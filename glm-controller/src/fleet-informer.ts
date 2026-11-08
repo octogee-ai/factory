@@ -1,31 +1,146 @@
 import { resolveOnboardingPlacementEligibility } from "@octogee/shared/types/orchestrator-placement";
 import type { Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
+import type {
+  PlatformStateError,
+  PlatformStateStore,
+  Stored,
+  WatchChange,
+  WatchEvent,
+  WatchFilters,
+  WatchRecords,
+  WatchSubscription,
+} from "@octogee/core/platform-state";
 
 export const FLEET_INFORMER_REATTACH_MS_DEFAULT = 60_000;
 
-export interface MirrorDocChange {
-  type: string;
-  doc: QueryDocumentSnapshot;
+export type MirroredAggregate = "gateways" | "fleetRegistry" | "assignments";
+
+export type MirrorDelivery<A extends MirroredAggregate> =
+  | { readonly kind: "reset"; readonly records: readonly Stored<WatchRecords[A]>[] }
+  | { readonly kind: "changes"; readonly changes: readonly WatchChange<A>[] };
+
+export type MirrorSubscriber<A extends MirroredAggregate> = (delivery: MirrorDelivery<A>) => void;
+
+export interface MirrorWithoutMalformed<A extends MirroredAggregate> {
+  readonly records: readonly Stored<WatchRecords[A]>[];
+  readonly malformedKeys: readonly string[];
 }
 
 export interface FleetInformer {
-  gateways(): QueryDocumentSnapshot[] | null;
-  glmGateways(): QueryDocumentSnapshot[] | null;
+  gateways(): readonly Stored<WatchRecords["gateways"]>[] | null;
+  fleetRegistry(): readonly Stored<WatchRecords["fleetRegistry"]>[] | null;
+  fleetRegistryWithoutMalformed(): MirrorWithoutMalformed<"fleetRegistry"> | null;
+  assignments(): readonly Stored<WatchRecords["assignments"]>[] | null;
   users(): QueryDocumentSnapshot[] | null;
+  subscribe<A extends MirroredAggregate>(aggregate: A, subscriber: MirrorSubscriber<A>): () => void;
   subscribeUnassignedUsers?(wake: () => void): () => void;
-  assignments(): QueryDocumentSnapshot[] | null;
-  ingestGateways(changes: readonly MirrorDocChange[], options?: { reset?: boolean }): void;
-  ingestGlmGateways(changes: readonly MirrorDocChange[], options?: { reset?: boolean }): void;
-  markGatewaysStale(reason: string): void;
-  markGlmGatewaysStale(reason: string): void;
   stop(): void;
 }
 
 export interface FleetInformerDeps {
   db: Firestore;
+  store: PlatformStateStore;
   log: (message: string) => void;
   reattachMs?: number;
+}
+
+const RECORD_KEYS: { readonly [A in MirroredAggregate]: (record: Stored<WatchRecords[A]>) => string } = {
+  gateways: (record) => record.gatewayId,
+  fleetRegistry: (record) => record.gatewayId,
+  assignments: (record) => `${record.gatewayId}/${record.uid}`,
+};
+
+interface MirrorView<A extends MirroredAggregate> {
+  readonly records: Map<string, Stored<WatchRecords[A]>>;
+  readonly malformed: Map<string, string>;
+}
+
+function sortedByKey<T>(entries: Iterable<[string, T]>): T[] {
+  return [...entries].sort(([left], [right]) => left.localeCompare(right)).map(([, value]) => value);
+}
+
+class RecordMirror<A extends MirroredAggregate> {
+  private view: MirrorView<A> | null = null;
+  private live = false;
+  private incomingMalformed = new Map<string, string>();
+  private strictlyFresh = false;
+
+  constructor(
+    private readonly name: A,
+    private readonly log: (message: string) => void,
+  ) {}
+
+  read(): readonly Stored<WatchRecords[A]>[] | null {
+    if (this.view === null || !this.isStrictlyFresh()) return null;
+    return sortedByKey(this.view.records.entries());
+  }
+
+  readWithoutMalformed(): MirrorWithoutMalformed<A> | null {
+    if (this.view === null) return null;
+    const malformedKeys = new Set([...this.view.malformed.keys(), ...this.incomingMalformed.keys()]);
+    return { records: sortedByKey(this.view.records.entries()), malformedKeys: [...malformedKeys].sort() };
+  }
+
+  beginSubscription(carryView: boolean, reason: string): void {
+    this.live = false;
+    this.incomingMalformed = new Map();
+    if (!carryView) this.view = null;
+    this.settle(reason);
+  }
+
+  replace(records: readonly Stored<WatchRecords[A]>[]): void {
+    const key: (record: Stored<WatchRecords[A]>) => string = RECORD_KEYS[this.name];
+    this.view = { records: new Map(records.map((record) => [key(record), record])), malformed: this.incomingMalformed };
+    this.incomingMalformed = new Map();
+    this.live = true;
+    this.refresh();
+  }
+
+  apply(changes: readonly WatchChange<A>[]): void {
+    if (!this.live || this.view === null) return;
+    for (const change of changes) {
+      if (change.record === null) {
+        this.view.records.delete(change.key);
+        continue;
+      }
+      this.view.records.set(change.key, change.record);
+      this.view.malformed.delete(change.key);
+    }
+    this.refresh();
+  }
+
+  rejectRecord(key: string, reason: string): void {
+    if (this.live && this.view !== null) {
+      this.view.records.delete(key);
+      this.view.malformed.set(key, reason);
+    } else {
+      this.incomingMalformed.set(key, reason);
+    }
+    this.settle(reason);
+  }
+
+  discard(reason: string): void {
+    this.live = false;
+    this.view = null;
+    this.incomingMalformed = new Map();
+    this.settle(reason);
+  }
+
+  private isStrictlyFresh(): boolean {
+    return this.live && this.view !== null && this.view.malformed.size === 0;
+  }
+
+  private settle(reason: string): void {
+    if (this.strictlyFresh && !this.isStrictlyFresh()) {
+      this.log(`[fleet-informer] ⚠ ${this.name} mirror stale — ${reason}; readers fall back to a direct read`);
+    }
+    this.refresh();
+  }
+
+  private refresh(): void {
+    this.strictlyFresh = this.isStrictlyFresh();
+  }
 }
 
 class CollectionMirror {
@@ -48,20 +163,6 @@ class CollectionMirror {
     this.fresh = true;
   }
 
-  apply(changes: readonly MirrorDocChange[], reset: boolean): void {
-    if (reset) {
-      this.docs.clear();
-      this.fresh = true;
-    }
-    // A delta against a set this mirror cannot vouch for would produce a
-    // plausible-looking but incomplete collection — drop it and wait for a reset.
-    if (!this.fresh) return;
-    for (const change of changes) {
-      if (change.type === "removed") this.docs.delete(change.doc.id);
-      else this.docs.set(change.doc.id, change.doc);
-    }
-  }
-
   markStale(reason: string): void {
     if (!this.fresh) return;
     this.fresh = false;
@@ -70,19 +171,6 @@ class CollectionMirror {
   }
 }
 
-/** A mirrored collection, or one direct scan while that mirror is stale. The
- *  informer logs the staleness transition, so a null mirror degrades to the old
- *  read cost instead of silently reconciling against an empty fleet. */
-export async function mirroredOrScan(
-  mirrored: QueryDocumentSnapshot[] | null,
-  scan: () => Promise<{ docs: QueryDocumentSnapshot[] }>,
-): Promise<QueryDocumentSnapshot[]> {
-  return mirrored ?? (await scan()).docs;
-}
-
-/** The assigned-roster slugs for a gateway, resolved from mirrored user documents.
- *  Must agree with `readAssignedSlugsForGateway`'s query — both resolve the slug
- *  through `slugFromAssignedUser` so the reported mounted set cannot drift. */
 export function assignedSlugsFromUserMirror(
   users: ReadonlyArray<{ id: string; data(): Record<string, unknown> }>,
   gatewayId: string,
@@ -99,13 +187,24 @@ export function assignedSlugsFromUserMirror(
   return [...slugByUid.values()];
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function createFleetInformer(deps: FleetInformerDeps): FleetInformer {
-  const { db, log } = deps;
+  const { db, store, log } = deps;
   const reattachMs = deps.reattachMs ?? FLEET_INFORMER_REATTACH_MS_DEFAULT;
-  const gateways = new CollectionMirror("gateways", log);
-  const glmGateways = new CollectionMirror("glmGateways", log);
+  const mirrors: { readonly [A in MirroredAggregate]: RecordMirror<A> } = {
+    gateways: new RecordMirror("gateways", log),
+    fleetRegistry: new RecordMirror("fleetRegistry", log),
+    assignments: new RecordMirror("assignments", log),
+  };
+  const subscribers: { readonly [A in MirroredAggregate]: Set<MirrorSubscriber<A>> } = {
+    gateways: new Set(),
+    fleetRegistry: new Set(),
+    assignments: new Set(),
+  };
   const users = new CollectionMirror("users", log);
-  const assignments = new CollectionMirror("assignments", log);
 
   const placementListeners = new Set<() => void>();
   let pendingUsers = "";
@@ -121,65 +220,134 @@ export function createFleetInformer(deps: FleetInformerDeps): FleetInformer {
   };
 
   let stopped = false;
+  const watchTokens = new Map<MirroredAggregate, object>();
+  const subscriptions = new Map<MirroredAggregate, WatchSubscription>();
   const unsubscribes = new Map<string, () => void>();
   const reattachTimers = new Map<string, NodeJS.Timeout>();
 
-  const attach = (
-    name: string,
-    mirror: CollectionMirror,
-    subscribe: (
-      onNext: (snapshot: { docs: QueryDocumentSnapshot[] }) => void,
-      onError: (error: Error) => void,
-    ) => () => void,
-  ): void => {
+  const scheduleReattach = (name: string, reason: string, reattach: () => void) => {
+    if (stopped || reattachTimers.has(name)) return;
+    const timer = setTimeout(() => {
+      reattachTimers.delete(name);
+      log(`[fleet-informer] re-attaching the ${name} watch after: ${reason}`);
+      reattach();
+    }, reattachMs);
+    reattachTimers.set(name, timer);
+  };
+
+  const deliver = <A extends MirroredAggregate>(aggregate: A, delivery: MirrorDelivery<A>) => {
+    const registered: Set<MirrorSubscriber<A>> = subscribers[aggregate];
+    for (const subscriber of registered) {
+      try {
+        subscriber(delivery);
+      } catch (error) {
+        log(`[fleet-informer] ⚠ ${aggregate} subscriber failed: ${errorMessage(error)}`);
+      }
+    }
+  };
+
+  const watchRecords = <A extends MirroredAggregate>(aggregate: A, carryView = false): void => {
     if (stopped) return;
-    const unsubscribe = subscribe(
+    const mirror: RecordMirror<A> = mirrors[aggregate];
+    const reattach = () => watchRecords(aggregate);
+    const reattachCarryingView = () => watchRecords(aggregate, true);
+    const token = {};
+    const current = () => !stopped && watchTokens.get(aggregate) === token;
+    watchTokens.set(aggregate, token);
+    void subscriptions.get(aggregate)?.close();
+    mirror.beginSubscription(carryView, "watch restarting");
+    const subscription = store.watch<A>(
+      { aggregate, filter: {} as WatchFilters[A] },
+      {
+        onEvent: (event: WatchEvent<A>) => {
+          if (!current()) return;
+          if (event.kind === "resync") {
+            mirror.beginSubscription(false, `watch resync after ${event.reason}`);
+            return;
+          }
+          if (event.kind === "snapshot") {
+            mirror.replace(event.records);
+            deliver(aggregate, { kind: "reset", records: event.records });
+            return;
+          }
+          mirror.apply(event.changes);
+          deliver(aggregate, { kind: "changes", changes: event.changes });
+        },
+        onError: (error: PlatformStateError) => {
+          if (!current()) return;
+          log(`[fleet-informer] ⚠ ${aggregate} watch error: ${error.message}`);
+          if (error.code === "backend-failure") {
+            mirror.discard(error.message);
+            return;
+          }
+          if (error.code === "malformed-record") {
+            mirror.rejectRecord(error.record.key, error.message);
+            scheduleReattach(aggregate, error.message, reattachCarryingView);
+            return;
+          }
+          mirror.discard(error.message);
+          scheduleReattach(aggregate, error.message, reattach);
+        },
+      },
+    );
+    subscriptions.set(aggregate, subscription);
+    subscription.closed.catch((error: unknown) => {
+      if (!current()) return;
+      log(`[fleet-informer] ⚠ ${aggregate} watch closed: ${errorMessage(error)}`);
+      mirror.discard(errorMessage(error));
+      scheduleReattach(aggregate, errorMessage(error), reattach);
+    });
+  };
+
+  const attachUsers = (): void => {
+    if (stopped) return;
+    const unsubscribe = db.collection("users").onSnapshot(
       (snapshot) => {
         if (stopped) return;
-        mirror.replace(snapshot.docs);
-        if (name === "users") notifyUnassignedChanges(snapshot.docs);
+        users.replace(snapshot.docs);
+        notifyUnassignedChanges(snapshot.docs);
       },
       (error) => {
         if (stopped) return;
-        mirror.markStale(error.message);
-        // One pending re-attach per collection. A listener that has reported an
-        // error is already dead and already scheduled; a second report must not
-        // buy a second listener.
-        if (reattachTimers.has(name)) return;
-        const timer = setTimeout(() => {
-          reattachTimers.delete(name);
-          log(`[fleet-informer] re-attaching the ${name} listener after error: ${error.message}`);
-          attach(name, mirror, subscribe);
-        }, reattachMs);
-        reattachTimers.set(name, timer);
+        log(`[fleet-informer] ⚠ users listener error: ${error.message}`);
+        users.markStale(error.message);
+        scheduleReattach("users", error.message, attachUsers);
       },
     );
-    unsubscribes.set(name, unsubscribe);
+    unsubscribes.set("users", unsubscribe);
   };
 
-  attach("users", users, (onNext, onError) =>
-    db.collection("users").onSnapshot(onNext, onError));
-  attach("assignments", assignments, (onNext, onError) =>
-    db.collectionGroup("assignments").onSnapshot(onNext, onError));
+  watchRecords("gateways");
+  watchRecords("fleetRegistry");
+  watchRecords("assignments");
+  attachUsers();
 
   return {
-    gateways: () => gateways.read(),
-    glmGateways: () => glmGateways.read(),
+    gateways: () => mirrors.gateways.read(),
+    fleetRegistry: () => mirrors.fleetRegistry.read(),
+    fleetRegistryWithoutMalformed: () => mirrors.fleetRegistry.readWithoutMalformed(),
+    assignments: () => mirrors.assignments.read(),
     users: () => users.read(),
+    subscribe: <A extends MirroredAggregate>(aggregate: A, subscriber: MirrorSubscriber<A>) => {
+      const registered: Set<MirrorSubscriber<A>> = subscribers[aggregate];
+      registered.add(subscriber);
+      return () => { registered.delete(subscriber); };
+    },
     subscribeUnassignedUsers: (wake) => {
       placementListeners.add(wake);
       return () => { placementListeners.delete(wake); };
     },
-    assignments: () => assignments.read(),
-    ingestGateways: (changes, options) => gateways.apply(changes, options?.reset ?? false),
-    ingestGlmGateways: (changes, options) => glmGateways.apply(changes, options?.reset ?? false),
-    markGatewaysStale: (reason) => gateways.markStale(reason),
-    markGlmGatewaysStale: (reason) => glmGateways.markStale(reason),
     stop: () => {
       stopped = true;
       placementListeners.clear();
+      subscribers.gateways.clear();
+      subscribers.fleetRegistry.clear();
+      subscribers.assignments.clear();
       for (const timer of reattachTimers.values()) clearTimeout(timer);
       reattachTimers.clear();
+      for (const subscription of subscriptions.values()) void subscription.close();
+      subscriptions.clear();
+      watchTokens.clear();
       for (const unsubscribe of unsubscribes.values()) unsubscribe();
       unsubscribes.clear();
     },

@@ -9,17 +9,9 @@ const h = vi.hoisted(() => ({
   holdProjectReads: false,
   releaseProjectReads: (() => undefined) as () => void,
   projectReadGate: Promise.resolve() as Promise<void>,
-  projects: [] as Array<{ id: string; archived?: boolean }>,
-  projectChannelCounts: new Map<string, number>(),
   documents: new Map<string, Record<string, unknown>>(),
-  channelLedger: {
-    id: "general",
-    path: "workspaces/alice/channels/general",
-    data: { kind: "general", mattermost: { channelId: "c".repeat(26) } },
-  },
   createClientCalls: 0,
   denyMembership: false,
-  channelLookupLimit: 0,
 }));
 
 function resetProjectGate(): void {
@@ -31,11 +23,12 @@ function resetProjectGate(): void {
   });
 }
 
-function query(docs: unknown[]) {
-  return {
-    limit: () => ({ get: async () => ({ docs }) }),
-  };
-}
+vi.mock("../lib/db.js", () => ({ db: {}, FieldValue: {} }));
+
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(h.documents) };
+});
 
 vi.mock("../lib/workspace-resolution.js", () => ({
   resolveWorkspaceUid: async () => "owner-uid",
@@ -58,95 +51,72 @@ vi.mock("../lib/channel-session-model-control.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../lib/db.js", () => ({
-  db: {
-    collectionGroup: () => ({
-      where: () => ({
-        limit: (value: number) => {
-          h.channelLookupLimit = value;
-          return {
-            get: async () => ({
-              docs: [{
-                id: h.channelLedger.id,
-                ref: { path: h.channelLedger.path },
-                data: () => h.channelLedger.data,
-              }],
-            }),
-          };
-        },
-      }),
-    }),
-    doc: (path: string) => {
-      if (path === "workspaces/alice") {
-        return {
-          collection: (name: string) => name === "channels"
-            ? query([])
-            : query(h.projects.map(({ id, archived }) => ({
-              id,
-              data: () => archived
-                ? { commercialLifecycle: { status: "archived" } }
-                : {},
-              ref: {
-                collection: () => ({
-                  limit: () => ({
-                    get: async () => {
-                      h.activeProjectReads += 1;
-                      h.projectReadsStarted += 1;
-                      h.maxActiveProjectReads = Math.max(
-                        h.maxActiveProjectReads,
-                        h.activeProjectReads,
-                      );
-                      if (h.holdProjectReads) await h.projectReadGate;
-                      h.activeProjectReads -= 1;
-                      return {
-                        docs: Array.from(
-                          { length: h.projectChannelCounts.get(id) ?? 0 },
-                          () => ({}),
-                        ),
-                      };
-                    },
-                  }),
-                }),
-              },
-            }))),
-        };
-      }
-      return { get: async () => ({ data: () => h.documents.get(path) }) };
-    },
-  },
-}));
-
 const {
   authorizeChannel,
   listWorkspaceChannelCandidates,
 } = await import("../lib/channel-session-authorization.js");
+const { platformStateStore } = await import("../lib/platform-state.js");
+
+const listChannels = platformStateStore.workspaces.channels.list;
+const findChannel = vi.spyOn(platformStateStore.workspaces.channels, "findByMattermostChannelId");
+vi.spyOn(platformStateStore.workspaces.channels, "list").mockImplementation(async (scope) => {
+  if (scope.projectSlug === null) return listChannels(scope);
+  h.activeProjectReads += 1;
+  h.projectReadsStarted += 1;
+  h.maxActiveProjectReads = Math.max(h.maxActiveProjectReads, h.activeProjectReads);
+  if (h.holdProjectReads) await h.projectReadGate;
+  h.activeProjectReads -= 1;
+  return listChannels(scope);
+});
+
+const ledger = {
+  path: "workspaces/alice/channels/general",
+};
+
+function setLedger(path: string, data: Record<string, unknown>): void {
+  h.documents.delete(ledger.path);
+  ledger.path = path;
+  h.documents.set(path, data);
+}
+
+function patchLedger(fields: Record<string, unknown>): void {
+  h.documents.set(ledger.path, { ...h.documents.get(ledger.path), ...fields });
+}
+
+function seedProjects(count: number): void {
+  for (let index = 0; index < count; index += 1) {
+    h.documents.set(`workspaces/alice/projects/project-${index}`, { ownerUid: "owner-uid" });
+  }
+}
+
+function seedProjectChannels(project: string, count: number): void {
+  for (let index = 0; index < count; index += 1) {
+    h.documents.set(`workspaces/alice/projects/${project}/channels/task-${index}`, {});
+  }
+}
 
 beforeEach(() => {
   h.activeProjectReads = 0;
   h.maxActiveProjectReads = 0;
   h.projectReadsStarted = 0;
   h.holdProjectReads = false;
-  h.projects = [];
-  h.projectChannelCounts.clear();
-  h.documents = new Map([
-    ["users/caller", { mattermost: { userId: "u".repeat(26) } }],
-    ["users/caller/secrets/mattermost", { personalToken: "t".repeat(32) }],
-    ["users/owner-uid/secrets/coachMattermost", { coachMmUserId: "a".repeat(26) }],
-  ]);
-  h.channelLedger = {
-    id: "general",
-    path: "workspaces/alice/channels/general",
-    data: { kind: "general", mattermost: { channelId } },
-  };
+  h.documents.clear();
+  h.documents.set("users/caller", { mattermost: { userId: "u".repeat(26) } });
+  h.documents.set("users/caller/secrets/mattermost", { personalToken: "t".repeat(32) });
+  h.documents.set("users/owner-uid/secrets/coachMattermost", {
+    personalToken: "coach-token",
+    coachMmUserId: "a".repeat(26),
+  });
+  setLedger("workspaces/alice/channels/general", { kind: "general", mattermost: { channelId } });
   h.createClientCalls = 0;
   h.denyMembership = false;
-  h.channelLookupLimit = 0;
+  findChannel.mockClear();
   resetProjectGate();
 });
 
 describe("channel session authorization discovery", () => {
   it("bounds project channel ledger reads and stops launching work after cancellation", async () => {
-    h.projects = Array.from({ length: 24 }, (_, index) => ({ id: `project-${index}` }));
+    seedProjects(24);
     h.holdProjectReads = true;
     const controller = new AbortController();
     const discovery = listWorkspaceChannelCandidates("alice", controller.signal);
@@ -161,14 +131,7 @@ describe("channel session authorization discovery", () => {
   });
 
   it("rejects an archived ledger binding when active discovery is required", async () => {
-    h.channelLedger = {
-      ...h.channelLedger,
-      data: {
-        kind: "general",
-        archivedAt: 100,
-        mattermost: { channelId },
-      },
-    };
+    patchLedger({ archivedAt: 100 });
 
     await expect(authorizeChannel(
       "caller",
@@ -177,15 +140,11 @@ describe("channel session authorization discovery", () => {
       { requireActiveLedger: true },
     )).resolves.toBeNull();
     expect(h.createClientCalls).toBe(0);
-    expect(h.channelLookupLimit).toBe(2);
+    expect(findChannel).toHaveBeenCalledWith(channelId);
   });
 
   it("rejects reserved and malformed ledger bindings when active discovery is required", async () => {
-    h.channelLedger = {
-      id: "coach-dm",
-      path: "workspaces/alice/channels/coach-dm",
-      data: { kind: "session", mattermost: { channelId } },
-    };
+    setLedger("workspaces/alice/channels/coach-dm", { kind: "session", mattermost: { channelId } });
     await expect(authorizeChannel(
       "caller",
       channelId,
@@ -193,11 +152,7 @@ describe("channel session authorization discovery", () => {
       { requireActiveLedger: true },
     )).resolves.toBeNull();
 
-    h.channelLedger = {
-      id: "general",
-      path: "workspaces/alice/channels/general",
-      data: { kind: "session", mattermost: { channelId } },
-    };
+    setLedger("workspaces/alice/channels/general", { kind: "session", mattermost: { channelId } });
     await expect(authorizeChannel(
       "caller",
       channelId,
@@ -207,9 +162,16 @@ describe("channel session authorization discovery", () => {
     expect(h.createClientCalls).toBe(0);
   });
 
+  it("denies a Mattermost channel that two channel ledgers claim", async () => {
+    h.documents.set("workspaces/mallory/channels/general", { kind: "general", mattermost: { channelId } });
+
+    await expect(authorizeChannel("caller", channelId, "alice")).resolves.toBeNull();
+    expect(h.createClientCalls).toBe(0);
+  });
+
   it("stops reading later project ledgers as soon as the global channel bound is exceeded", async () => {
-    h.projects = Array.from({ length: 24 }, (_, index) => ({ id: `project-${index}` }));
-    h.projectChannelCounts.set("project-0", 513);
+    seedProjects(24);
+    seedProjectChannels("project-0", 513);
 
     await expect(listWorkspaceChannelCandidates("alice")).rejects.toThrow(
       "Workspace channel directory exceeded its limit",
@@ -218,12 +180,9 @@ describe("channel session authorization discovery", () => {
   });
 
   it("rejects an archived parent project for an otherwise active channel binding", async () => {
-    h.channelLedger = {
-      id: "general",
-      path: "workspaces/alice/projects/orbit/channels/general",
-      data: { kind: "general", mattermost: { channelId } },
-    };
+    setLedger("workspaces/alice/projects/orbit/channels/general", { kind: "general", mattermost: { channelId } });
     h.documents.set("workspaces/alice/projects/orbit", {
+      ownerUid: "owner-uid",
       commercialLifecycle: { status: "archived" },
       agent: { mode: "scoped", enabled: true },
     });
@@ -245,7 +204,7 @@ describe("channel session authorization discovery", () => {
 
 describe("workspace conversation channel authority", () => {
   it.each([["general", "general"], ["coach-dm", "coach-dm"], ["planning", "session"]])("accepts workspace %s with its exact channel identity", async (id, kind) => {
-    h.channelLedger = { id, path: `workspaces/alice/channels/${id}`, data: { kind, mattermost: { channelId } } };
+    setLedger(`workspaces/alice/channels/${id}`, { kind, mattermost: { channelId } });
     await expect(authorizeChannel("caller", channelId, "alice", { workspaceConversation: true })).resolves.toMatchObject({ target: { workspaceSlug: "alice", agentId: "octogee-alice-coach" } });
   });
   it.each([
@@ -254,12 +213,12 @@ describe("workspace conversation channel authority", () => {
     ["general", "community/channels/general", "general"],
     ["coach-dm", "workspaces/alice/channels/coach-dm", "session"],
   ])("rejects unrelated or malformed workspace conversations %s %s", async (id, path, kind) => {
-    h.channelLedger = { id, path, data: { kind, mattermost: { channelId } } };
+    setLedger(path, { kind, mattermost: { channelId } });
     await expect(authorizeChannel("caller", channelId, "alice", { workspaceConversation: true })).resolves.toBeNull();
     expect(h.createClientCalls).toBe(0);
   });
   it("rejects archived workspace conversation ledgers", async () => {
-    Object.assign(h.channelLedger.data, { archivedAt: 100 });
+    patchLedger({ archivedAt: 100 });
     await expect(authorizeChannel("caller", channelId, "alice", { workspaceConversation: true })).resolves.toBeNull();
   });
 });
@@ -268,8 +227,7 @@ describe("workspace conversation channel authority", () => {
 describe("readiness active Coach conversation authority", () => {
   const options = { requireActiveLedger: true, includeCoachConversation: true };
   function coachLedger(): void {
-    h.channelLedger = { id: "coach-dm", path: "workspaces/alice/channels/coach-dm",
-      data: { kind: "coach-dm", mattermost: { channelId } } };
+    setLedger("workspaces/alice/channels/coach-dm", { kind: "coach-dm", mattermost: { channelId } });
   }
   it("authorizes the canonical private Coach conversation without making it discoverable", async () => {
     coachLedger();
@@ -284,24 +242,23 @@ describe("readiness active Coach conversation authority", () => {
   });
   it.each(["archived", "wrong-kind", "admin"])("rejects %s Coach ledger bindings", async (failure) => {
     coachLedger();
-    if (failure === "archived") Object.assign(h.channelLedger.data, { archivedAt: 100 });
-    if (failure === "wrong-kind") h.channelLedger.data.kind = "session";
-    if (failure === "admin") h.channelLedger = { id: "admin", path: "workspaces/alice/channels/admin",
-      data: { kind: "admin", mattermost: { channelId } } };
+    if (failure === "archived") patchLedger({ archivedAt: 100 });
+    if (failure === "wrong-kind") patchLedger({ kind: "session" });
+    if (failure === "admin") setLedger("workspaces/alice/channels/admin", { kind: "admin", mattermost: { channelId } });
     await expect(authorizeChannel("caller", channelId, "alice", options)).resolves.toBeNull();
     expect(h.createClientCalls).toBe(0);
   });
   it("still rejects archived parent projects when Coach conversations are included", async () => {
-    h.channelLedger.path = "workspaces/alice/projects/orbit/channels/general";
-    h.documents.set("workspaces/alice/projects/orbit", { commercialLifecycle: { status: "archived" } });
+    setLedger("workspaces/alice/projects/orbit/channels/general", { kind: "general", mattermost: { channelId } });
+    h.documents.set("workspaces/alice/projects/orbit", { ownerUid: "owner-uid", commercialLifecycle: { status: "archived" } });
     await expect(authorizeChannel("caller", channelId, "alice", options)).resolves.toBeNull();
   });
 });
 
 describe('project voice channel authority', () => {
   function project() {
-    h.channelLedger.path = 'workspaces/alice/projects/orbit/channels/general';
-    h.documents.set('workspaces/alice/projects/orbit', { agent: { status: 'ready' } });
+    setLedger('workspaces/alice/projects/orbit/channels/general', { kind: 'general', mattermost: { channelId } });
+    h.documents.set('workspaces/alice/projects/orbit', { ownerUid: 'owner-uid', agent: { status: 'ready' } });
     h.documents.set('users/owner-uid/secrets/projectAgentMattermost-orbit', { mmUserId: 'p'.repeat(26), personalToken: 'project-token' });
   }
   it('resolves the project agent under live channel membership', async () => {
@@ -311,10 +268,10 @@ describe('project voice channel authority', () => {
   });
   it.each(['missing-agent', 'missing-credential', 'archived-project', 'archived-channel', 'revoked-member'])('rejects %s without routing to the workspace coach', async failure => {
     project();
-    if (failure === 'missing-agent') h.documents.set('workspaces/alice/projects/orbit', {});
+    if (failure === 'missing-agent') h.documents.set('workspaces/alice/projects/orbit', { ownerUid: 'owner-uid' });
     if (failure === 'missing-credential') h.documents.delete('users/owner-uid/secrets/projectAgentMattermost-orbit');
-    if (failure === 'archived-project') h.documents.set('workspaces/alice/projects/orbit', { agent: {}, commercialLifecycle: { status: 'archived' } });
-    if (failure === 'archived-channel') Object.assign(h.channelLedger.data, { archivedAt: 1 });
+    if (failure === 'archived-project') h.documents.set('workspaces/alice/projects/orbit', { ownerUid: 'owner-uid', agent: {}, commercialLifecycle: { status: 'archived' } });
+    if (failure === 'archived-channel') patchLedger({ archivedAt: 1 });
     if (failure === 'revoked-member') h.denyMembership = true;
     const result = await authorizeChannel('caller', channelId, 'alice', { voiceConversation: true });
     expect(result === null || result.forbidden).toBe(true);

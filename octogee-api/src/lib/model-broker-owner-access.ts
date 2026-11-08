@@ -1,15 +1,5 @@
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
-
-interface OwnerAccessDb {
-  collection: (name: string) => {
-    doc: (id: string) => {
-      get: () => Promise<{
-        exists: boolean;
-        data: () => Record<string, unknown> | undefined;
-      }>;
-    };
-  };
-}
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 
 export interface ModelBrokerOwnerAccessInput {
   gatewayId: string;
@@ -21,20 +11,13 @@ export type ModelBrokerOwnerAccessResolver = (
 ) => Promise<boolean>;
 
 export function createModelBrokerOwnerAccessResolver(
-  db: OwnerAccessDb,
+  state: Pick<PlatformStateRepositories, "gateways" | "builders">,
 ): ModelBrokerOwnerAccessResolver {
   return async (input) => {
-    let ownerUid = input.ownerUid;
-    if (!ownerUid) {
-      const gateway = await db.collection("gateways").doc(input.gatewayId).get();
-      const candidate = gateway.data()?.ownerUid;
-      ownerUid = typeof candidate === "string" && candidate.length > 0
-        ? candidate
-        : null;
-    }
+    const ownerUid = input.ownerUid || (await state.gateways.roots.get(input.gatewayId))?.ownerUid || null;
     if (!ownerUid) return false;
-    const user = await db.collection("users").doc(ownerUid).get();
-    const data = user.exists ? user.data() : undefined;
-    return data !== undefined && accountAllowsInteractiveAccess(data);
+    const builder = await state.builders.records.get(ownerUid);
+    return builder !== null &&
+      accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined });
   };
 }

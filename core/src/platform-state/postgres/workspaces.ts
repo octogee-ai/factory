@@ -1,4 +1,4 @@
-import { MissingRecordError, type RecordKey } from "../errors.js";
+import { DuplicateRecordError, MissingRecordError, type RecordKey } from "../errors.js";
 import type { Stored, WatchFilters } from "../store.js";
 import type {
   BuilderAgentIdentitiesRepository,
@@ -10,6 +10,7 @@ import type {
   WorkspaceMembersRepository,
   WorkspaceProject,
   WorkspaceProjectsRepository,
+  WorkspaceProjectMember,
   WorkspaceRecord,
   WorkspaceRecordsRepository,
   WorkspaceRepositories,
@@ -69,6 +70,9 @@ const MEMBERS_TABLE: TableSpec = {
     column("role", "text"),
     column("joinedAt", "bigint", nullable),
     column("mattermostUserId", "text", nullable),
+    column("mattermostChannelId", "text", nullable),
+    column("canonicalSource", "text", nullable),
+    column("canonicalState", "text", nullable),
   ],
 };
 
@@ -95,6 +99,13 @@ const PROJECTS_TABLE: TableSpec = {
     column("agent", "jsonb", nullable),
     column("updatedAt", "bigint", nullable),
   ],
+};
+
+const PROJECT_MEMBERS_TABLE: TableSpec = {
+  table: "workspace_project_members",
+  aggregate: "workspace-project-member",
+  keyColumns: ["workspace_slug", "project_slug", "uid"],
+  columns: [column("workspaceSlug", "text"), column("projectSlug", "text"), column("uid", "text"), column("role", "text")],
 };
 
 const CHANNELS_TABLE: TableSpec = {
@@ -242,6 +253,13 @@ function decodeAgentIdentity(row: Row): Stored<BuilderAgentIdentity> {
 
 function createWorkspaceRecordsRepository(session: PostgresSession): WorkspaceRecordsRepository {
   return {
+    async findByMattermostTeamId(teamId) {
+      const rows = await selectRecords(session, "workspaces.records.findByMattermostTeamId",
+        "SELECT * FROM $schema.workspaces WHERE mattermost_team_id = $1::text ORDER BY slug LIMIT 2", [teamId]);
+      if (rows.length > 1) throw new DuplicateRecordError("workspace", "mattermostTeamId", teamId, rows.map(row => String(row.slug)));
+      return rows.length === 0 ? null : decodeWorkspace(rows[0]);
+    },
+
     async get(slug) {
       const row = await selectByKey(session, "workspaces.records.get", { table: WORKSPACES_TABLE, key: [slug] });
       return row === null ? null : decodeWorkspace(row);
@@ -480,6 +498,14 @@ export function createPostgresWorkspaceRepositories(session: PostgresSession): W
     records: createWorkspaceRecordsRepository(session),
     members: createWorkspaceMembersRepository(session),
     projects: createWorkspaceProjectsRepository(session),
+    projectMembers: {
+      async get(workspaceSlug, projectSlug, uid) {
+        const row = await selectByKey(session, "workspaces.projectMembers.get", {
+          table: PROJECT_MEMBERS_TABLE, key: [workspaceSlug, projectSlug, uid],
+        });
+        return row === null ? null : decodeStored<WorkspaceProjectMember>(PROJECT_MEMBERS_TABLE, row);
+      },
+    },
     channels: createWorkspaceChannelsRepository(session),
     agentIdentities: createAgentIdentitiesRepository(session),
   };

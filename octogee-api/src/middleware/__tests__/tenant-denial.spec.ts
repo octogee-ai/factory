@@ -1,4 +1,4 @@
-import type { Firestore } from "firebase-admin/firestore";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { describe, expect, it, vi } from "vitest";
 import type { NotificationEvent } from "../../../../gateway-edge/src/notifications/types.js";
 import {
@@ -9,26 +9,6 @@ import {
 
 const NOW = 1_800_000_000_000;
 
-function fakeDb(users: Record<string, Record<string, unknown>>): Pick<Firestore, "collection"> {
-  const valueAt = (data: Record<string, unknown>, path: string): unknown =>
-    path.split(".").reduce<unknown>((cursor, part) =>
-      cursor && typeof cursor === "object" ? (cursor as Record<string, unknown>)[part] : undefined, data);
-  return {
-    collection: (name: string) => {
-      if (name !== "users") throw new Error(`unexpected collection ${name}`);
-      return {
-        where: (field: string, _op: string, value: unknown) => ({
-          get: async () => ({
-            docs: Object.entries(users)
-              .filter(([, data]) => valueAt(data, field) === value)
-              .map(([id, data]) => ({ id, data: () => data })),
-          }),
-        }),
-      };
-    },
-  } as unknown as Pick<Firestore, "collection">;
-}
-
 function harness(opts: {
   users?: Record<string, Record<string, unknown>>;
   fanOut?: (event: NotificationEvent, targetUserIds: string[]) => Promise<{ eventId: string; delivered: string[]; deduplicated: string[]; failed: Array<{ uid: string; error: string }> }>;
@@ -36,15 +16,18 @@ function harness(opts: {
   const logger = { warn: vi.fn(), error: vi.fn() };
   const fanOut = vi.fn(opts.fanOut ?? (async (event: NotificationEvent, targetUserIds: string[]) =>
     ({ eventId: event.eventId, delivered: targetUserIds, deduplicated: [], failed: [] })));
+  const users = opts.users ?? {
+    "uid-alice": {
+      provisioning: { openclaw: { gatewayId: "shared-0", agentIds: ["octogee-alice-coach", "octogee-alice-proj-orbit-coach"] } },
+    },
+    "uid-bob": {
+      provisioning: { openclaw: { gatewayId: "shared-0", agentIds: ["octogee-bob-coach"] } },
+    },
+  };
   const report = createTenantDenialReporter({
-    db: fakeDb(opts.users ?? {
-      "uid-alice": {
-        provisioning: { openclaw: { gatewayId: "shared-0", agentIds: ["octogee-alice-coach", "octogee-alice-proj-orbit-coach"] } },
-      },
-      "uid-bob": {
-        provisioning: { openclaw: { gatewayId: "shared-0", agentIds: ["octogee-bob-coach"] } },
-      },
-    }),
+    store: createDocumentFixtureStore(Object.fromEntries(
+      Object.entries(users).map(([uid, data]) => [`users/${uid}`, data]),
+    )),
     logger,
     fanOut,
     now: () => NOW,

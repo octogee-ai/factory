@@ -3,10 +3,10 @@ import { deliverProjectAgentOnboarding } from "../../../gateway-edge/src/lib/pro
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 
 export async function completeProjectAgentReadiness(
-  db: Parameters<typeof completeProjectAgentActivations>[0],
+  store: Parameters<typeof completeProjectAgentActivations>[0],
   input: Parameters<typeof completeProjectAgentActivations>[1],
 ): Promise<boolean> {
-  if (!await completeProjectAgentActivations(db, input)) return false;
+  if (!await completeProjectAgentActivations(store, input)) return false;
   for (const project of input.projects) {
     try {
       await deliverProjectAgentOnboarding(input.uid, input.slug, project.projectId);

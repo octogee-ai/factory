@@ -270,10 +270,14 @@ function systemConfigRef(userRef: DocumentReference): DocumentReference {
   return userRef.collection("system").doc("config");
 }
 
+export function builderRoleFromData(uid: string, config: PlainObject | undefined): BuilderRole | null {
+  if (config === undefined) return null;
+  return new StoredFields(builderKey(uid), config).oneOf("role", BUILDER_ROLES) ?? null;
+}
+
 function decodeRole(uid: string, config: DocumentSnapshot | undefined): BuilderRole | null {
   if (config === undefined || !config.exists) return null;
-  const role = new StoredFields(builderKey(uid), decodeDocumentData(config)).oneOf("role", BUILDER_ROLES);
-  return role ?? null;
+  return builderRoleFromData(uid, decodeDocumentData(config));
 }
 
 function decodePersona(data: PlainObject): BuilderPersona | null {

@@ -1,40 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { MalformedRecordError } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
 import {
-  durableRolloutGateway,
   isRecoverableGatewayRelease,
+  resolveGatewayPlacement,
   resolveLiveRevisionAsSource,
-  resolvePlacementFromFirestore,
-  resolveSourceRevisionFromFirestore,
+  resolveSourceRevision,
 } from "../index.js";
 
-type Docs = Record<string, Record<string, unknown>>;
-
-function database(docs: Docs) {
-  function document(path: string) {
-    const data = docs[path];
-    return {
-      get: async () => ({ exists: data !== undefined, data: () => data }),
-      collection(name: string) {
-        return {
-          doc(id: string) {
-            return document(`${path}/${name}/${id}`);
-          },
-        };
-      },
-    };
-  }
-
-  return {
-    collection(name: string) {
-      return {
-        doc(id: string) {
-          return document(`${name}/${id}`);
-        },
-      };
-    },
-  };
-}
+const database = createDocumentFixtureStore;
 
 function durableGateway(
   gatewayId: string,
@@ -89,11 +64,11 @@ describe("durable migration root resolution", () => {
       "gateways/source": source,
       "glmGateways/source": servingRuntime("source"),
       "gateways/source/assignments/uid-alice": {
-        uid: "uid-alice", slug: "alice", gatewayId: "source", state: "serving", epoch: 7,
+        uid: "uid-alice", slug: "alice", gatewayId: "source", source: "migrate-customer", state: "serving", epoch: 7,
       },
     });
-    await expect(resolveSourceRevisionFromFirestore(db as never, "uid-alice", "source")).resolves.toBeNull();
-    await expect(resolveLiveRevisionAsSource(db as never, "source")).resolves.toBeNull();
+    await expect(resolveSourceRevision(db, "uid-alice", "source")).resolves.toBeNull();
+    await expect(resolveLiveRevisionAsSource(db, "source")).resolves.toBeNull();
   });
 
   it("keeps a claimed retired gateway out of ordinary migration sources and destinations", async () => {
@@ -114,11 +89,11 @@ describe("durable migration root resolution", () => {
       "glmGateways/default": servingRuntime("default"),
     });
 
-    await expect(resolvePlacementFromFirestore(db as never, "default")).resolves.toEqual({
+    await expect(resolveGatewayPlacement(db, "default")).resolves.toEqual({
       ok: false,
       reason: "revision-not-ready",
     });
-    await expect(resolveLiveRevisionAsSource(db as never, "default")).resolves.toBeNull();
+    await expect(resolveLiveRevisionAsSource(db, "default")).resolves.toBeNull();
   });
 
   it("binds an unassigned source to the exact stable live root generation", async () => {
@@ -128,7 +103,7 @@ describe("durable migration root resolution", () => {
     });
 
     await expect(
-      resolveSourceRevisionFromFirestore(db as never, "uid-alice", "source"),
+      resolveSourceRevision(db, "uid-alice", "source"),
     ).resolves.toEqual({
       revisionId: "source",
       release: 1,
@@ -153,7 +128,7 @@ describe("durable migration root resolution", () => {
     });
 
     await expect(
-      resolveSourceRevisionFromFirestore(db as never, "uid-alice", "source"),
+      resolveSourceRevision(db, "uid-alice", "source"),
     ).resolves.toEqual({
       revisionId: "source",
       release: 1,
@@ -173,7 +148,7 @@ describe("durable migration root resolution", () => {
     });
 
     await expect(
-      resolveSourceRevisionFromFirestore(db as never, "uid-alice", "source"),
+      resolveSourceRevision(db, "uid-alice", "source"),
     ).resolves.toBeNull();
   });
 
@@ -183,7 +158,7 @@ describe("durable migration root resolution", () => {
       "glmGateways/default": servingRuntime("default"),
     });
 
-    await expect(isRecoverableGatewayRelease(db as never, "default")).resolves.toBe(false);
+    await expect(isRecoverableGatewayRelease(db, "default")).resolves.toBe(false);
   });
 
   it("does not recover a pending Helm release whose runtime is marked failed", async () => {
@@ -192,7 +167,7 @@ describe("durable migration root resolution", () => {
       "glmGateways/default": servingRuntime("default", { lifecycle: "failed" }),
     });
 
-    await expect(isRecoverableGatewayRelease(db as never, "default")).resolves.toBe(false);
+    await expect(isRecoverableGatewayRelease(db, "default")).resolves.toBe(false);
   });
 
   it("recovers a pending Helm release for a healthy running root", async () => {
@@ -201,21 +176,7 @@ describe("durable migration root resolution", () => {
       "glmGateways/default": servingRuntime("default"),
     });
 
-    await expect(isRecoverableGatewayRelease(db as never, "default")).resolves.toBe(true);
-  });
-
-  it("rejects a gateway-shaped root before a rollout can consume it", () => {
-    expect(
-      durableRolloutGateway(
-        {
-          gatewayId: "target",
-          latestRelease: 1,
-          desiredRelease: 1,
-          desiredStatus: "running",
-        },
-        "target",
-      ),
-    ).toBeNull();
+    await expect(isRecoverableGatewayRelease(db, "default")).resolves.toBe(true);
   });
 
   it("rejects a destination that has only a gateway-shaped legacy root", async () => {
@@ -230,7 +191,7 @@ describe("durable migration root resolution", () => {
       "glmGateways/target": servingRuntime("target"),
     });
 
-    await expect(resolvePlacementFromFirestore(db as never, "target")).resolves.toBeNull();
+    await expect(resolveGatewayPlacement(db, "target")).resolves.toBeNull();
   });
 
   it("rejects a source that has only a gateway-shaped legacy root", async () => {
@@ -245,7 +206,7 @@ describe("durable migration root resolution", () => {
       "glmGateways/source": servingRuntime("source"),
     });
 
-    await expect(resolveLiveRevisionAsSource(db as never, "source")).resolves.toBeNull();
+    await expect(resolveLiveRevisionAsSource(db, "source")).resolves.toBeNull();
   });
 
   it("refuses a destination whose runtime doc claims a foreign gateway identity", async () => {
@@ -254,10 +215,7 @@ describe("durable migration root resolution", () => {
       "glmGateways/target": servingRuntime("other", { gatewayId: "other" }),
     });
 
-    await expect(resolvePlacementFromFirestore(db as never, "target")).resolves.toEqual({
-      ok: false,
-      reason: "revision-not-ready",
-    });
+    await expect(resolveGatewayPlacement(db, "target")).rejects.toThrow(MalformedRecordError);
   });
 
   it("refuses an assigned source whose runtime doc claims a foreign gateway identity", async () => {
@@ -272,7 +230,7 @@ describe("durable migration root resolution", () => {
     });
 
     await expect(
-      resolveSourceRevisionFromFirestore(db as never, "uid-alice", "source"),
-    ).resolves.toBeNull();
+      resolveSourceRevision(db, "uid-alice", "source"),
+    ).rejects.toThrow(MalformedRecordError);
   });
 });

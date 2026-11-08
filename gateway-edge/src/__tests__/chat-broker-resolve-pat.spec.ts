@@ -1,44 +1,24 @@
 import { describe, expect, it } from "vitest";
+import { DuplicateRecordError, MalformedRecordError } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import {
   ChatPatError,
   resolveChatIdentity,
 } from "../lib/chat-broker/resolve-pat.js";
 
-type Docs = Record<string, Record<string, unknown> | undefined>;
+type Docs = Record<string, Record<string, unknown>>;
 
 function dbOf(docs: Docs) {
-  function fieldValue(data: Record<string, unknown> | undefined, field: string): unknown {
-    return field.split(".").reduce<unknown>(
-      (value, part) =>
-        value && typeof value === "object"
-          ? (value as Record<string, unknown>)[part]
-          : undefined,
-      data,
-    );
-  }
-
   return {
-    doc: (path: string) => ({
-      get: async () => ({
-        exists: docs[path] !== undefined,
-        data: () => docs[path],
-      }),
-    }),
-    collectionGroup: (name: string) => ({
-      where: (field: string, _op: "==", expected: unknown) => ({
+    db: {
+      doc: (path: string) => ({
         get: async () => ({
-          docs: Object.entries(docs)
-            .filter(([path, data]) => {
-              const parts = path.split("/");
-              return parts.at(-2) === name && fieldValue(data, field) === expected;
-            })
-            .map(([path, data]) => ({
-              ref: { path },
-              data: () => data,
-            })),
+          exists: docs[path] !== undefined,
+          data: () => docs[path],
         }),
       }),
-    }),
+    },
+    store: createDocumentFixtureStore(docs),
   };
 }
 
@@ -224,14 +204,43 @@ describe("resolveChatIdentity", () => {
     ).rejects.toMatchObject({ code: "no-coach-identity" });
   });
 
-  it("fails loud when the coach bot's PAT is missing (the unread cursor has no credential)", async () => {
+  it("fails closed when the coach bot's secret stores no PAT (the unread cursor has no credential)", async () => {
     const db = dbOf({
       [`users/${UID}/secrets/mattermost`]: { personalToken: "builder-pat" },
       [`users/${UID}/secrets/coachMattermost`]: { coachMmUserId: "mm-coach-bot" },
     });
     await expect(
       resolveChatIdentity(db, { uid: UID, slug: SLUG, agentId: "octogee-alice-coach" }),
+    ).rejects.toBeInstanceOf(MalformedRecordError);
+  });
+
+  it("fails loud when the coach bot's PAT is blank (the unread cursor has no credential)", async () => {
+    const db = dbOf({
+      [`users/${UID}/secrets/mattermost`]: { personalToken: "builder-pat" },
+      [`users/${UID}/secrets/coachMattermost`]: { personalToken: "", coachMmUserId: "mm-coach-bot" },
+    });
+    await expect(
+      resolveChatIdentity(db, { uid: UID, slug: SLUG, agentId: "octogee-alice-coach" }),
     ).rejects.toMatchObject({ code: "no-coach-identity" });
+  });
+
+  it("fails closed when two canonical channels claim one Mattermost channel", async () => {
+    const sharedId = "s".repeat(26);
+    const db = dbOf({
+      [`users/${UID}/secrets/mattermost`]: { personalToken: "builder-pat" },
+      [`users/${UID}/secrets/coachMattermost`]: {
+        personalToken: "coach-pat",
+        coachMmUserId: "mm-coach-bot",
+      },
+      [`workspaces/${SLUG}/channels/general`]: { mattermost: { channelId: sharedId } },
+      "workspaces/carol/channels/general": { mattermost: { channelId: sharedId } },
+    });
+    const identity = await resolveChatIdentity(db, {
+      uid: UID,
+      slug: SLUG,
+      agentId: "octogee-alice-coach",
+    });
+    await expect(identity.canReadChannel(sharedId)).rejects.toBeInstanceOf(DuplicateRecordError);
   });
 
   it("errors are ChatPatError instances carrying a bounded code", async () => {

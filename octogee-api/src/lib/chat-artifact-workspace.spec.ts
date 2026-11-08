@@ -1,57 +1,42 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { DuplicateRecordError } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { resolveActiveArtifactWorkspaceSlug } from "./chat-artifact-workspace.js";
 
-function dbFor(input: { ownerUid?: string; lifecycle?: string; workspaceCount?: number }) {
-  const getUser = vi.fn(async () => ({
-    exists: true,
-    data: () => ({ accountLifecycle: { status: input.lifecycle ?? "active" } }),
-  }));
-  return {
-    collection: (name: string) => {
-      if (name === "workspaces") {
-        return {
-          where: () => ({
-            limit: () => ({
-              get: async () => ({
-                docs: Array.from({ length: input.workspaceCount ?? 1 }, (_, index) => ({
-                  id: index === 0 ? "channel-workspace" : "duplicate-workspace",
-                  data: () => ({ ownerUid: input.ownerUid ?? "owner-1" }),
-                })),
-              }),
-            }),
-          }),
-        };
-      }
-      return { doc: () => ({ get: getUser }) };
-    },
-  };
+function storeFor(input: { lifecycle?: string; duplicateTeam?: boolean; owner?: boolean }) {
+  return createDocumentFixtureStore({
+    "workspaces/channel-workspace": { id: "channel-workspace", ownerUid: "owner-1", mattermost: { teamId: "team-1" } },
+    ...(input.duplicateTeam
+      ? { "workspaces/duplicate-workspace": { id: "duplicate-workspace", ownerUid: "owner-2", mattermost: { teamId: "team-1" } } }
+      : {}),
+    ...(input.owner === false
+      ? {}
+      : { "users/owner-1": { username: "owner-1", accountLifecycle: { status: input.lifecycle ?? "active" } } }),
+  });
 }
 
 describe("resolveActiveArtifactWorkspaceSlug", () => {
   it("binds a Mattermost team to its active owning workspace", async () => {
-    await expect(resolveActiveArtifactWorkspaceSlug(
-      dbFor({}) as never,
-      "team-1",
-    )).resolves.toEqual({
+    await expect(resolveActiveArtifactWorkspaceSlug(storeFor({}), "team-1")).resolves.toEqual({
       workspaceSlug: "channel-workspace",
       workspaceOwnerUid: "owner-1",
     });
   });
 
+  it("does not bind an unmapped Mattermost team or a workspace whose owner record is gone", async () => {
+    await expect(resolveActiveArtifactWorkspaceSlug(storeFor({}), "team-2")).resolves.toBeNull();
+    await expect(resolveActiveArtifactWorkspaceSlug(storeFor({ owner: false }), "team-1")).resolves.toBeNull();
+  });
+
   it.each(["deletion_scheduled", "erasing", "suspended"])(
     "rejects artifact creation when the workspace owner is %s",
     async (lifecycle) => {
-      await expect(resolveActiveArtifactWorkspaceSlug(
-        dbFor({ lifecycle }) as never,
-        "team-1",
-      )).resolves.toBeNull();
+      await expect(resolveActiveArtifactWorkspaceSlug(storeFor({ lifecycle }), "team-1")).resolves.toBeNull();
     },
   );
 
   it("fails when a Mattermost team is ambiguously mapped", async () => {
-    await expect(resolveActiveArtifactWorkspaceSlug(
-      dbFor({ workspaceCount: 2 }) as never,
-      "team-1",
-    )).rejects.toThrow(/multiple workspaces/i);
+    await expect(resolveActiveArtifactWorkspaceSlug(storeFor({ duplicateTeam: true }), "team-1"))
+      .rejects.toBeInstanceOf(DuplicateRecordError);
   });
 });

@@ -16,6 +16,24 @@ import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store"
 import { createFleetBrokerRoutes } from "./fleet-broker.js";
 import { MAX_UPLOAD_BYTES } from "../../../gateway-edge/src/routes/workspace/upload.js";
 
+class ReadOnlyDocuments extends Map<string, Record<string, unknown>> {
+  constructor(private readonly docs: Record<string, Record<string, unknown>>) {
+    super();
+  }
+
+  override get(path: string): Record<string, unknown> | undefined {
+    return this.docs[path];
+  }
+
+  override set(): this {
+    throw Error("readonly authority");
+  }
+
+  override entries(): MapIterator<[string, Record<string, unknown>]> {
+    return new Map(Object.entries(this.docs)).entries();
+  }
+}
+
 const JWT = `${"a".repeat(20)}.${"b".repeat(20)}.${"c".repeat(20)}`;
 const target = { slug: "alice", projectSlug: null, gcsPrefix: "customers/alice" };
 const contents = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7]);
@@ -24,24 +42,21 @@ const filePath = "notes/file.bin";
 function harness() {
   const docs: Record<string, Record<string, unknown>> = {
     "users/uid-alice": { username: "alice", provisioning: { openclaw: { gatewayId: "shared-alice", status: "complete" } } },
-    "workspaces/alice": { ownerUid: "uid-alice", ownerActive: true },
+    "workspaces/alice": { id: "ws-alice", ownerUid: "uid-alice", ownerActive: true },
     "gateways/shared-alice/assignments/uid-alice": { uid: "uid-alice", slug: "alice", gatewayId: "shared-alice", source: "onboarding", state: "serving", epoch: 0 },
   };
-  const ref = (name: string) => ({ get: async () => ({ exists: Object.hasOwn(docs, name), data: () => docs[name] }) });
   const db = {
-    doc: ref,
     collection: (name: string) => ({ where: (_field: string, _op: string, gatewayId: string) => ({ get: async () => ({ docs: gatewayId === "shared-alice" && name === "users" ? [{ id: "uid-alice", data: () => docs["users/uid-alice"] }] : [] }) }) }),
-    runTransaction: async (work: (tx: unknown) => Promise<unknown>) => work({ get: (item: ReturnType<typeof ref>) => item.get(), set: () => { throw Error("readonly authority"); }, update: () => { throw Error("readonly authority"); } }),
   } as unknown as Firestore;
   const store = vi.fn(async (_target: unknown, name: string, bytes: Buffer) => ({ gcsPath: `customers/alice/${name}`, size: bytes.length }));
   const app = express(); app.disable("x-powered-by"); app.use(express.json());
   app.use((req, _res, next) => { req.boundTenant = { kind: "gateway", gatewayId: "shared-alice", saName: "octogee-gw-shared-alice", podUid: "pod-alice", podName: "pod-alice" }; next(); });
-  app.use(createTenantEnforcementMiddleware({ db, onDenied: async () => {} }));
+  app.use(createTenantEnforcementMiddleware({ db, store: createDocumentFixtureStore(new ReadOnlyDocuments(docs)), onDenied: async () => {} }));
   const auth = createGatewayCredentialAuth({ tokenHeader: SIDECAR_BROKER_TOKEN_HEADER, audience: SIDECAR_BROKER_TOKEN_AUDIENCE, namespace: "octogee-test",
     reviewer: async () => ({ authenticated: true, saName: "octogee-gw-shared-alice", namespace: "octogee-test", audiences: [SIDECAR_BROKER_TOKEN_AUDIENCE], podUid: "pod-alice", podName: "pod-alice" }),
     mapIdentity: async () => ({ kind: "gateway", gatewayId: "shared-alice" }) });
   app.use((req, res, next) => SIDECAR_BROKER_ROUTES.has(req.path) ? auth(req, res, next) : next());
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db, store: createDocumentFixtureStore({}), workspaceBlobStore: store }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({ db, store: createDocumentFixtureStore(new ReadOnlyDocuments(docs)), workspaceBlobStore: store }));
   return { app, docs, store };
 }
 
@@ -144,14 +159,18 @@ describe("gateway workspace binary central owner", () => {
     const h = harness(); const response = await request(h.app).post("/internal/fleet/blob/workspace/upload").set(SIDECAR_BROKER_TOKEN_HEADER, JWT).field("slug", "foreign").field("path", filePath).attach("file", contents, "blob");
     expect(response.status).toBe(403); expect(h.store).not.toHaveBeenCalled();
   });
-  it.each(["preparing", "mirror", "workspace-owner", "epoch", "restore"])("refuses noncanonical %s custody before central writes", async mode => {
+  it.each(["migrating", "mirror", "workspace-owner", "restore"])("refuses noncanonical %s custody before central writes", async mode => {
     const h = harness();
-    if (mode === "preparing") h.docs["gateways/shared-alice/assignments/uid-alice"].state = "preparing";
-    if (mode === "epoch") h.docs["gateways/shared-alice/assignments/uid-alice"].epoch = -1;
+    if (mode === "migrating") h.docs["gateways/shared-alice/assignments/uid-alice"].state = "migrating";
     if (mode === "workspace-owner") h.docs["workspaces/alice"].ownerUid = "foreign";
     const user = h.docs["users/uid-alice"] as { provisioning: { openclaw: Record<string, unknown> } };
     if (mode === "mirror") user.provisioning.openclaw.gatewayId = "other";
     if (mode === "restore") user.provisioning.openclaw.restoreFence = {};
     const response = await upload(h).attach("file", contents, "blob"); expect(response.status).toBe(403); expect(h.store).not.toHaveBeenCalled();
+  });
+  it.each([["state", "preparing"], ["epoch", -1]])("fails closed on a malformed assignment %s before central writes", async (field, value) => {
+    const h = harness();
+    h.docs["gateways/shared-alice/assignments/uid-alice"][field] = value;
+    const response = await upload(h).attach("file", contents, "blob"); expect(response.status).toBe(500); expect(h.store).not.toHaveBeenCalled();
   });
 });

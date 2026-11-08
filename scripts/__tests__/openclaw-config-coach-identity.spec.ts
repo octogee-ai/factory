@@ -1,12 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   buildCustomerAgent,
-  fetchCoachIdentities,
   platformOpenAiEmbeddingMemorySearch,
   platformOpenAiEmbeddingsEnabled,
   resolveCoachIdentity,
   type CustomerAgentInput,
-  type CoachIdentityDeps,
 } from "../lib/openclaw-config-builders.js";
 
 const DEFAULT_COACH = { name: "Octo", emoji: "🐙", model: "platform-openrouter/z-ai/glm-5.2" };
@@ -154,146 +152,5 @@ describe("platformOpenAiEmbeddingMemorySearch", () => {
     expect(platformOpenAiEmbeddingsEnabled({ OPENAI_EMBEDDINGS_ENABLED: "1" })).toBe(true);
     expect(platformOpenAiEmbeddingsEnabled({ OPENAI_EMBEDDINGS_ENABLED: "false" })).toBe(false);
     expect(platformOpenAiEmbeddingsEnabled({})).toBe(false);
-  });
-});
-
-describe("fetchCoachIdentities", () => {
-  function mkDeps(
-    docs: Record<string, { name?: string; avatarEmoji?: string } | undefined>,
-    logSpy = vi.fn(),
-  ): CoachIdentityDeps & { logs: ReturnType<typeof vi.fn> } {
-    const db = {
-      collection: (name: string) => ({
-        doc: (id: string) => ({
-          get: async () => {
-            const key = `${name}/${id}`;
-            const data = docs[key];
-            return { exists: !!data, data: () => data };
-          },
-        }),
-      }),
-    };
-    return { db, log: logSpy, logs: logSpy };
-  }
-
-  it("reads agents/{uid}.name + avatarEmoji and returns identities keyed by uid", async () => {
-    const deps = mkDeps({
-      "agents/uid-chris": { name: "Scout", avatarEmoji: "🧠" },
-      "agents/uid-sam": { name: "Pix", avatarEmoji: "🦊" },
-    });
-    const result = await fetchCoachIdentities(deps, [
-      { uid: "uid-chris", slug: "chris-builds-a3f2" },
-      { uid: "uid-sam", slug: "sam-cooks-b4g3" },
-    ]);
-    expect(result.get("uid-chris")).toEqual({ name: "Scout", emoji: "🧠" });
-    expect(result.get("uid-sam")).toEqual({ name: "Pix", emoji: "🦊" });
-  });
-
-  it("omits customers with no agents/{uid} doc and logs a warning", async () => {
-    const logSpy = vi.fn();
-    const deps = mkDeps(
-      { "agents/uid-chris": { name: "Scout", avatarEmoji: "🧠" } },
-      logSpy,
-    );
-    const result = await fetchCoachIdentities(deps, [
-      { uid: "uid-chris", slug: "chris-builds-a3f2" },
-      { uid: "uid-sam", slug: "sam-cooks-b4g3" },
-    ]);
-    expect(result.has("uid-chris")).toBe(true);
-    expect(result.has("uid-sam")).toBe(false);
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("sam-cooks-b4g3"),
-    );
-  });
-
-  it("omits entries when agents doc exists but has no customized name or emoji", async () => {
-    const logSpy = vi.fn();
-    const deps = mkDeps(
-      { "agents/uid-chris": {} },
-      logSpy,
-    );
-    const result = await fetchCoachIdentities(deps, [
-      { uid: "uid-chris", slug: "chris-builds-a3f2" },
-    ]);
-    expect(result.has("uid-chris")).toBe(false);
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("chris-builds-a3f2"),
-    );
-  });
-
-  it("accepts partial customization (name only or emoji only)", async () => {
-    const deps = mkDeps({
-      "agents/uid-chris": { name: "Scout" },
-      "agents/uid-sam": { avatarEmoji: "🦊" },
-    });
-    const result = await fetchCoachIdentities(deps, [
-      { uid: "uid-chris", slug: "chris-builds-a3f2" },
-      { uid: "uid-sam", slug: "sam-cooks-b4g3" },
-    ]);
-    expect(result.get("uid-chris")).toEqual({ name: "Scout", emoji: "" });
-    expect(result.get("uid-sam")).toEqual({ name: "", emoji: "🦊" });
-  });
-
-  it("tolerates Firestore errors for a single customer (continues others)", async () => {
-    const logSpy = vi.fn();
-    const db = {
-      collection: (_name: string) => ({
-        doc: (uid: string) => ({
-          get: async () => {
-            if (uid === "uid-broken") throw new Error("firestore hiccup");
-            return {
-              exists: true,
-              data: () => ({ name: "Scout", avatarEmoji: "🧠" }),
-            };
-          },
-        }),
-      }),
-    };
-    const deps = { db, log: logSpy };
-    const result = await fetchCoachIdentities(deps, [
-      { uid: "uid-broken", slug: "broken-slug-a1b2" },
-      { uid: "uid-ok", slug: "ok-slug-c3d4" },
-    ]);
-    expect(result.has("uid-broken")).toBe(false);
-    expect(result.get("uid-ok")).toEqual({ name: "Scout", emoji: "🧠" });
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("broken-slug-a1b2"),
-    );
-  });
-
-  it("distributes identities per customer — no cross-workspace bleed on Map lookup", async () => {
-    const deps = mkDeps({
-      "agents/uid-a": { name: "Scout", avatarEmoji: "🧠" },
-      "agents/uid-b": { name: "Pix", avatarEmoji: "🦊" },
-      "agents/uid-c": { name: "Marlo", avatarEmoji: "🐢" },
-    });
-    const customers = [
-      { uid: "uid-a", slug: "slug-a" },
-      { uid: "uid-b", slug: "slug-b" },
-      { uid: "uid-c", slug: "slug-c" },
-    ];
-    const identities = await fetchCoachIdentities(deps, customers);
-
-    const agents = customers.map((c) => {
-      const ident = identities.get(c.uid);
-      return buildCustomerAgent({
-        uid: c.uid,
-        slug: c.slug,
-        customerDir: `/tmp/${c.slug}`,
-        agentDir: `/tmp/${c.slug}/agent`,
-        coach: {
-          name: ident?.name || DEFAULT_COACH.name,
-          emoji: ident?.emoji || DEFAULT_COACH.emoji,
-          model: DEFAULT_COACH.model,
-        },
-      });
-    });
-
-    expect((agents[0].identity as any)).toEqual({ name: "Scout", emoji: "🧠" });
-    expect((agents[1].identity as any)).toEqual({ name: "Pix", emoji: "🦊" });
-    expect((agents[2].identity as any)).toEqual({ name: "Marlo", emoji: "🐢" });
-
-    const names = agents.map((a) => (a.identity as any).name);
-    expect(new Set(names).size).toBe(3);
   });
 });

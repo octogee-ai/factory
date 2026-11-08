@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import type { Firestore } from "firebase-admin/firestore";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createTenantEnforcementMiddleware, type TenantAccessRecord } from "../tenant-enforcement.js";
 import type { TenantDenial, TenantDenialReporter } from "../tenant-denial.js";
 
@@ -10,70 +11,38 @@ type UserDoc = Record<string, unknown>;
 type FlowDoc = Record<string, unknown>;
 type OperationDoc = Record<string, unknown>;
 
-function valueAtPath(data: Record<string, unknown>, path: string): unknown {
-  let cursor: unknown = data;
-  for (const part of path.split(".")) {
-    if (!cursor || typeof cursor !== "object") return undefined;
-    cursor = (cursor as Record<string, unknown>)[part];
-  }
-  return cursor;
+function flowDb(flows: Record<string, FlowDoc> = {}): Pick<Firestore, "collection"> {
+  return {
+    collection: (name: string) => {
+      if (name !== "byosubFlows") throw new Error(`tenant enforcement read ${name} outside the platform state store`);
+      return {
+        doc: (id: string) => ({
+          get: async () => ({
+            exists: Object.prototype.hasOwnProperty.call(flows, id),
+            data: () => flows[id],
+          }),
+        }),
+      };
+    },
+  } as unknown as Pick<Firestore, "collection">;
 }
 
-function fakeDb(opts: {
+function documentsAt(collection: string, records: Record<string, Record<string, unknown>> = {}) {
+  return Object.fromEntries(Object.entries(records).map(([id, data]) => [`${collection}/${id}`, data]));
+}
+
+function fixtureStore(opts: {
   users: Record<string, UserDoc>;
   flows?: Record<string, FlowDoc>;
   operations?: Record<string, OperationDoc>;
   gateways?: Record<string, Record<string, unknown>>;
-  // gateways/{gatewayId}/assignments/{uid} — the Step 2 roster layer. Empty by
-  // default: the roster then falls back to the assigned user mirror (legacy).
-  assignments?: Record<string, Record<string, Record<string, unknown>>>;
-}): Pick<Firestore, "collection"> {
-  return {
-    collection: (name: string) => {
-      if (name === "gateways") {
-        return {
-          doc: (gatewayId: string) => ({
-            get: async () => ({
-              exists: Object.prototype.hasOwnProperty.call(opts.gateways ?? {}, gatewayId),
-              data: () => opts.gateways?.[gatewayId],
-            }),
-            collection: (_sub: string) => ({
-              get: async () => ({
-                docs: Object.entries(opts.assignments?.[gatewayId] ?? {}).map(
-                  ([uid, data]) => ({ id: uid, data: () => data }),
-                ),
-              }),
-            }),
-          }),
-        };
-      }
-      const records =
-        name === "byosubFlows"
-          ? (opts.flows ?? {})
-          : name === "glmOperations"
-            ? (opts.operations ?? {})
-            : opts.users;
-      const query = (filters: Array<{ field: string; value: unknown }> = []) => ({
-        doc: (id: string) => ({
-          get: async () => ({
-            exists: Object.prototype.hasOwnProperty.call(records, id),
-            data: () => records[id],
-          }),
-        }),
-        where: (field: string, _op: string, value: unknown) =>
-          query([...filters, { field, value }]),
-        limit: () => query(filters),
-        get: async () => ({
-          docs: Object.entries(records)
-            .filter(([, data]) =>
-              filters.every((filter) => valueAtPath(data, filter.field) === filter.value),
-            )
-            .map(([id, data]) => ({ id, data: () => data })),
-        }),
-      });
-      return query();
-    },
-  } as unknown as Pick<Firestore, "collection">;
+}) {
+  return createDocumentFixtureStore({
+    ...documentsAt("users", opts.users),
+    ...documentsAt("byosubFlows", opts.flows),
+    ...documentsAt("glmOperations", opts.operations),
+    ...documentsAt("gateways", opts.gateways),
+  });
 }
 
 function app(opts: {
@@ -92,25 +61,27 @@ function app(opts: {
     if (opts.boundTenant) req.boundTenant = opts.boundTenant;
     next();
   });
+  const records = {
+    users:
+      opts.users ?? {
+        alice: {
+          username: "alice",
+          provisioning: { openclaw: { slug: "alice", gatewayId: "bender" } },
+        },
+        victim: {
+          username: "victim",
+          provisioning: { openclaw: { slug: "victim", gatewayId: "other" } },
+        },
+      },
+    flows: opts.flows,
+    operations: opts.operations,
+    gateways: opts.gateways,
+  };
   const enforcement = createTenantEnforcementMiddleware({
     onDenied: opts.onDenied ?? (async () => {}),
     onAccess: opts.onAccess ?? (() => {}),
-    db: fakeDb({
-      users:
-        opts.users ?? {
-          alice: {
-            username: "alice",
-            provisioning: { openclaw: { slug: "alice", gatewayId: "bender" } },
-          },
-          victim: {
-            username: "victim",
-            provisioning: { openclaw: { slug: "victim", gatewayId: "other" } },
-          },
-        },
-      flows: opts.flows,
-      operations: opts.operations,
-      gateways: opts.gateways,
-    }),
+    db: flowDb(records.flows),
+    store: fixtureStore(records),
   });
   const handler = (_req: express.Request, res: express.Response) =>
     res.status(opts.handlerStatus ?? 200).json({ ok: true });
@@ -259,6 +230,19 @@ describe("tenant enforcement middleware", () => {
 function disposableClaim(uid: string, extra: Record<string, unknown> = {}) {
   return {
     gatewayId: "ceckert-s-072b95aa",
+    createdAt: 1,
+    createdBy: "glm-controller",
+    updatedAt: 1,
+    updatedBy: "glm-controller",
+    latestRelease: 1,
+    desiredRelease: 1,
+    liveRelease: null,
+    liveRevisionId: null,
+    trafficRevisionId: null,
+    roll: null,
+    configSchemaVersion: 1,
+    profile: "builder",
+    imageProfile: "builder",
     gatewayClass: "builder",
     desiredStatus: "running",
     ownerUid: uid,
@@ -551,7 +535,7 @@ const STILL_ON_SHARED = {
         req.boundTenant = { kind: "platform", actor: "artifact-worker" };
         next();
       });
-      server.use(createTenantEnforcementMiddleware({ onAccess }));
+      server.use(createTenantEnforcementMiddleware({ onAccess, store: fixtureStore({ users: {} }) }));
       const router = express.Router();
       router.get("/:artifactId/source", (_req, res) => res.send("data"));
       server.use("/internal/chat-artifacts", router);
@@ -569,7 +553,7 @@ const STILL_ON_SHARED = {
         boundTenant: { kind: "platform", actor: "artifact-worker" },
       } as express.Request;
       const res = Object.assign(new EventEmitter(), { statusCode: 200, writableFinished: finished });
-      createTenantEnforcementMiddleware({ onAccess })(req, res as unknown as express.Response, () => {});
+      createTenantEnforcementMiddleware({ onAccess, store: fixtureStore({ users: {} }) })(req, res as unknown as express.Response, () => {});
 
       if (finished) res.emit("finish");
       res.emit("close");
@@ -584,7 +568,7 @@ const STILL_ON_SHARED = {
       const { records, onAccess } = accessCapture();
       const req = { method: "POST", path: "/internal/agent-projects/list", boundTenant: BENDER } as express.Request;
       const res = Object.assign(new EventEmitter(), { statusCode: 200, writableFinished: false });
-      createTenantEnforcementMiddleware({ onAccess, db: fakeDb({ users: {} }), onDenied: async () => {} })(
+      createTenantEnforcementMiddleware({ onAccess, db: flowDb(), store: fixtureStore({ users: {} }), onDenied: async () => {} })(
         req, res as unknown as express.Response, () => {},
       );
       res.emit("close");
@@ -1084,6 +1068,35 @@ const STILL_ON_SHARED = {
 
     expect(inbound.status).toBe(200);
     expect(ordinaryRoute.status).toBe(403);
+  });
+
+  it("refuses the Gitea inbound migration allowance when two Builders claim the slug", async () => {
+    const onDenied = vi.fn(async () => {});
+    const res = await request(
+      app({
+        boundTenant: BENDER,
+        users: {
+          victim: { username: "victim", provisioning: { openclaw: { slug: "victim", gatewayId: "other" } } },
+          impostor: { username: "victim" },
+        },
+        operations: {
+          inbound: {
+            kind: "migrate-customer",
+            status: "running",
+            inputUid: "victim",
+            input: { uid: "victim", toGatewayId: "bender" },
+          },
+        },
+        onDenied,
+      }),
+    )
+      .get("/internal/gitea/user-pubkey")
+      .query({ slug: "victim" });
+
+    expect(res.status).toBe(403);
+    expect(onDenied).toHaveBeenCalledWith(expect.objectContaining({
+      reason: expect.stringMatching(/^authorization check failed: /),
+    }));
   });
 
   it("keeps the Gitea inbound migration allowance scoped to the target gateway", async () => {

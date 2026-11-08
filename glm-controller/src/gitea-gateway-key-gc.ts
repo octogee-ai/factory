@@ -6,8 +6,10 @@ import {
   isManagedGatewayKeyTitle,
 } from "@octogee/core/gitea-naming";
 import { podBelongsToGateway } from "@octogee/core/gateway-live-release";
+import type { FleetRegistryRecord, GatewayRoot, PlatformStateStore } from "@octogee/core/platform-state";
 import { gatewayVmPodName } from "@octogee/shared/types/glm";
 
+import type { FleetInformer } from "./fleet-informer.js";
 import type { GatewayPodDiagnostics } from "./lib/kube-ops.js";
 
 export const GITEA_PAGE_SIZE = 50;
@@ -272,36 +274,22 @@ export async function runGiteaGatewayKeyGcTick(
   return { users, passCompleted, calls: pacer.calls };
 }
 
-interface OwnerSourceDoc {
-  id: string;
-  data(): Record<string, unknown> | undefined;
-}
-
 export interface LiveGatewayOwnerSources {
-  gateways: readonly OwnerSourceDoc[];
-  glmGateways: readonly OwnerSourceDoc[];
+  gateways: readonly Pick<GatewayRoot, "gatewayId">[];
+  fleetRegistry: readonly Pick<FleetRegistryRecord, "gatewayId" | "vm">[];
   readGatewayPodDiagnosticsBatch: (
     gatewayIds: readonly string[],
   ) => Promise<Record<string, GatewayPodDiagnostics>>;
 }
 
-function vmOwner(doc: OwnerSourceDoc): { gatewayId: string; owner: string } | null {
-  const data = doc.data();
-  const vm = data?.vm as { instanceId?: unknown } | null | undefined;
-  const instanceId = vm?.instanceId;
+function vmOwner(record: Pick<FleetRegistryRecord, "gatewayId" | "vm">): { gatewayId: string; owner: string } | null {
+  const instanceId = record.vm?.instanceId;
   if (typeof instanceId !== "string" || !/^\d+$/u.test(instanceId)) return null;
-  const gatewayId = typeof data?.gatewayId === "string" ? data.gatewayId : doc.id;
-  return { gatewayId, owner: gatewayKeyOwnerId(gatewayId, gatewayVmPodName(gatewayId, instanceId)) };
+  return { gatewayId: record.gatewayId, owner: gatewayKeyOwnerId(record.gatewayId, gatewayVmPodName(record.gatewayId, instanceId)) };
 }
 
 async function readOwnersByGateway(sources: LiveGatewayOwnerSources): Promise<Map<string, Set<string>>> {
-  const gatewayIds = new Set<string>();
-  for (const doc of [...sources.gateways, ...sources.glmGateways]) {
-    gatewayIds.add(doc.id);
-    const gatewayId = doc.data()?.gatewayId;
-    if (typeof gatewayId === "string" && gatewayId) gatewayIds.add(gatewayId);
-  }
-  const ids = [...gatewayIds].sort();
+  const ids = [...new Set([...sources.gateways, ...sources.fleetRegistry].map((record) => record.gatewayId))].sort();
   const diagnostics = await sources.readGatewayPodDiagnosticsBatch(ids);
   const ownersByGateway = new Map<string, Set<string>>();
   const addOwner = (gatewayId: string, owner: string) => {
@@ -322,8 +310,8 @@ async function readOwnersByGateway(sources: LiveGatewayOwnerSources): Promise<Ma
       }
     }
   }
-  for (const doc of sources.glmGateways) {
-    const vm = vmOwner(doc);
+  for (const record of sources.fleetRegistry) {
+    const vm = vmOwner(record);
     if (vm) addOwner(vm.gatewayId, vm.owner);
   }
   return ownersByGateway;
@@ -332,6 +320,24 @@ async function readOwnersByGateway(sources: LiveGatewayOwnerSources): Promise<Ma
 export async function readLiveGatewayKeyHolders(sources: LiveGatewayOwnerSources): Promise<LiveKeyHolders> {
   const ownersByGateway = await readOwnersByGateway(sources);
   return { owners: new Set([...ownersByGateway.values()].flatMap((held) => [...held])) };
+}
+
+export interface FleetKeyHolderSources {
+  informer: Pick<FleetInformer, "gateways" | "fleetRegistry">;
+  store: Pick<PlatformStateStore, "gateways" | "fleetRegistry">;
+  readGatewayPodDiagnosticsBatch: LiveGatewayOwnerSources["readGatewayPodDiagnosticsBatch"];
+}
+
+export async function readFleetLiveKeyHolders(sources: FleetKeyHolderSources): Promise<LiveKeyHolders> {
+  const [gateways, fleetRegistry] = await Promise.all([
+    sources.informer.gateways() ?? sources.store.gateways.roots.list(),
+    sources.informer.fleetRegistry() ?? sources.store.fleetRegistry.list(),
+  ]);
+  return readLiveGatewayKeyHolders({
+    gateways,
+    fleetRegistry,
+    readGatewayPodDiagnosticsBatch: sources.readGatewayPodDiagnosticsBatch,
+  });
 }
 
 export interface GiteaKeyAdminClientDeps {

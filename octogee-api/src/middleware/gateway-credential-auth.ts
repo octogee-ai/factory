@@ -6,21 +6,23 @@ import {
 } from "@octogee/core/internal-fetch";
 import { isWellFormedServiceAccountJwt } from "../../../gateway-edge/src/middleware/security.js";
 import { logger as defaultLogger } from "../../../gateway-edge/src/middleware/logging.js";
-import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 import { mapReviewToTenant, type BoundTenant } from "../lib/sa-to-tenant.js";
 import type { ReviewResult, Reviewer } from "../lib/token-review.js";
 
 type GatewayBinding = Extract<BoundTenant, { kind: "gateway" }>;
 
-export interface GatewayCredentialAuthOptions {
+interface GatewayCredentialAuthBaseOptions {
   reviewer: Reviewer;
   tokenHeader?: string;
   audience?: string;
-  db?: Parameters<typeof mapReviewToTenant>[0];
   namespace?: string;
-  mapIdentity?: (review: Extract<ReviewResult, { authenticated: true }>) => Promise<BoundTenant | null>;
   logger?: Pick<typeof defaultLogger, "warn">;
 }
+
+export type GatewayCredentialAuthOptions = GatewayCredentialAuthBaseOptions & (
+  | { store: Parameters<typeof mapReviewToTenant>[0] }
+  | { mapIdentity: (review: Extract<ReviewResult, { authenticated: true }>) => Promise<BoundTenant | null> }
+);
 
 const FORBIDDEN = { error: "forbidden" } as const;
 
@@ -36,15 +38,14 @@ function exactPodMatch(
 export function createGatewayCredentialAuth(
   opts: GatewayCredentialAuthOptions,
 ): (req: Request, res: Response, next: NextFunction) => void {
-  const db = opts.db ?? defaultDb;
   const namespace = opts.namespace ?? process.env.K8S_NAMESPACE ?? "octogee";
   const logger = opts.logger ?? defaultLogger;
   const tokenHeader = opts.tokenHeader ?? GATEWAY_CREDENTIAL_TOKEN_HEADER;
   const audience = opts.audience ?? GATEWAY_CREDENTIAL_TOKEN_AUDIENCE;
-  const mapIdentity = opts.mapIdentity ?? (async (review) => {
-    const mapped = await mapReviewToTenant(db, review, namespace);
+  const mapIdentity = "mapIdentity" in opts ? opts.mapIdentity : async (review: Extract<ReviewResult, { authenticated: true }>) => {
+    const mapped = await mapReviewToTenant(opts.store, review, namespace);
     return mapped.attached ? mapped.tenant : null;
-  });
+  };
 
   return (req, res, next): void => {
     const authenticate = async (): Promise<boolean> => {

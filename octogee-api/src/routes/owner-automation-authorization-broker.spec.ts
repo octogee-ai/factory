@@ -1,13 +1,15 @@
 import express, { type Express } from "express";
-import type { Firestore } from "firebase-admin/firestore";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
+import type { BuilderRecord, PlatformStateRepositories, Stored } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
 import { createProductivityRateLimiter } from "../lib/agent-productivity/rate-limit.js";
 import {
   OWNER_AUTOMATIONS_PROOF_PATH,
   ownerAutomationProofSignature,
 } from "../lib/owner-automation-authorization.js";
+import { fixtureBuilder } from "../test-helpers/fixture-builders.js";
 import { createOwnerAutomationAuthorizationBrokerRoutes } from "./owner-automation-authorization-broker.js";
 
 const NOW = 1_800_000_000_000;
@@ -40,31 +42,24 @@ function signedBody(overrides: Record<string, unknown> = {}): Record<string, unk
 
 function records(overrides: Record<string, Record<string, unknown> | undefined> = {}) {
   return {
-    "workspaces/acme": { ownerUid: "owner-acme", ownerActive: true },
+    "workspaces/acme": { id: "acme", ownerUid: "owner-acme", ownerActive: true },
     "workspaces/acme/channels/coach-dm": { mattermost: { channelId: COACH_CHANNEL } },
     "users/owner-acme/secrets/coachMattermost": { personalToken: "acme-coach-pat" },
     ...overrides,
   };
 }
 
-function fakeDb(data: Record<string, Record<string, unknown> | undefined>): Firestore {
-  return {
-    doc: (path: string) => ({
-      get: async () => ({ exists: data[path] !== undefined, data: () => data[path] }),
-    }),
-  } as unknown as Firestore;
-}
-
-const ASSIGNED = { uid: "owner-acme", data: { workspaceId: "acme", mattermost: { userId: OWNER_MM } } };
+const ASSIGNED = fixtureBuilder("owner-acme", { workspaceId: "acme", mattermostUserId: OWNER_MM });
 
 function app(opts: {
-  db?: Firestore;
-  assigned?: typeof ASSIGNED | null;
+  docs?: Record<string, Record<string, unknown> | undefined>;
+  assigned?: Stored<BuilderRecord> | null;
   bound?: boolean;
   limit?: number;
   readLimit?: number;
 } = {}): { server: Express; findAssignedUser: ReturnType<typeof vi.fn> } {
-  const findAssignedUser = vi.fn(async (_db: Firestore, gatewayId: string, agentId: string) =>
+  const docs = opts.docs ?? records();
+  const findAssignedUser = vi.fn(async (_store: PlatformStateRepositories, gatewayId: string, agentId: string) =>
     gatewayId === "shared-b" && agentId === AGENT ? (opts.assigned === undefined ? ASSIGNED : opts.assigned) : null);
   const server = express();
   server.use(express.json());
@@ -75,7 +70,7 @@ function app(opts: {
     });
   }
   server.use("/internal/owner-automations", createOwnerAutomationAuthorizationBrokerRoutes({
-    db: opts.db ?? fakeDb(records()),
+    store: createDocumentFixtureStore(docs),
     findAssignedUser,
     now: () => NOW,
     rateLimiter: createProductivityRateLimiter({ now: () => NOW, limits: { write: opts.limit ?? 20, read: opts.readLimit ?? 60 } }),
@@ -150,20 +145,20 @@ describe("owner automation authorization broker", () => {
   });
 
   it.each([
-    ["a workspace owned by someone else", { "workspaces/acme": { ownerUid: "owner-victim", ownerActive: true } }],
-    ["an inactive workspace owner", { "workspaces/acme": { ownerUid: "owner-acme", ownerActive: false } }],
+    ["a workspace owned by someone else", { "workspaces/acme": { id: "acme", ownerUid: "owner-victim", ownerActive: true } }],
+    ["an inactive workspace owner", { "workspaces/acme": { id: "acme", ownerUid: "owner-acme", ownerActive: false } }],
     ["an archived Coach channel", { "workspaces/acme/channels/coach-dm": { mattermost: { channelId: COACH_CHANNEL }, archivedAt: 1 } }],
     ["a missing Coach channel", { "workspaces/acme/channels/coach-dm": undefined }],
     ["a missing proof secret", { "users/owner-acme/secrets/coachMattermost": undefined }],
   ])("rejects %s", async (_label, overrides) => {
-    const res = await post(app({ db: fakeDb(records(overrides)) }).server, authorizeBody());
+    const res = await post(app({ docs: records(overrides) }).server, authorizeBody());
 
     expect(res.status).toBe(403);
   });
 
   it("rejects an agent that is not assigned to this gateway or is suspended", async () => {
     expect((await post(app({ assigned: null }).server, authorizeBody())).status).toBe(403);
-    const suspended = { ...ASSIGNED, data: { ...ASSIGNED.data, accountLifecycle: { status: "suspended" } } };
+    const suspended = fixtureBuilder("owner-acme", { ...ASSIGNED, accountLifecycle: { status: "suspended" } });
     expect((await post(app({ assigned: suspended }).server, authorizeBody())).status).toBe(403);
   });
 

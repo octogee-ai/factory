@@ -91,6 +91,12 @@ describe.skipIf(!dsn)("PostgreSQL fleet registry", { timeout: 30_000 }, () => {
     });
   });
 
+  it("refuses runtime rows without a heartbeat map", async () => {
+    await registry().create(runtimeRecord("bender"));
+    await harness.query("UPDATE $schema.fleet_registry SET heartbeat = 'null'::jsonb WHERE gateway_id = 'bender'");
+    await expect(registry().get("bender")).rejects.toMatchObject({ name: "MalformedRecordError" });
+  });
+
   it("round-trips every VM field and keeps a null vm apart from an absent one", async () => {
     const full = runtimeRecord("bender", {
       runtime: "gce-vm",

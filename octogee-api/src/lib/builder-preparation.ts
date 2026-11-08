@@ -1,9 +1,7 @@
-import type { Firestore } from "firebase-admin/firestore";
-import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, gatewayVmPodName, resolveGatewayRuntime } from "@octogee/shared/types/glm";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import type { FleetRegistryRecord, PlatformStateRepositories } from "@octogee/core/platform-state";
+import { gatewayVmPodName, resolveGatewayRuntime } from "@octogee/shared/types/glm";
 import { configuredBuilderCredentialBootstrapAllowed } from "@octogee/core/gateway-live-release";
 import { migrationCancellationDeferred } from "@octogee/core/fleet-state";
-import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
 import type { BoundTenant } from "./sa-to-tenant.js";
 
 function readPath(value: unknown, path: string): unknown {
@@ -15,37 +13,30 @@ function readPath(value: unknown, path: string): unknown {
 }
 
 export async function configuredBuilderPreparationAllowed(
-  db: Firestore,
+  store: PlatformStateRepositories,
   bound: Extract<BoundTenant, { kind: "gateway" }>,
   slug: string,
   ownerUid: string,
 ): Promise<boolean> {
   if (bound.ownerUid !== ownerUid || !bound.podUid) return false;
-  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
-  if (!configuredBuilderCredentialBootstrapAllowed(gatewaySnap.data(), {
+  const gateway = await store.gateways.roots.get(bound.gatewayId);
+  if (!configuredBuilderCredentialBootstrapAllowed(gateway ?? undefined, {
     gatewayId: bound.gatewayId, podName: bound.podName, slug, uid: ownerUid,
   })) return false;
-  const [userSnap, runtimeSnap, operations] = await Promise.all([
-    db.collection("users").doc(ownerUid).get(),
-    db.collection(GLM_GATEWAYS_COLLECTION).doc(bound.gatewayId).get(),
-    db.collection(GLM_OPERATIONS_COLLECTION)
-      .where("kind", "==", "migrate-customer")
-      .where("inputUid", "==", ownerUid)
-      .where("status", "==", "running")
-      .get(),
+  const [builder, runtime, operations] = await Promise.all([
+    store.builders.records.get(ownerUid),
+    store.fleetRegistry.get(bound.gatewayId),
+    store.journal.operations.listForUid(ownerUid, { kind: "migrate-customer", statuses: ["running"] }),
   ]);
-  const user = userSnap.data() as Record<string, unknown> | undefined;
-  const sourceGatewayId = readPath(user, "provisioning.openclaw.gatewayId");
-  if (typeof sourceGatewayId !== "string" || !sourceGatewayId || sourceGatewayId === bound.gatewayId || slugFromAssignedUser(user) !== slug) return false;
-  const runtime = runtimeSnap.data() as Record<string, unknown> | undefined;
-  if (runtime?.gatewayId !== bound.gatewayId) return false;
-  if (!preparationRuntimeMatches(runtime, bound, slug, ownerUid)) return false;
-  const matching = operations.docs.filter((doc) => preparationOperationMatches(doc.data(), doc.id, { ownerUid, sourceGatewayId, targetGatewayId: bound.gatewayId, slug }));
+  const sourceGatewayId = builder?.gateway?.gatewayId;
+  if (!sourceGatewayId || sourceGatewayId === bound.gatewayId || builder.slug !== slug) return false;
+  if (!runtime || !preparationRuntimeMatches(runtime, bound, slug, ownerUid)) return false;
+  const matching = operations.filter((operation) => preparationOperationMatches(operation as unknown as Record<string, unknown>, operation.id, { ownerUid, sourceGatewayId, targetGatewayId: bound.gatewayId, slug }));
   return matching.length === 1;
 }
 
 function preparationRuntimeMatches(
-  runtime: Record<string, unknown>,
+  runtime: FleetRegistryRecord,
   bound: Extract<BoundTenant, { kind: "gateway" }>,
   slug: string,
   ownerUid: string,

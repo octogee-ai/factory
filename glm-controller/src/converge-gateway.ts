@@ -353,7 +353,7 @@ function gatewayBuilderAccess(
 
 function provisioningRuntimeObservations(
   gateway: DurableGateway,
-  existing: GatewayRuntimeDoc | null,
+  existing: Omit<GatewayRuntimeDoc, "docKind"> | null,
   now: number,
 ): {
   runtime: Pick<GatewayRuntimeDoc, "lifecycle" | "heartbeat" | "kubernetes">;
@@ -385,7 +385,7 @@ function provisioningRuntimeObservations(
 export function provisioningRuntimeDoc(input: {
   gateway: DurableGateway;
   artifact: ReleasePayload;
-  existing: GatewayRuntimeDoc | null;
+  existing: Omit<GatewayRuntimeDoc, "docKind"> | null;
   now: number;
 }): GatewayRuntimeDoc {
   const { gateway, artifact, existing } = input;

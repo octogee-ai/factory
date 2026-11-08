@@ -3,11 +3,6 @@ export const PROJECT_AGENT_PAT_DESCRIPTION = "Octogee project agent (OpenClaw)";
 export function projectAgentSecretDocId(project) {
     return `projectAgentMattermost-${project}`;
 }
-function secretDoc(deps, uid, project) {
-    return deps.db
-        .collection("users").doc(uid)
-        .collection("secrets").doc(projectAgentSecretDocId(project));
-}
 async function createOrAdoptBotUser(deps, botUsername, displayName, description) {
     let createError;
     try {
@@ -91,11 +86,14 @@ export async function createProjectAgentBot(deps, input) {
     if (typeof minted?.token !== "string" || !minted.token) {
         throw new Error(`[project-agent] PAT mint returned no token for ${botUsername}`);
     }
-    await secretDoc(deps, input.uid, input.project).set({
+    await deps.secrets.put(input.uid, {
+        kind: "project-agent-mattermost",
+        secretId: projectAgentSecretDocId(input.project),
+        projectId: input.project,
         personalToken: minted.token,
-        mmUserId,
-        project: input.project,
-        createdAt: deps.now(),
+        mattermostUserId: mmUserId,
+        createdAt: { serverNow: true },
+        rotatedAt: null,
     });
     deps.log(`[project-agent] provisioned ${botUsername} (${mmUserId}) with fresh PAT`);
     return { mmUserId, token: minted.token };
@@ -112,6 +110,6 @@ export async function retireProjectAgentBot(deps, input) {
             throw err;
         deps.log(`[project-agent] bot ${input.mmUserId} already gone (404) - continuing retire`);
     }
-    await secretDoc(deps, input.uid, input.project).delete();
+    await deps.secrets.delete(input.uid, projectAgentSecretDocId(input.project));
     deps.log(`[project-agent] retired bot ${input.mmUserId} for project ${input.project}`);
 }

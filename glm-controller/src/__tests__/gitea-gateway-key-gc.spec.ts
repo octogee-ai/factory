@@ -2,9 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import { gatewayKeyOwnerId, gatewayKeyTitle } from "@octogee/core/gitea-naming";
 
+import { MalformedRecordError } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
+
 import {
   createGiteaGatewayKeyGcState,
   createGiteaKeyAdminClient,
+  readFleetLiveKeyHolders,
   readLiveGatewayKeyHolders,
   runGiteaGatewayKeyGcTick,
   type GiteaGatewayKeyGcDeps,
@@ -319,8 +323,12 @@ function diagnostics(podNames: string[], status: GatewayPodDiagnostics["status"]
   };
 }
 
-function doc(id: string, data: Record<string, unknown> = {}) {
-  return { id, data: () => data };
+function root(gatewayId: string) {
+  return { gatewayId };
+}
+
+function runtime(gatewayId: string, vm: { instanceId: string } | null = null) {
+  return { gatewayId, vm } as never;
 }
 
 describe("readLiveGatewayKeyHolders", () => {
@@ -334,10 +342,10 @@ describe("readLiveGatewayKeyHolders", () => {
       ])));
 
     const { owners } = await readLiveGatewayKeyHolders({
-      gateways: [doc("shared-0"), doc("builder-jack")],
-      glmGateways: [
-        doc("shared-0", { gatewayId: "shared-0" }),
-        doc("builder-jack", { gatewayId: "builder-jack", vm: { instanceId: "123456789" } }),
+      gateways: [root("shared-0"), root("builder-jack")],
+      fleetRegistry: [
+        runtime("shared-0"),
+        runtime("builder-jack", { instanceId: "123456789" }),
       ],
       readGatewayPodDiagnosticsBatch: readBatch,
     });
@@ -350,24 +358,42 @@ describe("readLiveGatewayKeyHolders", () => {
     ]);
   });
 
-  it("attributes a revision pod to the tenant gateway that registered its key", async () => {
-    const { owners } = await readLiveGatewayKeyHolders({
-      gateways: [doc("shared-0")],
-      glmGateways: [doc("shared-0-r3", { gatewayId: "shared-0" })],
+  it("fails closed when a direct read meets a revision runtime document named for another gateway", async () => {
+    const store = createDocumentFixtureStore({
+      "gateways/shared-0": { gatewayId: "shared-0", desiredRelease: 1, latestRelease: 1, desiredStatus: "running" },
+      "glmGateways/shared-0-r3": { docKind: "runtime", gatewayId: "shared-0", release: 1, lifecycle: "serving" },
+    });
+    const readBatch = vi.fn(async () => ({}));
+
+    await expect(readFleetLiveKeyHolders({
+      informer: { gateways: () => null, fleetRegistry: () => null },
+      store,
+      readGatewayPodDiagnosticsBatch: readBatch,
+    })).rejects.toBeInstanceOf(MalformedRecordError);
+    expect(readBatch).not.toHaveBeenCalled();
+  });
+
+  it("reads key holders from the fresh mirrors without a direct read", async () => {
+    const store = createDocumentFixtureStore({});
+    const list = vi.spyOn(store.fleetRegistry, "list");
+    const { owners } = await readFleetLiveKeyHolders({
+      informer: {
+        gateways: () => [root("builder-jack")] as never,
+        fleetRegistry: () => [runtime("builder-jack", { instanceId: "123456789" })],
+      },
+      store,
       readGatewayPodDiagnosticsBatch: async (gatewayIds) =>
-        Object.fromEntries(gatewayIds.map((id) => [
-          id,
-          id === "shared-0-r3" ? diagnostics(["octogee-gateway-shared-0-r3-5c6d-x7k2p"]) : diagnostics([], "missing"),
-        ])),
+        Object.fromEntries(gatewayIds.map((id) => [id, diagnostics([], "missing")])),
     });
 
-    expect(owners.has("shared-0/octogee-gateway-shared-0-r3-5c6d-x7k2p")).toBe(true);
+    expect([...owners]).toEqual(["builder-jack/octogee-gateway-builder-jack-vm-123456789"]);
+    expect(list).not.toHaveBeenCalled();
   });
 
   it("fails closed when any gateway's pods cannot be observed", async () => {
     await expect(readLiveGatewayKeyHolders({
-      gateways: [doc("shared-0")],
-      glmGateways: [],
+      gateways: [root("shared-0")],
+      fleetRegistry: [],
       readGatewayPodDiagnosticsBatch: async () => ({
         "shared-0": { ...diagnostics([], "unknown"), error: "pods not found" },
       }),

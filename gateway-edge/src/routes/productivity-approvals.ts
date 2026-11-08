@@ -10,6 +10,9 @@ import { connectorReviewerHasWorkspaceAccess } from "../lib/connector-reviewer-a
 import { isProjectRecipeId } from "@octogee/shared/types/project";
 
 import { db as defaultDb } from "../lib/db.js";
+import { platformStateStore, readBuilderTier } from "../lib/platform-state.js";
+import type { BuilderTierReader } from "@octogee/core/builder-activation-lease";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
 import { requireAuth } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
 import { connectorApprovalBinding, connectorApprovalRpc, readConnectorApproval, type ConnectorApprovalRpc } from "../lib/connector-approval-client.js";
@@ -21,6 +24,8 @@ const APPROVAL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f
 
 interface Deps {
   db: Firestore;
+  store: PlatformStateStore;
+  readBuilderTier: BuilderTierReader;
   now: () => number;
   nativeRpc: ConnectorApprovalRpc;
 }
@@ -591,7 +596,7 @@ async function loadAuthorizedApproval(
   const snap = await deps.db.doc(`${PRODUCTIVITY_APPROVALS_COLLECTION}/${approvalId}`).get();
   const data = snap.data();
   if (!snap.exists || !data || !hashesEqual(data.nonceHash, providedNonceHash)
-    || !(await connectorReviewerHasWorkspaceAccess(deps.db, data, uid))) {
+    || !(await connectorReviewerHasWorkspaceAccess(deps, data, uid))) {
     return null;
   }
   return data;
@@ -686,10 +691,13 @@ async function respondToApproval(
 }
 
 export function createProductivityApprovalRoutes(options: Partial<Deps> = {}): Router {
+  const store = options.store ?? platformStateStore;
   const deps: Deps = {
     db: options.db ?? defaultDb,
+    store,
+    readBuilderTier: options.readBuilderTier ?? readBuilderTier,
     now: options.now ?? Date.now,
-    nativeRpc: options.nativeRpc ?? connectorApprovalRpc(options.db ?? defaultDb),
+    nativeRpc: options.nativeRpc ?? connectorApprovalRpc(store),
   };
   const router = Router();
   router.get("/:approvalId", (req, res, next) => preview(deps, req, res, next));

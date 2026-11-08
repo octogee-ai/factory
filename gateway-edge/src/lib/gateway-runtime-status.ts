@@ -3,6 +3,7 @@ import {
   isBuilderActivationStatus,
   type BuilderActivationSummary,
 } from "@octogee/shared/types/gateway-control";
+import type { BuilderActivationLease } from "@octogee/core/platform-state";
 import {
   isGatewayRuntimeDoc,
   type GatewayHeartbeatStatus,
@@ -60,9 +61,7 @@ export function projectGatewayRuntimeStatus(
   return status;
 }
 
-export function projectOwnerActivation(ownerData: unknown): BuilderActivationSummary | null {
-  const openclaw = record(record(record(ownerData)?.provisioning)?.openclaw);
-  const lease = record(openclaw?.activationLease);
+export function projectOwnerActivation(lease: BuilderActivationLease | null): BuilderActivationSummary | null {
   if (!lease || !isBuilderActivationStatus(lease.status)) return null;
   return {
     status: lease.status,

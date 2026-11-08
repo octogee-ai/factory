@@ -10,8 +10,6 @@ import express from "express";
 import { workspaceIdentityReady } from "@octogee/core/openclaw-workspace-bootstrap";
 import { OpenclawWireError } from "@octogee/shared/types/openclaw-wire-core";
 import * as path from "node:path";
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
-import { readAssignedSlugsForGateway } from "./assigned-roster.js";
 import { agentIdsFromConfig } from "./byosub-restore.js";
 import { OPENCLAW_DIR, readOpenClawConfig } from "./config.js";
 import { readActivationManifest } from "./migration-activation-manifest.js";
@@ -29,7 +27,6 @@ import type { Server } from "http";
 import type { AddressInfo } from "net";
 import {
   FLEET_STATE_PATH,
-  GATEWAY_HEARTBEAT_INTERVAL_MS,
   type FleetHealthResponse,
   type FleetStateResponse,
   type FlushGatewayResponse,
@@ -76,15 +73,7 @@ import {
   type SurgeOpenClawProcessHandlerDeps,
 } from "./surge-openclaw-process-http.js";
 import { startAfterSurgeReadiness } from "./surge-reconcile-gate.js";
-import {
-  writeGatewayHeartbeat,
-  type FleetStateFirestore,
-  type GatewayHeartbeatDeps,
-  type HeartbeatSnapshot,
-} from "./fleet-state.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
-import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapter.js";
-import { FenceMismatchError, type BuilderRecordsRepository, type PlatformStateStore } from "@octogee/core/platform-state";
 import { agentIdsForMigration } from "./customer-lifecycle-broker-adapter.js";
 import { createScheduleTransfer } from "./schedule-transfer.js";
 import {
@@ -356,37 +345,17 @@ export function registerByosubDeviceAuth(
   });
 }
 
-export interface BuildAdapterOptions {
-  db: Firestore;
-  store: PlatformStateStore;
-  rpc: GatewayRpcClient;
-  log: (msg: string) => void;
-}
-
-export function buildProductionAdapter(opts: BuildAdapterOptions): CustomerLifecycleAdapter {
-  return buildProductionLifecycleAdapter(opts);
-}
-
 export interface StartFleetOptions {
-  db?: Firestore;
-  store?: PlatformStateStore;
   rpc: GatewayRpcClient;
-  adapter?: CustomerLifecycleAdapter;
+  adapter: CustomerLifecycleAdapter;
   gatewayId: string;
   log: (msg: string) => void;
   port: number;
   publicKey: string;
   version: string;
   openclawVersion: string;
-  platformState?: boolean;
-  // Read-only observability (seed + report mounted customers, write this
-  // gateway's own liveness heartbeat) — independent of local reconcile.
-  // Defaults true; db-less gateways leave it false and trusted Cowboy writes
-  // the heartbeat from /health.
-  reportState?: boolean;
-  /** Run the local assigned-roster reconcile without Firestore state ownership.
-   *  Used by db-less gateway pods; desired roster and state mirrors are brokered
-   *  through octogee-api. */
+  /** Run the local assigned-roster reconcile. Desired roster and state mirrors
+   *  are brokered through octogee-api. */
   localReconcile?: boolean;
   /** Credential-less local mount reconcile: trusted octogee-api returns the
    * assigned roster for this gateway identity. */
@@ -400,8 +369,7 @@ export interface StartFleetOptions {
    *  first-time builders mount ahead of movers. Takes precedence over readDesiredSlugs. */
   readDesiredCustomers?: () => Promise<Map<string, DesiredCustomer>>;
   readEnsureAdmission?: (uid: string) => Promise<boolean>;
-  /** Trusted-side mounted mirror writer used when the pod has no Firestore. */
-  stampMounted?: (uid: string, mounted: boolean) => Promise<void>;
+  stampMounted: (uid: string, mounted: boolean) => Promise<void>;
   readUserSnapshotForRuntimeReset?: (
     uid: string,
   ) => Promise<FleetBrokerUserSnapshot | null>;
@@ -410,9 +378,8 @@ export interface StartFleetOptions {
     operationId: string,
     generation: number,
   ) => Promise<void>;
-  /** Trusted-side reconcile error mirror used when the pod has no Firestore. */
-  recordReconcileError?: (slug: string, message: string) => Promise<void>;
-  clearReconcileError?: (slug: string) => Promise<void>;
+  recordReconcileError: (slug: string, message: string) => Promise<void>;
+  clearReconcileError: (slug: string) => Promise<void>;
   openclawDir?: string;
   projectBlobHydrator?: ProjectBlobHydrator;
   surgeOpenClawProcessGate?: SurgeOpenClawProcessSupervisorClient;
@@ -512,81 +479,15 @@ whenReady: Promise<void>;
 }
 
 export interface FleetCapabilities {
-  /** Read the assigned roster + write this gateway's own liveness/mounted
-   *  heartbeat (observability). Independent of provisioning. */
-  reportMounted: boolean;
-  /** Run the local reconcile loop (ensure/evict). Firestore-backed platform
-   *  provisioning requires platformState+db; db-less pods use localReconcile
-   *  with a brokered roster. */
+  /** Run the local reconcile loop (ensure/evict) from a brokered roster. */
   provision: boolean;
-  /** At least one capability needs Firestore write deps (own heartbeat +
-   *  glmGateways mirror). Brokered local reconcile can provision without it. */
-  needsStateDeps: boolean;
 }
 
 export function resolveFleetCapabilities(opts: {
-  platformState: boolean;
-  reportState: boolean;
   localReconcile?: boolean;
-  hasDb: boolean;
-  hasBrokeredRoster?: boolean;
+  hasBrokeredRoster: boolean;
 }): FleetCapabilities {
-  const reportMounted = opts.reportState && opts.hasDb;
-  const provision =
-    (opts.platformState && opts.hasDb) ||
-    (opts.localReconcile === true && opts.hasBrokeredRoster === true);
-  return {
-    reportMounted,
-    provision,
-    needsStateDeps: reportMounted,
-  };
-}
-
-export async function readMountedCustomersFromAssignedState(
-  builders: Pick<BuilderRecordsRepository, "listByGateway">,
-  gatewayId: string,
-  adapter: Pick<
-    CustomerLifecycleAdapter,
-    | "hasCustomerDir"
-    | "isBuilderGateway"
-    | "isConfiguredBuilderCustomer"
-    | "configuredBuilderOverlayPresent"
-    | "customerMountMarked"
-    | "customerCoachWiredInOpenclawConfig"
-    | "hasCustomerAgentRuntime"
-    | "hasWorkspaceGitDir"
-    | "hasGitRemote"
-  >,
-): Promise<string[]> {
-  const assigned = await builders.listByGateway(gatewayId, { openclawStatus: "complete" });
-
-  const mounted = new Set<string>();
-  for (const builder of assigned) {
-    const slug = builder.slug;
-    if (slug && assignedCustomerLooksMounted(adapter, slug)) mounted.add(slug);
-  }
-  return [...mounted].sort((a, b) => a.localeCompare(b));
-}
-
-type MountObservationAdapter = Parameters<typeof readMountedCustomersFromAssignedState>[2];
-
-function configuredBuilderLooksMounted(adapter: MountObservationAdapter, slug: string): boolean {
-  return adapter.isConfiguredBuilderCustomer?.(slug) === true
-    && adapter.configuredBuilderOverlayPresent?.(slug) === true
-    && adapter.customerMountMarked?.(slug) === true;
-}
-
-function sharedCoachLooksWired(adapter: MountObservationAdapter, slug: string): boolean {
-  return !adapter.customerCoachWiredInOpenclawConfig
-    || adapter.customerCoachWiredInOpenclawConfig(slug);
-}
-
-function assignedCustomerLooksMounted(adapter: MountObservationAdapter, slug: string): boolean {
-  if (!adapter.hasCustomerDir(slug)) return false;
-  const classGate = adapter.isBuilderGateway?.()
-    ? configuredBuilderLooksMounted(adapter, slug)
-    : sharedCoachLooksWired(adapter, slug);
-  return classGate && hasMountedRuntimeAndWorkspace(adapter, slug);
+  return { provision: opts.localReconcile === true && opts.hasBrokeredRoster };
 }
 
 function hasMountedRuntimeAndWorkspace(
@@ -614,36 +515,6 @@ function hasMountedRuntimeAndWorkspace(
   );
 }
 
-// The K8s Service name this pod publishes as its heartbeat internalUrl — the
-// chart's stable bare-id Service (GATEWAY-SIMPLE-ROLL-SPEC).
-export function gatewayServiceName(input: { gatewayId: string }): string {
-  if (!input.gatewayId) throw new Error("gatewayId is required for gateway service addressing");
-  return `octogee-gateway-${input.gatewayId}`;
-}
-
-// Build the heartbeat snapshot for a fleet tick.
-export function buildFleetHeartbeatSnapshot(input: {
-  gatewayId: string;
-  status: HeartbeatSnapshot["status"];
-  version: string;
-  openclawVersion: string;
-  mountedCustomers: string[];
-  internalUrl: string;
-  startedAt: number;
-}): HeartbeatSnapshot {
-  if (!input.gatewayId) {
-    throw new Error("gatewayId is required for a gateway heartbeat");
-  }
-  return {
-    gatewayId: input.gatewayId,
-    status: input.status,
-    version: input.version,
-    openclawVersion: input.openclawVersion,
-    mountedCustomers: input.mountedCustomers,
-    internalUrl: input.internalUrl,
-    startedAt: input.startedAt,
-  };
-}
 
 // The kubelet probes this and cannot sign, and the fleet ingress policy admits
 // every gateway pod on this port, so the probe body stays tenant-free: mounted
@@ -1336,39 +1207,16 @@ export function getMountObservedSlugs(adapter: CustomerLifecycleAdapter): string
     .sort((a, b) => a.localeCompare(b));
 }
 
-// Bounded, derived lastError mirror (the restoreJobs writer is gone — this is the only
-// writer of gateways/{id}.lastError now). Strictly best-effort: every path swallows its
-// own error so a Firestore blip can never crash the reconcile tick. lastError holds only
-// the MOST RECENT ensure failure; the full history is in the [reconcile] logs.
 function recordReconcileError(opts: StartFleetOptions, slug: string, message: string): void {
-  if (opts.recordReconcileError) {
-    opts
-      .recordReconcileError(slug, message)
-      .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ broker lastError write failed: ${String(err)}`));
-    return;
-  }
-  if (!opts.store) return;
-  opts.store.gateways.roots
-    .patch(opts.gatewayId, { lastError: { slug, message, at: { serverNow: true } } })
-    .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ lastError write failed: ${String(err)}`));
+  opts
+    .recordReconcileError(slug, message)
+    .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ broker lastError write failed: ${String(err)}`));
 }
 
-// Clear only when the standing lastError is for THIS slug — a success for one slug must
-// not wipe another slug's still-live error (which would otherwise flicker back next tick).
 function clearReconcileError(opts: StartFleetOptions, slug: string): void {
-  if (opts.clearReconcileError) {
-    opts
-      .clearReconcileError(slug)
-      .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ broker lastError clear failed: ${String(err)}`));
-    return;
-  }
-  if (!opts.store) return;
-  opts.store.gateways.roots
-    .patch(opts.gatewayId, { lastError: null }, { lastErrorSlug: slug })
-    .catch((err) => {
-      if (err instanceof FenceMismatchError) return;
-      opts.log(`[reconcile] ${opts.gatewayId}: ⚠ lastError clear failed: ${String(err)}`);
-    });
+  opts
+    .clearReconcileError(slug)
+    .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ broker lastError clear failed: ${String(err)}`));
 }
 
 interface EvictLocalCustomerInput {
@@ -1589,16 +1437,14 @@ export function createReconcileConvergenceHooks(input: {
 }
 
 type AssignedSlugReader = () => Promise<string[]>;
-type RosterSourceOptions = Pick<StartFleetOptions, "gatewayId" | "readDesiredCustomers" | "readDesiredSlugs" | "db">;
+type RosterSourceOptions = Pick<StartFleetOptions, "gatewayId" | "readDesiredCustomers" | "readDesiredSlugs">;
 
 function assignedRosterReader(
   opts: RosterSourceOptions,
 ): AssignedSlugReader | null {
   const customers = opts.readDesiredCustomers;
   if (customers) return async () => [...(await customers()).keys()];
-  if (opts.readDesiredSlugs) return opts.readDesiredSlugs;
-  const db = opts.db;
-  return db ? () => readAssignedSlugsForGateway(db, opts.gatewayId) : null;
+  return opts.readDesiredSlugs ?? null;
 }
 
 function createBuilderAgentAnchorReporter(opts: Pick<StartFleetOptions, "gatewayId" | "log">): () => Promise<void> {
@@ -1662,11 +1508,7 @@ function createDesiredRosterReader(input: {
       return [...next.keys()];
     };
   }
-  const readDesiredSlugs = input.opts.readDesiredSlugs;
-  if (readDesiredSlugs) return readDesiredSlugs;
-  const db = input.opts.db;
-  if (!db) return null;
-  return () => readAssignedSlugsForGateway(db, input.opts.gatewayId);
+  return input.opts.readDesiredSlugs ?? null;
 }
 
 async function mountCustomerWithPublication(input: {
@@ -1922,41 +1764,6 @@ function startMaybeReconcileLoop(params: {
   });
 }
 
-function createStateDeps(opts: StartFleetOptions, needsState: boolean): GatewayHeartbeatDeps | null {
-  if (!needsState) return null;
-  if (!opts.db) {
-    throw new Error("[fleet] db is required when reportState is enabled");
-  }
-  return {
-    db: opts.db as unknown as FleetStateFirestore,
-    serverTimestamp: () => FieldValue.serverTimestamp(),
-  };
-}
-
-function buildFleetAdapter(opts: StartFleetOptions): CustomerLifecycleAdapter {
-  if (opts.adapter) return opts.adapter;
-  if (!opts.db || !opts.store) {
-    throw new Error("[fleet] db and store are required when no explicit lifecycle adapter is provided");
-  }
-  return buildProductionAdapter({
-    db: opts.db,
-    store: opts.store,
-    rpc: opts.rpc,
-    log: opts.log,
-  });
-}
-
-function resolveK8sNamespace(): string {
-  const namespace = process.env.K8S_NAMESPACE;
-  if (!namespace) {
-    throw new Error(
-      "[fleet] K8S_NAMESPACE env var is not set. The gateway deployment must " +
-        "expose it via downward API (valueFrom.fieldRef.fieldPath=metadata.namespace) " +
-        "or heartbeats will publish internalUrl with a null namespace.",
-    );
-  }
-  return namespace;
-}
 
 function configuredBuilderSlug(adapter: CustomerLifecycleAdapter): string | null {
   const slug = builderClaimSlug();
@@ -2121,31 +1928,6 @@ function wrapAdapterWithRuntime(
   };
 }
 
-async function seedRuntimeMountedCustomers(params: {
-  opts: StartFleetOptions;
-  reportMounted: boolean;
-  wrappedAdapter: CustomerLifecycleAdapter;
-  runtime: FleetRuntime;
-}): Promise<void> {
-  const { opts, reportMounted, wrappedAdapter, runtime } = params;
-  try {
-    if (!reportMounted || !opts.store) return;
-    runtime.mountedCustomers = await readMountedCustomersFromAssignedState(
-      opts.store.builders.records,
-      opts.gatewayId,
-      wrappedAdapter,
-    );
-    if (runtime.mountedCustomers.length > 0) {
-      opts.log(
-        `[fleet] seeded mounted customers from assigned local state: ${runtime.mountedCustomers.join(",")}`,
-      );
-    }
-  } catch (err) {
-    opts.log(
-      `[fleet] ⚠ mounted-customer seed failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-}
 
 // Every handler below proves a fleet-controller signature before it looks at the
 // path's gatewayId (rejectMisaddressedGateway), so an unsigned caller cannot use
@@ -2752,51 +2534,16 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
   };
 }
 
-function createHeartbeatEmitter(input: {
-  stateDeps: GatewayHeartbeatDeps | null;
-  opts: StartFleetOptions;
-  runtime: FleetRuntime;
-  internalUrl: string;
-}): (status: HeartbeatSnapshot["status"]) => Promise<void> {
-  const { stateDeps, opts, runtime, internalUrl } = input;
-  return async (status) => {
-    if (!stateDeps) return;
-    try {
-      await writeGatewayHeartbeat(
-        stateDeps,
-        buildFleetHeartbeatSnapshot({
-          gatewayId: opts.gatewayId,
-          status,
-          version: opts.version,
-          openclawVersion: opts.openclawVersion,
-          mountedCustomers: runtime.mountedCustomers,
-          internalUrl,
-          startedAt: PROCESS_STARTED_AT_MS,
-        }),
-      );
-    } catch (err) {
-      opts.log(
-        `[fleet] ⚠ heartbeat write failed: ${String(err)} — will retry next tick`,
-      );
-    }
-  };
-}
 
 // eslint-disable-next-line max-lines-per-function -- controller startup owns one ordered lifecycle for listeners, reconciliation, health, and shutdown.
 export async function startFleetController(
   opts: StartFleetOptions,
 ): Promise<StartedFleetController> {
-  const platformState = opts.platformState !== false;
-  const reportState = opts.reportState !== false;
   const caps = resolveFleetCapabilities({
-    platformState,
-    reportState,
-    localReconcile: opts.localReconcile === true,
-    hasDb: !!opts.db,
+    localReconcile: opts.localReconcile,
     hasBrokeredRoster: !!opts.readDesiredSlugs || !!opts.readDesiredCustomers,
   });
-  const stateDeps = createStateDeps(opts, caps.needsStateDeps);
-  const adapter = buildFleetAdapter(opts);
+  const adapter = opts.adapter;
 
   const runtime = createFleetRuntime();
   const openclawDir = opts.openclawDir ?? path.join(process.env.HOME ?? "/home/node", ".openclaw");
@@ -2816,31 +2563,10 @@ export async function startFleetController(
     log: opts.log,
   });
 
-  const namespace = resolveK8sNamespace();
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
   const dashboardBridgeRequired = process.env.OPENCLAW_DASHBOARD_BRIDGE_REQUIRED === "true";
   const sharedProfileRoster = brokerProfileRoster(opts);
   let brokerProfilesSettled = !caps.provision;
-
-const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
-  const internalUrl = `http://${serviceName}.${namespace}.svc.cluster.local:${gatewayPort}`;
-
-  const emitHeartbeat = createHeartbeatEmitter({ stateDeps, opts, runtime, internalUrl });
-
-  // Derived readiness mirror (D5): stamp on-disk presence onto the user doc for cheap
-  // PWA queries. Nothing branches on it — it mirrors observed, never drives mounting.
-  const stampMounted = async (uid: string, mounted: boolean): Promise<void> => {
-    if (opts.stampMounted) {
-      await opts.stampMounted(uid, mounted);
-      return;
-    }
-    if (!opts.store) return;
-    try {
-      await opts.store.builders.records.patch(uid, { openclaw: { mounted } });
-    } catch (err) {
-      opts.log(`[reconcile] ⚠ mounted-mirror stamp failed for ${uid}: ${String(err)}`);
-    }
-  };
 
   const probeHealthz = () => probeOpenClawRuntimeReady(
     () => probeOpenClawHealth(`http://127.0.0.1:${gatewayPort}/healthz`),
@@ -2895,7 +2621,6 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
       `[fleet] OpenClaw healthz, workspace identities, broker profiles, and Dashboard bridge ready; ` +
         `transitioning gateways/${opts.gatewayId} to status=ready`,
     );
-    await emitHeartbeat("ready");
   };
   const waitForGatewayReady = async (): Promise<void> => {
     if (runtime.status === "ready") return;
@@ -2968,16 +2693,6 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     log: opts.log,
   }));
 
-  await seedRuntimeMountedCustomers({ opts, reportMounted: caps.reportMounted, wrappedAdapter, runtime });
-
-  await emitHeartbeat("booting");
-
-  const heartbeatTimer = caps.reportMounted
-    ? setInterval(() => {
-        void emitHeartbeat(runtime.status);
-      }, GATEWAY_HEARTBEAT_INTERVAL_MS)
-    : null;
-
   const reportBuilderAgentAnchors = createBuilderAgentAnchorReporter(opts);
   const brokerProfileTimer = startBrokerProfileRetry(
     caps.provision,
@@ -3048,7 +2763,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     opts,
     wrappedAdapter,
     runtime,
-    stampMounted,
+    stampMounted: opts.stampMounted,
     surgeReadiness,
     canReconcile,
   });
@@ -3069,14 +2784,13 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     reconcileLoopStatus = opts.subscribeDesiredChanges ? "push; repair=60000ms" : `${RECONCILE_LOOP_INTERVAL_MS}ms`;
   }
   opts.log(
-    `[fleet] listening on 0.0.0.0:${boundPort}; gatewayId=${opts.gatewayId}; platformState=${platformState}; reportState=${reportState}; reconcile-loop=${reconcileLoopStatus}`,
+    `[fleet] listening on 0.0.0.0:${boundPort}; gatewayId=${opts.gatewayId}; reconcile-loop=${reconcileLoopStatus}`,
   );
 
 return {
     port: boundPort,
     whenReady,
     stop: async () => {
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (brokerProfileTimer) clearInterval(brokerProfileTimer);
       stopBrokerTokenRefresh();
       stopReconcileLoop();

@@ -1,12 +1,13 @@
 import type { Firestore } from "firebase-admin/firestore";
-import { readGatewayAuthorization } from "@octogee/core/gateway-live-release";
-import { userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
+import type { BuilderRecord, PlatformStateRepositories } from "@octogee/core/platform-state";
+import { readGatewayAuthorizationInStore, type GatewayAuthorization } from "@octogee/core/gateway-live-release";
 
 import type {
   ModelBrokerProvider,
   ModelBrokerTokenRecord,
 } from "./model-broker-tokens.js";
 import { readSecret as defaultReadSecret } from "@octogee/core/secret-manager";
+import { builderAssignedToGateway } from "./assigned-builder.js";
 
 export type ModelBrokerProviderKeySource = "platform" | "owner_model_credential";
 
@@ -25,14 +26,18 @@ export type ModelBrokerProviderKeyResolver = (
   input: ResolveModelBrokerProviderKeyInput,
 ) => Promise<ModelBrokerProviderKey | null>;
 
+type ProviderKeyState = Pick<PlatformStateRepositories, "builders" | "gateways">;
+
 export interface AnthropicProviderKeyResolverDeps {
-  db: Pick<Firestore, "collection" | "doc">;
+  db: Pick<Firestore, "collection">;
+  store: ProviderKeyState;
   platformKey?: string;
   readSecret?: (name: string) => Promise<string>;
 }
 
 export interface ModelBrokerProviderKeyResolverDeps {
-  db: Pick<Firestore, "collection" | "doc">;
+  db: Pick<Firestore, "collection">;
+  store: ProviderKeyState;
   platformKeys?: Partial<Record<ModelBrokerProvider, string | undefined>>;
   readSecret?: (name: string) => Promise<string>;
 }
@@ -50,15 +55,8 @@ function objectRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function ownerSlug(userData: Record<string, unknown> | undefined): string | null {
-  const provisioning = objectRecord(userData?.provisioning);
-  const openclaw = objectRecord(provisioning?.openclaw);
-  const slug = openclaw?.slug ?? userData?.username ?? userData?.workspaceId;
-  return typeof slug === "string" && SLUG_PATTERN.test(slug) ? slug : null;
-}
-
 export function configuredAnthropicModelCredentialResolution(
-  userData: Record<string, unknown> | undefined,
+  builderSlug: string | null,
   configData: Record<string, unknown> | undefined,
 ): AnthropicModelCredentialResolution {
   const credential = objectRecord(configData?.modelCredential);
@@ -69,7 +67,7 @@ export function configuredAnthropicModelCredentialResolution(
   ) {
     return { kind: "platform" };
   }
-  const slug = ownerSlug(userData);
+  const slug = builderSlug !== null && SLUG_PATTERN.test(builderSlug) ? builderSlug : null;
   if (!slug) return { kind: "deny" };
   const expected = `byok-${slug}-anthropic`;
   return credential.secretName === expected
@@ -82,14 +80,31 @@ function platformKeyResolution(platformKey: string | undefined): ModelBrokerProv
   return apiKey ? { apiKey, source: "platform" } : null;
 }
 
+interface OwnerKeyAuthority {
+  builder: BuilderRecord | null;
+  config: Record<string, unknown> | undefined;
+}
+
+async function readOwnerKeyAuthority(
+  deps: Pick<AnthropicProviderKeyResolverDeps, "db" | "store">,
+  ownerUid: string,
+): Promise<OwnerKeyAuthority> {
+  const [builder, config] = await Promise.all([
+    deps.store.builders.records.get(ownerUid),
+    deps.db.collection("users").doc(ownerUid).collection("system").doc("config").get(),
+  ]);
+  return { builder, config: config.data() as Record<string, unknown> | undefined };
+}
+
 function assignedBuilderOwnsKey(
   record: ModelBrokerTokenRecord,
-  userData: Record<string, unknown> | undefined,
-  authorization: Awaited<ReturnType<typeof readGatewayAuthorization>>,
-): boolean {
+  builder: BuilderRecord | null,
+  authorization: GatewayAuthorization | null,
+): builder is BuilderRecord {
   return authorization?.config.gatewayClass === "builder" &&
     authorization.config.ownerUid === record.ownerUid &&
-    userAssignmentMatchesGateway(userData, record.gatewayId, authorization.config.builderSlug);
+    builder !== null &&
+    builderAssignedToGateway(builder, record.gatewayId, authorization.config.builderSlug);
 }
 
 export function createAnthropicProviderKeyResolver(
@@ -100,28 +115,22 @@ export function createAnthropicProviderKeyResolver(
     if (provider !== "anthropic") return null;
     if (!record.ownerUid) return platformKeyResolution(deps.platformKey);
 
-    const [userSnap, configSnap] = await Promise.all([
-      deps.db.collection("users").doc(record.ownerUid).get(),
-      deps.db.collection("users").doc(record.ownerUid).collection("system").doc("config").get(),
-    ]);
-    const userData = userSnap.data() as Record<string, unknown> | undefined;
-    const configData = configSnap.data() as Record<string, unknown> | undefined;
-    const authorization = await readGatewayAuthorization(deps.db, record.gatewayId);
+    const authorization = await readGatewayAuthorizationInStore(deps.store, record.gatewayId);
     if (!authorization) return null;
     if (authorization.config.gatewayClass === "shared") return platformKeyResolution(deps.platformKey);
-    if (!assignedBuilderOwnsKey(record, userData, authorization)) return null;
-    const resolution = configuredAnthropicModelCredentialResolution(userData, configData);
+    const owner = await readOwnerKeyAuthority(deps, record.ownerUid);
+    if (!assignedBuilderOwnsKey(record, owner.builder, authorization)) return null;
+    const resolution = configuredAnthropicModelCredentialResolution(owner.builder.slug, owner.config);
     if (resolution.kind === "deny") return null;
     if (resolution.kind === "platform") return platformKeyResolution(deps.platformKey);
 
     const apiKey = (await readSecret(resolution.secretName)).trim();
-    const [currentUser, currentConfig] = await Promise.all([
-      deps.db.collection("users").doc(record.ownerUid).get(),
-      deps.db.collection("users").doc(record.ownerUid).collection("system").doc("config").get(),
+    const [current, currentOwner] = await Promise.all([
+      readGatewayAuthorizationInStore(deps.store, record.gatewayId),
+      readOwnerKeyAuthority(deps, record.ownerUid),
     ]);
-    const current = await readGatewayAuthorization(deps.db, record.gatewayId);
-    if (!assignedBuilderOwnsKey(record, currentUser.data(), current)) return null;
-    const currentResolution = configuredAnthropicModelCredentialResolution(currentUser.data(), currentConfig.data());
+    if (!assignedBuilderOwnsKey(record, currentOwner.builder, current)) return null;
+    const currentResolution = configuredAnthropicModelCredentialResolution(currentOwner.builder.slug, currentOwner.config);
     if (currentResolution.kind !== "owner_model_credential" || currentResolution.secretName !== resolution.secretName) return null;
     return apiKey
       ? { apiKey, source: "owner_model_credential", secretName: resolution.secretName }
@@ -134,6 +143,7 @@ export function createModelBrokerProviderKeyResolver(
 ): ModelBrokerProviderKeyResolver {
   const anthropic = createAnthropicProviderKeyResolver({
     db: deps.db,
+    store: deps.store,
     platformKey: deps.platformKeys?.anthropic,
     readSecret: deps.readSecret,
   });

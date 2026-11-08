@@ -8,6 +8,7 @@ let glmOperationsDocs: Array<{ id: string; data: Row }> = [];
 let deletionJobsDocs: Record<string, Row> = {};
 let assignmentDocs: Record<string, Record<string, Row>> = {};
 const secretDocs: Record<string, Record<string, Row>> = {};
+const systemDocs: Record<string, Record<string, Row>> = {};
 const storeWrites: Array<{ op: "set" | "delete"; path: string; row?: Row }> = [];
 const authDisabledUids: string[] = [];
 const authRevokedUids: string[] = [];
@@ -19,6 +20,7 @@ function documentMap(collectionPath: string): Record<string, Row> {
   if (collectionPath === "customerDeletionJobs") return deletionJobsDocs;
   if (/^gateways\/[^/]+\/assignments$/.test(collectionPath)) return assignmentDocs[collectionPath] ??= {};
   if (/^users\/[^/]+\/secrets$/.test(collectionPath)) return secretDocs[collectionPath] ??= {};
+  if (/^users\/[^/]+\/system$/.test(collectionPath)) return systemDocs[collectionPath] ??= {};
   throw new Error(`admin delete fixture has no collection ${collectionPath}`);
 }
 

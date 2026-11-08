@@ -20,22 +20,17 @@ import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-li
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import {
   GATEWAY_UNREACHABLE_AFTER_MS,
-  GATEWAYS_COLLECTION,
   parseConfiguredBuilderReport,
   type ConfiguredBuilderReport,
 } from "@octogee/shared/types/fleet-controller";
 import {
-  GLM_GATEWAYS_COLLECTION,
   isGatewayRuntime,
   resolveGatewayRuntime,
   resolveUserGatewayControlState,
     type GatewayRuntime,
-    type GatewayVmState,
 } from "@octogee/shared/types/glm";
 import {
-  isGatewayRuntimeDoc,
   type GatewayKubernetesObservation,
-  type GatewayRuntimeDoc,
   isReleasePayload,
   projectGatewayDesiredRootForGateway,
   releasePayloadHash,
@@ -126,7 +121,7 @@ import {
 } from "./disposable-gateway-lifecycle.js";
 import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
 import { pairedReplacementTarget, readSharedPoolReplacements } from "./shared-pool-replacements.js";
-import { mirroredOrScan, type FleetInformer } from "./fleet-informer.js";
+import type { FleetInformer } from "./fleet-informer.js";
 import {
   classifyOperationFailure,
   isAgentStoreRetirementSessionDrain,
@@ -2758,10 +2753,6 @@ async function reconcileDisposableTombstones(
   }
 }
 
-function docsById(docs: QueryDocumentSnapshot[]): Map<string, Record<string, unknown>> {
-  return new Map(docs.map((doc) => [doc.id, doc.data() as Record<string, unknown>]));
-}
-
 function placementMigrationStatus(
   value: unknown,
 ): PlacementPolicyMigration["status"] | null {
@@ -2880,7 +2871,7 @@ async function readTerminalLeaseOperations(
 
 export function placementPodDiagnosticsScope(
   gatewayIds: readonly string[],
-  runtimes: ReadonlyMap<string, Record<string, unknown>>,
+  runtimes: ReadonlyMap<string, Pick<FleetRegistryRecord, "runtime">>,
 ): {
   clusterGatewayIds: string[];
   vmDiagnostics: Record<string, PlacementPolicyPodDiagnostics>;
@@ -3149,43 +3140,26 @@ export async function persistKubernetesObservations(
 }
 
 
-function placementAssignmentFromDocument(
-  doc: QueryDocumentSnapshot,
-): PlacementPolicyAssignment | null {
-  const data = doc.data() as Record<string, unknown>;
-  const gatewayId = nonEmptyString(data.gatewayId) ?? doc.ref.parent.parent?.id ?? null;
-  const uid = nonEmptyString(data.uid) ?? doc.id;
-  const slug = nonEmptyString(data.slug);
-  const state = nonEmptyString(data.state);
-  const rawEpoch = data.epoch;
-  const epoch = typeof rawEpoch === "number" &&
-    Number.isSafeInteger(rawEpoch) && rawEpoch >= 0
-    ? rawEpoch
-    : null;
-  if (!gatewayId || !uid || !slug || !state) return null;
+function placementAssignmentFromRecord(assignment: GatewayAssignment): PlacementPolicyAssignment {
   return {
-    uid,
-    slug,
-    gatewayId,
-    state,
-    epoch,
-    ...(millis(data.createdAt) !== null ? { createdAt: millis(data.createdAt) } : {}),
-    ...(nonEmptyString(data.source) ? { source: nonEmptyString(data.source)! } : {}),
-    ...(nonEmptyString(data.updatedByOperationId)
-      ? { updatedByOperationId: nonEmptyString(data.updatedByOperationId)! }
-      : {}),
+    uid: assignment.uid,
+    slug: assignment.slug,
+    gatewayId: assignment.gatewayId,
+    state: assignment.state,
+    epoch: assignment.epoch,
+    createdAt: assignment.createdAt,
+    source: assignment.source,
+    ...(assignment.updatedByOperationId ? { updatedByOperationId: assignment.updatedByOperationId } : {}),
   };
 }
 
 function gatewayRuntimeStartedAt(input: {
   gatewayId: string;
   gatewayClass: string;
-  runtime: Record<string, unknown> | undefined;
+  runtime: FleetRegistryRecord | null;
   diagnostics: PlacementPolicyPodDiagnostics | undefined;
 }): number | null {
-  const heartbeatStartedAt = isGatewayRuntimeDoc(input.runtime)
-    ? millis(input.runtime.heartbeat.startedAt)
-    : null;
+  const heartbeatStartedAt = input.runtime ? millis(input.runtime.heartbeat.startedAt) : null;
   if (input.gatewayClass !== "builder" || resolveGatewayRuntime(input.runtime?.runtime) !== "cluster") {
     return heartbeatStartedAt;
   }
@@ -3207,43 +3181,41 @@ function gatewayPodStartedAt(
   return currentPods.length === 1 ? millis(currentPods[0].gatewayContainerStartedAt) : null;
 }
 
-function gatewayComputerStartedAt(value: Record<string, unknown> | undefined): number | null {
-  if (value?.runtime !== "gce-vm") return null;
-  const vm = value.vm as Partial<GatewayVmState> | null | undefined;
-  return vm?.status === "RUNNING" ? millis(vm.startedAt) : null;
+function gatewayComputerStartedAt(runtime: FleetRegistryRecord | null): number | null {
+  if (runtime?.runtime !== "gce-vm") return null;
+  return runtime.vm?.status === "RUNNING" ? millis(runtime.vm.startedAt) : null;
 }
 
-function gatewayRuntimeObservation(value: Record<string, unknown> | undefined) {
+function gatewayRuntimeObservation(runtime: FleetRegistryRecord | null) {
   return {
-    runtime: isGatewayRuntime(value?.runtime) ? value.runtime : undefined,
-    computerStartedAt: gatewayComputerStartedAt(value),
-    runtimeStatus: isGatewayRuntimeDoc(value) ? value.heartbeat.status : undefined,
+    runtime: isGatewayRuntime(runtime?.runtime) ? runtime.runtime : undefined,
+    computerStartedAt: gatewayComputerStartedAt(runtime),
+    runtimeStatus: runtime?.heartbeat.status,
   };
 }
 
-function runtimeConfiguredBuilder(runtime: GatewayRuntimeDoc | null): ConfiguredBuilderReport | null {
+function runtimeConfiguredBuilder(runtime: FleetRegistryRecord | null): ConfiguredBuilderReport | null {
   return runtime ? parseConfiguredBuilderReport(runtime.heartbeat.configuredBuilder) : null;
 }
 
-function placementGatewayFromDocument(input: {
-  doc: QueryDocumentSnapshot;
-  runtimes: ReadonlyMap<string, Record<string, unknown>>;
+function placementGatewayFromRoot(input: {
+  stored: Stored<GatewayRoot>;
+  runtimes: ReadonlyMap<string, Stored<FleetRegistryRecord>>;
   assignments: readonly PlacementPolicyAssignment[];
   kubernetesByGatewayId: Readonly<Record<string, PlacementPolicyPodDiagnostics>>;
   now: number;
 }): PlacementPolicyGateway | null {
-  const { doc, runtimes, assignments, kubernetesByGatewayId, now } = input;
-  const root = projectGatewayDesiredRootForGateway(doc.data(), doc.id);
+  const { stored, runtimes, assignments, kubernetesByGatewayId, now } = input;
+  const gatewayId = stored.gatewayId;
+  const root = projectGatewayDesiredRootForGateway(stored, gatewayId);
   if (!root) return null;
-  const runtimeData = runtimes.get(doc.id);
-  const runtime = isGatewayRuntimeDoc(runtimeData) ? runtimeData : null;
+  const runtime = runtimes.get(gatewayId) ?? null;
   const heartbeatAt = millis(runtime?.heartbeat.lastHeartbeatAt);
   const heartbeatFresh = heartbeatAt === null
     ? false
     : now - heartbeatAt <= GATEWAY_UNREACHABLE_AFTER_MS;
   const runtimeReady = [
     runtime !== null,
-    runtime?.gatewayId === doc.id,
     root.liveRelease !== null,
     root.desiredRelease === root.liveRelease,
     runtime?.release === root.liveRelease,
@@ -3251,10 +3223,10 @@ function placementGatewayFromDocument(input: {
     runtime?.heartbeat.status === "ready",
     heartbeatFresh,
   ].every(Boolean);
-  const assigned = assignments.filter((assignment) => assignment.gatewayId === doc.id);
+  const assigned = assignments.filter((assignment) => assignment.gatewayId === gatewayId);
   const mounted = new Set(runtime?.heartbeat.mountedCustomers ?? []);
   return {
-    gatewayId: doc.id,
+    gatewayId,
     gatewayClass: root.gatewayClass,
     ownerUid: root.ownerUid,
     builderSlug: root.builderSlug,
@@ -3264,15 +3236,15 @@ function placementGatewayFromDocument(input: {
     configuredBuilder: runtimeConfiguredBuilder(runtime),
     allocation: root.allocation ?? null,
     ready: runtimeReady,
-    ...gatewayRuntimeObservation(runtimeData),
-    kubernetesStatus: placementKubernetesStatus(kubernetesByGatewayId[doc.id]),
+    ...gatewayRuntimeObservation(runtime),
+    kubernetesStatus: placementKubernetesStatus(kubernetesByGatewayId[gatewayId]),
     serving: runtime?.lifecycle === "serving",
     heartbeatFresh,
     runtimeStartedAt: gatewayRuntimeStartedAt({
-      gatewayId: doc.id,
+      gatewayId,
       gatewayClass: root.gatewayClass,
-      runtime: runtimeData,
-      diagnostics: kubernetesByGatewayId[doc.id],
+      runtime,
+      diagnostics: kubernetesByGatewayId[gatewayId],
     }),
     liveReleaseReady: [
       runtime !== null,
@@ -3326,24 +3298,21 @@ async function readPlacementPolicySnapshot(
 ): Promise<PlacementPolicySnapshot> {
   const { db, store, idleMs: fallbackIdleMs, now: nowFn, informer } = input;
   const now = nowFn();
-  const [orchestrator, userDocs, gatewayDocs, runtimeDocs, activeOperations, assignmentDocs, sharedPoolReplacements] =
+  const [orchestrator, userDocs, roots, runtimeRecords, activeOperations, assignmentRecords, sharedPoolReplacements] =
     await Promise.all([
       store.config.orchestrator.get(),
-      mirroredOrScan(informer.users(), () => db.collection("users").get()),
-      mirroredOrScan(informer.gateways(), () => db.collection(GATEWAYS_COLLECTION).get()),
-      mirroredOrScan(informer.glmGateways(), () => db.collection(GLM_GATEWAYS_COLLECTION).get()),
+      informer.users() ?? db.collection("users").get().then((snapshot) => snapshot.docs),
+      informer.gateways() ?? store.gateways.roots.list(),
+      informer.fleetRegistry() ?? store.fleetRegistry.list(),
       store.journal.operations.listByStatus([...PLACEMENT_ACTIVE_OPERATION_STATUSES]),
-      mirroredOrScan(informer.assignments(), () => db.collectionGroup("assignments").get()),
+      informer.assignments() ?? store.gateways.assignments.listAll(),
       readSharedPoolReplacements(store),
     ]);
-  const pool = deriveSharedGatewayPoolConfig(gatewayDocs.map((doc) => {
-    const data = doc.data() as Record<string, unknown>;
-    return {
-      gatewayId: doc.id,
-      gatewayClass: data.gatewayClass,
-      desiredStatus: data.desiredStatus,
-    };
-  }));
+  const pool = deriveSharedGatewayPoolConfig(roots.map((root) => ({
+    gatewayId: root.gatewayId,
+    gatewayClass: root.gatewayClass,
+    desiredStatus: root.desiredStatus,
+  })));
   const defaultGatewayId = pool?.defaultGatewayId ?? "";
   const sharedGatewayIds = pool?.sharedGatewayIds ?? [];
   const [completedReturnOperations, terminalLeaseOperations] = await Promise.all([
@@ -3352,8 +3321,8 @@ async function readPlacementPolicySnapshot(
   ]);
   const idleMs = orchestrator?.disposableGatewayIdleMs ?? fallbackIdleMs;
   const buildersPerGateway = placementBuildersPerGateway(orchestrator);
-  const runtimes = docsById(runtimeDocs);
-  const diagnosticsScope = placementPodDiagnosticsScope(gatewayDocs.map((doc) => doc.id), runtimes);
+  const runtimes = new Map(runtimeRecords.map((runtime) => [runtime.gatewayId, runtime]));
+  const diagnosticsScope = placementPodDiagnosticsScope(roots.map((root) => root.gatewayId), runtimes);
   const kubernetesByGatewayId = {
     ...diagnosticsScope.vmDiagnostics,
     ...await input.readGatewayPodDiagnosticsBatch({
@@ -3370,19 +3339,17 @@ async function readPlacementPolicySnapshot(
       }]));
     }),
   };
-  await persistKubernetesObservations(input.store, runtimeDocs.map((doc) => ({
-    gatewayId: doc.id,
-    kubernetes: record(doc.data())?.kubernetes,
+  await persistKubernetesObservations(input.store, runtimeRecords.map((runtime) => ({
+    gatewayId: runtime.gatewayId,
+    kubernetes: runtime.kubernetes,
   })), kubernetesByGatewayId, now, {
     log: input.log,
     namespace: input.namespace,
   });
-  const assignments = assignmentDocs
-    .map(placementAssignmentFromDocument)
-    .filter((assignment): assignment is PlacementPolicyAssignment => assignment !== null);
-  const gateways = gatewayDocs
-    .map((doc) => placementGatewayFromDocument({
-      doc,
+  const assignments = assignmentRecords.map(placementAssignmentFromRecord);
+  const gateways = roots
+    .map((stored) => placementGatewayFromRoot({
+      stored,
       runtimes,
       assignments,
       kubernetesByGatewayId,

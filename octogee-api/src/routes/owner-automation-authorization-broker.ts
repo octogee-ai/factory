@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import type { Firestore } from "firebase-admin/firestore";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import {
@@ -41,7 +41,7 @@ function proofBody(req: Request): OwnerAutomationProof | null {
 }
 
 export function createOwnerAutomationAuthorizationBrokerRoutes(opts: {
-  db: Firestore;
+  store: PlatformStateRepositories;
   findAssignedUser?: AssignedUserLookup;
   rateLimiter?: ProductivityRateLimiter;
   now?: () => number;
@@ -59,7 +59,7 @@ export function createOwnerAutomationAuthorizationBrokerRoutes(opts: {
       return;
     }
     try {
-      const authorization = await authorizeOwnerAutomation(opts.db, bound.gatewayId, proof, {
+      const authorization = await authorizeOwnerAutomation(opts.store, bound.gatewayId, proof, {
         findAssignedUser,
         now: opts.now,
       });

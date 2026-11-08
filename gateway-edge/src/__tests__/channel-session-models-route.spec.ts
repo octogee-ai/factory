@@ -9,8 +9,6 @@ const h = vi.hoisted(() => ({
   postError: null as Error | null,
   membershipError: null as Error | null,
   docs: new Map<string, Record<string, unknown>>(),
-  channelPath: "workspaces/alice/channels/coach-dm",
-  channelCount: 1,
   posts: [] as Array<{ segments: readonly string[]; body: unknown }>,
   auditSets: [] as Record<string, unknown>[],
   auditUpdates: [] as Record<string, unknown>[],
@@ -32,12 +30,15 @@ vi.mock("../middleware/logging.js", () => ({
 vi.mock("../lib/workspace-resolution.js", () => ({ resolveWorkspaceUid: async () => "owner-uid" }));
 vi.mock("../lib/db.js", () => ({
   db: {
-    collectionGroup: () => ({ where: () => ({ limit: () => ({ get: async () => ({ docs: Array.from({ length: h.channelCount }, () => ({ ref: { path: h.channelPath }, data: () => ({ mattermost: { channelId: "c".repeat(26) } }) })) }) }) }) }),
     doc: (path: string) => ({ get: async () => snap(path) }),
     collection: () => ({ doc: () => ({ id: "audit-1", set: async (data: Record<string, unknown>) => h.auditSets.push(data), update: async (data: Record<string, unknown>) => h.auditUpdates.push(data) }) }),
   },
   FieldValue: { serverTimestamp: () => "SERVER_TIMESTAMP" },
 }));
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(h.docs) };
+});
 vi.mock("../lib/channel-session-model-control.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/channel-session-model-control.js")>();
   return {
@@ -63,6 +64,13 @@ vi.mock("../lib/channel-session-model-control.js", async (importOriginal) => {
 const { ChannelSessionMattermostError } = await import("../lib/channel-session-model-control.js");
 const { default: routes } = await import("../routes/channel-session-models.js");
 
+const CHANNEL_LEDGER = { mattermost: { channelId: "c".repeat(26) } };
+
+function bindChannel(path: string): void {
+  h.docs.delete("workspaces/alice/channels/coach-dm");
+  h.docs.set(path, CHANNEL_LEDGER);
+}
+
 function app() {
   const value = express();
   value.use(express.json());
@@ -76,8 +84,6 @@ beforeEach(() => {
   h.postUserId = "a".repeat(26);
   h.postError = null;
   h.membershipError = null;
-  h.channelPath = "workspaces/alice/channels/coach-dm";
-  h.channelCount = 1;
   h.posts.length = 0;
   h.auditSets.length = 0;
   h.auditUpdates.length = 0;
@@ -85,12 +91,12 @@ beforeEach(() => {
   h.threadPosts = {
     ["r".repeat(26)]: { id: "r".repeat(26), type: "", root_id: "p".repeat(26), channel_id: "c".repeat(26), user_id: "g".repeat(26), create_at: 101, message: "Model set to platform-openrouter/z-ai/glm-5.2 for this session." },
   };
-  h.docs = new Map([
-    ["users/caller-uid", { mattermost: { userId: "a".repeat(26) } }],
-    ["users/caller-uid/secrets/mattermost", { personalToken: "t".repeat(32) }],
-    ["users/owner-uid/secrets/coachMattermost", { coachMmUserId: "g".repeat(26) }],
-    ["users/owner-uid/system/config", { agentModels: { "octogee-alice-coach": { primary: "openai/gpt-5", fallbacks: [] } } }],
-  ]);
+  h.docs.clear();
+  h.docs.set("users/caller-uid", { mattermost: { userId: "a".repeat(26) } });
+  h.docs.set("users/caller-uid/secrets/mattermost", { personalToken: "t".repeat(32) });
+  h.docs.set("users/owner-uid/secrets/coachMattermost", { personalToken: "coach-token", coachMmUserId: "g".repeat(26) });
+  h.docs.set("users/owner-uid/system/config", { agentModels: { "octogee-alice-coach": { primary: "openai/gpt-5", fallbacks: [] } } });
+  h.docs.set("workspaces/alice/channels/coach-dm", CHANNEL_LEDGER);
 });
 
 describe("channel session model routes", () => {
@@ -118,19 +124,30 @@ describe("channel session model routes", () => {
   });
 
   it("uses a scoped project Agent only when it has a complete minted credential", async () => {
-    h.channelPath = "workspaces/alice/projects/orbit/channels/general";
-    h.docs.set("workspaces/alice/projects/orbit", { agent: { mode: "scoped", enabled: false } });
-    h.docs.set("users/owner-uid/secrets/projectAgentMattermost-orbit", { mmUserId: "q".repeat(26) });
+    bindChannel("workspaces/alice/projects/orbit/channels/general");
+    h.docs.set("workspaces/alice/projects/orbit", { ownerUid: "owner-uid", agent: { mode: "scoped", enabled: false } });
+    h.docs.set("users/owner-uid/secrets/projectAgentMattermost-orbit", { personalToken: "", mmUserId: "q".repeat(26) });
     const fallback = await request(app()).get(`/api/channel-session-models/${"c".repeat(26)}`).expect(200);
     expect(fallback.body.agentId).toBe("octogee-alice-coach");
+    h.docs.set("users/owner-uid/secrets/projectAgentMattermost-orbit", { personalToken: "u".repeat(32) });
+    const unbound = await request(app()).get(`/api/channel-session-models/${"c".repeat(26)}`).expect(200);
+    expect(unbound.body.agentId).toBe("octogee-alice-coach");
     h.docs.set("users/owner-uid/secrets/projectAgentMattermost-orbit", { mmUserId: "q".repeat(26), personalToken: "u".repeat(32) });
     const project = await request(app()).get(`/api/channel-session-models/${"c".repeat(26)}`).expect(200);
     expect(project.body.agentId).toBe("octogee-alice-proj-orbit-coach");
   });
 
+  it("fails closed on a project Agent credential that has no token", async () => {
+    bindChannel("workspaces/alice/projects/orbit/channels/general");
+    h.docs.set("workspaces/alice/projects/orbit", { ownerUid: "owner-uid", agent: { mode: "scoped", enabled: false } });
+    h.docs.set("users/owner-uid/secrets/projectAgentMattermost-orbit", { mmUserId: "q".repeat(26) });
+
+    await request(app()).get(`/api/channel-session-models/${"c".repeat(26)}`).expect(500);
+  });
+
   it("uses the workspace coach for a project channel without an agent record", async () => {
-    h.channelPath = "workspaces/alice/projects/orbit/channels/general";
-    h.docs.set("workspaces/alice/projects/orbit", {});
+    bindChannel("workspaces/alice/projects/orbit/channels/general");
+    h.docs.set("workspaces/alice/projects/orbit", { ownerUid: "owner-uid" });
     h.docs.set("users/owner-uid/secrets/projectAgentMattermost-orbit", {
       mmUserId: "q".repeat(26),
       personalToken: "u".repeat(32),
@@ -141,9 +158,9 @@ describe("channel session model routes", () => {
   });
 
   it("fails closed on duplicate channel bindings and stale Agent preconditions", async () => {
-    h.channelCount = 2;
+    h.docs.set("workspaces/mallory/channels/general", CHANNEL_LEDGER);
     await request(app()).get(`/api/channel-session-models/${"c".repeat(26)}`).expect(404);
-    h.channelCount = 1;
+    h.docs.delete("workspaces/mallory/channels/general");
     await request(app()).post(`/api/channel-session-models/${"c".repeat(26)}`).send({
       operation: "resetSessionModel",
       agentId: "octogee-bob-coach",

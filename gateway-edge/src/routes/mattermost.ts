@@ -3,6 +3,8 @@ import * as crypto from "crypto";
 import { requireAuth } from "../middleware/auth.js";
 import { db, FieldValue, Timestamp } from "../lib/db.js";
 import { getWorkspaceMmContext } from "../lib/mattermost-context.js";
+import { readMattermostSecret } from "../lib/mattermost-secret.js";
+import { platformStateStore } from "../lib/platform-state.js";
 
 const router = Router();
 
@@ -99,10 +101,9 @@ router.get("/token", requireAuth, async (req: Request, res: Response, next: Next
       return;
     }
 
-    const secretDoc = await db.doc(`users/${uid}/secrets/mattermost`).get();
-    const hasToken = secretDoc.exists && !!secretDoc.data()?.personalToken;
+    const secret = await readMattermostSecret(platformStateStore, uid, "mattermost");
 
-    if (!hasToken) {
+    if (!secret?.personalToken) {
       res.status(202).json({
         status: "provisioning",
         message: "Chat credentials are being set up.",

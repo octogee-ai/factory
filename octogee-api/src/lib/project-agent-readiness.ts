@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
-import { FieldValue, type DocumentData, type Firestore, type QuerySnapshot } from "firebase-admin/firestore";
+import type { PlatformStateStore, Stored, WorkspaceChannel, WorkspaceProject } from "@octogee/core/platform-state";
 import type { FleetBrokerProjectAgentReadiness } from "@octogee/shared/types/fleet-broker";
 import { isValidProjectId } from "@octogee/shared/types/identity";
-import { projectAgentConfigured } from "@octogee/shared/types/project";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 
 function validChannelIds(value: unknown): value is string[] {
@@ -32,50 +31,49 @@ export function parseProjectAgentReadinessReports(value: unknown): FleetBrokerPr
   return new Set(projects.map((project) => project.projectId)).size === projects.length ? projects : null;
 }
 
-function projectChannelIds(channels: QuerySnapshot): string[] {
-  return [...new Set(channels.docs.flatMap((channel) => {
-    const data = channel.data();
-    return data.kind !== "admin" && typeof data.mattermost?.channelId === "string" ? [data.mattermost.channelId as string] : [];
-  }))].sort();
+function projectChannelIds(channels: readonly WorkspaceChannel[]): string[] {
+  return [...new Set(channels.flatMap((channel) =>
+    channel.kind !== "admin" && channel.mattermostChannelId !== null ? [channel.mattermostChannelId] : []))].sort();
 }
 
-function activationMatches(input: {
-  uid: string;
+interface ActivationRecord {
   report: FleetBrokerProjectAgentReadiness;
-  data: DocumentData | undefined;
-  secret: DocumentData | undefined;
-  channels: QuerySnapshot;
-}): boolean {
-  const { uid, report, data, secret, channels } = input;
-  if (data?.ownerUid !== uid || !projectAgentConfigured(data.agent) ||
-    data.commercialLifecycle?.status === "archived" || data.agent.activationId !== report.activationId ||
-    !["provisioning", "ready"].includes(data.agent.status)) return false;
-  if (typeof secret?.personalToken !== "string") return false;
-  return createHash("sha256").update(secret.personalToken).digest("hex") === report.tokenHash &&
+  project: Stored<WorkspaceProject> | null;
+  personalToken: string | null;
+  channels: readonly WorkspaceChannel[];
+}
+
+function activationMatches(uid: string, { report, project, personalToken, channels }: ActivationRecord): boolean {
+  const agent = project?.agent;
+  if (!project || project.ownerUid !== uid || !agent || project.commercialLifecycleStatus === "archived" ||
+    agent.activationId !== report.activationId ||
+    (agent.status !== "provisioning" && agent.status !== "ready")) return false;
+  if (personalToken === null) return false;
+  return createHash("sha256").update(personalToken).digest("hex") === report.tokenHash &&
     JSON.stringify(projectChannelIds(channels)) === JSON.stringify(report.channelIds);
 }
 
 export async function completeProjectAgentActivations(
-  db: Firestore,
+  store: PlatformStateStore,
   input: { uid: string; gatewayId: string; slug: string; projects: FleetBrokerProjectAgentReadiness[] },
 ): Promise<boolean> {
-  return db.runTransaction(async (transaction) => {
-    const user = await transaction.get(db.doc(`users/${input.uid}`));
-    if (user.data()?.provisioning?.openclaw?.gatewayId !== input.gatewayId) return false;
-    const records = await Promise.all(input.projects.map(async (report) => {
-      const projectRef = db.doc(`workspaces/${input.slug}/projects/${report.projectId}`);
+  return store.transaction({ label: "project-agent-readiness" }, async (tx) => {
+    const builder = await tx.builders.records.get(input.uid);
+    if (builder?.gateway?.gatewayId !== input.gatewayId) return false;
+    const records = await Promise.all(input.projects.map(async (report): Promise<ActivationRecord> => {
       const [project, secret, channels] = await Promise.all([
-        transaction.get(projectRef),
-        transaction.get(db.doc(`users/${input.uid}/secrets/${projectAgentSecretDocId(report.projectId)}`)),
-        transaction.get(projectRef.collection("channels")),
+        tx.workspaces.projects.get(input.slug, report.projectId),
+        tx.secrets.get(input.uid, projectAgentSecretDocId(report.projectId)),
+        tx.workspaces.channels.list({ workspaceSlug: input.slug, projectSlug: report.projectId }),
       ]);
-      return { report, projectRef, data: project.data(), secret: secret.data(), channels };
+      const personalToken = secret?.kind === "project-agent-mattermost" ? secret.personalToken : null;
+      return { report, project, personalToken, channels };
     }));
-    if (!records.every((record) => activationMatches({ uid: input.uid, ...record }))) return false;
-    for (const { projectRef, data } of records) {
-      if (data?.agent.status === "ready") continue;
-      transaction.update(projectRef, {
-        "agent.status": "ready", "agent.lastError": null, "agent.updatedAt": FieldValue.serverTimestamp(),
+    if (!records.every((record) => activationMatches(input.uid, record))) return false;
+    for (const { report, project } of records) {
+      if (!project?.agent || project.agent.status === "ready") continue;
+      await tx.workspaces.projects.patch(input.slug, report.projectId, {
+        agent: { ...project.agent, status: "ready", lastError: null, updatedAt: { serverNow: true } },
       });
     }
     return true;

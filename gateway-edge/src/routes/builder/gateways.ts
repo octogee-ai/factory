@@ -1,9 +1,19 @@
 import { Router, Request, Response, NextFunction } from "express";
 import rateLimit from "express-rate-limit";
-import type { Transaction } from "firebase-admin/firestore";
 import { requireAuth } from "../../middleware/auth.js";
-import { db, FieldValue, Timestamp } from "../../lib/db.js";
-import { platformStateStore } from "../../lib/platform-state.js";
+import { platformStateStore, readBuilderTier } from "../../lib/platform-state.js";
+import {
+  withCurrentBuilderTier,
+  type BuilderTierReader,
+  type CurrentBuilderTier,
+} from "@octogee/core/builder-activation-lease";
+import type {
+  BuilderRecord,
+  GatewayRoot,
+  PlatformStateRepositories,
+  PlatformStateStore,
+  Stored,
+} from "@octogee/core/platform-state";
 import {
   GatewayControlListEntry,
   GatewayControlListResponse,
@@ -15,7 +25,6 @@ import {
   resolveGatewayImageProfile,
 } from "@octogee/shared/types/glm";
 import {
-  readGatewayArtifact,
   readGatewayArtifactInStore,
   readGatewayAuthorizationInStore,
   gatewayRuntimeHeartbeatOf,
@@ -24,23 +33,14 @@ import {
   type GatewayAuthorization,
 } from "@octogee/core/gateway-live-release";
 import { projectOpenClawConfigStatus } from "../../lib/openclaw-config-status.js";
-import {
-  OPENCLAW_CONTROL_TICKETS_COLLECTION,
-  createOpenClawControlTicket,
-} from "@octogee/core/openclaw-control-tickets";
+import { createOpenClawControlTicket } from "@octogee/core/openclaw-control-tickets";
 import {
   isCanonicalWorkspaceMembership,
   resolveGatewayPrincipalAccess,
-  workspacePermissionsEnabled,
   type GatewayPrincipalAccess,
   type ResolvedGatewayAccess,
 } from "@octogee/core/gateway-principal-access";
-import { slugFromAssignedUser, userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
 import { isOpenClawControlRevisionRuntimeReady, isOpenClawControlServingRevision } from "../../openclaw-control/runtime-ready.js";
-import {
-  recordGatewayAccessDenial,
-  setGatewayAccessDenialAudit,
-} from "../../lib/gateway-access-audit.js";
 import type { FeaturePolicy, FeatureSubject } from "@octogee/shared/types/feature-flags";
 import { registerWorkspaceGatewayStatusRoute } from "./workspace-gateway-status.js";
 
@@ -127,15 +127,54 @@ export interface GatewayWorkspaceScope {
   ownerUid: string;
 }
 
-export type DocumentReader = (path: string) => Promise<{ exists: boolean; data(): unknown }>;
+type DurableGatewayAuthorization = Extract<GatewayAuthorization, { kind: "durable" }>;
 
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
+export interface GatewayOwnerTier extends CurrentBuilderTier {
+  readonly uid: string;
 }
 
-type DurableGatewayAuthorization = Extract<GatewayAuthorization, { kind: "durable" }>;
+function perUserControlIdentity(config: DurableGatewayAuthorization["config"]): boolean {
+  return config.gatewayClass === "builder" && config.builderAccess?.controlIdentity === "per-user";
+}
+
+export function perUserOwnerUid(authorization: DurableGatewayAuthorization | null): string | null {
+  return authorization && perUserControlIdentity(authorization.config) ? authorization.config.ownerUid : null;
+}
+
+export async function withGatewayOwnerTier<T>(
+  input: { store: PlatformStateStore; readBuilderTier: BuilderTierReader; ownerUid: string | null; now: number },
+  run: (ownerTier: GatewayOwnerTier | null) => Promise<T>,
+): Promise<T> {
+  const uid = input.ownerUid;
+  if (!uid) return run(null);
+  return withCurrentBuilderTier(
+    { store: input.store, readBuilderTier: input.readBuilderTier, uid, now: input.now },
+    (current) => run({ ...current, uid }),
+  );
+}
+
+export function ownerWorkspacePermissionsEnabled(
+  config: DurableGatewayAuthorization["config"],
+  ownerTier: GatewayOwnerTier | null,
+  owner: Stored<BuilderRecord> | null,
+): boolean {
+  if (!perUserControlIdentity(config) || ownerTier === null || ownerTier.uid !== owner?.uid) return false;
+  ownerTier.assertCurrent(owner);
+  return ownerTier.tier !== null;
+}
+
+export function builderAssignedTo(
+  builder: BuilderRecord | null,
+  gatewayId: string,
+  workspaceSlug: string,
+): boolean {
+  return builder !== null && builder.gateway?.gatewayId === gatewayId && builder.slug === workspaceSlug;
+}
+
+function rootDocument(root: Stored<GatewayRoot>): Record<string, unknown> {
+  const { revision: _revision, ...document } = root;
+  return document;
+}
 
 function isSharedGateway(authorization: DurableGatewayAuthorization): boolean {
   return resolveGatewayClass({
@@ -146,17 +185,12 @@ function isSharedGateway(authorization: DurableGatewayAuthorization): boolean {
 }
 
 async function currentOwnerScope(
-  get: DocumentReader,
+  state: PlatformStateRepositories,
   gatewayId: string,
   workspaceSlug: string,
   ownerUid: string,
 ): Promise<GatewayWorkspaceScope | null> {
-  const owner = await get(`users/${ownerUid}`);
-  return owner.exists && userAssignmentMatchesGateway(
-    record(owner.data()) ?? undefined,
-    gatewayId,
-    workspaceSlug,
-  )
+  return builderAssignedTo(await state.builders.records.get(ownerUid), gatewayId, workspaceSlug)
     ? { gatewayId, workspaceSlug, ownerUid }
     : null;
 }
@@ -164,35 +198,33 @@ async function currentOwnerScope(
 async function privateGatewayWorkspaceScope(
   authorization: DurableGatewayAuthorization,
   workspaceSlug: string,
-  get: DocumentReader,
+  state: PlatformStateRepositories,
 ): Promise<GatewayWorkspaceScope | null> {
   const { gatewayId } = authorization.gateway;
   const ownerUid = authorization.config.ownerUid;
   if (!ownerUid || authorization.config.builderSlug !== workspaceSlug) return null;
-  return currentOwnerScope(get, gatewayId, workspaceSlug, ownerUid);
+  return currentOwnerScope(state, gatewayId, workspaceSlug, ownerUid);
 }
 
 async function sharedGatewayWorkspaceScope(
   authorization: DurableGatewayAuthorization,
   workspaceSlug: string,
-  get: DocumentReader,
+  state: PlatformStateRepositories,
 ): Promise<GatewayWorkspaceScope | null> {
-  const { gatewayId } = authorization.gateway;
-  const workspace = await get(`workspaces/${workspaceSlug}`);
-  const ownerUid = record(workspace.exists ? workspace.data() : undefined)?.ownerUid;
-  if (typeof ownerUid !== "string" || !ownerUid) return null;
-  return currentOwnerScope(get, gatewayId, workspaceSlug, ownerUid);
+  const ownerUid = (await state.workspaces.records.get(workspaceSlug))?.ownerUid;
+  if (!ownerUid) return null;
+  return currentOwnerScope(state, authorization.gateway.gatewayId, workspaceSlug, ownerUid);
 }
 
 export async function workspaceScopeFor(
   authorization: DurableGatewayAuthorization,
   workspaceSlug: string | null | undefined,
-  get: DocumentReader,
+  state: PlatformStateRepositories,
   requireCurrentOwnerAssignment = false,
 ): Promise<GatewayWorkspaceScope | null> {
   if (!workspaceSlug) return null;
   if (isSharedGateway(authorization)) {
-    return sharedGatewayWorkspaceScope(authorization, workspaceSlug, get);
+    return sharedGatewayWorkspaceScope(authorization, workspaceSlug, state);
   }
   if (!requireCurrentOwnerAssignment) {
     const ownerUid = authorization.config.ownerUid;
@@ -200,96 +232,89 @@ export async function workspaceScopeFor(
       ? { gatewayId: authorization.gateway.gatewayId, workspaceSlug, ownerUid }
       : null;
   }
-  return privateGatewayWorkspaceScope(authorization, workspaceSlug, get);
+  return privateGatewayWorkspaceScope(authorization, workspaceSlug, state);
 }
 
 export async function principalAccess(
   scope: GatewayWorkspaceScope,
   uid: string,
-  get: DocumentReader,
+  state: PlatformStateRepositories,
+  ownerTier: GatewayOwnerTier | null,
 ): Promise<GatewayPrincipalAccess> {
   const { gatewayId, workspaceSlug, ownerUid } = scope;
   if (ownerUid === uid) return resolveGatewayPrincipalAccess({ gateway: scope, uid, membership: null });
-  const [membershipSnap, workspaceSnap, gatewaySnap, ownerSnap] = await Promise.all([
-    get(`workspaces/${workspaceSlug}/members/${uid}`),
-    get(`workspaces/${workspaceSlug}`),
-    get(`gateways/${gatewayId}`),
-    get(`users/${ownerUid}`),
+  const [membership, workspace, root, owner] = await Promise.all([
+    state.workspaces.members.get(workspaceSlug, uid),
+    state.workspaces.records.get(workspaceSlug),
+    state.gateways.roots.get(gatewayId),
+    state.builders.records.get(ownerUid),
   ]);
-  const workspace = record(workspaceSnap.data());
+  const authorization = root ? gatewayAuthorizationFromRootDocument(rootDocument(root), gatewayId) : null;
   return resolveGatewayPrincipalAccess({
     gateway: { gatewayId, ownerUid, workspaceSlug,
-      perUserIdentity: workspaceSnap.exists && workspace?.ownerUid === ownerUid &&
-        workspacePermissionsEnabled(gatewayAuthorizationFromRootDocument(gatewaySnap.data(), gatewayId)?.config ?? {}, ownerSnap.data() ?? {}),
+      perUserIdentity: workspace?.ownerUid === ownerUid && authorization !== null &&
+        ownerWorkspacePermissionsEnabled(authorization.config, ownerTier, owner),
     },
     uid,
-    membership: membershipSnap.exists ? membershipSnap.data() : null,
+    membership,
   });
 }
 
-async function builderGatewayCandidates(uid: string) {
-  const [userSnap, ownedSnap, membershipsSnap] = await Promise.all([
-    db.doc(`users/${uid}`).get(),
-    db.collection("gateways").where("ownerUid", "==", uid).get(),
-    db.collectionGroup("members").where("id", "==", uid).get(),
-  ]);
-  const user = record(userSnap.exists ? userSnap.data() : undefined);
-  const assignedOpenClaw = record(record(user?.provisioning)?.openclaw);
-  const selfGatewayId = typeof assignedOpenClaw?.gatewayId === "string" ? assignedOpenClaw.gatewayId : null;
-  const selfWorkspaceSlug = slugFromAssignedUser(user ?? undefined);
-  const teamRoots = await Promise.all(membershipsSnap.docs.map(async (member) => {
-    if (!isCanonicalWorkspaceMembership(member.data())) return null;
-    const workspaceRef = member.ref.parent.parent;
-    if (!workspaceRef || workspaceRef.parent.id !== "workspaces") return null;
-    const workspace = await workspaceRef.get();
-    const data = workspace.data();
-    if (typeof data?.ownerUid !== "string") return null;
-    const owner = await db.doc(`users/${data.ownerUid}`).get();
-    const ownerData = owner.data();
-    const gatewayId = record(record(ownerData?.provisioning)?.openclaw)?.gatewayId;
-    if (typeof gatewayId !== "string" || !userAssignmentMatchesGateway(ownerData, gatewayId, workspace.id)) return null;
-    const root = await db.doc(`gateways/${gatewayId}`).get();
-    return root.exists ? { root, workspaceSlug: workspace.id } : null;
-  }));
-  const assignedRoot = selfGatewayId && selfWorkspaceSlug
-    ? await db.doc(`gateways/${selfGatewayId}`).get()
-    : null;
-  return [
-    ...ownedSnap.docs.map((root) => ({ root, workspaceSlug: root.data().builderSlug })),
-    ...(assignedRoot?.exists && selfWorkspaceSlug
-      ? [{ root: assignedRoot, workspaceSlug: selfWorkspaceSlug }]
-      : []),
-    ...teamRoots.filter((item): item is { root: typeof ownedSnap.docs[number]; workspaceSlug: string } => item !== null),
-  ];
+interface BuilderGatewayCandidate {
+  root: Stored<GatewayRoot>;
+  workspaceSlug: string | null;
 }
 
-type BuilderGatewayCandidate = Awaited<ReturnType<typeof builderGatewayCandidates>>[number];
+async function teamGatewayCandidate(workspaceSlug: string): Promise<BuilderGatewayCandidate | null> {
+  const workspace = await platformStateStore.workspaces.records.get(workspaceSlug);
+  if (!workspace) return null;
+  const owner = await platformStateStore.builders.records.get(workspace.ownerUid);
+  const gatewayId = owner?.gateway?.gatewayId;
+  if (!gatewayId || !builderAssignedTo(owner, gatewayId, workspaceSlug)) return null;
+  const root = await platformStateStore.gateways.roots.get(gatewayId);
+  return root ? { root, workspaceSlug } : null;
+}
+
+async function builderGatewayCandidates(uid: string): Promise<BuilderGatewayCandidate[]> {
+  const [user, owned, memberships] = await Promise.all([
+    platformStateStore.builders.records.get(uid),
+    platformStateStore.gateways.roots.list({ ownerUid: uid }),
+    platformStateStore.workspaces.members.listForUid(uid),
+  ]);
+  const teamRoots = await Promise.all(memberships.map((member) =>
+    isCanonicalWorkspaceMembership(member) ? teamGatewayCandidate(member.workspaceSlug) : null));
+  const selfGatewayId = user?.gateway?.gatewayId;
+  const selfWorkspaceSlug = user?.slug;
+  const assignedRoot = selfGatewayId && selfWorkspaceSlug
+    ? await platformStateStore.gateways.roots.get(selfGatewayId)
+    : null;
+  return [
+    ...owned.map((root) => ({ root, workspaceSlug: root.builderSlug })),
+    ...(assignedRoot && selfWorkspaceSlug ? [{ root: assignedRoot, workspaceSlug: selfWorkspaceSlug }] : []),
+    ...teamRoots.filter((item): item is BuilderGatewayCandidate => item !== null),
+  ];
+}
 
 async function builderGatewayEntry(
   uid: string,
   candidate: BuilderGatewayCandidate,
 ): Promise<{ scopeKey: string; entry: GatewayControlListEntry } | null> {
-  const authorization = gatewayAuthorizationFromRootDocument(candidate.root.data(), candidate.root.id);
+  const authorization = gatewayAuthorizationFromRootDocument(rootDocument(candidate.root), candidate.root.gatewayId);
   if (!authorization) return null;
-  const scope = await workspaceScopeFor(
-    authorization,
-    typeof candidate.workspaceSlug === "string" ? candidate.workspaceSlug : null,
-    (path) => db.doc(path).get(),
-  );
+  const scope = await workspaceScopeFor(authorization, candidate.workspaceSlug, platformStateStore);
   if (!scope) return null;
-  const access = await principalAccess(scope, uid, (path) => db.doc(path).get());
+  const access = await withGatewayOwnerTier(
+    { store: platformStateStore, readBuilderTier, ownerUid: perUserOwnerUid(authorization), now: Date.now() },
+    (ownerTier) => principalAccess(scope, uid, platformStateStore, ownerTier),
+  );
   if (access.kind === "denied") return null;
-  const [artifact, runtime, ownerAssignment] = await Promise.all([
+  const [artifact, runtime, owner] = await Promise.all([
     readGatewayArtifactInStore(platformStateStore, authorization.gateway.gatewayId, authorization.gateway.liveRelease),
     readGatewayRuntimeDoc(platformStateStore, authorization.gateway),
-    db.collection("users").doc(scope.ownerUid).get(),
+    platformStateStore.builders.records.get(scope.ownerUid),
   ]);
   const heartbeat = gatewayRuntimeHeartbeatOf(runtime, authorization.gateway);
-  const isCurrentAssignment = ownerAssignment?.exists === true && userAssignmentMatchesGateway(
-    ownerAssignment.data(),
-    authorization.gateway.gatewayId,
-    scope.workspaceSlug,
-  );
+  const isCurrentAssignment = builderAssignedTo(owner, authorization.gateway.gatewayId, scope.workspaceSlug);
   return {
     scopeKey: `${scope.gatewayId}\0${scope.workspaceSlug}`,
     entry: await builderViewOf({
@@ -356,22 +381,24 @@ function controlUiAccess(
   ) ? "allowed" : CAPABILITY_DISABLED;
 }
 
-function denialAuditInput(
+async function recordAccessDenial(
+  state: PlatformStateRepositories,
   scope: GatewayWorkspaceScope,
   uid: string,
-  access: GatewayPrincipalAccess,
-  reason: "permission_required" | Exclude<GatewayPrincipalAccess, ResolvedGatewayAccess>["reason"],
-) {
-  return {
+  principal: GatewayPrincipalAccess,
+): Promise<void> {
+  await state.access.accessAudit.record({
+    at: Date.now(),
     gatewayId: scope.gatewayId,
-    workspaceSlug: scope.workspaceSlug,
-    ownerUid: scope.ownerUid,
-    actorUid: uid,
-    granteeUid: uid,
-    reason,
-    source: "system" as const,
-    now: Date.now(),
-  };
+    uid,
+    reason: principal.kind === "denied" ? principal.reason : "permission_required",
+    detail: {
+      workspaceSlug: scope.workspaceSlug,
+      ownerUid: scope.ownerUid,
+      actorUid: uid,
+      source: "system",
+    },
+  });
 }
 
 function requestedWorkspaceSlug(
@@ -393,9 +420,9 @@ function servingRevisionId(
 }
 
 async function openClawControlRuntimeReachable(
-  authorization: Extract<GatewayAuthorization, { kind: "durable" }>,
+  authorization: DurableGatewayAuthorization,
   runtime: unknown,
-  transaction?: Transaction,
+  state: PlatformStateRepositories,
 ): Promise<boolean> {
   const revisionId = servingRevisionId(authorization);
   if (!revisionId) return false;
@@ -403,13 +430,11 @@ async function openClawControlRuntimeReachable(
   if (gateway.desiredRelease !== gateway.liveRelease) {
     const ownerUid = authorization.config.ownerUid;
     if (!ownerUid) return false;
-    const assignmentRef = db.doc(`gateways/${gateway.gatewayId}/assignments/${ownerUid}`);
-    const assignment = await (transaction ? transaction.get(assignmentRef) : assignmentRef.get());
-    if (assignment.data()?.state !== "serving") return false;
+    if ((await state.gateways.assignments.get(gateway.gatewayId, ownerUid))?.state !== "serving") return false;
   }
   if (!await isOpenClawControlServingRevision(gateway, runtime, {
     gatewayId: gateway.gatewayId, revisionId,
-    readArtifact: (release) => readGatewayArtifact(db, gateway.gatewayId, release, transaction),
+    readArtifact: (release) => readGatewayArtifactInStore(state, gateway.gatewayId, release),
   })) return false;
   return isOpenClawControlRevisionRuntimeReady(runtime, {
     gatewayId: authorization.gateway.gatewayId,
@@ -426,80 +451,65 @@ async function openClawControlReachable(input: {
 }): Promise<boolean> {
   return input.controlUiEnabled &&
     input.isCurrentAssignment &&
-    await openClawControlRuntimeReachable(input.authorization, input.runtime);
+    await openClawControlRuntimeReachable(input.authorization, input.runtime, platformStateStore);
 }
 
 async function mintOpenClawTicket(
   gatewayId: string,
   workspaceSlug: string,
   uid: string,
+  ownerTier: GatewayOwnerTier | null,
 ): Promise<TicketResult> {
-  return db.runTransaction(async (tx) => {
-    const rootSnap = await tx.get(db.doc(`gateways/${gatewayId}`));
-    const serving = rootSnap.exists
-      ? gatewayAuthorizationFromRootDocument(rootSnap.data(), gatewayId)
-      : null;
+  return platformStateStore.transaction({ label: "builder-gateways.openclaw-ticket" }, async (tx) => {
+    const serving = await readGatewayAuthorizationInStore(tx, gatewayId);
     if (!serving) return { kind: NOT_READY };
-    const scope = await workspaceScopeFor(
-      serving,
-      workspaceSlug,
-      async (path) => {
-        const snap = await tx.get(db.doc(path));
-        return { exists: snap.exists, data: () => snap.data() };
-      },
-      true,
-    );
+    const scope = await workspaceScopeFor(serving, workspaceSlug, tx, true);
     if (!scope) return { kind: NOT_FOUND };
-    const principal = await principalAccess(
-      scope,
-      uid,
-      async (path) => {
-        const snap = await tx.get(db.doc(path));
-        return { exists: snap.exists, data: () => snap.data() };
-      },
-    );
+    const principal = await principalAccess(scope, uid, tx, ownerTier);
     if (principal.kind === "denied") {
-      setGatewayAccessDenialAudit(db, tx, denialAuditInput(
-        scope,
-        uid,
-        principal,
-        principal.kind === "denied" ? principal.reason : "permission_required",
-      ));
+      await recordAccessDenial(tx, scope, uid, principal);
       return { kind: NOT_FOUND };
     }
     const access = controlUiAccess(serving, principal);
     if (access !== "allowed") return { kind: access };
     const revisionId = servingRevisionId(serving);
     if (!revisionId) return { kind: NOT_READY };
-    const revisionSnap = await tx.get(db.doc(`glmGateways/${revisionId}`));
-    if (!await openClawControlRuntimeReachable(
-      serving,
-      revisionSnap.exists ? revisionSnap.data() : undefined,
-      tx,
-    )) return { kind: NOT_READY };
+    const runtime = await readGatewayRuntimeDoc(tx, serving.gateway);
+    if (!await openClawControlRuntimeReachable(serving, runtime, tx)) return { kind: NOT_READY };
     const minted = createOpenClawControlTicket({
       uid,
       gatewayId,
       workspaceSlug: scope.workspaceSlug,
       revisionId,
     });
-    tx.set(db.collection(OPENCLAW_CONTROL_TICKETS_COLLECTION).doc(minted.ticketHash), {
-      ...minted.document,
-      createdAt: FieldValue.serverTimestamp(),
-      expireAt: Timestamp.fromMillis(minted.document.expiresAt),
+    await tx.access.controlTickets.create({
+      ticketHash: minted.ticketHash,
+      uid,
+      gatewayId,
+      createdAt: { serverNow: true },
+      expiresAt: minted.document.expiresAt,
+      redeemedAt: null,
+      grant: { workspaceSlug: minted.document.workspaceSlug, revisionId: minted.document.revisionId },
     });
     return { kind: "minted" as const, minted };
   });
 }
 
-async function openClawReleaseAllowed(
+interface TicketResponse {
+  status: number;
+  body: Record<string, unknown>;
+}
+
+const TICKET_NOT_FOUND: TicketResponse = { status: 404, body: { error: "not-found" } };
+const TICKET_CAPABILITY_DISABLED: TicketResponse = { status: 403, body: { error: CAPABILITY_DISABLED } };
+
+async function openClawReleaseRefusal(
   req: Request,
-  res: Response,
-  authorization: Extract<GatewayAuthorization, { kind: "durable" }>,
+  authorization: DurableGatewayAuthorization,
   scope: GatewayWorkspaceScope,
   featurePolicy: FeaturePolicy | undefined,
-): Promise<boolean> {
-  if (!featurePolicy) return true;
+): Promise<TicketResponse | null> {
+  if (!featurePolicy) return null;
   const subject: FeatureSubject = {
     uid: req.uid!,
     isAdmin: req.isAdmin === true,
@@ -516,15 +526,58 @@ async function openClawReleaseAllowed(
     subject,
     "openclaw-dashboard",
   );
-  if (decision.state === "disabled") {
-    res.status(404).json({ error: "feature_unavailable" });
-    return false;
+  if (decision.state === "disabled") return { status: 404, body: { error: "feature_unavailable" } };
+  if (decision.state === "unavailable") return { status: 503, body: { error: "feature_evaluation_unavailable" } };
+  return null;
+}
+
+async function scopedOpenClawTicket(
+  req: Request,
+  authorization: DurableGatewayAuthorization,
+  workspaceSlug: string,
+  ownerTier: GatewayOwnerTier | null,
+  featurePolicy: FeaturePolicy | undefined,
+): Promise<TicketResponse> {
+  const uid = req.uid!;
+  const { gatewayId } = authorization.gateway;
+  const scope = await workspaceScopeFor(authorization, workspaceSlug, platformStateStore, true);
+  if (!scope) return TICKET_NOT_FOUND;
+  const principal = await principalAccess(scope, uid, platformStateStore, ownerTier);
+  const access = controlUiAccess(authorization, principal);
+  if (access === NOT_FOUND) {
+    await recordAccessDenial(platformStateStore, scope, uid, principal);
+    return TICKET_NOT_FOUND;
   }
-  if (decision.state === "unavailable") {
-    res.status(503).json({ error: "feature_evaluation_unavailable" });
-    return false;
-  }
-  return true;
+  if (access === CAPABILITY_DISABLED) return TICKET_CAPABILITY_DISABLED;
+  const refusal = await openClawReleaseRefusal(req, authorization, scope, featurePolicy);
+  if (refusal) return refusal;
+  const result = await mintOpenClawTicket(gatewayId, scope.workspaceSlug, uid, ownerTier);
+  if (result.kind === NOT_FOUND) return TICKET_NOT_FOUND;
+  if (result.kind === CAPABILITY_DISABLED) return TICKET_CAPABILITY_DISABLED;
+  if (result.kind === NOT_READY) return { status: 409, body: { error: "gateway-not-ready", retryable: true } };
+  return {
+    status: 201,
+    body: {
+      launchUrl: `${apiOrigin()}/g/${gatewayId}/openclaw/launch/${result.minted.ticket}`,
+      expiresAt: result.minted.document.expiresAt,
+    },
+  };
+}
+
+async function openClawTicketResponse(
+  req: Request,
+  gatewayId: unknown,
+  featurePolicy: FeaturePolicy | undefined,
+): Promise<TicketResponse> {
+  if (!isValidGatewayId(gatewayId)) return TICKET_NOT_FOUND;
+  const authorization = await readGatewayAuthorizationInStore(platformStateStore, gatewayId);
+  if (!authorization) return TICKET_NOT_FOUND;
+  const workspaceSlug = requestedWorkspaceSlug(req, authorization);
+  if (!workspaceSlug) return TICKET_NOT_FOUND;
+  return withGatewayOwnerTier(
+    { store: platformStateStore, readBuilderTier, ownerUid: perUserOwnerUid(authorization), now: Date.now() },
+    (ownerTier) => scopedOpenClawTicket(req, authorization, workspaceSlug, ownerTier, featurePolicy),
+  );
 }
 
 function registerOpenClawTicketRoute(router: Router, featurePolicy: FeaturePolicy | undefined): void {
@@ -532,76 +585,14 @@ function registerOpenClawTicketRoute(router: Router, featurePolicy: FeaturePolic
     "/gateways/:gatewayId/openclaw-ticket",
     openClawTicketRateLimit,
     async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const gatewayId = req.params.gatewayId;
-      if (!isValidGatewayId(gatewayId)) {
-        res.status(404).json({ error: "not-found" });
-        return;
+      try {
+        const { status, body } = await openClawTicketResponse(req, req.params.gatewayId, featurePolicy);
+        res.status(status).json(body);
+      } catch (err) {
+        next(err);
       }
-      const uid = req.uid!;
-      const authorization = await readGatewayAuthorizationInStore(platformStateStore, gatewayId);
-      if (!authorization) {
-        res.status(404).json({ error: "not-found" });
-        return;
-      }
-      const workspaceSlug = requestedWorkspaceSlug(req, authorization);
-      if (!workspaceSlug) {
-        res.status(404).json({ error: "not-found" });
-        return;
-      }
-      const scope = await workspaceScopeFor(
-        authorization,
-        workspaceSlug,
-        (path) => db.doc(path).get(),
-        true,
-      );
-      if (!scope) {
-        res.status(404).json({ error: "not-found" });
-        return;
-      }
-      const principal = await principalAccess(
-        scope,
-        uid,
-        (path) => db.doc(path).get(),
-      );
-      const access = controlUiAccess(authorization, principal);
-      if (access === NOT_FOUND) {
-        await recordGatewayAccessDenial(db, denialAuditInput(
-          scope,
-          uid,
-          principal,
-          principal.kind === "denied" ? principal.reason : "permission_required",
-        ));
-        res.status(404).json({ error: "not-found" });
-        return;
-      }
-      if (access === CAPABILITY_DISABLED) {
-        res.status(403).json({ error: CAPABILITY_DISABLED });
-        return;
-      }
-      if (!(await openClawReleaseAllowed(req, res, authorization, scope, featurePolicy))) return;
-      const result = await mintOpenClawTicket(gatewayId, scope.workspaceSlug, uid);
-      if (result.kind === NOT_FOUND) {
-        res.status(404).json({ error: "not-found" });
-        return;
-      }
-      if (result.kind === CAPABILITY_DISABLED) {
-        res.status(403).json({ error: CAPABILITY_DISABLED });
-        return;
-      }
-      if (result.kind === NOT_READY) {
-        res.status(409).json({ error: "gateway-not-ready", retryable: true });
-        return;
-      }
-      res.status(201).json({
-        launchUrl: `${apiOrigin()}/g/${gatewayId}/openclaw/launch/${result.minted.ticket}`,
-        expiresAt: result.minted.document.expiresAt,
-      });
-    } catch (err) {
-      next(err);
-    }
-  },
-    );
+    },
+  );
 }
 
 export function createBuilderGatewayRoutes({ featurePolicy }: { featurePolicy?: FeaturePolicy } = {}): Router {

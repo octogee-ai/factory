@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
 import {
   configuredAnthropicModelCredentialResolution,
@@ -33,28 +34,30 @@ function gatewayRoot(gatewayClass: "shared" | "builder" = "builder"): Record<str
   };
 }
 
-function fakeDb(docs: Record<string, Record<string, unknown> | undefined>) {
-  const docRef = (path: string): unknown => ({
-    get: async () => ({
-      exists: docs[path] !== undefined,
-      data: () => docs[path],
-    }),
-    collection: (name: string) => ({
-      doc: (id: string) => docRef(`${path}/${name}/${id}`),
-    }),
-  });
+type Docs = Record<string, Record<string, unknown>>;
+
+function systemConfigDb(docs: Docs) {
   return {
     collection: (name: string) => ({
-      doc: (id: string) => docRef(`${name}/${id}`),
+      doc: (uid: string) => ({
+        collection: (sub: string) => ({
+          doc: (id: string) => ({
+            get: async () => ({ data: () => docs[`${name}/${uid}/${sub}/${id}`] }),
+          }),
+        }),
+      }),
     }),
-    doc: docRef,
   };
+}
+
+function sources(docs: Docs) {
+  return { db: systemConfigDb(docs) as never, store: createDocumentFixtureStore(docs) };
 }
 
 describe("createAnthropicProviderKeyResolver", () => {
   it.each(["shared", "missing", "reassigned", "changed-during-secret", "parked-owner", "moved-during-secret", "revoked-during-secret"] as const)("keeps customer keys behind current Builder authority: %s", async state => {
-    const docs: Record<string, Record<string, unknown> | undefined> = {
-      "gateways/jack": state === "missing" ? undefined : { ...gatewayRoot(state === "shared" ? "shared" : "builder"), ...(state === "reassigned" ? { ownerUid: "different-owner" } : {}) },
+    const docs: Docs = {
+      ...(state === "missing" ? {} : { "gateways/jack": { ...gatewayRoot(state === "shared" ? "shared" : "builder"), ...(state === "reassigned" ? { ownerUid: "different-owner" } : {}) } }),
       "users/uid-jack": { username: "smile-wring-011b", provisioning: { openclaw: { gatewayId: state === "parked-owner" ? "shared-1" : "jack" } } },
       "users/uid-jack/system/config": { modelCredential: { active: true, provider: "anthropic", mode: "api_key", secretName: "byok-smile-wring-011b-anthropic" } },
     };
@@ -64,7 +67,7 @@ describe("createAnthropicProviderKeyResolver", () => {
       if (state === "revoked-during-secret") docs["users/uid-jack/system/config"] = { modelCredential: { active: false } };
       return "synthetic-owner-key";
     });
-    const resolver = createModelBrokerProviderKeyResolver({ db: fakeDb(docs) as never, platformKeys: { anthropic: "synthetic-platform-key" }, readSecret });
+    const resolver = createModelBrokerProviderKeyResolver({ ...sources(docs), platformKeys: { anthropic: "synthetic-platform-key" }, readSecret });
     const result = await resolver({ provider: "anthropic", record });
     expect(result).toEqual(state === "shared" ? { apiKey: "synthetic-platform-key", source: "platform" } : null);
     expect(readSecret).toHaveBeenCalledTimes(state.endsWith("during-secret") ? 1 : 0);
@@ -73,13 +76,13 @@ describe("createAnthropicProviderKeyResolver", () => {
 
   it("does not select a platform key when durable host authority cannot be read", async () => {
     const readSecret = vi.fn(async () => "synthetic-owner-key");
-    const db = fakeDb({
+    const { db, store } = sources({
       "users/uid-jack": { username: "smile-wring-011b" },
       "users/uid-jack/system/config": { modelCredential: { active: true, provider: "anthropic", mode: "api_key", secretName: "byok-smile-wring-011b-anthropic" } },
     });
+    vi.spyOn(store.gateways.roots, "get").mockRejectedValue(new Error("authority unavailable"));
     const resolver = createAnthropicProviderKeyResolver({
-      db: { ...db, doc: () => ({ get: async () => { throw new Error("authority unavailable"); } }) } as never,
-      platformKey: "synthetic-platform-key", readSecret,
+      db, store, platformKey: "synthetic-platform-key", readSecret,
     });
     await expect(resolver({ provider: "anthropic", record })).rejects.toThrow("authority unavailable");
     expect(readSecret).not.toHaveBeenCalled();
@@ -87,7 +90,7 @@ describe("createAnthropicProviderKeyResolver", () => {
 
   it("serves platform OpenRouter keys from broker environment config", async () => {
     const resolver = createModelBrokerProviderKeyResolver({
-      db: fakeDb({}) as never,
+      ...sources({}),
       platformKeys: {
         anthropic: "sk-ant-platform",
         openrouter: " sk-or-v1-platform ",
@@ -107,12 +110,12 @@ describe("createAnthropicProviderKeyResolver", () => {
   });
 
   it("represents modelCredential source decisions as named outcomes", () => {
-    expect(configuredAnthropicModelCredentialResolution(undefined, undefined)).toEqual({
+    expect(configuredAnthropicModelCredentialResolution(null, undefined)).toEqual({
       kind: "platform",
     });
     expect(
       configuredAnthropicModelCredentialResolution(
-        { username: "smile-wring-011b" },
+        "smile-wring-011b",
         {
           modelCredential: {
             active: false,
@@ -125,7 +128,7 @@ describe("createAnthropicProviderKeyResolver", () => {
     ).toEqual({ kind: "platform" });
     expect(
       configuredAnthropicModelCredentialResolution(
-        { username: "smile-wring-011b" },
+        "smile-wring-011b",
         {
           modelCredential: {
             active: true,
@@ -138,7 +141,7 @@ describe("createAnthropicProviderKeyResolver", () => {
     ).toEqual({ kind: "deny" });
     expect(
       configuredAnthropicModelCredentialResolution(
-        { username: "smile-wring-011b" },
+        "smile-wring-011b",
         {
           modelCredential: {
             active: true,
@@ -157,7 +160,7 @@ describe("createAnthropicProviderKeyResolver", () => {
   it("uses the owner's active Anthropic modelCredential key without legacy byotActive", async () => {
     const readSecret = vi.fn(async () => " sk-ant-owner ");
     const resolver = createAnthropicProviderKeyResolver({
-      db: fakeDb({
+      ...sources({
         "gateways/jack": gatewayRoot(),
         "users/uid-jack": {
           username: "smile-wring-011b",
@@ -171,7 +174,7 @@ describe("createAnthropicProviderKeyResolver", () => {
             secretName: "byok-smile-wring-011b-anthropic",
           },
         },
-      }) as never,
+      }),
       platformKey: "sk-ant-platform",
       readSecret,
     });
@@ -187,7 +190,7 @@ describe("createAnthropicProviderKeyResolver", () => {
   it("does not revive stale legacy BYOT when modelCredential is inactive", async () => {
     const readSecret = vi.fn(async () => "sk-ant-owner");
     const resolver = createAnthropicProviderKeyResolver({
-      db: fakeDb({
+      ...sources({
         "gateways/jack": gatewayRoot(),
         "users/uid-jack": {
           byotActive: true,
@@ -206,7 +209,7 @@ describe("createAnthropicProviderKeyResolver", () => {
             secretName: "byok-smile-wring-011b-anthropic",
           },
         },
-      }) as never,
+      }),
       platformKey: " sk-ant-platform ",
       readSecret,
     });
@@ -221,7 +224,7 @@ describe("createAnthropicProviderKeyResolver", () => {
   it("fails closed on an Anthropic modelCredential secret-name mismatch", async () => {
     const readSecret = vi.fn(async () => "sk-ant-owner");
     const resolver = createAnthropicProviderKeyResolver({
-      db: fakeDb({
+      ...sources({
         "gateways/jack": gatewayRoot(),
         "users/uid-jack": {
           username: "smile-wring-011b",
@@ -235,7 +238,7 @@ describe("createAnthropicProviderKeyResolver", () => {
             secretName: "byok-other-builder-anthropic",
           },
         },
-      }) as never,
+      }),
       platformKey: "sk-ant-platform",
       readSecret,
     });
@@ -250,7 +253,7 @@ describe("createAnthropicProviderKeyResolver", () => {
   ])("ignores legacy-only BYOT metadata referencing %s", async (secretName) => {
     const readSecret = vi.fn(async () => " sk-ant-owner ");
     const resolver = createAnthropicProviderKeyResolver({
-      db: fakeDb({
+      ...sources({
         "gateways/jack": gatewayRoot(),
         "users/uid-jack": {
           byotActive: true,
@@ -263,7 +266,7 @@ describe("createAnthropicProviderKeyResolver", () => {
             secretName,
           },
         },
-      }) as never,
+      }),
       platformKey: "sk-ant-platform",
       readSecret,
     });
@@ -277,7 +280,7 @@ describe("createAnthropicProviderKeyResolver", () => {
 
   it("uses the platform key when another provider is configured", async () => {
     const resolver = createAnthropicProviderKeyResolver({
-      db: fakeDb({
+      ...sources({
         "gateways/jack": gatewayRoot(),
         "users/uid-jack": {
           username: "smile-wring-011b",
@@ -291,7 +294,7 @@ describe("createAnthropicProviderKeyResolver", () => {
             secretName: "byok-smile-wring-011b-openai",
           },
         },
-      }) as never,
+      }),
       platformKey: " sk-ant-platform ",
       readSecret: vi.fn(),
     });

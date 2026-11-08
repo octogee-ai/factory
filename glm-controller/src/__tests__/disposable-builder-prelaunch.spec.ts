@@ -1,7 +1,6 @@
 import { disposableBuilderBootMode } from "@octogee/core/disposable-builder-prelaunch";
 import { createJournalFixtureStore, fixtureDocumentsAt, journalRowsAtPaths } from "@octogee/core/testing/journal-store";
 import { describe, expect, it, vi } from "vitest";
-import type { Firestore } from "firebase-admin/firestore";
 import type { GatewayRuntimeDoc, ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import type { DurableGateway } from "../converge-gateway.js";
 import { markGatewayLive, refineGatewayConvergenceAction, shouldReconcileDisposablePrelaunch } from "../index.js";
@@ -43,16 +42,9 @@ function fixture() {
     ["gateways/shared-blue", { ...gateway, gatewayId: "shared-blue", gatewayClass: "shared", profile: "standard", imageProfile: "standard", allocation: null, ownerUid: null, builderSlug: null }],
     ["gateways/shared-blue/assignments/uid-jefe", { uid: "uid-jefe", slug: "jefe", gatewayId: "shared-blue", source: "onboarding", state: "serving", epoch: 3 }],
   ]) as Map<string, Record<string, unknown>>;
-  const snapshot = (path: string) => ({ exists: documents.has(path), data: () => documents.get(path) });
-  const collection = (path: string) => ({
-    doc: (id: string) => document(`${path}/${id}`),
-    limit: () => ({ get: async () => ({ empty: ![...documents.keys()].some((key) => key.startsWith(`${path}/`)) }) }),
-  });
-  const document = (path: string): object => ({ path, get: async () => snapshot(path), collection: (name: string) => collection(`${path}/${name}`) });
   const backing = fixtureDocumentsAt(documents);
   const writes = vi.fn((path: string, row: Record<string, unknown>) => backing.set(path, row));
   const store = createJournalFixtureStore(journalRowsAtPaths(documents), { documents: { ...backing, set: writes } });
-  const db = { collection, doc: document } as unknown as Firestore;
   const target = { uid: "vm-r2", name: "vm-r2", podIP: "10.0.0.1", ready: false, terminating: false, crashLooping: false };
   const targetHealth = {
     status: "booting" as "booting" | "ready", version: imageTag, fleetSignatureCapability: "gateway-scoped" as const,
@@ -70,14 +62,14 @@ function fixture() {
   } as unknown as SurgeCustomerHandoffDeps;
   const reconcileSurgeHandoff = vi.fn((input) => reconcileSurgeCustomerHandoff(surgeDeps, input));
   const refine = () => refineGatewayConvergenceAction({
-    passDeps: { db, store, reconcileSurgeHandoff }, gateway, artifact, runtime,
+    passDeps: { store, reconcileSurgeHandoff }, gateway, artifact, runtime,
     helmObserved: { ...desiredImage, replicas: 1, ownerUid: gateway.ownerUid, builderSlug: gateway.builderSlug },
     action: { kind: "steady" },
   });
   const markLive = () => markGatewayLive({ store, log: vi.fn() }, gateway, artifact, true);
   const bootMode = () => store.transaction({ label: "test.boot-mode", readOnly: true }, (transaction) =>
     disposableBuilderBootMode({ reader: transaction, gateway }));
-  return { gateway, lease, user, runtime, documents, pods, targetHealth, releaseTarget, reconcileSurgeHandoff, refine, markLive, bootMode, writes, db, store };
+  return { gateway, lease, user, runtime, documents, pods, targetHealth, releaseTarget, reconcileSurgeHandoff, refine, markLive, bootMode, writes, store };
 }
 
 describe("disposable Builder prelaunch release refresh", () => {
@@ -86,7 +78,7 @@ describe("disposable Builder prelaunch release refresh", () => {
     h.gateway.liveRelease = 2;
     h.runtime.lifecycle = "provisioning";
     Object.assign(h.runtime.heartbeat, { lastHeartbeatAt: Date.now() });
-    await expect(shouldReconcileDisposablePrelaunch(h.db, h.store, h.gateway)).resolves.toBe(true);
+    await expect(shouldReconcileDisposablePrelaunch(h.store, h.gateway)).resolves.toBe(true);
     await expect(h.refine()).resolves.toEqual({ kind: "mark-live", prelaunchRefresh: true });
     await h.markLive();
     expect(h.documents.get("glmGateways/jefe-run")).toMatchObject({ lifecycle: "serving", release: 2 });
@@ -109,7 +101,7 @@ describe("disposable Builder prelaunch release refresh", () => {
   });
   it("does not requeue same-release serving gateways as prelaunch", async () => {
     const h = fixture(); h.gateway.liveRelease = 2;
-    await expect(shouldReconcileDisposablePrelaunch(h.db, h.store, h.gateway)).resolves.toBe(false);
+    await expect(shouldReconcileDisposablePrelaunch(h.store, h.gateway)).resolves.toBe(false);
   });
   it("rechecks same-release heartbeat freshness when committing", async () => {
     const h = fixture(); h.gateway.liveRelease = 2; h.runtime.lifecycle = "provisioning";
@@ -121,7 +113,7 @@ describe("disposable Builder prelaunch release refresh", () => {
   });
   it("converges release 2 while the exact release-1 allocation remains empty and held on Shared", async () => {
     const h = fixture();
-    await expect(shouldReconcileDisposablePrelaunch(h.db, h.store, h.gateway)).resolves.toBe(true);
+    await expect(shouldReconcileDisposablePrelaunch(h.store, h.gateway)).resolves.toBe(true);
     await expect(h.refine()).resolves.toEqual({ kind: "mark-live", prelaunchRefresh: true });
     expect(h.reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({ requiresCustomerMigration: false }));
     expect(h.releaseTarget).not.toHaveBeenCalled();
@@ -135,7 +127,7 @@ describe("prelaunch release admission boundaries", () => {
   it.each(["cluster", undefined])("does not admit a %s runtime to the VM refresh exception", async (runtime) => {
     const h = fixture();
     h.runtime.runtime = runtime;
-    await expect(shouldReconcileDisposablePrelaunch(h.db, h.store, h.gateway)).resolves.toBe(false);
+    await expect(shouldReconcileDisposablePrelaunch(h.store, h.gateway)).resolves.toBe(false);
     await expect(h.refine()).resolves.toEqual({ kind: "steady" });
     expect(h.reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({ requiresCustomerMigration: true }));
     expect(h.releaseTarget).not.toHaveBeenCalled();
@@ -156,7 +148,7 @@ describe("prelaunch release admission boundaries", () => {
   it.each(["activating", "active", "returning", "failed"])("keeps a %s lease behind ordinary migration", async (status) => {
     const h = fixture();
     h.lease.status = status;
-    await expect(shouldReconcileDisposablePrelaunch(h.db, h.store, h.gateway)).resolves.toBe(false);
+    await expect(shouldReconcileDisposablePrelaunch(h.store, h.gateway)).resolves.toBe(false);
     await expect(h.refine()).resolves.toEqual({ kind: "steady" });
     expect(h.reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({ requiresCustomerMigration: true }));
   });

@@ -1,14 +1,12 @@
 import type { NextFunction, Request, Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
-import {
-  hasRunningInboundMigrationForSlug,
-  readAssignedSlugsForGateway,
-} from "@octogee/core/assigned-roster";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import {
   configuredBuilderBootstrapAllowed,
 } from "@octogee/core/gateway-live-release";
 import { GATEWAY_BINDING_MISMATCH_REASON, RETIRED_COMPUTER_BINDING_DENIAL_REASON } from "@octogee/shared/types/fleet-broker";
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
+import { hasRunningCustomerMigration } from "../lib/running-customer-migration.js";
 import { normalizeTenantPolicyPath } from "../lib/tenant-route-policy.js";
 import { logger, redactRequestPath } from "../../../gateway-edge/src/middleware/logging.js";
 import {
@@ -21,6 +19,11 @@ import {
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 type PlatformBinding = Extract<Express.Request["boundTenant"], { kind: "platform" }>;
+
+interface EnforcementReaders {
+  db: Pick<Firestore, "collection">;
+  store: PlatformStateRepositories;
+}
 
 export interface TenantAccessRecord {
   method: string;
@@ -38,6 +41,7 @@ export type TenantAccessRecorder = (record: TenantAccessRecord) => void;
 
 export interface TenantEnforcementOptions {
   db?: Pick<Firestore, "collection">;
+  store: PlatformStateRepositories;
   onDenied?: TenantDenialReporter;
   onAccess?: TenantAccessRecorder;
   enforceWhen?: (req: Request) => boolean;
@@ -242,18 +246,13 @@ function requestedSlugs(req: Request): string[] {
 }
 
 async function uidBelongsToGateway(
-  db: Pick<Firestore, "collection">,
+  store: PlatformStateRepositories,
   uid: string,
   gatewayId: string,
 ): Promise<boolean> {
-  const snap = await db.collection("users").doc(uid).get();
-  if (snap.exists) {
-    const data = snap.data() as Record<string, unknown> | undefined;
-    const provisioning = data?.provisioning as Record<string, unknown> | undefined;
-    const openclaw = provisioning?.openclaw as Record<string, unknown> | undefined;
-    if (openclaw?.gatewayId === gatewayId) return true;
-  }
-  return uidHoldsDisposableClaim(db, uid, gatewayId);
+  const builder = await store.builders.records.get(uid);
+  if (builder?.gateway?.gatewayId === gatewayId) return true;
+  return uidHoldsDisposableClaim(store, uid, gatewayId);
 }
 
 // The user mirror only names a disposable builder once activation finishes, and
@@ -263,15 +262,13 @@ async function uidBelongsToGateway(
 // Both the claim and the owner must name the uid, and a retired gateway's
 // leftover claim binds nothing.
 async function uidHoldsDisposableClaim(
-  db: Pick<Firestore, "collection">,
+  store: PlatformStateRepositories,
   uid: string,
   gatewayId: string,
 ): Promise<boolean> {
-  const snap = await db.collection("gateways").doc(gatewayId).get();
-  if (!snap.exists) return false;
-  const gateway = snap.data() as Record<string, unknown> | undefined;
+  const gateway = await store.gateways.roots.get(gatewayId);
   if (!gateway || gateway.desiredStatus === "retired") return false;
-  const allocation = gateway.allocation as Record<string, unknown> | undefined;
+  const allocation = gateway.allocation;
   return (
     allocation?.kind === "disposable-builder" &&
     allocation.claimedByUid === uid &&
@@ -291,12 +288,21 @@ async function flowBelongsToGateway(
 }
 
 async function slugBelongsToGateway(
-  db: Pick<Firestore, "collection">,
+  store: PlatformStateRepositories,
   slug: string,
   gatewayId: string,
 ): Promise<boolean> {
-  const slugs = await readAssignedSlugsForGateway(db, gatewayId);
-  return slugs.includes(slug);
+  const assigned = await store.builders.records.listByGateway(gatewayId);
+  return assigned.some((builder) => builder.slug === slug);
+}
+
+async function slugHasRunningInboundMigration(
+  store: PlatformStateRepositories,
+  gatewayId: string,
+  slug: string,
+): Promise<boolean> {
+  const builder = await store.builders.records.findBySlug(slug);
+  return builder !== null && hasRunningCustomerMigration(store, builder.uid, gatewayId, "inbound");
 }
 
 function routeAllowsInboundMigrationSlug(req: Request): boolean {
@@ -313,17 +319,16 @@ function routeIsPlatformWideNotificationProducer(req: Request): boolean {
 }
 
 async function slugAllowedForRequest(
-  db: Pick<Firestore, "collection">,
+  store: PlatformStateRepositories,
   slug: string,
   bound: GatewayBinding,
   req: Request,
 ): Promise<boolean> {
-  if (await slugBelongsToGateway(db, slug, bound.gatewayId)) return true;
+  if (await slugBelongsToGateway(store, slug, bound.gatewayId)) return true;
   if (!routeAllowsInboundMigrationSlug(req)) return false;
-  if (await hasRunningInboundMigrationForSlug(db, bound.gatewayId, slug)) return true;
-  const gatewaySnap = await db.collection("gateways").doc(bound.gatewayId).get();
-  const gateway = gatewaySnap.exists ? gatewaySnap.data() : undefined;
-  return configuredBuilderBootstrapAllowed(gateway, {
+  if (await slugHasRunningInboundMigration(store, bound.gatewayId, slug)) return true;
+  const gateway = await store.gateways.roots.get(bound.gatewayId);
+  return configuredBuilderBootstrapAllowed(gateway ?? undefined, {
     gatewayId: bound.gatewayId,
     podName: bound.podName,
     slug,
@@ -331,40 +336,40 @@ async function slugAllowedForRequest(
 }
 
 async function allUidsBelongToGateway(
-  db: Pick<Firestore, "collection">,
+  store: PlatformStateRepositories,
   uids: string[],
   gatewayId: string,
 ): Promise<boolean> {
   for (const uid of uids) {
-    if (!(await uidBelongsToGateway(db, uid, gatewayId))) return false;
+    if (!(await uidBelongsToGateway(store, uid, gatewayId))) return false;
   }
   return true;
 }
 
 async function allSlugsAllowedForRequest(
-  db: Pick<Firestore, "collection">,
+  store: PlatformStateRepositories,
   slugs: string[],
   bound: GatewayBinding,
   req: Request,
 ): Promise<boolean> {
   for (const slug of slugs) {
-    if (!(await slugAllowedForRequest(db, slug, bound, req))) return false;
+    if (!(await slugAllowedForRequest(store, slug, bound, req))) return false;
   }
   return true;
 }
 
 async function uidsAllowedForRequest(
-  db: Pick<Firestore, "collection">,
+  store: PlatformStateRepositories,
   uids: string[],
   gatewayId: string,
   req: Request,
 ): Promise<boolean> {
   if (routeRequiresTargetUserOwnership(req) && uids.length === 0) return false;
-  return uids.length === 0 || allUidsBelongToGateway(db, uids, gatewayId);
+  return uids.length === 0 || allUidsBelongToGateway(store, uids, gatewayId);
 }
 
 async function gatewayDenialReason(
-  db: Pick<Firestore, "collection">,
+  readers: EnforcementReaders,
   bound: GatewayBinding,
   req: Request,
 ): Promise<string | null> {
@@ -388,22 +393,22 @@ async function gatewayDenialReason(
   if (isSelfScopedInternalBrokerRoute(req.path)) {
     return null;
   }
-  return targetedDenialReason(db, bound, req, gatewayIds.length > 0);
+  return targetedDenialReason(readers, bound, req, gatewayIds.length > 0);
 }
 
 async function targetedDenialReason(
-  db: Pick<Firestore, "collection">,
+  { db, store }: EnforcementReaders,
   bound: GatewayBinding,
   req: Request,
   namesBoundGateway: boolean,
 ): Promise<string | null> {
   const uids = requestedUids(req);
-  if (!(await uidsAllowedForRequest(db, uids, bound.gatewayId, req))) {
+  if (!(await uidsAllowedForRequest(store, uids, bound.gatewayId, req))) {
     return "request names a user not assigned to the bound gateway";
   }
 
   const slugs = requestedSlugs(req);
-  if (slugs.length > 0 && !(await allSlugsAllowedForRequest(db, slugs, bound, req))) {
+  if (slugs.length > 0 && !(await allSlugsAllowedForRequest(store, slugs, bound, req))) {
     return "request names a workspace slug not assigned to the bound gateway";
   }
 
@@ -484,10 +489,10 @@ function recordAccessOnResponse(
 }
 
 export function createTenantEnforcementMiddleware(
-  opts: TenantEnforcementOptions = {},
+  opts: TenantEnforcementOptions,
 ): (req: Request, res: Response, next: NextFunction) => void {
-  const db = opts.db ?? defaultDb;
-  const onDenied = opts.onDenied ?? createTenantDenialReporter({ db });
+  const readers: EnforcementReaders = { db: opts.db ?? defaultDb, store: opts.store };
+  const onDenied = opts.onDenied ?? createTenantDenialReporter({ store: opts.store });
   const onAccess = opts.onAccess ?? logAccess;
   const deny = (req: Request, res: Response, outcome: AccessOutcome, reason: string): void => {
     outcome.decision = "denied";
@@ -530,7 +535,7 @@ export function createTenantEnforcementMiddleware(
       return;
     }
 
-    gatewayDenialReason(db, bound, req)
+    gatewayDenialReason(readers, bound, req)
       .then((reason) => {
         if (reason !== null) {
           deny(req, res, outcome, reason);

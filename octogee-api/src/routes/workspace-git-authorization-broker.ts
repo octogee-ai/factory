@@ -1,7 +1,6 @@
 import { Router, type Request, type Response } from "express";
-import type { Firestore } from "firebase-admin/firestore";
 
-import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { isValidProjectId, isValidUsername } from "@octogee/shared/types/identity";
 import {
@@ -61,7 +60,7 @@ function safeUid(value: unknown): value is string {
 }
 
 export interface WorkspaceGitAuthorizationBrokerDeps {
-  db: Firestore;
+  store: PlatformStateRepositories;
   resolveTarget?: (
     input: Parameters<typeof resolveFileTarget>[0],
     opts: ResolveFileTargetOpts,
@@ -82,8 +81,8 @@ async function authorize(req: Request, res: Response, deps: WorkspaceGitAuthoriz
     res.status(401).json({ error: "Unauthenticated" });
     return;
   }
-  const assigned = await readAssignedSlugsForGateway(deps.db, body.gatewayId);
-  if (!assigned.includes(body.slug)) {
+  const assigned = await deps.store.builders.records.listByGateway(body.gatewayId);
+  if (!assigned.some((builder) => builder.slug === body.slug)) {
     res.status(404).json(NOT_FOUND);
     return;
   }

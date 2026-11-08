@@ -1,4 +1,3 @@
-import type { Firestore, Transaction } from "firebase-admin/firestore";
 import type {
   BuilderRecord,
   GatewayAssignment,
@@ -9,12 +8,16 @@ import type {
 
 interface RecoveryIdentity { ownerUid: string; gatewayId: string; instanceId: string; operationId: string }
 
-export async function assertOwnerOperationUnfenced(db: Firestore, tx: Transaction, operationId: string, input: Record<string, unknown>): Promise<void> {
+export async function assertOwnerOperationUnfenced(
+  state: Pick<PlatformStateRepositories, "builders">,
+  operationId: string,
+  input: Record<string, unknown>,
+): Promise<void> {
   if (!input || typeof input !== "object") return;
   const uid = input.uid ?? input.ownerUid;
   if (typeof uid !== "string" || !uid || uid.includes("/")) return;
-  const fence = (await tx.get(db.collection("users").doc(uid))).data()?.provisioning?.computerRecovery;
-  if (fence != null && fence.operationId !== operationId) throw new Error("Builder computer recovery is in progress");
+  const fence = (await state.builders.records.get(uid))?.fences.computerRecovery;
+  if (fence !== undefined && fence.operationId !== operationId) throw new Error("Builder computer recovery is in progress");
 }
 
 function assertFence(owner: Stored<BuilderRecord> | null, identity: RecoveryIdentity): { gatewayId: string; epoch: number } {

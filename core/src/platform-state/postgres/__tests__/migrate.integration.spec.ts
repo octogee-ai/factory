@@ -52,7 +52,7 @@ describe.skipIf(!dsn)("migratePlatformState", () => {
     await migratePlatformState(pool, { schema });
 
     const created = await tables(pool, schema);
-    expect(created).toHaveLength(39);
+    expect(created).toHaveLength(40);
     expect(created).toEqual(
       expect.arrayContaining([
         "operations",
@@ -63,6 +63,7 @@ describe.skipIf(!dsn)("migratePlatformState", () => {
         "builder_agents",
         "agent_stores",
         "workspaces",
+        "workspace_project_members",
         "gateway_tickets",
         "change_log",
         "change_log_retention",

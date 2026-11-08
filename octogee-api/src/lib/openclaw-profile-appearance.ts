@@ -1,5 +1,6 @@
 import { addAbortSignal } from "node:stream";
 import sharp from "sharp";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import { db, storage } from "../../../gateway-edge/src/lib/db.js";
 import { MM_URL } from "../../../gateway-edge/src/lib/mattermost.js";
 import type { OpenClawProfileAppearance } from "../../../gateway-edge/src/openclaw-control/proxy-identity.js";
@@ -66,9 +67,17 @@ async function uploadedAvatar(uid: string): Promise<OpenClawProfileAppearance["a
   };
 }
 
-async function mattermostAppearance(uid: string, mmUserId: string): Promise<OpenClawProfileAppearance> {
-  const secret = await db.doc(`users/${uid}/secrets/mattermost`).get();
-  const token = text(secret.data()?.personalToken);
+type ProfileAppearanceStore = Pick<PlatformStateRepositories, "builders" | "secrets">;
+
+export type OpenClawProfileAppearanceLoader = (uid: string) => Promise<OpenClawProfileAppearance>;
+
+async function mattermostAppearance(
+  store: ProfileAppearanceStore,
+  uid: string,
+  mmUserId: string,
+): Promise<OpenClawProfileAppearance> {
+  const secret = await store.secrets.get(uid, "mattermost");
+  const token = text(secret?.kind === "builder-mattermost" ? secret.personalToken : null);
   if (!token) throw new Error("Mattermost personal token missing for profile sync");
   const mmUser = await (await mattermostProfileRequest("/users/me", token)).json() as Record<string, unknown>;
   if (mmUser.id !== mmUserId) throw new Error("Mattermost profile identity mismatch");
@@ -85,20 +94,24 @@ async function mattermostAppearance(uid: string, mmUserId: string): Promise<Open
   };
 }
 
-export async function loadOpenClawProfileAppearance(uid: string): Promise<OpenClawProfileAppearance> {
-  const [userSnap, publicSnap] = await Promise.all([
+export async function loadOpenClawProfileAppearance(
+  store: ProfileAppearanceStore,
+  uid: string,
+): Promise<OpenClawProfileAppearance> {
+  const [builder, userSnap, publicSnap] = await Promise.all([
+    store.builders.records.get(uid),
     db.doc(`users/${uid}`).get(),
     db.doc(`users/${uid}/profile/public`).get(),
   ]);
-  if (!userSnap.exists) throw new Error("Octogee user not found for profile sync");
-  const user = userSnap.data()!;
+  if (!builder) throw new Error("Octogee user not found for profile sync");
+  const user = userSnap.data() ?? {};
   const profile = publicSnap.data() ?? {};
   const avatar = await uploadedAvatar(uid);
-  const mmUserId = text(user.mattermost?.userId);
+  const mmUserId = text(builder.mattermostUserId);
   const displayName = text(profile.displayName) || text(user.displayName)
     || fullName(user.firstName, user.lastName);
   const mattermost = mmUserId && (!displayName || !avatar)
-    ? await mattermostAppearance(uid, mmUserId) : null;
+    ? await mattermostAppearance(store, uid, mmUserId) : null;
   return {
     displayName: displayName || mattermost?.displayName || null,
     avatar: avatar ?? mattermost?.avatar ?? null,

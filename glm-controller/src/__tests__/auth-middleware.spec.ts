@@ -1,49 +1,42 @@
 import express, { type Express } from "express";
 import request from "supertest";
 import { describe, it, expect, vi } from "vitest";
+import { builderAccountFromData, type BuilderAccountReader } from "@octogee/core/builder-account";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createRequireAdmin } from "../middleware/auth";
 
-interface FakeStore {
+interface Seed {
   users: Record<string, { email?: string; accountLifecycle?: { status?: string } }>;
   configs: Record<string, { role?: string }>;
 }
 
-function buildDb(store: FakeStore) {
+function seededStore(seed: Seed): PlatformStateStore {
+  return createDocumentFixtureStore({
+    ...Object.fromEntries(Object.entries(seed.users).map(([uid, data]) => [`users/${uid}`, data])),
+    ...Object.fromEntries(Object.entries(seed.configs).map(([uid, data]) => [`users/${uid}/system/config`, data])),
+  });
+}
+
+function seededAccounts(seed: Seed): Pick<BuilderAccountReader, "get"> {
   return {
-    collection: (name: string) => ({
-      doc: (id: string) => ({
-        get: async () => {
-          if (name === "users") {
-            const data = store.users[id];
-            return { exists: data !== undefined, data: () => data };
-          }
-          return { exists: false, data: () => undefined };
-        },
-        collection: (sub: string) => ({
-          doc: (subId: string) => ({
-            get: async () => {
-              if (name === "users" && sub === "system" && subId === "config") {
-                const data = store.configs[id];
-                return { exists: data !== undefined, data: () => data };
-              }
-              return { exists: false, data: () => undefined };
-            },
-          }),
-        }),
-      }),
-    }),
+    get: async (uid) => {
+      const data = seed.users[uid];
+      return data === undefined ? null : builderAccountFromData(uid, data);
+    },
   };
 }
 
 function buildApp(opts: {
   verifyIdToken: (token: string) => Promise<{ uid: string }>;
-  store: FakeStore;
+  store: Seed;
 }): Express {
   const app = express();
   app.use(
     createRequireAdmin({
       verifyIdToken: opts.verifyIdToken,
-      db: buildDb(opts.store) as any,
+      store: seededStore(opts.store),
+      accounts: seededAccounts(opts.store),
       log: vi.fn(),
     }),
   );
@@ -112,13 +105,27 @@ describe("createRequireAdmin", () => {
       verifyIdToken: async () => ({ uid: "alice" }),
       store: {
         users: { alice: { email: "alice@octogee.com" } },
-        configs: { alice: { role: "operator" } },
+        configs: { alice: { role: "user" } },
       },
     });
     const res = await request(app)
       .get("/probe")
       .set("Authorization", "Bearer ok");
     expect(res.status).toBe(403);
+  });
+
+  it("fails the request instead of reading an unknown stored role as non-admin", async () => {
+    const app = buildApp({
+      verifyIdToken: async () => ({ uid: "alice" }),
+      store: {
+        users: { alice: { email: "alice@octogee.com" } },
+        configs: { alice: { role: "operator" } },
+      },
+    });
+    const res = await request(app)
+      .get("/probe")
+      .set("Authorization", "Bearer ok");
+    expect(res.status).toBe(500);
   });
 
   it("returns 403 for an admin whose account deletion is scheduled", async () => {
@@ -143,26 +150,14 @@ describe("createRequireAdmin", () => {
 
   it("returns 500 when Firestore throws on the role lookup", async () => {
     const app = express();
-    const failingDb = {
-      collection: () => ({
-        doc: () => ({
-          get: async () => {
-            throw new Error("firestore unreachable");
-          },
-          collection: () => ({
-            doc: () => ({
-              get: async () => {
-                throw new Error("firestore unreachable");
-              },
-            }),
-          }),
-        }),
-      }),
-    };
+    const seed: Seed = { users: { alice: { email: "alice@octogee.com" } }, configs: { alice: { role: "admin" } } };
+    const store = seededStore(seed);
+    vi.spyOn(store.builders.records, "get").mockRejectedValue(new Error("firestore unreachable"));
     app.use(
       createRequireAdmin({
         verifyIdToken: async () => ({ uid: "alice" }),
-        db: failingDb as any,
+        store,
+        accounts: seededAccounts(seed),
         log: vi.fn(),
       }),
     );
@@ -170,7 +165,7 @@ describe("createRequireAdmin", () => {
       res.json({ ok: true });
     });
 
-const res = await request(app)
+    const res = await request(app)
       .get("/probe")
       .set("Authorization", "Bearer ok");
     expect(res.status).toBe(500);

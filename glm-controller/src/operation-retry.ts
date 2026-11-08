@@ -1,7 +1,7 @@
 import { isBuilderActivateOperationIdFor, isBuilderReturnOperationIdFor } from "@octogee/core/builder-activation-lease";
 import { sourceTransferBlocksRelease } from './lib/source-transfer-execution.js';
 import type { SourceTransferExecution } from '@octogee/shared/types/glm';
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import type { OperationPatch } from "@octogee/core/platform-state";
 import type {
   CustomerMigrationV2State,
   OperationAttemptRecord,
@@ -91,8 +91,10 @@ export const MAX_OPERATION_ATTEMPT_HISTORY = 20;
 // can still change must never carry an expiry.
 export const OPERATION_JOURNAL_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
-function journalExpiry(now: number): Timestamp {
-  return Timestamp.fromMillis(now + OPERATION_JOURNAL_RETENTION_MS);
+const CLEAR = { clear: true } as const;
+
+function journalExpiry(now: number): number {
+  return now + OPERATION_JOURNAL_RETENTION_MS;
 }
 
 const RETRY_BACKOFF_MS_BY_ATTEMPT: Readonly<Record<number, number>> = {
@@ -205,23 +207,17 @@ export function verifiedDeletionCompletion(
     : null;
 }
 
-function resultOutput(result: OperationResult): Record<string, unknown> {
-  return { output: result.output ?? FieldValue.delete() };
+function resultOutput(result: OperationResult): OperationPatch {
+  return { output: result.output ?? CLEAR };
 }
 
 function successfulCompletion(
   input: OperationCompletionInput,
   persistedSteps: OperationStep[],
   attempts: number,
-): Record<string, unknown> {
-  const scrubbedInput = input.result.scrubInputOnSuccess
-    ? {
-        input: FieldValue.delete(),
-        inputUid: FieldValue.delete(),
-        createdBy: FieldValue.delete(),
-        attemptHistory: FieldValue.delete(),
-        steps: [],
-      }
+): OperationPatch {
+  const scrubbedInput: OperationPatch = input.result.scrubInputOnSuccess
+    ? { input: CLEAR, inputUid: CLEAR, createdBy: CLEAR, attemptHistory: CLEAR, steps: [] }
     : {};
   return {
     status: "succeeded",
@@ -229,10 +225,10 @@ function successfulCompletion(
     expireAt: journalExpiry(input.now),
     attempts,
     steps: persistedSteps,
-    error: FieldValue.delete(),
+    error: CLEAR,
     rolledBack: false,
-    nextAttemptAt: FieldValue.delete(),
-    waitingOn: FieldValue.delete(),
+    nextAttemptAt: CLEAR,
+    waitingOn: CLEAR,
     ...resultOutput(input.result),
     ...scrubbedInput,
   };
@@ -322,9 +318,9 @@ function failureCompletionContext(
   };
 }
 
-function restartAbortedMigration(op: OperationCompletionInput["op"]): Record<string, unknown> {
+function restartAbortedMigration(op: OperationCompletionInput["op"]): OperationPatch {
   return op.customerMigrationV2?.phase === "aborted"
-    ? { customerMigrationV2: FieldValue.delete() }
+    ? { customerMigrationV2: CLEAR }
     : {};
 }
 
@@ -332,22 +328,22 @@ function pendingCompletion(
   input: OperationCompletionInput,
   attempts: number,
   failure: FailureCompletionContext,
-): Record<string, unknown> {
+): OperationPatch {
   const backoffMs = Math.max(retryBackoffMs(attempts), requestedRetryDelayMs(input.result));
   return {
     ...restartAbortedMigration(input.op),
     status: "pending",
     startedAt: null,
     steps: [],
-    expireAt: FieldValue.delete(),
+    expireAt: CLEAR,
     attempts,
     attemptHistory: failure.attemptHistory,
     queuedAt: input.op.kind === MIGRATE_CUSTOMER_KIND && input.result.rolledBack === true &&
       !recordOutput(input.result.output?.configCleanup) &&
       (input.op.customerMigrationV2 === undefined || input.op.customerMigrationV2.phase === "aborted")
-      ? input.now : FieldValue.delete(),
+      ? input.now : CLEAR,
     nextAttemptAt: input.now + backoffMs,
-    waitingOn: FieldValue.delete(),
+    waitingOn: CLEAR,
     error: `attempt ${attempts} failed (transient): ${failure.error} — retrying in ${Math.round(backoffMs / 1000)}s`,
     ...resultOutput(input.result),
   };
@@ -358,7 +354,7 @@ function failedCompletion(
   persistedSteps: OperationStep[],
   attempts: number,
   failure: FailureCompletionContext,
-): Record<string, unknown> {
+): OperationPatch {
   return {
     status: "failed",
     completedAt: input.now,
@@ -368,8 +364,8 @@ function failedCompletion(
     steps: persistedSteps,
     error: failure.error,
     rolledBack: input.result.rolledBack ?? false,
-    nextAttemptAt: FieldValue.delete(),
-    waitingOn: FieldValue.delete(),
+    nextAttemptAt: CLEAR,
+    waitingOn: CLEAR,
     ...resultOutput(input.result),
   };
 }
@@ -383,20 +379,20 @@ function failedCompletion(
 // attempts stay visible however the op ends.
 export function buildOperationCompletionUpdate(
   input: OperationCompletionInput,
-): Record<string, unknown> {
+): OperationPatch {
   const { op, result, steps } = input;
   const persistedSteps = steps.length > 0 ? steps : result.steps;
   const attempts = (op.attempts ?? 0) + 1;
   if (sourceTransferBlocksRelease(op.sourceTransferExecution)) return {
-    status:'pending',startedAt:null,completedAt:null,expireAt:FieldValue.delete(),steps:persistedSteps,
+    status:'pending',startedAt:null,completedAt:null,expireAt:CLEAR,steps:persistedSteps,
     nextAttemptAt:input.now+30_000,lastProgressAt:input.now,error:'source transfer termination not observed',
   };
   if (result.waitingForBuilderIdle === true) {
     if (op.kind !== MIGRATE_CUSTOMER_KIND || result.success) throw new Error("only pending customer migrations can wait for active Builder work");
     return {
-      status: "pending", startedAt: null, completedAt: null, expireAt: FieldValue.delete(),
+      status: "pending", startedAt: null, completedAt: null, expireAt: CLEAR,
       steps: persistedSteps, nextAttemptAt: input.now + 15_000, lastProgressAt: input.now,
-      waitingOn: "builder-idle", error: FieldValue.delete(), rolledBack: false,
+      waitingOn: "builder-idle", error: CLEAR, rolledBack: false,
     };
   }
   if (result.success) return successfulCompletion(input, persistedSteps, attempts);

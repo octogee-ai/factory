@@ -23,7 +23,7 @@ class PostgresWatch {
     resolveClosed;
     rejectClosed;
     stopping = false;
-    known = new Set();
+    known = new Map();
     cursor = null;
     resumeFrom;
     snapshotDelivered = false;
@@ -184,7 +184,7 @@ class PostgresWatch {
         this.pendingResync = null;
         if (resync !== null)
             await this.deliver({ kind: "resync", reason: resync });
-        this.known = new Set(records.keys());
+        this.known = new Map([...records].map(([key, record]) => [key, JSON.stringify(record)]));
         this.cursor = read.horizon;
         this.snapshotDelivered = true;
         await this.deliver({ kind: "snapshot", records: [...records.values()], cursor: read.horizon });
@@ -237,8 +237,11 @@ class PostgresWatch {
         for (const key of result.keys ?? []) {
             const record = current.get(key);
             if (record !== undefined) {
+                const state = JSON.stringify(record);
+                if (this.known.get(key) === state)
+                    continue;
                 changes.push({ type: this.known.has(key) ? "modified" : "added", key, record });
-                this.known.add(key);
+                this.known.set(key, state);
             }
             else if (this.known.delete(key)) {
                 changes.push({ type: "removed", key, record: null });

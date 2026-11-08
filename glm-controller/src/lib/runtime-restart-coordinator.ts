@@ -1,22 +1,21 @@
 import { randomUUID } from 'node:crypto';
-import { type Firestore, type Transaction } from 'firebase-admin/firestore';
 import { updateRuntimeRestart, type RuntimeRestartFence } from '@octogee/core/gateway-runtime-restart';
 export { updateRuntimeRestart, type RuntimeRestartFence } from '@octogee/core/gateway-runtime-restart';
 import { assertGatewayRuntimeMutationUnfencedInStore } from '@octogee/core/gateway-retirement-claim';
 import { findActiveGatewayMigration, type FleetOperationLockRef } from '@octogee/core/fleet-operation-lock';
 import { runNormalFleetMutation } from '@octogee/core/normal-fleet-mutation';
-import type { PlatformStateStore } from '@octogee/core/platform-state';
+import type { PlatformStateRepositories, PlatformStateStore } from '@octogee/core/platform-state';
 import { runGatewayRuntimeExclusive } from './gateway-runtime-mutation.js';
 
-export async function assertMigrationRestartUnfenced(db:Firestore,transaction:Transaction,input:Record<string,unknown>):Promise<void> {
-  const ids=[input.fromGatewayId,input.toGatewayId].filter((id):id is string=>typeof id==='string');
+export async function assertMigrationRestartUnfenced(state:Pick<PlatformStateRepositories,'gateways'|'builders'>,input:Record<string,unknown>):Promise<void> {
+  const ids=[...new Set([input.fromGatewayId,input.toGatewayId].filter((id):id is string=>typeof id==='string'))];
   const uid = typeof input.uid === 'string' && input.uid && !input.uid.includes('/') ? input.uid : null;
   const [roots, owner] = await Promise.all([
-    Promise.all(ids.map(id=>transaction.get(db.collection("gateways").doc(id)))),
-    uid ? transaction.get(db.collection('users').doc(uid)) : null,
+    state.gateways.roots.getMany(ids),
+    uid ? state.builders.records.get(uid) : null,
   ]);
-  if(roots.some(root=>root.data()?.runtimeRestartFence!==undefined))throw new Error('gateway runtime restart outcome is unresolved');
-  if (owner?.data()?.provisioning?.computerRecovery != null) throw new Error('Builder computer recovery is in progress');
+  if([...roots.values()].some(root=>root.runtimeRestartFence!==undefined))throw new Error('gateway runtime restart outcome is unresolved');
+  if (owner?.fences.computerRecovery !== undefined) throw new Error('Builder computer recovery is in progress');
 }
 export async function acquireRuntimeRestart(store:PlatformStateStore,fence:RuntimeRestartFence):Promise<void> {
   await store.transaction({label:'runtime-restart.acquire'},async transaction=>{

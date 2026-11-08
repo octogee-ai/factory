@@ -1,11 +1,11 @@
 import express from "express";
-import type { Firestore } from "firebase-admin/firestore";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { COMPUTER_HOME_CHECKPOINT_KEEP, COMPUTER_HOME_CHECKPOINT_MAX_BYTES, type GatewayVmHomeCheckpoint } from "@octogee/shared/types/glm";
 import { ComputerHomeCheckpointError, type ComputerHomeStore } from "../lib/computer-home-checkpoint.js";
 import type { BoundTenant } from "../lib/sa-to-tenant.js";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
+import { RecordingDocuments } from "../test-helpers/recording-documents.js";
 import { createFleetBrokerRoutes } from "./fleet-broker.js";
 
 const NOW = Date.UTC(2026, 8, 5, 10, 15, 0, 500);
@@ -51,7 +51,7 @@ function gatewayDoc(overrides: Record<string, unknown> = {}): Record<string, unk
 }
 
 function glmDoc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return { gatewayId: "b-x", runtime: "gce-vm", vm: { instanceId: "4242", instanceName: "octogee-gw-b-x" }, ...overrides };
+  return { docKind: "runtime", gatewayId: "b-x", release: 1, lifecycle: "running", runtime: "gce-vm", vm: { instanceId: "4242", instanceName: "octogee-gw-b-x" }, ...overrides };
 }
 
 const current: GatewayVmHomeCheckpoint = { name: CHECKPOINT_NAME, size: 2048, sha256: SHA, instanceId: "4141", completedAt: NOW - 60_000 };
@@ -67,19 +67,7 @@ function harness(input: {
     "glmGateways/b-x": glmDoc(),
     ...input.docs,
   };
-  const writes: Array<{ path: string; data: unknown; options: unknown }> = [];
-  const db = {
-    doc: (path: string) => ({
-      path,
-      get: async () => ({ exists: docs[path] !== undefined, data: () => docs[path] }),
-      set: async (data: unknown, options: unknown) => { writes.push({ path, data, options }); },
-    }),
-    runTransaction: async (work: (tx: unknown) => Promise<void>) => work({
-      get: (ref: { get: () => Promise<unknown> }) => ref.get(),
-      set: (ref: { set: (data: unknown, options: unknown) => Promise<void> }, data: unknown, options: unknown) => ref.set(data, options),
-    }),
-    collection: () => { throw new Error("unexpected collection access"); },
-  } as unknown as Firestore;
+  const documents = new RecordingDocuments(Object.fromEntries(Object.entries(docs).filter(([, row]) => row !== undefined)));
   const store: ComputerHomeStore = {
     commit: vi.fn(async ({ checkpoint }: { checkpoint: GatewayVmHomeCheckpoint }) => checkpoint),
     readCurrent: vi.fn(async () => null),
@@ -100,9 +88,9 @@ function harness(input: {
     if (bound) req.boundTenant = bound;
     next();
   });
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db, store: createDocumentFixtureStore({}), computerHomeStore: store, createBlobSignedUrl, now: () => NOW }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({ db: {} as never, store: createDocumentFixtureStore(documents), computerHomeStore: store, createBlobSignedUrl, now: () => NOW }));
   const post = (path: string, body: Record<string, unknown>) => request(app).post(`/internal/fleet/computer-home/${path}`).send({ gatewayId: "b-x", slug: "bob", requestedAt: null, ...body });
-  return { post, store, createBlobSignedUrl, writes, app };
+  return { post, store, createBlobSignedUrl, documents, writes: documents.writes, app };
 }
 
 describe("computer-home checkpoint routes", () => {
@@ -156,7 +144,7 @@ describe("computer-home checkpoint routes", () => {
       currentPath: "customers/bob/computer-home/current.json",
       checkpoint,
     });
-    expect(h.writes).toEqual([{ path: "glmGateways/b-x", data: { vmHome: { lastCheckpoint: checkpoint, checkpointAcknowledgedAt: null } }, options: { merge: true } }]);
+    expect(h.writes).toEqual([{ path: "glmGateways/b-x", data: glmDoc({ vmHome: { lastCheckpoint: checkpoint, checkpointAcknowledgedAt: null } }) }]);
   });
 
   it("acknowledges only the request observed before snapshot capture, including a late periodic upload", async () => {
@@ -267,7 +255,7 @@ describe("computer-home checkpoint routes", () => {
     expect((await final.post("checkpoint-url", { size: 1 })).status).toBe(200);
     const commit = await final.post("commit", { name: CHECKPOINT_NAME, size: 2048, sha256: SHA });
     expect(commit.status).toBe(200);
-    expect(final.writes).toEqual([{ path: "glmGateways/b-x", data: { vmHome: { checkpointAcknowledgedAt: null, lastCheckpoint: { name: CHECKPOINT_NAME, size: 2048, sha256: SHA, instanceId: "4242", completedAt: NOW } } }, options: { merge: true } }]);
+    expect(final.writes).toEqual([{ path: "glmGateways/b-x", data: { ...glm, vmHome: { checkpointRequestedAt: NOW - 30_000, checkpointAcknowledgedAt: null, lastCheckpoint: { name: CHECKPOINT_NAME, size: 2048, sha256: SHA, instanceId: "4242", completedAt: NOW } } } }]);
     expect((await final.post("prune", {})).status).toBe(200);
 
     const plain = harness({ docs: { "gateways/b-x": retired, "glmGateways/b-x": glm } });
@@ -306,7 +294,7 @@ describe("required disposable recovery checkpoint", () => {
     const next = { ...saved, instanceId: "4242", completedAt: NOW };
     const h = harness({ store: { commit: vi.fn(async () => next) } });
     expect((await h.post("commit", { name: next.name, size: next.size, sha256: next.sha256 })).status).toBe(200);
-    expect(h.writes).toContainEqual({ path: "users/uid-bob", data: { provisioning: { homeCheckpoint: next } }, options: { merge: true } });
+    expect(h.writes).toContainEqual({ path: "users/uid-bob", data: { provisioning: { homeCheckpoint: next } } });
   });
 
 });

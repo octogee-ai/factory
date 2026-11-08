@@ -5,7 +5,7 @@ import {
   CREW_ROLES,
   CREW_IDENTITY,
   TIERS,
-} from "../lib/crew.js";
+} from "@octogee/core/crew";
 
 describe("CREW_ROLES", () => {
   it("contains only coach", () => {

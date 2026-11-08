@@ -4,7 +4,7 @@ import { MalformedRecordError, MissingRecordError } from "../errors.js";
 import { GATEWAY_RECOVERY_RECEIPTS_TABLE, OPERATION_AUDITS_TABLE, OPERATIONS_TABLE } from "./journal-tables.js";
 import { deleteRecord, equalsFence, insertRecord, oneOfFence, revisionFence, selectByKey, selectRecords, updateRecord, } from "./records.js";
 import { SqlParameters } from "./sql.js";
-import { columnFor, decodeStored } from "./values.js";
+import { columnFor, decodeStored, isClearField } from "./values.js";
 const AUTO_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const AUTO_ID_LENGTH = 20;
 const AUDIT_ID_PREFIX = "audit-";
@@ -97,7 +97,10 @@ function createOperationsRepository(session) {
             await insertRecord(session, "journal.operations.put", OPERATIONS_TABLE, operation, "put");
         },
         async patch(operationId, patch, fence) {
-            await updateRecord(session, "journal.operations.patch", { table: OPERATIONS_TABLE, key: [operationId] }, patch, [
+            const table = isClearField(patch.createdBy)
+                ? { ...OPERATIONS_TABLE, immutableFields: ["id", "kind", "createdAt"] }
+                : OPERATIONS_TABLE;
+            await updateRecord(session, "journal.operations.patch", { table, key: [operationId] }, patch, [
                 ...revisionFence(fence?.revision),
                 ...oneOfFence("status", STATUS, fence?.status),
                 ...equalsFence("startedAt", STARTED_AT, fence?.startedAt),

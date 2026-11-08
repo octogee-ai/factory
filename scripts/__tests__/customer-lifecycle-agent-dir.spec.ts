@@ -1,10 +1,8 @@
-import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import * as fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import * as fsSync from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Firestore } from "firebase-admin/firestore";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
@@ -342,27 +340,6 @@ describe("customer lifecycle config patch agent directories", () => {
     });
   });
 
-  it("prod adapter creates the coach agent dir before adding the customer config", async () => {
-    await withRuntimeMock(async ({ agentsDir, applyConfigPatch }) => {
-      const { buildProductionLifecycleAdapter } = await import(
-        "../lib/customer-lifecycle-prod-adapter.js"
-      );
-      const adapter = buildProductionLifecycleAdapter({
-        db: {} as Firestore,
-        store: createDocumentFixtureStore(new Map()),
-        rpc: {
-          channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [] } })),
-        } as unknown as GatewayRpcClient,
-        log: vi.fn(),
-      });
-
-      await adapter.applyAddCustomerConfigPatch(userSnapshot, { _coachPersonalToken: "pat-1" });
-
-      expect(fsSync.existsSync(path.join(agentsDir, "octogee-alice-coach", "agent"))).toBe(true);
-      expect(applyConfigPatch).toHaveBeenCalledTimes(1);
-    });
-  });
-
   it("broker import preparation keeps the coach agent dir present across a gateway restart", async () => {
     await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
       process.env.OPENCLAW_STATE_DIR = tempRoot;
@@ -510,29 +487,22 @@ describe("customer lifecycle config patch agent directories", () => {
     });
   });
 
-  async function buildAdapter(adapterKind: "broker" | "prod") {
-    return adapterKind === "broker"
-      ? (await import("../lib/customer-lifecycle-broker-adapter.js")).buildBrokeredLifecycleAdapter({
-        client: mkClient(brokerSnapshot),
-        rpc: {} as GatewayRpcClient,
-        log: vi.fn(),
-      })
-      : (await import("../lib/customer-lifecycle-prod-adapter.js")).buildProductionLifecycleAdapter({
-        db: {} as Firestore,
-        store: createDocumentFixtureStore(new Map()),
-        rpc: {} as GatewayRpcClient,
-        log: vi.fn(),
-      });
+  async function buildAdapter() {
+    return (await import("../lib/customer-lifecycle-broker-adapter.js")).buildBrokeredLifecycleAdapter({
+      client: mkClient(brokerSnapshot),
+      rpc: {} as GatewayRpcClient,
+      log: vi.fn(),
+    });
   }
 
-  it.each(["broker", "prod"] as const)(
-    "removes a departed customer's Git state and token expiry records with its workspace (%s)",
-    async (adapterKind) => {
+  it(
+    "removes a departed customer's Git state and token expiry records with its workspace",
+    async () => {
       await withRuntimeMock(async ({ tempRoot }) => {
         const customerDir = path.join(tempRoot, "customers", "alice");
         await fs.mkdir(customerDir, { recursive: true });
         const residue = await seedDepartedCustomerResidue(tempRoot);
-        const adapter = await buildAdapter(adapterKind);
+        const adapter = await buildAdapter();
 
         await adapter.deleteDepartedCustomerState("alice");
 
@@ -543,15 +513,15 @@ describe("customer lifecycle config patch agent directories", () => {
     },
   );
 
-  it.each(["broker", "prod"] as const)(
-    "keeps a customer's Git state and token expiry records when only a partial workspace is removed before a clone (%s)",
-    async (adapterKind) => {
+  it(
+    "keeps a customer's Git state and token expiry records when only a partial workspace is removed before a clone",
+    async () => {
       await withRuntimeMock(async ({ tempRoot }) => {
         const customerDir = path.join(tempRoot, "customers", "alice");
         await fs.mkdir(path.join(customerDir, "memory"), { recursive: true });
         await fs.writeFile(path.join(customerDir, "SOUL.md"), "partial");
         const residue = await seedDepartedCustomerResidue(tempRoot);
-        const adapter = await buildAdapter(adapterKind);
+        const adapter = await buildAdapter();
 
         await adapter.removePartialWorkspace("alice");
 
@@ -561,9 +531,9 @@ describe("customer lifecycle config patch agent directories", () => {
     },
   );
 
-  it.each(["broker", "prod"] as const)(
-    "keeps the project storage under a partial workspace and never tries to remove it (%s)",
-    async (adapterKind) => {
+  it(
+    "keeps the project storage under a partial workspace and never tries to remove it",
+    async () => {
       await withRuntimeMock(async ({ tempRoot }) => {
         const customerDir = path.join(tempRoot, "customers", "alice");
         const projects = path.join(customerDir, "projects");
@@ -574,7 +544,7 @@ describe("customer lifecycle config patch agent directories", () => {
         await fs.writeFile(path.join(customerDir, "memory", "today.md"), "partial");
         await fs.writeFile(path.join(customerDir, "SOUL.md"), "partial");
         await fs.chmod(projects, 0o500);
-        const adapter = await buildAdapter(adapterKind);
+        const adapter = await buildAdapter();
 
         try {
           await adapter.removePartialWorkspace("alice");
@@ -724,33 +694,6 @@ describe("customer lifecycle config patch agent directories", () => {
     });
   });
 
-  it("prod import preparation keeps the coach agent dir present across a gateway restart", async () => {
-    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
-      process.env.OPENCLAW_STATE_DIR = tempRoot;
-      const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
-      const customerKey = path.join(tempRoot, "customer-keys", "alice", "id_ed25519");
-      await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(path.join(agentDir, "stale.json"), "stale");
-      await fs.mkdir(path.dirname(customerKey), { recursive: true });
-      await fs.writeFile(customerKey, "private-key");
-      const { buildProductionLifecycleAdapter } = await import(
-        "../lib/customer-lifecycle-prod-adapter.js"
-      );
-      const adapter = buildProductionLifecycleAdapter({
-        db: {} as Firestore,
-        store: createDocumentFixtureStore(new Map()),
-        rpc: {} as GatewayRpcClient,
-        log: vi.fn(),
-      });
-
-      await adapter.prepareImportDir("alice", "pre");
-
-      expect(fsSync.existsSync(agentDir)).toBe(true);
-      expect(fsSync.existsSync(path.join(agentDir, "stale.json"))).toBe(false);
-      expect(fsSync.existsSync(customerKey)).toBe(true);
-    });
-  });
-
   it("carries the configured Builder agent root, workspace, and session store as one portable plan", async () => {
     await withRuntimeMock(async ({ tempRoot }) => {
       process.env.OPENCLAW_STATE_DIR = tempRoot;
@@ -798,9 +741,9 @@ describe("customer lifecycle config patch agent directories", () => {
     });
   });
 
-  it.each(["broker", "prod"] as const)(
-    "does not export the neutral route agent state from a configured Builder (%s)",
-    async (adapterKind) => {
+  it(
+    "does not export the neutral route agent state from a configured Builder",
+    async () => {
       await withRuntimeMock(async ({ tempRoot }) => {
         process.env.OPENCLAW_STATE_DIR = tempRoot;
         stubBuilderClaim("alice");
@@ -839,18 +782,11 @@ describe("customer lifecycle config patch agent directories", () => {
           await fs.writeFile(absolutePath, contents);
         }
 
-        const adapter = adapterKind === "broker"
-          ? (await import("../lib/customer-lifecycle-broker-adapter.js")).buildBrokeredLifecycleAdapter({
-            client: mkClient(brokerSnapshot),
-            rpc: {} as GatewayRpcClient,
-            log: vi.fn(),
-          })
-          : (await import("../lib/customer-lifecycle-prod-adapter.js")).buildProductionLifecycleAdapter({
-            db: {} as Firestore,
-            store: createDocumentFixtureStore(new Map()),
-            rpc: {} as GatewayRpcClient,
-            log: vi.fn(),
-          });
+        const adapter = (await import("../lib/customer-lifecycle-broker-adapter.js")).buildBrokeredLifecycleAdapter({
+          client: mkClient(brokerSnapshot),
+          rpc: {} as GatewayRpcClient,
+          log: vi.fn(),
+        });
 
         const paths = await adapter.listExportPaths("alice");
 
@@ -871,13 +807,11 @@ describe("customer lifecycle config patch agent directories", () => {
   );
 
   it.each([
-    ["broker", "native computer return", true, ["octogee-alice-coach", "octogee-alice-proj-orbit-coach"]],
-    ["prod", "native computer return", true, ["octogee-alice-coach", "octogee-alice-proj-orbit-coach"]],
-    ["broker", "Builder-to-Builder move", false, ["main", "octogee-alice-coach", "octogee-alice-proj-orbit-coach", "octogee-unmatched-route"]],
-    ["prod", "Builder-to-Builder move", false, ["main", "octogee-alice-coach", "octogee-alice-proj-orbit-coach", "octogee-unmatched-route"]],
+    ["native computer return", true, ["octogee-alice-coach", "octogee-alice-proj-orbit-coach"]],
+    ["Builder-to-Builder move", false, ["main", "octogee-alice-coach", "octogee-alice-proj-orbit-coach", "octogee-unmatched-route"]],
   ] as const)(
-    "%s adapter fences the scheduler agents a %s hands over",
-    async (adapterKind, _handoff, partialHandoff, expectedAgentIds) => {
+    "broker adapter fences the scheduler agents a %s hands over",
+    async (_handoff, partialHandoff, expectedAgentIds) => {
       await withRuntimeMock(async ({ tempRoot }) => {
         process.env.OPENCLAW_STATE_DIR = tempRoot;
         stubBuilderClaim("alice");
@@ -901,18 +835,11 @@ describe("customer lifecycle config patch agent directories", () => {
             operationId: request.operationId, phase: request.phase, agentIds: request.agentIds ?? [], drained: true,
           })),
         } as unknown as GatewayRpcClient;
-        const adapter = adapterKind === "broker"
-          ? (await import("../lib/customer-lifecycle-broker-adapter.js")).buildBrokeredLifecycleAdapter({
-            client: mkClient(brokerSnapshot),
-            rpc,
-            log: vi.fn(),
-          })
-          : (await import("../lib/customer-lifecycle-prod-adapter.js")).buildProductionLifecycleAdapter({
-            db: {} as Firestore,
-            store: createDocumentFixtureStore(new Map()),
-            rpc,
-            log: vi.fn(),
-          });
+        const adapter = (await import("../lib/customer-lifecycle-broker-adapter.js")).buildBrokeredLifecycleAdapter({
+          client: mkClient(brokerSnapshot),
+          rpc,
+          log: vi.fn(),
+        });
         const retain = partialHandoff ? { retainNonportable: true } : {};
 
         const quiesced = await adapter.quiesceCustomer("alice", 0, { stopMattermost: true, schedulerMigrationId: "handoff-1", ...retain });
@@ -929,9 +856,9 @@ describe("customer lifecycle config patch agent directories", () => {
     },
   );
 
-  it.each(["broker", "prod"] as const)(
-    "%s adapter quiesces a Shared customer that has scheduled jobs without a scheduler handoff",
-    async (adapterKind) => {
+  it(
+    "broker adapter quiesces a Shared customer that has scheduled jobs without a scheduler handoff",
+    async () => {
       await withRuntimeMock(async ({ tempRoot }) => {
         process.env.OPENCLAW_STATE_DIR = tempRoot;
         const config = { channels: { mattermost: { accounts: { "alice-coach": {} } } } };
@@ -943,18 +870,11 @@ describe("customer lifecycle config patch agent directories", () => {
           cronJobCount: vi.fn(async () => 3),
           schedulerMigration: vi.fn(),
         } as unknown as GatewayRpcClient;
-        const adapter = adapterKind === "broker"
-          ? (await import("../lib/customer-lifecycle-broker-adapter.js")).buildBrokeredLifecycleAdapter({
-            client: mkClient(brokerSnapshot),
-            rpc,
-            log: vi.fn(),
-          })
-          : (await import("../lib/customer-lifecycle-prod-adapter.js")).buildProductionLifecycleAdapter({
-            db: {} as Firestore,
-            store: createDocumentFixtureStore(new Map()),
-            rpc,
-            log: vi.fn(),
-          });
+        const adapter = (await import("../lib/customer-lifecycle-broker-adapter.js")).buildBrokeredLifecycleAdapter({
+          client: mkClient(brokerSnapshot),
+          rpc,
+          log: vi.fn(),
+        });
 
         await expect(adapter.quiesceCustomer("alice", 0)).resolves.toEqual({ drained: true, runningCount: 0 });
         expect(rpc.channelsStop).toHaveBeenCalledWith({ channel: "mattermost", accountId: "alice-coach" });

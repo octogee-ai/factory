@@ -106,6 +106,24 @@ describe.skipIf(!dsn)("PostgreSQL platform state watch", { timeout: 30_000 }, ()
     expect(cursors).toEqual([...cursors].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)));
   });
 
+  it("does not replay a snapshot revision when an older transaction holds the change horizon", async () => {
+    const held = await harness.pool.connect();
+    try {
+      await held.query("BEGIN");
+      await held.query("SELECT pg_current_xact_id()");
+      await harness.store.journal.operations.create(operation({ id: "visible" }));
+      const { listener } = await watched();
+      expect(snapshotIds(listener.events[0])).toEqual(["visible"]);
+      await held.query("COMMIT");
+      await harness.store.journal.operations.create(operation({ id: "later" }));
+      await vi.waitFor(() => expect(changesOf(listener)).toContainEqual(expect.objectContaining({ key: "later" })), WAIT);
+      expect(changesOf(listener).map(({ type, key }) => `${type}:${key}`)).toEqual(["added:later"]);
+    } finally {
+      await held.query("ROLLBACK");
+      held.release();
+    }
+  });
+
   it("wakes on a change notification instead of waiting for the poll interval", async () => {
     const store = harness.openStore({ ...FAST_TIMINGS, watchTiming: { pollIntervalMs: 60_000, initialRetryDelayMs: 20, maxRetryDelayMs: 200 } });
     const { listener } = await watched(store);

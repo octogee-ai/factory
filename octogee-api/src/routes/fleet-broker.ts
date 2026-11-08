@@ -1,8 +1,24 @@
+import type { WorkspaceProject } from "@octogee/core/platform-state";
 import { disposableBuilderBootMode } from "@octogee/core/disposable-builder-prelaunch";
 import { sharedAgentAnchorMigrationScope, sharedAssignedSourceSurgeAnchorScope } from "../lib/shared-agent-anchor-migration.js";
 import { installWorkspaceBlobBrokerRoute, type WorkspaceBlobStore } from "./fleet-broker-workspace-blob.js";
 import { readCustomerRestoreAuthoritySnapshot } from "@octogee/core/fleet-state";
-import type { PlatformStateStore } from "@octogee/core/platform-state";
+import { firestoreBuilderAccountReader } from "@octogee/core/builder-account";
+import {
+  FenceMismatchError,
+  MalformedRecordError,
+  MissingRecordError,
+  type AgentStoreRecord,
+  type BuilderRecord,
+  type FleetRegistryRecord,
+  type GatewayAssignment,
+  type GatewayRoot,
+  type MattermostTokenSecret,
+  type PlatformStateRepositories,
+  type PlatformStateStore,
+  type Stored,
+} from "@octogee/core/platform-state";
+import { builderRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
 import { configuredBuilderPreparationAllowed } from "../lib/builder-preparation.js";
 import { completeProjectAgentReadiness } from "../lib/project-agent-readiness-delivery.js";
 import { parseProjectAgentReadinessReports } from "../lib/project-agent-readiness.js";
@@ -13,16 +29,13 @@ import { isIP } from "node:net";
 import {
   COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE,
   COMPUTER_HOME_CHECKPOINT_KEEP,
-  GLM_OPERATIONS_COLLECTION,
   gatewayVmPodName,
   COMPUTER_HOME_CHECKPOINT_MAX_BYTES,
   computerHomeCheckpointName,
-  gatewayVmRuntimeDocPath,
   isGatewayVmDiskSample,
   isGatewayVmBootRecoverySample,
   isGatewayVmImageSample,
   isGatewayEgressMode,
-  isGatewayVmRuntimeBundle,
   isDisposableHomeCheckpoint,
   sameHomeCheckpoint,
   resolveGatewayRuntime,
@@ -44,7 +57,7 @@ import {
   type ComputerHomeStore,
 } from "../lib/computer-home-checkpoint.js";
 import { Router, type Request, type Response } from "express";
-import { FieldValue, type DocumentSnapshot, type Firestore, type QuerySnapshot, type Transaction } from "firebase-admin/firestore";
+import type { Firestore } from "firebase-admin/firestore";
 
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import { parseAgentLook, type AgentLook } from "@octogee/shared/types/agent-look";
@@ -104,26 +117,12 @@ import { isDeveloperToolchainStatus } from "@octogee/shared/types/developer-tool
 import {
   byotSnapshotProjectionFromSystemConfig,
   collectProjectAgentStates,
-  deriveSlug,
-  mapProjectChannelDoc,
-  mapWorkspaceChannelDoc,
 } from "@octogee/core/customer-snapshot-mapping";
 import {
-  hasRunningInboundMigrationForUid,
-  slugFromAssignedUser,
-} from "@octogee/core/assigned-roster";
-import {
-  parseAssignmentDoc,
-} from "@octogee/core/assignment-doc";
-import {
-  GATEWAYS_COLLECTION,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
 } from "@octogee/shared/types/fleet-controller";
 import {
-  GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
-  customerRuntimeMutationFenced,
-  isAssignmentState,
   projectGatewayDesiredRootForGateway,
   type GatewayDoc,
 } from "@octogee/shared/types/gateway-releases";
@@ -142,10 +141,12 @@ import { WebResearchError } from "../lib/web-research-error.js";
 import { createBraveSearchClient, createTavilyClient } from "../lib/web-provider-clients.js";
 import { isPublicIp } from "../lib/link-unfurl.js";
 import { recordRevisionSystemConfigStatus } from "../lib/revision-system-config-status.js";
+import { hasRunningCustomerMigration } from "../lib/running-customer-migration.js";
 import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
 import { createOpenClawBootSentinelStore, OPENCLAW_BUILD_PATTERN } from "../lib/openclaw-boot-sentinel.js";
 import {
   createOwnerWorkspaceTurnVerifier,
+  type OwnerTurnStore,
   type OwnerWorkspaceTurnVerifier,
 } from "../lib/openclaw-owner-turn.js";
 import {
@@ -164,7 +165,6 @@ import {
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
 const FORBIDDEN = { error: "forbidden" } as const;
-const OPENCLAW_GATEWAY_ID_FIELD = "provisioning.openclaw.gatewayId";
 const RECONCILE_ERROR_REPORT_WINDOW_MS = 60_000;
 
 type RecordUsageEvent = (input: {
@@ -249,7 +249,7 @@ type ExecuteChatHistory = (
 ) => Promise<Record<string, unknown>>;
 
 type ResolveChatIdentity = (
-  db: Firestore,
+  deps: { db: Firestore; store: PlatformStateStore },
   input: { uid: string; slug: string; agentId: string },
 ) => Promise<{
   lane: "workspace" | "project";
@@ -390,11 +390,11 @@ const defaultExecuteChatHistory: ExecuteChatHistory = async (identity, params) =
   return executeChatHistory(identity, params);
 };
 
-const defaultResolveChatIdentity: ResolveChatIdentity = async (db, input) => {
+const defaultResolveChatIdentity: ResolveChatIdentity = async (deps, input) => {
   const { resolveChatIdentity } = await import(
     "../../../gateway-edge/src/lib/chat-broker/resolve-pat.js"
   );
-  return resolveChatIdentity(db, input);
+  return resolveChatIdentity(deps, input);
 };
 
 function positiveConfigNumber(raw: string | undefined, fallback: number, name: string): number {
@@ -408,6 +408,7 @@ function positiveConfigNumber(raw: string | undefined, fallback: number, name: s
 
 function createDefaultWebResearch(
   db: Firestore,
+  store: PlatformStateStore,
   rails: ModelBrokerRailRegistry,
   onSignupOfferBudgetInterruption?: FleetBrokerRouteDeps["onSignupOfferBudgetInterruption"],
 ) {
@@ -420,8 +421,9 @@ function createDefaultWebResearch(
       prepaidCreditMarkupMultiplier: prepaidCreditMarkupMultiplierFromEnv(),
     }),
     resolveGrant: createCachedOwnerModelBrokerGrantResolver({
-      db,
       rails,
+      state: store,
+      accounts: firestoreBuilderAccountReader(db),
       log: (message, fields) => logger.info(message, fields),
     }),
     rails,
@@ -520,10 +522,6 @@ function readPath(obj: Record<string, unknown> | undefined, dotted: string): unk
 function stringAt(obj: Record<string, unknown> | undefined, dotted: string): string {
   const value = readPath(obj, dotted);
   return typeof value === "string" ? value : "";
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
 function objectBody(req: Request): Record<string, unknown> {
@@ -1056,140 +1054,111 @@ const defaultPruneBuilderRuntimeState: PruneBuilderRuntimeState = async (input) 
   return candidates.length;
 };
 
-function agentBelongsToAssignedWorkspace(
-  data: Record<string, unknown>,
-  agentId: string,
-): boolean {
-  const legacyAgentId = stringAt(data, "provisioning.openclaw.agentId");
-  if (legacyAgentId === agentId) return true;
-  const agentIds = stringArray(readPath(data, "provisioning.openclaw.agentIds"));
-  return agentIds.includes(agentId);
-}
-
 export async function findAssignedUserByAgentId(
-  db: Firestore,
+  store: PlatformStateRepositories,
   gatewayId: string,
   agentId: string,
-): Promise<{ uid: string; data: Record<string, unknown> } | null> {
-  const snap = await db
-    .collection("users")
-    .where(OPENCLAW_GATEWAY_ID_FIELD, "==", gatewayId)
-    .get();
-  for (const doc of snap.docs) {
-    const data = doc.data() as Record<string, unknown> | undefined;
-    if (!data) continue;
-    if (agentBelongsToAssignedWorkspace(data, agentId)) {
-      return { uid: doc.id, data };
-    }
-  }
-  return null;
+): Promise<Stored<BuilderRecord> | null> {
+  const builders = await store.builders.records.listByGateway(gatewayId);
+  return builders.find((builder) => builderCarriesAgentId(builder, agentId)) ?? null;
 }
 
-async function findUsersByAgentId(
-  db: Firestore,
-  agentId: string,
-): Promise<Array<{ uid: string; data: Record<string, unknown> }>> {
-  const matches: Array<{ uid: string; data: Record<string, unknown> }> = [];
-  const seen = new Set<string>();
-  for (const query of [
-    db.collection("users").where("provisioning.openclaw.agentId", "==", agentId).limit(10),
-    db
-      .collection("users")
-      .where("provisioning.openclaw.agentIds", "array-contains", agentId)
-      .limit(10),
-  ]) {
-    const snap = await query.get();
-    for (const doc of snap.docs) {
-      if (seen.has(doc.id)) continue;
-      const data = doc.data() as Record<string, unknown> | undefined;
-      if (!data || !agentBelongsToAssignedWorkspace(data, agentId)) {
-        continue;
-      }
-      seen.add(doc.id);
-      matches.push({ uid: doc.id, data });
-    }
-  }
-  return matches;
-}
+const AGENT_ID_CANDIDATE_LIMIT = 10;
 
 export async function findAssignedOrInboundMigratingUserByAgentId(
-  db: Firestore,
+  store: PlatformStateRepositories,
   gatewayId: string,
   agentId: string,
-): Promise<{ uid: string; data: Record<string, unknown> } | null> {
-  const assigned = await findAssignedUserByAgentId(db, gatewayId, agentId);
+): Promise<Stored<BuilderRecord> | null> {
+  const assigned = await findAssignedUserByAgentId(store, gatewayId, agentId);
   if (assigned) return assigned;
 
-  const candidates = await findUsersByAgentId(db, agentId);
-  for (const candidate of candidates) {
-    if (await hasRunningInboundMigrationForUid(db, gatewayId, candidate.uid)) {
-      return candidate;
-    }
+  for (const candidate of await store.builders.records.listByAgentId(agentId, AGENT_ID_CANDIDATE_LIMIT)) {
+    if (await hasRunningCustomerMigration(store, candidate.uid, gatewayId, "inbound")) return candidate;
   }
   return null;
 }
 
 export async function findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
-  db: Firestore,
+  store: PlatformStateRepositories,
   gatewayId: string,
   podName: string | undefined,
   agentId: string,
-): Promise<{ uid: string; data: Record<string, unknown> } | null> {
-  const admitted = await findAssignedOrInboundMigratingUserByAgentId(db, gatewayId, agentId);
+): Promise<Stored<BuilderRecord> | null> {
+  const admitted = await findAssignedOrInboundMigratingUserByAgentId(store, gatewayId, agentId);
   if (admitted) return admitted;
 
-  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const gateway = gatewaySnap.data();
-  const candidates = await findUsersByAgentId(db, agentId);
-  for (const candidate of candidates) {
-    const slug = slugFromAssignedUser(candidate.data);
-    if (
-      slug &&
-      configuredBuilderCredentialBootstrapAllowed(gateway, {
-        gatewayId,
-        podName,
-        slug,
-        uid: candidate.uid,
-      })
-    ) {
-      return candidate;
-    }
-  }
-  return null;
+  const [gateway, candidates] = await Promise.all([
+    store.gateways.roots.get(gatewayId),
+    store.builders.records.listByAgentId(agentId, AGENT_ID_CANDIDATE_LIMIT),
+  ]);
+  return candidates.find((candidate) =>
+    candidate.slug !== null &&
+    configuredBuilderCredentialBootstrapAllowed(gateway ?? undefined, {
+      gatewayId,
+      podName,
+      slug: candidate.slug,
+      uid: candidate.uid,
+    })) ?? null;
 }
 
 export async function configuredBuilderSlugCredentialBootstrapAllowed(
-  db: Firestore,
+  store: PlatformStateRepositories,
   gatewayId: string,
   podName: string | undefined,
   slug: string,
 ): Promise<boolean> {
-  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const gateway = gatewaySnap.data();
-  const config = projectGatewayMutableConfigForGateway(gateway, gatewayId);
-  if (!config) return false;
-  const uid = config.ownerUid;
-  if (typeof uid !== "string" || !configuredBuilderCredentialBootstrapAllowed(gateway, {
+  const gateway = await store.gateways.roots.get(gatewayId);
+  const root = projectGatewayDesiredRootForGateway(gateway ?? undefined, gatewayId);
+  if (!root) return false;
+  const uid = root.ownerUid;
+  if (typeof uid !== "string" || !configuredBuilderCredentialBootstrapAllowed(gateway ?? undefined, {
       gatewayId,
       podName,
       slug,
       uid,
     })) return false;
-  const user = (await db.collection("users").doc(uid).get()).data();
-  if (slugFromAssignedUser(user) !== slug) return false;
-  const assignedGatewayId = stringAt(user, OPENCLAW_GATEWAY_ID_FIELD);
+  const builder = await store.builders.records.get(uid);
+  if (builder?.slug !== slug) return false;
+  const assignedGatewayId = builder.gateway?.gatewayId;
   if (assignedGatewayId === gatewayId) return true;
-  if (await hasRunningInboundMigrationForUid(db, gatewayId, uid)) return true;
-  const root = projectGatewayDesiredRootForGateway(gateway, gatewayId);
-  return assignedGatewayId === "" && stringAt(user, "provisioning.openclaw.status") !== "complete" &&
-    root?.liveRelease === null && root.latestRelease === 1;
+  if (await hasRunningCustomerMigration(store, uid, gatewayId, "inbound")) return true;
+  return assignedGatewayId === undefined && builder.openclaw.status !== "complete" &&
+    root.liveRelease === null && root.latestRelease === 1;
 }
 
+function builderCarriesAgentId(builder: BuilderRecord, agentId: string): boolean {
+  return builder.openclaw.agentId === agentId || builder.agents.agentIds.includes(agentId);
+}
+
+function builderSlug(builder: BuilderRecord): string {
+  if (!builder.slug) {
+    throw new Error(`[load:${builder.uid}] cannot derive slug — neither provisioning.openclaw.slug nor users/{uid}.username is set`);
+  }
+  return builder.slug;
+}
+
+async function readBuilderAccountDocument(db: Firestore, uid: string): Promise<Record<string, unknown>> {
+  const data = (await db.collection("users").doc(uid).get()).data();
+  if (!data) throw new Error(`users/${uid} account document is missing for an assigned Builder`);
+  return data;
+}
+
+async function readBuilderAccountDocuments(db: Firestore, uids: readonly string[]): Promise<ReadonlyMap<string, Record<string, unknown>>> {
+  if (uids.length === 0) return new Map();
+  const snapshots = await db.getAll(...uids.map((uid) => db.collection("users").doc(uid)));
+  return new Map(snapshots.flatMap((snapshot) => {
+    const data = snapshot.data();
+    return data ? [[snapshot.id, data] as const] : [];
+  }));
+}
+
+
 async function requireAssignedUser(
-  db: Firestore,
+  store: PlatformStateStore,
   req: Request,
   res: Response,
-): Promise<{ bound: GatewayBinding; uid: string; data: Record<string, unknown> } | null> {
+): Promise<{ bound: GatewayBinding; uid: string; builder: Stored<BuilderRecord> } | null> {
   const bound = boundGateway(req, res);
   if (!bound) return null;
   const uid = typeof req.body?.uid === "string" ? req.body.uid : "";
@@ -1197,16 +1166,16 @@ async function requireAssignedUser(
     res.status(400).json({ error: "uid_required" });
     return null;
   }
-  const data = await isAssignedToGateway(db, bound.gatewayId, uid);
-  if (!data) {
+  const builder = await assignedBuilder(store, bound.gatewayId, uid);
+  if (!builder) {
     res.status(403).json(FORBIDDEN);
     return null;
   }
-  return { bound, uid, data };
+  return { bound, uid, builder };
 }
 
 async function requireAssignedSlug(
-  db: Firestore,
+  store: PlatformStateStore,
   req: Request,
   res: Response,
   preparingProjectRead = false,
@@ -1218,8 +1187,8 @@ async function requireAssignedSlug(
     res.status(400).json({ error: "invalid_slug" });
     return null;
   }
-  const assignedUid = await findAssignedUidBySlug(db, bound.gatewayId, slug);
-  const uid = assignedUid ?? (preparingProjectRead ? (await configuredBuilderNpmSubject(db, bound, slug, "preparation"))?.uid : null);
+  const assignedUid = await findAssignedUidBySlug(store, bound.gatewayId, slug);
+  const uid = assignedUid ?? (preparingProjectRead ? (await configuredBuilderNpmSubject(store, bound, slug, "preparation"))?.uid : null);
   if (!uid) {
     res.status(403).json(FORBIDDEN);
     return null;
@@ -1228,7 +1197,7 @@ async function requireAssignedSlug(
 }
 
 async function requireAssignedAgentWorkspace(
-  db: Firestore,
+  deps: Pick<ResolvedFleetBrokerRouteDeps, "store">,
   req: Request,
   res: Response,
 ): Promise<{
@@ -1236,7 +1205,7 @@ async function requireAssignedAgentWorkspace(
   agentId: string;
   uid: string;
   slug: string;
-  data: Record<string, unknown>;
+  builder: Stored<BuilderRecord>;
 } | null> {
   const bound = boundGateway(req, res);
   if (!bound) return null;
@@ -1251,17 +1220,17 @@ async function requireAssignedAgentWorkspace(
     res.status(400).json({ error: "invalid_agent_id" });
     return null;
   }
-  const uid = await findAssignedUidBySlug(db, bound.gatewayId, slug);
+  const uid = await findAssignedUidBySlug(deps.store, bound.gatewayId, slug);
   if (!uid) {
     res.status(403).json(FORBIDDEN);
     return null;
   }
-  const data = await isAssignedToGateway(db, bound.gatewayId, uid);
-  if (!data || !agentBelongsToAssignedWorkspace(data, agentId)) {
+  const builder = await assignedBuilder(deps.store, bound.gatewayId, uid);
+  if (!builder || !builderCarriesAgentId(builder, agentId)) {
     res.status(403).json(FORBIDDEN);
     return null;
   }
-  return { bound, agentId, uid, slug, data };
+  return { bound, agentId, uid, slug, builder };
 }
 
 async function runBrokered(
@@ -1276,60 +1245,64 @@ async function runBrokered(
 }
 
 export async function collectChannelBindings(
-  db: Firestore,
+  store: PlatformStateRepositories,
   slug: string,
 ): Promise<{
   bindings: FleetBrokerChannelBinding[];
   projectMemberships: Array<{ projectId: string; channelIds: string[] }>;
 }> {
-  const workspaceRef = db.collection("workspaces").doc(slug);
-  const [wsChannels, projects] = await Promise.all([
-    workspaceRef.collection("channels").get(),
-    workspaceRef.collection("projects").get(),
+  const [workspaceChannels, projects] = await Promise.all([
+    store.workspaces.channels.list({ workspaceSlug: slug, projectSlug: null }),
+    store.workspaces.projects.list(slug),
   ]);
 
   const bindings: FleetBrokerChannelBinding[] = [];
   const projectMemberships: Array<{ projectId: string; channelIds: string[] }> = [];
-  for (const ch of wsChannels.docs) {
-    const b = mapWorkspaceChannelDoc(ch.data());
-    if (b) bindings.push(b);
+  for (const channel of workspaceChannels) {
+    if (channel.mattermostChannelId) bindings.push({ scope: "workspace", kind: channel.kind ?? "general", channelId: channel.mattermostChannelId });
   }
-  for (const p of projects.docs) {
-    const projChannels = await p.ref.collection("channels").get();
+  for (const project of projects) {
+    const channels = await store.workspaces.channels.list({ workspaceSlug: slug, projectSlug: project.projectSlug });
     const channelIds: string[] = [];
-    for (const ch of projChannels.docs) {
-      const data = ch.data();
-      const b = mapProjectChannelDoc(p.id, data);
-      if (b) bindings.push(b);
-      const channelId = (data.mattermost as { channelId?: unknown } | undefined)?.channelId;
-      if (typeof channelId === "string" && channelId) channelIds.push(channelId);
+    for (const channel of channels) {
+      if (!channel.mattermostChannelId) continue;
+      bindings.push({ scope: "project", projectId: project.projectSlug, kind: channel.kind ?? "default", channelId: channel.mattermostChannelId });
+      channelIds.push(channel.mattermostChannelId);
     }
-    if (channelIds.length > 0) projectMemberships.push({ projectId: p.id, channelIds });
+    if (channelIds.length > 0) projectMemberships.push({ projectId: project.projectSlug, channelIds });
   }
   return { bindings, projectMemberships };
 }
 
+async function readProjectRecipes(db: Firestore, slug: string): Promise<ReadonlyMap<string, string>> {
+  const snap = await db.collection("workspaces").doc(slug).collection("projects").get();
+  return new Map(snap.docs.flatMap((doc) => {
+    const recipe: unknown = doc.data().recipe;
+    return typeof recipe === "string" ? [[doc.id, recipe] as const] : [];
+  }));
+}
+
 async function collectProjects(
-  db: Firestore,
+  deps: Pick<ResolvedFleetBrokerRouteDeps, "db" | "store">,
   slug: string,
 ): Promise<FleetBrokerProjectRestore[]> {
-  const snap = await db.collection("workspaces").doc(slug).collection("projects").get();
-  return snap.docs.map((doc) => {
-    const data = doc.data() as Record<string, unknown>;
+  const [projects, recipes] = await Promise.all([deps.store.workspaces.projects.list(slug), readProjectRecipes(deps.db, slug)]);
+  return projects.map((project) => {
     const out: FleetBrokerProjectRestore = {
-      projectSlug: doc.id,
-      giteaRepoName: typeof data.giteaRepoName === "string" ? data.giteaRepoName : null,
+      projectSlug: project.projectSlug,
+      giteaRepoName: project.giteaRepoName,
     };
-    if (typeof data.provisioningState === "string") {
-      out.provisioningState = data.provisioningState;
+    if (project.provisioningState !== null) {
+      out.provisioningState = project.provisioningState;
     }
-    if (data.checkoutEnabled === false) {
+    if (project.checkoutEnabled === false) {
       out.checkoutEnabled = false;
     }
-    if (typeof data.recipe === "string") {
-      out.recipe = data.recipe;
+    const recipe = recipes.get(project.projectSlug);
+    if (recipe !== undefined) {
+      out.recipe = recipe;
     }
-    const repoSource = projectRepoSourceFromDoc(data.repoSource);
+    const repoSource = projectRepoSourceFromDoc(project.repoSource ?? undefined);
     if (repoSource) {
       out.repoSource = repoSource;
     }
@@ -1359,17 +1332,13 @@ export function projectCheckoutScopeForGatewayRoot(
   return "workspace-only";
 }
 
-async function isAssignedToGateway(
-  db: Firestore,
+async function assignedBuilder(
+  store: PlatformStateRepositories,
   gatewayId: string,
   uid: string,
-  data?: Record<string, unknown>,
-): Promise<Record<string, unknown> | null> {
-  const userData =
-    data ??
-    ((await db.collection("users").doc(uid).get()).data() as Record<string, unknown> | undefined);
-  if (!userData) return null;
-  return stringAt(userData, OPENCLAW_GATEWAY_ID_FIELD) === gatewayId ? userData : null;
+): Promise<Stored<BuilderRecord> | null> {
+  const builder = await store.builders.records.get(uid);
+  return builder?.gateway?.gatewayId === gatewayId ? builder : null;
 }
 
 // Defense-in-depth against pod identity spoofing: the KSA binds the BARE
@@ -1384,16 +1353,15 @@ export function isRequestedRevisionAllowed(
 }
 
 export async function resolveAssignedUsersRevisionGate(
-  db: Firestore,
+  store: PlatformStateRepositories,
   gatewayId: string,
   podRevisionId: string,
   options: { requireDurableRoot?: boolean } = {},
 ): Promise<{ allowed: false } | { allowed: true }> {
-  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const gatewayData = gatewaySnap.data();
+  const gateway = await store.gateways.roots.get(gatewayId);
   if (
-    (options.requireDurableRoot && (!gatewaySnap.exists || !podRevisionId)) ||
-    (gatewaySnap.exists && !isDurableGatewayRoot(gatewayData, gatewayId))
+    (options.requireDurableRoot && (!gateway || !podRevisionId)) ||
+    (gateway && !isDurableGatewayRoot(gateway, gatewayId))
   ) {
     return { allowed: false };
   }
@@ -1406,40 +1374,20 @@ function respondInvalidRevision(res: Response, gatewayId: string, revisionId: st
 }
 
 async function readAssignmentRosterForGateway(
-  db: Firestore,
+  store: PlatformStateRepositories,
   gatewayId: string,
 ): Promise<FleetBrokerAssignmentRosterEntry[] | null> {
-  const snap = await db
-    .collection(GATEWAYS_COLLECTION)
-    .doc(gatewayId)
-    .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
-    .get();
-  const assignments: FleetBrokerAssignmentRosterEntry[] = [];
-  for (const doc of snap.docs) {
-    const raw = doc.data() as Record<string, unknown>;
-    const assignment = parseAssignmentDoc(doc.id, raw);
-    if (
-      !assignment ||
-      assignment.gatewayId !== gatewayId ||
-      (raw.state !== undefined && !isAssignmentState(raw.state)) ||
-      (raw.epoch !== undefined &&
-        (typeof raw.epoch !== "number" ||
-          !Number.isSafeInteger(raw.epoch) ||
-          raw.epoch < 0))
-    ) {
-      return null;
-    }
-    assignments.push({
-      uid: assignment.uid,
-      state: assignment.state,
-      epoch: assignment.epoch,
-    });
+  try {
+    const assignments = await store.gateways.assignments.list(gatewayId);
+    return assignments.map(({ uid, state, epoch }) => ({ uid, state, epoch }));
+  } catch (error) {
+    if (error instanceof MalformedRecordError) return null;
+    throw error;
   }
-  return assignments;
 }
 
 function configuredBuilderNpmOwnerUid(input: {
-  gatewayData: Record<string, unknown> | undefined;
+  gatewayData: GatewayRoot | undefined;
   bound: GatewayBinding;
   slug: string;
 }): string | null {
@@ -1458,51 +1406,32 @@ function configuredBuilderNpmOwnerUid(input: {
   return ownerUid;
 }
 
-function assignedBuilderNpmUid(input: {
-  docs: Array<{ id: string; data(): unknown }>;
-  gatewayId: string;
-  slug: string;
-}): string | null {
-  const matches = input.docs
-    .map((doc) => parseAssignmentDoc(doc.id, doc.data() as Record<string, unknown>))
-    .filter((assignment) =>
-      assignment?.gatewayId === input.gatewayId && assignment.slug === input.slug,
-    );
+function assignedBuilderNpmUid(assignments: readonly GatewayAssignment[], slug: string): string | null {
+  const matches = assignments.filter((assignment) => assignment.slug === slug);
   return matches.length === 1 ? matches[0]!.uid : null;
 }
 
-
 async function configuredBuilderNpmSubject(
-  db: Firestore,
+  store: PlatformStateRepositories,
   bound: GatewayBinding,
   slug: string,
   mode: "assignment-or-preparation" | "preparation" = "assignment-or-preparation",
 ): Promise<{ uid: string } | null> {
   if (!bound.podUid) return null;
-  const [gatewaySnap, assignmentsSnap] = await Promise.all([
-    db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get(),
-    db
-      .collection(GATEWAYS_COLLECTION)
-      .doc(bound.gatewayId)
-      .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
-      .get(),
+  const [gateway, assignments] = await Promise.all([
+    store.gateways.roots.get(bound.gatewayId),
+    store.gateways.assignments.list(bound.gatewayId),
   ]);
-  const gatewayData = gatewaySnap.data() as Record<string, unknown> | undefined;
-  const ownerUid = configuredBuilderNpmOwnerUid({ gatewayData, bound, slug });
+  const ownerUid = configuredBuilderNpmOwnerUid({ gatewayData: gateway ?? undefined, bound, slug });
   if (!ownerUid) return null;
-  const assignedUid = assignedBuilderNpmUid({
-    docs: assignmentsSnap.docs,
-    gatewayId: bound.gatewayId,
-    slug,
-  });
+  const assignedUid = assignedBuilderNpmUid(assignments, slug);
   if (assignedUid === ownerUid && mode === "assignment-or-preparation") return { uid: ownerUid };
-  if (assignmentsSnap.docs.length > 0 && assignedUid !== ownerUid) return null;
-  return await configuredBuilderPreparationAllowed(db, bound, slug, ownerUid) ? { uid: ownerUid } : null;
+  if (assignments.length > 0 && assignedUid !== ownerUid) return null;
+  return await configuredBuilderPreparationAllowed(store, bound, slug, ownerUid) ? { uid: ownerUid } : null;
 }
 
 function installNpmCacheCapabilityRoutes(
   router: Router,
-  db: Firestore,
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
   router.post("/npm-registry-credentials", async (req, res) => {
@@ -1513,7 +1442,7 @@ function installNpmCacheCapabilityRoutes(
       res.status(400).json({ error: "invalid_slug" });
       return;
     }
-    const subject = await configuredBuilderNpmSubject(db, bound, slug);
+    const subject = await configuredBuilderNpmSubject(deps.store, bound, slug);
     if (!subject || !bound.podUid) {
       res.status(403).json(FORBIDDEN);
       return;
@@ -1565,8 +1494,8 @@ function installNpmCacheCapabilityRoutes(
   });
 }
 
-function snapshotProvisioningStatus(data: Record<string, unknown>): FleetBrokerProvisioningStatus {
-  const status = stringAt(data, "provisioning.openclaw.status");
+function snapshotProvisioningStatus(builder: BuilderRecord): FleetBrokerProvisioningStatus {
+  const status = builder.openclaw.status;
   return status === "provisioning" || status === "complete" ? status : "";
 }
 
@@ -1584,9 +1513,9 @@ type StoredRuntimeReset = FleetBrokerCustomerRuntimeReset | (
 );
 
 function storedRuntimeReset(
-  data: Record<string, unknown>,
+  builder: BuilderRecord,
 ): StoredRuntimeReset | undefined {
-  const raw = readPath(data, "provisioning.openclaw.runtimeReset");
+  const raw: unknown = builder.fences.runtimeReset;
   if (raw === undefined) return undefined;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error("invalid customer runtime reset marker");
@@ -1615,81 +1544,77 @@ function storedRuntimeReset(
 }
 
 function snapshotRuntimeReset(
-  data: Record<string, unknown>,
+  builder: BuilderRecord,
 ): FleetBrokerCustomerRuntimeReset | undefined {
-  const marker = storedRuntimeReset(data);
+  const marker = storedRuntimeReset(builder);
   return marker?.status === "pending" ? marker : undefined;
 }
 
 async function admittedRuntimeReset(
-  db: Firestore,
-  uid: string,
-  data: Record<string, unknown>,
+  store: PlatformStateRepositories,
+  builder: BuilderRecord,
 ): Promise<FleetBrokerCustomerRuntimeReset | undefined> {
-  const marker = snapshotRuntimeReset(data);
+  const marker = snapshotRuntimeReset(builder);
   if (!marker) return undefined;
-  const assignmentSnapshot = await db
-    .collection(GATEWAYS_COLLECTION)
-    .doc(marker.targetGatewayId)
-    .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
-    .doc(uid)
-    .get();
-  const assignmentData = assignmentSnapshot.data() as Record<string, unknown> | undefined;
-  const assignment = assignmentData ? parseAssignmentDoc(uid, assignmentData) : null;
+  const assignment = await store.gateways.assignments.get(marker.targetGatewayId, builder.uid);
   const exact = [
-    marker.uid === uid,
-    marker.slug === slugFromAssignedUser(data),
-    marker.targetGatewayId === stringAt(data, OPENCLAW_GATEWAY_ID_FIELD),
-    assignment?.uid === uid,
+    marker.uid === builder.uid,
+    marker.slug === builder.slug,
+    marker.targetGatewayId === builder.gateway?.gatewayId,
     assignment?.gatewayId === marker.targetGatewayId,
     assignment?.epoch === marker.generation,
-    assignmentData?.source === "repair",
-    assignmentData?.updatedByOperationId === marker.operationId,
+    assignment?.source === "repair",
+    assignment?.updatedByOperationId === marker.operationId,
   ].every(Boolean);
   if (!exact) throw new Error("customer runtime reset assignment fence changed");
   return marker;
 }
 
-export function snapshotGreetingPosted(data: Record<string, unknown>): boolean {
-  const greeting = readPath(data, "provisioning.openclaw.greeting") as { ok?: unknown; jobId?: unknown } | undefined;
-  return greeting?.ok === true && typeof greeting.jobId === "string" && greeting.jobId.trim().length > 0;
+export function snapshotGreetingPosted(greeting: unknown): boolean {
+  const receipt = greeting as { ok?: unknown; jobId?: unknown } | null | undefined;
+  return receipt?.ok === true && typeof receipt.jobId === "string" && receipt.jobId.trim().length > 0;
 }
 
 function snapshotBaseFields(
-  data: Record<string, unknown>,
+  builder: BuilderRecord,
+  account: Record<string, unknown>,
   slug: string,
 ): Omit<
   FleetBrokerUserSnapshot,
   "uid" | "slug" | "channels" | "projectCheckoutScope" | "projects" | "coachToken" | "coachMmUserId" | "coachIdentity"
 > {
-  const mattermostUserId = stringAt(data, "mattermost.userId") || null;
+  const mattermostUserId = builder.mattermostUserId || null;
   return {
-    tier: stringAt(data, "tier") || stringAt(data, "subscription.tier") || "trial",
-    gatewayId: stringAt(data, OPENCLAW_GATEWAY_ID_FIELD),
-    status: snapshotProvisioningStatus(data),
-    agentIds: stringArray(readPath(data, "provisioning.openclaw.agentIds")),
-    repoUrl: stringAt(data, "provisioning.git.repoUrl"),
+    tier: stringAt(account, "tier") || stringAt(account, "subscription.tier") || "trial",
+    gatewayId: builder.gateway?.gatewayId ?? "",
+    status: snapshotProvisioningStatus(builder),
+    agentIds: [...builder.agents.agentIds],
+    repoUrl: builder.provisioning.gitRepoUrl ?? "",
     mattermostUserId,
     customerMmUserId: mattermostUserId,
-    ...pickPlanInputs(data),
-    ownerName: stringAt(data, "displayName") || stringAt(data, "username") || slug,
-    email: stringAt(data, "email"),
-    displayName: stringAt(data, "displayName"),
-    lastName: stringAt(data, "lastName"),
-    timeZone: storedTimeZone(data),
-    photoURL: stringAt(data, "photoURL"),
-    onboardingVibe: snapshotOnboardingVibe(data),
-    byotActive: data.byotActive === true,
+    ...pickPlanInputs(account),
+    ownerName: stringAt(account, "displayName") || stringAt(account, "username") || slug,
+    email: stringAt(account, "email"),
+    displayName: stringAt(account, "displayName"),
+    lastName: stringAt(account, "lastName"),
+    timeZone: storedTimeZone(account),
+    photoURL: stringAt(account, "photoURL"),
+    onboardingVibe: snapshotOnboardingVibe(account),
+    byotActive: account.byotActive === true,
   };
 }
 
+async function coachMattermostSecret(store: PlatformStateRepositories, uid: string): Promise<MattermostTokenSecret | null> {
+  const secret = await store.secrets.get(uid, "coachMattermost");
+  return secret?.kind === "coach-mattermost" ? secret : null;
+}
+
 function snapshotCoachFields(
-  coachData: Record<string, unknown> | undefined,
+  coach: MattermostTokenSecret | null,
 ): Pick<FleetBrokerUserSnapshot, "coachToken" | "coachMmUserId"> {
   return {
-    coachToken: typeof coachData?.personalToken === "string" ? coachData.personalToken : null,
-    coachMmUserId:
-      typeof coachData?.coachMmUserId === "string" ? coachData.coachMmUserId : null,
+    coachToken: coach?.personalToken ?? null,
+    coachMmUserId: coach?.mattermostUserId ?? null,
   };
 }
 
@@ -1707,51 +1632,50 @@ interface SnapshotModelDials {
 }
 
 interface LoadSnapshotOptions {
-  store: PlatformStateStore;
   modelDials: SnapshotModelDials;
   gatewayId: string;
-  gatewayData: Record<string, unknown> | undefined;
+  gatewayData: GatewayRoot | undefined;
 }
 
 async function loadSnapshot(
-  db: Firestore,
-  uid: string,
-  data: Record<string, unknown>,
+  deps: Pick<ResolvedFleetBrokerRouteDeps, "db" | "store">,
+  builder: Stored<BuilderRecord>,
+  account: Record<string, unknown>,
   options: LoadSnapshotOptions,
 ): Promise<(FleetBrokerUserSnapshot & { greetingPosted: boolean }) | null> {
+  const { db, store } = deps;
   const { modelDials } = options;
-  const slug = slugFromAssignedUser(data);
+  const { uid, slug } = builder;
   if (!slug || !isValidUsername(slug)) return null;
   const projectCheckoutScope = projectCheckoutScopeForGatewayRoot(options.gatewayData, options.gatewayId, uid, slug);
-  const [collectedChannels, projects, projectAgents, coachSecret, agentSnap, sysConfig, runtimeReset, restoreAuthority] = await Promise.all([
-    collectChannelBindings(db, slug),
+  const [collectedChannels, projects, projectAgents, coach, agentSnap, sysConfig, runtimeReset, restoreAuthority] = await Promise.all([
+    collectChannelBindings(store, slug),
     projectCheckoutScope === "workspace-and-projects"
-      ? collectProjects(db, slug)
+      ? collectProjects(deps, slug)
       : Promise.resolve([]),
-    collectProjectAgentStates(db, options.store.secrets, uid, slug),
-    db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
+    collectProjectAgentStates(db, store.secrets, uid, slug),
+    coachMattermostSecret(store, uid),
     db.collection("agents").doc(uid).get(),
     db.collection("users").doc(uid).collection("system").doc("config").get(),
-    admittedRuntimeReset(db, uid, data),
-    readCustomerRestoreAuthoritySnapshot({ store: options.store }, { uid, slug, gatewayId: options.gatewayId }),
+    admittedRuntimeReset(store, builder),
+    readCustomerRestoreAuthoritySnapshot({ store }, { uid, slug, gatewayId: options.gatewayId }),
   ]);
-  const coachData = coachSecret.data() as Record<string, unknown> | undefined;
   const agentData = agentSnap.data() as Record<string, unknown> | undefined;
   const credentialProjection = byotSnapshotProjectionFromSystemConfig(
     sysConfig.data() as Record<string, unknown> | undefined,
   );
-  const baseFields = snapshotBaseFields(data, slug);
+  const baseFields = snapshotBaseFields(builder, account, slug);
   const channels = collectedChannels.bindings;
-  const migration = readWorkspaceMigrationMarker(readPath(data, "provisioning.openclaw"));
+  const migration = readWorkspaceMigrationMarker({ migration: builder.fences.migration });
   const sourcePreparing = migration?.state === "preparing" && Boolean(migration.operationId)
     && (migration.phase === "preparing" || migration.phase === "waiting");
   return {
     uid,
     slug,
     ...baseFields,
-    greetingPosted: snapshotGreetingPosted(data),
-    runtimeMutationFenced: customerRuntimeMutationFenced(data)
-      || (readPath(data, "provisioning.openclaw.migration") !== undefined && !sourcePreparing),
+    greetingPosted: snapshotGreetingPosted(builder.openclaw.greeting),
+    runtimeMutationFenced: builderRuntimeMutationFenced(builder)
+      || (builder.fences.migration !== undefined && !sourcePreparing),
     ...(runtimeReset ? { runtimeReset } : {}),
     ...(restoreAuthority ? { restoreAuthority } : {}),
     byotActive: credentialProjection.byotActive ?? baseFields.byotActive,
@@ -1761,41 +1685,31 @@ async function loadSnapshot(
     projectCheckoutScope,
     projects,
     ...(projectAgents.length > 0 ? { projectAgents } : {}),
-    ...snapshotCoachFields(coachData),
+    ...snapshotCoachFields(coach),
     ...snapshotCoachIdentity(agentData),
     ...(credentialProjection.systemConfig ? { systemConfig: credentialProjection.systemConfig } : {}),
   };
 }
 
 async function findAssignedUidBySlug(
-  db: Firestore,
+  store: PlatformStateRepositories,
   gatewayId: string,
   slug: string,
 ): Promise<string | null> {
-  const snap = await db
-    .collection("users")
-    .where(OPENCLAW_GATEWAY_ID_FIELD, "==", gatewayId)
-    .get();
-  for (const doc of snap.docs) {
-    const data = doc.data() as Record<string, unknown> | undefined;
-    if (!data) continue;
-    if (slugFromAssignedUser(data) === slug) return doc.id;
-  }
-  return null;
+  const builders = await store.builders.records.listByGateway(gatewayId);
+  return builders.find((builder) => builder.slug === slug)?.uid ?? null;
 }
 
 async function findUidBySlug(
-  db: Firestore,
+  store: PlatformStateRepositories,
   gatewayId: string,
   podName: string | undefined,
   slug: string,
 ): Promise<string | null> {
-  const assignedUid = await findAssignedUidBySlug(db, gatewayId, slug);
+  const assignedUid = await findAssignedUidBySlug(store, gatewayId, slug);
   if (assignedUid) return assignedUid;
 
-  const gateway = (
-    await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get()
-  ).data();
+  const gateway = (await store.gateways.roots.get(gatewayId)) ?? undefined;
   const uid = projectGatewayMutableConfigForGateway(gateway, gatewayId)?.ownerUid ?? null;
   if (
     typeof uid !== "string" ||
@@ -1807,32 +1721,29 @@ async function findUidBySlug(
     })
   ) return null;
 
-  const user = (
-    await db.collection("users").doc(uid).get()
-  ).data() as Record<string, unknown> | undefined;
-  return slugFromAssignedUser(user) === slug ? uid : null;
+  const builder = await store.builders.records.get(uid);
+  return builder?.slug === slug ? uid : null;
 }
 
 async function userSnapshotAdmission(
-  db: Firestore,
+  store: PlatformStateRepositories,
   gatewayId: string,
   podName: string | undefined,
   uid: string,
 ): Promise<{
-  data: Record<string, unknown>;
-  gatewayData: Record<string, unknown> | undefined;
+  builder: Stored<BuilderRecord>;
+  gatewayData: GatewayRoot | undefined;
 } | null> {
-  const [userSnap, gatewaySnap] = await Promise.all([
-    db.collection("users").doc(uid).get(),
-    db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get(),
+  const [builder, gateway] = await Promise.all([
+    store.builders.records.get(uid),
+    store.gateways.roots.get(gatewayId),
   ]);
-  const data = userSnap.data() as Record<string, unknown> | undefined;
-  const gatewayData = gatewaySnap.data() as Record<string, unknown> | undefined;
-  if (!data) return null;
-  if (stringAt(data, OPENCLAW_GATEWAY_ID_FIELD) === gatewayId) {
-    return { data, gatewayData };
+  const gatewayData = gateway ?? undefined;
+  if (!builder) return null;
+  if (builder.gateway?.gatewayId === gatewayId) {
+    return { builder, gatewayData };
   }
-  const slug = slugFromAssignedUser(data);
+  const slug = builder.slug;
   if (
     !slug ||
     !configuredBuilderCredentialBootstrapAllowed(gatewayData, {
@@ -1844,7 +1755,7 @@ async function userSnapshotAdmission(
   ) {
     return null;
   }
-  return { data, gatewayData };
+  return { builder, gatewayData };
 }
 
 type FleetBrokerRouteOptions = { db: Firestore; store: PlatformStateStore } & FleetBrokerRouteDeps;
@@ -1880,9 +1791,9 @@ type ResolvedFleetBrokerRouteDeps = {
 };
 
 function ownerWorkspaceTurnVerifier(
-  opts: { db: Firestore } & FleetBrokerRouteDeps,
+  opts: { store: OwnerTurnStore } & FleetBrokerRouteDeps,
 ): OwnerWorkspaceTurnVerifier {
-  return opts.verifyOwnerWorkspaceTurn ?? createOwnerWorkspaceTurnVerifier(opts.db);
+  return opts.verifyOwnerWorkspaceTurn ?? createOwnerWorkspaceTurnVerifier(opts.store);
 }
 
 function projectCoachMembershipReconciler(
@@ -1939,11 +1850,11 @@ function resolveFleetBrokerRouteDeps(
     db: opts.db,
     store: opts.store,
     resolveFreeTierModel: createCachedFreeTierModelResolver({
-      db: opts.db,
+      platformConfig: opts.store.config.platform,
       onError: (err) => logger.error("fleet-broker free-tier dial resolution failed", { err }),
     }),
     resolveBuilderAgentDefault: createCachedBuilderAgentDefaultResolver({
-      db: opts.db,
+      platformConfig: opts.store.config.platform,
       onError: (err) =>
         logger.error("fleet-broker builder-agent dial resolution failed", { err }),
     }),
@@ -1951,6 +1862,7 @@ function resolveFleetBrokerRouteDeps(
     verifyOwnerWorkspaceTurn: ownerWorkspaceTurnVerifier(opts),
     webResearch: opts.webResearch ?? createDefaultWebResearch(
       opts.db,
+      opts.store,
       opts.modelBrokerRails ?? operatorRailRegistry(),
       opts.onSignupOfferBudgetInterruption,
     ),
@@ -1964,17 +1876,17 @@ function resolveFleetBrokerRouteDeps(
   };
 }
 
-function installAssignmentWatchRoute(router: Router, db: Firestore): void {
+function installAssignmentWatchRoute(router: Router, store: PlatformStateStore): void {
   router.post("/assignment-watch", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
     const revisionId = typeof req.body?.revisionId === "string" ? req.body.revisionId : "";
-    const gate = await resolveAssignedUsersRevisionGate(db, bound.gatewayId, revisionId);
+    const gate = await resolveAssignedUsersRevisionGate(store, bound.gatewayId, revisionId);
     if (!gate.allowed) {
       respondInvalidRevision(res, bound.gatewayId, revisionId);
       return;
     }
-    streamAssignmentChanges(req, res, db, bound.gatewayId, (message) => logger.error(message));
+    streamAssignmentChanges(req, res, store, bound.gatewayId, (message) => logger.error(message));
   });
 }
 
@@ -2034,8 +1946,8 @@ function installSnapshotRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
-  const { db } = deps;
-  installNpmCacheCapabilityRoutes(router, db, deps);
+  const { db, store } = deps;
+  installNpmCacheCapabilityRoutes(router, deps);
 
   router.post("/assignment-roster", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -2050,7 +1962,7 @@ function installSnapshotRoutes(
       return;
     }
     const gate = await resolveAssignedUsersRevisionGate(
-      db,
+      store,
       bound.gatewayId,
       podRevisionId,
       { requireDurableRoot: true },
@@ -2059,7 +1971,7 @@ function installSnapshotRoutes(
       respondInvalidRevision(res, bound.gatewayId, podRevisionId);
       return;
     }
-    const assignments = await readAssignmentRosterForGateway(db, bound.gatewayId);
+    const assignments = await readAssignmentRosterForGateway(store, bound.gatewayId);
     if (!assignments) {
       logger.error("fleet broker rejected invalid assignment roster", {
         gatewayId: bound.gatewayId,
@@ -2070,7 +1982,7 @@ function installSnapshotRoutes(
     res.json({ assignments });
   });
 
-  installAssignmentWatchRoute(router, db);
+  installAssignmentWatchRoute(router, store);
 
   router.post("/assigned-users", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -2081,42 +1993,30 @@ function installSnapshotRoutes(
     // belongs to this gateway and is an active revision (defense-in-depth against
     // same-gateway revision spoofing). Empty is legal only on a pre-backfill pod.
     const podRevisionId = typeof req.body?.revisionId === "string" ? req.body.revisionId : "";
-    const gate = await resolveAssignedUsersRevisionGate(db, bound.gatewayId, podRevisionId);
+    const gate = await resolveAssignedUsersRevisionGate(store, bound.gatewayId, podRevisionId);
     if (!gate.allowed) {
       respondInvalidRevision(res, bound.gatewayId, podRevisionId);
       return;
     }
-    const snap = await db
-      .collection("users")
-      .where(OPENCLAW_GATEWAY_ID_FIELD, "==", bound.gatewayId)
-      .get();
+    const builders = await store.builders.records.listByGateway(
+      bound.gatewayId,
+      completeOnly ? { openclawStatus: "complete" } : {},
+    );
     const modelDials = {
       freeTierModelRef: (await deps.resolveFreeTierModel()).ref,
       builderAgentDefault: await deps.resolveBuilderAgentDefault(),
     };
-    const gatewayData = (
-      await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get()
-    ).data();
+    const gatewayData = (await store.gateways.roots.get(bound.gatewayId)) ?? undefined;
+    const accounts = await readBuilderAccountDocuments(db, builders.filter((builder) => builder.slug).map((builder) => builder.uid));
     const users: FleetBrokerUserSnapshot[] = [];
-    for (const doc of snap.docs) {
-      const data = await isAssignedToGateway(db, bound.gatewayId, doc.id, doc.data() as Record<string, unknown>);
-      if (!data) continue;
-      if (completeOnly && stringAt(data, "provisioning.openclaw.status") !== "complete") {
-        continue;
-      }
-      const slug = slugFromAssignedUser(data);
-      if (!slug) continue;
-      const snapshot = await loadSnapshot(
-        db,
-        doc.id,
-        data,
-        {
-          store: deps.store,
-          gatewayId: bound.gatewayId,
-          modelDials,
-          gatewayData,
-        },
-      );
+    for (const builder of builders) {
+      const account = accounts.get(builder.uid);
+      if (!builder.slug || !account) continue;
+      const snapshot = await loadSnapshot(deps, builder, account, {
+        gatewayId: bound.gatewayId,
+        modelDials,
+        gatewayData,
+      });
       if (snapshot) users.push(snapshot);
     }
     res.json({ users });
@@ -2130,7 +2030,7 @@ function installSnapshotRoutes(
       res.status(400).json({ error: "invalid_slug" });
       return;
     }
-    const uid = await findUidBySlug(db, bound.gatewayId, bound.podName, slug);
+    const uid = await findUidBySlug(store, bound.gatewayId, bound.podName, slug);
     if (!uid) {
       res.status(404).json({ error: "not_found" });
       return;
@@ -2139,7 +2039,7 @@ function installSnapshotRoutes(
   });
 
   router.post("/configured-builder-bootstrap", async (req, res) => {
-    await handleConfiguredBuilderBootstrap(db, deps.store, req, res);
+    await handleConfiguredBuilderBootstrap(deps, req, res);
   });
 
   router.post("/user-snapshot", async (req, res) => {
@@ -2150,23 +2050,21 @@ function installSnapshotRoutes(
       res.status(400).json({ error: "uid_required" });
       return;
     }
-    const admission = await userSnapshotAdmission(db, bound.gatewayId, bound.podName, uid);
+    const admission = await userSnapshotAdmission(store, bound.gatewayId, bound.podName, uid);
     if (!admission) {
       res.status(403).json(FORBIDDEN);
       return;
     }
-    const { data, gatewayData } = admission;
-    const slug = slugFromAssignedUser(data);
-    if (!slug) {
+    const { builder, gatewayData } = admission;
+    if (!builder.slug) {
       res.status(404).json({ error: "not_found" });
       return;
     }
     const snapshot = await loadSnapshot(
-      db,
-      uid,
-      data,
+      deps,
+      builder,
+      await readBuilderAccountDocument(db, uid),
       {
-        store: deps.store,
         gatewayId: bound.gatewayId,
         modelDials: {
           freeTierModelRef: (await deps.resolveFreeTierModel()).ref,
@@ -2190,24 +2088,22 @@ function installSnapshotRoutes(
       res.status(400).json({ error: "uid_required" });
       return;
     }
-    const data = await isAssignedToGateway(db, bound.gatewayId, uid);
-    if (!data) {
+    const builder = await assignedBuilder(store, bound.gatewayId, uid);
+    if (!builder) {
       res.status(403).json(FORBIDDEN);
       return;
     }
-    const slug = slugFromAssignedUser(data);
+    const slug = builder.slug;
     if (!slug) {
       res.status(404).json({ error: "not_found" });
       return;
     }
     const [collectedChannels, coachSecret, projectAgents] = await Promise.all([
-      collectChannelBindings(db, slug),
-      db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
-      collectProjectAgentStates(db, deps.store.secrets, uid, slug),
+      collectChannelBindings(store, slug),
+      coachMattermostSecret(store, uid),
+      collectProjectAgentStates(db, store.secrets, uid, slug),
     ]);
-    const coach = snapshotCoachFields(
-      coachSecret.data() as Record<string, unknown> | undefined,
-    );
+    const coach = snapshotCoachFields(coachSecret);
     const agentByProject = new Map(projectAgents.map((agent) => [agent.projectId, agent]));
     const { pendingProjectIds } = await deps.reconcileCoachProjectMembership({
       coachMmUserId: coach.coachMmUserId,
@@ -2256,11 +2152,10 @@ interface BuilderRuntimeStateScope {
 }
 
 async function readBuilderRuntimeStateScope(
-  db: Firestore,
+  store: PlatformStateRepositories,
   input: { gatewayId: string; podName: string | undefined; slug: string },
 ): Promise<BuilderRuntimeStateScope | null> {
-  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId).get();
-  const gateway = gatewaySnap.data();
+  const gateway = (await store.gateways.roots.get(input.gatewayId)) ?? undefined;
   const config = projectGatewayMutableConfigForGateway(gateway, input.gatewayId);
   const uid = config?.ownerUid;
   const allocation = config?.allocation;
@@ -2288,69 +2183,60 @@ type AgentAnchorScope = BuilderRuntimeStateScope | SharedAgentAnchorScope;
 
 function agentAnchorAssignment(
   scope: Pick<SharedAgentAnchorScope, "gatewayId" | "uid" | "slug">,
-  data: Record<string, unknown> | undefined,
+  assignment: GatewayAssignment | null,
 ): Pick<SharedAgentAnchorScope, "assignmentEpoch" | "assignmentState"> | null {
-  const assignment = parseAssignmentDoc(scope.uid, data);
-  const epoch = data?.epoch;
-  const state = data?.state;
-  if (!assignment || data?.uid !== scope.uid || assignment.gatewayId !== scope.gatewayId || assignment.slug !== scope.slug ||
-      (state !== "serving" && state !== "quiescing") || typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch < 0) return null;
-  return { assignmentEpoch: epoch, assignmentState: state };
+  if (!assignment || assignment.gatewayId !== scope.gatewayId || assignment.slug !== scope.slug ||
+      (assignment.state !== "serving" && assignment.state !== "quiescing")) return null;
+  return { assignmentEpoch: assignment.epoch, assignmentState: assignment.state };
 }
 
 function sharedAgentAnchorScopeCurrent(
   scope: Pick<SharedAgentAnchorScope, "gatewayId" | "uid" | "slug">,
   gatewayData: unknown,
-  userData: Record<string, unknown> | undefined,
-  assignmentData: Record<string, unknown> | undefined,
+  builder: BuilderRecord | null,
+  assignmentRecord: GatewayAssignment | null,
 ): SharedAgentAnchorScope | null {
   const gateway = projectGatewayDesiredRootForGateway(gatewayData, scope.gatewayId);
-  const assignment = agentAnchorAssignment(scope, assignmentData);
+  const assignment = agentAnchorAssignment(scope, assignmentRecord);
   if (!gateway || gateway.gatewayClass !== "shared" || gateway.retirementClaim != null ||
       (gateway.desiredStatus !== "running" && gateway.desiredStatus !== "draining") ||
-      stringAt(userData, OPENCLAW_GATEWAY_ID_FIELD) !== scope.gatewayId || slugFromAssignedUser(userData) !== scope.slug ||
+      builder?.gateway?.gatewayId !== scope.gatewayId || builder.slug !== scope.slug ||
       !assignment) return null;
   return { ...scope, podName: undefined, ...assignment };
 }
 
-async function requireAgentAnchorScope(db: Firestore, req: Request, res: Response): Promise<AgentAnchorScope | null> {
+async function requireAgentAnchorScope(store: PlatformStateStore, req: Request, res: Response): Promise<AgentAnchorScope | null> {
   const bound = boundGateway(req, res);
   if (!bound) return null;
   const request = configuredBuilderBootstrapRequest(bound.gatewayId, bound.podName, req.body);
   if (!request) { res.status(403).json(FORBIDDEN); return null; }
-  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId);
-  const gateway = await gatewayRef.get();
-  if (projectGatewayDesiredRootForGateway(gateway.data(), bound.gatewayId)?.gatewayClass !== "shared") {
-    if (!migrationAnchorRequest(req)) return requireConfiguredBuilderRuntimeState(db, req, res);
+  const gateway = await store.gateways.roots.get(bound.gatewayId);
+  if (projectGatewayDesiredRootForGateway(gateway, bound.gatewayId)?.gatewayClass !== "shared") {
+    if (!migrationAnchorRequest(req)) return requireConfiguredBuilderRuntimeState(store, req, res);
     if (!req.path.endsWith("/read")) { res.status(403).json(FORBIDDEN); return null; }
-    if (await migrationSourceGatewayId(db, req) === bound.gatewayId) return requireConfiguredBuilderRuntimeState(db, req, res);
-    return requireMigratingAgentAnchorScope(db, req, res, bound, request.slug);
+    if (await migrationSourceGatewayId(store, req) === bound.gatewayId) return requireConfiguredBuilderRuntimeState(store, req, res);
+    return requireMigratingAgentAnchorScope(store, req, res, bound, request.slug);
   }
   if (migrationAnchorRequest(req)) {
-    return requireMigratingAgentAnchorScope(db, req, res, bound, request.slug);
+    return requireMigratingAgentAnchorScope(store, req, res, bound, request.slug);
   }
-  return requireAssignedSharedAgentAnchorScope(db, req, res, bound, { slug: request.slug, gateway });
+  return requireAssignedSharedAgentAnchorScope(store, req, res, bound, { slug: request.slug, gateway });
 }
 
 async function requireAssignedSharedAgentAnchorScope(
-  db: Firestore, req: Request, res: Response, bound: GatewayBinding, { slug, gateway }: { slug: string; gateway: DocumentSnapshot },
+  store: PlatformStateStore, req: Request, res: Response, bound: GatewayBinding, { slug, gateway }: { slug: string; gateway: Stored<GatewayRoot> | null },
 ): Promise<SharedAgentAnchorScope | null> {
-  const uid = req.body?.uid;
-  if (typeof uid !== "string" || !uid || uid.length > 128 || uid.includes("/")) {
-    res.status(403).json(FORBIDDEN); return null;
-  }
-  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId);
-  const [user, assignment] = await Promise.all([
-    db.collection("users").doc(uid).get(),
-    gatewayRef.collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(uid).get(),
+  const uid: unknown = req.body?.uid;
+  if (!validAnchorUid(uid)) { res.status(403).json(FORBIDDEN); return null; }
+  const [builder, assignment] = await Promise.all([
+    store.builders.records.get(uid),
+    store.gateways.assignments.get(bound.gatewayId, uid),
   ]);
-  let scope = sharedAgentAnchorScopeCurrent({ gatewayId: bound.gatewayId, uid, slug }, gateway.data(), user.data(), assignment.data());
+  let scope = sharedAgentAnchorScopeCurrent({ gatewayId: bound.gatewayId, uid, slug }, gateway, builder, assignment);
   if (!scope) { res.status(403).json(FORBIDDEN); return null; }
-  const operationId = stringAt(user.data(), "provisioning.openclaw.migration.operationId");
+  const operationId = builder?.fences.migration?.operationId;
   if (scope.assignmentState === "quiescing" && operationId) {
-    const migrationScope = await db.runTransaction(async (txn) => operationId.startsWith("surge-")
-      ? sharedAssignedSourceSurgeAnchorScope(db, txn, { gatewayId: bound.gatewayId, podUid: bound.podUid, uid, slug, migrationId: operationId })
-      : sharedAgentAnchorMigrationScope(db, txn, { gatewayId: bound.gatewayId, slug, migrationId: `mig-${operationId}` }));
+    const migrationScope = await sharedMigratingAnchorScope(store, bound, { uid, slug, operationId });
     if (!migrationScope || migrationScope.uid !== uid) { res.status(403).json(FORBIDDEN); return null; }
     scope = { ...migrationScope, podName: bound.podName };
   }
@@ -2361,22 +2247,34 @@ async function requireAssignedSharedAgentAnchorScope(
   return { ...scope, podName: bound.podName, podUid: bound.podUid };
 }
 
+function validAnchorUid(uid: unknown): uid is string {
+  return typeof uid === "string" && uid.length > 0 && uid.length <= 128 && !uid.includes("/");
+}
+
+function sharedMigratingAnchorScope(
+  store: PlatformStateStore, bound: GatewayBinding, { uid, slug, operationId }: { uid: string; slug: string; operationId: string },
+) {
+  return store.transaction({ label: "fleet-broker.shared-anchor-scope", readOnly: true }, async (tx) => operationId.startsWith("surge-")
+    ? sharedAssignedSourceSurgeAnchorScope(tx, { gatewayId: bound.gatewayId, podUid: bound.podUid, uid, slug, migrationId: operationId })
+    : sharedAgentAnchorMigrationScope(tx, { gatewayId: bound.gatewayId, slug, migrationId: `mig-${operationId}` }));
+}
+
 function migrationAnchorRequest(req: Request): boolean {
   return req.body?.migrationId !== undefined || req.body?.migration !== undefined;
 }
 
-async function migrationSourceGatewayId(db: Firestore, req: Request): Promise<unknown> {
+async function migrationSourceGatewayId(store: PlatformStateRepositories, req: Request): Promise<unknown> {
   const migrationId: unknown = req.body?.migration?.migrationId ?? req.body?.migrationId;
   if (typeof migrationId !== "string" || !/^mig-[a-zA-Z0-9_-]+$/.test(migrationId)) return undefined;
-  const operation = (await db.collection(GLM_OPERATIONS_COLLECTION).doc(migrationId.slice(4)).get()).data();
-  return operation?.kind === "migrate-customer" ? operation.input?.fromGatewayId : undefined;
+  const operation = await store.journal.operations.get(migrationId.slice(4));
+  return operation?.kind === "migrate-customer" ? operation.input.fromGatewayId : undefined;
 }
 
 async function requireMigratingAgentAnchorScope(
-  db: Firestore, req: Request, res: Response,
+  store: PlatformStateStore, req: Request, res: Response,
   bound: GatewayBinding, slug: string,
 ): Promise<SharedAgentAnchorScope | null> {
-  const scope = await db.runTransaction((txn) => sharedAgentAnchorMigrationScope(db, txn, {
+  const scope = await store.transaction({ label: "fleet-broker.migrating-anchor-scope", readOnly: true }, (tx) => sharedAgentAnchorMigrationScope(tx, {
     gatewayId: bound.gatewayId, podUid: bound.podUid, slug, migrationId: req.body.migration?.migrationId ?? req.body.migrationId, expected: req.body.migration,
   }));
   if (!scope || (req.body.uid !== undefined && req.body.uid !== scope.uid) ||
@@ -2386,7 +2284,6 @@ async function requireMigratingAgentAnchorScope(
   return { ...scope, podName: bound.podName, podUid: bound.podUid };
 }
 
-const AGENT_STORES_SUBCOLLECTION = "agentStores";
 const UNMATCHED_ROUTE_AGENT_ID = "octogee-unmatched-route";
 const AGENT_ANCHOR_STORE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const AGENT_ANCHOR_SCHEMA = /^[a-z_][a-z0-9_]{0,62}$/u;
@@ -2416,6 +2313,7 @@ interface AgentAnchorReport {
 }
 
 const GATEWAY_STATE_ANCHOR_DOC = "_gateway-state";
+const GATEWAY_STATE_KIND = "gateway-state";
 
 function gatewayStateAnchor(value: unknown): FleetBrokerGatewayStateAnchor | null {
   const record = value && typeof value === "object" ? value as Record<string, unknown> : null;
@@ -2444,16 +2342,21 @@ function reportedAuxiliaryAnchors(value: unknown): FleetBrokerAuxiliaryAnchor[] 
   return parsed as FleetBrokerAuxiliaryAnchor[];
 }
 
-function recordedAuxiliaryAnchor(scope: BuilderRuntimeStateScope, id: string, data: Record<string, unknown>): FleetBrokerAuxiliaryAnchor | null {
-  if (!AUXILIARY_FAMILIES.some(family => id === `_gateway-${family}`) || data.gatewayId !== scope.gatewayId || data.generation !== scope.generation) return null;
-  const anchor = auxiliaryAnchor(data);
-  if (!anchor || data.kind !== "gateway-auxiliary" || id !== `_gateway-${anchor.family}`) throw new AgentAnchorConflictError(id);
+function agentStoreKey(record: AgentStoreRecord): string {
+  if (record.kind === GATEWAY_STATE_KIND) return GATEWAY_STATE_ANCHOR_DOC;
+  if (record.kind === "auxiliary") return `_gateway-${record.family}`;
+  return record.agentId;
+}
+
+function recordedAuxiliaryAnchor(scope: BuilderRuntimeStateScope, record: AgentStoreRecord): FleetBrokerAuxiliaryAnchor | null {
+  if (record.kind !== "auxiliary" || record.gatewayId !== scope.gatewayId || record.generation !== scope.generation) return null;
+  const anchor = auxiliaryAnchor({ family: record.family, storeId: record.storeId, schema: record.schema });
+  if (!anchor) throw new AgentAnchorConflictError(agentStoreKey(record));
   return anchor;
 }
 
-function recordedGatewayStateAnchor(scope: BuilderRuntimeStateScope, data: unknown): FleetBrokerGatewayStateAnchor | null {
-  const record = data && typeof data === "object" ? data as Record<string, unknown> : null;
-  if (record?.kind !== "gateway-state" || record.gatewayId !== scope.gatewayId || record.generation !== scope.generation) return null;
+function recordedGatewayStateAnchor(scope: BuilderRuntimeStateScope, record: AgentStoreRecord): FleetBrokerGatewayStateAnchor | null {
+  if (record.kind !== GATEWAY_STATE_KIND || record.gatewayId !== scope.gatewayId || record.generation !== scope.generation) return null;
   return gatewayStateAnchor(record);
 }
 
@@ -2483,9 +2386,8 @@ function reportedAgentAnchors(slug: string, body: unknown): AgentAnchorReport | 
   return { anchors: parsed as FleetBrokerAgentAnchor[], configuredAgentIds, state, auxiliary };
 }
 
-function recordedAgentAnchor(scope: BuilderRuntimeStateScope, data: unknown): FleetBrokerAgentAnchor | null {
-  const record = data && typeof data === "object" ? data as Record<string, unknown> : null;
-  if (record?.gatewayId !== scope.gatewayId || record.generation !== scope.generation) return null;
+function recordedAgentAnchor(scope: BuilderRuntimeStateScope, record: AgentStoreRecord): FleetBrokerAgentAnchor | null {
+  if (record.kind !== "agent" || record.gatewayId !== scope.gatewayId || record.generation !== scope.generation) return null;
   return agentAnchorFor(scope.slug, record);
 }
 
@@ -2497,27 +2399,22 @@ class AgentAnchorConflictError extends Error {
   }
 }
 
-function agentStoreRecords(db: Firestore, uid: string) {
-  return db.collection("users").doc(uid).collection(AGENT_STORES_SUBCOLLECTION);
-}
-
 function builderAgentAnchorPruningAllowed(
   scope: BuilderRuntimeStateScope,
-  user: Record<string, unknown> | undefined,
-  assignment: Record<string, unknown> | undefined,
+  builder: Stored<BuilderRecord> | null,
+  assignment: GatewayAssignment | null,
 ): boolean {
   return agentAnchorAssignment(scope, assignment)?.assignmentState === "serving" &&
-    stringAt(user, OPENCLAW_GATEWAY_ID_FIELD) === scope.gatewayId && slugFromAssignedUser(user) === scope.slug &&
-    readPath(user, "provisioning.openclaw.migration") === undefined && !customerRuntimeMutationFenced(user);
+    builder?.gateway?.gatewayId === scope.gatewayId && builder.slug === scope.slug &&
+    builder.fences.migration === undefined && !builderRuntimeMutationFenced(builder);
 }
 
-function assertGlobalAnchorUnchanged(scope: BuilderRuntimeStateScope, doc: DocumentSnapshot, report: AgentAnchorReport): boolean {
-  const prior = doc.id === GATEWAY_STATE_ANCHOR_DOC
-    ? recordedGatewayStateAnchor(scope, doc.data())
-    : recordedAuxiliaryAnchor(scope, doc.id, doc.data() ?? {});
-  if (!prior) return doc.id === GATEWAY_STATE_ANCHOR_DOC;
+function globalAnchorUnchanged(scope: BuilderRuntimeStateScope, record: AgentStoreRecord, report: AgentAnchorReport): boolean {
+  if (record.kind === "agent") return false;
+  const prior = record.kind === GATEWAY_STATE_KIND ? recordedGatewayStateAnchor(scope, record) : recordedAuxiliaryAnchor(scope, record);
+  if (!prior) return true;
   const next = "family" in prior ? report.auxiliary.find(anchor => anchor.family === prior.family) : report.state;
-  if (next && (prior.storeId !== next.storeId || prior.schema !== next.schema)) throw new AgentAnchorConflictError(doc.id);
+  if (next && (prior.storeId !== next.storeId || prior.schema !== next.schema)) throw new AgentAnchorConflictError(agentStoreKey(record));
   return true;
 }
 
@@ -2526,65 +2423,66 @@ function builderAnchorAllocationCurrent(scope: BuilderRuntimeStateScope, gateway
   return configuredBuilderCredentialBootstrapAllowed(gateway, scope) && allocation?.leaseId === scope.leaseId && allocation.generation === scope.generation;
 }
 
-function archivedProjectAgentIds(scope: { uid: string; slug: string }, projects: QuerySnapshot): Set<string> {
-  return new Set(projects.docs.filter(doc => {
-    const project = doc.data();
+function archivedProjectAgentIds(scope: { uid: string; slug: string }, projects: readonly WorkspaceProject[]): Set<string> {
+  return new Set(projects.filter(project => {
     return project.ownerUid === scope.uid && projectAgentConfigured(project.agent) &&
-      (project.status === "archived" || project.commercialLifecycle?.status === "archived");
-  }).map(doc => projectAgentId(scope.slug, doc.id)));
+      (project.status === "archived" || project.commercialLifecycleStatus === "archived");
+  }).map(project => projectAgentId(scope.slug, project.projectSlug)));
 }
 
 async function recordAgentAnchors(
-  db: Firestore,
+  store: PlatformStateStore,
   scope: BuilderRuntimeStateScope,
   report: AgentAnchorReport,
   recordedAt: number,
 ): Promise<void> {
   const { anchors, configuredAgentIds, state, auxiliary } = report;
-  const records = agentStoreRecords(db, scope.uid);
   const reported = new Map(anchors.map((anchor) => [anchor.agentId, anchor]));
-  await db.runTransaction(async (txn) => {
-    const [existing, user, assignment, gateway, projects] = await Promise.all([
-      txn.get(records),
-      txn.get(db.collection("users").doc(scope.uid)),
-      txn.get(db.collection(GATEWAYS_COLLECTION).doc(scope.gatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(scope.uid)),
-      txn.get(db.collection(GATEWAYS_COLLECTION).doc(scope.gatewayId)),
-      txn.get(db.collection("workspaces").doc(scope.slug).collection("projects")),
+  const custody = { gatewayId: scope.gatewayId, generation: scope.generation, assignmentEpoch: null, recordedAt };
+  await store.transaction({ label: "fleet-broker.record-agent-anchors" }, async (tx) => {
+    const [existing, builder, assignment, gateway, projects] = await Promise.all([
+      tx.builders.agentStores.list(scope.uid),
+      tx.builders.records.get(scope.uid),
+      tx.gateways.assignments.get(scope.gatewayId, scope.uid),
+      tx.gateways.roots.get(scope.gatewayId),
+      tx.workspaces.projects.list(scope.slug),
     ]);
-    if (!builderAnchorAllocationCurrent(scope, gateway.data())) {
+    if (!builderAnchorAllocationCurrent(scope, gateway)) {
       throw new SharedAgentAnchorCustodyError("Builder allocation changed before anchor reporting");
     }
-    const canPrune = builderAgentAnchorPruningAllowed(scope, user.data(), assignment.data());
+    const canPrune = builderAgentAnchorPruningAllowed(scope, builder, assignment);
     const archived = archivedProjectAgentIds(scope, projects);
-    for (const doc of existing.docs) {
-      if (assertGlobalAnchorUnchanged(scope, doc, report)) continue;
-      const prior = recordedAgentAnchor(scope, doc.data());
+    const pruned: string[] = [];
+    for (const record of existing) {
+      if (globalAnchorUnchanged(scope, record, report)) continue;
+      const prior = recordedAgentAnchor(scope, record);
       if (!prior) continue;
       const next = reported.get(prior.agentId);
       if (!configuredAgentIds.has(prior.agentId)) {
-        if (canPrune && !archived.has(prior.agentId)) txn.delete(doc.ref);
+        if (canPrune && !archived.has(prior.agentId)) pruned.push(agentStoreKey(record));
       } else if (next && (prior.storeId !== next.storeId || prior.schema !== next.schema)) {
         throw new AgentAnchorConflictError(prior.agentId);
       }
     }
+    for (const key of pruned) await tx.builders.agentStores.delete(scope.uid, key);
     for (const anchor of anchors) {
-      txn.set(records.doc(anchor.agentId), { ...anchor, gatewayId: scope.gatewayId, generation: scope.generation, recordedAt });
+      await tx.builders.agentStores.put(scope.uid, { kind: "agent", ...anchor, ...custody });
     }
     for (const anchor of auxiliary) {
-      txn.set(records.doc(`_gateway-${anchor.family}`), { kind: "gateway-auxiliary", ...anchor, gatewayId: scope.gatewayId, generation: scope.generation, recordedAt });
+      await tx.builders.agentStores.put(scope.uid, { kind: "auxiliary", ...anchor, ...custody });
     }
     if (state) {
-      txn.set(records.doc(GATEWAY_STATE_ANCHOR_DOC), { kind: "gateway-state", ...state, gatewayId: scope.gatewayId, generation: scope.generation, recordedAt });
+      await tx.builders.agentStores.put(scope.uid, { kind: GATEWAY_STATE_KIND, ...state, ...custody });
     }
   });
 }
 
-function recordedSharedAgentAnchor(scope: SharedAgentAnchorScope, id: string, data: unknown): FleetBrokerAgentAnchor | null {
+function recordedSharedAgentAnchor(scope: SharedAgentAnchorScope, record: AgentStoreRecord): FleetBrokerAgentAnchor | null {
+  const id = agentStoreKey(record);
   if (id === UNMATCHED_ROUTE_AGENT_ID || !agentAnchorBelongsTo(scope.slug, id)) return null;
-  const record = data as Record<string, unknown> | null;
-  const anchor = agentAnchorFor(scope.slug, data);
+  const anchor = agentAnchorFor(scope.slug, record);
   if (!anchor || anchor.agentId !== id || (scope.assignmentState === "quiescing" && !scope.migration &&
-      (!record || record.gatewayId !== scope.gatewayId || record.assignmentEpoch !== scope.assignmentEpoch))) {
+      (record.gatewayId !== scope.gatewayId || record.assignmentEpoch !== scope.assignmentEpoch))) {
     throw new AgentAnchorConflictError(id);
   }
   return anchor;
@@ -2596,10 +2494,10 @@ function anchorCustodyGateway(scope: SharedAgentAnchorScope): string {
   return scope.migration?.sourceGatewayId ?? scope.gatewayId;
 }
 
-function unconfiguredSharedAgentAnchors(scope: SharedAgentAnchorScope, existing: QuerySnapshot, configuredAgentIds: ReadonlySet<string>) {
+function unconfiguredSharedAgentAnchors(scope: SharedAgentAnchorScope, existing: readonly AgentStoreRecord[], configuredAgentIds: ReadonlySet<string>) {
   if (scope.assignmentState !== "serving" || scope.migration) return [];
-  return existing.docs.filter((doc) => {
-    const prior = recordedSharedAgentAnchor(scope, doc.id, doc.data());
+  return existing.filter((record) => {
+    const prior = recordedSharedAgentAnchor(scope, record);
     return prior && !configuredAgentIds.has(prior.agentId);
   });
 }
@@ -2612,56 +2510,56 @@ function sharedAnchorMigrationBound(scope: SharedAgentAnchorScope): boolean {
   return scope.migration !== undefined || scope.sourceSurge !== undefined;
 }
 
-async function recheckSharedAnchorMigration(db: Firestore, txn: Transaction, scope: SharedAgentAnchorScope) {
+async function recheckSharedAnchorMigration(tx: PlatformStateRepositories, scope: SharedAgentAnchorScope) {
   const migration = scope.sourceSurge ?? scope.migration;
   if (!migration) return null;
   const request = { gatewayId: scope.gatewayId, podUid: scope.podUid, slug: scope.slug, migrationId: migration.migrationId, expected: migration };
-  return scope.sourceSurge ? sharedAssignedSourceSurgeAnchorScope(db, txn, { ...request, uid: scope.uid }) : sharedAgentAnchorMigrationScope(db, txn, request);
+  return scope.sourceSurge ? sharedAssignedSourceSurgeAnchorScope(tx, { ...request, uid: scope.uid }) : sharedAgentAnchorMigrationScope(tx, request);
 }
 
 async function recordSharedAgentAnchors(
-  db: Firestore,
+  store: PlatformStateStore,
   scope: SharedAgentAnchorScope,
   { anchors, configuredAgentIds }: AgentAnchorReport,
   recordedAt: number,
 ): Promise<void> {
-  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(scope.gatewayId);
-  const records = agentStoreRecords(db, scope.uid);
-  await db.runTransaction(async (txn) => {
-    const [gateway, user, assignment, existing, projects] = await Promise.all([
-      txn.get(gatewayRef), txn.get(db.collection("users").doc(scope.uid)),
-      txn.get(gatewayRef.collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(scope.uid)), txn.get(records),
-      txn.get(db.collection("workspaces").doc(scope.slug).collection("projects")),
+  await store.transaction({ label: "fleet-broker.record-shared-agent-anchors" }, async (tx) => {
+    const [gateway, builder, assignment, existing, projects] = await Promise.all([
+      tx.gateways.roots.get(scope.gatewayId), tx.builders.records.get(scope.uid),
+      tx.gateways.assignments.get(scope.gatewayId, scope.uid), tx.builders.agentStores.list(scope.uid),
+      tx.workspaces.projects.list(scope.slug),
     ]);
     const current = sharedAnchorMigrationBound(scope)
-      ? await recheckSharedAnchorMigration(db, txn, scope)
-      : sharedAgentAnchorScopeCurrent(scope, gateway.data(), user.data(), assignment.data());
+      ? await recheckSharedAnchorMigration(tx, scope)
+      : sharedAgentAnchorScopeCurrent(scope, gateway, builder, assignment);
     if (!sharedAgentAnchorCustodyMatches(current, scope)) {
       throw new SharedAgentAnchorCustodyError("Shared agent anchor custody changed before reporting");
     }
+    const byKey = new Map(existing.map((record) => [agentStoreKey(record), record]));
     for (const anchor of anchors) {
-      const doc = existing.docs.find((candidate) => candidate.id === anchor.agentId);
-      const prior = doc ? recordedSharedAgentAnchor(scope, doc.id, doc.data()) : null;
+      const record = byKey.get(anchor.agentId);
+      const prior = record ? recordedSharedAgentAnchor(scope, record) : null;
       if ((prior && (prior.storeId !== anchor.storeId || prior.schema !== anchor.schema)) ||
           (!prior && scope.assignmentState !== "serving")) throw new AgentAnchorConflictError(anchor.agentId);
     }
     const archived = archivedProjectAgentIds(scope, projects);
-    for (const doc of unconfiguredSharedAgentAnchors(scope, existing, configuredAgentIds)) {
-      if (!archived.has(doc.id)) txn.delete(doc.ref);
+    for (const record of unconfiguredSharedAgentAnchors(scope, existing, configuredAgentIds)) {
+      if (!archived.has(agentStoreKey(record))) await tx.builders.agentStores.delete(scope.uid, agentStoreKey(record));
     }
     for (const anchor of anchors) {
-      const prior = existing.docs.find((candidate) => candidate.id === anchor.agentId)?.data();
-      txn.set(records.doc(anchor.agentId), { ...prior, ...anchor, gatewayId: anchorCustodyGateway(scope), assignmentEpoch: scope.assignmentEpoch, recordedAt });
+      await tx.builders.agentStores.put(scope.uid, {
+        kind: "agent", ...anchor, gatewayId: anchorCustodyGateway(scope), generation: byKey.get(anchor.agentId)?.generation ?? null,
+        assignmentEpoch: scope.assignmentEpoch, recordedAt,
+      });
     }
   });
 }
 
 function installAgentAnchorRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
-  const { db } = deps;
-  const stores = (uid: string) => agentStoreRecords(db, uid);
+  const { store } = deps;
 
   router.post("/agent-anchors/report", async (req, res) => {
-    const scope = await requireAgentAnchorScope(db, req, res);
+    const scope = await requireAgentAnchorScope(store, req, res);
     if (!scope) return;
     const report = reportedAgentAnchors(scope.slug, req.body);
     if (!report || ("assignmentEpoch" in scope && (report.state || report.auxiliary.length > 0 ||
@@ -2672,8 +2570,8 @@ function installAgentAnchorRoutes(router: Router, deps: ResolvedFleetBrokerRoute
     await runBrokered(res, async () => {
       const recordedAt = deps.now();
       try {
-        if ("assignmentEpoch" in scope) await recordSharedAgentAnchors(db, scope, report, recordedAt);
-        else await recordAgentAnchors(db, scope, report, recordedAt);
+        if ("assignmentEpoch" in scope) await recordSharedAgentAnchors(store, scope, report, recordedAt);
+        else await recordAgentAnchors(store, scope, report, recordedAt);
       } catch (error) {
         if (error instanceof SharedAgentAnchorCustodyError) { res.status(403).json(FORBIDDEN); return; }
         if (!(error instanceof AgentAnchorConflictError)) throw error;
@@ -2688,18 +2586,20 @@ function installAgentAnchorRoutes(router: Router, deps: ResolvedFleetBrokerRoute
   });
 
   router.post("/agent-anchors/read", async (req, res) => {
-    const scope = await requireAgentAnchorScope(db, req, res);
+    const scope = await requireAgentAnchorScope(store, req, res);
     if (!scope) return;
     await runBrokered(res, async () => {
-      const snapshot = "assignmentEpoch" in scope && sharedAnchorMigrationBound(scope) ? await db.runTransaction(async (txn) => {
-        const current = await recheckSharedAnchorMigration(db, txn, scope);
-        if (!current || current.uid !== scope.uid) return null;
-        return txn.get(stores(scope.uid));
-      }) : await stores(scope.uid).get();
-      if (!snapshot) { res.status(403).json(FORBIDDEN); return; }
+      const records = "assignmentEpoch" in scope && sharedAnchorMigrationBound(scope)
+        ? await store.transaction({ label: "fleet-broker.read-agent-anchors", readOnly: true }, async (tx) => {
+          const current = await recheckSharedAnchorMigration(tx, scope);
+          if (!current || current.uid !== scope.uid) return null;
+          return tx.builders.agentStores.list(scope.uid);
+        })
+        : await store.builders.agentStores.list(scope.uid);
+      if (!records) { res.status(403).json(FORBIDDEN); return; }
       if ("assignmentEpoch" in scope) {
         try {
-          const anchors = snapshot.docs.map((doc) => recordedSharedAgentAnchor(scope, doc.id, doc.data()))
+          const anchors = records.map((record) => recordedSharedAgentAnchor(scope, record))
             .filter((anchor): anchor is FleetBrokerAgentAnchor => anchor !== null)
             .sort((left, right) => left.agentId.localeCompare(right.agentId));
           res.json({ anchors, assignment: { uid: scope.uid, epoch: scope.assignmentEpoch, state: scope.assignmentState }, ...(scope.migration ? { migration: scope.migration } : {}) } satisfies FleetBrokerAgentAnchors);
@@ -2709,16 +2609,15 @@ function installAgentAnchorRoutes(router: Router, deps: ResolvedFleetBrokerRoute
         }
         return;
       }
-      const anchors = snapshot.docs
-        .filter((doc) => doc.id !== GATEWAY_STATE_ANCHOR_DOC)
-        .map((doc) => recordedAgentAnchor(scope, doc.data()))
+      const anchors = records
+        .map((record) => recordedAgentAnchor(scope, record))
         .filter((anchor): anchor is FleetBrokerAgentAnchor => anchor !== null)
         .sort((left, right) => left.agentId.localeCompare(right.agentId));
-      const stateDoc = snapshot.docs.find((doc) => doc.id === GATEWAY_STATE_ANCHOR_DOC);
-      const state = stateDoc ? recordedGatewayStateAnchor(scope, stateDoc.data()) : null;
+      const stateRecord = records.find((record) => record.kind === GATEWAY_STATE_KIND);
+      const state = stateRecord ? recordedGatewayStateAnchor(scope, stateRecord) : null;
       let auxiliary: FleetBrokerAuxiliaryAnchor[];
       try {
-        auxiliary = snapshot.docs.map(doc => recordedAuxiliaryAnchor(scope, doc.id, doc.data()))
+        auxiliary = records.map(record => recordedAuxiliaryAnchor(scope, record))
           .filter((anchor): anchor is FleetBrokerAuxiliaryAnchor => anchor !== null)
           .sort((left, right) => AUXILIARY_FAMILIES.indexOf(left.family) - AUXILIARY_FAMILIES.indexOf(right.family));
       } catch (error) {
@@ -2733,17 +2632,17 @@ function installAgentAnchorRoutes(router: Router, deps: ResolvedFleetBrokerRoute
 }
 
 async function confirmBuilderRuntimeStateAllocationCurrent(
-  db: Firestore,
+  store: PlatformStateRepositories,
   scope: BuilderRuntimeStateScope,
 ): Promise<void> {
-  const current = await readBuilderRuntimeStateScope(db, scope);
+  const current = await readBuilderRuntimeStateScope(store, scope);
   if (current?.leaseId !== scope.leaseId || current.generation !== scope.generation) {
     throw new BuilderRuntimeStateAllocationSupersededError(scope);
   }
 }
 
 async function pruneBuilderRuntimeStateForScope(
-  db: Firestore,
+  store: PlatformStateRepositories,
   prune: PruneBuilderRuntimeState,
   scope: BuilderRuntimeStateScope,
   now: number,
@@ -2754,7 +2653,7 @@ async function pruneBuilderRuntimeStateForScope(
       runtimeStatePrefix: gcsPathForBuilderRuntimeStateRoot(scope.slug),
       allocationGeneration: scope.generation,
       now,
-      confirmAllocationCurrent: () => confirmBuilderRuntimeStateAllocationCurrent(db, scope),
+      confirmAllocationCurrent: () => confirmBuilderRuntimeStateAllocationCurrent(store, scope),
     });
   } catch (error) {
     if (!(error instanceof BuilderRuntimeStateAllocationSupersededError)) throw error;
@@ -2766,7 +2665,7 @@ async function pruneBuilderRuntimeStateForScope(
 }
 
 async function requireConfiguredBuilderRuntimeState(
-  db: Firestore,
+  store: PlatformStateRepositories,
   req: Request,
   res: Response,
 ): Promise<BuilderRuntimeStateScope | null> {
@@ -2782,7 +2681,7 @@ async function requireConfiguredBuilderRuntimeState(
     return null;
   }
 
-  const scope = await readBuilderRuntimeStateScope(db, {
+  const scope = await readBuilderRuntimeStateScope(store, {
     gatewayId: bound.gatewayId,
     podName: bound.podName,
     slug: request.slug,
@@ -2920,16 +2819,17 @@ export function configuredBuilderDesk(
 function configuredBuilderBootstrapPayload(input: {
   uid: string;
   slug: string;
+  builder: BuilderRecord | null;
   user: Record<string, unknown> | undefined;
-  coach: Record<string, unknown> | undefined;
+  coach: MattermostTokenSecret | null;
   agent: Record<string, unknown> | undefined;
   projectCredentials: FleetBrokerConfiguredBuilderProjectCredential[];
 }): FleetBrokerConfiguredBuilderBootstrap | null {
-  const { uid, slug, user, coach, agent, projectCredentials } = input;
+  const { uid, slug, builder, user, coach, agent, projectCredentials } = input;
   const agentId = `octogee-${slug}-coach`;
-  if (!user || slugFromAssignedUser(user) !== slug) return null;
-  if (!agentBelongsToAssignedWorkspace(user, agentId)) return null;
-  if (typeof coach?.personalToken !== "string" || coach.personalToken.length === 0) return null;
+  if (!builder || builder.slug !== slug) return null;
+  if (!builderCarriesAgentId(builder, agentId)) return null;
+  if (!coach || coach.personalToken.length === 0) return null;
   return {
     uid,
     slug,
@@ -2964,8 +2864,7 @@ function configuredBuilderProjectCredentials(
 }
 
 async function handleConfiguredBuilderBootstrap(
-  db: Firestore,
-  store: PlatformStateStore,
+  { db, store }: Pick<ResolvedFleetBrokerRouteDeps, "db" | "store">,
   req: Request,
   res: Response,
 ): Promise<void> {
@@ -2977,8 +2876,7 @@ async function handleConfiguredBuilderBootstrap(
     return;
   }
 
-  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
-  const gateway = gatewaySnap.data();
+  const gateway = (await store.gateways.roots.get(bound.gatewayId)) ?? undefined;
   const uid = projectGatewayMutableConfigForGateway(gateway, bound.gatewayId)?.ownerUid ?? null;
   if (
     typeof uid !== "string" ||
@@ -2993,9 +2891,10 @@ async function handleConfiguredBuilderBootstrap(
     return;
   }
 
-  const [userSnap, coachSnap, agentSnap, projectAgents] = await Promise.all([
+  const [builder, userSnap, coach, agentSnap, projectAgents] = await Promise.all([
+    store.builders.records.get(uid),
     db.collection("users").doc(uid).get(),
-    db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
+    coachMattermostSecret(store, uid),
     db.collection("agents").doc(uid).get(),
     collectProjectAgentStates(db, store.secrets, uid, request.slug),
   ]);
@@ -3004,8 +2903,9 @@ async function handleConfiguredBuilderBootstrap(
     bootstrap = configuredBuilderBootstrapPayload({
       uid,
       slug: request.slug,
+      builder,
       user: userSnap.data() as Record<string, unknown> | undefined,
-      coach: coachSnap.data() as Record<string, unknown> | undefined,
+      coach,
       agent: agentSnap.data() as Record<string, unknown> | undefined,
       projectCredentials: configuredBuilderProjectCredentials(request.slug, projectAgents),
     });
@@ -3022,9 +2922,9 @@ async function handleConfiguredBuilderBootstrap(
   res.json({ bootstrap });
 }
 
-function installToolchainStatusRoute(router: Router, db: Firestore): void {
+function installToolchainStatusRoute(router: Router, store: PlatformStateStore): void {
   router.post("/set-toolchain-status", async (req, res) => {
-    const assigned = await requireAssignedUser(db, req, res);
+    const assigned = await requireAssignedUser(store, req, res);
     if (!assigned) return;
     const status = objectBody(req).status;
     if (!isDeveloperToolchainStatus(status)) {
@@ -3032,18 +2932,21 @@ function installToolchainStatusRoute(router: Router, db: Firestore): void {
       return;
     }
     await runBrokered(res, async () => {
-      await db.collection("users").doc(assigned.uid).update({
-        "provisioning.openclaw.toolchain.status": status,
-        "provisioning.openclaw.toolchain.updatedAt": FieldValue.serverTimestamp(),
+      await store.transaction({ label: "fleet-broker.set-toolchain-status" }, async (tx) => {
+        const builder = await tx.builders.records.get(assigned.uid);
+        if (!builder) throw new MissingRecordError({ aggregate: "builder", key: assigned.uid });
+        await tx.builders.records.patch(assigned.uid, {
+          openclaw: { toolchain: { ...builder.openclaw.toolchain, status, updatedAt: { serverNow: true } } },
+        });
       });
       res.status(204).end();
     });
   });
 }
 
-function installRuntimeResetAckRoute(router: Router, db: Firestore): void {
+function installRuntimeResetAckRoute(router: Router, store: PlatformStateStore): void {
   router.post("/runtime-reset-ack", async (req, res) => {
-    const assigned = await requireAssignedUser(db, req, res);
+    const assigned = await requireAssignedUser(store, req, res);
     if (!assigned) return;
     const body = objectBody(req);
     const operationId = typeof body.operationId === "string" ? body.operationId : "";
@@ -3053,47 +2956,33 @@ function installRuntimeResetAckRoute(router: Router, db: Firestore): void {
       return;
     }
     await runBrokered(res, async () => {
-      const result = await db.runTransaction(async (txn) => {
-        const userRef = db.collection("users").doc(assigned.uid);
-        const assignmentRef = db
-          .collection(GATEWAYS_COLLECTION)
-          .doc(assigned.bound.gatewayId)
-          .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
-          .doc(assigned.uid);
-        const [userSnapshot, assignmentSnapshot] = await Promise.all([
-          txn.get(userRef),
-          txn.get(assignmentRef),
+      const result = await store.transaction({ label: "fleet-broker.runtime-reset-ack" }, async (tx) => {
+        const [builder, assignment] = await Promise.all([
+          tx.builders.records.get(assigned.uid),
+          tx.gateways.assignments.get(assigned.bound.gatewayId, assigned.uid),
         ]);
-        const userData = userSnapshot.data() as Record<string, unknown> | undefined;
-        if (stringAt(userData, OPENCLAW_GATEWAY_ID_FIELD) !== assigned.bound.gatewayId) {
+        if (builder?.gateway?.gatewayId !== assigned.bound.gatewayId) {
           return "conflict" as const;
         }
-        const marker = userData ? storedRuntimeReset(userData) : undefined;
+        const marker = storedRuntimeReset(builder);
         if (!marker) return "missing" as const;
         if (marker.status === "acknowledged") return "missing" as const;
-        const assignmentData = assignmentSnapshot.data() as Record<string, unknown> | undefined;
-        const assignment = assignmentData
-          ? parseAssignmentDoc(assigned.uid, assignmentData)
-          : null;
         const exact = [
           marker.uid === assigned.uid,
-          marker.slug === slugFromAssignedUser(userData),
+          marker.slug === builder.slug,
           marker.targetGatewayId === assigned.bound.gatewayId,
           marker.operationId === operationId,
           marker.generation === generation,
-          assignment?.uid === assigned.uid,
           assignment?.gatewayId === assigned.bound.gatewayId,
           assignment?.epoch === marker.generation,
-          assignmentData?.source === "repair",
-          assignmentData?.updatedByOperationId === marker.operationId,
+          assignment?.source === "repair",
+          assignment?.updatedByOperationId === marker.operationId,
         ].every(Boolean);
         if (!exact) return "conflict" as const;
-        txn.update(userRef, {
-          "provisioning.openclaw.runtimeReset": {
-            ...marker,
-            status: "acknowledged",
-            acknowledgedAt: FieldValue.serverTimestamp(),
-          },
+        await tx.builders.records.setFence(assigned.uid, "runtimeReset", {
+          ...marker,
+          status: "acknowledged",
+          acknowledgedAt: { serverNow: true },
         });
         return "acked" as const;
       });
@@ -3106,9 +2995,9 @@ function installRuntimeResetAckRoute(router: Router, db: Firestore): void {
   });
 }
 
-function installProjectAgentReadinessRoute(router: Router, db: Firestore): void {
+function installProjectAgentReadinessRoute(router: Router, { store }: Pick<ResolvedFleetBrokerRouteDeps, "store">): void {
   router.post("/project-agent-readiness", async (req, res) => {
-    const assigned = await requireAssignedUser(db, req, res);
+    const assigned = await requireAssignedUser(store, req, res);
     if (!assigned) return;
     const projects = parseProjectAgentReadinessReports(objectBody(req).projects);
     if (!projects) {
@@ -3116,10 +3005,10 @@ function installProjectAgentReadinessRoute(router: Router, db: Firestore): void 
       return;
     }
     await runBrokered(res, async () => {
-      const accepted = await completeProjectAgentReadiness(db, {
+      const accepted = await completeProjectAgentReadiness(store, {
         uid: assigned.uid,
         gatewayId: assigned.bound.gatewayId,
-        slug: deriveSlug(assigned.uid, assigned.data),
+        slug: builderSlug(assigned.builder),
         projects,
       });
       if (!accepted) {
@@ -3136,16 +3025,16 @@ function installProvisioningRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
-  const { db, provisionMattermost, markProvisioningComplete, notifyOpsOfSignup, ensureCommunityMembership, now } = deps;
+  const { db, store, provisionMattermost, markProvisioningComplete, notifyOpsOfSignup, ensureCommunityMembership, now } = deps;
   // A pod re-reports the same mount failure every reconcile cycle, and each write
   // to gateways/{id} costs the fleet a Firestore snapshot event. Repeats inside
   // the window are acknowledged without a write; anything new lands immediately.
   const reportedReconcileErrors = new Map<string, { report: string; at: number }>();
-  installToolchainStatusRoute(router, db);
-  installRuntimeResetAckRoute(router, db);
+  installToolchainStatusRoute(router, store);
+  installRuntimeResetAckRoute(router, store);
 
   router.post("/set-provisioning-status", async (req, res) => {
-    const assigned = await requireAssignedUser(db, req, res);
+    const assigned = await requireAssignedUser(store, req, res);
     if (!assigned) return;
     const status = objectBody(req).status;
     if (!isProvisioningStatus(status)) {
@@ -3153,16 +3042,16 @@ function installProvisioningRoutes(
       return;
     }
     await runBrokered(res, async () => {
-      await db.collection("users").doc(assigned.uid).update({
-        "provisioning.openclaw.status": status,
-        "provisioning.status": status === "complete" ? "complete" : "in_progress",
+      await store.builders.records.patch(assigned.uid, {
+        openclaw: { status },
+        provisioning: { status: status === "complete" ? "complete" : "in_progress" },
       });
       res.status(204).end();
     });
   });
 
   router.post("/set-repo-url", async (req, res) => {
-    const assigned = await requireAssignedUser(db, req, res);
+    const assigned = await requireAssignedUser(store, req, res);
     if (!assigned) return;
     const repoUrl = objectBody(req).repoUrl;
     if (typeof repoUrl !== "string" || repoUrl.length === 0 || repoUrl.length > 2048) {
@@ -3170,28 +3059,27 @@ function installProvisioningRoutes(
       return;
     }
     await runBrokered(res, async () => {
-      await db.collection("users").doc(assigned.uid).update({
-        "provisioning.git.repoUrl": repoUrl,
-        "provisioning.git.createdAt": FieldValue.serverTimestamp(),
+      await store.builders.records.patch(assigned.uid, {
+        provisioning: { gitRepoUrl: repoUrl, gitCreatedAt: { serverNow: true } },
       });
       res.status(204).end();
     });
   });
 
   router.post("/provision-mattermost", async (req, res) => {
-    const assigned = await requireAssignedUser(db, req, res);
+    const assigned = await requireAssignedUser(store, req, res);
     if (!assigned) return;
     await runBrokered(res, async () => {
       const mmUpdate = await provisionMattermost({
         uid: assigned.uid,
-        userData: assigned.data,
+        userData: await readBuilderAccountDocument(db, assigned.uid),
       });
       res.json({ mmUpdate });
     });
   });
 
   router.post("/set-mattermost-fields", async (req, res) => {
-    const assigned = await requireAssignedUser(db, req, res);
+    const assigned = await requireAssignedUser(store, req, res);
     if (!assigned) return;
     const mmUpdate = recordBodyValue(objectBody(req).mmUpdate);
     if (!mmUpdate) {
@@ -3199,21 +3087,22 @@ function installProvisioningRoutes(
       return;
     }
     await runBrokered(res, async () => {
+      const userData = await readBuilderAccountDocument(db, assigned.uid);
       await markProvisioningComplete({
         uid: assigned.uid,
-        userData: assigned.data,
+        userData,
         mmUpdate,
       });
-      const slug = stringAt(assigned.data, "username");
+      const slug = stringAt(userData, "username");
       if (slug) await applyDefaultCoachLook({ uid: assigned.uid, slug }, deps);
       res.status(204).end();
     });
   });
 
   router.post("/ensure-community-membership", async (req, res) => {
-    const assigned = await requireAssignedUser(db, req, res);
+    const assigned = await requireAssignedUser(store, req, res);
     if (!assigned) return;
-    const mmUserId = stringAt(assigned.data, "mattermost.userId");
+    const mmUserId = assigned.builder.mattermostUserId;
     await runBrokered(res, async () => {
       if (mmUserId) {
         await ensureCommunityMembership({ mmUserId });
@@ -3223,7 +3112,7 @@ function installProvisioningRoutes(
   });
 
   router.post("/set-agent-ids", async (req, res) => {
-    const assigned = await requireAssignedUser(db, req, res);
+    const assigned = await requireAssignedUser(store, req, res);
     if (!assigned) return;
     const agentIds = validAgentIds(objectBody(req).agentIds);
     if (!agentIds) {
@@ -3232,18 +3121,16 @@ function installProvisioningRoutes(
     }
     await runBrokered(res, async () => {
       if (agentIds.length > 0) {
-        await db.collection("users").doc(assigned.uid).update({
-          "provisioning.openclaw.agentIds": FieldValue.arrayUnion(...agentIds),
-        });
+        await store.builders.records.addAgents(assigned.uid, agentIds);
       }
       res.status(204).end();
     });
   });
 
-  installProjectAgentReadinessRoute(router, db);
+  installProjectAgentReadinessRoute(router, deps);
 
   router.post("/mounted", async (req, res) => {
-    const assigned = await requireAssignedUser(db, req, res);
+    const assigned = await requireAssignedUser(store, req, res);
     if (!assigned) return;
     const mounted = objectBody(req).mounted;
     if (typeof mounted !== "boolean") {
@@ -3251,15 +3138,13 @@ function installProvisioningRoutes(
       return;
     }
     await runBrokered(res, async () => {
-      await db.collection("users").doc(assigned.uid).update({
-        "provisioning.openclaw.mounted": mounted,
-      });
+      await store.builders.records.patch(assigned.uid, { openclaw: { mounted } });
       res.status(204).end();
     });
   });
 
   router.post("/reconcile-error", async (req, res) => {
-    const assigned = await requireAssignedSlug(db, req, res);
+    const assigned = await requireAssignedSlug(store, req, res);
     if (!assigned) return;
     const message = objectBody(req).message;
     if (typeof message !== "string" || message.length === 0) {
@@ -3280,43 +3165,33 @@ function installProvisioningRoutes(
       return;
     }
     await runBrokered(res, async () => {
-      await db.collection("gateways").doc(gatewayId).set(
-        {
-          lastError: {
-            slug: assigned.slug,
-            message: truncated,
-            at: FieldValue.serverTimestamp(),
-          },
-        },
-        { merge: true },
-      );
+      await store.gateways.roots.patch(gatewayId, {
+        lastError: { slug: assigned.slug, message: truncated, at: { serverNow: true } },
+      });
       reportedReconcileErrors.set(gatewayId, { report, at });
       res.status(204).end();
     });
   });
 
   router.post("/clear-reconcile-error", async (req, res) => {
-    const assigned = await requireAssignedSlug(db, req, res);
+    const assigned = await requireAssignedSlug(store, req, res);
     if (!assigned) return;
     await runBrokered(res, async () => {
-      const ref = db.collection("gateways").doc(assigned.bound.gatewayId);
-      await db.runTransaction(async (txn) => {
-        const snap = await txn.get(ref);
-        const current = snap.data()?.lastError as { slug?: string } | null | undefined;
-        if (current && current.slug === assigned.slug) {
-          txn.set(ref, { lastError: null }, { merge: true });
-        }
-      });
+      try {
+        await store.gateways.roots.patch(assigned.bound.gatewayId, { lastError: null }, { lastErrorSlug: assigned.slug });
+      } catch (error) {
+        if (!(error instanceof FenceMismatchError) && !(error instanceof MissingRecordError)) throw error;
+      }
       reportedReconcileErrors.delete(assigned.bound.gatewayId);
       res.status(204).end();
     });
   });
 
   router.post("/notify-signup", async (req, res) => {
-    const assigned = await requireAssignedUser(db, req, res);
+    const assigned = await requireAssignedUser(store, req, res);
     if (!assigned) return;
     await runBrokered(res, async () => {
-      await notifyOpsOfSignup({ uid: assigned.uid, userData: assigned.data });
+      await notifyOpsOfSignup({ uid: assigned.uid, userData: await readBuilderAccountDocument(db, assigned.uid) });
       res.status(204).end();
     });
   });
@@ -3326,10 +3201,10 @@ function installWorkspaceManifestRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
-  const { db, createBlobSignedUrl } = deps;
+  const { createBlobSignedUrl } = deps;
 
   router.post("/blob/manifest/read-url", async (req, res) => {
-    const assigned = await requireAssignedSlug(db, req, res);
+    const assigned = await requireAssignedSlug(deps.store, req, res);
     if (!assigned) return;
     const project = objectBody(req).projectSlug;
     if (project !== undefined && (typeof project !== "string" || !/^[a-z0-9][a-z0-9-]*$/u.test(project))) {
@@ -3345,7 +3220,7 @@ function installWorkspaceManifestRoutes(
   });
 
   router.post("/blob/manifest/write-url", async (req, res) => {
-    const assigned = await requireAssignedSlug(db, req, res);
+    const assigned = await requireAssignedSlug(deps.store, req, res);
     if (!assigned) return;
     const precondition = validGenerationPrecondition(objectBody(req).ifGenerationMatch);
     if (precondition === null) {
@@ -3367,7 +3242,7 @@ function installWorkspaceManifestRoutes(
 
 function installBlobMaterializationRoute(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
   router.post("/blob/project/upload-url", async (req, res) => {
-    const assigned = await requireAssignedSlug(deps.db, req, res);
+    const assigned = await requireAssignedSlug(deps.store, req, res);
     if (!assigned) return;
     const body = objectBody(req);
     const { projectSlug, sha256, size, md5Hash } = body;
@@ -3386,7 +3261,7 @@ function installBlobMaterializationRoute(router: Router, deps: ResolvedFleetBrok
     });
   });
   router.post("/blob/materialization/manifest/read-url", async (req, res) => {
-    const assigned = await requireAssignedSlug(deps.db, req, res, true);
+    const assigned = await requireAssignedSlug(deps.store, req, res, true);
     if (!assigned) return;
     const project = objectBody(req).projectSlug;
     if (typeof project !== "string" || !/^[a-z0-9][a-z0-9-]*$/u.test(project)) {
@@ -3398,7 +3273,7 @@ function installBlobMaterializationRoute(router: Router, deps: ResolvedFleetBrok
     });
   });
   router.post("/blob/materialization/read-url", async (req, res) => {
-    const assigned = await requireAssignedSlug(deps.db, req, res, true);
+    const assigned = await requireAssignedSlug(deps.store, req, res, true);
     if (!assigned) return;
     const body = objectBody(req);
     const relativePath = validBlobRelativePath(body.path);
@@ -3433,6 +3308,7 @@ function installGatewayOpsRoutes(
 ): void {
   const {
     db,
+    store,
     recordUsageEvent,
     createBlobSignedUrl,
     pruneBuilderRuntimeState,
@@ -3454,7 +3330,7 @@ function installGatewayOpsRoutes(
       return;
     }
     await runBrokered(res, async () => {
-      const accepted = await recordRevisionSystemConfigStatus(db, {
+      const accepted = await recordRevisionSystemConfigStatus(store, {
         gatewayId: bound.gatewayId,
         revisionId,
         status,
@@ -3476,22 +3352,10 @@ function installGatewayOpsRoutes(
       return;
     }
     await runBrokered(res, async () => {
-      const gatewayRef = db.collection("gateways").doc(bound.gatewayId);
-      const accepted = await db.runTransaction(async (txn) => {
-        const gatewaySnap = await txn.get(gatewayRef);
-        const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
-        if (!isDurableGatewayRoot(gatewayData, bound.gatewayId)) return false;
-        txn.set(
-          gatewayRef,
-          {
-            lastPreStopFlush: {
-              ...event,
-              at: FieldValue.serverTimestamp(),
-            },
-          },
-          { merge: true },
-        );
-
+      const accepted = await deps.store.transaction({ label: "fleet-broker.prestop-flush" }, async (tx) => {
+        const gateway = await tx.gateways.roots.get(bound.gatewayId);
+        if (!gateway || !isDurableGatewayRoot(gateway, bound.gatewayId)) return false;
+        await tx.gateways.roots.patch(bound.gatewayId, { lastPreStopFlush: { ...event, at: { serverNow: true } } });
         return true;
       });
       if (!accepted) {
@@ -3516,7 +3380,7 @@ function installGatewayOpsRoutes(
       res.status(400).json({ error: "invalid_usage" });
       return;
     }
-    const assigned = await findAssignedUserByAgentId(db, bound.gatewayId, agentId);
+    const assigned = await findAssignedUserByAgentId(deps.store, bound.gatewayId, agentId);
     if (!assigned) {
       res.status(403).json(FORBIDDEN);
       return;
@@ -3534,7 +3398,7 @@ function installGatewayOpsRoutes(
   });
 
   router.post("/blob/download-url", async (req, res) => {
-    const assigned = await requireAssignedSlug(db, req, res);
+    const assigned = await requireAssignedSlug(deps.store, req, res);
     if (!assigned) return;
     const relativePath = validBlobRelativePath(objectBody(req).path);
     if (!relativePath) {
@@ -3551,7 +3415,7 @@ function installGatewayOpsRoutes(
   });
 
   router.post("/blob/upload-url", async (req, res) => {
-    const assigned = await requireAssignedSlug(db, req, res);
+    const assigned = await requireAssignedSlug(deps.store, req, res);
     if (!assigned) return;
     const body = objectBody(req);
     const relativePath = validBlobRelativePath(body.path);
@@ -3578,7 +3442,7 @@ function installGatewayOpsRoutes(
   installBlobMaterializationRoute(router, deps);
 
   router.post("/builder-runtime-state/download-url", async (req, res) => {
-    const configured = await requireConfiguredBuilderRuntimeState(db, req, res);
+    const configured = await requireConfiguredBuilderRuntimeState(deps.store, req, res);
     if (!configured) return;
     await runBrokered(res, async () => {
       const signed = await createBlobSignedUrl({
@@ -3590,7 +3454,7 @@ function installGatewayOpsRoutes(
   });
 
   router.post("/builder-runtime-state/snapshot-urls", async (req, res) => {
-    const configured = await requireConfiguredBuilderRuntimeState(db, req, res);
+    const configured = await requireConfiguredBuilderRuntimeState(deps.store, req, res);
     if (!configured) return;
     const body = objectBody(req);
     const size = finiteNonNegative(body.size);
@@ -3622,10 +3486,10 @@ function installGatewayOpsRoutes(
   });
 
   router.post("/builder-runtime-state/prune", async (req, res) => {
-    const configured = await requireConfiguredBuilderRuntimeState(db, req, res);
+    const configured = await requireConfiguredBuilderRuntimeState(deps.store, req, res);
     if (!configured) return;
     await runBrokered(res, async () => {
-      const deleted = await pruneBuilderRuntimeStateForScope(db, pruneBuilderRuntimeState, configured, now());
+      const deleted = await pruneBuilderRuntimeStateForScope(deps.store, pruneBuilderRuntimeState, configured, now());
       if (deleted === null) {
         res.status(409).json({ error: "runtime_state_allocation_superseded" });
         return;
@@ -3652,14 +3516,13 @@ function homeCheckpointProtocolValid(coverage: unknown, writerProtocol: unknown)
   return (coverage === undefined || coverage === "builder-home-v2") && (writerProtocol === undefined || writerProtocol === 2);
 }
 
-function computerHomeBindingValid(glm: Record<string, unknown> | undefined, bound: GatewayBinding, gateway: ReturnType<typeof projectGatewayDesiredRootForGateway>, slug: string): boolean {
-  const vm = glm?.vm as { instanceId?: unknown } | null | undefined;
-  return resolveGatewayRuntime(glm?.runtime) === "gce-vm" && vm?.instanceId === bound.podUid
+function computerHomeBindingValid(glm: FleetRegistryRecord | undefined, bound: GatewayBinding, gateway: ReturnType<typeof projectGatewayDesiredRootForGateway>, slug: string): boolean {
+  return resolveGatewayRuntime(glm?.runtime) === "gce-vm" && glm?.vm?.instanceId === bound.podUid
     && computerHomeGatewayEligible(gateway, slug, bound.finalHomeCheckpoint === true);
 }
 
 async function requireComputerHomeScope(
-  db: Firestore,
+  store: PlatformStateRepositories,
   req: Request,
   res: Response,
 ): Promise<{ bound: GatewayBinding; slug: string; instanceId: string; ownerUid: string; restoreCheckpoint?: GatewayVmHomeCheckpoint } | null> {
@@ -3674,16 +3537,16 @@ async function requireComputerHomeScope(
     res.status(403).json(FORBIDDEN);
     return null;
   }
-  const [glm, gatewaySnap] = await Promise.all([
-    readComputerRuntimeObservation(db, bound.gatewayId),
-    db.doc(`${GATEWAYS_COLLECTION}/${bound.gatewayId}`).get(),
+  const [glm, root] = await Promise.all([
+    readComputerRuntimeObservation(store, bound.gatewayId),
+    store.gateways.roots.get(bound.gatewayId),
   ]);
-  const gateway = projectGatewayDesiredRootForGateway(gatewaySnap.exists ? gatewaySnap.data() : undefined, bound.gatewayId);
+  const gateway = projectGatewayDesiredRootForGateway(root, bound.gatewayId);
   if (!computerHomeBindingValid(glm, bound, gateway, slug)) {
     res.status(403).json(FORBIDDEN);
     return null;
   }
-  const restoreCheckpoint = validatedHomeRestore(glm?.vmHome as Partial<GatewayVmHomeState> | undefined, res);
+  const restoreCheckpoint = validatedHomeRestore(glm?.vmHome, res);
   if (restoreCheckpoint === null) return null;
   return { bound, slug, instanceId: bound.podUid, ownerUid: gateway!.ownerUid as string, ...(restoreCheckpoint ? { restoreCheckpoint } : {}) };
 }
@@ -3710,10 +3573,10 @@ function respondComputerHomeError(res: Response, error: unknown): boolean {
 }
 
 function installComputerHomeRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
-  const { db, createBlobSignedUrl, computerHomeStore, now } = deps;
+  const { store, createBlobSignedUrl, computerHomeStore, now } = deps;
 
   router.post("/computer-home/checkpoint-url", async (req, res) => {
-    const scope = await requireComputerHomeScope(db, req, res);
+    const scope = await requireComputerHomeScope(store, req, res);
     if (!scope) return;
     const size = finiteNonNegative(objectBody(req).size);
     if (size === null || size === 0 || size > COMPUTER_HOME_CHECKPOINT_MAX_BYTES) {
@@ -3734,7 +3597,7 @@ function installComputerHomeRoutes(router: Router, deps: ResolvedFleetBrokerRout
   });
 
   router.post("/computer-home/commit", async (req, res) => {
-    const scope = await requireComputerHomeScope(db, req, res);
+    const scope = await requireComputerHomeScope(store, req, res);
     if (!scope) return;
     const body = objectBody(req);
     const name = validComputerHomeCheckpointName(body.name);
@@ -3762,14 +3625,14 @@ function installComputerHomeRoutes(router: Router, deps: ResolvedFleetBrokerRout
         throw error;
       }
       const home: Pick<GatewayVmHomeState, "lastCheckpoint" | "checkpointAcknowledgedAt"> = { lastCheckpoint: checkpoint, checkpointAcknowledgedAt: requestedAt };
-      await recordComputerHomeCheckpoint(db, scope.bound.gatewayId, home, { uid: scope.ownerUid, instanceId: scope.instanceId });
+      await recordComputerHomeCheckpoint(store, scope.bound.gatewayId, home, { uid: scope.ownerUid, instanceId: scope.instanceId });
       const response: FleetBrokerComputerHomeCheckpointCommit = { name, size, sha256, completedAt: checkpoint.completedAt };
       res.json(response);
     });
   });
 
   router.post("/computer-home/download-url", async (req, res) => {
-    const scope = await requireComputerHomeScope(db, req, res);
+    const scope = await requireComputerHomeScope(store, req, res);
     if (!scope) return;
     await runBrokered(res, async () => {
       const current = await computerHomeStore.readCurrent(computerHomeCurrentPath(scope.slug));
@@ -3802,7 +3665,7 @@ function installComputerHomeRoutes(router: Router, deps: ResolvedFleetBrokerRout
   });
 
   router.post("/computer-home/prune", async (req, res) => {
-    const scope = await requireComputerHomeScope(db, req, res);
+    const scope = await requireComputerHomeScope(store, req, res);
     if (!scope) return;
     await runBrokered(res, async () => {
       const current = await computerHomeStore.readCurrent(computerHomeCurrentPath(scope.slug));
@@ -3848,16 +3711,16 @@ async function assignedChatOwnerTurnAllowed(input: {
   req: Request;
   gatewayId: string;
   uid: string;
-  data: Record<string, unknown> | null;
+  builder: BuilderRecord | null;
   agentId: string;
 }): Promise<boolean> {
-  if (!input.data || !agentBelongsToAssignedWorkspace(input.data, input.agentId)) return false;
+  if (!input.builder || !builderCarriesAgentId(input.builder, input.agentId)) return false;
   return verifyOwnerWorkspaceTurnFailClosed(input.deps.verifyOwnerWorkspaceTurn, {
     req: input.req,
     gatewayId: input.gatewayId,
     agentId: input.agentId,
     ownerUid: input.uid,
-    assignedData: input.data,
+    owner: input.builder,
   }, "agent-chat");
 }
 
@@ -3884,25 +3747,25 @@ async function requireAssignedChatIdentity(
     res.status(400).json({ error: "invalid_site_url" });
     return null;
   }
-  const uid = await findAssignedUidBySlug(deps.db, bound.gatewayId, slug);
+  const uid = await findAssignedUidBySlug(deps.store, bound.gatewayId, slug);
   if (!uid) {
     res.status(403).json(FORBIDDEN);
     return null;
   }
-  const data = await isAssignedToGateway(deps.db, bound.gatewayId, uid);
+  const builder = await assignedBuilder(deps.store, bound.gatewayId, uid);
   if (!await assignedChatOwnerTurnAllowed({
     deps,
     req,
     gatewayId: bound.gatewayId,
     uid,
-    data,
+    builder,
     agentId,
   })) {
     res.status(403).json(FORBIDDEN);
     return null;
   }
   try {
-    const resolved = await deps.resolveChatIdentity(deps.db, { uid, slug, agentId });
+    const resolved = await deps.resolveChatIdentity(deps, { uid, slug, agentId });
     return {
       slug,
       identity: {
@@ -4084,7 +3947,7 @@ function webSearchInput(
 }
 
 async function assignedWebAgent(
-  db: Firestore,
+  store: PlatformStateRepositories,
   req: Request,
   res: Response,
 ): Promise<WebAgentAttribution | null> {
@@ -4101,7 +3964,7 @@ async function assignedWebAgent(
     res.status(400).json({ error: "invalid_request_id" });
     return null;
   }
-  const assigned = await findAssignedUserByAgentId(db, bound.gatewayId, agentId);
+  const assigned = await findAssignedUserByAgentId(store, bound.gatewayId, agentId);
   if (!assigned) {
     res.status(403).json(FORBIDDEN);
     return null;
@@ -4123,7 +3986,7 @@ async function recordVmDiskReport(
   req: Request,
   res: Response,
   bound: GatewayBinding,
-  observation: Record<string, unknown> | undefined,
+  observation: FleetRegistryRecord | undefined,
 ): Promise<boolean> {
   const disk = (req.body as Partial<GatewayVmRuntimeRequest> | undefined)?.disk;
   if (disk === undefined) return true;
@@ -4131,10 +3994,9 @@ async function recordVmDiskReport(
     res.status(400).json({ error: "invalid_disk_sample" });
     return false;
   }
-  const vm = observation?.vm as { instanceId?: unknown } | null | undefined;
-  if (!bound.podUid || vm?.instanceId !== bound.podUid) return true;
+  if (!bound.podUid || observation?.vm?.instanceId !== bound.podUid) return true;
   try {
-    await recordComputerDiskObservation(deps.db, bound.gatewayId, observation?.vmDisk, { ...disk, instanceId: bound.podUid, observedAt: deps.now() });
+    await recordComputerDiskObservation(deps.store, bound.gatewayId, observation?.vmDisk, { ...disk, instanceId: bound.podUid, observedAt: deps.now() });
   } catch (error) {
     logger.error("[fleet-broker] computer disk observation failed", { gatewayId: bound.gatewayId, error });
   }
@@ -4146,7 +4008,7 @@ async function recordVmPreemptionNotice(
   req: Request,
   res: Response,
   bound: GatewayBinding,
-  observation: Record<string, unknown> | undefined,
+  observation: FleetRegistryRecord | undefined,
 ): Promise<boolean> {
   const preempted = (req.body as Partial<GatewayVmRuntimeRequest> | undefined)?.preempted;
   if (preempted === undefined) return true;
@@ -4154,11 +4016,10 @@ async function recordVmPreemptionNotice(
     res.status(400).json({ error: "invalid_preemption_notice" });
     return false;
   }
-  const vm = observation?.vm as { instanceId?: unknown } | null | undefined;
-  if (!bound.podUid || vm?.instanceId !== bound.podUid) return true;
+  if (!bound.podUid || observation?.vm?.instanceId !== bound.podUid) return true;
   logger.warn("[fleet-broker] computer announced its Spot preemption", { gatewayId: bound.gatewayId, instanceId: bound.podUid });
   try {
-    await recordComputerPreemptionNotice(deps.db, bound.gatewayId, { instanceId: bound.podUid, announcedAt: deps.now() });
+    await recordComputerPreemptionNotice(deps.store, bound.gatewayId, { instanceId: bound.podUid, announcedAt: deps.now() });
   } catch (error) {
     logger.error("[fleet-broker] computer preemption notice not recorded", { gatewayId: bound.gatewayId, error });
     res.status(503).json({ error: "preemption_notice_unrecorded" });
@@ -4182,7 +4043,7 @@ async function recordVmImageReport(
   if (!bound.podUid) return true;
   const containers = images.containers.map(({ name, imageReference, digests, running }) => ({ name, imageReference, digests, running }));
   try {
-    await recordComputerImageObservation(deps.db, bound.gatewayId, { containers, instanceId: bound.podUid, observedAt: deps.now() });
+    await recordComputerImageObservation(deps.store, bound.gatewayId, { containers, instanceId: bound.podUid, observedAt: deps.now() });
   } catch (error) {
     logger.error("[fleet-broker] computer image observation failed", { gatewayId: bound.gatewayId, error });
     res.status(503).json({ error: "image_observation_unrecorded" });
@@ -4198,7 +4059,7 @@ async function recordVmBootRecoveryReport(deps: ResolvedFleetBrokerRouteDeps, re
   if (!bound.podUid || sample.ready && sample.bundleVersion !== bundleVersion) return true;
   const { currentPointId, retainedPoints, ready, freeBytes } = sample;
   try {
-    await recordComputerBootRecovery(deps.db, bound.gatewayId, { currentPointId, retainedPoints, ready, freeBytes, bundleVersion: sample.bundleVersion, instanceId: bound.podUid, observedAt: deps.now() });
+    await recordComputerBootRecovery(deps.store, bound.gatewayId, { currentPointId, retainedPoints, ready, freeBytes, bundleVersion: sample.bundleVersion, instanceId: bound.podUid, observedAt: deps.now() });
   } catch (error) {
     logger.error("[fleet-broker] computer boot recovery observation failed", { gatewayId: bound.gatewayId, error });
     res.status(503).json({ error: "boot_recovery_unrecorded" }); return false;
@@ -4214,24 +4075,24 @@ function vmRuntimeCheckpointSignal(home: Partial<GatewayVmHomeState> | undefined
 }
 
 function installVmRuntimeRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
-  const { db } = deps;
+  const { store } = deps;
   router.post("/vm-runtime", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
-    const [snap, observation] = await Promise.all([
-      db.doc(gatewayVmRuntimeDocPath(bound.gatewayId)).get(),
-      readComputerRuntimeObservation(db, bound.gatewayId),
+    const [stored, observation] = await Promise.all([
+      store.gateways.vmRuntime.get(bound.gatewayId),
+      readComputerRuntimeObservation(store, bound.gatewayId),
     ]);
-    const bundle = snap.exists ? snap.data() : undefined;
-    if (!isGatewayVmRuntimeBundle(bundle) || bundle.gatewayId !== bound.gatewayId) {
+    if (!stored) {
       res.status(404).json({ error: "vm_runtime_not_rendered" });
       return;
     }
+    const { revision: _revision, ...bundle } = stored;
     if (!(await recordVmBootRecoveryReport(deps, req, res, bound, bundle.version))) return;
     if (!(await recordVmImageReport(deps, req, res, bound))) return;
     if (!(await recordVmPreemptionNotice(deps, req, res, bound, observation))) return;
     if (!(await recordVmDiskReport(deps, req, res, bound, observation))) return;
-    const home = observation?.vmHome as Partial<GatewayVmHomeState> | undefined;
+    const home = observation?.vmHome;
     const restoreCheckpoint = validatedHomeRestore(home, res);
     if (restoreCheckpoint === null) return;
     const response: GatewayVmRuntimeResponse = {
@@ -4244,7 +4105,7 @@ function installVmRuntimeRoutes(router: Router, deps: ResolvedFleetBrokerRouteDe
 }
 
 function installComputerEgressRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
-  const { db, now } = deps;
+  const { store, now } = deps;
   router.post("/computer-egress", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -4253,7 +4114,7 @@ function installComputerEgressRoutes(router: Router, deps: ResolvedFleetBrokerRo
       res.status(400).json({ error: "invalid_egress_mode" });
       return;
     }
-    const record = await readComputerEgress(db, bound.gatewayId);
+    const record = await readComputerEgress(store, bound.gatewayId);
     if (record.kind === "missing") {
       res.status(404).json({ error: "gateway_not_found" });
       return;
@@ -4261,7 +4122,7 @@ function installComputerEgressRoutes(router: Router, deps: ResolvedFleetBrokerRo
     let egress: GatewayVmEgressState | null = null;
     if (requested) {
       egress = { mode: requested, updatedAt: now() };
-      if (await recordComputerEgress(db, bound.gatewayId, egress) === "missing") {
+      if (await recordComputerEgress(store, bound.gatewayId, egress) === "missing") {
         res.status(404).json({ error: "gateway_not_found" });
         return;
       }
@@ -4278,7 +4139,7 @@ function installComputerEgressRoutes(router: Router, deps: ResolvedFleetBrokerRo
 }
 
 function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
-  const { db, renderAvatar, applyCoachIdentity } = deps;
+  const { renderAvatar, applyCoachIdentity } = deps;
 
   router.post("/agent/chat-search", async (req, res) => {
     const assigned = await requireAssignedChatIdentity(deps, req, res);
@@ -4322,7 +4183,7 @@ function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps):
   });
 
   router.post("/agent/web-search", async (req, res) => {
-    const assigned = await assignedWebAgent(db, req, res);
+    const assigned = await assignedWebAgent(deps.store, req, res);
     if (!assigned) return;
     const parsed = webSearchInput(objectBody(req), assigned);
     if ("error" in parsed) {
@@ -4337,7 +4198,7 @@ function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps):
   });
 
   router.post("/agent/web-extract", async (req, res) => {
-    const assigned = await assignedWebAgent(db, req, res);
+    const assigned = await assignedWebAgent(deps.store, req, res);
     if (!assigned) return;
     const body = objectBody(req);
     const urls = httpUrls(body.urls);
@@ -4369,14 +4230,14 @@ function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps):
   });
 
   router.post("/agent/set-coach-identity", async (req, res) => {
-    const assigned = await requireAssignedAgentWorkspace(db, req, res);
+    const assigned = await requireAssignedAgentWorkspace(deps, req, res);
     if (!assigned) return;
     if (!await verifyOwnerWorkspaceTurnFailClosed(deps.verifyOwnerWorkspaceTurn, {
       req,
       gatewayId: assigned.bound.gatewayId,
       agentId: assigned.agentId,
       ownerUid: assigned.uid,
-      assignedData: assigned.data,
+      owner: assigned.builder,
     }, "set-coach-identity")) {
       res.status(403).json(FORBIDDEN);
       return;
@@ -4444,9 +4305,9 @@ export function createFleetBrokerRoutes(opts: FleetBrokerRouteOptions): Router {
   installVmRuntimeRoutes(router, deps);
   installComputerEgressRoutes(router, deps);
   installAgentRoutes(router, deps);
-  installWorkspaceBlobBrokerRoute(router, { db: deps.db, store: opts.workspaceBlobStore, authorize: async (req, res, slug) => {
+  installWorkspaceBlobBrokerRoute(router, { store: deps.store, blobStore: opts.workspaceBlobStore, authorize: async (req, res, slug) => {
     req.body = { slug };
-    const assigned = await requireAssignedSlug(deps.db, req, res);
+    const assigned = await requireAssignedSlug(deps.store, req, res);
     return assigned ? { uid: assigned.uid, slug: assigned.slug, gatewayId: assigned.bound.gatewayId } : null;
   } });
   return router;

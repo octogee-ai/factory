@@ -119,7 +119,11 @@ export async function upsertRecord(
 }
 
 export function decodeFleetRegistryRecord(row: Row): Stored<FleetRegistryRecord> {
-  return decodeStored<FleetRegistryRecord>(FLEET_REGISTRY_TABLE, row);
+  const record = decodeStored<FleetRegistryRecord>(FLEET_REGISTRY_TABLE, row);
+  if (record.heartbeat === null || typeof record.heartbeat !== "object" || Array.isArray(record.heartbeat)) {
+    throw new MalformedRecordError({ aggregate: "fleet-registry", key: record.gatewayId }, "heartbeat is not a map");
+  }
+  return record;
 }
 
 function registryFences(fence: FleetRegistryFence | undefined): FenceCheck[] {

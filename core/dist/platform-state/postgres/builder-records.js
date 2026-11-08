@@ -162,6 +162,14 @@ class BuilderRow {
             throw new MalformedRecordError(this.record, `${columnName} is not a map`);
         return value;
     }
+    boolean(columnName) {
+        const value = this.json(columnName);
+        if (value === undefined)
+            return undefined;
+        if (typeof value !== "boolean")
+            throw new MalformedRecordError(this.record, `${columnName} is not a boolean`);
+        return value;
+    }
     maps(columnName) {
         const value = this.json(columnName);
         if (value === undefined)
@@ -246,7 +254,7 @@ function decodeHome(fields) {
         homeMigration: fields.map("home_migration"),
         homeErasure: fields.maps("home_erasure"),
         homeCapacity: fields.map("home_capacity"),
-        projectStorageNativeBoot: fields.map("project_storage_native_boot"),
+        projectStorageNativeBoot: fields.boolean("project_storage_native_boot"),
     });
 }
 export function decodeBuilderRow(row) {

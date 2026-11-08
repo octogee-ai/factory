@@ -23,9 +23,9 @@ const BYOSUB_ROUTES = [
   "/internal/byosub/device-auth/start",
 ];
 
-// A db-less operator-class controller: platformState=false + reportState=false
-// + no db → caps.provision resolves false, the capability the byosub auth mount
-// was previously gated behind. The mount must not depend on it.
+// A controller without the local reconcile resolves caps.provision false, the
+// capability the byosub auth mount was previously gated behind. The mount must
+// not depend on it.
 function operatorOpts(port: number): StartFleetOptions {
   return {
     rpc: {} as GatewayRpcClient,
@@ -37,8 +37,6 @@ function operatorOpts(port: number): StartFleetOptions {
     publicKey: "pk",
     version: "v",
     openclawVersion: "oc",
-    platformState: false,
-    reportState: false,
     internalServiceKey: KEY,
     openclawDir: "/tmp/octogee-byosub-mount-noexist",
   } as StartFleetOptions;

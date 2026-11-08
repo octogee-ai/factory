@@ -3,20 +3,17 @@ import * as adminCustomerRouterCore from "@octogee/core/admin-customer-router";
 import * as adminShapeCore from "@octogee/core/admin-shape";
 import * as agentModelTokenMaterializerCore from "@octogee/core/agent-model-token-materializer";
 import * as artifactRegistryCore from "@octogee/core/artifact-registry";
-import * as assignedRosterCore from "@octogee/core/assigned-roster";
 import * as builderActivationLeaseCore from "@octogee/core/builder-activation-lease";
 import * as byosubOnboardingCore from "@octogee/core/byosub-onboarding";
 import * as byosubRestoreCore from "@octogee/core/byosub-restore";
 import * as byotSyncRuntimeCore from "@octogee/core/byot-sync-runtime";
 import * as codexAuthHealthCore from "@octogee/core/codex-auth-health";
-import * as customerSnapshotMappingCore from "@octogee/core/customer-snapshot-mapping";
 import * as firebaseCore from "@octogee/core/firebase";
 import * as firebaseAuthHelpersCore from "@octogee/core/firebase-auth-helpers";
 import * as firebaseHostingCore from "@octogee/core/firebase-hosting";
 import * as fleetMigrationCore from "@octogee/core/fleet-migration";
 import * as fleetMigrationClientCore from "@octogee/core/fleet-migration-client";
 import * as fleetMigrationRunnerCore from "@octogee/core/fleet-migration-runner";
-import * as fleetStateCore from "@octogee/core/fleet-state";
 import * as gatewayDeviceIdentityCore from "@octogee/core/gateway-device-identity";
 import * as hostingCore from "@octogee/core/hosting";
 import * as imageTagCore from "@octogee/core/image-tag";
@@ -40,20 +37,17 @@ import * as adminCustomerRouterShim from "../lib/admin-customer-router.js";
 import * as adminShapeShim from "../lib/admin-shape.js";
 import * as agentModelTokenMaterializerShim from "../lib/agent-model-token-materializer.js";
 import * as artifactRegistryShim from "../lib/artifact-registry.js";
-import * as assignedRosterShim from "../lib/assigned-roster.js";
 import * as builderActivationLeaseShim from "../lib/builder-activation-lease.js";
 import * as byosubOnboardingShim from "../lib/byosub-onboarding.js";
 import * as byosubRestoreShim from "../lib/byosub-restore.js";
 import * as byotSyncRuntimeShim from "../lib/byot-sync-runtime.js";
 import * as codexAuthHealthShim from "../lib/codex-auth-health.js";
-import * as customerSnapshotMappingShim from "../lib/customer-snapshot-mapping.js";
 import * as firebaseShim from "../lib/firebase.js";
 import * as firebaseAuthHelpersShim from "../lib/firebase-auth-helpers.js";
 import * as firebaseHostingShim from "../lib/firebase-hosting.js";
 import * as fleetMigrationShim from "../lib/fleet-migration.js";
 import * as fleetMigrationClientShim from "../lib/fleet-migration-client.js";
 import * as fleetMigrationRunnerShim from "../lib/fleet-migration-runner.js";
-import * as fleetStateShim from "../lib/fleet-state.js";
 import * as gatewayDeviceIdentityShim from "../lib/gateway-device-identity.js";
 import * as hostingShim from "../lib/hosting.js";
 import * as imageTagShim from "../lib/image-tag.js";
@@ -79,20 +73,17 @@ const shims = [
   ["admin-shape", adminShapeShim, adminShapeCore],
   ["agent-model-token-materializer", agentModelTokenMaterializerShim, agentModelTokenMaterializerCore],
   ["artifact-registry", artifactRegistryShim, artifactRegistryCore],
-  ["assigned-roster", assignedRosterShim, assignedRosterCore],
   ["builder-activation-lease", builderActivationLeaseShim, builderActivationLeaseCore],
   ["byosub-onboarding", byosubOnboardingShim, byosubOnboardingCore],
   ["byosub-restore", byosubRestoreShim, byosubRestoreCore],
   ["byot-sync-runtime", byotSyncRuntimeShim, byotSyncRuntimeCore],
   ["codex-auth-health", codexAuthHealthShim, codexAuthHealthCore],
-  ["customer-snapshot-mapping", customerSnapshotMappingShim, customerSnapshotMappingCore],
   ["firebase", firebaseShim, firebaseCore],
   ["firebase-auth-helpers", firebaseAuthHelpersShim, firebaseAuthHelpersCore],
   ["firebase-hosting", firebaseHostingShim, firebaseHostingCore],
   ["fleet-migration", fleetMigrationShim, fleetMigrationCore],
   ["fleet-migration-client", fleetMigrationClientShim, fleetMigrationClientCore],
   ["fleet-migration-runner", fleetMigrationRunnerShim, fleetMigrationRunnerCore],
-  ["fleet-state", fleetStateShim, fleetStateCore],
   ["gateway-device-identity", gatewayDeviceIdentityShim, gatewayDeviceIdentityCore],
   ["hosting", hostingShim, hostingCore],
   ["image-tag", imageTagShim, imageTagCore],

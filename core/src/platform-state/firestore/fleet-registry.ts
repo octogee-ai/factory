@@ -29,8 +29,15 @@ export function decodeFleetRegistryRecord(snapshot: DocumentSnapshot): Stored<Fl
   if (!isGatewayRuntimeDoc(data) || data.gatewayId !== snapshot.id) {
     throw new MalformedRecordError(registryKey(snapshot.id), "is not this gateway's runtime record");
   }
+  if (!isHeartbeatMap(data.heartbeat)) {
+    throw new MalformedRecordError(registryKey(snapshot.id), "has no heartbeat map");
+  }
   const { docKind: _docKind, ...record } = data;
   return { ...record, revision: revisionOf(snapshot) } as Stored<FleetRegistryRecord>;
+}
+
+function isHeartbeatMap(value: unknown): boolean {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function applyRecordPatch<T extends object>(record: T, patch: object): T {

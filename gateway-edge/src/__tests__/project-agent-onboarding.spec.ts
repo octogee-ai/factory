@@ -3,18 +3,49 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-const h = vi.hoisted(() => ({ docs: new Map<string, any>(), mm: vi.fn(), seed: vi.fn(), avatar: vi.fn(), blob: vi.fn(), log: vi.fn() }));
+const h = vi.hoisted(() => ({
+  docs: new Map<string, any>(), versions: new Map<string, number>(), refused: new Set<string>(),
+  afterRead: new Map<string, () => void>(), afterWrite: new Map<string, () => void>(),
+  mm: vi.fn(), seed: vi.fn(), avatar: vi.fn(), blob: vi.fn(), log: vi.fn(),
+}));
+function rewrite(path: string, value: unknown) {
+  h.docs.set(path, structuredClone(value));
+  h.versions.set(path, (h.versions.get(path) ?? 0) + 1);
+}
 function ref(path: string) {
-  return { path, set: async (value: unknown) => { h.docs.set(path, structuredClone(value)); }, get: async () => ({ data: () => structuredClone(h.docs.get(path)) }), update: async (patch: Record<string, unknown>) => {
-    const data = h.docs.get(path);
+  const write = (value: unknown) => {
+    if (h.refused.has(path)) throw new Error('intent write refused');
+    rewrite(path, value);
+    h.afterWrite.get(path)?.();
+  };
+  return { path, set: async (value: unknown) => write(value), create: async (value: unknown) => {
+    if (h.docs.get(path) !== undefined) throw Object.assign(new Error('document already exists'), { code: 6 });
+    write(value);
+    return { writeTime: h.versions.get(path) };
+  }, get: async () => {
+    const data = structuredClone(h.docs.get(path));
+    const snapshot = { exists: data !== undefined, updateTime: h.versions.get(path) ?? 0, data: () => structuredClone(data) };
+    h.afterRead.get(path)?.();
+    return snapshot;
+  }, update: async (patch: Record<string, unknown>, precondition?: { lastUpdateTime?: number }) => {
+    if (precondition?.lastUpdateTime !== undefined && precondition.lastUpdateTime !== (h.versions.get(path) ?? 0)) {
+      throw Object.assign(new Error('document changed since the precondition read'), { code: 9 });
+    }
+    const data = structuredClone(h.docs.get(path));
     for (const [key, value] of Object.entries(patch)) {
       const parts = key.split('.'); let target = data;
       for (const part of parts.slice(0, -1)) target = target[part] ??= {};
       if (value === 'DELETE') delete target[parts.at(-1)!]; else target[parts.at(-1)!] = structuredClone(value);
     }
+    rewrite(path, data);
+    h.afterWrite.get(path)?.();
   } };
 }
 vi.mock('../lib/db.js', () => ({ db: { doc: ref, runTransaction: (fn: any) => fn({ get: (r: any) => r.get(), set: (r: any, p: any) => r.set(p), update: (r: any, p: any) => r.update(p) }) }, FieldValue: { delete: () => 'DELETE', serverTimestamp: () => 'NOW', increment: () => 1 } }));
+vi.mock('../lib/platform-state.js', async () => {
+  const { createDocumentFixtureStore } = await import('@octogee/core/testing/journal-store');
+  return { platformStateStore: createDocumentFixtureStore(h.docs) };
+});
 vi.mock('../lib/mattermost.js', () => ({ mmApi: h.mm, mmUploadAvatarBuffer: h.avatar }));
 vi.mock('../middleware/logging.js', () => ({ logger: { error: h.log } }));
 vi.mock('../lib/gitea.js', () => ({ giteaWriteFiles: h.seed }));
@@ -27,7 +58,7 @@ import { projectAgentSecretDocId } from '@octogee/core/mattermost/project-agent'
 const projectPath = 'workspaces/alice/projects/golf';
 const handoff = { name: 'Chip', emoji: '⛳', persona: 'A calm golf caddie, with Piper’s practical style.', message: 'Build Chris and Robert a shared golf dashboard. Chris prefers simple controls.' };
 beforeEach(() => {
-  vi.clearAllMocks(); h.docs.clear();
+  vi.clearAllMocks(); h.docs.clear(); h.versions.clear(); h.refused.clear(); h.afterRead.clear(); h.afterWrite.clear();
   h.docs.set(projectPath, { ownerUid: 'u', name: 'Fairway Partners', tagline: 'A shared golf dashboard', provisioningState: 'active', agent: { mode: 'scoped', enabled: true, status: 'ready', requestedName: '', identity: { name: 'golf', emoji: '🤖', persona: '' } } });
   h.docs.set(`${projectPath}/channels/general`, { mattermost: { channelId: 'general' } });
   h.docs.set('workspaces/alice/channels/coach-dm', { mattermost: { channelId: 'coach-dm' } });
@@ -35,7 +66,7 @@ beforeEach(() => {
   h.docs.set('agents/u', { mattermost: { userId: 'coach' }, name: 'Piper' });
   h.docs.set('users/u', { displayName: 'Private Builder Name' });
   h.docs.set('users/u/secrets/mattermost', { personalToken: 'builder-token' });
-  h.docs.set(`users/u/secrets/${projectAgentSecretDocId('golf')}`, { mmUserId: 'chip' });
+  h.docs.set(`users/u/secrets/${projectAgentSecretDocId('golf')}`, { personalToken: 'chip-token', mmUserId: 'chip' });
   h.mm.mockImplementation(async (path: string, method: string) => {
     if (path.includes('/posts?')) return { order: [], posts: {} };
     if (path === '/posts') return { id: 'post-1' };
@@ -101,6 +132,64 @@ it('keeps a failed delivery pending and records the error for retry', async () =
   expect(h.docs.get(projectPath).agent.deliveryLeaseUntil).toBeUndefined();
   await deliverProjectAgentOnboarding('u', 'alice', 'golf');
   expect(h.docs.get(projectPath).agent.handoff.status).toBe('sent');
+});
+const handoffIntent = `${projectPath}/agentState/handoffDelivery`;
+it('recovers the post of a delivery intent another worker created between the read and the create, without reposting', async () => {
+  await queueProjectHandoff('u', 'alice', 'golf', handoff);
+  const created = { startedAt: Date.now() - 5_000, postAttempted: true, recoveryBefore: 'cursor' };
+  h.afterRead.set(handoffIntent, () => { h.afterRead.delete(handoffIntent); rewrite(handoffIntent, created); });
+  h.mm.mockImplementation(async (path: string) => path.includes('/posts?')
+    ? { order: ['prior'], posts: { prior: { id: 'prior', create_at: Date.now(), props: { octogee_project_delivery: 'alice/golf/handoff' } } } }
+    : {});
+  await deliverProjectAgentOnboarding('u', 'alice', 'golf');
+  expect(h.docs.get(handoffIntent)).toEqual(created);
+  expect(h.mm.mock.calls.filter(c => c[0].includes('/posts?')).map(c => c[0])).toEqual(['/channels/general/posts?per_page=100&before=cursor']);
+  expect(h.mm.mock.calls.some(c => c[0] === '/posts')).toBe(false);
+  expect(h.docs.get(projectPath).agent.handoff).toEqual({ status: 'sent', postId: 'prior' });
+});
+it('stops before preparing the post when its lease was replaced right after it created the delivery intent', async () => {
+  await queueProjectHandoff('u', 'alice', 'golf', handoff);
+  h.afterWrite.set(handoffIntent, () => {
+    h.docs.get(projectPath).agent.deliveryLeaseId = 'replacement';
+    h.docs.get(projectPath).agent.deliveryLeaseUntil = Date.now() + 120_000;
+  });
+  await expect(deliverProjectAgentOnboarding('u', 'alice', 'golf')).rejects.toThrow('Project delivery lease was replaced');
+  expect(h.mm).not.toHaveBeenCalled();
+  expect(h.docs.get(projectPath).agent.deliveryLeaseId).toBe('replacement');
+  expect(h.docs.get(handoffIntent)).toEqual({ startedAt: expect.any(Number) });
+});
+it('refuses its post-attempt write when another worker rewrote the delivery intent after this worker opened it', async () => {
+  await queueProjectHandoff('u', 'alice', 'golf', handoff);
+  const newer = { startedAt: 7, postAttempted: true, recoveryBefore: 'cursor' };
+  h.mm.mockImplementationOnce(async () => { rewrite(handoffIntent, newer); });
+  await expect(deliverProjectAgentOnboarding('u', 'alice', 'golf')).rejects.toThrow('Project delivery lease was replaced');
+  expect(h.docs.get(handoffIntent)).toEqual(newer);
+  expect(h.mm.mock.calls.some(c => c[0] === '/posts')).toBe(false);
+});
+it('refuses its recovery-cursor write when another worker rewrote the delivery intent during the receipt scan', async () => {
+  h.docs.get(projectPath).agent.kickoff = { status: 'pending' };
+  const kickoffIntent = `${projectPath}/agentState/kickoffDelivery`;
+  h.docs.set(kickoffIntent, { startedAt: Date.now() - 5_000, postAttempted: true });
+  const newer = { startedAt: 7, postAttempted: true, recoveryBefore: 'newer-cursor' };
+  let pages = 0;
+  h.mm.mockImplementation(async (path: string) => {
+    if (!path.includes('/posts?')) return {};
+    pages += 1;
+    if (pages === 1) rewrite(kickoffIntent, newer);
+    const posts = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`p${pages}-${i}`, { id: `p${pages}-${i}`, create_at: Date.now() + 60_000 }]));
+    return { order: Object.keys(posts), posts };
+  });
+  await expect(deliverProjectAgentOnboarding('u', 'alice', 'golf')).rejects.toThrow('Project delivery lease was replaced');
+  expect(pages).toBe(3);
+  expect(h.docs.get(kickoffIntent)).toEqual(newer);
+});
+it('releases the delivery lease and records the error when its delivery intent cannot be opened', async () => {
+  await queueProjectHandoff('u', 'alice', 'golf', handoff);
+  h.refused.add(`${projectPath}/agentState/handoffDelivery`);
+  await expect(deliverProjectAgentOnboarding('u', 'alice', 'golf')).rejects.toThrow('intent write refused');
+  expect(h.docs.get(projectPath).agent).toMatchObject({ handoff: { status: 'pending' }, lastError: 'intent write refused' });
+  expect(h.docs.get(projectPath).agent.deliveryLeaseId).toBeUndefined();
+  expect(h.mm.mock.calls.some(c => c[0] === '/posts')).toBe(false);
 });
 it('starts UI-created projects with their own agent in project general', async () => {
   h.docs.get(projectPath).agent.kickoff = { status: 'pending' };

@@ -1,22 +1,14 @@
-import {
-  DEFAULT_PLATFORM_FREE_CONFIG,
-  PLATFORM_CONFIG_COLLECTION,
-  PLATFORM_FREE_CONFIG_DOC,
-  parsePlatformFreeConfig,
-  type PlatformFreeConfig,
-} from "@octogee/shared/types/platform-config";
-
-import { db } from "./db.js";
+import { MalformedRecordError } from "@octogee/core/platform-state";
+import { DEFAULT_PLATFORM_FREE_CONFIG, type PlatformFreeConfig } from "@octogee/shared/types/platform-config";
 import { logger } from "../middleware/logging.js";
+import { platformStateStore } from "./platform-state.js";
 
 export async function readPlatformFreeConfig(): Promise<PlatformFreeConfig> {
-  const snapshot = await db
-    .collection(PLATFORM_CONFIG_COLLECTION)
-    .doc(PLATFORM_FREE_CONFIG_DOC)
-    .get();
-  if (!snapshot.exists) return DEFAULT_PLATFORM_FREE_CONFIG;
-  const config = parsePlatformFreeConfig(snapshot.data());
-  if (config) return config;
-  logger.warn("platformConfig/free invalid; using compiled Free storage allowance");
-  return DEFAULT_PLATFORM_FREE_CONFIG;
+  try {
+    return (await platformStateStore.config.platform.get("free"))?.value ?? DEFAULT_PLATFORM_FREE_CONFIG;
+  } catch (error) {
+    if (!(error instanceof MalformedRecordError)) throw error;
+    logger.warn("platformConfig/free invalid; using compiled Free storage allowance");
+    return DEFAULT_PLATFORM_FREE_CONFIG;
+  }
 }

@@ -98,6 +98,30 @@ describe.skipIf(!dsn)("PostgreSQL workspace repositories", { timeout: 30_000 }, 
   }
 
   describe("records", () => {
+    it("looks up Mattermost teams and rejects ambiguous matches", async () => {
+      const records = harness.store.workspaces.records;
+      expect(await records.findByMattermostTeamId("team-acme")).toBeNull();
+      await records.put(workspace("acme", "u1"));
+      expect(await records.findByMattermostTeamId("team-acme")).toMatchObject({ slug: "acme", ownerUid: "u1" });
+      await records.put(workspace("other", "u2", { mattermostTeamId: "team-acme" }));
+      await expect(records.findByMattermostTeamId("team-acme")).rejects.toBeInstanceOf(DuplicateRecordError);
+    });
+
+    it("reads project membership inside a transaction and removes it with its project", async () => {
+      await harness.store.workspaces.records.put(workspace("acme", "u1"));
+      await harness.store.workspaces.projects.put(project("acme", "demo"));
+      const members = harness.store.workspaces.projectMembers;
+      expect(await members.get("acme", "demo", "u2")).toBeNull();
+      await harness.query("INSERT INTO $schema.workspace_project_members (workspace_slug, project_slug, uid, role) VALUES ('acme', 'demo', 'u2', 'member')");
+      const member = await harness.store.transaction({ label: "project-membership" }, tx => tx.workspaces.projectMembers.get("acme", "demo", "u2"));
+      expect(member).toMatchObject({ workspaceSlug: "acme", projectSlug: "demo", uid: "u2", role: "member" });
+      await harness.query("UPDATE $schema.workspace_project_members SET role = 'owner' WHERE uid = 'u2'");
+      expect((await members.get("acme", "demo", "u2"))!.revision).not.toBe(member!.revision);
+      await expect(harness.query("UPDATE $schema.workspace_project_members SET role = 'invalid' WHERE uid = 'u2'")).rejects.toThrow();
+      await harness.store.workspaces.projects.delete("acme", "demo");
+      expect(await members.get("acme", "demo", "u2")).toBeNull();
+    });
+
     it("round-trips every field with a revision and reads a missing workspace as null", async () => {
       await harness.store.workspaces.records.put(workspace("acme", "u1", { ownerActive: true, createdAt: NOW - 1_000 }));
 
@@ -241,6 +265,19 @@ describe.skipIf(!dsn)("PostgreSQL workspace repositories", { timeout: 30_000 }, 
       await harness.store.workspaces.records.put(workspace("beta", "u2"));
     });
 
+    it("round-trips canonical membership fields through all readers and preserves them on unrelated puts", async () => {
+      const canonical = { mattermostChannelId: "channel-general", canonicalSource: "mattermost", canonicalState: "active" };
+      const members = harness.store.workspaces.members;
+      await members.put(member("acme", "u1", canonical));
+      const initial = await members.get("acme", "u1");
+      expect(initial).toMatchObject(canonical);
+      await members.put(member("acme", "u1", { role: "owner" }));
+      expect(await members.get("acme", "u1")).toMatchObject({ ...canonical, role: "owner" });
+      expect((await members.get("acme", "u1"))!.revision).not.toBe(initial!.revision);
+      expect(await members.list("acme")).toEqual([expect.objectContaining(canonical)]);
+      expect(await members.listForUid("u1")).toEqual([expect.objectContaining(canonical)]);
+    });
+
     it("writes a member with a server joinedAt and reads it back", async () => {
       const before = Date.now();
       await harness.store.workspaces.members.put(member("acme", "u1", { role: "owner", joinedAt: { serverNow: true } }));
@@ -251,6 +288,9 @@ describe.skipIf(!dsn)("PostgreSQL workspace repositories", { timeout: 30_000 }, 
         role: "owner",
         joinedAt: expect.any(Number),
         mattermostUserId: null,
+        mattermostChannelId: null,
+        canonicalSource: null,
+        canonicalState: null,
         revision: expect.any(String),
       });
       expect((await harness.store.workspaces.members.get("acme", "u1"))!.joinedAt).toBeGreaterThanOrEqual(before - 5_000);

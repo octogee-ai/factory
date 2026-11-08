@@ -6,19 +6,19 @@ import {
   isConnectorAgentRuntimeTokenMaterializable,
   isConnectorTokenBrokerable,
 } from "../../../gateway-edge/src/lib/connectors/index.js";
-import { getFreshAccessTokenFromDb } from "../../../gateway-edge/src/lib/connector-tokens.js";
+import { getFreshAccessTokenFromStore } from "../../../gateway-edge/src/lib/connector-tokens.js";
 import { isSafeCanvasPath, resolveCanvasFile } from "../../../gateway-edge/src/lib/canvas-file.js";
 import { decryptSecret } from "../../../gateway-edge/src/lib/kms.js";
-import { parseAssignmentDoc } from "@octogee/core/assignment-doc";
+import type { OpaqueMap, PlatformStateRepositories, PlatformStateStore } from "@octogee/core/platform-state";
 import {
   podBelongsToGateway,
   readServingGatewayAuthorization,
-  type GatewayStateReader,
 } from "@octogee/core/gateway-live-release";
 import { gatewayVmPodName, resolveGatewayRuntime } from "@octogee/shared/types/glm";
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import { configuredBuilderPreparationAllowed } from "../lib/builder-preparation.js";
 import { readComputerRuntimeObservation } from "../lib/computer-runtime-observation.js";
+import { projectMemberExists } from "../lib/project-members.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -150,48 +150,42 @@ function safeDocId(value: string): boolean {
   return value.length > 0 && !value.includes("/");
 }
 
-function projectRepoSourceProvider(data: Record<string, unknown> | undefined): string | null {
-  const repoSource = data?.repoSource;
-  if (!repoSource || typeof repoSource !== "object") return null;
-  const provider = (repoSource as Record<string, unknown>).provider;
+function projectRepoSourceProvider(repoSource: OpaqueMap | null): string | null {
+  const provider = repoSource?.provider;
   return typeof provider === "string" ? provider : null;
 }
 
 async function projectAccessAuthorized(
-  db: Firestore,
-  uid: string,
-  connectorId: string,
-  access: ProjectAccessContext,
+  input: { db: Firestore; store: PlatformStateRepositories; uid: string; connectorId: string; access: ProjectAccessContext },
 ): Promise<boolean> {
-  const projectPath = `workspaces/${access.workspaceSlug}/projects/${access.projectSlug}`;
-  const projectSnap = await db.doc(projectPath).get();
-  if (!projectSnap.exists) return false;
-  const project = projectSnap.data() as Record<string, unknown> | undefined;
-  if (projectRepoSourceProvider(project) !== connectorId) return false;
+  const { db, store, uid, connectorId, access } = input;
+  const project = await store.workspaces.projects.get(access.workspaceSlug, access.projectSlug);
+  if (!project) return false;
+  if (projectRepoSourceProvider(project.repoSource) !== connectorId) return false;
   if (access.requestingUid !== uid) return false;
-  if (project?.ownerUid === uid) return true;
-
-  const memberSnap = await db.doc(`${projectPath}/members/${uid}`).get();
-  return memberSnap.exists;
+  if (project.ownerUid === uid) return true;
+  return projectMemberExists(db, access.workspaceSlug, access.projectSlug, uid);
 }
 
 async function publicCanvasAccessAuthorized(
-  db: Firestore,
-  uid: string,
-  runtimeOwnerUid: string,
-  connectorId: string,
-  access: PublicCanvasAccessContext,
+  input: {
+    db: Firestore;
+    store: PlatformStateRepositories;
+    uid: string;
+    runtimeOwnerUid: string;
+    connectorId: string;
+    access: PublicCanvasAccessContext;
+  },
 ): Promise<boolean> {
+  const { db, store, uid, runtimeOwnerUid, connectorId, access } = input;
   if (uid !== runtimeOwnerUid) return false;
-  const projectSnap = await db
-    .doc(`workspaces/${access.workspaceSlug}/projects/${access.projectSlug}`)
-    .get();
-  if (!projectSnap.exists) return false;
-  const project = projectSnap.data() as Record<string, unknown> | undefined;
-  if (project?.ownerUid !== uid) return false;
-  if (projectRepoSourceProvider(project) !== connectorId) return false;
-  if (project?.visibility !== "public" && project?.visibility !== "unlisted") return false;
-  return access.canvasPath === resolveCanvasFile(project?.canvasFile);
+  const project = await store.workspaces.projects.get(access.workspaceSlug, access.projectSlug);
+  if (!project) return false;
+  if (project.ownerUid !== uid) return false;
+  if (projectRepoSourceProvider(project.repoSource) !== connectorId) return false;
+  if (project.visibility !== "public" && project.visibility !== "unlisted") return false;
+  const presentation = await db.doc(`workspaces/${access.workspaceSlug}/projects/${access.projectSlug}`).get();
+  return access.canvasPath === resolveCanvasFile(presentation.data()?.canvasFile);
 }
 
 function refused(bound: GatewayBinding, reason: string): null {
@@ -240,17 +234,16 @@ function clusterOwnerIdentity(
 }
 
 async function verifiedGatewayAuthorization(
-  db: Firestore,
-  store: GatewayStateReader,
+  store: PlatformStateRepositories,
   bound: GatewayBinding,
 ): Promise<{ builderSlug: string; gatewayClass: string } | null> {
   const authorization = await readServingGatewayAuthorization(store, bound.gatewayId);
   if (!authorization) return refused(bound, "gateway is not serving");
   if (authorization.config.ownerUid !== bound.ownerUid) return refused(bound, "bound owner differs from gateway owner");
-  const runtime = await readComputerRuntimeObservation(db, bound.gatewayId);
+  const runtime = await readComputerRuntimeObservation(store, bound.gatewayId);
   const vmRuntime = resolveGatewayRuntime(runtime?.runtime) === "gce-vm";
   const ownerIdentity = vmRuntime
-    ? vmOwnerIdentity(runtime, bound)
+    ? vmOwnerIdentity(runtime && { ...runtime }, bound)
     : clusterOwnerIdentity(authorization.config, bound);
   if (!ownerIdentity) return refused(bound, vmRuntime ? "caller is not the gateway's VM instance" : "caller is not an owned pod of the gateway");
   if (
@@ -268,7 +261,7 @@ async function verifiedGatewayAuthorization(
 async function accessAuthorized(
   input: {
     db: Firestore;
-    store: GatewayStateReader;
+    store: PlatformStateRepositories;
     bound: GatewayBinding;
     uid: string;
     connectorId: string;
@@ -277,10 +270,10 @@ async function accessAuthorized(
 ): Promise<boolean> {
   const { db, store, bound, uid, connectorId, access } = input;
   if (!safeDocId(uid) || !bound.ownerUid || !bound.podName || !bound.podUid) return false;
-  const authorization = await verifiedGatewayAuthorization(db, store, bound);
+  const authorization = await verifiedGatewayAuthorization(store, bound);
   if (!authorization) return false;
   if (access?.kind === OWNER_RUNTIME_ACCESS_KIND) return ownerRuntimeAccessAuthorized({
-    db,
+    store,
     access,
     uid,
     ownerUid: bound.ownerUid,
@@ -288,18 +281,18 @@ async function accessAuthorized(
     gatewayClass: authorization.gatewayClass,
   });
   if (access?.kind === PUBLIC_CANVAS_ACCESS_KIND) {
-    return publicCanvasAccessAuthorized(db, uid, bound.ownerUid, connectorId, access);
+    return publicCanvasAccessAuthorized({ db, store, uid, runtimeOwnerUid: bound.ownerUid, connectorId, access });
   }
   if (access?.kind === "project") {
     if (uid !== bound.ownerUid || access.requestingUid !== bound.ownerUid) return false;
-    return projectAccessAuthorized(db, uid, connectorId, access);
+    return projectAccessAuthorized({ db, store, uid, connectorId, access });
   }
   if (uid === bound.ownerUid) return true;
   return false;
 }
 
 async function ownerRuntimeAccessAuthorized(input: {
-  db: Firestore;
+  store: PlatformStateRepositories;
   access: OwnerRuntimeAccessContext;
   uid: string;
   ownerUid: string;
@@ -313,34 +306,28 @@ async function ownerRuntimeAccessAuthorized(input: {
   ) {
     return false;
   }
-  const workspace = await input.db.doc(`workspaces/${input.access.builderSlug}`).get();
-  const workspaceOwnerUid = workspace.exists
-    ? (workspace.data() as Record<string, unknown> | undefined)?.ownerUid
-    : undefined;
-  return workspaceOwnerUid === input.ownerUid;
+  const workspace = await input.store.workspaces.records.get(input.access.builderSlug);
+  return workspace?.ownerUid === input.ownerUid;
 }
 
 type ProjectCloneAuthorizationInput = {
-  db: Firestore;
-  store: GatewayStateReader;
+  store: PlatformStateRepositories;
   bound: GatewayBinding;
   uid: string;
   access: ProjectCloneAccessContext;
 };
 
 async function projectCloneGatewayMode(input: ProjectCloneAuthorizationInput): Promise<"preparing" | "serving" | null> {
-  const { db, store, bound, uid, access } = input;
+  const { store, bound, uid, access } = input;
   if (!safeDocId(uid) || !bound.ownerUid || uid !== bound.ownerUid) return refused(bound, "clone request is not from the owner runtime");
-  if (await configuredBuilderPreparationAllowed(db, bound, access.builderSlug, uid)) return "preparing";
-  const [user, assignmentSnapshot] = await Promise.all([
-    db.doc(`users/${uid}`).get(),
-    db.doc(`gateways/${bound.gatewayId}/assignments/${uid}`).get(),
+  if (await configuredBuilderPreparationAllowed(store, bound, access.builderSlug, uid)) return "preparing";
+  const [builder, assignment] = await Promise.all([
+    store.builders.records.get(uid),
+    store.gateways.assignments.get(bound.gatewayId, uid),
   ]);
-  const assignedGateway = recordOf(recordOf(user.data()?.provisioning).openclaw).gatewayId;
-  const assignment = parseAssignmentDoc(uid, assignmentSnapshot.data());
-  if (assignedGateway !== bound.gatewayId || assignment?.gatewayId !== bound.gatewayId ||
+  if (builder?.gateway?.gatewayId !== bound.gatewayId || assignment?.gatewayId !== bound.gatewayId ||
     assignment.slug !== access.builderSlug || assignment.state !== "serving") return refused(bound, "clone gateway does not own the serving assignment");
-  const authorization = await verifiedGatewayAuthorization(db, store, bound);
+  const authorization = await verifiedGatewayAuthorization(store, bound);
   if (!authorization) return null;
   if (authorization.gatewayClass !== "builder" || authorization.builderSlug !== access.builderSlug) {
     return refused(bound, `clone requested for ${access.builderSlug} on a ${authorization.gatewayClass} gateway of ${authorization.builderSlug}`);
@@ -349,15 +336,13 @@ async function projectCloneGatewayMode(input: ProjectCloneAuthorizationInput): P
 }
 
 async function projectCloneSourceAuthorized(input: ProjectCloneAuthorizationInput): Promise<{ owner: string; repo: string } | null> {
-  const { db, bound, access } = input;
+  const { store, bound, access } = input;
   if (!await projectCloneGatewayMode(input)) return null;
-  const project = await db.doc(`workspaces/${access.builderSlug}/projects/${access.projectSlug}`).get();
-  const data = project.data() as Record<string, unknown> | undefined;
-  const source = data?.repoSource;
-  if (!project.exists || data?.ownerUid !== bound.ownerUid || !source || typeof source !== "object") {
+  const project = await store.workspaces.projects.get(access.builderSlug, access.projectSlug);
+  if (!project || project.ownerUid !== bound.ownerUid || !project.repoSource) {
     return refused(bound, `project ${access.builderSlug}/${access.projectSlug} is missing, foreign, or has no repo source`);
   }
-  const { provider, owner, repo } = source as Record<string, unknown>;
+  const { provider, owner, repo } = project.repoSource;
   if (provider !== "github" || typeof owner !== "string" || typeof repo !== "string") {
     return refused(bound, `project ${access.builderSlug}/${access.projectSlug} is not GitHub-backed`);
   }
@@ -376,40 +361,37 @@ function connectorAllowedForAccess(
 }
 
 async function readEncryptedAccessToken(
-  db: Firestore,
+  store: PlatformStateRepositories,
   uid: string,
   connectorId: string,
 ): Promise<string | null> {
-  const snap = await db.doc(`users/${uid}/secrets/${connectorId}`).get();
-  const enc = (snap.data() as { tokens?: { encryptedAccessToken?: unknown } } | undefined)
-    ?.tokens?.encryptedAccessToken;
-  return typeof enc === "string" && enc.length > 0 ? enc : null;
+  const secret = await store.secrets.get(uid, connectorId);
+  const enc = secret?.kind === "connector" ? secret.encryptedAccessToken : null;
+  return enc ? enc : null;
 }
 
 async function readOwnerRuntimeAccessToken(
-  db: Firestore,
+  store: PlatformStateStore,
   uid: string,
   connectorId: string,
 ): Promise<OwnerRuntimeTokenRead> {
   const def = getConnector(connectorId);
   if (!def) return { status: "disconnected", reason: "not_connected" };
-  const fresh = await getFreshAccessTokenFromDb(db, uid, def);
+  const fresh = await getFreshAccessTokenFromStore(store, uid, def);
   if (!fresh.ok) return { status: "disconnected", reason: fresh.reason };
   return { status: "connected", accessToken: fresh.accessToken };
 }
 
 async function respondProjectCloneAccess(input: {
-  db: Firestore;
-  store: GatewayStateReader;
+  store: PlatformStateStore;
   bound: GatewayBinding;
   uid: string;
   access: ProjectCloneAccessContext;
   connectorId: string;
   res: Response;
 }): Promise<void> {
-  const { db, store, bound, uid, access, connectorId, res } = input;
+  const { store, bound, uid, access, connectorId, res } = input;
   const repository = await projectCloneSourceAuthorized({
-    db,
     store,
     bound,
     uid,
@@ -419,12 +401,12 @@ async function respondProjectCloneAccess(input: {
     res.status(403).json(FORBIDDEN);
     return;
   }
-  const token = await readOwnerRuntimeAccessToken(db, uid, connectorId);
+  const token = await readOwnerRuntimeAccessToken(store, uid, connectorId);
   if (token.status === "disconnected") {
     res.status(token.reason === "reauth_required" ? 409 : 404).json({ error: token.reason });
     return;
   }
-  const currentRepository = await projectCloneSourceAuthorized({ db, store, bound, uid, access });
+  const currentRepository = await projectCloneSourceAuthorized({ store, bound, uid, access });
   if (!currentRepository || currentRepository.owner !== repository.owner || currentRepository.repo !== repository.repo) {
     res.status(403).json(FORBIDDEN);
     return;
@@ -435,7 +417,7 @@ async function respondProjectCloneAccess(input: {
 
 async function respondAuthorizedAccess(input: {
   db: Firestore;
-  store: GatewayStateReader;
+  store: PlatformStateStore;
   bound: GatewayBinding;
   uid: string;
   connectorId: string;
@@ -455,7 +437,7 @@ async function respondAuthorizedAccess(input: {
     return;
   }
   if (access?.kind === OWNER_RUNTIME_ACCESS_KIND) {
-    const token = await readOwnerRuntimeAccessToken(db, uid, connectorId);
+    const token = await readOwnerRuntimeAccessToken(store, uid, connectorId);
     if (token.status === "disconnected") {
       res.status(token.reason === "reauth_required" ? 409 : 404).json({ error: token.reason });
       return;
@@ -463,7 +445,7 @@ async function respondAuthorizedAccess(input: {
     res.json({ accessToken: token.accessToken });
     return;
   }
-  const enc = await readEncryptedAccessToken(db, uid, connectorId);
+  const enc = await readEncryptedAccessToken(store, uid, connectorId);
   if (!enc) {
     res.status(404).json({ error: "not_found" });
     return;
@@ -473,7 +455,7 @@ async function respondAuthorizedAccess(input: {
 
 export function createConnectorTokenBrokerRoutes(opts: {
   db: Firestore;
-  store: GatewayStateReader;
+  store: PlatformStateStore;
 }): Router {
   const router = Router();
   const { db, store } = opts;
@@ -512,7 +494,6 @@ export function createConnectorTokenBrokerRoutes(opts: {
 
     if (access?.kind === PROJECT_CLONE_ACCESS_KIND) {
       await respondProjectCloneAccess({
-        db,
         store,
         bound,
         uid,

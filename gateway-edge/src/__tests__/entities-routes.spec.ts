@@ -112,6 +112,11 @@ vi.mock("../lib/db.js", () => ({
   },
 }));
 
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(h.docs) };
+});
+
 vi.mock("../lib/mattermost.js", () => ({
   mmApi: h.mmApi,
 }));
@@ -216,6 +221,24 @@ describe("entities routes", () => {
     ]);
   });
 
+  it("fails the members list when two Builders claim the same Mattermost user", async () => {
+    h.resolveWorkspaceUid.mockResolvedValue("owner-1");
+    h.getWorkspaceMmContext.mockResolvedValue({ generalChannelId: "general-ch" });
+    h.docs.set("users/owner-1", { mattermost: { userId: "mm-owner" } });
+    h.docs.set("users/member-1", { mattermost: { userId: "mm-member" } });
+    h.docs.set("users/member-2", { mattermost: { userId: "mm-member" } });
+    h.mmApi.mockImplementation(async (path: string) => {
+      if (path === "/channels/general-ch/members") return [{ user_id: "mm-member", channel_id: "general-ch", roles: "" }];
+      if (path === "/users/ids") return [{ id: "mm-member", username: "member-mm", first_name: "", last_name: "" }];
+      throw new Error(`unexpected mmApi path: ${path}`);
+    });
+
+    const res = await request(app()).get("/api/entities/workspace/acme/members");
+
+    expect(res.status).toBe(500);
+    expect(h.logger.error).toHaveBeenCalled();
+  });
+
   it("excludes deactivated MM users — a retired project-agent bot must not linger in Members", async () => {
     // MM's DELETE /users/{id} only deactivates; deactivated users stay channel
     // members. The Vegas toggle-off retires the project bot this way, so the
@@ -283,8 +306,8 @@ describe("entities routes", () => {
 
   it("removes a project member from Mattermost and the project member document", async () => {
     h.uid = "owner-1";
-    h.readProject.mockResolvedValue({ ownerUid: "owner-1" });
-    h.readChannel.mockResolvedValue({ mattermost: { channelId: "project-ch" } });
+    h.docs.set("workspaces/acme/projects/project", { ownerUid: "owner-1" });
+    h.docs.set("workspaces/acme/projects/project/channels/general", { mattermost: { channelId: "project-ch" } });
     h.docs.set("users/owner-1", { mattermost: { userId: "mm-owner" } });
     h.docs.set("users/member-1", { mattermost: { userId: "mmmember" } });
     h.docs.set("workspaces/acme/projects/project/members/member-1", { role: "member" });
@@ -319,6 +342,8 @@ describe("entities routes", () => {
     h.docs.set("users/owner-1", { mattermost: { userId: "mm-owner" } });
     h.docs.set("users/member-1", { mattermost: { userId: "mmmember" } });
     h.docs.set("workspaces/acme/members/member-1", {
+      id: "member-1",
+      role: "member",
       canonicalSource: "mattermost-general",
       canonicalState: "active",
     });
@@ -327,12 +352,11 @@ describe("entities routes", () => {
     const res = await request(app()).delete("/api/entities/workspace/acme/members/mmmember");
 
     expect(res.status).toBe(500);
-    expect(h.docs.get("workspaces/acme/members/member-1")).toMatchObject({
+    expect(h.docs.get("workspaces/acme/members/member-1")).toEqual({
+      id: "member-1",
+      role: "member",
+      canonicalSource: "mattermost-general",
       canonicalState: "revoking",
-    });
-    expect(h.writes).not.toContainEqual({
-      method: "delete",
-      path: "workspaces/acme/members/member-1",
     });
   });
 
@@ -341,7 +365,7 @@ describe("entities routes", () => {
   h.getWorkspaceMmContext.mockResolvedValue({ generalChannelId: "general" });
   h.docs.set("users/caller-1", { mattermost: { userId: "mmowner" } });
   h.docs.set("users/member", { mattermost: { userId: "mmmember" } });
-  h.docs.set("workspaces/acme/members/member", { canonicalState: "active" });
+  h.docs.set("workspaces/acme/members/member", { role: "member", canonicalState: "active" });
   h.docs.set("workspaces/acme/channels/planning", { kind: "session" });
   h.docs.set("workspaces/acme/channels/coach-dm", { kind: "coach-dm" });
   const res = await request(app()).delete("/api/entities/workspace/acme/members/mmmember");

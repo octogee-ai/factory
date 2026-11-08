@@ -11,25 +11,19 @@ vi.mock("../lib/internal-fetch", () => ({
     internalFetchSpy(url, init, opts),
 }));
 
-let platformModelDoc: Record<string, unknown> | undefined;
-let platformModelDocError: Error | null = null;
-let gatewayRuntimeDoc: Record<string, unknown> | undefined;
+const { docs } = vi.hoisted(() => ({ docs: {} as Record<string, Record<string, unknown> | undefined> }));
 
-vi.mock("../lib/db", () => ({
-  db: {
-    collection: (name: string) => ({
-      doc: () => ({
-        get: async () => {
-          if (name === "glmGateways") return { data: () => gatewayRuntimeDoc };
-          if (platformModelDocError) throw platformModelDocError;
-          return { data: () => platformModelDoc };
-        },
-      }),
-    }),
-  },
-}));
+vi.mock("../lib/platform-state", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(docs) };
+});
 
+const { platformStateStore } = await import("../lib/platform-state.js");
 const modelCredentialSyncTrigger = await import("../lib/byot-sync-trigger.js");
+
+function vmRuntime(gatewayId: string, vm: Record<string, unknown>): Record<string, unknown> {
+  return { docKind: "runtime", gatewayId, release: 1, lifecycle: "serving", runtime: "gce-vm", vm };
+}
 const {
   gatewayModelCredentialSyncUrl,
   postGatewayModelCredentialSync,
@@ -61,9 +55,8 @@ function expectedSignature(body: unknown, timestamp: string, secret: string): st
 describe("model credential sync trigger", () => {
   beforeEach(() => {
     internalFetchSpy.mockReset();
-    platformModelDoc = undefined;
-    platformModelDocError = null;
-    gatewayRuntimeDoc = undefined;
+    for (const path of Object.keys(docs)) delete docs[path];
+    vi.restoreAllMocks();
     delete process.env.K8S_NAMESPACE;
     delete process.env.GATEWAY_EDGE_INTERNAL_URL_TEMPLATE;
     delete process.env.INTERNAL_SERVICE_KEY;
@@ -85,7 +78,7 @@ describe("model credential sync trigger", () => {
   });
 
   it("sends model selections to the running Builder VM instead of a nonexistent Kubernetes service", async () => {
-    gatewayRuntimeDoc = { runtime: "gce-vm", vm: { status: "RUNNING", internalIp: "10.128.0.49" } };
+    docs["glmGateways/builder-1"] = vmRuntime("builder-1", { status: "RUNNING", internalIp: "10.128.0.49" });
     internalFetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
     await postGatewayModelCredentialSync({
       gatewayId: "builder-1", userData,
@@ -101,7 +94,7 @@ describe("model credential sync trigger", () => {
     { status: "RUNNING" },
     { status: "RUNNING", internalIp: "invalid/address" },
   ])("rejects an unavailable or malformed VM address instead of falling back to cluster DNS: %j", async (vm) => {
-    gatewayRuntimeDoc = { runtime: "gce-vm", vm };
+    docs["glmGateways/builder-1"] = vmRuntime("builder-1", vm);
     await expect(postGatewayModelCredentialSync({
       gatewayId: "builder-1", userData,
       env: { BYOT_SYNC_INTERNAL_SIGNING_SECRET: signingKey },
@@ -151,7 +144,7 @@ describe("model credential sync trigger", () => {
   });
 
   it("carries the operator's dialed free-tier model on every push payload", async () => {
-    platformModelDoc = { freeTierModelRef: "anthropic/claude-haiku-4-5" };
+    docs["platformConfig/models"] = { freeTierModelRef: "anthropic/claude-haiku-4-5" };
     internalFetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
     await postGatewayModelCredentialSync({
       gatewayId: "bender",
@@ -163,7 +156,7 @@ describe("model credential sync trigger", () => {
   });
 
   it("carries the operator's dialed Builder Agent default on every push payload", async () => {
-    platformModelDoc = {
+    docs["platformConfig/models"] = {
       freeTierModelRef: "anthropic/claude-haiku-4-5",
       builderAgentModelRef: "anthropic/claude-sonnet-4-6",
       builderAgentFallbackModelRef: null,
@@ -182,7 +175,7 @@ describe("model credential sync trigger", () => {
   });
 
   it("keeps the free-tier dial when the independent Ops dial is invalid", async () => {
-    platformModelDoc = {
+    docs["platformConfig/models"] = {
       freeTierModelRef: "anthropic/claude-haiku-4-5",
       opsAgentModelRef: "anthropic/claude-haiku-4-5",
     };
@@ -198,7 +191,7 @@ describe("model credential sync trigger", () => {
   });
 
   it("serves the compiled default when the dial read fails (loud, never blocking the sync)", async () => {
-    platformModelDocError = new Error("firestore down");
+    vi.spyOn(platformStateStore.config.platform, "get").mockRejectedValue(new Error("firestore down"));
     internalFetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
     const warns: string[] = [];
     await postGatewayModelCredentialSync({

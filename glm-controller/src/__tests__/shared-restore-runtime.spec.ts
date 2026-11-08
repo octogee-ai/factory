@@ -135,8 +135,7 @@ describe('journaled Shared restore runtime recovery', () => {
     const handler = vi.fn(async () => ({ success: true, steps: [] }));
     const log = vi.fn();
     const run = () => processOperation({ ...h.store['glmOperations/queued'], id: 'queued' },
-      (h.db as any).doc('glmOperations/queued'),
-      { db: h.db, handlers: { 'migrate-customer': handler }, log } as never);
+      { store: h.deps.store, handlers: { 'migrate-customer': handler }, log } as never);
     return { run, handler, log };
   }
 

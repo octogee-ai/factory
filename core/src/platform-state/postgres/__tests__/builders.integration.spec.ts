@@ -28,7 +28,7 @@ describe.skipIf(!dsn)("PostgreSQL Builder records: round trip", () => {
       homeMigration: { state: "copying" },
       homeErasure: [{ diskId: "old-1", requestedAt: NOW }],
       homeCapacity: { desiredGiB: 20, allocatedGiB: 30, status: "shrink-pending" },
-      projectStorageNativeBoot: { status: "ready", at: NOW },
+      projectStorageNativeBoot: true,
     };
 
     await records.create({ uid: "alice", createdAt: NOW });
@@ -179,7 +179,7 @@ describe.skipIf(!dsn)("PostgreSQL Builder records: patches", () => {
       accountLifecycle: { status: "suspended", suspendedAt: NOW },
       provisioning: { status: "complete", gitRepoUrl: "https://git.example/alice/workspace", gitCreatedAt: NOW },
       openclaw: { status: "provisioning", customerDir: "/c/alice", toolchain: { status: "installing" } },
-      home: { homeStorage: { runtime: "gce-vm", retained: [{ id: "1" }] }, projectStorageNativeBoot: { status: "pending" } },
+      home: { homeStorage: { runtime: "gce-vm", retained: [{ id: "1" }] }, projectStorageNativeBoot: false },
     });
 
     await records.patch("alice", {

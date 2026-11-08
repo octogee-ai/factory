@@ -74,19 +74,6 @@ vi.mock("../middleware/auth.js", () => ({
     req.isAdmin = h.auth.isAdmin;
     next();
   },
-  requireAdmin: (
-    req: { uid?: string; isAdmin?: boolean },
-    res: { status: (code: number) => { json: (body: unknown) => void } },
-    next: () => void,
-  ) => {
-    req.uid = h.auth.uid;
-    req.isAdmin = h.auth.isAdmin;
-    if (!h.auth.isAdmin) {
-      res.status(403).json({ error: "Admin access required" });
-      return;
-    }
-    next();
-  },
 }));
 
 vi.mock("../lib/db.js", () => ({
@@ -99,6 +86,11 @@ vi.mock("../lib/db.js", () => ({
     serverTimestamp: h.serverTimestamp,
   },
 }));
+
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(h.docs) };
+});
 
 vi.mock("../lib/firestoreReads.js", () => ({
   readAgent: h.readAgent,
@@ -203,48 +195,18 @@ describe("agent routes", () => {
     });
   });
 
-  it("queues a cleanup job for all workspace agents from a slug prefix", async () => {
-    h.auth.isAdmin = true;
-    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+  it("reports a specialist the Builder record already activated without queueing it", async () => {
+    h.docs.set("users/owner-1", {
+      subscription: { tier: "pro" },
+      provisioning: { openclaw: { activatedAgents: ["alex"] } },
+    });
 
     const res = await request(app())
-      .post("/api/agents/deprovision")
-      .send({ slugPrefix: "octogee-acme", deleteWorkspace: true });
+      .post("/api/agents/activate")
+      .send({ role: "alex" });
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      status: "queued",
-      jobId: "acme-1700000000000",
-      slug: "acme",
-      targetAgentIds: [
-        "octogee-acme-coach",
-        "octogee-acme-alex",
-        "octogee-acme-morgan",
-        "octogee-acme-riley",
-        "octogee-acme-robert",
-      ],
-    });
-    expect(h.writes).toContainEqual({
-      method: "set",
-      path: "cleanupJobs/acme-1700000000000",
-      data: {
-        jobId: "acme-1700000000000",
-        slug: "acme",
-        slugPrefix: "octogee-acme",
-        targetAgentIds: [
-          "octogee-acme-coach",
-          "octogee-acme-alex",
-          "octogee-acme-morgan",
-          "octogee-acme-riley",
-          "octogee-acme-robert",
-        ],
-        deleteWorkspace: true,
-        status: "pending",
-        requestedAt: { __serverTimestamp: true },
-        requestedBy: "admin",
-        completedAt: null,
-        error: null,
-      },
-    });
+    expect(res.body).toEqual({ status: "already_active", role: "alex" });
+    expect(h.writes).toEqual([]);
   });
 });

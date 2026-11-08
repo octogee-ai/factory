@@ -1,9 +1,9 @@
-import type { Firestore } from "firebase-admin/firestore";
-
+import type { BuilderAccountReader } from "@octogee/core/builder-account";
 import type { OwnedSignupOfferBudget } from "@octogee/shared/types/billing";
 import {
-  readGatewayAuthorization,
+  readGatewayAuthorizationInStore,
   type GatewayAuthorization,
+  type GatewayRootReader,
 } from "@octogee/core/gateway-live-release";
 import {
   normalizeModelBrokerTokenLimits,
@@ -20,7 +20,10 @@ export interface OwnerModelBrokerGrant {
   signupOfferBudget?: OwnedSignupOfferBudget | null;
 }
 
-type ModelBrokerFirestore = Pick<Firestore, "collection" | "doc">;
+export interface ModelBrokerGrantReaders {
+  readonly state: GatewayRootReader;
+  readonly accounts: BuilderAccountReader;
+}
 
 function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
@@ -43,25 +46,23 @@ export function envDefaultModelBrokerLimits(
 }
 
 async function readOwnerProfile(
-  db: ModelBrokerFirestore | undefined,
+  accounts: BuilderAccountReader,
   ownerUid: string | undefined,
   now: number,
   rails: ModelBrokerRailRegistry,
 ): Promise<OwnerRailProfile | null> {
-  if (!db || !ownerUid) return null;
-  const snap = await db.collection("users").doc(ownerUid).get();
-  const data = snap.data() as Record<string, unknown> | undefined;
-  if (!data) return null;
-  return rails.resolveOwnerProfile(data, ownerUid, now);
+  if (!ownerUid) return null;
+  const account = await accounts.get(ownerUid);
+  if (!account) return null;
+  return rails.resolveOwnerProfile({ ...account.planInputs }, ownerUid, now);
 }
 
 async function readGatewayLimitOverrides(
-  db: ModelBrokerFirestore | undefined,
+  state: GatewayRootReader,
   gatewayId: string,
   authorization?: GatewayAuthorization,
 ): Promise<Partial<ModelBrokerTokenLimits>> {
-  if (!db) return {};
-  const resolved = authorization ?? await readGatewayAuthorization(db, gatewayId);
+  const resolved = authorization ?? await readGatewayAuthorizationInStore(state, gatewayId);
   if (!resolved) {
     throw new Error(`durable root config unavailable for gateways/${gatewayId}`);
   }
@@ -76,8 +77,7 @@ async function readGatewayLimitOverrides(
   };
 }
 
-export async function resolveOwnerModelBrokerGrant(input: {
-  db?: ModelBrokerFirestore;
+export async function resolveOwnerModelBrokerGrant(input: ModelBrokerGrantReaders & {
   gatewayId: string;
   ownerUid?: string;
   now: number;
@@ -85,9 +85,9 @@ export async function resolveOwnerModelBrokerGrant(input: {
   gatewayAuthorization?: GatewayAuthorization;
   rails: ModelBrokerRailRegistry;
 }): Promise<OwnerModelBrokerGrant> {
-  const tier = await readOwnerProfile(input.db, input.ownerUid, input.now, input.rails);
+  const tier = await readOwnerProfile(input.accounts, input.ownerUid, input.now, input.rails);
   const overrides = await readGatewayLimitOverrides(
-    input.db,
+    input.state,
     input.gatewayId,
     input.gatewayAuthorization,
   );
@@ -142,8 +142,7 @@ function mutableLimitFingerprint(authorization: GatewayAuthorization): string {
   ].join(":");
 }
 
-export function createCachedOwnerModelBrokerGrantResolver(opts: {
-  db: ModelBrokerFirestore;
+export function createCachedOwnerModelBrokerGrantResolver(opts: ModelBrokerGrantReaders & {
   rails: ModelBrokerRailRegistry;
   defaults?: Partial<ModelBrokerTokenLimits> | null;
   ttlMs?: number;
@@ -175,7 +174,7 @@ export function createCachedOwnerModelBrokerGrantResolver(opts: {
   };
 
   return async ({ gatewayId, ownerUid, now }) => {
-    const authorization = await readGatewayAuthorization(opts.db, gatewayId);
+    const authorization = await readGatewayAuthorizationInStore(opts.state, gatewayId);
     if (!authorization) {
       throw new Error(`durable root config unavailable for gateways/${gatewayId}`);
     }
@@ -186,7 +185,8 @@ export function createCachedOwnerModelBrokerGrantResolver(opts: {
     sweepExpired(now);
 
     const grant = await resolveOwnerModelBrokerGrant({
-      db: opts.db,
+      state: opts.state,
+      accounts: opts.accounts,
       gatewayId,
       ownerUid: ownerUid ?? undefined,
       now,

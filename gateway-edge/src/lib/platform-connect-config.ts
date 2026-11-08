@@ -1,12 +1,7 @@
-import {
-  DEFAULT_PLATFORM_CONNECT_CONFIG,
-  PLATFORM_CONFIG_COLLECTION,
-  PLATFORM_CONNECT_CONFIG_DOC,
-  parsePlatformConnectConfig,
-  type PlatformConnectConfig,
-} from "@octogee/shared/types/platform-config";
-import { db } from "./db.js";
+import { MalformedRecordError, type PlatformConfigRepository } from "@octogee/core/platform-state";
+import { DEFAULT_PLATFORM_CONNECT_CONFIG, type PlatformConnectConfig } from "@octogee/shared/types/platform-config";
 import { logger } from "../middleware/logging.js";
+import { platformStateStore } from "./platform-state.js";
 
 export class MalformedPlatformConnectConfigError extends Error {
   constructor() {
@@ -15,21 +10,17 @@ export class MalformedPlatformConnectConfigError extends Error {
   }
 }
 
-export function platformConnectDoc() {
-  return db.collection(PLATFORM_CONFIG_COLLECTION).doc(PLATFORM_CONNECT_CONFIG_DOC);
-}
-
-export async function readPlatformConnectConfig(): Promise<PlatformConnectConfig> {
-  const snap = await platformConnectDoc().get();
-  const data = snap.data();
-  if (data === undefined) return DEFAULT_PLATFORM_CONNECT_CONFIG;
-  const parsed = parsePlatformConnectConfig(data);
-  if (!parsed) {
+export async function readPlatformConnectConfig(
+  platform: Pick<PlatformConfigRepository, "get"> = platformStateStore.config.platform,
+): Promise<PlatformConnectConfig> {
+  try {
+    return (await platform.get("connect"))?.value ?? DEFAULT_PLATFORM_CONNECT_CONFIG;
+  } catch (error) {
+    if (!(error instanceof MalformedRecordError)) throw error;
     logger.error(
       "[connect] platformConfig/connect is malformed — Google connect is refused until the operator rewrites it as { googleStages, googleAllowlistUids }",
-      { data },
+      { error },
     );
     throw new MalformedPlatformConnectConfigError();
   }
-  return parsed;
 }

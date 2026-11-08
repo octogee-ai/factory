@@ -350,7 +350,6 @@ async function main(): Promise<void> {
     openclawVersion,
     openclawDir: OPENCLAW_DIR,
     projectBlobHydrator: builder ? createBrokeredProjectBlobHydrator(brokerClient) : undefined,
-    platformState: !builder,
     localReconcile: true,
     subscribeDesiredChanges: (wake) => brokerClient.watchAssignments(wake, log),
     configuredBuilderReport: () => configuredBuilderReport(process.env),
@@ -379,11 +378,6 @@ async function main(): Promise<void> {
         }),
       log,
     }),
-    // Db-less: gateway pods hold NO Firestore credentials. Cowboy polls
-    // /health and writes gateways/{id} on the trusted side. Gateway pods run
-    // only the local mount reconcile from brokered assigned snapshots; all
-    // trusted-side provisioning mutations go through octogee-api.
-    reportState: false,
     internalServiceKey: process.env.OPENCLAW_GATEWAY_TOKEN ?? "",
   });
   // Durable-config runtime health: refresh + broker publish, replacing the

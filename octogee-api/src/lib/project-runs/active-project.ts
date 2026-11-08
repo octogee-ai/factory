@@ -1,3 +1,5 @@
+import type { WorkspaceProject } from "@octogee/core/platform-state";
+
 const ACTIVE_PROJECT_STATUSES = new Set(["idea", "building", "launched", "paused"]);
 
 function nestedStatus(data: Record<string, unknown>, field: string): unknown {
@@ -19,4 +21,16 @@ export function isRunnableProject(data: Record<string, unknown>, ownerUid?: stri
     && data.provisioningState === "active"
     && absentOrActive(data, "commercialLifecycle")
     && absentOrActive(data, "retention");
+}
+
+export function isRunnableWorkspaceProject(project: WorkspaceProject, ownerUid: string): boolean {
+  return project.ownerUid === ownerUid && isActiveWorkspaceProject(project);
+}
+
+export function isActiveWorkspaceProject(project: WorkspaceProject): boolean {
+  return project.ownerActive === true
+    && project.status !== null
+    && ACTIVE_PROJECT_STATUSES.has(project.status)
+    && project.provisioningState === "active"
+    && (project.commercialLifecycleStatus === null || project.commercialLifecycleStatus === "active");
 }

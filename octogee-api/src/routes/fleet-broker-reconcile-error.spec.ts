@@ -1,54 +1,28 @@
 import express, { type RequestHandler } from "express";
 import request from "supertest";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
+import { RecordingDocuments } from "../test-helpers/recording-documents.js";
 import { createFleetBrokerRoutes } from "./fleet-broker.js";
 
 const GATEWAY_ID = "shared-blue";
 
-function fixture(start = 1_000_000) {
-  let now = start;
-  const writes: Array<{ path: string; data: Record<string, unknown> }> = [];
-  const stored: Record<string, Record<string, unknown>> = {};
-  const gatewayDoc = (id: string) => ({
-    path: `gateways/${id}`,
-    get: vi.fn(async () => ({ exists: true, data: () => stored[`gateways/${id}`] })),
-    set: vi.fn(async (data: Record<string, unknown>) => {
-      writes.push({ path: `gateways/${id}`, data });
-      stored[`gateways/${id}`] = { ...stored[`gateways/${id}`], ...data };
-    }),
-  });
-  const db = {
-    collection: vi.fn((name: string) => {
-      if (name === "users") {
-        return {
-          where: vi.fn(() => ({
-            get: vi.fn(async () => ({
-              docs: [{
-                id: "uid-alice",
-                data: () => ({
-                  provisioning: {
-                    openclaw: { gatewayId: GATEWAY_ID, slug: "alice" },
-                  },
-                }),
-              }],
-            })),
-          })),
-        };
-      }
-      if (name === "gateways") return { doc: vi.fn(gatewayDoc) };
-      throw new Error(`unexpected collection ${name}`);
-    }),
-    runTransaction: vi.fn(async (body: (txn: unknown) => Promise<void>) =>
-      body({
-        get: async (ref: { get(): Promise<unknown> }) => ref.get(),
-        set: (ref: { path: string }, data: Record<string, unknown>) => {
-          writes.push({ path: ref.path, data });
-          stored[ref.path] = { ...stored[ref.path], ...data };
-        },
-      })),
+function gatewayRoot(): Record<string, unknown> {
+  return {
+    gatewayId: GATEWAY_ID, createdAt: 1, createdBy: "test", updatedAt: 1, updatedBy: "test", latestRelease: 1,
+    desiredRelease: 1, liveRelease: 1, desiredStatus: "running", configSchemaVersion: 1, profile: null, gatewayClass: "shared",
+    imageProfile: "standard", sizingTier: null, gcpProject: null, gatewayContainerSecurityContext: null, serviceAccountName: null,
+    serviceAccount: null, builderAccess: null, ownerUid: null, builderSlug: null, modelBrokerLimits: null, preemption: null,
   };
+}
+
+function fixture(start = 1_000_000, seed: Record<string, Record<string, unknown>> = { [`gateways/${GATEWAY_ID}`]: gatewayRoot() }) {
+  let now = start;
+  const documents = new RecordingDocuments({
+    "users/uid-alice": { provisioning: { openclaw: { gatewayId: GATEWAY_ID, slug: "alice" } } },
+    ...seed,
+  });
   const server = express();
   server.disable("x-powered-by");
   server.use(express.json());
@@ -57,13 +31,14 @@ function fixture(start = 1_000_000) {
     next();
   }) as RequestHandler);
   server.use("/internal/fleet", createFleetBrokerRoutes({
-    db: db as never,
-    store: createDocumentFixtureStore({}),
+    db: {} as never,
+    store: createDocumentFixtureStore(documents),
     now: () => now,
   }));
   return {
     server,
-    writes,
+    documents,
+    writes: documents.writes,
     advance: (ms: number) => {
       now += ms;
     },
@@ -85,7 +60,7 @@ describe("reconcile-error reporting", () => {
 
     expect(writes).toHaveLength(1);
     expect(writes[0]?.path).toBe(`gateways/${GATEWAY_ID}`);
-    expect(writes[0]?.data.lastError).toMatchObject({ slug: "alice", message: "mount failed" });
+    expect(writes[0]?.data?.lastError).toMatchObject({ slug: "alice", message: "mount failed" });
   });
 
   it("writes again once the window elapses", async () => {
@@ -107,7 +82,7 @@ describe("reconcile-error reporting", () => {
     await report(server, "mount failed").expect(204);
     await report(server, "unmount failed").expect(204);
 
-    expect(writes.map((write) => (write.data.lastError as { message: string }).message)).toEqual([
+    expect(writes.map((write) => (write.data?.lastError as { message: string }).message)).toEqual([
       "mount failed",
       "unmount failed",
     ]);
@@ -124,6 +99,27 @@ describe("reconcile-error reporting", () => {
     await report(server, "mount failed").expect(204);
 
     expect(writes).toHaveLength(3);
-    expect(writes[1]?.data).toEqual({ lastError: null });
+    expect(writes[1]?.data?.lastError).toBeNull();
+  });
+
+  it("leaves a different slug's error in place on clear", async () => {
+    const { server, documents } = fixture();
+
+    await report(server, "mount failed").expect(204);
+    documents.set(`gateways/${GATEWAY_ID}`, { ...documents.get(`gateways/${GATEWAY_ID}`), lastError: { slug: "bob", message: "other", at: 1 } });
+    await request(server)
+      .post("/internal/fleet/clear-reconcile-error")
+      .send({ gatewayId: GATEWAY_ID, slug: "alice" })
+      .expect(204);
+
+    expect(documents.get(`gateways/${GATEWAY_ID}`)?.lastError).toEqual({ slug: "bob", message: "other", at: 1 });
+  });
+
+  it("refuses to create a gateway record for a report on a gateway without one", async () => {
+    const { server, documents } = fixture(1_000_000, {});
+
+    await report(server, "mount failed").expect(502);
+
+    expect(documents.get(`gateways/${GATEWAY_ID}`)).toBeUndefined();
   });
 });

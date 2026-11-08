@@ -67,30 +67,24 @@ describe("projectGatewayRuntimeStatus", () => {
 });
 
 describe("projectOwnerActivation", () => {
-  function owner(lease: unknown) {
-    return { username: "alice", provisioning: { openclaw: { gatewayId: "shared-0", activationLease: lease } } };
-  }
-
   it("projects only the lease status and target, never the lease internals", () => {
-    expect(projectOwnerActivation(owner({
+    expect(projectOwnerActivation({
       leaseId: "lease-1",
       generation: 3,
       status: "activating",
       targetGatewayId: "alice-s-12c32613",
       activationOperationId: "op-9",
       requestedAt: NOW,
-    }))).toEqual({ status: "activating", targetGatewayId: "alice-s-12c32613" });
+    })).toEqual({ status: "activating", targetGatewayId: "alice-s-12c32613" });
   });
 
   it("projects a lease that has no target yet", () => {
-    expect(projectOwnerActivation(owner({ leaseId: "lease-1", generation: 1, status: "requested" })))
+    expect(projectOwnerActivation({ leaseId: "lease-1", generation: 1, status: "requested" }))
       .toEqual({ status: "requested", targetGatewayId: null });
   });
 
   it("is null without a lease or with a status outside the activation lifecycle", () => {
-    expect(projectOwnerActivation(owner(undefined))).toBeNull();
-    expect(projectOwnerActivation(owner({ status: "released", targetGatewayId: "x" }))).toBeNull();
-    expect(projectOwnerActivation(undefined)).toBeNull();
-    expect(projectOwnerActivation({ username: "alice" })).toBeNull();
+    expect(projectOwnerActivation(null)).toBeNull();
+    expect(projectOwnerActivation({ leaseId: "lease-1", generation: 1, status: "parked", targetGatewayId: "x" })).toBeNull();
   });
 });

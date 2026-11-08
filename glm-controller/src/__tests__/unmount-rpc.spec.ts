@@ -7,27 +7,37 @@ import {
   buildGatewayHeartbeatPollerDeps,
   callUnmountRpc,
   heartbeatPollInstanceIds,
-  heartbeatRosterTarget,
 } from "../index.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import { mirrorDoc, stubInformer } from "./fixtures/fleet-informer-stub.js";
+import { createScriptedWatches, storeWithScriptedWatches } from "./fixtures/scripted-watches.js";
+import { createFleetInformer } from "../fleet-informer.js";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
+import { MalformedRecordError, type FleetRegistryRecord } from "@octogee/core/platform-state";
 
-function fakeDb(): Firestore {
-  return {
-    collection: vi.fn(() => ({
-      doc: vi.fn(() => ({
-        get: vi.fn(async () => ({
-          exists: true,
-          data: () => ({
-            docKind: "runtime",
-            gatewayId: "bender",
-            release: 2,
-            lifecycle: "serving",
-          }),
-        })),
-      })),
-    })),
-  } as unknown as Firestore;
+const BENDER_RUNTIME = { docKind: "runtime", gatewayId: "bender", release: 2, lifecycle: "serving" };
+
+function runtimeRegistry() {
+  return createDocumentFixtureStore({ "glmGateways/bender": { ...BENDER_RUNTIME } });
+}
+
+class RecordingDocuments extends Map<string, Record<string, unknown>> {
+  readonly reads: string[] = [];
+  readonly writes: Array<{ path: string; row: Record<string, unknown> }> = [];
+  override get(path: string) {
+    this.reads.push(path);
+    return super.get(path);
+  }
+  override set(path: string, row: Record<string, unknown>) {
+    this.writes.push({ path, row });
+    return super.set(path, row);
+  }
+}
+
+function recordingDocuments(entries: Record<string, Record<string, unknown>>): RecordingDocuments {
+  const documents = new RecordingDocuments();
+  for (const [path, row] of Object.entries(entries)) Map.prototype.set.call(documents, path, row);
+  return documents;
 }
 
 describe("callUnmountRpc", () => {
@@ -40,7 +50,7 @@ describe("callUnmountRpc", () => {
     const recovery = vi.spyOn(migrationTransport, "resolveMigrationRecoveryUrl")
       .mockResolvedValue("http://10.0.0.7:3003");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
-    await callUnmountRpc(fakeDb(), {
+    await callUnmountRpc(runtimeRegistry(), {
       privateKey: FLEET_KEY_PAIR.privateKey, gatewayId: "bender", slug: "alice", log: vi.fn(),
       ...(allowUnready ? { allowUnready: true } : {}),
     });
@@ -73,7 +83,7 @@ describe("callUnmountRpc", () => {
         });
       });
 
-    const pending = callUnmountRpc(fakeDb(), {
+    const pending = callUnmountRpc(runtimeRegistry(), {
       privateKey: FLEET_KEY_PAIR.privateKey,
       gatewayId: "bender",
       slug: "ghost",
@@ -107,7 +117,7 @@ describe("callUnmountRpc", () => {
         if (mode === "changed-pod") result.agentStoreErasure.podUid = "other";
         return new Response(JSON.stringify(result));
       });
-      const promise = callUnmountRpc(fakeDb(), { privateKey: FLEET_KEY_PAIR.privateKey,
+      const promise = callUnmountRpc(runtimeRegistry(), { privateKey: FLEET_KEY_PAIR.privateKey,
         gatewayId: "bender", slug: "alice", log: vi.fn(), migrationId: "erase-op-claim-10", agentStoreErasure: coverage });
       if (mode === "matching") await expect(promise).resolves.toBeUndefined();
       else await expect(promise).rejects.toThrow("did not confirm exact customer Native cleanup");
@@ -120,37 +130,21 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
   });
 
   it("writeHeartbeat writes ONLY glmGateways/{id}.heartbeat — never the flat gateways/{id} doc", async () => {
-    const setCalls: Array<{ collection: string; doc: string; data: Record<string, unknown> }> = [];
-    let committed = false;
-    const batchDb = {
-      collection: (name: string) => ({
-        doc: (id: string) => ({ _collection: name, _doc: id }),
-      }),
-      batch: () => ({
-        set: (
-          ref: { _collection: string; _doc: string },
-          data: Record<string, unknown>,
-        ) => {
-          setCalls.push({ collection: ref._collection, doc: ref._doc, data });
-        },
-        commit: async () => {
-          committed = true;
-        },
-      }),
-    } as unknown as Firestore;
-
-    const deps = buildGatewayHeartbeatPollerDeps(batchDb, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
+    const documents = recordingDocuments({ "glmGateways/bender": { ...BENDER_RUNTIME } });
+    const deps = buildGatewayHeartbeatPollerDeps({} as Firestore, createDocumentFixtureStore(documents), vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
     await deps.writeHeartbeat("bender", { status: "ready", mountedCustomers: ["ceckert"], startedAt: 42 });
 
-    expect(committed).toBe(true);
-    expect(setCalls.map((c) => c.collection)).toEqual(["glmGateways"]);
-    const glmCall = setCalls.find((c) => c.collection === "glmGateways");
-    expect(glmCall!.doc).toBe("bender");
-    expect(glmCall!.data).toHaveProperty("heartbeat");
-    expect(glmCall!.data).toMatchObject({
-      heartbeat: { internalUrl: expect.stringContaining("octogee-gateway-bender") },
+    expect(documents.writes.map((write) => write.path)).toEqual(["glmGateways/bender"]);
+    expect(documents.get("glmGateways/bender")).toMatchObject({
+      ...BENDER_RUNTIME,
+      heartbeat: {
+        status: "ready",
+        mountedCustomers: ["ceckert"],
+        startedAt: 42,
+        internalUrl: expect.stringContaining("octogee-gateway-bender"),
+        lastHeartbeatAt: expect.any(Number),
+      },
     });
-    expect(setCalls.some((c) => c.collection === "gateways")).toBe(false);
   });
 
   it("signs operator eviction with the fleet controller private key", async () => {
@@ -160,7 +154,8 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
       return Promise.resolve(new Response("{}", { status: 200 }));
     });
     const deps = buildGatewayHeartbeatPollerDeps(
-      fakeDb(),
+      {} as Firestore,
+      runtimeRegistry(),
       vi.fn(),
       FLEET_KEY_PAIR.privateKey,
       stubInformer(),
@@ -215,69 +210,29 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
       modelBrokerLimits: null,
       preemption: null,
     });
-    let gateway = durableGateway("shared");
-    const db = {
-      collection: () => ({
-        doc: () => ({
-          get: async () => ({ exists: true, data: () => gateway }),
-        }),
-      }),
-    } as unknown as Firestore;
-    const deps = buildGatewayHeartbeatPollerDeps(db, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
+    const documents = new Map<string, Record<string, unknown>>([["gateways/bender", durableGateway("shared")]]);
+    const deps = buildGatewayHeartbeatPollerDeps({} as Firestore, createDocumentFixtureStore(documents), vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
 
     await expect(deps.ownsEviction?.("bender")).resolves.toBe(false);
-    gateway = durableGateway("builder");
+    documents.set("gateways/bender", durableGateway("builder"));
     await expect(deps.ownsEviction?.("bender")).resolves.toBe(true);
   });
 });
 
 describe("gateway heartbeat poll — a converged gateway writes nothing", () => {
-  function pollerDb(store: Map<string, Record<string, unknown>>) {
-    const writes: Array<{ doc: string; data: Record<string, unknown> }> = [];
-    const db = {
-      collection: (name: string) => ({
-        get: async () => ({
-          docs: [...store.entries()].map(([id, data]) => ({ id, data: () => data })),
-        }),
-        doc: (id: string) => ({ _collection: name, _doc: id }),
-      }),
-      batch: () => ({
-        set: (ref: { _doc: string }, data: Record<string, unknown>) => {
-          writes.push({ doc: ref._doc, data });
-        },
-        commit: async () => {},
-      }),
-    } as unknown as Firestore;
-    return { db, writes };
-  }
-
-  function landWrite(
-    store: Map<string, Record<string, unknown>>,
-    write: { data: Record<string, unknown> },
-  ): void {
-    const heartbeat = write.data.heartbeat as Record<string, unknown>;
-    store.set("bender", {
-      ...store.get("bender")!,
-      heartbeat: { ...heartbeat, lastHeartbeatAt: Date.now() },
-    });
-  }
-
-  function runtimeStore(): Map<string, Record<string, unknown>> {
-    return new Map([
-      ["bender", { docKind: "runtime", gatewayId: "bender", release: 2, lifecycle: "serving" }],
-    ]);
+  function poller() {
+    const documents = recordingDocuments({ "glmGateways/bender": { ...BENDER_RUNTIME } });
+    const deps = buildGatewayHeartbeatPollerDeps({} as Firestore, createDocumentFixtureStore(documents), vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
+    return { deps, writes: documents.writes };
   }
 
   it("writes the first poll and skips an identical second poll", async () => {
-    const store = runtimeStore();
-    const { db, writes } = pollerDb(store);
-    const deps = buildGatewayHeartbeatPollerDeps(db, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
+    const { deps, writes } = poller();
     const health = { status: "ready", mountedCustomers: ["ceckert"], startedAt: 42 };
 
     expect(await deps.listGatewayIds()).toEqual(["bender"]);
     await deps.writeHeartbeat("bender", health);
     expect(writes).toHaveLength(1);
-    landWrite(store, writes[0]);
 
     await deps.listGatewayIds();
     await deps.writeHeartbeat("bender", health);
@@ -286,9 +241,7 @@ describe("gateway heartbeat poll — a converged gateway writes nothing", () => 
   });
 
   it("writes exactly once more when the poll reports a new mounted set", async () => {
-    const store = runtimeStore();
-    const { db, writes } = pollerDb(store);
-    const deps = buildGatewayHeartbeatPollerDeps(db, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
+    const { deps, writes } = poller();
 
     await deps.listGatewayIds();
     await deps.writeHeartbeat("bender", {
@@ -296,7 +249,6 @@ describe("gateway heartbeat poll — a converged gateway writes nothing", () => 
       mountedCustomers: ["ceckert"],
       startedAt: 42,
     });
-    landWrite(store, writes[0]);
 
     await deps.listGatewayIds();
     await deps.writeHeartbeat("bender", {
@@ -306,56 +258,73 @@ describe("gateway heartbeat poll — a converged gateway writes nothing", () => 
     });
 
     expect(writes).toHaveLength(2);
-    expect(writes[1].data.heartbeat).toMatchObject({ mountedCustomers: [] });
+    expect(writes[1].row.heartbeat).toMatchObject({ mountedCustomers: [] });
   });
 });
 
 describe("runtime heartbeat polling", () => {
-  it("polls only live runtime realizations", () => {
-    expect(
-      heartbeatPollInstanceIds([
-        {
-          id: "default-green",
-          data: () => ({
-            gatewayId: "default-green",
-            imageRepository: "repo",
-            imageTag: "abc1234",
-            desiredStatus: "running",
-            createdBy: "test",
-          }),
-        },
-        { id: "default", data: () => ({ docKind: "runtime", gatewayId: "default", release: 2, lifecycle: "provisioning" }) },
-        { id: "failed", data: () => ({ docKind: "runtime", gatewayId: "failed", release: 1, lifecycle: "failed" }) },
-      ]),
-    ).toEqual(["default"]);
+  function runtimeRecord(gatewayId: string, lifecycle: FleetRegistryRecord["lifecycle"]): FleetRegistryRecord {
+    return { gatewayId, release: 2, lifecycle } as FleetRegistryRecord;
+  }
+
+  it("polls every runtime record except failed ones", () => {
+    expect(heartbeatPollInstanceIds([
+      runtimeRecord("default", "provisioning"),
+      runtimeRecord("failed", "failed"),
+      runtimeRecord("serving", "serving"),
+    ])).toEqual(["default", "serving"]);
   });
 
-  it("does not poll a shadow document that claims another gateway identity", () => {
-    expect(
-      heartbeatPollInstanceIds([
-        {
-          id: "default-shadow",
-          data: () => ({
-            docKind: "runtime",
-            gatewayId: "default",
-            release: 2,
-            lifecycle: "serving",
-          }),
-        },
-      ]),
-    ).toEqual([]);
+  it("fails the whole poll listing on a runtime document that claims another gateway identity", async () => {
+    const store = createDocumentFixtureStore({
+      "glmGateways/bender": { ...BENDER_RUNTIME },
+      "glmGateways/default-shadow": { docKind: "runtime", gatewayId: "default", release: 2, lifecycle: "serving" },
+    });
+    const deps = buildGatewayHeartbeatPollerDeps({} as Firestore, store, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
+
+    await expect(deps.listGatewayIds()).rejects.toBeInstanceOf(MalformedRecordError);
   });
 
-  it("resolves a runtime instance to the bare gateway roster", () => {
-    expect(
-      heartbeatRosterTarget("default", {
-        docKind: "runtime",
-        gatewayId: "default",
-        release: 2,
-        lifecycle: "serving",
-      }),
-    ).toEqual({ gatewayId: "default" });
-    expect(heartbeatRosterTarget("default-green", { gatewayId: "default-green" })).toBeNull();
+  it("does not list non-runtime glmGateways documents", async () => {
+    const store = createDocumentFixtureStore({
+      "glmGateways/bender": { ...BENDER_RUNTIME },
+      "glmGateways/bender-r2": { docKind: "revision", gatewayId: "bender", release: 2, lifecycle: "serving" },
+    });
+    const deps = buildGatewayHeartbeatPollerDeps({} as Firestore, store, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
+
+    expect(await deps.listGatewayIds()).toEqual(["bender"]);
+  });
+
+  it("keeps polling every other gateway when one runtime record is malformed", async () => {
+    const store = createDocumentFixtureStore({
+      "glmGateways/bender": { ...BENDER_RUNTIME },
+      "glmGateways/flexo": { ...BENDER_RUNTIME, gatewayId: "flexo" },
+      "glmGateways/broken": { docKind: "runtime", gatewayId: "other", release: 2, lifecycle: "serving" },
+    });
+    const valid = await createDocumentFixtureStore({
+      "glmGateways/bender": { ...BENDER_RUNTIME },
+      "glmGateways/flexo": { ...BENDER_RUNTIME, gatewayId: "flexo" },
+    }).fleetRegistry.list();
+    const watches = createScriptedWatches();
+    const usersDb = { collection: () => ({ onSnapshot: () => () => undefined }) } as unknown as Firestore;
+    const informer = createFleetInformer({ db: usersDb, store: storeWithScriptedWatches(store, watches), log: vi.fn() });
+    watches.latest("fleetRegistry").error(new MalformedRecordError({ aggregate: "fleet-registry", key: "broken" }, "is not this gateway's runtime record"));
+    watches.latest("fleetRegistry").snapshot(valid);
+    const log = vi.fn();
+    const deps = buildGatewayHeartbeatPollerDeps({} as Firestore, store, log, FLEET_KEY_PAIR.privateKey, informer);
+
+    expect(await deps.listGatewayIds()).toEqual(["bender", "flexo"]);
+    expect(await deps.listGatewayIds()).toEqual(["bender", "flexo"]);
+    await expect(store.fleetRegistry.list()).rejects.toBeInstanceOf(MalformedRecordError);
+    expect(log.mock.calls.filter(([message]) =>
+      message === "[glm-controller] ⚠ heartbeat poll skips malformed runtime record(s): broken")).toHaveLength(2);
+    informer.stop();
+  });
+
+  it("reads no roster for a gateway without a runtime record", async () => {
+    const deps = buildGatewayHeartbeatPollerDeps({} as Firestore, createDocumentFixtureStore({}), vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer({ users: () => [] }));
+
+    expect(await deps.readAssignedSlugs("default-green")).toEqual([]);
   });
 });
 
@@ -419,20 +388,28 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
     return { db, reads };
   }
 
-  const warmInformer = () =>
-    stubInformer({
-      glmGateways: () => [mirrorDoc("bender", runtime)],
-      gateways: () => [mirrorDoc("bender", builderRoot)],
+  const seededDocuments = () => recordingDocuments({ "glmGateways/bender": runtime, "gateways/bender": builderRoot });
+
+  const warmInformer = async () => {
+    const seeded = createDocumentFixtureStore(seededDocuments());
+    const [runtimes, roots] = await Promise.all([seeded.fleetRegistry.list(), seeded.gateways.roots.list()]);
+    return stubInformer({
+      fleetRegistry: () => runtimes,
+      fleetRegistryWithoutMalformed: () => ({ records: runtimes, malformedKeys: [] }),
+      gateways: () => roots,
       users: () => [mirrorDoc("uid-bender", assignedUser)],
     });
+  };
 
-  it("lists gateways, resolves the roster and owns eviction with zero Firestore reads", async () => {
+  it("lists gateways, resolves the roster and owns eviction with zero Firestore or store reads", async () => {
     const { db, reads } = countingDb();
+    const documents = seededDocuments();
     const deps = buildGatewayHeartbeatPollerDeps(
       db,
+      createDocumentFixtureStore(documents),
       vi.fn(),
       FLEET_KEY_PAIR.privateKey,
-      warmInformer(),
+      await warmInformer(),
     );
 
     expect(await deps.listGatewayIds()).toEqual(["bender"]);
@@ -440,12 +417,15 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
     expect(await deps.ownsEviction?.("bender")).toBe(true);
 
     expect(reads).toEqual([]);
+    expect(documents.reads).toEqual([]);
   });
 
   it("falls back to direct reads while the mirrors are stale", async () => {
     const { db, reads } = countingDb();
+    const documents = seededDocuments();
     const deps = buildGatewayHeartbeatPollerDeps(
       db,
+      createDocumentFixtureStore(documents),
       vi.fn(),
       FLEET_KEY_PAIR.privateKey,
       stubInformer(),
@@ -455,28 +435,25 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
     expect(await deps.readAssignedSlugs("bender")).toEqual(["bender"]);
     expect(await deps.ownsEviction?.("bender")).toBe(true);
 
-    expect(reads).toEqual([
-      "scan:glmGateways",
-      "get:glmGateways/bender",
-      "query:users",
-      "get:gateways/bender",
-    ]);
+    expect(reads).toEqual(["query:users"]);
+    expect(documents.reads).toEqual(["glmGateways/bender", "gateways/bender"]);
   });
 
-  it("re-reads the runtime document directly before an eviction RPC", async () => {
+  it("re-reads the runtime record from the store, never the mirror, before an eviction RPC", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
     const { db, reads } = countingDb();
+    const documents = recordingDocuments({ "glmGateways/bender": { ...BENDER_RUNTIME } });
     const deps = buildGatewayHeartbeatPollerDeps(
       db,
+      createDocumentFixtureStore(documents),
       vi.fn(),
       FLEET_KEY_PAIR.privateKey,
-      warmInformer(),
+      await warmInformer(),
     );
 
     await deps.evictSlug?.("bender", "ghost");
 
-    // The mutation path stays on Firestore: the runtime guard and the URL
-    // resolution both read the live document, never the mirror.
-    expect(reads).toEqual(["get:glmGateways/bender", "get:glmGateways/bender"]);
+    expect(reads).toEqual([]);
+    expect(documents.reads).toEqual(["glmGateways/bender", "glmGateways/bender"]);
   });
 });

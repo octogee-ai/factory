@@ -1,3 +1,4 @@
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -6,33 +7,8 @@ import {
 } from "./fleet-broker.js";
 import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
 
-function gatewayStateDb(
-  data: Record<string, unknown> | undefined,
-  assignments: Array<{ uid: string; data: Record<string, unknown> }> = [],
-) {
-  return {
-    collection: (name: string) => {
-      if (name !== "gateways") throw new Error(`unexpected collection ${name}`);
-      return {
-        doc: () => ({
-          get: async () => ({ exists: data !== undefined, data: () => data }),
-          collection: (subcollection: string) => {
-            if (subcollection !== "assignments") {
-              throw new Error(`unexpected subcollection ${subcollection}`);
-            }
-            return {
-              get: async () => ({
-                docs: assignments.map((assignment) => ({
-                  id: assignment.uid,
-                  data: () => assignment.data,
-                })),
-              }),
-            };
-          },
-        }),
-      };
-    },
-  };
+function gatewayStateStore(data: Record<string, unknown> | undefined) {
+  return createDocumentFixtureStore({ "gateways/default": data });
 }
 
 function durableGatewayState(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -185,19 +161,22 @@ describe("system config observed status validation", () => {
 describe("fleet broker durable root boundary", () => {
   const incompleteRoot = { gatewayId: "default", internalUrl: "http://legacy-should-not-run" };
 
-  it("permits the empty-revision legacy roster path only when the root is absent", async () => {
+  it("permits the empty-revision legacy roster path when the root is absent", async () => {
     await expect(
-      resolveAssignedUsersRevisionGate(gatewayStateDb(undefined) as never, "default", ""),
+      resolveAssignedUsersRevisionGate(gatewayStateStore(undefined), "default", ""),
     ).resolves.toEqual({ allowed: true });
+  });
+
+  it("fails closed on an incomplete gateway root on the empty-revision legacy roster path", async () => {
     await expect(
-      resolveAssignedUsersRevisionGate(gatewayStateDb(incompleteRoot) as never, "default", ""),
-    ).resolves.toEqual({ allowed: false });
+      resolveAssignedUsersRevisionGate(gatewayStateStore(incompleteRoot), "default", ""),
+    ).rejects.toMatchObject({ name: "MalformedRecordError" });
   });
 
   it("requires a durable root when a routing roster is requested", async () => {
     await expect(
       resolveAssignedUsersRevisionGate(
-        gatewayStateDb(undefined) as never,
+        gatewayStateStore(undefined),
         "default",
         "default-r1",
         { requireDurableRoot: true },
@@ -210,7 +189,7 @@ describe("fleet broker durable root boundary", () => {
 
     await expect(
       resolveAssignedUsersRevisionGate(
-        gatewayStateDb(root) as never,
+        gatewayStateStore(root),
         "default",
         "default",
         { requireDurableRoot: true },
@@ -219,7 +198,7 @@ describe("fleet broker durable root boundary", () => {
 
     await expect(
       resolveAssignedUsersRevisionGate(
-        gatewayStateDb(root) as never,
+        gatewayStateStore(root),
         "default",
         "default-r13",
         { requireDurableRoot: true },
@@ -230,7 +209,7 @@ describe("fleet broker durable root boundary", () => {
   it("authorizes only an empty retired co-owner mirror on a durable roster root", async () => {
     await expect(
       resolveAssignedUsersRevisionGate(
-        gatewayStateDb(durableGatewayState({ coOwnerUids: [] })) as never,
+        gatewayStateStore(durableGatewayState({ coOwnerUids: [] })),
         "default",
         "default",
         { requireDurableRoot: true },
@@ -238,7 +217,7 @@ describe("fleet broker durable root boundary", () => {
     ).resolves.toEqual({ allowed: true });
     await expect(
       resolveAssignedUsersRevisionGate(
-        gatewayStateDb(durableGatewayState({ coOwnerUids: ["uid-former-helper"] })) as never,
+        gatewayStateStore(durableGatewayState({ coOwnerUids: ["uid-former-helper"] })),
         "default",
         "default",
         { requireDurableRoot: true },

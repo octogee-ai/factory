@@ -34,13 +34,17 @@ export interface ComputerRecoveryFence {
     readonly sharedGatewayId?: string | null;
     readonly assignmentEpoch?: number;
 }
+export type BuilderRuntimeReset = FleetBrokerCustomerRuntimeReset | (Omit<FleetBrokerCustomerRuntimeReset, "status"> & {
+    readonly status: "acknowledged";
+    readonly acknowledgedAt: TimeInput;
+});
 export interface BuilderFences {
     readonly restoreFence?: OpaqueMap;
     readonly sourceTransferFence?: SourceTransferFence;
     readonly computerRecovery?: ComputerRecoveryFence;
     readonly migration?: WorkspaceMigrationMarker;
     readonly pendingNativeSchedulerRetirement?: OpaqueMap;
-    readonly runtimeReset?: FleetBrokerCustomerRuntimeReset & OpaqueMap;
+    readonly runtimeReset?: BuilderRuntimeReset & OpaqueMap;
 }
 export type BuilderFenceName = keyof BuilderFences;
 export interface BuilderProvisioning {

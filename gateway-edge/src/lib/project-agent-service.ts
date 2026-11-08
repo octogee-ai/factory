@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { FieldValue, db } from "./db.js";
+import { platformStateStore } from "./platform-state.js";
+import { readMattermostSecret } from "./mattermost-secret.js";
 import { logger } from "../middleware/logging.js";
 import { mmApi } from "./mattermost.js";
 import {
@@ -24,7 +25,6 @@ export interface ProjectAgentProvisionResult {
 
 interface ProjectAgentProvisionContext {
   workspaceId: string;
-  projectRef: FirebaseFirestore.DocumentReference;
 }
 
 const PROVISION_FAILED = "Project Agent provisioning failed - retry from project settings";
@@ -44,31 +44,35 @@ function errorFrom(result: ProjectAgentProvisionResult): string {
   return typeof error === "string" ? error : "Project Agent operation failed";
 }
 
+interface ProjectAgentTarget {
+  workspaceId: string;
+  project: string;
+}
+
 async function writeProjectAgentState(
-  projectRef: FirebaseFirestore.DocumentReference,
+  target: ProjectAgentTarget,
   status: ProjectAgentStatus,
   lastError: string | null = null,
   activationId: string | null = null,
 ): Promise<void> {
-  await projectRef.set(
-    {
-      agent: {
-        status,
-        activationId,
-        lastError,
-        updatedAt: FieldValue.serverTimestamp(),
-      },
-    },
-    { merge: true },
-  );
+  await platformStateStore.transaction({ label: "project-agent.state" }, async (tx) => {
+    const current = await tx.workspaces.projects.get(target.workspaceId, target.project);
+    if (!current) throw new Error(`Project ${target.workspaceId}/${target.project} no longer exists`);
+    await tx.workspaces.projects.patch(
+      target.workspaceId,
+      target.project,
+      { agent: { ...current.agent, status, activationId, lastError, updatedAt: { serverNow: true } } },
+      { revision: current.revision },
+    );
+  });
 }
 
 async function settleProjectAgentError(
-  projectRef: FirebaseFirestore.DocumentReference,
+  target: ProjectAgentTarget,
   result: ProjectAgentProvisionResult,
 ): Promise<ProjectAgentProvisionResult> {
   try {
-    await writeProjectAgentState(projectRef, "error", errorFrom(result));
+    await writeProjectAgentState(target, "error", errorFrom(result));
   } catch (err) {
     logger.error("[project-agent] failed to record terminal error state:", { err });
   }
@@ -79,8 +83,7 @@ async function settleProjectAgentError(
 // (method, endpoint, body).
 const coreDeps = (): ProjectAgentDeps => ({
   mmApiCall: (method: string, endpoint: string, body?: unknown) => mmApi(endpoint, method, body),
-  db: db as unknown as ProjectAgentDeps["db"],
-  now: () => FieldValue.serverTimestamp(),
+  secrets: platformStateStore.secrets,
   log: (msg: string) => logger.info(msg),
 });
 
@@ -93,22 +96,18 @@ async function projectChannelBindings(
   workspaceId: string,
   project: string,
 ): Promise<ProjectChannelBinding[]> {
-  const projectPath = `workspaces/${workspaceId}/projects/${project}`;
-  const snap = await db
-    .doc(projectPath)
-    .collection("channels")
-    .get();
-  const bindings: ProjectChannelBinding[] = [];
-  for (const doc of snap.docs) {
-    const channelId = (doc.data()?.mattermost as { channelId?: unknown } | undefined)?.channelId;
-    if (typeof channelId === "string" && channelId) {
-      bindings.push({
-        channelId,
-        docPath: `${projectPath}/channels/${doc.id}`,
-      });
-    }
-  }
-  return bindings;
+  const channels = await platformStateStore.workspaces.channels.list({ workspaceSlug: workspaceId, projectSlug: project });
+  return channels.flatMap((channel) => channel.mattermostChannelId
+    ? [{
+        channelId: channel.mattermostChannelId,
+        docPath: `workspaces/${workspaceId}/projects/${project}/channels/${channel.channelId}`,
+      }]
+    : []);
+}
+
+function projectAgentDisplayName(agent: Record<string, unknown> | null, project: string): string {
+  const identity = agent?.identity as { name?: unknown } | undefined;
+  return typeof identity?.name === "string" ? identity.name : project;
 }
 
 async function resolveProjectAgentProvisionContext(
@@ -118,17 +117,15 @@ async function resolveProjectAgentProvisionContext(
   if (!isValidProjectId(project)) return bad(400, "Invalid project");
   if (!actor.workspaceId) return bad(422, "Workspace not provisioned");
   const workspaceId = actor.workspaceId;
-  const projectRef = db.doc(`workspaces/${workspaceId}/projects/${project}`);
-  const projectSnap = await projectRef.get();
-  if (!projectSnap.exists) return bad(404, "Project not found");
-  const projectData = projectSnap.data();
-  if (projectData?.ownerUid !== actor.uid) {
+  const record = await platformStateStore.workspaces.projects.get(workspaceId, project);
+  if (!record) return bad(404, "Project not found");
+  if (record.ownerUid !== actor.uid) {
     return bad(403, "Only the project owner can manage its agent");
   }
-  if (projectData?.commercialLifecycle?.status === "archived") {
+  if (record.commercialLifecycleStatus === "archived") {
     return bad(409, "Project is archived");
   }
-  return { workspaceId, projectRef };
+  return { workspaceId };
 }
 
 // Every active project has its agent. Provisioning writes the server-managed
@@ -142,9 +139,10 @@ export async function provisionProjectAgent(
 ): Promise<ProjectAgentProvisionResult> {
   const context = await resolveProjectAgentProvisionContext(actor, project);
   if (isProvisionResult(context)) return context;
-  const { workspaceId, projectRef } = context;
+  const { workspaceId } = context;
+  const target = { workspaceId, project };
 
-  await writeProjectAgentState(projectRef, "provisioning");
+  await writeProjectAgentState(target, "provisioning");
 
   // Roster precedes the mint outcome: the byok broker refuses tokens for
   // unrostered agent ids, and an unresolvable boot-time SecretRef probe-kills
@@ -153,38 +151,36 @@ export async function provisionProjectAgent(
   // provisioning lands in.
   const agentId = projectAgentId(workspaceId, project);
   try {
-    await db.doc(`users/${actor.uid}`).update({
-      "provisioning.openclaw.agentIds": FieldValue.arrayUnion(agentId),
-    });
+    await platformStateStore.builders.records.addAgents(actor.uid, [agentId]);
   } catch (err) {
     logger.error(`[project-agent] roster update failed for ${workspaceId}/${project}:`, { err });
-    return settleProjectAgentError(projectRef, bad(502, PROVISION_FAILED));
+    return settleProjectAgentError(target, bad(502, PROVISION_FAILED));
   }
 
-  const teamSnap = await db.doc(`workspaces/${workspaceId}`).get();
-  const teamId = (teamSnap.data()?.mattermost as { teamId?: unknown } | undefined)?.teamId;
-  if (typeof teamId !== "string" || !teamId) {
+  const teamId = (await platformStateStore.workspaces.records.get(workspaceId))?.mattermostTeamId;
+  if (!teamId) {
     logger.error(`[project-agent] no MM teamId for ${workspaceId} — cannot mint ${project}`);
-    return settleProjectAgentError(projectRef, bad(502, PROVISION_FAILED));
+    return settleProjectAgentError(target, bad(502, PROVISION_FAILED));
   }
   try {
     const channelBindings = await projectChannelBindings(workspaceId, project);
+    const record = await platformStateStore.workspaces.projects.get(workspaceId, project);
     const minted = await createProjectAgentBot(coreDeps(), {
       uid: actor.uid,
       username: workspaceId,
       project,
       teamId,
-      displayName: (await projectRef.get()).data()?.agent?.identity?.name ?? project,
+      displayName: projectAgentDisplayName(record?.agent ?? null, project),
       projectChannelIds: channelBindings.map((binding) => binding.channelId),
     });
     for (const binding of channelBindings) {
       await addChannelMember(binding.docPath, minted.mmUserId);
     }
-    await writeProjectAgentState(projectRef, "provisioning", null, randomUUID());
+    await writeProjectAgentState(target, "provisioning", null, randomUUID());
   } catch (err) {
     logger.error(`[project-agent] mint failed for ${workspaceId}/${project}:`, { err });
     return settleProjectAgentError(
-      projectRef,
+      target,
       mapMattermostMembershipError(err) ?? bad(502, PROVISION_FAILED),
     );
   }
@@ -205,18 +201,16 @@ export async function retireProjectAgentForDeletion(
   workspaceId: string,
   project: string,
 ): Promise<void> {
-  const secretRef = db.doc(`users/${uid}/secrets/${projectAgentSecretDocId(project)}`);
-  const secretSnap = await secretRef.get();
-  const mmUserId = secretSnap.data()?.mmUserId;
-  if (typeof mmUserId === "string" && mmUserId) {
+  const secretId = projectAgentSecretDocId(project);
+  const secret = await readMattermostSecret(platformStateStore, uid, secretId);
+  const mmUserId = secret?.mattermostUserId;
+  if (mmUserId) {
     await retireProjectAgentBot(coreDeps(), { uid, project, mmUserId });
-  } else if (secretSnap.exists) {
+  } else if (secret) {
     logger.warn(
       `[project-agent] dropping ${workspaceId}/${project} secret without an mmUserId — PAT not revoked`,
     );
-    await secretRef.delete();
+    await platformStateStore.secrets.delete(uid, secretId);
   }
-  await db.doc(`users/${uid}`).update({
-    "provisioning.openclaw.agentIds": FieldValue.arrayRemove(projectAgentId(workspaceId, project)),
-  });
+  await platformStateStore.builders.records.removeAgents(uid, [projectAgentId(workspaceId, project)]);
 }

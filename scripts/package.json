@@ -9,6 +9,8 @@
     "provision": "tsx entrypoints/fleet-controller.ts",
     "prefleet": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "fleet": "tsx ops/fleet.ts",
+    "preplatform-state-audit": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
+    "platform-state-audit": "tsx ops/platform-state-audit.ts",
     "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test": "npx vitest run __tests__",
     "pretest:emulator": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",

@@ -785,6 +785,9 @@ function harnessDocuments(input: {
     if (segments.length === 4 && segments[0] === "gateways" && segments[2] === "assignments") {
       return [input.assignments[segments[1]] ??= {}, segments[3]];
     }
+    if (segments.length === 4 && segments[0] === "users" && segments[2] === "system") {
+      return [input.collections[`users/${segments[1]}/system`] ??= {}, segments[3]];
+    }
     throw new Error(`the admin fleet route harness does not store ${path}`);
   };
   const entries = (): Array<readonly [string, Record<string, unknown>]> => [

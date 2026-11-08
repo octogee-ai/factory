@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 
-import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { describe, it, expect, vi } from "vitest";
 import {
   activeAgentProjectIds,
@@ -9,7 +8,6 @@ import {
   buildCustomerBindings,
   buildProjectAgentAccounts,
   buildProjectAgents,
-  fetchCoachTokens,
   gatewayAgentRoster,
   gatewayAgentRosterBuilderSlug,
   mattermostAccountBindingsNeedActivation,
@@ -18,7 +16,6 @@ import {
   PROJECT_AGENT_ALLOWED_TOOLS,
   PROJECT_AGENT_DENIED_TOOLS,
   SAFE_DEFAULT_AGENT_ID,
-  type CoachTokenDeps,
 } from "../lib/openclaw-config-builders.js";
 
 const CHRIS_MM_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -329,90 +326,6 @@ describe("mattermostAccountBindingsNeedActivation", () => {
       "jack-coach",
       "mike-coach",
     ]);
-  });
-});
-
-describe("fetchCoachTokens", () => {
-  function mkDeps(
-    docs: Record<string, Record<string, unknown>>,
-    logSpy = vi.fn(),
-  ): CoachTokenDeps & { logs: ReturnType<typeof vi.fn> } {
-    const store = createDocumentFixtureStore(new Map(Object.entries(docs).map(([uid, data]) => [`users/${uid}/secrets/coachMattermost`, data])));
-    return { secrets: store.secrets, log: logSpy, logs: logSpy };
-  }
-
-  it("reads users/{uid}/secrets/coachMattermost.personalToken and keys by uid", async () => {
-    const deps = mkDeps({
-      "uid-chris": { personalToken: "tok-chris-abc123" },
-      "uid-sam": { personalToken: "tok-sam-def456" },
-    });
-    const result = await fetchCoachTokens(deps, [
-      { uid: "uid-chris", slug: "chris-builds-a3f2" },
-      { uid: "uid-sam", slug: "sam-cooks-b4g3" },
-    ]);
-    expect(result.get("uid-chris")).toBe("tok-chris-abc123");
-    expect(result.get("uid-sam")).toBe("tok-sam-def456");
-    expect(result.size).toBe(2);
-  });
-
-  it("omits customers with no secrets doc and logs a warning", async () => {
-    const logSpy = vi.fn();
-    const deps = mkDeps(
-      { "uid-chris": { personalToken: "tok-chris" } },
-      logSpy,
-    );
-    const result = await fetchCoachTokens(deps, [
-      { uid: "uid-chris", slug: "chris-builds-a3f2" },
-      { uid: "uid-sam", slug: "sam-cooks-b4g3" },
-    ]);
-    expect(result.has("uid-chris")).toBe(true);
-    expect(result.has("uid-sam")).toBe(false);
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("no users/uid-sam/secrets/coachMattermost for sam-cooks-b4g3"),
-    );
-  });
-
-  it("omits entries when secrets doc exists but personalToken is empty", async () => {
-    const logSpy = vi.fn();
-    const deps = mkDeps({ "uid-chris": { personalToken: "" } }, logSpy);
-    const result = await fetchCoachTokens(deps, [
-      { uid: "uid-chris", slug: "chris-builds-a3f2" },
-    ]);
-    expect(result.has("uid-chris")).toBe(false);
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("chris-builds-a3f2"),
-    );
-  });
-
-  it("omits and logs a coach secret that does not decode", async () => {
-    const logSpy = vi.fn();
-    const deps = mkDeps({ "uid-chris": { personalToken: 7 } }, logSpy);
-    const result = await fetchCoachTokens(deps, [
-      { uid: "uid-chris", slug: "chris-builds-a3f2" },
-    ]);
-    expect(result.has("uid-chris")).toBe(false);
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("read failed for chris-builds-a3f2"));
-  });
-
-  it("tolerates Firestore errors for a single customer (continues others)", async () => {
-    const logSpy = vi.fn();
-    const { secrets } = mkDeps({ "uid-ok": { personalToken: "tok-ok" } });
-    const deps: CoachTokenDeps = {
-      secrets: {
-        get: async (uid, secretId) => {
-          if (uid === "uid-broken") throw new Error("firestore hiccup");
-          return secrets.get(uid, secretId);
-        },
-      },
-      log: logSpy,
-    };
-    const result = await fetchCoachTokens(deps, [
-      { uid: "uid-broken", slug: "broken-a1b2" },
-      { uid: "uid-ok", slug: "ok-c3d4" },
-    ]);
-    expect(result.has("uid-broken")).toBe(false);
-    expect(result.get("uid-ok")).toBe("tok-ok");
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("broken-a1b2"));
   });
 });
 

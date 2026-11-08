@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as path from "path";
-import { buildProvisioningContext } from "../lib/provisionSteps.js";
+import { buildProvisioningContext } from "@octogee/core/provisionSteps";
 import { CUSTOMERS_DIR } from "../lib/config.js";
 
 describe("buildProvisioningContext", () => {

@@ -1,5 +1,6 @@
 import * as crypto from "crypto";
 import { db, FieldValue, Timestamp } from "./db.js";
+import { platformStateStore } from "./platform-state.js";
 
 // Unified "mint centrally, manage at the gateway" ticket primitive. One
 // collection, purpose-scoped. See docs/specs/GATEWAY-ROUTING-PATTERN-SPEC.md.
@@ -91,8 +92,21 @@ export async function mintTicket(args: {
 
   const policy = POLICIES[purpose];
   const ticketId = crypto.randomUUID();
-  const ticketRef = db.collection(COLLECTION).doc(ticketId);
   const expiresAt = now + policy.ttlMs;
+  const result: GatewayTicket = { ticket: ticketId, uid, gatewayId, purpose, expiresAt, payload };
+
+  if (policy.perUidCap === undefined && policy.hourlyQuota === undefined) {
+    await platformStateStore.access.gatewayTickets.create({
+      ticketId,
+      uid,
+      gatewayId,
+      expiresAt,
+      grant: { purpose, payload, createdAt: { serverNow: true } },
+    });
+    return result;
+  }
+
+  const ticketRef = db.collection(COLLECTION).doc(ticketId);
   const docData = {
     uid,
     gatewayId,
@@ -105,14 +119,6 @@ export async function mintTicket(args: {
     payload,
     createdAt: FieldValue.serverTimestamp(),
   };
-  const result: GatewayTicket = { ticket: ticketId, uid, gatewayId, purpose, expiresAt, payload };
-
-  const capped = policy.perUidCap !== undefined;
-  const quotaed = policy.hourlyQuota !== undefined;
-  if (!capped && !quotaed) {
-    await ticketRef.set(docData);
-    return result;
-  }
 
   // Transactional read-then-write so concurrent mints can't both pass a stale
   // count — Firestore optimistic concurrency forces retry-and-reread. Caps and
@@ -156,73 +162,6 @@ export async function mintTicket(args: {
   });
 
   return result;
-}
-
-export async function redeemTicket(args: {
-  ticketId: string;
-  purpose: GatewayTicketPurpose;
-  // Per-gateway binding: the gatewayId this redemption must match — the
-  // /api/g/<gid> the request was routed to. Pass `null` to opt out EXPLICITLY
-  // (the legacy oc/ws path, which re-resolves the gateway from the user doc
-  // rather than trusting the ticket's stored gatewayId). Production callers
-  // always pass it; tests that aren't about binding may omit it.
-  expectedGatewayId?: string | null;
-  // Feature-specific payload check, run INSIDE the redeem transaction. Returning
-  // false vetoes the redemption with NO delete (the ticket can expire/retry) —
-  // distinct from onValidated throwing, which aborts the tx and propagates.
-  validate?: (ticket: GatewayTicket) => boolean;
-  onValidated?: (
-    tx: FirebaseFirestore.Transaction,
-    ticket: GatewayTicket,
-  ) => void | Promise<void>;
-  now?: number;
-}): Promise<GatewayTicket | null> {
-  const { ticketId, purpose, expectedGatewayId, validate, onValidated, now = Date.now() } = args;
-  if (typeof ticketId !== "string" || !ticketId) return null;
-  const ref = db.collection(COLLECTION).doc(ticketId);
-
-  return db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
-    if (!snap.exists) return null;
-    const ticket = redeemableTicketFromData({
-      data: snap.data() ?? {},
-      expectedGatewayId,
-      now,
-      purpose,
-      ticketId,
-    });
-    if (!ticket) return null;
-    if (validate && !validate(ticket)) return null;
-    if (onValidated) await onValidated(tx, ticket);
-    tx.delete(ref);
-    return ticket;
-  });
-}
-
-function redeemableTicketFromData(args: {
-  data: Record<string, unknown>;
-  expectedGatewayId: string | null | undefined;
-  now: number;
-  purpose: GatewayTicketPurpose;
-  ticketId: string;
-}): GatewayTicket | null {
-  const { data, expectedGatewayId, now, purpose, ticketId } = args;
-  const expiresAt = data.expiresAt;
-  const docPurpose = data.purpose;
-  const uid = data.uid;
-  const gatewayId = data.gatewayId;
-
-  if (typeof expiresAt !== "number" || expiresAt < now) return null;
-  if (docPurpose !== purpose) return null;
-  if (typeof uid !== "string" || !uid) return null;
-  if (typeof gatewayId !== "string") return null;
-  if (typeof expectedGatewayId === "string" && gatewayId !== expectedGatewayId) return null;
-
-  const payload =
-    data.payload && typeof data.payload === "object"
-      ? (data.payload as Record<string, unknown>)
-      : {};
-  return { ticket: ticketId, uid, gatewayId, purpose, expiresAt, payload };
 }
 
 export const _testInternal = {

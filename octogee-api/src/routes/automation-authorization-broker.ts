@@ -1,10 +1,9 @@
 import { Router, type Request, type Response } from "express";
-import type { Firestore } from "firebase-admin/firestore";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 
-import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
-import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { isValidUsername } from "@octogee/shared/types/identity";
+import { builderAllowsInteractiveAccess } from "../lib/assigned-builder.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -55,39 +54,37 @@ function authorizationContext(
   return { bound, uid: req.uid };
 }
 
+type AutomationAuthorizationStore = Pick<PlatformStateRepositories, "builders" | "workspaces">;
+
 async function assignedOwnerSlug(
-  db: Firestore,
+  store: AutomationAuthorizationStore,
   uid: string,
   gatewayId: string,
 ): Promise<{ slug: string | null; active: boolean }> {
-  const userSnap = await db.doc(`users/${uid}`).get();
-  const user = userSnap.exists ? userSnap.data() : undefined;
-  if (!accountAllowsInteractiveAccess(user)) return { slug: null, active: false };
-  const slug = slugFromAssignedUser(user);
-  const provisioning = user?.provisioning as Record<string, unknown> | undefined;
-  const openclaw = provisioning?.openclaw as Record<string, unknown> | undefined;
-  if (!slug || !isValidUsername(slug) || openclaw?.gatewayId !== gatewayId) {
+  const builder = await store.builders.records.get(uid);
+  if (builder && !builderAllowsInteractiveAccess(builder)) return { slug: null, active: false };
+  const slug = builder?.slug ?? null;
+  if (!slug || !isValidUsername(slug) || builder?.gateway?.gatewayId !== gatewayId) {
     return { slug: null, active: true };
   }
   return { slug, active: true };
 }
 
-async function isWorkspaceOwner(db: Firestore, slug: string, uid: string): Promise<boolean> {
-  const workspaceSnap = await db.doc(`workspaces/${slug}`).get();
-  return workspaceSnap.exists && workspaceSnap.data()?.ownerUid === uid;
+async function isWorkspaceOwner(store: AutomationAuthorizationStore, slug: string, uid: string): Promise<boolean> {
+  const workspace = await store.workspaces.records.get(slug);
+  return workspace?.ownerUid === uid;
 }
 
-async function coachChannelId(db: Firestore, slug: string): Promise<string | null> {
-  const channelSnap = await db.doc(`workspaces/${slug}/channels/coach-dm`).get();
-  const mattermost = record(channelSnap.data()?.mattermost);
-  const channelId = mattermost?.channelId;
+async function coachChannelId(store: AutomationAuthorizationStore, slug: string): Promise<string | null> {
+  const channel = await store.workspaces.channels.get({ workspaceSlug: slug, projectSlug: null }, "coach-dm");
+  const channelId = channel?.mattermostChannelId;
   return typeof channelId === "string" && MATTERMOST_ID.test(channelId) ? channelId : null;
 }
 
-async function authorizeRequest(req: Request, res: Response, db: Firestore): Promise<void> {
+async function authorizeRequest(req: Request, res: Response, store: AutomationAuthorizationStore): Promise<void> {
   const context = authorizationContext(req, res);
   if (!context) return;
-  const assignment = await assignedOwnerSlug(db, context.uid, context.bound.gatewayId);
+  const assignment = await assignedOwnerSlug(store, context.uid, context.bound.gatewayId);
   if (!assignment.active) {
     res.status(403).json(FORBIDDEN);
     return;
@@ -97,11 +94,11 @@ async function authorizeRequest(req: Request, res: Response, db: Firestore): Pro
     res.status(404).json({ error: "not_found" });
     return;
   }
-  if (!await isWorkspaceOwner(db, slug, context.uid)) {
+  if (!await isWorkspaceOwner(store, slug, context.uid)) {
     res.status(403).json(FORBIDDEN);
     return;
   }
-  const authorizedCoachChannelId = await coachChannelId(db, slug);
+  const authorizedCoachChannelId = await coachChannelId(store, slug);
   if (!authorizedCoachChannelId) {
     res.status(409).json({ error: "coach_channel_not_ready" });
     return;
@@ -113,12 +110,12 @@ async function authorizeRequest(req: Request, res: Response, db: Firestore): Pro
   });
 }
 
-export function createAutomationAuthorizationBrokerRoutes(opts: { db: Firestore }): Router {
+export function createAutomationAuthorizationBrokerRoutes(opts: { store: AutomationAuthorizationStore }): Router {
   const router = Router();
 
   router.post("/authorize", async (req, res, next) => {
     try {
-      await authorizeRequest(req, res, opts.db);
+      await authorizeRequest(req, res, opts.store);
     } catch (error) {
       next(error);
     }

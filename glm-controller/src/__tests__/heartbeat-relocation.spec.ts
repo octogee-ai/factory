@@ -6,8 +6,8 @@ import {
 import { OPENCLAW_CONTROL_RUNTIME_FRESH_MS } from "@octogee/core/openclaw-control-runtime-ready";
 import {
   HEARTBEAT_REFRESH_MS,
-  heartbeatMergeIsRedundant,
-  revisionHeartbeatMerge,
+  heartbeatReportIsRedundant,
+  pollerHeartbeatReport,
   readHeartbeatLiveness,
   readMountedCustomers,
   heartbeatTeardownAction,
@@ -33,81 +33,59 @@ describe("heartbeatTeardownAction — retire must preserve a durable GatewayDoc"
   });
 });
 
-describe("revisionHeartbeatMerge — writer targets glmGateways/{id}.heartbeat", () => {
-  it("nests live telemetry under the heartbeat sub-document", () => {
-    const merge = revisionHeartbeatMerge(
+describe("pollerHeartbeatReport — the poller's live telemetry report", () => {
+  const INTERNAL_URL = "http://octogee-gateway-bender.octogee.svc.cluster.local:18789";
+
+  it("reports the polled telemetry with the gateway's internal URL", () => {
+    expect(pollerHeartbeatReport(
       { status: "ready", mountedCustomers: ["a", "b"], startedAt: 42 },
-      1000,
-    );
-    expect(merge).toEqual({
-      heartbeat: {
-        status: "ready",
-        mountedCustomers: ["a", "b"],
-        lastHeartbeatAt: 1000,
-        startedAt: 42,
-      },
+      INTERNAL_URL,
+    )).toEqual({
+      status: "ready",
+      mountedCustomers: ["a", "b"],
+      startedAt: 42,
+      internalUrl: INTERNAL_URL,
     });
   });
 
   it("writes the configured Builder report, including an explicit null, only when the poll carried one", () => {
-    expect(revisionHeartbeatMerge(
-      { status: "ready", mountedCustomers: [], configuredBuilder: { state: "claimed", generation: 2 } }, 1000,
-    ).heartbeat.configuredBuilder).toEqual({ state: "claimed", generation: 2 });
-    expect(revisionHeartbeatMerge(
-      { status: "ready", mountedCustomers: [], configuredBuilder: null }, 1000,
-    ).heartbeat).toHaveProperty("configuredBuilder", null);
-    expect(revisionHeartbeatMerge({ status: "ready", mountedCustomers: [] }, 1000).heartbeat)
+    expect(pollerHeartbeatReport(
+      { status: "ready", mountedCustomers: [], configuredBuilder: { state: "claimed", generation: 2 } }, INTERNAL_URL,
+    ).configuredBuilder).toEqual({ state: "claimed", generation: 2 });
+    expect(pollerHeartbeatReport(
+      { status: "ready", mountedCustomers: [], configuredBuilder: null }, INTERNAL_URL,
+    )).toHaveProperty("configuredBuilder", null);
+    expect(pollerHeartbeatReport({ status: "ready", mountedCustomers: [] }, INTERNAL_URL))
       .not.toHaveProperty("configuredBuilder");
   });
 
-  it("leaves the separately published config marker untouched", () => {
-    const timestamp = { toMillis: () => 1000 };
-    const controlProtocol = { protocol: "durable-openclaw-config" as const, version: 2 as const };
-    const pollerMerge = revisionHeartbeatMerge({
-      status: "ready",
-      mountedCustomers: [],
-    }, timestamp);
-
-    expect(pollerMerge.heartbeat).not.toHaveProperty("configStatus");
-    expect({
-      configStatus: {
-        controlProtocol,
-        openclawVersion: "2026.7.1",
-        observedAt: 900,
-      },
-      ...pollerMerge.heartbeat,
-    }).toMatchObject({
-      configStatus: {
-        controlProtocol,
-        openclawVersion: "2026.7.1",
-        observedAt: 900,
-      },
-      lastHeartbeatAt: timestamp,
-    });
+  it("leaves the separately published config marker and the store's heartbeat stamp out of the report", () => {
+    const report = pollerHeartbeatReport({ status: "ready", mountedCustomers: [] }, INTERNAL_URL);
+    expect(report).not.toHaveProperty("configStatus");
+    expect(report).not.toHaveProperty("lastHeartbeatAt");
   });
 
   it("omits startedAt when the poll did not report it", () => {
-    const merge = revisionHeartbeatMerge({ status: "ready", mountedCustomers: [] }, 5);
-    expect(merge.heartbeat).not.toHaveProperty("startedAt");
+    expect(pollerHeartbeatReport({ status: "ready", mountedCustomers: [] }, INTERNAL_URL))
+      .not.toHaveProperty("startedAt");
   });
 
   it("persists the OpenClaw runtime version from trusted pod health", () => {
     expect(
-      revisionHeartbeatMerge(
+      pollerHeartbeatReport(
         {
           status: "ready",
           mountedCustomers: [],
           openclawVersion: "2026.7.1",
         },
-        5,
-      ).heartbeat,
+        INTERNAL_URL,
+      ),
     ).toMatchObject({ openclawVersion: "2026.7.1" });
   });
 });
 
-describe("heartbeatMergeIsRedundant — a converged poll writes nothing", () => {
+describe("heartbeatReportIsRedundant — a converged poll writes nothing", () => {
   const NOW = 1_000_000;
-  const SERVER_TIMESTAMP = { _methodName: "serverTimestamp" };
   const INTERNAL_URL = "http://octogee-gateway-bender.octogee.svc.cluster.local:18789";
   const REPORTED = {
     status: "ready",
@@ -117,10 +95,8 @@ describe("heartbeatMergeIsRedundant — a converged poll writes nothing", () => 
     openclawVersion: "2026.7.1",
   };
 
-  function candidate(): Record<string, unknown> {
-    const merge = revisionHeartbeatMerge(REPORTED, SERVER_TIMESTAMP);
-    merge.heartbeat.internalUrl = INTERNAL_URL;
-    return merge.heartbeat;
+  function candidate() {
+    return pollerHeartbeatReport(REPORTED, INTERNAL_URL);
   }
 
   function stored(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -133,11 +109,11 @@ describe("heartbeatMergeIsRedundant — a converged poll writes nothing", () => 
   }
 
   it("skips the write when every merged field already matches a fresh stored heartbeat", () => {
-    expect(heartbeatMergeIsRedundant(stored(), candidate(), NOW)).toBe(true);
+    expect(heartbeatReportIsRedundant(stored(), candidate(), NOW)).toBe(true);
   });
 
   it("reads a Firestore Timestamp lastHeartbeatAt for the freshness gate", () => {
-    expect(heartbeatMergeIsRedundant(
+    expect(heartbeatReportIsRedundant(
       stored({ lastHeartbeatAt: { toMillis: () => NOW - GATEWAY_HEARTBEAT_INTERVAL_MS } }),
       candidate(),
       NOW,
@@ -152,11 +128,11 @@ describe("heartbeatMergeIsRedundant — a converged poll writes nothing", () => 
     ["openclawVersion", { openclawVersion: "2026.7.0" }],
     ["internalUrl", { internalUrl: "http://elsewhere:18789" }],
   ])("writes when the poll reports a new %s", (_field, drift) => {
-    expect(heartbeatMergeIsRedundant(stored(drift), candidate(), NOW)).toBe(false);
+    expect(heartbeatReportIsRedundant(stored(drift), candidate(), NOW)).toBe(false);
   });
 
   it("writes once the stored heartbeat reaches the refresh deadline", () => {
-    expect(heartbeatMergeIsRedundant(
+    expect(heartbeatReportIsRedundant(
       stored({ lastHeartbeatAt: NOW - HEARTBEAT_REFRESH_MS }),
       candidate(),
       NOW,
@@ -164,20 +140,20 @@ describe("heartbeatMergeIsRedundant — a converged poll writes nothing", () => 
   });
 
   it("writes when the stored heartbeat is absent or carries no lastHeartbeatAt", () => {
-    expect(heartbeatMergeIsRedundant(undefined, candidate(), NOW)).toBe(false);
-    expect(heartbeatMergeIsRedundant({ status: "ready" }, candidate(), NOW)).toBe(false);
+    expect(heartbeatReportIsRedundant(undefined, candidate(), NOW)).toBe(false);
+    expect(heartbeatReportIsRedundant({ status: "ready" }, candidate(), NOW)).toBe(false);
   });
 
   it("writes when the stored stamp is ahead of the poller clock", () => {
-    expect(heartbeatMergeIsRedundant(
+    expect(heartbeatReportIsRedundant(
       stored({ lastHeartbeatAt: NOW + 1 }),
       candidate(),
       NOW,
     )).toBe(false);
   });
 
-  it("ignores stored fields the poller's merge never writes", () => {
-    expect(heartbeatMergeIsRedundant(
+  it("ignores stored fields the poller's report never writes", () => {
+    expect(heartbeatReportIsRedundant(
       stored({ lastError: { message: "boom", at: 5 } }),
       candidate(),
       NOW,
@@ -185,7 +161,7 @@ describe("heartbeatMergeIsRedundant — a converged poll writes nothing", () => 
   });
 
   it("never rewrites over the broker-authored configStatus it does not own", () => {
-    expect(heartbeatMergeIsRedundant(
+    expect(heartbeatReportIsRedundant(
       stored({
         configStatus: {
           runtimeReady: true,

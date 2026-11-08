@@ -1,14 +1,5 @@
 import * as crypto from "node:crypto";
-import type { Firestore } from "firebase-admin/firestore";
-import {
-  MODEL_BROKER_GATEWAY_POINTERS_COLLECTION,
-  MODEL_BROKER_TOKENS_COLLECTION,
-} from "@octogee/shared/types/model-broker-usage";
-
-export {
-  MODEL_BROKER_GATEWAY_POINTERS_COLLECTION,
-  MODEL_BROKER_TOKENS_COLLECTION,
-} from "@octogee/shared/types/model-broker-usage";
+import type { ModelBrokerToken, PlatformStateStore } from "@octogee/core/platform-state";
 
 export type ModelBrokerProvider = "anthropic" | "vertex" | "openrouter" | "openai";
 export type ModelBrokerTokenPurpose = "model" | "embeddings";
@@ -125,51 +116,11 @@ export function normalizeModelBrokerTokenLimits(
 }
 
 export function normalizeModelBrokerTokenPolicy(
-  policy: Partial<ModelBrokerTokenPolicy> | null | undefined,
+  policy: { readonly freeTier?: unknown; readonly houseFallback?: unknown } | null | undefined,
 ): ModelBrokerTokenPolicy {
   return {
     freeTier: policy?.freeTier === true,
     houseFallback: policy?.houseFallback !== false,
-  };
-}
-
-function optionalNumber(value: unknown): number | null {
-  return typeof value === "number" ? value : null;
-}
-
-function optionalRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function tokenPurpose(value: unknown): ModelBrokerTokenPurpose {
-  return value === "embeddings" ? "embeddings" : "model";
-}
-
-function parseRecord(data: Record<string, unknown> | undefined): ModelBrokerTokenRecord | null {
-  if (!recordHasRequiredShape(data)) return null;
-  const ownerUid = typeof data.ownerUid === "string" ? data.ownerUid : null;
-  const expiresAt = optionalNumber(data.expiresAt);
-  const revokedAt = optionalNumber(data.revokedAt);
-  const limits = normalizeModelBrokerTokenLimits(optionalRecord(data.limits));
-  const policy = normalizeModelBrokerTokenPolicy(optionalRecord(data.policy));
-  const trace = normalizeModelBrokerTokenTrace(optionalRecord(data.trace));
-  return {
-    tokenHash: data.tokenHash,
-    gatewayId: data.gatewayId,
-    ownerUid,
-    provider: data.provider,
-    purpose: tokenPurpose(data.purpose),
-    capped: true,
-    secretName: data.secretName,
-    createdAt: data.createdAt,
-    expiresAt,
-    limits,
-    policy,
-    trace,
-    revoked: data.revoked === true,
-    ...(revokedAt === null ? {} : { revokedAt }),
   };
 }
 
@@ -184,7 +135,7 @@ function optionalTraceString(value: unknown): string | null {
 }
 
 function normalizeModelBrokerTokenTrace(
-  trace: Partial<ModelBrokerTokenTrace> | null | undefined,
+  trace: { readonly source?: unknown; readonly ownerSlug?: unknown; readonly agentId?: unknown } | null | undefined,
 ): ModelBrokerTokenTrace | null {
   const source = traceSource(trace?.source);
   if (!source) return null;
@@ -195,45 +146,18 @@ function normalizeModelBrokerTokenTrace(
   };
 }
 
-function recordHasRequiredShape(data: Record<string, unknown> | undefined): data is Record<string, unknown> & {
-  tokenHash: string;
-  gatewayId: string;
-  provider: ModelBrokerProvider;
-  secretName: string;
-  createdAt: number;
+function mintModelBrokerToken(input: IssueModelBrokerTokenInput): {
+  token: string;
+  record: ModelBrokerTokenRecord;
 } {
-  if (!data) return false;
-  return [
-    data.provider === "anthropic" ||
-      data.provider === "vertex" ||
-      data.provider === "openrouter" ||
-      data.provider === "openai",
-    data.purpose === undefined ||
-      data.purpose === "model" ||
-      data.purpose === "embeddings",
-    data.capped === true,
-    typeof data.tokenHash === "string",
-    typeof data.gatewayId === "string" && data.gatewayId.length > 0,
-    typeof data.secretName === "string" && data.secretName.length > 0,
-    typeof data.createdAt === "number",
-  ].every(Boolean);
-}
-
-export class InMemoryModelBrokerTokenStore implements ModelBrokerTokenStore {
-  private readonly tokens = new Map<string, ModelBrokerTokenRecord>();
-  private readonly pointers = new Map<string, string>();
-
-  async issueToken(input: IssueModelBrokerTokenInput): Promise<{
-    token: string;
-    record: ModelBrokerTokenRecord;
-  }> {
-    const now = input.now ?? Date.now();
-    const ttl = normalizeTtlSeconds(input.ttlSeconds);
-    const randomBytes = input.randomBytes ?? crypto.randomBytes;
-    const token = `ogk_${input.gatewayId}_${randomBytes(32).toString("base64url")}`;
-    const tokenHash = hashModelBrokerToken(token);
-    const record: ModelBrokerTokenRecord = {
-      tokenHash,
+  const now = input.now ?? Date.now();
+  const ttl = normalizeTtlSeconds(input.ttlSeconds);
+  const randomBytes = input.randomBytes ?? crypto.randomBytes;
+  const token = `ogk_${input.gatewayId}_${randomBytes(32).toString("base64url")}`;
+  return {
+    token,
+    record: {
+      tokenHash: hashModelBrokerToken(token),
       gatewayId: input.gatewayId,
       ownerUid: input.ownerUid ?? null,
       provider: input.provider,
@@ -246,7 +170,63 @@ export class InMemoryModelBrokerTokenStore implements ModelBrokerTokenStore {
       policy: normalizeModelBrokerTokenPolicy(input.policy),
       trace: normalizeModelBrokerTokenTrace(input.trace),
       revoked: false,
-    };
+    },
+  };
+}
+
+function lookupOutcome(record: ModelBrokerTokenRecord, now: number): ModelBrokerTokenLookup {
+  if (record.revoked) return { outcome: "revoked", record };
+  if (record.expiresAt !== null && record.expiresAt <= now) return { outcome: "expired", record };
+  return { outcome: "valid", record };
+}
+
+function storedToken(record: ModelBrokerTokenRecord): ModelBrokerToken {
+  return {
+    tokenHash: record.tokenHash,
+    gatewayId: record.gatewayId,
+    ownerUid: record.ownerUid,
+    provider: record.provider,
+    purpose: record.purpose,
+    secretName: record.secretName,
+    createdAt: record.createdAt,
+    expiresAt: record.expiresAt,
+    limits: record.limits,
+    railPolicy: { ...record.policy },
+    trace: record.trace === null ? null : { ...record.trace },
+    revoked: record.revoked,
+    revokedAt: record.revokedAt ?? null,
+  };
+}
+
+function tokenRecord(token: ModelBrokerToken): ModelBrokerTokenRecord {
+  return {
+    tokenHash: token.tokenHash,
+    gatewayId: token.gatewayId,
+    ownerUid: token.ownerUid,
+    provider: token.provider,
+    purpose: token.purpose,
+    capped: true,
+    secretName: token.secretName,
+    createdAt: token.createdAt,
+    expiresAt: token.expiresAt,
+    limits: normalizeModelBrokerTokenLimits(token.limits),
+    policy: normalizeModelBrokerTokenPolicy(token.railPolicy),
+    trace: normalizeModelBrokerTokenTrace(token.trace),
+    revoked: token.revoked,
+    ...(token.revokedAt === null ? {} : { revokedAt: token.revokedAt }),
+  };
+}
+
+export class InMemoryModelBrokerTokenStore implements ModelBrokerTokenStore {
+  private readonly tokens = new Map<string, ModelBrokerTokenRecord>();
+  private readonly pointers = new Map<string, string>();
+
+  async issueToken(input: IssueModelBrokerTokenInput): Promise<{
+    token: string;
+    record: ModelBrokerTokenRecord;
+  }> {
+    const { token, record } = mintModelBrokerToken(input);
+    const { tokenHash, createdAt: now } = record;
     this.tokens.set(tokenHash, record);
     if (!input.skipPointer) {
       const pointerKey = input.pointerKey ?? input.gatewayId;
@@ -279,101 +259,60 @@ export class InMemoryModelBrokerTokenStore implements ModelBrokerTokenStore {
 
   async lookupToken(token: string, now = Date.now()): Promise<ModelBrokerTokenLookup> {
     const record = this.tokens.get(hashModelBrokerToken(token));
-    if (!record) return { outcome: "unknown" };
-    if (record.revoked) return { outcome: "revoked", record };
-    if (record.expiresAt !== null && record.expiresAt <= now) return { outcome: "expired", record };
-    return { outcome: "valid", record };
+    return record ? lookupOutcome(record, now) : { outcome: "unknown" };
   }
 }
 
-export function createFirestoreModelBrokerTokenStore(
-  db: Pick<Firestore, "collection">,
-): ModelBrokerTokenStore {
-  const tokens = db.collection(MODEL_BROKER_TOKENS_COLLECTION);
-  const pointers = db.collection(MODEL_BROKER_GATEWAY_POINTERS_COLLECTION);
+async function replaceGatewayToken(
+  state: PlatformStateStore,
+  token: ModelBrokerToken,
+  pointerKey: string,
+): Promise<void> {
+  await state.transaction({ label: "model-broker-token.issue" }, async (tx) => {
+    const pointer = await tx.access.modelBrokerGatewayTokens.get(pointerKey);
+    const previous = pointer === null ? null : await tx.access.modelBrokerTokens.get(pointer.tokenHash);
+    await tx.access.modelBrokerTokens.create(token);
+    if (previous !== null) await tx.access.modelBrokerTokens.revoke(previous.tokenHash, token.createdAt);
+    await tx.access.modelBrokerGatewayTokens.put({
+      pointerKey,
+      gatewayId: token.gatewayId,
+      ownerUid: token.ownerUid,
+      provider: token.provider,
+      secretName: token.secretName,
+      tokenHash: token.tokenHash,
+      updatedAt: token.createdAt,
+    });
+  });
+}
 
+export function createModelBrokerTokenStore(state: PlatformStateStore): ModelBrokerTokenStore {
   return {
     async issueToken(input) {
-      const now = input.now ?? Date.now();
-      const ttl = normalizeTtlSeconds(input.ttlSeconds);
-      const randomBytes = input.randomBytes ?? crypto.randomBytes;
-      const token = `ogk_${input.gatewayId}_${randomBytes(32).toString("base64url")}`;
-      const tokenHash = hashModelBrokerToken(token);
-      const record: ModelBrokerTokenRecord = {
-        tokenHash,
-        gatewayId: input.gatewayId,
-        ownerUid: input.ownerUid ?? null,
-        provider: input.provider,
-        purpose: input.purpose ?? "model",
-        capped: true,
-        secretName: input.secretName,
-        createdAt: now,
-        expiresAt: ttl ? now + ttl * 1000 : null,
-        limits: normalizeModelBrokerTokenLimits(input.limits),
-        policy: normalizeModelBrokerTokenPolicy(input.policy),
-        trace: normalizeModelBrokerTokenTrace(input.trace),
-        revoked: false,
-      };
-      await tokens.doc(tokenHash).set(record);
-      if (!input.skipPointer) {
-        const pointerKey = input.pointerKey ?? input.gatewayId;
-        const pointerRef = pointers.doc(pointerKey);
-        const pointer = await pointerRef.get();
-        const previousHash = pointer.exists
-          ? (pointer.data() as { tokenHash?: unknown } | undefined)?.tokenHash
-          : undefined;
-        if (typeof previousHash === "string" && previousHash && previousHash !== tokenHash) {
-          const previousRef = tokens.doc(previousHash);
-          const previous = await previousRef.get();
-          // A stale pointer should not create a revoked-only tombstone token doc.
-          if (previous.exists) {
-            await previousRef.set({ revoked: true, revokedAt: now }, { merge: true });
-          }
-        }
-        await pointerRef.set({
-          gatewayId: input.gatewayId,
-          ownerUid: input.ownerUid ?? null,
-          provider: input.provider,
-          secretName: input.secretName,
-          tokenHash,
-          updatedAt: now,
-        });
-      }
-      return { token, record };
+      const issued = mintModelBrokerToken(input);
+      const token = storedToken(issued.record);
+      await (input.skipPointer
+        ? state.access.modelBrokerTokens.create(token)
+        : replaceGatewayToken(state, token, input.pointerKey ?? input.gatewayId));
+      return issued;
     },
 
     async revokeGatewayToken(input) {
       const pointerKey = input.pointerKey ?? input.gatewayId;
-      const pointerRef = pointers.doc(pointerKey);
-      const pointer = await pointerRef.get();
-      if (!pointer.exists) return { revoked: false };
-      const data = pointer.data() as
-        | {
-            tokenHash?: unknown;
-            provider?: unknown;
-            secretName?: unknown;
-          }
-        | undefined;
-      const tokenHash = typeof data?.tokenHash === "string" ? data.tokenHash : "";
-      if (!tokenHash || data?.provider !== input.provider || data?.secretName !== input.secretName) {
-        return { revoked: false };
-      }
-      await tokens.doc(tokenHash).set(
-        { revoked: true, revokedAt: input.now ?? Date.now() },
-        { merge: true },
-      );
-      await pointerRef.delete();
-      return { revoked: true };
+      const revokedAt = input.now ?? Date.now();
+      return state.transaction({ label: "model-broker-token.revoke" }, async (tx) => {
+        const pointer = await tx.access.modelBrokerGatewayTokens.get(pointerKey);
+        if (pointer === null || pointer.provider !== input.provider || pointer.secretName !== input.secretName) {
+          return { revoked: false };
+        }
+        await tx.access.modelBrokerTokens.revoke(pointer.tokenHash, revokedAt);
+        await tx.access.modelBrokerGatewayTokens.delete(pointerKey);
+        return { revoked: true };
+      });
     },
 
     async lookupToken(token, now = Date.now()) {
-      const snap = await tokens.doc(hashModelBrokerToken(token)).get();
-      if (!snap.exists) return { outcome: "unknown" };
-      const record = parseRecord(snap.data() as Record<string, unknown> | undefined);
-      if (!record) return { outcome: "unknown" };
-      if (record.revoked) return { outcome: "revoked", record };
-      if (record.expiresAt !== null && record.expiresAt <= now) return { outcome: "expired", record };
-      return { outcome: "valid", record };
+      const stored = await state.access.modelBrokerTokens.get(hashModelBrokerToken(token));
+      return stored === null ? { outcome: "unknown" } : lookupOutcome(tokenRecord(stored), now);
     },
   };
 }

@@ -1,4 +1,5 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
+import { MalformedRecordError } from "@octogee/core/platform-state";
 import { requireAdmin } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
 import { db, FieldValue } from "../lib/db.js";
@@ -22,10 +23,7 @@ import {
   DEFAULT_BUILDER_AGENT_MODEL_REF,
   DEFAULT_FREE_TIER_MODEL_REF,
   DEFAULT_OPS_AGENT_MODEL_REF,
-  DEFAULT_PLATFORM_FREE_CONFIG,
   PLATFORM_CONFIG_COLLECTION,
-  PLATFORM_FREE_CONFIG_DOC,
-  PLATFORM_MODEL_CONFIG_DOC,
   PLATFORM_TRIAL_CONFIG_DOC,
   parsePlatformConnectConfig,
   parsePlatformFreeConfig,
@@ -33,12 +31,13 @@ import {
   parsePlatformTrialConfig,
   resolveFreeTierModel,
   resolveOpsAgentModel,
+  type PlatformModelConfig,
 } from "@octogee/shared/types/platform-config";
 import {
   MalformedPlatformConnectConfigError,
-  platformConnectDoc,
   readPlatformConnectConfig,
 } from "../lib/platform-connect-config.js";
+import { readPlatformFreeConfig } from "../lib/platform-free-config.js";
 
 const router = Router();
 router.use((_req, res, next) => {
@@ -97,10 +96,12 @@ addAdminFleetRoutes(router, {
   revokeConnectorGrantsForUser: customerDeletionDeps.revokeConnectorGrantsForUser,
 });
 
-const platformModelDoc = () =>
-  db.collection(PLATFORM_CONFIG_COLLECTION).doc(PLATFORM_MODEL_CONFIG_DOC);
-const platformFreeDoc = () =>
-  db.collection(PLATFORM_CONFIG_COLLECTION).doc(PLATFORM_FREE_CONFIG_DOC);
+const SERVER_NOW = { serverNow: true } as const;
+
+function adminUid(req: Request): string {
+  if (req.uid === undefined) throw new Error("admin route reached without an authenticated uid");
+  return req.uid;
+}
 
 const platformCatalog = MODEL_CATALOG.map((entry) => ({
   ref: modelRefForCatalogEntry(entry),
@@ -131,7 +132,7 @@ function postHogProjectUrl(value: string | undefined): string | null {
 
 // Field-tolerant read of the stored dial doc: each invalid field defaults
 // independently so one bad ref never blanks the whole Admin panel.
-function resolvePlatformModelDials(data: Record<string, unknown> | undefined): {
+function resolvePlatformModelDials(data: PlatformModelConfig | undefined): {
   freeTierModelRef: string;
   opsAgentModelRef: string;
   builderAgentModelRef: string;
@@ -141,21 +142,18 @@ function resolvePlatformModelDials(data: Record<string, unknown> | undefined): {
   const freeTierModelRef = validCatalogRef(data?.freeTierModelRef)
     ? data.freeTierModelRef
     : DEFAULT_FREE_TIER_MODEL_REF;
-  const opsAgentModelRef = typeof data?.opsAgentModelRef === "string" &&
-    resolveOpsAgentModel(data.opsAgentModelRef)
+  const opsAgentModelRef = data !== undefined && resolveOpsAgentModel(data.opsAgentModelRef)
     ? data.opsAgentModelRef
     : DEFAULT_OPS_AGENT_MODEL_REF;
   const builderAgentModelRef = validCatalogRef(data?.builderAgentModelRef)
     ? data.builderAgentModelRef
     : DEFAULT_BUILDER_AGENT_MODEL_REF;
   const builderAgentFallbackModelRef = resolvedFallbackDial(data?.builderAgentFallbackModelRef);
-  const invalidFields = [
-    ["freeTierModelRef", freeTierModelRef],
-    ["opsAgentModelRef", opsAgentModelRef],
-    ["builderAgentModelRef", builderAgentModelRef],
-    ["builderAgentFallbackModelRef", builderAgentFallbackModelRef],
-  ].some(([field, resolved]) =>
-    data?.[field as string] !== undefined && resolved !== data[field as string],
+  const invalidFields = data !== undefined && (
+    freeTierModelRef !== data.freeTierModelRef ||
+    opsAgentModelRef !== data.opsAgentModelRef ||
+    builderAgentModelRef !== data.builderAgentModelRef ||
+    builderAgentFallbackModelRef !== data.builderAgentFallbackModelRef
   );
   return {
     freeTierModelRef,
@@ -168,8 +166,7 @@ function resolvePlatformModelDials(data: Record<string, unknown> | undefined): {
 
 router.get("/platform-config", async (_req, res) => {
   try {
-    const snap = await platformModelDoc().get();
-    const data = snap.data() as Record<string, unknown> | undefined;
+    const data = (await platformStateStore.config.platform.get("models"))?.value;
     const dials = resolvePlatformModelDials(data);
     if (dials.invalidFields) {
       logger.warn("[admin] platformConfig/models carries an invalid model ref — defaulting invalid fields", {
@@ -193,6 +190,11 @@ router.get("/platform-config", async (_req, res) => {
       posthogProjectUrl: postHogProjectUrl(process.env.POSTHOG_PROJECT_URL),
     });
   } catch (err) {
+    if (err instanceof MalformedRecordError) {
+      logger.error("[admin] platformConfig/models is malformed — send a full dial to replace it", { err });
+      res.status(409).json({ error: "platform_config_invalid" });
+      return;
+    }
     logger.error("[admin] platform-config read failed", { err });
     res.status(500).json({ error: "platform_config_read_failed" });
   }
@@ -205,17 +207,7 @@ router.put("/platform-config", async (req, res) => {
     return;
   }
   try {
-    await platformModelDoc().set(
-      {
-        freeTierModelRef: parsed.freeTierModelRef,
-        opsAgentModelRef: parsed.opsAgentModelRef,
-        builderAgentModelRef: parsed.builderAgentModelRef,
-        builderAgentFallbackModelRef: parsed.builderAgentFallbackModelRef,
-        updatedAt: FieldValue.serverTimestamp(),
-        updatedBy: req.uid ?? null,
-      },
-      { merge: true },
-    );
+    await platformStateStore.config.platform.put("models", parsed, adminUid(req), SERVER_NOW);
     logger.info("[admin] platform model dials set", {
       freeTierModelRef: parsed.freeTierModelRef,
       opsAgentModelRef: parsed.opsAgentModelRef,
@@ -238,9 +230,7 @@ router.put("/platform-config", async (req, res) => {
 
 router.get("/platform-free-config", async (_req, res) => {
   try {
-    const snap = await platformFreeDoc().get();
-    const config = parsePlatformFreeConfig(snap.data()) ?? DEFAULT_PLATFORM_FREE_CONFIG;
-    res.json(config);
+    res.json(await readPlatformFreeConfig());
   } catch (err) {
     logger.error("[admin] platform-free-config read failed", { err });
     res.status(500).json({ error: "free_config_read_failed" });
@@ -254,12 +244,7 @@ router.put("/platform-free-config", async (req, res) => {
     return;
   }
   try {
-    await platformFreeDoc().set({
-      schemaVersion: config.schemaVersion,
-      workspaceStorageGb: config.workspaceStorageGb,
-      updatedAt: FieldValue.serverTimestamp(),
-      updatedBy: req.uid ?? null,
-    });
+    await platformStateStore.config.platform.put("free", config, adminUid(req), SERVER_NOW);
     logger.info("[admin] Free defaults set", {
       workspaceStorageGb: config.workspaceStorageGb,
       updatedBy: req.uid,
@@ -293,25 +278,27 @@ router.put("/platform-connect-config", async (req, res) => {
   try {
     const bodyHasUids =
       !!req.body && typeof req.body === "object" && "googleAllowlistUids" in (req.body as object);
-    let googleAllowlistUids = parsed.googleAllowlistUids;
-    if (!bodyHasUids) {
-      try {
-        googleAllowlistUids = (await readPlatformConnectConfig()).googleAllowlistUids;
-      } catch (err) {
-        if (!(err instanceof MalformedPlatformConnectConfigError)) throw err;
-        res.status(409).json({
-          error: "connect_config_invalid",
-          message: "stored doc is malformed; send googleAllowlistUids to replace it",
-        });
-        return;
-      }
-    }
-    await platformConnectDoc().set({
-      googleStages: parsed.googleStages,
-      googleAllowlistUids,
-      updatedAt: FieldValue.serverTimestamp(),
-      updatedBy: req.uid ?? null,
+    const updatedBy = adminUid(req);
+    const googleAllowlistUids = await platformStateStore.transaction(
+      { label: "admin.platformConnectConfig.put" },
+      async (tx) => {
+        const uids = bodyHasUids
+          ? parsed.googleAllowlistUids
+          : (await readPlatformConnectConfig(tx.config.platform)).googleAllowlistUids;
+        await tx.config.platform.put("connect", { googleStages: parsed.googleStages, googleAllowlistUids: uids }, updatedBy, SERVER_NOW);
+        return uids;
+      },
+    ).catch((err: unknown) => {
+      if (err instanceof MalformedPlatformConnectConfigError) return null;
+      throw err;
     });
+    if (googleAllowlistUids === null) {
+      res.status(409).json({
+        error: "connect_config_invalid",
+        message: "stored doc is malformed; send googleAllowlistUids to replace it",
+      });
+      return;
+    }
     logger.info("[admin] google connect dial set", {
       googleStages: parsed.googleStages,
       allowlistCount: googleAllowlistUids.length,

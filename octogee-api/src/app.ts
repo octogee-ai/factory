@@ -1,3 +1,4 @@
+import { firestoreBuilderAccountReader } from "@octogee/core/builder-account";
 
 import http from "node:http";
 import express, { Request, Response, type RequestHandler } from "express";
@@ -12,7 +13,7 @@ import { helmetMiddleware } from "../../gateway-edge/src/middleware/security.js"
 import { mountClusterRoutes, type ClusterRouteTable } from "../../gateway-edge/src/routes/mount-cluster-routes.js";
 import internalGiteaAdminRoutes from "../../gateway-edge/src/routes/internal/gitea-admin.js";
 import { installBodyParsers } from "../../gateway-edge/src/middleware/body-parsers.js";
-import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-proxy.js";
+import { createMattermostMintRoutes, createMmRestProxyHandler } from "./routes/mattermost-proxy.js";
 import { createOpenClawRuntimeBrokerRoutes } from "./routes/openclaw-runtime-broker.js";
 import { createConnectorTokenBrokerRoutes } from "./routes/connector-token-broker.js";
 import { createWorkspaceCommitProofBrokerRoutes } from "./routes/workspace-commit-proof-broker.js";
@@ -76,10 +77,10 @@ import {
 } from "./lib/chat-artifact-adapters.js";
 import { resolveActiveArtifactWorkspaceSlug } from "./lib/chat-artifact-workspace.js";
 import { auth, db, storage } from "../../gateway-edge/src/lib/db.js";
-import { platformStateStore } from "../../gateway-edge/src/lib/platform-state.js";
+import { platformStateStore, readBuilderTier } from "../../gateway-edge/src/lib/platform-state.js";
 import {
   ConnectorTokenReadError,
-  getFreshAccessTokenFromDb,
+  getFreshAccessTokenFromStore,
 } from "../../gateway-edge/src/lib/connector-tokens.js";
 import { getConnector } from "../../gateway-edge/src/lib/connectors/index.js";
 import { githubListRepos, githubRepoApi } from "../../gateway-edge/src/lib/github.js";
@@ -116,7 +117,7 @@ import {
   SIDECAR_BROKER_TOKEN_AUDIENCE,
   SIDECAR_BROKER_TOKEN_HEADER,
 } from "@octogee/core/internal-fetch";
-import type { ModelBrokerTokenStore } from "./lib/model-broker-tokens.js";
+import { createModelBrokerTokenStore, type ModelBrokerTokenStore } from "./lib/model-broker-tokens.js";
 import {
   createOpsAgentHttpClient,
   type AskOpsAgent,
@@ -280,7 +281,7 @@ function defaultChatArtifactRoutes() {
     mattermostBaseUrl: process.env.MM_INTERNAL_URL ?? "",
     adminToken: process.env.MM_ADMIN_TOKEN ?? "",
     resolveWorkspaceSlugForTeamId: (teamId: string) =>
-      resolveActiveArtifactWorkspaceSlug(db, teamId),
+      resolveActiveArtifactWorkspaceSlug(platformStateStore, teamId),
   });
   return {
     public: createChatArtifactRoutes({
@@ -326,7 +327,7 @@ export function shouldEnforceTenantBinding(req: Request): boolean {
 async function readFreshGithubToken(uid: string): Promise<string | null> {
   const connector = getConnector("github");
   if (!connector) throw new Error("GitHub connector is unavailable");
-  const token = await getFreshAccessTokenFromDb(db, uid, connector);
+  const token = await getFreshAccessTokenFromStore(platformStateStore, uid, connector);
   if (token.ok) return token.accessToken;
   if (token.reason === "not_connected") return null;
   throw new ConnectorTokenReadError(409, token.reason);
@@ -379,17 +380,17 @@ function clusterRouteOverrides(
   productRoutes: ClusterRouteTable,
 ) {
   return {
-    mmRestProxyHandler,
-    mattermostMintRoutes,
+    mmRestProxyHandler: createMmRestProxyHandler(platformStateStore),
+    mattermostMintRoutes: createMattermostMintRoutes(platformStateStore),
     productRoutes,
     builderGatewaysRoutes: createBuilderGatewayRoutes({ featurePolicy }),
     projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy, prewarmProjectRunCapacity }),
     projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
     voiceRoutes: createVoiceRoutes({ featurePolicy, catalog: voiceCatalog, resolveChannel: async (uid, channelId) => {
-      const result = await resolveVoiceChannel({ db }, { uid, channelId });
+      const result = await resolveVoiceChannel({ db, store: platformStateStore, readBuilderTier }, { uid, channelId });
       return result ? { gatewayId: result.scope.gatewayId, channelId } : null;
     }, resolveConversation: async (uid, channelId, threadRootPostId) => {
-      const result = await startWorkspaceVoiceConversation({ db }, { uid, channelId, threadRootPostId });
+      const result = await startWorkspaceVoiceConversation({ db, store: platformStateStore, readBuilderTier }, { uid, channelId, threadRootPostId });
       return result ? { gatewayId: result.scope.gatewayId, workspaceSlug: result.scope.workspaceSlug, ownerUid: result.scope.ownerUid, channelId, threadRootPostId: result.context.threadRootPostId, sessionKey: result.context.sessionKey } : null;
     } }),
     productivityApprovalRoutes: express.Router()
@@ -563,9 +564,10 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   const tenantBindingHealth = createTenantBindingHealthState();
   const tenantBindingMiddleware = createTenantBindingMiddleware({
     reviewer: tenantBindingReviewer,
+    store: platformStateStore,
     metrics: tenantBindingMetrics,
   });
-  const tenantEnforcementMiddleware = createTenantEnforcementMiddleware({ db, enforceWhen: shouldEnforceTenantBinding });
+  const tenantEnforcementMiddleware = createTenantEnforcementMiddleware({ db, store: platformStateStore, enforceWhen: shouldEnforceTenantBinding });
   const gatewayCredentialReviewer = opts.gatewayCredentialReviewer ?? createGatewayIdentityReviewer({
     reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
     caPath: IN_CLUSTER_IDENTITY_CA_PATH,
@@ -573,7 +575,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   }, { namespace });
   const gatewayCredentialAuth = createGatewayCredentialAuth({
     reviewer: gatewayCredentialReviewer,
-    db,
+    store: platformStateStore,
     namespace,
   });
   const sidecarBrokerReviewer = opts.sidecarBrokerReviewer ?? createGatewayIdentityReviewer({
@@ -583,7 +585,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   }, { namespace });
   const sidecarBrokerAuth = createGatewayCredentialAuth({
     reviewer: sidecarBrokerReviewer,
-    db,
+    store: platformStateStore,
     namespace,
     tokenHeader: SIDECAR_BROKER_TOKEN_HEADER,
     audience: SIDECAR_BROKER_TOKEN_AUDIENCE,
@@ -602,10 +604,11 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
 
   installBodyParsers(app);
   mountDiagnosticRoutes(app, metricsRegistry, tenantBindingHealth);
-  app.use("/api/auth/desktop", createDesktopAuthRoutes({ db, auth }));
+  app.use("/api/auth/desktop", createDesktopAuthRoutes({ db, auth, store: platformStateStore }));
   mountFeatureRoutes(app, product);
   app.use("/api/projects", createProjectPreviewDiscoveryRoutes({
     db,
+    state: platformStateStore,
     store: projectRunStore,
     previewOrigin,
     auth: requireAuth,
@@ -731,17 +734,18 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   // octogee-api-only: broker sidecar GitHub file-browser token reads
   // so cattle pods do not need Firestore or KMS access to user secrets.
   app.use("/internal/connectors", createConnectorTokenBrokerRoutes({ db, store: platformStateStore }));
-  app.use("/internal/workspace-commit", createWorkspaceCommitProofBrokerRoutes({ db }));
-  app.use("/internal/owner-automations", createOwnerAutomationAuthorizationBrokerRoutes({ db }));
+  app.use("/internal/workspace-commit", createWorkspaceCommitProofBrokerRoutes({ store: platformStateStore }));
+  app.use("/internal/owner-automations", createOwnerAutomationAuthorizationBrokerRoutes({ store: platformStateStore }));
   // octogee-api-only: materialize BYOK creds for cattle gateways that can't reach
   // Secret Manager — BYOSUB OAuth (scoped to the caller's user integration) and
   // byok-* API keys (roster-scoped to the gateway's assigned slugs).
-  app.use("/internal/byok", createByokBrokerRoutes({ db, rails: modelBrokerRails }));
+  app.use("/internal/byok", createByokBrokerRoutes({ db, store: platformStateStore, rails: modelBrokerRails }));
   // octogee-api-only: agent project CRUD — roster-scoped like /internal/byok;
   // the owner + workspace derive from the pod's assignment, and plan
   // entitlements are enforced by the same service the UI create uses.
   app.use("/internal/agent-projects", createAgentProjectRoutes({
     db,
+    store: platformStateStore,
     prewarmProjectRunCapacity: () => projectRunControlPlane.prewarm(),
     actionBaseUrl: appOrigin,
     onProjectCreated: (uid) => recordProductEvent(product, uid, {
@@ -758,6 +762,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   };
   app.use("/internal/project-runs", createAgentProjectRunRoutes({
     db,
+    state: platformStateStore,
     ...projectRunFinalizerDeps,
     source: projectRunSource,
     runnerImage,
@@ -771,6 +776,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   }
   app.use("/internal/openclaw", createAgentProjectPublishRoutes({
     db,
+    state: platformStateStore,
     runStore: projectRunStore,
     source: projectRunSource,
     artifacts: projectPublishArtifacts,
@@ -779,13 +785,15 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     customerHostingProjectId,
     actionBaseUrl: appOrigin,
   }));
-  app.use("/internal/agent-board", createAgentBoardRoutes({ db }));
+  app.use("/internal/agent-board", createAgentBoardRoutes({ store: platformStateStore }));
   app.use("/internal/agent-productivity", createAgentProductivityRoutes({
     db,
+    store: platformStateStore,
     actionBaseUrl: appOrigin,
   }));
   app.use("/internal/agent-productivity", createAgentObsidianRoutes({
     db,
+    store: platformStateStore,
     featurePolicy,
     actionBaseUrl: appOrigin,
   }));
@@ -793,6 +801,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     "/internal/agent-support",
     createAgentSupportRoutes({
       db,
+      store: platformStateStore,
       askOps:
         opts.askOpsAgent ??
         createOpsAgentHttpClient({
@@ -803,29 +812,30 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
       resolveModel:
         opts.resolveOpsAgentModel ??
         createCachedOpsAgentModelResolver({
-          db,
+          platformConfig: platformStateStore.config.platform,
           onError: (error) => logger.error("Ops Agent model resolution failed", { error }),
         }),
       logError: (message, fields) => logger.error(message, fields),
     }),
   );
-  app.use("/internal/computer", createAgentComputerContextRoutes({ db }));
-  app.use("/internal/openclaw-control", createOpenClawControlBrokerRoutes({ db }));
+  app.use("/internal/computer", createAgentComputerContextRoutes({ store: platformStateStore }));
+  app.use("/internal/openclaw-control", createOpenClawControlBrokerRoutes({ db, store: platformStateStore }));
   app.use(
     "/internal/automations",
     requireAuthenticatedUid,
-    createAutomationAuthorizationBrokerRoutes({ db }),
+    createAutomationAuthorizationBrokerRoutes({ store: platformStateStore }),
   );
-  app.use("/internal/voice", createVoiceConversationRoutes({ db }));
-  app.use("/internal/openclaw-control", createToolConversationRoutes({ db }));
-  app.use("/internal/openclaw-control", requireAuthenticatedUid, createWorkspaceNativeAccessRoutes({ db }));
-  app.use("/internal/workspace-git", requireAuth, createWorkspaceGitAuthorizationBrokerRoutes({ db }));
-  app.use("/internal/channel-agent-readiness", requireAuth, createChannelReadinessAuthorizationBrokerRoutes({ db }));
+  app.use("/internal/voice", createVoiceConversationRoutes({ db, store: platformStateStore, readBuilderTier }));
+  app.use("/internal/openclaw-control", createToolConversationRoutes({ db, store: platformStateStore, readBuilderTier }));
+  app.use("/internal/openclaw-control", requireAuthenticatedUid, createWorkspaceNativeAccessRoutes({ store: platformStateStore, readBuilderTier }));
+  app.use("/internal/workspace-git", requireAuth, createWorkspaceGitAuthorizationBrokerRoutes({ store: platformStateStore }));
+  app.use("/internal/channel-agent-readiness", requireAuth, createChannelReadinessAuthorizationBrokerRoutes({ store: platformStateStore }));
   app.use(
     "/internal/agent-imports",
     requireAuthenticatedUid,
     createAgentImportBrokerRoutes({
-      db,
+      store: platformStateStore,
+      accounts: firestoreBuilderAccountReader(db),
       bucket: importBucket,
       readGithubToken: readFreshGithubToken,
       listGithubRepos: githubListRepos,
@@ -865,9 +875,10 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   app.use(
     "/internal/model-keys",
     createModelKeyIssuerRoutes({
-      db,
       rails: modelBrokerRails,
-      store: opts.modelKeyTokenStore,
+      tokens: opts.modelKeyTokenStore ?? createModelBrokerTokenStore(platformStateStore),
+      state: platformStateStore,
+      accounts: firestoreBuilderAccountReader(db),
       bearerToken:
         opts.modelKeyIssuerBearerToken ?? process.env.GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN,
       ttlSeconds: opts.modelKeyIssuerTtlSeconds,

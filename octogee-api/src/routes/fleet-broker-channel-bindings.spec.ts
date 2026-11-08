@@ -1,43 +1,33 @@
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { describe, expect, it } from "vitest";
 
 import { collectChannelBindings } from "./fleet-broker.js";
 
-function channel(id: string, channelId: string) {
-  return { id, data: () => ({ kind: id, mattermost: { channelId } }) };
-}
-
 describe("collectChannelBindings", () => {
   it("uses each project channel once for fleet membership", async () => {
-    const workspaceChannels = [channel("general", "workspace-primary")];
-    const projectChannels = [
-      {
-        ...channel("general", "project-primary"),
-        data: () => ({ kind: "general", mattermost: { channelId: "project-primary" } }),
-      },
-    ];
-    const db = {
-      collection: () => ({
-        doc: () => ({
-          collection: (name: string) => ({
-            get: async () => name === "channels"
-              ? { docs: workspaceChannels }
-              : {
-                  docs: [{
-                    id: "orbit",
-                    ref: { collection: () => ({ get: async () => ({ docs: projectChannels }) }) },
-                  }],
-                },
-          }),
-        }),
-      }),
-    } as never;
+    const store = createDocumentFixtureStore({
+      "workspaces/alice/channels/general": { kind: "general", mattermost: { channelId: "workspace-primary" } },
+      "workspaces/alice/channels/unbound": { kind: "general" },
+      "workspaces/alice/projects/orbit": { ownerUid: "uid-alice" },
+      "workspaces/alice/projects/orbit/channels/general": { kind: "general", mattermost: { channelId: "project-primary" } },
+      "workspaces/alice/projects/quiet": { ownerUid: "uid-alice" },
+    });
 
-    await expect(collectChannelBindings(db, "alice")).resolves.toEqual({
+    await expect(collectChannelBindings(store, "alice")).resolves.toEqual({
       bindings: [
         { scope: "workspace", kind: "general", channelId: "workspace-primary" },
         { scope: "project", projectId: "orbit", kind: "general", channelId: "project-primary" },
       ],
       projectMemberships: [{ projectId: "orbit", channelIds: ["project-primary"] }],
     });
+  });
+
+  it("fails closed on a project without an owner", async () => {
+    const store = createDocumentFixtureStore({
+      "workspaces/alice/projects/orbit": {},
+      "workspaces/alice/projects/orbit/channels/general": { kind: "general", mattermost: { channelId: "project-primary" } },
+    });
+
+    await expect(collectChannelBindings(store, "alice")).rejects.toMatchObject({ name: "MalformedRecordError" });
   });
 });

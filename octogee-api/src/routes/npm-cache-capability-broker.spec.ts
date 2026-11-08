@@ -9,6 +9,7 @@ import {
 import { createGatewayCredentialAuth } from "../middleware/gateway-credential-auth.js";
 import { GATEWAY_CREDENTIAL_ROUTES } from "../index.js";
 import { InMemoryNpmCacheCapabilityStore } from "../lib/npm-cache-capabilities.js";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createFleetBrokerRoutes } from "./fleet-broker.js";
 
 const GATEWAY_ID = "builder-alice";
@@ -47,44 +48,27 @@ function gatewayDoc() {
   };
 }
 
-function database(assignedSlug: string | null = "alice", preparation: {
+function platformStore(assignedSlug: string | null = "alice", preparation: {
   operation?: Record<string, unknown>;
   runtime?: Record<string, unknown>;
   user?: Record<string, unknown>;
 } = {}) {
-  const assignments = assignedSlug === null
-    ? []
-    : [{
-        id: "uid-alice",
-        data: () => ({
-          slug: assignedSlug,
-          gatewayId: GATEWAY_ID,
-          source: "onboarding",
-          state: "serving",
-          epoch: 1,
-          updatedAt: 1,
-          updatedByOperationId: null,
-        }),
-      }];
-  return {
-    collection: vi.fn((name: string) => {
-      if (name === "users") return { doc: () => ({ get: async () => ({ exists: true, data: () => preparation.user ?? {
-        username: "alice", provisioning: { openclaw: { slug: "alice", gatewayId: "shared-source" } },
-      } }) }) };
-      if (name === "glmGateways") return { doc: () => ({ get: async () => ({ exists: Boolean(preparation.runtime), data: () => preparation.runtime }) }) };
-      if (name === "glmOperations") {
-        const query = { where: () => query, get: async () => ({ docs: preparation.operation ? [{ id: "move-alice", data: () => preparation.operation }] : [] }) };
-        return query;
-      }
-      if (name !== "gateways") throw new Error(`unexpected collection ${name}`);
-      return {
-        doc: vi.fn(() => ({
-          get: vi.fn(async () => ({ exists: true, data: gatewayDoc })),
-          collection: vi.fn(() => ({ get: vi.fn(async () => ({ docs: assignments })) })),
-        })),
-      };
-    }),
-  };
+  return createDocumentFixtureStore({
+    [`gateways/${GATEWAY_ID}`]: gatewayDoc(),
+    [`gateways/${GATEWAY_ID}/assignments/uid-alice`]: assignedSlug === null ? undefined : {
+      uid: "uid-alice",
+      slug: assignedSlug,
+      gatewayId: GATEWAY_ID,
+      source: "onboarding",
+      state: "serving",
+      epoch: 1,
+      updatedAt: 1,
+      updatedByOperationId: null,
+    },
+    "users/uid-alice": preparation.user ?? { username: "alice", provisioning: { openclaw: { slug: "alice", gatewayId: "shared-source" } } },
+    [`glmGateways/${GATEWAY_ID}`]: preparation.runtime && { docKind: "runtime", release: 1, lifecycle: "running", ...preparation.runtime },
+    "glmOperations/move-alice": preparation.operation && { inputUid: "uid-alice", ...preparation.operation },
+  });
 }
 
 function brokerOptions(
@@ -92,7 +76,8 @@ function brokerOptions(
   extra: Record<string, unknown> = {},
 ) {
   return {
-    db: database() as never,
+    db: {} as never,
+    store: platformStore(),
     npmCacheCapabilities: store,
     npmCacheRegistryUrl: "http://octogee-npm-cache-proxy.octogee-test.svc.cluster.local:3005/",
     now: () => NOW_MS,
@@ -151,7 +136,7 @@ describe("npm cache capability broker", () => {
   });
 
   it("hydrates the exact destination instance during its owner's active migration before assignment", async () => {
-    const options = brokerOptions(undefined, { db: database(null, preparation()) });
+    const options = brokerOptions(undefined, { store: platformStore(null, preparation()) });
     const response = await request(builderApp(options))
       .post("/internal/fleet/npm-registry-credentials")
       .set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT)
@@ -160,7 +145,7 @@ describe("npm cache capability broker", () => {
   });
 
   it.each(["finished", "foreign-owner", "foreign-source", "foreign-target", "replaced-instance", "moved-user", "cancelled", "foreign-runtime-owner", "foreign-runtime-slug"])("rejects stale or unrelated preparation (%s)", async (scenario) => {
-    const state: Parameters<typeof database>[1] = preparation();
+    const state: Parameters<typeof platformStore>[1] = preparation();
     if (scenario === "cancelled") state.operation!.cancellationRequestedAt = 1;
     if (scenario === "foreign-runtime-owner") state.runtime!.vmInstance = { ownerUid: "other-uid", builderSlug: "alice" };
     if (scenario === "foreign-runtime-slug") state.runtime!.vmInstance = { ownerUid: "uid-alice", builderSlug: "other-slug" };
@@ -170,7 +155,7 @@ describe("npm cache capability broker", () => {
     if (scenario === "foreign-target") (state.operation!.input as Record<string, unknown>).toGatewayId = "other-target";
     if (scenario === "replaced-instance") state.runtime!.vm = { instanceId: "previous-instance" };
     if (scenario === "moved-user") state.user = { username: "alice", provisioning: { openclaw: { slug: "alice", gatewayId: "another-source" } } };
-    const response = await request(builderApp(brokerOptions(undefined, { db: database(null, state) })))
+    const response = await request(builderApp(brokerOptions(undefined, { store: platformStore(null, state) })))
       .post("/internal/fleet/npm-registry-credentials")
       .set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT)
       .send({ gatewayId: GATEWAY_ID, slug: "alice" });
@@ -204,7 +189,7 @@ describe("npm cache capability broker", () => {
 
   it("rejects a configured Builder before its assignment exists", async () => {
     const options = brokerOptions();
-    options.db = database(null) as never;
+    options.store = platformStore(null);
     const response = await request(builderApp(options))
       .post("/internal/fleet/npm-registry-credentials")
       .set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT)
@@ -215,7 +200,7 @@ describe("npm cache capability broker", () => {
 
   it("rejects a slug that is not the gateway assignment", async () => {
     const options = brokerOptions();
-    options.db = database("mallory") as never;
+    options.store = platformStore("mallory");
     const response = await request(builderApp(options))
       .post("/internal/fleet/npm-registry-credentials")
       .set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT)

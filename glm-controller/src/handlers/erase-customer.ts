@@ -1,3 +1,4 @@
+import type { CustomerDeletionJobStatus } from "@octogee/core/platform-state";
 import type { Operation, OperationStep } from "@octogee/shared/types/glm";
 import type {
   OperationContext,
@@ -16,7 +17,7 @@ export const POSTHOG_VERIFICATION_RECHECK_MS = 60 * 60_000;
 
 export interface ErasureDeletionJob {
   uid: string;
-  status: string;
+  status: CustomerDeletionJobStatus;
   eraseAfter: number;
   stripeCustomerIds: string[];
   archiveId: string | null;
@@ -110,7 +111,7 @@ async function loadEraseCustomerContext(
   if (job.status === "verified_pending_completion" && job.archiveId) {
     return { kind: "verified", deletionId, archiveId: job.archiveId };
   }
-  if (job.status === "posthog_verification_pending" && job.archiveId) {
+  if (job.status === "product_verification_pending" && job.archiveId) {
     return {
       kind: "awaiting-posthog",
       confirmation: { deletionId, uid, archiveId: job.archiveId },

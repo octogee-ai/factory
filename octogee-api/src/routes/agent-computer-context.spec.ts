@@ -4,6 +4,7 @@ import request from "supertest";
 import { describe, expect, it } from "vitest";
 
 import { createTenantEnforcementMiddleware } from "../middleware/tenant-enforcement.js";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createAgentComputerContextRoutes } from "./agent-computer-context.js";
 
 function gatewayRoot() {
@@ -32,6 +33,10 @@ function gatewayRoot() {
     modelBrokerLimits: null,
     preemption: null,
   };
+}
+
+function runtimeRecord(fields: Record<string, unknown>) {
+  return { docKind: "runtime", gatewayId: "bender", release: 1, lifecycle: "running", ...fields };
 }
 
 function valueAtPath(data: Record<string, unknown>, path: string): unknown {
@@ -114,10 +119,9 @@ function app(
     };
     next();
   });
-  target.use(createTenantEnforcementMiddleware({ db: harness.db, onDenied: async () => {} }));
-  target.use("/internal/computer", createAgentComputerContextRoutes({
-    db: harness.db,
-  }));
+  const store = createDocumentFixtureStore(harness.docs);
+  target.use(createTenantEnforcementMiddleware({ db: harness.db, store, onDenied: async () => {} }));
+  target.use("/internal/computer", createAgentComputerContextRoutes({ store }));
   return target;
 }
 
@@ -128,7 +132,7 @@ describe("agent computer context", () => {
     const h = fakeDb();
     const podUid = "12345678-1234-1234-1234-123456789abc";
     h.docs.get("gateways/bender")!.sizingTier = sizingTier;
-    h.docs.set("glmGateways/bender", { runtime: "cluster", kubernetes: { status: "ready", totalPods: 1, readyPods: 1, pods: [{ uid: podUid }] } });
+    h.docs.set("glmGateways/bender", runtimeRecord({ runtime: "cluster", kubernetes: { status: "ready", totalPods: 1, readyPods: 1, pods: [{ uid: podUid }] } }));
     const response = await request(app(h, { podUid })).post("/internal/computer/agent-context").send({ agentId });
     expect(response.status).toBe(200);
     expect(response.body.computerInstanceId).toBe(`cluster:${podUid}`);
@@ -142,13 +146,13 @@ describe("agent computer context", () => {
     const h = fakeDb();
     const podUid = "12345678-1234-1234-1234-123456789abc";
     h.docs.get("gateways/bender")!.sizingTier = "s";
-    h.docs.set("glmGateways/bender", { runtime: "cluster", kubernetes: { ...observation, pods: [{ uid: podUid }] } });
+    h.docs.set("glmGateways/bender", runtimeRecord({ runtime: "cluster", kubernetes: { ...observation, pods: [{ uid: podUid }] } }));
     await request(app(h, { podUid })).post("/internal/computer/agent-context").send({ agentId }).expect(409);
   });
 
   it("binds computer authority to the desired gateway root and observed running VM", async () => {
     const h = fakeDb();
-    h.docs.set("glmGateways/bender", { runtime: "gce-vm", vm: { instanceId: "123", status: "RUNNING" } });
+    h.docs.set("glmGateways/bender", runtimeRecord({ runtime: "gce-vm", vm: { instanceId: "123", status: "RUNNING" } }));
     h.docs.get("users/owner")!.mattermost = { userId: "o".repeat(26) };
     const response = await request(app(h)).post("/internal/computer/agent-context")
       .send({ agentId });
@@ -164,14 +168,14 @@ describe("agent computer context", () => {
   it.each(["paused", "draining", "retired"])("rejects a %s gateway even when its VM is still running", async (desiredStatus) => {
     const h = fakeDb();
     h.docs.get("gateways/bender")!.desiredStatus = desiredStatus;
-    h.docs.set("glmGateways/bender", { runtime: "gce-vm", desiredStatus: "running", vm: { instanceId: "123", status: "RUNNING" } });
+    h.docs.set("glmGateways/bender", runtimeRecord({ runtime: "gce-vm", desiredStatus: "running", vm: { instanceId: "123", status: "RUNNING" } }));
     await request(app(h)).post("/internal/computer/agent-context")
       .send({ agentId }).expect(409, { error: "computer-unavailable" });
   });
 
   it("does not issue computer authority for a stopped VM or an unassigned agent", async () => {
     const h = fakeDb();
-    h.docs.set("glmGateways/bender", { runtime: "gce-vm", vm: { instanceId: "123", status: "TERMINATED" } });
+    h.docs.set("glmGateways/bender", runtimeRecord({ runtime: "gce-vm", vm: { instanceId: "123", status: "TERMINATED" } }));
     expect((await request(app(h)).post("/internal/computer/agent-context").send({ agentId })).status).toBe(409);
     expect((await request(app(h)).post("/internal/computer/agent-context").send({ agentId: "octogee-other-coach" })).status).toBe(403);
   });

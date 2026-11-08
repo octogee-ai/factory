@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FieldValue } from "firebase-admin/firestore";
 import { GLM_OPERATIONS_COLLECTION, type Operation } from "@octogee/shared/types/glm";
 import {
   drainPendingOperationsOnce,
@@ -11,186 +10,59 @@ import {
 } from "../index";
 import type { OperationHandler, OperationHandlers } from "../operation-router";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
+import { MissingRecordError, type PlatformStateStore, type WatchEvent, type WatchListener } from "@octogee/core/platform-state";
 import { resumeOrphanedRunningOps } from "../resume-orphaned-ops.js";
 import { operationNeedsDurableRestartResume } from "../operation-retry.js";
 
-type FakeQuery = {
-  where: (field: string, op: "==", value: unknown) => FakeQuery;
-  orderBy: (field: string, direction?: "asc" | "desc") => FakeQuery;
-  get: () => Promise<{ docs: FakeDocSnap[] }>;
-  onSnapshot: (
-    next: (snapshot: { docChanges: () => Array<{ type: string; doc: FakeDocSnap }> }) => void,
-    error: (err: unknown) => void,
-  ) => () => void;
-};
+type Rows = Record<string, Record<string, unknown>>;
 
-interface FakeDocSnap {
-  id: string;
-  exists: boolean;
-  data: () => Record<string, unknown> | undefined;
-  ref: FakeDocRef;
-}
-
-interface FakeDocRef {
-  id: string;
-  get: () => Promise<FakeDocSnap>;
-  update: (data: Record<string, unknown>) => Promise<void>;
-}
-
-function applyUpdate(current: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
-  const next = { ...current };
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === FieldValue.delete()) {
-      delete next[key];
-    } else {
-      next[key] = value;
+function createOperationsFixture(
+  initial: Rows,
+  opts: { gateways?: Rows; runtimes?: Rows; users?: Rows; documents?: Rows } = {},
+) {
+  const writeLog: Array<{ id: string; data: Record<string, unknown> }> = [];
+  const recording = { enabled: false };
+  class RecordingDocuments extends Map<string, Record<string, unknown>> {
+    override set(path: string, row: Record<string, unknown>): this {
+      if (recording.enabled && path.startsWith(`${GLM_OPERATIONS_COLLECTION}/`)) {
+        writeLog.push({ id: path.slice(GLM_OPERATIONS_COLLECTION.length + 1), data: row });
+      }
+      return super.set(path, row);
     }
   }
-  return next;
-}
-
-// Minimal in-memory Firestore double covering exactly what the operation worker
-// touches: single-collection get/where/orderBy queries and transactions that
-// read a doc + a query before writing. Mirrors the fake used in
-// reconciler.spec.ts (defer txn writes, apply after body() resolves).
-function createFakeGlmOperationsDb(
-  initial: Record<string, Record<string, unknown>>,
-  opts: {
-    orderByThrows?: boolean;
-    gateways?: Record<string, Record<string, unknown>>;
-    users?: Record<string, Record<string, unknown>>;
-    runtimes?: Record<string, Record<string, unknown>>;
-    snapshotChangeIds?: string[];
-  } = {},
-) {
-  const store = new Map<string, Record<string, unknown>>(Object.entries(initial));
-  const writeLog: Array<{ id: string; data: Record<string, unknown> }> = [];
-
-  function docRef(id: string): FakeDocRef {
-    return {
-      id,
-      get: async () => ({
-        id,
-        exists: store.has(id),
-        data: () => store.get(id),
-        ref: docRef(id),
-      }),
-      update: async (data: Record<string, unknown>) => {
-        const current = store.get(id) ?? {};
-        store.set(id, applyUpdate(current, data));
-      },
-    };
-  }
-
-  function buildQuery(filters: Array<[string, unknown]>, order?: { field: string; direction: "asc" | "desc" }): FakeQuery {
-    return {
-      where: (field, _op, value) => buildQuery([...filters, [field, value]], order),
-      orderBy: (field, direction = "asc") => {
-        if (opts.orderByThrows) {
-          throw new Error(
-            "9 FAILED_PRECONDITION: The query requires an index (simulated — status+createdAt has no composite index)",
-          );
-        }
-        return buildQuery(filters, { field, direction });
-      },
-      get: async () => {
-        let entries = [...store.entries()].filter(([, data]) =>
-          filters.every(([field, value]) => data[field] === value),
-        );
-        if (order) {
-          const { field, direction } = order;
-          entries = entries.sort((a, b) => {
-            const av = Number(a[1][field] ?? 0);
-            const bv = Number(b[1][field] ?? 0);
-            return direction === "desc" ? bv - av : av - bv;
-          });
-        }
-        return {
-          docs: entries.map(([id, data]) => ({
-            id,
-            exists: true,
-            data: () => data,
-            ref: docRef(id),
-          })),
-        };
-      },
-      onSnapshot: (next, _error) => {
-        queueMicrotask(() => {
-          next({
-            docChanges: () =>
-              (opts.snapshotChangeIds ?? []).flatMap((id) => {
-                const data = store.get(id);
-                if (!data) return [];
-                return [{
-                  type: "added",
-                  doc: {
-                    id,
-                    exists: true,
-                    data: () => data,
-                    ref: docRef(id),
-                  },
-                }];
-              }),
-          });
-        });
-        return () => undefined;
-      },
-    };
-  }
-
-  const collection = {
-    doc: (id: string) => docRef(id),
-    where: (field: string, op: "==", value: unknown) => buildQuery([[field, value]]),
-    get: () => buildQuery([]).get(),
-  };
-
-  const db = {
-    collection: (name: string) => {
-      if (name === "gateways" || name === "users" || name === "glmGateways") {
-        const docs = name === "gateways" ? opts.gateways ?? {}
-          : name === "glmGateways" ? opts.runtimes ?? {} : opts.users ?? {};
-        return {
-          doc: (id: string) => ({
-            id,
-            get: async () => ({
-              id,
-              exists: docs[id] !== undefined,
-              data: () => docs[id],
-              ref: undefined,
-            }),
-          }),
-          where: () => buildQuery([]),
-          get: async () => ({ docs: [] }),
-        };
+  const documents = new RecordingDocuments([
+    ...Object.entries(initial).map(([id, row]) => [`${GLM_OPERATIONS_COLLECTION}/${id}`, row] as const),
+    ...Object.entries(opts.gateways ?? {}).map(([id, row]) => [`gateways/${id}`, {
+      desiredStatus: "running", desiredRelease: 1, latestRelease: 1, liveRelease: 1, ...row,
+    }] as const),
+    ...Object.entries(opts.runtimes ?? {}).map(([id, row]) => [`glmGateways/${id}`, {
+      docKind: "runtime", gatewayId: id, release: 1, lifecycle: "active", ...row,
+    }] as const),
+    ...Object.entries(opts.users ?? {}).map(([uid, row]) => [`users/${uid}`, row] as const),
+    ...Object.entries(opts.documents ?? {}),
+  ]);
+  recording.enabled = true;
+  const listeners: Array<WatchListener<"operations">> = [];
+  const watchRequests: unknown[] = [];
+  let closedWatches = 0;
+  const fixture = createDocumentFixtureStore(documents);
+  const db = new Proxy(fixture, {
+    get: (target, property, receiver) => property === "watch"
+      ? (request: unknown, listener: WatchListener<"operations">) => {
+        watchRequests.push(request);
+        listeners.push(listener);
+        return { closed: Promise.resolve(), close: async () => { closedWatches += 1; } };
       }
-      if (name !== GLM_OPERATIONS_COLLECTION) {
-        return { doc: () => docRef("unused"), where: () => buildQuery([]), get: async () => ({ docs: [] }) };
-      }
-      return collection;
-    },
-    runTransaction: async <T,>(
-      body: (txn: {
-        get: (refOrQuery: { get: () => Promise<unknown> }) => Promise<unknown>;
-        update: (ref: FakeDocRef, data: Record<string, unknown>) => void;
-      }) => Promise<T>,
-    ): Promise<T> => {
-      const writes: Array<() => void> = [];
-      const result = await body({
-        get: async (refOrQuery) => refOrQuery.get(),
-        update: (ref, data) => {
-          writes.push(() => {
-            writeLog.push({ id: ref.id, data });
-            const current = store.get(ref.id) ?? {};
-            store.set(ref.id, applyUpdate(current, data));
-          });
-        },
-      });
-      for (const write of writes) write();
-      return result;
-    },
+      : Reflect.get(target, property, receiver),
+  });
+  const store = {
+    get: (id: string) => documents.get(`${GLM_OPERATIONS_COLLECTION}/${id}`),
+    set: (id: string, row: Record<string, unknown>) => documents.set(`${GLM_OPERATIONS_COLLECTION}/${id}`, row),
   };
-
-  return { db, store, writeLog };
+  const emit = async (event: WatchEvent<"operations">) => {
+    for (const listener of listeners) await listener.onEvent(event);
+  };
+  return { db, store, documents, writeLog, emit, watchRequests, closedWatches: () => closedWatches };
 }
 
 function baseOp(overrides: Partial<Operation> & { id: string }): Record<string, unknown> {
@@ -208,11 +80,11 @@ function baseOp(overrides: Partial<Operation> & { id: string }): Record<string, 
 }
 
 function buildDeps(
-  db: ReturnType<typeof createFakeGlmOperationsDb>["db"],
+  store: PlatformStateStore,
   handlers: Partial<OperationHandlers>,
 ): Parameters<typeof drainPendingOperationsOnce>[0] {
   return {
-    db,
+    store,
     handlers: handlers as OperationHandlers,
     log: () => undefined,
   } as unknown as Parameters<typeof drainPendingOperationsOnce>[0];
@@ -228,7 +100,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
       output: { gatewayCompatibilityPending: true } });
     const rollout = baseOp({ id: "target-roll", origin: "operator", createdAt: 2, input: { gatewayId: toGatewayId } });
     const events: string[] = [];
-    const { db, store } = createFakeGlmOperationsDb({ [migrationId]: waiting, "target-roll": rollout }, {
+    const { db, store } = createOperationsFixture({ [migrationId]: waiting, "target-roll": rollout }, {
       gateways: { "builder-a": { gatewayId: "builder-a", gatewayClass: "builder" }, "shared-a": { gatewayId: "shared-a", gatewayClass: "shared" } },
       runtimes: { "builder-a": { runtime: "cluster" }, "shared-a": { runtime: "cluster" } },
     });
@@ -236,12 +108,11 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
       rollout: async () => { events.push("rollout"); return { success: true, steps: [] }; },
       "migrate-customer": async () => { events.push("migration"); return { success: true, steps: [] }; },
     });
-    const operations = db.collection(GLM_OPERATIONS_COLLECTION);
-    await processOperation(waiting as unknown as Operation, operations.doc(migrationId), deps);
+    await processOperation(waiting as unknown as Operation, deps);
     expect(events).toEqual([]);
     expect(store.get(migrationId)?.status).toBe("pending");
-    await processOperation(rollout as unknown as Operation, operations.doc("target-roll"), deps);
-    await processOperation(waiting as unknown as Operation, operations.doc(migrationId), deps);
+    await processOperation(rollout as unknown as Operation, deps);
+    await processOperation(waiting as unknown as Operation, deps);
     expect(events).toEqual(["rollout", "migration"]);
   });
 
@@ -254,12 +125,12 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
       nextAttemptAt: Date.now() + 60_000, input: { fromGatewayId: "shared-source", toGatewayId: "shared-target" } });
     const rollout = baseOp({ id: "operator-roll", origin: "operator", createdAt: 3, input: { gatewayId: "builder-a" } });
     const handler: OperationHandler = vi.fn(async () => ({ success: true, steps: [] }));
-    const { db, store } = createFakeGlmOperationsDb({ [returnId]: blockedReturn, "older-shared-move": olderMigration, "operator-roll": rollout }, {
+    const { db, store } = createOperationsFixture({ [returnId]: blockedReturn, "older-shared-move": olderMigration, "operator-roll": rollout }, {
       gateways: { "builder-a": { gatewayId: "builder-a", gatewayClass: "builder" } },
       runtimes: { "builder-a": { runtime: "cluster" } },
     });
 
-    await processOperation(rollout as unknown as Operation, db.collection(GLM_OPERATIONS_COLLECTION).doc("operator-roll"), buildDeps(db, { rollout: handler }));
+    await processOperation(rollout as unknown as Operation, buildDeps(db, { rollout: handler }));
 
     expect(handler).toHaveBeenCalledOnce();
     expect(store.get("operator-roll")?.status).toBe("succeeded");
@@ -274,12 +145,12 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     const sharedRoll = baseOp({ id: "shared-roll", createdAt: 2, input: { gatewayId: "shared-target" } });
     const builderRoll = baseOp({ id: "builder-roll", origin: "operator", createdAt: 3, input: { gatewayId: "builder-a" } });
     const handler: OperationHandler = vi.fn(async () => ({ success: true, steps: [] }));
-    const { db, store } = createFakeGlmOperationsDb({ [returnId]: returning, "shared-roll": sharedRoll, "builder-roll": builderRoll }, {
+    const { db, store } = createOperationsFixture({ [returnId]: returning, "shared-roll": sharedRoll, "builder-roll": builderRoll }, {
       gateways: { "builder-a": { gatewayId: "builder-a", gatewayClass: "builder" }, "shared-target": { gatewayId: "shared-target", gatewayClass: "shared" } },
       runtimes: { "builder-a": { runtime: "cluster" }, "shared-target": { runtime: "cluster" } },
     });
 
-    await processOperation(returning as unknown as Operation, db.collection(GLM_OPERATIONS_COLLECTION).doc(returnId), buildDeps(db, { "migrate-customer": handler }));
+    await processOperation(returning as unknown as Operation, buildDeps(db, { "migrate-customer": handler }));
 
     expect(handler).toHaveBeenCalledOnce();
     expect(store.get(returnId)?.status).toBe("succeeded");
@@ -306,9 +177,9 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
       input: { source: "builder-activation-lease", fromGatewayId: "builder-a", toGatewayId: "shared-target" } }), ...returning };
     const queuedRoll = { ...baseOp({ id: "operator-roll", origin: "operator", createdAt: 2, input: { gatewayId: "builder-a" } }), ...rollout };
     const handler: OperationHandler = vi.fn(async () => ({ success: true, steps: [] }));
-    const { db, store } = createFakeGlmOperationsDb({ [returnId]: blockedReturn, "operator-roll": queuedRoll });
+    const { db, store } = createOperationsFixture({ [returnId]: blockedReturn, "operator-roll": queuedRoll });
 
-    await processOperation(queuedRoll as unknown as Operation, db.collection(GLM_OPERATIONS_COLLECTION).doc("operator-roll"), buildDeps(db, { rollout: handler }));
+    await processOperation(queuedRoll as unknown as Operation, buildDeps(db, { rollout: handler }));
 
     expect(handler).not.toHaveBeenCalled();
     expect(store.get("operator-roll")?.status).toBe("pending");
@@ -317,22 +188,16 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
 
   it("does not execute an audit record from a pending scan or snapshot", async () => {
     const rolloutHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
-    const { db, store } = createFakeGlmOperationsDb(
-      {
-        "audit-pending": {
-          recordType: "audit",
-          status: "recorded",
-          actor: "operator",
-          createdAt: 1,
-        },
-      },
-      { snapshotChangeIds: ["audit-pending"] },
-    );
+    const audit = {
+      recordType: "audit",
+      status: "recorded",
+      actor: "operator",
+      createdAt: 1,
+    };
+    const { db, store } = createOperationsFixture({ "audit-pending": audit });
 
     await drainPendingOperationsOnce(buildDeps(db, { rollout: rolloutHandler }));
-    const stop = startOperationWorker(buildDeps(db, { rollout: rolloutHandler }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    stop();
+    await processOperation({ ...audit, id: "audit-pending" } as never, buildDeps(db, { rollout: rolloutHandler }));
 
     expect(rolloutHandler).not.toHaveBeenCalled();
     expect(store.get("audit-pending")?.status).toBe("recorded");
@@ -340,7 +205,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
 
   it("does not let an audit-shaped row participate in serial command conflicts", async () => {
     const rolloutHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "audit-running": {
         recordType: "audit",
         status: "running",
@@ -359,7 +224,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
 
   it("admits a pending durable cleanup retry while release admission drains", async () => {
     const migrationHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "op-cleanup": baseOp({
         id: "op-cleanup",
         kind: "migrate-customer",
@@ -391,7 +256,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
       return { steps: [], success: true };
     });
 
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "op-bender": baseOp({ id: "op-bender", createdAt: 1, input: { gatewayId: "bender-blue" } }),
     });
     const deps = buildDeps(db, { rollout: rolloutHandler });
@@ -428,7 +293,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
 
   it("runs a Shared rollout while an unrelated Builder VM rollout is blocked", async () => {
     const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "vm-roll": baseOp({ id: "vm-roll", status: "running", input: { gatewayId: "sep092" } }),
       "shared-roll": baseOp({ id: "shared-roll", createdAt: 2, input: { gatewayId: "shared-0" } }),
     }, {
@@ -452,7 +317,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     ["a Builder on Kubernetes", "builder-2", "builder", "cluster", "roll shared-0"],
   ] as const)("queues %s rollout when both rollout lanes are occupied", async (_name, gatewayId, gatewayClass, runtime, waitingOn) => {
     const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "vm-roll": baseOp({ id: "vm-roll", status: "running", input: { gatewayId: "builder-1" } }),
       "shared-roll": baseOp({ id: "shared-roll", status: "running", input: { gatewayId: "shared-0" } }),
       "next-roll": baseOp({ id: "next-roll", createdAt: 2, input: { gatewayId } }),
@@ -483,7 +348,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     ["Shared VM mismatch", { gatewayId: "builder", gatewayClass: "shared" }, { runtime: "gce-vm" }],
   ] as const)("keeps an unclassified %s rollout globally exclusive", async (_name, root, runtime) => {
     const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "vm-roll": {
         ...baseOp({ id: "vm-roll", status: "running", input: { gatewayId: "builder", rolloutLane: "builder-vm" } }),
         rolloutLane: "builder-vm",
@@ -502,7 +367,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
 
   it("preserves an older return reservation while allowing a disjoint rollout", async () => {
     const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "vm-roll": baseOp({ id: "vm-roll", status: "running", input: { gatewayId: "builder" } }),
       "return": baseOp({
         id: "return", kind: "migrate-customer", createdAt: 1, nextAttemptAt: Date.now() + 60_000,
@@ -528,7 +393,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
 
   it("never marks a queued op failed — it stays pending the whole time it waits", async () => {
     const rolloutHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "op-running": { ...baseOp({ id: "op-running", createdAt: 1 }), status: "running" },
       "op-queued": baseOp({ id: "op-queued", createdAt: 2, input: { gatewayId: "default-green" } }),
     });
@@ -542,7 +407,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
 
   it("queues a migrate-customer op behind another one targeting the SAME gateway, but admits one to a DIFFERENT target immediately", async () => {
     const migrateHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "op-running": {
         ...baseOp({
           id: "op-running",
@@ -607,7 +472,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
   ] as const)("serializes cross-protocol conflict: %s", async (_name, fixture) => {
     const rolloutHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
     const migrateHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "op-running": {
         ...baseOp({
           id: "op-running",
@@ -638,22 +503,13 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
 });
 
 describe("gateway operation queue — FIFO per scope across the fast path", () => {
-  function fakeRefFor(
-    db: ReturnType<typeof createFakeGlmOperationsDb>["db"],
-    id: string,
-  ): Parameters<typeof processOperation>[1] {
-    return db
-      .collection(GLM_OPERATIONS_COLLECTION)
-      .doc(id) as unknown as Parameters<typeof processOperation>[1];
-  }
-
   it("a NEW rollout arriving via the fast path after the blocker completed queues behind the older queued op; the drain then claims the old one first", async () => {
     const claimedOrder: string[] = [];
     const rolloutHandler: OperationHandler = vi.fn(async (op) => {
       claimedOrder.push(op.id);
       return { steps: [], success: true };
     });
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "op-done": {
         ...baseOp({ id: "op-done", createdAt: 1, input: { gatewayId: "canary" } }),
         status: "succeeded",
@@ -672,7 +528,6 @@ describe("gateway operation queue — FIFO per scope across the fast path", () =
     );
     await processOperation(
       { ...(store.get("op-new") as unknown as Operation), id: "op-new" },
-      fakeRefFor(db, "op-new"),
       deps,
     );
 
@@ -696,7 +551,7 @@ describe("gateway operation queue — FIFO per scope across the fast path", () =
       await gate;
       return { steps: [], success: true };
     });
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "op-retry": {
         ...baseOp({ id: "op-retry", createdAt: 1, input: { gatewayId: "bender-blue" } }),
         attempts: 1,
@@ -737,15 +592,14 @@ describe("gateway operation queue — automatic retry with backoff", () => {
       }
       return { steps: [], success: true };
     });
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       retry: baseOp({ id: "retry", kind: "migrate-customer", createdAt: 1,
         input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" } }),
       healthy: baseOp({ id: "healthy", kind: "migrate-customer", createdAt: 2,
         input: { uid: "bob", fromGatewayId: "shared-a", toGatewayId: "shared-b" } }),
     });
     const deps = buildDeps(db, { "migrate-customer": handler });
-    await processOperation({ ...store.get("retry"), id: "retry" } as unknown as Operation,
-      db.collection(GLM_OPERATIONS_COLLECTION).doc("retry"), deps);
+    await processOperation({ ...store.get("retry"), id: "retry" } as unknown as Operation, deps);
     expect(store.get("retry")).toMatchObject({ status: "pending", createdAt: 1, queuedAt: 1_000_000 });
     vi.setSystemTime(retryAt);
     await drainPendingOperationsOnce(deps);
@@ -761,14 +615,13 @@ describe("gateway operation queue — automatic retry with backoff", () => {
   it("admits new snapshot work while a rolled-back migration backs off", async () => {
     vi.setSystemTime(1_010_000);
     const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       retry: baseOp({ id: "retry", kind: "migrate-customer", createdAt: 1, queuedAt: 1_000_000,
         nextAttemptAt: 1_030_000, input: { uid: "alice", toGatewayId: "shared-b" } }),
       newcomer: baseOp({ id: "newcomer", kind: "migrate-customer", createdAt: 1_005_000,
         input: { uid: "bob", toGatewayId: "shared-b" } }),
     });
-    await processOperation({ ...store.get("newcomer"), id: "newcomer" } as unknown as Operation,
-      db.collection(GLM_OPERATIONS_COLLECTION).doc("newcomer"), buildDeps(db, { "migrate-customer": handler }));
+    await processOperation({ ...store.get("newcomer"), id: "newcomer" } as unknown as Operation, buildDeps(db, { "migrate-customer": handler }));
     expect(handler).toHaveBeenCalledOnce();
     expect(store.get("newcomer")?.status).toBe("succeeded");
     expect(store.get("retry")?.status).toBe("pending");
@@ -784,7 +637,7 @@ describe("gateway operation queue — automatic retry with backoff", () => {
       }
       return { steps: [], success: true };
     });
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "op-migrate": baseOp({ id: "op-migrate", kind: "migrate-customer", createdAt: 1 }),
     });
     const deps = buildDeps(db, { "migrate-customer": handler });
@@ -819,7 +672,7 @@ describe("gateway operation queue — automatic retry with backoff", () => {
       success: false,
       error: "missing gatewayId in op.input",
     }));
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "op-bad": baseOp({ id: "op-bad", kind: "add-gateway", createdAt: 1 }),
     });
     const deps = buildDeps(db, { "add-gateway": handler });
@@ -838,7 +691,7 @@ describe("gateway operation queue — automatic retry with backoff", () => {
     const handler: OperationHandler = vi.fn(async (op) => op.id === "op-builder"
       ? { steps: [], success: false, error }
       : { steps: [], success: true });
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "op-builder": baseOp({ id: "op-builder", kind: "rollout", createdAt: 1, input: { gatewayId: "sep092" } }),
       "op-shared": baseOp({ id: "op-shared", kind: "rollout", createdAt: 2, input: { gatewayId: "shared-0" } }),
     });
@@ -859,7 +712,7 @@ describe("gateway operation queue — automatic retry with backoff", () => {
       success: false,
       error: "connect ECONNREFUSED 10.0.0.1:443",
     }));
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "op-flaky": baseOp({ id: "op-flaky", kind: "restart-gateway", createdAt: 1 }),
     });
     const deps = buildDeps(db, { "restart-gateway": handler });
@@ -887,7 +740,7 @@ describe("gateway operation queue — automatic retry with backoff", () => {
       { attempt: 2, startedAt: 3, completedAt: 4, error: "fetch failed", classification: "transient", steps: [] },
       { attempt: 3, startedAt: 5, completedAt: 6, error: "fetch failed", classification: "transient", steps: [] },
     ];
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "builder-return-run-alice-g1": baseOp({
         id: "builder-return-run-alice-g1",
         kind: "migrate-customer",
@@ -918,7 +771,7 @@ describe("startOperationQueueDrain", () => {
   it("ticks on the configured interval and can be stopped", async () => {
     vi.useFakeTimers();
     const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "op-1": baseOp({ id: "op-1", createdAt: 1 }),
     });
     const deps = buildDeps(db, { rollout: handler });
@@ -937,15 +790,12 @@ describe("startOperationQueueDrain", () => {
 });
 
 describe("queue drain — composite-index-free FIFO", () => {
-  it("drains pending ops in createdAt order without orderBy (no composite index exists for status+createdAt)", async () => {
-    const { db } = createFakeGlmOperationsDb(
-      {
-        "op-c": baseOp({ id: "op-c", createdAt: 30 }),
-        "op-a": baseOp({ id: "op-a", createdAt: 10 }),
-        "op-b": baseOp({ id: "op-b", createdAt: 20 }),
-      },
-      { orderByThrows: true },
-    );
+  it("drains pending ops in createdAt order from the unordered pending listing", async () => {
+    const { db } = createOperationsFixture({
+      "op-c": baseOp({ id: "op-c", createdAt: 30 }),
+      "op-a": baseOp({ id: "op-a", createdAt: 10 }),
+      "op-b": baseOp({ id: "op-b", createdAt: 20 }),
+    });
     const order: string[] = [];
     const handler: OperationHandler = vi.fn(async (op) => {
       order.push(op.id);
@@ -963,7 +813,7 @@ describe("completion bookkeeping reads the fresh doc, not the caller's snapshot"
     const original = baseOp({ id: "committed-migration", kind: "migrate-customer", status: "running", startedAt: 100,
       input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "alice-builder" }, schedulerHandoff,
       cutoverCommittedAt: 200 });
-    const { db, store } = createFakeGlmOperationsDb({ "committed-migration": original });
+    const { db, store } = createOperationsFixture({ "committed-migration": original });
     const handler: OperationHandler = vi.fn(async op => {
       expect(op.schedulerHandoff).toEqual(schedulerHandoff);
       expect(op.cutoverCommittedAt).toBe(200);
@@ -974,7 +824,7 @@ describe("completion bookkeeping reads the fresh doc, not the caller's snapshot"
     const deps = buildDeps(db, { "migrate-customer": handler });
     expect(await resumeOrphanedRunningOps({ store: createDocumentFixtureStore({ "glmOperations/committed-migration": original }), log: vi.fn(),
       resumableKinds: new Set(["migrate-customer"]), resumableOperation: operationNeedsDurableRestartResume,
-      redrive: (op) => reAdoptAndRunOperation(op, db.collection("glmOperations").doc(op.id) as never, deps),
+      redrive: (op) => reAdoptAndRunOperation(op, deps),
     })).toEqual({ scanned: 1, resumed: 1 });
     expect(handler).toHaveBeenCalledOnce();
     expect(store.get("committed-migration")).toMatchObject({ status: "succeeded", schedulerHandoff, cutoverCommittedAt: 200 });
@@ -982,7 +832,7 @@ describe("completion bookkeeping reads the fresh doc, not the caller's snapshot"
 
   it("preserves an explicit first start when claiming a pre-started pending operation", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_100_000);
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "op-prestarted": baseOp({
         id: "op-prestarted", createdAt: 1_000_000,
         startedAt: 1_000_000, firstStartedAt: 1_000_000,
@@ -1010,14 +860,13 @@ describe("completion bookkeeping reads the fresh doc, not the caller's snapshot"
       })
       .mockResolvedValueOnce({ steps: [], success: true });
     const initial = baseOp({ id: "op-fenced", createdAt: 1 });
-    const { db, store } = createFakeGlmOperationsDb({ "op-fenced": initial });
+    const { db, store } = createOperationsFixture({ "op-fenced": initial });
     const deps = buildDeps(db, { rollout: handler });
-    const ref = db.collection(GLM_OPERATIONS_COLLECTION).doc("op-fenced");
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-    const original = processOperation(initial as unknown as Operation, ref as never, deps);
+    const original = processOperation(initial as unknown as Operation, deps);
     await claimObserved;
     clock.mockReturnValue(1_100_000);
-    await reAdoptAndRunOperation(store.get("op-fenced") as unknown as Operation, ref as never, deps);
+    await reAdoptAndRunOperation(store.get("op-fenced") as unknown as Operation, deps);
     finishOriginal();
     await original;
     expect(store.get("op-fenced")).toMatchObject({
@@ -1034,7 +883,7 @@ describe("completion bookkeeping reads the fresh doc, not the caller's snapshot"
       id: "op-resume", status: "running", startedAt: 1_000_000,
       firstStartedAt: 900_000, resumeCount: 1,
     });
-    const { db, store } = createFakeGlmOperationsDb({ "op-resume": original });
+    const { db, store } = createOperationsFixture({ "op-resume": original });
     const handler: OperationHandler = vi.fn(async (op) => {
       expect(op.startedAt).toBe(1_100_000);
       expect(op.firstStartedAt).toBe(900_000);
@@ -1042,8 +891,7 @@ describe("completion bookkeeping reads the fresh doc, not the caller's snapshot"
       expect(store.get(op.id)?.startedAt).not.toBe(original.startedAt);
       return { steps: [], success: true };
     });
-    const ref = db.collection(GLM_OPERATIONS_COLLECTION).doc("op-resume");
-    await reAdoptAndRunOperation(original as unknown as Operation, ref as never, buildDeps(db, { rollout: handler }));
+    await reAdoptAndRunOperation(original as unknown as Operation, buildDeps(db, { rollout: handler }));
     expect(handler).toHaveBeenCalledOnce();
     expect(store.get("op-resume")).toMatchObject({
       status: "succeeded", firstStartedAt: 900_000, startedAt: 1_100_000,
@@ -1054,7 +902,7 @@ describe("completion bookkeeping reads the fresh doc, not the caller's snapshot"
 
   it("does not invent a first start for an operation whose earlier history was not recorded", async () => {
     const original = baseOp({ id: "old-retry", attempts: 2 });
-    const { db, store } = createFakeGlmOperationsDb({ "old-retry": original });
+    const { db, store } = createOperationsFixture({ "old-retry": original });
     await drainPendingOperationsOnce(buildDeps(db, {
       rollout: vi.fn(async () => ({ steps: [], success: true })),
     }));
@@ -1066,7 +914,7 @@ describe("completion bookkeeping reads the fresh doc, not the caller's snapshot"
       { attempt: 1, startedAt: 1, completedAt: 2, error: "e1", classification: "transient", steps: [] },
       { attempt: 2, startedAt: 3, completedAt: 4, error: "e2", classification: "transient", steps: [] },
     ];
-    const { db, store } = createFakeGlmOperationsDb({
+    const { db, store } = createOperationsFixture({
       "op-r": baseOp({ id: "op-r", createdAt: 5, attempts: 2, attemptHistory: priorAttempts }),
     });
     const handler: OperationHandler = vi.fn(async () => ({
@@ -1075,12 +923,7 @@ describe("completion bookkeeping reads the fresh doc, not the caller's snapshot"
       error: "connect ECONNREFUSED 10.0.0.1:443",
     }));
     const staleSnapshot = { ...(baseOp({ id: "op-r", createdAt: 5 }) as unknown as Operation), id: "op-r" };
-    const ref = (db.collection(GLM_OPERATIONS_COLLECTION) as { doc: (id: string) => unknown }).doc("op-r");
-    await processOperation(
-      staleSnapshot,
-      ref as Parameters<typeof processOperation>[1],
-      buildDeps(db, { rollout: handler }),
-    );
+    await processOperation(staleSnapshot, buildDeps(db, { rollout: handler }));
     const doc = store.get("op-r")!;
     expect(doc.attempts).toBe(3);
     expect(doc.status).toBe("failed");
@@ -1090,7 +933,7 @@ describe("completion bookkeeping reads the fresh doc, not the caller's snapshot"
 
 describe("queued op bookkeeping is write-quiet", () => {
   it("does not rewrite an identical waitingOn on every drain tick", async () => {
-    const { db, store, writeLog } = createFakeGlmOperationsDb({
+    const { db, store, writeLog } = createOperationsFixture({
       "op-live": baseOp({ id: "op-live", status: "running" }),
       "op-blocked": baseOp({ id: "op-blocked", createdAt: 9 }),
     });
@@ -1101,5 +944,105 @@ describe("queued op bookkeeping is write-quiet", () => {
     await drainPendingOperationsOnce(buildDeps(db, { rollout: handler }));
     const secondWrites = writeLog.filter((w) => w.id === "op-blocked").length;
     expect(secondWrites).toBe(firstWrites);
+  });
+});
+
+describe("pending operation watch", () => {
+  it("claims the watch snapshot and each later addition, ignoring modifications, until stopped", async () => {
+    const claimed: string[] = [];
+    const handler: OperationHandler = vi.fn(async (op) => {
+      claimed.push(op.id);
+      return { steps: [], success: true };
+    });
+    const { db, store, emit, watchRequests, closedWatches } = createOperationsFixture({
+      "op-a": baseOp({ id: "op-a", kind: "add-gateway", createdAt: 1 }),
+      "op-b": baseOp({ id: "op-b", kind: "add-gateway", createdAt: 2 }),
+    });
+    const pending = async (id: string) => (await db.journal.operations.get(id))!;
+    const stop = startOperationWorker(buildDeps(db, { "add-gateway": handler }));
+    expect(watchRequests).toEqual([{ aggregate: "operations", filter: { statuses: ["pending"] } }]);
+
+    await emit({ kind: "snapshot", records: [await pending("op-a")], cursor: "c1" as never });
+    await vi.waitFor(() => expect(store.get("op-a")?.status).toBe("succeeded"));
+    await emit({ kind: "changes", changes: [{ type: "modified", key: "op-b", record: await pending("op-b") }], cursor: "c2" as never });
+    await emit({ kind: "resync", reason: "backend-restart" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.get("op-b")?.status).toBe("pending");
+    await emit({ kind: "changes", changes: [{ type: "added", key: "op-b", record: await pending("op-b") }], cursor: "c3" as never });
+    await vi.waitFor(() => expect(store.get("op-b")?.status).toBe("succeeded"));
+
+    stop();
+    expect(claimed).toEqual(["op-a", "op-b"]);
+    expect(closedWatches()).toBe(1);
+  });
+});
+
+describe("verified customer erasure completion", () => {
+  const erasure = () => baseOp({ id: "erase-1", kind: "erase-customer", createdBy: "alice", input: { uid: "alice", deletionId: "del-1" } });
+  const verified = vi.fn(async () => ({
+    steps: [], success: true, scrubInputOnSuccess: true,
+    output: { verifiedDeletion: { deletionId: "del-1", archiveId: "archive-1" } },
+  }));
+
+  it("trims the deletion job to its anonymous archive in the same transaction that scrubs the operation", async () => {
+    const { db, store, documents } = createOperationsFixture({ "erase-1": erasure() }, { documents: {
+      "customerDeletionJobs/del-1": {
+        version: 1, uid: "alice", slug: "alice", status: "hibernating", requestedBy: "alice", requestedAt: 1, eraseAfter: 2,
+        erasureOperationId: "erase-1", cleanupContext: { slug: "alice" }, stripeCustomerIds: ["cus_1"],
+        posthogErasure: { personUuids: ["person-1"], requestedPersonUuids: ["person-1"] },
+      },
+    } });
+
+    await drainPendingOperationsOnce(buildDeps(db, { "erase-customer": verified }));
+
+    expect(documents.get("customerDeletionJobs/del-1")).toEqual({
+      version: 1, status: "verified", requestedAt: 1, eraseAfter: 2, archiveId: "archive-1", completedAt: expect.any(Number),
+    });
+    const operation = store.get("erase-1")!;
+    expect(operation.status).toBe("succeeded");
+    expect(operation).not.toHaveProperty("input");
+    expect(operation).not.toHaveProperty("createdBy");
+    expect(await db.journal.operations.listReferencingUid("alice")).toEqual([]);
+  });
+
+  it("leaves the operation running when its deletion job has vanished instead of inventing a verified job", async () => {
+    const { db, store, documents } = createOperationsFixture({ "erase-1": erasure() });
+
+    await expect(drainPendingOperationsOnce(buildDeps(db, { "erase-customer": verified }))).rejects.toBeInstanceOf(MissingRecordError);
+
+    expect(store.get("erase-1")?.status).toBe("running");
+    expect(documents.get("customerDeletionJobs/del-1")).toBeUndefined();
+  });
+});
+
+describe("claim admission fences", () => {
+  it.each([
+    ["another computer recovery owns the Builder", { users: { alice: { provisioning: { computerRecovery: { operationId: "recover-1" } } } } }],
+    ["a gateway runtime restart outcome is unresolved", { gateways: { "shared-a": { gatewayId: "shared-a", gatewayClass: "shared",
+      runtimeRestartFence: { attemptId: "attempt-1", gatewayId: "shared-a", kind: "process", phase: "dispatched", startedAt: 1 } } } }],
+  ] as const)("leaves a migration pending while %s", async (_name, seeds) => {
+    const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
+    const log = vi.fn();
+    const { db, store } = createOperationsFixture({
+      "op-move": baseOp({ id: "op-move", kind: "migrate-customer", input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" } }),
+    }, seeds);
+
+    await drainPendingOperationsOnce({ ...buildDeps(db, { "migrate-customer": handler }), log });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(store.get("op-move")?.status).toBe("pending");
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/claim transaction failed op=op-move: .*(computer recovery is in progress|restart outcome is unresolved)/));
+  });
+
+  it("lets the recovery's own operation claim the fenced Builder", async () => {
+    const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
+    const { db, store } = createOperationsFixture({
+      "recover-1": baseOp({ id: "recover-1", kind: "add-gateway", input: { uid: "alice" } }),
+    }, { users: { alice: { provisioning: { computerRecovery: { operationId: "recover-1" } } } } });
+
+    await drainPendingOperationsOnce(buildDeps(db, { "add-gateway": handler }));
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(store.get("recover-1")?.status).toBe("succeeded");
   });
 });

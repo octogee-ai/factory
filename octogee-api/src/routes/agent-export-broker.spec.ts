@@ -1,22 +1,25 @@
 import { describe, expect, it } from "vitest";
+import { MalformedRecordError } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { authorizeAgentExport } from "./agent-export-broker.js";
-import type { AgentImportBrokerDeps, OwnerContext } from "./agent-import-broker.js";
+import type { OwnerContext } from "./agent-import-broker.js";
 function fixture() {
   const owner: OwnerContext = { uid: "u1", slug: "alice", gatewayId: "shared-a", isAdmin: false, workspacePolicy: { preserveConvergedContextFiles: true } };
   const docs = new Map<string, any>([
     ["users/u1", { provisioning: { openclaw: { gatewayId: "shared-a", slug: "alice", status: "complete" } } }],
-    ["workspaces/alice", { ownerUid: "u1" }], ["gateways/shared-a", { desiredStatus: "running" }],
-    ["glmGateways/shared-a", { lifecycle: "serving" }], ["gateways/shared-a/assignments/u1", { state: "serving", epoch: 4, slug: "alice", gatewayId: "shared-a" }],
+    ["workspaces/alice", { id: "ws-alice", ownerUid: "u1" }],
+    ["gateways/shared-a", { gatewayId: "shared-a", desiredRelease: 1, latestRelease: 1, desiredStatus: "running" }],
+    ["glmGateways/shared-a", { docKind: "runtime", gatewayId: "shared-a", release: 1, lifecycle: "serving" }],
+    ["gateways/shared-a/assignments/u1", { uid: "u1", source: "onboarding", state: "serving", epoch: 4, slug: "alice", gatewayId: "shared-a" }],
     ["workspaces/alice/projects/demo", { ownerUid: "u1", provisioningState: "active" }],
   ]);
-  const deps = { db: { doc: (key: string) => ({ get: async () => ({ exists: docs.has(key), data: () => docs.get(key) }) }) } } as unknown as AgentImportBrokerDeps;
-  return { owner, docs, deps };
+  return { owner, docs, store: createDocumentFixtureStore(docs) };
 }
 describe("authored export custody", () => {
   it("admits an owned serving Barn coach and project without requiring dedicated Native surfaces", async () => {
     const f = fixture();
-    expect(await authorizeAgentExport(f.deps, f.owner, "octogee-alice-coach")).toMatchObject({ project: null, epoch: 4 });
-    expect(await authorizeAgentExport(f.deps, f.owner, "octogee-alice-proj-demo-coach")).toMatchObject({ project: "demo" });
+    expect(await authorizeAgentExport(f.store, f.owner, "octogee-alice-coach")).toMatchObject({ project: null, epoch: 4 });
+    expect(await authorizeAgentExport(f.store, f.owner, "octogee-alice-proj-demo-coach")).toMatchObject({ project: "demo" });
   });
   it.each(["quiescing", "missing", "retired", "restart", "transfer", "restore", "foreign", "archived", "owner", "pending-migration", "suspended", "deleting", "inactive-owner", "paused"])("refuses %s source custody", async scenario => {
     const f = fixture(); let agent = "octogee-alice-proj-demo-coach";
@@ -34,6 +37,11 @@ describe("authored export custody", () => {
     if (scenario === "deleting") f.docs.get("users/u1").accountLifecycle = { status: "deletion_scheduled" };
     if (scenario === "inactive-owner") f.docs.get("workspaces/alice").ownerActive = false;
     if (scenario === "paused") f.docs.get("gateways/shared-a").desiredStatus = "paused";
-    await expect(authorizeAgentExport(f.deps, f.owner, agent)).rejects.toThrow();
+    await expect(authorizeAgentExport(f.store, f.owner, agent)).rejects.toThrow();
+  });
+  it("fails closed on a source assignment that is not a complete record", async () => {
+    const f = fixture();
+    delete f.docs.get("gateways/shared-a/assignments/u1").source;
+    await expect(authorizeAgentExport(f.store, f.owner, "octogee-alice-coach")).rejects.toBeInstanceOf(MalformedRecordError);
   });
 });

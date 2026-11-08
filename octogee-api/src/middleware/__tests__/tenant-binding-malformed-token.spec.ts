@@ -1,6 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
 import { createTenantBindingMiddleware } from "../tenant-binding.js";
 import type { Reviewer } from "../../lib/token-review.js";
@@ -15,6 +16,7 @@ function harness(reviewer: Reviewer) {
   const inc = vi.fn();
   const middleware = createTenantBindingMiddleware({
     reviewer,
+    store: createDocumentFixtureStore({}),
     metrics: { attemptsTotal: { inc } as never },
     logger: { warn: vi.fn() },
   });

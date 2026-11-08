@@ -1,5 +1,6 @@
 import { isGatewayDesiredDoc } from "@octogee/shared/types/gateway-releases";
 import { GATEWAY_HEARTBEAT_INTERVAL_MS, type ConfiguredBuilderReport } from "@octogee/shared/types/fleet-controller";
+import type { FleetHeartbeatReport } from "@octogee/core/platform-state";
 
 export const HEARTBEAT_FIELD = "heartbeat";
 
@@ -33,23 +34,16 @@ export interface PollerHeartbeatRecord {
   configuredBuilder?: ConfiguredBuilderReport | null;
 }
 
-// glmGateways/{id} merge payload for the poller's live telemetry.
-export function revisionHeartbeatMerge(
-  record: PollerHeartbeatRecord,
-  lastHeartbeatAt: unknown,
-): { heartbeat: Record<string, unknown> } {
-  const heartbeat: Record<string, unknown> = {
-    status: record.status,
+export function pollerHeartbeatReport(record: PollerHeartbeatRecord, internalUrl: string): FleetHeartbeatReport {
+  return {
+    status: record.status as FleetHeartbeatReport["status"],
     mountedCustomers: record.mountedCustomers,
-    lastHeartbeatAt,
+    ...(typeof record.startedAt === "number" ? { startedAt: record.startedAt } : {}),
+    ...(typeof record.version === "string" ? { version: record.version } : {}),
+    ...(typeof record.openclawVersion === "string" ? { openclawVersion: record.openclawVersion } : {}),
+    ...(record.configuredBuilder !== undefined ? { configuredBuilder: record.configuredBuilder } : {}),
+    internalUrl,
   };
-  if (typeof record.startedAt === "number") heartbeat.startedAt = record.startedAt;
-  if (typeof record.version === "string") heartbeat.version = record.version;
-  if (typeof record.openclawVersion === "string") {
-    heartbeat.openclawVersion = record.openclawVersion;
-  }
-  if (record.configuredBuilder !== undefined) heartbeat.configuredBuilder = record.configuredBuilder;
-  return { [HEARTBEAT_FIELD]: heartbeat };
 }
 
 // Must stay a poll interval inside the OpenClaw control readiness window.
@@ -85,9 +79,9 @@ function alreadyStored(stored: unknown, candidate: unknown): boolean {
     );
 }
 
-export function heartbeatMergeIsRedundant(
+export function heartbeatReportIsRedundant(
   stored: unknown,
-  candidate: Record<string, unknown>,
+  candidate: FleetHeartbeatReport,
   now: number,
 ): boolean {
   const current = plainRecord(stored);

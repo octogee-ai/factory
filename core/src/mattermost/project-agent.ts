@@ -1,4 +1,5 @@
 import { projectAgentMmUsername } from "@octogee/shared/types/identity";
+import type { SecretsRepository } from "../platform-state/secrets.js";
 
 export const PROJECT_AGENT_PAT_DESCRIPTION = "Octogee project agent (OpenClaw)";
 
@@ -6,24 +7,9 @@ export function projectAgentSecretDocId(project: string): string {
   return `projectAgentMattermost-${project}`;
 }
 
-interface SecretDocRef {
-  set(data: Record<string, unknown>): Promise<unknown>;
-  delete(): Promise<unknown>;
-}
-interface SecretCollectionRef {
-  doc(id: string): SecretDocRef;
-}
-interface UserDocRef {
-  collection(name: string): SecretCollectionRef;
-}
-interface UsersCollectionRef {
-  doc(id: string): UserDocRef;
-}
-
 export interface ProjectAgentDeps {
   mmApiCall: (method: string, endpoint: string, body?: unknown) => Promise<unknown>;
-  db: { collection: (name: string) => UsersCollectionRef };
-  now: () => unknown;
+  secrets: Pick<SecretsRepository, "put" | "delete">;
   log: (msg: string) => void;
 }
 
@@ -39,12 +25,6 @@ export interface CreateProjectAgentBotInput {
 interface MmToken {
   id?: string;
   description?: string;
-}
-
-function secretDoc(deps: ProjectAgentDeps, uid: string, project: string): SecretDocRef {
-  return deps.db
-    .collection("users").doc(uid)
-    .collection("secrets").doc(projectAgentSecretDocId(project));
 }
 
 async function createOrAdoptBotUser(
@@ -166,11 +146,14 @@ export async function createProjectAgentBot(
     throw new Error(`[project-agent] PAT mint returned no token for ${botUsername}`);
   }
 
-  await secretDoc(deps, input.uid, input.project).set({
+  await deps.secrets.put(input.uid, {
+    kind: "project-agent-mattermost",
+    secretId: projectAgentSecretDocId(input.project),
+    projectId: input.project,
     personalToken: minted.token,
-    mmUserId,
-    project: input.project,
-    createdAt: deps.now(),
+    mattermostUserId: mmUserId,
+    createdAt: { serverNow: true },
+    rotatedAt: null,
   });
   deps.log(`[project-agent] provisioned ${botUsername} (${mmUserId}) with fresh PAT`);
 
@@ -196,6 +179,6 @@ export async function retireProjectAgentBot(
     if ((err as { status?: number }).status !== 404) throw err;
     deps.log(`[project-agent] bot ${input.mmUserId} already gone (404) - continuing retire`);
   }
-  await secretDoc(deps, input.uid, input.project).delete();
+  await deps.secrets.delete(input.uid, projectAgentSecretDocId(input.project));
   deps.log(`[project-agent] retired bot ${input.mmUserId} for project ${input.project}`);
 }

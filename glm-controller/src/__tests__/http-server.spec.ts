@@ -1,6 +1,18 @@
 import request from "supertest";
 import type { Express } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { builderAccountFromData, type BuilderAccountReader } from "@octogee/core/builder-account";
+import {
+  MalformedRecordError,
+  type PlatformStateError,
+  type PlatformStateStore,
+  type WatchAggregate,
+  type WatchCursor,
+  type WatchEvent,
+  type WatchListener,
+  type WatchRequest,
+  type WatchSubscription,
+} from "@octogee/core/platform-state";
 import {
   createJournalFixtureStore,
   fixtureDocumentsAt,
@@ -153,39 +165,86 @@ function applyPatch(
 }
 
 interface WatchRegistry {
-  attach(
-    collection: string,
-    filters: Array<{ field: string; value: unknown }>,
-    next: (snap: { docs: unknown[] }) => void,
-  ): () => void;
-  attachCount(collection: string): number;
-  filtersFor(collection: string): Array<{ field: string; value: unknown }> | undefined;
+  watch: PlatformStateStore["watch"];
+  attachCount(aggregate: WatchAggregate): number;
+  filterFor(aggregate: WatchAggregate): unknown;
+  aggregates(): WatchAggregate[];
   activeCount(): number;
 }
 
-function createWatchRegistry(): WatchRegistry {
-  const attachCounts = new Map<string, number>();
-  const filtersByCollection = new Map<string, Array<{ field: string; value: unknown }>>();
+const FIXTURE_CURSOR = "fixture-cursor" as WatchCursor;
+const SNAPSHOT: WatchEvent<WatchAggregate> = { kind: "snapshot", records: [], cursor: FIXTURE_CURSOR };
+const CHANGES: WatchEvent<WatchAggregate> = { kind: "changes", changes: [], cursor: FIXTURE_CURSOR };
+
+function createWatchRegistry(options: {
+  script?: (aggregate: WatchAggregate) => readonly WatchEvent<WatchAggregate>[];
+  failWith?: (aggregate: WatchAggregate) => PlatformStateError | undefined;
+  repeatEveryMs?: number;
+} = {}): WatchRegistry {
+  const attachCounts = new Map<WatchAggregate, number>();
+  const filters = new Map<WatchAggregate, unknown>();
+  const script = options.script ?? (() => [SNAPSHOT, CHANGES]);
   let active = 0;
+  const watch = (<A extends WatchAggregate>(request: WatchRequest<A>, listener: WatchListener<A>): WatchSubscription => {
+    const aggregate: WatchAggregate = request.aggregate;
+    attachCounts.set(aggregate, (attachCounts.get(aggregate) ?? 0) + 1);
+    filters.set(aggregate, request.filter);
+    active += 1;
+    let open = true;
+    const deliver = (event: WatchEvent<WatchAggregate>) => {
+      if (open) void listener.onEvent(event as WatchEvent<A>);
+    };
+    queueMicrotask(() => {
+      const failure = options.failWith?.(aggregate);
+      if (failure !== undefined && open) listener.onError(failure);
+      for (const event of script(aggregate)) deliver(event);
+    });
+    const timer = options.repeatEveryMs === undefined ? null : setInterval(() => deliver(CHANGES), options.repeatEveryMs);
+    timer?.unref?.();
+    let resolveClosed!: () => void;
+    const closed = new Promise<void>((resolve) => {
+      resolveClosed = resolve;
+    });
+    return {
+      closed,
+      close: async () => {
+        if (open) {
+          open = false;
+          active -= 1;
+          if (timer) clearInterval(timer);
+          resolveClosed();
+        }
+        return closed;
+      },
+    };
+  }) as PlatformStateStore["watch"];
   return {
-    attach(collection, filters, next) {
-      attachCounts.set(collection, (attachCounts.get(collection) ?? 0) + 1);
-      filtersByCollection.set(collection, filters);
-      active += 1;
-      next({ docs: [] });
-      const timer = setInterval(() => next({ docs: [] }), 5);
-      timer.unref?.();
-      let unsubscribed = false;
-      return () => {
-        if (unsubscribed) return;
-        unsubscribed = true;
-        active -= 1;
-        clearInterval(timer);
-      };
-    },
-    attachCount: (collection) => attachCounts.get(collection) ?? 0,
-    filtersFor: (collection) => filtersByCollection.get(collection),
+    watch,
+    attachCount: (aggregate) => attachCounts.get(aggregate) ?? 0,
+    filterFor: (aggregate) => filters.get(aggregate),
+    aggregates: () => [...attachCounts.keys()],
     activeCount: () => active,
+  };
+}
+
+function storeWithWatch(store: PlatformStateStore, watch: PlatformStateStore["watch"]): PlatformStateStore {
+  return new Proxy(store, {
+    get: (target, property) => (property === "watch" ? watch : Reflect.get(target, property)),
+  });
+}
+
+function accountsOver(store: FakeStore): BuilderAccountReader {
+  const account = (uid: string) => {
+    const data = store.users[uid];
+    return data === undefined ? null : builderAccountFromData(uid, data);
+  };
+  return {
+    get: async (uid) => account(uid),
+    getMany: async (uids) => new Map(uids.flatMap((uid) => {
+      const found = account(uid);
+      return found === null ? [] : [[uid, found] as const];
+    })),
+    list: async () => new Map(Object.keys(store.users).map((uid) => [uid, account(uid)!] as const)),
   };
 }
 
@@ -193,7 +252,6 @@ function makeQuery(
   collectionName: string,
   store: FakeStore,
   filters: Array<{ field: string; value: unknown }> = [],
-  watchRegistry?: WatchRegistry,
 ) {
   const matches = (data: Record<string, unknown>): boolean =>
     filters.every((f) => {
@@ -204,21 +262,9 @@ function makeQuery(
     });
   return {
     where: (field: string, _op: string, value: unknown) =>
-      makeQuery(collectionName, store, [...filters, { field, value }], watchRegistry),
-    orderBy: () => makeQuery(collectionName, store, filters, watchRegistry),
-    limit: () => makeQuery(collectionName, store, filters, watchRegistry),
-    onSnapshot: (
-      next: (snap: { docs: unknown[] }) => void,
-      _onError?: (err: unknown) => void,
-    ) => {
-      if (watchRegistry) return watchRegistry.attach(collectionName, filters, next);
-      const unsubscribe = vi.fn();
-      queueMicrotask(() => {
-        next({ docs: [] });
-        next({ docs: [] });
-      });
-      return unsubscribe;
-    },
+      makeQuery(collectionName, store, [...filters, { field, value }]),
+    orderBy: () => makeQuery(collectionName, store, filters),
+    limit: () => makeQuery(collectionName, store, filters),
     get: async () => {
       if (collectionName === "gateways") {
         const docs = Object.entries(store.gateways)
@@ -249,7 +295,7 @@ function makeQuery(
   };
 }
 
-function buildDb(store: FakeStore, watchRegistry?: WatchRegistry) {
+function buildDb(store: FakeStore) {
   let docSeq = 0;
   return {
     batch: () => {
@@ -441,18 +487,9 @@ function buildDb(store: FakeStore, watchRegistry?: WatchRegistry) {
         };
       },
       where: (field: string, _op: string, value: unknown) =>
-        makeQuery(name, store, [{ field, value }], watchRegistry),
-      orderBy: () => makeQuery(name, store, [], watchRegistry),
-      limit: () => makeQuery(name, store, [], watchRegistry),
-      onSnapshot: (next: (snap: { docs: unknown[] }) => void) => {
-        if (watchRegistry) return watchRegistry.attach(name, [], next);
-        const unsubscribe = vi.fn();
-        queueMicrotask(() => {
-          next({ docs: [] });
-          next({ docs: [] });
-        });
-        return unsubscribe;
-      },
+        makeQuery(name, store, [{ field, value }]),
+      orderBy: () => makeQuery(name, store, []),
+      limit: () => makeQuery(name, store, []),
       get: async () => {
         if (name === "gateways") {
           const docs = Object.entries(store.gateways).map(([id, data]) => ({
@@ -499,15 +536,23 @@ function fakeStoreDocuments(store: FakeStore): FixtureDocuments {
     return null;
   };
   const operationId = (path: string) => /^glmOperations\/([^/]+)$/.exec(path)?.[1];
+  const roleOwner = (path: string) => /^users\/([^/]+)\/system\/config$/.exec(path)?.[1];
   return {
     get: (path) => {
       const id = operationId(path);
       if (id !== undefined) return store.glmOperations.find((operation) => operation.id === id)?.data;
+      const owner = roleOwner(path);
+      if (owner !== undefined) return store.configs[owner];
       return topLevel(path)?.[path.split("/")[1]] ?? other.get(path);
     },
     set: (path, row) => {
       const id = operationId(path);
       if (id !== undefined) return setOperation(store, id, row);
+      const owner = roleOwner(path);
+      if (owner !== undefined) {
+        store.configs[owner] = row;
+        return;
+      }
       const rows = topLevel(path);
       if (rows) rows[path.split("/")[1]] = row;
       else other.set(path, row);
@@ -516,6 +561,11 @@ function fakeStoreDocuments(store: FakeStore): FixtureDocuments {
       const id = operationId(path);
       if (id !== undefined) {
         store.glmOperations = store.glmOperations.filter((operation) => operation.id !== id);
+        return;
+      }
+      const owner = roleOwner(path);
+      if (owner !== undefined) {
+        delete store.configs[owner];
         return;
       }
       const rows = topLevel(path);
@@ -533,14 +583,19 @@ function fakeStoreDocuments(store: FakeStore): FixtureDocuments {
   };
 }
 
-function buildDeps(store: FakeStore, overrides: Partial<HttpServerDeps> = {}): HttpServerDeps {
+function buildDeps(
+  store: FakeStore,
+  overrides: Partial<HttpServerDeps> = {},
+  watches: WatchRegistry = createWatchRegistry(),
+): HttpServerDeps {
   const documents = fakeStoreDocuments(store);
   return {
     db: buildDb(store) as any,
-    store: createJournalFixtureStore({
+    store: storeWithWatch(createJournalFixtureStore({
       get: (id) => documents.get(`glmOperations/${id}`),
       set: (id, data) => documents.set(`glmOperations/${id}`, data),
-    }, { documents }),
+    }, { documents }), watches.watch),
+    accounts: accountsOver(store),
     log: vi.fn(),
     verifyIdToken: vi.fn(async (token: string) => {
       if (token === "admin-token") return { uid: "admin-uid" };
@@ -566,7 +621,7 @@ describe("createHttpServer — admin gateway routes", () => {
     store.users["admin-uid"] = { email: "admin@octogee.com" };
     store.configs["admin-uid"] = { role: "admin" };
     store.users["user-uid"] = { email: "user@octogee.com" };
-    store.configs["user-uid"] = { role: "operator" };
+    store.configs["user-uid"] = { role: "user" };
   });
 
   afterEach(() => vi.unstubAllEnvs());
@@ -729,23 +784,70 @@ describe("createHttpServer — admin gateway routes", () => {
   });
 
   it("subscribes fleet invalidation events to admin data dependencies", async () => {
-    const db = buildDb(store) as { collection: (name: string) => unknown };
-    const originalCollection = db.collection.bind(db);
-    const watchedCollections: string[] = [];
-    db.collection = (name: string) => {
-      watchedCollections.push(name);
-      return originalCollection(name);
-    };
-    const app = createHttpServer(buildDeps(store, { db: db as any }));
+    const watches = createWatchRegistry();
+    const app = createHttpServer(buildDeps(store, {}, watches));
 
     const res = await request(app)
       .get("/api/admin/fleet-events?once=1")
       .set("Authorization", "Bearer admin-token");
 
     expect(res.status).toBe(200);
-    expect(watchedCollections).toContain("users");
-    expect(watchedCollections).toContain("config");
-    expect(watchedCollections).not.toContain("operatorGatewayReservations");
+    expect(watches.aggregates()).toEqual(["builders", "gateways", "config", "fleetRegistry", "operations"]);
+  });
+
+  it.each([
+    ["builders", "users"],
+    ["gateways", "gateways"],
+    ["config", "config"],
+    ["fleetRegistry", "glmGateways"],
+    ["operations", "glmOperations"],
+  ] as const)("names a %s change by the %s collection the admin app invalidates on", async (aggregate, collection) => {
+    const watches = createWatchRegistry({
+      script: (watched) => (watched === aggregate ? [SNAPSHOT, CHANGES] : [SNAPSHOT]),
+    });
+    const app = createHttpServer(buildDeps(store, {}, watches));
+
+    const res = await request(app)
+      .get("/api/admin/fleet-events?once=1")
+      .set("Authorization", "Bearer admin-token");
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain(`"collection":"${collection}"`);
+  });
+
+  it("announces a change when a resubscribed watch delivers its fresh snapshot", async () => {
+    const watches = createWatchRegistry({
+      script: (watched) => (watched === "fleetRegistry"
+        ? [SNAPSHOT, { kind: "resync", reason: "backend-restart" }, SNAPSHOT]
+        : [SNAPSHOT]),
+    });
+    const app = createHttpServer(buildDeps(store, {}, watches));
+
+    const res = await request(app)
+      .get("/api/admin/fleet-events?once=1")
+      .set("Authorization", "Bearer admin-token");
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain(`"collection":"glmGateways"`);
+  });
+
+  it("streams a watch failure to admins without ending the stream", async () => {
+    const watches = createWatchRegistry({
+      failWith: (watched) => (watched === "builders"
+        ? new MalformedRecordError({ aggregate: "builder", key: "uid-1" }, "fails the builder schema")
+        : undefined),
+      script: (watched) => (watched === "operations" ? [SNAPSHOT, CHANGES] : [SNAPSHOT]),
+    });
+    const app = createHttpServer(buildDeps(store, {}, watches));
+
+    const res = await request(app)
+      .get("/api/admin/fleet-events?once=1")
+      .set("Authorization", "Bearer admin-token");
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain(`event: error\ndata: {"collection":"users","error":`);
+    expect(res.text).toContain("fails the builder schema");
+    expect(res.text).toContain(`"collection":"glmOperations"`);
   });
 
   it("serves /api/admin/gateways with populated fleet stats", async () => {
@@ -1083,59 +1185,46 @@ describe("createHttpServer — fleet-events watcher sharing", () => {
       .set("Authorization", "Bearer admin-token");
 
   it("shares one watcher set across concurrent stream connections", async () => {
-    const registry = createWatchRegistry();
-    const app = createHttpServer(
-      buildDeps(store, { db: buildDb(store, registry) as any }),
-    );
+    const registry = createWatchRegistry({ repeatEveryMs: 5 });
+    const app = createHttpServer(buildDeps(store, {}, registry));
 
     const [first, second] = await Promise.all([streamOnce(app), streamOnce(app)]);
 
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
-    for (const collection of ["users", "gateways", "config", "glmGateways", "glmOperations"]) {
-      expect(registry.attachCount(collection), collection).toBe(1);
+    for (const aggregate of ["builders", "gateways", "config", "fleetRegistry", "operations"] as const) {
+      expect(registry.attachCount(aggregate), aggregate).toBe(1);
     }
   });
 
   it("keeps watchers warm across sequential reconnects", async () => {
-    const registry = createWatchRegistry();
-    const app = createHttpServer(
-      buildDeps(store, { db: buildDb(store, registry) as any }),
-    );
+    const registry = createWatchRegistry({ repeatEveryMs: 5 });
+    const app = createHttpServer(buildDeps(store, {}, registry));
 
     expect((await streamOnce(app)).status).toBe(200);
     expect((await streamOnce(app)).status).toBe(200);
 
-    expect(registry.attachCount("glmOperations")).toBe(1);
+    expect(registry.attachCount("operations")).toBe(1);
     expect(registry.activeCount()).toBe(5);
   });
 
   it("filters the glmOperations watch to active operations", async () => {
-    const registry = createWatchRegistry();
-    const app = createHttpServer(
-      buildDeps(store, { db: buildDb(store, registry) as any }),
-    );
+    const registry = createWatchRegistry({ repeatEveryMs: 5 });
+    const app = createHttpServer(buildDeps(store, {}, registry));
 
     expect((await streamOnce(app)).status).toBe(200);
 
-    expect(registry.filtersFor("glmOperations")).toEqual([
-      { field: "status", value: ["pending", "running"] },
-    ]);
+    expect(registry.filterFor("operations")).toEqual({ statuses: ["pending", "running"] });
   });
 
   it("tears down watchers after the last connection closes when linger is disabled", async () => {
-    const registry = createWatchRegistry();
-    const app = createHttpServer(
-      buildDeps(store, {
-        db: buildDb(store, registry) as any,
-        fleetEventListenerLingerMs: 0,
-      }),
-    );
+    const registry = createWatchRegistry({ repeatEveryMs: 5 });
+    const app = createHttpServer(buildDeps(store, { fleetEventListenerLingerMs: 0 }, registry));
 
     expect((await streamOnce(app)).status).toBe(200);
     expect(registry.activeCount()).toBe(0);
 
     expect((await streamOnce(app)).status).toBe(200);
-    expect(registry.attachCount("users")).toBe(2);
+    expect(registry.attachCount("builders")).toBe(2);
   });
 });

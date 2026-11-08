@@ -1,10 +1,12 @@
 import type { Request, Response, NextFunction } from "express";
-import type { Firestore } from "firebase-admin/firestore";
+import type { BuilderAccount, BuilderAccountReader } from "@octogee/core/builder-account";
+import type { BuilderRecord, PlatformStateStore, Stored } from "@octogee/core/platform-state";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
 export interface RequireAdminDeps {
   verifyIdToken: (token: string) => Promise<{ uid: string }>;
-  db: Firestore;
+  store: Pick<PlatformStateStore, "builders">;
+  accounts: Pick<BuilderAccountReader, "get">;
   log: (msg: string) => void;
 }
 
@@ -50,17 +52,12 @@ export function createRequireAdmin(
     if (!uid) return;
     req.uid = uid;
 
-    let userSnap: FirebaseFirestore.DocumentSnapshot;
-    let configSnap: FirebaseFirestore.DocumentSnapshot;
+    let builder: Stored<BuilderRecord> | null;
+    let account: BuilderAccount | null;
     try {
-      [userSnap, configSnap] = await Promise.all([
-        deps.db.collection("users").doc(uid).get(),
-        deps.db
-          .collection("users")
-          .doc(uid)
-          .collection("system")
-          .doc("config")
-          .get(),
+      [builder, account] = await Promise.all([
+        deps.store.builders.records.get(uid),
+        deps.accounts.get(uid),
       ]);
     } catch (error) {
       const message = errorMessage(error);
@@ -68,17 +65,12 @@ export function createRequireAdmin(
       next(error instanceof Error ? error : new Error(message));
       return;
     }
-    if (!userSnap.exists || !accountAllowsInteractiveAccess(userSnap.data())) {
+    if (builder === null || !accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle })) {
       res.status(403).json({ error: "Account suspended" });
       return;
     }
-    const userData = userSnap.data()!;
-    const email = typeof userData.email === "string" ? userData.email : null;
-    req.user = { email };
-    const role = configSnap.exists
-      ? (configSnap.data() as { role?: unknown } | undefined)?.role
-      : null;
-    req.isAdmin = role === "admin";
+    req.user = { email: account?.email ?? null };
+    req.isAdmin = builder.role === "admin";
 
     if (!req.isAdmin) {
       res.status(403).json({ error: "Admin access required" });

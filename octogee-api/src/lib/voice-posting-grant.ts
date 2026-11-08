@@ -222,11 +222,10 @@ async function conversationAgentCredential(deps: WorkspaceConversationDeps, owne
   const agent = parseAgentId(agentId);
   if (agent.kind === 'unknown') deny();
   const secretId = agent.kind === 'project' ? `projectAgentMattermost-${agent.project}` : 'coachMattermost';
-  const secret = record((await deps.db.doc(`users/${ownerUid}/secrets/${secretId}`).get()).data());
-  const agentMmUserId = agent.kind === 'project' ? secret?.mmUserId : secret?.coachMmUserId;
-  if (!secret || typeof secret.personalToken !== 'string' || !secret.personalToken.trim() ||
-    typeof agentMmUserId !== 'string' || !MATTERMOST_ID.test(agentMmUserId)) deny();
-  return { coachMmUserId: agentMmUserId, coachToken: secret.personalToken };
+  const secret = await deps.store.secrets.get(ownerUid, secretId);
+  if (!secret || secret.kind === 'connector' || !secret.personalToken.trim() ||
+    secret.mattermostUserId === null || !MATTERMOST_ID.test(secret.mattermostUserId)) deny();
+  return { coachMmUserId: secret.mattermostUserId, coachToken: secret.personalToken };
 }
 export async function startWorkspaceVoiceConversation(deps: WorkspaceConversationDeps, claim: { uid: string; channelId: string; threadRootPostId?: string }) {
   if (claim.threadRootPostId !== undefined) return resolveVoiceConversationContext(deps, { ...claim, threadRootPostId: claim.threadRootPostId });

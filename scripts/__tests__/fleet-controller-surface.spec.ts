@@ -37,8 +37,6 @@ function controllerOpts(): StartFleetOptions {
     publicKey: COWBOY.publicKey,
     version: "sha-1",
     openclawVersion: "2026.8.1-beta.2",
-    platformState: false,
-    reportState: false,
     openclawDir: "/tmp/octogee-fleet-surface-noexist",
   } as StartFleetOptions;
 }

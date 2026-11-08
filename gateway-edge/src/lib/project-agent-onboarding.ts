@@ -1,6 +1,18 @@
 import { logger } from "../middleware/logging.js";
-import { claimProjectDelivery, beginDeliveryPost, finishProjectDelivery, matchingDeliveryPost, type DeliveryClaim, type DeliveryKind, type OnboardingProject } from "./project-agent-delivery.js";
+import {
+  claimProjectDelivery,
+  beginDeliveryPost,
+  finishProjectDelivery,
+  matchingDeliveryPost,
+  openDeliveryIntent,
+  type DeliveryClaim,
+  type DeliveryKind,
+  type OnboardingProject,
+  type ProjectDeliveryTarget,
+} from "./project-agent-delivery.js";
 import { FieldValue, db } from "./db.js";
+import { platformStateStore } from "./platform-state.js";
+import { readMattermostSecret } from "./mattermost-secret.js";
 import { mmApi } from "./mattermost.js";
 import { projectAgentMmUsername } from "@octogee/shared/types/identity";
 import { projectAgentConfigured } from "@octogee/shared/types/project";
@@ -80,9 +92,9 @@ function deliveryMessage(project: OnboardingProject, kind: DeliveryKind, workspa
 
 async function prepareHandoff({ uid, projectSlug, project }: { uid: string; projectSlug: string; project: OnboardingProject }): Promise<void> {
   if (!project.agent.identity || !project.handoffMessage) throw new Error("Project handoff identity is missing");
-  const secret = (await db.doc(`users/${uid}/secrets/${projectAgentSecretDocId(projectSlug)}`).get()).data();
-  if (!secret?.mmUserId) throw new Error("Project agent has no chat identity");
-  await mmApi(`/bots/${secret.mmUserId}`, "PUT", { display_name: project.agent.identity.name });
+  const secret = await readMattermostSecret(platformStateStore, uid, projectAgentSecretDocId(projectSlug));
+  if (!secret?.mattermostUserId) throw new Error("Project agent has no chat identity");
+  await mmApi(`/bots/${secret.mattermostUserId}`, "PUT", { display_name: project.agent.identity.name });
 }
 
 async function ensureCoachMembership(channelId: string, coachId: string): Promise<void> {
@@ -100,23 +112,26 @@ async function readHandoffMessage(workspaceId: string, projectSlug: string): Pro
   return handoff.data()?.message;
 }
 
-async function postOnboarding(uid: string, workspaceId: string, projectSlug: string, claim: DeliveryClaim): Promise<string> {
+async function postOnboarding(uid: string, target: ProjectDeliveryTarget, claim: DeliveryClaim): Promise<string> {
   const { kind } = claim;
+  const { workspaceId, projectSlug } = target;
   const project = { ...claim.project, handoffMessage: kind === "handoff"
     ? await readHandoffMessage(workspaceId, projectSlug) : undefined };
-  const coach = (await db.doc(`users/${uid}/secrets/coachMattermost`).get()).data();
-  const coachId = (await db.doc(`agents/${uid}`).get()).data()?.mattermost?.userId;
-  const channelPath = `workspaces/${workspaceId}/projects/${projectSlug}/channels/general`;
-  const channelId = (await db.doc(channelPath).get()).data()?.mattermost?.channelId;
+  const [coach, coachIdentity, channel] = await Promise.all([
+    readMattermostSecret(platformStateStore, uid, "coachMattermost"),
+    platformStateStore.workspaces.agentIdentities.get(uid),
+    platformStateStore.workspaces.channels.get({ workspaceSlug: workspaceId, projectSlug }, "general"),
+  ]);
+  const coachId = coachIdentity?.mattermostUserId;
+  const channelId = channel?.mattermostChannelId;
   const token = coach?.personalToken;
   if (!channelId || !token || !coachId) throw new Error("Project handoff chat credentials are not ready");
   const receipt = `${workspaceId}/${projectSlug}/${kind}`;
   if (kind === "handoff") await prepareHandoff({ uid, projectSlug, project });
   await ensureCoachMembership(channelId, coachId);
-  const ref = db.doc(`workspaces/${workspaceId}/projects/${projectSlug}`);
-  let postId = await matchingDeliveryPost(ref, claim, channelId, receipt, token);
+  let postId = await matchingDeliveryPost(target, claim, channelId, receipt, token);
   if (!postId) {
-    await beginDeliveryPost(ref, claim);
+    await beginDeliveryPost(target, claim);
     const post = await mmApi("/posts", "POST", { channel_id: channelId,
       message: deliveryMessage(project, kind, workspaceId, projectSlug),
       props: { octogee_project_delivery: receipt } }, token) as { id?: string };
@@ -127,17 +142,17 @@ async function postOnboarding(uid: string, workspaceId: string, projectSlug: str
 }
 
 export async function deliverProjectAgentOnboarding(uid: string, workspaceId: string, projectSlug: string): Promise<void> {
-  const ref = db.doc(`workspaces/${workspaceId}/projects/${projectSlug}`);
-  const claim = await claimProjectDelivery(ref, uid);
-  if (!claim) return;
+  const target = { workspaceId, projectSlug };
+  const lease = await claimProjectDelivery(target, uid);
+  if (!lease) return;
   try {
-    const postId = await postOnboarding(uid, workspaceId, projectSlug, claim);
-    await finishProjectDelivery(ref, claim, { [`agent.${claim.kind}.status`]: "sent", [`agent.${claim.kind}.postId`]: postId,
-      "agent.lastError": null });
+    const claim = await openDeliveryIntent(target, lease);
+    const postId = await postOnboarding(uid, target, claim);
+    await finishProjectDelivery(target, lease, { postId });
   } catch (error) {
-    logger.error("Project onboarding delivery failed", { uid, workspaceId, projectSlug, kind: claim.kind, error });
+    logger.error("Project onboarding delivery failed", { uid, workspaceId, projectSlug, kind: lease.kind, error });
     try {
-      await finishProjectDelivery(ref, claim, { "agent.lastError": error instanceof Error ? error.message : String(error) });
+      await finishProjectDelivery(target, lease, { error: error instanceof Error ? error.message : String(error) });
     } catch (cleanupError) {
       logger.error("Project onboarding delivery cleanup failed", { uid, workspaceId, projectSlug, error: cleanupError });
     }

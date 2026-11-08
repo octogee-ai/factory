@@ -1,17 +1,22 @@
 import { registerAgentExportBrokerRoutes } from "./agent-export-broker.js";
 import { Router, type NextFunction, type Request, type Response } from "express";
-import { Timestamp, type Firestore } from "firebase-admin/firestore";
 import { randomUUID } from "node:crypto";
 import { Transform, type Readable, type Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
-import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
+import type { BuilderAccountReader } from "@octogee/core/builder-account";
+import {
+  agentImportRecordFromPayload,
+  type AgentImportRecord,
+  type BuilderRecord,
+  type PlatformStateStore,
+} from "@octogee/core/platform-state";
 import { classifyAgentImportArchivePath } from "@octogee/shared/types/agent-import";
 import {
   isAgentImportAuthorizationIntent,
   type AgentImportAuthorizationIntent,
 } from "@octogee/shared/types/agent-import";
-import { resolveBillingProfile, type TierResolvable } from "@octogee/shared/types/billing";
+import { resolveBillingProfile } from "@octogee/shared/types/billing";
 import type { FeaturePolicy } from "@octogee/shared/types/feature-flags";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { isValidUsername } from "@octogee/shared/types/identity";
@@ -26,6 +31,7 @@ const GITHUB_OWNER_RE = /^[A-Za-z0-9-]{1,39}$/;
 const GITHUB_REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const MAX_BLOB_BYTES = 100 * 1024 * 1024;
+const DAY_MS = 24 * 60 * 60 * 1_000;
 const RECOVERY_STATUSES = new Set([
   "workspace", "identity", "config", "verifying", "complete", "failed",
   "rolling_back", "rollback_failed", "rolled_back",
@@ -48,7 +54,8 @@ interface BucketLike {
 }
 
 export interface AgentImportBrokerDeps {
-  db: Firestore;
+  store: PlatformStateStore;
+  accounts: BuilderAccountReader;
   bucket: BucketLike;
   readGithubToken(uid: string): Promise<string | null>;
   listGithubRepos(token: string): Promise<unknown>;
@@ -93,19 +100,13 @@ function boundGateway(req: Request, res: Response): GatewayBinding | null {
   return bound;
 }
 
-function assignedWorkspaceSlug(
-  user: Record<string, unknown> | undefined,
-  gatewayId: string,
-  res: Response,
-): string | null {
-  const slug = slugFromAssignedUser(user);
-  const provisioning = object(user?.provisioning);
-  const openclaw = object(provisioning?.openclaw);
-  if (!slug || !isValidUsername(slug) || openclaw?.gatewayId !== gatewayId) {
+function assignedWorkspaceSlug(builder: BuilderRecord | null, gatewayId: string, res: Response): string | null {
+  const slug = builder?.slug ?? null;
+  if (!builder || !slug || !isValidUsername(slug) || builder.gateway?.gatewayId !== gatewayId) {
     res.status(404).json({ error: "not_found" });
     return null;
   }
-  if (openclaw.status !== "complete") {
+  if (builder.openclaw.status !== "complete") {
     res.status(409).json({ error: "openclaw_not_ready" });
     return null;
   }
@@ -121,27 +122,23 @@ async function ownerContext(
   if (!bound) return null;
   const uid = authenticatedUid(req, res, bound);
   if (!uid) return null;
-  const userSnapshot = await deps.db.doc(`users/${uid}`).get();
-  const user = userSnapshot.exists ? userSnapshot.data() : undefined;
-  const slug = assignedWorkspaceSlug(user, bound.gatewayId, res);
+  const builder = await deps.store.builders.records.get(uid);
+  const slug = assignedWorkspaceSlug(builder, bound.gatewayId, res);
   if (!slug) return null;
-  const [workspace, systemConfig] = await Promise.all([
-    deps.db.doc(`workspaces/${slug}`).get(),
-    deps.db.doc(`users/${uid}/system/config`).get(),
-  ]);
-  if (!workspace.exists || workspace.data()?.ownerUid !== uid) {
+  const [workspace, account] = await Promise.all([deps.store.workspaces.records.get(slug), deps.accounts.get(uid)]);
+  if (workspace?.ownerUid !== uid) {
     res.status(403).json({ error: "forbidden" });
     return null;
   }
+  const planInputs = account?.planInputs ?? {};
   return {
     uid,
     slug,
     gatewayId: bound.gatewayId,
-    isAdmin: systemConfig.exists && systemConfig.data()?.role === "admin",
-    ...(typeof user?.selectedTier === "string" ? { planTier: user.selectedTier } : {}),
+    isAdmin: builder?.role === "admin",
+    ...(typeof planInputs.selectedTier === "string" ? { planTier: planInputs.selectedTier } : {}),
     workspacePolicy: {
-      preserveConvergedContextFiles:
-        resolveBillingProfile(user as TierResolvable, deps.now()).modelAccess === "house_only",
+      preserveConvergedContextFiles: resolveBillingProfile(planInputs, deps.now()).modelAccess === "house_only",
     },
   };
 }
@@ -174,19 +171,19 @@ function ownedPayload(value: unknown, context: OwnerContext): JsonObject | null 
     : null;
 }
 
-function durableRecord(payload: JsonObject, now: Date): JsonObject {
-  const rollbackEligible = typeof payload.importCommit === "string" && payload.status !== "rolled_back";
-  const cleanupAt = new Date(now.getTime() + (rollbackEligible ? 8 : 1) * 24 * 60 * 60 * 1_000);
-  return {
-    ...payload,
-    cleanupAt: Timestamp.fromDate(cleanupAt),
-  };
+function isoTime(value: unknown): boolean {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value));
 }
 
-function publicRecord(payload: JsonObject): JsonObject {
-  const value = { ...payload };
-  delete value.cleanupAt;
-  return value;
+function storablePayload(payload: JsonObject): boolean {
+  return typeof payload.status === "string" && isoTime(payload.createdAt) && isoTime(payload.updatedAt) &&
+    (payload.importCommit === undefined || payload.importCommit === null || typeof payload.importCommit === "string");
+}
+
+function durableRecord(owner: OwnerContext, id: string, payload: JsonObject, now: Date): AgentImportRecord {
+  const { cleanupAt: _cleanupAt, ...record } = payload;
+  const rollbackEligible = typeof record.importCommit === "string" && record.status !== "rolled_back";
+  return agentImportRecordFromPayload(owner.uid, id, record, now.getTime() + (rollbackEligible ? 8 : 1) * DAY_MS);
 }
 
 function missingObject(error: unknown): boolean {
@@ -351,25 +348,20 @@ function registerRecordRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps)
     try {
       const id = importId(req, res);
       if (!id) return;
-      const payload = ownedPayload(req.body, context(res));
-      if (!payload || payload.id !== id || typeof payload.status !== "string") {
+      const owner = context(res);
+      const payload = ownedPayload(req.body, owner);
+      if (!payload || payload.id !== id || !storablePayload(payload)) {
         res.status(400).json({ error: "invalid_import_record" });
         return;
       }
-      const batch = deps.db.batch();
-      batch.set(
-        deps.db.doc(`users/${context(res).uid}/agentImports/${id}`),
-        durableRecord(payload, deps.now()),
-      );
-      if (RECOVERY_STATUSES.has(payload.status)) {
-        batch.set(deps.db.doc(`users/${context(res).uid}/agentImportState/latest`), {
-          id,
-          uid: context(res).uid,
-          slug: context(res).slug,
-          updatedAt: deps.now().toISOString(),
-        });
-      }
-      await batch.commit();
+      const now = deps.now();
+      const record = durableRecord(owner, id, payload, now);
+      await deps.store.transaction({ label: "agent-import.record" }, async (tx) => {
+        await tx.jobs.agentImports.put(record);
+        if (RECOVERY_STATUSES.has(record.status)) {
+          await tx.jobs.agentImports.putPointer(owner.uid, "latest", { importId: id, slug: owner.slug, updatedAt: now.getTime() });
+        }
+      });
       res.status(204).end();
     } catch (error) {
       next(error);
@@ -379,16 +371,14 @@ function registerRecordRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps)
   router.get("/records/latest", async (_req, res, next) => {
     try {
       const owner = context(res);
-      const pointer = await deps.db.doc(`users/${owner.uid}/agentImportState/latest`).get();
-      const data = pointer.exists ? ownedPayload(pointer.data(), owner) : null;
-      const id = typeof data?.id === "string" && IMPORT_ID_RE.test(data.id) ? data.id : null;
+      const pointer = await deps.store.jobs.agentImports.getPointer(owner.uid, "latest");
+      const id = pointer?.slug === owner.slug && IMPORT_ID_RE.test(pointer.importId) ? pointer.importId : null;
       if (!id) {
         res.json(null);
         return;
       }
-      const snapshot = await deps.db.doc(`users/${owner.uid}/agentImports/${id}`).get();
-      const payload = snapshot.exists ? ownedPayload(snapshot.data(), owner) : null;
-      res.json(payload ? publicRecord(payload) : null);
+      const stored = await deps.store.jobs.agentImports.get(owner.uid, id);
+      res.json(stored ? ownedPayload(stored.record, owner) : null);
     } catch (error) {
       next(error);
     }
@@ -398,13 +388,13 @@ function registerRecordRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps)
     try {
       const id = importId(req, res);
       if (!id) return;
-      const snapshot = await deps.db.doc(`users/${context(res).uid}/agentImports/${id}`).get();
-      const payload = snapshot.exists ? ownedPayload(snapshot.data(), context(res)) : null;
+      const stored = await deps.store.jobs.agentImports.get(context(res).uid, id);
+      const payload = stored ? ownedPayload(stored.record, context(res)) : null;
       if (!payload || payload.id !== id) {
         res.status(404).json({ error: "not_found" });
         return;
       }
-      res.json(publicRecord(payload));
+      res.json(payload);
     } catch (error) {
       next(error);
     }
@@ -418,19 +408,17 @@ function registerRecordRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps)
       const requested = ownedPayload(req.body, owner);
       if (
         !requested || requested.id !== id || requested.status !== "abandoned" ||
-        typeof requested.updatedAt !== "string" || requested.updatedAt.length > 100
+        typeof requested.updatedAt !== "string" || requested.updatedAt.length > 100 || !isoTime(requested.updatedAt)
       ) {
         res.status(400).json({ error: "invalid_import_record" });
         return;
       }
-      const recordRef = deps.db.doc(`users/${owner.uid}/agentImports/${id}`);
-      const pointerRef = deps.db.doc(`users/${owner.uid}/agentImportState/latest`);
-      const abandoned = await deps.db.runTransaction(async (transaction) => {
-        const [recordSnapshot, pointerSnapshot] = await Promise.all([
-          transaction.get(recordRef),
-          transaction.get(pointerRef),
+      const abandoned = await deps.store.transaction({ label: "agent-import.abandon" }, async (tx) => {
+        const [stored, pointer] = await Promise.all([
+          tx.jobs.agentImports.get(owner.uid, id),
+          tx.jobs.agentImports.getPointer(owner.uid, "latest"),
         ]);
-        const current = recordSnapshot.exists ? ownedPayload(recordSnapshot.data(), owner) : null;
+        const current = stored ? ownedPayload(stored.record, owner) : null;
         if (!current || current.id !== id) {
           throw Object.assign(new Error("agent import was not found"), { status: 404, code: "not_found" });
         }
@@ -440,17 +428,11 @@ function registerRecordRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps)
             code: "invalid_import_state",
           });
         }
-        const payload: JsonObject = {
-          ...current,
-          status: "abandoned",
-          updatedAt: requested.updatedAt,
-        };
-        delete payload.error;
-        const next = durableRecord(payload, deps.now());
-        transaction.set(recordRef, next);
-        const pointer = pointerSnapshot.exists ? ownedPayload(pointerSnapshot.data(), owner) : null;
-        if (pointer?.id === id) transaction.delete(pointerRef);
-        return publicRecord(next);
+        const { error: _error, ...kept } = current;
+        const next = durableRecord(owner, id, { ...kept, status: "abandoned", updatedAt: requested.updatedAt }, deps.now());
+        await tx.jobs.agentImports.put(next);
+        if (pointer?.importId === id && pointer.slug === owner.slug) await tx.jobs.agentImports.deletePointer(owner.uid, "latest");
+        return next.record;
       });
       res.json(abandoned);
     } catch (error) {

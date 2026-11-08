@@ -12,6 +12,7 @@ let gatewayReleasesDocs: Record<string, Record<string, unknown>> = {};
 // `${gatewayId}/${uid}` so the fake can serve subcollection + collectionGroup.
 let gatewayAssignmentsDocs: Record<string, Record<string, unknown>> = {};
 let usersDocs: Record<string, Record<string, unknown>> = {};
+const usersSystemDocs: Record<string, Record<string, unknown>> = {};
 let workspacesDocs: Record<string, Record<string, unknown>> = {};
 let configDocs: Record<string, Record<string, unknown>> = {};
 let sideEffects: string[] = [];
@@ -35,7 +36,9 @@ function fixtureCollection(collectionPath: string): { docs: FixtureCollection; p
     ? topLevel[root]
     : root === "gateways" && rest.length === 0
       ? gatewaySubcollections[subcollection]
-      : undefined;
+      : root === "users" && subcollection === "system" && rest.length === 0
+        ? usersSystemDocs
+        : undefined;
   if (docs === undefined) throw new Error(`admin-glm fixture has no collection ${collectionPath}`);
   return { docs, prefix: gatewayId === undefined ? "" : `${gatewayId}/` };
 }

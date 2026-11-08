@@ -1,11 +1,9 @@
-import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
   CLONE_RETRY_DELAYS_MS,
-  buildFleetHeartbeatSnapshot,
   buildFleetHealthResponse,
   buildFleetStateResponse,
   cloneRetryDelayMs,
@@ -26,7 +24,6 @@ import {
   NEEDS_FULL_ATTACH_FINGERPRINT,
   evictLocalCustomer,
   evictLocalCustomerIfStillUndesired,
-  gatewayServiceName,
   finalizeConvergedMount,
   pendingCloneAppliedFingerprint,
   pendingCloneOnlyStale,
@@ -37,7 +34,6 @@ import {
   probeSurgeReadiness,
   probeOpenClawRuntimeReady,
   reconcileAddCustomerOptions,
-  readMountedCustomersFromAssignedState,
   resolveFleetCapabilities,
   runProvisioningWork,
   waitForBrokerProfilesSettled,
@@ -74,19 +70,6 @@ afterEach(() => _resetMigratingInProcessPinsForTests());
 afterAll(() => {
   for (const dir of tmpDirs) fs.rmSync(dir, { recursive: true, force: true });
 });
-
-function assignedBuilders(gatewayId: string, rows: Array<Record<string, unknown>>) {
-  const docs = new Map<string, Record<string, unknown>>();
-  rows.forEach((row, index) => {
-    const provisioning = (row.provisioning ?? {}) as Record<string, unknown>;
-    const openclaw = (provisioning.openclaw ?? {}) as Record<string, unknown>;
-    docs.set(`users/u${index}`, {
-      ...row,
-      provisioning: { ...provisioning, openclaw: { gatewayId, status: "complete", ...openclaw } },
-    });
-  });
-  return createDocumentFixtureStore(docs).builders.records;
-}
 
 function recoveredSnapshot(overrides: Record<string, unknown> = {}) {
   return {
@@ -584,73 +567,6 @@ describe("createMountRefusalReader", () => {
 
   it("reports a converged refusal when an earlier configuration applied", () => {
     expect(reader({ applied: "customer-fp0" })("alice")).toEqual({ reason, converged: true });
-  });
-});
-
-describe("readMountedCustomersFromAssignedState", () => {
-  it("seeds assigned complete customers of this gateway only when local state is present and wired", async () => {
-    const db = assignedBuilders("gw-bender", [
-      { provisioning: { openclaw: { slug: "ceckert" } } },
-      { provisioning: { openclaw: { slug: "missing-dir" } } },
-      { provisioning: { openclaw: { slug: "unwired" } } },
-      { provisioning: { openclaw: { slug: "no-runtime" } } },
-      { provisioning: { openclaw: { slug: "no-git" } } },
-      { provisioning: { openclaw: { slug: "no-origin" } } },
-      { provisioning: { openclaw: { slug: "ceckert" } } },
-      { username: "fallback" },
-      { provisioning: { openclaw: { slug: "still-provisioning", status: "provisioning" } } },
-      { provisioning: { openclaw: { slug: "elsewhere", gatewayId: "gw-other" } } },
-    ]);
-    const hasCustomerDir = vi.fn((slug: string) => slug !== "missing-dir");
-    const customerCoachWiredInOpenclawConfig = vi.fn(
-      (slug: string) => slug !== "unwired",
-    );
-
-    await expect(
-      readMountedCustomersFromAssignedState(db, "gw-bender", {
-        hasCustomerDir,
-        customerCoachWiredInOpenclawConfig,
-        hasCustomerAgentRuntime: (slug) => slug !== "no-runtime",
-        hasWorkspaceGitDir: (slug) => slug !== "no-git",
-        hasGitRemote: (slug) => slug !== "no-origin",
-      }),
-    ).resolves.toEqual(["ceckert", "fallback"]);
-  });
-
-  it("falls back to customer-dir presence when the adapter has no config wiring probe", async () => {
-    const db = assignedBuilders("gw-a", [
-      { provisioning: { openclaw: { slug: "alice" } } },
-      { provisioning: { openclaw: { slug: "bob" } } },
-    ]);
-
-    await expect(
-      readMountedCustomersFromAssignedState(db, "gw-a", {
-        hasCustomerDir: (slug) => slug === "bob",
-        hasWorkspaceGitDir: () => true,
-        hasGitRemote: () => true,
-      }),
-    ).resolves.toEqual(["bob"]);
-  });
-
-  it("seeds a Builder-owned overlay only after its local mount marker is written", async () => {
-    const db = assignedBuilders("gw-builder", [
-      { provisioning: { openclaw: { slug: "discord-builder" } } },
-      { provisioning: { openclaw: { slug: "unmounted-builder" } } },
-    ]);
-
-    await expect(
-      readMountedCustomersFromAssignedState(db, "gw-builder", {
-        isBuilderGateway: () => true,
-        isConfiguredBuilderCustomer: (slug) => slug === "discord-builder",
-        hasCustomerDir: () => true,
-        configuredBuilderOverlayPresent: () => true,
-        customerMountMarked: (slug) => slug === "discord-builder",
-        customerCoachWiredInOpenclawConfig: () => false,
-        hasCustomerAgentRuntime: () => false,
-        hasWorkspaceGitDir: () => true,
-        hasGitRemote: () => true,
-      }),
-    ).resolves.toEqual(["discord-builder"]);
   });
 });
 
@@ -2801,95 +2717,17 @@ describe("in-pod gateway heartbeat", () => {
 
     expect(probe).toEqual({ status: "ready", podUid: "pod-uid-1", startedAt: 42, rsyncAttemptFencing: true });
   });
-
-  it("keys the heartbeat snapshot by the bare gateway id (GATEWAY-SIMPLE-ROLL-SPEC)", () => {
-    const snap = buildFleetHeartbeatSnapshot({
-      gatewayId: "default",
-      status: "ready",
-      version: "sha-1",
-      openclawVersion: "2026.7.1",
-      mountedCustomers: ["alice"],
-      internalUrl: "http://octogee-gateway-default.ns.svc.cluster.local:18789",
-      startedAt: 42,
-    });
-    expect(snap).toMatchObject({ gatewayId: "default", status: "ready" });
-    expect(snap).not.toHaveProperty("revisionId");
-    expect(snap.openclawVersion).toBe("2026.7.1");
-  });
-
-  it("refuses an empty gateway id so a misconfigured pod cannot write anonymous telemetry", () => {
-    expect(() =>
-      buildFleetHeartbeatSnapshot({
-        gatewayId: "",
-        status: "booting",
-        version: "v",
-        openclawVersion: "v",
-        mountedCustomers: [],
-        internalUrl: "http://gw",
-        startedAt: 1,
-      }),
-    ).toThrow("gatewayId is required");
-  });
-
-  it("points the heartbeat internalUrl at the stable bare-id Service", () => {
-    expect(gatewayServiceName({ gatewayId: "default" })).toBe("octogee-gateway-default");
-    expect(() => gatewayServiceName({ gatewayId: "" })).toThrow("gatewayId is required");
-  });
 });
 
-describe("resolveFleetCapabilities — observability vs provisioning seam", () => {
-  it("cattle (platformState + reportState + db): reports AND provisions", () => {
-    expect(
-      resolveFleetCapabilities({ platformState: true, reportState: true, hasDb: true }),
-    ).toEqual({ reportMounted: true, provision: true, needsStateDeps: true });
+describe("resolveFleetCapabilities — brokered local reconcile", () => {
+  it("provisions local mounts when the local reconcile runs from a brokered roster", () => {
+    expect(resolveFleetCapabilities({ localReconcile: true, hasBrokeredRoster: true })).toEqual({ provision: true });
   });
 
-  it("operator (db-less: platformState=false, reportState=false, no db): no capabilities — Cowboy owns reporting + eviction", () => {
-    expect(
-      resolveFleetCapabilities({ platformState: false, reportState: false, hasDb: false }),
-    ).toEqual({ reportMounted: false, provision: false, needsStateDeps: false });
-  });
-
-  it("report-only with db (platformState=false, reportState=true, db): reports, does NOT provision", () => {
-    expect(
-      resolveFleetCapabilities({ platformState: false, reportState: true, hasDb: true }),
-    ).toEqual({ reportMounted: true, provision: false, needsStateDeps: true });
-  });
-
-  it("no db: neither reports nor provisions, regardless of flags", () => {
-    expect(
-      resolveFleetCapabilities({ platformState: true, reportState: true, hasDb: false }),
-    ).toEqual({ reportMounted: false, provision: false, needsStateDeps: false });
-  });
-
-  it("the two axes are independent: provision without reporting", () => {
-    expect(
-      resolveFleetCapabilities({ platformState: true, reportState: false, hasDb: true }),
-    ).toEqual({ reportMounted: false, provision: true, needsStateDeps: false });
-  });
-
-  it("brokered db-less gateway: provisions local mounts without Firestore state deps", () => {
-    expect(
-      resolveFleetCapabilities({
-        platformState: true,
-        reportState: false,
-        localReconcile: true,
-        hasDb: false,
-        hasBrokeredRoster: true,
-      }),
-    ).toEqual({ reportMounted: false, provision: true, needsStateDeps: false });
-  });
-
-  it("brokered Builder gateway: provisions local mounts while platformState stays false", () => {
-    expect(
-      resolveFleetCapabilities({
-        platformState: false,
-        reportState: false,
-        localReconcile: true,
-        hasDb: false,
-        hasBrokeredRoster: true,
-      }),
-    ).toEqual({ reportMounted: false, provision: true, needsStateDeps: false });
+  it("does not provision without both the local reconcile and a brokered roster", () => {
+    expect(resolveFleetCapabilities({ localReconcile: false, hasBrokeredRoster: true })).toEqual({ provision: false });
+    expect(resolveFleetCapabilities({ hasBrokeredRoster: true })).toEqual({ provision: false });
+    expect(resolveFleetCapabilities({ localReconcile: true, hasBrokeredRoster: false })).toEqual({ provision: false });
   });
 });
 

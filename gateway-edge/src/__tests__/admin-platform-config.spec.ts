@@ -2,7 +2,9 @@ import { DEFAULT_OPS_AGENT_MODEL_REF, DEFAULT_PLATFORM_TRIAL_CONFIG } from "@oct
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const platformDocs: Record<string, Record<string, unknown> | undefined> = {};
+const { platformDocs } = vi.hoisted(() => ({
+  platformDocs: {} as Record<string, Record<string, unknown> | undefined>,
+}));
 const setCalls: Array<{ path: string; data: Record<string, unknown>; opts?: unknown }> = [];
 const queryDocs: Record<string, Array<{ id: string; data: Record<string, unknown> }>> = {};
 const aggregateCalls: string[] = [];
@@ -57,6 +59,11 @@ vi.mock("../lib/db", () => {
     FieldValue: { serverTimestamp: () => "server-now" },
     Timestamp: { now: () => ({ toDate: () => new Date() }) },
   };
+});
+
+vi.mock("../lib/platform-state", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(platformDocs), readBuilderTier: vi.fn() };
 });
 
 vi.mock("../middleware/auth", () => ({
@@ -163,6 +170,13 @@ describe("admin platform-config", () => {
     expect(res.body.freeTierModelRef).toBe("platform-openai/gpt-6-luna");
   });
 
+  it("GET refuses a models doc whose ref is not a string with 409 so the operator replaces it", async () => {
+    platformDocs["platformConfig/models"] = { freeTierModelRef: 42 };
+    const res = await request(app).get("/api/admin/platform-config");
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("platform_config_invalid");
+  });
+
   it("GET serves the Builder Agent default dial with its compiled defaults", async () => {
     const res = await request(app).get("/api/admin/platform-config");
     expect(res.status).toBe(200);
@@ -205,15 +219,13 @@ describe("admin platform-config", () => {
       builderAgentModelRef: "anthropic/claude-sonnet-4-6",
       builderAgentFallbackModelRef: "platform-openrouter/z-ai/glm-5.2",
     });
-    expect(setCalls).toHaveLength(1);
-    expect(setCalls[0].path).toBe("platformConfig/models");
-    expect(setCalls[0].data).toMatchObject({
+    expect(platformDocs["platformConfig/models"]).toEqual({
       freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
       opsAgentModelRef: "platform-openrouter/z-ai/glm-5.2",
       builderAgentModelRef: "anthropic/claude-sonnet-4-6",
       builderAgentFallbackModelRef: "platform-openrouter/z-ai/glm-5.2",
       updatedBy: "admin-user",
-      updatedAt: "server-now",
+      updatedAt: expect.any(Number),
     });
   });
 
@@ -224,7 +236,7 @@ describe("admin platform-config", () => {
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_model_ref");
-    expect(setCalls).toHaveLength(0);
+    expect(platformDocs["platformConfig/models"]).toBeUndefined();
   });
 
   it("PUT rejects a non-catalog ref with 400 and writes nothing", async () => {
@@ -233,7 +245,7 @@ describe("admin platform-config", () => {
       .send({ freeTierModelRef: "anthropic/model-not-in-catalog" });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_model_ref");
-    expect(setCalls).toHaveLength(0);
+    expect(platformDocs["platformConfig/models"]).toBeUndefined();
   });
 
   it("PUT rejects an Ops model outside the platform OpenRouter catalog", async () => {
@@ -243,7 +255,7 @@ describe("admin platform-config", () => {
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_model_ref");
-    expect(setCalls).toHaveLength(0);
+    expect(platformDocs["platformConfig/models"]).toBeUndefined();
   });
 
   it("PUT rejects a missing ref with 400", async () => {
@@ -310,14 +322,11 @@ describe("admin platform-connect-config", () => {
       googleStages: SPLIT,
       googleAllowlistUids: ["uid-chris"],
     });
-    expect(setCalls).toHaveLength(1);
-    expect(setCalls[0].path).toBe("platformConfig/connect");
-    expect(setCalls[0].opts).toBeUndefined();
-    expect(setCalls[0].data).toEqual({
+    expect(platformDocs["platformConfig/connect"]).toEqual({
       googleStages: SPLIT,
       googleAllowlistUids: ["uid-chris"],
       updatedBy: "admin-user",
-      updatedAt: "server-now",
+      updatedAt: expect.any(Number),
     });
   });
 
@@ -332,7 +341,7 @@ describe("admin platform-connect-config", () => {
       expect(res.status, JSON.stringify(body)).toBe(400);
       expect(res.body.error).toBe("invalid_connect_config");
     }
-    expect(setCalls).toHaveLength(0);
+    expect(platformDocs["platformConfig/connect"]).toBeUndefined();
   });
 });
 
@@ -360,7 +369,7 @@ describe("admin platform-connect-config — stage-only updates", () => {
       googleStages: { ...SPLIT, gmail: "on" },
       googleAllowlistUids: ["uid-chris", "uid-dan"],
     });
-    expect(setCalls[0].data).toMatchObject({
+    expect(platformDocs["platformConfig/connect"]).toMatchObject({
       googleStages: { ...SPLIT, gmail: "on" },
       googleAllowlistUids: ["uid-chris", "uid-dan"],
     });
@@ -373,7 +382,7 @@ describe("admin platform-connect-config — stage-only updates", () => {
       .send({ googleStages: SPLIT });
     expect(res.status).toBe(409);
     expect(res.body.error).toBe("connect_config_invalid");
-    expect(setCalls).toHaveLength(0);
+    expect(platformDocs["platformConfig/connect"]).toEqual({ googleStage: "allowlist", googleAllowlistUids: ["uid-chris"] });
   });
 
   it("an explicit empty allowlist clears it", async () => {
@@ -386,7 +395,7 @@ describe("admin platform-connect-config — stage-only updates", () => {
       .send({ googleStages: SPLIT, googleAllowlistUids: [] });
     expect(res.status).toBe(200);
     expect(res.body.googleAllowlistUids).toEqual([]);
-    expect(setCalls[0].data).toMatchObject({ googleAllowlistUids: [] });
+    expect(platformDocs["platformConfig/connect"]).toMatchObject({ googleAllowlistUids: [] });
   });
 });
 
@@ -547,15 +556,11 @@ describe("admin platform-free-config", () => {
       .put("/api/admin/platform-free-config")
       .send({ schemaVersion: 1, workspaceStorageGb: 2.5 });
     expect(res.status).toBe(200);
-    expect(setCalls).toContainEqual({
-      path: "platformConfig/free",
-      data: {
-        schemaVersion: 1,
-        workspaceStorageGb: 2.5,
-        updatedAt: "server-now",
-        updatedBy: "admin-user",
-      },
-      opts: undefined,
+    expect(platformDocs["platformConfig/free"]).toEqual({
+      schemaVersion: 1,
+      workspaceStorageGb: 2.5,
+      updatedAt: expect.any(Number),
+      updatedBy: "admin-user",
     });
   });
 
@@ -564,6 +569,6 @@ describe("admin platform-free-config", () => {
       .put("/api/admin/platform-free-config")
       .send({ schemaVersion: 1, workspaceStorageGb: 0 });
     expect(res.status).toBe(400);
-    expect(setCalls).toHaveLength(0);
+    expect(platformDocs["platformConfig/free"]).toBeUndefined();
   });
 });

@@ -12,7 +12,7 @@ import { createHomeCopyClient } from "./lib/compute-home-copy.js";
 import type { ComputeRequest } from "./lib/compute-vm.js";
 import { assertBuilderRuntimeStorage } from "./builder-runtime-storage.js";
 import { runNormalFleetMutation } from "@octogee/core/normal-fleet-mutation";
-import { createFirestorePlatformStateStore, MissingRecordError, type GatewayRootPatch, type PlatformStateStore, type SecretsRepository } from "@octogee/core/platform-state";
+import { createFirestorePlatformStateStore, MissingRecordError, type CustomerDeletionJob, type FleetRegistryRecord, type GatewayRoot, type OpaqueMap, type GatewayRootFields, type GatewayRootPatch, type OperationRecord, type PlatformStateStore, type SecretsRepository, type Stored, type WatchChange, type WatchEvent } from "@octogee/core/platform-state";
 import { restartGatewayProcess, restartGatewayDeployment } from './lib/runtime-restart-transport.js';
 import { assertMigrationRestartUnfenced } from './lib/runtime-restart-coordinator.js';
 import { assertOwnerOperationUnfenced } from './lib/computer-recovery-fence.js';
@@ -38,7 +38,6 @@ import {
 } from "firebase-admin/firestore";
 import {
   GLM_GATEWAYS_COLLECTION,
-  GLM_OPERATIONS_COLLECTION,
   resolveGatewayRuntime,
   isOperationAuditRow,
   builderGatewayServiceAccountName,
@@ -49,7 +48,6 @@ import {
   type HelmInstancesMap,
   type OperationAuditRecord,
   type Operation,
-  type GatewayVmState,
   type RuntimeBuilderIdentity,
 } from "@octogee/shared/types/glm";
 import {
@@ -83,12 +81,11 @@ import {
 import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
 import { createGatewayServiceAccountEnsurer } from "./gateway-service-account-ensurer.js";
 import {
-  revisionHeartbeatMerge,
+  pollerHeartbeatReport,
   readHeartbeatLiveness,
   readMountedCustomers,
-  heartbeatMergeIsRedundant,
+  heartbeatReportIsRedundant,
   heartbeatTeardownAction,
-  HEARTBEAT_FIELD,
   LEGACY_HEARTBEAT_FIELDS,
 } from "./heartbeat-relocation.js";
 import { createGatewayRuntimeConfigPreparer } from "./gateway-runtime-config.js";
@@ -96,7 +93,6 @@ import {
   isGatewayDesiredDoc,
   isGatewayRuntimeDoc,
   projectGatewayDesiredRootForGateway,
-  type GatewayDoc,
   type GatewayRuntimeDoc,
   type ReleasePayload,
 } from "@octogee/shared/types/gateway-releases";
@@ -202,7 +198,7 @@ import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
 import { createGatewayVmHandler } from "./handlers/gateway-vm.js";
 import { createGatewayVmClient } from "./lib/compute-vm.js";
 import { pausedNativeRetirementSourceFencedOff } from "./lib/native-retirement-telemetry.js";
-import { readHomeCheckpointCompletedAt, requestHomeCheckpoint } from "./lib/home-checkpoint.js";
+import { clearHomeCheckpointRequest, readHomeCheckpointCompletedAt, requestHomeCheckpoint } from "./lib/home-checkpoint.js";
 import { clearParkedComputer, readParkedComputer } from "./lib/parked-computer.js";
 import {
   createRolloutHandler,
@@ -230,11 +226,12 @@ import {
   createPostHogErasureClient,
   postHogErasureConfigFromEnvironment,
   type PostHogErasureRequest,
+  type PostHogErasureState,
 } from "./lib/customer-ops/posthog-erasure.js";
 import {
-  postHogMappingOnlyJobUpdate,
+  postHogMappingOnlyJobPatch,
   readPostHogErasureState,
-  verifiedDeletionJobUpdate,
+  verifiedDeletionJobPatch,
 } from "./lib/customer-ops/deletion-job.js";
 import { buildAnonymousOperationalArchive } from "./lib/customer-ops/deletion-archive.js";
 import {
@@ -249,10 +246,6 @@ import {
   slugFromAssignedUser,
 } from "@octogee/core/assigned-roster";
 import {
-  readAssignmentDoc,
-  readAssignmentDocsForGateway,
-} from "@octogee/core/assignment-doc";
-import {
   byotSystemConfigFromDoc,
   collectProjectAgentStates,
   mapProjectChannelDoc,
@@ -265,9 +258,12 @@ import {
 } from "@octogee/shared/types/fleet-controller";
 import {
   gatewayAuthorizationFromRootDocument,
-  readGatewayArtifact,
+  readGatewayArtifactInStore,
   readGatewayAuthorizationInStore,
   type GatewayArtifact,
+  type GatewayRootReader,
+  type GatewayRuntimeReader,
+  type GatewayStateReader,
 } from "@octogee/core/gateway-live-release";
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
@@ -340,10 +336,6 @@ import {
 import {
   ensureOwnedGatewaysRetired,
 } from "./lib/customer-ops/customer-gateway-retirement.js";
-import {
-  ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION,
-  CUSTOMER_DELETION_JOBS_COLLECTION,
-} from "@octogee/shared/types/account-lifecycle";
 import { MODEL_BROKER_USAGE_ROLLUPS_COLLECTION } from "@octogee/shared/types/model-broker-usage";
 import {
   recordReconcile,
@@ -351,15 +343,14 @@ import {
   recordSharedPoolReplicaBounds,
   recordVmDiskUsage,
 } from "./metrics.js";
-import { applyVmDiskChanges, type VmDiskSample } from "./lib/vm-disk-usage.js";
+import { applyVmDiskDelivery, type VmDiskSample } from "./lib/vm-disk-usage.js";
 import { startDisruptionObserver } from "./disruption-observer.js";
 import { createLogger, debugFromEnv } from "./lib/logger.js";
 import {
   assignedSlugsFromUserMirror,
   createFleetInformer,
-  mirroredOrScan,
   type FleetInformer,
-  type MirrorDocChange,
+  type MirrorDelivery,
 } from "./fleet-informer.js";
 import { recoverControllerOrphanedOperations, startStuckOpReaper } from "./stuck-op-reaper.js";
 import { claimCrashLoopEviction } from "./surge-crashloop-eviction.js";
@@ -367,7 +358,7 @@ import { startNativeReturnHoldReaper } from "./native-return-hold-reaper.js";
 import {
   createGiteaKeyAdminClient,
   parseGiteaGatewayKeyGcMode,
-  readLiveGatewayKeyHolders,
+  readFleetLiveKeyHolders,
   startGiteaGatewayKeyGc,
 } from "./gitea-gateway-key-gc.js";
 import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
@@ -542,10 +533,6 @@ interface ControllerDeps {
   ensureGatewayAuthSecret: AuthSecretEnsurer["ensureAuthSecret"];
 
   startDisruptionObserver?: () => ControllerStopper;
-
-  // Fed by the reconciler's fleet listeners; absent in unit fixtures that only
-  // exercise reconcile scheduling.
-  informer?: FleetInformer;
 }
 
 function deploymentNameForInstance(gatewayId: string): string {
@@ -562,16 +549,16 @@ export function gatewayComputeProjectId(env: Record<string, string | undefined> 
   return project;
 }
 
-function createGatewayComputeClient(logFn: (msg: string) => void) {
+function createGatewayComputeClient(store: PlatformStateStore, logFn: (msg: string) => void) {
   return createGatewayVmClient({
     projectId: gatewayComputeProjectId(),
-    journalHomeResize: (input, action) => runNormalFleetMutation(createFirestorePlatformStateStore({ db: getFirestore() }), {
+    journalHomeResize: (input, action) => runNormalFleetMutation(store, {
       actor: "cowboy", forced: false, what: "expand-builder-home", why: "Apply the Builder tier home allowance", target: { ownerUid: input.ownerUid, disk: input.home.name, zone: input.home.zone, projectId: input.home.projectId }, preActionStatus: { diskId: input.home.id, sizeGb: input.home.sizeGb }, mutation: { sizeGb: input.sizeGb }, action,
     }),
-    journalMachineType: (input, action) => runNormalFleetMutation(createFirestorePlatformStateStore({ db: getFirestore() }), {
+    journalMachineType: (input, action) => runNormalFleetMutation(store, {
       actor: "cowboy", forced: false, what: "resize-builder-computer", why: "Apply the Builder tier capacity before starting its parked computer", target: { instanceName: input.instanceName, zone: input.zone, projectId: gatewayComputeProjectId() }, preActionStatus: {}, mutation: { machineType: input.machineType }, action,
     }),
-    journalProvisioningModel: (input, action) => runNormalFleetMutation(createFirestorePlatformStateStore({ db: getFirestore() }), {
+    journalProvisioningModel: (input, action) => runNormalFleetMutation(store, {
       actor: "cowboy", forced: false, what: "reprovision-builder-computer", why: "Apply the Builder tier provisioning model before starting its parked computer", target: { instanceName: input.instanceName, zone: input.zone, projectId: gatewayComputeProjectId() }, preActionStatus: {}, mutation: { provisioningModel: input.provisioningModel }, action,
     }),
     log: logFn,
@@ -586,14 +573,24 @@ function createGatewayComputeClient(logFn: (msg: string) => void) {
   });
 }
 
-async function isVmGateway(db: Firestore, gatewayId: string): Promise<boolean> {
-  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  return snap.exists && resolveGatewayRuntime((snap.data() as Record<string, unknown>).runtime) === "gce-vm";
+async function isVmGateway(state: GatewayRuntimeReader, gatewayId: string): Promise<boolean> {
+  const runtime = await state.fleetRegistry.get(gatewayId);
+  return runtime !== null && resolveGatewayRuntime(runtime.runtime) === "gce-vm";
 }
 
-async function readGatewayVmAddress(db: Firestore, gatewayId: string) {
-  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  return gatewayVmAddress(snap.exists ? snap.data() : undefined);
+async function readGatewayVmAddress(state: GatewayRuntimeReader, gatewayId: string) {
+  return gatewayVmAddress(await state.fleetRegistry.get(gatewayId));
+}
+
+async function readDesiredRoot(state: GatewayRootReader, gatewayId: string) {
+  const root = await state.gateways.roots.get(gatewayId);
+  if (root === null) return null;
+  const { revision: _revision, ...record } = root;
+  return projectGatewayDesiredRootForGateway(record, gatewayId);
+}
+
+async function isServingRuntime(state: GatewayRuntimeReader, gatewayId: string): Promise<boolean> {
+  return (await state.fleetRegistry.get(gatewayId))?.lifecycle === "serving";
 }
 
 export function versionFromImageTag(imageTag: string | undefined): string {
@@ -608,72 +605,52 @@ function parseNonNegativeInt(raw: string | undefined, fallback: number): number 
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
-async function publishPlatformGatewayReady(
-  db: Firestore,
+export async function publishPlatformGatewayReady(
+  store: PlatformStateStore,
   input: {
     gatewayId: string;
     imageTag?: string;
     now: number;
   },
 ): Promise<void> {
-  const glmRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId);
-  await db.runTransaction(async (txn) => {
-    const glmSnap = await txn.get(glmRef);
-    const glmData = glmSnap.exists ? (glmSnap.data() as Record<string, unknown> | undefined) : undefined;
-    if (!isGatewayRuntimeDoc(glmData) || glmData.gatewayId !== input.gatewayId) {
+  await store.transaction({ label: "add-gateway.publish-ready" }, async (tx) => {
+    const runtime = await tx.fleetRegistry.get(input.gatewayId);
+    if (runtime === null) {
       throw new Error(
         `cannot publish readiness: glmGateways/${input.gatewayId} is not the gateway's runtime doc`,
       );
     }
-    const existingHb =
-      glmData.heartbeat && typeof glmData.heartbeat === "object" && !Array.isArray(glmData.heartbeat)
-        ? (glmData.heartbeat as unknown as Record<string, unknown>)
-        : undefined;
-    const patch: Record<string, unknown> = {
-      status: "ready",
-      version: versionFromImageTag(input.imageTag),
-      internalUrl: gatewayServiceInternalUrl(input.gatewayId),
-      startedAt: typeof existingHb?.startedAt === "number" ? existingHb.startedAt : input.now,
-    };
-    if (!Array.isArray(existingHb?.mountedCustomers)) {
-      patch.mountedCustomers = [];
-    }
-    if (!("lastError" in (existingHb ?? {}))) {
-      patch.lastError = null;
-    }
-    txn.set(glmRef, { lifecycle: "serving", heartbeat: patch }, { merge: true });
+    const existing: Partial<FleetRegistryRecord["heartbeat"]> = runtime.heartbeat ?? {};
+    await tx.fleetRegistry.patch(input.gatewayId, {
+      lifecycle: "serving",
+      heartbeat: {
+        ...existing,
+        status: "ready",
+        version: versionFromImageTag(input.imageTag),
+        internalUrl: gatewayServiceInternalUrl(input.gatewayId),
+        startedAt: typeof existing.startedAt === "number" ? existing.startedAt : input.now,
+        mountedCustomers: Array.isArray(existing.mountedCustomers) ? existing.mountedCustomers : [],
+        ...("lastError" in existing ? {} : { lastError: null }),
+      } as FleetRegistryRecord["heartbeat"],
+    }, { revision: runtime.revision });
   });
 }
 
-async function readGatewayHeartbeatFromFirestore(
-  db: Firestore,
+async function readGatewayHeartbeat(
+  state: GatewayRuntimeReader,
   gatewayId: string,
 ): Promise<{ lastHeartbeatAt: number; version?: string | null } | null> {
-  const glmSnap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const runtime = glmSnap.exists ? glmSnap.data() : undefined;
-  if (!isGatewayRuntimeDoc(runtime) || runtime.gatewayId !== gatewayId) {
-    return null;
-  }
-  return readHeartbeatLiveness(runtime as unknown as Record<string, unknown>);
+  const runtime = await state.fleetRegistry.get(gatewayId);
+  return runtime === null ? null : readHeartbeatLiveness(runtime as unknown as Record<string, unknown>);
 }
 
-async function readReleasePayloadFromFirestore(
-  db: Firestore,
-  gatewayId: string,
-  release: number,
-): Promise<ReleasePayload | null> {
-  return readGatewayArtifact(db, gatewayId, release);
-}
-
-async function readGatewaySystemConfigCommitFromFirestore(
-  db: Firestore,
+async function readGatewaySystemConfigCommit(
+  state: GatewayRuntimeReader,
   gatewayId: string,
 ): Promise<string | null> {
-  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const runtime = snap.exists ? snap.data() : undefined;
-  if (!isGatewayRuntimeDoc(runtime)) return null;
-  const configStatus = runtime.heartbeat?.configStatus as { acceptedCommit?: unknown } | undefined;
-  return typeof configStatus?.acceptedCommit === "string" ? configStatus.acceptedCommit : null;
+  const configStatus = (await state.fleetRegistry.get(gatewayId))?.heartbeat?.configStatus as { acceptedCommit?: unknown } | undefined;
+  const acceptedCommit = configStatus?.acceptedCommit;
+  return typeof acceptedCommit === "string" ? acceptedCommit : null;
 }
 
 function clearedHeartbeatFieldsPatch(): Record<string, unknown> {
@@ -692,7 +669,7 @@ async function syncGatewayModelKeySecrets(
   if (!ensurer) return changedBrokerGateways;
 
   for (const gateway of gateways) {
-    if (!(await gatewayDesiredRootPresent(deps.db, gateway.gatewayId))) continue;
+    if (!(await gatewayDesiredRootPresent(deps.store, gateway.gatewayId))) continue;
     const gatewayClass =
       gateway.desiredStatus === "retired" ? "shared" : gateway.gatewayClass;
     try {
@@ -725,7 +702,7 @@ async function syncGatewayModelKeySources(
   if (!issuer) return;
 
   for (const gateway of gateways) {
-    if (!(await gatewayDesiredRootPresent(deps.db, gateway.gatewayId))) continue;
+    if (!(await gatewayDesiredRootPresent(deps.store, gateway.gatewayId))) continue;
     const gatewayClass = gateway.gatewayClass;
     try {
       await issuer.syncGatewayModelKeySource({
@@ -756,7 +733,7 @@ async function restartGatewayDeploymentsForModelKeyChanges(
       );
       continue;
     }
-    if (!(await gatewayDesiredRootPresent(deps.db, gatewayId))) continue;
+    if (!(await gatewayDesiredRootPresent(deps.store, gatewayId))) continue;
     try {
       await deps.restartGatewayDeployment(gatewayId);
     } catch (err) {
@@ -766,13 +743,9 @@ async function restartGatewayDeploymentsForModelKeyChanges(
   }
 }
 
-async function gatewayDesiredRootPresent(db: Firestore, gatewayId: string): Promise<boolean> {
-  const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const root = projectGatewayDesiredRootForGateway(
-    snap.exists ? snap.data() : undefined,
-    gatewayId,
-  );
-  return root !== null && snap.data()?.runtimeRestartFence === undefined;
+async function gatewayDesiredRootPresent(state: GatewayRootReader, gatewayId: string): Promise<boolean> {
+  const root = await readDesiredRoot(state, gatewayId);
+  return root !== null && (root as GatewayRootFields).runtimeRestartFence === undefined;
 }
 
 async function gatewayRuntimeMutationAllowed(store: PlatformStateStore, gatewayId: string): Promise<boolean> {
@@ -957,7 +930,6 @@ function isInitialDisposableBuilderPrelaunch(gateway: DurableGateway): boolean {
 }
 
 export async function shouldReconcileDisposablePrelaunch(
-  db: Firestore,
   store: PlatformStateStore,
   gateway: DurableGateway | null,
 ): Promise<boolean> {
@@ -965,10 +937,9 @@ export async function shouldReconcileDisposablePrelaunch(
   if (isInitialDisposableBuilderPrelaunch(gateway)) return true;
   if (gateway.liveRelease === null || gateway.liveRelease > gateway.desiredRelease ||
     !(await disposableBuilderPrelaunchReserved({ reader: store, gateway }))) return false;
-  const runtime = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId).get();
-  const data = runtime.data();
-  return data?.runtime === "gce-vm" &&
-    (gateway.liveRelease !== gateway.desiredRelease || data.lifecycle === "provisioning");
+  const runtime = await store.fleetRegistry.get(gateway.gatewayId);
+  return runtime?.runtime === "gce-vm" &&
+    (gateway.liveRelease !== gateway.desiredRelease || runtime.lifecycle === "provisioning");
 }
 
 function runtimeReportsDesiredBuild(
@@ -1038,7 +1009,7 @@ function gatewayNeedsLiveVerification(gateway: DurableGateway, runtime: GatewayR
 }
 
 export async function refineGatewayConvergenceAction(input: {
-  passDeps: Pick<GatewayConvergencePassDeps, "db" | "store" | "reconcileSurgeHandoff">;
+  passDeps: Pick<GatewayConvergencePassDeps, "store" | "reconcileSurgeHandoff">;
   gateway: DurableGateway;
   artifact: ReleasePayload | null;
   pendingArtifact?: ReleasePayload | null;
@@ -1061,7 +1032,7 @@ export async function refineGatewayConvergenceAction(input: {
   } = input;
   if (action.kind !== "steady" || !artifact) return action;
   if (!gatewayNeedsLiveVerification(gateway, runtime)) return action;
-  if (!(await gatewayDesiredRootPresent(passDeps.db, gateway.gatewayId))) {
+  if (!(await gatewayDesiredRootPresent(passDeps.store, gateway.gatewayId))) {
     return { kind: "steady" };
   }
   const desiredImage = gatewayImageFor(gateway, artifact);
@@ -1190,16 +1161,16 @@ async function convergeAvailableGateway(
   instances: HelmInstancesMap,
   runtimeById: Map<string, GatewayRuntimeDoc>,
 ): Promise<void> {
-  const { db } = passDeps;
+  const { store } = passDeps;
   const instance = instances[gateway.gatewayId];
   const helmObserved = observedHelmInstance(instance);
   const artifact =
     gateway.desiredStatus === "retired"
       ? null
-      : await readGatewayArtifact(db, gateway.gatewayId, gateway.desiredRelease);
+      : await readGatewayArtifactInStore(store, gateway.gatewayId, gateway.desiredRelease);
   const pendingArtifact =
     artifact && gateway.latestRelease > gateway.desiredRelease
-      ? await readGatewayArtifact(db, gateway.gatewayId, gateway.latestRelease)
+      ? await readGatewayArtifactInStore(store, gateway.gatewayId, gateway.latestRelease)
       : null;
   const runtime = runtimeById.get(gateway.gatewayId);
   const desiredIntent = await prepareDesiredGatewayIntent({
@@ -1259,12 +1230,12 @@ async function uninstallGateway(
   passDeps: GatewayConvergencePassDeps,
   gateway: DurableGateway,
 ): Promise<void> {
-  const { db, store, helm, log } = passDeps;
+  const { store, helm, log } = passDeps;
   if (!(await gatewayRuntimeMutationAllowed(store, gateway.gatewayId))) return;
   log(`[converge-gateway] ${gateway.gatewayId} retired — uninstalling stable release`);
   await helm.removeInstance({ namespace: NAMESPACE, gatewayId: gateway.gatewayId });
   if (!(await gatewayRuntimeMutationAllowed(store, gateway.gatewayId))) return;
-  await db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId).delete();
+  await store.fleetRegistry.delete(gateway.gatewayId);
 }
 
 async function upsertGateway(
@@ -1277,7 +1248,7 @@ async function upsertGateway(
     replicas: number;
   },
 ): Promise<void> {
-  const { db, store, helm, log } = passDeps;
+  const { store, helm, log } = passDeps;
   const { gateway, artifact, runtime, desiredOpts, replicas } = input;
   if (!desiredOpts) throw new Error(`gateway ${gateway.gatewayId} has no deployable intent`);
   if (!(await gatewayRuntimeMutationAllowed(store, gateway.gatewayId))) return;
@@ -1285,13 +1256,12 @@ async function upsertGateway(
     `[converge-gateway] ${gateway.gatewayId} → release ${gateway.desiredRelease} ` +
       `(${desiredOpts.imageTag}, replicas=${replicas})`,
   );
-  const runtimeDoc = provisioningRuntimeDoc({
+  const { docKind: _docKind, ...initialRuntime } = provisioningRuntimeDoc({
     gateway,
     artifact: artifact as ReleasePayload,
     existing: runtime ?? null,
     now: Date.now(),
   });
-  const { docKind: _docKind, ...initialRuntime } = runtimeDoc;
   await stampGatewayRuntime({
     store,
     gatewayId: gateway.gatewayId,
@@ -1304,10 +1274,17 @@ async function upsertGateway(
       : undefined,
     log,
   });
-  await db
-    .collection(GLM_GATEWAYS_COLLECTION)
-    .doc(gateway.gatewayId)
-    .set(runtimeDoc as unknown as Record<string, unknown>, { merge: true });
+  await store.transaction({ label: "converge-gateway.upsert-runtime" }, async (transaction) => {
+    const current = await transaction.fleetRegistry.get(gateway.gatewayId);
+    if (!current) throw new MissingRecordError({ aggregate: "fleet-registry", key: gateway.gatewayId });
+    const { docKind: _docKind, gatewayId: _gatewayId, createdAt: _createdAt, ...runtimePatch } = provisioningRuntimeDoc({
+      gateway,
+      artifact: artifact as ReleasePayload,
+      existing: current,
+      now: Date.now(),
+    });
+    await transaction.fleetRegistry.patch(gateway.gatewayId, runtimePatch, { revision: current.revision });
+  });
   if (!(await gatewayRuntimeMutationAllowed(store, gateway.gatewayId))) return;
   await helm.upsertInstance({ ...desiredOpts, ...runtimeBuilderIdentity(gateway) });
 }
@@ -1526,8 +1503,8 @@ function reconcileFingerprintStableStringify(v: unknown): string {
   return `{${parts.join(",")}}`;
 }
 
-function reconcileRelevantFingerprint(data: Record<string, unknown>): string {
-  const { heartbeat, kubernetes, helm, ...rest } = data;
+function reconcileRelevantFingerprint(record: object): string {
+  const { heartbeat, kubernetes, helm, revision: _revision, ...rest } = record as Record<string, unknown>;
   delete rest.podReplacements;
   delete rest.vmDisk;
   delete rest.vmImages;
@@ -1562,69 +1539,59 @@ function reconcileRelevantFingerprint(data: Record<string, unknown>): string {
 // Root lastError is a gateway pod's self-report, not desired state, and it churns
 // for as long as a customer mount keeps failing. updatedAt/updatedBy stay in the
 // fingerprint: they are the durable migration fence (rootUpdatedAt).
-function rootReconcileRelevantFingerprint(data: Record<string, unknown>): string {
-  const { lastError: _lastError, ...rest } = data;
+function rootReconcileRelevantFingerprint(record: object): string {
+  const { lastError: _lastError, ...rest } = record as Record<string, unknown>;
   return reconcileRelevantFingerprint(rest);
 }
 
-interface ReconcileSnapshotDocChange {
-  type: string;
-  doc: { id: string; data(): Record<string, unknown> };
-}
-
-// True when a glmGateways snapshot carries a reconcile-relevant (non-heartbeat)
-// change. added/removed always count; a modified doc counts only if its
-// non-heartbeat projection changed. Mutates `fingerprints` to the new state.
-// This is what stops the controller from self-triggering a helm-list churn loop
-// on every ~15s heartbeat write into the watched collection.
-export function snapshotHasReconcileRelevantChange(
-  changes: ReadonlyArray<ReconcileSnapshotDocChange>,
+function changedGatewayIds<A extends "gateways" | "fleetRegistry">(
+  changes: readonly WatchChange<A>[],
   fingerprints: Map<string, string>,
-): boolean {
-  return snapshotReconcileRelevantGatewayIds(changes, fingerprints).length > 0;
-}
-
-export function snapshotHasReconcileRelevantRootChange(
-  changes: ReadonlyArray<ReconcileSnapshotDocChange>,
-  fingerprints: Map<string, string>,
-): boolean {
-  return snapshotReconcileRelevantRootGatewayIds(changes, fingerprints).length > 0;
-}
-
-function snapshotReconcileRelevantRootGatewayIds(
-  changes: ReadonlyArray<ReconcileSnapshotDocChange>,
-  fingerprints: Map<string, string>,
-): string[] {
-  return changedGatewayIds(changes, fingerprints, rootReconcileRelevantFingerprint);
-}
-
-export function snapshotReconcileRelevantGatewayIds(
-  changes: ReadonlyArray<ReconcileSnapshotDocChange>,
-  fingerprints: Map<string, string>,
-): string[] {
-  return changedGatewayIds(changes, fingerprints, reconcileRelevantFingerprint);
-}
-
-function changedGatewayIds(
-  changes: ReadonlyArray<ReconcileSnapshotDocChange>,
-  fingerprints: Map<string, string>,
-  fingerprint: (data: Record<string, unknown>) => string,
+  fingerprint: (record: object) => string,
 ): string[] {
   const gatewayIds = new Set<string>();
   for (const change of changes) {
-    if (change.type === "removed") {
-      fingerprints.delete(change.doc.id);
-      gatewayIds.add(change.doc.id);
+    if (change.record === null) {
+      fingerprints.delete(change.key);
+      gatewayIds.add(change.key);
       continue;
     }
-    const fp = fingerprint(change.doc.data());
-    if (fingerprints.get(change.doc.id) !== fp) gatewayIds.add(change.doc.id);
-    fingerprints.set(change.doc.id, fp);
+    const fp = fingerprint(change.record);
+    if (fingerprints.get(change.key) !== fp) gatewayIds.add(change.key);
+    fingerprints.set(change.key, fp);
   }
   return [...gatewayIds].sort(compareFingerprintKeys);
 }
 
-export function startReconciler(deps: ControllerDeps): () => void {
+function deliveryChanges<A extends "gateways" | "fleetRegistry">(
+  delivery: MirrorDelivery<A>,
+  fingerprints: ReadonlyMap<string, string>,
+): WatchChange<A>[] {
+  if (delivery.kind === "changes") return [...delivery.changes];
+  const present = new Set(delivery.records.map((record) => record.gatewayId));
+  return [
+    ...delivery.records.map((record): WatchChange<A> => ({ type: "added", key: record.gatewayId, record })),
+    ...[...fingerprints.keys()]
+      .filter((gatewayId) => !present.has(gatewayId))
+      .map((gatewayId): WatchChange<A> => ({ type: "removed", key: gatewayId, record: null })),
+  ];
+}
+
+export function reconcileRelevantDeliveryGatewayIds(
+  delivery: MirrorDelivery<"fleetRegistry">,
+  fingerprints: Map<string, string>,
+): string[] {
+  return changedGatewayIds(deliveryChanges(delivery, fingerprints), fingerprints, reconcileRelevantFingerprint);
+}
+
+export function reconcileRelevantRootDeliveryGatewayIds(
+  delivery: MirrorDelivery<"gateways">,
+  fingerprints: Map<string, string>,
+): string[] {
+  return changedGatewayIds(deliveryChanges(delivery, fingerprints), fingerprints, rootReconcileRelevantFingerprint);
+}
+
+export function startReconciler(deps: ControllerDeps & { informer: FleetInformer }): () => void {
   let debounceTimer: NodeJS.Timeout | null = null;
   let retryTimer: NodeJS.Timeout | null = null;
   let refreshTimer: NodeJS.Timeout | null = null;
@@ -1700,63 +1667,23 @@ export function startReconciler(deps: ControllerDeps): () => void {
 
   const reconcileFingerprints = new Map<string, string>();
   const rootFingerprints = new Map<string, string>();
-  const informer = deps.informer;
-
-  // The first delivery of a freshly attached listener carries the whole
-  // collection, so it resets the mirror; later deliveries are deltas.
-  let glmMirrorPrimed = false;
-  let rootMirrorPrimed = false;
   const vmDiskSamples = new Map<string, VmDiskSample>();
 
-  const unsub = deps.db.collection(GLM_GATEWAYS_COLLECTION).onSnapshot(
-    (snap?: { docChanges?: () => MirrorDocChange[] }) => {
-      if (stopped) return;
-      const changes = snap?.docChanges?.();
-      if (!changes) {
-        informer?.markGlmGatewaysStale("snapshot delivered without document changes");
-        glmMirrorPrimed = false;
-        scheduleDebouncedTick();
-        return;
-      }
-      informer?.ingestGlmGateways(changes, { reset: !glmMirrorPrimed });
-      recordVmDiskUsage(applyVmDiskChanges(vmDiskSamples, changes, { reset: !glmMirrorPrimed }));
-      const firstDelivery = !glmMirrorPrimed;
-      glmMirrorPrimed = true;
-      scheduleChangedGateways(
-        snapshotReconcileRelevantGatewayIds(changes, reconcileFingerprints),
-        firstDelivery,
-      );
-    },
-    (err) => {
-      informer?.markGlmGatewaysStale(String(err));
-      glmMirrorPrimed = false;
-      deps.log(`[glm-controller] ⚠ gateways snapshot error: ${String(err)}`);
-    },
-  );
+  const unsubscribeRuntimes = deps.informer.subscribe("fleetRegistry", (delivery) => {
+    if (stopped) return;
+    recordVmDiskUsage(applyVmDiskDelivery(vmDiskSamples, delivery));
+    scheduleChangedGateways(
+      reconcileRelevantDeliveryGatewayIds(delivery, reconcileFingerprints),
+      delivery.kind === "reset",
+    );
+  });
 
-  const rootUnsub = deps.db.collection(GATEWAYS_COLLECTION).onSnapshot(
-    (snap?: { docChanges?: () => MirrorDocChange[] }) => {
-      if (stopped) return;
-      const changes = snap?.docChanges?.();
-      if (!changes) {
-        informer?.markGatewaysStale("snapshot delivered without document changes");
-        rootMirrorPrimed = false;
-        scheduleDebouncedTick();
-        return;
-      }
-      informer?.ingestGateways(changes, { reset: !rootMirrorPrimed });
-      const firstDelivery = !rootMirrorPrimed;
-      rootMirrorPrimed = true;
-      const changedGatewayIds = snapshotReconcileRelevantRootGatewayIds(changes, rootFingerprints);
-      scheduleChangedGateways(changedGatewayIds, firstDelivery);
-      if (changedGatewayIds.length > 0) scheduleDebouncedTick();
-    },
-    (err) => {
-      informer?.markGatewaysStale(String(err));
-      rootMirrorPrimed = false;
-      deps.log(`[glm-controller] ⚠ gateways snapshot error: ${String(err)}`);
-    },
-  );
+  const unsubscribeRoots = deps.informer.subscribe("gateways", (delivery) => {
+    if (stopped) return;
+    const changedGatewayIds = reconcileRelevantRootDeliveryGatewayIds(delivery, rootFingerprints);
+    scheduleChangedGateways(changedGatewayIds, delivery.kind === "reset");
+    if (changedGatewayIds.length > 0) scheduleDebouncedTick();
+  });
 
   if (deps.reconcileSafetyRefreshMs && deps.reconcileSafetyRefreshMs > 0) {
     refreshTimer = setInterval(
@@ -1767,8 +1694,8 @@ export function startReconciler(deps: ControllerDeps): () => void {
 
   return () => {
     stopped = true;
-    unsub();
-    rootUnsub();
+    unsubscribeRuntimes();
+    unsubscribeRoots();
     if (requestReconcileTickRef.fire === scheduleDebouncedTick) {
       requestReconcileTickRef.fire = undefined;
     }
@@ -1780,24 +1707,32 @@ export function startReconciler(deps: ControllerDeps): () => void {
   };
 }
 
-export function startOperationWorker(deps: ControllerDeps): () => void {
-  const unsub = deps.db
-    .collection(GLM_OPERATIONS_COLLECTION)
-    .where("status", "==", "pending")
-    .onSnapshot(
-      async (snap) => {
-        for (const change of snap.docChanges()) {
-          if (change.type !== "added") continue;
-          const data = change.doc.data();
-          if (isOperationAuditRow(data)) continue;
-          const op = { ...(data as Operation), id: change.doc.id };
-          await processOperation(op, change.doc.ref, deps);
-        }
-      },
-      (err) => deps.log(`[glm-controller] ⚠ operations snapshot error: ${String(err)}`),
-    );
+function operationFromRecord(record: Stored<OperationRecord>): Operation {
+  const { revision: _revision, ...operation } = record;
+  return operation;
+}
 
-  return unsub;
+function addedPendingOperations(event: WatchEvent<"operations">): readonly Stored<OperationRecord>[] {
+  if (event.kind === "snapshot") return event.records;
+  if (event.kind === "resync") return [];
+  return event.changes.flatMap((change) => change.type === "added" && change.record !== null ? [change.record] : []);
+}
+
+export function startOperationWorker(deps: ControllerDeps): () => void {
+  const processInOrder = async (records: readonly Stored<OperationRecord>[]) => {
+    for (const record of records) await processOperation(operationFromRecord(record), deps);
+  };
+  const subscription = deps.store.watch({ aggregate: "operations", filter: { statuses: ["pending"] } }, {
+    onEvent: (event) => {
+      void processInOrder(addedPendingOperations(event)).catch((err) => {
+        deps.log(`[glm-controller] ⚠ pending operation run failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    },
+    onError: (err) => deps.log(`[glm-controller] ⚠ operations snapshot error: ${String(err)}`),
+  });
+  return () => {
+    void subscription.close();
+  };
 }
 
 // How often the queue drain re-scans pending ops. It exists for two cases the
@@ -1824,47 +1759,36 @@ function operationIsRestartResumable(op: Operation): boolean {
 
 async function attemptClaimOrQueueOperation(
   op: Operation,
-  ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
 ): Promise<{ outcome: "claimed" | "queued" | "skipped"; fresh?: Operation }> {
   try {
-    return await deps.db.runTransaction(async (txn) => {
-      const fresh = await txn.get(ref);
-      if (!fresh.exists) return { outcome: "skipped" as const };
-      const data = fresh.data() as unknown;
-      if (!data || isOperationAuditRow(data)) return { outcome: "skipped" as const };
-      const freshOperation = data as Operation;
-      await assertOwnerOperationUnfenced(deps.db, txn, op.id, freshOperation.input);
-      if (freshOperation.kind === 'migrate-customer') await assertMigrationRestartUnfenced(deps.db,txn,freshOperation.input);
+    return await deps.store.transaction({ label: "operation-worker.claim" }, async (tx) => {
+      const stored = await tx.journal.operations.get(op.id);
+      if (stored === null) return { outcome: "skipped" as const };
+      const freshOperation = operationFromRecord(stored);
+      await assertOwnerOperationUnfenced(tx, op.id, freshOperation.input);
+      if (freshOperation.kind === 'migrate-customer') await assertMigrationRestartUnfenced(tx, freshOperation.input);
       let runningOpsSameKind: OperationRef[] = [];
       let pendingOpsSameKind: PendingOperationRef[] = [];
       if (isSeriallyExclusiveKind(op.kind)) {
-        const operations = deps.db.collection(GLM_OPERATIONS_COLLECTION);
-        const [runningSnap, pendingSnap] = await Promise.all([
-          txn.get(operations.where("status", "==", "running")),
-          txn.get(operations.where("status", "==", "pending")),
+        const [running, pending] = await Promise.all([
+          tx.journal.operations.listByStatus(["running"]),
+          tx.journal.operations.listByStatus(["pending"]),
         ]);
-        runningOpsSameKind = runningSnap.docs.flatMap((d) => {
-          const runningData = d.data() as unknown;
-          if (isOperationAuditRow(runningData)) return [];
-          const runningOperation = runningData as Operation;
-          return isSeriallyExclusiveKind(runningOperation.kind) ? [{
-            id: d.id,
+        runningOpsSameKind = running.flatMap((runningOperation) =>
+          isSeriallyExclusiveKind(runningOperation.kind) ? [{
+            id: runningOperation.id,
             kind: runningOperation.kind,
             input: runningOperation.input,
             customerMigrationV2: runningOperation.customerMigrationV2,
             cutoverCommittedAt: runningOperation.cutoverCommittedAt,
-          }] : [];
-        });
-        pendingOpsSameKind = pendingSnap.docs.flatMap((d) => {
-          const pendingData = d.data() as unknown;
-          if (isOperationAuditRow(pendingData)) return [];
-          const pendingOperation = pendingData as Operation;
-          return isSeriallyExclusiveKind(pendingOperation.kind) ? [{
-            id: d.id,
+          }] : []);
+        pendingOpsSameKind = pending.flatMap((pendingOperation) =>
+          isSeriallyExclusiveKind(pendingOperation.kind) ? [{
+            id: pendingOperation.id,
             kind: pendingOperation.kind,
             origin: pendingOperation.origin,
-            unstartedBuilderReturn: isUnstartedBuilderReturn({ ...pendingOperation, id: d.id }),
+            unstartedBuilderReturn: isUnstartedBuilderReturn(pendingOperation),
             gatewayCompatibilityPending: pendingOperation.output?.gatewayCompatibilityPending === true,
             input: pendingOperation.input,
             output: pendingOperation.output,
@@ -1874,13 +1798,11 @@ async function attemptClaimOrQueueOperation(
             nextAttemptAt: pendingOperation.nextAttemptAt,
             customerMigrationV2: pendingOperation.customerMigrationV2,
             cutoverCommittedAt: pendingOperation.cutoverCommittedAt,
-          }] : [];
-        });
+          }] : []);
       }
 
       const rolloutLanes = await readOperationRolloutLanes(
-        deps.db,
-        txn,
+        tx,
         [{ id: op.id, kind: freshOperation.kind, input: freshOperation.input }, ...runningOpsSameKind, ...pendingOpsSameKind],
       );
       const decision = decideOperationClaim({
@@ -1889,7 +1811,7 @@ async function attemptClaimOrQueueOperation(
           kind: op.kind,
           status: freshOperation.status,
           origin: freshOperation.origin,
-          unstartedBuilderReturn: isUnstartedBuilderReturn({ ...freshOperation, id: op.id }),
+          unstartedBuilderReturn: isUnstartedBuilderReturn(freshOperation),
           gatewayCompatibilityPending: freshOperation.output?.gatewayCompatibilityPending === true,
           createdAt: freshOperation.createdAt,
           queuedAt: freshOperation.queuedAt,
@@ -1907,25 +1829,25 @@ async function attemptClaimOrQueueOperation(
       if (decision.outcome === "skip") return { outcome: "skipped" as const };
       if (decision.outcome === "queue") {
         if (freshOperation.waitingOn !== decision.waitingOn) {
-          txn.update(ref, { waitingOn: decision.waitingOn });
+          await tx.journal.operations.patch(op.id, { waitingOn: decision.waitingOn });
         }
         return { outcome: "queued" as const };
       }
       const now = Date.now();
       const firstStartedAt = operationFirstStartedAt(freshOperation, now);
-      txn.update(ref, {
+      await tx.journal.operations.patch(op.id, {
         status: "running",
         startedAt: now,
         firstStartedAt,
         lastProgressAt: now,
-        waitingOn: FieldValue.delete(),
-        nextAttemptAt: FieldValue.delete(),
-        queuedAt: FieldValue.delete(),
+        waitingOn: { clear: true },
+        nextAttemptAt: { clear: true },
+        queuedAt: { clear: true },
       });
       // The completion write derives attempts/attemptHistory from the op the
       // handler ran with — hand back the transaction's fresh read so a stale
       // worker snapshot can't reset the retry cap or drop history.
-      return { outcome: "claimed" as const, fresh: { ...freshOperation, id: op.id, status: "running", startedAt: now, firstStartedAt } };
+      return { outcome: "claimed" as const, fresh: { ...freshOperation, status: "running", startedAt: now, firstStartedAt } };
     });
   } catch (err) {
     deps.log(
@@ -1937,12 +1859,11 @@ async function attemptClaimOrQueueOperation(
 
 export async function processOperation(
   op: Operation | OperationAuditRecord,
-  ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
 ): Promise<void> {
   if (isOperationAuditRow(op)) return;
   const operation = op as Operation;
-  const claim = await attemptClaimOrQueueOperation(operation, ref, deps);
+  const claim = await attemptClaimOrQueueOperation(operation, deps);
   if (claim.outcome === "queued") {
     deps.log(`[glm-controller] op=${operation.id} kind=${operation.kind} queued — waiting on a conflicting op`);
     return;
@@ -1950,7 +1871,7 @@ export async function processOperation(
   if (claim.outcome !== "claimed" || !claim.fresh) return;
 
   deps.log(`[glm-controller] claim op=${operation.id} kind=${operation.kind}`);
-  await runClaimedOperation(claim.fresh, ref, deps);
+  await runClaimedOperation(claim.fresh, deps);
 }
 
 // Re-scan every pending op and try to claim each. The
@@ -1960,19 +1881,11 @@ export async function drainPendingOperationsOnce(deps: ControllerDeps): Promise<
   // Equality-only query, FIFO sort in memory: status+createdAt has no
   // composite index and must never need one — an orderBy here throws
   // FAILED_PRECONDITION in the real Firestore and silently kills the drain.
-  const snap = await deps.db
-    .collection(GLM_OPERATIONS_COLLECTION)
-    .where("status", "==", "pending")
-    .get();
-  const ops = snap.docs
-    .flatMap((doc) => {
-      const data = doc.data();
-      if (isOperationAuditRow(data)) return [];
-      return [{ op: { ...(data as Operation), id: doc.id }, ref: doc.ref }];
-    })
-    .sort((a, b) => compareOperationQueueOrder(a.op, b.op));
-  for (const { op, ref } of ops) {
-    await processOperation(op, ref, deps);
+  const ops = (await deps.store.journal.operations.listByStatus(["pending"]))
+    .map(operationFromRecord)
+    .sort(compareOperationQueueOrder);
+  for (const op of ops) {
+    await processOperation(op, deps);
   }
 }
 
@@ -1982,21 +1895,12 @@ export async function claimOperationsUnblockedByCutover(
 ): Promise<void> {
   const released = fleetOperationLockResources(cutOver);
   if (released.size === 0) return;
-  const snap = await deps.db
-    .collection(GLM_OPERATIONS_COLLECTION)
-    .where("status", "==", "pending")
-    .get();
-  const unblocked = snap.docs
-    .flatMap((doc) => {
-      const data = doc.data();
-      if (isOperationAuditRow(data)) return [];
-      const op = { ...(data as Operation), id: doc.id };
-      const resources = fleetOperationLockResources(op);
-      return [...resources].some((resource) => released.has(resource)) ? [{ op, ref: doc.ref }] : [];
-    })
-    .sort((a, b) => compareOperationQueueOrder(a.op, b.op));
-  for (const { op, ref } of unblocked) {
-    void processOperation(op, ref, deps).catch((err) => {
+  const unblocked = (await deps.store.journal.operations.listByStatus(["pending"]))
+    .map(operationFromRecord)
+    .filter((op) => [...fleetOperationLockResources(op)].some((resource) => released.has(resource)))
+    .sort(compareOperationQueueOrder);
+  for (const op of unblocked) {
+    void processOperation(op, deps).catch((err) => {
       deps.log(
         `[glm-controller] ⚠ post-cutover claim failed op=${op.id}: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -2030,18 +1934,14 @@ export function startOperationQueueDrain(
 // lock other pending rollout ops queue behind.
 export async function reAdoptAndRunOperation(
   op: Operation,
-  ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
 ): Promise<void> {
   let adopted: Operation | null = null;
   try {
-    adopted = await deps.db.runTransaction(async (txn) => {
-      const fresh = await txn.get(ref);
-      if (!fresh.exists) return null;
-      const data = fresh.data() as unknown;
-      if (!data || isOperationAuditRow(data)) return null;
-      const freshOperation = data as Operation;
-      if (freshOperation.status !== "running") return null;
+    adopted = await deps.store.transaction({ label: "operation-worker.re-adopt" }, async (tx) => {
+      const stored = await tx.journal.operations.get(op.id);
+      if (stored === null || stored.status !== "running") return null;
+      const freshOperation = operationFromRecord(stored);
       const now = Date.now();
       const timing = {
         startedAt: now,
@@ -2050,8 +1950,8 @@ export async function reAdoptAndRunOperation(
         lastProgressAt: now,
         resumeCount: (typeof freshOperation.resumeCount === "number" ? freshOperation.resumeCount : 0) + 1,
       };
-      txn.update(ref, timing);
-      return { ...freshOperation, id: op.id, ...timing };
+      await tx.journal.operations.patch(op.id, timing);
+      return { ...freshOperation, ...timing };
     });
   } catch (err) {
     deps.log(
@@ -2063,7 +1963,7 @@ export async function reAdoptAndRunOperation(
     deps.log(`[glm-controller] op=${op.id} no longer running — skip resume`);
     return;
   }
-  await runClaimedOperation(adopted, ref, deps);
+  await runClaimedOperation(adopted, deps);
 }
 
 // Run an op whose status is already `running` (freshly claimed or re-adopted):
@@ -2072,19 +1972,18 @@ export async function reAdoptAndRunOperation(
 // `pending` with backoff (operation-retry.ts) instead of failing it terminally.
 async function runClaimedOperation(
   op: Operation,
-  ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
 ): Promise<void> {
+  const operations = deps.store.journal.operations;
   const { ctx, steps } = createOperationContext({
     assertActiveClaim: async (allowCancelled) => {
-      const fresh = await ref.get();
-      assertActiveOperationClaim(op, fresh.exists ? fresh.data() as Operation : null, allowCancelled);
+      assertActiveOperationClaim(op, await operations.get(op.id), allowCancelled);
     },
     customerRestore: {
       assertSettled: async () => {
-        const fresh = await ref.get();
-        assertActiveOperationClaim(op, fresh.exists ? fresh.data() as Operation : null);
-        assertCustomerRestoreSettled(op, fresh.data()?.restoreAttempt);
+        const fresh = await operations.get(op.id);
+        assertActiveOperationClaim(op, fresh);
+        assertCustomerRestoreSettled(op, fresh?.restoreAttempt);
       },
       begin: async (input) => {
         if (typeof op.startedAt !== "number") throw new Error("customer restore requires an active claim");
@@ -2098,34 +1997,31 @@ async function runClaimedOperation(
       },
     },
     persist: async (next) => {
-      await deps.db.runTransaction(async (txn) => {
-        const fresh = await txn.get(ref);
-        const data = fresh.exists ? fresh.data() as Operation : undefined;
+      await deps.store.transaction({ label: "operation-worker.persist-steps" }, async (tx) => {
+        const data = await tx.journal.operations.get(op.id);
         if (data?.startedAt !== op.startedAt) {
           deps.log(`[glm-controller] op=${op.id} step progress discarded because the operation was re-claimed`);
           return;
         }
-        txn.update(ref, { steps: next, lastProgressAt: Date.now() });
+        await tx.journal.operations.patch(op.id, { steps: next, lastProgressAt: Date.now() });
       });
     },
     persistSchedulerHandoff: async (state) => {
-      await deps.db.runTransaction(async (txn) => {
-        const fresh = await txn.get(ref);
-        const data = fresh.exists ? fresh.data() as Operation : null;
+      await deps.store.transaction({ label: "operation-worker.persist-scheduler-handoff" }, async (tx) => {
+        const data = await tx.journal.operations.get(op.id);
         if (data?.status !== "running" || data.startedAt !== op.startedAt) {
           throw new Error("scheduler handoff operation is no longer owned by this attempt");
         }
-        txn.update(ref, { schedulerHandoff: state, schedulerHandoffReleased: false, lastProgressAt: Date.now() });
+        await tx.journal.operations.patch(op.id, { schedulerHandoff: state, schedulerHandoffReleased: false, lastProgressAt: Date.now() });
       });
     },
     persistCutoverCommitted: async (at) => {
-      await deps.db.runTransaction(async (txn) => {
-        const fresh = await txn.get(ref);
-        const data = fresh.exists ? fresh.data() as Operation : null;
+      await deps.store.transaction({ label: "operation-worker.persist-cutover" }, async (tx) => {
+        const data = await tx.journal.operations.get(op.id);
         if (data?.status !== "running" || data.startedAt !== op.startedAt) {
           throw new Error("cutover record operation is no longer owned by this attempt");
         }
-        txn.update(ref, { cutoverCommittedAt: at, lastProgressAt: Date.now() });
+        await tx.journal.operations.patch(op.id, { cutoverCommittedAt: at, lastProgressAt: Date.now() });
       });
       void claimOperationsUnblockedByCutover(op, deps).catch((err) => {
         deps.log(
@@ -2134,9 +2030,8 @@ async function runClaimedOperation(
       });
     },
     persistCustomerMigrationV2: async (state) => {
-      await deps.db.runTransaction(async (txn) => {
-        const fresh = await txn.get(ref);
-        const data = fresh.exists ? fresh.data() as Operation : null;
+      await deps.store.transaction({ label: "operation-worker.persist-customer-migration" }, async (tx) => {
+        const data = await tx.journal.operations.get(op.id);
         assertActiveOperationClaim(op,data,true);
         if (!data) throw new Error("customer migration V2 operation unavailable");
         if (sourceTransferBlocksRelease(data.sourceTransferExecution) && state.phase !== "sourceQuiesced") throw new Error("source transfer termination not observed");
@@ -2154,32 +2049,25 @@ async function runClaimedOperation(
         } else if (state.phase !== "initialized" || state.operationId !== op.id) {
           throw new Error("customer migration V2 must start with its operation-bound initialized state");
         }
-        txn.update(ref, {
+        await tx.journal.operations.patch(op.id, {
           customerMigrationV2: state,
           lastProgressAt: Date.now(),
         });
       });
     },
-    cancellationRequested: async () => {
-      const fresh = await ref.get();
-      const data = fresh.exists ? fresh.data() as Record<string, unknown> : null;
-      return data?.cancellationRequestedAt !== undefined;
-    },
+    cancellationRequested: async () => (await operations.get(op.id))?.cancellationRequestedAt !== undefined,
     log: deps.log,
     opId: op.id,
   });
 
   const result = await routeOperation(op, deps.handlers, ctx);
-  const completion = await deps.db.runTransaction(async (txn) => {
-    const fresh = await txn.get(ref);
-    if (!fresh.exists) return null;
-    const freshOp = fresh.data() as Operation | undefined;
-    if (!freshOp) return null;
-    const status = freshOp.status ?? "missing";
-    if (!shouldPersistClaimedOperationCompletion({ status, startedAt: freshOp.startedAt, claimedStartedAt: op.startedAt })) return null;
+  const completion = await deps.store.transaction({ label: "operation-worker.complete" }, async (tx) => {
+    const freshOp = await tx.journal.operations.get(op.id);
+    if (freshOp === null) return null;
+    if (!shouldPersistClaimedOperationCompletion({ status: freshOp.status, startedAt: freshOp.startedAt, claimedStartedAt: op.startedAt })) return null;
     const completion = buildOperationCompletionUpdate({
       op: {
-        id: ref.id,
+        id: op.id,
         kind: freshOp.kind,
         origin: freshOp.origin,
         input: freshOp.input,
@@ -2198,13 +2086,9 @@ async function runClaimedOperation(
     });
     const verifiedDeletion = verifiedDeletionCompletion(result);
     if (verifiedDeletion) {
-      txn.set(
-        deps.db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(verifiedDeletion.deletionId),
-        verifiedDeletionJobUpdate(verifiedDeletion.archiveId, Date.now()),
-        { merge: true },
-      );
+      await tx.jobs.deletions.patch(verifiedDeletion.deletionId, verifiedDeletionJobPatch(verifiedDeletion.archiveId, Date.now()));
     }
-    txn.update(ref, completion);
+    await tx.journal.operations.patch(op.id, completion);
     return completion;
   });
   if (!completion) {
@@ -2228,18 +2112,16 @@ async function runClaimedOperation(
 }
 
 function buildHeartbeatPollerCoreDeps(
-  db: Firestore,
+  { db, store, informer }: { db: Firestore; store: PlatformStateStore; informer: FleetInformer },
   log: (msg: string) => void,
   privateKey: string,
-  informer: FleetInformer,
-  listGatewayDocs: () => Promise<HeartbeatPollDocLike[]>,
 ): Omit<GatewayHeartbeatPollerDeps, "evictSlug"> {
   const polledHeartbeats = new Map<string, unknown>();
-  const polledHeartbeatDocs = new Map<string, unknown>();
+  const polledRuntimes = new Map<string, unknown>();
   const fetchFleetState = createFleetStateFetcher({
     privateKey,
     resolveBaseUrl: (gatewayId) => gatewayFleetBaseUrl({
-      runtimeDoc: polledHeartbeatDocs.get(gatewayId),
+      runtimeDoc: polledRuntimes.get(gatewayId),
       gatewayId,
       namespace: NAMESPACE,
       port: FLEET_CONTROLLER_PORT,
@@ -2249,48 +2131,33 @@ function buildHeartbeatPollerCoreDeps(
   });
   return {
     listGatewayIds: async () => {
-      const docs = informer.glmGateways() ?? await listGatewayDocs();
-      polledHeartbeats.clear();
-      polledHeartbeatDocs.clear();
-      for (const doc of docs) {
-        polledHeartbeats.set(doc.id, doc.data()?.[HEARTBEAT_FIELD]);
-        polledHeartbeatDocs.set(doc.id, doc.data());
+      const mirrored = informer.fleetRegistryWithoutMalformed();
+      if (mirrored !== null && mirrored.malformedKeys.length > 0) {
+        log(`[glm-controller] ⚠ heartbeat poll skips malformed runtime record(s): ${mirrored.malformedKeys.join(", ")}`);
       }
-      return heartbeatPollInstanceIds(docs);
+      const records = mirrored?.records ?? await store.fleetRegistry.list();
+      polledHeartbeats.clear();
+      polledRuntimes.clear();
+      for (const record of records) {
+        polledHeartbeats.set(record.gatewayId, record.heartbeat);
+        polledRuntimes.set(record.gatewayId, record);
+      }
+      return heartbeatPollInstanceIds(records);
     },
     fetchFleetState,
     readAssignedSlugs: async (instanceId) => {
-      const mirroredRuntime = informer.glmGateways()?.find((doc) => doc.id === instanceId);
-      const runtime = mirroredRuntime
-        ? mirroredRuntime.data()
-        : (await db.collection(GLM_GATEWAYS_COLLECTION).doc(instanceId).get()).data();
-      const target = heartbeatRosterTarget(instanceId, runtime);
-      if (!target) return [];
+      const runtime = informer.fleetRegistryWithoutMalformed()?.records.find((record) => record.gatewayId === instanceId) ??
+        await store.fleetRegistry.get(instanceId);
+      if (runtime === null) return [];
       const mirroredUsers = informer.users();
       return mirroredUsers
-        ? assignedSlugsFromUserMirror(mirroredUsers, target.gatewayId)
-        : readAssignedSlugsForGateway(db, target.gatewayId);
+        ? assignedSlugsFromUserMirror(mirroredUsers, runtime.gatewayId)
+        : readAssignedSlugsForGateway(db, runtime.gatewayId);
     },
     writeHeartbeat: async (gatewayId, record) => {
-      // Live telemetry lands only at glmGateways/{id}.heartbeat (the collision
-      // fix). The legacy flat gateways/{id} dual-write is retired — a per-poll
-      // flat write recreates the heartbeat fields the identity backfill refuses
-      // on, blocking it forever. Out-of-lane readers read the heartbeat sub-doc.
-      const lastHeartbeatAt = FieldValue.serverTimestamp();
-      const merge = revisionHeartbeatMerge(record, lastHeartbeatAt);
-      merge.heartbeat.internalUrl = gatewayServiceInternalUrl(gatewayId);
-      if (
-        heartbeatMergeIsRedundant(polledHeartbeats.get(gatewayId), merge.heartbeat, Date.now())
-      ) {
-        return;
-      }
-      const batch = db.batch();
-      batch.set(
-        db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId),
-        merge,
-        { merge: true },
-      );
-      await batch.commit();
+      const heartbeat = pollerHeartbeatReport(record, gatewayServiceInternalUrl(gatewayId));
+      if (heartbeatReportIsRedundant(polledHeartbeats.get(gatewayId), heartbeat, Date.now())) return;
+      await store.fleetRegistry.recordHeartbeat(gatewayId, heartbeat);
     },
     log,
   };
@@ -2298,36 +2165,26 @@ function buildHeartbeatPollerCoreDeps(
 
 export function buildGatewayHeartbeatPollerDeps(
   db: Firestore,
+  store: PlatformStateStore,
   log: (msg: string) => void,
   privateKey: string,
   informer: FleetInformer,
 ): GatewayHeartbeatPollerDeps {
-  const store = createFirestorePlatformStateStore({ db });
   const recoverComputer = createBackgroundGatewayRecovery(
     (gatewayId) => runGatewayRuntimeExclusive(async () => { await vmGatewayRuntimeRef.current?.recoverUnreachable(gatewayId); }),
     log,
   );
   return {
-    ...buildHeartbeatPollerCoreDeps(db, log, privateKey, informer, async () => {
-      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
-      return snap.docs;
-    }),
+    ...buildHeartbeatPollerCoreDeps({ db, store, informer }, log, privateKey),
     ownsEviction: async (gatewayId: string) => {
-      const mirrored = informer.gateways()?.find((doc) => doc.id === gatewayId);
-      const data = mirrored
-        ? mirrored.data()
-        : await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get()
-          .then((snap) => (snap.exists ? snap.data() : undefined));
-      const root = projectGatewayDesiredRootForGateway(data, gatewayId);
+      const stored = informer.gateways()?.find((root) => root.gatewayId === gatewayId) ??
+        await store.gateways.roots.get(gatewayId);
+      const root = stored === null ? null : projectGatewayDesiredRootForGateway(stored, gatewayId);
       return root !== null && root.gatewayClass !== "shared";
     },
     evictSlug: async (gatewayId: string, slug: string) => {
-      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-      const runtime = snap.exists ? snap.data() : undefined;
-      if (!isGatewayRuntimeDoc(runtime) || runtime.gatewayId !== gatewayId) {
-        return;
-      }
-      await callUnmountRpc(db, {
+      if ((await store.fleetRegistry.get(gatewayId)) === null) return;
+      await callUnmountRpc(store, {
         privateKey,
         gatewayId,
         slug,
@@ -2336,47 +2193,17 @@ export function buildGatewayHeartbeatPollerDeps(
       });
     },
     onUnreachable: async (gatewayId: string) => {
-      const snapshot = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-      const gateway = projectGatewayDesiredRootForGateway(
-        snapshot.exists ? snapshot.data() : undefined,
-        gatewayId,
-      );
+      const gateway = await readDesiredRoot(store, gatewayId) as DurableGateway | null;
       if (gateway?.desiredStatus === "running" && gateway.gatewayClass === "builder") recoverComputer(gatewayId);
-      if (await shouldReconcileDisposablePrelaunch(db, store, gateway)) {
+      if (await shouldReconcileDisposablePrelaunch(store, gateway)) {
         requestReconcileTickRef.fire?.(gatewayId);
       }
     },
   };
 }
 
-interface HeartbeatPollDocLike {
-  id: string;
-  data(): Record<string, unknown> | undefined;
-}
-
-export function heartbeatPollInstanceIds(docs: HeartbeatPollDocLike[]): string[] {
-  const ids: string[] = [];
-  for (const doc of docs) {
-    const data = doc.data() ?? {};
-    if (
-      isGatewayRuntimeDoc(data) &&
-      doc.id === data.gatewayId &&
-      data.lifecycle !== "failed"
-    ) {
-      ids.push(data.gatewayId);
-    }
-  }
-  return ids;
-}
-
-export function heartbeatRosterTarget(
-  instanceId: string,
-  data: Record<string, unknown> | undefined,
-): { gatewayId: string } | null {
-  if (isGatewayRuntimeDoc(data) && data.gatewayId === instanceId) {
-    return { gatewayId: data.gatewayId };
-  }
-  return null;
+export function heartbeatPollInstanceIds(records: readonly FleetRegistryRecord[]): string[] {
+  return records.filter((record) => record.lifecycle !== "failed").map((record) => record.gatewayId);
 }
 
 type ControllerStopper = () => void;
@@ -2406,15 +2233,12 @@ function startControllerBackgroundTasks({
   if (!deps.kubeOps) {
     throw new Error("controller background tasks require Kubernetes operations");
   }
-  // One mirror set for the whole process: the reconciler's listeners fill the two
-  // fleet collections, the informer owns users + assignments, and every periodic
-  // tick below reads memory instead of re-querying Firestore.
-  const informer = createFleetInformer({ db, log });
+  const informer = createFleetInformer({ db, store: deps.store, log });
   const stopReconciler = startReconciler({ ...deps, informer });
   const stopWorker = startOperationWorker(deps);
   const stopOperationQueueDrain = startOperationQueueDrain(deps);
   const stopPoller = startGatewayHeartbeatPoller(
-    buildGatewayHeartbeatPollerDeps(db, log, fleetControllerPrivateKey, informer),
+    buildGatewayHeartbeatPollerDeps(db, deps.store, log, fleetControllerPrivateKey, informer),
     GATEWAY_HEARTBEAT_POLL_MS,
   );
   const stopStuckOpReaper = startStuckOpReaper({
@@ -2425,24 +2249,21 @@ function startControllerBackgroundTasks({
     now: () => Date.now(),
     controllerStartedAt,
   });
-  const migrationClient = createMigrationClientBuilder(db, deps.store, fleetControllerPrivateKey, log);
+  const migrationClient = createMigrationClientBuilder(deps.store, fleetControllerPrivateKey, log);
   const stopSchedulerHandoffRelease = startSchedulerHandoffRelease({
     store: deps.store,
     log,
     intervalMs: 60_000,
     now: () => Date.now(),
-    gatewayExists: async (gatewayId) => {
-      const runtime = (await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get()).data();
-      return isGatewayRuntimeDoc(runtime) && runtime.gatewayId === gatewayId;
-    },
+    gatewayExists: async (gatewayId) => (await deps.store.fleetRegistry.get(gatewayId)) !== null,
     scheduler: async (gatewayId, request) => {
-      const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
+      const url = await resolveGatewayFleetUrl(deps.store, gatewayId);
       return migrationClient(() => url).scheduler({ ...request, gatewayId });
     },
   });
   const stopNativeReturnHoldReaper = startNativeReturnHoldReaper({
     store: deps.store,
-    vm: createGatewayComputeClient(log),
+    vm: createGatewayComputeClient(deps.store, log),
     informer,
     log,
     intervalMs: 60_000,
@@ -2454,18 +2275,12 @@ function startControllerBackgroundTasks({
       apiUrl: requireEnv("GIT_API_URL", "the Gitea gateway key sweep requires it"),
       token: requireEnv("GIT_API_TOKEN", "the Gitea gateway key sweep requires it"),
     }),
-    readLiveKeyHolders: async () => {
-      const [gateways, glmGateways] = await Promise.all([
-        mirroredOrScan(informer.gateways(), () => db.collection(GATEWAYS_COLLECTION).get()),
-        mirroredOrScan(informer.glmGateways(), () => db.collection(GLM_GATEWAYS_COLLECTION).get()),
-      ]);
-      return readLiveGatewayKeyHolders({
-        gateways,
-        glmGateways,
-        readGatewayPodDiagnosticsBatch: (gatewayIds) =>
-          kubeOps.readGatewayPodDiagnosticsBatch({ namespace: NAMESPACE, gatewayIds }),
-      });
-    },
+    readLiveKeyHolders: () => readFleetLiveKeyHolders({
+      informer,
+      store: deps.store,
+      readGatewayPodDiagnosticsBatch: (gatewayIds) =>
+        kubeOps.readGatewayPodDiagnosticsBatch({ namespace: NAMESPACE, gatewayIds }),
+    }),
     mode: parseGiteaGatewayKeyGcMode(process.env.GITEA_GATEWAY_KEY_GC_MODE),
     maxCallsPerTick: GITEA_GATEWAY_KEY_GC_MAX_CALLS_PER_TICK,
     minCallIntervalMs: GITEA_GATEWAY_KEY_GC_MIN_CALL_INTERVAL_MS,
@@ -2477,9 +2292,9 @@ function startControllerBackgroundTasks({
   });
   const stopHelmRecoverySweeper = startHelmRecoverySweeper({
     listPending: () => helm.listPendingReleases({ namespace: NAMESPACE }),
-    isRecoverableRevision: (gatewayId) => isRecoverableGatewayRelease(db, gatewayId),
+    isRecoverableRevision: (gatewayId) => isRecoverableGatewayRelease(deps.store, gatewayId),
     recover: (gatewayId) => runGatewayRuntimeExclusive(async () => {
-      if (!(await isRecoverableGatewayRelease(db, gatewayId)) || !(await gatewayRuntimeMutationAllowed(deps.store, gatewayId))) {
+      if (!(await isRecoverableGatewayRelease(deps.store, gatewayId)) || !(await gatewayRuntimeMutationAllowed(deps.store, gatewayId))) {
         throw new Error('gateway Helm recovery authority unavailable');
       }
       return helm.recoverRelease({ namespace: NAMESPACE, gatewayId });
@@ -2489,7 +2304,7 @@ function startControllerBackgroundTasks({
     intervalMs: HELM_RECOVERY_SWEEP_MS,
     log,
   });
-  const homeServices = BUILDER_VM_SPEC ? createBuilderHomeServices(db, log) : undefined;
+  const homeServices = BUILDER_VM_SPEC ? createBuilderHomeServices(deps.store, log) : undefined;
   const prepareBuilderHome = homeServices ? createBuilderHomeMigrator({
     store: deps.store, readBuilderTier: firestoreBuilderTierReader(db), environment: COMPUTER_ENVIRONMENT, now: Date.now, subnetwork: BUILDER_VM_SPEC!.subnetwork, nativeZones: BUILDER_VM_SPEC!.zones, log,
     ...homeServices.provider, copy: homeServices.copy,
@@ -2519,7 +2334,8 @@ function startControllerBackgroundTasks({
   const decryptConnectorSecret = createConnectorSecretDecryptor();
   const stopHttp = startHttpServer({
     db,
-    store: createFirestorePlatformStateStore({ db }),
+    store: deps.store,
+    accounts: firestoreBuilderAccountReader(db),
     log,
     port: HTTP_PORT,
     verifyIdToken: async (token) => {
@@ -2541,7 +2357,7 @@ function startControllerBackgroundTasks({
     suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
     revokeConnectorGrantsForUser: (uid) =>
       revokeAllConnectorGrantsForUser(uid, CONNECTOR_OAUTH_REVOCATION_TARGETS, {
-        secrets: createFirestorePlatformStateStore({ db }).secrets,
+        secrets: deps.store.secrets,
         decryptSecret: decryptConnectorSecret,
         logger: { warn: log },
       }),
@@ -2585,12 +2401,11 @@ function progressJournalDeps(store: PlatformStateStore, logFn: (message: string)
 }
 
 function buildSurgeHandoffDeps(input: {
-  db: Firestore;
   store: PlatformStateStore;
   runKubectl: KubectlSubprocess;
   privateKey: string;
 }): SurgeCustomerHandoffDeps {
-  const { db, store, runKubectl, privateKey } = input;
+  const { store, runKubectl, privateKey } = input;
   return {
     ...createSurgePodTransport({
       privateKey,
@@ -2599,8 +2414,7 @@ function buildSurgeHandoffDeps(input: {
     recordMigrationProgress: ({ gatewayId, uid, event }) =>
       journalHandoffProgress(progressJournalDeps(store, log), { gatewayId, uid }, event),
     listPods: createSurgeEndpointLister({
-      readRuntimeDoc: async (gatewayId) =>
-        (await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get()).data(),
+      readRuntimeDoc: (gatewayId) => store.fleetRegistry.get(gatewayId),
       listPods: (gatewayId) => listSurgePods(runKubectl, NAMESPACE, gatewayId),
       readComputerReady: createComputerReadinessProbe({
         port: FLEET_CONTROLLER_PORT,
@@ -2613,11 +2427,9 @@ function buildSurgeHandoffDeps(input: {
     claimCrashLoopEviction: ({ gatewayId, imageTag, pod }) =>
       claimCrashLoopEviction(store, { gatewayId, imageTag, pod, now: Date.now() }),
     readAssignments: async (gatewayId) => {
-      const [assignments, userSnapshot] = await Promise.all([
-        readAssignmentDocsForGateway(db, gatewayId),
-        db.collection("users")
-          .where("provisioning.openclaw.gatewayId", "==", gatewayId)
-          .get(),
+      const [assignments, builders] = await Promise.all([
+        store.gateways.assignments.list(gatewayId),
+        store.builders.records.listByGateway(gatewayId),
       ]);
       const projected = assignments.map((assignment) => ({
         uid: assignment.uid,
@@ -2628,10 +2440,9 @@ function buildSurgeHandoffDeps(input: {
         updatedByOperationId: assignment.updatedByOperationId,
         ...(assignment.sharedSurgeForwardRecovery ? { sharedSurgeForwardRecovery: assignment.sharedSurgeForwardRecovery } : {}),
       }));
-      const assignedUsers = userSnapshot.docs.map((doc) => {
-        const slug = slugFromAssignedUser(doc.data() as Record<string, unknown>);
-        if (!slug) throw new Error(`assigned user ${doc.id} has no gateway slug`);
-        return { uid: doc.id, slug };
+      const assignedUsers = builders.map((builder) => {
+        if (!builder.slug) throw new Error(`assigned user ${builder.uid} has no gateway slug`);
+        return { uid: builder.uid, slug: builder.slug };
       });
       const retained = await pruneSurgeOrphanAssignments({
         store,
@@ -2649,19 +2460,16 @@ function buildSurgeHandoffDeps(input: {
     rebindSharedSurgeForwardRecovery: (assignment) => rebindSharedSurgeForwardRecovery({ store, log }, assignment),
     markAssignment: (assignment) => markAssignmentState({ store, log }, assignment),
     readOwnerOperation: async (operationId) => {
-      const snapshot = await db
-        .collection(GLM_OPERATIONS_COLLECTION)
-        .doc(operationId)
-        .get();
-      if (!snapshot.exists) return null;
-      const operation = { ...snapshot.data(), id: snapshot.id } as Operation;
+      const record = await store.journal.operations.get(operationId);
+      if (record === null) return null;
+      const operation = operationFromRecord(record);
       return { status: operation.status, sourceRecoveryPending: schedulerHandoffAwaitingRelease(operation) };
     },
     log,
   };
 }
 
-function buildNativeReturnSourceRecoveryOwner(db: Firestore, store: PlatformStateStore, kubeOps: KubeOps, privateKey: string, prepareMigrationAgentStores: PrepareMigrationAgentStores) {
+function buildNativeReturnSourceRecoveryOwner(store: PlatformStateStore, kubeOps: KubeOps, privateKey: string, prepareMigrationAgentStores: PrepareMigrationAgentStores) {
   return createNativeReturnSourceRecoveryOwner({
     store, now: Date.now, log, prepareSourceStores: prepareMigrationAgentStores,
     verifyRetiredTarget: createNativeReturnTargetRetirementVerifier({
@@ -2673,11 +2481,11 @@ function buildNativeReturnSourceRecoveryOwner(db: Firestore, store: PlatformStat
         return !pvc.stdout.trim();
       },
     }),
-    releaseSourceHold: input => releaseNativeReturnSourceRecoveryHold({ store, vm: createGatewayComputeClient(log), now: Date.now,
+    releaseSourceHold: input => releaseNativeReturnSourceRecoveryHold({ store, vm: createGatewayComputeClient(store, log), now: Date.now,
       wait: ms => new Promise(resolve => setTimeout(resolve, ms)) }, input),
     sourceClient: async (gatewayId, authority) => {
-      const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
-      return createMigrationClientBuilder(db, store, privateKey, log,
+      const url = await resolveGatewayFleetUrl(store, gatewayId);
+      return createMigrationClientBuilder(store, privateKey, log,
         (id, slug) => prepareMigrationAgentStores(id, slug, authority))(id => {
           if (id !== gatewayId) throw new Error("native return recovery source transport changed");
           return url;
@@ -2686,15 +2494,9 @@ function buildNativeReturnSourceRecoveryOwner(db: Firestore, store: PlatformStat
   });
 }
 
-async function readBuilderAgentStoreInventory(db: Firestore, builder: { uid: string }) {
-  const stores = await db.collection("users").doc(builder.uid).collection("agentStores").get();
-  return stores.docs.filter(store => store.id !== "_gateway-state" && store.id !== "octogee-unmatched-route").map(store => {
-    const data = store.data();
-    if (data.agentId !== store.id || typeof data.storeId !== "string" || typeof data.schema !== "string") {
-      throw new Error(`Agent-store handoff inventory is invalid for ${store.id}`);
-    }
-    return { agentId: store.id, storeId: data.storeId, schema: data.schema };
-  });
+async function readBuilderAgentStoreInventory(store: PlatformStateStore, builder: { uid: string }) {
+  return (await store.builders.agentStores.list(builder.uid)).flatMap(record =>
+    record.kind === "agent" ? [{ agentId: record.agentId, storeId: record.storeId, schema: record.schema }] : []);
 }
 
 function createBootUpgradeJournal(store: PlatformStateStore): VmGatewayRuntimeDeps["journalBootUpgrade"] {
@@ -2718,8 +2520,7 @@ function agentStoreDsns(): { adminDsn: string; clientDsn: string } {
   };
 }
 
-async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime> {
-  const store = createFirestorePlatformStateStore({ db });
+async function createControllerRuntime(db: Firestore, store: PlatformStateStore): Promise<ControllerRuntime> {
   const runKubectl: KubectlSubprocess = (args, opts) => spawnKubectl(args, opts);
   const authSecretEnsurer = createAuthSecretEnsurer({
     runKubectl,
@@ -2730,26 +2531,20 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
   const provisionAgentStoreCredentials = createAgentStoreCredentialProvisioner(agentStore.adminDsn, agentStore.clientDsn);
   const { ensureGatewayAuthSecret, ensureGatewayCredentials } = createGatewayCredentialEnsurers({
     auth: authSecretEnsurer,
-    readGateway: async (gatewayId) => {
-      const snapshot = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-      return projectGatewayDesiredRootForGateway(snapshot.exists ? snapshot.data() : undefined, gatewayId);
-    },
+    readGateway: (gatewayId) => readDesiredRoot(store, gatewayId),
     provisionAgentStore: provisionAgentStoreCredentials,
     runKubectl,
     agentStoreClientDsn: agentStore.clientDsn,
   });
   const prepareMigrationAgentStores = createMigrationAgentStorePreparer({
-    readGateway: async gatewayId => {
-      const snapshot = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-      return projectGatewayDesiredRootForGateway(snapshot.exists ? snapshot.data() : undefined, gatewayId);
-    },
+    readGateway: gatewayId => readDesiredRoot(store, gatewayId),
     readBuilder: async slug => {
-      const users = await db.collection("users").where("provisioning.openclaw.slug", "==", slug).limit(2).get();
-      if (users.size !== 1) throw new Error(`Agent-store handoff requires one Builder for slug ${slug}`);
-      return { uid: users.docs[0].id, slug };
+      const builder = await store.builders.records.findBySlug(slug);
+      if (builder === null) throw new Error(`Agent-store handoff requires one Builder for slug ${slug}`);
+      return { uid: builder.uid, slug };
     },
     ensureCredentials: gatewayId => ensureGatewayCredentials({ namespace: NAMESPACE, gatewayId }),
-    transferOwnership: createAgentStoreOwnershipTransferer(agentStore.adminDsn, builder => readBuilderAgentStoreInventory(db, builder)),
+    transferOwnership: createAgentStoreOwnershipTransferer(agentStore.adminDsn, builder => readBuilderAgentStoreInventory(store, builder)),
   });
   const serviceAccountEnsurer = createGatewayServiceAccountEnsurer({
     runKubectl,
@@ -2800,7 +2595,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
       environment: COMPUTER_ENVIRONMENT,
       runHelm: spawnHelm,
       runKubectl,
-      vm: createGatewayComputeClient(log),
+      vm: createGatewayComputeClient(store, log),
       vmSpec: BUILDER_VM_SPEC,
       disposableParking: resolveDisposableBuilderParking(process.env),
       computeProjectId: gatewayComputeProjectId(),
@@ -2813,10 +2608,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
       },
       routesConfigMap: process.env.GATEWAY_VM_ROUTES_CONFIGMAP ?? "octogee-vm-routes",
       ensureAuthSecret: ensureGatewayCredentials,
-      readDesiredStatus: async (gatewayId) => {
-        const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-        return projectGatewayDesiredRootForGateway(snap.exists ? snap.data() : undefined, gatewayId)?.desiredStatus ?? null;
-      },
+      readDesiredStatus: async (gatewayId) => (await readDesiredRoot(store, gatewayId))?.desiredStatus ?? null,
       journalBootUpgrade: createBootUpgradeJournal(store),
       wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       onComputerCreationSettled: (gatewayId) => convergeSettledComputer(gatewayId),
@@ -2829,7 +2621,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     ? createRuntimeDispatchingHelmRunner({
         cluster: clusterHelm,
         vm: vmRuntime,
-        isVmGateway: (gatewayId) => isVmGateway(db, gatewayId),
+        isVmGateway: (gatewayId) => isVmGateway(store, gatewayId),
       })
     : clusterHelm;
   const kubeOps =
@@ -2868,7 +2660,6 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     "migrate-customer, deprovision-customer, and operator eviction RPCs require the controller signing key",
   );
   const surgeHandoffDeps = buildSurgeHandoffDeps({
-    db,
     store,
     runKubectl,
     privateKey: fleetControllerPrivateKey,
@@ -2887,7 +2678,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     }, gatewayIds);
   const convergeGateways = serializeGatewayConvergence(runGatewayConvergence);
   const convergeSettledComputer = convergeAfterComputerCreation(convergeGateways, log);
-  const nativeReturnRecovery = buildNativeReturnSourceRecoveryOwner(db, store, kubeOps, fleetControllerPrivateKey, prepareMigrationAgentStores);
+  const nativeReturnRecovery = buildNativeReturnSourceRecoveryOwner(store, kubeOps, fleetControllerPrivateKey, prepareMigrationAgentStores);
   const handlers = await buildHandlers(db, log, helm, kubeOps, {
     syncFleetIngress: handlerSyncFleetIngress, privateKey: fleetControllerPrivateKey,
     modelKeySourceIssuer, prepareGatewayConfig, chartFingerprint,
@@ -2932,7 +2723,8 @@ async function main(): Promise<void> {
     storageBucket: resolveDefaultStorageBucket(process.env.GOOGLE_CLOUD_PROJECT),
   });
   const db = getFirestore();
-  const { deps, fleetControllerPrivateKey, chartFingerprint } = await createControllerRuntime(db);
+  const store = createFirestorePlatformStateStore({ db });
+  const { deps, fleetControllerPrivateKey, chartFingerprint } = await createControllerRuntime(db, store);
 
   log(
     `[glm-controller] boot sha=${process.env.BUILD_SHA ?? "unknown"} oc=${process.env.OPENCLAW_VERSION ?? "n/a"} fork=${process.env.OPENCLAW_FORK_SHA ?? "n/a"} node=${process.version} — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} chartFingerprint=${chartFingerprint.slice(0, 12)} chartDriftPolicy=release-gated valuesFile=${GATEWAY_VALUES_FILE}`,
@@ -2973,7 +2765,7 @@ async function main(): Promise<void> {
     log,
     resumableKinds: RESUMABLE_OP_KINDS,
     resumableOperation: operationIsRestartResumable,
-    redrive: (op) => reAdoptAndRunOperation(op, db.collection(GLM_OPERATIONS_COLLECTION).doc(op.id), deps),
+    redrive: (op) => reAdoptAndRunOperation(op, deps),
   }).catch((err) =>
     log(
       `[glm-controller] ⚠ resume-orphaned-ops sweep failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -3022,12 +2814,11 @@ function retainedSourceRunner(store: PlatformStateStore, context: RetainedSource
   return createRetainedSourceTransfer({store,namespace:NAMESPACE,image:`${artifact.imageRepository}@${digest}`,runCommand:createSubprocessCommandRunner(),now:Date.now},context);
 }
 
-async function cleanupRetainedSource(db: Firestore, store: PlatformStateStore, privateKey:string, context:RetainedSourceContext): Promise<void> {
-  await abortRetainedSourceImport({store,namespace:NAMESPACE,privateKey,fleetControllerPort:FLEET_CONTROLLER_PORT,resolveGatewayUrl:()=>'',resolveGatewayVm:transportId=>readGatewayVmAddress(db,transportId),retainedSource:retainedSourceRunner(store,context)}, {migrationId:context.state.migrationId,slug:context.state.slug,toGatewayId:context.state.targetGatewayId});
+async function cleanupRetainedSource(store: PlatformStateStore, privateKey:string, context:RetainedSourceContext): Promise<void> {
+  await abortRetainedSourceImport({store,namespace:NAMESPACE,privateKey,fleetControllerPort:FLEET_CONTROLLER_PORT,resolveGatewayUrl:()=>'',resolveGatewayVm:transportId=>readGatewayVmAddress(store,transportId),retainedSource:retainedSourceRunner(store,context)}, {migrationId:context.state.migrationId,slug:context.state.slug,toGatewayId:context.state.targetGatewayId});
 }
 
 function createMigrationClientBuilder(
-  db: Firestore,
   store: PlatformStateStore,
   privateKey: string,
   logFn: (msg: string) => void,
@@ -3050,7 +2841,7 @@ function createMigrationClientBuilder(
         privateKey,
         fleetControllerPort: FLEET_CONTROLLER_PORT,
         resolveGatewayUrl: resolveSync,
-        resolveGatewayVm: (transportId) => readGatewayVmAddress(db, transportId),
+        resolveGatewayVm: (transportId) => readGatewayVmAddress(store, transportId),
         log: logFn,
       })(request);
       },
@@ -3253,14 +3044,10 @@ async function buildHandlers(
     helm,
     kubeOps,
     resolveGatewayRevision: async (gatewayId) => {
-      const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-      const authorization = gatewayAuthorizationFromRootDocument(
-        snap.exists ? snap.data() : undefined,
-        gatewayId,
-      );
+      const authorization = await readGatewayAuthorizationInStore(store, gatewayId);
       if (!authorization) return null;
       const gateway = authorization.gateway as DurableGateway;
-      const artifact = await readGatewayArtifact(db, gatewayId, gateway.desiredRelease);
+      const artifact = await readGatewayArtifactInStore(store, gatewayId, gateway.desiredRelease);
       if (!artifact) return null;
       return {
         gatewayId,
@@ -3273,10 +3060,9 @@ async function buildHandlers(
         }),
       };
     },
-    readGatewayHeartbeat: (gatewayId) =>
-      readGatewayHeartbeatFromFirestore(db, gatewayId),
+    readGatewayHeartbeat: (gatewayId) => readGatewayHeartbeat(store, gatewayId),
     publishGatewayReady: async ({ gatewayId, imageTag }) => {
-      await publishPlatformGatewayReady(db, {
+      await publishPlatformGatewayReady(store, {
         gatewayId,
         imageTag,
         now: Date.now(),
@@ -3295,7 +3081,7 @@ async function buildHandlers(
 
   const recoveryTargetTransport = createSurgePodTransport({ privateKey, log: logFn });
   const recoveryTargetEndpoints = createSurgeEndpointLister({
-    readRuntimeDoc: async gatewayId => (await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get()).data(),
+    readRuntimeDoc: gatewayId => store.fleetRegistry.get(gatewayId),
     listPods: gatewayId => listSurgePods(spawnKubectl, NAMESPACE, gatewayId),
     readComputerReady: createComputerReadinessProbe({ port: FLEET_CONTROLLER_PORT, timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS, log: logFn }),
   });
@@ -3303,11 +3089,11 @@ async function buildHandlers(
     prepareBuilderRecoveryTarget: input => prepareBuilderRecoveryTarget({
       assertAuthority: recovery => assertWorkspaceMigrationRecoveryAuthority(stateDeps, recovery),
       targetAssigned: async gatewayId => {
-        const [assignments, users] = await Promise.all([
-          readAssignmentDocsForGateway(db, gatewayId),
-          db.collection("users").where("provisioning.openclaw.gatewayId", "==", gatewayId).limit(1).get(),
+        const [unassigned, builders] = await Promise.all([
+          store.gateways.assignments.isEmpty(gatewayId),
+          store.builders.records.listByGateway(gatewayId, { limit: 1 }),
         ]);
-        return assignments.length > 0 || !users.empty;
+        return !unassigned || builders.length > 0;
       },
       listPods: recoveryTargetEndpoints,
       holdTargetOpenClaw: recoveryTargetTransport.holdTargetOpenClaw!,
@@ -3319,44 +3105,38 @@ async function buildHandlers(
     clearMigrationPreparation: (input) => clearWorkspaceMigrationPreparation(stateDeps, input),
     setMigrationPhase: (input) => setWorkspaceMigrationPhase(stateDeps, input),
     reportMigrationProgress: async (gatewayId, event) => {
-      const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
+      const url = await resolveGatewayFleetUrl(store, gatewayId);
       await reportMigrationProgress({ privateKey, resolveGatewayUrl: () => url }, gatewayId, event);
     },
     recordMigrationProgress: ({ operation, event }) =>
       journalOperationProgress(progressJournalDeps(store, logFn), operation, event),
     recoverNativeReturnSource: fleetOps.nativeReturnRecovery.recover,
     prepareNativeComputerReturn: (input) => prepareNativeComputerReturn({
-      store, vm: createGatewayComputeClient(logFn),
+      store, vm: createGatewayComputeClient(store, logFn),
       now: Date.now, wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     }, input),
     retireNativeSchedulerBeforeStage: (input, scheduler) => retireNativeSchedulerBeforeStage({
-      store, vm: createGatewayComputeClient(logFn), log: logFn,
+      store, vm: createGatewayComputeClient(store, logFn), log: logFn,
     }, input, scheduler),
     readUser: async (uid) => {
-      const doc = await db.collection("users").doc(uid).get();
-      if (!doc.exists) return null;
-      const data = doc.data() as
-        | { username?: string; provisioning?: { openclaw?: { slug?: string; gatewayId?: string } } }
-        | undefined;
-      const oc = data?.provisioning?.openclaw ?? {};
-      const slug = oc.slug ?? data?.username;
-      const currentGatewayId = oc.gatewayId;
+      const builder = await store.builders.records.get(uid);
+      const slug = builder?.slug;
+      const currentGatewayId = builder?.gateway?.gatewayId;
       if (!slug || !currentGatewayId) return null;
       return { slug, currentGatewayId };
     },
     readUserSnapshot: (uid, toGatewayId) => readMigrationUserSnapshot(db, store.secrets, uid, toGatewayId),
     readPrivateProjectCoachWorkspace: async (gatewayId, slug) => readPrivateProjectCoachWorkspace({
-      baseUrl: await resolveGatewayUrlFromFirestore(db, gatewayId, { allowUnready: true }),
+      baseUrl: await resolveGatewayFleetUrl(store, gatewayId, { allowUnready: true }),
       gatewayId, privateKey, privateProjectCoachSlug: slug, timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS,
       fetchImpl: fetch, newRequestId: randomUUID,
     }),
     readScheduleTransfer: (uid, migrationId) => store.builders.scheduleTransfers.get(uid, migrationId),
     saveScheduleTransfer: (uid, doc) => store.builders.scheduleTransfers.put(uid, doc),
     recordScheduleRestore: (uid, migrationId, restore) => store.builders.scheduleTransfers.patch(uid, migrationId, restore),
-    readGatewaySystemConfigCommit: (gatewayId) =>
-      readGatewaySystemConfigCommitFromFirestore(db, gatewayId),
+    readGatewaySystemConfigCommit: (gatewayId) => readGatewaySystemConfigCommit(store, gatewayId),
     readOpenClawBuild: async (gatewayId, release) =>
-      (await readReleasePayloadFromFirestore(db, gatewayId, release))?.openclawSourceSha ?? null,
+      (await readGatewayArtifactInStore(store, gatewayId, release))?.openclawSourceSha ?? null,
     commitCutover: async (commit) => {
       await commitCutoverAtomic(
         cutoverDeps,
@@ -3374,18 +3154,17 @@ async function buildHandlers(
         },
       );
     },
-    resolveGatewayUrl: (gatewayId, options) => resolveGatewayUrlFromFirestore(db, gatewayId, options),
+    resolveGatewayUrl: (gatewayId, options) => resolveGatewayFleetUrl(store, gatewayId, options),
     observeSourceTransfer: async (op) => {
-      const fresh = (await db.collection(GLM_OPERATIONS_COLLECTION).doc(op.id).get()).data() as Operation | undefined;
+      const fresh = await store.journal.operations.get(op.id);
       if (!fresh?.customerMigrationV2) return undefined;
       const context={op,state:fresh.customerMigrationV2};
       const observed=await retainedSourceRunner(store,context).observe();
-      if (observed?.status==='failed' && observed.targetCleanup==='pending') await cleanupRetainedSource(db,store,privateKey,context);
+      if (observed?.status==='failed' && observed.targetCleanup==='pending') await cleanupRetainedSource(store,privateKey,context);
       return retainedSourceRunner(store,context).observe();
     },
-    cleanupSourceTransfer: (op,state)=>cleanupRetainedSource(db,store,privateKey,{op,state}),
+    cleanupSourceTransfer: (op,state)=>cleanupRetainedSource(store,privateKey,{op,state}),
     buildClient: createMigrationClientBuilder(
-      db,
       store,
       privateKey,
       logFn,
@@ -3393,7 +3172,7 @@ async function buildHandlers(
     ),
     prepareMigrationAgentStores: fleetOps.prepareMigrationAgentStores,
     resolveSourcePlacement: async (uid, currentGatewayId) => {
-      const source = await resolveSourceRevisionFromFirestore(db, uid, currentGatewayId);
+      const source = await resolveSourceRevision(store, uid, currentGatewayId);
       if (!source) return null;
       return {
         release: source.release,
@@ -3404,7 +3183,7 @@ async function buildHandlers(
       };
     },
     resolveTargetPlacement: async (toGatewayId) => {
-      const placement = await resolvePlacementFromFirestore(db, toGatewayId);
+      const placement = await resolveGatewayPlacement(store, toGatewayId);
       if (!placement) return null;
       return placement.ok
         ? { ok: true, release: placement.release, gatewayClass: placement.gatewayClass }
@@ -3415,13 +3194,7 @@ async function buildHandlers(
     setAssignmentState: async (input) => {
       await markAssignmentState(stateDeps, input);
     },
-    readGatewayRootFence: async (gatewayId) => {
-      const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-      return customerMigrationV2GatewayRootFence(
-        snap.exists ? snap.data() : undefined,
-        gatewayId,
-      );
-    },
+    readGatewayRootFence: async (gatewayId) => customerMigrationV2GatewayRootFence(await readDesiredRoot(store, gatewayId), gatewayId),
     commitV2Cutover: async (input) => {
       await commitCutoverAtomic(
         cutoverDeps,
@@ -3455,18 +3228,10 @@ async function buildHandlers(
       );
     },
     useDurableMigration: async (fromGatewayId, toGatewayId, retainedNativeRelease) => {
-      const [source, target] = await Promise.all([
-        db.collection(GATEWAYS_COLLECTION).doc(fromGatewayId).get(),
-        db.collection(GATEWAYS_COLLECTION).doc(toGatewayId).get(),
+      const [sourceAuthorization, targetAuthorization] = await Promise.all([
+        readGatewayAuthorizationInStore(store, fromGatewayId),
+        readGatewayAuthorizationInStore(store, toGatewayId),
       ]);
-      const sourceAuthorization = gatewayAuthorizationFromRootDocument(
-        source.data(),
-        fromGatewayId,
-      );
-      const targetAuthorization = gatewayAuthorizationFromRootDocument(
-        target.data(),
-        toGatewayId,
-      );
       if (!sourceAuthorization) {
         throw new Error(`source gateway ${fromGatewayId} has no durable root`);
       }
@@ -3516,7 +3281,7 @@ async function buildHandlers(
     revokeAgentStoreCredentials: createAgentStoreCredentialRevoker(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "Gateway retirement requires the controller-only administration URL")),
     isPausedNativeSourceFencedOff: (input) => pausedNativeRetirementSourceFencedOff({
       store,
-      describe: (name, zone) => createGatewayComputeClient(logFn).describe(name, zone),
+      describe: (name, zone) => createGatewayComputeClient(store, logFn).describe(name, zone),
     }, input),
     verifyRetirementClaim: ({ gatewayId, operationId, version }) =>
       verifyGatewayRetirementClaimAtomic({
@@ -3528,10 +3293,8 @@ async function buildHandlers(
         updatedBy: "cowboy-retire-gateway",
       }),
     readMountedCustomers: async (gatewayId) => {
-      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-      const runtime = snap.exists ? snap.data() : undefined;
-      if (!isGatewayRuntimeDoc(runtime)) return [];
-      return readMountedCustomers(runtime as unknown as Record<string, unknown>);
+      const runtime = await store.fleetRegistry.get(gatewayId);
+      return runtime === null ? [] : readMountedCustomers(runtime as unknown as Record<string, unknown>);
     },
     helmUninstallGateway: async (gatewayId) => {
       await runGatewayRuntimeExclusive(async () => {
@@ -3540,12 +3303,10 @@ async function buildHandlers(
       });
     },
     readAssignmentsForGateway: async (gatewayId) => {
-      const assignments = await readAssignmentDocsForGateway(db, gatewayId);
+      const assignments = await store.gateways.assignments.list(gatewayId);
       return assignments.map((a) => ({ uid: a.uid, slug: a.slug }));
     },
-    deleteGlmGateway: async (gatewayId) => {
-      await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).delete();
-    },
+    deleteGlmGateway: (gatewayId) => store.fleetRegistry.delete(gatewayId),
     deleteGatewayHeartbeat: async (gatewayId) => {
       // gateways/{id} may now be the durable GatewayDoc (+ release subcollection).
       // NEVER delete it during retire — PR2's DELETE endpoint marks it
@@ -3612,7 +3373,7 @@ async function buildHandlers(
   const rollbackUnadmittedActivationTarget = createBuilderActivationRollRecoveryOwner({
     store, namespace: NAMESPACE, helm, chartFingerprint: fleetOps.chartFingerprint,
     runExclusive: fleetOps.runRuntimeRecovery,
-    readRelease: (gatewayId, release) => readGatewayArtifact(db, gatewayId, release),
+    readRelease: (gatewayId, release) => readGatewayArtifactInStore(store, gatewayId, release),
     prepareIntent: async (gateway, artifact) => {
       const intent = await prepareDesiredGatewayIntent({ passDeps: fleetOps, gateway, artifact, instance: undefined });
       if (!intent) throw new Error('Builder rollback immutable live intent is unavailable');
@@ -3630,15 +3391,10 @@ async function buildHandlers(
   });
   const rollout = createRolloutHandler({
     rollbackUnadmittedActivationTarget,
-    readGatewayDoc: async (gatewayId) => {
-      const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-      if (!snap.exists) return null;
-      return durableRolloutGateway(snap.data(), gatewayId);
-    },
-    readReleasePayload: (gatewayId, release) =>
-      readReleasePayloadFromFirestore(db, gatewayId, release),
+    readGatewayDoc: (gatewayId) => readDesiredRoot(store, gatewayId),
+    readReleasePayload: (gatewayId, release) => readGatewayArtifactInStore(store, gatewayId, release),
     readDeploymentPrerequisiteError: async (gatewayId) => {
-      if (!(await isVmGateway(db, gatewayId))) return null;
+      if (!(await isVmGateway(store, gatewayId))) return null;
       const vmRuntime = vmGatewayRuntimeRef.current;
       if (!vmRuntime) return `gateway ${gatewayId}: gce-vm deployment requires configured VM runtime`;
       return vmRuntime.readDeploymentPrerequisiteError(gatewayId);
@@ -3696,39 +3452,20 @@ async function buildHandlers(
       await restartGatewayProcess({store,namespace:NAMESPACE,runKubectl:spawnKubectl},gatewayId);
     }},
     namespace: NAMESPACE,
-    resolveLiveRevisionId: async (gatewayId) => {
-      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-      const runtime = snap.exists ? snap.data() : undefined;
-      return isGatewayRuntimeDoc(runtime) && runtime.lifecycle === "serving"
-        ? gatewayId
-        : null;
-    },
+    resolveLiveRevisionId: async (gatewayId) => (await isServingRuntime(store, gatewayId)) ? gatewayId : null,
     now: () => Date.now(),
     log: logFn,
   });
 
   const recycleGateway = createRecycleGatewayHandler({
-    readDesiredStatus: async (gatewayId) => {
-      const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-      const authorization = gatewayAuthorizationFromRootDocument(
-        snap.exists ? snap.data() : undefined,
-        gatewayId,
-      );
-      return authorization ? authorization.gateway.desiredStatus : null;
-    },
+    readDesiredStatus: async (gatewayId) => (await readDesiredRoot(store, gatewayId))?.desiredStatus ?? null,
     setDesiredStatus: async (gatewayId, status) => {
       await withGatewayRuntimeMutation(store,gatewayId,async transaction => {
         await transaction.gateways.roots.patch(gatewayId,
           { desiredStatus: status, updatedAt: Date.now(), updatedBy: "cowboy-recycle-gateway" });
       });
     },
-    readServingRevisionId: async (gatewayId) => {
-      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-      const runtime = snap.exists ? snap.data() : undefined;
-      return isGatewayRuntimeDoc(runtime) && runtime.lifecycle === "serving"
-        ? gatewayId
-        : null;
-    },
+    readServingRevisionId: async (gatewayId) => (await isServingRuntime(store, gatewayId)) ? gatewayId : null,
     readAvailableReplicas: (revisionId) =>
       kubeOps.readAvailableReplicas({
         namespace: NAMESPACE,
@@ -3756,21 +3493,15 @@ async function buildHandlers(
         action: () => runtime.replaceStoppedComputer(gatewayId, operationId, assertCurrent, options),
       });
     },
-    vm: createGatewayComputeClient(logFn),
+    vm: createGatewayComputeClient(store, logFn),
     readGateway: async (gatewayId) => {
-      const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-      if (!snap.exists) return null;
-      const data = snap.data() as Record<string, unknown>;
-      return { runtime: data.runtime, vm: (data.vm as GatewayVmState | undefined) ?? null };
+      const runtime = await store.fleetRegistry.get(gatewayId);
+      return runtime === null ? null : { runtime: runtime.runtime, vm: runtime.vm ?? null };
     },
-    writeVmState: async (gatewayId, vm) => {
-      await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).update({ vm });
-    },
+    writeVmState: (gatewayId, vm) => store.fleetRegistry.patch(gatewayId, { vm }),
     requestHomeCheckpoint: (gatewayId, requestedAt) => requestHomeCheckpoint(store, gatewayId, requestedAt),
     readHomeCheckpointCompletedAt: (gatewayId) => readHomeCheckpointCompletedAt(store, gatewayId),
-    clearHomeCheckpointRequest: async (gatewayId) => {
-      await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).update({ "vmHome.checkpointRequestedAt": FieldValue.delete() });
-    },
+    clearHomeCheckpointRequest: (gatewayId) => clearHomeCheckpointRequest(store, gatewayId),
     clearVmForReplacement: async (gatewayId) => {
       await clearReplacedComputer({ store, log: logFn }, gatewayId);
     },
@@ -3826,7 +3557,7 @@ function deletionPlanTier(user: Record<string, unknown> | undefined): string | n
   return typeof subscription?.tier === "string" ? subscription.tier : null;
 }
 
-function deletionGatewayClass(gateway: Record<string, unknown> | undefined): string | null {
+function deletionGatewayClass(gateway: Pick<GatewayRoot, "gatewayClass" | "profile" | "imageProfile"> | undefined): string | null {
   if (!gateway) return null;
   const gatewayClass = isGatewayClass(gateway.gatewayClass) ? gateway.gatewayClass : undefined;
   const profile = isGatewayProfile(gateway.profile) ? gateway.profile : undefined;
@@ -3835,51 +3566,97 @@ function deletionGatewayClass(gateway: Record<string, unknown> | undefined): str
 }
 
 async function deletionGateway(
-  db: Firestore,
-  currentGatewayId: unknown,
-): Promise<Record<string, unknown> | undefined> {
+  store: PlatformStateStore,
+  currentGatewayId: string | null | undefined,
+): Promise<GatewayRoot | undefined> {
   if (typeof currentGatewayId !== "string") return undefined;
-  const snapshot = await db.collection(GATEWAYS_COLLECTION).doc(currentGatewayId).get();
-  return snapshot.data() as Record<string, unknown> | undefined;
+  return (await store.gateways.roots.get(currentGatewayId)) ?? undefined;
 }
 
-async function ensureAnonymousDeletionArchive(
+export async function ensureAnonymousDeletionArchive(
   db: Firestore,
+  store: PlatformStateStore,
   deletionId: string,
 ): Promise<string> {
-  const jobRef = db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId);
-  const jobSnap = await jobRef.get();
-  if (!jobSnap.exists) throw new Error(`deletion job missing: ${deletionId}`);
-  const job = jobSnap.data() as Record<string, unknown>;
-  if (typeof job.archiveId === "string" && job.archiveId.length > 0) {
-    return job.archiveId;
-  }
-  if (typeof job.uid !== "string") throw new Error(`deletion job ${deletionId} has no uid`);
-  const uid = job.uid;
+  const job = await store.jobs.deletions.get(deletionId);
+  if (job === null) throw new Error(`deletion job missing: ${deletionId}`);
+  if (job.archiveId) return job.archiveId;
+  if (job.uid === undefined) throw new Error(`deletion job ${deletionId} has no uid`);
   const [userSnap, rollupSnap, gateway] = await Promise.all([
-    db.collection("users").doc(uid).get(),
-    db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(uid).get(),
-    deletionGateway(db, job.currentGatewayId),
+    db.collection("users").doc(job.uid).get(),
+    db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(job.uid).get(),
+    deletionGateway(store, job.currentGatewayId),
   ]);
   const user = userSnap.data() as Record<string, unknown> | undefined;
-  const archiveRef = db.collection(ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION).doc();
-  const archive = buildAnonymousOperationalArchive({
+  const { archivedAt, ...record } = buildAnonymousOperationalArchive({
     archivedAt: Date.now(),
     createdAt: timestampMillis(user?.createdAt),
-    deletionRequestedAt: timestampMillis(job.requestedAt) ?? Date.now(),
+    deletionRequestedAt: job.requestedAt,
     environment: deletionEnvironment(),
     planTier: deletionPlanTier(user),
     gatewayClass: deletionGatewayClass(gateway),
     rollup: (rollupSnap.data() ?? {}) as Record<string, unknown>,
   });
-  const batch = db.batch();
-  batch.create(archiveRef, archive);
-  batch.set(jobRef, { archiveId: archiveRef.id, updatedAt: Date.now() }, { merge: true });
-  await batch.commit();
-  return archiveRef.id;
+  return store.transaction({ label: "erase-customer.archive" }, async (tx) => {
+    const current = await tx.jobs.deletions.get(deletionId);
+    if (current === null) throw new Error(`deletion job missing: ${deletionId}`);
+    if (current.archiveId) return current.archiveId;
+    const archiveId = await tx.jobs.archives.create({ archivedAt, record });
+    await tx.jobs.deletions.patch(deletionId, { archiveId, updatedAt: Date.now() });
+    return archiveId;
+  });
+}
+
+function productIds(productContext: CustomerDeletionJob["productContext"], field: "stripeCustomerIds" | "stripeSubscriptionIds"): string[] {
+  const ids = productContext?.[field];
+  return Array.isArray(ids) ? ids.filter((value): value is string => typeof value === "string" && value.length > 0) : [];
+}
+
+export async function persistDeletionProductContext(
+  store: PlatformStateStore,
+  deletionId: string,
+  fields: Record<string, unknown>,
+): Promise<void> {
+  await store.transaction({ label: "customer-deletion.persist-product-context" }, async (tx) => {
+    const job = await tx.jobs.deletions.get(deletionId);
+    if (job === null) throw new Error(`deletion job missing: ${deletionId}`);
+    await tx.jobs.deletions.patch(deletionId, { productContext: { ...job.productContext, ...fields }, updatedAt: Date.now() });
+  });
+}
+
+const PROJECT_AGENT_SECRET_PATH = /^users\/([^/]+)\/secrets\/([^/]+)$/u;
+
+export async function deleteProjectAgentCredentialSecrets(store: PlatformStateStore, docPaths: readonly string[]): Promise<void> {
+  const secrets = docPaths.map((docPath) => {
+    const match = PROJECT_AGENT_SECRET_PATH.exec(docPath);
+    if (match === null) throw new Error(`project-agent credential is not a Builder secret: ${docPath}`);
+    return { uid: match[1], secretId: match[2] };
+  });
+  await store.transaction({ label: "suspend-customer.delete-project-agent-secrets" }, async (tx) => {
+    for (const { uid, secretId } of secrets) await tx.secrets.delete(uid, secretId);
+  });
 }
 
 const FIRESTORE_DOC_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+async function persistPostHogErasureState(store: PlatformStateStore, deletionId: string, state: PostHogErasureState): Promise<void> {
+  await store.transaction({ label: "erase-customer.persist-posthog-erasure" }, async (tx) => {
+    const job = await tx.jobs.deletions.get(deletionId);
+    if (job === null) throw new Error(`deletion job missing: ${deletionId}`);
+    await tx.jobs.deletions.patch(deletionId, {
+      productContext: { ...job.productContext, posthogErasure: state },
+      updatedAt: Date.now(),
+    });
+  });
+}
+
+async function retainPostHogMappingOnly(store: PlatformStateStore, deletionId: string, archiveId: string): Promise<void> {
+  await store.transaction({ label: "erase-customer.retain-posthog-mapping" }, async (tx) => {
+    const job = await tx.jobs.deletions.get(deletionId);
+    if (job === null) throw new Error(`deletion job missing: ${deletionId}`);
+    await tx.jobs.deletions.patch(deletionId, postHogMappingOnlyJobPatch(job, archiveId, Date.now()));
+  });
+}
 
 function buildEraseCustomerHandler(db: Firestore, store: PlatformStateStore, logFn: (msg: string) => void, kubeOps: Pick<KubeOps, "readAvailableReplicas" | "readGatewayPodDiagnostics">, privateKey: string) {
   const cloudCleanup = buildCustomerCloudCleanupDeps(db, store, logFn);
@@ -3894,30 +3671,28 @@ function buildEraseCustomerHandler(db: Firestore, store: PlatformStateStore, log
     eraseStores: (cleanup, custody) => eraseBuilderAgentStores(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "account erasure requires the PostgreSQL agent-store administration URL"), cleanup, custody),
     sharedGatewayRetired: gatewayId => isRetiredSharedGateway(store, gatewayId, clusterAbsent),
     runtimeAbsent: async (gatewayId, runtime) => runtime === "cluster" ? clusterAbsent(gatewayId) :
-      !await createGatewayComputeClient(logFn).findByLabels({ "octogee-gateway-id": gatewayId.toLowerCase(), "octogee-environment": COMPUTER_ENVIRONMENT }),
+      !await createGatewayComputeClient(store, logFn).findByLabels({ "octogee-gateway-id": gatewayId.toLowerCase(), "octogee-environment": COMPUTER_ENVIRONMENT }),
     ownerHomeAbsent: async uid => {
-      const instances = await createGatewayComputeClient(logFn).list({ labels: { "octogee-owner-uid": uid.toLowerCase(), "octogee-environment": COMPUTER_ENVIRONMENT } });
-      const homes = await createBuilderHomeServices(db, logFn).provider.remainingOwnerHomes(uid);
+      const instances = await createGatewayComputeClient(store, logFn).list({ labels: { "octogee-owner-uid": uid.toLowerCase(), "octogee-environment": COMPUTER_ENVIRONMENT } });
+      const homes = await createBuilderHomeServices(store, logFn).provider.remainingOwnerHomes(uid);
       return instances.length === 0 && homes.length === 0;
     },
     eraseComputer: cloudCleanup.deleteComputer,
     readSharedSource: async gatewayId => {
-      const root = (await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get()).data();
-      const authorization = gatewayAuthorizationFromRootDocument(root, gatewayId);
-      const gateway = authorization?.gateway as DurableGateway | undefined;
+      const gateway = await readDesiredRoot(store, gatewayId) as DurableGateway | null;
       if (!gateway || gateway.gatewayClass !== "shared" || gateway.ownerUid != null ||
           gateway.desiredStatus !== "running" || gateway.desiredRelease !== gateway.liveRelease) return null;
       const diagnostics = await kubeOps.readGatewayPodDiagnostics({ namespace: NAMESPACE, gatewayId });
       if (diagnostics.status !== "ready" || diagnostics.totalPods !== 1 || diagnostics.pods.length !== 1 ||
           diagnostics.pods[0]!.deleting || !diagnostics.pods[0]!.uid) return null;
-      const response = await requestFleetState({ baseUrl: await resolveGatewayUrlFromFirestore(db, gatewayId), gatewayId,
+      const response = await requestFleetState({ baseUrl: await resolveGatewayFleetUrl(store, gatewayId), gatewayId,
         privateKey, timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS, fetchImpl: fetch, newRequestId: randomUUID });
       if (!response.ok) throw new Error(`Customer PostgreSQL erasure source read refused: ${response.status}`);
       const source = await response.json() as SharedAgentErasureSource;
       if (source.podUid !== diagnostics.pods[0]!.uid) throw new Error("Customer PostgreSQL erasure source pod changed");
       return source;
     },
-    unmountSharedCustomer: (cleanup, agentStoreErasure, operation) => callUnmountRpc(db, { privateKey,
+    unmountSharedCustomer: (cleanup, agentStoreErasure, operation) => callUnmountRpc(store, { privateKey,
       gatewayId: cleanup.currentGatewayId!, slug: cleanup.slug, log: logFn, tag: "erase",
       migrationId: `erase-${operation.id}-claim-${operation.startedAt}`, agentStoreErasure }),
   });
@@ -3927,64 +3702,42 @@ function buildEraseCustomerHandler(db: Firestore, store: PlatformStateStore, log
       fetch,
       isOtherCustomerUid: async (distinctId) =>
         FIRESTORE_DOC_ID.test(distinctId) &&
-        (await db.collection("users").doc(distinctId).get()).exists,
+        (await store.builders.records.get(distinctId)) !== null,
     },
   );
   const postHogErasureRequest = async (
     uid: string,
     deletionId: string,
   ): Promise<PostHogErasureRequest> => {
-    const jobRef = db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId);
-    const job = await jobRef.get();
-    if (!job.exists) throw new Error(`deletion job missing: ${deletionId}`);
-    const data = job.data() as Record<string, unknown>;
-    if (data.uid !== uid) throw new Error(`deletion job uid mismatch: ${deletionId}`);
+    const job = await store.jobs.deletions.get(deletionId);
+    if (job === null) throw new Error(`deletion job missing: ${deletionId}`);
+    if (job.uid !== uid) throw new Error(`deletion job uid mismatch: ${deletionId}`);
     return {
       uid,
-      state: readPostHogErasureState(deletionId, data),
-      persistState: async (nextState) => {
-        await jobRef.set({ posthogErasure: nextState, updatedAt: Date.now() }, { merge: true });
-      },
+      state: readPostHogErasureState(deletionId, job),
+      persistState: (nextState) => persistPostHogErasureState(store, deletionId, nextState),
     };
   };
   return createEraseCustomerHandler({
     loadDeletionJob: async (deletionId) => {
-      const snap = await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).get();
-      if (!snap.exists) return null;
-      const data = snap.data() as Record<string, unknown>;
-      if (
-        typeof data.uid !== "string" ||
-        typeof data.eraseAfter !== "number"
-      ) {
-        throw new Error(`deletion job ${deletionId} is malformed`);
-      }
+      const job = await store.jobs.deletions.get(deletionId);
+      if (job === null) return null;
+      if (job.uid === undefined) throw new Error(`deletion job ${deletionId} is malformed`);
       return {
-        uid: data.uid,
-        status: typeof data.status === "string" ? data.status : "malformed",
-        eraseAfter: data.eraseAfter,
-        stripeCustomerIds: Array.isArray(data.stripeCustomerIds)
-          ? data.stripeCustomerIds.filter(
-              (value): value is string => typeof value === "string" && value.length > 0,
-            )
-          : [],
-        archiveId: typeof data.archiveId === "string" ? data.archiveId : null,
-        cleanupContext:
-          data.cleanupContext && typeof data.cleanupContext === "object"
-            ? data.cleanupContext as CustomerCleanupContext
-            : null,
+        uid: job.uid,
+        status: job.status,
+        eraseAfter: job.eraseAfter,
+        stripeCustomerIds: productIds(job.productContext, "stripeCustomerIds"),
+        archiveId: job.archiveId ?? null,
+        cleanupContext: (job.cleanupContext as CustomerCleanupContext | undefined) ?? null,
       };
     },
-    ensureAnonymousArchive: (deletionId) => ensureAnonymousDeletionArchive(db, deletionId),
+    ensureAnonymousArchive: (deletionId) => ensureAnonymousDeletionArchive(db, store, deletionId),
     requestPostHogDeletion: async (uid, deletionId) =>
       postHogErasure.requestDeletion(await postHogErasureRequest(uid, deletionId)),
     confirmPostHogDeletion: async (uid, deletionId) =>
       postHogErasure.confirmDeletion(await postHogErasureRequest(uid, deletionId)),
-    retainPostHogMappingOnly: async (deletionId, archiveId) => {
-      await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).set(
-        postHogMappingOnlyJobUpdate(archiveId, Date.now()),
-        { merge: true },
-      );
-    },
+    retainPostHogMappingOnly: (deletionId, archiveId) => retainPostHogMappingOnly(store, deletionId, archiveId),
     deleteStripeCustomer: (customerId) =>
       deleteStripeCustomer(
         fetch,
@@ -3997,12 +3750,8 @@ function buildEraseCustomerHandler(db: Firestore, store: PlatformStateStore, log
         requireEnv("STRIPE_SECRET_KEY", "customer erasure must discover Stripe PII"),
         uid,
       ),
-    persistStripeCustomerIds: async (deletionId, customerIds) => {
-      await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).set({
-        stripeCustomerIds: customerIds,
-        updatedAt: Date.now(),
-      }, { merge: true });
-    },
+    persistStripeCustomerIds: (deletionId, customerIds) =>
+      persistDeletionProductContext(store, deletionId, { stripeCustomerIds: customerIds }),
     ensureOwnedGatewayRetired: (cleanup, deletionId) =>
       ensureOwnedGatewaysRetired({
         store,
@@ -4067,16 +3816,10 @@ function buildEraseCustomerHandler(db: Firestore, store: PlatformStateStore, log
       return remaining;
     },
     finalizeVerifiedErasure: async (deletionId, archiveId) => {
-      const jobRef = db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId);
-      const archiveRef = db.collection(ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION).doc(archiveId);
-      const batch = db.batch();
-      batch.set(archiveRef, { cleanupOutcomeCodes: ["verified_erasure"] }, { merge: true });
-      batch.set(jobRef, {
-        status: "verified_pending_completion",
-        archiveId,
-        verifiedAt: Date.now(),
-      }, { merge: true });
-      await batch.commit();
+      await store.transaction({ label: "erase-customer.finalize-verified" }, async (tx) => {
+        await tx.jobs.archives.merge(archiveId, { cleanupOutcomeCodes: ["verified_erasure"] });
+        await tx.jobs.deletions.patch(deletionId, { status: "verified_pending_completion", archiveId, verifiedAt: Date.now() });
+      });
     },
     now: () => Date.now(),
   });
@@ -4093,37 +3836,20 @@ function buildSuspendCustomerHandler(
   return createSuspendCustomerHandler({
     assertRestoreNotInProgress: (uid) => assertCustomerRestoreNotInProgress(store, uid),
     loadDeletionJob: async (deletionId) => {
-      const snap = await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).get();
-      if (!snap.exists) return null;
-      const data = snap.data() as Record<string, unknown>;
+      const job = await store.jobs.deletions.get(deletionId);
+      if (job === null) return null;
       return {
-        uid: typeof data.uid === "string" ? data.uid : "",
-        slug: typeof data.slug === "string" ? data.slug : null,
-        currentGatewayId:
-          typeof data.currentGatewayId === "string" ? data.currentGatewayId : null,
-        stripeCustomerIds: Array.isArray(data.stripeCustomerIds)
-          ? data.stripeCustomerIds.filter(
-              (value): value is string => typeof value === "string" && value.length > 0,
-            )
-          : [],
-        stripeSubscriptionIds: Array.isArray(data.stripeSubscriptionIds)
-          ? data.stripeSubscriptionIds.filter(
-              (value): value is string => typeof value === "string" && value.length > 0,
-            )
-          : [],
-        cleanupContext:
-          data.cleanupContext && typeof data.cleanupContext === "object"
-            ? data.cleanupContext as CustomerCleanupContext
-            : null,
+        uid: job.uid ?? "",
+        slug: job.slug ?? null,
+        currentGatewayId: job.currentGatewayId ?? null,
+        stripeCustomerIds: productIds(job.productContext, "stripeCustomerIds"),
+        stripeSubscriptionIds: productIds(job.productContext, "stripeSubscriptionIds"),
+        cleanupContext: (job.cleanupContext as CustomerCleanupContext | undefined) ?? null,
       };
     },
     loadCleanupContext: (uid) => loadCustomerCleanupContext({ store, accounts: firestoreBuilderAccountReader(db), db }, uid),
-    persistCleanupContext: async (deletionId, cleanupContext) => {
-      await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).set(
-        { cleanupContext, status: "suspending", updatedAt: Date.now() },
-        { merge: true },
-      );
-    },
+    persistCleanupContext: (deletionId, cleanupContext) =>
+      store.jobs.deletions.patch(deletionId, { cleanupContext: cleanupContext as unknown as OpaqueMap, status: "suspending", updatedAt: Date.now() }),
     suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
     cancelCustomerMigrations: (uid, deletionId) =>
       cancelCustomerMigrationsForSuspension(store, uid, deletionId, Date.now()),
@@ -4161,16 +3887,11 @@ function buildSuspendCustomerHandler(
         requireEnv("STRIPE_SECRET_KEY", "customer suspension must close Stripe checkout"),
         sessionId,
       ),
-    persistStripeBillingRefs: async (deletionId, customerIds, subscriptionIds) => {
-      await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).set({
-        stripeCustomerIds: customerIds,
-        stripeSubscriptionIds: subscriptionIds,
-        updatedAt: Date.now(),
-      }, { merge: true });
-    },
+    persistStripeBillingRefs: (deletionId, customerIds, subscriptionIds) =>
+      persistDeletionProductContext(store, deletionId, { stripeCustomerIds: customerIds, stripeSubscriptionIds: subscriptionIds }),
     revokeConnectorGrants: (uid) =>
       revokeAllConnectorGrantsForUser(uid, CONNECTOR_OAUTH_REVOCATION_TARGETS, {
-        secrets: createFirestorePlatformStateStore({ db }).secrets,
+        secrets: store.secrets,
         decryptSecret: decryptConnectorSecret,
         logger: { warn: logFn },
       }),
@@ -4188,11 +3909,7 @@ function buildSuspendCustomerHandler(
       });
       for (const userId of userIds) await mattermost.destroyUser(userId);
     },
-    deleteProjectAgentCredentialDocs: async (docPaths) => {
-      const batch = db.batch();
-      for (const docPath of docPaths) batch.delete(db.doc(docPath));
-      await batch.commit();
-    },
+    deleteProjectAgentCredentialDocs: (docPaths) => deleteProjectAgentCredentialSecrets(store, docPaths),
     ensureOwnedGatewaysRetired: (uid, deletionId) =>
       ensureOwnedGatewaysRetired({
         store,
@@ -4218,37 +3935,31 @@ function createCustomerDeletionUnmount(
     isRetiredSharedGateway: (gatewayId) => isRetiredSharedGateway(store, gatewayId,
       (id) => retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, id, deploymentNameForInstance(id))),
     isGatewayAbsent: async (gatewayId) => {
-      const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
-      const [root, runtime, assignments, users] = await Promise.all([
-        rootRef.get(),
-        db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get(),
-        rootRef.collection("assignments").limit(1).get(),
-        db.collection("users").where("provisioning.openclaw.gatewayId", "==", gatewayId).limit(1).get(),
+      const [root, runtime, unassigned, builders] = await Promise.all([
+        store.gateways.roots.get(gatewayId),
+        store.fleetRegistry.get(gatewayId),
+        store.gateways.assignments.isEmpty(gatewayId),
+        store.builders.records.listByGateway(gatewayId, { limit: 1 }),
       ]);
-      return !root.exists && !runtime.exists && assignments.empty && users.empty &&
+      return root === null && runtime === null && unassigned && builders.length === 0 &&
         await retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(gatewayId));
     },
     resolveGatewayUnmountTarget: async (gatewayId) => {
-      const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-      const authorization = gatewayAuthorizationFromRootDocument(
-        rootSnap.exists ? rootSnap.data() : undefined,
-        gatewayId,
-      );
+      const authorization = await readGatewayAuthorizationInStore(store, gatewayId);
       if (!authorization) return null;
-      const runtimeSnap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-      const runtime = runtimeSnap.exists ? runtimeSnap.data() : undefined;
-      if (!isGatewayRuntimeDoc(runtime) || runtime.lifecycle !== "serving") return null;
+      const runtime = await store.fleetRegistry.get(gatewayId);
+      if (runtime?.lifecycle !== "serving") return null;
       return {
         gatewayId,
         revisionId: gatewayId,
         profile: authorization.config.profile ?? "standard",
-        runtime: resolveGatewayRuntime(runtimeSnap.data()?.runtime),
+        runtime: resolveGatewayRuntime(runtime.runtime),
       };
     },
     isRuntimeAbsent: (gatewayId, revisionId) =>
       retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(revisionId)),
     unmountRpc: ({ gatewayId, slug }) =>
-      callUnmountRpc(db, { privateKey, gatewayId, slug, log: logFn, allowUnready: true }),
+      callUnmountRpc(store, { privateKey, gatewayId, slug, log: logFn, allowUnready: true }),
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
     log: logFn,
@@ -4279,19 +3990,18 @@ function buildDeprovisionCustomerHandler(
   });
 }
 
-function createBuilderHomeServices(db: Firestore, log: (message: string) => void) {
+function createBuilderHomeServices(store: PlatformStateStore, log: (message: string) => void) {
   const homeCopyRequest: ComputeRequest = async ({ url, method, body }) => {
     const auth = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
     const client = await auth.getClient();
     const result = await client.request({ url, method, ...(body === undefined ? {} : { data: body }) });
     return { status: result.status, data: result.data };
   };
-  const store = createFirestorePlatformStateStore({ db });
   const homeJournal = <T>(what: string, uid: string, action: () => Promise<T>) => runNormalFleetMutation(store, {
     actor: "cowboy", forced: false, what, why: "Migrate the Builder home without removing its verified source", target: { ownerUid: uid }, preActionStatus: {}, mutation: { action: what }, action,
   });
   const provider = createBuilderHomeProvider({ store, projectId: gatewayComputeProjectId(), environment: COMPUTER_ENVIRONMENT,
-    request: homeCopyRequest, vm: createGatewayComputeClient(log), journal: homeJournal });
+    request: homeCopyRequest, vm: createGatewayComputeClient(store, log), journal: homeJournal });
   return {
     provider,
     copy: createHomeCopyClient({ request: homeCopyRequest, projectId: gatewayComputeProjectId(), journal: (what, input, action) => homeJournal(what, input.ownerUid, action) }),
@@ -4346,8 +4056,8 @@ function buildCustomerCloudCleanupDeps(db: Firestore, store: PlatformStateStore,
             const runtime = vmGatewayRuntimeRef.current;
             if (!runtime) throw new Error("the VM gateway runtime is not initialised; cannot delete the Builder's computer");
             const deleted = await runtime.deleteComputer(uid);
-            const homes = createBuilderHomeServices(db, logFn);
-            if (!await eraseBuilderHomeMigrationStorage({ store: createFirestorePlatformStateStore({ db }), removeStoppedHome: homes.provider.removeStoppedHome, copy: homes.copy, remainingOwnerHomes: homes.provider.remainingOwnerHomes, log: logFn }, uid)) {
+            const homes = createBuilderHomeServices(store, logFn);
+            if (!await eraseBuilderHomeMigrationStorage({ store, removeStoppedHome: homes.provider.removeStoppedHome, copy: homes.copy, remainingOwnerHomes: homes.provider.remainingOwnerHomes, log: logFn }, uid)) {
               throw new Error("Builder home cleanup is still converging; erasure tracking retained for retry");
             }
             return deleted;
@@ -4388,7 +4098,7 @@ function buildCustomerCloudCleanupDeps(db: Firestore, store: PlatformStateStore,
 }
 
 export async function callUnmountRpc(
-  db: Firestore,
+  state: GatewayRuntimeReader,
   opts: {
     privateKey: string;
     gatewayId: string;
@@ -4410,7 +4120,7 @@ export async function callUnmountRpc(
     timeoutMs = MIGRATION_UNMOUNT_TIMEOUT_MS,
   } = opts;
 
-  const url = await resolveGatewayUrlFromFirestore(db, gatewayId, { allowUnready: opts.allowUnready === true });
+  const url = await resolveGatewayFleetUrl(state, gatewayId, { allowUnready: opts.allowUnready === true });
   const migrationId = opts.migrationId ?? `${tag}-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const body = JSON.stringify({ migrationId, slug, ...(opts.agentStoreErasure ? { agentStoreErasure: opts.agentStoreErasure } : {}) });
   const signature = signFleetRequest(
@@ -4464,14 +4174,13 @@ function assertExactCustomerUnmountResponse(value: unknown, migrationId: string,
   }
 }
 
-async function resolveGatewayUrlFromFirestore(
-  db: Firestore,
+async function resolveGatewayFleetUrl(
+  state: GatewayRuntimeReader,
   gatewayId: string,
   options?: { allowUnready: boolean },
 ): Promise<string> {
-  const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const runtime = doc.exists ? doc.data() : undefined;
-  if (!isGatewayRuntimeDoc(runtime) || runtime.gatewayId !== gatewayId) {
+  const runtime = await state.fleetRegistry.get(gatewayId);
+  if (runtime === null) {
     throw new Error(`gateway not registered in glmGateways: ${gatewayId}`);
   }
   if (options?.allowUnready) return resolveMigrationRecoveryUrl({
@@ -4486,57 +4195,30 @@ async function resolveGatewayUrlFromFirestore(
 // whose runtime is not marked failed — a paused root's pending state may be an
 // intentional scale-to-zero mid-flight, and a failed runtime needs an operator.
 export async function isRecoverableGatewayRelease(
-  db: Firestore,
+  state: GatewayStateReader,
   gatewayId: string,
 ): Promise<boolean> {
-  const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const authorization = gatewayAuthorizationFromRootDocument(
-    snap.exists ? snap.data() : undefined,
-    gatewayId,
-  );
+  const authorization = await readGatewayAuthorizationInStore(state, gatewayId);
   if (!authorization || authorization.gateway.desiredStatus !== "running") return false;
-  const runtimeSnap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const runtime = runtimeSnap.exists ? runtimeSnap.data() : undefined;
-  if (isGatewayRuntimeDoc(runtime) && runtime.lifecycle === "failed") return false;
-  return true;
+  return (await state.fleetRegistry.get(gatewayId))?.lifecycle !== "failed";
 }
 
-async function isServingGateway(
-  db: Firestore,
-  gatewayId: string,
-): Promise<boolean> {
-  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const value = snap.exists ? snap.data() : undefined;
-  return isGatewayRuntimeDoc(value) && value.gatewayId === gatewayId &&
-    value.lifecycle === "serving";
-}
-
-export function durableRolloutGateway(
-  value: unknown,
-  gatewayId: string,
-): GatewayDoc | null {
-  const authorization = gatewayAuthorizationFromRootDocument(value, gatewayId);
-  return authorization ? authorization.gateway : null;
-}
-
-export async function resolvePlacementFromFirestore(
-  db: Firestore,
+export async function resolveGatewayPlacement(
+  state: GatewayStateReader,
   toGatewayId: string,
 ): Promise<
   | { ok: true; revisionId: string; release: number | null; gatewayClass: GatewayClass }
   | { ok: false; reason: "no-live-revision" | "revision-not-ready" }
   | null
 > {
-  const snap = await db.collection(GATEWAYS_COLLECTION).doc(toGatewayId).get();
-  if (!snap.exists) return null;
-  const authorization = gatewayAuthorizationFromRootDocument(snap.data(), toGatewayId);
+  const authorization = await readGatewayAuthorizationInStore(state, toGatewayId);
   if (!authorization) return null;
   const gateway = authorization.gateway as DurableGateway;
   if (gateway.desiredStatus !== "running") {
     return { ok: false, reason: "revision-not-ready" };
   }
   if (gateway.liveRelease == null) return { ok: false, reason: "no-live-revision" };
-  const ready = await isServingGateway(db, toGatewayId);
+  const ready = await isServingRuntime(state, toGatewayId);
   if (!ready) return { ok: false, reason: "revision-not-ready" };
   return {
     ok: true,
@@ -4551,7 +4233,7 @@ export async function resolvePlacementFromFirestore(
 }
 
 export async function resolveLiveRevisionAsSource(
-  db: Firestore,
+  state: GatewayStateReader,
   gatewayId: string,
 ): Promise<{
   revisionId: string;
@@ -4561,9 +4243,7 @@ export async function resolveLiveRevisionAsSource(
   rootUpdatedAt: number;
   gatewayClass?: GatewayClass;
 } | null> {
-  const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-  if (!snap.exists) return null;
-  const authorization = gatewayAuthorizationFromRootDocument(snap.data(), gatewayId);
+  const authorization = await readGatewayAuthorizationInStore(state, gatewayId);
   if (!authorization) return null;
   const gateway = authorization.gateway as DurableGateway;
   if (
@@ -4574,7 +4254,7 @@ export async function resolveLiveRevisionAsSource(
   ) {
     return null;
   }
-  const ready = await isServingGateway(db, gatewayId);
+  const ready = await isServingRuntime(state, gatewayId);
   return ready
     ? {
         revisionId: gatewayId,
@@ -4586,8 +4266,8 @@ export async function resolveLiveRevisionAsSource(
     : null;
 }
 
-export async function resolveSourceRevisionFromFirestore(
-  db: Firestore,
+export async function resolveSourceRevision(
+  state: GatewayStateReader,
   uid: string,
   gatewayId: string,
 ): Promise<{
@@ -4598,13 +4278,9 @@ export async function resolveSourceRevisionFromFirestore(
   rootUpdatedAt?: number;
   gatewayClass?: GatewayClass;
 } | null> {
-  const assignment = await readAssignmentDoc(db, gatewayId, uid);
-  if (!assignment) return resolveLiveRevisionAsSource(db, gatewayId);
-  const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const authorization = gatewayAuthorizationFromRootDocument(
-    rootSnap.exists ? rootSnap.data() : undefined,
-    gatewayId,
-  );
+  const assignment = await state.gateways.assignments.get(gatewayId, uid);
+  if (!assignment) return resolveLiveRevisionAsSource(state, gatewayId);
+  const authorization = await readGatewayAuthorizationInStore(state, gatewayId);
   if (!authorization) return null;
   const gateway = authorization.gateway as DurableGateway;
   if (
@@ -4614,7 +4290,7 @@ export async function resolveSourceRevisionFromFirestore(
     return null;
   }
   if (typeof gateway.liveRelease !== "number") return null;
-  const ready = await isServingGateway(db, gatewayId);
+  const ready = await isServingRuntime(state, gatewayId);
   if (!ready) return null;
   return {
     revisionId: gatewayId,

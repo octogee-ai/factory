@@ -26,7 +26,7 @@ function seedTier(tier: string, files: string[]): void {
 
 async function load() {
   const mod = await import(
-    "../lib/provisionSteps.ts?t=" + Date.now()
+    "../lib/tier-template-files.ts?t=" + Date.now()
   );
   return mod;
 }

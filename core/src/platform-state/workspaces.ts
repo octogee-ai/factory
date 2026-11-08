@@ -24,6 +24,7 @@ export type WorkspacePatch = RecordPatch<Omit<WorkspaceRecord, "updatedAt">, "sl
 export interface WorkspaceRecordsRepository {
   get(slug: string): Promise<Stored<WorkspaceRecord> | null>;
   listByOwner(ownerUid: string): Promise<readonly Stored<WorkspaceRecord>[]>;
+  findByMattermostTeamId(mattermostTeamId: string): Promise<Stored<WorkspaceRecord> | null>;
   put(record: WorkspaceInput): Promise<void>;
   patch(slug: string, patch: WorkspacePatch, fence?: { readonly revision?: Revision }): Promise<void>;
   delete(slug: string): Promise<void>;
@@ -37,14 +38,35 @@ export interface WorkspaceMember {
   readonly role: WorkspaceMemberRole;
   readonly joinedAt: number | null;
   readonly mattermostUserId: string | null;
+  readonly mattermostChannelId: string | null;
+  readonly canonicalSource: string | null;
+  readonly canonicalState: string | null;
 }
+
+type WorkspaceMemberCanonicalFields = "mattermostChannelId" | "canonicalSource" | "canonicalState";
+
+export type WorkspaceMemberInput = Omit<WorkspaceMember, "joinedAt" | WorkspaceMemberCanonicalFields> &
+  Partial<Pick<WorkspaceMember, WorkspaceMemberCanonicalFields>> & {
+    readonly joinedAt: TimeInput | null;
+  };
 
 export interface WorkspaceMembersRepository {
   get(workspaceSlug: string, uid: string): Promise<Stored<WorkspaceMember> | null>;
   list(workspaceSlug: string): Promise<readonly Stored<WorkspaceMember>[]>;
   listForUid(uid: string): Promise<readonly Stored<WorkspaceMember>[]>;
-  put(member: Omit<WorkspaceMember, "joinedAt"> & { readonly joinedAt: TimeInput | null }): Promise<void>;
+  put(member: WorkspaceMemberInput): Promise<void>;
   delete(workspaceSlug: string, uid: string): Promise<void>;
+}
+
+export interface WorkspaceProjectMember {
+  readonly workspaceSlug: string;
+  readonly projectSlug: string;
+  readonly uid: string;
+  readonly role: WorkspaceMemberRole;
+}
+
+export interface WorkspaceProjectMembersRepository {
+  get(workspaceSlug: string, projectSlug: string, uid: string): Promise<Stored<WorkspaceProjectMember> | null>;
 }
 
 export interface WorkspaceProject {
@@ -110,6 +132,10 @@ export interface WorkspaceChannel {
   readonly createdAt: number | null;
 }
 
+export type WorkspaceChannelPatch = RecordPatch<Omit<WorkspaceChannel, "archivedAt">, "scope" | "channelId" | "createdAt"> & {
+  readonly archivedAt?: TimeInput | ClearField | null;
+};
+
 export interface WorkspaceChannelsRepository {
   get(scope: WorkspaceChannelScope, channelId: string): Promise<Stored<WorkspaceChannel> | null>;
   list(scope: WorkspaceChannelScope): Promise<readonly Stored<WorkspaceChannel>[]>;
@@ -118,7 +144,7 @@ export interface WorkspaceChannelsRepository {
   patch(
     scope: WorkspaceChannelScope,
     channelId: string,
-    patch: RecordPatch<WorkspaceChannel, "scope" | "channelId" | "createdAt">,
+    patch: WorkspaceChannelPatch,
   ): Promise<void>;
   delete(scope: WorkspaceChannelScope, channelId: string): Promise<void>;
 }
@@ -141,6 +167,7 @@ export interface WorkspaceRepositories {
   readonly records: WorkspaceRecordsRepository;
   readonly members: WorkspaceMembersRepository;
   readonly projects: WorkspaceProjectsRepository;
+  readonly projectMembers: WorkspaceProjectMembersRepository;
   readonly channels: WorkspaceChannelsRepository;
   readonly agentIdentities: BuilderAgentIdentitiesRepository;
 }

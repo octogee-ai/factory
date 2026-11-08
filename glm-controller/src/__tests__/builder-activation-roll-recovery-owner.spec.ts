@@ -181,10 +181,10 @@ describe('retained rollback proof fences the entire source-recovery custody peri
     const h = fixture(); await h.run();
     const operation = h.documents.get(`glmOperations/${h.operationId}`) as Operation;
     Object.assign(operation, { status: 'running', startedAt: 6000 });
-    const completion = buildOperationCompletionUpdate({ op: operation, result: { success: false, steps: [], error: 'target cleanup refused' }, steps: [], now: 7000 });
-    Object.assign(operation, completion);
-    expect(operation.status).toBe('failed');
-    expect(hasBuilderActivationTargetRollback(operation)).toBe(true);
+    await h.store.journal.operations.patch(h.operationId, buildOperationCompletionUpdate({ op: operation, result: { success: false, steps: [], error: 'target cleanup refused' }, steps: [], now: 7000 }));
+    const failed = h.documents.get(`glmOperations/${h.operationId}`) as Operation;
+    expect(failed.status).toBe('failed');
+    expect(hasBuilderActivationTargetRollback(failed)).toBe(true);
     expect(await rearmOwnedLegacyMigration({ store: h.store, operationId: h.operationId, now: 8000, admitted: () => true })).toBe(true);
     const current = await readBuilderActivationRollRecovery({ state: h.store, gatewayId: 'builder-a' });
     expect(current!.operation).toMatchObject({ status: 'pending', startedAt: null });

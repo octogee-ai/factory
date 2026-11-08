@@ -929,10 +929,40 @@ CREATE TRIGGER platform_config_change AFTER INSERT OR UPDATE OR DELETE ON platfo
   FOR EACH ROW EXECUTE FUNCTION record_change('config', 'watch_key');
 `;
 
+const PROJECT_MEMBERS = String.raw`
+CREATE TABLE workspace_project_members (
+  workspace_slug text NOT NULL,
+  project_slug text NOT NULL,
+  uid text NOT NULL,
+  role text NOT NULL CHECK (role IN ('owner', 'member')),
+  revision bigint NOT NULL DEFAULT nextval('record_revision_seq'),
+  PRIMARY KEY (workspace_slug, project_slug, uid),
+  FOREIGN KEY (workspace_slug, project_slug) REFERENCES workspace_projects (workspace_slug, project_slug) ON DELETE CASCADE
+);
+CREATE TRIGGER workspace_project_members_revision BEFORE UPDATE ON workspace_project_members
+  FOR EACH ROW EXECUTE FUNCTION bump_revision();
+CREATE INDEX workspaces_mattermost_team_idx ON workspaces (mattermost_team_id);
+`;
+
+const OPERATION_PORT_FIDELITY = String.raw`
+ALTER TABLE operations ALTER COLUMN input DROP NOT NULL;
+ALTER TABLE operations ALTER COLUMN created_by DROP NOT NULL;
+ALTER TABLE operations ALTER COLUMN superseded_by TYPE jsonb USING superseded_by::jsonb;
+`;
+
+const CANONICAL_MEMBERSHIPS = String.raw`
+ALTER TABLE workspace_members ADD COLUMN mattermost_channel_id text;
+ALTER TABLE workspace_members ADD COLUMN canonical_source text;
+ALTER TABLE workspace_members ADD COLUMN canonical_state text;
+`;
+
 export const PLATFORM_STATE_MIGRATIONS: readonly PlatformStateMigration[] = [
   { version: 1, name: "core-schema", sql: CORE_SCHEMA },
   { version: 2, name: "change-feed", sql: CHANGE_FEED },
   { version: 3, name: "builder-constraints", sql: BUILDER_CONSTRAINTS },
   { version: 4, name: "workspace-and-job-fidelity", sql: WORKSPACE_AND_JOB_FIDELITY },
   { version: 5, name: "gateway-aggregate-fences", sql: GATEWAY_AGGREGATE_FENCES },
+  { version: 6, name: "project-members", sql: PROJECT_MEMBERS },
+  { version: 7, name: "operation-port-fidelity", sql: OPERATION_PORT_FIDELITY },
+  { version: 8, name: "canonical-memberships", sql: CANONICAL_MEMBERSHIPS },
 ];

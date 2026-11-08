@@ -1,5 +1,5 @@
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { describe, expect, it } from "vitest";
-import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { sharedAgentAnchorMigrationScope, sharedAssignedSourceSurgeAnchorScope } from "./shared-agent-anchor-migration.js";
 
 function fixture(kind: "v2" | "legacy" = "v2") {
@@ -14,21 +14,16 @@ function fixture(kind: "v2" | "legacy" = "v2") {
     forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 7 } };
   const operation: Record<string, any> = { kind: "migrate-customer", status: "running", startedAt: 50, cancellationRequestedAt: 60,
     input: { uid: "uid-bob", fromGatewayId: source, toGatewayId: target }, ...(kind === "v2" ? { customerMigrationV2: v2 } : { schedulerHandoff: handoff }) };
-  const assigned = { uid: "uid-bob", slug: "bob", gatewayId: source, epoch: 7, state: "quiescing", updatedByOperationId: operationId };
-  const records: Record<string, unknown> = {
+  const assigned = { uid: "uid-bob", slug: "bob", gatewayId: source, source: "migrate-customer", epoch: 7, state: "quiescing", updatedByOperationId: operationId };
+  const records: Record<string, Record<string, unknown>> = {
     [`glmOperations/${operationId}`]: operation, [`gateways/${source}`]: root(source), [`gateways/${target}`]: root(target),
     [`gateways/${source}/assignments/uid-bob`]: assigned,
     "users/uid-bob": { username: "bob", provisioning: { openclaw: { gatewayId: source, migration: { operationId, state: "moving" } } } },
   };
-  const collection = (path: string): any => ({ path, query: true, where: () => collection(path), limit: () => collection(path), doc: (id: string) => ({ path: `${path}/${id}`, collection: (name: string) => collection(`${path}/${id}/${name}`) }) });
-  const db = { collection } as unknown as Firestore;
-  const txn = { get: async (ref: { path: string; query?: boolean }) => ref.query
-    ? { size: Object.keys(records).filter(path => path.startsWith(`${ref.path}/`)).length,
-      docs: Object.entries(records).filter(([path]) => path.startsWith(`${ref.path}/`)).map(([path, data]) => ({ id: path.split("/").at(-1), data: () => data })) }
-    : { exists: Object.hasOwn(records, ref.path), data: () => records[ref.path] } } as unknown as Transaction;
+  const store = createDocumentFixtureStore(records);
   const request = { gatewayId: target, slug: "bob", migrationId };
   const expected = { migrationId, claimStartedAt: 50, sourceGatewayId: source, sourceEpoch: 7 };
-  return { operation, v2, handoff, assigned, records, db, txn, source, target, read: (changes = {}) => sharedAgentAnchorMigrationScope(db, txn, { ...request, ...changes }), expected };
+  return { operation, v2, handoff, assigned, records, store, source, target, read: (changes = {}) => sharedAgentAnchorMigrationScope(store, { ...request, ...changes }), expected };
 }
 
 describe("cancelled Shared migration anchor custody", () => {
@@ -73,8 +68,8 @@ function surgeFixture() {
   const request = { gatewayId: f.target, slug: "bob", migrationId, podUid: receiving };
   const expected = { migrationId, claimStartedAt: 50, sourceGatewayId: f.target, sourceEpoch: 7 };
   return { ...f, marker, assignment, receiving, original, sourcePod, expected,
-    readTarget: (podUid = receiving) => sharedAgentAnchorMigrationScope(f.db, f.txn, { ...request, podUid, expected }),
-    readSource: (podUid = sourcePod) => sharedAssignedSourceSurgeAnchorScope(f.db, f.txn, { ...request, podUid, uid: "uid-bob" }),
+    readTarget: (podUid = receiving) => sharedAgentAnchorMigrationScope(f.store, { ...request, podUid, expected }),
+    readSource: (podUid = sourcePod) => sharedAssignedSourceSurgeAnchorScope(f.store, { ...request, podUid, uid: "uid-bob" }),
   };
 }
 
@@ -87,13 +82,17 @@ describe("Shared surge rebound receiving pod", () => {
     expect(await f.readSource(f.receiving)).toBeNull();
     expect(await f.readSource()).toMatchObject({ sourceSurge: f.expected });
   });
-  it.each(["missing", "operation", "logical-target", "receiving", "malformed"])("rejects replacement receiving authority after %s marker changes", async change => {
+  it.each(["missing", "logical-target", "receiving", "malformed"])("rejects replacement receiving authority after %s marker changes", async change => {
     const f = surgeFixture();
     if (change === "missing") delete f.assignment.sharedSurgeForwardRecovery;
-    if (change === "operation") f.marker.operationId = "other";
     if (change === "logical-target") f.marker.targetPodUid = f.sourcePod;
     if (change === "receiving") f.marker.receivingPodUid = f.sourcePod;
     if (change === "malformed") f.marker.receivingPodUid = "not-a-pod-uid";
     expect(await f.readTarget()).toBeNull();
+  });
+  it("fails closed on a receiving marker that names another operation than the assignment", async () => {
+    const f = surgeFixture();
+    f.marker.operationId = "other";
+    await expect(f.readTarget()).rejects.toMatchObject({ name: "MalformedRecordError" });
   });
 });

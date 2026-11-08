@@ -1,6 +1,5 @@
-import type { Firestore } from "firebase-admin/firestore";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import { parseAgentId } from "@octogee/shared/types/identity";
-import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 import { logger as defaultLogger } from "../../../gateway-edge/src/middleware/logging.js";
 import type { FanOutResult, NotificationEvent } from "../../../gateway-edge/src/notifications/types.js";
 import { findAssignedUserByAgentId } from "../routes/fleet-broker.js";
@@ -29,7 +28,7 @@ type FanOut = (event: NotificationEvent, targetUserIds: string[]) => Promise<Fan
 type DenialLogger = Pick<typeof defaultLogger, "warn" | "error">;
 
 export interface TenantDenialReporterOptions {
-  db?: Pick<Firestore, "collection">;
+  store: PlatformStateRepositories;
   logger?: DenialLogger;
   fanOut?: FanOut;
   now?: () => number;
@@ -68,12 +67,12 @@ export function tenantDenialNotification(
 }
 
 async function resolveAffectedUid(
-  db: Pick<Firestore, "collection">,
+  store: PlatformStateRepositories,
   tenant: Extract<TenantDenialTenant, { kind: "gateway" }>,
   agentId: string | null,
 ): Promise<string | null> {
   if (agentId && parseAgentId(agentId).kind !== "unknown") {
-    const assigned = await findAssignedUserByAgentId(db as Firestore, tenant.gatewayId, agentId);
+    const assigned = await findAssignedUserByAgentId(store, tenant.gatewayId, agentId);
     if (assigned) return assigned.uid;
   }
   return tenant.ownerUid ?? null;
@@ -84,8 +83,7 @@ async function defaultFanOut(event: NotificationEvent, targetUserIds: string[]):
   return fanOutNotification(event, targetUserIds);
 }
 
-export function createTenantDenialReporter(opts: TenantDenialReporterOptions = {}): TenantDenialReporter {
-  const db = opts.db ?? defaultDb;
+export function createTenantDenialReporter(opts: TenantDenialReporterOptions): TenantDenialReporter {
   const logger = opts.logger ?? defaultLogger;
   const fanOut = opts.fanOut ?? defaultFanOut;
   const now = opts.now ?? Date.now;
@@ -104,7 +102,7 @@ export function createTenantDenialReporter(opts: TenantDenialReporterOptions = {
     const gatewayDenial = denial as TenantDenial & { tenant: { kind: "gateway"; gatewayId: string } };
 
     try {
-      const uid = await resolveAffectedUid(db, gatewayDenial.tenant, denial.agentId);
+      const uid = await resolveAffectedUid(opts.store, gatewayDenial.tenant, denial.agentId);
       if (!uid) {
         logger.warn("[tenant-enforcement] denial names no assigned Builder; inbox notification skipped", fields);
         return;

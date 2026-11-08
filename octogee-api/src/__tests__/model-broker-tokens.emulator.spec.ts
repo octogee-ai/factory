@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import { createFirestorePlatformStateStore, MalformedRecordError } from "@octogee/core/platform-state";
 import {
   MODEL_BROKER_GATEWAY_POINTERS_COLLECTION,
   MODEL_BROKER_TOKENS_COLLECTION,
-  createFirestoreModelBrokerTokenStore,
+} from "@octogee/shared/types/model-broker-usage";
+
+import {
+  createModelBrokerTokenStore,
   hashModelBrokerToken,
 } from "../lib/model-broker-tokens.js";
 import {
@@ -27,7 +31,7 @@ function randomBytes(fill: number): (size: number) => Buffer {
 describe("Firestore model broker token store", () => {
   it("issues, looks up, revokes the previous token on reissue, and revokes active tokens", async () => {
     const db = getAdminDb();
-    const store = createFirestoreModelBrokerTokenStore(db);
+    const store = createModelBrokerTokenStore(createFirestorePlatformStateStore({ db }));
 
     const first = await store.issueToken({
       ...gatewayTokenInput,
@@ -82,7 +86,7 @@ describe("Firestore model broker token store", () => {
 
   it("scopes revocation by pointerKey so per-customer tokens on a shared gateway are independent", async () => {
     const db = getAdminDb();
-    const store = createFirestoreModelBrokerTokenStore(db);
+    const store = createModelBrokerTokenStore(createFirestorePlatformStateStore({ db }));
 
     const perCustomer = (ownerUid: string, fill: number, now: number) =>
       store.issueToken({
@@ -123,7 +127,7 @@ describe("Firestore model broker token store", () => {
 
   it("skipPointer mints a standalone TTL-bounded token — a re-mint never revokes the in-flight one", async () => {
     const db = getAdminDb();
-    const store = createFirestoreModelBrokerTokenStore(db);
+    const store = createModelBrokerTokenStore(createFirestorePlatformStateStore({ db }));
 
     const mint = (fill: number, now: number) =>
       store.issueToken({
@@ -169,9 +173,9 @@ describe("Firestore model broker token store", () => {
     await expect(store.lookupToken(first.token, 1_000 + 3_600 * 1000 + 1)).resolves.toMatchObject({ outcome: "expired" });
   });
 
-  it("fails closed for malformed token records", async () => {
+  it("refuses a malformed token record instead of answering for it", async () => {
     const db = getAdminDb();
-    const store = createFirestoreModelBrokerTokenStore(db);
+    const store = createModelBrokerTokenStore(createFirestorePlatformStateStore({ db }));
     const token = "ogk_jack_malformed";
     const tokenHash = hashModelBrokerToken(token);
 
@@ -185,21 +189,23 @@ describe("Firestore model broker token store", () => {
       revoked: false,
     });
 
-    await expect(store.lookupToken(token, 1_001)).resolves.toEqual({ outcome: "unknown" });
+    await expect(store.lookupToken(token, 1_001)).rejects.toBeInstanceOf(MalformedRecordError);
   });
 
   it("does not create revoked-only tombstone docs for stale reissue pointers", async () => {
     const db = getAdminDb();
-    const store = createFirestoreModelBrokerTokenStore(db);
+    const store = createModelBrokerTokenStore(createFirestorePlatformStateStore({ db }));
 
     await db.collection(MODEL_BROKER_GATEWAY_POINTERS_COLLECTION).doc("jack").set({
       gatewayId: "jack",
+      ownerUid: "uid-jack",
       provider: "anthropic",
       secretName: "gateway-model-key-jack",
       tokenHash: "missing-token-hash",
+      updatedAt: 3_000,
     });
 
-    await store.issueToken({
+    const issued = await store.issueToken({
       ...gatewayTokenInput,
       now: 4_000,
       randomBytes: randomBytes(4),
@@ -210,5 +216,7 @@ describe("Firestore model broker token store", () => {
       .doc("missing-token-hash")
       .get();
     expect(staleToken.exists).toBe(false);
+    const pointer = await db.collection(MODEL_BROKER_GATEWAY_POINTERS_COLLECTION).doc("jack").get();
+    expect(pointer.data()).toMatchObject({ tokenHash: issued.record.tokenHash, updatedAt: 4_000 });
   });
 });

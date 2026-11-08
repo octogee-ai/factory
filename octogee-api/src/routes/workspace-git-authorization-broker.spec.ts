@@ -1,29 +1,18 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Firestore } from "firebase-admin/firestore";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
 import { createWorkspaceGitAuthorizationBrokerRoutes } from "./workspace-git-authorization-broker.js";
 
 const resolveTarget = vi.fn();
 
-function fakeDb(assigned: Array<{ uid: string; gatewayId: string; slug: string }>): Firestore {
-  return {
-    collection: (name: string) => ({
-      where: (_field: string, _op: string, gatewayId: string) => ({
-        get: async () => ({
-          docs: name === "users"
-            ? assigned
-              .filter((user) => user.gatewayId === gatewayId)
-              .map((user) => ({
-                id: user.uid,
-                data: () => ({ provisioning: { openclaw: { gatewayId: user.gatewayId, slug: user.slug } } }),
-              }))
-            : [],
-        }),
-      }),
-    }),
-  } as unknown as Firestore;
+function assignedStore(assigned: Array<{ uid: string; gatewayId: string; slug: string }>): PlatformStateStore {
+  return createDocumentFixtureStore(Object.fromEntries(assigned.map((user) => [
+    `users/${user.uid}`,
+    { provisioning: { openclaw: { gatewayId: user.gatewayId, slug: user.slug } } },
+  ])));
 }
 
 interface Caller {
@@ -32,7 +21,7 @@ interface Caller {
   workspaceSlug?: string | null;
 }
 
-function app(options: { bound?: boolean; caller?: Caller; db?: Firestore } = {}) {
+function app(options: { bound?: boolean; caller?: Caller; store?: PlatformStateStore } = {}) {
   const instance = express();
   instance.use(express.json());
   instance.use((req, _res, next) => {
@@ -53,7 +42,7 @@ function app(options: { bound?: boolean; caller?: Caller; db?: Firestore } = {})
     next();
   });
   instance.use("/internal/workspace-git", createWorkspaceGitAuthorizationBrokerRoutes({
-    db: options.db ?? fakeDb([{ uid: "uid-alice", gatewayId: "bender", slug: "alice" }]),
+    store: options.store ?? assignedStore([{ uid: "uid-alice", gatewayId: "bender", slug: "alice" }]),
     resolveTarget,
   }));
   return instance;
@@ -111,7 +100,7 @@ describe("POST /internal/workspace-git/authorize", () => {
   });
 
   it("answers 404 when the workspace is not assigned to the bound gateway", async () => {
-    const res = await request(app({ db: fakeDb([{ uid: "uid-alice", gatewayId: "other", slug: "alice" }]) }))
+    const res = await request(app({ store: assignedStore([{ uid: "uid-alice", gatewayId: "other", slug: "alice" }]) }))
       .post("/internal/workspace-git/authorize")
       .send(body);
     expect(res.status).toBe(404);

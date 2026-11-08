@@ -1,13 +1,5 @@
-import type { Firestore } from "firebase-admin/firestore";
-import {
-  isGatewayRuntimeDoc,
-  projectGatewayDesiredRootForGateway,
-  type GatewayDoc,
-} from "@octogee/shared/types/gateway-releases";
-import { parseAssignmentDoc } from "@octogee/core/assignment-doc";
-import {
-  type GatewayMutableConfig,
-} from "@octogee/core/gateway-live-release";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
+import { projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
 
 export type GatewayResolveErrorCode =
   | "workspace-moving"
@@ -26,8 +18,10 @@ export class GatewayResolveError extends Error {
   }
 }
 
+export type GatewayResolverState = Pick<PlatformStateRepositories, "builders" | "gateways" | "fleetRegistry">;
+
 export interface ResolveGatewayOptions {
-  db: Firestore;
+  store: GatewayResolverState;
   uid: string;
   overrideUrl?: string;
 }
@@ -35,26 +29,13 @@ export interface ResolveGatewayOptions {
 export interface ResolvedGateway {
   gatewayId: string;
   url: string;
-  userData: Record<string, unknown>;
 }
 
 export type ResolvedGatewayAssignment = Omit<ResolvedGateway, "url">;
 
-function isDurableGatewayRoot(
-  data: unknown,
-  gatewayId: string,
-): data is GatewayDoc & GatewayMutableConfig {
-  return (
-    projectGatewayDesiredRootForGateway(data, gatewayId) !== null
-  );
-}
-
-function readInternalUrl(data: Record<string, unknown> | undefined): string {
-  const hb =
-    data?.heartbeat && typeof data.heartbeat === "object" && !Array.isArray(data.heartbeat)
-      ? (data.heartbeat as Record<string, unknown>)
-      : undefined;
-  return typeof hb?.internalUrl === "string" ? hb.internalUrl : "";
+function withoutRevision(record: object): Record<string, unknown> {
+  const { revision: _revision, ...data } = record as Record<string, unknown>;
+  return data;
 }
 
 function unresolvedGatewayUrl(gatewayId: string, detail: string): never {
@@ -72,44 +53,36 @@ function assertRunningGateway(gatewayId: string, desiredStatus: string): void {
   );
 }
 
-async function readProvisionedUser(
-  db: Firestore,
+async function readProvisionedGatewayId(
+  store: GatewayResolverState,
   uid: string,
-): Promise<{ gatewayId: string; userData: Record<string, unknown> }> {
-  const userSnap = await db.doc(`users/${uid}`).get();
-  const userData = userSnap.data() ?? {};
-  const gatewayId = userData?.provisioning?.openclaw?.gatewayId;
-  if (typeof gatewayId !== "string" || gatewayId.length === 0) {
+): Promise<string> {
+  const builder = await store.builders.records.get(uid);
+  const gatewayId = builder?.gateway?.gatewayId;
+  if (gatewayId === undefined || gatewayId.length === 0) {
     throw new GatewayResolveError(
       "user-not-provisioned",
       `users/${uid} has no provisioning.openclaw.gatewayId`,
     );
   }
-  return { gatewayId, userData };
+  return gatewayId;
 }
 
 async function readRuntimeUrl(
-  db: Firestore,
+  store: GatewayResolverState,
   gatewayId: string,
-  requireRuntimeDoc: boolean,
 ): Promise<string> {
-  const runtimeSnap = await db.doc(`glmGateways/${gatewayId}`).get();
-  if (!runtimeSnap.exists) {
+  const runtime = await store.fleetRegistry.get(gatewayId);
+  if (runtime === null) {
     throw new GatewayResolveError(
       "gateway-not-registered",
-      `glmGateways/${gatewayId} does not exist`,
+      `glmGateways/${gatewayId} has no runtime realization`,
     );
   }
-  const runtimeData = (runtimeSnap.data() ?? {}) as Record<string, unknown>;
-  if (
-    requireRuntimeDoc &&
-    (!isGatewayRuntimeDoc(runtimeData) ||
-      runtimeData.gatewayId !== gatewayId ||
-      runtimeData.lifecycle !== "serving")
-  ) {
+  if (runtime.lifecycle !== "serving") {
     unresolvedGatewayUrl(gatewayId, "does not have a serving runtime realization");
   }
-  const internalUrl = readInternalUrl(runtimeData);
+  const internalUrl = runtime.heartbeat.internalUrl ?? "";
   if (internalUrl.length === 0) {
     throw new GatewayResolveError(
       "gateway-url-unresolved",
@@ -119,65 +92,54 @@ async function readRuntimeUrl(
   return internalUrl;
 }
 
-// Simple-roll resolution (GATEWAY-SIMPLE-ROLL-SPEC): a customer's serving
-// instance IS their gateway's single stable-name realization. The durable root
-// must be running (and any assignment doc serving); the bare-id runtime doc
-// must be serving with a heartbeat internalUrl.
 async function assertResolvableGateway(
-  db: Firestore,
+  store: GatewayResolverState,
   gatewayId: string,
   uid: string,
-  requireServingAssignment = false,
-): Promise<{ requireRuntimeDoc: boolean }> {
-  const gwSnap = await db.doc(`gateways/${gatewayId}`).get();
-  if (!gwSnap.exists) {
-    return { requireRuntimeDoc: false };
+  requireServingAssignment: boolean,
+): Promise<void> {
+  const root = await store.gateways.roots.get(gatewayId);
+  if (root === null) {
+    throw new GatewayResolveError(
+      "gateway-not-registered",
+      `gateways/${gatewayId} does not exist`,
+    );
   }
-  const gwData = gwSnap.data() ?? {};
-  if (!isDurableGatewayRoot(gwData, gatewayId)) {
+  if (projectGatewayDesiredRootForGateway(withoutRevision(root), gatewayId) === null) {
     throw new GatewayResolveError(
       "gateway-root-invalid",
       `gateways/${gatewayId} exists but is not a valid durable root`,
     );
   }
-  assertRunningGateway(gatewayId, gwData.desiredStatus);
-  const assignmentSnap = await db.doc(`gateways/${gatewayId}/assignments/${uid}`).get();
-  if (!assignmentSnap.exists) {
+  assertRunningGateway(gatewayId, root.desiredStatus);
+  const assignment = await store.gateways.assignments.get(gatewayId, uid);
+  if (assignment === null) {
     if (requireServingAssignment) {
       unresolvedGatewayUrl(gatewayId, `has no serving assignment for ${uid}`);
     }
-    return { requireRuntimeDoc: true };
+    return;
   }
-  const assignment = parseAssignmentDoc(uid, assignmentSnap.data());
-  if (
-    !assignment ||
-    assignment.state !== "serving" ||
-    (assignmentSnap.data()?.state !== undefined && assignmentSnap.data()?.state !== "serving") ||
-    assignment.gatewayId !== gatewayId
-  ) {
+  if (assignment.state !== "serving") {
     unresolvedGatewayUrl(gatewayId, `has a non-serving assignment for ${uid}`);
   }
-  return { requireRuntimeDoc: true };
 }
 
 export async function resolveGatewayAssignment(
-  opts: Pick<ResolveGatewayOptions, "db" | "uid">,
+  opts: Pick<ResolveGatewayOptions, "store" | "uid">,
 ): Promise<ResolvedGatewayAssignment> {
-  const { gatewayId, userData } = await readProvisionedUser(opts.db, opts.uid);
-  await assertResolvableGateway(opts.db, gatewayId, opts.uid, true);
-  return { gatewayId, userData };
+  const gatewayId = await readProvisionedGatewayId(opts.store, opts.uid);
+  await assertResolvableGateway(opts.store, gatewayId, opts.uid, true);
+  return { gatewayId };
 }
 
 export async function resolveGatewayUrl(
   opts: ResolveGatewayOptions,
 ): Promise<ResolvedGateway> {
-  const { gatewayId, userData } = await readProvisionedUser(opts.db, opts.uid);
+  const gatewayId = await readProvisionedGatewayId(opts.store, opts.uid);
   const overrideUrl = opts.overrideUrl ?? process.env.OPENCLAW_GATEWAY_URL;
   if (typeof overrideUrl === "string" && overrideUrl.length > 0) {
-    return { gatewayId, url: overrideUrl, userData };
+    return { gatewayId, url: overrideUrl };
   }
-
-  const gate = await assertResolvableGateway(opts.db, gatewayId, opts.uid);
-  const internalUrl = await readRuntimeUrl(opts.db, gatewayId, gate.requireRuntimeDoc);
-  return { gatewayId, url: internalUrl, userData };
+  await assertResolvableGateway(opts.store, gatewayId, opts.uid, false);
+  return { gatewayId, url: await readRuntimeUrl(opts.store, gatewayId) };
 }

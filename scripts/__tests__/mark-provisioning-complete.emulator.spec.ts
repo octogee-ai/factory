@@ -10,7 +10,7 @@ const { getFirestore, FieldValue } = await import("firebase-admin/firestore");
 if (getApps().length === 0) initializeApp({ projectId: "octogee-test" });
 const db = getFirestore();
 
-const { markProvisioningComplete: markProvisioningCompleteImpl } = await import("../lib/provisionSteps.js");
+const { markProvisioningComplete: markProvisioningCompleteImpl } = await import("@octogee/core/provisionSteps");
 
 async function markProvisioningComplete(
   ...args: Parameters<typeof markProvisioningCompleteImpl>

@@ -1,10 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import type { Firestore } from "firebase-admin/firestore";
 
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
-import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import type { BuilderRecord, PlatformStateRepositories, Stored } from "@octogee/core/platform-state";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
+import { builderAllowsInteractiveAccess } from "./assigned-builder.js";
 import { verifyOwnerAutomationTurn } from "./openclaw-owner-turn.js";
 
 export const OWNER_AUTOMATIONS_PROOF_PATH = "/internal/owner-automations";
@@ -26,10 +26,10 @@ export interface OwnerAutomationAuthorization {
 }
 
 export type AssignedUserLookup = (
-  db: Firestore,
+  store: PlatformStateRepositories,
   gatewayId: string,
   agentId: string,
-) => Promise<{ uid: string; data: Record<string, unknown> } | null>;
+) => Promise<Stored<BuilderRecord> | null>;
 
 export function ownerAutomationProofSignature(
   secret: string,
@@ -69,14 +69,13 @@ function signedRequest(body: string): { agentId: string; requestContext: unknown
   return { agentId, requestContext: data.requestContext, readOnly: data.action === "list" };
 }
 
-async function coachProofSecret(db: Firestore, uid: string): Promise<string | null> {
-  const secret = await db.doc(`users/${uid}/secrets/coachMattermost`).get();
-  const personalToken = secret.exists ? secret.data()?.personalToken : undefined;
-  return typeof personalToken === "string" && personalToken.length > 0 ? personalToken : null;
+async function coachProofSecret(store: PlatformStateRepositories, uid: string): Promise<string | null> {
+  const secret = await store.secrets.get(uid, "coachMattermost");
+  return secret?.kind === "coach-mattermost" && secret.personalToken.length > 0 ? secret.personalToken : null;
 }
 
 export async function authorizeOwnerAutomation(
-  db: Firestore,
+  store: PlatformStateRepositories,
   gatewayId: string,
   proof: OwnerAutomationProof,
   deps: { findAssignedUser: AssignedUserLookup; now?: () => number },
@@ -85,16 +84,16 @@ export async function authorizeOwnerAutomation(
   if (!freshTimestamp(timestamp, deps.now ?? Date.now)) return null;
   const request = signedRequest(proof.body);
   if (!request) return null;
-  const assigned = await deps.findAssignedUser(db, gatewayId, request.agentId);
-  if (!assigned || !accountAllowsInteractiveAccess(assigned.data)) return null;
-  const secret = await coachProofSecret(db, assigned.uid);
+  const assigned = await deps.findAssignedUser(store, gatewayId, request.agentId);
+  if (!assigned || !builderAllowsInteractiveAccess(assigned)) return null;
+  const secret = await coachProofSecret(store, assigned.uid);
   if (!secret) return null;
   const expected = ownerAutomationProofSignature(secret, timestamp, OWNER_AUTOMATIONS_PROOF_PATH, proof.body);
   if (!signaturesMatch(proof.signature.trim(), expected)) return null;
-  const turn = await verifyOwnerAutomationTurn(db, {
+  const turn = await verifyOwnerAutomationTurn(store, {
     agentId: request.agentId,
     ownerUid: assigned.uid,
-    assignedData: assigned.data,
+    owner: assigned,
     requestContext: request.requestContext,
   });
   if (!turn) return null;

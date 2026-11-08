@@ -1,8 +1,22 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import type { Request, Response } from "express";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import express, { type NextFunction, type Request, type Response } from "express";
+import request from "supertest";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
+
+vi.hoisted(() => {
+  process.env.API_PUBLIC_URL = "https://api.octogee.test";
+});
+vi.mock("../../../gateway-edge/src/middleware/auth.js", () => ({
+  requireAuth: (req: Request, _res: Response, next: NextFunction) => {
+    req.uid = req.get("x-test-uid");
+    next();
+  },
+}));
+
 import {
+  createMattermostMintRoutes,
+  createMmRestProxyHandler,
   isCreatePostRequest,
-  mmRestProxyHandler,
   setMmCredsCache,
   mmCredsCache,
   MM_CREDS_CACHE_MAX,
@@ -28,7 +42,7 @@ describe("mmRestProxyHandler — fail-closed on misconfiguration", () => {
   it("returns 502 when MM_INTERNAL_URL is unset (no env in the test runner)", () => {
 
 const res = mockRes();
-    mmRestProxyHandler({ method: "GET", url: "/api/v4/users/me", headers: {} } as Request, res);
+    createMmRestProxyHandler(createDocumentFixtureStore({}))({ method: "GET", url: "/api/v4/users/me", headers: {} } as Request, res);
     expect(res.statusCode).toBe(502);
     expect(res.body).toMatchObject({ error: expect.stringContaining("misconfigured") });
   });
@@ -70,5 +84,44 @@ describe("mmCredsCache — bounded on the cluster singleton", () => {
     setMmCredsCache("fresh", { mmToken: "t", mmUserId: "u", expiresAt: future });
     expect(mmCredsCache.has("fresh")).toBe(true);
     expect(mmCredsCache.size).toBeLessThanOrEqual(MM_CREDS_CACHE_MAX);
+  });
+});
+
+describe("Mattermost credential mint", () => {
+  const MM_USER_ID = "u".repeat(26);
+
+  beforeEach(() => mmCredsCache.clear());
+
+  function mint(documents: Record<string, Record<string, unknown>>, uid: string) {
+    const app = express();
+    app.use("/mint", createMattermostMintRoutes(createDocumentFixtureStore(documents)));
+    return request(app).post("/mint").set("x-test-uid", uid);
+  }
+
+  it("returns the Builder's own Mattermost user and personal token", async () => {
+    const res = await mint({
+      "users/uid-mira": { mattermost: { userId: MM_USER_ID } },
+      "users/uid-mira/secrets/mattermost": { personalToken: "mira-pat" },
+    }, "uid-mira");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ mmUrl: "https://api.octogee.test", mmToken: "mira-pat", mmUserId: MM_USER_ID });
+  });
+
+  it("reports chat as not provisioned without a stored personal token", async () => {
+    const res = await mint({ "users/uid-mira": { mattermost: { userId: MM_USER_ID } } }, "uid-mira");
+
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: "Chat not provisioned" });
+  });
+
+  it("reports the credential lookup as unavailable when the stored token is malformed", async () => {
+    const res = await mint({
+      "users/uid-mira": { mattermost: { userId: MM_USER_ID } },
+      "users/uid-mira/secrets/mattermost": { personalToken: 42 },
+    }, "uid-mira");
+
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: "Credential lookup unavailable" });
   });
 });

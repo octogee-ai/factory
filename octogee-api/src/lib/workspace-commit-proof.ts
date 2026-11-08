@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import type { Firestore } from "firebase-admin/firestore";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import { projectAgentConfigured } from "@octogee/shared/types/project";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
@@ -56,15 +56,17 @@ export function workspaceCommitProofTargetFromBody(
   };
 }
 
-function secretDocument(ownerUid: string, target: WorkspaceCommitProofTarget): string | null {
+function agentSecretId(target: WorkspaceCommitProofTarget): string | null {
   const identity = parseAgentId(target.agentId);
   if (identity.kind === "unknown" || identity.username !== target.slug) return null;
   if (identity.kind === "project") {
     if (identity.project !== target.project) return null;
-    return `users/${ownerUid}/secrets/projectAgentMattermost-${identity.project}`;
+    return `projectAgentMattermost-${identity.project}`;
   }
-  return `users/${ownerUid}/secrets/coachMattermost`;
+  return "coachMattermost";
 }
+
+export type WorkspaceCommitProofStore = Pick<PlatformStateRepositories, "workspaces" | "secrets">;
 
 function normalizedProof(
   proof: WorkspaceCommitProof,
@@ -79,33 +81,32 @@ function normalizedProof(
 }
 
 async function proofSecret(
-  db: Firestore,
+  store: WorkspaceCommitProofStore,
   target: WorkspaceCommitProofTarget,
 ): Promise<string | null> {
-  const workspace = await db.doc(`workspaces/${target.slug}`).get();
-  const ownerUid = workspace.exists ? workspace.data()?.ownerUid : undefined;
-  if (typeof ownerUid !== "string" || ownerUid.length === 0) return null;
-  const secretPath = secretDocument(ownerUid, target);
-  if (!secretPath) return null;
+  const workspace = await store.workspaces.records.get(target.slug);
+  if (!workspace || workspace.ownerUid.length === 0) return null;
+  const secretId = agentSecretId(target);
+  if (!secretId) return null;
   const identity = parseAgentId(target.agentId);
   if (identity.kind === "project") {
-    const project = await db.doc(`workspaces/${target.slug}/projects/${identity.project}`).get();
-    if (!project.exists || !projectAgentConfigured(project.data()?.agent)) return null;
+    const project = await store.workspaces.projects.get(target.slug, identity.project);
+    if (!project || !projectAgentConfigured(project.agent)) return null;
   }
-  const secret = await db.doc(secretPath).get();
-  const personalToken = secret.exists ? secret.data()?.personalToken : undefined;
-  return typeof personalToken === "string" && personalToken.length > 0 ? personalToken : null;
+  const secret = await store.secrets.get(workspace.ownerUid, secretId);
+  const personalToken = secret && secret.kind !== "connector" ? secret.personalToken : "";
+  return personalToken.length > 0 ? personalToken : null;
 }
 
 export async function verifyWorkspaceCommitProof(
   proof: WorkspaceCommitProof,
   target: WorkspaceCommitProofTarget,
-  db: Firestore,
+  store: WorkspaceCommitProofStore,
   now: () => number = Date.now,
 ): Promise<boolean> {
   const normalized = normalizedProof(proof, now);
   if (!normalized) return false;
-  const secret = await proofSecret(db, target);
+  const secret = await proofSecret(store, target);
   if (!secret) return false;
 
   const expected = workspaceCommitProofSignature(

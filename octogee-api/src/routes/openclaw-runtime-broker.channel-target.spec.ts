@@ -1,38 +1,11 @@
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const assignedSlugs = vi.hoisted(() => vi.fn());
-
-vi.mock("@octogee/core/assigned-roster", () => ({
-  readAssignedSlugsForGateway: (...args: unknown[]) => assignedSlugs(...args),
-}));
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { createOpenClawRuntimeBrokerRoutes } from "./openclaw-runtime-broker.js";
-import { createJournalFixtureStore, journalRowsIn } from "@octogee/core/testing/journal-store";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
-type ChannelDoc = { path: string; channelId: string };
-
-let channels: ChannelDoc[] = [];
-
-const db = {
-  collectionGroup: () => {
-    let channelId = "";
-    const query = {
-      where: (_field: string, _operator: string, value: unknown) => {
-        channelId = typeof value === "string" ? value : "";
-        return query;
-      },
-      limit: () => query,
-      get: async () => ({
-        docs: channels
-          .filter((channel) => channel.channelId === channelId)
-          .map((channel) => ({ ref: { path: channel.path }, data: () => ({}) })),
-      }),
-    };
-    return query;
-  },
-} as never;
+let documents: Record<string, Record<string, unknown>> = {};
 
 function app() {
   const app = express();
@@ -41,13 +14,15 @@ function app() {
     req.boundTenant = { kind: "gateway", gatewayId: "gw-alice", ownerUid: "uid-alice" };
     next();
   });
-  app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ db, store: createJournalFixtureStore(journalRowsIn({})) }));
+  app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ db: {} as never, store: createDocumentFixtureStore(documents) }));
   return app;
 }
 
 beforeEach(() => {
-  channels = [{ path: "workspaces/alice/channels/coach-dm", channelId: "primary" }];
-  assignedSlugs.mockReset().mockResolvedValue(["alice"]);
+  documents = {
+    "users/uid-alice": { username: "alice", provisioning: { openclaw: { gatewayId: "gw-alice", slug: "alice" } } },
+    "workspaces/alice/channels/coach-dm": { kind: "coach-dm", mattermost: { channelId: "primary" } },
+  };
 });
 
 describe("channel projection target", () => {
@@ -80,5 +55,23 @@ describe("channel projection target", () => {
 
     expect(response.status).toBe(404);
     expect(response.body).toEqual({ error: "not_found" });
+  });
+
+  it("refuses a channel target in a workspace this gateway does not serve", async () => {
+    documents["users/uid-alice"] = { username: "alice", provisioning: { openclaw: { gatewayId: "gw-other", slug: "alice" } } };
+    const response = await request(app())
+      .post("/internal/openclaw/activity/channel-target")
+      .send({ primaryChannelId: "primary" });
+
+    expect(response.status).toBe(403);
+  });
+
+  it("refuses a Mattermost channel id bound to two channel records", async () => {
+    documents["workspaces/alice/projects/web/channels/general"] = { kind: "general", mattermost: { channelId: "primary" } };
+    const response = await request(app())
+      .post("/internal/openclaw/activity/channel-target")
+      .send({ primaryChannelId: "primary" });
+
+    expect(response.status).toBe(403);
   });
 });

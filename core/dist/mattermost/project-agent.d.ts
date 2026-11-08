@@ -1,24 +1,9 @@
+import type { SecretsRepository } from "../platform-state/secrets.js";
 export declare const PROJECT_AGENT_PAT_DESCRIPTION = "Octogee project agent (OpenClaw)";
 export declare function projectAgentSecretDocId(project: string): string;
-interface SecretDocRef {
-    set(data: Record<string, unknown>): Promise<unknown>;
-    delete(): Promise<unknown>;
-}
-interface SecretCollectionRef {
-    doc(id: string): SecretDocRef;
-}
-interface UserDocRef {
-    collection(name: string): SecretCollectionRef;
-}
-interface UsersCollectionRef {
-    doc(id: string): UserDocRef;
-}
 export interface ProjectAgentDeps {
     mmApiCall: (method: string, endpoint: string, body?: unknown) => Promise<unknown>;
-    db: {
-        collection: (name: string) => UsersCollectionRef;
-    };
-    now: () => unknown;
+    secrets: Pick<SecretsRepository, "put" | "delete">;
     log: (msg: string) => void;
 }
 export interface CreateProjectAgentBotInput {
@@ -39,4 +24,3 @@ export interface RetireProjectAgentBotInput {
     mmUserId: string;
 }
 export declare function retireProjectAgentBot(deps: ProjectAgentDeps, input: RetireProjectAgentBotInput): Promise<void>;
-export {};

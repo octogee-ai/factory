@@ -1,41 +1,44 @@
-import { FieldValue } from "firebase-admin/firestore";
+import type { CustomerDeletionJob, CustomerDeletionJobPatch } from "@octogee/core/platform-state";
 import type { PostHogErasureState } from "./posthog-erasure.js";
 
-const CLEANUP_FIELDS = [
-  "slug",
-  "requestedBy",
-  "currentGatewayId",
-  "stripeCustomerIds",
-  "stripeSubscriptionIds",
-  "cleanupContext",
-  "suspensionOperationId",
-  "postgresAgentStoreTargets",
-  "sharedAgentStoreCleanup",
-  "retiredGatewayProofs",
-] as const;
+const CLEAR = { clear: true } as const;
 
-const IDENTITY_MAPPING_FIELDS = ["uid", "erasureOperationId", "posthogErasure"] as const;
+const CLEARED_CLEANUP_FIELDS = {
+  slug: CLEAR,
+  requestedBy: CLEAR,
+  currentGatewayId: CLEAR,
+  cleanupContext: CLEAR,
+  suspensionOperationId: CLEAR,
+  postgresAgentStoreTargets: CLEAR,
+  sharedAgentStoreCleanup: CLEAR,
+  retiredGatewayProofs: CLEAR,
+} satisfies CustomerDeletionJobPatch;
 
-function deleted(fields: readonly string[]): Record<string, FieldValue> {
-  return Object.fromEntries(fields.map((field) => [field, FieldValue.delete()]));
-}
-
-export function postHogMappingOnlyJobUpdate(archiveId: string, now: number): Record<string, unknown> {
+export function postHogMappingOnlyJobPatch(
+  job: Pick<CustomerDeletionJob, "productContext">,
+  archiveId: string,
+  now: number,
+): CustomerDeletionJobPatch {
+  const posthogErasure = job.productContext?.posthogErasure;
   return {
-    status: "posthog_verification_pending",
+    status: "product_verification_pending",
     archiveId,
     cloudErasedAt: now,
     updatedAt: now,
-    ...deleted(CLEANUP_FIELDS),
+    ...CLEARED_CLEANUP_FIELDS,
+    productContext: posthogErasure === undefined ? CLEAR : { posthogErasure },
   };
 }
 
-export function verifiedDeletionJobUpdate(archiveId: string, now: number): Record<string, unknown> {
+export function verifiedDeletionJobPatch(archiveId: string, now: number): CustomerDeletionJobPatch {
   return {
     status: "verified",
     archiveId,
     completedAt: now,
-    ...deleted([...CLEANUP_FIELDS, ...IDENTITY_MAPPING_FIELDS]),
+    ...CLEARED_CLEANUP_FIELDS,
+    uid: CLEAR,
+    erasureOperationId: CLEAR,
+    productContext: CLEAR,
   };
 }
 
@@ -46,10 +49,11 @@ function isPersonUuidList(value: unknown): value is string[] {
 
 export function readPostHogErasureState(
   deletionId: string,
-  job: Record<string, unknown>,
+  job: Pick<CustomerDeletionJob, "productContext">,
 ): PostHogErasureState | null {
-  if (job.posthogErasure === undefined) return null;
-  const persisted = job.posthogErasure as Partial<Record<keyof PostHogErasureState, unknown>> | null;
+  const productContext = job.productContext ?? {};
+  if (!("posthogErasure" in productContext)) return null;
+  const persisted = productContext.posthogErasure as Partial<Record<keyof PostHogErasureState, unknown>> | null;
   const requested = persisted?.requestedPersonUuids ?? [];
   if (
     !persisted ||

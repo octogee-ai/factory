@@ -4,12 +4,20 @@ import {
   workspaceCoachAgentId,
 } from "@octogee/shared/types/identity";
 import { projectAgentConfigured } from "@octogee/shared/types/project";
+import {
+  DuplicateRecordError,
+  type MattermostTokenSecret,
+  type Stored,
+  type WorkspaceChannel,
+} from "@octogee/core/platform-state";
+import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 
 import {
   ChannelSessionMattermostError,
   createChannelSessionMattermostClient,
 } from "./channel-session-model-control.js";
-import { db } from "./db.js";
+import { readMattermostSecret } from "./mattermost-secret.js";
+import { platformStateStore } from "./platform-state.js";
 import { resolveWorkspaceUid } from "./workspace-resolution.js";
 
 const MATTERMOST_ID = /^[a-z0-9]{26}$/;
@@ -56,12 +64,6 @@ export interface ChannelAuthorizationOptions {
   signal?: AbortSignal;
 }
 
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
 async function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
   signal.throwIfAborted();
@@ -81,20 +83,16 @@ async function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<
   });
 }
 
-function discoverableChannelId(
-  id: string,
-  value: FirebaseFirestore.DocumentData | undefined,
-  lane: "workspace" | "project",
-): string | null {
-  const data = record(value);
-  if (!data || data.archivedAt !== undefined && data.archivedAt !== null) return null;
-  if (lane === "workspace" && (id === "admin" || id === "coach-dm")) return null;
+function discoverableChannelId(channel: WorkspaceChannel): string | null {
+  if (channel.archivedAt !== null) return null;
+  const id = channel.channelId;
+  if (channel.scope.projectSlug === null && (id === "admin" || id === "coach-dm")) return null;
   const expectedKind = id === "general" ? "general" : "session";
-  if (data.kind !== expectedKind) {
+  if (channel.kind !== expectedKind) {
     throw new ChannelSessionMattermostError("Workspace channel ledger was invalid");
   }
-  const channelId = record(data.mattermost)?.channelId;
-  if (typeof channelId !== "string" || !MATTERMOST_ID.test(channelId)) {
+  const channelId = channel.mattermostChannelId;
+  if (channelId === null || !MATTERMOST_ID.test(channelId)) {
     throw new ChannelSessionMattermostError("Workspace channel ledger was invalid");
   }
   return channelId;
@@ -107,24 +105,20 @@ export async function listWorkspaceChannelCandidates(
   if (!USERNAME_RE.test(workspaceSlug)) {
     throw new ChannelSessionMattermostError("Workspace channel scope was invalid");
   }
-  const workspace = db.doc(`workspaces/${workspaceSlug}`);
   const [workspaceChannels, projects] = await abortable(Promise.all([
-    workspace.collection("channels").limit(MAX_WORKSPACE_CHANNEL_CANDIDATES + 1).get(),
-    workspace.collection("projects").limit(MAX_WORKSPACE_CHANNEL_CANDIDATES + 1).get(),
+    platformStateStore.workspaces.channels.list({ workspaceSlug, projectSlug: null }),
+    platformStateStore.workspaces.projects.list(workspaceSlug),
   ]), signal);
   if (
-    workspaceChannels.docs.length > MAX_WORKSPACE_CHANNEL_CANDIDATES ||
-    projects.docs.length > MAX_WORKSPACE_CHANNEL_CANDIDATES
+    workspaceChannels.length > MAX_WORKSPACE_CHANNEL_CANDIDATES ||
+    projects.length > MAX_WORKSPACE_CHANNEL_CANDIDATES
   ) {
     throw new ChannelSessionMattermostError("Workspace channel directory exceeded its limit");
   }
-  const activeProjects = projects.docs.filter((project) => {
-    const lifecycle = record(record(project.data())?.commercialLifecycle)?.status;
-    return lifecycle !== "archived";
-  });
+  const activeProjects = projects.filter((project) => project.commercialLifecycleStatus !== "archived");
   const channelIds: string[] = [];
-  for (const channel of workspaceChannels.docs) {
-    const channelId = discoverableChannelId(channel.id, channel.data(), "workspace");
+  for (const channel of workspaceChannels) {
+    const channelId = discoverableChannelId(channel);
     if (channelId) channelIds.push(channelId);
   }
   for (
@@ -135,15 +129,16 @@ export async function listWorkspaceChannelCandidates(
     signal?.throwIfAborted();
     const reads = activeProjects
       .slice(offset, offset + PROJECT_CHANNEL_DISCOVERY_CONCURRENCY)
-      .map((project) => project.ref.collection("channels")
-        .limit(MAX_WORKSPACE_CHANNEL_CANDIDATES + 1)
-        .get());
-    for (const snapshot of await abortable(Promise.all(reads), signal)) {
-      if (channelIds.length + snapshot.docs.length > MAX_WORKSPACE_CHANNEL_CANDIDATES) {
+      .map((project) => platformStateStore.workspaces.channels.list({
+        workspaceSlug,
+        projectSlug: project.projectSlug,
+      }));
+    for (const channels of await abortable(Promise.all(reads), signal)) {
+      if (channelIds.length + channels.length > MAX_WORKSPACE_CHANNEL_CANDIDATES) {
         throw new ChannelSessionMattermostError("Workspace channel directory exceeded its limit");
       }
-      for (const channel of snapshot.docs) {
-        const channelId = discoverableChannelId(channel.id, channel.data(), "project");
+      for (const channel of channels) {
+        const channelId = discoverableChannelId(channel);
         if (channelId) channelIds.push(channelId);
       }
     }
@@ -154,44 +149,16 @@ export async function listWorkspaceChannelCandidates(
   return channelIds.sort().map((channelId) => ({ channelId }));
 }
 
-function pathScope(path: string): ChannelScope | null {
-  const parts = path.split("/");
-  if (
-    parts.length === 4 &&
-    parts[0] === "workspaces" &&
-    parts[2] === "channels"
-  ) {
-    return { workspaceSlug: parts[1] };
-  }
-  if (
-    parts.length === 6 &&
-    parts[0] === "workspaces" &&
-    parts[2] === "projects" &&
-    parts[4] === "channels"
-  ) {
-    return { workspaceSlug: parts[1], projectId: parts[3] };
-  }
-  return null;
+function channelScope(channel: WorkspaceChannel): ChannelScope {
+  return channel.scope.projectSlug === null
+    ? { workspaceSlug: channel.scope.workspaceSlug }
+    : { workspaceSlug: channel.scope.workspaceSlug, projectId: channel.scope.projectSlug };
 }
 
-function activeProjectAgentMmUserId(
-  projectData: FirebaseFirestore.DocumentData | undefined,
-  credential: FirebaseFirestore.DocumentData | undefined,
-): string | null {
-  if (!projectAgentConfigured(projectData?.agent)) return null;
-  if (
-    typeof credential?.mmUserId !== "string" ||
-    !MATTERMOST_ID.test(credential.mmUserId)
-  ) {
-    return null;
-  }
-  if (
-    typeof credential.personalToken !== "string" ||
-    !credential.personalToken
-  ) {
-    return null;
-  }
-  return credential.mmUserId;
+function activeMattermostUserId(credential: MattermostTokenSecret | null): string | null {
+  const mmUserId = credential?.mattermostUserId;
+  if (!mmUserId || !MATTERMOST_ID.test(mmUserId) || !credential.personalToken) return null;
+  return mmUserId;
 }
 
 async function resolveProjectTarget(
@@ -202,23 +169,13 @@ async function resolveProjectTarget(
 ): Promise<{ archived: boolean; target: ChannelTarget | null }> {
   if (!scope.projectId) return { archived: false, target: null };
   const [project, secret] = await abortable(Promise.all([
-    db.doc(`workspaces/${scope.workspaceSlug}/projects/${scope.projectId}`).get(),
-    db
-      .doc(
-        `users/${ownerUid}/secrets/projectAgentMattermost-${scope.projectId}`,
-      )
-      .get(),
+    platformStateStore.workspaces.projects.get(scope.workspaceSlug, scope.projectId),
+    readMattermostSecret(platformStateStore, ownerUid, projectAgentSecretDocId(scope.projectId)),
   ]), signal);
-  if (
-    requireActiveLedger &&
-    record(record(project.data())?.commercialLifecycle)?.status === "archived"
-  ) {
+  if (requireActiveLedger && project?.commercialLifecycleStatus === "archived") {
     return { archived: true, target: null };
   }
-  const agentMmUserId = activeProjectAgentMmUserId(
-    project.data(),
-    secret.data(),
-  );
+  const agentMmUserId = projectAgentConfigured(project?.agent) ? activeMattermostUserId(secret) : null;
   if (!agentMmUserId) return { archived: false, target: null };
   return {
     archived: false,
@@ -236,14 +193,9 @@ async function resolveCoachTarget(
   ownerUid: string,
   signal?: AbortSignal,
 ): Promise<ChannelTarget | null> {
-  const coachSecret = await abortable(db
-    .doc(`users/${ownerUid}/secrets/coachMattermost`)
-    .get(), signal);
-  const agentMmUserId = coachSecret.data()?.coachMmUserId;
-  if (
-    typeof agentMmUserId !== "string" ||
-    !MATTERMOST_ID.test(agentMmUserId)
-  ) {
+  const coachSecret = await abortable(readMattermostSecret(platformStateStore, ownerUid, "coachMattermost"), signal);
+  const agentMmUserId = coachSecret?.mattermostUserId;
+  if (!agentMmUserId || !MATTERMOST_ID.test(agentMmUserId)) {
     return null;
   }
   return {
@@ -254,31 +206,38 @@ async function resolveCoachTarget(
   };
 }
 
-function workspaceConversationLedger(channel: { id: string; data(): FirebaseFirestore.DocumentData | undefined }, scope: ChannelScope, channelId: string): boolean {
-  if (scope.projectId || channel.id === "admin") return false;
-  const data = record(channel.data());
-  if (!data || data.archivedAt != null) return false;
-  const expectedKind = channel.id === "general" || channel.id === "coach-dm" ? channel.id : "session";
-  return data.kind === expectedKind && record(data.mattermost)?.channelId === channelId;
+function workspaceConversationLedger(channel: WorkspaceChannel, channelId: string): boolean {
+  if (channel.scope.projectSlug !== null || channel.channelId === "admin") return false;
+  if (channel.archivedAt !== null) return false;
+  const expectedKind = channel.channelId === "general" || channel.channelId === "coach-dm" ? channel.channelId : "session";
+  return channel.kind === expectedKind && channel.mattermostChannelId === channelId;
 }
 
 function activeChannelLedger(
-  channel: { id: string; data(): FirebaseFirestore.DocumentData | undefined },
-  scope: ChannelScope,
+  channel: WorkspaceChannel,
   channelId: string,
   options: ChannelAuthorizationOptions,
 ): boolean {
-  if (options.includeCoachConversation && channel.id === "coach-dm" && !scope.projectId) {
-    return workspaceConversationLedger(channel, scope, channelId);
+  if (options.includeCoachConversation && channel.channelId === "coach-dm" && channel.scope.projectSlug === null) {
+    return workspaceConversationLedger(channel, channelId);
   }
-  return discoverableChannelId(channel.id, channel.data(), scope.projectId ? "project" : "workspace") === channelId;
+  return discoverableChannelId(channel) === channelId;
 }
 
-function conversationLedgerAllowed(channel: { id: string; data(): FirebaseFirestore.DocumentData | undefined }, scope: ChannelScope, channelId: string, options: ChannelAuthorizationOptions): boolean {
-  if (options.workspaceConversation && !workspaceConversationLedger(channel, scope, channelId)) return false;
+function conversationLedgerAllowed(channel: WorkspaceChannel, channelId: string, options: ChannelAuthorizationOptions): boolean {
+  if (options.workspaceConversation && !workspaceConversationLedger(channel, channelId)) return false;
   if (!options.voiceConversation) return true;
-  if (channel.id === 'admin') return false;
-  return scope.projectId ? activeChannelLedger(channel, scope, channelId, options) : workspaceConversationLedger(channel, scope, channelId);
+  if (channel.channelId === 'admin') return false;
+  return channel.scope.projectSlug !== null ? activeChannelLedger(channel, channelId, options) : workspaceConversationLedger(channel, channelId);
+}
+
+async function boundChannelLedger(channelId: string): Promise<Stored<WorkspaceChannel> | null> {
+  try {
+    return await platformStateStore.workspaces.channels.findByMattermostChannelId(channelId);
+  } catch (error) {
+    if (error instanceof DuplicateRecordError) return null;
+    throw error;
+  }
 }
 
 async function resolveTarget(
@@ -286,16 +245,10 @@ async function resolveTarget(
   expectedWorkspaceSlug: string | undefined,
   options: ChannelAuthorizationOptions,
 ): Promise<ChannelTarget | null> {
-  const channels = await abortable(db
-    .collectionGroup("channels")
-    .where("mattermost.channelId", "==", channelId)
-    .limit(2)
-    .get(), options.signal);
-  if (channels.docs.length !== 1) return null;
-  const channel = channels.docs[0];
-  const scope = pathScope(channel.ref.path);
-  if (!scope) return null;
-  if (!conversationLedgerAllowed(channel, scope, channelId, options)) return null;
+  const channel = await abortable(boundChannelLedger(channelId), options.signal);
+  if (!channel) return null;
+  const scope = channelScope(channel);
+  if (!conversationLedgerAllowed(channel, channelId, options)) return null;
   if (
     expectedWorkspaceSlug !== undefined &&
     scope.workspaceSlug !== expectedWorkspaceSlug
@@ -304,7 +257,7 @@ async function resolveTarget(
   }
   if (
     options.requireActiveLedger &&
-    !activeChannelLedger(channel, scope, channelId, options)
+    !activeChannelLedger(channel, channelId, options)
   ) {
     return null;
   }
@@ -328,16 +281,13 @@ async function callerCredentials(
   uid: string,
   signal?: AbortSignal,
 ): Promise<{ storedUserId: string; token: string } | null> {
-  const [user, secret] = await abortable(Promise.all([
-    db.doc(`users/${uid}`).get(),
-    db.doc(`users/${uid}/secrets/mattermost`).get(),
+  const [builder, secret] = await abortable(Promise.all([
+    platformStateStore.builders.records.get(uid),
+    readMattermostSecret(platformStateStore, uid, "mattermost"),
   ]), signal);
-  const storedUserId = user.data()?.mattermost?.userId;
-  const token = secret.data()?.personalToken;
-  return typeof storedUserId === "string" &&
-    MATTERMOST_ID.test(storedUserId) &&
-    typeof token === "string"
-    ? { storedUserId, token }
+  const storedUserId = builder?.mattermostUserId;
+  return storedUserId && MATTERMOST_ID.test(storedUserId) && secret
+    ? { storedUserId, token: secret.personalToken }
     : null;
 }
 

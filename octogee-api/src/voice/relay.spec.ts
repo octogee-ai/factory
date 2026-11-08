@@ -5,6 +5,7 @@ import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { createTenantEnforcementMiddleware } from "../middleware/tenant-enforcement.js";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { encodeWav } from "./audio-format.js";
 import type { VoiceRelayConfig } from "./config.js";
 import {
@@ -127,7 +128,10 @@ describe("POST /internal/voice/tts", () => {
       req.boundTenant = { kind: "gateway", gatewayId: "gw-mom" } as Express.Request["boundTenant"];
       next();
     });
-    enforced.use(createTenantEnforcementMiddleware({ db: { collection: () => { throw new Error("no lookups expected"); } } as never }));
+    enforced.use(createTenantEnforcementMiddleware({
+      db: { collection: () => { throw new Error("no lookups expected"); } } as never,
+      store: createDocumentFixtureStore({}),
+    }));
     enforced.use("/internal/voice", createVoiceRelayRoutes({ config, fetchImpl: vi.fn(async () => wavResponse(new Int16Array(0))) }));
 
     expect((await request(enforced).get("/internal/voice/status")).status).toBe(403);

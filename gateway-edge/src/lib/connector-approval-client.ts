@@ -1,19 +1,19 @@
-import type { Firestore } from "firebase-admin/firestore";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import { gatewayModelCredentialSyncUrl } from "./byot-sync-trigger.js";
 import { createModelCredentialSyncAuthHeaders } from "./byot-sync-internal-auth.js";
 import { NativeConnectorApprovalAccessError, parseNativeApproval, type NativeConnectorCommand, type NativeApprovalSnapshot } from "./native-connector-approval.js";
-import { resolveGatewayAssignment } from "../chat-proxy/openclaw/gateway-resolver.js";
+import { resolveGatewayAssignment, type GatewayResolverState } from "../chat-proxy/openclaw/gateway-resolver.js";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
 export interface ConnectorApprovalBinding { ownerUid: string; gatewayId: string; agentId: string; nativeApprovalId: string }
 export type ConnectorApprovalRpc = (command: NativeConnectorCommand, authorization?: string) => Promise<unknown>;
 
-export function connectorApprovalRpc(db: Firestore, env: NodeJS.ProcessEnv = process.env): ConnectorApprovalRpc {
+export function connectorApprovalRpc(store: GatewayResolverState, env: NodeJS.ProcessEnv = process.env): ConnectorApprovalRpc {
   return async (command, authorization) => {
-    const assignment = await resolveGatewayAssignment({ db, uid: command.ownerUid });
+    const assignment = await resolveGatewayAssignment({ store, uid: command.ownerUid });
     if (assignment.gatewayId !== command.gatewayId) throw new Error("Approval gateway assignment changed; request a new approval");
-    const runtime = (await db.doc(`glmGateways/${command.gatewayId}`).get()).data();
-    const url = gatewayModelCredentialSyncUrl(command.gatewayId, env, runtime)
+    const runtime = await store.fleetRegistry.get(command.gatewayId);
+    const url = gatewayModelCredentialSyncUrl(command.gatewayId, env, runtime ?? undefined)
       .replace(/\/model-credential-sync$/u, "/connector-approvals");
     const body = { purpose: "connector-approval", command, ...(authorization ? { authorization } : {}) };
     const headers = createModelCredentialSyncAuthHeaders({ body, gatewayId: command.gatewayId, secret: env.BYOT_SYNC_INTERNAL_SIGNING_SECRET ?? "" });
@@ -43,16 +43,17 @@ function calendarReminderDetail(kind: string, preview: Record<string, unknown>):
   return `Reminders: ${preview.reminders === "none" ? "No reminders" : "Calendar defaults"}\n\n`;
 }
 
-export async function requestConnectorApproval(db: Firestore, rpc: ConnectorApprovalRpc, input: {
+export async function requestConnectorApproval(store: Pick<PlatformStateRepositories, "workspaces">, rpc: ConnectorApprovalRpc, input: {
   ownerUid: string; gatewayId: string; agentId: string; kind: string; digest: string; preview: Record<string, unknown>; actionUrl: string;
 }): Promise<{ nativeApprovalId: string; expiresAtMs: number }> {
   const agent = parseAgentId(input.agentId);
   if (agent.kind !== "coach") throw new Error("Connector approval requires a coach");
   const [workspace, channel] = await Promise.all([
-    db.doc(`workspaces/${agent.username}`).get(), db.doc(`workspaces/${agent.username}/channels/coach-dm`).get(),
+    store.workspaces.records.get(agent.username),
+    store.workspaces.channels.get({ workspaceSlug: agent.username, projectSlug: null }, "coach-dm"),
   ]);
-  const coachChannelId = channel.data()?.mattermost?.channelId;
-  if (workspace.data()?.ownerUid !== input.ownerUid || typeof coachChannelId !== "string" || !/^[a-z0-9]{26}$/u.test(coachChannelId)) {
+  const coachChannelId = channel?.mattermostChannelId;
+  if (workspace?.ownerUid !== input.ownerUid || typeof coachChannelId !== "string" || !/^[a-z0-9]{26}$/u.test(coachChannelId)) {
     throw new Error("Canonical Coach DM is unavailable for connector approval");
   }
   const preview = JSON.stringify(input.preview, null, 2);

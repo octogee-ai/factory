@@ -7,7 +7,8 @@ import { decomposeProjectId } from "../lib/projectId.js";
 import { logger } from "../middleware/logging.js";
 import { workspaceGeneralChannelName } from "@octogee/shared/types/identity";
 import { getWorkspaceMmContext } from "../lib/mattermost-context.js";
-import { readChannel, readProject } from "../lib/firestoreReads.js";
+import { readMattermostSecret } from "../lib/mattermost-secret.js";
+import { platformStateStore } from "../lib/platform-state.js";
 import { removeWorkspaceChannelMember } from "../lib/workspace-channel-membership.js";
 
 const router = Router();
@@ -69,9 +70,16 @@ function isEntityKind(kind: string): kind is EntityKind {
 }
 
 async function getCallerMmToken(uid: string): Promise<string | null> {
-  const secretDoc = await db.doc(`users/${uid}/secrets/mattermost`).get();
-  const token = secretDoc.data()?.personalToken;
-  return typeof token === "string" && token.length > 0 ? token : null;
+  const secret = await readMattermostSecret(platformStateStore, uid, "mattermost");
+  return secret?.personalToken || null;
+}
+
+async function projectGeneralChannelId(workspaceId: string, projectId: string): Promise<string | null> {
+  const general = await platformStateStore.workspaces.channels.get(
+    { workspaceSlug: workspaceId, projectSlug: projectId },
+    "general",
+  );
+  return general?.mattermostChannelId ?? null;
 }
 
 async function resolveEntityChannel(
@@ -108,14 +116,12 @@ async function resolveEntityChannel(
   const parts = decomposeProjectId(id);
   if (!parts) return { mmChannelId: null, ownerUid: null, error: "Invalid project id" };
 
-  const projectRef = db.doc(`workspaces/${parts.wid}/projects/${parts.pid}`);
-  const project = await readProject(projectRef);
+  const project = await platformStateStore.workspaces.projects.get(parts.wid, parts.pid);
   if (!project) {
     return { mmChannelId: null, ownerUid: null, error: "Project not found" };
   }
-  const generalChan = await readChannel(projectRef.collection("channels").doc("general"));
   return {
-    mmChannelId: generalChan?.mattermost?.channelId ?? null,
+    mmChannelId: await projectGeneralChannelId(parts.wid, parts.pid),
     ownerUid: project.ownerUid,
   };
 }
@@ -124,35 +130,21 @@ async function hydrateFromFirestore(
   mmUserIds: string[],
 ): Promise<Map<string, { uid: string; avatarUrl: string | null; displayName: string | null }>> {
   const byMmId = new Map<string, { uid: string; avatarUrl: string | null; displayName: string | null }>();
-  if (mmUserIds.length === 0) return byMmId;
-
-  const chunkSize = 30;
-  const userChunks: Array<Array<{ uid: string; data: FirebaseFirestore.DocumentData }>> = [];
-  for (let i = 0; i < mmUserIds.length; i += chunkSize) {
-    const chunk = mmUserIds.slice(i, i + chunkSize);
-    const snap = await db
-      .collection("users")
-      .where("mattermost.userId", "in", chunk)
-      .get();
-    userChunks.push(snap.docs.map((doc) => ({ uid: doc.id, data: doc.data() })));
-  }
-
-  const baseEntries = userChunks.flat().flatMap((u) => {
-    const mmId = u.data?.mattermost?.userId;
-    if (!mmId) return [];
-    return [{
-      mmId,
-      uid: u.uid,
-      displayName: u.data?.firstName ?? u.data?.displayName ?? null,
-    }];
-  });
+  const builders = await Promise.all(
+    mmUserIds.map((mmUserId) => platformStateStore.builders.records.findByMattermostUserId(mmUserId)),
+  );
 
   await Promise.all(
-    baseEntries.map(async (entry) => {
-      const publicDoc = await db.doc(`users/${entry.uid}/profile/public`).get();
-      byMmId.set(entry.mmId, {
-        uid: entry.uid,
-        displayName: entry.displayName,
+    builders.map(async (builder) => {
+      if (!builder?.mattermostUserId) return;
+      const [userDoc, publicDoc] = await Promise.all([
+        db.doc(`users/${builder.uid}`).get(),
+        db.doc(`users/${builder.uid}/profile/public`).get(),
+      ]);
+      const user = userDoc.data();
+      byMmId.set(builder.mattermostUserId, {
+        uid: builder.uid,
+        displayName: user?.firstName ?? user?.displayName ?? null,
         avatarUrl: publicDoc.data()?.avatarUrl ?? null,
       });
     }),
@@ -163,8 +155,7 @@ async function hydrateFromFirestore(
 
 async function ownerMmUserId(ownerUid: string | null): Promise<string | null> {
   if (!ownerUid) return null;
-  const ownerDoc = await db.doc(`users/${ownerUid}`).get();
-  return ownerDoc.data()?.mattermost?.userId ?? null;
+  return (await platformStateStore.builders.records.get(ownerUid))?.mattermostUserId ?? null;
 }
 
 async function fetchChannelMembers(
@@ -319,16 +310,15 @@ async function resolveProjectRemovalTarget(id: string, callerUid: string): Promi
   const parts = decomposeProjectId(id);
   if (!parts) return routeError(400, { error: "Invalid project id" });
 
-  const projectRef = db.doc(`workspaces/${parts.wid}/projects/${parts.pid}`);
-  const project = await readProject(projectRef);
+  const project = await platformStateStore.workspaces.projects.get(parts.wid, parts.pid);
   if (!project) return routeError(404, { error: "Project not found" });
   if (project.ownerUid !== callerUid) {
     return routeError(403, { error: "Only the project owner can remove members" });
   }
 
-  const generalChan = await readChannel(projectRef.collection("channels").doc("general"));
-  const mmChannelId = generalChan?.mattermost?.channelId;
+  const mmChannelId = await projectGeneralChannelId(parts.wid, parts.pid);
   if (!mmChannelId) return routeError(422, { error: "Project has no channel yet" });
+  const projectRef = db.doc(`workspaces/${parts.wid}/projects/${parts.pid}`);
   return {
     ownerUid: project.ownerUid,
     mmChannelId,
@@ -356,12 +346,7 @@ async function ownerRemovalError(ownerUid: string, mmUserId: string): Promise<Ro
 }
 
 async function uidForMattermostUser(mmUserId: string): Promise<string | null> {
-  const targetSnap = await db
-    .collection("users")
-    .where("mattermost.userId", "==", mmUserId)
-    .limit(1)
-    .get();
-  return targetSnap.empty ? null : targetSnap.docs[0].id;
+  return (await platformStateStore.builders.records.findByMattermostUserId(mmUserId))?.uid ?? null;
 }
 
 async function removeMemberDocument(
@@ -371,19 +356,20 @@ async function removeMemberDocument(
   const targetUid = await uidForMattermostUser(mmUserId);
   if (!targetUid) return;
 
-  const memberRef = target.projectRef
-    ? target.projectRef.collection("members").doc(targetUid)
-    : db.doc(`workspaces/${target.workspaceId}/members/${targetUid}`);
+  if (!target.projectRef) {
+    if (!await platformStateStore.workspaces.members.get(target.workspaceId, targetUid)) return;
+    await platformStateStore.workspaces.members.delete(target.workspaceId, targetUid);
+    return;
+  }
+  const memberRef = target.projectRef.collection("members").doc(targetUid);
   const memberDoc = await memberRef.get();
   if (!memberDoc.exists) return;
 
   await memberRef.delete();
-  if (target.projectRef) {
-    await target.projectRef.update({
-      memberCount: FieldValue.increment(-1),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-  }
+  await target.projectRef.update({
+    memberCount: FieldValue.increment(-1),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
 }
 
 async function markWorkspaceMemberRevoking(
@@ -393,13 +379,11 @@ async function markWorkspaceMemberRevoking(
   if (target.projectRef) return;
   const targetUid = await uidForMattermostUser(mmUserId);
   if (!targetUid) return;
-  const ref = db.doc(`workspaces/${target.workspaceId}/members/${targetUid}`);
-  const member = await ref.get();
-  if (!member.exists) return;
-  await ref.set({
-    canonicalState: "revoking",
-    updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
+  await platformStateStore.transaction({ label: "entities.member-revoking" }, async (tx) => {
+    const member = await tx.workspaces.members.get(target.workspaceId, targetUid);
+    if (!member) return;
+    await tx.workspaces.members.put({ ...member, canonicalState: "revoking" });
+  });
 }
 
 router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response) => {

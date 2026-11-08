@@ -1,16 +1,20 @@
 import type { Firestore } from "firebase-admin/firestore";
-import { gatewayAuthorizationFromRootDocument } from "@octogee/core/gateway-live-release";
-import { userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
-import { isCanonicalWorkspaceMembership, workspacePermissionsEnabled } from "@octogee/core/gateway-principal-access";
+import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
+import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
+import type { BuilderTierReader } from "@octogee/core/builder-activation-lease";
+import type { BuilderRecord, PlatformStateRepositories, PlatformStateStore, Stored, WorkspaceProject } from "@octogee/core/platform-state";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { isValidGatewayId, resolveGatewayClass } from "@octogee/shared/types/glm";
-import type { DocumentReader } from "../../../gateway-edge/src/routes/builder/gateways.js";
+import { builderAssignedTo, ownerWorkspacePermissionsEnabled, withGatewayOwnerTier } from "../../../gateway-edge/src/routes/builder/gateways.js";
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 import { ChannelSessionMattermostError } from '../../../gateway-edge/src/lib/channel-session-model-control.js';
 import { isValidProjectId, projectAgentId } from '@octogee/shared/types/identity';
+import { projectMemberExists } from './project-members.js';
 
 export interface WorkspaceConversationDeps {
   db: Firestore;
+  store: PlatformStateStore;
+  readBuilderTier: BuilderTierReader;
   authorize?: typeof import("../../../gateway-edge/src/lib/channel-session-authorization.js").authorizeChannelCredentials;
   readChannel?: (token: string, channelId: string) => Promise<unknown>;
   readPost?: (token: string, postId: string) => Promise<unknown>;
@@ -26,48 +30,54 @@ function validScopeClaim(claim: WorkspaceConversationScopeClaim): boolean {
     typeof claim.workspaceSlug === "string" && /^[a-z0-9-]{1,64}$/u.test(claim.workspaceSlug) &&
     (claim.projectId === undefined || isValidProjectId(claim.projectId));
 }
-function activeUser(snapshot: { exists: boolean; data(): unknown }): Record<string, unknown> | null {
-  const data = record(snapshot.data());
-  return snapshot.exists && data && accountAllowsInteractiveAccess(data) ? data : null;
+function interactiveBuilder(builder: Stored<BuilderRecord> | undefined): builder is Stored<BuilderRecord> {
+  return builder !== undefined && accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined });
 }
-async function activeProjectPrincipal(get: DocumentReader, claim: WorkspaceConversationScopeClaim, member: boolean): Promise<boolean> {
-  const project = await get(`workspaces/${claim.workspaceSlug}/projects/${claim.projectId}`);
-  const data = record(project.data());
-  return project.exists && data !== null && data.ownerUid === claim.ownerUid && data.status !== 'archived' &&
-    record(data.commercialLifecycle)?.status !== 'archived' && (claim.uid === claim.ownerUid || member);
+function activeProjectPrincipal(project: WorkspaceProject | null, claim: WorkspaceConversationScopeClaim, projectMember: boolean): boolean {
+  return project?.ownerUid === claim.ownerUid && project.status !== 'archived' && project.commercialLifecycleStatus !== 'archived' &&
+    (claim.uid === claim.ownerUid || projectMember);
 }
-async function workspacePrincipal(get: DocumentReader, { uid, workspaceSlug, ownerUid, projectId }: WorkspaceConversationScopeClaim) {
-  const membershipPath = projectId ? `workspaces/${workspaceSlug}/projects/${projectId}/members/${uid}` : `workspaces/${workspaceSlug}/members/${uid}`;
-  const [workspace, owner, caller, membership] = await Promise.all([
-    get(`workspaces/${workspaceSlug}`), get(`users/${ownerUid}`), get(`users/${uid}`), get(membershipPath),
+async function workspacePrincipal(state: PlatformStateRepositories, claim: WorkspaceConversationScopeClaim, projectMember: boolean) {
+  const { uid, workspaceSlug, ownerUid, projectId } = claim;
+  const [workspace, builders, member, project] = await Promise.all([
+    state.workspaces.records.get(workspaceSlug),
+    state.builders.records.getMany([ownerUid, uid]),
+    projectId === undefined ? state.workspaces.members.get(workspaceSlug, uid) : null,
+    projectId === undefined ? null : state.workspaces.projects.get(workspaceSlug, projectId),
   ]);
-  const ownerData = activeUser(owner);
-  const callerData = activeUser(caller);
-  if (!workspace.exists || record(workspace.data())?.ownerUid !== ownerUid || !ownerData || !callerData) return null;
-  if (projectId) {
-    if (!await activeProjectPrincipal(get, { uid, workspaceSlug, ownerUid, projectId }, membership.exists)) return null;
-  } else if (uid !== ownerUid && !isCanonicalWorkspaceMembership(membership.data())) return null;
-  return ownerData;
+  const owner = builders.get(ownerUid);
+  if (workspace?.ownerUid !== ownerUid || !interactiveBuilder(owner) || !interactiveBuilder(builders.get(uid))) return null;
+  const principalCurrent = projectId === undefined
+    ? uid === ownerUid || isCanonicalWorkspaceMembership(member)
+    : activeProjectPrincipal(project, claim, projectMember);
+  return principalCurrent ? owner : null;
 }
-function assignedGateway(ownerData: Record<string, unknown>, claim: WorkspaceConversationScopeClaim): string | null {
-  const gatewayId = record(record(ownerData.provisioning)?.openclaw)?.gatewayId;
-  if (!isValidGatewayId(gatewayId) || (claim.gatewayId !== undefined && gatewayId !== claim.gatewayId) ||
-    !userAssignmentMatchesGateway(ownerData, gatewayId, claim.workspaceSlug)) return null;
-  return gatewayId;
-}
-export async function resolveWorkspaceConversationScope(get: DocumentReader, claim: WorkspaceConversationScopeClaim) {
+export async function resolveWorkspaceConversationScope(state: PlatformStateRepositories, claim: WorkspaceConversationScopeClaim, projectMember: boolean) {
   if (!validScopeClaim(claim)) return null;
-  const ownerData = await workspacePrincipal(get, claim);
-  if (!ownerData) return null;
-  const gatewayId = assignedGateway(ownerData, claim);
-  if (!gatewayId) return null;
-  const root = await get(`gateways/${gatewayId}`);
-  const auth = root.exists ? gatewayAuthorizationFromRootDocument(root.data(), gatewayId) : null;
+  const owner = await workspacePrincipal(state, claim, projectMember);
+  const gatewayId = owner?.gateway?.gatewayId;
+  if (!owner || !isValidGatewayId(gatewayId) || (claim.gatewayId !== undefined && gatewayId !== claim.gatewayId) ||
+    !builderAssignedTo(owner, gatewayId, claim.workspaceSlug)) return null;
+  const auth = await readGatewayAuthorizationInStore(state, gatewayId);
   if (!auth || auth.gateway.desiredStatus !== "running") return null;
   const gatewayClass = resolveGatewayClass({ gatewayClass: auth.config.gatewayClass, profile: auth.config.profile ?? undefined, imageProfile: auth.config.imageProfile });
   const { uid, ownerUid, workspaceSlug } = claim;
   if (gatewayClass !== "shared" && (auth.config.ownerUid !== ownerUid || auth.config.builderSlug !== workspaceSlug)) return null;
-  return { uid, ownerUid, workspaceSlug, gatewayId, auth, gatewayClass, nativeAccess: workspacePermissionsEnabled(auth.config, ownerData) };
+  return { uid, ownerUid, workspaceSlug, gatewayId, auth, gatewayClass, owner };
+}
+async function resolveNativeConversationScope(deps: WorkspaceConversationDeps, claim: WorkspaceConversationScopeClaim) {
+  if (!validScopeClaim(claim)) return null;
+  const { projectId, uid, ownerUid, workspaceSlug } = claim;
+  const projectMember = projectId !== undefined && uid !== ownerUid && await projectMemberExists(deps.db, workspaceSlug, projectId, uid);
+  return withGatewayOwnerTier(
+    { store: deps.store, readBuilderTier: deps.readBuilderTier, ownerUid: claim.ownerUid, now: Date.now() },
+    async (ownerTier) => {
+      const resolved = await resolveWorkspaceConversationScope(deps.store, claim, projectMember);
+      if (!resolved) return null;
+      const { owner, ...scope } = resolved;
+      return { ...scope, nativeAccess: ownerWorkspacePermissionsEnabled(scope.auth.config, ownerTier, owner) };
+    },
+  );
 }
 async function mattermostClient(token: string) {
   const { createChannelSessionMattermostClient } = await import("../../../gateway-edge/src/lib/channel-session-model-control.js");
@@ -96,7 +106,7 @@ async function resolveWorkspaceChannel(deps: WorkspaceConversationDeps, claim: {
   const access = await authorize(claim.uid, claim.channelId, undefined, voice ? { voiceConversation: true } : { workspaceConversation: true });
   if (!access || access.forbidden || !channelAgentAllowed(access.target, voice)) return null;
   const { workspaceSlug, ownerUid, projectId } = access.target;
-  const scope = await resolveWorkspaceConversationScope(path => deps.db.doc(path).get(), { ...claim, workspaceSlug, ownerUid, projectId });
+  const scope = await resolveNativeConversationScope(deps, { ...claim, workspaceSlug, ownerUid, projectId });
   if (!scope) return null;
   const channel = record(await (deps.readChannel ?? readMattermostChannel)(access.token, claim.channelId));
   if (!channel || channel.id !== claim.channelId || !["O", "P"].includes(String(channel.type)) || channel.delete_at !== 0) return null;

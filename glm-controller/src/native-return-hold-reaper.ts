@@ -18,7 +18,7 @@ export const NATIVE_RETURN_HOLD_REAPER_CREATOR = "glm-controller-native-return-h
 
 export interface NativeReturnHoldReaperDeps {
   store: PlatformStateStore;
-  informer: Pick<FleetInformer, "glmGateways">;
+  informer: Pick<FleetInformer, "fleetRegistry">;
   vm: Pick<GatewayVmClient, "describe">;
   log: (msg: string) => void;
   now: () => number;
@@ -133,11 +133,8 @@ async function releaseTerminalHold(
 }
 
 async function holdCandidates(deps: NativeReturnHoldReaperDeps): Promise<HoldCandidate[]> {
-  const mirrored = deps.informer.glmGateways();
-  if (mirrored !== null) {
-    return mirrored.map((doc) => ({ gatewayId: doc.id, returnOperationId: heldReturnOperationId(doc.data().vmHome) }));
-  }
-  return (await deps.store.fleetRegistry.list()).map((record) => ({
+  const records = deps.informer.fleetRegistry() ?? await deps.store.fleetRegistry.list();
+  return records.map((record) => ({
     gatewayId: record.gatewayId,
     returnOperationId: heldReturnOperationId(record.vmHome),
   }));

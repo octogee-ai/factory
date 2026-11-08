@@ -212,6 +212,25 @@ function agentImportFields(uid, importId, record, cleanupAt) {
         updatedAt: isoMillis(key, fields, "updatedAt"),
     };
 }
+export function agentImportRecordFromPayload(uid, importId, payload, cleanupAt) {
+    return { ...agentImportFields(uid, importId, payload, cleanupAt), record: payload };
+}
+export function agentImportRecordFromData(uid, importId, data) {
+    const cleanupAt = new FirestoreFields(agentImportKey(uid, importId), data).nullableNumber("cleanupAt");
+    const { cleanupAt: _cleanupAt, ...record } = data;
+    return agentImportRecordFromPayload(uid, importId, record, cleanupAt);
+}
+export function agentImportDocument(record) {
+    if ("cleanupAt" in record.record) {
+        throw new TypeError("jobs.agentImports.put: cleanupAt is a typed field and cannot appear in the record");
+    }
+    const { record: payload, revision: _revision, ...typed } = record;
+    const derived = agentImportFields(record.uid, record.importId, payload, record.cleanupAt);
+    if (!isDeepStrictEqual(derived, typed)) {
+        throw new TypeError(`jobs.agentImports.put: typed fields ${JSON.stringify(typed)} disagree with the record, which carries ${JSON.stringify(derived)}`);
+    }
+    return record.cleanupAt === null ? { ...payload } : { ...payload, cleanupAt: record.cleanupAt };
+}
 function agentImportPath(path) {
     const parts = path.split("/");
     if (parts.length !== 4 || parts[0] !== "users" || parts[2] !== "agentImports")
@@ -225,30 +244,11 @@ function decodeAgentImport(snapshot) {
     if (location === null) {
         throw new MalformedRecordError({ aggregate: "agent-import", key: snapshot.ref.path }, "is not under users/{uid}/agentImports");
     }
-    const data = decodeDocumentData(snapshot);
-    const cleanup = new FirestoreFields(agentImportKey(location.uid, location.importId), data).nullableNumber("cleanupAt");
-    const { cleanupAt: _cleanupAt, ...record } = data;
-    return withStoredRevision(snapshot, {
-        ...agentImportFields(location.uid, location.importId, record, cleanup),
-        record,
-    });
+    return withStoredRevision(snapshot, agentImportRecordFromData(location.uid, location.importId, decodeDocumentData(snapshot)));
 }
-function encodeAgentImport(record) {
-    if ("cleanupAt" in record.record) {
-        throw new TypeError("jobs.agentImports.put: cleanupAt is a typed field and cannot appear in the record");
-    }
-    const { record: payload, revision: _revision, ...typed } = record;
-    const derived = agentImportFields(record.uid, record.importId, payload, record.cleanupAt);
-    if (!isDeepStrictEqual(derived, typed)) {
-        throw new TypeError(`jobs.agentImports.put: typed fields ${JSON.stringify(typed)} disagree with the record, which carries ${JSON.stringify(derived)}`);
-    }
-    return encodeDocument(record.cleanupAt === null ? payload : { ...payload, cleanupAt: record.cleanupAt }, AGENT_IMPORT_TIMES);
-}
-function decodeAgentImportPointer(uid, pointer, snapshot) {
-    if (!snapshot.exists)
-        return null;
+export function agentImportPointerFromData(uid, pointer, data) {
     const key = agentImportPointerKey(uid, pointer);
-    const fields = new FirestoreFields(key, decodeDocumentData(snapshot));
+    const fields = new FirestoreFields(key, data);
     const owner = fields.nullableString("uid");
     if (owner !== null && owner !== uid)
         throw new MalformedRecordError(key, `uid ${owner} does not own the pointer`);
@@ -257,11 +257,23 @@ function decodeAgentImportPointer(uid, pointer, snapshot) {
     if (updatedAtMillis !== null && Number.isNaN(updatedAtMillis)) {
         throw new MalformedRecordError(key, "updatedAt must be an ISO-8601 time");
     }
-    return withStoredRevision(snapshot, {
+    return {
         importId: fields.string("id"),
         slug: fields.nullableString("slug"),
         updatedAt: updatedAtMillis,
-    });
+    };
+}
+export function agentImportPointerDocument(uid, value) {
+    return {
+        id: value.importId,
+        ...(value.slug === null ? {} : { uid, slug: value.slug }),
+        ...(value.updatedAt === null ? {} : { updatedAt: new Date(value.updatedAt).toISOString() }),
+    };
+}
+function decodeAgentImportPointer(uid, pointer, snapshot) {
+    if (!snapshot.exists)
+        return null;
+    return withStoredRevision(snapshot, agentImportPointerFromData(uid, pointer, decodeDocumentData(snapshot)));
 }
 function createAgentImportsRepository(session) {
     const userRef = (uid) => session.db.collection("users").doc(uid);
@@ -283,7 +295,7 @@ function createAgentImportsRepository(session) {
             return snapshot.docs.map(decodeAgentImport).filter(isPresent);
         },
         async put(record) {
-            await session.set("jobs.agentImports.put", agentImportKey(record.uid, record.importId), ref(record.uid, record.importId), encodeAgentImport(record));
+            await session.set("jobs.agentImports.put", agentImportKey(record.uid, record.importId), ref(record.uid, record.importId), encodeDocument(agentImportDocument(record), AGENT_IMPORT_TIMES));
         },
         async delete(uid, importId) {
             await session.delete("jobs.agentImports.delete", agentImportKey(uid, importId), ref(uid, importId));
@@ -292,11 +304,7 @@ function createAgentImportsRepository(session) {
             return decodeAgentImportPointer(uid, pointer, await session.read("jobs.agentImports.getPointer", pointerRef(uid, pointer)));
         },
         async putPointer(uid, pointer, value) {
-            await session.set("jobs.agentImports.putPointer", agentImportPointerKey(uid, pointer), pointerRef(uid, pointer), {
-                id: value.importId,
-                ...(value.slug === null ? {} : { uid, slug: value.slug }),
-                ...(value.updatedAt === null ? {} : { updatedAt: new Date(value.updatedAt).toISOString() }),
-            });
+            await session.set("jobs.agentImports.putPointer", agentImportPointerKey(uid, pointer), pointerRef(uid, pointer), agentImportPointerDocument(uid, value));
         },
         async deletePointer(uid, pointer) {
             await session.delete("jobs.agentImports.deletePointer", agentImportPointerKey(uid, pointer), pointerRef(uid, pointer));

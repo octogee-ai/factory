@@ -1,17 +1,15 @@
 import { createHash } from "node:crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
-import {
-  Timestamp,
-  type DocumentData,
-  type DocumentReference,
-  type Firestore,
-  type Transaction,
-} from "firebase-admin/firestore";
+import type { Firestore } from "firebase-admin/firestore";
 
-import { userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
-import { gatewayAuthorizationFromRootDocument, readGatewayArtifact } from "@octogee/core/gateway-live-release";
 import {
-  OPENCLAW_CONTROL_TICKETS_COLLECTION,
+  firestoreBuilderTierReader,
+  withCurrentBuilderTier,
+  type BuilderTierReader,
+  type CurrentBuilderTier,
+} from "@octogee/core/builder-activation-lease";
+import { gatewayAuthorizationFromRootDocument, readGatewayArtifactInStore } from "@octogee/core/gateway-live-release";
+import {
   inspectOpenClawControlTicket,
   openClawControlTicketHash,
   type OpenClawControlTicketInspection,
@@ -20,17 +18,27 @@ import { isOpenClawControlRevisionRuntimeReady, isOpenClawControlServingRevision
 import {
   resolveGatewayPrincipalAccess,
   type GatewayPrincipalAccess,
-  workspacePermissionsEnabled,
   type ResolvedGatewayAccess,
 } from "@octogee/core/gateway-principal-access";
+import type {
+  BuilderRecord,
+  ControlSession as StoredControlSession,
+  ControlSessionChecks,
+  ControlTicket,
+  FleetRegistryRecord,
+  GatewayRoot,
+  PlatformStateStore,
+  PlatformStateTransaction,
+  Revision,
+  Stored,
+} from "@octogee/core/platform-state";
+import type { AssignmentState } from "@octogee/shared/types/gateway-releases";
 import { isGatewayClassControlUiAccessEnabled, resolveGatewayClass } from "@octogee/shared/types/glm";
 import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
-import { setGatewayAccessDenialAudit } from "../../../gateway-edge/src/lib/gateway-access-audit.js";
-import { nativeMobileAllocation } from '../lib/native-mobile-allocation.js';
+import { nativeMobileControlSessionChecks } from "../lib/native-mobile-control-session-checks.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
-export const OPENCLAW_CONTROL_SESSIONS_COLLECTION = "openclawControlSessions";
 export const OPENCLAW_CONTROL_SESSION_TTL_MS = 60 * 60_000;
 export const OPENCLAW_CONTROL_REQUEST_MAX_BYTES = 16 * 1024;
 
@@ -127,24 +135,63 @@ function controlUiAuthorization(
     ? authorization
     : null;
 }
-
 interface ScopedPrincipalAccess {
   scope: { gatewayId: string; workspaceSlug: string; ownerUid: string; perUserIdentity: boolean };
   principal: GatewayPrincipalAccess | null;
   assignmentMissing: boolean;
-  assignmentState: unknown;
+  assignmentState: AssignmentState | undefined;
 }
 
 type GatewayRootAuthorization = NonNullable<ReturnType<typeof gatewayAuthorizationFromRootDocument>>;
 
+interface OwnerTier extends CurrentBuilderTier {
+  readonly uid: string;
+}
+
+interface PrincipalReadArgs {
+  tx: PlatformStateTransaction;
+  gatewayId: string;
+  workspaceSlug: string;
+  uid: string;
+  ownerTier: OwnerTier | null;
+}
+
+function perUserControlIdentity(config: GatewayRootAuthorization["config"]): boolean {
+  return config.gatewayClass === "builder" && config.builderAccess?.controlIdentity === "per-user";
+}
+
+function perUserIdentityEnabled(
+  config: GatewayRootAuthorization["config"],
+  ownerTier: OwnerTier | null,
+  owner: Stored<BuilderRecord> | null,
+): boolean {
+  if (!perUserControlIdentity(config) || ownerTier === null || ownerTier.uid !== owner?.uid) return false;
+  ownerTier.assertCurrent(owner);
+  return ownerTier.tier !== null;
+}
+
+function rootDocument(root: Stored<GatewayRoot> | null): Record<string, unknown> | undefined {
+  if (root === null) return undefined;
+  const { revision: _revision, ...document } = root;
+  return document;
+}
+
+function registryRuntimeDocument(runtime: Stored<FleetRegistryRecord> | null): Record<string, unknown> | undefined {
+  if (runtime === null) return undefined;
+  const { revision: _revision, ...record } = runtime;
+  return { docKind: "runtime", ...record };
+}
+
+async function revisionRuntime(
+  tx: PlatformStateTransaction,
+  gatewayId: string,
+  revisionId: string,
+): Promise<Record<string, unknown> | undefined> {
+  return revisionId === gatewayId ? registryRuntimeDocument(await tx.fleetRegistry.get(gatewayId)) : undefined;
+}
+
 async function storedOwnerScope(
-  args: {
-    db: Firestore;
-    tx: Transaction;
-    gatewayId: string;
-    workspaceSlug: string;
-    now: number;
-  },
+  args: PrincipalReadArgs,
   authorization: GatewayRootAuthorization,
 ): Promise<Omit<ScopedPrincipalAccess, "principal"> | null> {
   const gatewayClass = resolveGatewayClass({
@@ -155,53 +202,39 @@ async function storedOwnerScope(
   if (gatewayClass !== "shared" && authorization.config.builderSlug !== args.workspaceSlug) {
     return null;
   }
-  const workspace = await args.tx.get(args.db.doc(`workspaces/${args.workspaceSlug}`));
+  const workspace = await args.tx.workspaces.records.get(args.workspaceSlug);
   const ownerUid = gatewayClass === "shared"
-    ? workspace.data()?.ownerUid
+    ? workspace?.ownerUid
     : authorization.config.ownerUid;
   if (typeof ownerUid !== "string" || !ownerUid) return null;
-  const workspaceData = workspace.data();
   const [owner, assignment] = await Promise.all([
-    args.tx.get(args.db.doc(`users/${ownerUid}`)),
-    args.tx.get(args.db.doc(`gateways/${args.gatewayId}/assignments/${ownerUid}`)),
+    args.tx.builders.records.get(ownerUid),
+    args.tx.gateways.assignments.get(args.gatewayId, ownerUid),
   ]);
   const scope = { gatewayId: args.gatewayId, workspaceSlug: args.workspaceSlug, ownerUid,
-    perUserIdentity: workspaceData?.ownerUid === ownerUid &&
-      workspacePermissionsEnabled(authorization.config, owner.data() ?? {}, new Date(args.now)),
+    perUserIdentity: workspace?.ownerUid === ownerUid &&
+      perUserIdentityEnabled(authorization.config, args.ownerTier, owner),
   };
   return {
     scope,
-    assignmentState: assignment.data()?.state,
-    assignmentMissing: !owner.exists || !userAssignmentMatchesGateway(
-      owner.data(),
-      args.gatewayId,
-      args.workspaceSlug,
-    ),
+    assignmentState: assignment?.state,
+    assignmentMissing: owner === null ||
+      owner.gateway?.gatewayId !== args.gatewayId ||
+      owner.slug !== args.workspaceSlug,
   };
 }
 
 async function storedMemberPrincipal(
-  args: {
-    db: Firestore;
-    tx: Transaction;
-    uid: string;
-    now: number;
-  },
+  args: PrincipalReadArgs,
   scope: ScopedPrincipalAccess["scope"],
 ): Promise<GatewayPrincipalAccess> {
-  const memberSnap = await args.tx.get(args.db.doc(`workspaces/${scope.workspaceSlug}/members/${args.uid}`));
-  return resolveGatewayPrincipalAccess({ gateway: scope, uid: args.uid, membership: memberSnap.exists ? memberSnap.data() : null });
+  const membership = await args.tx.workspaces.members.get(scope.workspaceSlug, args.uid);
+  return resolveGatewayPrincipalAccess({ gateway: scope, uid: args.uid, membership });
 }
 
-async function storedPrincipalAccess(args: {
-  db: Firestore;
-  tx: Transaction;
-  root: unknown;
-  gatewayId: string;
-  workspaceSlug: string;
-  uid: string;
-  now: number;
-}): Promise<ScopedPrincipalAccess | null> {
+async function storedPrincipalAccess(
+  args: PrincipalReadArgs & { root: Record<string, unknown> | undefined },
+): Promise<ScopedPrincipalAccess | null> {
   const authorization = gatewayAuthorizationFromRootDocument(args.root, args.gatewayId);
   if (!authorization) return null;
   const storedScope = await storedOwnerScope(args, authorization);
@@ -223,27 +256,34 @@ async function storedPrincipalAccess(args: {
   return { ...storedScope, principal };
 }
 
-function auditPrincipalDenial(args: {
-  db: Firestore;
-  tx: Transaction;
-  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string; perUserIdentity: boolean };
+async function auditPrincipalDenial(args: {
+  tx: PlatformStateTransaction;
+  scope: ScopedPrincipalAccess["scope"];
   uid: string;
   principal: GatewayPrincipalAccess;
   now: number;
-}): void {
+}): Promise<void> {
   if (args.uid === args.scope.ownerUid) return;
-  setGatewayAccessDenialAudit(args.db, args.tx, {
-    ...args.scope,
-    actorUid: args.uid,
-    granteeUid: args.uid,
+  await args.tx.access.accessAudit.record({
+    at: args.now,
+    gatewayId: args.scope.gatewayId,
+    uid: args.uid,
     reason: args.principal.kind === "denied" ? args.principal.reason : "binding_changed",
-    source: "system",
-    now: args.now,
+    detail: {
+      workspaceSlug: args.scope.workspaceSlug,
+      ownerUid: args.scope.ownerUid,
+      actorUid: args.uid,
+      source: "system",
+    },
   });
 }
 
 export function openClawControlSessionHash(sessionId: string): string {
   return createHash("sha256").update("openclaw-control-session\0").update(sessionId).digest("hex");
+}
+
+function sessionDocument(session: StoredControlSession): Record<string, unknown> {
+  return { ...session.grant, uid: session.uid, gatewayId: session.gatewayId, expiresAt: session.expiresAt };
 }
 
 function parseSession(
@@ -276,43 +316,50 @@ function parseSession(
   };
 }
 
+async function auditStoredPrincipalDenial(
+  tx: PlatformStateTransaction,
+  stored: ScopedPrincipalAccess | null,
+  uid: string,
+  now: number,
+): Promise<void> {
+  if (stored?.principal) await auditPrincipalDenial({ tx, scope: stored.scope, uid, principal: stored.principal, now });
+}
+
 interface ControlSessionAccessArgs {
-  db: Firestore;
-  tx: Transaction;
   gatewayId: string;
   revisionId: string;
   sessionHash: string;
+  sessionRevision: Revision;
+  ownerTier: OwnerTier | null;
   now: number;
 }
 
-async function sessionAccessInTransaction(args: ControlSessionAccessArgs): Promise<SessionAccess> {
-  const [rootSnap, revisionSnap, sessionSnap] = await Promise.all([
-    args.tx.get(args.db.doc(`gateways/${args.gatewayId}`)),
-    args.tx.get(args.db.doc(`glmGateways/${args.revisionId}`)),
-    args.tx.get(args.db.doc(`${OPENCLAW_CONTROL_SESSIONS_COLLECTION}/${args.sessionHash}`)),
+async function sessionAccessInTransaction(
+  tx: PlatformStateTransaction,
+  args: ControlSessionAccessArgs,
+): Promise<SessionAccess> {
+  const [storedRoot, revision, storedSession] = await Promise.all([
+    tx.gateways.roots.get(args.gatewayId),
+    revisionRuntime(tx, args.gatewayId, args.revisionId),
+    tx.access.controlSessions.get(args.sessionHash),
   ]);
-  const session = parseSession(
-    sessionSnap.exists ? sessionSnap.data() : undefined,
-    args.gatewayId,
-    args.revisionId,
-    args.now,
-  );
+  const session = storedSession?.revision === args.sessionRevision
+    ? parseSession(sessionDocument(storedSession), args.gatewayId, args.revisionId, args.now)
+    : null;
   if (!session) return { kind: SESSION_INVALID };
-  if (!await mobileSessionCurrent(args, session, sessionSnap.data()?.mobileEnrollmentId, rootSnap.data())) return { kind: SESSION_INVALID };
-  const root = rootSnap.data();
+  const root = rootDocument(storedRoot);
   const stored = await storedPrincipalAccess({
-    db: args.db,
-    tx: args.tx,
+    tx,
     root,
     gatewayId: args.gatewayId,
     workspaceSlug: session.workspaceSlug,
     uid: session.uid,
-    now: args.now,
+    ownerTier: args.ownerTier,
   });
   if (stored?.assignmentMissing) return { kind: ASSIGNMENT_MISSING };
   const principal = stored?.principal;
   if (!stored || !principal || principal.kind === "denied") {
-    auditStoredPrincipalDenial(args, stored, session);
+    await auditStoredPrincipalDenial(tx, stored, session.uid, args.now);
     return { kind: CAPABILITY_DISABLED };
   }
   const authorization = controlUiAuthorization(root, args.gatewayId, principal);
@@ -320,9 +367,9 @@ async function sessionAccessInTransaction(args: ControlSessionAccessArgs): Promi
   if (MOVING_ASSIGNMENT_STATES.has(stored.assignmentState)) {
     return { kind: WORKSPACE_NOT_SERVING };
   }
-  if (stored.assignmentState !== "serving" || !await isOpenClawControlServingRevision(root, revisionSnap.data(), {
+  if (stored.assignmentState !== "serving" || !await isOpenClawControlServingRevision(root, revision, {
     gatewayId: args.gatewayId, revisionId: args.revisionId, now: args.now,
-    readArtifact: (release) => readGatewayArtifact(args.db, args.gatewayId, release, args.tx),
+    readArtifact: (release) => readGatewayArtifactInStore(tx, args.gatewayId, release),
   })) {
     return { kind: "not-ready" };
   }
@@ -342,8 +389,44 @@ function sendSessionAccessFailure(result: Exclude<SessionAccess, { kind: "allowe
 }
 
 interface BrokerContext {
-  db: Firestore;
+  store: PlatformStateStore;
+  readBuilderTier: BuilderTierReader;
+  sessionChecks: ControlSessionChecks;
   now: () => number;
+}
+
+async function withOwnerTier<T>(
+  context: BrokerContext,
+  gatewayId: string,
+  now: number,
+  run: (ownerTier: OwnerTier | null) => Promise<T>,
+): Promise<T> {
+  const authorization = gatewayAuthorizationFromRootDocument(rootDocument(await context.store.gateways.roots.get(gatewayId)), gatewayId);
+  const uid = authorization && perUserControlIdentity(authorization.config) ? authorization.config.ownerUid : null;
+  if (!uid) return run(null);
+  return withCurrentBuilderTier(
+    { store: context.store, readBuilderTier: context.readBuilderTier, uid, now },
+    (current) => run({ ...current, uid }),
+  );
+}
+
+async function resolveSessionAccess(
+  context: BrokerContext,
+  input: { gatewayId: string; revisionId: string; sessionHash: string },
+): Promise<SessionAccess> {
+  const now = context.now();
+  const stored = await context.store.access.controlSessions.get(input.sessionHash);
+  const session = stored ? parseSession(sessionDocument(stored), input.gatewayId, input.revisionId, now) : null;
+  if (!stored || !session) return { kind: SESSION_INVALID };
+  if (stored.attachmentId !== null && !await context.sessionChecks.current({
+    uid: session.uid,
+    gatewayId: input.gatewayId,
+    workspaceSlug: session.workspaceSlug,
+    attachmentId: stored.attachmentId,
+  }, now)) return { kind: SESSION_INVALID };
+  return withOwnerTier(context, input.gatewayId, now, (ownerTier) =>
+    context.store.transaction({ label: "openclaw-control-broker.session-access" }, (tx) =>
+      sessionAccessInTransaction(tx, { ...input, sessionRevision: stored.revision, ownerTier, now })));
 }
 
 type AuthenticatedGateway = NonNullable<ReturnType<typeof authenticatedGateway>>;
@@ -431,40 +514,39 @@ function validateRedeemAttempt(
 }
 
 interface RedeemDocuments {
-  root: DocumentData | undefined;
-  revision: DocumentData | undefined;
-  ticket: DocumentData | undefined;
-  ticketRef: DocumentReference;
+  root: Record<string, unknown> | undefined;
+  revision: Record<string, unknown> | undefined;
+  ticket: Record<string, unknown> | undefined;
   sessionExists: boolean;
-  sessionRef: DocumentReference;
+}
+
+function ticketDocument(ticket: ControlTicket | null): Record<string, unknown> | undefined {
+  if (ticket === null) return undefined;
+  return {
+    ...ticket.grant,
+    uid: ticket.uid,
+    gatewayId: ticket.gatewayId,
+    expiresAt: ticket.expiresAt,
+    ...(ticket.redeemedAt === null ? {} : { redeemedAt: ticket.redeemedAt }),
+  };
 }
 
 async function loadRedeemDocuments(
-  context: BrokerContext,
+  tx: PlatformStateTransaction,
   attempt: RedeemAttempt,
-  tx: Transaction,
 ): Promise<RedeemDocuments> {
   const gatewayId = attempt.authenticated.bound.gatewayId;
-  const revisionId = attempt.authenticated.revisionId;
-  const ticketRef = context.db.doc(
-    `${OPENCLAW_CONTROL_TICKETS_COLLECTION}/${attempt.ticketHash}`,
-  );
-  const sessionRef = context.db.doc(
-    `${OPENCLAW_CONTROL_SESSIONS_COLLECTION}/${attempt.sessionHash}`,
-  );
   const [root, revision, ticket, session] = await Promise.all([
-    tx.get(context.db.doc(`gateways/${gatewayId}`)),
-    tx.get(context.db.doc(`glmGateways/${revisionId}`)),
-    tx.get(ticketRef),
-    tx.get(sessionRef),
+    tx.gateways.roots.get(gatewayId),
+    revisionRuntime(tx, gatewayId, attempt.authenticated.revisionId),
+    tx.access.controlTickets.get(attempt.ticketHash),
+    tx.access.controlSessions.get(attempt.sessionHash),
   ]);
   return {
-    root: root.data(),
-    revision: revision.data(),
-    ticket: ticket.exists ? ticket.data() : undefined,
-    ticketRef,
-    sessionExists: session.exists,
-    sessionRef,
+    root: rootDocument(root),
+    revision,
+    ticket: ticketDocument(ticket),
+    sessionExists: session !== null,
   };
 }
 
@@ -484,17 +566,15 @@ function inspectRedeemDocuments(args: {
   return { kind: "session-conflict" };
 }
 
-function rejectRedeemPrincipal(args: {
-  context: BrokerContext;
+async function rejectRedeemPrincipal(args: {
   attempt: RedeemAttempt;
   inspected: RedeemableTicket;
   principal: GatewayPrincipalAccess | null;
-  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string; perUserIdentity: boolean } | null;
-  tx: Transaction;
-}): RedeemResult {
+  scope: ScopedPrincipalAccess["scope"] | null;
+  tx: PlatformStateTransaction;
+}): Promise<RedeemResult> {
   if (args.principal && args.scope) {
-    auditPrincipalDenial({
-      db: args.context.db,
+    await auditPrincipalDenial({
       tx: args.tx,
       scope: args.scope,
       uid: args.inspected.uid,
@@ -506,21 +586,20 @@ function rejectRedeemPrincipal(args: {
 }
 
 async function redeemPrincipalFailure(args: {
-  context: BrokerContext;
   attempt: RedeemAttempt;
   inspected: RedeemableTicket;
-  root: unknown;
-  tx: Transaction;
+  root: Record<string, unknown> | undefined;
+  ownerTier: OwnerTier | null;
+  tx: PlatformStateTransaction;
 }): Promise<RedeemResult | null> {
   const gatewayId = args.attempt.authenticated.bound.gatewayId;
   const stored = await storedPrincipalAccess({
-    db: args.context.db,
     tx: args.tx,
     root: args.root,
     gatewayId,
     workspaceSlug: args.inspected.workspaceSlug,
     uid: args.inspected.uid,
-    now: args.attempt.attemptAt,
+    ownerTier: args.ownerTier,
   });
   if (stored?.assignmentMissing) {
     return { kind: ASSIGNMENT_MISSING };
@@ -540,40 +619,42 @@ async function redeemPrincipalFailure(args: {
   return null;
 }
 
-function persistRedeemedSession(args: {
+async function persistRedeemedSession(args: {
   attempt: RedeemAttempt;
-  documents: RedeemDocuments;
   inspected: RedeemableTicket;
-  tx: Transaction;
-}): RedeemResult {
-  const { attempt, documents, inspected, tx } = args;
+  tx: PlatformStateTransaction;
+}): Promise<RedeemResult> {
+  const { attempt, inspected, tx } = args;
   const expiresAt = attempt.attemptAt + OPENCLAW_CONTROL_SESSION_TTL_MS;
-  tx.update(documents.ticketRef, { redeemedAt: attempt.attemptAt });
-  tx.set(documents.sessionRef, {
+  await tx.access.controlTickets.markRedeemed(attempt.ticketHash, attempt.attemptAt, { redeemedAt: null });
+  await tx.access.controlSessions.put({
+    sessionHash: attempt.sessionHash,
     uid: inspected.uid,
     gatewayId: attempt.authenticated.bound.gatewayId,
-    workspaceSlug: inspected.workspaceSlug,
-    revisionId: attempt.authenticated.revisionId,
     createdAt: attempt.attemptAt,
     expiresAt,
-    expireAt: Timestamp.fromMillis(expiresAt),
+    attachmentId: null,
+    grant: {
+      workspaceSlug: inspected.workspaceSlug,
+      revisionId: attempt.authenticated.revisionId,
+    },
   });
   return { kind: "redeemed", redeemed: inspected, expiresAt };
 }
 
 async function applyRedeemAttempt(
-  context: BrokerContext,
+  tx: PlatformStateTransaction,
   attempt: RedeemAttempt,
-  tx: Transaction,
+  ownerTier: OwnerTier | null,
 ): Promise<RedeemResult> {
-  const documents = await loadRedeemDocuments(context, attempt, tx);
+  const documents = await loadRedeemDocuments(tx, attempt);
   const inspected = inspectRedeemDocuments({ attempt, documents });
   if (inspected.kind !== "redeemable") return inspected;
   const principalFailure = await redeemPrincipalFailure({
-    context,
     attempt,
     inspected,
     root: documents.root,
+    ownerTier,
     tx,
   });
   if (principalFailure) return principalFailure;
@@ -585,16 +666,17 @@ async function applyRedeemAttempt(
   if (!isOpenClawControlRevisionRuntimeReady(documents.revision, identity) ||
     !await isOpenClawControlServingRevision(documents.root, documents.revision, {
       ...identity,
-      readArtifact: (release) => readGatewayArtifact(context.db, identity.gatewayId, release, tx),
+      readArtifact: (release) => readGatewayArtifactInStore(tx, identity.gatewayId, release),
     })) return { kind: "not-ready" };
-  return persistRedeemedSession({ attempt, documents, inspected, tx });
+  return persistRedeemedSession({ attempt, inspected, tx });
 }
 
 async function redeemAttemptInTransaction(
   context: BrokerContext,
   attempt: RedeemAttempt,
 ): Promise<RedeemResult> {
-  return context.db.runTransaction((tx) => applyRedeemAttempt(context, attempt, tx));
+  return withOwnerTier(context, attempt.authenticated.bound.gatewayId, attempt.attemptAt, (ownerTier) =>
+    context.store.transaction({ label: "openclaw-control-broker.redeem" }, (tx) => applyRedeemAttempt(tx, attempt, ownerTier)));
 }
 
 function sendRedeemResult(result: RedeemResult, res: Response): void {
@@ -648,14 +730,7 @@ async function authorizeControlSession(
   const revisionId = body.revisionId as string;
   const sessionHash = openClawControlSessionHash(body.sessionId as string);
   try {
-    const result = await context.db.runTransaction((tx) => sessionAccessInTransaction({
-      db: context.db,
-      tx,
-      gatewayId: bound.gatewayId,
-      revisionId,
-      sessionHash,
-      now: context.now(),
-    }));
+    const result = await resolveSessionAccess(context, { gatewayId: bound.gatewayId, revisionId, sessionHash });
     if (result.kind !== "allowed") {
       sendSessionAccessFailure(result, res);
       return;
@@ -675,8 +750,8 @@ function validProfileRequest(body: Record<string, unknown> | null): body is Reco
 
 async function loadControlProfile(
   context: BrokerContext & {
-    profile: typeof import("../lib/openclaw-profile-appearance.js").loadOpenClawProfileAppearance;
-    chatAuthor: typeof import("../lib/openclaw-chat-author.js").resolveOpenClawChatAuthor;
+    profile: import("../lib/openclaw-profile-appearance.js").OpenClawProfileAppearanceLoader;
+    chatAuthor: import("../lib/openclaw-chat-author.js").OpenClawChatAuthorResolver;
   },
   req: Request,
   res: Response,
@@ -697,14 +772,7 @@ async function loadControlProfile(
   const revisionId = body.revisionId as string;
   const sessionHash = openClawControlSessionHash(body.sessionId as string);
   try {
-    const result = await context.db.runTransaction((tx) => sessionAccessInTransaction({
-      db: context.db,
-      tx,
-      gatewayId: bound.gatewayId,
-      revisionId,
-      sessionHash,
-      now: context.now(),
-    }));
+    const result = await resolveSessionAccess(context, { gatewayId: bound.gatewayId, revisionId, sessionHash });
     if (result.kind !== "allowed") {
       sendSessionAccessFailure(result, res);
       return;
@@ -766,11 +834,11 @@ async function controlMattermostRequest(
     return;
   }
   try {
-    const access = await context.db.runTransaction((tx) => sessionAccessInTransaction({
-      db: context.db, tx, gatewayId: bound.gatewayId,
+    const access = await resolveSessionAccess(context, {
+      gatewayId: bound.gatewayId,
       revisionId: body.revisionId as string,
-      sessionHash: openClawControlSessionHash(body.sessionId as string), now: context.now(),
-    }));
+      sessionHash: openClawControlSessionHash(body.sessionId as string),
+    });
     if (access.kind !== "allowed") {
       sendSessionAccessFailure(access, res);
       return;
@@ -795,7 +863,7 @@ async function controlMattermostRequest(
 }
 
 function cacheProfileAvatars(
-  load: typeof import("../lib/openclaw-profile-appearance.js").loadOpenClawProfileAppearance,
+  load: import("../lib/openclaw-profile-appearance.js").OpenClawProfileAppearanceLoader,
 ): typeof load {
   const avatars = new Map<string, { revision: string; bytes: Buffer }>();
   return async (uid) => {
@@ -815,48 +883,31 @@ function cacheProfileAvatars(
     } } };
   };
 }
-
 export function createOpenClawControlBrokerRoutes(args: {
   db: Firestore;
+  store: PlatformStateStore;
   now?: () => number;
   mattermost?: MattermostBrokerDependencies;
-  profile?: typeof import("../lib/openclaw-profile-appearance.js").loadOpenClawProfileAppearance;
-  chatAuthor?: typeof import("../lib/openclaw-chat-author.js").resolveOpenClawChatAuthor;
+  profile?: import("../lib/openclaw-profile-appearance.js").OpenClawProfileAppearanceLoader;
+  chatAuthor?: import("../lib/openclaw-chat-author.js").OpenClawChatAuthorResolver;
 }): Router {
   const router = Router();
   const context: BrokerContext = {
-    db: args.db,
+    store: args.store,
+    readBuilderTier: firestoreBuilderTierReader(args.db),
+    sessionChecks: nativeMobileControlSessionChecks({ db: args.db, store: args.store }),
     now: args.now ?? Date.now,
   };
   router.post("/redeem", (req, res, next) => redeemControlTicket(context, req, res, next));
   router.post("/authorize", (req, res, next) => authorizeControlSession(context, req, res, next));
   const profile = cacheProfileAvatars(args.profile ?? (async (uid) =>
-    (await import("../lib/openclaw-profile-appearance.js")).loadOpenClawProfileAppearance(uid)));
+    (await import("../lib/openclaw-profile-appearance.js")).loadOpenClawProfileAppearance(args.store, uid)));
   const chatAuthor = args.chatAuthor ?? (async (...params) =>
-    (await import("../lib/openclaw-chat-author.js")).resolveOpenClawChatAuthor(...params));
+    (await import("../lib/openclaw-chat-author.js")).resolveOpenClawChatAuthor(args.store, ...params));
   router.post("/profile", (req, res, next) => loadControlProfile({ ...context, profile, chatAuthor }, req, res, next));
   for (const operation of ["authorize", "channels"] as const) {
     router.post(`/mattermost/${operation}`, (req, res, next) =>
       controlMattermostRequest({ ...context, mattermost: args.mattermost ?? mattermostDefaults, operation }, req, res, next));
   }
   return router;
-}
-
-function matchingMobileEnrollment(enrollment: DocumentData | undefined, session: ControlSession, now: number): enrollment is DocumentData {
-  if (!enrollment) return false;
-  return enrollment.uid === session.uid && enrollment.gatewayId === session.gatewayId && enrollment.workspaceSlug === session.workspaceSlug &&
-    ['pending', 'reserved', 'awaiting-operator', 'active'].includes(enrollment.state) && (enrollment.state === 'active' || enrollment.setupExpiresAt > now);
-}
-async function mobileSessionCurrent(args: ControlSessionAccessArgs, session: ControlSession, id: unknown, root: DocumentData | undefined): Promise<boolean> {
-  if (id === undefined) return true;
-  if (typeof id !== 'string' || !UUID.test(id)) return false;
-  const enrollment = (await args.tx.get(args.db.doc(`nativeMobileDevices/${id}`))).data();
-  if (!matchingMobileEnrollment(enrollment, session, args.now)) return false;
-  const auth = gatewayAuthorizationFromRootDocument(root, args.gatewayId);
-  const assignment = (await args.tx.get(args.db.doc(`gateways/${args.gatewayId}/assignments/${session.uid}`))).data();
-  return !!auth && !!assignment && enrollment.allocation === nativeMobileAllocation(auth.gateway.createdAt, auth.config.allocation, assignment, session.uid, session.workspaceSlug);
-}
-
-function auditStoredPrincipalDenial(args: ControlSessionAccessArgs, stored: Awaited<ReturnType<typeof storedPrincipalAccess>>, session: ControlSession): void {
-  if (stored && stored.principal) auditPrincipalDenial({ db: args.db, tx: args.tx, scope: stored.scope, uid: session.uid, principal: stored.principal, now: args.now });
 }

@@ -1,3 +1,4 @@
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { describe, expect, it, vi } from "vitest";
 import type { ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import { refineGatewayConvergenceAction } from "../index.js";
@@ -155,8 +156,7 @@ describe("first-boot VM gateway handoff", () => {
 
     await expect(refineGatewayConvergenceAction({
       passDeps: {
-        db: { collection: () => ({ doc: () => ({ get: async () => ({ exists: true, data: () => gateway }) }) }) } as never,
-        store: {} as never,
+        store: createDocumentFixtureStore({ [`gateways/${gateway.gatewayId}`]: gateway }),
         reconcileSurgeHandoff,
       },
       gateway,

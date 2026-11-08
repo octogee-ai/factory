@@ -69,12 +69,12 @@ function computeReview(audience: string, instanceId = "4242"): ReviewResult {
 function appWith(tenantReviewer: Reviewer, credentialReviewer: Reviewer) {
   const app = express();
   app.use(createTenantBindingMiddleware({
-    reviewer: tenantReviewer, db: fakeDb(docs), namespace: "octogee-test",
+    reviewer: tenantReviewer, store: createDocumentFixtureStore(docs), namespace: "octogee-test",
     metrics: createTenantBindingMetrics(new Registry()), logger: { warn: vi.fn() },
   }));
   app.get("/bound", (req, res) => res.json(req.boundTenant ?? null));
   app.post("/secret", createGatewayCredentialAuth({
-    reviewer: credentialReviewer, db: fakeDb(docs), namespace: "octogee-test", logger: { warn: vi.fn() },
+    reviewer: credentialReviewer, store: createDocumentFixtureStore(docs), namespace: "octogee-test", logger: { warn: vi.fn() },
   }), (_req, res) => res.status(204).end());
   return app;
 }
@@ -102,16 +102,17 @@ describe("tenant binding for a VM gateway", () => {
 describe("builder runtime-state routes for a VM gateway", () => {
   it("authorize the VM's own snapshotter through binding, enforcement, and the route's pod-scoped check", async () => {
     const db = fakeDb(docs);
+    const store = createDocumentFixtureStore(docs);
     const app = express();
     app.use(express.json());
     app.use(createTenantBindingMiddleware({
-      reviewer: async () => computeReview("octogee-api"), db, namespace: "octogee-test",
+      reviewer: async () => computeReview("octogee-api"), store, namespace: "octogee-test",
       metrics: createTenantBindingMetrics(new Registry()), logger: { warn: vi.fn() },
     }));
-    app.use(createTenantEnforcementMiddleware({ db }));
+    app.use(createTenantEnforcementMiddleware({ db, store }));
     app.use("/internal/fleet", createFleetBrokerRoutes({
       db: db as unknown as Firestore,
-      store: createDocumentFixtureStore({}),
+      store,
       createBlobSignedUrl: async (input) => ({ url: `signed:${input.gcsPath}`, method: "GET", gcsPath: input.gcsPath, expiresAt: "later" }),
     }));
 

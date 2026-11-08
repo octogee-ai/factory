@@ -1,4 +1,3 @@
-import type { GatewayStatus } from "@octogee/shared/types/fleet-controller";
 import { type CustomerMigrationV2GatewayRootFence } from "@octogee/shared/types/glm";
 import { type AssignmentSource, type AssignmentState } from "@octogee/shared/types/gateway-releases";
 import type { FleetBrokerCustomerRestoreAuthority } from "@octogee/shared/types/fleet-broker";
@@ -57,36 +56,6 @@ export declare function clearRetiredBuilderActivationPreparation(deps: FleetStat
     generation: number;
     retirementOperationId: string;
 }): Promise<boolean>;
-export interface FleetStateDocRef {
-    set: (data: Record<string, unknown>, options?: {
-        merge?: boolean;
-    }) => Promise<unknown>;
-    update: (data: Record<string, unknown>) => Promise<unknown>;
-    get: () => Promise<{
-        exists: boolean;
-        data: () => Record<string, unknown> | undefined;
-    }>;
-    collection?: (name: string) => {
-        doc: (id: string) => FleetStateDocRef;
-    };
-}
-export interface FleetStateTxn {
-    get: (ref: FleetStateDocRef) => Promise<{
-        exists: boolean;
-        data: () => Record<string, unknown> | undefined;
-    }>;
-    update: (ref: FleetStateDocRef, data: Record<string, unknown>) => void;
-    set: (ref: FleetStateDocRef, data: Record<string, unknown>, options?: {
-        merge?: boolean;
-    }) => void;
-    delete: (ref: FleetStateDocRef) => void;
-}
-export interface FleetStateFirestore {
-    collection: (name: string) => {
-        doc: (id: string) => FleetStateDocRef;
-    };
-    runTransaction: <T>(body: (txn: FleetStateTxn) => Promise<T>) => Promise<T>;
-}
 export interface CustomerRestoreInput {
     fromGatewayId: string;
     uid: string;
@@ -106,20 +75,6 @@ export declare function beginCustomerRestore(deps: FleetStateDeps, input: Custom
     resume?: boolean;
 }): Promise<CustomerRestoreInput>;
 export declare function acknowledgeCustomerRestore(deps: FleetStateDeps, input: CustomerRestoreInput): Promise<void>;
-export interface HeartbeatSnapshot {
-    gatewayId: string;
-    status: GatewayStatus;
-    version: string;
-    openclawVersion: string;
-    mountedCustomers: string[];
-    internalUrl: string;
-    startedAt: number;
-}
-export interface GatewayHeartbeatDeps {
-    db: FleetStateFirestore;
-    serverTimestamp: () => unknown;
-}
-export declare function writeGatewayHeartbeat(deps: GatewayHeartbeatDeps, snapshot: HeartbeatSnapshot): Promise<void>;
 export interface CutoverCommitParams {
     uid: string;
     slug: string;

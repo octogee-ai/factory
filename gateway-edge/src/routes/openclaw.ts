@@ -37,21 +37,19 @@ router.post("/runtime-activity", requireAuth, async (req: Request, res: Response
   } catch (error) { next(error); }
 });
 
-function activationGatewayId(
+async function activationGatewayId(
+  uid: string,
   userData: Record<string, unknown> | undefined,
-): string | null {
-  if (!userData || !accountAllowsInteractiveAccess(userData)) return null;
+): Promise<string | null> {
+  if (!userData) return null;
   const builderTier = resolveBuilderTier(userData);
   if (!builderTier || BUILDER_TIERS[builderTier].instance === null) return null;
-  const provisioning = userData.provisioning as
-    | { openclaw?: { gatewayId?: unknown; slug?: unknown } }
-    | undefined;
-  const hasSlug =
-    typeof provisioning?.openclaw?.slug === "string" ||
-    typeof userData.username === "string";
-  return hasSlug && isValidGatewayId(provisioning?.openclaw?.gatewayId)
-    ? provisioning.openclaw.gatewayId
-    : null;
+  const builder = await platformStateStore.builders.records.get(uid);
+  if (!builder || !accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined })) {
+    return null;
+  }
+  const gatewayId = builder.gateway?.gatewayId;
+  return builder.slug !== null && isValidGatewayId(gatewayId) ? gatewayId : null;
 }
 
 async function requestRuntimeDemand(input: {
@@ -61,23 +59,15 @@ async function requestRuntimeDemand(input: {
   eventKey: string;
   createdBy: string;
 }): Promise<BuilderActivationLeaseResult | null> {
-  const reportingGatewayId = activationGatewayId(input.userData);
+  const reportingGatewayId = await activationGatewayId(input.uid, input.userData);
   if (!reportingGatewayId) return null;
-  const assignmentSnap = await db.doc(
-    `gateways/${reportingGatewayId}/assignments/${input.uid}`,
-  ).get();
-  const assignmentData = assignmentSnap.exists
-    ? assignmentSnap.data() as Record<string, unknown>
-    : undefined;
+  const assignment = await platformStateStore.gateways.assignments.get(reportingGatewayId, input.uid);
   return requestBuilderActivationLease({
     store: platformStateStore,
     readBuilderTier,
     uid: input.uid,
     reportingGatewayId,
-    assignmentEpoch:
-      typeof assignmentData?.epoch === "number"
-        ? assignmentData.epoch
-        : undefined,
+    assignmentEpoch: assignment?.epoch,
     eventKey: input.eventKey,
     cause: input.cause,
     observedAt: Date.now(),
@@ -106,12 +96,8 @@ router.post("/ticket", requireAuth, async (req: Request, res: Response, next: Ne
       res.set('Cache-Control', 'no-store').json({ wsTicket: ticket.ticket, proxyUrl: process.env.API_PUBLIC_URL || '', gatewayId, sessionKey: scope.sessionKey });
       return;
     }
-    const provisioning = req.user?.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
-    const rawGatewayId = provisioning?.openclaw?.gatewayId;
-    const gatewayId =
-      isValidGatewayId(rawGatewayId)
-        ? rawGatewayId
-        : "";
+    const rawGatewayId = (await platformStateStore.builders.records.get(uid))?.gateway?.gatewayId;
+    const gatewayId = isValidGatewayId(rawGatewayId) ? rawGatewayId : "";
 
     const t = await mintTicket({ uid, gatewayId, purpose: "openclaw-ws" });
 

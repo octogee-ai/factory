@@ -92,6 +92,34 @@ describe("brokered adapter — GitHub-backed project checkout source", () => {
     ]);
   });
 
+  it("prefers the connected GitHub repo over the project's stale Gitea mirror", async () => {
+    const { adapter } = mkAdapter([
+      {
+        projectSlug: "gh",
+        giteaRepoName: "alice-gh",
+        repoSource: { ...GITHUB_REPO_SOURCE },
+        provisioningState: "active",
+      },
+    ]);
+
+    await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([
+      { projectSlug: "gh", giteaRepoName: "alice-gh", repoSource: GITHUB_REPO_SOURCE },
+    ]);
+  });
+
+  it("still skips a project that is not active", async () => {
+    const { adapter } = mkAdapter([
+      {
+        projectSlug: "gh",
+        giteaRepoName: null,
+        repoSource: { ...GITHUB_REPO_SOURCE },
+        provisioningState: "provisioning",
+      },
+    ]);
+
+    await expect(adapter.listProjectsNeedingClone("alice")).resolves.toEqual([]);
+  });
+
   it("leaves a Gitea-backed project's target free of a repoSource", async () => {
     const { adapter } = mkAdapter([
       { projectSlug: "camp", giteaRepoName: "alice-camp", provisioningState: "active" },

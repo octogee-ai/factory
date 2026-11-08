@@ -106,7 +106,6 @@ describe("model credential materializer consumers", () => {
   test.each([
     "scripts/lib/byot-sync.ts",
     "scripts/lib/byot-sync-runtime.ts",
-    "scripts/lib/customer-lifecycle-prod-adapter.ts",
   ])("%s consumes the model credential materializer facade", (relativePath) => {
     const src = readSrc(relativePath);
     expect(src).toContain("./model-credential-materializer.js");

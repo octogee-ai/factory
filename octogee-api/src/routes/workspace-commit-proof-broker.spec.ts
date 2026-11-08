@@ -1,7 +1,8 @@
 import express, { type Express } from "express";
-import type { Firestore } from "firebase-admin/firestore";
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
 import {
   WORKSPACE_COMMIT_PROOF_PATH,
@@ -12,20 +13,8 @@ import { createWorkspaceCommitProofBrokerRoutes } from "./workspace-commit-proof
 const NOW = Date.now();
 const target = { agentId: "octogee-acme-coach", slug: "acme", project: null };
 
-function fakeDb(records: Record<string, Record<string, unknown>>): Firestore {
-  return {
-    doc(path: string) {
-      return {
-        async get() {
-          const data = records[path];
-          return { exists: data !== undefined, data: () => data };
-        },
-      };
-    },
-  } as unknown as Firestore;
-}
 
-function app(db: Firestore, bound = true): Express {
+function app(store: PlatformStateStore, bound = true): Express {
   const server = express();
   server.use(express.json());
   if (bound) {
@@ -34,7 +23,7 @@ function app(db: Firestore, bound = true): Express {
       next();
     });
   }
-  server.use("/internal/workspace-commit", createWorkspaceCommitProofBrokerRoutes({ db }));
+  server.use("/internal/workspace-commit", createWorkspaceCommitProofBrokerRoutes({ store }));
   return server;
 }
 
@@ -61,13 +50,13 @@ function requestBody(
 }
 
 const records = {
-  "workspaces/acme": { ownerUid: "owner-acme" },
+  "workspaces/acme": { id: "acme", ownerUid: "owner-acme" },
   "users/owner-acme/secrets/coachMattermost": { personalToken: "acme-coach-pat" },
 };
 
 describe("workspace commit proof broker", () => {
   it("returns no secret when a sidecar-authenticated gateway presents a valid proof", async () => {
-    const res = await request(app(fakeDb(records)))
+    const res = await request(app(createDocumentFixtureStore(records)))
       .post("/internal/workspace-commit/verify-proof")
       .send(requestBody())
       .expect(204);
@@ -76,13 +65,13 @@ describe("workspace commit proof broker", () => {
   });
 
   it("rejects an unbound gateway, mismatched claimed target, and invalid proof", async () => {
-    const unbound = await request(app(fakeDb(records), false))
+    const unbound = await request(app(createDocumentFixtureStore(records), false))
       .post("/internal/workspace-commit/verify-proof")
       .send(requestBody())
       .expect(403);
     expect(unbound.body).toEqual({ error: "forbidden" });
 
-    const mismatched = await request(app(fakeDb(records)))
+    const mismatched = await request(app(createDocumentFixtureStore(records)))
       .post("/internal/workspace-commit/verify-proof")
       .send(requestBody(target, { ...target, slug: "victim" }))
       .expect(400);
@@ -90,7 +79,7 @@ describe("workspace commit proof broker", () => {
 
     const invalid = requestBody();
     (invalid.proof as Record<string, unknown>).signature = "0".repeat(64);
-    const rejected = await request(app(fakeDb(records)))
+    const rejected = await request(app(createDocumentFixtureStore(records)))
       .post("/internal/workspace-commit/verify-proof")
       .send(invalid)
       .expect(403);
@@ -98,11 +87,8 @@ describe("workspace commit proof broker", () => {
   });
 
   it("reports a retryable error when the trusted datastore lookup fails", async () => {
-    const unavailable = {
-      doc() {
-        throw new Error("Firestore unavailable");
-      },
-    } as unknown as Firestore;
+    const unavailable = createDocumentFixtureStore(records);
+    vi.spyOn(unavailable.workspaces.records, "get").mockRejectedValue(new Error("Firestore unavailable"));
 
     const response = await request(app(unavailable))
       .post("/internal/workspace-commit/verify-proof")

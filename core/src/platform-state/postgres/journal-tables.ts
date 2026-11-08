@@ -41,7 +41,7 @@ export const OPERATIONS_TABLE: TableSpec = {
     column("cancelledByDeletionId", "text"),
     column("retryRequestedAt", "bigint"),
     column("retryRequestedBy", "text"),
-    column("supersededBy", "text"),
+    column("supersededBy", "jsonb"),
     column("restoreAttempt", "jsonb"),
     column("restoreRuntimeRecovery", "jsonb"),
     column("sourceRuntimeRecovery", "jsonb"),

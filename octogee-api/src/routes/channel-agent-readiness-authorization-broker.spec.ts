@@ -1,7 +1,7 @@
 import express from "express";
 import request from "supertest";
-import type { Firestore } from "firebase-admin/firestore";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createChannelReadinessAuthorizationBrokerRoutes } from "./channel-agent-readiness-authorization-broker.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -16,8 +16,9 @@ function setup(options: { bound?: "matching" | "different" | "none"; uid?: strin
     agentId: "octogee-alice-coach", agentMmUserId: "b".repeat(26) };
   const client = { getJson: vi.fn(async () => ({ type: "P", delete_at: 0 })) };
   const authorize = vi.fn(async () => ({ forbidden: false as const, target, client, callerMmUserId: "c".repeat(26) }));
-  const get = vi.fn(async () => ({ data: () => ({ provisioning: { openclaw: { gatewayId } } }) }));
-  const doc = vi.fn(() => ({ get }));
+  const docs: Record<string, Record<string, unknown>> = { "users/owner": { provisioning: { openclaw: { gatewayId } } } };
+  const store = createDocumentFixtureStore(docs);
+  const get = vi.spyOn(store.builders.records, "get");
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json());
@@ -26,16 +27,16 @@ function setup(options: { bound?: "matching" | "different" | "none"; uid?: strin
     if (options.bound !== "none") req.boundTenant = { kind: "gateway", gatewayId: options.bound === "different" ? "gateway-other" : gatewayId } as Express.Request["boundTenant"];
     next();
   });
-  app.use("/internal/channel-agent-readiness", createChannelReadinessAuthorizationBrokerRoutes({ db: { doc } as unknown as Firestore, authorize: authorize as never }));
+  app.use("/internal/channel-agent-readiness", createChannelReadinessAuthorizationBrokerRoutes({ store, authorize: authorize as never }));
   app.use((_err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => res.status(503).json({ error: "unavailable" }));
-  return { app, authorize, target, client, doc, get };
+  return { app, authorize, target, client, docs, get };
 }
 
 describe("channel readiness authorization authority", () => {
   it.each(["none", "different"] as const)("refuses a gateway identity that is %s before looking up any channel", async (bound) => {
     const h = setup({ bound });
     expect((await request(h.app).post(endpoint).send(body)).status).toBe(403);
-    expect(h.authorize).not.toHaveBeenCalled(); expect(h.doc).not.toHaveBeenCalled();
+    expect(h.authorize).not.toHaveBeenCalled(); expect(h.get).not.toHaveBeenCalled();
   });
   it("requires the verified user even if the gateway supplies a caller UID", async () => {
     const h = setup({ uid: null });
@@ -51,7 +52,7 @@ describe("channel readiness authorization authority", () => {
     const h = setup();
     if (failure === "missing") h.authorize.mockResolvedValue(null as never);
     if (failure === "forbidden") h.authorize.mockResolvedValue({ forbidden: true } as never);
-    if (failure === "moved-owner") h.get.mockResolvedValue({ data: () => ({ provisioning: { openclaw: { gatewayId: "gateway-other" } } }) });
+    if (failure === "moved-owner") h.docs["users/owner"] = { provisioning: { openclaw: { gatewayId: "gateway-other" } } };
     if (failure === "archived") h.client.getJson.mockResolvedValue({ type: "P", delete_at: 1 });
     if (["D", "G", "unknown"].includes(failure)) h.client.getJson.mockResolvedValue({ type: failure, delete_at: 0 });
     const r = await request(h.app).post(endpoint).send(body);
@@ -63,7 +64,7 @@ describe("channel readiness authorization authority", () => {
     const r = await request(h.app).post(endpoint).send({ ...body, uid: "owner", workspaceId: "mallory", agentId: "wrong", peerKind: "direct" });
     expect(r.status).toBe(200);
     expect(h.authorize).toHaveBeenCalledWith("member", channelId, undefined, { requireActiveLedger: true, includeCoachConversation: true, signal: expect.any(AbortSignal) });
-    expect(h.doc).toHaveBeenCalledWith("users/owner");
+    expect(h.get).toHaveBeenCalledWith("owner");
     expect(r.headers["cache-control"]).toBe("no-store");
     expect(r.body).toEqual({ gatewayId, channelId, workspaceId: "alice", project: "orbit", agentId: h.target.agentId,
       agentMmUserId: h.target.agentMmUserId, peerKind: type === "P" ? "group" : "channel" });
@@ -92,7 +93,7 @@ describe("channel readiness authorization deadline", () => {
     expect(r.status).toBe(503);
     expect(r.headers["cache-control"]).toBe("no-store");
     expect(r.body).toEqual({ error: "channel_readiness_unavailable", retryable: true });
-    if (dependency === "authorize") expect(h.doc).not.toHaveBeenCalled();
+    if (dependency === "authorize") expect(h.get).not.toHaveBeenCalled();
     if (dependency !== "mattermost") expect(h.client.getJson).not.toHaveBeenCalled();
   });
 });

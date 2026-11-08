@@ -1,10 +1,10 @@
 import { Router, type Request, type Response } from "express";
-import type { Firestore } from "firebase-admin/firestore";
-import { gatewayAuthorizationFromRootDocument } from "@octogee/core/gateway-live-release";
-import { slugFromAssignedUser, userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
+import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
+import type { BuilderRecord, PlatformStateRepositories, Stored } from "@octogee/core/platform-state";
 import { resolveGatewayClass } from "@octogee/shared/types/glm";
 import { parseAgentId, mattermostAccountIdForAgentId } from "@octogee/shared/types/identity";
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
+import { builderAssignedToGateway } from "../lib/assigned-builder.js";
 import { findAssignedUserByAgentId } from "./fleet-broker.js";
 
 const FORBIDDEN = { error: "forbidden" } as const;
@@ -13,7 +13,7 @@ interface AgentOwnerContext {
   ownerUid: string;
   workspaceSlug: string;
   agentId: string;
-  assignedData: Record<string, unknown>;
+  owner: Stored<BuilderRecord>;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -48,19 +48,16 @@ function agentRequestContext(
 }
 
 async function assignedAgentOwnerContext(
-  db: Firestore,
+  store: PlatformStateRepositories,
   gatewayId: string,
   agentId: string,
 ): Promise<AgentOwnerContext | null> {
-  const assigned = await findAssignedUserByAgentId(db, gatewayId, agentId);
+  const assigned = await findAssignedUserByAgentId(store, gatewayId, agentId);
   if (!assigned) {
     return null;
   }
-  const root = await db.doc(`gateways/${gatewayId}`).get();
-  const authorization = root.exists
-    ? gatewayAuthorizationFromRootDocument(root.data(), gatewayId)
-    : null;
-  const workspaceSlug = slugFromAssignedUser(assigned.data);
+  const authorization = await readGatewayAuthorizationInStore(store, gatewayId);
+  const workspaceSlug = assigned.slug;
   if (!authorization || !workspaceSlug) {
     return null;
   }
@@ -69,15 +66,10 @@ async function assignedAgentOwnerContext(
     profile: authorization.config.profile ?? undefined,
     imageProfile: authorization.config.imageProfile,
   });
-  const assignedScope = userAssignmentMatchesGateway(
-    assigned.data,
-    gatewayId,
-    workspaceSlug,
-  );
-  if (!assignedScope) return null;
+  if (!builderAssignedToGateway(assigned, gatewayId, workspaceSlug)) return null;
   if (gatewayClass === "shared") {
-    const workspace = await db.doc(`workspaces/${workspaceSlug}`).get();
-    if (!workspace.exists || workspace.data()?.ownerUid !== assigned.uid) return null;
+    const workspace = await store.workspaces.records.get(workspaceSlug);
+    if (workspace?.ownerUid !== assigned.uid) return null;
   } else if (authorization.config.ownerUid !== assigned.uid ||
     authorization.config.builderSlug !== workspaceSlug) {
     return null;
@@ -87,7 +79,7 @@ async function assignedAgentOwnerContext(
     ownerUid: assigned.uid,
     workspaceSlug,
     agentId,
-    assignedData: assigned.data as Record<string, unknown>,
+    owner: assigned,
   };
 }
 
@@ -108,32 +100,31 @@ function runningComputerInstanceId(live: Record<string, unknown> | undefined, po
   return `gce-vm:${vm.instanceId}`;
 }
 
-export function createAgentComputerContextRoutes(args: { db: Firestore }): Router {
+export function createAgentComputerContextRoutes(args: { store: PlatformStateRepositories }): Router {
   const router = Router();
   router.post("/agent-context", async (req, res) => {
     const request = agentRequestContext(req, res);
     if (!request) return;
-    const context = await assignedAgentOwnerContext(args.db, request.gatewayId, request.agentId);
+    const context = await assignedAgentOwnerContext(args.store, request.gatewayId, request.agentId);
     if (!context) { res.status(403).json(FORBIDDEN); return; }
-    const [root, fleet] = await Promise.all([
-      args.db.doc(`gateways/${context.gatewayId}`).get(),
-      args.db.doc(`glmGateways/${context.gatewayId}`).get(),
+    const [authorization, fleet] = await Promise.all([
+      readGatewayAuthorizationInStore(args.store, context.gatewayId),
+      args.store.fleetRegistry.get(context.gatewayId),
     ]);
-    const authorization = root.exists ? gatewayAuthorizationFromRootDocument(root.data(), context.gatewayId) : null;
     const agentAccountId = mattermostAccountIdForAgentId(context.agentId);
     if (!authorization || authorization.config.ownerUid !== context.ownerUid || !agentAccountId) {
       res.status(403).json(FORBIDDEN); return;
     }
     const bound = req.boundTenant;
-    const computerInstanceId = runningComputerInstanceId(fleet.data(), bound?.kind === "gateway" ? bound.podUid : undefined);
+    const computerInstanceId = runningComputerInstanceId(record(fleet) ?? undefined, bound?.kind === "gateway" ? bound.podUid : undefined);
     if (authorization.gateway.desiredStatus !== "running" || !computerInstanceId) {
       res.status(409).json({ error: "computer-unavailable" }); return;
     }
-    const ownerMattermostUserId = record(context.assignedData.mattermost)?.userId;
+    const ownerMattermostUserId = context.owner.mattermostUserId;
     res.json({
       gatewayId: context.gatewayId, ownerUid: context.ownerUid, computerInstanceId, agentAccountId,
       ...(computerInstanceId.startsWith("gce-vm:") ? { vmInstanceId: computerInstanceId.slice("gce-vm:".length) } : {}),
-      ownerMattermostUserId: typeof ownerMattermostUserId === "string" && /^[a-z0-9]{26}$/u.test(ownerMattermostUserId)
+      ownerMattermostUserId: ownerMattermostUserId !== null && /^[a-z0-9]{26}$/u.test(ownerMattermostUserId)
         ? ownerMattermostUserId : null,
     });
   });

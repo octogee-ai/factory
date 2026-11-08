@@ -1,6 +1,5 @@
 import type { Operation } from "@octogee/shared/types/glm";
 import { describe, expect, it } from "vitest";
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import {
   MAX_OPERATION_ATTEMPTS,
   MAX_PREEMPTED_OPERATION_ATTEMPTS,
@@ -98,7 +97,7 @@ describe("migration retry queue position", () => {
       result: { success: false, error: "runtime-update timed out", steps: [], ...result },
       steps: [], now: 10_000,
     });
-    expect(update.queuedAt).toEqual(FieldValue.delete());
+    expect(update.queuedAt).toEqual({ clear: true });
   });
 
   it.each(["initialized", "promotionIntent", "aborting"])("keeps durable migration authority during %s", (phase) => {
@@ -107,7 +106,7 @@ describe("migration retry queue position", () => {
       result: { success: false, rolledBack: true, error: "runtime-update timed out", steps: [] },
       steps: [], now: 10_000,
     });
-    expect(update.queuedAt).toEqual(FieldValue.delete());
+    expect(update.queuedAt).toEqual({ clear: true });
   });
 
   it("moves an aborted durable migration to the queue tail after cleanup", () => {
@@ -117,7 +116,7 @@ describe("migration retry queue position", () => {
       steps: [], now: 10_000,
     });
     expect(update).toMatchObject({ status: "pending", queuedAt: 10_000,
-      customerMigrationV2: FieldValue.delete() });
+      customerMigrationV2: { clear: true } });
   });
 
 });
@@ -378,7 +377,7 @@ describe("drain migration whose source has no converged configuration for the cu
       now,
     });
     expect(update).toMatchObject({ status: "failed", rolledBack: true, error: UNCONVERGED_SOURCE_ERROR, attempts: 1 });
-    expect(update.nextAttemptAt).toEqual(FieldValue.delete());
+    expect(update.nextAttemptAt).toEqual({ clear: true });
   });
 });
 
@@ -468,7 +467,7 @@ describe("buildOperationCompletionUpdate", () => {
     ]);
     if (delay !== null) {
       expect(update.nextAttemptAt).toBe(now + delay);
-      expect(update.expireAt).toEqual(FieldValue.delete());
+      expect(update.expireAt).toEqual({ clear: true });
     }
   });
 
@@ -482,14 +481,14 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update).toEqual({
       status: "succeeded",
       completedAt: now,
-      expireAt: Timestamp.fromMillis(now + OPERATION_JOURNAL_RETENTION_MS),
+      expireAt: now + OPERATION_JOURNAL_RETENTION_MS,
       attempts: 1,
       steps: [{ name: "spawn-green", status: "done" }],
-      error: FieldValue.delete(),
+      error: { clear: true },
       rolledBack: false,
-      nextAttemptAt: FieldValue.delete(),
-      waitingOn: FieldValue.delete(),
-      output: FieldValue.delete(),
+      nextAttemptAt: { clear: true },
+      waitingOn: { clear: true },
+      output: { clear: true },
     });
   });
 
@@ -510,10 +509,7 @@ describe("buildOperationCompletionUpdate", () => {
     expect(failed.status).toBe("failed");
     expect(OPERATION_JOURNAL_RETENTION_MS).toBe(30 * 24 * 60 * 60_000);
     for (const update of [succeeded, failed]) {
-      expect(update.expireAt).toBeInstanceOf(Timestamp);
-      expect((update.expireAt as Timestamp).toMillis()).toBe(
-        now + OPERATION_JOURNAL_RETENTION_MS,
-      );
+      expect(update.expireAt).toBe(now + OPERATION_JOURNAL_RETENTION_MS);
     }
   });
 
@@ -526,7 +522,7 @@ describe("buildOperationCompletionUpdate", () => {
     });
 
     expect(update.status).toBe("pending");
-    expect(update.expireAt).toEqual(FieldValue.delete());
+    expect(update.expireAt).toEqual({ clear: true });
   });
 
   it("atomically scrubs identifying operation input only on verified success", () => {
@@ -552,10 +548,10 @@ describe("buildOperationCompletionUpdate", () => {
       now,
     });
     expect(update).toMatchObject({ status: "succeeded", output: { archiveId: "archive-random" } });
-    expect(update.input).toEqual(FieldValue.delete());
-    expect(update.inputUid).toEqual(FieldValue.delete());
-    expect(update.createdBy).toEqual(FieldValue.delete());
-    expect(update.attemptHistory).toEqual(FieldValue.delete());
+    expect(update.input).toEqual({ clear: true });
+    expect(update.inputUid).toEqual({ clear: true });
+    expect(update.createdBy).toEqual({ clear: true });
+    expect(update.attemptHistory).toEqual({ clear: true });
     expect(update.steps).toEqual([]);
   });
 
@@ -693,7 +689,7 @@ describe("buildOperationCompletionUpdate", () => {
       now,
     });
 
-    expect(update.output).toEqual(FieldValue.delete());
+    expect(update.output).toEqual({ clear: true });
   });
 
   it("persists migration checkpoint and proof output with the terminal operation", () => {
@@ -724,7 +720,7 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.startedAt).toBeNull();
     expect(update.steps).toEqual([]);
     expect(update.nextAttemptAt).toBe(now + 30_000);
-    expect(update.waitingOn).toEqual(FieldValue.delete());
+    expect(update.waitingOn).toEqual({ clear: true });
     expect(update.error).toMatch(/attempt 1.*transient.*retrying in 30s/i);
     expect(update.attemptHistory).toEqual([
       {
@@ -783,8 +779,8 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.completedAt).toBe(now);
     expect(update.attempts).toBe(1);
     expect(update.error).toBe("missing gatewayId in op.input");
-    expect(update.nextAttemptAt).toEqual(FieldValue.delete());
-    expect(update.waitingOn).toEqual(FieldValue.delete());
+    expect(update.nextAttemptAt).toEqual({ clear: true });
+    expect(update.waitingOn).toEqual({ clear: true });
   });
 
   it("fails terminally once the attempt cap is reached even for a transient cause", () => {
@@ -1018,7 +1014,7 @@ describe("buildOperationCompletionUpdate", () => {
 
       expect(update.status).toBe("pending");
       expect(update.error).toMatch(/^attempt 3 failed \(transient\): target computer octogee-pool-44847785 was preempted: /);
-      expect(update.customerMigrationV2).toEqual(FieldValue.delete());
+      expect(update.customerMigrationV2).toEqual({ clear: true });
     });
 
     it("gives up once the preemption retry budget is spent", () => {
@@ -1055,7 +1051,7 @@ describe("buildOperationCompletionUpdate", () => {
       });
 
       expect(update.status).toBe("pending");
-      expect(update.customerMigrationV2).toEqual(FieldValue.delete());
+      expect(update.customerMigrationV2).toEqual({ clear: true });
     });
 
     it("still fails a rolled-back activation without a preemption at the normal cap", () => {
@@ -1093,7 +1089,7 @@ it("waits for active Builder work without consuming attempts or recording a fail
   expect(update).toMatchObject({ status: "pending", startedAt: null, nextAttemptAt: 16_000, waitingOn: "builder-idle", rolledBack: false });
   expect(update).not.toHaveProperty("attempts");
   expect(update).not.toHaveProperty("attemptHistory");
-  expect(update.error).toEqual(FieldValue.delete());
+  expect(update.error).toEqual({ clear: true });
 });
 
 it("retains durable resume ownership for a pending source Doctor and its retained Pod", () => {

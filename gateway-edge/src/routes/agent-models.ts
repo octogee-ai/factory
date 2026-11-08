@@ -18,8 +18,6 @@ import { resolveUserByosubCredentialRefs } from "@octogee/shared/types/model-cre
 import { agentModelCatalog } from "../lib/agent-model-catalog.js";
 import { pickPlanInputs, resolveBillingProfile } from "@octogee/shared/types/billing";
 import {
-  PLATFORM_CONFIG_COLLECTION,
-  PLATFORM_MODEL_CONFIG_DOC,
   builderAgentModelDefaultFromDoc,
   type BuilderAgentModelDefault,
 } from "@octogee/shared/types/platform-config";
@@ -55,10 +53,7 @@ async function platformAgentModelDefault(
   logWarn: (msg: string) => void,
 ): Promise<BuilderAgentModelDefault> {
   try {
-    const snap = await db
-      .doc(`${PLATFORM_CONFIG_COLLECTION}/${PLATFORM_MODEL_CONFIG_DOC}`)
-      .get();
-    return builderAgentModelDefaultFromDoc(snap.data());
+    return builderAgentModelDefaultFromDoc((await platformStateStore.config.platform.get("models"))?.value);
   } catch (err) {
     logWarn(
       `[agent-models] platform default dial read failed — serving the compiled default: ${

@@ -45,6 +45,16 @@ export async function requestHomeCheckpoint(store: PlatformStateStore, gatewayId
   });
 }
 
+export async function clearHomeCheckpointRequest(store: PlatformStateStore, gatewayId: string): Promise<void> {
+  await store.transaction({ label: "home-checkpoint.clear-request" }, async tx => {
+    const runtime = await tx.fleetRegistry.get(gatewayId);
+    if (runtime === null) throw new Error(`gateway ${gatewayId}: home checkpoint requires a runtime record`);
+    if (runtime.vmHome?.checkpointRequestedAt === undefined) return;
+    const { checkpointRequestedAt: _requestedAt, ...vmHome } = runtime.vmHome;
+    await tx.fleetRegistry.patch(gatewayId, { vmHome }, { revision: runtime.revision });
+  });
+}
+
 export async function readHomeCheckpointCompletedAt(state: Pick<PlatformStateRepositories, "fleetRegistry">, gatewayId: string): Promise<number | null> {
   const home = (await state.fleetRegistry.get(gatewayId))?.vmHome;
   return homeCheckpointOutstanding(home) ? null : homeCheckpointCompletedAt(home);

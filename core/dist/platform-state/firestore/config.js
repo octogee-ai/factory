@@ -1,6 +1,6 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 import { GATEWAY_VM_PROVISIONING_MODELS, isGatewayVmBootDiskType, isGatewayVmDesktop, } from "@octogee/shared/types/glm";
-import { parsePlatformConnectConfig, parsePlatformFreeConfig, parsePlatformModelConfig, PLATFORM_CONFIG_COLLECTION, } from "@octogee/shared/types/platform-config";
+import { DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF, DEFAULT_BUILDER_AGENT_MODEL_REF, DEFAULT_FREE_TIER_MODEL_REF, DEFAULT_OPS_AGENT_MODEL_REF, parsePlatformConnectConfig, parsePlatformFreeConfig, parsePlatformModelConfig, PLATFORM_CONFIG_COLLECTION, } from "@octogee/shared/types/platform-config";
 import { parseSharedGatewayAutoscalingConfig } from "@octogee/shared/types/shared-gateway-pool";
 import { isSizingTier } from "@octogee/shared/types/sizing";
 import { MalformedRecordError, MissingRecordError } from "../errors.js";
@@ -10,7 +10,23 @@ const ORCHESTRATOR_CONFIG_PATH = "config/orchestrator";
 const WRITER_QUIESCENCE_PATH = "config/platformMigrationWriterQuiescence";
 const MATTERMOST_ADMIN_PATH = "system/mattermostAdmin";
 const PLATFORM_CONFIG_KEYS = ["models", "free", "connect"];
-const PLATFORM_CONFIG_PARSERS = {
+export function parseStoredPlatformModelConfig(value) {
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+        return null;
+    const { freeTierModelRef = DEFAULT_FREE_TIER_MODEL_REF, opsAgentModelRef = DEFAULT_OPS_AGENT_MODEL_REF, builderAgentModelRef = DEFAULT_BUILDER_AGENT_MODEL_REF, builderAgentFallbackModelRef = DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF, } = value;
+    if (typeof freeTierModelRef !== "string" || typeof opsAgentModelRef !== "string" || typeof builderAgentModelRef !== "string") {
+        return null;
+    }
+    if (builderAgentFallbackModelRef !== null && typeof builderAgentFallbackModelRef !== "string")
+        return null;
+    return { freeTierModelRef, opsAgentModelRef, builderAgentModelRef, builderAgentFallbackModelRef };
+}
+const PLATFORM_CONFIG_READ_PARSERS = {
+    models: parseStoredPlatformModelConfig,
+    free: parsePlatformFreeConfig,
+    connect: parsePlatformConnectConfig,
+};
+const PLATFORM_CONFIG_WRITE_PARSERS = {
     models: parsePlatformModelConfig,
     free: parsePlatformFreeConfig,
     connect: parsePlatformConnectConfig,
@@ -133,8 +149,11 @@ function assertValidOrchestratorPatch(patch) {
 function decodePlatformConfig(key, snapshot) {
     if (!snapshot.exists)
         return null;
-    const { updatedAt, updatedBy, ...rest } = decodeDocumentData(snapshot);
-    const value = PLATFORM_CONFIG_PARSERS[key](rest);
+    return { ...platformConfigEntryFromData(key, decodeDocumentData(snapshot)), revision: revisionOf(snapshot) };
+}
+export function platformConfigEntryFromData(key, data) {
+    const { updatedAt, updatedBy, ...rest } = data;
+    const value = PLATFORM_CONFIG_READ_PARSERS[key](rest);
     if (value === null)
         throw new MalformedRecordError(platformKey(key), "does not parse");
     if (updatedAt !== undefined && updatedAt !== null && !isNumber(updatedAt)) {
@@ -148,8 +167,13 @@ function decodePlatformConfig(key, snapshot) {
         value: value,
         updatedAt: updatedAt ?? null,
         updatedBy: updatedBy ?? null,
-        revision: revisionOf(snapshot),
     };
+}
+export function parsePlatformConfigValue(key, value) {
+    const parsed = PLATFORM_CONFIG_WRITE_PARSERS[key](value);
+    if (parsed === null)
+        throw new MalformedRecordError(platformKey(key), "value does not parse");
+    return parsed;
 }
 function decodeMattermostAdmin(snapshot) {
     if (!snapshot.exists)
@@ -204,9 +228,7 @@ export function createFirestoreConfigRepositories(session) {
                 return decodePlatformConfig(key, await session.read("config.platform.get", platformRef(key)));
             },
             async put(key, value, updatedBy, updatedAt) {
-                const parsed = PLATFORM_CONFIG_PARSERS[key](value);
-                if (parsed === null)
-                    throw new MalformedRecordError(platformKey(key), "value does not parse");
+                const parsed = parsePlatformConfigValue(key, value);
                 await session.set("config.platform.put", platformKey(key), platformRef(key), encodeDocument({ ...parsed, updatedAt, updatedBy }, UPDATED_AT_TIMESTAMP));
             },
             async delete(key) {

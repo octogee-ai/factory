@@ -1,6 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import type { Firestore } from "firebase-admin/firestore";
 import { Registry } from "prom-client";
 
@@ -89,17 +90,19 @@ function sharedGatewayRoot(): Record<string, unknown> {
 }
 
 function middlewareStackApp(saName: string) {
-  const db = fakeDb({
+  const docs = {
     "gateways/default": sharedGatewayRoot(),
     "users/hermetic-uid": {
       username: "eggman",
       provisioning: { openclaw: { slug: "eggman", gatewayId: "default" } },
     },
-    "workspaces/eggman": { ownerUid: "hermetic-uid" },
+    "workspaces/eggman": { id: "eggman", ownerUid: "hermetic-uid" },
     "workspaces/eggman/channels/coach-dm": {
       mattermost: { channelId: COACH_CHANNEL_ID },
     },
-  });
+  };
+  const db = fakeDb(docs);
+  const store = createDocumentFixtureStore(docs);
   const reviewer: Reviewer = async () => ({
     authenticated: true,
     namespace: "octogee-test",
@@ -112,16 +115,16 @@ function middlewareStackApp(saName: string) {
   app.use(express.json());
   app.use("/internal", createTenantBindingMiddleware({
     reviewer,
-    db,
+    store,
     namespace: "octogee-test",
     metrics: createTenantBindingMetrics(new Registry()),
     logger: { warn: () => undefined },
   }));
-  app.use("/internal", createTenantEnforcementMiddleware({ db }));
+  app.use("/internal", createTenantEnforcementMiddleware({ db, store }));
   app.use(
     "/internal/automations",
     requireAuthenticatedUid,
-    createAutomationAuthorizationBrokerRoutes({ db }),
+    createAutomationAuthorizationBrokerRoutes({ store }),
   );
   return app;
 }
@@ -131,7 +134,12 @@ function appForTest(input: {
   boundGatewayId?: string;
   docs?: Record<string, Record<string, unknown>>;
 }) {
-  const db = fakeDb(input.docs ?? {});
+  const store = createDocumentFixtureStore(input.docs ?? {});
+  const reads = {
+    builder: vi.spyOn(store.builders.records, "get"),
+    workspace: vi.spyOn(store.workspaces.records, "get"),
+    channel: vi.spyOn(store.workspaces.channels, "get"),
+  };
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -141,8 +149,8 @@ function appForTest(input: {
       : undefined;
     next();
   });
-  app.use("/internal/automations", createAutomationAuthorizationBrokerRoutes({ db }));
-  return { app, db };
+  app.use("/internal/automations", createAutomationAuthorizationBrokerRoutes({ store }));
+  return { app, store, reads };
 }
 
 describe("POST /internal/automations/authorize", () => {
@@ -199,7 +207,7 @@ describe("POST /internal/automations/authorize", () => {
           username: "eggman",
           provisioning: { openclaw: { slug: "eggman", gatewayId: "eggman-devdays" } },
         },
-        "workspaces/eggman": { ownerUid: "eggman-uid" },
+        "workspaces/eggman": { id: "eggman", ownerUid: "eggman-uid" },
         "workspaces/eggman/channels/coach-dm": {
           mattermost: { channelId: COACH_CHANNEL_ID },
         },
@@ -227,7 +235,7 @@ describe("POST /internal/automations/authorize", () => {
           username: "eggman",
           provisioning: { openclaw: { slug: "eggman", gatewayId: "eggman-devdays" } },
         },
-        "workspaces/eggman": { ownerUid: "eggman-uid" },
+        "workspaces/eggman": { id: "eggman", ownerUid: "eggman-uid" },
       },
     });
 
@@ -248,7 +256,7 @@ describe("POST /internal/automations/authorize", () => {
           username: "eggman",
           provisioning: { openclaw: { slug: "eggman", gatewayId: "eggman-devdays" } },
         },
-        "workspaces/eggman": { ownerUid: "eggman-uid" },
+        "workspaces/eggman": { id: "eggman", ownerUid: "eggman-uid" },
         "workspaces/eggman/channels/coach-dm": {
           mattermost: { channelId: "mm-coach-eggman" },
         },
@@ -275,7 +283,7 @@ describe("POST /internal/automations/authorize", () => {
             accountLifecycle: { status },
             provisioning: { openclaw: { slug: "eggman", gatewayId: "eggman-devdays" } },
           },
-          "workspaces/eggman": { ownerUid: "eggman-uid" },
+          "workspaces/eggman": { id: "eggman", ownerUid: "eggman-uid" },
         },
       });
 
@@ -317,7 +325,7 @@ describe("POST /internal/automations/authorize", () => {
           username: "eggman",
           provisioning: { openclaw: { slug: "eggman", gatewayId: "default" } },
         },
-        "workspaces/eggman": { ownerUid: "owner-uid" },
+        "workspaces/eggman": { id: "eggman", ownerUid: "owner-uid" },
       },
     });
 
@@ -330,7 +338,7 @@ describe("POST /internal/automations/authorize", () => {
   });
 
   it("rejects a malformed broker-derived slug before constructing a workspace Firestore path", async () => {
-    const { app, db } = appForTest({
+    const { app, reads } = appForTest({
       uid: "eggman-uid",
       boundGatewayId: "default",
       docs: {
@@ -346,12 +354,14 @@ describe("POST /internal/automations/authorize", () => {
 
     expect(response.status).toBe(404);
     expect(response.body).toEqual({ error: "not_found" });
-    expect(db.doc).toHaveBeenCalledTimes(1);
-    expect(db.doc).toHaveBeenCalledWith("users/eggman-uid");
+    expect(reads.builder).toHaveBeenCalledTimes(1);
+    expect(reads.builder).toHaveBeenCalledWith("eggman-uid");
+    expect(reads.workspace).not.toHaveBeenCalled();
+    expect(reads.channel).not.toHaveBeenCalled();
   });
 
   it("requires a dedicated gateway's bound owner to match the Firebase caller before reads", async () => {
-    const { db } = appForTest({
+    const { store, reads } = appForTest({
       uid: "other-uid",
       boundGatewayId: "eggman-devdays",
     });
@@ -366,7 +376,7 @@ describe("POST /internal/automations/authorize", () => {
       };
       next();
     });
-    boundOwnerApp.use("/internal/automations", createAutomationAuthorizationBrokerRoutes({ db }));
+    boundOwnerApp.use("/internal/automations", createAutomationAuthorizationBrokerRoutes({ store }));
 
     const response = await request(boundOwnerApp)
       .post("/internal/automations/authorize")
@@ -374,11 +384,13 @@ describe("POST /internal/automations/authorize", () => {
 
     expect(response.status).toBe(403);
     expect(response.body).toEqual({ error: "forbidden" });
-    expect(db.doc).not.toHaveBeenCalled();
+    expect(reads.builder).not.toHaveBeenCalled();
+    expect(reads.workspace).not.toHaveBeenCalled();
+    expect(reads.channel).not.toHaveBeenCalled();
   });
 
   it("rejects a claimed gateway different from the projected service-account binding before Firestore reads", async () => {
-    const { app, db } = appForTest({
+    const { app, reads } = appForTest({
       uid: "eggman-uid",
       boundGatewayId: "eggman-devdays",
     });
@@ -389,6 +401,8 @@ describe("POST /internal/automations/authorize", () => {
 
     expect(response.status).toBe(403);
     expect(response.body).toEqual({ error: "forbidden" });
-    expect(db.doc).not.toHaveBeenCalled();
+    expect(reads.builder).not.toHaveBeenCalled();
+    expect(reads.workspace).not.toHaveBeenCalled();
+    expect(reads.channel).not.toHaveBeenCalled();
   });
 });

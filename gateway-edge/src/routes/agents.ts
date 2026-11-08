@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { requireAuth, requireAdmin } from "../middleware/auth.js";
+import { requireAuth } from "../middleware/auth.js";
 import { db, FieldValue } from "../lib/db.js";
+import { platformStateStore } from "../lib/platform-state.js";
 import { syncCoachIdentity } from "../lib/coach-identity.js";
 
 const router = Router();
@@ -66,10 +67,6 @@ const TIER_CREW_ACCESS: Record<string, readonly string[]> = {
   free: ["coach"],
 };
 
-const AGENT_ID_RE = /^octogee-([a-z0-9-]+)-(coach|alex|morgan|riley|robert)$/;
-const SLUG_PREFIX_RE = /^octogee-([a-z0-9-]+)$/;
-const ALL_ROLES = ["coach", "alex", "morgan", "riley", "robert"] as const;
-
 interface ActivateBody {
   uid?: string;
   role?: string;
@@ -112,10 +109,6 @@ function allowedRolesForTier(tier: string): readonly string[] {
   return TIER_CREW_ACCESS[tier] ?? TIER_CREW_ACCESS["starter"];
 }
 
-function activatedAgentsForUser(userData: FirebaseFirestore.DocumentData): string[] {
-  return userData.provisioning?.openclaw?.activatedAgents ?? [];
-}
-
 async function queueActivation(request: ActivationRequest): Promise<void> {
   await db.doc(`users/${request.targetUid}`).update({
     "provisioning.pendingActivations": FieldValue.arrayUnion(request.role),
@@ -132,7 +125,10 @@ router.post("/activate", requireAuth, async (req: Request, res: Response, next: 
       return;
     }
 
-    const userSnap = await db.doc(`users/${request.targetUid}`).get();
+    const [userSnap, builder] = await Promise.all([
+      db.doc(`users/${request.targetUid}`).get(),
+      platformStateStore.builders.records.get(request.targetUid),
+    ]);
     if (!userSnap.exists) {
       res.status(404).json({ error: "user_not_found", uid: request.targetUid });
       return;
@@ -146,7 +142,7 @@ router.post("/activate", requireAuth, async (req: Request, res: Response, next: 
       return;
     }
 
-    if (activatedAgentsForUser(userData).includes(request.role)) {
+    if (builder?.agents.activatedAgents.includes(request.role)) {
       res.json({ status: "already_active", role: request.role });
       return;
     }
@@ -154,95 +150,6 @@ router.post("/activate", requireAuth, async (req: Request, res: Response, next: 
     await queueActivation(request);
 
     res.json({ status: "queued", role: request.role, tier });
-  } catch (e) { next(e); }
-});
-
-interface DeprovisionBody {
-  slugPrefix?: string;
-  agentId?: string;
-  deleteWorkspace?: boolean;
-}
-
-interface DeprovisionTarget {
-  slug: string;
-  targetAgentIds: string[];
-}
-
-function parseSlugPrefixTarget(slugPrefix: string): DeprovisionTarget | RouteError {
-  const match = SLUG_PREFIX_RE.exec(slugPrefix);
-  if (!match) {
-    return routeError(400, { error: "invalid_format", message: "slugPrefix must be: octogee-{slug}" });
-  }
-  const slug = match[1];
-  return {
-    slug,
-    targetAgentIds: ALL_ROLES.map((role) => `octogee-${slug}-${role}`),
-  };
-}
-
-function parseAgentIdTarget(agentId: string): DeprovisionTarget | RouteError {
-  const match = AGENT_ID_RE.exec(agentId);
-  if (!match) {
-    return routeError(400, { error: "invalid_format", message: "agentId must be: octogee-{slug}-{role}" });
-  }
-  return {
-    slug: match[1],
-    targetAgentIds: [agentId],
-  };
-}
-
-function parseDeprovisionTarget(body: DeprovisionBody): DeprovisionTarget | RouteError {
-  if (!body.slugPrefix && !body.agentId) {
-    return routeError(400, {
-      error: "missing_fields",
-      message: "Provide either slugPrefix or agentId",
-    });
-  }
-  return body.slugPrefix
-    ? parseSlugPrefixTarget(body.slugPrefix)
-    : parseAgentIdTarget(body.agentId!);
-}
-
-function cleanupJobData(
-  jobId: string,
-  target: DeprovisionTarget,
-  deleteWorkspace: boolean
-): Record<string, unknown> {
-  return {
-    jobId,
-    slug: target.slug,
-    slugPrefix: `octogee-${target.slug}`,
-    targetAgentIds: target.targetAgentIds,
-    deleteWorkspace,
-    status: "pending",
-    requestedAt: FieldValue.serverTimestamp(),
-    requestedBy: "admin",
-    completedAt: null,
-    error: null,
-  };
-}
-
-router.post("/deprovision", requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const body = (req.body ?? {}) as DeprovisionBody;
-    const target = parseDeprovisionTarget(body);
-    if (isRouteError(target)) {
-      sendRouteError(res, target);
-      return;
-    }
-
-    const jobId = `${target.slug}-${Date.now()}`;
-    await db.collection("cleanupJobs").doc(jobId).set(
-      cleanupJobData(jobId, target, !!body.deleteWorkspace)
-    );
-
-    res.json({
-      status: "queued",
-      jobId,
-      slug: target.slug,
-      targetAgentIds: target.targetAgentIds,
-      message: "Cleanup job queued. The gateway provisioner will process it within seconds.",
-    });
   } catch (e) { next(e); }
 });
 

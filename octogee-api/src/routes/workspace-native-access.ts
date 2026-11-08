@@ -1,11 +1,18 @@
 import { Router, type Request } from "express";
-import type { Firestore } from "firebase-admin/firestore";
-import { gatewayAuthorizationFromRootDocument } from "@octogee/core/gateway-live-release";
-import { isCanonicalWorkspaceMembership, workspacePermissionsEnabled } from "@octogee/core/gateway-principal-access";
+import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
+import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
+import type { BuilderTierReader } from "@octogee/core/builder-activation-lease";
+import type { PlatformStateRepositories, PlatformStateStore } from "@octogee/core/platform-state";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { resolveWorkspaceConversation, resolveWorkspaceToolChannel, resolveWorkspaceToolControl, type WorkspaceConversationDeps } from "../lib/workspace-conversation.js";
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
-import { principalAccess, workspaceScopeFor, type DocumentReader } from "../../../gateway-edge/src/routes/builder/gateways.js";
+import {
+  ownerWorkspacePermissionsEnabled,
+  perUserOwnerUid,
+  principalAccess,
+  withGatewayOwnerTier,
+  workspaceScopeFor,
+} from "../../../gateway-edge/src/routes/builder/gateways.js";
 
 const MOVING_ASSIGNMENT_STATES = new Set<unknown>(["quiescing", "migrating"]);
 
@@ -19,43 +26,59 @@ function workspaceAccessClaim(req: Request): { gatewayId: string; targetUid?: st
   return { gatewayId, targetUid };
 }
 
-async function targetMemberAllowed(targetUid: string | undefined, scope: { ownerUid: string; workspaceSlug: string }, get: DocumentReader): Promise<boolean> {
+async function targetMemberAllowed(targetUid: string | undefined, scope: { ownerUid: string; workspaceSlug: string }, state: PlatformStateRepositories): Promise<boolean> {
   if (!targetUid || targetUid === scope.ownerUid) return true;
-  return isCanonicalWorkspaceMembership((await get(`workspaces/${scope.workspaceSlug}/members/${targetUid}`)).data());
+  return isCanonicalWorkspaceMembership(await state.workspaces.members.get(scope.workspaceSlug, targetUid));
 }
 
-export function createWorkspaceNativeAccessRoutes({ db }: { db: Firestore }): Router {
+interface WorkspaceAccessDeps {
+  store: PlatformStateStore;
+  readBuilderTier: BuilderTierReader;
+}
+
+interface WorkspaceAccessResult {
+  status: number;
+  body: Record<string, unknown>;
+}
+
+async function workspaceAccess(
+  deps: WorkspaceAccessDeps,
+  uid: string,
+  claim: { gatewayId: string; targetUid?: string },
+): Promise<WorkspaceAccessResult> {
+  const { gatewayId, targetUid } = claim;
+  const auth = await readGatewayAuthorizationInStore(deps.store, gatewayId);
+  if (!auth) return { status: 404, body: { error: "not_found" } };
+  return withGatewayOwnerTier(
+    { store: deps.store, readBuilderTier: deps.readBuilderTier, ownerUid: perUserOwnerUid(auth), now: Date.now() },
+    async (ownerTier): Promise<WorkspaceAccessResult> => {
+      const scope = await workspaceScopeFor(auth, auth.config.builderSlug, deps.store, true);
+      if (!scope) return { status: 404, body: { error: "not_found" } };
+      const owner = await deps.store.builders.records.get(scope.ownerUid);
+      if (!ownerWorkspacePermissionsEnabled(auth.config, ownerTier, owner)) {
+        return { status: 403, body: { error: "builder_workspace_required" } };
+      }
+      const access = await principalAccess(scope, uid, deps.store, ownerTier);
+      if (access.kind === "denied") return { status: 403, body: { error: "forbidden" } };
+      const assignmentState = (await deps.store.gateways.assignments.get(gatewayId, scope.ownerUid))?.state;
+      if (MOVING_ASSIGNMENT_STATES.has(assignmentState)) return { status: 403, body: { error: "workspace_not_serving" } };
+      if (assignmentState !== "serving") return { status: 503, body: { error: "workspace_not_serving", retryable: true } };
+      if (!await targetMemberAllowed(targetUid, scope, deps.store)) return { status: 404, body: { error: "member_not_found" } };
+      return { status: 200, body: { uid, gatewayId, workspaceSlug: scope.workspaceSlug, ...(targetUid ? { targetUid } : {}) } };
+    },
+  );
+}
+
+export function createWorkspaceNativeAccessRoutes(deps: WorkspaceAccessDeps): Router {
   const router = Router();
   router.post("/workspace-access", async (req: Request, res, next) => {
     try {
       const claim = workspaceAccessClaim(req);
       if (!claim) { res.status(403).json({ error: "forbidden" }); return; }
-      const { gatewayId, targetUid } = claim;
       if (!req.uid) { res.status(401).json({ error: "Unauthenticated" }); return; }
-      const get: DocumentReader = path => db.doc(path).get();
-      const root = await get(`gateways/${gatewayId}`);
-      const auth = root.exists ? gatewayAuthorizationFromRootDocument(root.data(), gatewayId) : null;
-      if (!auth) { res.status(404).json({ error: "not_found" }); return; }
-      const scope = await workspaceScopeFor(auth, auth.config.builderSlug, get, true);
-      if (!scope) { res.status(404).json({ error: "not_found" }); return; }
-      const owner = await get(`users/${scope.ownerUid}`);
-      if (!workspacePermissionsEnabled(auth.config, owner.data() ?? {})) {
-        res.status(403).json({ error: "builder_workspace_required" }); return;
-      }
-      const access = await principalAccess(scope, req.uid, get);
-      if (access.kind === "denied") { res.status(403).json({ error: "forbidden" }); return; }
-      const assignment = await db.doc(`gateways/${gatewayId}/assignments/${scope.ownerUid}`).get();
-      const assignmentState = assignment.data()?.state;
-      if (MOVING_ASSIGNMENT_STATES.has(assignmentState)) {
-        res.status(403).json({ error: "workspace_not_serving" }); return;
-      }
-      if (assignmentState !== "serving") {
-        res.status(503).json({ error: "workspace_not_serving", retryable: true }); return;
-      }
-      if (!await targetMemberAllowed(targetUid, scope, get)) {
-        res.status(404).json({ error: "member_not_found" }); return;
-      }
-      res.set("cache-control", "no-store").json({ uid: req.uid, gatewayId, workspaceSlug: scope.workspaceSlug, ...(targetUid ? { targetUid } : {}) });
+      const result = await workspaceAccess(deps, req.uid, claim);
+      if (result.status === 200) res.set("cache-control", "no-store");
+      res.status(result.status).json(result.body);
     } catch (error) { next(error); }
   });
   return router;

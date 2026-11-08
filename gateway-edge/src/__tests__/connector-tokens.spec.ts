@@ -1,21 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const firestoreData: Record<string, Record<string, unknown>> = {};
-const docWrites: { path: string; data: unknown; merge?: boolean }[] = [];
-
-vi.mock('../lib/db', () => ({
-  db: {
-    doc: (path: string) => ({
-      get: async () => {
-        const data = firestoreData[path];
-        return { exists: !!data, data: () => data };
-      },
-      set: async (data: unknown, opts?: { merge?: boolean }) => {
-        docWrites.push({ path, data, merge: opts?.merge });
-      },
-    }),
-  },
+const { firestoreData } = vi.hoisted(() => ({
+  firestoreData: {} as Record<string, Record<string, unknown>>,
 }));
+
+vi.mock('../lib/platform-state.js', async () => {
+  const { createDocumentFixtureStore } = await import('@octogee/core/testing/journal-store');
+  return { platformStateStore: createDocumentFixtureStore(firestoreData) };
+});
 
 vi.mock('../lib/kms', () => ({
   decryptSecret: vi.fn(async (enc: string) => {
@@ -50,11 +42,11 @@ import { getConnector } from '../lib/connectors/index.js';
 import { decryptSecret } from '../lib/kms.js';
 import { internalFetch } from '../lib/internal-fetch.js';
 import { sidecarBrokerHeaders } from '@octogee/core/internal-fetch';
+import { MalformedRecordError } from '@octogee/core/platform-state';
 import { claimedTestBuilder, installTestBuilderIdentity } from "./helpers/builder-identity.js";
 
 beforeEach(() => {
   for (const k of Object.keys(firestoreData)) delete firestoreData[k];
-  docWrites.length = 0;
   vi.mocked(decryptSecret).mockClear();
   vi.mocked(internalFetch).mockReset();
 });
@@ -327,15 +319,12 @@ describe('readConnectorAccessToken', () => {
       accessToken: 'fresh_google',
     });
 
-    expect(docWrites[0]).toMatchObject({
-      path: 'users/uid-owner/secrets/google',
-      merge: true,
-      data: {
-        tokens: {
-          encryptedAccessToken: 'ENC:fresh_google',
-          encryptedRefreshToken: 'ENC:refresh_google',
-          tokenType: 'Bearer',
-        },
+    expect(firestoreData['users/uid-owner/secrets/google']).toMatchObject({
+      provider: 'google',
+      tokens: {
+        encryptedAccessToken: 'ENC:fresh_google',
+        encryptedRefreshToken: 'ENC:refresh_google',
+        tokenType: 'Bearer',
       },
     });
   });
@@ -512,11 +501,62 @@ describe('getFreshAccessToken — refresh-aware access', () => {
     const out = await getFreshAccessToken('u-dan', getConnector('google')!);
     expect(out).toEqual({ ok: true, accessToken: 'fresh-access' });
 
-    const write = docWrites.find((w) => w.path === 'users/u-dan/secrets/google');
-    expect(write?.merge).toBe(true);
-    const tokens = (write?.data as { tokens: Record<string, unknown> }).tokens;
-    expect(tokens.encryptedAccessToken).toBe('ENC:fresh-access');
-    expect(tokens.encryptedRefreshToken).toBe('ENC:long-lived-refresh');
+    const stored = firestoreData['users/u-dan/secrets/google'] as {
+      provider: unknown;
+      tokens: Record<string, unknown>;
+      updatedAt: unknown;
+    };
+    expect(stored.provider).toBe('google');
+    expect(stored.tokens.encryptedAccessToken).toBe('ENC:fresh-access');
+    expect(stored.tokens.encryptedRefreshToken).toBe('ENC:long-lived-refresh');
+    expect(stored.tokens.expiresAt).toBeGreaterThan(Date.now());
+    expect(typeof stored.updatedAt).toBe('number');
+  });
+
+  it('keeps connector fields written while the refresh was in flight', async () => {
+    process.env.GOOGLE_CLIENT_ID = 'env-id';
+    process.env.GOOGLE_CLIENT_SECRET = 'env-secret';
+    seedGoogleTokens({ expiresAt: Date.now() - 1000 });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        firestoreData['users/u-dan/secrets/google'].accountEmail = 'dan@example.com';
+        return new Response(
+          JSON.stringify({ access_token: 'fresh-access', expires_in: 3600, token_type: 'Bearer' }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }),
+    );
+
+    await expect(getFreshAccessToken('u-dan', getConnector('google')!)).resolves.toEqual({
+      ok: true,
+      accessToken: 'fresh-access',
+    });
+    const stored = firestoreData['users/u-dan/secrets/google'] as { accountEmail: unknown; tokens: Record<string, unknown> };
+    expect(stored.accountEmail).toBe('dan@example.com');
+    expect(stored.tokens.encryptedAccessToken).toBe('ENC:fresh-access');
+  });
+
+  it('does not resurrect a connector the Builder disconnected while the refresh was in flight', async () => {
+    process.env.GOOGLE_CLIENT_ID = 'env-id';
+    process.env.GOOGLE_CLIENT_SECRET = 'env-secret';
+    seedGoogleTokens({ expiresAt: Date.now() - 1000 });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        delete firestoreData['users/u-dan/secrets/google'];
+        return new Response(
+          JSON.stringify({ access_token: 'fresh-access', expires_in: 3600, token_type: 'Bearer' }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }),
+    );
+
+    await expect(getFreshAccessToken('u-dan', getConnector('google')!)).resolves.toEqual({
+      ok: false,
+      reason: 'not_connected',
+    });
+    expect(firestoreData['users/u-dan/secrets/google']).toBeUndefined();
   });
 
   it('reports reauth_required when a token expires and no platform client is configured', async () => {
@@ -591,6 +631,14 @@ describe('getFreshAccessToken — refresh-aware access', () => {
       ok: false,
       reason: 'reauth_required',
     });
+  });
+
+  it('fails closed on a connector secret whose access token is not a string', async () => {
+    seedGoogleTokens({ encryptedAccessToken: 42 });
+    await expect(getFreshAccessToken('u-dan', getConnector('google')!)).rejects.toBeInstanceOf(
+      MalformedRecordError,
+    );
+    expect(decryptSecret).not.toHaveBeenCalled();
   });
 
   it('reports not_connected when there are no stored tokens', async () => {

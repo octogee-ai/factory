@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MalformedRecordError } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { runNativeReturnHoldReaperTick } from "../native-return-hold-reaper.js";
 
@@ -36,9 +37,12 @@ function harness(input: {
   const store = createDocumentFixtureStore(docs);
   const scan = vi.spyOn(store.fleetRegistry, "list");
   const informer = {
-    glmGateways: () => (input.mirrorStale
+    fleetRegistry: () => (input.mirrorStale
       ? null
-      : Object.keys(input.gateways).map((id) => ({ id, data: () => structuredClone(docs[`glmGateways/${id}`]) }))),
+      : Object.keys(input.gateways).map((id) => {
+        const { docKind: _docKind, ...record } = structuredClone(docs[`glmGateways/${id}`]);
+        return { ...record, revision: "mirrored" };
+      })),
   };
   const log = vi.fn();
   const vm = { describe: vi.fn(async (): Promise<{ status: string; instanceId: string } | null> => ({ status: "TERMINATED", instanceId: "vm-1" })) };
@@ -182,7 +186,7 @@ describe("native return hold reaper", () => {
     expect(h.docs["glmOperations/native-return-hold-release-native-builder-return-native"]).toEqual({ status: "succeeded", createdAt: 1 });
   });
 
-  it("falls back to the registry when the glmGateways mirror is stale", async () => {
+  it("falls back to the registry when the fleetRegistry mirror is stale", async () => {
     const h = harness({
       gateways: { native: heldGateway("builder-return-native") },
       operations: { "builder-return-native": { kind: "migrate-customer", status: "failed" } },
@@ -190,6 +194,17 @@ describe("native return hold reaper", () => {
     });
     expect(await runNativeReturnHoldReaperTick(h.deps)).toEqual({ scanned: 1, released: 1 });
     expect(h.scan).toHaveBeenCalledOnce();
+  });
+
+  it("fails the whole tick on one malformed runtime record while the fleetRegistry mirror is stale", async () => {
+    const h = harness({
+      gateways: { native: heldGateway("builder-return-native") },
+      operations: { "builder-return-native": { kind: "migrate-customer", status: "failed" } },
+      mirrorStale: true,
+    });
+    h.docs["glmGateways/broken"] = { docKind: "runtime", gatewayId: "other" };
+    await expect(runNativeReturnHoldReaperTick(h.deps)).rejects.toBeInstanceOf(MalformedRecordError);
+    expectHoldUntouched(h, "native", "builder-return-native");
   });
 
   it.each(["STOPPING", "replacement", "read-failure", "binding-missing"])("retains terminal holds without exact stop proof: %s", async kind => {

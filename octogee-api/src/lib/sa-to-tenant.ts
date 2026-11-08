@@ -1,11 +1,15 @@
-import type { Firestore } from "firebase-admin/firestore";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import {
+  DuplicateRecordError,
+  type GatewayRoot,
+  type PlatformStateRepositories,
+  type Stored,
+} from "@octogee/core/platform-state";
 import { homeCheckpointOutstanding } from "@octogee/shared/types/glm";
 import { findComputerRuntimeForInstance } from "./computer-runtime-observation.js";
 import type { ReviewResult } from "./token-review.js";
 import {
   effectiveGatewayServiceAccountNameForGateway,
-  readGatewayAuthorization,
+  readGatewayAuthorizationInStore,
   type GatewayAuthorization,
 } from "@octogee/core/gateway-live-release";
 
@@ -58,7 +62,7 @@ export interface ServiceAccountIdentity {
 const GATEWAY_SA_PREFIX = "octogee-gw-";
 const RETIRED_GATEWAY_SA_PREFIX = "octogee-gateway-";
 const SHARED_GATEWAY_SA_NAME = "octogee-gateway";
-type GatewayRootFirestore = Pick<Firestore, "doc" | "collection">;
+type TenantState = Pick<PlatformStateRepositories, "gateways" | "fleetRegistry">;
 
 function isDnsLabel(value: string): boolean {
   if (value.length < 1 || value.length > 63) return false;
@@ -118,7 +122,7 @@ function gatewayIdentityAdmitted(
 }
 
 async function bindGatewaySa(
-  db: GatewayRootFirestore,
+  store: TenantState,
   identity: ServiceAccountIdentity,
   suffix: string,
   result: "ok",
@@ -127,7 +131,7 @@ async function bindGatewaySa(
   const gatewayId = gatewayIdFromSaSuffix(suffix);
   if (!gatewayId) return { attached: false, result: "malformed_sa" };
 
-  const authorization = await readGatewayAuthorization(db, gatewayId);
+  const authorization = await readGatewayAuthorizationInStore(store, gatewayId);
   if (!gatewayIdentityAdmitted(authorization, identity)) {
     return { attached: false, result: "unknown_tenant" };
   }
@@ -145,18 +149,23 @@ async function bindGatewaySa(
   );
 }
 
+async function rootForServiceAccount(store: TenantState, saName: string): Promise<Stored<GatewayRoot> | null> {
+  try {
+    return await store.gateways.roots.findByServiceAccountName(saName);
+  } catch (error) {
+    if (error instanceof DuplicateRecordError) return null;
+    throw error;
+  }
+}
+
 async function bindCustomGatewaySa(
-  db: GatewayRootFirestore,
+  store: TenantState,
   identity: ServiceAccountIdentity,
 ): Promise<SaToTenantResult> {
   const { saName } = identity;
-  const roots = await db
-    .collection(GATEWAYS_COLLECTION)
-    .where("serviceAccountName", "==", saName)
-    .get();
-  if (roots.docs.length !== 1) return { attached: false, result: "unknown_tenant" };
-  const root = roots.docs[0];
-  const authorization = await readGatewayAuthorization(db, root.id);
+  const root = await rootForServiceAccount(store, saName);
+  if (!root) return { attached: false, result: "unknown_tenant" };
+  const authorization = await readGatewayAuthorizationInStore(store, root.gatewayId);
   if (!gatewayIdentityAdmitted(authorization, identity)) {
     return { attached: false, result: "unknown_tenant" };
   }
@@ -182,13 +191,13 @@ export interface ComputeInstanceTenantIdentity {
 }
 
 export async function mapComputeInstanceToTenant(
-  db: GatewayRootFirestore,
+  store: TenantState,
   identity: ComputeInstanceTenantIdentity,
 ): Promise<SaToTenantResult> {
   if (!identity.instanceId) return { attached: false, result: "malformed_sa" };
-  const runtime = await findComputerRuntimeForInstance(db, identity.instanceId);
+  const runtime = await findComputerRuntimeForInstance(store, identity.instanceId);
   if (!runtime) return { attached: false, result: "unknown_tenant" };
-  const authorization = await readGatewayAuthorization(db, runtime.gatewayId);
+  const authorization = await readGatewayAuthorizationInStore(store, runtime.gatewayId);
   if (!authorization) return { attached: false, result: "unknown_tenant" };
   if (authorization.gateway.desiredStatus === "retired") {
     if (!homeCheckpointOutstanding(runtime.home)) return { attached: false, result: "unknown_tenant" };
@@ -198,16 +207,16 @@ export async function mapComputeInstanceToTenant(
 }
 
 export async function mapReviewToTenant(
-  db: GatewayRootFirestore,
+  store: TenantState,
   review: Extract<ReviewResult, { authenticated: true }>,
   expectedNamespace = process.env.K8S_NAMESPACE ?? "octogee",
 ): Promise<SaToTenantResult> {
   if (review.computeInstance) {
     if (review.namespace !== expectedNamespace) return { attached: false, result: "ns_mismatch" };
-    return mapComputeInstanceToTenant(db, review.computeInstance);
+    return mapComputeInstanceToTenant(store, review.computeInstance);
   }
   return mapSaToTenant(
-    db,
+    store,
     {
       namespace: review.namespace,
       saName: review.saName,
@@ -218,7 +227,7 @@ export async function mapReviewToTenant(
 }
 
 export async function mapSaToTenant(
-  db: GatewayRootFirestore,
+  store: TenantState,
   identity: ServiceAccountIdentity,
   expectedNamespace = process.env.K8S_NAMESPACE ?? "octogee",
 ): Promise<SaToTenantResult> {
@@ -241,7 +250,7 @@ export async function mapSaToTenant(
 
   if (identity.saName.startsWith(GATEWAY_SA_PREFIX)) {
     return bindGatewaySa(
-      db,
+      store,
       identity,
       identity.saName.slice(GATEWAY_SA_PREFIX.length),
       "ok",
@@ -253,5 +262,5 @@ export async function mapSaToTenant(
   }
 
   if (!isDnsLabel(identity.saName)) return { attached: false, result: "unknown_sa" };
-  return bindCustomGatewaySa(db, identity);
+  return bindCustomGatewaySa(store, identity);
 }

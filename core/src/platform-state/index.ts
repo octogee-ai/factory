@@ -25,6 +25,7 @@ export {
   createFirestorePlatformStateStore,
   type FirestorePlatformStateStoreOptions,
 } from "./firestore/store.js";
+export { agentImportRecordFromPayload } from "./firestore/jobs.js";
 export {
   DEFAULT_PLATFORM_STATE_SCHEMA,
   migratePlatformState,

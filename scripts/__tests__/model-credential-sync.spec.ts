@@ -158,7 +158,6 @@ describe("syncModelCredentialsForCustomer", () => {
 describe("model credential sync facade adoption", () => {
   it.each([
     "customer-lifecycle-broker-adapter.ts",
-    "customer-lifecycle-prod-adapter.ts",
   ])("%s uses the model credential sync runtime facade", (file) => {
     const src = readFileSync(join(import.meta.dirname, "..", "lib", file), "utf8");
     expect(src).toContain("model-credential-sync-runtime");

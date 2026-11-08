@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { db } from "../../lib/db.js";
 import { platformStateStore } from "../../lib/platform-state.js";
+import type { GatewayRoot, Stored } from "@octogee/core/platform-state";
 import {
   WORKSPACE_GATEWAY_STATUS_MAX_SLUGS,
   type WorkspaceGatewayStatus,
@@ -13,17 +14,10 @@ import {
   readGatewayRuntimeDoc,
 } from "@octogee/core/gateway-live-release";
 import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
-import { userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
 import {
   projectGatewayRuntimeStatus,
   projectOwnerActivation,
 } from "../../lib/gateway-runtime-status.js";
-
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
 
 type RequestedSlugs =
   | { kind: "ok"; slugs: string[] }
@@ -38,22 +32,24 @@ export function parseRequestedWorkspaceSlugs(raw: unknown): RequestedSlugs {
   return { kind: "ok", slugs };
 }
 
-function workspaceSlugOfMembership(ref: FirebaseFirestore.DocumentReference): string | null {
-  const container = ref.parent.parent;
-  if (!container) return null;
-  if (container.parent.id === "workspaces") return container.id;
-  const workspace = container.parent.parent;
-  return container.parent.id === "projects" && workspace?.parent.id === "workspaces" ? workspace.id : null;
+function projectMembershipWorkspaceSlug(ref: FirebaseFirestore.DocumentReference): string | null {
+  const project = ref.parent.parent;
+  const workspace = project?.parent.parent;
+  return project?.parent.id === "projects" && workspace?.parent.id === "workspaces" ? workspace.id : null;
 }
 
 async function memberWorkspaceSlugs(uid: string): Promise<Set<string>> {
-  const memberships = await db.collectionGroup("members").where("id", "==", uid).get();
+  const [workspaceMemberships, memberships] = await Promise.all([
+    platformStateStore.workspaces.members.listForUid(uid),
+    db.collectionGroup("members").where("id", "==", uid).get(),
+  ]);
   const slugs = new Set<string>();
+  for (const membership of workspaceMemberships) {
+    if (isCanonicalWorkspaceMembership(membership)) slugs.add(membership.workspaceSlug);
+  }
   for (const membership of memberships.docs) {
-    const slug = workspaceSlugOfMembership(membership.ref);
-    if (!slug) continue;
-    const workspaceLevel = membership.ref.parent.parent?.parent.id === "workspaces";
-    if (!workspaceLevel || isCanonicalWorkspaceMembership(membership.data())) slugs.add(slug);
+    const slug = projectMembershipWorkspaceSlug(membership.ref);
+    if (slug) slugs.add(slug);
   }
   return slugs;
 }
@@ -63,18 +59,15 @@ async function workspaceGatewayStatus(
   ownerUid: string,
   now: number,
 ): Promise<WorkspaceGatewayStatus> {
-  const owner = record((await db.doc(`users/${ownerUid}`).get()).data());
-  const assignedGatewayId = record(record(owner?.provisioning)?.openclaw)?.gatewayId;
-  const activation = projectOwnerActivation(owner);
-  const gatewayId = typeof assignedGatewayId === "string" &&
-    userAssignmentMatchesGateway(owner ?? undefined, assignedGatewayId, workspaceSlug)
-    ? assignedGatewayId
-    : null;
+  const owner = await platformStateStore.builders.records.get(ownerUid);
+  const activation = projectOwnerActivation(owner?.activationLease ?? null);
+  const assignedGatewayId = owner?.gateway?.gatewayId;
+  const gatewayId = assignedGatewayId && owner.slug === workspaceSlug ? assignedGatewayId : null;
   if (!gatewayId) {
     return { workspaceSlug, gatewayId: null, gatewayClass: null, runtimeStatus: "unknown", activation };
   }
-  const root = await db.doc(`gateways/${gatewayId}`).get();
-  const authorization = root.exists ? gatewayAuthorizationFromRootDocument(root.data(), gatewayId) : null;
+  const root = await platformStateStore.gateways.roots.get(gatewayId);
+  const authorization = root ? gatewayAuthorizationFromRootDocument(rootDocument(root), gatewayId) : null;
   if (!authorization) {
     return { workspaceSlug, gatewayId, gatewayClass: null, runtimeStatus: "unknown", activation };
   }
@@ -92,6 +85,11 @@ async function workspaceGatewayStatus(
   };
 }
 
+function rootDocument(root: Stored<GatewayRoot>): Record<string, unknown> {
+  const { revision: _revision, ...document } = root;
+  return document;
+}
+
 export async function workspaceGatewayStatusesFor(
   uid: string,
   slugs: string[],
@@ -100,9 +98,8 @@ export async function workspaceGatewayStatusesFor(
   if (slugs.length === 0) return [];
   const memberOf = await memberWorkspaceSlugs(uid);
   const statuses = await Promise.all(slugs.map(async (workspaceSlug) => {
-    const workspace = record((await db.doc(`workspaces/${workspaceSlug}`).get()).data());
-    const ownerUid = workspace?.ownerUid;
-    if (typeof ownerUid !== "string" || ownerUid.length === 0) return null;
+    const ownerUid = (await platformStateStore.workspaces.records.get(workspaceSlug))?.ownerUid;
+    if (!ownerUid) return null;
     if (ownerUid !== uid && !memberOf.has(workspaceSlug)) return null;
     return workspaceGatewayStatus(workspaceSlug, ownerUid, now);
   }));

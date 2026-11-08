@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { GLM_GATEWAYS_COLLECTION, resolveUserGatewayControlState, readSchedulerMigrationIdentity, } from "@octogee/shared/types/glm";
+import { resolveUserGatewayControlState, readSchedulerMigrationIdentity, } from "@octogee/shared/types/glm";
 import { hasFreshReadyKubernetesObservation, isGatewayRuntimeDoc, projectGatewayDesiredRootForGateway, } from "@octogee/shared/types/gateway-releases";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { readWorkspaceMigrationMarker } from "@octogee/shared/types/workspace-migration";
@@ -593,24 +593,6 @@ export async function acknowledgeCustomerRestore(deps, input) {
             lastProgressAt: now,
         }, customerRestoreOperationFence(input));
     });
-}
-export async function writeGatewayHeartbeat(deps, snapshot) {
-    if (!snapshot.gatewayId) {
-        throw new Error("gatewayId is required for a gateway heartbeat");
-    }
-    const heartbeat = {
-        status: snapshot.status,
-        version: snapshot.version,
-        openclawVersion: snapshot.openclawVersion,
-        mountedCustomers: snapshot.mountedCustomers,
-        internalUrl: snapshot.internalUrl,
-        startedAt: snapshot.startedAt,
-        lastHeartbeatAt: deps.serverTimestamp(),
-    };
-    await deps.db
-        .collection(GLM_GATEWAYS_COLLECTION)
-        .doc(snapshot.gatewayId)
-        .set({ heartbeat }, { merge: true });
 }
 export function legacyForwardRecoveryMatches(operationId, input, handoff) {
     const recovery = recordOrEmpty(handoff.forwardRecovery);

@@ -1,5 +1,5 @@
 import type { GlmOperationRecord, Operation, OperationAuditRecord, OperationAuditStatus, OperationKind, OperationStatus, OperationStep } from "@octogee/shared/types/glm";
-import type { OpaqueMap, Page, PageRequest, RecordPatch, Revision, Stored } from "./store.js";
+import type { Clearable, ClearField, OpaqueMap, Page, PageRequest, RecordPatch, Revision, Stored } from "./store.js";
 export interface OperationJournalFields {
     readonly gatewayId?: string;
     readonly inputUid?: string;
@@ -21,7 +21,10 @@ export interface OperationJournalFields {
 }
 export type OperationRecord = Operation & OperationJournalFields;
 export type NewOperation = Omit<OperationRecord, "id">;
-export type OperationPatch = RecordPatch<OperationRecord, "id" | "kind" | "createdAt" | "createdBy">;
+export type OperationPatch = RecordPatch<OperationRecord, "id" | "kind" | "createdAt" | "createdBy" | "input"> & {
+    readonly input?: Clearable<OperationRecord["input"]>;
+    readonly createdBy?: ClearField;
+};
 export interface OperationFence {
     readonly revision?: Revision;
     readonly status?: readonly OperationStatus[];

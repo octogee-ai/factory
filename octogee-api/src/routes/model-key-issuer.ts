@@ -1,25 +1,23 @@
+import { operatorRailRegistry, type ModelBrokerRailRegistry } from "../lib/model-broker-rails.js";
 import * as crypto from "node:crypto";
 import { Router, type Request, type Response } from "express";
 
-import {
-  createFirestoreModelBrokerTokenStore,
-  type ModelBrokerTokenLimits,
-  type ModelBrokerTokenStore,
+import type {
+  ModelBrokerTokenLimits,
+  ModelBrokerTokenStore,
 } from "../lib/model-broker-tokens.js";
 import {
   envDefaultModelBrokerLimits,
   resolveOwnerModelBrokerGrant,
+  type ModelBrokerGrantReaders,
 } from "../lib/model-broker-limits.js";
-import { operatorRailRegistry, type ModelBrokerRailRegistry } from "../lib/model-broker-rails.js";
-import type { Firestore } from "firebase-admin/firestore";
 import {
   GATEWAY_ID_REQUIREMENT,
 } from "@octogee/shared/types/glm";
 import { isBareGatewayId } from "@octogee/core/gateway-live-release";
 
-export interface ModelKeyIssuerRouteDeps {
-  db?: Pick<Firestore, "collection" | "doc">;
-  store?: ModelBrokerTokenStore;
+export interface ModelKeyIssuerRouteDeps extends ModelBrokerGrantReaders {
+  tokens: ModelBrokerTokenStore;
   bearerToken?: string;
   ttlSeconds?: number | null;
   defaultLimits?: Partial<ModelBrokerTokenLimits> | null;
@@ -112,10 +110,9 @@ function parseOptionalTtlSeconds(raw: string | undefined): number | null {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
 }
 
-export function createModelKeyIssuerRoutes(deps: ModelKeyIssuerRouteDeps = {}): Router {
+export function createModelKeyIssuerRoutes(deps: ModelKeyIssuerRouteDeps): Router {
   const rails = deps.rails ?? operatorRailRegistry();
   const router = Router();
-  let store = deps.store;
   const bearerToken = deps.bearerToken ?? process.env.GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN;
   const ttlSeconds =
     deps.ttlSeconds === undefined
@@ -123,21 +120,9 @@ export function createModelKeyIssuerRoutes(deps: ModelKeyIssuerRouteDeps = {}): 
       : deps.ttlSeconds;
   const now = deps.now ?? Date.now;
 
-  const tokenStore = (): ModelBrokerTokenStore | undefined => {
-    if (store) return store;
-    if (!deps.db) return undefined;
-    store = createFirestoreModelBrokerTokenStore(deps.db);
-    return store;
-  };
-
   router.post("/issue", async (req, res, next) => {
     try {
       if (!authorize(req, bearerToken, res)) return;
-      const activeStore = tokenStore();
-      if (!activeStore) {
-        res.status(503).json({ error: "model broker token store unavailable" });
-        return;
-      }
       const parsed = validIssueBody((req.body ?? {}) as IssueBody);
       if ("error" in parsed) {
         res.status(400).json({ error: parsed.error });
@@ -145,7 +130,8 @@ export function createModelKeyIssuerRoutes(deps: ModelKeyIssuerRouteDeps = {}): 
       }
       const issuedAt = now();
       const grant = await resolveOwnerModelBrokerGrant({
-        db: deps.db,
+        state: deps.state,
+        accounts: deps.accounts,
         gatewayId: parsed.gatewayId,
         ownerUid: parsed.ownerUid,
         now: issuedAt,
@@ -153,7 +139,7 @@ export function createModelKeyIssuerRoutes(deps: ModelKeyIssuerRouteDeps = {}): 
           deps.defaultLimits === undefined ? envDefaultModelBrokerLimits() : deps.defaultLimits,
         rails,
       });
-      const issued = await activeStore.issueToken({
+      const issued = await deps.tokens.issueToken({
         ...parsed,
         provider: PROVIDER,
         ttlSeconds,
@@ -177,17 +163,12 @@ export function createModelKeyIssuerRoutes(deps: ModelKeyIssuerRouteDeps = {}): 
   router.post("/revoke", async (req, res, next) => {
     try {
       if (!authorize(req, bearerToken, res)) return;
-      const activeStore = tokenStore();
-      if (!activeStore) {
-        res.status(503).json({ error: "model broker token store unavailable" });
-        return;
-      }
       const parsed = validIssueBody((req.body ?? {}) as IssueBody);
       if ("error" in parsed) {
         res.status(400).json({ error: parsed.error });
         return;
       }
-      const result = await activeStore.revokeGatewayToken({
+      const result = await deps.tokens.revokeGatewayToken({
         ...parsed,
         provider: PROVIDER,
         now: now(),

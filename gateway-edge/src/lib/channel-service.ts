@@ -1,4 +1,7 @@
+import type { OpaqueMap, Stored, WorkspaceChannel, WorkspaceChannelScope } from "@octogee/core/platform-state";
 import { FieldValue, db } from "./db.js";
+import { platformStateStore } from "./platform-state.js";
+import { readMattermostSecret } from "./mattermost-secret.js";
 import { logger } from "../middleware/logging.js";
 import { mmApi } from "./mattermost.js";
 import { getWorkspaceMmContext } from "./mattermost-context.js";
@@ -41,15 +44,6 @@ export interface SessionChannelResult {
   body: Record<string, unknown>;
 }
 
-interface SessionChannelDoc {
-  kind?: unknown;
-  archivedAt?: unknown;
-  createdDisplayName?: unknown;
-  mattermost?: {
-    channelId?: unknown;
-  };
-}
-
 export function sessionChannelNameAvailability(
   name: string,
 ): { ok: true } | { ok: false; reason: string } {
@@ -82,6 +76,10 @@ function channelDocPath(workspaceId: string, project: string | null, name: strin
     : `workspaces/${workspaceId}/channels/${name}`;
 }
 
+function laneChannelScope(workspaceId: string, project: string | null): WorkspaceChannelScope {
+  return { workspaceSlug: workspaceId, projectSlug: project };
+}
+
 function laneChannelName(workspaceId: string, project: string | null, name: string): string {
   return project
     ? projectChannelName(workspaceId, project, name)
@@ -106,9 +104,9 @@ export async function createProjectSessionChannel(
 ): Promise<SessionChannelResult> {
   if (!isValidProjectId(project)) return bad(400, "Invalid project");
   if (!actor.workspaceId) return bad(422, "Workspace not provisioned");
-  const projectSnap = await db.doc(`workspaces/${actor.workspaceId}/projects/${project}`).get();
-  if (!projectSnap.exists) return bad(404, "Project not found");
-  const projectAgentMember = await projectAgentChannelMember(actor.uid, project, projectSnap.data());
+  const record = await platformStateStore.workspaces.projects.get(actor.workspaceId, project);
+  if (!record) return bad(404, "Project not found");
+  const projectAgentMember = await projectAgentChannelMember(actor.uid, project, record.agent);
   if (!projectAgentMember.ok) return bad(502, projectAgentMember.error);
   return createSessionChannelImpl(actor, input, project, projectAgentMember.mmUserId);
 }
@@ -116,13 +114,12 @@ export async function createProjectSessionChannel(
 async function projectAgentChannelMember(
   uid: string,
   project: string,
-  projectData: FirebaseFirestore.DocumentData | undefined,
+  agent: OpaqueMap | null,
 ): Promise<{ ok: true; mmUserId: string | null } | { ok: false; error: string }> {
-  const enabled = projectAgentConfigured(projectData?.agent);
-  if (!enabled) return { ok: true, mmUserId: null };
-  const secret = await db.doc(`users/${uid}/secrets/${projectAgentSecretDocId(project)}`).get();
-  const mmUserId = secret.data()?.mmUserId;
-  if (typeof mmUserId === "string" && mmUserId) return { ok: true, mmUserId };
+  if (!projectAgentConfigured(agent)) return { ok: true, mmUserId: null };
+  const secret = await readMattermostSecret(platformStateStore, uid, projectAgentSecretDocId(project));
+  const mmUserId = secret?.mattermostUserId;
+  if (mmUserId) return { ok: true, mmUserId };
   return { ok: false, error: "Channel creation failed - project agent is not ready" };
 }
 
@@ -139,8 +136,8 @@ async function createSessionChannelImpl(
   const workspaceId = actor.workspaceId;
   const scope = laneScope(workspaceId, project, normalized.name);
 
-  const docRef = db.doc(channelDocPath(workspaceId, project, normalized.name));
-  const existingResult = await existingSessionChannelResult(docRef, normalized);
+  const docPath = channelDocPath(workspaceId, project, normalized.name);
+  const existingResult = await existingSessionChannelResult(laneChannelScope(workspaceId, project), docPath, normalized);
   if (existingResult) return completeExistingSessionChannel(project, workspaceId, normalized.name, existingResult);
 
   const ctx = await getWorkspaceMmContext(actor.uid, workspaceId, actor.userData);
@@ -172,7 +169,7 @@ async function createSessionChannelImpl(
     return bad(502, "Channel creation failed - could not add channel members");
   }
 
-  await docRef.set({
+  await db.doc(docPath).set({
     id: normalized.name,
     kind: "session",
     name: normalized.name,
@@ -243,23 +240,21 @@ function invalidSessionChannelCreateInput(
 }
 
 async function existingSessionChannelResult(
-  docRef: FirebaseFirestore.DocumentReference,
+  scope: WorkspaceChannelScope,
+  docPath: string,
   request: NormalizedSessionChannelCreateInput,
 ): Promise<SessionChannelResult | null> {
-  const existing = await docRef.get();
-  if (!existing.exists) return null;
-  const data = existing.data() as SessionChannelDoc | undefined;
-  if (data?.archivedAt) {
+  const existing = await platformStateStore.workspaces.channels.get(scope, request.name);
+  if (!existing) return null;
+  if (existing.archivedAt !== null) {
     return bad(409, "A session with this name was archived; channel names cannot be reused");
   }
-  const channelId = data?.mattermost?.channelId;
-  if (
-    typeof channelId !== "string"
-    || channelId.length === 0
-  ) {
+  const channelId = existing.mattermostChannelId;
+  if (!channelId) {
     return bad(409, "A channel with this name already exists in your workspace");
   }
-  if (data?.createdDisplayName !== request.displayName) {
+  const createdDisplayName = (await db.doc(docPath).get()).data()?.createdDisplayName;
+  if (createdDisplayName !== request.displayName) {
     return bad(
       409,
       `A channel already uses the name "${request.name}". Choose a name that differs within its first ${CUSTOM_CHANNEL_MAX_LENGTH} letters and numbers.`,
@@ -382,8 +377,8 @@ async function addChannelMembers(
 }
 
 interface ResolvedSessionChannel {
-  docRef: FirebaseFirestore.DocumentReference;
-  doc: SessionChannelDoc;
+  docPath: string;
+  channel: Stored<WorkspaceChannel>;
   channelId: string;
 }
 
@@ -397,14 +392,11 @@ async function readSessionChannel(
   // live MM name WOULD pass the binding check (e.g. a rewritten
   // projects/{pid}/channels/general pointing at the real general channel).
   if (!sessionChannelNameAvailability(name).ok) return null;
-  const docRef = db.doc(channelDocPath(workspaceId, project, name));
-  const snap = await docRef.get();
-  if (!snap.exists) return null;
-  const doc = snap.data() as SessionChannelDoc | undefined;
-  if (!doc || doc.kind !== "session") return null;
-  const channelId = doc.mattermost?.channelId;
-  if (typeof channelId !== "string" || channelId.length === 0) return null;
-  return { docRef, doc, channelId };
+  const channel = await platformStateStore.workspaces.channels.get(laneChannelScope(workspaceId, project), name);
+  if (!channel || channel.kind !== "session") return null;
+  const channelId = channel.mattermostChannelId;
+  if (!channelId) return null;
+  return { docPath: channelDocPath(workspaceId, project, name), channel, channelId };
 }
 
 // Defense-in-depth for the admin-token MM mutations: channel docs are
@@ -517,7 +509,7 @@ async function archiveSessionChannelImpl(
 
   const found = await readSessionChannel(actor.workspaceId, project, name);
   if (!found) return bad(404, "Session channel not found");
-  if (found.doc.archivedAt) return { status: 200, body: { success: true } };
+  if (found.channel.archivedAt !== null) return { status: 200, body: { success: true } };
   const bindingFailure = await verifyChannelBinding(actor.workspaceId, project, name, found.channelId);
   if (bindingFailure) return bindingFailure;
 
@@ -525,13 +517,17 @@ async function archiveSessionChannelImpl(
     const {
       setStoredChannelArchived,
     } = await import("./channel-lifecycle.js");
-    await setStoredChannelArchived(found.docRef.path, true);
+    await setStoredChannelArchived(found.docPath, true);
   } catch (err) {
     logger.error(`[channels] Channel archive failed for ${scope}:`, { err });
     return bad(502, "Channel archive failed");
   }
 
-  await found.docRef.update({ archivedAt: FieldValue.serverTimestamp() });
+  await platformStateStore.workspaces.channels.patch(
+    laneChannelScope(actor.workspaceId, project),
+    name,
+    { archivedAt: { serverNow: true } },
+  );
   logger.info(`[channels] Archived session channel ${scope}`, { uid: actor.uid });
 
   return { status: 200, body: { success: true } };

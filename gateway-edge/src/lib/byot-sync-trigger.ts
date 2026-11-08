@@ -1,13 +1,11 @@
 import { internalFetch } from "./internal-fetch.js";
 import { isIPv4 } from "node:net";
 import { logger } from "../middleware/logging.js";
-import { db } from "./db.js";
+import { platformStateStore } from "./platform-state.js";
 import { isSafeGatewayId } from "./byosub.js";
 import { createModelCredentialSyncAuthHeaders } from "./byot-sync-internal-auth.js";
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
-  PLATFORM_CONFIG_COLLECTION,
-  PLATFORM_MODEL_CONFIG_DOC,
   builderAgentModelDefaultFromDoc,
   resolveFreeTierModel,
   type BuilderAgentModelDefault,
@@ -65,7 +63,7 @@ function trimTrailingSlash(value: string): string {
 export function gatewayModelCredentialSyncUrl(
   gatewayId: string,
   env: GatewayModelCredentialSyncEnv = process.env,
-  runtime?: { runtime?: unknown; vm?: { status?: unknown; internalIp?: unknown } },
+  runtime?: { runtime?: unknown; vm?: { status?: unknown; internalIp?: unknown } | null },
 ): string {
   if (!isSafeGatewayId(gatewayId)) {
     throw new Error(`invalid gatewayId ${JSON.stringify(gatewayId)}`);
@@ -89,17 +87,13 @@ async function platformModelDialsForSync(logWarn: (msg: string) => void): Promis
   builderAgentDefault: BuilderAgentModelDefault;
 }> {
   try {
-    const snap = await db
-      .collection(PLATFORM_CONFIG_COLLECTION)
-      .doc(PLATFORM_MODEL_CONFIG_DOC)
-      .get();
-    const data = snap.data() as { freeTierModelRef?: unknown } | undefined;
-    const configured = data?.freeTierModelRef;
+    const models = (await platformStateStore.config.platform.get("models"))?.value;
+    const configured = models?.freeTierModelRef;
     return {
-      freeTierModelRef: typeof configured === "string" && resolveFreeTierModel(configured)
+      freeTierModelRef: configured !== undefined && resolveFreeTierModel(configured)
         ? configured
         : DEFAULT_FREE_TIER_MODEL_REF,
-      builderAgentDefault: builderAgentModelDefaultFromDoc(data),
+      builderAgentDefault: builderAgentModelDefaultFromDoc(models),
     };
   } catch (err) {
     logWarn(
@@ -132,7 +126,7 @@ export async function postGatewayModelCredentialSync(args: {
     platformModelDialsForSync(logWarn),
     env.GATEWAY_EDGE_INTERNAL_URL_TEMPLATE
       ? undefined
-      : db.collection("glmGateways").doc(args.gatewayId).get().then((snapshot) => snapshot.data()),
+      : platformStateStore.fleetRegistry.get(args.gatewayId).then((record) => record ?? undefined),
   ]);
   const userData: ModelCredentialSyncUserData = {
     ...dials,

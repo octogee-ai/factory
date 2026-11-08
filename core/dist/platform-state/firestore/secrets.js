@@ -17,9 +17,9 @@ const CONTROL_TICKET_TIMES = storedAsTimestamps("createdAt", "expireAt");
 const ACCESS_DENIAL_BUCKET_MS = 60_000;
 const MODEL_BROKER_PROVIDERS = ["anthropic", "vertex", "openrouter", "openai"];
 const MODEL_BROKER_PURPOSES = ["model", "embeddings"];
-const GATEWAY_TICKET_FIELDS = ["uid", "gatewayId", "expiresAt", "expireAt"];
-const CONTROL_TICKET_FIELDS = ["uid", "gatewayId", "createdAt", "expiresAt", "expireAt", "redeemedAt"];
-const CONTROL_SESSION_FIELDS = ["uid", "gatewayId", "createdAt", "expiresAt", "expireAt", "mobileEnrollmentId"];
+export const GATEWAY_TICKET_FIELDS = ["uid", "gatewayId", "expiresAt", "expireAt"];
+export const CONTROL_TICKET_FIELDS = ["uid", "gatewayId", "createdAt", "expiresAt", "expireAt", "redeemedAt"];
+export const CONTROL_SESSION_FIELDS = ["uid", "gatewayId", "createdAt", "expiresAt", "expireAt", "mobileEnrollmentId"];
 function isPlainObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -94,7 +94,7 @@ export function builderSecretFromData(uid, secretId, data) {
         rotatedAt: fields.nullableNumber("rotatedAt"),
     };
 }
-function encodeSecret(secret) {
+export function builderSecretToData(secret) {
     const derivedKind = secretKindOf(secret.secretId);
     if (derivedKind !== secret.kind) {
         throw new TypeError(`secrets.put: secret id ${secret.secretId} holds a ${derivedKind} secret, not ${secret.kind}`);
@@ -105,19 +105,22 @@ function encodeSecret(secret) {
             ...detailTokens,
             ...nonNull({ encryptedAccessToken: secret.encryptedAccessToken, encryptedRefreshToken: secret.encryptedRefreshToken }),
         };
-        return encodeDocument(Object.keys(tokens).length === 0 ? without(secret.detail, ["tokens"]) : { ...secret.detail, tokens }, SECRET_TIMES);
+        return Object.keys(tokens).length === 0 ? without(secret.detail, ["tokens"]) : { ...secret.detail, tokens };
     }
     const projectId = secret.kind === "project-agent-mattermost" ? secret.secretId.slice(PROJECT_AGENT_SECRET_PREFIX.length) : null;
     if (secret.projectId !== projectId) {
         throw new TypeError(`secrets.put: secret id ${secret.secretId} belongs to project ${String(projectId)}, not ${String(secret.projectId)}`);
     }
-    return encodeDocument(nonNull({
+    return nonNull({
         personalToken: secret.personalToken,
         [mattermostUserIdField(secret.kind)]: secret.mattermostUserId,
         project: projectId,
         createdAt: secret.createdAt,
         rotatedAt: secret.rotatedAt,
-    }), SECRET_TIMES);
+    });
+}
+function encodeSecret(secret) {
+    return encodeDocument(builderSecretToData(secret), SECRET_TIMES);
 }
 export function createFirestoreSecretsRepository(session) {
     const ref = (uid, secretId) => secretsCollection(session, uid).doc(secretId);
@@ -138,53 +141,54 @@ export function createFirestoreSecretsRepository(session) {
         },
     };
 }
-function decodeGatewayTicket(snapshot) {
-    if (!snapshot.exists)
-        return null;
-    const data = decodeDocumentData(snapshot);
-    const fields = new FirestoreFields(gatewayTicketKey(snapshot.id), data);
-    return withStoredRevision(snapshot, {
-        ticketId: snapshot.id,
+export function gatewayTicketFromData(ticketId, data) {
+    const fields = new FirestoreFields(gatewayTicketKey(ticketId), data);
+    return {
+        ticketId,
         uid: fields.string("uid"),
         gatewayId: fields.string("gatewayId"),
         expiresAt: fields.number("expiresAt"),
         grant: without(data, GATEWAY_TICKET_FIELDS),
-    });
+    };
 }
-function decodeControlTicket(snapshot) {
-    if (!snapshot.exists)
-        return null;
-    const data = decodeDocumentData(snapshot);
-    const fields = new FirestoreFields(controlTicketKey(snapshot.id), data);
-    return withStoredRevision(snapshot, {
-        ticketHash: snapshot.id,
+export function controlTicketFromData(ticketHash, data) {
+    const fields = new FirestoreFields(controlTicketKey(ticketHash), data);
+    return {
+        ticketHash,
         uid: fields.string("uid"),
         gatewayId: fields.string("gatewayId"),
         createdAt: fields.number("createdAt"),
         expiresAt: fields.number("expiresAt"),
         redeemedAt: fields.nullableNumber("redeemedAt"),
         grant: without(data, CONTROL_TICKET_FIELDS),
-    });
+    };
 }
-function decodeControlSession(snapshot) {
-    if (!snapshot.exists)
-        return null;
-    const data = decodeDocumentData(snapshot);
-    const fields = new FirestoreFields(controlSessionKey(snapshot.id), data);
-    return withStoredRevision(snapshot, {
-        sessionHash: snapshot.id,
+export function controlSessionFromData(sessionHash, data) {
+    const fields = new FirestoreFields(controlSessionKey(sessionHash), data);
+    return {
+        sessionHash,
         uid: fields.string("uid"),
         gatewayId: fields.string("gatewayId"),
         createdAt: fields.nullableNumber("createdAt"),
         expiresAt: fields.number("expiresAt"),
         attachmentId: fields.nullableString("mobileEnrollmentId"),
         grant: without(data, CONTROL_SESSION_FIELDS),
-    });
+    };
 }
-function decodeModelBrokerToken(snapshot) {
+function decodeGatewayTicket(snapshot) {
     if (!snapshot.exists)
         return null;
-    return withStoredRevision(snapshot, modelBrokerTokenFromData(snapshot.id, decodeDocumentData(snapshot)));
+    return withStoredRevision(snapshot, gatewayTicketFromData(snapshot.id, decodeDocumentData(snapshot)));
+}
+function decodeControlTicket(snapshot) {
+    if (!snapshot.exists)
+        return null;
+    return withStoredRevision(snapshot, controlTicketFromData(snapshot.id, decodeDocumentData(snapshot)));
+}
+function decodeControlSession(snapshot) {
+    if (!snapshot.exists)
+        return null;
+    return withStoredRevision(snapshot, controlSessionFromData(snapshot.id, decodeDocumentData(snapshot)));
 }
 export function modelBrokerTokenFromData(tokenHash, data) {
     const key = modelBrokerTokenKey(tokenHash);
@@ -211,10 +215,9 @@ export function modelBrokerTokenFromData(tokenHash, data) {
         revokedAt: fields.nullableNumber("revokedAt"),
     };
 }
-function decodeModelBrokerGatewayToken(snapshot) {
-    if (!snapshot.exists)
-        return null;
-    return withStoredRevision(snapshot, modelBrokerGatewayTokenFromData(snapshot.id, decodeDocumentData(snapshot)));
+export function modelBrokerTokenDocument(token) {
+    const { railPolicy, revokedAt, ...rest } = token;
+    return { ...rest, capped: true, policy: railPolicy, ...nonNull({ revokedAt }) };
 }
 export function modelBrokerGatewayTokenFromData(pointerKey, data) {
     const fields = new FirestoreFields(modelBrokerPointerKey(pointerKey), data);
@@ -227,6 +230,16 @@ export function modelBrokerGatewayTokenFromData(pointerKey, data) {
         tokenHash: fields.string("tokenHash"),
         updatedAt: fields.number("updatedAt"),
     };
+}
+function decodeModelBrokerToken(snapshot) {
+    if (!snapshot.exists)
+        return null;
+    return withStoredRevision(snapshot, modelBrokerTokenFromData(snapshot.id, decodeDocumentData(snapshot)));
+}
+function decodeModelBrokerGatewayToken(snapshot) {
+    if (!snapshot.exists)
+        return null;
+    return withStoredRevision(snapshot, modelBrokerGatewayTokenFromData(snapshot.id, decodeDocumentData(snapshot)));
 }
 export function gatewayAccessDenialAuditId(gatewayId, granteeUid, reason, at) {
     const bucket = Math.floor(at / ACCESS_DENIAL_BUCKET_MS);
@@ -359,8 +372,7 @@ function createModelBrokerTokensRepository(session) {
             return snapshot.docs.map(decodeModelBrokerToken).filter(isPresent);
         },
         async create(token) {
-            const { railPolicy, revokedAt, ...rest } = token;
-            await session.create("access.modelBrokerTokens.create", modelBrokerTokenKey(token.tokenHash), ref(token.tokenHash), encodeDocument({ ...rest, capped: true, policy: railPolicy, ...nonNull({ revokedAt }) }, STORED_AS_NUMBERS));
+            await session.create("access.modelBrokerTokens.create", modelBrokerTokenKey(token.tokenHash), ref(token.tokenHash), encodeDocument(modelBrokerTokenDocument(token), STORED_AS_NUMBERS));
         },
         async revoke(tokenHash, revokedAt) {
             await session.merge("access.modelBrokerTokens.revoke", modelBrokerTokenKey(tokenHash), ref(tokenHash), { revoked: true, revokedAt });

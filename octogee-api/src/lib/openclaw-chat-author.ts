@@ -1,13 +1,27 @@
 import { authorizeChannel } from "../../../gateway-edge/src/lib/channel-session-authorization.js";
-import { db } from "../../../gateway-edge/src/lib/db.js";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import { USERNAME_RE } from "@octogee/shared/types/identity";
 
-export async function resolveOpenClawChatAuthor(
+export interface OpenClawChatAuthor {
+  uid: string;
+  username: string;
+  mattermostUserId: string;
+}
+
+export type OpenClawChatAuthorResolver = (
   viewerUid: string,
   workspaceSlug: string,
   channelId: string,
   postId: string,
-): Promise<{ uid: string; username: string; mattermostUserId: string } | null> {
+) => Promise<OpenClawChatAuthor | null>;
+
+export async function resolveOpenClawChatAuthor(
+  store: Pick<PlatformStateRepositories, "builders">,
+  viewerUid: string,
+  workspaceSlug: string,
+  channelId: string,
+  postId: string,
+): Promise<OpenClawChatAuthor | null> {
   const access = await authorizeChannel(viewerUid, channelId, workspaceSlug, {
     requireActiveLedger: true, includeCoachConversation: true, signal: AbortSignal.timeout(5_000),
   });
@@ -16,11 +30,8 @@ export async function resolveOpenClawChatAuthor(
   if (post.id !== postId || post.channel_id !== channelId || typeof post.user_id !== "string") {
     throw new Error("Chat author post does not belong to the authorized channel");
   }
-  const users = await db.collection("users").where("mattermost.userId", "==", post.user_id).limit(2).get();
-  if (users.docs.length === 0) return null;
-  if (users.docs.length !== 1) throw new Error("Chat author Mattermost identity is ambiguous");
-  const user = users.docs[0]!;
-  const username: unknown = user.data().username;
-  if (typeof username !== "string" || !USERNAME_RE.test(username)) throw new Error("Chat author builder slug is invalid");
-  return { uid: user.id, username, mattermostUserId: post.user_id };
+  const author = await store.builders.records.findByMattermostUserId(post.user_id);
+  if (!author) return null;
+  if (author.slug === null || !USERNAME_RE.test(author.slug)) throw new Error("Chat author builder slug is invalid");
+  return { uid: author.uid, username: author.slug, mattermostUserId: post.user_id };
 }

@@ -5,13 +5,19 @@ import type { Server } from "node:http";
 import { publicAppOriginsFromEnv } from "@octogee/core/public-app-origins";
 import { renderMetrics } from "./metrics.js";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import type { BuilderAccountReader } from "@octogee/core/builder-account";
 import {
   addAdminFleetRoutes,
   type FleetLogger,
   type GatewayPodDiagnostics,
 } from "@octogee/core/admin-fleet-router";
 import type { CentralReleaseAuthority } from "@octogee/core/artifact-registry";
-import type { PlatformStateStore } from "@octogee/core/platform-state";
+import type {
+  PlatformStateStore,
+  WatchAggregate,
+  WatchRequest,
+  WatchSubscription,
+} from "@octogee/core/platform-state";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
@@ -54,6 +60,7 @@ function corsMiddleware(req: Request, res: Response, next: NextFunction): void {
 export interface HttpServerDeps {
   db: Firestore;
   store: PlatformStateStore;
+  accounts: BuilderAccountReader;
   verifyIdToken: RequireAdminDeps["verifyIdToken"];
   log: (msg: string) => void;
   provisionGatewayAuthSecret: (opts: {
@@ -107,71 +114,66 @@ interface FleetEventHub {
   subscribe(handler: (event: FleetEvent) => void): () => void;
 }
 
-interface FleetEventWatchTarget {
-  onSnapshot(
-    next: (snap: unknown) => void,
-    onError: (err: unknown) => void,
-  ): () => void;
+interface FleetEventWatch {
+  readonly collection: string;
+  readonly request: WatchRequest<WatchAggregate>;
 }
 
+const FLEET_EVENT_WATCHES: readonly FleetEventWatch[] = [
+  { collection: "users", request: { aggregate: "builders", filter: {} } },
+  { collection: "gateways", request: { aggregate: "gateways", filter: {} } },
+  { collection: "config", request: { aggregate: "config", filter: {} } },
+  { collection: GLM_GATEWAYS_COLLECTION, request: { aggregate: "fleetRegistry", filter: {} } },
+  {
+    collection: GLM_OPERATIONS_COLLECTION,
+    request: { aggregate: "operations", filter: { statuses: ACTIVE_OPERATION_STATUSES } },
+  },
+];
+
 function createFleetEventHub(deps: {
-  db: Firestore;
+  store: Pick<PlatformStateStore, "watch">;
   log: (msg: string) => void;
   lingerMs: number;
 }): FleetEventHub {
   const subscribers = new Set<(event: FleetEvent) => void>();
-  const primed = new Set<string>();
-  let unsubscribes: Array<() => void> | null = null;
+  let subscriptions: WatchSubscription[] | null = null;
   let lingerTimer: NodeJS.Timeout | null = null;
 
   const emit = (event: FleetEvent) => {
     for (const subscriber of [...subscribers]) subscriber(event);
   };
 
-  const watch = (collection: string, target: FleetEventWatchTarget) =>
-    target.onSnapshot(
-      () => {
-        if (!primed.has(collection)) {
-          primed.add(collection);
+  const reportFailure = (collection: string, error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    deps.log(`[glm-controller] fleet event watch failed collection=${collection}: ${message}`);
+    emit({ kind: "error", collection, error: message });
+  };
+
+  const watch = ({ collection, request }: FleetEventWatch): WatchSubscription => {
+    let primed = false;
+    const subscription = deps.store.watch(request, {
+      onEvent: (event) => {
+        if (event.kind === "resync") return;
+        if (!primed) {
+          primed = true;
           return;
         }
         emit({ kind: "changed", collection, at: Date.now() });
       },
-      (err) => {
-        deps.log(
-          `[glm-controller] fleet event watch failed collection=${collection}: ${
-            (err as Error)?.message ?? String(err)
-          }`,
-        );
-        emit({
-          kind: "error",
-          collection,
-          error: (err as Error)?.message ?? "watch failed",
-        });
-      },
-    );
+      onError: (error) => reportFailure(collection, error),
+    });
+    subscription.closed.catch((error: unknown) => reportFailure(collection, error));
+    return subscription;
+  };
 
   const ensureWatchers = () => {
-    if (unsubscribes) return;
-    primed.clear();
-    unsubscribes = [
-      watch("users", deps.db.collection("users")),
-      watch("gateways", deps.db.collection("gateways")),
-      watch("config", deps.db.collection("config")),
-      watch(GLM_GATEWAYS_COLLECTION, deps.db.collection(GLM_GATEWAYS_COLLECTION)),
-      watch(
-        GLM_OPERATIONS_COLLECTION,
-        deps.db
-          .collection(GLM_OPERATIONS_COLLECTION)
-          .where("status", "in", [...ACTIVE_OPERATION_STATUSES]),
-      ),
-    ];
+    if (subscriptions) return;
+    subscriptions = FLEET_EVENT_WATCHES.map(watch);
   };
 
   const teardown = () => {
-    for (const unsubscribe of unsubscribes ?? []) unsubscribe();
-    unsubscribes = null;
-    primed.clear();
+    for (const subscription of subscriptions ?? []) void subscription.close();
+    subscriptions = null;
   };
 
   return {
@@ -261,7 +263,8 @@ export function createHttpServer(deps: HttpServerDeps): Express {
   adminRouter.use(
     createRequireAdmin({
       verifyIdToken: deps.verifyIdToken,
-      db: deps.db,
+      store: deps.store,
+      accounts: deps.accounts,
       log: deps.log,
     }),
   );
@@ -269,7 +272,7 @@ export function createHttpServer(deps: HttpServerDeps): Express {
   addAdminFleetEventRoute(
     adminRouter,
     createFleetEventHub({
-      db: deps.db,
+      store: deps.store,
       log: deps.log,
       lingerMs: deps.fleetEventListenerLingerMs ?? FLEET_EVENT_LINGER_MS_DEFAULT,
     }),

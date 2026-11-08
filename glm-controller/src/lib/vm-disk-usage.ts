@@ -1,5 +1,6 @@
-import { isGatewayVmDiskObservation, resolveGatewayRuntime, type GatewayVmState } from "@octogee/shared/types/glm";
-import type { MirrorDocChange } from "../fleet-informer.js";
+import type { FleetRegistryRecord } from "@octogee/core/platform-state";
+import { isGatewayVmDiskObservation, resolveGatewayRuntime } from "@octogee/shared/types/glm";
+import type { MirrorDelivery } from "../fleet-informer.js";
 
 export interface VmDiskSample {
   gatewayId: string;
@@ -8,24 +9,29 @@ export interface VmDiskSample {
   observedAt: number;
 }
 
-export function vmDiskSampleFromDoc(gatewayId: string, data: Record<string, unknown> | undefined): VmDiskSample | null {
-  if (resolveGatewayRuntime(data?.runtime) !== "gce-vm") return null;
-  const vm = data?.vm as Partial<GatewayVmState> | null | undefined;
-  const disk = data?.vmDisk;
+export function vmDiskSampleFromRecord(record: FleetRegistryRecord): VmDiskSample | null {
+  if (resolveGatewayRuntime(record.runtime) !== "gce-vm") return null;
+  const vm = record.vm;
+  const disk = record.vmDisk;
   if (!vm || vm.status !== "RUNNING" || !isGatewayVmDiskObservation(disk) || disk.instanceId !== vm.instanceId) return null;
-  return { gatewayId, sizeBytes: disk.sizeBytes, freeBytes: disk.freeBytes, observedAt: disk.observedAt };
+  return { gatewayId: record.gatewayId, sizeBytes: disk.sizeBytes, freeBytes: disk.freeBytes, observedAt: disk.observedAt };
 }
 
-export function applyVmDiskChanges(
+function setSample(samples: Map<string, VmDiskSample>, gatewayId: string, record: FleetRegistryRecord | null): void {
+  const sample = record === null ? null : vmDiskSampleFromRecord(record);
+  if (sample) samples.set(gatewayId, sample);
+  else samples.delete(gatewayId);
+}
+
+export function applyVmDiskDelivery(
   samples: Map<string, VmDiskSample>,
-  changes: readonly MirrorDocChange[],
-  options: { reset: boolean },
+  delivery: MirrorDelivery<"fleetRegistry">,
 ): VmDiskSample[] {
-  if (options.reset) samples.clear();
-  for (const change of changes) {
-    const sample = change.type === "removed" ? null : vmDiskSampleFromDoc(change.doc.id, change.doc.data());
-    if (sample) samples.set(change.doc.id, sample);
-    else samples.delete(change.doc.id);
+  if (delivery.kind === "reset") {
+    samples.clear();
+    for (const record of delivery.records) setSample(samples, record.gatewayId, record);
+  } else {
+    for (const change of delivery.changes) setSample(samples, change.key, change.record);
   }
   return [...samples.values()].sort((a, b) => a.gatewayId.localeCompare(b.gatewayId));
 }

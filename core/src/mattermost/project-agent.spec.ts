@@ -5,25 +5,22 @@ import {
   projectAgentSecretDocId,
   retireProjectAgentBot,
 } from "./project-agent.js";
+import { createDocumentFixtureStore } from "../testing/journal-store.js";
+
+const SECRET_PATH = "users/uid-1/secrets/projectAgentMattermost-orbit";
 
 function deps() {
-  const set = vi.fn(async () => undefined);
-  const del = vi.fn(async () => undefined);
-  const secretDoc = vi.fn(() => ({ set, delete: del }));
-  const secrets = vi.fn(() => ({ doc: secretDoc }));
-  const userDoc = vi.fn(() => ({ collection: secrets }));
-  const users = vi.fn(() => ({ doc: userDoc }));
+  const documents = new Map<string, Record<string, unknown>>();
+  const store = createDocumentFixtureStore(documents);
+  const set = vi.spyOn(store.secrets, "put");
+  const del = vi.spyOn(store.secrets, "delete");
   return {
-    db: { collection: users },
+    secrets: store.secrets,
     mmApiCall: vi.fn(),
-    now: vi.fn(() => ({ __op: "serverTimestamp" })),
     log: vi.fn(),
+    documents,
     set,
     del,
-    users,
-    userDoc,
-    secrets,
-    secretDoc,
   };
 }
 
@@ -104,12 +101,11 @@ describe("createProjectAgentBot", () => {
       endpoint: "/channels/chan-b/members",
       body: { user_id: "bot-1" },
     });
-    expect(d.secretDoc).toHaveBeenCalledWith("projectAgentMattermost-orbit");
-    expect(d.set).toHaveBeenCalledWith({
+    expect(d.documents.get(SECRET_PATH)).toEqual({
       personalToken: "proj-pat",
       mmUserId: "bot-1",
       project: "orbit",
-      createdAt: { __op: "serverTimestamp" },
+      createdAt: expect.any(Number),
     });
   });
 
@@ -183,7 +179,7 @@ describe("createProjectAgentBot", () => {
       "/teams/team-1/members", "/channels/chan-a/members", "/channels/chan-b/members",
     ]));
     expect(d.set).toHaveBeenCalledTimes(2);
-    expect(d.set).toHaveBeenLastCalledWith(expect.objectContaining({ personalToken: "pat-2", mmUserId: "bot-1" }));
+    expect(d.documents.get(SECRET_PATH)).toEqual(expect.objectContaining({ personalToken: "pat-2", mmUserId: "bot-1" }));
     expect(mm.calls).toContainEqual({ method: "POST", endpoint: "/users/tokens/revoke", body: { token_id: "stale-pat" } });
   });
 
@@ -339,8 +335,7 @@ describe("retireProjectAgentBot", () => {
       body: { token_id: "t2" },
     });
     expect(mm.calls).toContainEqual({ method: "DELETE", endpoint: "/users/bot-1", body: undefined });
-    expect(d.secretDoc).toHaveBeenCalledWith("projectAgentMattermost-orbit");
-    expect(d.del).toHaveBeenCalled();
+    expect(d.del).toHaveBeenCalledWith("uid-1", "projectAgentMattermost-orbit");
   });
 
   it("continues past a failed token listing (logs) and still deactivates + deletes the secret", async () => {

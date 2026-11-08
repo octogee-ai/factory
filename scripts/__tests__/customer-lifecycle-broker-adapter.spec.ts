@@ -1653,6 +1653,38 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(rpc.channelsStatus).not.toHaveBeenCalled();
   }, 5_000);
 
+  it("refuses import publication when the target identity callback denies", async () => {
+    const rpc = {
+      configGet: vi.fn(async () => configSnapshot({ agents: { list: [] } })),
+      agentsCreate: rosterRpc().agentsCreate,
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    const beforeRuntimePublish = vi.fn(async () => { throw new Error("target identity authority changed"); });
+
+    await expect(adapter.activateImportedCustomer("tester10", { beforeRuntimePublish })).rejects.toThrow("target identity authority changed");
+    expect(beforeRuntimePublish).toHaveBeenCalledOnce();
+    expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+  });
+
+  it.each(["current", "missing-assignment", "moved-user", "inactive-assignment", "missing-pod"])("requires the exact canonical source custody: %s", async (mode) => {
+    vi.stubEnv("GATEWAY_ID", "shared-source"); vi.stubEnv("POD_UID", mode === "missing-pod" ? "" : "source-pod");
+    try {
+      const client = mkClient({
+        uidForSlug: vi.fn(async () => "uid-alice"),
+        userSnapshot: vi.fn(async () => aliceSnapshot({ status: "complete", gatewayId: mode === "moved-user" ? "shared-other" : "shared-source" })),
+        assignmentRoster: vi.fn(async () => mode === "missing-assignment" ? []
+          : [{ uid: "uid-alice", state: mode === "inactive-assignment" ? "migrating" : "quiescing", epoch: 0 }]),
+      });
+      const adapter = buildBrokeredLifecycleAdapter({ client, rpc: mkGatewayRpc(), log: vi.fn() });
+
+      const custody = adapter.sourceMigrationIdentityCustody!("alice", "migration-alice");
+
+      if (mode === "current") await expect(custody).resolves.toEqual({ migrationId: "migration-alice", uid: "uid-alice", gatewayId: "shared-source", podUid: "source-pod", epoch: 0 });
+      else await expect(custody).rejects.toThrow(/custody|assigned customer/);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   describe("import secrets.reload gate", () => {
     const importedConfig = {
       agents: { list: [{ id: "octogee-tester10-coach", model: "house" }] },
@@ -4756,6 +4788,16 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     ]);
     expect(rpc.configPatch).not.toHaveBeenCalled();
     expect(rpc.configPatchAndWaitForChange).toHaveBeenCalledOnce();
+  });
+
+  it("refuses add publication when the target identity callback denies", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc: mkGatewayRpc(), log: vi.fn() });
+    const beforeRuntimePublish = vi.fn(async () => { throw new Error("target identity authority changed"); });
+
+    await expect(adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" }, { beforeRuntimePublish }))
+      .rejects.toThrow("target identity authority changed");
+    expect(beforeRuntimePublish).toHaveBeenCalledOnce();
+    expect(applyConfigPatch).not.toHaveBeenCalled();
   });
 
   it("preserves unrelated agents while explicitly confirming the full agent list replacement", async () => {

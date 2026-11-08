@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MalformedRecordError } from "@octogee/core/platform-state";
 
 type Write = {
   path: string;
@@ -52,6 +53,11 @@ vi.mock("../lib/db.js", () => ({
   },
 }));
 
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(h.docs) };
+});
+
 vi.mock("../middleware/logging.js", () => ({
   logger: h.logger,
 }));
@@ -92,6 +98,7 @@ function actor(overrides: Record<string, unknown> = {}) {
 }
 
 const DOC_PATH = "workspaces/mira/channels/patchroll";
+const ARCHIVED_AT = 1_700_000_000_000;
 
 // mmApi mock where GET /channels/channel-1 verifies as the caller's own
 // session channel, plus per-path responses (an Error value → rejection).
@@ -279,7 +286,7 @@ describe("createSessionChannel", () => {
   });
 
   it("returns 409 with an archived hint when the existing doc is archived", async () => {
-    seedSessionDoc({ archivedAt: "SOME_TS" });
+    seedSessionDoc({ archivedAt: ARCHIVED_AT });
     await expect(createSessionChannel(actor(), input)).resolves.toEqual({
       status: 409,
       body: { error: "A session with this name was archived; channel names cannot be reused" },
@@ -659,7 +666,7 @@ describe("archiveSessionChannel", () => {
     });
     expect(h.mmApi).not.toHaveBeenCalledWith("/channels/foreign-channel", "DELETE");
     expect(h.logger.error).toHaveBeenCalled();
-    expect(h.updates).toEqual([]);
+    expect(h.docs.get(DOC_PATH)?.archivedAt).toBeUndefined();
   });
 
   it("archives the MM channel and stamps the doc", async () => {
@@ -670,20 +677,27 @@ describe("archiveSessionChannel", () => {
 
     expect(result).toEqual({ status: 200, body: { success: true } });
     expect(h.setStoredChannelArchived).toHaveBeenCalledWith(DOC_PATH, true);
-    expect(h.updates).toEqual([
-      { path: DOC_PATH, data: { archivedAt: "SERVER_TS" } },
-    ]);
+    expect(h.docs.get(DOC_PATH)?.archivedAt).toEqual(expect.any(Number));
   });
 
   it("is idempotent for an already-archived channel", async () => {
-    seedSessionDoc({ archivedAt: "SOME_TS" });
+    seedSessionDoc({ archivedAt: ARCHIVED_AT });
 
     const result = await archiveSessionChannel(actor(), "patchroll");
 
     expect(result).toEqual({ status: 200, body: { success: true } });
     expect(h.setStoredChannelArchived).not.toHaveBeenCalled();
     expect(h.mmApi).not.toHaveBeenCalled();
-    expect(h.updates).toEqual([]);
+    expect(h.docs.get(DOC_PATH)?.archivedAt).toBe(ARCHIVED_AT);
+  });
+
+  it("fails closed on a channel record whose archive time is not a time", async () => {
+    seedSessionDoc({ archivedAt: "yesterday" });
+
+    await expect(archiveSessionChannel(actor(), "patchroll")).rejects.toThrow(MalformedRecordError);
+
+    expect(h.setStoredChannelArchived).not.toHaveBeenCalled();
+    expect(h.mmApi).not.toHaveBeenCalled();
   });
 
   it("surfaces MM archive failures as 502", async () => {
@@ -708,10 +722,14 @@ function seedProjectDoc() {
   h.docs.set(PROJECT_DOC_PATH, {
     id: "orbit",
     slug: "orbit",
+    ownerUid: "owner-1",
     provisioningState: "active",
     agent: { mode: "scoped", enabled: false },
   });
-  h.docs.set("users/owner-1/secrets/projectAgentMattermost-orbit", { mmUserId: "project-agent-mm" });
+  h.docs.set("users/owner-1/secrets/projectAgentMattermost-orbit", {
+    personalToken: "project-agent-pat",
+    mmUserId: "project-agent-mm",
+  });
 }
 
 function seedProjectSessionDoc(extra: Record<string, unknown> = {}) {
@@ -807,9 +825,11 @@ describe("createProjectSessionChannel", () => {
     h.docs.set(PROJECT_DOC_PATH, {
       id: "orbit",
       slug: "orbit",
+      ownerUid: "owner-1",
       provisioningState: "active",
     });
     h.docs.set("users/owner-1/secrets/projectAgentMattermost-orbit", {
+      personalToken: "stale-project-agent-pat",
       mmUserId: "stale-project-agent-mm",
     });
 
@@ -875,13 +895,11 @@ describe("archiveProjectSessionChannel", () => {
 
     expect(result).toEqual({ status: 200, body: { success: true } });
     expect(h.setStoredChannelArchived).toHaveBeenCalledWith(PROJECT_CHANNEL_DOC_PATH, true);
-    expect(h.updates).toEqual([
-      { path: PROJECT_CHANNEL_DOC_PATH, data: { archivedAt: "SERVER_TS" } },
-    ]);
+    expect(h.docs.get(PROJECT_CHANNEL_DOC_PATH)?.archivedAt).toEqual(expect.any(Number));
   });
 
   it("is idempotent for an already-archived project channel", async () => {
-    seedProjectSessionDoc({ archivedAt: "SOME_TS" });
+    seedProjectSessionDoc({ archivedAt: ARCHIVED_AT });
 
     const result = await archiveProjectSessionChannel(actor(), "orbit", "patchroll");
 

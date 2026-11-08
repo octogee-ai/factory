@@ -1,6 +1,13 @@
-import type { Firestore, Transaction, DocumentData } from "firebase-admin/firestore";
 import {
-  GLM_GATEWAYS_COLLECTION,
+  DuplicateRecordError,
+  type BuilderRecord,
+  type FleetRegistryRecord,
+  type PlatformStateRepositories,
+  type PlatformStateStore,
+  type PlatformStateTransaction,
+  type Stored,
+} from "@octogee/core/platform-state";
+import {
   isGatewayVmDiskObservation,
   isDisposableHomeCheckpoint,
   resolveGatewayRuntime,
@@ -15,35 +22,42 @@ import {
 
 export const COMPUTER_DISK_OBSERVATION_REFRESH_MS = 10 * 60_000;
 
-type RuntimeDb = Pick<Firestore, "collection">;
-
-export async function findComputerRuntimeForInstance(db: RuntimeDb, instanceId: string): Promise<{ gatewayId: string; home: Partial<GatewayVmHomeState> | undefined } | null> {
-  const runtimes = await db.collection(GLM_GATEWAYS_COLLECTION).where("vm.instanceId", "==", instanceId).get();
-  if (runtimes.docs.length !== 1) return null;
-  const runtime = runtimes.docs[0];
-  const data = runtime.data();
-  if (data?.gatewayId !== runtime.id || resolveGatewayRuntime(data?.runtime) !== "gce-vm") return null;
-  return { gatewayId: runtime.id, home: data?.vmHome as Partial<GatewayVmHomeState> | undefined };
+async function runtimeForInstance(
+  store: Pick<PlatformStateRepositories, "fleetRegistry">,
+  instanceId: string,
+): Promise<Stored<FleetRegistryRecord> | null> {
+  try {
+    return await store.fleetRegistry.findByVmInstanceId(instanceId);
+  } catch (error) {
+    if (error instanceof DuplicateRecordError) return null;
+    throw error;
+  }
 }
 
-export async function readComputerRuntimeObservation(db: Pick<Firestore, "doc">, gatewayId: string): Promise<Record<string, unknown> | undefined> {
-  const snap = await db.doc(`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`).get();
-  return snap.exists ? snap.data() : undefined;
+export async function findComputerRuntimeForInstance(
+  store: Pick<PlatformStateRepositories, "fleetRegistry">,
+  instanceId: string,
+): Promise<{ gatewayId: string; home: Partial<GatewayVmHomeState> | undefined } | null> {
+  const runtime = await runtimeForInstance(store, instanceId);
+  if (!runtime || resolveGatewayRuntime(runtime.runtime) !== "gce-vm") return null;
+  return { gatewayId: runtime.gatewayId, home: runtime.vmHome };
+}
+
+export async function readComputerRuntimeObservation(store: Pick<PlatformStateRepositories, "fleetRegistry">, gatewayId: string): Promise<Stored<FleetRegistryRecord> | undefined> {
+  return (await store.fleetRegistry.get(gatewayId)) ?? undefined;
 }
 
 type CheckpointOwner = { uid: string; instanceId: string };
 
-function runtimeCheckpointMatches(data: DocumentData | undefined, owner: CheckpointOwner): boolean {
-  return data?.runtime === "gce-vm" && data?.vm?.instanceId === owner.instanceId;
+function runtimeCheckpointMatches(runtime: FleetRegistryRecord, owner: CheckpointOwner): boolean {
+  return runtime.runtime === "gce-vm" && runtime.vm?.instanceId === owner.instanceId;
 }
 
-async function checkpointOwnerAuthority(tx: Transaction, db: Pick<Firestore, "doc">, gatewayId: string, owner?: CheckpointOwner) {
-  if (!owner) return { userRef: null, userData: undefined };
-  const userRef = db.doc(`users/${owner.uid}`);
-  const user = await tx.get(userRef);
-  const gateway = await tx.get(db.doc(`gateways/${gatewayId}`));
-  if (!user.exists || gateway.data()?.ownerUid !== owner.uid) throw new Error("computer checkpoint owner changed before acceptance");
-  return { userRef, userData: user.data() };
+async function checkpointOwnerAuthority(tx: PlatformStateTransaction, gatewayId: string, owner?: CheckpointOwner): Promise<Stored<BuilderRecord> | null> {
+  if (!owner) return null;
+  const [builder, gateway] = await Promise.all([tx.builders.records.get(owner.uid), tx.gateways.roots.get(gatewayId)]);
+  if (!builder || gateway?.ownerUid !== owner.uid) throw new Error("computer checkpoint owner changed before acceptance");
+  return builder;
 }
 
 function checkpointObservationAdvances(previous: Partial<GatewayVmHomeState> | undefined, home: Partial<GatewayVmHomeState>, incoming: GatewayVmHomeCheckpoint): boolean {
@@ -52,27 +66,26 @@ function checkpointObservationAdvances(previous: Partial<GatewayVmHomeState> | u
   return previousName !== incoming.name || (previous?.checkpointAcknowledgedAt ?? -1) < (home.checkpointAcknowledgedAt ?? -1);
 }
 
-function nextHomeRecovery(userData: DocumentData | undefined, incoming: GatewayVmHomeCheckpoint): GatewayVmHomeCheckpoint | null {
+function nextHomeRecovery(builder: Stored<BuilderRecord>, incoming: GatewayVmHomeCheckpoint): GatewayVmHomeCheckpoint | null {
   if (!isDisposableHomeCheckpoint(incoming)) return null;
-  const recovery = userData?.provisioning?.homeCheckpoint;
+  const recovery: unknown = builder.home.homeCheckpoint;
   if (recovery === undefined) return incoming;
   if (!isDisposableHomeCheckpoint(recovery)) throw new Error("Builder home recovery checkpoint is malformed");
   return recovery.name <= incoming.name ? incoming : null;
 }
 
-export async function recordComputerHomeCheckpoint(db: Pick<Firestore, "doc" | "runTransaction">, gatewayId: string, home: Partial<GatewayVmHomeState>, owner?: CheckpointOwner): Promise<void> {
+export async function recordComputerHomeCheckpoint(store: PlatformStateStore, gatewayId: string, home: Partial<GatewayVmHomeState>, owner?: CheckpointOwner): Promise<void> {
   const incoming = home.lastCheckpoint;
   if (!incoming) throw new Error("cannot record an empty computer checkpoint");
-  const ref = db.doc(`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`);
-  await db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
-    if (!snap.exists) return;
-    if (owner && !runtimeCheckpointMatches(snap.data(), owner)) throw new Error("computer checkpoint binding changed before acceptance");
-    const { userRef, userData } = await checkpointOwnerAuthority(tx, db, gatewayId, owner);
-    if (!checkpointObservationAdvances(snap.data()?.vmHome, home, incoming)) return;
-    const recovery = userRef ? nextHomeRecovery(userData, incoming) : null;
-    tx.set(ref, { vmHome: home }, { merge: true });
-    if (userRef && recovery) tx.set(userRef, { provisioning: { homeCheckpoint: recovery } }, { merge: true });
+  await store.transaction({ label: "computer-runtime.home-checkpoint" }, async (tx) => {
+    const runtime = await tx.fleetRegistry.get(gatewayId);
+    if (!runtime) return;
+    if (owner && !runtimeCheckpointMatches(runtime, owner)) throw new Error("computer checkpoint binding changed before acceptance");
+    const builder = await checkpointOwnerAuthority(tx, gatewayId, owner);
+    if (!checkpointObservationAdvances(runtime.vmHome, home, incoming)) return;
+    const recovery = builder ? nextHomeRecovery(builder, incoming) : null;
+    await tx.fleetRegistry.patch(gatewayId, { vmHome: { ...runtime.vmHome, ...home } });
+    if (builder && recovery) await tx.builders.records.patch(builder.uid, { home: { homeCheckpoint: recovery } });
   });
 }
 
@@ -83,51 +96,52 @@ export function computerDiskObservationDue(previous: unknown, next: GatewayVmDis
 }
 
 export async function recordComputerDiskObservation(
-  db: Pick<Firestore, "doc">,
+  store: PlatformStateRepositories,
   gatewayId: string,
   previous: unknown,
   next: GatewayVmDiskObservation,
 ): Promise<boolean> {
   if (!computerDiskObservationDue(previous, next)) return false;
-  await db.doc(`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`).set({ vmDisk: next }, { merge: true });
+  await store.fleetRegistry.patch(gatewayId, { vmDisk: { ...next } });
   return true;
 }
 
 export async function recordComputerPreemptionNotice(
-  db: Pick<Firestore, "doc">,
+  store: PlatformStateRepositories,
   gatewayId: string,
   notice: GatewayVmPreemptionNotice,
 ): Promise<void> {
-  await db.doc(`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`).set({ vmPreemption: notice }, { merge: true });
+  await store.fleetRegistry.patch(gatewayId, { vmPreemption: { ...notice } });
+}
+
+function currentComputerRuntime(runtime: FleetRegistryRecord | null, gatewayId: string, instanceId: string): runtime is FleetRegistryRecord {
+  return runtime !== null && runtime.gatewayId === gatewayId && runtime.runtime === "gce-vm" && runtime.vm?.instanceId === instanceId;
 }
 
 export async function recordComputerImageObservation(
-  db: Pick<Firestore, "doc" | "runTransaction">,
+  store: PlatformStateStore,
   gatewayId: string,
   next: GatewayVmImageObservation,
 ): Promise<void> {
-  const ref = db.doc(`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`);
-  await db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
-    const data = snap.data();
-    if (!snap.exists || data?.gatewayId !== gatewayId || data.runtime !== "gce-vm" || data.vm?.instanceId !== next.instanceId) return;
-    const previous = data.vmImages as Partial<GatewayVmImageObservation> | undefined;
+  await store.transaction({ label: "computer-runtime.image-observation" }, async (tx) => {
+    const runtime = await tx.fleetRegistry.get(gatewayId);
+    if (!currentComputerRuntime(runtime, gatewayId, next.instanceId)) return;
+    const previous = runtime.vmImages as Partial<GatewayVmImageObservation> | undefined;
     if (typeof previous?.observedAt === "number" && previous.instanceId === next.instanceId && previous.observedAt > next.observedAt) return;
-    tx.set(ref, { vmImages: next }, { merge: true });
+    await tx.fleetRegistry.patch(gatewayId, { vmImages: { ...next } });
   });
 }
 
 export async function recordComputerBootRecovery(
-  db: Pick<Firestore, "doc" | "runTransaction">,
+  store: PlatformStateStore,
   gatewayId: string,
   next: GatewayVmBootRecoverySample & { instanceId: string; observedAt: number },
 ): Promise<void> {
-  const ref = db.doc(`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`);
-  await db.runTransaction(async tx => {
-    const snap = await tx.get(ref);
-    const data = snap.data();
-    if (!snap.exists || data?.gatewayId !== gatewayId || data.runtime !== "gce-vm" || data.vm?.instanceId !== next.instanceId) return;
-    if (data.vmBootRecovery?.observedAt > next.observedAt) return;
-    tx.set(ref, { vmBootRecovery: next }, { merge: true });
+  await store.transaction({ label: "computer-runtime.boot-recovery" }, async (tx) => {
+    const runtime = await tx.fleetRegistry.get(gatewayId);
+    if (!currentComputerRuntime(runtime, gatewayId, next.instanceId)) return;
+    const previousObservedAt = runtime.vmBootRecovery?.observedAt;
+    if (typeof previousObservedAt === "number" && previousObservedAt > next.observedAt) return;
+    await tx.fleetRegistry.patch(gatewayId, { vmBootRecovery: { ...next } });
   });
 }

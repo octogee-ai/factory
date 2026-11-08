@@ -1,7 +1,5 @@
-import type { GatewayStatus } from "@octogee/shared/types/fleet-controller";
 import { isDeepStrictEqual } from "node:util";
 import {
-  GLM_GATEWAYS_COLLECTION,
   type CustomerMigrationV2GatewayRootFence,
   resolveUserGatewayControlState,
   readSchedulerMigrationIdentity,
@@ -537,27 +535,6 @@ function preparationStepsMatch(operation: Data, unmountStatus: "done" | "failed"
     }) && new Set(operation.steps.map(value => recordOrEmpty(value).name)).size === Object.keys(expected).length;
 }
 
-export interface FleetStateDocRef {
-  set: (data: Record<string, unknown>, options?: { merge?: boolean }) => Promise<unknown>;
-  update: (data: Record<string, unknown>) => Promise<unknown>;
-  get: () => Promise<{ exists: boolean; data: () => Record<string, unknown> | undefined }>;
-  collection?: (name: string) => { doc: (id: string) => FleetStateDocRef };
-}
-
-export interface FleetStateTxn {
-  get: (ref: FleetStateDocRef) => Promise<{ exists: boolean; data: () => Record<string, unknown> | undefined }>;
-  update: (ref: FleetStateDocRef, data: Record<string, unknown>) => void;
-  set: (ref: FleetStateDocRef, data: Record<string, unknown>, options?: { merge?: boolean }) => void;
-  delete: (ref: FleetStateDocRef) => void;
-}
-
-export interface FleetStateFirestore {
-  collection: (name: string) => {
-    doc: (id: string) => FleetStateDocRef;
-  };
-  runTransaction: <T>(body: (txn: FleetStateTxn) => Promise<T>) => Promise<T>;
-}
-
 export interface CustomerRestoreInput {
   fromGatewayId: string;
   uid: string;
@@ -765,44 +742,6 @@ export async function acknowledgeCustomerRestore(deps: FleetStateDeps, input: Cu
       lastProgressAt: now,
     }, customerRestoreOperationFence(input));
   });
-}
-
-export interface HeartbeatSnapshot {
-  gatewayId: string;
-  status: GatewayStatus;
-  version: string;
-  openclawVersion: string;
-  mountedCustomers: string[];
-  internalUrl: string;
-  startedAt: number;
-}
-
-export interface GatewayHeartbeatDeps {
-  db: FleetStateFirestore;
-  serverTimestamp: () => unknown;
-}
-
-export async function writeGatewayHeartbeat(
-  deps: GatewayHeartbeatDeps,
-  snapshot: HeartbeatSnapshot,
-): Promise<void> {
-  if (!snapshot.gatewayId) {
-    throw new Error("gatewayId is required for a gateway heartbeat");
-  }
-
-  const heartbeat = {
-    status: snapshot.status,
-    version: snapshot.version,
-    openclawVersion: snapshot.openclawVersion,
-    mountedCustomers: snapshot.mountedCustomers,
-    internalUrl: snapshot.internalUrl,
-    startedAt: snapshot.startedAt,
-    lastHeartbeatAt: deps.serverTimestamp(),
-  };
-  await deps.db
-    .collection(GLM_GATEWAYS_COLLECTION)
-    .doc(snapshot.gatewayId)
-    .set({ heartbeat }, { merge: true });
 }
 
 export interface CutoverCommitParams {
@@ -1568,7 +1507,7 @@ function priorDisposableRecovery(input: {
     : null;
 }
 
-type RuntimeResetMarker = NonNullable<BuilderFences["runtimeReset"]>;
+type RuntimeResetMarker = Extract<NonNullable<BuilderFences["runtimeReset"]>, { status: "pending" }>;
 
 function recoveredRuntimeResetMarker(input: {
   params: RecoveredDisposableRuntimeResetParams;

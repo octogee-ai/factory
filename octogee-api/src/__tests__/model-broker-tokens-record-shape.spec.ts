@@ -1,22 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { MalformedRecordError } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
 import {
-  createFirestoreModelBrokerTokenStore,
+  createModelBrokerTokenStore,
   hashModelBrokerToken,
 } from "../lib/model-broker-tokens.js";
 
 const TOKEN = "ogk_jack_stored";
 
-function storeWithRecord(data: Record<string, unknown>) {
-  const docs = new Map<string, Record<string, unknown>>([[hashModelBrokerToken(TOKEN), data]]);
-  const db = {
-    collection: () => ({
-      doc: (id: string) => ({
-        get: async () => ({ exists: docs.has(id), data: () => docs.get(id) }),
-      }),
-    }),
-  };
-  return createFirestoreModelBrokerTokenStore(db as never);
+function storeWith(documents: Record<string, Record<string, unknown>>) {
+  return createModelBrokerTokenStore(createDocumentFixtureStore(new Map(Object.entries(documents))));
 }
 
 function storedRecord(provider: string): Record<string, unknown> {
@@ -36,15 +30,32 @@ function storedRecord(provider: string): Record<string, unknown> {
 
 describe("stored broker token record shape", () => {
   it("parses a vertex record on lookup", async () => {
-    await expect(storeWithRecord(storedRecord("vertex")).lookupToken(TOKEN, 2_000)).resolves.toMatchObject({
+    const store = storeWith({ [`modelBrokerTokens/${hashModelBrokerToken(TOKEN)}`]: storedRecord("vertex") });
+    await expect(store.lookupToken(TOKEN, 2_000)).resolves.toMatchObject({
       outcome: "valid",
       record: { provider: "vertex", gatewayId: "jack", ownerUid: "uid-jack" },
     });
   });
 
-  it("still treats an unknown provider as an unknown token", async () => {
-    await expect(storeWithRecord(storedRecord("bedrock")).lookupToken(TOKEN, 2_000)).resolves.toEqual({
-      outcome: "unknown",
-    });
+  it("refuses a record with an unknown provider", async () => {
+    const store = storeWith({ [`modelBrokerTokens/${hashModelBrokerToken(TOKEN)}`]: storedRecord("bedrock") });
+    await expect(store.lookupToken(TOKEN, 2_000)).rejects.toBeInstanceOf(MalformedRecordError);
+  });
+
+  it("refuses to reissue over a gateway pointer that is not a complete record", async () => {
+    const documents = new Map<string, Record<string, unknown>>([[
+      "modelBrokerGatewayTokens/jack",
+      { gatewayId: "jack", provider: "anthropic", secretName: "gateway-model-key-jack", tokenHash: "previous" },
+    ]]);
+    const store = createModelBrokerTokenStore(createDocumentFixtureStore(documents));
+
+    await expect(store.issueToken({
+      gatewayId: "jack",
+      ownerUid: "uid-jack",
+      provider: "anthropic",
+      secretName: "gateway-model-key-jack",
+      now: 2_000,
+    })).rejects.toBeInstanceOf(MalformedRecordError);
+    expect([...documents.keys()]).toEqual(["modelBrokerGatewayTokens/jack"]);
   });
 });

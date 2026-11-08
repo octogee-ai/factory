@@ -1,10 +1,7 @@
-import type { Firestore } from "firebase-admin/firestore";
-
+import type { PlatformConfigRepository } from "@octogee/core/platform-state";
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
   DEFAULT_OPS_AGENT_MODEL_REF,
-  PLATFORM_CONFIG_COLLECTION,
-  PLATFORM_MODEL_CONFIG_DOC,
   builderAgentModelDefaultFromDoc,
   resolveFreeTierModel,
   resolveOpsAgentModel,
@@ -40,7 +37,7 @@ function mustResolveOpsAgent(ref: string): ResolvedOpsAgentModel {
 // hot path. An unreadable or invalid doc never blocks free traffic — it
 // reports and serves the last-known (else compiled) house model.
 export function createCachedFreeTierModelResolver(opts: {
-  db: Pick<Firestore, "collection">;
+  platformConfig: Pick<PlatformConfigRepository, "get">;
   ttlMs?: number;
   now?: () => number;
   onError?: (err: unknown) => void;
@@ -54,23 +51,16 @@ export function createCachedFreeTierModelResolver(opts: {
     const at = now();
     if (cached && at - cached.resolvedAt < ttlMs) return cached.value;
     try {
-      const snap = await opts.db
-        .collection(PLATFORM_CONFIG_COLLECTION)
-        .doc(PLATFORM_MODEL_CONFIG_DOC)
-        .get();
-      const data = snap.data();
+      const models = (await opts.platformConfig.get("models"))?.value;
       let value = fallback;
-      if (data !== undefined) {
-        const configured = (data as { freeTierModelRef?: unknown }).freeTierModelRef;
-        if (configured === undefined) {
-          value = fallback;
-        } else if (typeof configured === "string" && resolveFreeTierModel(configured)) {
-          value = mustResolve(configured);
+      if (models !== undefined) {
+        if (resolveFreeTierModel(models.freeTierModelRef)) {
+          value = mustResolve(models.freeTierModelRef);
         } else {
           opts.onError?.(
             new Error(
               `platformConfig/models freeTierModelRef is not a catalog ref: ${JSON.stringify(
-                (data as { freeTierModelRef?: unknown }).freeTierModelRef,
+                models.freeTierModelRef,
               )} — serving ${DEFAULT_FREE_TIER_MODEL_REF}`,
             ),
           );
@@ -88,7 +78,7 @@ export function createCachedFreeTierModelResolver(opts: {
 // Same contract as the free-tier resolver: the field-tolerant doc read means
 // an unreadable or invalid doc serves the last-known (else compiled) default.
 export function createCachedBuilderAgentDefaultResolver(opts: {
-  db: Pick<Firestore, "collection">;
+  platformConfig: Pick<PlatformConfigRepository, "get">;
   ttlMs?: number;
   now?: () => number;
   onError?: (err: unknown) => void;
@@ -102,11 +92,7 @@ export function createCachedBuilderAgentDefaultResolver(opts: {
     const at = now();
     if (cached && at - cached.resolvedAt < ttlMs) return cached.value;
     try {
-      const snap = await opts.db
-        .collection(PLATFORM_CONFIG_COLLECTION)
-        .doc(PLATFORM_MODEL_CONFIG_DOC)
-        .get();
-      const value = builderAgentModelDefaultFromDoc(snap.data());
+      const value = builderAgentModelDefaultFromDoc((await opts.platformConfig.get("models"))?.value);
       cached = { value, resolvedAt: at };
       return value;
     } catch (err) {
@@ -117,7 +103,7 @@ export function createCachedBuilderAgentDefaultResolver(opts: {
 }
 
 export function createCachedOpsAgentModelResolver(opts: {
-  db: Pick<Firestore, "collection">;
+  platformConfig: Pick<PlatformConfigRepository, "get">;
   ttlMs?: number;
   now?: () => number;
   onError?: (err: unknown) => void;
@@ -131,23 +117,16 @@ export function createCachedOpsAgentModelResolver(opts: {
     const at = now();
     if (cached && at - cached.resolvedAt < ttlMs) return cached.value;
     try {
-      const snap = await opts.db
-        .collection(PLATFORM_CONFIG_COLLECTION)
-        .doc(PLATFORM_MODEL_CONFIG_DOC)
-        .get();
-      const data = snap.data();
+      const models = (await opts.platformConfig.get("models"))?.value;
       let value = fallback;
-      if (data !== undefined) {
-        const configured = (data as { opsAgentModelRef?: unknown }).opsAgentModelRef;
-        if (configured === undefined) {
-          value = fallback;
-        } else if (typeof configured === "string" && resolveOpsAgentModel(configured)) {
-          value = mustResolveOpsAgent(configured);
+      if (models !== undefined) {
+        if (resolveOpsAgentModel(models.opsAgentModelRef)) {
+          value = mustResolveOpsAgent(models.opsAgentModelRef);
         } else {
           opts.onError?.(
             new Error(
               `platformConfig/models opsAgentModelRef is not an OpenRouter catalog ref: ${JSON.stringify(
-                (data as { opsAgentModelRef?: unknown }).opsAgentModelRef,
+                models.opsAgentModelRef,
               )} — serving ${DEFAULT_OPS_AGENT_MODEL_REF}`,
             ),
           );

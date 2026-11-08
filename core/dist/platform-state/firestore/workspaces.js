@@ -6,7 +6,7 @@ export const WORKSPACES_COLLECTION = "workspaces";
 export const AGENTS_COLLECTION = "agents";
 const WORKSPACE_TIMES = storedAsTimestamps("createdAt", "updatedAt");
 const MEMBER_TIMES = storedAsTimestamps("joinedAt");
-const PROJECT_TIMES = storedAsTimestamps("archivedAt", "updatedAt", "agent.updatedAt");
+const PROJECT_TIMES = storedAsTimestamps("archivedAt", "updatedAt", "agent.updatedAt", "agent.identity.avatar.updatedAt");
 const CHANNEL_TIMES = storedAsTimestamps("archivedAt", "createdAt");
 const AGENT_TIMES = storedAsTimestamps("createdAt", "updatedAt");
 const MEMBER_ROLES = ["owner", "member"];
@@ -122,6 +122,10 @@ const projectKey = (workspaceSlug, projectSlug) => ({
     aggregate: "workspace-project",
     key: `${workspaceSlug}/${projectSlug}`,
 });
+const projectMemberKey = (workspaceSlug, projectSlug, uid) => ({
+    aggregate: "workspace-project-member",
+    key: `${workspaceSlug}/${projectSlug}/${uid}`,
+});
 const channelKey = (scope, channelId) => ({
     aggregate: "workspace-channel",
     key: scope.projectSlug === null ? `${scope.workspaceSlug}/${channelId}` : `${scope.workspaceSlug}/${scope.projectSlug}/${channelId}`,
@@ -198,6 +202,9 @@ export function workspaceMemberFromData(workspaceSlug, uid, data) {
         role: fields.oneOf("role", MEMBER_ROLES),
         joinedAt: fields.nullableNumber("joinedAt"),
         mattermostUserId: fields.nullableString("mattermostUserId"),
+        mattermostChannelId: fields.nullableString("mattermostChannelId"),
+        canonicalSource: fields.nullableString("canonicalSource"),
+        canonicalState: fields.nullableString("canonicalState"),
     };
 }
 export function decodeWorkspaceProject(snapshot) {
@@ -227,6 +234,10 @@ export function workspaceProjectFromData(workspaceSlug, projectSlug, data) {
         agent: fields.nullableMap("agent"),
         updatedAt: fields.nullableNumber("updatedAt"),
     };
+}
+export function workspaceProjectMemberFromData(workspaceSlug, projectSlug, uid, data) {
+    const fields = new FirestoreFields(projectMemberKey(workspaceSlug, projectSlug, uid), data);
+    return { workspaceSlug, projectSlug, uid, role: fields.oneOf("role", MEMBER_ROLES) };
 }
 export function decodeWorkspaceChannel(snapshot) {
     const location = channelPath(snapshot.ref.path);
@@ -291,6 +302,17 @@ function createWorkspaceRecordsRepository(session) {
             const query = session.db.collection(WORKSPACES_COLLECTION).where("ownerUid", "==", ownerUid);
             return decodeAll((await session.query("workspaces.records.listByOwner", query)).docs, decodeWorkspace);
         },
+        async findByMattermostTeamId(mattermostTeamId) {
+            const query = session.db
+                .collection(WORKSPACES_COLLECTION)
+                .where("mattermost.teamId", "==", mattermostTeamId)
+                .limit(2);
+            const { docs } = await session.query("workspaces.records.findByMattermostTeamId", query);
+            if (docs.length > 1) {
+                throw new DuplicateRecordError("workspace", "mattermostTeamId", mattermostTeamId, docs.map((doc) => doc.id));
+            }
+            return docs.length === 0 ? null : decodeWorkspace(docs[0]);
+        },
         async put(record) {
             await session.merge("workspaces.records.put", workspaceKey(record.slug), ref(record.slug), encodeMergePut({
                 id: record.id,
@@ -340,6 +362,9 @@ function createWorkspaceMembersRepository(session) {
                 role: member.role,
                 joinedAt: member.joinedAt,
                 mattermostUserId: member.mattermostUserId,
+                mattermostChannelId: member.mattermostChannelId,
+                canonicalSource: member.canonicalSource,
+                canonicalState: member.canonicalState,
             }, MEMBER_TIMES));
         },
         async delete(workspaceSlug, uid) {
@@ -396,6 +421,16 @@ function createWorkspaceProjectsRepository(session) {
         },
         async delete(workspaceSlug, projectSlug) {
             await session.delete("workspaces.projects.delete", projectKey(workspaceSlug, projectSlug), ref(workspaceSlug, projectSlug));
+        },
+    };
+}
+function createWorkspaceProjectMembersRepository(session) {
+    return {
+        async get(workspaceSlug, projectSlug, uid) {
+            const snapshot = await session.read("workspaces.projectMembers.get", projectsCollection(session.db, workspaceSlug).doc(projectSlug).collection("members").doc(uid));
+            if (!snapshot.exists)
+                return null;
+            return withStoredRevision(snapshot, workspaceProjectMemberFromData(workspaceSlug, projectSlug, uid, decodeDocumentData(snapshot)));
         },
     };
 }
@@ -470,6 +505,7 @@ export function createFirestoreWorkspaceRepositories(session) {
         records: createWorkspaceRecordsRepository(session),
         members: createWorkspaceMembersRepository(session),
         projects: createWorkspaceProjectsRepository(session),
+        projectMembers: createWorkspaceProjectMembersRepository(session),
         channels: createWorkspaceChannelsRepository(session),
         agentIdentities: createAgentIdentitiesRepository(session),
     };

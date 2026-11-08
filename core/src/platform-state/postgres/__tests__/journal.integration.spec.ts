@@ -19,6 +19,16 @@ describe.skipIf(!dsn)("PostgreSQL journal repositories", () => {
   });
 
   describe("operations", () => {
+    it("clears completed-operation input and creator without changing operation identity", async () => {
+      const operations = harness.store.journal.operations;
+      await operations.create(operation({ id: "op-clear", status: "succeeded" }));
+      await operations.patch("op-clear", { input: { clear: true }, createdBy: { clear: true } });
+      const stored = await operations.get("op-clear");
+      expect(stored).toMatchObject({ id: "op-clear", status: "succeeded" });
+      expect(stored).not.toHaveProperty("input");
+      expect(stored).not.toHaveProperty("createdBy");
+    });
+
     it("round-trips every operation field exactly, with a revision", async () => {
       const full: OperationRecord = {
         id: "op-full",
@@ -58,7 +68,7 @@ describe.skipIf(!dsn)("PostgreSQL journal repositories", () => {
         cancelledByDeletionId: "deletion-1",
         retryRequestedAt: 12,
         retryRequestedBy: "operator:chris",
-        supersededBy: "op-next",
+        supersededBy: { operationId: "op-next" },
         restoreAttempt: { attempt: 1 },
         restoreRuntimeRecovery: { state: "pending" },
         sourceRuntimeRecovery: { state: "done" },

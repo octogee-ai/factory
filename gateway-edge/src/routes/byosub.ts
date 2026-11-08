@@ -6,6 +6,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { requireAuth, requireInternalServiceAuth } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
 import { platformStateStore, readBuilderTier } from "../lib/platform-state.js";
+import type { BuilderActivationLease, BuilderRecord } from "@octogee/core/platform-state";
 import {
   deleteSecret,
   writeSecret,
@@ -61,14 +62,8 @@ const BYOSUB_PROVIDER_ORDER: ByosubProvider[] = ["openai", "anthropic"];
 
 type SubscriptionRuntimeState = "ready" | "activating" | "shared" | "unavailable";
 
-function activationIsPending(userData: Record<string, unknown>): boolean {
-  const provisioning = userData.provisioning;
-  if (!provisioning || typeof provisioning !== "object" || Array.isArray(provisioning)) return false;
-  const openclaw = (provisioning as Record<string, unknown>).openclaw;
-  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) return false;
-  const lease = (openclaw as Record<string, unknown>).activationLease;
-  if (!lease || typeof lease !== "object" || Array.isArray(lease)) return false;
-  const status = (lease as Record<string, unknown>).status;
+function activationIsPending(lease: BuilderActivationLease | null): boolean {
+  const status = lease?.status;
   return status === "requested" || status === "provisioning" || status === "activating" || status === "returning";
 }
 
@@ -76,15 +71,13 @@ async function subscriptionRuntimeFor(
   uid: string,
   resolved: { gatewayId: string },
 ): Promise<SubscriptionRuntimeState> {
-  const [authorization, userSnap] = await Promise.all([
+  const [authorization, builder] = await Promise.all([
     readGatewayAuthorizationInStore(platformStateStore, resolved.gatewayId),
-    db.collection("users").doc(uid).get(),
+    platformStateStore.builders.records.get(uid),
   ]);
-  if (authorization?.kind !== "durable" || !userSnap.exists) return "unavailable";
+  if (authorization?.kind !== "durable" || !builder) return "unavailable";
   if (authorization.config.gatewayClass !== "shared") return "ready";
-  return activationIsPending((userSnap.data() ?? {}) as Record<string, unknown>)
-    ? "activating"
-    : "shared";
+  return activationIsPending(builder.activationLease) ? "activating" : "shared";
 }
 
 async function hasReadySubscriptionRuntime(
@@ -171,34 +164,15 @@ async function readFlow(flowId: string): Promise<FlowDoc | null> {
   return (snap.data() || null) as FlowDoc | null;
 }
 
-function agentBelongsToUser(data: Record<string, unknown>, agentId: string): boolean {
-  const provisioning =
-    data.provisioning && typeof data.provisioning === "object"
-      ? (data.provisioning as Record<string, unknown>)
-      : null;
-  const openclaw =
-    provisioning?.openclaw && typeof provisioning.openclaw === "object"
-      ? (provisioning.openclaw as Record<string, unknown>)
-      : null;
-  if (!openclaw) return false;
-  if (openclaw.agentId === agentId) return true;
-  if (Array.isArray(openclaw.agentIds) && openclaw.agentIds.includes(agentId)) return true;
-  return typeof openclaw.slug === "string" && coachAgentId(openclaw.slug) === agentId;
+function agentBelongsToBuilder(builder: BuilderRecord, agentId: string): boolean {
+  return builder.openclaw.agentId === agentId ||
+    builder.agents.agentIds.includes(agentId) ||
+    (builder.slug !== null && coachAgentId(builder.slug) === agentId);
 }
 
-async function findGatewayUserByAgentId(
-  gatewayId: string,
-  agentId: string,
-): Promise<{ uid: string; data: Record<string, unknown> } | null> {
-  const snap = await db
-    .collection("users")
-    .where("provisioning.openclaw.gatewayId", "==", gatewayId)
-    .get();
-  for (const doc of snap.docs) {
-    const data = doc.data() as Record<string, unknown> | undefined;
-    if (data && agentBelongsToUser(data, agentId)) return { uid: doc.id, data };
-  }
-  return null;
+async function findGatewayUserByAgentId(gatewayId: string, agentId: string): Promise<string | null> {
+  const builders = await platformStateStore.builders.records.listByGateway(gatewayId);
+  return builders.find((builder) => agentBelongsToBuilder(builder, agentId))?.uid ?? null;
 }
 
 function requestGatewayMatchesBinding(req: Request, gatewayId: string): boolean {
@@ -281,17 +255,14 @@ router.post(
         res.json({ status: "ready", gatewayId: resolved.gatewayId });
         return;
       }
-      const assignment = await db
-        .doc(`gateways/${resolved.gatewayId}/assignments/${uid}`)
-        .get();
-      const epoch = assignment.exists ? assignment.data()?.epoch : undefined;
+      const assignment = await platformStateStore.gateways.assignments.get(resolved.gatewayId, uid);
       const observedAt = Date.now();
       const result = await requestBuilderActivationLease({
         store: platformStateStore,
         readBuilderTier,
         uid,
         reportingGatewayId: resolved.gatewayId,
-        assignmentEpoch: typeof epoch === "number" ? epoch : undefined,
+        assignmentEpoch: assignment?.epoch,
         eventKey: `subscription-connect:${randomUUID()}`,
         cause: "manual",
         observedAt,
@@ -956,14 +927,14 @@ router.post(
         return;
       }
       const provider = entry.oauth.secretProvider as ByosubProvider;
-      const assigned = await findGatewayUserByAgentId(b.gatewayId, b.agentId);
-      if (!assigned) {
+      const assignedUid = await findGatewayUserByAgentId(b.gatewayId, b.agentId);
+      if (!assignedUid) {
         res.json({ ok: true, noop: true });
         return;
       }
       const integrationSnap = await db
         .collection("users")
-        .doc(assigned.uid)
+        .doc(assignedUid)
         .collection("integrations")
         .doc("byosub")
         .get();
@@ -977,7 +948,7 @@ router.post(
         [provider]: { ...(providers[provider] as Record<string, unknown>), status: "needs_reauth", connected: false },
       };
       await writeByosubIntegration({
-        uid: assigned.uid,
+        uid: assignedUid,
         provider,
         modelCredentialProvider: entry.id,
         status: "needs_reauth",
@@ -1025,18 +996,18 @@ router.post(
         res.status(403).json({ error: "forbidden" });
         return;
       }
-      const assigned = await findGatewayUserByAgentId(b.gatewayId, b.agentId);
-      if (!assigned) {
+      const assignedUid = await findGatewayUserByAgentId(b.gatewayId, b.agentId);
+      if (!assignedUid) {
         res.json({ ok: true, noop: true });
         return;
       }
       const integrationSnap = await db
         .collection("users")
-        .doc(assigned.uid)
+        .doc(assignedUid)
         .collection("integrations")
         .doc("byosub")
         .get();
-      const ref = resolveUserByosubCredentialRefs(assigned.uid, integrationSnap.data()).refs.find(
+      const ref = resolveUserByosubCredentialRefs(assignedUid, integrationSnap.data()).refs.find(
         (candidate) => candidate.provider === "openai",
       );
       if (!ref) {

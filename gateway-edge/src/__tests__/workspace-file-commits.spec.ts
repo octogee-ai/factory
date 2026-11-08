@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, type Mock } from "vitest";
 
+vi.mock("../lib/platform-state", () => ({ platformStateStore: {} }));
 vi.mock("../lib/db", () => ({ storage: { bucket: vi.fn() } }));
 vi.mock("../lib/manifest", () => ({ getManifest: vi.fn() }));
 vi.mock("../lib/github", () => ({ isOversizeFile: vi.fn() }));

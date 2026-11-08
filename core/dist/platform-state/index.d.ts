@@ -12,6 +12,7 @@ export type * from "./store.js";
 export type * from "./workspaces.js";
 export { AlreadyExistsError, BackendFailureError, ContentionExhaustedError, DuplicateRecordError, FenceMismatchError, isPlatformStateError, MalformedRecordError, MissingRecordError, UnsupportedOperationError, } from "./errors.js";
 export { createFirestorePlatformStateStore, type FirestorePlatformStateStoreOptions, } from "./firestore/store.js";
+export { agentImportRecordFromPayload } from "./firestore/jobs.js";
 export { DEFAULT_PLATFORM_STATE_SCHEMA, migratePlatformState, type MigratePlatformStateOptions, type PlatformStateMigrationResult, } from "./postgres/migrate.js";
 export { PLATFORM_STATE_MIGRATIONS, type PlatformStateMigration } from "./postgres/migrations.js";
 export type { PlatformStateLogger, PostgresRetryPolicy } from "./postgres/session.js";

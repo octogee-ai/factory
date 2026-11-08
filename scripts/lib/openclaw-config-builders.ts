@@ -1,4 +1,3 @@
-import type { SecretsRepository } from "@octogee/core/platform-state";
 import { PROJECT_COACH_WORKSPACE_PARTS, type ProjectAgentIdentity } from "../../shared/types/project.js";
 import { parseAgentId, projectAgentId } from "../../shared/types/identity.js";
 import { PLATFORM_MATTERMOST_BASE_URL } from "../../shared/types/openclaw-mattermost-accounts.js";
@@ -142,17 +141,6 @@ export function buildCustomerAgent(
   return agent;
 }
 
-export interface CoachIdentityDeps {
-  db: {
-    collection: (name: string) => {
-      doc: (id: string) => {
-        get: () => Promise<{ exists: boolean; data: () => Record<string, unknown> }>;
-      };
-    };
-  };
-  log: (msg: string) => void;
-}
-
 export interface CoachIdentity {
   name: string;
   emoji: string;
@@ -171,83 +159,6 @@ export function resolveCoachIdentity(
     name: (custom?.name && custom.name.length > 0) ? custom.name : defaults.name,
     emoji: (custom?.emoji && custom.emoji.length > 0) ? custom.emoji : defaults.emoji,
   };
-}
-
-export async function fetchCoachIdentities(
-  deps: CoachIdentityDeps,
-  customers: ReadonlyArray<{ uid: string; slug: string }>,
-): Promise<Map<string, CoachIdentity>> {
-  const out = new Map<string, CoachIdentity>();
-  for (const c of customers) {
-    try {
-      const snap = await deps.db.collection("agents").doc(c.uid).get();
-      if (!snap.exists) {
-        deps.log(
-          `⚠ no agents/${c.uid} doc for ${c.slug} — using default coach identity`,
-        );
-        continue;
-      }
-      const data = snap.data() ?? {};
-      const name = typeof data.name === "string" && data.name ? data.name : null;
-      const emoji =
-        typeof data.avatarEmoji === "string" && data.avatarEmoji ? data.avatarEmoji : null;
-      if (!name && !emoji) {
-        deps.log(
-          `⚠ agents/${c.uid} has no name/avatarEmoji for ${c.slug} — using defaults`,
-        );
-        continue;
-      }
-      out.set(c.uid, {
-        name: name ?? "",
-        emoji: emoji ?? "",
-      });
-    } catch (err) {
-      deps.log(
-        `⚠ agents/${c.uid} read failed for ${c.slug}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
-  }
-  return out;
-}
-
-export interface CoachTokenDeps {
-  secrets: Pick<SecretsRepository, "get">;
-  log: (msg: string) => void;
-}
-
-export async function fetchCoachTokens(
-  deps: CoachTokenDeps,
-  customers: ReadonlyArray<{ uid: string; slug: string }>,
-): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  for (const c of customers) {
-    try {
-      const coach = await deps.secrets.get(c.uid, "coachMattermost");
-      if (coach === null) {
-        deps.log(
-          `⚠ no users/${c.uid}/secrets/coachMattermost for ${c.slug} — coach has no PAT; re-run provisioning`,
-        );
-        continue;
-      }
-      const token = coach.kind === "coach-mattermost" ? coach.personalToken : "";
-      if (!token) {
-        deps.log(
-          `⚠ users/${c.uid}/secrets/coachMattermost missing personalToken for ${c.slug}`,
-        );
-        continue;
-      }
-      out.set(c.uid, token);
-    } catch (err) {
-      deps.log(
-        `⚠ users/${c.uid}/secrets/coachMattermost read failed for ${c.slug}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
-  }
-  return out;
 }
 
 export interface MattermostAccountInput {

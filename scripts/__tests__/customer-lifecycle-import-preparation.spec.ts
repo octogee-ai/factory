@@ -1,10 +1,7 @@
-import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Firestore } from "firebase-admin/firestore";
 import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-adapter.js";
-import { buildProductionLifecycleAdapter } from "../lib/customer-lifecycle-prod-adapter.js";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
 
@@ -36,9 +33,6 @@ afterAll(async () => {
 const factories = {
   broker: () => buildBrokeredLifecycleAdapter({
     client: {} as FleetBrokerClient, rpc: {} as GatewayRpcClient, log: vi.fn(),
-  }),
-  production: () => buildProductionLifecycleAdapter({
-    db: {} as Firestore, store: createDocumentFixtureStore(new Map()), rpc: {} as GatewayRpcClient, log: vi.fn(),
   }),
 };
 

@@ -4,19 +4,28 @@ import {
   processOperation,
   readTargetedDurableRuntimeGateways,
   runGatewayConvergencePass,
+  reconcileRelevantDeliveryGatewayIds,
+  reconcileRelevantRootDeliveryGatewayIds,
   serializeGatewayConvergence,
-  snapshotHasReconcileRelevantChange,
-  snapshotHasReconcileRelevantRootChange,
   startReconciler,
 } from "../index";
 import { FieldValue } from "firebase-admin/firestore";
 import { acknowledgeCustomerRestore, beginCustomerRestore, type FleetStateDeps } from "@octogee/core/fleet-state";
-import type { PlatformStateStore } from "@octogee/core/platform-state";
+import {
+  MalformedRecordError,
+  type FleetRegistryRecord,
+  type GatewayRoot,
+  type PlatformStateStore,
+  type Stored,
+  type WatchChange,
+} from "@octogee/core/platform-state";
 import { createJournalFixtureStore, journalRowsIn, type FixtureDocuments } from "@octogee/core/testing/journal-store";
 import { ComputerCreationPendingError, FinalHomeCheckpointPendingError } from "../vm-computer-lifecycle";
 import { runGatewayRuntimeExclusive } from "../lib/gateway-runtime-mutation";
 import { reconcileSurgeCustomerHandoff } from "../surge-customer-handoff";
 import { assignment, createSurgeHandoffHarness } from "./fixtures/surge-customer-handoff";
+import { stubInformer } from "./fixtures/fleet-informer-stub";
+import type { FleetInformer, MirroredAggregate, MirrorDelivery, MirrorSubscriber } from "../fleet-informer";
 
 function durableRoot(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -59,28 +68,113 @@ function servingRuntime(overrides: Record<string, unknown> = {}): Record<string,
   };
 }
 
-interface SnapshotCallbacks {
-  glm?: (snapshot?: { docChanges?: () => SnapshotChange[] }) => void;
-  roots?: (snapshot?: { docChanges?: () => SnapshotChange[] }) => void;
+interface MirrorFeeds {
+  fleetRegistry?: MirrorSubscriber<"fleetRegistry">;
+  gateways?: MirrorSubscriber<"gateways">;
+  decodable?: () => Promise<DecodableRecords>;
+}
+
+interface DecodableRecords {
+  gateways: Stored<GatewayRoot>[];
+  fleetRegistry: Stored<FleetRegistryRecord>[];
 }
 
 interface SnapshotChange {
-  type: string;
+  type: WatchChange<"fleetRegistry">["type"];
   doc: { id: string; data(): Record<string, unknown> };
+}
+
+let revisionCount = 0;
+
+function nextRevision(): string {
+  revisionCount += 1;
+  return `r${revisionCount}`;
+}
+
+function runtimeRecord(data: Record<string, unknown>): Stored<FleetRegistryRecord> {
+  const { docKind: _docKind, ...record } = data;
+  return { ...record, revision: nextRevision() } as unknown as Stored<FleetRegistryRecord>;
+}
+
+function rootRecord(data: Record<string, unknown>): Stored<GatewayRoot> {
+  return { ...data, revision: nextRevision() } as unknown as Stored<GatewayRoot>;
+}
+
+function runtimeChanges(changes: readonly SnapshotChange[]): MirrorDelivery<"fleetRegistry"> {
+  return {
+    kind: "changes",
+    changes: changes.map((change) => ({
+      type: change.type,
+      key: change.doc.id,
+      record: change.type === "removed" ? null : runtimeRecord(change.doc.data()),
+    })),
+  };
+}
+
+function rootChanges(changes: readonly SnapshotChange[]): MirrorDelivery<"gateways"> {
+  return {
+    kind: "changes",
+    changes: changes.map((change) => ({
+      type: change.type,
+      key: change.doc.id,
+      record: change.type === "removed" ? null : rootRecord(change.doc.data()),
+    })),
+  };
+}
+
+function runtimeReset(changes: readonly SnapshotChange[]): MirrorDelivery<"fleetRegistry"> {
+  return { kind: "reset", records: changes.map((change) => runtimeRecord(change.doc.data())) };
+}
+
+function rootReset(changes: readonly SnapshotChange[]): MirrorDelivery<"gateways"> {
+  return { kind: "reset", records: changes.map((change) => rootRecord(change.doc.data())) };
+}
+
+function runtimeChangeIsRelevant(changes: readonly SnapshotChange[], fingerprints: Map<string, string>): boolean {
+  return reconcileRelevantDeliveryGatewayIds(runtimeChanges(changes), fingerprints).length > 0;
+}
+
+function rootChangeIsRelevant(changes: readonly SnapshotChange[], fingerprints: Map<string, string>): boolean {
+  return reconcileRelevantRootDeliveryGatewayIds(rootChanges(changes), fingerprints).length > 0;
+}
+
+function feedingInformer(feeds: MirrorFeeds): FleetInformer {
+  const subscribe = (aggregate: MirroredAggregate, subscriber: MirrorSubscriber<MirroredAggregate>) => {
+    if (aggregate === "assignments") throw new Error("the reconciler does not subscribe to assignments");
+    const slot = feeds as Record<string, unknown>;
+    slot[aggregate] = subscriber;
+    return () => {
+      if (slot[aggregate] === subscriber) delete slot[aggregate];
+    };
+  };
+  return stubInformer({ subscribe: subscribe as FleetInformer["subscribe"] });
+}
+
+async function decodableRecords(store: PlatformStateStore, rows: { roots: Rows; runtimes: Rows }): Promise<DecodableRecords> {
+  const decoded = async <T>(read: () => Promise<T | null>): Promise<T[]> => {
+    try {
+      const record = await read();
+      return record === null ? [] : [record];
+    } catch (error) {
+      if (error instanceof MalformedRecordError) return [];
+      throw error;
+    }
+  };
+  const gateways = await Promise.all(Object.keys(rows.roots).map((id) => decoded(() => store.gateways.roots.get(id))));
+  const fleetRegistry = await Promise.all(Object.keys(rows.runtimes).map((id) => decoded(() => store.fleetRegistry.get(id))));
+  return { gateways: gateways.flat(), fleetRegistry: fleetRegistry.flat() };
 }
 
 function makeDb(input: {
   roots?: Record<string, Record<string, unknown>>;
   runtimes?: Record<string, Record<string, unknown>>;
   releases?: Record<string, Record<number, Record<string, unknown>>>;
-  callbacks: SnapshotCallbacks;
   users?: Record<string, Record<string, unknown>>;
   operations?: Record<string, Record<string, unknown>>;
   assignments?: Record<string, Record<string, unknown>>;
 }) {
   const roots = input.roots ?? {};
   const runtimes = input.runtimes ?? {};
-  const releases = input.releases ?? {};
   const users = input.users ?? {};
   const operations = input.operations ?? {};
   const assignments = input.assignments ?? {};
@@ -126,17 +220,6 @@ function makeDb(input: {
       return result;
     },
     getAll: async (...refs: any[]) => Promise.all(refs.map(async (ref) => ({ id: ref.id, ...(await ref.get()) }))),
-    doc: (path: string) => {
-      const match = /^gateways\/([^/]+)\/releases\/(\d+)$/u.exec(path);
-      if (!match) throw new Error(`unexpected document ${path}`);
-      const data = releases[match[1]]?.[Number(match[2])];
-      return {
-        get: async () => ({
-          exists: data !== undefined,
-          data: () => data,
-        }),
-      };
-    },
     collection: (name: string) => {
       if (name === "glmOperations") return {
         doc: (id: string) => document(operations, id),
@@ -157,20 +240,12 @@ function makeDb(input: {
         return {
           get: async () => snapshot(roots),
           doc: (id: string) => document(roots, id),
-          onSnapshot: (callback: (snapshot?: { docChanges?: () => SnapshotChange[] }) => void) => {
-            input.callbacks.roots = callback;
-            return () => {};
-          },
         };
       }
       if (name === "glmGateways") {
         return {
           get: async () => snapshot(runtimes),
           doc: (id: string) => document(runtimes, id),
-          onSnapshot: (callback: (snapshot?: { docChanges?: () => SnapshotChange[] }) => void) => {
-            input.callbacks.glm = callback;
-            return () => {};
-          },
         };
       }
       throw new Error(`unexpected collection ${name}`);
@@ -180,10 +255,28 @@ function makeDb(input: {
 
 type Rows = Record<string, Record<string, unknown>>;
 
-function fixtureStoreOver(collections: { roots: Rows; runtimes: Rows; users: Rows; operations: Rows; assignments: Rows }): PlatformStateStore {
+function reconcilerState(input: Parameters<typeof makeDb>[0] & { callbacks: MirrorFeeds }) {
+  const rows = {
+    roots: input.roots ?? {}, runtimes: input.runtimes ?? {}, users: input.users ?? {},
+    operations: input.operations ?? {}, assignments: input.assignments ?? {},
+  };
+  const store = fixtureStoreOver({ ...rows, releases: input.releases });
+  input.callbacks.decodable = () => decodableRecords(store, rows);
+  return { db: makeDb({ ...input, ...rows }), store, informer: feedingInformer(input.callbacks) };
+}
+
+function fixtureStoreOver(collections: {
+  roots: Rows; runtimes: Rows; users: Rows; operations: Rows; assignments: Rows;
+  releases?: Record<string, Record<number, Record<string, unknown>>>;
+}): PlatformStateStore {
+  const releases: Rows = Object.fromEntries(Object.entries(collections.releases ?? {}).flatMap(([gatewayId, byRelease]) =>
+    Object.entries(byRelease).map(([release, row]) => [`${gatewayId}/${release}`, row])));
+  const builderSystemConfigs: Rows = {};
   const locate = (path: string): [Rows, string] => {
     const [collection, id, sub, uid, ...rest] = path.split("/");
+    if (rest.length === 0 && collection === "users" && sub === "system" && uid === "config") return [builderSystemConfigs, id];
     if (rest.length === 0 && collection === "gateways" && sub === "assignments" && uid !== undefined) return [collections.assignments, `${id}/${uid}`];
+    if (rest.length === 0 && collection === "gateways" && sub === "releases" && uid !== undefined) return [releases, `${id}/${uid}`];
     if (sub === undefined && collection === "gateways") return [collections.roots, id];
     if (sub === undefined && collection === "glmGateways") return [collections.runtimes, id];
     if (sub === undefined && collection === "users") return [collections.users, id];
@@ -196,6 +289,7 @@ function fixtureStoreOver(collections: { roots: Rows; runtimes: Rows; users: Row
     delete: (path) => { const [rows, id] = locate(path); delete rows[id]; },
     children: (collectionPath) => {
       if (collectionPath === "users") return Object.entries(collections.users);
+      if (collectionPath === "glmOperations") return Object.entries(collections.operations);
       throw new Error(`unexpected collection listing ${collectionPath}`);
     },
     group: (collectionId) => { throw new Error(`unexpected collection group ${collectionId}`); },
@@ -224,9 +318,10 @@ function releaseArtifact(
   };
 }
 
-async function runTick(callbacks: SnapshotCallbacks): Promise<void> {
-  callbacks.glm?.();
-  callbacks.roots?.();
+async function runTick(callbacks: MirrorFeeds): Promise<void> {
+  const records = await callbacks.decodable!();
+  callbacks.fleetRegistry?.({ kind: "reset", records: records.fleetRegistry });
+  callbacks.gateways?.({ kind: "reset", records: records.gateways });
   await vi.advanceTimersByTimeAsync(1_000);
   await Promise.resolve();
   await Promise.resolve();
@@ -235,7 +330,7 @@ async function runTick(callbacks: SnapshotCallbacks): Promise<void> {
 describe("snapshot reconciliation filters", () => {
   it("ignores heartbeat telemetry-only runtime doc changes", () => {
     const fingerprints = new Map<string, string>();
-    snapshotHasReconcileRelevantChange(
+    runtimeChangeIsRelevant(
       [{
         type: "added",
         doc: {
@@ -254,7 +349,7 @@ describe("snapshot reconciliation filters", () => {
     );
 
     expect(
-      snapshotHasReconcileRelevantChange(
+      runtimeChangeIsRelevant(
         [
           {
             type: "modified",
@@ -278,7 +373,7 @@ describe("snapshot reconciliation filters", () => {
 
   it("ignores pod-identity and loss-history changes on the runtime doc", () => {
     const fingerprints = new Map<string, string>();
-    snapshotHasReconcileRelevantChange(
+    runtimeChangeIsRelevant(
       [{
         type: "added",
         doc: {
@@ -298,7 +393,7 @@ describe("snapshot reconciliation filters", () => {
     );
 
     expect(
-      snapshotHasReconcileRelevantChange(
+      runtimeChangeIsRelevant(
         [{
           type: "modified",
           doc: {
@@ -334,27 +429,27 @@ describe("snapshot reconciliation filters", () => {
       runtime: "gce-vm",
       vmDisk: { sizeBytes: 100, freeBytes, instanceId: "4242", observedAt },
     });
-    snapshotHasReconcileRelevantChange([{ type: "added", doc: { id: "default", data: () => disk(50, 1) } }], fingerprints);
+    runtimeChangeIsRelevant([{ type: "added", doc: { id: "default", data: () => disk(50, 1) } }], fingerprints);
 
     expect(
-      snapshotHasReconcileRelevantChange([{ type: "modified", doc: { id: "default", data: () => disk(10, 2) } }], fingerprints),
+      runtimeChangeIsRelevant([{ type: "modified", doc: { id: "default", data: () => disk(10, 2) } }], fingerprints),
     ).toBe(false);
   });
 
   it("ignores the Builder's computer egress routing choice", () => {
     const fingerprints = new Map<string, string>();
     const routed = (mode: "cloud" | "desktop", updatedAt: number) => servingRuntime({ runtime: "gce-vm", vmEgress: { mode, updatedAt } });
-    snapshotHasReconcileRelevantChange([{ type: "added", doc: { id: "default", data: () => routed("cloud", 1) } }], fingerprints);
-    expect(snapshotHasReconcileRelevantChange([{ type: "modified", doc: { id: "default", data: () => routed("desktop", 2) } }], fingerprints)).toBe(false);
+    runtimeChangeIsRelevant([{ type: "added", doc: { id: "default", data: () => routed("cloud", 1) } }], fingerprints);
+    expect(runtimeChangeIsRelevant([{ type: "modified", doc: { id: "default", data: () => routed("desktop", 2) } }], fingerprints)).toBe(false);
   });
 
   it("ignores VM container image observations without hiding release changes", () => {
     const fingerprints = new Map<string, string>();
     const first = servingRuntime({ vmImages: { instanceId: "4242", observedAt: 1, containers: [] } });
-    snapshotHasReconcileRelevantChange([{ type: "added", doc: { id: "default", data: () => first } }], fingerprints);
+    runtimeChangeIsRelevant([{ type: "added", doc: { id: "default", data: () => first } }], fingerprints);
     const next = { ...first, vmImages: { instanceId: "4242", observedAt: 2, containers: [{ name: "gateway", running: false }] } };
-    expect(snapshotHasReconcileRelevantChange([{ type: "modified", doc: { id: "default", data: () => next } }], fingerprints)).toBe(false);
-    expect(snapshotHasReconcileRelevantChange([{ type: "modified", doc: { id: "default", data: () => ({ ...next, desiredRelease: 99 }) } }], fingerprints)).toBe(true);
+    expect(runtimeChangeIsRelevant([{ type: "modified", doc: { id: "default", data: () => next } }], fingerprints)).toBe(false);
+    expect(runtimeChangeIsRelevant([{ type: "modified", doc: { id: "default", data: () => ({ ...next, desiredRelease: 99 }) } }], fingerprints)).toBe(true);
   });
 
   it.each([
@@ -362,7 +457,7 @@ describe("snapshot reconciliation filters", () => {
     ["version", { status: "ready", version: "def5678" }],
   ])("schedules when heartbeat %s changes", (_field, heartbeat) => {
     const fingerprints = new Map<string, string>();
-    snapshotHasReconcileRelevantChange(
+    runtimeChangeIsRelevant(
       [{
         type: "added",
         doc: {
@@ -376,7 +471,7 @@ describe("snapshot reconciliation filters", () => {
     );
 
     expect(
-      snapshotHasReconcileRelevantChange(
+      runtimeChangeIsRelevant(
         [{
           type: "modified",
           doc: {
@@ -391,7 +486,7 @@ describe("snapshot reconciliation filters", () => {
 
   it("ignores Kubernetes observation freshness-only changes", () => {
     const fingerprints = new Map<string, string>();
-    snapshotHasReconcileRelevantChange(
+    runtimeChangeIsRelevant(
       [{
         type: "added",
         doc: {
@@ -405,7 +500,7 @@ describe("snapshot reconciliation filters", () => {
     );
 
     expect(
-      snapshotHasReconcileRelevantChange(
+      runtimeChangeIsRelevant(
         [{
           type: "modified",
           doc: {
@@ -422,7 +517,7 @@ describe("snapshot reconciliation filters", () => {
 
   it("ignores converge-authored helm bookkeeping-only changes", () => {
     const fingerprints = new Map<string, string>();
-    snapshotHasReconcileRelevantChange(
+    runtimeChangeIsRelevant(
       [{
         type: "added",
         doc: {
@@ -436,7 +531,7 @@ describe("snapshot reconciliation filters", () => {
     );
 
     expect(
-      snapshotHasReconcileRelevantChange(
+      runtimeChangeIsRelevant(
         [{
           type: "modified",
           doc: {
@@ -453,7 +548,7 @@ describe("snapshot reconciliation filters", () => {
 
   it("still reconciles when the applied helm image changes", () => {
     const fingerprints = new Map<string, string>();
-    snapshotHasReconcileRelevantChange(
+    runtimeChangeIsRelevant(
       [{
         type: "added",
         doc: {
@@ -467,7 +562,7 @@ describe("snapshot reconciliation filters", () => {
     );
 
     expect(
-      snapshotHasReconcileRelevantChange(
+      runtimeChangeIsRelevant(
         [{
           type: "modified",
           doc: {
@@ -488,7 +583,7 @@ describe("snapshot reconciliation filters", () => {
     ["readyPods", { status: "ready", totalPods: 1, readyPods: 0 }],
   ])("schedules when Kubernetes %s changes", (_field, kubernetes) => {
     const fingerprints = new Map<string, string>();
-    snapshotHasReconcileRelevantChange(
+    runtimeChangeIsRelevant(
       [{
         type: "added",
         doc: {
@@ -502,7 +597,7 @@ describe("snapshot reconciliation filters", () => {
     );
 
     expect(
-      snapshotHasReconcileRelevantChange(
+      runtimeChangeIsRelevant(
         [{
           type: "modified",
           doc: {
@@ -517,12 +612,12 @@ describe("snapshot reconciliation filters", () => {
 
   it("schedules on a release-bearing runtime change", () => {
     const fingerprints = new Map<string, string>();
-    snapshotHasReconcileRelevantChange(
+    runtimeChangeIsRelevant(
       [{ type: "added", doc: { id: "default", data: () => servingRuntime() } }],
       fingerprints,
     );
     expect(
-      snapshotHasReconcileRelevantChange(
+      runtimeChangeIsRelevant(
         [
           {
             type: "modified",
@@ -535,16 +630,48 @@ describe("snapshot reconciliation filters", () => {
   });
 });
 
+describe("mirror delivery reconciliation filters", () => {
+  it("ignores a runtime change that only moves the record revision", () => {
+    const fingerprints = new Map<string, string>();
+    runtimeChangeIsRelevant([{ type: "added", doc: { id: "default", data: () => servingRuntime() } }], fingerprints);
+
+    expect(runtimeChangeIsRelevant([{ type: "modified", doc: { id: "default", data: () => servingRuntime() } }], fingerprints)).toBe(false);
+  });
+
+  it("reports a gateway that a later reset no longer carries as changed", () => {
+    const fingerprints = new Map<string, string>();
+    reconcileRelevantDeliveryGatewayIds(runtimeReset([
+      { type: "added", doc: { id: "default", data: () => servingRuntime() } },
+      { type: "added", doc: { id: "bender", data: () => servingRuntime({ gatewayId: "bender" }) } },
+    ]), fingerprints);
+
+    expect(reconcileRelevantDeliveryGatewayIds(runtimeReset([
+      { type: "added", doc: { id: "default", data: () => servingRuntime() } },
+    ]), fingerprints)).toEqual(["bender"]);
+    expect([...fingerprints.keys()]).toEqual(["default"]);
+  });
+
+  it("reports nothing for a reset that matches what the fingerprints already hold", () => {
+    const fingerprints = new Map<string, string>();
+    reconcileRelevantRootDeliveryGatewayIds(rootReset([{ type: "added", doc: { id: "default", data: () => durableRoot() } }]), fingerprints);
+
+    expect(reconcileRelevantRootDeliveryGatewayIds(
+      rootReset([{ type: "added", doc: { id: "default", data: () => durableRoot() } }]),
+      fingerprints,
+    )).toEqual([]);
+  });
+});
+
 describe("root snapshot reconciliation filters", () => {
   it("ignores a gateway pod's reconcile-error report", () => {
     const fingerprints = new Map<string, string>();
-    snapshotHasReconcileRelevantRootChange(
+    rootChangeIsRelevant(
       [{ type: "added", doc: { id: "default", data: () => durableRoot() } }],
       fingerprints,
     );
 
     expect(
-      snapshotHasReconcileRelevantRootChange(
+      rootChangeIsRelevant(
         [{
           type: "modified",
           doc: {
@@ -559,7 +686,7 @@ describe("root snapshot reconciliation filters", () => {
     ).toBe(false);
 
     expect(
-      snapshotHasReconcileRelevantRootChange(
+      rootChangeIsRelevant(
         [{
           type: "modified",
           doc: {
@@ -574,7 +701,7 @@ describe("root snapshot reconciliation filters", () => {
     ).toBe(false);
 
     expect(
-      snapshotHasReconcileRelevantRootChange(
+      rootChangeIsRelevant(
         [{
           type: "modified",
           doc: { id: "default", data: () => durableRoot({ lastError: null }) },
@@ -591,13 +718,13 @@ describe("root snapshot reconciliation filters", () => {
     ["updatedAt", { updatedAt: 2 }],
   ])("still reconciles when the root %s changes", (_field, overrides) => {
     const fingerprints = new Map<string, string>();
-    snapshotHasReconcileRelevantRootChange(
+    rootChangeIsRelevant(
       [{ type: "added", doc: { id: "default", data: () => durableRoot() } }],
       fingerprints,
     );
 
     expect(
-      snapshotHasReconcileRelevantRootChange(
+      rootChangeIsRelevant(
         [{
           type: "modified",
           doc: {
@@ -729,8 +856,9 @@ describe("gateway convergence pass outcomes", () => {
       }),
     };
     const deps = {
-      db: makeDb({ roots, runtimes, callbacks: {}, releases: Object.fromEntries(ids.map(id => [id, { 2: releaseArtifact(id, 2, "abc1234") }])) }),
-      store: fixtureStoreOver({ roots, runtimes, users: {}, operations: {}, assignments: {} }),
+      db: makeDb({ roots, runtimes }),
+      store: fixtureStoreOver({ roots, runtimes, users: {}, operations: {}, assignments: {},
+        releases: Object.fromEntries(ids.map(id => [id, { 2: releaseArtifact(id, 2, "abc1234") }])) }),
       helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
       prepareGatewayConfig: vi.fn(async (config: any) => config),
       reconcileSurgeHandoff: vi.fn(async (_input: { gatewayId: string; desiredImageTag: string }) => ({ ready: true })),
@@ -767,6 +895,58 @@ describe("gateway convergence pass outcomes", () => {
     await expect(runGatewayConvergencePass(h.deps)).resolves.toBeUndefined();
 
     expect(h.helm.upsertInstance.mock.calls.map(([opts]) => opts.gatewayId).sort()).toEqual(["default", "minted"]);
+  });
+
+  function reportedHeartbeat(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      status: "booting", lastHeartbeatAt: 10, version: "abc1234", openclawVersion: null,
+      internalUrl: "http://octogee-gateway-default:18789", startedAt: 5, mountedCustomers: [], migratingIn: [],
+      ...overrides,
+    };
+  }
+
+  it("keeps a heartbeat config status written after the pass read when it upserts the gateway", async () => {
+    const h = convergenceFleet(["default"]);
+    h.runtimes.default = servingRuntime({
+      lifecycle: "provisioning",
+      helm: { imageTag: "abc1234", replicas: 1, availableReplicas: null },
+      heartbeat: reportedHeartbeat(),
+    });
+    const configStatus = { runtimeReady: true, openclawVersion: "2026.7.2", observedAt: 15 };
+    h.deps.prepareGatewayConfig.mockImplementation(async (config: any) => {
+      h.runtimes.default = {
+        ...h.runtimes.default,
+        heartbeat: { ...(h.runtimes.default.heartbeat as Record<string, unknown>), configStatus, lastHeartbeatAt: 20 },
+      };
+      return config;
+    });
+
+    await runGatewayConvergencePass(h.deps);
+
+    expect(h.helm.upsertInstance).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ gatewayId: "default" }));
+    expect(h.runtimes.default.heartbeat).toEqual(reportedHeartbeat({ configStatus, lastHeartbeatAt: 20 }));
+  });
+
+  it("resets the heartbeat of a gateway resuming from zero replicas", async () => {
+    const h = convergenceFleet(["default"]);
+    h.runtimes.default = servingRuntime({
+      lifecycle: "serving",
+      helm: { imageTag: "abc1234", replicas: 0, availableReplicas: 0 },
+      heartbeat: reportedHeartbeat({ status: "ready", configStatus: { runtimeReady: true } }),
+    });
+
+    await runGatewayConvergencePass(h.deps);
+
+    expect(h.helm.upsertInstance).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ gatewayId: "default" }));
+    expect(h.runtimes.default).toMatchObject({
+      lifecycle: "provisioning",
+      heartbeat: {
+        status: "unknown", lastHeartbeatAt: null, version: null, openclawVersion: null,
+        internalUrl: null, startedAt: null, mountedCustomers: [], migratingIn: [],
+      },
+      helm: { replicas: 1, availableReplicas: null },
+    });
+    expect(h.runtimes.default.heartbeat).not.toHaveProperty("configStatus");
   });
 
   it.each(["provisioning", "serving"])("marks a released Ready slot live ahead of blocked Helm installs with lifecycle=%s", async lifecycle => {
@@ -875,10 +1055,9 @@ describe("gateway convergence pass outcomes", () => {
       input: { uid: "u", fromGatewayId: "builder-alice", toGatewayId: gatewayId }, cutoverCommittedAt: 50,
       schedulerHandoff: { uid: "u", slug: "alice", fromGatewayId: "builder-alice", toGatewayId: gatewayId } } };
     const assignments = { [`${gatewayId}/u`]: { uid: "u", slug: "alice", gatewayId, source: "onboarding", epoch: 3, state: "serving" } };
-    const db = makeDb({ roots, runtimes, users, operations, assignments, callbacks: {},
-      releases: { [gatewayId]: { 2: releaseArtifact(gatewayId, 2, "abc1234") } },
-    });
-    const store = fixtureStoreOver({ roots, runtimes, users, operations, assignments });
+    const db = makeDb({ roots, runtimes, users, operations, assignments });
+    const store = fixtureStoreOver({ roots, runtimes, users, operations, assignments,
+      releases: { [gatewayId]: { 2: releaseArtifact(gatewayId, 2, "abc1234") } } });
     const helm = {
       upsertInstance: vi.fn(async (_opts: Record<string, unknown>) => {}), removeInstance: vi.fn(async () => {}),
       readDeployedInstances: vi.fn(async () => ({ [gatewayId]: { gatewayId, enabled: true, release: 2,
@@ -899,11 +1078,10 @@ describe("gateway convergence pass outcomes", () => {
     };
     const runtimes: Record<string, Record<string, unknown>> = { hobby: servingRuntime({ gatewayId: "hobby", runtime: "cluster" }) };
     const users = { u: { provisioning: { computer: { id: "retained-computer" } } } };
-    const db = makeDb({ roots, runtimes, callbacks: {}, users,
-      releases: Object.fromEntries(Object.keys(roots).map(id => [id, { 2: releaseArtifact(id, 2, "abc1234", { profileImages: { builder: { imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder", imageTag: `abc1234@sha256:${"b".repeat(64)}` } } }) }])),
-    });
+    const db = makeDb({ roots, runtimes, users });
     const helm = { upsertInstance: vi.fn(async () => {}), readDeployedInstances: vi.fn(async () => ({})) };
-    const store = fixtureStoreOver({ roots, runtimes, users, operations: {}, assignments: {} });
+    const store = fixtureStoreOver({ roots, runtimes, users, operations: {}, assignments: {},
+      releases: Object.fromEntries(Object.keys(roots).map(id => [id, { 2: releaseArtifact(id, 2, "abc1234", { profileImages: { builder: { imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder", imageTag: `abc1234@sha256:${"b".repeat(64)}` } } }) }])) });
     const deps = { db, store, helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
       prepareGatewayConfig: vi.fn(async (config: any) => config),
       reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log: vi.fn() };
@@ -927,10 +1105,9 @@ describe("gateway convergence pass outcomes", () => {
       next: durableRoot({ gatewayId: "next", liveRelease: null }),
     };
     const runtimes: Record<string, Record<string, unknown>> = {};
-    const db = makeDb({ roots, runtimes, callbacks: {},
-      releases: Object.fromEntries(Object.keys(roots).map(id => [id, { 2: releaseArtifact(id, 2, "abc1234") }])),
-    });
-    const store = fixtureStoreOver({ roots, runtimes, users: {}, operations: {}, assignments: {} });
+    const db = makeDb({ roots, runtimes });
+    const store = fixtureStoreOver({ roots, runtimes, users: {}, operations: {}, assignments: {},
+      releases: Object.fromEntries(Object.keys(roots).map(id => [id, { 2: releaseArtifact(id, 2, "abc1234") }])) });
     const upsertInstance = vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
       if (gatewayId === "creating") throw new ComputerCreationPendingError("computer c is being created; converging it once Compute finishes");
     });
@@ -1059,7 +1236,7 @@ describe("gateway convergence pass outcomes", () => {
       });
       return { success: true, steps: [] };
     });
-    const operation = processOperation(h.operations.return as never, h.deps.db.collection("glmOperations").doc("return"),
+    const operation = processOperation(h.operations.return as never,
       { ...h.deps, handlers: { "migrate-customer": handler } } as never);
     await handling;
     await new Promise<void>(resolve => setImmediate(resolve));
@@ -1130,7 +1307,7 @@ describe("gateway convergence pass outcomes", () => {
     });
     const log = vi.fn();
     const passDeps = (roots: Record<string, Record<string, unknown>>) => ({
-      db: makeDb({ roots, runtimes: {}, callbacks: {} }) as never,
+      db: makeDb({ roots, runtimes: {} }) as never,
       store: fixtureStoreOver({ roots, runtimes: {}, users: {}, operations: {}, assignments: {} }),
       helm: {
         removeInstance,
@@ -1204,11 +1381,11 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
   });
 
   it("refuses fleet mutation while a stray (non-runtime) glmGateways doc exists", async () => {
-    const callbacks: SnapshotCallbacks = {};
+    const callbacks: MirrorFeeds = {};
     const log = vi.fn();
     const syncFleetIngress = vi.fn(async () => {});
     const stop = startReconciler({
-      db: makeDb({
+      ...reconcilerState({
         roots: { default: durableRoot() },
         runtimes: {
           "default-r2": {
@@ -1237,11 +1414,11 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
   });
 
   it("names deletion, not the cutover script, for a vm-only stray that no durable root owns", async () => {
-    const callbacks: SnapshotCallbacks = {};
+    const callbacks: MirrorFeeds = {};
     const log = vi.fn();
     const syncFleetIngress = vi.fn(async () => {});
     const stop = startReconciler({
-      db: makeDb({
+      ...reconcilerState({
         roots: { default: durableRoot() },
         runtimes: {
           "jefe-s-3e8d49e8": { vm: { status: "TERMINATED", stopReason: "idle", instanceName: "octogee-pool-dd5de412", updatedAt: 1 } },
@@ -1264,12 +1441,12 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
   });
 
   it("refuses fleet mutation for an invalid durable root", async () => {
-    const callbacks: SnapshotCallbacks = {};
+    const callbacks: MirrorFeeds = {};
     const log = vi.fn();
     const syncFleetIngress = vi.fn(async () => {});
     const stop = startReconciler({
-      db: makeDb({
-        roots: { legacy: { gatewayId: "legacy", desiredStatus: "running" } },
+      ...reconcilerState({
+        roots: { default: durableRoot(), legacy: { gatewayId: "legacy", desiredStatus: "running" } },
         callbacks,
       }),
       helm: {} as never,
@@ -1288,10 +1465,10 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
   });
 
   it("restarts the bare gateway deployment after a model-key change", async () => {
-    const callbacks: SnapshotCallbacks = {};
+    const callbacks: MirrorFeeds = {};
     const restartGatewayDeployment = vi.fn(async () => {});
     const stop = startReconciler({
-      db: makeDb({
+      ...reconcilerState({
         roots: {
           default: durableRoot({
             profile: "builder",
@@ -1321,10 +1498,10 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
   });
 
   it("publishes the fleet ingress from every non-retired durable root", async () => {
-    const callbacks: SnapshotCallbacks = {};
+    const callbacks: MirrorFeeds = {};
     const syncFleetIngress = vi.fn(async () => {});
     const stop = startReconciler({
-      db: makeDb({
+      ...reconcilerState({
         roots: {
           default: durableRoot(),
           paused: durableRoot({ gatewayId: "paused", desiredStatus: "paused" }),
@@ -1353,10 +1530,10 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
   });
 
   it("runs the convergence arm each tick after dependencies sync", async () => {
-    const callbacks: SnapshotCallbacks = {};
+    const callbacks: MirrorFeeds = {};
     const convergeGateways = vi.fn(async () => {});
     const stop = startReconciler({
-      db: makeDb({
+      ...reconcilerState({
         roots: { default: durableRoot() },
         runtimes: { default: servingRuntime() },
         releases: { default: { 2: releaseArtifact("default", 2, "abc1234") } },
@@ -1375,11 +1552,11 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
   });
 
   it("limits runtime changes to targeted gateway convergence", async () => {
-    const callbacks: SnapshotCallbacks = {};
+    const callbacks: MirrorFeeds = {};
     const syncFleetIngress = vi.fn(async () => {});
     const convergeGateways = vi.fn(async () => {});
     const stop = startReconciler({
-      db: makeDb({
+      ...reconcilerState({
         roots: { default: durableRoot() },
         runtimes: { default: servingRuntime() },
         releases: { default: { 2: releaseArtifact("default", 2, "abc1234") } },
@@ -1392,28 +1569,22 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
       log: vi.fn(),
     });
 
-    callbacks.glm?.({
-      docChanges: () => [{
+    callbacks.fleetRegistry?.(runtimeReset([{
         type: "added",
         doc: { id: "default", data: () => servingRuntime() },
-      }],
-    });
-    callbacks.roots?.({
-      docChanges: () => [{
+      }]));
+    callbacks.gateways?.(rootReset([{
         type: "added",
         doc: { id: "default", data: () => durableRoot() },
-      }],
-    });
+      }]));
     await vi.advanceTimersByTimeAsync(1_000);
     syncFleetIngress.mockClear();
     convergeGateways.mockClear();
 
-    callbacks.glm?.({
-      docChanges: () => [{
+    callbacks.fleetRegistry?.(runtimeChanges([{
         type: "modified",
         doc: { id: "default", data: () => servingRuntime({ release: 3 }) },
-      }],
-    });
+      }]));
     await vi.advanceTimersByTimeAsync(1_000);
     stop();
 
@@ -1422,10 +1593,10 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
   });
 
   it("does not reconcile the fleet when a root doc only records a reconcile error", async () => {
-    const callbacks: SnapshotCallbacks = {};
+    const callbacks: MirrorFeeds = {};
     const convergeGateways = vi.fn(async () => {});
     const stop = startReconciler({
-      db: makeDb({
+      ...reconcilerState({
         roots: { default: durableRoot() },
         runtimes: { default: servingRuntime() },
         releases: { default: { 2: releaseArtifact("default", 2, "abc1234") } },
@@ -1437,17 +1608,14 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
       log: vi.fn(),
     });
 
-    callbacks.roots?.({
-      docChanges: () => [{
+    callbacks.gateways?.(rootReset([{
         type: "added",
         doc: { id: "default", data: () => durableRoot() },
-      }],
-    });
+      }]));
     await vi.advanceTimersByTimeAsync(1_000);
     convergeGateways.mockClear();
 
-    callbacks.roots?.({
-      docChanges: () => [{
+    callbacks.gateways?.(rootChanges([{
         type: "modified",
         doc: {
           id: "default",
@@ -1455,8 +1623,7 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
             lastError: { slug: "alice", message: "mount failed", at: 2 },
           }),
         },
-      }],
-    });
+      }]));
     await vi.advanceTimersByTimeAsync(1_000);
     stop();
 
@@ -1464,10 +1631,10 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
   });
 
   it("runs a full safety reconciliation only after the configured interval", async () => {
-    const callbacks: SnapshotCallbacks = {};
+    const callbacks: MirrorFeeds = {};
     const convergeGateways = vi.fn(async () => {});
     const stop = startReconciler({
-      db: makeDb({
+      ...reconcilerState({
         roots: { default: durableRoot() },
         runtimes: { default: servingRuntime() },
         releases: { default: { 2: releaseArtifact("default", 2, "abc1234") } },
@@ -1493,10 +1660,10 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
   });
 
   it("logs bounded timing for each reconciliation phase", async () => {
-    const callbacks: SnapshotCallbacks = {};
+    const callbacks: MirrorFeeds = {};
     const log = vi.fn();
     const stop = startReconciler({
-      db: makeDb({
+      ...reconcilerState({
         roots: { default: durableRoot() },
         runtimes: { default: servingRuntime() },
         releases: { default: { 2: releaseArtifact("default", 2, "abc1234") } },
@@ -1584,11 +1751,11 @@ describe("startReconciler — targeted gateways ahead of a queued full reconcile
   }
 
   function startRecordingReconciler(options: { reconcileSafetyRefreshMs?: number } = {}) {
-    const callbacks: SnapshotCallbacks = {};
+    const callbacks: MirrorFeeds = {};
     const events: string[] = [];
     const roots: Record<string, Record<string, unknown>> = { default: durableRoot() };
     const stop = startReconciler({
-      db: makeDb({ roots, runtimes: { default: servingRuntime() }, callbacks }),
+      ...reconcilerState({ roots, runtimes: { default: servingRuntime() }, callbacks }),
       helm: {} as never,
       handlers: {} as never,
       modelKeySourceIssuer: {
@@ -1612,13 +1779,9 @@ describe("startReconciler — targeted gateways ahead of a queued full reconcile
     return { callbacks, events, roots, stop };
   }
 
-  async function primeListeners(callbacks: SnapshotCallbacks): Promise<void> {
-    callbacks.roots?.({
-      docChanges: () => [{ type: "added", doc: { id: "default", data: () => durableRoot() } }],
-    });
-    callbacks.glm?.({
-      docChanges: () => [{ type: "added", doc: { id: "default", data: () => servingRuntime() } }],
-    });
+  async function primeListeners(callbacks: MirrorFeeds): Promise<void> {
+    callbacks.gateways?.(rootReset([{ type: "added", doc: { id: "default", data: () => durableRoot() } }]));
+    callbacks.fleetRegistry?.(runtimeReset([{ type: "added", doc: { id: "default", data: () => servingRuntime() } }]));
     await vi.advanceTimersByTimeAsync(1_000);
   }
 
@@ -1628,9 +1791,7 @@ describe("startReconciler — targeted gateways ahead of a queued full reconcile
     events.length = 0;
 
     roots.fresh = builderRoot("fresh");
-    callbacks.roots?.({
-      docChanges: () => [{ type: "added", doc: { id: "fresh", data: () => roots.fresh } }],
-    });
+    callbacks.gateways?.(rootChanges([{ type: "added", doc: { id: "fresh", data: () => roots.fresh } }]));
     await vi.advanceTimersByTimeAsync(1_000);
     stop();
     return events;
@@ -1669,12 +1830,10 @@ describe("startReconciler — targeted gateways ahead of a queued full reconcile
     await vi.advanceTimersByTimeAsync(4_500);
     events.length = 0;
 
-    callbacks.glm?.({
-      docChanges: () => [{
+    callbacks.fleetRegistry?.(runtimeChanges([{
         type: "modified",
         doc: { id: "default", data: () => servingRuntime({ release: 3 }) },
-      }],
-    });
+      }]));
     await vi.advanceTimersByTimeAsync(1_000);
     stop();
 

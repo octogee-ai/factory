@@ -1,9 +1,9 @@
-import { FieldValue } from "firebase-admin/firestore";
+import type { ConnectorTokenSecret, PlatformStateRepositories, PlatformStateStore } from "@octogee/core/platform-state";
 import {
   gatewayCredentialHeaders,
   sidecarBrokerHeaders,
 } from "@octogee/core/internal-fetch";
-import { db } from "./db.js";
+import { platformStateStore } from "./platform-state.js";
 import { internalFetch } from "./internal-fetch.js";
 import { decryptSecret, encryptSecret } from "./kms.js";
 import {
@@ -161,10 +161,9 @@ async function readConnectorAccessTokenDirect(
     }
     return fresh.accessToken;
   }
-  const snap = await db.doc(`users/${uid}/secrets/${connectorId}`).get();
-  const enc = (snap.data() as { tokens?: { encryptedAccessToken?: unknown } } | undefined)
-    ?.tokens?.encryptedAccessToken;
-  if (typeof enc !== "string" || enc.length === 0) return null;
+  const secret = await readConnectorSecret(platformStateStore, uid, connectorId);
+  const enc = readEncryptedToken(secret?.encryptedAccessToken);
+  if (!enc) return null;
   return decryptSecret(enc);
 }
 
@@ -274,7 +273,7 @@ export interface ConnectorClientCreds {
   clientSecret: string;
 }
 
-export type ConnectorTokenStore = Pick<FirebaseFirestore.Firestore, "doc">;
+export type ConnectorTokenStore = Pick<PlatformStateStore, "secrets" | "transaction">;
 
 export function configuredEnvValue(value: string | undefined): string | null {
   const trimmed = value?.trim();
@@ -294,39 +293,48 @@ export type FreshTokenResult =
   | { ok: true; accessToken: string }
   | { ok: false; reason: "not_connected" | "reauth_required" };
 
-interface StoredConnectorTokens {
-  encryptedAccessToken?: unknown;
-  encryptedRefreshToken?: unknown;
-  expiresAt?: unknown;
-  tokenType?: unknown;
-}
-
 export async function getFreshAccessToken(
   uid: string,
   def: ConnectorDef,
 ): Promise<FreshTokenResult> {
-  return getFreshAccessTokenFromDb(db, uid, def);
+  return getFreshAccessTokenFromStore(platformStateStore, uid, def);
 }
 
-export async function getFreshAccessTokenFromDb(
+async function readConnectorSecret(
+  store: Pick<PlatformStateRepositories, "secrets">,
+  uid: string,
+  connectorId: string,
+): Promise<ConnectorTokenSecret | null> {
+  const stored = await store.secrets.get(uid, connectorId);
+  if (stored === null) return null;
+  if (stored.kind !== "connector") throw new Error(`users/${uid}/secrets/${connectorId} is not a connector secret`);
+  return stored;
+}
+
+function tokenDetail(secret: ConnectorTokenSecret): Record<string, unknown> {
+  const tokens = secret.detail.tokens;
+  return tokens !== null && typeof tokens === "object" && !Array.isArray(tokens)
+    ? (tokens as Record<string, unknown>)
+    : {};
+}
+
+export async function getFreshAccessTokenFromStore(
   store: ConnectorTokenStore,
   uid: string,
   def: ConnectorDef,
 ): Promise<FreshTokenResult> {
-  const ref = store.doc(`users/${uid}/secrets/${def.meta.id}`);
-  const snap = await ref.get();
-  const tokens = readStoredConnectorTokens(snap.data());
-
-  const enc = readEncryptedToken(tokens?.encryptedAccessToken);
-  if (!enc) {
+  const secret = await readConnectorSecret(store, uid, def.meta.id);
+  const enc = readEncryptedToken(secret?.encryptedAccessToken);
+  if (!secret || !enc) {
     return { ok: false, reason: "not_connected" };
   }
 
+  const tokens = tokenDetail(secret);
   if (isStoredAccessTokenFresh(tokens)) {
     return { ok: true, accessToken: await decryptSecret(enc) };
   }
 
-  const encRefresh = readEncryptedToken(tokens?.encryptedRefreshToken);
+  const encRefresh = readEncryptedToken(secret.encryptedRefreshToken);
   if (!encRefresh || !def.oauth) {
     return { ok: false, reason: "reauth_required" };
   }
@@ -336,43 +344,41 @@ export async function getFreshAccessTokenFromDb(
   }
 
   return refreshAccessToken({
-    ref,
+    store,
+    uid,
+    secret,
     def,
     creds,
     encRefresh,
     previousAccessEnc: enc,
-    fallbackTokenType: readStoredTokenType(tokens),
   });
-}
-
-function readStoredConnectorTokens(data: unknown): StoredConnectorTokens | undefined {
-  return (data as { tokens?: StoredConnectorTokens } | undefined)?.tokens;
 }
 
 function readEncryptedToken(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-function isStoredAccessTokenFresh(tokens: StoredConnectorTokens | undefined): boolean {
-  const expiresAt = typeof tokens?.expiresAt === "number" ? tokens.expiresAt : null;
+function isStoredAccessTokenFresh(tokens: Record<string, unknown>): boolean {
+  const expiresAt = typeof tokens.expiresAt === "number" ? tokens.expiresAt : null;
   return expiresAt === null || expiresAt > Date.now() + FRESHNESS_MARGIN_MS;
 }
 
-function readStoredTokenType(tokens: StoredConnectorTokens | undefined): string {
-  return typeof tokens?.tokenType === "string" ? tokens.tokenType : "bearer";
+function readStoredTokenType(tokens: Record<string, unknown>): string {
+  return typeof tokens.tokenType === "string" ? tokens.tokenType : "bearer";
 }
 
 async function refreshAccessToken(args: {
-  ref: FirebaseFirestore.DocumentReference;
+  store: ConnectorTokenStore;
+  uid: string;
+  secret: ConnectorTokenSecret;
   def: ConnectorDef;
   creds: ConnectorClientCreds;
   encRefresh: string;
   previousAccessEnc: string;
-  fallbackTokenType: string;
 }): Promise<FreshTokenResult> {
-  const { ref, def, creds, encRefresh, previousAccessEnc, fallbackTokenType } = args;
+  const { store, uid, secret, def, creds, encRefresh, previousAccessEnc } = args;
   const lost = async (): Promise<FreshTokenResult> =>
-    (await rereadAfterRefreshLoss(ref, previousAccessEnc)) ?? { ok: false, reason: "reauth_required" };
+    (await rereadAfterRefreshLoss(store, uid, secret.secretId, previousAccessEnc)) ?? { ok: false, reason: "reauth_required" };
 
   const refreshToken = await decryptSecret(encRefresh);
   const resp = await fetch(def.oauth!.tokenUrl, {
@@ -398,35 +404,42 @@ async function refreshAccessToken(args: {
   };
   if (out.error || !out.access_token) return lost();
 
-  await ref.set(
-    {
-      tokens: {
-        encryptedAccessToken: await encryptSecret(out.access_token),
-        encryptedRefreshToken: out.refresh_token ? await encryptSecret(out.refresh_token) : encRefresh,
-        expiresAt: out.expires_in ? Date.now() + out.expires_in * 1000 : null,
-        tokenType: out.token_type ?? fallbackTokenType,
+  const encryptedAccessToken = await encryptSecret(out.access_token);
+  const encryptedRefreshToken = out.refresh_token ? await encryptSecret(out.refresh_token) : encRefresh;
+  const expiresAt = out.expires_in ? Date.now() + out.expires_in * 1000 : null;
+  const stored = await store.transaction({ label: "connector-tokens.refresh" }, async (transaction) => {
+    const latest = await readConnectorSecret(transaction, uid, secret.secretId);
+    if (latest === null) return false;
+    const tokens = tokenDetail(latest);
+    await transaction.secrets.put(uid, {
+      kind: "connector",
+      secretId: latest.secretId,
+      encryptedAccessToken,
+      encryptedRefreshToken,
+      detail: {
+        ...latest.detail,
+        tokens: { ...tokens, expiresAt, tokenType: out.token_type ?? readStoredTokenType(tokens) },
+        updatedAt: { serverNow: true },
       },
-      updatedAt: FieldValue.serverTimestamp(),
-    },
-    { merge: true },
-  );
+    });
+    return true;
+  });
+  if (!stored) return { ok: false, reason: "not_connected" };
   return { ok: true, accessToken: out.access_token };
 }
 
 async function rereadAfterRefreshLoss(
-  ref: FirebaseFirestore.DocumentReference,
+  store: ConnectorTokenStore,
+  uid: string,
+  secretId: string,
   previousEncryptedAccessToken: string,
 ): Promise<FreshTokenResult | null> {
-  const snap = await ref.get();
-  const tokens = (
-    snap.data() as { tokens?: { encryptedAccessToken?: unknown; expiresAt?: unknown } } | undefined
-  )?.tokens;
-  const enc = tokens?.encryptedAccessToken;
-  if (typeof enc !== "string" || enc.length === 0 || enc === previousEncryptedAccessToken) {
+  const secret = await readConnectorSecret(store, uid, secretId);
+  const enc = readEncryptedToken(secret?.encryptedAccessToken);
+  if (!secret || !enc || enc === previousEncryptedAccessToken) {
     return null;
   }
-  const expiresAt = typeof tokens?.expiresAt === "number" ? tokens.expiresAt : null;
-  if (expiresAt !== null && expiresAt <= Date.now() + FRESHNESS_MARGIN_MS) {
+  if (!isStoredAccessTokenFresh(tokenDetail(secret))) {
     return null;
   }
   return { ok: true, accessToken: await decryptSecret(enc) };

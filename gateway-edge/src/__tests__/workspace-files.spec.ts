@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../lib/platform-state", () => ({ platformStateStore: {} }));
 vi.mock("../lib/db", () => ({
   storage: { bucket: vi.fn() },
 }));

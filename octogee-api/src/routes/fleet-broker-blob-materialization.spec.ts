@@ -11,8 +11,7 @@ import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store"
 import { createFleetBrokerRoutes } from "./fleet-broker.js";
 
 function harness(metadata: Record<string, unknown> = { generation: "17", size: "3", md5Hash: "kAFQmDzST7DWlj99KOF/cg==" }) {
-  const db = { collection: () => ({ where: (_field: string, _op: string, id: string) => ({ get: async () => ({ docs: id === "b-owner"
-    ? [{ id: "uid-owner", data: () => ({ username: "owner" }) }] : [] }) }) }) } as unknown as Firestore;
+  const store = createDocumentFixtureStore({ "users/uid-owner": { username: "owner", provisioning: { openclaw: { gatewayId: "b-owner" } } } });
   const readBlobMetadata = vi.fn(async () => metadata);
   const createBlobSignedUrl = vi.fn(async (input: { gcsPath: string; generation?: string }) => ({
     url: `https://storage.example/${input.gcsPath}?generation=${input.generation}`, method: "GET" as const,
@@ -20,7 +19,7 @@ function harness(metadata: Record<string, unknown> = { generation: "17", size: "
   }));
   const app = express(); app.disable("x-powered-by"); app.use(express.json());
   app.use((req, _res, next) => { req.boundTenant = { kind: "gateway", gatewayId: "b-owner" }; next(); });
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db, store: createDocumentFixtureStore({}), readBlobMetadata, createBlobSignedUrl }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({ db: {} as never, store, readBlobMetadata, createBlobSignedUrl }));
   return { app, readBlobMetadata, createBlobSignedUrl };
 }
 
@@ -103,7 +102,7 @@ function preparingHarness(scenario = "valid") {
     profile: "builder", gatewayClass: "builder", imageProfile: "builder", sizingTier: null, gcpProject: null,
     gatewayContainerSecurityContext: null, serviceAccountName: null, serviceAccount: null, builderAccess: null,
     ownerUid: "uid-owner", builderSlug: "owner", modelBrokerLimits: null, preemption: null };
-  const runtime = { gatewayId: "b-owner", runtime: "gce-vm", vm: { instanceId: "4242" }, vmInstance: { ownerUid: "uid-owner", builderSlug: "owner" } };
+  const runtime = { docKind: "runtime", release: 1, lifecycle: "running", gatewayId: "b-owner", runtime: "gce-vm", vm: { instanceId: "4242" }, vmInstance: { ownerUid: "uid-owner", builderSlug: "owner" } };
   const operation: Record<string, any> = { kind: "migrate-customer", status: "running", input: { uid: "uid-owner", fromGatewayId: "shared-source", toGatewayId: "b-owner" } };
   if (scenario === "unrelated-target") operation.input.toGatewayId = "other";
   if (scenario === "ended-operation") operation.status = "failed";
@@ -112,25 +111,25 @@ function preparingHarness(scenario = "valid") {
   if (scenario === "changed-instance") runtime.vm.instanceId = "4243";
   if (scenario === "changed-source") owner.provisioning.openclaw.gatewayId = "other-source";
   if (scenario === "retired") gateway.desiredStatus = "retired";
-  const docs: Record<string, unknown> = { "users/uid-owner": owner, "gateways/b-owner": gateway, "glmGateways/b-owner": runtime };
-  const db = { collection: (collection: string) => {
-    const operationDocs = scenario === "missing-operation" ? [] : Array.from({ length: scenario === "duplicate-operation" ? 2 : 1 }, (_, index) => ({ id: `move-${index}`, data: () => operation }));
-    const query = { where: () => query, get: async () => ({ docs: collection === "glmOperations" ? operationDocs : [] }),
-      doc: (id: string) => ({ get: async () => ({ exists: Boolean(docs[`${collection}/${id}`]), data: () => docs[`${collection}/${id}`] }),
-        collection: () => ({ get: async () => ({ docs: [] }) }) }) };
-    return query;
-  } } as unknown as Firestore;
+  const operationCount = scenario === "missing-operation" ? 0 : scenario === "duplicate-operation" ? 2 : 1;
+  const docs: Record<string, Record<string, unknown>> = {
+    "users/uid-owner": owner, "gateways/b-owner": gateway, "glmGateways/b-owner": runtime,
+    ...Object.fromEntries(Array.from({ length: operationCount }, (_, index) => [`glmOperations/move-${index}`, operation])),
+  };
+  operation.inputUid = "uid-owner";
+  const query = { where: () => query, get: async () => ({ docs: [] }) };
+  const db = { collection: () => query } as unknown as Firestore;
   const readBlobMetadata = vi.fn(async () => ({ generation: "17", size: "3", md5Hash: "kAFQmDzST7DWlj99KOF/cg==" }));
   const createBlobSignedUrl = vi.fn(async (input: { gcsPath: string }) => ({ url: `https://signed.test/${input.gcsPath}`, method: "GET" as const, gcsPath: input.gcsPath, expiresAt: "2026-10-07T12:00:00Z" }));
   const app = express(); app.disable("x-powered-by"); app.use(express.json());
   app.use((req, _res, next) => { req.boundTenant = { kind: "gateway", gatewayId: "b-owner", ownerUid: "uid-owner", podUid: "4242", podName: gatewayVmPodName("b-owner", "4242"), saName: "octogee-gw-b-owner" }; next(); });
-  app.use(createTenantEnforcementMiddleware({ db, onDenied: async () => {} }));
+  app.use(createTenantEnforcementMiddleware({ db, store: createDocumentFixtureStore(docs), onDenied: async () => {} }));
   const credentialAuth = createGatewayCredentialAuth({ namespace: "octogee-test",
     reviewer: async () => ({ authenticated: true, saName: "octogee-gw-b-owner", namespace: "octogee-test", audiences: [GATEWAY_CREDENTIAL_TOKEN_AUDIENCE],
       podName: gatewayVmPodName("b-owner", "4242"), podUid: scenario === "wrong-credential" ? "9999" : "4242" }),
     mapIdentity: async () => ({ kind: "gateway", gatewayId: "b-owner" }), logger: { warn: vi.fn() } });
   app.use((req, res, next) => GATEWAY_CREDENTIAL_ROUTES.has(req.path) ? credentialAuth(req, res, next) : next());
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db, store: createDocumentFixtureStore({}), readBlobMetadata, createBlobSignedUrl }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({ db, store: createDocumentFixtureStore(docs), readBlobMetadata, createBlobSignedUrl }));
   return { app, owner, operation, readBlobMetadata, createBlobSignedUrl };
 }
 

@@ -1,10 +1,9 @@
 import { Router, type Request, type Response } from "express";
-import type { Firestore } from "firebase-admin/firestore";
-
 import {
   verifyWorkspaceCommitProof,
   workspaceCommitProofTargetFromBody,
   type WorkspaceCommitProof,
+  type WorkspaceCommitProofStore,
   type WorkspaceCommitProofTarget,
 } from "../lib/workspace-commit-proof.js";
 
@@ -54,7 +53,7 @@ function targetsMatch(a: WorkspaceCommitProofTarget, b: WorkspaceCommitProofTarg
   return a.agentId === b.agentId && a.slug === b.slug && a.project === b.project;
 }
 
-export function createWorkspaceCommitProofBrokerRoutes(opts: { db: Firestore }): Router {
+export function createWorkspaceCommitProofBrokerRoutes(opts: { store: WorkspaceCommitProofStore }): Router {
   const router = Router();
 
   router.post("/verify-proof", async (req, res) => {
@@ -71,7 +70,7 @@ export function createWorkspaceCommitProofBrokerRoutes(opts: { db: Firestore }):
       return;
     }
     try {
-      const authorized = await verifyWorkspaceCommitProof(proof, target, opts.db);
+      const authorized = await verifyWorkspaceCommitProof(proof, target, opts.store);
       if (!authorized) {
         res.status(403).json(FORBIDDEN);
         return;

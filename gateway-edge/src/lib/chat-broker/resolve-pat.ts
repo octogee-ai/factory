@@ -10,6 +10,7 @@
  * No fallback lanes: a missing secret is a refusal, never a broader token.
  */
 
+import type { MattermostTokenSecret, PlatformStateRepositories } from "@octogee/core/platform-state";
 import { parseAgentId } from "@octogee/shared/types/identity";
 import { parseProjectRetention } from "@octogee/shared/types/project-retention";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
@@ -33,23 +34,18 @@ export class ChatPatError extends Error {
   }
 }
 
-interface SecretsDb {
+interface ProductDb {
   doc(path: string): {
     get(): Promise<{
       exists?: boolean;
       data(): Record<string, unknown> | undefined;
     }>;
   };
-  collectionGroup(name: string): {
-    where(field: string, op: "==", value: unknown): {
-      get(): Promise<{
-        docs: Array<{
-          ref: { path: string };
-          data(): Record<string, unknown> | undefined;
-        }>;
-      }>;
-    };
-  };
+}
+
+export interface ChatIdentityDeps {
+  db: ProductDb;
+  store: Pick<PlatformStateRepositories, "secrets" | "workspaces">;
 }
 
 export interface ChatIdentityInput {
@@ -73,31 +69,21 @@ export interface ResolvedChatIdentity {
   includeArchivedProjectHistory?: true;
 }
 
-async function secretData(
-  db: SecretsDb,
+async function mattermostSecret(
+  deps: ChatIdentityDeps,
   uid: string,
-  docId: string,
-): Promise<Record<string, unknown>> {
-  const snap = await db.doc(`users/${uid}/secrets/${docId}`).get();
-  return snap.data() ?? {};
+  secretId: string,
+): Promise<MattermostTokenSecret | null> {
+  const secret = await deps.store.secrets.get(uid, secretId);
+  return secret === null || secret.kind === "connector" ? null : secret;
 }
 
-function nonEmptyString(value: unknown): string | null {
+function nonEmptyString(value: string | null | undefined): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-async function matchingChannelPaths(
-  db: SecretsDb,
-  channelId: string,
-): Promise<string[]> {
-  const snapshot = await db.collectionGroup("channels")
-    .where("mattermost.channelId", "==", channelId)
-    .get();
-  return [...new Set(snapshot.docs.map((doc) => doc.ref.path))];
-}
-
 async function workspaceChannelReadable(
-  db: SecretsDb,
+  deps: ChatIdentityDeps,
   uid: string,
   assignedSlug: string,
   workspaceSlug: string,
@@ -106,67 +92,47 @@ async function workspaceChannelReadable(
   if (channelDocId === "admin") return false;
   if (workspaceSlug === assignedSlug) return true;
   const [workspace, membership] = await Promise.all([
-    db.doc(`workspaces/${workspaceSlug}`).get(),
-    db.doc(`workspaces/${workspaceSlug}/members/${uid}`).get(),
+    deps.store.workspaces.records.get(workspaceSlug),
+    deps.store.workspaces.members.get(workspaceSlug, uid),
   ]);
-  return workspace.data()?.ownerUid === uid ||
-    (membership.exists === true &&
-      isCanonicalWorkspaceMembership(membership.data()));
+  return workspace?.ownerUid === uid ||
+    (membership !== null && isCanonicalWorkspaceMembership(membership));
 }
 
 async function projectChannelReadable(
-  db: SecretsDb,
+  deps: ChatIdentityDeps,
   uid: string,
   workspaceSlug: string,
   projectSlug: string,
 ): Promise<boolean> {
-  const projectPath = `workspaces/${workspaceSlug}/projects/${projectSlug}`;
   const [project, membership] = await Promise.all([
-    db.doc(projectPath).get(),
-    db.doc(`${projectPath}/members/${uid}`).get(),
+    deps.store.workspaces.projects.get(workspaceSlug, projectSlug),
+    deps.db.doc(`workspaces/${workspaceSlug}/projects/${projectSlug}/members/${uid}`).get(),
   ]);
   const membershipData = membership.data();
-  return project.data()?.ownerUid === uid ||
+  return project?.ownerUid === uid ||
     (membership.exists === true &&
       membershipData?.id === uid &&
       (membershipData.role === "owner" || membershipData.role === "member"));
 }
 
 async function canonicalChannelReadable(
-  db: SecretsDb,
+  deps: ChatIdentityDeps,
   uid: string,
   assignedSlug: string,
   channelId: string,
 ): Promise<boolean> {
-  const paths = await matchingChannelPaths(db, channelId);
-  for (const path of paths) {
-    const workspaceMatch = /^workspaces\/([^/]+)\/channels\/([^/]+)$/u.exec(path);
-    if (
-      workspaceMatch &&
-      await workspaceChannelReadable(
-        db,
-        uid,
-        assignedSlug,
-        workspaceMatch[1],
-        workspaceMatch[2],
-      )
-    ) {
-      return true;
-    }
-    const projectMatch =
-      /^workspaces\/([^/]+)\/projects\/([^/]+)\/channels\/([^/]+)$/u.exec(path);
-    if (
-      projectMatch &&
-      await projectChannelReadable(db, uid, projectMatch[1], projectMatch[2])
-    ) {
-      return true;
-    }
+  const channel = await deps.store.workspaces.channels.findByMattermostChannelId(channelId);
+  if (channel === null) return false;
+  const { workspaceSlug, projectSlug } = channel.scope;
+  if (projectSlug === null) {
+    return workspaceChannelReadable(deps, uid, assignedSlug, workspaceSlug, channel.channelId);
   }
-  return false;
+  return projectChannelReadable(deps, uid, workspaceSlug, projectSlug);
 }
 
 async function projectArchiveAccess(
-  db: SecretsDb,
+  db: ProductDb,
   uid: string,
 ): Promise<{ blocksProjectAgent: boolean; historyReadable: boolean }> {
   const user = await db.doc(`users/${uid}`).get();
@@ -183,8 +149,30 @@ async function projectArchiveAccess(
   };
 }
 
+async function projectAgentIdentity(
+  deps: ChatIdentityDeps,
+  input: ChatIdentityInput,
+  project: string,
+): Promise<ResolvedChatIdentity> {
+  const secret = await mattermostSecret(deps, input.uid, projectAgentSecretDocId(project));
+  const pat = nonEmptyString(secret?.personalToken);
+  const mmUserId = nonEmptyString(secret?.mattermostUserId);
+  if (!pat || !mmUserId) {
+    throw new ChatPatError(
+      "no-project-pat",
+      `project agent ${input.agentId} has no minted PAT — agent disabled or not yet provisioned`,
+    );
+  }
+  return {
+    lane: "project",
+    pat,
+    coachMmUserId: mmUserId,
+    unread: { pat, mmUserId },
+  };
+}
+
 export async function resolveChatIdentity(
-  db: SecretsDb,
+  deps: ChatIdentityDeps,
   input: ChatIdentityInput,
 ): Promise<ResolvedChatIdentity> {
   const parsed = parseAgentId(input.agentId);
@@ -198,7 +186,7 @@ export async function resolveChatIdentity(
     );
   }
 
-  const archiveAccess = await projectArchiveAccess(db, input.uid);
+  const archiveAccess = await projectArchiveAccess(deps.db, input.uid);
 
   if (parsed.kind === "project") {
     if (archiveAccess.blocksProjectAgent) {
@@ -207,38 +195,20 @@ export async function resolveChatIdentity(
         `project agent ${input.agentId} is disabled while its owner is on Free`,
       );
     }
-    const secret = await secretData(
-      db,
-      input.uid,
-      projectAgentSecretDocId(parsed.project),
-    );
-    const pat = nonEmptyString(secret.personalToken);
-    const mmUserId = nonEmptyString(secret.mmUserId);
-    if (!pat || !mmUserId) {
-      throw new ChatPatError(
-        "no-project-pat",
-        `project agent ${input.agentId} has no minted PAT — agent disabled or not yet provisioned`,
-      );
-    }
-    return {
-      lane: "project",
-      pat,
-      coachMmUserId: mmUserId,
-      unread: { pat, mmUserId },
-    };
+    return projectAgentIdentity(deps, input, parsed.project);
   }
 
-  const builderSecret = await secretData(db, input.uid, "mattermost");
-  const builderPat = nonEmptyString(builderSecret.personalToken);
+  const builderSecret = await mattermostSecret(deps, input.uid, "mattermost");
+  const builderPat = nonEmptyString(builderSecret?.personalToken);
   if (!builderPat) {
     throw new ChatPatError(
       "no-builder-pat",
       `no builder MM PAT at users/{uid}/secrets/mattermost for ${input.slug} — re-run provisioning`,
     );
   }
-  const coachSecret = await secretData(db, input.uid, "coachMattermost");
-  const coachMmUserId = nonEmptyString(coachSecret.coachMmUserId);
-  const coachPat = nonEmptyString(coachSecret.personalToken);
+  const coachSecret = await mattermostSecret(deps, input.uid, "coachMattermost");
+  const coachMmUserId = nonEmptyString(coachSecret?.mattermostUserId);
+  const coachPat = nonEmptyString(coachSecret?.personalToken);
   if (!coachMmUserId || !coachPat) {
     throw new ChatPatError(
       "no-coach-identity",
@@ -251,7 +221,7 @@ export async function resolveChatIdentity(
     coachMmUserId,
     unread: { pat: coachPat, mmUserId: coachMmUserId },
     canReadChannel: (channelId) =>
-      canonicalChannelReadable(db, input.uid, input.slug, channelId),
+      canonicalChannelReadable(deps, input.uid, input.slug, channelId),
     ...(archiveAccess.historyReadable ? { includeArchivedProjectHistory: true as const } : {}),
   };
 }

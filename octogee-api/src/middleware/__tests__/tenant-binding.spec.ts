@@ -1,8 +1,8 @@
 import express from "express";
-import type { Firestore } from "firebase-admin/firestore";
 import { Registry } from "prom-client";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import {
   K8S_SA_TOKEN_HEADER,
   createTenantBindingMetrics,
@@ -16,33 +16,10 @@ const WELL_FORMED_SA_TOKEN = [
   "c2lnbmF0dXJlLXNlZ21lbnQtZm9yLXRlc3RpbmctcHVycG9zZXMtb25seQ",
 ].join(".");
 
-function fakeDb(docs: Record<string, Record<string, unknown>>): Pick<Firestore, "collection" | "doc"> {
-  return {
-    collection: () => ({
-      doc: (id: string) => ({
-        get: async () => ({
-          exists: Object.prototype.hasOwnProperty.call(docs, id),
-          data: () => docs[id],
-        }),
-      }),
-      where: (field: string, operator: string, value: unknown) => ({
-        get: async () => ({
-          docs: Object.entries(docs)
-            .filter(([, data]) => operator === "==" && data[field] === value)
-            .map(([id, data]) => ({ id, data: () => data })),
-        }),
-      }),
-    }),
-    doc: (path: string) => {
-      const id = path.split("/").at(-1) ?? "";
-      return {
-        get: async () => ({
-          exists: Object.prototype.hasOwnProperty.call(docs, id),
-          data: () => docs[id],
-        }),
-      };
-    },
-  } as unknown as Pick<Firestore, "collection" | "doc">;
+function gatewayRootStore(roots: Record<string, Record<string, unknown>>) {
+  return createDocumentFixtureStore(
+    Object.fromEntries(Object.entries(roots).map(([gatewayId, root]) => [`gateways/${gatewayId}`, root])),
+  );
 }
 
 function gatewayRoot(serviceAccountName: string | null = null): Record<string, unknown> {
@@ -117,7 +94,7 @@ function buildApp(opts: {
     "/internal",
     createTenantBindingMiddleware({
       reviewer: opts.reviewer,
-      db: fakeDb(
+      store: gatewayRootStore(
         opts.docs ?? {
           bender: gatewayRoot(),
         },

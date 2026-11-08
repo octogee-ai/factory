@@ -264,6 +264,35 @@ function agentImportFields(uid: string, importId: string, record: OpaqueMap, cle
   };
 }
 
+export function agentImportRecordFromPayload(
+  uid: string,
+  importId: string,
+  payload: OpaqueMap,
+  cleanupAt: number | null,
+): AgentImportRecord {
+  return { ...agentImportFields(uid, importId, payload, cleanupAt), record: payload };
+}
+
+export function agentImportRecordFromData(uid: string, importId: string, data: PlainObject): AgentImportRecord {
+  const cleanupAt = new FirestoreFields(agentImportKey(uid, importId), data).nullableNumber("cleanupAt");
+  const { cleanupAt: _cleanupAt, ...record } = data;
+  return agentImportRecordFromPayload(uid, importId, record, cleanupAt);
+}
+
+export function agentImportDocument(record: AgentImportRecord & { readonly revision?: Revision }): PlainObject {
+  if ("cleanupAt" in record.record) {
+    throw new TypeError("jobs.agentImports.put: cleanupAt is a typed field and cannot appear in the record");
+  }
+  const { record: payload, revision: _revision, ...typed } = record;
+  const derived = agentImportFields(record.uid, record.importId, payload, record.cleanupAt);
+  if (!isDeepStrictEqual(derived, typed)) {
+    throw new TypeError(
+      `jobs.agentImports.put: typed fields ${JSON.stringify(typed)} disagree with the record, which carries ${JSON.stringify(derived)}`,
+    );
+  }
+  return record.cleanupAt === null ? { ...payload } : { ...payload, cleanupAt: record.cleanupAt };
+}
+
 function agentImportPath(path: string): { uid: string; importId: string } | null {
   const parts = path.split("/");
   if (parts.length !== 4 || parts[0] !== "users" || parts[2] !== "agentImports") return null;
@@ -276,30 +305,35 @@ function decodeAgentImport(snapshot: DocumentSnapshot): Stored<AgentImportRecord
   if (location === null) {
     throw new MalformedRecordError({ aggregate: "agent-import", key: snapshot.ref.path }, "is not under users/{uid}/agentImports");
   }
-  const data = decodeDocumentData(snapshot);
-  const cleanup = new FirestoreFields(agentImportKey(location.uid, location.importId), data).nullableNumber("cleanupAt");
-  const { cleanupAt: _cleanupAt, ...record } = data;
-  return withStoredRevision<AgentImportRecord>(snapshot, {
-    ...agentImportFields(location.uid, location.importId, record, cleanup),
-    record,
-  });
+  return withStoredRevision<AgentImportRecord>(
+    snapshot,
+    agentImportRecordFromData(location.uid, location.importId, decodeDocumentData(snapshot)),
+  );
 }
 
-function encodeAgentImport(record: AgentImportRecord & { readonly revision?: Revision }): DocumentData {
-  if ("cleanupAt" in record.record) {
-    throw new TypeError("jobs.agentImports.put: cleanupAt is a typed field and cannot appear in the record");
+export function agentImportPointerFromData(uid: string, pointer: AgentImportPointerName, data: PlainObject): AgentImportPointer {
+  const key = agentImportPointerKey(uid, pointer);
+  const fields = new FirestoreFields(key, data);
+  const owner = fields.nullableString("uid");
+  if (owner !== null && owner !== uid) throw new MalformedRecordError(key, `uid ${owner} does not own the pointer`);
+  const updatedAt = fields.nullableString("updatedAt");
+  const updatedAtMillis = updatedAt === null ? null : Date.parse(updatedAt);
+  if (updatedAtMillis !== null && Number.isNaN(updatedAtMillis)) {
+    throw new MalformedRecordError(key, "updatedAt must be an ISO-8601 time");
   }
-  const { record: payload, revision: _revision, ...typed } = record;
-  const derived = agentImportFields(record.uid, record.importId, payload, record.cleanupAt);
-  if (!isDeepStrictEqual(derived, typed)) {
-    throw new TypeError(
-      `jobs.agentImports.put: typed fields ${JSON.stringify(typed)} disagree with the record, which carries ${JSON.stringify(derived)}`,
-    );
-  }
-  return encodeDocument(
-    record.cleanupAt === null ? payload : { ...payload, cleanupAt: record.cleanupAt },
-    AGENT_IMPORT_TIMES,
-  );
+  return {
+    importId: fields.string("id"),
+    slug: fields.nullableString("slug"),
+    updatedAt: updatedAtMillis,
+  };
+}
+
+export function agentImportPointerDocument(uid: string, value: AgentImportPointer): PlainObject {
+  return {
+    id: value.importId,
+    ...(value.slug === null ? {} : { uid, slug: value.slug }),
+    ...(value.updatedAt === null ? {} : { updatedAt: new Date(value.updatedAt).toISOString() }),
+  };
 }
 
 function decodeAgentImportPointer(
@@ -308,20 +342,7 @@ function decodeAgentImportPointer(
   snapshot: DocumentSnapshot,
 ): Stored<AgentImportPointer> | null {
   if (!snapshot.exists) return null;
-  const key = agentImportPointerKey(uid, pointer);
-  const fields = new FirestoreFields(key, decodeDocumentData(snapshot));
-  const owner = fields.nullableString("uid");
-  if (owner !== null && owner !== uid) throw new MalformedRecordError(key, `uid ${owner} does not own the pointer`);
-  const updatedAt = fields.nullableString("updatedAt");
-  const updatedAtMillis = updatedAt === null ? null : Date.parse(updatedAt);
-  if (updatedAtMillis !== null && Number.isNaN(updatedAtMillis)) {
-    throw new MalformedRecordError(key, "updatedAt must be an ISO-8601 time");
-  }
-  return withStoredRevision<AgentImportPointer>(snapshot, {
-    importId: fields.string("id"),
-    slug: fields.nullableString("slug"),
-    updatedAt: updatedAtMillis,
-  });
+  return withStoredRevision<AgentImportPointer>(snapshot, agentImportPointerFromData(uid, pointer, decodeDocumentData(snapshot)));
 }
 
 function createAgentImportsRepository(session: FirestoreSession): AgentImportsRepository {
@@ -353,7 +374,7 @@ function createAgentImportsRepository(session: FirestoreSession): AgentImportsRe
         "jobs.agentImports.put",
         agentImportKey(record.uid, record.importId),
         ref(record.uid, record.importId),
-        encodeAgentImport(record),
+        encodeDocument(agentImportDocument(record), AGENT_IMPORT_TIMES),
       );
     },
 
@@ -366,11 +387,12 @@ function createAgentImportsRepository(session: FirestoreSession): AgentImportsRe
     },
 
     async putPointer(uid, pointer, value) {
-      await session.set("jobs.agentImports.putPointer", agentImportPointerKey(uid, pointer), pointerRef(uid, pointer), {
-        id: value.importId,
-        ...(value.slug === null ? {} : { uid, slug: value.slug }),
-        ...(value.updatedAt === null ? {} : { updatedAt: new Date(value.updatedAt).toISOString() }),
-      });
+      await session.set(
+        "jobs.agentImports.putPointer",
+        agentImportPointerKey(uid, pointer),
+        pointerRef(uid, pointer),
+        agentImportPointerDocument(uid, value),
+      );
     },
 
     async deletePointer(uid, pointer) {

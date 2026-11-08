@@ -28,6 +28,11 @@ vi.mock("../lib/mattermost-context", () => ({
   getWorkspaceMmContext: vi.fn(),
 }));
 
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(dbState.docs) };
+});
+
 vi.mock("../lib/db", () => {
   type Pred = (d: Record<string, unknown>) => boolean;
   function makeQuery(coll: string, preds: Pred[]) {

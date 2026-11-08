@@ -182,11 +182,15 @@ function usersCollection(db) {
 function systemConfigRef(userRef) {
     return userRef.collection("system").doc("config");
 }
+export function builderRoleFromData(uid, config) {
+    if (config === undefined)
+        return null;
+    return new StoredFields(builderKey(uid), config).oneOf("role", BUILDER_ROLES) ?? null;
+}
 function decodeRole(uid, config) {
     if (config === undefined || !config.exists)
         return null;
-    const role = new StoredFields(builderKey(uid), decodeDocumentData(config)).oneOf("role", BUILDER_ROLES);
-    return role ?? null;
+    return builderRoleFromData(uid, decodeDocumentData(config));
 }
 function decodePersona(data) {
     const vibe = productValue(data, "onboarding.vibe");

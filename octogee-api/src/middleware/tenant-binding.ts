@@ -1,6 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
 import { Counter, type Registry } from "prom-client";
-import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 import { isWellFormedServiceAccountJwt } from "../../../gateway-edge/src/middleware/security.js";
 import {
   mapReviewToTenant,
@@ -47,7 +46,7 @@ export interface TenantBindingLogger {
 
 export interface TenantBindingMiddlewareOptions {
   reviewer?: Reviewer;
-  db?: Parameters<typeof mapReviewToTenant>[0];
+  store: Parameters<typeof mapReviewToTenant>[0];
   namespace?: string;
   metrics: TenantBindingMetrics;
   logger?: TenantBindingLogger;
@@ -106,7 +105,6 @@ export function createTenantBindingMiddleware(
     reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
     caPath: IN_CLUSTER_IDENTITY_CA_PATH,
   });
-  const db = opts.db ?? defaultDb;
   const logger = opts.logger ?? defaultLogger;
   const namespace = opts.namespace ?? process.env.K8S_NAMESPACE ?? "octogee";
 
@@ -183,7 +181,7 @@ export function createTenantBindingMiddleware(
 
     let mapped;
     try {
-      mapped = await mapReviewToTenant(db, review, namespace);
+      mapped = await mapReviewToTenant(opts.store, review, namespace);
     } catch (err) {
       record(opts.metrics, req, "reviewer_error");
       warn(logger, "tenant lookup failed", {

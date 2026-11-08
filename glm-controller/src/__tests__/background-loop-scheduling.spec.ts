@@ -17,7 +17,7 @@ const loops: Array<[string, Start]> = [
   })],
   ["native return hold reaper", (work, log) => startNativeReturnHoldReaper({
     store: {} as Parameters<typeof startNativeReturnHoldReaper>[0]["store"],
-    informer: { glmGateways: () => null },
+    informer: { fleetRegistry: () => null },
     now: Date.now, intervalMs: 100, log,
     runTick: async () => { await work(); return { scanned: 0, released: 0 }; },
   })],

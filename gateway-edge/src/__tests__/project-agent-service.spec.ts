@@ -1,11 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
 const h = vi.hoisted(() => ({
   docs: new Map<string, Record<string, unknown>>(),
-  sets: [] as Array<{ path: string; data: Record<string, unknown>; options?: Record<string, unknown> }>,
-  updates: [] as Array<{ path: string; data: Record<string, unknown> }>,
-  updateFailures: new Map<string, Error>(),
-  deletes: [] as string[],
   mmApi: vi.fn(),
   addChannelMember: vi.fn(),
   createProjectAgentBot: vi.fn(),
@@ -13,47 +9,12 @@ const h = vi.hoisted(() => ({
   logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
 }));
 
-function docRef(path: string) {
-  return {
-    get: async () => {
-      const data = h.docs.get(path);
-      return { exists: data !== undefined, data: () => data };
-    },
-    set: async (data: Record<string, unknown>, options?: Record<string, unknown>) => {
-      h.sets.push({ path, data, options });
-    },
-    update: async (data: Record<string, unknown>) => {
-      const failure = h.updateFailures.get(path);
-      if (failure) throw failure;
-      h.updates.push({ path, data });
-    },
-    delete: async () => {
-      h.deletes.push(path);
-      h.docs.delete(path);
-    },
-    collection: (name: string) => collectionRef(`${path}/${name}`),
-  };
-}
+vi.mock("../lib/db.js", () => ({ db: {}, FieldValue: {} }));
 
-function collectionRef(path: string) {
-  return {
-    doc: (id: string) => docRef(`${path}/${id}`),
-    get: async () => ({
-      docs: [...h.docs.entries()]
-        .filter(([p]) => p.startsWith(`${path}/`) && p.slice(path.length + 1).split("/").length === 1)
-        .map(([p, data]) => ({ id: p.split("/").at(-1)!, data: () => data })),
-    }),
-  };
-}
-
-vi.mock("../lib/db.js", () => ({
-  db: { doc: (path: string) => docRef(path), collection: (name: string) => collectionRef(name) },
-  FieldValue: {
-    serverTimestamp: () => "SERVER_TS",
-    arrayUnion: (...values: unknown[]) => ({ arrayUnion: values }),
-    arrayRemove: (...values: unknown[]) => ({ arrayRemove: values }),
-  },
-}));
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(h.docs) };
+});
 
 vi.mock("../middleware/logging.js", () => ({ logger: h.logger }));
 
@@ -84,48 +45,50 @@ function actor(overrides: Record<string, unknown> = {}) {
 }
 
 const PROJECT_PATH = "workspaces/mira/projects/orbit";
+const USER_PATH = "users/owner-1";
+const PROJECT_AGENT_ID = "octogee-mira-proj-orbit-coach";
+const PROVISION_FAILED = "Project Agent provisioning failed - retry from project settings";
 
-function projectAgentStateWrite(
-  status: "provisioning" | "ready" | "error",
-  { lastError = null }: { lastError?: string | null } = {},
-) {
-  return {
-    path: PROJECT_PATH,
-    data: {
-      agent: {
-        status,
-        activationId: null,
-        lastError,
-        updatedAt: "SERVER_TS",
-      },
-    },
-    options: { merge: true },
-  };
+let documentWrites: MockInstance<(path: string, data: Record<string, unknown>) => Map<string, Record<string, unknown>>>;
+
+function agentWrites() {
+  return documentWrites.mock.calls
+    .filter(([path]) => path === PROJECT_PATH)
+    .map(([, data]) => data.agent as Record<string, unknown>);
 }
 
-const ROSTER_UNION = {
-  path: "users/owner-1",
-  data: {
-    "provisioning.openclaw.agentIds": { arrayUnion: ["octogee-mira-proj-orbit-coach"] },
-  },
-};
+function agentStateWrite(
+  status: "provisioning" | "ready" | "error",
+  { lastError = null, activationId = null }: { lastError?: string | null; activationId?: unknown } = {},
+) {
+  return { status, activationId, lastError, updatedAt: expect.any(Number) };
+}
+
+function rosteredAgentIds() {
+  const provisioning = h.docs.get(USER_PATH)?.provisioning as { openclaw?: { agentIds?: string[] } } | undefined;
+  return provisioning?.openclaw?.agentIds;
+}
+
+function seedOwner(agentIds: string[] = ["octogee-mira-coach"]) {
+  h.docs.set(USER_PATH, { provisioning: { openclaw: { slug: "mira", agentIds } } });
+}
 
 function seedProject(extra: Record<string, unknown> = {}) {
   h.docs.set(PROJECT_PATH, { id: "orbit", ownerUid: "owner-1", ...extra });
-  h.docs.set("workspaces/mira", { ownerUid: "owner-1", mattermost: { teamId: "team-1" } });
+  h.docs.set("workspaces/mira", { id: "mira", ownerUid: "owner-1", mattermost: { teamId: "team-1" } });
   h.docs.set("agents/owner-1", { name: "BenderEcho", avatarEmoji: "🤖" });
   h.docs.set(`${PROJECT_PATH}/channels/general`, {
+    id: "general",
     kind: "general",
     mattermost: { channelId: "po-1" },
   });
+  seedOwner();
+  documentWrites.mockClear();
 }
 
 beforeEach(() => {
   h.docs.clear();
-  h.sets.length = 0;
-  h.updates.length = 0;
-  h.updateFailures.clear();
-  h.deletes.length = 0;
+  documentWrites = vi.spyOn(h.docs, "set");
   h.mmApi.mockReset();
   h.addChannelMember.mockReset().mockResolvedValue(undefined);
   h.createProjectAgentBot.mockReset().mockResolvedValue({ mmUserId: "bot-1", token: "pat-1" });
@@ -135,21 +98,25 @@ beforeEach(() => {
   h.logger.warn.mockReset();
 });
 
+afterEach(() => {
+  documentWrites.mockRestore();
+});
+
 describe("provisionProjectAgent", () => {
   it("502s when the workspace has no MM teamId, recording the error for retry", async () => {
     seedProject();
-    h.docs.set("workspaces/mira", { ownerUid: "owner-1" });
+    h.docs.set("workspaces/mira", { id: "mira", ownerUid: "owner-1" });
 
     const result = await provisionProjectAgent(actor(), "orbit");
 
     expect(result).toEqual({
       status: 502,
-      body: { error: "Project Agent provisioning failed - retry from project settings" },
+      body: { error: PROVISION_FAILED },
     });
-    expect(h.sets).toContainEqual(projectAgentStateWrite("provisioning"));
-    expect(h.sets).toContainEqual(projectAgentStateWrite("error", {
-      lastError: "Project Agent provisioning failed - retry from project settings",
-    }));
+    expect(agentWrites()).toEqual([
+      agentStateWrite("provisioning"),
+      agentStateWrite("error", { lastError: PROVISION_FAILED }),
+    ]);
     expect(h.createProjectAgentBot).not.toHaveBeenCalled();
     expect(h.logger.error).toHaveBeenCalled();
   });
@@ -163,8 +130,7 @@ describe("provisionProjectAgent", () => {
       status: 403,
       body: { error: "Only the project owner can manage its agent" },
     });
-    expect(h.sets).toEqual([]);
-    expect(h.updates).toEqual([]);
+    expect(documentWrites).not.toHaveBeenCalled();
     expect(h.createProjectAgentBot).not.toHaveBeenCalled();
   });
 
@@ -177,7 +143,7 @@ describe("provisionProjectAgent", () => {
       status: 409,
       body: { error: "Project is archived" },
     });
-    expect(h.sets).toEqual([]);
+    expect(documentWrites).not.toHaveBeenCalled();
     expect(h.createProjectAgentBot).not.toHaveBeenCalled();
   });
 
@@ -197,9 +163,10 @@ describe("provisionProjectAgent", () => {
 
     const result = await provisionProjectAgent(actor(), "orbit");
 
-    expect(h.sets).toContainEqual(projectAgentStateWrite("provisioning"));
-    expect(h.sets.some((write) => (write.data.agent as { status: string }).status === "ready")).toBe(false);
-    expect((h.sets.at(-1)?.data.agent as { activationId: string }).activationId).toMatch(/^[a-f0-9-]{36}$/);
+    expect(agentWrites()).toEqual([
+      agentStateWrite("provisioning"),
+      agentStateWrite("provisioning", { activationId: expect.stringMatching(/^[a-f0-9-]{36}$/) }),
+    ]);
     expect(h.createProjectAgentBot).toHaveBeenCalledWith(expect.anything(), {
       uid: "owner-1",
       username: "mira",
@@ -218,18 +185,34 @@ describe("provisionProjectAgent", () => {
     });
   });
 
+  it("names the bot after the project agent's identity and keeps the rest of its agent state", async () => {
+    seedProject({ agent: { status: "ready", identity: { name: "Beacon", emoji: "🛰️" } } });
+
+    await provisionProjectAgent(actor(), "orbit");
+
+    expect(h.createProjectAgentBot).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ displayName: "Beacon" }),
+    );
+    expect(h.docs.get(PROJECT_PATH)?.agent).toEqual({
+      ...agentStateWrite("provisioning", { activationId: expect.any(String) }),
+      identity: { name: "Beacon", emoji: "🛰️" },
+    });
+  });
+
   it("invalidates prior readiness before minting and assigns a new activation to each successful provision", async () => {
     seedProject({ agent: { status: "ready", activationId: "previous" } });
     let finishMint!: (value: { mmUserId: string; token: string }) => void;
     h.createProjectAgentBot.mockImplementationOnce(() => new Promise((resolve) => { finishMint = resolve; }));
     const enabling = provisionProjectAgent(actor(), "orbit");
     await vi.waitFor(() => expect(h.createProjectAgentBot).toHaveBeenCalled());
-    expect(h.sets).toEqual([projectAgentStateWrite("provisioning")]);
+    expect(agentWrites()).toEqual([agentStateWrite("provisioning")]);
     finishMint({ mmUserId: "bot-1", token: "new-pat" });
     await enabling;
-    const first = (h.sets.at(-1)?.data.agent as { activationId: string }).activationId;
+    const first = agentWrites().at(-1)?.activationId;
     await provisionProjectAgent(actor(), "orbit");
-    const second = (h.sets.at(-1)?.data.agent as { activationId: string }).activationId;
+    const second = agentWrites().at(-1)?.activationId;
+    expect(first).toEqual(expect.any(String));
     expect(second).not.toBe(first);
   });
 
@@ -238,7 +221,21 @@ describe("provisionProjectAgent", () => {
 
     await provisionProjectAgent(actor(), "orbit");
 
-    expect(h.updates).toEqual([ROSTER_UNION]);
+    expect(rosteredAgentIds()).toEqual(["octogee-mira-coach", PROJECT_AGENT_ID]);
+  });
+
+  it("records the error without minting when the owner's roster cannot be updated", async () => {
+    seedProject();
+    h.docs.delete(USER_PATH);
+
+    const result = await provisionProjectAgent(actor(), "orbit");
+
+    expect(result).toEqual({ status: 502, body: { error: PROVISION_FAILED } });
+    expect(agentWrites()).toEqual([
+      agentStateWrite("provisioning"),
+      agentStateWrite("error", { lastError: PROVISION_FAILED }),
+    ]);
+    expect(h.createProjectAgentBot).not.toHaveBeenCalled();
   });
 
   it("reports 502 when minting fails (retry re-mints idempotently)", async () => {
@@ -247,14 +244,14 @@ describe("provisionProjectAgent", () => {
 
     const result = await provisionProjectAgent(actor(), "orbit");
 
-    expect(h.sets).toContainEqual(projectAgentStateWrite("provisioning"));
-    expect(h.sets).toContainEqual(projectAgentStateWrite("error", {
-      lastError: "Project Agent provisioning failed - retry from project settings",
-    }));
-    expect(h.updates).toEqual([ROSTER_UNION]);
+    expect(agentWrites()).toEqual([
+      agentStateWrite("provisioning"),
+      agentStateWrite("error", { lastError: PROVISION_FAILED }),
+    ]);
+    expect(rosteredAgentIds()).toEqual(["octogee-mira-coach", PROJECT_AGENT_ID]);
     expect(result).toEqual({
       status: 502,
-      body: { error: "Project Agent provisioning failed - retry from project settings" },
+      body: { error: PROVISION_FAILED },
     });
     expect(h.logger.error).toHaveBeenCalled();
   });
@@ -268,11 +265,9 @@ describe("provisionProjectAgent", () => {
     expect(h.createProjectAgentBot).toHaveBeenCalled();
     expect(result).toEqual({
       status: 502,
-      body: { error: "Project Agent provisioning failed - retry from project settings" },
+      body: { error: PROVISION_FAILED },
     });
-    expect(h.sets).toContainEqual(projectAgentStateWrite("error", {
-      lastError: "Project Agent provisioning failed - retry from project settings",
-    }));
+    expect(agentWrites().at(-1)).toEqual(agentStateWrite("error", { lastError: PROVISION_FAILED }));
     expect(h.logger.error).toHaveBeenCalled();
   });
 
@@ -290,7 +285,7 @@ describe("provisionProjectAgent", () => {
       status: 422,
       body: { error: "Your chat account could not be found. Please contact support to restore access." },
     });
-    expect(h.sets).toContainEqual(projectAgentStateWrite("error", {
+    expect(agentWrites().at(-1)).toEqual(agentStateWrite("error", {
       lastError: "Your chat account could not be found. Please contact support to restore access.",
     }));
     expect(h.logger.error).toHaveBeenCalled();
@@ -298,14 +293,12 @@ describe("provisionProjectAgent", () => {
 });
 
 const SECRET_PATH = "users/owner-1/secrets/projectAgentMattermost-orbit";
-const ROSTER_REMOVAL = {
-  path: "users/owner-1",
-  data: {
-    "provisioning.openclaw.agentIds": { arrayRemove: ["octogee-mira-proj-orbit-coach"] },
-  },
-};
 
 describe("retireProjectAgentForDeletion", () => {
+  beforeEach(() => {
+    seedOwner(["octogee-mira-coach", PROJECT_AGENT_ID]);
+  });
+
   it("retires the minted bot, then removes the roster id", async () => {
     h.docs.set(SECRET_PATH, { mmUserId: "bot-1", personalToken: "pat-1" });
 
@@ -316,14 +309,14 @@ describe("retireProjectAgentForDeletion", () => {
       project: "orbit",
       mmUserId: "bot-1",
     });
-    expect(h.updates).toEqual([ROSTER_REMOVAL]);
+    expect(rosteredAgentIds()).toEqual(["octogee-mira-coach"]);
   });
 
   it("removes a stale roster id even when no bot secret exists", async () => {
     await retireProjectAgentForDeletion("owner-1", "mira", "orbit");
 
     expect(h.retireProjectAgentBot).not.toHaveBeenCalled();
-    expect(h.updates).toEqual([ROSTER_REMOVAL]);
+    expect(rosteredAgentIds()).toEqual(["octogee-mira-coach"]);
   });
 
   it("drops a secret without an mmUserId so config demand cannot outlive the project", async () => {
@@ -332,9 +325,9 @@ describe("retireProjectAgentForDeletion", () => {
     await retireProjectAgentForDeletion("owner-1", "mira", "orbit");
 
     expect(h.retireProjectAgentBot).not.toHaveBeenCalled();
-    expect(h.deletes).toEqual([SECRET_PATH]);
+    expect(h.docs.has(SECRET_PATH)).toBe(false);
     expect(h.logger.warn).toHaveBeenCalled();
-    expect(h.updates).toEqual([ROSTER_REMOVAL]);
+    expect(rosteredAgentIds()).toEqual(["octogee-mira-coach"]);
   });
 
   it("keeps the roster id when retiring fails — the roster must stay a superset of config demand", async () => {
@@ -345,6 +338,6 @@ describe("retireProjectAgentForDeletion", () => {
       "MM down",
     );
 
-    expect(h.updates).toEqual([]);
+    expect(rosteredAgentIds()).toEqual(["octogee-mira-coach", PROJECT_AGENT_ID]);
   });
 });

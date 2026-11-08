@@ -1,35 +1,7 @@
-import type { Firestore } from "firebase-admin/firestore";
 import { describe, expect, it } from "vitest";
+import { MalformedRecordError } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { mapSaToTenant } from "../sa-to-tenant.js";
-
-type Docs = Record<string, Record<string, unknown>>;
-
-function fakeDb(docs: Docs): Pick<Firestore, "doc" | "collection"> {
-  return {
-    doc: (path: string) => ({
-      get: async () => ({
-        exists: docs[path] !== undefined,
-        data: () => docs[path],
-      }),
-    }),
-    collection: (name: string) => ({
-      where: (field: string, operator: string, value: unknown) => ({
-        get: async () => ({
-          docs: Object.entries(docs)
-            .filter(([path, data]) => {
-              if (!path.startsWith(`${name}/`)) return false;
-              if (path.slice(name.length + 1).includes("/")) return false;
-              return operator === "==" && data[field] === value;
-            })
-            .map(([path, data]) => ({
-              id: path.slice(name.length + 1),
-              data: () => data,
-            })),
-        }),
-      }),
-    }),
-  } as Pick<Firestore, "doc" | "collection">;
-}
 
 function durableGateway(
   gatewayId: string,
@@ -81,7 +53,7 @@ function inFlightRetirementClaim(): Record<string, unknown> {
 describe("mapSaToTenant", () => {
   it("maps per-gateway KSAs from durable root ownership", async () => {
     const result = await mapSaToTenant(
-      fakeDb({
+      createDocumentFixtureStore({
         "gateways/bender": durableGateway("bender", {
           gatewayClass: "builder",
           imageProfile: "builder",
@@ -103,7 +75,7 @@ describe("mapSaToTenant", () => {
   it("maps a gateway with only an empty retired co-owner mirror", async () => {
     await expect(
       mapSaToTenant(
-        fakeDb({
+        createDocumentFixtureStore({
           "gateways/bender": durableGateway("bender", {
             gatewayClass: "builder",
             imageProfile: "builder",
@@ -123,7 +95,7 @@ describe("mapSaToTenant", () => {
 
     await expect(
       mapSaToTenant(
-        fakeDb({
+        createDocumentFixtureStore({
           "gateways/bender": durableGateway("bender", {
             gatewayClass: "builder",
             imageProfile: "builder",
@@ -140,7 +112,7 @@ describe("mapSaToTenant", () => {
 
   it("takes the KSA suffix as the bare gateway id", async () => {
     const result = await mapSaToTenant(
-      fakeDb({ "gateways/canary-2": durableGateway("canary-2") }),
+      createDocumentFixtureStore({ "gateways/canary-2": durableGateway("canary-2") }),
       { namespace: "octogee", saName: "octogee-gw-canary-2" },
       "octogee",
     );
@@ -153,7 +125,7 @@ describe("mapSaToTenant", () => {
 
   it("rejects retired operator KSA names even when stale root config names one", async () => {
     const result = await mapSaToTenant(
-      fakeDb({
+      createDocumentFixtureStore({
         "gateways/bender": durableGateway("bender", {
           gatewayClass: "builder",
           imageProfile: "builder",
@@ -171,7 +143,7 @@ describe("mapSaToTenant", () => {
 
   it("maps a custom KSA through exactly one active durable root", async () => {
     const result = await mapSaToTenant(
-      fakeDb({
+      createDocumentFixtureStore({
         "gateways/bender": durableGateway("bender", {
           gatewayClass: "builder",
           imageProfile: "builder",
@@ -194,7 +166,7 @@ describe("mapSaToTenant", () => {
   it("denies a custom KSA with no, ambiguous, or retired durable root", async () => {
     await expect(
       mapSaToTenant(
-        fakeDb({}),
+        createDocumentFixtureStore({}),
         { namespace: "octogee", saName: "custom-operator-ksa" },
         "octogee",
       ),
@@ -202,7 +174,7 @@ describe("mapSaToTenant", () => {
 
     await expect(
       mapSaToTenant(
-        fakeDb({
+        createDocumentFixtureStore({
           "gateways/alpha": durableGateway("alpha", { serviceAccountName: "custom-operator-ksa" }),
           "gateways/beta": durableGateway("beta", { serviceAccountName: "custom-operator-ksa" }),
         }),
@@ -213,7 +185,7 @@ describe("mapSaToTenant", () => {
 
     await expect(
       mapSaToTenant(
-        fakeDb({
+        createDocumentFixtureStore({
           "gateways/bender": durableGateway("bender", {
             serviceAccountName: "custom-operator-ksa",
             desiredStatus: "retired",
@@ -228,7 +200,7 @@ describe("mapSaToTenant", () => {
   it("requires the prefix KSA to equal the root's effective KSA", async () => {
     await expect(
       mapSaToTenant(
-        fakeDb({
+        createDocumentFixtureStore({
           "gateways/bender": durableGateway("bender", {
             serviceAccountName: "custom-operator-ksa",
           }),
@@ -240,7 +212,7 @@ describe("mapSaToTenant", () => {
 
     await expect(
       mapSaToTenant(
-        fakeDb({
+        createDocumentFixtureStore({
           "gateways/bender": durableGateway("bender", {
             serviceAccountName: "octogee-gw-other",
           }),
@@ -253,7 +225,7 @@ describe("mapSaToTenant", () => {
 
   it("soft-fails a namespace mismatch before the root lookup", async () => {
     const result = await mapSaToTenant(
-      fakeDb({}),
+      createDocumentFixtureStore({}),
       { namespace: "octogee-test", saName: "octogee-gw-bender" },
       "octogee",
     );
@@ -261,22 +233,25 @@ describe("mapSaToTenant", () => {
     expect(result).toEqual({ attached: false, result: "ns_mismatch" });
   });
 
-  it("soft-fails a missing or malformed durable root", async () => {
+  it("soft-fails a missing durable root", async () => {
     await expect(
-      mapSaToTenant(fakeDb({}), { namespace: "octogee", saName: "octogee-gw-bender" }, "octogee"),
+      mapSaToTenant(createDocumentFixtureStore({}), { namespace: "octogee", saName: "octogee-gw-bender" }, "octogee"),
     ).resolves.toEqual({ attached: false, result: "unknown_tenant" });
+  });
+
+  it("fails closed on a malformed durable root", async () => {
     await expect(
       mapSaToTenant(
-        fakeDb({ "gateways/bender": { gatewayId: "bender", desiredStatus: "running" } }),
+        createDocumentFixtureStore({ "gateways/bender": { gatewayId: "bender", desiredStatus: "running" } }),
         { namespace: "octogee", saName: "octogee-gw-bender" },
         "octogee",
       ),
-    ).resolves.toEqual({ attached: false, result: "unknown_tenant" });
+    ).rejects.toBeInstanceOf(MalformedRecordError);
   });
 
   it("rejects a retired durable gateway", async () => {
     const result = await mapSaToTenant(
-      fakeDb({ "gateways/bender": durableGateway("bender", { desiredStatus: "retired" }) }),
+      createDocumentFixtureStore({ "gateways/bender": durableGateway("bender", { desiredStatus: "retired" }) }),
       { namespace: "octogee", saName: "octogee-gw-bender" },
       "octogee",
     );
@@ -293,7 +268,7 @@ describe("mapSaToTenant", () => {
 
     await expect(
       mapSaToTenant(
-        fakeDb({ "gateways/shared-0a1b2c3d4e5f": retiring }),
+        createDocumentFixtureStore({ "gateways/shared-0a1b2c3d4e5f": retiring }),
         { namespace: "octogee", saName: "octogee-gw-shared-0a1b2c3d4e5f", podUid: "pod-uid-1" },
         "octogee",
       ),
@@ -306,7 +281,7 @@ describe("mapSaToTenant", () => {
 
     await expect(
       mapSaToTenant(
-        fakeDb({
+        createDocumentFixtureStore({
           "gateways/bender": durableGateway("bender", {
             serviceAccountName: "custom-operator-ksa",
             desiredStatus: "retired",
@@ -322,7 +297,7 @@ describe("mapSaToTenant", () => {
 
   it("rejects a retiring gateway identity that is not bound to a pod", async () => {
     const result = await mapSaToTenant(
-      fakeDb({
+      createDocumentFixtureStore({
         "gateways/bender": durableGateway("bender", {
           desiredStatus: "retired",
           retirementVersion: 1,
@@ -338,7 +313,7 @@ describe("mapSaToTenant", () => {
 
   it("rejects a pod-bound identity of a retired gateway without a retirement claim", async () => {
     const result = await mapSaToTenant(
-      fakeDb({ "gateways/bender": durableGateway("bender", { desiredStatus: "retired" }) }),
+      createDocumentFixtureStore({ "gateways/bender": durableGateway("bender", { desiredStatus: "retired" }) }),
       { namespace: "octogee", saName: "octogee-gw-bender", podUid: "pod-uid-1" },
       "octogee",
     );
@@ -348,7 +323,7 @@ describe("mapSaToTenant", () => {
 
   it("binds a durable shared gateway without an owner", async () => {
     const result = await mapSaToTenant(
-      fakeDb({ "gateways/default": durableGateway("default") }),
+      createDocumentFixtureStore({ "gateways/default": durableGateway("default") }),
       { namespace: "octogee", saName: "octogee-gw-default" },
       "octogee",
     );
@@ -362,7 +337,7 @@ describe("mapSaToTenant", () => {
 
   it("never restores an owner from a stale release snapshot", async () => {
     const result = await mapSaToTenant(
-      fakeDb({
+      createDocumentFixtureStore({
         "gateways/bender": durableGateway("bender", {
           gatewayClass: "builder",
           imageProfile: "builder",
@@ -383,43 +358,43 @@ describe("mapSaToTenant", () => {
 
   it("classifies the shared gateway KSA without tenant binding", async () => {
     await expect(
-      mapSaToTenant(fakeDb({}), { namespace: "octogee", saName: "octogee-gateway" }, "octogee"),
+      mapSaToTenant(createDocumentFixtureStore({}), { namespace: "octogee", saName: "octogee-gateway" }, "octogee"),
     ).resolves.toEqual({ attached: false, result: "shared_gateway" });
   });
 
   it("soft-fails malformed and unknown service accounts", async () => {
     await expect(
-      mapSaToTenant(fakeDb({}), { namespace: "octogee", saName: "octogee-gw-" }, "octogee"),
+      mapSaToTenant(createDocumentFixtureStore({}), { namespace: "octogee", saName: "octogee-gw-" }, "octogee"),
     ).resolves.toEqual({ attached: false, result: "malformed_sa" });
     await expect(
-      mapSaToTenant(fakeDb({}), { namespace: "octogee", saName: "octogee-random" }, "octogee"),
+      mapSaToTenant(createDocumentFixtureStore({}), { namespace: "octogee", saName: "octogee-random" }, "octogee"),
     ).resolves.toEqual({ attached: false, result: "unknown_tenant" });
   });
 
   it("allows platform service accounts without any tenant lookup", async () => {
     await expect(
-      mapSaToTenant(fakeDb({}), { namespace: "octogee", saName: "octogee-glm-controller" }, "octogee"),
+      mapSaToTenant(createDocumentFixtureStore({}), { namespace: "octogee", saName: "octogee-glm-controller" }, "octogee"),
     ).resolves.toEqual({
       attached: true,
       result: "ok_platform",
       tenant: { kind: "platform", actor: "glm-controller" },
     });
     await expect(
-      mapSaToTenant(fakeDb({}), { namespace: "octogee", saName: "octogee-api" }, "octogee"),
+      mapSaToTenant(createDocumentFixtureStore({}), { namespace: "octogee", saName: "octogee-api" }, "octogee"),
     ).resolves.toEqual({
       attached: true,
       result: "ok_platform",
       tenant: { kind: "platform", actor: "octogee-api" },
     });
     await expect(
-      mapSaToTenant(fakeDb({}), { namespace: "octogee", saName: "octogee-artifact-worker" }, "octogee"),
+      mapSaToTenant(createDocumentFixtureStore({}), { namespace: "octogee", saName: "octogee-artifact-worker" }, "octogee"),
     ).resolves.toEqual({
       attached: true,
       result: "ok_platform",
       tenant: { kind: "platform", actor: "artifact-worker" },
     });
     await expect(
-      mapSaToTenant(fakeDb({}), { namespace: "octogee", saName: "llm-broker" }, "octogee"),
+      mapSaToTenant(createDocumentFixtureStore({}), { namespace: "octogee", saName: "llm-broker" }, "octogee"),
     ).resolves.toEqual({
       attached: true,
       result: "ok_platform",
@@ -427,7 +402,7 @@ describe("mapSaToTenant", () => {
     });
     await expect(
       mapSaToTenant(
-        fakeDb({}),
+        createDocumentFixtureStore({}),
         { namespace: "octogee", saName: "octogee-npm-cache-proxy" },
         "octogee",
       ),

@@ -1,11 +1,11 @@
 import { Router, type Request, type Response } from "express";
-import type { Firestore } from "firebase-admin/firestore";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { authorizeChannel, type AuthorizedChannel } from "../../../gateway-edge/src/lib/channel-session-authorization.js";
 import type { ChannelReadinessAuthorization } from "../../../gateway-edge/src/lib/channel-agent-readiness-authorization-broker.js";
 
 export interface ChannelReadinessAuthorizationBrokerDeps {
-  db: Firestore;
+  store: Pick<PlatformStateRepositories, "builders">;
   authorize?: typeof authorizeChannel;
 }
 
@@ -46,8 +46,8 @@ async function authorize(req: Request, res: Response, deps: ChannelReadinessAuth
     requireActiveLedger: true, includeCoachConversation: true, signal,
   }), signal);
   if (!access || access.forbidden) { res.status(404).json({ error: "not_found" }); return; }
-  const owner = await withDeadline(() => deps.db.doc(`users/${access.target.ownerUid}`).get(), signal);
-  if (owner.data()?.provisioning?.openclaw?.gatewayId !== body.gatewayId) {
+  const owner = await withDeadline(() => deps.store.builders.records.get(access.target.ownerUid), signal);
+  if (owner?.gateway?.gatewayId !== body.gatewayId) {
     res.status(404).json({ error: "not_found" }); return;
   }
   const peerKind = await withDeadline(() => channelPeerKind(access.client, body.channelId), signal);

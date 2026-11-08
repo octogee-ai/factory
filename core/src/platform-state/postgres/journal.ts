@@ -29,7 +29,7 @@ import {
 } from "./records.js";
 import type { PostgresSession } from "./session.js";
 import { SqlParameters, type Row } from "./sql.js";
-import { columnFor, decodeStored } from "./values.js";
+import { columnFor, decodeStored, isClearField } from "./values.js";
 
 const AUTO_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const AUTO_ID_LENGTH = 20;
@@ -162,7 +162,10 @@ function createOperationsRepository(session: PostgresSession): OperationsReposit
     },
 
     async patch(operationId, patch, fence) {
-      await updateRecord(session, "journal.operations.patch", { table: OPERATIONS_TABLE, key: [operationId] }, patch, [
+      const table = isClearField(patch.createdBy)
+        ? { ...OPERATIONS_TABLE, immutableFields: ["id", "kind", "createdAt"] }
+        : OPERATIONS_TABLE;
+      await updateRecord(session, "journal.operations.patch", { table, key: [operationId] }, patch, [
         ...revisionFence(fence?.revision),
         ...oneOfFence("status", STATUS, fence?.status),
         ...equalsFence("startedAt", STARTED_AT, fence?.startedAt),

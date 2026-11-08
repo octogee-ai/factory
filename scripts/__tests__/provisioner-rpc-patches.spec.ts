@@ -3,7 +3,7 @@ import {
   buildCoachAgentEntry,
   buildCoachBindings,
   type ProvisioningContext,
-} from "../lib/provisionSteps.js";
+} from "@octogee/core/provisionSteps";
 
 vi.mock("../lib/config.js", async () => {
   const actual: any = await vi.importActual("../lib/config.js");
