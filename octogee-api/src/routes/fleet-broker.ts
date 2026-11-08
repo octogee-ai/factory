@@ -2519,6 +2519,14 @@ function builderAnchorAllocationCurrent(scope: BuilderRuntimeStateScope, gateway
   return configuredBuilderCredentialBootstrapAllowed(gateway, scope) && allocation?.leaseId === scope.leaseId && allocation.generation === scope.generation;
 }
 
+function archivedProjectAgentIds(scope: { uid: string; slug: string }, projects: QuerySnapshot): Set<string> {
+  return new Set(projects.docs.filter(doc => {
+    const project = doc.data();
+    return project.ownerUid === scope.uid && projectAgentConfigured(project.agent) &&
+      (project.status === "archived" || project.commercialLifecycle?.status === "archived");
+  }).map(doc => projectAgentId(scope.slug, doc.id)));
+}
+
 async function recordAgentAnchors(
   db: Firestore,
   scope: BuilderRuntimeStateScope,
@@ -2529,23 +2537,25 @@ async function recordAgentAnchors(
   const records = agentStoreRecords(db, scope.uid);
   const reported = new Map(anchors.map((anchor) => [anchor.agentId, anchor]));
   await db.runTransaction(async (txn) => {
-    const [existing, user, assignment, gateway] = await Promise.all([
+    const [existing, user, assignment, gateway, projects] = await Promise.all([
       txn.get(records),
       txn.get(db.collection("users").doc(scope.uid)),
       txn.get(db.collection(GATEWAYS_COLLECTION).doc(scope.gatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(scope.uid)),
       txn.get(db.collection(GATEWAYS_COLLECTION).doc(scope.gatewayId)),
+      txn.get(db.collection("workspaces").doc(scope.slug).collection("projects")),
     ]);
     if (!builderAnchorAllocationCurrent(scope, gateway.data())) {
       throw new SharedAgentAnchorCustodyError("Builder allocation changed before anchor reporting");
     }
     const canPrune = builderAgentAnchorPruningAllowed(scope, user.data(), assignment.data());
+    const archived = archivedProjectAgentIds(scope, projects);
     for (const doc of existing.docs) {
       if (assertGlobalAnchorUnchanged(scope, doc, report)) continue;
       const prior = recordedAgentAnchor(scope, doc.data());
       if (!prior) continue;
       const next = reported.get(prior.agentId);
       if (!configuredAgentIds.has(prior.agentId)) {
-        if (canPrune) txn.delete(doc.ref);
+        if (canPrune && !archived.has(prior.agentId)) txn.delete(doc.ref);
       } else if (next && (prior.storeId !== next.storeId || prior.schema !== next.schema)) {
         throw new AgentAnchorConflictError(prior.agentId);
       }
@@ -2611,9 +2621,10 @@ async function recordSharedAgentAnchors(
   const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(scope.gatewayId);
   const records = agentStoreRecords(db, scope.uid);
   await db.runTransaction(async (txn) => {
-    const [gateway, user, assignment, existing] = await Promise.all([
+    const [gateway, user, assignment, existing, projects] = await Promise.all([
       txn.get(gatewayRef), txn.get(db.collection("users").doc(scope.uid)),
       txn.get(gatewayRef.collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(scope.uid)), txn.get(records),
+      txn.get(db.collection("workspaces").doc(scope.slug).collection("projects")),
     ]);
     const current = sharedAnchorMigrationBound(scope)
       ? await recheckSharedAnchorMigration(db, txn, scope)
@@ -2627,7 +2638,10 @@ async function recordSharedAgentAnchors(
       if ((prior && (prior.storeId !== anchor.storeId || prior.schema !== anchor.schema)) ||
           (!prior && scope.assignmentState !== "serving")) throw new AgentAnchorConflictError(anchor.agentId);
     }
-    for (const doc of unconfiguredSharedAgentAnchors(scope, existing, configuredAgentIds)) txn.delete(doc.ref);
+    const archived = archivedProjectAgentIds(scope, projects);
+    for (const doc of unconfiguredSharedAgentAnchors(scope, existing, configuredAgentIds)) {
+      if (!archived.has(doc.id)) txn.delete(doc.ref);
+    }
     for (const anchor of anchors) {
       const prior = existing.docs.find((candidate) => candidate.id === anchor.agentId)?.data();
       txn.set(records.doc(anchor.agentId), { ...prior, ...anchor, gatewayId: anchorCustodyGateway(scope), assignmentEpoch: scope.assignmentEpoch, recordedAt });
