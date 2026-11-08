@@ -1,0 +1,42 @@
+replicaCount: 1
+strategy:
+  type: Recreate
+postgresql:
+  enabled: false
+postgresql-ha:
+  enabled: false
+valkey:
+  enabled: false
+valkey-cluster:
+  enabled: false
+persistence:
+  enabled: true
+  size: 5Gi
+ingress:
+  enabled: false
+gitea:
+  admin:
+    existingSecret: platform-credentials
+  additionalConfigFromEnvs:
+    - name: GITEA__DATABASE__PASSWD
+      valueFrom:
+        secretKeyRef:
+          name: platform-credentials
+          key: gitea-db-password
+  config:
+    database:
+      DB_TYPE: postgres
+      NAME: gitea
+      USER: gitea
+    session:
+      PROVIDER: db
+    cache:
+      ADAPTER: memory
+    queue:
+      TYPE: level
+    indexer:
+      ISSUE_INDEXER_TYPE: bleve
+    service:
+      DISABLE_REGISTRATION: true
+    actions:
+      ENABLED: false

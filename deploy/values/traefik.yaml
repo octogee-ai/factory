@@ -1,0 +1,16 @@
+ingressClass:
+  enabled: true
+  isDefaultClass: false
+  name: traefik
+ports:
+  web:
+    expose:
+      default: true
+  websecure:
+    expose:
+      default: false
+providers:
+  kubernetesCRD:
+    enabled: false
+  kubernetesIngress:
+    enabled: true
