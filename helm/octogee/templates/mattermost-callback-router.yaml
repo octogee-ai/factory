@@ -48,6 +48,8 @@ spec:
               value: agent-control-router
             - name: PORT
               value: "3001"
+            - name: PUBLIC_APP_ORIGINS
+              value: {{ join "," (required "global.publicAppOrigins is required" (.Values.global).publicAppOrigins) | quote }}
             - name: K8S_NAMESPACE
               valueFrom:
                 fieldRef:

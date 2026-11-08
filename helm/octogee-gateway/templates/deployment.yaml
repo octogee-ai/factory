@@ -498,6 +498,8 @@ spec:
               value: {{ .Values.env.logLevel | default "info" | quote }}
             - name: PORT
               value: "{{ .Values.gatewayEdge.port }}"
+            - name: PUBLIC_APP_ORIGINS
+              value: {{ join "," (required "gatewayEdge.publicAppOrigins is required" .Values.gatewayEdge.publicAppOrigins) | quote }}
             {{- if eq $gatewayClass "builder" }}
             - name: OCTOGEE_PROJECTS_MOUNT
               value: "/work/materialized"

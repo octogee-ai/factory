@@ -62,6 +62,17 @@ function allContainers(pod: Pod): Container[] {
 
 describe("helm/octogee-gateway/ — Builder identity is never rendered", () => {
   it.each([
+    ["Shared", { gatewayClass: "shared" }],
+    ["X11 Builder VM", BUILDER_VALUES],
+    ["Omarchy Builder VM", { ...VM_VALUES, sizingTier: "m" }],
+  ])("supplies declared browser origins to the %s edge process", (_label, values) => {
+    const { pod } = renderPod("origin-proof", values);
+    const edge = pod.spec.containers.find((container) => container.name === "gateway-edge")!;
+    expect(edge.env?.filter((entry) => entry.name === "PUBLIC_APP_ORIGINS"))
+      .toEqual([{ name: "PUBLIC_APP_ORIGINS", value: "https://app-test.octogee.com" }]);
+  });
+
+  it.each([
     ["X11 VM", BUILDER_VALUES],
     ["Omarchy VM", { ...VM_VALUES, sizingTier: "m" }],
   ])("renders a %s Builder pod with no owner or slug env, annotation, label, or path", (_label, values) => {
