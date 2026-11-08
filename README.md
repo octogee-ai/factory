@@ -6,9 +6,15 @@ start of every session, the checks they run before a change reaches `main`,
 and the commands that ship a build. You can read the factory yourself instead
 of taking my word for it.
 
-Published from the Octogee monorepo at `5fc418033c0527f625dedfcec9333120064758e2`. The pin in
-`.factory-source.json` carries that commit, its date, and the exported source
-paths.
+Published from the Octogee monorepo at `5fc418033c0527f625dedfcec9333120064758e2`.
+
+## Run it
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/octogee-ai/octogee-cloud/main/install.sh | bash
+```
+
+[Try it locally](docs/getting-started.md), or [run it in production](docs/running-in-the-cloud.md) on GKE or EKS.
 
 ## What is here today
 
@@ -31,8 +37,8 @@ Builder state on PostgreSQL, the CI/CD workflows, and the operations chapters
 of the handbook. The Octogee product keeps its own private repository and
 builds on top of this one.
 
-Every file here is published from the monorepo at the pinned commit, apart
-from environment identities replaced by placeholders.
+Files listed in `.factory-source.json` are published from the monorepo, with
+environment identities replaced by placeholders. The rest is written here.
 
 ## License
 
