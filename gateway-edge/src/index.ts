@@ -10,8 +10,6 @@ import { logger } from "./middleware/logging.js";
 import { helmetMiddleware, dashboardAssetRateLimit } from "./middleware/security.js";
 import { requireAuthenticatedUid } from "./middleware/auth.js";
 import { installBodyParsers } from "./middleware/body-parsers.js";
-import { createEmailMetrics, setEmailMetrics } from "./lib/email-metrics.js";
-import { createNotificationMetrics, setNotificationMetrics } from "./lib/notification-metrics.js";
 
 import { mountApi } from "./routes/mount-api.js";
 import automationsRoutes from "./routes/automations.js";
@@ -192,9 +190,6 @@ const httpRequestTotal = new Counter({
   labelNames: ['method', 'route', 'status'] as const,
   registers: [metricsRegistry],
 });
-
-setEmailMetrics(createEmailMetrics(metricsRegistry));
-setNotificationMetrics(createNotificationMetrics(metricsRegistry));
 
 app.use(helmetMiddleware);
 app.use(corsMiddleware);
