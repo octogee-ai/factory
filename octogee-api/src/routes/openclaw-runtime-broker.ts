@@ -15,7 +15,6 @@ import { Router, type Request, type Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
-import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 
 import {
   isValidCustomChannelName,
@@ -825,7 +824,8 @@ async function isOctogeeUser(store: PlatformStateStore, mmUserId: string): Promi
 async function hasDisposableBuilderRuntime(deps: RuntimeBrokerDeps, owner: BuilderRecord, now: number): Promise<boolean> {
   if (!interactiveBuilder(owner)) return false;
   const tier = await deps.readBuilderTier(owner.uid, now);
-  return tier !== null && BUILDER_TIERS[tier].instance !== null;
+  if (tier === null) return false;
+  return (await deps.store.config.orchestrator.getSizingProfile(tier)).isolation === "isolated";
 }
 
 async function requestChatActivityDemand(

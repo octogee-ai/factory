@@ -15,6 +15,14 @@ export interface FixtureDocuments {
 }
 export type FixtureDocumentRecords = Map<string, Record<string, unknown>> | Record<string, Record<string, unknown> | undefined>;
 export declare function fixtureDocumentsAt(records: FixtureDocumentRecords): FixtureDocuments;
+export declare const FIXTURE_SIZING_PROFILES: Record<string, import("../platform-state/config.js").GatewaySizingProfile>;
+export declare function seedFixtureSizingProfiles(db: {
+    doc(path: string): {
+        set(data: Record<string, unknown>, options: {
+            merge: boolean;
+        }): Promise<unknown>;
+    };
+}): Promise<void>;
 export interface JournalFixtureOptions {
     readonly transactionFailure?: Error;
     readonly documents?: FixtureDocuments;

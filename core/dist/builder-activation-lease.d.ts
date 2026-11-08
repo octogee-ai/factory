@@ -1,20 +1,21 @@
 import type { Firestore } from "firebase-admin/firestore";
-import { type BuilderTierName } from "@octogee/shared/types/billing-tiers";
 import type { BuilderRecord } from "./platform-state/builders.js";
+import { type GatewaySizingProfile } from "./platform-state/config.js";
 import type { PlatformStateStore, Stored } from "./platform-state/store.js";
 export type BuilderRuntimeDemandCause = "run-start" | "chat" | "scheduled" | "manual";
 export type BuilderActivationLeaseResult = {
     statusCode: number;
     body: Record<string, unknown>;
 };
-export type BuilderTierReader = (uid: string, now: number) => Promise<BuilderTierName | null>;
+export type BuilderTierReader = (uid: string, now: number) => Promise<string | null>;
 export declare function firestoreBuilderTierReader(db: Pick<Firestore, "doc">): BuilderTierReader;
 export declare class BuilderTierChangedError extends Error {
     readonly uid: string;
     constructor(uid: string);
 }
 export interface CurrentBuilderTier {
-    readonly tier: BuilderTierName | null;
+    readonly tier: string | null;
+    readonly profile: GatewaySizingProfile | null;
     readonly assertCurrent: (builder: Stored<BuilderRecord> | null) => void;
 }
 export declare function withCurrentBuilderTier<T>(input: {

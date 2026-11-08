@@ -15,7 +15,6 @@ import {
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import type { FleetBrokerCustomerRestoreAuthority } from "@octogee/shared/types/fleet-broker";
 import { readWorkspaceMigrationMarker, type WorkspaceMigrationMarker, type WorkspaceMigrationPhase } from "@octogee/shared/types/workspace-migration";
-import type { BuilderTierName } from "@octogee/shared/types/billing-tiers";
 import {
   customerMigrationV2GatewayRootFenceEqual,
   customerMigrationV2GatewayRootFenceMatches,
@@ -940,7 +939,7 @@ interface CustomerMigrationV2FenceValidationInput {
   builder: Builder | null;
   targetRoot: Stored<GatewayRoot> | null;
   prior: PriorAssignment;
-  tier: BuilderTierName | null;
+  tier: string | null;
 }
 
 async function assertCustomerMigrationV2FenceCurrent(
@@ -972,7 +971,7 @@ function assertBuilderActivationCutoverAuthorized(input: {
   builder: Builder | null;
   targetRoot: Stored<GatewayRoot> | null;
   fence: CustomerMigrationV2Fence;
-  tier: BuilderTierName | null;
+  tier: string | null;
 }): void {
   const operationInput = recordOrEmpty(input.operation?.input);
   const allocation = recordOrEmpty(input.targetRoot?.allocation);

@@ -32,6 +32,7 @@ function parkedBuilderStore(): PlatformStateStore {
   };
   return {
     builders: transaction.builders,
+    config: { orchestrator: { getSizingProfile: async () => ({ isolation: "isolated", sizingTier: "s", computer: {}, fallbackStorageGb: null }) } },
     transaction: async (_options: unknown, body: (tx: unknown) => Promise<unknown>) => body(transaction),
   } as unknown as PlatformStateStore;
 }

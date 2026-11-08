@@ -2,7 +2,7 @@ import { createComputerHomeClient } from "../lib/compute-home.js";
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { MissingRecordError, type FleetRegistryRecord } from "@octogee/core/platform-state";
-import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
+import { createDocumentFixtureStore, FIXTURE_SIZING_PROFILES } from "@octogee/core/testing/journal-store";
 import type { GatewayVmSpec, HelmInstancesMap } from "@octogee/shared/types/glm";
 import type { CreateGatewayVmInput, CreateGatewayVmResult, GatewayVmClient, GatewayVmDescription } from "../lib/compute-vm";
 import { ComputeOperationError, GATEWAY_VM_ACCESS_SCOPES } from "../lib/compute-vm";
@@ -45,6 +45,7 @@ function completeGatewaySeeds(docs: Docs): Docs {
 
 function recordingStore(seed: Docs, beforeWrite?: (path: string, data: Record<string, unknown>) => void) {
   const docs = completeGatewaySeeds(seed);
+  docs["config/orchestrator"] ??= { sizingProfiles: FIXTURE_SIZING_PROFILES };
   const writes: Array<{ path: string; data: Record<string, unknown> }> = [];
   const deletes: string[] = [];
   const recorded = new Proxy(docs, {
@@ -1730,10 +1731,12 @@ describe("vmRoutesFromRecords", () => {
 });
 
 describe("runtime policy and stamping", () => {
-  it("resolves tier policy and validates VM configuration", () => {
-    expect(resolveBuilderComputerPolicy("s").runtime).toBe("gce-vm");
-    expect(resolveBuilderComputerPolicy("m").runtime).toBe("gce-vm");
-    expect(resolveBuilderComputerPolicy("l").machineType).toBe("e2-standard-4");
+  it("resolves computer policy from the stored profiles and validates VM configuration", async () => {
+    const { store } = recordingStore({});
+    await expect(resolveBuilderComputerPolicy(store, "s")).resolves.toMatchObject({ runtime: "gce-vm", machineType: "e2-medium" });
+    await expect(resolveBuilderComputerPolicy(store, "m")).resolves.toMatchObject({ runtime: "gce-vm", machineType: "e2-standard-2" });
+    await expect(resolveBuilderComputerPolicy(store, "l")).resolves.toMatchObject({ machineType: "e2-standard-4" });
+    await expect(resolveBuilderComputerPolicy(store, "xs")).rejects.toThrow("No Builder computer policy for sizing tier xs");
     expect(parseGatewayVmSpec(JSON.stringify(spec))).toEqual(spec);
     expect(() => parseGatewayVmSpec(undefined)).toThrow(/required/);
     expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, diskSizeGb: "40" }))).toThrow(/diskSizeGb/);

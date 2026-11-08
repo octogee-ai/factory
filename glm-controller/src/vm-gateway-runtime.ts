@@ -1,5 +1,10 @@
-import type { BuilderRecord, FleetRegistryRecord, PlatformStateStore } from "@octogee/core/platform-state";
-import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
+import { isDeepStrictEqual } from "node:util";
+import {
+  type BuilderRecord,
+  type FleetRegistryRecord,
+  type GatewayComputerProfile,
+  type PlatformStateStore,
+} from "@octogee/core/platform-state";
 import type { SizingTier } from "@octogee/shared/types/sizing";
 import {
   isGatewayRuntime,
@@ -59,11 +64,20 @@ export interface VmGatewayRuntimeDeps {
   log: (msg: string) => void;
 }
 
-export function resolveBuilderComputerPolicy(sizingTier: SizingTier | null | undefined) {
+export async function resolveBuilderComputerPolicy(
+  store: Pick<PlatformStateStore, "config">,
+  sizingTier: SizingTier | null | undefined,
+): Promise<GatewayComputerProfile> {
   const tier = sizingTier ?? "s";
-  const computer = Object.values(BUILDER_TIERS).find((entry) => entry.instance === tier)?.computer;
-  if (!computer) throw new Error(`No Builder computer policy for sizing tier ${tier}`);
-  return computer;
+  const config = await store.config.orchestrator.get();
+  const matches = Object.entries(config?.sizingProfiles ?? {}).flatMap(([key, entry]) =>
+    entry.isolation === "isolated" && entry.sizingTier === tier ? [{ key, computer: entry.computer }] : []);
+  const [first] = matches;
+  if (!first) throw new Error(`No Builder computer policy for sizing tier ${tier}`);
+  if (matches.some(({ computer }) => !isDeepStrictEqual(computer, first.computer))) {
+    throw new Error(`Conflicting Builder computer policies for sizing tier ${tier}: ${matches.map(({ key }) => key).join(", ")}`);
+  }
+  return first.computer;
 }
 
 export function resolveDisposableBuilderParking(env: Record<string, string | undefined>): boolean {
@@ -105,10 +119,9 @@ function assertSpecChoices(spec: Partial<GatewayVmSpec>): void {
   if (!isGatewayVmBootDiskType(spec.bootDiskType)) throw new Error("GATEWAY_VM_SPEC_JSON.bootDiskType must be pd-ssd or pd-balanced");
 }
 
-type BuilderComputerPolicy = ReturnType<typeof resolveBuilderComputerPolicy>;
 type TierVmShape = Pick<GatewayVmSpec, "machineType" | "diskSizeGb" | "bootDiskType" | "homeDiskSizeGb" | "provisioningModel" | "desktop">;
 
-function tierVmShape(computer: BuilderComputerPolicy): TierVmShape {
+function tierVmShape(computer: GatewayComputerProfile): TierVmShape {
   if (!computer.machineType || !computer.provisioningModel || !computer.bootDisk) throw new Error("a gce-vm Builder tier needs a machine type, provisioning model and boot disk");
   return {
     machineType: computer.machineType, diskSizeGb: computer.bootDisk.sizeGb, bootDiskType: computer.bootDisk.type,
@@ -145,7 +158,7 @@ function validateRuntimeObservation(data: Partial<FleetRegistryRecord>, gatewayI
 }
 
 interface GatewayRuntimeStampInput {
-  store: Pick<PlatformStateStore, "fleetRegistry" | "transaction">;
+  store: Pick<PlatformStateStore, "config" | "fleetRegistry" | "transaction">;
   gatewayId: string;
   initial: FleetRegistryRecord;
   gatewayClass: string | null | undefined;
@@ -157,7 +170,7 @@ interface GatewayRuntimeStampInput {
 
 async function reconcileStampedVmSpec(input: GatewayRuntimeStampInput, data: Partial<FleetRegistryRecord>): Promise<void> {
   if (data.runtime !== "gce-vm" || input.gatewayClass !== "builder" || !input.vmSpec) return;
-  const computer = resolveBuilderComputerPolicy(input.sizingTier);
+  const computer = await resolveBuilderComputerPolicy(input.store, input.sizingTier);
   if (computer.runtime !== "gce-vm") return;
   const shape = tierVmShape(computer);
   await input.store.transaction({ label: "gateway-runtime.reconcile-vm-spec" }, async (transaction) => {
@@ -181,7 +194,7 @@ export async function stampGatewayRuntime(input: GatewayRuntimeStampInput): Prom
     return data.runtime;
   }
   const deployedCluster = hasObservedClusterPods(data) || hasPriorClusterDeployment(data, input.gatewayId);
-  const computer = input.gatewayClass === "builder" && !deployedCluster ? resolveBuilderComputerPolicy(input.sizingTier) : null;
+  const computer = input.gatewayClass === "builder" && !deployedCluster ? await resolveBuilderComputerPolicy(input.store, input.sizingTier) : null;
   const runtime: GatewayRuntime = computer?.runtime ?? "cluster";
   if (runtime === "gce-vm" && !input.vmSpec) throw new Error(`gateway ${input.gatewayId}: gce-vm runtime needs a vmSpec`);
   await input.assertStorage?.(runtime);

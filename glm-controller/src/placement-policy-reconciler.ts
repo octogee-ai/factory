@@ -100,6 +100,8 @@ import {
   type PlatformStateStore,
   type PlatformStateTransaction,
   type Stored,
+  requireSizingProfile,
+  type GatewaySizingProfile,
 } from "@octogee/core/platform-state";
 import {
   resolveContinuousBuilderPlacement,
@@ -108,7 +110,6 @@ import {
   type ContinuousPlacementOwnedGateway,
 } from "@octogee/shared/types/orchestrator-placement";
 import type { SizingTier } from "@octogee/shared/types/sizing";
-import { BUILDER_TIERS, type BuilderTierName } from "@octogee/shared/types/billing-tiers";
 import {
   advanceActivationLeaseFirestore,
   requestTierTransitionFirestore,
@@ -266,6 +267,7 @@ export interface PlacementPolicyAssignment {
 }
 
 export interface PlacementPolicySnapshot {
+  sizingProfiles: Readonly<Record<string, GatewaySizingProfile>>;
   defaultGatewayId: string;
   sharedGatewayIds: readonly string[];
   idleMs: number;
@@ -314,7 +316,7 @@ export interface AllocateDisposableGatewayInput {
   generation: number;
   sourceGatewayId: string;
   sourceAssignmentEpoch: number;
-  entitlementTier: BuilderTierName;
+  entitlementTier: string;
   sizingTier: SizingTier;
   parkedGateway?: { gatewayId: string; generation: number };
 }
@@ -324,7 +326,7 @@ export interface TierTransitionInput {
   leaseId: string;
   generation: number;
   targetGatewayId: string;
-  tier: BuilderTierName;
+  tier: string;
 }
 
 export interface AdvanceActivationLeaseInput {
@@ -910,8 +912,9 @@ function entitledComputerSizing(
 ): SizingTier | null {
   if (!accountAllowsInteractiveAccess(user.data)) return null;
   const tier = resolveBuilderTier(user.data, new Date(context.deps.now()));
-  const config = tier ? BUILDER_TIERS[tier] : null;
-  return config?.computer?.runtime === "gce-vm" ? config.instance : null;
+  if (tier === null) return null;
+  const profile = requireSizingProfile(context.state.sizingProfiles, tier);
+  return profile.isolation === "isolated" && profile.computer.runtime === "gce-vm" ? profile.sizingTier : null;
 }
 
 function ownedPausedDisposableGateway(gateway: PlacementPolicyGateway, uid: string): boolean {
@@ -1482,7 +1485,7 @@ async function reconcileRequestedActivation(
   const sourceAssignmentEpoch = Number.isSafeInteger(lease.raw.sourceAssignmentEpoch)
     ? lease.raw.sourceAssignmentEpoch as number
     : null;
-  const entitlementTier = nonEmptyString(lease.raw.entitlementTier) as BuilderTierName | null;
+  const entitlementTier = nonEmptyString(lease.raw.entitlementTier) as string | null;
   const sizingTier = nonEmptyString(lease.raw.sizingTier) as SizingTier | null;
   if (
     !sourceGatewayId ||
@@ -3387,6 +3390,7 @@ async function readPlacementPolicySnapshot(
     gateways.filter((gateway) => sharedGatewayIds.includes(gateway.gatewayId)),
   );
   return {
+    sizingProfiles: orchestrator?.sizingProfiles ?? {},
     defaultGatewayId,
     sharedGatewayIds,
     idleMs,

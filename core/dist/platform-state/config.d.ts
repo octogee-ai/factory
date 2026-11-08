@@ -23,6 +23,8 @@ export type GatewaySizingProfile = {
     readonly computer: GatewayComputerProfile;
     readonly fallbackStorageGb: number | null;
 };
+export declare function isolatedSizingTier(profile: GatewaySizingProfile | null): SizingTier | null;
+export declare function requireSizingProfile(profiles: Readonly<Record<string, GatewaySizingProfile>>, sizingKey: string): GatewaySizingProfile;
 export interface OrchestratorConfig {
     readonly sharedGatewayAutoscaling: SharedGatewayAutoscalingConfig | null;
     readonly sizingProfiles: Readonly<Record<string, GatewaySizingProfile>>;

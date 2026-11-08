@@ -8,7 +8,6 @@ import { resolveActivityConversation } from "../lib/activity-conversation.js";
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
-import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import {
   requestBuilderActivationLease,
@@ -43,7 +42,9 @@ async function activationGatewayId(
 ): Promise<string | null> {
   if (!userData) return null;
   const builderTier = resolveBuilderTier(userData);
-  if (!builderTier || BUILDER_TIERS[builderTier].instance === null) return null;
+  if (!builderTier) return null;
+  const sizingProfile = await platformStateStore.config.orchestrator.getSizingProfile(builderTier);
+  if (sizingProfile.isolation !== "isolated") return null;
   const builder = await platformStateStore.builders.records.get(uid);
   if (!builder || !accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined })) {
     return null;

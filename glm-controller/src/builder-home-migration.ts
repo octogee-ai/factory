@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { BUILDER_TIERS, type BuilderTierName } from "@octogee/shared/types/billing-tiers";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { withCurrentBuilderTier, type BuilderTierReader } from "@octogee/core/builder-activation-lease";
 import type {
@@ -9,6 +8,7 @@ import type {
   PlatformStateStore,
   RecordPatch,
   Stored,
+  GatewayComputerProfile,
 } from "@octogee/core/platform-state";
 import type { AllocateDisposableGatewayInput } from "./placement-policy-reconciler.js";
 import { HomeCopyFailure, homeCopyCapacity, type CopyHomeDisk, type HomeCopyInput, type HomeCopyProgress } from "./lib/compute-home-copy.js";
@@ -66,7 +66,7 @@ export interface BuilderHomeMigrationDeps {
   log: (message: string) => void;
 }
 
-export function assertHomeMigrationAuthority(owner: BuilderRecord, tier: BuilderTierName | null, request: AllocateDisposableGatewayInput): void {
+export function assertHomeMigrationAuthority(owner: BuilderRecord, tier: string | null, request: AllocateDisposableGatewayInput): void {
   const lease = owner.activationLease;
   if (!accountAllowsInteractiveAccess({ accountLifecycle: owner.accountLifecycle ?? undefined }) || tier !== request.entitlementTier ||
       owner.gateway?.gatewayId !== request.sourceGatewayId || lease?.leaseId !== request.leaseId || lease.generation !== request.generation ||
@@ -90,10 +90,15 @@ function assertNativeCopy(state: BuilderHomeMigration): void {
 class HomeMigration {
   constructor(private readonly deps: BuilderHomeMigrationDeps, private readonly request: AllocateDisposableGatewayInput) {}
 
-  private get policy() {
-    const policy = BUILDER_TIERS[this.request.entitlementTier].computer;
-    if (!policy) throw new Error("home migration requires a computer tier policy");
-    return policy;
+  private computerPolicy: GatewayComputerProfile | null = null;
+  private get policy(): GatewayComputerProfile {
+    if (!this.computerPolicy) throw new Error("home migration requires a computer tier policy");
+    return this.computerPolicy;
+  }
+  private async loadPolicy(): Promise<void> {
+    const profile = await this.deps.store.config.orchestrator.getSizingProfile(this.request.entitlementTier);
+    if (profile.isolation !== "isolated") throw new Error("home migration requires a computer tier policy");
+    this.computerPolicy = profile.computer;
   }
   private withCurrentTier<T>(run: (assertOwner: (owner: Stored<BuilderRecord> | null) => Stored<BuilderRecord>) => Promise<T>): Promise<T> {
     return withCurrentBuilderTier({ store: this.deps.store, readBuilderTier: this.deps.readBuilderTier, uid: this.request.uid, now: this.deps.now() },
@@ -227,6 +232,7 @@ class HomeMigration {
     return true;
   }
   async reconcile(): Promise<boolean> {
+    await this.loadPolicy();
     const owner = builderHomeOwner(await this.readOwner());
     await this.removeExpiredHome(owner.homeStorage);
     const source = await this.deps.inventory(this.request.uid, owner);

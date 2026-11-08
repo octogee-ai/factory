@@ -1,3 +1,5 @@
+export { isolatedSizingTier, requireSizingProfile } from "./config.js";
+export { seedSizingProfiles } from "./firestore/config.js";
 export { MANAGED_CHANNEL_INSTALLATION, MANAGED_GIT_HOST } from "./channel-identities.js";
 export { AlreadyExistsError, BackendFailureError, ContentionExhaustedError, DuplicateRecordError, FenceMismatchError, isPlatformStateError, MalformedRecordError, MissingRecordError, UnsupportedOperationError, } from "./errors.js";
 export { createFirestorePlatformStateStore, } from "./firestore/store.js";

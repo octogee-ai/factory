@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import {
   isGatewayDesiredDoc,
   isGatewayRuntimeDoc,
@@ -26,7 +27,13 @@ import type {
   BuilderRepositories,
   GatewayFenceHolders,
 } from "../platform-state/builders.js";
-import type { ConfigRepositories, OrchestratorConfig, PlatformConfigEntry, PlatformConfigKey } from "../platform-state/config.js";
+import {
+  requireSizingProfile,
+  type ConfigRepositories,
+  type OrchestratorConfig,
+  type PlatformConfigEntry,
+  type PlatformConfigKey,
+} from "../platform-state/config.js";
 import type { ControllerStateRepositories } from "../platform-state/controller-state.js";
 import {
   AlreadyExistsError,
@@ -49,7 +56,7 @@ import {
   builderRecordFromData,
   builderRoleFromData,
 } from "../platform-state/firestore/builders.js";
-import { parseOrchestratorConfig, parsePlatformConfigValue, platformConfigEntryFromData } from "../platform-state/firestore/config.js";
+import { parseOrchestratorConfig, parsePlatformConfigValue, platformConfigEntryFromData, seedSizingProfiles } from "../platform-state/firestore/config.js";
 import { parseSharedPoolScalerState } from "../platform-state/firestore/controller-state.js";
 import { assertAbsentFence, assertFenceEquals, assertFenceOneOf } from "../platform-state/firestore/fences.js";
 import { migrationTransferTaskFromData } from "../platform-state/firestore/migration-tasks.js";
@@ -1346,6 +1353,14 @@ function controllerStateRepositories(documents: FixtureDocuments, write: Write):
   });
 }
 
+export const FIXTURE_SIZING_PROFILES = seedSizingProfiles(BUILDER_TIERS);
+
+export async function seedFixtureSizingProfiles(db: {
+  doc(path: string): { set(data: Record<string, unknown>, options: { merge: boolean }): Promise<unknown> };
+}): Promise<void> {
+  await db.doc("config/orchestrator").set({ sizingProfiles: FIXTURE_SIZING_PROFILES }, { merge: true });
+}
+
 function orchestratorConfigRepository(documents: FixtureDocuments, write: Write): ConfigRepositories["orchestrator"] {
   const path = "config/orchestrator";
   return partialRepository<ConfigRepositories["orchestrator"]>("config.orchestrator", {
@@ -1354,6 +1369,11 @@ function orchestratorConfigRepository(documents: FixtureDocuments, write: Write)
       return row === undefined
         ? null
         : { ...parseOrchestratorConfig(structuredClone(row)), revision: FIXTURE_REVISION } as Stored<OrchestratorConfig>;
+    },
+    getSizingProfile: async (sizingKey) => {
+      const row = documents.get(path);
+      const seeded = row === undefined ? {} : parseOrchestratorConfig(structuredClone(row)).sizingProfiles;
+      return requireSizingProfile({ ...FIXTURE_SIZING_PROFILES, ...seeded }, sizingKey);
     },
     patch: async (patch) => {
       write(() => documents.set(path, applyPatch(documents.get(path) ?? {}, structuredClone(patch))));

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
-import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
+import { isolatedSizingTier } from "./platform-state/config.js";
 export function firestoreBuilderTierReader(db) {
     return async (uid, now) => {
         const snapshot = await db.doc(`users/${uid}`).get();
@@ -21,12 +21,13 @@ export async function withCurrentBuilderTier(input, run) {
     for (let attempt = 1;; attempt += 1) {
         const revision = (await input.store.builders.records.get(input.uid))?.revision ?? null;
         const tier = await input.readBuilderTier(input.uid, input.now);
+        const profile = tier === null ? null : await input.store.config.orchestrator.getSizingProfile(tier);
         const assertCurrent = (builder) => {
             if ((builder?.revision ?? null) !== revision)
                 throw new BuilderTierChangedError(input.uid);
         };
         try {
-            return await run({ tier, assertCurrent });
+            return await run({ tier, profile, assertCurrent });
         }
         catch (error) {
             if (!(error instanceof BuilderTierChangedError) || attempt === BUILDER_TIER_READ_ATTEMPTS)
@@ -48,7 +49,7 @@ export async function recordBuilderRuntimeActivity(input) {
     if (!Number.isFinite(now) || now <= 0)
         throw new Error("invalid runtime activity time");
     const tierRead = { store: input.store, readBuilderTier: input.readBuilderTier, uid: input.uid, now };
-    return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.activity" }, async (transaction) => {
+    return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, profile, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.activity" }, async (transaction) => {
         const [builder, assignment] = await Promise.all([
             transaction.builders.records.get(input.uid),
             transaction.gateways.assignments.get(input.gatewayId, input.uid),
@@ -58,7 +59,7 @@ export async function recordBuilderRuntimeActivity(input) {
         if (!builder || !lease || !activeActivityLease(lease, input.gatewayId) ||
             builder.gateway?.gatewayId !== input.gatewayId ||
             !servingActivityAssignment(assignment, input.uid, input.gatewayId) ||
-            "result" in activationDemandEligibility(builder, entitlementTier))
+            "result" in activationDemandEligibility(builder, entitlementTier, profile))
             return false;
         const previous = typeof lease.lastActiveAt === "number" ? lease.lastActiveAt : 0;
         if (now - previous >= 60_000) {
@@ -146,7 +147,7 @@ function parkedDuplicateBody(lease) {
         },
     };
 }
-function activationDemandEligibility(builder, entitlementTier) {
+function activationDemandEligibility(builder, entitlementTier, profile) {
     if (!accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined })) {
         return {
             result: {
@@ -169,7 +170,7 @@ function activationDemandEligibility(builder, entitlementTier) {
             },
         };
     }
-    const sizingTier = BUILDER_TIERS[entitlementTier].instance;
+    const sizingTier = isolatedSizingTier(profile);
     if (!sizingTier) {
         return {
             result: {
@@ -256,7 +257,7 @@ export async function requestBuilderActivationLease(input) {
     const cause = input.cause;
     const observedAt = input.observedAt;
     const tierRead = { store: input.store, readBuilderTier: input.readBuilderTier, uid: input.uid, now: input.now ?? Date.now() };
-    return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.request" }, async (transaction) => {
+    return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, profile, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.request" }, async (transaction) => {
         const [builder, assignment] = await Promise.all([
             transaction.builders.records.get(input.uid),
             transaction.gateways.assignments.get(reportingGatewayId, input.uid),
@@ -291,7 +292,7 @@ export async function requestBuilderActivationLease(input) {
                 body: { code: "builder-computer-recovery-in-progress", error: "computer recovery is in progress" },
             };
         }
-        const eligibility = activationDemandEligibility(builder, entitlementTier);
+        const eligibility = activationDemandEligibility(builder, entitlementTier, profile);
         if ("result" in eligibility)
             return eligibility.result;
         const { sizingTier, slug } = eligibility;

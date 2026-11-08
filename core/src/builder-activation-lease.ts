@@ -3,8 +3,8 @@ import type { Firestore } from "firebase-admin/firestore";
 
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier, type TierResolvable } from "@octogee/shared/types/billing";
-import { BUILDER_TIERS, type BuilderTierName } from "@octogee/shared/types/billing-tiers";
 import type { BuilderActivationLease, BuilderRecord } from "./platform-state/builders.js";
+import { isolatedSizingTier, type GatewaySizingProfile } from "./platform-state/config.js";
 import type { GatewayAssignment } from "./platform-state/gateways.js";
 import type { PlatformStateStore, Stored } from "./platform-state/store.js";
 
@@ -19,7 +19,7 @@ export type BuilderActivationLeaseResult = {
   body: Record<string, unknown>;
 };
 
-export type BuilderTierReader = (uid: string, now: number) => Promise<BuilderTierName | null>;
+export type BuilderTierReader = (uid: string, now: number) => Promise<string | null>;
 
 export function firestoreBuilderTierReader(db: Pick<Firestore, "doc">): BuilderTierReader {
   return async (uid, now) => {
@@ -38,7 +38,8 @@ export class BuilderTierChangedError extends Error {
 }
 
 export interface CurrentBuilderTier {
-  readonly tier: BuilderTierName | null;
+  readonly tier: string | null;
+  readonly profile: GatewaySizingProfile | null;
   readonly assertCurrent: (builder: Stored<BuilderRecord> | null) => void;
 }
 
@@ -49,11 +50,12 @@ export async function withCurrentBuilderTier<T>(
   for (let attempt = 1; ; attempt += 1) {
     const revision = (await input.store.builders.records.get(input.uid))?.revision ?? null;
     const tier = await input.readBuilderTier(input.uid, input.now);
+    const profile = tier === null ? null : await input.store.config.orchestrator.getSizingProfile(tier);
     const assertCurrent = (builder: Stored<BuilderRecord> | null): void => {
       if ((builder?.revision ?? null) !== revision) throw new BuilderTierChangedError(input.uid);
     };
     try {
-      return await run({ tier, assertCurrent });
+      return await run({ tier, profile, assertCurrent });
     } catch (error) {
       if (!(error instanceof BuilderTierChangedError) || attempt === BUILDER_TIER_READ_ATTEMPTS) throw error;
     }
@@ -95,7 +97,7 @@ export async function recordBuilderRuntimeActivity(input: {
   const now = input.now ?? Date.now();
   if (!Number.isFinite(now) || now <= 0) throw new Error("invalid runtime activity time");
   const tierRead = { store: input.store, readBuilderTier: input.readBuilderTier, uid: input.uid, now };
-  return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.activity" }, async (transaction) => {
+  return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, profile, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.activity" }, async (transaction) => {
     const [builder, assignment] = await Promise.all([
       transaction.builders.records.get(input.uid),
       transaction.gateways.assignments.get(input.gatewayId, input.uid),
@@ -105,7 +107,7 @@ export async function recordBuilderRuntimeActivity(input: {
     if (!builder || !lease || !activeActivityLease(lease, input.gatewayId) ||
       builder.gateway?.gatewayId !== input.gatewayId ||
       !servingActivityAssignment(assignment, input.uid, input.gatewayId) ||
-      "result" in activationDemandEligibility(builder, entitlementTier)) return false;
+      "result" in activationDemandEligibility(builder, entitlementTier, profile)) return false;
     const previous = typeof lease.lastActiveAt === "number" ? lease.lastActiveAt : 0;
     if (now - previous >= 60_000) {
       await transaction.builders.records.patchActivationLease(input.uid, { lastActiveAt: now }, {
@@ -223,14 +225,15 @@ function parkedDuplicateBody(
 type ActivationDemandEligibility =
   | { result: BuilderActivationLeaseResult }
   | {
-      entitlementTier: keyof typeof BUILDER_TIERS;
+      entitlementTier: string;
       sizingTier: string;
       slug: string;
     };
 
 function activationDemandEligibility(
   builder: BuilderRecord,
-  entitlementTier: BuilderTierName | null,
+  entitlementTier: string | null,
+  profile: GatewaySizingProfile | null,
 ): ActivationDemandEligibility {
   if (!accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined })) {
     return {
@@ -254,7 +257,7 @@ function activationDemandEligibility(
       },
     };
   }
-  const sizingTier = BUILDER_TIERS[entitlementTier].instance;
+  const sizingTier = isolatedSizingTier(profile);
   if (!sizingTier) {
     return {
       result: {
@@ -370,7 +373,7 @@ export async function requestBuilderActivationLease(
   const observedAt = input.observedAt!;
   const tierRead = { store: input.store, readBuilderTier: input.readBuilderTier, uid: input.uid, now: input.now ?? Date.now() };
 
-  return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.request" }, async (transaction) => {
+  return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, profile, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.request" }, async (transaction) => {
     const [builder, assignment] = await Promise.all([
       transaction.builders.records.get(input.uid),
       transaction.gateways.assignments.get(reportingGatewayId, input.uid),
@@ -405,7 +408,7 @@ export async function requestBuilderActivationLease(
         body: { code: "builder-computer-recovery-in-progress", error: "computer recovery is in progress" },
       };
     }
-    const eligibility = activationDemandEligibility(builder, entitlementTier);
+    const eligibility = activationDemandEligibility(builder, entitlementTier, profile);
     if ("result" in eligibility) return eligibility.result;
     const { sizingTier, slug } = eligibility;
     const existing = builder.activationLease;

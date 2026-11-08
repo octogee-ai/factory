@@ -1,5 +1,7 @@
 export type * from "./builders.js";
 export type * from "./config.js";
+export { isolatedSizingTier, requireSizingProfile } from "./config.js";
+export { seedSizingProfiles } from "./firestore/config.js";
 export type * from "./controller-state.js";
 export type * from "./errors.js";
 export type * from "./fleet-registry.js";

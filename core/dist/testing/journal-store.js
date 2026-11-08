@@ -1,12 +1,14 @@
 import { isDeepStrictEqual } from "node:util";
+import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import { isGatewayDesiredDoc, isGatewayRuntimeDoc, isReleasePayload, parsePlatformReleaseRecord, PLATFORM_RELEASE_RECORD_DOC_PATH, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
 import { gatewayVmRuntimeDocPath, isGatewayVmRuntimeBundle, isOperationAuditRecord, isOperationAuditRow, } from "@octogee/shared/types/glm";
 import { CUSTOMER_DELETION_JOBS_COLLECTION } from "@octogee/shared/types/account-lifecycle";
 import { MODEL_BROKER_GATEWAY_POINTERS_COLLECTION, MODEL_BROKER_TOKENS_COLLECTION } from "@octogee/shared/types/model-broker-usage";
 import { placementReceiptDocId } from "@octogee/shared/types/placement-receipts";
+import { requireSizingProfile, } from "../platform-state/config.js";
 import { AlreadyExistsError, DuplicateRecordError, FenceMismatchError, MalformedRecordError, MissingRecordError, UnsupportedOperationError, } from "../platform-state/errors.js";
 import { agentStoreFromData, agentStoreKeyOf, BUILDER_ACTIVATION_LEASE_PATH, BUILDER_FENCE_PATHS, BUILDER_MIRROR_PATHS, builderPatchPaths, builderRecordFromData, builderRoleFromData, } from "../platform-state/firestore/builders.js";
-import { parseOrchestratorConfig, parsePlatformConfigValue, platformConfigEntryFromData } from "../platform-state/firestore/config.js";
+import { parseOrchestratorConfig, parsePlatformConfigValue, platformConfigEntryFromData, seedSizingProfiles } from "../platform-state/firestore/config.js";
 import { parseSharedPoolScalerState } from "../platform-state/firestore/controller-state.js";
 import { assertAbsentFence, assertFenceEquals, assertFenceOneOf } from "../platform-state/firestore/fences.js";
 import { migrationTransferTaskFromData } from "../platform-state/firestore/migration-tasks.js";
@@ -1215,6 +1217,10 @@ function controllerStateRepositories(documents, write) {
         }),
     });
 }
+export const FIXTURE_SIZING_PROFILES = seedSizingProfiles(BUILDER_TIERS);
+export async function seedFixtureSizingProfiles(db) {
+    await db.doc("config/orchestrator").set({ sizingProfiles: FIXTURE_SIZING_PROFILES }, { merge: true });
+}
 function orchestratorConfigRepository(documents, write) {
     const path = "config/orchestrator";
     return partialRepository("config.orchestrator", {
@@ -1223,6 +1229,11 @@ function orchestratorConfigRepository(documents, write) {
             return row === undefined
                 ? null
                 : { ...parseOrchestratorConfig(structuredClone(row)), revision: FIXTURE_REVISION };
+        },
+        getSizingProfile: async (sizingKey) => {
+            const row = documents.get(path);
+            const seeded = row === undefined ? {} : parseOrchestratorConfig(structuredClone(row)).sizingProfiles;
+            return requireSizingProfile({ ...FIXTURE_SIZING_PROFILES, ...seeded }, sizingKey);
         },
         patch: async (patch) => {
             write(() => documents.set(path, applyPatch(documents.get(path) ?? {}, structuredClone(patch))));

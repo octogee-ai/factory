@@ -33,6 +33,19 @@ export type GatewaySizingProfile =
       readonly fallbackStorageGb: number | null;
     };
 
+export function isolatedSizingTier(profile: GatewaySizingProfile | null): SizingTier | null {
+  return profile?.isolation === "isolated" ? profile.sizingTier : null;
+}
+
+export function requireSizingProfile(
+  profiles: Readonly<Record<string, GatewaySizingProfile>>,
+  sizingKey: string,
+): GatewaySizingProfile {
+  const profile = profiles[sizingKey];
+  if (!profile) throw new Error(`gateway sizing profile is not configured: ${sizingKey}`);
+  return profile;
+}
+
 export interface OrchestratorConfig {
   readonly sharedGatewayAutoscaling: SharedGatewayAutoscalingConfig | null;
   readonly sizingProfiles: Readonly<Record<string, GatewaySizingProfile>>;
