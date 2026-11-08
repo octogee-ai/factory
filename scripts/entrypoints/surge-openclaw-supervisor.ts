@@ -1,4 +1,5 @@
 import { prepareBuilderPrelaunchConfig } from "../lib/system-config.js";
+import { prepareBuilderSystemStore } from "../lib/builder-system-store.js";
 import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("surge-openclaw-supervisor");
@@ -51,7 +52,9 @@ export interface StartSurgeOpenClawSupervisorOptions {
   stopGraceMs?: number;
   readinessReleased?: () => Promise<boolean>;
   prelaunchBoot?: boolean;
-  preparePrelaunch?: () => Promise<void>;
+  preparePrelaunch?: (assertHeld: () => Promise<void>) => Promise<void>;
+  assertPrelaunchAuthority?: () => Promise<void>;
+  prepareSystemStore?: (assertStopped: () => Promise<void>) => Promise<void>;
   activationMigrationId?: string;
   spawnOpenClaw?: () => SpawnedOpenClaw;
   prepareTarget?: () => Promise<void>;
@@ -328,6 +331,7 @@ interface StartPermittedOpenClawChildOptions {
   podUid: string;
   prepare: boolean;
   prepareTarget: () => Promise<void>;
+  prepareSystemStore?: (assertStopped: () => Promise<void>) => Promise<void>;
   prepareDatabases: () => Promise<void>;
   probeHealthz: () => Promise<boolean>;
   reapOrphanedOpenClaw: () => Promise<void>;
@@ -346,6 +350,18 @@ async function preparePermittedOpenClawChild(
   opts.signal.throwIfAborted();
   await opts.reapOrphanedOpenClaw();
   opts.signal.throwIfAborted();
+  const assertStopped = async () => {
+    opts.signal.throwIfAborted();
+    const state = await opts.current();
+    if (state.podUid !== opts.podUid || state.mode !== "permitted" || state.phase !== "starting" || opts.child.get()) {
+      throw new Error("Builder system-store preparation lost its stopped-writer boundary");
+    }
+  };
+  if (opts.prepareSystemStore) {
+    await assertStopped();
+    await opts.prepareSystemStore(assertStopped);
+    await assertStopped();
+  }
   if (opts.prepare || opts.before.role === "target") await opts.prepareTarget();
   opts.signal.throwIfAborted();
   const afterPreparation = await opts.current();
@@ -618,7 +634,14 @@ async function initializeBootGate(input: {
   if (holdForPrelaunch && !matchingActivation) initial = await gate.holdPrelaunch({ podUid: opts.podUid });
   if (opts.prelaunchBoot) {
     if (!opts.preparePrelaunch) throw new Error("Builder prelaunch config preparation is unavailable");
-    await opts.preparePrelaunch();
+    const assertHeld = async () => {
+      const state = await readOwnedSurgeGate(gate, opts.podUid);
+      if (state.role !== "normal" || state.mode !== "held" || state.phase !== "held") throw new Error("Builder prelaunch lost its stopped-writer hold");
+      await opts.assertPrelaunchAuthority?.();
+    };
+    await assertHeld();
+    await opts.preparePrelaunch(assertHeld);
+    await assertHeld();
     initial = await gate.permitNormal({ podUid: opts.podUid });
     await readiness.release({ targetPodUid: opts.podUid });
   }
@@ -747,6 +770,7 @@ export async function startSurgeOpenClawSupervisor(
         podUid: opts.podUid,
         prepare,
         prepareTarget: opts.prepareTarget ?? prepareConfiguredBuilderTarget,
+        prepareSystemStore: opts.prepareSystemStore,
         prepareDatabases: opts.prepareDatabases ?? (() => defaultPrepareDatabases(opts)),
         probeHealthz,
         reapOrphanedOpenClaw,
@@ -894,16 +918,18 @@ export function createSurgeOpenClawBootWatcher(input: {
     : undefined });
 }
 
-async function nativeBootMode(gatewayId: string, revisionId: string): Promise<{ prelaunchBoot: boolean; activationMigrationId?: string }> {
+async function nativeBootMode(gatewayId: string, revisionId: string): Promise<{ prelaunchBoot: boolean; activationMigrationId?: string; builderAuthorityKey?: string }> {
   let prelaunchBoot = false;
+  let builderAuthorityKey: string | undefined;
   let activationMigrationId: string | undefined;
   if (process.env.GATEWAY_RUNTIME_KIND === "gce-vm") {
     const identity = await createFleetBrokerClient(gatewayId, revisionId).builderIdentity({ nativeBoot: true });
     if (identity.state !== "claimed" || !identity.bootMode) throw new Error("Native Builder boot mode is unavailable");
     prelaunchBoot = identity.bootMode === "prelaunch";
+    builderAuthorityKey = JSON.stringify([identity.gatewayId, identity.ownerUid, identity.builderSlug, identity.leaseId, identity.generation]);
     activationMigrationId = identity.activationMigrationId;
   }
-  return { prelaunchBoot, activationMigrationId };
+  return { prelaunchBoot, activationMigrationId, builderAuthorityKey };
 }
 
 async function main(): Promise<void> {
@@ -932,7 +958,14 @@ async function main(): Promise<void> {
     log,
     bootWatcher,
     ...boot,
-    preparePrelaunch: async () => {
+    prepareSystemStore: (assertStopped) => prepareBuilderSystemStore({ root: openclawDir, assertCurrent: assertStopped, log,
+      readAuthority: async () => (await nativeBootMode(gatewayId, revisionId)).builderAuthorityKey }),
+    assertPrelaunchAuthority: async () => {
+      const current = await nativeBootMode(gatewayId, revisionId);
+      if (!current.prelaunchBoot || !boot.builderAuthorityKey || current.builderAuthorityKey !== boot.builderAuthorityKey) throw new Error("Builder prelaunch authority changed");
+    },
+    preparePrelaunch: async (assertHeld) => {
+      await prepareBuilderSystemStore({ root: openclawDir, assertCurrent: assertHeld, log });
       const slug = builderClaimSlug();
       if (!slug) throw new Error("Builder prelaunch requires its owner slug");
       await prepareBuilderPrelaunchConfig(openclawDir, slug);

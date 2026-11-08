@@ -858,6 +858,9 @@ async function resumeComputer(deps: ComputerLifecycleDeps, gatewayId: string, de
 }
 
 async function bindParkedComputer(deps: ComputerLifecycleDeps, gatewayId: string, description: GatewayVmDescription, input: CreateGatewayVmInput): Promise<GatewayVmDescription> {
+  if (description.metadata["gateway-image"] !== input.metadata["gateway-image"]) {
+    description = await stopSuspendedComputer(deps, gatewayId, description, "change its Gateway image");
+  }
   try {
     await deps.vm.bind(description.name, description.zone, bindingOf(input));
     return description;
@@ -901,7 +904,7 @@ async function confirmRetainedHome(deps: ComputerLifecycleDeps, gatewayId: strin
 }
 
 async function prepareParkedUpgrade(deps: ComputerLifecycleDeps, input: {
-  gatewayId: string; ownerUid: string; description: GatewayVmDescription; spec: GatewayVmSpec;
+  gatewayId: string; ownerUid: string; image: string; description: GatewayVmDescription; spec: GatewayVmSpec;
   bind: (description: GatewayVmDescription) => Promise<GatewayVmDescription>;
 }): Promise<GatewayVmDescription | null> {
   const { gatewayId, ownerUid, spec } = input;
@@ -918,7 +921,10 @@ async function prepareParkedUpgrade(deps: ComputerLifecycleDeps, input: {
       if (recorded) description = await input.bind(description);
     }
   }
-  if (description.metadata["octogee-owner-uid"] === ownerUid) return upgradeStoppedBoot(deps, gatewayId, description, spec);
+  if (description.metadata["octogee-owner-uid"] === ownerUid) {
+    if (description.status === "SUSPENDED" && description.metadata["gateway-image"] !== input.image) description = await input.bind(description);
+    return upgradeStoppedBoot(deps, gatewayId, description, spec);
+  }
   deps.log(`[vm-gateway-runtime] ${gatewayId}: boot image upgrade skipped; computer owner binding requires reconciliation`);
   return description;
 }
@@ -1115,7 +1121,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
     let description = existing ? await deps.vm.describe(existing.instanceName, existing.zone) : null;
     if (!description) description = await deps.vm.findByLabels(ownerComputerLabels(deps.environment, ownerUid));
     const recovery = await requireHomeRecovery(deps, { gatewayId, ownerUid, data, description });
-    if (description) description = await prepareParkedUpgrade(deps, { gatewayId, ownerUid, description, spec,
+    if (description) description = await prepareParkedUpgrade(deps, { gatewayId, ownerUid, image, description, spec,
       bind: (parked) => reconcileComputerBinding(gatewayId, ownerUid, input, parked) });
     const retainedHome = await readRetainedBuilderHome(deps.db, ownerUid);
     if (!description && retainedHome) {

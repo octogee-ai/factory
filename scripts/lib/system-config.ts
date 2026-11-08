@@ -2,6 +2,7 @@ import { applyAgentStoreDatabasePatch } from "../entrypoints/pre-boot-config.js"
 import { localStateStoreKind, localStateStorePath } from "./openclaw-state-store.js";
 import { agentIdsFromConfig } from "@octogee/core/byosub-restore";
 import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
+import { redactSecrets } from "@octogee/shared/types/secret-redaction";
 import { clearMountedMarker } from "./local-coach-wired.js";
 import { disableSystemConfigWatch, isSystemConfigRuntimeProjection } from "./system-config-watch-state.js";
 import { createHash } from "node:crypto";
@@ -2104,6 +2105,10 @@ async function writeBuilderPrelaunchConfig(
       ...replacePaths.flatMap(key => ["--replace-path", key])], {
       env: { ...env, OPENCLAW_STATE_DIR: openclawDir, OPENCLAW_CONFIG_PATH: systemConfigPath(openclawDir) },
     });
-    if (result.code !== 0) throw new Error(`Native Builder prelaunch config write failed (exit ${result.code})`);
+    if (result.code !== 0) {
+      const diagnostic = redactSecrets(result.stderr?.trim() ?? "").slice(0, 2000);
+      const detail = diagnostic ? ": " + diagnostic : "";
+      throw new Error(`Native Builder prelaunch config write failed (exit ${result.code})${detail}`);
+    }
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }

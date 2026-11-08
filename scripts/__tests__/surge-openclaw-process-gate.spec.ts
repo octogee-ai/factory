@@ -423,13 +423,14 @@ describe("surge OpenClaw process supervisor", () => {
     });
     const supervisor = await startSurgeOpenClawSupervisor({
       openclawDir, podUid: "builder-pod", socketPath, log: () => {}, readinessReleased: async () => false,
-      prepareTarget: async () => {}, prepareDatabases: async () => {}, bootWatcher,
+      prepareSystemStore: async (assertStopped) => { await assertStopped(); expect(children).toHaveLength(0); order.push("system"); },
+      prepareTarget: async () => { order.push("target"); }, prepareDatabases: async () => {}, bootWatcher,
       spawnOpenClaw: () => { order.push("spawn"); const child = new FakeChild(); children.push(child); return child; },
       probeHealthz: healthzOf(children), healthTimeoutMs: 100,
     });
     try {
       await createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath }).permitNormal();
-      expect(order).toEqual(["inspect", "spawn"]);
+      expect(order).toEqual(["system", "target", "inspect", "spawn"]);
       expect(inspection).toHaveBeenCalledWith({ stateDir: openclawDir, configPath: path.join(openclawDir, "system_config/openclaw.json") });
     } finally { await supervisor.stop(); inspection.mockRestore(); }
   });
@@ -446,6 +447,22 @@ describe("surge OpenClaw process supervisor", () => {
     try { await expect(client.permitNormal()).rejects.toThrow("newer store schema refused"); expect(spawnOpenClaw).not.toHaveBeenCalled();
       await expect(client.status()).resolves.toMatchObject({ phase: "held" });
     } finally { await supervisor.stop(); inspection.mockRestore(); }
+  });
+
+  it("keeps the Builder held when native system-store maintenance refuses startup", async () => {
+    const openclawDir = await temporaryOpenClawDir(), socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const spawnOpenClaw = vi.fn(() => new FakeChild()), prepareTarget = vi.fn(async () => {});
+    const supervisor = await startSurgeOpenClawSupervisor({
+      openclawDir, podUid: "builder-pod", socketPath, log: () => {}, readinessReleased: async () => false,
+      prepareSystemStore: async () => { throw new Error("native system-store maintenance refused"); },
+      prepareTarget, prepareDatabases: async () => {}, spawnOpenClaw, probeHealthz: async () => false,
+    });
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    try {
+      await expect(client.permitNormal()).rejects.toThrow("native system-store maintenance refused");
+      expect(spawnOpenClaw).not.toHaveBeenCalled(); expect(prepareTarget).not.toHaveBeenCalled();
+      await expect(client.status()).resolves.toMatchObject({ phase: "held" });
+    } finally { await supervisor.stop(); }
   });
 
   it("does not apply Builder configured-store inspection to a Shared supervisor", async () => {
@@ -996,6 +1013,17 @@ describe("surge OpenClaw process supervisor", () => {
 });
 
 describe("Native prelaunch boot mode", () => {
+  it("holds startup when prelaunch authority changes during retained-store preparation", async () => {
+    const openclawDir = await temporaryOpenClawDir(), podUid = "native-pod";
+    const spawnOpenClaw = vi.fn(() => new FakeChild());
+    const authority = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValue(new Error("authority changed"));
+    await expect(startSurgeOpenClawSupervisor({ openclawDir, podUid, log: () => {},
+      socketPath: path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`), prelaunchBoot: true,
+      assertPrelaunchAuthority: authority, preparePrelaunch: async assertHeld => { await assertHeld(); }, spawnOpenClaw, probeHealthz: async () => false,
+    })).rejects.toThrow("authority changed");
+    expect(spawnOpenClaw).not.toHaveBeenCalled();
+    await expect(createSurgeOpenClawProcessGate(openclawDir).read()).resolves.toMatchObject({ mode: "held", phase: "held" });
+  });
   it("boots an unassigned safe runtime during verified prelaunch", async () => {
     const openclawDir = await temporaryOpenClawDir(), podUid = "native-pod";
     const readiness = createSurgeReadinessGate(openclawDir, podUid);

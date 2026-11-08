@@ -2153,6 +2153,8 @@ describe("Builder prelaunch config", () => {
     try {
       const before = fs.readFileSync(path.join(repo, "openclaw.json"), "utf8");
       await expect(prepareBuilderPrelaunchConfig(root, "alice", env, async () => ({ code: 1, stdout: "" }))).rejects.toThrow("Native Builder prelaunch config write failed");
+      await expect(prepareBuilderPrelaunchConfig(root, "alice", env, async () => ({ code: 1, stdout: "", stderr: "Gateway holder namespace is unknown; password=example-secret" })))
+        .rejects.toThrow("Gateway holder namespace is unknown; password=[redacted]");
       expect(fs.readFileSync(path.join(repo, "openclaw.json"), "utf8")).toBe(before);
       await prepareBuilderPrelaunchConfig(root, "alice", env, nativeWrite);
       const live = JSON.parse(fs.readFileSync(path.join(repo, "openclaw.json"), "utf8"));

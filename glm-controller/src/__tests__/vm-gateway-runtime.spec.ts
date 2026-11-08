@@ -1168,27 +1168,44 @@ describe("suspend parking", () => {
     expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ status: "RUNNING", instanceId: "4242", stopReason: null });
   });
 
-  it("refreshes bootstrap metadata on a suspended computer bound to the same gateway without stopping it, then resumes", async () => {
+  it("cold-starts a suspended computer before changing its Gateway image", async () => {
+    let current: GatewayVmDescription = suspended;
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "operator" } } }, {
-      describe: vi.fn(async () => running).mockResolvedValueOnce(suspended),
+      describe: vi.fn(async () => current),
+      stop: vi.fn(async () => { current = { ...current, status: "TERMINATED" }; }),
+      start: vi.fn(async () => { current = running; return { fellBackToStandard: false }; }),
     });
     await h.runtime.upsertInstance({ ...upsertOpts, imageTag: "main.new-agent" });
     expect(h.vm.bind).toHaveBeenCalledWith(COMPUTER, "us-west1-b", expect.objectContaining({ metadata: expect.objectContaining({ "gateway-image": `${upsertOpts.imageRepository}:main.new-agent` }) }));
-    expect(h.vm.resume).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
-    expect(h.vm.stop).not.toHaveBeenCalled();
-    expect(h.vm.start).not.toHaveBeenCalled();
-    expect(h.vm.bind.mock.invocationCallOrder[0]).toBeLessThan(h.vm.resume.mock.invocationCallOrder[0]);
+    expect(h.vm.resume).not.toHaveBeenCalled();
+    expect(h.vm.stop).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.start).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.stop.mock.invocationCallOrder[0]).toBeLessThan(h.vm.bind.mock.invocationCallOrder[0]);
+    expect(h.vm.bind.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
+  });
+
+  it("checks the accepted Desktop image after cold-stopping an owned computer for a Gateway image change", async () => {
+    let current: GatewayVmDescription = { ...suspended, metadata: { ...suspended.metadata, "octogee-owner-uid": "UidA" } };
+    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "operator" } } }, {
+      describe: vi.fn(async () => current),
+      stop: vi.fn(async () => { current = { ...current, status: "TERMINATED" }; }),
+      start: vi.fn(async () => { current = running; return { fellBackToStandard: false }; }),
+    });
+    await h.runtime.upsertInstance({ ...upsertOpts, imageTag: "main.new-agent" });
+    expect(h.vm.readFamilyImage).toHaveBeenCalledWith(spec.imageFamily, spec.imageProject);
+    expect(h.vm.stop.mock.invocationCallOrder[0]).toBeLessThan(h.vm.readFamilyImage.mock.invocationCallOrder[0]);
+    expect(h.vm.readFamilyImage.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
   });
 
   it("stops a suspended same-gateway computer and refreshes again when Compute rejects the metadata refresh, then starts it", async () => {
-    let current: GatewayVmDescription = suspended;
+    let current: GatewayVmDescription = { ...suspended, metadata: { ...suspended.metadata, "octogee-api-url": "http://172.20.7.8:3001" } };
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "operator" } } }, {
       describe: vi.fn(async () => current),
       bind: vi.fn(async () => {}).mockRejectedValueOnce(new Error("UNSUPPORTED_OPERATION: instance is suspended")),
       stop: vi.fn(async () => { current = { ...current, status: "TERMINATED" }; }),
       start: vi.fn(async () => { current = running; return { fellBackToStandard: false }; }),
     });
-    await h.runtime.upsertInstance({ ...upsertOpts, imageTag: "main.new-agent" });
+    await h.runtime.upsertInstance(upsertOpts);
     expect(h.vm.bind).toHaveBeenCalledTimes(2);
     expect(h.vm.resume).not.toHaveBeenCalled();
     expect(h.vm.bind.mock.invocationCallOrder[0]).toBeLessThan(h.vm.stop.mock.invocationCallOrder[0]);
