@@ -151,7 +151,9 @@ without waking; retired gateways are skipped. **Ship PROD** deploys a TEST-passe
 converges the PROD Builder fleet. Cowboy attempts the latest accepted computer image when
 a stopped computer boots or restarts after preemption, retaining the home disk and logging
 any skipped upgrade. Project autosave and shutdown flush are best effort. Active computers
-stay running and suspended computers resume on their current boot; Admin **Replace
+stay running and suspended computers resume on their current boot when the Gateway image is unchanged.
+A suspended computer changing Gateway images is stopped before rebinding and cold-started on the retained home.
+Admin **Replace
 computer** forces a rollout.
 Build main constructs the desktop VM before it succeeds, so the boot image carries
 that build's Gateway image and new computers skip the image pull. The image is
