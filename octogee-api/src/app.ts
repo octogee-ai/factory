@@ -49,14 +49,7 @@ import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import { operatorRailRegistry, type ModelBrokerRailRegistry } from "./lib/model-broker-rails.js";
 import { createDesktopAuthRoutes } from "./routes/desktop-auth.js";
 import { createFeatureRoutes } from "./routes/features.js";
-import { FeaturePolicy } from "./lib/feature-policy.js";
-import {
-  captureProductAnalyticsEvent,
-  type ProductAnalytics,
-} from "./lib/product-analytics.js";
-import type { ProductAnalyticsEvent } from "@octogee/shared/types/product-analytics";
-import { createPostHogServices, type PostHogServices } from "./lib/posthog.js";
-import { createProductObservability } from "./lib/product-observability.js";
+import { DisabledFeatureFlagProvider, FeaturePolicy } from "./lib/feature-policy.js";
 import { createBuilderGatewayRoutes } from "../../gateway-edge/src/routes/builder/gateways.js";
 import { createProjectCreateRoutes } from "../../gateway-edge/src/routes/projects/create.js";
 import { createProjectRepoSourceRoutes } from "../../gateway-edge/src/routes/projects/repo-source.js";
@@ -192,16 +185,21 @@ export const SIDECAR_BROKER_ROUTES = new Set([
 
 export interface ProductRouteDeps {
   featurePolicy: FeaturePolicy;
-  analytics: ProductAnalytics;
-  observability: ReturnType<typeof createProductObservability>;
+}
+
+export interface ProductRuntime {
+  featurePolicy: FeaturePolicy;
+  clusterRoutes(deps: ProductRouteDeps): ClusterRouteTable;
+  apiRoutes(deps: ProductRouteDeps): ClusterRouteTable;
+  internalRoutes(deps: ProductRouteDeps): ClusterRouteTable;
+  onSignupOfferBudgetInterruption(input: { uid: string; reason: "waiting_for_unlock" | "hard_cap_exhausted" }): void;
+  onProjectCreated(uid: string): void;
+  shutdown(): Promise<void>;
 }
 
 export interface ProductExtension {
   validateBoot(): void;
-  registerMetrics(registry: Registry): void;
-  clusterRoutes(deps: ProductRouteDeps): ClusterRouteTable;
-  apiRoutes(deps: ProductRouteDeps): ClusterRouteTable;
-  internalRoutes(deps: ProductRouteDeps): ClusterRouteTable;
+  createRuntime(input: { metricsRegistry: Registry }): ProductRuntime;
   modelBrokerRails?: ModelBrokerRailRegistry;
 }
 
@@ -222,8 +220,6 @@ export interface PlatformAppOptions {
   featurePolicy?: FeaturePolicy;
   voiceRelayConfig?: VoiceRelayConfig | null;
   voiceOpenAiApiKey?: string | null;
-  productAnalytics?: ProductAnalytics;
-  postHogServices?: PostHogServices;
   projectRunControlPlane?: ProjectRunControlPlane;
   projectRunArtifactStore?: ProjectRunArtifactStore;
   projectPreviewArtifactStore?: ProjectPreviewArtifactStore;
@@ -333,44 +329,8 @@ async function readFreshGithubToken(uid: string): Promise<string | null> {
   throw new ConnectorTokenReadError(409, token.reason);
 }
 
-function productRuntime(opts: PlatformAppOptions, metricsRegistry: Registry) {
-  const observability = createProductObservability(metricsRegistry);
-  const postHog = opts.postHogServices ?? createPostHogServices(process.env, {
-    featureMetrics: observability,
-    logger,
-  });
-  return {
-    observability,
-    postHog,
-    featurePolicy: opts.featurePolicy ?? postHog.featurePolicy,
-    analytics: opts.productAnalytics ?? postHog.productAnalytics,
-  };
-}
-
-function mountFeatureRoutes(app: ReturnType<typeof express>, runtime: ReturnType<typeof productRuntime>): void {
-  app.use("/api/features", createFeatureRoutes({ featurePolicy: runtime.featurePolicy }));
-}
-
 function mountRouteTable(app: ReturnType<typeof express>, routes: ClusterRouteTable): void {
   for (const [path, route] of routes) app.use(path, route);
-}
-
-function recordProductEvent(
-  runtime: ReturnType<typeof productRuntime>,
-  uid: string,
-  event: ProductAnalyticsEvent,
-): void {
-  try {
-    captureProductAnalyticsEvent({
-      analytics: runtime.analytics,
-      metrics: runtime.observability,
-      uid,
-      event,
-    });
-  } catch (error) {
-    runtime.observability.event(event.name, "dropped");
-    logger.error("product analytics capture failed", { event: event.name, error });
-  }
 }
 
 function clusterRouteOverrides(
@@ -546,16 +506,11 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   const metricsRegistry = new Registry();
   collectDefaultMetrics({ register: metricsRegistry });
   const httpRequestMetrics = createHttpRequestMetrics(metricsRegistry);
-  opts.product?.registerMetrics(metricsRegistry);
-  const product = productRuntime(opts, metricsRegistry);
-  const productRouteDeps: ProductRouteDeps = {
-    featurePolicy: product.featurePolicy,
-    analytics: product.analytics,
-    observability: product.observability,
-  };
-  const featurePolicy = product.featurePolicy;
+  const product = opts.product?.createRuntime({ metricsRegistry }) ?? null;
+  const featurePolicy = opts.featurePolicy ?? product?.featurePolicy ?? new FeaturePolicy(new DisabledFeatureFlagProvider(), { logger });
+  const productRouteDeps: ProductRouteDeps = { featurePolicy };
   const modelBrokerRails = opts.product?.modelBrokerRails ?? operatorRailRegistry();
-  app.locals.postHogShutdown = product.postHog.shutdown;
+  app.locals.productShutdown = product?.shutdown;
   const tenantBindingMetrics = createTenantBindingMetrics(metricsRegistry);
   const tenantBindingReviewer = opts.tenantBindingReviewer ?? createGatewayIdentityReviewer({
     reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
@@ -605,7 +560,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   installBodyParsers(app);
   mountDiagnosticRoutes(app, metricsRegistry, tenantBindingHealth);
   app.use("/api/auth/desktop", createDesktopAuthRoutes({ db, auth, store: platformStateStore }));
-  mountFeatureRoutes(app, product);
+  app.use("/api/features", createFeatureRoutes({ featurePolicy }));
   app.use("/api/projects", createProjectPreviewDiscoveryRoutes({
     db,
     state: platformStateStore,
@@ -686,10 +641,10 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     featurePolicy,
     voiceOpenAiApiKey ? createOpenAiVoiceCatalog(voiceOpenAiApiKey) : createVoiceCatalog(voiceRelayConfig, { log: voiceRelayLog }),
     () => projectRunControlPlane.prewarm(),
-    opts.product?.clusterRoutes(productRouteDeps) ?? [],
+    product?.clusterRoutes(productRouteDeps) ?? [],
   ));
-  mountRouteTable(app, opts.product?.apiRoutes(productRouteDeps) ?? []);
-  mountRouteTable(app, opts.product?.internalRoutes(productRouteDeps) ?? []);
+  mountRouteTable(app, product?.apiRoutes(productRouteDeps) ?? []);
+  mountRouteTable(app, product?.internalRoutes(productRouteDeps) ?? []);
   const chatArtifacts = defaultChatArtifactRoutes();
   app.use("/api/chat/artifacts", chatArtifacts.public);
   // octogee-api-only: Gitea admin broker. Gateway provisioners call this with
@@ -726,10 +681,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     db,
     store: platformStateStore,
     modelBrokerRails,
-    onSignupOfferBudgetInterruption: ({ uid, reason }) => recordProductEvent(product, uid, {
-      name: "model_budget_interrupted",
-      properties: { reason },
-    }),
+    onSignupOfferBudgetInterruption: product?.onSignupOfferBudgetInterruption,
   }));
   // octogee-api-only: broker sidecar GitHub file-browser token reads
   // so cattle pods do not need Firestore or KMS access to user secrets.
@@ -748,10 +700,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     store: platformStateStore,
     prewarmProjectRunCapacity: () => projectRunControlPlane.prewarm(),
     actionBaseUrl: appOrigin,
-    onProjectCreated: (uid) => recordProductEvent(product, uid, {
-      name: "project_created",
-      properties: { source: "agent" },
-    }),
+    onProjectCreated: product?.onProjectCreated,
   }));
   const projectRunFinalizerDeps = {
     store: projectRunStore,

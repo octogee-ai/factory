@@ -112,13 +112,6 @@ export {
 } from './agent-characters.js';
 
 export type {
-  ProductAnalyticsEvent,
-  ProductAnalyticsEventName,
-  ProductAnalyticsEventProperties,
-} from './product-analytics.js';
-export { PRODUCT_ANALYTICS_EVENT_NAMES } from './product-analytics.js';
-
-export type {
   Workspace,
   WorkspaceVisibility,
   WorkspaceMattermost,

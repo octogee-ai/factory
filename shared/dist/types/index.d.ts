@@ -12,8 +12,6 @@ export { TALK_INPUT_SAMPLE_RATE, TALK_OUTPUT_SAMPLE_RATE, TALK_PROTOCOL_VERSION,
 export type { AgentLook, AgentLookStyle } from './agent-look.js';
 export { AGENT_LOOK_STYLES, parseAgentLook } from './agent-look.js';
 export { BRAND_LOOK_COLOR, CHARACTER_NAMES, CHARACTER_STYLES, DEFAULT_AGENT_LOOK, LOOK_COLORS, OCTO_MASCOT, characterBackSvg, characterSvg, } from './agent-characters.js';
-export type { ProductAnalyticsEvent, ProductAnalyticsEventName, ProductAnalyticsEventProperties, } from './product-analytics.js';
-export { PRODUCT_ANALYTICS_EVENT_NAMES } from './product-analytics.js';
 export type { Workspace, WorkspaceVisibility, WorkspaceMattermost, WorkspaceGitea, } from './workspace.js';
 export type { WorkspaceVibe, WorkspaceChannelKind } from './display-names.js';
 export { WORKSPACE_VIBE_PRESETS, DEFAULT_VIBE_NOUN, WORKSPACE_CHANNEL_DISPLAY_NAMES, TYPING_PHRASES_BY_VIBE, DEFAULT_TYPING_PHRASES, isWorkspaceVibe, titleCaseVibe, computeWorkspaceDisplayName, computeProjectChannelDisplayName, } from './display-names.js';

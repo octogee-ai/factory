@@ -33,7 +33,7 @@ if (process.env.NODE_ENV !== "test") {
   });
   const shutdown = createGracefulShutdown({
     server,
-    flushPostHog: app.locals.postHogShutdown as (() => Promise<void>) | undefined,
+    flushPostHog: app.locals.productShutdown as (() => Promise<void>) | undefined,
     onError(message, error) {
       process.exitCode = 1;
       logger.error(message, { error });
