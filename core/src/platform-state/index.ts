@@ -27,6 +27,14 @@ export {
 } from "./firestore/store.js";
 export { agentImportRecordFromPayload } from "./firestore/jobs.js";
 export {
+  createPlatformStatePool,
+  platformDatabasePoolConfig,
+  platformDatabaseSettingsFromEnvironment,
+  type PlatformDatabaseSettings,
+  type PlatformDatabaseSslMode,
+  type PlatformStatePoolOptions,
+} from "./postgres/connection.js";
+export {
   DEFAULT_PLATFORM_STATE_SCHEMA,
   migratePlatformState,
   type MigratePlatformStateOptions,
