@@ -10,28 +10,7 @@ import {
   pollerHeartbeatReport,
   readHeartbeatLiveness,
   readMountedCustomers,
-  heartbeatTeardownAction,
 } from "../heartbeat-relocation.js";
-
-describe("heartbeatTeardownAction — retire must preserve a durable GatewayDoc", () => {
-  it("CLEARS (never deletes) when gateways/{id} is a GatewayDoc (numeric latestRelease)", () => {
-    expect(
-      heartbeatTeardownAction({
-        gatewayId: "default",
-        latestRelease: 4,
-        desiredRelease: 4,
-        desiredStatus: "retired",
-      }),
-    ).toBe("clear");
-  });
-
-  it("DELETES a legacy heartbeat-only doc", () => {
-    expect(
-      heartbeatTeardownAction({ status: "ready", version: "abc", lastHeartbeatAt: 1, mountedCustomers: [] }),
-    ).toBe("delete");
-    expect(heartbeatTeardownAction(undefined)).toBe("delete");
-  });
-});
 
 describe("pollerHeartbeatReport — the poller's live telemetry report", () => {
   const INTERNAL_URL = "http://octogee-gateway-bender.octogee.svc.cluster.local:18789";

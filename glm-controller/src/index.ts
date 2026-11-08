@@ -12,7 +12,7 @@ import { createHomeCopyClient } from "./lib/compute-home-copy.js";
 import type { ComputeRequest } from "./lib/compute-vm.js";
 import { assertBuilderRuntimeStorage } from "./builder-runtime-storage.js";
 import { runNormalFleetMutation } from "@octogee/core/normal-fleet-mutation";
-import { createFirestorePlatformStateStore, platformStateStoreFromEnvironment, MissingRecordError, type CustomerDeletionJob, type PlacementAdmissionPolicy, type FleetRegistryRecord, type GatewayRoot, type OpaqueMap, type GatewayRootFields, type GatewayRootPatch, type OperationRecord, type PlatformStateStore, type SecretsRepository, type Stored, type WatchChange, type WatchEvent } from "@octogee/core/platform-state";
+import { createFirestorePlatformStateStore, platformStateStoreFromEnvironment, MissingRecordError, type CustomerDeletionJob, type PlacementAdmissionPolicy, type FleetRegistryRecord, type GatewayRoot, type OpaqueMap, type GatewayRootFields, type GatewayRootPatch, type OperationRecord, type PlatformStateStore, type Stored, type WatchChange, type WatchEvent, type FleetRegistryInventory } from "@octogee/core/platform-state";
 import { restartGatewayProcess, restartGatewayDeployment } from './lib/runtime-restart-transport.js';
 import { assertMigrationRestartUnfenced } from './lib/runtime-restart-coordinator.js';
 import { assertOwnerOperationUnfenced } from './lib/computer-recovery-fence.js';
@@ -32,7 +32,6 @@ import { randomUUID } from "node:crypto";
 import { initializeApp, applicationDefault } from "firebase-admin/app";
 import {
   getFirestore,
-  FieldValue,
   type Firestore,
   type QueryDocumentSnapshot,
 } from "firebase-admin/firestore";
@@ -85,13 +84,9 @@ import {
   readHeartbeatLiveness,
   readMountedCustomers,
   heartbeatReportIsRedundant,
-  heartbeatTeardownAction,
-  LEGACY_HEARTBEAT_FIELDS,
 } from "./heartbeat-relocation.js";
 import { createGatewayRuntimeConfigPreparer } from "./gateway-runtime-config.js";
 import {
-  isGatewayDesiredDoc,
-  isGatewayRuntimeDoc,
   projectGatewayDesiredRootForGateway,
   type GatewayRuntimeDoc,
   type ReleasePayload,
@@ -252,7 +247,6 @@ import {
   mapWorkspaceChannelDoc,
 } from "@octogee/core/customer-snapshot-mapping";
 import {
-  GATEWAYS_COLLECTION,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   SIGNATURE_HEADER,
 } from "@octogee/shared/types/fleet-controller";
@@ -506,7 +500,6 @@ function createGatewayDeploymentRestarter(
 }
 
 interface ControllerDeps {
-  db: Firestore;
   store: PlatformStateStore;
   helm: HelmRunner;
   kubeOps?: KubeOps;
@@ -653,13 +646,6 @@ async function readGatewaySystemConfigCommit(
   return typeof acceptedCommit === "string" ? acceptedCommit : null;
 }
 
-function clearedHeartbeatFieldsPatch(): Record<string, unknown> {
-  const del = FieldValue.delete();
-  const out: Record<string, unknown> = {};
-  for (const field of LEGACY_HEARTBEAT_FIELDS) out[field] = del;
-  return out;
-}
-
 async function syncGatewayModelKeySecrets(
   deps: ControllerDeps,
   gateways: readonly DurableGateway[],
@@ -759,7 +745,7 @@ async function syncFleetIngressIfConfigured(
   const syncFleetIngress = deps.syncFleetIngress;
   if (!syncFleetIngress) return;
   try {
-    await syncFleetIngress(await readDurableServingFleetGateways(deps.db));
+    await syncFleetIngress(await readDurableServingFleetGateways(deps.store));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`(source=fleet-ingress) ${message}`);
@@ -778,23 +764,18 @@ interface StrayGlmDoc {
   remedy: string;
 }
 
-interface RuntimeQueryDoc {
-  id: string;
-  data(): unknown;
-}
-
-function collectDurableRuntimeRoots(docs: ReadonlyArray<RuntimeQueryDoc>): {
+function collectDurableRuntimeRoots(stored: Iterable<Stored<GatewayRoot>>): {
   gateways: DurableGateway[];
   invalidRootIds: string[];
 } {
   const gateways: DurableGateway[] = [];
   const invalidRootIds: string[] = [];
-  for (const doc of docs) {
-    const authorization = gatewayAuthorizationFromRootDocument(doc.data(), doc.id);
+  for (const { revision: _revision, ...root } of stored) {
+    const authorization = gatewayAuthorizationFromRootDocument(root, root.gatewayId);
     if (authorization) {
       gateways.push(authorization.gateway as DurableGateway);
     } else {
-      invalidRootIds.push(doc.id);
+      invalidRootIds.push(root.gatewayId);
     }
   }
   return { gateways, invalidRootIds };
@@ -802,70 +783,52 @@ function collectDurableRuntimeRoots(docs: ReadonlyArray<RuntimeQueryDoc>): {
 
 const REVISION_GLM_DOC_ID = /-r\d+$/u;
 
-function strayGlmDocRemedy(doc: RuntimeQueryDoc, data: Record<string, unknown> | undefined): string {
-  if (REVISION_GLM_DOC_ID.test(doc.id)) return "revision doc; run scripts/ops/cutover-simple-roll.ts";
-  const fields = Object.keys(data ?? {}).sort().join(", ") || "none";
-  return `not a runtime doc of a durable gateway, fields: ${fields}; delete ${GLM_GATEWAYS_COLLECTION}/${doc.id}`;
+function strayGlmDocRemedy(gatewayId: string, fields: readonly string[]): string {
+  if (REVISION_GLM_DOC_ID.test(gatewayId)) return "revision doc; run scripts/ops/cutover-simple-roll.ts";
+  return `not a runtime doc of a durable gateway, fields: ${fields.join(", ") || "none"}; delete ${GLM_GATEWAYS_COLLECTION}/${gatewayId}`;
 }
 
-function classifyDurableRuntimeGlmDocs(
-  docs: ReadonlyArray<RuntimeQueryDoc>,
+function classifyFleetRegistryInventory(
+  inventory: FleetRegistryInventory,
   gateways: readonly DurableGateway[],
 ): {
   runtimeDocs: GatewayRuntimeDoc[];
   strayGlmDocs: StrayGlmDoc[];
 } {
-  const runtimeDocs: GatewayRuntimeDoc[] = [];
-  const strayGlmDocs: StrayGlmDoc[] = [];
   const gatewayIds = new Set(gateways.map((gateway) => gateway.gatewayId));
-  for (const doc of docs) {
-    const data = doc.data();
-    if (isGatewayRuntimeDoc(data) && data.gatewayId === doc.id && gatewayIds.has(doc.id)) {
-      runtimeDocs.push(data);
+  const runtimeDocs: GatewayRuntimeDoc[] = [];
+  const strayGlmDocs: StrayGlmDoc[] = inventory.foreign.map(({ gatewayId, fields }) => ({
+    id: gatewayId,
+    remedy: strayGlmDocRemedy(gatewayId, fields),
+  }));
+  for (const { revision: _revision, ...record } of inventory.records) {
+    const runtime: GatewayRuntimeDoc = { docKind: "runtime", ...record };
+    if (gatewayIds.has(record.gatewayId)) {
+      runtimeDocs.push(runtime);
     } else {
-      strayGlmDocs.push({ id: doc.id, remedy: strayGlmDocRemedy(doc, data as Record<string, unknown> | undefined) });
+      strayGlmDocs.push({ id: record.gatewayId, remedy: strayGlmDocRemedy(record.gatewayId, Object.keys(runtime).sort()) });
     }
   }
   return { runtimeDocs, strayGlmDocs };
 }
 
-async function readDurableRuntimeGateways(db: Firestore): Promise<DurableRuntimeState> {
-  const [rootSnap, glmSnap] = await Promise.all([
-    db.collection(GATEWAYS_COLLECTION).get(),
-    db.collection(GLM_GATEWAYS_COLLECTION).get(),
-  ]);
-  const roots = collectDurableRuntimeRoots(rootSnap.docs);
-  const glm = classifyDurableRuntimeGlmDocs(glmSnap.docs, roots.gateways);
-  return {
-    ...roots,
-    ...glm,
-  };
+async function readDurableRuntimeGateways(store: PlatformStateStore): Promise<DurableRuntimeState> {
+  const [roots, inventory] = await Promise.all([store.gateways.roots.list(), store.fleetRegistry.inventory()]);
+  const durable = collectDurableRuntimeRoots(roots);
+  return { ...durable, ...classifyFleetRegistryInventory(inventory, durable.gateways) };
 }
 
-// A targeted pass converges named gateways, so it reads named documents. The
-// stray/invalid assertions still run, bounded to the documents actually read;
-// whole-fleet assertions stay with the full pass.
 export async function readTargetedDurableRuntimeGateways(
-  db: Firestore,
+  store: PlatformStateStore,
   gatewayIds: readonly string[],
 ): Promise<DurableRuntimeState> {
   const ids = [...new Set(gatewayIds)];
   if (ids.length === 0) {
     return { gateways: [], runtimeDocs: [], invalidRootIds: [], strayGlmDocs: [] };
   }
-  const [rootSnaps, glmSnaps] = await Promise.all([
-    db.getAll(...ids.map((id) => db.collection(GATEWAYS_COLLECTION).doc(id))),
-    db.getAll(...ids.map((id) => db.collection(GLM_GATEWAYS_COLLECTION).doc(id))),
-  ]);
-  const roots = collectDurableRuntimeRoots(rootSnaps.filter((snap) => snap.exists));
-  const glm = classifyDurableRuntimeGlmDocs(
-    glmSnaps.filter((snap) => snap.exists),
-    roots.gateways,
-  );
-  return {
-    ...roots,
-    ...glm,
-  };
+  const [roots, inventory] = await Promise.all([store.gateways.roots.getMany(ids), store.fleetRegistry.inventory(ids)]);
+  const durable = collectDurableRuntimeRoots(roots.values());
+  return { ...durable, ...classifyFleetRegistryInventory(inventory, durable.gateways) };
 }
 
 function assertDurableRuntimeState(state: DurableRuntimeState): void {
@@ -884,8 +847,8 @@ function assertDurableRuntimeState(state: DurableRuntimeState): void {
   }
 }
 
-async function readDurableServingFleetGateways(db: Firestore): Promise<FleetGateway[]> {
-  const state = await readDurableRuntimeGateways(db);
+async function readDurableServingFleetGateways(store: PlatformStateStore): Promise<FleetGateway[]> {
+  const state = await readDurableRuntimeGateways(store);
   assertDurableRuntimeState(state);
   return state.gateways
     .filter((gateway) => gateway.desiredStatus !== "retired")
@@ -902,7 +865,6 @@ async function syncDurableRuntimeDependencies(
 }
 
 interface GatewayConvergencePassDeps {
-  db: Firestore;
   store: PlatformStateStore;
   helm: HelmRunner;
   kubeOps: KubeOps;
@@ -1080,10 +1042,10 @@ export async function runGatewayConvergencePass(
   passDeps: GatewayConvergencePassDeps,
   gatewayIds?: readonly string[],
 ): Promise<void> {
-  const { db, helm, log } = passDeps;
+  const { store, helm, log } = passDeps;
   const state = gatewayIds
-    ? await readTargetedDurableRuntimeGateways(db, gatewayIds)
-    : await readDurableRuntimeGateways(db);
+    ? await readTargetedDurableRuntimeGateways(store, gatewayIds)
+    : await readDurableRuntimeGateways(store);
   assertDurableRuntimeState(state);
   const runtimeById = new Map(state.runtimeDocs.map((doc) => [doc.gatewayId, doc]));
   const failures: string[] = [];
@@ -1448,7 +1410,7 @@ async function reconcileOnce(
   dependenciesSyncedGatewayIds: ReadonlySet<string>,
 ): Promise<void> {
   const runtime = await runReconcilePhase(deps, "durable-state", async () => {
-    const state = await readDurableRuntimeGateways(deps.db);
+    const state = await readDurableRuntimeGateways(deps.store);
     assertDurableRuntimeState(state);
     return state;
   });
@@ -1468,7 +1430,7 @@ async function reconcileGatewayChanges(
 ): Promise<void> {
   const scope = `gateways=${gatewayIds.length}`;
   const runtime = await runReconcilePhase(deps, "durable-state", async () => {
-    const state = await readTargetedDurableRuntimeGateways(deps.db, gatewayIds);
+    const state = await readTargetedDurableRuntimeGateways(deps.store, gatewayIds);
     assertDurableRuntimeState(state);
     return state;
   }, scope);
@@ -2655,7 +2617,7 @@ async function createControllerRuntime(db: Firestore, store: PlatformStateStore)
     createGatewayRuntimeConfigPreparer(resolveApiServerEgressCidrs);
 
   const handlerSyncFleetIngress = async () => {
-    await syncEdgeIngressForGateways(await readDurableServingFleetGateways(db));
+    await syncEdgeIngressForGateways(await readDurableServingFleetGateways(store));
   };
 
   const fleetControllerPrivateKey = requireEnv(
@@ -2670,7 +2632,6 @@ async function createControllerRuntime(db: Firestore, store: PlatformStateStore)
 
   const runGatewayConvergence = (gatewayIds?: readonly string[]) =>
     runGatewayConvergencePass({
-      db,
       store,
       helm,
       kubeOps,
@@ -2690,7 +2651,6 @@ async function createControllerRuntime(db: Firestore, store: PlatformStateStore)
   });
 
   const deps: ControllerDeps = {
-    db,
     store,
     helm,
     kubeOps,
@@ -2920,12 +2880,13 @@ function collectMigrationProjects(
 }
 
 function migrationProjectCheckoutScope(
-  gatewayData: unknown,
+  stored: Stored<GatewayRoot> | null,
   gatewayId: string | undefined,
   uid: string,
   slug: string,
 ): FleetBrokerProjectCheckoutScope {
-  if (!gatewayId) return "workspace-only";
+  if (!gatewayId || stored === null) return "workspace-only";
+  const { revision: _revision, ...gatewayData } = stored;
   const root = projectGatewayDesiredRootForGateway(gatewayData, gatewayId);
   if (!root) return "workspace-only";
   if (root.gatewayClass === "shared") return "workspace-and-projects";
@@ -2945,7 +2906,7 @@ function migrationProjectCheckoutScope(
 // eslint-disable-next-line complexity -- Mirrors the octogee-api fleet broker snapshot shape.
 export async function readMigrationUserSnapshot(
   db: Firestore,
-  secrets: Pick<SecretsRepository, "list">,
+  store: Pick<PlatformStateStore, "secrets" | "gateways">,
   uid: string,
   toGatewayId?: string,
 ): Promise<FleetBrokerUserSnapshot | null> {
@@ -2961,15 +2922,13 @@ export async function readMigrationUserSnapshot(
     db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
     db.collection("agents").doc(uid).get(),
     db.collection("users").doc(uid).collection("system").doc("config").get(),
-    toGatewayId
-      ? db.collection(GATEWAYS_COLLECTION).doc(toGatewayId).get()
-      : Promise.resolve(null),
-    collectProjectAgentStates(db, secrets, uid, slug),
+    toGatewayId ? store.gateways.roots.get(toGatewayId) : Promise.resolve(null),
+    collectProjectAgentStates(db, store.secrets, uid, slug),
   ]);
   const projectDocs = projectSnap.docs;
   const channels = await collectMigrationChannelBindings(workspaceChannels.docs, projectDocs);
   const projectCheckoutScope = migrationProjectCheckoutScope(
-    targetGateway?.data(),
+    targetGateway,
     toGatewayId,
     uid,
     slug,
@@ -3134,7 +3093,7 @@ async function buildHandlers(
       if (!slug || !currentGatewayId) return null;
       return { slug, currentGatewayId };
     },
-    readUserSnapshot: (uid, toGatewayId) => readMigrationUserSnapshot(db, store.secrets, uid, toGatewayId),
+    readUserSnapshot: (uid, toGatewayId) => readMigrationUserSnapshot(db, store, uid, toGatewayId),
     readPrivateProjectCoachWorkspace: async (gatewayId, slug) => readPrivateProjectCoachWorkspace({
       baseUrl: await resolveGatewayFleetUrl(store, gatewayId, { allowUnready: true }),
       gatewayId, privateKey, privateProjectCoachSlug: slug, timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS,
@@ -3316,26 +3275,6 @@ async function buildHandlers(
       return assignments.map((a) => ({ uid: a.uid, slug: a.slug }));
     },
     deleteGlmGateway: (gatewayId) => store.fleetRegistry.delete(gatewayId),
-    deleteGatewayHeartbeat: async (gatewayId) => {
-      // gateways/{id} may now be the durable GatewayDoc (+ release subcollection).
-      // NEVER delete it during retire — PR2's DELETE endpoint marks it
-      // desiredStatus:retired and the release history is retained. Clear only the
-      // legacy dual-written heartbeat fields; a plain legacy heartbeat doc is
-      // deleted as before.
-      const ref = db.collection("gateways").doc(gatewayId);
-      const doc = await ref.get();
-      if (doc.exists && heartbeatTeardownAction(doc.data()) === "clear") {
-        await ref.set(clearedHeartbeatFieldsPatch(), { merge: true });
-        return;
-      }
-      await ref.delete();
-    },
-    readGatewayHeartbeatExists: async (gatewayId) => {
-      const doc = await db.collection("gateways").doc(gatewayId).get();
-      // A durable GatewayDoc is not a resurrected heartbeat — report it absent so
-      // the quiesce step doesn't try to re-delete it.
-      return doc.exists && !isGatewayDesiredDoc(doc.data());
-    },
     deleteGatewayPersistentVolumeClaim: createGatewayPersistentVolumeClaimDeleter(kubeOps),
     deleteGatewayKubeSecret: async (gatewayId) =>
       kubeOps.deleteSecret({ namespace: NAMESPACE, name: `gateway-auth-token-${gatewayId}` }),

@@ -2,7 +2,7 @@ import type { DocumentSnapshot, Query } from "firebase-admin/firestore";
 import { isGatewayRuntimeDoc } from "@octogee/shared/types/gateway-releases";
 import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
 import { DuplicateRecordError, MalformedRecordError, MissingRecordError, type RecordKey } from "../errors.js";
-import type { FleetRegistryFence, FleetRegistryRecord, FleetRegistryRepository } from "../fleet-registry.js";
+import type { FleetRegistryFence, FleetRegistryForeignEntry, FleetRegistryRecord, FleetRegistryRepository } from "../fleet-registry.js";
 import type { Stored } from "../store.js";
 import { assertFenceEquals, assertFenceOneOf, assertRevisionFence } from "./fences.js";
 import type { FirestoreSession } from "./session.js";
@@ -60,6 +60,15 @@ function isPresent<T>(value: T | null): value is T {
   return value !== null;
 }
 
+function decodeInventoryEntry(snapshot: DocumentSnapshot): Stored<FleetRegistryRecord> | null {
+  try {
+    return decodeFleetRegistryRecord(snapshot);
+  } catch (error) {
+    if (error instanceof MalformedRecordError) return null;
+    throw error;
+  }
+}
+
 export function createFirestoreFleetRegistryRepository(session: FirestoreSession): FleetRegistryRepository {
   const collection = () => session.db.collection(GLM_GATEWAYS_COLLECTION);
   const ref = (gatewayId: string) => collection().doc(gatewayId);
@@ -79,6 +88,21 @@ export function createFirestoreFleetRegistryRepository(session: FirestoreSession
     async list(filter = {}) {
       const query: Query = filter.runtime === undefined ? collection() : collection().where("runtime", "==", filter.runtime);
       return (await session.query("fleetRegistry.list", query)).docs.map(decodeFleetRegistryRecord).filter(isPresent);
+    },
+
+    async inventory(gatewayIds) {
+      const name = "fleetRegistry.inventory";
+      const snapshots = gatewayIds === undefined
+        ? (await session.query(name, collection())).docs
+        : (await session.readAll(name, gatewayIds.map(ref))).filter((snapshot) => snapshot.exists);
+      const records: Stored<FleetRegistryRecord>[] = [];
+      const foreign: FleetRegistryForeignEntry[] = [];
+      for (const snapshot of snapshots) {
+        const record = decodeInventoryEntry(snapshot);
+        if (record === null) foreign.push({ gatewayId: snapshot.id, fields: Object.keys(snapshot.data() ?? {}).sort() });
+        else records.push(record);
+      }
+      return { records, foreign };
     },
 
     async findByVmInstanceId(instanceId) {

@@ -107,6 +107,12 @@ export function createPostgresFleetRegistryRepository(session) {
                 return list("fleetRegistry.list", "", []);
             return list("fleetRegistry.list", "WHERE runtime = $1::text", [filter.runtime]);
         },
+        async inventory(gatewayIds) {
+            const records = gatewayIds === undefined
+                ? await list("fleetRegistry.inventory", "", [])
+                : await list("fleetRegistry.inventory", "WHERE gateway_id = ANY($1::text[])", [[...gatewayIds]]);
+            return { records, foreign: [] };
+        },
         async findByVmInstanceId(instanceId) {
             const rows = await selectRecords(session, "fleetRegistry.findByVmInstanceId", "SELECT * FROM $schema.fleet_registry WHERE vm_instance_id = $1::text", [instanceId]);
             return rows.length === 0 ? null : decodeFleetRegistryRecord(rows[0]);

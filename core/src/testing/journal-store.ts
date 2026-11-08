@@ -38,7 +38,7 @@ import {
   type FenceName,
   type RecordKey,
 } from "../platform-state/errors.js";
-import type { FleetRegistryRecord, FleetRegistryRepository } from "../platform-state/fleet-registry.js";
+import type { FleetRegistryForeignEntry, FleetRegistryRecord, FleetRegistryRepository } from "../platform-state/fleet-registry.js";
 import {
   agentStoreFromData,
   agentStoreKeyOf,
@@ -1238,9 +1238,33 @@ function fleetRegistryRepository(documents: FixtureDocuments, write: Write): Fle
     const { docKind: _docKind, ...record } = structuredClone(row) as Record<string, unknown>;
     return { ...record, revision: FIXTURE_REVISION } as unknown as Stored<FleetRegistryRecord>;
   };
+  const decodeInventoryRuntime = (gatewayId: string, row: Record<string, unknown>) => {
+    try {
+      return decodeRuntime(gatewayId, row);
+    } catch (error) {
+      if (error instanceof MalformedRecordError) return null;
+      throw error;
+    }
+  };
   const registryKey = (gatewayId: string): RecordKey => ({ aggregate: "fleet-registry", key: gatewayId });
   return partialRepository<FleetRegistryRepository>("fleetRegistry", {
     get: async (gatewayId) => decodeRuntime(gatewayId, documents.get(`glmGateways/${gatewayId}`)),
+    inventory: async (gatewayIds) => {
+      const rows = gatewayIds === undefined
+        ? documents.children("glmGateways")
+        : gatewayIds.flatMap((gatewayId) => {
+          const row = documents.get(`glmGateways/${gatewayId}`);
+          return row === undefined ? [] : [[gatewayId, row] as const];
+        });
+      const records: Stored<FleetRegistryRecord>[] = [];
+      const foreign: FleetRegistryForeignEntry[] = [];
+      for (const [gatewayId, row] of rows) {
+        const record = decodeInventoryRuntime(gatewayId, row);
+        if (record === null) foreign.push({ gatewayId, fields: Object.keys(row).sort() });
+        else records.push(record);
+      }
+      return { records, foreign };
+    },
     findByVmInstanceId: async (instanceId) => {
       const found = documents.children("glmGateways").filter(([, row]) => {
         const vm = row.vm as { instanceId?: unknown } | null | undefined;

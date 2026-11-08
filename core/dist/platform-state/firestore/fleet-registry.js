@@ -44,6 +44,16 @@ function assertRegistryFence(key, fence, current) {
 function isPresent(value) {
     return value !== null;
 }
+function decodeInventoryEntry(snapshot) {
+    try {
+        return decodeFleetRegistryRecord(snapshot);
+    }
+    catch (error) {
+        if (error instanceof MalformedRecordError)
+            return null;
+        throw error;
+    }
+}
 export function createFirestoreFleetRegistryRepository(session) {
     const collection = () => session.db.collection(GLM_GATEWAYS_COLLECTION);
     const ref = (gatewayId) => collection().doc(gatewayId);
@@ -62,6 +72,22 @@ export function createFirestoreFleetRegistryRepository(session) {
         async list(filter = {}) {
             const query = filter.runtime === undefined ? collection() : collection().where("runtime", "==", filter.runtime);
             return (await session.query("fleetRegistry.list", query)).docs.map(decodeFleetRegistryRecord).filter(isPresent);
+        },
+        async inventory(gatewayIds) {
+            const name = "fleetRegistry.inventory";
+            const snapshots = gatewayIds === undefined
+                ? (await session.query(name, collection())).docs
+                : (await session.readAll(name, gatewayIds.map(ref))).filter((snapshot) => snapshot.exists);
+            const records = [];
+            const foreign = [];
+            for (const snapshot of snapshots) {
+                const record = decodeInventoryEntry(snapshot);
+                if (record === null)
+                    foreign.push({ gatewayId: snapshot.id, fields: Object.keys(snapshot.data() ?? {}).sort() });
+                else
+                    records.push(record);
+            }
+            return { records, foreign };
         },
         async findByVmInstanceId(instanceId) {
             const docs = (await session.query("fleetRegistry.findByVmInstanceId", collection().where("vm.instanceId", "==", instanceId).limit(2))).docs;

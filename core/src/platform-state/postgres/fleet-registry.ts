@@ -157,6 +157,13 @@ export function createPostgresFleetRegistryRepository(session: PostgresSession):
       return list("fleetRegistry.list", "WHERE runtime = $1::text", [filter.runtime]);
     },
 
+    async inventory(gatewayIds) {
+      const records = gatewayIds === undefined
+        ? await list("fleetRegistry.inventory", "", [])
+        : await list("fleetRegistry.inventory", "WHERE gateway_id = ANY($1::text[])", [[...gatewayIds]]);
+      return { records, foreign: [] };
+    },
+
     async findByVmInstanceId(instanceId) {
       const rows = await selectRecords(
         session,

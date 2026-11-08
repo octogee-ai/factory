@@ -219,6 +219,19 @@ describe.skipIf(!dsn)("PostgreSQL fleet registry", { timeout: 30_000 }, () => {
     await registry().create(runtimeRecord("hermes", { vm: vm(null) }));
   });
 
+  it("inventories every runtime record, or only the named gateways, with nothing foreign", async () => {
+    await registry().create(runtimeRecord("bender"));
+    await registry().create(runtimeRecord("shared-a"));
+
+    const everything = await registry().inventory();
+    const named = await registry().inventory(["shared-a", "ghost"]);
+
+    expect(everything.records.map((record) => record.gatewayId)).toEqual(["bender", "shared-a"]);
+    expect(everything.foreign).toEqual([]);
+    expect(named.records.map((record) => record.gatewayId)).toEqual(["shared-a"]);
+    expect(named.foreign).toEqual([]);
+  });
+
   it("lists by runtime, reads many and deletes", async () => {
     await registry().create(runtimeRecord("bender", { runtime: "gce-vm", vm: null }));
     await registry().create(runtimeRecord("shared-a", { runtime: "cluster" }));

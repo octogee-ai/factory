@@ -1102,9 +1102,37 @@ function fleetRegistryRepository(documents, write) {
         const { docKind: _docKind, ...record } = structuredClone(row);
         return { ...record, revision: FIXTURE_REVISION };
     };
+    const decodeInventoryRuntime = (gatewayId, row) => {
+        try {
+            return decodeRuntime(gatewayId, row);
+        }
+        catch (error) {
+            if (error instanceof MalformedRecordError)
+                return null;
+            throw error;
+        }
+    };
     const registryKey = (gatewayId) => ({ aggregate: "fleet-registry", key: gatewayId });
     return partialRepository("fleetRegistry", {
         get: async (gatewayId) => decodeRuntime(gatewayId, documents.get(`glmGateways/${gatewayId}`)),
+        inventory: async (gatewayIds) => {
+            const rows = gatewayIds === undefined
+                ? documents.children("glmGateways")
+                : gatewayIds.flatMap((gatewayId) => {
+                    const row = documents.get(`glmGateways/${gatewayId}`);
+                    return row === undefined ? [] : [[gatewayId, row]];
+                });
+            const records = [];
+            const foreign = [];
+            for (const [gatewayId, row] of rows) {
+                const record = decodeInventoryRuntime(gatewayId, row);
+                if (record === null)
+                    foreign.push({ gatewayId, fields: Object.keys(row).sort() });
+                else
+                    records.push(record);
+            }
+            return { records, foreign };
+        },
         findByVmInstanceId: async (instanceId) => {
             const found = documents.children("glmGateways").filter(([, row]) => {
                 const vm = row.vm;

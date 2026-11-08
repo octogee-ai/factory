@@ -9,7 +9,6 @@ import {
   serializeGatewayConvergence,
   startReconciler,
 } from "../index";
-import { FieldValue } from "firebase-admin/firestore";
 import { acknowledgeCustomerRestore, beginCustomerRestore, type FleetStateDeps } from "@octogee/core/fleet-state";
 import {
   MalformedRecordError,
@@ -165,104 +164,25 @@ async function decodableRecords(store: PlatformStateStore, rows: { roots: Rows; 
   return { gateways: gateways.flat(), fleetRegistry: fleetRegistry.flat() };
 }
 
-function makeDb(input: {
-  roots?: Record<string, Record<string, unknown>>;
-  runtimes?: Record<string, Record<string, unknown>>;
+interface ReconcilerRows {
+  roots?: Rows;
+  runtimes?: Rows;
   releases?: Record<string, Record<number, Record<string, unknown>>>;
-  users?: Record<string, Record<string, unknown>>;
-  operations?: Record<string, Record<string, unknown>>;
-  assignments?: Record<string, Record<string, unknown>>;
-}) {
-  const roots = input.roots ?? {};
-  const runtimes = input.runtimes ?? {};
-  const users = input.users ?? {};
-  const operations = input.operations ?? {};
-  const assignments = input.assignments ?? {};
-  const snapshot = (store: Record<string, Record<string, unknown>>) => ({
-    size: Object.keys(store).length,
-    docs: Object.entries(store).map(([id, data]) => ({ id, data: () => data })),
-  });
-  const document = (store: Record<string, Record<string, unknown>>, id: string): any => ({
-    id,
-    collection: (name: string) => {
-      if (name !== "assignments") throw new Error(`unexpected subcollection ${name}`);
-      return { doc: (uid: string) => document(assignments, `${id}/${uid}`) };
-    },
-    set: async (data: Record<string, unknown>, options?: { merge: boolean }) => {
-      store[id] = options?.merge ? { ...store[id], ...data } : data;
-    },
-    delete: async () => { delete store[id]; },
-    update: async (patch: Record<string, unknown>) => {
-      for (const [key, value] of Object.entries(patch)) {
-        const parts = key.split(".");
-        let row: any = store[id];
-        for (const part of parts.slice(0, -1)) row = row[part] ??= {};
-        if (value instanceof FieldValue && value.isEqual(FieldValue.delete())) delete row[parts.at(-1)!];
-        else row[parts.at(-1)!] = structuredClone(value);
-      }
-    },
-    get: async () => ({
-      id,
-      exists: Object.prototype.hasOwnProperty.call(store, id),
-      data: () => store[id],
-    }),
-  });
-  return {
-    getAll: async (...refs: Array<{ get(): Promise<unknown> }>) => Promise.all(refs.map((ref) => ref.get())),
-    runTransaction: async (body: (transaction: any) => Promise<unknown>) => {
-      const writes: Array<() => Promise<void>> = [];
-      const result = await body({
-        get: (ref: any) => ref.get(),
-        set: (ref: any, data: Record<string, unknown>, options?: { merge: boolean }) => writes.push(() => ref.set(data, options)),
-        update: (ref: any, data: Record<string, unknown>) => writes.push(() => ref.update(data)),
-      });
-      for (const write of writes) await write();
-      return result;
-    },
-    getAll: async (...refs: any[]) => Promise.all(refs.map(async (ref) => ({ id: ref.id, ...(await ref.get()) }))),
-    collection: (name: string) => {
-      if (name === "glmOperations") return {
-        doc: (id: string) => document(operations, id),
-        where: (field: string, comparator: string, expected: unknown) => ({ get: async () => {
-          if (comparator !== "==") throw new Error(`unexpected comparator ${comparator}`);
-          return snapshot(Object.fromEntries(Object.entries(operations).filter(([, operation]) => operation[field] === expected)));
-        } }),
-      };
-      if (name === "users") return {
-        doc: (id: string) => document(users, id),
-        where: (field: string, comparator: string, expected: unknown) => ({ get: async () => {
-          if (comparator !== "==") throw new Error(`unexpected comparator ${comparator}`);
-          return snapshot(Object.fromEntries(Object.entries(users).filter(([, user]) =>
-            field.split(".").reduce((row: any, part) => row?.[part], user) === expected)));
-        } }),
-      };
-      if (name === "gateways") {
-        return {
-          get: async () => snapshot(roots),
-          doc: (id: string) => document(roots, id),
-        };
-      }
-      if (name === "glmGateways") {
-        return {
-          get: async () => snapshot(runtimes),
-          doc: (id: string) => document(runtimes, id),
-        };
-      }
-      throw new Error(`unexpected collection ${name}`);
-    },
-  } as unknown as Parameters<typeof startReconciler>[0]["db"];
+  users?: Rows;
+  operations?: Rows;
+  assignments?: Rows;
 }
 
 type Rows = Record<string, Record<string, unknown>>;
 
-function reconcilerState(input: Parameters<typeof makeDb>[0] & { callbacks: MirrorFeeds }) {
+function reconcilerState(input: ReconcilerRows & { callbacks: MirrorFeeds }) {
   const rows = {
     roots: input.roots ?? {}, runtimes: input.runtimes ?? {}, users: input.users ?? {},
     operations: input.operations ?? {}, assignments: input.assignments ?? {},
   };
   const store = fixtureStoreOver({ ...rows, releases: input.releases });
   input.callbacks.decodable = () => decodableRecords(store, rows);
-  return { db: makeDb({ ...input, ...rows }), store, informer: feedingInformer(input.callbacks) };
+  return { store, informer: feedingInformer(input.callbacks) };
 }
 
 function fixtureStoreOver(collections: {
@@ -290,6 +210,8 @@ function fixtureStoreOver(collections: {
     children: (collectionPath) => {
       if (collectionPath === "users") return Object.entries(collections.users);
       if (collectionPath === "glmOperations") return Object.entries(collections.operations);
+      if (collectionPath === "gateways") return Object.entries(collections.roots);
+      if (collectionPath === "glmGateways") return Object.entries(collections.runtimes);
       throw new Error(`unexpected collection listing ${collectionPath}`);
     },
     group: (collectionId) => { throw new Error(`unexpected collection group ${collectionId}`); },
@@ -742,36 +664,42 @@ describe("root snapshot reconciliation filters", () => {
 });
 
 describe("targeted durable state reads", () => {
-  function targetedDb(input: {
-    roots: Record<string, Record<string, unknown>>;
-    runtimes: Record<string, Record<string, unknown>>;
-  }) {
+  function targetedStore(input: { roots: Rows; runtimes: Rows }) {
     const scanned: string[] = [];
     const fetched: string[] = [];
-    const store = (name: string) => (name === "gateways" ? input.roots : input.runtimes);
-    const db = {
-      collection: (name: string) => ({
-        get: async () => {
-          scanned.push(name);
-          return {
-            docs: Object.entries(store(name)).map(([id, data]) => ({ id, data: () => data })),
-          };
+    const fixture = fixtureStoreOver({ ...input, users: {}, operations: {}, assignments: {} });
+    const roots = fixture.gateways.roots;
+    const registry = fixture.fleetRegistry;
+    const store = {
+      ...fixture,
+      gateways: {
+        ...fixture.gateways,
+        roots: {
+          ...roots,
+          list: (filter?: Parameters<typeof roots.list>[0]) => {
+            scanned.push("gateways");
+            return roots.list(filter);
+          },
+          getMany: (ids: readonly string[]) => {
+            fetched.push(...ids.map((id) => `gateways/${id}`));
+            return roots.getMany(ids);
+          },
         },
-        doc: (id: string) => ({ collection: name, id }),
-      }),
-      getAll: async (...refs: Array<{ collection: string; id: string }>) => {
-        for (const ref of refs) fetched.push(`${ref.collection}/${ref.id}`);
-        return refs.map((ref) => {
-          const data = store(ref.collection)[ref.id];
-          return { id: ref.id, exists: data !== undefined, data: () => data };
-        });
       },
-    };
-    return { db, scanned, fetched };
+      fleetRegistry: {
+        ...registry,
+        inventory: (ids?: readonly string[]) => {
+          if (ids === undefined) scanned.push("glmGateways");
+          else fetched.push(...ids.map((id) => `glmGateways/${id}`));
+          return registry.inventory(ids);
+        },
+      },
+    } as PlatformStateStore;
+    return { store, scanned, fetched };
   }
 
   it("reads only the selected roots and runtimes", async () => {
-    const { db, scanned, fetched } = targetedDb({
+    const { store, scanned, fetched } = targetedStore({
       roots: { default: durableRoot(), other: durableRoot({ gatewayId: "other" }) },
       runtimes: {
         default: servingRuntime(),
@@ -779,7 +707,7 @@ describe("targeted durable state reads", () => {
       },
     });
 
-    const state = await readTargetedDurableRuntimeGateways(db as never, ["default"]);
+    const state = await readTargetedDurableRuntimeGateways(store, ["default"]);
 
     expect(scanned).toEqual([]);
     expect(fetched.sort()).toEqual(["gateways/default", "glmGateways/default"]);
@@ -790,9 +718,9 @@ describe("targeted durable state reads", () => {
   });
 
   it("treats a fully removed gateway as absent, not invalid", async () => {
-    const { db } = targetedDb({ roots: {}, runtimes: {} });
+    const { store } = targetedStore({ roots: {}, runtimes: {} });
 
-    await expect(readTargetedDurableRuntimeGateways(db as never, ["gone"])).resolves.toEqual({
+    await expect(readTargetedDurableRuntimeGateways(store, ["gone"])).resolves.toEqual({
       gateways: [],
       runtimeDocs: [],
       invalidRootIds: [],
@@ -801,25 +729,25 @@ describe("targeted durable state reads", () => {
   });
 
   it("still refuses a selected invalid root or stray runtime doc", async () => {
-    const invalid = targetedDb({
+    const invalid = targetedStore({
       roots: { legacy: { gatewayId: "legacy", desiredStatus: "running" } },
       runtimes: {},
     });
-    await expect(readTargetedDurableRuntimeGateways(invalid.db as never, ["legacy"]))
-      .resolves.toMatchObject({ invalidRootIds: ["legacy"] });
+    await expect(readTargetedDurableRuntimeGateways(invalid.store, ["legacy"]))
+      .rejects.toBeInstanceOf(MalformedRecordError);
 
-    const stray = targetedDb({
+    const stray = targetedStore({
       roots: {},
       runtimes: { orphan: servingRuntime({ gatewayId: "orphan" }) },
     });
-    await expect(readTargetedDurableRuntimeGateways(stray.db as never, ["orphan"]))
+    await expect(readTargetedDurableRuntimeGateways(stray.store, ["orphan"]))
       .resolves.toMatchObject({ strayGlmDocs: [{ id: "orphan", remedy: expect.stringContaining("delete glmGateways/orphan") }] });
   });
 
   it("does not scan either fleet collection for a targeted convergence pass", async () => {
-    const { db, scanned } = targetedDb({ roots: {}, runtimes: {} });
+    const { store, scanned } = targetedStore({ roots: {}, runtimes: {} });
     const passDeps = {
-      db: db as never,
+      store,
       helm: {
         readDeployedInstance: vi.fn(async () => null),
         readDeployedInstances: vi.fn(async () => ({})),
@@ -856,7 +784,6 @@ describe("gateway convergence pass outcomes", () => {
       }),
     };
     const deps = {
-      db: makeDb({ roots, runtimes }),
       store: fixtureStoreOver({ roots, runtimes, users: {}, operations: {}, assignments: {},
         releases: Object.fromEntries(ids.map(id => [id, { 2: releaseArtifact(id, 2, "abc1234") }])) }),
       helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
@@ -1055,7 +982,6 @@ describe("gateway convergence pass outcomes", () => {
       input: { uid: "u", fromGatewayId: "builder-alice", toGatewayId: gatewayId }, cutoverCommittedAt: 50,
       schedulerHandoff: { uid: "u", slug: "alice", fromGatewayId: "builder-alice", toGatewayId: gatewayId } } };
     const assignments = { [`${gatewayId}/u`]: { uid: "u", slug: "alice", gatewayId, source: "onboarding", epoch: 3, state: "serving" } };
-    const db = makeDb({ roots, runtimes, users, operations, assignments });
     const store = fixtureStoreOver({ roots, runtimes, users, operations, assignments,
       releases: { [gatewayId]: { 2: releaseArtifact(gatewayId, 2, "abc1234") } } });
     const helm = {
@@ -1064,7 +990,7 @@ describe("gateway convergence pass outcomes", () => {
         image: { repository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway", tag: "abc1234" },
         chartFingerprint: "chart", deploymentIntentFingerprint: "stale-intent", replicas: 1 } })),
     };
-    const deps = { db, store, helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
+    const deps = { store, helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
       prepareGatewayConfig: vi.fn(async (config: any) => config),
       reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log: vi.fn() };
     const stateDeps: FleetStateDeps = { store };
@@ -1078,11 +1004,10 @@ describe("gateway convergence pass outcomes", () => {
     };
     const runtimes: Record<string, Record<string, unknown>> = { hobby: servingRuntime({ gatewayId: "hobby", runtime: "cluster" }) };
     const users = { u: { provisioning: { computer: { id: "retained-computer" } } } };
-    const db = makeDb({ roots, runtimes, users });
     const helm = { upsertInstance: vi.fn(async () => {}), readDeployedInstances: vi.fn(async () => ({})) };
     const store = fixtureStoreOver({ roots, runtimes, users, operations: {}, assignments: {},
       releases: Object.fromEntries(Object.keys(roots).map(id => [id, { 2: releaseArtifact(id, 2, "abc1234", { profileImages: { builder: { imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder", imageTag: `abc1234@sha256:${"b".repeat(64)}` } } }) }])) });
-    const deps = { db, store, helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
+    const deps = { store, helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
       prepareGatewayConfig: vi.fn(async (config: any) => config),
       reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log: vi.fn() };
 
@@ -1105,7 +1030,6 @@ describe("gateway convergence pass outcomes", () => {
       next: durableRoot({ gatewayId: "next", liveRelease: null }),
     };
     const runtimes: Record<string, Record<string, unknown>> = {};
-    const db = makeDb({ roots, runtimes });
     const store = fixtureStoreOver({ roots, runtimes, users: {}, operations: {}, assignments: {},
       releases: Object.fromEntries(Object.keys(roots).map(id => [id, { 2: releaseArtifact(id, 2, "abc1234") }])) });
     const upsertInstance = vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
@@ -1113,7 +1037,7 @@ describe("gateway convergence pass outcomes", () => {
     });
     const helm = { upsertInstance, readDeployedInstance: vi.fn(async () => null), readDeployedInstances: vi.fn(async () => ({})) };
     const log = vi.fn();
-    const converge = serializeGatewayConvergence((gatewayIds) => runGatewayConvergencePass({ db, store, helm: helm as never, kubeOps: {} as never,
+    const converge = serializeGatewayConvergence((gatewayIds) => runGatewayConvergencePass({ store, helm: helm as never, kubeOps: {} as never,
       chartFingerprint: "chart", prepareGatewayConfig: vi.fn(async (config: any) => config),
       reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log }, gatewayIds));
 
@@ -1307,7 +1231,6 @@ describe("gateway convergence pass outcomes", () => {
     });
     const log = vi.fn();
     const passDeps = (roots: Record<string, Record<string, unknown>>) => ({
-      db: makeDb({ roots, runtimes: {} }) as never,
       store: fixtureStoreOver({ roots, runtimes: {}, users: {}, operations: {}, assignments: {} }),
       helm: {
         removeInstance,
@@ -1460,7 +1383,7 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
 
     expect(syncFleetIngress).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("invalid durable root document(s): legacy"),
+      expect.stringMatching(/legacy.* is malformed/u),
     );
   });
 

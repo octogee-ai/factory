@@ -112,11 +112,6 @@ function makeRetireDeps(state: SharedState) {
     deleteGlmGateway: async (gatewayId: string) => {
       state.glmGateways.delete(gatewayId);
     },
-    deleteGatewayHeartbeat: async (gatewayId: string) => {
-      state.gateways.delete(gatewayId);
-    },
-    readGatewayHeartbeatExists: async (gatewayId: string) =>
-      state.gateways.has(gatewayId),
     deleteGatewayPersistentVolumeClaim: vi.fn(async () => {}),
     deleteGatewayKubeSecret: vi.fn(async () => {}),
     deleteAuthTokenSecret: vi.fn(async () => {}),
@@ -187,7 +182,6 @@ const op = state.operations.get(adminRes.operationId!);
 
 expect(state.helmReleases.size).toBe(0);
     expect(state.glmGateways.size).toBe(0);
-    expect(state.gateways.size).toBe(0);
 
     const stepFlow = ctx.reported.map((s) => `${s.name}:${s.status}`);
     expect(stepFlow).toEqual([
@@ -211,8 +205,6 @@ expect(state.helmReleases.size).toBe(0);
       "teardown-gsa:done",
       "cleanup:running",
       "cleanup:done",
-      "heartbeat-quiesce:running",
-      "heartbeat-quiesce:done",
       "fleet-ingress:running",
       "fleet-ingress:done",
     ]);
@@ -346,6 +338,5 @@ imageTag: "9778420",
     expect(result.success).toBe(true);
     expect(state.helmReleases.size).toBe(0);
     expect(state.glmGateways.size).toBe(0);
-    expect(state.gateways.size).toBe(0);
   });
 });

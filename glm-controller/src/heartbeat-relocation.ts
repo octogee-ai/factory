@@ -1,29 +1,7 @@
-import { isGatewayDesiredDoc } from "@octogee/shared/types/gateway-releases";
 import { GATEWAY_HEARTBEAT_INTERVAL_MS, type ConfiguredBuilderReport } from "@octogee/shared/types/fleet-controller";
 import type { FleetHeartbeatReport } from "@octogee/core/platform-state";
 
 export const HEARTBEAT_FIELD = "heartbeat";
-
-// The dual-written flat heartbeat fields on gateways/{id}. Cleared (not deleted)
-// when the doc is a durable GatewayDoc that retire must preserve.
-export const LEGACY_HEARTBEAT_FIELDS = [
-  "status",
-  "version",
-  "openclawVersion",
-  "internalUrl",
-  "startedAt",
-  "mountedCustomers",
-  "lastHeartbeatAt",
-  "lastError",
-] as const;
-
-// Retire teardown decision for gateways/{id}: a durable GatewayDoc (holds the
-// release subcollection) must be PRESERVED — only its dual-written heartbeat
-// fields are cleared. A legacy heartbeat-only doc is deleted outright. This is
-// the P0 guard: retire must never delete the GatewayDoc + release history.
-export function heartbeatTeardownAction(data: unknown): "clear" | "delete" {
-  return isGatewayDesiredDoc(data) ? "clear" : "delete";
-}
 
 export interface PollerHeartbeatRecord {
   status: string;

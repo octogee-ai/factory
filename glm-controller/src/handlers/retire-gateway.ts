@@ -32,9 +32,7 @@ export interface RetireGatewayDeps {
 
   deleteGlmGateway: (gatewayId: string) => Promise<void>;
 
-  deleteGatewayHeartbeat: (gatewayId: string) => Promise<void>;
 
-  readGatewayHeartbeatExists?: (gatewayId: string) => Promise<boolean>;
 
   // Teardown of the per-gateway runtime resources is structurally required.
   deleteGatewayPersistentVolumeClaim: (gatewayId: string) => Promise<void>;
@@ -179,8 +177,6 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
 
     const cleanupFailure = await cleanupGatewayRecords(ctx, deps, gatewayId);
     if (cleanupFailure) return cleanupFailure;
-
-    await quiesceGatewayHeartbeat(ctx, deps, gatewayId);
 
     await syncFleetIngress(ctx, deps);
 
@@ -331,32 +327,10 @@ async function cleanupGatewayRecords(
 ): Promise<OperationResult | null> {
   const result = await runReportedStep(ctx, deps, "cleanup", async () => {
     await deps.deleteGlmGateway(gatewayId);
-    await deps.deleteGatewayHeartbeat(gatewayId);
   });
   return result.ok
     ? null
     : failure(`cleanup failed after teardown: ${result.error ?? UNKNOWN_ERROR}`);
-}
-
-async function quiesceGatewayHeartbeat(
-  ctx: OperationContext,
-  deps: RetireGatewayDeps,
-  gatewayId: string,
-): Promise<void> {
-  const readGatewayHeartbeatExists = deps.readGatewayHeartbeatExists;
-  if (!readGatewayHeartbeatExists) return;
-  const result = await runReportedStep(ctx, deps, "heartbeat-quiesce", async () => {
-    await deps.wait(deps.pollIntervalMs);
-    const resurrected = await readGatewayHeartbeatExists(gatewayId);
-    if (resurrected) {
-      await deps.deleteGatewayHeartbeat(gatewayId);
-    }
-  });
-  if (!result.ok) {
-    deps.log(
-      `[retire-gateway] heartbeat-quiesce failed for ${gatewayId} (reaper will heal within 60s): ${result.error ?? UNKNOWN_ERROR}`,
-    );
-  }
 }
 
 async function syncFleetIngress(

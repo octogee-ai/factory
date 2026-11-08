@@ -35,8 +35,6 @@ interface FakeState {
   claimOk: boolean;
   helmUninstalled: string[];
   deletedGlm: Set<string>;
-  deletedHeartbeat: Set<string>;
-  heartbeatPresentAfterDelete?: Set<string>;
   teardownCalls: string[];
 }
 
@@ -47,7 +45,6 @@ function baseState(overrides: Partial<FakeState> = {}): FakeState {
     claimOk: true,
     helmUninstalled: [],
     deletedGlm: new Set(),
-    deletedHeartbeat: new Set(),
     teardownCalls: [],
     ...overrides,
   };
@@ -72,12 +69,6 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
     deleteGlmGateway: vi.fn(async (gatewayId: string) => {
       state.deletedGlm.add(gatewayId);
     }),
-    deleteGatewayHeartbeat: vi.fn(async (gatewayId: string) => {
-      state.deletedHeartbeat.add(gatewayId);
-    }),
-    readGatewayHeartbeatExists: vi.fn(async (gatewayId: string) =>
-      state.heartbeatPresentAfterDelete?.has(gatewayId) ?? false,
-    ),
     deleteGatewayPersistentVolumeClaim: vi.fn(async () => record("delete-pvc")),
     deleteGatewayKubeSecret: vi.fn(async () => record("delete-kube-secret")),
     deleteAuthTokenSecret: vi.fn(async () => record("delete-sm-secret")),
@@ -114,7 +105,6 @@ describe("createRetireGatewayHandler — simple-roll retirement", () => {
     expect(result.error).toContain("login still connected");
     expect(state.teardownCalls).toEqual([]);
     expect(state.deletedGlm.size).toBe(0);
-    expect(state.deletedHeartbeat.size).toBe(0);
   });
 
   it("refuses SQL retirement when the retirement claim changes after runtime removal", async () => {
@@ -156,7 +146,6 @@ describe("createRetireGatewayHandler — simple-roll retirement", () => {
       "teardown-gsa",
     ]);
     expect(state.deletedGlm.has("canary")).toBe(true);
-    expect(state.deletedHeartbeat.has("canary")).toBe(true);
     expect(deps.syncFleetIngress).toHaveBeenCalledTimes(1);
   });
 
@@ -279,7 +268,6 @@ describe("createRetireGatewayHandler — simple-roll retirement", () => {
     expect(state.teardownCalls).toContain("delete-ksa");
     expect(state.teardownCalls).toContain("teardown-gsa");
     expect(state.deletedGlm.size).toBe(0);
-    expect(state.deletedHeartbeat.size).toBe(0);
   });
 
   it("retainData preserves the PVC; retainServiceAccount preserves the GSA", async () => {
@@ -303,19 +291,6 @@ describe("createRetireGatewayHandler — simple-roll retirement", () => {
     expect(state.teardownCalls).not.toContain("teardown-gsa");
   });
 
-  it("re-deletes a resurrected heartbeat during the quiesce grace pass", async () => {
-    const state = baseState({ heartbeatPresentAfterDelete: new Set(["canary"]) });
-    const deleteGatewayHeartbeat = vi.fn(async (gatewayId: string) => {
-      state.deletedHeartbeat.add(gatewayId);
-    });
-    const deps = makeDeps(state, { deleteGatewayHeartbeat });
-
-    const res = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
-
-    expect(res.success).toBe(true);
-    expect(deleteGatewayHeartbeat.mock.calls.length).toBe(2);
-  });
-
   it("completes retirement when post-cleanup ingress sync fails", async () => {
     const state = baseState();
     const deps = makeDeps(state, {
@@ -328,7 +303,6 @@ describe("createRetireGatewayHandler — simple-roll retirement", () => {
 
     expect(res.success).toBe(true);
     expect(state.deletedGlm.has("canary")).toBe(true);
-    expect(state.deletedHeartbeat.has("canary")).toBe(true);
     expect(deps.log).toHaveBeenCalledWith(
       expect.stringContaining("reconciler will heal within 30s"),
     );

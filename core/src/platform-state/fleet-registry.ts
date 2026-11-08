@@ -44,10 +44,21 @@ export interface FleetRegistryFilter {
   readonly runtime?: GatewayRuntime;
 }
 
+export interface FleetRegistryForeignEntry {
+  readonly gatewayId: string;
+  readonly fields: readonly string[];
+}
+
+export interface FleetRegistryInventory {
+  readonly records: readonly Stored<FleetRegistryRecord>[];
+  readonly foreign: readonly FleetRegistryForeignEntry[];
+}
+
 export interface FleetRegistryRepository {
   get(gatewayId: string): Promise<Stored<FleetRegistryRecord> | null>;
   getMany(gatewayIds: readonly string[]): Promise<ReadonlyMap<string, Stored<FleetRegistryRecord>>>;
   list(filter?: FleetRegistryFilter): Promise<readonly Stored<FleetRegistryRecord>[]>;
+  inventory(gatewayIds?: readonly string[]): Promise<FleetRegistryInventory>;
   findByVmInstanceId(instanceId: string): Promise<Stored<FleetRegistryRecord> | null>;
   create(record: FleetRegistryRecord): Promise<void>;
   upsert(gatewayId: string, initial: FleetRegistryRecord, patch: FleetRegistryPatch): Promise<void>;
