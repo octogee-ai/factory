@@ -6,7 +6,7 @@ start of every session, the checks they run before a change reaches `main`,
 and the commands that ship a build. You can read the factory yourself instead
 of taking my word for it.
 
-Published from the Octogee monorepo at `b6b098172dc38608b1f0fc2051ea18c11c5c478d`.
+Published from the Octogee monorepo at `0cd0b1c63da5248a350c4d635bc9694aca624019`.
 
 ## Run it
 

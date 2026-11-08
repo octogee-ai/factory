@@ -13,6 +13,7 @@ export interface CheckJob {
 }
 
 const emulatorDirectories: Partial<Record<JobKey, string>> = {
+  [JOBS.coreEmulator]: "core",
   [JOBS.customerLifecycleEmulator]: "scripts",
   [JOBS.functionsEmulator]: "functions",
   [JOBS.gatewayEdgeEmulator]: "gateway-edge",
@@ -117,6 +118,11 @@ function installsFor(directory: string): string[] {
   return [directory];
 }
 
+function emulatorInstallsFor(name: JobKey, directory: string): string[] {
+  if (name === JOBS.coreEmulator) return ["scripts", directory];
+  return installsFor(directory);
+}
+
 function testJob(name: JobKey): CheckJob {
   const pkg = UNIT_PACKAGES.find(value => value.name === name);
   if (pkg) return {
@@ -126,7 +132,7 @@ function testJob(name: JobKey): CheckJob {
     commands: [...(name === JOBS.site ? ["npx playwright install chromium"] : []), pkg.typecheck, ...(name === JOBS.core ? ["node ../scripts/ci/core-postgres.mjs"] : []), "npm test"],
   };
   const directory = emulatorDirectories[name];
-  if (directory) return { name, directory, nodeVersion: packageNodeVersion(directory), installs: installsFor(directory), commands: ["npm run test:emulator"] };
+  if (directory) return { name, directory, nodeVersion: packageNodeVersion(directory), installs: emulatorInstallsFor(name, directory), commands: ["npm run test:emulator"] };
   if (name === JOBS.app) return { name, directory: "app", nodeVersion: DEFAULT_NODE_VERSION, installs: installsFor("app"), commands: ["npm run typecheck", "npm test"] };
   if (name === JOBS.firestoreRules) return { name, directory: "firestore-rules-tests", nodeVersion: DEFAULT_NODE_VERSION, installs: ["firestore-rules-tests"], commands: ["npm test"] };
   if (name === JOBS.desktopPackage) return {
