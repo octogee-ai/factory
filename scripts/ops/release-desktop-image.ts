@@ -1,6 +1,6 @@
 import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
-import { createFirestorePlatformStateStore } from "@octogee/core/platform-state";
+import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
 import { GoogleAuth } from "google-auth-library";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import { runDesktopImagePublication } from "../lib/desktop-image-publication.js";
@@ -23,6 +23,6 @@ await runDesktopImagePublication({
   skipMissing: true,
   actor: requiredEnv("RELEASE_ACTOR"),
   why: requiredEnv("RELEASE_REASON"),
-  store: createFirestorePlatformStateStore({ db: getFirestore() }),
+  store: await operatorPlatformStateStore(getFirestore(), deploymentEnvironmentSettings(environment).targetId),
   auth: new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] }),
 });

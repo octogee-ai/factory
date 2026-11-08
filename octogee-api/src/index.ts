@@ -1,4 +1,5 @@
 import http from "node:http";
+import { platformStateStore } from "../../gateway-edge/src/lib/platform-state.js";
 import { logger } from "../../gateway-edge/src/middleware/logging.js";
 import { createGracefulShutdown } from "./lib/graceful-shutdown.js";
 import { createPlatformApp, type PlatformAppOptions } from "./app.js";
@@ -34,6 +35,7 @@ if (process.env.NODE_ENV !== "test") {
   const shutdown = createGracefulShutdown({
     server,
     flushPostHog: app.locals.productShutdown as (() => Promise<void>) | undefined,
+    closePlatformState: () => platformStateStore.close(),
     onError(message, error) {
       process.exitCode = 1;
       logger.error(message, { error });

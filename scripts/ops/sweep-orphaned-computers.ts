@@ -2,7 +2,9 @@ import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { applicationDefault, getApps, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
-import { createFirestorePlatformStateStore, type PlatformStateStore } from "@octogee/core/platform-state";
+import { type PlatformStateStore } from "@octogee/core/platform-state";
+import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
+import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
 
 import { BUILDER_COMPUTER_INSTANCE_PREFIX } from "../../shared/types/glm.js";
 
@@ -105,7 +107,7 @@ export async function readComputerReferences(store: PlatformStateStore, computer
 async function main(): Promise<void> {
   const args = parseSweepOrphanedComputersArgs(process.argv.slice(2));
   if (getApps().length === 0) initializeApp({ credential: applicationDefault(), projectId: args.firestoreProjectId });
-  const store = createFirestorePlatformStateStore({ db: getFirestore() });
+  const store = await operatorPlatformStateStore(getFirestore(), deploymentEnvironmentSettings(args.environment).targetId);
   const computers = listTerminatedComputers(args);
   console.log(`${computers.length} TERMINATED ${BUILDER_COMPUTER_INSTANCE_PREFIX}${args.environment}-* instance(s) in ${args.computeProjectId}`);
   const refs = await readComputerReferences(store, computers);

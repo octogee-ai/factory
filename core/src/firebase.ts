@@ -5,6 +5,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import { deploymentEnvironmentForProject } from "./deployment-environment.js";
 import { createFirestorePlatformStateStore } from "./platform-state/firestore/store.js";
+import { platformStateStoreFromEnvironment } from "./platform-state/postgres/store-from-environment.js";
 
 export const FIREBASE_PROJECT_ID =
   process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || "unknown";
@@ -28,6 +29,10 @@ logger.info(`Environment: ${OCTOGEE_ENV} (${FIREBASE_PROJECT_ID})`);
 
 export const db = getFirestore();
 
-export const platformStateStore = createFirestorePlatformStateStore({ db });
+export const platformStateStore = platformStateStoreFromEnvironment({
+  applicationName: "octogee-provisioner",
+  createFirestoreStore: () => createFirestorePlatformStateStore({ db }),
+  logger,
+});
 
 export { getStorage };

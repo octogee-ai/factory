@@ -30,11 +30,11 @@ import {
   type NormalFleetMutationInput,
 } from "@octogee/core/normal-fleet-mutation";
 import {
-  createFirestorePlatformStateStore,
   type BuilderRecord,
   type PlatformStateStore,
   type Stored,
 } from "@octogee/core/platform-state";
+import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
 import {
   enqueueOperation,
   awaitOperation,
@@ -352,6 +352,7 @@ function applicationDefaultServiceAccountCredential(
 }
 
 export function resolveFleetDeploymentTarget(environment: "test" | "prod"): {
+  targetId: string;
   projectId: string;
   clusterProjectId: string;
   namespace: string;
@@ -362,6 +363,7 @@ export function resolveFleetDeploymentTarget(environment: "test" | "prod"): {
     throw new Error(`fleet only supports the active CENTRAL target for ${environment}`);
   }
   return {
+    targetId: target.targetId,
     projectId: target.firebaseProjectId,
     clusterProjectId: target.clusterProjectId,
     namespace: target.namespace,
@@ -1025,7 +1027,7 @@ let platformState: PlatformStateStore;
 let resolvedOperatorUid: Promise<string> | null = null;
 let resolvedFirebaseWebApiKey: Promise<string> | null = null;
 
-function initializeFleetCli(argv: string[]): void {
+async function initializeFleetCli(argv: string[]): Promise<void> {
   args = parseFleetArgs(argv);
 
   if (args.flags.version === true) {
@@ -1091,7 +1093,7 @@ function initializeFleetCli(argv: string[]): void {
       : `  fleet uses keyless ADC/WIF for ${projectId}; Firebase tokens are signed by ${signerServiceAccountId}.`,
   ));
   db = getFirestore();
-  platformState = createFirestorePlatformStateStore({ db });
+  platformState = await operatorPlatformStateStore(db, target.targetId);
   KUBE_CONTEXT = target.kubeContext;
   KUBE_NS = target.namespace;
 }
@@ -1845,7 +1847,7 @@ async function executeMigration(
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
-  initializeFleetCli(argv);
+  await initializeFleetCli(argv);
   const verb = args.positional[0] ?? "";
   const sub = args.positional[1] ?? "";
   const apply = args.flags.apply === true;

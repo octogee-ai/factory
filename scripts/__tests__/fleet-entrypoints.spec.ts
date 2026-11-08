@@ -1201,12 +1201,14 @@ describe("fleet force gateway restart", () => {
 describe("fleet CLI args", () => {
   it("resolves Firestore and Kubernetes from the active deployment target", () => {
     expect(resolveFleetDeploymentTarget("test")).toEqual({
+      targetId: "test-central",
       projectId: "octogee-test",
       clusterProjectId: "octogee",
       namespace: "octogee-test",
       kubeContext: "gke_octogee_us-central1_octogee-gateway",
     });
     expect(resolveFleetDeploymentTarget("prod")).toEqual({
+      targetId: "prod-central",
       projectId: "octogee",
       clusterProjectId: "octogee",
       namespace: "octogee",

@@ -5,10 +5,12 @@ export interface ClosableServer {
 export function createGracefulShutdown({
   server,
   flushPostHog,
+  closePlatformState,
   onError,
 }: {
   server: ClosableServer;
   flushPostHog?: () => Promise<void>;
+  closePlatformState?: () => Promise<void>;
   onError(message: string, error: unknown): void;
 }): () => Promise<void> {
   let stopping = false;
@@ -26,6 +28,11 @@ export function createGracefulShutdown({
       await flushPostHog?.();
     } catch (error) {
       onError("PostHog shutdown failed", error);
+    }
+    try {
+      await closePlatformState?.();
+    } catch (error) {
+      onError("platform state shutdown failed", error);
     }
   };
 }

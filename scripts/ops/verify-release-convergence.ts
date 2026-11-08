@@ -8,7 +8,8 @@ import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { deploymentTargetSettings } from "@octogee/core/deployment-environment";
 import { isBareGatewayId, readGatewayRuntimeDoc } from "@octogee/core/gateway-live-release";
-import { createFirestorePlatformStateStore, type PlatformStateStore } from "@octogee/core/platform-state";
+import { type PlatformStateStore } from "@octogee/core/platform-state";
+import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
 import {
   isGatewayRuntimeDoc,
   projectGatewayDesiredRootForGateway,
@@ -330,7 +331,7 @@ async function run(): Promise<void> {
     credential: applicationDefault(),
     projectId: settings.firebaseProjectId,
   }, `release-convergence-${settings.targetId}`);
-  const store = createFirestorePlatformStateStore({ db: getFirestore(app) });
+  const store = await operatorPlatformStateStore(getFirestore(app), settings.targetId);
   const deadline = Date.now() + options.timeoutMs;
   let failures = ["release convergence has not been observed"];
 

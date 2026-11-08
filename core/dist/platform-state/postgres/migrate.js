@@ -1,4 +1,5 @@
 import pg from "pg";
+import { claimPlatformDatabaseTarget } from "./deployment-target.js";
 import { PLATFORM_STATE_MIGRATIONS } from "./migrations.js";
 export const DEFAULT_PLATFORM_STATE_SCHEMA = "platform";
 const LATEST_VERSION = PLATFORM_STATE_MIGRATIONS[PLATFORM_STATE_MIGRATIONS.length - 1].version;
@@ -26,6 +27,7 @@ export async function migratePlatformState(pool, options = {}) {
         await client.query(`CREATE SCHEMA IF NOT EXISTS ${identifier}`);
         await client.query(`SET LOCAL search_path TO ${identifier}`);
         await client.query("CREATE TABLE IF NOT EXISTS platform_state_migrations (version integer PRIMARY KEY, name text NOT NULL, applied_at bigint NOT NULL)");
+        await client.query("CREATE TABLE IF NOT EXISTS platform_deployment_target (singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), target_id text NOT NULL CHECK (target_id <> ''))");
         const existing = await client.query("SELECT version FROM platform_state_migrations");
         const done = new Set(existing.rows.map((row) => row.version));
         const applied = [];
@@ -35,6 +37,9 @@ export async function migratePlatformState(pool, options = {}) {
             await client.query(migration.sql);
             await client.query("INSERT INTO platform_state_migrations (version, name, applied_at) VALUES ($1, $2, (extract(epoch FROM clock_timestamp()) * 1000)::bigint)", [migration.version, migration.name]);
             applied.push(migration.version);
+        }
+        if (options.deploymentTargetId !== undefined) {
+            await claimPlatformDatabaseTarget(client, options.deploymentTargetId);
         }
         await client.query("COMMIT");
         return { applied, version: Math.max(0, ...done, ...applied) };

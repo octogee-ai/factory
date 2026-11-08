@@ -1,4 +1,5 @@
 import pg from "pg";
+import { claimPlatformDatabaseTarget } from "./deployment-target.js";
 import { PLATFORM_STATE_MIGRATIONS } from "./migrations.js";
 
 export const DEFAULT_PLATFORM_STATE_SCHEMA = "platform";
@@ -6,6 +7,7 @@ export const DEFAULT_PLATFORM_STATE_SCHEMA = "platform";
 export interface MigratePlatformStateOptions {
   readonly schema?: string;
   readonly through?: number;
+  readonly deploymentTargetId?: string;
 }
 
 export interface PlatformStateMigrationResult {
@@ -44,6 +46,9 @@ export async function migratePlatformState(
     await client.query(
       "CREATE TABLE IF NOT EXISTS platform_state_migrations (version integer PRIMARY KEY, name text NOT NULL, applied_at bigint NOT NULL)",
     );
+    await client.query(
+      "CREATE TABLE IF NOT EXISTS platform_deployment_target (singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), target_id text NOT NULL CHECK (target_id <> ''))",
+    );
     const existing = await client.query<{ version: number }>("SELECT version FROM platform_state_migrations");
     const done = new Set(existing.rows.map((row) => row.version));
     const applied: number[] = [];
@@ -55,6 +60,9 @@ export async function migratePlatformState(
         [migration.version, migration.name],
       );
       applied.push(migration.version);
+    }
+    if (options.deploymentTargetId !== undefined) {
+      await claimPlatformDatabaseTarget(client, options.deploymentTargetId);
     }
     await client.query("COMMIT");
     return { applied, version: Math.max(0, ...done, ...applied) };

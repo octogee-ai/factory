@@ -12,12 +12,12 @@ import { GatewayRetirementConflictError } from "@octogee/core/gateway-retirement
 import { readGatewayRuntimeDoc } from "@octogee/core/gateway-live-release";
 import { runNormalFleetMutation } from "@octogee/core/normal-fleet-mutation";
 import {
-  createFirestorePlatformStateStore,
   type GatewayRelease,
   type OperationRecord,
   type PlatformStateStore,
   type Stored,
 } from "@octogee/core/platform-state";
+import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
 import { timestampMillis } from "@octogee/core/timestamps";
 import {
   isGatewayRuntimeDoc, isReleasePayload, projectGatewayDesiredRootForGateway, releasePayloadHash,
@@ -171,7 +171,7 @@ export async function runFleetDeploy(argv: string[]): Promise<void> {
   const payload = centralGatewayReleasePayload(manifest);
   const app = initializeApp({ credential: applicationDefault(), projectId: settings.firebaseProjectId }, "deploy-fleet");
   try {
-    const store = createFirestorePlatformStateStore({ db: getFirestore(app) });
+    const store = await operatorPlatformStateStore(getFirestore(app), settings.targetId);
     const report = await deployFleet({ ...options, environment, payload }, {
       now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       readSnapshot: () => readFleetSnapshot(store, () => observeGatewayPods(environment)),

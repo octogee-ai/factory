@@ -27,7 +27,7 @@ export function parseSetAdminRoleArgs(
   return { project, revoke, target };
 }
 
-async function main(argv: string[] = process.argv.slice(2)) {
+export async function main(argv: string[] = process.argv.slice(2)) {
   const parsed = parseSetAdminRoleArgs(argv);
   if (!parsed) {
     console.error(SET_ADMIN_ROLE_USAGE);

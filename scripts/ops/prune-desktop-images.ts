@@ -2,7 +2,7 @@
 import { parseArgs } from "node:util";
 import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
-import { createFirestorePlatformStateStore } from "@octogee/core/platform-state";
+import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
 import { GoogleAuth } from "google-auth-library";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import { DESKTOP_ARCHIVE_KEEP_DEFAULT, runDesktopArchivePrune } from "../lib/desktop-image-publication.js";
@@ -22,7 +22,7 @@ const result = await runDesktopArchivePrune({
   apply: values.apply,
   actor: values.actor ?? "operator",
   why: values.why ?? "dry run",
-  store: createFirestorePlatformStateStore({ db: getFirestore() }),
+  store: await operatorPlatformStateStore(getFirestore(), deploymentEnvironmentSettings(environment).targetId),
   auth: new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] }),
 });
 if (!values.apply && result.remove.length > 0) console.log(`Dry run: rerun with --apply --actor=<who> --why=<reason> to remove ${result.remove.length} archived image(s).`);

@@ -86,6 +86,10 @@ describe("platform database pool configuration", () => {
     });
   });
 
+  it("lets a finished process exit while connections sit idle", () => {
+    expect(platformDatabasePoolConfig(settingsWith({}), "api")).toMatchObject({ allowExitOnIdle: true });
+  });
+
   it("disable connects without TLS", () => {
     expect(platformDatabasePoolConfig(settingsWith({ PLATFORM_DB_SSLMODE: "disable" }), "api").ssl).toBe(false);
   });

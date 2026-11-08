@@ -12,7 +12,7 @@ import { createHomeCopyClient } from "./lib/compute-home-copy.js";
 import type { ComputeRequest } from "./lib/compute-vm.js";
 import { assertBuilderRuntimeStorage } from "./builder-runtime-storage.js";
 import { runNormalFleetMutation } from "@octogee/core/normal-fleet-mutation";
-import { createFirestorePlatformStateStore, MissingRecordError, type CustomerDeletionJob, type FleetRegistryRecord, type GatewayRoot, type OpaqueMap, type GatewayRootFields, type GatewayRootPatch, type OperationRecord, type PlatformStateStore, type SecretsRepository, type Stored, type WatchChange, type WatchEvent } from "@octogee/core/platform-state";
+import { createFirestorePlatformStateStore, platformStateStoreFromEnvironment, MissingRecordError, type CustomerDeletionJob, type FleetRegistryRecord, type GatewayRoot, type OpaqueMap, type GatewayRootFields, type GatewayRootPatch, type OperationRecord, type PlatformStateStore, type SecretsRepository, type Stored, type WatchChange, type WatchEvent } from "@octogee/core/platform-state";
 import { restartGatewayProcess, restartGatewayDeployment } from './lib/runtime-restart-transport.js';
 import { assertMigrationRestartUnfenced } from './lib/runtime-restart-coordinator.js';
 import { assertOwnerOperationUnfenced } from './lib/computer-recovery-fence.js';
@@ -2722,7 +2722,11 @@ export async function main(product: { addAdminRoutes?: ProductAdminRoutes } = {}
     storageBucket: resolveDefaultStorageBucket(process.env.GOOGLE_CLOUD_PROJECT),
   });
   const db = getFirestore();
-  const store = createFirestorePlatformStateStore({ db });
+  const store = platformStateStoreFromEnvironment({
+    applicationName: "glm-controller",
+    createFirestoreStore: () => createFirestorePlatformStateStore({ db }),
+    logger,
+  });
   const { deps, fleetControllerPrivateKey, chartFingerprint } = await createControllerRuntime(db, store);
 
   log(

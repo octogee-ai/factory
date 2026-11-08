@@ -3,7 +3,9 @@
 import { initializeApp, applicationDefault, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
-import { createFirestorePlatformStateStore, type ServerNow } from "@octogee/core/platform-state";
+import { type ServerNow } from "@octogee/core/platform-state";
+import { deploymentTargetForFirebaseProject } from "@octogee/core/deployment-environment";
+import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
 import { mmApiCall, revokeAndMintBuilderPat } from "../lib/mattermost.js";
 import { pathToFileURL } from "node:url";
 
@@ -28,7 +30,7 @@ export function parseRotateBuilderMmPatArgs(
   return { project, target };
 }
 
-async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   const parsed = parseRotateBuilderMmPatArgs(argv);
   if (!parsed) {
     console.error(ROTATE_BUILDER_MM_PAT_USAGE);
@@ -39,7 +41,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     initializeApp({ credential: applicationDefault(), projectId: project });
   }
   const auth = getAuth();
-  const store = createFirestorePlatformStateStore({ db: getFirestore() });
+  const store = await operatorPlatformStateStore(getFirestore(), deploymentTargetForFirebaseProject(project).targetId);
   let uid: string;
   let email: string;
   if (target.includes("@")) {

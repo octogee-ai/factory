@@ -8,12 +8,13 @@ import {
 import { readGatewayAuthorizationInStore, readGatewayRuntimeDoc } from "@octogee/core/gateway-live-release";
 import { builderRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
 import {
-  createFirestorePlatformStateStore,
   type BuilderRecord,
   type PlatformStateStore,
   type PlatformStateTransaction,
   type Stored,
 } from "@octogee/core/platform-state";
+import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
+import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
 import {
   readSharedGatewayAutoscalingConfigInStore,
   readSharedGatewayPoolConfigInStore,
@@ -410,7 +411,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   initializeOperatorFirebaseAdmin(opts.env === "prod" ? "octogee" : `octogee-${opts.env}`);
   const db = getFirestore();
   const deps: AssignCustomerGatewayDeps = {
-    store: createFirestorePlatformStateStore({ db }),
+    store: await operatorPlatformStateStore(db, deploymentEnvironmentSettings(opts.env).targetId),
     accounts: firestoreBuilderAccountReader(db),
   };
   const uids: string[] = [];

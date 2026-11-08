@@ -75,6 +75,7 @@ export function platformDatabasePoolConfig(settings, applicationName) {
         max: settings.poolMax,
         application_name: applicationName,
         connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
+        allowExitOnIdle: true,
         lock_timeout: LOCK_TIMEOUT_MS,
         statement_timeout: STATEMENT_TIMEOUT_MS,
         idle_in_transaction_session_timeout: IDLE_IN_TRANSACTION_TIMEOUT_MS,

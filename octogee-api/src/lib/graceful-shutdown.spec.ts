@@ -18,6 +18,33 @@ describe("graceful shutdown", () => {
     expect(flushPostHog).toHaveBeenCalledTimes(1);
   });
 
+  it("closes the platform state store after the server has drained", async () => {
+    const order: string[] = [];
+    const shutdown = createGracefulShutdown({
+      server: { close: (callback) => { order.push("server"); callback(); } },
+      closePlatformState: async () => { order.push("platform-state"); },
+      onError: vi.fn(),
+    });
+
+    await shutdown();
+
+    expect(order).toEqual(["server", "platform-state"]);
+  });
+
+  it("reports a platform state close failure", async () => {
+    const onError = vi.fn();
+    const failure = new Error("close failed");
+    const shutdown = createGracefulShutdown({
+      server: { close: (callback) => callback() },
+      closePlatformState: async () => { throw failure; },
+      onError,
+    });
+
+    await shutdown();
+
+    expect(onError).toHaveBeenCalledWith("platform state shutdown failed", failure);
+  });
+
   it("still flushes PostHog when closing the HTTP server fails", async () => {
     const onError = vi.fn();
     const flushPostHog = vi.fn(async () => undefined);
