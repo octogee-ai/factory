@@ -1,4 +1,3 @@
-// Job-key registry: the literal lives once here, referenced everywhere else.
 export const JOBS = {
   gatewayEdge: "gateway-edge",
   octogeeApi: "octogee-api",
@@ -51,7 +50,6 @@ export interface UnitPackage {
   matchGatewayImageNpm?: boolean;
 }
 
-// The dynamic `test` matrix entries. `typecheck` runs after `npm ci`, before `npm test`.
 export const UNIT_PACKAGES: readonly UnitPackage[] = [
   {
     name: JOBS.core,
@@ -147,7 +145,6 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
   },
 ] as const;
 
-// Jobs that JDK/emulator or sharding force out of the matrix; each gated by its own flag.
 export const STANDALONE_JOBS: readonly JobKey[] = [
   JOBS.app,
   JOBS.desktopPackage,
@@ -170,7 +167,6 @@ export interface Ownership {
   jobs: readonly JobKey[];
 }
 
-// dir-prefix → owned jobs. Resolution picks the LONGEST match.
 export const OWNERSHIP: readonly Ownership[] = [
   { dir: "core/", jobs: [JOBS.core, JOBS.coreEmulator] },
   { dir: "test-helpers/", jobs: [JOBS.testHelpers] },
@@ -272,8 +268,6 @@ export interface ScopeEdge {
   reason: string;
 }
 
-// Cross-package edges, additive on top of ownership. The correctness hazards —
-// each pinned by a test in scope-resolve.spec.ts.
 export const EDGES: readonly ScopeEdge[] = [
   {
     when: "scripts/ops/run-emulator-vitest.mjs",
@@ -332,14 +326,6 @@ export const EDGES: readonly ScopeEdge[] = [
     jobs: [JOBS.firestoreRules],
     reason: "index shape drives rules-test expectations",
   },
-  // tests/specs imports/reads app/site/scripts/functions/octogee-api source
-  // directly (see #2130/#2134: an app/src/routes/appRoutes.ts change merged
-  // without running `test (tests)`, even though app-route-helpers.spec.ts
-  // asserts on it, and main went latently red). Ownership alone routes these
-  // paths to their own package job only; these edges make tests/specs'
-  // cross-package dependencies a hazard the scope resolver actually knows
-  // about — whether via `import`, a dynamic `import()`, or a raw
-  // readFileSync() source-text parity check.
   {
     when: "app/src/",
     jobs: [JOBS.tests],
@@ -440,8 +426,6 @@ export const EDGES: readonly ScopeEdge[] = [
   },
 ];
 
-// Repo-wide blast radius → run everything. Exact root-file names (so app/package.json
-// does NOT match) plus prefixes for the check runner and the resolver itself.
 export const GLOBAL_EXACT: ReadonlySet<string> = new Set([
   "package.json",
   "package-lock.json",
@@ -452,8 +436,6 @@ export const GLOBAL_EXACT: ReadonlySet<string> = new Set([
 ]);
 export const GLOBAL_PREFIX: readonly string[] = [".github/actions/setup-ci/", "scripts/lib/scope/", "scripts/lib/ci-", "scripts/ops/ci-", "scripts/ci/", "ci/"];
 
-// Inert → run nothing: docs and root-level markdown only. A *.md under a package
-// dir (e.g. site content) still falls to that package, never inert.
 export function isInert(path: string): boolean {
   if (path.startsWith("docs/")) return true;
   if (/^[^/]+\.md$/.test(path)) return true;

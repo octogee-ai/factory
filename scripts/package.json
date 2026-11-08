@@ -21,7 +21,8 @@
     "verify-silent-post": "tsx ops/verify-silent-post.ts",
     "verify:mattermost-capability": "tsx ops/verify-mattermost-capability-artifact.ts",
     "scope": "tsx ops/scope.ts",
-    "audit-duplication": "node ops/audit-duplication.mjs"
+    "audit-duplication": "node ops/audit-duplication.mjs",
+    "publish-factory-repo": "tsx ops/publish-factory-repo.ts"
   },
   "allowScripts": {
     "esbuild": true,

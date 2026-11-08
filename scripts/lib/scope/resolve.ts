@@ -39,11 +39,6 @@ function ownerOf(path: string): (typeof OWNERSHIP)[number] | undefined {
   return best;
 }
 
-/**
- * The CI test jobs a diff must run. Pure. A repo-wide path escalates to the full
- * set; a path no manifest entry owns is refused so it gets an owner, unless the
- * diff deletes it; an empty diff runs nothing. The CLI passes `everything` itself when the diff base is unusable.
- */
 export function resolveScope(changedPaths: string[], deletedPaths: ReadonlySet<string> = new Set()): ScopeResult {
   const acc: ScopeAccumulator = {
     jobs: new Set<JobKey>(),
@@ -142,7 +137,6 @@ export function toGhaOutputs(result: ScopeResult): GhaOutputs {
   };
 }
 
-// $GITHUB_OUTPUT key=value lines; test_matrix is single-line JSON for fromJSON().
 export function serializeGhaOutputs(out: GhaOutputs): string {
   return [
     `any=${out.any}`,
