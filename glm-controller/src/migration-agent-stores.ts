@@ -1,3 +1,5 @@
+import type { AgentStoresRepository } from "@octogee/core/platform-state";
+
 type Builder = { uid: string; slug: string };
 type Gateway = { gatewayClass: "shared" | "builder"; ownerUid: string | null; builderSlug: string | null };
 
@@ -69,4 +71,10 @@ export function createMigrationAgentStorePreparer(deps: {
     }
     await authority?.assertCurrent();
   };
+}
+
+export async function readBuilderAgentStoreInventory(stores: Pick<AgentStoresRepository, "list">, uid: string) {
+  return (await stores.list(uid)).flatMap(record =>
+    record.kind === "agent" && record.agentId !== "octogee-unmatched-route"
+      ? [{ agentId: record.agentId, storeId: record.storeId, schema: record.schema }] : []);
 }

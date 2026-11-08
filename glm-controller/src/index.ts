@@ -1,6 +1,6 @@
 import { createBuilderActivationRollRecoveryOwner } from './builder-activation-roll-recovery-owner.js';
 import { hasBuilderActivationTargetRollback, readBuilderActivationRollRecoveryCustody } from './builder-activation-roll-recovery.js';
-import { createMigrationAgentStorePreparer, type PrepareMigrationAgentStores } from "./migration-agent-stores.js";
+import { createMigrationAgentStorePreparer, readBuilderAgentStoreInventory, type PrepareMigrationAgentStores } from "./migration-agent-stores.js";
 import { prepareBuilderRecoveryTarget } from "./builder-recovery-target.js";
 import { createGatewayCredentialEnsurers } from "./gateway-credential-ensurers.js";
 import { createAgentStoreCredentialProvisioner, createAgentStoreCredentialRevoker, createAgentStoreCredentialRetirementVerifier, createAgentStoreOwnershipTransferer, assertNoBuilderAgentStores, eraseBuilderAgentStores } from "@octogee/core/agent-store-credentials";
@@ -2494,11 +2494,6 @@ function buildNativeReturnSourceRecoveryOwner(store: PlatformStateStore, kubeOps
   });
 }
 
-async function readBuilderAgentStoreInventory(store: PlatformStateStore, builder: { uid: string }) {
-  return (await store.builders.agentStores.list(builder.uid)).flatMap(record =>
-    record.kind === "agent" ? [{ agentId: record.agentId, storeId: record.storeId, schema: record.schema }] : []);
-}
-
 function createBootUpgradeJournal(store: PlatformStateStore): VmGatewayRuntimeDeps["journalBootUpgrade"] {
   return async (input, work) => {
     const assertAuthority = () => withGatewayRuntimeMutation(store, input.gatewayId, async (transaction) => {
@@ -2544,7 +2539,7 @@ async function createControllerRuntime(db: Firestore, store: PlatformStateStore)
       return { uid: builder.uid, slug };
     },
     ensureCredentials: gatewayId => ensureGatewayCredentials({ namespace: NAMESPACE, gatewayId }),
-    transferOwnership: createAgentStoreOwnershipTransferer(agentStore.adminDsn, builder => readBuilderAgentStoreInventory(store, builder)),
+    transferOwnership: createAgentStoreOwnershipTransferer(agentStore.adminDsn, builder => readBuilderAgentStoreInventory(store.builders.agentStores, builder.uid)),
   });
   const serviceAccountEnsurer = createGatewayServiceAccountEnsurer({
     runKubectl,

@@ -1,5 +1,6 @@
+import type { AgentStoreAnchor, AgentStoreRecord, Revision, Stored } from "@octogee/core/platform-state";
 import { describe, expect, it, vi } from "vitest";
-import { createMigrationAgentStorePreparer } from "../migration-agent-stores.js";
+import { createMigrationAgentStorePreparer, readBuilderAgentStoreInventory } from "../migration-agent-stores.js";
 import { classifyCustomerMigrationV2Error } from "@octogee/core/customer-migration-v2";
 import { classifyOperationFailure } from "../operation-retry.js";
 
@@ -99,5 +100,34 @@ describe("claimed agent-store recovery authority", () => {
     await expect(h.prepare("source", "alice", { expectedBuilderUid: "uid-alice", assertCurrent })).rejects.toThrow();
     expect(h.transferOwnership).not.toHaveBeenCalled();
     if (scenario === "changed-uid") expect(h.ensureCredentials).not.toHaveBeenCalled();
+  });
+});
+
+describe("migration agent-store inventory", () => {
+  function stored(anchor: AgentStoreAnchor): Stored<AgentStoreRecord> {
+    return { ...anchor, gatewayId: "source", generation: null, assignmentEpoch: 1, recordedAt: 1, revision: "1" as Revision };
+  }
+
+  it("transfers Builder agents without gateway-wide stores or the unmatched-route service agent", async () => {
+    const coach = { kind: "agent", agentId: "octogee-alice-coach", storeId: "coach-store", schema: "coach_schema" } as const;
+    const project = { kind: "agent", agentId: "octogee-alice-proj-site-coach", storeId: "project-store", schema: "project_schema" } as const;
+    const list = vi.fn(async () => [
+      stored(coach), stored(project),
+      stored({ kind: "agent", agentId: "octogee-unmatched-route", storeId: "service-store", schema: "service_schema" }),
+      stored({ kind: "gateway-state", storeId: "gateway-store", schema: "gateway_schema" }),
+      stored({ kind: "auxiliary", family: "workboard", storeId: "auxiliary-store", schema: "workboard_schema" }),
+    ]);
+    expect(await readBuilderAgentStoreInventory({ list }, "uid-alice")).toEqual([
+      { agentId: coach.agentId, storeId: coach.storeId, schema: coach.schema },
+      { agentId: project.agentId, storeId: project.storeId, schema: project.schema },
+    ]);
+    expect(list).toHaveBeenCalledExactlyOnceWith("uid-alice");
+  });
+
+  it("keeps foreign agent identities visible to the ownership validator", async () => {
+    const list = vi.fn(async () => [stored({ kind: "agent", agentId: "octogee-bob-coach", storeId: "foreign-store", schema: "foreign_schema" })]);
+    expect(await readBuilderAgentStoreInventory({ list }, "uid-alice")).toEqual([
+      { agentId: "octogee-bob-coach", storeId: "foreign-store", schema: "foreign_schema" },
+    ]);
   });
 });
