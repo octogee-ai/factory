@@ -27,7 +27,6 @@ import { MissingRecordError } from "./platform-state/errors.js";
 import type { AnonymousOperationalArchive } from "./platform-state/jobs.js";
 import type { PlatformStateStore } from "./platform-state/store.js";
 import { readOwnerBrokerUsageSeries } from "./broker-usage-series.js";
-import { addAdminCustomerResetRoutes } from "./admin-customer-reset.js";
 import {
   MODEL_BROKER_USAGE_EVENTS_COLLECTION,
   MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
@@ -574,7 +573,6 @@ export function addAdminCustomerRoutes(
   const { db, store, logger, FieldValue } = deps;
   const accounts = firestoreBuilderAccountReader(db);
   const directory: CustomerDirectory = { db, store, accounts };
-  addAdminCustomerResetRoutes(router, deps);
 
   router.get(
     "/customer-archives",

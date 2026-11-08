@@ -7,12 +7,9 @@ import {
   DEFAULT_OPS_AGENT_MODEL_REF,
   DEFAULT_PLATFORM_CONNECT_CONFIG,
   DEFAULT_PLATFORM_FREE_CONFIG,
-  DEFAULT_PLATFORM_TRIAL_CONFIG,
   GOOGLE_CONNECT_CAPABILITY_KEYS,
   PLATFORM_CONNECT_CONFIG_DOC,
   PLATFORM_FREE_CONFIG_DOC,
-  PLATFORM_TRIAL_CONFIG_DOC,
-  TRIAL_CONFIG_SCHEMA_VERSION,
   builderAgentModelDefaultFromDoc,
   googleCapabilityConnectAllowed,
   googleConnectAllowed,
@@ -21,11 +18,8 @@ import {
   parsePlatformConnectConfig,
   parsePlatformFreeConfig,
   parsePlatformModelConfig,
-  parsePlatformTrialConfig,
-  parseSignupOfferBudgetPolicy,
   resolveFreeTierModel,
   resolveOpsAgentModel,
-  trialConfigHash,
 } from "./platform-config";
 
 describe("parsePlatformFreeConfig", () => {
@@ -49,123 +43,6 @@ describe("parsePlatformFreeConfig", () => {
     expect(parsePlatformFreeConfig({ schemaVersion: 1, workspaceStorageGb: 1001 })).toBeNull();
     expect(parsePlatformFreeConfig({ schemaVersion: 2, workspaceStorageGb: 10 })).toBeNull();
     expect(parsePlatformFreeConfig(null)).toBeNull();
-  });
-});
-
-describe("parsePlatformTrialConfig", () => {
-  it("seeds the seven-day momentum Signup Offer with a Hobby builder gateway", () => {
-    expect(parsePlatformTrialConfig(DEFAULT_PLATFORM_TRIAL_CONFIG)).toEqual({
-      schemaVersion: 2,
-      offerId: "builder-signup",
-      offerVersion: 3,
-      durationDays: 7,
-      defaultPersonalTier: "personal",
-      defaultBuilderTier: "hobby",
-      budgetPolicy: {
-        schemaVersion: 1,
-        currency: "USD",
-        cumulativeUnlockUsd: [4.8, 5.6, 6.4, 6.8, 7.2, 7.6, 8],
-        hardCapUsd: 8,
-      },
-    });
-    expect(PLATFORM_TRIAL_CONFIG_DOC).toBe("trial");
-    expect(TRIAL_CONFIG_SCHEMA_VERSION).toBe(2);
-  });
-
-  it("accepts every Personal tier and every provisionable builder tier", () => {
-    for (const personalTier of ["personal_free", "personal", "personal_pro", "personal_pro_max"]) {
-      expect(
-        parsePlatformTrialConfig({
-          ...DEFAULT_PLATFORM_TRIAL_CONFIG,
-          defaultPersonalTier: personalTier,
-        }),
-      ).not.toBeNull();
-    }
-    for (const builderTier of ["hobby", "pro", "team"]) {
-      expect(
-        parsePlatformTrialConfig({
-          ...DEFAULT_PLATFORM_TRIAL_CONFIG,
-          defaultBuilderTier: builderTier,
-        }),
-      ).not.toBeNull();
-    }
-    expect(
-      parsePlatformTrialConfig({
-        ...DEFAULT_PLATFORM_TRIAL_CONFIG,
-        defaultBuilderTier: null,
-      }),
-    ).toMatchObject({ defaultBuilderTier: null });
-    // enterprise has no instance size, so nothing can provision it.
-    expect(
-      parsePlatformTrialConfig({
-        ...DEFAULT_PLATFORM_TRIAL_CONFIG,
-        defaultBuilderTier: "enterprise",
-      }),
-    ).toBeNull();
-  });
-
-  it("rejects malformed and unsupported configs", () => {
-    expect(parsePlatformTrialConfig(null)).toBeNull();
-    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, schemaVersion: 1 })).toBeNull();
-    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, defaultPersonalTier: "pro" })).toBeNull();
-    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, defaultBuilderTier: "max" })).toBeNull();
-    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, offerId: "" })).toBeNull();
-    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, offerVersion: 0 })).toBeNull();
-    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, durationDays: 0 })).toBeNull();
-    expect(parsePlatformTrialConfig({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, durationDays: 31 })).toBeNull();
-    expect(parsePlatformTrialConfig({
-      ...DEFAULT_PLATFORM_TRIAL_CONFIG,
-      budgetPolicy: undefined,
-    })).toBeNull();
-  });
-
-  it("hashes only the canonical grant-shaping fields", () => {
-    const hash = trialConfigHash(DEFAULT_PLATFORM_TRIAL_CONFIG);
-    expect(hash).toMatch(/^[0-9a-f]{16}$/);
-    expect(
-      trialConfigHash({
-        ...DEFAULT_PLATFORM_TRIAL_CONFIG,
-        updatedBy: "operator-2",
-      }),
-    ).toBe(hash);
-    expect(trialConfigHash({
-      ...DEFAULT_PLATFORM_TRIAL_CONFIG,
-      defaultBuilderTier: "team",
-    })).not.toBe(hash);
-    expect(
-      trialConfigHash({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, durationDays: 14 }),
-    ).not.toBe(hash);
-    expect(
-      trialConfigHash({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, offerVersion: 2 }),
-    ).not.toBe(hash);
-    expect(
-      trialConfigHash({
-        ...DEFAULT_PLATFORM_TRIAL_CONFIG,
-        budgetPolicy: {
-          ...DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy!,
-          cumulativeUnlockUsd: [4.9, 5.6, 6.4, 6.8, 7.2, 7.6, 8],
-        },
-      }),
-    ).not.toBe(hash);
-  });
-
-  it("validates the complete immutable momentum schedule", () => {
-    const valid = DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy!;
-    expect(parseSignupOfferBudgetPolicy(valid)).toEqual(valid);
-    for (const invalid of [
-      undefined,
-      { ...valid, schemaVersion: 2 },
-      { ...valid, currency: "EUR" },
-      { ...valid, cumulativeUnlockUsd: [4.8, 5.6] },
-      { ...valid, cumulativeUnlockUsd: [4.8, 5.6, 5.5, 6.8, 7.2, 7.6, 8] },
-      { ...valid, cumulativeUnlockUsd: [4.8, 5.6, -1, 6.8, 7.2, 7.6, 8] },
-      { ...valid, cumulativeUnlockUsd: [4.8, 5.6, Number.NaN, 6.8, 7.2, 7.6, 8] },
-      { ...valid, hardCapUsd: 0 },
-      { ...valid, hardCapUsd: 9 },
-      { ...valid, unrecognizedPromise: true },
-    ]) {
-      expect(parseSignupOfferBudgetPolicy(invalid)).toBeNull();
-    }
   });
 });
 

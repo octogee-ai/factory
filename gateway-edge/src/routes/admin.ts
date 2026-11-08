@@ -17,18 +17,14 @@ import { customerDeletionDeps } from "../lib/customer-deletion-deps.js";
 import { platformStateStore } from "../lib/platform-state.js";
 import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
 import { modelRefForCatalogEntry } from "@octogee/shared/types/agent-models";
-import { BUILDER_TIERS, TIERS } from "@octogee/shared/types/billing-tiers";
 import {
   DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF,
   DEFAULT_BUILDER_AGENT_MODEL_REF,
   DEFAULT_FREE_TIER_MODEL_REF,
   DEFAULT_OPS_AGENT_MODEL_REF,
-  PLATFORM_CONFIG_COLLECTION,
-  PLATFORM_TRIAL_CONFIG_DOC,
   parsePlatformConnectConfig,
   parsePlatformFreeConfig,
   parsePlatformModelConfig,
-  parsePlatformTrialConfig,
   resolveFreeTierModel,
   resolveOpsAgentModel,
   type PlatformModelConfig,
@@ -308,75 +304,6 @@ router.put("/platform-connect-config", async (req, res) => {
   } catch (err) {
     logger.error("[admin] platform-connect-config write failed", { err });
     res.status(500).json({ error: "platform_config_write_failed" });
-  }
-});
-
-const platformTrialDoc = () =>
-  db.collection(PLATFORM_CONFIG_COLLECTION).doc(PLATFORM_TRIAL_CONFIG_DOC);
-
-router.get("/platform-trial-config", async (_req, res) => {
-  try {
-    const configSnap = await platformTrialDoc().get();
-    const config = parsePlatformTrialConfig(configSnap.data());
-    if (!config) {
-      logger.error("[admin] trial config is missing or invalid", {
-        exists: configSnap.exists,
-      });
-      res.status(409).json({ error: "trial_config_invalid" });
-      return;
-    }
-    res.json({
-      config,
-      personalPlans: ["personal_free", "personal", "personal_pro", "personal_pro_max"].map((name) => ({
-        name,
-        displayName: TIERS[name as keyof typeof TIERS].displayName,
-      })),
-      builderPlans: [
-        { name: null, displayName: "No", sizingTier: null },
-        ...["hobby", "pro", "team"].map((name) => ({
-          name,
-          displayName: BUILDER_TIERS[name as keyof typeof BUILDER_TIERS].displayName,
-          sizingTier: BUILDER_TIERS[name as keyof typeof BUILDER_TIERS].instance,
-        })),
-      ],
-    });
-  } catch (err) {
-    logger.error("[admin] platform-trial-config read failed", { err });
-    res.status(500).json({ error: "trial_config_read_failed" });
-  }
-});
-
-router.put("/platform-trial-config", async (req, res) => {
-  const config = parsePlatformTrialConfig(req.body);
-  if (!config) {
-    res.status(400).json({ error: "invalid_trial_config" });
-    return;
-  }
-  try {
-    await platformTrialDoc().set({
-      schemaVersion: config.schemaVersion,
-      offerId: config.offerId,
-      offerVersion: config.offerVersion,
-      durationDays: config.durationDays,
-      defaultPersonalTier: config.defaultPersonalTier,
-      defaultBuilderTier: config.defaultBuilderTier,
-      budgetPolicy: config.budgetPolicy,
-      updatedAt: FieldValue.serverTimestamp(),
-      updatedBy: req.uid ?? null,
-    });
-    logger.info("[admin] trial defaults set", {
-      offerId: config.offerId,
-      offerVersion: config.offerVersion,
-      durationDays: config.durationDays,
-      defaultPersonalTier: config.defaultPersonalTier,
-      defaultBuilderTier: config.defaultBuilderTier,
-      budgetPolicy: config.budgetPolicy,
-      updatedBy: req.uid,
-    });
-    res.json({ ok: true });
-  } catch (err) {
-    logger.error("[admin] platform-trial-config write failed", { err });
-    res.status(500).json({ error: "trial_config_write_failed" });
   }
 });
 

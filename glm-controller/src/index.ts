@@ -316,7 +316,7 @@ import {
   createProjectHostingRetirementClient,
   retireWorkspaceBeforeLegacyHostingDeletion,
 } from "./project-hosting-retirement-client.js";
-import { startHttpServer } from "./http-server.js";
+import { startHttpServer, type ProductAdminRoutes } from "./http-server.js";
 import { createConnectorSecretDecryptor } from "./connector-secret-decryption.js";
 import {
   assertCustomerRestoreNotInProgress,
@@ -2208,6 +2208,7 @@ export function heartbeatPollInstanceIds(records: readonly FleetRegistryRecord[]
 type ControllerStopper = () => void;
 
 interface ControllerBackgroundTasksDeps {
+  addProductAdminRoutes?: ProductAdminRoutes;
   db: Firestore;
   deps: ControllerDeps;
   helm: HelmRunner;
@@ -2222,6 +2223,7 @@ const GITEA_GATEWAY_KEY_GC_MIN_CALL_INTERVAL_MS = 100;
 const GITEA_GATEWAY_KEY_GC_GRACE_MS = 10 * 60 * 1000;
 
 function startControllerBackgroundTasks({
+  addProductAdminRoutes,
   db,
   deps,
   helm,
@@ -2334,6 +2336,7 @@ function startControllerBackgroundTasks({
   const httpKubeOps = deps.kubeOps;
   const decryptConnectorSecret = createConnectorSecretDecryptor();
   const stopHttp = startHttpServer({
+    addProductAdminRoutes,
     db,
     store: deps.store,
     accounts: firestoreBuilderAccountReader(db),
@@ -2712,7 +2715,7 @@ async function createControllerRuntime(db: Firestore, store: PlatformStateStore)
   return { deps, fleetControllerPrivateKey, chartFingerprint };
 }
 
-async function main(): Promise<void> {
+export async function main(product: { addAdminRoutes?: ProductAdminRoutes } = {}): Promise<void> {
   const controllerStartedAt = Date.now();
   initializeApp({
     credential: applicationDefault(),
@@ -2777,6 +2780,7 @@ async function main(): Promise<void> {
   }
 
   const stoppers = startControllerBackgroundTasks({
+    addProductAdminRoutes: product.addAdminRoutes,
     db,
     deps,
     helm: deps.helm,

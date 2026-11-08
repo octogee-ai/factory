@@ -57,7 +57,13 @@ function corsMiddleware(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
+export type ProductAdminRoutes = (
+  router: Router,
+  deps: { db: Firestore; FieldValue: { serverTimestamp: () => unknown } },
+) => void;
+
 export interface HttpServerDeps {
+  addProductAdminRoutes?: ProductAdminRoutes;
   db: Firestore;
   store: PlatformStateStore;
   accounts: BuilderAccountReader;
@@ -284,6 +290,7 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     FieldValue,
     logger: adaptLogger(deps.log),
   });
+  deps.addProductAdminRoutes?.(adminRouter, { db: deps.db, FieldValue });
   addAdminFleetRoutes(adminRouter, {
     computerReplacementEnabled: true,
     db: deps.db,

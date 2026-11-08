@@ -1,9 +1,4 @@
-import type { TrialGrant } from "./billing.js";
-import { type BuilderTierName, type PersonalTierName } from "./billing-tiers.js";
 import type { ModelCatalogProvider } from "./model-catalog.js";
-import { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, parseSignupOfferBudgetPolicy, type ModelBrokerSignupOfferBudget, type SignupOfferBudgetPolicy } from "./signup-offer.js";
-export { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, parseSignupOfferBudgetPolicy, };
-export type { SignupOfferBudgetPolicy };
 export declare const DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS: number;
 export interface PlatformRuntimeConfig {
     disposableGatewayIdleMs: number;
@@ -12,8 +7,6 @@ export declare const PLATFORM_CONFIG_COLLECTION = "platformConfig";
 export declare const PLATFORM_MODEL_CONFIG_DOC = "models";
 export declare const PLATFORM_CONNECT_CONFIG_DOC = "connect";
 export declare const PLATFORM_FREE_CONFIG_DOC = "free";
-export declare const PLATFORM_TRIAL_CONFIG_DOC = "trial";
-export declare const TRIAL_CONFIG_SCHEMA_VERSION: 2;
 export interface PlatformFreeConfig {
     schemaVersion: 1;
     workspaceStorageGb: number;
@@ -22,26 +15,6 @@ export interface PlatformFreeConfig {
 }
 export declare const DEFAULT_PLATFORM_FREE_CONFIG: PlatformFreeConfig;
 export declare function parsePlatformFreeConfig(value: unknown): PlatformFreeConfig | null;
-export type TrialBuilderTier = Exclude<BuilderTierName, "enterprise">;
-export interface PlatformTrialConfig {
-    schemaVersion: typeof TRIAL_CONFIG_SCHEMA_VERSION;
-    offerId: string;
-    offerVersion: number;
-    durationDays: number;
-    defaultPersonalTier: PersonalTierName;
-    defaultBuilderTier: TrialBuilderTier | null;
-    budgetPolicy: SignupOfferBudgetPolicy;
-    updatedAt?: unknown;
-    updatedBy?: string;
-}
-export declare const DEFAULT_PLATFORM_TRIAL_CONFIG: PlatformTrialConfig;
-export declare function parsePlatformTrialConfig(value: unknown): PlatformTrialConfig | null;
-export declare function trialConfigHash(config: PlatformTrialConfig): string;
-export declare function createSignupOffer(uid: string, config: PlatformTrialConfig, claimedAtMs: number): {
-    grant: TrialGrant;
-    budgetKey: string;
-    budget: ModelBrokerSignupOfferBudget;
-};
 export type GoogleConnectStage = "off" | "allowlist" | "on";
 export declare const GOOGLE_CONNECT_STAGES: readonly GoogleConnectStage[];
 export declare const GOOGLE_CONNECT_CAPABILITY_KEYS: readonly ["calendar", "gmail", "drive", "drive-full", "tasks", "contacts"];

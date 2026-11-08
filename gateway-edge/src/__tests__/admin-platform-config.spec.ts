@@ -1,4 +1,5 @@
-import { DEFAULT_OPS_AGENT_MODEL_REF, DEFAULT_PLATFORM_TRIAL_CONFIG } from "@octogee/shared/types/platform-config";
+import { DEFAULT_OPS_AGENT_MODEL_REF } from "@octogee/shared/types/platform-config";
+import { DEFAULT_PLATFORM_TRIAL_CONFIG } from "@octogee/shared/types/signup-offer-config";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -81,11 +82,13 @@ vi.mock("../middleware/auth", () => ({
 
 import express from "express";
 import adminRouter from "../routes/admin.js";
+import productAdminRouter from "../routes/product-admin.js";
 
 function buildApp() {
   const app = express();
   app.use(express.json());
   app.use("/api/admin", adminRouter);
+  app.use("/api/admin", productAdminRouter);
   return app;
 }
 

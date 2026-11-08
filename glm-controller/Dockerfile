@@ -98,4 +98,4 @@ COPY helm/octogee         /charts/octogee
 COPY helm/octogee-gateway /charts/octogee-gateway
 
 USER 1000:1000
-ENTRYPOINT ["/usr/bin/tini", "--", "node", "dist/glm-controller/src/index.js"]
+ENTRYPOINT ["/usr/bin/tini", "--", "node", "dist/glm-controller/src/product-main.js"]

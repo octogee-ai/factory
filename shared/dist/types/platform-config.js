@@ -1,7 +1,4 @@
 import { SIMPLE_MODEL_TIERS, catalogEntryForModelRef } from "./agent-models.js";
-import { BUILDER_TIERS, TIERS, } from "./billing-tiers.js";
-import { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, parseSignupOfferBudgetPolicy, modelBrokerSignupOfferBudgetDocId, SIGNUP_OFFER_LEDGER_RETENTION_MS, } from "./signup-offer.js";
-export { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, parseSignupOfferBudgetPolicy, };
 export const DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS = 15 * 60_000;
 // Operator dials for platform-wide model policy, stored at platformConfig/models
 // (server-only collection; admin reads/writes go through the API). Absent or
@@ -11,8 +8,6 @@ export const PLATFORM_CONFIG_COLLECTION = "platformConfig";
 export const PLATFORM_MODEL_CONFIG_DOC = "models";
 export const PLATFORM_CONNECT_CONFIG_DOC = "connect";
 export const PLATFORM_FREE_CONFIG_DOC = "free";
-export const PLATFORM_TRIAL_CONFIG_DOC = "trial";
-export const TRIAL_CONFIG_SCHEMA_VERSION = 2;
 export const DEFAULT_PLATFORM_FREE_CONFIG = {
     schemaVersion: 1,
     workspaceStorageGb: 10,
@@ -35,113 +30,6 @@ export function parsePlatformFreeConfig(value) {
         ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
         ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy } : {}),
     };
-}
-export const DEFAULT_PLATFORM_TRIAL_CONFIG = {
-    schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
-    offerId: "builder-signup",
-    offerVersion: 3,
-    durationDays: 7,
-    defaultPersonalTier: "personal",
-    defaultBuilderTier: "hobby",
-    budgetPolicy: DEFAULT_SIGNUP_OFFER_BUDGET_POLICY,
-};
-function isPersonalTier(value) {
-    return typeof value === "string" && value in TIERS && value !== "builder" && value !== "operator";
-}
-function isTrialBuilderTier(value) {
-    return (typeof value === "string" &&
-        value in BUILDER_TIERS &&
-        BUILDER_TIERS[value].instance !== null);
-}
-function validTrialOfferIdentity(raw) {
-    return raw.schemaVersion === TRIAL_CONFIG_SCHEMA_VERSION &&
-        typeof raw.offerId === "string" &&
-        raw.offerId.trim().length > 0 &&
-        Number.isInteger(raw.offerVersion) &&
-        raw.offerVersion >= 1;
-}
-function validTrialOfferTerms(raw) {
-    return Number.isInteger(raw.durationDays) &&
-        raw.durationDays >= 1 &&
-        raw.durationDays <= 30 &&
-        isPersonalTier(raw.defaultPersonalTier) &&
-        (raw.defaultBuilderTier === null || isTrialBuilderTier(raw.defaultBuilderTier));
-}
-function validConfigEditor(value) {
-    return value === undefined || typeof value === "string";
-}
-export function parsePlatformTrialConfig(value) {
-    if (!value || typeof value !== "object" || Array.isArray(value))
-        return null;
-    const raw = value;
-    const budgetPolicy = parseSignupOfferBudgetPolicy(raw.budgetPolicy);
-    if (!validTrialOfferIdentity(raw) ||
-        !validTrialOfferTerms(raw) ||
-        !validConfigEditor(raw.updatedBy) ||
-        budgetPolicy === null) {
-        return null;
-    }
-    return {
-        schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
-        offerId: raw.offerId,
-        offerVersion: raw.offerVersion,
-        durationDays: raw.durationDays,
-        defaultPersonalTier: raw.defaultPersonalTier,
-        defaultBuilderTier: raw.defaultBuilderTier,
-        budgetPolicy,
-        ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
-        ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy } : {}),
-    };
-}
-function fnv1a64Hex(input) {
-    let high = 0x811c9dc5;
-    let low = 0x01000193;
-    for (let index = 0; index < input.length; index += 1) {
-        const code = input.charCodeAt(index);
-        high = Math.imul(high ^ code, 0x01000193) >>> 0;
-        low = Math.imul(low ^ code, 0x811c9dc5) >>> 0;
-    }
-    return high.toString(16).padStart(8, "0") + low.toString(16).padStart(8, "0");
-}
-export function trialConfigHash(config) {
-    return fnv1a64Hex(JSON.stringify({
-        schemaVersion: config.schemaVersion,
-        offerId: config.offerId,
-        offerVersion: config.offerVersion,
-        durationDays: config.durationDays,
-        defaultPersonalTier: config.defaultPersonalTier,
-        defaultBuilderTier: config.defaultBuilderTier,
-        budgetPolicy: config.budgetPolicy,
-    }));
-}
-export function createSignupOffer(uid, config, claimedAtMs) {
-    const endsAtMs = claimedAtMs + config.durationDays * 24 * 60 * 60 * 1000;
-    const configHash = trialConfigHash(config);
-    const grant = {
-        schemaVersion: 4,
-        offerId: config.offerId,
-        offerVersion: config.offerVersion,
-        personalTier: config.defaultPersonalTier,
-        builderTier: config.defaultBuilderTier,
-        configHash,
-        claimedAt: new Date(claimedAtMs),
-        endsAt: new Date(endsAtMs),
-        budgetPolicy: config.budgetPolicy,
-    };
-    const budget = {
-        ownerUid: uid,
-        offerId: config.offerId,
-        offerVersion: config.offerVersion,
-        receiptConfigHash: configHash,
-        claimedAtMs,
-        endsAtMs,
-        chargeUsd: 0,
-        requestCount: 0,
-        totalTokens: 0,
-        updatedAt: claimedAtMs,
-        expiresAt: new Date(claimedAtMs + SIGNUP_OFFER_LEDGER_RETENTION_MS),
-    };
-    return { grant, budgetKey: modelBrokerSignupOfferBudgetDocId(budget), budget };
 }
 export const GOOGLE_CONNECT_STAGES = ["off", "allowlist", "on"];
 export const GOOGLE_CONNECT_CAPABILITY_KEYS = [

@@ -1,26 +1,5 @@
 import { SIMPLE_MODEL_TIERS, catalogEntryForModelRef } from "./agent-models.js";
-import type { TrialGrant } from "./billing.js";
-import {
-  BUILDER_TIERS,
-  TIERS,
-  type BuilderTierName,
-  type PersonalTierName,
-} from "./billing-tiers.js";
 import type { ModelCatalogProvider } from "./model-catalog.js";
-import {
-  DEFAULT_SIGNUP_OFFER_BUDGET_POLICY,
-  parseSignupOfferBudgetPolicy,
-  modelBrokerSignupOfferBudgetDocId,
-  SIGNUP_OFFER_LEDGER_RETENTION_MS,
-  type ModelBrokerSignupOfferBudget,
-  type SignupOfferBudgetPolicy,
-} from "./signup-offer.js";
-
-export {
-  DEFAULT_SIGNUP_OFFER_BUDGET_POLICY,
-  parseSignupOfferBudgetPolicy,
-};
-export type { SignupOfferBudgetPolicy };
 
 export const DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS = 15 * 60_000;
 
@@ -37,9 +16,6 @@ export const PLATFORM_CONFIG_COLLECTION = "platformConfig";
 export const PLATFORM_MODEL_CONFIG_DOC = "models";
 export const PLATFORM_CONNECT_CONFIG_DOC = "connect";
 export const PLATFORM_FREE_CONFIG_DOC = "free";
-export const PLATFORM_TRIAL_CONFIG_DOC = "trial";
-
-export const TRIAL_CONFIG_SCHEMA_VERSION = 2 as const;
 
 export interface PlatformFreeConfig {
   schemaVersion: 1;
@@ -72,144 +48,6 @@ export function parsePlatformFreeConfig(value: unknown): PlatformFreeConfig | nu
     ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
     ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy } : {}),
   };
-}
-
-export type TrialBuilderTier = Exclude<BuilderTierName, "enterprise">;
-
-export interface PlatformTrialConfig {
-  schemaVersion: typeof TRIAL_CONFIG_SCHEMA_VERSION;
-  offerId: string;
-  offerVersion: number;
-  durationDays: number;
-  defaultPersonalTier: PersonalTierName;
-  defaultBuilderTier: TrialBuilderTier | null;
-  budgetPolicy: SignupOfferBudgetPolicy;
-  updatedAt?: unknown;
-  updatedBy?: string;
-}
-
-export const DEFAULT_PLATFORM_TRIAL_CONFIG: PlatformTrialConfig = {
-  schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
-  offerId: "builder-signup",
-  offerVersion: 3,
-  durationDays: 7,
-  defaultPersonalTier: "personal",
-  defaultBuilderTier: "hobby",
-  budgetPolicy: DEFAULT_SIGNUP_OFFER_BUDGET_POLICY,
-};
-
-function isPersonalTier(value: unknown): value is PersonalTierName {
-  return typeof value === "string" && value in TIERS && value !== "builder" && value !== "operator";
-}
-
-function isTrialBuilderTier(value: unknown): value is TrialBuilderTier {
-  return (
-    typeof value === "string" &&
-    value in BUILDER_TIERS &&
-    BUILDER_TIERS[value as BuilderTierName].instance !== null
-  );
-}
-
-function validTrialOfferIdentity(raw: Record<string, unknown>): boolean {
-  return raw.schemaVersion === TRIAL_CONFIG_SCHEMA_VERSION &&
-    typeof raw.offerId === "string" &&
-    raw.offerId.trim().length > 0 &&
-    Number.isInteger(raw.offerVersion) &&
-    (raw.offerVersion as number) >= 1;
-}
-
-function validTrialOfferTerms(raw: Record<string, unknown>): boolean {
-  return Number.isInteger(raw.durationDays) &&
-    (raw.durationDays as number) >= 1 &&
-    (raw.durationDays as number) <= 30 &&
-    isPersonalTier(raw.defaultPersonalTier) &&
-    (raw.defaultBuilderTier === null || isTrialBuilderTier(raw.defaultBuilderTier));
-}
-
-function validConfigEditor(value: unknown): boolean {
-  return value === undefined || typeof value === "string";
-}
-
-export function parsePlatformTrialConfig(value: unknown): PlatformTrialConfig | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const raw = value as Record<string, unknown>;
-  const budgetPolicy = parseSignupOfferBudgetPolicy(raw.budgetPolicy);
-  if (
-    !validTrialOfferIdentity(raw) ||
-    !validTrialOfferTerms(raw) ||
-    !validConfigEditor(raw.updatedBy) ||
-    budgetPolicy === null
-  ) {
-    return null;
-  }
-  return {
-    schemaVersion: TRIAL_CONFIG_SCHEMA_VERSION,
-    offerId: raw.offerId as string,
-    offerVersion: raw.offerVersion as number,
-    durationDays: raw.durationDays as number,
-    defaultPersonalTier: raw.defaultPersonalTier as PersonalTierName,
-    defaultBuilderTier: raw.defaultBuilderTier as TrialBuilderTier | null,
-    budgetPolicy,
-    ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
-    ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy as string } : {}),
-  };
-}
-
-function fnv1a64Hex(input: string): string {
-  let high = 0x811c9dc5;
-  let low = 0x01000193;
-  for (let index = 0; index < input.length; index += 1) {
-    const code = input.charCodeAt(index);
-    high = Math.imul(high ^ code, 0x01000193) >>> 0;
-    low = Math.imul(low ^ code, 0x811c9dc5) >>> 0;
-  }
-  return high.toString(16).padStart(8, "0") + low.toString(16).padStart(8, "0");
-}
-
-export function trialConfigHash(config: PlatformTrialConfig): string {
-  return fnv1a64Hex(JSON.stringify({
-    schemaVersion: config.schemaVersion,
-    offerId: config.offerId,
-    offerVersion: config.offerVersion,
-    durationDays: config.durationDays,
-    defaultPersonalTier: config.defaultPersonalTier,
-    defaultBuilderTier: config.defaultBuilderTier,
-    budgetPolicy: config.budgetPolicy,
-  }));
-}
-
-export function createSignupOffer(
-  uid: string,
-  config: PlatformTrialConfig,
-  claimedAtMs: number,
-): { grant: TrialGrant; budgetKey: string; budget: ModelBrokerSignupOfferBudget } {
-  const endsAtMs = claimedAtMs + config.durationDays * 24 * 60 * 60 * 1000;
-  const configHash = trialConfigHash(config);
-  const grant: TrialGrant = {
-    schemaVersion: 4,
-    offerId: config.offerId,
-    offerVersion: config.offerVersion,
-    personalTier: config.defaultPersonalTier,
-    builderTier: config.defaultBuilderTier,
-    configHash,
-    claimedAt: new Date(claimedAtMs),
-    endsAt: new Date(endsAtMs),
-    budgetPolicy: config.budgetPolicy,
-  };
-  const budget: ModelBrokerSignupOfferBudget = {
-    ownerUid: uid,
-    offerId: config.offerId,
-    offerVersion: config.offerVersion,
-    receiptConfigHash: configHash,
-    claimedAtMs,
-    endsAtMs,
-    chargeUsd: 0,
-    requestCount: 0,
-    totalTokens: 0,
-    updatedAt: claimedAtMs,
-    expiresAt: new Date(claimedAtMs + SIGNUP_OFFER_LEDGER_RETENTION_MS),
-  };
-  return { grant, budgetKey: modelBrokerSignupOfferBudgetDocId(budget), budget };
 }
 
 export type GoogleConnectStage = "off" | "allowlist" | "on";

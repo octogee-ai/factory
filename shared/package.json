@@ -198,6 +198,10 @@
       "types": "./dist/types/platform-config.d.ts",
       "default": "./dist/types/platform-config.js"
     },
+    "./types/signup-offer-config": {
+      "types": "./dist/types/signup-offer-config.d.ts",
+      "default": "./dist/types/signup-offer-config.js"
+    },
     "./types/signup-offer": {
       "types": "./dist/types/signup-offer.d.ts",
       "default": "./dist/types/signup-offer.js"

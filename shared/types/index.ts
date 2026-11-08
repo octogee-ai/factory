@@ -198,8 +198,6 @@ export { resolveCommercialEntitlements } from './commercial-entitlements.js';
 
 export type {
   PlatformFreeConfig,
-  PlatformTrialConfig,
-  TrialBuilderTier,
 } from './platform-config.js';
 export {
   DEFAULT_SIGNUP_OFFER_BUDGET_POLICY,
@@ -216,13 +214,8 @@ export type {
 } from './signup-offer.js';
 export {
   DEFAULT_PLATFORM_FREE_CONFIG,
-  DEFAULT_PLATFORM_TRIAL_CONFIG,
   PLATFORM_FREE_CONFIG_DOC,
-  PLATFORM_TRIAL_CONFIG_DOC,
-  TRIAL_CONFIG_SCHEMA_VERSION,
   parsePlatformFreeConfig,
-  parsePlatformTrialConfig,
-  trialConfigHash,
 } from './platform-config.js';
 export { redactSecrets, redactStructuredSecrets } from './secret-redaction.js';
 export { summarizeToolArgs, summarizeToolOutput } from './tool-format.js';

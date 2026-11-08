@@ -1168,6 +1168,21 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.body).toEqual({ error: "User not found" });
   });
 
+  it("serves product admin routes only when the product supplies them", async () => {
+    const path = "/api/admin/customer/u1/reset";
+    const bare = await request(createHttpServer(buildDeps(store)))
+      .get(path).set("Authorization", "Bearer admin-token");
+    expect(bare.status).toBe(404);
+    const app = createHttpServer({
+      ...buildDeps(store),
+      addProductAdminRoutes: (router) => {
+        router.get("/customer/:uid/reset", (_req, res) => { res.json({ ok: true }); });
+      },
+    });
+    const supplied = await request(app).get(path).set("Authorization", "Bearer admin-token");
+    expect(supplied.status).toBe(200);
+    expect(supplied.body).toEqual({ ok: true });
+  });
 });
 
 describe("createHttpServer — fleet-events watcher sharing", () => {

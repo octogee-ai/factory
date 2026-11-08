@@ -25,10 +25,10 @@ export { WINDOW_LENGTH_HOURS, WINDOWS_PER_DAY, WINDOWS_PER_WEEK, WINDOW_BURST_MU
 export type { BillingProfile, BillingRail, EffectivePlan, PlanInputs, TierResolvable, TrialGrant, LegacyTrialGrant, ParsedTrialGrant, ResolvedSignupOfferBudget, OwnedSignupOfferBudget, } from './billing.js';
 export type { CommercialEntitlements, ProjectCommercialMode, } from './commercial-entitlements.js';
 export { resolveCommercialEntitlements } from './commercial-entitlements.js';
-export type { PlatformFreeConfig, PlatformTrialConfig, TrialBuilderTier, } from './platform-config.js';
+export type { PlatformFreeConfig, } from './platform-config.js';
 export { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, MODEL_BROKER_SIGNUP_OFFER_BUDGETS_COLLECTION, SIGNUP_OFFER_LEDGER_RETENTION_MS, modelBrokerSignupOfferBudgetDocId, parseModelBrokerSignupOfferBudget, parseSignupOfferBudgetPolicy, } from './signup-offer.js';
 export type { ModelBrokerSignupOfferBudget, SignupOfferBudgetIdentity, SignupOfferBudgetPolicy, } from './signup-offer.js';
-export { DEFAULT_PLATFORM_FREE_CONFIG, DEFAULT_PLATFORM_TRIAL_CONFIG, PLATFORM_FREE_CONFIG_DOC, PLATFORM_TRIAL_CONFIG_DOC, TRIAL_CONFIG_SCHEMA_VERSION, parsePlatformFreeConfig, parsePlatformTrialConfig, trialConfigHash, } from './platform-config.js';
+export { DEFAULT_PLATFORM_FREE_CONFIG, PLATFORM_FREE_CONFIG_DOC, parsePlatformFreeConfig, } from './platform-config.js';
 export { redactSecrets, redactStructuredSecrets } from './secret-redaction.js';
 export { summarizeToolArgs, summarizeToolOutput } from './tool-format.js';
 export type { NotificationCategory, DeliveryChannel, NotificationAction, InboxDocument, } from './notifications.js';

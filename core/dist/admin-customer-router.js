@@ -5,7 +5,6 @@ import { placementReceiptDocId } from "@octogee/shared/types/placement-receipts"
 import { builderAccountFromData, firestoreBuilderAccountReader, } from "./builder-account.js";
 import { MissingRecordError } from "./platform-state/errors.js";
 import { readOwnerBrokerUsageSeries } from "./broker-usage-series.js";
-import { addAdminCustomerResetRoutes } from "./admin-customer-reset.js";
 import { MODEL_BROKER_USAGE_EVENTS_COLLECTION, MODEL_BROKER_USAGE_ROLLUPS_COLLECTION, MODEL_BROKER_USAGE_WINDOWS_COLLECTION, MODEL_BROKER_WEEK_WINDOWS_COLLECTION, modelBrokerWindowDocId, usageWindowStartMs, weekWindowStartMs, } from "@octogee/shared/types/model-broker-usage";
 import { anonymousOperationalEnvironment, anonymousOperationalGatewayClass, anonymousOperationalPlanTier, isAnonymousOperationalModelDimension, } from "@octogee/shared/types/account-lifecycle";
 function financeNumber(value) {
@@ -381,7 +380,6 @@ export function addAdminCustomerRoutes(router, deps) {
     const { db, store, logger, FieldValue } = deps;
     const accounts = firestoreBuilderAccountReader(db);
     const directory = { db, store, accounts };
-    addAdminCustomerResetRoutes(router, deps);
     router.get("/customer-archives", async (_req, res, next) => {
         try {
             const archives = (await readAllArchives(store)).map((archive) => projectAnonymousArchive(archive.id, { ...archive.record, archivedAt: archive.archivedAt }));

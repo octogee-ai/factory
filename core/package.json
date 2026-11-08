@@ -33,6 +33,10 @@
       "types": "./dist/git-metadata.d.ts",
       "default": "./dist/git-metadata.js"
     },
+    "./admin-customer-reset": {
+      "types": "./dist/admin-customer-reset.d.ts",
+      "default": "./dist/admin-customer-reset.js"
+    },
     "./admin-customer-router": {
       "types": "./dist/admin-customer-router.d.ts",
       "default": "./dist/admin-customer-router.js"
@@ -457,6 +461,9 @@
   },
   "typesVersions": {
     "*": {
+      "admin-customer-reset": [
+        "dist/admin-customer-reset.d.ts"
+      ],
       "admin-customer-router": [
         "dist/admin-customer-router.d.ts"
       ],
