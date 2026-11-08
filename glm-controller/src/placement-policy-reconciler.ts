@@ -4061,7 +4061,9 @@ export async function enqueuePlacementMigration(
     }
     if (preRpcAuthorityFailure(data, request) || sourceOnlyRollbackCompleted(data, request)) {
       await assertPreRpcRetryAuthority(input, transaction, request);
-      transaction.update(ref, { ...rearmedPlacementMigrationPatch(), schedulerHandoff: FieldValue.delete(), "input.recoverSourceOnly": FieldValue.delete() });
+      transaction.update(ref, { ...rearmedPlacementMigrationPatch(), schedulerHandoff: FieldValue.delete(),
+        schedulerHandoffReleased: FieldValue.delete(), schedulerHandoffReleasedAt: FieldValue.delete(),
+        "input.recoverSourceOnly": FieldValue.delete() });
       return;
     }
     if (!rolledBackTransientPlacementCanRearm(data, request)) {
