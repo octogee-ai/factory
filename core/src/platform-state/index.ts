@@ -25,3 +25,13 @@ export {
   createFirestorePlatformStateStore,
   type FirestorePlatformStateStoreOptions,
 } from "./firestore/store.js";
+export {
+  DEFAULT_PLATFORM_STATE_SCHEMA,
+  migratePlatformState,
+  type MigratePlatformStateOptions,
+  type PlatformStateMigrationResult,
+} from "./postgres/migrate.js";
+export { PLATFORM_STATE_MIGRATIONS, type PlatformStateMigration } from "./postgres/migrations.js";
+export type { PlatformStateLogger, PostgresRetryPolicy } from "./postgres/session.js";
+export { createPostgresPlatformStateStore, type PostgresPlatformStateStoreOptions } from "./postgres/store.js";
+export type { PostgresWatchTiming } from "./postgres/watch.js";

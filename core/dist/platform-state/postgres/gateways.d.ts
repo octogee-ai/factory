@@ -1,0 +1,14 @@
+import type { GatewayAssignment, GatewayRepositories, GatewayRoot } from "../gateways.js";
+import type { Stored, WatchFilters } from "../store.js";
+import type { PostgresSession } from "./session.js";
+import { SqlParameters, type Row } from "./sql.js";
+import { type TableSpec } from "./values.js";
+import type { FilterKeys, PostgresWatchSource } from "./watch-sources.js";
+export declare const GATEWAYS_TABLE: TableSpec;
+export declare function decodeGatewayRoot(row: Row): Stored<GatewayRoot>;
+export declare function decodeGatewayAssignment(row: Row): Stored<GatewayAssignment>;
+export declare function createPostgresGatewayRepositories(session: PostgresSession): GatewayRepositories;
+export declare function gatewayFilterMatches(gatewayId: string | undefined, filterKeys: FilterKeys): boolean;
+export declare function gatewayCondition(gatewayId: string | undefined, parameters: SqlParameters): string;
+export declare function postgresGatewaysWatchSource(filter: WatchFilters["gateways"]): PostgresWatchSource<"gateways">;
+export declare function postgresAssignmentsWatchSource(filter: WatchFilters["assignments"]): PostgresWatchSource<"assignments">;

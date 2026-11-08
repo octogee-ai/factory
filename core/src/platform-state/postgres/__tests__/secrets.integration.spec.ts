@@ -1,0 +1,481 @@
+import { createHash } from "node:crypto";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { AlreadyExistsError, FenceMismatchError, MissingRecordError } from "../../errors.js";
+import type { BuilderSecretInput, ModelBrokerGatewayToken, ModelBrokerToken } from "../../secrets.js";
+import { createHarness, dsn, type PlatformStateHarness } from "./fixtures/harness.js";
+
+const NOW = 1_762_500_000_000;
+const hashOf = (value: string) => createHash("sha256").update(value).digest("hex");
+
+const coachSecret: BuilderSecretInput = {
+  kind: "coach-mattermost",
+  secretId: "coachMattermost",
+  projectId: null,
+  personalToken: "coach-pat",
+  mattermostUserId: "mm-coach",
+  createdAt: NOW,
+  rotatedAt: NOW + 1,
+};
+
+describe.skipIf(!dsn)("PostgreSQL secrets and access repositories", { timeout: 30_000 }, () => {
+  let harness: PlatformStateHarness;
+
+  beforeEach(async () => {
+    harness = await createHarness();
+  });
+
+  afterEach(async () => {
+    await harness.dispose();
+  });
+
+  async function builder(uid: string): Promise<void> {
+    await harness.query("INSERT INTO $schema.builders (uid) VALUES ($1::text)", [uid]);
+  }
+
+  describe("Builder secrets", () => {
+    beforeEach(async () => {
+      await builder("u1");
+    });
+
+    it("round-trips each Mattermost secret kind with its project and a server createdAt", async () => {
+      await harness.store.secrets.put("u1", coachSecret);
+      await harness.store.secrets.put("u1", {
+        kind: "builder-mattermost",
+        secretId: "mattermost",
+        projectId: null,
+        personalToken: "builder-pat",
+        mattermostUserId: null,
+        createdAt: { serverNow: true },
+        rotatedAt: null,
+      });
+      await harness.store.secrets.put("u1", {
+        kind: "project-agent-mattermost",
+        secretId: "projectAgentMattermost-site",
+        projectId: "site",
+        personalToken: "agent-pat",
+        mattermostUserId: "mm-agent",
+        createdAt: NOW,
+        rotatedAt: null,
+      });
+
+      expect(await harness.store.secrets.get("u1", "coachMattermost")).toEqual({ ...coachSecret, revision: expect.any(String) });
+      expect(await harness.store.secrets.get("u1", "mattermost")).toEqual({
+        kind: "builder-mattermost",
+        secretId: "mattermost",
+        projectId: null,
+        personalToken: "builder-pat",
+        mattermostUserId: null,
+        createdAt: expect.any(Number),
+        rotatedAt: null,
+        revision: expect.any(String),
+      });
+      expect(await harness.store.secrets.get("u1", "projectAgentMattermost-site")).toMatchObject({
+        kind: "project-agent-mattermost",
+        projectId: "site",
+        mattermostUserId: "mm-agent",
+      });
+      expect(await harness.store.secrets.get("u1", "missing")).toBeNull();
+    });
+
+    it("replaces a secret whole and moves its revision", async () => {
+      await harness.store.secrets.put("u1", coachSecret);
+      const before = (await harness.store.secrets.get("u1", "coachMattermost"))!;
+
+      await harness.store.secrets.put("u1", { ...coachSecret, personalToken: "rotated", mattermostUserId: null, rotatedAt: null });
+
+      const after = await harness.store.secrets.get("u1", "coachMattermost");
+      expect(after).toMatchObject({ personalToken: "rotated", mattermostUserId: null, createdAt: NOW, rotatedAt: null });
+      expect(after?.revision).not.toBe(before.revision);
+    });
+
+    it("rejects a secret whose kind or project disagrees with its id and writes nothing", async () => {
+      await expect(harness.store.secrets.put("u1", { ...coachSecret, secretId: "mattermost" })).rejects.toBeInstanceOf(TypeError);
+      await expect(
+        harness.store.secrets.put("u1", {
+          ...coachSecret,
+          kind: "project-agent-mattermost",
+          secretId: "projectAgentMattermost-site",
+          projectId: "docs",
+        }),
+      ).rejects.toBeInstanceOf(TypeError);
+      expect(await harness.store.secrets.list("u1")).toEqual([]);
+    });
+
+    it("round-trips a connector secret, keeping other token fields in the detail", async () => {
+      const connector: BuilderSecretInput = {
+        kind: "connector",
+        secretId: "google",
+        encryptedAccessToken: "enc-access",
+        encryptedRefreshToken: "enc-refresh",
+        detail: { provider: "google", tokens: { expiresAt: NOW + 3_600_000, tokenType: "bearer" }, updatedAt: NOW },
+      };
+
+      await harness.store.secrets.put("u1", connector);
+
+      expect(await harness.store.secrets.get("u1", "google")).toEqual({ ...connector, revision: expect.any(String) });
+    });
+
+    it("reads encrypted tokens carried inside the detail and drops an emptied tokens map", async () => {
+      await harness.store.secrets.put("u1", {
+        kind: "connector",
+        secretId: "github",
+        encryptedAccessToken: null,
+        encryptedRefreshToken: null,
+        detail: { provider: "github", tokens: { encryptedAccessToken: "enc-in-detail" } },
+      });
+
+      expect(await harness.store.secrets.get("u1", "github")).toEqual({
+        kind: "connector",
+        secretId: "github",
+        encryptedAccessToken: "enc-in-detail",
+        encryptedRefreshToken: null,
+        detail: { provider: "github" },
+        revision: expect.any(String),
+      });
+    });
+
+    it("lists secrets by kind and deletes one", async () => {
+      await harness.store.secrets.put("u1", coachSecret);
+      await harness.store.secrets.put("u1", { ...coachSecret, kind: "builder-mattermost", secretId: "mattermost" });
+      await harness.store.secrets.put("u1", {
+        kind: "connector",
+        secretId: "google",
+        encryptedAccessToken: "enc",
+        encryptedRefreshToken: null,
+        detail: { provider: "google" },
+      });
+
+      expect((await harness.store.secrets.list("u1")).map((secret) => secret.kind)).toEqual([
+        "coach-mattermost",
+        "connector",
+        "builder-mattermost",
+      ]);
+      expect((await harness.store.secrets.list("u1", "connector")).map((secret) => secret.secretId)).toEqual(["google"]);
+
+      await harness.store.secrets.delete("u1", "google");
+      expect(await harness.store.secrets.get("u1", "google")).toBeNull();
+    });
+
+    it("refuses a secret for an unknown Builder and drops a Builder's secrets with the Builder", async () => {
+      await expect(harness.store.secrets.put("ghost", coachSecret)).rejects.toMatchObject({
+        constructor: MissingRecordError,
+        record: { aggregate: "builder", key: "ghost" },
+      });
+      await harness.store.secrets.put("u1", coachSecret);
+
+      await harness.query("DELETE FROM $schema.builders WHERE uid = 'u1'");
+
+      expect(await harness.store.secrets.list("u1")).toEqual([]);
+    });
+  });
+
+  describe("gateway tickets", () => {
+    const ticket = { ticketId: "t1", uid: "u1", gatewayId: "g1", expiresAt: NOW + 30_000, grant: { purpose: "preview", payload: { channelId: "c1" } } };
+
+    it("creates a ticket once and reads it back", async () => {
+      await harness.store.access.gatewayTickets.create(ticket);
+
+      expect(await harness.store.access.gatewayTickets.get("t1")).toEqual({ ...ticket, revision: expect.any(String) });
+      expect(await harness.store.access.gatewayTickets.get("missing")).toBeNull();
+      await expect(harness.store.access.gatewayTickets.create(ticket)).rejects.toBeInstanceOf(AlreadyExistsError);
+      await expect(harness.store.access.gatewayTickets.create({ ...ticket, ticketId: "t2", grant: { uid: "u2" } })).rejects.toBeInstanceOf(
+        TypeError,
+      );
+    });
+
+    it("deletes a ticket only at the fenced revision", async () => {
+      await harness.store.access.gatewayTickets.create(ticket);
+      const minted = (await harness.store.access.gatewayTickets.get("t1"))!;
+      await harness.query(`UPDATE $schema.gateway_tickets SET access_grant = '{"redeemed": true}' WHERE ticket_id = 't1'`);
+
+      await expect(harness.store.access.gatewayTickets.delete("t1", { revision: minted.revision })).rejects.toMatchObject({
+        constructor: FenceMismatchError,
+        fence: "revision",
+      });
+      await expect(harness.store.access.gatewayTickets.delete("missing", { revision: minted.revision })).rejects.toBeInstanceOf(
+        MissingRecordError,
+      );
+      const current = (await harness.store.access.gatewayTickets.get("t1"))!;
+      await harness.store.access.gatewayTickets.delete("t1", { revision: current.revision });
+      expect(await harness.store.access.gatewayTickets.get("t1")).toBeNull();
+      await harness.store.access.gatewayTickets.delete("t1");
+    });
+
+    it("is swept with control tickets and sessions once expiresAt passes", async () => {
+      await harness.store.access.gatewayTickets.create({ ...ticket, ticketId: "expired", expiresAt: NOW - 1 });
+      await harness.store.access.gatewayTickets.create({ ...ticket, ticketId: "live", expiresAt: NOW + 60_000 });
+      await harness.store.access.controlTickets.create({
+        ticketHash: "h1",
+        uid: "u1",
+        gatewayId: "g1",
+        createdAt: NOW - 10,
+        expiresAt: NOW - 1,
+        redeemedAt: null,
+        grant: {},
+      });
+      await harness.store.access.controlSessions.put({
+        sessionHash: "s1",
+        uid: "u1",
+        gatewayId: "g1",
+        createdAt: null,
+        expiresAt: NOW - 1,
+        attachmentId: null,
+        grant: {},
+      });
+
+      expect(await harness.store.sweepExpired(NOW, 10)).toEqual({ operations: 0, operationAudits: 0, accessGrants: 3 });
+      expect(await harness.store.access.gatewayTickets.get("live")).not.toBeNull();
+      expect(await harness.store.access.gatewayTickets.get("expired")).toBeNull();
+      expect(await harness.store.access.controlTickets.get("h1")).toBeNull();
+      expect(await harness.store.access.controlSessions.get("s1")).toBeNull();
+    });
+  });
+
+  describe("control tickets", () => {
+    const controlTicket = {
+      ticketHash: hashOf("ticket"),
+      uid: "u1",
+      gatewayId: "g1",
+      createdAt: NOW,
+      expiresAt: NOW + 60_000,
+      redeemedAt: null,
+      grant: { workspaceSlug: "acme", revisionId: "rev-1" },
+    };
+
+    it("creates a ticket with a server createdAt and refuses typed fields in the grant", async () => {
+      await harness.store.access.controlTickets.create({ ...controlTicket, createdAt: { serverNow: true } });
+
+      expect(await harness.store.access.controlTickets.get(controlTicket.ticketHash)).toEqual({
+        ...controlTicket,
+        createdAt: expect.any(Number),
+        revision: expect.any(String),
+      });
+      await expect(
+        harness.store.access.controlTickets.create({ ...controlTicket, ticketHash: "other", grant: { redeemedAt: 1 } }),
+      ).rejects.toBeInstanceOf(TypeError);
+      await expect(harness.store.access.controlTickets.create(controlTicket)).rejects.toBeInstanceOf(AlreadyExistsError);
+    });
+
+    it("marks a ticket redeemed once and refuses a replay", async () => {
+      await harness.store.access.controlTickets.create(controlTicket);
+
+      await harness.store.access.controlTickets.markRedeemed(controlTicket.ticketHash, NOW + 5, { redeemedAt: null });
+
+      expect((await harness.store.access.controlTickets.get(controlTicket.ticketHash))?.redeemedAt).toBe(NOW + 5);
+      await expect(
+        harness.store.access.controlTickets.markRedeemed(controlTicket.ticketHash, NOW + 6, { redeemedAt: null }),
+      ).rejects.toMatchObject({ constructor: FenceMismatchError, fence: "absent", expected: null, actual: NOW + 5 });
+      await expect(harness.store.access.controlTickets.markRedeemed("missing", NOW, { redeemedAt: null })).rejects.toBeInstanceOf(
+        MissingRecordError,
+      );
+      expect((await harness.store.access.controlTickets.get(controlTicket.ticketHash))?.redeemedAt).toBe(NOW + 5);
+    });
+
+    it("lets exactly one of two concurrent redemptions win", async () => {
+      await harness.store.access.controlTickets.create(controlTicket);
+      const redeem = async (at: number) => {
+        await harness.store.access.controlTickets.markRedeemed(controlTicket.ticketHash, at, { redeemedAt: null });
+        return at;
+      };
+
+      const outcomes = await Promise.allSettled([redeem(NOW + 1), redeem(NOW + 2)]);
+
+      const won = outcomes.flatMap((outcome) => (outcome.status === "fulfilled" ? [outcome.value] : []));
+      const lost = outcomes.flatMap((outcome) => (outcome.status === "rejected" ? [outcome.reason] : []));
+      expect(won).toHaveLength(1);
+      expect(lost).toHaveLength(1);
+      expect(lost[0]).toBeInstanceOf(FenceMismatchError);
+      expect((await harness.store.access.controlTickets.get(controlTicket.ticketHash))?.redeemedAt).toBe(won[0]);
+    });
+  });
+
+  describe("control sessions", () => {
+    it("puts, replaces, reads and deletes a session with an attachment and no creation time", async () => {
+      await harness.store.access.controlSessions.put({
+        sessionHash: "mobile",
+        uid: "u1",
+        gatewayId: "g1",
+        createdAt: NOW,
+        expiresAt: NOW + 1,
+        attachmentId: null,
+        grant: { stale: true },
+      });
+      const session = {
+        sessionHash: "mobile",
+        uid: "u1",
+        gatewayId: "g1",
+        createdAt: null,
+        expiresAt: NOW + 60_000,
+        attachmentId: "enrollment-1",
+        grant: { workspaceSlug: "acme", revisionId: "g1" },
+      };
+
+      await harness.store.access.controlSessions.put(session);
+
+      expect(await harness.store.access.controlSessions.get("mobile")).toEqual({ ...session, revision: expect.any(String) });
+      await expect(
+        harness.store.access.controlSessions.put({ ...session, grant: { mobileEnrollmentId: "x" } }),
+      ).rejects.toBeInstanceOf(TypeError);
+      await harness.store.access.controlSessions.delete("mobile");
+      expect(await harness.store.access.controlSessions.get("mobile")).toBeNull();
+    });
+  });
+
+  describe("gateway access audit", () => {
+    const denialId = (gatewayId: string, uid: string, reason: string, minute: number) =>
+      `denied-${createHash("sha256").update(`${gatewayId}\0${uid}\0${reason}\0${minute}`).digest("hex")}`;
+
+    it("records a denial under the per-minute id", async () => {
+      const id = await harness.store.access.accessAudit.record({
+        at: NOW + 12_345,
+        gatewayId: "g1",
+        uid: "u2",
+        reason: "membership_required",
+        detail: { workspaceSlug: "acme", source: "agent" },
+      });
+
+      expect(id).toBe(denialId("g1", "u2", "membership_required", Math.floor((NOW + 12_345) / 60_000)));
+      const rows = await harness.query("SELECT id, at, gateway_id, uid, reason, detail FROM $schema.gateway_access_audit");
+      expect(rows.map((row) => ({ ...row, detail: JSON.parse(row.detail as string) as unknown }))).toEqual([
+        { id, at: NOW + 12_345, gateway_id: "g1", uid: "u2", reason: "membership_required", detail: { workspaceSlug: "acme", source: "agent" } },
+      ]);
+    });
+
+    it("collapses repeated denials within a minute into one row and keys a denial without a grantee", async () => {
+      const denial = { gatewayId: "g1", uid: "u2", reason: "membership_required", detail: { source: "agent" } };
+      const minute = Math.floor(NOW / 60_000) * 60_000;
+
+      const first = await harness.store.access.accessAudit.record({ ...denial, at: minute + 1 });
+      const repeat = await harness.store.access.accessAudit.record({ ...denial, at: minute + 59_999 });
+      const next = await harness.store.access.accessAudit.record({ ...denial, at: minute + 60_000 });
+      const anonymous = await harness.store.access.accessAudit.record({ ...denial, uid: null, at: minute + 1 });
+
+      expect(repeat).toBe(first);
+      expect(next).not.toBe(first);
+      expect(anonymous).toBe(denialId("g1", "", "membership_required", minute / 60_000));
+      const rows = await harness.query("SELECT id, at FROM $schema.gateway_access_audit ORDER BY at, id");
+      expect(rows).toHaveLength(3);
+      expect(rows.find((row) => row.id === first)).toEqual({ id: first, at: minute + 59_999 });
+    });
+  });
+
+  describe("model broker tokens", () => {
+    const token = (overrides: Partial<ModelBrokerToken> = {}): ModelBrokerToken => ({
+      tokenHash: hashOf("token-1"),
+      gatewayId: "g1",
+      ownerUid: null,
+      provider: "anthropic",
+      purpose: "model",
+      secretName: "anthropic-key",
+      createdAt: NOW,
+      expiresAt: null,
+      limits: { spendWindowUsd: 5, spendWeekUsd: null, requestsPerMinute: 60 },
+      railPolicy: { freeTier: false, houseFallback: true },
+      trace: null,
+      revoked: false,
+      revokedAt: null,
+      ...overrides,
+    });
+
+    it("round-trips a token with its limits, rail policy and trace, once", async () => {
+      await harness.store.access.modelBrokerTokens.create(token());
+      const traced = token({ tokenHash: hashOf("token-2"), ownerUid: "u1", purpose: "embeddings", expiresAt: NOW + 1, trace: { requestId: "r1" }, limits: { spendWindowUsd: 0.25, spendWeekUsd: 10, requestsPerMinute: null } });
+      await harness.store.access.modelBrokerTokens.create(traced);
+
+      expect(await harness.store.access.modelBrokerTokens.get(hashOf("token-1"))).toEqual({ ...token(), revision: expect.any(String) });
+      expect(await harness.store.access.modelBrokerTokens.get(traced.tokenHash)).toEqual({ ...traced, revision: expect.any(String) });
+      expect(await harness.store.access.modelBrokerTokens.get(hashOf("missing"))).toBeNull();
+      await expect(harness.store.access.modelBrokerTokens.create(token())).rejects.toBeInstanceOf(AlreadyExistsError);
+    });
+
+    it("revokes a token and refuses to revoke one that does not exist", async () => {
+      await harness.store.access.modelBrokerTokens.create(token());
+
+      await harness.store.access.modelBrokerTokens.revoke(hashOf("token-1"), NOW + 1);
+
+      expect(await harness.store.access.modelBrokerTokens.get(hashOf("token-1"))).toMatchObject({ revoked: true, revokedAt: NOW + 1 });
+      await expect(harness.store.access.modelBrokerTokens.revoke(hashOf("missing"), NOW)).rejects.toMatchObject({
+        constructor: MissingRecordError,
+        record: { aggregate: "model-broker-token", key: hashOf("missing") },
+      });
+    });
+
+    it("lists an owner's tokens and deletes one with the pointers that name it", async () => {
+      await harness.store.access.modelBrokerTokens.create(token({ tokenHash: hashOf("a"), ownerUid: "u1" }));
+      await harness.store.access.modelBrokerTokens.create(token({ tokenHash: hashOf("b"), ownerUid: "u1" }));
+      await harness.store.access.modelBrokerTokens.create(token({ tokenHash: hashOf("c"), ownerUid: "u2" }));
+      await harness.store.access.modelBrokerGatewayTokens.put({
+        pointerKey: "g1",
+        gatewayId: "g1",
+        ownerUid: "u1",
+        provider: "anthropic",
+        secretName: "anthropic-key",
+        tokenHash: hashOf("b"),
+        updatedAt: NOW,
+      });
+
+      await harness.store.access.modelBrokerTokens.delete(hashOf("b"));
+
+      expect((await harness.store.access.modelBrokerTokens.listForOwner("u1")).map((record) => record.tokenHash)).toEqual([hashOf("a")]);
+      expect(await harness.store.access.modelBrokerGatewayTokens.get("g1")).toBeNull();
+    });
+  });
+
+  describe("model broker gateway token pointers", () => {
+    const pointer = (overrides: Partial<ModelBrokerGatewayToken> = {}): ModelBrokerGatewayToken => ({
+      pointerKey: "g1:embeddings",
+      gatewayId: "g1",
+      ownerUid: "u1",
+      provider: "openai",
+      secretName: "openai-key",
+      tokenHash: hashOf("token-1"),
+      updatedAt: NOW,
+      ...overrides,
+    });
+
+    beforeEach(async () => {
+      for (const name of ["token-1", "token-2"]) {
+        await harness.store.access.modelBrokerTokens.create({
+          tokenHash: hashOf(name),
+          gatewayId: "g1",
+          ownerUid: "u1",
+          provider: "openai",
+          purpose: "embeddings",
+          secretName: "openai-key",
+          createdAt: NOW,
+          expiresAt: null,
+          limits: { spendWindowUsd: null, spendWeekUsd: null, requestsPerMinute: null },
+          railPolicy: {},
+          trace: null,
+          revoked: false,
+          revokedAt: null,
+        });
+      }
+    });
+
+    it("puts, replaces, lists and deletes pointers", async () => {
+      await harness.store.access.modelBrokerGatewayTokens.put(pointer());
+      await harness.store.access.modelBrokerGatewayTokens.put(pointer({ pointerKey: "g2", gatewayId: "g2", ownerUid: null }));
+      await harness.store.access.modelBrokerGatewayTokens.put(pointer({ tokenHash: hashOf("token-2"), updatedAt: NOW + 1 }));
+
+      expect(await harness.store.access.modelBrokerGatewayTokens.get("g1:embeddings")).toEqual({
+        ...pointer({ tokenHash: hashOf("token-2"), updatedAt: NOW + 1 }),
+        revision: expect.any(String),
+      });
+      expect(await harness.store.access.modelBrokerGatewayTokens.get("g2")).toMatchObject({ ownerUid: null });
+      expect((await harness.store.access.modelBrokerGatewayTokens.listForOwner("u1")).map((record) => record.pointerKey)).toEqual([
+        "g1:embeddings",
+      ]);
+
+      await harness.store.access.modelBrokerGatewayTokens.delete("g1:embeddings");
+      expect(await harness.store.access.modelBrokerGatewayTokens.get("g1:embeddings")).toBeNull();
+    });
+
+    it("refuses a pointer to a token that does not exist", async () => {
+      await expect(harness.store.access.modelBrokerGatewayTokens.put(pointer({ tokenHash: hashOf("missing") }))).rejects.toMatchObject({
+        constructor: MissingRecordError,
+        record: { aggregate: "model-broker-token", key: hashOf("missing") },
+      });
+    });
+  });
+});
