@@ -47,7 +47,7 @@ const NPM_PACKAGES = {
   "@sparticuz/chromium": "149.0.0",
   "firebase-tools": "15.28.2",
   "npm-check-updates": "23.1.0",
-  "pnpm": "12.16.1",
+  "pnpm": "12.17.0",
   "tsx": "4.23.15",
   "typescript": "5.9.3",
 };
@@ -80,7 +80,7 @@ function groupsFixture(): BuilderToolGroups {
         npmPackages: {
           "firebase-tools": "15.28.2",
           "npm-check-updates": "23.1.0",
-          "pnpm": "12.16.1",
+          "pnpm": "12.17.0",
           "tsx": "4.23.15",
           "typescript": "5.9.3",
         },
@@ -168,7 +168,7 @@ async function writePinnedInputs(home: string): Promise<{
     allowScripts: {
       "@anthropic-ai/claude-code@2.1.316": true,
       "esbuild@0.28.2": true,
-      "pnpm@12.16.1": true,
+      "pnpm@12.17.0": true,
       "protobufjs@7.6.6": true,
       "re2@1.26.1": true,
     },
@@ -415,7 +415,7 @@ describe("Builder npm toolchain lock", () => {
 
   it.each([
     ["@anthropic-ai/claude-code", "2.1.316"],
-    ["pnpm", "12.16.1"],
+    ["pnpm", "12.17.0"],
   ])("requires the exact pinned %s install approval before invoking npm", async (name, version) => {
     const home = await tempRoot();
     const root = path.join(home, ".octogee", "toolchains");
