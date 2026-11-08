@@ -40,8 +40,8 @@ CREATE TABLE operations (
   input_uid                            text,
   input_gateway_id                     text GENERATED ALWAYS AS (input ->> 'gatewayId') STORED,
   input_uid_raw                        text GENERATED ALWAYS AS (input ->> 'uid') STORED,
-  input_builder_slug                   text GENERATED ALWAYS AS (input ->> 'builderSlug') STORED,
-  customer_migration_v2                jsonb,
+  input_user_slug                   text GENERATED ALWAYS AS (input ->> 'builderSlug') STORED,
+  user_migration_v2                jsonb,
   source_transfer_execution            jsonb,
   scheduler_handoff                    jsonb,
   scheduler_handoff_released           boolean,
@@ -76,7 +76,7 @@ CREATE INDEX operations_created_by_idx          ON operations (created_by);
 CREATE INDEX operations_kind_idx                ON operations (kind, status);
 CREATE INDEX operations_created_at_idx          ON operations (created_at DESC);
 CREATE INDEX operations_expire_idx              ON operations (expire_at) WHERE expire_at IS NOT NULL;
-CREATE INDEX operations_builder_slug_idx        ON operations (input_builder_slug text_pattern_ops);
+CREATE INDEX operations_user_slug_idx        ON operations (input_user_slug text_pattern_ops);
 CREATE TRIGGER operations_revision BEFORE UPDATE ON operations FOR EACH ROW EXECUTE FUNCTION bump_revision_and_touch();
 
 CREATE TABLE operation_audits (
@@ -163,9 +163,9 @@ CREATE TABLE gateways (
   gateway_container_security_context  jsonb,
   service_account_name                text,
   service_account                     jsonb,
-  builder_access                      jsonb,
+  user_access                      jsonb,
   owner_uid                           text,
-  builder_slug                        text,
+  user_slug                        text,
   model_broker_limits                 jsonb,
   allocation_lease_id                 text,
   allocation_generation               integer CHECK (allocation_generation >= 1),
@@ -323,14 +323,14 @@ CREATE TRIGGER migration_transfer_tasks_revision BEFORE UPDATE ON migration_tran
 CREATE TABLE orchestrator_config (
   id                           text PRIMARY KEY CHECK (id = 'orchestrator'),
   shared_autoscaling_enabled   boolean,
-  shared_builders_per_gateway  integer CHECK (shared_builders_per_gateway >= 1),
+  shared_users_per_gateway  integer CHECK (shared_users_per_gateway >= 1),
   default_gateway_id           text,
   disposable_gateway_idle_ms   bigint CHECK (disposable_gateway_idle_ms >= 0),
   placement_updated_at         bigint,
   placement_updated_by         text,
   sizing_profiles              jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(sizing_profiles) = 'object'),
   revision                     bigint NOT NULL DEFAULT nextval('record_revision_seq'),
-  CHECK ((shared_autoscaling_enabled IS NULL) = (shared_builders_per_gateway IS NULL))
+  CHECK ((shared_autoscaling_enabled IS NULL) = (shared_users_per_gateway IS NULL))
 );
 CREATE TRIGGER orchestrator_config_revision BEFORE UPDATE ON orchestrator_config FOR EACH ROW EXECUTE FUNCTION bump_revision();
 
@@ -341,14 +341,14 @@ CREATE TABLE writer_quiescence (
 );
 CREATE TRIGGER writer_quiescence_revision BEFORE UPDATE ON writer_quiescence FOR EACH ROW EXECUTE FUNCTION bump_revision();
 
-CREATE TABLE mattermost_admin (
+CREATE TABLE channel_host_admin (
   id          text PRIMARY KEY CHECK (id = 'mattermostAdmin'),
   user_id     text NOT NULL,
   proxy_url   text,
   updated_at  bigint NOT NULL,
   revision    bigint NOT NULL DEFAULT nextval('record_revision_seq')
 );
-CREATE TRIGGER mattermost_admin_revision BEFORE UPDATE ON mattermost_admin FOR EACH ROW EXECUTE FUNCTION bump_revision();
+CREATE TRIGGER channel_host_admin_revision BEFORE UPDATE ON channel_host_admin FOR EACH ROW EXECUTE FUNCTION bump_revision();
 
 CREATE TABLE platform_config (
   key         text PRIMARY KEY CHECK (key IN ('models','free','connect')),
@@ -359,10 +359,9 @@ CREATE TABLE platform_config (
 );
 CREATE TRIGGER platform_config_revision BEFORE UPDATE ON platform_config FOR EACH ROW EXECUTE FUNCTION bump_revision();
 
-CREATE TABLE builders (
+CREATE TABLE users (
   uid                                 text PRIMARY KEY CHECK (uid <> ''),
   slug                                text,
-  mattermost_user_id                  text,
   admitted                            boolean NOT NULL DEFAULT false,
   persona                             jsonb CHECK (persona IS NULL OR jsonb_typeof(persona) = 'object'),
   workspace_id                        text,
@@ -379,7 +378,7 @@ CREATE TABLE builders (
   openclaw_status                     text,
   openclaw_version                    text,
   agent_id                            text,
-  customer_dir                        text,
+  user_dir                        text,
   provisioned_at                      bigint,
   mounted                             boolean,
   managed_by                          text CHECK (managed_by IN ('cowboy','operator')),
@@ -423,33 +422,32 @@ CREATE TABLE builders (
   CHECK (NOT admitted OR provisioning_status IS NOT NULL),
   CHECK (NOT admitted OR slug IS NOT NULL)
 );
-CREATE UNIQUE INDEX builders_slug_idx              ON builders (slug) WHERE slug IS NOT NULL;
-CREATE UNIQUE INDEX builders_mattermost_user_idx   ON builders (mattermost_user_id) WHERE mattermost_user_id IS NOT NULL;
-CREATE UNIQUE INDEX builders_computer_instance_idx ON builders (computer_instance_id) WHERE computer_instance_id IS NOT NULL;
-CREATE INDEX builders_gateway_idx                  ON builders (gateway_id, openclaw_status);
-CREATE INDEX builders_openclaw_status_idx          ON builders (openclaw_status);
-CREATE INDEX builders_transfer_source_idx          ON builders (source_transfer_source_gateway_id) WHERE source_transfer_source_gateway_id IS NOT NULL;
-CREATE INDEX builders_transfer_target_idx          ON builders (source_transfer_target_gateway_id) WHERE source_transfer_target_gateway_id IS NOT NULL;
-CREATE INDEX builders_computer_recovery_idx        ON builders (computer_recovery_gateway_id) WHERE computer_recovery_gateway_id IS NOT NULL;
-CREATE INDEX builders_admitted_idx                 ON builders (uid) WHERE admitted;
-CREATE INDEX builders_agent_idx                    ON builders (agent_id);
-CREATE INDEX builders_created_at_idx               ON builders (created_at DESC, uid);
-CREATE TRIGGER builders_revision BEFORE UPDATE ON builders FOR EACH ROW EXECUTE FUNCTION bump_revision_and_touch();
+CREATE UNIQUE INDEX users_slug_idx              ON users (slug) WHERE slug IS NOT NULL;
+CREATE UNIQUE INDEX users_computer_instance_idx ON users (computer_instance_id) WHERE computer_instance_id IS NOT NULL;
+CREATE INDEX users_gateway_idx                  ON users (gateway_id, openclaw_status);
+CREATE INDEX users_openclaw_status_idx          ON users (openclaw_status);
+CREATE INDEX users_transfer_source_idx          ON users (source_transfer_source_gateway_id) WHERE source_transfer_source_gateway_id IS NOT NULL;
+CREATE INDEX users_transfer_target_idx          ON users (source_transfer_target_gateway_id) WHERE source_transfer_target_gateway_id IS NOT NULL;
+CREATE INDEX users_computer_recovery_idx        ON users (computer_recovery_gateway_id) WHERE computer_recovery_gateway_id IS NOT NULL;
+CREATE INDEX users_admitted_idx                 ON users (uid) WHERE admitted;
+CREATE INDEX users_agent_idx                    ON users (agent_id);
+CREATE INDEX users_created_at_idx               ON users (created_at DESC, uid);
+CREATE TRIGGER users_revision BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION bump_revision_and_touch();
 
-CREATE TABLE builder_agents (
-  uid        text NOT NULL REFERENCES builders (uid) ON DELETE CASCADE,
+CREATE TABLE user_agents (
+  uid        text NOT NULL REFERENCES users (uid) ON DELETE CASCADE,
   agent_id   text NOT NULL CHECK (agent_id <> ''),
   PRIMARY KEY (uid, agent_id)
 );
-CREATE INDEX builder_agents_agent_idx ON builder_agents (agent_id);
+CREATE INDEX user_agents_agent_idx ON user_agents (agent_id);
 
 CREATE TABLE placement_receipts (
-  uid                      text NOT NULL REFERENCES builders (uid) ON DELETE CASCADE,
+  uid                      text NOT NULL REFERENCES users (uid) ON DELETE CASCADE,
   receipt_id               text NOT NULL,
   schema_version           smallint NOT NULL CHECK (schema_version = 1),
   kind                     text NOT NULL CHECK (kind IN ('activated','returned','activation-failed')),
   at                       bigint NOT NULL,
-  builder_slug             text,
+  user_slug             text,
   lease_id                 text NOT NULL CHECK (lease_id <> ''),
   generation               integer NOT NULL CHECK (generation >= 1),
   cause                    text,
@@ -471,7 +469,7 @@ CREATE TABLE placement_receipts (
 CREATE INDEX placement_receipts_at_idx ON placement_receipts (uid, at DESC);
 
 CREATE TABLE schedule_transfers (
-  uid                   text NOT NULL REFERENCES builders (uid) ON DELETE CASCADE,
+  uid                   text NOT NULL REFERENCES users (uid) ON DELETE CASCADE,
   migration_id          text NOT NULL,
   slug                  text NOT NULL,
   source_gateway_id     text NOT NULL,
@@ -490,7 +488,7 @@ CREATE TABLE schedule_transfers (
 CREATE TRIGGER schedule_transfers_revision BEFORE UPDATE ON schedule_transfers FOR EACH ROW EXECUTE FUNCTION bump_revision();
 
 CREATE TABLE agent_stores (
-  uid               text NOT NULL REFERENCES builders (uid) ON DELETE CASCADE,
+  uid               text NOT NULL REFERENCES users (uid) ON DELETE CASCADE,
   store_key         text NOT NULL,
   store_kind        text GENERATED ALWAYS AS (CASE WHEN store_key = '_gateway-state' THEN 'gateway-state'
                                                    WHEN store_key LIKE '\_gateway-%' THEN 'auxiliary'
@@ -517,9 +515,12 @@ CREATE TABLE workspaces (
   id                  text NOT NULL,
   owner_uid           text NOT NULL,
   owner_active        boolean NOT NULL DEFAULT true,
-  mattermost_team_id  text,
-  gitea_org_name      text,
-  gitea_repo_name     text,
+  channel_provider      text NOT NULL DEFAULT 'managed',
+  channel_installation  text NOT NULL DEFAULT 'default',
+  channel_host_team_id  text,
+  git_host       text NOT NULL DEFAULT 'managed',
+  git_owner      text,
+  git_repo     text,
   created_at          bigint,
   updated_at          bigint,
   revision            bigint NOT NULL DEFAULT nextval('record_revision_seq')
@@ -532,7 +533,7 @@ CREATE TABLE workspace_members (
   uid                 text NOT NULL,
   role                text NOT NULL CHECK (role IN ('owner','member')),
   joined_at           bigint,
-  mattermost_user_id  text,
+  channel_host_user_id  text,
   revision            bigint NOT NULL DEFAULT nextval('record_revision_seq'),
   PRIMARY KEY (workspace_slug, uid)
 );
@@ -544,7 +545,8 @@ CREATE TABLE workspace_projects (
   project_slug                 text NOT NULL CHECK (project_slug <> ''),
   owner_uid                    text NOT NULL,
   owner_active                 boolean NOT NULL DEFAULT true,
-  gitea_repo_name              text,
+  git_host              text NOT NULL DEFAULT 'managed',
+  git_repo              text,
   provisioning_state           text,
   provisioning_error           text,
   pending_visibility           text,
@@ -567,28 +569,66 @@ CREATE TABLE workspace_channels (
   project_slug           text NOT NULL DEFAULT '',
   channel_id             text NOT NULL CHECK (channel_id <> ''),
   kind                   text NOT NULL,
-  mattermost_channel_id  text,
+  channel_provider       text NOT NULL DEFAULT 'managed',
+  channel_installation   text NOT NULL DEFAULT 'default',
+  channel_host_channel_id  text,
   archived_at            bigint,
   created_by             text,
   created_at             bigint,
   revision               bigint NOT NULL DEFAULT nextval('record_revision_seq'),
   PRIMARY KEY (workspace_slug, project_slug, channel_id)
 );
-CREATE UNIQUE INDEX workspace_channels_mattermost_idx ON workspace_channels (mattermost_channel_id) WHERE mattermost_channel_id IS NOT NULL;
+CREATE UNIQUE INDEX workspace_channels_channel_host_idx ON workspace_channels (channel_provider, channel_installation, channel_host_channel_id) WHERE channel_host_channel_id IS NOT NULL;
 CREATE TRIGGER workspace_channels_revision BEFORE UPDATE ON workspace_channels FOR EACH ROW EXECUTE FUNCTION bump_revision();
 
-CREATE TABLE builder_agent_identities (
+CREATE TABLE user_agent_identities (
   uid                 text PRIMARY KEY,
-  mattermost_user_id  text,
   created_at          bigint,
   updated_at          bigint,
   revision            bigint NOT NULL DEFAULT nextval('record_revision_seq')
 );
-CREATE UNIQUE INDEX builder_agent_identities_mattermost_idx ON builder_agent_identities (mattermost_user_id) WHERE mattermost_user_id IS NOT NULL;
-CREATE TRIGGER builder_agent_identities_revision BEFORE UPDATE ON builder_agent_identities FOR EACH ROW EXECUTE FUNCTION bump_revision();
+CREATE TRIGGER user_agent_identities_revision BEFORE UPDATE ON user_agent_identities FOR EACH ROW EXECUTE FUNCTION bump_revision();
 
-CREATE TABLE builder_secrets (
-  uid                     text NOT NULL REFERENCES builders (uid) ON DELETE CASCADE,
+CREATE TABLE channel_identities (
+  channel_provider      text NOT NULL CHECK (channel_provider <> ''),
+  channel_installation  text NOT NULL CHECK (channel_installation <> ''),
+  external_user_id      text NOT NULL CHECK (external_user_id <> ''),
+  owner_kind            text NOT NULL CHECK (owner_kind IN ('user','agent')),
+  owner_id              text NOT NULL CHECK (owner_id <> ''),
+  revision              bigint NOT NULL DEFAULT nextval('record_revision_seq'),
+  PRIMARY KEY (channel_provider, channel_installation, external_user_id)
+);
+CREATE UNIQUE INDEX channel_identities_owner_idx ON channel_identities (owner_id, owner_kind, channel_provider, channel_installation);
+CREATE TRIGGER channel_identities_revision BEFORE UPDATE ON channel_identities FOR EACH ROW EXECUTE FUNCTION bump_revision();
+CREATE FUNCTION forget_channel_identities() RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $$
+BEGIN
+  DELETE FROM channel_identities WHERE owner_kind = TG_ARGV[0] AND owner_id = OLD.uid;
+  RETURN OLD;
+END
+$$;
+CREATE FUNCTION touch_managed_channel_identity_owner() RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $$
+DECLARE
+  identity channel_identities;
+BEGIN
+  IF TG_OP = 'DELETE' THEN identity := OLD; ELSE identity := NEW; END IF;
+  IF identity.channel_provider <> 'managed' OR identity.channel_installation <> 'default' THEN RETURN NULL; END IF;
+  IF identity.owner_kind = 'user' THEN
+    UPDATE users SET uid = uid WHERE uid = identity.owner_id;
+  ELSE
+    UPDATE user_agent_identities SET uid = uid WHERE uid = identity.owner_id;
+  END IF;
+  RETURN NULL;
+END
+$$;
+CREATE TRIGGER channel_identities_touch_owner AFTER INSERT OR DELETE ON channel_identities
+  FOR EACH ROW EXECUTE FUNCTION touch_managed_channel_identity_owner();
+CREATE TRIGGER users_forget_channel_identities AFTER DELETE ON users
+  FOR EACH ROW EXECUTE FUNCTION forget_channel_identities('user');
+CREATE TRIGGER user_agent_identities_forget_channel_identities AFTER DELETE ON user_agent_identities
+  FOR EACH ROW EXECUTE FUNCTION forget_channel_identities('agent');
+
+CREATE TABLE user_secrets (
+  uid                     text NOT NULL REFERENCES users (uid) ON DELETE CASCADE,
   secret_id               text NOT NULL CHECK (secret_id <> ''),
   secret_kind             text GENERATED ALWAYS AS (CASE WHEN secret_id = 'mattermost' THEN 'builder-mattermost'
                                                          WHEN secret_id = 'coachMattermost' THEN 'coach-mattermost'
@@ -597,7 +637,7 @@ CREATE TABLE builder_secrets (
   project_id              text GENERATED ALWAYS AS (CASE WHEN secret_id LIKE 'projectAgentMattermost-%'
                                                          THEN substr(secret_id, length('projectAgentMattermost-') + 1) END) STORED,
   personal_token          text,
-  mattermost_user_id      text,
+  channel_host_user_id      text,
   encrypted_access_token  text,
   encrypted_refresh_token text,
   detail                  jsonb,
@@ -609,8 +649,8 @@ CREATE TABLE builder_secrets (
   CHECK ((secret_kind = 'connector') = (personal_token IS NULL)),
   CHECK ((secret_kind = 'connector') = (detail IS NOT NULL))
 );
-CREATE INDEX builder_secrets_kind_idx ON builder_secrets (uid, secret_kind);
-CREATE TRIGGER builder_secrets_revision BEFORE UPDATE ON builder_secrets FOR EACH ROW EXECUTE FUNCTION bump_revision_and_touch();
+CREATE INDEX user_secrets_kind_idx ON user_secrets (uid, secret_kind);
+CREATE TRIGGER user_secrets_revision BEFORE UPDATE ON user_secrets FOR EACH ROW EXECUTE FUNCTION bump_revision_and_touch();
 
 CREATE TABLE gateway_tickets (
   ticket_id   text PRIMARY KEY,
@@ -696,7 +736,7 @@ CREATE TABLE gateway_access_audit (
 );
 CREATE INDEX gateway_access_audit_gateway_idx ON gateway_access_audit (gateway_id, at DESC);
 
-CREATE TABLE customer_deletion_jobs (
+CREATE TABLE user_deletion_jobs (
   deletion_id                   text PRIMARY KEY,
   version                       smallint NOT NULL CHECK (version = 1),
   uid                           text NOT NULL,
@@ -721,9 +761,9 @@ CREATE TABLE customer_deletion_jobs (
   updated_at                    bigint,
   revision                      bigint NOT NULL DEFAULT nextval('record_revision_seq')
 );
-CREATE INDEX customer_deletion_jobs_uid_idx    ON customer_deletion_jobs (uid);
-CREATE INDEX customer_deletion_jobs_status_idx ON customer_deletion_jobs (status);
-CREATE TRIGGER customer_deletion_jobs_revision BEFORE UPDATE ON customer_deletion_jobs FOR EACH ROW EXECUTE FUNCTION bump_revision();
+CREATE INDEX user_deletion_jobs_uid_idx    ON user_deletion_jobs (uid);
+CREATE INDEX user_deletion_jobs_status_idx ON user_deletion_jobs (status);
+CREATE TRIGGER user_deletion_jobs_revision BEFORE UPDATE ON user_deletion_jobs FOR EACH ROW EXECUTE FUNCTION bump_revision();
 
 CREATE TABLE anonymous_operational_archives (
   id           text PRIMARY KEY,
@@ -735,7 +775,7 @@ CREATE INDEX anonymous_operational_archives_at_idx ON anonymous_operational_arch
 CREATE TRIGGER anonymous_operational_archives_revision BEFORE UPDATE ON anonymous_operational_archives FOR EACH ROW EXECUTE FUNCTION bump_revision();
 
 CREATE TABLE agent_imports (
-  uid            text NOT NULL REFERENCES builders (uid) ON DELETE CASCADE,
+  uid            text NOT NULL REFERENCES users (uid) ON DELETE CASCADE,
   import_id      text NOT NULL,
   kind           text NOT NULL CHECK (kind IN ('import','export')),
   slug           text,
@@ -752,7 +792,7 @@ CREATE INDEX agent_imports_cleanup_idx ON agent_imports (cleanup_at) WHERE clean
 CREATE TRIGGER agent_imports_revision BEFORE UPDATE ON agent_imports FOR EACH ROW EXECUTE FUNCTION bump_revision();
 
 CREATE TABLE agent_import_pointers (
-  uid         text NOT NULL REFERENCES builders (uid) ON DELETE CASCADE,
+  uid         text NOT NULL REFERENCES users (uid) ON DELETE CASCADE,
   pointer     text NOT NULL CHECK (pointer IN ('latest','export-latest')),
   import_id   text NOT NULL,
   updated_at  bigint NOT NULL,
@@ -809,9 +849,9 @@ CREATE TRIGGER gateway_assignments_change AFTER INSERT OR UPDATE OR DELETE ON ga
   FOR EACH ROW EXECUTE FUNCTION record_change('assignments', 'gateway_id', 'uid', 'filter:gateway_id');
 CREATE TRIGGER fleet_registry_change AFTER INSERT OR UPDATE OR DELETE ON fleet_registry
   FOR EACH ROW EXECUTE FUNCTION record_change('fleetRegistry', 'gateway_id', 'filter:gateway_id');
-CREATE TRIGGER builders_change AFTER INSERT OR UPDATE OR DELETE ON builders
+CREATE TRIGGER users_change AFTER INSERT OR UPDATE OR DELETE ON users
   FOR EACH ROW EXECUTE FUNCTION record_change('builders', 'uid', 'filter:uid', 'filter:gateway_id');
-CREATE TRIGGER builder_agents_change AFTER INSERT OR UPDATE OR DELETE ON builder_agents
+CREATE TRIGGER user_agents_change AFTER INSERT OR UPDATE OR DELETE ON user_agents
   FOR EACH ROW EXECUTE FUNCTION record_change('builders', 'uid', 'filter:uid');
 CREATE TRIGGER orchestrator_config_change AFTER INSERT OR UPDATE OR DELETE ON orchestrator_config
   FOR EACH ROW EXECUTE FUNCTION record_change('config', 'id');
@@ -827,32 +867,32 @@ CREATE TRIGGER workspace_projects_change AFTER INSERT OR UPDATE OR DELETE ON wor
   FOR EACH ROW EXECUTE FUNCTION record_change('workspaceProjects', 'workspace_slug', 'project_slug', 'filter:workspace_slug');
 CREATE TRIGGER workspace_channels_change AFTER INSERT OR UPDATE OR DELETE ON workspace_channels
   FOR EACH ROW EXECUTE FUNCTION record_change('workspaceChannels', 'workspace_slug', 'project_slug', 'channel_id', 'filter:workspace_slug');
-CREATE TRIGGER builder_agent_identities_change AFTER INSERT OR UPDATE OR DELETE ON builder_agent_identities
+CREATE TRIGGER user_agent_identities_change AFTER INSERT OR UPDATE OR DELETE ON user_agent_identities
   FOR EACH ROW EXECUTE FUNCTION record_change('agentIdentities', 'uid', 'filter:uid');
 `;
 const BUILDER_CONSTRAINTS = String.raw `
 ALTER TABLE gateway_assignments
-  ADD CONSTRAINT gateway_assignments_builder_fk FOREIGN KEY (uid) REFERENCES builders (uid) ON DELETE CASCADE;
+  ADD CONSTRAINT gateway_assignments_user_fk FOREIGN KEY (uid) REFERENCES users (uid) ON DELETE CASCADE;
 
-CREATE FUNCTION builder_mirror_assigned() RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $$
+CREATE FUNCTION user_mirror_assigned() RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $$
 DECLARE
   target_uid text;
 BEGIN
-  IF TG_TABLE_NAME = 'builders' THEN target_uid := NEW.uid; ELSE target_uid := OLD.uid; END IF;
+  IF TG_TABLE_NAME = 'users' THEN target_uid := NEW.uid; ELSE target_uid := OLD.uid; END IF;
   IF EXISTS (
-    SELECT 1 FROM builders b
+    SELECT 1 FROM users b
     WHERE b.uid = target_uid AND b.gateway_id IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM gateway_assignments a WHERE a.gateway_id = b.gateway_id AND a.uid = b.uid)
   ) THEN
-    RAISE EXCEPTION 'builder % mirrors a gateway without an assignment', target_uid USING ERRCODE = '23514';
+    RAISE EXCEPTION 'user % mirrors a gateway without an assignment', target_uid USING ERRCODE = '23514';
   END IF;
   RETURN NULL;
 END $$;
 
-CREATE CONSTRAINT TRIGGER builders_mirror_assigned AFTER INSERT OR UPDATE OF gateway_id ON builders
-  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION builder_mirror_assigned();
+CREATE CONSTRAINT TRIGGER users_mirror_assigned AFTER INSERT OR UPDATE OF gateway_id ON users
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION user_mirror_assigned();
 CREATE CONSTRAINT TRIGGER gateway_assignments_mirror_assigned AFTER DELETE OR UPDATE OF gateway_id, uid ON gateway_assignments
-  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION builder_mirror_assigned();
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION user_mirror_assigned();
 `;
 const WORKSPACE_AND_JOB_FIDELITY = String.raw `
 ALTER TABLE workspaces
@@ -876,7 +916,7 @@ DROP TRIGGER workspace_channels_change ON workspace_channels;
 CREATE TRIGGER workspace_channels_change AFTER INSERT OR UPDATE OR DELETE ON workspace_channels
   FOR EACH ROW EXECUTE FUNCTION record_change('workspaceChannels', 'channel_key', 'filter:workspace_slug');
 
-ALTER TABLE customer_deletion_jobs
+ALTER TABLE user_deletion_jobs
   ALTER COLUMN uid DROP NOT NULL,
   ALTER COLUMN requested_by DROP NOT NULL,
   ALTER COLUMN erasure_operation_id DROP NOT NULL,
@@ -909,9 +949,9 @@ END $$;
 const GATEWAY_AGGREGATE_FENCES = String.raw `
 ALTER TABLE gateways ADD COLUMN last_error_slug text GENERATED ALWAYS AS (last_error ->> 'slug') STORED;
 
-ALTER TABLE orchestrator_config DROP CONSTRAINT orchestrator_config_shared_builders_per_gateway_check;
-ALTER TABLE orchestrator_config ADD CONSTRAINT orchestrator_config_shared_builders_per_gateway_check
-  CHECK (shared_builders_per_gateway >= 2);
+ALTER TABLE orchestrator_config DROP CONSTRAINT orchestrator_config_shared_users_per_gateway_check;
+ALTER TABLE orchestrator_config ADD CONSTRAINT orchestrator_config_shared_users_per_gateway_check
+  CHECK (shared_users_per_gateway >= 2);
 
 ALTER TABLE platform_config ADD COLUMN watch_key text GENERATED ALWAYS AS ('platform/' || key) STORED;
 DROP TRIGGER platform_config_change ON platform_config;
@@ -930,7 +970,7 @@ CREATE TABLE workspace_project_members (
 );
 CREATE TRIGGER workspace_project_members_revision BEFORE UPDATE ON workspace_project_members
   FOR EACH ROW EXECUTE FUNCTION bump_revision();
-CREATE INDEX workspaces_mattermost_team_idx ON workspaces (mattermost_team_id);
+CREATE INDEX workspaces_channel_host_team_idx ON workspaces (channel_provider, channel_installation, channel_host_team_id);
 `;
 const OPERATION_PORT_FIDELITY = String.raw `
 ALTER TABLE operations ALTER COLUMN input DROP NOT NULL;
@@ -938,14 +978,14 @@ ALTER TABLE operations ALTER COLUMN created_by DROP NOT NULL;
 ALTER TABLE operations ALTER COLUMN superseded_by TYPE jsonb USING superseded_by::jsonb;
 `;
 const CANONICAL_MEMBERSHIPS = String.raw `
-ALTER TABLE workspace_members ADD COLUMN mattermost_channel_id text;
+ALTER TABLE workspace_members ADD COLUMN channel_host_channel_id text;
 ALTER TABLE workspace_members ADD COLUMN canonical_source text;
 ALTER TABLE workspace_members ADD COLUMN canonical_state text;
 `;
 export const PLATFORM_STATE_MIGRATIONS = [
     { version: 1, name: "core-schema", sql: CORE_SCHEMA },
     { version: 2, name: "change-feed", sql: CHANGE_FEED },
-    { version: 3, name: "builder-constraints", sql: BUILDER_CONSTRAINTS },
+    { version: 3, name: "user-constraints", sql: BUILDER_CONSTRAINTS },
     { version: 4, name: "workspace-and-job-fidelity", sql: WORKSPACE_AND_JOB_FIDELITY },
     { version: 5, name: "gateway-aggregate-fences", sql: GATEWAY_AGGREGATE_FENCES },
     { version: 6, name: "project-members", sql: PROJECT_MEMBERS },

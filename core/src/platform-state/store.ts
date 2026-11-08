@@ -1,5 +1,6 @@
 import type { OperationStatus } from "@octogee/shared/types/glm";
 import type { BuilderRepositories, BuilderRecord } from "./builders.js";
+import type { ChannelIdentitiesRepository } from "./channel-identities.js";
 import type { ConfigRepositories, ConfigRecord } from "./config.js";
 import type { ControllerStateRepositories } from "./controller-state.js";
 import type { PlatformStateError } from "./errors.js";
@@ -68,6 +69,7 @@ export interface PlatformStateRepositories {
   readonly builders: BuilderRepositories;
   readonly workspaces: WorkspaceRepositories;
   readonly secrets: SecretsRepository;
+  readonly channelIdentities: ChannelIdentitiesRepository;
   readonly access: AccessRepositories;
   readonly jobs: JobRepositories;
 }

@@ -98,9 +98,9 @@ describe.skipIf(!dsn)("PostgreSQL Builder records: round trip", () => {
   it("rejects a stored value of the wrong shape instead of guessing", async () => {
     const { records, harness } = fixture();
     for (const uid of ["fence", "erasure", "lease"]) await records.create({ uid, createdAt: NOW });
-    await harness.query(`UPDATE $schema.builders SET restore_fence = '"x"'::jsonb WHERE uid = 'fence'`);
-    await harness.query(`UPDATE $schema.builders SET home_erasure = '[1]'::jsonb WHERE uid = 'erasure'`);
-    await harness.query(`UPDATE $schema.builders SET activation_lease = '{"leaseId": 7, "generation": 1, "status": "active"}'::jsonb WHERE uid = 'lease'`);
+    await harness.query(`UPDATE $schema.users SET restore_fence = '"x"'::jsonb WHERE uid = 'fence'`);
+    await harness.query(`UPDATE $schema.users SET home_erasure = '[1]'::jsonb WHERE uid = 'erasure'`);
+    await harness.query(`UPDATE $schema.users SET activation_lease = '{"leaseId": 7, "generation": 1, "status": "active"}'::jsonb WHERE uid = 'lease'`);
 
     await expect(records.get("fence")).rejects.toMatchObject({
       constructor: MalformedRecordError, record: { aggregate: "builder", key: "fence" }, detail: "restore_fence is not a map",
@@ -291,6 +291,6 @@ describe.skipIf(!dsn)("PostgreSQL Builder records: agent roster", () => {
     await expect(records.setActivatedAgents("nobody", ["coach"])).rejects.toMatchObject(MISSING_BUILDER);
     await records.addAgents("nobody", []);
     await records.removeAgents("nobody", []);
-    expect(await harness.query("SELECT * FROM $schema.builder_agents")).toEqual([]);
+    expect(await harness.query("SELECT * FROM $schema.user_agents")).toEqual([]);
   });
 });

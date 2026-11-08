@@ -143,7 +143,7 @@ describe.skipIf(!dsn)("PostgreSQL gateway repositories", { timeout: 30_000 }, ()
   });
 
   async function builders(...uids: string[]): Promise<void> {
-    for (const uid of uids) await harness.query("INSERT INTO $schema.builders (uid) VALUES ($1::text)", [uid]);
+    for (const uid of uids) await harness.query("INSERT INTO $schema.users (uid) VALUES ($1::text)", [uid]);
   }
 
   async function mint(gatewayId: string, config: Partial<GatewayMutableConfig> = {}): Promise<void> {
@@ -632,7 +632,7 @@ describe.skipIf(!dsn)("PostgreSQL gateway repositories", { timeout: 30_000 }, ()
       await assignments().put(assignment("bender", "uid-a"));
       await assignments().put(assignment("flexo", "uid-a"));
 
-      await harness.query("DELETE FROM $schema.builders WHERE uid = 'uid-a'");
+      await harness.query("DELETE FROM $schema.users WHERE uid = 'uid-a'");
 
       expect(await assignments().listForUid("uid-a")).toEqual([]);
     });

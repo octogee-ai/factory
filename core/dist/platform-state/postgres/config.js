@@ -16,7 +16,7 @@ const ORCHESTRATOR_TABLE = {
     columns: [
         column("id", "text"),
         column("sharedAutoscalingEnabled", "boolean"),
-        column("sharedBuildersPerGateway", "integer"),
+        column("sharedBuildersPerGateway", "integer", { column: "shared_users_per_gateway" }),
         column("defaultGatewayId", "text", { nullAs: "null" }),
         column("disposableGatewayIdleMs", "bigint", { nullAs: "null" }),
         column("placementUpdatedAt", "bigint", { nullAs: "null" }),
@@ -43,7 +43,7 @@ const WRITER_QUIESCENCE_TABLE = {
     columns: [column("id", "text"), column("record", "jsonb")],
 };
 const MATTERMOST_ADMIN_TABLE = {
-    table: "mattermost_admin",
+    table: "channel_host_admin",
     aggregate: "mattermost-admin",
     keyColumns: ["id"],
     columns: [column("id", "text"), column("userId", "text"), column("proxyUrl", "text", { nullAs: "null" }), column("updatedAt", "bigint")],

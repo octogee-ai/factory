@@ -20,7 +20,7 @@ const WORKSPACES: TableSpec = {
     column("slug", "text"),
     column("id", "text"),
     column("ownerUid", "text"),
-    column("mattermostTeamId", "text"),
+    column("mattermostTeamId", "text", { column: "channel_host_team_id" }),
     column("createdAt", "bigint"),
     column("updatedAt", "bigint"),
   ],
@@ -33,11 +33,11 @@ const WORKSPACE_MEMBERS: TableSpec = {
   columns: [column("workspaceSlug", "text"), column("uid", "text"), column("role", "text"), column("joinedAt", "bigint")],
 };
 
-const AGENT_IDENTITIES: TableSpec = {
-  table: "builder_agent_identities",
-  aggregate: "builder-agent-identity",
+const USERS_BY_SLUG: TableSpec = {
+  table: "users",
+  aggregate: "builder",
   keyColumns: ["uid"],
-  columns: [column("uid", "text"), column("mattermostUserId", "text"), column("createdAt", "bigint")],
+  columns: [column("uid", "text"), column("slug", "text"), column("createdAt", "bigint")],
 };
 
 const serverNow = { serverNow: true } as const;
@@ -183,21 +183,21 @@ describe.skipIf(!dsn)("PostgreSQL platform state records", () => {
     });
 
     it("maps a secondary unique collision to DuplicateRecordError naming the lookup", async () => {
-      await insertRecord(harness.session, "identity.create", AGENT_IDENTITIES, { uid: "uid-1", mattermostUserId: "mm-1" }, "create");
+      await insertRecord(harness.session, "user.create", USERS_BY_SLUG, { uid: "uid-1", slug: "taken" }, "create");
 
       const failure = await insertRecord(
         harness.session,
-        "identity.create",
-        AGENT_IDENTITIES,
-        { uid: "uid-2", mattermostUserId: "mm-1" },
+        "user.create",
+        USERS_BY_SLUG,
+        { uid: "uid-2", slug: "taken" },
         "create",
       ).catch((error: unknown) => error);
 
       expect(failure).toBeInstanceOf(DuplicateRecordError);
       expect(failure).toMatchObject({
-        aggregate: "builder-agent-identity",
-        lookup: "mattermost_user_id",
-        value: "mm-1",
+        aggregate: "builder",
+        lookup: "slug",
+        value: "taken",
         keysFound: ["uid-2"],
       });
     });

@@ -134,7 +134,7 @@ describe.skipIf(!dsn)("PostgreSQL config", { timeout: 30_000 }, () => {
     it("holds the stored autoscaling to the shared parser's bounds", async () => {
       await orchestrator().patch({ sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 2 } });
 
-      expect(await failure(harness.query("UPDATE $schema.orchestrator_config SET shared_builders_per_gateway = 1"))).toMatchObject({ code: "23514" });
+      expect(await failure(harness.query("UPDATE $schema.orchestrator_config SET shared_users_per_gateway = 1"))).toMatchObject({ code: "23514" });
       expect(await failure(harness.query("UPDATE $schema.orchestrator_config SET shared_autoscaling_enabled = NULL"))).toMatchObject({ code: "23514" });
       expect((await orchestrator().get())?.sharedGatewayAutoscaling).toEqual({ enabled: true, buildersPerGateway: 2 });
     });

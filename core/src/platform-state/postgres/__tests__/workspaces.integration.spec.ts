@@ -130,6 +130,9 @@ describe.skipIf(!dsn)("PostgreSQL workspace repositories", { timeout: 30_000 }, 
         id: "acme",
         ownerUid: "u1",
         ownerActive: true,
+        channelProvider: "managed",
+        channelInstallation: "default",
+        gitHost: "managed",
         mattermostTeamId: "team-acme",
         giteaOrgName: "acme",
         giteaRepoName: "acme-workspace",
@@ -339,6 +342,7 @@ describe.skipIf(!dsn)("PostgreSQL workspace repositories", { timeout: 30_000 }, 
     it("round-trips every project field", async () => {
       const full = project("acme", "site", {
         ownerActive: true,
+        gitHost: "github.com",
         provisioningError: "repo missing",
         pendingVisibility: "public",
         checkoutEnabled: false,
@@ -481,6 +485,8 @@ describe.skipIf(!dsn)("PostgreSQL workspace repositories", { timeout: 30_000 }, 
         scope: { workspaceSlug: "acme", projectSlug: null },
         channelId: "general",
         kind: "general",
+        channelProvider: "managed",
+        channelInstallation: "default",
         mattermostChannelId: "mm-general",
         archivedAt: null,
         createdBy: null,
@@ -554,7 +560,11 @@ describe.skipIf(!dsn)("PostgreSQL workspace repositories", { timeout: 30_000 }, 
         .catch((error: unknown) => error);
 
       expect(failure).toBeInstanceOf(DuplicateRecordError);
-      expect(failure).toMatchObject({ aggregate: "workspace-channel", lookup: "mattermost_channel_id", value: "mm-shared" });
+      expect(failure).toMatchObject({
+        aggregate: "workspace-channel",
+        lookup: "channel_provider, channel_installation, channel_host_channel_id",
+        value: "managed, default, mm-shared",
+      });
       expect(await harness.store.workspaces.channels.findByMattermostChannelId("mm-shared")).toMatchObject({ channelId: "general" });
     });
 

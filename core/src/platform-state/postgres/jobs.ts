@@ -33,7 +33,7 @@ const EXPORT_RECORD_KIND = "authored-agent-export";
 const nullable = { nullAs: "null" } as const;
 
 const DELETION_JOBS_TABLE: TableSpec = {
-  table: "customer_deletion_jobs",
+  table: "user_deletion_jobs",
   aggregate: "customer-deletion-job",
   keyColumns: ["deletion_id"],
   columns: [
@@ -122,7 +122,7 @@ function createDeletionJobsRepository(session: PostgresSession): CustomerDeletio
       const rows = await selectRecords(
         session,
         "jobs.deletions.listForUid",
-        "SELECT * FROM $schema.customer_deletion_jobs WHERE uid = $1::text ORDER BY deletion_id",
+        "SELECT * FROM $schema.user_deletion_jobs WHERE uid = $1::text ORDER BY deletion_id",
         [uid],
       );
       return rows.map(decodeDeletionJob);
@@ -147,7 +147,7 @@ function createDeletionJobsRepository(session: PostgresSession): CustomerDeletio
       const rows = await session.write(
         operation,
         record,
-        `UPDATE $schema.customer_deletion_jobs
+        `UPDATE $schema.user_deletion_jobs
             SET retired_gateway_proofs = COALESCE(retired_gateway_proofs, '{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)
           WHERE deletion_id = $1::text
           RETURNING revision`,

@@ -1,3 +1,5 @@
+import { MANAGED_CHANNEL_INSTALLATION } from "../channel-identities.js";
+import { clearManagedChannelIdentity, linkChannelIdentity, managedExternalUserIdOf, managedOwnerIdOf } from "./channel-identities.js";
 import { isDeepStrictEqual } from "node:util";
 import { DuplicateRecordError, FenceMismatchError, MalformedRecordError, MissingRecordError, } from "../errors.js";
 import { serverNow } from "./records.js";
@@ -14,7 +16,6 @@ const LEASE_STATUSES = [
 ];
 const COLUMNS = {
     slug: column("slug", "text"),
-    mattermostUserId: column("mattermostUserId", "text"),
     workspaceId: column("workspaceId", "text"),
     role: column("role", "text"),
     createdAt: column("createdAt", "bigint"),
@@ -30,7 +31,7 @@ const COLUMNS = {
     openclawStatus: column("openclawStatus", "text"),
     openclawVersion: column("openclawVersion", "text"),
     agentId: column("agentId", "text"),
-    customerDir: column("customerDir", "text"),
+    customerDir: column("customerDir", "text", { column: "user_dir" }),
     provisionedAt: column("provisionedAt", "bigint"),
     mounted: column("mounted", "boolean"),
     managedBy: column("managedBy", "text"),
@@ -58,7 +59,6 @@ const COLUMNS = {
 };
 const TOP_LEVEL_COLUMNS = {
     slug: COLUMNS.slug,
-    mattermostUserId: COLUMNS.mattermostUserId,
     workspaceId: COLUMNS.workspaceId,
     role: COLUMNS.role,
 };
@@ -116,13 +116,13 @@ const PATCH_GROUPS = {
 };
 const UNIQUE_LOOKUPS = {
     slug: "slug",
-    mattermost_user_id: "mattermostUserId",
     computer_instance_id: "computerInstanceId",
 };
 const BY_UID = "ORDER BY b.uid";
 const SELECT_BUILDERS = `SELECT b.*,
-  ARRAY(SELECT a.agent_id FROM $schema.builder_agents a WHERE a.uid = b.uid ORDER BY a.agent_id) AS agent_ids
-  FROM $schema.builders b`;
+  ${managedExternalUserIdOf("user", "b.uid")} AS channel_host_user_id,
+  ARRAY(SELECT a.agent_id FROM $schema.user_agents a WHERE a.uid = b.uid ORDER BY a.agent_id) AS agent_ids
+  FROM $schema.users b`;
 export const builderKey = (uid) => ({ aggregate: "builder", key: uid });
 function isPlainObject(value) {
     if (value === null || typeof value !== "object" || Array.isArray(value))
@@ -227,7 +227,7 @@ function decodeOpenClaw(fields) {
         status: fields.optional("openclaw_status"),
         version: fields.optional("openclaw_version"),
         agentId: fields.optional("agent_id"),
-        customerDir: fields.optional("customer_dir"),
+        customerDir: fields.optional("user_dir"),
         provisionedAt: fields.optional("provisioned_at"),
         mounted: fields.optional("mounted"),
         managedBy: fields.optional("managed_by"),
@@ -262,7 +262,7 @@ export function decodeBuilderRow(row) {
     return {
         uid: row.uid,
         slug: fields.nullable("slug"),
-        mattermostUserId: fields.nullable("mattermost_user_id"),
+        mattermostUserId: fields.nullable("channel_host_user_id"),
         admitted: row.admitted === true,
         persona: fields.map("persona") ?? null,
         workspaceId: fields.nullable("workspace_id"),
@@ -408,7 +408,7 @@ class BuilderUpdate {
         const explanations = [...this.explanations];
         return {
             uid: this.uid,
-            text: `UPDATE $schema.builders SET ${this.sets.join(", ")} WHERE ${where} RETURNING revision`,
+            text: `UPDATE $schema.users SET ${this.sets.join(", ")} WHERE ${where} RETURNING revision`,
             values: this.parameters.values,
             explain: explanations.length === 0 ? undefined : (current) => explanations.forEach((explain) => explain(current)),
         };
@@ -484,11 +484,11 @@ function jsonParameter(value, parameters, now, path) {
     return parameters.add(JSON.stringify(resolveJsonValue(value, now, "reject", path)), "jsonb");
 }
 function rosterStatement(uid, agentIds, change) {
-    const touched = "touched AS (UPDATE $schema.builders SET uid = uid WHERE uid = $1::text RETURNING uid)";
+    const touched = "touched AS (UPDATE $schema.users SET uid = uid WHERE uid = $1::text RETURNING uid)";
     const roster = change === "add"
-        ? `INSERT INTO $schema.builder_agents (uid, agent_id)
+        ? `INSERT INTO $schema.user_agents (uid, agent_id)
            SELECT DISTINCT touched.uid, agent.id FROM touched, unnest($2::text[]) AS agent (id) ON CONFLICT DO NOTHING`
-        : "DELETE FROM $schema.builder_agents a USING touched WHERE a.uid = touched.uid AND a.agent_id = ANY($2::text[])";
+        : "DELETE FROM $schema.user_agents a USING touched WHERE a.uid = touched.uid AND a.agent_id = ANY($2::text[])";
     return { uid, text: `WITH ${touched}, roster AS (${roster}) SELECT uid FROM touched`, values: [uid, [...agentIds]] };
 }
 async function selectRecords(session, operation, text, values) {
@@ -508,16 +508,16 @@ function builderRecordReads(session) {
             return findOne("builders.records.findBySlug", "b.slug = $1::text", slug);
         },
         findByMattermostUserId(mattermostUserId) {
-            return findOne("builders.records.findByMattermostUserId", "b.mattermost_user_id = $1::text", mattermostUserId);
+            return findOne("builders.records.findByMattermostUserId", `b.uid = ${managedOwnerIdOf("user", "$1::text")}`, mattermostUserId);
         },
         findByComputerInstanceId(instanceId) {
             return findOne("builders.records.findByComputerInstanceId", "b.computer_instance_id = $1::text", instanceId);
         },
         listByAgentId(agentId, limit) {
             const where = `b.uid IN (
-        (SELECT p.uid FROM $schema.builders p WHERE p.agent_id = $1::text ORDER BY p.uid LIMIT $2::integer)
+        (SELECT p.uid FROM $schema.users p WHERE p.agent_id = $1::text ORDER BY p.uid LIMIT $2::integer)
         UNION
-        (SELECT r.uid FROM $schema.builder_agents r WHERE r.agent_id = $1::text ORDER BY r.uid LIMIT $2::integer))`;
+        (SELECT r.uid FROM $schema.user_agents r WHERE r.agent_id = $1::text ORDER BY r.uid LIMIT $2::integer))`;
             return selectRecords(session, "builders.records.listByAgentId", selectBuilders(where, BY_UID), [agentId, limit]);
         },
         listByGateway(gatewayId, filter = {}) {
@@ -556,7 +556,7 @@ function builderRecordReads(session) {
             const parameters = new SqlParameters();
             const conditions = ["b.created_at IS NOT NULL"];
             if (page.after !== undefined) {
-                const anchors = await session.read(name, "SELECT created_at FROM $schema.builders WHERE uid = $1::text AND created_at IS NOT NULL", [
+                const anchors = await session.read(name, "SELECT created_at FROM $schema.users WHERE uid = $1::text AND created_at IS NOT NULL", [
                     page.after,
                 ]);
                 if (anchors.length === 0)
@@ -581,7 +581,7 @@ function admitStatement(uid, input, now) {
     ];
     return {
         uid,
-        text: `INSERT INTO $schema.builders AS b (uid, slug, persona, provisioning_started_at, admitted, provisioning_status)
+        text: `INSERT INTO $schema.users AS b (uid, slug, persona, provisioning_started_at, admitted, provisioning_status)
              VALUES (${values.join(", ")}, true, 'in_progress')
            ON CONFLICT (uid) DO UPDATE SET slug = COALESCE(b.slug, EXCLUDED.slug), persona = EXCLUDED.persona,
              provisioning_started_at = EXCLUDED.provisioning_started_at, admitted = true, provisioning_status = EXCLUDED.provisioning_status
@@ -605,13 +605,32 @@ function builderRecordWrites(session) {
         async create(record) {
             const parameters = new SqlParameters();
             const createdAt = encodeValue(COLUMNS.createdAt, record.createdAt, parameters, undefined);
-            const text = `INSERT INTO $schema.builders (uid, created_at) VALUES (${parameters.add(record.uid, "text")}, ${createdAt})
+            const text = `INSERT INTO $schema.users (uid, created_at) VALUES (${parameters.add(record.uid, "text")}, ${createdAt})
         ON CONFLICT (uid) DO UPDATE SET created_at = EXCLUDED.created_at`;
             await writeBuilder(session, "builders.records.create", record.uid, text, parameters.values);
         },
         async patch(uid, patch, fence) {
-            const assignments = patchAssignments(patch);
-            await update("builders.records.patch", uid, jsonValuesOf(assignments), (builder) => builder.set(assignments).where(builderFenceConditions(fence, builder.parameters), explainBuilderFence(uid, fence)));
+            const operation = "builders.records.patch";
+            const { mattermostUserId, ...fields } = patch;
+            const assignments = patchAssignments(fields);
+            const applyFields = async (target) => {
+                const now = await resolveNow(target, jsonValuesOf(assignments));
+                const builder = new BuilderUpdate(uid, now);
+                const fenced = builder.set(assignments).where(builderFenceConditions(fence, builder.parameters), explainBuilderFence(uid, fence));
+                await runBuilderStatement(target, operation, fenced.statement());
+            };
+            if (mattermostUserId === undefined) {
+                await applyFields(session);
+                return;
+            }
+            await session.atomically(operation, async (transaction) => {
+                await applyFields(transaction);
+                if (mattermostUserId === null || isClearField(mattermostUserId)) {
+                    await clearManagedChannelIdentity(transaction, operation, builderKey(uid), "user", uid);
+                    return;
+                }
+                await linkChannelIdentity(transaction, operation, builderKey(uid), { ...MANAGED_CHANNEL_INSTALLATION, externalUserId: mattermostUserId, ownerKind: "user", ownerId: uid }, { aggregate: "builder", lookup: "mattermostUserId" });
+            });
         },
         async admit(uid, input) {
             const now = await resolveNow(session, [input.persona]);
@@ -679,7 +698,7 @@ function builderRecordWrites(session) {
             });
         },
         async delete(uid) {
-            await writeBuilder(session, "builders.records.delete", uid, "DELETE FROM $schema.builders WHERE uid = $1::text", [uid]);
+            await writeBuilder(session, "builders.records.delete", uid, "DELETE FROM $schema.users WHERE uid = $1::text", [uid]);
         },
     };
 }

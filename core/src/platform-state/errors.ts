@@ -25,6 +25,7 @@ export type PlatformAggregate =
   | "workspace-project-member"
   | "workspace-channel"
   | "builder-agent-identity"
+  | "channel-identity"
   | "builder-secret"
   | "gateway-ticket"
   | "control-ticket"

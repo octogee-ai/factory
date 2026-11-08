@@ -1,3 +1,4 @@
+import type { ChannelInstallation } from "./channel-identities.js";
 import type { ClearField, OpaqueMap, RecordPatch, Revision, Stored, TimeInput } from "./store.js";
 
 export interface WorkspaceRecord {
@@ -5,7 +6,10 @@ export interface WorkspaceRecord {
   readonly id: string;
   readonly ownerUid: string;
   readonly ownerActive: boolean | null;
+  readonly channelProvider?: string;
+  readonly channelInstallation?: string;
   readonly mattermostTeamId: string | null;
+  readonly gitHost?: string;
   readonly giteaOrgName: string | null;
   readonly giteaRepoName: string | null;
   readonly createdAt: number | null;
@@ -17,7 +21,10 @@ export type WorkspaceInput = Omit<WorkspaceRecord, "createdAt" | "updatedAt"> & 
   readonly updatedAt: TimeInput | null;
 };
 
-export type WorkspacePatch = RecordPatch<Omit<WorkspaceRecord, "updatedAt">, "slug" | "id"> & {
+export type WorkspacePatch = RecordPatch<
+  Omit<WorkspaceRecord, "updatedAt" | "channelProvider" | "channelInstallation" | "gitHost">,
+  "slug" | "id"
+> & {
   readonly updatedAt?: TimeInput;
 };
 
@@ -25,6 +32,7 @@ export interface WorkspaceRecordsRepository {
   get(slug: string): Promise<Stored<WorkspaceRecord> | null>;
   listByOwner(ownerUid: string): Promise<readonly Stored<WorkspaceRecord>[]>;
   findByMattermostTeamId(mattermostTeamId: string): Promise<Stored<WorkspaceRecord> | null>;
+  findByChannelTeamId(installation: ChannelInstallation, teamId: string): Promise<Stored<WorkspaceRecord> | null>;
   put(record: WorkspaceInput): Promise<void>;
   patch(slug: string, patch: WorkspacePatch, fence?: { readonly revision?: Revision }): Promise<void>;
   delete(slug: string): Promise<void>;
@@ -74,6 +82,7 @@ export interface WorkspaceProject {
   readonly projectSlug: string;
   readonly ownerUid: string;
   readonly ownerActive: boolean | null;
+  readonly gitHost?: string;
   readonly giteaRepoName: string | null;
   readonly provisioningState: string | null;
   readonly provisioningError: string | null;
@@ -95,7 +104,7 @@ export type WorkspaceProjectInput = Omit<WorkspaceProject, "archivedAt" | "updat
 };
 
 export type WorkspaceProjectPatch = RecordPatch<
-  Omit<WorkspaceProject, "archivedAt" | "updatedAt">,
+  Omit<WorkspaceProject, "archivedAt" | "updatedAt" | "gitHost">,
   "workspaceSlug" | "projectSlug"
 > & {
   readonly archivedAt?: TimeInput | ClearField | null;
@@ -126,13 +135,15 @@ export interface WorkspaceChannel {
   readonly scope: WorkspaceChannelScope;
   readonly channelId: string;
   readonly kind: string | null;
+  readonly channelProvider?: string;
+  readonly channelInstallation?: string;
   readonly mattermostChannelId: string | null;
   readonly archivedAt: number | null;
   readonly createdBy: string | null;
   readonly createdAt: number | null;
 }
 
-export type WorkspaceChannelPatch = RecordPatch<Omit<WorkspaceChannel, "archivedAt">, "scope" | "channelId" | "createdAt"> & {
+export type WorkspaceChannelPatch = RecordPatch<Omit<WorkspaceChannel, "archivedAt" | "channelProvider" | "channelInstallation">, "scope" | "channelId" | "createdAt"> & {
   readonly archivedAt?: TimeInput | ClearField | null;
 };
 
@@ -140,6 +151,7 @@ export interface WorkspaceChannelsRepository {
   get(scope: WorkspaceChannelScope, channelId: string): Promise<Stored<WorkspaceChannel> | null>;
   list(scope: WorkspaceChannelScope): Promise<readonly Stored<WorkspaceChannel>[]>;
   findByMattermostChannelId(mattermostChannelId: string): Promise<Stored<WorkspaceChannel> | null>;
+  findByHostChannelId(installation: ChannelInstallation, channelId: string): Promise<Stored<WorkspaceChannel> | null>;
   put(channel: Omit<WorkspaceChannel, "createdAt"> & { readonly createdAt: TimeInput | null }): Promise<void>;
   patch(
     scope: WorkspaceChannelScope,

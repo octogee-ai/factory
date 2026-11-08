@@ -52,15 +52,14 @@ describe.skipIf(!dsn)("migratePlatformState", () => {
     await migratePlatformState(pool, { schema });
 
     const created = await tables(pool, schema);
-    expect(created).toHaveLength(40);
     expect(created).toEqual(
       expect.arrayContaining([
         "operations",
         "operation_audits",
         "gateway_recovery_receipts",
         "gateways",
-        "builders",
-        "builder_agents",
+        "users",
+        "user_agents",
         "agent_stores",
         "workspaces",
         "workspace_project_members",
@@ -75,6 +74,36 @@ describe.skipIf(!dsn)("migratePlatformState", () => {
       [schema],
     );
     expect(triggers[0].count).toBeGreaterThan(0);
+  });
+
+  it("names no product or hosting provider in any schema object", async () => {
+    const { pool, schema } = isolated();
+    await migratePlatformState(pool, { schema });
+
+    const { rows } = await pool.query<{ name: string }>(
+      `SELECT table_name AS name FROM information_schema.tables WHERE table_schema = $1
+       UNION SELECT column_name FROM information_schema.columns WHERE table_schema = $1
+       UNION SELECT indexname FROM pg_indexes WHERE schemaname = $1
+       UNION SELECT c.conname FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace WHERE n.nspname = $1
+       UNION SELECT t.tgname FROM pg_trigger t JOIN pg_class r ON r.oid = t.tgrelid JOIN pg_namespace n ON n.oid = r.relnamespace
+             WHERE n.nspname = $1 AND NOT t.tgisinternal
+       UNION SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`,
+      [schema],
+    );
+
+    expect(rows.map((row) => row.name).filter((name) => /builder|customer|mattermost|gitea/.test(name)).sort()).toEqual([]);
+  });
+
+  it("keeps external user IDs out of the user tables", async () => {
+    const { pool, schema } = isolated();
+    await migratePlatformState(pool, { schema });
+
+    const { rows } = await pool.query<{ table_name: string }>(
+      "SELECT table_name FROM information_schema.columns WHERE table_schema = $1 AND column_name = 'channel_host_user_id' ORDER BY table_name",
+      [schema],
+    );
+
+    expect(rows.map((row) => row.table_name)).toEqual(["user_secrets", "workspace_members"]);
   });
 
   it("stops at the requested version and resumes from it", async () => {

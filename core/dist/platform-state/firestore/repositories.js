@@ -1,4 +1,5 @@
 import { createFirestoreBuilderRepositories } from "./builders.js";
+import { createFirestoreChannelIdentitiesRepository } from "./channel-identities.js";
 import { createFirestoreConfigRepositories } from "./config.js";
 import { createFirestoreControllerStateRepositories } from "./controller-state.js";
 import { createFirestoreFleetRegistryRepository } from "./fleet-registry.js";
@@ -19,6 +20,7 @@ export function createFirestoreRepositories(session) {
         builders: createFirestoreBuilderRepositories(session),
         workspaces: createFirestoreWorkspaceRepositories(session),
         secrets: createFirestoreSecretsRepository(session),
+        channelIdentities: createFirestoreChannelIdentitiesRepository(),
         access: createFirestoreAccessRepositories(session),
         jobs: createFirestoreJobRepositories(session),
     };

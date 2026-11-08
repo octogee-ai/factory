@@ -54,8 +54,8 @@ describe.skipIf(!dsn)("PostgreSQL Builder watch", { timeout: 30_000 }, () => {
     await records.patch("alice", { workspaceId: "alice" });
     await untilChange(listener, { type: "modified", key: "alice", record: expect.objectContaining({ workspaceId: "alice", role: "admin" }) });
 
-    await harness.query("INSERT INTO $schema.builder_agents (uid, agent_id) VALUES ('carol', 'octogee-carol-site')");
-    await harness.query("INSERT INTO $schema.builder_agents (uid, agent_id) VALUES ('alice', 'octogee-alice-site')");
+    await harness.query("INSERT INTO $schema.user_agents (uid, agent_id) VALUES ('carol', 'octogee-carol-site')");
+    await harness.query("INSERT INTO $schema.user_agents (uid, agent_id) VALUES ('alice', 'octogee-alice-site')");
     await untilChange(listener, {
       type: "modified",
       key: "alice",
@@ -108,7 +108,7 @@ describe.skipIf(!dsn)("PostgreSQL Builder watch", { timeout: 30_000 }, () => {
       await records.create({ uid, createdAt: NOW });
       await place(uid, "g1");
     }
-    await harness.query(`UPDATE $schema.builders SET restore_fence = '"x"'::jsonb WHERE uid = 'broken'`);
+    await harness.query(`UPDATE $schema.users SET restore_fence = '"x"'::jsonb WHERE uid = 'broken'`);
 
     const listener = await watched(fixture(), { aggregate: "builders", filter: { gatewayId: "g1" } });
 

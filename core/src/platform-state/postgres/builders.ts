@@ -31,7 +31,7 @@ const PLACEMENT_RECEIPTS_TABLE: TableSpec = {
     column("schemaVersion", "integer"),
     column("kind", "text"),
     column("at", "bigint"),
-    column("builderSlug", "text", NULLABLE),
+    column("builderSlug", "text", { ...NULLABLE, column: "user_slug" }),
     column("leaseId", "text"),
     column("generation", "integer"),
     column("cause", "text", NULLABLE),

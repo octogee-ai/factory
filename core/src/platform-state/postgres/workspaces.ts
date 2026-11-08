@@ -1,3 +1,5 @@
+import { MANAGED_CHANNEL_INSTALLATION, type ChannelInstallation } from "../channel-identities.js";
+import { linkChannelIdentity, managedExternalUserIdOf } from "./channel-identities.js";
 import { DuplicateRecordError, MissingRecordError, type RecordKey } from "../errors.js";
 import type { Stored, WatchFilters } from "../store.js";
 import type {
@@ -51,9 +53,12 @@ const WORKSPACES_TABLE: TableSpec = {
     column("id", "text"),
     column("ownerUid", "text"),
     column("ownerActive", "boolean", nullable),
-    column("mattermostTeamId", "text", nullable),
-    column("giteaOrgName", "text", nullable),
-    column("giteaRepoName", "text", nullable),
+    column("channelProvider", "text", { column: "channel_provider" }),
+    column("channelInstallation", "text", { column: "channel_installation" }),
+    column("mattermostTeamId", "text", { ...nullable, column: "channel_host_team_id" }),
+    column("gitHost", "text", { column: "git_host" }),
+    column("giteaOrgName", "text", { ...nullable, column: "git_owner" }),
+    column("giteaRepoName", "text", { ...nullable, column: "git_repo" }),
     column("createdAt", "bigint", nullable),
     column("updatedAt", "bigint", nullable),
   ],
@@ -69,8 +74,8 @@ const MEMBERS_TABLE: TableSpec = {
     column("uid", "text"),
     column("role", "text"),
     column("joinedAt", "bigint", nullable),
-    column("mattermostUserId", "text", nullable),
-    column("mattermostChannelId", "text", nullable),
+    column("mattermostUserId", "text", { ...nullable, column: "channel_host_user_id" }),
+    column("mattermostChannelId", "text", { ...nullable, column: "channel_host_channel_id" }),
     column("canonicalSource", "text", nullable),
     column("canonicalState", "text", nullable),
   ],
@@ -85,7 +90,8 @@ const PROJECTS_TABLE: TableSpec = {
     column("projectSlug", "text"),
     column("ownerUid", "text"),
     column("ownerActive", "boolean", nullable),
-    column("giteaRepoName", "text", nullable),
+    column("gitHost", "text", { column: "git_host" }),
+    column("giteaRepoName", "text", { ...nullable, column: "git_repo" }),
     column("provisioningState", "text", nullable),
     column("provisioningError", "text", nullable),
     column("pendingVisibility", "text", nullable),
@@ -117,7 +123,9 @@ const CHANNELS_TABLE: TableSpec = {
     column("projectSlug", "text"),
     column("channelId", "text"),
     column("kind", "text", nullable),
-    column("mattermostChannelId", "text", nullable),
+    column("channelProvider", "text", { column: "channel_provider" }),
+    column("channelInstallation", "text", { column: "channel_installation" }),
+    column("mattermostChannelId", "text", { ...nullable, column: "channel_host_channel_id" }),
     column("archivedAt", "bigint", nullable),
     column("createdBy", "text", nullable),
     column("createdAt", "bigint", nullable),
@@ -125,16 +133,17 @@ const CHANNELS_TABLE: TableSpec = {
 };
 
 const AGENT_IDENTITIES_TABLE: TableSpec = {
-  table: "builder_agent_identities",
+  table: "user_agent_identities",
   aggregate: "builder-agent-identity",
   keyColumns: ["uid"],
   columns: [
     column("uid", "text"),
-    column("mattermostUserId", "text", nullable),
     column("createdAt", "bigint", nullable),
     column("updatedAt", "bigint", nullable),
   ],
 };
+
+const AGENT_IDENTITY_COLUMNS = `*, ${managedExternalUserIdOf("agent", "user_agent_identities.uid")} AS channel_host_user_id`;
 
 const WORKSPACE_SCOPE_PROJECT_SLUG = "";
 
@@ -248,16 +257,54 @@ function decodeChannel(row: Row): Stored<WorkspaceChannel> {
 }
 
 function decodeAgentIdentity(row: Row): Stored<BuilderAgentIdentity> {
-  return decodeStored<BuilderAgentIdentity>(AGENT_IDENTITIES_TABLE, row);
+  return {
+    ...decodeStored<Omit<BuilderAgentIdentity, "mattermostUserId">>(AGENT_IDENTITIES_TABLE, row),
+    mattermostUserId: (row.channel_host_user_id as string | null) ?? null,
+  };
+}
+
+async function findWorkspaceByChannelTeam(
+  session: PostgresSession,
+  operation: string,
+  installation: ChannelInstallation,
+  teamId: string,
+): Promise<Stored<WorkspaceRecord> | null> {
+  const rows = await selectRecords(
+    session,
+    operation,
+    `SELECT * FROM $schema.workspaces
+     WHERE channel_provider = $1::text AND channel_installation = $2::text AND channel_host_team_id = $3::text
+     ORDER BY slug LIMIT 2`,
+    [installation.provider, installation.installation, teamId],
+  );
+  if (rows.length > 1) throw new DuplicateRecordError("workspace", "mattermostTeamId", teamId, rows.map(row => String(row.slug)));
+  return rows.length === 0 ? null : decodeWorkspace(rows[0]);
+}
+
+async function findChannelByHostId(
+  session: PostgresSession,
+  operation: string,
+  installation: ChannelInstallation,
+  channelId: string,
+): Promise<Stored<WorkspaceChannel> | null> {
+  const rows = await selectRecords(
+    session,
+    operation,
+    `SELECT * FROM $schema.workspace_channels
+     WHERE channel_provider = $1::text AND channel_installation = $2::text AND channel_host_channel_id = $3::text`,
+    [installation.provider, installation.installation, channelId],
+  );
+  return rows.length === 0 ? null : decodeChannel(rows[0]);
 }
 
 function createWorkspaceRecordsRepository(session: PostgresSession): WorkspaceRecordsRepository {
   return {
-    async findByMattermostTeamId(teamId) {
-      const rows = await selectRecords(session, "workspaces.records.findByMattermostTeamId",
-        "SELECT * FROM $schema.workspaces WHERE mattermost_team_id = $1::text ORDER BY slug LIMIT 2", [teamId]);
-      if (rows.length > 1) throw new DuplicateRecordError("workspace", "mattermostTeamId", teamId, rows.map(row => String(row.slug)));
-      return rows.length === 0 ? null : decodeWorkspace(rows[0]);
+    findByMattermostTeamId(teamId) {
+      return findWorkspaceByChannelTeam(session, "workspaces.records.findByMattermostTeamId", MANAGED_CHANNEL_INSTALLATION, teamId);
+    },
+
+    findByChannelTeamId(installation, teamId) {
+      return findWorkspaceByChannelTeam(session, "workspaces.records.findByChannelTeamId", installation, teamId);
     },
 
     async get(slug) {
@@ -432,14 +479,12 @@ function createWorkspaceChannelsRepository(session: PostgresSession): WorkspaceC
       return rows.map(decodeChannel);
     },
 
-    async findByMattermostChannelId(mattermostChannelId) {
-      const rows = await selectRecords(
-        session,
-        "workspaces.channels.findByMattermostChannelId",
-        "SELECT * FROM $schema.workspace_channels WHERE mattermost_channel_id = $1::text",
-        [mattermostChannelId],
-      );
-      return rows.length === 0 ? null : decodeChannel(rows[0]);
+    findByMattermostChannelId(mattermostChannelId) {
+      return findChannelByHostId(session, "workspaces.channels.findByMattermostChannelId", MANAGED_CHANNEL_INSTALLATION, mattermostChannelId);
+    },
+
+    findByHostChannelId(installation, channelId) {
+      return findChannelByHostId(session, "workspaces.channels.findByHostChannelId", installation, channelId);
     },
 
     async put(channel) {
@@ -465,25 +510,42 @@ function createWorkspaceChannelsRepository(session: PostgresSession): WorkspaceC
 function createAgentIdentitiesRepository(session: PostgresSession): BuilderAgentIdentitiesRepository {
   return {
     async get(uid) {
-      const row = await selectByKey(session, "workspaces.agentIdentities.get", { table: AGENT_IDENTITIES_TABLE, key: [uid] });
-      return row === null ? null : decodeAgentIdentity(row);
+      const rows = await selectRecords(
+        session,
+        "workspaces.agentIdentities.get",
+        `SELECT ${AGENT_IDENTITY_COLUMNS} FROM $schema.user_agent_identities WHERE uid = $1::text`,
+        [uid],
+      );
+      return rows.length === 0 ? null : decodeAgentIdentity(rows[0]);
     },
 
     async listAll() {
       const rows = await selectRecords(
         session,
         "workspaces.agentIdentities.listAll",
-        "SELECT * FROM $schema.builder_agent_identities ORDER BY uid",
+        `SELECT ${AGENT_IDENTITY_COLUMNS} FROM $schema.user_agent_identities ORDER BY uid`,
       );
       return rows.map(decodeAgentIdentity);
     },
 
     async put(identity) {
-      await mergePutRecord(session, {
-        operation: "workspaces.agentIdentities.put",
-        table: AGENT_IDENTITIES_TABLE,
-        record: agentIdentityKey(identity.uid),
-        input: { uid: identity.uid, mattermostUserId: identity.mattermostUserId, createdAt: identity.at, updatedAt: identity.at },
+      const operation = "workspaces.agentIdentities.put";
+      const record = agentIdentityKey(identity.uid);
+      await session.atomically(operation, async (transaction) => {
+        await mergePutRecord(transaction, {
+          operation,
+          table: AGENT_IDENTITIES_TABLE,
+          record,
+          input: { uid: identity.uid, createdAt: identity.at, updatedAt: identity.at },
+        });
+        if (identity.mattermostUserId === null) return;
+        await linkChannelIdentity(
+          transaction,
+          operation,
+          record,
+          { ...MANAGED_CHANNEL_INSTALLATION, externalUserId: identity.mattermostUserId, ownerKind: "agent", ownerId: identity.uid },
+          { aggregate: "builder-agent-identity", lookup: "mattermostUserId" },
+        );
       });
     },
 
@@ -537,6 +599,7 @@ function splitKeys(keys: readonly string[], parts: number): string[][] {
 
 interface KeyedSource {
   readonly table: string;
+  readonly columns?: string;
   readonly keyColumns: readonly string[];
   readonly order: string;
   readonly filters: readonly (readonly [string, string | undefined])[];
@@ -546,11 +609,11 @@ function keyedSelects(source: KeyedSource) {
   const conditions = (parameters: SqlParameters) => equalityConditions(source.filters, parameters);
   return {
     selectAll: (parameters: SqlParameters) =>
-      `SELECT * FROM $schema.${source.table} ${whereClause(conditions(parameters))} ORDER BY ${source.order}`,
+      `SELECT ${source.columns ?? "*"} FROM $schema.${source.table} ${whereClause(conditions(parameters))} ORDER BY ${source.order}`,
     selectKeys: (keys: readonly string[], parameters: SqlParameters) => {
       const arrays = splitKeys(keys, source.keyColumns.length).map((values) => parameters.add(values, "text[]"));
       const keyed = `(${source.keyColumns.join(", ")}) IN (SELECT * FROM unnest(${arrays.join(", ")}))`;
-      return `SELECT * FROM $schema.${source.table} ${whereClause([keyed, ...conditions(parameters)])}`;
+      return `SELECT ${source.columns ?? "*"} FROM $schema.${source.table} ${whereClause([keyed, ...conditions(parameters)])}`;
     },
   };
 }
@@ -622,7 +685,7 @@ export function postgresAgentIdentitiesWatchSource(filter: WatchFilters["agentId
   return {
     aggregate: "agentIdentities",
     operation: "watch agentIdentities",
-    ...keyedSelects({ table: "builder_agent_identities", keyColumns: ["uid"], order: "uid", filters: [["uid", filter.uid]] }),
+    ...keyedSelects({ table: "user_agent_identities", columns: AGENT_IDENTITY_COLUMNS, keyColumns: ["uid"], order: "uid", filters: [["uid", filter.uid]] }),
     keyOf: (row) => row.uid as string,
     decode: decodeAgentIdentity,
     mayMatch: (filterKeys) => filterAllows(filterKeys, "uid", filter.uid),

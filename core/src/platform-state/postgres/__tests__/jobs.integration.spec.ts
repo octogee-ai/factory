@@ -322,7 +322,7 @@ describe.skipIf(!dsn)("PostgreSQL job repositories", { timeout: 30_000 }, () => 
     });
 
     beforeEach(async () => {
-      for (const uid of ["u1", "u2"]) await harness.query("INSERT INTO $schema.builders (uid) VALUES ($1::text)", [uid]);
+      for (const uid of ["u1", "u2"]) await harness.query("INSERT INTO $schema.users (uid) VALUES ($1::text)", [uid]);
     });
 
     it("round-trips import and export records", async () => {
@@ -402,7 +402,7 @@ describe.skipIf(!dsn)("PostgreSQL job repositories", { timeout: 30_000 }, () => 
       await harness.store.jobs.agentImports.put(importRecord(importPayload));
       await harness.store.jobs.agentImports.putPointer("u1", "latest", { importId: "import-1", slug: "acme", updatedAt: NOW });
 
-      await harness.query("DELETE FROM $schema.builders WHERE uid = 'u1'");
+      await harness.query("DELETE FROM $schema.users WHERE uid = 'u1'");
 
       expect(await harness.store.jobs.agentImports.listForUid("u1")).toEqual([]);
       expect(await harness.store.jobs.agentImports.getPointer("u1", "latest")).toBeNull();

@@ -12,14 +12,14 @@ const ENCRYPTED_TOKEN_FIELDS = ["encryptedAccessToken", "encryptedRefreshToken"]
 const nullable = { nullAs: "null" };
 const grantColumn = column("grant", "jsonb", { column: "access_grant" });
 const SECRETS_TABLE = {
-    table: "builder_secrets",
+    table: "user_secrets",
     aggregate: "builder-secret",
     keyColumns: ["uid", "secret_id"],
     columns: [
         column("uid", "text"),
         column("secretId", "text"),
         column("personalToken", "text"),
-        column("mattermostUserId", "text", nullable),
+        column("mattermostUserId", "text", { ...nullable, column: "channel_host_user_id" }),
         column("encryptedAccessToken", "text", nullable),
         column("encryptedRefreshToken", "text", nullable),
         column("detail", "jsonb"),
@@ -211,8 +211,8 @@ export function createPostgresSecretsRepository(session) {
         },
         async list(uid, kind) {
             const rows = kind === undefined
-                ? await selectRecords(session, "secrets.list", "SELECT * FROM $schema.builder_secrets WHERE uid = $1::text ORDER BY secret_id", [uid])
-                : await selectRecords(session, "secrets.list", "SELECT * FROM $schema.builder_secrets WHERE uid = $1::text AND secret_kind = $2::text ORDER BY secret_id", [uid, kind]);
+                ? await selectRecords(session, "secrets.list", "SELECT * FROM $schema.user_secrets WHERE uid = $1::text ORDER BY secret_id", [uid])
+                : await selectRecords(session, "secrets.list", "SELECT * FROM $schema.user_secrets WHERE uid = $1::text AND secret_kind = $2::text ORDER BY secret_id", [uid, kind]);
             return rows.map(decodeSecret);
         },
         async put(uid, secret) {

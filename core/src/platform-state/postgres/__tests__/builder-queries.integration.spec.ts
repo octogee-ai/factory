@@ -32,7 +32,7 @@ async function seedFleet({ records, place, harness }: BuilderFixture): Promise<v
   await records.patch("carol", { slug: "carol", openclaw: { status: "complete" } });
   await records.setFence("carol", "computerRecovery", { operationId: "op-recover", gatewayId: "g1" });
 
-  await harness.query("INSERT INTO $schema.builders (uid, slug) VALUES ('dave', 'dave')");
+  await harness.query("INSERT INTO $schema.users (uid, slug) VALUES ('dave', 'dave')");
   await records.patch("dave", { openclaw: { agentId: BOB_SITE } });
   await records.addAgents("dave", [BOB_SITE]);
 }
@@ -241,7 +241,7 @@ describe.skipIf(!dsn)("PostgreSQL Builder records: deletion", () => {
     await records.delete("bob");
 
     expect(await records.get("bob")).toBeNull();
-    for (const table of ["builder_agents", "placement_receipts", "schedule_transfers", "agent_stores", "gateway_assignments"]) {
+    for (const table of ["user_agents", "placement_receipts", "schedule_transfers", "agent_stores", "gateway_assignments"]) {
       expect(await count(table, "bob"), table).toBe(0);
     }
     expect(await row("gateway_assignments", "uid = $1::text", ["alice"])).toBeDefined();
@@ -258,7 +258,7 @@ describe.skipIf(!dsn)("PostgreSQL Builder records: deletion", () => {
       await tx.builders.records.patch("alice", { workspaceId: "alice" });
     });
     expect(await records.get("dave")).toBeNull();
-    expect(await count("builder_agents", "dave")).toBe(0);
+    expect(await count("user_agents", "dave")).toBe(0);
     expect((await records.get("alice"))!.workspaceId).toBe("alice");
   });
 });

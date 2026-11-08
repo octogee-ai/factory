@@ -9,7 +9,7 @@ const GATEWAY_ID_SEGMENT = /^[A-Za-z0-9_-]+$/;
 const EXPORT_RECORD_KIND = "authored-agent-export";
 const nullable = { nullAs: "null" };
 const DELETION_JOBS_TABLE = {
-    table: "customer_deletion_jobs",
+    table: "user_deletion_jobs",
     aggregate: "customer-deletion-job",
     keyColumns: ["deletion_id"],
     columns: [
@@ -87,7 +87,7 @@ function createDeletionJobsRepository(session) {
             return row === null ? null : decodeDeletionJob(row);
         },
         async listForUid(uid) {
-            const rows = await selectRecords(session, "jobs.deletions.listForUid", "SELECT * FROM $schema.customer_deletion_jobs WHERE uid = $1::text ORDER BY deletion_id", [uid]);
+            const rows = await selectRecords(session, "jobs.deletions.listForUid", "SELECT * FROM $schema.user_deletion_jobs WHERE uid = $1::text ORDER BY deletion_id", [uid]);
             return rows.map(decodeDeletionJob);
         },
         async create(job) {
@@ -105,7 +105,7 @@ function createDeletionJobsRepository(session) {
                 throw new TypeError(`${operation}: ${JSON.stringify(gatewayId)} cannot name a map key`);
             const now = containsServerNow(proof) ? await serverNow(session) : undefined;
             const record = deletionKey(deletionId);
-            const rows = await session.write(operation, record, `UPDATE $schema.customer_deletion_jobs
+            const rows = await session.write(operation, record, `UPDATE $schema.user_deletion_jobs
             SET retired_gateway_proofs = COALESCE(retired_gateway_proofs, '{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)
           WHERE deletion_id = $1::text
           RETURNING revision`, [deletionId, gatewayId, JSON.stringify(resolveJsonValue(proof, now, "reject", "proof"))]);

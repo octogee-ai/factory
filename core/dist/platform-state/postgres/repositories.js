@@ -1,3 +1,4 @@
+import { createPostgresChannelIdentitiesRepository } from "./channel-identities.js";
 import { createPostgresBuilderRepositories } from "./builders.js";
 import { createPostgresConfigRepositories } from "./config.js";
 import { createPostgresControllerStateRepositories } from "./controller-state.js";
@@ -19,6 +20,7 @@ export function createPostgresRepositories(session) {
         builders: createPostgresBuilderRepositories(session),
         workspaces: createPostgresWorkspaceRepositories(session),
         secrets: createPostgresSecretsRepository(session),
+        channelIdentities: createPostgresChannelIdentitiesRepository(session),
         access: createPostgresAccessRepositories(session),
         jobs: createPostgresJobRepositories(session),
     };

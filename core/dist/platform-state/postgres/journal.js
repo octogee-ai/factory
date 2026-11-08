@@ -83,7 +83,7 @@ function createOperationsRepository(session) {
             return list("journal.operations.listReferencingUid", "input_uid = $1::text OR input_uid_raw = $1::text OR created_by = $1::text", [uid]);
         },
         listByInputBuilderSlugPrefix(prefix) {
-            return list("journal.operations.listByInputBuilderSlugPrefix", "input_builder_slug LIKE $1::text ESCAPE '\\'", [`${escapeLike(prefix)}%`], "input_builder_slug, id");
+            return list("journal.operations.listByInputBuilderSlugPrefix", "input_user_slug LIKE $1::text ESCAPE '\\'", [`${escapeLike(prefix)}%`], "input_user_slug, id");
         },
         async enqueue(operation) {
             const id = mintOperationId();

@@ -1,3 +1,4 @@
+import { MANAGED_CHANNEL_INSTALLATION, MANAGED_GIT_HOST } from "../channel-identities.js";
 import { FieldPath, } from "firebase-admin/firestore";
 import { DuplicateRecordError, MalformedRecordError, MissingRecordError, UnsupportedOperationError, } from "../errors.js";
 import { assertRevisionFence } from "./fences.js";
@@ -292,9 +293,39 @@ async function revisionFencedUpdate(session, target, data, revision) {
 function decodeAll(docs, decode) {
     return docs.map(decode).filter(isPresent);
 }
+function assertManagedInstallation(operation, installation) {
+    if (installation.provider !== MANAGED_CHANNEL_INSTALLATION.provider || installation.installation !== MANAGED_CHANNEL_INSTALLATION.installation) {
+        throw new UnsupportedOperationError("firestore", operation, "backend-capability");
+    }
+}
+function assertManagedHosts(operation, fields) {
+    assertManagedInstallation(operation, {
+        provider: fields.channelProvider ?? MANAGED_CHANNEL_INSTALLATION.provider,
+        installation: fields.channelInstallation ?? MANAGED_CHANNEL_INSTALLATION.installation,
+    });
+    if ((fields.gitHost ?? MANAGED_GIT_HOST) !== MANAGED_GIT_HOST) {
+        throw new UnsupportedOperationError("firestore", operation, "backend-capability");
+    }
+}
 function createWorkspaceRecordsRepository(session) {
     const ref = (slug) => workspaceRef(session.db, slug);
+    const findByMattermostTeamId = async (mattermostTeamId) => {
+        const query = session.db
+            .collection(WORKSPACES_COLLECTION)
+            .where("mattermost.teamId", "==", mattermostTeamId)
+            .limit(2);
+        const { docs } = await session.query("workspaces.records.findByMattermostTeamId", query);
+        if (docs.length > 1) {
+            throw new DuplicateRecordError("workspace", "mattermostTeamId", mattermostTeamId, docs.map((doc) => doc.id));
+        }
+        return docs.length === 0 ? null : decodeWorkspace(docs[0]);
+    };
     return {
+        findByMattermostTeamId,
+        async findByChannelTeamId(installation, teamId) {
+            assertManagedInstallation("workspaces.records.findByChannelTeamId", installation);
+            return findByMattermostTeamId(teamId);
+        },
         async get(slug) {
             return decodeWorkspace(await session.read("workspaces.records.get", ref(slug)));
         },
@@ -302,18 +333,8 @@ function createWorkspaceRecordsRepository(session) {
             const query = session.db.collection(WORKSPACES_COLLECTION).where("ownerUid", "==", ownerUid);
             return decodeAll((await session.query("workspaces.records.listByOwner", query)).docs, decodeWorkspace);
         },
-        async findByMattermostTeamId(mattermostTeamId) {
-            const query = session.db
-                .collection(WORKSPACES_COLLECTION)
-                .where("mattermost.teamId", "==", mattermostTeamId)
-                .limit(2);
-            const { docs } = await session.query("workspaces.records.findByMattermostTeamId", query);
-            if (docs.length > 1) {
-                throw new DuplicateRecordError("workspace", "mattermostTeamId", mattermostTeamId, docs.map((doc) => doc.id));
-            }
-            return docs.length === 0 ? null : decodeWorkspace(docs[0]);
-        },
         async put(record) {
+            assertManagedHosts("workspaces.records.put", record);
             await session.merge("workspaces.records.put", workspaceKey(record.slug), ref(record.slug), encodeMergePut({
                 id: record.id,
                 slug: record.slug,
@@ -390,6 +411,7 @@ function createWorkspaceProjectsRepository(session) {
             return list("workspaces.projects.listAll", session.db.collectionGroup("projects"));
         },
         async put(project) {
+            assertManagedHosts("workspaces.projects.put", project);
             await session.merge("workspaces.projects.put", projectKey(project.workspaceSlug, project.projectSlug), ref(project.workspaceSlug, project.projectSlug), encodeMergePut({
                 id: project.projectSlug,
                 slug: project.projectSlug,
@@ -436,7 +458,23 @@ function createWorkspaceProjectMembersRepository(session) {
 }
 function createWorkspaceChannelsRepository(session) {
     const ref = (scope, channelId) => channelsCollection(session.db, scope).doc(channelId);
+    const findByMattermostChannelId = async (mattermostChannelId) => {
+        const query = session.db
+            .collectionGroup("channels")
+            .where("mattermost.channelId", "==", mattermostChannelId)
+            .limit(2);
+        const { docs } = await session.query("workspaces.channels.findByMattermostChannelId", query);
+        if (docs.length > 1) {
+            throw new DuplicateRecordError("workspace-channel", "mattermostChannelId", mattermostChannelId, docs.map(channelKeyString));
+        }
+        return docs.length === 0 ? null : decodeWorkspaceChannel(docs[0]);
+    };
     return {
+        findByMattermostChannelId,
+        async findByHostChannelId(installation, channelId) {
+            assertManagedInstallation("workspaces.channels.findByHostChannelId", installation);
+            return findByMattermostChannelId(channelId);
+        },
         async get(scope, channelId) {
             return decodeWorkspaceChannel(await session.read("workspaces.channels.get", ref(scope, channelId)));
         },
@@ -444,18 +482,8 @@ function createWorkspaceChannelsRepository(session) {
             const snapshot = await session.query("workspaces.channels.list", channelsCollection(session.db, scope));
             return decodeAll(snapshot.docs, decodeWorkspaceChannel);
         },
-        async findByMattermostChannelId(mattermostChannelId) {
-            const query = session.db
-                .collectionGroup("channels")
-                .where("mattermost.channelId", "==", mattermostChannelId)
-                .limit(2);
-            const { docs } = await session.query("workspaces.channels.findByMattermostChannelId", query);
-            if (docs.length > 1) {
-                throw new DuplicateRecordError("workspace-channel", "mattermostChannelId", mattermostChannelId, docs.map(channelKeyString));
-            }
-            return docs.length === 0 ? null : decodeWorkspaceChannel(docs[0]);
-        },
         async put(channel) {
+            assertManagedHosts("workspaces.channels.put", channel);
             await session.merge("workspaces.channels.put", channelKey(channel.scope, channel.channelId), ref(channel.scope, channel.channelId), encodeMergePut({
                 id: channel.channelId,
                 kind: channel.kind,

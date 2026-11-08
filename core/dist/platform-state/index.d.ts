@@ -7,6 +7,8 @@ export type * from "./gateways.js";
 export type * from "./jobs.js";
 export type * from "./migration-tasks.js";
 export type * from "./operations.js";
+export type * from "./channel-identities.js";
+export { MANAGED_CHANNEL_INSTALLATION, MANAGED_GIT_HOST } from "./channel-identities.js";
 export type * from "./secrets.js";
 export type * from "./store.js";
 export type * from "./workspaces.js";

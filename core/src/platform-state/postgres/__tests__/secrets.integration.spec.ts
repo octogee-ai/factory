@@ -29,7 +29,7 @@ describe.skipIf(!dsn)("PostgreSQL secrets and access repositories", { timeout: 3
   });
 
   async function builder(uid: string): Promise<void> {
-    await harness.query("INSERT INTO $schema.builders (uid) VALUES ($1::text)", [uid]);
+    await harness.query("INSERT INTO $schema.users (uid) VALUES ($1::text)", [uid]);
   }
 
   describe("Builder secrets", () => {
@@ -163,7 +163,7 @@ describe.skipIf(!dsn)("PostgreSQL secrets and access repositories", { timeout: 3
       });
       await harness.store.secrets.put("u1", coachSecret);
 
-      await harness.query("DELETE FROM $schema.builders WHERE uid = 'u1'");
+      await harness.query("DELETE FROM $schema.users WHERE uid = 'u1'");
 
       expect(await harness.store.secrets.list("u1")).toEqual([]);
     });
