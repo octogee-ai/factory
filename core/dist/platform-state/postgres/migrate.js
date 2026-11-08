@@ -11,6 +11,14 @@ function targetVersion(through) {
     }
     return through;
 }
+async function grantRuntimeAccess(client, schema, role) {
+    const grantee = pg.escapeIdentifier(role);
+    await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${grantee}`);
+    await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${grantee}`);
+    await client.query(`REVOKE ALL ON TABLE ${schema}.platform_state_migrations FROM ${grantee}`);
+    await client.query(`REVOKE INSERT, UPDATE, DELETE ON TABLE ${schema}.platform_deployment_target FROM ${grantee}`);
+    await client.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${schema} TO ${grantee}`);
+}
 export async function migratePlatformState(pool, options = {}) {
     const schema = options.schema ?? DEFAULT_PLATFORM_STATE_SCHEMA;
     const target = targetVersion(options.through);
@@ -41,6 +49,8 @@ export async function migratePlatformState(pool, options = {}) {
         if (options.deploymentTargetId !== undefined) {
             await claimPlatformDatabaseTarget(client, options.deploymentTargetId);
         }
+        if (options.runtimeRole !== undefined)
+            await grantRuntimeAccess(client, identifier, options.runtimeRole);
         await client.query("COMMIT");
         return { applied, version: Math.max(0, ...done, ...applied) };
     }

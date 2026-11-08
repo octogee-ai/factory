@@ -4,6 +4,7 @@ export interface MigratePlatformStateOptions {
     readonly schema?: string;
     readonly through?: number;
     readonly deploymentTargetId?: string;
+    readonly runtimeRole?: string;
 }
 export interface PlatformStateMigrationResult {
     readonly applied: readonly number[];

@@ -64,6 +64,7 @@ spec:
             - name: http
               containerPort: {{ .Values.llmBroker.port }}
           env:
+            {{- with (include "octogee.platformStateEnv" .) }}{{ . | nindent 12 }}{{ end }}
             - name: LOG_LEVEL
               value: {{ (.Values.global).logLevel | default "info" | quote }}
             - name: PORT

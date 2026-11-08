@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterEach, describe, expect, it } from "vitest";
 import { migratePlatformState } from "../migrate.js";
 import { PLATFORM_STATE_MIGRATIONS } from "../migrations.js";
-import { dsn, newPool, newSchemaName } from "./fixtures/harness.js";
+import { createPostgresPlatformStateStore } from "../store.js";
+import { dsn, newPool, newSchemaName, operation } from "./fixtures/harness.js";
 
 const LATEST = PLATFORM_STATE_MIGRATIONS[PLATFORM_STATE_MIGRATIONS.length - 1].version;
 const ALL_VERSIONS = PLATFORM_STATE_MIGRATIONS.map((migration) => migration.version);
@@ -31,6 +33,83 @@ describe.skipIf(!dsn)("migratePlatformState", () => {
     );
     return rows.map((row) => row.table_name);
   }
+
+  async function runtimeRole(admin: pg.Pool, schema: string): Promise<{ role: string; runtime: pg.Pool }> {
+    const role = `platform_runtime_${randomUUID().replaceAll("-", "")}`;
+    await admin.query(`CREATE ROLE ${pg.escapeIdentifier(role)} LOGIN PASSWORD 'localonly'`);
+    const url = new URL(dsn as string);
+    url.username = role;
+    url.password = "localonly";
+    const runtime = new pg.Pool({ connectionString: url.toString(), max: 4 });
+    cleanups.push(async () => {
+      await runtime.end();
+      await admin.query(`DROP SCHEMA IF EXISTS ${pg.escapeIdentifier(schema)} CASCADE`);
+      await admin.query(`DROP ROLE ${pg.escapeIdentifier(role)}`);
+    });
+    return { role, runtime };
+  }
+
+  it("gives the runtime role enough access to drive the store", async () => {
+    const { pool, schema } = isolated();
+    const { role, runtime } = await runtimeRole(pool, schema);
+
+    await migratePlatformState(pool, { schema, runtimeRole: role });
+
+    const store = createPostgresPlatformStateStore({ pool: runtime, schema });
+    const record = operation();
+    await store.journal.operations.create(record);
+    await expect(store.journal.operations.get(record.id)).resolves.toMatchObject({ id: record.id });
+    await store.close();
+  });
+
+  it("lets the runtime role read the deployment target but never change it", async () => {
+    const { pool, schema } = isolated();
+    const { role, runtime } = await runtimeRole(pool, schema);
+    const table = `${pg.escapeIdentifier(schema)}.platform_deployment_target`;
+
+    await migratePlatformState(pool, { schema, deploymentTargetId: "test-central", runtimeRole: role });
+
+    await expect(runtime.query(`SELECT target_id FROM ${table}`)).resolves.toMatchObject({ rows: [{ target_id: "test-central" }] });
+    await expect(runtime.query(`UPDATE ${table} SET target_id = 'prod-central'`)).rejects.toMatchObject({ code: "42501" });
+    await expect(runtime.query(`DELETE FROM ${table}`)).rejects.toMatchObject({ code: "42501" });
+  });
+
+  it("keeps schema changes and migration history away from the runtime role", async () => {
+    const { pool, schema } = isolated();
+    const { role, runtime } = await runtimeRole(pool, schema);
+    const qualified = pg.escapeIdentifier(schema);
+
+    await migratePlatformState(pool, { schema, runtimeRole: role });
+
+    await expect(runtime.query(`CREATE TABLE ${qualified}.intruder (id int)`)).rejects.toMatchObject({ code: "42501" });
+    await expect(runtime.query(`DROP TABLE ${qualified}.operations`)).rejects.toMatchObject({ code: "42501" });
+    await expect(runtime.query(`DELETE FROM ${qualified}.platform_state_migrations`)).rejects.toMatchObject({ code: "42501" });
+  });
+
+  it("extends runtime access to tables added by later migrations", async () => {
+    const { pool, schema } = isolated();
+    const { role, runtime } = await runtimeRole(pool, schema);
+
+    await migratePlatformState(pool, { schema, through: 1, runtimeRole: role });
+    await migratePlatformState(pool, { schema, runtimeRole: role });
+
+    const { rows } = await pool.query<{ table_name: string }>(
+      "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_name <> 'platform_state_migrations'",
+      [schema],
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    for (const { table_name: table } of rows) {
+      await expect(runtime.query(`SELECT 1 FROM ${pg.escapeIdentifier(schema)}.${pg.escapeIdentifier(table)} LIMIT 1`)).resolves.toBeDefined();
+    }
+  });
+
+  it("applies nothing when the runtime role does not exist", async () => {
+    const { pool, schema } = isolated();
+
+    await expect(migratePlatformState(pool, { schema, runtimeRole: "no_such_role" })).rejects.toMatchObject({ code: "42704" });
+
+    expect(await tables(pool, schema)).toEqual([]);
+  });
 
   it("applies every migration once and records each in the migrations table", async () => {
     const { pool, schema } = isolated();

@@ -60,6 +60,7 @@ spec:
                   key: client-dsn
             - name: LOG_LEVEL
               value: {{ (.Values.global).logLevel | default "info" | quote }}
+            {{- with (include "octogee.platformStateEnv" .) }}{{ . | nindent 12 }}{{ end }}
             - name: K8S_NAMESPACE
               valueFrom:
                 fieldRef:

@@ -3,6 +3,8 @@
 
 # ── Global values (shared across sub-charts) ────────────────────────────────
 global:
+  platformState:
+    backend: firestore
   deploymentTargetId: ""
   deploymentProjectId: ""
   customerHostingProjectId: ""
@@ -302,6 +304,7 @@ builderBalloon:
 
 networkPolicy:
   agentStorePostgresCidr: ""
+  platformStatePostgresCidr: ""
   enforceDefaultDeny: false
   nodeLocalDnsCidr: 169.254.20.10/32
   controlPlaneCidr: ""

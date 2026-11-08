@@ -104,6 +104,7 @@ spec:
             - name: GATEWAY_SERVICE_ACCOUNT
               value: {{ .Values.gatewayServiceAccount | quote }}
             {{- end }}
+            {{- with (include "octogee.platformStateEnv" .) }}{{ . | nindent 12 }}{{ end }}
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}

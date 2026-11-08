@@ -17,6 +17,7 @@ export { createFirestorePlatformStateStore, type FirestorePlatformStateStoreOpti
 export { agentImportRecordFromPayload } from "./firestore/jobs.js";
 export { createPlatformStatePool, platformDatabasePoolConfig, platformDatabaseSettingsFromEnvironment, type PlatformDatabaseSettings, type PlatformDatabaseSslMode, type PlatformStatePoolOptions, } from "./postgres/connection.js";
 export { DEFAULT_PLATFORM_STATE_SCHEMA, migratePlatformState, type MigratePlatformStateOptions, type PlatformStateMigrationResult, } from "./postgres/migrate.js";
+export { migratePlatformStateFromEnvironment, type PlatformStateMigrationRun } from "./postgres/migrate-from-environment.js";
 export { PLATFORM_STATE_MIGRATIONS, type PlatformStateMigration } from "./postgres/migrations.js";
 export type { PlatformStateLogger, PostgresRetryPolicy } from "./postgres/session.js";
 export { createPostgresPlatformStateStore, type PostgresPlatformStateStoreOptions } from "./postgres/store.js";
