@@ -9,7 +9,7 @@ and local.
 ## Contract
 
 1. **Build main** produces one immutable, SHA- and digest-addressed image family
-   and manifest. A running main build is never cancelled. Building never deploys.
+   and manifest. A new push cancels an older automatic main build. Building never deploys.
 2. **Deploy platform** checks out an already-built SHA and deploys its platform
    and site surfaces to the selected environment. Shared gateway slots converge
    to that build. Ordinary deployment never changes a Builder gateway's desired
