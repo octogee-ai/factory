@@ -4,6 +4,7 @@ const runtimeLogger = createServiceLogger("byosub-syncback-runner");
 
 
 import * as fs from "fs";
+import { pathToFileURL } from "node:url";
 import { parseAgentId } from "../../shared/types/identity.js";
 import { readAuthProfileStore, sharedAuthStoreUsable } from "../lib/auth-profile-store.js";
 import {
@@ -88,11 +89,7 @@ async function main(): Promise<void> {
   setInterval(() => void tick(), INTERVAL_MS);
 }
 
-const isEntrypoint =
-  (process.argv[1] && process.argv[1].endsWith("byosub-syncback-runner.ts")) ||
-  process.argv[1]?.endsWith("byosub-syncback-runner.js");
-if (isEntrypoint) {
-  
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
     runtimeLogger.error(`[byosub-syncback] fatal: ${err.message}`);
     process.exit(0);

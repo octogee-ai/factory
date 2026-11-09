@@ -470,7 +470,7 @@ fi
 # writes, and standard-image gateways mount customers from tenant-bound
 # octogee-api broker reads rather than local Firestore credentials.
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ]; then
-  TSX=/octogee/infra/gateway/shared-auxiliary-tsx.sh
+  TSX=/octogee/infra/gateway/shared-auxiliary-runner.sh
   SUPERVISE="$TSX /octogee/scripts/entrypoints/supervise-runner.ts"
 fi
 supervise_runner fleet-controller 5000 "$TSX" /octogee/scripts/entrypoints/fleet-controller.ts

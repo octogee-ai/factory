@@ -79,6 +79,13 @@ RUN cd /octogee/shared && npm ci --no-audit --no-fund
 RUN /octogee/scripts/node_modules/.bin/esbuild /octogee/scripts/entrypoints/source-transfer-stage.ts \
       --bundle --platform=node --format=esm --packages=external \
       --outfile=/octogee/scripts/source-transfer-stage.mjs
+RUN /octogee/scripts/node_modules/.bin/esbuild \
+      /octogee/scripts/entrypoints/supervise-runner.ts \
+      /octogee/scripts/entrypoints/fleet-controller.ts \
+      /octogee/scripts/entrypoints/byosub-syncback-runner.ts \
+      /octogee/scripts/entrypoints/runner-metrics-exporter.ts \
+      --bundle --platform=node --format=esm --packages=external \
+      --outdir=/octogee/scripts/shared-runners --out-extension:.js=.mjs
 
 # ── Type-check provisioner (catches errors at build time) ───────────────────
 # Then prune the dev tree — nothing in scripts/ devDependencies is needed
@@ -173,7 +180,7 @@ COPY --chown=node:node infra/gateway/openclaw.builder.template.json /octogee/inf
 COPY --chown=node:node infra/gateway/workflow-tools.mjs /octogee/infra/gateway/workflow-tools.mjs
 COPY --chown=node:node infra/gateway/apply-gateway-class-policy.mjs /octogee/infra/gateway/apply-gateway-class-policy.mjs
 COPY --chown=node:node infra/gateway/quarantine-customer-cron-jobs.mjs /octogee/infra/gateway/quarantine-customer-cron-jobs.mjs
-COPY --chmod=755 infra/gateway/shared-auxiliary-tsx.sh /octogee/infra/gateway/shared-auxiliary-tsx.sh
+COPY --chmod=755 infra/gateway/shared-auxiliary-runner.sh /octogee/infra/gateway/shared-auxiliary-runner.sh
 COPY infra/gateway/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY infra/gateway/desktop-node.sh /usr/local/bin/octogee-desktop-node
 COPY infra/gateway/hobby-desktop.sh /usr/local/bin/octogee-hobby-desktop
