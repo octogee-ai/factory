@@ -314,7 +314,9 @@ function workloadContainers(workload: KubernetesWorkload, label: string): string
 
 export function selectPlatformCredentialWriterWorkloads(
   workloads: readonly KubernetesWorkload[],
+  additionalStaticWriters: readonly string[] = [],
 ): WriterWorkload[] {
+  const writerContainers = new Set([...PLATFORM_CREDENTIAL_WRITER_CONTAINERS, ...additionalStaticWriters]);
   const selected: WriterWorkload[] = [];
   const identities = new Set<string>();
   for (const workload of workloads) {
@@ -327,7 +329,7 @@ export function selectPlatformCredentialWriterWorkloads(
     const label = `${String(kind)}/${name}`;
     const containers = workloadContainers(workload, label);
     const writesCredentials = containers.some((container) =>
-      PLATFORM_CREDENTIAL_WRITER_CONTAINERS.has(container));
+      writerContainers.has(container));
     if (!writesCredentials) continue;
     if (kind !== "Deployment" && kind !== "StatefulSet") {
       throw new Error(`${label} is a credential writer with unsupported kind`);
@@ -342,7 +344,7 @@ export function selectPlatformCredentialWriterWorkloads(
       containers,
     });
   }
-  for (const name of REQUIRED_STATIC_WRITERS) {
+  for (const name of [...REQUIRED_STATIC_WRITERS, ...additionalStaticWriters]) {
     const matches = selected.filter((workload) => workload.kind === "Deployment" && workload.name === name);
     if (matches.length !== 1) throw new Error(`required credential writer Deployment/${name} is missing or ambiguous`);
   }
