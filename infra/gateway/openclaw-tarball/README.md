@@ -167,15 +167,15 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: November 7 daily runtime refresh
+## Current overlay: November 9 daily runtime refresh
 
-The operator selected OpenClaw main `1c848332c84faf8b382302369959ce0d2872bfb0` for independent qualification. The clean built overlay is `eca28b466aecb1af8d4a2a03c56b07e48668d95d` on `ceckert/openclaw:codex/gateway-refresh-20261107`.
+The operator selected OpenClaw main `d53921ac1424b92692f084a16e3d6248cfc1c86d` for independent qualification. The clean built overlay is `e9c9cd30ff6db8b7422d508704cfda8b554dab00` on `ceckert/openclaw:codex/gateway-refresh-20261109`.
 
-Upstream [#194541](https://github.com/openclaw/openclaw/pull/194541) fixes draining retained subagent sessions without reentering closed admission; [#194567](https://github.com/openclaw/openclaw/pull/194567) bounds idle-session drain fan-out. The earlier PostgreSQL cron enabled-value overlay is removed: native `jsonValue` now owns both engine expressions. Upstream moved voice provider request types; the retained gateway relay follows that owner. The retry wrapper retains Octogee's native detach option and existing journal custody.
+The frozen tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/42695766339) passed security-fast and skipped 39 jobs, including PostgreSQL conformance and build artifacts. The latest successful [scheduled full CI](https://github.com/openclaw/openclaw/actions/runs/42494775876) was on `ee2d00b13f786f568baa4c4c33376767e5c6f666`: 150 jobs passed and 11 were skipped, including Node 24 compatibility, screenshots and mobile release e2e. It does not qualify the frozen tip.
 
-The frozen tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/42378844452) passed security-fast and skipped 42 jobs, including PostgreSQL conformance and build artifacts. The latest successful [scheduled full CI](https://github.com/openclaw/openclaw/actions/runs/42225420585) was on `d4ae77eae296fd8eb1f90f7a4ebb5d77fa2e6ad9`: 150 jobs passed and 11 were skipped, including Node 24 compatibility, screenshots and mobile release e2e. It does not qualify the frozen tip.
+Native #194541 and #194567 are in the selected base; their downstream drain changes are retired. Native #194791 skips membership lookups outside the invited policy. Octogee's restricted channel policy still grants synchronized members access, so its read, linked-row and list projections must also query membership under `none` and invalidate cached visibility on grants and revocations. The existing authorization and privacy boundaries remain in force. The selected base also adds startup read admission and publication withdrawal; the deferred model recheck preserves those owners. Remove these adaptations when native supplies equivalent behavior or the product policy changes.
 
-The retained authorization, membership, strict-stop and recovery boundaries below remain subject to the corresponding affected tests and deployed-image qualification. Earlier evidence in this assessment identifies the behaviors and removal conditions; it is not proof of this new build.
+The retained authorization, membership, strict-stop and recovery boundaries below remain subject to the corresponding affected tests and complete-image qualification. Earlier evidence identifies behaviors and removal conditions; it is not proof of this build.
 
 ### Deferred agent model preparation
 
@@ -513,16 +513,18 @@ permission, handoff and recovery controls pass.
 
 ### Qualification and publication
 
-The exact clean source built with pinned pnpm 12.15.0 and the frozen lockfile; `dist/build-info.json` matches the source SHA. Production type checks, channel metadata, the native detach reproduction, startup lifecycle, voice relay and PostgreSQL reattachment controls pass. Native `pnpm check` fails its changelog attribution guard on unchanged upstream files; its remaining reported guards, including the npm lock and SQLite worker ratchets, pass. The frozen upstream tip has not passed full upstream CI.
+The clean source built with pinned pnpm 12.15.0 and the frozen lockfile; `dist/build-info.json` matches the source SHA. Production typechecks, channel metadata, startup recovery and cancellation, membership grant/revocation, and focused channel, reload, voice and Mattermost controls were exercised. The full build reported four Control UI size-budget warnings. The frozen upstream tip has not passed full upstream CI.
 
-Root and Mattermost packages were packed sequentially from that build, checked with the native archive checker, and exercised by the actual Linux amd64 full-plugin installer. Hosted islands and the PostgreSQL routine catalog were regenerated from the same source; the catalog used disposable PostgreSQL 16 with pgvector 0.8.7. Complete Gateway-image qualification, TEST deployment and final-head CI are recorded separately and are not implied by package checks.
+The aggregate `pnpm check` on the preceding source failed lint: 24 error-bearing files are unchanged from the frozen upstream base. Four downstream files also had lint findings; those were corrected and scoped type-aware lint passed on the current source. The other reported aggregate stages passed. The aggregate check has not been rerun in full on this corrected commit.
 
-Published with generation-zero preconditions and verified by exact-generation readback:
+Root and Mattermost were packed sequentially from that build in a clean Octogee checkout. The native root archive integrity check, independent installed pair and Linux amd64 full-plugin installer passed, including both patched npm copies, their 24 controls, bundled source matching and three native hooks. Hosted islands and the PostgreSQL routine catalog were regenerated from the same source; the catalog used disposable PostgreSQL 16 with pgvector 0.8.7. Complete-image qualification is recorded separately.
+
+Published with generation-zero preconditions and verified by exact-generation SHA-256 readback:
 
 | Object | Generation | SHA-256 |
 | --- | --- | --- |
-| `openclaw-fork-d98b3178.tgz` | `1794061707610803` | `d98b3178d69cb272837262d67230b76c4d7158c6980b4d1156e1802fe0f65e08` |
-| `openclaw-mattermost-9deb4557.tgz` | `1794061721182952` | `9deb4557ff3abd20bccdd04d8623b8684a0e28dea564637dd8c0e53639979e12` |
+| `openclaw-fork-ff0f8c62.tgz` | `1794261747834210` | `ff0f8c62164c8b527b7cf7758da5c95c36b62b8d9b9b752fcc56c9114daf2371` |
+| `openclaw-mattermost-dc8bf5b4.tgz` | `1794260851889471` | `dc8bf5b43a50547758e6859ee6b6dca692bea71a28fe71927ec121fcf76bc886` |
 
 ### Upstream contributions
 
