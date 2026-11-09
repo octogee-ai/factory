@@ -58,8 +58,8 @@ export interface KubernetesWorkload {
 
 export interface KubernetesPodList {
   items?: Array<{
-    metadata?: { name?: unknown };
-    spec?: { containers?: Array<{ name?: unknown }> };
+    metadata?: { name?: unknown; uid?: unknown; labels?: Record<string, string>; deletionTimestamp?: unknown };
+    spec?: { hostNetwork?: unknown; containers?: Array<{ name?: unknown }> };
     status?: {
       phase?: unknown;
       conditions?: Array<{ type?: unknown; status?: unknown }>;
