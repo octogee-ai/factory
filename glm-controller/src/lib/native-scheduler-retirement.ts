@@ -91,19 +91,20 @@ function ownerMatches(builder: BuilderRecord, input: NativeSchedulerRetirementIn
 
 type ComputerAuthority = { instanceId: string; image?: { name: string; id: string; project: string; operationId: string } };
 
-function admittedReplacementImage(image: DocumentData | undefined, pending: Retirement): ComputerAuthority["image"] | null {
+function admittedReplacementImage(image: DocumentData | undefined, pending: Retirement, targetGatewayId: string): ComputerAuthority["image"] | null {
   if (image?.homeAdmission !== true || image.homeId !== pending.homeDiskId) return null;
   if (["name", "id", "project", "operationId"].some(key => typeof image[key] !== "string" || !image[key])) return null;
   const source = image.sourceComputer;
-  if (source?.instanceId !== pending.instanceId || source.name !== pending.instanceName || source.zone !== pending.zone || source.gatewayId !== pending.sourceGatewayId) return null;
+  if (source?.instanceId !== pending.instanceId || source.name !== pending.instanceName || source.zone !== pending.zone ||
+      ![pending.sourceGatewayId, targetGatewayId].includes(source.gatewayId)) return null;
   return { name: image.name, id: image.id, project: image.project, operationId: image.operationId };
 }
 
-function computerAuthority(runtime: FleetRegistryRecord | null, builder: BuilderRecord | null, pending: Retirement): ComputerAuthority | null {
+function computerAuthority(runtime: FleetRegistryRecord | null, builder: BuilderRecord | null, pending: Retirement, targetGatewayId: string): ComputerAuthority | null {
   const vm = runtime?.vm;
   if (vm?.instanceName !== pending.instanceName || vm.zone !== pending.zone || typeof vm.instanceId !== "string") return null;
   if (vm.instanceId === pending.instanceId) return { instanceId: vm.instanceId };
-  const image = admittedReplacementImage(builder?.home.homeDisk?.bootImage as DocumentData | undefined, pending);
+  const image = admittedReplacementImage(builder?.home.homeDisk?.bootImage as DocumentData | undefined, pending, targetGatewayId);
   return image ? { instanceId: vm.instanceId, image } : null;
 }
 
@@ -118,7 +119,7 @@ async function authorize(deps: Deps, input: NativeSchedulerRetirementInput, pend
       tx.builders.records.get(input.uid), tx.gateways.roots.get(input.gatewayId), tx.fleetRegistry.get(input.gatewayId),
       tx.journal.operations.getMany([...new Set([input.operationId, pending.returnOperationId])]),
     ]);
-    const authority = computerAuthority(runtime, builder, pending);
+    const authority = computerAuthority(runtime, builder, pending, input.gatewayId);
     const exact = builder !== null && ownerMatches(builder, input, pending) &&
       targetMatches(root, runtime, input, authority) &&
       (!expected || JSON.stringify(authority) === JSON.stringify(expected)) &&
