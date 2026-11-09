@@ -23,7 +23,7 @@ if (process.env.RELEASE_POST_CHECKS === 'true') {
   const inventory = join(process.env.RUNNER_TEMP, 'functions-before.json');
   writeFileSync(inventory, run('node_modules/.bin/firebase', ['functions:list', '--project', target.firebase_project_id, '--json'], { env }));
   const args = ['scripts/ops/verify-firebase-function-release.mjs', '--mode=predeploy', `--inventory=${inventory}`, '--functions-module=functions/lib/index.js', `--target-region=${target.region}`];
-  for (const id of ['onOrchestratorConfigWritten', 'onTrialGatewayConfigWritten', 'onTrialGatewayPoolAvailable', 'redriveTrialGatewayClaims']) args.push(`--allow-delete=${id}`);
+  for (const id of ['onCustomerAssignGateway', 'onOrchestratorConfigWritten', 'onTrialGatewayConfigWritten', 'onTrialGatewayPoolAvailable', 'redriveTrialGatewayClaims']) args.push(`--allow-delete=${id}`);
   run('node', args, { stdio: 'inherit', env });
 }
 run('npm', ['run', 'deploy:functions', '--', '--project', target.firebase_project_id, '--non-interactive', '--force'], { stdio: 'inherit', env });
