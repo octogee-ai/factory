@@ -35,6 +35,8 @@ import { isPerUserControlIdentity } from "@octogee/shared/types/openclaw-proxy-i
 const DEFAULT_HEALTH_TIMEOUT_MS = 600_000;
 const DEFAULT_STOP_GRACE_MS = 30_000;
 const ORPHAN_REAP_POLL_MS = 250;
+const INITIAL_START_RETRY_MIN_MS = 5_000;
+const INITIAL_START_RETRY_MAX_MS = 60_000;
 const SURGE_OPENCLAW_PID_FILE = ".surge-openclaw-process.pid";
 
 interface SpawnedOpenClaw {
@@ -679,6 +681,33 @@ async function migrateHeldBuilderStores(input: {
   return current();
 }
 
+function createInitialStartRecovery(input: {
+  log: (message: string) => void;
+  sleep: (ms: number) => Promise<void>;
+  signal: AbortSignal;
+  runSerial: <T>(work: () => Promise<T>) => Promise<T>;
+  restart: () => Promise<void>;
+}): { cancel: () => void; recover: (firstFailure: unknown) => Promise<void> } {
+  let cancelled = false;
+  const recover = async (firstFailure: unknown): Promise<void> => {
+    let failure = firstFailure;
+    for (let attempt = 0; ; attempt += 1) {
+      input.log(`[surge-openclaw] initial permitted start failed: ${errorMessage(failure)}`);
+      if (cancelled || input.signal.aborted) return;
+      const delayMs = Math.min(INITIAL_START_RETRY_MIN_MS * 2 ** attempt, INITIAL_START_RETRY_MAX_MS);
+      input.log(`[surge-openclaw] retrying the initial start in ${delayMs}ms`);
+      await input.sleep(delayMs);
+      try {
+        await input.runSerial(async () => { if (!cancelled) await input.restart(); });
+        return;
+      } catch (error) {
+        failure = error;
+      }
+    }
+  };
+  return { cancel: () => { cancelled = true; }, recover };
+}
+
 export async function startSurgeOpenClawSupervisor(
   opts: StartSurgeOpenClawSupervisorOptions,
 ): Promise<StartedSurgeOpenClawSupervisor> {
@@ -875,10 +904,12 @@ export async function startSurgeOpenClawSupervisor(
   };
   // A gate read must never queue behind a start or stop; the readiness probe
   // calls it while a permit holds the lane.
+  const initialStart = createInitialStartRecovery({ log: opts.log, sleep, signal: shutdown.signal, runSerial,
+    restart: async () => { await gate.permitNormal({ podUid: opts.podUid }); await startChild(); } });
   const server = createServer(supervisorRequestListener(
     (request) => request.action === "status"
       ? dispatch(request)
-      : runSerial(() => dispatch(request)),
+      : runSerial(() => { initialStart.cancel(); return dispatch(request); }),
     opts.log,
   ));
   await new Promise<void>((resolve, reject) => {
@@ -888,9 +919,7 @@ export async function startSurgeOpenClawSupervisor(
   await fs.chmod(socketPath, 0o600);
 
   if (initial.mode === "permitted") {
-    void runSerial(startChild).catch((error) => {
-      opts.log(`[surge-openclaw] initial permitted start failed: ${errorMessage(error)}`);
-    });
+    void runSerial(startChild).catch(initialStart.recover);
   }
 
   return {

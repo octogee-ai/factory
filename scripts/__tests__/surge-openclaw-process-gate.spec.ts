@@ -377,6 +377,89 @@ describe("surge OpenClaw process supervisor", () => {
     } finally { await supervisor.stop(); }
   });
 
+  describe("a failed first start", () => {
+    async function supervisorFailingFirstStarts(failures: number, retryWait: (ms: number) => Promise<void>) {
+      const sleep = (ms: number) => ms >= 5_000 ? retryWait(ms) : new Promise<void>(resolve => { setTimeout(resolve, ms); });
+      const openclawDir = await temporaryOpenClawDir(), socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+      const children: FakeChild[] = [], logs: string[] = [];
+      const spawnOpenClaw = vi.fn(() => { const child = new FakeChild(); children.push(child); return child; });
+      let attempts = 0;
+      const prepareDatabases = vi.fn(async () => {
+        attempts += 1;
+        if (attempts <= failures) throw new Error("Connection terminated due to connection timeout");
+      });
+      const supervisor = await startSurgeOpenClawSupervisor({
+        openclawDir, podUid: "builder-pod", socketPath, log: line => { logs.push(line); }, readinessReleased: async () => true,
+        prepareTarget: async () => undefined, prepareDatabases, spawnOpenClaw, probeHealthz: healthzOf(children), healthTimeoutMs: 100, stopGraceMs: 1_000, sleep,
+      });
+      return { client: createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath }), supervisor, spawnOpenClaw, prepareDatabases, logs };
+    }
+
+    function pausedRetryWait() {
+      let entered = false, release!: () => void;
+      const released = new Promise<void>(resolve => { release = resolve; });
+      return { reached: () => vi.waitFor(() => expect(entered).toBe(true)), release, sleep: () => { entered = true; return released; } };
+    }
+
+    it("starts OpenClaw once the failure clears", async () => {
+      const delays: number[] = [];
+      const f = await supervisorFailingFirstStarts(2, async ms => { delays.push(ms); });
+      try {
+        await vi.waitFor(async () => expect(await f.client.status()).toMatchObject({ mode: "permitted", phase: "running" }));
+        expect(f.prepareDatabases).toHaveBeenCalledTimes(3);
+        expect(f.spawnOpenClaw).toHaveBeenCalledTimes(1);
+        expect(delays).toEqual([5_000, 10_000]);
+        expect(f.logs.filter(line => line.includes("initial permitted start failed"))).toHaveLength(2);
+      } finally { await f.supervisor.stop(); }
+    });
+
+    it("backs off to a one-minute retry while the failure persists", async () => {
+      const delays: number[] = [];
+      const f = await supervisorFailingFirstStarts(6, async ms => { delays.push(ms); });
+      try {
+        await vi.waitFor(async () => expect(await f.client.status()).toMatchObject({ phase: "running" }));
+        expect(delays).toEqual([5_000, 10_000, 20_000, 40_000, 60_000, 60_000]);
+      } finally { await f.supervisor.stop(); }
+    });
+
+    it("stays held and never starts OpenClaw while the failure persists", async () => {
+      const wait = pausedRetryWait();
+      const f = await supervisorFailingFirstStarts(Number.POSITIVE_INFINITY, wait.sleep);
+      try {
+        await wait.reached();
+        expect(f.spawnOpenClaw).not.toHaveBeenCalled();
+        await expect(f.client.status()).resolves.toMatchObject({ mode: "held", phase: "held" });
+      } finally { await f.supervisor.stop(); wait.release(); }
+    });
+
+    it("leaves a hold requested during the retry wait in place", async () => {
+      const wait = pausedRetryWait();
+      const f = await supervisorFailingFirstStarts(1, wait.sleep);
+      try {
+        await wait.reached();
+        await f.client.holdNormal();
+        wait.release();
+        await f.client.holdNormal();
+        expect(f.prepareDatabases).toHaveBeenCalledTimes(1);
+        expect(f.spawnOpenClaw).not.toHaveBeenCalled();
+        await expect(f.client.status()).resolves.toMatchObject({ mode: "held", phase: "held" });
+      } finally { await f.supervisor.stop(); }
+    });
+
+    it("stops retrying when the supervisor stops", async () => {
+      const wait = pausedRetryWait();
+      const f = await supervisorFailingFirstStarts(1, wait.sleep);
+      try {
+        await wait.reached();
+        await f.supervisor.stop();
+        wait.release();
+        await new Promise(resolve => setImmediate(resolve));
+        expect(f.prepareDatabases).toHaveBeenCalledTimes(1);
+        expect(f.spawnOpenClaw).not.toHaveBeenCalled();
+      } finally { await f.supervisor.stop(); }
+    });
+  });
+
   it("keeps a Builder boot held until a migration releases it", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
