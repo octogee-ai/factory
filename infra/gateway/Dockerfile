@@ -173,6 +173,7 @@ COPY --chown=node:node infra/gateway/openclaw.builder.template.json /octogee/inf
 COPY --chown=node:node infra/gateway/workflow-tools.mjs /octogee/infra/gateway/workflow-tools.mjs
 COPY --chown=node:node infra/gateway/apply-gateway-class-policy.mjs /octogee/infra/gateway/apply-gateway-class-policy.mjs
 COPY --chown=node:node infra/gateway/quarantine-customer-cron-jobs.mjs /octogee/infra/gateway/quarantine-customer-cron-jobs.mjs
+COPY --chmod=755 infra/gateway/shared-auxiliary-tsx.sh /octogee/infra/gateway/shared-auxiliary-tsx.sh
 COPY infra/gateway/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY infra/gateway/desktop-node.sh /usr/local/bin/octogee-desktop-node
 COPY infra/gateway/hobby-desktop.sh /usr/local/bin/octogee-hobby-desktop

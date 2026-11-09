@@ -233,7 +233,35 @@ describe("infra/gateway/entrypoint.sh — in-pod runner boundary", () => {
       "fleet-controller",
       "byosub-syncback",
     ]);
+    expect(result.commands.get("fleet-controller")).toBe(
+      "/octogee/infra/gateway/shared-auxiliary-tsx.sh /octogee/scripts/entrypoints/fleet-controller.ts",
+    );
     expect(result.stderr).toMatch(/In-gateway project code runners disabled/);
+  });
+
+  it("starts Shared auxiliary scripts directly with bounded thread pools", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "shared-auxiliary-tsx-"));
+    try {
+      const fakeNode = path.join(tmp, "node");
+      fs.writeFileSync(fakeNode, '#!/bin/sh\nprintf "%s\\n" "$NODE_OPTIONS" "$UV_THREADPOOL_SIZE" "$GOMAXPROCS" "$@"\n', { mode: 0o700 });
+      const wrapper = path.resolve(path.dirname(ENTRYPOINT), "shared-auxiliary-tsx.sh");
+      const result = spawnSync("/bin/sh", [wrapper, "/app/fleet-controller.ts", "two words"], {
+        encoding: "utf8",
+        env: { PATH: tmp, NODE_OPTIONS: "--no-deprecation --max-old-space-size=5632", UV_THREADPOOL_SIZE: "4" },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim().split("\n")).toEqual([
+        "--no-deprecation --max-old-space-size=5632 --v8-pool-size=1",
+        "1",
+        "1",
+        "--import",
+        "/octogee/scripts/node_modules/tsx/dist/loader.mjs",
+        "/app/fleet-controller.ts",
+        "two words",
+      ]);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
 });
