@@ -70,12 +70,13 @@ export function createServiceLogger(service: string, options: { debug?: boolean 
       if (LEVEL_RANK[level] < LEVEL_RANK[configured]) return;
       const merged = { ...(process.env.GATEWAY_ID ? { gatewayId: process.env.GATEWAY_ID } : {}), ...bindings, ...context.getStore(), ...fields };
       const safe = Object.fromEntries(Object.entries(merged).filter(([key]) => !RESERVED.has(key)));
-      const redacted = redactStructuredSecrets(serializeFields(safe)) as Record<string, unknown>;
+      const redaction = { keepLongTokens: process.env.LOG_KEEP_LONG_IDENTIFIERS === "true" };
+      const redacted = redactStructuredSecrets(serializeFields(safe), redaction) as Record<string, unknown>;
       for (const key of ["builderSlug", "gatewayId", "operationId", "sourceGateway", "targetGateway", "requestId"]) {
         const value = safe[key];
         if (typeof value === "string" && /^[a-zA-Z0-9_.:-]+$/.test(value)) redacted[key] = value;
       }
-      output[level](redacted, redactSecrets(stripVTControlCharacters(message)));
+      output[level](redacted, redactSecrets(stripVTControlCharacters(message), redaction));
     };
     return {
       debug: (message, fields) => emit("debug", message, fields),

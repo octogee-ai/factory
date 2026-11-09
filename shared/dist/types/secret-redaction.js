@@ -15,17 +15,34 @@ const SECRET_PATTERNS = [
     [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, REDACTED],
     [/\bxox[baprs]-[A-Za-z0-9-]{10,}/g, REDACTED],
     [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, REDACTED],
-    [/\b[0-9a-fA-F]{40,}\b/g, REDACTED],
-    [/\b(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{40,}\b/g, REDACTED],
+];
+const LONG_TOKEN_CATCHALLS = [
+    /\b[0-9a-fA-F]{40,}\b/g,
+    /\b(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{40,}\b/g,
+];
+const LONG_CREDENTIAL_PATTERNS = [
+    [/((?:token|secret|auth|sig|signature|hmac)[\\"']{0,2}\s*[:=]\s*[\\"']{0,2})[^\s"'\\,;&}]{20,}/gi, `$1${REDACTED}`],
+    [/((?:passw(?:or)?d|pwd|api[-_]?key)[\\"']{0,2}\s*[:=]\s*[\\"']{0,2})[^\s"'\\,;&}]{20,}/gi, `$1${REDACTED}`],
+    [/((?:credentials?|private[-_]?key)[\\"']{0,2}\s*[:=]\s*[\\"']{0,2})[^\s"'\\,;&}]{20,}/gi, `$1${REDACTED}`],
+    [/(cookie[\\"']{0,2}\s*[:=]\s*)\[[^\]\r\n]*\]?/gi, `$1${REDACTED}`],
+    [/(cookie[\\"']{0,2}\s*[:=]\s*[\\"']{0,2})(?!\[redacted\])[^"'\\\r\n]+/gi, `$1${REDACTED}`],
+    [/\b(Authorization[\\"']{0,2}\s*[:=]\s*[\\"']{0,2}(?:[a-z]+\s+)?)[^\s"'\\,;]{20,}/gi, `$1${REDACTED}`],
+    [/\b((?:https?|ssh|git|postgres(?:ql)?|rediss?|mysql|amqps?):\/\/[^\s:/@]+:)[^\s@/]+@/gi, `$1${REDACTED}@`],
 ];
 const LABELED_SECRET_PATTERNS = [
     /\b((?:access|refresh|id|oauth)[-_]?token\s*[:=]\s*)[^\s,;&}]+/gi,
     /\b((?:api[-_]?key|client[-_]?secret)\s*[:=]\s*)[^\s,;&}]+/gi,
     /\b((?:password|credential)\s*[:=]\s*)[^\s,;&}]+/gi,
 ];
-export function redactSecrets(value) {
+export function redactSecrets(value, options = {}) {
     const labeled = LABELED_SECRET_PATTERNS.reduce((redacted, pattern) => redacted.replace(pattern, `$1${REDACTED}`), value);
-    return SECRET_PATTERNS.reduce((redacted, [pattern, replacement]) => redacted.replace(pattern, replacement), labeled);
+    const named = applyPatterns(labeled, SECRET_PATTERNS);
+    if (options.keepLongTokens)
+        return applyPatterns(named, LONG_CREDENTIAL_PATTERNS);
+    return LONG_TOKEN_CATCHALLS.reduce((redacted, pattern) => redacted.replace(pattern, REDACTED), named);
+}
+function applyPatterns(value, patterns) {
+    return patterns.reduce((redacted, [pattern, replacement]) => redacted.replace(pattern, replacement), value);
 }
 function credentialField(key) {
     const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -34,14 +51,14 @@ function credentialField(key) {
         "privatekey", "secret", "token",
     ].some((suffix) => normalized === suffix || normalized.endsWith(suffix)) || normalized.endsWith("apikey");
 }
-export function redactStructuredSecrets(value) {
+export function redactStructuredSecrets(value, options = {}) {
     if (Array.isArray(value))
-        return value.map(redactStructuredSecrets);
+        return value.map(item => redactStructuredSecrets(item, options));
     if (!value || typeof value !== "object") {
-        return typeof value === "string" ? redactSecrets(value) : value;
+        return typeof value === "string" ? redactSecrets(value, options) : value;
     }
     return Object.fromEntries(Object.entries(value).map(([key, field]) => [
         key,
-        credentialField(key) ? REDACTED : redactStructuredSecrets(field),
+        credentialField(key) ? REDACTED : redactStructuredSecrets(field, options),
     ]));
 }

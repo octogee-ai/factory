@@ -51,6 +51,8 @@ spec:
               value: "{{ .Values.image.repository }}:{{ .Values.image.tag }}@{{ .Values.image.digest }}"
             - name: LOG_LEVEL
               value: {{ (.Values.global).logLevel | default "info" | quote }}
+            - name: LOG_KEEP_LONG_IDENTIFIERS
+              value: {{ (.Values.global).logKeepLongIdentifiers | default false | quote }}
             - name: PORT
               value: {{ .Values.port | quote }}
             - name: NODE_EXTRA_CA_CERTS

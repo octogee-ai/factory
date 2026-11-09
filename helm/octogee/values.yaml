@@ -9,6 +9,7 @@ global:
   deploymentProjectId: ""
   customerHostingProjectId: ""
   logLevel: "info"
+  logKeepLongIdentifiers: false
   computer:
     enabled: false
     projectId: ""
