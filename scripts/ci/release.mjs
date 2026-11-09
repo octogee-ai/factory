@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 import { releaseOptions, deployRelease } from './release-plan.mjs';
 import { withBuildLock } from './build-lock.mjs';
 import { request } from './gcs.mjs';
+import { fleetStoreDependencies, withFleetStore } from './fleet-store.mjs';
 
 const options = releaseOptions(process.argv.slice(2));
 const temporary = mkdtempSync(join(tmpdir(), 'platform-release-'));
@@ -14,7 +15,7 @@ const run = (file, args, extra = {}) => execFileSync(file, args, { env, stdio: '
 const stage = (label, file, args, extra = {}) => new Promise((resolve, reject) => {
   const runnerTemp = join(temporary, label);
   mkdirSync(runnerTemp);
-  const child = spawn(file, args, { env: { ...env, RUNNER_TEMP: runnerTemp }, stdio: ['ignore', 'pipe', 'pipe'], ...extra });
+  const child = spawn(file, args, { stdio: ['ignore', 'pipe', 'pipe'], ...extra, env: { ...env, RUNNER_TEMP: runnerTemp, ...extra.env } });
   for (const [input, output] of [[child.stdout, process.stdout], [child.stderr, process.stderr]]) {
     createInterface({ input }).on('line', line => output.write(`[${label}] ${line}\n`));
   }
@@ -33,6 +34,6 @@ try {
     platform: () => stage('platform', 'bash', ['scripts/ci/platform-deploy.sh']),
     site: () => stage('site', 'node', ['scripts/ci/site-deploy.mjs']),
     desktop: () => stage('desktop', 'node', ['--import', './node_modules/tsx/dist/loader.mjs', 'ops/release-desktop-image.ts'], { cwd: 'scripts' }),
-    fleet: () => stage('fleet', 'node', ['--import', './node_modules/tsx/dist/loader.mjs', 'ops/deploy-fleet.ts', `--sha=${options.sha}`, '--timeout-ms=3600000'], { cwd: 'scripts' }),
+    fleet: () => withFleetStore(fleetStoreDependencies(options.environment), fleetEnv => stage('fleet', 'node', ['--import', './node_modules/tsx/dist/loader.mjs', 'ops/deploy-fleet.ts', `--sha=${options.sha}`, '--timeout-ms=3600000'], { cwd: 'scripts', env: fleetEnv })),
   });
 } finally { rmSync(temporary, { recursive: true, force: true }); }

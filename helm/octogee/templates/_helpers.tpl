@@ -33,6 +33,7 @@ gateway-router Service to the selected gateway's internal services.
   "/api/admin/fleet-settings"
   "/api/admin/onboarding-placement/*"
   "/api/admin/onboarding-placement"
+  "/api/admin/platform-state-projection"
   "/api/admin/gateway-migrations/*"
   "/api/admin/customer-distribution"
   "/api/admin/customers/by-slug/*"
