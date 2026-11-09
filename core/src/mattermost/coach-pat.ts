@@ -1,19 +1,11 @@
 import type { ManagedChannelHost } from "../channel-host/types.js";
+import type { SecretsRepository } from "../platform-state/secrets.js";
 
 export const COACH_PAT_DESCRIPTION = "Octogee coach agent (OpenClaw)";
 
-interface MintCollectionRef {
-  doc(id: string): MintDocRef;
-}
-interface MintDocRef {
-  collection(name: string): MintCollectionRef;
-  set(data: Record<string, unknown>): Promise<unknown>;
-}
-
 export interface CoachPatMintDeps {
   channelHost: Pick<ManagedChannelHost, "revokeTokens" | "issueToken">;
-  db: { collection: (name: string) => MintCollectionRef };
-  now: () => unknown;
+  secrets: Pick<SecretsRepository, "put">;
 }
 
 export async function mintAndPersistCoachToken(
@@ -31,13 +23,14 @@ export async function mintAndPersistCoachToken(
     return null;
   }
   if (!token) return null;
-  await deps.db
-    .collection("users").doc(uid)
-    .collection("secrets").doc("coachMattermost")
-    .set({
-      personalToken: token,
-      coachMmUserId,
-      createdAt: deps.now(),
-    });
+  await deps.secrets.put(uid, {
+    kind: "coach-mattermost",
+    secretId: "coachMattermost",
+    projectId: null,
+    personalToken: token,
+    mattermostUserId: coachMmUserId,
+    createdAt: { serverNow: true },
+    rotatedAt: null,
+  });
   return { token };
 }

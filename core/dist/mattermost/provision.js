@@ -1,7 +1,6 @@
 import * as crypto from "crypto";
-import { FieldValue } from "firebase-admin/firestore";
 import { log } from "../config.js";
-import { db } from "../firebase.js";
+import { db, platformStateStore } from "../firebase.js";
 import { workspaceGeneralChannelName, workspaceCoachChannelName, } from "@octogee/shared/types/identity";
 import { computeWorkspaceDisplayName, WORKSPACE_CHANNEL_DISPLAY_NAMES, } from "@octogee/shared/types/display-names";
 import { customerChannelMembers } from "./channel-members.js";
@@ -9,17 +8,13 @@ import { mintAndPersistCoachToken } from "./coach-pat.js";
 import { BUILDER_PAT_DESCRIPTION } from "./builder-pat.js";
 import { mmUploadAvatar } from "./avatars.js";
 async function backfillCoachIdentity(host, uid, slug) {
-    const coachSecretSnap = await db
-        .collection("users").doc(uid)
-        .collection("secrets").doc("coachMattermost")
-        .get();
-    if (coachSecretSnap.exists) {
-        const persisted = coachSecretSnap.data()?.personalToken;
-        const token = typeof persisted === "string" && persisted.length > 0 ? persisted : null;
+    const coachSecret = await platformStateStore.secrets.get(uid, "coachMattermost");
+    if (coachSecret !== null) {
+        const token = coachSecret.kind === "connector" ? null : nonEmptyString(coachSecret.personalToken);
         return { coachUserId: null, personalToken: token };
     }
-    const agentSnap = await db.collection("agents").doc(uid).get();
-    let coachUserId = agentSnap.data()?.mattermost?.userId ?? null;
+    const coachIdentity = await platformStateStore.workspaces.agentIdentities.get(uid);
+    let coachUserId = coachIdentity?.mattermostUserId ?? null;
     if (!coachUserId) {
         const coachLookup = await host.findUser(`${slug}-coach`);
         coachUserId = coachLookup?.id ?? null;
@@ -28,7 +23,7 @@ async function backfillCoachIdentity(host, uid, slug) {
         log(`[mattermost] ⚠ coach PAT backfill skipped for ${slug}: no coach MM user found`);
         return { coachUserId: null, personalToken: null };
     }
-    const minted = await mintAndPersistCoachToken({ channelHost: host, db, now: () => FieldValue.serverTimestamp() }, uid, coachUserId);
+    const minted = await mintAndPersistCoachToken({ channelHost: host, secrets: platformStateStore.secrets }, uid, coachUserId);
     if (!minted) {
         log(`[mattermost] ⚠ coach PAT backfill failed for ${slug} — coach will fall back to shared bot token`);
         return { coachUserId: null, personalToken: null };
@@ -45,16 +40,19 @@ function existingTeamId(existing, workspace) {
         : nonEmptyString(existing);
 }
 async function loadExistingMattermostTopology(slug, existingMattermost) {
-    const [workspaceSnap, coachDmSnap, generalSnap, adminSnap] = await Promise.all([
-        db.doc(`workspaces/${slug}`).get(),
+    const { records, channels } = platformStateStore.workspaces;
+    const scope = { workspaceSlug: slug, projectSlug: null };
+    const [workspace, coachDm, general, admin, coachDmPresentation] = await Promise.all([
+        records.get(slug),
+        channels.get(scope, "coach-dm"),
+        channels.get(scope, "general"),
+        channels.get(scope, "admin"),
         db.doc(`workspaces/${slug}/channels/coach-dm`).get(),
-        db.doc(`workspaces/${slug}/channels/general`).get(),
-        db.doc(`workspaces/${slug}/channels/admin`).get(),
     ]);
-    const teamId = existingTeamId(existingMattermost.teamId, workspaceSnap.data()?.mattermost?.teamId);
-    const coachChannelId = nonEmptyString(coachDmSnap.data()?.mattermost?.channelId);
-    const generalChannelId = nonEmptyString(generalSnap.data()?.mattermost?.channelId);
-    const adminChannelId = nonEmptyString(adminSnap.data()?.mattermost?.channelId);
+    const teamId = existingTeamId(existingMattermost.teamId, workspace?.mattermostTeamId);
+    const coachChannelId = nonEmptyString(coachDm?.mattermostChannelId);
+    const generalChannelId = nonEmptyString(general?.mattermostChannelId);
+    const adminChannelId = nonEmptyString(admin?.mattermostChannelId);
     if (!teamId || !coachChannelId || !generalChannelId)
         return null;
     return {
@@ -62,7 +60,7 @@ async function loadExistingMattermostTopology(slug, existingMattermost) {
         coachChannelId,
         generalChannelId,
         adminChannelId,
-        channelName: nonEmptyString(coachDmSnap.data()?.name) ?? workspaceCoachChannelName(slug),
+        channelName: nonEmptyString(coachDmPresentation.data()?.name) ?? workspaceCoachChannelName(slug),
     };
 }
 function existingProvisioningUpdate(input) {
@@ -85,9 +83,13 @@ function existingProvisioningUpdate(input) {
     return update;
 }
 async function backfillExistingProvisioning(host, uid, slug) {
-    const existingData = (await db.collection("users").doc(uid).get()).data() || {};
+    const [userSnap, builder] = await Promise.all([
+        db.collection("users").doc(uid).get(),
+        platformStateStore.builders.records.get(uid),
+    ]);
+    const existingData = userSnap.data() || {};
     const existingMattermost = existingData.mattermost ?? {};
-    const builderUserId = nonEmptyString(existingMattermost.userId);
+    const builderUserId = nonEmptyString(builder?.mattermostUserId);
     if (!builderUserId)
         return null;
     const topology = await loadExistingMattermostTopology(slug, existingMattermost);
@@ -183,9 +185,14 @@ async function createChannelWithMembers(host, spec, memberIds) {
 }
 async function persistBuilderToken(uid, token) {
     if (token) {
-        await db.collection("users").doc(uid).collection("secrets").doc("mattermost").set({
+        await platformStateStore.secrets.put(uid, {
+            kind: "builder-mattermost",
+            secretId: "mattermost",
+            projectId: null,
             personalToken: token,
-            createdAt: FieldValue.serverTimestamp(),
+            mattermostUserId: null,
+            createdAt: { serverNow: true },
+            rotatedAt: null,
         });
     }
     else {
@@ -210,7 +217,7 @@ async function createCoachBot(host, input) {
         await host.addMember({ channelId: generalChannelId }, coachMmUser.id);
     }
     log(`[mattermost] coach bot created: ${coachUsername} (${coachMmUser.id})`);
-    const coachToken = await mintAndPersistCoachToken({ channelHost: host, db, now: () => FieldValue.serverTimestamp() }, uid, coachMmUser.id);
+    const coachToken = await mintAndPersistCoachToken({ channelHost: host, secrets: platformStateStore.secrets }, uid, coachMmUser.id);
     if (!coachToken) {
         log(`[mattermost] ⚠ coach PAT creation failed — coach identity will fall back to octogee-bot until re-provisioned`);
         return { coachUserId: coachMmUser.id, personalToken: null };

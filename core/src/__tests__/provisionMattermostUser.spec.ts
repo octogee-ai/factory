@@ -13,8 +13,43 @@ const h = vi.hoisted(() => {
     collection: (sub: string) => collRef(`${p}/${sub}`),
   });
   const collRef = (p: string) => ({ doc: (id: string) => docRef(`${p}/${id}`) });
+  const mattermostOf = (path: string) => (docs[path] as { mattermost?: Record<string, string> } | undefined)?.mattermost;
+  const secretPut = vi.fn(async () => {});
+  const store = {
+    builders: {
+      records: {
+        get: async (uid: string) =>
+          docs[`users/${uid}`] ? { mattermostUserId: mattermostOf(`users/${uid}`)?.userId ?? null } : null,
+      },
+    },
+    secrets: {
+      get: async (uid: string, secretId: string) => {
+        const secret = docs[`users/${uid}/secrets/${secretId}`] as { personalToken: string } | undefined;
+        return secret ? { kind: "coach-mattermost", secretId, ...secret } : null;
+      },
+      put: secretPut,
+    },
+    workspaces: {
+      records: {
+        get: async (slug: string) =>
+          docs[`workspaces/${slug}`] ? { mattermostTeamId: mattermostOf(`workspaces/${slug}`)?.teamId ?? null } : null,
+      },
+      channels: {
+        get: async (scope: { workspaceSlug: string }, channelId: string) => {
+          const path = `workspaces/${scope.workspaceSlug}/channels/${channelId}`;
+          return docs[path] ? { mattermostChannelId: mattermostOf(path)?.channelId ?? null } : null;
+        },
+      },
+      agentIdentities: {
+        get: async (uid: string) =>
+          docs[`agents/${uid}`] ? { mattermostUserId: mattermostOf(`agents/${uid}`)?.userId ?? null } : null,
+      },
+    },
+  };
   return {
     db: { collection: (n: string) => collRef(n), doc: (p: string) => docRef(p) },
+    store,
+    secretPut,
     setSpy,
     setDocs: (d: Record<string, unknown>) => {
       docs = d;
@@ -25,7 +60,7 @@ const h = vi.hoisted(() => {
   };
 });
 
-vi.mock("../firebase.js", () => ({ db: h.db }));
+vi.mock("../firebase.js", () => ({ db: h.db, platformStateStore: h.store }));
 vi.mock("../mattermost/coach-pat.js", () => ({
   mintAndPersistCoachToken: h.mintAndPersistCoachToken,
 }));
@@ -127,9 +162,16 @@ describe("provisionMattermostUser — new builder (happy path)", () => {
 
   it("persists the builder personal token to the user's mattermost secret", async () => {
     await call(HAPPY);
-    expect(h.setSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ personalToken: "builder-token" }),
-    );
+    expect(h.secretPut).toHaveBeenCalledWith("u1", {
+      kind: "builder-mattermost",
+      secretId: "mattermost",
+      projectId: null,
+      personalToken: "builder-token",
+      mattermostUserId: null,
+      createdAt: { serverNow: true },
+      rotatedAt: null,
+    });
+    expect(h.setSpy).not.toHaveBeenCalled();
   });
 
   it("never reads MM_COMMUNITY_TEAM_ID — community membership is reconciled separately, not during MM account provisioning", async () => {

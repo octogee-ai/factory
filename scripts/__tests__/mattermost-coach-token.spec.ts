@@ -4,7 +4,7 @@ import { mintAndPersistCoachToken } from "../lib/mattermost.js";
 
 type MmFake = (method: string, endpoint: string, body?: any) => Promise<unknown>;
 
-function hostDeps(deps: { db: any; now: () => unknown; log: (msg: string) => void; mmApiCall: MmFake }) {
+function hostDeps(deps: { secrets: any; log: (msg: string) => void; mmApiCall: MmFake }) {
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const endpoint = String(input).replace("http://mm.test/api/v4", "");
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
@@ -12,8 +12,7 @@ function hostDeps(deps: { db: any; now: () => unknown; log: (msg: string) => voi
     return new Response(JSON.stringify(result ?? null), { status: 200 });
   }) as typeof fetch;
   return {
-    db: deps.db,
-    now: deps.now,
+    secrets: deps.secrets,
     channelHost: createMattermostChannelHost({
       baseUrl: "http://mm.test",
       adminToken: "admin",
@@ -24,19 +23,13 @@ function hostDeps(deps: { db: any; now: () => unknown; log: (msg: string) => voi
 }
 
 function mkDeps() {
-  const setSpy = vi.fn().mockResolvedValue(undefined);
-  const doc2 = vi.fn(() => ({ set: setSpy }));
-  const collection2 = vi.fn(() => ({ doc: doc2 }));
-  const doc1 = vi.fn(() => ({ collection: collection2 }));
-  const collection1 = vi.fn(() => ({ doc: doc1 }));
-  const db = { collection: collection1 } as any;
+  const secrets = { put: vi.fn().mockResolvedValue(undefined) };
   const mmApiCall = vi.fn(async (method: string, endpoint: string) => {
     if (method === "GET" && endpoint.endsWith("/tokens")) return [];
     return undefined;
   });
-  const now = vi.fn(() => ({ __op: "serverTimestamp" }));
   const log = vi.fn();
-  return { db, mmApiCall, now, log, setSpy, collection1, doc1, collection2, doc2 };
+  return { secrets, mmApiCall, log };
 }
 
 function scriptMm(opts: {
@@ -83,16 +76,15 @@ describe("mintAndPersistCoachToken", () => {
 
     await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "coach-mm-id-1");
 
-    expect(deps.collection1).toHaveBeenCalledWith("users");
-    expect(deps.doc1).toHaveBeenCalledWith("uid-chris");
-    expect(deps.collection2).toHaveBeenCalledWith("secrets");
-    expect(deps.doc2).toHaveBeenCalledWith("coachMattermost");
-
-    expect(deps.setSpy).toHaveBeenCalledTimes(1);
-    expect(deps.setSpy).toHaveBeenCalledWith({
+    expect(deps.secrets.put).toHaveBeenCalledTimes(1);
+    expect(deps.secrets.put).toHaveBeenCalledWith("uid-chris", {
+      kind: "coach-mattermost",
+      secretId: "coachMattermost",
+      projectId: null,
       personalToken: "pat-abc123",
-      coachMmUserId: "coach-mm-id-1",
-      createdAt: { __op: "serverTimestamp" },
+      mattermostUserId: "coach-mm-id-1",
+      createdAt: { serverNow: true },
+      rotatedAt: null,
     });
   });
 
@@ -112,7 +104,7 @@ describe("mintAndPersistCoachToken", () => {
     const result = await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "coach-mm-id-1");
 
     expect(result).toBeNull();
-    expect(deps.setSpy).not.toHaveBeenCalled();
+    expect(deps.secrets.put).not.toHaveBeenCalled();
   });
 
   it("returns null when MM throws on mint (no silent crash, no orphan doc)", async () => {
@@ -122,7 +114,7 @@ describe("mintAndPersistCoachToken", () => {
     const result = await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "coach-mm-id-1");
 
     expect(result).toBeNull();
-    expect(deps.setSpy).not.toHaveBeenCalled();
+    expect(deps.secrets.put).not.toHaveBeenCalled();
   });
 
   it("does not write when coachMmUserId is empty (guard against provisioner regressions)", async () => {
@@ -133,7 +125,7 @@ describe("mintAndPersistCoachToken", () => {
 
     expect(result).toBeNull();
     expect(deps.mmApiCall).not.toHaveBeenCalled();
-    expect(deps.setSpy).not.toHaveBeenCalled();
+    expect(deps.secrets.put).not.toHaveBeenCalled();
   });
 });
 

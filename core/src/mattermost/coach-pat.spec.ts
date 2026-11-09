@@ -15,8 +15,7 @@ function fetchOver(mmApiCall: MmFake): typeof fetch {
 
 function mintDeps(d: ReturnType<typeof deps>) {
   return {
-    db: d.db,
-    now: d.now,
+    secrets: d.secrets,
     channelHost: createMattermostChannelHost({
       baseUrl: "http://mm.test",
       adminToken: "admin",
@@ -27,21 +26,10 @@ function mintDeps(d: ReturnType<typeof deps>) {
 }
 
 function deps() {
-  const set = vi.fn(async () => undefined);
-  const secretDoc = vi.fn(() => ({ set }));
-  const secrets = vi.fn(() => ({ doc: secretDoc }));
-  const userDoc = vi.fn(() => ({ collection: secrets }));
-  const users = vi.fn(() => ({ doc: userDoc }));
   return {
-    db: { collection: users },
+    secrets: { put: vi.fn(async () => undefined) },
     mmApiCall: vi.fn<MmFake>(),
-    now: vi.fn(() => ({ __op: "serverTimestamp" })),
     log: vi.fn(),
-    set,
-    users,
-    userDoc,
-    secrets,
-    secretDoc,
   };
 }
 
@@ -88,14 +76,14 @@ describe("mintAndPersistCoachToken", () => {
     expect(d.mmApiCall).toHaveBeenCalledWith("POST", "/users/mm-coach/tokens", {
       description: COACH_PAT_DESCRIPTION,
     });
-    expect(d.users).toHaveBeenCalledWith("users");
-    expect(d.userDoc).toHaveBeenCalledWith("uid-coach");
-    expect(d.secrets).toHaveBeenCalledWith("secrets");
-    expect(d.secretDoc).toHaveBeenCalledWith("coachMattermost");
-    expect(d.set).toHaveBeenCalledWith({
+    expect(d.secrets.put).toHaveBeenCalledWith("uid-coach", {
+      kind: "coach-mattermost",
+      secretId: "coachMattermost",
+      projectId: null,
       personalToken: "coach-pat",
-      coachMmUserId: "mm-coach",
-      createdAt: { __op: "serverTimestamp" },
+      mattermostUserId: "mm-coach",
+      createdAt: { serverNow: true },
+      rotatedAt: null,
     });
   });
 
@@ -105,11 +93,11 @@ describe("mintAndPersistCoachToken", () => {
 
     await expect(mintAndPersistCoachToken(mintDeps(d), "uid-coach", "")).resolves.toBeNull();
     expect(d.mmApiCall).not.toHaveBeenCalled();
-    expect(d.set).not.toHaveBeenCalled();
+    expect(d.secrets.put).not.toHaveBeenCalled();
 
     d.mmApiCall = mm({ mintResult: { ok: true } });
     await expect(mintAndPersistCoachToken(mintDeps(d), "uid-coach", "mm-coach")).resolves.toBeNull();
-    expect(d.set).not.toHaveBeenCalled();
+    expect(d.secrets.put).not.toHaveBeenCalled();
   });
 
   it("continues minting when stale-token listing or revoke fails", async () => {
