@@ -18,6 +18,23 @@ describe("boot recovery capacity/admission report", () => {
     h.home.desktop.recovery.mockRejectedValue(new Error("unverified snapshot"));
     expect(await bootRecoveryReport(h as unknown as VmAgentDeps)).toMatchObject({ bootRecovery: { ready: false, retainedPoints: 1000 } });
   });
+  it("logs the recovery sample when it changes and stays quiet while it holds", async () => {
+    const h = fixture();
+    await bootRecoveryReport(h as unknown as VmAgentDeps);
+    await bootRecoveryReport(h as unknown as VmAgentDeps);
+    expect(h.log).toHaveBeenCalledTimes(1);
+    expect(h.log).toHaveBeenCalledWith("[vm-agent] boot recovery ready=true retainedPoints=1 freeGiB=3 bundle=v1");
+    h.home.desktop.recovery.mockResolvedValue({ ...sample, ready: false, freeBytes: 1024 ** 3 });
+    await bootRecoveryReport(h as unknown as VmAgentDeps);
+    expect(h.log).toHaveBeenLastCalledWith("[vm-agent] boot recovery ready=false retainedPoints=1 freeGiB=1 bundle=v1");
+  });
+  it("logs a persistent inspection failure once", async () => {
+    const h = fixture();
+    h.home.desktop.recovery.mockRejectedValue(new Error("unverified snapshot"));
+    await bootRecoveryReport(h as unknown as VmAgentDeps);
+    await bootRecoveryReport(h as unknown as VmAgentDeps);
+    expect(h.log.mock.calls.filter(([line]) => String(line).includes("unavailable"))).toHaveLength(1);
+  });
   it("allows a verified legacy first update only with no existing points and actual native readiness", async () => {
     const h = fixture();
     h.home.desktop.recovery.mockRejectedValue(Object.assign(new Error("unknown action"), { status: 400 }));

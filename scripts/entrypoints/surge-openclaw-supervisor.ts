@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url";
 
 import {
   createSurgeOpenClawProcessGate,
+  surgeOpenClawGatePhase,
   isSurgeOpenClawProcessSupervisorAction,
   surgeOpenClawProcessActionNamesMigration,
   surgeOpenClawProcessSocketPath,
@@ -389,13 +390,16 @@ async function startPermittedOpenClawChild(
     opts.signal.throwIfAborted();
     await opts.bootWatcher.beforeStart();
     opts.signal.throwIfAborted();
+    const spawnedAt = Date.now();
     const spawned = opts.spawnOpenClaw();
     opts.child.set(spawned);
+    opts.log(`[surge-openclaw] OpenClaw spawned pid=${spawned.pid ?? "unknown"}`);
     let healthy = false;
     let exitedBeforeHealth = false;
     let resolveExitCleanup: () => void = () => {};
     const exitCleanup = new Promise<void>((resolve) => { resolveExitCleanup = resolve; });
-    spawned.once("exit", () => {
+    spawned.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+      opts.log(`[surge-openclaw] OpenClaw exited code=${code ?? "none"} signal=${signal ?? "none"} after ${Date.now() - spawnedAt}ms`);
       if (opts.child.get() !== spawned) return;
       opts.child.set(null);
       void opts.forgetChildPid().then(resolveExitCleanup, resolveExitCleanup);
@@ -423,6 +427,7 @@ async function startPermittedOpenClawChild(
       });
     } catch (error) {
       if (!retriedPreHealthExit && !opts.signal.aborted) {
+        opts.log(`[surge-openclaw] OpenClaw did not become healthy; restarting once: ${errorMessage(error)}`);
         await opts.stopChild();
         if (exitedBeforeHealth) await exitCleanup;
         retriedPreHealthExit = true;
@@ -438,6 +443,7 @@ async function startPermittedOpenClawChild(
       }
       throw new Error("OpenClaw exited before becoming healthy");
     }
+    opts.log(`[surge-openclaw] OpenClaw healthy after ${Date.now() - spawnedAt}ms`);
     opts.signal.throwIfAborted();
     healthy = true;
     await opts.bootWatcher.healthy();
@@ -617,6 +623,11 @@ function terminalSupervisorStop(input: {
   };
 }
 
+function logBootGateDecision(opts: StartSurgeOpenClawSupervisorOptions, prior: SurgeOpenClawProcessGateState | null, released: boolean, hold: boolean): void {
+  opts.log(`[surge-openclaw] boot gate pod=${opts.podUid} prior=${prior ? surgeOpenClawGatePhase(prior) : "none"} readinessReleased=${released} `
+    + `prelaunchBoot=${Boolean(opts.prelaunchBoot)} activation=${opts.activationMigrationId ?? "none"} hold=${hold}`);
+}
+
 async function initializeBootGate(input: {
   opts: StartSurgeOpenClawSupervisorOptions; gate: ReturnType<typeof createSurgeOpenClawProcessGate>;
   readiness: ReturnType<typeof createSurgeReadinessGate>; readinessReleased: () => Promise<boolean>;
@@ -632,7 +643,9 @@ async function initializeBootGate(input: {
     await readiness.hold();
     await reapOrphanedOpenClaw();
   }
-  let initial = await gate.ensure({ podUid: opts.podUid, readinessReleased: await readinessReleased() });
+  const released = await readinessReleased();
+  logBootGateDecision(opts, prior, released, Boolean(holdForPrelaunch));
+  let initial = await gate.ensure({ podUid: opts.podUid, readinessReleased: released });
   if (holdForPrelaunch && !matchingActivation) initial = await gate.holdPrelaunch({ podUid: opts.podUid });
   if (opts.prelaunchBoot) {
     if (!opts.preparePrelaunch) throw new Error("Builder prelaunch config preparation is unavailable");
@@ -681,6 +694,23 @@ async function migrateHeldBuilderStores(input: {
   return current();
 }
 
+function serializedGateRequests(input: {
+  dispatch: (request: SurgeOpenClawProcessSupervisorRequest) => Promise<SurgeOpenClawProcessGateState>;
+  runSerial: <T>(work: () => Promise<T>) => Promise<T>;
+  cancelInitialStart: () => void;
+  log: (message: string) => void;
+}): (request: SurgeOpenClawProcessSupervisorRequest) => Promise<SurgeOpenClawProcessGateState> {
+  return (request) => {
+    if (request.action === "status") return input.dispatch(request);
+    return input.runSerial(() => {
+      input.cancelInitialStart();
+      const owner = "migrationId" in request && request.migrationId ? ` migration=${request.migrationId} slug=${request.slug}` : "";
+      input.log(`[surge-openclaw] gate request ${request.action}${owner}`);
+      return input.dispatch(request);
+    });
+  };
+}
+
 function createInitialStartRecovery(input: {
   log: (message: string) => void;
   sleep: (ms: number) => Promise<void>;
@@ -711,7 +741,7 @@ function createInitialStartRecovery(input: {
 export async function startSurgeOpenClawSupervisor(
   opts: StartSurgeOpenClawSupervisorOptions,
 ): Promise<StartedSurgeOpenClawSupervisor> {
-  const gate = createSurgeOpenClawProcessGate(opts.openclawDir);
+  const gate = createSurgeOpenClawProcessGate(opts.openclawDir, opts.log);
   const readiness = createSurgeReadinessGate(opts.openclawDir, opts.podUid);
   const socketPath = opts.socketPath ?? surgeOpenClawProcessSocketPath(opts.openclawDir);
   const probeHealthz = opts.probeHealthz ?? defaultProbeHealthz;
@@ -751,6 +781,7 @@ export async function startSurgeOpenClawSupervisor(
     const active = child;
     if (!active) return;
     stopping = true;
+    const stopRequestedAt = Date.now();
     try {
       active.kill("SIGTERM");
       let exit = await waitForExitOrTimeout(active, stopGraceMs, sleep);
@@ -761,6 +792,7 @@ export async function startSurgeOpenClawSupervisor(
       }
       if (child === active) child = null;
       await forgetChildPid();
+      opts.log(`[surge-openclaw] OpenClaw stopped in ${Date.now() - stopRequestedAt}ms`);
       return exit;
     } finally {
       stopping = false;
@@ -906,12 +938,7 @@ export async function startSurgeOpenClawSupervisor(
   // calls it while a permit holds the lane.
   const initialStart = createInitialStartRecovery({ log: opts.log, sleep, signal: shutdown.signal, runSerial,
     restart: async () => { await gate.permitNormal({ podUid: opts.podUid }); await startChild(); } });
-  const server = createServer(supervisorRequestListener(
-    (request) => request.action === "status"
-      ? dispatch(request)
-      : runSerial(() => { initialStart.cancel(); return dispatch(request); }),
-    opts.log,
-  ));
+  const server = createServer(supervisorRequestListener(serializedGateRequests({ dispatch, runSerial, cancelInitialStart: initialStart.cancel, log: opts.log }), opts.log));
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(socketPath, () => resolve());

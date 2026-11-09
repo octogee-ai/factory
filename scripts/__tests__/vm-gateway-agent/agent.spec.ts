@@ -183,6 +183,8 @@ function deps(
   return { d, files, dirs, chowns, fetchImpl, home };
 }
 
+const logLines = (d: VmAgentDeps, text: string) => vi.mocked(d.log).mock.calls.map(([line]) => line).filter(line => line.includes(text));
+
 const homeBundle = (overrides: Parameters<typeof bundleFixture>[0] = {}) => bundleFixture({
   builderIdentity: { ownerUid: "uid-bob", builderSlug: "bob" },
   ...overrides,
@@ -933,12 +935,17 @@ describe("convergeOnce", () => {
     state = await convergeOnce(h.d, state);
     expect([...docker.containers.values()].every((c) => c.paused)).toBe(true);
     expect(JSON.parse(String(calls(h.fetchImpl, "/computer-home/commit")[0][1].body))).toMatchObject({ requestedAt: 1_000 });
+    expect(h.d.log).toHaveBeenCalledWith(expect.stringMatching(/home snapshot pausing 2 writers .*requested/));
     signal = { requestedAt: 1_000, completedAt: 1_000 };
     await convergeOnce(h.d, initialAgentState());
     expect([...docker.containers.values()].every((c) => c.paused)).toBe(true);
+    expect(logLines(h.d, "released")).toEqual([]);
     signal = { requestedAt: null, completedAt: 1_000 };
     await convergeOnce(h.d, state);
     expect([...docker.containers.values()].some((c) => c.paused)).toBe(false);
+    expect(logLines(h.d, "released 2 held home writers")).toHaveLength(1);
+    await convergeOnce(h.d, state);
+    expect(logLines(h.d, "released 2 held home writers")).toHaveLength(1);
     for (const service of docker.containers.values()) expect(service.config.HostConfig).toMatchObject({ RestartPolicy: { Name: "on-failure" } });
   });
 

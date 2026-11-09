@@ -20,15 +20,32 @@ async function legacyRecovery(deps: VmAgentDeps): Promise<GatewayVmBootRecoveryS
   return { currentPointId: null, retainedPoints: points.length, ready, bundleVersion: version, freeBytes };
 }
 
+const lastLogged = new WeakMap<VmAgentDeps, string>();
+
+function logOnChange(deps: VmAgentDeps, line: string): void {
+  if (lastLogged.get(deps) === line) return;
+  lastLogged.set(deps, line);
+  deps.log(line);
+}
+
+const UNAVAILABLE_SAMPLE: GatewayVmBootRecoverySample = { currentPointId: null, retainedPoints: 1000, ready: false, bundleVersion: "unavailable", freeBytes: 0 };
+
+async function sampleBootRecovery(deps: VmAgentDeps, recovery: () => Promise<GatewayVmBootRecoverySample>): Promise<GatewayVmBootRecoverySample> {
+  try {
+    const sample = await recovery();
+    logOnChange(deps, `[vm-agent] boot recovery ready=${sample.ready} retainedPoints=${sample.retainedPoints} freeGiB=${Math.floor(sample.freeBytes / 1024 ** 3)} bundle=${sample.bundleVersion}`);
+    return sample;
+  } catch (error) {
+    if ((error as { status?: number }).status === 400 && String(error).includes("unknown action")) {
+      try { return await legacyRecovery(deps); }
+      catch (legacyError) { logOnChange(deps, `[vm-agent] legacy recovery preflight unavailable: ${String(legacyError)}`); }
+    }
+    logOnChange(deps, `[vm-agent] home recovery admission/capacity unavailable; retaining points: ${String(error)}`);
+    return UNAVAILABLE_SAMPLE;
+  }
+}
+
 export async function bootRecoveryReport(deps: VmAgentDeps): Promise<GatewayVmRuntimeRequest> {
   if (!deps.home.desktop.recovery) return {};
-  try { return { bootRecovery: await deps.home.desktop.recovery() }; }
-  catch (error) {
-    if ((error as { status?: number }).status === 400 && String(error).includes("unknown action")) {
-      try { return { bootRecovery: await legacyRecovery(deps) }; }
-      catch (legacyError) { deps.log(`[vm-agent] legacy recovery preflight unavailable: ${String(legacyError)}`); }
-    }
-    deps.log(`[vm-agent] home recovery admission/capacity unavailable; retaining points: ${String(error)}`);
-    return { bootRecovery: { currentPointId: null, retainedPoints: 1000, ready: false, bundleVersion: "unavailable", freeBytes: 0 } };
-  }
+  return { bootRecovery: await sampleBootRecovery(deps, deps.home.desktop.recovery) };
 }

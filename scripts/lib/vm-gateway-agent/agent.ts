@@ -254,6 +254,7 @@ function homeDeps(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, holdAfterSn
       const startedAt = deps.now();
       const paused: string[] = [];
       const errors: unknown[] = [];
+      deps.log(`[vm-agent] home snapshot pausing ${bundle.containers.length} writers for a ${holdAfterSnapshot ? "requested checkpoint, then holding them" : "scheduled checkpoint"}`);
       try {
         await deps.home.desktop.run("freeze");
         for (const container of bundle.containers) {
@@ -444,21 +445,28 @@ function allHomeWritersHeld(running: ContainerInspection[]): boolean {
 async function keepAcknowledgedCheckpointHeld(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, running: ContainerInspection[], signal: HomeCheckpointSignal): Promise<boolean> {
   if (signal.requestedAt === null || signal.completedAt === null || signal.completedAt < signal.requestedAt) return false;
   await deps.home.desktop.run("freeze");
+  let repaused = 0;
   for (const [index, inspection] of running.entries()) {
     if (!inspection?.State?.Running) continue;
     await setContainerRestartPolicy(deps.engine, containerName(bundle.containers[index]), "no");
-    if (!inspection.State.Paused) await setContainerPaused(deps.engine, containerName(bundle.containers[index]), true);
+    if (inspection.State.Paused) continue;
+    await setContainerPaused(deps.engine, containerName(bundle.containers[index]), true);
+    repaused += 1;
   }
+  if (repaused) deps.log(`[vm-agent] paused ${repaused} home writers again to keep the checkpoint requested at ${signal.requestedAt} consistent`);
   return true;
 }
 
 async function releaseHomeWriterHold(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, running: ContainerInspection[]): Promise<void> {
+  let released = 0;
   for (const [index, inspection] of running.entries()) {
     if (!inspection?.State?.Paused) continue;
     await setContainerRestartPolicy(deps.engine, containerName(bundle.containers[index]), SERVICE_RESTART_POLICY);
     await setContainerPaused(deps.engine, containerName(bundle.containers[index]), false);
+    released += 1;
   }
   await deps.home.desktop.run("thaw");
+  if (released) deps.log(`[vm-agent] released ${released} held home writers; no checkpoint hold is in force`);
 }
 
 export async function convergeOnce(deps: VmAgentDeps, state: VmAgentState): Promise<VmAgentState> {

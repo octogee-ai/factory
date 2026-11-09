@@ -377,6 +377,62 @@ describe("surge OpenClaw process supervisor", () => {
     } finally { await supervisor.stop(); }
   });
 
+  describe("what the supervisor records", () => {
+    it("logs each process gate transition once, with the migration that owns it", async () => {
+      const openclawDir = await temporaryOpenClawDir();
+      const logs: string[] = [];
+      const gate = createSurgeOpenClawProcessGate(openclawDir, line => { logs.push(line); });
+      await gate.ensure({ podUid: "pod-1", readinessReleased: true });
+      await gate.holdNormal({ podUid: "pod-1" });
+      await gate.holdNormal({ podUid: "pod-1" });
+      expect(logs).toEqual([
+        "[surge-openclaw] process gate none -> normal/permitted/starting pod=pod-1",
+        "[surge-openclaw] process gate normal/permitted/starting -> normal/held/stopping pod=pod-1",
+      ]);
+      await gate.hold({ podUid: "pod-1", migrationId: "migration-1", slug: "jefe", targetPodUid: "target-pod" });
+      expect(logs.at(-1)).toContain("migration=migration-1 slug=jefe");
+    });
+
+    it("logs the boot decision, OpenClaw's start and health timing, each request, and how it stopped", async () => {
+      const openclawDir = await temporaryOpenClawDir();
+      const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+      const children: FakeChild[] = [], logs: string[] = [];
+      const supervisor = await startSurgeOpenClawSupervisor({
+        openclawDir, podUid: "source-pod", log: line => { logs.push(line); }, socketPath, readinessReleased: async () => true,
+        spawnOpenClaw: () => { const child = new FakeChild(); children.push(child); return child; },
+        probeHealthz: healthzOf(children), healthTimeoutMs: 100,
+      });
+      const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+      try {
+        await vi.waitFor(() => expect(logs.join("\n")).toMatch(/OpenClaw healthy after \d+ms/));
+        await client.hold({ migrationId: "migration-1", slug: "jefe", targetPodUid: "target-pod" });
+        const text = logs.join("\n");
+        expect(text).toMatch(/boot gate pod=source-pod prior=none readinessReleased=true prelaunchBoot=false activation=none hold=false/);
+        expect(text).toMatch(/OpenClaw spawned pid=/);
+        expect(text).toMatch(/gate request hold migration=migration-1 slug=jefe/);
+        expect(text).toMatch(/OpenClaw exited code=0 signal=none after \d+ms/);
+        expect(text).toMatch(/OpenClaw stopped in \d+ms/);
+      } finally { await supervisor.stop(); }
+    });
+
+    it("does not log routine status reads", async () => {
+      const openclawDir = await temporaryOpenClawDir();
+      const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+      const children: FakeChild[] = [], logs: string[] = [];
+      const supervisor = await startSurgeOpenClawSupervisor({
+        openclawDir, podUid: "source-pod", log: line => { logs.push(line); }, socketPath, readinessReleased: async () => true,
+        spawnOpenClaw: () => { const child = new FakeChild(); children.push(child); return child; },
+        probeHealthz: healthzOf(children), healthTimeoutMs: 100,
+      });
+      const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+      try {
+        await vi.waitFor(() => expect(logs.join("\n")).toMatch(/OpenClaw healthy/));
+        await client.status();
+        expect(logs.filter(line => line.includes("gate request"))).toEqual([]);
+      } finally { await supervisor.stop(); }
+    });
+  });
+
   describe("a failed first start", () => {
     async function supervisorFailingFirstStarts(failures: number, retryWait: (ms: number) => Promise<void>) {
       const sleep = (ms: number) => ms >= 5_000 ? retryWait(ms) : new Promise<void>(resolve => { setTimeout(resolve, ms); });

@@ -532,7 +532,19 @@ export function surgeOpenClawProcessSocketPath(openclawDir: string): string {
   return path.join(openclawDir, SURGE_OPENCLAW_PROCESS_SOCKET_FILE);
 }
 
-export function createSurgeOpenClawProcessGate(openclawDir: string): SurgeOpenClawProcessGate {
+export function surgeOpenClawGatePhase(state: Pick<SurgeOpenClawProcessGateState, "role" | "mode" | "phase">): string {
+  return `${state.role}/${state.mode}/${state.phase}`;
+}
+
+function describeGateChange(prior: SurgeOpenClawProcessGateState | null, next: SurgeOpenClawProcessGateState): string | null {
+  const from = prior ? surgeOpenClawGatePhase(prior) : "none";
+  const to = surgeOpenClawGatePhase(next);
+  if (from === to && prior?.migrationId === next.migrationId) return null;
+  const owner = next.migrationId ? ` migration=${next.migrationId} slug=${next.slug ?? "none"}` : "";
+  return `[surge-openclaw] process gate ${from} -> ${to} pod=${next.podUid}${owner}`;
+}
+
+export function createSurgeOpenClawProcessGate(openclawDir: string, log: (message: string) => void = () => {}): SurgeOpenClawProcessGate {
   const gatePath = path.join(openclawDir, SURGE_OPENCLAW_PROCESS_GATE_FILE);
 
   const current = async (podUid: string): Promise<SurgeOpenClawProcessGateState> => {
@@ -571,7 +583,10 @@ export function createSurgeOpenClawProcessGate(openclawDir: string): SurgeOpenCl
   };
 
   const write = async (next: SurgeOpenClawProcessGateState): Promise<SurgeOpenClawProcessGateState> => {
+    const prior = await readState(gatePath);
     await writeState(gatePath, next);
+    const change = describeGateChange(prior, next);
+    if (change) log(change);
     return next;
   };
   const targetOperations = createTargetGateOperations({ current, requireMigrationOwner, write });
