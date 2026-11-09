@@ -98,8 +98,7 @@ scheduled security audits run in **GitHub Actions**. Checks are tiered: PR commi
 run the affected packages' typecheck and tests plus diff-scoped lint and security
 scans; main runs the full suite every two hours, skipped when every lane already
 succeeded on main's current commit; Ship TEST runs the end-to-end tests in `tests/live/` against the
-deployed environment. A running main build is
-never cancelled; GitHub keeps only the newest pending push, and Ship TEST builds any
+deployed environment. A new push cancels an older automatic main build, and Ship TEST builds any
 SHA that was skipped.
 Add or change checks in `scripts/lib/ci-checks.ts` and `scripts/ci/`.
 PR jobs use read-only repository access and no cloud credentials. Native image
