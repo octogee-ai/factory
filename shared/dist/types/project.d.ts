@@ -35,6 +35,7 @@ export interface ProjectAgentConfig {
     handoff?: {
         status: 'pending' | 'sent';
         postId?: string;
+        generation?: number;
     };
     status?: ProjectAgentStatus;
     activationId?: string | null;

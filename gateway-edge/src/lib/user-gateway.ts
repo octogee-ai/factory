@@ -1,5 +1,4 @@
-import { db } from "./db.js";
-import { primaryWorkspaceSlug } from "@octogee/core/workspace-slugs";
+import { platformStateStore } from "./platform-state.js";
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
 
 export interface ResolvedGateway {
@@ -20,20 +19,14 @@ export function rosteredAgentIdsForSlug(userData: unknown, slug: string): string
   return [coach, ...own.filter((id) => id !== coach)];
 }
 
-// Resolve a user's workspace slug + assigned gateway id from their user doc.
-// Shared by the byosub routes (cluster) and the byosub-health locality route
-// (per-pod), so both read the same field — provisioning.openclaw.gatewayId.
 export async function resolveUserGateway(uid: string): Promise<ResolvedGateway | null> {
-  const snap = await db.collection("users").doc(uid).get();
-  if (!snap.exists) return null;
-  const data = (snap.data() || {}) as {
-    username?: string | null;
-    provisioning?: {
-      openclaw?: { slug?: string | null; gatewayId?: unknown } | null;
-    } | null;
+  const builder = await platformStateStore.builders.records.get(uid);
+  const slug = builder?.slug;
+  const gatewayId = builder?.gateway?.gatewayId;
+  if (!slug || !gatewayId) return null;
+  return {
+    slug,
+    gatewayId,
+    agentIds: rosteredAgentIdsForSlug({ provisioning: { openclaw: { agentIds: builder.agents.agentIds } } }, slug),
   };
-  const slug = primaryWorkspaceSlug(data);
-  const gatewayId = data?.provisioning?.openclaw?.gatewayId;
-  if (!slug || typeof gatewayId !== "string" || !gatewayId) return null;
-  return { slug, gatewayId, agentIds: rosteredAgentIdsForSlug(data, slug) };
 }

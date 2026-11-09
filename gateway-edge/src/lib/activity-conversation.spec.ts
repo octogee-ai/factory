@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { resolveActivityConversation } from './activity-conversation.js';
 import { ChannelSessionMattermostError } from './channel-session-model-control.js';
+import type { BuilderRecord } from '@octogee/core/platform-state';
 
 const channelId = 'c'.repeat(26);
 const threadRootPostId = 'r'.repeat(26);
@@ -14,9 +15,9 @@ function fixture(type = 'P') {
     ? { id: channelId, type, delete_at: 0 }
     : { channel_id: channelId, user_id: target.agentMmUserId }), postJson: vi.fn(async () => null), uploadFiles: vi.fn(async () => ({ file_infos: [] })), getCurrentUserId: vi.fn(async () => 'u'.repeat(26)), listChannelPosts: vi.fn(async () => ({ posts: [], reachedEnd: true })) };
   const authorize = vi.fn(async () => ({ forbidden: false as const, target, client, callerMmUserId: 'u'.repeat(26) }));
-  const owner = { provisioning: { openclaw: { gatewayId, slug: 'alice' } }, username: 'alice' };
-  const db = { doc: vi.fn(() => ({ get: async () => ({ exists: true, data: () => owner }) })) };
-  return { db, authorize, client, target };
+  const owner = { uid: 'owner', slug: 'alice', gateway: { gatewayId }, accountLifecycle: null } as unknown as BuilderRecord;
+  const builders = { get: vi.fn(async () => owner) };
+  return { builders, authorize, client, target };
 }
 describe('native Activity conversation', () => {
   it('shares channel memory across selected roots while retaining the authorized display root', async () => {
@@ -106,7 +107,7 @@ describe('native Activity conversation', () => {
     const f = fixture();
     f.client.getJson.mockResolvedValueOnce({ id: channelId, type: 'P', delete_at: 1 });
     expect(await resolveActivityConversation({ ...f, uid, channelId })).toBeNull();
-    f.db.doc.mockReturnValueOnce({ get: async () => ({ exists: true, data: () => ({}) }) } as never);
+    f.builders.get.mockResolvedValueOnce({ uid: 'owner', slug: null, gateway: null, accountLifecycle: null } as unknown as BuilderRecord);
     expect(await resolveActivityConversation({ ...f, uid, channelId })).toBeNull();
   });
 });

@@ -38,12 +38,13 @@ async function resolveInviteeByEmail(email: string): Promise<InviteeResolution> 
   const snap = await db.collection("users").where("email", "==", normalizedEmail).limit(1).get();
   if (snap.empty) return { ok: false, status: 404, error: "No Octogee user found with that email" };
   const data = snap.docs[0].data();
-  if (!data.mattermost?.userId) return { ok: false, status: 400, error: "That user's workspace isn't set up yet" };
+  const builder = await platformStateStore.builders.records.get(snap.docs[0].id);
+  if (!builder?.mattermostUserId) return { ok: false, status: 400, error: "That user's workspace isn't set up yet" };
   return {
     ok: true,
     id: snap.docs[0].id,
     firstName: data.firstName || "",
-    mmUserId: data.mattermost.userId,
+    mmUserId: builder.mattermostUserId,
     normalizedEmail,
   };
 }

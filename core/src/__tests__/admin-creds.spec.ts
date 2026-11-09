@@ -16,13 +16,12 @@ vi.mock("@google-cloud/secret-manager", () => ({
     createSecret = vi.fn(async () => [{}]);
   },
 }));
-vi.mock("../firebase.js", () => ({ db: { doc: () => ({ set: h.setSpy }) } }));
+vi.mock("../firebase.js", () => ({ platformStateStore: { config: { mattermostAdmin: { put: h.setSpy } } } }));
 vi.mock("../mattermost/client.js", () => ({
   getMmAdminToken: h.getMmAdminToken,
   mmApiCall: h.mmApiCall,
 }));
 vi.mock("../config.js", () => ({ log: vi.fn() }));
-vi.mock("firebase-admin/firestore", () => ({ FieldValue: { serverTimestamp: () => "ts" } }));
 
 import { ensureAdminCredentials } from "../mattermost/admin-creds.js";
 
@@ -35,12 +34,11 @@ describe("ensureAdminCredentials", () => {
     h.getMmAdminToken.mockResolvedValue("tok");
   });
 
-  it("records the admin user id + proxy url in Firestore", async () => {
+  it("records the admin user id + proxy url in the platform store", async () => {
     process.env.API_PUBLIC_URL = "https://api.test";
     await ensureAdminCredentials();
     expect(h.setSpy).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "admin-id", proxyUrl: "https://api.test" }),
-      { merge: true },
     );
   });
 

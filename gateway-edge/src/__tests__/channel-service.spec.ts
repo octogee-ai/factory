@@ -87,6 +87,7 @@ const {
   archiveProjectSessionChannel,
   sessionChannelNameAvailability,
 } = await import("../lib/channel-service.js");
+const { platformStateStore } = await import("../lib/platform-state.js");
 
 function actor(overrides: Record<string, unknown> = {}) {
   return {
@@ -319,20 +320,22 @@ describe("createSessionChannel", () => {
     });
     expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "owner-mm" });
     expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "coach-mm" });
+    expect(h.docs.get(DOC_PATH)).toMatchObject({
+      id: "patchroll",
+      kind: "session",
+      mattermost: { channelId: "channel-1" },
+      createdBy: "owner-1",
+      createdAt: expect.any(Number),
+    });
     expect(h.writes).toEqual([
       {
         path: DOC_PATH,
         data: {
-          id: "patchroll",
-          kind: "session",
           name: "patchroll",
           purpose: "Roll OC patches",
           createdDisplayName: "OpenClaw Patch Upgrade",
-          mattermost: { channelId: "channel-1" },
-          createdBy: "owner-1",
-          createdAt: "SERVER_TS",
         },
-        options: undefined,
+        options: { merge: true },
       },
     ]);
     expect(h.logger.info).toHaveBeenCalledWith("[channels] Created session channel mira/patchroll", {
@@ -375,7 +378,7 @@ describe("createSessionChannel", () => {
       display_name: "OpenClaw Patch Upgrade",
       purpose: "Roll OC patches",
     });
-    expect(h.writes[0]?.data).toEqual(
+    expect(h.docs.get(DOC_PATH)).toEqual(
       expect.objectContaining({ mattermost: { channelId: "channel-9" } }),
     );
   });
@@ -472,14 +475,12 @@ describe("createSessionChannel", () => {
       }
       throw new Error(`unexpected Mattermost call: ${method ?? "GET"} ${path}`);
     });
-    h.setError = new Error("Firestore unavailable");
+    const put = vi.spyOn(platformStateStore.workspaces.channels, "put").mockRejectedValueOnce(new Error("store unavailable"));
 
-    await expect(createSessionChannel(actor(), input)).rejects.toThrow(
-      "Firestore unavailable",
-    );
+    await expect(createSessionChannel(actor(), input)).rejects.toThrow("store unavailable");
     expect(h.writes).toEqual([]);
+    put.mockRestore();
 
-    h.setError = null;
   h.enrollWorkspaceChannelMembers.mockReset().mockResolvedValue(undefined);
     await expect(createSessionChannel(actor(), input)).resolves.toEqual({
       status: 200,
@@ -493,12 +494,53 @@ describe("createSessionChannel", () => {
         purpose: "Roll OC patches",
       },
     );
-    expect(h.writes[0]?.data).toEqual(
-      expect.objectContaining({
-        purpose: "Roll OC patches",
-        mattermost: { channelId: "channel-1" },
-      }),
+    expect(h.docs.get(DOC_PATH)).toEqual(
+      expect.objectContaining({ mattermost: { channelId: "channel-1" } }),
     );
+    expect(h.writes[0]?.data).toEqual(expect.objectContaining({ purpose: "Roll OC patches" }));
+  });
+
+  it("finishes the presentation write on retry without creating another Mattermost channel", async () => {
+    h.setError = new Error("Firestore unavailable");
+
+    await expect(createSessionChannel(actor(), input)).rejects.toThrow("Firestore unavailable");
+    expect(h.docs.get(DOC_PATH)).toEqual(
+      expect.objectContaining({ mattermost: { channelId: "channel-1" }, createdBy: "owner-1" }),
+    );
+
+    h.setError = null;
+    h.mmApi.mockClear();
+
+    await expect(createSessionChannel(actor(), input)).resolves.toEqual({
+      status: 200,
+      body: { success: true, channelId: "channel-1", name: "patchroll" },
+    });
+    expect(h.mmApi).not.toHaveBeenCalledWith("/channels", "POST", expect.anything());
+    expect(h.writes).toEqual([
+      {
+        path: DOC_PATH,
+        data: {
+          name: "patchroll",
+          purpose: "Roll OC patches",
+          createdDisplayName: "OpenClaw Patch Upgrade",
+        },
+        options: { merge: true },
+      },
+    ]);
+  });
+
+  it("does not adopt another creator's channel whose presentation is missing", async () => {
+    h.docs.set(DOC_PATH, {
+      id: "patchroll",
+      kind: "session",
+      mattermost: { channelId: "channel-1" },
+      createdBy: "someone-else",
+    });
+
+    const result = await createSessionChannel(actor(), input);
+
+    expect(result.status).toBe(409);
+    expect(h.writes).toEqual([]);
   });
 
   it("does not adopt on a non-conflict MM 400", async () => {
@@ -803,20 +845,22 @@ describe("createProjectSessionChannel", () => {
     expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "owner-mm" });
     expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "project-agent-mm" });
     expect(h.mmApi).not.toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "coach-mm" });
+    expect(h.docs.get(PROJECT_CHANNEL_DOC_PATH)).toMatchObject({
+      id: "patchroll",
+      kind: "session",
+      mattermost: { channelId: "channel-1" },
+      createdBy: "owner-1",
+      createdAt: expect.any(Number),
+    });
     expect(h.writes).toEqual([
       {
         path: PROJECT_CHANNEL_DOC_PATH,
         data: {
-          id: "patchroll",
-          kind: "session",
           name: "patchroll",
           purpose: "Rolls",
           createdDisplayName: "OC Patch Upgrade",
-          mattermost: { channelId: "channel-1" },
-          createdBy: "owner-1",
-          createdAt: "SERVER_TS",
         },
-        options: undefined,
+        options: { merge: true },
       },
     ]);
   });

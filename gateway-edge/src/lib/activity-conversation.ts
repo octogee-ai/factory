@@ -1,5 +1,5 @@
+import type { BuilderRecord } from '@octogee/core/platform-state';
 import { accountAllowsInteractiveAccess } from '@octogee/shared/types/account-lifecycle';
-import { userAssignmentMatchesGateway } from '@octogee/core/assigned-roster';
 import { isValidGatewayId } from '@octogee/shared/types/glm';
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 import { authorizeChannel, type AuthorizedChannel, type ChannelSessionMattermostClient } from './channel-session-authorization.js';
@@ -15,7 +15,7 @@ export interface ActivityConversation {
 }
 
 interface ActivityConversationInput {
-  db: { doc(path: string): { get(): Promise<{ exists: boolean; data(): Record<string, unknown> | undefined }> } };
+  builders: { get(uid: string): Promise<BuilderRecord | null> };
   uid: string;
   channelId: string;
   threadRootPostId?: string;
@@ -23,12 +23,10 @@ interface ActivityConversationInput {
 }
 
 async function assignedGateway(input: ActivityConversationInput, { target }: AuthorizedChannel): Promise<string | null> {
-  const [owner, caller] = await Promise.all([input.db.doc(`users/${target.ownerUid}`).get(), input.db.doc(`users/${input.uid}`).get()]);
-  const data = owner.data();
-  if (!owner.exists || !data || !accountAllowsInteractiveAccess(data) || !caller.exists || !accountAllowsInteractiveAccess(caller.data())) return null;
-  const provisioning = data.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
-  const gatewayId = provisioning?.openclaw?.gatewayId;
-  if (!isValidGatewayId(gatewayId) || !userAssignmentMatchesGateway(data, gatewayId, target.workspaceSlug)) return null;
+  const [owner, caller] = await Promise.all([input.builders.get(target.ownerUid), input.builders.get(input.uid)]);
+  if (!owner || !caller || !accountAllowsInteractiveAccess({ accountLifecycle: owner.accountLifecycle }) || !accountAllowsInteractiveAccess({ accountLifecycle: caller.accountLifecycle })) return null;
+  const gatewayId = owner.gateway?.gatewayId;
+  if (!isValidGatewayId(gatewayId) || !target.workspaceSlug || owner.slug !== target.workspaceSlug) return null;
   return gatewayId;
 }
 

@@ -16,7 +16,7 @@ import {
   type GoogleConnectCapabilityKey,
   type PlatformConnectConfig,
 } from "@octogee/shared/types/platform-config";
-import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import { accountActiveInStore } from "../lib/user-platform-state.js";
 import { revokeProviderGrant } from "@octogee/core/connector-revocation";
 import { requireAuth } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
@@ -298,7 +298,7 @@ async function storeConnectorTokens(args: {
   await db.runTransaction(async (tx) => {
     const ownerRef = db.collection("users").doc(uid);
     const owner = await tx.get(ownerRef);
-    if (!owner.exists || !accountAllowsInteractiveAccess(owner.data())) {
+    if (!owner.exists || !(await accountActiveInStore(uid))) {
       throw new InactiveConnectorOwnerError();
     }
     const priorGoogle = def.meta.id === "google" ? (await tx.get(integrationRef)).data() : undefined;
@@ -790,7 +790,7 @@ async function consumeFlowNonce(
     if (!snap.exists || !flow || flow.consumedAt || flow.uid !== payload.uid || flow.connector !== connectorId) {
       throw new Error("state nonce unknown or already consumed");
     }
-    if (!owner.exists || !accountAllowsInteractiveAccess(owner.data())) {
+    if (!owner.exists || !(await accountActiveInStore(payload.uid))) {
       throw new InactiveConnectorOwnerError();
     }
     tx.set(ref, { consumedAt: FieldValue.serverTimestamp() }, { merge: true });

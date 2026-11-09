@@ -1,5 +1,40 @@
 import { describe, expect, it } from "vitest";
-import { buildRemoveCustomerConfig } from "./provisionSteps.js";
+import { FieldValue } from "firebase-admin/firestore";
+import {
+  buildCoachAgentDoc,
+  buildProvisioningContext,
+  buildRemoveCustomerConfig,
+  buildProvisionedBuilderPatch,
+  buildUserProductFields,
+} from "./provisionSteps.js";
+
+describe("provisioned Builder state", () => {
+  const ctx = buildProvisioningContext("uid-1", { username: "octogeedemo", tier: "trial" });
+
+  it("binds the provisioned Builder to the workspace used by agent tools", () => {
+    expect(buildProvisionedBuilderPatch(ctx, { "mattermost.userId": "mm-1", "mattermost.teamId": "team-1" })).toEqual({
+      workspaceId: "octogeedemo",
+      slug: "octogeedemo",
+      mattermostUserId: "mm-1",
+      openclaw: { version: "v1", customerDir: ctx.customerDir, provisionedAt: { serverNow: true } },
+    });
+  });
+
+  it("leaves the Mattermost user id out when provisioning did not produce one", () => {
+    expect(buildProvisionedBuilderPatch(ctx, {})).not.toHaveProperty("mattermostUserId");
+  });
+
+  it("leaves the Mattermost user id out when provisioning produced an empty one", () => {
+    expect(buildProvisionedBuilderPatch(ctx, { "mattermost.userId": "" })).not.toHaveProperty("mattermostUserId");
+  });
+
+  it("keeps the tier and the derived Mattermost fields on the product document, without the platform user id", () => {
+    expect(buildUserProductFields(ctx, { "mattermost.userId": "mm-1", "mattermost.teamId": "team-1", other: 1 })).toEqual({
+      tier: "trial",
+      "mattermost.teamId": "team-1",
+    });
+  });
+});
 
 describe("buildRemoveCustomerConfig", () => {
   const current = {
@@ -80,5 +115,20 @@ describe("buildRemoveCustomerConfig", () => {
     expect(config.channels?.mattermost?.accounts).toEqual({
       "alice-b-proj-x": { botToken: "s" },
     });
+  });
+});
+
+describe("buildCoachAgentDoc", () => {
+  it("gives every new coach the Octo identity with the coral Octo look", () => {
+    const doc = buildCoachAgentDoc("uid-1");
+    expect(doc).toMatchObject({
+      id: "uid-1",
+      name: "Octo",
+      persona: "",
+      avatarEmoji: "🐙",
+      look: { style: "octo", color: "#e74e3c" },
+    });
+    expect(doc.createdAt).toEqual(FieldValue.serverTimestamp());
+    expect(doc.updatedAt).toEqual(FieldValue.serverTimestamp());
   });
 });

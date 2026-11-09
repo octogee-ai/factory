@@ -9,18 +9,8 @@ function nestedStatus(data: Record<string, unknown>, field: string): unknown {
     : undefined;
 }
 
-function absentOrActive(data: Record<string, unknown>, field: string): boolean {
-  return data[field] === undefined || nestedStatus(data, field) === "active";
-}
-
-export function isRunnableProject(data: Record<string, unknown>, ownerUid?: string): boolean {
-  return (ownerUid === undefined || data.ownerUid === ownerUid)
-    && data.ownerActive === true
-    && typeof data.status === "string"
-    && ACTIVE_PROJECT_STATUSES.has(data.status)
-    && data.provisioningState === "active"
-    && absentOrActive(data, "commercialLifecycle")
-    && absentOrActive(data, "retention");
+export function projectRetentionActive(data: Record<string, unknown> | undefined): boolean {
+  return data === undefined || data.retention === undefined || nestedStatus(data, "retention") === "active";
 }
 
 export function isRunnableWorkspaceProject(project: WorkspaceProject, ownerUid: string): boolean {

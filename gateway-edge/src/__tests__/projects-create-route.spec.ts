@@ -8,8 +8,7 @@ const h = vi.hoisted(() => ({
   user: { username: "mira" } as Record<string, unknown>,
   workspaceSlug: "mira" as string | undefined,
   isAdmin: false,
-  gatewayClass: "builder",
-  existingProject: false,
+  docs: new Map<string, Record<string, unknown>>(),
   createProjectForActor: vi.fn(),
   projectSlugAvailability: vi.fn(),
   evaluate: vi.fn(),
@@ -26,29 +25,10 @@ vi.mock("../middleware/security.js", () => ({
   },
 }));
 
-vi.mock("../lib/db.js", () => ({
-  db: {
-    doc: (path: string) => ({
-      get: async () => {
-        if (path === "gateways/gw-builder") {
-          return {
-            exists: true,
-            data: () => ({
-              gatewayClass: h.gatewayClass,
-              ownerUid: "owner-1",
-              builderSlug: "mira",
-            }),
-          };
-        }
-        if (path !== "workspaces/mira/projects/orbit") {
-          throw new Error(`unexpected doc ${path}`);
-        }
-        return { exists: h.existingProject };
-      },
-    }),
-  },
-  FieldValue: { serverTimestamp: () => "SERVER_TS" },
-}));
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(h.docs) };
+});
 
 vi.mock("../lib/project-create-service.js", () => ({
   createProjectForActor: (...args: unknown[]) => h.createProjectForActor(...args),
@@ -95,6 +75,34 @@ function app(routes: express.Router = createRoutes) {
   return a;
 }
 
+function seedGateway(gatewayClass: string) {
+  h.docs.set("gateways/gw-builder", {
+    gatewayId: "gw-builder",
+    createdAt: 1,
+    createdBy: "admin",
+    updatedAt: 2,
+    updatedBy: "admin",
+    latestRelease: 2,
+    desiredRelease: 2,
+    liveRelease: 1,
+    desiredStatus: "running",
+    configSchemaVersion: 1,
+    profile: "builder",
+    imageProfile: "builder",
+    sizingTier: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: "octogee-gw-builder",
+    serviceAccount: null,
+    builderAccess: null,
+    modelBrokerLimits: null,
+    preemption: null,
+    gatewayClass,
+    ownerUid: gatewayClass === "builder" ? "owner-1" : null,
+    builderSlug: gatewayClass === "builder" ? "mira" : null,
+  });
+}
+
 function gatedApp() {
   return app(createProjectCreateRoutes({ featurePolicy }));
 }
@@ -107,8 +115,8 @@ beforeEach(() => {
   };
   h.workspaceSlug = "mira";
   h.isAdmin = false;
-  h.gatewayClass = "builder";
-  h.existingProject = false;
+  h.docs.clear();
+  seedGateway("builder");
   h.createProjectForActor.mockReset().mockResolvedValue({
     status: 200,
     body: { success: true, slug: "orbit" },
@@ -143,7 +151,7 @@ describe("GET /api/projects/slug-available", () => {
   });
 
   it("checks the workspace project doc for valid slugs", async () => {
-    h.existingProject = true;
+    h.docs.set("workspaces/mira/projects/orbit", { ownerUid: "owner-1" });
 
     await request(app())
       .get("/api/projects/slug-available?slug= orbit ")
@@ -215,7 +223,7 @@ describe("POST /api/projects", () => {
   });
 
   it("hands a disabled decision to the service for a Barn workspace without evaluating the flag", async () => {
-    h.gatewayClass = "shared";
+    seedGateway("shared");
     const body = {
       name: "Orbit",
       slug: "orbit",

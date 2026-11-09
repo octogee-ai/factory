@@ -7,10 +7,7 @@ import {
   PROJECT_RECIPE_IDS,
   type ProjectRecipeId,
 } from "@octogee/shared/types/project";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
-  hasRunningInboundMigrationForSlug,
-  readAssignedSlugsForGateway,
 } from "@octogee/core/assigned-roster";
 import {
   configuredBuilderBootstrapAllowed,
@@ -20,7 +17,7 @@ import {
   systemConfigRepoName,
   workspaceRepoName,
 } from "@octogee/core/gitea-naming";
-import { db } from "../../lib/db.js";
+import { platformStateStore } from "../../lib/platform-state.js";
 import { gitHost } from "../../lib/git-host.js";
 import { requireInternalServiceAuth } from "../../middleware/auth.js";
 import { logger } from "../../middleware/logging.js";
@@ -173,6 +170,24 @@ function gatewayKeyOwnerForRequest(req: Request, res: Response): string | null {
   return gatewayKeyOwnerId(caller.gatewayId, caller.podName);
 }
 
+async function assignedSlugsForGateway(gatewayId: string): Promise<string[]> {
+  const builders = await platformStateStore.builders.records.listByGateway(gatewayId);
+  return builders.flatMap((builder) => (builder.slug ? [builder.slug] : []));
+}
+
+async function inboundMigrationRunning(gatewayId: string, slug: string): Promise<boolean> {
+  const builder = await platformStateStore.builders.records.findBySlug(slug);
+  if (!builder) return false;
+  const operations = await platformStateStore.journal.operations.listForUid(builder.uid, {
+    kind: "migrate-customer",
+    statuses: ["running"],
+  });
+  return operations.some((operation) => {
+    const input = operation.input as { uid?: unknown; toGatewayId?: unknown } | undefined;
+    return input?.uid === builder.uid && input.toGatewayId === gatewayId;
+  });
+}
+
 async function requireAssignedHere(req: Request, res: Response, slug: string): Promise<boolean> {
   const caller = gatewayCallerForRequest(req);
   if (!caller) {
@@ -183,17 +198,16 @@ async function requireAssignedHere(req: Request, res: Response, slug: string): P
   const { gatewayId, podName } = caller;
 
   try {
-    const assigned = await readAssignedSlugsForGateway(db, gatewayId);
+    const assigned = await assignedSlugsForGateway(gatewayId);
     if (assigned.includes(slug)) return true;
-    const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-    const gateway = gatewaySnap.exists ? gatewaySnap.data() : undefined;
+    const gateway = await platformStateStore.gateways.roots.get(gatewayId);
     const configuredIsolatedBuilder = configuredBuilderBootstrapAllowed(gateway, {
       gatewayId,
       podName,
       slug,
     });
     if (configuredIsolatedBuilder) return true;
-    if (!(await hasRunningInboundMigrationForSlug(db, gatewayId, slug))) {
+    if (!(await inboundMigrationRunning(gatewayId, slug))) {
       res.status(403).json({ error: "slug is not assigned to this gateway" });
       return false;
     }

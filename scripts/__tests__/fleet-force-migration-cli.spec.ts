@@ -29,11 +29,9 @@ import { main } from "../ops/fleet.js";
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 describe("Fleet forced migration customer lookup", () => {
-  it.each([false, true])("resolves a username alias to the canonical slug for apply=%s", async apply => {
+  it.each([false, true])("resolves the customer by canonical slug for apply=%s", async apply => {
     const h = forceMigrationHarness();
-    const user = h.docs.get("users/u1")!;
-    user.username = "login-alias";
-    user.provisioning.openclaw.slug = "alice";
+    h.docs.get("users/u1")!.provisioning.openclaw.slug = "alice";
     mocks.db = h.db;
     const bound = { podName: "builder-pod", podUid: "pod-uid", containerImage: "image", beforeBootId: "before" };
     const transport = {
@@ -44,7 +42,7 @@ describe("Fleet forced migration customer lookup", () => {
     vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
-    await main(["--env=test", "migrate-customer", "login-alias", "--to=shared-b", "--force", "--operation=move-1", ...(apply ? ["--apply"] : [])]);
+    await main(["--env=test", "migrate-customer", "alice", "--to=shared-b", "--force", "--operation=move-1", ...(apply ? ["--apply"] : [])]);
     expect(transport.dispatch).toHaveBeenCalledTimes(apply ? 1 : 0);
     if (apply) {
       expect(h.op().forceDrainRequest.completedAt).toEqual(expect.any(Number));

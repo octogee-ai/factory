@@ -3,6 +3,8 @@ import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const logger = createServiceLogger("provisioner");
 import type { UserSnapshot } from "./customer-lifecycle.js";
 import type { MattermostTokenSecret, SecretsRepository } from "./platform-state/secrets.js";
+import type { PlatformStateRepositories } from "./platform-state/store.js";
+import type { WorkspaceProject } from "./platform-state/workspaces.js";
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
 import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { projectAgentConfigured, projectRepoSourceFromDoc, type ProjectAgentStatus, type ProjectAgentIdentity } from "@octogee/shared/types/project";
@@ -90,41 +92,46 @@ export function mapProjectAgentState(
   }
 }
 
-interface SnapshotDocSnap {
-  id: string;
-  data(): Record<string, unknown> | undefined;
-}
-interface SnapshotDocRef {
-  get(): Promise<{ data(): Record<string, unknown> | undefined }>;
-  collection(name: string): SnapshotCollectionRef;
-}
-interface SnapshotCollectionRef {
-  doc(id: string): SnapshotDocRef;
-  get(): Promise<{ docs: SnapshotDocSnap[] }>;
-}
-export interface ProjectAgentSnapshotDb {
-  collection(name: string): SnapshotCollectionRef;
+type ProjectAgentStates = Array<NonNullable<ReturnType<typeof mapProjectAgentState>>>;
+
+type ProjectAgentSource = { readonly id: string; readonly data: Record<string, unknown> };
+
+function storedProjectAgentSource(project: WorkspaceProject): ProjectAgentSource {
+  return {
+    id: project.projectSlug,
+    data: {
+      status: project.status,
+      ...(project.agent === null ? {} : { agent: project.agent }),
+      ...(project.commercialLifecycleStatus === null ? {} : { commercialLifecycle: { status: project.commercialLifecycleStatus } }),
+      ...(project.repoSource === null ? {} : { repoSource: project.repoSource }),
+    },
+  };
 }
 
-export async function collectProjectAgentStates(
-  db: ProjectAgentSnapshotDb,
-  secrets: Pick<SecretsRepository, "list">,
+export async function collectStoredProjectAgentStates(
+  state: Pick<PlatformStateRepositories, "workspaces" | "secrets">,
   uid: string,
   slug: string,
-): Promise<Array<NonNullable<ReturnType<typeof mapProjectAgentState>>>> {
-  const [snap, projectSecrets] = await Promise.all([
-    db.collection("workspaces").doc(slug).collection("projects").get(),
-    secrets.list(uid, "project-agent-mattermost"),
+): Promise<ProjectAgentStates> {
+  const [projects, projectSecrets] = await Promise.all([
+    state.workspaces.projects.list(slug),
+    state.secrets.list(uid, "project-agent-mattermost"),
   ]);
+  return projectAgentStatesFrom(projects.map(storedProjectAgentSource), projectSecrets);
+}
+
+function projectAgentStatesFrom(
+  projects: readonly ProjectAgentSource[],
+  projectSecrets: Awaited<ReturnType<SecretsRepository["list"]>>,
+): ProjectAgentStates {
   const credentials = new Map(projectSecrets.flatMap((secret) =>
     secret.kind === "connector" || !secret.projectId ? [] : [[secret.projectId, secret] as const]));
-  const out: Array<NonNullable<ReturnType<typeof mapProjectAgentState>>> = [];
+  const out: ProjectAgentStates = [];
   const seenProjects = new Set<string>();
-  for (const doc of snap.docs) {
-    const data = doc.data() ?? {};
+  for (const { id, data } of projects) {
     if (data.agent === undefined) continue;
-    seenProjects.add(doc.id);
-    const state = mapProjectAgentState(doc.id, data, credentials.get(doc.id) ?? null);
+    seenProjects.add(id);
+    const state = mapProjectAgentState(id, data, credentials.get(id) ?? null);
     if (state) out.push(state);
   }
 

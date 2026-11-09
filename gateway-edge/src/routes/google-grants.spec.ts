@@ -1,15 +1,25 @@
 import express from "express";
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { platformStateStore } from "../lib/platform-state.js";
 import { createGoogleGrantRoutes } from "./google-grants.js";
+
+const documents = vi.hoisted(() => ({}) as Record<string, Record<string, unknown>>);
+
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(documents) };
+});
 
 function harness() {
   const stamp = { seconds: 1, nanoseconds: 0 };
-  const documents: Record<string, Record<string, unknown>> = {
+  for (const path of Object.keys(documents)) delete documents[path];
+  Object.assign(documents, {
     "users/owner": { username: "space" },
     "users/member": { username: "collaborator" },
-    "workspaces/space": { ownerUid: "owner", ownerActive: true },
+    "workspaces/space": { id: "space", ownerUid: "owner", ownerActive: true },
     "workspaces/space/members/member": {
+      role: "member",
       canonicalSource: "mattermost-general",
       canonicalState: "active",
       mattermostChannelId: "general",
@@ -30,7 +40,7 @@ function harness() {
       connectedAt: stamp,
       pickedFiles: [],
     },
-  };
+  });
   const snapshot = (path: string) => ({
     id: path.split("/").at(-1)!,
     exists: !!documents[path],
@@ -124,6 +134,30 @@ describe("owner-managed Google grants", () => {
       ).toBe(400);
     },
   );
+  it("denies a grant when the store holds a revoking member, even though the product document reads active", async () => {
+    const h = harness();
+    const member = await platformStateStore.workspaces.members.get("space", "member");
+    const get = vi.spyOn(platformStateStore.workspaces.members, "get")
+      .mockResolvedValueOnce({ ...member!, canonicalState: "revoking" });
+
+    const response = await request(h.app).post("/member").send({ permissions: [h.permission] });
+
+    expect(response.status).not.toBe(200);
+    expect(h.documents["users/owner/googleGrants/member"]).toBeUndefined();
+    get.mockRestore();
+  });
+  it("denies a grant when the store shows the owner suspended, even though the product document reads active", async () => {
+    const h = harness();
+    const owner = await platformStateStore.builders.records.get("owner");
+    const get = vi.spyOn(platformStateStore.builders.records, "get")
+      .mockResolvedValue({ ...owner!, accountLifecycle: { status: "suspended" } as never });
+
+    const response = await request(h.app).post("/member").send({ permissions: [h.permission] });
+
+    expect(response.status).toBe(403);
+    expect(h.documents["users/owner/googleGrants/member"]).toBeUndefined();
+    get.mockRestore();
+  });
   it("does not allow a collaborator to approve access to the owner connection", async () => {
     const h = harness();
     expect(

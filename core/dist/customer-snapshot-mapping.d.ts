@@ -1,31 +1,14 @@
 import type { FleetBrokerProjectAgent } from "@octogee/shared/types/fleet-broker";
 import type { UserSnapshot } from "./customer-lifecycle.js";
-import type { MattermostTokenSecret, SecretsRepository } from "./platform-state/secrets.js";
+import type { MattermostTokenSecret } from "./platform-state/secrets.js";
+import type { PlatformStateRepositories } from "./platform-state/store.js";
 type ChannelBinding = UserSnapshot["channels"][number];
 export declare function mapWorkspaceChannelDoc(data: Record<string, unknown>): ChannelBinding | null;
 export declare function mapProjectChannelDoc(projectId: string, data: Record<string, unknown>): ChannelBinding | null;
 export type ProjectAgentCredential = Pick<MattermostTokenSecret, "mattermostUserId" | "personalToken">;
 export declare function mapProjectAgentState(projectId: string, projectData: Record<string, unknown>, credential: ProjectAgentCredential | null): FleetBrokerProjectAgent | null;
-interface SnapshotDocSnap {
-    id: string;
-    data(): Record<string, unknown> | undefined;
-}
-interface SnapshotDocRef {
-    get(): Promise<{
-        data(): Record<string, unknown> | undefined;
-    }>;
-    collection(name: string): SnapshotCollectionRef;
-}
-interface SnapshotCollectionRef {
-    doc(id: string): SnapshotDocRef;
-    get(): Promise<{
-        docs: SnapshotDocSnap[];
-    }>;
-}
-export interface ProjectAgentSnapshotDb {
-    collection(name: string): SnapshotCollectionRef;
-}
-export declare function collectProjectAgentStates(db: ProjectAgentSnapshotDb, secrets: Pick<SecretsRepository, "list">, uid: string, slug: string): Promise<Array<NonNullable<ReturnType<typeof mapProjectAgentState>>>>;
+type ProjectAgentStates = Array<NonNullable<ReturnType<typeof mapProjectAgentState>>>;
+export declare function collectStoredProjectAgentStates(state: Pick<PlatformStateRepositories, "workspaces" | "secrets">, uid: string, slug: string): Promise<ProjectAgentStates>;
 export declare function deriveSlug(uid: string, data: Record<string, unknown>): string;
 type SnapshotSystemConfig = NonNullable<UserSnapshot["systemConfig"]>;
 export interface ByotSnapshotProjection {

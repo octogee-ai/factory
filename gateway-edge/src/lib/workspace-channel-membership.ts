@@ -1,6 +1,6 @@
 import { isValidCustomChannelName, RESERVED_USERNAMES, USERNAME_RE } from "@octogee/shared/types/identity";
-import { db } from "./db.js";
 import { mmApi } from "./mattermost.js";
+import { platformStateStore } from "./platform-state.js";
 import { addActiveChannelMember, addChannelMember, removeChannelMember, verifiedPrimaryChannelIdFor } from "./channel-lifecycle.js";
 
 const MEMBER_PAGE_SIZE = 200;
@@ -13,17 +13,16 @@ function workspaceChannelPath(workspaceSlug: string, name: string): string {
 
 async function workspaceGroupPaths(workspaceSlug: string, includeArchived: boolean): Promise<string[]> {
   const generalPath = workspaceChannelPath(workspaceSlug, "general");
-  const channels = await db.collection(`workspaces/${workspaceSlug}/channels`)
-    .limit(MAX_WORKSPACE_CHANNELS + 1).get();
-  if (channels.docs.length > MAX_WORKSPACE_CHANNELS) throw new Error("Workspace channel directory exceeded its limit");
+  const channels = await platformStateStore.workspaces.channels.list({ workspaceSlug, projectSlug: null });
+  if (channels.length > MAX_WORKSPACE_CHANNELS) throw new Error("Workspace channel directory exceeded its limit");
   const paths = [generalPath];
-  for (const channel of channels.docs) {
-    if (["general", "coach-dm", "admin"].includes(channel.id)) continue;
-    const data = channel.data();
-    if (data.kind !== "session" || !isValidCustomChannelName(channel.id) || RESERVED_USERNAMES.has(channel.id)) {
-      throw new Error(`Invalid workspace group channel ${channel.ref.path}`);
+  for (const channel of channels) {
+    if (["general", "coach-dm", "admin"].includes(channel.channelId)) continue;
+    const path = workspaceChannelPath(workspaceSlug, channel.channelId);
+    if (channel.kind !== "session" || !isValidCustomChannelName(channel.channelId) || RESERVED_USERNAMES.has(channel.channelId)) {
+      throw new Error(`Invalid workspace group channel ${path}`);
     }
-    if (includeArchived || data.archivedAt === undefined || data.archivedAt === null) paths.push(channel.ref.path);
+    if (includeArchived || channel.archivedAt === null) paths.push(path);
   }
   return [generalPath, ...paths.slice(1).sort()];
 }

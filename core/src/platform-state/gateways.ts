@@ -79,6 +79,7 @@ export interface GatewayRootsRepository {
     next: GatewayRuntimeRestartFenceValue | null,
   ): Promise<void>;
   delete(gatewayId: string, fence?: GatewayRootFence): Promise<void>;
+  deleteChildren(gatewayId: string): Promise<void>;
 }
 
 export type GatewayRelease = ReleaseDoc;

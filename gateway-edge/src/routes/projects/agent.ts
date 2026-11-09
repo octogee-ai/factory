@@ -3,7 +3,7 @@ import { strictRateLimit } from "../../middleware/security.js";
 import { logger } from "../../middleware/logging.js";
 import { provisionProjectAgent } from "../../lib/project-agent-service.js";
 import { withProject } from '../../lib/withProject.js';
-import { FieldValue } from '../../lib/db.js';
+import { platformStateStore } from '../../lib/platform-state.js';
 import { isTalkVoiceId } from '@octogee/shared/types/voice';
 import { projectAgentConfigured } from '@octogee/shared/types/project';
 
@@ -15,9 +15,20 @@ router.put('/:wid/:pid/agent/voice', strictRateLimit, async (req: Request, res: 
   if (!isTalkVoiceId(body.voice) || Object.keys(body).some(key => key !== 'voice')) {
     res.status(400).json({ error: 'Invalid project agent voice' }); return;
   }
-  await withProject(req, res, wid, pid, { ownerOnly: true, requireActive: true }, async ctx => {
-    if (!projectAgentConfigured(ctx.project.agent)) { res.status(409).json({ error: 'Project agent is not configured' }); return; }
-    await ctx.projectRef.update({ 'agent.voice': body.voice, updatedAt: FieldValue.serverTimestamp() });
+  await withProject(req, res, wid, pid, { ownerOnly: true, requireActive: true }, async () => {
+    const configured = await platformStateStore.transaction({ label: 'project-agent.voice' }, async tx => {
+      const { projects } = tx.workspaces;
+      const project = await projects.get(wid, pid);
+      if (!project || !projectAgentConfigured(project.agent)) return false;
+      await projects.patch(
+        wid,
+        pid,
+        { agent: { ...project.agent, voice: body.voice, updatedAt: { serverNow: true } }, updatedAt: { serverNow: true } },
+        { revision: project.revision },
+      );
+      return true;
+    });
+    if (!configured) { res.status(409).json({ error: 'Project agent is not configured' }); return; }
     res.json({ voice: body.voice });
   });
 });

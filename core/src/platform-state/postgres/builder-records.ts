@@ -562,6 +562,7 @@ async function selectRecords(session: PostgresSession, operation: string, text: 
 
 type BuilderRecordReadMethod =
   | "get"
+  | "getRole"
   | "getMany"
   | "findBySlug"
   | "findByMattermostUserId"
@@ -580,6 +581,11 @@ function builderRecordReads(session: PostgresSession): Pick<BuilderRecordsReposi
   return {
     get(uid) {
       return findOne("builders.records.get", "b.uid = $1::text", uid);
+    },
+
+    async getRole(uid) {
+      const rows = await session.read("builders.records.getRole", "SELECT role FROM $schema.users WHERE uid = $1::text", [uid]);
+      return (rows[0]?.role as BuilderRole | null | undefined) ?? null;
     },
 
     async getMany(uids) {

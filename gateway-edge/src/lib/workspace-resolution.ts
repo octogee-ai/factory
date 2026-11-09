@@ -1,6 +1,5 @@
-import { readWorkspace } from "./firestoreReads.js";
+import { platformStateStore } from "./platform-state.js";
 
 export async function resolveWorkspaceUid(slug: string): Promise<string | null> {
-  const workspace = await readWorkspace(slug);
-  return workspace?.ownerUid ?? null;
+  return (await platformStateStore.workspaces.records.get(slug))?.ownerUid ?? null;
 }

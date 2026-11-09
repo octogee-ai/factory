@@ -1,5 +1,5 @@
 import type { OpaqueMap, Stored, WorkspaceChannel, WorkspaceChannelScope } from "@octogee/core/platform-state";
-import { FieldValue, db } from "./db.js";
+import { db } from "./db.js";
 import { platformStateStore } from "./platform-state.js";
 import { readMattermostSecret } from "./mattermost-secret.js";
 import { logger } from "../middleware/logging.js";
@@ -137,7 +137,8 @@ async function createSessionChannelImpl(
   const scope = laneScope(workspaceId, project, normalized.name);
 
   const docPath = channelDocPath(workspaceId, project, normalized.name);
-  const existingResult = await existingSessionChannelResult(laneChannelScope(workspaceId, project), docPath, normalized);
+  const channelScope = laneChannelScope(workspaceId, project);
+  const existingResult = await existingSessionChannelResult(channelScope, docPath, normalized, actor.uid);
   if (existingResult) return completeExistingSessionChannel(project, workspaceId, normalized.name, existingResult);
 
   const ctx = await getWorkspaceMmContext(actor.uid, workspaceId, actor.userData);
@@ -169,16 +170,16 @@ async function createSessionChannelImpl(
     return bad(502, "Channel creation failed - could not add channel members");
   }
 
-  await db.doc(docPath).set({
-    id: normalized.name,
+  await platformStateStore.workspaces.channels.put({
+    scope: channelScope,
+    channelId: normalized.name,
     kind: "session",
-    name: normalized.name,
-    purpose: normalized.purpose,
-    createdDisplayName: normalized.displayName,
-    mattermost: { channelId },
+    mattermostChannelId: channelId,
+    archivedAt: null,
     createdBy: actor.uid,
-    createdAt: FieldValue.serverTimestamp(),
+    createdAt: { serverNow: true },
   });
+  await writeSessionChannelPresentation(docPath, normalized);
   if (!project) {
     const failure = await enrollWorkspaceGroup(workspaceId, normalized.name);
     if (failure) return failure;
@@ -239,10 +240,21 @@ function invalidSessionChannelCreateInput(
   return null;
 }
 
+async function writeSessionChannelPresentation(
+  docPath: string,
+  request: NormalizedSessionChannelCreateInput,
+): Promise<void> {
+  await db.doc(docPath).set(
+    { name: request.name, purpose: request.purpose, createdDisplayName: request.displayName },
+    { merge: true },
+  );
+}
+
 async function existingSessionChannelResult(
   scope: WorkspaceChannelScope,
   docPath: string,
   request: NormalizedSessionChannelCreateInput,
+  uid: string,
 ): Promise<SessionChannelResult | null> {
   const existing = await platformStateStore.workspaces.channels.get(scope, request.name);
   if (!existing) return null;
@@ -253,8 +265,12 @@ async function existingSessionChannelResult(
   if (!channelId) {
     return bad(409, "A channel with this name already exists in your workspace");
   }
-  const createdDisplayName = (await db.doc(docPath).get()).data()?.createdDisplayName;
-  if (createdDisplayName !== request.displayName) {
+  const presentation = (await db.doc(docPath).get()).data();
+  if (presentation?.name === undefined && presentation?.createdDisplayName === undefined && existing.createdBy === uid) {
+    await writeSessionChannelPresentation(docPath, request);
+    return { status: 200, body: { success: true, channelId, name: request.name } };
+  }
+  if (presentation?.createdDisplayName !== request.displayName) {
     return bad(
       409,
       `A channel already uses the name "${request.name}". Choose a name that differs within its first ${CUSTOM_CHANNEL_MAX_LENGTH} letters and numbers.`,

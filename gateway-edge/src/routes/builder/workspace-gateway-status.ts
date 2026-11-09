@@ -1,5 +1,4 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { db } from "../../lib/db.js";
 import { platformStateStore } from "../../lib/platform-state.js";
 import type { GatewayRoot, Stored } from "@octogee/core/platform-state";
 import {
@@ -32,25 +31,16 @@ export function parseRequestedWorkspaceSlugs(raw: unknown): RequestedSlugs {
   return { kind: "ok", slugs };
 }
 
-function projectMembershipWorkspaceSlug(ref: FirebaseFirestore.DocumentReference): string | null {
-  const project = ref.parent.parent;
-  const workspace = project?.parent.parent;
-  return project?.parent.id === "projects" && workspace?.parent.id === "workspaces" ? workspace.id : null;
-}
-
 async function memberWorkspaceSlugs(uid: string): Promise<Set<string>> {
-  const [workspaceMemberships, memberships] = await Promise.all([
+  const [workspaceMemberships, projectMemberships] = await Promise.all([
     platformStateStore.workspaces.members.listForUid(uid),
-    db.collectionGroup("members").where("id", "==", uid).get(),
+    platformStateStore.workspaces.projectMembers.listForUid(uid),
   ]);
   const slugs = new Set<string>();
   for (const membership of workspaceMemberships) {
     if (isCanonicalWorkspaceMembership(membership)) slugs.add(membership.workspaceSlug);
   }
-  for (const membership of memberships.docs) {
-    const slug = projectMembershipWorkspaceSlug(membership.ref);
-    if (slug) slugs.add(slug);
-  }
+  for (const membership of projectMemberships) slugs.add(membership.workspaceSlug);
   return slugs;
 }
 

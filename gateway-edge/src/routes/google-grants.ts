@@ -6,7 +6,8 @@ import {
 } from "express";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { parseGooglePickedFiles } from "@octogee/shared/types/connectors";
-import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import { platformStateStore } from "../lib/platform-state.js";
+import { accountActiveInStore } from "../lib/user-platform-state.js";
 import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
 import {
   googleGrantEpoch,
@@ -17,20 +18,15 @@ const identifier = /^[a-zA-Z0-9_-]{1,128}$/;
 
 async function ownerContext(db: Firestore, uid: string) {
   const user = await db.doc(`users/${uid}`).get();
-  const data = user.data();
-  const workspaceId = data?.username;
+  const workspaceId = user.data()?.username;
   if (
-    !accountAllowsInteractiveAccess(data) ||
+    !(await accountActiveInStore(uid)) ||
     typeof workspaceId !== "string" ||
     !identifier.test(workspaceId)
   )
     return null;
-  const workspace = await db.doc(`workspaces/${workspaceId}`).get();
-  if (
-    workspace.data()?.ownerUid !== uid ||
-    workspace.data()?.ownerActive !== true
-  )
-    return null;
+  const workspace = await platformStateStore.workspaces.records.get(workspaceId);
+  if (workspace?.ownerUid !== uid || workspace.ownerActive !== true) return null;
   return { workspaceId };
 }
 
@@ -44,7 +40,8 @@ export function createGoogleGrantRoutes(db: Firestore): Router {
         res.status(403).json({ error: "forbidden" });
         return;
       }
-      const [members, grants, connection] = await Promise.all([
+      const [storedMembers, members, grants, connection] = await Promise.all([
+        platformStateStore.workspaces.members.list(context.workspaceId),
         db
           .collection(`workspaces/${context.workspaceId}/members`)
           .limit(101)
@@ -52,13 +49,16 @@ export function createGoogleGrantRoutes(db: Firestore): Router {
         db.collection(`users/${uid}/googleGrants`).limit(101).get(),
         db.doc(`users/${uid}/integrations/google`).get(),
       ]);
-      if (members.size > 100 || grants.size > 100) {
+      if (storedMembers.length > 100 || grants.size > 100) {
         res.status(422).json({ error: "grant_directory_limit" });
         return;
       }
-      const activeMembers = members.docs.filter(
-        (doc) => doc.id !== uid && isCanonicalWorkspaceMembership(doc.data()),
+      const activeMemberUids = new Set(
+        storedMembers
+          .filter((member) => member.uid !== uid && isCanonicalWorkspaceMembership(member))
+          .map((member) => member.uid),
       );
+      const activeMembers = members.docs.filter((doc) => activeMemberUids.has(doc.id));
       const memberNames = await Promise.all(
         activeMembers.map(async (doc) => {
           const profile = await db.doc(`users/${doc.id}`).get();
@@ -124,19 +124,16 @@ export function createGoogleGrantRoutes(db: Firestore): Router {
           return;
         }
         const outcome = await db.runTransaction(async (tx) => {
-          const [member, connection, owner, workspace] = await Promise.all([
+          const [ownerActive, storedMember, workspace, member, connection] = await Promise.all([
+            accountActiveInStore(uid),
+            platformStateStore.workspaces.members.get(context.workspaceId, memberUid),
+            platformStateStore.workspaces.records.get(context.workspaceId),
             tx.get(
               db.doc(`workspaces/${context.workspaceId}/members/${memberUid}`),
             ),
             tx.get(db.doc(`users/${uid}/integrations/google`)),
-            tx.get(db.doc(`users/${uid}`)),
-            tx.get(db.doc(`workspaces/${context.workspaceId}`)),
           ]);
-          if (
-            !accountAllowsInteractiveAccess(owner.data()) ||
-            workspace.data()?.ownerUid !== uid ||
-            workspace.data()?.ownerActive !== true
-          )
+          if (!ownerActive || workspace?.ownerUid !== uid || workspace.ownerActive !== true)
             return false;
           if (!permissions.length) {
             tx.set(db.doc(`users/${uid}/googleGrants/${memberUid}`), {
@@ -152,7 +149,7 @@ export function createGoogleGrantRoutes(db: Firestore): Router {
             return true;
           }
           if (
-            !isCanonicalWorkspaceMembership(member.data()) ||
+            !isCanonicalWorkspaceMembership(storedMember) ||
             connection.data()?.status !== "connected"
           )
             return false;

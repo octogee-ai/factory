@@ -4,6 +4,7 @@ const OPERATIONS = { table: "operations", aggregate: "operation", key: "id", exp
 const OPERATION_AUDITS = { table: "operation_audits", aggregate: "operation-audit", key: "id", expiry: "expire_at" };
 const ACCESS_GRANTS = [
     { table: "gateway_tickets", aggregate: "gateway-ticket", key: "ticket_id", expiry: "expires_at" },
+    { table: "gateway_ticket_mint_log", aggregate: "gateway-ticket", key: "id", expiry: "expires_at" },
     { table: "control_tickets", aggregate: "control-ticket", key: "ticket_hash", expiry: "expires_at" },
     { table: "control_sessions", aggregate: "control-session", key: "session_hash", expiry: "expires_at" },
 ];

@@ -3,7 +3,7 @@ import type { CollectionReference, DocumentData, DocumentReference, DocumentSnap
 import { MODEL_BROKER_GATEWAY_POINTERS_COLLECTION, MODEL_BROKER_TOKENS_COLLECTION } from "@octogee/shared/types/model-broker-usage";
 import { GATEWAY_ACCESS_AUDIT_COLLECTION } from "../../gateway-principal-access.js";
 import { OPENCLAW_CONTROL_TICKETS_COLLECTION } from "../../openclaw-control-tickets.js";
-import { MalformedRecordError, MissingRecordError, type RecordKey } from "../errors.js";
+import { MalformedRecordError, MissingRecordError, UnsupportedOperationError, type RecordKey } from "../errors.js";
 import type {
   AccessRepositories,
   BuilderSecret,
@@ -30,6 +30,7 @@ import type { FirestoreSession } from "./session.js";
 import {
   decodeDocumentData,
   encodeDocument,
+  encodePatch,
   revisionOf,
   STORED_AS_NUMBERS,
   storedAsTimestamps,
@@ -37,6 +38,7 @@ import {
 import { FirestoreFields, withStoredRevision } from "./workspaces.js";
 
 export const GATEWAY_TICKETS_COLLECTION = "gatewayTickets";
+export const GATEWAY_TICKET_MINT_LOG_COLLECTION = "gatewayTicketMintLog";
 export const OPENCLAW_CONTROL_SESSIONS_COLLECTION = "openclawControlSessions";
 
 const BUILDER_MATTERMOST_SECRET_ID = "mattermost";
@@ -319,10 +321,35 @@ async function fencedRead(
 
 function createGatewayTicketsRepository(session: FirestoreSession): GatewayTicketsRepository {
   const ref = (ticketId: string) => session.db.collection(GATEWAY_TICKETS_COLLECTION).doc(ticketId);
+  const mintLog = () => session.db.collection(GATEWAY_TICKET_MINT_LOG_COLLECTION);
 
   return {
     async get(ticketId) {
       return decodeGatewayTicket(await session.read("access.gatewayTickets.get", ref(ticketId)));
+    },
+
+    async countLive(uid, purpose, now) {
+      const query = session.db
+        .collection(GATEWAY_TICKETS_COLLECTION)
+        .where("uid", "==", uid)
+        .where("purpose", "==", purpose)
+        .where("expiresAt", ">", now);
+      return (await session.query("access.gatewayTickets.countLive", query)).size;
+    },
+
+    async countMintsSince(uid, purpose, since) {
+      const query = mintLog().where("uid", "==", uid).where("purpose", "==", purpose).where("mintedAt", ">", since);
+      return (await session.query("access.gatewayTickets.countMintsSince", query)).size;
+    },
+
+    async recordMint(mint) {
+      const entry = mintLog().doc();
+      await session.set(
+        "access.gatewayTickets.recordMint",
+        gatewayTicketKey(entry.id),
+        entry,
+        encodeDocument({ uid: mint.uid, purpose: mint.purpose, mintedAt: mint.mintedAt, expireAt: mint.expiresAt }, TICKET_TIMES),
+      );
     },
 
     async create(ticket) {
@@ -342,6 +369,22 @@ function createGatewayTicketsRepository(session: FirestoreSession): GatewayTicke
           TICKET_TIMES,
         ),
       );
+    },
+
+    async patchGrant(ticketId, patch, fence) {
+      const name = "access.gatewayTickets.patchGrant";
+      const key = gatewayTicketKey(ticketId);
+      assertNoReservedKeys(name, patch, GATEWAY_TICKET_FIELDS);
+      const data = encodePatch(patch, TICKET_TIMES);
+      if (fence?.revision === undefined) {
+        await session.update(name, key, ref(ticketId), data);
+        return;
+      }
+      await session.atomically(name, async (fenced) => {
+        const current = await fencedRead(fenced, name, key, ref(ticketId));
+        assertRevisionFence(key, fence.revision, revisionOf(current));
+        await fenced.update(name, key, ref(ticketId), data);
+      });
     },
 
     async delete(ticketId, fence) {
@@ -533,6 +576,22 @@ function createModelBrokerGatewayTokensRepository(session: FirestoreSession): Mo
   };
 }
 
+const UID_REFERENCING_ACCESS_QUERIES = [
+  { collection: GATEWAY_TICKETS_COLLECTION, field: "uid" },
+  { collection: GATEWAY_TICKET_MINT_LOG_COLLECTION, field: "uid" },
+  { collection: OPENCLAW_CONTROL_TICKETS_COLLECTION, field: "uid" },
+  { collection: OPENCLAW_CONTROL_SESSIONS_COLLECTION, field: "uid" },
+  { collection: GATEWAY_ACCESS_AUDIT_COLLECTION, field: "ownerUid" },
+  { collection: GATEWAY_ACCESS_AUDIT_COLLECTION, field: "actorUid" },
+  { collection: GATEWAY_ACCESS_AUDIT_COLLECTION, field: "granteeUid" },
+] as const;
+
+async function accessDocumentsForUid(session: FirestoreSession, uid: string): Promise<ReadonlyMap<string, DocumentReference>> {
+  const snapshots = await Promise.all(UID_REFERENCING_ACCESS_QUERIES.map(({ collection, field }) =>
+    session.query("access.listRecordsForUid", session.db.collection(collection).where(field, "==", uid))));
+  return new Map(snapshots.flatMap((snapshot) => snapshot.docs).map((doc) => [doc.ref.path, doc.ref]));
+}
+
 export function createFirestoreAccessRepositories(session: FirestoreSession): AccessRepositories {
   return {
     gatewayTickets: createGatewayTicketsRepository(session),
@@ -541,5 +600,18 @@ export function createFirestoreAccessRepositories(session: FirestoreSession): Ac
     accessAudit: createAccessAuditRepository(session),
     modelBrokerTokens: createModelBrokerTokensRepository(session),
     modelBrokerGatewayTokens: createModelBrokerGatewayTokensRepository(session),
+
+    async listRecordsForUid(uid) {
+      return [...(await accessDocumentsForUid(session, uid)).keys()];
+    },
+
+    async eraseForUid(uid) {
+      if (session.transactional) {
+        throw new UnsupportedOperationError("firestore", "access.eraseForUid inside a transaction", "backend-capability");
+      }
+      const writer = session.db.bulkWriter();
+      const refs = [...(await accessDocumentsForUid(session, uid)).values()];
+      await Promise.all([...refs.map((ref) => writer.delete(ref)), writer.close()]);
+    },
   };
 }

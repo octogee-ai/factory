@@ -11,8 +11,7 @@ router.post("/:wid/:pid/star", async (req: Request, res: Response) => {
   const uid = req.uid!;
 
   try {
-    const projectRef = db.doc(`workspaces/${wid}/projects/${pid}`);
-    const project = await readProject(projectRef);
+    const project = await readProject(wid, pid);
     if (!project) {
       res.status(404).json({ error: "Project not found" });
       return;

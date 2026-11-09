@@ -25,6 +25,7 @@ export interface ReportUsageForUidInput {
     usage: UsageData;
     log: LogFn;
     gatewayId: string;
+    platformWorkspaceSlug?: string | null;
 }
 export interface StartUsageTrackingOptions {
     db: Firestore;

@@ -10,7 +10,7 @@ import {
   type OnboardingProject,
   type ProjectDeliveryTarget,
 } from "./project-agent-delivery.js";
-import { FieldValue, db } from "./db.js";
+import { db } from "./db.js";
 import { platformStateStore } from "./platform-state.js";
 import { readMattermostSecret } from "./mattermost-secret.js";
 import { mmApi } from "./mattermost.js";
@@ -38,38 +38,69 @@ export function parseProjectHandoff(value: unknown): ProjectHandoff | null {
   return result as unknown as ProjectHandoff;
 }
 
+type HandoffAgent = Record<string, unknown> & {
+  kickoff?: { status?: string };
+  handoff?: { status?: string; generation?: number };
+  requestedName?: string;
+  deliveryLeaseUntil?: number;
+};
+
 function initialPostStarted(state: { status?: string } | undefined, delivery: { postAttempted?: boolean } | undefined): boolean {
   return state?.status === "sent" || delivery?.postAttempted === true;
 }
 
+function handoffAlreadyQueued(existing: FirebaseFirestore.DocumentData | undefined, agent: HandoffAgent, requested: ProjectHandoff): boolean {
+  return existing?.generation === agent.handoff?.generation
+    && existing?.message === requested.message
+    && (["name", "emoji", "persona"] as const).every(key => existing?.identity?.[key] === requested[key]);
+}
+
 export async function queueProjectHandoff(uid: string, workspaceId: string, projectSlug: string, handoff: ProjectHandoff): Promise<void> {
-  const ref = db.doc(`workspaces/${workspaceId}/projects/${projectSlug}`);
-  const handoffRef = db.doc(`${ref.path}/agentState/handoff`);
-  await db.runTransaction(async (tx) => {
-    const project = (await tx.get(ref)).data();
+  const agentStatePath = `workspaces/${workspaceId}/projects/${projectSlug}/agentState`;
+  const handoffRef = db.doc(`${agentStatePath}/handoff`);
+  const [existingSnapshot, deliverySnapshot, kickoffDeliverySnapshot] = await Promise.all([
+    handoffRef.get(),
+    db.doc(`${agentStatePath}/handoffDelivery`).get(),
+    db.doc(`${agentStatePath}/kickoffDelivery`).get(),
+  ]);
+  const existing = existingSnapshot.data();
+  const queued = await platformStateStore.transaction({ label: "project-agent-onboarding.queue-handoff" }, async (tx) => {
+    const { projects } = tx.workspaces;
+    const project = await projects.get(workspaceId, projectSlug);
     if (project?.ownerUid !== uid || project.provisioningState !== "active" || !projectAgentConfigured(project.agent)) {
       throw new Error("An active project with its own agent is required");
     }
-    const existing = (await tx.get(handoffRef)).data();
-    const delivery = (await tx.get(db.doc(`${ref.path}/agentState/handoffDelivery`))).data();
-    const kickoffDelivery = (await tx.get(db.doc(`${ref.path}/agentState/kickoffDelivery`))).data();
-    if (initialPostStarted(project.agent.kickoff, kickoffDelivery)) {
+    const agent = project.agent as HandoffAgent;
+    if (initialPostStarted(agent.kickoff, kickoffDeliverySnapshot.data())) {
       throw new Error("This project already has its initial kickoff; continue in its chat");
     }
-    const identity = { name: project.agent.requestedName || handoff.name, emoji: handoff.emoji, persona: handoff.persona };
-    if (existing?.message === handoff.message && (["name", "emoji", "persona"] as const)
-      .every(key => existing.identity?.[key] === identity[key])) return;
-    if (initialPostStarted(project.agent.handoff, delivery)) {
+    const next = { name: agent.requestedName || handoff.name, emoji: handoff.emoji, persona: handoff.persona };
+    if (handoffAlreadyQueued(existing, agent, { ...next, message: handoff.message })) return null;
+    if (initialPostStarted(agent.handoff, deliverySnapshot.data())) {
       throw new Error("This project already has its initial handoff; continue in its chat");
     }
-    if (project.agent.deliveryLeaseUntil > Date.now()) throw new Error("Project agent delivery is in progress");
-    tx.set(handoffRef, { message: handoff.message, identity });
-    tx.update(ref, {
-      "agent.identity": identity,
-      "agent.handoff": { status: "pending" },
-      "agent.kickoff": FieldValue.delete(),
-      "agent.updatedAt": FieldValue.serverTimestamp(),
-    });
+    if ((agent.deliveryLeaseUntil ?? 0) > Date.now()) throw new Error("Project agent delivery is in progress");
+    const remaining = Object.fromEntries(Object.entries(agent).filter(([key]) => key !== "kickoff"));
+    const generation = (agent.handoff?.generation ?? 0) + 1;
+    await projects.patch(
+      workspaceId,
+      projectSlug,
+      { agent: { ...remaining, identity: next, handoff: { status: "pending", generation }, updatedAt: { serverNow: true } } },
+      { revision: project.revision },
+    );
+    return { identity: next, generation };
+  });
+  if (queued) await writeHandoffMessage(handoffRef, { message: handoff.message, ...queued });
+}
+
+async function writeHandoffMessage(
+  ref: FirebaseFirestore.DocumentReference,
+  document: { message: string; identity: Omit<ProjectHandoff, "message">; generation: number },
+): Promise<void> {
+  await db.runTransaction(async (tx) => {
+    const current = await tx.get(ref);
+    if ((current.data()?.generation ?? 0) > document.generation) return;
+    tx.set(ref, document);
   });
 }
 
@@ -107,16 +138,17 @@ async function ensureCoachMembership(channelId: string, coachId: string): Promis
   }
 }
 
-async function readHandoffMessage(workspaceId: string, projectSlug: string): Promise<string | undefined> {
-  const handoff = await db.doc(`workspaces/${workspaceId}/projects/${projectSlug}/agentState/handoff`).get();
-  return handoff.data()?.message;
+async function readHandoffMessage(target: ProjectDeliveryTarget, generation: number | undefined): Promise<string | undefined> {
+  const handoff = await db.doc(`workspaces/${target.workspaceId}/projects/${target.projectSlug}/agentState/handoff`).get();
+  const stored = handoff.data();
+  return stored?.generation === generation ? stored?.message : undefined;
 }
 
 async function postOnboarding(uid: string, target: ProjectDeliveryTarget, claim: DeliveryClaim): Promise<string> {
   const { kind } = claim;
   const { workspaceId, projectSlug } = target;
   const project = { ...claim.project, handoffMessage: kind === "handoff"
-    ? await readHandoffMessage(workspaceId, projectSlug) : undefined };
+    ? await readHandoffMessage(target, claim.agent.handoff?.generation) : undefined };
   const [coach, coachIdentity, channel] = await Promise.all([
     readMattermostSecret(platformStateStore, uid, "coachMattermost"),
     platformStateStore.workspaces.agentIdentities.get(uid),

@@ -68,7 +68,7 @@ export async function resolveWorkspaceConversationScope(state: PlatformStateRepo
 async function resolveNativeConversationScope(deps: WorkspaceConversationDeps, claim: WorkspaceConversationScopeClaim) {
   if (!validScopeClaim(claim)) return null;
   const { projectId, uid, ownerUid, workspaceSlug } = claim;
-  const projectMember = projectId !== undefined && uid !== ownerUid && await projectMemberExists(deps.db, workspaceSlug, projectId, uid);
+  const projectMember = projectId !== undefined && uid !== ownerUid && await projectMemberExists(deps.store, workspaceSlug, projectId, uid);
   return withGatewayOwnerTier(
     { store: deps.store, readBuilderTier: deps.readBuilderTier, ownerUid: claim.ownerUid, now: Date.now() },
     async (ownerTier) => {

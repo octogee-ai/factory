@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { parseArtifactRequest, type ArtifactJob } from "./chat-artifacts.js";
 import {
   ArtifactRegistry,
@@ -271,7 +273,7 @@ interface FakeQuery {
   limit(count: number): { get(): Promise<{ docs: FakeQueryDocumentSnapshot[] }> };
 }
 
-function firestoreHarness() {
+function firestoreHarness(platformState?: PlatformStateStore) {
   const documents = new Map<string, Record<string, unknown>>();
   documents.set("users/uid-alice", { accountLifecycle: { status: "active" } });
   let now = new Date("2026-07-13T12:00:00.000Z");
@@ -312,7 +314,7 @@ function firestoreHarness() {
       set: (ref, value) => { documents.set(ref.path, structuredClone(value)); },
     }),
   };
-  const store = createFirestoreArtifactJobStore(db);
+  const store = createFirestoreArtifactJobStore(db, platformState ?? createDocumentFixtureStore(documents));
   const registry = new ArtifactRegistry(store, {
     now: () => now,
     leaseToken: () => `lease-${"x".repeat(32)}`,
@@ -357,6 +359,14 @@ describe("Firestore artifact job store", () => {
     expect(claim?.job.artifactId).toBe(created.artifactId);
     expect(claim?.job.attempt).toBe(2);
     expect(claim?.job.lease?.workerId).toBe("pdf-worker-2");
+  });
+
+  it("decides workspace owner activity from the platform store rather than the product document", async () => {
+    const harness = firestoreHarness(createDocumentFixtureStore({
+      "users/uid-alice": { accountLifecycle: { status: "deletion_scheduled" } },
+    }));
+
+    await expect(harness.registry.enqueue(REQUEST, OWNERSHIP)).rejects.toThrow("workspace owner is not active");
   });
 
   it("hides existing jobs and rejects worker transactions after the workspace owner is suspended", async () => {

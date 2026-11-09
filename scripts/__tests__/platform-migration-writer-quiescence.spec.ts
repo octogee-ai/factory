@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -7,6 +9,7 @@ import {
   PLATFORM_MIGRATION_WRITER_READINESS_TIMEOUT_MILLISECONDS,
   platformMigrationWriterQuiescenceConfirmation,
   PLATFORM_MIGRATION_CRONJOB_WRITERS,
+  PLATFORM_MIGRATION_SCHEDULED_WRITER_FUNCTIONS,
   PLATFORM_MIGRATION_SCHEDULER_ATTEMPT_DEADLINE_MILLISECONDS,
   platformMigrationScheduledWriterNames,
   assertPlatformMigrationScheduledWritersQuiesced,
@@ -307,6 +310,41 @@ describe("platform migration writer quiescence", () => {
       });
   });
 
+  it.each([
+    ["still running", { active: 1 }],
+    ["never reached a terminal condition", { active: 0 }],
+  ])("does not claim quiescence while a standalone Job is %s", async (_label, status) => {
+    const state = dependencies();
+    await executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies);
+    expect(() => assertPlatformMigrationScheduledWritersQuiesced(
+      state.dependencies.settingsForTarget(targetId),
+      state.getReceipt() as never,
+      scheduledWriters.map((writer) => ({ ...writer, state: "PAUSED" })),
+      kubernetesCronJobs(cronJobs.map((cronJob) => ({ ...cronJob, suspended: true }))),
+      [{ metadata: { name: "operator-backfill" }, status }],
+    )).toThrow("standalone Job can still write: operator-backfill");
+  });
+
+  it("accepts a finished standalone Job", async () => {
+    const state = dependencies();
+    await executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies);
+    expect(() => assertPlatformMigrationScheduledWritersQuiesced(
+      state.dependencies.settingsForTarget(targetId),
+      state.getReceipt() as never,
+      scheduledWriters.map((writer) => ({ ...writer, state: "PAUSED" })),
+      kubernetesCronJobs(cronJobs.map((cronJob) => ({ ...cronJob, suspended: true }))),
+      [{ metadata: { name: "operator-backfill" }, status: { succeeded: 1, conditions: [{ type: "Complete", status: "True" }] } }],
+    )).not.toThrow();
+  });
+
+  it("declares exactly the scheduled Functions the functions package deploys", () => {
+    const functionsSource = path.resolve(import.meta.dirname, "../../functions/src");
+    const scheduled = fs.readdirSync(functionsSource, { recursive: true, encoding: "utf8" })
+      .filter((file) => file.endsWith(".ts") && !file.endsWith(".spec.ts") && !file.includes("__tests__"))
+      .flatMap((file) => [...fs.readFileSync(path.join(functionsSource, file), "utf8").matchAll(/export const (\w+) = onSchedule\(/gu)].map((match) => match[1]));
+    expect([...PLATFORM_MIGRATION_SCHEDULED_WRITER_FUNCTIONS].sort()).toEqual(scheduled.sort());
+  });
+
   it("binds both completed migration receipts to the exact writer-quiescence revision", () => {
     const receipt = {
       schemaVersion: 1 as const,
@@ -379,8 +417,9 @@ describe("platform migration writer quiescence", () => {
     await executePlatformMigrationWriterQuiescence(args("quiesce"), state.dependencies);
     expect(state.schedulerPauses).toEqual([
       "firebase-schedule-cleanupFeedRetention-us-west1",
-      "firebase-schedule-processGatewayAccessLifecycle-us-west1",
       "firebase-schedule-reapExpiredAgentImports-us-west1",
+      "firebase-schedule-sweepProvisioningStarts-us-west1",
+      "firebase-schedule-sweepTrialGrants-us-west1",
     ]);
     expect(state.cronSuspensions).toEqual(migrationCronJobNames.map((name) => `${name}=true`));
     expect(state.getReceipt()).toMatchObject({

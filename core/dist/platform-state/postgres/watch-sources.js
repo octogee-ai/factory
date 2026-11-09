@@ -4,7 +4,7 @@ import { postgresFleetRegistryWatchSource } from "./fleet-registry.js";
 import { postgresAssignmentsWatchSource, postgresGatewaysWatchSource } from "./gateways.js";
 import { decodeOperation } from "./journal.js";
 import { postgresMigrationTasksWatchSource } from "./migration-tasks.js";
-import { postgresAgentIdentitiesWatchSource, postgresWorkspaceChannelsWatchSource, postgresWorkspaceMembersWatchSource, postgresWorkspaceProjectsWatchSource, postgresWorkspacesWatchSource, } from "./workspaces.js";
+import { postgresAgentIdentitiesWatchSource, postgresWorkspaceChannelsWatchSource, postgresWorkspaceMembersWatchSource, postgresWorkspaceProjectMembersWatchSource, postgresWorkspaceProjectsWatchSource, postgresWorkspacesWatchSource, } from "./workspaces.js";
 const operationsWatchSource = (filter) => {
     const statuses = [...filter.statuses];
     return {
@@ -23,6 +23,7 @@ const WATCH_SOURCES = {
     workspaces: postgresWorkspacesWatchSource,
     workspaceMembers: postgresWorkspaceMembersWatchSource,
     workspaceProjects: postgresWorkspaceProjectsWatchSource,
+    workspaceProjectMembers: postgresWorkspaceProjectMembersWatchSource,
     workspaceChannels: postgresWorkspaceChannelsWatchSource,
     agentIdentities: postgresAgentIdentitiesWatchSource,
     gateways: postgresGatewaysWatchSource,

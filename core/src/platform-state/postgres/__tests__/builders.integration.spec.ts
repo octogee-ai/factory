@@ -208,6 +208,17 @@ describe.skipIf(!dsn)("PostgreSQL Builder records: patches", () => {
     expect((await records.get("alice"))!.accountLifecycle).toEqual({ status: "active" });
   });
 
+  it("reads the role alone, and reports none for an unknown user", async () => {
+    const { records } = fixture();
+    await records.create({ uid: "role-reader", createdAt: NOW });
+    await records.patch("role-reader", { role: "admin" });
+
+    expect(await records.getRole("role-reader")).toBe("admin");
+    await records.patch("role-reader", { role: { clear: true } });
+    expect(await records.getRole("role-reader")).toBeNull();
+    expect(await records.getRole("nobody")).toBeNull();
+  });
+
   it("stores the role on the record, reads it in a transaction, and clears it", async () => {
     const { records, store } = fixture();
     await records.create({ uid: "alice", createdAt: NOW });

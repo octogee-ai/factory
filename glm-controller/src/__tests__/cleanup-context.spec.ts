@@ -88,6 +88,10 @@ function buildDb(initialDocs: Record<string, Record<string, unknown> | undefined
   };
 }
 
+function agentImportDoc(uid: string, importId: string): Record<string, unknown> {
+  return { uid, importId, status: "complete", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+}
+
 function contextDeps(initialDocs: Record<string, Record<string, unknown> | undefined>): ContextDeps {
   const account = (uid: string) => {
     const data = initialDocs[`users/${uid}`];
@@ -410,8 +414,8 @@ const deps = contextDeps({
   it("captures every agent import staging prefix owned by the user", async () => {
     const deps = contextDeps({
       "users/uid-alice": { username: "alice" },
-      "agentImports/import-owned": { uid: "uid-alice" },
-      "agentImports/import-other": { uid: "uid-other" },
+      "users/uid-alice/agentImports/import-owned": agentImportDoc("uid-alice", "import-owned"),
+      "users/uid-other/agentImports/import-other": agentImportDoc("uid-other", "import-other"),
     });
 
     const ctx = await loadCustomerCleanupContext(

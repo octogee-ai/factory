@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const storeDocs = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 const mockSet = vi.fn().mockResolvedValue(undefined);
 const mockDoc = vi.fn(() => ({ set: mockSet }));
 const mockMmApi = vi.fn().mockResolvedValue({});
@@ -9,6 +10,10 @@ const mockResolveFileTarget = vi.fn();
 const mockStoreWorkspaceBlob = vi.fn();
 const mockRemoveWorkspaceBlob = vi.fn();
 
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(storeDocs) };
+});
 vi.mock("../lib/db.js", () => ({
   db: { doc: (p: string) => mockDoc(p) },
   FieldValue: {
@@ -41,7 +46,9 @@ const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockReadAgent.mockResolvedValue({ id: "u1", mattermost: { userId: "coach-mm-u1" } });
+  storeDocs.clear();
+  storeDocs.set("agents/u1", { mattermost: { userId: "coach-mm-u1" } });
+  mockReadAgent.mockResolvedValue({ id: "u1" });
   mockResolveFileTarget.mockResolvedValue({
     ok: true,
     target: { slug: "alice", org: "octogee-alice", repoName: "alice-workspace", gcsPrefix: "customers/alice", sudoUser: "ws-alice" },
@@ -156,7 +163,7 @@ describe("syncCoachIdentity", () => {
   });
 
   it("skips Mattermost when the coach has no bot id", async () => {
-    mockReadAgent.mockResolvedValue({ id: "u1", mattermost: {} });
+    storeDocs.set("agents/u1", {});
     await syncCoachIdentity("u1", { name: "Scout" });
     expect(mockMmApi).not.toHaveBeenCalled();
   });

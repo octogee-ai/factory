@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import type { Firestore } from "firebase-admin/firestore";
 import {
   claimGatewayRetirementInStore,
   GatewayRetirementReleaseUnconvergedError,
@@ -19,8 +18,6 @@ import type {
   PlatformStateTransaction,
   Stored,
 } from "@octogee/core/platform-state";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
 import { schedulerHandoffAwaitingRelease } from "../../scheduler-handoff-release.js";
 
 export type OwnedGatewayRetirementOutcome =
@@ -30,7 +27,6 @@ export type OwnedGatewayRetirementOutcome =
 
 export interface OwnedGatewayRetirementInput {
   store: PlatformStateStore;
-  db: Pick<Firestore, "collection" | "recursiveDelete">;
   uid: string;
   deletionId: string;
   now: number;
@@ -163,14 +159,6 @@ function disposableAllocationGeneration(gatewayId: string, root: RootFields): nu
   return allocation.generation as number;
 }
 
-async function deleteGatewayRootChildren(db: OwnedGatewayRetirementInput["db"], gatewayId: string): Promise<void> {
-  const children = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).listCollections();
-  for (const collection of children) {
-    if (collection.id === GATEWAY_ASSIGNMENTS_SUBCOLLECTION) continue;
-    await db.recursiveDelete(collection);
-  }
-}
-
 async function finishCompletedGatewayRetirement(
   input: OwnedGatewayRetirementInput,
   selected: Stored<GatewayRoot>,
@@ -217,7 +205,7 @@ async function finishCompletedGatewayRetirement(
   );
   if (!cleanup) return true;
   if (proof) await input.preserveRetirementProof!(proof);
-  await deleteGatewayRootChildren(input.db, gatewayId);
+  await input.store.gateways.roots.deleteChildren(gatewayId);
   return input.store.transaction({ label: "customer-deletion.owned-gateway-retirement.finish" }, async (transaction) => {
     const current = await canFinish(transaction);
     if (!current || !isDeepStrictEqual(current, cleanup)) return true;

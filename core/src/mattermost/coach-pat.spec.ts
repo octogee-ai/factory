@@ -15,7 +15,8 @@ function fetchOver(mmApiCall: MmFake): typeof fetch {
 
 function mintDeps(d: ReturnType<typeof deps>) {
   return {
-    secrets: d.secrets,
+    secrets: { put: d.put },
+    now: d.now,
     channelHost: createMattermostChannelHost({
       baseUrl: "http://mm.test",
       adminToken: "admin",
@@ -27,8 +28,9 @@ function mintDeps(d: ReturnType<typeof deps>) {
 
 function deps() {
   return {
-    secrets: { put: vi.fn(async () => undefined) },
+    put: vi.fn(async () => undefined),
     mmApiCall: vi.fn<MmFake>(),
+    now: vi.fn(() => ({ serverNow: true as const })),
     log: vi.fn(),
   };
 }
@@ -76,7 +78,7 @@ describe("mintAndPersistCoachToken", () => {
     expect(d.mmApiCall).toHaveBeenCalledWith("POST", "/users/mm-coach/tokens", {
       description: COACH_PAT_DESCRIPTION,
     });
-    expect(d.secrets.put).toHaveBeenCalledWith("uid-coach", {
+    expect(d.put).toHaveBeenCalledWith("uid-coach", {
       kind: "coach-mattermost",
       secretId: "coachMattermost",
       projectId: null,
@@ -93,11 +95,11 @@ describe("mintAndPersistCoachToken", () => {
 
     await expect(mintAndPersistCoachToken(mintDeps(d), "uid-coach", "")).resolves.toBeNull();
     expect(d.mmApiCall).not.toHaveBeenCalled();
-    expect(d.secrets.put).not.toHaveBeenCalled();
+    expect(d.put).not.toHaveBeenCalled();
 
     d.mmApiCall = mm({ mintResult: { ok: true } });
     await expect(mintAndPersistCoachToken(mintDeps(d), "uid-coach", "mm-coach")).resolves.toBeNull();
-    expect(d.secrets.put).not.toHaveBeenCalled();
+    expect(d.put).not.toHaveBeenCalled();
   });
 
   it("continues minting when stale-token listing or revoke fails", async () => {

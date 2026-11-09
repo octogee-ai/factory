@@ -1,4 +1,5 @@
 import { FieldValue, db } from "./db.js";
+import { platformStateStore } from "./platform-state.js";
 import { logger } from "../middleware/logging.js";
 import { mmApi } from "./mattermost.js";
 import { ChannelNameInUseError, createFreshPrivateChannel } from "./mattermost-channel-name.js";
@@ -135,12 +136,11 @@ export async function createProjectForActor(
   if (!planResult.ok) return planResult.result;
   const plan = planResult.plan;
 
-  const projectRef = db.doc(`workspaces/${plan.workspaceId}/projects/${plan.slug}`);
-  const existing = await projectRef.get();
-  if (existing.exists) {
+  const existing = await platformStateStore.workspaces.projects.get(plan.workspaceId, plan.slug);
+  if (existing) {
     // Deterministic 409 before the plan gate — a duplicate slug is a slug
     // problem, not an upgrade prompt, and this avoids the aggregate count read.
-    return bad(409, "A project with this slug already exists in your workspace");
+    return slugTaken();
   }
 
   const limitFailure = await enforceProjectLimit(plan);
@@ -154,7 +154,8 @@ export async function createProjectForActor(
     if (proofFailure) return proofFailure;
   }
 
-  await writeProvisioningProject(projectRef, plan);
+  const reservationFailure = await reserveProvisioningProject(plan);
+  if (reservationFailure) return reservationFailure;
   if (plan.recipe !== "static-site" && prewarmProjectRunCapacity) {
     void prewarmProjectCapacity(plan, prewarmProjectRunCapacity);
   }
@@ -164,11 +165,12 @@ export async function createProjectForActor(
   };
 
   try {
-    await writeProjectOwnerMember(projectRef, plan.uid);
+    await writeProjectProductFields(plan);
+    await writeProjectOwnerMember(plan);
     const callerCtx = await getWorkspaceMmContext(plan.uid, plan.workspaceId, plan.userData);
-    const channel = await provisionProjectMattermost(projectRef, plan, callerCtx, artifacts);
+    const channel = await provisionProjectMattermost(plan, callerCtx, artifacts);
     await provisionProjectCodeRepo(plan, artifacts);
-    await markProjectActive(projectRef, plan.targetVisibility);
+    await markProjectActive(plan);
     await provisionProjectAgentByDefault(plan);
     logger.info(`[projects] Created project ${plan.workspaceId}/${plan.slug}`, {
       source: plan.source,
@@ -185,7 +187,7 @@ export async function createProjectForActor(
       },
     };
   } catch (error) {
-    return failProjectProvisioning(projectRef, plan, artifacts, error);
+    return failProjectProvisioning(plan, artifacts, error);
   }
 }
 
@@ -221,13 +223,15 @@ async function enforceProjectLimit(
     return bad(402, "Projects are available on paid plans — upgrade to start building", { maxProjects });
   }
 
-  const owned = await db
-    .collection(`workspaces/${plan.workspaceId}/projects`)
-    .where("ownerUid", "==", plan.uid)
-    .count()
-    .get();
-  if (owned.data().count < maxProjects) return null;
+  const owned = await platformStateStore.workspaces.projects.listByOwner(plan.uid, plan.workspaceId);
+  return owned.length < maxProjects ? null : projectLimitReached(maxProjects);
+}
 
+function slugTaken(): ProjectCreateResult {
+  return bad(409, "A project with this slug already exists in your workspace");
+}
+
+function projectLimitReached(maxProjects: number): ProjectCreateResult {
   return bad(
     402,
     `Your plan includes ${maxProjects} project${maxProjects === 1 ? "" : "s"}. Upgrade for more.`,
@@ -323,55 +327,77 @@ function nonEmptyStringOr<T>(value: unknown, fallback: T): string | T {
   return typeof value === "string" && value.length > 0 ? value : fallback;
 }
 
-async function writeProvisioningProject(
-  projectRef: FirebaseFirestore.DocumentReference,
-  plan: ProjectCreatePlan,
-): Promise<void> {
-  await projectRef.set({
-    agent: {
-      requestedName: plan.agentName,
-      identity: { name: plan.agentName || plan.slug, emoji: "🤖", persona: "" },
-      ...(plan.source === "ui" ? { kickoff: { status: "pending" } } : {}),
-    },
+function projectDocument(plan: ProjectCreatePlan): FirebaseFirestore.DocumentReference {
+  return db.doc(`workspaces/${plan.workspaceId}/projects/${plan.slug}`);
+}
+
+async function reserveProvisioningProject(plan: ProjectCreatePlan): Promise<ProjectCreateResult | null> {
+  const maxProjects = userEntitlements().maxProjects(plan.userData ?? {});
+  return platformStateStore.transaction({ label: "project-create.reserve" }, async (tx) => {
+    const { projects } = tx.workspaces;
+    if (await projects.get(plan.workspaceId, plan.slug)) return slugTaken();
+    if (maxProjects !== "unlimited") {
+      const owned = await projects.listByOwner(plan.uid, plan.workspaceId);
+      if (owned.length >= maxProjects) return projectLimitReached(maxProjects);
+    }
+    await projects.put({
+      workspaceSlug: plan.workspaceId,
+      projectSlug: plan.slug,
+      ownerUid: plan.uid,
+      ownerActive: true,
+      giteaRepoName: plan.giteaRepoName,
+      provisioningState: "provisioning",
+      provisioningError: null,
+      pendingVisibility: plan.targetVisibility,
+      visibility: "private",
+      checkoutEnabled: null,
+      status: plan.status,
+      archived: null,
+      archivedAt: null,
+      commercialLifecycleStatus: null,
+      repoSource: plan.ghRepoSource,
+      agent: {
+        requestedName: plan.agentName,
+        identity: { name: plan.agentName || plan.slug, emoji: "🤖", persona: "" },
+        ...(plan.source === "ui" ? { kickoff: { status: "pending" } } : {}),
+      },
+      updatedAt: { serverNow: true },
+    });
+    return null;
+  });
+}
+
+async function writeProjectProductFields(plan: ProjectCreatePlan): Promise<void> {
+  await projectDocument(plan).set({
     id: plan.slug,
-    ownerUid: plan.uid,
-    ownerActive: true,
     workspaceId: plan.workspaceId,
     slug: plan.slug,
+    ownerUid: plan.uid,
     name: plan.trimmedName,
     tagline: plan.trimmedTagline,
     description: "",
     category: plan.category,
     projectType: plan.projectType,
-    status: plan.status,
-    visibility: "private",
-    pendingVisibility: plan.targetVisibility,
-    provisioningState: "provisioning",
     canvasFile: "README.md",
     recipe: plan.recipe,
     publishedUrl: null,
-    giteaRepoName: plan.giteaRepoName,
-    repoSource: plan.ghRepoSource,
     starCount: 0,
     memberCount: 1,
     createdAt: FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp(),
-  });
+  }, { merge: true });
 }
 
-async function writeProjectOwnerMember(
-  projectRef: FirebaseFirestore.DocumentReference,
-  uid: string,
-): Promise<void> {
-  await projectRef.collection("members").doc(uid).set({
-    id: uid,
+async function writeProjectOwnerMember(plan: ProjectCreatePlan): Promise<void> {
+  await platformStateStore.workspaces.projectMembers.put({
+    workspaceSlug: plan.workspaceId,
+    projectSlug: plan.slug,
+    uid: plan.uid,
     role: "owner",
-    joinedAt: FieldValue.serverTimestamp(),
+    joinedAt: { serverNow: true },
   });
 }
 
 async function provisionProjectMattermost(
-  projectRef: FirebaseFirestore.DocumentReference,
   plan: ProjectCreatePlan,
   callerCtx: WorkspaceMmContext | null,
   artifacts: ProjectProvisioningArtifacts,
@@ -386,7 +412,7 @@ async function provisionProjectMattermost(
 
   const mmChannelId = await createMattermostProjectChannel(plan, teamId, artifacts);
   try {
-    await writeProjectGeneralChannel(projectRef, mmChannelId);
+    await writeProjectGeneralChannel(plan, mmChannelId);
     artifacts.generalChannelStored = true;
   } catch (error) {
     throw new ProjectProvisioningError(
@@ -457,17 +483,17 @@ async function addMattermostChannelMember(
   }
 }
 
-async function writeProjectGeneralChannel(
-  projectRef: FirebaseFirestore.DocumentReference,
-  mmChannelId: string,
-): Promise<void> {
-  await projectRef.collection("channels").doc("general").set({
-    id: "general",
+async function writeProjectGeneralChannel(plan: ProjectCreatePlan, mmChannelId: string): Promise<void> {
+  await platformStateStore.workspaces.channels.put({
+    scope: { workspaceSlug: plan.workspaceId, projectSlug: plan.slug },
+    channelId: "general",
     kind: "general",
-    name: "general",
-    mattermost: { channelId: mmChannelId },
-    createdAt: FieldValue.serverTimestamp(),
+    mattermostChannelId: mmChannelId,
+    archivedAt: null,
+    createdBy: null,
+    createdAt: { serverNow: true },
   });
+  await projectDocument(plan).collection("channels").doc("general").set({ name: "general" }, { merge: true });
 }
 
 async function provisionProjectCodeRepo(
@@ -493,7 +519,6 @@ async function provisionProjectCodeRepo(
 }
 
 async function failProjectProvisioning(
-  projectRef: FirebaseFirestore.DocumentReference,
   plan: ProjectCreatePlan,
   artifacts: ProjectProvisioningArtifacts,
   error: unknown,
@@ -502,26 +527,26 @@ async function failProjectProvisioning(
   const responseError = error instanceof ProjectProvisioningError
     ? error.responseError
     : "Project provisioning failed - could not complete setup";
-  await projectRef.update({
+  await platformStateStore.workspaces.projects.patch(plan.workspaceId, plan.slug, {
     provisioningState: "failed",
     provisioningError: provisioningError.slice(0, 500),
     provisioningCleanup: {
       status: "in_progress",
       error: null,
     },
-    updatedAt: FieldValue.serverTimestamp(),
+    updatedAt: { serverNow: true },
   });
   logger.error(`[projects] Provisioning failed for ${plan.workspaceId}/${plan.slug}: ${provisioningError}`);
 
   try {
-    await cleanupProjectProvisioning(projectRef, plan, artifacts);
-    await projectRef.update({
+    await cleanupProjectProvisioning(plan, artifacts);
+    await platformStateStore.workspaces.projects.patch(plan.workspaceId, plan.slug, {
       provisioningCleanup: {
         status: "complete",
         error: null,
-        completedAt: FieldValue.serverTimestamp(),
+        completedAt: { serverNow: true },
       },
-      updatedAt: FieldValue.serverTimestamp(),
+      updatedAt: { serverNow: true },
     });
     return bad(502, responseError, {
       workspaceId: plan.workspaceId,
@@ -530,12 +555,12 @@ async function failProjectProvisioning(
     });
   } catch (cleanupError) {
     const cleanupMessage = errorMessage(cleanupError);
-    await projectRef.update({
+    await platformStateStore.workspaces.projects.patch(plan.workspaceId, plan.slug, {
       provisioningCleanup: {
         status: "failed",
         error: cleanupMessage.slice(0, 500),
       },
-      updatedAt: FieldValue.serverTimestamp(),
+      updatedAt: { serverNow: true },
     });
     logger.error(
       `[projects] Provisioning cleanup failed for ${plan.workspaceId}/${plan.slug}: ${cleanupMessage}`,
@@ -549,7 +574,6 @@ async function failProjectProvisioning(
 }
 
 async function cleanupProjectProvisioning(
-  projectRef: FirebaseFirestore.DocumentReference,
   plan: ProjectCreatePlan,
   artifacts: ProjectProvisioningArtifacts,
 ): Promise<void> {
@@ -610,16 +634,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function markProjectActive(
-  projectRef: FirebaseFirestore.DocumentReference,
-  targetVisibility: string,
-): Promise<void> {
-  await projectRef.update({
+async function markProjectActive(plan: ProjectCreatePlan): Promise<void> {
+  await platformStateStore.workspaces.projects.patch(plan.workspaceId, plan.slug, {
     provisioningState: "active",
     provisioningError: null,
-    visibility: targetVisibility,
+    visibility: plan.targetVisibility,
     pendingVisibility: null,
-    updatedAt: FieldValue.serverTimestamp(),
+    updatedAt: { serverNow: true },
   });
 }
 

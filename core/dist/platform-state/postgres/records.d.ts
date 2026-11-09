@@ -26,4 +26,5 @@ export declare function selectRecords(session: PostgresSession, operation: strin
 export declare function selectByKey(session: PostgresSession, operation: string, target: RecordTarget): Promise<Row | null>;
 export declare function insertRecord(session: PostgresSession, operation: string, table: TableSpec, input: object, mode: "create" | "put"): Promise<void>;
 export declare function updateRecord(session: PostgresSession, operation: string, target: RecordTarget, patch: object, fences: readonly FenceCheck[]): Promise<void>;
+export declare function mergeJsonColumn(session: PostgresSession, operation: string, target: RecordTarget, spec: ColumnSpec, additions: object, fences: readonly FenceCheck[]): Promise<void>;
 export declare function deleteRecord(session: PostgresSession, operation: string, target: RecordTarget, fences?: readonly FenceCheck[]): Promise<void>;

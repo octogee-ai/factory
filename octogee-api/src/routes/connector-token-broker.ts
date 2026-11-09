@@ -156,15 +156,15 @@ function projectRepoSourceProvider(repoSource: OpaqueMap | null): string | null 
 }
 
 async function projectAccessAuthorized(
-  input: { db: Firestore; store: PlatformStateRepositories; uid: string; connectorId: string; access: ProjectAccessContext },
+  input: { store: PlatformStateRepositories; uid: string; connectorId: string; access: ProjectAccessContext },
 ): Promise<boolean> {
-  const { db, store, uid, connectorId, access } = input;
+  const { store, uid, connectorId, access } = input;
   const project = await store.workspaces.projects.get(access.workspaceSlug, access.projectSlug);
   if (!project) return false;
   if (projectRepoSourceProvider(project.repoSource) !== connectorId) return false;
   if (access.requestingUid !== uid) return false;
   if (project.ownerUid === uid) return true;
-  return projectMemberExists(db, access.workspaceSlug, access.projectSlug, uid);
+  return projectMemberExists(store, access.workspaceSlug, access.projectSlug, uid);
 }
 
 async function publicCanvasAccessAuthorized(
@@ -285,7 +285,7 @@ async function accessAuthorized(
   }
   if (access?.kind === "project") {
     if (uid !== bound.ownerUid || access.requestingUid !== bound.ownerUid) return false;
-    return projectAccessAuthorized({ db, store, uid, connectorId, access });
+    return projectAccessAuthorized({ store, uid, connectorId, access });
   }
   if (uid === bound.ownerUid) return true;
   return false;

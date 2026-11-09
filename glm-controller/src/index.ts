@@ -13,7 +13,7 @@ import { createHomeCopyClient } from "./lib/compute-home-copy.js";
 import type { ComputeRequest } from "./lib/compute-vm.js";
 import { assertBuilderRuntimeStorage } from "./builder-runtime-storage.js";
 import { runNormalFleetMutation } from "@octogee/core/normal-fleet-mutation";
-import { createFirestorePlatformStateStore, platformStateStoreFromEnvironment, MissingRecordError, type CustomerDeletionJob, type PlacementAdmissionPolicy, type FleetRegistryRecord, type GatewayRoot, type OpaqueMap, type GatewayRootFields, type GatewayRootPatch, type OperationRecord, type PlatformStateStore, type Stored, type WatchChange, type WatchEvent, type FleetRegistryInventory } from "@octogee/core/platform-state";
+import { createFirestorePlatformStateStore, platformStateStoreFromEnvironment, MissingRecordError, type WorkspaceProject, type CustomerDeletionJob, type FleetRegistryRecord, type GatewayRoot, type OpaqueMap, type GatewayRootFields, type GatewayRootPatch, type OperationRecord, type PlatformStateStore, type Stored, type WatchChange, type WatchEvent, type FleetRegistryInventory, type PlacementAdmissionPolicy } from "@octogee/core/platform-state";
 import { restartGatewayProcess, restartGatewayDeployment } from './lib/runtime-restart-transport.js';
 import { assertMigrationRestartUnfenced } from './lib/runtime-restart-coordinator.js';
 import { assertOwnerOperationUnfenced } from './lib/computer-recovery-fence.js';
@@ -34,7 +34,6 @@ import { initializeApp, applicationDefault } from "firebase-admin/app";
 import {
   getFirestore,
   type Firestore,
-  type QueryDocumentSnapshot,
 } from "firebase-admin/firestore";
 import {
   GLM_GATEWAYS_COLLECTION,
@@ -238,14 +237,10 @@ import { resolveDefaultStorageBucket } from "./gcp-project.js";
 import { deleteComputerHomeObjects } from "./lib/customer-ops/computer-home.js";
 import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
 import {
-  readAssignedSlugsForGateway,
-  slugFromAssignedUser,
 } from "@octogee/core/assigned-roster";
 import {
   byotSystemConfigFromDoc,
-  collectProjectAgentStates,
-  mapProjectChannelDoc,
-  mapWorkspaceChannelDoc,
+  collectStoredProjectAgentStates,
 } from "@octogee/core/customer-snapshot-mapping";
 import {
   MIGRATION_UNMOUNT_TIMEOUT_MS,
@@ -342,7 +337,7 @@ import { applyVmDiskDelivery, type VmDiskSample } from "./lib/vm-disk-usage.js";
 import { startDisruptionObserver } from "./disruption-observer.js";
 import { createLogger, debugFromEnv } from "./lib/logger.js";
 import {
-  assignedSlugsFromUserMirror,
+  assignedSlugsFromBuilderMirror,
   createFleetInformer,
   type FleetInformer,
   type MirrorDelivery,
@@ -375,6 +370,7 @@ import {
 } from "./placement-policy-reconciler.js";
 import { placementPassOptions, type BuilderAdmissionSourceFactory } from "./builder-admission.js";
 import { openPlacementAdmission } from "./initial-placement.js";
+import { noBuilderPolicyInputs, type BuilderPolicyInputsSource } from "./builder-placement-document.js";
 import type {
   FleetBrokerChannelBinding,
   FleetBrokerProjectCheckoutScope,
@@ -2077,7 +2073,7 @@ async function runClaimedOperation(
 }
 
 function buildHeartbeatPollerCoreDeps(
-  { db, store, informer }: { db: Firestore; store: PlatformStateStore; informer: FleetInformer },
+  { store, informer }: { store: PlatformStateStore; informer: FleetInformer },
   log: (msg: string) => void,
   privateKey: string,
 ): Omit<GatewayHeartbeatPollerDeps, "evictSlug"> {
@@ -2114,10 +2110,11 @@ function buildHeartbeatPollerCoreDeps(
       const runtime = informer.fleetRegistryWithoutMalformed()?.records.find((record) => record.gatewayId === instanceId) ??
         await store.fleetRegistry.get(instanceId);
       if (runtime === null) return [];
-      const mirroredUsers = informer.users();
-      return mirroredUsers
-        ? assignedSlugsFromUserMirror(mirroredUsers, runtime.gatewayId)
-        : readAssignedSlugsForGateway(db, runtime.gatewayId);
+      const mirroredBuilders = informer.buildersWithoutMalformed()?.records;
+      return assignedSlugsFromBuilderMirror(
+        mirroredBuilders ?? await store.builders.records.listByGateway(runtime.gatewayId),
+        runtime.gatewayId,
+      );
     },
     writeHeartbeat: async (gatewayId, record) => {
       const heartbeat = pollerHeartbeatReport(record, gatewayServiceInternalUrl(gatewayId));
@@ -2140,7 +2137,7 @@ export function buildGatewayHeartbeatPollerDeps(
     log,
   );
   return {
-    ...buildHeartbeatPollerCoreDeps({ db, store, informer }, log, privateKey),
+    ...buildHeartbeatPollerCoreDeps({ store, informer }, log, privateKey),
     ownsEviction: async (gatewayId: string) => {
       const stored = informer.gateways()?.find((root) => root.gatewayId === gatewayId) ??
         await store.gateways.roots.get(gatewayId);
@@ -2176,6 +2173,7 @@ type ControllerStopper = () => void;
 interface ControllerBackgroundTasksDeps {
   addProductAdminRoutes?: ProductAdminRoutes;
   placementAdmission: PlacementAdmissionPolicy;
+  policyInputs: BuilderPolicyInputsSource;
   builderAdmission?: BuilderAdmissionSourceFactory | undefined;
   db: Firestore;
   deps: ControllerDeps;
@@ -2193,6 +2191,7 @@ const GITEA_GATEWAY_KEY_GC_GRACE_MS = 10 * 60 * 1000;
 function startControllerBackgroundTasks({
   addProductAdminRoutes,
   placementAdmission,
+  policyInputs,
   builderAdmission,
   db,
   deps,
@@ -2204,7 +2203,7 @@ function startControllerBackgroundTasks({
   if (!deps.kubeOps) {
     throw new Error("controller background tasks require Kubernetes operations");
   }
-  const informer = createFleetInformer({ db, store: deps.store, log });
+  const informer = createFleetInformer({ store: deps.store, log });
   const stopReconciler = startReconciler({ ...deps, informer });
   const stopWorker = startOperationWorker(deps);
   const stopOperationQueueDrain = startOperationQueueDrain(deps);
@@ -2284,10 +2283,10 @@ function startControllerBackgroundTasks({
   }) : undefined;
   const stopPlacementPolicyReconciler = startPlacementPolicyReconciler(
     createFirestorePlacementPolicyReconcilerDeps({
-      db,
       store: deps.store,
       prepareBuilderHome,
       informer,
+      policyInputs,
       namespace: NAMESPACE,
       idleMs: DISPOSABLE_GATEWAY_IDLE_MS,
       platformArtifact,
@@ -2355,6 +2354,7 @@ function startControllerBackgroundTasks({
     stopDisruptionObserver,
     stopHttp,
     informer.stop,
+    policyInputs.stop,
   ];
 }
 
@@ -2688,11 +2688,19 @@ async function createControllerRuntime(db: Firestore, store: PlatformStateStore)
   return { deps, fleetControllerPrivateKey, chartFingerprint };
 }
 
-export async function main(product: {
+export interface ControllerProduct {
   addAdminRoutes?: ProductAdminRoutes;
   placementAdmission?: PlacementAdmissionPolicy;
   builderAdmission?: BuilderAdmissionSourceFactory;
-} = {}): Promise<void> {
+  builderPolicyInputs?: (db: Firestore, log: (message: string) => void) => BuilderPolicyInputsSource;
+  startProjection?: (deps: {
+    db: Firestore;
+    store: PlatformStateStore;
+    log: (message: string) => void;
+  }) => ControllerStopper;
+}
+
+export async function main(product: ControllerProduct = {}): Promise<void> {
   installDefaultUserEntitlements();
   const controllerStartedAt = Date.now();
   initializeApp({
@@ -2761,9 +2769,11 @@ export async function main(product: {
     );
   }
 
+  const policyInputs = product.builderPolicyInputs?.(db, log) ?? noBuilderPolicyInputs;
   const stoppers = startControllerBackgroundTasks({
     addProductAdminRoutes: product.addAdminRoutes,
     placementAdmission: product.placementAdmission ?? openPlacementAdmission,
+    policyInputs,
     builderAdmission: product.builderAdmission,
     db,
     deps,
@@ -2782,6 +2792,7 @@ export async function main(product: {
       recordMaxCapacity: recordSharedGatewayMaxCapacity,
     }, SHARED_POOL_SCALER_MS),
   );
+  if (product.startProjection) stoppers.push(product.startProjection({ db, store: deps.store, log }));
   const shutdown = createControllerShutdown(stoppers, log);
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
@@ -2847,49 +2858,39 @@ function stringAt(obj: Record<string, unknown> | undefined, dotted: string): str
   return typeof value === "string" ? value : "";
 }
 
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
-}
-
 async function collectMigrationChannelBindings(
-  workspaceChannels: QueryDocumentSnapshot[],
-  projectDocs: QueryDocumentSnapshot[],
+  store: Pick<PlatformStateStore, "workspaces">,
+  slug: string,
+  projects: readonly Stored<WorkspaceProject>[],
 ): Promise<FleetBrokerChannelBinding[]> {
-  const bindings: FleetBrokerChannelBinding[] = [];
-  for (const ch of workspaceChannels) {
-    const b = mapWorkspaceChannelDoc(ch.data());
-    if (b) bindings.push(b);
-  }
-  const projectChannelSnaps = await Promise.all(
-    projectDocs.map((p) => p.ref.collection("channels").get()),
-  );
-  for (let i = 0; i < projectDocs.length; i++) {
-    const p = projectDocs[i];
-    const projChannels = projectChannelSnaps[i];
-    for (const ch of projChannels.docs) {
-      const b = mapProjectChannelDoc(p.id, ch.data());
-      if (b) bindings.push(b);
-    }
-  }
-  return bindings;
+  const [workspaceChannels, projectChannels] = await Promise.all([
+    store.workspaces.channels.list({ workspaceSlug: slug, projectSlug: null }),
+    Promise.all(projects.map((project) => store.workspaces.channels.list({ workspaceSlug: slug, projectSlug: project.projectSlug }))),
+  ]);
+  return [
+    ...workspaceChannels.flatMap((channel) =>
+      channel.mattermostChannelId === null
+        ? []
+        : [{ scope: "workspace" as const, kind: channel.kind ?? "general", channelId: channel.mattermostChannelId }]),
+    ...projects.flatMap((project, index) =>
+      projectChannels[index].flatMap((channel) =>
+        channel.mattermostChannelId === null
+          ? []
+          : [{
+              scope: "project" as const,
+              projectId: project.projectSlug,
+              kind: channel.kind ?? "default",
+              channelId: channel.mattermostChannelId,
+            }])),
+  ];
 }
 
-function collectMigrationProjects(
-  projectDocs: QueryDocumentSnapshot[],
-): FleetBrokerProjectRestore[] {
-  return projectDocs.map((doc) => {
-    const data = doc.data() as Record<string, unknown>;
-    const out: FleetBrokerProjectRestore = {
-      projectSlug: doc.id,
-      giteaRepoName: typeof data.giteaRepoName === "string" ? data.giteaRepoName : null,
-    };
-    if (typeof data.provisioningState === "string") {
-      out.provisioningState = data.provisioningState;
-    }
-    const repoSource = projectRepoSourceFromDoc(data.repoSource);
-    if (repoSource) {
-      out.repoSource = repoSource;
-    }
+function collectMigrationProjects(projects: readonly Stored<WorkspaceProject>[]): FleetBrokerProjectRestore[] {
+  return projects.map((project) => {
+    const out: FleetBrokerProjectRestore = { projectSlug: project.projectSlug, giteaRepoName: project.giteaRepoName };
+    if (project.provisioningState !== null) out.provisioningState = project.provisioningState;
+    const repoSource = projectRepoSourceFromDoc(project.repoSource);
+    if (repoSource) out.repoSource = repoSource;
     return out;
   });
 }
@@ -2921,27 +2922,24 @@ function migrationProjectCheckoutScope(
 // eslint-disable-next-line complexity -- Mirrors the octogee-api fleet broker snapshot shape.
 export async function readMigrationUserSnapshot(
   db: Firestore,
-  store: Pick<PlatformStateStore, "secrets" | "gateways">,
+  store: Pick<PlatformStateStore, "secrets" | "gateways" | "builders" | "workspaces">,
   uid: string,
   toGatewayId?: string,
 ): Promise<FleetBrokerUserSnapshot | null> {
-  const userSnap = await db.collection("users").doc(uid).get();
+  const [builder, userSnap] = await Promise.all([store.builders.records.get(uid), db.collection("users").doc(uid).get()]);
   const data = userSnap.data() as Record<string, unknown> | undefined;
-  if (!userSnap.exists || !data) return null;
-  const slug = slugFromAssignedUser(data);
+  if (builder === null || !userSnap.exists || !data) return null;
+  const slug = builder.slug;
   if (!slug) return null;
-  const workspaceRef = db.collection("workspaces").doc(slug);
-  const [workspaceChannels, projectSnap, coachSecret, agentSnap, sysConfig, targetGateway, projectAgents] = await Promise.all([
-    workspaceRef.collection("channels").get(),
-    workspaceRef.collection("projects").get(),
-    db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
+  const [workspaceProjects, coachSecret, agentSnap, sysConfig, targetGateway, projectAgents] = await Promise.all([
+    store.workspaces.projects.list(slug),
+    store.secrets.get(uid, "coachMattermost"),
     db.collection("agents").doc(uid).get(),
     db.collection("users").doc(uid).collection("system").doc("config").get(),
     toGatewayId ? store.gateways.roots.get(toGatewayId) : Promise.resolve(null),
-    collectProjectAgentStates(db, store.secrets, uid, slug),
+    collectStoredProjectAgentStates(store, uid, slug),
   ]);
-  const projectDocs = projectSnap.docs;
-  const channels = await collectMigrationChannelBindings(workspaceChannels.docs, projectDocs);
+  const channels = await collectMigrationChannelBindings(store, slug, workspaceProjects);
   const projectCheckoutScope = migrationProjectCheckoutScope(
     targetGateway,
     toGatewayId,
@@ -2949,13 +2947,13 @@ export async function readMigrationUserSnapshot(
     slug,
   );
   const projects = projectCheckoutScope === "workspace-and-projects"
-    ? collectMigrationProjects(projectDocs)
+    ? collectMigrationProjects(workspaceProjects)
     : [];
-  const coachData = coachSecret.data() as Record<string, unknown> | undefined;
+  const coachCredential = coachSecret !== null && coachSecret.kind === "coach-mattermost" ? coachSecret : null;
   const agentData = agentSnap.data() as Record<string, unknown> | undefined;
   const name = typeof agentData?.name === "string" ? agentData.name : "";
   const emoji = typeof agentData?.avatarEmoji === "string" ? agentData.avatarEmoji : "";
-  const status = stringAt(data, "provisioning.openclaw.status");
+  const status = builder.openclaw.status;
   // byotActive + the system/config byot subdoc must ride along so the migration target's
   // mount re-assert (reassertByot) sees the customer's real BYOT state — without it a
   // non-anthropic BYOK customer's models.json is not re-written on the new pod.
@@ -2966,17 +2964,17 @@ export async function readMigrationUserSnapshot(
     uid,
     slug,
     tier: stringAt(data, "tier") || stringAt(data, "subscription.tier") || "trial",
-    gatewayId: stringAt(data, "provisioning.openclaw.gatewayId"),
+    gatewayId: builder.gateway?.gatewayId ?? "",
     status: status === "provisioning" || status === "complete" ? status : "",
-    agentIds: stringArray(readPath(data, "provisioning.openclaw.agentIds")),
-    repoUrl: stringAt(data, "provisioning.git.repoUrl"),
-    mattermostUserId: stringAt(data, "mattermost.userId") || null,
-    customerMmUserId: stringAt(data, "mattermost.userId") || null,
+    agentIds: [...builder.agents.agentIds],
+    repoUrl: builder.provisioning.gitRepoUrl ?? "",
+    mattermostUserId: builder.mattermostUserId,
+    customerMmUserId: builder.mattermostUserId,
     channels,
     projectCheckoutScope,
     projects,
     projectAgents,
-    ownerName: stringAt(data, "displayName") || stringAt(data, "username") || slug,
+    ownerName: stringAt(data, "displayName") || slug,
     email: stringAt(data, "email"),
     displayName: stringAt(data, "displayName"),
     lastName: stringAt(data, "lastName"),
@@ -2985,9 +2983,8 @@ export async function readMigrationUserSnapshot(
       typeof readPath(data, "onboarding.vibe") === "string"
         ? (readPath(data, "onboarding.vibe") as string)
         : null,
-    coachToken: typeof coachData?.personalToken === "string" ? coachData.personalToken : null,
-    coachMmUserId:
-      typeof coachData?.coachMmUserId === "string" ? coachData.coachMmUserId : null,
+    coachToken: coachCredential?.personalToken ?? null,
+    coachMmUserId: coachCredential?.mattermostUserId ?? null,
     byotActive: data.byotActive === true,
     ...(systemConfig ? { systemConfig } : {}),
     ...(name || emoji ? { coachIdentity: { name, emoji } } : {}),
@@ -3718,7 +3715,6 @@ function buildEraseCustomerHandler(db: Firestore, store: PlatformStateStore, log
     ensureOwnedGatewayRetired: (cleanup, deletionId) =>
       ensureOwnedGatewaysRetired({
         store,
-        db,
         uid: cleanup.uid,
         deletionId,
         now: Date.now(),
@@ -3876,7 +3872,6 @@ function buildSuspendCustomerHandler(
     ensureOwnedGatewaysRetired: (uid, deletionId) =>
       ensureOwnedGatewaysRetired({
         store,
-        db,
         uid,
         deletionId,
         now: Date.now(),

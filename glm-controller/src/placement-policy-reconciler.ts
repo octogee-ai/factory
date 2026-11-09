@@ -2,11 +2,8 @@ import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import { isDeepStrictEqual } from 'node:util';
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const eventLogger = createServiceLogger("cowboy");
-import type {
-  Firestore,
-  QueryDocumentSnapshot,
-} from "firebase-admin/firestore";
 import { isReapedOperationError, REARMED_RETIRE_OPERATION } from "./stuck-op-reaper.js";
+import { builderPlacementDocument, type BuilderPolicyInputsSource } from "./builder-placement-document.js";
 import { sourceRecoveryForwardRetryable } from "./legacy-migration-recovery.js";
 import { schedulerHandoffAwaitingRelease } from "./scheduler-handoff-release.js";
 import { createHash } from "node:crypto";
@@ -2832,10 +2829,10 @@ function activeMigration(operation: Stored<OperationRecord>): PlacementPolicyMig
 }
 
 interface FirestorePlacementPolicyInput {
-  db: Firestore;
   store: PlatformStateStore;
   readBuilderTier: BuilderTierReader;
   placementAdmission: PlacementAdmissionPolicy;
+  policyInputs: BuilderPolicyInputsSource;
   prepareBuilderHome?: (request: AllocateDisposableGatewayInput) => Promise<boolean>;
   informer: FleetInformer;
   namespace: string;
@@ -2861,11 +2858,10 @@ interface FirestorePlacementPolicyInput {
 }
 
 function completedReturnOperationIds(
-  userDocuments: ReadonlyArray<QueryDocumentSnapshot>,
+  users: ReadonlyArray<PlacementPolicyUser>,
   sharedGatewayIds: readonly string[],
 ): string[] {
-  return userDocuments.flatMap((doc) => {
-    const userData = doc.data() as Record<string, unknown>;
+  return users.flatMap(({ data: userData }) => {
     const lease = builderActivationLease(userData);
     const onShared = sharedGatewayIds.includes(currentGatewayId(userData) ?? "");
     const returnMayHaveSucceeded = lease?.status === "returning" ||
@@ -2877,10 +2873,10 @@ function completedReturnOperationIds(
 
 async function readCompletedReturnOperations(
   store: PlatformStateStore,
-  userDocuments: ReadonlyArray<QueryDocumentSnapshot>,
+  users: ReadonlyArray<PlacementPolicyUser>,
   sharedGatewayIds: readonly string[],
 ): Promise<Stored<OperationRecord>[]> {
-  const operations = await store.journal.operations.getMany(completedReturnOperationIds(userDocuments, sharedGatewayIds));
+  const operations = await store.journal.operations.getMany(completedReturnOperationIds(users, sharedGatewayIds));
   return [...operations.values()].filter((operation) => operation.status === "succeeded");
 }
 
@@ -2889,11 +2885,9 @@ async function readCompletedReturnOperations(
 // left in the tick's collection scan.
 async function readTerminalLeaseOperations(
   store: PlatformStateStore,
-  userDocuments: ReadonlyArray<QueryDocumentSnapshot>,
+  users: ReadonlyArray<PlacementPolicyUser>,
 ): Promise<Stored<OperationRecord>[]> {
-  const operationIds = [...new Set(
-    userDocuments.flatMap((doc) => leaseJournalOperationIds(doc.data() as Record<string, unknown>)),
-  )];
+  const operationIds = [...new Set(users.flatMap(({ data }) => leaseJournalOperationIds(data)))];
   const operations = await store.journal.operations.getMany(operationIds);
   return [...operations.values()].filter((operation) => TERMINAL_LEASE_OPERATION_STATUSES.has(operation.status));
 }
@@ -3322,21 +3316,39 @@ async function readPlatformCurrentSharedGatewayIds(
     .map((gateway) => gateway.gatewayId);
 }
 
+async function readPlacementBuilders(
+  informer: FleetInformer,
+  store: PlatformStateStore,
+  log: (message: string) => void,
+): Promise<readonly Stored<BuilderRecord>[]> {
+  const mirrored = informer.buildersWithoutMalformed();
+  if (mirrored === null) return store.builders.records.listAll();
+  if (mirrored.malformedKeys.length > 0) {
+    log(`[placement-policy] ⚠ skipping malformed Builder records: ${mirrored.malformedKeys.join(", ")}`);
+  }
+  return mirrored.records;
+}
+
 async function readPlacementPolicySnapshot(
   input: FirestorePlacementPolicyInput,
 ): Promise<PlacementPolicySnapshot> {
-  const { db, store, idleMs: fallbackIdleMs, now: nowFn, informer } = input;
+  const { store, idleMs: fallbackIdleMs, now: nowFn, informer, policyInputs } = input;
   const now = nowFn();
-  const [orchestrator, userDocs, roots, runtimeRecords, activeOperations, assignmentRecords, sharedPoolReplacements] =
+  const [orchestrator, builders, currentPolicyInputs, roots, runtimeRecords, activeOperations, assignmentRecords, sharedPoolReplacements] =
     await Promise.all([
       store.config.orchestrator.get(),
-      informer.users() ?? db.collection("users").get().then((snapshot) => snapshot.docs),
+      readPlacementBuilders(informer, store, input.log),
+      policyInputs.current() ?? policyInputs.list(),
       informer.gateways() ?? store.gateways.roots.list(),
       informer.fleetRegistry() ?? store.fleetRegistry.list(),
       store.journal.operations.listByStatus([...PLACEMENT_ACTIVE_OPERATION_STATUSES]),
       informer.assignments() ?? store.gateways.assignments.listAll(),
       readSharedPoolReplacements(store),
     ]);
+  const users: PlacementPolicyUser[] = builders.map((builder) => ({
+    uid: builder.uid,
+    data: builderPlacementDocument(builder, currentPolicyInputs.get(builder.uid) ?? {}),
+  }));
   const pool = deriveSharedGatewayPoolConfig(roots.map((root) => ({
     gatewayId: root.gatewayId,
     gatewayClass: root.gatewayClass,
@@ -3345,8 +3357,8 @@ async function readPlacementPolicySnapshot(
   const defaultGatewayId = pool?.defaultGatewayId ?? "";
   const sharedGatewayIds = pool?.sharedGatewayIds ?? [];
   const [completedReturnOperations, terminalLeaseOperations] = await Promise.all([
-    readCompletedReturnOperations(store, userDocs, sharedGatewayIds),
-    readTerminalLeaseOperations(store, userDocs),
+    readCompletedReturnOperations(store, users, sharedGatewayIds),
+    readTerminalLeaseOperations(store, users),
   ]);
   const idleMs = orchestrator?.disposableGatewayIdleMs ?? fallbackIdleMs;
   const buildersPerGateway = placementBuildersPerGateway(orchestrator);
@@ -3397,7 +3409,7 @@ async function readPlacementPolicySnapshot(
     buildersPerGateway,
     platformCurrentGatewayIds,
     sharedPoolReplacements,
-    users: userDocs.map((doc) => ({ uid: doc.id, data: doc.data() as Record<string, unknown> })),
+    users,
     gateways,
     assignments,
     activeMigrations: [

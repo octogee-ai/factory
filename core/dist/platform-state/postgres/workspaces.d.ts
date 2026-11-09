@@ -17,5 +17,6 @@ export declare function createPostgresWorkspaceRepositories(session: PostgresSes
 export declare function postgresWorkspacesWatchSource(filter: WatchFilters["workspaces"]): PostgresWatchSource<"workspaces">;
 export declare function postgresWorkspaceMembersWatchSource(filter: WatchFilters["workspaceMembers"]): PostgresWatchSource<"workspaceMembers">;
 export declare function postgresWorkspaceProjectsWatchSource(filter: WatchFilters["workspaceProjects"]): PostgresWatchSource<"workspaceProjects">;
+export declare function postgresWorkspaceProjectMembersWatchSource(filter: WatchFilters["workspaceProjectMembers"]): PostgresWatchSource<"workspaceProjectMembers">;
 export declare function postgresWorkspaceChannelsWatchSource(filter: WatchFilters["workspaceChannels"]): PostgresWatchSource<"workspaceChannels">;
 export declare function postgresAgentIdentitiesWatchSource(filter: WatchFilters["agentIdentities"]): PostgresWatchSource<"agentIdentities">;

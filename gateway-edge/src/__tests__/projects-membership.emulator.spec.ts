@@ -140,6 +140,17 @@ async function seedProjectChannel(): Promise<void> {
     }, { merge: true });
 }
 
+async function seedOtherProjectMember(): Promise<void> {
+  await db
+    .collection("workspaces")
+    .doc("alice")
+    .collection("projects")
+    .doc("game")
+    .collection("members")
+    .doc("other-guest-uid")
+    .set({ id: "other-guest-uid", role: "member" });
+}
+
 async function getProjectDoc(): Promise<Record<string, unknown> | undefined> {
   const snap = await db
     .collection("workspaces")
@@ -261,6 +272,7 @@ describe("POST /api/projects/:wid/:pid/join", () => {
 
   it("adds the caller as a member + increments memberCount on first join", async () => {
     await seedPublicAliceGame();
+    await seedOtherProjectMember();
     mockMmApi.mockImplementation(async (path: string, method?: string) => {
       if (path === "/users/mm-bob" && (!method || method === "GET")) return { id: "mm-bob", delete_at: 0 };
       if (method === "POST" && path === "/teams/team-alice/members") return { ok: true };
@@ -390,6 +402,7 @@ describe("POST /api/projects/:wid/:pid/leave", () => {
 
   it("short-circuits with notAMember:true when the member doc is absent", async () => {
     await seedPublicAliceGame();
+    await seedOtherProjectMember();
     const beforeMemberCount = (await getProjectDoc())?.memberCount;
     const app = createApp();
     const res = await request(app)
@@ -561,6 +574,7 @@ describe("DELETE /api/projects/:wid/:pid/members/:guestUid", () => {
 
   it("short-circuits with notAMember:true when the guest has no member doc", async () => {
     await seedPublicAliceGame({ ownerUid: CALLER_UID });
+    await seedOtherProjectMember();
     const beforeMemberCount = (await getProjectDoc())?.memberCount;
     const app = createApp();
     const res = await request(app)

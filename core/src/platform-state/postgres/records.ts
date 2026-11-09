@@ -199,8 +199,36 @@ export async function updateRecord(
     ([spec, value]) => `${spec.column} = ${isClearField(value) ? "NULL" : encodeColumn(spec, value, parameters, now)}`,
   );
   if (assignments.length === 0) assignments.push(`${table.keyColumns[0]} = ${table.keyColumns[0]}`);
+  await applyAssignments(session, operation, target, assignments, parameters, fences);
+}
+
+// eslint-disable-next-line max-params -- session context, target, column, and fence set are independent inputs
+export async function mergeJsonColumn(
+  session: PostgresSession,
+  operation: string,
+  target: RecordTarget,
+  spec: ColumnSpec,
+  additions: object,
+  fences: readonly FenceCheck[],
+): Promise<void> {
+  const now = inputContainsServerNow([[spec, additions]]) ? await serverNow(session) : undefined;
+  const parameters = new SqlParameters();
+  const assignment = `${spec.column} = ${spec.column} || ${encodeColumn(spec, additions, parameters, now)}`;
+  await applyAssignments(session, operation, target, [assignment], parameters, fences);
+}
+
+// eslint-disable-next-line max-params -- session context, target, statement parts, and fence set are independent inputs
+async function applyAssignments(
+  session: PostgresSession,
+  operation: string,
+  target: RecordTarget,
+  assignments: readonly string[],
+  parameters: SqlParameters,
+  fences: readonly FenceCheck[],
+): Promise<void> {
+  const record = recordKeyOf(target);
   const conditions = [keyPredicate(target, parameters), ...fences.map((check) => fencePredicate(check, parameters))];
-  const text = `UPDATE $schema.${table.table} SET ${assignments.join(", ")} WHERE ${conditions.join(" AND ")} RETURNING revision`;
+  const text = `UPDATE $schema.${target.table.table} SET ${assignments.join(", ")} WHERE ${conditions.join(" AND ")} RETURNING revision`;
   if (fences.length === 0) {
     const rows = await session.write(operation, record, text, parameters.values);
     if (rows.length === 0) throw new MissingRecordError(record);

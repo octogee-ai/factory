@@ -27,6 +27,7 @@ import {
   workspaceCustomChannelName,
   workspaceGeneralChannelName,
   type ParsedAgentId,
+  workspaceCoachAgentId,
 } from "@octogee/shared/types/identity";
 import { projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
@@ -40,6 +41,7 @@ import {
   type BuilderRecord,
   type BuilderSecret,
   type GatewayRoot,
+  MalformedRecordError,
   type GatewayTicket,
   type PlatformStateRepositories,
   type PlatformStateStore,
@@ -47,7 +49,6 @@ import {
   type Stored,
   type WorkspaceChannel,
 } from "@octogee/core/platform-state";
-import { deriveExpectedAgentId } from "../../../gateway-edge/src/chat-proxy/openclaw/frame-filter.js";
 import {
   ActivityReceiptConflictError,
   ActivityReceiptLeaseError,
@@ -149,7 +150,7 @@ async function previewTarget(
   }
   const [project, member] = await Promise.all([
     deps.store.workspaces.projects.get(workspaceSlug, projectSlug),
-    projectMemberExists(deps.db, workspaceSlug, projectSlug, uid),
+    projectMemberExists(deps.store, workspaceSlug, projectSlug, uid),
   ]);
   if (!project) return null;
   const archived = project.commercialLifecycleStatus === "archived" || !(await projectOwnerEntitled(deps.db, project.ownerUid));
@@ -920,7 +921,7 @@ type RedeemPrelude =
   | { kind: "denied" }
   | { kind: "activity"; scope: ActivityConversation }
   | { kind: "voice"; claim: VoiceClaim; live: Deferred<VoiceContext | null> }
-  | { kind: "builder"; expectedAgentId: Deferred<string> };
+  | { kind: "builder" };
 
 type RedeemIdentity =
   | { expectedAgentId: string; activityConversation: ActivityConversation }
@@ -932,7 +933,7 @@ const DENIED: RedeemPrelude = { kind: "denied" };
 async function prepareActivityRedeem(deps: RuntimeBrokerDeps, payload: Record<string, unknown>, uid: string, gatewayId: string): Promise<RedeemPrelude> {
   if (Object.keys(payload).some(key => !['channelId', 'threadRootPostId', 'ownerUid', 'expectedAgentId', 'sessionKey'].includes(key)) || !isMattermostPostId(payload.channelId)
     || (payload.threadRootPostId !== undefined && !isMattermostPostId(payload.threadRootPostId))) return DENIED;
-  const scope = await resolveActivityConversation({ db: deps.db, uid, channelId: payload.channelId, ...(payload.threadRootPostId === undefined ? {} : { threadRootPostId: payload.threadRootPostId }) });
+  const scope = await resolveActivityConversation({ builders: deps.store.builders.records, uid, channelId: payload.channelId, ...(payload.threadRootPostId === undefined ? {} : { threadRootPostId: payload.threadRootPostId }) });
   return scope && matchesActivityTicket(scope, gatewayId, payload) ? { kind: "activity", scope } : DENIED;
 }
 
@@ -960,11 +961,6 @@ async function prepareVoiceRedeem(deps: RuntimeBrokerDeps, payload: Record<strin
   return { kind: "voice", claim, live };
 }
 
-async function prepareBuilderRedeem(deps: RuntimeBrokerDeps, uid: string): Promise<RedeemPrelude> {
-  const account = (await deps.db.doc(`users/${uid}`).get()).data() ?? {};
-  return { kind: "builder", expectedAgentId: await deferred(async () => deriveExpectedAgentId(uid, account)) };
-}
-
 async function prepareWsRedeem(deps: RuntimeBrokerDeps, ticket: GatewayTicket, gatewayId: string): Promise<RedeemPrelude> {
   if (ticket.gatewayId !== gatewayId) return DENIED;
   const payload = ticket.grant.payload as Record<string, unknown> | undefined;
@@ -972,7 +968,7 @@ async function prepareWsRedeem(deps: RuntimeBrokerDeps, ticket: GatewayTicket, g
     return prepareActivityRedeem(deps, payload, ticket.uid, gatewayId);
   }
   if (ticket.grant.purpose === "voice-ws") return prepareVoiceRedeem(deps, payload, ticket.uid, gatewayId);
-  return prepareBuilderRedeem(deps, ticket.uid);
+  return { kind: "builder" };
 }
 
 async function redeemVoiceIdentity(
@@ -1003,7 +999,8 @@ async function redeemWsIdentity(
   if (prelude.kind === "activity") {
     return { expectedAgentId: prelude.scope.expectedAgentId, activityConversation: prelude.scope };
   }
-  return { expectedAgentId: settled(prelude.expectedAgentId) };
+  if (mirror.slug === null) throw new Error(`Builder ${uid} has no slug`);
+  return { expectedAgentId: workspaceCoachAgentId(mirror.slug) };
 }
 
 function redeemableTicket(ticket: Stored<GatewayTicket> | null, purpose: string, now: number): ticket is Stored<GatewayTicket> {
@@ -1073,7 +1070,7 @@ function mountUserAndWsRoutes(router: Router, deps: RuntimeBrokerDeps): void {
     const rawThreadRootPostId = (req.body as Record<string, unknown> | undefined)?.threadRootPostId;
     const threadRootPostId = rawThreadRootPostId === undefined ? undefined : stringBody(req, 'threadRootPostId');
     if (!safeDocId(uid) || !MATTERMOST_ID_RE.test(channelId) || (threadRootPostId !== undefined && !isMattermostPostId(threadRootPostId))) { res.status(400).json({ error: 'invalid_activity_channel' }); return; }
-    const scope = await resolveActivityConversation({ db: deps.db, uid, channelId, ...(threadRootPostId === undefined ? {} : { threadRootPostId }) });
+    const scope = await resolveActivityConversation({ builders: deps.store.builders.records, uid, channelId, ...(threadRootPostId === undefined ? {} : { threadRootPostId }) });
     if (!scope || scope.gatewayId !== bound.gatewayId) { forbidden(res); return; }
     res.set('Cache-Control', 'no-store').json(scope);
   });
@@ -1410,10 +1407,14 @@ async function activeReplyRecipient(store: PlatformStateStore, uid: string) {
   return { uid, mmUserId };
 }
 
-async function projectMembershipAuthorized(db: Firestore, binding: BoundChannelPath, uid: string): Promise<boolean> {
-  const membership = await db.doc(`${binding.ownerPath}/members/${uid}`).get();
-  const member = membership.data();
-  return membership.exists && member?.id === uid && (member.role === "owner" || member.role === "member");
+async function projectMembershipAuthorized(store: PlatformStateStore, binding: BoundChannelPath, uid: string): Promise<boolean> {
+  try {
+    return await projectMemberExists(store, binding.workspaceSlug, binding.projectSlug!, uid);
+  } catch (error) {
+    if (!(error instanceof MalformedRecordError)) throw error;
+    logger.warn("[openclaw-runtime-broker] refused a malformed project membership", { workspaceSlug: binding.workspaceSlug, projectSlug: binding.projectSlug, uid, detail: error.detail });
+    return false;
+  }
 }
 
 async function finalReplyMembershipAuthorized(deps: RuntimeBrokerDeps, target: AuthorizedConversationTarget, identity: FinalReplyIdentity, recipient: { uid: string; mmUserId: string }): Promise<boolean> {
@@ -1422,7 +1423,7 @@ async function finalReplyMembershipAuthorized(deps: RuntimeBrokerDeps, target: A
   if (binding.lane === "project") {
     const [project, member] = await Promise.all([
       deps.store.workspaces.projects.get(binding.workspaceSlug, binding.projectSlug!),
-      projectMembershipAuthorized(deps.db, binding, recipient.uid),
+      projectMembershipAuthorized(deps.store, binding, recipient.uid),
     ]);
     return project?.ownerUid === recipient.uid || member;
   }

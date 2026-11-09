@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { readWorkspace } from "../../lib/firestoreReads.js";
+import { platformStateStore } from "../../lib/platform-state.js";
 import { mmApi } from "../../lib/mattermost.js";
+import { USERNAME_RE } from "@octogee/shared/types/identity";
 import { logger } from "../../middleware/logging.js";
 
 const router = Router();
@@ -30,7 +31,7 @@ router.patch("/display-name", async (req: Request, res: Response, next: NextFunc
       return;
     }
 
-    const workspace = await readWorkspace(slug);
+    const workspace = USERNAME_RE.test(slug) ? await platformStateStore.workspaces.records.get(slug) : null;
     if (!workspace) {
       res.status(404).json({ error: "Workspace not found" });
       return;
@@ -40,7 +41,7 @@ router.patch("/display-name", async (req: Request, res: Response, next: NextFunc
       return;
     }
 
-    const teamId = workspace.mattermost.teamId;
+    const teamId = workspace.mattermostTeamId;
     if (!teamId) {
       res.status(409).json({ error: "Workspace is not yet provisioned" });
       return;

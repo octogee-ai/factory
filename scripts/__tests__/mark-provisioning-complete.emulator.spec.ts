@@ -207,7 +207,7 @@ describe("markProvisioningComplete — workspace doc + channels + members", () =
     const { uid, slug } = freshIds();
     await seedUser(uid, { username: slug });
     
-    await db.doc(`workspaces/${slug}`).set({ vibe: "calm", createdAt: "earlier" });
+    await db.doc(`workspaces/${slug}`).set({ name: slug, ownerDisplayName: "Reserved", visibility: "private", vibe: "calm" });
 
     await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), []);
 
@@ -219,9 +219,10 @@ describe("markProvisioningComplete — workspace doc + channels + members", () =
       name: slug,
       ownerDisplayName: slug,
       mattermost: { teamId: `mm-team-${slug}` },
-      vibe: "calm", // ← survived the merge
-      createdAt: "earlier",
+      visibility: "private",
+      vibe: "calm",
     });
+    expect(ws?.createdAt).toBeDefined();
     expect(ws?.gitea?.orgName).toBe(slug);
     expect(typeof ws?.gitea?.repoName).toBe("string");
   });

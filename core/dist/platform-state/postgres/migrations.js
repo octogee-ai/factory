@@ -982,6 +982,26 @@ ALTER TABLE workspace_members ADD COLUMN channel_host_channel_id text;
 ALTER TABLE workspace_members ADD COLUMN canonical_source text;
 ALTER TABLE workspace_members ADD COLUMN canonical_state text;
 `;
+const EDGE_PROJECT_AND_TICKET_STATE = String.raw `
+ALTER TABLE workspace_project_members ADD COLUMN joined_at bigint;
+CREATE INDEX workspace_project_members_uid_idx ON workspace_project_members (uid);
+CREATE TRIGGER workspace_project_members_change AFTER INSERT OR UPDATE OR DELETE ON workspace_project_members
+  FOR EACH ROW EXECUTE FUNCTION record_change('workspaceProjectMembers', 'workspace_slug', 'project_slug', 'uid', 'filter:workspace_slug', 'filter:uid');
+
+ALTER TABLE workspace_projects ADD COLUMN provisioning_cleanup jsonb;
+
+CREATE INDEX gateway_tickets_uid_purpose_idx ON gateway_tickets (uid, (access_grant ->> 'purpose'), expires_at);
+
+CREATE TABLE gateway_ticket_mint_log (
+  id text PRIMARY KEY,
+  uid text NOT NULL,
+  purpose text NOT NULL,
+  minted_at bigint NOT NULL,
+  expires_at bigint NOT NULL
+);
+CREATE INDEX gateway_ticket_mint_log_uid_purpose_idx ON gateway_ticket_mint_log (uid, purpose, minted_at);
+CREATE INDEX gateway_ticket_mint_log_expiry_idx ON gateway_ticket_mint_log (expires_at);
+`;
 export const PLATFORM_STATE_MIGRATIONS = [
     { version: 1, name: "core-schema", sql: CORE_SCHEMA },
     { version: 2, name: "change-feed", sql: CHANGE_FEED },
@@ -991,4 +1011,5 @@ export const PLATFORM_STATE_MIGRATIONS = [
     { version: 6, name: "project-members", sql: PROJECT_MEMBERS },
     { version: 7, name: "operation-port-fidelity", sql: OPERATION_PORT_FIDELITY },
     { version: 8, name: "canonical-memberships", sql: CANONICAL_MEMBERSHIPS },
+    { version: 9, name: "edge-project-and-ticket-state", sql: EDGE_PROJECT_AND_TICKET_STATE },
 ];

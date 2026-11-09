@@ -17,7 +17,7 @@ const h = vi.hoisted(() => ({
   projectPlaybookSeeds: vi.fn(),
   projectRecipeStarterSeeds: vi.fn(),
   notesWelcomeSeed: vi.fn(),
-  readWorkspace: vi.fn(),
+  docs: new Map<string, Record<string, unknown>>(),
   mmApi: vi.fn(),
   logger: {
     error: vi.fn(),
@@ -32,6 +32,11 @@ vi.mock("../lib/db.js", () => ({
   auth: { verifyIdToken: vi.fn() },
   FieldValue: { serverTimestamp: vi.fn() },
 }));
+
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(h.docs) };
+});
 
 vi.mock("../lib/gitea.js", () => ({
   giteaApi: (...args: unknown[]) => h.giteaApi(...args),
@@ -48,7 +53,6 @@ vi.mock("../lib/internal-fetch.js", () => ({
 
 vi.mock("../lib/firestoreReads.js", () => ({
   readProject: (...args: unknown[]) => h.readProject(...args),
-  readWorkspace: (...args: unknown[]) => h.readWorkspace(...args),
 }));
 
 vi.mock("../lib/mattermost.js", () => ({
@@ -126,7 +130,7 @@ beforeEach(() => {
     relPath: "notes/welcome.md",
     content: "# Welcome to notes\n",
   });
-  h.readWorkspace.mockReset();
+  h.docs.clear();
   h.mmApi.mockReset().mockResolvedValue({});
   h.logger.error.mockClear();
 });
@@ -146,7 +150,7 @@ describe("project README route", () => {
       .expect(200);
 
     expect(res.body).toEqual({ content: "# Orbit\n", path: "docs/README.md" });
-    expect(h.readProject).toHaveBeenCalledWith({ path: "workspaces/mira/projects/orbit" });
+    expect(h.readProject).toHaveBeenCalledWith("mira", "orbit");
     expect(h.giteaApi).toHaveBeenCalledWith("mira", "orbit/contents/docs/README.md");
   });
 
@@ -407,10 +411,7 @@ describe("project provisioning helpers", () => {
 
 describe("workspace display-name route", () => {
   it("renames the Mattermost team for the workspace owner", async () => {
-    h.readWorkspace.mockResolvedValue({
-      ownerUid: "uid-owner",
-      mattermost: { teamId: "team-1" },
-    });
+    h.docs.set("workspaces/mira", { id: "mira", ownerUid: "uid-owner", mattermost: { teamId: "team-1" } });
 
     const res = await request(displayNameApp())
       .patch("/api/workspace/display-name")
@@ -441,19 +442,18 @@ describe("workspace display-name route", () => {
   });
 
   it("rejects missing, non-owner, and unprovisioned workspaces", async () => {
-    h.readWorkspace.mockResolvedValueOnce(null);
     await request(displayNameApp())
       .patch("/api/workspace/display-name")
       .send({ displayName: "Mira" })
       .expect(404, { error: "Workspace not found" });
 
-    h.readWorkspace.mockResolvedValueOnce({ ownerUid: "someone-else", mattermost: { teamId: "team-1" } });
+    h.docs.set("workspaces/mira", { id: "mira", ownerUid: "someone-else", mattermost: { teamId: "team-1" } });
     await request(displayNameApp())
       .patch("/api/workspace/display-name")
       .send({ displayName: "Mira" })
       .expect(403, { error: "Only the workspace owner can rename" });
 
-    h.readWorkspace.mockResolvedValueOnce({ ownerUid: "uid-owner", mattermost: {} });
+    h.docs.set("workspaces/mira", { id: "mira", ownerUid: "uid-owner", mattermost: {} });
     await request(displayNameApp())
       .patch("/api/workspace/display-name")
       .send({ displayName: "Mira" })
@@ -463,10 +463,7 @@ describe("workspace display-name route", () => {
   });
 
   it("logs and forwards unexpected failures", async () => {
-    h.readWorkspace.mockResolvedValue({
-      ownerUid: "uid-owner",
-      mattermost: { teamId: "team-1" },
-    });
+    h.docs.set("workspaces/mira", { id: "mira", ownerUid: "uid-owner", mattermost: { teamId: "team-1" } });
     h.mmApi.mockRejectedValueOnce(new Error("mattermost down"));
 
     await request(displayNameApp())

@@ -193,21 +193,25 @@ async function emailArrayReferenceDocs(
 }
 
 async function platformStateReferences(store: PlatformStateStore, uid: string, currentOperationId: string) {
-  const [operations, receipts, assignments, members, tokens, pointers] = await Promise.all([
+  const [operations, receipts, assignments, members, projectMembers, tokens, pointers, accessRecords] = await Promise.all([
     store.journal.operations.listReferencingUid(uid),
     store.journal.recoveryReceipts.listReferencingUid(uid),
     store.gateways.assignments.listForUid(uid),
     store.workspaces.members.listForUid(uid),
+    store.workspaces.projectMembers.listForUid(uid),
     store.access.modelBrokerTokens.listForOwner(uid),
     store.access.modelBrokerGatewayTokens.listForOwner(uid),
+    store.access.listRecordsForUid(uid),
   ]);
   return {
     operations: operations.filter((operation) => operation.id !== currentOperationId),
     receipts,
     assignments,
     members,
+    projectMembers,
     tokens,
     pointers,
+    accessRecords,
   };
 }
 
@@ -219,8 +223,10 @@ function platformStateReferencePaths(references: PlatformStateReferences): strin
     ...references.receipts.map((receipt) => `gatewayRecoveryReceipts/${receipt.id}`),
     ...references.assignments.map((assignment) => `gateways/${assignment.gatewayId}/assignments/${assignment.uid}`),
     ...references.members.map((member) => `workspaces/${member.workspaceSlug}/members/${member.uid}`),
+    ...references.projectMembers.map((member) => `workspaces/${member.workspaceSlug}/projects/${member.projectSlug}/members/${member.uid}`),
     ...references.tokens.map((token) => `modelBrokerTokens/${token.tokenHash}`),
     ...references.pointers.map((pointer) => `modelBrokerGatewayTokens/${pointer.pointerKey}`),
+    ...references.accessRecords,
   ];
 }
 
@@ -234,6 +240,8 @@ function platformStateReferenceDeletes(references: PlatformStateReferences): Pla
       transaction.gateways.assignments.delete(assignment.gatewayId, assignment.uid)),
     ...references.members.map((member): PlatformWrite => (transaction) =>
       transaction.workspaces.members.delete(member.workspaceSlug, member.uid)),
+    ...references.projectMembers.map((member): PlatformWrite => (transaction) =>
+      transaction.workspaces.projectMembers.delete(member.workspaceSlug, member.projectSlug, member.uid)),
     ...references.tokens.map((token): PlatformWrite => (transaction) =>
       transaction.access.modelBrokerTokens.delete(token.tokenHash)),
     ...references.pointers.map((pointer): PlatformWrite => (transaction) =>
@@ -254,6 +262,7 @@ async function erasePlatformState(
       for (const write of chunk) await write(transaction);
     });
   }
+  await store.access.eraseForUid(uid);
   await store.workspaces.agentIdentities.delete(uid);
   if (slug) await store.workspaces.records.delete(slug);
   await store.builders.records.delete(uid);

@@ -6,6 +6,11 @@ const h = vi.hoisted(() => ({
   logger: { error: vi.fn(), warn: vi.fn() },
 }));
 
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(h.docs) };
+});
+
 vi.mock("../lib/db.js", () => ({
   db: {
     doc: (path: string) => ({
@@ -49,7 +54,7 @@ function channel(
 
 beforeEach(() => {
   h.docs.clear();
-  h.docs.set("workspaces/alice", { mattermost: { teamId: "team" } });
+  h.docs.set("workspaces/alice", { id: "alice", ownerUid: "owner-1", mattermost: { teamId: "team" } });
   h.docs.set(channelPath, {
     kind: "general",
     mattermost: { channelId: "primary" },

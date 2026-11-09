@@ -19,6 +19,7 @@ import type {
   WorkspaceChannel,
   WorkspaceMember,
   WorkspaceProject,
+  WorkspaceProjectMember,
   WorkspaceRecord,
   WorkspaceRepositories,
 } from "./workspaces.js";
@@ -97,6 +98,7 @@ export interface WatchFilters {
   readonly workspaces: { readonly ownerUid?: string };
   readonly workspaceMembers: { readonly workspaceSlug?: string; readonly uid?: string };
   readonly workspaceProjects: { readonly workspaceSlug?: string };
+  readonly workspaceProjectMembers: { readonly workspaceSlug?: string; readonly uid?: string };
   readonly workspaceChannels: { readonly workspaceSlug?: string };
   readonly agentIdentities: { readonly uid?: string };
 }
@@ -112,6 +114,7 @@ export interface WatchRecords {
   readonly workspaces: WorkspaceRecord;
   readonly workspaceMembers: WorkspaceMember;
   readonly workspaceProjects: WorkspaceProject;
+  readonly workspaceProjectMembers: WorkspaceProjectMember;
   readonly workspaceChannels: WorkspaceChannel;
   readonly agentIdentities: BuilderAgentIdentity;
 }

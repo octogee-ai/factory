@@ -201,6 +201,114 @@ describe.skipIf(!dsn)("PostgreSQL secrets and access repositories", { timeout: 3
       await harness.store.access.gatewayTickets.delete("t1");
     });
 
+
+    it("counts a uid's live tickets per purpose, excluding expired tickets and other purposes", async () => {
+      const tickets = harness.store.access.gatewayTickets;
+      await tickets.create({ ...ticket, ticketId: "live", expiresAt: NOW + 1, grant: { purpose: "voice-ws", payload: {} } });
+      await tickets.create({ ...ticket, ticketId: "expired", expiresAt: NOW, grant: { purpose: "voice-ws", payload: {} } });
+      await tickets.create({ ...ticket, ticketId: "other-purpose", expiresAt: NOW + 1, grant: { purpose: "preview", payload: {} } });
+      await tickets.create({ ...ticket, ticketId: "other-uid", uid: "u2", expiresAt: NOW + 1, grant: { purpose: "voice-ws", payload: {} } });
+
+      expect(await tickets.countLive("u1", "voice-ws", NOW)).toBe(1);
+      expect(await tickets.countLive("u1", "unknown", NOW)).toBe(0);
+    });
+
+    it("counts recorded mints strictly after the window start and sweeps them at expiry", async () => {
+      const tickets = harness.store.access.gatewayTickets;
+      await tickets.recordMint({ uid: "u1", purpose: "voice-ws", mintedAt: NOW, expiresAt: NOW + 10 });
+      await tickets.recordMint({ uid: "u1", purpose: "voice-ws", mintedAt: NOW + 1, expiresAt: NOW + 11 });
+      await tickets.recordMint({ uid: "u1", purpose: "preview", mintedAt: NOW + 1, expiresAt: NOW + 11 });
+
+      expect(await tickets.countMintsSince("u1", "voice-ws", NOW)).toBe(1);
+      expect(await tickets.countMintsSince("u1", "voice-ws", NOW - 1)).toBe(2);
+
+      await harness.store.sweepExpired(NOW + 11, 100);
+      expect(await tickets.countMintsSince("u1", "voice-ws", NOW - 1)).toBe(1);
+    });
+
+    it("never admits more concurrent mints than the cap, retrying the losers against the new count", async () => {
+      const mint = (id: string) =>
+        harness.store.transaction({ label: "capped-mint", maxAttempts: 10 }, async (tx) => {
+          const live = await tx.access.gatewayTickets.countLive("u1", "voice-ws", NOW);
+          if (live >= 2) throw new RangeError("capped");
+          await tx.access.gatewayTickets.create({ ...ticket, ticketId: id, expiresAt: NOW + 30_000, grant: { purpose: "voice-ws", payload: {} } });
+          await tx.access.gatewayTickets.recordMint({ uid: "u1", purpose: "voice-ws", mintedAt: NOW, expiresAt: NOW + 3_600_000 });
+        });
+
+      const results = await Promise.allSettled(["a", "b", "c", "d", "e"].map(mint));
+
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(2);
+      expect(results.filter((result) => result.status === "rejected").map((result) => (result as PromiseRejectedResult).reason)).toEqual(
+        Array.from({ length: 3 }, () => expect.any(RangeError)),
+      );
+      expect(await harness.store.access.gatewayTickets.countLive("u1", "voice-ws", NOW)).toBe(2);
+      expect(await harness.store.access.gatewayTickets.countMintsSince("u1", "voice-ws", NOW - 1)).toBe(2);
+    });
+
+    it("patches named grant fields, keeps the others and moves the revision", async () => {
+      await harness.store.access.gatewayTickets.create(ticket);
+      const minted = (await harness.store.access.gatewayTickets.get("t1"))!;
+
+      await harness.store.access.gatewayTickets.patchGrant("t1", { sessionId: "s1", turns: { a: { state: "pending" } } });
+
+      const patched = (await harness.store.access.gatewayTickets.get("t1"))!;
+      expect(patched).toEqual({
+        ...ticket,
+        grant: { ...ticket.grant, sessionId: "s1", turns: { a: { state: "pending" } } },
+        revision: expect.any(String),
+      });
+      expect(patched.revision).not.toBe(minted.revision);
+    });
+
+    it("refuses a typed field in a grant patch and writes nothing", async () => {
+      await harness.store.access.gatewayTickets.create(ticket);
+
+      await expect(harness.store.access.gatewayTickets.patchGrant("t1", { expiresAt: NOW + 1 })).rejects.toBeInstanceOf(TypeError);
+
+      expect((await harness.store.access.gatewayTickets.get("t1"))?.expiresAt).toBe(ticket.expiresAt);
+    });
+
+    it("patches a grant only at the fenced revision and refuses a missing ticket", async () => {
+      await harness.store.access.gatewayTickets.create(ticket);
+      const minted = (await harness.store.access.gatewayTickets.get("t1"))!;
+      await harness.store.access.gatewayTickets.patchGrant("t1", { sessionId: "s1" });
+
+      await expect(harness.store.access.gatewayTickets.patchGrant("t1", { sessionId: "s2" }, { revision: minted.revision })).rejects.toBeInstanceOf(
+        FenceMismatchError,
+      );
+      expect((await harness.store.access.gatewayTickets.get("t1"))?.grant.sessionId).toBe("s1");
+      await expect(harness.store.access.gatewayTickets.patchGrant("missing", { sessionId: "s2" })).rejects.toBeInstanceOf(MissingRecordError);
+      await expect(harness.store.access.gatewayTickets.patchGrant("missing", { sessionId: "s2" }, { revision: minted.revision })).rejects.toBeInstanceOf(
+        MissingRecordError,
+      );
+    });
+
+    it("keeps both entries when concurrent transactions extend one grant map", async () => {
+      await harness.store.access.gatewayTickets.create({ ...ticket, grant: { turns: {} } });
+      let release!: () => void;
+      const bothRead = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let reads = 0;
+      const addTurn = (turnId: string) =>
+        harness.store.transaction({ label: `turn-${turnId}` }, async (tx) => {
+          const current = (await tx.access.gatewayTickets.get("t1"))!;
+          reads += 1;
+          if (reads === 2) release();
+          await bothRead;
+          await tx.access.gatewayTickets.patchGrant("t1", {
+            turns: { ...(current.grant.turns as Record<string, unknown>), [turnId]: { state: "pending" } },
+          });
+        });
+
+      await Promise.all([addTurn("a"), addTurn("b")]);
+
+      expect((await harness.store.access.gatewayTickets.get("t1"))?.grant.turns).toEqual({
+        a: { state: "pending" },
+        b: { state: "pending" },
+      });
+    });
+
     it("is swept with control tickets and sessions once expiresAt passes", async () => {
       await harness.store.access.gatewayTickets.create({ ...ticket, ticketId: "expired", expiresAt: NOW - 1 });
       await harness.store.access.gatewayTickets.create({ ...ticket, ticketId: "live", expiresAt: NOW + 60_000 });
@@ -356,6 +464,34 @@ describe.skipIf(!dsn)("PostgreSQL secrets and access repositories", { timeout: 3
       const rows = await harness.query("SELECT id, at FROM $schema.gateway_access_audit ORDER BY at, id");
       expect(rows).toHaveLength(3);
       expect(rows.find((row) => row.id === first)).toEqual({ id: first, at: minute + 59_999 });
+    });
+  });
+
+  describe("customer erasure", () => {
+    const seedFor = async (uid: string, suffix: string) => {
+      await harness.store.access.gatewayTickets.create({ ticketId: `t-${suffix}`, uid, gatewayId: "g1", expiresAt: NOW + 30_000, grant: { purpose: "preview" } });
+      await harness.store.access.gatewayTickets.recordMint({ uid, purpose: "voice-ws", mintedAt: NOW, expiresAt: NOW + 10 });
+      await harness.store.access.controlTickets.create({ ticketHash: hashOf(`ticket-${suffix}`), uid, gatewayId: "g1", createdAt: NOW, expiresAt: NOW + 60_000, redeemedAt: null, grant: {} });
+      await harness.store.access.controlSessions.put({ sessionHash: `s-${suffix}`, uid, gatewayId: "g1", createdAt: NOW, expiresAt: NOW + 1, attachmentId: null, grant: {} });
+      await harness.store.access.accessAudit.record({ at: NOW, gatewayId: `grantee-${suffix}`, uid, reason: "membership_required", detail: {} });
+      await harness.store.access.accessAudit.record({ at: NOW, gatewayId: `owner-${suffix}`, uid: null, reason: "membership_required", detail: { ownerUid: uid } });
+      await harness.store.access.accessAudit.record({ at: NOW, gatewayId: `actor-${suffix}`, uid: null, reason: "membership_required", detail: { actorUid: uid } });
+    };
+
+    it("lists and erases every access record that names the user and leaves other users' records", async () => {
+      await seedFor("u1", "one");
+      await seedFor("u2", "two");
+
+      const listed = await harness.store.access.listRecordsForUid("u1");
+      expect(listed).toHaveLength(7);
+      expect(listed.some((record) => record.includes("two"))).toBe(false);
+
+      await harness.store.access.eraseForUid("u1");
+
+      expect(await harness.store.access.listRecordsForUid("u1")).toEqual([]);
+      expect(await harness.store.access.listRecordsForUid("u2")).toHaveLength(7);
+      expect(await harness.store.access.gatewayTickets.get("t-one")).toBeNull();
+      expect(await harness.store.access.gatewayTickets.get("t-two")).not.toBeNull();
     });
   });
 

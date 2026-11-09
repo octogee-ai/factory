@@ -412,6 +412,17 @@ describe.skipIf(!dsn)("PostgreSQL gateway repositories", { timeout: 30_000 }, ()
       expect(await roots().get("bender")).toMatchObject({ latestRelease: 1, desiredRelease: 1, updatedAt: NOW });
     });
 
+    it("deletes every release of one gateway and leaves other gateways alone", async () => {
+      await mint("bender");
+      await mint("fry");
+      await releases().append(appendInput("bender"));
+
+      await roots().deleteChildren("bender");
+
+      expect(await releases().list("bender", "asc")).toEqual([]);
+      expect((await releases().list("fry", "asc")).map((release) => release.release)).toEqual([1]);
+    });
+
     it("lets exactly one of two concurrent appends at the same latestRelease win", async () => {
       await mint("bender");
 

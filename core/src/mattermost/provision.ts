@@ -1,6 +1,7 @@
 import * as crypto from "crypto";
 import { log } from "../config.js";
 import { db, platformStateStore } from "../firebase.js";
+import type { ServerNow } from "../platform-state/store.js";
 import {
   workspaceGeneralChannelName,
   workspaceCoachChannelName,
@@ -32,12 +33,12 @@ async function backfillCoachIdentity(
 ): Promise<{ coachUserId: string | null; personalToken: string | null }> {
   const coachSecret = await platformStateStore.secrets.get(uid, "coachMattermost");
   if (coachSecret !== null) {
-    const token = coachSecret.kind === "connector" ? null : nonEmptyString(coachSecret.personalToken);
+    const persisted = coachSecret.kind === "coach-mattermost" ? coachSecret.personalToken : null;
+    const token = typeof persisted === "string" && persisted.length > 0 ? persisted : null;
     return { coachUserId: null, personalToken: token };
   }
 
-  const coachIdentity = await platformStateStore.workspaces.agentIdentities.get(uid);
-  let coachUserId = coachIdentity?.mattermostUserId ?? null;
+  let coachUserId = (await platformStateStore.workspaces.agentIdentities.get(uid))?.mattermostUserId ?? null;
   if (!coachUserId) {
     const coachLookup = await host.findUser(`${slug}-coach`);
     coachUserId = coachLookup?.id ?? null;
@@ -48,7 +49,7 @@ async function backfillCoachIdentity(
   }
 
   const minted = await mintAndPersistCoachToken(
-    { channelHost: host, secrets: platformStateStore.secrets },
+    { channelHost: host, secrets: platformStateStore.secrets, now: () => SERVER_NOW },
     uid,
     coachUserId,
   );
@@ -60,14 +61,10 @@ async function backfillCoachIdentity(
   return { coachUserId, personalToken: minted.token };
 }
 
+const SERVER_NOW: ServerNow = { serverNow: true };
+
 function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function existingTeamId(existing: unknown, workspace: unknown): string | null {
-  return existing === null || existing === undefined
-    ? nonEmptyString(workspace)
-    : nonEmptyString(existing);
 }
 
 interface ExistingMattermostTopology {
@@ -78,12 +75,9 @@ interface ExistingMattermostTopology {
   channelName: string;
 }
 
-async function loadExistingMattermostTopology(
-  slug: string,
-  existingMattermost: Record<string, unknown>,
-): Promise<ExistingMattermostTopology | null> {
-  const { records, channels } = platformStateStore.workspaces;
+async function loadExistingMattermostTopology(slug: string): Promise<ExistingMattermostTopology | null> {
   const scope = { workspaceSlug: slug, projectSlug: null };
+  const { records, channels } = platformStateStore.workspaces;
   const [workspace, coachDm, general, admin, coachDmPresentation] = await Promise.all([
     records.get(slug),
     channels.get(scope, "coach-dm"),
@@ -91,32 +85,30 @@ async function loadExistingMattermostTopology(
     channels.get(scope, "admin"),
     db.doc(`workspaces/${slug}/channels/coach-dm`).get(),
   ]);
-  const teamId = existingTeamId(existingMattermost.teamId, workspace?.mattermostTeamId);
+  const teamId = nonEmptyString(workspace?.mattermostTeamId);
   const coachChannelId = nonEmptyString(coachDm?.mattermostChannelId);
   const generalChannelId = nonEmptyString(general?.mattermostChannelId);
-  const adminChannelId = nonEmptyString(admin?.mattermostChannelId);
   if (!teamId || !coachChannelId || !generalChannelId) return null;
   return {
     teamId,
     coachChannelId,
     generalChannelId,
-    adminChannelId,
+    adminChannelId: nonEmptyString(admin?.mattermostChannelId),
     channelName: nonEmptyString(coachDmPresentation.data()?.name) ?? workspaceCoachChannelName(slug),
   };
 }
 
 function existingProvisioningUpdate(input: {
   builderUserId: string;
-  slug: string;
-  existingMattermost: Record<string, unknown>;
+  username: string;
   topology: ExistingMattermostTopology;
   coachUserId: string | null;
   personalToken: string | null;
 }): Record<string, unknown> {
-  const { builderUserId, slug, existingMattermost, topology, coachUserId, personalToken } = input;
+  const { builderUserId, username, topology, coachUserId, personalToken } = input;
   const update: Record<string, unknown> = {
     "mattermost.userId": builderUserId,
-    "mattermost.username": nonEmptyString(existingMattermost.username) ?? slug,
+    "mattermost.username": username,
     "mattermost.teamId": topology.teamId,
     "mattermost.channelId": topology.coachChannelId,
     "mattermost.channelName": topology.channelName,
@@ -135,26 +127,23 @@ async function backfillExistingProvisioning(
   uid: string,
   slug: string,
 ): Promise<Record<string, unknown> | null> {
-  const [userSnap, builder] = await Promise.all([
-    db.collection("users").doc(uid).get(),
+  const [builder, userDoc] = await Promise.all([
     platformStateStore.builders.records.get(uid),
+    db.doc(`users/${uid}`).get(),
   ]);
-  const existingData = userSnap.data() || {};
-  const existingMattermost = (existingData.mattermost as Record<string, unknown> | undefined) ?? {};
   const builderUserId = nonEmptyString(builder?.mattermostUserId);
   if (!builderUserId) return null;
 
-  const topology = await loadExistingMattermostTopology(slug, existingMattermost);
+  const topology = await loadExistingMattermostTopology(slug);
   if (!topology) return null;
 
   log(`[mattermost] user already provisioned (userId=${builderUserId}) — skipping MM creation`);
   const backfilledCoach = await backfillCoachIdentity(host, uid, slug);
   const coachUserId = backfilledCoach.coachUserId
-    ?? nonEmptyString(existingMattermost.coachUserId);
+    ?? nonEmptyString((await platformStateStore.workspaces.agentIdentities.get(uid))?.mattermostUserId);
   return existingProvisioningUpdate({
     builderUserId,
-    slug,
-    existingMattermost,
+    username: nonEmptyString((userDoc.data()?.mattermost as { username?: unknown } | undefined)?.username) ?? slug,
     topology,
     coachUserId,
     personalToken: backfilledCoach.personalToken,
@@ -261,15 +250,15 @@ async function createChannelWithMembers(
   return channel.id;
 }
 
-async function persistBuilderToken(uid: string, token: string | null): Promise<void> {
+async function persistBuilderToken(uid: string, builderUserId: string, token: string | null): Promise<void> {
   if (token) {
     await platformStateStore.secrets.put(uid, {
       kind: "builder-mattermost",
       secretId: "mattermost",
       projectId: null,
       personalToken: token,
-      mattermostUserId: null,
-      createdAt: { serverNow: true },
+      mattermostUserId: builderUserId,
+      createdAt: SERVER_NOW,
       rotatedAt: null,
     });
   } else {
@@ -306,7 +295,7 @@ async function createCoachBot(host: ManagedChannelHost, input: {
   log(`[mattermost] coach bot created: ${coachUsername} (${coachMmUser.id})`);
 
   const coachToken = await mintAndPersistCoachToken(
-    { channelHost: host, secrets: platformStateStore.secrets },
+    { channelHost: host, secrets: platformStateStore.secrets, now: () => SERVER_NOW },
     uid,
     coachMmUser.id,
   );
@@ -427,7 +416,7 @@ export async function provisionMattermostUser(
 
     const builderToken = await host.issueToken(mmUser.id, BUILDER_PAT_DESCRIPTION);
     log(`[mattermost] ✅ provisioned: ${slug} (${mmUser.id}), channel: ${coachChannelId} (#${coachChannelName})`);
-    await persistBuilderToken(uid, builderToken);
+    await persistBuilderToken(uid, mmUser.id, builderToken);
 
     const coach = await createCoachBot(host, {
       uid,

@@ -1,6 +1,5 @@
-import { FieldValue } from "firebase-admin/firestore";
 import { log } from "../config.js";
-import { db } from "../firebase.js";
+import { platformStateStore } from "../firebase.js";
 import { mmApiCall, getMmAdminToken } from "./client.js";
 
 export async function ensureAdminCredentials(): Promise<void> {
@@ -35,11 +34,11 @@ export async function ensureAdminCredentials(): Promise<void> {
 
   const proxyUrl = process.env.API_PUBLIC_URL || "";
 
-  await db.doc("system/mattermostAdmin").set({
+  await platformStateStore.config.mattermostAdmin.put({
     userId: adminUserId,
-    proxyUrl,
-    updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
+    proxyUrl: proxyUrl || null,
+    updatedAt: { serverNow: true },
+  });
 
   log(`[admin-creds] stored admin credentials for user ${adminUserId}`);
 }

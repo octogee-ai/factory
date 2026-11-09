@@ -59,6 +59,7 @@ export interface GatewayRootsRepository {
     patch(gatewayId: string, patch: GatewayRootPatch, fence?: GatewayRootFence): Promise<void>;
     compareAndSetRuntimeRestartFence(gatewayId: string, expected: GatewayRuntimeRestartFenceValue | null, next: GatewayRuntimeRestartFenceValue | null): Promise<void>;
     delete(gatewayId: string, fence?: GatewayRootFence): Promise<void>;
+    deleteChildren(gatewayId: string): Promise<void>;
 }
 export type GatewayRelease = ReleaseDoc;
 export interface AppendGatewayReleaseInput {

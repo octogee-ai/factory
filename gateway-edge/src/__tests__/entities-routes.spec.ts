@@ -36,6 +36,7 @@ function snap(path: string) {
 
 function docRef(path: string) {
   return {
+    id: path.split("/").at(-1),
     path,
     get: async () => snap(path),
     set: async (data: unknown) => {
@@ -321,17 +322,12 @@ describe("entities routes", () => {
       "workspaces/acme/projects/project/channels/general",
       "mmmember",
     );
-    expect(h.writes).toContainEqual({
-      method: "delete",
-      path: "workspaces/acme/projects/project/members/member-1",
-    });
+    expect(h.docs.has("workspaces/acme/projects/project/members/member-1")).toBe(false);
+    expect(h.docs.get("workspaces/acme/projects/project")?.updatedAt).toEqual(expect.any(Number));
     expect(h.writes).toContainEqual({
       method: "update",
       path: "workspaces/acme/projects/project",
-      data: {
-        memberCount: { __increment: -1 },
-        updatedAt: { __serverTimestamp: true },
-      },
+      data: { memberCount: 1 },
     });
   });
 

@@ -44,9 +44,20 @@ export interface GatewayTicket {
   readonly grant: OpaqueMap;
 }
 
+export interface GatewayTicketMint {
+  readonly uid: string;
+  readonly purpose: string;
+  readonly mintedAt: number;
+  readonly expiresAt: number;
+}
+
 export interface GatewayTicketsRepository {
   get(ticketId: string): Promise<Stored<GatewayTicket> | null>;
   create(ticket: GatewayTicket): Promise<void>;
+  countLive(uid: string, purpose: string, now: number): Promise<number>;
+  countMintsSince(uid: string, purpose: string, since: number): Promise<number>;
+  recordMint(mint: GatewayTicketMint): Promise<void>;
+  patchGrant(ticketId: string, patch: OpaqueMap, fence?: { readonly revision?: Revision }): Promise<void>;
   delete(ticketId: string, fence?: { readonly revision?: Revision }): Promise<void>;
 }
 
@@ -152,4 +163,6 @@ export interface AccessRepositories {
   readonly accessAudit: GatewayAccessAuditRepository;
   readonly modelBrokerTokens: ModelBrokerTokensRepository;
   readonly modelBrokerGatewayTokens: ModelBrokerGatewayTokensRepository;
+  listRecordsForUid(uid: string): Promise<readonly string[]>;
+  eraseForUid(uid: string): Promise<void>;
 }

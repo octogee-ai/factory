@@ -4,7 +4,7 @@ import { firestoreFleetRegistryWatchSource } from "./fleet-registry.js";
 import { firestoreAssignmentsWatchSource, firestoreGatewaysWatchSource } from "./gateways.js";
 import { firestoreOperationsWatchSource } from "./journal.js";
 import { firestoreMigrationTasksWatchSource } from "./migration-tasks.js";
-import { firestoreAgentIdentitiesWatchSource, firestoreWorkspaceChannelsWatchSource, firestoreWorkspaceMembersWatchSource, firestoreWorkspaceProjectsWatchSource, firestoreWorkspacesWatchSource, } from "./workspaces.js";
+import { firestoreAgentIdentitiesWatchSource, firestoreWorkspaceChannelsWatchSource, firestoreWorkspaceMembersWatchSource, firestoreWorkspaceProjectMembersWatchSource, firestoreWorkspaceProjectsWatchSource, firestoreWorkspacesWatchSource, } from "./workspaces.js";
 const FIRESTORE_WATCH_SOURCES = {
     operations: firestoreOperationsWatchSource,
     gateways: firestoreGatewaysWatchSource,
@@ -16,6 +16,7 @@ const FIRESTORE_WATCH_SOURCES = {
     workspaces: firestoreWorkspacesWatchSource,
     workspaceMembers: firestoreWorkspaceMembersWatchSource,
     workspaceProjects: firestoreWorkspaceProjectsWatchSource,
+    workspaceProjectMembers: firestoreWorkspaceProjectMembersWatchSource,
     workspaceChannels: firestoreWorkspaceChannelsWatchSource,
     agentIdentities: firestoreAgentIdentitiesWatchSource,
 };

@@ -1,4 +1,5 @@
 import { db, storage } from "./db.js";
+import { platformStateStore } from "./platform-state.js";
 import { uploadProjectBlobViaBroker, uploadWorkspaceBlobViaBroker } from "./project-blob-upload.js";
 import { createHash } from "node:crypto";
 import { isManifestPath } from "@octogee/core/workspace-manifest";
@@ -68,11 +69,8 @@ async function configuredWorkspaceStorageLimitBytes(
   target: WorkspaceBlobTarget,
 ): Promise<number | undefined> {
   if (target.projectSlug !== null) return undefined;
-  const workspace = await db.doc(`workspaces/${target.slug}`).get();
-  const ownerUid = workspace.data()?.ownerUid;
-  if (typeof ownerUid !== "string" || !ownerUid) {
-    throw new Error(`workspace ${target.slug} has no storage owner`);
-  }
+  const ownerUid = (await platformStateStore.workspaces.records.get(target.slug))?.ownerUid;
+  if (!ownerUid) throw new Error(`workspace ${target.slug} has no storage owner`);
   const [owner, config] = await Promise.all([
     db.doc(`users/${ownerUid}`).get(),
     readPlatformFreeConfig(),

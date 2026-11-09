@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { requireAuth } from "../middleware/auth.js";
-import { db, FieldValue } from "../lib/db.js";
+import { db } from "../lib/db.js";
+import { removeProjectMember } from "../lib/project-platform-state.js";
 import { mmApi } from "../lib/mattermost.js";
 import { resolveWorkspaceUid } from "../lib/workspace-resolution.js";
 import { decomposeProjectId } from "../lib/projectId.js";
@@ -361,15 +362,7 @@ async function removeMemberDocument(
     await platformStateStore.workspaces.members.delete(target.workspaceId, targetUid);
     return;
   }
-  const memberRef = target.projectRef.collection("members").doc(targetUid);
-  const memberDoc = await memberRef.get();
-  if (!memberDoc.exists) return;
-
-  await memberRef.delete();
-  await target.projectRef.update({
-    memberCount: FieldValue.increment(-1),
-    updatedAt: FieldValue.serverTimestamp(),
-  });
+  await removeProjectMember(target.workspaceId, target.projectRef.id, targetUid);
 }
 
 async function markWorkspaceMemberRevoking(

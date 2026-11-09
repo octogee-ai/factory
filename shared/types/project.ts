@@ -61,7 +61,7 @@ export interface ProjectAgentConfig {
   identity?: ProjectAgentIdentity;
   requestedName?: string;
   kickoff?: { status: 'pending' | 'sent'; postId?: string };
-  handoff?: { status: 'pending' | 'sent'; postId?: string };
+  handoff?: { status: 'pending' | 'sent'; postId?: string; generation?: number };
   status?: ProjectAgentStatus;
   activationId?: string | null;
   lastError?: string | null;

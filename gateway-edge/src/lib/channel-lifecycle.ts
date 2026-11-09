@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import type { WorkspaceChannelScope } from "@octogee/core/platform-state";
 import { db } from "./db.js";
 import { mmApi } from "./mattermost.js";
+import { platformStateStore } from "./platform-state.js";
 import { retiredChannelName } from "./mattermost-channel-name.js";
 import { logger } from "../middleware/logging.js";
 import {
@@ -156,17 +158,29 @@ export async function verifiedPrimaryChannelIdFor(channelDocPath: string): Promi
   return primary.id;
 }
 
+function channelLocation(channelDocPath: string): { scope: WorkspaceChannelScope; channelId: string } {
+  const parts = channelDocPath.split("/");
+  if (parts[0] === "workspaces" && parts[1] && parts.length === 4 && parts[2] === "channels" && parts[3]) {
+    return { scope: { workspaceSlug: parts[1], projectSlug: null }, channelId: parts[3] };
+  }
+  if (parts[0] === "workspaces" && parts[1] && parts.length === 6 && parts[2] === "projects" && parts[3] && parts[4] === "channels" && parts[5]) {
+    return { scope: { workspaceSlug: parts[1], projectSlug: parts[3] }, channelId: parts[5] };
+  }
+  throw new MattermostChannelBindingError(`unsupported channel document path ${channelDocPath}`);
+}
+
 async function readStoredChannel(channelDocPath: string): Promise<StoredChannel> {
-  const snap = await db.doc(channelDocPath).get();
-  if (!snap.exists) {
+  const { scope, channelId } = channelLocation(channelDocPath);
+  const [channel, product] = await Promise.all([
+    platformStateStore.workspaces.channels.get(scope, channelId),
+    db.doc(channelDocPath).get(),
+  ]);
+  if (channel === null) {
     throw new MattermostChannelBindingError(`channel document ${channelDocPath} was not found`);
   }
-  const data = snap.data() ?? {};
-  const mattermost = (data.mattermost ?? {}) as Record<string, unknown>;
-  const primaryChannelId = typeof mattermost.channelId === "string" ? mattermost.channelId : "";
-  const legacyActivityChannelId = typeof mattermost.activityChannelId === "string" && mattermost.activityChannelId
-    ? mattermost.activityChannelId
-    : null;
+  const primaryChannelId = channel.mattermostChannelId ?? "";
+  const legacy = product.data()?.mattermost?.activityChannelId;
+  const legacyActivityChannelId = typeof legacy === "string" && legacy ? legacy : null;
   if (!primaryChannelId) {
     throw new MattermostChannelBindingError(`channel document ${channelDocPath} has no primary channel`);
   }
@@ -319,21 +333,15 @@ async function deleteMember(channelId: string, mmUserId: string): Promise<boolea
 }
 
 async function expectedBinding(channelDocPath: string): Promise<ExpectedBinding> {
-  const parts = channelDocPath.split("/");
-  const workspaceId = parts[0] === "workspaces" ? parts[1] : undefined;
-  if (!workspaceId) throw new MattermostChannelBindingError(`unsupported channel document path ${channelDocPath}`);
-  const workspace = await db.doc(`workspaces/${workspaceId}`).get();
-  const teamId = workspace.data()?.mattermost?.teamId;
-  if (typeof teamId !== "string" || !teamId) {
+  const { scope, channelId } = channelLocation(channelDocPath);
+  const workspaceId = scope.workspaceSlug;
+  const teamId = (await platformStateStore.workspaces.records.get(workspaceId))?.mattermostTeamId;
+  if (!teamId) {
     throw new MattermostChannelBindingError(`workspace ${workspaceId} has no Mattermost team binding`);
   }
-  if (parts[2] === "channels" && parts[3]) {
-    return { primaryName: workspacePrimaryName(workspaceId, parts[3]), teamId };
-  }
-  if (parts[2] === "projects" && parts[3] && parts[4] === "channels" && parts[5]) {
-    return { primaryName: projectChannelName(workspaceId, parts[3], parts[5]), teamId };
-  }
-  throw new MattermostChannelBindingError(`unsupported channel document path ${channelDocPath}`);
+  return scope.projectSlug === null
+    ? { primaryName: workspacePrimaryName(workspaceId, channelId), teamId }
+    : { primaryName: projectChannelName(workspaceId, scope.projectSlug, channelId), teamId };
 }
 
 function workspacePrimaryName(workspaceId: string, channelId: string): string {

@@ -10,7 +10,7 @@ import type { JobRepositories } from "./jobs.js";
 import type { MigrationTransferTask, MigrationTransferTaskStatus, MigrationTasksRepository } from "./migration-tasks.js";
 import type { JournalRepositories, OperationRecord } from "./operations.js";
 import type { AccessRepositories, SecretsRepository } from "./secrets.js";
-import type { BuilderAgentIdentity, WorkspaceChannel, WorkspaceMember, WorkspaceProject, WorkspaceRecord, WorkspaceRepositories } from "./workspaces.js";
+import type { BuilderAgentIdentity, WorkspaceChannel, WorkspaceMember, WorkspaceProject, WorkspaceProjectMember, WorkspaceRecord, WorkspaceRepositories } from "./workspaces.js";
 export interface ServerNow {
     readonly serverNow: true;
 }
@@ -92,6 +92,10 @@ export interface WatchFilters {
     readonly workspaceProjects: {
         readonly workspaceSlug?: string;
     };
+    readonly workspaceProjectMembers: {
+        readonly workspaceSlug?: string;
+        readonly uid?: string;
+    };
     readonly workspaceChannels: {
         readonly workspaceSlug?: string;
     };
@@ -110,6 +114,7 @@ export interface WatchRecords {
     readonly workspaces: WorkspaceRecord;
     readonly workspaceMembers: WorkspaceMember;
     readonly workspaceProjects: WorkspaceProject;
+    readonly workspaceProjectMembers: WorkspaceProjectMember;
     readonly workspaceChannels: WorkspaceChannel;
     readonly agentIdentities: BuilderAgentIdentity;
 }

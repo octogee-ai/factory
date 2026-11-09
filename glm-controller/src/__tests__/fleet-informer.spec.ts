@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
-import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
 import {
   BackendFailureError,
   MalformedRecordError,
@@ -9,7 +7,7 @@ import {
 } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import {
-  assignedSlugsFromUserMirror,
+  assignedSlugsFromBuilderMirror,
   createFleetInformer,
   FLEET_INFORMER_REATTACH_MS_DEFAULT,
   type FleetInformer,
@@ -18,59 +16,11 @@ import {
 } from "../fleet-informer.js";
 import { createScriptedWatches, storeWithScriptedWatches, type ScriptedWatches } from "./fixtures/scripted-watches.js";
 
-type FakeDoc = QueryDocumentSnapshot;
-
-interface FakeSnapshot {
-  docs: FakeDoc[];
-}
-
-interface OwnedListener {
-  onNext: (snap: FakeSnapshot) => void;
-  onError: (err: Error) => void;
-  unsubscribed: boolean;
-}
-
-function doc(id: string, data: Record<string, unknown>): FakeDoc {
-  return { id, data: () => data } as unknown as QueryDocumentSnapshot;
-}
-
-function fakeUsersDb() {
-  const users: OwnedListener[] = [];
-  const selects: string[][] = [];
-  const attach = (onNext: (snap: FakeSnapshot) => void, onError: (err: Error) => void) => {
-    const listener: OwnedListener = { onNext, onError, unsubscribed: false };
-    users.push(listener);
-    return () => {
-      listener.unsubscribed = true;
-    };
-  };
-  const db = {
-    collection: (name: string) => {
-      if (name !== "users") throw new Error(`unexpected collection ${name}`);
-      return {
-        onSnapshot: attach,
-        select: (...fields: string[]) => {
-          selects.push(fields);
-          return { onSnapshot: attach };
-        },
-      };
-    },
-  } as unknown as Firestore;
-  return { db, users, selects };
-}
-
-function lastListener(bucket: OwnedListener[]): OwnedListener {
-  const listener = bucket.at(-1);
-  if (!listener) throw new Error("no listener attached");
-  return listener;
-}
-
 function startInformer(options: { reattachMs?: number; log?: (message: string) => void } = {}) {
-  const { db, users, selects } = fakeUsersDb();
   const watches = createScriptedWatches();
   const store = storeWithScriptedWatches(createDocumentFixtureStore({}), watches);
-  const informer = createFleetInformer({ db, store, log: options.log ?? vi.fn(), reattachMs: options.reattachMs });
-  return { informer, watches, users, selects };
+  const informer = createFleetInformer({ store, log: options.log ?? vi.fn(), reattachMs: options.reattachMs });
+  return { informer, watches };
 }
 
 function record<A extends MirroredAggregate>(fields: Record<string, unknown>): Stored<WatchRecords[A]> {
@@ -95,7 +45,22 @@ function listenerFailure(): BackendFailureError {
   return new BackendFailureError("firestore", "watch fleetRegistry", { cause: new Error("listen stream broke") });
 }
 
-describe("fleet informer — users listener", () => {
+function builder(uid: string, fields: Record<string, unknown> = {}): Stored<WatchRecords["builders"]> {
+  return record<"builders">({
+    uid,
+    slug: uid,
+    admitted: true,
+    accountLifecycle: null,
+    provisioning: { status: "in_progress" },
+    openclaw: {},
+    gateway: null,
+    activationLease: null,
+    fences: {},
+    ...fields,
+  });
+}
+
+describe("fleet informer — Builder records mirror", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -103,106 +68,86 @@ describe("fleet informer — users listener", () => {
     vi.useRealTimers();
   });
 
-  it("wakes placement only when eligible unassigned users change", () => {
-    const { informer, users } = startInformer();
+  it("wakes placement only when the eligible unassigned Builders change", () => {
+    const { informer, watches } = startInformer();
     const wake = vi.fn();
     const stop = informer.subscribeUnassignedUsers!(wake);
-    const candidate = { username: "alice", onboardingStep: "complete", provisioning: { status: "in_progress" } };
-    lastListener(users).onNext({ docs: [doc("alice", candidate)] });
+
+    watches.latest("builders").snapshot([builder("alice")]);
     expect(wake).toHaveBeenCalledOnce();
-    lastListener(users).onNext({ docs: [doc("alice", { ...candidate, displayName: "Alice" })] });
+
+    watches.latest("builders").changes([
+      { type: "modified", key: "alice", record: builder("alice", { persona: { vibe: "calm" } }) },
+    ]);
     expect(wake).toHaveBeenCalledOnce();
-    lastListener(users).onNext({ docs: [doc("alice", { ...candidate, provisioning: { openclaw: { gatewayId: "shared-a" } } })] });
+
+    watches.latest("builders").changes([
+      { type: "modified", key: "alice", record: builder("alice", { gateway: { gatewayId: "shared-a" } }) },
+    ]);
     expect(wake).toHaveBeenCalledTimes(2);
     stop();
     informer.stop();
   });
 
-  it("attaches a users listener without a Firestore projection", () => {
-    const { informer, selects, users } = startInformer();
+  it("does not wake placement for a Builder the operator manages", () => {
+    const { informer, watches } = startInformer();
+    const wake = vi.fn();
+    informer.subscribeUnassignedUsers!(wake);
 
-    expect(users).toHaveLength(1);
-    expect(selects).toEqual([]);
+    watches.latest("builders").snapshot([builder("alice", { openclaw: { managedBy: "operator" } })]);
+
+    expect(wake).not.toHaveBeenCalled();
     informer.stop();
   });
 
-  it("serves null before the initial users snapshot, docs sorted by id after", () => {
-    const { informer, users } = startInformer();
+  it("serves null before the first snapshot and Builders sorted by uid after it", () => {
+    const { informer, watches } = startInformer();
+    expect(informer.builders()).toBeNull();
 
-    expect(informer.users()).toBeNull();
+    watches.latest("builders").snapshot([builder("uid-b"), builder("uid-a")]);
 
-    lastListener(users).onNext({
-      docs: [doc("uid-b", { username: "bee" }), doc("uid-a", { username: "aye" })],
-    });
-
-    expect(informer.users()?.map((d) => d.id)).toEqual(["uid-a", "uid-b"]);
-    expect(informer.users()?.[0]?.data()).toEqual({ username: "aye" });
+    expect(informer.builders()?.map((stored) => stored.uid)).toEqual(["uid-a", "uid-b"]);
     informer.stop();
   });
 
-  it("rebuilds the users mirror from each full snapshot — removed docs disappear", () => {
-    const { informer, users } = startInformer();
+  it("drops a removed Builder from the mirror", () => {
+    const { informer, watches } = startInformer();
+    watches.latest("builders").snapshot([builder("uid-a"), builder("uid-b")]);
 
-    lastListener(users).onNext({
-      docs: [doc("uid-a", { username: "aye" }), doc("uid-b", { username: "bee" })],
-    });
-    lastListener(users).onNext({ docs: [doc("uid-b", { username: "bee" })] });
+    watches.latest("builders").changes([{ type: "removed", key: "uid-a", record: null }]);
 
-    expect(informer.users()?.map((d) => d.id)).toEqual(["uid-b"]);
+    expect(informer.builders()?.map((stored) => stored.uid)).toEqual(["uid-b"]);
     informer.stop();
   });
 
-  it("marks the users mirror stale on listener error and re-attaches after the delay", () => {
+  it("keeps the healthy Builders readable when one record is malformed", () => {
+    const { informer, watches } = startInformer();
+    watches.latest("builders").snapshot([builder("uid-a"), builder("uid-b")]);
+
+    watches.latest("builders").error(
+      new MalformedRecordError({ aggregate: "builder", key: "uid-b" }, "provisioning.status is not a string"),
+    );
+
+    expect(informer.builders()).toBeNull();
+    expect(informer.buildersWithoutMalformed()?.records.map((stored) => stored.uid)).toEqual(["uid-a"]);
+    expect(informer.buildersWithoutMalformed()?.malformedKeys).toEqual(["uid-b"]);
+    informer.stop();
+  });
+
+  it("discards the mirror when the watch dies and re-attaches after the delay", async () => {
     const log = vi.fn();
-    const { informer, users } = startInformer({ log });
+    const { informer, watches } = startInformer({ log, reattachMs: 5_000 });
+    watches.latest("builders").snapshot([builder("uid-a")]);
 
-    lastListener(users).onNext({ docs: [doc("uid-a", { username: "aye" })] });
-    expect(informer.users()).not.toBeNull();
+    watches.latest("builders").reject(new Error("listen stream broke"));
+    await vi.advanceTimersByTimeAsync(0);
 
-    lastListener(users).onError(new Error("listen stream broke"));
-    expect(informer.users()).toBeNull();
+    expect(informer.builders()).toBeNull();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("listen stream broke"));
-
-    expect(users).toHaveLength(1);
-    vi.advanceTimersByTime(FLEET_INFORMER_REATTACH_MS_DEFAULT);
-    expect(users).toHaveLength(2);
-
-    lastListener(users).onNext({ docs: [doc("uid-b", { username: "bee" })] });
-    expect(informer.users()?.map((d) => d.id)).toEqual(["uid-b"]);
-    informer.stop();
-  });
-
-  it("logs the listener error even when the mirror was never fresh", () => {
-    const log = vi.fn();
-    const { informer, users } = startInformer({ log });
-
-    lastListener(users).onError(new Error("PERMISSION_DENIED: listen rejected"));
-    vi.advanceTimersByTime(FLEET_INFORMER_REATTACH_MS_DEFAULT);
-
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("PERMISSION_DENIED"));
-    informer.stop();
-  });
-
-  it("schedules exactly one re-attach no matter how many errors a dead listener reports", () => {
-    const { informer, users } = startInformer();
-
-    lastListener(users).onError(new Error("first"));
-    lastListener(users).onError(new Error("second"));
-
-    vi.advanceTimersByTime(FLEET_INFORMER_REATTACH_MS_DEFAULT * 2);
-
-    expect(users).toHaveLength(2);
-    informer.stop();
-  });
-
-  it("honors a configured re-attach delay", () => {
-    const { informer, users } = startInformer({ reattachMs: 5_000 });
-
-    lastListener(users).onError(new Error("boom"));
     vi.advanceTimersByTime(4_999);
-    expect(users).toHaveLength(1);
+    expect(watches.attachCount("builders")).toBe(1);
     vi.advanceTimersByTime(1);
-    expect(users).toHaveLength(2);
+    expect(watches.attachCount("builders")).toBe(2);
     informer.stop();
   });
 });
@@ -222,7 +167,8 @@ describe("fleet informer — store watch mirrors", () => {
       expect(watches.attachCount(aggregate)).toBe(1);
       expect(watches.latest(aggregate).filter).toEqual({});
     }
-    expect(watches.attachCount("builders")).toBe(0);
+    expect(watches.attachCount("builders")).toBe(1);
+    expect(watches.latest("builders").filter).toEqual({});
     informer.stop();
   });
 
@@ -460,78 +406,33 @@ describe("fleet informer — store watch mirrors", () => {
     informer.stop();
   });
 
-  it("stop() closes every watch, unsubscribes users and cancels pending re-attaches", () => {
-    const { informer, watches, users } = startInformer();
+  it("stop() closes every watch and cancels pending re-attaches", () => {
+    const { informer, watches } = startInformer();
     watches.latest("fleetRegistry").error(malformed("broken"));
-    lastListener(users).onError(new Error("boom"));
+    watches.latest("builders").error(new BackendFailureError("firestore", "watch builders", { cause: new Error("boom") }));
 
     informer.stop();
 
     for (const [aggregate] of MIRRORS) expect(watches.latest(aggregate).open).toBe(false);
-    expect(lastListener(users).unsubscribed).toBe(true);
+    expect(watches.latest("builders").open).toBe(false);
     vi.advanceTimersByTime(FLEET_INFORMER_REATTACH_MS_DEFAULT * 2);
     expect(watches.attachCount("fleetRegistry")).toBe(1);
-    expect(users).toHaveLength(1);
+    expect(watches.attachCount("builders")).toBe(1);
   });
 });
 
-describe("assignedSlugsFromUserMirror", () => {
-  const userDocs = [
-    doc("uid-a", {
-      username: "alice",
-      provisioning: { openclaw: { gatewayId: "shared-blue", slug: "alice" } },
-    }),
-    doc("uid-b", {
-      username: "bob-fallback",
-      provisioning: { openclaw: { gatewayId: "shared-blue" } },
-    }),
-    doc("uid-c", {
-      username: "carol",
-      provisioning: { openclaw: { gatewayId: "bender", slug: "carol" } },
-    }),
-    doc("uid-d", { username: "dave" }),
+describe("assignedSlugsFromBuilderMirror", () => {
+  const builders = [
+    { uid: "uid-a", slug: "alice", gateway: { gatewayId: "shared-blue" } },
+    { uid: "uid-b", slug: "bob", gateway: { gatewayId: "shared-blue" } },
+    { uid: "uid-c", slug: "carol", gateway: { gatewayId: "bender" } },
+    { uid: "uid-d", slug: "dave", gateway: null },
+    { uid: "uid-e", slug: null, gateway: { gatewayId: "bender" } },
   ];
 
-  it("resolves the assigned slugs for a gateway from mirror docs", () => {
-    expect(assignedSlugsFromUserMirror(userDocs, "shared-blue").sort()).toEqual([
-      "alice",
-      "bob-fallback",
-    ]);
-    expect(assignedSlugsFromUserMirror(userDocs, "bender")).toEqual(["carol"]);
-    expect(assignedSlugsFromUserMirror(userDocs, "ghost")).toEqual([]);
-  });
-
-  it("matches readAssignedSlugsForGateway on identical data", async () => {
-    const queryDb = {
-      collection: (name: string) => {
-        if (name !== "users") throw new Error(`unexpected collection ${name}`);
-        return {
-          where: (field: string, op: string, value: unknown) => {
-            expect(field).toBe("provisioning.openclaw.gatewayId");
-            expect(op).toBe("==");
-            return {
-              get: async () => ({
-                docs: userDocs.filter((d) => {
-                  const provisioning = d.data().provisioning as
-                    | Record<string, unknown>
-                    | undefined;
-                  const openclaw = provisioning?.openclaw as
-                    | Record<string, unknown>
-                    | undefined;
-                  return openclaw?.gatewayId === value;
-                }),
-              }),
-            };
-          },
-        };
-      },
-    };
-    const direct = await readAssignedSlugsForGateway(
-      queryDb as never,
-      "shared-blue",
-    );
-    expect(assignedSlugsFromUserMirror(userDocs, "shared-blue").sort()).toEqual(
-      [...direct].sort(),
-    );
+  it("lists the slugs of the Builders mirrored on the gateway", () => {
+    expect(assignedSlugsFromBuilderMirror(builders, "shared-blue").sort()).toEqual(["alice", "bob"]);
+    expect(assignedSlugsFromBuilderMirror(builders, "bender")).toEqual(["carol"]);
+    expect(assignedSlugsFromBuilderMirror(builders, "ghost")).toEqual([]);
   });
 });

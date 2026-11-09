@@ -107,13 +107,9 @@ async function projectChannelReadable(
 ): Promise<boolean> {
   const [project, membership] = await Promise.all([
     deps.store.workspaces.projects.get(workspaceSlug, projectSlug),
-    deps.db.doc(`workspaces/${workspaceSlug}/projects/${projectSlug}/members/${uid}`).get(),
+    deps.store.workspaces.projectMembers.get(workspaceSlug, projectSlug, uid),
   ]);
-  const membershipData = membership.data();
-  return project?.ownerUid === uid ||
-    (membership.exists === true &&
-      membershipData?.id === uid &&
-      (membershipData.role === "owner" || membershipData.role === "member"));
+  return project?.ownerUid === uid || membership !== null;
 }
 
 async function canonicalChannelReadable(

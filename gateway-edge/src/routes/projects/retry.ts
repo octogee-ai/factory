@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { strictRateLimit } from "../../middleware/security.js";
 import { db, FieldValue } from "../../lib/db.js";
+import { platformStateStore } from "../../lib/platform-state.js";
 import { mmApi } from "../../lib/mattermost.js";
 import { createFreshPrivateChannel } from "../../lib/mattermost-channel-name.js";
 import { logger } from "../../middleware/logging.js";
@@ -32,40 +33,61 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-async function markRetryFailed(projectRef: FirebaseFirestore.DocumentReference, provisioningError: string): Promise<void> {
-  await projectRef.update({
+function generalChannelScope(ctx: ProjectCtx): { workspaceSlug: string; projectSlug: string } {
+  return { workspaceSlug: ctx.wid, projectSlug: ctx.pid };
+}
+
+async function markRetryFailed(ctx: ProjectCtx, provisioningError: string): Promise<void> {
+  await platformStateStore.workspaces.projects.patch(ctx.wid, ctx.pid, {
     provisioningState: "failed",
     provisioningError: provisioningError.slice(0, 500),
-    updatedAt: FieldValue.serverTimestamp(),
+    updatedAt: { serverNow: true },
   });
 }
 
 async function claimProjectRetry(ctx: ProjectCtx): Promise<boolean> {
-  return db.runTransaction(async (transaction) => {
-    const project = (await transaction.get(ctx.projectRef)).data();
+  return platformStateStore.transaction({ label: "project-retry.claim" }, async (tx) => {
+    const { projects, channels } = tx.workspaces;
+    const project = await projects.get(ctx.wid, ctx.pid);
     if (!project || project.ownerUid !== ctx.uid || project.provisioningCleanup?.status === "in_progress") {
       return false;
     }
     if (project.provisioningState !== "failed") {
       if (project.provisioningState !== "active") return false;
-      const channel = await transaction.get(ctx.projectRef.collection("channels").doc("general"));
-      if (channel.exists) return false;
+      if (await channels.get(generalChannelScope(ctx), "general")) return false;
     }
-    transaction.update(ctx.projectRef, {
+    await projects.patch(ctx.wid, ctx.pid, {
       provisioningState: "provisioning",
       provisioningError: null,
       provisioningCleanup: null,
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+      updatedAt: { serverNow: true },
+    }, { revision: project.revision });
     return true;
   });
+}
+
+async function restoreInterruptedProductFields(ctx: ProjectCtx): Promise<void> {
+  if (ctx.project.name !== undefined) return;
+  await ctx.projectRef.set({
+    name: ctx.pid,
+    tagline: "",
+    description: "",
+    category: "other",
+    projectType: null,
+    canvasFile: "README.md",
+    recipe: defaultProjectRecipe(null),
+    publishedUrl: null,
+    starCount: 0,
+    memberCount: 1,
+    createdAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
 }
 
 async function retryMattermostContext(ctx: ProjectCtx, res: Response): Promise<RetryMattermostContext | null> {
   const userDoc = await db.doc(`users/${ctx.uid}`).get();
   const callerCtx = await getWorkspaceMmContext(ctx.uid, ctx.wid, userDoc.data());
   if (callerCtx?.teamId) return { ...callerCtx, teamId: callerCtx.teamId };
-  await markRetryFailed(ctx.projectRef, "Workspace has no Mattermost team context");
+  await markRetryFailed(ctx, "Workspace has no Mattermost team context");
   res.status(502).json({ error: "Retry failed — workspace chat is not ready" });
   return null;
 }
@@ -102,20 +124,14 @@ async function restoreStoredRetryChannel(
   teamId: string,
   channelName: string,
 ): Promise<string | null> {
-  const stored = await ctx.projectRef.collection("channels").doc("general").get();
-  const channelId = storedChannelId(stored.data()?.mattermost);
+  const stored = await platformStateStore.workspaces.channels.get(generalChannelScope(ctx), "general");
+  const channelId = stored?.mattermostChannelId;
   if (!channelId) return null;
   const channel = await loadStoredRetryChannel(channelId);
   if (!channel) return null;
   assertStoredRetryChannelBinding(channel, channelId, teamId, channelName, ctx);
   await restoreArchivedRetryChannel(channel, channelId);
   return channelId;
-}
-
-function storedChannelId(mattermost: unknown): string | null {
-  if (!mattermost || typeof mattermost !== "object") return null;
-  const { channelId } = mattermost as Record<string, unknown>;
-  return typeof channelId === "string" && channelId ? channelId : null;
 }
 
 async function loadStoredRetryChannel(channelId: string): Promise<Record<string, unknown> | null> {
@@ -163,7 +179,7 @@ async function retryChannelId(
     return { id: await ensureRetryChannel(ctx, teamId, channelName) };
   } catch (err) {
     const message = errorMessage(err);
-    await markRetryFailed(ctx.projectRef, message);
+    await markRetryFailed(ctx, message);
     logger.error(`[projects] Retry provisioning failed for ${ctx.wid}/${ctx.pid}:`, { err });
     res.status(502).json({ error: "Retry failed — could not create chat channel" });
     return null;
@@ -196,7 +212,7 @@ async function addRetryMembersOrFail(
 ): Promise<boolean> {
   const memberFailure = await addRetryMembers(mmChannelId, members);
   if (!memberFailure) return true;
-  await markRetryFailed(ctx.projectRef, memberFailure);
+  await markRetryFailed(ctx, memberFailure);
   logger.error(`[projects] Retry membership failed for ${ctx.wid}/${ctx.pid}: ${memberFailure}`);
   res.status(502).json({ error: "Retry failed — could not add channel members" });
   return false;
@@ -206,15 +222,16 @@ async function writeRetryGeneralChannel(
   ctx: ProjectCtx,
   mmChannelId: string,
 ): Promise<void> {
-  await ctx.projectRef.collection("channels").doc("general").set({
-    id: "general",
+  await platformStateStore.workspaces.channels.put({
+    scope: generalChannelScope(ctx),
+    channelId: "general",
     kind: "general",
-    name: "general",
-    mattermost: {
-      channelId: mmChannelId,
-    },
-    createdAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
+    mattermostChannelId: mmChannelId,
+    archivedAt: null,
+    createdBy: null,
+    createdAt: { serverNow: true },
+  });
+  await ctx.projectRef.collection("channels").doc("general").set({ name: "general" }, { merge: true });
 }
 
 function restoredVisibility(ctx: ProjectCtx): string {
@@ -238,20 +255,20 @@ async function reconcileRetryRepoOrFail(ctx: ProjectCtx, res: Response, visibili
       : defaultProjectRecipe(projectType),
   });
   if (!repoErr) return true;
-  await markRetryFailed(ctx.projectRef, repoErr);
+  await markRetryFailed(ctx, repoErr);
   logger.error(`[projects] Gitea reconcile failed for ${ctx.wid}/${ctx.pid}: ${repoErr}`);
   res.status(502).json({ error: "Retry failed — could not reconcile code repo" });
   return false;
 }
 
 async function activateRetriedProject(ctx: ProjectCtx, visibility: string): Promise<void> {
-  await ctx.projectRef.update({
+  await platformStateStore.workspaces.projects.patch(ctx.wid, ctx.pid, {
     provisioningState: "active",
     provisioningError: null,
     visibility,
     pendingVisibility: null,
     giteaRepoName: ctx.project.giteaRepoName || projectRepoName(ctx.pid),
-    updatedAt: FieldValue.serverTimestamp(),
+    updatedAt: { serverNow: true },
   });
 }
 
@@ -270,6 +287,7 @@ async function provisionRetriedProjectAgent(ctx: ProjectCtx): Promise<void> {
 }
 
 async function retryProjectProvisioning(ctx: ProjectCtx, res: Response): Promise<void> {
+  await restoreInterruptedProductFields(ctx);
   const callerCtx = await retryMattermostContext(ctx, res);
   if (!callerCtx) return;
 
@@ -306,7 +324,7 @@ router.post("/:wid/:pid/retry-provisioning", strictRateLimit, async (req: Reques
     try {
       await retryProjectProvisioning(ctx, res);
     } catch (error) {
-      await markRetryFailed(ctx.projectRef, errorMessage(error));
+      await markRetryFailed(ctx, errorMessage(error));
       throw error;
     }
   });

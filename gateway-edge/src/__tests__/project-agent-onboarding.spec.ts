@@ -41,7 +41,12 @@ function ref(path: string) {
     h.afterWrite.get(path)?.();
   } };
 }
-vi.mock('../lib/db.js', () => ({ db: { doc: ref, runTransaction: (fn: any) => fn({ get: (r: any) => r.get(), set: (r: any, p: any) => r.set(p), update: (r: any, p: any) => r.update(p) }) }, FieldValue: { delete: () => 'DELETE', serverTimestamp: () => 'NOW', increment: () => 1 } }));
+vi.mock('../lib/db.js', () => ({ db: { doc: ref, runTransaction: async (fn: any) => {
+  const writes: Array<() => Promise<unknown>> = [];
+  const result = await fn({ get: (r: any) => r.get(), set: (r: any, p: any) => { writes.push(() => r.set(p)); }, update: (r: any, p: any) => { writes.push(() => r.update(p)); } });
+  for (const write of writes) await write();
+  return result;
+} }, FieldValue: { delete: () => 'DELETE', serverTimestamp: () => 'NOW', increment: () => 1 } }));
 vi.mock('../lib/platform-state.js', async () => {
   const { createDocumentFixtureStore } = await import('@octogee/core/testing/journal-store');
   return { platformStateStore: createDocumentFixtureStore(h.docs) };
@@ -79,7 +84,7 @@ it('queues a distinct identity and context, honoring the Builder’s requested n
   h.docs.get(projectPath).agent.requestedName = 'Birdie';
   await queueProjectHandoff('u', 'alice', 'golf', handoff);
   expect(h.docs.get(projectPath).agent.identity).toEqual({ name: 'Birdie', emoji: '⛳', persona: handoff.persona });
-  expect(h.docs.get(projectPath).agent.handoff).toEqual({ status: 'pending' });
+  expect(h.docs.get(projectPath).agent.handoff).toEqual({ status: 'pending', generation: 1 });
   expect(h.docs.get(`${projectPath}/agentState/handoff`).message).toBe(handoff.message);
   expect(h.mm).not.toHaveBeenCalled();
   await queueProjectHandoff('u', 'alice', 'golf', handoff);
@@ -91,6 +96,55 @@ it('rejects a handoff to another Builder’s project and malformed input', async
   await expect(queueProjectHandoff('other', 'alice', 'golf', handoff)).rejects.toThrow('active project');
   expect(parseProjectHandoff({ ...handoff, emoji: '' })).toBeNull();
   expect(parseProjectHandoff(handoff)).toEqual(handoff);
+});
+it('refuses a handoff when a delivery lease appears after the preflight reads', async () => {
+  h.afterRead.set(`${projectPath}/agentState/kickoffDelivery`, () => {
+    h.docs.get(projectPath).agent.deliveryLeaseUntil = Date.now() + 60_000;
+  });
+  await expect(queueProjectHandoff('u', 'alice', 'golf', handoff)).rejects.toThrow('in progress');
+  expect(h.docs.get(`${projectPath}/agentState/handoff`)).toBeUndefined();
+  expect(h.docs.get(projectPath).agent.handoff).toBeUndefined();
+});
+it('refuses a handoff when the project leaves active after the preflight reads', async () => {
+  h.afterRead.set(`${projectPath}/agentState/kickoffDelivery`, () => {
+    h.docs.get(projectPath).provisioningState = 'failed';
+  });
+  await expect(queueProjectHandoff('u', 'alice', 'golf', handoff)).rejects.toThrow('active project');
+  expect(h.docs.get(`${projectPath}/agentState/handoff`)).toBeUndefined();
+});
+it('writes the handoff message on retry after the message write was interrupted', async () => {
+  h.refused.add(`${projectPath}/agentState/handoff`);
+  await expect(queueProjectHandoff('u', 'alice', 'golf', handoff)).rejects.toThrow('intent write refused');
+  expect(h.docs.get(projectPath).agent.handoff).toEqual({ status: 'pending', generation: 1 });
+  expect(h.docs.get(`${projectPath}/agentState/handoff`)).toBeUndefined();
+  h.refused.clear();
+  await queueProjectHandoff('u', 'alice', 'golf', handoff);
+  expect(h.docs.get(`${projectPath}/agentState/handoff`).message).toBe(handoff.message);
+  expect(h.docs.get(projectPath).agent.handoff).toEqual({ status: 'pending', generation: 2 });
+});
+it('keeps the newer handoff message when the older request finishes writing last', async () => {
+  const { platformStateStore } = await import('../lib/platform-state.js');
+  const commit = platformStateStore.transaction.bind(platformStateStore);
+  const newer = { ...handoff, persona: 'Patient golf tutor', message: 'Newer task' };
+  const transaction = vi.spyOn(platformStateStore, 'transaction').mockImplementationOnce(async (options: any, work: any) => {
+    const committed = await commit(options, work);
+    await queueProjectHandoff('u', 'alice', 'golf', newer);
+    return committed;
+  });
+  try {
+    await queueProjectHandoff('u', 'alice', 'golf', handoff);
+  } finally {
+    transaction.mockRestore();
+  }
+  expect(h.docs.get(projectPath).agent.identity.persona).toBe(newer.persona);
+  expect(h.docs.get(`${projectPath}/agentState/handoff`)).toMatchObject({ message: newer.message, generation: 2 });
+});
+it('refuses to deliver a handoff message that belongs to another generation of the project agent', async () => {
+  await queueProjectHandoff('u', 'alice', 'golf', handoff);
+  h.docs.get(projectPath).agent.handoff.generation = 2;
+  await expect(deliverProjectAgentOnboarding('u', 'alice', 'golf')).rejects.toThrow('handoff identity is missing');
+  expect(h.mm).not.toHaveBeenCalledWith('/posts', 'POST', expect.anything(), expect.anything());
+  expect(h.docs.get(projectPath).agent.handoff.status).toBe('pending');
 });
 it('waits for readiness, then delivers the complete handoff once without writing to the remote repo', async () => {
   await queueProjectHandoff('u', 'alice', 'golf', handoff);
@@ -145,7 +199,7 @@ it('recovers the post of a delivery intent another worker created between the re
   expect(h.docs.get(handoffIntent)).toEqual(created);
   expect(h.mm.mock.calls.filter(c => c[0].includes('/posts?')).map(c => c[0])).toEqual(['/channels/general/posts?per_page=100&before=cursor']);
   expect(h.mm.mock.calls.some(c => c[0] === '/posts')).toBe(false);
-  expect(h.docs.get(projectPath).agent.handoff).toEqual({ status: 'sent', postId: 'prior' });
+  expect(h.docs.get(projectPath).agent.handoff).toEqual({ status: 'sent', generation: 1, postId: 'prior' });
 });
 it('stops before preparing the post when its lease was replaced right after it created the delivery intent', async () => {
   await queueProjectHandoff('u', 'alice', 'golf', handoff);

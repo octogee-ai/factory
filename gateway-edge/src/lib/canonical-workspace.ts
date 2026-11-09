@@ -1,5 +1,5 @@
 import { USERNAME_RE } from "@octogee/shared/types/identity";
-import { db } from "./db.js";
+import { platformStateStore } from "./platform-state.js";
 
 export interface UserWorkspaceIdentityData {
   username?: unknown;
@@ -22,8 +22,7 @@ function unique<T>(values: T[]): T[] {
 }
 
 async function ownsWorkspace(uid: string, slug: string): Promise<boolean> {
-  const snap = await db.doc(`workspaces/${slug}`).get();
-  return snap.exists && snap.data()?.ownerUid === uid;
+  return (await platformStateStore.workspaces.records.get(slug))?.ownerUid === uid;
 }
 
 export async function resolveCanonicalWorkspaceSlug(

@@ -1,10 +1,10 @@
-import type { Firestore } from "firebase-admin/firestore";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 
 export async function projectMemberExists(
-  db: Pick<Firestore, "doc">,
+  state: Pick<PlatformStateRepositories, "workspaces">,
   workspaceSlug: string,
   projectSlug: string,
   uid: string,
 ): Promise<boolean> {
-  return (await db.doc(`workspaces/${workspaceSlug}/projects/${projectSlug}/members/${uid}`).get()).exists;
+  return (await state.workspaces.projectMembers.get(workspaceSlug, projectSlug, uid)) !== null;
 }

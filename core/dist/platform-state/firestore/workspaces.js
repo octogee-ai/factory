@@ -158,6 +158,12 @@ function projectPath(path) {
         return null;
     return { workspaceSlug: parts[1], projectSlug: parts[3] };
 }
+function projectMemberPath(path) {
+    const parts = path.split("/");
+    if (parts.length !== 6 || parts[0] !== WORKSPACES_COLLECTION || parts[2] !== "projects" || parts[4] !== "members")
+        return null;
+    return { workspaceSlug: parts[1], projectSlug: parts[3], uid: parts[5] };
+}
 function channelPath(path) {
     const parts = path.split("/");
     if (parts[0] !== WORKSPACES_COLLECTION)
@@ -173,7 +179,13 @@ function channelPath(path) {
 export function decodeWorkspace(snapshot) {
     if (!snapshot.exists)
         return null;
-    return withStoredRevision(snapshot, workspaceRecordFromData(snapshot.id, decodeDocumentData(snapshot)));
+    const data = decodeDocumentData(snapshot);
+    if (isWorkspaceReservation(data))
+        return null;
+    return withStoredRevision(snapshot, workspaceRecordFromData(snapshot.id, data));
+}
+export function isWorkspaceReservation(data) {
+    return data.id === undefined && data.ownerUid === undefined;
 }
 export function workspaceRecordFromData(slug, data) {
     const fields = new FirestoreFields(workspaceKey(slug), data);
@@ -224,6 +236,7 @@ export function workspaceProjectFromData(workspaceSlug, projectSlug, data) {
         giteaRepoName: fields.nullableString("giteaRepoName"),
         provisioningState: fields.nullableString("provisioningState"),
         provisioningError: fields.nullableString("provisioningError"),
+        provisioningCleanup: fields.nullableMap("provisioningCleanup"),
         pendingVisibility: fields.nullableString("pendingVisibility"),
         visibility: fields.nullableString("visibility"),
         checkoutEnabled: fields.nullableBoolean("checkoutEnabled"),
@@ -237,8 +250,18 @@ export function workspaceProjectFromData(workspaceSlug, projectSlug, data) {
     };
 }
 export function workspaceProjectMemberFromData(workspaceSlug, projectSlug, uid, data) {
-    const fields = new FirestoreFields(projectMemberKey(workspaceSlug, projectSlug, uid), data);
-    return { workspaceSlug, projectSlug, uid, role: fields.oneOf("role", MEMBER_ROLES) };
+    const key = projectMemberKey(workspaceSlug, projectSlug, uid);
+    const fields = new FirestoreFields(key, data);
+    const storedId = fields.value("id");
+    if (storedId !== undefined && storedId !== uid)
+        throw new MalformedRecordError(key, `id must be ${uid}, found ${String(storedId)}`);
+    return { workspaceSlug, projectSlug, uid, role: fields.oneOf("role", MEMBER_ROLES), joinedAt: fields.nullableNumber("joinedAt") };
+}
+function decodeWorkspaceProjectMember(snapshot) {
+    const location = projectMemberPath(snapshot.ref.path);
+    if (!snapshot.exists || location === null)
+        return null;
+    return withStoredRevision(snapshot, workspaceProjectMemberFromData(location.workspaceSlug, location.projectSlug, location.uid, decodeDocumentData(snapshot)));
 }
 export function decodeWorkspaceChannel(snapshot) {
     const location = channelPath(snapshot.ref.path);
@@ -421,6 +444,7 @@ function createWorkspaceProjectsRepository(session) {
                 giteaRepoName: project.giteaRepoName,
                 provisioningState: project.provisioningState,
                 provisioningError: project.provisioningError,
+                provisioningCleanup: project.provisioningCleanup,
                 pendingVisibility: project.pendingVisibility,
                 visibility: project.visibility,
                 checkoutEnabled: project.checkoutEnabled,
@@ -447,12 +471,25 @@ function createWorkspaceProjectsRepository(session) {
     };
 }
 function createWorkspaceProjectMembersRepository(session) {
+    const collection = (workspaceSlug, projectSlug) => projectsCollection(session.db, workspaceSlug).doc(projectSlug).collection("members");
+    const ref = (workspaceSlug, projectSlug, uid) => collection(workspaceSlug, projectSlug).doc(uid);
     return {
         async get(workspaceSlug, projectSlug, uid) {
-            const snapshot = await session.read("workspaces.projectMembers.get", projectsCollection(session.db, workspaceSlug).doc(projectSlug).collection("members").doc(uid));
-            if (!snapshot.exists)
-                return null;
-            return withStoredRevision(snapshot, workspaceProjectMemberFromData(workspaceSlug, projectSlug, uid, decodeDocumentData(snapshot)));
+            return decodeWorkspaceProjectMember(await session.read("workspaces.projectMembers.get", ref(workspaceSlug, projectSlug, uid)));
+        },
+        async list(workspaceSlug, projectSlug) {
+            const snapshot = await session.query("workspaces.projectMembers.list", collection(workspaceSlug, projectSlug));
+            return decodeAll(snapshot.docs, decodeWorkspaceProjectMember);
+        },
+        async listForUid(uid) {
+            const query = session.db.collectionGroup("members").where("id", "==", uid);
+            return decodeAll((await session.query("workspaces.projectMembers.listForUid", query)).docs, decodeWorkspaceProjectMember);
+        },
+        async put(member) {
+            await session.merge("workspaces.projectMembers.put", projectMemberKey(member.workspaceSlug, member.projectSlug, member.uid), ref(member.workspaceSlug, member.projectSlug, member.uid), encodeMergePut({ id: member.uid, role: member.role, joinedAt: member.joinedAt }, MEMBER_TIMES));
+        },
+        async delete(workspaceSlug, projectSlug, uid) {
+            await session.delete("workspaces.projectMembers.delete", projectMemberKey(workspaceSlug, projectSlug, uid), ref(workspaceSlug, projectSlug, uid));
         },
     };
 }
@@ -555,6 +592,10 @@ function projectLocationKey(snapshot) {
     const location = projectPath(snapshot.ref.path);
     return location === null ? null : projectKey(location.workspaceSlug, location.projectSlug);
 }
+function projectMemberLocationKey(snapshot) {
+    const location = projectMemberPath(snapshot.ref.path);
+    return location === null ? null : projectMemberKey(location.workspaceSlug, location.projectSlug, location.uid);
+}
 function channelLocationKey(snapshot) {
     const location = channelPath(snapshot.ref.path);
     return location === null ? null : channelKey(location.scope, location.channelId);
@@ -593,6 +634,20 @@ export const firestoreWorkspaceProjectsWatchSource = (db, filter) => {
     return {
         operation: "watch workspaceProjects",
         targets: [queryTarget(query, decodeWorkspaceProject, projectLocationKey)],
+    };
+};
+export const firestoreWorkspaceProjectMembersWatchSource = (db, filter) => {
+    const { workspaceSlug, uid } = filter;
+    const group = db.collectionGroup("members");
+    const workspaceScoped = workspaceSlug === undefined ? group : descendantsOf(group, workspaceRef(db, workspaceSlug));
+    const query = uid === undefined ? workspaceScoped : group.where("id", "==", uid);
+    const decode = (snapshot) => {
+        const member = decodeWorkspaceProjectMember(snapshot);
+        return workspaceSlug === undefined || member?.workspaceSlug === workspaceSlug ? member : null;
+    };
+    return {
+        operation: "watch workspaceProjectMembers",
+        targets: [queryTarget(query, decode, projectMemberLocationKey)],
     };
 };
 export const firestoreWorkspaceChannelsWatchSource = (db, filter) => {

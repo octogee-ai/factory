@@ -263,7 +263,7 @@ export function createLazyProjectRunBucket(
 }
 
 function defaultChatArtifactRoutes() {
-  const registry = new ArtifactRegistry(createFirestoreArtifactJobStore(db));
+  const registry = new ArtifactRegistry(createFirestoreArtifactJobStore(db, platformStateStore));
   let blobs: ReturnType<typeof createGcsArtifactBlobStore> | undefined;
   const blobStore = {
     put(input: Parameters<ReturnType<typeof createGcsArtifactBlobStore>["put"]>[0]) {
@@ -465,7 +465,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     ?? createGcsProjectRunArtifactStore(lazyProjectRunBucket);
   const projectPreviewArtifactStore = opts.projectPreviewArtifactStore
     ?? createGcsProjectPreviewArtifactStore(lazyProjectRunBucket);
-  const projectPublishAllocations = opts.projectPublishAllocations ?? createProjectPublishAllocationStore(db);
+  const projectPublishAllocations = opts.projectPublishAllocations ?? createProjectPublishAllocationStore(db, platformStateStore);
   const projectPublishArtifacts = opts.projectPublishArtifacts
     ?? createGcsProjectPublishArtifactSource(lazyProjectRunBucket);
   const previewOrigin = opts.previewOrigin ?? process.env.PREVIEW_PUBLIC_URL
@@ -590,7 +590,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   }));
   app.use(
     "/api/connect/obsidian/pair",
-    createObsidianPairingRoutes({ db, featurePolicy }),
+    createObsidianPairingRoutes({ db, store: platformStateStore, featurePolicy }),
   );
   const projectPublishControlReviewer = opts.projectPublishControlReviewer ?? createKubernetesTokenReviewer({
     reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,

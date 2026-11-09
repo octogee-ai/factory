@@ -22,6 +22,11 @@ function colRef(path: string): any {
   return { doc: (id: string) => docRef(`${path}/${id}`) };
 }
 
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(mockDocs as Map<string, Record<string, unknown>>) };
+});
+
 vi.mock('../lib/db', () => ({
   auth: { verifyIdToken },
   db: {
@@ -40,6 +45,9 @@ import {
   requireRecentAuthentication,
   RECENT_AUTH_MAX_AGE_SECONDS,
 } from '../middleware/auth.js';
+
+import { platformStateStore } from '../lib/platform-state.js';
+import { logger } from '../middleware/logging.js';
 
 afterEach(() => vi.useRealTimers());
 
@@ -66,7 +74,7 @@ describe('requireAuth — admin role only; no per-user gitea secret read (retire
     reads.length = 0;
     verifyIdToken.mockReset().mockResolvedValue({ uid: 'u1' });
     mockDocs.set('users/u1', { username: 'alice' });
-    mockDocs.set('workspaces/alice', { ownerUid: 'u1' });
+    mockDocs.set('workspaces/alice', { id: 'alice', ownerUid: 'u1' });
   });
 
   it('attaches isAdmin from system/config and does NOT touch secrets/gitea', async () => {
@@ -81,6 +89,40 @@ describe('requireAuth — admin role only; no per-user gitea secret read (retire
     expect(req.workspaceSlug).toBe('alice');
     expect((req as Record<string, unknown>).giteaToken).toBeUndefined();
     expect(reads).not.toContain('users/u1/secrets/gitea');
+  });
+
+  it('takes isAdmin from the platform state store', async () => {
+    const getRole = vi.spyOn(platformStateStore.builders.records, 'getRole').mockResolvedValueOnce('admin');
+
+    const { req } = await runAuth();
+
+    expect(getRole).toHaveBeenCalledWith('u1');
+    expect(req.isAdmin).toBe(true);
+    getRole.mockRestore();
+  });
+
+  it('fails closed and logs when the role cannot be read', async () => {
+    const getRole = vi.spyOn(platformStateStore.builders.records, 'getRole').mockRejectedValueOnce(new Error('store unavailable'));
+
+    const { req, nextCalled } = await runAuth();
+
+    expect(nextCalled).toBe(true);
+    expect(req.isAdmin).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('store unavailable'));
+    getRole.mockRestore();
+  });
+
+  it('denies a suspended account from the store even when the product document reads active', async () => {
+    const builder = await platformStateStore.builders.records.get('u1');
+    const get = vi.spyOn(platformStateStore.builders.records, 'get')
+      .mockResolvedValueOnce({ ...builder!, accountLifecycle: { status: 'suspended' } as never });
+
+    const { req, nextCalled, status } = await runAuth();
+
+    expect(nextCalled).toBe(false);
+    expect(status).toBe(403);
+    expect(req.user).toBeUndefined();
+    get.mockRestore();
   });
 
   it('non-admin user resolves isAdmin=false', async () => {

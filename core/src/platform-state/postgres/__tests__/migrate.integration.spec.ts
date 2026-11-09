@@ -142,6 +142,7 @@ describe.skipIf(!dsn)("migratePlatformState", () => {
         "agent_stores",
         "workspaces",
         "workspace_project_members",
+        "gateway_ticket_mint_log",
         "gateway_tickets",
         "change_log",
         "change_log_retention",

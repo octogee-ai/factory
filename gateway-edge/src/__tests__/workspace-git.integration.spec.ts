@@ -5,7 +5,12 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-const firestoreData: Record<string, any> = {};
+const firestoreData = vi.hoisted(() => ({}) as Record<string, any>);
+
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(firestoreData), readBuilderTier: vi.fn() };
+});
 
 vi.mock("../lib/db", () => ({
   auth: {
@@ -438,6 +443,7 @@ const PROJECT = "myproj";
     };
     firestoreData[`workspaces/${SLUG}/projects/${PROJECT}/members/caller-uid`] = {
       uid: "caller-uid",
+      role: "member",
     };
     const app = createApp();
     const res = await request(app)
@@ -653,6 +659,7 @@ firestoreData[`users/caller-uid`] = {
     };
     firestoreData[`workspaces/${SLUG}/projects/myproj/members/caller-uid`] = {
       uid: "caller-uid",
+      role: "member",
     };
     const app = createApp();
     const res = await request(app)

@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import type { FeaturePolicy } from "@octogee/shared/types/feature-flags";
 import { strictRateLimit } from "../../middleware/security.js";
 import { logger } from "../../middleware/logging.js";
-import { db } from "../../lib/db.js";
+import { platformStateStore } from "../../lib/platform-state.js";
 import {
   createProjectForActor,
   projectSlugAvailability,
@@ -37,8 +37,8 @@ export function createProjectCreateRoutes(
       return;
     }
 
-    const existing = await db.doc(`workspaces/${workspaceId}/projects/${slug}`).get();
-    res.json({ available: !existing.exists });
+    const existing = await platformStateStore.workspaces.projects.get(workspaceId, slug);
+    res.json({ available: existing === null });
   });
 
   router.post("/", strictRateLimit, async (req: Request, res: Response) => {

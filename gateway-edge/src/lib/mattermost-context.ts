@@ -1,5 +1,6 @@
+import type { BuilderRecord, BuilderAgentIdentity, WorkspaceChannel, WorkspaceRecord } from "@octogee/core/platform-state";
 import { db } from "./db.js";
-import { readAgent, readChannel, readWorkspace } from "./firestoreReads.js";
+import { platformStateStore } from "./platform-state.js";
 
 export interface WorkspaceMmContext {
   ownerUid: string;
@@ -16,11 +17,11 @@ export interface WorkspaceMmContext {
 type RawDocData = Record<string, unknown>;
 
 interface MattermostContextParts {
-  workspace: Awaited<ReturnType<typeof readWorkspace>>;
-  generalChan: Awaited<ReturnType<typeof readChannel>>;
-  coachDmChan: Awaited<ReturnType<typeof readChannel>>;
-  adminChan: Awaited<ReturnType<typeof readChannel>>;
-  agent: Awaited<ReturnType<typeof readAgent>>;
+  workspace: WorkspaceRecord | null;
+  generalChan: WorkspaceChannel | null;
+  coachDmChan: WorkspaceChannel | null;
+  adminChan: WorkspaceChannel | null;
+  agent: BuilderAgentIdentity | null;
 }
 
 export async function getWorkspaceMmContext(
@@ -28,13 +29,16 @@ export async function getWorkspaceMmContext(
   ownerSlug?: string,
   userDataHint?: unknown,
 ): Promise<WorkspaceMmContext | null> {
-  const userData = await loadUserData(ownerUid, userDataHint);
+  const [userData, builder] = await Promise.all([
+    loadUserData(ownerUid, userDataHint),
+    platformStateStore.builders.records.get(ownerUid),
+  ]);
   if (!userData) return null;
-  const slug = resolveWorkspaceSlug(ownerSlug, userData);
+  const slug = resolveWorkspaceSlug(ownerSlug, userData, builder);
   if (!slug) return null;
 
   const parts = await loadMattermostContextParts(ownerUid, slug);
-  return buildWorkspaceMmContext(ownerUid, slug, userData, parts);
+  return buildWorkspaceMmContext(ownerUid, slug, userData, builder, parts);
 }
 
 async function loadUserData(ownerUid: string, userDataHint: unknown): Promise<RawDocData | null> {
@@ -43,17 +47,19 @@ async function loadUserData(ownerUid: string, userDataHint: unknown): Promise<Ra
   return asRecord((await db.doc(`users/${ownerUid}`).get()).data());
 }
 
-function resolveWorkspaceSlug(ownerSlug: string | undefined, userData: RawDocData): string | null {
-  return ownerSlug || stringField(userData, "username") || stringField(userData, "workspaceId");
+function resolveWorkspaceSlug(ownerSlug: string | undefined, userData: RawDocData, builder: BuilderRecord | null): string | null {
+  return ownerSlug || stringField(userData, "username") || builder?.workspaceId || null;
 }
 
 async function loadMattermostContextParts(ownerUid: string, slug: string): Promise<MattermostContextParts> {
+  const scope = { workspaceSlug: slug, projectSlug: null };
+  const { records, channels, agentIdentities } = platformStateStore.workspaces;
   const [workspace, generalChan, coachDmChan, adminChan, agent] = await Promise.all([
-    readWorkspace(slug),
-    readChannel(db.doc(`workspaces/${slug}/channels/general`)),
-    readChannel(db.doc(`workspaces/${slug}/channels/coach-dm`)),
-    readChannel(db.doc(`workspaces/${slug}/channels/admin`)),
-    readAgent(ownerUid),
+    records.get(slug),
+    channels.get(scope, "general"),
+    channels.get(scope, "coach-dm"),
+    channels.get(scope, "admin"),
+    agentIdentities.get(ownerUid),
   ]);
   return { workspace, generalChan, coachDmChan, adminChan, agent };
 }
@@ -62,19 +68,20 @@ function buildWorkspaceMmContext(
   ownerUid: string,
   slug: string,
   userData: RawDocData,
+  builder: BuilderRecord | null,
   parts: MattermostContextParts,
 ): WorkspaceMmContext {
   const userMattermost = asRecord(userData.mattermost);
   return {
     ownerUid,
     slug,
-    teamId: parts.workspace?.mattermost.teamId ?? null,
-    userId: stringField(userMattermost, "userId"),
+    teamId: parts.workspace?.mattermostTeamId ?? null,
+    userId: builder?.mattermostUserId ?? null,
     username: stringField(userMattermost, "username"),
-    coachUserId: parts.agent?.mattermost.userId ?? null,
-    coachDmChannelId: parts.coachDmChan?.mattermost.channelId ?? null,
-    generalChannelId: parts.generalChan?.mattermost.channelId ?? null,
-    adminChannelId: parts.adminChan?.mattermost.channelId ?? null,
+    coachUserId: parts.agent?.mattermostUserId ?? null,
+    coachDmChannelId: parts.coachDmChan?.mattermostChannelId ?? null,
+    generalChannelId: parts.generalChan?.mattermostChannelId ?? null,
+    adminChannelId: parts.adminChan?.mattermostChannelId ?? null,
   };
 }
 

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => {
   const writes: Array<{ path: string; data: Record<string, unknown> }> = [];
+  const workspaceEntries: Array<{ ref: { update: (data: Record<string, unknown>) => Promise<void> } }> = [];
   const docRef = (path: string): Record<string, unknown> => ({
     set: async (data: Record<string, unknown>) => {
       writes.push({ path, data });
@@ -13,7 +14,9 @@ const h = vi.hoisted(() => {
   });
   const collectionRef = (path: string): Record<string, unknown> => ({
     doc: (id: string) => docRef(`${path}/${id}`),
-    where: () => ({ limit: () => ({ get: async () => ({ empty: true, docs: [] }) }) }),
+    where: () => ({
+      limit: () => ({ get: async () => ({ empty: workspaceEntries.length === 0, docs: workspaceEntries }) }),
+    }),
   });
   const write = () => vi.fn(async (..._args: unknown[]): Promise<void> => undefined);
   const records = {
@@ -23,9 +26,9 @@ const h = vi.hoisted(() => {
     setActivatedAgents: write(),
   };
   const workspaces = {
-    records: { put: write() },
-    channels: { put: write() },
-    members: { put: write() },
+    records: { get: vi.fn(async (): Promise<unknown> => null), put: write(), patch: write() },
+    channels: { get: vi.fn(async (): Promise<unknown> => null), put: write(), patch: write() },
+    members: { get: vi.fn(async (): Promise<unknown> => null), put: write() },
     agentIdentities: { put: write() },
   };
   const store = {
@@ -33,7 +36,7 @@ const h = vi.hoisted(() => {
     workspaces,
     transaction: (_options: unknown, body: (transaction: unknown) => Promise<unknown>) => body(store),
   };
-  return { writes, records, workspaces, store, db: { collection: collectionRef, doc: docRef } };
+  return { writes, workspaceEntries, records, workspaces, store, db: { collection: collectionRef, doc: docRef } };
 });
 
 vi.mock("./firebase.js", () => ({ db: h.db, platformStateStore: h.store }));
@@ -59,6 +62,7 @@ function firestoreWrite(path: string): Record<string, unknown> | undefined {
 describe("markProvisioningComplete store routing", () => {
   beforeEach(() => {
     h.writes.length = 0;
+    h.workspaceEntries.length = 0;
     vi.clearAllMocks();
   });
 
@@ -73,6 +77,15 @@ describe("markProvisioningComplete store routing", () => {
     });
     expect(h.records.addAgents).toHaveBeenCalledWith("u1", ["octogee-acme-coach", "octogee-second"]);
     expect(h.records.setActivatedAgents).toHaveBeenCalledWith("u1", ["coach"]);
+  });
+
+  it("marks the Builder's workspace entry complete", async () => {
+    const update = vi.fn(async (_data: Record<string, unknown>): Promise<void> => undefined);
+    h.workspaceEntries.push({ ref: { update } });
+
+    await markProvisioningComplete(ctx, mmUpdate, []);
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ "provisioning.openclaw.status": "complete" }));
   });
 
   it("keeps only product fields on the Firestore user document", async () => {
@@ -100,24 +113,37 @@ describe("markProvisioningComplete store routing", () => {
       mattermostTeamId: "mm-team",
       giteaOrgName: "acme",
       giteaRepoName: expect.any(String),
-      createdAt: null,
+      createdAt: SERVER_NOW,
       updatedAt: SERVER_NOW,
     });
-    expect(firestoreWrite("workspaces/acme")).toEqual({ name: "acme", ownerDisplayName: "acme" });
+    expect(firestoreWrite("workspaces/acme")).toMatchObject({ name: "acme", ownerDisplayName: "acme" });
+    expect(firestoreWrite("workspaces/acme")).not.toHaveProperty("ownerUid");
     expect(h.workspaces.members.put).toHaveBeenCalledWith({
       workspaceSlug: "acme",
       uid: "u1",
       role: "owner",
       joinedAt: SERVER_NOW,
-      mattermostUserId: null,
+      mattermostUserId: "mm-builder",
     });
     expect(firestoreWrite("workspaces/acme/members/u1")).toBeUndefined();
   });
 
   it("does not clear a workspace's team when the update carries none", async () => {
+    h.workspaces.records.get.mockResolvedValueOnce({ slug: "acme", mattermostTeamId: "mm-existing" });
+
     await markProvisioningComplete(ctx, { "mattermost.generalChannelId": "mm-general" }, []);
 
-    expect(h.workspaces.records.put).toHaveBeenCalledWith(expect.objectContaining({ mattermostTeamId: null }));
+    expect(h.workspaces.records.put).not.toHaveBeenCalled();
+    expect(h.workspaces.records.patch).toHaveBeenCalledTimes(1);
+    expect(h.workspaces.records.patch.mock.calls[0]?.[1]).not.toHaveProperty("mattermostTeamId");
+  });
+
+  it("replaces a workspace's team when the update carries one", async () => {
+    h.workspaces.records.get.mockResolvedValueOnce({ slug: "acme", mattermostTeamId: "mm-existing" });
+
+    await markProvisioningComplete(ctx, mmUpdate, []);
+
+    expect(h.workspaces.records.patch).toHaveBeenCalledWith("acme", expect.objectContaining({ mattermostTeamId: "mm-team" }));
   });
 
   it("seeds each primary channel through the store, leaving Firestore its name", async () => {
@@ -147,6 +173,27 @@ describe("markProvisioningComplete store routing", () => {
     expect(h.workspaces.channels.put).toHaveBeenCalledTimes(1);
     expect(h.workspaces.channels.put).toHaveBeenCalledWith(expect.objectContaining({ channelId: "general" }));
     expect(firestoreWrite("workspaces/acme/channels/coach-dm")).toBeUndefined();
+  });
+
+  it("keeps an existing channel's creation record and updates only its Mattermost channel", async () => {
+    h.workspaces.channels.get.mockResolvedValueOnce({ channelId: "general" });
+
+    await markProvisioningComplete(ctx, { "mattermost.generalChannelId": "mm-general" }, []);
+
+    expect(h.workspaces.channels.put).not.toHaveBeenCalled();
+    expect(h.workspaces.channels.patch).toHaveBeenCalledWith(
+      { workspaceSlug: "acme", projectSlug: null },
+      "general",
+      { mattermostChannelId: "mm-general" },
+    );
+  });
+
+  it("leaves an existing owner membership alone", async () => {
+    h.workspaces.members.get.mockResolvedValueOnce({ uid: "u1", role: "owner" });
+
+    await markProvisioningComplete(ctx, mmUpdate, []);
+
+    expect(h.workspaces.members.put).not.toHaveBeenCalled();
   });
 
   it("records the coach's identity through the store, leaving Firestore its presentation", async () => {

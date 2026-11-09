@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   selectStore: vi.fn(),
-  createFirestoreStore: vi.fn(),
   shell: vi.fn(),
   getFirestore: vi.fn(() => ({})),
   getAuth: vi.fn(),
@@ -11,7 +10,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@octogee/core/platform-state", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@octogee/core/platform-state")>()),
   platformStateStoreForDeploymentTarget: mocks.selectStore,
-  createFirestorePlatformStateStore: mocks.createFirestoreStore,
 }));
 vi.mock("firebase-admin/app", async (importOriginal) => ({
   ...(await importOriginal<typeof import("firebase-admin/app")>()),
@@ -65,8 +63,11 @@ describe("operator commands bind the platform database to their deployment targe
     expect(mocks.shell).not.toHaveBeenCalled();
   });
 
-  it("takes rotate-builder-mm-pat's target from the Firebase project and stops before any account change", async () => {
-    await expect(rotateBuilderMmPat(["--project=octogee-test", "someone@example.com"])).rejects.toThrow(
+  it.each([
+    ["rotate-builder-mm-pat", rotateBuilderMmPat],
+    ["set-admin-role", setAdminRole],
+  ])("%s takes its target from the Firebase project and stops before any account change", async (_name, command) => {
+    await expect(command(["--project=octogee-test", "someone@example.com"])).rejects.toThrow(
       'belongs to deployment target "prod-central", not "test-central"',
     );
     expect(mocks.selectStore.mock.calls[0]?.[0]).toMatchObject({ deploymentTargetId: "test-central" });
@@ -74,22 +75,9 @@ describe("operator commands bind the platform database to their deployment targe
   });
 
   it("refuses a Firebase project that names no deployment target", async () => {
-    await expect(rotateBuilderMmPat(["--project=somewhere-else", "someone@example.com"])).rejects.toThrow(
+    await expect(setAdminRole(["--project=somewhere-else", "someone@example.com"])).rejects.toThrow(
       "Unknown Firebase deployment project: somewhere-else",
     );
-    expect(mocks.selectStore).not.toHaveBeenCalled();
-  });
-
-  it("keeps set-admin-role on Firestore, where authorization reads the role", async () => {
-    vi.stubEnv("PLATFORM_STATE_BACKEND", "postgres");
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    mocks.getAuth.mockReturnValue({ getUserByEmail: async () => ({ uid: "u1", email: "someone@example.com" }) });
-    const patch = vi.fn(async () => {});
-    mocks.createFirestoreStore.mockReturnValue({ builders: { records: { get: async () => ({ uid: "u1" }), patch } } });
-
-    await setAdminRole(["--project=octogee-test", "someone@example.com", "--revoke"]);
-
-    expect(patch).toHaveBeenCalledWith("u1", { role: { clear: true } });
     expect(mocks.selectStore).not.toHaveBeenCalled();
   });
 });

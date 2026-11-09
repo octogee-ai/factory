@@ -13,6 +13,7 @@ import {
   addSecretVersionIfExists,
 } from "@octogee/core/secret-manager";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import { accountActiveInStore, userDataWithBuilderState } from "../lib/user-platform-state.js";
 import {
   byosubSecretName,
   validateCodexCredential,
@@ -437,6 +438,14 @@ function subscriptionDefaultModel(modelCredentialProvider: string): string | nul
   return null;
 }
 
+function flowUnchangedForCommit(flow: FlowDoc, current: FlowDoc | undefined, captureClaimId: string | undefined): boolean {
+  if (current === undefined) return false;
+  if (current.uid !== flow.uid || current.gatewayId !== flow.gatewayId || current.agentId !== flow.agentId) return false;
+  return captureClaimId
+    ? current.consumedAt === undefined && current.captureClaimId === captureClaimId
+    : Boolean(current.consumedAt);
+}
+
 async function commitByosubCapture(args: {
   flowId: string;
   flow: FlowDoc;
@@ -451,29 +460,22 @@ async function commitByosubCapture(args: {
   const flowRef = db.collection("byosubFlows").doc(args.flowId);
   const addedAt = FieldValue.serverTimestamp();
   await db.runTransaction(async (tx) => {
-    const [owner, currentFlowSnap] = await Promise.all([
+    const [owner, currentFlowSnap, builder] = await Promise.all([
       tx.get(ownerRef),
       tx.get(flowRef),
+      platformStateStore.builders.records.get(args.flow.uid),
     ]);
     const currentFlow = currentFlowSnap.data() as FlowDoc | undefined;
-    if (!owner.exists || !accountAllowsInteractiveAccess(owner.data())) {
+    const ownerData = owner.exists ? userDataWithBuilderState(owner.data() ?? {}, builder) : undefined;
+    if (!ownerData || !accountAllowsInteractiveAccess(ownerData)) {
       throw new Error("BYOS credential owner is not active");
     }
-    if (
-      !currentFlowSnap.exists ||
-      !currentFlow ||
-      currentFlow.uid !== args.flow.uid ||
-      currentFlow.gatewayId !== args.flow.gatewayId ||
-      currentFlow.agentId !== args.flow.agentId ||
-      (args.captureClaimId
-        ? currentFlow.consumedAt !== undefined || currentFlow.captureClaimId !== args.captureClaimId
-        : !currentFlow.consumedAt)
-    ) {
+    if (!flowUnchangedForCommit(args.flow, currentFlow, args.captureClaimId)) {
       throw new Error("BYOS credential flow changed before commit");
     }
     const subscriptionModel = subscriptionDefaultModel(args.modelCredentialProvider);
     const slug = slugFromCoachAgentId(args.flow.agentId);
-    const agentIds = slug ? rosteredAgentIdsForSlug(owner.data(), slug) : [args.flow.agentId];
+    const agentIds = slug ? rosteredAgentIdsForSlug(ownerData, slug) : [args.flow.agentId];
     if (subscriptionModel) {
       tx.set(configRef, {
         agentModels: subscriptionModelPicks(agentIds, subscriptionModel),
@@ -535,12 +537,13 @@ async function claimByosubCapture(flowId: string, flow: FlowDoc): Promise<string
   const ownerRef = db.collection("users").doc(flow.uid);
   const flowRef = db.collection("byosubFlows").doc(flowId);
   await db.runTransaction(async (tx) => {
-    const [owner, currentFlowSnap] = await Promise.all([
+    const [owner, currentFlowSnap, ownerActive] = await Promise.all([
       tx.get(ownerRef),
       tx.get(flowRef),
+      accountActiveInStore(flow.uid),
     ]);
     const currentFlow = currentFlowSnap.data() as FlowDoc | undefined;
-    if (!owner.exists || !accountAllowsInteractiveAccess(owner.data())) {
+    if (!owner.exists || !ownerActive) {
       throw new Error("BYOS credential owner is not active");
     }
     if (

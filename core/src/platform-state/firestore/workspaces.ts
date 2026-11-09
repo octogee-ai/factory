@@ -207,6 +207,12 @@ function projectPath(path: string): { workspaceSlug: string; projectSlug: string
   return { workspaceSlug: parts[1], projectSlug: parts[3] };
 }
 
+function projectMemberPath(path: string): { workspaceSlug: string; projectSlug: string; uid: string } | null {
+  const parts = path.split("/");
+  if (parts.length !== 6 || parts[0] !== WORKSPACES_COLLECTION || parts[2] !== "projects" || parts[4] !== "members") return null;
+  return { workspaceSlug: parts[1], projectSlug: parts[3], uid: parts[5] };
+}
+
 function channelPath(path: string): { scope: WorkspaceChannelScope; channelId: string } | null {
   const parts = path.split("/");
   if (parts[0] !== WORKSPACES_COLLECTION) return null;
@@ -221,7 +227,13 @@ function channelPath(path: string): { scope: WorkspaceChannelScope; channelId: s
 
 export function decodeWorkspace(snapshot: DocumentSnapshot): Stored<WorkspaceRecord> | null {
   if (!snapshot.exists) return null;
-  return withStoredRevision(snapshot, workspaceRecordFromData(snapshot.id, decodeDocumentData(snapshot)));
+  const data = decodeDocumentData(snapshot);
+  if (isWorkspaceReservation(data)) return null;
+  return withStoredRevision(snapshot, workspaceRecordFromData(snapshot.id, data));
+}
+
+export function isWorkspaceReservation(data: PlainObject): boolean {
+  return data.id === undefined && data.ownerUid === undefined;
 }
 
 export function workspaceRecordFromData(slug: string, data: PlainObject): WorkspaceRecord {
@@ -275,6 +287,7 @@ export function workspaceProjectFromData(workspaceSlug: string, projectSlug: str
     giteaRepoName: fields.nullableString("giteaRepoName"),
     provisioningState: fields.nullableString("provisioningState"),
     provisioningError: fields.nullableString("provisioningError"),
+    provisioningCleanup: fields.nullableMap("provisioningCleanup"),
     pendingVisibility: fields.nullableString("pendingVisibility"),
     visibility: fields.nullableString("visibility"),
     checkoutEnabled: fields.nullableBoolean("checkoutEnabled"),
@@ -294,8 +307,20 @@ export function workspaceProjectMemberFromData(
   uid: string,
   data: PlainObject,
 ): WorkspaceProjectMember {
-  const fields = new FirestoreFields(projectMemberKey(workspaceSlug, projectSlug, uid), data);
-  return { workspaceSlug, projectSlug, uid, role: fields.oneOf("role", MEMBER_ROLES) };
+  const key = projectMemberKey(workspaceSlug, projectSlug, uid);
+  const fields = new FirestoreFields(key, data);
+  const storedId = fields.value("id");
+  if (storedId !== undefined && storedId !== uid) throw new MalformedRecordError(key, `id must be ${uid}, found ${String(storedId)}`);
+  return { workspaceSlug, projectSlug, uid, role: fields.oneOf("role", MEMBER_ROLES), joinedAt: fields.nullableNumber("joinedAt") };
+}
+
+function decodeWorkspaceProjectMember(snapshot: DocumentSnapshot): Stored<WorkspaceProjectMember> | null {
+  const location = projectMemberPath(snapshot.ref.path);
+  if (!snapshot.exists || location === null) return null;
+  return withStoredRevision(
+    snapshot,
+    workspaceProjectMemberFromData(location.workspaceSlug, location.projectSlug, location.uid, decodeDocumentData(snapshot)),
+  );
 }
 
 export function decodeWorkspaceChannel(snapshot: DocumentSnapshot): Stored<WorkspaceChannel> | null {
@@ -545,6 +570,7 @@ function createWorkspaceProjectsRepository(session: FirestoreSession): Workspace
             giteaRepoName: project.giteaRepoName,
             provisioningState: project.provisioningState,
             provisioningError: project.provisioningError,
+            provisioningCleanup: project.provisioningCleanup,
             pendingVisibility: project.pendingVisibility,
             visibility: project.visibility,
             checkoutEnabled: project.checkoutEnabled,
@@ -586,14 +612,40 @@ function createWorkspaceProjectsRepository(session: FirestoreSession): Workspace
 }
 
 function createWorkspaceProjectMembersRepository(session: FirestoreSession): WorkspaceProjectMembersRepository {
+  const collection = (workspaceSlug: string, projectSlug: string) =>
+    projectsCollection(session.db, workspaceSlug).doc(projectSlug).collection("members");
+  const ref = (workspaceSlug: string, projectSlug: string, uid: string) => collection(workspaceSlug, projectSlug).doc(uid);
+
   return {
     async get(workspaceSlug, projectSlug, uid) {
-      const snapshot = await session.read(
-        "workspaces.projectMembers.get",
-        projectsCollection(session.db, workspaceSlug).doc(projectSlug).collection("members").doc(uid),
+      return decodeWorkspaceProjectMember(await session.read("workspaces.projectMembers.get", ref(workspaceSlug, projectSlug, uid)));
+    },
+
+    async list(workspaceSlug, projectSlug) {
+      const snapshot = await session.query("workspaces.projectMembers.list", collection(workspaceSlug, projectSlug));
+      return decodeAll(snapshot.docs, decodeWorkspaceProjectMember);
+    },
+
+    async listForUid(uid) {
+      const query = session.db.collectionGroup("members").where("id", "==", uid);
+      return decodeAll((await session.query("workspaces.projectMembers.listForUid", query)).docs, decodeWorkspaceProjectMember);
+    },
+
+    async put(member) {
+      await session.merge(
+        "workspaces.projectMembers.put",
+        projectMemberKey(member.workspaceSlug, member.projectSlug, member.uid),
+        ref(member.workspaceSlug, member.projectSlug, member.uid),
+        encodeMergePut({ id: member.uid, role: member.role, joinedAt: member.joinedAt }, MEMBER_TIMES),
       );
-      if (!snapshot.exists) return null;
-      return withStoredRevision(snapshot, workspaceProjectMemberFromData(workspaceSlug, projectSlug, uid, decodeDocumentData(snapshot)));
+    },
+
+    async delete(workspaceSlug, projectSlug, uid) {
+      await session.delete(
+        "workspaces.projectMembers.delete",
+        projectMemberKey(workspaceSlug, projectSlug, uid),
+        ref(workspaceSlug, projectSlug, uid),
+      );
     },
   };
 }
@@ -741,6 +793,11 @@ function projectLocationKey(snapshot: DocumentSnapshot): RecordKey | null {
   return location === null ? null : projectKey(location.workspaceSlug, location.projectSlug);
 }
 
+function projectMemberLocationKey(snapshot: DocumentSnapshot): RecordKey | null {
+  const location = projectMemberPath(snapshot.ref.path);
+  return location === null ? null : projectMemberKey(location.workspaceSlug, location.projectSlug, location.uid);
+}
+
 function channelLocationKey(snapshot: DocumentSnapshot): RecordKey | null {
   const location = channelPath(snapshot.ref.path);
   return location === null ? null : channelKey(location.scope, location.channelId);
@@ -783,6 +840,21 @@ export const firestoreWorkspaceProjectsWatchSource: FirestoreWatchSourceFactory<
   return {
     operation: "watch workspaceProjects",
     targets: [queryTarget(query, decodeWorkspaceProject, projectLocationKey)],
+  };
+};
+
+export const firestoreWorkspaceProjectMembersWatchSource: FirestoreWatchSourceFactory<"workspaceProjectMembers"> = (db, filter) => {
+  const { workspaceSlug, uid } = filter;
+  const group = db.collectionGroup("members");
+  const workspaceScoped = workspaceSlug === undefined ? group : descendantsOf(group, workspaceRef(db, workspaceSlug));
+  const query = uid === undefined ? workspaceScoped : group.where("id", "==", uid);
+  const decode = (snapshot: DocumentSnapshot) => {
+    const member = decodeWorkspaceProjectMember(snapshot);
+    return workspaceSlug === undefined || member?.workspaceSlug === workspaceSlug ? member : null;
+  };
+  return {
+    operation: "watch workspaceProjectMembers",
+    targets: [queryTarget(query, decode, projectMemberLocationKey)],
   };
 };
 

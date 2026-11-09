@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import { db } from "./db.js";
 import { readProject } from "./firestoreReads.js";
+import { platformStateStore } from "./platform-state.js";
 import { USERNAME_RE } from "@octogee/shared/types/identity";
 import { readConnectorAccessToken } from "./connector-tokens.js";
 import { workspaceGiteaOrg, workspaceRepoName, projectRepoName } from "@octogee/core/gitea-naming";
@@ -70,14 +71,13 @@ async function resolveProjectTarget(
   opts: ResolveFileTargetOpts,
 ): Promise<FileTargetResult> {
   const { slug, projectSlug, callerUid, callerWorkspaceSlug } = input;
-  const projectRef = db.doc(`workspaces/${slug}/projects/${projectSlug}`);
-  const project = await readProject(projectRef);
+  const project = await readProject(slug, projectSlug);
   if (!project) {
     return { ok: false, status: 404, error: "Project not found" };
   }
   const isOwner = project.ownerUid === callerUid;
   const isMember = !isOwner && callerUid
-    ? (await projectRef.collection("members").doc(callerUid).get()).exists
+    ? (await platformStateStore.workspaces.projectMembers.get(slug, projectSlug, callerUid)) !== null
     : false;
   if (!isOwner && !isMember) {
     return { ok: false, status: 403, error: "Forbidden" };
@@ -218,8 +218,8 @@ async function resolveWorkspaceMemberTarget(
   if (!USERNAME_RE.test(slug)) {
     return { ok: false, status: 403, error: "Forbidden" };
   }
-  const memberDoc = await db.doc(`workspaces/${slug}/members/${callerUid}`).get();
-  if (!memberDoc.exists || !isCanonicalWorkspaceMembership(memberDoc.data())) {
+  const member = await platformStateStore.workspaces.members.get(slug, callerUid);
+  if (member === null || !isCanonicalWorkspaceMembership(member)) {
     return { ok: false, status: 403, error: "Forbidden" };
   }
   logger.info(`[fileTarget] brokered gitea sudo workspace=${slug} caller=${callerUid} as=ws-${slug}`);

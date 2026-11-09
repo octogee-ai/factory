@@ -1,6 +1,7 @@
 import { FieldValue, Timestamp, type Firestore } from "firebase-admin/firestore";
 import { timestampMillis } from "@octogee/core/timestamps";
-import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
+import { accountActiveInStore } from "./user-platform-state.js";
 import { logger } from "../middleware/logging.js";
 import { applyGoogleGrantApproval } from "./google-grant-approval.js";
 import type { NativeApprovalSnapshot } from "./native-connector-approval.js";
@@ -87,6 +88,7 @@ function storedDigest(stored: Record<string, unknown>): string {
 
 export async function recordApprovalDecision(
   db: Firestore,
+  store: Pick<PlatformStateStore, "builders" | "workspaces">,
   approvalId: string,
   input: RecordApprovalDecisionInput,
 ): Promise<RecordedApprovalDecision> {
@@ -108,9 +110,8 @@ export async function recordApprovalDecision(
     };
     const update: Record<string, unknown> = { decision, updatedAt: FieldValue.serverTimestamp() };
     if ((stored.action as { kind?: string } | undefined)?.kind === "google-access" && input.state === "approved") {
-      const owner = await tx.get(db.doc(`users/${stored.ownerUid}`));
-      const granted = accountAllowsInteractiveAccess(owner.data())
-        && await applyGoogleGrantApproval(db, tx, String(stored.ownerUid), stored.preview, approvalId);
+      const granted = await accountActiveInStore(String(stored.ownerUid), store)
+        && await applyGoogleGrantApproval(db, store, tx, String(stored.ownerUid), stored.preview, approvalId);
       update.state = granted ? "succeeded" : "failed";
       if (!granted) update.failReason = "grant_authority_changed";
     }

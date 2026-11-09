@@ -13,6 +13,7 @@ import type {
   WorkspaceProject,
   WorkspaceProjectsRepository,
   WorkspaceProjectMember,
+  WorkspaceProjectMembersRepository,
   WorkspaceRecord,
   WorkspaceRecordsRepository,
   WorkspaceRepositories,
@@ -94,6 +95,7 @@ const PROJECTS_TABLE: TableSpec = {
     column("giteaRepoName", "text", { ...nullable, column: "git_repo" }),
     column("provisioningState", "text", nullable),
     column("provisioningError", "text", nullable),
+    column("provisioningCleanup", "jsonb", nullable),
     column("pendingVisibility", "text", nullable),
     column("visibility", "text", nullable),
     column("checkoutEnabled", "boolean", nullable),
@@ -111,7 +113,13 @@ const PROJECT_MEMBERS_TABLE: TableSpec = {
   table: "workspace_project_members",
   aggregate: "workspace-project-member",
   keyColumns: ["workspace_slug", "project_slug", "uid"],
-  columns: [column("workspaceSlug", "text"), column("projectSlug", "text"), column("uid", "text"), column("role", "text")],
+  columns: [
+    column("workspaceSlug", "text"),
+    column("projectSlug", "text"),
+    column("uid", "text"),
+    column("role", "text"),
+    column("joinedAt", "bigint", nullable),
+  ],
 };
 
 const CHANNELS_TABLE: TableSpec = {
@@ -244,6 +252,10 @@ function decodeMember(row: Row): Stored<WorkspaceMember> {
 
 function decodeProject(row: Row): Stored<WorkspaceProject> {
   return decodeStored<WorkspaceProject>(PROJECTS_TABLE, row);
+}
+
+function decodeProjectMember(row: Row): Stored<WorkspaceProjectMember> {
+  return decodeStored<WorkspaceProjectMember>(PROJECT_MEMBERS_TABLE, row);
 }
 
 function decodeChannel(row: Row): Stored<WorkspaceChannel> {
@@ -434,6 +446,52 @@ function createWorkspaceProjectsRepository(session: PostgresSession): WorkspaceP
   };
 }
 
+function createWorkspaceProjectMembersRepository(session: PostgresSession): WorkspaceProjectMembersRepository {
+  const list = async (operation: string, where: string, values: readonly unknown[]) =>
+    (
+      await selectRecords(
+        session,
+        operation,
+        `SELECT * FROM $schema.workspace_project_members WHERE ${where} ORDER BY workspace_slug, project_slug, uid`,
+        values,
+      )
+    ).map(decodeProjectMember);
+
+  return {
+    async get(workspaceSlug, projectSlug, uid) {
+      const row = await selectByKey(session, "workspaces.projectMembers.get", {
+        table: PROJECT_MEMBERS_TABLE,
+        key: [workspaceSlug, projectSlug, uid],
+      });
+      return row === null ? null : decodeProjectMember(row);
+    },
+
+    list(workspaceSlug, projectSlug) {
+      return list("workspaces.projectMembers.list", "workspace_slug = $1::text AND project_slug = $2::text", [workspaceSlug, projectSlug]);
+    },
+
+    listForUid(uid) {
+      return list("workspaces.projectMembers.listForUid", "uid = $1::text", [uid]);
+    },
+
+    async put(member) {
+      await mergePutRecord(session, {
+        operation: "workspaces.projectMembers.put",
+        table: PROJECT_MEMBERS_TABLE,
+        record: { aggregate: "workspace-project-member", key: `${member.workspaceSlug}/${member.projectSlug}/${member.uid}` },
+        input: member,
+      });
+    },
+
+    async delete(workspaceSlug, projectSlug, uid) {
+      await deleteRecord(session, "workspaces.projectMembers.delete", {
+        table: PROJECT_MEMBERS_TABLE,
+        key: [workspaceSlug, projectSlug, uid],
+      });
+    },
+  };
+}
+
 async function patchChannel(
   session: PostgresSession,
   scope: WorkspaceChannelScope,
@@ -560,14 +618,7 @@ export function createPostgresWorkspaceRepositories(session: PostgresSession): W
     records: createWorkspaceRecordsRepository(session),
     members: createWorkspaceMembersRepository(session),
     projects: createWorkspaceProjectsRepository(session),
-    projectMembers: {
-      async get(workspaceSlug, projectSlug, uid) {
-        const row = await selectByKey(session, "workspaces.projectMembers.get", {
-          table: PROJECT_MEMBERS_TABLE, key: [workspaceSlug, projectSlug, uid],
-        });
-        return row === null ? null : decodeStored<WorkspaceProjectMember>(PROJECT_MEMBERS_TABLE, row);
-      },
-    },
+    projectMembers: createWorkspaceProjectMembersRepository(session),
     channels: createWorkspaceChannelsRepository(session),
     agentIdentities: createAgentIdentitiesRepository(session),
   };
@@ -662,6 +713,28 @@ export function postgresWorkspaceProjectsWatchSource(filter: WatchFilters["works
     keyOf: (row) => `${row.workspace_slug as string}/${row.project_slug as string}`,
     decode: decodeProject,
     mayMatch: (filterKeys) => filterAllows(filterKeys, "workspace_slug", filter.workspaceSlug),
+  };
+}
+
+export function postgresWorkspaceProjectMembersWatchSource(
+  filter: WatchFilters["workspaceProjectMembers"],
+): PostgresWatchSource<"workspaceProjectMembers"> {
+  return {
+    aggregate: "workspaceProjectMembers",
+    operation: "watch workspaceProjectMembers",
+    ...keyedSelects({
+      table: "workspace_project_members",
+      keyColumns: ["workspace_slug", "project_slug", "uid"],
+      order: "workspace_slug, project_slug, uid",
+      filters: [
+        ["workspace_slug", filter.workspaceSlug],
+        ["uid", filter.uid],
+      ],
+    }),
+    keyOf: (row) => `${row.workspace_slug as string}/${row.project_slug as string}/${row.uid as string}`,
+    decode: decodeProjectMember,
+    mayMatch: (filterKeys) =>
+      filterAllows(filterKeys, "workspace_slug", filter.workspaceSlug) && filterAllows(filterKeys, "uid", filter.uid),
   };
 }
 

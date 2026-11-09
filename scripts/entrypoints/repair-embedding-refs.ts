@@ -24,6 +24,7 @@ import {
   repairTargetRevisionAllowed,
   runEmbeddingRefRepair,
 } from "../lib/embedding-ref-repair.js";
+import { operatorPlatformStateStoreForFirebaseProject } from "../lib/platform-state-store.js";
 
 function argValue(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -55,8 +56,8 @@ async function main(): Promise<void> {
   }
 
   initializeApp({ projectId: project });
-  const rootSnap = await getFirestore().collection("gateways").doc(gatewayId).get();
-  const rootData = rootSnap.exists ? rootSnap.data() : undefined;
+  const store = await operatorPlatformStateStoreForFirebaseProject(getFirestore(), project);
+  const rootData: unknown = await store.gateways.roots.get(gatewayId);
   if (!isGatewayDesiredDoc(rootData) || rootData.gatewayId !== gatewayId) {
     console.error(`gateways/${gatewayId} in ${project} is missing or not a durable root — refusing`);
     process.exit(1);

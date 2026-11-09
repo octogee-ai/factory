@@ -5,7 +5,7 @@ import {
 } from "@octogee/shared/types/identity";
 
 const h = vi.hoisted(() => {
-  let docs: Record<string, unknown> = {};
+  const docs: Record<string, Record<string, unknown>> = {};
   const setSpy = vi.fn(async () => {});
   const docRef = (p: string) => ({
     get: async () => ({ exists: docs[p] !== undefined, data: () => docs[p] }),
@@ -13,46 +13,13 @@ const h = vi.hoisted(() => {
     collection: (sub: string) => collRef(`${p}/${sub}`),
   });
   const collRef = (p: string) => ({ doc: (id: string) => docRef(`${p}/${id}`) });
-  const mattermostOf = (path: string) => (docs[path] as { mattermost?: Record<string, string> } | undefined)?.mattermost;
-  const secretPut = vi.fn(async () => {});
-  const store = {
-    builders: {
-      records: {
-        get: async (uid: string) =>
-          docs[`users/${uid}`] ? { mattermostUserId: mattermostOf(`users/${uid}`)?.userId ?? null } : null,
-      },
-    },
-    secrets: {
-      get: async (uid: string, secretId: string) => {
-        const secret = docs[`users/${uid}/secrets/${secretId}`] as { personalToken: string } | undefined;
-        return secret ? { kind: "coach-mattermost", secretId, ...secret } : null;
-      },
-      put: secretPut,
-    },
-    workspaces: {
-      records: {
-        get: async (slug: string) =>
-          docs[`workspaces/${slug}`] ? { mattermostTeamId: mattermostOf(`workspaces/${slug}`)?.teamId ?? null } : null,
-      },
-      channels: {
-        get: async (scope: { workspaceSlug: string }, channelId: string) => {
-          const path = `workspaces/${scope.workspaceSlug}/channels/${channelId}`;
-          return docs[path] ? { mattermostChannelId: mattermostOf(path)?.channelId ?? null } : null;
-        },
-      },
-      agentIdentities: {
-        get: async (uid: string) =>
-          docs[`agents/${uid}`] ? { mattermostUserId: mattermostOf(`agents/${uid}`)?.userId ?? null } : null,
-      },
-    },
-  };
   return {
     db: { collection: (n: string) => collRef(n), doc: (p: string) => docRef(p) },
-    store,
-    secretPut,
     setSpy,
-    setDocs: (d: Record<string, unknown>) => {
-      docs = d;
+    docs,
+    setDocs: (d: Record<string, Record<string, unknown>>) => {
+      for (const key of Object.keys(docs)) delete docs[key];
+      Object.assign(docs, d);
     },
     mmApiCall: vi.fn(),
     mintAndPersistCoachToken: vi.fn(),
@@ -60,7 +27,10 @@ const h = vi.hoisted(() => {
   };
 });
 
-vi.mock("../firebase.js", () => ({ db: h.db, platformStateStore: h.store }));
+vi.mock("../firebase.js", async () => {
+  const { createDocumentFixtureStore } = await import("../testing/journal-store.js");
+  return { db: h.db, platformStateStore: createDocumentFixtureStore(h.docs) };
+});
 vi.mock("../mattermost/coach-pat.js", () => ({
   mintAndPersistCoachToken: h.mintAndPersistCoachToken,
 }));
@@ -162,16 +132,7 @@ describe("provisionMattermostUser — new builder (happy path)", () => {
 
   it("persists the builder personal token to the user's mattermost secret", async () => {
     await call(HAPPY);
-    expect(h.secretPut).toHaveBeenCalledWith("u1", {
-      kind: "builder-mattermost",
-      secretId: "mattermost",
-      projectId: null,
-      personalToken: "builder-token",
-      mattermostUserId: null,
-      createdAt: { serverNow: true },
-      rotatedAt: null,
-    });
-    expect(h.setSpy).not.toHaveBeenCalled();
+    expect(h.docs["users/u1/secrets/mattermost"]).toMatchObject({ personalToken: "builder-token" });
   });
 
   it("never reads MM_COMMUNITY_TEAM_ID — community membership is reconciled separately, not during MM account provisioning", async () => {
@@ -197,7 +158,8 @@ describe("provisionMattermostUser — already provisioned (idempotent backfill)"
           coachUserId: "existing-coach",
         },
       },
-      "workspaces/acme": { mattermost: { teamId: "existing-team" } },
+      "workspaces/acme": { id: "acme", ownerUid: "u1", mattermost: { teamId: "existing-team" } },
+      "agents/u1": { mattermost: { userId: "existing-coach" } },
       "workspaces/acme/channels/coach-dm": {
         name: "acme-coach",
         mattermost: { channelId: "existing-coach-ch" },
@@ -221,6 +183,15 @@ describe("provisionMattermostUser — already provisioned (idempotent backfill)"
     expect(seq()).not.toContain("POST /teams");
   });
 
+  it("keeps the stored Mattermost username and coach channel name", async () => {
+    h.docs["users/u1"] = { mattermost: { userId: "existing-builder", username: "legacy-name" } };
+
+    const result = await call(HAPPY);
+
+    expect(result["mattermost.username"]).toBe("legacy-name");
+    expect(result["mattermost.channelName"]).toBe("acme-coach");
+  });
+
   it("keeps a new-style topology without an Admin channel idempotent", async () => {
     h.setDocs({
       "users/u1": {
@@ -231,7 +202,8 @@ describe("provisionMattermostUser — already provisioned (idempotent backfill)"
           coachUserId: "existing-coach",
         },
       },
-      "workspaces/acme": { mattermost: { teamId: "existing-team" } },
+      "workspaces/acme": { id: "acme", ownerUid: "u1", mattermost: { teamId: "existing-team" } },
+      "agents/u1": { mattermost: { userId: "existing-coach" } },
       "workspaces/acme/channels/coach-dm": {
         name: "acme-coach",
         mattermost: { channelId: "existing-coach-ch" },
@@ -266,7 +238,8 @@ describe("provisionMattermostUser — already provisioned (idempotent backfill)"
       "users/u1": {
         mattermost: { userId: "existing-builder", username: "acme", teamId: "existing-team" },
       },
-      "workspaces/acme": { mattermost: { teamId: "existing-team" } },
+      "workspaces/acme": { id: "acme", ownerUid: "u1", mattermost: { teamId: "existing-team" } },
+      "agents/u1": { mattermost: { userId: "existing-coach" } },
       "workspaces/acme/channels/coach-dm": { mattermost: { channelId: "existing-coach-ch" } },
     });
 

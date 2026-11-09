@@ -4,6 +4,7 @@ import {
   type Transaction,
 } from "firebase-admin/firestore";
 import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
 import {
   googleGrantEpoch,
   parseGoogleGrantPermissions,
@@ -68,8 +69,10 @@ function existingPermissions(stored: Record<string, unknown> | undefined, reques
   return current;
 }
 
+// eslint-disable-next-line max-params -- Firestore handle, platform store, and transaction are separate authorities beside the request identity
 export async function applyGoogleGrantApproval(
   db: Firestore,
+  store: Pick<PlatformStateStore, "workspaces">,
   tx: Transaction,
   ownerUid: string,
   value: unknown,
@@ -79,18 +82,19 @@ export async function applyGoogleGrantApproval(
   const grantRef = db.doc(
     `users/${ownerUid}/googleGrants/${request.memberUid}`,
   );
-  const [member, connection, workspace, grant] = await Promise.all([
+  const [storedMember, workspace, member, connection, grant] = await Promise.all([
+    store.workspaces.members.get(request.workspaceId, request.memberUid),
+    store.workspaces.records.get(request.workspaceId),
     tx.get(
       db.doc(`workspaces/${request.workspaceId}/members/${request.memberUid}`),
     ),
     tx.get(db.doc(`users/${ownerUid}/integrations/google`)),
-    tx.get(db.doc(`workspaces/${request.workspaceId}`)),
     tx.get(grantRef),
   ]);
   if (
-    workspace.data()?.ownerUid !== ownerUid ||
-    workspace.data()?.ownerActive !== true ||
-    !isCanonicalWorkspaceMembership(member.data()) ||
+    workspace?.ownerUid !== ownerUid ||
+    workspace.ownerActive !== true ||
+    !isCanonicalWorkspaceMembership(storedMember) ||
     connection.data()?.status !== "connected" ||
     googleGrantEpoch(member.createTime) !== request.membershipEpoch ||
     googleGrantEpoch(connection.data()?.connectedAt) !==

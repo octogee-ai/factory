@@ -500,6 +500,10 @@ function builderRecordReads(session) {
         get(uid) {
             return findOne("builders.records.get", "b.uid = $1::text", uid);
         },
+        async getRole(uid) {
+            const rows = await session.read("builders.records.getRole", "SELECT role FROM $schema.users WHERE uid = $1::text", [uid]);
+            return rows[0]?.role ?? null;
+        },
         async getMany(uids) {
             const records = await selectRecords(session, "builders.records.getMany", selectBuilders("b.uid = ANY($1::text[])"), [[...uids]]);
             return new Map(records.map((record) => [record.uid, record]));

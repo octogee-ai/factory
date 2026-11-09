@@ -1,6 +1,8 @@
 import { Router, Request, Response } from "express";
 import { strictRateLimit } from "../../middleware/security.js";
-import { db, FieldValue } from "../../lib/db.js";
+import { db } from "../../lib/db.js";
+import { platformStateStore } from "../../lib/platform-state.js";
+import { removeProjectMember, syncProjectMemberCount } from "../../lib/project-platform-state.js";
 import { mmApi } from "../../lib/mattermost.js";
 import { giteaApi } from "../../lib/gitea.js";
 import { workspaceGiteaOrg, projectRepoName } from "@octogee/core/gitea-naming";
@@ -21,37 +23,43 @@ function errorIncludes(err: unknown, expected: string): boolean {
 }
 
 async function readProjectActor(uid: string): Promise<ProjectActor> {
-  const actorDoc = await db.doc(`users/${uid}`).get();
-  const data = actorDoc.data();
-  const username = data?.username;
+  const [actorDoc, builder] = await Promise.all([
+    db.doc(`users/${uid}`).get(),
+    platformStateStore.builders.records.get(uid),
+  ]);
+  const username = actorDoc.data()?.username;
   return {
-    mmUserId: data?.mattermost?.userId,
+    mmUserId: builder?.mattermostUserId ?? undefined,
     giteaUser: username ? `ws-${username}` : null,
   };
 }
 
-async function joinMemberRef(
-  ctx: ProjectCtx,
-  res: Response,
-): Promise<FirebaseFirestore.DocumentReference | null> {
+function respondProjectPrivate(res: Response): void {
+  res.status(403).json({ error: "This project is private. You need an invite to join." });
+}
+
+async function respondAlreadyMember(ctx: ProjectCtx, res: Response): Promise<void> {
+  await syncProjectMemberCount(ctx.wid, ctx.pid);
+  res.json({ success: true, alreadyMember: true });
+}
+
+async function projectJoinable(ctx: ProjectCtx, res: Response): Promise<boolean> {
   if (ctx.project.ownerUid === ctx.uid) {
     res.status(400).json({ error: "You already own this project" });
-    return null;
+    return false;
   }
 
   if (ctx.project.visibility === "private") {
-    res.status(403).json({ error: "This project is private. You need an invite to join." });
-    return null;
+    respondProjectPrivate(res);
+    return false;
   }
 
-  const memberRef = ctx.projectRef.collection("members").doc(ctx.uid);
-  const existingMember = await memberRef.get();
-  if (existingMember.exists) {
-    res.json({ success: true, alreadyMember: true });
-    return null;
+  if (await platformStateStore.workspaces.projectMembers.get(ctx.wid, ctx.pid, ctx.uid)) {
+    await respondAlreadyMember(ctx, res);
+    return false;
   }
 
-  return memberRef;
+  return true;
 }
 
 async function addMattermostTeamMember(
@@ -92,18 +100,23 @@ async function ensureProjectJoinerTeamMember(
   return addMattermostTeamMember(teamId, actor.mmUserId, res);
 }
 
-async function writeProjectJoin(
-  ctx: ProjectCtx,
-  memberRef: FirebaseFirestore.DocumentReference,
-): Promise<void> {
-  await memberRef.set({
-    id: ctx.uid,
-    role: "member",
-    joinedAt: FieldValue.serverTimestamp(),
-  });
-  await ctx.projectRef.update({
-    memberCount: FieldValue.increment(1),
-    updatedAt: FieldValue.serverTimestamp(),
+type ProjectJoinCommit = "joined" | "already-member" | "not-joinable";
+
+async function commitProjectJoin(ctx: ProjectCtx): Promise<ProjectJoinCommit> {
+  return platformStateStore.transaction({ label: "project.join" }, async (tx) => {
+    const { projects, projectMembers } = tx.workspaces;
+    const project = await projects.get(ctx.wid, ctx.pid);
+    if (!project || project.visibility === "private") return "not-joinable";
+    if (await projectMembers.get(ctx.wid, ctx.pid, ctx.uid)) return "already-member";
+    await projectMembers.put({
+      workspaceSlug: ctx.wid,
+      projectSlug: ctx.pid,
+      uid: ctx.uid,
+      role: "member",
+      joinedAt: { serverNow: true },
+    });
+    await projects.patch(ctx.wid, ctx.pid, { updatedAt: { serverNow: true } });
+    return "joined";
   });
 }
 
@@ -122,16 +135,26 @@ async function grantProjectGiteaAccess(ctx: ProjectCtx, actor: ProjectActor): Pr
 }
 
 async function joinProject(ctx: ProjectCtx, res: Response): Promise<void> {
-  const memberRef = await joinMemberRef(ctx, res);
-  if (!memberRef) return;
+  if (!(await projectJoinable(ctx, res))) return;
 
   const actor = await readProjectActor(ctx.uid);
-  const { addChannelMember, ensureActiveMattermostUser } = await import("../../lib/channel-lifecycle.js");
+  const { addChannelMember, ensureActiveMattermostUser, removeChannelMember } = await import("../../lib/channel-lifecycle.js");
   if (actor.mmUserId) await ensureActiveMattermostUser(actor.mmUserId);
   if (!(await ensureProjectJoinerTeamMember(ctx, actor, res))) return;
 
-  await addChannelMember(`${ctx.projectRef.path}/channels/general`, actor.mmUserId!);
-  await writeProjectJoin(ctx, memberRef);
+  const channelPath = `${ctx.projectRef.path}/channels/general`;
+  await addChannelMember(channelPath, actor.mmUserId!);
+  const commit = await commitProjectJoin(ctx);
+  if (commit === "not-joinable") {
+    await removeChannelMember(channelPath, actor.mmUserId!);
+    respondProjectPrivate(res);
+    return;
+  }
+  if (commit === "already-member") {
+    await respondAlreadyMember(ctx, res);
+    return;
+  }
+  await syncProjectMemberCount(ctx.wid, ctx.pid);
   await grantProjectGiteaAccess(ctx, actor);
 
   logger.info(`[projects] ${ctx.uid} joined ${ctx.wid}/${ctx.pid}`);
@@ -147,34 +170,19 @@ router.post("/:wid/:pid/join", strictRateLimit, async (req: Request, res: Respon
   }, async (ctx) => joinProject(ctx, res));
 });
 
-async function leaveMemberRef(
-  ctx: ProjectCtx,
-  res: Response,
-): Promise<FirebaseFirestore.DocumentReference | null> {
+async function projectLeavable(ctx: ProjectCtx, res: Response): Promise<boolean> {
   if (ctx.project.ownerUid === ctx.uid) {
     res.status(400).json({ error: "You cannot leave your own project" });
-    return null;
+    return false;
   }
 
-  const memberRef = ctx.projectRef.collection("members").doc(ctx.uid);
-  const memberDoc = await memberRef.get();
-  if (!memberDoc.exists) {
+  if (!(await platformStateStore.workspaces.projectMembers.get(ctx.wid, ctx.pid, ctx.uid))) {
+    await syncProjectMemberCount(ctx.wid, ctx.pid);
     res.json({ success: true, notAMember: true });
-    return null;
+    return false;
   }
 
-  return memberRef;
-}
-
-async function writeProjectLeave(
-  ctx: ProjectCtx,
-  memberRef: FirebaseFirestore.DocumentReference,
-): Promise<void> {
-  await memberRef.delete();
-  await ctx.projectRef.update({
-    memberCount: FieldValue.increment(-1),
-    updatedAt: FieldValue.serverTimestamp(),
-  });
+  return true;
 }
 
 async function revokeProjectGiteaAccess(ctx: ProjectCtx, actor: ProjectActor): Promise<void> {
@@ -191,15 +199,14 @@ async function revokeProjectGiteaAccess(ctx: ProjectCtx, actor: ProjectActor): P
 }
 
 async function leaveProject(ctx: ProjectCtx, res: Response): Promise<void> {
-  const memberRef = await leaveMemberRef(ctx, res);
-  if (!memberRef) return;
+  if (!(await projectLeavable(ctx, res))) return;
 
   const actor = await readProjectActor(ctx.uid);
   if (actor.mmUserId) {
     const { removeChannelMember } = await import("../../lib/channel-lifecycle.js");
     await removeChannelMember(`${ctx.projectRef.path}/channels/general`, actor.mmUserId);
   }
-  await writeProjectLeave(ctx, memberRef);
+  await removeProjectMember(ctx.wid, ctx.pid, ctx.uid);
   await revokeProjectGiteaAccess(ctx, actor);
 
   logger.info(`[projects] ${ctx.uid} left ${ctx.wid}/${ctx.pid}`);

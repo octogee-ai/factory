@@ -1,158 +1,85 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const firestoreData: Record<string, any> = {};
-
-function makeDocRef(path: string) {
-  return {
-    path,
-    get: async () => {
-      const data = firestoreData[path];
-      return { exists: !!data, data: () => data };
-    },
-  };
-}
+const h = vi.hoisted(() => ({
+  product: {} as Record<string, any>,
+  platform: new Map<string, Record<string, unknown>>(),
+}));
 
 vi.mock('../lib/db', () => ({
   db: {
-    doc: (path: string) => makeDocRef(path),
+    doc: (path: string) => ({
+      path,
+      get: async () => {
+        const data = h.product[path];
+        return { exists: !!data, data: () => data };
+      },
+    }),
   },
 }));
 
-import {
-  readAgent,
-  readChannel,
-  readMember,
-  readProject,
-  readWorkspace,
-} from '../lib/firestoreReads.js';
+vi.mock('../lib/platform-state.js', async () => {
+  const { createDocumentFixtureStore } = await import('@octogee/core/testing/journal-store');
+  return { platformStateStore: createDocumentFixtureStore(h.platform) };
+});
+
+import { readAgent, readProject } from '../lib/firestoreReads.js';
+
+const projectPath = 'workspaces/alice/projects/game';
 
 beforeEach(() => {
-  for (const k of Object.keys(firestoreData)) delete firestoreData[k];
+  for (const key of Object.keys(h.product)) delete h.product[key];
+  h.platform.clear();
 });
 
 describe('readProject', () => {
-  it('returns null when the doc does not exist', async () => {
-    const ref = makeDocRef('workspaces/alice/projects/missing') as any;
-    expect(await readProject(ref)).toBeNull();
+  it('returns null when the store has no record, even if a product document remains', async () => {
+    h.product[projectPath] = { name: 'Residue', ownerUid: 'u-alice' };
+
+    expect(await readProject('alice', 'game')).toBeNull();
   });
 
-  it('returns the typed Project on a present doc', async () => {
-    firestoreData['workspaces/alice/projects/game'] = {
-      id: 'game',
+  it('combines the product presentation with the platform record', async () => {
+    h.product[projectPath] = { id: 'game', workspaceId: 'alice', slug: 'game', ownerUid: 'u-alice', name: 'My Game', visibility: 'private', provisioningState: 'active' };
+    h.platform.set(projectPath, { ownerUid: 'u-alice', visibility: 'private', provisioningState: 'active' });
+
+    const project = await readProject('alice', 'game');
+
+    expect(project).toMatchObject({ id: 'game', slug: 'game', workspaceId: 'alice', ownerUid: 'u-alice', name: 'My Game', visibility: 'private' });
+  });
+
+  it('takes authorization and lifecycle fields from the store over a stale projection', async () => {
+    h.product[projectPath] = { ownerUid: 'stale-owner', name: 'My Game', visibility: 'public', provisioningState: 'provisioning', commercialLifecycle: { status: 'active' } };
+    h.platform.set(projectPath, {
       ownerUid: 'u-alice',
-      workspaceId: 'alice',
-      slug: 'game',
+      visibility: 'private',
+      provisioningState: 'active',
+      commercialLifecycle: { status: 'archived' },
+    });
+
+    expect(await readProject('alice', 'game')).toMatchObject({
+      ownerUid: 'u-alice',
       name: 'My Game',
       visibility: 'private',
       provisioningState: 'active',
-    };
-    const ref = makeDocRef('workspaces/alice/projects/game') as any;
-    const project = await readProject(ref);
-    expect(project).not.toBeNull();
-    expect(project!.ownerUid).toBe('u-alice');
-    expect(project!.visibility).toBe('private');
-  });
-});
-
-describe('readWorkspace', () => {
-  it('returns null when the doc does not exist', async () => {
-    expect(await readWorkspace('nobody')).toBeNull();
+      commercialLifecycle: { status: 'archived' },
+    });
   });
 
-  it('returns the typed Workspace on a present doc', async () => {
-    firestoreData['workspaces/alice'] = {
-      id: 'alice',
-      ownerUid: 'u-alice',
-      slug: 'alice',
-      name: 'alice',
-      ownerDisplayName: 'alice',
-      visibility: 'public',
-      mattermost: { teamId: 'team-abc' },
-      gitea: { orgName: 'alice', repoName: 'alice-workspace' },
-    };
-    const workspace = await readWorkspace('alice');
-    expect(workspace).not.toBeNull();
-    expect(workspace!.mattermost.teamId).toBe('team-abc');
-    expect(workspace!.gitea.orgName).toBe('alice');
-  });
+  it('supplies identity fields when the product document has not been written yet', async () => {
+    h.platform.set(projectPath, { ownerUid: 'u-alice', provisioningState: 'provisioning' });
 
-  it('returns null for a slug that fails the username regex (no Firestore read)', async () => {
-    firestoreData['workspaces/BAD SLUG'] = { id: 'x', ownerUid: 'u', slug: 'x' };
-    expect(await readWorkspace('BAD SLUG')).toBeNull();
-  });
-
-  it('rejects path-traversal attempts in the slug', async () => {
-    expect(await readWorkspace('../other')).toBeNull();
+    expect(await readProject('alice', 'game')).toMatchObject({ id: 'game', slug: 'game', workspaceId: 'alice', ownerUid: 'u-alice' });
   });
 });
 
 describe('readAgent', () => {
   it('returns null when the doc does not exist', async () => {
-    expect(await readAgent('u-nobody')).toBeNull();
+    expect(await readAgent('nobody')).toBeNull();
   });
 
   it('returns the typed Agent on a present doc', async () => {
-    firestoreData['agents/u-alice'] = {
-      id: 'u-alice',
-      name: 'Octo',
-      persona: 'helpful coach',
-      mattermost: { userId: 'mm-agent-1' },
-    };
-    const agent = await readAgent('u-alice');
-    expect(agent).not.toBeNull();
-    expect(agent!.name).toBe('Octo');
-    expect(agent!.mattermost.userId).toBe('mm-agent-1');
-  });
-});
+    h.product['agents/u-alice'] = { id: 'u-alice', name: 'Scout' };
 
-describe('readMember', () => {
-  it('returns null when the doc does not exist', async () => {
-    const ref = makeDocRef('workspaces/alice/projects/game/members/u-bob') as any;
-    expect(await readMember(ref)).toBeNull();
-  });
-
-  it('returns the typed Member on a present doc', async () => {
-    firestoreData['workspaces/alice/projects/game/members/u-bob'] = {
-      id: 'u-bob',
-      role: 'member',
-      joinedAt: {},
-    };
-    const ref = makeDocRef('workspaces/alice/projects/game/members/u-bob') as any;
-    const member = await readMember(ref);
-    expect(member).not.toBeNull();
-    expect(member!.role).toBe('member');
-  });
-});
-
-describe('readChannel', () => {
-  it('returns null when the doc does not exist', async () => {
-    const ref = makeDocRef('workspaces/alice/channels/general') as any;
-    expect(await readChannel(ref)).toBeNull();
-  });
-
-  it('returns the typed Channel for a general channel', async () => {
-    firestoreData['workspaces/alice/channels/general'] = {
-      id: 'general',
-      kind: 'general',
-      name: 'General',
-      mattermost: { channelId: 'ch-gen' },
-    };
-    const ref = makeDocRef('workspaces/alice/channels/general') as any;
-    const channel = await readChannel(ref);
-    expect(channel).not.toBeNull();
-    expect(channel!.mattermost.channelId).toBe('ch-gen');
-  });
-
-  it('accepts coach-dm kind (workspace-level channel)', async () => {
-    firestoreData['workspaces/alice/channels/coach-dm'] = {
-      id: 'coach-dm',
-      kind: 'coach-dm',
-      name: 'Coach',
-      mattermost: { channelId: 'ch-coach' },
-    };
-    const ref = makeDocRef('workspaces/alice/channels/coach-dm') as any;
-    const channel = await readChannel(ref);
-    expect(channel).not.toBeNull();
-    expect(channel!.kind).toBe('coach-dm');
+    expect(await readAgent('u-alice')).toMatchObject({ id: 'u-alice', name: 'Scout' });
   });
 });

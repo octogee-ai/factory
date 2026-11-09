@@ -16,9 +16,11 @@ const h = vi.hoisted(() => ({
     pendingVisibility: "public",
     provisioningState: "failed",
   } as Project,
+  docs: new Map<string, Record<string, unknown>>(),
   projectUpdates: [] as ProjectUpdate[],
+  productWrites: [] as Array<{ data: ProjectUpdate; options?: ProjectUpdate }>,
   channelWrites: [] as Array<{ path: string; data: ProjectUpdate; options?: ProjectUpdate }>,
-  generalChannel: undefined as ProjectUpdate | undefined,
+  failChannelProductWrite: false,
   userData: { username: "mira" } as ProjectUpdate,
   mmContext: {
     teamId: "team-1",
@@ -34,22 +36,20 @@ const h = vi.hoisted(() => ({
   },
 }));
 
+const PROJECT = "workspaces/mira/projects/orbit";
+const GENERAL = `${PROJECT}/channels/general`;
+
 function projectRef() {
   return {
-    path: `workspaces/${h.wid}/projects/${h.pid}`,
-    get: async () => ({ exists: true, data: () => h.project }),
-    update: async (data: ProjectUpdate) => {
-      h.projectUpdates.push(data);
+    path: PROJECT,
+    set: async (data: ProjectUpdate, options?: ProjectUpdate) => {
+      h.productWrites.push({ data, options });
     },
     collection: (name: string) => ({
       doc: (id: string) => ({
-        get: async () => ({
-          exists: h.generalChannel !== undefined,
-          data: () => h.generalChannel,
-        }),
         set: async (data: ProjectUpdate, options?: ProjectUpdate) => {
+          if (h.failChannelProductWrite) throw new Error("firestore unavailable");
           h.channelWrites.push({ path: `${name}/${id}`, data, options });
-          h.generalChannel = data;
         },
       }),
     }),
@@ -84,13 +84,6 @@ vi.mock("../lib/withProject.js", () => ({
 
 vi.mock("../lib/db.js", () => ({
   db: {
-    runTransaction: async (handler: (transaction: unknown) => Promise<unknown>) => handler({
-      get: (ref: { get(): Promise<unknown> }) => ref.get(),
-      update: (_ref: unknown, data: ProjectUpdate) => {
-        h.projectUpdates.push(data);
-        Object.assign(h.project, data);
-      },
-    }),
     doc: (path: string) => {
       if (path !== `users/${h.uid}`) throw new Error(`unexpected doc ${path}`);
       return {
@@ -102,9 +95,28 @@ vi.mock("../lib/db.js", () => ({
   },
   FieldValue: {
     serverTimestamp: () => "SERVER_TS",
-    delete: () => "DELETE_FIELD",
   },
 }));
+
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  const store = createDocumentFixtureStore(h.docs);
+  const recordPatches = (projects: typeof store.workspaces.projects) => {
+    const patchProject = projects.patch;
+    projects.patch = async (workspaceSlug, projectSlug, patch, fence) => {
+      h.projectUpdates.push(patch as ProjectUpdate);
+      return patchProject(workspaceSlug, projectSlug, patch, fence);
+    };
+  };
+  recordPatches(store.workspaces.projects);
+  const transaction = store.transaction.bind(store);
+  store.transaction = ((options: never, body: (tx: typeof store) => Promise<unknown>) =>
+    transaction(options, (tx: typeof store) => {
+      recordPatches(tx.workspaces.projects);
+      return body(tx);
+    })) as typeof store.transaction;
+  return { platformStateStore: store };
+});
 
 vi.mock("../lib/mattermost-context.js", () => ({
   getWorkspaceMmContext: (..._args: unknown[]) => h.mmContext,
@@ -148,9 +160,12 @@ beforeEach(() => {
     pendingVisibility: "public",
     provisioningState: "failed",
   };
+  h.docs.clear();
+  h.docs.set(PROJECT, h.project);
   h.projectUpdates.length = 0;
+  h.productWrites.length = 0;
   h.channelWrites.length = 0;
-  h.generalChannel = undefined;
+  h.failChannelProductWrite = false;
   h.userData = { username: "mira" };
   h.mmContext = {
     teamId: "team-1",
@@ -200,20 +215,14 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       githubBacked: false,
       recipe: "static-site",
     });
+    expect(h.docs.get(GENERAL)).toMatchObject({
+      id: "general",
+      kind: "general",
+      mattermost: { channelId: "channel-1" },
+      createdAt: expect.any(Number),
+    });
     expect(h.channelWrites).toEqual([
-      {
-        path: "channels/general",
-        data: {
-          id: "general",
-          kind: "general",
-          name: "general",
-          mattermost: {
-            channelId: "channel-1",
-          },
-          createdAt: "SERVER_TS",
-        },
-        options: { merge: true },
-      },
+      { path: "channels/general", data: { name: "general" }, options: { merge: true } },
     ]);
     expect(h.projectUpdates.at(-1)).toEqual({
       provisioningState: "active",
@@ -221,7 +230,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       visibility: "public",
       pendingVisibility: null,
       giteaRepoName: "orbit",
-      updatedAt: "SERVER_TS",
+      updatedAt: { serverNow: true },
     });
   });
 
@@ -240,7 +249,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
 
   it("rejects retrying an active project with its primary channel already recorded", async () => {
     h.project.provisioningState = "active";
-    h.generalChannel = { mattermost: { channelId: "channel-1" } };
+    h.docs.set(GENERAL, { mattermost: { channelId: "channel-1" } });
 
     await request(app()).post("/api/projects/mira/orbit/retry-provisioning").expect(409);
 
@@ -255,7 +264,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
 
     expect(h.projectUpdates[0]).toMatchObject({ provisioningState: "provisioning" });
     expect(h.projectUpdates.at(-1)).toMatchObject({ provisioningState: "active" });
-    expect(h.generalChannel).toMatchObject({ mattermost: { channelId: "channel-1" } });
+    expect(h.docs.get(GENERAL)).toMatchObject({ mattermost: { channelId: "channel-1" } });
   });
 
   it("preserves GitHub-backed provisioning so retry does not seed the wrong Board", async () => {
@@ -289,12 +298,12 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
         provisioningState: "provisioning",
         provisioningError: null,
         provisioningCleanup: null,
-        updatedAt: "SERVER_TS",
+        updatedAt: { serverNow: true },
       },
       {
         provisioningState: "failed",
         provisioningError: "Workspace has no Mattermost team context",
-        updatedAt: "SERVER_TS",
+        updatedAt: { serverNow: true },
       },
     ]);
   });
@@ -352,7 +361,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     expect(h.projectUpdates.at(-1)).toEqual({
       provisioningState: "failed",
       provisioningError: "Gitea unreachable",
-      updatedAt: "SERVER_TS",
+      updatedAt: { serverNow: true },
     });
     expect(h.logger.error).toHaveBeenCalledWith(
       "[projects] Gitea reconcile failed for mira/orbit: Gitea unreachable",
@@ -360,11 +369,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
   });
 
   it("restores the verified archived primary recorded by failed provisioning", async () => {
-    h.generalChannel = {
-      mattermost: {
-        channelId: "archived-channel",
-      },
-    };
+    h.docs.set(GENERAL, { mattermost: { channelId: "archived-channel" } });
     h.mmApi.mockImplementation(async (path: string, method?: string) => {
       if (path === "/channels/archived-channel" && method === undefined) {
         return {
@@ -389,8 +394,74 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       "/teams/team-1/channels/name/mira-proj-orbit-general",
     );
     expect(h.mmApi).not.toHaveBeenCalledWith("/channels", "POST", expect.anything());
-    expect(h.channelWrites[0]?.data).toMatchObject({
-      mattermost: { channelId: "archived-channel" },
+    expect(h.docs.get(GENERAL)).toMatchObject({ mattermost: { channelId: "archived-channel" } });
+  });
+
+  it.each([
+    ["another retry already claimed the project", { provisioningState: "provisioning" }],
+    ["cleanup started after the route loaded the project", { provisioningCleanup: { status: "in_progress" } }],
+    ["ownership moved after the route loaded the project", { ownerUid: "owner-2" }],
+  ])("refuses the claim from authoritative state when %s", async (_label, change) => {
+    h.docs.set(PROJECT, { ...h.project, ...change });
+
+    await request(app()).post("/api/projects/mira/orbit/retry-provisioning").expect(409);
+
+    expect(h.projectUpdates).toEqual([]);
+    expect(h.mmApi).not.toHaveBeenCalled();
+    expect(h.provisionProjectRepo).not.toHaveBeenCalled();
+  });
+
+  it("restores product fields an interrupted create never wrote", async () => {
+    delete h.project.name;
+    delete h.project.tagline;
+    delete h.project.projectType;
+
+    await request(app()).post("/api/projects/mira/orbit/retry-provisioning").expect(200);
+
+    expect(h.productWrites).toEqual([
+      {
+        data: expect.objectContaining({ name: "orbit", canvasFile: "README.md", memberCount: 1 }),
+        options: { merge: true },
+      },
+    ]);
+  });
+
+  it("leaves existing product fields alone on retry", async () => {
+    await request(app()).post("/api/projects/mira/orbit/retry-provisioning").expect(200);
+
+    expect(h.productWrites).toEqual([]);
+  });
+
+  it("adopts the recorded channel on retry after the channel's product write was interrupted", async () => {
+    h.mmApi.mockImplementation(async (path: string, method?: string) => {
+      if ((method ?? "GET") === "GET" && path.startsWith("/teams/team-1/channels/name/")) {
+        throw Object.assign(new Error("not found"), { status: 404 });
+      }
+      if (method === "POST" && path === "/channels") return { id: "channel-1" };
+      if (method === undefined && path === "/channels/channel-1") {
+        return { id: "channel-1", name: "mira-proj-orbit-general", team_id: "team-1", type: "P", delete_at: 0 };
+      }
+      if (method === "POST" && path === "/channels/channel-1/members") return { ok: true };
+      throw new Error(`unexpected Mattermost call: ${method ?? "GET"} ${path}`);
     });
+    h.failChannelProductWrite = true;
+
+    await request(app()).post("/api/projects/mira/orbit/retry-provisioning").expect(500);
+
+    expect(h.docs.get(PROJECT)).toMatchObject({ provisioningState: "failed", provisioningError: "firestore unavailable" });
+    expect(h.docs.get(GENERAL)).toMatchObject({ mattermost: { channelId: "channel-1" } });
+
+    h.failChannelProductWrite = false;
+    h.mmApi.mockClear();
+
+    await request(app())
+      .post("/api/projects/mira/orbit/retry-provisioning")
+      .expect(200, { success: true, channelId: "channel-1" });
+
+    expect(h.mmApi).not.toHaveBeenCalledWith("/channels", "POST", expect.anything());
+    expect(h.channelWrites).toEqual([
+      { path: "channels/general", data: { name: "general" }, options: { merge: true } },
+    ]);
+    expect(h.docs.get(PROJECT)).toMatchObject({ provisioningState: "active" });
   });
 });

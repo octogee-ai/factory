@@ -1,5 +1,4 @@
 import * as crypto from "crypto";
-import { db, FieldValue, Timestamp } from "./db.js";
 import { platformStateStore } from "./platform-state.js";
 
 // Unified "mint centrally, manage at the gateway" ticket primitive. One
@@ -67,9 +66,6 @@ const POLICIES: Record<GatewayTicketPurpose, PurposePolicy> = {
   "voice-ws": { ttlMs: 30_000, perUidCap: 5, hourlyQuota: 120 },
 };
 
-const COLLECTION = "gatewayTickets";
-const MINT_LOG_COLLECTION = "gatewayTicketMintLog";
-
 export async function mintTicket(args: {
   uid: string;
   gatewayId: string;
@@ -106,58 +102,29 @@ export async function mintTicket(args: {
     return result;
   }
 
-  const ticketRef = db.collection(COLLECTION).doc(ticketId);
-  const docData = {
-    uid,
-    gatewayId,
-    purpose,
-    expiresAt,
-    // Timestamp twin of expiresAt so a Firestore TTL policy GCs unredeemed
-    // tickets — redeem leaves expired/invalid docs in place by design, so
-    // without TTL they'd retain uid/gateway/payload metadata indefinitely.
-    expireAt: Timestamp.fromMillis(expiresAt),
-    payload,
-    createdAt: FieldValue.serverTimestamp(),
-  };
-
-  // Transactional read-then-write so concurrent mints can't both pass a stale
-  // count — Firestore optimistic concurrency forces retry-and-reread. Caps and
-  // quota are scoped per (uid, purpose): exhausting one purpose never starves
-  // another. (Reads precede writes, as Firestore transactions require.)
   const windowStart = now - HOURLY_WINDOW_MS;
-  const mintLogRef = db.collection(MINT_LOG_COLLECTION).doc();
-  const liveQuery = db
-    .collection(COLLECTION)
-    .where("uid", "==", uid)
-    .where("purpose", "==", purpose)
-    .where("expiresAt", ">", now);
-  const mintLogQuery = db
-    .collection(MINT_LOG_COLLECTION)
-    .where("uid", "==", uid)
-    .where("purpose", "==", purpose)
-    .where("mintedAt", ">", windowStart);
-
-  await db.runTransaction(async (tx) => {
+  await platformStateStore.transaction({ label: "gateway-ticket.capped-mint" }, async (tx) => {
     if (policy.hourlyQuota !== undefined) {
-      const logSnap = await tx.get(mintLogQuery);
-      if (logSnap.size >= policy.hourlyQuota) {
+      const mints = await tx.access.gatewayTickets.countMintsSince(uid, purpose, windowStart);
+      if (mints >= policy.hourlyQuota) {
         throw new HourlyMintQuotaExceededError(uid, purpose, policy.hourlyQuota, HOURLY_WINDOW_MS);
       }
     }
     if (policy.perUidCap !== undefined) {
-      const liveSnap = await tx.get(liveQuery);
-      if (liveSnap.size >= policy.perUidCap) {
+      const live = await tx.access.gatewayTickets.countLive(uid, purpose, now);
+      if (live >= policy.perUidCap) {
         throw new TicketCapExceededError(uid, purpose, policy.perUidCap);
       }
     }
-    tx.set(ticketRef, docData);
+    await tx.access.gatewayTickets.create({
+      ticketId,
+      uid,
+      gatewayId,
+      expiresAt,
+      grant: { purpose, payload, createdAt: { serverNow: true } },
+    });
     if (policy.hourlyQuota !== undefined) {
-      tx.set(mintLogRef, {
-        uid,
-        purpose,
-        mintedAt: now,
-        expireAt: Timestamp.fromMillis(now + HOURLY_WINDOW_MS),
-      });
+      await tx.access.gatewayTickets.recordMint({ uid, purpose, mintedAt: now, expiresAt: now + HOURLY_WINDOW_MS });
     }
   });
 
@@ -165,8 +132,6 @@ export async function mintTicket(args: {
 }
 
 export const _testInternal = {
-  COLLECTION,
-  MINT_LOG_COLLECTION,
   POLICIES,
   HOURLY_WINDOW_MS,
 };

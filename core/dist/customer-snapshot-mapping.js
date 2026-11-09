@@ -74,20 +74,33 @@ export function mapProjectAgentState(projectId, projectData, credential) {
         return { projectId, enabled, mmUserId, token, status: "error", activationId: null };
     }
 }
-export async function collectProjectAgentStates(db, secrets, uid, slug) {
-    const [snap, projectSecrets] = await Promise.all([
-        db.collection("workspaces").doc(slug).collection("projects").get(),
-        secrets.list(uid, "project-agent-mattermost"),
+function storedProjectAgentSource(project) {
+    return {
+        id: project.projectSlug,
+        data: {
+            status: project.status,
+            ...(project.agent === null ? {} : { agent: project.agent }),
+            ...(project.commercialLifecycleStatus === null ? {} : { commercialLifecycle: { status: project.commercialLifecycleStatus } }),
+            ...(project.repoSource === null ? {} : { repoSource: project.repoSource }),
+        },
+    };
+}
+export async function collectStoredProjectAgentStates(state, uid, slug) {
+    const [projects, projectSecrets] = await Promise.all([
+        state.workspaces.projects.list(slug),
+        state.secrets.list(uid, "project-agent-mattermost"),
     ]);
+    return projectAgentStatesFrom(projects.map(storedProjectAgentSource), projectSecrets);
+}
+function projectAgentStatesFrom(projects, projectSecrets) {
     const credentials = new Map(projectSecrets.flatMap((secret) => secret.kind === "connector" || !secret.projectId ? [] : [[secret.projectId, secret]]));
     const out = [];
     const seenProjects = new Set();
-    for (const doc of snap.docs) {
-        const data = doc.data() ?? {};
+    for (const { id, data } of projects) {
         if (data.agent === undefined)
             continue;
-        seenProjects.add(doc.id);
-        const state = mapProjectAgentState(doc.id, data, credentials.get(doc.id) ?? null);
+        seenProjects.add(id);
+        const state = mapProjectAgentState(id, data, credentials.get(id) ?? null);
         if (state)
             out.push(state);
     }

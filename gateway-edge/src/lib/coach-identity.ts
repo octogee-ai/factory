@@ -1,5 +1,6 @@
 import { logger } from "../middleware/logging.js";
 import { db, FieldValue } from "./db.js";
+import { platformStateStore } from "./platform-state.js";
 import { readAgent } from "./firestoreReads.js";
 import { mmApi, mmUploadAvatarBuffer } from "./mattermost.js";
 import { resolveFileTarget, type FileTarget } from "./fileTarget.js";
@@ -112,7 +113,7 @@ export async function syncCoachIdentity(
   const updated: string[] = [];
 
   applyTextIdentity(update, updated, patch);
-  const agent = patch.avatarPng || patch.name ? await readAgent(uid) : null;
+  const agent = patch.avatarPng ? await readAgent(uid) : null;
   await applyAvatarIdentity({ uid, patch, ctx, agent, update, updated });
 
   if (updated.length === 0) return [];
@@ -122,11 +123,11 @@ export async function syncCoachIdentity(
   // updates stay Firestore-first — the app reads the name from Firestore and the
   // MM bot rename is best-effort, so a failed MM call can't strand the write.
   if (patch.avatarPng) {
-    await syncCoachToMattermost(uid, patch, agent);
+    await syncCoachToMattermost(uid, patch);
     await db.doc(`agents/${uid}`).set(update, { merge: true });
   } else {
     await db.doc(`agents/${uid}`).set(update, { merge: true });
-    await syncCoachToMattermost(uid, patch, agent);
+    await syncCoachToMattermost(uid, patch);
   }
   return updated;
 }
@@ -135,7 +136,6 @@ export async function replaceCoachTextIdentity(
   uid: string,
   identity: CoachTextIdentitySnapshot,
 ): Promise<void> {
-  const agent = await readAgent(uid);
   await db.doc(`agents/${uid}`).set({
     id: uid,
     updatedAt: FieldValue.serverTimestamp(),
@@ -143,18 +143,13 @@ export async function replaceCoachTextIdentity(
     persona: identity.persona ?? FieldValue.delete(),
     avatarEmoji: identity.emoji ?? FieldValue.delete(),
   }, { merge: true });
-  await syncCoachToMattermost(uid, { name: identity.name ?? "Coach" }, agent);
+  await syncCoachToMattermost(uid, { name: identity.name ?? "Coach" });
 }
 
-async function syncCoachToMattermost(
-  uid: string,
-  patch: CoachIdentityPatch,
-  preread: Awaited<ReturnType<typeof readAgent>>,
-): Promise<void> {
+async function syncCoachToMattermost(uid: string, patch: CoachIdentityPatch): Promise<void> {
   if (!patch.name && !patch.avatarPng) return;
   try {
-    const agent = preread ?? (await readAgent(uid));
-    const coachMmUserId = agent?.mattermost?.userId;
+    const coachMmUserId = (await platformStateStore.workspaces.agentIdentities.get(uid))?.mattermostUserId;
     if (!coachMmUserId) return;
     if (patch.name) {
       await mmApi(`/bots/${coachMmUserId}`, "PUT", { display_name: patch.name });

@@ -190,6 +190,7 @@ export interface BuilderGatewayFilter {
 
 export interface BuilderRecordsRepository {
   get(uid: string): Promise<Stored<BuilderRecord> | null>;
+  getRole(uid: string): Promise<BuilderRole | null>;
   getMany(uids: readonly string[]): Promise<ReadonlyMap<string, Stored<BuilderRecord>>>;
   findBySlug(slug: string): Promise<Stored<BuilderRecord> | null>;
   findByMattermostUserId(mattermostUserId: string): Promise<Stored<BuilderRecord> | null>;

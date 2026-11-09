@@ -1,67 +1,50 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => {
-  const userDoc = {
-    data: vi.fn<() => Record<string, unknown> | undefined>(),
-  };
+  const docs = new Map<string, Record<string, unknown>>();
   const db = {
     doc: vi.fn((path: string) => ({
       path,
-      get: vi.fn(async () => userDoc),
+      get: vi.fn(async () => ({ data: () => docs.get(path) })),
     })),
   };
-  return {
-    userDoc,
-    db,
-    readWorkspace: vi.fn(),
-    readChannel: vi.fn(),
-    readAgent: vi.fn(),
-  };
+  return { docs, db };
 });
 
 vi.mock("../lib/db.js", () => ({
   db: h.db,
 }));
 
-vi.mock("../lib/firestoreReads.js", () => ({
-  readWorkspace: h.readWorkspace,
-  readChannel: h.readChannel,
-  readAgent: h.readAgent,
-}));
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(h.docs) };
+});
 
 const { getWorkspaceMmContext } = await import("../lib/mattermost-context.js");
 
 describe("getWorkspaceMmContext", () => {
   beforeEach(() => {
-    h.userDoc.data.mockReset();
+    h.docs.clear();
     h.db.doc.mockClear();
-    h.readWorkspace.mockReset();
-    h.readChannel.mockReset();
-    h.readAgent.mockReset();
   });
 
   it("returns null when the owner user document is missing", async () => {
-    h.userDoc.data.mockReturnValue(undefined);
-
     await expect(getWorkspaceMmContext("uid-1")).resolves.toBeNull();
 
     expect(h.db.doc).toHaveBeenCalledWith("users/uid-1");
-    expect(h.readWorkspace).not.toHaveBeenCalled();
   });
 
-  it("assembles workspace Mattermost ids from user, workspace, channels, and agent", async () => {
-    h.readWorkspace.mockResolvedValue({ mattermost: { teamId: "team-1" } });
-    h.readAgent.mockResolvedValue({ mattermost: { userId: "coach-mm" } });
-    h.readChannel.mockImplementation(async (ref: { path: string }) => {
-      if (ref.path.endsWith("/general")) return { mattermost: { channelId: "general-ch" } };
-      if (ref.path.endsWith("/coach-dm")) return { mattermost: { channelId: "coach-dm-ch" } };
-      if (ref.path.endsWith("/admin")) return { mattermost: { channelId: "admin-ch" } };
-      return null;
-    });
+  it("assembles workspace Mattermost ids from the platform records and product username", async () => {
+    h.docs.set("users/uid-1", { username: "alice", mattermost: { userId: "owner-mm", username: "alice-mm" } });
+    h.docs.set("workspaces/alice", { id: "alice", ownerUid: "uid-1", mattermost: { teamId: "team-1" } });
+    h.docs.set("agents/uid-1", { mattermost: { userId: "coach-mm" } });
+    h.docs.set("workspaces/alice/channels/general", { mattermost: { channelId: "general-ch" } });
+    h.docs.set("workspaces/alice/channels/coach-dm", { mattermost: { channelId: "coach-dm-ch" } });
+    h.docs.set("workspaces/alice/channels/admin", { mattermost: { channelId: "admin-ch" } });
 
     const ctx = await getWorkspaceMmContext("uid-1", undefined, {
       username: "alice",
-      mattermost: { userId: "owner-mm", username: "alice-mm" },
+      mattermost: { userId: "stale-projected-mm", username: "alice-mm" },
     });
 
     expect(ctx).toEqual({

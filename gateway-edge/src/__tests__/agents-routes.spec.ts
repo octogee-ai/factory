@@ -40,7 +40,9 @@ function docRef(path: string) {
     get: async () => snap(path),
     set: async (data: unknown, options?: unknown) => {
       h.writes.push({ method: "set", path, data, options });
-      h.docs.set(path, data as DocData);
+      const merge = (options as { merge?: boolean } | undefined)?.merge === true;
+      const stored = { ...(data as DocData), ...("updatedAt" in (data as DocData) ? { updatedAt: 1 } : {}) };
+      h.docs.set(path, merge ? { ...(h.docs.get(path) ?? {}), ...stored } : stored);
     },
     update: async (data: unknown) => {
       h.writes.push({ method: "update", path, data });
@@ -67,6 +69,11 @@ function colRef(path: string) {
     }),
   };
 }
+
+vi.mock("../lib/platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(h.docs) };
+});
 
 vi.mock("../middleware/auth.js", () => ({
   requireAuth: (req: { uid?: string; isAdmin?: boolean }, _res: unknown, next: () => void) => {
@@ -134,7 +141,7 @@ describe("agent routes", () => {
   });
 
   it("patches coach profile fields and syncs the Mattermost display name", async () => {
-    h.readAgent.mockResolvedValue({ mattermost: { userId: "coach-mm" } });
+    h.docs.set("agents/owner-1", { mattermost: { userId: "coach-mm" } });
 
     const res = await request(app())
       .patch("/api/agents/me")

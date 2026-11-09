@@ -523,6 +523,7 @@ type BuilderRecordAccess = ReturnType<typeof builderRecordAccess>;
 
 type BuilderRecordReadMethod =
   | "get"
+  | "getRole"
   | "getMany"
   | "findBySlug"
   | "findByMattermostUserId"
@@ -542,6 +543,10 @@ function builderRecordReads(access: BuilderRecordAccess): Pick<BuilderRecordsRep
       const name = "builders.records.get";
       const [user, config] = await session.readAll(name, [ref(uid), systemConfigRef(ref(uid))]);
       return decodeBuilder(user, config);
+    },
+
+    async getRole(uid) {
+      return decodeRole(uid, await session.read("builders.records.getRole", systemConfigRef(ref(uid))));
     },
 
     async getMany(uids) {

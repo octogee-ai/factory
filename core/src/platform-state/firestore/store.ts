@@ -1,9 +1,9 @@
-import type { Firestore } from "firebase-admin/firestore";
-import type { PlatformStateStore, PlatformStateTransaction, WatchSubscription } from "../store.js";
+import type { Firestore, Transaction } from "firebase-admin/firestore";
+import type { PlatformStateRepositories, PlatformStateStore, PlatformStateTransaction, WatchSubscription } from "../store.js";
 import { sweepExpiredFirestoreState } from "./expiry.js";
 import { createFirestoreRepositories } from "./repositories.js";
 import { DirectFirestoreSession } from "./session.js";
-import { runFirestoreTransaction, type TransactionFirestoreSession } from "./transaction.js";
+import { runFirestoreTransaction, TransactionFirestoreSession } from "./transaction.js";
 import { watchFirestore, type FirestoreWatchTiming } from "./watch.js";
 import { firestoreWatchSource } from "./watch-sources.js";
 
@@ -21,10 +21,22 @@ function transactionHandle(session: TransactionFirestoreSession): PlatformStateT
   };
 }
 
+const firestoreBackedStores = new WeakMap<PlatformStateStore, Firestore>();
+
+export function platformStateReadsInFirestoreTransaction(
+  store: PlatformStateStore,
+  transaction: Transaction,
+  label: string,
+): PlatformStateRepositories {
+  const db = firestoreBackedStores.get(store);
+  if (db === undefined) return store;
+  return createFirestoreRepositories(new TransactionFirestoreSession(db, transaction, { label, readOnly: true, attempt: 1 }));
+}
+
 export function createFirestorePlatformStateStore(options: FirestorePlatformStateStoreOptions): PlatformStateStore {
   const { db } = options;
   const subscriptions = new Set<WatchSubscription>();
-  return {
+  const store: PlatformStateStore = {
     ...createFirestoreRepositories(new DirectFirestoreSession(db)),
 
     transaction(transactionOptions, body) {
@@ -49,4 +61,6 @@ export function createFirestorePlatformStateStore(options: FirestorePlatformStat
       await Promise.all([...subscriptions].map((subscription) => subscription.close()));
     },
   };
+  firestoreBackedStores.set(store, db);
+  return store;
 }

@@ -42,6 +42,7 @@ function project(workspaceSlug: string, projectSlug: string, overrides: Partial<
     archived: null,
     archivedAt: null,
     commercialLifecycleStatus: null,
+    provisioningCleanup: null,
     repoSource: null,
     agent: null,
     updatedAt: NOW,
@@ -339,6 +340,14 @@ describe.skipIf(!dsn)("PostgreSQL workspace repositories", { timeout: 30_000 }, 
       await harness.store.workspaces.records.put(workspace("beta", "u1"));
     });
 
+    it("round-trips and clears the provisioning cleanup map", async () => {
+      await harness.store.workspaces.records.put(workspace("acme", "u1"));
+      await harness.store.workspaces.projects.put(project("acme", "site", { provisioningCleanup: { status: "in_progress", error: null } }));
+      expect(await harness.store.workspaces.projects.get("acme", "site")).toMatchObject({ provisioningCleanup: { status: "in_progress", error: null } });
+      await harness.store.workspaces.projects.patch("acme", "site", { provisioningCleanup: null });
+      expect(await harness.store.workspaces.projects.get("acme", "site")).toMatchObject({ provisioningCleanup: null });
+    });
+
     it("round-trips every project field", async () => {
       const full = project("acme", "site", {
         ownerActive: true,
@@ -466,6 +475,67 @@ describe.skipIf(!dsn)("PostgreSQL workspace repositories", { timeout: 30_000 }, 
 
       expect(await harness.store.workspaces.projects.get("acme", "site")).toBeNull();
       expect(await harness.store.workspaces.channels.get({ workspaceSlug: "acme", projectSlug: "site" }, "c1")).not.toBeNull();
+    });
+  });
+
+  describe("project members", () => {
+    beforeEach(async () => {
+      await harness.store.workspaces.records.put(workspace("acme", "u1"));
+      await harness.store.workspaces.projects.put(project("acme", "site"));
+      await harness.store.workspaces.projects.put(project("acme", "docs"));
+    });
+
+    const projectMember = (projectSlug: string, uid: string, overrides: Partial<{ role: "owner" | "member"; joinedAt: TimeInput | null }> = {}) => ({
+      workspaceSlug: "acme",
+      projectSlug,
+      uid,
+      role: "member" as const,
+      joinedAt: NOW,
+      ...overrides,
+    });
+
+    it("puts a member, reads it back with its join time and lists it per project and per uid", async () => {
+      const members = harness.store.workspaces.projectMembers;
+      await members.put(projectMember("site", "u2"));
+      await members.put(projectMember("docs", "u2", { role: "owner", joinedAt: { serverNow: true } }));
+      await members.put(projectMember("site", "u3"));
+
+      expect(await members.get("acme", "site", "u2")).toEqual({
+        workspaceSlug: "acme", projectSlug: "site", uid: "u2", role: "member", joinedAt: NOW, revision: expect.any(String),
+      });
+      expect((await members.list("acme", "site")).map((member) => member.uid)).toEqual(["u2", "u3"]);
+      expect((await members.listForUid("u2")).map((member) => `${member.projectSlug}:${member.role}`)).toEqual(["docs:owner", "site:member"]);
+      expect((await members.get("acme", "docs", "u2"))!.joinedAt).toEqual(expect.any(Number));
+    });
+
+    it("keeps the stored join time when a later put carries none", async () => {
+      const members = harness.store.workspaces.projectMembers;
+      await members.put(projectMember("site", "u2"));
+      await members.put(projectMember("site", "u2", { role: "owner", joinedAt: null }));
+      expect(await members.get("acme", "site", "u2")).toMatchObject({ role: "owner", joinedAt: NOW });
+    });
+
+    it("deletes one membership and treats a repeated delete as done", async () => {
+      const members = harness.store.workspaces.projectMembers;
+      await members.put(projectMember("site", "u2"));
+      await members.put(projectMember("docs", "u2"));
+      await members.delete("acme", "site", "u2");
+      await members.delete("acme", "site", "u2");
+      expect(await members.get("acme", "site", "u2")).toBeNull();
+      expect((await members.listForUid("u2")).map((member) => member.projectSlug)).toEqual(["docs"]);
+    });
+
+    it("refuses a member of a project that does not exist", async () => {
+      await expect(harness.store.workspaces.projectMembers.put(projectMember("missing", "u2"))).rejects.toThrow();
+    });
+
+    it("gives concurrent joins distinct members and no lost write", async () => {
+      await Promise.all(["u2", "u3", "u4", "u5"].map((uid) =>
+        harness.store.transaction({ label: "project-member-join", maxAttempts: 8 }, async (tx) => {
+          const members = await tx.workspaces.projectMembers.list("acme", "site");
+          if (!members.some((member) => member.uid === uid)) await tx.workspaces.projectMembers.put(projectMember("site", uid));
+        })));
+      expect((await harness.store.workspaces.projectMembers.list("acme", "site")).map((member) => member.uid)).toEqual(["u2", "u3", "u4", "u5"]);
     });
   });
 
@@ -623,6 +693,36 @@ describe.skipIf(!dsn)("PostgreSQL workspace repositories", { timeout: 30_000 }, 
   });
 
   describe("watches", () => {
+    it("watches project memberships by workspace and by uid", async () => {
+      const records = harness.store.workspaces;
+      await records.records.put(workspace("acme", "u1"));
+      await records.records.put(workspace("beta", "u1"));
+      await records.projects.put(project("acme", "site"));
+      await records.projects.put(project("beta", "docs"));
+      await records.projectMembers.put({ workspaceSlug: "acme", projectSlug: "site", uid: "u1", role: "owner", joinedAt: NOW });
+      await records.projectMembers.put({ workspaceSlug: "beta", projectSlug: "docs", uid: "u2", role: "owner", joinedAt: NOW });
+
+      const byWorkspace = await watch({ aggregate: "workspaceProjectMembers", filter: { workspaceSlug: "acme" } });
+      const byUid = await watch({ aggregate: "workspaceProjectMembers", filter: { uid: "u2" } });
+      expect(snapshotOf(byWorkspace)?.map((record) => record.uid)).toEqual(["u1"]);
+      expect(snapshotOf(byUid)?.map((record) => record.workspaceSlug)).toEqual(["beta"]);
+
+      await records.projectMembers.put({ workspaceSlug: "acme", projectSlug: "site", uid: "u2", role: "member", joinedAt: NOW });
+      await vi.waitFor(() => expect(changeLog(byWorkspace)).toEqual(["added:acme/site/u2"]), WAIT);
+      await vi.waitFor(() => expect(changeLog(byUid)).toEqual(["added:acme/site/u2"]), WAIT);
+      await records.projectMembers.put({ workspaceSlug: "acme", projectSlug: "site", uid: "u2", role: "owner", joinedAt: null });
+      await vi.waitFor(() => expect(changeLog(byWorkspace)).toEqual(["added:acme/site/u2", "modified:acme/site/u2"]), WAIT);
+      await vi.waitFor(() => expect(changeLog(byUid)).toEqual(["added:acme/site/u2", "modified:acme/site/u2"]), WAIT);
+      await records.projectMembers.delete("acme", "site", "u2");
+      await vi.waitFor(() => expect(changeLog(byUid)).toEqual(["added:acme/site/u2", "modified:acme/site/u2", "removed:acme/site/u2"]), WAIT);
+      await records.projects.delete("acme", "site");
+      await vi.waitFor(() => expect(changeLog(byWorkspace)).toEqual(["added:acme/site/u2", "modified:acme/site/u2", "removed:acme/site/u2", "removed:acme/site/u1"]), WAIT);
+
+      expect(changesOf(byWorkspace)[1].record).toMatchObject({ uid: "u2", role: "owner", joinedAt: NOW });
+      expect(byWorkspace.errors).toEqual([]);
+      expect(byUid.errors).toEqual([]);
+    });
+
     it("watches a Builder's workspaces: snapshot, then additions, modifications and removals", async () => {
       await harness.store.workspaces.records.put(workspace("acme", "u1"));
       await harness.store.workspaces.records.put(workspace("beta", "u2"));

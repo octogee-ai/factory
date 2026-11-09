@@ -1294,10 +1294,7 @@ function table(rows: Array<Record<string, string | number>>): string {
 }
 
 async function findBuilderBySlug(slug: string): Promise<Stored<BuilderRecord> | null> {
-  const builder = await platformState.builders.records.findBySlug(slug);
-  if (builder !== null) return builder;
-  const alias = await db.collection("users").where("username", "==", slug).limit(1).get();
-  return alias.empty ? null : platformState.builders.records.get(alias.docs[0].id);
+  return platformState.builders.records.findBySlug(slug);
 }
 
 export function retirementFinished(entry: FleetGatewayRuntimeEntry, podNames: readonly string[]): boolean {
@@ -1410,7 +1407,7 @@ async function lsCustomers(): Promise<void> {
 async function inspectCustomer(slug: string): Promise<void> {
   const user = await findBuilderBySlug(slug);
   if (!user) {
-    console.error(red(`${CROSS} No user found with slug or username '${slug}'.`));
+    console.error(red(`${CROSS} No user found with slug '${slug}'.`));
     process.exit(1);
   }
   const account = await firestoreBuilderAccountReader(db).get(user.uid);
@@ -1602,7 +1599,7 @@ async function releaseStatus(): Promise<void> {
 async function addCustomer(slug: string, gatewayId: string, apply: boolean): Promise<void> {
   const user = await findBuilderBySlug(slug);
   if (!user) {
-    console.error(red(`${CROSS} No user found with slug or username '${slug}'.`));
+    console.error(red(`${CROSS} No user found with slug '${slug}'.`));
     process.exit(1);
   }
   const runtime = await readFleetGatewayRuntime(platformState, gatewayId);
@@ -1678,7 +1675,7 @@ async function migrateCustomerPlan(
 ): Promise<void> {
   const user = await findBuilderBySlug(slug);
   if (!user) {
-    console.error(red(`${CROSS} No user found with slug or username '${slug}'.`));
+    console.error(red(`${CROSS} No user found with slug '${slug}'.`));
     process.exit(1);
   }
   slug = user.slug ?? slug;

@@ -1,4 +1,3 @@
-import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
 import type { FleetInformer } from "../../fleet-informer.js";
 
 export function stubInformer(overrides: Partial<FleetInformer> = {}): FleetInformer {
@@ -6,17 +5,11 @@ export function stubInformer(overrides: Partial<FleetInformer> = {}): FleetInfor
     gateways: () => null,
     fleetRegistry: () => null,
     fleetRegistryWithoutMalformed: () => null,
-    users: () => null,
+    builders: () => null,
+    buildersWithoutMalformed: () => null,
     assignments: () => null,
     subscribe: () => () => undefined,
     stop: () => undefined,
     ...overrides,
   };
-}
-
-export function mirrorDoc(
-  id: string,
-  data: Record<string, unknown>,
-): QueryDocumentSnapshot {
-  return { id, data: () => data, ref: { id } } as unknown as QueryDocumentSnapshot;
 }

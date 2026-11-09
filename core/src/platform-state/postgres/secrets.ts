@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { RecordKey } from "../errors.js";
 import type {
   AccessRepositories,
@@ -19,7 +19,7 @@ import type {
   SecretsRepository,
 } from "../secrets.js";
 import type { OpaqueMap, Stored } from "../store.js";
-import { deleteRecord, equalsFence, insertRecord, revisionFence, selectByKey, selectRecords, updateRecord } from "./records.js";
+import { deleteRecord, equalsFence, insertRecord, mergeJsonColumn, revisionFence, selectByKey, selectRecords, updateRecord } from "./records.js";
 import type { PostgresSession } from "./session.js";
 import type { Row } from "./sql.js";
 import { column, columnFor, decodeStored, type TableSpec } from "./values.js";
@@ -303,6 +303,43 @@ function createGatewayTicketsRepository(session: PostgresSession): GatewayTicket
       await insertRecord(session, "access.gatewayTickets.create", GATEWAY_TICKETS_TABLE, ticket, "create");
     },
 
+    async countLive(uid, purpose, now) {
+      const rows = await session.read(
+        "access.gatewayTickets.countLive",
+        `SELECT count(*)::integer AS live FROM $schema.gateway_tickets
+          WHERE uid = $1::text AND access_grant ->> 'purpose' = $2::text AND expires_at > $3::bigint`,
+        [uid, purpose, now],
+      );
+      return rows[0].live as number;
+    },
+
+    async countMintsSince(uid, purpose, since) {
+      const rows = await session.read(
+        "access.gatewayTickets.countMintsSince",
+        `SELECT count(*)::integer AS mints FROM $schema.gateway_ticket_mint_log
+          WHERE uid = $1::text AND purpose = $2::text AND minted_at > $3::bigint`,
+        [uid, purpose, since],
+      );
+      return rows[0].mints as number;
+    },
+
+    async recordMint(mint) {
+      const id = randomUUID();
+      await session.write(
+        "access.gatewayTickets.recordMint",
+        { aggregate: "gateway-ticket", key: id },
+        `INSERT INTO $schema.gateway_ticket_mint_log (id, uid, purpose, minted_at, expires_at)
+         VALUES ($1::text, $2::text, $3::text, $4::bigint, $5::bigint)`,
+        [id, mint.uid, mint.purpose, mint.mintedAt, mint.expiresAt],
+      );
+    },
+
+    async patchGrant(ticketId, patch, fence) {
+      const name = "access.gatewayTickets.patchGrant";
+      assertNoReservedKeys(name, patch, GATEWAY_TICKET_RESERVED);
+      await mergeJsonColumn(session, name, { table: GATEWAY_TICKETS_TABLE, key: [ticketId] }, grantColumn, patch, revisionFence(fence?.revision));
+    },
+
     async delete(ticketId, fence) {
       await deleteRecord(
         session,
@@ -469,6 +506,19 @@ function createModelBrokerGatewayTokensRepository(session: PostgresSession): Mod
   };
 }
 
+const UID_REFERENCING_ACCESS_TABLES = [
+  { table: "gateway_tickets", path: "gatewayTickets", id: "ticket_id", where: "uid = $1::text" },
+  { table: "gateway_ticket_mint_log", path: "gatewayTicketMintLog", id: "id", where: "uid = $1::text" },
+  { table: "control_tickets", path: "openclawControlTickets", id: "ticket_hash", where: "uid = $1::text" },
+  { table: "control_sessions", path: "openclawControlSessions", id: "session_hash", where: "uid = $1::text" },
+  {
+    table: "gateway_access_audit",
+    path: "gatewayAccessAudit",
+    id: "id",
+    where: "(uid = $1::text OR detail ->> 'ownerUid' = $1::text OR detail ->> 'actorUid' = $1::text)",
+  },
+] as const;
+
 export function createPostgresAccessRepositories(session: PostgresSession): AccessRepositories {
   return {
     gatewayTickets: createGatewayTicketsRepository(session),
@@ -477,5 +527,18 @@ export function createPostgresAccessRepositories(session: PostgresSession): Acce
     accessAudit: createAccessAuditRepository(session),
     modelBrokerTokens: createModelBrokerTokensRepository(session),
     modelBrokerGatewayTokens: createModelBrokerGatewayTokensRepository(session),
+
+    async listRecordsForUid(uid) {
+      const selects = UID_REFERENCING_ACCESS_TABLES.map(({ table, path, id, where }) =>
+        `SELECT '${path}/' || ${id} AS record FROM $schema.${table} WHERE ${where}`);
+      const rows = await session.execute(selects.join(" UNION ALL "), [uid]);
+      return rows.map((row) => row.record as string);
+    },
+
+    async eraseForUid(uid) {
+      for (const { table, where } of UID_REFERENCING_ACCESS_TABLES) {
+        await session.execute(`DELETE FROM $schema.${table} WHERE ${where}`, [uid]);
+      }
+    },
   };
 }

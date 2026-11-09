@@ -1,6 +1,8 @@
 
 
-import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import { getFirestore } from "firebase-admin/firestore";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
+import { operatorPlatformStateStoreForFirebaseProject } from "../lib/platform-state-store.js";
 import { projectGeneralChannelName } from "../../shared/types/identity.js";
 import { pathToFileURL } from "node:url";
 import { initializeOperatorFirebaseAdmin } from "../lib/operator-firebase-admin.js";
@@ -29,6 +31,7 @@ let APPLY = false;
 let MM_URL = "";
 let MM_ADMIN_TOKEN = "";
 let db: FirebaseFirestore.Firestore;
+let store: PlatformStateStore;
 
 async function mm(method: string, endpoint: string, body?: unknown): Promise<{ id: string; type: string }> {
   const resp = await fetch(`${MM_URL}/api/v4${endpoint}`, {
@@ -64,31 +67,18 @@ targetVisibility: string | null;
 }
 
 async function findProjectsNeedingRepair(): Promise<ProjectToRepair[]> {
-  const snap = await db.collectionGroup("projects").get();
   const out: ProjectToRepair[] = [];
+  const ownerCache = new Map<string, { ownerMmUserId: string; agentMmUserId: string }>();
+  const teamCache = new Map<string, string>();
 
-const ownerCache = new Map<string, { ownerMmUserId: string; agentMmUserId: string }>();
-  const teamCache = new Map<string, string>(); 
+  for (const project of await store.workspaces.projects.listAll()) {
+    const { workspaceSlug: workspaceId, projectSlug, ownerUid } = project;
+    const general = await store.workspaces.channels.get({ workspaceSlug: workspaceId, projectSlug }, "general");
+    if (general !== null) continue;
 
-  for (const doc of snap.docs) {
-    
-    const segments = doc.ref.path.split("/");
-    if (segments.length !== 4 || segments[0] !== "workspaces" || segments[2] !== "projects") continue;
-
-    const general = await doc.ref.collection("channels").doc("general").get();
-    if (general.exists) continue;
-
-    const data = doc.data();
-    const workspaceId = segments[1];
-    const projectSlug = segments[3];
-
-let teamId: string;
-    const cachedTeamId = teamCache.get(workspaceId);
-    if (cachedTeamId !== undefined) {
-      teamId = cachedTeamId;
-    } else {
-      const wsSnap = await db.doc(`workspaces/${workspaceId}`).get();
-      teamId = (wsSnap.data()?.mattermost?.teamId ?? "") as string;
+    let teamId = teamCache.get(workspaceId);
+    if (teamId === undefined) {
+      teamId = (await store.workspaces.records.get(workspaceId))?.mattermostTeamId ?? "";
       teamCache.set(workspaceId, teamId);
     }
     if (!teamId) {
@@ -96,33 +86,28 @@ let teamId: string;
       continue;
     }
 
-const ownerUid = data.ownerUid as string | undefined;
-    let ownerMmUserId = "";
-    let agentMmUserId = "";
-    if (ownerUid) {
-      const cached = ownerCache.get(ownerUid);
-      if (cached) {
-        ownerMmUserId = cached.ownerMmUserId;
-        agentMmUserId = cached.agentMmUserId;
-      } else {
-        const userSnap = await db.doc(`users/${ownerUid}`).get();
-        ownerMmUserId = userSnap.data()?.mattermost?.userId ?? "";
-        const agentSnap = await db.doc(`agents/${ownerUid}`).get();
-        agentMmUserId = agentSnap.data()?.mattermost?.userId ?? "";
-        ownerCache.set(ownerUid, { ownerMmUserId, agentMmUserId });
-      }
+    let owner = ownerCache.get(ownerUid);
+    if (owner === undefined) {
+      const [builder, agent] = await Promise.all([
+        store.builders.records.get(ownerUid),
+        store.workspaces.agentIdentities.get(ownerUid),
+      ]);
+      owner = {
+        ownerMmUserId: builder?.mattermostUserId ?? "",
+        agentMmUserId: agent?.mattermostUserId ?? "",
+      };
+      ownerCache.set(ownerUid, owner);
     }
 
+    const productDoc = await db.doc(`workspaces/${workspaceId}/projects/${projectSlug}`).get();
     out.push({
       workspaceId,
       projectSlug,
-      projectName: data.name || projectSlug,
+      projectName: (productDoc.data()?.name as string | undefined) || projectSlug,
       teamId,
-      ownerMmUserId,
-      agentMmUserId,
-      targetVisibility:
-        typeof data.pendingVisibility === "string" ? data.pendingVisibility : (data.visibility ?? null),
-      giteaRepoName: data.giteaRepoName ?? null,
+      ...owner,
+      targetVisibility: project.pendingVisibility ?? project.visibility,
+      giteaRepoName: project.giteaRepoName,
     });
   }
   return out;
@@ -182,23 +167,25 @@ for (const m of [
     console.log(`  ENSURED ${m.label} ${m.id} in ${channelName}`);
   }
 
-  const projectRef = db.doc(`workspaces/${p.workspaceId}/projects/${p.projectSlug}`);
-  await projectRef.collection("channels").doc("general").set({
-    id: "general",
+  await store.workspaces.channels.put({
+    scope: { workspaceSlug: p.workspaceId, projectSlug: p.projectSlug },
+    channelId: "general",
     kind: "general",
-    name: "general",
-    mattermost: { channelId },
-    createdAt: FieldValue.serverTimestamp(),
+    mattermostChannelId: channelId,
+    archivedAt: null,
+    createdBy: null,
+    createdAt: { serverNow: true },
   });
-  const updates: Record<string, unknown> = {
+  await db.doc(`workspaces/${p.workspaceId}/projects/${p.projectSlug}/channels/general`)
+    .set({ name: "general" }, { merge: true });
+  await store.workspaces.projects.patch(p.workspaceId, p.projectSlug, {
     provisioningState: "active",
     provisioningError: null,
     pendingVisibility: null,
-    updatedAt: FieldValue.serverTimestamp(),
-  };
-  if (p.targetVisibility) updates.visibility = p.targetVisibility;
-  if (!p.giteaRepoName) updates.giteaRepoName = p.projectSlug;
-  await projectRef.update(updates);
+    updatedAt: { serverNow: true },
+    ...(p.targetVisibility ? { visibility: p.targetVisibility } : {}),
+    ...(p.giteaRepoName ? {} : { giteaRepoName: p.projectSlug }),
+  });
   console.log(`  WROTE channels/general for ${p.workspaceId}/${p.projectSlug}`);
 }
 
@@ -214,6 +201,7 @@ async function main() {
 
   initializeOperatorFirebaseAdmin(config.project);
   db = getFirestore();
+  store = await operatorPlatformStateStoreForFirebaseProject(db, config.project);
   console.log(`Project: ${config.project}${APPLY ? "" : " [DRY RUN — pass --apply to write]"}`);
 
   const needs = await findProjectsNeedingRepair();

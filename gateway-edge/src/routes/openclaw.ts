@@ -1,7 +1,6 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { randomUUID } from "node:crypto";
 import { requireAuth } from "../middleware/auth.js";
-import { db } from "../lib/db.js";
 import { platformStateStore, readBuilderTier } from "../lib/platform-state.js";
 import { mintTicket } from "../lib/gateway-ticket.js";
 import { resolveActivityConversation } from "../lib/activity-conversation.js";
@@ -90,7 +89,7 @@ router.post("/ticket", requireAuth, async (req: Request, res: Response, next: Ne
       if (!isMattermostActivitySelection(req.body)) {
         res.status(400).json({ error: 'invalid_activity_channel' }); return;
       }
-      const scope = await resolveActivityConversation({ db, uid, ...req.body });
+      const scope = await resolveActivityConversation({ builders: platformStateStore.builders.records, uid, ...req.body });
       if (!scope) { res.status(403).json({ error: 'activity_channel_forbidden' }); return; }
       const { gatewayId, ...payload } = scope;
       const ticket = await mintTicket({ uid, gatewayId, purpose: 'openclaw-ws', payload });

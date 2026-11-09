@@ -71,10 +71,19 @@ export interface WorkspaceProjectMember {
   readonly projectSlug: string;
   readonly uid: string;
   readonly role: WorkspaceMemberRole;
+  readonly joinedAt: number | null;
 }
+
+export type WorkspaceProjectMemberInput = Omit<WorkspaceProjectMember, "joinedAt"> & {
+  readonly joinedAt: TimeInput | null;
+};
 
 export interface WorkspaceProjectMembersRepository {
   get(workspaceSlug: string, projectSlug: string, uid: string): Promise<Stored<WorkspaceProjectMember> | null>;
+  list(workspaceSlug: string, projectSlug: string): Promise<readonly Stored<WorkspaceProjectMember>[]>;
+  listForUid(uid: string): Promise<readonly Stored<WorkspaceProjectMember>[]>;
+  put(member: WorkspaceProjectMemberInput): Promise<void>;
+  delete(workspaceSlug: string, projectSlug: string, uid: string): Promise<void>;
 }
 
 export interface WorkspaceProject {
@@ -86,6 +95,7 @@ export interface WorkspaceProject {
   readonly giteaRepoName: string | null;
   readonly provisioningState: string | null;
   readonly provisioningError: string | null;
+  readonly provisioningCleanup?: OpaqueMap | null;
   readonly pendingVisibility: string | null;
   readonly visibility: string | null;
   readonly checkoutEnabled: boolean | null;

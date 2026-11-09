@@ -13,7 +13,8 @@ export const PLATFORM_MIGRATION_SCHEDULER_ATTEMPT_DEADLINE_MILLISECONDS = 180_00
 export const PLATFORM_MIGRATION_SCHEDULED_WRITER_FUNCTIONS = [
   "cleanupFeedRetention",
   "reapExpiredAgentImports",
-  "processGatewayAccessLifecycle",
+  "sweepProvisioningStarts",
+  "sweepTrialGrants",
 ] as const;
 export const PLATFORM_MIGRATION_CRONJOB_WRITERS = [
   "trial-expiry",
@@ -571,15 +572,26 @@ function assertCronJobJobDrained(
   const name = job.metadata?.name;
   if (typeof name !== "string" || name.length === 0) throw new Error("Kubernetes Job has no name");
   const owner = cronJobOwner(job, name);
-  if (owner === null) return;
   const active = nonNegativeInteger(job.status?.active ?? 0, `Kubernetes Job ${name} active`);
   const terminal = terminalCronJobJob(job, `Kubernetes Job ${name}`);
+  if (owner === null) {
+    if (active > 0 || !terminal) throw new Error(`standalone Job can still write: ${name}`);
+    return;
+  }
   if (!declared.has(owner)) {
     if (active > 0 || !terminal) throw new Error(`unknown CronJob Job can still write: ${name}`);
     return;
   }
   if (active > 0) throw new Error(`CronJob Job ${name} is still active`);
   if (!terminal) throw new Error(`CronJob Job ${name} is not terminal`);
+}
+
+export function assertKubernetesJobsDrained(
+  jobs: readonly KubernetesCronJobJob[],
+  declaredCronJobs: readonly string[],
+): void {
+  const declared = new Set(declaredCronJobs);
+  for (const job of jobs) assertCronJobJobDrained(job, declared);
 }
 
 function assertCronJobJobsDrained(

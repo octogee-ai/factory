@@ -318,38 +318,38 @@ export function wireCoachMattermostBindings(
   }
 }
 
-const OPENCLAW_PROVISIONING_VERSION = "v1";
-
 export async function markProvisioningComplete(
   ctx: ProvisioningContext,
   mmUpdate: MmUpdate,
   allAgentIds: string[],
 ): Promise<void> {
+  const provisioningObj = buildProvisioningSnapshot(ctx, allAgentIds);
+
   await writeSystemConfig(ctx);
-  await writeBuilderProvisioningState(ctx, mmUpdate, allAgentIds);
-  await writeProductUserFields(ctx, mmUpdate);
-  await writeWorkspaceDoc(ctx, mmUpdate);
+  await writeProvisionedBuilder(ctx, allAgentIds, mmUpdate);
+  await db.collection("users").doc(ctx.uid).update(buildUserProductFields(ctx, mmUpdate));
+  await writeWorkspaceRecord(ctx, mmUpdate);
   await seedWorkspaceChannels(ctx, mmUpdate);
-  await seedWorkspaceOwner(ctx);
-  await writeAgentDoc(ctx, mmUpdate);
-  await updateUserWorkspaceEntry(ctx, buildProvisioningSnapshot(ctx, allAgentIds));
+  await seedWorkspaceOwner(ctx, mmUpdate);
+  await writeAgentIdentity(ctx, mmUpdate);
+  await updateUserWorkspaceEntry(ctx, provisioningObj);
 }
+
+const SERVER_NOW = { serverNow: true } as const;
 
 function buildProvisioningSnapshot(
   ctx: ProvisioningContext,
   allAgentIds: string[],
 ): Record<string, unknown> {
-  const provisioningObj: Record<string, unknown> = {
+  return {
     status: "complete",
-    version: OPENCLAW_PROVISIONING_VERSION,
+    version: "v1",
     slug: ctx.slug,
     ...(allAgentIds.length > 0 ? { agentIds: FieldValue.arrayUnion(...allAgentIds) } : {}),
     activatedAgents: ["coach"],
     customerDir: ctx.customerDir,
     provisionedAt: FieldValue.serverTimestamp(),
   };
-
-  return provisioningObj;
 }
 
 async function writeSystemConfig(ctx: ProvisioningContext): Promise<void> {
@@ -375,115 +375,138 @@ async function writeSystemConfig(ctx: ProvisioningContext): Promise<void> {
   await db.doc(`users/${ctx.uid}/system/config`).set(systemConfigData, { merge: true });
 }
 
-function builderProvisioningPatch(ctx: ProvisioningContext, mmUpdate: MmUpdate): BuilderPatch {
+export function buildProvisionedBuilderPatch(ctx: ProvisioningContext, mmUpdate: MmUpdate): BuilderPatch {
   const mattermostUserId = mmUpdate["mattermost.userId"];
   return {
-    slug: ctx.slug,
     workspaceId: ctx.slug,
+    slug: ctx.slug,
     ...(typeof mattermostUserId === "string" && mattermostUserId !== "" ? { mattermostUserId } : {}),
-    openclaw: {
-      version: OPENCLAW_PROVISIONING_VERSION,
-      customerDir: ctx.customerDir,
-      provisionedAt: { serverNow: true },
-    },
+    openclaw: { version: "v1", customerDir: ctx.customerDir, provisionedAt: SERVER_NOW },
   };
 }
 
-async function writeBuilderProvisioningState(
+async function writeProvisionedBuilder(
   ctx: ProvisioningContext,
-  mmUpdate: MmUpdate,
   allAgentIds: string[],
-): Promise<void> {
-  const { records } = platformStateStore.builders;
-  await records.patch(ctx.uid, builderProvisioningPatch(ctx, mmUpdate));
-  await records.addAgents(ctx.uid, allAgentIds);
-  await records.setActivatedAgents(ctx.uid, ["coach"]);
-}
-
-async function writeProductUserFields(ctx: ProvisioningContext, mmUpdate: MmUpdate): Promise<void> {
-  const productFields: Record<string, unknown> = { tier: ctx.tier };
-  for (const [key, value] of Object.entries(mmUpdate)) {
-    if (key.startsWith("mattermost.") && key !== "mattermost.userId") productFields[key] = value;
-  }
-  await db.collection("users").doc(ctx.uid).update(productFields);
-}
-
-async function writeWorkspaceDoc(
-  ctx: ProvisioningContext,
   mmUpdate: MmUpdate,
 ): Promise<void> {
-  const mmTeamId = mmUpdate["mattermost.teamId"] as string | undefined;
-  await platformStateStore.workspaces.records.put({
-    slug: ctx.slug,
-    id: ctx.slug,
-    ownerUid: ctx.uid,
-    ownerActive: null,
-    mattermostTeamId: mmTeamId || null,
-    giteaOrgName: ctx.slug,
-    giteaRepoName: workspaceRepoName(),
-    createdAt: null,
-    updatedAt: { serverNow: true },
+  await platformStateStore.transaction({ label: "provisioning.complete" }, async (transaction) => {
+    await transaction.builders.records.patch(ctx.uid, buildProvisionedBuilderPatch(ctx, mmUpdate));
+    if (allAgentIds.length > 0) await transaction.builders.records.addAgents(ctx.uid, allAgentIds);
+    await transaction.builders.records.setActivatedAgents(ctx.uid, ["coach"]);
   });
-  await db.doc(`workspaces/${ctx.slug}`).set({ name: ctx.slug, ownerDisplayName: ctx.slug }, { merge: true });
+}
+
+export function buildUserProductFields(ctx: ProvisioningContext, mmUpdate: MmUpdate): Record<string, unknown> {
+  return {
+    tier: ctx.tier,
+    ...Object.fromEntries(
+      Object.entries(mmUpdate).filter(([key]) => key.startsWith("mattermost.") && key !== "mattermost.userId"),
+    ),
+  };
+}
+
+async function writeWorkspaceRecord(ctx: ProvisioningContext, mmUpdate: MmUpdate): Promise<void> {
+  const mattermostTeamId = (mmUpdate["mattermost.teamId"] as string | undefined) || null;
+  const giteaFields = { giteaOrgName: ctx.slug, giteaRepoName: workspaceRepoName() };
+  await platformStateStore.transaction({ label: "provisioning.workspace" }, async (transaction) => {
+    if ((await transaction.workspaces.records.get(ctx.slug)) === null) {
+      await transaction.workspaces.records.put({
+        slug: ctx.slug,
+        id: ctx.slug,
+        ownerUid: ctx.uid,
+        ownerActive: null,
+        mattermostTeamId,
+        ...giteaFields,
+        createdAt: SERVER_NOW,
+        updatedAt: SERVER_NOW,
+      });
+      return;
+    }
+    await transaction.workspaces.records.patch(ctx.slug, {
+      ownerUid: ctx.uid,
+      ...(mattermostTeamId === null ? {} : { mattermostTeamId }),
+      ...giteaFields,
+      updatedAt: SERVER_NOW,
+    });
+  });
+  await db.doc(`workspaces/${ctx.slug}`).set(
+    { name: ctx.slug, ownerDisplayName: ctx.slug, updatedAt: FieldValue.serverTimestamp() },
+    { merge: true },
+  );
 }
 
 async function seedWorkspaceChannel(
-  slug: string,
-  channelId: string,
+  ctx: ProvisioningContext,
+  channelId: "general" | "coach-dm",
   mattermostChannelId: string,
   name: string,
 ): Promise<void> {
-  await platformStateStore.workspaces.channels.put({
-    scope: { workspaceSlug: slug, projectSlug: null },
-    channelId,
-    kind: channelId,
-    mattermostChannelId,
-    archivedAt: null,
-    createdBy: null,
-    createdAt: { serverNow: true },
+  const scope = { workspaceSlug: ctx.slug, projectSlug: null };
+  await platformStateStore.transaction({ label: "provisioning.channel" }, async (transaction) => {
+    if ((await transaction.workspaces.channels.get(scope, channelId)) === null) {
+      await transaction.workspaces.channels.put({
+        scope,
+        channelId,
+        kind: channelId,
+        mattermostChannelId,
+        archivedAt: null,
+        createdBy: null,
+        createdAt: SERVER_NOW,
+      });
+      return;
+    }
+    await transaction.workspaces.channels.patch(scope, channelId, { mattermostChannelId });
   });
-  await db.doc(`workspaces/${slug}/channels/${channelId}`).set({ name }, { merge: true });
+  await db.doc(`workspaces/${ctx.slug}/channels/${channelId}`).set({ name }, { merge: true });
 }
 
-async function seedWorkspaceChannels(
-  ctx: ProvisioningContext,
-  mmUpdate: MmUpdate,
-): Promise<void> {
+async function seedWorkspaceChannels(ctx: ProvisioningContext, mmUpdate: MmUpdate): Promise<void> {
   const generalChannelId = mmUpdate["mattermost.generalChannelId"] as string | undefined;
-  if (generalChannelId) await seedWorkspaceChannel(ctx.slug, "general", generalChannelId, "general");
+  if (generalChannelId) await seedWorkspaceChannel(ctx, "general", generalChannelId, "general");
 
   const coachDmChannelId = mmUpdate["mattermost.channelId"] as string | undefined;
   if (coachDmChannelId) {
     const name = (mmUpdate["mattermost.channelName"] as string | undefined) || "coach-dm";
-    await seedWorkspaceChannel(ctx.slug, "coach-dm", coachDmChannelId, name);
+    await seedWorkspaceChannel(ctx, "coach-dm", coachDmChannelId, name);
   }
 }
 
-async function seedWorkspaceOwner(ctx: ProvisioningContext): Promise<void> {
-  await platformStateStore.workspaces.members.put({
-    workspaceSlug: ctx.slug,
-    uid: ctx.uid,
-    role: "owner",
-    joinedAt: { serverNow: true },
-    mattermostUserId: null,
+async function seedWorkspaceOwner(ctx: ProvisioningContext, mmUpdate: MmUpdate): Promise<void> {
+  const mattermostUserId = (mmUpdate["mattermost.userId"] as string | undefined) ?? null;
+  await platformStateStore.transaction({ label: "provisioning.owner" }, async (transaction) => {
+    if ((await transaction.workspaces.members.get(ctx.slug, ctx.uid)) !== null) return;
+    await transaction.workspaces.members.put({
+      workspaceSlug: ctx.slug,
+      uid: ctx.uid,
+      role: "owner",
+      joinedAt: SERVER_NOW,
+      mattermostUserId,
+    });
   });
 }
 
-async function writeAgentDoc(
-  ctx: ProvisioningContext,
-  mmUpdate: MmUpdate,
-): Promise<void> {
+async function writeAgentIdentity(ctx: ProvisioningContext, mmUpdate: MmUpdate): Promise<void> {
   const coachMmUserId = mmUpdate["mattermost.coachUserId"] as string | undefined;
   if (!coachMmUserId) return;
   await platformStateStore.workspaces.agentIdentities.put({
     uid: ctx.uid,
     mattermostUserId: coachMmUserId,
-    at: { serverNow: true },
+    at: SERVER_NOW,
   });
-  await db.doc(`agents/${ctx.uid}`).set(
-    { name: "Octo", persona: "", avatarEmoji: "🐙", look: DEFAULT_AGENT_LOOK },
-    { merge: true },
-  );
+  await db.doc(`agents/${ctx.uid}`).set(buildCoachAgentDoc(ctx.uid), { merge: true });
+}
+
+export function buildCoachAgentDoc(uid: string): Record<string, unknown> {
+  return {
+    id: uid,
+    name: "Octo",
+    persona: "",
+    avatarEmoji: "🐙",
+    look: DEFAULT_AGENT_LOOK,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  };
 }
 
 async function updateUserWorkspaceEntry(

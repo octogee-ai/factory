@@ -65,7 +65,12 @@ async function seedProject(
   pid: string,
   data: Record<string, unknown>,
 ): Promise<void> {
-  await db.collection("workspaces").doc(wid).collection("projects").doc(pid).set(data);
+  await db
+    .collection("workspaces")
+    .doc(wid)
+    .collection("projects")
+    .doc(pid)
+    .set({ ownerUid: "seeded-owner-uid", ...data });
 }
 
 async function getProject(wid: string, pid: string): Promise<Record<string, unknown> | undefined> {

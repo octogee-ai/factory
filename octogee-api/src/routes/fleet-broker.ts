@@ -116,7 +116,7 @@ import { readWorkspaceMigrationMarker } from "@octogee/shared/types/workspace-mi
 import { isDeveloperToolchainStatus } from "@octogee/shared/types/developer-toolchain";
 import {
   byotSnapshotProjectionFromSystemConfig,
-  collectProjectAgentStates,
+  collectStoredProjectAgentStates,
 } from "@octogee/core/customer-snapshot-mapping";
 import {
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
@@ -173,6 +173,7 @@ type RecordUsageEvent = (input: {
   agentId: string;
   usage: FleetBrokerUsageData;
   gatewayId: string;
+  workspaceSlug: string | null;
 }) => Promise<void>;
 
 type ReadBlobMetadata = (gcsPath: string) => Promise<{ generation?: unknown; size?: unknown; md5Hash?: unknown }>;
@@ -461,6 +462,7 @@ const defaultRecordUsageEvent: RecordUsageEvent = async (input) => {
     role: extractRole(input.agentId),
     usage: input.usage,
     gatewayId: input.gatewayId,
+    platformWorkspaceSlug: input.workspaceSlug,
     log: (msg) => logger.info(`[usage-broker] ${msg}`),
   });
 };
@@ -1503,9 +1505,9 @@ function snapshotProvisioningStatus(builder: BuilderRecord): FleetBrokerProvisio
   return status === "provisioning" || status === "complete" ? status : "";
 }
 
-function snapshotOnboardingVibe(data: Record<string, unknown>): string | null {
-  const value = readPath(data, "onboarding.vibe");
-  return typeof value === "string" ? value : null;
+function snapshotOnboardingVibe(builder: BuilderRecord): string | null {
+  const vibe = builder.persona?.vibe;
+  return typeof vibe === "string" ? vibe : null;
 }
 
 
@@ -1579,7 +1581,7 @@ export function snapshotGreetingPosted(greeting: unknown): boolean {
   return receipt?.ok === true && typeof receipt.jobId === "string" && receipt.jobId.trim().length > 0;
 }
 
-function snapshotBaseFields(
+export function snapshotBaseFields(
   builder: BuilderRecord,
   account: Record<string, unknown>,
   slug: string,
@@ -1603,7 +1605,7 @@ function snapshotBaseFields(
     lastName: stringAt(account, "lastName"),
     timeZone: storedTimeZone(account),
     photoURL: stringAt(account, "photoURL"),
-    onboardingVibe: snapshotOnboardingVibe(account),
+    onboardingVibe: snapshotOnboardingVibe(builder),
     byotActive: account.byotActive === true,
   };
 }
@@ -1657,7 +1659,7 @@ async function loadSnapshot(
     projectCheckoutScope === "workspace-and-projects"
       ? collectProjects(deps, slug)
       : Promise.resolve([]),
-    collectProjectAgentStates(db, store.secrets, uid, slug),
+    collectStoredProjectAgentStates(store, uid, slug),
     coachMattermostSecret(store, uid),
     db.collection("agents").doc(uid).get(),
     db.collection("users").doc(uid).collection("system").doc("config").get(),
@@ -2105,7 +2107,7 @@ function installSnapshotRoutes(
     const [collectedChannels, coachSecret, projectAgents] = await Promise.all([
       collectChannelBindings(store, slug),
       coachMattermostSecret(store, uid),
-      collectProjectAgentStates(db, store.secrets, uid, slug),
+      collectStoredProjectAgentStates(store, uid, slug),
     ]);
     const coach = snapshotCoachFields(coachSecret);
     const agentByProject = new Map(projectAgents.map((agent) => [agent.projectId, agent]));
@@ -2900,7 +2902,7 @@ async function handleConfiguredBuilderBootstrap(
     db.collection("users").doc(uid).get(),
     coachMattermostSecret(store, uid),
     db.collection("agents").doc(uid).get(),
-    collectProjectAgentStates(db, store.secrets, uid, request.slug),
+    collectStoredProjectAgentStates(store, uid, request.slug),
   ]);
   let bootstrap: FleetBrokerConfiguredBuilderBootstrap | null;
   try {
@@ -3097,7 +3099,7 @@ function installProvisioningRoutes(
         userData,
         mmUpdate,
       });
-      const slug = stringAt(userData, "username");
+      const { slug } = assigned.builder;
       if (slug) await applyDefaultCoachLook({ uid: assigned.uid, slug }, deps);
       res.status(204).end();
     });
@@ -3396,6 +3398,7 @@ function installGatewayOpsRoutes(
         agentId,
         usage,
         gatewayId: bound.gatewayId,
+        workspaceSlug: assigned.slug,
       });
       res.status(204).end();
     });

@@ -1,4 +1,5 @@
 import type { MmUpdate } from "./customer-lifecycle.js";
+import type { BuilderPatch } from "./platform-state/builders.js";
 import type { ManagedChannelHost } from "./channel-host/types.js";
 export { listTierTemplateFiles, writeTierTemplateFiles, } from "./tier-template-files.js";
 export interface AgentBinding {
@@ -78,4 +79,7 @@ export declare function upsertMattermostBindingByAgentAndPeer(bindings: AgentBin
 }): void;
 export declare function wireCoachMattermostBindings(config: OpenclawConfigShape, coachAgentId: string, slug: string, mmUpdate: MmUpdate): void;
 export declare function markProvisioningComplete(ctx: ProvisioningContext, mmUpdate: MmUpdate, allAgentIds: string[]): Promise<void>;
+export declare function buildProvisionedBuilderPatch(ctx: ProvisioningContext, mmUpdate: MmUpdate): BuilderPatch;
+export declare function buildUserProductFields(ctx: ProvisioningContext, mmUpdate: MmUpdate): Record<string, unknown>;
+export declare function buildCoachAgentDoc(uid: string): Record<string, unknown>;
 export declare function notifyOpsOfSignup(ctx: ProvisioningContext): Promise<void>;

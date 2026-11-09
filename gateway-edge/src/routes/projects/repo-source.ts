@@ -7,7 +7,7 @@ import {
 } from "@octogee/shared/types/feature-flags";
 import type { ProjectRepoSource } from "@octogee/shared/types/index";
 import { strictRateLimit } from "../../middleware/security.js";
-import { db, FieldValue } from "../../lib/db.js";
+import { platformStateStore } from "../../lib/platform-state.js";
 import { logger } from "../../middleware/logging.js";
 import { withProject } from "../../lib/withProject.js";
 import {
@@ -102,12 +102,10 @@ async function builderGatewayAssigned(
 ): Promise<boolean> {
   const gatewayId = assignedGatewayId(req);
   if (!gatewayId || gatewayId.includes("/")) return false;
-  const gateway = await db.doc(`gateways/${gatewayId}`).get();
-  if (!gateway.exists) return false;
-  const data = gateway.data() as Record<string, unknown> | undefined;
-  return data?.gatewayClass === "builder"
-    && data.ownerUid === uid
-    && data.builderSlug === workspaceSlug;
+  const gateway = await platformStateStore.gateways.roots.get(gatewayId);
+  return gateway?.gatewayClass === "builder"
+    && gateway.ownerUid === uid
+    && gateway.builderSlug === workspaceSlug;
 }
 
 export type RepoReachability =
@@ -204,9 +202,9 @@ export function createProjectRepoSourceRoutes(
         }
       }
 
-      await projectRef.update({
-        repoSource: requested.value,
-        updatedAt: FieldValue.serverTimestamp(),
+      await platformStateStore.workspaces.projects.patch(wid, pid, {
+        repoSource: requested.value ? { ...requested.value } : null,
+        updatedAt: { serverNow: true },
       });
 
       logger.info(

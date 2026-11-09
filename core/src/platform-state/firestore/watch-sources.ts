@@ -11,6 +11,7 @@ import {
   firestoreAgentIdentitiesWatchSource,
   firestoreWorkspaceChannelsWatchSource,
   firestoreWorkspaceMembersWatchSource,
+  firestoreWorkspaceProjectMembersWatchSource,
   firestoreWorkspaceProjectsWatchSource,
   firestoreWorkspacesWatchSource,
 } from "./workspaces.js";
@@ -26,6 +27,7 @@ const FIRESTORE_WATCH_SOURCES: { readonly [A in WatchAggregate]: FirestoreWatchS
   workspaces: firestoreWorkspacesWatchSource,
   workspaceMembers: firestoreWorkspaceMembersWatchSource,
   workspaceProjects: firestoreWorkspaceProjectsWatchSource,
+  workspaceProjectMembers: firestoreWorkspaceProjectMembersWatchSource,
   workspaceChannels: firestoreWorkspaceChannelsWatchSource,
   agentIdentities: firestoreAgentIdentitiesWatchSource,
 };

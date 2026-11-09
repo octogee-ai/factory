@@ -680,7 +680,7 @@ async function respondToApproval(
     await requireReviewerAuthority(deps, data, reviewer);
     await withNativeDenial(deps, approvalId, data);
     const now = deps.now();
-    const { data: updated, recorded } = await recordApprovalDecision(deps.db, approvalId, {
+    const { data: updated, recorded } = await recordApprovalDecision(deps.db, deps.store, approvalId, {
       state: targetState, reviewerUid: reviewer.uid, reviewerAuthTime: reviewer.authTime, nowMs: now,
     });
     if (recorded && targetState === "denied") await mirrorNativeDenial(deps, approvalId, updated, reviewer);

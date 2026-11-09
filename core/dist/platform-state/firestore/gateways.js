@@ -212,6 +212,15 @@ function createRootsRepository(session) {
                 await fenced.update(name, key, ref(gatewayId), encodePatch({ runtimeRestartFence: next ?? { clear: true } }, ROOT_TIMES));
             });
         },
+        async deleteChildren(gatewayId) {
+            if (session.transactional) {
+                throw new UnsupportedOperationError("firestore", "gateways.roots.deleteChildren inside a transaction", "backend-capability");
+            }
+            for (const child of await ref(gatewayId).listCollections()) {
+                if (child.id !== GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
+                    await session.db.recursiveDelete(child);
+            }
+        },
         async delete(gatewayId, fence) {
             const name = "gateways.roots.delete";
             const key = rootKey(gatewayId);

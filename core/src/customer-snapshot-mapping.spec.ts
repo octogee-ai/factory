@@ -7,7 +7,7 @@ import {
   mapWorkspaceChannelDoc,
   mapProjectChannelDoc,
   mapProjectAgentState,
-  collectProjectAgentStates,
+  collectStoredProjectAgentStates,
 } from "./customer-snapshot-mapping.js";
 import { MalformedRecordError } from "./platform-state/errors.js";
 import { createDocumentFixtureStore } from "./testing/journal-store.js";
@@ -293,30 +293,15 @@ function projectAgentFixture(
   projects: Array<{ id: string; data: Record<string, unknown> }>,
   secrets: Record<string, Record<string, unknown>>,
 ) {
-  const db = {
-    collection: (_name: string) => ({
-      doc: (_id: string) => ({
-        get: async () => { throw new Error("unused"); },
-        collection: (sub: string) => {
-          expect(sub).toBe("projects");
-          return {
-            doc: () => { throw new Error("unused"); },
-            get: async () => ({ docs: projects.map((p) => ({ id: p.id, data: () => p.data })) }),
-          };
-        },
-      }),
-      get: async () => { throw new Error("unused"); },
-    }),
-  };
-  const store = createDocumentFixtureStore(Object.fromEntries(
-    Object.entries(secrets).map(([secretId, row]) => [`users/uid-1/secrets/${secretId}`, row]),
-  ));
-  return { db, secrets: store.secrets };
+  return createDocumentFixtureStore({
+    ...Object.fromEntries(projects.map((project) => [`workspaces/alice/projects/${project.id}`, { ownerUid: "uid-1", ...project.data }])),
+    ...Object.fromEntries(Object.entries(secrets).map(([secretId, row]) => [`users/uid-1/secrets/${secretId}`, row])),
+  });
 }
 
-describe("collectProjectAgentStates", () => {
+describe("collectStoredProjectAgentStates: project agents", () => {
   it("collects live and retire-pending agents, skipping untouched projects", async () => {
-    const { db, secrets } = projectAgentFixture(
+    const store = projectAgentFixture(
       [
         { id: "orbit", data: { agent: {} } },
         { id: "plain", data: {} },
@@ -328,7 +313,7 @@ describe("collectProjectAgentStates", () => {
       },
     );
 
-    const states = await collectProjectAgentStates(db, secrets, "uid-1", "alice");
+    const states = await collectStoredProjectAgentStates(store, "uid-1", "alice");
 
     expect(states).toEqual([
       { projectId: "orbit", enabled: true, mmUserId: "bot-1", token: "pat-1", activationId: null, status: null },
@@ -338,7 +323,7 @@ describe("collectProjectAgentStates", () => {
 
   it("quarantines a malformed identity without blocking healthy projects or retiring its bot", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { db, secrets } = projectAgentFixture([
+    const store = projectAgentFixture([
       { id: "broken", data: { agent: { identity: { name: "Broken" }, kickoff: { status: "pending" } } } },
       { id: "healthy", data: { agent: { identity: { name: "Chip", emoji: "⛳", persona: "Caddie" } } } },
     ], {
@@ -346,7 +331,7 @@ describe("collectProjectAgentStates", () => {
       "projectAgentMattermost-healthy": { mmUserId: "bot-healthy", personalToken: "pat-healthy" },
     });
     try {
-      const states = await collectProjectAgentStates(db, secrets, "uid-1", "alice");
+      const states = await collectStoredProjectAgentStates(store, "uid-1", "alice");
       expect(states).toHaveLength(2);
       expect(states[0]).toEqual({ projectId: "broken", enabled: true, mmUserId: "bot-broken", token: "pat-broken", status: "error", activationId: null });
       expect(states[1]).toMatchObject({ projectId: "healthy", identity: { name: "Chip", emoji: "⛳", persona: "Caddie" } });
@@ -355,28 +340,51 @@ describe("collectProjectAgentStates", () => {
   });
 
   it("drops fully-settled archived agents (no secret left)", async () => {
-    const { db, secrets } = projectAgentFixture([{ id: "old", data: { agent: {}, commercialLifecycle: { status: "archived" } } }], {});
+    const store = projectAgentFixture([{ id: "old", data: { agent: {}, commercialLifecycle: { status: "archived" } } }], {});
 
-    expect(await collectProjectAgentStates(db, secrets, "uid-1", "alice")).toEqual([]);
+    expect(await collectStoredProjectAgentStates(store, "uid-1", "alice")).toEqual([]);
   });
 
   it("fails closed on a malformed project agent secret", async () => {
-    const { db, secrets } = projectAgentFixture([{ id: "orbit", data: { agent: {} } }], {
+    const store = projectAgentFixture([{ id: "orbit", data: { agent: {} } }], {
       "projectAgentMattermost-orbit": { mmUserId: 7, personalToken: "pat-1" },
     });
 
-    await expect(collectProjectAgentStates(db, secrets, "uid-1", "alice")).rejects.toBeInstanceOf(MalformedRecordError);
+    await expect(collectStoredProjectAgentStates(store, "uid-1", "alice")).rejects.toBeInstanceOf(MalformedRecordError);
   });
 });
 
-describe("collectProjectAgentStates — orphaned secrets (deleted projects)", () => {
+describe("collectStoredProjectAgentStates", () => {
+  it("maps project records from the store the same way as project documents", async () => {
+    const store = createDocumentFixtureStore({
+      "workspaces/alice/projects/orbit": { ownerUid: "uid-1", agent: { activationId: "a1", status: "ready" }, status: "building", repoSource: { provider: "github", repo: "acme/orbit" } },
+      "workspaces/alice/projects/plain": { ownerUid: "uid-1", status: "building" },
+      "workspaces/alice/projects/old": { ownerUid: "uid-1", agent: {}, status: "building", commercialLifecycle: { status: "archived" } },
+      "users/uid-1/secrets/projectAgentMattermost-orbit": { mmUserId: "bot-1", personalToken: "pat-1" },
+      "users/uid-1/secrets/projectAgentMattermost-old": { mmUserId: "bot-2", personalToken: "pat-2" },
+      "users/uid-1/secrets/projectAgentMattermost-gone": { mmUserId: "bot-3", personalToken: "pat-3" },
+    });
+
+    const states = await collectStoredProjectAgentStates(store, "uid-1", "alice");
+
+    expect(states).toEqual(expect.arrayContaining([
+      expect.objectContaining({ projectId: "orbit", enabled: true, mmUserId: "bot-1", token: "pat-1", activationId: "a1", status: "ready" }),
+      expect.objectContaining({ projectId: "old", enabled: false, mmUserId: "bot-2" }),
+      expect.objectContaining({ projectId: "gone", enabled: false, mmUserId: "bot-3" }),
+    ]));
+    expect(states).toHaveLength(3);
+    expect(states.find((state) => state.projectId === "plain")).toBeUndefined();
+  });
+});
+
+describe("collectStoredProjectAgentStates: orphaned secrets (deleted projects)", () => {
   it("emits a retire-pending state for a projectAgentMattermost-* secret whose project doc is gone", async () => {
-    const { db, secrets } = projectAgentFixture([], {
+    const store = projectAgentFixture([], {
       "projectAgentMattermost-ghost": { mmUserId: "bot-ghost", personalToken: "pat-ghost" },
       coachMattermost: { personalToken: "coach-pat" },
     });
 
-    const states = await collectProjectAgentStates(db, secrets, "uid-1", "alice");
+    const states = await collectStoredProjectAgentStates(store, "uid-1", "alice");
 
     expect(states).toEqual([
       { projectId: "ghost", enabled: false, mmUserId: "bot-ghost", token: "pat-ghost", activationId: null, status: null },

@@ -1,7 +1,6 @@
 import { resolveOnboardingPlacementEligibility } from "@octogee/shared/types/orchestrator-placement";
-import type { Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
-import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
 import type {
+  BuilderRecord,
   PlatformStateError,
   PlatformStateStore,
   Stored,
@@ -11,10 +10,11 @@ import type {
   WatchRecords,
   WatchSubscription,
 } from "@octogee/core/platform-state";
+import { builderPlacementDocument } from "./builder-placement-document.js";
 
 export const FLEET_INFORMER_REATTACH_MS_DEFAULT = 60_000;
 
-export type MirroredAggregate = "gateways" | "fleetRegistry" | "assignments";
+export type MirroredAggregate = "gateways" | "fleetRegistry" | "assignments" | "builders";
 
 export type MirrorDelivery<A extends MirroredAggregate> =
   | { readonly kind: "reset"; readonly records: readonly Stored<WatchRecords[A]>[] }
@@ -32,14 +32,14 @@ export interface FleetInformer {
   fleetRegistry(): readonly Stored<WatchRecords["fleetRegistry"]>[] | null;
   fleetRegistryWithoutMalformed(): MirrorWithoutMalformed<"fleetRegistry"> | null;
   assignments(): readonly Stored<WatchRecords["assignments"]>[] | null;
-  users(): QueryDocumentSnapshot[] | null;
+  builders(): readonly Stored<BuilderRecord>[] | null;
+  buildersWithoutMalformed(): MirrorWithoutMalformed<"builders"> | null;
   subscribe<A extends MirroredAggregate>(aggregate: A, subscriber: MirrorSubscriber<A>): () => void;
   subscribeUnassignedUsers?(wake: () => void): () => void;
   stop(): void;
 }
 
 export interface FleetInformerDeps {
-  db: Firestore;
   store: PlatformStateStore;
   log: (message: string) => void;
   reattachMs?: number;
@@ -49,6 +49,7 @@ const RECORD_KEYS: { readonly [A in MirroredAggregate]: (record: Stored<WatchRec
   gateways: (record) => record.gatewayId,
   fleetRegistry: (record) => record.gatewayId,
   assignments: (record) => `${record.gatewayId}/${record.uid}`,
+  builders: (record) => record.uid,
 };
 
 interface MirrorView<A extends MirroredAggregate> {
@@ -143,48 +144,15 @@ class RecordMirror<A extends MirroredAggregate> {
   }
 }
 
-class CollectionMirror {
-  private readonly docs = new Map<string, QueryDocumentSnapshot>();
-  private fresh = false;
-
-  constructor(
-    private readonly name: string,
-    private readonly log: (message: string) => void,
-  ) {}
-
-  read(): QueryDocumentSnapshot[] | null {
-    if (!this.fresh) return null;
-    return [...this.docs.values()].sort((left, right) => left.id.localeCompare(right.id));
-  }
-
-  replace(docs: readonly QueryDocumentSnapshot[]): void {
-    this.docs.clear();
-    for (const doc of docs) this.docs.set(doc.id, doc);
-    this.fresh = true;
-  }
-
-  markStale(reason: string): void {
-    if (!this.fresh) return;
-    this.fresh = false;
-    this.docs.clear();
-    this.log(`[fleet-informer] ⚠ ${this.name} mirror stale — ${reason}; readers fall back to a direct scan`);
-  }
-}
-
-export function assignedSlugsFromUserMirror(
-  users: ReadonlyArray<{ id: string; data(): Record<string, unknown> }>,
+export function assignedSlugsFromBuilderMirror(
+  builders: readonly Pick<BuilderRecord, "uid" | "slug" | "gateway">[],
   gatewayId: string,
 ): string[] {
-  const slugByUid = new Map<string, string>();
-  for (const doc of users) {
-    const data = doc.data();
-    const provisioning = data.provisioning as Record<string, unknown> | undefined;
-    const openclaw = provisioning?.openclaw as Record<string, unknown> | undefined;
-    if (openclaw?.gatewayId !== gatewayId) continue;
-    const slug = slugFromAssignedUser(data);
-    if (slug) slugByUid.set(doc.id, slug);
-  }
-  return [...slugByUid.values()];
+  return builders.flatMap((builder) => (builder.gateway?.gatewayId === gatewayId && builder.slug ? [builder.slug] : []));
+}
+
+function placementIsPending(builder: Stored<BuilderRecord>): boolean {
+  return builder.gateway === null && resolveOnboardingPlacementEligibility(builderPlacementDocument(builder, {})).eligible;
 }
 
 function errorMessage(error: unknown): string {
@@ -192,28 +160,27 @@ function errorMessage(error: unknown): string {
 }
 
 export function createFleetInformer(deps: FleetInformerDeps): FleetInformer {
-  const { db, store, log } = deps;
+  const { store, log } = deps;
   const reattachMs = deps.reattachMs ?? FLEET_INFORMER_REATTACH_MS_DEFAULT;
   const mirrors: { readonly [A in MirroredAggregate]: RecordMirror<A> } = {
     gateways: new RecordMirror("gateways", log),
     fleetRegistry: new RecordMirror("fleetRegistry", log),
     assignments: new RecordMirror("assignments", log),
+    builders: new RecordMirror("builders", log),
   };
   const subscribers: { readonly [A in MirroredAggregate]: Set<MirrorSubscriber<A>> } = {
     gateways: new Set(),
     fleetRegistry: new Set(),
     assignments: new Set(),
+    builders: new Set(),
   };
-  const users = new CollectionMirror("users", log);
 
   const placementListeners = new Set<() => void>();
   let pendingUsers = "";
-  const notifyUnassignedChanges = (docs: QueryDocumentSnapshot[]) => {
-    const pending = docs.filter((doc) => {
-      const data = doc.data();
-      return resolveOnboardingPlacementEligibility(data).eligible &&
-        !data.provisioning?.openclaw?.gatewayId;
-    }).map((doc) => doc.id).sort().join("\n");
+  const notifyUnassignedChanges = () => {
+    const builders = mirrors.builders.readWithoutMalformed();
+    if (builders === null) return;
+    const pending = builders.records.filter(placementIsPending).map((builder) => builder.uid).join("\n");
     if (pending === pendingUsers) return;
     pendingUsers = pending;
     for (const wake of placementListeners) wake();
@@ -222,7 +189,6 @@ export function createFleetInformer(deps: FleetInformerDeps): FleetInformer {
   let stopped = false;
   const watchTokens = new Map<MirroredAggregate, object>();
   const subscriptions = new Map<MirroredAggregate, WatchSubscription>();
-  const unsubscribes = new Map<string, () => void>();
   const reattachTimers = new Map<string, NodeJS.Timeout>();
 
   const scheduleReattach = (name: string, reason: string, reattach: () => void) => {
@@ -268,10 +234,12 @@ export function createFleetInformer(deps: FleetInformerDeps): FleetInformer {
           if (event.kind === "snapshot") {
             mirror.replace(event.records);
             deliver(aggregate, { kind: "reset", records: event.records });
+            if (aggregate === "builders") notifyUnassignedChanges();
             return;
           }
           mirror.apply(event.changes);
           deliver(aggregate, { kind: "changes", changes: event.changes });
+          if (aggregate === "builders") notifyUnassignedChanges();
         },
         onError: (error: PlatformStateError) => {
           if (!current()) return;
@@ -299,35 +267,18 @@ export function createFleetInformer(deps: FleetInformerDeps): FleetInformer {
     });
   };
 
-  const attachUsers = (): void => {
-    if (stopped) return;
-    const unsubscribe = db.collection("users").onSnapshot(
-      (snapshot) => {
-        if (stopped) return;
-        users.replace(snapshot.docs);
-        notifyUnassignedChanges(snapshot.docs);
-      },
-      (error) => {
-        if (stopped) return;
-        log(`[fleet-informer] ⚠ users listener error: ${error.message}`);
-        users.markStale(error.message);
-        scheduleReattach("users", error.message, attachUsers);
-      },
-    );
-    unsubscribes.set("users", unsubscribe);
-  };
-
   watchRecords("gateways");
   watchRecords("fleetRegistry");
   watchRecords("assignments");
-  attachUsers();
+  watchRecords("builders");
 
   return {
     gateways: () => mirrors.gateways.read(),
     fleetRegistry: () => mirrors.fleetRegistry.read(),
     fleetRegistryWithoutMalformed: () => mirrors.fleetRegistry.readWithoutMalformed(),
     assignments: () => mirrors.assignments.read(),
-    users: () => users.read(),
+    builders: () => mirrors.builders.read(),
+    buildersWithoutMalformed: () => mirrors.builders.readWithoutMalformed(),
     subscribe: <A extends MirroredAggregate>(aggregate: A, subscriber: MirrorSubscriber<A>) => {
       const registered: Set<MirrorSubscriber<A>> = subscribers[aggregate];
       registered.add(subscriber);
@@ -343,13 +294,12 @@ export function createFleetInformer(deps: FleetInformerDeps): FleetInformer {
       subscribers.gateways.clear();
       subscribers.fleetRegistry.clear();
       subscribers.assignments.clear();
+      subscribers.builders.clear();
       for (const timer of reattachTimers.values()) clearTimeout(timer);
       reattachTimers.clear();
       for (const subscription of subscriptions.values()) void subscription.close();
       subscriptions.clear();
       watchTokens.clear();
-      for (const unsubscribe of unsubscribes.values()) unsubscribe();
-      unsubscribes.clear();
     },
   };
 }

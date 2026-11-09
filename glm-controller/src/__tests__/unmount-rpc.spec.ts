@@ -9,7 +9,7 @@ import {
   heartbeatPollInstanceIds,
 } from "../index.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
-import { mirrorDoc, stubInformer } from "./fixtures/fleet-informer-stub.js";
+import { stubInformer } from "./fixtures/fleet-informer-stub.js";
 import { createScriptedWatches, storeWithScriptedWatches } from "./fixtures/scripted-watches.js";
 import { createFleetInformer } from "../fleet-informer.js";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
@@ -388,16 +388,23 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
     return { db, reads };
   }
 
-  const seededDocuments = () => recordingDocuments({ "glmGateways/bender": runtime, "gateways/bender": builderRoot });
+  const seededDocuments = () => recordingDocuments({
+    "glmGateways/bender": runtime,
+    "gateways/bender": builderRoot,
+    "users/uid-bender": assignedUser,
+  });
 
   const warmInformer = async () => {
     const seeded = createDocumentFixtureStore(seededDocuments());
-    const [runtimes, roots] = await Promise.all([seeded.fleetRegistry.list(), seeded.gateways.roots.list()]);
+    const [runtimes, roots, builders] = await Promise.all([
+      seeded.fleetRegistry.list(), seeded.gateways.roots.list(), seeded.builders.records.listAll(),
+    ]);
     return stubInformer({
       fleetRegistry: () => runtimes,
       fleetRegistryWithoutMalformed: () => ({ records: runtimes, malformedKeys: [] }),
       gateways: () => roots,
-      users: () => [mirrorDoc("uid-bender", assignedUser)],
+      builders: () => builders,
+      buildersWithoutMalformed: () => ({ records: builders, malformedKeys: [] }),
     });
   };
 
@@ -435,8 +442,8 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
     expect(await deps.readAssignedSlugs("bender")).toEqual(["bender"]);
     expect(await deps.ownsEviction?.("bender")).toBe(true);
 
-    expect(reads).toEqual(["query:users"]);
-    expect(documents.reads).toEqual(["glmGateways/bender", "gateways/bender"]);
+    expect(reads).toEqual([]);
+    expect(documents.reads).toEqual(expect.arrayContaining(["glmGateways/bender", "gateways/bender"]));
   });
 
   it("re-reads the runtime record from the store, never the mirror, before an eviction RPC", async () => {

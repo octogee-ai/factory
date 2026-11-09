@@ -130,9 +130,7 @@ describe("project star route", () => {
       .expect(200);
 
     expect(res.body).toEqual({ starred: true });
-    expect(h.readProject).toHaveBeenCalledWith(expect.objectContaining({
-      path: "workspaces/mira/projects/orbit",
-    }));
+    expect(h.readProject).toHaveBeenCalledWith("mira", "orbit");
     expect(h.set).toHaveBeenCalledWith({
       actorUid: "uid-viewer",
       target: {

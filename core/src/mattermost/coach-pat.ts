@@ -1,11 +1,13 @@
 import type { ManagedChannelHost } from "../channel-host/types.js";
 import type { SecretsRepository } from "../platform-state/secrets.js";
+import type { TimeInput } from "../platform-state/store.js";
 
 export const COACH_PAT_DESCRIPTION = "Octogee coach agent (OpenClaw)";
 
 export interface CoachPatMintDeps {
   channelHost: Pick<ManagedChannelHost, "revokeTokens" | "issueToken">;
   secrets: Pick<SecretsRepository, "put">;
+  now: () => TimeInput;
 }
 
 export async function mintAndPersistCoachToken(
@@ -29,7 +31,7 @@ export async function mintAndPersistCoachToken(
     projectId: null,
     personalToken: token,
     mattermostUserId: coachMmUserId,
-    createdAt: { serverNow: true },
+    createdAt: deps.now(),
     rotatedAt: null,
   });
   return { token };

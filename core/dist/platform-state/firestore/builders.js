@@ -411,6 +411,9 @@ function builderRecordReads(access) {
             const [user, config] = await session.readAll(name, [ref(uid), systemConfigRef(ref(uid))]);
             return decodeBuilder(user, config);
         },
+        async getRole(uid) {
+            return decodeRole(uid, await session.read("builders.records.getRole", systemConfigRef(ref(uid))));
+        },
         async getMany(uids) {
             const name = "builders.records.getMany";
             const unique = [...new Set(uids)];

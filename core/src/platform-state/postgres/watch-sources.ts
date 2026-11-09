@@ -10,6 +10,7 @@ import {
   postgresAgentIdentitiesWatchSource,
   postgresWorkspaceChannelsWatchSource,
   postgresWorkspaceMembersWatchSource,
+  postgresWorkspaceProjectMembersWatchSource,
   postgresWorkspaceProjectsWatchSource,
   postgresWorkspacesWatchSource,
 } from "./workspaces.js";
@@ -50,6 +51,7 @@ const WATCH_SOURCES: { readonly [A in WatchAggregate]: PostgresWatchSourceFactor
   workspaces: postgresWorkspacesWatchSource,
   workspaceMembers: postgresWorkspaceMembersWatchSource,
   workspaceProjects: postgresWorkspaceProjectsWatchSource,
+  workspaceProjectMembers: postgresWorkspaceProjectMembersWatchSource,
   workspaceChannels: postgresWorkspaceChannelsWatchSource,
   agentIdentities: postgresAgentIdentitiesWatchSource,
   gateways: postgresGatewaysWatchSource,

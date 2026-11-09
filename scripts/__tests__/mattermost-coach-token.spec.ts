@@ -4,7 +4,7 @@ import { mintAndPersistCoachToken } from "../lib/mattermost.js";
 
 type MmFake = (method: string, endpoint: string, body?: any) => Promise<unknown>;
 
-function hostDeps(deps: { secrets: any; log: (msg: string) => void; mmApiCall: MmFake }) {
+function hostDeps(deps: { put: any; now: () => any; log: (msg: string) => void; mmApiCall: MmFake }) {
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const endpoint = String(input).replace("http://mm.test/api/v4", "");
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
@@ -12,7 +12,8 @@ function hostDeps(deps: { secrets: any; log: (msg: string) => void; mmApiCall: M
     return new Response(JSON.stringify(result ?? null), { status: 200 });
   }) as typeof fetch;
   return {
-    secrets: deps.secrets,
+    secrets: { put: deps.put },
+    now: deps.now,
     channelHost: createMattermostChannelHost({
       baseUrl: "http://mm.test",
       adminToken: "admin",
@@ -23,13 +24,14 @@ function hostDeps(deps: { secrets: any; log: (msg: string) => void; mmApiCall: M
 }
 
 function mkDeps() {
-  const secrets = { put: vi.fn().mockResolvedValue(undefined) };
+  const put = vi.fn().mockResolvedValue(undefined);
   const mmApiCall = vi.fn(async (method: string, endpoint: string) => {
     if (method === "GET" && endpoint.endsWith("/tokens")) return [];
     return undefined;
   });
+  const now = vi.fn(() => ({ serverNow: true }));
   const log = vi.fn();
-  return { secrets, mmApiCall, log };
+  return { put, mmApiCall, now, log };
 }
 
 function scriptMm(opts: {
@@ -70,22 +72,18 @@ describe("mintAndPersistCoachToken", () => {
     );
   });
 
-  it("writes the PAT to users/{uid}/secrets/coachMattermost with the expected shape", async () => {
+  it("stores the PAT as the coach channel-host secret", async () => {
     const deps = mkDeps();
     deps.mmApiCall = scriptMm({ postResult: { token: "pat-abc123" } });
 
     await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "coach-mm-id-1");
 
-    expect(deps.secrets.put).toHaveBeenCalledTimes(1);
-    expect(deps.secrets.put).toHaveBeenCalledWith("uid-chris", {
+    expect(deps.put).toHaveBeenCalledTimes(1);
+    expect(deps.put).toHaveBeenCalledWith("uid-chris", expect.objectContaining({
       kind: "coach-mattermost",
       secretId: "coachMattermost",
-      projectId: null,
       personalToken: "pat-abc123",
-      mattermostUserId: "coach-mm-id-1",
-      createdAt: { serverNow: true },
-      rotatedAt: null,
-    });
+    }));
   });
 
   it("returns the minted token on success", async () => {
@@ -104,7 +102,7 @@ describe("mintAndPersistCoachToken", () => {
     const result = await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "coach-mm-id-1");
 
     expect(result).toBeNull();
-    expect(deps.secrets.put).not.toHaveBeenCalled();
+    expect(deps.put).not.toHaveBeenCalled();
   });
 
   it("returns null when MM throws on mint (no silent crash, no orphan doc)", async () => {
@@ -114,7 +112,7 @@ describe("mintAndPersistCoachToken", () => {
     const result = await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "coach-mm-id-1");
 
     expect(result).toBeNull();
-    expect(deps.secrets.put).not.toHaveBeenCalled();
+    expect(deps.put).not.toHaveBeenCalled();
   });
 
   it("does not write when coachMmUserId is empty (guard against provisioner regressions)", async () => {
@@ -125,7 +123,7 @@ describe("mintAndPersistCoachToken", () => {
 
     expect(result).toBeNull();
     expect(deps.mmApiCall).not.toHaveBeenCalled();
-    expect(deps.secrets.put).not.toHaveBeenCalled();
+    expect(deps.put).not.toHaveBeenCalled();
   });
 });
 

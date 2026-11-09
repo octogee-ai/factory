@@ -1,7 +1,9 @@
 
 
 import { initializeApp, applicationDefault } from "firebase-admin/app";
-import { getFirestore, type Firestore } from "firebase-admin/firestore";
+import { getFirestore } from "firebase-admin/firestore";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
+import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
 import {
   deploymentEnvironmentSettings,
   deploymentSettingsForRuntime,
@@ -117,7 +119,7 @@ interface ProjEntry {
   oldName: string;
 }
 interface Ctx {
-  db: Firestore;
+  store: PlatformStateStore;
   slug: string;
   io: GiteaIO;
   wsGitea: { orgName?: string; repoName?: string };
@@ -128,40 +130,30 @@ interface Ctx {
 }
 
 async function gatherCtx(
-  db: Firestore,
+  store: PlatformStateStore,
   slug: string,
   io: GiteaIO,
 ): Promise<Ctx> {
-  const wsSnap = await db.collection("workspaces").doc(slug).get();
-  const ws = (wsSnap.data() ?? {}) as {
-    ownerUid?: string;
-    gitea?: { orgName?: string; repoName?: string };
+  const [workspace, workspaceProjects] = await Promise.all([
+    store.workspaces.records.get(slug),
+    store.workspaces.projects.list(slug),
+  ]);
+  const wsGitea = {
+    orgName: workspace?.giteaOrgName ?? undefined,
+    repoName: workspace?.giteaRepoName ?? undefined,
   };
-  const wsGitea = ws.gitea ?? {};
   const wsOldName =
     wsGitea.repoName && wsGitea.repoName !== "workspace"
       ? wsGitea.repoName
       : `${slug}-workspace`;
-  const projSnap = await db
-    .collection("workspaces")
-    .doc(slug)
-    .collection("projects")
-    .get();
-  const projects: ProjEntry[] = projSnap.docs.map((d) => {
-    const data = d.data() as { slug?: string; giteaRepoName?: string };
-    const projectSlug = data.slug ?? d.id;
-    return {
-      projectSlug,
-      oldName: data.giteaRepoName ?? `${slug}-${projectSlug}`,
-    };
-  });
-  const ownerUid = ws.ownerUid ?? "";
-  const userSnap = ownerUid
-    ? await db.collection("users").doc(ownerUid).get()
-    : null;
-  const repoUrl = (userSnap?.data()?.provisioning?.git?.repoUrl ??
-    "") as string;
-  return { db, slug, io, wsGitea, wsOldName, ownerUid, repoUrl, projects };
+  const projects: ProjEntry[] = workspaceProjects.map(({ projectSlug, giteaRepoName }) => ({
+    projectSlug,
+    oldName: giteaRepoName ?? `${slug}-${projectSlug}`,
+  }));
+  const ownerUid = workspace?.ownerUid ?? "";
+  const owner = ownerUid ? await store.builders.records.get(ownerUid) : null;
+  const repoUrl = owner?.provisioning.gitRepoUrl ?? "";
+  return { store, slug, io, wsGitea, wsOldName, ownerUid, repoUrl, projects };
 }
 
 async function loadState(ctx: Ctx): Promise<ReconcileState> {
@@ -225,12 +217,9 @@ async function giteaWrite(io: GiteaIO, w: GiteaWrite): Promise<void> {
   console.info(`  ✓ ${w.label}`);
 }
 
-async function repointFirestore(ctx: Ctx): Promise<void> {
-  const { db, slug } = ctx;
-  await db
-    .collection("workspaces")
-    .doc(slug)
-    .set({ gitea: { orgName: slug, repoName: "workspace" } }, { merge: true });
+async function repointPlatformState(ctx: Ctx): Promise<void> {
+  const { store, slug } = ctx;
+  await store.workspaces.records.patch(slug, { giteaOrgName: slug, giteaRepoName: "workspace" });
   const newRepoUrl = rewriteRepoUrl(
     ctx.repoUrl,
     OLD_ORG,
@@ -239,23 +228,12 @@ async function repointFirestore(ctx: Ctx): Promise<void> {
     "workspace",
   );
   if (ctx.ownerUid && newRepoUrl) {
-    await db
-      .collection("users")
-      .doc(ctx.ownerUid)
-      .set(
-        { provisioning: { git: { repoUrl: newRepoUrl } } },
-        { merge: true },
-      );
+    await store.builders.records.patch(ctx.ownerUid, { provisioning: { gitRepoUrl: newRepoUrl } });
   }
   for (const p of ctx.projects) {
-    await db
-      .collection("workspaces")
-      .doc(slug)
-      .collection("projects")
-      .doc(p.projectSlug)
-      .set({ giteaRepoName: p.projectSlug }, { merge: true });
+    await store.workspaces.projects.patch(slug, p.projectSlug, { giteaRepoName: p.projectSlug });
   }
-  console.info(`  ✓ Firestore .git re-pointed for ${slug}`);
+  console.info(`  ✓ platform state .git re-pointed for ${slug}`);
 }
 
 async function applyAction(action: ReconcileAction, ctx: Ctx): Promise<void> {
@@ -296,7 +274,7 @@ async function applyAction(action: ReconcileAction, ctx: Ctx): Promise<void> {
       label: `renamed ${action.owner}/${action.from} → ${action.to}`,
     });
   } else {
-    await repointFirestore(ctx);
+    await repointPlatformState(ctx);
   }
 }
 
@@ -315,9 +293,9 @@ async function main(): Promise<void> {
     credential: applicationDefault(),
     projectId: resolveReconcileFirebaseProject(args.env),
   });
-  const db = getFirestore();
+  const store = await operatorPlatformStateStore(getFirestore(), deploymentEnvironmentSettings(args.env).targetId);
 
-  const ctx = await gatherCtx(db, args.slug, io);
+  const ctx = await gatherCtx(store, args.slug, io);
   const plan = planGiteaReconcile(await loadState(ctx));
   printPlan(args.slug, args.env, plan);
   if (plan.problems.length > 0) {
@@ -333,7 +311,7 @@ async function main(): Promise<void> {
 
   for (const action of plan.actions) await applyAction(action, ctx);
 
-const verify = planGiteaReconcile(await loadState(await gatherCtx(db, args.slug, io)));
+const verify = planGiteaReconcile(await loadState(await gatherCtx(store, args.slug, io)));
   if (verify.actions.length > 0 || verify.problems.length > 0) {
     throw new Error(
       `Post-apply verify FAILED: ${JSON.stringify(verify)}`,

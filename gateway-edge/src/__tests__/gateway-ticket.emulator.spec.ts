@@ -10,7 +10,8 @@ import { setupEmulatorTest } from "@octogee/test-helpers/firestore-emulator";
 
 setupEmulatorTest();
 
-const COLLECTION = _testInternal.COLLECTION;
+const COLLECTION = "gatewayTickets";
+const MINT_LOG_COLLECTION = "gatewayTicketMintLog";
 const VOICE_CAP = _testInternal.POLICIES["voice-ws"].perUidCap as number;
 const VOICE_QUOTA = _testInternal.POLICIES["voice-ws"].hourlyQuota as number;
 
@@ -87,7 +88,7 @@ describe("mintTicket — unified gateway ticket (emulator)", () => {
   it("hourly quota (voice-ws) caps sustained mints per (uid,purpose)", async () => {
     const now = Date.now();
     for (let i = 0; i < VOICE_QUOTA - 1; i++) {
-      await db.collection(_testInternal.MINT_LOG_COLLECTION).add({
+      await db.collection(MINT_LOG_COLLECTION).add({
         uid: "u1",
         purpose: "voice-ws",
         mintedAt: now - i * 1000,
@@ -103,7 +104,7 @@ describe("mintTicket — unified gateway ticket (emulator)", () => {
   it("hourly quota is per-(uid,purpose) — an exhausted voice window does NOT block openclaw-ws", async () => {
     const now = Date.now();
     for (let i = 0; i < VOICE_QUOTA; i++) {
-      await db.collection(_testInternal.MINT_LOG_COLLECTION).add({
+      await db.collection(MINT_LOG_COLLECTION).add({
         uid: "u1",
         purpose: "voice-ws",
         mintedAt: now - i * 1000,

@@ -222,6 +222,11 @@ function createRootsRepository(session) {
         async compareAndSetRuntimeRestartFence(gatewayId, expected, next) {
             await updateRecord(session, "gateways.roots.compareAndSetRuntimeRestartFence", target(gatewayId), { runtimeRestartFence: next ?? { clear: true } }, equalsFence("runtimeRestartFence", RUNTIME_RESTART_FENCE, expected));
         },
+        async deleteChildren(gatewayId) {
+            const parameters = new SqlParameters();
+            const gateway = parameters.add(gatewayId, "text");
+            await session.execute(`DELETE FROM $schema.gateway_releases WHERE gateway_id = ${gateway}`, parameters.values);
+        },
         async delete(gatewayId, fence) {
             await deleteRecord(session, "gateways.roots.delete", target(gatewayId), rootFences(fence));
         },

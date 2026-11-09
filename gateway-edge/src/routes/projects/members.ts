@@ -1,6 +1,8 @@
 import { Router, Request, Response } from "express";
 import { strictRateLimit } from "../../middleware/security.js";
-import { db, FieldValue } from "../../lib/db.js";
+import { db } from "../../lib/db.js";
+import { platformStateStore } from "../../lib/platform-state.js";
+import { removeProjectMember, syncProjectMemberCount } from "../../lib/project-platform-state.js";
 import { giteaApi } from "../../lib/gitea.js";
 import { workspaceGiteaOrg, projectRepoName } from "@octogee/core/gitea-naming";
 import { logger } from "../../middleware/logging.js";
@@ -13,43 +15,29 @@ interface GuestActor {
   giteaUser: string | null;
 }
 
-async function removableGuestMemberRef(
-  ctx: ProjectCtx,
-  guestUid: string,
-  res: Response,
-): Promise<FirebaseFirestore.DocumentReference | null> {
+async function guestRemovable(ctx: ProjectCtx, guestUid: string, res: Response): Promise<boolean> {
   if (guestUid === ctx.project.ownerUid) {
     res.status(400).json({ error: "Cannot remove the project owner" });
-    return null;
+    return false;
   }
 
-  const memberRef = ctx.projectRef.collection("members").doc(guestUid);
-  const memberDoc = await memberRef.get();
-  if (!memberDoc.exists) {
+  if (!(await platformStateStore.workspaces.projectMembers.get(ctx.wid, ctx.pid, guestUid))) {
+    await syncProjectMemberCount(ctx.wid, ctx.pid);
     res.json({ success: true, notAMember: true });
-    return null;
+    return false;
   }
 
-  return memberRef;
-}
-
-async function removeGuestMember(
-  ctx: ProjectCtx,
-  memberRef: FirebaseFirestore.DocumentReference,
-): Promise<void> {
-  await memberRef.delete();
-  await ctx.projectRef.update({
-    memberCount: FieldValue.increment(-1),
-    updatedAt: FieldValue.serverTimestamp(),
-  });
+  return true;
 }
 
 async function readGuestActor(guestUid: string): Promise<GuestActor> {
-  const guestDoc = await db.doc(`users/${guestUid}`).get();
-  const guestData = guestDoc.data();
-  const username = guestData?.username;
+  const [guestDoc, builder] = await Promise.all([
+    db.doc(`users/${guestUid}`).get(),
+    platformStateStore.builders.records.get(guestUid),
+  ]);
+  const username = guestDoc.data()?.username;
   return {
-    mmUserId: guestData?.mattermost?.userId,
+    mmUserId: builder?.mattermostUserId ?? undefined,
     giteaUser: username ? `ws-${username}` : null,
   };
 }
@@ -68,15 +56,14 @@ async function revokeGuestGiteaAccess(ctx: ProjectCtx, guest: GuestActor): Promi
 }
 
 async function removeProjectGuest(ctx: ProjectCtx, guestUid: string, res: Response): Promise<void> {
-  const memberRef = await removableGuestMemberRef(ctx, guestUid, res);
-  if (!memberRef) return;
+  if (!(await guestRemovable(ctx, guestUid, res))) return;
 
   const guest = await readGuestActor(guestUid);
   if (guest.mmUserId) {
     const { removeChannelMember } = await import("../../lib/channel-lifecycle.js");
     await removeChannelMember(`${ctx.projectRef.path}/channels/general`, guest.mmUserId);
   }
-  await removeGuestMember(ctx, memberRef);
+  await removeProjectMember(ctx.wid, ctx.pid, guestUid);
   await revokeGuestGiteaAccess(ctx, guest);
 
   logger.info(`[projects] ${ctx.uid} removed ${guestUid} from ${ctx.wid}/${ctx.pid}`);

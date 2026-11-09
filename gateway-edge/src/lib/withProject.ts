@@ -71,7 +71,7 @@ export async function withProject(
     }
 
     const projectRef = db.doc(`workspaces/${wid}/projects/${pid}`);
-    const project = await readProject(projectRef);
+    const project = await readProject(wid, pid);
     if (!project) {
       res.status(404).json({ error: "Project not found" });
       return;

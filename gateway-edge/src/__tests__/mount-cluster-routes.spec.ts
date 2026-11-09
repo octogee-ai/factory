@@ -67,7 +67,7 @@ describe("mountClusterRoutes", () => {
     mountClusterRoutes(app);
 
     const projects = useCalls(app, "/api/projects");
-    expect(projects).toHaveLength(11);
+    expect(projects).toHaveLength(12);
     expect((projects[2].handlers[0] as { name?: string }).name).toBe("requireAuth");
   });
 
@@ -144,6 +144,7 @@ describe("mountClusterRoutes", () => {
       "/api/workspace",
       "/api/channels",
       "/api/channels",
+      "/api/projects",
       "/api/projects",
       "/api/projects",
       "/api/projects",

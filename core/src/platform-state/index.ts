@@ -27,6 +27,7 @@ export {
 } from "./errors.js";
 export {
   createFirestorePlatformStateStore,
+  platformStateReadsInFirestoreTransaction,
   type FirestorePlatformStateStoreOptions,
 } from "./firestore/store.js";
 export { agentImportRecordFromPayload } from "./firestore/jobs.js";

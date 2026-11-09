@@ -1,6 +1,8 @@
 import * as fs from "fs";
 import { applicationDefault, cert, initializeApp } from "firebase-admin/app";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
+import { operatorPlatformStateStoreForFirebaseProject } from "../lib/platform-state-store.js";
 import { pathToFileURL } from "node:url";
 
 export interface ReconcileCoachNamesArgs {
@@ -38,6 +40,7 @@ let MM_URL = "";
 let MM_ADMIN_TOKEN = "";
 let projectId = "";
 let db: FirebaseFirestore.Firestore;
+let store: PlatformStateStore;
 
 // The canonical Mattermost display name for a coach is the bot account's
 // display_name — exactly the field syncCoachIdentity writes (PUT /bots/{id}).
@@ -70,18 +73,21 @@ interface AgentRow {
 }
 
 async function buildInventory(): Promise<AgentRow[]> {
-  const snap = await db.collection("agents").get();
+  const identities = await store.workspaces.agentIdentities.listAll();
   const out: AgentRow[] = [];
 
-  for (const doc of snap.docs) {
-    const uid = doc.id;
-    const data = doc.data();
-    const coachMmUserId = data.mattermost?.userId as string | undefined;
+  for (const { uid, mattermostUserId } of identities) {
+    const coachMmUserId = mattermostUserId;
     if (!coachMmUserId) continue;
 
-    const userSnap = await db.doc(`users/${uid}`).get();
+    const [builder, agentSnap, userSnap] = await Promise.all([
+      store.builders.records.get(uid),
+      db.doc(`agents/${uid}`).get(),
+      db.doc(`users/${uid}`).get(),
+    ]);
+    const data = agentSnap.data() ?? {};
     const userData = userSnap.data() ?? {};
-    const slug = (userData.username as string | undefined) ?? uid;
+    const slug = builder?.slug ?? uid;
     const onboarding = (userData.onboarding ?? {}) as Record<string, unknown>;
     const onboardingName = typeof onboarding.coachName === "string" ? onboarding.coachName : "";
 
@@ -167,6 +173,7 @@ async function main() {
     process.exit(1);
   }
   db = getFirestore();
+  store = await operatorPlatformStateStoreForFirebaseProject(db, projectId);
   console.log(`Project: ${projectId}${APPLY ? "" : LIST ? " [LIST]" : " [DRY RUN — pass --apply to write]"}`);
   if (FILTERS.length > 0) console.log(`Filter: ${FILTERS.join(", ")}`);
 

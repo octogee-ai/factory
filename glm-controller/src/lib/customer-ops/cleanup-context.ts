@@ -118,13 +118,13 @@ async function resolveChatArtifactIds(
   return Array.from(new Set(ids)).sort();
 }
 
-async function resolveAgentImportIds(db: ContextDeps["db"], uid: string): Promise<string[]> {
-  const snapshot = await db.collection("agentImports").where("uid", "==", uid).get();
-  return snapshot.docs.map((doc) => {
-    if (!/^[A-Za-z0-9_-]{1,160}$/.test(doc.id)) {
-      throw new Error(`agent import cleanup context invalid: ${doc.id}`);
+async function resolveAgentImportIds(store: ContextDeps["store"], uid: string): Promise<string[]> {
+  const imports = await store.jobs.agentImports.listForUid(uid);
+  return imports.map(({ importId }) => {
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(importId)) {
+      throw new Error(`agent import cleanup context invalid: ${importId}`);
     }
-    return doc.id;
+    return importId;
   }).sort();
 }
 
@@ -156,7 +156,7 @@ export async function loadCustomerCleanupContext(
       resolveCredentialSecretNames(deps.db, uid, slug),
       resolveProjectAgentCleanup(deps.store, uid),
       resolveChatArtifactIds(deps.db, uid, slug),
-      resolveAgentImportIds(deps.db, uid),
+      resolveAgentImportIds(deps.store, uid),
     ]);
 
   return {

@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { Timestamp, type DocumentReference, type Firestore } from 'firebase-admin/firestore';
+import { Timestamp } from 'firebase-admin/firestore';
+import type { GatewayTicket, Stored } from '@octogee/core/platform-state';
 import { VOICE_ARCHIVE_POST_KIND, VOICE_TURN_POST_KIND, voiceTurnMessage, type VoiceArchiveRequest, type VoiceConversation, type VoiceGrantBinding, type VoiceGrantEndRequest, type VoiceGrantRequest, type VoiceTurnPost, type VoiceTurnRequest } from '@octogee/core/voice-conversation';
 import { resolveVoiceConversationContext, resolveVoiceChannel, type WorkspaceConversationDeps } from './workspace-conversation.js';
 import { parseAgentId } from '@octogee/shared/types/identity';
@@ -42,8 +43,12 @@ function grantHash(voiceGrant: string): string {
   if (!/^[A-Za-z0-9_-]{43}$/u.test(voiceGrant)) deny();
   return createHash('sha256').update(voiceGrant).digest('hex');
 }
-function grantRef(db: Firestore, voiceGrant: string): DocumentReference {
-  return db.doc(`gatewayTickets/${grantHash(voiceGrant)}`);
+function grantBody(ticket: Stored<GatewayTicket> | null): unknown {
+  if (ticket === null) return undefined;
+  return { ...ticket.grant, uid: ticket.uid, gatewayId: ticket.gatewayId, expiresAt: ticket.expiresAt };
+}
+async function readGrant(deps: WorkspaceConversationDeps, voiceGrant: string): Promise<unknown> {
+  return grantBody(await deps.store.access.gatewayTickets.get(grantHash(voiceGrant)));
 }
 export function createVoicePostingGrant(identity: GrantIdentity, now = Date.now()) {
   if (!validIdentity(identity)) throw new Error('Voice grant identity is invalid');
@@ -84,25 +89,25 @@ function grantBinding(context: VoiceConversation, grant: GrantDocument, sessionI
   return { ...context, sessionId, expiresAt: grant.expiresAt };
 }
 export async function bindWorkspaceVoiceGrant(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceGrantRequest): Promise<VoiceGrantBinding> {
-  const ref = grantRef(deps.db, request.voiceGrant);
-  const initial = activeGrant((await ref.get()).data(), gatewayId);
+  const ticketId = grantHash(request.voiceGrant);
+  const initial = activeGrant(await readGrant(deps, request.voiceGrant), gatewayId);
   if (initial.sessionId !== null && initial.sessionId !== request.sessionId) deny();
   const resolved = await authorizeGrant(deps, initial);
-  const grant = await deps.db.runTransaction(async tx => {
-    const current = activeGrant((await tx.get(ref)).data(), gatewayId);
+  const grant = await deps.store.transaction({ label: 'voice-grant-bind' }, async tx => {
+    const current = activeGrant(grantBody(await tx.access.gatewayTickets.get(ticketId)), gatewayId);
     if (!matchesResolved(current, resolved) || (current.sessionId !== null && current.sessionId !== request.sessionId)) deny();
-    tx.update(ref, { sessionId: request.sessionId, callerMmUserId: resolved.context.callerMmUserId });
+    await tx.access.gatewayTickets.patchGrant(ticketId, { sessionId: request.sessionId, callerMmUserId: resolved.context.callerMmUserId });
     return current;
   });
   const { scope } = resolved;
   return grantBinding({ ...resolved.context, nativeInterrupt: scope.gatewayClass === 'builder' && scope.nativeAccess && scope.auth.config.builderAccess?.controlUiEnabled === true }, grant, request.sessionId);
 }
 export async function endWorkspaceVoiceGrant(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceGrantEndRequest): Promise<{ revoked: true }> {
-  const ref = grantRef(deps.db, request.voiceGrant);
-  await deps.db.runTransaction(async tx => {
-    const current = parseGrant((await tx.get(ref)).data(), gatewayId);
+  const ticketId = grantHash(request.voiceGrant);
+  await deps.store.transaction({ label: 'voice-grant-end' }, async tx => {
+    const current = parseGrant(grantBody(await tx.access.gatewayTickets.get(ticketId)), gatewayId);
     if (request.sessionId !== undefined && current.sessionId !== null && current.sessionId !== request.sessionId) deny();
-    if (current.revokedAt === null) tx.update(ref, { revokedAt: Date.now() });
+    if (current.revokedAt === null) await tx.access.gatewayTickets.patchGrant(ticketId, { revokedAt: Date.now() });
   });
   return { revoked: true };
 }
@@ -116,23 +121,23 @@ function replayTurn(turn: TurnReceipt, digest: string): VoiceTurnPost {
   throw new VoicePostingGrantError(409, 'voice_turn_pending');
 }
 async function reserveTurn(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceTurnRequest, resolved: NonNullable<Awaited<ReturnType<typeof resolveVoiceConversationContext>>>, digest: string) {
-  const ref = grantRef(deps.db, request.voiceGrant);
-  return deps.db.runTransaction(async tx => {
-    const grant = activeGrant((await tx.get(ref)).data(), gatewayId);
+  const ticketId = grantHash(request.voiceGrant);
+  return deps.store.transaction({ label: 'voice-grant-reserve-turn' }, async tx => {
+    const grant = activeGrant(grantBody(await tx.access.gatewayTickets.get(ticketId)), gatewayId);
     if (grant.sessionId !== request.sessionId || !matchesResolved(grant, resolved)) deny();
     if (Object.hasOwn(grant.turns, request.turnId)) return replayTurn(grant.turns[request.turnId], digest);
     if (Object.keys(grant.turns).length >= MAX_TURNS) throw new VoicePostingGrantError(429, 'voice_turn_limit');
-    tx.update(ref, { turns: { ...grant.turns, [request.turnId]: { state: 'pending', digest } } });
+    await tx.access.gatewayTickets.patchGrant(ticketId, { turns: { ...grant.turns, [request.turnId]: { state: 'pending', digest } } });
     return null;
   });
 }
 async function finishTurn(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceTurnRequest, receipt: TurnReceipt): Promise<void> {
-  const ref = grantRef(deps.db, request.voiceGrant);
-  await deps.db.runTransaction(async tx => {
-    const grant = parseGrant((await tx.get(ref)).data(), gatewayId);
+  const ticketId = grantHash(request.voiceGrant);
+  await deps.store.transaction({ label: 'voice-grant-finish-turn' }, async tx => {
+    const grant = parseGrant(grantBody(await tx.access.gatewayTickets.get(ticketId)), gatewayId);
     const existing = grant.turns[request.turnId];
     if (!existing || existing.digest !== receipt.digest || existing.state !== 'pending') throw new Error('Voice turn reservation changed before delivery settled');
-    tx.update(ref, { turns: { ...grant.turns, [request.turnId]: receipt } });
+    await tx.access.gatewayTickets.patchGrant(ticketId, { turns: { ...grant.turns, [request.turnId]: receipt } });
   });
 }
 async function createTurnPost(deps: WorkspaceConversationDeps, token: string, context: { channelId: string; threadRootPostId: string; callerMmUserId: string }, request: VoiceTurnRequest): Promise<VoiceTurnPost> {
@@ -146,7 +151,7 @@ async function createTurnPost(deps: WorkspaceConversationDeps, token: string, co
   return { postId: post.id, channelId: context.channelId, threadRootPostId: context.threadRootPostId, userId: context.callerMmUserId };
 }
 export async function postWorkspaceVoiceTurn(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceTurnRequest): Promise<VoiceTurnPost> {
-  const initial = activeGrant((await grantRef(deps.db, request.voiceGrant).get()).data(), gatewayId);
+  const initial = activeGrant(await readGrant(deps, request.voiceGrant), gatewayId);
   if (initial.sessionId !== request.sessionId) deny();
   const resolved = await authorizeGrant(deps, initial);
   const digest = turnDigest(request);
@@ -159,7 +164,7 @@ export async function postWorkspaceVoiceTurn(deps: WorkspaceConversationDeps, ga
       createPost = (credential, body) => createChannelSessionMattermostClient({ baseUrl: process.env.MM_INTERNAL_URL ?? '', token: credential }).postJson(['posts'], body);
     }
     const fresh = await authorizeGrant(deps, initial);
-    const current = activeGrant((await grantRef(deps.db, request.voiceGrant).get()).data(), gatewayId);
+    const current = activeGrant(await readGrant(deps, request.voiceGrant), gatewayId);
     if (current.sessionId !== request.sessionId || !matchesResolved(current, fresh)) deny();
     if (replay) {
       if (replay.channelId !== current.channelId || replay.threadRootPostId !== current.threadRootPostId || replay.userId !== current.callerMmUserId) deny();
@@ -201,21 +206,21 @@ function archiveMessage(request: VoiceArchiveRequest, participantMmUserId: strin
   return prefix.replace(/[\uD800-\uDBFF]$/u, '') + notice;
 }
 async function reserveArchive(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceArchiveRequest, resolved: NonNullable<Awaited<ReturnType<typeof resolveVoiceConversationContext>>>, digest: string) {
-  const ref = grantRef(deps.db, request.voiceGrant);
-  return deps.db.runTransaction(async tx => {
-    const grant = activeGrant((await tx.get(ref)).data(), gatewayId);
+  const ticketId = grantHash(request.voiceGrant);
+  return deps.store.transaction({ label: 'voice-grant-reserve-archive' }, async tx => {
+    const grant = activeGrant(grantBody(await tx.access.gatewayTickets.get(ticketId)), gatewayId);
     if (grant.sessionId !== request.sessionId || !matchesResolved(grant, resolved)) deny();
     if (grant.archive) return replayArchive(grant.archive, digest);
-    tx.update(ref, { archive: { state: 'pending', digest } });
+    await tx.access.gatewayTickets.patchGrant(ticketId, { archive: { state: 'pending', digest } });
     return null;
   });
 }
 async function finishArchive(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceArchiveRequest, receipt: TurnReceipt): Promise<void> {
-  const ref = grantRef(deps.db, request.voiceGrant);
-  await deps.db.runTransaction(async tx => {
-    const grant = parseGrant((await tx.get(ref)).data(), gatewayId);
+  const ticketId = grantHash(request.voiceGrant);
+  await deps.store.transaction({ label: 'voice-grant-finish-archive' }, async tx => {
+    const grant = parseGrant(grantBody(await tx.access.gatewayTickets.get(ticketId)), gatewayId);
     if (!grant.archive || grant.archive.digest !== receipt.digest || grant.archive.state !== 'pending') throw new Error('Voice archive reservation changed before delivery settled');
-    tx.update(ref, { archive: receipt });
+    await tx.access.gatewayTickets.patchGrant(ticketId, { archive: receipt });
   });
 }
 async function conversationAgentCredential(deps: WorkspaceConversationDeps, ownerUid: string, agentId: string) {
@@ -253,8 +258,7 @@ function verifiedArchivePost(value: unknown, current: GrantDocument, coachMmUser
   return { postId: posted.id, channelId: current.channelId, threadRootPostId: current.threadRootPostId, userId: coachMmUserId };
 }
 export async function archiveWorkspaceVoiceCall(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceArchiveRequest): Promise<VoiceTurnPost> {
-  const ref = grantRef(deps.db, request.voiceGrant);
-  const initial = activeGrant((await ref.get()).data(), gatewayId);
+  const initial = activeGrant(await readGrant(deps, request.voiceGrant), gatewayId);
   if (initial.sessionId !== request.sessionId || initial.callerMmUserId === null) deny();
   const resolved = await authorizeGrant(deps, initial);
   const { coachMmUserId, coachToken } = await conversationAgentCredential(deps, initial.ownerUid, initial.agentId);
@@ -269,7 +273,7 @@ export async function archiveWorkspaceVoiceCall(deps: WorkspaceConversationDeps,
   let post: VoiceTurnPost;
   try {
     const fresh = await authorizeGrant(deps, initial);
-    const current = activeGrant((await ref.get()).data(), gatewayId);
+    const current = activeGrant(await readGrant(deps, request.voiceGrant), gatewayId);
     if (current.sessionId !== request.sessionId || !matchesResolved(current, fresh) || fresh.agentMmUserId !== coachMmUserId) deny();
     if (replay) {
       if (replay.channelId !== current.channelId || replay.threadRootPostId !== current.threadRootPostId || replay.userId !== coachMmUserId) deny();

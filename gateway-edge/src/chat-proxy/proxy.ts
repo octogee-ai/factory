@@ -42,7 +42,7 @@ import {
   listLocalCoachWiredSlugs,
   readOpenclawConfig,
 } from "@octogee/core/local-coach-wired";
-import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import { accountActiveInStore } from "../lib/user-platform-state.js";
 
 import { attachMmWsBridge, createMmWsRegistry } from "./mm-proxy/ws.js";
 import {
@@ -388,8 +388,7 @@ export async function verifyAuth(req: http.IncomingMessage): Promise<string | nu
   try {
     const decoded = await getAuth().verifyIdToken(token, true);
     const userSnap = await db.collection("users").doc(decoded.uid).get();
-    const userData = userSnap.exists ? userSnap.data() : undefined;
-    return userData && accountAllowsInteractiveAccess(userData)
+    return userSnap.exists && await accountActiveInStore(decoded.uid)
       ? decoded.uid
       : null;
   } catch (error) {

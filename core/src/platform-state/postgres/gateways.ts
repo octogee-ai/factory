@@ -285,6 +285,12 @@ function createRootsRepository(session: PostgresSession): GatewayRootsRepository
       );
     },
 
+    async deleteChildren(gatewayId) {
+      const parameters = new SqlParameters();
+      const gateway = parameters.add(gatewayId, "text");
+      await session.execute(`DELETE FROM $schema.gateway_releases WHERE gateway_id = ${gateway}`, parameters.values);
+    },
+
     async delete(gatewayId, fence) {
       await deleteRecord(session, "gateways.roots.delete", target(gatewayId), rootFences(fence));
     },

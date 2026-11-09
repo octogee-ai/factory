@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { applyGoogleGrantApproval } from "./google-grant-approval.js";
+import { platformStateStore } from "./platform-state.js";
+
+const documents = vi.hoisted(() => ({}) as Record<string, Record<string, unknown>>);
+
+vi.mock("./platform-state.js", async () => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return { platformStateStore: createDocumentFixtureStore(documents) };
+});
 
 function harness() {
   const stamp = { seconds: 1, nanoseconds: 0 };
@@ -19,9 +27,11 @@ function harness() {
     grantEpoch: "1:0",
     permissions: [permission],
   };
-  const documents: Record<string, Record<string, unknown>> = {
-    "workspaces/space": { ownerUid: "owner", ownerActive: true },
+  for (const path of Object.keys(documents)) delete documents[path];
+  Object.assign(documents, {
+    "workspaces/space": { id: "space", ownerUid: "owner", ownerActive: true },
     "workspaces/space/members/member": {
+      role: "member",
       canonicalSource: "mattermost-general",
       canonicalState: "active",
       mattermostChannelId: "general",
@@ -37,7 +47,7 @@ function harness() {
       membershipEpoch: "1:0",
       permissions: [{ ...permission, resourceIds: ["prior-file"] }],
     },
-  };
+  });
   let grantStamp = stamp;
   const tx = {
     get: async (ref: { path: string }) => ({
@@ -65,7 +75,7 @@ describe("Google grant approval lifecycle", () => {
     expect(
       await applyGoogleGrantApproval(
         h.db as never,
-        h.tx as never,
+        platformStateStore, h.tx as never,
         "owner",
         h.preview,
         "plugin:grant-review",
@@ -78,13 +88,26 @@ describe("Google grant approval lifecycle", () => {
     expect(h.tx.set.mock.calls[0][1].approvalId).toBe("plugin:grant-review");
     expect(h.tx.set.mock.calls[0][1]).not.toHaveProperty("approvedBy");
   });
+  it("rejects when the store holds a revoking member and leaves the grant alone", async () => {
+    const h = harness();
+    const member = await platformStateStore.workspaces.members.get("space", "member");
+    const get = vi.spyOn(platformStateStore.workspaces.members, "get")
+      .mockResolvedValueOnce({ ...member!, canonicalState: "revoking" });
+
+    await expect(
+      applyGoogleGrantApproval(h.db as never, platformStateStore, h.tx as never, "owner", h.preview, "plugin:grant-review"),
+    ).resolves.toBe(false);
+
+    expect(h.tx.set).not.toHaveBeenCalled();
+    get.mockRestore();
+  });
   it("cannot regrant access using a request issued before revocation", async () => {
     const h = harness();
     h.revoke();
     expect(
       await applyGoogleGrantApproval(
         h.db as never,
-        h.tx as never,
+        platformStateStore, h.tx as never,
         "owner",
         h.preview,
         "plugin:grant-review",
@@ -109,7 +132,7 @@ describe("Google grant approval lifecycle", () => {
       expect(
         await applyGoogleGrantApproval(
           h.db as never,
-          h.tx as never,
+          platformStateStore, h.tx as never,
           "owner",
           h.preview,
           "plugin:grant-review",

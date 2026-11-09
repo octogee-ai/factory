@@ -17,6 +17,11 @@ function workspaceIdFromAgentId(agentId) {
     }
     return null;
 }
+function attributedWorkspaceId(data, agentId, platformWorkspaceSlug) {
+    if (platformWorkspaceSlug === undefined)
+        return workspaceIdFromUserData(data, agentId);
+    return platformWorkspaceSlug !== null && isValidUsername(platformWorkspaceSlug) ? platformWorkspaceSlug : workspaceIdFromAgentId(agentId);
+}
 function workspaceIdFromUserData(data, agentId) {
     const provisioning = data.provisioning;
     const slug = provisioning?.openclaw?.slug ?? data.username;
@@ -66,7 +71,7 @@ function tokenBreakdownIncrements(usage) {
 }
 function usageTransactionState(args) {
     const { data, agentId, usage } = args;
-    const workspaceId = workspaceIdFromUserData(data, agentId);
+    const workspaceId = attributedWorkspaceId(data, agentId, args.platformWorkspaceSlug);
     const usageData = data.usage || {};
     const now = new Date();
     const startedAt = usageData.windowStartedAt?.toDate?.() ?? null;
@@ -143,6 +148,7 @@ async function writeUsageTransaction(t, input) {
         agentId: input.agentId,
         usage: input.usage,
         log: input.log,
+        platformWorkspaceSlug: input.platformWorkspaceSlug,
     });
     t.update(input.userRef, userUsageUpdate(state, input.usage));
     t.set(input.logRef, usageLogData(input), { merge: true });
@@ -170,6 +176,7 @@ export async function reportUsageForUid(input) {
             log,
             gatewayId,
             today,
+            platformWorkspaceSlug: input.platformWorkspaceSlug,
         }));
         log(formatUsageLogLine({
             totalTokens: usage.totalTokens,

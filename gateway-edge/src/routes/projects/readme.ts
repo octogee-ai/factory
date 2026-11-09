@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import type { Project } from "@octogee/shared/types/index";
-import { db, FieldValue } from "../../lib/db.js";
+import { FieldValue } from "../../lib/db.js";
 import { giteaApi } from "../../lib/gitea.js";
 import { githubContentsApi } from "../../lib/github.js";
 import { workspaceGiteaOrg, projectRepoName } from "@octogee/core/gitea-naming";
@@ -65,7 +65,7 @@ router.get("/:wid/:pid/readme", async (req: Request, res: Response) => {
     return;
   }
   try {
-    const project = await readProject(db.doc(`workspaces/${wid}/projects/${pid}`));
+    const project = await readProject(wid, pid);
     if (!project) {
       res.status(404).json({ error: "Project not found" });
       return;

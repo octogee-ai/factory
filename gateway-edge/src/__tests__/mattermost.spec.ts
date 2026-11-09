@@ -200,8 +200,9 @@ describe("POST /invite", () => {
 
   it("returns the existing message when a completed invite already exists", async () => {
     dbState.collections.set("users", [
-      { id: "invitee-1", data: { email: "a@b.com", firstName: "Ada", mattermost: { userId: "mm-i" } } },
+      { id: "invitee-1", data: { email: "a@b.com", firstName: "Ada" } },
     ]);
+    dbState.docs.set("users/invitee-1", { mattermost: { userId: "mm-i" } });
     dbState.collections.set("invites", [
       { id: "inv-old", data: { channelId: "chan-1", inviteeUid: "invitee-1", status: "completed" } },
     ]);
@@ -214,8 +215,9 @@ describe("POST /invite", () => {
 
   it("creates a pending invite + returns its id on success", async () => {
     dbState.collections.set("users", [
-      { id: "invitee-1", data: { email: "a@b.com", firstName: "Ada", mattermost: { userId: "mm-i" } } },
+      { id: "invitee-1", data: { email: "a@b.com", firstName: "Ada" } },
     ]);
+    dbState.docs.set("users/invitee-1", { mattermost: { userId: "mm-i" } });
     const res = await request(app)
       .post("/api/mattermost/invite")
       .send({ channelId: "chan-1", email: "a@b.com" });

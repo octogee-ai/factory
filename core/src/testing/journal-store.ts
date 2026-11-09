@@ -89,6 +89,7 @@ import {
   workspaceMemberFromData,
   workspaceProjectFromData,
   workspaceProjectMemberFromData,
+  isWorkspaceReservation,
   workspaceRecordFromData,
 } from "../platform-state/firestore/workspaces.js";
 import type { CustomerDeletionJob, CustomerDeletionJobStatus, JobRepositories } from "../platform-state/jobs.js";
@@ -476,6 +477,13 @@ function gatewayRepositories(documents: FixtureDocuments, write: Write): Gateway
     write(() => documents.set(rootPath(id), applyPatch(presentRoot(id), patch)));
   return {
     roots: partialRepository<GatewayRepositories["roots"]>("gateways.roots", {
+      deleteChildren: async (id) => {
+        write(() => {
+          for (const [release] of documents.children(`gateways/${id}/releases`)) {
+            documents.delete(`gateways/${id}/releases/${release}`);
+          }
+        });
+      },
       get: async (id) => decodeRoot(id),
       getMany: async (ids) => new Map(ids.flatMap((id) => {
         const root = decodeRoot(id);
@@ -758,6 +766,24 @@ function builderRecordRepository(
       const byRoster = all().filter((record) => record.agents.agentIds.includes(agentId)).slice(0, limit);
       return [...new Map([...byAgentId, ...byRoster].map((record) => [record.uid, record])).values()];
     },
+    admit: async (uid, input) => {
+      const path = `users/${uid}`;
+      const row = documents.get(path);
+      const provisioning = row?.provisioning as Record<string, unknown> | undefined;
+      if (provisioning?.status !== undefined) {
+        throw new FenceMismatchError(
+          { aggregate: "builder", key: uid },
+          "absent",
+          { provisioningStatus: null },
+          { provisioningStatus: provisioning.status },
+        );
+      }
+      write(() => documents.set(path, {
+        ...row,
+        onboardingStep: "complete",
+        provisioning: { ...provisioning, status: "in_progress", startedAt: input.provisioningStartedAt },
+      }));
+    },
     delete: async (uid) => {
       assertOutsideTransaction(transactional, "builders.records.delete");
       write(() => deleteTree(documents, path(uid)));
@@ -854,6 +880,10 @@ function builderRepositories(documents: FixtureDocuments, write: Write, transact
       valueAt(row, path) === gatewayId ? [fixtureBuilderRecord(documents, uid, row)] : []);
   const records = partialRepository<BuilderRepositories["records"]>("builders.records", {
     ...builderRecordRepository(documents, write, transactional),
+    getRole: async (uid) => {
+      const config = documents.get(`users/${uid}/system/config`);
+      return config === undefined ? null : builderRoleFromData(uid, structuredClone(config));
+    },
     listGatewayFenceHolders: async (gatewayId): Promise<GatewayFenceHolders> => ({
       assigned: holding(["provisioning", "openclaw", "gatewayId"], gatewayId),
       sourceTransferSource: holding(["provisioning", "openclaw", "sourceTransferFence", "sourceGatewayId"], gatewayId),
@@ -927,6 +957,38 @@ function presentFields(fields: Record<string, unknown>): Record<string, unknown>
   return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== null && value !== undefined));
 }
 
+function projectMemberRepository(
+  documents: FixtureDocuments,
+  write: Write,
+  mergeDocument: (path: string, fields: Record<string, unknown>) => void,
+): WorkspaceRepositories["projectMembers"] {
+  const membersPath = (workspaceSlug: string, projectSlug: string) => `workspaces/${workspaceSlug}/projects/${projectSlug}/members`;
+  const decode = (workspaceSlug: string, projectSlug: string, uid: string, row: Record<string, unknown>) =>
+    ({ ...workspaceProjectMemberFromData(workspaceSlug, projectSlug, uid, structuredClone(row)), revision: FIXTURE_REVISION });
+  return partialRepository<WorkspaceRepositories["projectMembers"]>("workspaces.projectMembers", {
+    get: async (workspaceSlug, projectSlug, uid) => {
+      const row = documents.get(`${membersPath(workspaceSlug, projectSlug)}/${uid}`);
+      return row === undefined ? null : decode(workspaceSlug, projectSlug, uid, row);
+    },
+    list: async (workspaceSlug, projectSlug) => documents.children(membersPath(workspaceSlug, projectSlug))
+      .map(([uid, row]) => decode(workspaceSlug, projectSlug, uid, row)),
+    listForUid: async (uid) => documents.group("members").flatMap(([path, row]) => {
+      const parts = path.split("/");
+      return parts[0] === "workspaces" && parts.length === 6 && parts[2] === "projects" && row.id === uid
+        ? [decode(parts[1], parts[3], parts[5], row)]
+        : [];
+    }),
+    put: async (input) => mergeDocument(`${membersPath(input.workspaceSlug, input.projectSlug)}/${input.uid}`, {
+      id: input.uid,
+      role: input.role,
+      joinedAt: input.joinedAt,
+    }),
+    delete: async (workspaceSlug, projectSlug, uid) => {
+      write(() => documents.delete(`${membersPath(workspaceSlug, projectSlug)}/${uid}`));
+    },
+  });
+}
+
 function workspaceRepositories(documents: FixtureDocuments, write: Write, transactional: boolean): WorkspaceRepositories {
   const channelsPath = (workspaceSlug: string, projectSlug: string | null) =>
     projectSlug === null ? `workspaces/${workspaceSlug}/channels` : `workspaces/${workspaceSlug}/projects/${projectSlug}/channels`;
@@ -959,7 +1021,7 @@ function workspaceRepositories(documents: FixtureDocuments, write: Write, transa
     records: partialRepository<WorkspaceRepositories["records"]>("workspaces.records", {
       get: async (slug) => {
         const row = documents.get(workspacePath(slug));
-        return row === undefined ? null : decodeWorkspace(slug, row);
+        return row === undefined || isWorkspaceReservation(row) ? null : decodeWorkspace(slug, row);
       },
       listByOwner: async (ownerUid) => documents.children("workspaces").flatMap(([slug, row]) =>
         row.ownerUid === ownerUid ? [decodeWorkspace(slug, row)] : []),
@@ -971,8 +1033,19 @@ function workspaceRepositories(documents: FixtureDocuments, write: Write, transa
         }
         return found.length === 0 ? null : decodeWorkspace(found[0][0], found[0][1]);
       },
+      put: async (input) => mergeDocument(workspacePath(input.slug), {
+        id: input.id,
+        slug: input.slug,
+        ownerUid: input.ownerUid,
+        ownerActive: input.ownerActive,
+        "mattermost.teamId": input.mattermostTeamId,
+        "gitea.orgName": input.giteaOrgName,
+        "gitea.repoName": input.giteaRepoName,
+        createdAt: input.createdAt,
+        updatedAt: input.updatedAt,
+      }),
       patch: async (slug, patch) =>
-        updatePresent(workspacePath(slug), { aggregate: "workspace", key: slug }, storedPatchFields(patch, WORKSPACE_STORED_PATHS)),
+        updatePresent(workspacePath(slug), { aggregate: "workspace", key: slug }, resolveServerNow(storedPatchFields(patch, WORKSPACE_STORED_PATHS)) as Record<string, unknown>),
       delete: async (slug) => {
         assertOutsideTransaction(transactional, "workspaces.records.delete");
         write(() => deleteTree(documents, workspacePath(slug)));
@@ -1013,6 +1086,31 @@ function workspaceRepositories(documents: FixtureDocuments, write: Write, transa
         .map(([projectSlug, row]) => decodeProject(workspaceSlug, projectSlug, row)),
       listByOwner: async (ownerUid, workspaceSlug) => workspaceProjects().filter((project) =>
         project.ownerUid === ownerUid && (workspaceSlug === undefined || project.workspaceSlug === workspaceSlug)),
+      listAll: async () => workspaceProjects(),
+      put: async (input) => mergeDocument(projectPath(input.workspaceSlug, input.projectSlug), {
+        id: input.projectSlug,
+        slug: input.projectSlug,
+        workspaceId: input.workspaceSlug,
+        ownerUid: input.ownerUid,
+        ownerActive: input.ownerActive,
+        giteaRepoName: input.giteaRepoName,
+        provisioningState: input.provisioningState,
+        provisioningError: input.provisioningError,
+        provisioningCleanup: input.provisioningCleanup,
+        pendingVisibility: input.pendingVisibility,
+        visibility: input.visibility,
+        checkoutEnabled: input.checkoutEnabled,
+        status: input.status,
+        archived: input.archived,
+        archivedAt: input.archivedAt,
+        "commercialLifecycle.status": input.commercialLifecycleStatus,
+        repoSource: input.repoSource,
+        agent: input.agent,
+        updatedAt: input.updatedAt,
+      }),
+      delete: async (workspaceSlug, projectSlug) => {
+        write(() => documents.delete(projectPath(workspaceSlug, projectSlug)));
+      },
       patch: async (workspaceSlug, projectSlug, patch, fence) => {
         const key: RecordKey = { aggregate: "workspace-project", key: `${workspaceSlug}/${projectSlug}` };
         if (documents.get(projectPath(workspaceSlug, projectSlug)) === undefined) throw new MissingRecordError(key);
@@ -1023,19 +1121,18 @@ function workspaceRepositories(documents: FixtureDocuments, write: Write, transa
           resolveServerNow(storedPatchFields(patch, PROJECT_STORED_PATHS)) as Record<string, unknown>);
       },
     }),
-    projectMembers: partialRepository<WorkspaceRepositories["projectMembers"]>("workspaces.projectMembers", {
-      get: async (workspaceSlug, projectSlug, uid) => {
-        const row = documents.get(`${projectPath(workspaceSlug, projectSlug)}/members/${uid}`);
-        return row === undefined
-          ? null
-          : { ...workspaceProjectMemberFromData(workspaceSlug, projectSlug, uid, structuredClone(row)), revision: FIXTURE_REVISION };
-      },
-    }),
+    projectMembers: projectMemberRepository(documents, write, mergeDocument),
     agentIdentities: partialRepository<WorkspaceRepositories["agentIdentities"]>("workspaces.agentIdentities", {
       get: async (uid) => {
         const row = documents.get(`agents/${uid}`);
         return row === undefined ? null : { ...agentIdentityFromData(uid, structuredClone(row)), revision: FIXTURE_REVISION };
       },
+      put: async (identity) => mergeDocument(`agents/${identity.uid}`, {
+        id: identity.uid,
+        "mattermost.userId": identity.mattermostUserId,
+        createdAt: identity.at,
+        updatedAt: identity.at,
+      }),
       delete: async (uid) => {
         write(() => documents.delete(`agents/${uid}`));
       },
@@ -1064,6 +1161,9 @@ function workspaceRepositories(documents: FixtureDocuments, write: Write, transa
         createdBy: input.createdBy,
         createdAt: input.createdAt,
       }),
+      delete: async (scope, channelId) => {
+        write(() => documents.delete(`${channelsPath(scope.workspaceSlug, scope.projectSlug)}/${channelId}`));
+      },
       patch: async (scope, channelId, patch) => {
         const { mattermostChannelId, ...fields } = patch;
         const key: RecordKey = {
@@ -1097,7 +1197,20 @@ function accessRepositories(documents: FixtureDocuments, write: Write): AccessRe
     const row = documents.get(controlTicketPath(ticketHash));
     return row === undefined ? null : withRevision(controlTicketFromData(ticketHash, structuredClone(row)));
   };
+  const uidReferences = (uid: string) => [
+    ["gatewayTickets", ["uid"]],
+    ["gatewayTicketMintLog", ["uid"]],
+    ["openclawControlTickets", ["uid"]],
+    ["openclawControlSessions", ["uid"]],
+    ["gatewayAccessAudit", ["ownerUid", "actorUid", "granteeUid"]],
+  ].flatMap(([collection, fields]) => documents.children(collection as string)
+    .filter(([, row]) => (fields as string[]).some((field) => row[field] === uid))
+    .map(([id]) => `${collection as string}/${id}`));
   return partialRepository<AccessRepositories>("access", {
+    listRecordsForUid: async (uid) => uidReferences(uid),
+    eraseForUid: async (uid) => {
+      write(() => { for (const path of uidReferences(uid)) documents.delete(path); });
+    },
     gatewayTickets: partialRepository<AccessRepositories["gatewayTickets"]>("access.gatewayTickets", {
       get: async (ticketId) => getGatewayTicket(ticketId),
       create: async (ticket) => {
@@ -1111,6 +1224,31 @@ function accessRepositories(documents: FixtureDocuments, write: Write): AccessRe
           expiresAt: ticket.expiresAt,
           expireAt: ticket.expiresAt,
         }));
+      },
+      countLive: async (uid, purpose, now) => documents.children("gatewayTickets")
+        .filter(([, row]) => row.uid === uid && row.purpose === purpose && (row.expiresAt as number) > now).length,
+      countMintsSince: async (uid, purpose, since) => documents.children("gatewayTicketMintLog")
+        .filter(([, row]) => row.uid === uid && row.purpose === purpose && (row.mintedAt as number) > since).length,
+      recordMint: async (mint) => {
+        write(() => {
+          const id = `mint-${documents.children("gatewayTicketMintLog").length + 1}`;
+          documents.set(`gatewayTicketMintLog/${id}`, {
+            uid: mint.uid,
+            purpose: mint.purpose,
+            mintedAt: mint.mintedAt,
+            expireAt: mint.expiresAt,
+          });
+        });
+      },
+      patchGrant: async (ticketId, patch, fence) => {
+        const key: RecordKey = { aggregate: "gateway-ticket", key: ticketId };
+        assertNoReservedGrantKeys("access.gatewayTickets.patchGrant", patch, GATEWAY_TICKET_FIELDS);
+        const current = getGatewayTicket(ticketId);
+        if (current === null) throw new MissingRecordError(key);
+        if (fence?.revision !== undefined && current.revision !== fence.revision) {
+          throw new FenceMismatchError(key, "revision", fence.revision, current.revision);
+        }
+        write(() => documents.set(gatewayTicketPath(ticketId), { ...documents.get(gatewayTicketPath(ticketId))!, ...structuredClone(patch) }));
       },
       delete: async (ticketId, fence) => {
         const key: RecordKey = { aggregate: "gateway-ticket", key: ticketId };
@@ -1601,8 +1739,11 @@ export interface JournalFixtureOptions {
   readonly serializeTransactions?: boolean;
 }
 
-export function createDocumentFixtureStore(records: FixtureDocumentRecords): PlatformStateStore {
-  return createJournalFixtureStore(journalRowsAtPaths(records), { documents: fixtureDocumentsAt(records) });
+export function createDocumentFixtureStore(
+  records: FixtureDocumentRecords,
+  options: Omit<JournalFixtureOptions, "documents"> = {},
+): PlatformStateStore {
+  return createJournalFixtureStore(journalRowsAtPaths(records), { ...options, documents: fixtureDocumentsAt(records) });
 }
 
 export function createJournalFixtureStore(rows: JournalRows, options: JournalFixtureOptions = {}): PlatformStateStore {

@@ -29,5 +29,5 @@ export interface JournalFixtureOptions {
     readonly beforeTransaction?: (label: string) => void;
     readonly serializeTransactions?: boolean;
 }
-export declare function createDocumentFixtureStore(records: FixtureDocumentRecords): PlatformStateStore;
+export declare function createDocumentFixtureStore(records: FixtureDocumentRecords, options?: Omit<JournalFixtureOptions, "documents">): PlatformStateStore;
 export declare function createJournalFixtureStore(rows: JournalRows, options?: JournalFixtureOptions): PlatformStateStore;

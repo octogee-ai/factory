@@ -1,7 +1,7 @@
 import { sweepExpiredFirestoreState } from "./expiry.js";
 import { createFirestoreRepositories } from "./repositories.js";
 import { DirectFirestoreSession } from "./session.js";
-import { runFirestoreTransaction } from "./transaction.js";
+import { runFirestoreTransaction, TransactionFirestoreSession } from "./transaction.js";
 import { watchFirestore } from "./watch.js";
 import { firestoreWatchSource } from "./watch-sources.js";
 function transactionHandle(session) {
@@ -12,10 +12,17 @@ function transactionHandle(session) {
         attempt: session.attempt.attempt,
     };
 }
+const firestoreBackedStores = new WeakMap();
+export function platformStateReadsInFirestoreTransaction(store, transaction, label) {
+    const db = firestoreBackedStores.get(store);
+    if (db === undefined)
+        return store;
+    return createFirestoreRepositories(new TransactionFirestoreSession(db, transaction, { label, readOnly: true, attempt: 1 }));
+}
 export function createFirestorePlatformStateStore(options) {
     const { db } = options;
     const subscriptions = new Set();
-    return {
+    const store = {
         ...createFirestoreRepositories(new DirectFirestoreSession(db)),
         transaction(transactionOptions, body) {
             return runFirestoreTransaction(db, transactionOptions, (session) => body(transactionHandle(session)));
@@ -36,4 +43,6 @@ export function createFirestorePlatformStateStore(options) {
             await Promise.all([...subscriptions].map((subscription) => subscription.close()));
         },
     };
+    firestoreBackedStores.set(store, db);
+    return store;
 }

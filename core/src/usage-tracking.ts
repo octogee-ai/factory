@@ -29,6 +29,11 @@ function workspaceIdFromAgentId(agentId: string): string | null {
   return null;
 }
 
+function attributedWorkspaceId(data: Record<string, unknown>, agentId: string, platformWorkspaceSlug: string | null | undefined): string | null {
+  if (platformWorkspaceSlug === undefined) return workspaceIdFromUserData(data, agentId);
+  return platformWorkspaceSlug !== null && isValidUsername(platformWorkspaceSlug) ? platformWorkspaceSlug : workspaceIdFromAgentId(agentId);
+}
+
 function workspaceIdFromUserData(data: Record<string, unknown>, agentId: string): string | null {
   const provisioning = data.provisioning as { openclaw?: { slug?: unknown } } | undefined;
   const slug = provisioning?.openclaw?.slug ?? data.username;
@@ -71,6 +76,7 @@ export interface ReportUsageForUidInput {
   usage: UsageData;
   log: LogFn;
   gatewayId: string;
+  platformWorkspaceSlug?: string | null;
 }
 
 export interface StartUsageTrackingOptions {
@@ -137,6 +143,7 @@ interface UsageTransactionInput {
   log: LogFn;
   gatewayId: string;
   today: string;
+  platformWorkspaceSlug?: string | null;
 }
 
 function usageTransactionState(args: {
@@ -145,9 +152,10 @@ function usageTransactionState(args: {
   agentId: string;
   usage: UsageData;
   log: LogFn;
+  platformWorkspaceSlug?: string | null;
 }): UsageTransactionState {
   const { data, agentId, usage } = args;
-  const workspaceId = workspaceIdFromUserData(data, agentId);
+  const workspaceId = attributedWorkspaceId(data, agentId, args.platformWorkspaceSlug);
   const usageData = data.usage || {};
   const now = new Date();
 
@@ -257,6 +265,7 @@ async function writeUsageTransaction(t: Transaction, input: UsageTransactionInpu
     agentId: input.agentId,
     usage: input.usage,
     log: input.log,
+    platformWorkspaceSlug: input.platformWorkspaceSlug,
   });
 
   t.update(input.userRef, userUsageUpdate(state, input.usage));
@@ -294,6 +303,7 @@ export async function reportUsageForUid(input: ReportUsageForUidInput): Promise<
       log,
       gatewayId,
       today,
+      platformWorkspaceSlug: input.platformWorkspaceSlug,
     }));
 
     log(formatUsageLogLine({
