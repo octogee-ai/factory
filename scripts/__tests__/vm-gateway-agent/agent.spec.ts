@@ -9,6 +9,7 @@ import {
   convergeOnce,
   fetchRuntimeBundle,
   initialAgentState,
+  runVmGatewayAgent,
   watchPreemption,
   applyBundle,
   applyServices,
@@ -302,6 +303,32 @@ describe.each(["bundle", "services"] as const)("%s runtime replacement", (kind) 
       await supervisor.stop();
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("runVmGatewayAgent", () => {
+  const oneTick = (d: VmAgentDeps) => {
+    let ticks = 0;
+    return runVmGatewayAgent(d, { intervalMs: 0, sleep: async () => {}, stop: () => ticks++ > 1 });
+  };
+
+  it("forwards the host journal even when no runtime bundle can be fetched", async () => {
+    const docker = fakeDocker();
+    const h = deps(docker, () => ({ status: 500, body: { error: "unavailable" } }), { now: 1_000 });
+    await oneTick(h.d);
+    expect(docker.containers.get("octo-journal-forward")?.running).toBe(true);
+    expect(docker.containers.get("octo-journal-forward")?.config.Image).toBe("sha256:agent");
+    expect(h.d.log).toHaveBeenCalledWith(expect.stringContaining("converge failed"));
+  });
+
+  it("reports a forwarder it cannot start and still converges the runtime", async () => {
+    const docker = fakeDocker();
+    docker.agentImage = null;
+    const h = deps(docker, () => ({ status: 404, body: { error: "not_rendered" } }), { now: 1_000 });
+    await oneTick(h.d);
+    expect(docker.containers.has("octo-journal-forward")).toBe(false);
+    expect(h.d.log).toHaveBeenCalledWith(expect.stringContaining("journal forwarding unavailable"));
+    expect(h.d.log).toHaveBeenCalledWith(expect.stringContaining("runtime bundle not rendered yet"));
   });
 });
 

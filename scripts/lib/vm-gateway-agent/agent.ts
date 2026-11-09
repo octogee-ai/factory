@@ -37,6 +37,7 @@ import {
   type HomeShell,
 } from "./home-checkpoint.js";
 import { fetchDesk, syncDesk } from "./desk.js";
+import { ensureJournalForward, planJournalForward } from "./journal-forward.js";
 import type { MetadataClient } from "./metadata.js";
 import { GATEWAY_HOST_DESKTOP_AUTH_DIR } from "../openclaw-computer-browser.js";
 import type { DesktopControl } from "./desktop-control.js";
@@ -575,10 +576,21 @@ export async function watchPreemption(deps: VmAgentDeps, opts: { sleep: (ms: num
   }
 }
 
+async function keepJournalForwarded(deps: VmAgentDeps): Promise<void> {
+  try {
+    const agent = await inspectContainer(deps.engine, AGENT_CONTAINER);
+    if (!agent?.Image) throw new Error(`${AGENT_CONTAINER} container not found`);
+    await ensureJournalForward(deps.engine, planJournalForward(deps.gatewayId, agent.Image), deps.log);
+  } catch (err) {
+    deps.log(`[vm-agent] journal forwarding unavailable: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 export async function runVmGatewayAgent(deps: VmAgentDeps, opts: { intervalMs: number; sleep: (ms: number) => Promise<void>; stop?: () => boolean }): Promise<void> {
   const preemption = watchPreemption(deps, opts);
   let state = initialAgentState();
   while (!opts.stop?.()) {
+    await keepJournalForwarded(deps);
     try {
       state = await convergeOnce(deps, state);
     } catch (err) {
