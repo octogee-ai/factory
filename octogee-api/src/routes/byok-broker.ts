@@ -50,7 +50,7 @@ import {
   createAgentSupportTurnVerifier,
   type OwnerWorkspaceTurnVerifier,
 } from "../lib/openclaw-owner-turn.js";
-import { MODEL_BROKER_SIGNUP_OFFER_BUDGETS_COLLECTION, parseModelBrokerSignupOfferBudget } from "@octogee/shared/types/signup-offer";
+import { parseFundedBudgetLedger } from "../lib/model-broker-budget.js";
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 
 type GatewayBinding = Extract<
@@ -271,10 +271,8 @@ async function agentUsageStatusPayload(
   });
 
   return {
+    ...userEntitlements().productProjection?.agentUsageStatus(assigned.account.planInputs, new Date(nowMs)),
     gatewayClass: authorization.config.gatewayClass,
-    tier: plan.planId,
-    effectiveTier: plan.activePlanId,
-    trialDaysRemaining: plan.introductoryDaysRemaining,
     week: {
       percentUsed: spend.onOwnerCredential
         ? 0
@@ -626,6 +624,19 @@ function registerAgentUsageStatusRoute(
   });
 }
 
+async function fundedBudgetInspectionFields(
+  readers: Pick<UsageReaders, "db" | "rails">,
+  assigned: { uid: string; account: BuilderAccount },
+  nowMs: number,
+): Promise<Record<string, unknown>> {
+  const budget = readers.rails.resolveOwnerProfile({ ...assigned.account.planInputs }, assigned.uid, nowMs)?.fundedBudget ?? null;
+  if (!budget) return readers.rails.budgetInspection(null, null);
+  const snapshot = await readers.db.collection(budget.ledgerCollection).doc(budget.ledgerKey).get();
+  const ledger = parseFundedBudgetLedger(snapshot.data(), budget);
+  if (!ledger) throw new Error("funded budget accounting unavailable");
+  return readers.rails.budgetInspection(budget, ledger);
+}
+
 async function privateBrokerInspectionPayload(
   readers: Pick<UsageReaders, "db" | "store" | "rails">,
   gatewayId: string,
@@ -634,17 +645,8 @@ async function privateBrokerInspectionPayload(
   nowMs: number,
 ): Promise<Record<string, unknown>> {
   const status = await agentUsageStatusPayload(readers, gatewayId, assigned, nowMs);
-  const offer = userEntitlements().ownedPromotionBudget(assigned.account.planInputs, assigned.uid, new Date(nowMs));
-  let signupOffer: Record<string, unknown> | null = null;
-  if (offer) {
-    const snapshot = await readers.db.collection(MODEL_BROKER_SIGNUP_OFFER_BUDGETS_COLLECTION).doc(offer.budgetKey).get();
-    const ledger = parseModelBrokerSignupOfferBudget(snapshot.data(), offer);
-    if (!ledger) throw new Error("signup offer accounting unavailable");
-    signupOffer = { currency: "USD", spent: ledger.chargeUsd, unlocked: offer.unlockedCapUsd, hardCap: offer.hardCapUsd,
-      remaining: Math.max(0, offer.unlockedCapUsd - ledger.chargeUsd), expiresAt: new Date(offer.endsAtMs).toISOString(),
-      nextUnlockAt: offer.nextUnlockAtMs === null ? null : new Date(offer.nextUnlockAtMs).toISOString() };
-  }
-  return { schemaVersion: 1, agentId, ...status, observedAt: new Date(nowMs).toISOString(), signupOffer,
+  const budgetFields = await fundedBudgetInspectionFields(readers, assigned, nowMs);
+  return { schemaVersion: 1, agentId, ...status, observedAt: new Date(nowMs).toISOString(), ...budgetFields,
     periods: {
       burst: { kind: "fixed", durationMs: MODEL_BROKER_USAGE_WINDOW_MS, startsAt: new Date(usageWindowStartMs(nowMs)).toISOString(),
         resetAt: new Date(usageWindowStartMs(nowMs) + MODEL_BROKER_USAGE_WINDOW_MS).toISOString() },

@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { TEMPLATES_DIR } from "./config.js";
 import { applyTemplatePlaceholders } from "./helpers.js";
 // The platform owns exactly AGENTS.md + TOOLS.md; SOUL.md/USER.md/MEMORY.md are
@@ -8,17 +9,7 @@ import { applyTemplatePlaceholders } from "./helpers.js";
 // property that makes them safe for context-file-convergence.ts to re-assert
 // unconditionally on every plan.
 export const PLATFORM_CONVERGED_CONTEXT_FILES = new Set(["AGENTS.md", "TOOLS.md"]);
-const TEMPLATE_TIER_BY_NAME = {
-    free: "free",
-    personal_free: "free",
-    trial: "trial",
-};
-// Total by construction: the free and trial tier names are enumerated and every
-// other tier — personal, personal_pro, personal_pro_max, hobby, pro, team,
-// enterprise, builder, operator — reads the paid templates.
-export function templateTierForName(tier) {
-    return TEMPLATE_TIER_BY_NAME[tier] ?? "paid";
-}
+export const CUSTOMER_OWNED_CONTEXT_FILES = new Set(["SOUL.md", "USER.md", "MEMORY.md"]);
 function templatesRoot() {
     return process.env.OCTOGEE_TEMPLATES_DIR || TEMPLATES_DIR;
 }
@@ -58,12 +49,12 @@ function removeLegacyContextIgnores(customerDir) {
 // hook mkdirs the directory on demand and every native reader tolerates absence.
 export function writeTierTemplateFiles(customerDir, tier, templateVars) {
     const written = [];
-    const templateTier = templateTierForName(tier);
-    for (const file of listTierTemplateFiles(templateTier)) {
+    const templateKey = userEntitlements().seedContextTemplateKey(tier);
+    for (const file of listTierTemplateFiles(templateKey)) {
         const dest = path.join(customerDir, file);
         if (fs.existsSync(dest))
             continue;
-        fs.writeFileSync(dest, readTierTemplateFile(templateTier, file, templateVars), "utf-8");
+        fs.writeFileSync(dest, readTierTemplateFile(templateKey, file, templateVars), "utf-8");
         written.push(file);
     }
     if (removeLegacyContextIgnores(customerDir)) {

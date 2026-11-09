@@ -1,5 +1,6 @@
 import * as crypto from "node:crypto";
 
+import type { FundedBudgetInterruptionHandler } from "./model-broker-budget.js";
 import type { LiveOwnerGrantResolver, OwnerModelBrokerGrant } from "./model-broker-limits.js";
 import type { ModelBrokerRailRegistry, RailAllowanceResult } from "./model-broker-rails.js";
 import type { ModelBrokerUsageStore } from "./model-broker-usage.js";
@@ -38,10 +39,7 @@ interface WebResearchServiceOptions {
   tavilyCostPerCreditUsd: number;
   markupMultiplier: number;
   onError?: (error: unknown) => void;
-  onSignupOfferBudgetInterruption?: (input: {
-    uid: string;
-    reason: "waiting_for_unlock" | "hard_cap_exhausted";
-  }) => void | Promise<void>;
+  onBudgetInterruption?: FundedBudgetInterruptionHandler;
 }
 
 const EMPTY_USAGE = {
@@ -109,7 +107,7 @@ export function createWebResearchService(options: WebResearchServiceOptions) {
         gatewayId: input.gatewayId,
         ownerUid: input.ownerUid,
         now: at,
-        onSignupOfferBudgetInterruption: options.onSignupOfferBudgetInterruption,
+        onBudgetInterruption: options.onBudgetInterruption,
         onError: options.onError,
       });
       await requireRequestRate({
@@ -158,7 +156,7 @@ export function createWebResearchService(options: WebResearchServiceOptions) {
         chargeUsd: input.costUsd * options.markupMultiplier,
         debitsCreditBalance: input.billing.debitsCreditBalance,
         countsTowardSpendWindow: input.billing.countsTowardSpendWindow,
-        signupOfferBudget: input.billing.signupOfferBudget,
+        fundedBudget: input.billing.fundedBudget,
         providerMetadata: input.metadata,
       });
     } catch (error) {

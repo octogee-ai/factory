@@ -4,25 +4,11 @@ import * as path from "path";
 
 import { userEntitlements, type UserEntitlementInputs } from "@octogee/shared/types/user-entitlements";
 import {
+  CUSTOMER_OWNED_CONTEXT_FILES,
   PLATFORM_CONVERGED_CONTEXT_FILES,
   readTierTemplateFile,
 } from "./tier-template-files.js";
 import { CUSTOMERS_DIR, log } from "./config.js";
-
-// The seed tier and the converged tier are deliberately different concepts: a
-// workspace is seeded once from whatever tier the customer signed up on, and
-// converges from then on onto whatever their plan resolves to today. A
-// trial-boosted signup seeds tiers/trial/ and converges onto tiers/free/ when
-// the boost lapses, onto tiers/paid/ when they subscribe.
-// Files the platform REMOVES for customers on the free template: they are already
-// bootstrapped by platform onboarding by the time the coach runs, so a seeded
-// BOOTSTRAP.md (pre-removal seeds, or a Gitea boot-sync resurrection) is dead
-// context weight in exactly the tier where context is the budget. The
-// mount-time reassert re-deletes it on the gateway's own disk, which is what
-// the agent reads; reaching Gitea needs a commit, and the only commit path is
-// the agent's own workspace_commit. Same drift-only semantics as the converged
-// writes: absent file, no-op, no churn.
-const CONVERGED_CONTEXT_REMOVED_FILES = ["BOOTSTRAP.md"] as const;
 
 function writeAtomic(target: string, content: string): void {
   const tmp = `${target}.tmp`;
@@ -71,8 +57,11 @@ export function reassertConvergedContextFiles(
   userData: UserEntitlementInputs & { timeZone?: unknown },
   vars: Record<string, string> = {},
 ): string[] {
-  const plan = userEntitlements().plan(userData);
-  const templateTier = plan.contextTemplate;
+  const policy = userEntitlements().contextFilePolicy(userData);
+  const customerOwned = policy.removedFiles.filter((file) => CUSTOMER_OWNED_CONTEXT_FILES.has(file));
+  if (customerOwned.length > 0) {
+    throw new Error(`[context-files] ${slug}: policy may not remove customer-owned ${customerOwned.join(", ")}`);
+  }
 
   const changed: string[] = [];
   if (reassertUserTimeZoneLine(customerDir, parseTimeZone(userData.timeZone))) {
@@ -80,7 +69,7 @@ export function reassertConvergedContextFiles(
     log(`[context-files] ${slug}: USER.md time zone set to ${String(userData.timeZone)}`);
   }
   for (const file of PLATFORM_CONVERGED_CONTEXT_FILES) {
-    const desired = readTierTemplateFile(templateTier, file, vars);
+    const desired = readTierTemplateFile(policy.templateKey, file, vars);
     const dest = path.join(customerDir, file);
     const existing = fs.existsSync(dest) ? fs.readFileSync(dest, "utf-8") : null;
     if (existing === desired) continue;
@@ -88,21 +77,18 @@ export function reassertConvergedContextFiles(
     changed.push(file);
   }
   if (changed.length > 0) {
-    log(`[context-files] ${slug}: converged ${changed.join(", ")} to the free-tier template`);
+    log(`[context-files] ${slug}: converged ${changed.join(", ")} to the ${policy.templateKey} template`);
   }
 
   const removed: string[] = [];
-  const removable = templateTier === "free" ? CONVERGED_CONTEXT_REMOVED_FILES : [];
-  for (const file of removable) {
+  for (const file of policy.removedFiles) {
     const dest = path.join(customerDir, file);
     if (!fs.existsSync(dest)) continue;
     fs.rmSync(dest);
     removed.push(file);
   }
   if (removed.length > 0) {
-    log(
-      `[context-files] ${slug}: removed ${removed.join(", ")} — platform onboarding already bootstrapped this workspace`,
-    );
+    log(`[context-files] ${slug}: removed ${removed.join(", ")}`);
   }
 
   return [...changed, ...removed];

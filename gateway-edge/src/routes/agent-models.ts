@@ -136,8 +136,8 @@ router.get("/", requireAuth, async (req: Request, res: Response, next: NextFunct
     const plan = userEntitlements().plan(req.user ?? {});
     const slug = slugFromRequest(req);
     res.json({
+      ...userEntitlements().productProjection?.agentModels(req.user ?? {}),
       modelAccess: plan.modelAccess,
-      tier: plan.planId,
       builderTools: plan.toolAccess,
       ...(slug ? { coachAgentId: `octogee-${slug}-coach` } : {}),
       byosub: subscriptionProviders.length > 0 && await isBuilderRuntime(req),

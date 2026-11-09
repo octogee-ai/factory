@@ -55,7 +55,13 @@ describe("staticUserEntitlements", () => {
     expect(plan.houseFallback).toBe(false);
     expect(plan.spendWeekUsd).toBeGreaterThan(1_000_000);
     expect(plan.spendWindowUsd).toBeGreaterThan(1_000_000);
-    expect(plan.contextTemplate).toBe("paid");
+    expect(Object.keys(plan).sort()).toEqual([
+      "houseFallback",
+      "modelAccess",
+      "spendWeekUsd",
+      "spendWindowUsd",
+      "toolAccess",
+    ]);
   });
 
   it("keeps projects active and unlimited with one configured sizing key", () => {
@@ -64,10 +70,14 @@ describe("staticUserEntitlements", () => {
     expect(staticUserEntitlements.sizingKey({})).toBe("default");
   });
 
-  it("carries no plan inputs, price or promotional budget", () => {
+  it("carries no plan inputs and no product projection", () => {
     expect(staticUserEntitlements.pickInputs({ subscription: { tier: "personal" } })).toEqual({});
-    expect(staticUserEntitlements.monthlyPriceUsd("personal")).toBe(0);
-    expect(staticUserEntitlements.ownedPromotionBudget({}, "u1")).toBeNull();
+    expect(staticUserEntitlements.productProjection).toBeUndefined();
+  });
+
+  it("seeds and converges every user onto one context template without removing files", () => {
+    expect(staticUserEntitlements.contextFilePolicy({})).toEqual({ templateKey: "default", removedFiles: [] });
+    expect(staticUserEntitlements.seedContextTemplateKey("personal_free")).toBe("default");
   });
 
   it("enforces a spent budget generically, degrading only when a house model exists", () => {

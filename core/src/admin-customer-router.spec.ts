@@ -1,8 +1,13 @@
 import express from "express";
 import request from "supertest";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
 import { usageWindowStartMs, weekWindowStartMs } from "@octogee/shared/types/model-broker-usage";
+import {
+  installUserEntitlements,
+  staticUserEntitlements,
+  userEntitlements,
+} from "@octogee/shared/types/user-entitlements";
 import {
   aggregateBrokerDiagnostics,
   addAdminCustomerRoutes,
@@ -316,6 +321,58 @@ describe("GET /api/admin/customer-archives", () => {
       totalTokens: 987_654,
       requestCount: 321,
     }]);
+  });
+});
+
+describe("admin customer routes — commercial fields", () => {
+  const productResolver = userEntitlements();
+  const paying = (): Record<string, DocData> => ({
+    "users/uid-1": customerDoc({
+      createdAt: 1_800_000_000_000,
+      selectedTier: "pro",
+      subscription: { tier: "personal", status: "active", stripeCustomerId: "cus_1" },
+    }),
+  });
+
+  afterEach(() => {
+    installUserEntitlements(productResolver);
+  });
+
+  it("adds the subscription, tier price and selected tier from the product", async () => {
+    const res = await request(makeApp(paying())).get("/api/admin/customer/uid-1").expect(200);
+
+    expect(res.body).toMatchObject({
+      subscription: { status: "active", stripeCustomerId: "cus_1", currentPeriodEnd: null },
+      tierConfig: { monthlyPrice: 20 },
+      selectedTier: "pro",
+    });
+  });
+
+  it("omits them from the customer detail on a bare platform", async () => {
+    installUserEntitlements(staticUserEntitlements);
+
+    const res = await request(makeApp(paying())).get("/api/admin/customer/uid-1").expect(200);
+
+    expect(res.body.summary).toMatchObject({ email: "builder@example.com" });
+    expect(res.body.summary).not.toHaveProperty("revenueUsd");
+    for (const field of ["subscription", "tierConfig", "selectedTier"]) {
+      expect(res.body).not.toHaveProperty(field);
+    }
+  });
+
+  it("reports recurring revenue in the stats from the product", async () => {
+    const res = await request(makeApp(paying())).get("/api/admin/customers/stats").expect(200);
+
+    expect(res.body).toMatchObject({ totalCustomers: 1, mrrUsd: 20 });
+  });
+
+  it("reports no recurring revenue in the stats on a bare platform", async () => {
+    installUserEntitlements(staticUserEntitlements);
+
+    const res = await request(makeApp(paying())).get("/api/admin/customers/stats").expect(200);
+
+    expect(res.body.totalCustomers).toBe(1);
+    expect(res.body).not.toHaveProperty("mrrUsd");
   });
 });
 

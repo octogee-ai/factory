@@ -51,6 +51,7 @@ import { createVoiceConversationRoutes } from "./routes/voice-conversation.js";
 import { createToolConversationRoutes, createWorkspaceNativeAccessRoutes } from "./routes/workspace-native-access.js";
 import { createAgentImportBrokerRoutes } from "./routes/agent-import-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
+import type { FundedBudgetInterruption } from "./lib/model-broker-budget.js";
 import { operatorRailRegistry, type ModelBrokerRailRegistry } from "./lib/model-broker-rails.js";
 import { createDesktopAuthRoutes } from "./routes/desktop-auth.js";
 import { createFeatureRoutes } from "./routes/features.js";
@@ -198,7 +199,7 @@ export interface ProductRuntime {
   clusterRoutes(deps: ProductRouteDeps): ClusterRouteTable;
   apiRoutes(deps: ProductRouteDeps): ClusterRouteTable;
   internalRoutes(deps: ProductRouteDeps): ClusterRouteTable;
-  onSignupOfferBudgetInterruption(input: { uid: string; reason: "waiting_for_unlock" | "hard_cap_exhausted" }): void;
+  onBudgetInterruption(input: { uid: string; reason: FundedBudgetInterruption }): void;
   onProjectCreated(uid: string): void;
   shutdown(): Promise<void>;
 }
@@ -701,7 +702,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     db,
     store: platformStateStore,
     modelBrokerRails,
-    onSignupOfferBudgetInterruption: product?.onSignupOfferBudgetInterruption,
+    onBudgetInterruption: product?.onBudgetInterruption,
   }));
   // octogee-api-only: broker sidecar GitHub file-browser token reads
   // so cattle pods do not need Firestore or KMS access to user secrets.

@@ -1,3 +1,4 @@
+import type { FundedBudgetInterruption } from "./model-broker-budget.js";
 import type { OwnerModelBrokerGrant } from "./model-broker-limits.js";
 import type { ModelBrokerUsageStore } from "./model-broker-usage.js";
 import { readPlatformSpendState } from "./platform-usage-allowance.js";
@@ -9,8 +10,8 @@ export interface GateDecisionAllowed {
   windowCostUsd: number | null;
   weekCostUsd: number | null;
   creditBalanceUsd: number | null;
-  offerFunded: boolean;
-  offerChargeUsd: number | null;
+  budgetFunded: boolean;
+  budgetChargeUsd: number | null;
 }
 
 export interface GateDecisionDenied {
@@ -18,8 +19,8 @@ export interface GateDecisionDenied {
   status: 402 | 429 | 503;
   error: string;
   retryAfterSeconds?: number;
-  signupOfferReason?: "waiting_for_unlock" | "hard_cap_exhausted";
-  offerChargeUsd?: number;
+  budgetInterruption?: FundedBudgetInterruption;
+  budgetChargeUsd?: number;
 }
 
 export type GateDecision = GateDecisionAllowed | GateDecisionDenied;
@@ -33,8 +34,8 @@ export type DegradeOutcome =
       windowCostUsd: number | null;
       weekCostUsd: number | null;
       creditBalanceUsd: number | null;
-      offerFunded?: boolean;
-      offerChargeUsd?: number | null;
+      budgetFunded?: boolean;
+      budgetChargeUsd?: number | null;
     };
 
 export interface RailGateContext {

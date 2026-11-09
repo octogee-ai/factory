@@ -13,6 +13,7 @@ import type {
   ModelBrokerTokenRecord,
   ModelBrokerTokenStore,
 } from "./lib/model-broker-tokens.js";
+import type { FundedBudgetInterruptionHandler } from "./lib/model-broker-budget.js";
 import type {
   LiveOwnerGrantResolver,
   OwnerModelBrokerGrant,
@@ -84,16 +85,13 @@ export interface LlmBrokerAppDeps {
   onMeteringError?: (err: unknown) => void;
   // Live per-owner grant resolution (tier limits + policy). When present it is
   // authoritative on every call — mint-time token limits stop being load-bearing,
-  // so plan changes and the trial daily decay reach the gate within one cache TTL.
+  // so plan changes and funded budget transitions reach the gate within one cache TTL.
   resolveGrant?: LiveOwnerGrantResolver;
   resolveOwnerAccess?: ModelBrokerOwnerAccessResolver;
   // Structured gate-decision log: one line per proxied model call with the
   // owner, budget, and model routing needed to verify billing in TEST.
   log?: (msg: string, fields?: Record<string, unknown>) => void;
-  onSignupOfferBudgetInterruption?: (input: {
-    uid: string;
-    reason: "waiting_for_unlock" | "hard_cap_exhausted";
-  }) => void | Promise<void>;
+  onBudgetInterruption?: FundedBudgetInterruptionHandler;
   rails?: ModelBrokerRailRegistry;
 }
 
@@ -658,7 +656,7 @@ interface MeteringContext {
   onMeteringError: (err: unknown) => void;
   countsTowardSpendWindow: boolean;
   debitsCreditBalance: boolean;
-  signupOfferBudget?: NonNullable<OwnerModelBrokerGrant["signupOfferBudget"]>;
+  fundedBudget?: NonNullable<OwnerModelBrokerGrant["fundedBudget"]>;
   vertexPricing?: { model: string; prices: VertexModelPriceTable };
 }
 
@@ -734,7 +732,7 @@ async function recordUsage(
       now: ctx.now(),
       countsTowardSpendWindow: ctx.countsTowardSpendWindow,
       debitsCreditBalance: ctx.debitsCreditBalance,
-      signupOfferBudget: ctx.signupOfferBudget,
+      fundedBudget: ctx.fundedBudget,
       reportedCostUsd,
       usageKind:
         ctx.record.purpose === "embeddings" ? "embedding" : "model",
@@ -789,7 +787,7 @@ async function rateWindowDenial(
 }
 
 function gateDecisionName(gate: GateDecisionAllowed): string {
-  if (gate.offerChargeUsd !== null && gate.creditBalanceUsd !== null) return "credits";
+  if (gate.budgetChargeUsd !== null && gate.creditBalanceUsd !== null) return "credits";
   if (!gate.degrade) return "forward";
   if (gate.degradeReason === "free") return "degrade_free";
   return gate.degradeReason === "credits" ? "degrade_credits" : "degrade_budget";
@@ -798,8 +796,8 @@ function gateDecisionName(gate: GateDecisionAllowed): string {
 type GateLogger = (decision: string, extra?: Record<string, unknown>) => void;
 
 function deniedDecisionName(gate: GateDecisionDenied): string {
-  if (gate.signupOfferReason === "waiting_for_unlock") return "denied_waiting";
-  if (gate.signupOfferReason === "hard_cap_exhausted") return "denied_exhausted";
+  if (gate.budgetInterruption === "awaiting_increase") return "denied_waiting";
+  if (gate.budgetInterruption === "exhausted") return "denied_exhausted";
   if (gate.status === 402) return "denied_no_token_path";
   if (gate.status === 429) return "rate_limited";
   return "gate_unavailable";
@@ -816,8 +814,8 @@ function sendGateDenied(
   logGate(deniedDecisionName(gate), {
     status: gate.status,
     error: gate.error,
-    signupOfferReason: gate.signupOfferReason,
-    offerChargeUsd: gate.offerChargeUsd,
+    budgetInterruption: gate.budgetInterruption,
+    budgetChargeUsd: gate.budgetChargeUsd,
   });
   res.status(gate.status).json({ error: gate.error });
 }
@@ -832,7 +830,7 @@ async function grantForRecord(
       limits: record.limits,
       policy: record.policy,
       rail: railsFor(deps).defaultRailId,
-      signupOfferBudget: null,
+      fundedBudget: null,
     };
   }
   return deps.resolveGrant({
@@ -849,8 +847,8 @@ const GATE_PASS: GateDecisionAllowed = {
   windowCostUsd: null,
   weekCostUsd: null,
   creditBalanceUsd: null,
-  offerFunded: false,
-  offerChargeUsd: null,
+  budgetFunded: false,
+  budgetChargeUsd: null,
 };
 
 // Free tier rides the house model against the same weekly-ledger + burst
@@ -980,8 +978,8 @@ async function preflightGate(input: PreflightGateInput): Promise<GateDecision> {
       windowCostUsd,
       weekCostUsd,
       creditBalanceUsd,
-      offerFunded: outcome.offerFunded === true,
-      offerChargeUsd: outcome.offerChargeUsd ?? null,
+      budgetFunded: outcome.budgetFunded === true,
+      budgetChargeUsd: outcome.budgetChargeUsd ?? null,
     };
   } catch (err) {
     input.onMeteringError(err);
@@ -1105,7 +1103,7 @@ async function logAndForwardAllowed(args: {
   logGate: GateLogger;
   rail: ModelBrokerRail;
   grant: OwnerModelBrokerGrant;
-  signupOfferBudget: OwnerModelBrokerGrant["signupOfferBudget"];
+  fundedBudget: OwnerModelBrokerGrant["fundedBudget"];
   usageStore?: ModelBrokerUsageStore;
   upstreamHeaderTimeoutMs: number;
   now: () => number;
@@ -1126,7 +1124,7 @@ async function logAndForwardAllowed(args: {
       windowCostUsd: gate.windowCostUsd,
       weekCostUsd: gate.weekCostUsd,
       creditBalanceUsd: gate.creditBalanceUsd,
-      offerChargeUsd: gate.offerChargeUsd,
+      budgetChargeUsd: gate.budgetChargeUsd,
     });
   }
   await forwardAllowed({ ...args, houseModel });
@@ -1165,11 +1163,11 @@ function meteringContextFor(args: {
   now: () => number;
   onMeteringError: (err: unknown) => void;
   usingCredits: boolean;
-  offerFunded: boolean;
-  signupOfferBudget: OwnerModelBrokerGrant["signupOfferBudget"];
+  budgetFunded: boolean;
+  fundedBudget: OwnerModelBrokerGrant["fundedBudget"];
   vertexPricing?: MeteringContext["vertexPricing"];
 }): MeteringContext {
-  const { providerKey, gate, usingCredits, offerFunded } = args;
+  const { providerKey, gate, usingCredits, budgetFunded } = args;
   const platformFundedEmbedding = args.record.purpose === "embeddings";
   return {
     req: args.req,
@@ -1191,15 +1189,15 @@ function meteringContextFor(args: {
       !platformFundedEmbedding &&
       providerKey.source !== "owner_model_credential" &&
       !usingCredits &&
-      !offerFunded &&
+      !budgetFunded &&
       (!gate.degrade || gate.degradeReason === "free"),
     debitsCreditBalance:
       !platformFundedEmbedding &&
       usingCredits &&
       providerKey.source !== "owner_model_credential" &&
       !gate.degrade,
-    ...(offerFunded && args.signupOfferBudget
-      ? { signupOfferBudget: args.signupOfferBudget }
+    ...(budgetFunded && args.fundedBudget
+      ? { fundedBudget: args.fundedBudget }
       : {}),
     ...(args.vertexPricing ? { vertexPricing: args.vertexPricing } : {}),
   };
@@ -1296,7 +1294,7 @@ async function forwardAllowed(args: {
   houseModel: string;
   rail: ModelBrokerRail;
   grant: OwnerModelBrokerGrant;
-  signupOfferBudget: OwnerModelBrokerGrant["signupOfferBudget"];
+  fundedBudget: OwnerModelBrokerGrant["fundedBudget"];
   usageStore?: ModelBrokerUsageStore;
   upstreamHeaderTimeoutMs: number;
   now: () => number;
@@ -1367,8 +1365,8 @@ async function forwardAllowed(args: {
         now: args.now,
         onMeteringError: args.onMeteringError,
         usingCredits,
-        offerFunded: gate.offerFunded,
-        signupOfferBudget: args.signupOfferBudget,
+        budgetFunded: gate.budgetFunded,
+        fundedBudget: args.fundedBudget,
         vertexPricing: call.vertexPricing,
       })
     : undefined;
@@ -1648,16 +1646,16 @@ function brokerGateLogger(
   };
 }
 
-async function reportSignupOfferGateDenial(
+async function reportBudgetGateDenial(
   deps: LlmBrokerAppDeps,
   record: ModelBrokerTokenRecord,
   gate: GateDecisionDenied,
 ): Promise<void> {
-  if (!gate.signupOfferReason || !record.ownerUid || !deps.onSignupOfferBudgetInterruption) return;
+  if (!gate.budgetInterruption || !record.ownerUid || !deps.onBudgetInterruption) return;
   try {
-    await deps.onSignupOfferBudgetInterruption({
+    await deps.onBudgetInterruption({
       uid: record.ownerUid,
-      reason: gate.signupOfferReason,
+      reason: gate.budgetInterruption,
     });
   } catch (error) {
     reportBrokerResolutionError(deps, error);
@@ -1684,7 +1682,7 @@ function createBrokerRequestHandler(options: BrokerRequestHandlerOptions) {
         onMeteringError: deps.onMeteringError ?? (() => undefined),
       });
       if (!gate.allowed) {
-        await reportSignupOfferGateDenial(deps, record, gate);
+        await reportBudgetGateDenial(deps, record, gate);
         sendGateDenied(res, gate, logGate);
         return;
       }
@@ -1704,7 +1702,7 @@ function createBrokerRequestHandler(options: BrokerRequestHandlerOptions) {
         logGate,
         rail: context.rail,
         grant,
-        signupOfferBudget: grant.signupOfferBudget,
+        fundedBudget: grant.fundedBudget,
         usageStore: deps.usageStore,
         upstreamHeaderTimeoutMs,
         now,

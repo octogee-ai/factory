@@ -1,11 +1,14 @@
-import type { OwnedSignupOfferBudget } from "@octogee/shared/types/signup-offer";
-
 import {
   exhaustedSpendBudget,
   type ModelAccess,
   type SpendThrottleState,
 } from "@octogee/shared/types/model-broker-usage";
 
+import type {
+  FundedBudget,
+  FundedBudgetInterruptionHandler,
+  FundedBudgetLedger,
+} from "./model-broker-budget.js";
 import type { DegradeOutcome, GateDecisionAllowed, RailGateContext, SpendBudgets } from "./model-broker-gate.js";
 import type { OwnerModelBrokerGrant } from "./model-broker-limits.js";
 import type { ModelBrokerUsageStore } from "./model-broker-usage.js";
@@ -19,7 +22,7 @@ export interface OwnerRailProfile {
   windowBudgets: boolean;
   freeTier: boolean;
   houseFallback: boolean;
-  signupOfferBudget: OwnedSignupOfferBudget | null;
+  fundedBudget: FundedBudget | null;
 }
 
 export interface RailAllowanceInput {
@@ -28,17 +31,14 @@ export interface RailAllowanceInput {
   gatewayId: string;
   ownerUid: string;
   now: number;
-  onSignupOfferBudgetInterruption?: (input: {
-    uid: string;
-    reason: "waiting_for_unlock" | "hard_cap_exhausted";
-  }) => void | Promise<void>;
+  onBudgetInterruption?: FundedBudgetInterruptionHandler;
   onError?: (error: unknown) => void;
 }
 
 export interface RailAllowanceResult {
   debitsCreditBalance: boolean;
   countsTowardSpendWindow: boolean;
-  signupOfferBudget?: OwnedSignupOfferBudget;
+  fundedBudget?: FundedBudget;
 }
 
 export interface RailSpendObservation {
@@ -71,6 +71,7 @@ export interface ModelBrokerRailRegistry {
   readonly defaultRailId: string;
   rail(id: string): ModelBrokerRail;
   resolveOwnerProfile(ownerData: Record<string, unknown>, ownerUid: string, now: number): OwnerRailProfile | null;
+  budgetInspection(budget: FundedBudget | null, ledger: FundedBudgetLedger | null): Record<string, unknown>;
 }
 
 export class UnknownModelBrokerRailError extends Error {
@@ -84,6 +85,7 @@ export function createModelBrokerRailRegistry(input: {
   rails: readonly ModelBrokerRail[];
   defaultRailId: string;
   resolveOwnerProfile?: ModelBrokerRailRegistry["resolveOwnerProfile"];
+  budgetInspection?: ModelBrokerRailRegistry["budgetInspection"];
 }): ModelBrokerRailRegistry {
   const byId = new Map(input.rails.map((rail) => [rail.id, rail] as const));
   if (byId.size !== input.rails.length) throw new Error("model broker rail ids must be unique");
@@ -98,6 +100,7 @@ export function createModelBrokerRailRegistry(input: {
       return rail;
     },
     resolveOwnerProfile: input.resolveOwnerProfile ?? (() => null),
+    budgetInspection: input.budgetInspection ?? (() => ({})),
   };
 }
 

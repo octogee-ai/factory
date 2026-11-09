@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  installUserEntitlements,
+  staticUserEntitlements,
+  userEntitlements,
+} from "@octogee/shared/types/user-entitlements";
 import { buildCustomerSummary, type BrokerCustomerUsage } from "./admin-shape.js";
 import { builderAccountFromData } from "./builder-account.js";
 import { builderRecordFromData } from "./platform-state/firestore/builders.js";
@@ -175,5 +180,32 @@ describe("buildCustomerSummary", () => {
     expect(
       summarize("u", free, { windowCostUsd: 9_999, now: NOW }).percentUsed,
     ).toBe(100);
+  });
+});
+
+describe("buildCustomerSummary commercial fields", () => {
+  const productResolver = userEntitlements();
+  const paying = { email: "a@b.co", subscription: { tier: "personal", status: "active" } };
+
+  afterEach(() => {
+    installUserEntitlements(productResolver);
+  });
+
+  it("merges the product projection into the summary", () => {
+    const summary = summarize("u1", paying, { now: NOW, totalCostUsd: 5 });
+
+    expect(summary).toMatchObject({ uid: "u1", tier: "personal", subscriptionStatus: "active", revenueUsd: 20 });
+    expect(summary.marginUsd).toBeCloseTo(15, 5);
+  });
+
+  it("carries no commercial field on a bare platform", () => {
+    installUserEntitlements(staticUserEntitlements);
+
+    const summary = summarize("u1", paying);
+
+    expect(summary).toMatchObject({ uid: "u1", email: "a@b.co" });
+    for (const field of ["tier", "effectiveTier", "trialDaysRemaining", "subscriptionStatus", "revenueUsd", "marginUsd"]) {
+      expect(summary).not.toHaveProperty(field);
+    }
   });
 });

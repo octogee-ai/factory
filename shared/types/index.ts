@@ -158,19 +158,6 @@ export type {
   PlatformFreeConfig,
 } from './platform-config.js';
 export {
-  DEFAULT_SIGNUP_OFFER_BUDGET_POLICY,
-  MODEL_BROKER_SIGNUP_OFFER_BUDGETS_COLLECTION,
-  SIGNUP_OFFER_LEDGER_RETENTION_MS,
-  modelBrokerSignupOfferBudgetDocId,
-  parseModelBrokerSignupOfferBudget,
-  parseSignupOfferBudgetPolicy,
-} from './signup-offer.js';
-export type {
-  ModelBrokerSignupOfferBudget,
-  SignupOfferBudgetIdentity,
-  SignupOfferBudgetPolicy,
-} from './signup-offer.js';
-export {
   DEFAULT_PLATFORM_FREE_CONFIG,
   PLATFORM_FREE_CONFIG_DOC,
   parsePlatformFreeConfig,

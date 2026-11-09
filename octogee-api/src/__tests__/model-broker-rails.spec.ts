@@ -17,7 +17,7 @@ function grant(overrides: Partial<OwnerModelBrokerGrant> = {}): OwnerModelBroker
     limits: { spendWindowUsd: null, spendWeekUsd: null, requestsPerMinute: null },
     policy: { freeTier: false, houseFallback: true },
     rail: "operator",
-    signupOfferBudget: null,
+    fundedBudget: null,
     ...overrides,
   };
 }
@@ -29,8 +29,8 @@ const allowed = {
   windowCostUsd: null,
   weekCostUsd: null,
   creditBalanceUsd: null,
-  offerFunded: false,
-  offerChargeUsd: null,
+  budgetFunded: false,
+  budgetChargeUsd: null,
 };
 
 describe("model broker rail registry", () => {

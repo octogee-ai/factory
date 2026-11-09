@@ -134,6 +134,7 @@ import {
 } from "@octogee/core/gateway-live-release";
 import { createCachedOwnerModelBrokerGrantResolver } from "../lib/model-broker-limits.js";
 import { operatorRailRegistry, type ModelBrokerRailRegistry } from "../lib/model-broker-rails.js";
+import type { FundedBudgetInterruptionHandler } from "../lib/model-broker-budget.js";
 import { createFirestoreModelBrokerUsageStore } from "../lib/model-broker-usage.js";
 import { prepaidCreditMarkupMultiplierFromEnv, webMarkupMultiplierFromEnv } from "../lib/prepaid-credit-markup.js";
 import { createWebResearchService, type WebResearchExtractInput, type WebResearchSearchInput } from "../lib/web-research-service.js";
@@ -291,10 +292,7 @@ interface FleetBrokerRouteDeps {
   verifyOwnerWorkspaceTurn?: OwnerWorkspaceTurnVerifier;
   webResearch?: Pick<ReturnType<typeof createWebResearchService>, "search" | "extract">;
   modelBrokerRails?: ModelBrokerRailRegistry;
-  onSignupOfferBudgetInterruption?: (input: {
-    uid: string;
-    reason: "waiting_for_unlock" | "hard_cap_exhausted";
-  }) => void | Promise<void>;
+  onBudgetInterruption?: FundedBudgetInterruptionHandler;
   npmCacheCapabilities?: NpmCacheCapabilityStore;
   npmCacheRegistryUrl?: string;
   reportNpmCacheCapabilityFailure?: (input: {
@@ -415,7 +413,7 @@ function createDefaultWebResearch(
   db: Firestore,
   store: PlatformStateStore,
   rails: ModelBrokerRailRegistry,
-  onSignupOfferBudgetInterruption?: FleetBrokerRouteDeps["onSignupOfferBudgetInterruption"],
+  onBudgetInterruption?: FleetBrokerRouteDeps["onBudgetInterruption"],
 ) {
   const braveKey = process.env.BRAVE_API_KEY?.trim();
   const tavilyKey = process.env.TAVILY_API_KEY?.trim();
@@ -447,7 +445,7 @@ function createDefaultWebResearch(
     ),
     markupMultiplier: webMarkupMultiplierFromEnv(),
     onError: (error) => logger.error("web research usage recording failed", { error }),
-    onSignupOfferBudgetInterruption,
+    onBudgetInterruption,
   });
 }
 
@@ -1870,7 +1868,7 @@ function resolveFleetBrokerRouteDeps(
       opts.db,
       opts.store,
       opts.modelBrokerRails ?? operatorRailRegistry(),
-      opts.onSignupOfferBudgetInterruption,
+      opts.onBudgetInterruption,
     ),
     now: opts.now ?? Date.now,
     reconcileCoachProjectMembership: projectCoachMembershipReconciler(opts),

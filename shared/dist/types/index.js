@@ -7,7 +7,6 @@ export { AGENT_LOOK_STYLES, parseAgentLook } from './agent-look.js';
 export { BRAND_LOOK_COLOR, CHARACTER_NAMES, CHARACTER_STYLES, DEFAULT_AGENT_LOOK, LOOK_COLORS, OCTO_MASCOT, characterBackSvg, characterSvg, } from './agent-characters.js';
 export { WORKSPACE_VIBE_PRESETS, DEFAULT_VIBE_NOUN, WORKSPACE_CHANNEL_DISPLAY_NAMES, TYPING_PHRASES_BY_VIBE, DEFAULT_TYPING_PHRASES, isWorkspaceVibe, titleCaseVibe, computeWorkspaceDisplayName, computeProjectChannelDisplayName, } from './display-names.js';
 export { DEVELOPER_TOOLCHAIN_STATUS_FILE_RELATIVE_PATH, DEVELOPER_TOOLCHAIN_STATUS_SCHEMA_VERSION, DEVELOPER_TOOLCHAIN_STATUSES, isDeveloperToolchainStatus, parseDeveloperToolchainStatusArtifact, } from './developer-toolchain.js';
-export { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, MODEL_BROKER_SIGNUP_OFFER_BUDGETS_COLLECTION, SIGNUP_OFFER_LEDGER_RETENTION_MS, modelBrokerSignupOfferBudgetDocId, parseModelBrokerSignupOfferBudget, parseSignupOfferBudgetPolicy, } from './signup-offer.js';
 export { DEFAULT_PLATFORM_FREE_CONFIG, PLATFORM_FREE_CONFIG_DOC, parsePlatformFreeConfig, } from './platform-config.js';
 export { redactSecrets, redactStructuredSecrets } from './secret-redaction.js';
 export { summarizeToolArgs, summarizeToolOutput } from './tool-format.js';

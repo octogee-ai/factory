@@ -10,17 +10,6 @@ export function toISODate(val) {
         return val.toISOString();
     return null;
 }
-export function isActiveStatus(status) {
-    return status === "active" || status === "trialing";
-}
-function objectAt(src, key) {
-    const value = src[key];
-    return value && typeof value === "object" ? value : {};
-}
-function stringAt(src, key, fallback = "") {
-    const value = src[key];
-    return typeof value === "string" ? value : fallback;
-}
 function numberAt(src, key, fallback = 0) {
     const value = src[key];
     return typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -41,11 +30,8 @@ function builderSummaryFields(builder) {
     };
 }
 export function buildCustomerSummary(builder, account, broker = {}) {
-    const subscription = objectAt(account.planInputs, "subscription");
     const now = broker.now ?? Date.now();
     const plan = userEntitlements().plan(account.planInputs, new Date(now));
-    const monthlyPriceUsd = userEntitlements().monthlyPriceUsd(plan.planId);
-    const subscriptionStatus = stringAt(subscription, "status", "trial");
     const usage = account.usage;
     const windowCostUsd = broker.windowCostUsd ?? 0;
     const weekCostUsd = broker.weekCostUsd ?? 0;
@@ -59,18 +45,15 @@ export function buildCustomerSummary(builder, account, broker = {}) {
         weekCostUsd,
         onOwnerCredential,
     }).degraded;
-    const revenueUsd = isActiveStatus(subscriptionStatus)
-        ? monthlyPriceUsd
-        : 0;
     return {
+        ...userEntitlements().productProjection?.adminCustomerSummary(account.planInputs, {
+            costUsd,
+            now: new Date(now),
+        }),
         uid: builder.uid,
         displayName: displayNameFor(account),
         email: account.email ?? "",
         username: account.username ?? "",
-        tier: plan.planId,
-        effectiveTier: plan.activePlanId,
-        trialDaysRemaining: plan.introductoryDaysRemaining,
-        subscriptionStatus,
         byotActive: account.byotActive,
         windowCostUsd,
         windowBudgetUsd: plan.spendWindowUsd,
@@ -86,8 +69,6 @@ export function buildCustomerSummary(builder, account, broker = {}) {
         lastActive: toISODate(usage.lastUpdated),
         mattermostUsername: account.mattermostUsername,
         percentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(windowCostUsd, plan.spendWindowUsd),
-        revenueUsd,
-        marginUsd: revenueUsd - costUsd,
         ...builderSummaryFields(builder),
     };
 }

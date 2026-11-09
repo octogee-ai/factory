@@ -3,24 +3,36 @@ import {
   type ModelAccess,
   type SpendThrottleState,
 } from "./model-broker-usage.js";
-import type { OwnedSignupOfferBudget } from "./signup-offer.js";
 
 export type UserEntitlementInputs = object;
 export type MaxProjects = number | "unlimited";
 export type ProjectAccessMode = "active" | "archive_read";
-export type ContextTemplate = "trial" | "free" | "paid";
 
 export interface UserPlan {
-  planId: string;
-  activePlanId: string;
-  dedicatedPlanId: string | null;
   modelAccess: ModelAccess;
   spendWeekUsd: number;
   spendWindowUsd: number;
-  introductoryDaysRemaining: number | null;
   toolAccess: boolean;
   houseFallback: boolean;
-  contextTemplate: ContextTemplate;
+}
+
+export interface ContextFilePolicy {
+  templateKey: string;
+  removedFiles: readonly string[];
+}
+
+export type ProductFields = Readonly<Record<string, unknown>>;
+
+export interface UserProductProjection {
+  agentUsageStatus(user: UserEntitlementInputs, now: Date): ProductFields;
+  agentSupportBuilder(user: UserEntitlementInputs): ProductFields;
+  agentModels(user: UserEntitlementInputs): ProductFields;
+  adminCustomerSummary(
+    user: UserEntitlementInputs,
+    usage: { costUsd: number; now: Date },
+  ): ProductFields;
+  adminCustomerDetail(user: UserEntitlementInputs): ProductFields;
+  adminCustomerStats(summaries: readonly ProductFields[]): ProductFields;
 }
 
 export interface UserSpendObservation {
@@ -36,30 +48,23 @@ export interface UserEntitlementResolver {
   projectMode(user: UserEntitlementInputs, now?: Date): ProjectAccessMode;
   maxProjects(user: UserEntitlementInputs, now?: Date): MaxProjects;
   spendThrottle(plan: UserPlan, observation: UserSpendObservation): SpendThrottleState;
-  monthlyPriceUsd(planId: string): number;
   pickInputs(source: Record<string, unknown>): Record<string, unknown>;
-  ownedPromotionBudget(
-    user: UserEntitlementInputs,
-    ownerUid: string,
-    now?: Date,
-  ): OwnedSignupOfferBudget | null;
+  contextFilePolicy(user: UserEntitlementInputs, now?: Date): ContextFilePolicy;
+  seedContextTemplateKey(provisionedTier: string): string;
+  readonly productProjection?: UserProductProjection;
 }
 
 const UNMETERED_BUDGET_USD = Number.MAX_SAFE_INTEGER;
 const STATIC_SIZING_KEY = "default";
+const STATIC_CONTEXT_TEMPLATE_KEY = "default";
 
 export const staticUserEntitlements: UserEntitlementResolver = {
   plan: () => ({
-    planId: "operator",
-    activePlanId: "operator",
-    dedicatedPlanId: STATIC_SIZING_KEY,
     modelAccess: "catalog",
     spendWeekUsd: UNMETERED_BUDGET_USD,
     spendWindowUsd: UNMETERED_BUDGET_USD,
-    introductoryDaysRemaining: null,
     toolAccess: true,
     houseFallback: false,
-    contextTemplate: "paid",
   }),
   sizingKey: () => STATIC_SIZING_KEY,
   projectMode: () => "active",
@@ -80,9 +85,9 @@ export const staticUserEntitlements: UserEntitlementResolver = {
       reason: `${exhausted}_exhausted`,
     };
   },
-  monthlyPriceUsd: () => 0,
   pickInputs: () => ({}),
-  ownedPromotionBudget: () => null,
+  contextFilePolicy: () => ({ templateKey: STATIC_CONTEXT_TEMPLATE_KEY, removedFiles: [] }),
+  seedContextTemplateKey: () => STATIC_CONTEXT_TEMPLATE_KEY,
 };
 
 const RESOLVER_SLOT = Symbol.for("octogee.userEntitlements");

@@ -1,4 +1,4 @@
-import { userEntitlements } from "@octogee/shared/types/user-entitlements";
+import { userEntitlements, type ProductFields } from "@octogee/shared/types/user-entitlements";
 import {
   MODEL_BROKER_USAGE_WINDOW_MS,
   MODEL_BROKER_WEEK_WINDOW_MS,
@@ -18,21 +18,7 @@ export function toISODate(val: unknown): string | null {
   return null;
 }
 
-export function isActiveStatus(status: string): boolean {
-  return status === "active" || status === "trialing";
-}
-
 type CustomerDoc = Readonly<Record<string, unknown>>;
-
-function objectAt(src: CustomerDoc, key: string): CustomerDoc {
-  const value = src[key];
-  return value && typeof value === "object" ? value as CustomerDoc : {};
-}
-
-function stringAt(src: CustomerDoc, key: string, fallback = ""): string {
-  const value = src[key];
-  return typeof value === "string" ? value : fallback;
-}
 
 function numberAt(src: CustomerDoc, key: string, fallback = 0): number {
   const value = src[key];
@@ -59,15 +45,11 @@ export interface BrokerCustomerUsage {
   now?: number;
 }
 
-export interface CustomerSummary {
+export interface PlatformCustomerSummary {
   uid:                 string;
   displayName:         string;
   email:               string;
   username:            string;
-  tier:                string;
-  effectiveTier:       string;
-  trialDaysRemaining:  number | null;
-  subscriptionStatus:  string;
   byotActive:          boolean;
   windowCostUsd:       number;
   windowBudgetUsd:     number;
@@ -86,12 +68,12 @@ export interface CustomerSummary {
   agentCount:          number;
   createdAt:           string | null;
   percentUsed:         number;
-  revenueUsd:          number;
-  marginUsd:           number;
 
   provisioningStatus:  string | null;
   accountLifecycleStatus: string;
 }
+
+export type CustomerSummary = PlatformCustomerSummary & ProductFields;
 
 function builderSummaryFields(builder: BuilderRecord) {
   return {
@@ -108,11 +90,8 @@ export function buildCustomerSummary(
   account: BuilderAccount,
   broker: BrokerCustomerUsage = {},
 ): CustomerSummary {
-  const subscription = objectAt(account.planInputs as CustomerDoc, "subscription");
   const now = broker.now ?? Date.now();
   const plan = userEntitlements().plan(account.planInputs, new Date(now));
-  const monthlyPriceUsd = userEntitlements().monthlyPriceUsd(plan.planId);
-  const subscriptionStatus = stringAt(subscription, "status", "trial");
   const usage = account.usage;
   const windowCostUsd = broker.windowCostUsd ?? 0;
   const weekCostUsd = broker.weekCostUsd ?? 0;
@@ -126,19 +105,16 @@ export function buildCustomerSummary(
     weekCostUsd,
     onOwnerCredential,
   }).degraded;
-  const revenueUsd: number = isActiveStatus(subscriptionStatus)
-    ? monthlyPriceUsd
-    : 0;
 
   return {
+    ...userEntitlements().productProjection?.adminCustomerSummary(account.planInputs, {
+      costUsd,
+      now: new Date(now),
+    }),
     uid: builder.uid,
     displayName: displayNameFor(account),
     email: account.email ?? "",
     username: account.username ?? "",
-    tier: plan.planId,
-    effectiveTier: plan.activePlanId,
-    trialDaysRemaining: plan.introductoryDaysRemaining,
-    subscriptionStatus,
     byotActive: account.byotActive,
     windowCostUsd,
     windowBudgetUsd: plan.spendWindowUsd,
@@ -154,8 +130,6 @@ export function buildCustomerSummary(
     lastActive: toISODate(usage.lastUpdated),
     mattermostUsername: account.mattermostUsername,
     percentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(windowCostUsd, plan.spendWindowUsd),
-    revenueUsd,
-    marginUsd: revenueUsd - costUsd,
     ...builderSummaryFields(builder),
   };
 }

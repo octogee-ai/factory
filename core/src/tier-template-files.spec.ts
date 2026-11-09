@@ -3,7 +3,13 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-import { listTierTemplateFiles, templateTierForName, writeTierTemplateFiles } from "./tier-template-files.js";
+import {
+  installUserEntitlements,
+  staticUserEntitlements,
+  userEntitlements,
+} from "@octogee/shared/types/user-entitlements";
+
+import { CUSTOMER_OWNED_CONTEXT_FILES, listTierTemplateFiles, writeTierTemplateFiles } from "./tier-template-files.js";
 
 let tmpRoot: string;
 let prevTemplatesDir: string | undefined;
@@ -34,20 +40,9 @@ function customerDir(name = "alice"): string {
   return dir;
 }
 
-describe("templateTierForName", () => {
-  it("maps the free tier names onto the free templates", () => {
-    expect(templateTierForName("free")).toBe("free");
-    expect(templateTierForName("personal_free")).toBe("free");
-  });
-
-  it("maps trial onto the trial templates", () => {
-    expect(templateTierForName("trial")).toBe("trial");
-  });
-
-  it("maps every paid tier in both namespaces onto the paid templates", () => {
-    for (const tier of ["personal", "personal_pro", "personal_pro_max", "hobby", "pro", "team", "enterprise", "builder", "operator"]) {
-      expect(templateTierForName(tier)).toBe("paid");
-    }
+describe("CUSTOMER_OWNED_CONTEXT_FILES", () => {
+  it("names the files that belong to the customer once seeded", () => {
+    expect([...CUSTOMER_OWNED_CONTEXT_FILES].sort()).toEqual(["MEMORY.md", "SOUL.md", "USER.md"]);
   });
 });
 
@@ -71,7 +66,7 @@ describe("listTierTemplateFiles", () => {
 
 describe("writeTierTemplateFiles", () => {
   it("writes missing tier files without clobbering customer edits", () => {
-    seedTier("paid", {
+    seedTier("default", {
       "AGENTS.md": "Hello {{slug}}\n",
       "SOUL.md": "Template soul\n",
     });
@@ -85,8 +80,27 @@ describe("writeTierTemplateFiles", () => {
     expect(fs.readFileSync(path.join(dir, "SOUL.md"), "utf-8")).toBe("Customer soul\n");
   });
 
+  it("seeds from the template the installed resolver names for the provisioned tier", () => {
+    const productResolver = userEntitlements();
+    seedTier("default", { "AGENTS.md": "Default\n" });
+    seedTier("free", { "AGENTS.md": "Free\n" });
+    const product = customerDir("product");
+    const bare = customerDir("bare");
+
+    writeTierTemplateFiles(product, "personal_free", {});
+    installUserEntitlements(staticUserEntitlements);
+    try {
+      writeTierTemplateFiles(bare, "personal_free", {});
+    } finally {
+      installUserEntitlements(productResolver);
+    }
+
+    expect(fs.readFileSync(path.join(product, "AGENTS.md"), "utf-8")).toBe("Free\n");
+    expect(fs.readFileSync(path.join(bare, "AGENTS.md"), "utf-8")).toBe("Default\n");
+  });
+
   it("seeds NO memory note and NO memory directory — openclaw does memory, not Octogee", () => {
-    seedTier("paid", { "AGENTS.md": "# Agents\n" });
+    seedTier("default", { "AGENTS.md": "# Agents\n" });
     const dir = customerDir("memoryless");
 
     const written = writeTierTemplateFiles(dir, "hobby", {});
@@ -96,7 +110,7 @@ describe("writeTierTemplateFiles", () => {
   });
 
   it("removes retired context-file ignores while preserving unrelated ignore rules", () => {
-    seedTier("paid", {
+    seedTier("default", {
       "AGENTS.md": "# Agents\n",
       "TOOLS.md": "# Tools\n",
     });
@@ -129,7 +143,7 @@ describe("writeTierTemplateFiles", () => {
   });
 
   it("is a no-op when tier files and ignores are already current", () => {
-    seedTier("paid", {
+    seedTier("default", {
       "AGENTS.md": "# Agents\n",
     });
     const dir = customerDir("current");

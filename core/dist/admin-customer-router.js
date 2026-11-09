@@ -472,22 +472,21 @@ export function addAdminCustomerRoutes(router, deps) {
         try {
             let totalCustomers = 0;
             let incompleteProvisioning = 0;
-            let mrrUsd = 0;
             let totalCostUsd = 0;
             let needsAttention = 0;
-            for (const summary of await sortedCustomers(directory, "createdAt")) {
+            const summaries = await sortedCustomers(directory, "createdAt");
+            for (const summary of summaries) {
                 totalCustomers++;
                 if (summary.provisioningStatus !== "complete")
                     incompleteProvisioning++;
-                mrrUsd += summary.revenueUsd;
                 totalCostUsd += summary.costUsd;
                 if (summary.degraded || summary.percentUsed > 80)
                     needsAttention++;
             }
             res.json({
+                ...userEntitlements().productProjection?.adminCustomerStats(summaries),
                 totalCustomers,
                 incompleteProvisioning,
-                mrrUsd: Math.round(mrrUsd * 100) / 100,
                 totalCostUsd: Math.round(totalCostUsd * 100) / 100,
                 needsAttention,
                 generatedAt: new Date().toISOString(),
@@ -523,10 +522,7 @@ export function addAdminCustomerRoutes(router, deps) {
                 .orderBy("date", "desc").get();
             const wsSnap = await userRef.collection("workspaces").get();
             const onboardingSnap = await userRef.collection("onboarding").get();
-            const subscription = objectValue(account.planInputs.subscription) ?? {};
             const usage = account.usage;
-            const tier = String(subscription.tier || "trial");
-            const monthlyPriceUsd = userEntitlements().monthlyPriceUsd(tier);
             const now = Date.now();
             const [brokerUsage, brokerDaily, brokerRollupSnap] = await Promise.all([
                 readBrokerCustomerUsage(db, [uid], now),
@@ -570,19 +566,9 @@ export function addAdminCustomerRoutes(router, deps) {
                 modelCosts[model] = existing;
             }
             res.json({
+                ...userEntitlements().productProjection?.adminCustomerDetail(account.planInputs),
                 summary,
                 accountLifecycle: builder.accountLifecycle ?? { status: "active" },
-                subscription: {
-                    status: subscription.status || "none",
-                    stripeCustomerId: subscription.stripeCustomerId || null,
-                    currentPeriodEnd: toISODate(subscription.currentPeriodEnd),
-                    trialStartedAt: toISODate(subscription.trialStartedAt),
-                    trialEndsAt: toISODate(subscription.trialEndsAt),
-                    canceledAt: toISODate(subscription.canceledAt),
-                },
-                tierConfig: {
-                    monthlyPrice: monthlyPriceUsd,
-                },
                 usage: {
                     totalTokensUsed: usage.totalTokensUsed || 0,
                     brokerTotalTokens: summary.brokerTotalTokens,
@@ -620,7 +606,6 @@ export function addAdminCustomerRoutes(router, deps) {
                     complete: account.onboardingComplete,
                     milestones: Object.fromEntries(onboardingSnap.docs.map((doc) => [doc.id, doc.data()])),
                 },
-                selectedTier: account.planInputs.selectedTier || tier,
                 workspaces: wsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
                 // Daily history: token/interaction telemetry from the legacy tailer
                 // (covers byosub traffic), USD strictly from the broker ledger.

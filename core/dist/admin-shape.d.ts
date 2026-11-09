@@ -1,7 +1,7 @@
+import { type ProductFields } from "@octogee/shared/types/user-entitlements";
 import type { BuilderAccount } from "./builder-account.js";
 import type { BuilderRecord } from "./platform-state/builders.js";
 export declare function toISODate(val: unknown): string | null;
-export declare function isActiveStatus(status: string): boolean;
 export declare function isoMillis(value: number | null): string | null;
 export interface BrokerCustomerUsage {
     windowCostUsd?: number;
@@ -10,15 +10,11 @@ export interface BrokerCustomerUsage {
     totalTokens?: number;
     now?: number;
 }
-export interface CustomerSummary {
+export interface PlatformCustomerSummary {
     uid: string;
     displayName: string;
     email: string;
     username: string;
-    tier: string;
-    effectiveTier: string;
-    trialDaysRemaining: number | null;
-    subscriptionStatus: string;
     byotActive: boolean;
     windowCostUsd: number;
     windowBudgetUsd: number;
@@ -37,9 +33,8 @@ export interface CustomerSummary {
     agentCount: number;
     createdAt: string | null;
     percentUsed: number;
-    revenueUsd: number;
-    marginUsd: number;
     provisioningStatus: string | null;
     accountLifecycleStatus: string;
 }
+export type CustomerSummary = PlatformCustomerSummary & ProductFields;
 export declare function buildCustomerSummary(builder: BuilderRecord, account: BuilderAccount, broker?: BrokerCustomerUsage): CustomerSummary;

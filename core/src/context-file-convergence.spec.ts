@@ -4,6 +4,13 @@ import * as os from "os";
 import * as path from "path";
 
 import {
+  installUserEntitlements,
+  staticUserEntitlements,
+  userEntitlements,
+  type ContextFilePolicy,
+} from "@octogee/shared/types/user-entitlements";
+
+import {
   reassertConvergedContextFiles,
   reassertConvergedContextFilesForSlug,
   reassertUserTimeZoneLine,
@@ -18,7 +25,7 @@ beforeEach(() => {
   prevTemplatesDir = process.env.OCTOGEE_TEMPLATES_DIR;
   process.env.OCTOGEE_TEMPLATES_DIR = tmpRoot;
 
-  for (const [tier, label] of [["free", "Free"], ["trial", "Trial"], ["paid", "Paid"]]) {
+  for (const [tier, label] of [["free", "Free"], ["trial", "Trial"], ["default", "Default"]]) {
     const tierDir = path.join(tmpRoot, "tiers", tier);
     fs.mkdirSync(tierDir, { recursive: true });
     fs.writeFileSync(path.join(tierDir, "AGENTS.md"), `# ${label} AGENTS for {{slug}}\n`, "utf-8");
@@ -132,8 +139,8 @@ describe("reassertConvergedContextFiles", () => {
     const changed = reassertConvergedContextFiles("alice", dir, { tier: "pro" }, { slug: "alice" });
 
     expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
-    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Paid AGENTS for alice\n");
-    expect(fs.readFileSync(path.join(dir, "TOOLS.md"), "utf-8")).toBe("# Paid TOOLS\n");
+    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Default AGENTS for alice\n");
+    expect(fs.readFileSync(path.join(dir, "TOOLS.md"), "utf-8")).toBe("# Default TOOLS\n");
   });
 
   it("converges a live Signup Offer onto the trial template, not the free one", () => {
@@ -157,7 +164,7 @@ describe("reassertConvergedContextFiles", () => {
     const changed = reassertConvergedContextFiles("alice", dir, { tier: "pro" }, { slug: "alice" });
 
     expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
-    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Paid AGENTS for alice\n");
+    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Default AGENTS for alice\n");
   });
 
   it("prefers a live Signup Offer over house-only model access when picking the template", () => {
@@ -258,7 +265,105 @@ describe("reassertConvergedContextFiles", () => {
     const changed = reassertConvergedContextFiles("alice", dir, snapshot, { slug: "alice" });
 
     expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
-    expect(fs.readFileSync(path.join(dir, "TOOLS.md"), "utf-8")).toBe("# Paid TOOLS\n");
+    expect(fs.readFileSync(path.join(dir, "TOOLS.md"), "utf-8")).toBe("# Default TOOLS\n");
+  });
+});
+
+describe("reassertConvergedContextFiles under a product-supplied policy", () => {
+  const productResolver = userEntitlements();
+
+  function installPolicy(policy: ContextFilePolicy): void {
+    installUserEntitlements({ ...productResolver, contextFilePolicy: () => policy });
+  }
+
+  function seedCustomTemplate(key: string): void {
+    const dir = path.join(tmpRoot, "tiers", key);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "AGENTS.md"), `# ${key} AGENTS\n`, "utf-8");
+    fs.writeFileSync(path.join(dir, "TOOLS.md"), `# ${key} TOOLS\n`, "utf-8");
+  }
+
+  afterEach(() => {
+    installUserEntitlements(productResolver);
+  });
+
+  it("converges onto whatever template key the policy names", () => {
+    seedCustomTemplate("studio-eu");
+    installPolicy({ templateKey: "studio-eu", removedFiles: [] });
+    const dir = customerDir();
+
+    const changed = reassertConvergedContextFiles("alice", dir, {});
+
+    expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# studio-eu AGENTS\n");
+  });
+
+  it("removes exactly the files the policy lists and reports them as changed", () => {
+    seedCustomTemplate("studio-eu");
+    installPolicy({ templateKey: "studio-eu", removedFiles: ["HEARTBEAT.md"] });
+    const dir = customerDir();
+    fs.writeFileSync(path.join(dir, "HEARTBEAT.md"), "retired\n", "utf-8");
+    fs.writeFileSync(path.join(dir, "BOOTSTRAP.md"), "kept\n", "utf-8");
+
+    const changed = reassertConvergedContextFiles("alice", dir, {});
+
+    expect(changed).toContain("HEARTBEAT.md");
+    expect(fs.existsSync(path.join(dir, "HEARTBEAT.md"))).toBe(false);
+    expect(fs.readFileSync(path.join(dir, "BOOTSTRAP.md"), "utf-8")).toBe("kept\n");
+  });
+
+  it("removes nothing when the policy lists nothing", () => {
+    seedCustomTemplate("studio-eu");
+    installPolicy({ templateKey: "studio-eu", removedFiles: [] });
+    const dir = customerDir();
+    fs.writeFileSync(path.join(dir, "BOOTSTRAP.md"), "kept\n", "utf-8");
+
+    expect(reassertConvergedContextFiles("alice", dir, {})).not.toContain("BOOTSTRAP.md");
+    expect(fs.existsSync(path.join(dir, "BOOTSTRAP.md"))).toBe(true);
+  });
+
+  it.each(["USER.md", "SOUL.md", "MEMORY.md"])("refuses a policy that would remove the customer-owned %s and leaves it intact", (file) => {
+    seedCustomTemplate("studio-eu");
+    installPolicy({ templateKey: "studio-eu", removedFiles: [file] });
+    const dir = customerDir();
+    fs.writeFileSync(path.join(dir, file), "customer content\n", "utf-8");
+
+    expect(() => reassertConvergedContextFiles("alice", dir, {})).toThrow(/customer-owned/);
+    expect(fs.readFileSync(path.join(dir, file), "utf-8")).toBe("customer content\n");
+  });
+
+  it("preserves USER.md through convergence and removal", () => {
+    seedCustomTemplate("studio-eu");
+    installPolicy({ templateKey: "studio-eu", removedFiles: ["BOOTSTRAP.md"] });
+    const dir = customerDir();
+    fs.writeFileSync(path.join(dir, "USER.md"), "- **Name:** Alice\nCoach notes stay.\n", "utf-8");
+    fs.writeFileSync(path.join(dir, "BOOTSTRAP.md"), "retired\n", "utf-8");
+
+    const changed = reassertConvergedContextFiles("alice", dir, {});
+
+    expect(changed).toContain("BOOTSTRAP.md");
+    expect(changed).not.toContain("USER.md");
+    expect(fs.readFileSync(path.join(dir, "USER.md"), "utf-8")).toBe("- **Name:** Alice\nCoach notes stay.\n");
+  });
+
+  it("converges a bare platform onto the default template and removes nothing", () => {
+    installUserEntitlements(staticUserEntitlements);
+    const dir = customerDir();
+    fs.writeFileSync(path.join(dir, "BOOTSTRAP.md"), "kept\n", "utf-8");
+    fs.writeFileSync(path.join(dir, "USER.md"), "customer content\n", "utf-8");
+
+    const changed = reassertConvergedContextFiles("alice", dir, { tier: "personal_free" }, { slug: "alice" });
+
+    expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Default AGENTS for alice\n");
+    expect(fs.existsSync(path.join(dir, "BOOTSTRAP.md"))).toBe(true);
+    expect(fs.readFileSync(path.join(dir, "USER.md"), "utf-8")).toBe("customer content\n");
+  });
+
+  it("fails loud when the policy names a template that does not exist", () => {
+    installPolicy({ templateKey: "absent", removedFiles: [] });
+
+    expect(() => reassertConvergedContextFiles("alice", customerDir(), {})).toThrow(/tiers\/absent/);
   });
 });
 

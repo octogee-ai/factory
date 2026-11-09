@@ -1,5 +1,4 @@
 import type { BuilderAccountReader } from "@octogee/core/builder-account";
-import type { OwnedSignupOfferBudget } from "@octogee/shared/types/signup-offer";
 import {
   readGatewayAuthorizationInStore,
   type GatewayAuthorization,
@@ -11,13 +10,14 @@ import {
   type ModelBrokerTokenLimits,
   type ModelBrokerTokenPolicy,
 } from "./model-broker-tokens.js";
+import type { FundedBudget } from "./model-broker-budget.js";
 import type { ModelBrokerRailRegistry, OwnerRailProfile } from "./model-broker-rails.js";
 
 export interface OwnerModelBrokerGrant {
   limits: ModelBrokerTokenLimits;
   policy: ModelBrokerTokenPolicy;
   rail: string;
-  signupOfferBudget?: OwnedSignupOfferBudget | null;
+  fundedBudget?: FundedBudget | null;
 }
 
 export interface ModelBrokerGrantReaders {
@@ -103,7 +103,7 @@ export async function resolveOwnerModelBrokerGrant(input: ModelBrokerGrantReader
     freeTier: tier?.freeTier === true,
     houseFallback: tier?.houseFallback !== false,
   });
-  return { limits, policy, rail, signupOfferBudget: tier?.signupOfferBudget ?? null };
+  return { limits, policy, rail, fundedBudget: tier?.fundedBudget ?? null };
 }
 
 export interface LiveOwnerGrantInput {
@@ -125,10 +125,10 @@ function cachedGrantIsFresh(
   ttlMs: number,
 ): boolean {
   if (now - entry.resolvedAt >= ttlMs) return false;
-  const budget = entry.grant.signupOfferBudget;
+  const budget = entry.grant.fundedBudget;
   if (!budget) return true;
-  if (now >= budget.endsAtMs) return false;
-  return budget.nextUnlockAtMs === null || now < budget.nextUnlockAtMs;
+  if (now >= budget.expiresAtMs) return false;
+  return budget.nextCapIncreaseAtMs === null || now < budget.nextCapIncreaseAtMs;
 }
 
 function mutableLimitFingerprint(authorization: GatewayAuthorization): string {
@@ -203,9 +203,7 @@ export function createCachedOwnerModelBrokerGrantResolver(opts: ModelBrokerGrant
       requestsPerMinute: grant.limits.requestsPerMinute,
       freeTier: grant.policy.freeTier,
       rail: grant.rail,
-      offerId: grant.signupOfferBudget?.offerId,
-      offerVersion: grant.signupOfferBudget?.offerVersion,
-      offerDayIndex: grant.signupOfferBudget?.offerDayIndex,
+      ...grant.fundedBudget?.logFields,
     });
     return grant;
   };
