@@ -2,6 +2,7 @@
 
 import type { ManagedChannelHost } from "@octogee/core/channel-host";
 import type { ManagedGitHost } from "@octogee/core/git-host";
+import { PROJECT_COACH_REPO } from "@octogee/shared/types/project";
 
 export interface NukeCloudCtx {
   uid: string;
@@ -91,7 +92,7 @@ if (!ctx.slug) {
 } else {
   results.push(
     await runStep("gitea", log, async () => {
-      await deps.git.eraseOwner(ctx.slug, ctx.repoNames);
+      await deps.git.eraseOwner(ctx.slug, [...ctx.repoNames, PROJECT_COACH_REPO]);
     }),
   );
 }

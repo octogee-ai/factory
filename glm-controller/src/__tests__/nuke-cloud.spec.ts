@@ -105,7 +105,7 @@ describe("nukeUserCloudSide — happy path", () => {
   it("Gitea step erases every repo, the owner, and the user", async () => {
     const deps = mkDeps();
     await nukeUserCloudSide(mkCtx(), deps);
-    expect(deps.git.eraseOwner).toHaveBeenCalledWith("alice", ["workspace", "blog"]);
+    expect(deps.git.eraseOwner).toHaveBeenCalledWith("alice", ["workspace", "blog", "project_coaches"]);
   });
 
   it("direct and group memberships do not block permanent Mattermost user and team erasure", async () => {
