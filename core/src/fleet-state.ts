@@ -1306,22 +1306,98 @@ function assertSharedRecoverySource(
 ): void {
   const invalid = [
     root.gatewayClass !== "shared",
-    root.desiredStatus !== "running",
+    !["running", "draining"].includes(root.desiredStatus),
     !params.sharedGatewayIds.includes(params.fromGatewayId),
   ].some(Boolean);
   if (invalid) throw new Error("shared gateway recovery source is not an active pool member");
 }
 
+function assertMissingDrainingSource(input: {
+  sourceRootData: Data | undefined;
+  sourceRuntime: Stored<FleetRegistryRecord> | null;
+  sourceAssignment: Assignment | null;
+  now: number;
+  maxAgeMs: number;
+}): void {
+  const { sourceRootData: root, sourceRuntime, sourceAssignment, now, maxAgeMs } = input;
+  const runtime = runtimeDocument(sourceRuntime);
+  if (!root || !isGatewayRuntimeDoc(runtime) || runtime.kubernetes === undefined) {
+    throw new Error("draining Shared source is not confirmed missing");
+  }
+  const observed = runtime.kubernetes;
+  const heartbeat = millisFromUnknown(runtime.heartbeat.lastHeartbeatAt);
+  const safe = [
+    root.retirementClaim == null, root.runtimeRestartFence == null,
+    root.liveRelease === root.desiredRelease, runtime.release === root.liveRelease,
+    sourceAssignment?.sharedSurgeForwardRecovery === undefined,
+    observed.status === "missing", observed.totalPods === 0, observed.readyPods === 0,
+    now >= observed.observedAt && now - observed.observedAt <= maxAgeMs,
+    heartbeat !== null && now - heartbeat > maxAgeMs,
+  ].every(Boolean);
+  if (!safe) throw new Error("draining Shared source is not confirmed missing");
+}
+
 function assertRecoverySource(input: {
   params: UnavailableGatewayRecoveryParams;
   sourceRootData: Data | undefined;
+  sourceRuntime: Stored<FleetRegistryRecord> | null;
   builder: Builder | null;
   sourceAssignment: Assignment | null;
+  now: number;
 }): void {
   const { params, sourceRootData, builder, sourceAssignment } = input;
   const root = projectGatewayDesiredRootForGateway(sourceRootData, params.fromGatewayId);
   assertRecoverySourceIdentity(root, builder, sourceAssignment, params);
   assertSharedRecoverySource(root, params);
+  if (root.desiredStatus === "draining") assertMissingDrainingSource({ ...input, maxAgeMs: params.targetHeartbeatMaxAgeMs });
+}
+
+async function assertDrainingMigrationUnclaimed(
+  tx: PlatformStateTransaction,
+  operation: OperationRecord,
+  params: UnavailableGatewayRecoveryParams,
+): Promise<void> {
+  const handoff = recordOrEmpty(operation.schedulerHandoff);
+  const safe = [
+    operation.status === "pending", operation.startedAt == null, operation.completedAt == null,
+    operation.input.uid === params.uid, operation.input.fromGatewayId === params.fromGatewayId,
+    operation.steps.length === 0, operation.sourceTransferExecution === undefined,
+    operation.cutoverCommittedAt === undefined, operation.customerMigrationV2 === undefined,
+    operation.restoreAttempt === undefined, operation.schedulerHandoffLost === undefined,
+    handoff.stageAfterCutover === undefined, handoff.stagedAt === undefined, handoff.forwardRecovery === undefined,
+    handoff.sourceRecovery === undefined,
+  ].every(Boolean);
+  if (!safe) throw new Error("missing draining Shared source has unresolved migration custody");
+  if (operation.schedulerHandoff === undefined || operation.schedulerHandoffReleased === true) return;
+  const history = operation.attemptHistory ?? [];
+  const beforeTransfer = history.length > 0 && history.every((attempt) => attempt.steps.length === 1 &&
+    attempt.steps[0].name === "keys-sync-state" && attempt.steps[0].status === "failed" &&
+    attempt.error === `expected exactly one ready pod for transport=${params.fromGatewayId}; found 0`);
+  const exactHandoff = handoff.uid === params.uid && handoff.slug === params.slug &&
+    handoff.fromGatewayId === params.fromGatewayId && handoff.toGatewayId === operation.input.toGatewayId &&
+    readSchedulerMigrationIdentity(operation.id, handoff.migrationId) !== null;
+  if (handoff.scheduleTransfer !== true || typeof handoff.migrationId !== "string" || !exactHandoff || !beforeTransfer ||
+    await tx.builders.scheduleTransfers.get(params.uid, handoff.migrationId) !== null) {
+    throw new Error("missing draining Shared source has unresolved scheduler custody");
+  }
+}
+
+async function supersedeDrainingMigrations(
+  tx: PlatformStateTransaction,
+  params: UnavailableGatewayRecoveryParams,
+  now: number,
+): Promise<void> {
+  const active = await tx.journal.operations.listForUid(params.uid, {
+    kind: MIGRATE_CUSTOMER_OPERATION_KIND, statuses: ["pending", "running"],
+  });
+  for (const operation of active) await assertDrainingMigrationUnclaimed(tx, operation, params);
+  for (const operation of active) {
+    await tx.journal.operations.patch(operation.id, {
+      status: "failed", completedAt: now, rolledBack: false, nextAttemptAt: CLEAR, waitingOn: CLEAR,
+      supersededBy: { kind: "missing-shared-source-recovery", operationId: params.operationId },
+      error: "superseded by confirmed missing Shared source recovery",
+    }, { status: ["pending"] });
+  }
 }
 
 async function clearRecoveredSourceMount(
@@ -1408,9 +1484,12 @@ export async function commitUnavailableGatewayRecoveryAtomic(
     assertRecoverySource({
       params,
       sourceRootData: withoutRevision(sourceRoot),
+      sourceRuntime,
       builder,
       sourceAssignment,
+      now,
     });
+    if (sourceRoot?.desiredStatus === "draining") await supersedeDrainingMigrations(tx, params, now);
     const controlState = resolveUserGatewayControlState(targetRootData, params.uid);
     await clearRecoveredSourceMount(tx, sourceRuntime, params.fromGatewayId, params.slug);
     await tx.builders.records.setGatewayMirror(params.uid, {
