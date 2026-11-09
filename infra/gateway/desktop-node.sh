@@ -83,8 +83,12 @@ until dbus-send --session --print-reply --reply-timeout=5000 --dest=org.a11y.Bus
   sleep 2
 done
 
+gateway_checks=0
 until curl -fsS --max-time 2 http://127.0.0.1:18789/healthz >/dev/null 2>&1; do
-  echo "desktop-node: waiting for the gateway on 127.0.0.1:18789"
+  if [ $((gateway_checks % 30)) -eq 0 ]; then
+    echo "desktop-node: waiting for the gateway on 127.0.0.1:18789 (${gateway_checks} checks so far)"
+  fi
+  gateway_checks=$((gateway_checks + 1))
   sleep 2
 done
 

@@ -1,3 +1,4 @@
+import { createRepeatSquelch } from "@octogee/shared/server/repeat-squelch";
 import { isValidUsername, parseAgentId } from "@octogee/shared/types/identity";
 import { PROJECT_COACH_WORKSPACE_PARTS } from "@octogee/shared/types/project";
 import type { ProjectBlobHydrator } from "./project-blob-materialization.js";
@@ -1113,11 +1114,14 @@ export function createSurgeReadinessHandler(input: {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      input.log(`[surge-handoff] readiness probe failed: ${message}`);
+      const admitted = readinessFailures.admit("surge-handoff", message);
+      if (admitted) input.log(`[surge-handoff] readiness probe failed: ${message}${admitted.note}`);
       res.status(500).json({ ready: false, error: message });
     }
   };
 }
+
+const readinessFailures = createRepeatSquelch({ windowMs: 60_000 });
 
 export function createToolchainReadinessHandler(input: {
   adapter: CustomerLifecycleAdapter;
@@ -1133,7 +1137,8 @@ export function createToolchainReadinessHandler(input: {
       res.status(ready ? 200 : 503).json({ ready, prelaunchState });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      input.log(`[builder-toolchain] readiness failed: ${message}`);
+      const admitted = readinessFailures.admit("builder-toolchain", message);
+      if (admitted) input.log(`[builder-toolchain] readiness failed: ${message}${admitted.note}`);
       res.status(500).json({ ready: false, error: message });
     }
   };

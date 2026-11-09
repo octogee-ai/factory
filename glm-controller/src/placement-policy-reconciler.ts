@@ -1,3 +1,4 @@
+import { createRepeatSquelch, type RepeatSquelch } from "@octogee/shared/server/repeat-squelch";
 import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import { isDeepStrictEqual } from 'node:util';
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
@@ -564,6 +565,18 @@ interface PlacementPolicyReconcileContext {
   result: PlacementPolicyReconcileResult;
 }
 
+
+const blockedLogs = new WeakMap<PlacementPolicyReconcilerDeps, RepeatSquelch>();
+
+function blockedLogFor(deps: PlacementPolicyReconcilerDeps): RepeatSquelch {
+  let squelch = blockedLogs.get(deps);
+  if (!squelch) {
+    squelch = createRepeatSquelch({ windowMs: 5 * 60_000 });
+    blockedLogs.set(deps, squelch);
+  }
+  return squelch;
+}
+
 function blockPlacement(
   context: PlacementPolicyReconcileContext,
   input: {
@@ -577,8 +590,10 @@ function blockPlacement(
   const leaseIdentity = input.lease
     ? ` lease=${input.lease.leaseId} generation=${input.lease.generation}`
     : "";
+  const admitted = blockedLogFor(context.deps).admit(input.uid, `${input.code}:${input.reason}`);
+  if (!admitted) return;
   context.deps.log(
-    `[placement-policy] blocked code=${input.code} uid=${input.uid}${leaseIdentity}: ${input.reason}`,
+    `[placement-policy] blocked code=${input.code} uid=${input.uid}${leaseIdentity}: ${input.reason}${admitted.note}`,
   );
 }
 

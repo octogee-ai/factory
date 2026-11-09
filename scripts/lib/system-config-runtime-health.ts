@@ -1,4 +1,5 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
+import { createRepeatSquelch } from "@octogee/shared/server/repeat-squelch";
 const runtimeLogger = createServiceLogger("system-config-runtime-health");
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -143,6 +144,18 @@ export function observeDashboardControl(
   };
 }
 
+const healthFailures = createRepeatSquelch({ windowMs: 60_000 });
+
+function reportHealthFailure(healthUrl: string, fields: { failure: string; status?: number; durationMs: number }): void {
+  const admitted = healthFailures.admit(healthUrl, `${fields.failure}:${fields.status ?? ""}`);
+  if (admitted) runtimeLogger.warn("[openclaw-health] probe failed", { ...fields, ...(admitted.suppressed ? { repeatsSuppressed: admitted.suppressed } : {}) });
+}
+
+function reportHealthRecovered(healthUrl: string): void {
+  const settled = healthFailures.settle(healthUrl);
+  if (settled) runtimeLogger.info("[openclaw-health] probe recovered", { repeatsSuppressed: settled.suppressed });
+}
+
 export async function probeOpenClawHealth(
   healthUrl = "http://127.0.0.1:18789/healthz",
   timeoutMs = 2_000,
@@ -152,16 +165,11 @@ export async function probeOpenClawHealth(
   try {
     const response = await fetch(healthUrl, { signal });
     await response.body?.cancel();
-    if (!response.ok) runtimeLogger.warn("[openclaw-health] probe failed", {
-      failure: "http-error", status: response.status,
-      durationMs: Math.round(performance.now() - startedAt),
-    });
+    if (response.ok) reportHealthRecovered(healthUrl);
+    else reportHealthFailure(healthUrl, { failure: "http-error", status: response.status, durationMs: Math.round(performance.now() - startedAt) });
     return response.ok;
   } catch {
-    runtimeLogger.warn("[openclaw-health] probe failed", {
-      failure: signal.aborted ? "timeout" : "request-failed",
-      durationMs: Math.round(performance.now() - startedAt),
-    });
+    reportHealthFailure(healthUrl, { failure: signal.aborted ? "timeout" : "request-failed", durationMs: Math.round(performance.now() - startedAt) });
     return false;
   }
 }

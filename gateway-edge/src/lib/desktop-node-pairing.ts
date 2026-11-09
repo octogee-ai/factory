@@ -1,3 +1,4 @@
+import { createRepeatSquelch } from "@octogee/shared/server/repeat-squelch";
 import { GATEWAY_DESKTOP_NODE_NAME } from "@octogee/shared/types/glm";
 
 const IPV4_MAPPED_PREFIX = "::ffff:";
@@ -8,6 +9,8 @@ function isLocalNodeAddress(address: string): boolean {
   return ipv4 === "127.0.0.1" || address === "::1";
 }
 export const DESKTOP_NODE_PAIRING_INTERVAL_MS = 5_000;
+export const DESKTOP_NODE_PAIRING_IDLE_INTERVAL_MS = 60_000;
+export const DESKTOP_NODE_PAIRING_FAST_CHECKS = 60;
 
 export interface DesktopNodePairingRequest {
   requestId: string;
@@ -72,6 +75,7 @@ export async function approveDesktopNodePairing(deps: DesktopNodePairingDeps): P
 
 export interface DesktopNodePairingLoopOptions extends DesktopNodePairingDeps {
   intervalMs?: number;
+  idleIntervalMs?: number;
   schedule?: (tick: () => void, intervalMs: number) => () => void;
 }
 
@@ -82,20 +86,38 @@ function scheduleWithTimers(tick: () => void, intervalMs: number): () => void {
 }
 
 export function startDesktopNodePairing(options: DesktopNodePairingLoopOptions): () => void {
+  const schedule = options.schedule ?? scheduleWithTimers;
+  const failures = createRepeatSquelch({ windowMs: 60_000 });
   let inFlight = false;
+  let checks = 0;
+  let idle = false;
+  let cancel = (): void => {};
+  const settleIntoIdlePace = (): void => {
+    if (idle) return;
+    idle = true;
+    cancel();
+    cancel = schedule(tick, options.idleIntervalMs ?? DESKTOP_NODE_PAIRING_IDLE_INTERVAL_MS);
+  };
   const tick = (): void => {
     if (inFlight) return;
     inFlight = true;
+    checks += 1;
     approveDesktopNodePairing(options)
+      .then((approved) => {
+        failures.settle("check");
+        if (approved.length > 0) settleIntoIdlePace();
+      })
       .catch((error: unknown) => {
-        options.log("desktop node pairing check failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
+        const message = error instanceof Error ? error.message : String(error);
+        const admitted = failures.admit("check", message);
+        if (admitted) options.log("desktop node pairing check failed", { error: message, repeatsSuppressed: admitted.suppressed });
       })
       .finally(() => {
         inFlight = false;
+        if (checks >= DESKTOP_NODE_PAIRING_FAST_CHECKS) settleIntoIdlePace();
       });
   };
   tick();
-  return (options.schedule ?? scheduleWithTimers)(tick, options.intervalMs ?? DESKTOP_NODE_PAIRING_INTERVAL_MS);
+  cancel = schedule(tick, options.intervalMs ?? DESKTOP_NODE_PAIRING_INTERVAL_MS);
+  return () => cancel();
 }

@@ -1,3 +1,4 @@
+import { createRepeatSquelch } from "@octogee/shared/server/repeat-squelch";
 import { recoverAbandonedSurgeSchedulerSource } from "./surge-scheduler-source-recovery.js";
 import { abortSurgeSchedulerTarget, activateSurgeScheduler, resumeSurgeSchedulerSource, assertSurgeSchedulerCustody, inspectExistingSurgeScheduler, stageSurgeScheduler, type SurgeSchedulerCustody } from "./surge-scheduler-handoff.js";
 import type { CrashLoopEvictionClaim } from "./surge-crashloop-eviction.js";
@@ -918,25 +919,24 @@ async function releaseSourcelessSharedTarget(
   }
 }
 
+const sourceWaits = createRepeatSquelch({ windowMs: 60_000 });
+
 function sourceForTransfer(
   deps: SurgeCustomerHandoffDeps,
   input: ReconcileSurgeCustomerHandoffInput,
   source: SurgeSourceSelection,
 ): SurgePod | null {
   if (source.kind === "missing") {
-    deps.log(
-      `[surge-handoff] source absent; waiting for pod-side readiness release ` +
-      `gateway=${input.gatewayId}`,
-    );
+    const admitted = sourceWaits.admit(input.gatewayId, "missing");
+    if (admitted) deps.log(`[surge-handoff] source absent; waiting for pod-side readiness release gateway=${input.gatewayId}${admitted.note}`);
     return null;
   }
   if (source.kind === "waiting") {
-    deps.log(
-      `[surge-handoff] source pod exists but is NotReady; waiting ` +
-      `gateway=${input.gatewayId} source=${source.pod.name}`,
-    );
+    const admitted = sourceWaits.admit(input.gatewayId, `waiting:${source.pod.name}`);
+    if (admitted) deps.log(`[surge-handoff] source pod exists but is NotReady; waiting gateway=${input.gatewayId} source=${source.pod.name}${admitted.note}`);
     return null;
   }
+  sourceWaits.settle(input.gatewayId);
   return source.pod;
 }
 
