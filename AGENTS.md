@@ -127,6 +127,9 @@ Ship TEST requires that complete build before deploying. Public desktop download
 Do not add deployment or fleet authority to the main/check identities.
 See [Handbook 21](docs/handbook/21-deploy-and-cicd.md) for credentials and cutover.
 
+For a change confined to `glm-controller/`, test it on TEST with the one-off Cowboy image swap in
+[Handbook 21](docs/handbook/21-deploy-and-cicd.md#cowboy-only-changes) before merging, rather than waiting for Build main and Ship TEST.
+
 The deployment path preserves three invariants:
 
 1. **Build main** (`.github/workflows/build-main.yml`) produces one immutable, SHA- and
