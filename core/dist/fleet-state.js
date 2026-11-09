@@ -991,6 +991,22 @@ function assertRecoverySource(input) {
     if (root.desiredStatus === "draining")
         assertMissingDrainingSource({ ...input, maxAgeMs: params.targetHeartbeatMaxAgeMs });
 }
+function attemptsStoppedBeforeSharedTransfer(operation, params) {
+    const history = operation.attemptHistory ?? [];
+    const missingSource = `expected exactly one ready pod for transport=${params.fromGatewayId}; found 0`;
+    const compatibilityFailure = `gateway compatibility pending: status 503: expected exactly one running pod for transport=${params.fromGatewayId}; found 0`;
+    const destinationAbortFailure = `/scheduler/${params.toGatewayId} transport failed: fetch failed`;
+    const exactDestinationCleanup = operation.input.toGatewayId === params.toGatewayId &&
+        operation.input.recoverSourceOnly !== true && operation.input.sourceTransferMode === undefined;
+    const missedKeysTransfer = (attempt) => attempt.steps.length === 1 &&
+        attempt.steps[0].name === "keys-sync-state" && attempt.steps[0].status === "failed" &&
+        attempt.error === missingSource;
+    const stoppedBeforeSteps = (attempt) => attempt.steps.length === 0 &&
+        (attempt.error === compatibilityFailure || (exactDestinationCleanup && attempt.error === destinationAbortFailure));
+    const [first, ...retries] = history;
+    return first !== undefined && missedKeysTransfer(first) &&
+        retries.every(attempt => missedKeysTransfer(attempt) || stoppedBeforeSteps(attempt));
+}
 async function assertDrainingMigrationUnclaimed(tx, operation, params) {
     const handoff = recordOrEmpty(operation.schedulerHandoff);
     const safe = [
@@ -1006,14 +1022,11 @@ async function assertDrainingMigrationUnclaimed(tx, operation, params) {
         throw new Error("missing draining Shared source has unresolved migration custody");
     if (operation.schedulerHandoff === undefined || operation.schedulerHandoffReleased === true)
         return;
-    const history = operation.attemptHistory ?? [];
-    const beforeTransfer = history.length > 0 && history.every((attempt) => attempt.steps.length === 1 &&
-        attempt.steps[0].name === "keys-sync-state" && attempt.steps[0].status === "failed" &&
-        attempt.error === `expected exactly one ready pod for transport=${params.fromGatewayId}; found 0`);
     const exactHandoff = handoff.uid === params.uid && handoff.slug === params.slug &&
         handoff.fromGatewayId === params.fromGatewayId && handoff.toGatewayId === operation.input.toGatewayId &&
         readSchedulerMigrationIdentity(operation.id, handoff.migrationId) !== null;
-    if (handoff.scheduleTransfer !== true || typeof handoff.migrationId !== "string" || !exactHandoff || !beforeTransfer ||
+    if (handoff.scheduleTransfer !== true || typeof handoff.migrationId !== "string" || !exactHandoff ||
+        !attemptsStoppedBeforeSharedTransfer(operation, params) ||
         await tx.builders.scheduleTransfers.get(params.uid, handoff.migrationId) !== null) {
         throw new Error("missing draining Shared source has unresolved scheduler custody");
     }
