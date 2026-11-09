@@ -196,9 +196,10 @@ Active TEST and PROD share the CENTRAL GKE cluster. MM WebSockets ride
   text in Gitea, binaries in GCS (`.files/manifest.json`); per-customer `GITEA_TOKEN`.
 - **Membership.** Workspace and project membership are independent; `{slug}-general` channel
   membership is the canonical workspace-membership signal.
-- **Provisioning.** Onboarding done → Cloud Function sets `provisioning.status` → in-pod
-  provisioner (scripts, in the gateway pod) creates MM team + Builder + Agent
-  (`octogee-{slug}-coach`) + Gitea org + workspace repo. Project create = `POST /api/projects`
+- **Provisioning.** Onboarding done → Cloud Function records `signupAdmission` → Cowboy
+  admits through the platform store (sets `provisioning.status`) → in-pod provisioner
+  (scripts, in the gateway pod) creates MM team + Builder + Agent (`octogee-{slug}-coach`)
+  + Gitea org + workspace repo. Project create = `POST /api/projects`
   (octogee-api): Firestore doc + MM channel + Gitea repo; client reacts to the doc.
 - **Gateways.** glm-controller ("Cowboy") provisions/retires/rolls per-customer gateway pods
   and reconciles the static shared edge routes; per-gateway state in `glmGateways/{id}`.
