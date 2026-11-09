@@ -17,6 +17,7 @@
 {{ include "octogee.platformStateSecretEnv" (dict "name" "PLATFORM_DB_NAME" "key" "database") }}
 {{ include "octogee.platformStateSecretEnv" (dict "name" "PLATFORM_DB_SSLMODE" "key" "sslmode") }}
 {{ include "octogee.platformStateSecretEnv" (dict "name" "PLATFORM_DB_CA_CERT" "key" "ca-cert" "optional" true) }}
+{{ include "octogee.platformStateSecretEnv" (dict "name" "PLATFORM_DB_TLS_SERVER_IDENTITY" "key" "tls-server-identity" "optional" true) }}
 {{- end -}}
 
 {{- define "octogee.platformStateEnv" -}}

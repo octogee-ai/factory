@@ -60,6 +60,12 @@ describe("platform database settings", () => {
   it("refuses a CA certificate under a mode that would ignore it", () => {
     expect(() => settingsWith({ PLATFORM_DB_CA_CERT: "pem" })).toThrow(/PLATFORM_DB_CA_CERT.*verify-full/);
   });
+
+  it("requires verified TLS and an IP connection address for a separate certificate identity", () => {
+    const identity = { PLATFORM_DB_TLS_SERVER_IDENTITY: "db.example.test" };
+    expect(() => settingsWith({ ...identity, PLATFORM_DB_HOST: "127.0.0.1" })).toThrow(/verify-full/);
+    expect(() => settingsWith({ ...identity, PLATFORM_DB_SSLMODE: "verify-full" })).toThrow(/IP address/);
+  });
 });
 
 describe("platform database pool configuration", () => {
@@ -113,6 +119,30 @@ describe("platform database pool configuration", () => {
     const settings = settingsWith({ PLATFORM_DB_SSLMODE: "verify-full", PLATFORM_DB_CA_CERT: "pem" });
 
     expect(platformDatabasePoolConfig(settings, "api").ssl).toMatchObject({ rejectUnauthorized: true, ca: "pem" });
+  });
+
+  it("uses the original DNS certificate identity over an IP tunnel", () => {
+    const settings = settingsWith({
+      PLATFORM_DB_HOST: "127.0.0.1",
+      PLATFORM_DB_SSLMODE: "verify-full",
+      PLATFORM_DB_TLS_SERVER_IDENTITY: "db.example.test",
+      PLATFORM_DB_CA_CERT: "pem",
+    });
+    expect(platformDatabasePoolConfig(settings, "fleet")).toMatchObject({
+      host: "127.0.0.1",
+      ssl: { rejectUnauthorized: true, host: "db.example.test", servername: "db.example.test", ca: "pem" },
+    });
+  });
+
+  it("checks an original IP certificate identity without sending it as SNI", () => {
+    const settings = settingsWith({
+      PLATFORM_DB_HOST: "127.0.0.1",
+      PLATFORM_DB_SSLMODE: "verify-full",
+      PLATFORM_DB_TLS_SERVER_IDENTITY: "10.89.0.11",
+    });
+    const ssl = platformDatabasePoolConfig(settings, "fleet").ssl;
+    expect(ssl).toMatchObject({ rejectUnauthorized: true, host: "10.89.0.11" });
+    expect(ssl).not.toHaveProperty("servername");
   });
 
   it("verify-full without a CA verifies against the system roots", () => {

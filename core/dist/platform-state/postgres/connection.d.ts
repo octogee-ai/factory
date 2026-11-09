@@ -10,6 +10,7 @@ export interface PlatformDatabaseSettings {
     readonly password: string;
     readonly sslMode: PlatformDatabaseSslMode;
     readonly caCertificate?: string;
+    readonly tlsServerIdentity?: string;
     readonly poolMax: number;
 }
 export interface PlatformStatePoolOptions {

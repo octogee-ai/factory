@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import pg from "pg";
 import type { PlatformStateLogger } from "./session.js";
 
@@ -20,6 +21,7 @@ export interface PlatformDatabaseSettings {
   readonly password: string;
   readonly sslMode: PlatformDatabaseSslMode;
   readonly caCertificate?: string;
+  readonly tlsServerIdentity?: string;
   readonly poolMax: number;
 }
 
@@ -61,19 +63,25 @@ function sslModeOf(environment: Environment): PlatformDatabaseSslMode {
 }
 
 export function platformDatabaseSettingsFromEnvironment(environment: Environment = process.env): PlatformDatabaseSettings {
+  const host = required(environment, "PLATFORM_DB_HOST");
   const sslMode = sslModeOf(environment);
   const caCertificate = present(environment, "PLATFORM_DB_CA_CERT");
+  const tlsServerIdentity = present(environment, "PLATFORM_DB_TLS_SERVER_IDENTITY");
   if (caCertificate !== undefined && sslMode !== "verify-full") {
     throw new Error(`PLATFORM_DB_CA_CERT only applies with PLATFORM_DB_SSLMODE=verify-full, got ${sslMode}`);
   }
+  if (tlsServerIdentity !== undefined && (sslMode !== "verify-full" || isIP(host) === 0)) {
+    throw new Error("PLATFORM_DB_TLS_SERVER_IDENTITY requires verify-full and an IP address in PLATFORM_DB_HOST");
+  }
   return {
-    host: required(environment, "PLATFORM_DB_HOST"),
+    host,
     port: positiveInteger(environment, "PLATFORM_DB_PORT", DEFAULT_PORT, MAX_PORT),
     database: required(environment, "PLATFORM_DB_NAME"),
     user: required(environment, "PLATFORM_DB_USER"),
     password: required(environment, "PLATFORM_DB_PASSWORD"),
     sslMode,
     ...(caCertificate === undefined ? {} : { caCertificate }),
+    ...(tlsServerIdentity === undefined ? {} : { tlsServerIdentity }),
     poolMax: positiveInteger(environment, "PLATFORM_DB_POOL_MAX", DEFAULT_POOL_MAX, Number.MAX_SAFE_INTEGER),
   };
 }
@@ -84,10 +92,15 @@ function sslOptions(settings: PlatformDatabaseSettings): pg.PoolConfig["ssl"] {
       return false;
     case "require":
       return { rejectUnauthorized: false };
-    case "verify-full":
-      return settings.caCertificate === undefined
-        ? { rejectUnauthorized: true, host: settings.host }
-        : { rejectUnauthorized: true, host: settings.host, ca: settings.caCertificate };
+    case "verify-full": {
+      const identity = settings.tlsServerIdentity ?? settings.host;
+      return {
+        rejectUnauthorized: true,
+        host: identity,
+        ...(settings.tlsServerIdentity !== undefined && isIP(identity) === 0 ? { servername: identity } : {}),
+        ...(settings.caCertificate === undefined ? {} : { ca: settings.caCertificate }),
+      };
+    }
   }
 }
 

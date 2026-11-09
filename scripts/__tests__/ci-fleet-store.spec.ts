@@ -31,9 +31,28 @@ describe("release fleet store", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
-  it("does not downgrade verified TLS to an unverified tunnel", async () => {
+  it("passes the original certificate identity and CA through the tunnel", async () => {
+    const close = vi.fn(async () => {});
+    const result = await withFleetStore({
+      inspect: async () => ({
+        backend: "postgres", host: "10.89.0.11", port: 5432, database: "platform",
+        user: "runtime", password: "secret", sslmode: "verify-full", image: "image",
+        tlsServerIdentity: "db.example.test", caCertificate: "pem",
+      }),
+      tunnel: async () => ({ port: 15432, close }),
+    }, async env => env);
+    expect(result).toMatchObject({
+      PLATFORM_DB_HOST: "127.0.0.1",
+      PLATFORM_DB_SSLMODE: "verify-full",
+      PLATFORM_DB_TLS_SERVER_IDENTITY: "db.example.test",
+      PLATFORM_DB_CA_CERT: "pem",
+    });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("refuses plaintext connections through the tunnel", async () => {
     const tunnel = vi.fn();
-    await expect(withFleetStore({ inspect: async () => ({ backend: "postgres", sslmode: "verify-full" }), tunnel }, async () => {})).rejects.toThrow("verify-full");
+    await expect(withFleetStore({ inspect: async () => ({ backend: "postgres", sslmode: "disable" }), tunnel }, async () => {})).rejects.toThrow("disable");
     expect(tunnel).not.toHaveBeenCalled();
   });
 });
