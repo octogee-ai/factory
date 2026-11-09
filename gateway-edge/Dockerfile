@@ -59,6 +59,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     curl \
     ca-certificates \
+    tini \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=gitleaks-builder /go/bin/gitleaks /usr/local/bin/gitleaks
 # The runtime install packs the direct internal directory dependencies.
@@ -73,4 +74,5 @@ COPY gateway-edge/agent-import-gitleaks.toml ./agent-import-gitleaks.toml
 USER node
 EXPOSE 3001
 ENV PORT=3001
+ENTRYPOINT ["/usr/bin/tini", "--", "docker-entrypoint.sh"]
 CMD ["node", "dist/gateway-edge/src/product-main.js"]
