@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Operation, OperationStep } from "@octogee/shared/types/glm";
-import { assertActiveOperationClaim, assertCustomerRestoreSettled, createOperationContext, PendingCustomerRestoreError } from "../operation-context";
+import { operationElapsed, assertActiveOperationClaim, assertCustomerRestoreSettled, createOperationContext, PendingCustomerRestoreError } from "../operation-context";
 
 function makeDeps() {
   const persistedSnapshots: OperationStep[][] = [];
@@ -17,6 +17,39 @@ function makeDeps() {
 }
 
 describe("createOperationContext", () => {
+  describe("step logging", () => {
+    it("logs a step starting and finishing with how long it took", async () => {
+      const deps = makeDeps();
+      const { ctx } = createOperationContext(deps);
+      await ctx.reportStep({ name: "transfer-state", status: "running", startedAt: 1_000 });
+      await ctx.reportStep({ name: "transfer-state", status: "done", completedAt: 4_500 });
+      expect(deps.logCalls).toEqual([
+        "[glm-controller] op=op-test-1 step=transfer-state status=running",
+        "[glm-controller] op=op-test-1 step=transfer-state status=done durationMs=3500",
+      ]);
+    });
+
+    it("includes the error on a failed step", async () => {
+      const deps = makeDeps();
+      const { ctx } = createOperationContext(deps);
+      await ctx.reportStep({ name: "cutover", status: "running", startedAt: 10 });
+      await ctx.reportStep({ name: "cutover", status: "failed", completedAt: 25, error: "source is held" });
+      expect(deps.logCalls.at(-1)).toBe("[glm-controller] op=op-test-1 step=cutover status=failed durationMs=15: source is held");
+    });
+
+    it("logs a step reported only when finished, without a duration", async () => {
+      const deps = makeDeps();
+      const { ctx } = createOperationContext(deps);
+      await ctx.reportStep({ name: "noop", status: "skipped", completedAt: 25 });
+      expect(deps.logCalls.at(-1)).toBe("[glm-controller] op=op-test-1 step=noop status=skipped");
+    });
+  });
+
+  it("reports the elapsed time of a claimed operation", () => {
+    expect(operationElapsed({ startedAt: 1_000 }, 3_500)).toBe(" after 2500ms");
+    expect(operationElapsed({}, 3_500)).toBe("");
+  });
+
   it.each(["RPC timed out", "restore response does not match"])("retains the durable fence when %s", async (message) => {
     const acknowledge = vi.fn(async () => undefined);
     const begin = vi.fn(async () => acknowledge);

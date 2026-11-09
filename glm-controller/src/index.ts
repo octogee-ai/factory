@@ -145,7 +145,7 @@ import {
   routeOperation,
   type OperationHandlers,
 } from "./operation-router.js";
-import { assertActiveOperationClaim, assertCustomerRestoreSettled, createOperationContext } from "./operation-context.js";
+import { assertActiveOperationClaim, assertCustomerRestoreSettled, createOperationContext, operationElapsed } from "./operation-context.js";
 import {
   compareOperationQueueOrder,
   decideOperationClaim,
@@ -2059,7 +2059,7 @@ async function runClaimedOperation(
   }
 
   if (result.success) {
-    deps.log(`[glm-controller] op=${op.id} → succeeded`);
+    deps.log(`[glm-controller] op=${op.id} kind=${op.kind} → succeeded${operationElapsed(op, Date.now())}`);
     return;
   }
 
@@ -2070,7 +2070,7 @@ async function runClaimedOperation(
     return;
   }
 
-  deps.log(`[glm-controller] op=${op.id} → failed (${result.error})`);
+  deps.log(`[glm-controller] op=${op.id} kind=${op.kind} → failed${operationElapsed(op, Date.now())} (${result.error})`);
 }
 
 function buildHeartbeatPollerCoreDeps(

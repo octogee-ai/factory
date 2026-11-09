@@ -2557,7 +2557,7 @@ describe("stopped retained-home boot replacement", () => {
     await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
     expect(readPath(h.docs["users/UidA"], "provisioning.computer.bootRecovery.ready")).toBe(false);
     delete h.docs["glmGateways/b-x"];
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-retired", async () => {})).rejects.toThrow(/native admission/);
+    await expect(h.runtime.replaceStoppedComputer("b-x", "op-retired", async () => {})).rejects.toThrow(/recovery reports not ready/);
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
   it.each(["missing", "foreign", "unready"])("retired replacement preserves both disks for unusable owner-anchored evidence: %s", async fault => {
@@ -2583,7 +2583,7 @@ describe("stopped retained-home boot replacement", () => {
     const h = harness(vmDoc(), { describe: vi.fn(async () => ({ ...ownedStopped, lastStartedAt: 200000 })) }, undefined, { "b-x": "paused" });
     h.clock.now = 300000;
     await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-restarted", async () => {})).rejects.toThrow(/stale/);
+    await expect(h.runtime.replaceStoppedComputer("b-x", "op-restarted", async () => {})).rejects.toThrow(/recovery receipt observed at/);
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
   it.each(["RUNNING", "STOPPING", "owner-changed", "instance-changed"])("never deletes an unsafe replacement source: %s", async scenario => {
@@ -2606,14 +2606,21 @@ describe("stopped retained-home boot replacement", () => {
     expect(h.vm.verifyDetachedHome).toHaveBeenCalledTimes(2);
     expect(h.vm.readFamilyImage).toHaveBeenCalledTimes(1);
   });
-  it.each(["missing", "not-ready", "two-points", "wrong-instance", "stale", "no-headroom"])("keeps the old boot before predictable recovery admission failure: %s", async fault => {
+  it.each([
+    ["missing", /no native recovery report/],
+    ["not-ready", /recovery reports not ready/],
+    ["two-points", /2 retained recovery points/],
+    ["wrong-instance", /recovery receipt from instance 999.*computer is 4242/],
+    ["stale", /recovery receipt observed at -100000/],
+    ["no-headroom", /recovery point needs .* free, found 100 bytes/],
+  ])("keeps the old boot before predictable recovery admission failure and says why: %s", async (fault, reason) => {
     const docs = vmDoc();
     docs["glmGateways/b-x"].vmBootRecovery = fault === "missing" ? undefined : { ...receipt,
       ready: fault !== "not-ready", retainedPoints: fault === "two-points" ? 2 : 1,
       instanceId: fault === "wrong-instance" ? "999" : "4242", observedAt: fault === "stale" ? -100000 : 1000,
       freeBytes: fault === "no-headroom" ? 100 : receipt.freeBytes };
     const h = harness(docs, { describe: vi.fn(async () => ownedStopped) }, undefined, { "b-x": "paused" });
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-one", async () => {})).rejects.toThrow(/recovery|native admission/);
+    await expect(h.runtime.replaceStoppedComputer("b-x", "op-one", async () => {})).rejects.toThrow(reason);
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
     expect(h.vm.retainHome).not.toHaveBeenCalled();
     expect(h.vm.readFamilyImage).not.toHaveBeenCalled();

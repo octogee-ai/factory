@@ -640,13 +640,20 @@ async function assertHomeAssignment(store: PlatformStateStore, ownerUid: string,
   }
 }
 
+const REPLACEMENT_RECOVERY_MIN_FREE_BYTES = 2 * 1024 ** 3;
+
 function assertReplacementRecoveryCapacity(data: VmRuntimeFields | undefined, vm: GatewayVmState, description: GatewayVmDescription): void {
+  const refuse = (reason: string): never => { throw new Error(`boot replacement ${reason}; source boot/home kept`); };
   const recovery = data?.vmBootRecovery as { instanceId?: string; observedAt?: number } | undefined;
-  if (!isGatewayVmBootRecoverySample(recovery) || !recovery.ready || recovery.retainedPoints > 1 || recovery.freeBytes < 2 * 1024 ** 3) throw new Error("boot replacement requires successful native admission and room for its pre-migration recovery point; source boot/home kept");
+  if (!isGatewayVmBootRecoverySample(recovery)) return refuse("has no native recovery report from this computer yet");
+  if (!recovery.ready) return refuse(`recovery reports not ready for bundle ${recovery.bundleVersion}`);
+  if (recovery.retainedPoints > 1) return refuse(`requires at most 1 retained point, found ${recovery.retainedPoints} retained recovery points`);
+  if (recovery.freeBytes < REPLACEMENT_RECOVERY_MIN_FREE_BYTES) return refuse(`recovery point needs ${REPLACEMENT_RECOVERY_MIN_FREE_BYTES} bytes free, found ${recovery.freeBytes} bytes`);
   const identity = recovery as typeof recovery & { instanceId?: string; observedAt?: number };
-  if (identity.instanceId !== description.instanceId || typeof identity.observedAt !== "number" || identity.observedAt < vm.updatedAt - 90_000
-    || description.lastStartedAt !== null && identity.observedAt < description.lastStartedAt) throw new Error("boot replacement recovery receipt is stale or belongs to another computer; source boot/home kept");
-  if ((recovery.retainedPoints === 0) !== (recovery.currentPointId === null)) throw new Error("boot replacement recovery point count/identity differs; source boot/home kept");
+  if (identity.instanceId !== description.instanceId) return refuse(`recovery receipt from instance ${identity.instanceId ?? "unknown"} but this computer is ${description.instanceId}`);
+  if (typeof identity.observedAt !== "number" || identity.observedAt < vm.updatedAt - 90_000) return refuse(`recovery receipt observed at ${identity.observedAt ?? "unknown"} is older than computer state at ${vm.updatedAt}`);
+  if (description.lastStartedAt !== null && identity.observedAt < description.lastStartedAt) return refuse(`recovery receipt observed at ${identity.observedAt} predates the computer's last start at ${description.lastStartedAt}`);
+  if ((recovery.retainedPoints === 0) !== (recovery.currentPointId === null)) return refuse(`recovery point count ${recovery.retainedPoints} disagrees with current point ${recovery.currentPointId ?? "none"}`);
 }
 
 function assertReplacementRoot(root: GatewayRoot | null, desired: string | null, forceOwnerUid?: string): void {

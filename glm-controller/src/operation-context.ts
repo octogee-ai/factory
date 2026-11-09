@@ -23,6 +23,19 @@ export interface CreateOperationContextDeps {
   opId: string;
 }
 
+function describeStepReport(opId: string, step: OperationStep): string {
+  const finished = step.status !== "running" && step.status !== "pending";
+  const duration = finished && typeof step.startedAt === "number" && typeof step.completedAt === "number"
+    ? ` durationMs=${step.completedAt - step.startedAt}`
+    : "";
+  const failure = step.error ? `: ${step.error}` : "";
+  return `[glm-controller] op=${opId} step=${step.name} status=${step.status}${duration}${failure}`;
+}
+
+export function operationElapsed(op: Pick<Operation, "startedAt">, now: number): string {
+  return typeof op.startedAt === "number" ? ` after ${now - op.startedAt}ms` : "";
+}
+
 export function createOperationContext(deps: CreateOperationContextDeps): {
   ctx: OperationContext;
   steps: OperationStep[];
@@ -43,12 +56,10 @@ export function createOperationContext(deps: CreateOperationContextDeps): {
       const idx = steps.findIndex(
         (s) => s.name === step.name && (s.status === "running" || s.status === "pending"),
       );
-      if (idx >= 0) {
-        const existing = steps.at(idx) ?? step;
-        steps.splice(idx, 1, { ...existing, ...step });
-      } else {
-        steps.push(step);
-      }
+      const merged = idx >= 0 ? { ...(steps.at(idx) ?? step), ...step } : step;
+      if (idx >= 0) steps.splice(idx, 1, merged);
+      else steps.push(step);
+      deps.log(describeStepReport(deps.opId, merged));
       try {
         await deps.persist([...steps]);
       } catch (err) {
