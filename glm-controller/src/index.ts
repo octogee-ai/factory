@@ -363,6 +363,7 @@ import {
 import { ComputerCreationPendingError, FinalHomeCheckpointPendingError, clearReplacedComputer } from "./vm-computer-lifecycle.js";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
 import {
+  PLACEMENT_ACTIVE_OPERATION_STATUSES,
   PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
   createFirestorePlacementPolicyReconcilerDeps,
   reconcilePlacementPolicyOnce,
@@ -2076,7 +2077,7 @@ function buildHeartbeatPollerCoreDeps(
   { store, informer }: { store: PlatformStateStore; informer: FleetInformer },
   log: (msg: string) => void,
   privateKey: string,
-): Omit<GatewayHeartbeatPollerDeps, "evictSlug"> {
+): Omit<GatewayHeartbeatPollerDeps, "evictSlug" | "listActiveMigrations"> {
   const polledHeartbeats = new Map<string, unknown>();
   const polledRuntimes = new Map<string, unknown>();
   const fetchFleetState = createFleetStateFetcher({
@@ -2138,6 +2139,7 @@ export function buildGatewayHeartbeatPollerDeps(
   );
   return {
     ...buildHeartbeatPollerCoreDeps({ store, informer }, log, privateKey),
+    listActiveMigrations: () => store.journal.operations.listByKind("migrate-customer", [...PLACEMENT_ACTIVE_OPERATION_STATUSES]),
     ownsEviction: async (gatewayId: string) => {
       const stored = informer.gateways()?.find((root) => root.gatewayId === gatewayId) ??
         await store.gateways.roots.get(gatewayId);

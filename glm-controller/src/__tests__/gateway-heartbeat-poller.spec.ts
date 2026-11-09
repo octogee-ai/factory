@@ -145,6 +145,7 @@ function makeDeps(
     })),
     readAssignedSlugs: vi.fn(async () => ["ceckert"]),
     writeHeartbeat: vi.fn(async () => {}),
+    listActiveMigrations: vi.fn(async () => []),
     log: vi.fn(),
     ...over,
   };
@@ -331,6 +332,42 @@ describe("pollGatewayHeartbeatsOnce — Cowboy-driven local eviction", () => {
     );
   });
 
+  it("leaves a departed customer to the migration still moving it off this gateway", async () => {
+    const listActiveMigrations = vi.fn<GatewayHeartbeatPollerDeps["listActiveMigrations"]>(async () => [
+      { input: { fromGatewayId: "bender", toGatewayId: "shared-1" } },
+    ]);
+    const deps = evictDeps({ evictAfterStreak: 1, listActiveMigrations });
+    const streaks: EvictionStreaks = new Map();
+
+    await pollGatewayHeartbeatsOnce(deps, streaks);
+    await pollGatewayHeartbeatsOnce(deps, streaks);
+    expect(deps.evictSlug).not.toHaveBeenCalled();
+
+    listActiveMigrations.mockResolvedValue([]);
+    await pollGatewayHeartbeatsOnce(deps, streaks);
+    expect(deps.evictSlug).toHaveBeenCalledWith("bender", "ghost");
+  });
+
+  it.each([
+    ["leaves another gateway", { fromGatewayId: "other", toGatewayId: "shared-1" }],
+    ["arrives on this gateway", { fromGatewayId: "other", toGatewayId: "bender" }],
+  ])("still evicts when the only active migration %s", async (_name, input) => {
+    const deps = evictDeps({ evictAfterStreak: 1, listActiveMigrations: vi.fn(async () => [{ input }]) });
+    await pollGatewayHeartbeatsOnce(deps, new Map());
+    expect(deps.evictSlug).toHaveBeenCalledWith("bender", "ghost");
+  });
+
+  it("does not evict when active migrations cannot be read", async () => {
+    const deps = evictDeps({
+      evictAfterStreak: 1,
+      listActiveMigrations: vi.fn(async () => { throw new Error("journal unavailable"); }),
+    });
+    await pollGatewayHeartbeatsOnce(deps, new Map());
+    expect(deps.evictSlug).not.toHaveBeenCalled();
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("journal unavailable"));
+    expect(deps.writeHeartbeat).toHaveBeenCalled();
+  });
+
   it("does nothing (but still reports) when no evictSlug is configured", async () => {
     const deps = makeDeps({ evictAfterStreak: 1 }); // no evictSlug
     const streaks: EvictionStreaks = new Map();
@@ -354,6 +391,17 @@ describe("pollGatewayHeartbeatsOnce — Cowboy-driven local eviction", () => {
     expect(streaks.has("bender")).toBe(false);
   });
 
+  it("keeps reporting the remaining gateways while an eviction is still running", async () => {
+    const deps = evictDeps({
+      evictAfterStreak: 1,
+      listGatewayIds: vi.fn(async () => ["bender", "flexo"]),
+      evictSlug: vi.fn(() => new Promise<void>(() => {})),
+    });
+    await pollGatewayHeartbeatsOnce(deps, new Map());
+    expect(deps.evictSlug).toHaveBeenCalledWith("bender", "ghost");
+    expect(deps.writeHeartbeat).toHaveBeenCalledWith("flexo", expect.anything());
+  });
+
   it("logs and continues the poll when an eviction call fails", async () => {
     const deps = evictDeps({
       evictAfterStreak: 1,
@@ -364,7 +412,7 @@ describe("pollGatewayHeartbeatsOnce — Cowboy-driven local eviction", () => {
     const streaks: EvictionStreaks = new Map();
     await pollGatewayHeartbeatsOnce(deps, streaks);
     expect(deps.evictSlug).toHaveBeenCalledWith("bender", "ghost");
-    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("evict"));
+    await vi.waitFor(() => expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("evict")));
     expect(deps.writeHeartbeat).toHaveBeenCalled();
   });
 

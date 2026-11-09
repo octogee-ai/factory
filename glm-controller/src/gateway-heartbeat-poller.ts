@@ -74,6 +74,7 @@ export interface GatewayHeartbeatPollerDeps {
   /** Tear down a departed customer's local footprint on the gateway (pod /unmount).
    *  Omit to disable Cowboy-driven eviction (e.g. no fleet secret configured). */
   evictSlug?: (gatewayId: string, slug: string) => Promise<void>;
+  listActiveMigrations: () => Promise<readonly { input?: { fromGatewayId?: unknown } }[]>;
   /** Consecutive departed-observations before eviction (debounce). Default 2. */
   evictAfterStreak?: number;
   log: (msg: string) => void;
@@ -198,16 +199,21 @@ async function evictDepartedForGateway(
       );
       continue;
     }
-    state.inFlight.add(flightKey);
-    try {
-      await deps.evictSlug(gatewayId, slug);
-    } catch (err) {
-      deps.log(
-        `[gateway-poll] ⚠ evict ${gatewayId}/${slug}: ${errMsg(err)} — will retry next tick`,
-      );
-    } finally {
-      state.inFlight.delete(flightKey);
+    const migrations = await deps.listActiveMigrations();
+    if (migrations.some((operation) => operation.input?.fromGatewayId === gatewayId)) {
+      deps.log(`[gateway-poll] ${gatewayId}/${slug} is still being moved off this gateway — leaving cleanup to its migration`);
+      continue;
     }
+    state.inFlight.add(flightKey);
+    void deps.evictSlug(gatewayId, slug)
+      .catch((err: unknown) => {
+        deps.log(
+          `[gateway-poll] ⚠ evict ${gatewayId}/${slug}: ${errMsg(err)} — will retry next tick`,
+        );
+      })
+      .finally(() => {
+        state.inFlight.delete(flightKey);
+      });
   }
 }
 
