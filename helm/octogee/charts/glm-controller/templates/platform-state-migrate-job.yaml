@@ -36,6 +36,8 @@ spec:
             capabilities:
               drop: [ALL]
           env:
+            - name: LOG_LEVEL
+              value: {{ ((.Values.global).logLevel | default "info") | quote }}
             - name: DEPLOYMENT_TARGET_ID
               value: {{ required "global.deploymentTargetId is required" (.Values.global).deploymentTargetId | quote }}
             {{- include "octogee.platformStateConnectionEnv" . | nindent 12 }}
