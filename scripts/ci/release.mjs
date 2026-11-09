@@ -25,7 +25,11 @@ const stage = (label, file, args, extra = {}) => new Promise((resolve, reject) =
 try {
   run('npm', ['ci', '--prefix', 'scripts', '--no-audit', '--no-fund']);
   run('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund']);
+  const { parse } = await import('yaml');
+  const values = parse(readFileSync(`helm/octogee/values.${options.environment}.yaml`, 'utf8'));
+  const siteAfterPlatform = values?.global?.platformState?.requireCutoverImport === true;
   await deployRelease(options, {
+    siteAfterPlatform,
     manifest: async sha => {
       if (sha !== env.SOURCE_SHA) throw new Error('Release source changed');
       return JSON.parse(readFileSync(process.env.CI_RELEASE_MANIFEST, 'utf8'));

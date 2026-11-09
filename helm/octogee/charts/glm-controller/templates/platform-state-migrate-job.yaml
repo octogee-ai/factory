@@ -40,6 +40,10 @@ spec:
               value: {{ ((.Values.global).logLevel | default "info") | quote }}
             - name: DEPLOYMENT_TARGET_ID
               value: {{ required "global.deploymentTargetId is required" (.Values.global).deploymentTargetId | quote }}
+            {{- if (((.Values.global).platformState).requireCutoverImport) }}
+            - name: PLATFORM_DB_REQUIRE_CUTOVER_IMPORT
+              value: "true"
+            {{- end }}
             {{- include "octogee.platformStateConnectionEnv" . | nindent 12 }}
             {{- include "octogee.platformStateSecretEnv" (dict "name" "PLATFORM_DB_USER" "key" "migration-user") | nindent 12 }}
             {{- include "octogee.platformStateSecretEnv" (dict "name" "PLATFORM_DB_PASSWORD" "key" "migration-password") | nindent 12 }}

@@ -24,8 +24,10 @@ export async function deployRelease(options, deps) {
   const manifest = await deps.manifest(options.sha);
   if (manifest.sourceSha !== options.sha) throw new Error('Selected immutable manifest differs from requested SHA');
   return deps.lock(async () => {
+    const platform = deps.platform(manifest);
+    if (deps.siteAfterPlatform) await platform;
     const results = await Promise.allSettled([
-      deps.platform(manifest).then(() => deps.desktop(manifest)),
+      platform.then(() => deps.desktop(manifest)),
       deps.site(manifest),
     ]);
     const failures = results.filter(result => result.status === 'rejected').map(result => result.reason);

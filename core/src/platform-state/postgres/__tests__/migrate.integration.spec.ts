@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterEach, describe, expect, it } from "vitest";
+import { assertPlatformCutoverImported } from "../migrate-from-environment.js";
 import { migratePlatformState } from "../migrate.js";
 import { PLATFORM_STATE_MIGRATIONS } from "../migrations.js";
 import { createPostgresPlatformStateStore } from "../store.js";
@@ -72,6 +73,28 @@ describe.skipIf(!dsn)("migratePlatformState", () => {
     await expect(runtime.query(`SELECT target_id FROM ${table}`)).resolves.toMatchObject({ rows: [{ target_id: "test-central" }] });
     await expect(runtime.query(`UPDATE ${table} SET target_id = 'prod-central'`)).rejects.toMatchObject({ code: "42501" });
     await expect(runtime.query(`DELETE FROM ${table}`)).rejects.toMatchObject({ code: "42501" });
+  });
+
+  it("holds production shipment until its bound database has a completed nonempty import", async () => {
+    const { pool, schema } = isolated();
+    const ledger = pg.escapeIdentifier(`${schema}_cutover`);
+    await migratePlatformState(pool, { schema, deploymentTargetId: "prod-central" });
+    const requireImport = () => assertPlatformCutoverImported(pool, "prod-central", schema);
+    await expect(requireImport()).rejects.toThrow("no completed platform state import for prod-central");
+    try {
+      await pool.query(`CREATE SCHEMA ${ledger};
+        CREATE TABLE ${ledger}.import_ledger (
+          singleton boolean PRIMARY KEY DEFAULT true, target_id text, source_project text, row_count bigint, completed_at bigint
+        )`);
+      await pool.query(`INSERT INTO ${ledger}.import_ledger (target_id, source_project, row_count, completed_at) VALUES ('prod-central', 'octogee-test', 10, 1000)`);
+      await expect(requireImport()).rejects.toThrow("no completed platform state import for prod-central");
+      await pool.query(`UPDATE ${ledger}.import_ledger SET source_project = 'octogee', row_count = 0`);
+      await expect(requireImport()).rejects.toThrow("no completed platform state import for prod-central");
+      await pool.query(`UPDATE ${ledger}.import_ledger SET row_count = 10`);
+      await expect(requireImport()).resolves.toBeUndefined();
+    } finally {
+      await pool.query(`DROP SCHEMA IF EXISTS ${ledger} CASCADE`);
+    }
   });
 
   it("keeps schema changes and migration history away from the runtime role", async () => {

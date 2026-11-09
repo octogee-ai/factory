@@ -36,6 +36,23 @@ it('deploys the site while the platform rollout is still running', async () => {
   await release;
   expect(deps.desktop).toHaveBeenCalledOnce();
 });
+it('holds Firebase deployment until the cutover platform is ready', async () => {
+  const deps = dependencies();
+  const platform = deferred();
+  deps.platform.mockReturnValue(platform.promise);
+  const release = deployRelease(options, { ...deps, siteAfterPlatform: true });
+  await settle();
+  expect(deps.site).not.toHaveBeenCalled();
+  platform.resolve();
+  await release;
+  expect(deps.site).toHaveBeenCalledOnce();
+});
+it('leaves Firebase deployment held when the cutover platform fails', async () => {
+  const deps = dependencies();
+  deps.platform.mockRejectedValue(new Error('cutover import missing'));
+  await expect(deployRelease(options, { ...deps, siteAfterPlatform: true })).rejects.toThrow('cutover import missing');
+  expect(deps.site).not.toHaveBeenCalled();
+});
 it('holds the deploy lock until the platform settles after the site fails', async () => {
   const deps = dependencies();
   const platform = deferred();
