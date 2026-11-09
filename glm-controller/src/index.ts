@@ -370,8 +370,10 @@ import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
 import {
   PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
   createFirestorePlacementPolicyReconcilerDeps,
+  reconcilePlacementPolicyOnce,
   startPlacementPolicyReconciler,
 } from "./placement-policy-reconciler.js";
+import { placementPassOptions, type BuilderAdmissionSourceFactory } from "./builder-admission.js";
 import { openPlacementAdmission } from "./initial-placement.js";
 import type {
   FleetBrokerChannelBinding,
@@ -2174,6 +2176,7 @@ type ControllerStopper = () => void;
 interface ControllerBackgroundTasksDeps {
   addProductAdminRoutes?: ProductAdminRoutes;
   placementAdmission: PlacementAdmissionPolicy;
+  builderAdmission?: BuilderAdmissionSourceFactory | undefined;
   db: Firestore;
   deps: ControllerDeps;
   helm: HelmRunner;
@@ -2190,6 +2193,7 @@ const GITEA_GATEWAY_KEY_GC_GRACE_MS = 10 * 60 * 1000;
 function startControllerBackgroundTasks({
   addProductAdminRoutes,
   placementAdmission,
+  builderAdmission,
   db,
   deps,
   helm,
@@ -2297,7 +2301,11 @@ function startControllerBackgroundTasks({
       readGatewayPodDiagnosticsBatch: deps.kubeOps.readGatewayPodDiagnosticsBatch,
     }),
     PLACEMENT_POLICY_RECONCILE_MS,
-    { subscribe: informer.subscribeUnassignedUsers?.bind(informer) },
+    placementPassOptions({
+      admission: builderAdmission ? { store: deps.store, source: builderAdmission(log), log } : null,
+      runPlacementPass: reconcilePlacementPolicyOnce,
+      subscribeUnassigned: informer.subscribeUnassignedUsers?.bind(informer),
+    }),
   );
   const stopDisruptionObserver = deps.startDisruptionObserver?.() ?? (() => undefined);
   const httpKubeOps = deps.kubeOps;
@@ -2680,7 +2688,11 @@ async function createControllerRuntime(db: Firestore, store: PlatformStateStore)
   return { deps, fleetControllerPrivateKey, chartFingerprint };
 }
 
-export async function main(product: { addAdminRoutes?: ProductAdminRoutes; placementAdmission?: PlacementAdmissionPolicy } = {}): Promise<void> {
+export async function main(product: {
+  addAdminRoutes?: ProductAdminRoutes;
+  placementAdmission?: PlacementAdmissionPolicy;
+  builderAdmission?: BuilderAdmissionSourceFactory;
+} = {}): Promise<void> {
   installDefaultUserEntitlements();
   const controllerStartedAt = Date.now();
   initializeApp({
@@ -2752,6 +2764,7 @@ export async function main(product: { addAdminRoutes?: ProductAdminRoutes; place
   const stoppers = startControllerBackgroundTasks({
     addProductAdminRoutes: product.addAdminRoutes,
     placementAdmission: product.placementAdmission ?? openPlacementAdmission,
+    builderAdmission: product.builderAdmission,
     db,
     deps,
     helm: deps.helm,
