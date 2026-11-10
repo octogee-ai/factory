@@ -2,7 +2,7 @@ import { isReleasePayload } from "@octogee/shared/types/gateway-releases";
 import { GoogleAuth } from "google-auth-library";
 import { gunzipSync } from "node:zlib";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
-import { deploymentSettingsForRuntime } from "./deployment-environment.js";
+import { deploymentSettingsForRuntime, requireHostedDeploymentSettings } from "./deployment-environment.js";
 function registryCoordinates(overrides) {
     if (overrides.project && overrides.location && overrides.repository) {
         return {
@@ -15,10 +15,10 @@ function registryCoordinates(overrides) {
     if (!namespace) {
         throw new Error("K8S_NAMESPACE is required when Artifact Registry coordinates are incomplete");
     }
-    const runtime = deploymentSettingsForRuntime({
+    const runtime = requireHostedDeploymentSettings(deploymentSettingsForRuntime({
         namespace,
         targetId: process.env.DEPLOYMENT_TARGET_ID,
-    });
+    }));
     return {
         project: overrides.project ?? runtime.artifactRegistryProjectId,
         location: overrides.location ?? runtime.artifactRegistryLocation,

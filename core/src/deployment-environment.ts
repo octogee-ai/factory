@@ -47,18 +47,29 @@ interface NetworkBoundaryDocument {
   privateServicesCidr: string;
 }
 
-interface DeploymentTargetDocument {
-  environment: DeploymentEnvironment;
+interface PlatformTargetDocument {
+  environment: string;
   promotionSourceTargetId?: string;
   lifecycle: DeploymentTargetLifecycle;
+  clusterName: string;
+  kubeContext?: string;
+  namespace: string;
+  siteOrigin: string;
+  appOrigin: string;
+  apiOrigin: string;
+  gitOrigin: string;
+  mattermostOrigin: string;
+  gatewayValuesFile: string;
+  pinEnvironment?: string;
+}
+
+interface HostedTargetDocument extends PlatformTargetDocument {
   secretNameSuffix: string;
   clusterProjectId: string;
   firebaseProjectId: string;
   hostingProjectId: string;
   customerHostingProjectId: string;
   region: string;
-  clusterName: string;
-  namespace: string;
   projectRunnerApiServerEgressCidrs: string[];
   artifactRegistry: ArtifactRegistryDocument;
   cloudSql: CloudSqlDocument;
@@ -66,24 +77,18 @@ interface DeploymentTargetDocument {
   storage: StorageDocument;
   ingress: IngressDocument;
   networkBoundary?: NetworkBoundaryDocument;
-  siteOrigin: string;
-  appOrigin: string;
-  apiOrigin: string;
-  gitOrigin: string;
-  mattermostOrigin: string;
   previewOrigin: string;
-  gatewayValuesFile: string;
   pinEnvironment: string;
 }
 
 interface DeploymentTargetsDocument {
   schemaVersion: 1;
-  activeTargets: Record<DeploymentEnvironment, string>;
-  targets: Record<string, DeploymentTargetDocument>;
+  activeTargets: Record<string, string>;
+  targets: Record<string, PlatformTargetDocument | HostedTargetDocument>;
 }
 
 export interface DeploymentEnvironmentSettings {
-  name: DeploymentEnvironment;
+  name: string;
   promotionSourceTargetId?: string;
   targetId: string;
   lifecycle: DeploymentTargetLifecycle;
@@ -131,22 +136,17 @@ export interface DeploymentEnvironmentSettings {
   pinEnvironment: string;
 }
 
-const DEPLOYMENT_ENVIRONMENTS: DeploymentEnvironment[] = [
-  "prod",
-  "test",
-];
+export type DeploymentTargetSettings = Pick<DeploymentEnvironmentSettings,
+  "name" | "targetId" | "lifecycle" | "clusterName" | "namespace" | "siteOrigin" | "appOrigin" |
+  "apiOrigin" | "gitOrigin" | "mattermostOrigin" | "gatewayValuesFile"
+> & Partial<DeploymentEnvironmentSettings>;
+
 const TARGET_LIFECYCLES: DeploymentTargetLifecycle[] = [
   "active",
   "candidate",
   "frozen",
 ];
 const TARGET_STRING_FIELDS = [
-  "secretNameSuffix",
-  "clusterProjectId",
-  "firebaseProjectId",
-  "hostingProjectId",
-  "customerHostingProjectId",
-  "region",
   "clusterName",
   "namespace",
   "siteOrigin",
@@ -154,9 +154,21 @@ const TARGET_STRING_FIELDS = [
   "apiOrigin",
   "gitOrigin",
   "mattermostOrigin",
-  "previewOrigin",
   "gatewayValuesFile",
+] as const;
+const HOSTED_TARGET_STRING_FIELDS = [
+  "secretNameSuffix",
+  "clusterProjectId",
+  "firebaseProjectId",
+  "hostingProjectId",
+  "customerHostingProjectId",
+  "region",
+  "previewOrigin",
   "pinEnvironment",
+] as const;
+const HOSTED_TARGET_FIELDS = [
+  "clusterProjectId", "firebaseProjectId", "hostingProjectId", "customerHostingProjectId",
+  "artifactRegistry", "cloudSql", "kms", "storage", "ingress",
 ] as const;
 const INGRESS_STRING_FIELDS = [
   "edgeStaticIpName",
@@ -308,6 +320,60 @@ function validateCustomerHostingProjects(targets: Record<string, unknown>): void
   }
 }
 
+function validateHostedTarget(target: Record<string, unknown>, targetId: string): void {
+  const label = `deployment target ${targetId}`;
+  stringFields(target, HOSTED_TARGET_STRING_FIELDS, label);
+  apiServerEgressCidrs(
+    target.projectRunnerApiServerEgressCidrs,
+    `deployment target ${targetId}.projectRunnerApiServerEgressCidrs`,
+  );
+  stringFields(
+    record(target.artifactRegistry, `deployment target ${targetId}.artifactRegistry`),
+    ["projectId", "location", "repository"],
+    `deployment target ${targetId}.artifactRegistry`,
+  );
+  const cloudSql = record(target.cloudSql, `deployment target ${targetId}.cloudSql`);
+  stringFields(
+    cloudSql,
+    [
+      "projectId",
+      "region",
+      "instance",
+      "mattermostPasswordSecret",
+      "giteaPasswordSecret",
+      "connectionNameSecret",
+    ],
+    `deployment target ${targetId}.cloudSql`,
+  );
+  if (typeof cloudSql.pointInTimeRecoveryEnabled !== "boolean") {
+    throw new Error(
+      `deployment target ${targetId}.cloudSql.pointInTimeRecoveryEnabled must be a boolean`,
+    );
+  }
+  stringFields(
+    record(target.kms, `deployment target ${targetId}.kms`),
+    ["projectId", "location", "keyRing", "key"],
+    `deployment target ${targetId}.kms`,
+  );
+  stringFields(
+    record(target.storage, `deployment target ${targetId}.storage`),
+    ["projectId", "location"],
+    `deployment target ${targetId}.storage`,
+  );
+  stringFields(
+    record(target.ingress, `deployment target ${targetId}.ingress`),
+    INGRESS_STRING_FIELDS,
+    `deployment target ${targetId}.ingress`,
+  );
+  if (target.networkBoundary !== undefined) {
+    stringFields(
+      record(target.networkBoundary, `deployment target ${targetId}.networkBoundary`),
+      ["controlPlaneCidr", "privateServicesCidr"],
+      `deployment target ${targetId}.networkBoundary`,
+    );
+  }
+}
+
 export function validateDeploymentTargetsDocument(document: unknown): asserts document is DeploymentTargetsDocument {
   const manifest = record(document, "deployment targets manifest");
   if (manifest.schemaVersion !== 1) {
@@ -316,87 +382,35 @@ export function validateDeploymentTargetsDocument(document: unknown): asserts do
 
   const activeTargets = record(manifest.activeTargets, "deployment targets manifest.activeTargets");
   const targets = record(manifest.targets, "deployment targets manifest.targets");
-
-  for (const environment of DEPLOYMENT_ENVIRONMENTS) {
-    const targetId = stringField(
-      activeTargets,
-      environment,
-      "deployment targets manifest.activeTargets",
-    );
-    if (!(targetId in targets)) {
-      throw new Error(`Active deployment target does not exist: ${targetId}`);
-    }
-  }
+  const hostedTargets: Record<string, unknown> = Object.create(null);
 
   for (const [targetId, value] of Object.entries(targets)) {
-    const target = record(value, `deployment target ${targetId}`);
-    const environment = stringField(target, "environment", `deployment target ${targetId}`);
-    if (!DEPLOYMENT_ENVIRONMENTS.includes(environment as DeploymentEnvironment)) {
-      throw new Error(`deployment target ${targetId}.environment is invalid: ${environment}`);
-    }
-    validatePromotionSourceField(target, targetId, environment);
-    const lifecycle = stringField(target, "lifecycle", `deployment target ${targetId}`);
+    const label = `deployment target ${targetId}`;
+    const target = record(value, label);
+    const environment = stringField(target, "environment", label);
+    const lifecycle = stringField(target, "lifecycle", label);
     if (!TARGET_LIFECYCLES.includes(lifecycle as DeploymentTargetLifecycle)) {
-      throw new Error(`deployment target ${targetId}.lifecycle is invalid: ${lifecycle}`);
+      throw new Error(`${label}.lifecycle is invalid: ${lifecycle}`);
     }
-    stringFields(target, TARGET_STRING_FIELDS, `deployment target ${targetId}`);
-    apiServerEgressCidrs(
-      target.projectRunnerApiServerEgressCidrs,
-      `deployment target ${targetId}.projectRunnerApiServerEgressCidrs`,
-    );
-    stringFields(
-      record(target.artifactRegistry, `deployment target ${targetId}.artifactRegistry`),
-      ["projectId", "location", "repository"],
-      `deployment target ${targetId}.artifactRegistry`,
-    );
-    const cloudSql = record(target.cloudSql, `deployment target ${targetId}.cloudSql`);
-    stringFields(
-      cloudSql,
-      [
-        "projectId",
-        "region",
-        "instance",
-        "mattermostPasswordSecret",
-        "giteaPasswordSecret",
-        "connectionNameSecret",
-      ],
-      `deployment target ${targetId}.cloudSql`,
-    );
-    if (typeof cloudSql.pointInTimeRecoveryEnabled !== "boolean") {
-      throw new Error(
-        `deployment target ${targetId}.cloudSql.pointInTimeRecoveryEnabled must be a boolean`,
-      );
-    }
-    stringFields(
-      record(target.kms, `deployment target ${targetId}.kms`),
-      ["projectId", "location", "keyRing", "key"],
-      `deployment target ${targetId}.kms`,
-    );
-    stringFields(
-      record(target.storage, `deployment target ${targetId}.storage`),
-      ["projectId", "location"],
-      `deployment target ${targetId}.storage`,
-    );
-    stringFields(
-      record(target.ingress, `deployment target ${targetId}.ingress`),
-      INGRESS_STRING_FIELDS,
-      `deployment target ${targetId}.ingress`,
-    );
-    if (target.networkBoundary !== undefined) {
-      stringFields(
-        record(target.networkBoundary, `deployment target ${targetId}.networkBoundary`),
-        ["controlPlaneCidr", "privateServicesCidr"],
-        `deployment target ${targetId}.networkBoundary`,
-      );
+    stringFields(target, TARGET_STRING_FIELDS, label);
+    if (target.kubeContext !== undefined) stringField(target, "kubeContext", label);
+    if (target.pinEnvironment !== undefined) stringField(target, "pinEnvironment", label);
+    if (HOSTED_TARGET_FIELDS.some((field) => Object.hasOwn(target, field))) {
+      validateHostedTarget(target, targetId);
+      validatePromotionSourceField(target, targetId, environment);
+      hostedTargets[targetId] = target;
+    } else if (target.promotionSourceTargetId !== undefined) {
+      throw new Error(`${label}.promotionSourceTargetId requires hosted release settings`);
     }
   }
 
-  validatePromotionSources(targets);
-  validateIngressIdentityUniqueness(targets);
-  validateCustomerHostingProjects(targets);
+  validatePromotionSources(hostedTargets);
+  validateIngressIdentityUniqueness(hostedTargets);
+  validateCustomerHostingProjects(hostedTargets);
 
-  for (const environment of DEPLOYMENT_ENVIRONMENTS) {
-    const targetId = activeTargets[environment] as string;
+  for (const environment of Object.keys(activeTargets)) {
+    const targetId = stringField(activeTargets, environment, "deployment targets manifest.activeTargets");
+    if (!Object.hasOwn(targets, targetId)) throw new Error(`Active deployment target does not exist: ${targetId}`);
     const target = targets[targetId] as Record<string, unknown>;
     if (target.environment !== environment) {
       throw new Error(`Active deployment target ${targetId} belongs to ${String(target.environment)}`);
@@ -435,22 +449,34 @@ export function loadDeploymentTargetsDocument(path: string): DeploymentTargetsDo
 
 function settings(
   targetId: string,
-  target: DeploymentTargetDocument,
-): DeploymentEnvironmentSettings {
-  return {
+  target: PlatformTargetDocument | HostedTargetDocument,
+): DeploymentTargetSettings {
+  const platform: DeploymentTargetSettings = {
     name: target.environment,
-    promotionSourceTargetId: target.promotionSourceTargetId,
     targetId,
     lifecycle: target.lifecycle,
+    clusterName: target.clusterName,
+    namespace: target.namespace,
+    siteOrigin: target.siteOrigin,
+    appOrigin: target.appOrigin,
+    apiOrigin: target.apiOrigin,
+    gitOrigin: target.gitOrigin,
+    mattermostOrigin: target.mattermostOrigin,
+    gatewayValuesFile: target.gatewayValuesFile,
+    ...(target.kubeContext === undefined ? {} : { kubeContext: target.kubeContext }),
+    ...(target.pinEnvironment === undefined ? {} : { pinEnvironment: target.pinEnvironment }),
+  };
+  if (!("clusterProjectId" in target)) return platform;
+  return {
+    ...platform,
+    promotionSourceTargetId: target.promotionSourceTargetId,
     secretNameSuffix: target.secretNameSuffix,
     clusterProjectId: target.clusterProjectId,
     firebaseProjectId: target.firebaseProjectId,
     hostingProjectId: target.hostingProjectId,
     customerHostingProjectId: target.customerHostingProjectId,
     region: target.region,
-    clusterName: target.clusterName,
     kubeContext: `gke_${target.clusterProjectId}_${target.region}_${target.clusterName}`,
-    namespace: target.namespace,
     projectRunnerApiServerEgressCidrs: [...target.projectRunnerApiServerEgressCidrs],
     artifactRegistryProjectId: target.artifactRegistry.projectId,
     artifactRegistryLocation: target.artifactRegistry.location,
@@ -476,20 +502,13 @@ function settings(
     giteaStaticIpName: target.ingress.giteaStaticIpName,
     previewStaticIpName: target.ingress.previewStaticIpName,
     networkBoundary: target.networkBoundary,
-    siteOrigin: target.siteOrigin,
-    appOrigin: target.appOrigin,
-    apiOrigin: target.apiOrigin,
-    gitOrigin: target.gitOrigin,
-    mattermostOrigin: target.mattermostOrigin,
     previewOrigin: target.previewOrigin,
-    gatewayValuesFile: target.gatewayValuesFile,
-    pinEnvironment: target.pinEnvironment,
   };
 }
 
 interface DeploymentTargetRegistry {
-  targets: Record<string, DeploymentEnvironmentSettings>;
-  environments: Record<DeploymentEnvironment, DeploymentEnvironmentSettings>;
+  targets: Record<string, DeploymentTargetSettings>;
+  environments: Record<string, DeploymentTargetSettings>;
 }
 
 function buildRegistry(manifest: DeploymentTargetsDocument): DeploymentTargetRegistry {
@@ -498,13 +517,10 @@ function buildRegistry(manifest: DeploymentTargetsDocument): DeploymentTargetReg
       targetId,
       settings(targetId, target),
     ]),
-  ) as Record<string, DeploymentEnvironmentSettings>;
+  );
   const environments = Object.fromEntries(
-    DEPLOYMENT_ENVIRONMENTS.map((environment) => [
-      environment,
-      targets[manifest.activeTargets[environment]],
-    ]),
-  ) as Record<DeploymentEnvironment, DeploymentEnvironmentSettings>;
+    Object.entries(manifest.activeTargets).map(([environment, targetId]) => [environment, targets[targetId]]),
+  );
   return { targets, environments };
 }
 
@@ -519,24 +535,44 @@ export function resetDeploymentTargetsForTests(): void {
   registry = undefined;
 }
 
-export function deploymentEnvironmentSettings(
-  environment: DeploymentEnvironment,
-): DeploymentEnvironmentSettings {
-  return loadRegistry().environments[environment];
+export function activeDeploymentTargetSettings(environment: string): DeploymentTargetSettings {
+  const { environments } = loadRegistry();
+  if (!Object.hasOwn(environments, environment)) {
+    throw new Error(`Unknown deployment environment: ${environment}`);
+  }
+  return environments[environment];
 }
 
-export function deploymentTargetSettings(targetId: string): DeploymentEnvironmentSettings {
-  const target = loadRegistry().targets[targetId];
-  if (!target) {
+export function requireHostedDeploymentSettings(settings: DeploymentTargetSettings): DeploymentEnvironmentSettings {
+  if (!settings.clusterProjectId) {
+    throw new Error(`Deployment target ${settings.targetId} has no hosted deployment settings`);
+  }
+  return settings as DeploymentEnvironmentSettings;
+}
+
+export function deploymentEnvironmentSettings(
+  environment: DeploymentEnvironment,
+): DeploymentEnvironmentSettings & { name: DeploymentEnvironment } {
+  const settings = requireHostedDeploymentSettings(activeDeploymentTargetSettings(environment));
+  return { ...settings, name: environment };
+}
+
+export function deploymentTargetSettings(targetId: string): DeploymentTargetSettings {
+  const { targets } = loadRegistry();
+  if (!Object.hasOwn(targets, targetId)) {
     throw new Error(`Unknown deployment target: ${targetId}`);
   }
-  return target;
+  return targets[targetId];
+}
+
+export function hostedDeploymentTargetSettings(targetId: string): DeploymentEnvironmentSettings {
+  return requireHostedDeploymentSettings(deploymentTargetSettings(targetId));
 }
 
 export function deploymentSettingsForRuntime(input: {
   namespace: string;
   targetId?: string;
-}): DeploymentEnvironmentSettings {
+}): DeploymentTargetSettings {
   if (input.targetId !== undefined) {
     const target = deploymentTargetSettings(input.targetId);
     if (target.namespace !== input.namespace) {
@@ -547,11 +583,11 @@ export function deploymentSettingsForRuntime(input: {
     return target;
   }
 
-  const environment = deploymentEnvironmentForNamespace(input.namespace);
-  if (environment === "unknown") {
+  const target = Object.values(loadRegistry().targets).find((settings) => settings.namespace === input.namespace);
+  if (!target) {
     throw new Error(`Unknown deployment environment for namespace: ${input.namespace}`);
   }
-  return deploymentEnvironmentSettings(environment);
+  return activeDeploymentTargetSettings(target.name);
 }
 
 export function deploymentTargetForFirebaseProject(
@@ -563,18 +599,20 @@ export function deploymentTargetForFirebaseProject(
   if (!target) {
     throw new Error(`Unknown Firebase deployment project: ${projectId}`);
   }
-  return target;
+  return requireHostedDeploymentSettings(target);
 }
 
 export function deploymentTargetsForEnvironment(
   environment: DeploymentEnvironment,
 ): DeploymentEnvironmentSettings[] {
-  return Object.values(loadRegistry().targets).filter((target) => target.name === environment);
+  return Object.values(loadRegistry().targets)
+    .filter((target) => target.name === environment)
+    .map(requireHostedDeploymentSettings);
 }
 
 export function deploymentEnvironmentForNamespace(
   namespace: string,
-): ResolvedDeploymentEnvironment {
+): string {
   const entry = Object.values(loadRegistry().targets).find((value) => value.namespace === namespace);
   return entry?.name ?? "unknown";
 }
@@ -585,10 +623,13 @@ export function deploymentEnvironmentForProject(
   const entry = Object.values(loadRegistry().targets).find(
     (value) => value.firebaseProjectId === projectId,
   );
-  return entry?.name ?? "unknown";
+  return entry?.name === "test" || entry?.name === "prod" ? entry.name : "unknown";
 }
 
-export function publicAppOriginsForTarget(settings: DeploymentEnvironmentSettings): string[] {
+export function publicAppOriginsForTarget(settings: DeploymentTargetSettings): string[] {
+  if (!settings.firebaseProjectId || !settings.hostingProjectId) {
+    return [settings.siteOrigin, settings.appOrigin];
+  }
   const project = settings.firebaseProjectId;
   if (settings.name === "prod") {
     return [

@@ -293,6 +293,7 @@ import {
 } from "@octogee/core/artifact-registry";
 import {
   deploymentSettingsForRuntime,
+  requireHostedDeploymentSettings,
 } from "@octogee/core/deployment-environment";
 import {
   deleteAuthUserTolerantOfMissing,
@@ -406,19 +407,19 @@ const ENVIRONMENT_SETTINGS = deploymentSettingsForRuntime({
   namespace: NAMESPACE,
   targetId: process.env.DEPLOYMENT_TARGET_ID,
 });
-const RELEASE_ENVIRONMENT =
-  ENVIRONMENT_SETTINGS.name === "test" || ENVIRONMENT_SETTINGS.name === "prod"
-    ? ENVIRONMENT_SETTINGS.name
-    : null;
-const CENTRAL_RELEASE_ROUTE_DEPS = RELEASE_ENVIRONMENT
+const environmentName = ENVIRONMENT_SETTINGS.name;
+const hostedRelease = ENVIRONMENT_SETTINGS.clusterProjectId
+  ? requireHostedDeploymentSettings(ENVIRONMENT_SETTINGS)
+  : null;
+const CENTRAL_RELEASE_ROUTE_DEPS = hostedRelease && (environmentName === "test" || environmentName === "prod")
   ? {
-      releaseEnvironment: RELEASE_ENVIRONMENT,
+      releaseEnvironment: environmentName,
       releaseAuthority: createCentralReleaseAuthority({
-        project: ENVIRONMENT_SETTINGS.artifactRegistryProjectId,
-        location: ENVIRONMENT_SETTINGS.artifactRegistryLocation,
-        repository: ENVIRONMENT_SETTINGS.artifactRegistryName,
+        project: hostedRelease.artifactRegistryProjectId,
+        location: hostedRelease.artifactRegistryLocation,
+        repository: hostedRelease.artifactRegistryName,
       }),
-    }
+    } as const
   : { releaseEnvironment: null };
 
 const GATEWAY_VALUES_FILE = (function () {
@@ -1337,8 +1338,9 @@ async function prepareDesiredGatewayIntent(input: {
     kmsKeyName: ENVIRONMENT_SETTINGS.kmsKeyName,
     deploymentTargetId: ENVIRONMENT_SETTINGS.targetId,
     deploymentProjectId: ENVIRONMENT_SETTINGS.firebaseProjectId,
-    gatewayServiceAccount:
-      `octogee-gateway@${ENVIRONMENT_SETTINGS.firebaseProjectId}.iam.gserviceaccount.com`,
+    gatewayServiceAccount: ENVIRONMENT_SETTINGS.firebaseProjectId
+      ? `octogee-gateway@${ENVIRONMENT_SETTINGS.firebaseProjectId}.iam.gserviceaccount.com`
+      : undefined,
   });
   return {
     opts,

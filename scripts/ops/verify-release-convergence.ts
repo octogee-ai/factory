@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
-import { deploymentTargetSettings } from "@octogee/core/deployment-environment";
+import { hostedDeploymentTargetSettings } from "@octogee/core/deployment-environment";
 import { isBareGatewayId, readGatewayRuntimeDoc } from "@octogee/core/gateway-live-release";
 import { type PlatformStateStore } from "@octogee/core/platform-state";
 import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
@@ -325,7 +325,7 @@ async function readSnapshot(input: {
 
 async function run(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  const settings = deploymentTargetSettings(options.deploymentTarget);
+  const settings = hostedDeploymentTargetSettings(options.deploymentTarget);
   const baselineValue = JSON.parse(await readFile(options.baseline, "utf8")) as unknown;
   if (!isBaseline(baselineValue)) throw new Error("release convergence baseline is invalid");
   const app = initializeApp({

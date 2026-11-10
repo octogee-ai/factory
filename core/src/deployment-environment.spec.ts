@@ -1,7 +1,9 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+
+import { runDeploymentTargetResolver } from "./resolve-deployment-target.js";
 
 import deploymentTargetsDocument from "./deployment-targets.json" with { type: "json" };
 
@@ -316,6 +318,46 @@ describe("deployment targets manifest location", () => {
     resetDeploymentTargetsForTests();
     expect(deploymentEnvironmentSettings("test").namespace).toBe("octogee-elsewhere");
     expect(deploymentEnvironmentForNamespace("octogee-test")).toBe("unknown");
+  });
+
+  it("resolves an active custom environment without GCP configuration", () => {
+    const dir = mkdtempSync(join(tmpdir(), "platform-deployment-targets-"));
+    try {
+      const path = join(dir, "deployment-targets.json");
+      writeFileSync(path, JSON.stringify({
+        schemaVersion: 1,
+        activeTargets: { "local-factory": "local-kind" },
+        targets: {
+          "local-kind": {
+            environment: "local-factory",
+            lifecycle: "active",
+            namespace: "factory",
+            clusterName: "kind",
+            kubeContext: "kind-factory",
+            appOrigin: "http://localhost:4322",
+            siteOrigin: "http://localhost:4321",
+            apiOrigin: "http://localhost:3001",
+            gitOrigin: "https://git.example.com",
+            mattermostOrigin: "https://chat.example.com",
+            gatewayValuesFile: "values.yaml",
+          },
+        },
+      }));
+      process.env[DEPLOYMENT_TARGETS_ENV] = path;
+      resetDeploymentTargetsForTests();
+      const settings = deploymentSettingsForRuntime({ namespace: "factory" });
+      expect(settings).toMatchObject({
+        name: "local-factory",
+        targetId: "local-kind",
+        kubeContext: "kind-factory",
+      });
+      expect(settings).not.toHaveProperty("clusterProjectId");
+      expect(publicAppOriginsForTarget(settings)).toEqual(["http://localhost:4321", "http://localhost:4322"]);
+      expect(JSON.parse(runDeploymentTargetResolver(["--environment=local-factory", "--format=json"])))
+        .toMatchObject({ environment: "local-factory", target_id: "local-kind", namespace: "factory" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("fails loud when the named manifest is missing or invalid", () => {

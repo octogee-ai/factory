@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { deploymentTargetSettings, type DeploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
+import { hostedDeploymentTargetSettings, type DeploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import {
   executePlatformMigrationActivation,
   parsePlatformMigrationActivationArgs,
@@ -121,7 +121,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
       await assertPairedCentralQuiesced(receipt);
       await assertTargetWriterQuiesced(receipt);
     },
-    settingsForTarget: (target) => deploymentTargetSettings(target),
+    settingsForTarget: (target) => hostedDeploymentTargetSettings(target),
     readServices: async (settings) => services(settings),
     scaleService: async (settings, service, replicas) => { kube(settings, ["scale", `${service.kind.toLowerCase()}/${service.name}`, `--replicas=${replicas}`]); },
     waitForServicesReady: async (settings, expected) => {

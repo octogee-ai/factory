@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import type { DeploymentEnvironmentSettings } from "./deployment-environment.js";
+import { requireHostedDeploymentSettings, type DeploymentEnvironmentSettings } from "./deployment-environment.js";
 import {
   isDeploymentTargetResolverEntrypoint,
   resolveDeploymentTargetArguments,
@@ -98,7 +98,7 @@ if (isDeploymentTargetResolverEntrypoint(import.meta.url, process.argv[1])) {
   try {
     process.stdout.write(
       renderDeploymentTargetHelmValues(
-        resolveDeploymentTargetArguments(process.argv.slice(2)),
+        requireHostedDeploymentSettings(resolveDeploymentTargetArguments(process.argv.slice(2))),
       ),
     );
   } catch (error) {

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { deploymentTargetSettings, type DeploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
+import { hostedDeploymentTargetSettings, type DeploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import { createPlatformContentMigrationPlan, parsePlatformContentMigrationArguments } from "../lib/platform-content-migration.js";
 import { resolvePlatformContentMigrationOperatorImage } from "../lib/platform-content-migration-image.js";
 import {
@@ -388,7 +388,7 @@ function main(): void {
   assertMigrationReceiptBucket();
   const revision = assertExactMergedMain(fileURLToPath(new URL("../..", import.meta.url)));
   if (receiptExists(receipt)) throw new Error("migration receipt already exists; completed migrations cannot be replayed");
-  const source = deploymentTargetSettings(plan.source); const target = deploymentTargetSettings(plan.target);
+  const source = hostedDeploymentTargetSettings(plan.source); const target = hostedDeploymentTargetSettings(plan.target);
   if (!source.region.includes("central") || !target.region.includes("west") || source.name !== target.name) throw new Error("target pair is not an exact same-environment central-to-west migration");
   const image = resolvePlatformContentMigrationOperatorImage({
     artifactRegistryLocation: target.artifactRegistryLocation,

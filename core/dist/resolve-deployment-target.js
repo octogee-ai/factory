@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { deploymentEnvironmentSettings, deploymentTargetSettings, } from "./deployment-environment.js";
+import { activeDeploymentTargetSettings, deploymentTargetSettings, } from "./deployment-environment.js";
 export function isDeploymentTargetResolverEntrypoint(moduleUrl, entrypoint) {
     if (!entrypoint)
         return false;
@@ -14,16 +14,6 @@ export function isDeploymentTargetResolverEntrypoint(moduleUrl, entrypoint) {
         }
         return moduleUrl === pathToFileURL(entrypoint).href;
     }
-}
-const DEPLOYMENT_ENVIRONMENTS = [
-    "prod",
-    "test",
-];
-function deploymentEnvironment(value) {
-    if (!DEPLOYMENT_ENVIRONMENTS.includes(value)) {
-        throw new Error(`Unknown deployment environment: ${value}`);
-    }
-    return value;
 }
 export function resolveDeploymentTargetArguments(argv) {
     let environment;
@@ -43,7 +33,7 @@ export function resolveDeploymentTargetArguments(argv) {
         throw new Error("Exactly one of --environment or --target is required");
     }
     if (environment !== undefined) {
-        return deploymentEnvironmentSettings(deploymentEnvironment(environment));
+        return activeDeploymentTargetSettings(environment);
     }
     return deploymentTargetSettings(targetId);
 }
@@ -72,7 +62,7 @@ function deploymentTargetOutput(settings) {
         cloud_sql_mattermost_password_secret_name: settings.cloudSqlMattermostPasswordSecretName,
         cloud_sql_gitea_password_secret_name: settings.cloudSqlGiteaPasswordSecretName,
         cloud_sql_connection_name_secret_name: settings.cloudSqlConnectionNameSecretName,
-        cloud_sql_point_in_time_recovery_enabled: String(settings.cloudSqlPointInTimeRecoveryEnabled),
+        cloud_sql_point_in_time_recovery_enabled: settings.cloudSqlPointInTimeRecoveryEnabled?.toString(),
         kms_project_id: settings.kmsProjectId,
         kms_location: settings.kmsLocation,
         kms_key_name: settings.kmsKeyName,
@@ -97,6 +87,7 @@ export function formatDeploymentTargetOutput(settings, format) {
         return JSON.stringify(output);
     }
     return Object.entries(output)
+        .filter((entry) => entry[1] !== undefined)
         .map(([key, value]) => {
         if (value.includes("\n") || value.includes("\r")) {
             throw new Error(`Deployment target output ${key} contains a newline`);

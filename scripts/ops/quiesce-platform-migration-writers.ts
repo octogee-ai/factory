@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { applicationDefault, getApps, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import {
-  deploymentTargetSettings,
+  hostedDeploymentTargetSettings,
   type DeploymentEnvironmentSettings,
 } from "@octogee/core/deployment-environment";
 import {
@@ -437,7 +437,7 @@ export async function assertPairedCentralQuiesced(receipt: PlatformMigrationWrit
   ) {
     throw new Error("paired CENTRAL writer quiescence receipt does not match the WEST restore receipt");
   }
-  const settings = deploymentTargetSettings(source);
+  const settings = hostedDeploymentTargetSettings(source);
   const maintenance = await dependenciesForPairedMaintenance(settings);
   if (maintenance?.mode !== FROZEN_MAINTENANCE_MODE || maintenance.managedBy !== QUIESCENCE_MANAGER) {
     throw new Error("paired CENTRAL writer quiescence maintenance state is not frozen");
@@ -455,7 +455,7 @@ export async function assertPairedCentralQuiesced(receipt: PlatformMigrationWrit
 }
 
 export async function assertTargetWriterQuiesced(receipt: PlatformMigrationWriterReceipt): Promise<void> {
-  const settings = deploymentTargetSettings(receipt.targetId);
+  const settings = hostedDeploymentTargetSettings(receipt.targetId);
   const maintenance = await dependenciesForPairedMaintenance(settings);
   if (maintenance?.mode !== FROZEN_MAINTENANCE_MODE || maintenance.managedBy !== QUIESCENCE_MANAGER) {
     throw new Error("target writer quiescence maintenance state is not frozen");
@@ -544,7 +544,7 @@ function dependencies(repoRoot: string): PlatformMigrationWriterQuiescenceDepend
     assertRequiredMigrationReceipts: async (receipt) => assertRequiredMigrationReceipts(receipt),
     assertMigrationActivation: async (receipt) => assertMigrationActivation(receipt),
     assertPairedCentralQuiesced: async (receipt) => assertPairedCentralQuiesced(receipt),
-    settingsForTarget: (targetId) => deploymentTargetSettings(targetId),
+    settingsForTarget: (targetId) => hostedDeploymentTargetSettings(targetId),
     receiptUri: platformMigrationWriterReceiptUri,
   };
 }

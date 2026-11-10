@@ -36,18 +36,28 @@ interface NetworkBoundaryDocument {
     controlPlaneCidr: string;
     privateServicesCidr: string;
 }
-interface DeploymentTargetDocument {
-    environment: DeploymentEnvironment;
+interface PlatformTargetDocument {
+    environment: string;
     promotionSourceTargetId?: string;
     lifecycle: DeploymentTargetLifecycle;
+    clusterName: string;
+    kubeContext?: string;
+    namespace: string;
+    siteOrigin: string;
+    appOrigin: string;
+    apiOrigin: string;
+    gitOrigin: string;
+    mattermostOrigin: string;
+    gatewayValuesFile: string;
+    pinEnvironment?: string;
+}
+interface HostedTargetDocument extends PlatformTargetDocument {
     secretNameSuffix: string;
     clusterProjectId: string;
     firebaseProjectId: string;
     hostingProjectId: string;
     customerHostingProjectId: string;
     region: string;
-    clusterName: string;
-    namespace: string;
     projectRunnerApiServerEgressCidrs: string[];
     artifactRegistry: ArtifactRegistryDocument;
     cloudSql: CloudSqlDocument;
@@ -55,22 +65,16 @@ interface DeploymentTargetDocument {
     storage: StorageDocument;
     ingress: IngressDocument;
     networkBoundary?: NetworkBoundaryDocument;
-    siteOrigin: string;
-    appOrigin: string;
-    apiOrigin: string;
-    gitOrigin: string;
-    mattermostOrigin: string;
     previewOrigin: string;
-    gatewayValuesFile: string;
     pinEnvironment: string;
 }
 interface DeploymentTargetsDocument {
     schemaVersion: 1;
-    activeTargets: Record<DeploymentEnvironment, string>;
-    targets: Record<string, DeploymentTargetDocument>;
+    activeTargets: Record<string, string>;
+    targets: Record<string, PlatformTargetDocument | HostedTargetDocument>;
 }
 export interface DeploymentEnvironmentSettings {
-    name: DeploymentEnvironment;
+    name: string;
     promotionSourceTargetId?: string;
     targetId: string;
     lifecycle: DeploymentTargetLifecycle;
@@ -117,18 +121,24 @@ export interface DeploymentEnvironmentSettings {
     gatewayValuesFile: string;
     pinEnvironment: string;
 }
+export type DeploymentTargetSettings = Pick<DeploymentEnvironmentSettings, "name" | "targetId" | "lifecycle" | "clusterName" | "namespace" | "siteOrigin" | "appOrigin" | "apiOrigin" | "gitOrigin" | "mattermostOrigin" | "gatewayValuesFile"> & Partial<DeploymentEnvironmentSettings>;
 export declare function validateDeploymentTargetsDocument(document: unknown): asserts document is DeploymentTargetsDocument;
 export declare function loadDeploymentTargetsDocument(path: string): DeploymentTargetsDocument;
 export declare function resetDeploymentTargetsForTests(): void;
-export declare function deploymentEnvironmentSettings(environment: DeploymentEnvironment): DeploymentEnvironmentSettings;
-export declare function deploymentTargetSettings(targetId: string): DeploymentEnvironmentSettings;
+export declare function activeDeploymentTargetSettings(environment: string): DeploymentTargetSettings;
+export declare function requireHostedDeploymentSettings(settings: DeploymentTargetSettings): DeploymentEnvironmentSettings;
+export declare function deploymentEnvironmentSettings(environment: DeploymentEnvironment): DeploymentEnvironmentSettings & {
+    name: DeploymentEnvironment;
+};
+export declare function deploymentTargetSettings(targetId: string): DeploymentTargetSettings;
+export declare function hostedDeploymentTargetSettings(targetId: string): DeploymentEnvironmentSettings;
 export declare function deploymentSettingsForRuntime(input: {
     namespace: string;
     targetId?: string;
-}): DeploymentEnvironmentSettings;
+}): DeploymentTargetSettings;
 export declare function deploymentTargetForFirebaseProject(projectId: string): DeploymentEnvironmentSettings;
 export declare function deploymentTargetsForEnvironment(environment: DeploymentEnvironment): DeploymentEnvironmentSettings[];
-export declare function deploymentEnvironmentForNamespace(namespace: string): ResolvedDeploymentEnvironment;
+export declare function deploymentEnvironmentForNamespace(namespace: string): string;
 export declare function deploymentEnvironmentForProject(projectId: string): ResolvedDeploymentEnvironment;
-export declare function publicAppOriginsForTarget(settings: DeploymentEnvironmentSettings): string[];
+export declare function publicAppOriginsForTarget(settings: DeploymentTargetSettings): string[];
 export {};

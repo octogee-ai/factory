@@ -4,9 +4,8 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
-  type DeploymentEnvironment,
-  type DeploymentEnvironmentSettings,
-  deploymentEnvironmentSettings,
+  type DeploymentTargetSettings,
+  activeDeploymentTargetSettings,
   deploymentTargetSettings,
 } from "./deployment-environment.js";
 
@@ -27,21 +26,9 @@ export function isDeploymentTargetResolverEntrypoint(
   }
 }
 
-const DEPLOYMENT_ENVIRONMENTS: DeploymentEnvironment[] = [
-  "prod",
-  "test",
-];
-
-function deploymentEnvironment(value: string): DeploymentEnvironment {
-  if (!DEPLOYMENT_ENVIRONMENTS.includes(value as DeploymentEnvironment)) {
-    throw new Error(`Unknown deployment environment: ${value}`);
-  }
-  return value as DeploymentEnvironment;
-}
-
 export function resolveDeploymentTargetArguments(
   argv: readonly string[],
-): DeploymentEnvironmentSettings {
+): DeploymentTargetSettings {
   let environment: string | undefined;
   let targetId: string | undefined;
 
@@ -59,14 +46,14 @@ export function resolveDeploymentTargetArguments(
     throw new Error("Exactly one of --environment or --target is required");
   }
   if (environment !== undefined) {
-    return deploymentEnvironmentSettings(deploymentEnvironment(environment));
+    return activeDeploymentTargetSettings(environment);
   }
   return deploymentTargetSettings(targetId as string);
 }
 
 function deploymentTargetOutput(
-  settings: DeploymentEnvironmentSettings,
-): Record<string, string> {
+  settings: DeploymentTargetSettings,
+): Record<string, string | undefined> {
   return {
     environment: settings.name,
     target_id: settings.targetId,
@@ -92,9 +79,7 @@ function deploymentTargetOutput(
       settings.cloudSqlMattermostPasswordSecretName,
     cloud_sql_gitea_password_secret_name: settings.cloudSqlGiteaPasswordSecretName,
     cloud_sql_connection_name_secret_name: settings.cloudSqlConnectionNameSecretName,
-    cloud_sql_point_in_time_recovery_enabled: String(
-      settings.cloudSqlPointInTimeRecoveryEnabled,
-    ),
+    cloud_sql_point_in_time_recovery_enabled: settings.cloudSqlPointInTimeRecoveryEnabled?.toString(),
     kms_project_id: settings.kmsProjectId,
     kms_location: settings.kmsLocation,
     kms_key_name: settings.kmsKeyName,
@@ -115,7 +100,7 @@ function deploymentTargetOutput(
 }
 
 export function formatDeploymentTargetOutput(
-  settings: DeploymentEnvironmentSettings,
+  settings: DeploymentTargetSettings,
   format: DeploymentTargetOutputFormat,
 ): string {
   const output = deploymentTargetOutput(settings);
@@ -123,6 +108,7 @@ export function formatDeploymentTargetOutput(
     return JSON.stringify(output);
   }
   return Object.entries(output)
+    .filter((entry): entry is [string, string] => entry[1] !== undefined)
     .map(([key, value]) => {
       if (value.includes("\n") || value.includes("\r")) {
         throw new Error(`Deployment target output ${key} contains a newline`);

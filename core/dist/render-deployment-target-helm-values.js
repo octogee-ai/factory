@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { requireHostedDeploymentSettings } from "./deployment-environment.js";
 import { isDeploymentTargetResolverEntrypoint, resolveDeploymentTargetArguments, } from "./resolve-deployment-target.js";
 function quoted(value) {
     return JSON.stringify(value);
@@ -86,7 +87,7 @@ glm-controller:
 }
 if (isDeploymentTargetResolverEntrypoint(import.meta.url, process.argv[1])) {
     try {
-        process.stdout.write(renderDeploymentTargetHelmValues(resolveDeploymentTargetArguments(process.argv.slice(2))));
+        process.stdout.write(renderDeploymentTargetHelmValues(requireHostedDeploymentSettings(resolveDeploymentTargetArguments(process.argv.slice(2)))));
     }
     catch (error) {
         process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

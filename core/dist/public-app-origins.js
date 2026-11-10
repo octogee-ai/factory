@@ -2,7 +2,7 @@ export const PUBLIC_APP_ORIGINS_ENV = "PUBLIC_APP_ORIGINS";
 export function parsePublicAppOrigins(raw) {
     const entries = (raw ?? "").split(/[\s,]+/u).filter((entry) => entry.length > 0);
     if (entries.length === 0) {
-        throw new Error(`${PUBLIC_APP_ORIGINS_ENV} must list at least one https origin, separated by commas or whitespace`);
+        throw new Error(`${PUBLIC_APP_ORIGINS_ENV} must list at least one https origin or http://localhost origin, separated by commas or whitespace`);
     }
     const origins = new Set();
     for (const entry of entries) {
@@ -13,8 +13,9 @@ export function parsePublicAppOrigins(raw) {
         catch {
             throw new Error(`${PUBLIC_APP_ORIGINS_ENV} entry is not a URL: ${JSON.stringify(entry)}`);
         }
-        if (url.protocol !== "https:" || url.origin !== entry) {
-            throw new Error(`${PUBLIC_APP_ORIGINS_ENV} entry must be a bare https origin: ${JSON.stringify(entry)}`);
+        const allowedProtocol = url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "localhost");
+        if (!allowedProtocol || url.origin !== entry) {
+            throw new Error(`${PUBLIC_APP_ORIGINS_ENV} entry must be a bare https origin or http://localhost origin: ${JSON.stringify(entry)}`);
         }
         origins.add(url.origin);
     }

@@ -1,11 +1,11 @@
 import pg from "pg";
-import { deploymentTargetSettings } from "../../deployment-environment.js";
+import { hostedDeploymentTargetSettings } from "../../deployment-environment.js";
 import { createPlatformStatePool, platformDatabaseSettingsFromEnvironment } from "./connection.js";
 import { assertPlatformDatabaseTarget } from "./deployment-target.js";
 import { DEFAULT_PLATFORM_STATE_SCHEMA, migratePlatformState } from "./migrate.js";
 export async function assertPlatformCutoverImported(pool, deploymentTargetId, schema = DEFAULT_PLATFORM_STATE_SCHEMA) {
     await assertPlatformDatabaseTarget(pool, deploymentTargetId, schema);
-    const sourceProject = deploymentTargetSettings(deploymentTargetId).firebaseProjectId;
+    const sourceProject = hostedDeploymentTargetSettings(deploymentTargetId).firebaseProjectId;
     const ledgerSchema = pg.escapeIdentifier(`${schema}_cutover`);
     try {
         const result = await pool.query(`SELECT 1 FROM ${ledgerSchema}.import_ledger

@@ -7,12 +7,21 @@ describe("public app origins", () => {
       .toEqual(["https://app.example.com", "https://example.com"]);
   });
 
+  it("accepts bare HTTP origins on localhost", () => {
+    expect(parsePublicAppOrigins("http://localhost:4322, https://example.com"))
+      .toEqual(["http://localhost:4322", "https://example.com"]);
+  });
+
   it.each([undefined, "", " , "])("fails loud when nothing is configured: %j", (raw) => {
     expect(() => parsePublicAppOrigins(raw)).toThrow(/PUBLIC_APP_ORIGINS must list at least one https origin/);
   });
 
   it.each([
     "http://app.example.com",
+    "http://127.0.0.1:4322",
+    "http://localhost.example.com",
+    "http://localhost:4322/",
+    "http://user@localhost:4322",
     "https://app.example.com/",
     "https://app.example.com/path",
     "app.example.com",

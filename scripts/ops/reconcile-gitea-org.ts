@@ -7,6 +7,7 @@ import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
 import {
   deploymentEnvironmentSettings,
   deploymentSettingsForRuntime,
+  requireHostedDeploymentSettings,
 } from "@octogee/core/deployment-environment";
 import { systemConfigRepoName } from "@octogee/core/gitea-naming";
 import {
@@ -81,7 +82,7 @@ export function resolveReconcileFirebaseProject(
       `Deployment target ${target.targetId} belongs to ${target.name}, not ${environment}`,
     );
   }
-  return target.firebaseProjectId;
+  return requireHostedDeploymentSettings(target).firebaseProjectId;
 }
 
 interface GiteaIO {
