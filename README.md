@@ -18,13 +18,8 @@ curl -fsSL https://raw.githubusercontent.com/octogee-ai/octogee-cloud/main/insta
 
 ## What you need to sign up for
 
-| Where it runs | Sign up for | Cost to start |
-| --- | --- | --- |
-| Your own machine | A Gemini API key from Google | Nothing, on the free tier |
-| Google Cloud | Google Cloud, a domain, and the same Gemini API key | Google's welcome credit for new accounts covers Google Cloud for up to 90 days. The domain is a yearly fee |
-
-Mattermost, Gitea and the rest are installed for you and need no account.
-[Getting started](docs/getting-started.md#what-you-need-to-sign-up-for) lists every account, the tier to choose and what happens when a free tier runs out.
+On your own machine, one model key. Gemini's free tier works. On Google Cloud,
+also a billing account and a domain. [See every account and tier](docs/getting-started.md#what-you-need-to-sign-up-for).
 
 ## What is here today
 
