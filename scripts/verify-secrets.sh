@@ -145,6 +145,13 @@ if posthog_cloud_required_for_env "$ENV"; then
   )
 fi
 
+if [[ "$ENV" != custom ]]; then
+  REQUIRED_SECRETS+=("platform-state-postgres")
+  for platform_state_key in host database sslmode migration-user migration-password runtime-user runtime-password; do
+    REQUIRED_KEYS+=("platform-state-postgres:${platform_state_key}:./scripts/setup-secrets.sh ${FIX_SUFFIX}")
+  done
+fi
+
 echo ""
 echo -e "${BOLD}Pre-deploy secret check — ${ENV}${NC}"
 echo -e "Namespace: ${NS} | Context: ${KUBE_CTX}"

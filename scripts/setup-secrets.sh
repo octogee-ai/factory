@@ -42,6 +42,7 @@ source "$SCRIPT_DIR/lib/github-oauth-redirect.sh"
 source "$SCRIPT_DIR/lib/openai-key-validation.sh"
 source "$SCRIPT_DIR/lib/signature-key-validation.sh"
 source "$SCRIPT_DIR/lib/agent-store-postgres-secret.sh"
+source "$SCRIPT_DIR/lib/platform-state-postgres-secret.sh"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -378,6 +379,11 @@ AGENT_STORE_SECRET_PREFIX="agent-store-postgres"
 [[ "$ENV" != custom ]] || AGENT_STORE_SECRET_PREFIX="agent-store-postgres-$K8S_NAMESPACE"
 materialize_agent_store_postgres_secret "$FIREBASE_PROJECT" "$K8S_NAMESPACE" "$K8S_CONTEXT" "$AGENT_STORE_SECRET_PREFIX"
 ok "Secret: agent-store-postgres"
+
+if [[ "$ENV" != custom ]]; then
+  materialize_platform_state_postgres_secret "$FIREBASE_PROJECT" "$TARGET_CLOUD_SQL_PROJECT" "octogee-platform-$TARGET_ENVIRONMENT" "$K8S_NAMESPACE" "$K8S_CONTEXT"
+  ok "Secret: platform-state-postgres"
+fi
 
 info "mattermost-cloud-sql"
 MM_DB_PASSWORD=$(sm_get "$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET" "$SM_PROJECT")
