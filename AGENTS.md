@@ -171,7 +171,7 @@ in Central Artifact Registry.
 
 ## Environments
 
-Active TEST and PROD share the CENTRAL GKE cluster. MM WebSockets ride
+TEST and PROD run in separate GCP projects, each with its own GKE cluster. MM WebSockets ride
 `api.octogee.com` (chat.octogee.com retired).
 
 |                       | Test                                              | Prod                                  |

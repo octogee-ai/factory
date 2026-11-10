@@ -296,6 +296,11 @@ export const EDGES: readonly ScopeEdge[] = [
       "@octogee/core is consumed by scripts + octogee-api (via scripts/lib re-export shims) + gateway-edge + glm-controller (direct package import); tests/specs' readSrc() helpers (model-credential-materializer, byot-sync-apply, gateway-rpc-local-exceptions specs) also fall back to reading core/src directly for logic that moved out of scripts/lib",
   },
   {
+    when: "core/src/deployment-targets.json",
+    jobs: [JOBS.acceptance],
+    reason: "acceptance/lib/safety-preflight.ts and acceptance/lib/customer-session.ts import the deployment-target registry directly",
+  },
+  {
     when: "test-helpers/",
     jobs: [
       JOBS.coreEmulator,
