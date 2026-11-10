@@ -76,6 +76,10 @@ describe("portable Linux PR checks", () => {
     expect(checkPlan(["docs/INDEX.md"], "tests")).toEqual([]);
   });
 
+  it("runs the acceptance specs when the deployment-target registry changes, because acceptance imports it directly", () => {
+    expect(checkPlan(["core/src/deployment-targets.json"], "tests").map(job => job.name)).toContain("acceptance");
+  });
+
   it("runs every quality gate on a full run without deployment commands", () => {
     const plan = checkPlan(["docs/INDEX.md"], "quality", false, true);
     expect(plan.map(job => job.name)).toEqual(["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit"]);
