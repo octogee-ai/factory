@@ -45,7 +45,49 @@ function fixture() {
   return { records, deps, owner, request, ctx, claim, events, setProof: (value: boolean) => { proof = value; } };
 }
 
+function failedCleanupRetry() {
+  const h = fixture();
+  const operation = h.records[`glmOperations/${operationId}`];
+  const error = `/unmount/${target}: 500 {"error":"unmount failed","message":"voice migration resume failed: HTTP 409"}`;
+  Object.assign(operation.attemptHistory[0], { startedAt: 90, completedAt: 100 });
+  operation.attemptHistory.push({ attempt: 23, startedAt: 110, completedAt: 120, steps: [], error });
+  Object.assign(operation, {
+    attempts: 23, startedAt: 110, completedAt: 120, steps: [], error,
+    schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 130,
+  });
+  h.records[`glmGateways/${source}`].vmHome = {};
+  return { ...h, operation };
+}
+
 describe("retired target Native return source-only recovery", () => {
+  it("recovers the original source claim after a failed cleanup-only retry", async () => {
+    const h = failedCleanupRetry();
+    const history = structuredClone(h.operation.attemptHistory);
+    expect(await h.request()).toBe(true);
+    expect(h.events).toEqual([]);
+    expect(await h.owner.recover(h.claim(), h.ctx)).toMatchObject({ rolledBack: true });
+    expect(h.events).toEqual(["hold", "ownership", "scheduler", "ingress"]);
+    const client = await h.deps.sourceClient.mock.results[0].value;
+    expect(client.scheduler).toHaveBeenCalledWith(expect.objectContaining({
+      gatewayId: source, migrationId: `mig-${operationId}:scheduler:22:claim:90`, phase: "resume",
+    }));
+    expect(h.operation.attemptHistory).toEqual(history);
+  });
+
+  it.each([
+    ["unreleased scheduler", (op: any) => { op.schedulerHandoffReleased = false; }],
+    ["old release receipt", (op: any) => { op.schedulerHandoffReleasedAt = 100; }],
+    ["missing historical claim", (op: any) => { op.attemptHistory[0].startedAt = 91; }],
+    ["later migration progress", (op: any) => { op.attemptHistory[1].steps.push({ name: "keys-sync-state", status: "done" }); }],
+    ["other failure", (op: any) => { op.attemptHistory[1].error = "unrelated failure"; }],
+    ["forward recovery", (op: any) => { op.schedulerHandoff.forwardRecovery = {}; }],
+  ])("refuses historical scheduler recovery with %s", async (_change, corrupt) => {
+    const h = failedCleanupRetry();
+    corrupt(h.operation);
+    expect(await h.request()).toBe(false);
+    expect(h.operation.status).toBe("failed");
+  });
+
   it("queues the exact failed generation without claiming rollback, changing pending demand or contacting Native31", async () => {
     const h = fixture(), before = structuredClone(h.records[`users/${uid}`]);
     expect(await h.request()).toBe(true);

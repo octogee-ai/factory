@@ -130,10 +130,38 @@ function assertCapturedIntent(prior: NativeReturnRecoveryIntent | undefined, int
   }
   if (claimedStartedAt !== undefined) requireState(prior !== undefined, "native return recovery intent is unavailable");
 }
+
+function releasedCleanupRetryMatches(
+  operation: OperationRecord,
+  scheduler: NonNullable<ReturnType<typeof readSchedulerMigrationIdentity>>,
+): boolean {
+  const handoff = operation.schedulerHandoff;
+  const latest = operation.attemptHistory?.at(-1);
+  const held = operation.attemptHistory?.at(-2);
+  const releasedAt = operation.schedulerHandoffReleasedAt;
+  if (!handoff || !latest || !held || !safeInteger(releasedAt)) return false;
+  const lastHeldStep = held.steps.at(-1);
+  return [
+    operation.schedulerHandoffReleased === true, releasedAt >= latest.completedAt,
+    handoff.forwardRecovery === undefined, handoff.sourceRecovery === undefined,
+    operation.steps?.length === 0, latest.steps.length === 0,
+    latest.attempt === operation.attempts, latest.startedAt === operation.startedAt,
+    latest.completedAt === operation.completedAt, latest.error === operation.error,
+    latest.error.startsWith(`/unmount/${handoff.toGatewayId}: `),
+    held.attempt === scheduler.attempt, latest.attempt === held.attempt + 1,
+    held.startedAt === scheduler.claimStartedAt,
+    held.startedAt <= held.completedAt, held.completedAt <= latest.startedAt,
+    lastHeldStep?.name === "quiesce-source", lastHeldStep?.status === "failed",
+  ].every(Boolean);
+}
+
 function assertInitialFailureScheduler(operation: OperationRecord, operationId: string, prior: NativeReturnRecoveryIntent | undefined): void {
   if (prior) return;
   const scheduler = readSchedulerMigrationIdentity(operationId, operation.schedulerHandoff?.migrationId);
-  requireState(scheduler !== null && scheduler.attempt === operation.attempts && scheduler.claimStartedAt === operation.startedAt,
+  requireState(scheduler !== null && (
+    scheduler.attempt === operation.attempts && scheduler.claimStartedAt === operation.startedAt ||
+    releasedCleanupRetryMatches(operation, scheduler)
+  ),
     "native return recovery scheduler failure claim changed");
 }
 async function readAuthority(tx: PlatformStateTransaction, uid: string, operationId: string, claimedStartedAt?: number) {
