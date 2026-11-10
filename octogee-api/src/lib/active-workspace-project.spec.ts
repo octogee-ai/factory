@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { WorkspaceProject } from "@octogee/core/platform-state";
 
-import { isRunnableWorkspaceProject, projectRetentionActive } from "./active-project.js";
+import { isRunnableWorkspaceProject, projectRetentionActive } from "./active-workspace-project.js";
 
 describe("projectRetentionActive", () => {
   it.each([

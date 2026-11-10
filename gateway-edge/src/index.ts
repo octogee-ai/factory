@@ -159,6 +159,7 @@ export function installRollRosterGate(gate: RequestHandler): void {
 export interface CreateAppOptions {
   surface?: GatewayEdgeSurface;
   productRoutes?: ClusterRouteTable;
+  projectsDeleteRoutes?: Router;
   // Route tests inject an enabling policy to exercise the workspace sharing
   // paths; unset means the flag is off, which is what the pod surface wants.
   featurePolicy?: FeaturePolicy;
@@ -280,6 +281,7 @@ function mountClusterSurface(app: Express, opts: CreateAppOptions): void {
       projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
     } : {}),
     productRoutes: opts.productRoutes ?? [],
+    projectsDeleteRoutes: opts.projectsDeleteRoutes,
   });
 }
 

@@ -33,7 +33,6 @@ import projectsRetryRoutes from "./projects/retry.js";
 import projectsJoinLeaveRoutes from "./projects/join-leave.js";
 import projectsStarRoutes from "./projects/star.js";
 import projectsMembersRoutes from "./projects/members.js";
-import projectsDeleteRoutes from "./projects/delete.js";
 import projectsAgentRoutes from "./projects/agent.js";
 import projectsRepoSourceRoutes from "./projects/repo-source.js";
 import projectsRecipeRoutes from "./projects/recipe.js";
@@ -51,6 +50,7 @@ export interface MountClusterRoutesOpts {
   productRoutes?: ClusterRouteTable;
   builderGatewaysRoutes?: Router;
   projectsCreateRoutes?: Router;
+  projectsDeleteRoutes?: Router;
   projectsRepoSourceRoutes?: Router;
   productivityApprovalRoutes?: Router;
   voiceRoutes?: Router;
@@ -77,7 +77,7 @@ const CHANNEL_ROUTES: readonly RouteHandler[] = [requireAuth, channelsRoutes];
 function projectRoutes(opts: MountClusterRoutesOpts): readonly RouteHandler[] {
   return [
     projectsReadmeRoutes,
-    projectsDeleteRoutes,
+    ...(opts.projectsDeleteRoutes ? [opts.projectsDeleteRoutes] : []),
     requireAuth,
     opts.projectsCreateRoutes ?? projectsCreateRoutes,
     projectsRetryRoutes,

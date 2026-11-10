@@ -8,7 +8,7 @@ import {
   workspaceCoachMmUsername,
 } from "@octogee/shared/types/identity";
 
-import { isRunnableWorkspaceProject } from "./project-runs/active-project.js";
+import { isRunnableWorkspaceProject } from "./active-workspace-project.js";
 
 const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
 const REQUEST_CONTEXT_FIELDS = new Set([

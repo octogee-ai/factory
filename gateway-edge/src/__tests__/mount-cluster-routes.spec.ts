@@ -61,24 +61,26 @@ describe("mountClusterRoutes", () => {
     expect((channels[0].handlers[0] as { name?: string }).name).toBe("requireAuth");
   });
 
-  it("keeps public project read/delete mounted before project auth", () => {
+  it("keeps public project reads before project auth and omits product deletion by default", () => {
     const app = recordingApp();
 
     mountClusterRoutes(app);
 
     const projects = useCalls(app, "/api/projects");
-    expect(projects).toHaveLength(12);
-    expect((projects[2].handlers[0] as { name?: string }).name).toBe("requireAuth");
+    expect(projects).toHaveLength(11);
+    expect((projects[1].handlers[0] as { name?: string }).name).toBe("requireAuth");
   });
 
   it("prefers the injected project routers over the fail-closed defaults", () => {
     const app = recordingApp();
     const projectsCreateRoutes = Router();
+    const projectsDeleteRoutes = Router();
     const projectsRepoSourceRoutes = Router();
 
-    mountClusterRoutes(app, { projectsCreateRoutes, projectsRepoSourceRoutes });
+    mountClusterRoutes(app, { projectsCreateRoutes, projectsDeleteRoutes, projectsRepoSourceRoutes });
 
     const projects = useCalls(app, "/api/projects");
+    expect(projects[1].handlers).toEqual([projectsDeleteRoutes]);
     expect(projects[3].handlers).toEqual([projectsCreateRoutes]);
     expect(projects[9].handlers).toEqual([projectsRepoSourceRoutes]);
   });
@@ -144,7 +146,6 @@ describe("mountClusterRoutes", () => {
       "/api/workspace",
       "/api/channels",
       "/api/channels",
-      "/api/projects",
       "/api/projects",
       "/api/projects",
       "/api/projects",

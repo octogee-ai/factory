@@ -3,20 +3,21 @@ import { platformStateStore } from "../../gateway-edge/src/lib/platform-state.js
 import { logger } from "../../gateway-edge/src/middleware/logging.js";
 import { createGracefulShutdown } from "./lib/graceful-shutdown.js";
 import { createPlatformApp, type PlatformAppOptions } from "./app.js";
-import { octogeeProduct } from "./product.js";
+import { createOctogeeProduct, type OctogeeProductOptions } from "./product.js";
+
+export { createLazyProjectRunBucket } from "./product-project-runtime.js";
 
 export {
   GATEWAY_CREDENTIAL_ROUTES,
   SIDECAR_BROKER_ROUTES,
-  createLazyProjectRunBucket,
   shouldAttemptTenantBinding,
   shouldEnforceTenantBinding,
 } from "./app.js";
 
-export type CreateAppOptions = Omit<PlatformAppOptions, "product">;
+export type CreateAppOptions = Omit<PlatformAppOptions, "product"> & OctogeeProductOptions;
 
 export function createApp(opts: CreateAppOptions = {}) {
-  return createPlatformApp({ ...opts, product: octogeeProduct });
+  return createPlatformApp({ ...opts, product: createOctogeeProduct(opts) });
 }
 
 const PORT = parseInt(process.env.PORT || "3001", 10);

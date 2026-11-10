@@ -14,7 +14,6 @@ import { resolveActivityConversation, type ActivityConversation } from '../../..
 import { Router, type Request, type Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
-import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 
 import {
   isValidCustomChannelName,
@@ -91,11 +90,9 @@ interface AuthorizedConversationTarget extends ChannelProjectionTarget {
 const REDEEMABLE_WS_TICKET_PURPOSES: ReadonlySet<string> = new Set(["openclaw-ws", "voice-ws"]);
 const FORBIDDEN = { error: "forbidden" } as const;
 const RECEIPT_MAX_LEASE_MS = 60_000;
-const PREVIEW_PROJECT_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const PREVIEW_PROJECT_SLUG_MAX_LENGTH = 63;
 const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
 
-function boundGateway(req: Request, res: Response): GatewayBinding | null {
+export function boundGateway(req: Request, res: Response): GatewayBinding | null {
   const bound = req.boundTenant;
   if (!bound || bound.kind !== "gateway") {
     res.status(403).json(FORBIDDEN);
@@ -109,67 +106,18 @@ function boundGateway(req: Request, res: Response): GatewayBinding | null {
   return bound;
 }
 
-function stringBody(req: Request, key: string): string {
+export function stringBody(req: Request, key: string): string {
   const value = (req.body as Record<string, unknown> | undefined)?.[key];
   return typeof value === "string" ? value : "";
 }
 
-function safeDocId(value: string): boolean {
+export function safeDocId(value: string): boolean {
   return value.length > 0 && !value.includes("/");
 }
 
-function validPreviewProjectSlug(value: unknown): value is string {
-  return typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= PREVIEW_PROJECT_SLUG_MAX_LENGTH &&
-    PREVIEW_PROJECT_SLUG_RE.test(value);
-}
-
-function interactiveBuilder(builder: BuilderRecord | null | undefined): builder is BuilderRecord {
+export function interactiveBuilder(builder: BuilderRecord | null | undefined): builder is BuilderRecord {
   return builder !== null && builder !== undefined &&
     accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined });
-}
-
-async function projectOwnerEntitled(db: Firestore, ownerUid: string): Promise<boolean> {
-  const owner = await db.doc(`users/${ownerUid}`).get();
-  return userEntitlements().projectMode(owner.data() ?? {}) === "active";
-}
-
-async function previewTarget(
-  deps: RuntimeBrokerDeps,
-  uid: string,
-  workspaceSlug: string,
-  projectSlug: string | null,
-): Promise<{ ownerUid: string; member: boolean; archived: boolean } | null> {
-  if (projectSlug === null) {
-    const [workspace, member] = await Promise.all([
-      deps.store.workspaces.records.get(workspaceSlug),
-      deps.store.workspaces.members.get(workspaceSlug, uid),
-    ]);
-    return workspace ? { ownerUid: workspace.ownerUid, member: member !== null, archived: false } : null;
-  }
-  const [project, member] = await Promise.all([
-    deps.store.workspaces.projects.get(workspaceSlug, projectSlug),
-    projectMemberExists(deps.store, workspaceSlug, projectSlug, uid),
-  ]);
-  if (!project) return null;
-  const archived = project.commercialLifecycleStatus === "archived" || !(await projectOwnerEntitled(deps.db, project.ownerUid));
-  return { ownerUid: project.ownerUid, member, archived };
-}
-
-async function previewAccessAuthorized(
-  deps: RuntimeBrokerDeps,
-  uid: string,
-  workspaceSlug: string,
-  projectSlug: string | null,
-): Promise<boolean> {
-  const target = await previewTarget(deps, uid, workspaceSlug, projectSlug);
-  if (!target) return false;
-  const builders = await deps.store.builders.records.getMany([uid, target.ownerUid]);
-  return !target.archived &&
-    interactiveBuilder(builders.get(uid)) &&
-    interactiveBuilder(builders.get(target.ownerUid)) &&
-    (target.ownerUid === uid || target.member);
 }
 
 function workspaceChannelPath(channel: WorkspaceChannel): string {
@@ -245,7 +193,7 @@ function ordinaryChannelKind(binding: BoundChannelPath): string | null {
   return null;
 }
 
-async function assignedHere(store: PlatformStateStore, gatewayId: string, slug: string): Promise<boolean> {
+export async function assignedHere(store: PlatformStateStore, gatewayId: string, slug: string): Promise<boolean> {
   const assigned = await store.builders.records.listByGateway(gatewayId);
   return assigned.some((builder) => builder.slug === slug);
 }
@@ -255,7 +203,7 @@ async function userGatewayId(store: PlatformStateStore, uid: string): Promise<st
   return gatewayId ? gatewayId : null;
 }
 
-function forbidden(res: Response): void {
+export function forbidden(res: Response): void {
   res.status(403).json(FORBIDDEN);
 }
 
@@ -1074,30 +1022,6 @@ function mountUserAndWsRoutes(router: Router, deps: RuntimeBrokerDeps): void {
     if (!scope || scope.gatewayId !== bound.gatewayId) { forbidden(res); return; }
     res.set('Cache-Control', 'no-store').json(scope);
   });
-  router.post("/previews/authorize", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const uid = stringBody(req, "uid");
-    const workspaceSlug = stringBody(req, "workspaceSlug");
-    const rawProjectSlug = (req.body as Record<string, unknown> | undefined)?.projectSlug;
-    const projectSlug = rawProjectSlug === null ? null : rawProjectSlug;
-    if (
-      !safeDocId(uid) ||
-      !isValidUsername(workspaceSlug) ||
-      (projectSlug !== null && !validPreviewProjectSlug(projectSlug))
-    ) {
-      res.status(400).json({ error: "invalid_preview_access_request" });
-      return;
-    }
-    if (!(await assignedHere(deps.store, bound.gatewayId, workspaceSlug))) {
-      forbidden(res);
-      return;
-    }
-    res.json({
-      authorized: await previewAccessAuthorized(deps, uid, workspaceSlug, projectSlug),
-    });
-  });
-
   router.post("/users/gateway-id", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;

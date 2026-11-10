@@ -216,7 +216,7 @@ import { createGiteaGitHost } from "@octogee/core/git-host";
 import { firestoreBuilderAccountReader } from "@octogee/core/builder-account";
 import { createUnmountFromGateway } from "./lib/customer-ops/unmount-gateway.js";
 import { isRetiredSharedGateway, retiredSharedGatewayRuntimeAbsent } from "./lib/customer-ops/retired-shared-gateway.js";
-import { nukeUserCloudSide } from "./lib/customer-ops/nuke-cloud.js";
+import { nukeUserCloudSide, type NukeCloudDeps } from "./lib/customer-ops/nuke-cloud.js";
 import { markSuspendedAndReleaseErasure } from "./lib/customer-ops/erasure-release.js";
 import {
   createPostHogErasureClient,
@@ -301,12 +301,7 @@ import {
 import { revokeAllConnectorGrantsForUser } from "@octogee/core/connector-revocation";
 import { CONNECTOR_OAUTH_REVOCATION_TARGETS } from "@octogee/shared/types/connectors";
 import { projectRepoSourceFromDoc } from "@octogee/shared/types/project";
-import { deleteHostingSitesForCustomer } from "@octogee/core/firebase-hosting";
 import { GoogleAuth } from "google-auth-library";
-import {
-  createProjectHostingRetirementClient,
-  retireWorkspaceBeforeLegacyHostingDeletion,
-} from "./project-hosting-retirement-client.js";
 import { startHttpServer, type ProductAdminRoutes } from "./http-server.js";
 import { createConnectorSecretDecryptor } from "./connector-secret-decryption.js";
 import {
@@ -2522,7 +2517,11 @@ function agentStoreDsns(): { adminDsn: string; clientDsn: string } {
   };
 }
 
-async function createControllerRuntime(db: Firestore, store: PlatformStateStore): Promise<ControllerRuntime> {
+async function createControllerRuntime(
+  db: Firestore,
+  store: PlatformStateStore,
+  createHostingCleanup?: ControllerProduct["createHostingCleanup"],
+): Promise<ControllerRuntime> {
   const runKubectl: KubectlSubprocess = (args, opts) => spawnKubectl(args, opts);
   const authSecretEnsurer = createAuthSecretEnsurer({
     runKubectl,
@@ -2685,6 +2684,7 @@ async function createControllerRuntime(db: Firestore, store: PlatformStateStore)
     modelKeySourceIssuer, prepareGatewayConfig, chartFingerprint,
     runRuntimeRecovery: convergeGateways.runExclusive,
     prepareMigrationAgentStores, nativeReturnRecovery, store,
+    deleteHostingSites: createHostingCleanup?.(log),
   });
 
   const deps: ControllerDeps = {
@@ -2716,7 +2716,10 @@ async function createControllerRuntime(db: Firestore, store: PlatformStateStore)
   return { deps, fleetControllerPrivateKey, chartFingerprint };
 }
 
+type HostingCleanup = NonNullable<NukeCloudDeps["deleteHostingSites"]>;
+
 export interface ControllerProduct {
+  createHostingCleanup?: (log: (message: string) => void) => HostingCleanup;
   addAdminRoutes?: ProductAdminRoutes;
   placementAdmission?: PlacementAdmissionPolicy;
   builderAdmission?: BuilderAdmissionSourceFactory;
@@ -2741,7 +2744,7 @@ export async function main(product: ControllerProduct = {}): Promise<void> {
     createFirestoreStore: () => createFirestorePlatformStateStore({ db }),
     logger,
   });
-  const { deps, fleetControllerPrivateKey, chartFingerprint } = await createControllerRuntime(db, store);
+  const { deps, fleetControllerPrivateKey, chartFingerprint } = await createControllerRuntime(db, store, product.createHostingCleanup);
 
   log(
     `[glm-controller] boot sha=${process.env.BUILD_SHA ?? "unknown"} oc=${process.env.OPENCLAW_VERSION ?? "n/a"} fork=${process.env.OPENCLAW_FORK_SHA ?? "n/a"} node=${process.version} — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} chartFingerprint=${chartFingerprint.slice(0, 12)} chartDriftPolicy=release-gated valuesFile=${GATEWAY_VALUES_FILE}`,
@@ -3037,9 +3040,10 @@ async function buildHandlers(
     prepareMigrationAgentStores: PrepareMigrationAgentStores;
     nativeReturnRecovery: ReturnType<typeof createNativeReturnSourceRecoveryOwner>;
     store: PlatformStateStore;
+    deleteHostingSites?: HostingCleanup;
   },
 ): Promise<OperationHandlers> {
-  const { privateKey, modelKeySourceIssuer, store } = fleetOps;
+  const { privateKey, modelKeySourceIssuer, store, deleteHostingSites } = fleetOps;
   if (!privateKey) {
     throw new Error(
       "FLEET_CONTROLLER_PRIVATE_KEY is not set — required for migrate-customer. Refusing to start with stub handlers.",
@@ -3416,13 +3420,8 @@ async function buildHandlers(
     log: logFn,
   });
 
-  const deprovisionCustomer = buildDeprovisionCustomerHandler(
-    db,
-    store,
-    privateKey,
-    logFn,
-    kubeOps,
-  );
+  const removal = { db, store, logFn, kubeOps, privateKey, deleteHostingSites };
+  const deprovisionCustomer = buildDeprovisionCustomerHandler(removal);
   const suspendCustomer = buildSuspendCustomerHandler(
     db,
     store,
@@ -3430,7 +3429,7 @@ async function buildHandlers(
     logFn,
     kubeOps,
   );
-  const eraseCustomer = buildEraseCustomerHandler(db, store, logFn, kubeOps, privateKey);
+  const eraseCustomer = buildEraseCustomerHandler(removal);
 
   const restartGateway = createRestartGatewayHandler({
     recoverRestore: (op, ctx) => fleetOps.runRuntimeRecovery(() => recoverSharedRestoreRuntime({ store, namespace: NAMESPACE, sourceSha: process.env.BUILD_SHA ?? '', runKubectl: spawnKubectl }, op, ctx)),
@@ -3647,8 +3646,17 @@ async function retainPostHogMappingOnly(store: PlatformStateStore, deletionId: s
   });
 }
 
-function buildEraseCustomerHandler(db: Firestore, store: PlatformStateStore, logFn: (msg: string) => void, kubeOps: Pick<KubeOps, "readAvailableReplicas" | "readGatewayPodDiagnostics">, privateKey: string) {
-  const cloudCleanup = buildCustomerCloudCleanupDeps(db, store, logFn);
+interface CustomerRemovalOptions {
+  db: Firestore;
+  store: PlatformStateStore;
+  logFn: (message: string) => void;
+  kubeOps: Pick<KubeOps, "readAvailableReplicas" | "readGatewayPodDiagnostics">;
+  privateKey: string;
+  deleteHostingSites?: HostingCleanup;
+}
+
+function buildEraseCustomerHandler({ db, store, logFn, kubeOps, privateKey, deleteHostingSites }: CustomerRemovalOptions) {
+  const cloudCleanup = buildCustomerCloudCleanupDeps(db, store, logFn, deleteHostingSites);
   const clusterAbsent = async (gatewayId: string) => {
     if (!await retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(gatewayId))) return false;
     const pvc = await spawnKubectl(["-n", NAMESPACE, "get", `pvc/octogee-gateway-${gatewayId}-data`, "--ignore-not-found=true", "-o", "name"]);
@@ -3961,17 +3969,11 @@ function requireEnv(name: string, why: string): string {
   return value;
 }
 
-function buildDeprovisionCustomerHandler(
-  db: Firestore,
-  store: PlatformStateStore,
-  privateKey: string,
-  logFn: (msg: string) => void,
-  kubeOps: Pick<KubeOps, "readAvailableReplicas" | "readGatewayPodDiagnostics">,
-) {
+function buildDeprovisionCustomerHandler({ db, store, logFn, kubeOps, privateKey, deleteHostingSites }: CustomerRemovalOptions) {
   return createDeprovisionCustomerHandler({
     loadCleanupContext: (uid) => loadCustomerCleanupContext({ store, accounts: firestoreBuilderAccountReader(db), db }, uid),
     unmountFromGateway: createCustomerDeletionUnmount(db, store, privateKey, logFn, kubeOps),
-    cloudCleanup: buildCustomerCloudCleanupDeps(db, store, logFn),
+    cloudCleanup: buildCustomerCloudCleanupDeps(db, store, logFn, deleteHostingSites),
     now: () => Date.now(),
     log: logFn,
   });
@@ -3995,7 +3997,12 @@ function createBuilderHomeServices(store: PlatformStateStore, log: (message: str
   };
 }
 
-function buildCustomerCloudCleanupDeps(db: Firestore, store: PlatformStateStore, logFn: (msg: string) => void) {
+function buildCustomerCloudCleanupDeps(
+  db: Firestore,
+  store: PlatformStateStore,
+  logFn: (msg: string) => void,
+  deleteHostingSites?: HostingCleanup,
+) {
   const cleanupEnv = (name: string) =>
     requireEnv(name, "customer erasure cloud cleanup requires it");
   const gitApiUrl = cleanupEnv("GIT_API_URL");
@@ -4009,9 +4016,6 @@ function buildCustomerCloudCleanupDeps(db: Firestore, store: PlatformStateStore,
     baseUrl: cleanupEnv("MM_URL"),
     adminToken: cleanupEnv("MM_ADMIN_TOKEN"),
     log: logFn,
-  });
-  const projectHostingRetirement = createProjectHostingRetirementClient({
-    baseUrl: cleanupEnv("PROJECT_HOSTING_RETIREMENT_URL"),
   });
   return {
     git,
@@ -4053,35 +4057,7 @@ function buildCustomerCloudCleanupDeps(db: Firestore, store: PlatformStateStore,
           },
         }
       : {}),
-    deleteHostingSites: async (slug: string, projectSlugs: string[]) => {
-      const result = await retireWorkspaceBeforeLegacyHostingDeletion({
-        retirement: projectHostingRetirement,
-        workspaceId: slug,
-        deleteLegacy: async () => {
-          const auth = new GoogleAuth({
-            scopes: ["https://www.googleapis.com/auth/firebase.hosting"],
-          });
-          const projectId = requireEnv(
-            "GOOGLE_CLOUD_PROJECT",
-            "hosting-site deletion must target this env's Firebase project",
-          );
-          return deleteHostingSitesForCustomer(
-            {
-              projectId,
-              getAccessToken: async () => {
-                const token = await auth.getAccessToken();
-                if (!token) throw new Error("firebase-hosting: no access token from ADC");
-                return token;
-              },
-              log: logFn,
-            },
-            slug,
-            projectSlugs,
-          );
-        },
-      });
-      return { deleted: result.deleted };
-    },
+    deleteHostingSites,
     log: logFn,
   };
 }

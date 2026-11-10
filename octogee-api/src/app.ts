@@ -25,22 +25,12 @@ import { createWorkspaceCommitProofBrokerRoutes } from "./routes/workspace-commi
 import { createOwnerAutomationAuthorizationBrokerRoutes } from "./routes/owner-automation-authorization-broker.js";
 import { createByokBrokerRoutes } from "./routes/byok-broker.js";
 import { createAgentProjectRoutes } from "./routes/agent-projects.js";
-import { createAgentProjectRunRoutes, finalizeProjectRun } from "./routes/agent-project-runs.js";
-import { createAdminProjectRunRoutes } from "./routes/admin-project-runs.js";
-import { createAgentProjectPublishRoutes } from "./routes/agent-project-publish.js";
-import { createProjectPublishControlRoutes } from "./routes/project-publish-control.js";
-import { createProjectHostingRetirementRoutes } from "./routes/project-hosting-retirement.js";
-import {
-  createProjectPreviewDiscoveryRoutes,
-  createProjectPreviewStaticRoutes,
-} from "./routes/project-previews.js";
 import {
   createAgentProductivityRoutes,
 } from "./routes/agent-productivity.js";
 import { createAgentBoardRoutes } from "./routes/agent-board.js";
 import { createAgentObsidianRoutes } from "./routes/agent-productivity-obsidian.js";
 import { createObsidianPairingRoutes } from "./routes/obsidian-pairing.js";
-import { createAgentSupportRoutes } from "./routes/agent-support.js";
 import { createAgentComputerContextRoutes } from "./routes/agent-computer-context.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
@@ -86,9 +76,8 @@ import { getConnector } from "../../gateway-edge/src/lib/connectors/index.js";
 import { githubListRepos, githubRepoApi } from "../../gateway-edge/src/lib/github.js";
 import { readAgent } from "../../gateway-edge/src/lib/firestoreReads.js";
 import { replaceCoachTextIdentity, syncCoachIdentity } from "../../gateway-edge/src/lib/coach-identity.js";
-import { requireAdmin, requireAuth, requireAuthenticatedUid } from "../../gateway-edge/src/middleware/auth.js";
+import { requireAuth, requireAuthenticatedUid } from "../../gateway-edge/src/middleware/auth.js";
 import {
-  createKubernetesTokenReviewer,
   IN_CLUSTER_IDENTITY_CA_PATH,
   IN_CLUSTER_IDENTITY_TOKEN_PATH,
 } from "./lib/token-review.js";
@@ -118,41 +107,8 @@ import {
   SIDECAR_BROKER_TOKEN_HEADER,
 } from "@octogee/core/internal-fetch";
 import { createModelBrokerTokenStore, type ModelBrokerTokenStore } from "./lib/model-broker-tokens.js";
-import {
-  createOpsAgentHttpClient,
-  type AskOpsAgent,
-} from "./lib/ops-agent-client.js";
-import {
-  createCachedOpsAgentModelResolver,
-  type OpsAgentModelResolver,
-} from "./lib/platform-model-config.js";
 import { normalizeTenantPolicyPath } from "./lib/tenant-route-policy.js";
-import { createFirestoreProjectRunStore } from "./lib/project-runs/firestore-store.js";
-import { createProjectSnapshotSource } from "./lib/project-runs/source.js";
-import {
-  createProjectRunControlPlaneClient,
-  type ProjectRunControlPlane,
-} from "./lib/project-runs/control-plane.js";
-import {
-  createGcsProjectRunArtifactStore,
-  type ProjectRunArtifactStore,
-} from "./lib/project-runs/artifact-store.js";
-import {
-  createGcsProjectPreviewArtifactStore,
-  type ProjectPreviewArtifactStore,
-} from "./lib/project-runs/preview-artifacts.js";
-import { startProjectRunRetention } from "./lib/project-runs/retention.js";
-import { startProjectRunFinalization } from "./lib/project-runs/finalization.js";
-import { createProjectPublishAllocationStore, type ProjectPublishAllocationStore } from "./lib/project-publish/allocation.js";
-import { createGcsProjectPublishArtifactSource, type ProjectPublishArtifactSource } from "./lib/project-publish/artifact-source.js";
-import { createProjectPublisherClient, type ProjectPublisherClient } from "./lib/project-publish/publisher-client.js";
-import { createProjectHostingRetirementService } from "./lib/project-publish/retirement.js";
-import { setProjectHostingRetirementHandler } from "../../gateway-edge/src/lib/project-hosting-retirement.js";
-import {
-  PROJECT_PUBLISH_CONTROL_AUDIENCE,
-  PROJECT_HOSTING_RETIREMENT_AUDIENCE,
-  requireProjectPublishService,
-} from "./lib/project-publish/service-auth.js";
+
 
 setLogService("api");
 
@@ -196,6 +152,10 @@ export interface ProductRouteDeps {
 
 export interface ProductRuntime {
   featurePolicy: FeaturePolicy;
+  routesBeforeMiddleware?: ClusterRouteTable;
+  routesBeforeTenantBinding?: ClusterRouteTable;
+  prewarmProjectCapacity?: () => Promise<void>;
+  projectsDeleteRoutes?: express.Router;
   clusterRoutes(deps: ProductRouteDeps): ClusterRouteTable;
   apiRoutes(deps: ProductRouteDeps): ClusterRouteTable;
   internalRoutes(deps: ProductRouteDeps): ClusterRouteTable;
@@ -207,7 +167,12 @@ export interface ProductRuntime {
 export interface ProductExtension {
   entitlements: UserEntitlementResolver;
   validateBoot(): void;
-  createRuntime(input: { metricsRegistry: Registry }): ProductRuntime;
+  createRuntime(input: {
+    metricsRegistry: Registry;
+    namespace: string;
+    appOrigin: string;
+    readGithubToken(uid: string): Promise<string | null>;
+  }): ProductRuntime;
   modelBrokerRails?: ModelBrokerRailRegistry;
   notifications?: ProductNotifications;
 }
@@ -224,43 +189,10 @@ export interface PlatformAppOptions {
   modelKeyTokenStore?: ModelBrokerTokenStore;
   modelKeyIssuerBearerToken?: string;
   modelKeyIssuerTtlSeconds?: number | null;
-  askOpsAgent?: AskOpsAgent;
-  resolveOpsAgentModel?: OpsAgentModelResolver;
   featurePolicy?: FeaturePolicy;
   voiceRelayConfig?: VoiceRelayConfig | null;
   voiceOpenAiApiKey?: string | null;
-  projectRunControlPlane?: ProjectRunControlPlane;
-  projectRunArtifactStore?: ProjectRunArtifactStore;
-  projectPreviewArtifactStore?: ProjectPreviewArtifactStore;
-  previewOrigin?: string;
   appOrigin?: string;
-  projectRunnerImage?: string;
-  customerHostingProjectId?: string;
-  projectPublishAllocations?: ProjectPublishAllocationStore;
-  projectPublishArtifacts?: ProjectPublishArtifactSource;
-  projectPublisher?: ProjectPublisherClient;
-  projectPublishControlReviewer?: Parameters<typeof requireProjectPublishService>[0]["reviewer"];
-}
-
-export function createLazyProjectRunBucket(
-  acquire: () => ReturnType<typeof storage.bucket> = () => storage.bucket(),
-) {
-  let bucket: ReturnType<typeof storage.bucket> | undefined;
-  const current = () => {
-    bucket ??= acquire();
-    return bucket;
-  };
-  return {
-    get name() {
-      return current().name;
-    },
-    file(path: string, options?: { generation?: string }) {
-      return current().file(path, options);
-    },
-    getFiles(options: { prefix: string; autoPaginate: false; maxResults: number }) {
-      return current().getFiles(options);
-    },
-  };
 }
 
 function defaultChatArtifactRoutes() {
@@ -345,16 +277,16 @@ function mountRouteTable(app: ReturnType<typeof express>, routes: ClusterRouteTa
 function clusterRouteOverrides(
   featurePolicy: FeaturePolicy,
   voiceCatalog: VoiceCatalog,
-  prewarmProjectRunCapacity: () => Promise<void>,
-  productRoutes: ClusterRouteTable,
+  product: ProductRuntime | undefined,
   notifications?: ProductNotifications,
 ) {
   return {
     mmRestProxyHandler: createMmRestProxyHandler(platformStateStore, notifications),
     mattermostMintRoutes: createMattermostMintRoutes(platformStateStore),
-    productRoutes,
+    productRoutes: product?.clusterRoutes({ featurePolicy }) ?? [],
+    projectsDeleteRoutes: product?.projectsDeleteRoutes,
     builderGatewaysRoutes: createBuilderGatewayRoutes({ featurePolicy }),
-    projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy, prewarmProjectRunCapacity }),
+    projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy, prewarmProjectRunCapacity: product?.prewarmProjectCapacity }),
     projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
     voiceRoutes: createVoiceRoutes({ featurePolicy, catalog: voiceCatalog, resolveChannel: async (uid, channelId) => {
       const result = await resolveVoiceChannel({ db, store: platformStateStore, readBuilderTier }, { uid, channelId });
@@ -460,64 +392,21 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
       return agentImportBucket.deleteFiles(options);
     },
   };
-  const projectRunStore = createFirestoreProjectRunStore(db);
-  const lazyProjectRunBucket = createLazyProjectRunBucket();
-  const projectRunArtifactStore = opts.projectRunArtifactStore
-    ?? createGcsProjectRunArtifactStore(lazyProjectRunBucket);
-  const projectPreviewArtifactStore = opts.projectPreviewArtifactStore
-    ?? createGcsProjectPreviewArtifactStore(lazyProjectRunBucket);
-  const projectPublishAllocations = opts.projectPublishAllocations ?? createProjectPublishAllocationStore(db, platformStateStore);
-  const projectPublishArtifacts = opts.projectPublishArtifacts
-    ?? createGcsProjectPublishArtifactSource(lazyProjectRunBucket);
-  const previewOrigin = opts.previewOrigin ?? process.env.PREVIEW_PUBLIC_URL
-    ?? (process.env.NODE_ENV === "test" ? "https://preview-test.octogee.com" : "");
-  const appOrigin = opts.appOrigin ?? process.env.APP_URL
-    ?? (process.env.NODE_ENV === "test" ? "https://app-test.octogee.com" : "");
-  if (process.env.NODE_ENV !== "test") {
-    startProjectRunRetention({
-      runs: projectRunStore,
-      artifacts: projectRunArtifactStore,
-      previews: projectPreviewArtifactStore,
-      onError: (error) => logger.error("[project-runs] retention sweep failed", { error }),
-    });
-  }
-  const projectRunSource = createProjectSnapshotSource({
-    readGithubToken: readFreshGithubToken,
-  });
-  const namespace = process.env.K8S_NAMESPACE ?? "octogee";
-  const customerHostingProjectId = opts.customerHostingProjectId
-    ?? process.env.OCTOGEE_CUSTOMER_HOSTING_PROJECT_ID
-    ?? (process.env.NODE_ENV === "test" ? "octogee-customer-hosting-test" : "");
-  const projectPublisher = opts.projectPublisher ?? createProjectPublisherClient({
-    baseUrl: process.env.PROJECT_PUBLISHER_URL
-      ?? `http://octogee-project-publisher.${namespace}.svc.cluster.local:3005`,
-  });
-  const retireProjectHosting = createProjectHostingRetirementService({
-    customerHostingProjectId,
-    allocations: projectPublishAllocations,
-    publisher: projectPublisher,
-  });
-  setProjectHostingRetirementHandler(retireProjectHosting);
-  const runnerImage = opts.projectRunnerImage ?? process.env.PROJECT_RUNNER_IMAGE ?? "";
-  const projectRunControlPlane = opts.projectRunControlPlane ?? createProjectRunControlPlaneClient({
-    brokerBaseUrl: process.env.PROJECT_RUN_BROKER_URL
-      ?? `http://octogee-project-run-broker.${namespace}.svc.cluster.local:3002`,
-    controllerBaseUrl: process.env.PROJECT_RUN_CONTROLLER_URL
-      ?? `http://octogee-project-run-controller.${namespace}.svc.cluster.local:3003`,
-  });
   // client → GCLB (appends client-ip, lb-ip) → this app
   app.set("trust proxy", 2);
-  app.use("/p", createProjectPreviewStaticRoutes({
-    store: projectRunStore,
-    artifacts: projectPreviewArtifactStore,
-    previewOrigin,
-    appOrigin,
-  }));
-
   const metricsRegistry = new Registry();
   collectDefaultMetrics({ register: metricsRegistry });
   const httpRequestMetrics = createHttpRequestMetrics(metricsRegistry);
-  const product = opts.product?.createRuntime({ metricsRegistry }) ?? null;
+  const namespace = process.env.K8S_NAMESPACE ?? "octogee";
+  const appOrigin = opts.appOrigin ?? process.env.APP_URL
+    ?? (process.env.NODE_ENV === "test" ? "https://app-test.octogee.com" : "");
+  const product = opts.product?.createRuntime({
+    metricsRegistry,
+    namespace,
+    appOrigin,
+    readGithubToken: readFreshGithubToken,
+  });
+  mountRouteTable(app, product?.routesBeforeMiddleware ?? []);
   const featurePolicy = opts.featurePolicy ?? product?.featurePolicy ?? new FeaturePolicy(new DisabledFeatureFlagProvider(), { logger });
   const productRouteDeps: ProductRouteDeps = { featurePolicy };
   const modelBrokerRails = opts.product?.modelBrokerRails ?? operatorRailRegistry();
@@ -577,51 +466,11 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   mountDiagnosticRoutes(app, metricsRegistry, tenantBindingHealth);
   app.use("/api/auth/desktop", createDesktopAuthRoutes({ db, auth, store: platformStateStore }));
   app.use("/api/features", createFeatureRoutes({ featurePolicy }));
-  app.use("/api/projects", createProjectPreviewDiscoveryRoutes({
-    db,
-    state: platformStateStore,
-    store: projectRunStore,
-    previewOrigin,
-    auth: requireAuth,
-  }));
-  app.use("/api/admin/project-runs", requireAdmin, createAdminProjectRunRoutes({
-    db,
-    controlPlane: projectRunControlPlane,
-    previewOrigin,
-  }));
+  mountRouteTable(app, product?.routesBeforeTenantBinding ?? []);
   app.use(
     "/api/connect/obsidian/pair",
     createObsidianPairingRoutes({ db, store: platformStateStore, featurePolicy }),
   );
-  const projectPublishControlReviewer = opts.projectPublishControlReviewer ?? createKubernetesTokenReviewer({
-    reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
-    caPath: IN_CLUSTER_IDENTITY_CA_PATH,
-    audience: PROJECT_PUBLISH_CONTROL_AUDIENCE,
-  });
-  const projectHostingRetirementReviewer = createKubernetesTokenReviewer({
-    reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
-    caPath: IN_CLUSTER_IDENTITY_CA_PATH,
-    audience: PROJECT_HOSTING_RETIREMENT_AUDIENCE,
-  });
-  app.use("/internal/project-publish-control", createProjectPublishControlRoutes({
-    allocations: projectPublishAllocations,
-    auth: requireProjectPublishService({
-      reviewer: projectPublishControlReviewer,
-      namespace,
-      serviceAccount: "octogee-project-publisher",
-      audience: PROJECT_PUBLISH_CONTROL_AUDIENCE,
-    }),
-  }));
-  app.use("/internal/project-hosting", createProjectHostingRetirementRoutes({
-    db,
-    retire: retireProjectHosting,
-    auth: requireProjectPublishService({
-      reviewer: projectHostingRetirementReviewer,
-      namespace,
-      serviceAccount: "glm-controller",
-      audience: PROJECT_HOSTING_RETIREMENT_AUDIENCE,
-    }),
-  }));
   app.use((req, res, next) => {
     if (!shouldAttemptTenantBinding(req.path)) {
       next();
@@ -656,8 +505,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   mountClusterRoutes(app, clusterRouteOverrides(
     featurePolicy,
     voiceOpenAiApiKey ? createOpenAiVoiceCatalog(voiceOpenAiApiKey) : createVoiceCatalog(voiceRelayConfig, { log: voiceRelayLog }),
-    () => projectRunControlPlane.prewarm(),
-    product?.clusterRoutes(productRouteDeps) ?? [],
+    product,
     opts.product?.notifications,
   ));
   mountRouteTable(app, product?.apiRoutes(productRouteDeps) ?? []);
@@ -719,41 +567,9 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   app.use("/internal/agent-projects", createAgentProjectRoutes({
     db,
     store: platformStateStore,
-    prewarmProjectRunCapacity: () => projectRunControlPlane.prewarm(),
+    prewarmProjectRunCapacity: product?.prewarmProjectCapacity,
     actionBaseUrl: appOrigin,
     onProjectCreated: product?.onProjectCreated,
-  }));
-  const projectRunFinalizerDeps = {
-    store: projectRunStore,
-    controlPlane: projectRunControlPlane,
-    artifactStore: projectRunArtifactStore,
-    previewArtifactStore: projectPreviewArtifactStore,
-    previewOrigin,
-  };
-  app.use("/internal/project-runs", createAgentProjectRunRoutes({
-    db,
-    state: platformStateStore,
-    ...projectRunFinalizerDeps,
-    source: projectRunSource,
-    runnerImage,
-  }));
-  if (process.env.NODE_ENV !== "test") {
-    startProjectRunFinalization({
-      runs: projectRunStore,
-      finalize: async (run) => { await finalizeProjectRun(run, projectRunFinalizerDeps); },
-      onError: (error) => logger.error("[project-runs] finalization sweep failed", { error }),
-    });
-  }
-  app.use("/internal/openclaw", createAgentProjectPublishRoutes({
-    db,
-    state: platformStateStore,
-    runStore: projectRunStore,
-    source: projectRunSource,
-    artifacts: projectPublishArtifacts,
-    allocations: projectPublishAllocations,
-    publisher: projectPublisher,
-    customerHostingProjectId,
-    actionBaseUrl: appOrigin,
   }));
   app.use("/internal/agent-board", createAgentBoardRoutes({ store: platformStateStore }));
   app.use("/internal/agent-productivity", createAgentProductivityRoutes({
@@ -767,27 +583,6 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     featurePolicy,
     actionBaseUrl: appOrigin,
   }));
-  app.use(
-    "/internal/agent-support",
-    createAgentSupportRoutes({
-      db,
-      store: platformStateStore,
-      askOps:
-        opts.askOpsAgent ??
-        createOpsAgentHttpClient({
-          baseUrl: process.env.OPS_AGENT_URL,
-          bearerToken: process.env.OPS_AGENT_BEARER_TOKEN,
-          logError: (message, fields) => logger.error(message, fields),
-        }),
-      resolveModel:
-        opts.resolveOpsAgentModel ??
-        createCachedOpsAgentModelResolver({
-          platformConfig: platformStateStore.config.platform,
-          onError: (error) => logger.error("Ops Agent model resolution failed", { error }),
-        }),
-      logError: (message, fields) => logger.error(message, fields),
-    }),
-  );
   app.use("/internal/computer", createAgentComputerContextRoutes({ store: platformStateStore }));
   app.use("/internal/openclaw-control", createOpenClawControlBrokerRoutes({ db, store: platformStateStore }));
   app.use(
