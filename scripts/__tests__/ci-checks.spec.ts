@@ -78,8 +78,8 @@ describe("portable Linux PR checks", () => {
 
   it("runs every quality gate on a full run without deployment commands", () => {
     const plan = checkPlan(["docs/INDEX.md"], "quality", false, true);
-    expect(plan.map(job => job.name)).toEqual(["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit", "fleet-go"]);
-    expect(plan.map(job => job.commands)).toEqual(["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit", "fleet-go"].map(name => [`bash scripts/ci/quality.sh ${name}`]));
+    expect(plan.map(job => job.name)).toEqual(["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit"]);
+    expect(plan.map(job => job.commands)).toEqual(["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit"].map(name => [`bash scripts/ci/quality.sh ${name}`]));
     expect(JSON.stringify(plan)).not.toMatch(/firebase deploy|helm upgrade|desiredRelease/);
   });
 
@@ -112,7 +112,7 @@ describe("portable Linux PR checks", () => {
     expect(checkPlan(["eslint.config.mjs"], "quality")[0].commands).toEqual(["bash scripts/ci/quality.sh eslint"]);
     expect(checkPlan(["knip.json"], "quality").map(job => job.name)).toContain("knip");
     expect(checkPlan(["osv-scanner.toml"], "quality").find(job => job.name === "osv-scanner")?.commands).toEqual(["bash scripts/ci/quality.sh osv-scanner"]);
-    expect(checkPlan(["package.json"], "quality").map(job => job.name)).toEqual(["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit", "fleet-go"]);
+    expect(checkPlan(["package.json"], "quality").map(job => job.name)).toEqual(["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit"]);
   });
 
   it("scans infrastructure configuration only when it changes", () => {
@@ -120,12 +120,6 @@ describe("portable Linux PR checks", () => {
     expect(checkPlan(["infra/gateway/Dockerfile"], "quality").map(job => job.name)).toContain("trivy");
     expect(checkPlan(["app/src/App.tsx"], "quality").map(job => job.name)).not.toContain("trivy");
     expect(checkPlan(["artifact-worker/renderer/Cargo.lock"], "quality").map(job => job.name)).toEqual(["gitleaks", "cargo-audit"]);
-  });
-
-  it("runs the Go command line's checks only when it changes, and no package tests", () => {
-    expect(checkPlan(["fleet/main.go"], "tests")).toEqual([]);
-    expect(checkPlan(["fleet/main.go"], "quality").map(job => job.name)).toEqual(["gitleaks", "fleet-go"]);
-    expect(checkPlan(["app/src/App.tsx"], "quality").map(job => job.name)).not.toContain("fleet-go");
   });
 
   it("fails the aggregate check when an in-scope job fails, without skipping later checks", async () => {
