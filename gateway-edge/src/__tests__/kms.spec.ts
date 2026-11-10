@@ -25,6 +25,7 @@ beforeEach(() => {
 afterEach(() => {
   _setKmsClientForTesting(null);
   delete process.env.OCTOGEE_KMS_KEY_NAME;
+  delete process.env.ENCRYPTION_ROOT_KEY;
 });
 
 describe("encryptSecret", () => {
@@ -56,10 +57,11 @@ describe("encryptSecret", () => {
     );
   });
 
-  it("throws when OCTOGEE_KMS_KEY_NAME env is missing (fail-loud, no silent plaintext)", async () => {
+  it("requires a root key when Cloud KMS is not configured", async () => {
     delete process.env.OCTOGEE_KMS_KEY_NAME;
+    delete process.env.ENCRYPTION_ROOT_KEY;
     _setKmsClientForTesting(mockKms());
-    await expect(encryptSecret("x")).rejects.toThrow(/OCTOGEE_KMS_KEY_NAME/);
+    await expect(encryptSecret("x")).rejects.toThrow(/ENCRYPTION_ROOT_KEY/);
   });
 
   it("propagates KMS API errors (transient + permanent must reach the caller)", async () => {
@@ -123,10 +125,11 @@ describe("decryptSecret", () => {
     await expect(decryptSecret("")).rejects.toThrow(/non-empty/);
   });
 
-  it("throws when OCTOGEE_KMS_KEY_NAME env is missing", async () => {
+  it("requires a root key when Cloud KMS is not configured", async () => {
     delete process.env.OCTOGEE_KMS_KEY_NAME;
+    delete process.env.ENCRYPTION_ROOT_KEY;
     _setKmsClientForTesting(mockKms());
-    await expect(decryptSecret("YWJj")).rejects.toThrow(/OCTOGEE_KMS_KEY_NAME/);
+    await expect(decryptSecret("YWJj")).rejects.toThrow(/ENCRYPTION_ROOT_KEY/);
   });
 
   it("propagates KMS API errors (key rotation, IAM denial, etc.)", async () => {
@@ -200,4 +203,18 @@ _setKmsClientForTesting({
     const dec = await decryptSecret(enc);
     expect(dec).toBe(original);
   });
+});
+
+it("encrypts and decrypts with the root key when Cloud KMS is not configured", async () => {
+  delete process.env.OCTOGEE_KMS_KEY_NAME;
+  process.env.ENCRYPTION_ROOT_KEY = Buffer.alloc(32, 1).toString("base64");
+  const encrypt = vi.fn();
+  const decrypt = vi.fn();
+  _setKmsClientForTesting({ encrypt, decrypt });
+
+  const ciphertext = await encryptSecret("default backend credential");
+
+  await expect(decryptSecret(ciphertext)).resolves.toBe("default backend credential");
+  expect(encrypt).not.toHaveBeenCalled();
+  expect(decrypt).not.toHaveBeenCalled();
 });

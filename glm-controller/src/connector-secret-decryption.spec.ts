@@ -1,3 +1,4 @@
+import { createRootKeyEncryptor } from "@octogee/core/encryptor";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createConnectorSecretDecryptor } from "./connector-secret-decryption.js";
@@ -22,10 +23,22 @@ describe("createConnectorSecretDecryptor", () => {
     });
   });
 
-  it("fails loudly when the KMS key is not configured", async () => {
+  it("requires a root key when Cloud KMS is not configured", async () => {
     vi.stubEnv("OCTOGEE_KMS_KEY_NAME", "");
+    vi.stubEnv("ENCRYPTION_ROOT_KEY", "");
     const decryptSecret = createConnectorSecretDecryptor({ decrypt: vi.fn() });
 
-    await expect(decryptSecret("YQ==")).rejects.toThrow(/OCTOGEE_KMS_KEY_NAME/);
+    await expect(decryptSecret("YQ==")).rejects.toThrow(/ENCRYPTION_ROOT_KEY/);
+  });
+
+  it("reads root-key credentials without a KMS client", async () => {
+    const key = Buffer.alloc(32, 1).toString("base64");
+    vi.stubEnv("OCTOGEE_KMS_KEY_NAME", "");
+    vi.stubEnv("ENCRYPTION_ROOT_KEY", key);
+    const ciphertext = await createRootKeyEncryptor(key).encrypt("connector credential");
+    const decrypt = vi.fn();
+
+    await expect(createConnectorSecretDecryptor({ decrypt })(ciphertext)).resolves.toBe("connector credential");
+    expect(decrypt).not.toHaveBeenCalled();
   });
 });

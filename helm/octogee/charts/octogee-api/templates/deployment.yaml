@@ -109,6 +109,15 @@ spec:
               value: {{ .Values.gatewayServiceAccount | quote }}
             {{- end }}
             {{- with (include "octogee.platformStateEnv" .) }}{{ . | nindent 12 }}{{ end }}
+            {{- if not .Values.env.OCTOGEE_KMS_KEY_NAME }}
+            {{- with (.Values.global).encryptionRootKeySecretName }}
+            - name: ENCRYPTION_ROOT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: root-key
+            {{- end }}
+            {{- end }}
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}

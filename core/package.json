@@ -149,6 +149,14 @@
       "types": "./dist/customer-snapshot-mapping.d.ts",
       "default": "./dist/customer-snapshot-mapping.js"
     },
+    "./encryptor": {
+      "types": "./dist/encryptor.d.ts",
+      "default": "./dist/encryptor.js"
+    },
+    "./cloud-kms-encryptor": {
+      "types": "./dist/cloud-kms-encryptor.d.ts",
+      "default": "./dist/cloud-kms-encryptor.js"
+    },
     "./deployment-environment": {
       "types": "./dist/deployment-environment.d.ts",
       "default": "./dist/deployment-environment.js"
@@ -535,6 +543,12 @@
       ],
       "customer-snapshot-mapping": [
         "dist/customer-snapshot-mapping.d.ts"
+      ],
+      "encryptor": [
+        "dist/encryptor.d.ts"
+      ],
+      "cloud-kms-encryptor": [
+        "dist/cloud-kms-encryptor.d.ts"
       ],
       "deployment-environment": [
         "dist/deployment-environment.d.ts"

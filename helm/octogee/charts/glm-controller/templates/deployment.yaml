@@ -86,8 +86,18 @@ spec:
               value: {{ required "global.deploymentProjectId is required" (.Values.global).deploymentProjectId | quote }}
             - name: GCP_PROJECT_ID
               value: {{ required "global.deploymentProjectId is required" (.Values.global).deploymentProjectId | quote }}
+            {{- if .Values.kmsKeyName }}
             - name: OCTOGEE_KMS_KEY_NAME
-              value: {{ required "glm-controller.kmsKeyName is required" .Values.kmsKeyName | quote }}
+              value: {{ .Values.kmsKeyName | quote }}
+            {{- else }}
+            {{- with (.Values.global).encryptionRootKeySecretName }}
+            - name: ENCRYPTION_ROOT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: root-key
+            {{- end }}
+            {{- end }}
             - name: GKE_WORKLOAD_IDENTITY_PROJECT
               value: {{ required "glm-controller.workloadIdentityProject is required" .Values.workloadIdentityProject | quote }}
             {{- $computer := (.Values.global).computer | default dict }}
