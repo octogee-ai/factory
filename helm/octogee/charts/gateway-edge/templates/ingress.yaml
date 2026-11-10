@@ -136,6 +136,20 @@ spec:
                 name: {{ $glm }}
                 port:
                   name: http
+          - path: /api/admin/release-status
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/logs
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
           - path: /api/admin/fleet-settings
             pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
             backend:

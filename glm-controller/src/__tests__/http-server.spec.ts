@@ -612,6 +612,7 @@ function buildDeps(
     listGatewayBuilds: vi.fn(async () => []),
     suspendAuthUser: vi.fn(async () => undefined),
     revokeConnectorGrantsForUser: vi.fn(async () => undefined),
+    logs: { source: null, namespace: "octogee-test" },
     ...overrides,
   };
 }
@@ -1169,6 +1170,13 @@ describe("createHttpServer — admin gateway routes", () => {
       .set("Authorization", "Bearer admin-token");
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "User not found" });
+  });
+
+  it("serves fleet logs only to admins", async () => {
+    const app = createHttpServer(buildDeps(store));
+    await request(app).get("/api/admin/logs").set("Authorization", "Bearer user-token").expect(403);
+    const res = await request(app).get("/api/admin/logs").set("Authorization", "Bearer admin-token").expect(503);
+    expect(res.body.error).toContain("not configured");
   });
 
   it("serves product admin routes only when the product supplies them", async () => {

@@ -40,7 +40,7 @@ import {
   enqueueOperation,
   awaitOperation,
 } from "../lib/glm-operations.js";
-import { readReleaseStatus, summarizeReleaseStatus, type ReleaseStatusSnapshot } from "../lib/release-status.js";
+import { readReleaseStatus, summarizeReleaseStatus, type ReleaseStatusSnapshot } from "@octogee/core/release-status";
 import { readForceMigrationPlan, readForceMigrationSource } from "./fleet-force-migration.js";
 import { readForcedMigrationRecovery, runForcedMigration } from "./fleet-force-migration-executor.js";
 import { createForceMigrationTransport } from "./fleet-force-migration-transport.js";

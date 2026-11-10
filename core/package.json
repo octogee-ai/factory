@@ -470,6 +470,18 @@
       "types": "./dist/git-host/index.d.ts",
       "default": "./dist/git-host/index.js"
     },
+    "./release-status": {
+      "types": "./dist/release-status.d.ts",
+      "default": "./dist/release-status.js"
+    },
+    "./fleet-logs": {
+      "types": "./dist/fleet-logs.d.ts",
+      "default": "./dist/fleet-logs.js"
+    },
+    "./admin-logs-router": {
+      "types": "./dist/admin-logs-router.d.ts",
+      "default": "./dist/admin-logs-router.js"
+    },
     "./identity-provider": {
       "types": "./dist/identity-provider.d.ts",
       "default": "./dist/identity-provider.js"
@@ -785,6 +797,15 @@
       ],
       "git-host": [
         "dist/git-host/index.d.ts"
+      ],
+      "release-status": [
+        "dist/release-status.d.ts"
+      ],
+      "fleet-logs": [
+        "dist/fleet-logs.d.ts"
+      ],
+      "admin-logs-router": [
+        "dist/admin-logs-router.d.ts"
       ],
       "identity-provider": [
         "dist/identity-provider.d.ts"

@@ -140,6 +140,7 @@ import type {
 } from "./platform-state/builders.js";
 import type { OrchestratorConfig } from "./platform-state/config.js";
 import type { FleetRegistryRecord } from "./platform-state/fleet-registry.js";
+import { readReleaseStatus, summarizeReleaseStatus } from "./release-status.js";
 import type { GatewayAssignment, GatewayRoot } from "./platform-state/gateways.js";
 import type { NewOperation, OperationRecord } from "./platform-state/operations.js";
 import type { PlatformStateStore, PlatformStateTransaction, Stored } from "./platform-state/store.js";
@@ -6401,6 +6402,18 @@ router.get(
             service,
           });
         }
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+router.get(
+    "/release-status",
+    async (_req: Request, res: Response, next: NextFunction) => {
+      try {
+        const snapshot = await readReleaseStatus(store);
+        res.json({ summary: summarizeReleaseStatus(snapshot), ...snapshot });
       } catch (e) {
         next(e);
       }

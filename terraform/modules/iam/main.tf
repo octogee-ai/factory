@@ -229,6 +229,12 @@ resource "google_project_iam_member" "glm_controller_secretmanager_admin" {
   member  = "serviceAccount:${google_service_account.glm_controller.email}"
 }
 
+resource "google_project_iam_member" "glm_controller_log_viewer" {
+  project = var.project_id
+  role    = "roles/logging.viewer"
+  member  = "serviceAccount:${google_service_account.glm_controller.email}"
+}
+
 # Narrow project-level role for dynamic per-gateway GSA teardown. NOT
 # serviceAccountAdmin: Cowboy can delete service accounts such as
 # octogee-gw-<gatewayId>, but cannot mutate IAM policy on arbitrary service

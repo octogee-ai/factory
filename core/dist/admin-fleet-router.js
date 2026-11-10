@@ -27,6 +27,7 @@ import { buildCustomerDeletionPlan } from "./customer-deletion-plan.js";
 import { FleetMutationIdempotencyError, runNormalFleetMutation, } from "./normal-fleet-mutation.js";
 import { OperationAuditIdempotencyConflictError } from "./operation-audit.js";
 import { firestoreBuilderAccountReader, } from "./builder-account.js";
+import { readReleaseStatus, summarizeReleaseStatus } from "./release-status.js";
 import { centralGatewayReleasePayload, } from "./artifact-registry.js";
 function rejectPersistenceInBody(body) {
     if (body.persistence === undefined)
@@ -4831,6 +4832,15 @@ export function addAdminFleetRoutes(router, deps) {
                     service,
                 });
             }
+        }
+        catch (e) {
+            next(e);
+        }
+    });
+    router.get("/release-status", async (_req, res, next) => {
+        try {
+            const snapshot = await readReleaseStatus(store);
+            res.json({ summary: summarizeReleaseStatus(snapshot), ...snapshot });
         }
         catch (e) {
             next(e);

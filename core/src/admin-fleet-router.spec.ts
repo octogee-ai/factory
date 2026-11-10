@@ -787,6 +787,9 @@ function harnessDocuments(input: {
     if (segments.length === 4 && segments[0] === "gateways" && segments[2] === "assignments") {
       return [input.assignments[segments[1]] ??= {}, segments[3]];
     }
+    if (segments.length === 4 && segments[0] === "gateways" && segments[2] === "releases") {
+      return [input.collections[`gateways/${segments[1]}/releases`] ??= {}, segments[3]];
+    }
     if (segments.length === 4 && segments[0] === "users" && segments[2] === "system") {
       return [input.collections[`users/${segments[1]}/system`] ??= {}, segments[3]];
     }
@@ -3595,5 +3598,31 @@ describe("operations history route", () => {
     });
     const res = await request(app).get("/operations?status=failed&limit=5").expect(200);
     expect(ids(res)).toEqual(["old-failed"]);
+  });
+});
+
+describe("release status route", () => {
+  it("reports each gateway's release observation under a fleet summary", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-blue" },
+      users: {},
+      gateways: { "shared-blue": durableGatewayRoot("shared-blue", { liveRelease: 1 }) },
+    });
+    const res = await request(app).get("/release-status").expect(200);
+    expect(res.body.summary).toEqual({
+      status: "incomplete",
+      serving: 1,
+      converged: 0,
+      excluded: 0,
+      blockers: ["shared-blue: missing-release"],
+    });
+    expect(res.body.gateways).toEqual([expect.objectContaining({
+      gatewayId: "shared-blue",
+      isDefault: true,
+      desiredRelease: 1,
+      liveRelease: 1,
+      runtimeRelease: null,
+      observation: "missing-release",
+    })]);
   });
 });

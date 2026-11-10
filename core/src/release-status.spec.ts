@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { MalformedRecordError } from "@octogee/core/platform-state";
-import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
+import { MalformedRecordError } from "./platform-state/index.js";
+import { createDocumentFixtureStore } from "./testing/journal-store.js";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 
 import {
@@ -8,7 +8,7 @@ import {
   readReleaseStatus,
   summarizeReleaseStatus,
   type ReleaseStatusGatewayInput,
-} from "../lib/release-status.js";
+} from "./release-status.js";
 
 type DocData = Record<string, unknown>;
 const NOW = 10_000_000;

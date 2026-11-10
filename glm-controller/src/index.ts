@@ -307,6 +307,7 @@ import { CONNECTOR_OAUTH_REVOCATION_TARGETS } from "@octogee/shared/types/connec
 import { projectRepoSourceFromDoc } from "@octogee/shared/types/project";
 import { GoogleAuth } from "google-auth-library";
 import { startHttpServer, type ProductAdminRoutes } from "./http-server.js";
+import { createCloudLoggingSource } from "./cloud-logging-source.js";
 import { createConnectorSecretDecryptor } from "./connector-secret-decryption.js";
 import {
   assertCustomerRestoreNotInProgress,
@@ -2334,6 +2335,12 @@ function startControllerBackgroundTasks({
         }
       : {}),
     requestNativeReturnSourceRecovery: deps.requestNativeReturnSourceRecovery,
+    logs: {
+      source: ENVIRONMENT_SETTINGS.clusterProjectId
+        ? createCloudLoggingSource(`projects/${ENVIRONMENT_SETTINGS.clusterProjectId}`)
+        : null,
+      namespace: NAMESPACE,
+    },
     suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
     revokeConnectorGrantsForUser: (uid) =>
       revokeAllConnectorGrantsForUser(uid, CONNECTOR_OAUTH_REVOCATION_TARGETS, {

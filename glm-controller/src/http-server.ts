@@ -23,6 +23,8 @@ import {
   GLM_OPERATIONS_COLLECTION,
 } from "@octogee/shared/types/glm";
 import { addAdminCustomerRoutes } from "@octogee/core/admin-customer-router";
+import { addAdminLogsRoutes } from "@octogee/core/admin-logs-router";
+import type { LogEntriesSource } from "@octogee/core/fleet-logs";
 import {
   createRequireAdmin,
   type RequireAdminDeps,
@@ -87,6 +89,7 @@ export interface HttpServerDeps {
   suspendAuthUser: (uid: string) => Promise<void>;
   revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
   fleetEventListenerLingerMs?: number;
+  logs: { source: LogEntriesSource | null; namespace: string };
 }
 
 function adaptLogger(log: (msg: string) => void): FleetLogger {
@@ -305,6 +308,11 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     requestNativeReturnSourceRecovery: deps.requestNativeReturnSourceRecovery,
     suspendAuthUser: deps.suspendAuthUser,
     revokeConnectorGrantsForUser: deps.revokeConnectorGrantsForUser,
+  });
+  addAdminLogsRoutes(adminRouter, {
+    source: deps.logs.source,
+    namespace: deps.logs.namespace,
+    logger: adaptLogger(deps.log),
   });
   app.use("/api/admin", adminRouter);
 

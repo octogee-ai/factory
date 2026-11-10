@@ -31,6 +31,8 @@ gateway-router Service to the selected gateway's internal services.
   "/api/admin/restore-jobs"
   "/api/admin/builds"
   "/api/admin/rollouts"
+  "/api/admin/release-status"
+  "/api/admin/logs"
   "/api/admin/fleet-settings"
   "/api/admin/placement/*"
   "/api/admin/placement"

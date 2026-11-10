@@ -1,8 +1,14 @@
-import type { FleetRegistryRecord, PlatformStateStore, Stored } from "@octogee/core/platform-state";
+import type { FleetRegistryRecord, PlatformStateStore, Stored } from "./platform-state/index.js";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
 import { deriveSharedGatewayPoolConfig } from "@octogee/shared/types/shared-gateway-pool";
-import { imageTagMatchesArtifact } from "./release-convergence.js";
+
+export function imageTagMatchesArtifact(
+  artifactTag: string | null | undefined,
+  expectedImageTag: string,
+): boolean {
+  return artifactTag?.split("@", 1)[0] === expectedImageTag.split("@", 1)[0];
+}
 
 export type ReleaseStatusObservation =
   | "converged"

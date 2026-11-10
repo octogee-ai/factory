@@ -1,3 +1,5 @@
+import { imageTagMatchesArtifact } from "@octogee/core/release-status";
+
 export interface ReleaseConvergenceBaseline {
   configuredDefaultGatewayId: string;
   predecessorPodUids: string[];
@@ -88,13 +90,6 @@ function imageHasTag(image: string | undefined, expectedImageTag: string): boole
   if (!image) return false;
   const withoutDigest = image.split("@", 1)[0] ?? "";
   return withoutDigest.endsWith(`:${expectedImageTag}`);
-}
-
-export function imageTagMatchesArtifact(
-  artifactTag: string | null | undefined,
-  expectedImageTag: string,
-): boolean {
-  return artifactTag?.split("@", 1)[0] === expectedImageTag.split("@", 1)[0];
 }
 
 export function assessReleaseConvergence(
