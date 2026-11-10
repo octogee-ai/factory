@@ -1,8 +1,8 @@
-import { expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { desktopBuild, validateDesktopRelease, waitForMainBuild } from '../ci/desktop-build.mjs';
+import { desktopBuild, lockDesktopImage, validateDesktopRelease, waitForMainBuild } from '../ci/desktop-build.mjs';
 import { publishDesktopRelease } from '../ci/publish-desktop.mjs';
 
 const sha = 'a'.repeat(40);
@@ -87,4 +87,51 @@ it('fails when the written companion cannot be read back unchanged', async () =>
   try {
     await expect(publishDesktopRelease(record, build, directory, { read: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ ...record, desktopImage: { ...artifact, id: '456' } }), run: vi.fn() })).rejects.toThrow('differs');
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+describe('desktop image lock held by an earlier run', () => {
+  const holder = { owner: 'earlier', run: { repository: 'octogee-ai/octogee', id: '42890806285', attempt: '1' } };
+  function heldLock(steps: string[]) {
+    let held = true;
+    return vi.fn(async (url: string, options: any = {}) => {
+      const method = options.method ?? 'GET';
+      if (method === 'POST') return held ? { status: 412 } : { status: 200, json: async () => ({ generation: '8' }) };
+      if (method === 'GET' && url.includes('alt=media')) return { status: 200, json: async () => holder };
+      if (method === 'GET') return { status: 200, json: async () => ({ generation: '7' }) };
+      steps.push(`release ${url.match(/ifGenerationMatch=(\d+)/)?.[1]}`);
+      if (url.includes('ifGenerationMatch=7')) held = false;
+      return { status: 204 };
+    });
+  }
+  const waitingForever = async () => { throw new Error('still waiting for desktop-image'); };
+
+  it('deletes the image VMs of a cancelled holder run before taking over its lock', async () => {
+    const steps: string[] = [];
+    const deleteRunVms = vi.fn(async (runId: string) => { steps.push(`delete VMs ${runId}`); });
+    await expect(lockDesktopImage(async () => { steps.push('build'); return 'built'; }, {
+      request: heldLock(steps), canRelease: () => true, deleteRunVms, runCompleted: async () => true, sleep: waitingForever,
+    })).resolves.toBe('built');
+    expect(steps).toEqual(['delete VMs 42890806285-1', 'release 7', 'build', 'release 8']);
+  });
+
+  it('keeps waiting while the holder run is still building', async () => {
+    const steps: string[] = [];
+    const deleteRunVms = vi.fn();
+    await expect(lockDesktopImage(async () => 'built', {
+      request: heldLock(steps), canRelease: () => true, deleteRunVms, runCompleted: async () => false, sleep: waitingForever,
+    })).rejects.toThrow('still waiting');
+    expect(deleteRunVms).not.toHaveBeenCalled();
+    expect(steps).toEqual([]);
+  });
+
+  it('leaves the lock in place when the finished holder run VMs cannot be deleted', async () => {
+    const steps: string[] = [];
+    const task = vi.fn();
+    await expect(lockDesktopImage(task, {
+      request: heldLock(steps), canRelease: () => true, runCompleted: async () => true, sleep: waitingForever,
+      deleteRunVms: async () => { throw new Error('instances.delete denied'); },
+    })).rejects.toThrow('instances.delete denied');
+    expect(steps).toEqual([]);
+    expect(task).not.toHaveBeenCalled();
+  });
 });

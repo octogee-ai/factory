@@ -22,7 +22,7 @@ export async function githubRunCompleted(run, { fetchRun = fetch, token = proces
   return (await response.json()).status === 'completed';
 }
 
-async function takeOverFinishedHolder(request, url, runCompleted, label) {
+async function takeOverFinishedHolder(request, url, runCompleted, stopHolderRun, label) {
   const metadata = await request(url, { method: 'GET' });
   if (metadata.status === 404) return true;
   if (metadata.status !== 200) throw new Error(`Build lock inspect failed: ${metadata.status}`);
@@ -39,6 +39,7 @@ async function takeOverFinishedHolder(request, url, runCompleted, label) {
     return false;
   }
   if (!finished) return false;
+  await stopHolderRun?.(holder.run);
   const removed = await request(`${url}?ifGenerationMatch=${generation}`, { method: 'DELETE' });
   if (removed.status === 204) {
     console.log(`Took over ${label}: holder run ${holder.run.id} attempt ${holder.run.attempt} has finished`);
@@ -72,7 +73,7 @@ export async function withBuildPin(sha, request, run, { canRelease = () => true 
 
 export async function withBuildLock(sha, request, run, {
   now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), canRelease = () => true,
-  takeOverFinishedRuns = false, runCompleted = githubRunCompleted, runOwner = githubRunOwner(),
+  takeOverFinishedRuns = false, runCompleted = githubRunCompleted, stopHolderRun, runOwner = githubRunOwner(),
 } = {}) {
   const object = encodeURIComponent(`main/${sha}.json`);
   const url = `https://storage.googleapis.com/storage/v1/b/octogee-ci-state/o/${object}`;
@@ -84,7 +85,7 @@ export async function withBuildLock(sha, request, run, {
     generation = await createLockObject(request, upload, { ...record, createdAt: now() });
     if (generation) break;
     if (now() >= deadline) throw new Error(`Timed out waiting for main build ${sha}`);
-    if (takeOverFinishedRuns && await takeOverFinishedHolder(request, url, runCompleted, `gs://octogee-ci-state/main/${sha}.json`)) continue;
+    if (takeOverFinishedRuns && await takeOverFinishedHolder(request, url, runCompleted, stopHolderRun, `gs://octogee-ci-state/main/${sha}.json`)) continue;
     console.log(`Waiting for main build ${sha}`);
     await sleep(30_000);
   }

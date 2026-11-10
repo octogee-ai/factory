@@ -1,3 +1,4 @@
+import { withBuildLock } from './build-lock.mjs';
 import { desktopRunId } from './main-build.mjs';
 import { validateDesktopRelease } from '../lib/desktop-image-release.mjs';
 export { validateDesktopRelease } from '../lib/desktop-image-release.mjs';
@@ -15,6 +16,11 @@ export async function desktopBuild(options, deps) {
     return deps.publish(validateDesktopRelease({ schemaVersion: 1, sourceSha: options.sourceSha,
       manifestDigest: build.digest, gatewayDigest: build.manifest.surfaces.gateway['octogee-gateway-builder'], desktopImage }, build), build);
   });
+}
+
+export function lockDesktopImage(task, { request, canRelease, deleteRunVms, ...options }) {
+  return withBuildLock('desktop-image', request, task, { canRelease, takeOverFinishedRuns: true,
+    stopHolderRun: run => deleteRunVms(desktopRunId(`${run.id}-${run.attempt}`)), ...options });
 }
 
 export async function waitForMainBuild(sha, { read, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), timeout = 90 * 60_000 }) {

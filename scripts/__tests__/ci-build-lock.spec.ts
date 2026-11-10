@@ -146,11 +146,11 @@ describe('deploy lock takeover from a finished run', () => {
     expect(JSON.parse(request.mock.calls[0][1].body)).toMatchObject({ run: holderRun });
   });
 
-  it('is opted into by the deploy lock only', () => {
-    expect(readFileSync(new URL('../ci/release.mjs', import.meta.url), 'utf8')).toContain('takeOverFinishedRuns: true');
-    for (const caller of ['../ci/run-main.mjs', '../ci/desktop.mjs']) {
-      expect(readFileSync(new URL(caller, import.meta.url), 'utf8')).not.toContain('takeOverFinishedRuns');
+  it('is opted into by the deploy and desktop locks, not the main build lock', () => {
+    for (const caller of ['../ci/release.mjs', '../ci/desktop-build.mjs']) {
+      expect(readFileSync(new URL(caller, import.meta.url), 'utf8')).toContain('takeOverFinishedRuns: true');
     }
+    expect(readFileSync(new URL('../ci/run-main.mjs', import.meta.url), 'utf8')).not.toContain('takeOverFinishedRuns');
   });
 });
 
@@ -168,12 +168,17 @@ describe('githubRunCompleted', () => {
   });
 });
 
-describe('deploy workflows can check the lock holder run', () => {
-  it.each(['deploy.yml', 'ship-test.yml'])('%s gives its deploy job read access to Actions and the run token', (file) => {
+describe('lock-taking workflows can check the lock holder run', () => {
+  it.each([
+    ['deploy.yml', 'deploy', 'scripts/ci/deploy.mjs'],
+    ['ship-test.yml', 'deploy', 'scripts/ci/deploy.mjs'],
+    ['build-main.yml', 'desktop', 'scripts/ci/desktop.mjs'],
+    ['desktop-image.yml', 'build', 'scripts/ci/desktop.mjs'],
+  ])('%s gives its %s job read access to Actions and the run token', (file, jobName, script) => {
     const workflow = parse(readFileSync(new URL(`../../.github/workflows/${file}`, import.meta.url), 'utf8'));
-    const job = workflow.jobs.deploy;
-    expect(job.permissions).toMatchObject({ actions: 'read' });
-    const step = job.steps.find((s: { run?: string }) => s.run?.includes('scripts/ci/deploy.mjs'));
+    const job = workflow.jobs[jobName];
+    expect(job.permissions ?? workflow.permissions).toMatchObject({ actions: 'read' });
+    const step = job.steps.find((s: { run?: string }) => s.run?.includes(script));
     expect(step.env.GH_TOKEN).toBe('${{ github.token }}');
   });
 });

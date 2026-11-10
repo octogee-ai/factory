@@ -2,8 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { desktopBuild, waitForMainBuild } from './desktop-build.mjs';
-import { withBuildLock } from './build-lock.mjs';
+import { desktopBuild, lockDesktopImage, waitForMainBuild } from './desktop-build.mjs';
 import { request } from './gcs.mjs';
 import { resolveRelease, resolveDesktopRelease } from './release-source.mjs';
 import { publishDesktopRelease } from './publish-desktop.mjs';
@@ -21,7 +20,8 @@ try {
       run('git', ['merge-base', '--is-ancestor', sha, 'origin/main']);
       return waitForMainBuild(sha, { read: resolveRelease });
     },
-    lock: task => withBuildLock('desktop-image', request, task, { canRelease: () => cleaned }),
+    lock: task => lockDesktopImage(task, { request, canRelease: () => cleaned,
+      deleteRunVms: runId => run('node', ['.github/actions/release-digest-manifest/build-desktop-image.mjs', 'cleanup'], { env: { ...env, CI_RUN_ID: runId }, stdio: 'inherit' }) }),
     lookup: resolveDesktopRelease,
     desktop: async build => {
       cleaned = false;
