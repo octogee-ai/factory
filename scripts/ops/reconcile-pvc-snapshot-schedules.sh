@@ -39,8 +39,8 @@ case "${TARGET_ID}" in
     exit 2
     ;;
 esac
-if [[ "${TARGET_REGION}" != "${EXPECTED_REGION}" || "${TARGET_CLUSTER_PROJECT}" != "octogee" ]]; then
-  echo "Deployment target ${TARGET_ID} does not resolve to octogee/${EXPECTED_REGION}" >&2
+if [[ "${TARGET_REGION}" != "${EXPECTED_REGION}" ]]; then
+  echo "Deployment target ${TARGET_ID} does not resolve to ${EXPECTED_REGION}" >&2
   exit 2
 fi
 

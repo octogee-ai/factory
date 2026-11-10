@@ -390,6 +390,7 @@ else
       -var="namespace=$NAMESPACE" \
       -var="region=$TARGET_REGION" \
       -var="cloudsql_project_id=$TARGET_CLOUD_SQL_PROJECT" \
+      -var="cloudsql_instance_name=$TARGET_CLOUD_SQL_INSTANCE" \
       -auto-approve \
       -input=false
   )

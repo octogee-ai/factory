@@ -42,15 +42,13 @@ variable "ops_agent_sa_name" {
 }
 
 variable "cloudsql_project_id" {
-  description = "Project ID that owns the Cloud SQL instance (always 'octogee')"
+  description = "Project ID that owns the Cloud SQL instance"
   type        = string
-  default     = "octogee"
 }
 
 variable "cluster_project_id" {
-  description = "Project ID that owns the GKE cluster (for Workload Identity pool). Both test and prod use the same cluster in the 'octogee' project."
+  description = "Project ID that owns the GKE cluster and its Workload Identity pool"
   type        = string
-  default     = "octogee"
 }
 
 variable "firebase_deployer_sa_name" {

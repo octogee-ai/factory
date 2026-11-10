@@ -102,7 +102,7 @@ verify_terraform_prerequisites() {
     ))
   ' "$INSTANCE_JSON" >/dev/null || fail_prerequisites "Cloud SQL settings, PITR, or backup policy drifted"
 
-  for database in mattermost_prod mattermost_test gitea_prod gitea_test; do
+  for database in "mattermost_${TARGET_ENVIRONMENT}" "gitea_${TARGET_ENVIRONMENT}"; do
     gcloud sql databases describe "$database" \
       --instance="$INSTANCE" --project="$PROJECT" >/dev/null 2>&1 \
       || fail_prerequisites "database '$database' is absent"
@@ -113,13 +113,14 @@ verify_terraform_prerequisites() {
       || fail_prerequisites "Secret Manager container '$secret' is absent"
   done
 
+  release_identity="octogee-release-${TARGET_ENVIRONMENT}@octogee.iam.gserviceaccount.com"
   iam_member="$(gcloud secrets get-iam-policy "$GITEA_PASSWORD_SECRET" \
     --project="$PROJECT" \
     --flatten='bindings[].members' \
-    --filter='bindings.role=roles/secretmanager.secretAccessor AND bindings.members=serviceAccount:github-actions@octogee.iam.gserviceaccount.com' \
+    --filter="bindings.role=roles/secretmanager.secretAccessor AND bindings.members=serviceAccount:${release_identity}" \
     --format='value(bindings.members)' 2>/dev/null || true)"
-  [[ "$iam_member" == *"github-actions@octogee.iam.gserviceaccount.com"* ]] \
-    || fail_prerequisites "GitHub Actions secretAccessor IAM binding is absent"
+  [[ "$iam_member" == *"$release_identity"* ]] \
+    || fail_prerequisites "release identity secretAccessor IAM binding is absent"
 }
 
 sql_user_exists() {
