@@ -9,7 +9,13 @@ spec:
     matchExpressions:
       - key: app
         operator: In
-        values: [octogee-api, llm-broker, glm-controller]
+        values:
+          - octogee-api
+          - llm-broker
+          - glm-controller
+          {{- if and (eq (((.Values.global).platformState).backend | default "firestore") "postgres") (((.Values.global).platformState).expirySweepEnabled) }}
+          - platform-state-expiry
+          {{- end }}
   policyTypes: [Egress]
   egress:
     - to:

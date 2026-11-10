@@ -1,0 +1,76 @@
+{{- $platformState := (.Values.global).platformState | default dict -}}
+{{- if and (eq ($platformState.backend | default "firestore") "postgres") $platformState.expirySweepEnabled -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: platform-state-expiry
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: platform-state-expiry
+spec:
+  schedule: "*/10 * * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            app: platform-state-expiry
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          {{- with (.Values.global).nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: platform-state-expiry
+              image: "{{ required "glm-controller.image.repository is required" .Values.image.repository }}:{{ required "glm-controller.image.tag is required" .Values.image.tag }}@{{ required "glm-controller.image.digest is required" .Values.image.digest }}"
+              command:
+                - /usr/bin/tini
+                - --
+                - node
+                - --input-type=module
+                - --eval
+                - |
+                  import { platformStateStoreForDeploymentTarget } from '@octogee/core/platform-state';
+
+                  const store = await platformStateStoreForDeploymentTarget({
+                    deploymentTargetId: process.env.DEPLOYMENT_TARGET_ID,
+                    applicationName: 'platform-state-expiry',
+                    logger: console,
+                    createFirestoreStore: () => { throw new Error('Expiry sweep requires PostgreSQL'); },
+                  });
+                  try {
+                    const expired = await store.sweepExpired(Date.now(), 500);
+                    console.info(JSON.stringify(expired));
+                  } finally {
+                    await store.close();
+                  }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              env:
+                - name: DEPLOYMENT_TARGET_ID
+                  value: {{ required "global.deploymentTargetId is required" (.Values.global).deploymentTargetId | quote }}
+                {{- include "octogee.platformStateEnv" . | nindent 16 }}
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  memory: 256Mi
+{{- end }}
