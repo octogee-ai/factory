@@ -22,6 +22,7 @@ app/             Vite + React PWA, all roles (app.octogee.com)
 octogee-api/     Express cluster singleton — the HTTP API (api.octogee.com)
 gateway-edge/    Express sidecar on each gateway pod — locality routes + MM WS proxy
 glm-controller/  "Cowboy" — gateway-fleet lifecycle (provision/retire/roll, /g routing)
+fleet/           Go operator CLI — Admin API client only, imports nothing from this repo
 functions/       Firebase Functions (Firestore triggers + scheduled)
 shared/          @octogee/shared — TypeScript types only (no React)
 scripts/         in-pod provisioner + operator tooling
