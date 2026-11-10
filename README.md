@@ -23,14 +23,11 @@ also a billing account and a domain. [See every account and tier](docs/getting-s
 
 ## What is here today
 
-- `AGENTS.md` is the contract every agent loads. It is the file that runs in the
-  Octogee monorepo today, renamed from `CLAUDE.md`.
+- `AGENTS.md` is the contract every agent loads.
 - `docs/handbook/` holds the five Dev Workflow chapters: engineering principles,
   testing, the PR and effort workflow, repo conventions, and docs curation.
-- `scripts/lib/ci-checks.ts` plans the pull-request checks from a diff.
-  `scripts/lib/scope/` maps changed paths to the jobs that own them, and
-  `scripts/ci/quality.sh` runs the lint and security lanes. `npx vitest run`
-  runs the spec that pins their behavior, here and in Actions.
+- `scripts/lib/ci-checks.ts` plans the pull-request checks from a diff, and
+  `scripts/ci/quality.sh` runs the lint and security lanes.
 - `SHIP.md` shows the shape of the four commands that move a build to TEST, to
   PROD, and to a single Builder gateway. Identities are placeholders.
 
