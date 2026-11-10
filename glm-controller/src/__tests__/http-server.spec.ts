@@ -597,11 +597,14 @@ function buildDeps(
     }, { documents }), watches.watch),
     accounts: accountsOver(store),
     log: vi.fn(),
-    verifyIdToken: vi.fn(async (token: string) => {
-      if (token === "admin-token") return { uid: "admin-uid" };
-      if (token === "user-token") return { uid: "user-uid" };
-      throw new Error("invalid token");
-    }),
+    identity: {
+      issuers: [],
+      verifyBearer: vi.fn(async (token: string) => {
+        if (token === "admin-token") return { ownerId: "admin-uid", email: null, operator: false };
+        if (token === "user-token") return { ownerId: "user-uid", email: null, operator: false };
+        throw new Error("invalid token");
+      }),
+    },
     provisionGatewayAuthSecret: vi.fn(async () => ({
       secretName: "stub",
       created: true,

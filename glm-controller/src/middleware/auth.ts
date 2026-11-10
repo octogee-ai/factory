@@ -1,10 +1,11 @@
 import type { Request, Response, NextFunction } from "express";
 import type { BuilderAccount, BuilderAccountReader } from "@octogee/core/builder-account";
+import type { IdentityProvider, VerifiedIdentity } from "@octogee/core/identity-provider";
 import type { BuilderRecord, PlatformStateStore, Stored } from "@octogee/core/platform-state";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
 export interface RequireAdminDeps {
-  verifyIdToken: (token: string) => Promise<{ uid: string }>;
+  identity: IdentityProvider;
   store: Pick<PlatformStateStore, "builders">;
   accounts: Pick<BuilderAccountReader, "get">;
   log: (msg: string) => void;
@@ -14,18 +15,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function authenticatedUid(
+async function authenticatedIdentity(
   deps: RequireAdminDeps,
   req: Request,
   res: Response,
-): Promise<string | null> {
+): Promise<VerifiedIdentity | null> {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) {
     res.status(401).json({ error: "Unauthenticated" });
     return null;
   }
   try {
-    return (await deps.verifyIdToken(header.slice(7))).uid;
+    return await deps.identity.verifyBearer(header.slice(7));
   } catch (error) {
     deps.log(`[admin-auth] verify failed: ${errorMessage(error)}`);
     res.status(401).json({ error: "Invalid token" });
@@ -48,9 +49,16 @@ export function createRequireAdmin(
   deps: RequireAdminDeps,
 ): (req: Request, res: Response, next: NextFunction) => Promise<void> {
   return async function requireAdmin(req, res, next) {
-    const uid = await authenticatedUid(deps, req, res);
-    if (!uid) return;
+    const identity = await authenticatedIdentity(deps, req, res);
+    if (!identity) return;
+    const uid = identity.ownerId;
     req.uid = uid;
+    if (identity.operator) {
+      req.user = { email: identity.email };
+      req.isAdmin = true;
+      next();
+      return;
+    }
 
     let builder: Stored<BuilderRecord> | null;
     let account: BuilderAccount | null;

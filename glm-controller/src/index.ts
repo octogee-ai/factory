@@ -259,6 +259,7 @@ import {
 } from "@octogee/core/gateway-live-release";
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
+import { combineIdentityProviders, googleIdentityFromEnvironment, type IdentityProvider } from "@octogee/core/identity-provider";
 import { createMigrationClient } from "@octogee/core/fleet-migration-client";
 import {
   customerMigrationV2GatewayRootFence,
@@ -2174,6 +2175,7 @@ type ControllerStopper = () => void;
 
 interface ControllerBackgroundTasksDeps {
   addProductAdminRoutes?: ProductAdminRoutes;
+  adminIdentity: IdentityProvider;
   placementAdmission: PlacementAdmissionPolicy;
   policyInputs: BuilderPolicyInputsSource;
   builderAdmission?: BuilderAdmissionSourceFactory | undefined;
@@ -2192,6 +2194,7 @@ const GITEA_GATEWAY_KEY_GC_GRACE_MS = 10 * 60 * 1000;
 
 function startControllerBackgroundTasks({
   addProductAdminRoutes,
+  adminIdentity,
   placementAdmission,
   policyInputs,
   builderAdmission,
@@ -2318,10 +2321,7 @@ function startControllerBackgroundTasks({
     accounts: firestoreBuilderAccountReader(db),
     log,
     port: HTTP_PORT,
-    verifyIdToken: async (token) => {
-      const decoded = await getAuth().verifyIdToken(token, true);
-      return { uid: decoded.uid };
-    },
+    identity: adminIdentity,
     provisionGatewayAuthSecret,
     listGatewayBuilds,
     ...CENTRAL_RELEASE_ROUTE_DEPS,
@@ -2725,6 +2725,7 @@ type HostingCleanup = NonNullable<NukeCloudDeps["deleteHostingSites"]>;
 export interface ControllerProduct {
   createHostingCleanup?: (log: (message: string) => void) => HostingCleanup;
   addAdminRoutes?: ProductAdminRoutes;
+  adminIdentity?: IdentityProvider;
   placementAdmission?: PlacementAdmissionPolicy;
   builderAdmission?: BuilderAdmissionSourceFactory;
   builderPolicyInputs?: (db: Firestore, log: (message: string) => void) => BuilderPolicyInputsSource;
@@ -2805,8 +2806,13 @@ export async function main(product: ControllerProduct = {}): Promise<void> {
   }
 
   const policyInputs = product.builderPolicyInputs?.(db, log) ?? noBuilderPolicyInputs;
+  const adminIdentity = combineIdentityProviders([
+    product.adminIdentity,
+    googleIdentityFromEnvironment(process.env),
+  ].filter((provider): provider is IdentityProvider => provider != null));
   const stoppers = startControllerBackgroundTasks({
     addProductAdminRoutes: product.addAdminRoutes,
+    adminIdentity,
     placementAdmission: product.placementAdmission ?? openPlacementAdmission,
     policyInputs,
     builderAdmission: product.builderAdmission,

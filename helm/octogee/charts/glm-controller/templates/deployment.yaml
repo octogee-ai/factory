@@ -70,6 +70,14 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            {{- with .Values.fleetIdentity.googleClientId }}
+            - name: FLEET_GOOGLE_CLIENT_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.fleetIdentity.operatorEmails }}
+            - name: FLEET_OPERATOR_EMAILS
+              value: {{ join "," . | quote }}
+            {{- end }}
             - name: DEPLOYMENT_TARGET_ID
               value: {{ required "global.deploymentTargetId is required" (.Values.global).deploymentTargetId | quote }}
             - name: PUBLIC_APP_ORIGINS

@@ -59,6 +59,12 @@ env:
   mmUrl: ""
   systemNotificationUrl: ""
 
+# Google sign-in for the fleet command line. googleClientId is the OAuth client
+# of type "TVs and Limited Input devices"; operatorEmails may use the Admin API.
+fleetIdentity:
+  googleClientId: ""
+  operatorEmails: []
+
 # Gitea gateway SSH key sweep: dry-run logs per-user managed-key counts,
 # enforce deletes keys whose owning gateway pod or computer VM is gone.
 # legacy governs legacy-titled keys separately: enforce deletes those whose key

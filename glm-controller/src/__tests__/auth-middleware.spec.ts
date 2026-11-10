@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import request from "supertest";
 import { describe, it, expect, vi } from "vitest";
 import { builderAccountFromData, type BuilderAccountReader } from "@octogee/core/builder-account";
+import type { IdentityProvider } from "@octogee/core/identity-provider";
 import type { PlatformStateStore } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createRequireAdmin } from "../middleware/auth";
@@ -28,13 +29,20 @@ function seededAccounts(seed: Seed): Pick<BuilderAccountReader, "get"> {
 }
 
 function buildApp(opts: {
-  verifyIdToken: (token: string) => Promise<{ uid: string }>;
+  verifyIdToken?: (token: string) => Promise<{ uid: string }>;
+  verifyBearer?: IdentityProvider["verifyBearer"];
   store: Seed;
 }): Express {
   const app = express();
   app.use(
     createRequireAdmin({
-      verifyIdToken: opts.verifyIdToken,
+      identity: {
+        issuers: [],
+        verifyBearer: opts.verifyBearer ?? (async (token) => {
+          const { uid } = await opts.verifyIdToken!(token);
+          return { ownerId: uid, email: null, operator: false };
+        }),
+      },
       store: seededStore(opts.store),
       accounts: seededAccounts(opts.store),
       log: vi.fn(),
@@ -100,6 +108,25 @@ describe("createRequireAdmin", () => {
     expect(res.status).toBe(403);
   });
 
+  it("admits an identity its provider marks as an operator, with no account of its own", async () => {
+    const app = buildApp({
+      verifyBearer: async () => ({ ownerId: "ada@example.com", email: "ada@example.com", operator: true }),
+      store: { users: {}, configs: {} },
+    });
+    const res = await request(app).get("/probe").set("Authorization", "Bearer ok");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ uid: "ada@example.com", isAdmin: true, email: "ada@example.com" });
+  });
+
+  it("refuses a verified identity that is neither an operator nor a known account", async () => {
+    const app = buildApp({
+      verifyBearer: async () => ({ ownerId: "grace@example.com", email: "grace@example.com", operator: false }),
+      store: { users: {}, configs: {} },
+    });
+    const res = await request(app).get("/probe").set("Authorization", "Bearer ok");
+    expect(res.status).toBe(403);
+  });
+
   it("returns 403 when role is not 'admin'", async () => {
     const app = buildApp({
       verifyIdToken: async () => ({ uid: "alice" }),
@@ -155,7 +182,7 @@ describe("createRequireAdmin", () => {
     vi.spyOn(store.builders.records, "get").mockRejectedValue(new Error("firestore unreachable"));
     app.use(
       createRequireAdmin({
-        verifyIdToken: async () => ({ uid: "alice" }),
+        identity: { issuers: [], verifyBearer: async () => ({ ownerId: "alice", email: null, operator: false }) },
         store,
         accounts: seededAccounts(seed),
         log: vi.fn(),

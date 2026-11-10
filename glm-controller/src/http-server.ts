@@ -67,7 +67,7 @@ export interface HttpServerDeps {
   db: Firestore;
   store: PlatformStateStore;
   accounts: BuilderAccountReader;
-  verifyIdToken: RequireAdminDeps["verifyIdToken"];
+  identity: RequireAdminDeps["identity"];
   log: (msg: string) => void;
   provisionGatewayAuthSecret: (opts: {
     gatewayId: string;
@@ -268,7 +268,7 @@ export function createHttpServer(deps: HttpServerDeps): Express {
   const adminRouter = Router();
   adminRouter.use(
     createRequireAdmin({
-      verifyIdToken: deps.verifyIdToken,
+      identity: deps.identity,
       store: deps.store,
       accounts: deps.accounts,
       log: deps.log,

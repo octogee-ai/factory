@@ -469,6 +469,10 @@
     "./git-host": {
       "types": "./dist/git-host/index.d.ts",
       "default": "./dist/git-host/index.js"
+    },
+    "./identity-provider": {
+      "types": "./dist/identity-provider.d.ts",
+      "default": "./dist/identity-provider.js"
     }
   },
   "typesVersions": {
@@ -781,6 +785,9 @@
       ],
       "git-host": [
         "dist/git-host/index.d.ts"
+      ],
+      "identity-provider": [
+        "dist/identity-provider.d.ts"
       ]
     }
   },
