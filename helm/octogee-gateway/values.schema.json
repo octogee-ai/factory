@@ -45,9 +45,12 @@
       "maximum": 1,
       "description": "Replica count for one stable gateway member. 0 = paused; 1 = running or draining. Cowboy scales the Shared Barn by whole independently rollable members, never HPA replicas behind one Service."
     },
+    "nodeSelector": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
     "computeClass": {
       "type": "string",
-      "minLength": 1,
       "description": "Environment-owned regional Spot-first ComputeClass selected by owner-bound gateway pods."
     },
     "sizingTier": {

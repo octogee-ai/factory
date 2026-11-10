@@ -21,7 +21,9 @@ spec:
         app: mattermost
     spec:
       nodeSelector:
-        cloud.google.com/private-node: "true"
+        {{- with (.Values.global).nodeSelector }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         kubernetes.io/arch: amd64
       serviceAccountName: {{ .Values.serviceAccountName }}
       automountServiceAccountToken: false
@@ -57,7 +59,7 @@ spec:
                   name: {{ .Values.db.passwordSecret }}
                   key: {{ .Values.db.passwordKey }}
             - name: MM_SQLSETTINGS_DATASOURCE
-              value: "postgres://{{ .Values.db.user }}:$(MM_DB_PASSWORD)@cloud-sql-proxy:5432/{{ .Values.db.name }}?sslmode=disable&connect_timeout=10"
+              value: "postgres://{{ .Values.db.user }}:$(MM_DB_PASSWORD)@{{ .Values.db.host }}:{{ .Values.db.port }}/{{ .Values.db.name }}?sslmode=disable&connect_timeout=10"
             - name: MM_SQLSETTINGS_DRIVERNAME
               value: postgres
             - name: MM_SERVICESETTINGS_SITEURL

@@ -4,6 +4,8 @@ image:
   digest: ""
 
 db:
+  host: postgres
+  port: 5432
   user: mattermost
   name: mattermost_prod
   passwordSecret: mattermost-cloud-sql

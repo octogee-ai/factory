@@ -1,5 +1,6 @@
+{{- $ingressClass := (.Values.global).ingressClassName | default "traefik" -}}
 {{- $edgeEnabled := .Values.edgeIngress.enabled | default false -}}
-{{- if or .Values.gitea.webIngress.enabled $edgeEnabled }}
+{{- if and (eq $ingressClass "gce") (or .Values.gitea.webIngress.enabled $edgeEnabled) }}
 ---
 apiVersion: cloud.google.com/v1
 kind: BackendConfig
@@ -42,18 +43,20 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: gitea-ingress
+  {{- if eq $ingressClass "gce" }}
   annotations:
     kubernetes.io/ingress.class: "gce"
     networking.gke.io/managed-certificates: {{ .Values.gitea.webIngress.certName }}
     kubernetes.io/ingress.global-static-ip-name: {{ .Values.gitea.webIngress.staticIpName }}
+  {{- end }}
 spec:
-  ingressClassName: gce
+  ingressClassName: {{ $ingressClass }}
   rules:
     - host: {{ .Values.gitea.webIngress.host }}
       http:
         paths:
-          - path: /*
-            pathType: ImplementationSpecific
+          - path: {{ ternary "/*" "/" (eq $ingressClass "gce") }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" (eq $ingressClass "gce") }}
             backend:
               service:
                 name: octogee-gitea-http

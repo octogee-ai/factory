@@ -1,5 +1,7 @@
 {{- if .Values.edgeIngress.enabled }}
 {{- $name := .Values.edgeIngress.name | default "octogee-edge-ingress" -}}
+{{- $ingressClass := (.Values.global).ingressClassName | default "traefik" -}}
+{{- if eq $ingressClass "gce" }}
 apiVersion: networking.gke.io/v1beta1
 kind: FrontendConfig
 metadata:
@@ -11,17 +13,20 @@ spec:
     enabled: true
     responseCodeName: MOVED_PERMANENTLY_DEFAULT
 ---
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ $name }}
+  {{- if eq $ingressClass "gce" }}
   annotations:
     kubernetes.io/ingress.class: "gce"
     networking.gke.io/managed-certificates: {{ join "," .Values.edgeIngress.managedCertificates | quote }}
     kubernetes.io/ingress.global-static-ip-name: {{ .Values.edgeIngress.staticIpName }}
     networking.gke.io/v1beta1.FrontendConfig: octogee-https-redirect
+  {{- end }}
 spec:
-  ingressClassName: gce
+  ingressClassName: {{ $ingressClass }}
   defaultBackend:
     service:
       name: octogee-api

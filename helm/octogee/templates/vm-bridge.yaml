@@ -53,8 +53,10 @@ spec:
       annotations:
         checksum/nginx: {{ list $ns $llmPort $npmPort .Values.npmCacheProxy.enabled .Values.networkPolicy.nodeLocalDnsCidr 2222 2222 "quiet-empty-probes" | toJson | sha256sum | trunc 16 }}
     spec:
+      {{- with (.Values.global).nodeSelector }}
       nodeSelector:
-        cloud.google.com/private-node: "true"
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true

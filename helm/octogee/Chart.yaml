@@ -9,6 +9,7 @@ dependencies:
   - name: cloud-sql-proxy
     version: "0.1.0"
     repository: "file://charts/cloud-sql-proxy"
+    condition: cloud-sql-proxy.enabled
 
   - name: mattermost
     version: "0.1.0"

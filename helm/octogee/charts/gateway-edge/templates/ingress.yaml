@@ -1,5 +1,7 @@
+{{- $ingressClass := (.Values.global).ingressClassName | default "traefik" -}}
+{{- $gke := eq $ingressClass "gce" -}}
 {{- $resourcesEnabled := or .Values.ingress.enabled (.Values.ingress.resourcesEnabled | default false) -}}
-{{- if $resourcesEnabled }}
+{{- if and $gke $resourcesEnabled }}
 ---
 apiVersion: networking.gke.io/v1
 kind: ManagedCertificate
@@ -35,12 +37,14 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: gateway-edge-ingress
+  {{- if $gke }}
   annotations:
     kubernetes.io/ingress.class: "gce"
     networking.gke.io/managed-certificates: {{ .Values.ingress.certName }}
     kubernetes.io/ingress.global-static-ip-name: {{ .Values.ingress.staticIpName }}
+  {{- end }}
 spec:
-  ingressClassName: gce
+  ingressClassName: {{ $ingressClass }}
   rules:
     - host: {{ .Values.ingress.host }}
       http:
@@ -67,29 +71,29 @@ spec:
           # path; turns out it doesn't, and bare /api/admin/gateways
           # was 502-ing through to gateway-edge on no-gateway-pod
           # clusters until both rules were present.
-          - path: /api/admin/gateways/*
-            pathType: ImplementationSpecific
+          - path: {{ ternary "/api/admin/gateways/*" "/api/admin/gateways" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
             backend:
               service:
                 name: {{ $glm }}
                 port:
                   name: http
           - path: /api/admin/gateways
-            pathType: ImplementationSpecific
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
             backend:
               service:
                 name: {{ $glm }}
                 port:
                   name: http
           - path: /api/admin/operations
-            pathType: ImplementationSpecific
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
             backend:
               service:
                 name: {{ $glm }}
                 port:
                   name: http
           - path: /api/admin/fleet-events
-            pathType: ImplementationSpecific
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
             backend:
               service:
                 name: {{ $glm }}
@@ -104,71 +108,71 @@ spec:
           # `/api/admin/restore-jobs/<jobId>/kick` and falls through the
           # catch-all `/api/*` to gateway-edge, which 404s if it's
           # running an older image without the kick endpoint.
-          - path: /api/admin/restore-jobs/*
-            pathType: ImplementationSpecific
+          - path: {{ ternary "/api/admin/restore-jobs/*" "/api/admin/restore-jobs" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
             backend:
               service:
                 name: {{ $glm }}
                 port:
                   name: http
           - path: /api/admin/restore-jobs
-            pathType: ImplementationSpecific
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
             backend:
               service:
                 name: {{ $glm }}
                 port:
                   name: http
           - path: /api/admin/builds
-            pathType: ImplementationSpecific
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
             backend:
               service:
                 name: {{ $glm }}
                 port:
                   name: http
           - path: /api/admin/rollouts
-            pathType: ImplementationSpecific
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
             backend:
               service:
                 name: {{ $glm }}
                 port:
                   name: http
           - path: /api/admin/fleet-settings
-            pathType: ImplementationSpecific
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
             backend:
               service:
                 name: {{ $glm }}
                 port:
                   name: http
-          - path: /api/admin/onboarding-placement/*
-            pathType: ImplementationSpecific
+          - path: {{ ternary "/api/admin/onboarding-placement/*" "/api/admin/onboarding-placement" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
             backend:
               service:
                 name: {{ $glm }}
                 port:
                   name: http
           - path: /api/admin/onboarding-placement
-            pathType: ImplementationSpecific
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
             backend:
               service:
                 name: {{ $glm }}
                 port:
                   name: http
-          - path: /api/admin/gateway-migrations/*
-            pathType: ImplementationSpecific
+          - path: {{ ternary "/api/admin/gateway-migrations/*" "/api/admin/gateway-migrations" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
             backend:
               service:
                 name: {{ $glm }}
                 port:
                   name: http
           - path: /api/admin/customer-distribution
-            pathType: ImplementationSpecific
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
             backend:
               service:
                 name: {{ $glm }}
                 port:
                   name: http
-          - path: /api/admin/customers/by-slug/*
-            pathType: ImplementationSpecific
+          - path: {{ ternary "/api/admin/customers/by-slug/*" "/api/admin/customers/by-slug" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
             backend:
               service:
                 name: {{ $glm }}
@@ -179,30 +183,30 @@ spec:
           # prefix matches /customer/:uid + all sub-paths (usage, throttle,
           # audit, ops, delete). /api/admin/customers/* matches
           # the list + stats endpoints.
-          - path: /api/admin/customer/*
-            pathType: ImplementationSpecific
+          - path: {{ ternary "/api/admin/customer/*" "/api/admin/customer" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
             backend:
               service:
                 name: {{ $glm }}
                 port:
                   name: http
-          - path: /api/admin/customers/*
-            pathType: ImplementationSpecific
+          - path: {{ ternary "/api/admin/customers/*" "/api/admin/customers" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
             backend:
               service:
                 name: {{ $glm }}
                 port:
                   name: http
           - path: /api/admin/customers
-            pathType: ImplementationSpecific
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
             backend:
               service:
                 name: {{ $glm }}
                 port:
                   name: http
           # ── /g/* gateway-local public router ───────────────────
-          - path: /g/*
-            pathType: ImplementationSpecific
+          - path: {{ ternary "/g/*" "/g" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
             backend:
               service:
                 name: {{ $routerSvc }}
@@ -212,15 +216,15 @@ spec:
           # octogee-api serves the full cluster API bundle. Gateway-local
           # routes are intentionally not carved out here; callers use
           # /g/<gatewayId>/* so they reach the correct gateway pod.
-          - path: /api/*
-            pathType: ImplementationSpecific
+          - path: {{ ternary "/api/*" "/api" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
             backend:
               service:
                 name: {{ $api }}
                 port:
                   name: http
           - path: /health
-            pathType: ImplementationSpecific
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
             backend:
               service:
                 name: {{ $routerSvc }}

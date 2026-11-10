@@ -7,6 +7,9 @@
 # via `kubectl port-forward`. Cheap, isolated, and disposable.
 
 global:
+  ingressClassName: gce
+  nodeSelector:
+    cloud.google.com/private-node: "true"
   deploymentTargetId: "__TARGET_ID__"
   deploymentProjectId: "__FIREBASE_PROJECT__"
   publicAppOrigins:
@@ -20,6 +23,7 @@ npmCacheProxy:
   enabled: false
 
 cloud-sql-proxy:
+  enabled: true
   connectionName: "__CLOUD_SQL_CONNECTION__"
   usePrivateIp: true
 
@@ -29,6 +33,7 @@ mattermost:
     tag: "12.0.1-octogee-4ee2e9ab"
     digest: "sha256:6fa50729743aaf50e839e33d33c709bdf3cbdbde718b0306cb9574f112fdf2a4"
   db:
+    host: cloud-sql-proxy
     name: mattermost___DB_SLUG__
   siteUrl: "http://mattermost.__NAMESPACE__.svc.cluster.local:8065"
   pvc:
@@ -38,9 +43,17 @@ mattermost:
       memory: "1Gi"
 
 gitea:
+  service:
+    http:
+      annotations:
+        cloud.google.com/backend-config: '{"default":"gitea-backend"}'
+        cloud.google.com/neg: '{"ingress":true}'
+  nodeSelector:
+    cloud.google.com/private-node: "true"
   gitea:
     config:
       database:
+        HOST: cloud-sql-proxy:5432
         NAME: gitea___DB_SLUG__
       server:
         # Internal-only — no DNS, no public access. Use port-forward.
@@ -140,3 +153,7 @@ opsAgent:
 
 networkPolicy:
   agentStorePostgresCidr: "__AGENT_STORE_POSTGRES_CIDR__"
+
+gatewayFleet:
+  computeClass:
+    enabled: true

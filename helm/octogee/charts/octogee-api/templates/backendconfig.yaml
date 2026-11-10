@@ -1,3 +1,4 @@
+{{- if eq ((.Values.global).ingressClassName | default "traefik") "gce" }}
 apiVersion: cloud.google.com/v1
 kind: BackendConfig
 metadata:
@@ -15,3 +16,4 @@ spec:
   timeoutSec: {{ .Values.backendConfig.timeoutSec | default 30 }}
   connectionDraining:
     drainingTimeoutSec: {{ .Values.backendConfig.drainingTimeoutSec | default 300 }}
+{{- end }}

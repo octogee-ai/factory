@@ -3,6 +3,8 @@
 
 # ── Global values (shared across sub-charts) ────────────────────────────────
 global:
+  ingressClassName: traefik
+  nodeSelector: {}
   platformState:
     backend: firestore
   deploymentTargetId: ""
@@ -70,6 +72,7 @@ edgeIngress:
 
 # ── cloud-sql-proxy ─────────────────────────────────────────────────────────
 cloud-sql-proxy:
+  enabled: false
   image:
     repository: gcr.io/cloud-sql-connectors/cloud-sql-proxy
     tag: "2.27.0"
@@ -93,6 +96,8 @@ mattermost:
     tag: "12.0.1-octogee-4ee2e9ab"
     digest: "sha256:6fa50729743aaf50e839e33d33c709bdf3cbdbde718b0306cb9574f112fdf2a4"
   db:
+    host: postgres
+    port: 5432
     user: mattermost
     name: mattermost_prod
     passwordSecret: mattermost-cloud-sql
@@ -149,8 +154,7 @@ gitea:
     enabled: false
   networkPolicy:
     enabled: true
-  nodeSelector:
-    cloud.google.com/private-node: "true"
+  nodeSelector: {}
   podSecurityContext:
     fsGroup: 1000
     runAsNonRoot: true
@@ -188,7 +192,7 @@ gitea:
     config:
       database:
         DB_TYPE: postgres
-        HOST: cloud-sql-proxy:5432
+        HOST: postgres:5432
         NAME: gitea_prod
         USER: gitea
       server:
@@ -203,9 +207,7 @@ gitea:
         ENABLED: "true"
   service:
     http:
-      annotations:
-        cloud.google.com/backend-config: '{"default":"gitea-backend"}'
-        cloud.google.com/neg: '{"ingress":true}'
+      annotations: {}
       clusterIP: ""
   postgresql:
     enabled: false
@@ -262,7 +264,7 @@ gateway-edge:
 # per env in values.{test,prod}.yaml.
 gatewayFleet:
   computeClass:
-    enabled: true
+    enabled: false
     name: octogee-gateway
     preferSpot: true
     zones: []

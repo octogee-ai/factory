@@ -1,3 +1,4 @@
+{{- if eq ((.Values.global).ingressClassName | default "traefik") "gce" }}
 apiVersion: cloud.google.com/v1
 kind: BackendConfig
 metadata:
@@ -13,3 +14,4 @@ spec:
     requestPath: {{ .Values.backendConfig.healthCheck.path | default "/healthz" }}
     port: {{ .Values.backendConfig.healthCheck.port | default .Values.http.port }}
   timeoutSec: {{ .Values.backendConfig.timeoutSec | default 3600 }}
+{{- end }}

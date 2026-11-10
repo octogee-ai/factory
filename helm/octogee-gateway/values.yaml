@@ -67,7 +67,8 @@ replicas: 1
 # surge for managed releases so unpublished files transfer before source removal.
 rollStrategy: recreate
 
-computeClass: octogee-gateway
+nodeSelector: {}
+computeClass: ""
 computerDesktop: auto
 
 # Pod-termination durable-flush budget. Kubernetes runs this hook before SIGTERM and

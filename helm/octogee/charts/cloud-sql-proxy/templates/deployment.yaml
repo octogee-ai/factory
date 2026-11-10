@@ -20,8 +20,10 @@ spec:
       labels:
         app: cloud-sql-proxy
     spec:
+      {{- with (.Values.global).nodeSelector }}
       nodeSelector:
-        cloud.google.com/private-node: "true"
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       serviceAccountName: {{ .Values.serviceAccountName }}
       automountServiceAccountToken: true
       securityContext:

@@ -35,8 +35,10 @@ spec:
       labels:
         app: llm-broker
     spec:
+      {{- with (.Values.global).nodeSelector }}
       nodeSelector:
-        cloud.google.com/private-node: "true"
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       terminationGracePeriodSeconds: 30
       serviceAccountName: {{ .Values.llmBroker.serviceAccountName }}
       automountServiceAccountToken: false

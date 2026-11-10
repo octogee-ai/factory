@@ -23,8 +23,10 @@ spec:
       labels:
         app: glm-controller
     spec:
+      {{- with (.Values.global).nodeSelector }}
       nodeSelector:
-        cloud.google.com/private-node: "true"
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       serviceAccountName: glm-controller
       automountServiceAccountToken: true
       securityContext:

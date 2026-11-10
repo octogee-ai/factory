@@ -15,6 +15,7 @@ Gateway-local public traffic is stable at /g/* and is forwarded by the shared
 gateway-router Service to the selected gateway's internal services.
 */}}
 {{- define "octogee.edgeBaseRoutes" -}}
+{{- $gke := eq ((.Values.global).ingressClassName | default "traefik") "gce" -}}
 {{- $hosts := .Values.edgeIngress.hosts -}}
 {{- $gatewayEdge := index .Values "gateway-edge" -}}
 {{- $router := $gatewayEdge.router | default dict -}}
@@ -44,30 +45,30 @@ gateway-router Service to the selected gateway's internal services.
   http:
     paths:
 {{- range $adminPaths }}
-      - path: {{ . }}
-        pathType: ImplementationSpecific
+      - path: {{ ternary . (trimSuffix "/*" .) $gke }}
+        pathType: {{ ternary "ImplementationSpecific" (ternary "Prefix" "Exact" (hasSuffix "/*" .)) $gke }}
         backend:
           service:
             name: {{ $glmSvc }}
             port:
               name: http
 {{- end }}
-      - path: /g/*
-        pathType: ImplementationSpecific
+      - path: {{ ternary "/g/*" "/g" $gke }}
+        pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
         backend:
           service:
             name: {{ $routerSvc }}
             port:
               name: http
-      - path: /api/*
-        pathType: ImplementationSpecific
+      - path: {{ ternary "/api/*" "/api" $gke }}
+        pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
         backend:
           service:
             name: {{ $apiSvc }}
             port:
               name: http
       - path: /health
-        pathType: ImplementationSpecific
+        pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
         backend:
           service:
             name: {{ $routerSvc }}
@@ -76,8 +77,8 @@ gateway-router Service to the selected gateway's internal services.
 - host: {{ $hosts.git }}
   http:
     paths:
-      - path: /*
-        pathType: ImplementationSpecific
+      - path: {{ ternary "/*" "/" $gke }}
+        pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
         backend:
           service:
             name: octogee-gitea-http
@@ -86,8 +87,8 @@ gateway-router Service to the selected gateway's internal services.
 - host: {{ $hosts.mattermost }}
   http:
     paths:
-      - path: /*
-        pathType: ImplementationSpecific
+      - path: {{ ternary "/*" "/" $gke }}
+        pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
         backend:
           service:
             name: mattermost
@@ -96,8 +97,8 @@ gateway-router Service to the selected gateway's internal services.
 - host: {{ $hosts.preview }}
   http:
     paths:
-      - path: /p/*
-        pathType: ImplementationSpecific
+      - path: {{ ternary "/p/*" "/p" $gke }}
+        pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
         backend:
           service:
             name: {{ $apiSvc }}

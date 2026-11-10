@@ -3,7 +3,7 @@
 {{- $tier := include "octogee-gateway.effectiveTier" . -}}
 {{- $preset := index .Values.tiers $tier -}}
 {{- $gatewayClass := include "octogee-gateway.gatewayClass" . -}}
-{{- $computeClass := required "computeClass is required for owner-bound gateways" .Values.computeClass -}}
+{{- $computeClass := .Values.computeClass -}}
 {{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
 {{- $computerDesktop := include "octogee-gateway.computerDesktop" . -}}
 {{- $x11Desktop := and (eq $gatewayClass "builder") (eq $computerDesktop "x11") -}}
@@ -68,12 +68,13 @@ spec:
         gateway-image: {{ $gatewayImageLabel | quote }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.preStopFlush.terminationGracePeriodSeconds | default 30 }}
+      {{- if and (ne $gatewayClass "shared") $computeClass }}
       nodeSelector:
-        {{- if eq $gatewayClass "shared" }}
-        cloud.google.com/private-node: "true"
-        {{- else }}
         cloud.google.com/compute-class: {{ $computeClass | quote }}
-        {{- end }}
+      {{- else if .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      {{- end }}
       {{- if eq $gatewayClass "shared" }}
       topologySpreadConstraints:
         - maxSkew: 1

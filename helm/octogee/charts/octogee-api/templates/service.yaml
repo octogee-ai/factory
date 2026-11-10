@@ -5,9 +5,11 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     app: octogee-api
+  {{- if eq ((.Values.global).ingressClassName | default "traefik") "gce" }}
   annotations:
     cloud.google.com/backend-config: '{"default":"{{ .Values.backendConfig.name | default "octogee-api-backend" }}"}'
     cloud.google.com/neg: '{"ingress":true}'
+  {{- end }}
 spec:
   type: ClusterIP
   selector:

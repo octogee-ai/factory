@@ -166,7 +166,7 @@ spec:
 {{- end }}
 
 {{- $edgeEnabled := .Values.edgeIngress.enabled | default false -}}
-{{- if or .Values.gatewayFleet.previewIngress.enabled $edgeEnabled }}
+{{- if and (eq ((.Values.global).ingressClassName | default "traefik") "gce") (or .Values.gatewayFleet.previewIngress.enabled $edgeEnabled) }}
 ---
 apiVersion: networking.gke.io/v1
 kind: ManagedCertificate

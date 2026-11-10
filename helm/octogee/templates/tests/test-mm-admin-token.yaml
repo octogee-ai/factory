@@ -10,8 +10,10 @@ metadata:
     "helm.sh/hook": test
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
+  {{- with (.Values.global).nodeSelector }}
   nodeSelector:
-    cloud.google.com/private-node: "true"
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   serviceAccountName: octogee-gateway
   automountServiceAccountToken: false
   restartPolicy: Never

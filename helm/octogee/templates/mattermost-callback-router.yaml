@@ -26,8 +26,10 @@ spec:
       labels:
         app: mattermost-callback-router
     spec:
+      {{- with (.Values.global).nodeSelector }}
       nodeSelector:
-        cloud.google.com/private-node: "true"
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       serviceAccountName: mattermost-callback-router
       automountServiceAccountToken: false
       securityContext:
