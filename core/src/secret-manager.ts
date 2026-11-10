@@ -1,3 +1,4 @@
+import type { SecretVersionWriteResult, SecretWrite, SubscriptionSecretVersionResult } from "./secret-store-types.js";
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 import { deploymentTargetForFirebaseProject } from "./deployment-environment.js";
 
@@ -29,11 +30,7 @@ export function secretReplicationPolicy(targetProjectId: string) {
   return { userManaged: { replicas: [{ location: target.region }] } };
 }
 
-export async function writeSecret(params: {
-  name: string;
-  value: string;
-  labels?: Record<string, string>;
-}): Promise<{ versionName: string }> {
+export async function writeSecret(params: SecretWrite): Promise<{ versionName: string }> {
   const parent = `projects/${projectId()}`;
   const secretName = fqSecretName(params.name);
 
@@ -71,9 +68,7 @@ export async function writeSecret(params: {
 export async function addSecretVersionIfExists(
   name: string,
   value: string,
-): Promise<
-  { ok: true; versionName: string } | { ok: false; reason: "not_found" }
-> {
+): Promise<SecretVersionWriteResult> {
   const secretName = fqSecretName(name);
   try {
     const [version] = await client().addSecretVersion({
@@ -91,11 +86,6 @@ export async function addSecretVersionIfExists(
     throw err;
   }
 }
-
-export type SubscriptionSecretVersionResult =
-  | { ok: true; changed: false; destroyed: number }
-  | { ok: true; changed: true; versionName: string; destroyed: number }
-  | { ok: false; reason: "not_found" };
 
 function secretVersionNumber(versionName: string): number {
   const match = /\/versions\/(\d+)$/.exec(versionName);

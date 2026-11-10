@@ -7,7 +7,7 @@ import {
 } from "@octogee/shared/types/model-credentials";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
-import { readSecret, addSecretVersionKeepingLatest, type SubscriptionSecretVersionResult } from "@octogee/core/secret-manager";
+import { readSecret, addSecretVersionKeepingLatest, type SubscriptionSecretVersionResult } from "@octogee/core/secret-store";
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
 import { firestoreBuilderAccountReader, type BuilderAccount, type BuilderAccountReader } from "@octogee/core/builder-account";

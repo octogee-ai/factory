@@ -7,6 +7,7 @@
 # via `kubectl port-forward`. Cheap, isolated, and disposable.
 
 global:
+  secretStoreBackend: secret-manager
   ingressClassName: gce
   nodeSelector:
     cloud.google.com/private-node: "true"

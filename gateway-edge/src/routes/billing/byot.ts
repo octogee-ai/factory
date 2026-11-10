@@ -8,7 +8,7 @@ import {
   type Provider,
 } from "../../billing/provider-key-format.js";
 import { probeProviderKey } from "../../billing/provider-probe.js";
-import { writeSecret, archiveSecret } from "@octogee/core/secret-manager";
+import { writeSecret, archiveSecret } from "@octogee/core/secret-store";
 import { byotSecretName, keyFingerprintFor, keyHashFor } from "../../billing/byot-key-identity.js";
 import { triggerGatewayModelCredentialSync } from "../../lib/byot-sync-trigger.js";
 import { modelCredentialApiKeyState } from "@octogee/shared/types/model-credentials";

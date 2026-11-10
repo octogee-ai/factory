@@ -1,4 +1,4 @@
-{{- if ne (((.Values.global).platformState).backend | default "firestore") "firestore" -}}
+{{- if include "octogee.platformDatabaseRequired" . -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -46,7 +46,9 @@ spec:
             - name: PLATFORM_DB_REQUIRE_CUTOVER_IMPORT
               value: "true"
             {{- end }}
-            {{- include "octogee.platformStateConnectionEnv" . | nindent 12 }}
+            - name: PLATFORM_STATE_BACKEND
+              value: {{ (((.Values.global).platformState).backend | default "firestore") | quote }}
+            {{- include "octogee.platformDatabaseConnectionEnv" . | nindent 12 }}
             {{- include "octogee.platformStateSecretEnv" (dict "name" "PLATFORM_DB_USER" "key" "migration-user") | nindent 12 }}
             {{- include "octogee.platformStateSecretEnv" (dict "name" "PLATFORM_DB_PASSWORD" "key" "migration-password") | nindent 12 }}
             {{- include "octogee.platformStateSecretEnv" (dict "name" "PLATFORM_DB_RUNTIME_USER" "key" "runtime-user") | nindent 12 }}

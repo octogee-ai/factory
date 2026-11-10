@@ -273,6 +273,10 @@
       "types": "./dist/platform-embedding-refs.d.ts",
       "default": "./dist/platform-embedding-refs.js"
     },
+    "./secret-store": {
+      "types": "./dist/secret-store.d.ts",
+      "default": "./dist/secret-store.js"
+    },
     "./secret-manager": {
       "types": "./dist/secret-manager.d.ts",
       "default": "./dist/secret-manager.js"
@@ -633,6 +637,9 @@
       ],
       "platform-embedding-refs": [
         "dist/platform-embedding-refs.d.ts"
+      ],
+      "secret-store": [
+        "dist/secret-store.d.ts"
       ],
       "secret-manager": [
         "dist/secret-manager.d.ts"

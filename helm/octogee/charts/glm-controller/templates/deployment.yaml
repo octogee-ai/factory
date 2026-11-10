@@ -65,6 +65,7 @@ spec:
             - name: LOG_KEEP_LONG_IDENTIFIERS
               value: {{ (.Values.global).logKeepLongIdentifiers | default false | quote }}
             {{- with (include "octogee.platformStateEnv" .) }}{{ . | nindent 12 }}{{ end }}
+            {{- include "octogee.runtimeSecretStoreEnv" . | nindent 12 }}
             - name: K8S_NAMESPACE
               valueFrom:
                 fieldRef:

@@ -1002,6 +1002,27 @@ CREATE TABLE gateway_ticket_mint_log (
 CREATE INDEX gateway_ticket_mint_log_uid_purpose_idx ON gateway_ticket_mint_log (uid, purpose, minted_at);
 CREATE INDEX gateway_ticket_mint_log_expiry_idx ON gateway_ticket_mint_log (expires_at);
 `;
+const RUNTIME_SECRET_STORE = String.raw `
+CREATE TABLE runtime_secret_key (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  key_id text NOT NULL CHECK (key_id ~ '^[a-f0-9]{64}$')
+);
+
+CREATE TABLE runtime_secrets (
+  name text PRIMARY KEY,
+  labels jsonb NOT NULL DEFAULT '{}'::jsonb,
+  last_version integer NOT NULL DEFAULT 0 CHECK (last_version >= 0)
+);
+
+CREATE TABLE runtime_secret_versions (
+  name text NOT NULL REFERENCES runtime_secrets (name) ON DELETE CASCADE,
+  version integer NOT NULL CHECK (version > 0),
+  key_id text NOT NULL CHECK (key_id ~ '^[a-f0-9]{64}$'),
+  ciphertext text NOT NULL,
+  enabled boolean NOT NULL DEFAULT true,
+  PRIMARY KEY (name, version)
+);
+`;
 export const PLATFORM_STATE_MIGRATIONS = [
     { version: 1, name: "core-schema", sql: CORE_SCHEMA },
     { version: 2, name: "change-feed", sql: CHANGE_FEED },
@@ -1012,4 +1033,5 @@ export const PLATFORM_STATE_MIGRATIONS = [
     { version: 7, name: "operation-port-fidelity", sql: OPERATION_PORT_FIDELITY },
     { version: 8, name: "canonical-memberships", sql: CANONICAL_MEMBERSHIPS },
     { version: 9, name: "edge-project-and-ticket-state", sql: EDGE_PROJECT_AND_TICKET_STATE },
+    { version: 10, name: "runtime-secret-store", sql: RUNTIME_SECRET_STORE },
 ];

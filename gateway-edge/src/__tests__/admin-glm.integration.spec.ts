@@ -441,7 +441,7 @@ const provisionerCalls: Array<{ gatewayId: string; gatewayServiceAccount: string
 let provisionerNextError: Error | null = null;
 let provisionerConcurrentGatewayId: string | null = null;
 
-vi.mock("@octogee/core/secret-manager", () => ({
+vi.mock("@octogee/core/secret-store", () => ({
   provisionGatewayAuthSecret: async (params: {
     gatewayId: string;
     gatewayServiceAccount: string;

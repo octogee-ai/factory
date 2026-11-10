@@ -6,7 +6,7 @@ import type {
   ModelBrokerProvider,
   ModelBrokerTokenRecord,
 } from "./model-broker-tokens.js";
-import { readSecret as defaultReadSecret } from "@octogee/core/secret-manager";
+import { readSecret as defaultReadSecret } from "@octogee/core/secret-store";
 import { builderAssignedToGateway } from "./assigned-builder.js";
 
 export type ModelBrokerProviderKeySource = "platform" | "owner_model_credential";

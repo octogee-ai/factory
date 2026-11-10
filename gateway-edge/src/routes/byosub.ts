@@ -11,7 +11,7 @@ import {
   deleteSecret,
   writeSecret,
   addSecretVersionIfExists,
-} from "@octogee/core/secret-manager";
+} from "@octogee/core/secret-store";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { accountActiveInStore, userDataWithBuilderState } from "../lib/user-platform-state.js";
 import {

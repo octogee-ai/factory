@@ -285,8 +285,9 @@ import {
   provisionGatewayAuthSecret,
   deleteSecret,
   readSecretWithLabels,
+  isSecretNotFound,
   writeSecret,
-} from "@octogee/core/secret-manager";
+} from "@octogee/core/secret-store";
 import {
   createCentralReleaseAuthority,
   listGatewayBuilds,
@@ -2559,7 +2560,7 @@ async function createControllerRuntime(
       try {
         return await readSecretWithLabels(secretName);
       } catch (err) {
-        if ((err as { code?: number } | null)?.code === 5) return null;
+        if (isSecretNotFound(err)) return null;
         throw err;
       }
     },
@@ -2570,7 +2571,7 @@ async function createControllerRuntime(
       try {
         return await readSecretWithLabels(secretName);
       } catch (err) {
-        if ((err as { code?: number } | null)?.code === 5) return null;
+        if (isSecretNotFound(err)) return null;
         throw err;
       }
     },

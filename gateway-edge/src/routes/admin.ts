@@ -6,7 +6,7 @@ import { db, FieldValue } from "../lib/db.js";
 import { liftSuppression } from "../lib/email-suppression.js";
 import { runEmailPreflight } from "../lib/email-preflight.js";
 import { getResend } from "../lib/resend.js";
-import { provisionGatewayAuthSecret } from "@octogee/core/secret-manager";
+import { provisionGatewayAuthSecret } from "@octogee/core/secret-store";
 import {
   createCentralReleaseAuthority,
   listGatewayBuilds,
