@@ -25,6 +25,7 @@ gateway-router Service to the selected gateway's internal services.
 {{- $adminPaths := list
   "/api/admin/gateways/*"
   "/api/admin/gateways"
+  "/api/admin/operations/*"
   "/api/admin/operations"
   "/api/admin/fleet-events"
   "/api/admin/restore-jobs/*"

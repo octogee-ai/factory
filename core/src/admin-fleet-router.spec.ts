@@ -3535,6 +3535,36 @@ describe("operations history route", () => {
     await request(app).get("/operations?status=bogus").expect(400);
   });
 
+  it("returns one operation with its steps and failure reason", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-a" },
+      users: {},
+      operations: {
+        "op-move": {
+          kind: "migrate-customer",
+          status: "failed",
+          createdAt: 4_000,
+          input: { uid: "u3" },
+          error: "source drain timed out",
+          steps: [{ name: "quiesce-source", status: "failed", error: "source drain timed out" }],
+        },
+      },
+    });
+    const res = await request(app).get("/operations/op-move").expect(200);
+    expect(res.body.operation).toMatchObject({
+      id: "op-move",
+      kind: "migrate-customer",
+      status: "failed",
+      error: "source drain timed out",
+      steps: [{ name: "quiesce-source", status: "failed", error: "source drain timed out" }],
+    });
+  });
+
+  it("returns 404 for an operation that does not exist", async () => {
+    const { app } = operationsApp();
+    await request(app).get("/operations/missing").expect(404);
+  });
+
   it("filters by one status, newest first, capped at the limit", async () => {
     const { app } = operationsApp();
     const all = await request(app).get("/operations?status=failed&limit=100").expect(200);

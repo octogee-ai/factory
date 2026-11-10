@@ -85,6 +85,13 @@ spec:
                 name: {{ $glm }}
                 port:
                   name: http
+          - path: {{ ternary "/api/admin/operations/*" "/api/admin/operations" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
           - path: /api/admin/operations
             pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
             backend:

@@ -2001,6 +2001,7 @@ const ERR_GATEWAY_NOT_FOUND = "gateway not found";
 const ERR_GATEWAY_OPERATION_IN_FLIGHT =
   "another operation is already pending or running for this gateway";
 const ERR_USER_NOT_FOUND = "user not found";
+const ERR_OPERATION_NOT_FOUND = "operation not found";
 const ERR_TARGET_GATEWAY_NOT_READY = "target gateway not ready";
 const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
 const OP_KIND_RESTART_GATEWAY = "restart-gateway";
@@ -6445,6 +6446,24 @@ router.get(
           shapeOperationsHistoryRecord(doc.id, doc.data()),
         );
         res.json({ operations, generatedAt: new Date().toISOString() });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
+  router.get(
+    "/operations/:id",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const id = req.params.id as string;
+        const record = await store.journal.getRecord(id);
+        if (!record) {
+          res.status(404).json({ error: ERR_OPERATION_NOT_FOUND, operationId: id });
+          return;
+        }
+        const [doc] = operationDocs([record]);
+        res.json({ operation: shapeOperationsHistoryRecord(doc.id, doc.data()) });
       } catch (e) {
         next(e);
       }
