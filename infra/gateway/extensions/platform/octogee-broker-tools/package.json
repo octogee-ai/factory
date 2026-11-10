@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "typecheck:native": "node ../../verify-broker-plugin-contract.mjs"
+    "typecheck:native": "node ../../../verify-broker-plugin-contract.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

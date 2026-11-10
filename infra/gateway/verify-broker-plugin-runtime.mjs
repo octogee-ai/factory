@@ -20,7 +20,7 @@ const run = (args, options = {}) => {
 try {
   const extensions = path.join(root, "extensions");
   const plugin = path.join(extensions, "octogee-broker-tools");
-  cpSync(path.join(repo, "infra/gateway/extensions/octogee-broker-tools"), plugin, { recursive: true, filter: value => !value.split(path.sep).includes("node_modules") });
+  cpSync(path.join(repo, "infra/gateway/extensions/platform/octogee-broker-tools"), plugin, { recursive: true, filter: value => !value.split(path.sep).includes("node_modules") });
   run([path.join(repo, "infra/gateway/build-extensions.mjs"), extensions, path.join(repo, "scripts/node_modules/.bin/esbuild")]);
   run([path.join(repo, "infra/gateway/verify-extension-bundles.mjs"), extensions, source]);
   mkdirSync(path.join(root, "node_modules"));

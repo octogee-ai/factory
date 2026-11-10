@@ -1,5 +1,6 @@
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { BROKER_PROVIDER_ID, createBrokerCatalog } from "./catalog.js";
+import { registerBrokerProfiles } from "./broker-profiles.js";
 import { registerBrokerInspection } from "./inspect.js";
 
 export default definePluginEntry({
@@ -14,5 +15,6 @@ export default definePluginEntry({
     });
     api.registerModelCatalogProvider({ provider: BROKER_PROVIDER_ID, kinds: ["text"], liveCatalog: catalog.picker });
     registerBrokerInspection(api);
+    registerBrokerProfiles(api);
   },
 });

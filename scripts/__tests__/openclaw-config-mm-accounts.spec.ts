@@ -171,7 +171,7 @@ describe("buildCustomerAgent", () => {
   it("keeps productivity policy synchronized, excluding setup-only connection requests and coach-only owner automations", () => {
     const manifest = JSON.parse(readFileSync(
       new URL(
-        "../../infra/gateway/extensions/octogee-connector-tools/openclaw.plugin.json",
+        "../../infra/gateway/extensions/product/octogee-connector-tools/openclaw.plugin.json",
         import.meta.url,
       ),
       "utf8",

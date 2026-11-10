@@ -303,6 +303,7 @@
       "octogee-chat-tools",
       "octogee-connector-tools",
       "octogee-access-tools",
+      "octogee-broker-tools",
       "octogee-project-tools",
       "octogee-board-tools",
       "octogee-status-tools",
@@ -396,6 +397,13 @@
       "octogee-workspace-tools": {
         "enabled": true,
         "config": {}
+      },
+      "octogee-broker-tools": {
+        "enabled": true,
+        "config": {
+          "brokerUrl": "${FLEET_BROKER_URL}",
+          "tokenPath": "${OCTOGEE_API_SA_TOKEN_PATH}"
+        }
       },
       "octogee-activity-tools": {
         "enabled": true,

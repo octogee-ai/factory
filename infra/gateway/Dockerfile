@@ -110,7 +110,8 @@ RUN node ops/verify-native-modules.mjs
 # Each extension ships as one self-contained index.js: runtime dependencies are
 # bundled in, only node builtins and openclaw/plugin-sdk/* stay external, and no
 # node_modules tree is left for OpenClaw's plugin-generation capture to copy.
-COPY --chown=node:node infra/gateway/extensions/ /octogee/extensions/
+COPY --chown=node:node infra/gateway/extensions/platform/ /octogee/extensions/
+COPY --chown=node:node infra/gateway/extensions/product/ /octogee/extensions/
 COPY --chown=node:node infra/gateway/build-extensions.mjs \
       infra/gateway/extension-manifest.mjs \
       infra/gateway/verify-extension-bundles.mjs \

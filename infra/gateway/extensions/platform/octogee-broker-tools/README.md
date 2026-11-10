@@ -29,7 +29,7 @@ Thursday 00:00 UTC seven-day reset, credits when applicable, and the active
 signup offer's ledger spend, unlocked cap, next unlock and expiry. Missing offer
 accounting fails closed. These values are not monthly or unmetered allowances.
 
-Run behavioral coverage with `npm test --prefix infra/gateway/extensions/octogee-broker-tools`.
+Run behavioral coverage with `npm test --prefix infra/gateway/extensions/platform/octogee-broker-tools`.
 For an exact, clean Native source checkout:
 
 ```sh

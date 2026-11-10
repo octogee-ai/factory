@@ -132,6 +132,7 @@ export const CUSTOMER_APPROVED_PLUGINS = [
   "octogee-chat-tools",
   "octogee-connector-tools",
   "octogee-access-tools",
+  "octogee-broker-tools",
   "octogee-project-tools",
   "octogee-board-tools",
   "octogee-status-tools",
@@ -210,6 +211,13 @@ const CUSTOMER_PLUGIN_ENTRIES = {
     config: {
       brokerUrl: FLEET_BROKER_URL_TEMPLATE,
       gatewayId: "${GATEWAY_ID}",
+      tokenPath: API_SA_TOKEN_PATH_TEMPLATE,
+    },
+  },
+  "octogee-broker-tools": {
+    enabled: true,
+    config: {
+      brokerUrl: FLEET_BROKER_URL_TEMPLATE,
       tokenPath: API_SA_TOKEN_PATH_TEMPLATE,
     },
   },
@@ -366,6 +374,7 @@ const PLATFORM_CAPABILITY_PLUGINS = [
   BOARD_TOOLS_PLUGIN,
   OPS_TOOLS_PLUGIN,
   ACCESS_TOOLS_PLUGIN,
+  "octogee-broker-tools",
 ];
 
 // A builder gateway's config is persisted and restored across every VM

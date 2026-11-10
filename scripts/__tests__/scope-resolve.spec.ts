@@ -20,8 +20,8 @@ describe("resolveScope — ownership", () => {
     expectJobs(["infra/vm-bridge/Dockerfile"], ["tests"]);
   });
   it("runs broker adapter behavioral coverage for installed extension changes", () => {
-    expect(resolveScope(["infra/gateway/extensions/octogee-broker-tools/catalog.ts"]).jobs).toContain("octogee-broker-tools");
-    expect(UNIT_PACKAGES.find(pkg => pkg.name === "octogee-broker-tools")?.dir).toBe("infra/gateway/extensions/octogee-broker-tools");
+    expect(resolveScope(["infra/gateway/extensions/platform/octogee-broker-tools/catalog.ts"]).jobs).toContain("octogee-broker-tools");
+    expect(UNIT_PACKAGES.find(pkg => pkg.name === "octogee-broker-tools")?.dir).toBe("infra/gateway/extensions/platform/octogee-broker-tools");
   });
   it("empty diff runs nothing (not everything)", () => {
     const r = resolveScope([]);
@@ -88,55 +88,55 @@ describe("resolveScope — ownership", () => {
 
   it("octogee-chat-tools resolves to its own job (sibling extension dir)", () => {
     expectJobs(
-      ["infra/gateway/extensions/octogee-chat-tools/src/tools.ts"],
+      ["infra/gateway/extensions/product/octogee-chat-tools/src/tools.ts"],
       ["octogee-chat-tools"],
     );
   });
 
   it("octogee-access-tools resolves to its own job", () => {
     expectJobs(
-      ["infra/gateway/extensions/octogee-access-tools/access-client.ts"],
+      ["infra/gateway/extensions/platform/octogee-access-tools/access-client.ts"],
       ["octogee-access-tools"],
     );
   });
 
   it("octogee-activity-tools resolves to its behavioral suite", () => {
     expectJobs(
-      ["infra/gateway/extensions/octogee-activity-tools/plugin-runtime-native.ts"],
+      ["infra/gateway/extensions/product/octogee-activity-tools/plugin-runtime-native.ts"],
       ["octogee-activity-tools"],
     );
     const unitPackage = UNIT_PACKAGES.find(({ name }) => name === "octogee-activity-tools");
     expect(unitPackage).toEqual({
       name: "octogee-activity-tools",
-      dir: "infra/gateway/extensions/octogee-activity-tools",
+      dir: "infra/gateway/extensions/product/octogee-activity-tools",
       typecheck: "npm run typecheck --silent",
     });
   });
 
   it("octogee-connector-tools resolves to its own job and cross-package contracts", () => {
     expectJobs(
-      ["infra/gateway/extensions/octogee-connector-tools/connector-client.ts"],
+      ["infra/gateway/extensions/product/octogee-connector-tools/connector-client.ts"],
       ["octogee-connector-tools", "tests"],
     );
   });
 
   it("octogee-web-tools resolves to its own job", () => {
     expectJobs(
-      ["infra/gateway/extensions/octogee-web-tools/web-client.ts"],
+      ["infra/gateway/extensions/product/octogee-web-tools/web-client.ts"],
       ["octogee-web-tools"],
     );
   });
 
   it("octogee-board-tools resolves to its own job", () => {
     expectJobs(
-      ["infra/gateway/extensions/octogee-board-tools/board-client.ts"],
+      ["infra/gateway/extensions/product/octogee-board-tools/board-client.ts"],
       ["octogee-board-tools"],
     );
   });
 
   it("octogee-project-tools resolves to its own job", () => {
     expectJobs(
-      ["infra/gateway/extensions/octogee-project-tools/project-client.ts"],
+      ["infra/gateway/extensions/product/octogee-project-tools/project-client.ts"],
       ["octogee-project-tools"],
     );
   });

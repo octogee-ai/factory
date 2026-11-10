@@ -42,6 +42,7 @@ const approvedPlugins = [
   "octogee-chat-tools",
   "octogee-connector-tools",
   "octogee-access-tools",
+  "octogee-broker-tools",
   "octogee-project-tools",
   "octogee-board-tools",
   "octogee-status-tools",
@@ -912,6 +913,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "octogee-board-tools",
       "octogee-ops-tools",
       "octogee-access-tools",
+      "octogee-broker-tools",
     ]);
     expect(out.plugins.entries["discord-bridge"]).toEqual({
       enabled: true,
@@ -1882,6 +1884,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     ]) {
       expect(out.plugins.entries[pluginId].config).toEqual(brokerPluginConfig);
     }
+    expect(out.plugins.entries["octogee-broker-tools"]).toEqual({ enabled: true, config: brokerPluginConfig });
     expect(out.plugins.entries["octogee-workspace-tools"].config).toEqual({});
     expect(out.plugins.entries["octogee-activity-tools"]).toEqual({
       enabled: true,

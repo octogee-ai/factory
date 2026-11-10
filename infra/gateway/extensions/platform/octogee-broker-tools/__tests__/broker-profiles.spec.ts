@@ -1,6 +1,24 @@
+import plugin from "../index.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/core";
 import { registerBrokerProfiles } from "../broker-profiles.js";
+
+vi.mock("openclaw/plugin-sdk/core", () => ({ definePluginEntry: (entry: unknown) => entry }));
+
+it("registers operator profile materialization from the broker plugin", () => {
+  const registerGatewayMethod = vi.fn();
+  plugin.register({
+    registerGatewayMethod,
+    registerProvider: vi.fn(),
+    registerModelCatalogProvider: vi.fn(),
+  } as never);
+  expect(registerGatewayMethod).toHaveBeenCalledWith(
+    "octogee.brokerProfiles.materialize",
+    expect.any(Function),
+    { scope: "operator.admin" },
+  );
+});
+
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   resolveAgentDir: (config: { agents: { entries: Record<string, { agentDir?: string }> } }, id: string) =>

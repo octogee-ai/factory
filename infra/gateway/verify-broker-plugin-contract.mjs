@@ -21,7 +21,7 @@ if (manifest.name !== "openclaw" || !manifest.exports?.["./plugin-sdk/core"]) {
 const compiler = realpathSync(path.join(source, "node_modules/typescript/lib/tsc.js"));
 if (!compiler.startsWith(`${source}${path.sep}`)) throw new Error("The TypeScript compiler must belong to the selected OpenClaw checkout");
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const pluginRoot = path.join(repoRoot, "infra/gateway/extensions/octogee-broker-tools");
+const pluginRoot = path.join(repoRoot, "infra/gateway/extensions/platform/octogee-broker-tools");
 const nativeConfig = JSON.parse(readFileSync(path.join(source, "tsconfig.json"), "utf8"));
 const paths = Object.fromEntries(Object.entries(nativeConfig.compilerOptions.paths).map(([key, values]) => [key, values.map(value => path.resolve(source, value))]));
 paths["@octogee/core/*"] = [path.join(repoRoot, "core/dist/*.d.ts")];
@@ -39,7 +39,7 @@ try {
       paths, types: ["node"], typeRoots: [path.join(source, "node_modules/@types")],
       rootDir: path.parse(source).root, noEmit: true, declaration: false, incremental: false,
     },
-    files: ["index.ts", "http.ts", "catalog.ts", "inspect.ts"].map(file => path.join(pluginRoot, file)),
+    files: ["index.ts", "http.ts", "catalog.ts", "inspect.ts", "__tests__/broker-profiles.spec.ts"].map(file => path.join(pluginRoot, file)),
     include: [path.join(source, "src/types/*.d.ts")], exclude: [],
   }));
   const checked = spawnSync(process.execPath, [compiler, "--noEmit", "--pretty", "false", "-p", config], { cwd: source, stdio: "inherit" });

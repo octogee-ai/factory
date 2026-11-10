@@ -18,7 +18,7 @@ const ALLOWED_TEST_CROSS_PACKAGE_IMPORTS = new Set([
     "contacts-client.js",
     "obsidian-client.js",
   ].map((client) =>
-    `src/__tests__/productivity-boundaries.emulator.spec.ts::../../../infra/gateway/extensions/octogee-connector-tools/${client}`,
+    `src/__tests__/productivity-boundaries.emulator.spec.ts::../../../infra/gateway/extensions/product/octogee-connector-tools/${client}`,
   ),
 ]);
 
