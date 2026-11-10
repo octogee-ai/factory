@@ -244,18 +244,22 @@ export function blobFileEntries(
   return entries;
 }
 
+async function signWorkspaceBlob(target: Parameters<typeof repoContentsApi>[0], key: string): Promise<string> {
+  const expires = Date.now() + BLOB_SIGNED_URL_TTL_MS;
+  if (target.blobStore) return (await target.blobStore.signedUrl({ gcsPath: key, action: "read" }, expires)).url;
+  const [url] = await storage.bucket().file(key).getSignedUrl({ action: "read", expires });
+  return url;
+}
+
 async function signThumbnailUrls(
   target: Parameters<typeof repoContentsApi>[0],
   manifest: Manifest,
   entries: WorkspaceFileEntry[],
 ): Promise<WorkspaceFileEntry[]> {
-  const bucket = storage.bucket();
   return Promise.all(entries.map(async (file) => {
     if (!manifest[file.path]?.hasThumbnail) return file;
     try {
-      const [thumbnailUrl] = await bucket
-        .file(`${target.gcsPrefix}/.thumbs/${file.path}.png`)
-        .getSignedUrl({ action: "read", expires: Date.now() + BLOB_SIGNED_URL_TTL_MS });
+      const thumbnailUrl = await signWorkspaceBlob(target, `${target.gcsPrefix}/.thumbs/${file.path}.png`);
       return { ...file, thumbnailUrl };
     } catch (err) {
       logger.error("thumbnail url signing failed", { err, path: file.path });
@@ -272,12 +276,12 @@ export function sortWorkspaceFiles(files: WorkspaceFileEntry[]): WorkspaceFileEn
 }
 
 async function targetAssetManifest(target: Parameters<typeof repoContentsApi>[0], bustCache = false, ref?: string): Promise<Manifest> {
-  if (!target.projectSlug) return getManifest(target.gcsPrefix, bustCache);
+  if (!target.projectSlug) return getManifest(target.gcsPrefix, bustCache, target.blobStore);
   let file;
   try { file = await repoContentsApi(target, ".files/manifest.json", ref) as { encoding?: string; content?: string }; }
   catch (error) {
     if (!errorMessage(error).includes("404")) throw error;
-    return ref ? {} : getManifest(target.gcsPrefix, bustCache);
+    return ref ? {} : getManifest(target.gcsPrefix, bustCache, target.blobStore);
   }
   if (!file || file.encoding !== "base64" || typeof file.content !== "string" || file.content.length > 14 * 1024 * 1024) throw new Error("project asset manifest is invalid");
   return parseManifest(manifestObjectPath(target.gcsPrefix), Buffer.from(file.content, "base64").toString("utf8"));
@@ -461,12 +465,7 @@ async function loadWorkspaceFileResponse(
     const blobEntry = manifest[path];
 
     if (blobEntry) {
-      const bucket = storage.bucket();
-      const file = bucket.file(blobEntry.gcsPath);
-      const [signedUrl] = await file.getSignedUrl({
-        action: "read",
-        expires: Date.now() + 60 * 60 * 1000,
-      });
+      const signedUrl = await signWorkspaceBlob(target, blobEntry.gcsPath);
       return {
         content: null,
         downloadUrl: signedUrl,

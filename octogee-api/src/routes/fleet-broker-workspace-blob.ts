@@ -1,3 +1,4 @@
+import { runtimeBlobStore } from "../lib/runtime-blob-store.js";
 import type { Request, Response, Router } from "express";
 import type { BuilderRecord, GatewayAssignment, PlatformStateStore, WorkspaceRecord } from "@octogee/core/platform-state";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
@@ -36,7 +37,11 @@ async function canonicalWorkspaceOwned(store: PlatformStateStore, scope: Assigne
   });
 }
 
-const centralStore: WorkspaceBlobStore = async (...args) => (await import("../../../gateway-edge/src/lib/workspace-blob.js")).storeWorkspaceBlobCentrally(...args);
+const centralStore: WorkspaceBlobStore = async (target, path, bytes, mimeType, options) => {
+  const { storeWorkspaceBlobCentrally } = await import("../../../gateway-edge/src/lib/workspace-blob.js");
+  const blobStore = process.env.BLOB_STORE_BACKEND === "gcs" ? undefined : runtimeBlobStore();
+  return storeWorkspaceBlobCentrally(target, path, bytes, mimeType, { ...options, blobStore });
+};
 
 function workspaceBlobPathAllowed(parsed: Awaited<ReturnType<typeof parseMultipart>>): boolean {
   return parsed.projectSlug === null && isManifestPath(parsed.path) && !validateFilePath(parsed.path) && !pathHasReservedOrHiddenSegment(parsed.path) && parsed.path !== "projects" && !parsed.path.startsWith("projects/");

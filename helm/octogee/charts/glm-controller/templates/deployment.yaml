@@ -99,6 +99,7 @@ spec:
                   key: root-key
             {{- end }}
             {{- end }}
+            {{- include "octogee.blobStoreEnv" . | nindent 12 }}
             - name: GKE_WORKLOAD_IDENTITY_PROJECT
               value: {{ required "glm-controller.workloadIdentityProject is required" .Values.workloadIdentityProject | quote }}
             {{- $computer := (.Values.global).computer | default dict }}

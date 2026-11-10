@@ -1,4 +1,5 @@
 import { storeUploadedWorkspaceBlob as storeWorkspaceBlob } from "../../lib/project-blob-edit.js";
+import { requestBlobStore, type BlobStore } from "../../lib/blob-store.js";
 import { Router, Request, Response, NextFunction } from "express";
 import { logger } from "../../middleware/logging.js";
 import { giteaApiAsUser } from "../../lib/gitea.js";
@@ -207,7 +208,7 @@ async function importGitHubRepo(context: ImportRepoContext, res: Response): Prom
   return { fileCount };
 }
 
-function importRepoContext(slug: string, request: ImportRepoRequest): ImportRepoContext {
+function importRepoContext(slug: string, request: ImportRepoRequest, blobStore?: BlobStore): ImportRepoContext {
   return {
     ...request,
     slug,
@@ -222,6 +223,7 @@ function importRepoContext(slug: string, request: ImportRepoRequest): ImportRepo
       org: workspaceGiteaOrg(slug),
       repoName: workspaceRepoName(),
       gcsPrefix: `customers/${slug}`,
+      blobStore,
       sudoUser: `ws-${slug}`,
       brokered: false,
       canvasFile: "README.md",
@@ -258,7 +260,7 @@ async function handleImportRepo(req: Request, res: Response): Promise<void> {
   const request = importRepoRequest(req.body, res);
   if (!request) return;
 
-  const context = importRepoContext(slug, request);
+  const context = importRepoContext(slug, request, requestBlobStore(req));
   const result = await importGitHubRepo(context, res);
   if (!result) return;
 

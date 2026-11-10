@@ -1,3 +1,4 @@
+import { isBlobObjectVersion } from "@octogee/shared/types/fleet-broker";
 import { createHash } from "node:crypto";
 import { gatewayCredentialHeaders, internalFetch, sidecarBrokerHeaders } from "@octogee/core/internal-fetch";
 import type { FleetBrokerBlobSignedUrl } from "@octogee/shared/types/fleet-broker";
@@ -18,11 +19,19 @@ async function brokerRequest<T>(base: string, route: string, body: object, heade
   return response.json();
 }
 
+function isUploadDestination(upload: FleetBrokerBlobSignedUrl, url: URL): boolean {
+  if (url.username || url.password) return false;
+  if (upload.storage !== "s3") return url.protocol === "https:" && url.hostname === "storage.googleapis.com";
+  const endpoint = process.env.BLOB_S3_PUBLIC_ENDPOINT;
+  return Boolean(endpoint && url.origin === new URL(endpoint).origin);
+}
+
 function assertUploadCapability(upload: FleetBrokerBlobSignedUrl, gcsPath: string, md5Hash: string, size: number): void {
   const url = new URL(upload.url);
-  if (upload.gcsPath !== gcsPath || upload.method !== "PUT" || url.protocol !== "https:" ||
-    url.hostname !== "storage.googleapis.com" || url.username || url.password ||
-    upload.requiredHeaders?.["x-goog-if-generation-match"] !== "0" ||
+  const writeOnce = upload.storage === "s3"
+    ? upload.requiredHeaders?.["if-none-match"] === "*"
+    : upload.requiredHeaders?.["x-goog-if-generation-match"] === "0";
+  if (upload.gcsPath !== gcsPath || upload.method !== "PUT" || !isUploadDestination(upload, url) || !writeOnce ||
     upload.requiredHeaders?.["content-md5"] !== md5Hash || upload.requiredHeaders?.["content-length"] !== String(size)) {
     throw new Error("project asset upload identity mismatch");
   }
@@ -47,7 +56,7 @@ export async function uploadProjectBlobViaBroker(base: string, target: Workspace
     slug: target.slug, path: `projects/${target.projectSlug}/asset`, sha256, size: contents.length,
   }, await gatewayCredentialHeaders());
   if (verified.download?.gcsPath !== gcsPath || verified.size !== contents.length || verified.md5Hash !== md5Hash ||
-    typeof verified.generation !== "string" || !/^[1-9]\d{0,19}$/u.test(verified.generation)) {
+    !isBlobObjectVersion(verified.generation, verified.download.storage)) {
     throw new Error("project asset upload checksum mismatch");
   }
   return { gcsPath, sha256, size: contents.length };
@@ -89,5 +98,12 @@ export function projectBlobHydrationClient(base: string): ProjectBlobHydrationCl
   return {
     workspaceManifestReadUrl: async input => brokerRequest(base, "materialization/manifest/read-url", input, await gatewayCredentialHeaders()),
     blobMaterializationReadUrl: async input => brokerRequest(base, "materialization/read-url", input, await gatewayCredentialHeaders()),
+  };
+}
+
+export function workspaceBlobReadClient(base: string) {
+  return {
+    manifestUrl: (slug: string) => brokerRequest<FleetBrokerBlobSignedUrl>(base, "manifest/read-url", { slug }, {}),
+    blobUrl: (slug: string, path: string) => brokerRequest<FleetBrokerBlobSignedUrl>(base, "download-url", { slug, path }, {}),
   };
 }

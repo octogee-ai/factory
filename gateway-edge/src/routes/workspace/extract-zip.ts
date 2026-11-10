@@ -1,9 +1,10 @@
 import { storeUploadedWorkspaceBlob as storeWorkspaceBlob } from "../../lib/project-blob-edit.js";
 import { Router, Request, Response, NextFunction } from "express";
 import JSZip from "jszip";
+import { requestBlobStore, type BlobStore } from "../../lib/blob-store.js";
 import { storage } from "../../lib/db.js";
 import { logger } from "../../middleware/logging.js";
-import { removeFromManifest } from "../../lib/manifest.js";
+import { manifestStoreForBlobs, removeFromManifest } from "../../lib/manifest.js";
 import { giteaApiAsUser } from "../../lib/gitea.js";
 import { workspaceGiteaOrg, workspaceRepoName } from "@octogee/core/gitea-naming";
 import {
@@ -24,8 +25,6 @@ const MAX_ENTRY_BYTES = 50 * 1024 * 1024;
 const MAX_ENTRIES = 10000;
 const MAX_DECOMPRESSED_BYTES = 500 * 1024 * 1024;
 
-type StorageBucket = ReturnType<typeof storage.bucket>;
-type StorageFile = ReturnType<StorageBucket["file"]>;
 type ExtractedKind = "git" | "blob";
 
 export interface ZipEntryLike {
@@ -46,8 +45,7 @@ export type ZipEntriesValidation<T extends ZipEntryLike> =
 interface ExtractZipContext {
   slug: string;
   zipPath: string;
-  bucket: StorageBucket;
-  zipFile: StorageFile;
+  zip: { download(): Promise<Buffer | null>; delete(): Promise<unknown> };
   org: string;
   sudoUser: string;
   repoName: string;
@@ -108,14 +106,23 @@ export function validatedZipEntries<T extends ZipEntryLike>(
   return { ok: true, entries };
 }
 
-function extractZipContext(slug: string, zipPath: string): ExtractZipContext {
-  const bucket = storage.bucket();
+function zipObject(key: string, blobs?: BlobStore): ExtractZipContext["zip"] {
+  if (blobs) {
+    return {
+      download: async () => (await blobs.download(key))?.bytes ?? null,
+      delete: () => blobs.delete(key),
+    };
+  }
+  const file = storage.bucket().file(key);
+  return { download: async () => (await file.download())[0], delete: () => file.delete() };
+}
+
+function extractZipContext(slug: string, zipPath: string, blobStore?: BlobStore): ExtractZipContext {
   const gcsZipPath = `customers/${slug}/${zipPath}`;
   return {
     slug,
     zipPath,
-    bucket,
-    zipFile: bucket.file(gcsZipPath),
+    zip: zipObject(gcsZipPath, blobStore),
     org: workspaceGiteaOrg(slug),
     sudoUser: `ws-${slug}`,
     repoName: workspaceRepoName(),
@@ -126,6 +133,7 @@ function extractZipContext(slug: string, zipPath: string): ExtractZipContext {
       org: workspaceGiteaOrg(slug),
       repoName: workspaceRepoName(),
       gcsPrefix: `customers/${slug}`,
+      blobStore,
       sudoUser: `ws-${slug}`,
       brokered: false,
       canvasFile: "README.md",
@@ -150,7 +158,11 @@ function requestZipPath(req: Request, res: Response): string | null {
 }
 
 async function loadZipArchive(context: ExtractZipContext, res: Response): Promise<JSZip | null> {
-  const [zipBuffer] = await context.zipFile.download();
+  const zipBuffer = await context.zip.download();
+  if (!zipBuffer) {
+    res.status(404).json({ error: "Archive not found" });
+    return null;
+  }
   if (zipBuffer.length > MAX_ARCHIVE_BYTES) {
     res.status(413).json({ error: "Archive exceeds 200MB limit" });
     return null;
@@ -256,7 +268,7 @@ async function extractEntries(
 
 async function deleteOriginalZip(context: ExtractZipContext): Promise<void> {
   try {
-    await context.zipFile.delete();
+    await context.zip.delete();
   } catch (e) {
     logger.warn(`Failed to delete ZIP after extraction: ${errorMessage(e)}`);
   }
@@ -264,7 +276,8 @@ async function deleteOriginalZip(context: ExtractZipContext): Promise<void> {
 
 async function finalizeExtraction(context: ExtractZipContext): Promise<void> {
   await deleteOriginalZip(context);
-  await removeFromManifest(context.target.gcsPrefix, context.zipPath);
+  const { blobStore, gcsPrefix } = context.target;
+  await removeFromManifest(gcsPrefix, context.zipPath, blobStore && manifestStoreForBlobs(blobStore));
 }
 
 async function extractZip(req: Request, res: Response): Promise<void> {
@@ -274,7 +287,7 @@ async function extractZip(req: Request, res: Response): Promise<void> {
   const zipPath = requestZipPath(req, res);
   if (!zipPath) return;
 
-  const context = extractZipContext(slug, zipPath);
+  const context = extractZipContext(slug, zipPath, requestBlobStore(req));
   const zip = await loadZipArchive(context, res);
   if (!zip) return;
 

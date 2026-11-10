@@ -1,3 +1,4 @@
+import type { BlobStore } from "../lib/blob-store.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import type { FileTarget } from "../lib/fileTarget.js";
@@ -46,7 +47,8 @@ vi.mock("../lib/workspace-storage-quota.js", () => ({
   releaseWorkspaceStorage: (...args: unknown[]) => h.releaseWorkspaceStorage(...args),
 }));
 
-vi.mock("../lib/manifest.js", () => ({
+vi.mock("../lib/manifest.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../lib/manifest.js")>(),
   updateManifest: h.updateManifest,
   removeFromManifest: h.removeFromManifest,
   getManifestForQuota: h.getManifestForQuota,
@@ -158,7 +160,7 @@ it("stores an immutable project asset with create-only semantics and verifies a 
   const saved = await storeWorkspaceBlob(target, "asset.bin", contents, "application/octet-stream", { immutable: true });
   expect(saved).toMatchObject({ gcsPath: `${target.gcsPrefix}/.objects/${sha256}`, sha256, size: 3 });
   expect(h.save).toHaveBeenCalledWith(contents, expect.objectContaining({ preconditionOpts: { ifGenerationMatch: 0 } }));
-  expect(h.updateManifest).toHaveBeenCalledWith(target.gcsPrefix, expect.objectContaining({ "asset.bin": expect.objectContaining({ sha256 }) }));
+  expect(h.updateManifest).toHaveBeenCalledWith(target.gcsPrefix, expect.objectContaining({ "asset.bin": expect.objectContaining({ sha256 }) }), undefined);
   h.save.mockRejectedValueOnce(Object.assign(new Error("already exists"), { code: 412 }));
   await expect(storeWorkspaceBlob(target, "asset.bin", contents, "application/octet-stream", { immutable: true })).resolves.toMatchObject({ sha256 });
   h.save.mockRejectedValueOnce(Object.assign(new Error("already exists"), { code: 412 }));
@@ -174,6 +176,16 @@ describe("storeWorkspaceBlob", () => {
     expect(h.save).not.toHaveBeenCalled(); expect(h.updateManifest).not.toHaveBeenCalled();
     expect(h.rollbackWorkspaceStorageReservation).not.toHaveBeenCalled();
   });
+  it("requires a project target for paths that would use versioned project storage", async () => {
+    const save = vi.fn<BlobStore["save"]>();
+    const blobs = { save } as unknown as BlobStore;
+    const workspace = { ...target, projectSlug: null, gcsPrefix: "customers/alice", blobStore: blobs };
+    await expect(storeWorkspaceBlob(workspace, "projects/orbit/asset.bin", Buffer.from("data")))
+      .rejects.toThrow(/project upload target/);
+    expect(save).not.toHaveBeenCalled();
+    expect(h.reserveWorkspaceStorage).not.toHaveBeenCalled();
+  });
+
   it("saves non-image blobs to GCS and writes the manifest placeholder", async () => {
     const result = await storeWorkspaceBlob(
       target,
@@ -193,7 +205,7 @@ describe("storeWorkspaceBlob", () => {
         mimeType: "application/pdf",
         uploadedAt: expect.any(String),
       }),
-    });
+    }, undefined);
     expect(result).toEqual({
       gcsPath: "customers/alice/projects/site/files/report.pdf",
       size: 3,
@@ -211,6 +223,7 @@ describe("storeWorkspaceBlob", () => {
       expect.objectContaining({
         "files/custom.bin": expect.objectContaining({ mimeType: "application/x-custom" }),
       }),
+      undefined,
     );
   });
 
@@ -266,6 +279,16 @@ describe("storeWorkspaceBlob", () => {
 });
 
 describe("removeWorkspaceBlob", () => {
+  it("removes the workspace file and thumbnail from the selected store", async () => {
+    const prefix = "customers/alice";
+    const remove = vi.fn<BlobStore["delete"]>();
+    const blobs = { delete: remove } as unknown as BlobStore;
+    await removeWorkspaceBlob({ ...target, projectSlug: null, gcsPrefix: prefix, blobStore: blobs }, "photo.png");
+    expect(remove.mock.calls).toEqual([[prefix + "/photo.png"], [prefix + "/.thumbs/photo.png.png"]]);
+    expect(h.removeFromManifest).toHaveBeenCalledWith(prefix, "photo.png", expect.objectContaining({ read: expect.any(Function), write: expect.any(Function) }));
+    expect(h.bucket).not.toHaveBeenCalled();
+  });
+
   it("removes the blob, image thumbnail, and manifest entry", async () => {
     await removeWorkspaceBlob(target, "images/logo.png");
 
@@ -273,7 +296,7 @@ describe("removeWorkspaceBlob", () => {
     expect(h.file).toHaveBeenCalledWith("customers/alice/projects/site/.thumbs/images/logo.png.png");
     expect(h.delete).toHaveBeenNthCalledWith(1, { ignoreNotFound: true });
     expect(h.delete).toHaveBeenNthCalledWith(2, { ignoreNotFound: true });
-    expect(h.removeFromManifest).toHaveBeenCalledWith("customers/alice/projects/site", "images/logo.png");
+    expect(h.removeFromManifest).toHaveBeenCalledWith("customers/alice/projects/site", "images/logo.png", undefined);
   });
 
   it("does not attempt thumbnail deletion for non-image blobs", async () => {
@@ -281,6 +304,6 @@ describe("removeWorkspaceBlob", () => {
 
     expect(h.file).toHaveBeenCalledTimes(1);
     expect(h.file).toHaveBeenCalledWith("customers/alice/projects/site/docs/readme.pdf");
-    expect(h.removeFromManifest).toHaveBeenCalledWith("customers/alice/projects/site", "docs/readme.pdf");
+    expect(h.removeFromManifest).toHaveBeenCalledWith("customers/alice/projects/site", "docs/readme.pdf", undefined);
   });
 });

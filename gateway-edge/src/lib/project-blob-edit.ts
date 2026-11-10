@@ -6,7 +6,7 @@ import { manifestObjectPath, parseManifest, serializeManifest, type Manifest, ty
 import type { FileTarget } from "./fileTarget.js";
 import { giteaApiAsUserAllowNotFound } from "./gitea.js";
 import { getMimeType, getExtension, targetGiteaApi } from "../routes/workspace/helpers.js";
-import { getManifestForQuota } from "./manifest.js";
+import { getManifestForQuota, manifestStoreForBlobs } from "./manifest.js";
 import { storeWorkspaceBlob, removeWorkspaceBlob, type WorkspaceBlobOptions, type StoredWorkspaceBlob } from "./workspace-blob.js";
 import { commitAndPushWorkspace, resolveProjectDir } from "./workspace-git.js";
 import { divertWorktreeBinaries, isDivertablePath } from "./binary-diversion.js";
@@ -30,8 +30,13 @@ async function remoteManifest(target: FileTarget, deps: RemoteAssetDeps) {
   const objectPath = manifestObjectPath(target.gcsPrefix);
     const current = await deps.read(target) as { sha?: string; encoding?: string; content?: string } | null;
     if (current && (!current.sha || current.encoding !== "base64" || typeof current.content !== "string" || current.content.length > 14 * 1024 * 1024)) throw new Error("invalid project asset manifest response");
-    const manifest = current ? parseManifest(objectPath, Buffer.from(current.content!, "base64").toString("utf8")) : await deps.readLegacy(target.gcsPrefix);
+    const manifest = current ? parseManifest(objectPath, Buffer.from(current.content!, "base64").toString("utf8")) : await readLegacyManifest(target, deps);
   return { current, manifest };
+}
+
+function readLegacyManifest(target: FileTarget, deps: RemoteAssetDeps): Promise<Manifest> {
+  if (target.blobStore) return getManifestForQuota(target.gcsPrefix, manifestStoreForBlobs(target.blobStore));
+  return deps.readLegacy(target.gcsPrefix);
 }
 
 function assertProjectAssetEdit(target: FileTarget, name: string): void {

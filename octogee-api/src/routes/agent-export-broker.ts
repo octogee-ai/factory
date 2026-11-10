@@ -110,7 +110,9 @@ export function registerAgentExportBrokerRoutes(router: Router, deps: AgentImpor
       if (!Buffer.isBuffer(req.body)) fail("invalid export snapshot");
       const existing = await storedRecord(owner, key);
       if (!owned(existing, owner) || existing.status !== "previewed") fail("export preview is missing");
-      await deps.bucket.file(`agent-imports/${owner.uid}/${key}/export.json`).save(req.body, { contentType: "application/json", resumable: false, preconditionOpts: { ifGenerationMatch: 0 } });
+      const object = `agent-imports/${owner.uid}/${key}/export.json`;
+      if (deps.exportBlobs) await deps.exportBlobs().save(object, req.body, { contentType: "application/json", ifGenerationMatch: 0 });
+      else await deps.bucket.file(object).save(req.body, { contentType: "application/json", resumable: false, preconditionOpts: { ifGenerationMatch: 0 } });
       res.status(204).end();
     } catch (error) { next(error); }
   });
@@ -118,7 +120,9 @@ export function registerAgentExportBrokerRoutes(router: Router, deps: AgentImpor
     try {
       const owner = context(res), key = id(req.params.id);
       if (!owned(await storedRecord(owner, key), owner)) fail("export record is unavailable");
-      const [contents] = await deps.bucket.file(`agent-imports/${owner.uid}/${key}/export.json`).download();
+      const object = `agent-imports/${owner.uid}/${key}/export.json`;
+      const contents = deps.exportBlobs ? (await deps.exportBlobs().download(object))?.bytes : (await deps.bucket.file(object).download())[0];
+      if (!contents) throw new Error("authored export snapshot is missing");
       res.type("application/json").send(contents);
     } catch (error) { next(error); }
   });

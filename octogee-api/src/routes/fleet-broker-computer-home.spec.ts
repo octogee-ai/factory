@@ -2,6 +2,7 @@ import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { COMPUTER_HOME_CHECKPOINT_KEEP, COMPUTER_HOME_CHECKPOINT_MAX_BYTES, type GatewayVmHomeCheckpoint } from "@octogee/shared/types/glm";
+import { gcsBlobStore } from "../lib/runtime-blob-store.js";
 import { ComputerHomeCheckpointError, type ComputerHomeStore } from "../lib/computer-home-checkpoint.js";
 import type { BoundTenant } from "../lib/sa-to-tenant.js";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
@@ -60,6 +61,7 @@ function harness(input: {
   docs?: Record<string, Record<string, unknown>>;
   bound?: BoundTenant | null;
   store?: Partial<ComputerHomeStore>;
+  useDefaultSigner?: boolean;
 } = {}) {
   const docs: Record<string, Record<string, unknown>> = {
     "users/uid-bob": { provisioning: {} },
@@ -88,12 +90,56 @@ function harness(input: {
     if (bound) req.boundTenant = bound;
     next();
   });
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db: {} as never, store: createDocumentFixtureStore(documents), computerHomeStore: store, createBlobSignedUrl, now: () => NOW }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({ db: {} as never, store: createDocumentFixtureStore(documents), computerHomeStore: store, createBlobSignedUrl, ...(!input.useDefaultSigner && { createComputerHomeSignedUrl: createBlobSignedUrl }), now: () => NOW }));
   const post = (path: string, body: Record<string, unknown>) => request(app).post(`/internal/fleet/computer-home/${path}`).send({ gatewayId: "b-x", slug: "bob", requestedAt: null, ...body });
   return { post, store, createBlobSignedUrl, documents, writes: documents.writes, app };
 }
 
 describe("computer-home checkpoint routes", () => {
+  it("keeps home checkpoint signing on GCS when platform blobs use S3", async () => {
+    vi.stubEnv("BLOB_STORE_BACKEND", "s3");
+    const signer = vi.spyOn(gcsBlobStore, "signedUrl").mockResolvedValue({
+      url: "https://storage.googleapis.com/fixture", method: "PUT", gcsPath: "fixture", expiresAt: "",
+    });
+    try {
+      const h = harness({ useDefaultSigner: true });
+      expect((await h.post("checkpoint-url", { size: 2048 })).status).toBe(200);
+      expect(signer).toHaveBeenCalledWith(expect.objectContaining({
+        gcsPath: expect.stringMatching(/^customers\/bob\/computer-home\/checkpoints\//u), action: "write",
+      }), expect.any(Number));
+      expect(h.createBlobSignedUrl).not.toHaveBeenCalled();
+    } finally {
+      signer.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps Builder runtime snapshots on GCS when platform blobs use S3", async () => {
+    vi.stubEnv("BLOB_STORE_BACKEND", "s3");
+    const signer = vi.spyOn(gcsBlobStore, "signedUrl").mockResolvedValue({
+      url: "https://storage.googleapis.com/fixture", method: "PUT", gcsPath: "fixture", expiresAt: "",
+    });
+    try {
+      const h = harness({
+        bound: { ...vmBound, podName: "octogee-gateway-b-x-5bc5949d46-p946t" },
+        docs: { "gateways/b-x": gatewayDoc({ allocation: {
+          kind: "disposable-builder", schemaVersion: 1, leaseId: "lease-bob-3", generation: 3, claimedByUid: "uid-bob",
+        } }) },
+      });
+      const snapshot = await request(h.app).post("/internal/fleet/builder-runtime-state/snapshot-urls").send({
+        gatewayId: "b-x", revisionId: "b-x", slug: "bob", size: 4096, recoveryTiers: ["minute"],
+      });
+      expect(snapshot.status).toBe(200);
+      expect(signer).toHaveBeenCalledWith(expect.objectContaining({
+        gcsPath: "customers/bob/runtime-state/allocations/b-x-g3/checkpoint.tar.gz", action: "write",
+      }), expect.any(Number));
+      expect(h.createBlobSignedUrl).not.toHaveBeenCalled();
+    } finally {
+      signer.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("rejects unpublished writer protocol 3 so a claimed protocol cannot enable disposal", async () => {
     const h = harness();
     const res = await h.post("commit", { name: CHECKPOINT_NAME, size: 2048, sha256: SHA, coverage: "builder-home-v2", writerProtocol: 3 });

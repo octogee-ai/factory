@@ -113,7 +113,7 @@ describe("builder runtime-state routes for a VM gateway", () => {
     app.use("/internal/fleet", createFleetBrokerRoutes({
       db: db as unknown as Firestore,
       store,
-      createBlobSignedUrl: async (input) => ({ url: `signed:${input.gcsPath}`, method: "GET", gcsPath: input.gcsPath, expiresAt: "later" }),
+      createBuilderRuntimeStateSignedUrl: async (input) => ({ url: `signed:${input.gcsPath}`, method: "GET", gcsPath: input.gcsPath, expiresAt: "later" }),
     }));
 
     const res = await request(app)

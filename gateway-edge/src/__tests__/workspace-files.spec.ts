@@ -5,8 +5,12 @@ vi.mock("../lib/db", () => ({
   storage: { bucket: vi.fn() },
 }));
 
-vi.mock("../lib/manifest", () => ({
-  getManifest: vi.fn(),
+vi.mock("../lib/manifest", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../lib/manifest.js")>(),
+  getManifest: vi.fn(async (prefix, bustCache, blobs) => {
+    if (blobs) return (await importOriginal<typeof import("../lib/manifest.js")>()).getManifest(prefix, bustCache, blobs);
+    return {};
+  }),
 }));
 
 vi.mock("../lib/github", () => ({
@@ -48,6 +52,7 @@ import { repoContentsApi, repoTreeApi } from "../routes/workspace/helpers.js";
 import { getManifest } from "../lib/manifest.js";
 import { storage } from "../lib/db.js";
 import type { Manifest } from "../lib/manifest.js";
+import type { BlobStore } from "../lib/blob-store.js";
 import type { FileTarget } from "../lib/fileTarget.js";
 
 const giteaTarget: FileTarget = {
@@ -91,6 +96,28 @@ describe("workspace file list helpers", () => {
     expect(await workspaceFilesResponse(target, "", false, "old-version")).toMatchObject({ files: [{ path: "old.bin", source: "blob" }] });
     expect(await workspaceFilesResponse(target, "", false, "main")).toMatchObject({ files: [] });
     expect(getManifest).not.toHaveBeenCalled();
+  });
+
+  it("lists and signs workspace files using the selected blob store", async () => {
+    const key = "customers/alice/photo.png";
+    const manifest = { "photo.png": { type: "blob", gcsPath: key, size: 10, mimeType: "image/png", hasThumbnail: true, uploadedAt: "2026-01-01" } };
+    const signedUrl = vi.fn<BlobStore["signedUrl"]>(async ({ gcsPath }) => ({
+      url: `https://files.test/${gcsPath}`, method: "GET", gcsPath, expiresAt: "", storage: "s3",
+    }));
+    const download = vi.fn<BlobStore["download"]>(async () => ({
+      bytes: Buffer.from(JSON.stringify(manifest)), revision: '"manifest"',
+    }));
+    const blobStore = { signedUrl, download } as unknown as BlobStore;
+    const target: FileTarget = { ...giteaTarget, blobStore };
+    vi.mocked(repoContentsApi).mockResolvedValue([]);
+    await expect(workspaceFilesResponse(target, "", false)).resolves.toMatchObject({
+      files: [{ path: "photo.png", source: "blob", thumbnailUrl: "https://files.test/customers/alice/.thumbs/photo.png.png" }],
+    });
+    await expect(workspaceFileResponse(target, "photo.png")).resolves.toMatchObject({
+      path: "photo.png", source: "blob", downloadUrl: `https://files.test/${key}`,
+    });
+    expect(download).toHaveBeenCalledWith("customers/alice/.files/manifest.json");
+    expect(storage.bucket).not.toHaveBeenCalled();
   });
 
   it("maps visible repo entries, including customer-owned context files, and hides reserved or dot-prefixed names", () => {

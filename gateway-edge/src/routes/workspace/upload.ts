@@ -1,6 +1,7 @@
 import { storeUploadedWorkspaceBlob as storeWorkspaceBlob } from "../../lib/project-blob-edit.js";
 import { Router, Request, Response, NextFunction } from "express";
 import Busboy from "busboy";
+import { requestBlobStore } from "../../lib/blob-store.js";
 import { storage } from "../../lib/db.js";
 import { readPlatformFreeConfig } from "../../lib/platform-free-config.js";
 import { validateFilePath } from "../../lib/path-validation.js";
@@ -197,6 +198,7 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
     if (pathError) { res.status(400).json({ error: pathError }); return; }
 
     const maxStorageBytes = await uploadStorageLimitBytes(req.user, target);
+    target.blobStore = requestBlobStore(req);
     const stored = await storeWorkspaceBlob(
       target,
       filePath,
@@ -209,7 +211,7 @@ router.post("/upload-blob", async (req: Request, res: Response, next: NextFuncti
     res.json({
       success: true,
       path: filePath,
-      gcsUrl: `gs://${storage.bucket().name}/${stored.gcsPath}`,
+      ...(!target.blobStore && { gcsUrl: `gs://${storage.bucket().name}/${stored.gcsPath}` }),
       ...(stored.thumbnailUrl ? { thumbnailUrl: stored.thumbnailUrl } : {}),
       ...(stored.thumbnailError ? { thumbnailError: stored.thumbnailError } : {}),
       manifestUpdated: true,

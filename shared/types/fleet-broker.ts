@@ -128,11 +128,17 @@ export interface FleetBrokerUsageEvent {
 }
 
 export interface FleetBrokerBlobSignedUrl {
+  storage?: "s3";
   url: string;
   method: "GET" | "PUT";
   gcsPath: string;
   expiresAt: string;
   requiredHeaders?: Record<string, string>;
+}
+
+export function isBlobObjectVersion(version: unknown, storage?: "s3"): version is string {
+  if (typeof version !== "string") return false;
+  return storage === "s3" ? /^[!-~]{1,1024}$/u.test(version) : /^[1-9]\d{0,19}$/u.test(version);
 }
 
 export interface FleetBrokerNpmRegistryCredentials {

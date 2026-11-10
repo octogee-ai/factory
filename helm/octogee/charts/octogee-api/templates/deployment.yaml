@@ -108,6 +108,7 @@ spec:
             - name: GATEWAY_SERVICE_ACCOUNT
               value: {{ .Values.gatewayServiceAccount | quote }}
             {{- end }}
+            {{- include "octogee.blobStoreEnv" . | nindent 12 }}
             {{- with (include "octogee.platformStateEnv" .) }}{{ . | nindent 12 }}{{ end }}
             {{- include "octogee.runtimeSecretStoreEnv" . | nindent 12 }}
             {{- if not .Values.env.OCTOGEE_KMS_KEY_NAME }}

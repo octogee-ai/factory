@@ -1,3 +1,4 @@
+import { createBrokeredExportAssets } from "./agent-export-blob.js";
 import { randomUUID } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import path from "node:path";
@@ -14,7 +15,8 @@ import { agentExportGithub } from "./agent-export-github.js";
 
 export function createAgentExportRuntime(input: { authorization: string; gatewayId: string }) {
   const deadline = AbortSignal.timeout(90_000);
-  const store = createAgentImportStore({ ...input, signal: deadline, baseUrl: agentImportBrokerBaseUrlFromEnv() });
+  const baseUrl = agentImportBrokerBaseUrlFromEnv();
+  const store = createAgentImportStore({ ...input, signal: deadline, baseUrl });
   const json = (value: unknown): RequestInit => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(value) });
   const authorize = async (agentId: string): Promise<AgentExportSource> => store.exportRequest("/exports/authorize", json({ agentId })) as Promise<AgentExportSource>;
   const github = agentExportGithub(async () => { const token = await store.readGithubToken(); if (!token) { throw new Error("Reconnect GitHub before exporting"); } return token; }, deadline);
@@ -30,11 +32,14 @@ export function createAgentExportRuntime(input: { authorization: string; gateway
     if (!directory) throw new Error("agent workspace is not available on this gateway");
     const prefix = source.project ? `customers/${source.slug}/projects/${source.project}` : `customers/${source.slug}`;
     const gitDir = workspaceMutationLeaseGitDir(directory);
+    const endpoint = process.env.BLOB_S3_PUBLIC_ENDPOINT;
+    const brokered = endpoint && createBrokeredExportAssets({ baseUrl, endpoint, source, prefix, signal: deadline });
+    const readManifest = brokered ? brokered.readManifest : () => getManifestForQuota(prefix);
     return captureAgentExport(directory, {
       coachWorkspace: source.project === null, assertCurrent, gitDir,
       readAssets: async pinned => {
         if (!pinned) throw new Error("authored workspace capture is not pinned");
-        const manifest = source.project ? await readProjectAssetManifest(pinned.root, prefix) ?? await getManifestForQuota(prefix) : await getManifestForQuota(prefix);
+        const manifest = source.project ? await readProjectAssetManifest(pinned.root, prefix) ?? await readManifest() : await readManifest();
         parseManifest(manifestObjectPath(prefix), JSON.stringify(manifest));
         const materialized = source.project ? await readMaterializedProjectAssets(pinned.root, prefix, { parent: pinned.parent, name: pinned.name }) : {};
         const deleted: string[] = [];
@@ -45,7 +50,7 @@ export function createAgentExportRuntime(input: { authorization: string; gateway
         }
         return { manifest, deleted: deleted.sort() };
       },
-      readBlob: async entry => {
+      readBlob: brokered ? brokered.readBlob : async entry => {
         const file = storage.bucket().file(entry.gcsPath);
         const [metadata] = await file.getMetadata();
         if (!metadata.generation || Number(metadata.size) !== entry.size) throw new Error("authored asset generation or size changed");

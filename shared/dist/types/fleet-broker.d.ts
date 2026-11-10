@@ -106,12 +106,14 @@ export interface FleetBrokerUsageEvent {
     usage: FleetBrokerUsageData;
 }
 export interface FleetBrokerBlobSignedUrl {
+    storage?: "s3";
     url: string;
     method: "GET" | "PUT";
     gcsPath: string;
     expiresAt: string;
     requiredHeaders?: Record<string, string>;
 }
+export declare function isBlobObjectVersion(version: unknown, storage?: "s3"): version is string;
 export interface FleetBrokerNpmRegistryCredentials {
     registryUrl: string;
     token: string;

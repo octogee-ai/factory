@@ -1,3 +1,4 @@
+import { isBlobObjectVersion } from "@octogee/shared/types/fleet-broker";
 import { createHash } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -131,7 +132,7 @@ async function downloadBlob(client: Pick<ProjectBlobHydrationClient, "blobMateri
   const staging = await fs.mkdtemp(path.join(path.dirname(input.destination), ".blob-"));
   const file = path.join(staging, "contents");
   try {
-    if (response.headers.get("x-goog-generation") !== signed.generation) throw new Error("project blob generation changed");
+    if (response.headers.get(signed.download.storage === "s3" ? "x-amz-version-id" : "x-goog-generation") !== signed.generation) throw new Error("project blob generation changed");
     // eslint-disable-next-line sonarjs/hashing -- compares the trusted GCS object checksum; not an authentication hash
     const hash = createHash("md5");
     const contentHash = createHash("sha256");
@@ -156,7 +157,7 @@ async function downloadBlob(client: Pick<ProjectBlobHydrationClient, "blobMateri
 
 function validateIdentity(signed: BlobMaterialization, input: { gcsPath: string; size: number }): void {
   if (signed.download.gcsPath !== input.gcsPath || signed.download.method !== "GET" || signed.size !== input.size ||
-      !/^[1-9]\d{0,19}$/u.test(signed.generation) || !/^[A-Za-z0-9+/]{22}==$/u.test(signed.md5Hash)) {
+      !isBlobObjectVersion(signed.generation, signed.download.storage) || !/^[A-Za-z0-9+/]{22}==$/u.test(signed.md5Hash)) {
     throw new Error("project blob broker identity mismatch");
   }
 }
@@ -175,8 +176,8 @@ async function hydrationManifest(client: HydrationClient, input: HydrationInput,
         return { manifest: {}, generation: null };
       }
       if (!response.ok) throw new Error(`project blob manifest failed: ${response.status}`);
-      generation = response.headers.get("x-goog-generation");
-      if (!generation || !/^[1-9]\d{0,19}$/u.test(generation)) throw new Error("project blob manifest lacks generation");
+      generation = response.headers.get(signed.storage === "s3" ? "x-amz-version-id" : "x-goog-generation");
+      if (!generation || !isBlobObjectVersion(generation, signed.storage)) throw new Error("project blob manifest lacks generation");
       const parts: Buffer[] = [];
       await boundedBody(response, MANIFEST_MAX_BYTES, async chunk => { parts.push(Buffer.from(chunk)); });
       manifest = parseManifest(manifestObjectPath(prefix), Buffer.concat(parts).toString("utf8"));

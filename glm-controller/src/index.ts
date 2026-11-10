@@ -235,6 +235,7 @@ import {
   verifyCustomerFirestoreErasure,
 } from "./lib/customer-ops/customer-firestore-erasure.js";
 import { resolveDefaultStorageBucket } from "./gcp-project.js";
+import { createS3UserBlobErasure } from "./lib/customer-ops/s3-blob-erasure.js";
 import { deleteComputerHomeObjects } from "./lib/customer-ops/computer-home.js";
 import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
 import {
@@ -3789,8 +3790,7 @@ function buildEraseCustomerHandler({ db, store, logFn, kubeOps, privateKey, dele
         cleanup.email,
         currentOperationId,
       );
-      remaining.push(...await verifyCustomerStorageErasure(
-        getStorage().bucket(),
+      remaining.push(...await cloudCleanup.verifyStorageErasure(
         cleanup.uid,
         cleanup.slug,
         cleanup.chatArtifactIds,
@@ -4020,6 +4020,7 @@ function buildCustomerCloudCleanupDeps(
     adminToken: cleanupEnv("MM_ADMIN_TOKEN"),
     log: logFn,
   });
+  const s3 = createS3UserBlobErasure();
   return {
     git,
     channels,
@@ -4029,18 +4030,15 @@ function buildCustomerCloudCleanupDeps(
       email: string | null,
       currentOperationId: string,
     ) => eraseCustomerFirestore({ store, db }, uid, slug, email, currentOperationId),
-    deleteCustomerStorage: (
-      uid: string,
-      slug: string,
-      chatArtifactIds: string[],
-      agentImportIds: string[],
-    ) => deleteCustomerStorageObjects(
-      getStorage().bucket(),
-      uid,
-      slug,
-      chatArtifactIds,
-      agentImportIds,
-    ),
+    deleteCustomerStorage: async (uid: string, slug: string, chatArtifactIds: string[], agentImportIds: string[]) => {
+      await deleteCustomerStorageObjects(getStorage().bucket(), uid, slug, chatArtifactIds, agentImportIds);
+      await s3?.erase(uid, slug);
+    },
+    verifyStorageErasure: async (uid: string, slug: string, chatArtifactIds: string[], agentImportIds: string[]) => {
+      const remaining = await verifyCustomerStorageErasure(getStorage().bucket(), uid, slug, chatArtifactIds, agentImportIds);
+      if (s3) remaining.push(...await s3.remaining(uid, slug));
+      return remaining;
+    },
     deleteCredentialSecrets: async (secretNames: string[]) => {
       for (const secretName of secretNames) await deleteSecret(secretName);
     },

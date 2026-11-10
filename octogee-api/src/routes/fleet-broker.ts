@@ -1,3 +1,5 @@
+import { isBlobObjectVersion } from "@octogee/shared/types/fleet-broker";
+import { gcsBlobStore, runtimeBlobStore } from "../lib/runtime-blob-store.js";
 import type { WorkspaceProject } from "@octogee/core/platform-state";
 import { disposableBuilderBootMode } from "@octogee/core/disposable-builder-prelaunch";
 import { sharedAgentAnchorMigrationScope, sharedAssignedSourceSurgeAnchorScope } from "../lib/shared-agent-anchor-migration.js";
@@ -177,7 +179,7 @@ type RecordUsageEvent = (input: {
   workspaceSlug: string | null;
 }) => Promise<void>;
 
-type ReadBlobMetadata = (gcsPath: string) => Promise<{ generation?: unknown; size?: unknown; md5Hash?: unknown }>;
+type ReadBlobMetadata = (gcsPath: string) => Promise<{ generation?: unknown; size?: unknown; md5Hash?: unknown; storage?: "s3" }>;
 
 type CreateBlobSignedUrl = (input: {
   gcsPath: string;
@@ -283,6 +285,8 @@ interface FleetBrokerRouteDeps {
   renderAvatar?: RenderAvatar;
   applyCoachIdentity?: ApplyCoachIdentity;
   createBlobSignedUrl?: CreateBlobSignedUrl;
+  createComputerHomeSignedUrl?: CreateBlobSignedUrl;
+  createBuilderRuntimeStateSignedUrl?: CreateBlobSignedUrl;
   readBlobMetadata?: ReadBlobMetadata;
   pruneBuilderRuntimeState?: PruneBuilderRuntimeState;
   computerHomeStore?: ComputerHomeStore;
@@ -465,40 +469,13 @@ const defaultRecordUsageEvent: RecordUsageEvent = async (input) => {
   });
 };
 
-const defaultReadBlobMetadata: ReadBlobMetadata = async (gcsPath) => {
-  const { getStorage } = await import("firebase-admin/storage");
-  const [metadata] = await getStorage().bucket().file(gcsPath).getMetadata();
-  return metadata;
-};
+const defaultReadBlobMetadata: ReadBlobMetadata = (key) => runtimeBlobStore().metadata(key);
 
-const defaultCreateBlobSignedUrl: CreateBlobSignedUrl = async (input) => {
-  const { getStorage } = await import("firebase-admin/storage");
-  const expires = Date.now() + BLOB_SIGNED_URL_TTL_MS;
-  const requiredHeaders = {
-    ...(input.ifGenerationMatch === undefined ? {} : { "x-goog-if-generation-match": String(input.ifGenerationMatch) }),
-    ...(input.contentMd5 === undefined ? {} : { "content-md5": input.contentMd5 }),
-    ...(input.contentLength === undefined ? {} : { "content-length": String(input.contentLength) }),
-  };
-  const [url] = await getStorage()
-    .bucket()
-    .file(input.gcsPath)
-    .getSignedUrl({
-      version: "v4",
-      action: input.action,
-      expires,
-      ...(input.action === "write" ? { contentType: input.contentType } : {}),
-      ...(input.contentMd5 ? { contentMd5: input.contentMd5 } : {}),
-      ...(Object.keys(requiredHeaders).length ? { extensionHeaders: requiredHeaders } : {}),
-      ...(input.generation ? { queryParams: { generation: input.generation } } : {}),
-    });
-  return {
-    url,
-    method: input.action === "read" ? "GET" : "PUT",
-    gcsPath: input.gcsPath,
-    expiresAt: new Date(expires).toISOString(),
-    ...(Object.keys(requiredHeaders).length ? { requiredHeaders } : {}),
-  };
-};
+const defaultCreateBlobSignedUrl: CreateBlobSignedUrl = (input) =>
+  runtimeBlobStore().signedUrl(input, Date.now() + BLOB_SIGNED_URL_TTL_MS);
+
+const createGcsBackupSignedUrl: CreateBlobSignedUrl = (input) =>
+  gcsBlobStore.signedUrl(input, Date.now() + BLOB_SIGNED_URL_TTL_MS);
 
 function boundGateway(req: Request, res: Response): GatewayBinding | null {
   const bound = req.boundTenant;
@@ -795,7 +772,7 @@ function validBlobRelativePath(value: unknown): string {
 }
 
 function validGenerationPrecondition(value: unknown): string | null {
-  if (typeof value !== "string" || !/^\d{1,20}$/u.test(value)) return null;
+  if (typeof value !== "string" || !/^(?:\d{1,20}|"[a-f0-9]{32}(?:-\d+)?")$/u.test(value)) return null;
   return value;
 }
 
@@ -1777,6 +1754,8 @@ type ResolvedFleetBrokerRouteDeps = {
   renderAvatar: RenderAvatar;
   applyCoachIdentity: ApplyCoachIdentity;
   createBlobSignedUrl: CreateBlobSignedUrl;
+  createComputerHomeSignedUrl: CreateBlobSignedUrl;
+  createBuilderRuntimeStateSignedUrl: CreateBlobSignedUrl;
   readBlobMetadata: ReadBlobMetadata;
   pruneBuilderRuntimeState: PruneBuilderRuntimeState;
   computerHomeStore: ComputerHomeStore;
@@ -1863,6 +1842,8 @@ function resolveFleetBrokerRouteDeps(
         logger.error("fleet-broker builder-agent dial resolution failed", { err }),
     }),
     ...resolveFleetBrokerRouteImplementations(opts),
+    createComputerHomeSignedUrl: opts.createComputerHomeSignedUrl ?? createGcsBackupSignedUrl,
+    createBuilderRuntimeStateSignedUrl: opts.createBuilderRuntimeStateSignedUrl ?? createGcsBackupSignedUrl,
     verifyOwnerWorkspaceTurn: ownerWorkspaceTurnVerifier(opts),
     webResearch: opts.webResearch ?? createDefaultWebResearch(
       opts.db,
@@ -3297,7 +3278,7 @@ function installBlobMaterializationRoute(router: Router, deps: ResolvedFleetBrok
       const generation = typeof metadata.generation === "string" ? metadata.generation : "";
       const objectSize = typeof metadata.size === "string" && /^(0|[1-9]\d*)$/u.test(metadata.size) ? Number(metadata.size) : NaN;
       const md5Hash = typeof metadata.md5Hash === "string" ? metadata.md5Hash : "";
-      if (!/^[1-9]\d{0,19}$/u.test(generation) || objectSize !== size || !/^[A-Za-z0-9+/]{22}==$/u.test(md5Hash)) {
+      if (!isBlobObjectVersion(generation, metadata.storage) || objectSize !== size || !/^[A-Za-z0-9+/]{22}==$/u.test(md5Hash)) {
         res.status(409).json({ error: "blob_identity_changed" }); return;
       }
       const download = await deps.createBlobSignedUrl({ gcsPath, action: "read", generation });
@@ -3424,7 +3405,7 @@ function installGatewayOpsRoutes(
     if (!assigned) return;
     const body = objectBody(req);
     const relativePath = validBlobRelativePath(body.path);
-    if (!relativePath) {
+    if (!relativePath || ((process.env.BLOB_STORE_BACKEND ?? "s3") === "s3" && relativePath.split("/")[0] === "projects")) {
       res.status(400).json({ error: "invalid_path" });
       return;
     }
@@ -3450,7 +3431,7 @@ function installGatewayOpsRoutes(
     const configured = await requireConfiguredBuilderRuntimeState(deps.store, req, res);
     if (!configured) return;
     await runBrokered(res, async () => {
-      const signed = await createBlobSignedUrl({
+      const signed = await deps.createBuilderRuntimeStateSignedUrl({
         gcsPath: gcsPathForBuilderRuntimeState(configured),
         action: "read",
       });
@@ -3474,12 +3455,12 @@ function installGatewayOpsRoutes(
     }
     await runBrokered(res, async () => {
       const snapshotAt = now();
-      const live = await createBlobSignedUrl({
+      const live = await deps.createBuilderRuntimeStateSignedUrl({
         gcsPath: gcsPathForBuilderRuntimeState(configured),
         action: "write",
         contentType: BUILDER_RUNTIME_STATE_CONTENT_TYPE,
       });
-      const recovery = await Promise.all(recoveryTiers.map((tier) => createBlobSignedUrl({
+      const recovery = await Promise.all(recoveryTiers.map((tier) => deps.createBuilderRuntimeStateSignedUrl({
         gcsPath: runtimeStateRecoveryObjectPath(configured.slug, tier, snapshotAt),
         action: "write",
         contentType: BUILDER_RUNTIME_STATE_CONTENT_TYPE,
@@ -3578,7 +3559,7 @@ function respondComputerHomeError(res: Response, error: unknown): boolean {
 }
 
 function installComputerHomeRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
-  const { store, createBlobSignedUrl, computerHomeStore, now } = deps;
+  const { store, createComputerHomeSignedUrl, computerHomeStore, now } = deps;
 
   router.post("/computer-home/checkpoint-url", async (req, res) => {
     const scope = await requireComputerHomeScope(store, req, res);
@@ -3590,7 +3571,7 @@ function installComputerHomeRoutes(router: Router, deps: ResolvedFleetBrokerRout
     }
     await runBrokered(res, async () => {
       const name = computerHomeCheckpointName(now());
-      const upload = await createBlobSignedUrl({
+      const upload = await createComputerHomeSignedUrl({
         gcsPath: computerHomeCheckpointPath(scope.slug, name),
         action: "write",
         contentType: COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE,
@@ -3649,7 +3630,7 @@ function installComputerHomeRoutes(router: Router, deps: ResolvedFleetBrokerRout
         res.status(409).json({ error: "home_restore_checkpoint_mismatch" });
         return;
       }
-      const download = await createBlobSignedUrl({
+      const download = await createComputerHomeSignedUrl({
         gcsPath: computerHomeCheckpointPath(scope.slug, current.name),
         action: "read",
         ...(current.generation ? { generation: current.generation } : {}),

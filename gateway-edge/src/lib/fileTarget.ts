@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction, RequestHandler } from "express";
+import { requestBlobStore, type BlobStore } from "./blob-store.js";
 import { db } from "./db.js";
 import { readProject } from "./firestoreReads.js";
 import { platformStateStore } from "./platform-state.js";
@@ -18,6 +19,7 @@ export interface FileTarget {
 
   repoName: string;
   gcsPrefix: string;
+  blobStore?: BlobStore;
   githubToken?: string;
   cacheAuthority?: string;
   // Gitea: the username to impersonate via admin Sudo (no per-user PAT). The caller's
@@ -263,6 +265,10 @@ export function withFileTarget(
           .status(result.status)
           .json({ error: result.error, ...(result.reason ? { reason: result.reason } : {}) });
         return;
+      }
+      if (result.target.provider === "gitea") {
+        const blobStore = requestBlobStore(req);
+        if (blobStore) result.target.blobStore = blobStore;
       }
       await handler(req, res, next, result.target);
     } catch (e) {

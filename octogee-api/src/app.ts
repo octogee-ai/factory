@@ -10,6 +10,7 @@ import { requestLogger, logger, setLogService } from "../../gateway-edge/src/mid
 import { errorHandler } from "../../gateway-edge/src/middleware/errors.js";
 import { helmetMiddleware } from "../../gateway-edge/src/middleware/security.js";
 
+import { runtimeBlobStore } from "./lib/runtime-blob-store.js";
 import { mountClusterRoutes, type ClusterRouteTable } from "../../gateway-edge/src/routes/mount-cluster-routes.js";
 import {
   installUserEntitlements,
@@ -381,6 +382,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   opts.product?.validateBoot();
 
   const app = express();
+  if (process.env.BLOB_STORE_BACKEND !== "gcs") app.locals.workspaceBlobStore = runtimeBlobStore;
   let agentImportBucket: ReturnType<typeof storage.bucket> | undefined;
   const importBucket = {
     file(path: string) {
@@ -602,6 +604,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
       store: platformStateStore,
       accounts: firestoreBuilderAccountReader(db),
       bucket: importBucket,
+      exportBlobs: app.locals.workspaceBlobStore,
       readGithubToken: readFreshGithubToken,
       listGithubRepos: githubListRepos,
       readGithubRepoSize: async (owner, repo, token) => {

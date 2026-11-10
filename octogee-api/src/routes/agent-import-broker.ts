@@ -1,3 +1,4 @@
+import type { BlobStore } from "../../../gateway-edge/src/lib/blob-store.js";
 import { registerAgentExportBrokerRoutes } from "./agent-export-broker.js";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { randomUUID } from "node:crypto";
@@ -57,6 +58,7 @@ export interface AgentImportBrokerDeps {
   store: PlatformStateStore;
   accounts: BuilderAccountReader;
   bucket: BucketLike;
+  exportBlobs?: () => BlobStore;
   readGithubToken(uid: string): Promise<string | null>;
   listGithubRepos(token: string): Promise<unknown>;
   readGithubRepoSize(owner: string, repo: string, token: string): Promise<number>;

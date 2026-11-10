@@ -19,7 +19,7 @@ function brokeredManifestStore(client: FleetBrokerClient, slug: string): Manifes
       const resp = await fetch(signed.url, { method: signed.method });
       if (resp.status === 404) return null;
       await requireOk(resp, `manifest read ${slug}`);
-      const generation = resp.headers.get("x-goog-generation");
+      const generation = resp.headers.get(signed.storage === "s3" ? "etag" : "x-goog-generation");
       if (!generation) {
         throw new Error(`manifest read ${slug} returned no generation for ${objectPath}`);
       }
@@ -29,7 +29,7 @@ function brokeredManifestStore(client: FleetBrokerClient, slug: string): Manifes
       const signed = await client.workspaceManifestWriteUrl({ slug, ifGenerationMatch });
       const resp = await fetch(signed.url, {
         method: signed.method,
-        headers: { "Content-Type": "application/json", ...signed.requiredHeaders },
+        headers: { "content-type": "application/json", ...signed.requiredHeaders },
         body: contents,
       });
       if (resp.status === 412) throw new ManifestGenerationConflict(objectPath);
@@ -61,7 +61,7 @@ export function createBrokeredBlobStore(client: FleetBrokerClient): BlobStore {
       const body = await readFile(input.localPath);
       const resp = await fetch(signed.url, {
         method: signed.method,
-        headers: { "Content-Type": input.mimeType },
+        headers: { "content-type": input.mimeType, ...signed.requiredHeaders },
         body,
       });
       await requireOk(resp, `blob upload ${input.slug}/${input.relativePath}`);

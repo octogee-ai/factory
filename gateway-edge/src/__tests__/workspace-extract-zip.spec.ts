@@ -175,6 +175,6 @@ describe("POST /extract-zip", () => {
       "image/png",
     );
     expect(mockZipDelete).toHaveBeenCalled();
-    expect(removeFromManifest).toHaveBeenCalledWith("customers/alice", "imports/site.zip");
+    expect(removeFromManifest).toHaveBeenCalledWith("customers/alice", "imports/site.zip", undefined);
   });
 });

@@ -1,5 +1,7 @@
+import { blobStatus, type BlobStore } from "./blob-store.js";
 import {
   createGcsManifestStore,
+  ManifestGenerationConflict,
   putManifestEntries,
   readManifest,
   removeManifestEntries,
@@ -26,7 +28,25 @@ function store(): ManifestStore {
   return createGcsManifestStore(storage.bucket());
 }
 
-export async function getManifest(gcsPrefix: string, bustCache = false): Promise<Manifest> {
+export function manifestStoreForBlobs(blobs: BlobStore): ManifestStore {
+  return {
+    async read(key) {
+      const object = await blobs.download(key);
+      return object && { contents: object.bytes.toString("utf8"), generation: object.revision };
+    },
+    async write(key, contents, ifGenerationMatch) {
+      try {
+        await blobs.save(key, contents, { contentType: "application/json", ifGenerationMatch });
+      } catch (error) {
+        if (blobStatus(error) === "412") throw new ManifestGenerationConflict(key);
+        throw error;
+      }
+    },
+  };
+}
+
+export async function getManifest(gcsPrefix: string, bustCache = false, blobs?: BlobStore): Promise<Manifest> {
+  if (blobs) return readManifest(manifestStoreForBlobs(blobs), gcsPrefix);
   if (!bustCache) {
     const cached = manifestCache.get(gcsPrefix);
     if (cached && Date.now() - cached.ts < MANIFEST_TTL_MS) return cached.data;
@@ -42,20 +62,21 @@ export async function getManifest(gcsPrefix: string, bustCache = false): Promise
   return data;
 }
 
-export async function getManifestForQuota(gcsPrefix: string): Promise<Manifest> {
-  return readManifest(store(), gcsPrefix);
+export async function getManifestForQuota(gcsPrefix: string, manifests = store()): Promise<Manifest> {
+  return readManifest(manifests, gcsPrefix);
 }
 
-export async function updateManifest(gcsPrefix: string, entries: Manifest): Promise<void> {
-  await putManifestEntries(store(), gcsPrefix, entries);
+export async function updateManifest(gcsPrefix: string, entries: Manifest, manifests = store()): Promise<void> {
+  await putManifestEntries(manifests, gcsPrefix, entries);
   manifestCache.delete(gcsPrefix);
 }
 
 export async function removeFromManifest(
   gcsPrefix: string,
   paths: string | string[],
+  manifests = store(),
 ): Promise<void> {
-  await removeManifestEntries(store(), gcsPrefix, paths);
+  await removeManifestEntries(manifests, gcsPrefix, paths);
   manifestCache.delete(gcsPrefix);
 }
 

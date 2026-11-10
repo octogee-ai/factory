@@ -79,7 +79,7 @@ describe("createBrokeredBlobStore", () => {
       "https://signed.test/upload",
       expect.objectContaining({
         method: "PUT",
-        headers: { "Content-Type": "text/plain" },
+        headers: { "content-type": "text/plain" },
         body: Buffer.from("hello"),
       }),
     );
@@ -123,6 +123,30 @@ describe("brokered manifest store", () => {
     await expect(store.read("customers/acme/.files/manifest.json")).resolves.toEqual({
       contents: "{}",
       generation: "17",
+    });
+  });
+
+  it("uses the S3 ETag and forwards the signed conditional write headers", async () => {
+    const etag = '"dcddb75469b4b4875094e14561e573d8"';
+    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 200, headers: { etag } }));
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const c = client({
+      workspaceManifestReadUrl: vi.fn(async () => ({
+        url: "https://signed.test/manifest-read", method: "GET", storage: "s3",
+        expiresAt: "", gcsPath: "customers/acme/.files/manifest.json",
+      })),
+      workspaceManifestWriteUrl: vi.fn(async () => ({
+        url: "https://signed.test/manifest-write", method: "PUT", storage: "s3",
+        expiresAt: "", gcsPath: "customers/acme/.files/manifest.json", requiredHeaders: { "if-match": etag },
+      })),
+    });
+    const store = createBrokeredBlobStore(c).manifestFor("acme");
+    const key = "customers/acme/.files/manifest.json";
+    await expect(store.read(key)).resolves.toEqual({ contents: "{}", generation: etag });
+    await store.write(key, "{}", etag);
+    expect(c.workspaceManifestWriteUrl).toHaveBeenCalledWith({ slug: "acme", ifGenerationMatch: etag });
+    expect(fetchMock).toHaveBeenLastCalledWith("https://signed.test/manifest-write", {
+      method: "PUT", headers: { "content-type": "application/json", "if-match": etag }, body: "{}",
     });
   });
 

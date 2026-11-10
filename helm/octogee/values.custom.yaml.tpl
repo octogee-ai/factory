@@ -13,6 +13,7 @@ global:
     cloud.google.com/private-node: "true"
   deploymentTargetId: "__TARGET_ID__"
   deploymentProjectId: "__FIREBASE_PROJECT__"
+  blobStoreBackend: gcs
   publicAppOrigins:
     - https://octogee-test.web.app
     - https://app-test.octogee.com
