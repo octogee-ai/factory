@@ -101,11 +101,11 @@ describe("deployment environment registry", () => {
       cloudSqlGiteaPasswordSecretName: "gitea-db-password",
       cloudSqlConnectionNameSecretName: "cloud-sql-connection-name",
       secretNameSuffix: "test",
-      edgeStaticIpName: "workspace-api-ip-test",
+      edgeStaticIpName: "workspace-api-ip",
       mattermostStaticIpName: "mattermost-ip-test",
       giteaStaticIpName: "gitea-ip-test",
       previewStaticIpName: "preview-ip-test",
-      projectRunnerApiServerEgressCidrs: ["10.128.0.2/32", "34.118.224.1/32"],
+      projectRunnerApiServerEgressCidrs: ["10.128.0.87/32", "34.118.224.1/32"],
       appOrigin: "https://app-test.octogee.com",
     });
 
@@ -122,20 +122,22 @@ describe("deployment environment registry", () => {
     }
   });
 
-  it("rejects a target that reuses another ingress identity", () => {
+  it("rejects a target that reuses another ingress identity in the same project", () => {
     const candidate = structuredClone(deploymentTargetsDocument) as {
-      targets: Record<string, {
-        ingress: {
-          edgeStaticIpName: string;
-        };
-      }>;
+      targets: Record<string, { clusterProjectId: string }>;
     };
-    candidate.targets["prod-central"].ingress.edgeStaticIpName =
-      candidate.targets["test-central"].ingress.edgeStaticIpName;
+    candidate.targets["test-central"].clusterProjectId =
+      candidate.targets["prod-central"].clusterProjectId;
 
     expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(
-      "deployment target test-central ingress identity workspace-api-ip-test is already used by prod-central.edgeStaticIpName",
+      "deployment target test-central ingress identity workspace-api-ip is already used by prod-central.edgeStaticIpName",
     );
+  });
+
+  it("allows the same ingress identity name in separate projects", () => {
+    expect(() => validateDeploymentTargetsDocument(deploymentTargetsDocument)).not.toThrow();
+    expect(deploymentTargetSettings("test-central").edgeStaticIpName)
+      .toBe(deploymentTargetSettings("prod-central").edgeStaticIpName);
   });
 
   it("requires a distinct dedicated customer Hosting project for every target", () => {
@@ -168,11 +170,15 @@ describe("deployment environment registry", () => {
     const staticIpName = "gitea-ip-test";
     const candidate = structuredClone(deploymentTargetsDocument) as {
       targets: Record<string, {
+        clusterProjectId: string;
         ingress: {
           edgeStaticIpName: string;
         };
       }>;
     };
+    candidate.targets["test-central"].clusterProjectId =
+      candidate.targets["prod-central"].clusterProjectId;
+    candidate.targets["test-central"].ingress.edgeStaticIpName = "workspace-api-ip-test";
     candidate.targets["prod-central"].ingress.edgeStaticIpName = staticIpName;
 
     expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(

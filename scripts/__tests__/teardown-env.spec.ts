@@ -173,7 +173,7 @@ set -euo pipefail
 printf 'kubectl %s\\n' "$*" >> "$FAKE_CALL_LOG"
 case "$1 $2" in
   "config use-context") ;;
-  "config current-context") printf 'gke_octogee_us-central1_octogee-gateway\\n' ;;
+  "config current-context") printf 'gke_octogee-test_us-central1_octogee-gateway\\n' ;;
   "get serviceaccount") printf 'octogee-api@octogee.iam.gserviceaccount.com\\n' ;;
   "get serviceaccounts")
     [[ "$FAKE_GATEWAY_RUNTIME_FAILURE" != "serviceaccount-inspect" ]] || {
@@ -463,7 +463,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     expect(result.calls).toContain(
-      "kubectl scale deployment/octogee-gitea -n octogee-test --context gke_octogee_us-central1_octogee-gateway --replicas=0",
+      "kubectl scale deployment/octogee-gitea -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --replicas=0",
     );
   });
 
@@ -531,7 +531,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     for (const name of ["octogee-gw-default", "octogee-gw-builder-one"]) {
       expect(result.calls).toContain(
-        `kubectl delete serviceaccount ${name} -n octogee-test --context gke_octogee_us-central1_octogee-gateway --wait=true`,
+        `kubectl delete serviceaccount ${name} -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --wait=true`,
       );
     }
     for (const name of [
@@ -540,7 +540,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
       "gateway-model-key-builder-one",
     ]) {
       expect(result.calls).toContain(
-        `kubectl delete secret ${name} -n octogee-test --context gke_octogee_us-central1_octogee-gateway --wait=true`,
+        `kubectl delete secret ${name} -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --wait=true`,
       );
     }
     expect(result.calls).not.toContainEqual(
@@ -554,7 +554,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     );
     expect(result.stdout).toContain("Dynamic gateway runtime identities confirmed absent");
     expect(result.calls).toContain(
-      "kubectl scale deployment/glm-controller -n octogee-test --context gke_octogee_us-central1_octogee-gateway --replicas=0",
+      "kubectl scale deployment/glm-controller -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --replicas=0",
     );
   });
 
@@ -563,22 +563,22 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     const kubernetesDelete = result.calls.indexOf(
-      "kubectl delete secret gitea-token -n octogee-test --context gke_octogee_us-central1_octogee-gateway --ignore-not-found=true --wait=true",
+      "kubectl delete secret gitea-token -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --ignore-not-found=true --wait=true",
     );
     const secretManagerDelete = result.calls.indexOf(
-      "secrets delete gitea-api-token-test --project=octogee --quiet",
+      "secrets delete gitea-api-token-test --project=octogee-test --quiet",
     );
     const databaseResets = result.calls
       .map((call, index) => call.includes("kubectl apply -f -") ? index : -1)
       .filter((index) => index >= 0);
     const controllerQuiescence = result.calls.indexOf(
-      "kubectl scale deployment/glm-controller -n octogee-test --context gke_octogee_us-central1_octogee-gateway --replicas=0",
+      "kubectl scale deployment/glm-controller -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --replicas=0",
     );
     const gatewayHelmRemoval = result.calls.findIndex((call) =>
       call.startsWith("helm uninstall octogee-gw-stale "),
     );
     const runtimeIdentityRemoval = result.calls.indexOf(
-      "kubectl delete secret gateway-model-key-builder-one -n octogee-test --context gke_octogee_us-central1_octogee-gateway --wait=true",
+      "kubectl delete secret gateway-model-key-builder-one -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --wait=true",
     );
 
     expect(kubernetesDelete).toBeGreaterThan(-1);
@@ -817,7 +817,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     const result = runPrivateCentralTeardown();
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-    expect(result.stdout).toContain("kubectl rollout restart deploy -n octogee-test --context gke_octogee_us-central1_octogee-gateway -l 'app!=octogee-gateway'");
+    expect(result.stdout).toContain("kubectl rollout restart deploy -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway -l 'app!=octogee-gateway'");
   });
 
   it("allows an already-empty target Storage bucket to complete the reset", () => {

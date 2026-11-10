@@ -433,11 +433,11 @@ fi
 info "agent-control-router"
 AGENT_CONTROL_ROUTER_SM_KEY="agent-control-router-ed25519-${INTERNAL_SECRET_SUFFIX}"
 [[ "$ENV" == "custom" ]] && AGENT_CONTROL_ROUTER_SM_KEY="agent-control-router-ed25519-custom-${CUSTOM_NS}"
-AGENT_CONTROL_ROUTER_SECRET=$(sm_get "$AGENT_CONTROL_ROUTER_SM_KEY" octogee 2>/dev/null || echo "")
+AGENT_CONTROL_ROUTER_SECRET=$(sm_get "$AGENT_CONTROL_ROUTER_SM_KEY" "$SM_PROJECT" 2>/dev/null || echo "")
 if [[ -z "$AGENT_CONTROL_ROUTER_SECRET" ]]; then
   AGENT_CONTROL_ROUTER_SECRET=$(openssl genpkey -algorithm ED25519)
   info "  Generated new agent-control-router secret — saving to Secret Manager..."
-  secret_manager_persist_value "$AGENT_CONTROL_ROUTER_SM_KEY" "$AGENT_CONTROL_ROUTER_SECRET" octogee \
+  secret_manager_persist_value "$AGENT_CONTROL_ROUTER_SM_KEY" "$AGENT_CONTROL_ROUTER_SECRET" "$SM_PROJECT" \
     || fail "Could not persist agent-control-router secret to Secret Manager (key=${AGENT_CONTROL_ROUTER_SM_KEY})."
 fi
 AGENT_CONTROL_ROUTER_PUBLIC_KEY=$(printf '%s\n' "$AGENT_CONTROL_ROUTER_SECRET" | openssl pkey -pubout) \
@@ -450,11 +450,11 @@ ksecret agent-control-router --from-literal=secret="$AGENT_CONTROL_ROUTER_SECRET
 info "byot-sync-internal"
 BYOT_SYNC_INTERNAL_SM_KEY="byot-sync-internal-ed25519-${INTERNAL_SECRET_SUFFIX}"
 [[ "$ENV" == "custom" ]] && BYOT_SYNC_INTERNAL_SM_KEY="byot-sync-internal-ed25519-custom-${CUSTOM_NS}"
-BYOT_SYNC_INTERNAL_SECRET=$(sm_get "$BYOT_SYNC_INTERNAL_SM_KEY" octogee 2>/dev/null || echo "")
+BYOT_SYNC_INTERNAL_SECRET=$(sm_get "$BYOT_SYNC_INTERNAL_SM_KEY" "$SM_PROJECT" 2>/dev/null || echo "")
 if [[ -z "$BYOT_SYNC_INTERNAL_SECRET" ]]; then
   BYOT_SYNC_INTERNAL_SECRET=$(openssl genpkey -algorithm ED25519)
   info "  Generated new BYOT sync signing secret — saving to Secret Manager..."
-  secret_manager_persist_value "$BYOT_SYNC_INTERNAL_SM_KEY" "$BYOT_SYNC_INTERNAL_SECRET" octogee \
+  secret_manager_persist_value "$BYOT_SYNC_INTERNAL_SM_KEY" "$BYOT_SYNC_INTERNAL_SECRET" "$SM_PROJECT" \
     || fail "Could not persist BYOT sync signing secret to Secret Manager (key=${BYOT_SYNC_INTERNAL_SM_KEY}). Refusing to materialize a K8s secret that exists nowhere else."
 fi
 BYOT_SYNC_INTERNAL_PUBLIC_KEY=$(printf '%s\n' "$BYOT_SYNC_INTERNAL_SECRET" | openssl pkey -pubout) \
@@ -466,11 +466,11 @@ ksecret byot-sync-internal --from-literal=secret="$BYOT_SYNC_INTERNAL_SECRET" --
 # ── 3. Gitea admin ────────────────────────────────────────────────────────
 info "gitea-admin"
 GITEA_ADMIN_PASSWORD_SM_KEY="gitea-admin-password-${INTERNAL_SECRET_SUFFIX}"
-GITEA_ADMIN_PASS=$(sm_get "$GITEA_ADMIN_PASSWORD_SM_KEY" octogee 2>/dev/null || echo "")
+GITEA_ADMIN_PASS=$(sm_get "$GITEA_ADMIN_PASSWORD_SM_KEY" "$SM_PROJECT" 2>/dev/null || echo "")
 if [[ -z "$GITEA_ADMIN_PASS" ]]; then
   GITEA_ADMIN_PASS=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 32)
   info "  Generated new Gitea admin password — saving to Secret Manager..."
-  secret_manager_persist_value "$GITEA_ADMIN_PASSWORD_SM_KEY" "$GITEA_ADMIN_PASS" octogee \
+  secret_manager_persist_value "$GITEA_ADMIN_PASSWORD_SM_KEY" "$GITEA_ADMIN_PASS" "$SM_PROJECT" \
     || warn "  Could not persist Gitea admin password to Secret Manager (key=${GITEA_ADMIN_PASSWORD_SM_KEY})"
 fi
 ksecret gitea-admin \
@@ -507,7 +507,7 @@ ksecret gitea-credentials \
 # ── 5. Gitea API token (may not exist yet — created by setup-gitea.sh) ────
 info "gitea-token"
 GITEA_API_TOKEN_SM_KEY="gitea-api-token-${INTERNAL_SECRET_SUFFIX}"
-GIT_API_TOKEN=$(sm_get "$GITEA_API_TOKEN_SM_KEY" octogee 2>/dev/null || echo "")
+GIT_API_TOKEN=$(sm_get "$GITEA_API_TOKEN_SM_KEY" "$SM_PROJECT" 2>/dev/null || echo "")
 if [[ -n "$GIT_API_TOKEN" ]]; then
   ksecret gitea-token --from-literal=token="$GIT_API_TOKEN"
 else
@@ -736,11 +736,11 @@ esac
 info "connect-state-secret"
 CONNECT_STATE_SM_KEY="connect-state-secret-${INTERNAL_SECRET_SUFFIX}"
 [[ "$ENV" == "custom" ]] && CONNECT_STATE_SM_KEY="connect-state-secret-custom-${CUSTOM_NS}"
-CONNECT_STATE_SECRET=$(sm_get "$CONNECT_STATE_SM_KEY" octogee 2>/dev/null || echo "")
+CONNECT_STATE_SECRET=$(sm_get "$CONNECT_STATE_SM_KEY" "$SM_PROJECT" 2>/dev/null || echo "")
 if [[ -z "$CONNECT_STATE_SECRET" ]]; then
   CONNECT_STATE_SECRET=$(openssl rand -hex 32)
   info "  Generated new connect-state secret — saving to Secret Manager..."
-  secret_manager_persist_value "$CONNECT_STATE_SM_KEY" "$CONNECT_STATE_SECRET" octogee \
+  secret_manager_persist_value "$CONNECT_STATE_SM_KEY" "$CONNECT_STATE_SECRET" "$SM_PROJECT" \
     || fail "Could not persist connect-state secret to Secret Manager (key=${CONNECT_STATE_SM_KEY}). Refusing to materialize a K8s secret that exists nowhere else."
 fi
 ksecret connect-state-secret --from-literal=secret="$CONNECT_STATE_SECRET"

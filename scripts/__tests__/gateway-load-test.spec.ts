@@ -1,13 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import { hasCoachReply, parseLoadPlan, performCoachTurn, runLoadPlan, summarizeMeasurements, type LoadClient, type LoadMeasurement, LoadHttpError } from "../lib/gateway-load-test.js";
+import { hasCoachReply, parseLoadPlan, performCoachTurn, runLoadPlan, summarizeMeasurements, TEST_CONTEXT, type LoadClient, type LoadMeasurement, LoadHttpError } from "../lib/gateway-load-test.js";
 import { createSharedPoolSampler, parseCgroup, slotObservation, stableMediumPod } from "../lib/gateway-load-sampler.js";
 import { testToken, testTokens } from "../lib/gateway-load-client.js";
+import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 
 const target = (name = "alice") => ({ name, workspaceSlug: name, tokenEnv: `OCTOGEE_LOAD_TOKEN_${name.toUpperCase()}`,
   channelId: name[0].repeat(26) });
 const input = { gatewayId: "shared-0", targets: [target(), target("bob")], readConcurrency: [1, 2] };
 
 describe("TEST gateway load boundaries", () => {
+  it("targets the TEST cluster named by the deployment registry", () => {
+    expect(TEST_CONTEXT).toBe(deploymentEnvironmentSettings("test").kubeContext);
+  });
+
   it("rejects production overrides, duplicate identities, and invalid concurrency", () => {
     expect(() => parseLoadPlan({ ...input, apiOrigin: "https://api.octogee.com" })).toThrow("cannot be overridden");
     expect(() => parseLoadPlan({ ...input, gatewayId: "builder-1" })).toThrow("shared");

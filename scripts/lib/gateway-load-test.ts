@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 
 export const MAX_LOAD_RUN_MS = 30 * 60_000;
 export const TEST_API_ORIGIN = "https://api-test.octogee.com";
-export const TEST_CONTEXT = "gke_octogee_us-central1_octogee-gateway";
+export const TEST_CONTEXT = deploymentEnvironmentSettings("test").kubeContext;
 export const TEST_NAMESPACE = "octogee-test";
 // Numbered slots predate the scaler; it mints shared-<12 hex> (glm-controller shared-pool-scaler).
 export const SHARED_SLOT_RE = /^shared-(?:\d+|[a-f0-9]{12})$/;

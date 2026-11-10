@@ -21,10 +21,10 @@ describe("deployment target Helm values", () => {
     expect(rendered).not.toContain("projectPublisher:");
     expect(rendered).not.toContain("platformComputeClass");
     expect(rendered).toContain(`projectRunner:
-  apiServerEgressCidrs: ["10.128.0.2/32","34.118.224.1/32"]`);
+  apiServerEgressCidrs: ["10.128.0.87/32","34.118.224.1/32"]`);
     expect(rendered).toContain(`networkPolicy:
   enforceDefaultDeny: false`);
-    expect(rendered).toContain('connectionName: "octogee:us-central1:octogee-pg"');
+    expect(rendered).toContain('connectionName: "octogee-test:us-central1:octogee-pg"');
     expect(rendered).toContain(
       'repository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-api"',
     );
@@ -44,13 +44,13 @@ describe("deployment target Helm values", () => {
       'MM_INTERNAL_URL: "http://mattermost.octogee-test.svc.cluster.local:8065"',
     );
     expect(rendered).toContain(
-      'loggingResourceName: "projects/octogee/locations/global/buckets/ops-agent-test/views/ops-agent"',
+      'loggingResourceName: "projects/octogee-test/locations/global/buckets/ops-agent-test/views/ops-agent"',
     );
     expect(rendered).toContain(`edgeIngress:
-  staticIpName: "workspace-api-ip-test"`);
+  staticIpName: "workspace-api-ip"`);
     expect(rendered).toContain(`gateway-edge:
   ingress:
-    staticIpName: "workspace-api-ip-test"`);
+    staticIpName: "workspace-api-ip"`);
     expect(rendered).toContain(`mattermost:
   ingress:
     staticIpName: "mattermost-ip-test"`);
@@ -66,7 +66,7 @@ describe("deployment target Helm values", () => {
 
   it.each([
     ["prod-central", "workspace-api-ip", "mattermost-ip", "gitea-ip", "preview-ip"],
-    ["test-central", "workspace-api-ip-test", "mattermost-ip-test", "gitea-ip-test", "preview-ip-test"],
+    ["test-central", "workspace-api-ip", "mattermost-ip-test", "gitea-ip-test", "preview-ip-test"],
   ])(
     "renders the canonical ingress identities for %s",
     (targetId, edge, mattermost, gitea, preview) => {
@@ -82,12 +82,15 @@ describe("deployment target Helm values", () => {
     },
   );
 
-  it.each(["prod-central", "test-central"])(
+  it.each([
+    ["prod-central", "10.128.0.2/32"],
+    ["test-central", "10.128.0.87/32"],
+  ])(
     "renders the exact central project runner API-server destinations for %s",
-    (targetId) => {
+    (targetId, apiServer) => {
       const rendered = renderDeploymentTargetHelmValues(deploymentTargetSettings(targetId));
       expect(rendered).toContain(`projectRunner:
-  apiServerEgressCidrs: ["10.128.0.2/32","34.118.224.1/32"]`);
+  apiServerEgressCidrs: ["${apiServer}","34.118.224.1/32"]`);
       expect(rendered).toContain("enforceDefaultDeny: false");
     },
   );

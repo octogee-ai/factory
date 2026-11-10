@@ -516,9 +516,9 @@ remove_gitea_database_credentials() {
     || die "database-bound Kubernetes secret gitea-token remains after cleanup"
 
   secret_manager_stderr=$(mktemp)
-  if gcloud secrets describe "$GITEA_API_TOKEN_SM_KEY" --project=octogee \
+  if gcloud secrets describe "$GITEA_API_TOKEN_SM_KEY" --project="$TARGET_CLOUD_SQL_PROJECT" \
       --format='value(name)' >/dev/null 2>"$secret_manager_stderr"; then
-    gcloud secrets delete "$GITEA_API_TOKEN_SM_KEY" --project=octogee --quiet \
+    gcloud secrets delete "$GITEA_API_TOKEN_SM_KEY" --project="$TARGET_CLOUD_SQL_PROJECT" --quiet \
       || die "could not delete database-bound Secret Manager token $GITEA_API_TOKEN_SM_KEY"
   elif ! grep -qE "NOT_FOUND|was not found|does not exist" "$secret_manager_stderr"; then
     sed 's/^/      /' "$secret_manager_stderr" >&2
@@ -526,7 +526,7 @@ remove_gitea_database_credentials() {
     die "could not inspect database-bound Secret Manager token $GITEA_API_TOKEN_SM_KEY"
   fi
 
-  if gcloud secrets describe "$GITEA_API_TOKEN_SM_KEY" --project=octogee \
+  if gcloud secrets describe "$GITEA_API_TOKEN_SM_KEY" --project="$TARGET_CLOUD_SQL_PROJECT" \
       --format='value(name)' >/dev/null 2>"$secret_manager_stderr"; then
     rm -f "$secret_manager_stderr"
     die "database-bound Secret Manager token $GITEA_API_TOKEN_SM_KEY remains after cleanup"

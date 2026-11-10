@@ -269,7 +269,7 @@ if [[ "$ENV" == "custom" ]]; then
   GITEA_API_TOKEN_SM_KEY="gitea-api-token-${INTERNAL_SECRET_SUFFIX}"
 fi
 GITEA_ADMIN_PASS=$(gcloud secrets versions access latest \
-  --secret="$GITEA_ADMIN_PASSWORD_SM_KEY" --project=octogee 2>/dev/null || echo "")
+  --secret="$GITEA_ADMIN_PASSWORD_SM_KEY" --project="$TARGET_CLOUD_SQL_PROJECT" 2>/dev/null || echo "")
 
 if [[ -z "$GITEA_ADMIN_PASS" ]]; then
   # Fall back to the secret embedded in the K8s secret
@@ -401,7 +401,7 @@ save_env "GIT_API_TOKEN" "$GIT_API_TOKEN"
 ok "Token saved to $ENV_FILE"
 
 SM_TOKEN_PERSIST_STATUS=0
-secret_manager_persist_value "$GITEA_API_TOKEN_SM_KEY" "$GIT_API_TOKEN" octogee || SM_TOKEN_PERSIST_STATUS=$?
+secret_manager_persist_value "$GITEA_API_TOKEN_SM_KEY" "$GIT_API_TOKEN" "$TARGET_CLOUD_SQL_PROJECT" || SM_TOKEN_PERSIST_STATUS=$?
 if [[ "$SM_TOKEN_PERSIST_STATUS" -eq 0 ]]; then
   ok "Token saved to Secret Manager: $GITEA_API_TOKEN_SM_KEY"
 else

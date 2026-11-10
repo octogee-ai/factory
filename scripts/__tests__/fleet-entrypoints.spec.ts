@@ -1203,9 +1203,9 @@ describe("fleet CLI args", () => {
     expect(resolveFleetDeploymentTarget("test")).toEqual({
       targetId: "test-central",
       projectId: "octogee-test",
-      clusterProjectId: "octogee",
+      clusterProjectId: "octogee-test",
       namespace: "octogee-test",
-      kubeContext: "gke_octogee_us-central1_octogee-gateway",
+      kubeContext: "gke_octogee-test_us-central1_octogee-gateway",
     });
     expect(resolveFleetDeploymentTarget("prod")).toEqual({
       targetId: "prod-central",

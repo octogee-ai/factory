@@ -41,10 +41,10 @@ case "$*" in
     ;;
   *" get pv pv-gitea "*)
     claim="$([[ "$FAKE_CLAIM_MISMATCH" == "true" ]] && printf other || printf gitea-shared-storage)"
-    printf '{"metadata":{"name":"pv-gitea"},"spec":{"claimRef":{"namespace":"%s","name":"%s"},"csi":{"driver":"pd.csi.storage.gke.io","volumeHandle":"projects/octogee/zones/%s-a/disks/disk-gitea"}}}\\n' "$FAKE_NAMESPACE" "$claim" "$FAKE_REGION"
+    printf '{"metadata":{"name":"pv-gitea"},"spec":{"claimRef":{"namespace":"%s","name":"%s"},"csi":{"driver":"pd.csi.storage.gke.io","volumeHandle":"projects/octogee-test/zones/%s-a/disks/disk-gitea"}}}\\n' "$FAKE_NAMESPACE" "$claim" "$FAKE_REGION"
     ;;
   *" get pv pv-mattermost "*)
-    printf '{"metadata":{"name":"pv-mattermost"},"spec":{"claimRef":{"namespace":"%s","name":"mattermost-data"},"csi":{"driver":"pd.csi.storage.gke.io","volumeHandle":"projects/octogee/zones/%s-b/disks/disk-mattermost"}}}\\n' "$FAKE_NAMESPACE" "$FAKE_REGION"
+    printf '{"metadata":{"name":"pv-mattermost"},"spec":{"claimRef":{"namespace":"%s","name":"mattermost-data"},"csi":{"driver":"pd.csi.storage.gke.io","volumeHandle":"projects/octogee-test/zones/%s-b/disks/disk-mattermost"}}}\\n' "$FAKE_NAMESPACE" "$FAKE_REGION"
     ;;
   *)
     printf 'unexpected kubectl call: %s\\n' "$*" >&2
@@ -56,7 +56,7 @@ esac
   executable(path.join(temp, "gcloud"), `#!/usr/bin/env bash
 set -euo pipefail
 printf 'gcloud %s\\n' "$*" >> "$FAKE_CALL_LOG"
-EXPECTED="https://www.googleapis.com/compute/v1/projects/octogee/regions/$FAKE_REGION/resourcePolicies/$FAKE_POLICY_NAME"
+EXPECTED="https://www.googleapis.com/compute/v1/projects/octogee-test/regions/$FAKE_REGION/resourcePolicies/$FAKE_POLICY_NAME"
 case "$1 $2 $3" in
   "compute resource-policies describe")
     if [[ "$FAKE_SCHEDULE" == "missing" ]]; then
@@ -64,15 +64,15 @@ case "$1 $2 $3" in
       exit 1
     fi
     if [[ "$FAKE_SCHEDULE" == "unbounded" ]]; then
-      printf '{"name":"%s","region":"https://www.googleapis.com/compute/v1/projects/octogee/regions/%s","snapshotSchedulePolicy":{"schedule":{"dailySchedule":{"daysInCycle":1,"startTime":"08:00"}},"retentionPolicy":{"maxRetentionDays":999,"onSourceDiskDelete":"KEEP_AUTO_SNAPSHOTS"},"snapshotProperties":{"storageLocations":["%s"]}}}\\n' "$FAKE_POLICY_NAME" "$FAKE_REGION" "$FAKE_REGION"
+      printf '{"name":"%s","region":"https://www.googleapis.com/compute/v1/projects/octogee-test/regions/%s","snapshotSchedulePolicy":{"schedule":{"dailySchedule":{"daysInCycle":1,"startTime":"08:00"}},"retentionPolicy":{"maxRetentionDays":999,"onSourceDiskDelete":"KEEP_AUTO_SNAPSHOTS"},"snapshotProperties":{"storageLocations":["%s"]}}}\\n' "$FAKE_POLICY_NAME" "$FAKE_REGION" "$FAKE_REGION"
     else
-      printf '{"name":"%s","region":"https://www.googleapis.com/compute/v1/projects/octogee/regions/%s","snapshotSchedulePolicy":{"schedule":{"dailySchedule":{"daysInCycle":1,"startTime":"08:00"}},"retentionPolicy":{"maxRetentionDays":14,"onSourceDiskDelete":"APPLY_RETENTION_POLICY"},"snapshotProperties":{"storageLocations":["%s"]}}}\\n' "$FAKE_POLICY_NAME" "$FAKE_REGION" "$FAKE_REGION"
+      printf '{"name":"%s","region":"https://www.googleapis.com/compute/v1/projects/octogee-test/regions/%s","snapshotSchedulePolicy":{"schedule":{"dailySchedule":{"daysInCycle":1,"startTime":"08:00"}},"retentionPolicy":{"maxRetentionDays":14,"onSourceDiskDelete":"APPLY_RETENTION_POLICY"},"snapshotProperties":{"storageLocations":["%s"]}}}\\n' "$FAKE_POLICY_NAME" "$FAKE_REGION" "$FAKE_REGION"
     fi
     ;;
   "compute disks describe")
     disk="$4"
     if [[ "$FAKE_POLICY" == "unexpected" ]]; then
-      printf '{"resourcePolicies":["https://www.googleapis.com/compute/v1/projects/octogee/regions/%s/resourcePolicies/other-policy"]}\\n' "$FAKE_REGION"
+      printf '{"resourcePolicies":["https://www.googleapis.com/compute/v1/projects/octogee-test/regions/%s/resourcePolicies/other-policy"]}\\n' "$FAKE_REGION"
     elif [[ "$FAKE_POLICY" == "expected" ]] || grep -q "^gcloud compute disks add-resource-policies \${disk} " "$FAKE_CALL_LOG"; then
       printf '{"resourcePolicies":["%s"]}\\n' "$EXPECTED"
     else

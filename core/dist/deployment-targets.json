@@ -64,7 +64,7 @@
             "environment": "test",
             "lifecycle": "active",
             "secretNameSuffix": "test",
-            "clusterProjectId": "octogee",
+            "clusterProjectId": "octogee-test",
             "firebaseProjectId": "octogee-test",
             "hostingProjectId": "octogee-test",
             "customerHostingProjectId": "octogee-customer-hosting-test",
@@ -72,7 +72,7 @@
             "clusterName": "octogee-gateway",
             "namespace": "octogee-test",
             "projectRunnerApiServerEgressCidrs": [
-                "10.128.0.2/32",
+                "10.128.0.87/32",
                 "34.118.224.1/32"
             ],
             "artifactRegistry": {
@@ -81,7 +81,7 @@
                 "repository": "octogee"
             },
             "cloudSql": {
-                "projectId": "octogee",
+                "projectId": "octogee-test",
                 "region": "us-central1",
                 "instance": "octogee-pg",
                 "mattermostPasswordSecret": "MM_DB_PASSWORD",
@@ -100,7 +100,7 @@
                 "location": "us-central1"
             },
             "ingress": {
-                "edgeStaticIpName": "workspace-api-ip-test",
+                "edgeStaticIpName": "workspace-api-ip",
                 "mattermostStaticIpName": "mattermost-ip-test",
                 "giteaStaticIpName": "gitea-ip-test",
                 "previewStaticIpName": "preview-ip-test"
