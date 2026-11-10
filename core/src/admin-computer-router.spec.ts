@@ -41,8 +41,8 @@ function harness(overrides: Record<string, Record<string, unknown> | null> = {},
   app.use((error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => res.status(500).json({ error: error.message }));
   return { app, records, operations: () => [...records.values()].filter((value) => value.kind === "gateway-vm"), audits: () => [...records.values()].filter((value) => value.recordType === "audit") };
 }
-const livePath = `/gateways/${GATEWAY}/computer/replace`;
-const parkedPath = `/customers/${OWNER}/computer/replace`;
+const livePath = `/gateways/${GATEWAY}/vm/replace`;
+const parkedPath = `/users/${OWNER}/vm/replace`;
 
 describe("admin computer replacement", () => {
   it.each([livePath, parkedPath])("rejects unavailable replacement before admission: %s", async (path) => {
@@ -88,7 +88,7 @@ describe("admin computer replacement", () => {
     expect([404, 409]).toContain(res.status);
     expect(h.operations()).toHaveLength(0);
   });
-  it.each(["/gateways/invalid%2Fgateway/computer/replace", "/customers/invalid%2Fowner/computer/replace"])("rejects malformed document identities %s before journaling", async (path) => {
+  it.each(["/gateways/invalid%2Fgateway/vm/replace", "/users/invalid%2Fowner/vm/replace"])("rejects malformed document identities %s before journaling", async (path) => {
     const h = harness();
     await request(h.app).post(path).send({}).expect(400);
     expect(h.audits()).toHaveLength(0);

@@ -1545,16 +1545,16 @@ describe("fleet CLI args", () => {
       "--env=test", "gw", "replace-computer", "canary", "--idempotency-key=k1", "--apply",
     ]))).toEqual({
       method: "POST",
-      path: "/api/admin/gateways/canary/computer/replace",
+      path: "/api/admin/gateways/canary/vm/replace",
       body: {},
       idempotencyKey: "k1",
     });
     expect(resolveFleetGatewayMutation(parseFleetArgs([
       "--env=test", "gw", "replace-computer", "--owner-uid=owner-1", "--idempotency-key=k2", "--apply",
-    ]))).toEqual({ method: "POST", path: "/api/admin/customers/owner-1/computer/replace", body: {}, idempotencyKey: "k2" });
+    ]))).toEqual({ method: "POST", path: "/api/admin/users/owner-1/vm/replace", body: {}, idempotencyKey: "k2" });
     expect(resolveFleetGatewayMutation(parseFleetArgs([
       "--env=test", "gw", "replace-computer", "--owner-uid=owner-1", "--force", "--accept-boot-data-loss", "--apply",
-    ]))).toEqual({ method: "POST", path: "/api/admin/customers/owner-1/computer/replace", body: { force: true, acceptBootDataLoss: true } });
+    ]))).toEqual({ method: "POST", path: "/api/admin/users/owner-1/vm/replace", body: { force: true, acceptBootDataLoss: true } });
     for (const argv of [
       ["--env=test", "gw", "replace-computer", "canary", "false"],
       ["--env=test", "gw", "replace-computer", "canary", "--apply=true"],

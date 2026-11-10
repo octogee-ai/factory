@@ -104,7 +104,7 @@ function customerDoc(overrides: DocData = {}): DocData {
   };
 }
 
-describe("GET /api/admin/customer/:uid — model credential state", () => {
+describe("GET /api/admin/users/:uid — model credential state", () => {
   it("returns the deletion lifecycle so the admin UI cannot present a suspended account as active", async () => {
     const accountLifecycle = {
       status: "deletion_scheduled",
@@ -115,7 +115,7 @@ describe("GET /api/admin/customer/:uid — model credential state", () => {
       "users/uid-1": customerDoc({ accountLifecycle }),
     });
 
-    const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
+    const res = await request(app).get("/api/admin/users/uid-1").expect(200);
 
     expect(res.body.accountLifecycle).toEqual(accountLifecycle);
   });
@@ -139,7 +139,7 @@ describe("GET /api/admin/customer/:uid — model credential state", () => {
       },
     });
 
-    const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
+    const res = await request(app).get("/api/admin/users/uid-1").expect(200);
 
     expect(res.body.modelCredential).toEqual({
       active: true,
@@ -162,7 +162,7 @@ describe("GET /api/admin/customer/:uid — model credential state", () => {
       "users/uid-legacy": customerDoc({ byotActive: true }),
     });
 
-    const res = await request(app).get("/api/admin/customer/uid-legacy").expect(200);
+    const res = await request(app).get("/api/admin/users/uid-legacy").expect(200);
 
     expect(res.body.modelCredential).toBeNull();
     expect(res.body.byot).toEqual({ active: true });
@@ -178,7 +178,7 @@ describe("GET /api/admin/customer/:uid — model credential state", () => {
       },
     });
 
-    const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
+    const res = await request(app).get("/api/admin/users/uid-1").expect(200);
 
     expect(res.body.mattermost).toEqual({
       connected: true,
@@ -193,11 +193,11 @@ describe("GET /api/admin/customer/:uid — model credential state", () => {
       "users/uid-1": customerDoc({ provisioning: { openclaw: { status: "complete", slug: "builder", agentIds: "agent-1" } } }),
     });
 
-    await request(app).get("/api/admin/customer/uid-1").expect(500);
+    await request(app).get("/api/admin/users/uid-1").expect(500);
   });
 });
 
-describe("GET /api/admin/customers — search and filters cover every customer", () => {
+describe("GET /api/admin/users — search and filters cover every customer", () => {
   function directory(count: number): Record<string, DocData> {
     return Object.fromEntries(
       Array.from({ length: count }, (_, index) => {
@@ -214,7 +214,7 @@ describe("GET /api/admin/customers — search and filters cover every customer",
 
   it("finds a customer beyond the first page", async () => {
     const res = await request(makeApp(directory(40)))
-      .get("/api/admin/customers?search=builder33")
+      .get("/api/admin/users?search=builder33")
       .expect(200);
 
     expect(res.body.items.map((item: { username: string }) => item.username)).toEqual(["builder33"]);
@@ -225,14 +225,14 @@ describe("GET /api/admin/customers — search and filters cover every customer",
   it("pages through matches instead of through unfiltered rows", async () => {
     const app = makeApp(directory(40));
 
-    const first = await request(app).get("/api/admin/customers?search=builder3&pageSize=4").expect(200);
+    const first = await request(app).get("/api/admin/users?search=builder3&pageSize=4").expect(200);
     expect(first.body.items.map((item: { username: string }) => item.username)).toEqual([
       "builder30", "builder31", "builder32", "builder33",
     ]);
     expect(first.body.hasMore).toBe(true);
 
     const second = await request(app)
-      .get(`/api/admin/customers?search=builder3&pageSize=4&cursor=${first.body.nextCursor}`)
+      .get(`/api/admin/users?search=builder3&pageSize=4&cursor=${first.body.nextCursor}`)
       .expect(200);
     expect(second.body.items.map((item: { username: string }) => item.username)).toEqual([
       "builder34", "builder35", "builder36", "builder37",
@@ -243,20 +243,20 @@ describe("GET /api/admin/customers — search and filters cover every customer",
   it("pages the unfiltered directory newest-first by creation time", async () => {
     const app = makeApp(directory(6));
 
-    const first = await request(app).get("/api/admin/customers?pageSize=4").expect(200);
+    const first = await request(app).get("/api/admin/users?pageSize=4").expect(200);
     expect(first.body.items.map((item: { username: string }) => item.username)).toEqual([
       "builder00", "builder01", "builder02", "builder03",
     ]);
     expect(first.body.nextCursor).toBe("uid-builder03");
 
-    const second = await request(app).get(`/api/admin/customers?pageSize=4&cursor=${first.body.nextCursor}`).expect(200);
+    const second = await request(app).get(`/api/admin/users?pageSize=4&cursor=${first.body.nextCursor}`).expect(200);
     expect(second.body.items.map((item: { username: string }) => item.username)).toEqual(["builder04", "builder05"]);
     expect(second.body.hasMore).toBe(false);
   });
 
   it.each([
-    ["the unfiltered directory", "/api/admin/customers?cursor=uid-gone"],
-    ["a filtered search", "/api/admin/customers?search=builder&cursor=uid-gone"],
+    ["the unfiltered directory", "/api/admin/users?cursor=uid-gone"],
+    ["a filtered search", "/api/admin/users?search=builder&cursor=uid-gone"],
   ])("rejects a cursor naming no customer in %s", async (_name, url) => {
     const res = await request(makeApp(directory(3))).get(url).expect(400);
 
@@ -264,7 +264,7 @@ describe("GET /api/admin/customers — search and filters cover every customer",
   });
 });
 
-describe("GET /api/admin/customer-archives", () => {
+describe("GET /api/admin/user-archives", () => {
   it("returns retained operational totals while dropping unexpected identifying fields", async () => {
     const app = makeApp({
       "anonymousOperationalArchives/random-1": {
@@ -298,7 +298,7 @@ describe("GET /api/admin/customer-archives", () => {
       },
     });
 
-    const res = await request(app).get("/api/admin/customer-archives").expect(200);
+    const res = await request(app).get("/api/admin/user-archives").expect(200);
 
     expect(res.body.summary).toEqual({
       archiveCount: 1,
@@ -339,7 +339,7 @@ describe("admin customer routes — commercial fields", () => {
   });
 
   it("adds the subscription, tier price and selected tier from the product", async () => {
-    const res = await request(makeApp(paying())).get("/api/admin/customer/uid-1").expect(200);
+    const res = await request(makeApp(paying())).get("/api/admin/users/uid-1").expect(200);
 
     expect(res.body).toMatchObject({
       subscription: { status: "active", stripeCustomerId: "cus_1", currentPeriodEnd: null },
@@ -351,7 +351,7 @@ describe("admin customer routes — commercial fields", () => {
   it("omits them from the customer detail on a bare platform", async () => {
     installUserEntitlements(staticUserEntitlements);
 
-    const res = await request(makeApp(paying())).get("/api/admin/customer/uid-1").expect(200);
+    const res = await request(makeApp(paying())).get("/api/admin/users/uid-1").expect(200);
 
     expect(res.body.summary).toMatchObject({ email: "builder@example.com" });
     expect(res.body.summary).not.toHaveProperty("revenueUsd");
@@ -361,7 +361,7 @@ describe("admin customer routes — commercial fields", () => {
   });
 
   it("reports recurring revenue in the stats from the product", async () => {
-    const res = await request(makeApp(paying())).get("/api/admin/customers/stats").expect(200);
+    const res = await request(makeApp(paying())).get("/api/admin/users/stats").expect(200);
 
     expect(res.body).toMatchObject({ totalCustomers: 1, mrrUsd: 20 });
   });
@@ -369,7 +369,7 @@ describe("admin customer routes — commercial fields", () => {
   it("reports no recurring revenue in the stats on a bare platform", async () => {
     installUserEntitlements(staticUserEntitlements);
 
-    const res = await request(makeApp(paying())).get("/api/admin/customers/stats").expect(200);
+    const res = await request(makeApp(paying())).get("/api/admin/users/stats").expect(200);
 
     expect(res.body.totalCustomers).toBe(1);
     expect(res.body).not.toHaveProperty("mrrUsd");
@@ -418,7 +418,7 @@ describe("mergeDailyUsage", () => {
   });
 });
 
-describe("GET /api/admin/customer/:uid — placement and parked computer", () => {
+describe("GET /api/admin/users/:uid — placement and parked computer", () => {
   it("projects the placement and the parked computer with its checkpoint state", async () => {
     const computer = {
       instanceName: "octogee-computer-prod-uid-1",
@@ -437,7 +437,7 @@ describe("GET /api/admin/customer/:uid — placement and parked computer", () =>
       }),
     });
 
-    const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
+    const res = await request(app).get("/api/admin/users/uid-1").expect(200);
 
     expect(res.body.placement).toEqual({ managedBy: "cowboy", gatewayId: "alice-m-1", gatewayProfile: "builder" });
     expect(res.body.computer).toEqual(computer);
@@ -446,14 +446,14 @@ describe("GET /api/admin/customer/:uid — placement and parked computer", () =>
   it("reports no placement and no computer when the user has never been placed", async () => {
     const app = makeApp({ "users/uid-1": customerDoc() });
 
-    const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
+    const res = await request(app).get("/api/admin/users/uid-1").expect(200);
 
     expect(res.body.placement).toEqual({ managedBy: "cowboy", gatewayId: null, gatewayProfile: null });
     expect(res.body.computer).toBeNull();
   });
 });
 
-describe("GET /api/admin/customer/:uid — broker-sourced usage", () => {
+describe("GET /api/admin/users/:uid — broker-sourced usage", () => {
   it("uses reset budget charges while retaining actual historical cost totals", async () => {
     const now = Date.now();
     const app = makeApp({
@@ -462,7 +462,7 @@ describe("GET /api/admin/customer/:uid — broker-sourced usage", () => {
       [`modelBrokerWeekWindows/uid-1_${weekWindowStartMs(now)}`]: { costUsd: 20, chargeUsd: 0 },
       "modelBrokerUsageRollups/uid-1": { costUsd: 50, totalTokens: 1000000 },
     });
-    const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
+    const res = await request(app).get("/api/admin/users/uid-1").expect(200);
     expect(res.body.usage).toMatchObject({ windowCostUsd: 0, weekCostUsd: 0, costUsd: 50, degraded: false, percentUsed: 0 });
     expect(res.body.summary.weekPercentUsed).toBe(0);
   });
@@ -480,7 +480,7 @@ describe("GET /api/admin/customer/:uid — broker-sourced usage", () => {
       },
     });
 
-    const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
+    const res = await request(app).get("/api/admin/users/uid-1").expect(200);
     expect(res.body.usage).toMatchObject({
       costUsd: 1.73,
       brokerTotalTokens: 1_323_462,
@@ -496,17 +496,17 @@ describe("GET /api/admin/customer/:uid — broker-sourced usage", () => {
   });
 });
 
-describe("POST /api/admin/customer/:uid/ops", () => {
+describe("POST /api/admin/users/:uid/ops", () => {
   it("records an absent previous selected tier as null on the first tier change", async () => {
     const app = makeApp({ "users/uid-ops": customerDoc() });
 
     const result = await request(app)
-      .post("/api/admin/customer/uid-ops/ops")
+      .post("/api/admin/users/uid-ops/ops")
       .send({ action: "setTier", value: "pro" })
       .expect(200);
 
     expect(result.body).toMatchObject({ success: true, before: null, after: "pro" });
-    const audit = await request(app).get("/api/admin/customer/uid-ops/audit").expect(200);
+    const audit = await request(app).get("/api/admin/users/uid-ops/audit").expect(200);
     expect(audit.body.items).toEqual([expect.objectContaining({ action: "setTier", before: null, after: "pro" })]);
   });
 
@@ -516,7 +516,7 @@ describe("POST /api/admin/customer/:uid/ops", () => {
     });
 
     const res = await request(app)
-      .post("/api/admin/customer/uid-ops/ops")
+      .post("/api/admin/users/uid-ops/ops")
       .send({ action: "setThrottle", value: false })
       .expect(400);
 
@@ -568,7 +568,7 @@ describe("aggregateBrokerDiagnostics — the where-did-my-window-go projection",
   });
 });
 
-describe("GET /api/admin/customer/:uid/placements", () => {
+describe("GET /api/admin/users/:uid/placements", () => {
   function receipt(overrides: DocData): DocData {
     return {
       schemaVersion: 1,
@@ -632,7 +632,7 @@ describe("GET /api/admin/customer/:uid/placements", () => {
       }),
     });
 
-    const res = await request(app).get("/api/admin/customer/uid-1/placements").expect(200);
+    const res = await request(app).get("/api/admin/users/uid-1/placements").expect(200);
 
     expect(res.body.items.map((item: { kind: string }) => item.kind)).toEqual([
       "activation-failed",
@@ -672,7 +672,7 @@ describe("GET /api/admin/customer/:uid/placements", () => {
     });
 
     const res = await request(app)
-      .get("/api/admin/customer/uid-1/placements?limit=2")
+      .get("/api/admin/users/uid-1/placements?limit=2")
       .expect(200);
 
     expect(res.body.items.map((item: { at: number }) => item.at)).toEqual([3_000, 2_000]);
@@ -699,7 +699,7 @@ describe("GET /api/admin/customer/:uid/placements", () => {
       },
     });
 
-    const res = await request(app).get("/api/admin/customer/uid-1/placements").expect(200);
+    const res = await request(app).get("/api/admin/users/uid-1/placements").expect(200);
 
     expect(res.body.retryAvailable).toBe(false);
     expect(res.body.items).toEqual([]);
@@ -707,6 +707,6 @@ describe("GET /api/admin/customer/:uid/placements", () => {
 
   it("rejects an unknown customer", async () => {
     const app = makeApp({});
-    await request(app).get("/api/admin/customer/uid-missing/placements").expect(404);
+    await request(app).get("/api/admin/users/uid-missing/placements").expect(404);
   });
 });

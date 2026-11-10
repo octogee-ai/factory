@@ -575,7 +575,7 @@ export function addAdminCustomerRoutes(
   const directory: CustomerDirectory = { db, store, accounts };
 
   router.get(
-    "/customer-archives",
+    "/user-archives",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
         const archives = (await readAllArchives(store)).map((archive) =>
@@ -595,7 +595,7 @@ export function addAdminCustomerRoutes(
   );
 
 router.get(
-    "/customers/:uid/broker-diagnostics",
+    "/users/:uid/broker-diagnostics",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const uid = req.params.uid as string;
@@ -642,7 +642,7 @@ router.get(
   );
 
   router.get(
-    "/customers",
+    "/users",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const pageSize = Math.min(
@@ -682,7 +682,7 @@ const statsSnap = await db.doc("system/stats").get();
   );
 
   router.get(
-    "/customers/stats",
+    "/users/stats",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
         let totalCustomers = 0;
@@ -711,7 +711,7 @@ const statsSnap = await db.doc("system/stats").get();
   );
 
 router.get(
-    "/customer/:uid",
+    "/users/:uid",
     // eslint-disable-next-line complexity -- response-shape builder; cyclomatic count tracks customer schema's optional-field depth, not branching logic. Splitting into sub-builders would scatter the response contract.
     async (req: Request, res: Response, next: NextFunction) => {
       try {
@@ -845,7 +845,7 @@ router.get(
   );
 
   router.get(
-    "/customer/:uid/usage",
+    "/users/:uid/usage",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const uid = req.params.uid as string;
@@ -928,7 +928,7 @@ router.get(
 
 
   router.get(
-    "/customer/:uid/placements",
+    "/users/:uid/placements",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const uid = req.params.uid as string;
@@ -956,7 +956,7 @@ router.get(
   );
 
   router.get(
-    "/customer/:uid/audit",
+    "/users/:uid/audit",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const uid = req.params.uid as string;
@@ -988,7 +988,7 @@ router.get(
   );
 
   router.post(
-    "/customer/:uid/ops",
+    "/users/:uid/ops",
     async (req: ActorRequest, res: Response, next: NextFunction) => {
       try {
         const uid = req.params.uid as string;

@@ -32,15 +32,15 @@ gateway-router Service to the selected gateway's internal services.
   "/api/admin/builds"
   "/api/admin/rollouts"
   "/api/admin/fleet-settings"
-  "/api/admin/onboarding-placement/*"
-  "/api/admin/onboarding-placement"
+  "/api/admin/placement/*"
+  "/api/admin/placement"
   "/api/admin/platform-state-projection"
   "/api/admin/gateway-migrations/*"
-  "/api/admin/customer-distribution"
-  "/api/admin/customers/by-slug/*"
-  "/api/admin/customer/*"
-  "/api/admin/customers/*"
-  "/api/admin/customers" -}}
+  "/api/admin/user-archives"
+  "/api/admin/user-distribution"
+  "/api/admin/user-by-slug/*"
+  "/api/admin/users/*"
+  "/api/admin/users" -}}
 - host: {{ $hosts.api }}
   http:
     paths:

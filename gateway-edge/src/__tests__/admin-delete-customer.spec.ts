@@ -179,9 +179,9 @@ beforeEach(() => {
   loggedWarnings.length = 0;
 });
 
-describe("POST /api/admin/customer/:uid/delete — 404 + 409 paths", () => {
+describe("POST /api/admin/users/:uid/delete — 404 + 409 paths", () => {
   it("404 when the user doc doesn't exist", async () => {
-    const res = await request(buildApp()).post("/api/admin/customer/missing-uid/delete");
+    const res = await request(buildApp()).post("/api/admin/users/missing-uid/delete");
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/not found/i);
   });
@@ -199,7 +199,7 @@ describe("POST /api/admin/customer/:uid/delete — 404 + 409 paths", () => {
         },
       },
     ];
-    const res = await request(buildApp()).post("/api/admin/customer/uid-alice/delete");
+    const res = await request(buildApp()).post("/api/admin/users/uid-alice/delete");
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/already in progress/i);
     expect(res.body.operationId).toBe("op-existing");
@@ -210,19 +210,19 @@ describe("POST /api/admin/customer/:uid/delete — 404 + 409 paths", () => {
     glmOperationsDocs = [
       { id: "op-running", data: { kind: "erase-customer", status: "running", inputUid: "uid-alice", input: { uid: "uid-alice" } } },
     ];
-    const res = await request(buildApp()).post("/api/admin/customer/uid-alice/delete");
+    const res = await request(buildApp()).post("/api/admin/users/uid-alice/delete");
     expect(res.status).toBe(409);
   });
 });
 
-describe("POST /api/admin/customer/:uid/delete — has-slug branch", () => {
+describe("POST /api/admin/users/:uid/delete — has-slug branch", () => {
   it("enqueues suspension and retained erasure operations, returning their durable ids", async () => {
     usersDocs["uid-alice"] = {
       username: "alice",
       email: "alice@example.com",
       provisioning: { openclaw: { slug: "alice", gatewayId: "gw-test" } },
     };
-    const res = await request(buildApp()).post("/api/admin/customer/uid-alice/delete");
+    const res = await request(buildApp()).post("/api/admin/users/uid-alice/delete");
     expect(res.status).toBe(202);
     expect(res.body).toMatchObject({
       status: "deletion_scheduled",
@@ -241,7 +241,7 @@ describe("POST /api/admin/customer/:uid/delete — has-slug branch", () => {
 usersDocs["uid-alice"] = {
       provisioning: { openclaw: { slug: "alice-via-onboarding" } },
     };
-    const res = await request(buildApp()).post("/api/admin/customer/uid-alice/delete");
+    const res = await request(buildApp()).post("/api/admin/users/uid-alice/delete");
     expect(res.status).toBe(202);
     expect(res.body.slug).toBe("alice-via-onboarding");
     
@@ -254,17 +254,17 @@ usersDocs["uid-alice"] = {
       username: "alice",
       provisioning: { openclaw: { slug: "alice" } },
     };
-    await request(buildApp()).post("/api/admin/customer/uid-alice/delete");
+    await request(buildApp()).post("/api/admin/users/uid-alice/delete");
     expect(authDisabledUids).toEqual(["uid-alice"]);
     expect(storeWrites).not.toContainEqual({ op: "delete", path: "users/uid-alice" });
     expect(usersDocs["uid-alice"]).toBeDefined();
   });
 });
 
-describe("POST /api/admin/customer/:uid/delete — no-slug lifecycle", () => {
+describe("POST /api/admin/users/:uid/delete — no-slug lifecycle", () => {
   it("schedules retention and suspends Auth without deleting identity inline", async () => {
     usersDocs["uid-bob"] = { email: "bob@example.com" };
-    const res = await request(buildApp()).post("/api/admin/customer/uid-bob/delete");
+    const res = await request(buildApp()).post("/api/admin/users/uid-bob/delete");
     expect(res.status).toBe(202);
     expect(res.body).toMatchObject({ status: "deletion_scheduled", slug: null });
     expect(authDisabledUids).toEqual(["uid-bob"]);
@@ -277,7 +277,7 @@ describe("POST /api/admin/customer/:uid/delete — no-slug lifecycle", () => {
     usersDocs["uid-bob"] = { email: "bob@example.com" };
     const e = Object.assign(new Error("user not found"), { code: "auth/user-not-found" });
     authNextError = e;
-    const res = await request(buildApp()).post("/api/admin/customer/uid-bob/delete");
+    const res = await request(buildApp()).post("/api/admin/users/uid-bob/delete");
     expect(res.status).toBe(202);
     expect(operationWrites()).toHaveLength(2);
   });
@@ -288,7 +288,7 @@ describe("POST /api/admin/customer/:uid/delete — no-slug lifecycle", () => {
       code: "auth/quota-exceeded",
     });
     authNextError = e;
-    const res = await request(buildApp()).post("/api/admin/customer/uid-bob/delete");
+    const res = await request(buildApp()).post("/api/admin/users/uid-bob/delete");
     expect(res.status).toBe(500);
     expect(glmOperationsDocs.map((entry) => entry.data)).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -311,12 +311,12 @@ describe("POST /api/admin/customer/:uid/delete — no-slug lifecycle", () => {
 
   it("enqueues lifecycle operations even when provisioning never produced a slug", async () => {
     usersDocs["uid-bob"] = { email: "bob@example.com" };
-    await request(buildApp()).post("/api/admin/customer/uid-bob/delete");
+    await request(buildApp()).post("/api/admin/users/uid-bob/delete");
     expect(operationWrites()).toHaveLength(2);
   });
 });
 
-describe("POST /api/admin/customer/:uid/delete — Stripe cleanup context", () => {
+describe("POST /api/admin/users/:uid/delete — Stripe cleanup context", () => {
   it("persists Stripe ids for the suspension worker instead of logging a manual-cleanup warning", async () => {
     usersDocs["uid-alice"] = {
       username: "alice",
@@ -332,7 +332,7 @@ describe("POST /api/admin/customer/:uid/delete — Stripe cleanup context", () =
         status: "active",
       },
     };
-    await request(buildApp()).post("/api/admin/customer/uid-alice/delete");
+    await request(buildApp()).post("/api/admin/users/uid-alice/delete");
     expect(Object.values(deletionJobsDocs)).toEqual([expect.objectContaining({
       stripeCustomerIds: ["cus_abc"],
       stripeSubscriptionIds: ["sub_personal", "sub_builder"],
@@ -345,7 +345,7 @@ describe("POST /api/admin/customer/:uid/delete — Stripe cleanup context", () =
       username: "alice",
       provisioning: { openclaw: { slug: "alice" } },
     };
-    await request(buildApp()).post("/api/admin/customer/uid-alice/delete");
+    await request(buildApp()).post("/api/admin/users/uid-alice/delete");
     expect(loggedWarnings.length).toBe(0);
   });
 });

@@ -178,7 +178,7 @@ describe("GET /api/admin/gateways", () => {
     app = buildApp();
   });
 
-  it("returns the fleet list with image SHA, status, mounted customers, and heartbeat freshness", async () => {
+  it("returns the fleet list with image SHA, status, mounted users, and heartbeat freshness", async () => {
     const res = await request(app).get("/api/admin/gateways");
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.gateways)).toBe(true);
@@ -189,7 +189,7 @@ describe("GET /api/admin/gateways", () => {
       gatewayId: "gw-test-primary",
       status: "ready",
       imageTag: "abc1234",
-      mountedCustomers: ["alice", "bob", "christopher"],
+      mountedUsers: ["alice", "bob", "christopher"],
     });
     expect(primary.heartbeatAgeMs).toBeGreaterThanOrEqual(0);
     expect(primary.heartbeatAgeMs).toBeLessThan(5_000);

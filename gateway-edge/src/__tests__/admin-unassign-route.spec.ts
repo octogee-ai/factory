@@ -182,7 +182,7 @@ function seedAssignment(gatewayId: string, uid: string, over: Partial<StoredDoc>
   };
 }
 
-describe("POST /api/admin/customers/:uid/unassign", () => {
+describe("POST /api/admin/users/:uid/unassign", () => {
   let app: express.Express;
 
   beforeEach(() => {
@@ -194,7 +194,7 @@ describe("POST /api/admin/customers/:uid/unassign", () => {
     seedMountedUser("u-serving", "gw-blue");
     seedAssignment("gw-blue", "u-serving");
 
-    const res = await request(app).post("/api/admin/customers/u-serving/unassign");
+    const res = await request(app).post("/api/admin/users/u-serving/unassign");
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ unassigned: true, uid: "u-serving", from: "gw-blue" });
@@ -205,7 +205,7 @@ describe("POST /api/admin/customers/:uid/unassign", () => {
 
   it("is NOT destructive — never deletes the user doc", async () => {
     seedMountedUser("u-serving", "gw-blue");
-    await request(app).post("/api/admin/customers/u-serving/unassign");
+    await request(app).post("/api/admin/users/u-serving/unassign");
     expect(state.store["users/u-serving"]).toBeDefined();
   });
 
@@ -218,7 +218,7 @@ describe("POST /api/admin/customers/:uid/unassign", () => {
       status: "running",
     };
 
-    const res = await request(app).post("/api/admin/customers/u-moving/unassign");
+    const res = await request(app).post("/api/admin/users/u-moving/unassign");
 
     expect(res.status).toBe(409);
     expect(res.body.operationId).toBe("op-1");
@@ -230,7 +230,7 @@ describe("POST /api/admin/customers/:uid/unassign", () => {
     seedMountedUser("u-quiesce", "gw-blue");
     seedAssignment("gw-blue", "u-quiesce", { state: "quiescing" });
 
-    const res = await request(app).post("/api/admin/customers/u-quiesce/unassign");
+    const res = await request(app).post("/api/admin/users/u-quiesce/unassign");
 
     expect(res.status).toBe(409);
     expect(res.body.state).toBe("quiescing");
@@ -241,25 +241,25 @@ describe("POST /api/admin/customers/:uid/unassign", () => {
     seedMountedUser("u-mig", "gw-blue");
     seedAssignment("gw-blue", "u-mig", { state: "migrating" });
 
-    const res = await request(app).post("/api/admin/customers/u-mig/unassign");
+    const res = await request(app).post("/api/admin/users/u-mig/unassign");
     expect(res.status).toBe(409);
     expect(res.body.state).toBe("migrating");
   });
 
   it("clears a serving customer that has no assignment doc (legacy) without erroring", async () => {
     seedMountedUser("u-legacy", "gw-blue");
-    const res = await request(app).post("/api/admin/customers/u-legacy/unassign");
+    const res = await request(app).post("/api/admin/users/u-legacy/unassign");
     expect(res.status).toBe(200);
   });
 
   it("returns 409 when the customer is already unassigned", async () => {
     state.store["users/u-none"] = { provisioning: { openclaw: {} } };
-    const res = await request(app).post("/api/admin/customers/u-none/unassign");
+    const res = await request(app).post("/api/admin/users/u-none/unassign");
     expect(res.status).toBe(409);
   });
 
   it("returns 404 when the customer does not exist", async () => {
-    const res = await request(app).post("/api/admin/customers/ghost/unassign");
+    const res = await request(app).post("/api/admin/users/ghost/unassign");
     expect(res.status).toBe(404);
   });
 });

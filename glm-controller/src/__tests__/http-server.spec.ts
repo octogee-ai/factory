@@ -647,7 +647,7 @@ describe("createHttpServer — admin gateway routes", () => {
   it("answers OPTIONS preflight with 204 + CORS headers (no auth needed)", async () => {
     const app = createHttpServer(buildDeps(store));
     const res = await request(app)
-      .options("/api/admin/customers")
+      .options("/api/admin/users")
       .set("Origin", "https://app-octogee-test.web.app")
       .set("Access-Control-Request-Method", "GET");
     expect(res.status).toBe(204);
@@ -697,7 +697,7 @@ describe("createHttpServer — admin gateway routes", () => {
     }));
 
     const res = await request(app)
-      .post("/api/admin/customer/delete-me/delete")
+      .post("/api/admin/users/delete-me/delete")
       .set("Authorization", "Bearer admin-token");
 
     expect(res.status, JSON.stringify(res.body)).toBe(202);
@@ -1094,7 +1094,7 @@ describe("createHttpServer — admin gateway routes", () => {
       desiredStatus: "running",
       imageTag: "8507a63-oc2026.6.10",
       openclawVersion: "2026.6.10",
-      mountedCustomers: [],
+      mountedUsers: [],
       heartbeatAgeMs: null,
       podDiagnostics: {
         status: "not-ready",
@@ -1162,21 +1162,21 @@ describe("createHttpServer — admin gateway routes", () => {
   it("mounts addAdminCustomerRoutes and returns 404 for unknown customer (factory wired)", async () => {
     const app = createHttpServer(buildDeps(store));
     const res = await request(app)
-      .get("/api/admin/customer/does-not-exist")
+      .get("/api/admin/users/does-not-exist")
       .set("Authorization", "Bearer admin-token");
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "User not found" });
   });
 
   it("serves product admin routes only when the product supplies them", async () => {
-    const path = "/api/admin/customer/u1/reset";
+    const path = "/api/admin/users/u1/reset";
     const bare = await request(createHttpServer(buildDeps(store)))
       .get(path).set("Authorization", "Bearer admin-token");
     expect(bare.status).toBe(404);
     const app = createHttpServer({
       ...buildDeps(store),
       addProductAdminRoutes: (router) => {
-        router.get("/customer/:uid/reset", (_req, res) => { res.json({ ok: true }); });
+        router.get("/users/:uid/reset", (_req, res) => { res.json({ ok: true }); });
       },
     });
     const supplied = await request(app).get(path).set("Authorization", "Bearer admin-token");

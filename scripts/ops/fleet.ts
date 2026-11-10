@@ -702,12 +702,12 @@ export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRe
           (args.flags["idempotency-key"] !== undefined && !idempotencyKey)) {
           throw new Error("gw replace-computer requires exactly --owner-uid=<uid> and optional --idempotency-key and --apply");
         }
-        return withIdempotency({ method: "POST", path: `/api/admin/customers/${encodeURIComponent(uid)}/computer/replace`, body: force ? { force: true, acceptBootDataLoss: true } : {} });
+        return withIdempotency({ method: "POST", path: `/api/admin/users/${encodeURIComponent(uid)}/vm/replace`, body: force ? { force: true, acceptBootDataLoss: true } : {} });
       }
       const target = resolveFleetGatewayTarget(args, "gw replace-computer");
       return {
         method: "POST",
-        path: `/api/admin/gateways/${target.gatewayId}/computer/replace`,
+        path: `/api/admin/gateways/${target.gatewayId}/vm/replace`,
         body: {},
         ...(target.idempotencyKey ? { idempotencyKey: target.idempotencyKey } : {}),
       };

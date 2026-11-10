@@ -184,7 +184,7 @@ function requestedComputer(req, key) {
     return key === "gatewayId" ? { gatewayId: id } : { ownerUid: id, ...(force ? { force: true } : {}) };
 }
 export function addAdminComputerRoutes(router, deps) {
-    for (const [path, key] of [["/gateways/:id/computer/replace", "gatewayId"], ["/customers/:uid/computer/replace", "ownerUid"]]) {
+    for (const [path, key] of [["/gateways/:id/vm/replace", "gatewayId"], ["/users/:uid/vm/replace", "ownerUid"]]) {
         router.post(path, async (req, res, next) => {
             try {
                 const actor = req;

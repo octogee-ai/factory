@@ -2,7 +2,7 @@ import { migrationCancellationDeferred } from "./fleet-state.js";
 import { readSharedSourceRecoveryAuthority, readSharedSourceRecoverySupersession, SharedSourceRecoveryConflict } from "./shared-source-recovery.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { isOperationAuditRecord, isOperationAuditRow, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayControlState, isValidNewGatewayId, isGatewayClass, isGatewayProfile, resolveGatewayClass, resolveGatewayImageProfile, resolveGatewayRuntime, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
+import { isOperationAuditRecord, isOperationAuditRow, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayControlState, isValidNewGatewayId, isGatewayClass, isGatewayProfile, resolveGatewayClass, resolveGatewayImageProfile, resolveGatewayRuntime, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
 import { deploymentTargetsForEnvironment } from "./deployment-environment.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS, } from "@octogee/shared/types/platform-config";
 import { accountAllowsInteractiveAccess, } from "@octogee/shared/types/account-lifecycle";
@@ -115,6 +115,15 @@ export function resolveFleetNamespace(env = process.env) {
     return typeof ns === "string" && ns.length > 0 ? ns : "octogee";
 }
 export const ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE = "shared pool rides the platform release; deploy the platform instead";
+function adminGatewayClass(gatewayClass) {
+    return gatewayClass === "builder" ? "isolated" : "shared";
+}
+function isAdminGatewayClass(value) {
+    return value === "shared" || value === "isolated";
+}
+function withAdminGatewayClass(gateway) {
+    return { ...gateway, gatewayClass: adminGatewayClass(gateway.gatewayClass) };
+}
 function sharedGatewayAutoscalingOf(config) {
     const autoscaling = config === null
         ? parseSharedGatewayAutoscalingConfig(undefined)
@@ -519,7 +528,7 @@ function buildOnboardingPlacementResponse(opts) {
             .flatMap((customer) => customer.warnings);
         return {
             gatewayId,
-            gatewayClass,
+            gatewayClass: adminGatewayClass(gatewayClass),
             desiredStatus,
             status,
             imageTag: projectImageTag(heartbeat ?? {}, glmDoc),
@@ -579,10 +588,13 @@ function buildOnboardingPlacementResponse(opts) {
         config: {
             defaultGatewayId,
             sharedGatewayIds: [...opts.config.sharedGatewayIds],
-            sharedGatewayAutoscaling: opts.config.sharedGatewayAutoscaling,
+            sharedGatewayAutoscaling: {
+                enabled: opts.config.sharedGatewayAutoscaling.enabled,
+                usersPerGateway: opts.config.sharedGatewayAutoscaling.buildersPerGateway,
+            },
         },
         gateways,
-        customers,
+        users: customers.map(({ uid, slug, ...user }) => ({ ...user, id: uid, name: slug })),
         driftSummary,
         warnings,
         generatedAt: new Date().toISOString(),
@@ -871,7 +883,8 @@ export function projectGatewaySummary(doc, glmDoc, now) {
         desiredStatus,
         imageTag: projectImageTag(data, glmDoc),
         openclawVersion: projectOpenclawVersion(data, glmDoc),
-        mountedCustomers: Array.isArray(data.mountedCustomers) ? data.mountedCustomers : [],
+        mountedUsers: Array.isArray(data.mountedCustomers) ? data.mountedCustomers : [],
+        ownerId: asStringOrNull(glmDoc?.ownerUid),
         lastHeartbeatAt: toIso(data.lastHeartbeatAt),
         heartbeatAgeMs: ageMsOrNull(toMillis(data.lastHeartbeatAt), now),
         startedAt: toIso(data.startedAt),
@@ -1162,7 +1175,7 @@ function rollupFleetStats(gateways) {
             unreachable++;
         else if (g.status === "ready")
             ready++;
-        customersMounted += g.mountedCustomers.length;
+        customersMounted += g.mountedUsers.length;
         fleetMonthlyUsd += g.sizing.monthlyCostUsd.compute;
         fleetOnDemandUsd += g.sizing.monthlyCostUsd.onDemandCompute;
         const entry = byTier[g.sizing.tier] ?? {
@@ -1435,12 +1448,12 @@ function validateAddGatewayProfile(body) {
             },
         };
     }
-    if (body.gatewayClass !== undefined && !isGatewayClass(body.gatewayClass)) {
+    if (body.gatewayClass !== undefined && !isAdminGatewayClass(body.gatewayClass)) {
         return {
             error: {
                 status: 400,
                 body: {
-                    error: `gatewayClass must be one of: ${GATEWAY_CLASSES.join(", ")}`,
+                    error: "gatewayClass must be one of: shared, isolated",
                     got: body.gatewayClass,
                 },
             },
@@ -1460,7 +1473,7 @@ function validateAddGatewayProfile(body) {
     return {
         ok: {
             ...(body.profile ? { profile: body.profile } : {}),
-            ...(body.gatewayClass ? { gatewayClass: body.gatewayClass } : {}),
+            ...(body.gatewayClass ? { gatewayClass: body.gatewayClass === "isolated" ? "builder" : "shared" } : {}),
             ...(body.imageProfile ? { imageProfile: body.imageProfile } : {}),
         },
     };
@@ -1487,7 +1500,7 @@ function validateSharedGatewayCreate(body, gatewayClass) {
         return {
             status: 400,
             body: {
-                error: "Builder gateways are created by the disposable lifecycle",
+                error: "isolated gateways are created by the disposable lifecycle",
             },
         };
     }
@@ -1669,7 +1682,9 @@ function shapeValidOperationAuditHistoryRecord(id, data) {
         idempotencyKey: data.idempotencyKey,
         mutationFingerprint: data.mutationFingerprint,
         mutation: data.mutation,
+        kind: data.mutation.kind,
         actor: data.actor,
+        createdBy: data.actor,
         forced: data.forced,
         what: data.what,
         why: data.why,
@@ -1724,6 +1739,43 @@ async function listUnresolvedOperationDocs(store, limit) {
     const newestFirst = (operations) => operations.sort((a, b) => createdAt(b) - createdAt(a));
     const inFlightCapped = newestFirst([...inFlight]).slice(0, limit);
     return operationDocs(newestFirst([...pointedFailures, ...inFlightCapped]));
+}
+const JOURNAL_STATUS_FILTERS = [
+    "pending",
+    "running",
+    "succeeded",
+    "failed",
+    "rolled-back",
+    "recorded",
+    "in-progress",
+    "completed",
+];
+const JOURNAL_SCAN_PAGE_SIZE = 100;
+function isJournalStatusFilter(value) {
+    return JOURNAL_STATUS_FILTERS.includes(value);
+}
+async function listJournalDocsWithStatus(store, status, limit) {
+    const matching = [];
+    let after = null;
+    do {
+        const page = await store.journal.listRecent(after === null ? { limit: JOURNAL_SCAN_PAGE_SIZE } : { limit: JOURNAL_SCAN_PAGE_SIZE, after });
+        for (const record of page.items) {
+            if (record.status !== status)
+                continue;
+            matching.push(record);
+            if (matching.length === limit)
+                return operationDocs(matching);
+        }
+        after = page.next;
+    } while (after !== null);
+    return operationDocs(matching);
+}
+async function listOperationDocsForStatus(store, status, limit) {
+    if (status === undefined)
+        return operationDocs((await store.journal.listRecent({ limit })).items);
+    if (status === "unresolved")
+        return listUnresolvedOperationDocs(store, limit);
+    return listJournalDocsWithStatus(store, status, limit);
 }
 export function shapeOperationsHistoryRecord(id, data) {
     if (isOperationAuditRow(data) && !isOperationAuditRecord(data)) {
@@ -3047,7 +3099,7 @@ export function addAdminFleetRoutes(router, deps) {
         input.res.status(acceleration.status).json(acceleration.body);
         return true;
     }
-    router.post("/customer/:uid/delete", async (req, res, next) => {
+    router.post("/users/:uid/delete", async (req, res, next) => {
         try {
             const uid = req.params.uid;
             const body = (req.body ?? {});
@@ -3095,8 +3147,9 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    router.get("/gateways", async (_req, res, next) => {
+    router.get("/gateways", async (req, res, next) => {
         try {
+            const includeRetired = req.query.all === "true";
             const [snapshot, sharedPoolConfig] = await Promise.all([
                 readFleetSnapshot(store),
                 store.transaction({ label: "admin.fleet.gatewaysSharedPool", readOnly: true }, readSharedGatewayPoolConfigInStore),
@@ -3133,16 +3186,13 @@ export function addAdminFleetRoutes(router, deps) {
             const gatewayIds = new Set(glmByGatewayId.keys());
             const gatewayInputs = [...gatewayIds].flatMap((gatewayId) => {
                 const glmDoc = glmByGatewayId.get(gatewayId);
-                if (projectDesiredStatus(glmDoc) === "retired" &&
-                    !visibleRetiredGatewayIds.has(gatewayId)) {
+                const retired = projectDesiredStatus(glmDoc) === "retired";
+                const retiredButListed = retired && (includeRetired || visibleRetiredGatewayIds.has(gatewayId));
+                if (retired && !retiredButListed)
                     return [];
-                }
                 const doc = effectiveHeartbeatDoc(gatewayId, glmDoc);
-                if (!doc &&
-                    !shouldProjectDesiredOnlyGateway(glmDoc) &&
-                    !visibleRetiredGatewayIds.has(gatewayId)) {
+                if (!doc && !shouldProjectDesiredOnlyGateway(glmDoc) && !retiredButListed)
                     return [];
-                }
                 return [{ doc: doc ?? syntheticGatewayDoc(gatewayId), glmDoc }];
             });
             const summaries = gatewayInputs.map(({ doc, glmDoc }) => projectGatewaySummary(doc, glmDoc, now));
@@ -3169,7 +3219,7 @@ export function addAdminFleetRoutes(router, deps) {
                     sharedGatewayIds.has(asStringOrNull(resolved.openclaw.gatewayId) ?? ""));
             }).length;
             res.json({
-                gateways,
+                gateways: gateways.map(withAdminGatewayClass),
                 builderRuntimes: builderRuntimeViews,
                 disposableCapacity: {
                     ...projectDisposableFleetCapacity(gateways, builderRuntimeViews, parkedBuilders),
@@ -3184,7 +3234,7 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    router.get("/onboarding-placement", async (_req, res, next) => {
+    router.get("/placement", async (_req, res, next) => {
         try {
             res.json(await readAdminOnboardingPlacementResponse(store, accounts));
         }
@@ -3192,12 +3242,17 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    router.patch("/onboarding-placement/autoscaling", async (req, res, next) => {
+    router.patch("/placement/autoscaling", async (req, res, next) => {
         try {
-            const autoscaling = parseSharedGatewayAutoscalingConfig(req.body);
+            const autoscaling = isPlainRecord(req.body)
+                ? parseSharedGatewayAutoscalingConfig({
+                    enabled: req.body.enabled,
+                    buildersPerGateway: req.body.usersPerGateway,
+                })
+                : null;
             if (autoscaling === null) {
                 res.status(400).json({
-                    error: "enabled and buildersPerGateway must form a valid shared pool autoscaling config",
+                    error: "enabled and usersPerGateway must form a valid shared pool autoscaling config",
                 });
                 return;
             }
@@ -3236,8 +3291,8 @@ export function addAdminFleetRoutes(router, deps) {
     async (req, res, next) => {
         try {
             const body = req.body;
-            const uids = Array.isArray(body.uids)
-                ? body.uids.filter((uid) => typeof uid === "string" && uid.length > 0)
+            const uids = Array.isArray(body.userIds)
+                ? body.userIds.filter((uid) => typeof uid === "string" && uid.length > 0)
                 : [];
             const toGatewayId = asStringOrNull(body.toGatewayId) ?? asStringOrNull(body.targetGatewayId);
             const sourceGatewayId = asStringOrNull(body.sourceGatewayId);
@@ -3246,7 +3301,7 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             if (uids.length === 0) {
-                res.status(400).json({ error: "uids must contain at least one uid" });
+                res.status(400).json({ error: "userIds must contain at least one id" });
                 return;
             }
             // Registration is either doc; readiness comes from the relocated
@@ -3357,7 +3412,7 @@ export function addAdminFleetRoutes(router, deps) {
         }
         return gateways;
     }
-    router.get("/customer-distribution", async (_req, res, next) => {
+    router.get("/user-distribution", async (_req, res, next) => {
         try {
             const [roots, runtimes, builders, accountsByUid] = await Promise.all([
                 store.gateways.roots.list(),
@@ -3448,9 +3503,9 @@ export function addAdminFleetRoutes(router, deps) {
                 .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
                 .slice(0, 20);
             res.json({
-                mountedCustomers,
+                mountedUsers: mountedCustomers,
                 recentOperations,
-                control: projectGatewayControl(runtime.root, runtime.runtime ? { ...runtime.runtime } : undefined),
+                control: withAdminGatewayClass(projectGatewayControl(runtime.root, runtime.runtime ? { ...runtime.runtime } : undefined)),
                 generatedAt: new Date().toISOString(),
             });
         }
@@ -3458,7 +3513,7 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    router.post("/customers/:uid/assign", 
+    router.post("/users/:uid/assign", 
     // eslint-disable-next-line complexity -- linear request validation and one repair fast-path; each branch returns its own operator-facing response.
     async (req, res, next) => {
         try {
@@ -3569,7 +3624,7 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    router.post("/customers/:uid/activation-lease/cancel", async (req, res, next) => {
+    router.post("/users/:uid/activation-lease/cancel", async (req, res, next) => {
         try {
             const body = isPlainRecord(req.body) ? req.body : {};
             const allowed = new Set(["leaseId", "generation"]);
@@ -3630,7 +3685,7 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    router.post("/customers/:uid/activation-lease/terminate", async (req, res, next) => {
+    router.post("/users/:uid/activation-lease/terminate", async (req, res, next) => {
         try {
             const body = isPlainRecord(req.body) ? req.body : {};
             const allowed = new Set(["leaseId", "generation"]);
@@ -3687,7 +3742,7 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    router.post("/customers/:uid/activation-lease/return", async (req, res, next) => {
+    router.post("/users/:uid/activation-lease/return", async (req, res, next) => {
         try {
             const body = isPlainRecord(req.body) ? req.body : {};
             const allowed = new Set(["leaseId", "generation"]);
@@ -3760,7 +3815,7 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    router.post("/customers/:uid/activation-lease/return/retry", async (req, res, next) => {
+    router.post("/users/:uid/activation-lease/return/retry", async (req, res, next) => {
         try {
             const body = isPlainRecord(req.body) ? req.body : {};
             if (Object.keys(body).length !== 1 ||
@@ -3814,7 +3869,7 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    router.post("/customers/:uid/activation-lease", async (req, res, next) => {
+    router.post("/users/:uid/activation-lease", async (req, res, next) => {
         try {
             const uid = req.params.uid;
             const actor = req;
@@ -4078,7 +4133,7 @@ export function addAdminFleetRoutes(router, deps) {
                 res.status(409).json({
                     error: "gateway still has mounted customers; migrate them off before retiring",
                     gatewayId: id,
-                    mountedCustomers: mounted,
+                    mountedUsers: mounted,
                 });
                 return;
             }
@@ -4437,7 +4492,7 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    router.get("/customers/by-slug/:slug", async (req, res, next) => {
+    router.get("/user-by-slug/:slug", async (req, res, next) => {
         try {
             const slug = req.params.slug;
             const builder = await store.builders.records.findBySlug(slug);
@@ -4455,7 +4510,7 @@ export function addAdminFleetRoutes(router, deps) {
         const operation = (await inFlightOperationsForUid(store, uid)).find(isInFlightCustomerMigration);
         return operation ? { id: operation.id } : null;
     }
-    router.patch("/customers/:uid/placement", async (req, res, next) => {
+    router.patch("/users/:uid/placement", async (req, res, next) => {
         try {
             const command = (req.body ?? {});
             const park = command.managedBy === "operator" && command.gatewayId === null;
@@ -4517,7 +4572,7 @@ export function addAdminFleetRoutes(router, deps) {
             next(error);
         }
     });
-    router.post("/customers/:uid/migrate", async (req, res, next) => {
+    router.post("/users/:uid/migrate", async (req, res, next) => {
         try {
             const uid = req.params.uid;
             const body = req.body;
@@ -4610,7 +4665,7 @@ export function addAdminFleetRoutes(router, deps) {
     // migrate op is pending/running OR the durable roster state is not "serving"
     // (a terminal failed roll can leave the customer quiescing with no live op).
     // Never destructive beyond the placement: the user + workspace stay put.
-    router.post("/customers/:uid/unassign", async (req, res, next) => {
+    router.post("/users/:uid/unassign", async (req, res, next) => {
         try {
             const uid = req.params.uid;
             const userBefore = await store.builders.records.get(uid);
@@ -4785,13 +4840,14 @@ export function addAdminFleetRoutes(router, deps) {
         try {
             const limit = Math.min(100, Math.max(1, parseInt(req.query.limit ?? "25", 10)));
             const status = req.query.status;
-            if (status !== undefined && status !== "unresolved") {
-                res.status(400).json({ error: "status must be omitted or \"unresolved\"", got: status });
+            if (status !== undefined && status !== "unresolved" && !isJournalStatusFilter(status)) {
+                res.status(400).json({
+                    error: `status must be omitted, "unresolved", or one of: ${JOURNAL_STATUS_FILTERS.join(", ")}`,
+                    got: status,
+                });
                 return;
             }
-            const docs = status === "unresolved"
-                ? await listUnresolvedOperationDocs(store, limit)
-                : operationDocs((await store.journal.listRecent({ limit })).items);
+            const docs = await listOperationDocsForStatus(store, status, limit);
             const operations = docs.map((doc) => shapeOperationsHistoryRecord(doc.id, doc.data()));
             res.json({ operations, generatedAt: new Date().toISOString() });
         }

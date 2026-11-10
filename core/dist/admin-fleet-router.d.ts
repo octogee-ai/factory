@@ -132,7 +132,8 @@ export declare function projectGatewaySummary(doc: FirestoreDocLike, glmDoc: Glm
     desiredStatus: AdminGatewayDesiredStatus | null;
     imageTag: string | null;
     openclawVersion: string | null;
-    mountedCustomers: unknown[];
+    mountedUsers: unknown[];
+    ownerId: string | null;
     handoffProgress?: Record<string, MigrationProgressRecord[]>;
     lastHeartbeatAt: string | null;
     heartbeatAgeMs: number | null;

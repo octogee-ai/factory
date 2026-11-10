@@ -380,7 +380,7 @@ export function addAdminCustomerRoutes(router, deps) {
     const { db, store, logger, FieldValue } = deps;
     const accounts = firestoreBuilderAccountReader(db);
     const directory = { db, store, accounts };
-    router.get("/customer-archives", async (_req, res, next) => {
+    router.get("/user-archives", async (_req, res, next) => {
         try {
             const archives = (await readAllArchives(store)).map((archive) => projectAnonymousArchive(archive.id, { ...archive.record, archivedAt: archive.archivedAt }));
             const summary = archives.reduce((total, archive) => ({
@@ -395,7 +395,7 @@ export function addAdminCustomerRoutes(router, deps) {
             next(e);
         }
     });
-    router.get("/customers/:uid/broker-diagnostics", async (req, res, next) => {
+    router.get("/users/:uid/broker-diagnostics", async (req, res, next) => {
         try {
             const uid = req.params.uid;
             const days = Math.min(30, Math.max(1, parseInt(req.query.days ?? "14", 10)));
@@ -437,7 +437,7 @@ export function addAdminCustomerRoutes(router, deps) {
             next(e);
         }
     });
-    router.get("/customers", async (req, res, next) => {
+    router.get("/users", async (req, res, next) => {
         try {
             const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, parseInt(req.query.pageSize ?? `${DEFAULT_PAGE_SIZE}`, 10)));
             const cursor = req.query.cursor || null;
@@ -468,7 +468,7 @@ export function addAdminCustomerRoutes(router, deps) {
                 next(e);
         }
     });
-    router.get("/customers/stats", async (_req, res, next) => {
+    router.get("/users/stats", async (_req, res, next) => {
         try {
             let totalCustomers = 0;
             let incompleteProvisioning = 0;
@@ -496,7 +496,7 @@ export function addAdminCustomerRoutes(router, deps) {
             next(e);
         }
     });
-    router.get("/customer/:uid", 
+    router.get("/users/:uid", 
     // eslint-disable-next-line complexity -- response-shape builder; cyclomatic count tracks customer schema's optional-field depth, not branching logic. Splitting into sub-builders would scatter the response contract.
     async (req, res, next) => {
         try {
@@ -618,7 +618,7 @@ export function addAdminCustomerRoutes(router, deps) {
             next(e);
         }
     });
-    router.get("/customer/:uid/usage", async (req, res, next) => {
+    router.get("/users/:uid/usage", async (req, res, next) => {
         try {
             const uid = req.params.uid;
             const days = Math.max(1, Math.min(365, parseInt(req.query.days ?? "30", 10)));
@@ -688,7 +688,7 @@ export function addAdminCustomerRoutes(router, deps) {
             next(e);
         }
     });
-    router.get("/customer/:uid/placements", async (req, res, next) => {
+    router.get("/users/:uid/placements", async (req, res, next) => {
         try {
             const uid = req.params.uid;
             const builder = await store.builders.records.get(uid);
@@ -713,7 +713,7 @@ export function addAdminCustomerRoutes(router, deps) {
             next(e);
         }
     });
-    router.get("/customer/:uid/audit", async (req, res, next) => {
+    router.get("/users/:uid/audit", async (req, res, next) => {
         try {
             const uid = req.params.uid;
             const limit = Math.max(1, Math.min(200, parseInt(req.query.limit ?? "50", 10)));
@@ -739,7 +739,7 @@ export function addAdminCustomerRoutes(router, deps) {
             next(e);
         }
     });
-    router.post("/customer/:uid/ops", async (req, res, next) => {
+    router.post("/users/:uid/ops", async (req, res, next) => {
         try {
             const uid = req.params.uid;
             const { action, value } = (req.body ?? {});

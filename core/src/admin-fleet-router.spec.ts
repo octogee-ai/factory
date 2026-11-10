@@ -118,7 +118,7 @@ describe("shapeOperationsHistoryRecord", () => {
       lifecycleStage: "action-completed",
       idempotencyKey: "key",
       mutationFingerprint: "fingerprint",
-      mutation: { action: "move-alias" },
+      mutation: { kind: "move-alias" },
       actor: "fleet-cli:chris",
       forced: true,
       what: "move release alias",
@@ -140,8 +140,10 @@ describe("shapeOperationsHistoryRecord", () => {
       lifecycleStage: "action-completed",
       idempotencyKey: "key",
       mutationFingerprint: "fingerprint",
-      mutation: { action: "move-alias" },
+      mutation: { kind: "move-alias" },
+      kind: "move-alias",
       actor: "fleet-cli:chris",
+      createdBy: "fleet-cli:chris",
       forced: true,
       what: "move release alias",
       why: "candidate verified in TEST",
@@ -1014,6 +1016,103 @@ function runtimeDoc(
   };
 }
 
+describe("the fleet command line contract", () => {
+  const isolatedRoot = durableGatewayRoot("iso-ada", {
+    gatewayClass: "builder",
+    imageProfile: "builder",
+    profile: "builder",
+    ownerUid: "uid-ada",
+    builderSlug: "ada",
+  });
+
+  it("names isolated gateways and their owners on the gateway list", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-a" },
+      users: {},
+      gateways: { "iso-ada": isolatedRoot },
+    });
+    const res = await request(app).get("/gateways").expect(200);
+    const byId = new Map(res.body.gateways.map((gateway: { gatewayId: string }) => [gateway.gatewayId, gateway]));
+    expect(byId.get("iso-ada")).toMatchObject({ gatewayClass: "isolated", ownerId: "uid-ada" });
+    expect(byId.get("shared-a")).toMatchObject({ gatewayClass: "shared", ownerId: null, mountedUsers: [] });
+  });
+
+  it("lists retired gateways only when asked for all of them", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-a" },
+      users: {},
+      gateways: {
+        gone: durableGatewayRoot("gone", { desiredStatus: "retired" }),
+        "still-reporting": durableGatewayRoot("still-reporting", { desiredStatus: "retired", liveRelease: 1 }),
+      },
+      glmGateways: {
+        "still-reporting": {
+          docKind: "runtime",
+          gatewayId: "still-reporting",
+          release: 1,
+          lifecycle: "serving",
+          helm: { imageRepository: "registry.example/gateway", imageTag: "1234567" },
+          heartbeat: { status: "ready", mountedCustomers: [], version: "1234567", lastHeartbeatAt: 1_000, startedAt: 500 },
+          lastError: { message: null, at: null },
+        },
+      },
+    });
+    const ids = (res: { body: { gateways: Array<{ gatewayId: string }> } }) =>
+      res.body.gateways.map((gateway) => gateway.gatewayId);
+    expect(ids(await request(app).get("/gateways").expect(200))).toEqual(["shared-a"]);
+    expect(ids(await request(app).get("/gateways?all=true").expect(200)).sort()).toEqual(["gone", "shared-a", "still-reporting"]);
+  });
+
+  it("names users by id and name on the placement directory", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-a" },
+      users: {
+        "uid-ada": {
+          username: "ada",
+          email: "ada@example.com",
+          provisioning: { status: "complete", openclaw: { slug: "ada", gatewayId: "shared-a" } },
+        },
+      },
+    });
+    const res = await request(app).get("/placement").expect(200);
+    expect(res.body).not.toHaveProperty("customers");
+    expect(res.body.users[0]).toMatchObject({ id: "uid-ada", name: "ada", assignedGatewayId: "shared-a" });
+    expect(res.body.users[0]).not.toHaveProperty("uid");
+    expect(res.body.config.sharedGatewayAutoscaling).toHaveProperty("usersPerGateway");
+    expect(res.body.gateways[0]).toMatchObject({ gatewayId: "shared-a", gatewayClass: "shared" });
+  });
+
+  it("refuses autoscaling that does not name usersPerGateway validly", async () => {
+    const { app } = mkAdminFleetRouteApp({ config: { defaultGatewayId: "shared-a" }, users: {} });
+    await request(app).patch("/placement/autoscaling").send([]).expect(400);
+    await request(app).patch("/placement/autoscaling").send({ enabled: true, usersPerGateway: "many" }).expect(400);
+  });
+
+  it("refuses the internal gateway class name when adding a gateway", async () => {
+    const { app } = mkAdminFleetRouteApp({ config: { defaultGatewayId: "shared-a" }, users: {} });
+    const res = await request(app).post("/gateways").send({
+      gatewayId: "new-gateway",
+      imageRepository: "registry.example/gateway",
+      imageTag: "abc1234",
+      gatewayClass: "builder",
+    }).expect(400);
+    expect(res.body.error).toContain("shared, isolated");
+  });
+
+  it("requires userIds on a bulk migration", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-a" },
+      users: {},
+      glmGateways: { "shared-a": { docKind: "runtime", gatewayId: "shared-a", heartbeat: { status: "ready" } } },
+    });
+    const res = await request(app)
+      .post("/gateway-migrations/bulk")
+      .send({ uids: ["uid-ada"], toGatewayId: "shared-a" })
+      .expect(400);
+    expect(res.body.error).toContain("userIds");
+  });
+});
+
 describe("fleet gateway projection", () => {
   it("counts an operator-held source as parked without a failed active-return row", async () => {
     const { app } = mkAdminFleetRouteApp({ config: { defaultGatewayId: "shared-blue" }, users: {
@@ -1560,13 +1659,13 @@ describe("fleet gateway projection", () => {
     const fleet = await request(app).get("/gateways").expect(200);
     expect(fleet.body.gateways).toEqual([]);
 
-    const onboarding = await request(app).get("/onboarding-placement").expect(200);
+    const onboarding = await request(app).get("/placement").expect(200);
     expect(onboarding.body.warnings).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: "default-gateway-missing" })]),
     );
-    expect(onboarding.body.customers).toEqual([
+    expect(onboarding.body.users).toEqual([
       expect.objectContaining({
-        uid: "uid-alice",
+        id: "uid-alice",
         mountedGatewayId: null,
         driftState: "missing-gateway",
       }),
@@ -1615,24 +1714,24 @@ describe("fleet gateway projection", () => {
       expect.objectContaining({
         gatewayId: "default",
         status: "ready",
-        mountedCustomers: ["alice"],
+        mountedUsers: ["alice"],
       }),
     ]);
 
-    const onboarding = await request(app).get("/onboarding-placement").expect(200);
+    const onboarding = await request(app).get("/placement").expect(200);
     expect(onboarding.body.warnings).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ code: "default-gateway-missing" })]),
     );
-    expect(onboarding.body.customers).toEqual([
+    expect(onboarding.body.users).toEqual([
       expect.objectContaining({
-        uid: "uid-alice",
+        id: "uid-alice",
         assignedGatewayId: "default",
         mountedGatewayId: "default",
         driftState: "healthy",
       }),
     ]);
 
-    const distribution = await request(app).get("/customer-distribution").expect(200);
+    const distribution = await request(app).get("/user-distribution").expect(200);
     expect(distribution.body.perGateway).toEqual([
       expect.objectContaining({
         gatewayId: "default",
@@ -1643,7 +1742,7 @@ describe("fleet gateway projection", () => {
     ]);
 
     const details = await request(app).get("/gateways/default/details").expect(200);
-    expect(details.body.mountedCustomers).toEqual([
+    expect(details.body.mountedUsers).toEqual([
       expect.objectContaining({ uid: "uid-alice", slug: "alice" }),
     ]);
   });
@@ -1673,7 +1772,7 @@ describe("fleet gateway projection", () => {
       },
     });
 
-    const distribution = await request(app).get("/customer-distribution").expect(200);
+    const distribution = await request(app).get("/user-distribution").expect(200);
 
     expect(
       distribution.body.perGateway.map((row: { gatewayId: string }) => row.gatewayId),
@@ -1844,7 +1943,7 @@ describe("fleet gateway projection", () => {
     });
 
     await request(app)
-      .post("/customers/uid-alice/activation-lease/terminate")
+      .post("/users/uid-alice/activation-lease/terminate")
       .send({ leaseId: "lease-1", generation: 3 })
       .expect(409);
 
@@ -1883,7 +1982,7 @@ describe("manual disposable runtime return", () => {
     });
 
     await request(app)
-      .post("/customers/uid-alice/activation-lease/cancel")
+      .post("/users/uid-alice/activation-lease/cancel")
       .send({ leaseId: "lease-1", generation: 3 })
       .expect(200, {
         status: "cancelled",
@@ -1927,7 +2026,7 @@ describe("manual disposable runtime return", () => {
     });
 
     await request(app)
-      .post("/customers/uid-alice/activation-lease/cancel")
+      .post("/users/uid-alice/activation-lease/cancel")
       .send({ leaseId: "lease-1", generation: 3 })
       .expect(409);
 
@@ -1963,11 +2062,11 @@ describe("manual disposable runtime return", () => {
     });
 
     await request(app)
-      .post("/customers/uid-alice/activation-lease/return")
+      .post("/users/uid-alice/activation-lease/return")
       .send({ leaseId: "lease-1", generation: 3 })
       .expect(202);
     const duplicate = await request(app)
-      .post("/customers/uid-alice/activation-lease/return")
+      .post("/users/uid-alice/activation-lease/return")
       .send({ leaseId: "lease-1", generation: 3 })
       .expect(200);
 
@@ -2114,7 +2213,7 @@ describe("manual disposable runtime return", () => {
     });
 
     await request(app)
-      .post("/customers/uid-alice/activation-lease/return/retry")
+      .post("/users/uid-alice/activation-lease/return/retry")
       .send({ operationId })
       .expect(expected);
 
@@ -2163,7 +2262,7 @@ describe("manual disposable runtime return", () => {
         input: { uid: "admin", fromGatewayId: source, toGatewayId: "shared-old", source: "builder-activation-lease" },
         steps: [{ name: "quiesce-source", status: "failed" }], error: "target cleanup unconfirmed" } },
     });
-    await request(app).post("/customers/admin/activation-lease/return/retry").send({ operationId }).expect(admitted ? 202 : 409);
+    await request(app).post("/users/admin/activation-lease/return/retry").send({ operationId }).expect(admitted ? 202 : 409);
     expect(requestNativeReturnSourceRecovery).toHaveBeenCalledWith({ uid: "admin", operationId, requestedAt: expect.any(Number), requestedBy: "unknown" });
     expect(state.operations[operationId]).toMatchObject({ status: "failed", rolledBack: false });
     expect(state.operations[operationId].schedulerHandoffReleased).toBeUndefined();
@@ -2233,7 +2332,7 @@ describe("manual disposable runtime return", () => {
     });
 
     await request(app)
-      .post("/customers/uid-alice/activation-lease/return/retry")
+      .post("/users/uid-alice/activation-lease/return/retry")
       .send({ operationId })
       .expect(409);
 
@@ -2266,11 +2365,11 @@ describe("manual disposable runtime return", () => {
     });
 
     await request(app)
-      .post("/customers/uid-alice/activation-lease/return")
+      .post("/users/uid-alice/activation-lease/return")
       .send({ leaseId: "lease-1", generation: 2 })
       .expect(409);
     await request(app)
-      .post("/customers/uid-alice/activation-lease/return")
+      .post("/users/uid-alice/activation-lease/return")
       .send({
         leaseId: "lease-1",
         generation: 3,
@@ -2333,11 +2432,11 @@ describe("manual disposable runtime return", () => {
     });
 
     await request(app)
-      .post("/customers/uid-alice/activation-lease/terminate")
+      .post("/users/uid-alice/activation-lease/terminate")
       .send({ leaseId: "lease-1", generation: 3 })
       .expect(202);
     await request(app)
-      .post("/customers/uid-alice/activation-lease/terminate")
+      .post("/users/uid-alice/activation-lease/terminate")
       .send({ leaseId: "lease-1", generation: 3 })
       .expect(200);
 
@@ -2391,7 +2490,7 @@ describe("onboarding placement (post-cohorts)", () => {
       },
     });
 
-    const res = await request(app).get("/onboarding-placement").expect(200);
+    const res = await request(app).get("/placement").expect(200);
 
     expect(res.body.warnings).toEqual(
       expect.arrayContaining([
@@ -2439,9 +2538,9 @@ describe("onboarding placement (post-cohorts)", () => {
       },
     });
 
-    const res = await request(app).get("/onboarding-placement").expect(200);
+    const res = await request(app).get("/placement").expect(200);
 
-    expect(res.body.customers.map((customer: { uid: string }) => customer.uid)).toEqual([
+    expect(res.body.users.map((user: { id: string }) => user.id)).toEqual([
       "uid-active",
     ]);
     expect(res.body.warnings).toEqual(
@@ -2465,12 +2564,12 @@ describe("onboarding placement (post-cohorts)", () => {
       gateways: { "gw-builder": builderGatewayRoot("gw-builder", "uid-owner", "owner") },
     });
 
-    const res = await request(app).get("/onboarding-placement").expect(200);
+    const res = await request(app).get("/placement").expect(200);
 
     expect(res.body.config).toEqual({
       defaultGatewayId: null,
       sharedGatewayIds: [],
-      sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 10 },
+      sharedGatewayAutoscaling: { enabled: true, usersPerGateway: 10 },
     });
     expect(res.body.warnings).toEqual(
       expect.arrayContaining([
@@ -2508,8 +2607,8 @@ describe("onboarding placement (post-cohorts)", () => {
       },
     });
 
-    const res = await request(app).get("/onboarding-placement").expect(200);
-    const customer = res.body.customers.find((c: { uid: string }) => c.uid === "uid-a");
+    const res = await request(app).get("/placement").expect(200);
+    const customer = res.body.users.find((user: { id: string }) => user.id === "uid-a");
     expect(customer).toMatchObject({
       rosterState: "quiescing",
       rosterRevisionId: "default",
@@ -2552,13 +2651,13 @@ describe("onboarding placement (post-cohorts)", () => {
       },
     });
 
-    const res = await request(app).get("/onboarding-placement").expect(200);
+    const res = await request(app).get("/placement").expect(200);
     const draining = res.body.gateways.find(
       (gateway: { gatewayId: string }) => gateway.gatewayId === "shared-c",
     );
 
     expect(draining).toMatchObject({ assignedCount: 1, mountedCount: 1 });
-    expect(res.body.customers[0]).toMatchObject({
+    expect(res.body.users[0]).toMatchObject({
       assignedGatewayId: "shared-c",
       mountedGatewayId: "shared-c",
       rosterRevisionId: "shared-c",
@@ -2580,8 +2679,8 @@ describe("onboarding placement (post-cohorts)", () => {
       glmGateways: { default: { gatewayClass: "shared", desiredStatus: "running" } },
     });
 
-    const res = await request(app).get("/onboarding-placement").expect(200);
-    const customer = res.body.customers.find((c: { uid: string }) => c.uid === "uid-a");
+    const res = await request(app).get("/placement").expect(200);
+    const customer = res.body.users.find((user: { id: string }) => user.id === "uid-a");
     expect(customer).toMatchObject({
       rosterState: null,
       rosterRevisionId: null,
@@ -2599,23 +2698,23 @@ describe("onboarding placement (post-cohorts)", () => {
     });
 
     const response = await request(app)
-      .patch("/onboarding-placement/autoscaling")
-      .send({ enabled: false, buildersPerGateway: 6 })
+      .patch("/placement/autoscaling")
+      .send({ enabled: false, usersPerGateway: 6 })
       .expect(200);
 
     expect(state.config.sharedGatewayAutoscaling).toEqual({ enabled: false, buildersPerGateway: 6 });
     expect(response.body.config.sharedGatewayAutoscaling).toEqual({
       enabled: false,
-      buildersPerGateway: 6,
+      usersPerGateway: 6,
     });
 
     await request(app)
-      .patch("/onboarding-placement/autoscaling")
-      .send({ enabled: true, buildersPerGateway: 1 })
+      .patch("/placement/autoscaling")
+      .send({ enabled: true, usersPerGateway: 1 })
       .expect(400);
     await request(app)
-      .patch("/onboarding-placement/autoscaling")
-      .send({ enabled: "yes", buildersPerGateway: 4 })
+      .patch("/placement/autoscaling")
+      .send({ enabled: "yes", usersPerGateway: 4 })
       .expect(400);
   });
 
@@ -2638,12 +2737,12 @@ describe("onboarding placement (post-cohorts)", () => {
       },
     });
 
-    const res = await request(app).get("/onboarding-placement").expect(200);
+    const res = await request(app).get("/placement").expect(200);
 
     expect(res.body.config).toEqual({
       defaultGatewayId: "shared-1",
       sharedGatewayIds: ["shared-1", "shared-0", "shared-a"],
-      sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 10 },
+      sharedGatewayAutoscaling: { enabled: true, usersPerGateway: 10 },
     });
   });
 
@@ -2663,22 +2762,22 @@ describe("onboarding placement (post-cohorts)", () => {
       },
     });
 
-    const res = await request(app).get("/onboarding-placement").expect(200);
+    const res = await request(app).get("/placement").expect(200);
 
     expect(res.body.config).toEqual({
       defaultGatewayId: "gw-canary",
       sharedGatewayIds: ["gw-canary", "gw-default"],
-      sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 10 },
+      sharedGatewayAutoscaling: { enabled: true, usersPerGateway: 10 },
     });
     expect(res.body).not.toHaveProperty("overrides");
-    expect(res.body.customers[0]).not.toHaveProperty("overrideGatewayId");
+    expect(res.body.users[0]).not.toHaveProperty("overrideGatewayId");
 
     await request(app)
-      .put("/onboarding-placement/overrides/by-slug/alice")
+      .put("/placement/overrides/by-slug/alice")
       .send({ gatewayId: "gw-canary" })
       .expect(404);
 
-    await request(app).delete("/onboarding-placement/overrides/uid-alice").expect(404);
+    await request(app).delete("/placement/overrides/uid-alice").expect(404);
   });
 
   it("does not report pointer drift for an active disposable builder runtime outside onboarding placement", async () => {
@@ -2723,11 +2822,11 @@ describe("onboarding placement (post-cohorts)", () => {
       },
     });
 
-    const res = await request(app).get("/onboarding-placement").expect(200);
+    const res = await request(app).get("/placement").expect(200);
 
-    const customer = res.body.customers.find((c: { uid: string }) => c.uid === "uid-ceckert");
+    const customer = res.body.users.find((user: { id: string }) => user.id === "uid-ceckert");
     expect(customer).toMatchObject({
-      uid: "uid-ceckert",
+      id: "uid-ceckert",
       assignedGatewayId: "bender-blue",
       mountedGatewayId: "bender-blue",
       policyTargetGatewayId: "bender-blue",
@@ -2762,9 +2861,9 @@ describe("onboarding placement (post-cohorts)", () => {
       },
     });
 
-    const res = await request(app).get("/onboarding-placement").expect(200);
+    const res = await request(app).get("/placement").expect(200);
 
-    expect(res.body.customers[0]).toMatchObject({
+    expect(res.body.users[0]).toMatchObject({
       policyTargetGatewayId: "default-green",
       assignedGatewayId: "default-green",
       mountedGatewayId: "default-green",
@@ -2799,10 +2898,10 @@ describe("onboarding placement (post-cohorts)", () => {
       },
     });
 
-    const res = await request(app).get("/onboarding-placement").expect(200);
+    const res = await request(app).get("/placement").expect(200);
 
-    expect(res.body.customers[0]).toMatchObject({
-      uid: "uid-stale",
+    expect(res.body.users[0]).toMatchObject({
+      id: "uid-stale",
       policyTargetGatewayId: "default-blue",
       assignedGatewayId: "stale-builder",
       driftState: "pointer-drift",
@@ -3032,7 +3131,7 @@ describe("account deletion revokes connector grants at the provider first", () =
       history,
     );
 
-    await request(app).post("/customer/u2/delete").expect(202);
+    await request(app).post("/users/u2/delete").expect(202);
 
     expect(operationQueries).toEqual([{ uid: "u2", statuses: ["pending", "running"] }]);
   });
@@ -3046,7 +3145,7 @@ describe("account deletion revokes connector grants at the provider first", () =
       "glmOperations/restore-1": { kind: "migrate-customer", status, inputUid: "u1", input: { uid: "u1" } },
     });
 
-    const response = await request(app).post("/customers/u1/unassign");
+    const response = await request(app).post("/users/u1/unassign");
 
     expect(response.status).toBe(409);
     expect(response.body.error).toMatch(/restore/);
@@ -3062,18 +3161,18 @@ describe("account deletion revokes connector grants at the provider first", () =
     const { app, remaining, otherDocs } = makeDeleteApp({ u1: user }, {
       [path]: { uid: "u1", slug: "alice", gatewayId: "shared-1", source: "repair", state: "serving", epoch: 3 },
     });
-    await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
+    await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
     expect(remaining.u1.provisioning.openclaw.managedBy).toBe("operator");
     expect(remaining.u1.provisioning.openclaw.gatewayId).toBeUndefined();
     expect(remaining.u1.provisioning.openclaw.agentIds).toEqual(["octogee-alice-coach"]);
     expect(otherDocs[path]).toBeUndefined();
-    await request(app).patch("/customers/u1/placement").send({ managedBy: "cowboy" }).expect(200);
+    await request(app).patch("/users/u1/placement").send({ managedBy: "cowboy" }).expect(200);
     expect(remaining.u1.provisioning.openclaw.managedBy).toBe("cowboy");
   });
 
   it("releases an old provisioned parked Builder through the current placement eligibility gate", async () => {
     const { app, remaining } = makeDeleteApp({ u1: { username: "alice", provisioning: { openclaw: { managedBy: "operator", status: "complete" } } } });
-    await request(app).patch("/customers/u1/placement").send({ managedBy: "cowboy" }).expect(200);
+    await request(app).patch("/users/u1/placement").send({ managedBy: "cowboy" }).expect(200);
     expect(remaining.u1.provisioning.status).toBe("complete");
     expect(remaining.u1.provisioning.openclaw.managedBy).toBe("cowboy");
   });
@@ -3083,7 +3182,7 @@ describe("account deletion revokes connector grants at the provider first", () =
       "gateways/builder-alice": durableGatewayRoot("builder-alice", { gatewayClass: "builder", ownerUid: "u1", desiredStatus: "running" }),
       "gateways/builder-alice/assignments/u1": { uid: "u1", slug: "alice", gatewayId: "builder-alice", source: "repair", state: "serving", epoch: 3 },
     });
-    await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
+    await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
     expect(otherDocs["gateways/builder-alice"].desiredStatus).toBe("paused");
   });
 
@@ -3094,34 +3193,34 @@ describe("account deletion revokes connector grants at the provider first", () =
       "gateways/builder-alice": durableGatewayRoot("builder-alice", { gatewayClass: "builder", ownerUid: "u1", desiredStatus: "running" }),
       "gateways/builder-alice/assignments/u1": assignment,
     });
-    await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
+    await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
     expect(otherDocs["gateways/builder-alice"].desiredStatus).toBe("paused");
     expect(otherDocs["gateways/builder-alice/assignments/u1"]).toEqual(assignment);
     expect(remaining.u1.provisioning.openclaw.activationLease).toEqual(lease);
     expect(remaining.u1.provisioning.openclaw.gatewayId).toBe("builder-alice");
     expect(calls).not.toContain("delete:gateways/builder-alice/assignments/u1");
-    await request(app).patch("/customers/u1/placement").send({ managedBy: "cowboy" }).expect(200);
+    await request(app).patch("/users/u1/placement").send({ managedBy: "cowboy" }).expect(200);
     expect(otherDocs["gateways/builder-alice"].desiredStatus).toBe("running");
   });
 
   it("preserves the generation of a parked computer while holding its Shared coach offline", async () => {
     const lease = { leaseId: "parked", generation: 24, status: "parked", targetGatewayId: "builder-alice" };
     const { app, remaining } = makeDeleteApp({ u1: { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1", activationLease: lease } } } });
-    await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
+    await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
     expect(remaining.u1.provisioning.openclaw.activationLease).toEqual(lease);
   });
 
   it("requires a requested activation to settle before parking its source", async () => {
     const user = { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1", activationLease: { leaseId: "requested", generation: 25, status: "requested" } } } };
     const { app, remaining } = makeDeleteApp({ u1: user });
-    await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(409);
+    await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(409);
     expect(remaining.u1).toEqual(user);
   });
 
   it("refuses parking while a different allocated activation target still needs its lease", async () => {
     const user = { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1", activationLease: { leaseId: "lease-4", status: "provisioning", generation: 4, targetGatewayId: "builder-alice" } } } };
     const { app, remaining, otherDocs } = makeDeleteApp({ u1: user }, { "gateways/builder-alice": durableGatewayRoot("builder-alice", { gatewayClass: "builder", ownerUid: "u1", desiredStatus: "running" }) });
-    await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(409);
+    await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(409);
     expect(remaining.u1).toEqual(user);
     expect(otherDocs["gateways/builder-alice"].desiredStatus).toBe("running");
   });
@@ -3130,7 +3229,7 @@ describe("account deletion revokes connector grants at the provider first", () =
     const root = durableGatewayRoot("builder-alice", { gatewayClass: "builder", ownerUid: reason === "foreign-owner" ? "u2" : "u1", desiredStatus: "running", ...(reason === "runtime-fence" ? { runtimeRestartFence: { phase: "dispatched" } } : {}), ...(reason === "retirement" ? { retirementClaim: { phase: "claimed" } } : {}) });
     const user = { username: "alice", provisioning: { openclaw: { gatewayId: "builder-alice" } } };
     const { app, otherDocs, remaining } = makeDeleteApp({ u1: user }, { "gateways/builder-alice": root });
-    await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(409);
+    await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(409);
     expect(remaining.u1).toEqual(user);
     expect(otherDocs["gateways/builder-alice"]).toEqual(root);
   });
@@ -3138,21 +3237,21 @@ describe("account deletion revokes connector grants at the provider first", () =
   it.each(["pending", "running"])("refuses Park while a migration is %s", async status => {
     const user = { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1" } } };
     const { app, remaining } = makeDeleteApp({ u1: user }, { "glmOperations/move": { kind: "migrate-customer", status, inputUid: "u1" } });
-    await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(409);
+    await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(409);
     expect(remaining.u1).toEqual(user);
   });
 
   it("refuses Park while terminal migration custody still quiesces the roster", async () => {
     const user = { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1" } } };
     const { app, remaining } = makeDeleteApp({ u1: user }, { "gateways/shared-1/assignments/u1": { uid: "u1", slug: "alice", gatewayId: "shared-1", source: "repair", state: "quiescing", epoch: 3 } });
-    await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(409);
+    await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(409);
     expect(remaining.u1).toEqual(user);
   });
 
   it.each(["restoreFence", "sourceTransferFence"])("keeps the existing %s protection on the restored Park command", async fence => {
     const user = { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1", [fence]: { phase: "dispatched" } } } };
     const { app, remaining } = makeDeleteApp({ u1: user });
-    await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(409);
+    await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(409);
     expect(remaining.u1).toEqual(user);
   });
 
@@ -3160,7 +3259,7 @@ describe("account deletion revokes connector grants at the provider first", () =
     const { app, calls, remaining } = makeDeleteApp({
       u1: { username: "alice", provisioning: { openclaw: { restoreFence: { phase: "dispatched" }, gatewayId: "shared-1" } } },
     });
-    await request(app).post("/customer/u1/delete").expect(409);
+    await request(app).post("/users/u1/delete").expect(409);
     expect(calls).not.toContain("suspend-auth:u1");
     expect(calls).not.toContain("revoke:u1");
     expect(remaining.u1.accountLifecycle).toBeUndefined();
@@ -3175,7 +3274,7 @@ describe("account deletion revokes connector grants at the provider first", () =
       "glmOperations/restore-1": { kind: "migrate-customer", status, inputUid: "u1", input: { uid: "u1" } },
     });
 
-    const response = await request(app).post("/customers/u1/unassign");
+    const response = await request(app).post("/users/u1/unassign");
 
     expect(response.status).toBe(409);
     expect(response.body.error).toMatch(/source transfer/);
@@ -3189,7 +3288,7 @@ describe("account deletion revokes connector grants at the provider first", () =
     const { app, calls, remaining } = makeDeleteApp({
       u1: { username: "alice", provisioning: { openclaw: { sourceTransferFence: { phase: "dispatched" }, gatewayId: "shared-1" } } },
     });
-    await request(app).post("/customer/u1/delete").expect(409);
+    await request(app).post("/users/u1/delete").expect(409);
     expect(calls).not.toContain("suspend-auth:u1");
     expect(calls).not.toContain("revoke:u1");
     expect(remaining.u1.accountLifecycle).toBeUndefined();
@@ -3198,7 +3297,7 @@ describe("account deletion revokes connector grants at the provider first", () =
   it("schedules retention for a pre-provisioning account instead of deleting inline", async () => {
     const { app, calls } = makeDeleteApp({ u1: { email: "a@b.co" } });
 
-    const res = await request(app).post("/customer/u1/delete").expect(202);
+    const res = await request(app).post("/users/u1/delete").expect(202);
 
     expect(res.body).toMatchObject({ status: "deletion_scheduled", slug: null });
     expect(calls).toContain("suspend-auth:u1");
@@ -3210,7 +3309,7 @@ describe("account deletion revokes connector grants at the provider first", () =
       u2: { username: "acme", email: "c@d.co" },
     });
 
-    const res = await request(app).post("/customer/u2/delete").expect(202);
+    const res = await request(app).post("/users/u2/delete").expect(202);
 
     expect(res.body).toMatchObject({ status: "deletion_scheduled", slug: "acme" });
     expect(added).toEqual(expect.arrayContaining([
@@ -3227,8 +3326,8 @@ describe("account deletion revokes connector grants at the provider first", () =
     });
 
     const responses = await Promise.all([
-      request(app).post("/customer/u2/delete"),
-      request(app).post("/customer/u2/delete"),
+      request(app).post("/users/u2/delete"),
+      request(app).post("/users/u2/delete"),
     ]);
 
     expect(responses.map((response) => response.status).sort()).toEqual([202, 409]);
@@ -3247,7 +3346,7 @@ describe("account deletion revokes connector grants at the provider first", () =
     };
     const { app } = makeDeleteApp({ u2: { username: "acme" } }, publicDocs);
 
-    await request(app).post("/customer/u2/delete").expect(202);
+    await request(app).post("/users/u2/delete").expect(202);
 
     expect(publicDocs).toMatchObject({
       "workspaces/acme": { ownerUid: "u2", ownerActive: true },
@@ -3262,7 +3361,7 @@ describe("account deletion revokes connector grants at the provider first", () =
   it("does not revoke or delete when the user does not exist", async () => {
     const { app, calls } = makeDeleteApp({});
 
-    await request(app).post("/customer/ghost/delete").expect(404);
+    await request(app).post("/users/ghost/delete").expect(404);
 
     expect(calls).toEqual([]);
   });
@@ -3279,7 +3378,7 @@ describe("account deletion revokes connector grants at the provider first", () =
       },
     );
 
-    await request(app).post("/customer/u2/delete").expect(409);
+    await request(app).post("/users/u2/delete").expect(409);
 
     expect(Object.values(otherDocs)).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -3319,7 +3418,7 @@ describe("account deletion revokes connector grants at the provider first", () =
     );
 
     const res = await request(app)
-      .post("/customer/u3/delete")
+      .post("/users/u3/delete")
       .send({ eraseNow: true })
       .expect(202);
 
@@ -3430,6 +3529,71 @@ describe("operations history route", () => {
 
   it("rejects an unknown status filter", async () => {
     const { app } = operationsApp();
-    await request(app).get("/operations?status=failed").expect(400);
+    await request(app).get("/operations?status=bogus").expect(400);
+  });
+
+  it("filters by one status, newest first, capped at the limit", async () => {
+    const { app } = operationsApp();
+    const all = await request(app).get("/operations?status=failed&limit=100").expect(200);
+    expect(ids(all)).toEqual(["restart-failed", "failed"]);
+    const capped = await request(app).get("/operations?status=failed&limit=1").expect(200);
+    expect(ids(capped)).toEqual(["restart-failed"]);
+  });
+
+  it("filters audited mutations by their own status alongside operations", async () => {
+    const audit = (status: "completed" | "failed", createdAt: number) => ({
+      recordType: "audit",
+      schemaVersion: 1,
+      status,
+      lifecycleStage: status === "failed" ? "action-failed" : "action-completed",
+      outcome: status,
+      idempotencyKey: `key-${createdAt}`,
+      mutationFingerprint: `fingerprint-${createdAt}`,
+      mutation: { kind: "move-alias" },
+      actor: "fleet-cli:operator",
+      forced: false,
+      what: "move release alias",
+      why: "candidate verified",
+      target: { gatewayId: "shared-blue" },
+      preActionStatus: {},
+      aliasPlan: [],
+      createdAt,
+      actionClaimId: "runner-1",
+      actionStartedAt: createdAt,
+      actionRecoveryCount: 0,
+      completedAt: createdAt + 1,
+      ...(status === "failed" ? { error: "alias move refused" } : {}),
+    });
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-blue" },
+      users: {},
+      gateways: { "shared-blue": durableGatewayRoot("shared-blue") },
+      operations: {
+        "failed": { kind: "migrate-customer", status: "failed", createdAt: 4_000, input: { uid: "u3" }, steps: [] },
+        "audit-failed": audit("failed", 7_000),
+        "audit-completed": audit("completed", 8_000),
+      },
+    });
+    const failed = await request(app).get("/operations?status=failed&limit=100").expect(200);
+    expect(ids(failed)).toEqual(["audit-failed", "failed"]);
+    const completed = await request(app).get("/operations?status=completed&limit=100").expect(200);
+    expect(ids(completed)).toEqual(["audit-completed"]);
+  });
+
+  it("finds a status match older than the newest page of the journal", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-blue" },
+      users: {},
+      gateways: { "shared-blue": durableGatewayRoot("shared-blue") },
+      operations: {
+        "old-failed": { kind: "migrate-customer", status: "failed", createdAt: 10, input: { uid: "u1" }, steps: [] },
+        ...Object.fromEntries(Array.from({ length: 150 }, (_, index) => [
+          `done-${index}`,
+          { kind: "rollout", status: "succeeded", createdAt: 1_000 + index, input: { gatewayId: "shared-blue" }, steps: [] },
+        ])),
+      },
+    });
+    const res = await request(app).get("/operations?status=failed&limit=5").expect(200);
+    expect(ids(res)).toEqual(["old-failed"]);
   });
 });

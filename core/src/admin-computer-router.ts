@@ -203,7 +203,7 @@ function requestedComputer(req: Request, key: "gatewayId" | "ownerUid"): Request
 }
 
 export function addAdminComputerRoutes(router: Router, deps: ComputerRouterDeps): void {
-  for (const [path, key] of [["/gateways/:id/computer/replace", "gatewayId"], ["/customers/:uid/computer/replace", "ownerUid"]] as const) {
+  for (const [path, key] of [["/gateways/:id/vm/replace", "gatewayId"], ["/users/:uid/vm/replace", "ownerUid"]] as const) {
     router.post(path, async (req, res, next) => {
       try {
         const actor = req as Request & { uid?: string; isAdmin?: boolean };

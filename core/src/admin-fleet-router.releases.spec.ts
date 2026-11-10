@@ -641,8 +641,8 @@ describe("POST /gateways/:id/deploy", () => {
 
 describe("manual gateway migrations", () => {
   it.each([
-    ["/customers/uid-alice/migrate", { to: "legacy-owner" }],
-    ["/gateway-migrations/bulk", { uids: ["uid-alice"], toGatewayId: "legacy-owner" }],
+    ["/users/uid-alice/migrate", { to: "legacy-owner" }],
+    ["/gateway-migrations/bulk", { userIds: ["uid-alice"], toGatewayId: "legacy-owner" }],
   ])("rejects an owner runtime target for %s", async (path, body) => {
     const { app, store } = mkApp({
       "users/uid-alice": builderUser("source"),
@@ -799,7 +799,7 @@ describe("POST /gateways — creates only the durable root and immutable release
       gatewayId: "operator",
       imageRepository: REPO,
       imageTag: "abc1234",
-      gatewayClass: "builder",
+      gatewayClass: "isolated",
       imageProfile: "builder",
       ownerUid: "uid-owner",
     });
@@ -822,7 +822,7 @@ describe("admin target resolution", () => {
     });
 
     const res = await request(app)
-      .post("/customers/uid-alice/assign")
+      .post("/users/uid-alice/assign")
       .send({ gatewayId: "legacy" });
     expect(res.status).toBe(404);
   });
@@ -846,7 +846,7 @@ describe("admin target resolution", () => {
     });
 
     const res = await request(app)
-      .post("/customers/uid-alice/assign")
+      .post("/users/uid-alice/assign")
       .send({ gatewayId: "operator" });
 
     expect(res.status).toBe(400);
@@ -868,7 +868,7 @@ describe("admin target resolution", () => {
     const { app } = mkApp(seed);
 
     const res = await request(app)
-      .post("/customers/uid-alice/assign")
+      .post("/users/uid-alice/assign")
       .send({ gatewayId: "target" })
       .expect(409);
 
@@ -1078,7 +1078,7 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
 
     const res = await request(app)
       .patch("/gateways/bench")
-      .send({ gatewayClass: "builder", ownerUid: "uid-new", builderSlug: "new" });
+      .send({ gatewayClass: "isolated", ownerUid: "uid-new", builderSlug: "new" });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/disposable lifecycle/);
@@ -1225,7 +1225,7 @@ describe("DELETE /gateways/:id — retirement claim", () => {
 
     const res = await request(app).delete("/gateways/mounted").expect(409);
 
-    expect(res.body.mountedCustomers).toEqual(["alice"]);
+    expect(res.body.mountedUsers).toEqual(["alice"]);
     expect(store.get("gateways/mounted")?.desiredStatus).toBe("running");
     expect(opsIn(store, "retire-gateway")).toHaveLength(0);
   });

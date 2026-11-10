@@ -635,19 +635,19 @@ describe("Admin onboarding placement", () => {
       },
     };
 
-    const res = await request(buildApp()).get("/api/admin/onboarding-placement");
+    const res = await request(buildApp()).get("/api/admin/placement");
 
     expect(res.status).toBe(200);
     expect(res.body.config).toEqual({
       defaultGatewayId: "gw-target",
       sharedGatewayIds: ["gw-target"],
-      sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 10 },
+      sharedGatewayAutoscaling: { enabled: true, usersPerGateway: 10 },
     });
     expect(res.body.driftSummary["pointer-drift"]).toBe(1);
-    expect(res.body.customers).toEqual([
+    expect(res.body.users).toEqual([
       expect.objectContaining({
-        uid: "uid-alice",
-        slug: "alice",
+        id: "uid-alice",
+        name: "alice",
         policyTargetGatewayId: "gw-target",
         assignedGatewayId: "gw-source",
         mountedGatewayId: "gw-source",
@@ -685,18 +685,18 @@ describe("Admin onboarding placement", () => {
     };
 
     const patched = await request(buildApp())
-      .patch("/api/admin/onboarding-placement")
+      .patch("/api/admin/placement")
       .send({ defaultGatewayId: "gw-new" });
     expect(patched.status).toBe(404);
     expect(configDocs.orchestrator).toBeUndefined();
 
     const retiredPut = await request(buildApp())
-      .put("/api/admin/onboarding-placement/overrides/uid-alice")
+      .put("/api/admin/placement/overrides/uid-alice")
       .send({ gatewayId: "gw-new" });
     expect(retiredPut.status).toBe(404);
 
     const retiredDelete = await request(buildApp()).delete(
-      "/api/admin/onboarding-placement/overrides/uid-alice",
+      "/api/admin/placement/overrides/uid-alice",
     );
     expect(retiredDelete.status).toBe(404);
   });
@@ -861,11 +861,11 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       gatewayId: "jack",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
-      gatewayClass: "builder",
+      gatewayClass: "isolated",
       ownerUid: "uid-jack",
     });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Builder gateways.*disposable lifecycle/);
+    expect(res.body.error).toMatch(/isolated gateways.*disposable lifecycle/);
     expect(provisionerCalls).toEqual([]);
     expect(gatewaysDocs.jack).toBeUndefined();
   });
@@ -876,10 +876,10 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       gatewayId: "jack",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
-      gatewayClass: "builder",
+      gatewayClass: "isolated",
     });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Builder gateways.*disposable lifecycle/);
+    expect(res.body.error).toMatch(/isolated gateways.*disposable lifecycle/);
     expect(provisionerCalls).toEqual([]);
     expect(gatewaysDocs.jack).toBeUndefined();
   });
@@ -904,11 +904,11 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       gatewayId: "ghost",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
-      gatewayClass: "builder",
+      gatewayClass: "isolated",
       ownerUid: "uid-ghost",
     });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Builder gateways.*disposable lifecycle/);
+    expect(res.body.error).toMatch(/isolated gateways.*disposable lifecycle/);
     expect(provisionerCalls).toEqual([]);
     expect(gatewaysDocs.ghost).toBeUndefined();
   });
@@ -1301,11 +1301,11 @@ describe("POST /api/admin/gateways — body type guards", () => {
   });
 });
 
-describe("POST /api/admin/customers/:uid/migrate — body type guards", () => {
+describe("POST /api/admin/users/:uid/migrate — body type guards", () => {
   it("rejects non-string `to` field with 400", async () => {
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-bob/migrate")
+      .post("/api/admin/users/uid-bob/migrate")
       .send({ to: 42 });
     expect(res.status).toBe(400);
   });
@@ -1382,7 +1382,7 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/still has mounted customers/i);
-    expect(res.body.mountedCustomers).toEqual(["alice", "bob"]);
+    expect(res.body.mountedUsers).toEqual(["alice", "bob"]);
     expect(gatewaysDocs.canary).toMatchObject({ desiredStatus: "running" });
     expect(gatewaysDocs.canary.retirementClaim).toBeUndefined();
   });
@@ -1487,7 +1487,7 @@ describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl ro
 
 });
 
-describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
+describe("POST /api/admin/users/:uid/migrate — start migration", () => {
   it("creates a migrate-customer operation", async () => {
     seedDurableGateway("canary", {
       heartbeat: { status: "ready", mountedCustomers: [] },
@@ -1498,7 +1498,7 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-alice/migrate")
+      .post("/api/admin/users/uid-alice/migrate")
       .send({ to: "canary" });
     expect(res.status).toBe(202);
     expect(commandOperation()).toMatchObject({
@@ -1517,7 +1517,7 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
   it("rejects without a target gateway", async () => {
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-alice/migrate")
+      .post("/api/admin/users/uid-alice/migrate")
       .send({});
     expect(res.status).toBe(400);
   });
@@ -1525,7 +1525,7 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
   it("returns 404 when the target gateway is not registered", async () => {
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-alice/migrate")
+      .post("/api/admin/users/uid-alice/migrate")
       .send({ to: "gw-bogus" });
     expect(res.status).toBe(404);
   });
@@ -1536,7 +1536,7 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
     });
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-alice/migrate")
+      .post("/api/admin/users/uid-alice/migrate")
       .send({ to: "gw-booting" });
     expect(res.status).toBe(409);
   });
@@ -1550,7 +1550,7 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-alice/migrate")
+      .post("/api/admin/users/uid-alice/migrate")
       .send({ to: "canary" });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/already/i);
@@ -1572,7 +1572,7 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
     });
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-alice/migrate")
+      .post("/api/admin/users/uid-alice/migrate")
       .send({ to: "canary" });
     expect(res.status).toBe(409);
     expect(res.body.operationId).toBe("op-mig-live");
@@ -1581,7 +1581,7 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
   });
 });
 
-describe("POST /api/admin/customers/:uid/unassign — clear assignment, let reconcile evict", () => {
+describe("POST /api/admin/users/:uid/unassign — clear assignment, let reconcile evict", () => {
   it("clears provisioning.openclaw.gatewayId and reports where the customer was", async () => {
     usersDocs["uid-alice"] = {
       username: "alice",
@@ -1589,7 +1589,7 @@ describe("POST /api/admin/customers/:uid/unassign — clear assignment, let reco
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-alice/unassign")
+      .post("/api/admin/users/uid-alice/unassign")
       .send({});
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ unassigned: true, uid: "uid-alice", from: "default-green" });
@@ -1599,7 +1599,7 @@ describe("POST /api/admin/customers/:uid/unassign — clear assignment, let reco
   it("returns 404 for an unknown customer", async () => {
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-ghost/unassign")
+      .post("/api/admin/users/uid-ghost/unassign")
       .send({});
     expect(res.status).toBe(404);
   });
@@ -1608,7 +1608,7 @@ describe("POST /api/admin/customers/:uid/unassign — clear assignment, let reco
     usersDocs["uid-alice"] = { username: "alice", provisioning: { openclaw: { slug: "alice" } } };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-alice/unassign")
+      .post("/api/admin/users/uid-alice/unassign")
       .send({});
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/already unassigned/i);
@@ -1630,7 +1630,7 @@ describe("POST /api/admin/customers/:uid/unassign — clear assignment, let reco
     });
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-alice/unassign")
+      .post("/api/admin/users/uid-alice/unassign")
       .send({});
     expect(res.status).toBe(409);
     expect(res.body.operationId).toBe("op-mig-1");
@@ -1696,13 +1696,13 @@ describe("POST /api/admin/rollouts — composite operation", () => {
   });
 });
 
-describe("GET /api/admin/customers/by-slug/:slug — slug→uid lookup", () => {
+describe("GET /api/admin/user-by-slug/:slug — slug→uid lookup", () => {
   it("returns uid + currentGatewayId for a slug stored at provisioning.openclaw.slug", async () => {
     usersDocs["uid-alice"] = {
       provisioning: { openclaw: { slug: "alice", gatewayId: "canary" } },
     };
     const app = buildApp();
-    const res = await request(app).get("/api/admin/customers/by-slug/alice");
+    const res = await request(app).get("/api/admin/user-by-slug/alice");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ uid: "uid-alice", currentGatewayId: "canary" });
   });
@@ -1710,7 +1710,7 @@ describe("GET /api/admin/customers/by-slug/:slug — slug→uid lookup", () => {
   it("falls back to username when no provisioning slug matches", async () => {
     usersDocs["uid-bob"] = { username: "bob" };
     const app = buildApp();
-    const res = await request(app).get("/api/admin/customers/by-slug/bob");
+    const res = await request(app).get("/api/admin/user-by-slug/bob");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ uid: "uid-bob", currentGatewayId: null });
   });
@@ -1720,19 +1720,19 @@ describe("GET /api/admin/customers/by-slug/:slug — slug→uid lookup", () => {
       provisioning: { openclaw: { slug: "claire" } },
     };
     const app = buildApp();
-    const res = await request(app).get("/api/admin/customers/by-slug/claire");
+    const res = await request(app).get("/api/admin/user-by-slug/claire");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ uid: "uid-claire", currentGatewayId: null });
   });
 
   it("returns 404 when no user has the slug or username", async () => {
     const app = buildApp();
-    const res = await request(app).get("/api/admin/customers/by-slug/ghost");
+    const res = await request(app).get("/api/admin/user-by-slug/ghost");
     expect(res.status).toBe(404);
   });
 });
 
-describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
+describe("GET /api/admin/user-distribution — fleet-wide ops view", () => {
   it("buckets every builder into mounted / assigned-not-mounted / unassigned", async () => {
     seedDurableGateway("default", {
       heartbeat: { status: "ready", mountedCustomers: ["alice", "bob"] },
@@ -1765,7 +1765,7 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
       },
     };
     const app = buildApp();
-    const res = await request(app).get("/api/admin/customer-distribution");
+    const res = await request(app).get("/api/admin/user-distribution");
     expect(res.status).toBe(200);
     expect(res.body.stats).toMatchObject({
       totalBuilders: 5,
@@ -1803,7 +1803,7 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
       },
     };
     const app = buildApp();
-    const res = await request(app).get("/api/admin/customer-distribution");
+    const res = await request(app).get("/api/admin/user-distribution");
     expect(res.status).toBe(200);
     expect(res.body.pendingPlacements).toHaveLength(1);
     expect(res.body.pendingPlacements[0]).toMatchObject({
@@ -1819,7 +1819,7 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
     });
     usersDocs = {};
     const app = buildApp();
-    const res = await request(app).get("/api/admin/customer-distribution");
+    const res = await request(app).get("/api/admin/user-distribution");
     expect(res.status).toBe(200);
     expect(res.body.stats).toMatchObject({
       totalBuilders: 0,
@@ -1831,7 +1831,7 @@ describe("GET /api/admin/customer-distribution — fleet-wide ops view", () => {
   });
 });
 
-describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
+describe("POST /api/admin/users/:uid/assign — initial placement", () => {
   it("writes placement without a separate eligibility field", async () => {
     seedDurableGateway("default", {
       heartbeat: { status: "ready", mountedCustomers: [] },
@@ -1841,7 +1841,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-dave/assign")
+      .post("/api/admin/users/uid-dave/assign")
       .send({ gatewayId: "default" });
     expect(res.status).toBe(202);
     expect(res.body).toMatchObject({ uid: "uid-dave", gatewayId: "default" });
@@ -1868,7 +1868,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-dave/assign")
+      .post("/api/admin/users/uid-dave/assign")
       .send({ gatewayId: "gw-operator" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/Builder gateway placement is managed by the disposable lifecycle/);
@@ -1880,7 +1880,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
   it("returns 400 when gatewayId is missing", async () => {
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-dave/assign")
+      .post("/api/admin/users/uid-dave/assign")
       .send({});
     expect(res.status).toBe(400);
   });
@@ -1889,7 +1889,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     gatewaysDocs = { "default": { status: "ready" } };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-missing/assign")
+      .post("/api/admin/users/uid-missing/assign")
       .send({ gatewayId: "default" });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/user not found/);
@@ -1899,7 +1899,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     usersDocs = { "uid-dave": { username: "dave" } };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-dave/assign")
+      .post("/api/admin/users/uid-dave/assign")
       .send({ gatewayId: "gw-missing" });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/gateway not found/);
@@ -1912,7 +1912,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     usersDocs = { "uid-dave": { username: "dave" } };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-dave/assign")
+      .post("/api/admin/users/uid-dave/assign")
       .send({ gatewayId: "default" });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/not ready/);
@@ -1930,7 +1930,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     };
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/customers/uid-alice/assign")
+      .post("/api/admin/users/uid-alice/assign")
       .send({ gatewayId: "default" });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body).toMatchObject({ repaired: true, gatewayId: "default" });
@@ -1960,7 +1960,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     gatewayAssignmentsDocs["default/uid-alice"] = existing;
 
     const res = await request(buildApp())
-      .post("/api/admin/customers/uid-alice/assign")
+      .post("/api/admin/users/uid-alice/assign")
       .send({ gatewayId: "default" });
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
@@ -1979,7 +1979,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     };
 
     const res = await request(buildApp())
-      .post("/api/admin/customers/uid-orphan/assign")
+      .post("/api/admin/users/uid-orphan/assign")
       .send({ gatewayId: "default" });
 
     expect(res.status).toBe(409);
@@ -2042,10 +2042,10 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways/default/details");
     expect(res.status).toBe(200);
-    expect(res.body.mountedCustomers).toHaveLength(2);
-    const slugs = res.body.mountedCustomers.map((m: { slug: string }) => m.slug).sort();
+    expect(res.body.mountedUsers).toHaveLength(2);
+    const slugs = res.body.mountedUsers.map((m: { slug: string }) => m.slug).sort();
     expect(slugs).toEqual(["alice", "bob"]);
-    const alice = res.body.mountedCustomers.find(
+    const alice = res.body.mountedUsers.find(
       (m: { slug: string }) => m.slug === "alice",
     );
     expect(alice).toMatchObject({
@@ -2065,7 +2065,7 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways/gw-empty/details");
     expect(res.status).toBe(200);
-    expect(res.body.mountedCustomers).toEqual([]);
+    expect(res.body.mountedUsers).toEqual([]);
   });
 
   it("404s for an unknown gateway", async () => {
@@ -2082,7 +2082,7 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways/gw-booting/details");
     expect(res.status).toBe(200);
-    expect(res.body.mountedCustomers).toEqual([]);
+    expect(res.body.mountedUsers).toEqual([]);
   });
 
   it("only returns operations whose input.gatewayId matches the path id", async () => {
