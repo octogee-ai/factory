@@ -31,6 +31,7 @@ activated users across the server. Bots do not count.
 
 ## Before you start
 
+- The accounts in [What you need to sign up for](getting-started.md#what-you-need-to-sign-up-for).
 - A cloud account with billing on and permission to create the resources above.
 - A domain you control. Chat and Git use `chat.` and `git.` under it.
 - An email address for certificate notices.
@@ -38,6 +39,21 @@ activated users across the server. Bots do not count.
 
 These are billable resources that run until you remove them. Check your
 provider's pricing first.
+
+## Start small on the welcome credit
+
+The defaults are sized for production: nodes in three zones and a highly
+available database. They use up Google Cloud's welcome credit quickly. For a first
+install, use one zone and a smaller database:
+
+```bash
+export GCP_ZONE=us-central1-a SQL_AVAILABILITY=ZONAL SQL_TIER=db-custom-1-3840
+```
+
+You get one node that can grow to three and a database with no standby. The
+free tier covers the fee for a zonal cluster, but not the node, the database or
+the network. If that zone goes down, so does your install, so move to the
+defaults before you depend on it.
 
 ## Install on Google Cloud
 
@@ -118,6 +134,8 @@ Set these before you install.
 | `CLUSTER_NAME` | `octogee-cloud` | Both |
 | `MACHINE_TYPE` | `e2-standard-4` | Google Cloud nodes |
 | `SQL_TIER` | `db-custom-2-7680` | Cloud SQL |
+| `SQL_AVAILABILITY` | `REGIONAL` | Cloud SQL. `ZONAL` has no standby |
+| `GCP_ZONE` | Not set, so the cluster is regional | Google Cloud. Set it for a zonal cluster |
 | `NODE_TYPE` | `m6i.xlarge` | AWS nodes |
 | `DB_CLASS` | `db.m6i.large` | RDS |
 
@@ -155,6 +173,8 @@ gcloud sql instances delete octogee-cloud --project "${GCP_PROJECT}"
 ```bash
 gcloud container clusters delete octogee-cloud --region "${GCP_REGION}" --project "${GCP_PROJECT}"
 ```
+
+If you installed in one zone, use `--zone "${GCP_ZONE}"` in place of `--region`.
 
 ```bash
 gcloud storage rm -r "gs://${GCP_PROJECT}-octogee-cloud" --project "${GCP_PROJECT}"

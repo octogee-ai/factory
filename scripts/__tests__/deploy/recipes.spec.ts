@@ -93,6 +93,59 @@ describe.each([
   });
 });
 
+describe("sizing a Google Cloud install", () => {
+  beforeEach(() => {
+    host.stub("gcloud", GCLOUD_STUB);
+    host.stub("gke-gcloud-auth-plugin", "cat >/dev/null");
+  });
+
+  function call(fragment: string): string {
+    const found = lines("gcloud").find((line) => line.includes(fragment));
+    if (found === undefined) throw new Error(`no gcloud call contains ${fragment}`);
+    return found;
+  }
+
+  it("defaults to a regional cluster and a highly available database", () => {
+    expect(host.run("deploy/cloud/gcp.sh", [], { env: SETTINGS }).status).toBe(0);
+    expect(call("clusters create")).toContain("--region us-central1");
+    expect(call("sql instances create")).toContain("--availability-type=REGIONAL");
+  });
+
+  it("starts small in one zone when asked", () => {
+    const env = { ...SETTINGS, GCP_ZONE: "us-central1-a", SQL_AVAILABILITY: "ZONAL" };
+    expect(host.run("deploy/cloud/gcp.sh", [], { env }).status).toBe(0);
+    for (const fragment of ["clusters create", "clusters get-credentials"]) {
+      expect(call(fragment)).toContain("--zone us-central1-a");
+      expect(call(fragment)).not.toContain("--region");
+    }
+    expect(call("sql instances create")).toContain("--availability-type=ZONAL");
+  });
+});
+
+describe("choosing the agent's model", () => {
+  beforeEach(() => {
+    host.stub("gcloud", GCLOUD_STUB);
+    host.stub("gke-gcloud-auth-plugin", "cat >/dev/null");
+  });
+
+  function modelKeysCall(env: Record<string, string>): string | undefined {
+    expect(host.run("deploy/cloud/gcp.sh", [], { env: { ...SETTINGS, ...env } }).status).toBe(0);
+    return lines("kubectl").find((line) => line.includes("secret generic platform-model-keys"));
+  }
+
+  it("uses a free-tier Gemini model when a Gemini key is the only key", () => {
+    expect(modelKeysCall({ GEMINI_API_KEY: "stub-key" })).toContain("--from-literal=AGENT_MODEL=google/gemini-3.6-flash");
+  });
+
+  it("uses the first key it finds when there are several", () => {
+    expect(modelKeysCall({ OPENAI_API_KEY: "stub-key", GEMINI_API_KEY: "stub-key" })).toContain("--from-literal=AGENT_MODEL=openai/gpt-6-astra");
+  });
+
+  it("stores nothing when there is no key", () => {
+    expect(modelKeysCall({})).toBeUndefined();
+  });
+});
+
 describe("deploy/cloud/check.sh", () => {
   it("requires a provider name", () => {
     const run = host.run("deploy/cloud/check.sh", [], { env: SETTINGS });

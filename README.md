@@ -16,6 +16,16 @@ curl -fsSL https://raw.githubusercontent.com/octogee-ai/octogee-cloud/main/insta
 
 [Try it locally](docs/getting-started.md), or [run it in production](docs/running-in-the-cloud.md) on GKE or EKS.
 
+## What you need to sign up for
+
+| Where it runs | Sign up for | Cost to start |
+| --- | --- | --- |
+| Your own machine | A Gemini API key from Google | Nothing, on the free tier |
+| Google Cloud | Google Cloud, a domain, and the same Gemini API key | Google's welcome credit for new accounts covers Google Cloud for up to 90 days. The domain is a yearly fee |
+
+Mattermost, Gitea and the rest are installed for you and need no account.
+[Getting started](docs/getting-started.md#what-you-need-to-sign-up-for) lists every account, the tier to choose and what happens when a free tier runs out.
+
 ## What is here today
 
 - `AGENTS.md` is the contract every agent loads. It is the file that runs in the

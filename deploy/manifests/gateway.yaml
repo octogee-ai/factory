@@ -85,12 +85,18 @@ spec:
               mkdir -p /home/node/.openclaw/workspace
               cp /config/openclaw.json /home/node/.openclaw/openclaw.json
               node /app/dist/index.js plugins install --force @openclaw/mattermost@2026.11.1
+              if [ -n "${AGENT_MODEL:-}" ]; then
+                node /app/dist/index.js config set agents.defaults.model.primary "${AGENT_MODEL}"
+              fi
           env:
             - name: HOME
               value: /home/node
           envFrom:
             - secretRef:
                 name: gateway-environment
+            - secretRef:
+                name: platform-model-keys
+                optional: true
           volumeMounts:
             - name: state
               mountPath: /home/node/.openclaw
