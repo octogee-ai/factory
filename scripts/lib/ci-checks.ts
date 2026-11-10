@@ -168,6 +168,7 @@ function qualityJobs(paths: string[], full: boolean): CheckJob[] {
   else if (lockfiles.length) jobs.push(job("osv-scanner", qualityCommand("osv-scanner", lockfiles)));
   if (full || paths.some(path => INFRASTRUCTURE_CONFIG.test(path))) jobs.push(job("trivy", qualityCommand("trivy")));
   if (full || paths.some(path => RUST_AUDIT_INPUTS.some(prefix => path.startsWith(prefix)))) jobs.push(job("cargo-audit", qualityCommand("cargo-audit")));
+  if (full || paths.some(path => path.startsWith("fleet/"))) jobs.push(job("fleet-go", qualityCommand("fleet-go")));
   return jobs;
 }
 

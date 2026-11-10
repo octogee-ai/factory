@@ -47,5 +47,6 @@ case "$check" in
     trivy "${args[@]}" --severity CRITICAL --exit-code 1
     ;;
   cargo-audit) (cd artifact-worker/renderer && cargo-audit audit) ;;
+  fleet-go) (cd fleet && test -z "$(gofmt -l .)" && go vet ./... && go test ./...) ;;
   *) echo "Unknown quality check: $check" >&2; exit 2 ;;
 esac

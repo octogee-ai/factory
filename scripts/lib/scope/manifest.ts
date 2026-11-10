@@ -438,6 +438,7 @@ export const GLOBAL_PREFIX: readonly string[] = [".github/actions/setup-ci/", "s
 
 export function isInert(path: string): boolean {
   if (path.startsWith("docs/")) return true;
+  if (path.startsWith("fleet/")) return true;
   if (/^[^/]+\.md$/.test(path)) return true;
   return false;
 }
