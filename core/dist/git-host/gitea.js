@@ -363,5 +363,17 @@ export function createGiteaGitHost(config) {
         restoreRepo: (ref) => setRepoArchived(api, ref, false),
         deleteRepo: (ref) => deleteRepo(api, ref),
         eraseOwner: (workspaceSlug, repos) => eraseWorkspaceOwner(api, workspaceSlug, repos),
+        async setUserPassword(workspaceSlug, password) {
+            const username = giteaUsername(workspaceSlug);
+            const updated = await api.request("PATCH", `/admin/users/${username}`, {
+                login_name: username,
+                source_id: 0,
+                password,
+                must_change_password: true,
+            });
+            if (!ok(updated.status))
+                fail("set-password", updated);
+            return username;
+        },
     };
 }

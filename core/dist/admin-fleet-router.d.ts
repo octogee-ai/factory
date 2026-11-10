@@ -6,6 +6,7 @@ import { type GatewayPodReplacementSummary } from "@octogee/shared/types/gateway
 import type { MigrationProgressRecord } from "@octogee/shared/types/glm";
 import { type SizingTier } from "@octogee/shared/types/sizing";
 import { type GatewayPricingMode } from "@octogee/shared/types/cost-estimator";
+import { type UserAccounts, type UserSignInHosts } from "./admin-user-router.js";
 import { type DurableGatewayRoot } from "./gateway-release-append.js";
 import { type BuilderAccountReader } from "./builder-account.js";
 import type { PlatformStateStore } from "./platform-state/store.js";
@@ -67,6 +68,8 @@ export interface FleetRouterDeps {
     }) => Promise<boolean>;
     suspendAuthUser: (uid: string) => Promise<void>;
     revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
+    userAccounts?: UserAccounts;
+    userSignIn?: UserSignInHosts;
 }
 declare function resolveSizingForResponse(glmDoc: Record<string, unknown> | undefined, reservation: ReturnType<typeof projectGatewayReservation>): {
     tier: SizingTier;

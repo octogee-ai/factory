@@ -505,6 +505,27 @@ describe("createGiteaGitHost — managed Gitea admin operations", () => {
     });
   });
 
+  describe("setUserPassword", () => {
+    it("sets the ws-<slug> password, requires a change at first sign-in, and returns the login", async () => {
+      fetchMock.mockResolvedValue(res(200, {}));
+      await expect(host.setUserPassword("alice", "s3cret-value")).resolves.toBe("ws-alice");
+      expect(callsTo(fetchMock)).toEqual([
+        {
+          method: "PATCH",
+          url: `${BASE}/admin/users/ws-alice`,
+          body: { login_name: "ws-alice", source_id: 0, password: "s3cret-value", must_change_password: true },
+        },
+      ]);
+    });
+
+    it("fails loudly when Gitea refuses, without echoing the password", async () => {
+      fetchMock.mockResolvedValue(res(422, { message: "password is too weak" }));
+      const failure = await host.setUserPassword("alice", "s3cret-value").catch((error: Error) => error);
+      expect(String(failure)).toContain("set-password failed: 422");
+      expect(String(failure)).not.toContain("s3cret-value");
+    });
+  });
+
   describe("eraseOwner", () => {
     it("deletes every repo, then the owner org, then the ws-<slug> user with the admin token", async () => {
       fetchMock.mockResolvedValue(res(204));

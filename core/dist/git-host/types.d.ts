@@ -73,7 +73,10 @@ export interface GitHostSshKeys {
 export interface GitHostErasure {
     eraseOwner(workspaceSlug: string, repos: readonly string[]): Promise<void>;
 }
-export interface ManagedGitHost extends GitHostProvisioning, GitHostSshKeys, GitHostErasure {
+export interface GitHostSignIn {
+    setUserPassword(workspaceSlug: string, password: string): Promise<string>;
+}
+export interface ManagedGitHost extends GitHostProvisioning, GitHostSshKeys, GitHostErasure, GitHostSignIn {
     readonly kind: "managed";
     readonly provider: string;
     readonly naming: GitHostNaming;

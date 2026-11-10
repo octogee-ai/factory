@@ -233,6 +233,19 @@ export function createMattermostChannelHost(config) {
         },
         ensureChannel: (input) => ensureMmChannel(api, input),
         findUser: (username) => call("GET", `/users/username/${username}`),
+        async setUserPassword(username, password) {
+            const user = await call("GET", `/users/username/${username}`);
+            if (!user)
+                throw new Error(`mm user ${username} was not found`);
+            const resp = await api.fetch(`/users/${user.id}/password`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ new_password: password }),
+            });
+            if (!resp.ok) {
+                throw new Error(`mm set password for ${username} failed: ${resp.status} ${await responseText(resp)}`);
+            }
+        },
         async addMember(target, userId, roles) {
             await call("POST", membersPath(target), "teamId" in target
                 ? { team_id: target.teamId, user_id: userId, ...(roles ? { roles } : {}) }

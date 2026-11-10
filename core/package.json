@@ -45,6 +45,14 @@
       "types": "./dist/admin-fleet-router.d.ts",
       "default": "./dist/admin-fleet-router.js"
     },
+    "./admin-user-router": {
+      "types": "./dist/admin-user-router.d.ts",
+      "default": "./dist/admin-user-router.js"
+    },
+    "./workspace-reservation": {
+      "types": "./dist/workspace-reservation.d.ts",
+      "default": "./dist/workspace-reservation.js"
+    },
     "./normal-fleet-mutation": {
       "types": "./dist/normal-fleet-mutation.d.ts",
       "default": "./dist/normal-fleet-mutation.js"
@@ -497,6 +505,12 @@
       ],
       "admin-fleet-router": [
         "dist/admin-fleet-router.d.ts"
+      ],
+      "admin-user-router": [
+        "dist/admin-user-router.d.ts"
+      ],
+      "workspace-reservation": [
+        "dist/workspace-reservation.d.ts"
       ],
       "normal-fleet-mutation": [
         "dist/normal-fleet-mutation.d.ts"

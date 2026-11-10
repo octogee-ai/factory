@@ -211,6 +211,7 @@ import {
   verifyCustomerStorageErasure,
 } from "./lib/customer-ops/avatars.js";
 import { loadCustomerCleanupContext } from "./lib/customer-ops/cleanup-context.js";
+import type { UserAccounts, UserSignInHosts } from "@octogee/core/admin-user-router";
 import { createMattermostChannelHost } from "@octogee/core/channel-host";
 import { createGiteaGitHost } from "@octogee/core/git-host";
 import { firestoreBuilderAccountReader } from "@octogee/core/builder-account";
@@ -2176,6 +2177,7 @@ type ControllerStopper = () => void;
 
 interface ControllerBackgroundTasksDeps {
   addProductAdminRoutes?: ProductAdminRoutes;
+  userAccounts?: UserAccounts | undefined;
   adminIdentity: IdentityProvider;
   placementAdmission: PlacementAdmissionPolicy;
   policyInputs: BuilderPolicyInputsSource;
@@ -2195,6 +2197,7 @@ const GITEA_GATEWAY_KEY_GC_GRACE_MS = 10 * 60 * 1000;
 
 function startControllerBackgroundTasks({
   addProductAdminRoutes,
+  userAccounts,
   adminIdentity,
   placementAdmission,
   policyInputs,
@@ -2317,6 +2320,8 @@ function startControllerBackgroundTasks({
   const decryptConnectorSecret = createConnectorSecretDecryptor();
   const stopHttp = startHttpServer({
     addProductAdminRoutes,
+    userAccounts,
+    userSignIn: buildUserSignInHosts(log),
     db,
     store: deps.store,
     accounts: firestoreBuilderAccountReader(db),
@@ -2732,6 +2737,7 @@ type HostingCleanup = NonNullable<NukeCloudDeps["deleteHostingSites"]>;
 export interface ControllerProduct {
   createHostingCleanup?: (log: (message: string) => void) => HostingCleanup;
   addAdminRoutes?: ProductAdminRoutes;
+  userAccounts?: (db: Firestore) => UserAccounts;
   adminIdentity?: IdentityProvider;
   placementAdmission?: PlacementAdmissionPolicy;
   builderAdmission?: BuilderAdmissionSourceFactory;
@@ -2829,6 +2835,7 @@ export async function main(product: ControllerProduct = {}): Promise<void> {
     fleetControllerPrivateKey,
     platformArtifact,
     controllerStartedAt,
+    userAccounts: product.userAccounts?.(db),
   });
   stoppers.push(
     startSharedPoolScaler({
@@ -4010,6 +4017,19 @@ function createBuilderHomeServices(store: PlatformStateStore, log: (message: str
   return {
     provider,
     copy: createHomeCopyClient({ request: homeCopyRequest, projectId: gatewayComputeProjectId(), journal: (what, input, action) => homeJournal(what, input.ownerUid, action) }),
+  };
+}
+
+function buildUserSignInHosts(log: (message: string) => void): UserSignInHosts {
+  const signInEnv = (name: string) => requireEnv(name, "issuing one-time passwords requires it");
+  const gitApiToken = signInEnv("GIT_API_TOKEN");
+  return {
+    channels: createMattermostChannelHost({
+      baseUrl: signInEnv("MM_URL"),
+      adminToken: signInEnv("MM_ADMIN_TOKEN"),
+      log,
+    }),
+    git: createGiteaGitHost({ apiBaseUrl: signInEnv("GIT_API_URL"), token: () => gitApiToken, log }),
   };
 }
 

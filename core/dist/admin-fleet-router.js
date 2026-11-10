@@ -19,6 +19,7 @@ import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-contro
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { builderReturnOperationId, firestoreBuilderTierReader, placementRetireOperationId, requestBuilderActivationLease, } from "./builder-activation-lease.js";
 import { addAdminComputerRoutes } from "./admin-computer-router.js";
+import { addAdminUserRoutes } from "./admin-user-router.js";
 import { GatewayRetirementConflictError, assertGatewayRuntimeMutationUnfencedInStore, builderRuntimeMutationFenced, claimGatewayRetirementInStore, } from "./gateway-retirement-claim.js";
 import { appendGatewayRelease, asDurableGatewayRoot, InvalidGatewayRootError, StaleGatewayReleaseError, } from "./gateway-release-append.js";
 import { findActiveGatewayMigration, GatewayMigrationInFlightError, } from "./fleet-operation-lock.js";
@@ -3030,7 +3031,7 @@ export function addAdminFleetRoutes(router, deps) {
             target: input.target,
             preActionStatus: input.preActionStatus,
             mutation: input.mutation,
-            action: async () => input.action(),
+            action: async (claim) => input.action(claim),
             classifyResult: input.classifyResult,
             ...(input.aliasPlan ? { aliasPlan: input.aliasPlan } : {}),
             ...(headerKey
@@ -3039,6 +3040,7 @@ export function addAdminFleetRoutes(router, deps) {
         });
     }
     addAdminComputerRoutes(router, { store, replacementEnabled: deps.computerReplacementEnabled, journal: runAdminFleetMutation });
+    addAdminUserRoutes(router, { store, accounts: deps.userAccounts, signIn: deps.userSignIn, journal: runAdminFleetMutation });
     router.get("/platform-runtime-config", async (_req, res, next) => {
         try {
             res.json(await readPlatformRuntimeConfig(store));

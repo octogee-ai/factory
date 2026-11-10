@@ -103,6 +103,7 @@ import {
   requestBuilderActivationLease,
 } from "./builder-activation-lease.js";
 import { addAdminComputerRoutes } from "./admin-computer-router.js";
+import { addAdminUserRoutes, type UserAccounts, type UserSignInHosts } from "./admin-user-router.js";
 import {
   GatewayRetirementConflictError,
   assertGatewayRuntimeMutationUnfencedInStore,
@@ -127,7 +128,7 @@ import {
   runNormalFleetMutation,
   type NormalFleetMutationResult,
 } from "./normal-fleet-mutation.js";
-import { OperationAuditIdempotencyConflictError } from "./operation-audit.js";
+import { OperationAuditIdempotencyConflictError, type OperationAuditActionClaim } from "./operation-audit.js";
 import {
   firestoreBuilderAccountReader,
   type BuilderAccount,
@@ -223,6 +224,8 @@ export interface FleetRouterDeps {
   requestNativeReturnSourceRecovery?: (input: { uid: string; operationId: string; requestedAt: number; requestedBy: string }) => Promise<boolean>;
   suspendAuthUser: (uid: string) => Promise<void>;
   revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
+  userAccounts?: UserAccounts;
+  userSignIn?: UserSignInHosts;
 }
 
 type ActorRequest = Request & {
@@ -4414,7 +4417,7 @@ export function addAdminFleetRoutes(
     preActionStatus: Record<string, unknown>;
     mutation: Record<string, unknown>;
     forced?: boolean;
-    action: () => Promise<T>;
+    action: (claim: OperationAuditActionClaim) => Promise<T>;
     classifyResult?: (result: T) => NormalFleetMutationResult;
     idempotencyScope?: string;
     aliasPlan?: OperationAuditAliasPlan[];
@@ -4429,7 +4432,7 @@ export function addAdminFleetRoutes(
       target: input.target,
       preActionStatus: input.preActionStatus,
       mutation: input.mutation,
-      action: async () => input.action(),
+      action: async (claim) => input.action(claim),
       classifyResult: input.classifyResult,
       ...(input.aliasPlan ? { aliasPlan: input.aliasPlan } : {}),
       ...(headerKey
@@ -4439,6 +4442,7 @@ export function addAdminFleetRoutes(
   }
 
   addAdminComputerRoutes(router, { store, replacementEnabled: deps.computerReplacementEnabled, journal: runAdminFleetMutation });
+  addAdminUserRoutes(router, { store, accounts: deps.userAccounts, signIn: deps.userSignIn, journal: runAdminFleetMutation });
 
   router.get("/platform-runtime-config", async (_req, res, next) => {
     try {

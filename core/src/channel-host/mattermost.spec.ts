@@ -273,3 +273,28 @@ describe("createMattermostChannelHost — userExists", () => {
     await expect(setup([{ status: 500, body: "down" }]).host.userExists("u1")).rejects.toThrow(/500.*down/);
   });
 });
+
+describe("createMattermostChannelHost — setUserPassword", () => {
+  it("finds the account by username and sets its password as admin", async () => {
+    const { host, calls } = setup([{ body: { id: "u1" } }, { body: { status: "OK" } }]);
+    await host.setUserPassword("lin", "s3cret-value");
+    expect(calls.map(({ method, url }) => [method, url])).toEqual([
+      ["GET", "https://mm.test/api/v4/users/username/lin"],
+      ["PUT", "https://mm.test/api/v4/users/u1/password"],
+    ]);
+    expect(calls[1]!.body).toEqual({ new_password: "s3cret-value" });
+  });
+
+  it("fails when the account does not exist", async () => {
+    const { host, calls } = setup([{ status: 404, body: {} }]);
+    await expect(host.setUserPassword("lin", "s3cret-value")).rejects.toThrow("was not found");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("fails loudly when Mattermost refuses, without echoing the password", async () => {
+    const { host } = setup([{ body: { id: "u1" } }, { status: 400, body: { message: "too weak" } }]);
+    const failure = await host.setUserPassword("lin", "s3cret-value").catch((error: Error) => error);
+    expect(String(failure)).toContain("400");
+    expect(String(failure)).not.toContain("s3cret-value");
+  });
+});

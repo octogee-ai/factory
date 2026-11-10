@@ -5,6 +5,7 @@ import type { Server } from "node:http";
 import { publicAppOriginsFromEnv } from "@octogee/core/public-app-origins";
 import { renderMetrics } from "./metrics.js";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import type { UserAccounts, UserSignInHosts } from "@octogee/core/admin-user-router";
 import type { BuilderAccountReader } from "@octogee/core/builder-account";
 import {
   addAdminFleetRoutes,
@@ -66,6 +67,8 @@ export type ProductAdminRoutes = (
 
 export interface HttpServerDeps {
   addProductAdminRoutes?: ProductAdminRoutes;
+  userAccounts?: UserAccounts | undefined;
+  userSignIn?: UserSignInHosts | undefined;
   db: Firestore;
   store: PlatformStateStore;
   accounts: BuilderAccountReader;
@@ -308,6 +311,8 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     requestNativeReturnSourceRecovery: deps.requestNativeReturnSourceRecovery,
     suspendAuthUser: deps.suspendAuthUser,
     revokeConnectorGrantsForUser: deps.revokeConnectorGrantsForUser,
+    userAccounts: deps.userAccounts,
+    userSignIn: deps.userSignIn,
   });
   addAdminLogsRoutes(adminRouter, {
     source: deps.logs.source,
