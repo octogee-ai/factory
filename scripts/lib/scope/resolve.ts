@@ -112,6 +112,7 @@ export interface GhaOutputs {
   run_app: boolean;
   run_desktop_package: boolean;
   run_firestore_rules: boolean;
+  run_core_emulator: boolean;
   run_customer_lifecycle_emulator: boolean;
   run_functions_emulator: boolean;
   run_gateway_edge_emulator: boolean;
@@ -127,6 +128,7 @@ export function toGhaOutputs(result: ScopeResult): GhaOutputs {
     run_app: has("app"),
     run_desktop_package: has("desktop-package"),
     run_firestore_rules: has("firestore-rules"),
+    run_core_emulator: has("core-emulator"),
     run_customer_lifecycle_emulator: has("customer-lifecycle-emulator"),
     run_functions_emulator: has("functions-emulator"),
     run_gateway_edge_emulator: has("gateway-edge-emulator"),
@@ -142,6 +144,7 @@ export function serializeGhaOutputs(out: GhaOutputs): string {
     `run_app=${out.run_app}`,
     `run_desktop_package=${out.run_desktop_package}`,
     `run_firestore_rules=${out.run_firestore_rules}`,
+    `run_core_emulator=${out.run_core_emulator}`,
     `run_customer_lifecycle_emulator=${out.run_customer_lifecycle_emulator}`,
     `run_functions_emulator=${out.run_functions_emulator}`,
     `run_gateway_edge_emulator=${out.run_gateway_edge_emulator}`,

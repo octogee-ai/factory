@@ -28,6 +28,7 @@ export const JOBS = {
   desktop: "desktop",
   desktopPackage: "desktop-package",
   firestoreRules: "firestore-rules",
+  coreEmulator: "core-emulator",
   customerLifecycleEmulator: "customer-lifecycle-emulator",
   functionsEmulator: "functions-emulator",
   gatewayEdgeEmulator: "gateway-edge-emulator",
@@ -85,52 +86,52 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
   { name: JOBS.scripts, dir: "scripts", typecheck: "npx tsc --noEmit", matchGatewayImageNpm: true },
   {
     name: JOBS.octogeeVoiceTools,
-    dir: "infra/gateway/extensions/octogee-voice-tools",
+    dir: "infra/gateway/extensions/product/octogee-voice-tools",
     typecheck: 'echo "Voice SDK types run during native packaging; this job runs behavioral tests"',
   },
   {
     name: JOBS.octogeeBrokerTools,
-    dir: "infra/gateway/extensions/octogee-broker-tools",
+    dir: "infra/gateway/extensions/platform/octogee-broker-tools",
     typecheck: 'echo "Broker SDK types run against the pinned Native source; behavioral tests run here"',
   },
   {
     name: JOBS.octogeeActivityTools,
-    dir: "infra/gateway/extensions/octogee-activity-tools",
+    dir: "infra/gateway/extensions/product/octogee-activity-tools",
     typecheck: "npm run typecheck --silent",
   },
   {
     name: JOBS.octogeeAccessTools,
-    dir: "infra/gateway/extensions/octogee-access-tools",
+    dir: "infra/gateway/extensions/platform/octogee-access-tools",
     typecheck: 'echo "octogee-access-tools — no tsconfig; vitest is the gate"',
   },
   {
     name: JOBS.octogeeChatTools,
-    dir: "infra/gateway/extensions/octogee-chat-tools",
+    dir: "infra/gateway/extensions/product/octogee-chat-tools",
     typecheck: 'echo "octogee-chat-tools — no tsconfig; vitest is the gate"',
   },
   {
     name: JOBS.octogeeConnectorTools,
-    dir: "infra/gateway/extensions/octogee-connector-tools",
+    dir: "infra/gateway/extensions/product/octogee-connector-tools",
     typecheck: 'echo "octogee-connector-tools — no tsconfig; vitest is the gate"',
   },
   {
     name: JOBS.octogeeProjectTools,
-    dir: "infra/gateway/extensions/octogee-project-tools",
+    dir: "infra/gateway/extensions/product/octogee-project-tools",
     typecheck: 'echo "octogee-project-tools — no tsconfig; vitest is the gate"',
   },
   {
     name: JOBS.octogeeBoardTools,
-    dir: "infra/gateway/extensions/octogee-board-tools",
+    dir: "infra/gateway/extensions/product/octogee-board-tools",
     typecheck: 'echo "octogee-board-tools — no tsconfig; vitest is the gate"',
   },
   {
     name: JOBS.octogeeWebTools,
-    dir: "infra/gateway/extensions/octogee-web-tools",
+    dir: "infra/gateway/extensions/product/octogee-web-tools",
     typecheck: 'echo "octogee-web-tools — no tsconfig; vitest is the gate"',
   },
   {
     name: JOBS.octogeeOpsTools,
-    dir: "infra/gateway/extensions/octogee-ops-tools",
+    dir: "infra/gateway/extensions/product/octogee-ops-tools",
     typecheck: 'echo "octogee-ops-tools — no tsconfig; vitest is the gate"',
   },
   { name: JOBS.functions, dir: "functions", typecheck: TYPECHECK, nodeVersion: 22 },
@@ -148,6 +149,7 @@ export const STANDALONE_JOBS: readonly JobKey[] = [
   JOBS.app,
   JOBS.desktopPackage,
   JOBS.firestoreRules,
+  JOBS.coreEmulator,
   JOBS.customerLifecycleEmulator,
   JOBS.functionsEmulator,
   JOBS.gatewayEdgeEmulator,
@@ -166,7 +168,7 @@ export interface Ownership {
 }
 
 export const OWNERSHIP: readonly Ownership[] = [
-  { dir: "core/", jobs: [JOBS.core] },
+  { dir: "core/", jobs: [JOBS.core, JOBS.coreEmulator] },
   { dir: "test-helpers/", jobs: [JOBS.testHelpers] },
   { dir: "gateway-edge/", jobs: [JOBS.gatewayEdge, JOBS.gatewayEdgeEmulator] },
   { dir: "octogee-api/", jobs: [JOBS.octogeeApi, JOBS.octogeeApiEmulator] },
@@ -184,43 +186,43 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: "desktop/", jobs: [JOBS.desktop, JOBS.desktopPackage] },
   { dir: "scripts/", jobs: [JOBS.scripts, JOBS.customerLifecycleEmulator] },
   {
-    dir: "infra/gateway/extensions/octogee-voice-tools/",
+    dir: "infra/gateway/extensions/product/octogee-voice-tools/",
     jobs: [JOBS.octogeeVoiceTools, JOBS.tests],
   },
   {
-    dir: "infra/gateway/extensions/octogee-broker-tools/",
+    dir: "infra/gateway/extensions/platform/octogee-broker-tools/",
     jobs: [JOBS.octogeeBrokerTools],
   },
   {
-    dir: "infra/gateway/extensions/octogee-activity-tools/",
+    dir: "infra/gateway/extensions/product/octogee-activity-tools/",
     jobs: [JOBS.octogeeActivityTools],
   },
   {
-    dir: "infra/gateway/extensions/octogee-access-tools/",
+    dir: "infra/gateway/extensions/platform/octogee-access-tools/",
     jobs: [JOBS.octogeeAccessTools],
   },
   {
-    dir: "infra/gateway/extensions/octogee-chat-tools/",
+    dir: "infra/gateway/extensions/product/octogee-chat-tools/",
     jobs: [JOBS.octogeeChatTools],
   },
   {
-    dir: "infra/gateway/extensions/octogee-connector-tools/",
+    dir: "infra/gateway/extensions/product/octogee-connector-tools/",
     jobs: [JOBS.octogeeConnectorTools, JOBS.tests],
   },
   {
-    dir: "infra/gateway/extensions/octogee-project-tools/",
+    dir: "infra/gateway/extensions/product/octogee-project-tools/",
     jobs: [JOBS.octogeeProjectTools],
   },
   {
-    dir: "infra/gateway/extensions/octogee-board-tools/",
+    dir: "infra/gateway/extensions/product/octogee-board-tools/",
     jobs: [JOBS.octogeeBoardTools],
   },
   {
-    dir: "infra/gateway/extensions/octogee-web-tools/",
+    dir: "infra/gateway/extensions/product/octogee-web-tools/",
     jobs: [JOBS.octogeeWebTools],
   },
   {
-    dir: "infra/gateway/extensions/octogee-ops-tools/",
+    dir: "infra/gateway/extensions/product/octogee-ops-tools/",
     jobs: [JOBS.octogeeOpsTools, JOBS.tests],
   },
   { dir: "functions/", jobs: [JOBS.functions, JOBS.functionsEmulator] },
@@ -270,6 +272,7 @@ export const EDGES: readonly ScopeEdge[] = [
   {
     when: "scripts/ops/run-emulator-vitest.mjs",
     jobs: [
+      JOBS.coreEmulator,
       JOBS.functionsEmulator,
       JOBS.gatewayEdgeEmulator,
       JOBS.glmControllerEmulator,
@@ -295,6 +298,7 @@ export const EDGES: readonly ScopeEdge[] = [
   {
     when: "test-helpers/",
     jobs: [
+      JOBS.coreEmulator,
       JOBS.gatewayEdge,
       JOBS.gatewayEdgeEmulator,
       JOBS.octogeeApi,
@@ -304,7 +308,7 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.tests,
     ],
     reason:
-      "@octogee/test-helpers (firestore-emulator) is consumed by the gateway-edge + octogee-api + functions emulator specs; test-helpers/package.json's firebase-admin range is also swept by tests/specs/firebase-admin-major-alignment.spec.ts",
+      "@octogee/test-helpers (firestore-emulator) is consumed by the core + gateway-edge + octogee-api + functions emulator specs; test-helpers/package.json's firebase-admin range is also swept by tests/specs/firebase-admin-major-alignment.spec.ts",
   },
   {
     when: "gateway-edge/",
@@ -395,6 +399,7 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.app,
       JOBS.artifactWorker,
       JOBS.core,
+      JOBS.coreEmulator,
       JOBS.functions,
       JOBS.functionsEmulator,
       JOBS.gatewayEdge,

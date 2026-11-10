@@ -98,8 +98,7 @@ scheduled security audits run in **GitHub Actions**. Checks are tiered: PR commi
 run the affected packages' typecheck and tests plus diff-scoped lint and security
 scans; main runs the full suite every two hours, skipped when every lane already
 succeeded on main's current commit; Ship TEST runs the end-to-end tests in `tests/live/` against the
-deployed environment. A running main build is
-never cancelled; GitHub keeps only the newest pending push, and Ship TEST builds any
+deployed environment. A new push cancels an older automatic main build, and Ship TEST builds any
 SHA that was skipped.
 Add or change checks in `scripts/lib/ci-checks.ts` and `scripts/ci/`.
 PR jobs use read-only repository access and no cloud credentials. Native image
@@ -127,6 +126,9 @@ Ship TEST requires that complete build before deploying. Public desktop download
 Do not add deployment or fleet authority to the main/check identities.
 See [Handbook 21](docs/handbook/21-deploy-and-cicd.md) for credentials and cutover.
 
+For a change confined to `glm-controller/`, test it on TEST with the one-off Cowboy image swap in
+[Handbook 21](docs/handbook/21-deploy-and-cicd.md#cowboy-only-changes) before merging, rather than waiting for Build main and Ship TEST.
+
 The deployment path preserves three invariants:
 
 1. **Build main** (`.github/workflows/build-main.yml`) produces one immutable, SHA- and
@@ -151,7 +153,9 @@ without waking; retired gateways are skipped. **Ship PROD** deploys a TEST-passe
 converges the PROD Builder fleet. Cowboy attempts the latest accepted computer image when
 a stopped computer boots or restarts after preemption, retaining the home disk and logging
 any skipped upgrade. Project autosave and shutdown flush are best effort. Active computers
-stay running and suspended computers resume on their current boot; Admin **Replace
+stay running and suspended computers resume on their current boot when the Gateway image is unchanged.
+A suspended computer changing Gateway images is stopped before rebinding and cold-started on the retained home.
+Admin **Replace
 computer** forces a rollout.
 Build main constructs the desktop VM before it succeeds, so the boot image carries
 that build's Gateway image and new computers skip the image pull. The image is
@@ -194,9 +198,10 @@ Active TEST and PROD share the CENTRAL GKE cluster. MM WebSockets ride
   text in Gitea, binaries in GCS (`.files/manifest.json`); per-customer `GITEA_TOKEN`.
 - **Membership.** Workspace and project membership are independent; `{slug}-general` channel
   membership is the canonical workspace-membership signal.
-- **Provisioning.** Onboarding done → Cloud Function sets `provisioning.status` → in-pod
-  provisioner (scripts, in the gateway pod) creates MM team + Builder + Agent
-  (`octogee-{slug}-coach`) + Gitea org + workspace repo. Project create = `POST /api/projects`
+- **Provisioning.** Onboarding done → Cloud Function records `signupAdmission` → Cowboy
+  admits through the platform store (sets `provisioning.status`) → in-pod provisioner
+  (scripts, in the gateway pod) creates MM team + Builder + Agent (`octogee-{slug}-coach`)
+  + Gitea org + workspace repo. Project create = `POST /api/projects`
   (octogee-api): Firestore doc + MM channel + Gitea repo; client reacts to the doc.
 - **Gateways.** glm-controller ("Cowboy") provisions/retires/rolls per-customer gateway pods
   and reconciles the static shared edge routes; per-gateway state in `glmGateways/{id}`.

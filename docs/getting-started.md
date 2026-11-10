@@ -48,7 +48,7 @@ is free only for one 30-day instance. To make the credit last, follow
 
 ### To manage gateways with `fleet`
 
-The `fleet` command line signs in with your Google account. It needs one more
+The [`fleet`](https://github.com/octogee-ai/fleet) command line signs in with your Google account. It needs one more
 free item in the same Google Cloud project: an OAuth client of the type
 **TVs and Limited Input devices**. That odd name is Google's term for sign-in
 from a command line, where `fleet` prints a code and you approve it in a

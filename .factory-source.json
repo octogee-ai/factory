@@ -1,6 +1,6 @@
 {
-  "sha": "5fc418033c0527f625dedfcec9333120064758e2",
-  "committedAt": "2026-11-07T08:55:08-08:00",
+  "sha": "d805a4179237799e1dfa356e759a02b6decc2c2b",
+  "committedAt": "2026-11-10T11:59:41-08:00",
   "sources": [
     "CLAUDE.md",
     "CODE_OF_CONDUCT.md",
@@ -25,7 +25,11 @@
     "scripts/ops/factory-repo/SECURITY.md",
     "scripts/ops/factory-repo/SHIP.md",
     "scripts/ops/factory-repo/dependabot.yml",
+    "scripts/ops/factory-repo/gitignore",
+    "scripts/ops/factory-repo/package.base.json",
     "scripts/ops/factory-repo/pull_request_template.md",
+    "scripts/ops/factory-repo/tsconfig.json",
+    "scripts/ops/factory-repo/vitest.config.ts",
     "scripts/ops/factory-repo/workflows/checks.yml",
     "scripts/ops/factory-repo/workflows/dco.yml",
     "scripts/package.json"
