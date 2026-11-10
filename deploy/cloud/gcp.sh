@@ -5,9 +5,15 @@ PROVIDER="gcp"
 GCP_REGION="${GCP_REGION:-us-central1}"
 MACHINE_TYPE="${MACHINE_TYPE:-e2-standard-4}"
 SQL_TIER="${SQL_TIER:-db-custom-2-7680}"
+SQL_AVAILABILITY="${SQL_AVAILABILITY:-REGIONAL}"
 NETWORK_NAME="${CLUSTER_NAME}"
 SQL_INSTANCE="${CLUSTER_NAME}"
 FILES_ACCOUNT="${CLUSTER_NAME}-files"
+if [ -n "${GCP_ZONE:-}" ]; then
+  CLUSTER_LOCATION=(--zone "${GCP_ZONE}")
+else
+  CLUSTER_LOCATION=(--region "${GCP_REGION}")
+fi
 
 g() {
   gcloud --project "${GCP_PROJECT}" --quiet "$@"
@@ -38,16 +44,16 @@ ensure_network() {
 }
 
 ensure_cluster() {
-  if ! g container clusters describe "${CLUSTER_NAME}" --region "${GCP_REGION}" >/dev/null 2>&1; then
+  if ! g container clusters describe "${CLUSTER_NAME}" "${CLUSTER_LOCATION[@]}" >/dev/null 2>&1; then
     step "GKE cluster (about 10 minutes)"
-    g container clusters create "${CLUSTER_NAME}" --region "${GCP_REGION}" \
+    g container clusters create "${CLUSTER_NAME}" "${CLUSTER_LOCATION[@]}" \
       --network "${NETWORK_NAME}" --subnetwork "${NETWORK_NAME}" \
       --enable-ip-alias --enable-private-nodes --release-channel regular \
       --machine-type "${MACHINE_TYPE}" --num-nodes 1 \
       --enable-autoscaling --min-nodes 1 --max-nodes 3 \
       --workload-pool "${GCP_PROJECT}.svc.id.goog" --enable-shielded-nodes >/dev/null
   fi
-  g container clusters get-credentials "${CLUSTER_NAME}" --region "${GCP_REGION}" >/dev/null
+  g container clusters get-credentials "${CLUSTER_NAME}" "${CLUSTER_LOCATION[@]}" >/dev/null
   KUBE_CONTEXT="$(kubectl config current-context)"
 }
 
@@ -57,7 +63,7 @@ ensure_database() {
     g sql instances create "${SQL_INSTANCE}" --database-version=POSTGRES_16 --edition=ENTERPRISE \
       --tier="${SQL_TIER}" --region="${GCP_REGION}" \
       --network="projects/${GCP_PROJECT}/global/networks/${NETWORK_NAME}" --no-assign-ip \
-      --availability-type=REGIONAL --storage-size=20 --storage-auto-increase \
+      --availability-type="${SQL_AVAILABILITY}" --storage-size=20 --storage-auto-increase \
       --backup-start-time=03:00 --enable-point-in-time-recovery \
       --ssl-mode=ENCRYPTED_ONLY --deletion-protection >/dev/null
   fi

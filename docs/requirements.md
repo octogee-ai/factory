@@ -60,7 +60,7 @@ OpenClaw's own options work today.
 | --- | --- | --- |
 | Chat | Mattermost | A `ChannelHost` adapter: Slack, Discord and others |
 | Git host | Gitea | A `GitHost` adapter |
-| Operator identity | A token file | Any standard OIDC issuer: Keycloak, Dex, Authentik, Zitadel, Okta, Entra |
+| Operator identity | Google sign-in | Other OIDC issuers later: Keycloak, Dex, Authentik, Zitadel, Okta, Entra |
 | Control UI sign-in | OpenClaw's gateway token | OpenClaw's `trusted-proxy` mode behind Pomerium or oauth2-proxy |
 | Startup secrets and the root key | Environment variables | OpenClaw `file` or `exec` secret references: Vault, OpenBao, 1Password |
 | Secrets the platform creates | Encrypted rows in PostgreSQL | A Vault or OpenBao adapter |

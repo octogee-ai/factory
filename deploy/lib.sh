@@ -80,16 +80,27 @@ apply_settings() {
     --dry-run=client -o yaml | k apply -f - >/dev/null
 }
 
+model_for_key() {
+  case "${1}" in
+    ANTHROPIC_API_KEY) echo "anthropic/claude-opus-5-5" ;;
+    OPENAI_API_KEY) echo "openai/gpt-6-astra" ;;
+    GEMINI_API_KEY) echo "google/gemini-3.6-flash" ;;
+    OPENROUTER_API_KEY) echo "openrouter/auto" ;;
+  esac
+}
+
 apply_model_keys() {
-  local name value names="" args=()
+  local name value model="" names="" args=()
   for name in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY; do
     value="$(printenv "${name}" || true)"
     if [ -n "${value}" ]; then
       args+=("--from-literal=${name}=${value}")
       names="${names} ${name}"
+      [ -n "${model}" ] || model="$(model_for_key "${name}")"
     fi
   done
   [ "${#args[@]}" -gt 0 ] || return 0
+  args+=("--from-literal=AGENT_MODEL=${model}")
   step "Copying model keys into the cluster:${names}"
   k create secret generic platform-model-keys "${args[@]}" --dry-run=client -o yaml | k apply -f - >/dev/null
   if k get deploy/gateway >/dev/null 2>&1; then
