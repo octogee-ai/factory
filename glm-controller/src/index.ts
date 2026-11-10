@@ -28,6 +28,7 @@ import { createNativeReturnSourceRecoveryOwner } from "./native-return-source-re
 import { createNativeReturnTargetRetirementVerifier } from "./lib/native-return-target-retirement.js";
 import { prepareNativeComputerReturn, releaseNativeReturnSourceRecoveryHold } from "./lib/native-computer-return.js";
 import { retireNativeSchedulerBeforeStage } from "./lib/native-scheduler-retirement.js";
+import { createAbandonedNativeSchedulerRecovery } from "./lib/native-return-scheduler-recovery.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS } from "@octogee/shared/types/platform-config";
 import { randomUUID } from "node:crypto";
 import { initializeApp, applicationDefault } from "firebase-admin/app";
@@ -2450,18 +2451,22 @@ function buildSurgeHandoffDeps(input: {
   };
 }
 
+function buildNativeReturnTargetRetirementVerifier(store: PlatformStateStore, kubeOps: KubeOps) {
+  return createNativeReturnTargetRetirementVerifier({
+    store, credentialsRetired: createAgentStoreCredentialRetirementVerifier(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "native return recovery requires PostgreSQL retirement proof")),
+    runtimeAbsent: async gatewayId => {
+      if (!await retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(gatewayId))) return false;
+      const pvc = await spawnKubectl(["-n", NAMESPACE, "get", `pvc/octogee-gateway-${gatewayId}-data`, "--ignore-not-found=true", "-o", "name"]);
+      if (pvc.code !== 0) throw new Error("native return recovery could not inspect retired Shared home storage");
+      return !pvc.stdout.trim();
+    },
+  });
+}
+
 function buildNativeReturnSourceRecoveryOwner(store: PlatformStateStore, kubeOps: KubeOps, privateKey: string, prepareMigrationAgentStores: PrepareMigrationAgentStores) {
   return createNativeReturnSourceRecoveryOwner({
     store, now: Date.now, log, prepareSourceStores: prepareMigrationAgentStores,
-    verifyRetiredTarget: createNativeReturnTargetRetirementVerifier({
-      store, credentialsRetired: createAgentStoreCredentialRetirementVerifier(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "native return recovery requires PostgreSQL retirement proof")),
-      runtimeAbsent: async gatewayId => {
-        if (!await retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(gatewayId))) return false;
-        const pvc = await spawnKubectl(["-n", NAMESPACE, "get", `pvc/octogee-gateway-${gatewayId}-data`, "--ignore-not-found=true", "-o", "name"]);
-        if (pvc.code !== 0) throw new Error("native return recovery could not inspect retired Shared home storage");
-        return !pvc.stdout.trim();
-      },
-    }),
+    verifyRetiredTarget: buildNativeReturnTargetRetirementVerifier(store, kubeOps),
     releaseSourceHold: input => releaseNativeReturnSourceRecoveryHold({ store, vm: createGatewayComputeClient(store, log), now: Date.now,
       wait: ms => new Promise(resolve => setTimeout(resolve, ms)) }, input),
     sourceClient: async (gatewayId, authority) => {
@@ -2471,6 +2476,27 @@ function buildNativeReturnSourceRecoveryOwner(store: PlatformStateStore, kubeOps
           if (id !== gatewayId) throw new Error("native return recovery source transport changed");
           return url;
         });
+    },
+  });
+}
+
+function buildAbandonedNativeSchedulerRecovery(store: PlatformStateStore, kubeOps: KubeOps, logFn: (msg: string) => void) {
+  const vm = createGatewayComputeClient(store, logFn);
+  const { provider } = createBuilderHomeServices(store, logFn);
+  return createAbandonedNativeSchedulerRecovery({
+    store,
+    verifyRetiredTarget: buildNativeReturnTargetRetirementVerifier(store, kubeOps),
+    oldSourceAbsent: async gatewayId => {
+      if (!await retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(gatewayId))) return false;
+      return !await vm.findByLabels({ "octogee-gateway-id": gatewayId, "octogee-environment": COMPUTER_ENVIRONMENT });
+    },
+    verifyComputer: async (computer, input) => {
+      const [instance, home] = await Promise.all([vm.describe(computer.instanceName, computer.zone), provider.readDisk(computer.homeSource)]);
+      const instancePath = `projects/${home.projectId}/zones/${computer.zone}/instances/${computer.instanceName}`;
+      return instance?.instanceId === computer.instanceId && instance.gatewayId === input.fromGatewayId &&
+        instance.internalIp === computer.internalIp && instance.status === "RUNNING" &&
+        instance.metadata["octogee-owner-uid"] === input.uid && home.ownerUid === input.uid.toLowerCase() &&
+        home.id === computer.homeId && home.users?.length === 1 && home.users[0].endsWith(instancePath);
     },
   });
 }
@@ -3093,6 +3119,7 @@ async function buildHandlers(
     recordMigrationProgress: ({ operation, event }) =>
       journalOperationProgress(progressJournalDeps(store, logFn), operation, event),
     recoverNativeReturnSource: fleetOps.nativeReturnRecovery.recover,
+    recoverAbandonedNativeScheduler: buildAbandonedNativeSchedulerRecovery(store, kubeOps, logFn),
     prepareNativeComputerReturn: (input) => prepareNativeComputerReturn({
       store, vm: createGatewayComputeClient(store, logFn),
       now: Date.now, wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

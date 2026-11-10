@@ -21,6 +21,7 @@ import {
 } from "@octogee/shared/types/fleet-controller";
 import type { NativeComputerReturn, NativeComputerReturnInput, NativeReturnPark, NativeSourcePark } from "../lib/native-computer-return.js";
 import type { NativeSchedulerRetirementInput } from "../lib/native-scheduler-retirement.js";
+import { reportedAbandonedNativeScheduler, type RecoverAbandonedNativeScheduler } from "../lib/native-return-scheduler-recovery.js";
 import type {
   CustomerMigrationV2GatewayRootFence,
   CustomerMigrationV2State,
@@ -91,6 +92,7 @@ export interface MigrateCustomerDeps {
   reportMigrationProgress: (gatewayId: string, event: MigrationProgressRequestBody) => Promise<void>;
   recordMigrationProgress: (input: { operation: Operation; event: MigrationProgressRecord }) => Promise<void>;
   recoverNativeReturnSource?: OperationHandler;
+  recoverAbandonedNativeScheduler?: RecoverAbandonedNativeScheduler;
   prepareNativeComputerReturn: (input: NativeComputerReturnInput) => Promise<NativeComputerReturn | null>;
   retireNativeSchedulerBeforeStage: (input: NativeSchedulerRetirementInput, scheduler: MigrationClient["scheduler"]) => Promise<void>;
 
@@ -857,12 +859,7 @@ async function closeSourceForNativeReturnProvision(
   const { targets, slug, migrationId } = input;
   if (!handoff) throw new Error("native return requires a durable scheduler handoff");
   if (!handoff.forwardRecovery) {
-    await step("quiesce-source", () => client.quiesce({
-      migrationId,
-      gatewayId: targets.fromGatewayId,
-      slug,
-      ...(handoff ? { schedulerHandoff: true, schedulerMigrationId: handoff.migrationId, retainNonportable: true } : {}),
-    }));
+    await quiesceNativeReturnSource(input, client, step, handoff);
     if (!input.nativeReturn.checkpointRequested) {
       await step("flush-source", () => client.flushGateway({
         migrationId,
@@ -898,6 +895,32 @@ async function closeSourceForNativeReturnProvision(
   });
   if (handoff) await step("stage-scheduler", () => stagePortableSchedules(input.deps, client, handoff));
   await step("request-native-checkpoint", input.nativeReturn.requestCheckpoint);
+}
+
+async function quiesceNativeReturnSource(
+  input: NativeReturnProvision,
+  client: MigrationClient,
+  step: (name: string, action: () => Promise<unknown>) => Promise<void>,
+  handoff: SchedulerHandoffState,
+): Promise<void> {
+  const { targets, slug, migrationId, uid, operationId, op, ctx } = input;
+  const gatewayId = targets.fromGatewayId;
+  const quiesce = () => client.quiesce({
+    migrationId, gatewayId, slug, schedulerHandoff: true, schedulerMigrationId: handoff.migrationId, retainNonportable: true,
+  });
+  try {
+    await step("quiesce-source", quiesce);
+  } catch (error) {
+    const hold = reportedAbandonedNativeScheduler(error, { gatewayId, slug, operationId });
+    const recover = input.deps.recoverAbandonedNativeScheduler;
+    const assertActiveClaim = ctx.assertActiveClaim;
+    if (!hold || !recover || !assertActiveClaim) throw error;
+    await step("recover-abandoned-native-scheduler", () => recover({
+      fromGatewayId: gatewayId, toGatewayId: targets.toGatewayId, uid, slug, operationId,
+      claimedStartedAt: op.startedAt, sourceEpoch: targets.fromEpoch, hold,
+    }, client.scheduler, assertActiveClaim));
+    await step("quiesce-source", quiesce);
+  }
 }
 
 async function settleNativeReturnAfterFailure(

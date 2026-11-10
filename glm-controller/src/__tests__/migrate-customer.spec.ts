@@ -889,6 +889,33 @@ describe("native computer return", () => {
     return native;
   }
 
+  it("recovers the reported older scheduler hold before retrying the same quiesce", async () => {
+    const h = mkDeps();
+    nativeReturn(h);
+    const oldScheduler = "mig-builder-return-alice-s-old-g3:scheduler:1:claim:2000";
+    h.deps.recoverAbandonedNativeScheduler = vi.fn(async () => undefined);
+    const quiesce = h.client.quiesce;
+    let blocked = true;
+    h.client.quiesce = vi.fn(async request => {
+      if (blocked && request.schedulerHandoff) {
+        blocked = false;
+        throw new MigrationRpcError("/quiesce/gw-blue: 500 quiesce failed", { status: 500, details: {
+          error: "quiesce failed", message: `Cron agent octogee-alice-coach is held for migration ${oldScheduler}`,
+        } });
+      }
+      return quiesce(request);
+    });
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+    expect(result.success).toBe(true);
+    expect(h.deps.recoverAbandonedNativeScheduler).toHaveBeenCalledOnce();
+    expect(h.deps.recoverAbandonedNativeScheduler).toHaveBeenCalledWith(
+      expect.objectContaining({ fromGatewayId: "gw-blue", sourceEpoch: 4, hold: {
+        operationId: "builder-return-alice-s-old-g3", migrationId: oldScheduler, agentId: "octogee-alice-coach",
+      } }), expect.any(Function), expect.any(Function),
+    );
+    expect(vi.mocked(h.client.quiesce).mock.calls.filter(([request]) => request.schedulerHandoff)).toHaveLength(2);
+  });
+
   it("continues a validated Native forward recovery on its live source release", async () => {
     const h = mkDeps();
     const native = nativeReturn(h);

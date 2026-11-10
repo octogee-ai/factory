@@ -197,11 +197,15 @@ class BuilderHomeProvider {
   }
 }
 
-export function createBuilderHomeProvider(deps: HomeProviderDeps): Pick<BuilderHomeMigrationDeps, "inventory" | "verifyStopped" | "adopt" | "nativeZone" | "removeStoppedHome"> & { remainingOwnerHomes(uid: string): Promise<string[]> } {
+export function createBuilderHomeProvider(deps: HomeProviderDeps): Pick<BuilderHomeMigrationDeps, "inventory" | "verifyStopped" | "adopt" | "nativeZone" | "removeStoppedHome"> & {
+  readDisk: BuilderHomeProvider["disk"];
+  remainingOwnerHomes(uid: string): Promise<string[]>;
+} {
   const provider = new BuilderHomeProvider(deps);
   return {
     inventory: provider.inventory.bind(provider), verifyStopped: provider.verifyStopped.bind(provider),
     adopt: provider.adopt.bind(provider), removeStoppedHome: provider.removeStoppedHome.bind(provider),
+    readDisk: provider.disk.bind(provider),
     remainingOwnerHomes: provider.remainingOwnerHomes.bind(provider),
     nativeZone: async uid => (await provider.ownedComputer(uid, PARKED_STATUSES))?.zone ?? null,
   };
