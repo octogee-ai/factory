@@ -20,7 +20,6 @@ export interface LogEntry {
 export type StoreOverrides = Omit<PostgresPlatformStateStoreOptions, "pool" | "schema" | "logger">;
 
 export const FAST_TIMINGS: StoreOverrides = {
-  retry: { baseDelayMs: 1, maxDelayMs: 5, budgetMs: 10_000 },
   watchTiming: { pollIntervalMs: 100, initialRetryDelayMs: 20, maxRetryDelayMs: 200 },
   notificationTiming: { initialReconnectDelayMs: 20, maxReconnectDelayMs: 200 },
 };
