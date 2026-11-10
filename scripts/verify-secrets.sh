@@ -19,6 +19,7 @@ set -euo pipefail
 #   ./scripts/verify-secrets.sh --env=prod [--deployment-target=prod-west]
 #   ./scripts/verify-secrets.sh --env=test [--context=<kube-context>]
 #   ./scripts/verify-secrets.sh --env=custom --namespace=feat-alice
+#   ./scripts/verify-secrets.sh --env=test --phase=bootstrap   # before the first Helm install
 #
 # Exit codes:
 #   0 — required secrets, values and signing keypairs verified
@@ -39,6 +40,7 @@ ENV=""
 KUBE_CTX=""
 CUSTOM_NS=""
 DEPLOYMENT_TARGET=""
+PHASE="launch"
 
 for arg in "$@"; do
   case $arg in
@@ -46,12 +48,17 @@ for arg in "$@"; do
     --deployment-target=*) DEPLOYMENT_TARGET="${arg#*=}" ;;
     --namespace=*) CUSTOM_NS="${arg#*=}" ;;
     --context=*)   KUBE_CTX="${arg#*=}" ;;
-    --help|-h)     echo "Usage: $0 --env=prod|test|custom [--deployment-target=TARGET] [--namespace=NAME] [--context=<kube-context>]"; exit 0 ;;
+    --phase=*)     PHASE="${arg#*=}" ;;
+    --help|-h)     echo "Usage: $0 --env=prod|test|custom [--deployment-target=TARGET] [--namespace=NAME] [--context=<kube-context>] [--phase=bootstrap|launch]"; exit 0 ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
 [[ -z "$ENV" ]] && { echo "Usage: $0 --env=prod|test|custom [--namespace=NAME]"; exit 1; }
+case "$PHASE" in
+  bootstrap|launch) ;;
+  *) echo "--phase must be bootstrap or launch"; exit 1 ;;
+esac
 
 TARGET_ENV="$ENV"
 [[ "$TARGET_ENV" == "custom" ]] && TARGET_ENV="test"
@@ -153,7 +160,7 @@ if [[ "$ENV" != custom ]]; then
 fi
 
 echo ""
-echo -e "${BOLD}Pre-deploy secret check — ${ENV}${NC}"
+echo -e "${BOLD}Pre-deploy secret check — ${ENV} (${PHASE})${NC}"
 echo -e "Namespace: ${NS} | Context: ${KUBE_CTX}"
 echo ""
 
@@ -175,6 +182,11 @@ echo ""
 echo -e "${BOLD}Required keys (non-empty):${NC}"
 for entry in "${REQUIRED_KEYS[@]}"; do
   IFS=':' read -r secret key fix <<< "$entry"
+
+  if [[ "$PHASE" == "bootstrap" && "$secret" == "mattermost-gateway" ]]; then
+    echo -e "  ${YELLOW}↷${NC} ${secret}/${key} — skipped (set by setup-mattermost.sh after Helm)"
+    continue
+  fi
 
   # Skip key check if the secret itself is missing (already reported above)
   if ! kubectl get secret "$secret" -n "$NS" --context "$KUBE_CTX" >/dev/null 2>&1; then

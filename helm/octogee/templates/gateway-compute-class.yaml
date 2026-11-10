@@ -8,6 +8,12 @@ metadata:
   name: {{ $base }}
   labels:
     {{- include "octogee.labels" . | nindent 4 }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace }}
+    {{- if .Release.IsInstall }}
+    helm.sh/hook: pre-install
+    {{- end }}
 spec:
   autopilot:
     enabled: true
