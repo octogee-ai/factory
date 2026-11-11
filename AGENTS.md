@@ -5,8 +5,8 @@ file — Claude, Codex, and anything else working here share one context). Just-
 
 ## What Is Octogee
 
-Personal AI partner platform — "Eight arms. One dream." Each user gets an AI agent
-(their Agent), a workspace with chat (Mattermost) + git (Gitea) + a managed hosting
+Personal AI partner platform — "Eight arms. One dream." Each user gets an AI agent,
+a workspace with chat (Mattermost) + git (Gitea) + a managed hosting
 pipeline. Users create projects (each with a chat channel, repo, and canvas home
 page); others can join workspaces or projects independently. Admins operate via a
 separate dashboard.
@@ -30,7 +30,7 @@ tests/ firestore-rules-tests/  cross-package + security-rules tests
 docs/            start at docs/INDEX.md
 ```
 
-The per-user Agent runtime is the OpenClaw **gateway pod** (built from
+The per-user agent runtime is the OpenClaw **gateway pod** (built from
 `infra/gateway/`); gateway-edge and the provisioner run inside it. Ready-to-serve
 `static-site` build/test/preview uses a bounded, non-executing API materializer.
 Vite/Astro build/test/preview use external ephemeral gVisor Jobs, and publish
@@ -45,7 +45,7 @@ cd site && npm run dev         # :4321
 cd octogee-api && npm run dev  # :3001 (the API)
 ```
 
-## Engineering Principles — non-negotiable (solo operator, pre-customer)
+## Engineering Principles — non-negotiable (solo operator, pre-launch)
 
 - **Test changed behavior, not files.** Start red for bugs, logic branches,
   state transitions, auth boundaries, handlers, and user interactions. Do not
@@ -80,11 +80,11 @@ cd octogee-api && npm run dev  # :3001 (the API)
 
 ## Workflow — keep it small
 
-This is a pre-customer product run by one operator. Prefer one small PR with one
+This is a pre-launch product run by one operator. Prefer one small PR with one
 purpose and the narrowest relevant test/typecheck. Write a spec only when
 the operator needs to choose among materially different cross-subsystem designs.
 Do not add review agents, receipts, baselines, rehearsals, approval layers, or
-multi-PR sequencing unless the operator asks for them or a current customer-risk
+multi-PR sequencing unless the operator asks for them or a current user-risk
 boundary requires them.
 
 **Specs are disposable.** Delete a spec when its work lands; code and tests are
@@ -121,7 +121,7 @@ npm run ci:ship-prod -- --sha=<test-passed-main-sha> --actor=operator:<name>
 Hosted operator commands dispatch and wait for an exact GitHub Actions run.
 `ci:build` builds committed main locally; `ci:deploy -- --local` and
 `ci:ship-test -- --local` and `ci:ship-prod -- --local` use the operator host. Desktop installer builds remain explicit. Build main constructs and accepts the
-Desktop VM after the container images, bound to the exact isolated Gateway digest.
+Desktop VM after the container images, bound to the exact isolated gateway image digest.
 Ship TEST requires that complete build before deploying. Public desktop downloads stay on GitHub Releases.
 Do not add deployment or fleet authority to the main/check identities.
 See [Handbook 21](docs/handbook/21-deploy-and-cicd.md) for credentials and cutover.
@@ -148,7 +148,7 @@ release reservation, or automatic CI fleet authority. **Ship TEST** is an explic
 operator command (`npm run ci:ship-test`) that waits for the SHA's running Build main run (dispatching one
 when there is no manifest or running build), deploys TEST platform/site, publishes the desktop
 image when included in the build, journals isolated gateway desired releases, and waits for
-shared and isolated live image convergence. Paused isolated gateways receive the desired release
+shared and isolated gateway live-image convergence. Paused isolated gateways receive the desired release
 without waking; retired gateways are skipped. **Ship PROD** deploys a TEST-passed SHA and
 converges the PROD isolated gateways. The fleet controller attempts the latest accepted VM image when
 a stopped VM boots or restarts after preemption, retaining the home disk and logging
@@ -201,7 +201,7 @@ TEST and PROD run in separate GCP projects, each with its own GKE cluster. MM We
   membership is the canonical workspace-membership signal.
 - **Provisioning.** Onboarding done → Cloud Function records `signupAdmission` → the fleet controller
   admits through the platform store (sets `provisioning.status`) → in-pod provisioner
-  (scripts, in the gateway pod) creates MM team + user + Agent (`octogee-{slug}-coach`)
+  (scripts, in the gateway pod) creates MM team + user + agent (`octogee-{slug}-coach`)
   + Gitea org + workspace repo. Project create = `POST /api/projects`
   (octogee-api): Firestore doc + MM channel + Gitea repo; client reacts to the doc.
 - **Gateways.** glm-controller (the fleet controller) provisions/retires/rolls per-user gateway pods

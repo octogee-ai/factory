@@ -8,7 +8,7 @@ of taking my word for it.
 
 [How this differs from OpenClaw Enterprise](docs/why-octogee-cloud.md).
 
-Published from the Octogee monorepo at `4b5ca4b12194707de3f5c0be21547c807c8da6c6`.
+Published from the Octogee monorepo at `e337134ca046e2922048c0729b2711dfa26eddb5`.
 
 ## Run it
 

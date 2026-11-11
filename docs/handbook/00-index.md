@@ -15,7 +15,7 @@ agentic development workflow. It serves two audiences from one set of chapters:
 
 - **Operators** (human or agent) running the platform — deploy, verify, rotate
   credentials, provision environments, troubleshoot, recover.
-- **Builder agents** working in this repo — how we write reliable code, the
+- **Coding agents** working in this repo — how we write reliable code, the
   PR/effort workflow, testing rules, repo conventions.
 
 It replaces the old monolith `docs/operations/RUNBOOK.md`. A monolith is bad for
