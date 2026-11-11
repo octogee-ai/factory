@@ -80,8 +80,11 @@ export async function writeInitialGatewayReleaseInTransaction(transaction, args)
     await transaction.gateways.roots.create(gatewayDoc);
     await transaction.gateways.releases.createInitial(releaseDoc);
 }
-export async function writeInitialGatewayReleaseInStore(store, args) {
-    await store.transaction({ label: "gateway-release.initial" }, (transaction) => writeInitialGatewayReleaseInTransaction(transaction, args));
+export async function writeInitialGatewayReleaseInStore(store, args, beforeCommit) {
+    await store.transaction({ label: "gateway-release.initial" }, async (transaction) => {
+        await writeInitialGatewayReleaseInTransaction(transaction, args);
+        await beforeCommit?.();
+    });
 }
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);

@@ -273,13 +273,13 @@ function clientErrorStatus(error: unknown): number | undefined {
 function jsonErrorHandler(log: (msg: string) => void) {
   return (error: unknown, req: Request, res: Response, next: NextFunction): void => {
     const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
-    log(`[glm-controller] ${req.method} ${req.originalUrl} failed: ${detail}`);
+    const clientStatus = clientErrorStatus(error);
+    log(`[glm-controller] ${clientStatus === undefined ? "❌ " : ""}${req.method} ${req.originalUrl} failed: ${detail}`);
     if (res.headersSent) {
       next(error);
       return;
     }
     const message = error instanceof Error ? error.message : String(error);
-    const clientStatus = clientErrorStatus(error);
     if (clientStatus !== undefined) {
       res.status(clientStatus).json({ error: "invalid_request", message });
       return;

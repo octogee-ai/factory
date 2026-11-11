@@ -2,6 +2,7 @@ import request from "supertest";
 import type { Express } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { userAccountFromData, type UserAccountReader } from "@octogee/core/user-account";
+import { createLogger } from "../lib/logger.js";
 import {
   MalformedRecordError,
   type PlatformStateError,
@@ -1212,6 +1213,30 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(res.text).not.toContain("at ");
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("POST /api/admin/users/u1/explode failed"));
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining(failure.stack!));
+  });
+
+  it("logs an unexpected admin route failure at error severity and a refused request below it", async () => {
+    const logger = createLogger();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const deps = buildDeps(store, {
+      log: (message) => logger.legacy(message),
+      addProductAdminRoutes: (router) => {
+        router.post("/users/:uid/explode", () => { throw new Error("store refused the write"); });
+      },
+    });
+    const app = createHttpServer(deps);
+
+    await request(app).post("/api/admin/users/u1/explode").set("Authorization", "Bearer admin-token").expect(500);
+    const loggedAsError = errors.mock.calls.flat().join("\n");
+    errors.mockClear();
+    await request(app).post("/api/admin/users/u1/explode").set("Authorization", "Bearer admin-token")
+      .set("Content-Type", "application/json").send("{\"uid\":").expect(400);
+
+    expect(loggedAsError).toContain("POST /api/admin/users/u1/explode failed");
+    expect(loggedAsError).toContain("store refused the write");
+    expect(errors).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
   });
 
   it.each([

@@ -1,5 +1,6 @@
 import { type GatewayDesiredStatus } from "./glm.js";
 export declare const SHARED_POOL_SLOT_ID_PATTERN: RegExp;
+export declare const SHARED_POOL_SLOT_ID_REQUIREMENT = "a shared gatewayId must be \"shared-\" followed by lowercase letters or digits";
 export declare const DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED = true;
 export declare const DEFAULT_SHARED_GATEWAY_USERS_PER_GATEWAY = 10;
 export interface SharedGatewayAutoscalingConfig {

@@ -406,6 +406,12 @@ describe("a dry run of a changing request", () => {
     ["deploy to an unknown gateway", 404, { method: "post", path: "/gateways/nowhere/deploy", body: { sourceSha: SOURCE_SHA } }, FLEET],
     ["deploy to a retired gateway", 409, { method: "post", path: "/gateways/gone/deploy", body: { sourceSha: SOURCE_SHA } }, FLEET],
     ["deploy to a shared gateway", 409, { method: "post", path: "/gateways/shared-b/deploy", body: { sourceSha: SOURCE_SHA } }, FLEET],
+    [
+      "shared gateway id the store would reject",
+      400,
+      { method: "post", path: "/gateways", body: { gatewayId: "fleet-live-teau", gatewayClass: "shared", imageRepository: PAYLOAD.imageRepository, imageTag: "abc1234" } },
+      FLEET,
+    ],
     ["retirement of an unknown gateway", 404, { method: "delete", path: "/gateways/nowhere" }, FLEET],
     ["retirement of a gateway with assigned users", 409, { method: "delete", path: "/gateways/shared-a" }, FLEET],
     ["migration to an unregistered gateway", 404, { method: "post", path: "/users/uid-ada/migrate", body: { to: "nowhere" } }, FLEET],

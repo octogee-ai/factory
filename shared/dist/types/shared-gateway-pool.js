@@ -1,5 +1,6 @@
 import { isValidGatewayId, } from "./glm.js";
 export const SHARED_POOL_SLOT_ID_PATTERN = /^shared-[a-z0-9]+$/;
+export const SHARED_POOL_SLOT_ID_REQUIREMENT = 'a shared gatewayId must be "shared-" followed by lowercase letters or digits';
 export const DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED = true;
 export const DEFAULT_SHARED_GATEWAY_USERS_PER_GATEWAY = 10;
 const SHARED_POOL_MEMBER_STATUSES = new Set(["running", "draining", "paused"]);

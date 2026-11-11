@@ -173,9 +173,12 @@ export async function writeInitialGatewayReleaseInTransaction(
 export async function writeInitialGatewayReleaseInStore(
   store: PlatformStateStore,
   args: InitialGatewayReleaseArgs,
+  beforeCommit?: () => Promise<void>,
 ): Promise<void> {
-  await store.transaction({ label: "gateway-release.initial" }, (transaction) =>
-    writeInitialGatewayReleaseInTransaction(transaction, args));
+  await store.transaction({ label: "gateway-release.initial" }, async (transaction) => {
+    await writeInitialGatewayReleaseInTransaction(transaction, args);
+    await beforeCommit?.();
+  });
 }
 
 export interface RenderedGatewayConfig

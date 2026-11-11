@@ -11,7 +11,7 @@ import { isGatewayPodReplacements, summarizeGatewayPodReplacements, } from "@oct
 import { GATEWAY_CONFIG_SCHEMA_VERSION, InitialGatewayReleaseConflictError, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, writeInitialGatewayReleaseInStore, } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import { resolveContinuousUserPlacement, resolveLiveActivationTargetGatewayId, } from "@octogee/shared/types/orchestrator-placement";
-import { parseSharedGatewayAutoscalingConfig, } from "@octogee/shared/types/shared-gateway-pool";
+import { SHARED_POOL_SLOT_ID_REQUIREMENT, isSharedPoolSlotId, parseSharedGatewayAutoscalingConfig, } from "@octogee/shared/types/shared-gateway-pool";
 import { InvalidSharedGatewayAutoscalingConfigError, ORCHESTRATOR_CONFIG_DOC_PATH, readSharedGatewayPoolConfigInStore, } from "./shared-gateway-pool-read.js";
 import { SIZING_TIERS, resolveSizingTier, } from "@octogee/shared/types/sizing";
 import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/shared/types/cost-estimator";
@@ -1514,6 +1514,12 @@ function validateSharedGatewayCreate(body, gatewayClass) {
             body: { error: "shared gateway creation does not accept owner fields" },
         };
     }
+    if (!isSharedPoolSlotId(body.gatewayId)) {
+        return {
+            status: 400,
+            body: { error: SHARED_POOL_SLOT_ID_REQUIREMENT, got: body.gatewayId },
+        };
+    }
     return null;
 }
 function validateAddGatewayBody(body) {
@@ -2658,15 +2664,7 @@ function classifyAddGatewayMutation(outcome, gatewayId, artifact) {
     };
 }
 async function performAddGatewayMutation(opts) {
-    try {
-        await opts.provisionGatewayAuthSecret({
-            gatewayId: opts.body.gatewayId,
-            gatewayServiceAccount: opts.gatewayServiceAccount,
-        });
-    }
-    catch (error) {
-        throw new GatewayAuthSecretProvisionError(error instanceof Error ? error.message : String(error));
-    }
+    let authSecretProvisioned = false;
     try {
         await writeInitialGatewayReleaseInStore(opts.store, {
             gatewayId: opts.body.gatewayId,
@@ -2675,9 +2673,22 @@ async function performAddGatewayMutation(opts) {
             desiredStatus: "running",
             config: opts.config,
             artifact: opts.artifact,
+        }, async () => {
+            try {
+                await opts.provisionGatewayAuthSecret({
+                    gatewayId: opts.body.gatewayId,
+                    gatewayServiceAccount: opts.gatewayServiceAccount,
+                });
+            }
+            catch (error) {
+                throw new GatewayAuthSecretProvisionError(error instanceof Error ? error.message : String(error));
+            }
+            authSecretProvisioned = true;
         });
     }
     catch (error) {
+        if (!authSecretProvisioned || error instanceof GatewayAuthSecretProvisionError)
+            throw error;
         return {
             kind: "partial",
             failedStep: "initial-release",

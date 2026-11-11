@@ -44,7 +44,7 @@ export declare class InitialGatewayReleaseConflictError extends Error {
     constructor(gatewayId: string);
 }
 export declare function writeInitialGatewayReleaseInTransaction(transaction: PlatformStateTransaction, args: InitialGatewayReleaseArgs): Promise<void>;
-export declare function writeInitialGatewayReleaseInStore(store: PlatformStateStore, args: InitialGatewayReleaseArgs): Promise<void>;
+export declare function writeInitialGatewayReleaseInStore(store: PlatformStateStore, args: InitialGatewayReleaseArgs, beforeCommit?: () => Promise<void>): Promise<void>;
 export interface RenderedGatewayConfig extends Omit<GatewayMutableConfig, "configSchemaVersion">, GatewayArtifact {
 }
 export interface GatewayAuthorization {

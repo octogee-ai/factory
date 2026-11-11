@@ -439,7 +439,6 @@ function makeBatch() {
 
 const provisionerCalls: Array<{ gatewayId: string; gatewayServiceAccount: string }> = [];
 let provisionerNextError: Error | null = null;
-let provisionerConcurrentGatewayId: string | null = null;
 
 vi.mock("@octogee/core/secret-store", () => ({
   provisionGatewayAuthSecret: async (params: {
@@ -453,10 +452,6 @@ vi.mock("@octogee/core/secret-store", () => ({
     }
     provisionerCalls.push(params);
     sideEffects.push(`provision ${params.gatewayId}`);
-    if (provisionerConcurrentGatewayId === params.gatewayId) {
-      seedDurableGateway(params.gatewayId);
-      provisionerConcurrentGatewayId = null;
-    }
     return { secretName: `projects/octogee-test/secrets/gateway-auth-token-${params.gatewayId}`, created: true };
   },
 }));
@@ -603,7 +598,6 @@ beforeEach(() => {
   configDocs = {};
   provisionerCalls.length = 0;
   provisionerNextError = null;
-  provisionerConcurrentGatewayId = null;
   userCalls.length = 0;
   nextBuildsResult = [];
   nextBuildsError = null;
@@ -706,32 +700,32 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
   it("writes a durable gateway root and immutable release with an add-gateway operation", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "created-canary",
+      gatewayId: "shared-canary",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
     });
     expect(res.status).toBe(202);
-    expect(res.body).toMatchObject({ gatewayId: "created-canary" });
+    expect(res.body).toMatchObject({ gatewayId: "shared-canary" });
     expect(res.body.operationId).toBeTruthy();
 
-    expect(gatewaysDocs["created-canary"]).toMatchObject({
-      gatewayId: "created-canary",
+    expect(gatewaysDocs["shared-canary"]).toMatchObject({
+      gatewayId: "shared-canary",
       desiredStatus: "running",
       createdBy: "admin-user",
       latestRelease: 1,
       desiredRelease: 1,
     });
-    expect(glmGatewaysDocs["created-canary"]).toBeUndefined();
+    expect(glmGatewaysDocs["shared-canary"]).toBeUndefined();
 
     expect(commandOperation()).toMatchObject({
       kind: "add-gateway",
       status: "pending",
       createdBy: "admin-user",
-      gatewayId: "created-canary",
+      gatewayId: "shared-canary",
     });
 
-    expect(gatewayReleasesDocs["created-canary/1"]).toMatchObject({
-      gatewayId: "created-canary",
+    expect(gatewayReleasesDocs["shared-canary/1"]).toMatchObject({
+      gatewayId: "shared-canary",
       release: 1,
       sourceRelease: null,
       payload: { imageTag: "abc1234" },
@@ -740,7 +734,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       expect.objectContaining({
         recordType: "audit",
         releaseRollout: {
-          releaseId: "created-canary/1",
+          releaseId: "shared-canary/1",
           releaseTag: "abc1234",
           rolloutOperationId: res.body.operationId,
         },
@@ -752,13 +746,13 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     failingStoreTransaction = "admin.fleet.createOperation";
 
     await request(buildApp()).post("/api/admin/gateways").send({
-      gatewayId: "partial-canary",
+      gatewayId: "shared-partial",
       imageRepository: GATEWAY_REPOSITORY,
       imageTag: "abc1234",
     }).expect(500);
 
-    expect(gatewaysDocs["partial-canary"]).toMatchObject({
-      gatewayId: "partial-canary",
+    expect(gatewaysDocs["shared-partial"]).toMatchObject({
+      gatewayId: "shared-partial",
       latestRelease: 1,
     });
     expect(glmOperationsDocs.map((doc) => doc.data)).toEqual(expect.arrayContaining([
@@ -767,34 +761,8 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
         status: "completed",
         lifecycleStage: "action-partial",
         releaseRollout: {
-          releaseId: "partial-canary/1",
+          releaseId: "shared-partial/1",
           releaseTag: "abc1234",
-        },
-      }),
-    ]));
-  });
-
-  it("records a partial audit when secret provisioning wins but the initial release conflicts", async () => {
-    provisionerConcurrentGatewayId = "conflicted-canary";
-
-    await request(buildApp()).post("/api/admin/gateways").send({
-      gatewayId: "conflicted-canary",
-      imageRepository: GATEWAY_REPOSITORY,
-      imageTag: "abc1234",
-    }).expect(409);
-
-    expect(provisionerCalls).toHaveLength(1);
-    expect(glmOperationsDocs.map((doc) => doc.data)).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        recordType: "audit",
-        status: "completed",
-        lifecycleStage: "action-partial",
-        partialOutcome: {
-          summary: "gateway auth secret was provisioned but its initial release was not created",
-          details: {
-            gatewayId: "conflicted-canary",
-            failedStep: "initial-release",
-          },
         },
       }),
     ]));
@@ -823,13 +791,13 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
   it("persists sizingTier for a shared gateway", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "created-shared",
+      gatewayId: "shared-sized",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
       sizingTier: "l",
     });
     expect(res.status).toBe(202);
-    expect(gatewaysDocs["created-shared"]).toMatchObject({
+    expect(gatewaysDocs["shared-sized"]).toMatchObject({
       profile: null,
       gatewayClass: "shared",
       imageProfile: "standard",
@@ -926,23 +894,24 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     expect(gatewaysDocs["invalid-tier"]).toBeUndefined();
   });
 
-  it("provisions the gateway-auth-token Secret Manager shell before writing the durable root", async () => {
+  it("provisions the gateway auth secret inside the transaction that creates the durable root", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "secret-ready",
+      gatewayId: "shared-ready",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
     });
     expect(res.status).toBe(202);
     expect(provisionerCalls).toEqual([
       {
-        gatewayId: "secret-ready",
+        gatewayId: "shared-ready",
         gatewayServiceAccount: "octogee-gateway@octogee-test.iam.gserviceaccount.com",
       },
     ]);
-    expect(sideEffects.filter((effect) => effect.endsWith("secret-ready"))).toEqual([
-      "provision secret-ready",
-      "set gateways/secret-ready",
+    expect(sideEffects.filter((effect) => effect.endsWith("shared-ready") || effect === "begin gateway-release.initial")).toEqual([
+      "begin gateway-release.initial",
+      "provision shared-ready",
+      "set gateways/shared-ready",
     ]);
   });
 
@@ -950,21 +919,21 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     provisionerNextError = new Error("PERMISSION_DENIED on secretmanager.secrets.create");
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "secret-failure",
+      gatewayId: "shared-nosecret",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
     });
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/auth-token/);
-    expect(gatewaysDocs["secret-failure"]).toBeUndefined();
-    expect(gatewayReleasesDocs["secret-failure/1"]).toBeUndefined();
+    expect(gatewaysDocs["shared-nosecret"]).toBeUndefined();
+    expect(gatewayReleasesDocs["shared-nosecret/1"]).toBeUndefined();
   });
 
   it("returns 500 if GATEWAY_SERVICE_ACCOUNT is not configured (cluster misconfigured)", async () => {
     delete process.env.GATEWAY_SERVICE_ACCOUNT;
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "missing-service-account",
+      gatewayId: "shared-noaccount",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
     });
@@ -975,7 +944,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
   it("rejects 400 when imageRepository is not the canonical Artifact Registry repo", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "typo",
+      gatewayId: "shared-typo",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogeee/octogee-gateway",
       imageTag: "abc1234",
     });
@@ -984,10 +953,10 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
   });
 
   it("returns 409 when the gatewayId already exists", async () => {
-    seedDurableGateway("gw-existing");
+    seedDurableGateway("shared-existing");
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "gw-existing",
+      gatewayId: "shared-existing",
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
       imageTag: "abc1234",
     });

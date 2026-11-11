@@ -677,11 +677,11 @@ describe("POST /gateways — creates only the durable root and immutable release
 
     await request(app)
       .post("/gateways")
-      .send({ gatewayId: "alpha", imageRepository: REPO, imageTag: "latest" })
+      .send({ gatewayId: "shared-alpha", imageRepository: REPO, imageTag: "latest" })
       .expect(400);
 
-    expect(store.get("gateways/alpha")).toBeUndefined();
-    expect(store.get(`gateways/alpha/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)).toBeUndefined();
+    expect(store.get("gateways/shared-alpha")).toBeUndefined();
+    expect(store.get(`gateways/shared-alpha/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)).toBeUndefined();
   });
 
   it("writes gateways/{id}, release 1, and an add-gateway op without a bare glm desired doc", async () => {
@@ -689,16 +689,16 @@ describe("POST /gateways — creates only the durable root and immutable release
 
     const res = await request(app)
       .post("/gateways")
-      .send({ gatewayId: "alpha", imageRepository: REPO, imageTag: "abc1234" })
+      .send({ gatewayId: "shared-alpha", imageRepository: REPO, imageTag: "abc1234" })
       .expect(202);
-    expect(res.body).toMatchObject({ gatewayId: "alpha" });
+    expect(res.body).toMatchObject({ gatewayId: "shared-alpha" });
 
-    expect(store.get(`${GLM_GATEWAYS_COLLECTION}/alpha`)).toBeUndefined();
+    expect(store.get(`${GLM_GATEWAYS_COLLECTION}/shared-alpha`)).toBeUndefined();
 
     // New durable identity.
-    const gw = store.get("gateways/alpha");
+    const gw = store.get("gateways/shared-alpha");
     expect(gw).toMatchObject({
-      gatewayId: "alpha",
+      gatewayId: "shared-alpha",
       latestRelease: 1,
       desiredRelease: 1,
       desiredStatus: "running",
@@ -708,7 +708,7 @@ describe("POST /gateways — creates only the durable root and immutable release
     });
 
     // Immutable release 1.
-    const rel = store.get(`gateways/alpha/${GATEWAY_RELEASES_SUBCOLLECTION}/1`);
+    const rel = store.get(`gateways/shared-alpha/${GATEWAY_RELEASES_SUBCOLLECTION}/1`);
     expect(rel).toMatchObject({ release: 1, sourceRelease: null });
     expect(rel?.payload).toEqual({
       imageRepository: REPO,
@@ -720,7 +720,7 @@ describe("POST /gateways — creates only the durable root and immutable release
     expect(auditsIn(store)).toContainEqual(expect.objectContaining({
       status: "completed",
       what: "add gateway",
-      target: { gatewayId: "alpha" },
+      target: { gatewayId: "shared-alpha" },
     }));
   });
 
@@ -733,7 +733,7 @@ describe("POST /gateways — creates only the durable root and immutable release
 
     await request(app)
       .post("/gateways")
-      .send({ gatewayId: "alpha", imageRepository: REPO, imageTag: "abc1234" })
+      .send({ gatewayId: "shared-alpha", imageRepository: REPO, imageTag: "abc1234" })
       .expect(502);
 
     expect(auditsIn(store)).toContainEqual(expect.objectContaining({
@@ -741,7 +741,7 @@ describe("POST /gateways — creates only the durable root and immutable release
       what: "add gateway",
       error: "secret manager unavailable",
     }));
-    expect(store.get("gateways/alpha")).toBeUndefined();
+    expect(store.get("gateways/shared-alpha")).toBeUndefined();
   });
 
   it("does not leave a bare desired doc when durable-root creation fails atomically", async () => {
@@ -749,12 +749,101 @@ describe("POST /gateways — creates only the durable root and immutable release
 
     await request(app)
       .post("/gateways")
-      .send({ gatewayId: "alpha", imageRepository: REPO, imageTag: "abc1234" })
+      .send({ gatewayId: "shared-alpha", imageRepository: REPO, imageTag: "abc1234" })
       .expect(500);
 
-    expect(store.get(`${GLM_GATEWAYS_COLLECTION}/alpha`)).toBeUndefined();
-    expect(store.get("gateways/alpha")).toBeUndefined();
-    expect(store.get(`gateways/alpha/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)).toBeUndefined();
+    expect(store.get(`${GLM_GATEWAYS_COLLECTION}/shared-alpha`)).toBeUndefined();
+    expect(store.get("gateways/shared-alpha")).toBeUndefined();
+    expect(store.get(`gateways/shared-alpha/${GATEWAY_RELEASES_SUBCOLLECTION}/1`)).toBeUndefined();
+  });
+
+  it("refuses a shared gateway id the store would reject, before provisioning its auth secret", async () => {
+    const provisionGatewayAuthSecret = vi.fn(async () => ({}));
+    const { app, store } = mkApp({}, { provisionGatewayAuthSecret });
+
+    const res = await request(app)
+      .post("/gateways")
+      .send({ gatewayId: "fleet-live-teau", gatewayClass: "shared", imageRepository: REPO, imageTag: "abc1234" })
+      .expect(400);
+
+    expect(res.body).toEqual({
+      error: 'a shared gatewayId must be "shared-" followed by lowercase letters or digits',
+      got: "fleet-live-teau",
+    });
+    expect(provisionGatewayAuthSecret).not.toHaveBeenCalled();
+    expect(auditsIn(store)).toEqual([]);
+    expect(store.get("gateways/fleet-live-teau")).toBeUndefined();
+  });
+
+  it("provisions no auth secret when the store refuses the gateway record", async () => {
+    const provisionGatewayAuthSecret = vi.fn(async () => ({}));
+    const { app, store } = mkApp({}, {
+      provisionGatewayAuthSecret,
+      beforeFirstTransaction: () => {
+        throw new Error("store refused the gateway record");
+      },
+    });
+
+    await request(app)
+      .post("/gateways")
+      .send({ gatewayId: "shared-alpha", imageRepository: REPO, imageTag: "abc1234" })
+      .expect(500);
+
+    expect(provisionGatewayAuthSecret).not.toHaveBeenCalled();
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "failed",
+      what: "add gateway",
+      error: "store refused the gateway record",
+    }));
+    expect(store.get("gateways/shared-alpha")).toBeUndefined();
+  });
+
+  it("provisions no auth secret when another creator wins the gateway id first", async () => {
+    const provisionGatewayAuthSecret = vi.fn(async () => ({}));
+    const { app, store } = mkApp({}, {
+      provisionGatewayAuthSecret,
+      beforeFirstTransaction: (state) => {
+        const won = seedNewSchemaGateway("shared-alpha", { imageRepository: REPO, imageTag: "abc1234" }, { createdBy: "other-creator" });
+        for (const [path, record] of Object.entries(won)) state.set(path, record);
+      },
+    });
+
+    await request(app)
+      .post("/gateways")
+      .send({ gatewayId: "shared-alpha", imageRepository: REPO, imageTag: "abc1234" })
+      .expect(409);
+
+    expect(provisionGatewayAuthSecret).not.toHaveBeenCalled();
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({ status: "failed", what: "add gateway" }));
+    expect(store.get("gateways/shared-alpha")).toMatchObject({ createdBy: "other-creator" });
+  });
+
+  it("journals a partial outcome when the gateway record cannot be committed after its auth secret exists", async () => {
+    let state = new Map<string, Record<string, unknown>>();
+    const { app, store } = mkApp({}, {
+      provisionGatewayAuthSecret: async () => {
+        vi.spyOn(state, "set").mockImplementationOnce(() => {
+          throw new Error("commit failed");
+        });
+        return {};
+      },
+    });
+    state = store;
+
+    await request(app)
+      .post("/gateways")
+      .send({ gatewayId: "shared-alpha", imageRepository: REPO, imageTag: "abc1234" })
+      .expect(500);
+
+    expect(auditsIn(store)).toContainEqual(expect.objectContaining({
+      status: "completed",
+      what: "add gateway",
+      partialOutcome: {
+        summary: "gateway auth secret was provisioned but its initial release was not created",
+        details: { gatewayId: "shared-alpha", failedStep: "initial-release" },
+      },
+    }));
+    expect(store.get("gateways/shared-alpha")).toBeUndefined();
   });
 
   it("rejects an invalid new gatewayId (reserved -blue/-green) via isValidNewGatewayId", async () => {
@@ -768,7 +857,7 @@ describe("POST /gateways — creates only the durable root and immutable release
   it("rejects gateway-scoped BYOSUB input instead of persisting credentials with a release", async () => {
     const { app } = mkApp();
     const res = await request(app).post("/gateways").send({
-      gatewayId: "alpha",
+      gatewayId: "shared-alpha",
       imageRepository: REPO,
       imageTag: "abc1234",
       byosub: { openai: { secretName: "forbidden" } },
@@ -782,7 +871,7 @@ describe("POST /gateways — creates only the durable root and immutable release
     async (field) => {
       const { app } = mkApp();
       const res = await request(app).post("/gateways").send({
-        gatewayId: "alpha",
+        gatewayId: "shared-alpha",
         imageRepository: REPO,
         imageTag: "abc1234",
         [field]: "operator",
