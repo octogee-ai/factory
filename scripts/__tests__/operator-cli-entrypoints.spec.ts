@@ -25,7 +25,7 @@ import {
   runSetupStripePlans,
   SETUP_STRIPE_PLANS_USAGE,
   SUBSCRIPTIONS,
-} from "../ops/setup-stripe-plans.js";
+} from "../product/ops/setup-stripe-plans.js";
 import {
   BUILDER_TIERS,
   CREDIT_DENOMINATIONS_USD,

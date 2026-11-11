@@ -1348,7 +1348,7 @@ echo "  npm run ci:deploy -- --environment=$ENV --sha=\"\$PLATFORM_SOURCE_SHA\" 
 echo ""
 if [[ "$ENV" == "test" ]]; then
   echo "  # 7b. Recreate the live-test fixture (Ship TEST's end-to-end job signs in as it)"
-  echo "  ./scripts/node_modules/.bin/tsx scripts/ops/ensure-live-fixture-account.ts"
+  echo "  ./scripts/node_modules/.bin/tsx scripts/product/ops/ensure-live-fixture-account.ts"
   echo ""
 fi
 echo "  # 8. Verify"

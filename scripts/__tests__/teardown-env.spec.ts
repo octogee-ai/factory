@@ -798,7 +798,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     const result = runPrivateCentralTeardown();
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-    const fixture = result.stdout.indexOf("scripts/ops/ensure-live-fixture-account.ts");
+    const fixture = result.stdout.indexOf("scripts/product/ops/ensure-live-fixture-account.ts");
     expect(fixture).toBeGreaterThan(result.stdout.indexOf("npm run ci:deploy"));
     expect(fixture).toBeLessThan(result.stdout.indexOf("./scripts/verify-env.sh"));
   });

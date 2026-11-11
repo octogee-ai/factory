@@ -20,7 +20,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["__tests__/**/*.spec.ts"],
+    include: ["__tests__/**/*.spec.ts", "product/__tests__/**/*.spec.ts"],
     exclude: [
       ...configDefaults.exclude,
       "**/*.emulator.spec.ts",

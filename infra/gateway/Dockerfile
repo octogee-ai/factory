@@ -42,6 +42,7 @@ COPY --chown=node:node scripts/secret-resolver.mjs /octogee/scripts/
 COPY --chown=node:node scripts/publish-gateway-token.mjs /octogee/scripts/
 COPY --chown=node:node scripts/tsconfig.json /octogee/scripts/
 COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
+COPY --chown=node:node scripts/product/lib/octogee-entitlements.ts /octogee/scripts/product/lib/
 COPY --chown=node:node .github/actions/release-digest-manifest/desktop-image.mjs .github/actions/release-digest-manifest/desktop-image.d.mts /octogee/.github/actions/release-digest-manifest/
 COPY --chown=node:node scripts/ops/verify-native-modules.mjs /octogee/scripts/ops/
 COPY --chown=node:node scripts/ops/migrate-user-stores.ts /octogee/scripts/ops/
@@ -155,7 +156,12 @@ RUN chown root:root /octogee/scripts \
     && chmod 500 /octogee/scripts/secret-resolver.mjs
 
 # Workspace templates are runtime data and bypass the build stage.
-COPY --chown=node:node templates/ /octogee/templates/
+COPY --chown=node:node templates/claws/ /octogee/templates/claws/
+COPY --chown=node:node templates/github-workflow/ /octogee/templates/github-workflow/
+COPY --chown=node:node templates/shared/ /octogee/templates/shared/
+COPY --chown=node:node templates/tiers/ /octogee/templates/tiers/
+COPY --chown=node:node templates/workspace/ /octogee/templates/workspace/
+COPY --chown=node:node templates/product/tiers/ /octogee/templates/tiers/
 
 # ── Runtime utilities ───────────────────────────────────────────────────────
 # `chmod 1777 /tmp` is defensive: newer Debian bookworm apt sandboxes

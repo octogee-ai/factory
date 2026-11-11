@@ -7,13 +7,13 @@ import {
 import {
   NOTIFICATION_SMOKE_CLEANUP_EMAIL,
   NOTIFICATION_SMOKE_USER_SUBCOLLECTIONS,
-} from "../ops/cleanup-notif-smoke-user.js";
+} from "../product/ops/cleanup-notif-smoke-user.js";
 import { formatListUsersLine } from "../ops/list-users.js";
 import {
   NOTIFICATION_SMOKE_DISPLAY_NAME,
   NOTIFICATION_SMOKE_EMAIL,
   NOTIFICATION_SMOKE_PASSWORD,
-} from "../ops/seed-test-notification-user.js";
+} from "../product/ops/seed-test-notification-user.js";
 import { parseSeedTypingPhrasesArgs } from "../ops/seed-typing-phrases.js";
 
 describe("seed and cleanup smoke-notification utilities", () => {

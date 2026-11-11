@@ -1,4 +1,4 @@
-import "../lib/octogee-entitlements.js";
+import "../product/lib/octogee-entitlements.js";
 import { createBrokeredProjectBlobHydrator } from "../lib/project-blob-materialization.js";
 import { persistUserProjects, persistSharedUserFiles, persistAssignedSharedUsers, startProjectAutosave } from "../lib/project-persistence.js";
 import { createServiceLogger } from "@octogee/shared/server/service-logger";

@@ -13,7 +13,7 @@ set -euo pipefail
 #   - gateway/templates/deployment.yaml  (secretKeyRef without optional: true)
 #   - gateway-edge/values.yaml          (optional: false)
 #   - gateway-edge/values.yaml           (optional: false)
-#   - gateway-edge/templates/cronjob-*  (secretKeyRef)
+#   - gateway-edge/templates/product/cronjob-*  (secretKeyRef)
 #
 # Usage:
 #   ./scripts/verify-secrets.sh --env=prod [--deployment-target=prod-west]
@@ -90,7 +90,7 @@ esac
 # Keep in sync with:
 #   helm/octogee/charts/gateway/templates/deployment.yaml
 #   helm/octogee/charts/gateway-edge/values.yaml
-#   helm/octogee/charts/gateway-edge/templates/cronjob-trial-expiry.yaml
+#   helm/octogee/charts/gateway-edge/templates/product/cronjob-trial-expiry.yaml
 REQUIRED_SECRETS=(
   "agent-store-postgres"
   "octogee-anthropic"       # setup/legacy only; gateway pods do not mount it

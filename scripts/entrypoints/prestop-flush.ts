@@ -1,4 +1,4 @@
-import "../lib/octogee-entitlements.js";
+import "../product/lib/octogee-entitlements.js";
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("prestop-flush");
 import { flushUserFiles, flushAllUserFiles } from "../lib/user-file-state.js";
