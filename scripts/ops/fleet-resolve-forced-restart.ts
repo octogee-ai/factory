@@ -10,7 +10,7 @@ import type {
   PlatformStateStore,
   PlatformStateTransaction,
 } from "@octogee/core/platform-state";
-import { isReleasePayload, projectGatewayDesiredRootForGateway, releasePayloadHash } from "../../shared/types/gateway-releases.js";
+import { dualReadIsolatedProfileImage, isReleasePayload, projectGatewayDesiredRootForGateway, releasePayloadHash } from "../../shared/types/gateway-releases.js";
 import type { FleetKubectlRunner } from "./fleet.js";
 
 interface Authority {
@@ -73,12 +73,13 @@ async function readAuthority(transaction: PlatformStateTransaction, gatewayId: s
   }
   const payload = release?.payload;
   if (!release || release.gatewayId !== gatewayId || release.release !== liveRelease || !isReleasePayload(payload) ||
-    release.payloadHash !== releasePayloadHash(payload) || !payload.profileImages?.builder || !payload.gatewayEdgeImage) {
+    release.payloadHash !== releasePayloadHash(payload) || !payload.profileImages || !payload.gatewayEdgeImage) {
     throw new Error("restart resolution release images are unavailable");
   }
   await assertNoCustody(transaction, gatewayId, root.ownerUid);
+  const isolatedImage = dualReadIsolatedProfileImage(payload.profileImages);
   return { root, fence, restart, force, release, images: {
-    gateway: `${payload.profileImages.builder.imageRepository}:${payload.profileImages.builder.imageTag}`,
+    gateway: `${isolatedImage.imageRepository}:${isolatedImage.imageTag}`,
     "gateway-edge": `${payload.gatewayEdgeImage.imageRepository}:${payload.gatewayEdgeImage.imageTag}`,
   } };
 }

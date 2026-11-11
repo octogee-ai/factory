@@ -76,6 +76,7 @@ import {
   SYSTEM_CONFIG_DURABLE_FILENAMES,
 } from "./system-config-durable-files.js";
 import { userClaimSlug } from "@octogee/shared/server/user-claim";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -709,7 +710,7 @@ function retryRetainedInitialSeedPush(
 function restoreIsolatedRuntimeProjection(
   slug: string, dir: string, env: NodeJS.ProcessEnv, sshKey: string, log: (msg: string) => void,
 ): boolean {
-  if (env.GATEWAY_CLASS !== "builder" || userClaimSlug(env) !== slug ||
+  if (!isIsolatedGatewayClassValue(env.GATEWAY_CLASS) || userClaimSlug(env) !== slug ||
       !isSystemConfigRuntimeProjection(path.dirname(dir), slug)) return true;
   if (gitExec(dir, ["merge-base", "--is-ancestor", "HEAD", "origin/main"], sshKey) === null ||
       gitExec(dir, ["restore", "--source=HEAD", "--staged", "--worktree", "--", OPENCLAW_CONFIG_FILENAME, SYSTEM_CONFIG_METADATA_FILENAME], sshKey) === null) {
@@ -1094,7 +1095,7 @@ export async function reconcileSystemConfigSchema(
 // override for tooling that seeds a shared-gateway-shaped config on purpose.
 export function defaultSystemConfigTemplatePath(env: NodeJS.ProcessEnv = process.env): string {
   const gatewayDir = path.join(TEMPLATES_DIR, "..", "infra", "gateway");
-  return env.GATEWAY_CLASS === "builder"
+  return isIsolatedGatewayClassValue(env.GATEWAY_CLASS)
     ? path.join(gatewayDir, "openclaw.isolated.template.json")
     : path.join(gatewayDir, "openclaw.template.json");
 }
@@ -1151,7 +1152,7 @@ async function restoreSystemConfigCheckout(
     }
     await reconcileTrackedOpenClawConfig(configPath, openclawDir, env);
   }
-  if (env.GATEWAY_CLASS === "builder") ensureUserRosterAtPath(configPath, slug, log);
+  if (isIsolatedGatewayClassValue(env.GATEWAY_CLASS)) ensureUserRosterAtPath(configPath, slug, log);
   reconcilePlatformInvariantsAtPath(configPath, env);
   return { seeded, restored: true, configPath };
 }

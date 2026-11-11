@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { createFleetBrokerClient, type FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { landGatewayStateAnchor, type GatewayStateAnchorVerifier } from "../lib/agent-anchor-record.js";
 import { localStateStoreKind, localStateStorePath, openclawStateRoot } from "../lib/openclaw-state-store.js";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 const runtimeLogger = createServiceLogger("builder-runtime-state-restore");
 class UserStatePolicyError extends Error {}
@@ -16,7 +17,7 @@ export async function runIsolatedRuntimeStateRestore(
     deferMigration?: boolean;
   } = {},
 ): Promise<void> {
-  if (env.GATEWAY_CLASS !== "builder") return;
+  if (!isIsolatedGatewayClassValue(env.GATEWAY_CLASS)) return;
   const gatewayId = env.GATEWAY_ID?.trim();
   const slug = userClaimSlug(env);
   if (!gatewayId || !slug) throw new UserStatePolicyError("User PostgreSQL state recovery requires a Gateway ID and verified claim");

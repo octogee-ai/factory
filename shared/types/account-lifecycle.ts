@@ -1,3 +1,5 @@
+import { dualReadGatewayClassValue } from "./glm.js";
+
 export const ACCOUNT_DELETION_RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
 
 export type AccountLifecycleStatus =
@@ -97,7 +99,7 @@ export function anonymousOperationalPlanTier(value: unknown): string | null {
 }
 
 export function anonymousOperationalGatewayClass(value: unknown): string | null {
-  return closedOperationalValue(value, ANONYMOUS_OPERATIONAL_GATEWAY_CLASSES);
+  return closedOperationalValue(dualReadGatewayClassValue(value), ANONYMOUS_OPERATIONAL_GATEWAY_CLASSES);
 }
 
 export function accountAllowsInteractiveAccess(

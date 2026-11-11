@@ -1,4 +1,5 @@
 import { createServiceLogger, type LogContext } from "@octogee/shared/server/service-logger";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -20,7 +21,7 @@ export const GATEWAY_PROFILE = process.env.GATEWAY_PROFILE ?? "default";
 export const GATEWAY_CLASS = process.env.GATEWAY_CLASS ?? "";
 
 export function isIsolatedGateway(): boolean {
-  return GATEWAY_CLASS === "builder";
+  return isIsolatedGatewayClassValue(GATEWAY_CLASS);
 }
 
 export function isSharedGateway(): boolean {
@@ -28,7 +29,7 @@ export function isSharedGateway(): boolean {
 }
 
 export function usesLlmBrokerToken(): boolean {
-  return GATEWAY_CLASS === "builder";
+  return isIsolatedGatewayClassValue(GATEWAY_CLASS);
 }
 export const CUSTOMERS_DIR = path.join(OPENCLAW_DIR, "customers");
 export const CUSTOMER_KEYS_DIR = path.join(OPENCLAW_DIR, "customer-keys");

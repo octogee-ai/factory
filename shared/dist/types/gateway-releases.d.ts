@@ -1,7 +1,7 @@
 import type { MigrationProgressRecord } from "./glm.js";
 import type { GatewayPodPlacement, GatewayPodReplacements } from "./gateway-pod-replacements.js";
 import { type GatewayMutableConfig } from "./gateway-mutable-config.js";
-import type { GatewayDesiredStatus } from "./glm.js";
+import { type GatewayDesiredStatus } from "./glm.js";
 export declare const GATEWAY_RELEASES_SUBCOLLECTION = "releases";
 export declare const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
 export type GatewayLifecycleStatus = GatewayDesiredStatus;
@@ -36,12 +36,16 @@ export interface GatewayEdgeImage {
     imageRepository: string;
     imageTag: string;
 }
-export interface GatewayProfileImages {
-    builder: {
-        imageRepository: string;
-        imageTag: string;
-    };
+export interface GatewayProfileImage {
+    imageRepository: string;
+    imageTag: string;
 }
+export type GatewayProfileImages = {
+    builder: GatewayProfileImage;
+} | {
+    isolated: GatewayProfileImage;
+};
+export declare function dualReadIsolatedProfileImage(images: GatewayProfileImages): GatewayProfileImage;
 export interface ReleasePayload {
     imageRepository: string;
     imageTag: string;

@@ -166,7 +166,7 @@ for deployment in live_deployments:
     if not instance:
         errors.append(f"Deployment {name} has no gateway-instance label")
         continue
-    if gateway_class not in ("shared", "builder"):
+    if gateway_class not in ("shared", "builder", "isolated"):
         errors.append(f"Deployment {name} has invalid gateway-class label")
         continue
     matching_pdbs = [

@@ -24,6 +24,29 @@ describe("active OpenClaw config path", () => {
   });
 });
 
+describe("gateway class from GATEWAY_CLASS", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  async function classify(value: string) {
+    vi.stubEnv("GATEWAY_CLASS", value);
+    vi.resetModules();
+    const config = await import("./config.js");
+    return { isolated: config.isIsolatedGateway(), shared: config.isSharedGateway(), broker: config.usesLlmBrokerToken() };
+  }
+
+  it("treats isolated the same as builder", async () => {
+    expect(await classify("isolated")).toEqual(await classify("builder"));
+    expect(await classify("isolated")).toEqual({ isolated: true, shared: false, broker: true });
+  });
+
+  it("still treats unknown classes as neither isolated nor shared", async () => {
+    expect(await classify("operator")).toEqual({ isolated: false, shared: false, broker: false });
+  });
+});
+
 describe("readOpenClawConfig / writeOpenClawConfig round-trip", () => {
   let tmpDir: string;
   let configPath: string;

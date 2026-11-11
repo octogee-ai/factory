@@ -1,7 +1,7 @@
 import { logger } from "../middleware/logging.js";
 import * as crypto from "crypto";
 import { readFileSync } from "node:fs";
-import { isolatedGatewayServiceAccountName } from "@octogee/shared/types/glm";
+import { isIsolatedGatewayClassValue, isolatedGatewayServiceAccountName } from "@octogee/shared/types/glm";
 import {
   createKubernetesTokenReviewer,
   TOKEN_REVIEW_AUDIENCE,
@@ -131,7 +131,7 @@ export function resolveGatewayInternalAuthSecret(
     };
   }
 
-  if (sharedGateway || (env.GATEWAY_CLASS === "builder" && env.GATEWAY_PROFILE === "builder")) {
+  if (sharedGateway || (isIsolatedGatewayClassValue(env.GATEWAY_CLASS) && isIsolatedGatewayClassValue(env.GATEWAY_PROFILE))) {
     const serviceAccountToken = readProjectedServiceAccountToken(env);
     if (serviceAccountToken) {
       return {

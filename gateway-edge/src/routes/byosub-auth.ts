@@ -20,6 +20,7 @@ import {
   type ModelCredentialOAuthProviderId,
   type ModelCredentialSubscriptionProviderId,
 } from "@octogee/shared/types/model-credentials";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 function subscriptionProviderIds(): ModelCredentialSubscriptionProviderId[] {
   return [...MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS];
@@ -48,7 +49,7 @@ function flowIsMountedHere(flow: ByosubFlowRecord): boolean {
 }
 
 function hasPrivateSubscriptionRuntime(): boolean {
-  return process.env.GATEWAY_CLASS?.trim() === "builder";
+  return isIsolatedGatewayClassValue(process.env.GATEWAY_CLASS?.trim());
 }
 
 export function createByosubAuthRouter(): Router {

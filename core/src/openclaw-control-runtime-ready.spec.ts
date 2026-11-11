@@ -113,6 +113,13 @@ describe("serving isolated gateway during an unconverged roll", () => {
     expect(f.readArtifact).toHaveBeenCalledWith(2);
   });
 
+  it("admits the fresh live image when the release keys it under isolated", async () => {
+    const f = fixture();
+    f.readArtifact.mockResolvedValueOnce({ imageRepository: "registry/octogee-gateway", imageTag: "def5678",
+      profileImages: { isolated: { imageRepository: "registry/octogee-gateway-builder", imageTag: `abc1234@sha256:${"b".repeat(64)}` } } } as never);
+    expect(await f.check()).toBe(true);
+  });
+
   it.each([
     { desiredStatus: "paused" }, { desiredStatus: "retired" }, { desiredStatus: "draining" },
     { liveRelease: null }, { desiredRelease: 1 }, { gatewayId: "other" },

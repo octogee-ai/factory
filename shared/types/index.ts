@@ -339,6 +339,8 @@ export type {
 } from './glm.js';
 export {
   GATEWAY_CLASSES,
+  dualReadGatewayClassValue,
+  isIsolatedGatewayClassValue,
   OPERATION_ORIGINS,
   GATEWAY_IMAGE_PROFILES,
   OPERATION_AUDIT_RECORD_TYPE,

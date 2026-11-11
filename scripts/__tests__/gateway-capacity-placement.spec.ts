@@ -297,6 +297,22 @@ describe("gateway capacity placement verifier", () => {
     expect(result.stdout).toContain("must use regional on-demand capacity");
   });
 
+  it("accepts an owner-bound deployment labeled isolated the same as builder", () => {
+    const isolated = deployment("builder") as {
+      metadata: { labels: Record<string, string> };
+      spec: { template: { metadata: { labels: Record<string, string> } } };
+    };
+    isolated.metadata.labels["gateway-class"] = "isolated";
+    isolated.spec.template.metadata.labels["gateway-class"] = "isolated";
+
+    const result = runPlacementCheck({
+      deployments: { items: [deployment("shared-a"), deployment("shared-b"), isolated] },
+    });
+
+    expect(result.status, result.stdout).toBe(0);
+    expect(result.stdout).toBe(runPlacementCheck({}).stdout);
+  });
+
   it("rejects the retired operator user gateway class", () => {
     const retired = deployment("builder") as {
       metadata: { labels: Record<string, string> };

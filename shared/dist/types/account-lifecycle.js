@@ -1,3 +1,4 @@
+import { dualReadGatewayClassValue } from "./glm.js";
 export const ACCOUNT_DELETION_RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
 export const USER_DELETION_JOBS_COLLECTION = "customerDeletionJobs";
 export const ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION = "anonymousOperationalArchives";
@@ -66,7 +67,7 @@ export function anonymousOperationalPlanTier(value) {
     return closedOperationalValue(value, ANONYMOUS_OPERATIONAL_PLAN_TIERS);
 }
 export function anonymousOperationalGatewayClass(value) {
-    return closedOperationalValue(value, ANONYMOUS_OPERATIONAL_GATEWAY_CLASSES);
+    return closedOperationalValue(dualReadGatewayClassValue(value), ANONYMOUS_OPERATIONAL_GATEWAY_CLASSES);
 }
 export function accountAllowsInteractiveAccess(userData) {
     const lifecycle = userData?.accountLifecycle;

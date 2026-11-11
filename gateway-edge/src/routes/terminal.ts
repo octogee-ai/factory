@@ -21,6 +21,7 @@ import { WorkspaceNativeAccessError } from "../lib/workspace-native-access.js";
 import { TerminalConversationScope, type TerminalConversation } from "./terminal-conversation.js";
 import { openNativeUserSocket } from "../openclaw-control/native-user-client.js";
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 export interface TerminalSession {
   conversation?: TerminalConversation;
@@ -37,7 +38,7 @@ export function openTerminalUserSocket(session: TerminalSession, open = openNati
 }
 
 export function terminalAvailable(env: NodeJS.ProcessEnv): boolean {
-  return isPerUserControlIdentity(env) && env.GATEWAY_CLASS === "builder";
+  return isPerUserControlIdentity(env) && isIsolatedGatewayClassValue(env.GATEWAY_CLASS);
 }
 
 export interface TerminalRouterDeps {

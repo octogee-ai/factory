@@ -94,6 +94,16 @@ it("keeps native Codex available in fresh user config without overriding a user 
   expect(runPolicy("builder", fresh).plugins.entries.codex).toEqual({ enabled: false });
 });
 
+it("applies the same policy to an isolated class as to builder and the shared policy to an unknown class", () => {
+  const policy = (gatewayClass: string) => {
+    const fresh = JSON.parse(readFileSync(path.join(repoRoot, "infra/gateway/openclaw.isolated.template.json"), "utf8"));
+    const { config, dir } = runPolicyWithDir(gatewayClass, fresh);
+    return JSON.parse(JSON.stringify(config).replaceAll(dir, "<openclaw-dir>"));
+  };
+  expect(policy("isolated")).toEqual(policy("builder"));
+  expect(policy("operator")).toEqual(policy("shared"));
+});
+
 function canonicalAgentAuthProfiles(agentId: string) {
   const profile = (provider: string, id: string) => ({
     type: "api_key",

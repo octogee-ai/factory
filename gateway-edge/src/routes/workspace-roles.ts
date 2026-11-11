@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireAuthenticatedUid } from "../middleware/auth.js";
 import { resolveWorkspaceNativeIdentity, WorkspaceNativeAccessError } from "../lib/workspace-native-access.js";
 import { openNativeUserClient } from "../openclaw-control/native-user-client.js";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 interface NativeProfile { id: string; emails: string[]; role: string | null }
 type NativeClient = Awaited<ReturnType<typeof openNativeUserClient>>;
@@ -34,7 +35,7 @@ export function createWorkspaceRolesRouter(deps = { resolveIdentity: resolveWork
   const router = Router({ mergeParams: true });
   router.use(requireAuthenticatedUid);
   router.use(async (req, res, next) => {
-    if (process.env.GATEWAY_CLASS !== "builder" || process.env.OPENCLAW_CONTROL_IDENTITY !== "per-user") {
+    if (!isIsolatedGatewayClassValue(process.env.GATEWAY_CLASS) || process.env.OPENCLAW_CONTROL_IDENTITY !== "per-user") {
       res.status(404).json({ error: "builder_workspace_required" }); return;
     }
     next();

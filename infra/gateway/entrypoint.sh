@@ -1,7 +1,10 @@
 #!/bin/sh
 set -e
 
-if [ "${GATEWAY_CLASS:-shared}" = builder ] && [ "${GATEWAY_COMPUTER_DESKTOP:-}" = x11 ] && [ "${OCTOGEE_X11_SESSION:-0}" != 1 ]; then
+. "${OCTOGEE_LIBEXEC_DIR:-/usr/local/libexec}/gateway-class-dual-read.sh"
+GATEWAY_CLASS_EFFECTIVE="$(dual_read_gateway_class "${GATEWAY_CLASS:-shared}")"
+
+if [ "$GATEWAY_CLASS_EFFECTIVE" = builder ] && [ "${GATEWAY_COMPUTER_DESKTOP:-}" = x11 ] && [ "${OCTOGEE_X11_SESSION:-0}" != 1 ]; then
   exec /usr/local/bin/octogee-hobby-desktop
 fi
 
@@ -15,13 +18,11 @@ export OPENCLAW_DIR=/home/node/.openclaw
 export OPENCLAW_STATE_DIR="$OPENCLAW_DIR"
 TEMPLATES_DIR="${OCTOGEE_TEMPLATES_DIR:-/octogee/templates}"
 TSX=/octogee/scripts/node_modules/.bin/tsx
-GATEWAY_CLASS_EFFECTIVE="${GATEWAY_CLASS:-}"
-GATEWAY_CLASS_EFFECTIVE="${GATEWAY_CLASS_EFFECTIVE:-shared}"
 case "$GATEWAY_CLASS_EFFECTIVE" in
   shared|builder) ;;
   *) echo "FATAL: GATEWAY_CLASS must be shared or builder" >&2; exit 1 ;;
 esac
-case "${GATEWAY_PROFILE:-standard}" in
+case "$(dual_read_gateway_class "${GATEWAY_PROFILE:-standard}")" in
   standard|builder) ;;
   *) echo "FATAL: GATEWAY_PROFILE must be standard or builder" >&2; exit 1 ;;
 esac

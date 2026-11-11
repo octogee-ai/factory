@@ -4,6 +4,7 @@ import { persistUserProjects, persistSharedUserFiles } from "../../lib/project-p
 import { isValidUsername } from "@octogee/shared/types/identity";
 import { logger } from "../../middleware/logging.js";
 import { claimedUserIdentity } from "../../lib/user-identity.js";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 export function createProjectPersistenceRouter(persist = persistUserProjects): Router {
   const router = Router();
@@ -20,7 +21,7 @@ export function createProjectPersistenceRouter(persist = persistUserProjects): R
       return;
     }
     const slug = claimedUserIdentity()?.builderSlug;
-    if (process.env.GATEWAY_CLASS !== "builder" || !slug || req.body?.slug !== slug) {
+    if (!isIsolatedGatewayClassValue(process.env.GATEWAY_CLASS) || !slug || req.body?.slug !== slug) {
       res.status(403).json({ error: "project owner differs from this user" });
       return;
     }

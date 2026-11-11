@@ -1,4 +1,4 @@
-import { isReleasePayload, releasePayloadHash, type PlatformReleaseRecord, type ReleasePayload } from "@octogee/shared/types/gateway-releases";
+import { dualReadIsolatedProfileImage, isReleasePayload, releasePayloadHash, type PlatformReleaseRecord, type ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import type { SharedPoolReplacement } from "@octogee/shared/types/shared-gateway-pool";
 
 export interface FleetContainer {
@@ -97,7 +97,7 @@ function matchesPayload(actual: ReleasePayload | null, expected: ReleasePayload)
 }
 
 export function expectedFleetImages(gateway: Pick<FleetGateway, "imageProfile">, payload: ReleasePayload): Record<string, string> {
-  const image = gateway.imageProfile === "builder" ? payload.profileImages?.builder : payload;
+  const image = gateway.imageProfile === "builder" ? payload.profileImages && dualReadIsolatedProfileImage(payload.profileImages) : payload;
   if (!image || !payload.gatewayEdgeImage) throw new Error("complete gateway image family is required");
   return { gateway: `${image.imageRepository}:${image.imageTag}`, "gateway-edge": `${payload.gatewayEdgeImage.imageRepository}:${payload.gatewayEdgeImage.imageTag}` };
 }
@@ -110,7 +110,7 @@ function pinnedImage(reference: string): string | null {
 function retagPayload(payload: ReleasePayload, prefix: string): ReleasePayload {
   const retag = (image: { imageRepository: string; imageTag: string }) => ({ ...image, imageTag: `${prefix}@${image.imageTag.split("@")[1]}` });
   return { ...payload, ...retag(payload),
-    ...(payload.profileImages ? { profileImages: { builder: retag(payload.profileImages.builder) } } : {}),
+    ...(payload.profileImages ? { profileImages: "isolated" in payload.profileImages ? { isolated: retag(payload.profileImages.isolated) } : { builder: retag(payload.profileImages.builder) } } : {}),
     ...(payload.gatewayEdgeImage ? { gatewayEdgeImage: retag(payload.gatewayEdgeImage) } : {}),
   };
 }

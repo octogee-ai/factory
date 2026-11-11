@@ -3,6 +3,7 @@ import {
   releasePayloadHash,
   upgradeReleasePayloadSchema,
   isReleasePayload,
+  dualReadIsolatedProfileImage,
   classifyGatewayField,
   isGatewayRuntimeDoc,
   isGatewayDesiredDoc,
@@ -128,6 +129,21 @@ describe("isReleasePayload", () => {
         },
       },
     })).toBe(false);
+  });
+
+  it("reads an isolated profile image under the isolated key the same as under builder", () => {
+    const image = {
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
+      imageTag: `abc1234@sha256:${"c".repeat(64)}`,
+    };
+    const base = { imageTag: `abc1234@sha256:${"a".repeat(64)}` };
+    for (const profileImages of [{ builder: image }, { isolated: image }]) {
+      const payload = samplePayload({ ...base, profileImages });
+      expect(isReleasePayload(payload)).toBe(true);
+      expect(dualReadIsolatedProfileImage(payload.profileImages!)).toEqual(image);
+    }
+    expect(isReleasePayload({ ...samplePayload(base), profileImages: { builder: image, isolated: image } })).toBe(false);
+    expect(isReleasePayload({ ...samplePayload(base), profileImages: { operator: image } })).toBe(false);
   });
 
 });

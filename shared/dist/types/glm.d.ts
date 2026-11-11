@@ -6,6 +6,8 @@ export declare const GATEWAY_CLASSES: readonly ["shared", "builder"];
 export type GatewayClass = (typeof GATEWAY_CLASSES)[number];
 export declare const GATEWAY_IMAGE_PROFILES: readonly ["standard", "builder"];
 export type GatewayImageProfile = (typeof GATEWAY_IMAGE_PROFILES)[number];
+export declare function dualReadGatewayClassValue<T>(value: T): T | "builder";
+export declare function isIsolatedGatewayClassValue(value: unknown): boolean;
 export interface GatewayDesiredState {
     gatewayId: string;
     /**

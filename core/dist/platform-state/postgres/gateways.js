@@ -1,5 +1,5 @@
 import { isReleasePayload, upgradeReleasePayloadSchema } from "@octogee/shared/types/gateway-releases";
-import { isGatewayVmRuntimeBundle } from "@octogee/shared/types/glm";
+import { dualReadGatewayClassValue, isGatewayVmRuntimeBundle } from "@octogee/shared/types/glm";
 import { parseAssignmentDoc } from "../../assignment-doc.js";
 import { DuplicateRecordError, MalformedRecordError } from "../errors.js";
 import { deleteRecord, equalsFence, insertRecord, oneOfFence, revisionFence, selectByKey, selectRecords, updateRecord, } from "./records.js";
@@ -119,7 +119,13 @@ function rootColumns(gatewayId, input) {
     return allocation === undefined ? fields : { ...fields, ...allocationColumns(gatewayId, allocation) };
 }
 export function decodeGatewayRoot(row) {
-    const { allocationLeaseId, allocationGeneration, allocationClaimedByUid, ...root } = decodeStored(GATEWAYS_TABLE, row);
+    const { allocationLeaseId, allocationGeneration, allocationClaimedByUid, ...stored } = decodeStored(GATEWAYS_TABLE, row);
+    const root = {
+        ...stored,
+        profile: dualReadGatewayClassValue(stored.profile),
+        gatewayClass: dualReadGatewayClassValue(stored.gatewayClass),
+        imageProfile: dualReadGatewayClassValue(stored.imageProfile),
+    };
     if (allocationLeaseId === undefined)
         return root;
     const allocation = {
@@ -200,8 +206,10 @@ function createRootsRepository(session) {
         list(filter = {}) {
             const parameters = new SqlParameters();
             const conditions = [];
-            if (filter.gatewayClass !== undefined)
-                conditions.push(`gateway_class = ${parameters.add(filter.gatewayClass, "text")}`);
+            if (filter.gatewayClass !== undefined) {
+                const storedClasses = filter.gatewayClass === "builder" ? ["builder", "isolated"] : [filter.gatewayClass];
+                conditions.push(`gateway_class = ANY(${parameters.add(storedClasses, "text[]")})`);
+            }
             if (filter.ownerUid !== undefined)
                 conditions.push(`owner_uid = ${parameters.add(filter.ownerUid, "text")}`);
             return list("gateways.roots.list", conditions.length === 0 ? "" : `WHERE ${conditions.join(" AND ")}`, parameters.values);

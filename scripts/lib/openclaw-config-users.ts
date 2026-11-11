@@ -21,6 +21,7 @@ export {
   platformOpenAiEmbeddingSecretId,
   rebindPlatformEmbeddingRefs,
 } from "@octogee/core/platform-embedding-refs";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 export {
   PRODUCTIVITY_TOOL_NAMES,
   PROJECT_AGENT_ALLOWED_TOOLS,
@@ -378,7 +379,7 @@ export function gatewayAgentRosterUserSlug(
 ): string {
   const gatewayClass = env.GATEWAY_CLASS?.trim();
   if (gatewayClass === "shared") return "";
-  if (gatewayClass === "builder") return userClaimSlug(env) || "";
+  if (isIsolatedGatewayClassValue(gatewayClass)) return userClaimSlug(env) || "";
   return "";
 }
 

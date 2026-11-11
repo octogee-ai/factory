@@ -1,6 +1,12 @@
 export const GATEWAY_PROFILES = ["standard", "builder"];
 export const GATEWAY_CLASSES = ["shared", "builder"];
 export const GATEWAY_IMAGE_PROFILES = ["standard", "builder"];
+export function dualReadGatewayClassValue(value) {
+    return value === "isolated" ? "builder" : value;
+}
+export function isIsolatedGatewayClassValue(value) {
+    return dualReadGatewayClassValue(value) === "builder";
+}
 export const GATEWAY_RUNTIMES = ["cluster", "gce-vm"];
 export function isGatewayRuntime(value) {
     return typeof value === "string" && GATEWAY_RUNTIMES.includes(value);
@@ -313,10 +319,13 @@ export function isGatewayClassControlUiAccessEnabled(gatewayClass, builderAccess
     return gatewayClass === "builder" && builderAccess?.controlUiEnabled === true;
 }
 export function resolveUserGatewayControlState(data, uid) {
+    const storedClass = dualReadGatewayClassValue(data?.gatewayClass);
+    const storedProfile = dualReadGatewayClassValue(data?.profile);
+    const storedImageProfile = dualReadGatewayClassValue(data?.imageProfile);
     const gatewayClass = resolveGatewayClass({
-        gatewayClass: isGatewayClass(data?.gatewayClass) ? data.gatewayClass : undefined,
-        profile: isGatewayProfile(data?.profile) ? data.profile : undefined,
-        imageProfile: isGatewayProfile(data?.imageProfile) ? data.imageProfile : undefined,
+        gatewayClass: isGatewayClass(storedClass) ? storedClass : undefined,
+        profile: isGatewayProfile(storedProfile) ? storedProfile : undefined,
+        imageProfile: isGatewayProfile(storedImageProfile) ? storedImageProfile : undefined,
     });
     const userOwns = data?.ownerUid === uid;
     return {

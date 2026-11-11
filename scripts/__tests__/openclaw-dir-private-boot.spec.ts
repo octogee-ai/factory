@@ -23,7 +23,7 @@ it.each(["builder", "shared"])("makes the %s OpenClaw state root private before 
   const result = spawnSync("sh", ["-s"], {
     input: `${prefix}\nmkdir -m 700 "$OPENCLAW_DIR/control"\nnode -e "for (const p of [process.env.OPENCLAW_DIR, process.env.OPENCLAW_DIR + '/control']) console.log('mode=' + (require('node:fs').statSync(p).mode & 0o7777).toString(8))"\n`,
     encoding: "utf8",
-    env: { ...process.env, HOME: root, GATEWAY_CLASS: gatewayClass, GATEWAY_RUNTIME_KIND: "cluster", GATEWAY_ID: "gw-private" },
+    env: { ...process.env, OCTOGEE_LIBEXEC_DIR: path.join(repo, "infra/gateway"), HOME: root, GATEWAY_CLASS: gatewayClass, GATEWAY_RUNTIME_KIND: "cluster", GATEWAY_ID: "gw-private" },
   });
   expect(result.status, result.stderr).toBe(0);
   expect(result.stdout).toContain("mode=700\nmode=700\n");

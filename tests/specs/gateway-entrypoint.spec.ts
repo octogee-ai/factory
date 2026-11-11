@@ -84,7 +84,7 @@ describe("Gateway startup state authority", () => {
     const configPath = "/home/node/.openclaw/system_config/openclaw.json";
     const run = spawnSync("sh", ["-c", `${setup}\n"$1" -e 'process.stdout.write(JSON.stringify({state:process.env.OPENCLAW_STATE_DIR,config:process.env.OPENCLAW_CONFIG_PATH}))'`, "_", process.execPath], {
       encoding: "utf8",
-      env: { ...process.env, GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "", OPENCLAW_STATE_DIR: inheritedState, OPENCLAW_CONFIG_PATH: configPath },
+      env: { ...process.env, OCTOGEE_LIBEXEC_DIR: path.join(repoRoot, "infra/gateway"), GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "", OPENCLAW_STATE_DIR: inheritedState, OPENCLAW_CONFIG_PATH: configPath },
     });
     expect(run.status, run.stderr).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({ state: "/home/node/.openclaw", config: configPath });

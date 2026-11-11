@@ -1,6 +1,7 @@
 import { MANAGED_CHANNEL_INSTALLATION } from "../channel-identities.js";
 import { clearManagedChannelIdentity, linkChannelIdentity, managedExternalUserIdOf, managedOwnerIdOf } from "./channel-identities.js";
 import { isDeepStrictEqual } from "node:util";
+import { dualReadGatewayClassValue } from "@octogee/shared/types/glm";
 import { DuplicateRecordError, FenceMismatchError, MalformedRecordError, MissingRecordError, } from "../errors.js";
 import { serverNow } from "./records.js";
 import { SqlParameters } from "./sql.js";
@@ -207,7 +208,7 @@ function decodeGatewayMirror(fields) {
     return present({
         gatewayId,
         gatewayAssignedAt: fields.optional("gateway_assigned_at"),
-        gatewayProfile: fields.optional("gateway_profile"),
+        gatewayProfile: dualReadGatewayClassValue(fields.optional("gateway_profile")),
         controlUiEnabled: fields.optional("control_ui_enabled"),
     });
 }

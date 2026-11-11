@@ -29,6 +29,7 @@ import {
   canonicalUserModelDefinition,
 } from "@octogee/shared/types/agent-models";
 import { parseAgentId } from "@octogee/shared/types/identity";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 const CONFIG_PATH = openClawConfigPath();
 
@@ -40,7 +41,7 @@ export function shouldMaterializeAnthropicBrokerProfiles(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const gatewayClass = env.GATEWAY_CLASS ?? "";
-  return gatewayClass === "shared" || gatewayClass === "builder";
+  return gatewayClass === "shared" || isIsolatedGatewayClassValue(gatewayClass);
 }
 
 export function platformBrokerCatalogOpts(env: NodeJS.ProcessEnv): {
@@ -410,7 +411,7 @@ export function applySharedMattermostRoutingSafetyPatch(
   env: NodeJS.ProcessEnv,
   logFn: (msg: string) => void,
 ): boolean {
-  if (env.GATEWAY_CLASS?.trim() === "builder") return false;
+  if (isIsolatedGatewayClassValue(env.GATEWAY_CLASS?.trim())) return false;
   let changed = applySharedDefaultAgent(config);
   if (changed) {
     logFn("converged the non-tenant agent roster for unmatched routes");
@@ -500,7 +501,7 @@ export function applyAnthropicBaseUrlPatch(
 }
 
 function applyPlatformBrokerProviderPatch(config: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  if (env.GATEWAY_CLASS !== "shared" && env.GATEWAY_CLASS !== "builder") return false;
+  if (env.GATEWAY_CLASS !== "shared" && !isIsolatedGatewayClassValue(env.GATEWAY_CLASS)) return false;
   const expected = platformBrokerProviderDeclarations(env);
   const models = ensureNullishObjectProperty(config, "models");
   const providers = models ? ensureNullishObjectProperty(models, "providers") : null;
@@ -736,7 +737,7 @@ function applyWorkspaceIdentityBootstrapPolicy(
   env: NodeJS.ProcessEnv,
   logFn: (msg: string) => void,
 ): boolean {
-  if (env.GATEWAY_CLASS !== "shared" && env.GATEWAY_CLASS !== "builder") return false;
+  if (env.GATEWAY_CLASS !== "shared" && !isIsolatedGatewayClassValue(env.GATEWAY_CLASS)) return false;
   const agents = ensureNullishObjectProperty(config, "agents");
   const defaults = agents ? ensureNullishObjectProperty(agents, "defaults") : null;
   if (!defaults) return false;
@@ -757,7 +758,7 @@ export function applyPreBootPatches(
   logFn: (msg: string) => void = () => {},
   options: { stateStore?: LocalStateStoreKind } = {},
 ): boolean {
-  const isolatedGateway = env.GATEWAY_CLASS?.trim() === "builder";
+  const isolatedGateway = isIsolatedGatewayClassValue(env.GATEWAY_CLASS?.trim());
   return [
     applyAgentStoreDatabasePatch(config, env, options.stateStore),
     applyWorkspaceIdentityBootstrapPolicy(config, env, logFn),
@@ -794,7 +795,7 @@ export function applyAgentStoreDatabasePatch(
   env: NodeJS.ProcessEnv,
   stateStore?: LocalStateStoreKind,
 ): boolean {
-  if (env.GATEWAY_CLASS !== "shared" && env.GATEWAY_CLASS !== "builder") return false;
+  if (env.GATEWAY_CLASS !== "shared" && !isIsolatedGatewayClassValue(env.GATEWAY_CLASS)) return false;
   const current = isPlainObject(config.database) ? config.database : {};
   const families = isPlainObject(current.families) ? current.families : {};
   let sqliteFamily: string | undefined;
@@ -948,7 +949,7 @@ export async function materializeBrokerProfilesBeforeBoot(
   logFn: (message: string) => void = log,
 ): Promise<void> {
   if (!shouldMaterializeAnthropicBrokerProfiles(env)) return;
-  if (env.GATEWAY_CLASS?.trim() === "builder") {
+  if (isIsolatedGatewayClassValue(env.GATEWAY_CLASS?.trim())) {
     logFn("model-ready: Isolated gateway broker profiles are materialized by the post-boot sweep");
     return;
   }
@@ -982,7 +983,7 @@ async function main(): Promise<void> {
   try {
     changed = applyPreBootPatches(config, process.env, log, { stateStore });
   } catch (error) {
-    if (process.argv.includes("--defer-builder-store-migration") && process.env.GATEWAY_CLASS === "builder" &&
+    if (process.argv.includes("--defer-builder-store-migration") && isIsolatedGatewayClassValue(process.env.GATEWAY_CLASS) &&
         error instanceof GatewayStoreMigrationRequiredError) {
       log("User stores require migration; preserving config for the held supervisor (startup remains blocked)");
       return;

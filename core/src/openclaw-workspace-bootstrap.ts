@@ -7,6 +7,7 @@ import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
 import { sendWsRequest, startConnectChallengeTracker, waitForWsOpen } from "@octogee/shared/types/openclaw-wire-core";
 import { OPENCLAW_EDGE_SERVICE_IDENTITY, OPENCLAW_PROVISIONER_SERVICE_IDENTITY, openClawProxyIdentityHeaders, openClawProxyOrigin } from "@octogee/shared/types/openclaw-proxy-identity";
 import { userClaimOwnerUid } from "@octogee/shared/server/user-claim";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 interface BootstrapIdentity { uid: string; role: "admin" | "service" }
 interface BootstrapJournal { ownerUid: string }
@@ -14,7 +15,7 @@ interface NativeProfile { id: string; emails: string[]; role?: string | null }
 type NativeRequest = <T>(method: string, params: Record<string, unknown>, options: { scopes: string[] }) => Promise<T>;
 
 function enabled(env: NodeJS.ProcessEnv): boolean {
-  return env.GATEWAY_CLASS === "builder" && env.OPENCLAW_CONTROL_IDENTITY === "per-user";
+  return isIsolatedGatewayClassValue(env.GATEWAY_CLASS) && env.OPENCLAW_CONTROL_IDENTITY === "per-user";
 }
 
 function files(env: NodeJS.ProcessEnv) {

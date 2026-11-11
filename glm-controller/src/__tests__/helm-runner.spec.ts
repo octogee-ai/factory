@@ -73,6 +73,12 @@ describe("helm-runner helpers", () => {
     })).toEqual({});
   });
 
+  it("reads isolated class and profile knobs from deployed values the same as builder", () => {
+    const knobs = (value: string) => readPersonalKnobs({ profile: value, gatewayClass: value, imageProfile: value });
+    expect(knobs("isolated")).toEqual(knobs("builder"));
+    expect(knobs("isolated")).toEqual({ profile: "builder", gatewayClass: "builder", imageProfile: "builder" });
+  });
+
   it("drops a residual computeClassOverride left in a deployed release's values", () => {
     const residue = { computeClassOverride: "octogee-gateway-spot" };
     expect(readPersonalKnobs(residue)).toEqual({});

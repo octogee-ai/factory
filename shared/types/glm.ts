@@ -11,6 +11,14 @@ export type GatewayClass = (typeof GATEWAY_CLASSES)[number];
 export const GATEWAY_IMAGE_PROFILES = ["standard", "builder"] as const;
 export type GatewayImageProfile = (typeof GATEWAY_IMAGE_PROFILES)[number];
 
+export function dualReadGatewayClassValue<T>(value: T): T | "builder" {
+  return value === "isolated" ? "builder" : value;
+}
+
+export function isIsolatedGatewayClassValue(value: unknown): boolean {
+  return dualReadGatewayClassValue(value) === "builder";
+}
+
 export interface GatewayDesiredState {
   gatewayId: string;
 
@@ -648,10 +656,13 @@ export function resolveUserGatewayControlState(
     | undefined,
   uid: string,
 ): { gatewayProfile: GatewayProfile; controlUiEnabled: boolean } {
+  const storedClass = dualReadGatewayClassValue(data?.gatewayClass);
+  const storedProfile = dualReadGatewayClassValue(data?.profile);
+  const storedImageProfile = dualReadGatewayClassValue(data?.imageProfile);
   const gatewayClass = resolveGatewayClass({
-    gatewayClass: isGatewayClass(data?.gatewayClass) ? data.gatewayClass : undefined,
-    profile: isGatewayProfile(data?.profile) ? data.profile : undefined,
-    imageProfile: isGatewayProfile(data?.imageProfile) ? data.imageProfile : undefined,
+    gatewayClass: isGatewayClass(storedClass) ? storedClass : undefined,
+    profile: isGatewayProfile(storedProfile) ? storedProfile : undefined,
+    imageProfile: isGatewayProfile(storedImageProfile) ? storedImageProfile : undefined,
   });
   const userOwns = data?.ownerUid === uid;
   return {

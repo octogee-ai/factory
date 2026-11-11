@@ -12,6 +12,7 @@ import { userClaimSlug } from "@octogee/shared/server/user-claim";
 import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
 import { localStateStoreKind, localStateStorePath, openclawStateRoot } from "./openclaw-state-store.js";
 import { checkpointDurableSystemConfigForSlug } from "./system-config.js";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 const FAMILIES = ["state", "agent", ...AUXILIARY_FAMILIES] as const;
 type Family = typeof FAMILIES[number];
@@ -40,7 +41,7 @@ function engine(config: Config, family: string): "sqlite" | "postgres" {
 }
 
 export async function assertUserPostgresSelection(env: NodeJS.ProcessEnv): Promise<void> {
-  if (env.GATEWAY_CLASS !== "builder") return;
+  if (!isIsolatedGatewayClassValue(env.GATEWAY_CLASS)) return;
   const stateDir = openclawStateRoot(env);
   const config = JSON.parse(await fs.readFile(env.OPENCLAW_CONFIG_PATH || path.join(stateDir, "system_config", "openclaw.json"), "utf8")) as Config;
   if (localStateStoreKind(localStateStorePath(stateDir)) === "sqlite" ||
@@ -51,7 +52,7 @@ export async function assertUserPostgresSelection(env: NodeJS.ProcessEnv): Promi
 
 function migrationContext(env: NodeJS.ProcessEnv) {
   const slug = userClaimSlug(env);
-  if (env.GATEWAY_CLASS !== "builder" || !slug || !env.GATEWAY_ID || !env.POD_UID) {
+  if (!isIsolatedGatewayClassValue(env.GATEWAY_CLASS) || !slug || !env.GATEWAY_ID || !env.POD_UID) {
     throw new Error("Store migration requires a claimed isolated allocation");
   }
   const stateDir = openclawStateRoot(env);

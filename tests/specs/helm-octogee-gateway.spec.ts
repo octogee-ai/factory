@@ -61,6 +61,30 @@ function helmTemplate(
   return result.stdout;
 }
 
+describe("octogee-gateway chart — isolated class dual read", () => {
+  function isolatedRender(value: string, extra: Record<string, string> = {}): string {
+    return helmTemplate("octogee-gw-walter", {
+      gatewayId: "walter", gatewayClass: value, imageProfile: value, runtimeKind: "gce-vm", ...extra,
+    });
+  }
+
+  it.each<Record<string, string>>([{}, { computerDesktop: "x11" }, { "builderAccess.controlUiEnabled": "true", "builderAccess.controlIdentity": "per-user" }])(
+    "renders an isolated class and image profile the same as builder apart from the values it passes through (%o)",
+    (extra) => {
+      const passedThrough = (out: string) => out
+        .replace(/(gateway-(?:class|profile): )"isolated"/g, '$1"builder"')
+        .replace(/(name: GATEWAY_(?:CLASS|PROFILE)\n\s+value: )"isolated"/g, '$1"builder"');
+      const isolated = isolatedRender("isolated", extra);
+      expect(isolated).toContain('gateway-class: "isolated"');
+      expect(passedThrough(isolated)).toBe(isolatedRender("builder", extra));
+    },
+  );
+
+  it("still rejects an unknown class", () => {
+    expect(() => helmTemplate("octogee-gw-walter", { gatewayId: "walter", gatewayClass: "operator" })).toThrow(/gatewayClass/);
+  });
+});
+
 function findDoc(out: string, kind: string, name: string): string | null {
   const docs = out.split(/^---\s*$/m);
   return (

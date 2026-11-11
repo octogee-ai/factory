@@ -43,6 +43,7 @@ import {
   rollbackWorkspaceStorageReservation,
   type WorkspaceStorageReservation,
 } from "./workspace-storage-quota.js";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 export { WorkspaceStorageQuotaError } from "./workspace-storage-quota.js";
 
@@ -181,7 +182,7 @@ export async function storeWorkspaceBlob(
   if (options.immutable && process.env.FLEET_BROKER_URL) {
     return uploadProjectBlobViaBroker(process.env.FLEET_BROKER_URL, target, fileBuffer, contentType);
   }
-  if (target.projectSlug === null && ["shared", "builder"].includes(process.env.GATEWAY_CLASS ?? "")) {
+  if (target.projectSlug === null && (process.env.GATEWAY_CLASS === "shared" || isIsolatedGatewayClassValue(process.env.GATEWAY_CLASS))) {
     if (!process.env.FLEET_BROKER_URL) throw new Error("workspace blob upload requires its configured fleet broker");
     return uploadWorkspaceBlobViaBroker(process.env.FLEET_BROKER_URL, target, filePath, fileBuffer, contentType);
   }

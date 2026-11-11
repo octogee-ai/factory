@@ -70,6 +70,7 @@ import {
 } from "./mattermost-chat.js";
 import type { ClaimedUserIdentity } from "@octogee/shared/types/builder-identity";
 import { claimedUserIdentity } from "../lib/user-identity.js";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 const MAX_BROWSER_WS_FRAME_BYTES = 1_048_576;
 const MAX_UPSTREAM_WS_FRAME_BYTES = 25 * 1024 * 1024;
@@ -235,7 +236,7 @@ function appOrigin(env: NodeJS.ProcessEnv): string {
 }
 
 function gatewayClass(env: NodeJS.ProcessEnv): "shared" | "builder" {
-  return env.GATEWAY_CLASS === "builder" && env.GATEWAY_PROFILE === "builder"
+  return isIsolatedGatewayClassValue(env.GATEWAY_CLASS) && isIsolatedGatewayClassValue(env.GATEWAY_PROFILE)
     ? "builder"
     : "shared";
 }

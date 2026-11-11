@@ -3,10 +3,11 @@ import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { createSurgeOpenClawProcessSupervisorClient } from "../lib/surge-openclaw-process-gate.js";
 import { openclawStateRoot } from "../lib/openclaw-state-store.js";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 export async function migrateUserStores(args = process.argv.slice(2), env = process.env): Promise<void> {
   const { values } = parseArgs({ args, options: { "expected-pod-uid": { type: "string" }, apply: { type: "boolean", default: false }, resume: { type: "boolean", default: false } } });
-  if (!values.apply || !values["expected-pod-uid"] || env.GATEWAY_CLASS !== "builder") {
+  if (!values.apply || !values["expected-pod-uid"] || !isIsolatedGatewayClassValue(env.GATEWAY_CLASS)) {
     throw new Error("Run on the retained source user: migrate-user-stores.ts --expected-pod-uid=<source UID> --apply");
   }
   const client = createSurgeOpenClawProcessSupervisorClient(openclawStateRoot(env));

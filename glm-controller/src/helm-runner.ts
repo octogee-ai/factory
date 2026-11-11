@@ -6,6 +6,7 @@ import type {
   HelmInstancesMap,
   RuntimeUserIdentity,
 } from "@octogee/shared/types/glm";
+import { dualReadGatewayClassValue } from "@octogee/shared/types/glm";
 import type { SizingTier } from "@octogee/shared/types/sizing";
 import { SIZING_TIERS } from "@octogee/shared/types/sizing";
 import {
@@ -395,9 +396,9 @@ const PERSONAL_KNOB_READERS: PersonalKnobReader[] = [
     v.gatewayContainerSecurityContext,
   )),
   (v) => knob("builderAccess", plainObjectKnob<HelmInstancesMap[string]["builderAccess"]>(v.builderAccess)),
-  (v) => knob("profile", enumString(v.profile, PROFILE_VALUES)),
-  (v) => knob("gatewayClass", enumString(v.gatewayClass, GATEWAY_CLASS_VALUES)),
-  (v) => knob("imageProfile", enumString(v.imageProfile, IMAGE_PROFILE_VALUES)),
+  (v) => knob("profile", enumString(dualReadGatewayClassValue(v.profile), PROFILE_VALUES)),
+  (v) => knob("gatewayClass", enumString(dualReadGatewayClassValue(v.gatewayClass), GATEWAY_CLASS_VALUES)),
+  (v) => knob("imageProfile", enumString(dualReadGatewayClassValue(v.imageProfile), IMAGE_PROFILE_VALUES)),
   (v) => knob("sizingTier", enumString(v.sizingTier, SIZING_TIER_VALUES)),
   (v) => knob("replicas", integerAtLeastZero(v.replicas)),
 ];

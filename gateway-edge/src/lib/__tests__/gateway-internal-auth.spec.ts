@@ -51,6 +51,29 @@ describe("gateway internal auth", () => {
     });
   });
 
+  it.each([["builder", "isolated"], ["isolated", "builder"], ["isolated", "isolated"]])(
+    "uses the projected token when the class is %s and the profile is %s",
+    async (gatewayClass, gatewayProfile) => {
+      await withTokenFile("projected-sa-token\n", (tokenPath) => {
+        expect(resolveGatewayInternalAuthSecret({
+          GATEWAY_CLASS: gatewayClass,
+          GATEWAY_PROFILE: gatewayProfile,
+          OCTOGEE_API_SA_TOKEN_PATH: tokenPath,
+        })).toMatchObject({ mode: "gateway-service-account" });
+      });
+    },
+  );
+
+  it("does not use a projected token for an unknown class", async () => {
+    await withTokenFile("projected-sa-token\n", (tokenPath) => {
+      expect(resolveGatewayInternalAuthSecret({
+        GATEWAY_CLASS: "operator",
+        GATEWAY_PROFILE: "builder",
+        OCTOGEE_API_SA_TOKEN_PATH: tokenPath,
+      })).toBeNull();
+    });
+  });
+
   it("does not use a projected token outside the isolated runtime", async () => {
     await withTokenFile("projected-sa-token\n", (tokenPath) => {
       expect(

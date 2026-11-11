@@ -8,6 +8,7 @@ import {
   type HelmInstanceValue,
 } from "@octogee/shared/types/glm";
 import {
+  dualReadIsolatedProfileImage,
   type GatewayDoc,
   type GatewayRuntimeDoc,
   type ReleasePayload,
@@ -72,7 +73,7 @@ function gatewayImageIn(
       imageTag: artifact.imageTag,
     };
   }
-  return artifact.profileImages?.builder ?? null;
+  return artifact.profileImages === undefined ? null : dualReadIsolatedProfileImage(artifact.profileImages);
 }
 
 export function gatewayImageFor(

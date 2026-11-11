@@ -96,6 +96,7 @@ import { createWorkspaceRolesRouter } from "./routes/workspace-roles.js";
 import { resolveNativeAdminAccess } from "./lib/native-admin-access.js";
 import { createWsTicketStore } from "./lib/ws-ticket-store.js";
 import { workspaceDefaultAgentId } from "@octogee/shared/types/identity";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 type ChatProxyModule = typeof import("./chat-proxy/proxy.js");
@@ -452,7 +453,7 @@ if (process.env.NODE_ENV !== "test") {
     process.exit(1);
   }
 
-  const edgeGatewayClass = process.env.GATEWAY_CLASS === "builder" ? "builder" : "shared";
+  const edgeGatewayClass = isIsolatedGatewayClassValue(process.env.GATEWAY_CLASS) ? "builder" : "shared";
   if (edgeGatewayClass === "builder") {
     const identityStore = createUserIdentityStore({
       read: brokerUserIdentityReader(process.env),

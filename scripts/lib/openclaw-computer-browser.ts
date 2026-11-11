@@ -1,4 +1,5 @@
 import { userClaimSlug } from "@octogee/shared/server/user-claim";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 type JsonObject = Record<string, unknown>;
 
 function objectAt(parent: JsonObject, key: string): JsonObject {
@@ -39,7 +40,7 @@ const FILE_TRANSFER_NODE_COMMANDS = [
 ] as const;
 
 function gatewayVm(env: NodeJS.ProcessEnv): boolean {
-  return env.GATEWAY_CLASS === "builder" && (env.GATEWAY_RUNTIME_KIND === "gce-vm" ||
+  return isIsolatedGatewayClassValue(env.GATEWAY_CLASS) && (env.GATEWAY_RUNTIME_KIND === "gce-vm" ||
     (env.GATEWAY_RUNTIME_KIND === "cluster" && env.GATEWAY_COMPUTER_DESKTOP === "x11"));
 }
 

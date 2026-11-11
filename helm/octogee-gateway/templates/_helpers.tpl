@@ -65,6 +65,16 @@ shared
 {{- end -}}
 {{- end }}
 
+{{- define "octogee-gateway.dualReadGatewayClass" -}}
+{{- $class := include "octogee-gateway.gatewayClass" . -}}
+{{- ternary "builder" $class (eq $class "isolated") -}}
+{{- end }}
+
+{{- define "octogee-gateway.dualReadImageProfile" -}}
+{{- $profile := include "octogee-gateway.imageProfile" . -}}
+{{- ternary "builder" $profile (eq $profile "isolated") -}}
+{{- end }}
+
 {{/*
 Resolve the installed image/tooling profile. Shared uses the standard image;
 owner-bound disposable Builder gateways use the Builder image.
@@ -74,7 +84,7 @@ owner-bound disposable Builder gateways use the Builder image.
 {{- .Values.imageProfile -}}
 {{- else if .Values.profile -}}
 {{- .Values.profile -}}
-{{- else if eq (include "octogee-gateway.gatewayClass" .) "builder" -}}
+{{- else if eq (include "octogee-gateway.dualReadGatewayClass" .) "builder" -}}
 builder
 {{- else -}}
 standard
@@ -113,10 +123,10 @@ into `.Values.tiers` will succeed.
 {{- define "octogee-gateway.effectiveTier" -}}
 {{- if .Values.sizingTier -}}
 {{- .Values.sizingTier -}}
-{{- else if and .Values.classDefaults (index .Values.classDefaults (include "octogee-gateway.gatewayClass" .)) -}}
-{{- index .Values.classDefaults (include "octogee-gateway.gatewayClass" .) -}}
-{{- else if and .Values.profileDefaults (index .Values.profileDefaults (include "octogee-gateway.imageProfile" .)) -}}
-{{- index .Values.profileDefaults (include "octogee-gateway.imageProfile" .) -}}
+{{- else if and .Values.classDefaults (index .Values.classDefaults (include "octogee-gateway.dualReadGatewayClass" .)) -}}
+{{- index .Values.classDefaults (include "octogee-gateway.dualReadGatewayClass" .) -}}
+{{- else if and .Values.profileDefaults (index .Values.profileDefaults (include "octogee-gateway.dualReadImageProfile" .)) -}}
+{{- index .Values.profileDefaults (include "octogee-gateway.dualReadImageProfile" .) -}}
 {{- else -}}
 {{- .Values.profileDefaults.standard -}}
 {{- end -}}
@@ -150,7 +160,7 @@ tier isn't declared in `.Values.tiers`.
 {{- end -}}
 
 {{- define "octogee-gateway.computerDesktop" -}}
-{{- $class := include "octogee-gateway.gatewayClass" . -}}
+{{- $class := include "octogee-gateway.dualReadGatewayClass" . -}}
 {{- $tier := include "octogee-gateway.effectiveTier" . -}}
 {{- $desktop := .Values.computerDesktop | default "auto" -}}
 {{- if eq $desktop "auto" -}}

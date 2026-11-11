@@ -28,6 +28,7 @@ import {
 } from "../lib/system-config.js";
 import { pathToFileURL } from "node:url";
 import { userClaimSlug } from "@octogee/shared/server/user-claim";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 export interface PreStopFlushConfig {
   builderSlug: string;
@@ -145,7 +146,7 @@ async function main(): Promise<void> {
     gatewayClass,
     quiesceSessions: createPreStopSessionQuiesce(builderSlug),
     flushFiles: builderSlug
-      ? () => flushUserFiles(builderSlug, { persistProjects: gatewayClass === "builder" ? persistUserProjects : undefined })
+      ? () => flushUserFiles(builderSlug, { persistProjects: isIsolatedGatewayClassValue(gatewayClass) ? persistUserProjects : undefined })
       : async () => flushAllUserFiles({
         ...(gatewayClass === "shared" ? {
           slugs: (await brokerClient.assignedUsers({ completeOnly: true })).map(user => user.slug),

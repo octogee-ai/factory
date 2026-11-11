@@ -53,6 +53,7 @@ describe("account deletion lifecycle", () => {
     expect(anonymousOperationalPlanTier("builder")).toBe("builder");
     expect(anonymousOperationalPlanTier("alice@example.com")).toBeNull();
     expect(anonymousOperationalGatewayClass("builder")).toBe("builder");
+    expect(anonymousOperationalGatewayClass("isolated")).toBe(anonymousOperationalGatewayClass("builder"));
     expect(anonymousOperationalGatewayClass("operator")).toBeNull();
     expect(anonymousOperationalGatewayClass("alice@example.com")).toBeNull();
   });

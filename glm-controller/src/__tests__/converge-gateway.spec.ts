@@ -299,6 +299,19 @@ describe("gatewayUpsertOptsFromRelease", () => {
     expect(opts.gatewayEdgeImageTag).toBe("def5678");
   });
 
+  it("converges an isolated gateway to its profile image whether the release keys it builder or isolated", () => {
+    const image = { imageRepository: USER_REPO, imageTag: `def5678@sha256:${"b".repeat(64)}` };
+    const opts = (profileImages: ReleasePayload["profileImages"]) => gatewayUpsertOptsFromRelease({
+      namespace: "octogee-test",
+      gateway: gateway({ gatewayClass: "builder", imageProfile: "builder" }),
+      artifact: artifact({ profileImages }),
+      replicas: 1,
+      chartPath: "/charts/octogee-gateway",
+    });
+    expect(opts({ isolated: image })).toEqual(opts({ builder: image }));
+    expect(opts({ isolated: image })).toMatchObject({ imageRepository: USER_REPO, imageTag: image.imageTag });
+  });
+
   it("fails before Helm convergence when a user release lacks its profile receipt", () => {
     expect(() => gatewayUpsertOptsFromRelease({
       namespace: "octogee-test",

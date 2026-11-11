@@ -138,7 +138,10 @@ spec:
         - podSelector:
             matchLabels:
               app: octogee-gateway
-              gateway-class: builder
+            matchExpressions:
+              - key: gateway-class
+                operator: In
+                values: [builder, isolated]
         {{- if (.Values.global.computer).enabled }}
         - podSelector:
             matchLabels:

@@ -11,6 +11,7 @@ import { storeWorkspaceBlob, removeWorkspaceBlob, type WorkspaceBlobOptions, typ
 import { commitAndPushWorkspace, resolveProjectDir } from "./workspace-git.js";
 import { divertWorktreeBinaries, isDivertablePath } from "./binary-diversion.js";
 import { projectAssetEntry, withProjectAssetManifest } from "./project-asset-manifest.js";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 interface RemoteAssetDeps {
   read(target: FileTarget): Promise<unknown>;
@@ -94,7 +95,7 @@ async function editLocalAsset(root: string, name: string, contents: Buffer | nul
 }
 
 async function localProject(target: FileTarget): Promise<string | null> {
-  if (process.env.GATEWAY_CLASS !== "builder" || !process.env.OCTOGEE_PROJECTS_MOUNT) return null;
+  if (!isIsolatedGatewayClassValue(process.env.GATEWAY_CLASS) || !process.env.OCTOGEE_PROJECTS_MOUNT) return null;
   const root = process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
   const dir = await resolveProjectDir(root, target.slug, target.projectSlug!);
   if (!dir) return null;

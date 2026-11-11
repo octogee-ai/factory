@@ -220,6 +220,7 @@ import {
 import { snapshotConfigFingerprint } from "./snapshot-fingerprint.js";
 import { loadAppliedFingerprints } from "./applied-fingerprint-store.js";
 import { userClaimOverlaySlug, userClaimSlug } from "@octogee/shared/server/user-claim";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 const WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE: FleetBrokerProjectCheckoutScope = "workspace-only";
 
@@ -2205,7 +2206,7 @@ export function projectCheckoutScopeForRuntime(
 ): FleetBrokerProjectCheckoutScope {
   const gatewayClass = env.GATEWAY_CLASS?.trim();
   const includesProjects = gatewayClass === "shared" || (
-    gatewayClass === "builder" &&
+    isIsolatedGatewayClassValue(gatewayClass) &&
     userClaimSlug(env) === slug
   );
   return includesProjects

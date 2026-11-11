@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { projectGatewayMutableConfigForGateway, } from "./gateway-mutable-config.js";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
+import { dualReadGatewayClassValue, } from "./glm.js";
 // Simple-roll model (GATEWAY-SIMPLE-ROLL-SPEC): durable identity
 // (gateways/{id}) + immutable releases (releases/{n}) + ONE stable-name
 // realization per gateway (glmGateways/{gatewayId} runtime doc). A roll is a
@@ -9,6 +10,9 @@ import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 // are subcollections of the durable gateway identity doc.
 export const GATEWAY_RELEASES_SUBCOLLECTION = "releases";
 export const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
+export function dualReadIsolatedProfileImage(images) {
+    return "isolated" in images ? images.isolated : images.builder;
+}
 const DIGEST_BOUND_IMAGE_TAG_PATTERN = /^[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$/;
 const RELEASE_PAYLOAD_FIELD_NAMES = new Set([
     "imageRepository",
@@ -43,7 +47,10 @@ export function isReleasePayload(value) {
 function isGatewayProfileImages(value, gatewayImageRepository, gatewayImageTag) {
     if (!isPlainRecord(value) || Object.keys(value).length !== 1)
         return false;
-    const isolatedImage = value.builder;
+    const [profile] = Object.keys(value);
+    if (dualReadGatewayClassValue(profile) !== "builder")
+        return false;
+    const isolatedImage = value[profile];
     if (!isPlainRecord(isolatedImage) || Object.keys(isolatedImage).length !== 2)
         return false;
     const gatewayPackageSuffix = "/octogee-gateway";

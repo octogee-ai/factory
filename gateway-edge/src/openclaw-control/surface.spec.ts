@@ -169,6 +169,11 @@ describe("OpenClaw Dashboard invariant context", () => {
     });
     expect(invariantContext({ ...env(), GATEWAY_CLASS: "shared" }, "shared-a", null)).toMatchObject({ gatewayClass: "shared" });
   });
+  it("reads an isolated class and profile the same as builder", () => {
+    const isolated = { ...env(), GATEWAY_CLASS: "isolated", GATEWAY_PROFILE: "isolated" };
+    expect(invariantContext(isolated, "walter", CLAIMED_ALICE)).toEqual(invariantContext(env(), "walter", CLAIMED_ALICE));
+    expect(invariantContext({ ...env(), GATEWAY_CLASS: "operator" }, "walter", CLAIMED_ALICE)).toMatchObject({ gatewayClass: "shared" });
+  });
   it.each(["shared", "builder"])("preserves broker declarations through an unrelated %s Dashboard write and rejects rewiring", (gatewayClass) => {
     const context = invariantContext({ ...env(), GATEWAY_CLASS: gatewayClass, OPENROUTER_BASE_URL: "https://broker.example/openrouter" }, "walter", CLAIMED_ALICE);
     if (!context) throw new Error("Expected claimed invariant context");

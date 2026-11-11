@@ -1,5 +1,6 @@
 import { centralGatewayReleasePayload, createCentralReleaseAuthority, type CentralReleaseAuthority } from "@octogee/core/artifact-registry";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
+import { dualReadIsolatedProfileImage } from "@octogee/shared/types/gateway-releases";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -35,7 +36,7 @@ export async function renderReleaseHelmValues(sourceSha: string, authority?: Pic
         sourceSha,
         gatewayImageRepository: gatewayPayload.imageRepository,
         gatewayImageTag: gatewayPayload.imageTag,
-        builderImageTag: gatewayPayload.profileImages!.builder.imageTag,
+        builderImageTag: dualReadIsolatedProfileImage(gatewayPayload.profileImages!).imageTag,
         gatewayEdgeImageRepository: gatewayPayload.gatewayEdgeImage!.imageRepository,
         gatewayEdgeImageTag: gatewayPayload.gatewayEdgeImage!.imageTag,
         openclawSourceSha: manifest.openclawSourceSha,

@@ -9,6 +9,7 @@ import { openProxyIdentitySocket, podClientAddress, profileFor, type OpenClawPro
 import { openClawControlUpstreamBase } from "./surface.js";
 import { synchronizeChannelMembership } from "./channel-membership-sync.js";
 import { resolveVoiceConversation } from '@octogee/core/voice-conversation';
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 export interface NativeUserSocket { ws: WebSocket; scopes: Set<string> }
 interface NativeUserSocketOptions { caps?: readonly string[]; channelSessionKey?: string; threadRootPostId?: string; purpose?: 'voice' }
@@ -51,7 +52,7 @@ async function synchronizeConnectedChannelMembership(input: {
 }
 
 export async function openNativeUserSocket(uid: string, gatewayId: string, env: NodeJS.ProcessEnv = process.env, options: NativeUserSocketOptions = {}): Promise<NativeUserSocket> {
-  if (env.OPENCLAW_CONTROL_IDENTITY !== "per-user" || env.GATEWAY_CLASS !== "builder" || env.GATEWAY_ID !== gatewayId) {
+  if (env.OPENCLAW_CONTROL_IDENTITY !== "per-user" || !isIsolatedGatewayClassValue(env.GATEWAY_CLASS) || env.GATEWAY_ID !== gatewayId) {
     throw new Error("Native workspace permissions require the local per-user isolated gateway");
   }
   const channel = nativeChannelIdentity(options);

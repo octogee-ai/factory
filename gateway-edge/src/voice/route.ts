@@ -14,6 +14,7 @@ import { NativeTalkSession } from "./native-session.js";
 import { TalkSession } from "./talk-session.js";
 import { archiveVoiceCall, bindVoiceGrant, endVoiceGrant, postVoiceTurn, resolveVoiceConversation, type VoiceConversation, type VoiceGrantBinding } from "@octogee/core/voice-conversation";
 import { interruptNativeVoiceRun } from "./native-control.js";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 export const VOICE_WS_PATH_RE = /\/api\/voice\/ws\/([a-f0-9-]{36})$/;
 const MAX_CLIENT_AUDIO_FRAME_BYTES = 64 * 1024;
@@ -79,7 +80,7 @@ interface RedeemedVoiceTicket {
 }
 
 function nativeVoiceEnabled(deps: VoiceWsRouteDeps): boolean {
-  return deps.nativeVoiceEnabled ?? (process.env.GATEWAY_CLASS === "builder" && process.env.OPENCLAW_CONTROL_IDENTITY === "per-user");
+  return deps.nativeVoiceEnabled ?? (isIsolatedGatewayClassValue(process.env.GATEWAY_CLASS) && process.env.OPENCLAW_CONTROL_IDENTITY === "per-user");
 }
 
 function grantOptions(deps: VoiceWsRouteDeps) {

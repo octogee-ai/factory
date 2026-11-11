@@ -32,6 +32,7 @@ import {
 } from "../lib/openclaw-boot-watcher.js";
 import { readInstalledOpenClawBuild } from "../lib/openclaw-installed-build.js";
 import { isPerUserControlIdentity } from "@octogee/shared/types/openclaw-proxy-identity";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 600_000;
 const DEFAULT_STOP_GRACE_MS = 30_000;
@@ -144,7 +145,7 @@ export function openClawProcessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS
   if (!isPerUserControlIdentity(env)) return withFailureStacks;
   const { OPENCLAW_GATEWAY_TOKEN: podToken, ...rest } = withFailureStacks;
   if ((env.GATEWAY_RUNTIME_KIND === "gce-vm" ||
-    (env.GATEWAY_CLASS === "builder" && env.GATEWAY_RUNTIME_KIND === "cluster" && env.GATEWAY_COMPUTER_DESKTOP === "x11")) && podToken) {
+    (isIsolatedGatewayClassValue(env.GATEWAY_CLASS) && env.GATEWAY_RUNTIME_KIND === "cluster" && env.GATEWAY_COMPUTER_DESKTOP === "x11")) && podToken) {
     return { ...rest, OPENCLAW_GATEWAY_PASSWORD: podToken };
   }
   return rest;
@@ -965,7 +966,7 @@ export function createSurgeOpenClawBootWatcher(input: {
   installedOpenClawBuild?: () => Promise<string>;
 }): OpenClawBootWatcher {
   const env = input.env ?? process.env;
-  return createOpenClawBootWatcher({ ...input, inspectUserStores: env.GATEWAY_CLASS === "builder"
+  return createOpenClawBootWatcher({ ...input, inspectUserStores: isIsolatedGatewayClassValue(env.GATEWAY_CLASS)
     ? () => inspectConfiguredUserAgentStores({ stateDir: input.openclawDir,
       configPath: env.OPENCLAW_CONFIG_PATH || path.join(input.openclawDir, "openclaw.json") })
     : undefined,

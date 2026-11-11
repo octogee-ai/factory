@@ -39,7 +39,7 @@ async function boot(gatewayClass: string, runtime: string, expectEmptyRemoved: b
   await writeFile(reader, `import assert from 'node:assert/strict';import fs from 'node:fs';assert.equal(fs.existsSync(process.env.OPENCLAW_DIR+'/customers/alice/projects/rvshare'),${!expectEmptyRemoved});console.log('runtime-reader-started');`);
   return spawnSync("sh", ["-s"], {
     input: `${prefix}\nnode '${reader}'\n`, encoding: "utf8",
-    env: { ...process.env, HOME: root, GATEWAY_CLASS: gatewayClass, GATEWAY_RUNTIME_KIND: runtime, GATEWAY_ID: TEST_CLAIM_GATEWAY_ID },
+    env: { ...process.env, OCTOGEE_LIBEXEC_DIR: path.join(repo, "infra/gateway"), HOME: root, GATEWAY_CLASS: gatewayClass, GATEWAY_RUNTIME_KIND: runtime, GATEWAY_ID: TEST_CLAIM_GATEWAY_ID },
   });
 }
 

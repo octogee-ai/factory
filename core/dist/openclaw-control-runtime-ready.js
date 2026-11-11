@@ -1,5 +1,5 @@
 import { GATEWAY_HEARTBEAT_INTERVAL_MS, OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_TTL_MS, OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL, OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION, } from "@octogee/shared/types/fleet-controller";
-import { isGatewayRuntimeDoc, projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
+import { dualReadIsolatedProfileImage, isGatewayRuntimeDoc, projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
 import { gatewayHeartbeatMatchesImageTag } from "@octogee/shared/types/image-tag";
 export const OPENCLAW_CONTROL_RUNTIME_FRESH_MS = GATEWAY_HEARTBEAT_INTERVAL_MS * 4;
 const MAX_CLOCK_SKEW_MS = 5_000;
@@ -85,6 +85,6 @@ async function isServingUserDuringRoll(root, gateway, runtime, input) {
         !isOpenClawControlRevisionRuntimeReady(runtime, input))
         return false;
     const artifact = await input.readArtifact(gateway.liveRelease);
-    const image = artifact?.profileImages?.builder;
+    const image = artifact?.profileImages === undefined ? undefined : dualReadIsolatedProfileImage(artifact.profileImages);
     return image !== undefined && gatewayHeartbeatMatchesImageTag(runtime.heartbeat.version, image.imageTag);
 }

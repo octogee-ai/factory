@@ -13,6 +13,7 @@ import {
 } from "../../shared/dist/types/agent-models.js";
 import { modelCatalogForProvider } from "../../shared/dist/types/model-catalog.js";
 import { parseAgentId } from "../../shared/dist/types/identity.js";
+import { isIsolatedGatewayClassValue } from "../../shared/dist/types/glm.js";
 import { projectPlatformAgentMattermostAccounts } from "../../shared/dist/types/openclaw-mattermost-accounts.js";
 import {
   withOpenClawOperatorRoles,
@@ -1530,10 +1531,7 @@ function applyControlIdentityPolicy(config, env, claim) {
 }
 
 function resolveGatewayClass(env) {
-  if (env.GATEWAY_CLASS === "builder") {
-    return env.GATEWAY_CLASS;
-  }
-  return "shared";
+  return isIsolatedGatewayClassValue(env.GATEWAY_CLASS) ? "builder" : "shared";
 }
 
 function resolveOpenclawJsonPath() {

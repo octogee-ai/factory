@@ -5,6 +5,7 @@ import { attachUpstreamRpcClient } from "../../chat-proxy/openclaw/bridge-upstre
 import { openNativeUserClient } from "../../openclaw-control/native-user-client.js";
 import { resolveWorkspaceNativeIdentity } from "../../lib/workspace-native-access.js";
 import { NativeConnectorApprovalAccessError, runNativeConnectorApproval, type NativeConnectorCommand, type NativeApprovalClient } from "../../lib/native-connector-approval.js";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 async function openService(): Promise<NativeApprovalClient> {
   const ws = await openAuthenticatedUpstream({ gatewayId: process.env.GATEWAY_ID!, url: "ws://127.0.0.1:18789", timeoutMs: 5000 });
@@ -32,7 +33,7 @@ export function createInternalConnectorApprovalRouter() {
       if (command.gatewayId !== process.env.GATEWAY_ID || command.gatewayId !== req.params.gatewayId) {
         res.status(409).json({ error: "gateway_mismatch" }); return;
       }
-      const isolated = process.env.GATEWAY_CLASS === "builder";
+      const isolated = isIsolatedGatewayClassValue(process.env.GATEWAY_CLASS);
       if (isolated && command.operation !== "create" && command.reviewerUid) {
         const identity = await resolveWorkspaceNativeIdentity({ gatewayId: command.gatewayId, authorization: req.body.authorization });
         if (identity.uid !== command.reviewerUid) { res.status(403).json({ error: "reviewer_mismatch" }); return; }

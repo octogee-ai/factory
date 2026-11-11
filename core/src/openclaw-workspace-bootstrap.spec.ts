@@ -160,4 +160,19 @@ describe("native workspace identity initialization", () => {
     await bootstrapWorkspaceIdentities({ ...args, env: { ...env, GATEWAY_CLASS: "shared" } });
     expect(request).not.toHaveBeenCalled();
   });
+
+  it("initializes identities on a gateway whose class is isolated the same as builder", async () => {
+    const { env, profiles, args } = fixture();
+    const isolatedEnv = { ...env, GATEWAY_CLASS: "isolated" };
+    beginWorkspaceIdentityBoot(isolatedEnv);
+    await bootstrapWorkspaceIdentities({ ...args, env: isolatedEnv });
+    expect(profiles.map(profile => profile.role)).toEqual(["service", "service", "admin"]);
+    expect(workspaceIdentityReady(isolatedEnv)).toBe(true);
+  });
+
+  it("does nothing on a gateway with an unknown class", async () => {
+    const { env, args, request } = fixture();
+    await bootstrapWorkspaceIdentities({ ...args, env: { ...env, GATEWAY_CLASS: "operator" } });
+    expect(request).not.toHaveBeenCalled();
+  });
 });

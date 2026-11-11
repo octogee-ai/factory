@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   GATEWAY_CLASSES,
+  dualReadGatewayClassValue,
+  isIsolatedGatewayClassValue,
   readSchedulerMigrationIdentity,
   defaultIsolatedGatewayAccess,
   deriveGatewayIdentity,
@@ -135,6 +137,30 @@ describe("isValidNewGatewayId", () => {
   it("existing suffixed INSTANCE ids stay valid for routing/rollout — only new-gateway creation reserves the suffix", () => {
     expect(isValidGatewayId("default-blue")).toBe(true);
     expect(isValidGatewayId("default-green")).toBe(true);
+  });
+});
+
+describe("isolated class dual read", () => {
+  it("reads the isolated value the same as builder for class, profile and image profile", () => {
+    expect(dualReadGatewayClassValue("isolated")).toBe("builder");
+    expect(dualReadGatewayClassValue("builder")).toBe("builder");
+    expect(isIsolatedGatewayClassValue("isolated")).toBe(true);
+    expect(isIsolatedGatewayClassValue("builder")).toBe(true);
+  });
+
+  it("passes every other value through so validators still reject unknown classes", () => {
+    for (const value of ["shared", "standard", "operator", "Isolated", " isolated", "", undefined, null]) {
+      expect(dualReadGatewayClassValue(value)).toBe(value);
+      expect(isIsolatedGatewayClassValue(value)).toBe(false);
+    }
+  });
+
+  it("resolves an isolated stored class and image profile the same as builder", () => {
+    for (const value of ["builder", "isolated"]) {
+      const stored = { gatewayClass: value, imageProfile: value };
+      expect(resolveUserGatewayControlState({ ...stored, ownerUid: "u1", builderAccess: { controlUiEnabled: true } as never }, "u1"))
+        .toEqual({ gatewayProfile: "builder", controlUiEnabled: true });
+    }
   });
 });
 

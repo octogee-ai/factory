@@ -15,6 +15,7 @@ import type { OpenClawControlSession } from './session.js';
 import type { MattermostControlChat } from './mattermost-chat.js';
 import type { WorkspaceServingResolver } from './workspace-serving.js';
 import { mobileRecord } from './mobile-proof.js';
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 export type MobileBroker = (
   operation: string,
@@ -147,7 +148,7 @@ export class MobileGatewayAuthority {
 
   enabled(): boolean {
     return (
-      this.env.GATEWAY_CLASS === 'builder' && isPerUserControlIdentity(this.env) && this.identity.enabled
+      isIsolatedGatewayClassValue(this.env.GATEWAY_CLASS) && isPerUserControlIdentity(this.env) && this.identity.enabled
     );
   }
   origin(): string {

@@ -53,6 +53,7 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { userClaimSlug } from "@octogee/shared/server/user-claim";
 import { configuredUserReport } from "../lib/user-claim.js";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 
 export interface FleetControllerEntrypointConfig {
@@ -180,7 +181,7 @@ export function createFleetControllerRequestedFlush(input: FleetControllerReques
       throw new Error(`migration converge is missing expected system config commit for ${slug}`);
     }
     const nativeReturn = reason === "native-return";
-    if (nativeReturn && (!input.isolated || input.gatewayClass !== "builder" || input.builderSlug !== slug || expectedSystemConfigCommit)) {
+    if (nativeReturn && (!input.isolated || !isIsolatedGatewayClassValue(input.gatewayClass) || input.builderSlug !== slug || expectedSystemConfigCommit)) {
       throw new Error("native return requires the configured user and a full-home checkpoint, not a config transfer");
     }
     const syncSystemConfig = nativeReturn ? undefined : createFleetFlushSystemConfigSync({

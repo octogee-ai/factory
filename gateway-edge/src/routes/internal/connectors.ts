@@ -10,6 +10,7 @@ import { cloneGithubProjectCheckout } from "../../lib/github-project-clone.js";
 import { logger } from "../../middleware/logging.js";
 import { requireGatewayInternalAuth } from "../../middleware/gateway-internal-auth.js";
 import { claimedUserIdentity } from "../../lib/user-identity.js";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 const router = Router();
 
@@ -19,8 +20,7 @@ function nonBlank(value: string | undefined): string | null {
 }
 
 function isOwnerRuntimeGateway(): boolean {
-  const gatewayClass = nonBlank(process.env.GATEWAY_CLASS);
-  return gatewayClass === "builder";
+  return isIsolatedGatewayClassValue(nonBlank(process.env.GATEWAY_CLASS));
 }
 
 function paramString(value: unknown): string | null {

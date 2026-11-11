@@ -1,11 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
+import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 export type LocalStateStoreKind = "absent" | "anchor" | "sqlite";
 
 export function clusterIsolatedGateway(env: NodeJS.ProcessEnv): boolean {
-  return env.GATEWAY_CLASS === "builder" && env.GATEWAY_RUNTIME_KIND === "cluster";
+  return isIsolatedGatewayClassValue(env.GATEWAY_CLASS) && env.GATEWAY_RUNTIME_KIND === "cluster";
 }
 
 export function openclawStateRoot(env: NodeJS.ProcessEnv): string {

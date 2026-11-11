@@ -9,8 +9,9 @@ import {
   type GatewayMutableConfig,
 } from "./gateway-mutable-config.js";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
-import type {
-  GatewayDesiredStatus,
+import {
+  dualReadGatewayClassValue,
+  type GatewayDesiredStatus,
 } from "./glm.js";
 
 // Simple-roll model (GATEWAY-SIMPLE-ROLL-SPEC): durable identity
@@ -63,11 +64,15 @@ export interface GatewayEdgeImage {
   imageTag: string;
 }
 
-export interface GatewayProfileImages {
-  builder: {
-    imageRepository: string;
-    imageTag: string;
-  };
+export interface GatewayProfileImage {
+  imageRepository: string;
+  imageTag: string;
+}
+
+export type GatewayProfileImages = { builder: GatewayProfileImage } | { isolated: GatewayProfileImage };
+
+export function dualReadIsolatedProfileImage(images: GatewayProfileImages): GatewayProfileImage {
+  return "isolated" in images ? images.isolated : images.builder;
 }
 
 const DIGEST_BOUND_IMAGE_TAG_PATTERN =
@@ -124,7 +129,9 @@ function isGatewayProfileImages(
   gatewayImageTag: string,
 ): value is GatewayProfileImages {
   if (!isPlainRecord(value) || Object.keys(value).length !== 1) return false;
-  const isolatedImage = value.builder;
+  const [profile] = Object.keys(value);
+  if (dualReadGatewayClassValue(profile) !== "builder") return false;
+  const isolatedImage = value[profile];
   if (!isPlainRecord(isolatedImage) || Object.keys(isolatedImage).length !== 2) return false;
   const gatewayPackageSuffix = "/octogee-gateway";
   const expectedRepository = gatewayImageRepository.endsWith(gatewayPackageSuffix)
