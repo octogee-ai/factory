@@ -3,6 +3,7 @@ import { hasDefaultAgentReply, parseLoadPlan, performDefaultAgentTurn, runLoadPl
 import { createSharedPoolSampler, parseCgroup, slotObservation, stableMediumPod } from "../lib/gateway-load-sampler.js";
 import { testToken, testTokens } from "../lib/gateway-load-client.js";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
+import { TEST_TARGET } from "./fixtures/deployment.js";
 
 const target = (name = "alice") => ({ name, workspaceSlug: name, tokenEnv: `OCTOGEE_LOAD_TOKEN_${name.toUpperCase()}`,
   channelId: name[0].repeat(26) });
@@ -39,8 +40,8 @@ describe("TEST gateway load boundaries", () => {
   });
 
   it("rejects different environment variables for the same Firebase identity", () => {
-    const token = (sub: string) => `header.${Buffer.from(JSON.stringify({ sub, aud: "octogee-test",
-      iss: "https://securetoken.google.com/octogee-test", exp: Date.now() / 1_000 + 3600 })).toString("base64url")}.signature`;
+    const token = (sub: string) => `header.${Buffer.from(JSON.stringify({ sub, aud: TEST_TARGET.firebaseProjectId,
+      iss: `https://securetoken.google.com/${TEST_TARGET.firebaseProjectId}`, exp: Date.now() / 1_000 + 3600 })).toString("base64url")}.signature`;
     const env = { OCTOGEE_LOAD_TOKEN_ALICE: token("alice"), OCTOGEE_LOAD_TOKEN_BOB: token("alice") };
     expect(() => testTokens(input.targets, env)).toThrow("distinct Firebase");
     env.OCTOGEE_LOAD_TOKEN_BOB = token("bob");
@@ -48,8 +49,8 @@ describe("TEST gateway load boundaries", () => {
   });
 
   it("requires tokens to outlive the full run deadline and setup margin", () => {
-    const token = (minutes: number) => `header.${Buffer.from(JSON.stringify({ sub: "alice", aud: "octogee-test",
-      iss: "https://securetoken.google.com/octogee-test", exp: Date.now() / 1_000 + minutes * 60 })).toString("base64url")}.signature`;
+    const token = (minutes: number) => `header.${Buffer.from(JSON.stringify({ sub: "alice", aud: TEST_TARGET.firebaseProjectId,
+      iss: `https://securetoken.google.com/${TEST_TARGET.firebaseProjectId}`, exp: Date.now() / 1_000 + minutes * 60 })).toString("base64url")}.signature`;
     for (const minutes of [3, 30, 34]) {
       expect(() => testToken(target(), { OCTOGEE_LOAD_TOKEN_ALICE: token(minutes) })).toThrow("fresh");
     }
@@ -59,9 +60,9 @@ describe("TEST gateway load boundaries", () => {
   it("accepts TEST tokens only", () => {
     const token = (aud: string, exp = Date.now() / 1_000 + 3600) => `header.${Buffer.from(JSON.stringify({ aud, sub: "alice",
       iss: `https://securetoken.google.com/${aud}`, exp })).toString("base64url")}.signature`;
-    expect(testToken(target(), { OCTOGEE_LOAD_TOKEN_ALICE: token("octogee-test") }).token).toContain("header.");
-    expect(() => testToken(target(), { OCTOGEE_LOAD_TOKEN_ALICE: token("octogee") })).toThrow("octogee-test");
-    expect(() => testToken(target(), { OCTOGEE_LOAD_TOKEN_ALICE: token("octogee-test", 0) })).toThrow("fresh");
+    expect(testToken(target(), { OCTOGEE_LOAD_TOKEN_ALICE: token(TEST_TARGET.firebaseProjectId) }).token).toContain("header.");
+    expect(() => testToken(target(), { OCTOGEE_LOAD_TOKEN_ALICE: token("octogee") })).toThrow(TEST_TARGET.firebaseProjectId);
+    expect(() => testToken(target(), { OCTOGEE_LOAD_TOKEN_ALICE: token(TEST_TARGET.firebaseProjectId, 0) })).toThrow("fresh");
 
   });
 });

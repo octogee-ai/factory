@@ -5,7 +5,7 @@ import { initializeApp, applicationDefault, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import { type ServerNow } from "@octogee/core/platform-state";
-import { deploymentTargetForFirebaseProject } from "@octogee/core/deployment-environment";
+import { deploymentEnvironmentSettings, deploymentTargetForFirebaseProject } from "@octogee/core/deployment-environment";
 import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
 import { mmApiCall, revokeAndMintUserPat } from "../lib/mattermost.js";
 import { pathToFileURL } from "node:url";
@@ -25,7 +25,7 @@ export function parseRotateUserMmPatArgs(
   env: NodeJS.ProcessEnv = process.env,
 ): RotateUserMmPatArgs | null {
   const projectArg = argv.find((a) => a.startsWith("--project="));
-  const project = projectArg?.split("=")[1] || env.GOOGLE_CLOUD_PROJECT || "octogee-test";
+  const project = projectArg?.split("=")[1] || env.GOOGLE_CLOUD_PROJECT || deploymentEnvironmentSettings("test").firebaseProjectId;
   const target = argv.find((a) => !a.startsWith("--"));
   if (!target) return null;
   return { project, target };

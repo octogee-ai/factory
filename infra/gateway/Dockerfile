@@ -10,7 +10,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 #   - All apt packages (curl, jq, python3, git, sqlite3, etc.)
 #   - npm cache with correct ownership
 #
-# This image only adds NuCrew-specific code that changes per commit.
+# This image only adds Octogee-specific code that changes per commit.
 # Keep heavy/stable deps in Dockerfile.base to maximise layer cache hits.
 # ─────────────────────────────────────────────────────────────────────────────
 

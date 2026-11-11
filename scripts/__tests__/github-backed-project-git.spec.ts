@@ -29,7 +29,7 @@ vi.mock("../lib/config.js", () => ({
   OPENCLAW_DIR: paths.openclaw,
   CUSTOMERS_DIR: paths.users,
   CUSTOMER_KEYS_DIR: paths.keys,
-  AGENTS_DIR: "/tmp/octogee-test/agents",
+  AGENTS_DIR: "/tmp/octogee-fixture/agents",
 }));
 
 const broker = vi.hoisted(() => ({

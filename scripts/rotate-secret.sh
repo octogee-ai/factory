@@ -168,7 +168,7 @@ case "$SECRET" in
     echo "    discord-ops-webhook   — DISCORD_OPS_WEBHOOK_URL, consumers: signup + Monitoring alert relay Cloud Functions"
     echo ""
     echo "  For rarer rotations (Gitea SSH host key, Firebase SA key, DB passwords,"
-    echo "  Stripe webhook secret, etc.) see RUNBOOK.md → 'Credential Rotation (Full Playbook)'."
+    echo "  payment webhook secret, etc.) see RUNBOOK.md → 'Credential Rotation (Full Playbook)'."
     echo ""
     echo "  Custom namespaces are non-rotatable by design — re-provision instead:"
     echo "    ./scripts/provision-namespace.sh <namespace> --yes"

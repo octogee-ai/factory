@@ -3,7 +3,7 @@ import { ensureDesktopImage, desktopFingerprint, resolveDesktopGatewayImage } fr
 const fingerprint = 'b'.repeat(64), sourceSha = 'a'.repeat(40);
 const name = `octogee-computer-${fingerprint.slice(0, 24)}`;
 const image = { name, id: '123', status: 'READY', labels: { source: sourceSha, 'input-a': fingerprint.slice(0, 32), 'input-b': fingerprint.slice(32) } };
-const artifact = { project: 'octogee-test', name, id: '123', sourceSha, inputFingerprint: fingerprint, acceptance: 'boot-smoke-v1' };
+const artifact = { project: TEST_TARGET.clusterProjectId, name, id: '123', sourceSha, inputFingerprint: fingerprint, acceptance: 'boot-smoke-v1' };
 it('reuses a tested input fingerprint without another build or test VM', async () => {
   const build = vi.fn(), accept = vi.fn(), save = vi.fn();
   expect(await ensureDesktopImage({ fingerprint, sourceSha: 'c'.repeat(40), cached: artifact, readImage: async () => image, build, accept, save })).toEqual(artifact);
@@ -54,6 +54,7 @@ it('gives up on a candidate that never leaves PENDING before the deadline', asyn
 });
 
 import { cleanupCandidates } from '../../.github/actions/release-digest-manifest/build-desktop-image.mjs';
+import { TEST_TARGET } from "./fixtures/deployment.js";
 it('cleanup excludes operator VMs and other active CI runs', () => {
   const vm = (run: string) => ({ labels: { 'octogee-image-run': run, purpose: 'octogee-computer-test' }, creationTimestamp: '2026-09-07T00:00:00Z' });
   const mine = vm('123-1');

@@ -13,7 +13,7 @@
 # Terraform state.
 #
 # Why: automatic replication stores every version in ~26 regions at
-# $0.06/version/region. Each platform target is single-region, so this
+# a per-version, per-region price. Each platform target is single-region, so this
 # buys no real availability (region down => cluster down) and costs ~25x.
 # See DECISIONS.md. bash 3.2 compatible (macOS default).
 set -uo pipefail

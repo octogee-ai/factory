@@ -18,15 +18,15 @@ describe("initializeOperatorFirebaseAdmin", () => {
   it("authenticates with application default credentials for the explicit project", () => {
     const log = vi.fn();
 
-    initializeOperatorFirebaseAdmin("octogee-test", { env: {}, log });
+    initializeOperatorFirebaseAdmin("firebase-test", { env: {}, log });
 
     expect(firebaseAdmin.initializeApp).toHaveBeenCalledWith({
       credential: { kind: "application-default" },
-      projectId: "octogee-test",
+      projectId: "firebase-test",
     });
     expect(log).toHaveBeenCalledTimes(1);
     expect(log.mock.calls[0]?.[0]).toContain("gcloud auth application-default login");
-    expect(log.mock.calls[0]?.[0]).toContain("octogee-test");
+    expect(log.mock.calls[0]?.[0]).toContain("firebase-test");
   });
 
   it("names the key file when GOOGLE_APPLICATION_CREDENTIALS supplies the credentials", () => {

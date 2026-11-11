@@ -45,20 +45,20 @@ describe("planBundle", () => {
     const gateway = plan.services[0];
     expect(gateway.name).toBe("octogee-gateway");
     expect(gateway.config.Image).toBe("us-central1-docker.pkg.dev/octogee/octogee/gateway:main.abc");
-    expect(gateway.config.Env).toEqual(["GATEWAY_ID=b-x", "POD_UID=octogee-gateway-b-x-vm-4242", "K8S_NAMESPACE=octogee-test"]);
+    expect(gateway.config.Env).toEqual(["GATEWAY_ID=b-x", "POD_UID=octogee-gateway-b-x-vm-4242", "K8S_NAMESPACE=shared-test"]);
     expect((gateway.config.HostConfig as { Binds: string[] }).Binds).toEqual([
       "/srv/octogee/volumes/data:/home/node",
       "/srv/octogee/volumes/secret-resolver/secret-resolver.mjs:/octogee/scripts/secret-resolver.mjs:ro",
       "/srv/octogee/tokens/gateway-broker-sa-token:/var/run/secrets/octogee-gateway-broker:ro",
       "/home/octo/Documents:/home/octo/Documents",
     ]);
-    expect((gateway.config.HostConfig as { ExtraHosts: string[] }).ExtraHosts).toEqual(["octogee-api.octogee-test.svc.cluster.local:10.128.9.9"]);
+    expect((gateway.config.HostConfig as { ExtraHosts: string[] }).ExtraHosts).toEqual(["octogee-api.shared-test.svc.cluster.local:10.128.9.9"]);
     expect(gateway.config.Labels).toEqual({
       "ai.octogee.bundle-version": "v1",
       "ai.octogee.container-spec": expect.stringMatching(/^[0-9a-f]{16}$/),
       "ai.octogee.init-spec": expect.stringMatching(/^[0-9a-f]{16}$/),
       "ai.octogee.gateway-id": "b-x",
-      "ai.octogee.namespace": "octogee-test",
+      "ai.octogee.namespace": "shared-test",
       "ai.octogee.container": "gateway",
       "ai.octogee.role": "service",
     });
@@ -142,7 +142,7 @@ describe("planBundle", () => {
         Type: "gcplogs",
         Config: { labels: "ai.octogee.gateway-id,ai.octogee.namespace,ai.octogee.container,ai.octogee.role" },
       });
-      expect((spec!.config.Labels as Record<string, string>)["ai.octogee.namespace"]).toBe("octogee-test");
+      expect((spec!.config.Labels as Record<string, string>)["ai.octogee.namespace"]).toBe("shared-test");
     }
 
     expect((plan.init!.config.Labels as Record<string, string>)["ai.octogee.container"]).toBe("fix-perms");

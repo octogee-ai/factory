@@ -57,7 +57,7 @@ describe("fleet controller port surface", () => {
   let controller: StartedFleetController | undefined;
 
   beforeEach(() => {
-    vi.stubEnv("K8S_NAMESPACE", "octogee-test");
+    vi.stubEnv("K8S_NAMESPACE", "shared-test");
     vi.stubEnv("POD_UID", "pod-uid-1");
   });
 

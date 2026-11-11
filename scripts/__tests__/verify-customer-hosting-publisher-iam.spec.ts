@@ -3,11 +3,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { TEST_TARGET } from "./fixtures/deployment.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const verifier = path.join(repoRoot, "scripts/verify-customer-hosting-publisher-iam.sh");
-const publisher = "serviceAccount:octogee-project-publisher@octogee-customer-hosting-test.iam.gserviceaccount.com";
-const ksa = "serviceAccount:octogee-test.svc.id.goog[octogee-test/octogee-project-publisher]";
+const publisher = `serviceAccount:octogee-project-publisher@${TEST_TARGET.customerHostingProjectId}.iam.gserviceaccount.com`;
+const ksa = `serviceAccount:${TEST_TARGET.clusterProjectId}.svc.id.goog[${TEST_TARGET.namespace}/octogee-project-publisher]`;
 
 function policy(bindings: Array<{ role: string; members: string[] }>): string {
   return JSON.stringify({ bindings });
@@ -24,7 +25,7 @@ function runVerifier(overrides: {
   writeFileSync(gcloud, `#!/usr/bin/env bash
 set -euo pipefail
 case "$1 $2 $3" in
-  "projects get-iam-policy octogee-customer-hosting-test") printf '%s\\n' "$FAKE_PROJECT_POLICY" ;;
+  "projects get-iam-policy ${TEST_TARGET.customerHostingProjectId}") printf '%s\\n' "$FAKE_PROJECT_POLICY" ;;
   "iam service-accounts get-iam-policy") printf '%s\\n' "$FAKE_SERVICE_ACCOUNT_POLICY" ;;
   "storage buckets get-iam-policy") printf '%s\\n' "$FAKE_JOURNAL_POLICY" ;;
   *) printf 'unexpected gcloud call: %s\\n' "$*" >&2; exit 2 ;;
@@ -77,7 +78,7 @@ describe("user Hosting publisher IAM verifier", () => {
     const result = runVerifier({
       projectPolicy: policy([
         { role: "roles/firebasehosting.admin", members: [publisher] },
-        { role: "roles/viewer", members: ["serviceAccount:octogee-api@octogee-test.iam.gserviceaccount.com"] },
+        { role: "roles/viewer", members: [`serviceAccount:octogee-api@${TEST_TARGET.clusterProjectId}.iam.gserviceaccount.com`] },
       ]),
     });
 
@@ -90,7 +91,7 @@ describe("user Hosting publisher IAM verifier", () => {
       serviceAccountPolicy: policy([
         {
           role: "roles/iam.workloadIdentityUser",
-          members: ["serviceAccount:octogee.svc.id.goog[octogee-test/octogee-project-publisher]"],
+          members: [`serviceAccount:octogee.svc.id.goog[${TEST_TARGET.namespace}/octogee-project-publisher]`],
         },
       ]),
     });

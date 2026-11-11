@@ -9,7 +9,7 @@ const sha = 'a'.repeat(40);
 const digest = `sha256:${'b'.repeat(64)}`;
 const gatewayDigest = `sha256:${'c'.repeat(64)}`;
 const build = { digest, manifest: { sourceSha: sha, surfaces: { gateway: { 'octogee-gateway-builder': gatewayDigest } } } };
-const artifact = { project: 'octogee-test', name: 'octogee-computer-fixture', id: '123', sourceSha: 'd'.repeat(40), inputFingerprint: 'e'.repeat(64), acceptance: 'resize-reboot-v1' };
+const artifact = { project: 'firebase-test', name: 'octogee-computer-fixture', id: '123', sourceSha: 'd'.repeat(40), inputFingerprint: 'e'.repeat(64), acceptance: 'resize-reboot-v1' };
 const record = { schemaVersion: 1, sourceSha: sha, manifestDigest: digest, gatewayDigest, desktopImage: artifact };
 const options = { sourceSha: sha, checkoutSha: sha, branch: 'main', clean: true, actions: true, runId: '123-2' };
 function dependencies() {

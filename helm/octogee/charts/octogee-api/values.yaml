@@ -53,8 +53,8 @@ env:
   CONNECTOR_TOKEN_AUTHORITY: "1"
   # GCLOUD_PROJECT / GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT / FIREBASE_PROJECT_ID
   # are NOT set here — the deployment template wires them all from
-  # metadata.namespace via downward API. PROD ns "octogee" = PROD project,
-  # TEST ns "octogee-test" = TEST project. Matches the glm-controller pattern.
+  # metadata.namespace via downward API; each environment's namespace is named
+  # after its Google project. Matches the glm-controller pattern.
   # K8S_NAMESPACE is also downward API, not values-driven.
   # Model broker issuer defaults. Spend caps come from the owner tier unless
   # glmGateways/{gatewayId}.modelBrokerLimits.spendWindowUsd overrides them.

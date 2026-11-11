@@ -1,12 +1,13 @@
 import { parseAllDocuments, stringify } from 'yaml';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { deploymentEnvironmentSettings } from '../../core/dist/deployment-environment.js';
 
 export const clusterKinds = new Set(['Namespace', 'ClusterRole', 'ClusterRoleBinding', 'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding', 'StorageClass', 'PriorityClass', 'ComputeClass', 'CustomResourceDefinition', 'RuntimeClass']);
 const isApiReader = (resource, namespace) => resource.metadata.namespace === 'default' && ['Role', 'RoleBinding'].includes(resource.kind) && resource.metadata.name === `glm-controller-apiserver-read-${namespace}`;
 
 export function splitPlatformManifest(input, namespace, kinds = clusterKinds) {
-  if (!['octogee', 'octogee-test'].includes(namespace)) throw new Error(`Unknown release namespace ${namespace}`);
+  if (!['prod', 'test'].some(environment => deploymentEnvironmentSettings(environment).namespace === namespace)) throw new Error(`Unknown release namespace ${namespace}`);
   const release = [], bootstrap = [];
   for (const document of parseAllDocuments(input)) {
     if (document.errors.length) throw document.errors[0];

@@ -374,6 +374,33 @@ function validateHostedTarget(target: Record<string, unknown>, targetId: string)
   }
 }
 
+function validateActiveEnvironmentIsolation(
+  activeTargets: Record<string, unknown>,
+  targets: Record<string, unknown>,
+): void {
+  const active = Object.entries(activeTargets)
+    .filter(([, targetId]) => typeof targetId === "string" && Object.hasOwn(targets, targetId))
+    .map(([environment, targetId]) => ({ environment, target: targets[targetId as string] as Record<string, unknown> }))
+    .sort((a, b) => a.environment.localeCompare(b.environment));
+  for (const [index, first] of active.entries()) {
+    for (const second of active.slice(index + 1)) {
+      const pair = `${first.environment} and ${second.environment}`;
+      if (first.target.firebaseProjectId !== undefined && first.target.firebaseProjectId === second.target.firebaseProjectId) {
+        throw new Error(`active deployment targets for ${pair} share Firebase project ${String(first.target.firebaseProjectId)}`);
+      }
+      if (
+        first.target.clusterProjectId !== undefined &&
+        first.target.clusterProjectId === second.target.clusterProjectId &&
+        first.target.namespace === second.target.namespace
+      ) {
+        throw new Error(
+          `active deployment targets for ${pair} share cluster namespace ${String(first.target.clusterProjectId)}/${String(first.target.namespace)}`,
+        );
+      }
+    }
+  }
+}
+
 export function validateDeploymentTargetsDocument(document: unknown): asserts document is DeploymentTargetsDocument {
   const manifest = record(document, "deployment targets manifest");
   if (manifest.schemaVersion !== 1) {
@@ -404,6 +431,7 @@ export function validateDeploymentTargetsDocument(document: unknown): asserts do
     }
   }
 
+  validateActiveEnvironmentIsolation(activeTargets, targets);
   validatePromotionSources(hostedTargets);
   validateIngressIdentityUniqueness(hostedTargets);
   validateCustomerHostingProjects(hostedTargets);

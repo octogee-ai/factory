@@ -15,12 +15,12 @@ describe("run-emulator-vitest", () => {
       nodePath: "/opt/homebrew/bin/node",
       vitestPath: "/repo/gateway-edge/node_modules/vitest/vitest.mjs",
       config: "vitest.emulator.config.ts",
-      env: { GCLOUD_PROJECT: "octogee-test" },
+      env: { GCLOUD_PROJECT: "firebase-test" },
       vitestArgs: ["src/__tests__/preview-discovery.emulator.spec.ts"],
     });
 
     expect(command).toBe(
-      "GCLOUD_PROJECT='octogee-test' '/opt/homebrew/bin/node' '/repo/gateway-edge/node_modules/vitest/vitest.mjs' run --config 'vitest.emulator.config.ts' 'src/__tests__/preview-discovery.emulator.spec.ts'",
+      "GCLOUD_PROJECT='firebase-test' '/opt/homebrew/bin/node' '/repo/gateway-edge/node_modules/vitest/vitest.mjs' run --config 'vitest.emulator.config.ts' 'src/__tests__/preview-discovery.emulator.spec.ts'",
     );
   });
 
@@ -29,13 +29,13 @@ describe("run-emulator-vitest", () => {
       "--only",
       "firestore,auth",
       "--project",
-      "octogee-test",
+      "firebase-test",
       "--firebase-config",
       "../firebase.json",
       "--config",
       "vitest.emulator.config.ts",
       "--env",
-      "GCLOUD_PROJECT=octogee-test",
+      "GCLOUD_PROJECT=firebase-test",
       "--",
       "src/__tests__/one.emulator.spec.ts",
       "-t",
@@ -44,10 +44,10 @@ describe("run-emulator-vitest", () => {
 
     expect(parsed).toEqual({
       only: "firestore,auth",
-      project: "octogee-test",
+      project: "firebase-test",
       firebaseConfig: "../firebase.json",
       config: "vitest.emulator.config.ts",
-      env: { GCLOUD_PROJECT: "octogee-test" },
+      env: { GCLOUD_PROJECT: "firebase-test" },
       vitestArgs: ["src/__tests__/one.emulator.spec.ts", "-t", "returns preview"],
     });
   });
@@ -56,7 +56,7 @@ describe("run-emulator-vitest", () => {
     const args = buildFirebaseEmulatorsExecArgs({
       firebaseCliPath: "/repo/functions/node_modules/firebase-tools/lib/bin/firebase.js",
       only: "firestore,auth,functions",
-      project: "octogee-test",
+      project: "firebase-test",
       firebaseConfig: "../firebase.json",
       innerCommand: "node vitest.mjs run",
     });
@@ -67,7 +67,7 @@ describe("run-emulator-vitest", () => {
       "--only",
       "firestore,auth,functions",
       "--project",
-      "octogee-test",
+      "firebase-test",
       "--config",
       "../firebase.json",
       "node vitest.mjs run",

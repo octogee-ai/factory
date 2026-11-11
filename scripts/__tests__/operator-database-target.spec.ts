@@ -37,6 +37,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 import { main as fleet } from "../ops/fleet.js";
 import { main as rotateUserMmPat } from "../ops/rotate-user-mm-pat.js";
 import { main as setAdminRole } from "../ops/set-admin-role.js";
+import { TEST_TARGET } from "./fixtures/deployment.js";
 
 function otherTargetsDatabase(selected: { deploymentTargetId: string }): Promise<never> {
   return Promise.reject(new Error(`platform database belongs to deployment target "prod-central", not "${selected.deploymentTargetId}"`));
@@ -68,7 +69,7 @@ describe("operator commands bind the platform database to their deployment targe
     ["rotate-user-mm-pat", rotateUserMmPat],
     ["set-admin-role", setAdminRole],
   ])("%s takes its target from the Firebase project and stops before any account change", async (_name, command) => {
-    await expect(command(["--project=octogee-test", "someone@example.com"])).rejects.toThrow(
+    await expect(command([`--project=${TEST_TARGET.firebaseProjectId}`, "someone@example.com"])).rejects.toThrow(
       'belongs to deployment target "prod-central", not "test-central"',
     );
     expect(mocks.selectStore.mock.calls[0]?.[0]).toMatchObject({ deploymentTargetId: "test-central" });

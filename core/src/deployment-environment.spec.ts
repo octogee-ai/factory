@@ -134,6 +134,34 @@ describe("deployment environment registry", () => {
     );
   });
 
+  it("refuses a registry whose active environments share a Firebase project", () => {
+    const candidate = structuredClone(deploymentTargetsDocument) as { targets: Record<string, Record<string, unknown>> };
+    candidate.targets["test-central"].firebaseProjectId = candidate.targets["prod-central"].firebaseProjectId;
+    expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(
+      "active deployment targets for prod and test share Firebase project",
+    );
+  });
+
+  it("refuses a registry whose active environments share a cluster namespace", () => {
+    const candidate = structuredClone(deploymentTargetsDocument) as { targets: Record<string, Record<string, unknown>> };
+    const prod = candidate.targets["prod-central"];
+    candidate.targets["test-central"].clusterProjectId = prod.clusterProjectId;
+    candidate.targets["test-central"].namespace = prod.namespace;
+    candidate.targets["test-central"].ingress = { ...(prod.ingress as object), edgeStaticIpName: "test-edge", mattermostStaticIpName: "test-mm", giteaStaticIpName: "test-git", previewStaticIpName: "test-preview" };
+    expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(
+      "active deployment targets for prod and test share cluster namespace",
+    );
+  });
+
+  it("refuses a test target that carries every prod project", () => {
+    const candidate = structuredClone(deploymentTargetsDocument) as { targets: Record<string, Record<string, unknown>> };
+    const prod = candidate.targets["prod-central"];
+    for (const field of ["firebaseProjectId", "hostingProjectId", "clusterProjectId", "namespace"]) {
+      candidate.targets["test-central"][field] = prod[field];
+    }
+    expect(() => validateDeploymentTargetsDocument(candidate)).toThrow(/prod and test share/);
+  });
+
   it("allows the same ingress identity name in separate projects", () => {
     expect(() => validateDeploymentTargetsDocument(deploymentTargetsDocument)).not.toThrow();
     expect(deploymentTargetSettings("test-central").edgeStaticIpName)

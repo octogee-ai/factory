@@ -264,7 +264,7 @@ describe("release digest manifest", () => {
 
 it("retains the accepted desktop artifact when authoring and validating a main manifest", () => {
   const baseline = manifest();
-  const desktopImage = { project: "octogee-test", name: "octogee-computer-fixture", id: "123", sourceSha, inputFingerprint: "b".repeat(64), acceptance: "resize-reboot-v1" };
+  const desktopImage = { project: "firebase-test", name: "octogee-computer-fixture", id: "123", sourceSha, inputFingerprint: "b".repeat(64), acceptance: "resize-reboot-v1" };
   const result = createMainBuildReleaseDigestManifest({ sourceSha, openclawVersion: baseline.openclawVersion, openclawSourceSha,
     baselineOpenclawVersion: baseline.openclawVersion, baselineOpenclawSourceSha: openclawSourceSha, repository,
     baselineImages: { ...baseline.surfaces.gateway, ...baseline.surfaces.platform }, exactImages: {},

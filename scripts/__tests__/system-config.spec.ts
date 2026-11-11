@@ -1480,7 +1480,7 @@ describe("system_config restore", () => {
     const durableEnv = {
       GATEWAY_CLASS: "builder",
       GATEWAY_ID: "walter",
-      API_PUBLIC_URL: "https://api-test.octogee.com",
+      API_PUBLIC_URL: "https://api.example.test",
     };
     const config: Record<string, unknown> = {};
     reconcilePlatformInvariants(config, durableEnv);
@@ -1575,7 +1575,7 @@ describe("system_config restore", () => {
       openclawDir, templatePath,
       env: withUserClaim({
         GATEWAY_CLASS: "builder", GATEWAY_ID: "acme-xs-12345678", 
-        API_PUBLIC_URL: "https://api-test.octogee.com",
+        API_PUBLIC_URL: "https://api.example.test",
         MM_URL: "http://runtime-mattermost", OWNER_MM_URL: "https://runtime-owner.example",
         MM_BOT_TOKEN: "must-not-enter-git",
       }, "acme"),
@@ -2123,7 +2123,7 @@ describe("Isolated prelaunch config", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "isolated-prelaunch-config-"));
     const repo = path.join(root, "system_config");
     fs.mkdirSync(repo);
-    const env = withUserClaim({ OPENCLAW_DIR: root, GATEWAY_CLASS: "builder", API_PUBLIC_URL: "https://api-test.octogee.com" }, "alice");
+    const env = withUserClaim({ OPENCLAW_DIR: root, GATEWAY_CLASS: "builder", API_PUBLIC_URL: "https://api.example.test" }, "alice");
     const config = { agents: { entries: { "octogee-alice-coach": { workspace: path.join(root, "customers/alice"), model: "custom/model" } } },
       channels: { mattermost: { enabled: true, baseUrl: "${MM_URL}", accounts: { "alice-coach": {} } } },
       bindings: [{ agentId: "octogee-alice-coach" }], cron: { enabled: true },

@@ -35,7 +35,7 @@ function config(): Record<string, unknown> {
 const env = {
   GATEWAY_CLASS: "shared",
   GATEWAY_ID: "walter",
-  API_PUBLIC_URL: "https://api-test.octogee.com",
+  API_PUBLIC_URL: "https://api.example.test",
 };
 
 describe("system config platform invariants", () => {

@@ -31,7 +31,7 @@ describe("firebase hosting deploy wrapper", () => {
     const configPath = join(directory, "firebase.json");
     const result = spawnSync(
       "bash",
-      [script, "site", "octogee-test", "us-west1"],
+      [script, "site", "firebase-test", "us-west1"],
       {
         cwd: repoRoot,
         encoding: "utf8",
@@ -54,7 +54,7 @@ describe("firebase hosting deploy wrapper", () => {
   });
 
   it("requires an explicit SSR region only for the site target", () => {
-    const missing = spawnSync("bash", [script, "site", "octogee-test"], {
+    const missing = spawnSync("bash", [script, "site", "firebase-test"], {
       cwd: repoRoot,
       encoding: "utf8",
     });
@@ -62,7 +62,7 @@ describe("firebase hosting deploy wrapper", () => {
     expect(missing.stderr).toContain("SSR region");
 
     const directory = mkdtempSync(join(tmpdir(), "octogee-hosting-"));
-    const result = spawnSync("bash", [script, "app", "octogee-test"], {
+    const result = spawnSync("bash", [script, "app", "firebase-test"], {
       cwd: repoRoot,
       encoding: "utf8",
       env: {
@@ -78,7 +78,7 @@ describe("firebase hosting deploy wrapper", () => {
   it("invokes an app deploy without site config under strict Bash", () => {
     const directory = mkdtempSync(join(tmpdir(), "octogee-hosting-"));
     const argsPath = join(directory, "args.txt");
-    const result = spawnSync("bash", [script, "app", "octogee-test"], {
+    const result = spawnSync("bash", [script, "app", "firebase-test"], {
       cwd: repoRoot,
       encoding: "utf8",
       env: {

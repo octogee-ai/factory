@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { TEST_TARGET } from "./fixtures/deployment.js";
 
 const { command } = vi.hoisted(() => ({ command: vi.fn() }));
 vi.mock('node:child_process', () => ({ execFileSync: command }));
@@ -10,7 +11,7 @@ beforeEach(() => {
   vi.stubEnv('RELEASE_ENVIRONMENT', 'test');
   vi.stubGlobal('fetch', vi.fn(async () => ({
     ok: true,
-    json: async () => ({ apiKey: 'public-key', appId: 'app', messagingSenderId: 'sender', projectId: 'octogee-test' }),
+    json: async () => ({ apiKey: 'public-key', appId: 'app', messagingSenderId: 'sender', projectId: TEST_TARGET.firebaseProjectId }),
   })));
 });
 afterEach(() => {
@@ -27,7 +28,7 @@ it('rejects an unknown SSR release environment before building packages', async 
 function tools(lookup: () => string) {
   command.mockImplementation((file: string, _args: string[]) => {
     if (file === 'node' && _args[0] === '-p') return process.env.FAKE_NODE_24_VERSION ?? '24.12.0';
-    if (file === 'node') return 'hosting_project_id=octogee-test\nfirebase_project_id=octogee-test\nartifact_registry_repository=us-central1-docker.pkg.dev/octogee/octogee\napi_origin=https://api-test.octogee.com\napp_origin=https://app-test.octogee.com\nsite_origin=https://octogee-test.web.app\ngit_origin=https://git-test.octogee.com';
+    if (file === 'node') return `hosting_project_id=${TEST_TARGET.firebaseProjectId}\nfirebase_project_id=${TEST_TARGET.firebaseProjectId}\nartifact_registry_repository=us-central1-docker.pkg.dev/octogee/octogee\napi_origin=https://api-test.octogee.com\napp_origin=https://app-test.octogee.com\nsite_origin=https://${TEST_TARGET.firebaseProjectId}.web.app\ngit_origin=https://git-test.octogee.com`;
     if (file === 'gcloud') return 'public-posthog-token';
     if (file === 'bash') return lookup();
     return '';

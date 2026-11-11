@@ -280,7 +280,7 @@ The installed disk was converted to raw, patched while loop-mounted
 (`modules-load.d` for `vkms` + `vgem`, serial console on the kernel cmdline,
 `resume=` and quiet flags dropped), packaged as `disk.raw` in a tarball and
 registered with `gcloud compute images create --guest-os-features=UEFI_COMPATIBLE`
-as `omarchy-spike-v1` (family `omarchy-spike`) in `octogee-test`. It boots
+as `omarchy-spike-v1` (family `omarchy-spike`) in the TEST project. It boots
 Limine from the ESP fallback loader, gets DHCP from NetworkManager, and
 answers SSH about 6 s after `instances create` returns. `systemd-analyze`:
 2.0 s firmware + 12.5 s loader + 0.9 s kernel + 4.7 s userspace; the loader
@@ -302,7 +302,7 @@ guest was installed unattended from the ISO with a `cidata` drive.
 
 The installed disk (`omarchy.qcow2`), OVMF vars, the QEMU driver script, the
 guest test script, logs and screenshots are preserved at
-`gs://octogee-test-agent-computer-spike/` for the GCE image import. The
+the TEST project's `agent-computer-spike` bucket for the GCE image import. The
 reproducible build that replaced this manual path lives in
 [`image/`](image/README.md).
 

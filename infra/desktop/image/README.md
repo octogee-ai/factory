@@ -13,7 +13,7 @@ metadata-driven SSH key installer. Spec:
 ## Build
 
 ```bash
-infra/desktop/image/build.sh --project octogee-test
+infra/desktop/image/build.sh --project <test-project>
 ```
 
 1. Creates a nested-virt builder VM (`n2-standard-8`, Debian 12) with a second
@@ -57,7 +57,7 @@ leaves the current file intact and logs a failure for retry.
 ## Test
 
 ```bash
-infra/desktop/image/test.sh --project octogee-test --stop-start
+infra/desktop/image/test.sh --project <test-project> --stop-start
 python3 -m unittest infra/desktop/image/test_acceptance.py
 ```
 
@@ -251,8 +251,8 @@ delivered the same way worked, so the orchestrator uses its own ed25519 key.
 Build with `--candidate` to register an image without advancing the family:
 
 ```bash
-infra/desktop/image/build.sh --project octogee-test --candidate
-infra/desktop/image/test.sh --project octogee-test --image <candidate-name> --stop-start
+infra/desktop/image/build.sh --project <test-project> --candidate
+infra/desktop/image/test.sh --project <test-project> --image <candidate-name> --stop-start
 ```
 
 Acceptance checks the native resize API, screenshot dimensions, and XWayland
@@ -283,7 +283,7 @@ UI, resize, and stop/start tests remain explicit operator qualification through
 local immutable images without a registry request; an explicit later runtime
 update can fetch a missing image through the existing owner.
 Only successful acceptance creates an immutable descriptor in
-`gs://octogee-test-octogee-computer-images/accepted/`.
+`gs://<test-project>-octogee-computer-images/accepted/`.
 
 The existing release manifest records `desktopImage`: project, image name,
 numeric GCE image ID, source SHA, input fingerprint, and acceptance version.

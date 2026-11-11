@@ -42,7 +42,7 @@ it('reports an absent main build as missing but fails closed on other lookup err
 });
 
 const build = { manifest, digest: `sha256:${'f'.repeat(64)}` };
-const desktopImage = { project: 'octogee-test', name: 'octogee-computer-fixture', id: '123', sourceSha: sha, inputFingerprint: 'e'.repeat(64), acceptance: 'resize-reboot-v1' };
+const desktopImage = { project: 'firebase-test', name: 'octogee-computer-fixture', id: '123', sourceSha: sha, inputFingerprint: 'e'.repeat(64), acceptance: 'resize-reboot-v1' };
 const companion = { schemaVersion: 1, sourceSha: sha, manifestDigest: build.digest, gatewayDigest: manifest.surfaces.gateway['octogee-gateway-builder'], desktopImage };
 it('resolves a separately accepted desktop companion bound to the immutable main manifest', async () => {
   const fixture = registry(companion, 'desktop-image-manifest.json');

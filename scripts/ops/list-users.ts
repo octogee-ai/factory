@@ -3,6 +3,7 @@
 import { getFirestore } from "firebase-admin/firestore";
 import { pathToFileURL } from "node:url";
 import { initializeOperatorFirebaseAdmin } from "../lib/operator-firebase-admin.js";
+import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 
 function stringField(record: Record<string, unknown>, key: string, fallback: string): string {
   const value = record[key];
@@ -25,7 +26,7 @@ export function formatListUsersLine(id: string, data: Record<string, unknown>): 
 }
 
 async function main() {
-  initializeOperatorFirebaseAdmin("octogee-test");
+  initializeOperatorFirebaseAdmin(deploymentEnvironmentSettings("test").firebaseProjectId);
   const db = getFirestore();
   const snap = await db.collection("users").get();
   console.log(`\n${snap.size} user(s) in Firestore:\n`);

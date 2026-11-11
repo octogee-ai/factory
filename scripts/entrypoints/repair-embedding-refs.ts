@@ -8,7 +8,7 @@
 //   3. kubectl -n <ns> exec <gateway-pod> -c gateway -- cat /home/octogee/.openclaw/openclaw.json > /tmp/gw-config.json
 //      kubectl -n <ns> exec <gateway-pod> -c gateway -- ls /home/octogee/.openclaw/agents > /tmp/gw-agent-dirs.txt
 //   4. npx tsx entrypoints/repair-embedding-refs.ts \
-//        --project octogee-test --gateway default --revision default-r2 \
+//        --project <firebase-project> --gateway default --revision default-r2 \
 //        --config-file /tmp/gw-config.json --agent-dirs-file /tmp/gw-agent-dirs.txt [--apply]
 //
 // The tool refuses any revision the durable root does not select as

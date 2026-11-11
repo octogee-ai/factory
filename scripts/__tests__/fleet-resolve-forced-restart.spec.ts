@@ -67,7 +67,7 @@ function harness() {
     else throw new Error(`unexpected Kubernetes command ${args.join(" ")} ${stdin ?? ""}`);
     return { status: 0, stdout: value ? JSON.stringify(value) : "", stderr: "" };
   });
-  const input = { store, gatewayId: "canary", forceAuditId: "audit-force", kubeContext: "test-context", namespace: "octogee-test", runKubectl, apply: true, idempotencyKey: "resolve-1" };
+  const input = { store, gatewayId: "canary", forceAuditId: "audit-force", kubeContext: "test-context", namespace: "shared-test", runKubectl, apply: true, idempotencyKey: "resolve-1" };
   return { docs, writes, root, fence, pod, deployment, replicaSets, input, runKubectl,
     beforeProbe: (hook: typeof beforeProbe) => { beforeProbe = hook; },
     setOld: (value: any) => { old = value; }, setExtraPod: () => { extraPod = true; }, setHealth: (value: any) => { health = value; }, failNative: () => { nativeFailure = true; } };

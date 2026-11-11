@@ -1,14 +1,15 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { EMULATOR_PROJECT } from "./fixtures/emulator.js";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
 process.env.FIRESTORE_EMULATOR_HOST ??= "127.0.0.1:8088";
-process.env.GCLOUD_PROJECT ??= "octogee-test";
+process.env.GCLOUD_PROJECT ??= EMULATOR_PROJECT;
 
 const { deleteApp, getApps, initializeApp } = await import("firebase-admin/app");
 const { getFirestore } = await import("firebase-admin/firestore");
-if (getApps().length === 0) initializeApp({ projectId: "octogee-test" });
+if (getApps().length === 0) initializeApp({ projectId: EMULATOR_PROJECT });
 const db = getFirestore();
 
 const { reportUsage } = await import("../lib/usage-tracking.js");

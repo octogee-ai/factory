@@ -45,7 +45,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); fs.rmSync(paths.root, { recursive: true, force: true }); });
 
 function wiring(provider: "gitea" | "github" = "gitea", failGitCommand?: string) {
-  const repoSource = provider === "github" ? { provider: "github" as const, owner: "octogee-test", repo: project } : undefined;
+  const repoSource = provider === "github" ? { provider: "github" as const, owner: "firebase-test", repo: project } : undefined;
   if (repoSource && fs.existsSync(metadata)) {
     git(dir, ["remote", "set-url", "origin", `https://github.com/${repoSource.owner}/${repoSource.repo}.git`]);
     fs.writeFileSync(`${metadata}.octogee-trusted-v3`, `octogee-customer-git-v3\ngithub:${repoSource.owner}/${repoSource.repo}\n`);

@@ -1,5 +1,5 @@
 import { WebSocket } from "ws";
-import { LoadHttpError, MAX_LOAD_RUN_MS, TEST_API_ORIGIN, type LoadClient, type LoadTarget } from "./gateway-load-test.js";
+import { LoadHttpError, MAX_LOAD_RUN_MS, TEST_API_ORIGIN, TEST_APP_ORIGIN, TEST_FIREBASE_PROJECT, type LoadClient, type LoadTarget } from "./gateway-load-test.js";
 
 export function testToken(target: LoadTarget, env: NodeJS.ProcessEnv): { token: string; uid: string } {
   const token = env[target.tokenEnv];
@@ -7,10 +7,10 @@ export function testToken(target: LoadTarget, env: NodeJS.ProcessEnv): { token: 
   let claims: { aud?: unknown; iss?: unknown; exp?: unknown; sub?: unknown };
   try { claims = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()); }
   catch { throw new Error(`Invalid TEST token for ${target.name}`); }
-  if (claims.aud !== "octogee-test" || claims.iss !== "https://securetoken.google.com/octogee-test"
+  if (claims.aud !== TEST_FIREBASE_PROJECT || claims.iss !== `https://securetoken.google.com/${TEST_FIREBASE_PROJECT}`
     || typeof claims.sub !== "string" || !claims.sub
     || typeof claims.exp !== "number" || claims.exp * 1_000 < Date.now() + MAX_LOAD_RUN_MS + 5 * 60_000) {
-    throw new Error(`A fresh octogee-test Firebase ID token with at least 35 minutes remaining is required for ${target.name}`);
+    throw new Error(`A fresh ${TEST_FIREBASE_PROJECT} Firebase ID token with at least 35 minutes remaining is required for ${target.name}`);
   }
   return { token, uid: claims.sub };
 }
@@ -89,8 +89,8 @@ export async function connectLoadClient(input: {
   }
   const mmToken = credentials.mmToken, userDefaultAgentId = route.defaultAgentMmUserId;
   signal.throwIfAborted();
-  const ws = new WebSocket(`wss://api-test.octogee.com/g/${gatewayId}/api/v4/websocket`, {
-    headers: { Origin: "https://app-test.octogee.com" }, maxPayload: 4 * 1024 * 1024,
+  const ws = new WebSocket(`${TEST_API_ORIGIN.replace(/^https:/, "wss:")}/g/${gatewayId}/api/v4/websocket`, {
+    headers: { Origin: TEST_APP_ORIGIN }, maxPayload: 4 * 1024 * 1024,
   });
   let socketFailed = false;
   ws.on("error", () => { socketFailed = true; });

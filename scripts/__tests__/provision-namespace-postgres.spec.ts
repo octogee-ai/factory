@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-function provision(missing: string) {
+function provision(missing: string, namespace = "feat-alice") {
   const root = mkdtempSync(path.join(tmpdir(), "custom-postgres-"));
   const scripts = path.join(root, "scripts");
   const bin = path.join(root, "bin");
@@ -18,8 +18,12 @@ function provision(missing: string) {
   writeFileSync(path.join(scripts, "lib/deployment-target.sh"), `octogee_load_deployment_target() {
 TARGET_CLUSTER_PROJECT=octogee; TARGET_CLOUD_SQL_PROJECT=octogee; TARGET_CLOUD_SQL_INSTANCE=octogee-pg
 TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET=mm; TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET=gitea
-TARGET_CLUSTER_NAME=cluster; TARGET_KUBE_CONTEXT=explicit-context; TARGET_FIREBASE_PROJECT=octogee-test
+TARGET_CLUSTER_NAME=cluster; TARGET_KUBE_CONTEXT=explicit-context; TARGET_FIREBASE_PROJECT=firebase-test
 TARGET_REGION=us-central1; TARGET_ID=test-central; TARGET_ENVIRONMENT=test; TARGET_CLOUD_SQL_CONNECTION=octogee:us-central1:octogee-pg
+}
+octogee_deployment_target_field() {
+  [[ "$#" == 2 && "$1" == "--environment=test" && "$2" == "namespace" ]] || { echo "unexpected deployment target field query: $*" >&2; return 1; }
+  printf '%s\\n' shared-test
 }
 `);
   const stub = (file: string, body: string) => { writeFileSync(file, `#!/bin/bash\n${body}\n`); chmodSync(file, 0o755); };
@@ -33,11 +37,11 @@ ${tool === "terraform" ? 'exit 42' : ""}`);
   }
   const trace = path.join(root, "trace");
   try {
-    const result = spawnSync("bash", [path.join(scripts, "provision-namespace.sh"), "feat-alice", `--sha=${"a".repeat(40)}`, "--yes"], {
+    const result = spawnSync("bash", [path.join(scripts, "provision-namespace.sh"), namespace, `--sha=${"a".repeat(40)}`, "--yes"], {
       encoding: "utf8", timeout: 5000,
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TRACE: trace, MISSING: missing },
     });
-    return { ...result, calls: readFileSync(trace, "utf8") };
+    return { ...result, calls: existsSync(trace) ? readFileSync(trace, "utf8") : "" };
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
 
@@ -46,7 +50,7 @@ describe("custom PostgreSQL prerequisites before destructive recreation", () => 
     const result = provision(missing);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("before recreating this namespace");
-    expect(result.calls).toContain(`--secret=agent-store-postgres-feat-alice-${missing === "empty-client" ? "client-dsn" : missing} --project=octogee-test`);
+    expect(result.calls).toContain(`--secret=agent-store-postgres-feat-alice-${missing === "empty-client" ? "client-dsn" : missing} --project=firebase-test`);
     expect(result.calls).not.toContain("helm status");
     expect(result.calls).not.toContain("kubectl delete");
     expect(result.calls).not.toContain("terraform");
@@ -61,5 +65,12 @@ describe("custom PostgreSQL prerequisites before destructive recreation", () => 
     expect(client).toBeGreaterThan(admin);
     expect(result.calls.indexOf("helm status")).toBeGreaterThan(client);
     expect(result.calls).toContain("terraform init");
+  });
+
+  it.each(["shared-test", "shared-test-west"])("refuses the TEST environment's namespace %s before touching anything", namespace => {
+    const result = provision("", namespace);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(`NAMESPACE '${namespace}' IS A SHARED TEST ENV`);
+    expect(result.calls).toBe("");
   });
 });

@@ -70,7 +70,7 @@ function secretManagerState(mode: "present" | "absent" | "error"): string {
 
   return runShell([
     `source ${JSON.stringify(helperPath)}`,
-    "secret_manager_secret_state GOOGLE_CLIENT_ID octogee-test",
+    "secret_manager_secret_state GOOGLE_CLIENT_ID firebase-test",
   ].join("\n"), {
     FAKE_GCLOUD_MODE: mode,
     PATH: `${dir}:${process.env.PATH}`,

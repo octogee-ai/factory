@@ -26,6 +26,7 @@ octogee_load_deployment_target() {
       cluster_project_id) TARGET_CLUSTER_PROJECT="$value" ;;
       firebase_project_id) TARGET_FIREBASE_PROJECT="$value" ;;
       hosting_project_id) TARGET_HOSTING_PROJECT="$value" ;;
+      customer_hosting_project_id) TARGET_CUSTOMER_HOSTING_PROJECT="$value" ;;
       region) TARGET_REGION="$value" ;;
       cluster_name) TARGET_CLUSTER_NAME="$value" ;;
       kube_context) TARGET_KUBE_CONTEXT="$value" ;;
@@ -62,7 +63,7 @@ octogee_load_deployment_target() {
   done <<< "$output"
 
   export TARGET_ENVIRONMENT TARGET_ID TARGET_LIFECYCLE TARGET_SECRET_NAME_SUFFIX
-  export TARGET_CLUSTER_PROJECT TARGET_FIREBASE_PROJECT TARGET_HOSTING_PROJECT
+  export TARGET_CLUSTER_PROJECT TARGET_FIREBASE_PROJECT TARGET_HOSTING_PROJECT TARGET_CUSTOMER_HOSTING_PROJECT
   export TARGET_REGION TARGET_CLUSTER_NAME TARGET_KUBE_CONTEXT TARGET_NAMESPACE
   export TARGET_AR_PROJECT TARGET_AR_LOCATION TARGET_AR_NAME TARGET_AR_REPOSITORY
   export TARGET_CLOUD_SQL_PROJECT TARGET_CLOUD_SQL_REGION
@@ -75,4 +76,24 @@ octogee_load_deployment_target() {
   export TARGET_GIT_ORIGIN TARGET_MATTERMOST_ORIGIN TARGET_PREVIEW_ORIGIN
   export TARGET_GATEWAY_VALUES_FILE TARGET_PIN_ENVIRONMENT
   export TARGET_NETWORK_POLICY_ENFORCE_DEFAULT_DENY TARGET_NETWORK_POLICY_CONTROL_PLANE_CIDR TARGET_NETWORK_POLICY_PRIVATE_SERVICES_CIDR
+}
+
+octogee_deployment_target_field() {
+  if [ "$#" -ne 2 ]; then
+    echo "octogee_deployment_target_field requires a --environment= or --target= selector and a field" >&2
+    return 2
+  fi
+
+  local helper_dir repo_root output value
+  helper_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  repo_root="$(cd "$helper_dir/../.." && pwd)"
+  if ! output="$(node "$repo_root/core/dist/resolve-deployment-target.js" "$1")"; then
+    return 1
+  fi
+  value="$(printf '%s\n' "$output" | sed -n "s/^$2=//p")"
+  if [ -z "$value" ]; then
+    echo "deployment target has no $2" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
 }

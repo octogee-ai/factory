@@ -18,7 +18,7 @@ describe("fleet broker npm cache client", () => {
 
   it("requests an assignment-scoped capability with the purpose KSA credential", async () => {
     const credentials = {
-      registryUrl: "http://octogee-npm-cache-proxy.octogee-test.svc.cluster.local:3005/",
+      registryUrl: "http://octogee-npm-cache-proxy.shared-test.svc.cluster.local:3005/",
       token: "opaque-capability",
       expiresAt: "2026-08-30T12:10:00.000Z",
     };

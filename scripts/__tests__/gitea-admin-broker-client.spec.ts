@@ -153,11 +153,11 @@ describe("brokeredGitHost → Gitea admin broker", () => {
 
   it("prefers GITEA_ADMIN_BROKER_URL over the legacy local sidecar URL", async () => {
     process.env.GATEWAY_EDGE_INTERNAL_URL = "http://localhost:9999";
-    process.env.GITEA_ADMIN_BROKER_URL = "http://octogee-api.octogee-test.svc.cluster.local:3001";
+    process.env.GITEA_ADMIN_BROKER_URL = "http://octogee-api.shared-test.svc.cluster.local:3001";
     mockFetch.mockResolvedValueOnce(reply(204));
     await broker.ensureRepo("acme", { kind: "workspace" });
     expect(lastCall().url).toBe(
-      "http://octogee-api.octogee-test.svc.cluster.local:3001/internal/gitea/ensure-workspace-repo",
+      "http://octogee-api.shared-test.svc.cluster.local:3001/internal/gitea/ensure-workspace-repo",
     );
   });
 });

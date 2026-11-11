@@ -17,7 +17,7 @@ gatewayServiceAccount: ""
 
 # GKE Workload Identity pool project. Test and prod share the octogee GKE
 # cluster, so TEST must still emit serviceAccount:octogee.svc.id.goog[...] IAM
-# members even though its runtime Google project is octogee-test.
+# members even though its runtime Google project is the TEST project.
 workloadIdentityProject: ""
 
 kmsKeyName: ""

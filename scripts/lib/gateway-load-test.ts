@@ -2,9 +2,12 @@ import { randomUUID } from "node:crypto";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 
 export const MAX_LOAD_RUN_MS = 30 * 60_000;
-export const TEST_API_ORIGIN = "https://api-test.octogee.com";
-export const TEST_CONTEXT = deploymentEnvironmentSettings("test").kubeContext;
-export const TEST_NAMESPACE = "octogee-test";
+const testTarget = deploymentEnvironmentSettings("test");
+export const TEST_API_ORIGIN = testTarget.apiOrigin;
+export const TEST_APP_ORIGIN = testTarget.appOrigin;
+export const TEST_FIREBASE_PROJECT = testTarget.firebaseProjectId;
+export const TEST_CONTEXT = testTarget.kubeContext;
+export const TEST_NAMESPACE = testTarget.namespace;
 // Numbered slots predate the scaler; it mints shared-<12 hex> (glm-controller shared-pool-scaler).
 export const SHARED_SLOT_RE = /^shared-(?:\d+|[a-f0-9]{12})$/;
 

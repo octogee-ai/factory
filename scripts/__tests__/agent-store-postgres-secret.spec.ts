@@ -12,7 +12,7 @@ function materialize(missing = false) {
   const payload = path.join(dir, "payload");
   writeFileSync(path.join(dir, "gcloud"), `#!/bin/bash
 printf '%s\\n' "$*" >> "$TRACE"
-[[ "$*" == *"--project=octogee-test"* ]] || exit 8
+[[ "$*" == *"--project=firebase-test"* ]] || exit 8
 if [[ "$*" == *"client-dsn"* && "$MISSING" == 1 ]]; then exit 9; fi
 printf 'postgres://private-credential@10.89.0.3/octogee_agents_test'
 `);
@@ -31,7 +31,7 @@ if [[ "$*" == *"create secret"* ]]; then
 else cat >/dev/null; fi
 `);
   for (const name of ["gcloud", "kubectl"]) chmodSync(path.join(dir, name), 0o755);
-  const result = spawnSync("bash", ["-euo", "pipefail", "-c", `source "$HELPER"; materialize_agent_store_postgres_secret octogee-test octogee-test explicit-context`], {
+  const result = spawnSync("bash", ["-euo", "pipefail", "-c", `source "$HELPER"; materialize_agent_store_postgres_secret firebase-test firebase-test explicit-context`], {
     encoding: "utf8",
     env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, TRACE: trace, PAYLOAD: payload, MISSING: missing ? "1" : "0", HELPER: helper },
   });
@@ -49,7 +49,7 @@ describe("PostgreSQL agent-store secret materialization", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(data).toBe("postgres://private-credential@10.89.0.3/octogee_agents_test".repeat(2));
     expect(calls).toContain("--context=explicit-context");
-    expect(calls).toContain("-n octogee-test");
+    expect(calls).toContain("-n firebase-test");
     expect(calls).toContain("apply -f -");
     expect(calls).not.toContain("private-credential");
     expect(result.stdout + result.stderr).not.toContain("private-credential");

@@ -42,7 +42,7 @@ resource "google_vpc_access_connector" "main" {
 }
 
 # ── Static external IP for workspace-api Ingress ────────────────────────────
-# GKE Ingress for api.octogee.com / api-test.octogee.com
+# GKE Ingress for the environment's public API host
 
 resource "google_compute_global_address" "workspace_api" {
   name    = "workspace-api-ip"

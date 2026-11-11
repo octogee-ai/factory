@@ -382,13 +382,13 @@ for (const writer of writers) {
       const result = runHygiene({
         helpers: helpers(),
         secret: "FLEET_CONTROLLER_PRIVATE_KEY",
-        project: "octogee-test",
+        project: "firebase-test",
         versions: { 1: { payload: "old-key\n" } },
         call: [
           'payload="$(mktemp)"',
           `printf '%s' 'new-key
 ' > "$payload"`,
-          'secret_manager_persist_version_file "FLEET_CONTROLLER_PRIVATE_KEY" "$payload" "octogee-test"',
+          'secret_manager_persist_version_file "FLEET_CONTROLLER_PRIVATE_KEY" "$payload" "firebase-test"',
         ].join("\n"),
       });
 

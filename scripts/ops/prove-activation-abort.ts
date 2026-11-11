@@ -35,6 +35,7 @@ await fs.writeFile(process.env.OCTOGEE_API_SA_TOKEN_PATH!, "synthetic-abort-proo
 const { reconcilePlatformInvariants } = await import("@octogee/core/system-config-invariants");
 const { readPostgresAgentAnchor, queryAgentStore } = await import("@octogee/core/agent-postgres");
 const { generateIdentity } = await import("@octogee/core/gateway-device-identity");
+const { deploymentEnvironmentSettings } = await import("@octogee/core/deployment-environment");
 const { createGatewayRpc } = await import("../lib/gateway-rpc.js");
 const { buildSafeDefaultAgent, SAFE_DEFAULT_AGENT_ID } = await import("../lib/openclaw-config-users.js");
 const { buildBrokeredLifecycleAdapter } = await import("../lib/user-lifecycle-broker-adapter.js");
@@ -58,7 +59,7 @@ for (const [id, entry] of Object.entries(config.agents.entries)) {
 }
 config.database.postgres.connection.id = "OCTOGEE_DETACH_PROOF_PG";
 reconcilePlatformInvariants(config, { gatewayClass: "shared" });
-reconcilePlatformInvariants(config, { gatewayClass: "builder", gatewayId, apiOrigin: "https://app-test.octogee.com" });
+reconcilePlatformInvariants(config, { gatewayClass: "builder", gatewayId, apiOrigin: deploymentEnvironmentSettings("test").appOrigin });
 const agents = Object.keys(config.agents.entries).filter(id => id !== SAFE_DEFAULT_AGENT_ID);
 const anchors = new Map<string, unknown>(), transcripts = new Map<string, unknown>();
 const transcript = (file: string) => {

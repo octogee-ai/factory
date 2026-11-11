@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { createDesktopPublicationCloud, planDesktopPublication, publishDesktopArtifact, type DesktopPublicationDeps } from '../lib/desktop-image-publication';
 import type { GoogleAuth } from 'google-auth-library';
-const artifact = { project: 'octogee-test', name: 'octogee-computer-fixture', id: '123', sourceSha: 'a'.repeat(40), inputFingerprint: 'b'.repeat(64), acceptance: 'resize-reboot-v1' };
+const artifact = { project: TEST_TARGET.clusterProjectId, name: 'octogee-computer-fixture', id: '123', sourceSha: 'a'.repeat(40), inputFingerprint: 'b'.repeat(64), acceptance: 'resize-reboot-v1' };
 const source = { name: artifact.name, id: artifact.id, status: 'READY', labels: { source: artifact.sourceSha, 'home-admission': 'retained-v1' } };
 function cloud(): DesktopPublicationDeps {
   return {
@@ -11,18 +11,18 @@ function cloud(): DesktopPublicationDeps {
 }
 it('publishes an accepted TEST image without rebuilding or copying it', async () => {
   const deps = cloud();
-  expect(await publishDesktopArtifact(artifact, 'test', deps)).toEqual({ project: 'octogee-test', image: artifact.name });
+  expect(await publishDesktopArtifact(artifact, 'test', deps)).toEqual({ project: TEST_TARGET.clusterProjectId, image: artifact.name });
   expect(deps.copyImage).not.toHaveBeenCalled();
-  expect(deps.setFamily).toHaveBeenCalledWith('octogee-test', artifact.name);
+  expect(deps.setFamily).toHaveBeenCalledWith(TEST_TARGET.clusterProjectId, artifact.name);
 });
 it('leaves the family alone when it already serves the image', async () => {
   const deps = cloud(); vi.mocked(deps.resolveFamily).mockResolvedValue(artifact.name);
-  expect(await publishDesktopArtifact(artifact, 'test', deps)).toEqual({ project: 'octogee-test', image: artifact.name });
+  expect(await publishDesktopArtifact(artifact, 'test', deps)).toEqual({ project: TEST_TARGET.clusterProjectId, image: artifact.name });
   expect(deps.setFamily).not.toHaveBeenCalled();
 });
 it('plans nothing when the family already serves the image', async () => {
   const deps = cloud(); vi.mocked(deps.resolveFamily).mockResolvedValue(artifact.name);
-  expect(await planDesktopPublication(artifact, 'test', deps)).toEqual({ project: 'octogee-test', image: artifact.name, familyImage: artifact.name, unchanged: true });
+  expect(await planDesktopPublication(artifact, 'test', deps)).toEqual({ project: TEST_TARGET.clusterProjectId, image: artifact.name, familyImage: artifact.name, unchanged: true });
   expect(deps.setFamily).not.toHaveBeenCalled(); expect(deps.copyImage).not.toHaveBeenCalled();
 });
 it('plans a publication when the family serves another image', async () => {
@@ -58,7 +58,7 @@ it('copies the same accepted image to PROD and verifies its origin before publis
   const deps = cloud();
   vi.mocked(deps.getImage).mockResolvedValueOnce(source).mockResolvedValueOnce(null).mockResolvedValueOnce({ ...source, id: '456', sourceImageId: source.id });
   await publishDesktopArtifact(artifact, 'prod', deps);
-  expect(deps.copyImage).toHaveBeenCalledWith('octogee-test', artifact.name, 'octogee', artifact.sourceSha);
+  expect(deps.copyImage).toHaveBeenCalledWith(TEST_TARGET.clusterProjectId, artifact.name, 'octogee', artifact.sourceSha);
   expect(deps.setFamily).toHaveBeenCalledWith('octogee', artifact.name);
 });
 it('rejects a destination image copied from another source', async () => {
@@ -81,7 +81,7 @@ it('does not report PROD unchanged when its copy lost native home admission', as
 it('preserves the tested image labels when copying its bytes to PROD', async () => {
   const labels = { ...source.labels, omarchy: '4-0-6', 'input-a': 'verified-input', purpose: 'octogee-computer' };
   const request = vi.fn(async (input: { url: string; method: string; data?: unknown }) => {
-    if (input.url.endsWith(`/octogee-test/global/images/${artifact.name}`)) return { data: { ...source, labels } };
+    if (input.url.endsWith(`/${TEST_TARGET.clusterProjectId}/global/images/${artifact.name}`)) return { data: { ...source, labels } };
     if (input.url.endsWith('/octogee/global/images')) return { data: { name: 'copy-operation' } };
     if (input.url.endsWith('/octogee/global/operations/copy-operation')) return { data: { status: 'DONE' } };
     throw new Error(`Unexpected request ${input.url}`);
@@ -112,6 +112,7 @@ it('fails publication if the family resolves to a different image', async () => 
 });
 
 import { planDesktopArchivePrune, pruneDesktopArchive } from '../lib/desktop-image-publication';
+import { TEST_TARGET } from "./fixtures/deployment.js";
 const archived = (name: string, creationTimestamp: string, family = 'octogee-computer-archive') => ({ name, creationTimestamp, family });
 
 it('plans to remove archived images beyond the newest kept ones, never the family head or an image a disk was created from', () => {
@@ -136,9 +137,9 @@ it('removes exactly the planned archived images when applied and only plans othe
     listDiskSourceImages: vi.fn().mockResolvedValue(new Set<string>()),
     deleteImage: vi.fn(async (project: string, name: string) => { removed.push(`${project}/${name}`); }),
   };
-  expect(await pruneDesktopArchive('octogee-test', { keep: 1, apply: false }, deps)).toEqual({ project: 'octogee-test', kept: ['a2'], retainedInUse: [], remove: ['a1'], removed: 0 });
+  expect(await pruneDesktopArchive(TEST_TARGET.clusterProjectId, { keep: 1, apply: false }, deps)).toEqual({ project: TEST_TARGET.clusterProjectId, kept: ['a2'], retainedInUse: [], remove: ['a1'], removed: 0 });
   expect(removed).toEqual([]);
-  expect(await pruneDesktopArchive('octogee-test', { keep: 1, apply: true }, deps)).toEqual({ project: 'octogee-test', kept: ['a2'], retainedInUse: [], remove: ['a1'], removed: 1 });
-  expect(removed).toEqual(['octogee-test/a1']);
-  expect(deps.listImages).toHaveBeenCalledWith('octogee-test');
+  expect(await pruneDesktopArchive(TEST_TARGET.clusterProjectId, { keep: 1, apply: true }, deps)).toEqual({ project: TEST_TARGET.clusterProjectId, kept: ['a2'], retainedInUse: [], remove: ['a1'], removed: 1 });
+  expect(removed).toEqual([`${TEST_TARGET.clusterProjectId}/a1`]);
+  expect(deps.listImages).toHaveBeenCalledWith(TEST_TARGET.clusterProjectId);
 });

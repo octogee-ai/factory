@@ -89,9 +89,9 @@ describe("fleet logs CLI", () => {
   it("narrows to one migration by its operation id across the fleet controller, pods and VMs", () => {
     expect(parseFleetLogsOptions(["--env=test", "logs", "--migration=placement-retire-uid-1:scheduler:2"])).toMatchObject({ migrationId: "placement-retire-uid-1:scheduler:2" });
     expect(() => parseFleetLogsOptions(["--env=test", "logs", '--migration=a"b'])).toThrow();
-    const filter = buildFleetLogsFilter({ namespace: "octogee-test", migrationId: "abc123" });
+    const filter = buildFleetLogsFilter({ namespace: "shared-test", migrationId: "abc123" });
     expect(filter.split(" AND ").at(-1)).toBe('"abc123"');
-    expect(buildFleetLogsFilter({ namespace: "octogee-test" })).not.toContain('"abc123"');
+    expect(buildFleetLogsFilter({ namespace: "shared-test" })).not.toContain('"abc123"');
   });
   it("includes revisioned gateway pods without matching a different gateway", () => {
     const filter = buildFleetLogsFilter({ namespace: "octogee", gatewayId: "shared-a" });

@@ -6,6 +6,7 @@ import { operatorPlatformStateStoreForFirebaseProject } from "../lib/platform-st
 import { projectGeneralChannelName } from "../../shared/types/identity.js";
 import { pathToFileURL } from "node:url";
 import { initializeOperatorFirebaseAdmin } from "../lib/operator-firebase-admin.js";
+import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 
 export interface RepairMissingProjectChannelsConfig {
   apply: boolean;
@@ -21,7 +22,7 @@ export function resolveRepairMissingProjectChannelsConfig(
   const projectFlag = argv.find((arg) => arg.startsWith("--project="));
   return {
     apply: argv.includes("--apply"),
-    project: projectFlag ? projectFlag.slice("--project=".length) : "octogee-test",
+    project: projectFlag ? projectFlag.slice("--project=".length) : deploymentEnvironmentSettings("test").firebaseProjectId,
     mmUrl: env.MM_URL,
     mmAdminToken: env.MM_ADMIN_TOKEN,
   };

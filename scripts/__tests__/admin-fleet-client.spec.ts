@@ -5,6 +5,7 @@ import {
   exchangeAdminFleetCustomToken,
   resolveFirebaseWebApiKey,
 } from "../lib/admin-fleet-client.js";
+import { TEST_TARGET } from "./fixtures/deployment.js";
 
 function response(input: {
   status: number;
@@ -23,16 +24,16 @@ describe("admin fleet client", () => {
   it("discovers the Firebase web API key from the environment app origin", async () => {
     const fetchImpl = vi.fn(async () => response({
       status: 200,
-      body: JSON.stringify({ apiKey: "public-web-key", projectId: "octogee-test" }),
+      body: JSON.stringify({ apiKey: "public-web-key", projectId: TEST_TARGET.firebaseProjectId }),
     }));
 
     await expect(resolveFirebaseWebApiKey({
-      appOrigin: "https://app-test.octogee.com/",
+      appOrigin: `${TEST_TARGET.appOrigin}/`,
       fetchImpl,
     })).resolves.toBe("public-web-key");
 
     expect(fetchImpl).toHaveBeenCalledWith(
-      "https://app-test.octogee.com/__/firebase/init.json",
+      `${TEST_TARGET.appOrigin}/__/firebase/init.json`,
       { headers: { Accept: "application/json" } },
     );
   });
@@ -41,7 +42,7 @@ describe("admin fleet client", () => {
     const fetchImpl = vi.fn();
 
     await expect(resolveFirebaseWebApiKey({
-      appOrigin: "https://app-test.octogee.com",
+      appOrigin: TEST_TARGET.appOrigin,
       configuredKey: "  explicit-key  ",
       fetchImpl,
     })).resolves.toBe("explicit-key");
@@ -51,7 +52,7 @@ describe("admin fleet client", () => {
 
   it("fails clearly when public Firebase initialization metadata has no API key", async () => {
     await expect(resolveFirebaseWebApiKey({
-      appOrigin: "https://app-test.octogee.com",
+      appOrigin: TEST_TARGET.appOrigin,
       fetchImpl: async () => response({ status: 200, body: "{}" }),
     })).rejects.toThrow("Firebase initialization metadata returned no apiKey");
   });
@@ -62,7 +63,7 @@ describe("admin fleet client", () => {
       body: JSON.stringify({ operationId: "op-1" }),
     }));
     const client = createAdminFleetClient({
-      apiOrigin: "https://api-test.octogee.com/",
+      apiOrigin: `${TEST_TARGET.apiOrigin}/`,
       getIdToken: async () => "id-token",
       fetchImpl,
     });
@@ -75,7 +76,7 @@ describe("admin fleet client", () => {
     })).resolves.toEqual({ operationId: "op-1" });
 
     expect(fetchImpl).toHaveBeenCalledWith(
-      "https://api-test.octogee.com/api/admin/gateways/gw-1/rollout",
+      `${TEST_TARGET.apiOrigin}/api/admin/gateways/gw-1/rollout`,
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ imageTag: "abc1234" }),

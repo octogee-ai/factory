@@ -172,6 +172,25 @@ function validateHostedTarget(target, targetId) {
         stringFields(record(target.networkBoundary, `deployment target ${targetId}.networkBoundary`), ["controlPlaneCidr", "privateServicesCidr"], `deployment target ${targetId}.networkBoundary`);
     }
 }
+function validateActiveEnvironmentIsolation(activeTargets, targets) {
+    const active = Object.entries(activeTargets)
+        .filter(([, targetId]) => typeof targetId === "string" && Object.hasOwn(targets, targetId))
+        .map(([environment, targetId]) => ({ environment, target: targets[targetId] }))
+        .sort((a, b) => a.environment.localeCompare(b.environment));
+    for (const [index, first] of active.entries()) {
+        for (const second of active.slice(index + 1)) {
+            const pair = `${first.environment} and ${second.environment}`;
+            if (first.target.firebaseProjectId !== undefined && first.target.firebaseProjectId === second.target.firebaseProjectId) {
+                throw new Error(`active deployment targets for ${pair} share Firebase project ${String(first.target.firebaseProjectId)}`);
+            }
+            if (first.target.clusterProjectId !== undefined &&
+                first.target.clusterProjectId === second.target.clusterProjectId &&
+                first.target.namespace === second.target.namespace) {
+                throw new Error(`active deployment targets for ${pair} share cluster namespace ${String(first.target.clusterProjectId)}/${String(first.target.namespace)}`);
+            }
+        }
+    }
+}
 export function validateDeploymentTargetsDocument(document) {
     const manifest = record(document, "deployment targets manifest");
     if (manifest.schemaVersion !== 1) {
@@ -202,6 +221,7 @@ export function validateDeploymentTargetsDocument(document) {
             throw new Error(`${label}.promotionSourceTargetId requires hosted release settings`);
         }
     }
+    validateActiveEnvironmentIsolation(activeTargets, targets);
     validatePromotionSources(hostedTargets);
     validateIngressIdentityUniqueness(hostedTargets);
     validateCustomerHostingProjects(hostedTargets);

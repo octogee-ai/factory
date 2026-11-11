@@ -4,6 +4,7 @@ import {
   resolveReconcileFirebaseProject,
   rewriteRepoUrl,
 } from "../ops/reconcile-gitea-org.js";
+import { TEST_TARGET } from "./fixtures/deployment.js";
 
 describe("parseReconcileArgs", () => {
   it("parses a dry-run invocation (apply defaults false)", () => {
@@ -33,9 +34,9 @@ describe("parseReconcileArgs", () => {
 describe("resolveReconcileFirebaseProject", () => {
   it("uses the exact active target selected by the shell runner", () => {
     expect(resolveReconcileFirebaseProject("test", {
-      K8S_NAMESPACE: "octogee-test",
-      DEPLOYMENT_TARGET_ID: "test-central",
-    })).toBe("octogee-test");
+      K8S_NAMESPACE: TEST_TARGET.namespace,
+      DEPLOYMENT_TARGET_ID: TEST_TARGET.targetId,
+    })).toBe(TEST_TARGET.firebaseProjectId);
   });
 });
 

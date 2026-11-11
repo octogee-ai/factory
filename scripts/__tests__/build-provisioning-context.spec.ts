@@ -112,7 +112,7 @@ vi.setSystemTime(new Date("2026-03-14T08:30:00Z"));
   it("passes userData through unchanged on the returned ctx (steps read auxiliary fields off it)", () => {
     const userData = {
       username: "acme",
-      email: "a@b.co",
+      email: "a@example.test",
       onboarding: { vibe: "calm" },
       displayName: "First Last",
       photoURL: "https://example.com/a.png",

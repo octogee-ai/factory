@@ -14,7 +14,7 @@ afterEach(() => {
 
 describe("realDeviceAuthDeps postCapture", () => {
   it("defaults capture posts to octogee-api in the current namespace", async () => {
-    process.env.K8S_NAMESPACE = "octogee-test";
+    process.env.K8S_NAMESPACE = "shared-test";
     delete process.env.OCTOGEE_API_URL;
     const calls: Array<{ url: string; body: unknown; key: string | null }> = [];
     vi.stubGlobal(
@@ -38,7 +38,7 @@ describe("realDeviceAuthDeps postCapture", () => {
     await expect(deps.postCapture("flow-1", "{\"ok\":true}")).resolves.toEqual({ ok: true });
     expect(calls).toEqual([
       {
-        url: "http://octogee-api.octogee-test.svc.cluster.local:3001/api/model-credentials/subscription/capture",
+        url: "http://octogee-api.shared-test.svc.cluster.local:3001/api/model-credentials/subscription/capture",
         body: { flowId: "flow-1", credential: "{\"ok\":true}" },
         key: null,
       },

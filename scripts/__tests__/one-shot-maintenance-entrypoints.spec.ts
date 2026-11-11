@@ -15,6 +15,7 @@ import {
   NOTIFICATION_SMOKE_PASSWORD,
 } from "../product/ops/seed-test-notification-user.js";
 import { parseSeedTypingPhrasesArgs } from "../ops/seed-typing-phrases.js";
+import { TEST_TARGET } from "./fixtures/deployment.js";
 
 describe("seed and cleanup smoke-notification utilities", () => {
   it("shares the fixed test identity between seed and cleanup scripts", () => {
@@ -32,7 +33,7 @@ describe("seed and cleanup smoke-notification utilities", () => {
   });
 
   it("parses seed typing phrase force mode and target project", () => {
-    expect(parseSeedTypingPhrasesArgs([])).toEqual({ force: false, project: "octogee-test" });
+    expect(parseSeedTypingPhrasesArgs([])).toEqual({ force: false, project: TEST_TARGET.firebaseProjectId });
     expect(parseSeedTypingPhrasesArgs(["--force", "--project=octogee"])).toEqual({
       force: true,
       project: "octogee",
@@ -54,7 +55,7 @@ describe("cleanup-stale-smoke-docs helpers", () => {
     });
     expect(parseCleanupStaleSmokeDocsArgs([], {})).toEqual({
       dryRun: false,
-      project: "octogee-test",
+      project: TEST_TARGET.firebaseProjectId,
     });
   });
 

@@ -90,7 +90,7 @@ describe("projectGatewaySummary — lastError (restoreJobs retired: no jobId)", 
 
 describe("resolveFleetNamespace", () => {
   it("returns K8S_NAMESPACE when set (the env the fleet lives in)", () => {
-    expect(resolveFleetNamespace({ K8S_NAMESPACE: "octogee-test" })).toBe("octogee-test");
+    expect(resolveFleetNamespace({ K8S_NAMESPACE: "shared-test" })).toBe("shared-test");
     expect(resolveFleetNamespace({ K8S_NAMESPACE: "octogee" })).toBe("octogee");
   });
 

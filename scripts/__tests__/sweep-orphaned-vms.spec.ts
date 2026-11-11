@@ -10,6 +10,7 @@ import {
   type VmReferences,
   type TerminatedVm,
 } from "../ops/sweep-orphaned-vms.js";
+import { TEST_TARGET } from "./fixtures/deployment.js";
 
 const vm: TerminatedVm = { name: "octogee-computer-prod-abc", zone: "us-central1-a", instanceId: "111", ownerUid: "UidA", lastStopTimestamp: "2026-09-10T02:56:00Z" };
 
@@ -20,7 +21,7 @@ function refs(overrides: Partial<VmReferences> = {}): VmReferences {
 describe("sweep-orphaned-vms", () => {
   it("is dry-run by default, needs an environment, and rejects stray arguments", () => {
     expect(parseSweepOrphanedVmsArgs(["--env=prod"])).toMatchObject({ environment: "prod", apply: false, firestoreProjectId: "octogee", computeProjectId: "octogee" });
-    expect(parseSweepOrphanedVmsArgs(["--env=test", "--apply"])).toMatchObject({ environment: "test", apply: true, firestoreProjectId: "octogee-test", computeProjectId: "octogee-test" });
+    expect(parseSweepOrphanedVmsArgs(["--env=test", "--apply"])).toMatchObject({ environment: "test", apply: true, firestoreProjectId: TEST_TARGET.firebaseProjectId, computeProjectId: TEST_TARGET.firebaseProjectId });
     expect(() => parseSweepOrphanedVmsArgs([])).toThrow(/--env/);
     expect(() => parseSweepOrphanedVmsArgs(["--env=prod", "--force"])).toThrow(/--force/);
   });

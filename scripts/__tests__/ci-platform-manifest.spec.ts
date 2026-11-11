@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseAllDocuments } from 'yaml';
 import { bootstrapReleaseParameters, extractPlatformValues, manifestYaml, splitPlatformManifest, valuesTemplate, verifyBootstrapResources, writeNamespaceChart } from '../ci/platform-manifest.mjs';
+import { TEST_TARGET } from "./fixtures/deployment.js";
 
-it.each(['octogee-test', 'octogee'])('gives bootstrapped admission parameters to the %s Helm release', namespace => {
+it.each([TEST_TARGET.namespace, 'octogee'])('gives bootstrapped admission parameters to the %s Helm release', namespace => {
   const parameters = ['octogee-project-runner'].flatMap(name => [
     { kind: 'ConfigMap', metadata: { name: `${name}-image`, namespace }, data: { image: 'image@sha256:reviewed' } },
     { kind: 'Role', metadata: { name: `${name}-parameters`, namespace, labels: { existing: 'retained' } }, rules: [{ resources: ['configmaps'], verbs: ['get'] }] },
@@ -29,18 +30,18 @@ it.each(['octogee-test', 'octogee'])('gives bootstrapped admission parameters to
 it('keeps only environment-owned namespace objects in the release chart', () => {
   const resources = [
     { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'image' }, data: { image: 'reviewed' } },
-    { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'runner', namespace: 'octogee-test-project-runs' } },
+    { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'runner', namespace: `${TEST_TARGET.namespace}-project-runs` } },
     { apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'ClusterRole', metadata: { name: 'observer' }, rules: [] },
     { apiVersion: 'admissionregistration.k8s.io/v1', kind: 'ValidatingAdmissionPolicy', metadata: { name: 'fixed' }, spec: { failurePolicy: 'Fail' } },
-    { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'octogee-test-project-runs' } },
+    { apiVersion: 'v1', kind: 'Namespace', metadata: { name: `${TEST_TARGET.namespace}-project-runs` } },
   ];
-  const result = splitPlatformManifest(manifestYaml(resources), 'octogee-test');
+  const result = splitPlatformManifest(manifestYaml(resources), TEST_TARGET.namespace);
   expect(result.release.map(resource => resource.kind)).toEqual(['ConfigMap', 'Deployment']);
-  expect(result.release.map(resource => resource.metadata.namespace)).toEqual(['octogee-test', 'octogee-test-project-runs']);
+  expect(result.release.map(resource => resource.metadata.namespace)).toEqual([TEST_TARGET.namespace, `${TEST_TARGET.namespace}-project-runs`]);
   expect(result.bootstrap.map(resource => resource.kind)).toEqual(['ClusterRole', 'ValidatingAdmissionPolicy', 'Namespace']);
 });
 it.each(['octogee', 'default', 'kube-system'])('rejects a TEST release object in %s', namespace => {
-  expect(() => splitPlatformManifest(manifestYaml([{ kind: 'Secret', metadata: { name: 'other', namespace } }]), 'octogee-test')).toThrow('cannot manage');
+  expect(() => splitPlatformManifest(manifestYaml([{ kind: 'Secret', metadata: { name: 'other', namespace } }]), TEST_TARGET.namespace)).toThrow('cannot manage');
 });
 it('requires preserved live cluster resources to agree with the reviewed security definition', () => {
   const desired = { kind: 'ClusterRole', metadata: { name: 'reader' }, rules: [{ resources: ['nodes'], verbs: ['get'] }] };
@@ -89,11 +90,11 @@ it('preserves effective values and literal template data through the namespace-o
     writeFileSync(join(source, 'values.yaml'), 'settings:\n  retained: original\n  overridden: original\n');
     writeFileSync(join(source, 'templates/values.yaml'), valuesTemplate);
     writeFileSync(join(source, 'templates/resources.yaml'), 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: config\ndata:\n  literal: {{ "{{ mustStayLiteral }}" | quote }}\n---\napiVersion: v1\nkind: Pod\nmetadata:\n  name: check\n  annotations:\n    helm.sh/hook: test\nspec:\n  containers: []\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: fixed-security\nrules: []\n');
-    const captured = extractPlatformValues(execFileSync('helm', ['template', 'octogee', source, '--namespace', 'octogee-test', '--set', 'settings.overridden=new'], { encoding: 'utf8' }));
-    const resources = splitPlatformManifest(captured.manifest, 'octogee-test');
+    const captured = extractPlatformValues(execFileSync('helm', ['template', 'octogee', source, '--namespace', TEST_TARGET.namespace, '--set', 'settings.overridden=new'], { encoding: 'utf8' }));
+    const resources = splitPlatformManifest(captured.manifest, TEST_TARGET.namespace);
     const output = join(directory, 'release');
     writeNamespaceChart(output, { apiVersion: 'v2', name: 'octogee', version: '1.2.3' }, resources.release, captured.values);
-    const rendered = execFileSync('helm', ['template', 'octogee', output, '--namespace', 'octogee-test'], { encoding: 'utf8' });
+    const rendered = execFileSync('helm', ['template', 'octogee', output, '--namespace', TEST_TARGET.namespace], { encoding: 'utf8' });
     const documents = parseAllDocuments(rendered).map(document => document.toJSON());
     expect(documents.map(document => document.kind)).toEqual(['ConfigMap', 'Pod']);
     expect(documents[0].data.literal).toBe('{{ mustStayLiteral }}');

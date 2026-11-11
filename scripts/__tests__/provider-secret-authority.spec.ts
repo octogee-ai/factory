@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { TEST_TARGET } from "./fixtures/deployment.js";
 
 const root = path.resolve(__dirname, "../..");
 const setup = readFileSync(path.join(root, "scripts/setup-secrets.sh"), "utf8");
@@ -46,10 +47,10 @@ function materialize(provider: typeof providers[number], environment: string, st
       RESEND_FROM_NAME: "Demo",
       RESEND_WEBHOOK_SECRET: "fixture-webhook",
       EMAIL_UNSUBSCRIBE_SECRET: "fixture-unsubscribe",
-      FIREBASE_PROJECT: environment === "prod" ? "octogee" : "octogee-test",
+      FIREBASE_PROJECT: environment === "prod" ? "octogee" : TEST_TARGET.firebaseProjectId,
       SHELL_ENV_HELPER: path.join(root, "scripts/lib/shell-env.sh"),
       FAKE_SM_STATE: state,
-      FAKE_EXPECTED_PROJECT: provider.central || environment === "prod" ? "octogee" : "octogee-test",
+      FAKE_EXPECTED_PROJECT: provider.central || environment === "prod" ? "octogee" : TEST_TARGET.firebaseProjectId,
       FAKE_SM_VALUE: state === "absent" ? "" : "rotated-provider-value",
       FAKE_K8S_VALUE: "namespace-provider-value",
       [provider.variable]: "retired-local-value",
@@ -63,7 +64,7 @@ describe.each(providers)("$name setup credential authority", (provider) => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain(`--from-literal=${provider.field}=rotated-provider-value`);
     expect(result.stdout).not.toContain("retired-local-value");
-    const project = provider.central || environment === "prod" ? "octogee" : "octogee-test";
+    const project = provider.central || environment === "prod" ? "octogee" : TEST_TARGET.firebaseProjectId;
     expect(result.stdout).toContain(`PERSIST:${provider.variable}:rotated-provider-value:${project}`);
     expect(result.stdout).toContain(`CACHE:${provider.variable}:rotated-provider-value`);
   });
@@ -84,7 +85,7 @@ describe.each(providers)("$name setup credential authority", (provider) => {
   it("persists the bootstrap credential only after confirmed managed-secret absence", () => {
     const result = materialize(provider, "test", "absent");
     expect(result.status, result.stderr).toBe(0);
-    const project = provider.central ? "octogee" : "octogee-test";
+    const project = provider.central ? "octogee" : TEST_TARGET.firebaseProjectId;
     expect(result.stdout).toContain(`--from-literal=${provider.field}=retired-local-value`);
     expect(result.stdout).toContain(`PERSIST:${provider.variable}:retired-local-value:${project}`);
   });
@@ -112,12 +113,12 @@ function materializeOAuth(input: { state: "present" | "absent"; envValue?: strin
       ENV: "test",
       ENV_FILE: "/unused-oauth-test.env",
       TARGET_ID: "test-central",
-      FIREBASE_PROJECT: "octogee-test",
+      FIREBASE_PROJECT: TEST_TARGET.firebaseProjectId,
       SM_PROJECT: "octogee",
       SHELL_ENV_HELPER: path.join(root, "scripts/lib/shell-env.sh"),
       COMPLETENESS_HELPER: path.join(root, "scripts/lib/secret-completeness.sh"),
       FAKE_SM_STATE: input.state,
-      FAKE_EXPECTED_PROJECT: "octogee-test",
+      FAKE_EXPECTED_PROJECT: TEST_TARGET.firebaseProjectId,
       FAKE_SM_VALUE: input.state === "absent" ? "" : "managed",
       FAKE_K8S_VALUE: input.k8sValue ?? "",
       GITHUB_CLIENT_ID: input.envValue ?? "",

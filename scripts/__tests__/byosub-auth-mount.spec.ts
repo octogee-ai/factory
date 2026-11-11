@@ -44,7 +44,7 @@ function operatorOpts(port: number): StartFleetOptions {
 
 describe("byosub auth route mount", () => {
   let controller: StartedFleetController | undefined;
-  beforeEach(() => vi.stubEnv("K8S_NAMESPACE", "octogee-test"));
+  beforeEach(() => vi.stubEnv("K8S_NAMESPACE", "shared-test"));
   afterEach(async () => {
     await controller?.stop();
     controller = undefined;

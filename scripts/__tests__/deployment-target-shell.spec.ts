@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { PROD_TARGET } from "./fixtures/deployment.js";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 const helper = resolve(repoRoot, "scripts/lib/deployment-target.sh");
@@ -24,7 +25,7 @@ describe("deployment target shell loader", () => {
     expect(result.stdout.trim().split("\n")).toEqual([
       "prod-central",
       "us-central1",
-      "gke_octogee_us-central1_octogee-gateway",
+      PROD_TARGET.kubeContext,
       "us-central1-docker.pkg.dev/octogee/octogee",
       "octogee:us-central1:octogee-pg",
       "false",
@@ -51,5 +52,28 @@ describe("deployment target shell loader", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("deployment target resolver returned empty output");
+  });
+
+  it("reads one field of another target without replacing the loaded target", () => {
+    const result = bash(`
+      source "${helper}"
+      octogee_load_deployment_target --environment=test
+      test_namespace="$TARGET_NAMESPACE"
+      octogee_load_deployment_target --target=prod-central
+      [[ "$(octogee_deployment_target_field --environment=test namespace)" == "$test_namespace" ]] && printf '%s\n' "$TARGET_ID"
+    `);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("prod-central");
+  });
+
+  it("fails when the requested field is absent", () => {
+    const result = bash(`
+      source "${helper}"
+      octogee_deployment_target_field --environment=test no_such_field
+    `);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("deployment target has no no_such_field");
   });
 });

@@ -766,7 +766,7 @@ describe("applyPreBootPatches — Anthropic broker base URL", () => {
     };
 
     const changed = applyPreBootPatches(config, {
-      ANTHROPIC_BASE_URL: "http://llm-broker.octogee-test.svc.cluster.local:3010",
+      ANTHROPIC_BASE_URL: "http://llm-broker.shared-test.svc.cluster.local:3010",
     });
 
     expect(changed).toBe(true);
@@ -776,7 +776,7 @@ describe("applyPreBootPatches — Anthropic broker base URL", () => {
     });
     expect(config.auth.profiles["anthropic:default"].baseUrl).toBeUndefined();
     expect(config.models.providers.anthropic.baseUrl).toBe(
-      "http://llm-broker.octogee-test.svc.cluster.local:3010",
+      "http://llm-broker.shared-test.svc.cluster.local:3010",
     );
   });
 
@@ -794,13 +794,13 @@ describe("applyPreBootPatches — Anthropic broker base URL", () => {
     };
 
     const changed = applyPreBootPatches(config, {
-      ANTHROPIC_BASE_URL: "http://llm-broker.octogee-test.svc.cluster.local:3010",
+      ANTHROPIC_BASE_URL: "http://llm-broker.shared-test.svc.cluster.local:3010",
     });
 
     expect(changed).toBe(true);
     expect(config.auth.profiles["anthropic:default"].baseUrl).toBeUndefined();
     expect(config.models.providers.anthropic.baseUrl).toBe(
-      "http://llm-broker.octogee-test.svc.cluster.local:3010",
+      "http://llm-broker.shared-test.svc.cluster.local:3010",
     );
   });
 
@@ -836,7 +836,7 @@ describe("applyPreBootPatches — Anthropic broker base URL", () => {
     };
 
     const changed = applyAnthropicBaseUrlPatch(config, {
-      ANTHROPIC_BASE_URL: "http://llm-broker.octogee-test.svc.cluster.local:3010",
+      ANTHROPIC_BASE_URL: "http://llm-broker.shared-test.svc.cluster.local:3010",
     }, () => {});
 
     expect(changed).toBe(false);
@@ -1389,19 +1389,19 @@ describe("pickSoleTenantSlug", () => {
 
 describe("buildGitconfigContent — first-boot seed shape", () => {
   it("emits [user] section with the given name and email", () => {
-    const out = buildGitconfigContent({ name: "Chris Eckert", email: "c@e.com" });
+    const out = buildGitconfigContent({ name: "Ada Lovelace", email: "c@example.test" });
     expect(out).toContain("[user]");
-    expect(out).toMatch(/name = Chris Eckert/);
-    expect(out).toMatch(/email = c@e\.com/);
+    expect(out).toMatch(/name = Ada Lovelace/);
+    expect(out).toMatch(/email = c@example\.test/);
   });
 
   it("emits [push] autoSetupRemote = true (the manual `git config` line we want to delete from the operator runbook)", () => {
-    const out = buildGitconfigContent({ name: "X", email: "y@z.com" });
+    const out = buildGitconfigContent({ name: "X", email: "y@example.test" });
     expect(out).toMatch(/\[push\]\s*\n\s*autoSetupRemote = true/);
   });
 
   it("emits [init] defaultBranch = main", () => {
-    const out = buildGitconfigContent({ name: "X", email: "y@z.com" });
+    const out = buildGitconfigContent({ name: "X", email: "y@example.test" });
     expect(out).toMatch(/\[init\]\s*\n\s*defaultBranch = main/);
   });
 

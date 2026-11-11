@@ -5,6 +5,7 @@ import {
 import {
   resolveRepairMissingProjectChannelsConfig,
 } from "../ops/repair-missing-project-channels.js";
+import { TEST_TARGET } from "./fixtures/deployment.js";
 
 describe("repair-missing-project-channels config", () => {
   it("resolves dry-run defaults and Mattermost credentials from env", () => {
@@ -17,7 +18,7 @@ describe("repair-missing-project-channels config", () => {
       },
     )).toEqual({
       apply: false,
-      project: "octogee-test",
+      project: TEST_TARGET.firebaseProjectId,
       mmUrl: "https://mattermost.test",
       mmAdminToken: "token",
     });
@@ -42,7 +43,7 @@ describe("reconcile-coach-names args", () => {
       "alice",
       "uid-2",
     ], {
-      GCLOUD_PROJECT: "octogee-test",
+      GCLOUD_PROJECT: TEST_TARGET.firebaseProjectId,
       MM_ADMIN_TOKEN: "token",
       MM_URL: "https://mattermost.test",
     })).toEqual({
@@ -53,7 +54,7 @@ describe("reconcile-coach-names args", () => {
       mmUrl: "https://mattermost.test",
       mmAdminToken: "token",
       saKey: undefined,
-      projectId: "octogee-test",
+      projectId: TEST_TARGET.firebaseProjectId,
     });
   });
 });

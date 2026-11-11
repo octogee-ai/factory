@@ -18,7 +18,7 @@ import { resolveToolchainCommand } from "../lib/isolated-toolchain-wrapper.js";
 
 const tempRoots: string[] = [];
 const PROXY_REGISTRY =
-  "http://octogee-npm-cache-proxy.octogee-test.svc.cluster.local:3005/";
+  "http://octogee-npm-cache-proxy.shared-test.svc.cluster.local:3005/";
 const CAPABILITY = "t".repeat(43);
 
 const registryCredentials = () => Promise.resolve({

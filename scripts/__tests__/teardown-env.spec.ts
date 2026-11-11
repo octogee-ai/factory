@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { TEST_TARGET } from "./fixtures/deployment.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const teardown = path.join(repoRoot, "scripts/teardown-env.sh");
@@ -62,7 +63,7 @@ function runPrivateCentralTeardown(options: TeardownOptions = {}) {
   const helmListCount = path.join(temp, "helm-list-count");
   const storageRemoved = path.join(temp, "storage-removed");
   const sqlOwnerManifest = path.join(temp, "sql-owner-manifest.yaml");
-  const laptopServiceAccountKey = path.join(temp, ".openclaw", "secrets", "octogee-test-sa-key.json");
+  const laptopServiceAccountKey = path.join(temp, ".openclaw", "secrets", `${TEST_TARGET.firebaseProjectId}-sa-key.json`);
   writeFileSync(log, "");
   writeFileSync(describeCount, "0");
   writeFileSync(deletedPvcs, "");
@@ -73,7 +74,7 @@ function runPrivateCentralTeardown(options: TeardownOptions = {}) {
   writeFileSync(helmListCount, "0");
   writeFileSync(sqlOwnerManifest, "");
   mkdirSync(path.dirname(laptopServiceAccountKey), { recursive: true });
-  writeFileSync(laptopServiceAccountKey, '{"type":"service_account","project_id":"octogee-test"}');
+  writeFileSync(laptopServiceAccountKey, `{"type":"service_account","project_id":"${TEST_TARGET.firebaseProjectId}"}`);
 
   executable(path.join(temp, "gcloud"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -173,7 +174,7 @@ set -euo pipefail
 printf 'kubectl %s\\n' "$*" >> "$FAKE_CALL_LOG"
 case "$1 $2" in
   "config use-context") ;;
-  "config current-context") printf 'gke_octogee-test_us-central1_octogee-gateway\\n' ;;
+  "config current-context") printf '${TEST_TARGET.kubeContext}\\n' ;;
   "get serviceaccount") printf 'octogee-api@octogee.iam.gserviceaccount.com\\n' ;;
   "get serviceaccounts")
     [[ "$FAKE_GATEWAY_RUNTIME_FAILURE" != "serviceaccount-inspect" ]] || {
@@ -463,7 +464,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     expect(result.calls).toContain(
-      "kubectl scale deployment/octogee-gitea -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --replicas=0",
+      `kubectl scale deployment/octogee-gitea -n ${TEST_TARGET.namespace} --context ${TEST_TARGET.kubeContext} --replicas=0`,
     );
   });
 
@@ -531,7 +532,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     for (const name of ["octogee-gw-default", "octogee-gw-builder-one"]) {
       expect(result.calls).toContain(
-        `kubectl delete serviceaccount ${name} -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --wait=true`,
+        `kubectl delete serviceaccount ${name} -n ${TEST_TARGET.namespace} --context ${TEST_TARGET.kubeContext} --wait=true`,
       );
     }
     for (const name of [
@@ -540,7 +541,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
       "gateway-model-key-user-one",
     ]) {
       expect(result.calls).toContain(
-        `kubectl delete secret ${name} -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --wait=true`,
+        `kubectl delete secret ${name} -n ${TEST_TARGET.namespace} --context ${TEST_TARGET.kubeContext} --wait=true`,
       );
     }
     expect(result.calls).not.toContainEqual(
@@ -554,7 +555,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     );
     expect(result.stdout).toContain("Dynamic gateway runtime identities confirmed absent");
     expect(result.calls).toContain(
-      "kubectl scale deployment/glm-controller -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --replicas=0",
+      `kubectl scale deployment/glm-controller -n ${TEST_TARGET.namespace} --context ${TEST_TARGET.kubeContext} --replicas=0`,
     );
   });
 
@@ -563,22 +564,22 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     const kubernetesDelete = result.calls.indexOf(
-      "kubectl delete secret gitea-token -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --ignore-not-found=true --wait=true",
+      `kubectl delete secret gitea-token -n ${TEST_TARGET.namespace} --context ${TEST_TARGET.kubeContext} --ignore-not-found=true --wait=true`,
     );
     const secretManagerDelete = result.calls.indexOf(
-      "secrets delete gitea-api-token-test --project=octogee-test --quiet",
+      `secrets delete gitea-api-token-test --project=${TEST_TARGET.firebaseProjectId} --quiet`,
     );
     const databaseResets = result.calls
       .map((call, index) => call.includes("kubectl apply -f -") ? index : -1)
       .filter((index) => index >= 0);
     const controllerQuiescence = result.calls.indexOf(
-      "kubectl scale deployment/glm-controller -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --replicas=0",
+      `kubectl scale deployment/glm-controller -n ${TEST_TARGET.namespace} --context ${TEST_TARGET.kubeContext} --replicas=0`,
     );
     const gatewayHelmRemoval = result.calls.findIndex((call) =>
       call.startsWith("helm uninstall octogee-gw-stale "),
     );
     const runtimeIdentityRemoval = result.calls.indexOf(
-      "kubectl delete secret gateway-model-key-user-one -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --wait=true",
+      `kubectl delete secret gateway-model-key-user-one -n ${TEST_TARGET.namespace} --context ${TEST_TARGET.kubeContext} --wait=true`,
     );
 
     expect(kubernetesDelete).toBeGreaterThan(-1);
@@ -725,8 +726,8 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     expect(result.calls.filter((call) => call.includes("delete-firebase-auth-users.ts"))).toEqual([
-      "npx -y tsx ops/delete-firebase-auth-users.ts --verify --project=octogee-test",
-      "npx -y tsx ops/delete-firebase-auth-users.ts --project=octogee-test",
+      `npx -y tsx ops/delete-firebase-auth-users.ts --verify --project=${TEST_TARGET.firebaseProjectId}`,
+      `npx -y tsx ops/delete-firebase-auth-users.ts --project=${TEST_TARGET.firebaseProjectId}`,
     ]);
   });
 
@@ -736,7 +737,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     expect(result.status).toBe(1);
     expect(`${result.stderr}\n${result.stdout}`).toContain("Firebase Storage wipe failed");
     expect(result.calls).toContainEqual(
-      expect.stringContaining("storage rm --all-versions gs://octogee-test.firebasestorage.app/** --project=octogee-test --quiet"),
+      expect.stringContaining(`storage rm --all-versions gs://${TEST_TARGET.firebaseProjectId}.firebasestorage.app/** --project=${TEST_TARGET.firebaseProjectId} --quiet`),
     );
     expect(result.calls.some((call) => call.startsWith("firebase firestore:delete"))).toBe(false);
     expect(result.calls.some((call) => call.startsWith("npx ") && !call.includes("--verify"))).toBe(false);
@@ -771,8 +772,8 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     expect(result.sqlOwnerManifest).toBe("");
-    expect(result.calls).toContain("firebase firestore:delete --all-collections --project octogee-test --force");
-    expect(result.calls).toContain("npx -y tsx ops/delete-firebase-auth-users.ts --project=octogee-test");
+    expect(result.calls).toContain(`firebase firestore:delete --all-collections --project ${TEST_TARGET.firebaseProjectId} --force`);
+    expect(result.calls).toContain(`npx -y tsx ops/delete-firebase-auth-users.ts --project=${TEST_TARGET.firebaseProjectId}`);
   });
 
   it("refuses --resume while Mattermost and Gitea still run", () => {
@@ -817,7 +818,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     const result = runPrivateCentralTeardown();
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-    expect(result.stdout).toContain("kubectl rollout restart deploy -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway -l 'app!=octogee-gateway'");
+    expect(result.stdout).toContain(`kubectl rollout restart deploy -n ${TEST_TARGET.namespace} --context ${TEST_TARGET.kubeContext} -l 'app!=octogee-gateway'`);
   });
 
   it("allows an already-empty target Storage bucket to complete the reset", () => {
@@ -931,7 +932,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     const result = runPrivateCentralTeardown();
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-    const roll = result.stdout.indexOf("kubectl rollout restart deploy -n octogee-test");
+    const roll = result.stdout.indexOf(`kubectl rollout restart deploy -n ${TEST_TARGET.namespace}`);
     const seed = result.stdout.indexOf(
       "npm run --prefix scripts with-platform-state -- --env=test -- npx tsx ops/seed-orchestrator-config.ts --env=test --deployment-target=test-central",
     );

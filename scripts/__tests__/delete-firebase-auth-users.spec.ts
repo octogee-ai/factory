@@ -23,6 +23,7 @@ import {
   deleteAllFirebaseAuthUsers,
   main,
 } from "../ops/delete-firebase-auth-users.js";
+import { TEST_TARGET } from "./fixtures/deployment.js";
 
 describe("delete-firebase-auth-users entrypoint credentials", () => {
   let home: string;
@@ -33,8 +34,8 @@ describe("delete-firebase-auth-users entrypoint credentials", () => {
     const secrets = path.join(home, ".openclaw", "secrets");
     fs.mkdirSync(secrets, { recursive: true });
     fs.writeFileSync(
-      path.join(secrets, "octogee-test-sa-key.json"),
-      JSON.stringify({ project_id: "octogee-test", client_email: "stale@octogee-test.iam.gserviceaccount.com" }),
+      path.join(secrets, `${TEST_TARGET.firebaseProjectId}-sa-key.json`),
+      JSON.stringify({ project_id: TEST_TARGET.firebaseProjectId, client_email: `stale@${TEST_TARGET.firebaseProjectId}.iam.gserviceaccount.com` }),
     );
     vi.stubEnv("HOME", home);
     vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
@@ -51,12 +52,12 @@ describe("delete-firebase-auth-users entrypoint credentials", () => {
   });
 
   it("verifies Auth access with application default credentials for the requested project, ignoring laptop key files", async () => {
-    await main(["--verify", "--project=octogee-test"]);
+    await main(["--verify", `--project=${TEST_TARGET.firebaseProjectId}`]);
 
     expect(firebaseAdmin.cert).not.toHaveBeenCalled();
     expect(firebaseAdmin.initializeApp).toHaveBeenCalledWith({
       credential: { kind: "application-default" },
-      projectId: "octogee-test",
+      projectId: TEST_TARGET.firebaseProjectId,
     });
     expect(firebaseAdmin.listUsers).toHaveBeenCalledWith(1);
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/application default for octogee-test/));
@@ -64,7 +65,7 @@ describe("delete-firebase-auth-users entrypoint credentials", () => {
 
   it("rejects a service-account key argument instead of silently switching credentials", async () => {
     await expect(
-      main(["--project=octogee-test", "--service-account=/keys/stale.json"]),
+      main([`--project=${TEST_TARGET.firebaseProjectId}`, "--service-account=/keys/stale.json"]),
     ).rejects.toThrow(/unknown argument/i);
     expect(firebaseAdmin.initializeApp).not.toHaveBeenCalled();
   });

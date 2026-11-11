@@ -47,6 +47,7 @@ import {
   resolveFleetOperatorUid,
 } from "../ops/fleet.js";
 import { withUserClaim } from "./helpers/user-claim.js";
+import { PROD_TARGET, TEST_TARGET } from "./fixtures/deployment.js";
 
 describe("fleet-controller entrypoint config", () => {
   it("reports the complete gateway image tag instead of its ambiguous build SHA", () => {
@@ -949,7 +950,7 @@ describe("fleet force gateway restart", () => {
     documents.get("gateways/canary")!.gatewayClass = "shared";
     await expect(runForcedGatewayRestart({
       store,
-      kubeContext: "gke_octogee_us-central1_octogee-gateway", namespace: "octogee-test",
+      kubeContext: PROD_TARGET.kubeContext, namespace: TEST_TARGET.namespace,
       gatewayId: "canary", runKubectl: kubectl, runMutation,
     })).rejects.toThrow("Shared gateways cannot be force restarted");
     expect(runMutation).not.toHaveBeenCalled();
@@ -1028,8 +1029,8 @@ describe("fleet force gateway restart", () => {
 
     await expect(runForcedGatewayRestart({
       store,
-      kubeContext: "gke_octogee_us-central1_octogee-gateway",
-      namespace: "octogee-test",
+      kubeContext: PROD_TARGET.kubeContext,
+      namespace: TEST_TARGET.namespace,
       gatewayId: "canary",
       idempotencyKey: "restart-canary-force",
       now: () => 1234,
@@ -1058,23 +1059,23 @@ describe("fleet force gateway restart", () => {
     ]);
     expect(kubectl.mock.calls.map(([argv]) => argv)).toEqual([
       [
-        "--context", "gke_octogee_us-central1_octogee-gateway",
-        "-n", "octogee-test",
+        "--context", PROD_TARGET.kubeContext,
+        "-n", TEST_TARGET.namespace,
         "get", "pods",
         "-l", "app=octogee-gateway,gateway-instance=canary",
         "-o", "json",
       ],
       [
-        "--context", "gke_octogee_us-central1_octogee-gateway",
-        "-n", "octogee-test",
+        "--context", PROD_TARGET.kubeContext,
+        "-n", TEST_TARGET.namespace,
         "get", "pod", "octogee-gateway-canary-a",
         "-o", "json",
       ],
       [
-        "--context", "gke_octogee_us-central1_octogee-gateway",
-        "-n", "octogee-test",
+        "--context", PROD_TARGET.kubeContext,
+        "-n", TEST_TARGET.namespace,
         "delete",
-        "--raw=/api/v1/namespaces/octogee-test/pods/octogee-gateway-canary-a",
+        `--raw=/api/v1/namespaces/${TEST_TARGET.namespace}/pods/octogee-gateway-canary-a`,
         "-f", "-",
       ],
     ]);
@@ -1087,8 +1088,8 @@ describe("fleet force gateway restart", () => {
 
     await expect(runForcedGatewayRestart({
       store,
-      kubeContext: "gke_octogee_us-central1_octogee-gateway",
-      namespace: "octogee-test",
+      kubeContext: PROD_TARGET.kubeContext,
+      namespace: TEST_TARGET.namespace,
       gatewayId: "canary",
       now: () => 1234,
       runKubectl: kubectl,
@@ -1116,8 +1117,8 @@ describe("fleet force gateway restart", () => {
 
     await expect(runForcedGatewayRestart({
       store,
-      kubeContext: "gke_octogee_us-central1_octogee-gateway",
-      namespace: "octogee-test",
+      kubeContext: PROD_TARGET.kubeContext,
+      namespace: TEST_TARGET.namespace,
       gatewayId: "canary",
       now: () => 1234,
       runKubectl: kubectl,
@@ -1159,8 +1160,8 @@ describe("fleet force gateway restart", () => {
 
     await expect(runForcedGatewayRestart({
       store,
-      kubeContext: "gke_octogee_us-central1_octogee-gateway",
-      namespace: "octogee-test",
+      kubeContext: PROD_TARGET.kubeContext,
+      namespace: TEST_TARGET.namespace,
       gatewayId: "canary",
       now: () => 1234,
       runKubectl: kubectl,
@@ -1181,8 +1182,8 @@ describe("fleet force gateway restart", () => {
 
     await expect(runForcedGatewayRestart({
       store,
-      kubeContext: "gke_octogee_us-central1_octogee-gateway",
-      namespace: "octogee-test",
+      kubeContext: PROD_TARGET.kubeContext,
+      namespace: TEST_TARGET.namespace,
       gatewayId: "canary",
       now: () => 1234,
       runKubectl: kubectl,
@@ -1202,17 +1203,17 @@ describe("fleet CLI args", () => {
   it("resolves Firestore and Kubernetes from the active deployment target", () => {
     expect(resolveFleetDeploymentTarget("test")).toEqual({
       targetId: "test-central",
-      projectId: "octogee-test",
-      clusterProjectId: "octogee-test",
-      namespace: "octogee-test",
-      kubeContext: "gke_octogee-test_us-central1_octogee-gateway",
+      projectId: TEST_TARGET.firebaseProjectId,
+      clusterProjectId: TEST_TARGET.clusterProjectId,
+      namespace: TEST_TARGET.namespace,
+      kubeContext: TEST_TARGET.kubeContext,
     });
     expect(resolveFleetDeploymentTarget("prod")).toEqual({
       targetId: "prod-central",
       projectId: "octogee",
       clusterProjectId: "octogee",
       namespace: "octogee",
-      kubeContext: "gke_octogee_us-central1_octogee-gateway",
+      kubeContext: PROD_TARGET.kubeContext,
     });
   });
 
@@ -1287,19 +1288,19 @@ describe("fleet CLI args", () => {
   it("uses a service-account credential supplied through application-default configuration as a local signer", () => {
     expect(fleetServiceAccountCredential({
       type: "service_account",
-      client_email: "fleet@test.iam.gserviceaccount.com",
+      client_email: "fleet@example.iam.gserviceaccount.com",
       private_key: "private-key",
-    }, "octogee-test")).toEqual({
-      projectId: "octogee-test",
-      clientEmail: "fleet@test.iam.gserviceaccount.com",
+    }, TEST_TARGET.firebaseProjectId)).toEqual({
+      projectId: TEST_TARGET.firebaseProjectId,
+      clientEmail: "fleet@example.iam.gserviceaccount.com",
       privateKey: "private-key",
     });
-    expect(fleetServiceAccountCredential({ type: "external_account" }, "octogee-test")).toBeNull();
+    expect(fleetServiceAccountCredential({ type: "external_account" }, TEST_TARGET.firebaseProjectId)).toBeNull();
   });
 
   it("uses the environment Firebase deployer as the keyless custom-token signer", () => {
-    expect(fleetFirebaseSignerServiceAccountId("octogee-test")).toBe(
-      "firebase-deployer@octogee-test.iam.gserviceaccount.com",
+    expect(fleetFirebaseSignerServiceAccountId(TEST_TARGET.firebaseProjectId)).toBe(
+      `firebase-deployer@${TEST_TARGET.firebaseProjectId}.iam.gserviceaccount.com`,
     );
   });
 

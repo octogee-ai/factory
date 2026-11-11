@@ -18,7 +18,7 @@ set -euo pipefail
 #   - Its own PVCs (mattermost-data, gitea-shared-storage)
 #   - Its own helm release + K8s secrets + MM/Gitea bootstrap
 #   - Internal-only services (no ingress, no public URL)
-#   - SHARED octogee-test Firebase project (Auth + Firestore)
+#   - SHARED TEST Firebase project (Auth + Firestore)
 #
 # Custom namespaces are explicitly DISPOSABLE and NON-ROTATABLE.
 # To "rotate" secrets, re-run this script (which destroys + recreates).
@@ -124,6 +124,7 @@ fi
 DB_SLUG="${NAMESPACE//-/_}"
 
 # ── Safety gate: reserved namespace handling ───────────────────────────────
+TEST_NAMESPACE="$(octogee_deployment_target_field --environment=test namespace)"
 case "$NAMESPACE" in
   octogee|octogee-west)
     echo ""
@@ -146,7 +147,7 @@ case "$NAMESPACE" in
       exit 1
     fi
     ;;
-  octogee-test|octogee-test-west)
+  "$TEST_NAMESPACE"|"$TEST_NAMESPACE-west")
     echo ""
     echo -e "${YELLOW}${BOLD}═══════════════════════════════════════════════════════════${NC}"
     echo -e "${YELLOW}${BOLD}  ⚠️  NAMESPACE '$NAMESPACE' IS A SHARED TEST ENV${NC}"
@@ -237,7 +238,7 @@ echo -e "  DB slug:           ${BOLD}$DB_SLUG${NC}"
 echo -e "  Mattermost DB:     ${BOLD}$MM_DB_NAME${NC} (will be DROPped if it exists)"
 echo -e "  Gitea DB:          ${BOLD}$GITEA_DB_NAME${NC} (will be DROPped if it exists)"
 echo -e "  Cluster:           ${BOLD}$CLUSTER_NAME${NC}"
-echo -e "  Firebase (shared): ${BOLD}$FIREBASE_PROJECT${NC} (NOT touched — shared with octogee-test)"
+echo -e "  Firebase (shared): ${BOLD}$FIREBASE_PROJECT${NC} (NOT touched — shared with the TEST environment)"
 echo ""
 
 # ── Tool checks ────────────────────────────────────────────────────────────

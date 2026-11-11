@@ -16,7 +16,7 @@ const dirs: string[] = [];
 const env = {
   GATEWAY_CLASS: "shared",
   GATEWAY_ID: "walter",
-  API_PUBLIC_URL: "https://api-test.octogee.com",
+  API_PUBLIC_URL: "https://api.example.test",
   GATEWAY_REVISION_ID: "walter-r9",
   OPENCLAW_VERSION: "2026.7.1",
 };

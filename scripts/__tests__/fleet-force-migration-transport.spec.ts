@@ -10,7 +10,7 @@ function harness() {
       options?.stdin?.includes("boot-before") ? { version: 1, attemptId: "attempt", beforeBootId: "boot-before", afterBootId: "boot-after", ready: true } : { bootId: "boot-before", nativeOwner: { pid: 90, ownerId: "native-owner", port: 18789 } };
     return { code: 0, stdout: JSON.stringify(result), stderr: "" };
   });
-  return { pod, runKubectl, transport: createForceMigrationTransport({ namespace: "octogee-test", runKubectl }) };
+  return { pod, runKubectl, transport: createForceMigrationTransport({ namespace: "shared-test", runKubectl }) };
 }
 
 describe("native Fleet force transport", () => {

@@ -9,10 +9,10 @@ vi.mock("../lib/config.js", () => ({
   dlog: () => {},
   GIT_API_URL: "https://gitea.test/api/v1",
   GIT_SSH_HOST: "gitea.test",
-  OPENCLAW_DIR: "/tmp/octogee-test",
-  CUSTOMERS_DIR: "/tmp/octogee-test/users-doesnt-exist",
-  CUSTOMER_KEYS_DIR: "/tmp/octogee-test/keys",
-  AGENTS_DIR: "/tmp/octogee-test/agents",
+  OPENCLAW_DIR: "/tmp/octogee-fixture",
+  CUSTOMERS_DIR: "/tmp/octogee-fixture/users-doesnt-exist",
+  CUSTOMER_KEYS_DIR: "/tmp/octogee-fixture/keys",
+  AGENTS_DIR: "/tmp/octogee-fixture/agents",
 }));
 
 const { externalizeUserGitDir, gitExec, setRepoSshCommand } = await import("../lib/git.js");
@@ -108,11 +108,11 @@ describe("gitExec argv semantics (no shell)", () => {
 
   it("refuses clean-filter config before git add can execute repository-controlled code", () => {
     const marker = path.join(repo, "filter-ran");
-    execFileSync("git", ["config", "filter.octogee-test.clean", `touch ${marker}; cat`], {
+    execFileSync("git", ["config", "filter.octogee-fixture.clean", `touch ${marker}; cat`], {
       cwd: repo,
       env: process.env,
     });
-    fs.writeFileSync(path.join(repo, ".gitattributes"), "payload.txt filter=octogee-test\n");
+    fs.writeFileSync(path.join(repo, ".gitattributes"), "payload.txt filter=octogee-fixture\n");
     fs.writeFileSync(path.join(repo, "payload.txt"), "payload\n");
 
     expect(gitExec(repo, ["add", "-A"])).toBeNull();
@@ -126,8 +126,8 @@ describe("gitExec argv semantics (no shell)", () => {
   });
 
   it("ignores agent-writable Git pointers and uses platform-owned user metadata", () => {
-    const userRepo = "/tmp/octogee-test/users-doesnt-exist/alice";
-    const metadataRoot = "/tmp/octogee-test/git-metadata/alice";
+    const userRepo = "/tmp/octogee-fixture/users-doesnt-exist/alice";
+    const metadataRoot = "/tmp/octogee-fixture/git-metadata/alice";
     fs.rmSync(userRepo, { recursive: true, force: true });
     fs.rmSync(metadataRoot, { recursive: true, force: true });
     fs.mkdirSync(userRepo, { recursive: true });
@@ -150,7 +150,7 @@ describe("gitExec argv semantics (no shell)", () => {
       fs.rmSync(canonical, { recursive: true, force: true });
       execFileSync("git", ["clone", "--bare", userRepo, canonical], { env: process.env });
       setRepoSshCommand(userRepo, "alice", { fetchCanonical: fetchCanonicalFrom(canonical) });
-      const trustedGitDir = "/tmp/octogee-test/git-metadata/alice/workspace.git";
+      const trustedGitDir = "/tmp/octogee-fixture/git-metadata/alice/workspace.git";
       expect(execFileSync("git", ["config", "--file", path.join(trustedGitDir, "config"), "remote.origin.url"], {
         encoding: "utf8",
         env: process.env,
@@ -164,13 +164,13 @@ describe("gitExec argv semantics (no shell)", () => {
       const attacker = fs.mkdtempSync(path.join(os.tmpdir(), "git-exec-attacker-"));
       const marker = path.join(userRepo, "filter-ran");
       execFileSync("git", ["init", "-q", attacker], { env: process.env });
-      execFileSync("git", ["config", "filter.octogee-test.clean", `touch ${marker}; cat`], {
+      execFileSync("git", ["config", "filter.octogee-fixture.clean", `touch ${marker}; cat`], {
         cwd: attacker,
         env: process.env,
       });
       fs.chmodSync(path.join(userRepo, ".git"), 0o644);
       fs.writeFileSync(path.join(userRepo, ".git"), `gitdir: ${path.join(attacker, ".git")}\n`);
-      fs.writeFileSync(path.join(userRepo, ".gitattributes"), "payload.txt filter=octogee-test\n");
+      fs.writeFileSync(path.join(userRepo, ".gitattributes"), "payload.txt filter=octogee-fixture\n");
       fs.writeFileSync(path.join(userRepo, "payload.txt"), "payload\n");
 
       expect(gitExec(userRepo, ["add", "-A"])).not.toBeNull();
@@ -184,9 +184,9 @@ describe("gitExec argv semantics (no shell)", () => {
   });
 
   it("quarantines symlinked user Git metadata without dereferencing it", () => {
-    const userRepo = "/tmp/octogee-test/users-doesnt-exist/symlinked";
-    const metadataRoot = "/tmp/octogee-test/git-metadata/symlinked";
-    const quarantine = "/tmp/octogee-test/git-metadata-quarantine/symlinked";
+    const userRepo = "/tmp/octogee-fixture/users-doesnt-exist/symlinked";
+    const metadataRoot = "/tmp/octogee-fixture/git-metadata/symlinked";
+    const quarantine = "/tmp/octogee-fixture/git-metadata-quarantine/symlinked";
     const attacker = fs.mkdtempSync(path.join(os.tmpdir(), "git-exec-symlink-attacker-"));
     fs.rmSync(userRepo, { recursive: true, force: true });
     fs.rmSync(metadataRoot, { recursive: true, force: true });

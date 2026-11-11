@@ -138,7 +138,7 @@ export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): st
     // Plan fields shape the effective model config through the ensure's byot reassert —
     // an upgrade (or signup-offer grant) must reconverge a mounted user's model picks.
     // Only the fields plan resolution reads: hashing the whole subscription object would
-    // re-ensure every customer on routine Stripe churn (currentPeriodEnd on renewal).
+    // re-ensure every customer on routine billing churn (currentPeriodEnd on renewal).
     tier: snapshot.tier,
     selectedTier: snapshot.selectedTier ?? null,
     subscription: planSubscriptionSlice(snapshot.subscription),

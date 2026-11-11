@@ -32,6 +32,7 @@ import {
   getTierConfig,
   STRIPE_PRICE_IDS,
 } from "@octogee/shared/types/billing-tiers";
+import { TEST_TARGET } from "./fixtures/deployment.js";
 
 describe("seed-orchestrator-config args", () => {
   it("validates env and the deployment target before Firebase init", () => {
@@ -44,7 +45,7 @@ describe("seed-orchestrator-config args", () => {
       args: {
         env: "test",
         deploymentTargetId: "test-central",
-        firebaseProjectId: "octogee-test",
+        firebaseProjectId: TEST_TARGET.firebaseProjectId,
         force: true,
         dryRun: true,
         check: false,

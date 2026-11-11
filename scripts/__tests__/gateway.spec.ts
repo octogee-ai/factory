@@ -150,7 +150,7 @@ it("sets maxConcurrent to 8 when missing", () => {
   });
 
   it("enforces fs.workspaceOnly on agents", () => {
-    const agent: any = { id: "octogee-test-coach", tools: {} };
+    const agent: any = { id: "octogee-tester-coach", tools: {} };
     if (/^octogee-.+-coach$/.test(agent.id)) {
       agent.tools.fs = { workspaceOnly: true };
     }

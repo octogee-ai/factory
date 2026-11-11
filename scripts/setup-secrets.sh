@@ -101,7 +101,7 @@ case "$ENV" in
     NS_SLUG="test"
     ;;
   custom)
-    # Ephemeral/feature namespaces sharing the octogee-test Firebase project.
+    # Ephemeral/feature namespaces sharing the TEST Firebase project.
     [[ -z "$CUSTOM_NS" ]] && { echo "--env=custom requires --namespace=NAME"; exit 1; }
     [[ "$CUSTOM_NS" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "Invalid namespace '$CUSTOM_NS'"; exit 1; }
     [[ ${#CUSTOM_NS} -le 63 ]] || { echo "Namespace too long (max 63)"; exit 1; }
@@ -1039,7 +1039,7 @@ ksecret invite-secret --from-literal=secret="${INVITE_SECRET:-placeholder}"
 # Pre-create them with placeholder values; runtime services read the canonical
 # K8s secrets directly where possible.
 info "Pre-creating Firebase function secrets in Secret Manager (suppress deploy prompts)..."
-SM_PROJECT_CF="$FIREBASE_PROJECT"  # Functions run in the Firebase project (octogee-test for test, octogee for prod)
+SM_PROJECT_CF="$FIREBASE_PROJECT"  # Functions run in the target's Firebase project
 
 function_secret_value() {
   case "$1" in

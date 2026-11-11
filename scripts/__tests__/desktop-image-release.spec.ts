@@ -5,6 +5,7 @@ import { createDocumentFixtureStore } from '@octogee/core/testing/journal-store'
 import { runWithOperationAuditIntent } from '@octogee/core/operation-audit';
 import { runDesktopArchivePrune, runDesktopImagePublication, type DesktopArchiveDeps, type DesktopPublicationDeps } from '../lib/desktop-image-publication';
 import * as releaseSource from '../lib/desktop-image-release.mjs';
+import { TEST_TARGET } from "./fixtures/deployment.js";
 
 vi.mock('@octogee/core/artifact-registry', () => ({ createCentralReleaseAuthority: vi.fn() }));
 vi.mock('@octogee/core/operation-audit', () => ({ runWithOperationAuditIntent: vi.fn() }));
@@ -52,7 +53,7 @@ it('does not skip a desktop companion whose registry lookup is denied', async ()
 });
 
 it('plans an accepted desktop companion even when main was published without a desktop image', async () => {
-  const artifact = { project: 'octogee-test', name: 'octogee-computer-fixture', id: '123', sourceSha: 'a'.repeat(40), inputFingerprint: 'b'.repeat(64), acceptance: 'resize-reboot-v1' as const };
+  const artifact = { project: TEST_TARGET.clusterProjectId, name: 'octogee-computer-fixture', id: '123', sourceSha: 'a'.repeat(40), inputFingerprint: 'b'.repeat(64), acceptance: 'resize-reboot-v1' as const };
   const { input, client, log } = publication();
   vi.spyOn(releaseSource, 'resolveDesktopRelease').mockResolvedValue({ desktopImage: artifact, digest: `sha256:${'c'.repeat(64)}` });
   const request = vi.fn()
@@ -80,7 +81,7 @@ it('still fails manifest lookup errors instead of skipping publication', async (
 
 it('still inspects and plans publication when the optional desktop artifact is present', async () => {
   const artifact = {
-    project: 'octogee-test', name: 'octogee-computer-fixture', id: '123', sourceSha: 'a'.repeat(40),
+    project: TEST_TARGET.clusterProjectId, name: 'octogee-computer-fixture', id: '123', sourceSha: 'a'.repeat(40),
     inputFingerprint: 'b'.repeat(64), acceptance: 'resize-reboot-v1',
   };
   const { input, client, log } = publication(artifact);
@@ -95,7 +96,7 @@ it('still inspects and plans publication when the optional desktop artifact is p
 });
 
 const publishedArtifact = {
-  project: 'octogee-test', name: 'octogee-computer-fixture', id: '123', sourceSha: 'a'.repeat(40),
+  project: TEST_TARGET.clusterProjectId, name: 'octogee-computer-fixture', id: '123', sourceSha: 'a'.repeat(40),
   inputFingerprint: 'b'.repeat(64), acceptance: 'resize-reboot-v1',
 };
 function publicationCloud(): DesktopPublicationDeps {
@@ -126,11 +127,11 @@ it('prunes the archive inside the audited publication once the family head has m
   const cloud = publicationCloud();
   const archive = archiveFixture();
   await runDesktopImagePublication({ ...input, cloud, archive, archiveKeep: 2 });
-  expect(cloud.setFamily).toHaveBeenCalledWith('octogee-test', publishedArtifact.name);
+  expect(cloud.setFamily).toHaveBeenCalledWith(TEST_TARGET.clusterProjectId, publishedArtifact.name);
   expect(runWithOperationAuditIntent).toHaveBeenCalledOnce();
-  expect(archive.listImages).toHaveBeenCalledWith('octogee-test');
+  expect(archive.listImages).toHaveBeenCalledWith(TEST_TARGET.clusterProjectId);
   expect(archive.deleteImage).toHaveBeenCalledOnce();
-  expect(archive.deleteImage).toHaveBeenCalledWith('octogee-test', 'a1');
+  expect(archive.deleteImage).toHaveBeenCalledWith(TEST_TARGET.clusterProjectId, 'a1');
   expect(log).toHaveBeenCalledWith(expect.stringContaining('"desktopArchivePrune"'));
 });
 
@@ -142,9 +143,9 @@ it('keeps the publication when the archive prune is denied, and reports the fail
   archive.listDiskSourceImages.mockRejectedValue(new Error('compute.disks.list denied'));
   const reported = vi.spyOn(console, 'error').mockImplementation(() => {});
   await expect(runDesktopImagePublication({ ...input, cloud, archive })).resolves.toBeUndefined();
-  expect(cloud.setFamily).toHaveBeenCalledWith('octogee-test', publishedArtifact.name);
+  expect(cloud.setFamily).toHaveBeenCalledWith(TEST_TARGET.clusterProjectId, publishedArtifact.name);
   expect(archive.deleteImage).not.toHaveBeenCalled();
-  expect(reported).toHaveBeenCalledWith(expect.stringContaining('archive prune of octogee-test failed'));
+  expect(reported).toHaveBeenCalledWith(expect.stringContaining(`archive prune of ${TEST_TARGET.clusterProjectId} failed`));
   expect(reported).toHaveBeenCalledWith(expect.stringContaining('compute.disks.list denied'));
 });
 
@@ -154,13 +155,13 @@ it('audits an on-demand archive prune only when it applies removals', async () =
   const archive = archiveFixture();
   const prune = { environment: 'test' as const, keep: 2, actor: 'fixture', why: 'fixture', store: createDocumentFixtureStore({}), auth: new GoogleAuth(), archive };
   const dry = await runDesktopArchivePrune({ ...prune, apply: false });
-  expect(dry).toMatchObject({ project: 'octogee-test', kept: ['a3', 'a2'], remove: ['a1'], removed: 0 });
+  expect(dry).toMatchObject({ project: TEST_TARGET.clusterProjectId, kept: ['a3', 'a2'], remove: ['a1'], removed: 0 });
   expect(runWithOperationAuditIntent).not.toHaveBeenCalled();
   expect(archive.deleteImage).not.toHaveBeenCalled();
   const applied = await runDesktopArchivePrune({ ...prune, apply: true });
   expect(runWithOperationAuditIntent).toHaveBeenCalledWith(
     prune.store, expect.objectContaining({ actor: 'fixture', mutation: { action: 'prune-desktop-archive' } }), expect.anything(), expect.any(Function),
   );
-  expect(archive.deleteImage).toHaveBeenCalledWith('octogee-test', 'a1');
+  expect(archive.deleteImage).toHaveBeenCalledWith(TEST_TARGET.clusterProjectId, 'a1');
   expect(applied).toMatchObject({ remove: ['a1'], removed: 1 });
 });

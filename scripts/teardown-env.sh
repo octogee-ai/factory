@@ -1361,10 +1361,7 @@ echo "    kubectl exec -n $K8S_NAMESPACE --context $K8S_CONTEXT \"\$SLOT\" -- cu
 echo "    kubectl exec -n $K8S_NAMESPACE --context $K8S_CONTEXT \"\$SLOT\" -- curl -s http://127.0.0.1:3001/api/site/health"
 echo "    kubectl exec -n $K8S_NAMESPACE --context $K8S_CONTEXT \"\$SLOT\" -- curl -s http://127.0.0.1:9080/health"
 echo "  Public smoke (Option C — MM must be reachable directly with PAT auth):"
-case "$ENV" in
-  prod) echo "    curl -sk https://mattermost.octogee.com/api/v4/system/ping" ;;
-  test) echo "    curl -sk https://mattermost-test.octogee.com/api/v4/system/ping" ;;
-esac
+echo "    curl -sk ${TARGET_MATTERMOST_ORIGIN}/api/v4/system/ping"
 echo ""
 if ! $FULL; then
   echo "  Note: --full was NOT used. Cloud SQL data, Firestore, Auth users,"

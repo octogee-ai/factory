@@ -61,7 +61,7 @@ function runVerifier(options: RunOptions = {}) {
           clusterProjectId: "octogee",
           region: "us-central1",
           clusterName: "octogee-gateway",
-          namespace: "octogee-test",
+          namespace: "shared-test",
         },
       },
     }),
@@ -74,7 +74,7 @@ set -euo pipefail
 printf 'kubectl %s\\n' "$*" >> "$FAKE_CALL_LOG"
 namespace=octogee
 target=prod
-if [[ "$*" == *"--namespace=octogee-test"* || "$*" == *"pv-test-"* ]]; then namespace=octogee-test; target=test; fi
+if [[ "$*" == *"--namespace=shared-test"* || "$*" == *"pv-test-"* ]]; then namespace=shared-test; target=test; fi
 case "$*" in
   *" get pvc gitea-shared-storage "*) printf '{"metadata":{"name":"gitea-shared-storage","namespace":"%s"},"spec":{"volumeName":"pv-%s-gitea"},"status":{"phase":"Bound"}}\\n' "$namespace" "$target" ;;
   *" get pvc mattermost-data "*) printf '{"metadata":{"name":"mattermost-data","namespace":"%s"},"spec":{"volumeName":"pv-%s-mattermost"},"status":{"phase":"Bound"}}\\n' "$namespace" "$target" ;;

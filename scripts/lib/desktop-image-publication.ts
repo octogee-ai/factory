@@ -18,7 +18,7 @@ export interface DesktopPublicationDeps {
 }
 
 export function desktopImageProject(environment: 'test' | 'prod'): string {
-  return environment === 'test' ? 'octogee-test' : 'octogee';
+  return deploymentEnvironmentSettings(environment).clusterProjectId;
 }
 
 export interface DesktopPublicationPlan {

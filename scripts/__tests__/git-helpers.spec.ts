@@ -12,10 +12,10 @@ vi.mock("../lib/config.js", () => ({
   dlog: () => {},
   GIT_API_URL: "https://gitea.test/api/v1",
   GIT_SSH_HOST: "gitea.test",
-  OPENCLAW_DIR: "/tmp/octogee-test",
-  CUSTOMERS_DIR: "/tmp/octogee-test/users-doesnt-exist",
-  CUSTOMER_KEYS_DIR: "/tmp/octogee-test/keys",
-  AGENTS_DIR: "/tmp/octogee-test/agents",
+  OPENCLAW_DIR: "/tmp/octogee-fixture",
+  CUSTOMERS_DIR: "/tmp/octogee-fixture/users-doesnt-exist",
+  CUSTOMER_KEYS_DIR: "/tmp/octogee-fixture/keys",
+  AGENTS_DIR: "/tmp/octogee-fixture/agents",
 }));
 
 const {
@@ -124,7 +124,7 @@ describe("execErrStderr", () => {
 describe("userSshKeyPath", () => {
   it("composes the per-slug key path under CUSTOMER_KEYS_DIR", () => {
     expect(userSshKeyPath("acme")).toBe(
-      "/tmp/octogee-test/keys/acme/id_ed25519",
+      "/tmp/octogee-fixture/keys/acme/id_ed25519",
     );
   });
 });

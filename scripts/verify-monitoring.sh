@@ -85,7 +85,9 @@ for monitor in gmp-kube-state-metrics octogee-api octogee-gateway gateway-edge g
   assert_release_ownership clusterpodmonitoring "$monitor"
 done
 assert_release_ownership clusterrules octogee-alerts
-for namespace in octogee octogee-test; do
+prod_namespace="$(octogee_deployment_target_field --environment=prod namespace)"
+test_namespace="$(octogee_deployment_target_field --environment=test namespace)"
+for namespace in "$prod_namespace" "$test_namespace"; do
   assert_release_ownership networkpolicy allow-gateway-edge-monitoring-scrape "$namespace"
 done
 

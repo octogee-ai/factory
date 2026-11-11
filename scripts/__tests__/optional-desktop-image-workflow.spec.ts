@@ -23,7 +23,7 @@ it('builds Desktop as part of the selected main build before shipment', () => {
 });
 
 it.each(['', JSON.stringify({
-  project: 'octogee-test', name: 'octogee-computer-fixture', id: '123', sourceSha: 'a'.repeat(40),
+  project: 'firebase-test', name: 'octogee-computer-fixture', id: '123', sourceSha: 'a'.repeat(40),
   inputFingerprint: 'b'.repeat(64), acceptance: 'resize-reboot-v1',
 })])('authors a valid immutable manifest with an optional desktop output (%s)', artifact => {
   const writer = readFileSync(resolve(import.meta.dirname, '../../scripts/ci/publish-manifest.sh'), 'utf8');

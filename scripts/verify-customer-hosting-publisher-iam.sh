@@ -9,19 +9,14 @@ for arg in "$@"; do
   esac
 done
 
-case "${DEPLOYMENT_TARGET}" in
-  prod-central)
-    HOSTING_PROJECT_ID="octogee-customer-hosting"
-    CLUSTER_PROJECT_ID="octogee"
-    NAMESPACE="octogee"
-    ;;
-  test-central)
-    HOSTING_PROJECT_ID="octogee-customer-hosting-test"
-    CLUSTER_PROJECT_ID="octogee-test"
-    NAMESPACE="octogee-test"
-    ;;
-  *) echo "Unsupported deployment target: ${DEPLOYMENT_TARGET:-<missing>}" >&2; exit 2 ;;
-esac
+source "$(dirname "${BASH_SOURCE[0]}")/lib/deployment-target.sh"
+if [[ -z "${DEPLOYMENT_TARGET}" ]] || ! octogee_load_deployment_target "--target=${DEPLOYMENT_TARGET}"; then
+  echo "Unsupported deployment target: ${DEPLOYMENT_TARGET:-<missing>}" >&2
+  exit 2
+fi
+HOSTING_PROJECT_ID="${TARGET_CUSTOMER_HOSTING_PROJECT}"
+CLUSTER_PROJECT_ID="${TARGET_CLUSTER_PROJECT}"
+NAMESPACE="${TARGET_NAMESPACE}"
 
 PUBLISHER_EMAIL="octogee-project-publisher@${HOSTING_PROJECT_ID}.iam.gserviceaccount.com"
 PUBLISHER_MEMBER="serviceAccount:${PUBLISHER_EMAIL}"

@@ -537,7 +537,7 @@ offline CLI reproduce HTTP 500 with unmarked policy, then return 200 after six
 preserved-store detaches with corrected policy. Target history/anchors and the
 source anchor survive; the source's held model response finishes afterward.
 Process custody and watcher ownership are local fixtures, not a deployed fleet
-trial. Both native config-writer/Doctor cases and 76 current-catalog PostgreSQL
+run. Both native config-writer/Doctor cases and 76 current-catalog PostgreSQL
 permission, handoff and recovery controls pass.
 
 ### Qualification and publication

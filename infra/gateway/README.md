@@ -52,7 +52,7 @@ Deployed as part of the Helm umbrella chart:
 helm upgrade --install octogee helm/octogee \
   --server-side=true --force-conflicts \
   -f helm/octogee/values.test.yaml \
-  -n octogee-test --create-namespace
+  -n <test-namespace> --create-namespace
 
 # Prod
 helm upgrade --install octogee helm/octogee \

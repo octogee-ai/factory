@@ -16,7 +16,7 @@ vi.mock("../lib/config.js", () => ({
   OPENCLAW_DIR: paths.root,
   CUSTOMERS_DIR: paths.users,
   CUSTOMER_KEYS_DIR: paths.keys,
-  AGENTS_DIR: "/tmp/octogee-test/agents",
+  AGENTS_DIR: "/tmp/octogee-fixture/agents",
   BLOB_SYNC_MAX_CONCURRENT: 2,
   BLOB_SYNC_MAX_SIZE: 100 * 1024 * 1024,
 }));

@@ -63,8 +63,7 @@ spec:
             # spellings the route handlers use (GCLOUD_PROJECT,
             # GCP_PROJECT_ID, GOOGLE_CLOUD_PROJECT, FIREBASE_PROJECT_ID)
             # all derive from the pod's namespace via downward API.
-            # PROD namespace `octogee` = PROD project `octogee`,
-            # TEST namespace `octogee-test` = TEST project `octogee-test`.
+            # Each environment's namespace is named after its Google project.
             # Matches the glm-controller pattern; eliminates the
             # values.test.yaml override surface and the no-env-conditionals
             # rule (memory feedback_no_env_conditionals).

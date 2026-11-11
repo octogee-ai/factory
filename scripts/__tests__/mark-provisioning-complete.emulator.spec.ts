@@ -1,13 +1,14 @@
 
 
 import { afterAll, describe, expect, it } from "vitest";
+import { EMULATOR_PROJECT } from "./fixtures/emulator.js";
 
 process.env.FIRESTORE_EMULATOR_HOST ??= "127.0.0.1:8088";
-process.env.FIREBASE_PROJECT_ID ??= "octogee-test";
+process.env.FIREBASE_PROJECT_ID ??= EMULATOR_PROJECT;
 
 const { deleteApp, getApps, initializeApp } = await import("firebase-admin/app");
 const { getFirestore, FieldValue } = await import("firebase-admin/firestore");
-if (getApps().length === 0) initializeApp({ projectId: "octogee-test" });
+if (getApps().length === 0) initializeApp({ projectId: EMULATOR_PROJECT });
 const db = getFirestore();
 
 const { markProvisioningComplete: markProvisioningCompleteImpl } = await import("@octogee/core/provisionSteps");

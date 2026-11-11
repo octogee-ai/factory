@@ -95,7 +95,7 @@ const run = (harness: Harness, environment: Record<string, string> = {}) =>
       "--instance=octogee-pg-west",
       `--terraform-bin=${harness.terraform}`,
       `--selector=${selector}`,
-      "--receipt-bucket=gs://octogee-test/receipts",
+      "--receipt-bucket=gs://firebase-test/receipts",
       "--run-timestamp=20260722T203000Z",
       "--git-commit=9379a5e5b",
       `--temp-dir=${harness.tempDir}`,

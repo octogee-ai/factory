@@ -23,7 +23,7 @@ export function withUserClaim<T extends Record<string, string | undefined>>(
   env: T,
   builderSlug: string,
 ): T & { OPENCLAW_DIR: string; GATEWAY_ID: string } {
-  const openclawDir = env.OPENCLAW_DIR || mkdtempSync(path.join(tmpdir(), "octogee-test-claim-"));
+  const openclawDir = env.OPENCLAW_DIR || mkdtempSync(path.join(tmpdir(), "octogee-claim-"));
   const gatewayId = env.GATEWAY_ID?.trim() || TEST_CLAIM_GATEWAY_ID;
   writeTestUserClaim(openclawDir, builderSlug, gatewayId);
   return { ...env, OPENCLAW_DIR: openclawDir, GATEWAY_ID: gatewayId };
