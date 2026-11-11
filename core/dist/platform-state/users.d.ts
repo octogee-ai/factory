@@ -114,6 +114,7 @@ export interface NewUserRecord {
 export interface AdmitUserInput {
     readonly slug: string;
     readonly persona: UserPersona | null;
+    readonly createdAt: TimeInput;
     readonly provisioningStartedAt: TimeInput;
 }
 export interface UserPatch {

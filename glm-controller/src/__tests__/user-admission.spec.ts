@@ -39,7 +39,7 @@ function harness(requests: readonly UserAdmissionRequest[]) {
 }
 
 describe("reconcileUserAdmissions", () => {
-  it("admits each pending user with a server-time start, then applies the recorded decision", async () => {
+  it("admits each pending user with a server creation time and start, then applies the recorded decision", async () => {
     const run = harness([alice, bob]);
 
     await expect(reconcileUserAdmissions(run.deps)).resolves.toEqual({
@@ -49,8 +49,8 @@ describe("reconcileUserAdmissions", () => {
     });
 
     expect(run.admit.mock.calls).toEqual([
-      ["alice", { slug: "alice", persona: { vibe: "calm" }, provisioningStartedAt: { serverNow: true } }],
-      ["bob", { slug: "bob", persona: null, provisioningStartedAt: { serverNow: true } }],
+      ["alice", { slug: "alice", persona: { vibe: "calm" }, createdAt: { serverNow: true }, provisioningStartedAt: { serverNow: true } }],
+      ["bob", { slug: "bob", persona: null, createdAt: { serverNow: true }, provisioningStartedAt: { serverNow: true } }],
     ]);
     expect(run.source.markAdmitted.mock.calls).toEqual([["alice"], ["bob"]]);
     expect(run.pending.size).toBe(0);

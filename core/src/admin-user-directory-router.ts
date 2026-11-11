@@ -430,12 +430,15 @@ async function summarizeUsers(
     buildUserSummary(userRecord, accountFor(accounts, userRecord.uid), brokerUsage.get(userRecord.uid) ?? {}));
 }
 
+function newestFirstWithUndatedLast(a: string | null, b: string | null): number {
+  if (a === null || b === null) return Number(a === null) - Number(b === null);
+  return b.localeCompare(a);
+}
+
 async function sortedUsers(directory: UserDirectory, sort: UserSort): Promise<UserSummary[]> {
   const summaries = await summarizeUsers(directory, await directory.store.users.records.listAll());
   const key = (user: UserSummary) => (sort === "lastActive" ? user.lastActive : user.createdAt);
-  return summaries
-    .filter((user) => key(user) !== null)
-    .sort((a, b) => key(b)!.localeCompare(key(a)!) || b.uid.localeCompare(a.uid));
+  return summaries.sort((a, b) => newestFirstWithUndatedLast(key(a), key(b)) || b.uid.localeCompare(a.uid));
 }
 
 async function unfilteredUserPage(

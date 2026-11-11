@@ -685,8 +685,12 @@ function userRecordWrites(access: UserRecordAccess): Omit<UserRecordsRepository,
             key,
             ref(uid),
             encodeMergeDocument(
-              { onboardingStep: ADMITTED_STEP, provisioning: { status: "in_progress", startedAt: input.provisioningStartedAt } },
-              STORED_AS_NUMBERS,
+              {
+                createdAt: input.createdAt,
+                onboardingStep: ADMITTED_STEP,
+                provisioning: { status: "in_progress", startedAt: input.provisioningStartedAt },
+              },
+              CREATED_AT_TIMESTAMP,
             ),
           );
           return;
@@ -703,11 +707,12 @@ function userRecordWrites(access: UserRecordAccess): Omit<UserRecordsRepository,
           ref(uid),
           encodePatch(
             {
+              ...(current.createdAt === null ? { createdAt: input.createdAt } : {}),
               onboardingStep: ADMITTED_STEP,
               [PROVISIONING_PATHS.status]: "in_progress",
               [PROVISIONING_PATHS.startedAt]: input.provisioningStartedAt,
             },
-            STORED_AS_NUMBERS,
+            CREATED_AT_TIMESTAMP,
           ),
         );
       });

@@ -522,7 +522,11 @@ function userRecordWrites(access) {
             await session.atomically(name, async (fenced) => {
                 const current = decodeUser(await fenced.readForFence(name, ref(uid)), undefined);
                 if (current === null) {
-                    await fenced.merge(name, key, ref(uid), encodeMergeDocument({ onboardingStep: ADMITTED_STEP, provisioning: { status: "in_progress", startedAt: input.provisioningStartedAt } }, STORED_AS_NUMBERS));
+                    await fenced.merge(name, key, ref(uid), encodeMergeDocument({
+                        createdAt: input.createdAt,
+                        onboardingStep: ADMITTED_STEP,
+                        provisioning: { status: "in_progress", startedAt: input.provisioningStartedAt },
+                    }, CREATED_AT_TIMESTAMP));
                     return;
                 }
                 if (current.provisioning.status !== undefined) {
@@ -532,10 +536,11 @@ function userRecordWrites(access) {
                     throw userFenceMismatch(key, "slug", input.slug, current.slug);
                 }
                 await fenced.update(name, key, ref(uid), encodePatch({
+                    ...(current.createdAt === null ? { createdAt: input.createdAt } : {}),
                     onboardingStep: ADMITTED_STEP,
                     [PROVISIONING_PATHS.status]: "in_progress",
                     [PROVISIONING_PATHS.startedAt]: input.provisioningStartedAt,
-                }, STORED_AS_NUMBERS));
+                }, CREATED_AT_TIMESTAMP));
             });
         },
         async setGatewayMirror(uid, mirror, fence) {

@@ -49,7 +49,7 @@ function fixtureFor(harness: PlatformStateHarness): UserFixture {
       await store.users.records.setGatewayMirror(uid, { gatewayId });
     },
     async admitted(uid, slug = uid) {
-      await store.users.records.admit(uid, { slug, persona: null, provisioningStartedAt: NOW });
+      await store.users.records.admit(uid, { slug, persona: null, createdAt: NOW, provisioningStartedAt: NOW });
     },
     async row(table, where, values) {
       const rows = await harness.query(`SELECT * FROM $schema.${table} WHERE ${where}`, values);

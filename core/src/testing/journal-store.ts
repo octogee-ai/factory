@@ -751,8 +751,10 @@ function userRecordRepository(
     })),
     listAll: async () => all(),
     list: async (page) => fixturePage(
-      all().filter((record) => record.createdAt !== null)
-        .sort((a, b) => b.createdAt! - a.createdAt! || b.uid.localeCompare(a.uid)),
+      all().sort((a, b) =>
+        Number(a.createdAt === null) - Number(b.createdAt === null) ||
+        (b.createdAt ?? 0) - (a.createdAt ?? 0) ||
+        b.uid.localeCompare(a.uid)),
       (record) => record.uid,
       page,
       (uid) => new MissingRecordError(key(uid)),
@@ -780,6 +782,7 @@ function userRecordRepository(
       }
       write(() => documents.set(path, {
         ...row,
+        createdAt: row?.createdAt ?? resolveServerNow(input.createdAt),
         onboardingStep: "complete",
         provisioning: { ...provisioning, status: "in_progress", startedAt: input.provisioningStartedAt },
       }));

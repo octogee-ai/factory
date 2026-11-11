@@ -12,7 +12,7 @@ const BOB_SITE = "octogee-bob-site";
 
 async function seedFleet({ records, place, harness }: UserFixture): Promise<void> {
   await records.create({ uid: "alice", createdAt: NOW });
-  await records.admit("alice", { slug: "alice", persona: null, provisioningStartedAt: NOW });
+  await records.admit("alice", { slug: "alice", persona: null, createdAt: NOW, provisioningStartedAt: NOW });
   await records.patch("alice", {
     role: "admin",
     mattermostUserId: "mm-alice",
@@ -22,7 +22,7 @@ async function seedFleet({ records, place, harness }: UserFixture): Promise<void
   await place("alice", "g1");
 
   await records.create({ uid: "bob", createdAt: NOW + 1 });
-  await records.admit("bob", { slug: "bob", persona: null, provisioningStartedAt: NOW });
+  await records.admit("bob", { slug: "bob", persona: null, createdAt: NOW, provisioningStartedAt: NOW });
   await records.patch("bob", { openclaw: { status: "provisioning" } });
   await records.addAgents("bob", ["octogee-bob-coach", BOB_SITE]);
   await records.setFence("bob", "sourceTransferFence", { sourceGatewayId: "g2", targetGatewayId: "g1" }, "absent");
@@ -106,21 +106,27 @@ describe.skipIf(!dsn)("PostgreSQL user records: queries", () => {
     expect(all.find((record) => record.uid === "dave")!.createdAt).toBeNull();
   });
 
-  it("lists newest first by createdAt, pages with a uid cursor, and leaves out records without createdAt", async () => {
-    const { records } = fixture();
+  it("lists newest first by createdAt with records lacking one last, and pages with a uid cursor", async () => {
+    const { records, harness } = fixture();
     await seedFleet(fixture());
+    await harness.query("INSERT INTO $schema.users (uid) VALUES ('erin')");
 
     const first = await records.list({ limit: 2 });
     expect(first.items.map((record) => record.uid)).toEqual(["carol", "bob"]);
     expect(first.next).toBe("bob");
     const second = await records.list({ limit: 2, after: first.next! });
-    expect(second.items.map((record) => record.uid)).toEqual(["alice"]);
+    expect(second.items.map((record) => record.uid)).toEqual(["alice", "erin"]);
     expect(second.items[0].role).toBe("admin");
-    expect(second.next).toBeNull();
+    expect(second.items[1].createdAt).toBeNull();
+    expect(second.next).toBe("erin");
+    const third = await records.list({ limit: 2, after: second.next! });
+    expect(third.items.map((record) => record.uid)).toEqual(["dave"]);
+    expect(third.next).toBeNull();
+    expect((await records.list({ limit: 10 })).items.map((record) => record.uid)).toEqual(["carol", "bob", "alice", "erin", "dave"]);
+    expect(await records.list({ limit: 2, after: "dave" })).toEqual({ items: [], next: null });
     await expect(records.list({ limit: 2, after: "gone" })).rejects.toMatchObject({
       constructor: MissingRecordError, record: { aggregate: "builder", key: "gone" },
     });
-    await expect(records.list({ limit: 2, after: "dave" })).rejects.toMatchObject({ constructor: MissingRecordError });
   });
 });
 
@@ -141,7 +147,7 @@ describe.skipIf(!dsn)("PostgreSQL user records: uniqueness", () => {
     await expect(records.patch("eve", { home: { computer: { instanceId: "i-alice" } as never } })).rejects.toMatchObject({
       constructor: DuplicateRecordError, lookup: "vmInstanceId", value: "i-alice",
     });
-    await expect(records.admit("eve", { slug: "bob", persona: null, provisioningStartedAt: NOW })).rejects.toMatchObject({
+    await expect(records.admit("eve", { slug: "bob", persona: null, createdAt: NOW, provisioningStartedAt: NOW })).rejects.toMatchObject({
       constructor: DuplicateRecordError, lookup: "slug", value: "bob",
     });
     expect(await records.get("eve")).toMatchObject({ slug: null, mattermostUserId: null, admitted: false, home: {} });

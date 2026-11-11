@@ -75,7 +75,7 @@ describe.skipIf(!dsn)("PostgreSQL user watch", { timeout: 30_000 }, () => {
     const listener = await watched(fixture(), { aggregate: "builders", filter: { uid: "alice" } });
     expect(snapshotOf(listener.events[0])).toEqual([]);
 
-    await records.admit("alice", { slug: "alice", persona: null, provisioningStartedAt: NOW });
+    await records.admit("alice", { slug: "alice", persona: null, createdAt: NOW, provisioningStartedAt: NOW });
     await untilChange(listener, { type: "added", key: "alice", record: expect.objectContaining({ admitted: true, role: null }) });
     await records.patch("bob", { workspaceId: "bob" });
     await records.addAgents("alice", ["octogee-alice-coach"]);

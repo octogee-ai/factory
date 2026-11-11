@@ -254,6 +254,59 @@ describe("GET /api/admin/users — search and filters cover every user", () => {
     expect(second.body.hasMore).toBe(false);
   });
 
+  function withUndated(count: number): Record<string, DocData> {
+    const undated = (name: string): [string, DocData] =>
+      [`users/uid-${name}`, userDoc({ username: name, email: `${name}@example.com`, displayName: name })];
+    return { ...directory(count), ...Object.fromEntries([undated("undated-a"), undated("undated-b")]) };
+  }
+
+  const usernames = (res: { body: { items: Array<{ username: string }> } }) => res.body.items.map((item) => item.username);
+
+  it("lists users that have no creation time after the dated ones, across pages", async () => {
+    const app = makeApp(withUndated(3));
+
+    const first = await request(app).get("/api/admin/users?pageSize=4").expect(200);
+    expect(usernames(first)).toEqual(["user00", "user01", "user02", "undated-b"]);
+    expect(first.body.items[3].createdAt).toBeNull();
+    expect(first.body.hasMore).toBe(true);
+
+    const second = await request(app).get(`/api/admin/users?pageSize=4&cursor=${first.body.nextCursor}`).expect(200);
+    expect(usernames(second)).toEqual(["undated-a"]);
+    expect(second.body.hasMore).toBe(false);
+  });
+
+  it("keeps users that have no creation time in a filtered search, after the dated ones", async () => {
+    const app = makeApp(withUndated(2));
+
+    const all = await request(app).get("/api/admin/users?byot=off&pageSize=3").expect(200);
+    expect(usernames(all)).toEqual(["user00", "user01", "undated-b"]);
+    const rest = await request(app).get(`/api/admin/users?byot=off&pageSize=3&cursor=${all.body.nextCursor}`).expect(200);
+    expect(usernames(rest)).toEqual(["undated-a"]);
+
+    const found = await request(app).get("/api/admin/users?search=undated").expect(200);
+    expect(usernames(found)).toEqual(["undated-b", "undated-a"]);
+  });
+
+  it("lists users that have never been active last when sorting by last activity", async () => {
+    const active = (name: string, lastUpdated: string): [string, DocData] => [`users/uid-${name}`, userDoc({
+      username: name, email: `${name}@example.com`, displayName: name, usage: { lastUpdated: new Date(lastUpdated) },
+    })];
+    const app = makeApp({
+      ...directory(2),
+      ...Object.fromEntries([active("early", "2026-06-01T00:00:00.000Z"), active("recent", "2026-06-02T00:00:00.000Z")]),
+    });
+
+    const res = await request(app).get("/api/admin/users?sort=lastActive").expect(200);
+
+    expect(usernames(res)).toEqual(["recent", "early", "user01", "user00"]);
+  });
+
+  it("counts users that have no creation time in the stats", async () => {
+    const res = await request(makeApp(withUndated(2))).get("/api/admin/users/stats").expect(200);
+
+    expect(res.body).toMatchObject({ totalCustomers: 4, incompleteProvisioning: 0 });
+  });
+
   it.each([
     ["the unfiltered directory", "/api/admin/users?cursor=uid-gone"],
     ["a filtered search", "/api/admin/users?search=user&cursor=uid-gone"],

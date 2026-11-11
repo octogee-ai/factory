@@ -32,7 +32,7 @@ describe.skipIf(!dsn)("PostgreSQL user records: round trip", () => {
     };
 
     await records.create({ uid: "alice", createdAt: NOW });
-    await records.admit("alice", { slug: "alice", persona: { vibe: "playful", timeZone: "America/Denver" }, provisioningStartedAt: NOW + 1 });
+    await records.admit("alice", { slug: "alice", persona: { vibe: "playful", timeZone: "America/Denver" }, createdAt: NOW, provisioningStartedAt: NOW + 1 });
     await records.patch("alice", {
       mattermostUserId: "mm-alice",
       workspaceId: "alice",
@@ -111,7 +111,7 @@ describe.skipIf(!dsn)("PostgreSQL user records: round trip", () => {
 
   it("creates the record by setting only createdAt, keeping every other field of an existing one", async () => {
     const { records } = fixture();
-    await records.admit("alice", { slug: "alice", persona: { vibe: "calm" }, provisioningStartedAt: NOW });
+    await records.admit("alice", { slug: "alice", persona: { vibe: "calm" }, createdAt: NOW, provisioningStartedAt: NOW });
     const before = Date.now();
     await records.create({ uid: "alice", createdAt: { serverNow: true } });
     await records.create({ uid: "fresh", createdAt: NOW });
@@ -130,14 +130,14 @@ describe.skipIf(!dsn)("PostgreSQL user records: admission", () => {
     const { records } = fixture();
     await records.create({ uid: "alice", createdAt: NOW });
     const before = Date.now();
-    await records.admit("alice", { slug: "alice", persona: { vibe: "playful" }, provisioningStartedAt: { serverNow: true } });
+    await records.admit("alice", { slug: "alice", persona: { vibe: "playful" }, createdAt: NOW, provisioningStartedAt: { serverNow: true } });
 
     const admitted = (await records.get("alice"))!;
     expect(admitted).toMatchObject({ admitted: true, slug: "alice", persona: { vibe: "playful" }, provisioning: { status: "in_progress" } });
     expect(admitted.provisioning.startedAt).toBeGreaterThanOrEqual(before - 5_000);
     expect((await records.listAdmitted()).map((record) => record.uid)).toEqual(["alice"]);
 
-    await expect(records.admit("alice", { slug: "alice", persona: null, provisioningStartedAt: NOW })).rejects.toMatchObject({
+    await expect(records.admit("alice", { slug: "alice", persona: null, createdAt: NOW, provisioningStartedAt: NOW })).rejects.toMatchObject({
       constructor: FenceMismatchError,
       fence: "absent",
       expected: { provisioningStatus: null },
@@ -146,25 +146,40 @@ describe.skipIf(!dsn)("PostgreSQL user records: admission", () => {
     expect(await records.get("alice")).toEqual(admitted);
   });
 
-  it("admits by creating the record when it is absent and refuses a slug that differs from the record's", async () => {
+  it("admits by creating the record with its creation time when it is absent and refuses a slug that differs from the record's", async () => {
     const { records } = fixture();
-    await records.admit("fresh", { slug: "fresh", persona: null, provisioningStartedAt: NOW });
+    await records.admit("fresh", { slug: "fresh", persona: null, createdAt: NOW + 3, provisioningStartedAt: NOW });
     expect(await records.get("fresh")).toMatchObject({
-      admitted: true, slug: "fresh", persona: null, createdAt: null, provisioning: { status: "in_progress", startedAt: NOW },
+      admitted: true, slug: "fresh", persona: null, createdAt: NOW + 3, provisioning: { status: "in_progress", startedAt: NOW },
     });
 
     await records.create({ uid: "bob", createdAt: NOW });
     await records.patch("bob", { slug: "bob" });
-    await expect(records.admit("bob", { slug: "robert", persona: null, provisioningStartedAt: NOW })).rejects.toMatchObject({
+    await expect(records.admit("bob", { slug: "robert", persona: null, createdAt: NOW, provisioningStartedAt: NOW })).rejects.toMatchObject({
       constructor: FenceMismatchError, fence: "present", expected: { slug: "robert" }, actual: { slug: "bob" },
     });
     expect(await records.get("bob")).toMatchObject({ admitted: false, slug: "bob", provisioning: {} });
   });
 
+  it("stamps a server creation time on admission, fills one a record lacks, and keeps the one a record has", async () => {
+    const { records, harness } = fixture();
+    const before = Date.now();
+    await records.admit("fresh", { slug: "fresh", persona: null, createdAt: { serverNow: true }, provisioningStartedAt: NOW });
+    expect((await records.get("fresh"))!.createdAt).toBeGreaterThanOrEqual(before - 5_000);
+
+    await harness.query("INSERT INTO $schema.users (uid) VALUES ('undated')");
+    await records.admit("undated", { slug: "undated", persona: null, createdAt: NOW + 1, provisioningStartedAt: NOW });
+    expect((await records.get("undated"))!.createdAt).toBe(NOW + 1);
+
+    await records.create({ uid: "alice", createdAt: NOW });
+    await records.admit("alice", { slug: "alice", persona: null, createdAt: NOW + 2, provisioningStartedAt: NOW });
+    expect((await records.get("alice"))!.createdAt).toBe(NOW);
+  });
+
   it("admits a record that has no slug yet by writing the slug it was handed", async () => {
     const { records } = fixture();
     await records.create({ uid: "carol", createdAt: NOW });
-    await records.admit("carol", { slug: "carol", persona: { timeZone: "UTC" }, provisioningStartedAt: NOW });
+    await records.admit("carol", { slug: "carol", persona: { timeZone: "UTC" }, createdAt: NOW, provisioningStartedAt: NOW });
     expect(await records.findBySlug("carol")).toMatchObject({ uid: "carol", admitted: true, persona: { timeZone: "UTC" } });
   });
 });
@@ -174,7 +189,7 @@ describe.skipIf(!dsn)("PostgreSQL user records: patches", () => {
 
   it("patches each group field by field, so siblings survive and cleared fields disappear", async () => {
     const { records } = fixture();
-    await records.admit("alice", { slug: "alice-renamed", persona: null, provisioningStartedAt: NOW });
+    await records.admit("alice", { slug: "alice-renamed", persona: null, createdAt: NOW, provisioningStartedAt: NOW });
     await records.patch("alice", {
       accountLifecycle: { status: "suspended", suspendedAt: NOW },
       provisioning: { status: "complete", gitRepoUrl: "https://git.example/alice/workspace", gitCreatedAt: NOW },

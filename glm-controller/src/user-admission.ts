@@ -42,6 +42,7 @@ async function admit(deps: UserAdmissionDeps, request: UserAdmissionRequest): Pr
     await deps.store.users.records.admit(request.uid, {
       slug: request.slug,
       persona: request.persona,
+      createdAt: { serverNow: true },
       provisioningStartedAt: { serverNow: true },
     });
     return "admitted";

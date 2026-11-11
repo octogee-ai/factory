@@ -558,17 +558,20 @@ function userRecordReads(session) {
         async list(page) {
             const name = "builders.records.list";
             const parameters = new SqlParameters();
-            const conditions = ["b.created_at IS NOT NULL"];
+            let where = "TRUE";
             if (page.after !== undefined) {
-                const anchors = await session.read(name, "SELECT created_at FROM $schema.users WHERE uid = $1::text AND created_at IS NOT NULL", [
-                    page.after,
-                ]);
+                const anchors = await session.read(name, "SELECT created_at FROM $schema.users WHERE uid = $1::text", [page.after]);
                 if (anchors.length === 0)
                     throw new MissingRecordError(userKey(page.after));
-                conditions.push(`(b.created_at, b.uid) < (${parameters.add(anchors[0].created_at, "bigint")}, ${parameters.add(page.after, "text")})`);
+                const createdAt = anchors[0].created_at;
+                const uid = parameters.add(page.after, "text");
+                where =
+                    createdAt === null
+                        ? `b.created_at IS NULL AND b.uid < ${uid}`
+                        : `(b.created_at IS NULL OR (b.created_at, b.uid) < (${parameters.add(createdAt, "bigint")}, ${uid}))`;
             }
             const limit = parameters.add(page.limit + 1, "integer");
-            const records = await selectRecords(session, name, selectUsers(conditions.join(" AND "), `ORDER BY b.created_at DESC, b.uid DESC LIMIT ${limit}`), parameters.values);
+            const records = await selectRecords(session, name, selectUsers(where, `ORDER BY b.created_at DESC NULLS LAST, b.uid DESC LIMIT ${limit}`), parameters.values);
             const items = records.slice(0, page.limit);
             return { items, next: records.length > page.limit ? items[items.length - 1].uid : null };
         },
@@ -581,13 +584,15 @@ function admitStatement(uid, input, now) {
         parameters.add(uid, "text"),
         parameters.add(input.slug, "text"),
         encodeValue(COLUMNS.persona, input.persona, parameters, now),
+        encodeValue(COLUMNS.createdAt, input.createdAt, parameters, now),
         encodeValue(COLUMNS.provisioningStartedAt, input.provisioningStartedAt, parameters, now),
     ];
     return {
         uid,
-        text: `INSERT INTO $schema.users AS b (uid, slug, persona, provisioning_started_at, admitted, provisioning_status)
+        text: `INSERT INTO $schema.users AS b (uid, slug, persona, created_at, provisioning_started_at, admitted, provisioning_status)
              VALUES (${values.join(", ")}, true, 'in_progress')
            ON CONFLICT (uid) DO UPDATE SET slug = COALESCE(b.slug, EXCLUDED.slug), persona = EXCLUDED.persona,
+             created_at = COALESCE(b.created_at, EXCLUDED.created_at),
              provisioning_started_at = EXCLUDED.provisioning_started_at, admitted = true, provisioning_status = EXCLUDED.provisioning_status
            WHERE b.provisioning_status IS NULL AND (b.slug IS NULL OR b.slug = EXCLUDED.slug)
            RETURNING b.revision`,
