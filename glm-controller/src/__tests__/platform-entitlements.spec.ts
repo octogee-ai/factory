@@ -20,7 +20,7 @@ async function startUntilFirebase() {
   vi.stubEnv("GOOGLE_CLOUD_PROJECT", "octogee-test");
   vi.mocked(applicationDefault).mockReturnValue({} as never);
   vi.mocked(initializeApp).mockImplementation(() => { throw new Error("bootstrap boundary"); });
-  await expect(main()).rejects.toThrow("bootstrap boundary");
+  await expect(main({ userLifecycle: null })).rejects.toThrow("bootstrap boundary");
 }
 
 it("initializes bare platform entitlements before starting the fleet controller", async () => {

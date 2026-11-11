@@ -1,7 +1,6 @@
 import {
   anonymousOperationalEnvironment,
   anonymousOperationalGatewayClass,
-  anonymousOperationalPlanTier,
   isAnonymousOperationalModelDimension,
 } from "@octogee/shared/types/account-lifecycle";
 
@@ -10,7 +9,7 @@ interface DeletionArchiveInput {
   createdAt: number | null;
   deletionRequestedAt: number;
   environment: string;
-  planTier: string | null;
+  productFields: Record<string, unknown>;
   gatewayClass: string | null;
   rollup: Record<string, unknown>;
 }
@@ -117,12 +116,12 @@ function modelAggregates(rollup: Record<string, unknown>): AnonymousModelAggrega
 
 export function buildAnonymousOperationalArchive(input: DeletionArchiveInput) {
   return {
+    ...input.productFields,
     schemaVersion: 1,
     archivedAt: input.archivedAt,
     accountCreatedMonth: month(input.createdAt),
     deletionRequestedMonth: month(input.deletionRequestedAt),
     environment: anonymousOperationalEnvironment(input.environment),
-    planTier: anonymousOperationalPlanTier(input.planTier),
     gatewayClass: anonymousOperationalGatewayClass(input.gatewayClass),
     totals: {
       costUsd: nonNegative(input.rollup.costUsd),

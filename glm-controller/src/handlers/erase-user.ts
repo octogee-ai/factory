@@ -7,20 +7,20 @@ import type {
 } from "../operation-router.js";
 import type { UserCleanupContext } from "./deprovision-user.js";
 import type { NukeCloudStepResult } from "../lib/user-ops/nuke-cloud.js";
-import {
-  PostHogMergedIdentityError,
-  PostHogRateLimitedError,
-  type PostHogConfirmation,
-} from "../lib/user-ops/posthog-erasure.js";
 import { UserErasureBlockedError } from "../lib/user-ops/agent-store-erasure.js";
-
-export const POSTHOG_VERIFICATION_RECHECK_MS = 60 * 60_000;
+import {
+  UserErasureRetryLaterError,
+  type ErasureStep,
+  type ProductContext,
+  type ProductUserErasure,
+  type UserLifecycleJob,
+} from "../lib/user-ops/user-lifecycle-product.js";
 
 export interface ErasureDeletionJob {
   uid: string;
   status: UserDeletionJobStatus;
   eraseAfter: number;
-  stripeCustomerIds: string[];
+  productContext: ProductContext;
   archiveId: string | null;
   cleanupContext: UserCleanupContext | null;
 }
@@ -28,12 +28,7 @@ export interface ErasureDeletionJob {
 export interface EraseUserDeps {
   loadDeletionJob: (deletionId: string) => Promise<ErasureDeletionJob | null>;
   ensureAnonymousArchive: (deletionId: string) => Promise<string>;
-  requestPostHogDeletion: (uid: string, deletionId: string) => Promise<{ skipped: boolean }>;
-  confirmPostHogDeletion: (uid: string, deletionId: string) => Promise<PostHogConfirmation>;
-  retainPostHogMappingOnly: (deletionId: string, archiveId: string) => Promise<void>;
-  deleteStripeCustomer: (customerId: string) => Promise<void>;
-  discoverStripeCustomerIds: (uid: string) => Promise<string[]>;
-  persistStripeCustomerIds: (deletionId: string, customerIds: string[]) => Promise<void>;
+  retainProductVerificationContext: (deletionId: string, archiveId: string) => Promise<void>;
   ensureOwnedGatewayRetired: (
     cleanup: UserCleanupContext,
     deletionId: string,
@@ -58,6 +53,7 @@ export interface EraseUserDeps {
     archiveId: string,
     currentOperationId: string,
   ) => Promise<void>;
+  product?: ProductUserErasure;
   now: () => number;
 }
 
@@ -80,16 +76,15 @@ interface EraseUserContext {
   cleanup: UserCleanupContext;
 }
 
-interface PostHogConfirmationContext {
-  deletionId: string;
-  uid: string;
+interface ProductVerificationContext {
+  job: UserLifecycleJob;
   archiveId: string;
 }
 
 type EraseUserLoadResult =
   | { kind: "context"; context: EraseUserContext }
   | { kind: "error"; error: OperationResult }
-  | { kind: "awaiting-posthog"; confirmation: PostHogConfirmationContext }
+  | { kind: "awaiting-product-verification"; verification: ProductVerificationContext }
   | { kind: "verified"; deletionId: string; archiveId: string };
 
 async function loadEraseUserContext(
@@ -114,8 +109,8 @@ async function loadEraseUserContext(
   }
   if (job.status === "product_verification_pending" && job.archiveId) {
     return {
-      kind: "awaiting-posthog",
-      confirmation: { deletionId, uid, archiveId: job.archiveId },
+      kind: "awaiting-product-verification",
+      verification: { job: { uid, deletionId, productContext: job.productContext }, archiveId: job.archiveId },
     };
   }
   if (!job.cleanupContext || job.status !== "hibernating") {
@@ -150,15 +145,15 @@ function cleanupRetry(deletionId: string, error: string): OperationResult {
   };
 }
 
-function postHogFailure(
+function productStepFailure(
   deletionId: string,
   step: string,
   err: unknown,
 ): OperationResult {
   const error = err instanceof Error ? err.message : String(err);
-  if (err instanceof PostHogMergedIdentityError) return deletionBlocked(deletionId, step, error);
+  if (err instanceof UserErasureBlockedError) return deletionBlocked(deletionId, step, error);
   const retry = cleanupRetry(deletionId, error);
-  if (err instanceof PostHogRateLimitedError && err.retryAfterMs !== null) {
+  if (err instanceof UserErasureRetryLaterError && err.retryAfterMs !== null) {
     return { ...retry, retryAfterMs: err.retryAfterMs };
   }
   return retry;
@@ -173,90 +168,51 @@ function verifiedErasureResult(deletionId: string, archiveId: string): Operation
   };
 }
 
-async function eraseStripeCustomers(
-  context: EraseUserContext,
+async function runProductStep(
+  step: ErasureStep,
+  job: UserLifecycleJob,
   ctx: OperationContext,
   deps: EraseUserDeps,
 ): Promise<OperationResult | null> {
   try {
-    const customerIds = [...new Set([
-      ...context.job.stripeCustomerIds,
-      ...await deps.discoverStripeCustomerIds(context.job.uid),
-    ])].sort();
-    await deps.persistStripeCustomerIds(context.deletionId, customerIds);
-    for (const customerId of customerIds) await deps.deleteStripeCustomer(customerId);
-    const deleted = new Set(customerIds);
-    const remaining = (await deps.discoverStripeCustomerIds(context.job.uid))
-      .filter((customerId) => !deleted.has(customerId));
-    if (remaining.length > 0) {
-      throw new Error(`Stripe customers remain: ${remaining.sort().join(", ")}`);
-    }
-    await report(ctx, deps, {
-      name: "delete-stripe-customers",
-      status: customerIds.length > 0 ? "done" : "skipped",
-    });
+    const status = await step.run(job);
+    await report(ctx, deps, { name: step.name, status });
     return null;
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
-    await report(ctx, deps, { name: "delete-stripe-customers", status: "failed", error });
-    return cleanupRetry(context.deletionId, error);
+    await report(ctx, deps, { name: step.name, status: "failed", error });
+    return productStepFailure(job.deletionId, step.name, err);
   }
 }
 
-const REQUEST_POSTHOG_STEP = "request-posthog-person-deletion";
-const CONFIRM_POSTHOG_STEP = "confirm-posthog-person-deletion";
-
-async function requestPostHogDeletion(
-  context: EraseUserContext,
-  ctx: OperationContext,
-  deps: EraseUserDeps,
-): Promise<OperationResult | null> {
-  try {
-    const outcome = await deps.requestPostHogDeletion(context.job.uid, context.deletionId);
-    await report(ctx, deps, {
-      name: REQUEST_POSTHOG_STEP,
-      status: outcome.skipped ? "skipped" : "done",
-    });
-    return null;
-  } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    await report(ctx, deps, { name: REQUEST_POSTHOG_STEP, status: "failed", error });
-    return postHogFailure(context.deletionId, REQUEST_POSTHOG_STEP, err);
-  }
-}
-
-async function confirmPostHogAndFinalize(
-  confirmation: PostHogConfirmationContext,
+async function confirmProductVerificationAndFinalize(
+  { job, archiveId }: ProductVerificationContext,
   op: Operation,
   ctx: OperationContext,
   deps: EraseUserDeps,
 ): Promise<OperationResult> {
-  const { deletionId, uid, archiveId } = confirmation;
-  let outcome: PostHogConfirmation;
-  try {
-    outcome = await deps.confirmPostHogDeletion(uid, deletionId);
-  } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    await report(ctx, deps, { name: CONFIRM_POSTHOG_STEP, status: "failed", error });
-    return postHogFailure(deletionId, CONFIRM_POSTHOG_STEP, err);
+  const verification = deps.product?.verification;
+  if (verification) {
+    let outcome: Awaited<ReturnType<typeof verification.confirm>>;
+    try {
+      outcome = await verification.confirm(job);
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      await report(ctx, deps, { name: verification.name, status: "failed", error });
+      return productStepFailure(job.deletionId, verification.name, err);
+    }
+    if (outcome === "pending") {
+      await report(ctx, deps, { name: verification.name, status: "running" });
+      return { steps: [], success: false, ...verification.pending(job) };
+    }
+    await report(ctx, deps, {
+      name: verification.name,
+      status: outcome === "skipped" ? "skipped" : "done",
+    });
   }
-  if (outcome === "pending") {
-    await report(ctx, deps, { name: CONFIRM_POSTHOG_STEP, status: "running" });
-    return {
-      steps: [],
-      success: false,
-      error: "PostHog event deletion verification is still pending",
-      output: { postHogVerificationPending: { deletionId } },
-      retryAfterMs: POSTHOG_VERIFICATION_RECHECK_MS,
-    };
-  }
-  await report(ctx, deps, {
-    name: CONFIRM_POSTHOG_STEP,
-    status: outcome === "skipped" ? "skipped" : "done",
-  });
-  await deps.finalizeVerifiedErasure(deletionId, archiveId, op.id);
+  await deps.finalizeVerifiedErasure(job.deletionId, archiveId, op.id);
   await report(ctx, deps, { name: "destroy-identity-mapping", status: "done" });
-  return verifiedErasureResult(deletionId, archiveId);
+  return verifiedErasureResult(job.deletionId, archiveId);
 }
 
 function cloudStepStatus(result: NukeCloudStepResult): OperationStep["status"] {
@@ -289,85 +245,88 @@ async function runEraseUser(
   if (loaded.kind === "verified") {
     return verifiedErasureResult(loaded.deletionId, loaded.archiveId);
   }
-  if (loaded.kind === "awaiting-posthog") {
-    return confirmPostHogAndFinalize(loaded.confirmation, op, ctx, deps);
+  if (loaded.kind === "awaiting-product-verification") {
+    return confirmProductVerificationAndFinalize(loaded.verification, op, ctx, deps);
   }
-    const { deletionId, cleanup } = loaded.context;
+  return eraseUserData(loaded.context, op, ctx, deps);
+}
 
-    const archiveId = await deps.ensureAnonymousArchive(deletionId);
-    await report(ctx, deps, { name: "archive-operational-data", status: "done" });
+async function eraseUserData(
+  { deletionId, cleanup, job }: EraseUserContext,
+  op: Operation,
+  ctx: OperationContext,
+  deps: EraseUserDeps,
+): Promise<OperationResult> {
+  const productJob = { uid: job.uid, deletionId, productContext: job.productContext };
 
-    const stripeFailure = await eraseStripeCustomers(loaded.context, ctx, deps);
-    if (stripeFailure) return stripeFailure;
+  const archiveId = await deps.ensureAnonymousArchive(deletionId);
+  await report(ctx, deps, { name: "archive-operational-data", status: "done" });
 
-    const postHogFailure = await requestPostHogDeletion(loaded.context, ctx, deps);
-    if (postHogFailure) return postHogFailure;
+  for (const step of deps.product?.steps ?? []) {
+    const failure = await runProductStep(step, productJob, ctx, deps);
+    if (failure) return failure;
+  }
 
-    const retirement = await deps.ensureOwnedGatewayRetired(cleanup, deletionId);
-    if (retirement === "retirement-pending") {
-      await report(ctx, deps, { name: "retire-owned-gateway", status: "running" });
-      return {
-        steps: [],
-        success: false,
-        error: "owned gateway retirement pending",
-        output: { retirementFencePending: { deletionId } },
-      };
-    }
-    await report(ctx, deps, {
-      name: "retire-owned-gateway",
-      status: retirement === "not-owned" ? "skipped" : "done",
-    });
+  const retirement = await deps.ensureOwnedGatewayRetired(cleanup, deletionId);
+  if (retirement === "retirement-pending") {
+    await report(ctx, deps, { name: "retire-owned-gateway", status: "running" });
+    return {
+      steps: [],
+      success: false,
+      error: "owned gateway retirement pending",
+      output: { retirementFencePending: { deletionId } },
+    };
+  }
+  await report(ctx, deps, {
+    name: "retire-owned-gateway",
+    status: retirement === "not-owned" ? "skipped" : "done",
+  });
 
-    const undrainedArtifactIds = await deps.findUndrainedArtifactIds(cleanup.chatArtifactIds);
-    if (undrainedArtifactIds.length > 0) {
-      await report(ctx, deps, { name: "drain-artifact-workers", status: "running" });
-      return {
-        steps: [],
-        success: false,
-        error: `artifact workers still hold leases: ${undrainedArtifactIds.join(", ")}`,
-        output: { artifactDrainPending: { deletionId } },
-      };
-    }
-    await report(ctx, deps, {
-      name: "drain-artifact-workers",
-      status: cleanup.chatArtifactIds.length > 0 ? "done" : "skipped",
-    });
+  const undrainedArtifactIds = await deps.findUndrainedArtifactIds(cleanup.chatArtifactIds);
+  if (undrainedArtifactIds.length > 0) {
+    await report(ctx, deps, { name: "drain-artifact-workers", status: "running" });
+    return {
+      steps: [],
+      success: false,
+      error: `artifact workers still hold leases: ${undrainedArtifactIds.join(", ")}`,
+      output: { artifactDrainPending: { deletionId } },
+    };
+  }
+  await report(ctx, deps, {
+    name: "drain-artifact-workers",
+    status: cleanup.chatArtifactIds.length > 0 ? "done" : "skipped",
+  });
 
-    try {
-      await deps.eraseAgentStores(cleanup, deletionId, op, ctx.assertActiveClaim);
-      await report(ctx, deps, { name: "erase-agent-stores", status: "done" });
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
-      await report(ctx, deps, { name: "erase-agent-stores", status: "failed", error });
-      return err instanceof UserErasureBlockedError
-        ? deletionBlocked(deletionId, "erase-agent-stores", error)
-        : cleanupRetry(deletionId, error);
-    }
-    const cloudResults = await deps.cloudErase(cleanup, op.id);
-    await reportCloudErasure(cloudResults, ctx, deps);
-    const failures = cloudResults.filter((result) => !result.ok && !result.skipped);
-    if (failures.length > 0) {
-      return cleanupRetry(
-        deletionId,
-        failures.map((result) => `${result.key}: ${result.error}`).join("; "),
-      );
-    }
-
-    const remaining = await deps.verifyErasure(cleanup, op.id);
-    if (remaining.length > 0) {
-      return cleanupRetry(
-        deletionId,
-        `erasure verification found identifying references: ${remaining.join(", ")}`,
-      );
-    }
-    await report(ctx, deps, { name: "verify-erasure", status: "done" });
-    await deps.retainPostHogMappingOnly(deletionId, archiveId);
-    return confirmPostHogAndFinalize(
-      { deletionId, uid: loaded.context.job.uid, archiveId },
-      op,
-      ctx,
-      deps,
+  try {
+    await deps.eraseAgentStores(cleanup, deletionId, op, ctx.assertActiveClaim);
+    await report(ctx, deps, { name: "erase-agent-stores", status: "done" });
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    await report(ctx, deps, { name: "erase-agent-stores", status: "failed", error });
+    return err instanceof UserErasureBlockedError
+      ? deletionBlocked(deletionId, "erase-agent-stores", error)
+      : cleanupRetry(deletionId, error);
+  }
+  const cloudResults = await deps.cloudErase(cleanup, op.id);
+  await reportCloudErasure(cloudResults, ctx, deps);
+  const failures = cloudResults.filter((result) => !result.ok && !result.skipped);
+  if (failures.length > 0) {
+    return cleanupRetry(
+      deletionId,
+      failures.map((result) => `${result.key}: ${result.error}`).join("; "),
     );
+  }
+
+  const remaining = await deps.verifyErasure(cleanup, op.id);
+  if (remaining.length > 0) {
+    return cleanupRetry(
+      deletionId,
+      `erasure verification found identifying references: ${remaining.join(", ")}`,
+    );
+  }
+  await report(ctx, deps, { name: "verify-erasure", status: "done" });
+  await deps.retainProductVerificationContext(deletionId, archiveId);
+  return confirmProductVerificationAndFinalize({ job: productJob, archiveId }, op, ctx, deps);
 }
 
 export function createEraseUserHandler(deps: EraseUserDeps): OperationHandler {

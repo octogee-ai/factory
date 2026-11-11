@@ -11,8 +11,6 @@ export interface UserAccount {
     readonly mattermostUsername: string | null;
     readonly onboardingStep: string | null;
     readonly onboardingComplete: boolean;
-    readonly stripeCustomerIds: readonly string[];
-    readonly stripeSubscriptionIds: readonly string[];
 }
 export interface UserAccountReader {
     get(uid: string): Promise<UserAccount | null>;

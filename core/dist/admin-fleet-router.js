@@ -41,6 +41,7 @@ function rejectPersistenceInBody(body) {
         },
     };
 }
+const noDeletionProductContext = async () => ({});
 class GatewayAuthSecretProvisionError extends Error {
 }
 function resolveSizingForResponse(glmDoc, reservation) {
@@ -2349,7 +2350,7 @@ async function userDeletionConflict(transaction, userRecord) {
         : null;
 }
 async function claimUserDeletion(opts) {
-    const account = await opts.accounts.get(opts.uid);
+    const productContext = await opts.discoverProductContext(opts.uid);
     const deletionId = randomUUID();
     const suspensionOperationId = randomUUID();
     const erasureOperationId = randomUUID();
@@ -2373,8 +2374,7 @@ async function claimUserDeletion(opts) {
             deletionId,
             suspensionOperationId,
             erasureOperationId,
-            stripeCustomerIds: [...(account?.stripeCustomerIds ?? [])],
-            stripeSubscriptionIds: [...(account?.stripeSubscriptionIds ?? [])],
+            productContext,
         });
         if (currentGatewayId) {
             await transaction.gateways.assignments.delete(currentGatewayId, opts.uid);
@@ -2468,7 +2468,7 @@ function respondToUserDeletionAdmission(admission, res, logger, uid) {
 async function claimAndCleanupUserDeletion(opts) {
     const claimed = await claimUserDeletion({
         store: opts.store,
-        accounts: opts.accounts,
+        discoverProductContext: opts.discoverProductContext,
         uid: opts.uid,
         requestedBy: opts.requestedBy,
         eraseNow: opts.eraseNow,
@@ -2519,7 +2519,7 @@ export async function scheduleUserSelfDeletion(opts) {
         classifyResult: (result) => classifyUserDeletion(result, opts.uid),
         action: async () => claimAndCleanupUserDeletion({
             store: opts.store,
-            accounts: opts.accounts,
+            discoverProductContext: opts.discoverProductContext,
             deps: opts.deps,
             uid: opts.uid,
             requestedBy: opts.uid,
@@ -3153,7 +3153,7 @@ export function addAdminFleetRoutes(router, deps) {
                 classifyResult: (result) => classifyUserDeletion(result, uid),
                 action: async () => claimAndCleanupUserDeletion({
                     store,
-                    accounts,
+                    discoverProductContext: deps.discoverDeletionProductContext ?? noDeletionProductContext,
                     deps,
                     uid,
                     requestedBy: actor.uid ?? "unknown",

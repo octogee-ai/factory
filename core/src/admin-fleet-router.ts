@@ -155,7 +155,7 @@ import type { FleetRegistryRecord } from "./platform-state/fleet-registry.js";
 import { readReleaseStatus, summarizeReleaseStatus } from "./release-status.js";
 import type { GatewayAssignment, GatewayRoot } from "./platform-state/gateways.js";
 import type { NewOperation, OperationRecord } from "./platform-state/operations.js";
-import type { PlatformStateStore, PlatformStateTransaction, Stored } from "./platform-state/store.js";
+import type { OpaqueMap, PlatformStateStore, PlatformStateTransaction, Stored } from "./platform-state/store.js";
 import {
   type CentralReleaseAuthority,
   type ReleaseDigestManifest,
@@ -237,7 +237,12 @@ export interface FleetRouterDeps {
   revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
   userAccounts?: UserAccounts;
   userSignIn?: UserSignInHosts;
+  discoverDeletionProductContext?: DeletionProductContextDiscovery;
 }
+
+export type DeletionProductContextDiscovery = (uid: string) => Promise<OpaqueMap>;
+
+const noDeletionProductContext: DeletionProductContextDiscovery = async () => ({});
 
 type ActorRequest = Request & {
   uid?: string;
@@ -3537,12 +3542,12 @@ async function userDeletionConflict(
 
 async function claimUserDeletion(opts: {
   store: PlatformStateStore;
-  accounts: UserAccountReader;
+  discoverProductContext: DeletionProductContextDiscovery;
   uid: string;
   requestedBy: string;
   eraseNow: boolean;
 }): Promise<UserDeletionAdmission> {
-  const account = await opts.accounts.get(opts.uid);
+  const productContext = await opts.discoverProductContext(opts.uid);
   const deletionId = randomUUID();
   const suspensionOperationId = randomUUID();
   const erasureOperationId = randomUUID();
@@ -3564,8 +3569,7 @@ async function claimUserDeletion(opts: {
       deletionId,
       suspensionOperationId,
       erasureOperationId,
-      stripeCustomerIds: [...(account?.stripeCustomerIds ?? [])],
-      stripeSubscriptionIds: [...(account?.stripeSubscriptionIds ?? [])],
+      productContext,
     });
     if (currentGatewayId) {
       await transaction.gateways.assignments.delete(currentGatewayId, opts.uid);
@@ -3679,7 +3683,7 @@ function respondToUserDeletionAdmission(
 
 async function claimAndCleanupUserDeletion(opts: {
   store: PlatformStateStore;
-  accounts: UserAccountReader;
+  discoverProductContext: DeletionProductContextDiscovery;
   deps: Pick<FleetRouterDeps, "suspendAuthUser" | "revokeConnectorGrantsForUser">;
   uid: string;
   requestedBy: string;
@@ -3687,7 +3691,7 @@ async function claimAndCleanupUserDeletion(opts: {
 }): Promise<UserDeletionActionOutcome> {
   const claimed = await claimUserDeletion({
     store: opts.store,
-    accounts: opts.accounts,
+    discoverProductContext: opts.discoverProductContext,
     uid: opts.uid,
     requestedBy: opts.requestedBy,
     eraseNow: opts.eraseNow,
@@ -3731,7 +3735,7 @@ export type UserSelfDeletionOutcome =
 
 export async function scheduleUserSelfDeletion(opts: {
   store: PlatformStateStore;
-  accounts: UserAccountReader;
+  discoverProductContext: DeletionProductContextDiscovery;
   deps: Pick<FleetRouterDeps, "suspendAuthUser" | "revokeConnectorGrantsForUser">;
   uid: string;
 }): Promise<UserSelfDeletionOutcome> {
@@ -3751,7 +3755,7 @@ export async function scheduleUserSelfDeletion(opts: {
     classifyResult: (result) => classifyUserDeletion(result, opts.uid),
     action: async () => claimAndCleanupUserDeletion({
       store: opts.store,
-      accounts: opts.accounts,
+      discoverProductContext: opts.discoverProductContext,
       deps: opts.deps,
       uid: opts.uid,
       requestedBy: opts.uid,
@@ -4572,7 +4576,7 @@ router.post(
           classifyResult: (result) => classifyUserDeletion(result, uid),
           action: async () => claimAndCleanupUserDeletion({
             store,
-            accounts,
+            discoverProductContext: deps.discoverDeletionProductContext ?? noDeletionProductContext,
             deps,
             uid,
             requestedBy: actor.uid ?? "unknown",

@@ -85,6 +85,15 @@ describe("mountClusterRoutes", () => {
     expect(projects[9].handlers).toEqual([projectsRepoSourceRoutes]);
   });
 
+  it("mounts the injected admin router in place of the platform default", () => {
+    const app = recordingApp();
+    const adminRoutes = Router();
+
+    mountClusterRoutes(app, { adminRoutes });
+
+    expect(useCalls(app, "/api/admin")[0].handlers).toEqual([adminRoutes]);
+  });
+
   it("mounts the optional Mattermost mint route at the browser credential path", () => {
     const app = recordingApp();
     const mattermostMintRoutes = Router();

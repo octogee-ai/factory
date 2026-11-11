@@ -4,6 +4,7 @@ import {
   type Firestore,
 } from "firebase-admin/firestore";
 import type { PlatformStateStore, PlatformStateTransaction } from "@octogee/core/platform-state";
+import type { ProductUserLifecycle } from "./user-lifecycle-product.js";
 
 export interface UserErasureCollectionPolicy {
   userKey?: "uid" | "email";
@@ -16,34 +17,16 @@ export interface UserErasureCollectionPolicy {
 
 export const USER_ERASURE_COLLECTION_POLICIES = {
   customerStats: { userKey: "uid" },
-  modelBrokerCredits: { userKey: "uid" },
-  emailSuppressions: { userKey: "email" },
   opsSupportQuestions: { uidFields: ["ownerUid"] },
   modelBrokerUsageEvents: { uidFields: ["ownerUid"] },
   modelBrokerUsageRollups: { uidFields: ["ownerUid"] },
   modelBrokerUsageWindows: { uidFields: ["ownerUid"] },
   modelBrokerWeekWindows: { uidFields: ["ownerUid"] },
-  modelBrokerSignupOfferBudgets: { uidFields: ["ownerUid"] },
   modelBrokerRateWindows: { uidFields: ["ownerKey"] },
-  modelBrokerCreditTopups: { uidFields: ["ownerUid"] },
   connectFlows: { uidFields: ["uid"] },
   desktopSignInCodes: { uidFields: ["uid"] },
   desktopSignInChallenges: {},
   byosubFlows: { uidFields: ["uid"] },
-  invites: {
-    uidFields: [
-      "inviteeUid",
-      "inviterUid",
-      "callerUid",
-      "ownerUid",
-      "createdBy",
-      "redeemedBy",
-      "acceptedBy",
-      "revokedBy",
-    ],
-    emailFields: ["inviteeEmail", "email"],
-  },
-  channelInvites: { uidFields: ["createdBy"] },
   posts: { uidFields: ["authorUid"] },
   feed: { uidFields: ["actorUid", "targetUid"] },
   stars: { uidFields: ["actorUid", "target.ownerUid"] },
@@ -57,7 +40,6 @@ export const USER_ERASURE_COLLECTION_POLICIES = {
     slugFields: ["workspaceSlug"],
   },
   cleanupJobs: { slugFields: ["slug"] },
-  email: { emailFields: ["to"], emailArrayFields: ["to"], ownsSubcollections: true },
   gatewayAccessGrants: {
     uidFields: ["ownerUid", "granteeUid", "createdByUid", "updatedByUid", "revokedByUid"],
   },
@@ -90,39 +72,39 @@ export const PLATFORM_STATE_ERASURE_COLLECTIONS = [
   "platformConfig",
 ] as const;
 
-type PolicyEntry = [string, UserErasureCollectionPolicy];
-const POLICY_ENTRIES = Object.entries(USER_ERASURE_COLLECTION_POLICIES) as PolicyEntry[];
+export type UserErasureCollections = Readonly<Record<string, UserErasureCollectionPolicy>>;
 
-function policyQueries(key: "uidFields" | "slugFields" | "emailFields") {
-  return POLICY_ENTRIES.flatMap(([collection, policy]) =>
-    (policy[key] ?? []).map((field) => ({ collection, field })));
+export function userErasureCollections(
+  userLifecycle: Pick<ProductUserLifecycle, "firestoreCollections"> | null,
+): UserErasureCollections {
+  return { ...USER_ERASURE_COLLECTION_POLICIES, ...userLifecycle?.firestoreCollections };
 }
-
-function policyArrayQueries(key: "emailArrayFields") {
-  return POLICY_ENTRIES.flatMap(([collection, policy]) =>
-    (policy[key] ?? []).map((field) => ({ collection, field })));
-}
-
-export const USER_REFERENCE_QUERIES = policyQueries("uidFields");
-export const USER_SLUG_REFERENCE_QUERIES = policyQueries("slugFields");
 
 export const USER_GROUP_REFERENCE_QUERIES = [
   { collectionGroup: "members", field: "id" },
 ] as const;
 
-export const USER_EMAIL_REFERENCE_QUERIES = policyQueries("emailFields");
-export const USER_EMAIL_ARRAY_REFERENCE_QUERIES = policyArrayQueries("emailArrayFields");
+export function userErasureQueries(collections: UserErasureCollections) {
+  const entries = Object.entries(collections);
+  const fieldQueries = (key: "uidFields" | "slugFields" | "emailFields" | "emailArrayFields") =>
+    entries.flatMap(([collection, policy]) =>
+      (policy[key] ?? []).map((field) => ({ collection, field })));
+  const keyedRoots = (userKey: "uid" | "email") =>
+    entries.filter(([, policy]) => policy.userKey === userKey).map(([collection]) => collection);
+  return {
+    uidReferences: fieldQueries("uidFields"),
+    slugReferences: fieldQueries("slugFields"),
+    emailReferences: fieldQueries("emailFields"),
+    emailArrayReferences: fieldQueries("emailArrayFields"),
+    uidKeyedRoots: keyedRoots("uid"),
+    emailKeyedRoots: keyedRoots("email"),
+    subcollectionOwners: new Set(entries
+      .filter(([, policy]) => policy.ownsSubcollections)
+      .map(([collection]) => collection)),
+  };
+}
 
-const USER_KEYED_ROOTS = POLICY_ENTRIES
-  .filter(([, policy]) => policy.userKey === "uid")
-  .map(([collection]) => collection);
-const USER_EMAIL_KEYED_ROOTS = POLICY_ENTRIES
-  .filter(([, policy]) => policy.userKey === "email")
-  .map(([collection]) => collection);
-
-const SUBCOLLECTION_OWNING_COLLECTIONS = new Set(POLICY_ENTRIES
-  .filter(([, policy]) => policy.ownsSubcollections)
-  .map(([collection]) => collection));
+type UserErasureQueries = ReturnType<typeof userErasureQueries>;
 
 const RETRYABLE_LEAF_DELETE_CODES = new Set<number>([
   GrpcStatus.DEADLINE_EXCEEDED,
@@ -144,32 +126,34 @@ type VerificationFirestore = Pick<Firestore, "collection" | "collectionGroup">;
 
 function userRootRefs(
   db: VerificationFirestore,
+  queries: UserErasureQueries,
   uid: string,
   email: string | null,
 ) {
   return [
-    ...USER_KEYED_ROOTS.map((collection) =>
+    ...queries.uidKeyedRoots.map((collection) =>
       db.collection(collection).doc(uid)),
-    ...(email ? USER_EMAIL_KEYED_ROOTS.map((collection) =>
+    ...(email ? queries.emailKeyedRoots.map((collection) =>
       db.collection(collection).doc(email)) : []),
   ];
 }
 
 async function referenceDocs(
   db: VerificationFirestore,
+  queries: UserErasureQueries,
   uid: string,
   slug: string,
   email: string | null,
 ) {
   const snapshots = await Promise.all([
-    ...USER_REFERENCE_QUERIES.map((query) =>
+    ...queries.uidReferences.map((query) =>
       db.collection(query.collection).where(query.field, "==", uid).get()),
-    ...USER_SLUG_REFERENCE_QUERIES.map((query) =>
+    ...queries.slugReferences.map((query) =>
       db.collection(query.collection).where(query.field, "==", slug).get()),
     ...USER_GROUP_REFERENCE_QUERIES.map((query) =>
       db.collectionGroup(query.collectionGroup).where(query.field, "==", uid).get()),
     ...(email
-      ? USER_EMAIL_REFERENCE_QUERIES.map((query) =>
+      ? queries.emailReferences.map((query) =>
           db.collection(query.collection).where(query.field, "==", email).get())
       : []),
   ]);
@@ -184,10 +168,11 @@ function workspaceMemberPath(path: string): boolean {
 
 async function emailArrayReferenceDocs(
   db: VerificationFirestore,
+  queries: UserErasureQueries,
   email: string | null,
 ) {
   if (!email) return [];
-  const snapshots = await Promise.all(USER_EMAIL_ARRAY_REFERENCE_QUERIES.map((query) =>
+  const snapshots = await Promise.all(queries.emailArrayReferences.map((query) =>
     db.collection(query.collection).where(query.field, "array-contains", email).get()));
   return snapshots.flatMap((snapshot) => snapshot.docs);
 }
@@ -295,10 +280,10 @@ function normalizedEmail(email: string | null): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
-function ownsSubcollections(path: string): boolean {
+function ownsSubcollections(queries: UserErasureQueries, path: string): boolean {
   const segments = path.split("/");
   const collection = segments[segments.length - 2];
-  return collection !== undefined && SUBCOLLECTION_OWNING_COLLECTIONS.has(collection);
+  return collection !== undefined && queries.subcollectionOwners.has(collection);
 }
 
 async function deleteLeafRefs(db: ErasureFirestore, refs: DocumentReference[]): Promise<void> {
@@ -322,21 +307,23 @@ async function deleteLeafRefs(db: ErasureFirestore, refs: DocumentReference[]): 
 export interface UserFirestoreErasureDeps<Db> {
   store: PlatformStateStore;
   db: Db;
+  collections: UserErasureCollections;
 }
 
 export async function eraseUserFirestore(
-  { store, db }: UserFirestoreErasureDeps<ErasureFirestore>,
+  { store, db, collections }: UserFirestoreErasureDeps<ErasureFirestore>,
   uid: string,
   slug: string,
   email: string | null,
   currentOperationId: string,
 ): Promise<void> {
+  const queries = userErasureQueries(collections);
   const normalized = normalizedEmail(email);
-  const roots = userRootRefs(db, uid, normalized);
+  const roots = userRootRefs(db, queries, uid, normalized);
   const [platformReferences, references, emailArrays] = await Promise.all([
     platformStateReferences(store, uid, currentOperationId),
-    referenceDocs(db, uid, slug, normalized),
-    emailArrayReferenceDocs(db, normalized),
+    referenceDocs(db, queries, uid, slug, normalized),
+    emailArrayReferenceDocs(db, queries, normalized),
   ]);
   const refs: DocumentReference[] = [
     ...roots,
@@ -347,7 +334,7 @@ export async function eraseUserFirestore(
   const uniqueRefs = new Map(refs.map((ref) => [ref.path, ref]));
   const leafRefs: DocumentReference[] = [];
   for (const [path, ref] of uniqueRefs) {
-    if (rootPaths.has(path) || ownsSubcollections(path)) {
+    if (rootPaths.has(path) || ownsSubcollections(queries, path)) {
       await db.recursiveDelete(ref);
       continue;
     }
@@ -358,18 +345,19 @@ export async function eraseUserFirestore(
 }
 
 export async function verifyUserFirestoreErasure(
-  { store, db }: UserFirestoreErasureDeps<VerificationFirestore>,
+  { store, db, collections }: UserFirestoreErasureDeps<VerificationFirestore>,
   uid: string,
   slug: string,
   email: string | null,
   currentOperationId: string,
 ): Promise<string[]> {
+  const queries = userErasureQueries(collections);
   const normalized = normalizedEmail(email);
-  const refs = userRootRefs(db, uid, normalized);
+  const refs = userRootRefs(db, queries, uid, normalized);
   const [rootSnaps, references, emailArrays, platformState] = await Promise.all([
     Promise.all(refs.map((ref) => ref.get())),
-    referenceDocs(db, uid, slug, normalized),
-    emailArrayReferenceDocs(db, normalized),
+    referenceDocs(db, queries, uid, slug, normalized),
+    emailArrayReferenceDocs(db, queries, normalized),
     remainingPlatformState(store, uid, slug, currentOperationId),
   ]);
   const remaining = refs

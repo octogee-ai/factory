@@ -1,5 +1,6 @@
 import type { AccountLifecycle } from "@octogee/shared/types/account-lifecycle";
 import type { UserDeletionJob } from "./platform-state/jobs.js";
+import type { OpaqueMap } from "./platform-state/store.js";
 import type { OperationRecord } from "./platform-state/operations.js";
 
 interface UserDeletionPlanInput {
@@ -12,8 +13,7 @@ interface UserDeletionPlanInput {
   deletionId: string;
   suspensionOperationId: string;
   erasureOperationId: string;
-  stripeCustomerIds: string[];
-  stripeSubscriptionIds: string[];
+  productContext: OpaqueMap;
 }
 
 function operationRecord(input: {
@@ -68,10 +68,7 @@ export function buildUserDeletionPlan(input: UserDeletionPlanInput): {
       currentGatewayId: input.currentGatewayId,
       suspensionOperationId: input.suspensionOperationId,
       erasureOperationId: input.erasureOperationId,
-      productContext: {
-        stripeCustomerIds: input.stripeCustomerIds,
-        stripeSubscriptionIds: input.stripeSubscriptionIds,
-      },
+      productContext: input.productContext,
     },
     suspensionOperation: operationRecord({
       kind: "suspend-customer",

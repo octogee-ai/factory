@@ -158,12 +158,12 @@ vi.mock("../middleware/logging", () => ({
 }));
 
 import express from "express";
-import adminRouter from "../routes/admin.js";
+import adminRouter, { createAdminRoutes } from "../routes/admin.js";
 
-function buildApp() {
+function buildApp(router = adminRouter) {
   const app = express();
   app.use(express.json());
-  app.use("/api/admin", adminRouter);
+  app.use("/api/admin", router);
   return app;
 }
 
@@ -316,36 +316,32 @@ describe("POST /api/admin/users/:uid/delete — no-slug lifecycle", () => {
   });
 });
 
-describe("POST /api/admin/users/:uid/delete — Stripe cleanup context", () => {
-  it("persists Stripe ids for the suspension worker instead of logging a manual-cleanup warning", async () => {
-    usersDocs["uid-alice"] = {
-      username: "alice",
-      email: "alice@example.com",
-      provisioning: { openclaw: { slug: "alice" } },
-      subscription: {
-        stripeSubscriptionId: "sub_personal",
-        stripeCustomerId: "cus_abc",
-        status: "active",
-      },
-      builderSubscription: {
-        stripeSubscriptionId: "sub_builder",
-        status: "active",
-      },
-    };
-    await request(buildApp()).post("/api/admin/users/uid-alice/delete");
+describe("POST /api/admin/users/:uid/delete — product deletion context", () => {
+  it("records the product's discovered context on the deletion job for the suspension worker", async () => {
+    usersDocs["uid-alice"] = { username: "alice", provisioning: { openclaw: { slug: "alice" } } };
+    const discoverDeletionProductContext = vi.fn(async () => ({
+      stripeCustomerIds: ["cus_abc"],
+      stripeSubscriptionIds: ["sub_personal"],
+    }));
+    const res = await request(buildApp(createAdminRoutes({ discoverDeletionProductContext })))
+      .post("/api/admin/users/uid-alice/delete");
+    expect(res.status).toBe(202);
+    expect(discoverDeletionProductContext).toHaveBeenCalledWith("uid-alice");
     expect(Object.values(deletionJobsDocs)).toEqual([expect.objectContaining({
       stripeCustomerIds: ["cus_abc"],
-      stripeSubscriptionIds: ["sub_personal", "sub_builder"],
+      stripeSubscriptionIds: ["sub_personal"],
     })]);
-    expect(loggedWarnings).toEqual([]);
   });
 
-  it("does NOT log when no stripe IDs are present", async () => {
+  it("records an empty product context when no product is installed", async () => {
     usersDocs["uid-alice"] = {
       username: "alice",
       provisioning: { openclaw: { slug: "alice" } },
+      subscription: { stripeCustomerId: "cus_abc", stripeSubscriptionId: "sub_personal" },
     };
     await request(buildApp()).post("/api/admin/users/uid-alice/delete");
-    expect(loggedWarnings.length).toBe(0);
+    const [job] = Object.values(deletionJobsDocs);
+    expect(job).not.toHaveProperty("stripeCustomerIds");
+    expect(job).not.toHaveProperty("stripeSubscriptionIds");
   });
 });

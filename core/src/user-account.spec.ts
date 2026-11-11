@@ -3,25 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { userAccountFromData, firestoreUserAccountReader } from "./user-account.js";
 
 describe("userAccountFromData", () => {
-  it("collects every distinct Stripe customer and the personal and user subscriptions", () => {
-    const account = userAccountFromData("u1", {
-      subscription: { stripeCustomerId: "cus_1", id: "sub_personal" },
-      stripeCustomerId: "cus_1",
-      billing: { stripeCustomerId: "cus_2", subscriptionId: "sub_billing" },
-      builderSubscription: { id: "sub_builder" },
-    });
-
-    expect(account.stripeCustomerIds).toEqual(["cus_1", "cus_2"]);
-    expect(account.stripeSubscriptionIds).toEqual(["sub_personal", "sub_builder"]);
-  });
-
-  it("falls back to the billing subscription when the personal subscription has no id", () => {
-    const account = userAccountFromData("u1", { billing: { subscriptionId: "sub_billing" } });
-
-    expect(account.stripeSubscriptionIds).toEqual(["sub_billing"]);
-    expect(account.stripeCustomerIds).toEqual([]);
-  });
-
   it.each([
     [1_700, 1_700],
     [new Date(2_000), 2_000],

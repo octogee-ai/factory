@@ -54,6 +54,7 @@ export interface MountClusterRoutesOpts {
   projectsRepoSourceRoutes?: Router;
   productivityApprovalRoutes?: Router;
   voiceRoutes?: Router;
+  adminRoutes?: Router;
 }
 
 type RouteHandler = RequestHandler | Router;
@@ -131,6 +132,7 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
       return [path, opts.productivityApprovalRoutes ?? route] as const;
     }
     if (path === "/api/voice") return [path, opts.voiceRoutes ?? route] as const;
+    if (path === "/api/admin") return [path, opts.adminRoutes ?? route] as const;
     return [path, route] as const;
   }));
   mountRouteTable(app, opts.productRoutes ?? []);

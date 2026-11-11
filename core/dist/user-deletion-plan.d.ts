@@ -1,5 +1,6 @@
 import type { AccountLifecycle } from "@octogee/shared/types/account-lifecycle";
 import type { UserDeletionJob } from "./platform-state/jobs.js";
+import type { OpaqueMap } from "./platform-state/store.js";
 import type { OperationRecord } from "./platform-state/operations.js";
 interface UserDeletionPlanInput {
     uid: string;
@@ -11,8 +12,7 @@ interface UserDeletionPlanInput {
     deletionId: string;
     suspensionOperationId: string;
     erasureOperationId: string;
-    stripeCustomerIds: string[];
-    stripeSubscriptionIds: string[];
+    productContext: OpaqueMap;
 }
 export declare function buildUserDeletionPlan(input: UserDeletionPlanInput): {
     lifecycle: AccountLifecycle;

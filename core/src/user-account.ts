@@ -13,8 +13,6 @@ export interface UserAccount {
   readonly mattermostUsername: string | null;
   readonly onboardingStep: string | null;
   readonly onboardingComplete: boolean;
-  readonly stripeCustomerIds: readonly string[];
-  readonly stripeSubscriptionIds: readonly string[];
 }
 
 export interface UserAccountReader {
@@ -40,14 +38,7 @@ function millis(value: unknown): number | null {
   return typeof timestamp?.toMillis === "function" ? timestamp.toMillis() : null;
 }
 
-function distinct(values: ReadonlyArray<string | null>): string[] {
-  return [...new Set(values.filter((value): value is string => value !== null))];
-}
-
 export function userAccountFromData(uid: string, data: Data): UserAccount {
-  const subscription = map(data.subscription);
-  const builderSubscription = map(data.builderSubscription);
-  const billing = map(data.billing);
   const mattermostUsername = map(data.mattermost).username;
   return {
     uid,
@@ -61,17 +52,6 @@ export function userAccountFromData(uid: string, data: Data): UserAccount {
     mattermostUsername: typeof mattermostUsername === "string" ? mattermostUsername : null,
     onboardingStep: nonEmptyString(data.onboardingStep),
     onboardingComplete: data.onboardingComplete === true,
-    stripeCustomerIds: distinct([
-      nonEmptyString(subscription.stripeCustomerId),
-      nonEmptyString(data.stripeCustomerId),
-      nonEmptyString(billing.stripeCustomerId),
-    ]),
-    stripeSubscriptionIds: distinct([
-      nonEmptyString(subscription.stripeSubscriptionId) ??
-        nonEmptyString(subscription.id) ??
-        nonEmptyString(billing.subscriptionId),
-      nonEmptyString(builderSubscription.stripeSubscriptionId) ?? nonEmptyString(builderSubscription.id),
-    ]),
   };
 }
 

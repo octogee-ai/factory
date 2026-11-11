@@ -4,8 +4,8 @@ import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store"
 import {
   deleteProjectAgentCredentialSecrets,
   ensureAnonymousDeletionArchive,
-  persistDeletionProductContext,
 } from "../index.js";
+import { persistDeletionProductContext } from "../lib/user-ops/deletion-job.js";
 
 const userRoot = {
   gatewayId: "alice-gw", latestRelease: 1, desiredRelease: 1, desiredStatus: "running",
@@ -36,18 +36,20 @@ describe("ensureAnonymousDeletionArchive", () => {
     const store = createDocumentFixtureStore(documents);
     const db = productDb({ "users/uid-alice": { selectedTier: "personal_pro" } });
 
-    const archiveId = await ensureAnonymousDeletionArchive(db, store, "del-1");
+    const productFields = (user: Record<string, unknown> | undefined) => ({ planTier: user?.selectedTier });
+
+    const archiveId = await ensureAnonymousDeletionArchive(db, store, "del-1", productFields);
 
     expect(documents.get("customerDeletionJobs/del-1")).toMatchObject({ archiveId, updatedAt: expect.any(Number) });
     expect(documents.get(`anonymousOperationalArchives/${archiveId}`)).toMatchObject({
       schemaVersion: 1, planTier: "personal_pro", gatewayClass: "builder", archivedAt: expect.any(Number),
     });
-    await expect(ensureAnonymousDeletionArchive(db, store, "del-1")).resolves.toBe(archiveId);
+    await expect(ensureAnonymousDeletionArchive(db, store, "del-1", productFields)).resolves.toBe(archiveId);
     expect([...documents.keys()].filter((path) => path.startsWith("anonymousOperationalArchives/"))).toHaveLength(1);
   });
 
   it("refuses a vanished deletion job instead of archiving an unknown user", async () => {
-    await expect(ensureAnonymousDeletionArchive(productDb({}), createDocumentFixtureStore({}), "del-1"))
+    await expect(ensureAnonymousDeletionArchive(productDb({}), createDocumentFixtureStore({}), "del-1", () => ({})))
       .rejects.toThrow("deletion job missing: del-1");
   });
 });

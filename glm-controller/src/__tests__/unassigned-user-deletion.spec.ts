@@ -84,7 +84,7 @@ async function suspend(records: Records, suspensionOperationId: string): Promise
       const job = await store.jobs.deletions.get(id);
       return job === null ? null : {
         uid: job.uid ?? "", slug: job.slug ?? null, currentGatewayId: job.currentGatewayId ?? null,
-        stripeCustomerIds: [], stripeSubscriptionIds: [],
+        productContext: job.productContext ?? {},
         cleanupContext: (job.cleanupContext as UserCleanupContext | undefined) ?? null,
       };
     },
@@ -107,15 +107,8 @@ async function suspend(records: Records, suspensionOperationId: string): Promise
     invalidatePendingCredentialFlows: done,
     unmountFromGateway: vi.fn(async () => "unmounted" as const),
     releasePlacement: done,
-    cancelStripeSubscription: done,
-    listStripeCustomerIdsForUid: vi.fn(async () => []),
-    listLiveStripeSubscriptionIds: vi.fn(async () => []),
-    listOpenStripeCheckoutSessionIds: vi.fn(async () => []),
-    expireStripeCheckoutSession: done,
-    persistStripeBillingRefs: done,
     revokeConnectorGrants: done,
     revokeModelBrokerAccess: done,
-    disableAutoTopUp: done,
     deleteCredentialSecrets: done,
     retireProjectAgentMattermostUsers: done,
     deleteProjectAgentCredentialDocs: done,
@@ -139,7 +132,7 @@ async function erase(records: Records, erasureOperationId: string, cloudErase: E
     loadDeletionJob: async (id) => {
       const job = await store.jobs.deletions.get(id);
       return job === null ? null : {
-        uid: job.uid ?? "", status: job.status, eraseAfter: job.eraseAfter, stripeCustomerIds: [],
+        uid: job.uid ?? "", status: job.status, eraseAfter: job.eraseAfter, productContext: job.productContext ?? {},
         archiveId: job.archiveId ?? null, cleanupContext: (job.cleanupContext as UserCleanupContext | undefined) ?? null,
       };
     },
@@ -158,12 +151,7 @@ async function erase(records: Records, erasureOperationId: string, cloudErase: E
       unmountSharedUser,
     }),
     ensureAnonymousArchive: vi.fn(async () => "archive-1"),
-    requestPostHogDeletion: vi.fn(async () => ({ skipped: true })),
-    confirmPostHogDeletion: vi.fn(async () => "skipped" as const),
-    retainPostHogMappingOnly: vi.fn(async () => undefined),
-    deleteStripeCustomer: vi.fn(async () => undefined),
-    discoverStripeCustomerIds: vi.fn(async () => []),
-    persistStripeCustomerIds: vi.fn(async () => undefined),
+    retainProductVerificationContext: vi.fn(async () => undefined),
     ensureOwnedGatewayRetired: vi.fn(async () => "not-owned" as const),
     findUndrainedArtifactIds: vi.fn(async () => []),
     cloudErase,

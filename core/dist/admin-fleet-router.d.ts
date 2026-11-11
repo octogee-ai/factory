@@ -8,8 +8,7 @@ import { type SizingTier } from "@octogee/shared/types/sizing";
 import { type GatewayPricingMode } from "@octogee/shared/types/cost-estimator";
 import { type UserAccounts, type UserSignInHosts } from "./admin-user-router.js";
 import { type DurableGatewayRoot } from "./gateway-release-append.js";
-import { type UserAccountReader } from "./user-account.js";
-import type { PlatformStateStore } from "./platform-state/store.js";
+import type { OpaqueMap, PlatformStateStore } from "./platform-state/store.js";
 import { type CentralReleaseAuthority } from "./artifact-registry.js";
 export interface FleetLogger {
     info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -70,7 +69,9 @@ export interface FleetRouterDeps {
     revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
     userAccounts?: UserAccounts;
     userSignIn?: UserSignInHosts;
+    discoverDeletionProductContext?: DeletionProductContextDiscovery;
 }
+export type DeletionProductContextDiscovery = (uid: string) => Promise<OpaqueMap>;
 declare function resolveSizingForResponse(glmDoc: Record<string, unknown> | undefined, reservation: ReturnType<typeof projectGatewayReservation>): {
     tier: SizingTier;
     resolvedFrom: "explicit" | "class-default" | "profile-default";
@@ -257,7 +258,7 @@ export type UserSelfDeletionOutcome = {
 };
 export declare function scheduleUserSelfDeletion(opts: {
     store: PlatformStateStore;
-    accounts: UserAccountReader;
+    discoverProductContext: DeletionProductContextDiscovery;
     deps: Pick<FleetRouterDeps, "suspendAuthUser" | "revokeConnectorGrantsForUser">;
     uid: string;
 }): Promise<UserSelfDeletionOutcome>;

@@ -20,7 +20,7 @@ import type { AgentStoreUnmountCoverage } from "@octogee/shared/types/fleet-cont
 import { isSharedPoolSlotId } from "@octogee/shared/types/shared-gateway-pool";
 
 export class UserErasureBlockedError extends Error {
-  override readonly name = "UserErasureBlockedError";
+  override readonly name: string = "UserErasureBlockedError";
 }
 
 export interface SharedAgentErasureSource {

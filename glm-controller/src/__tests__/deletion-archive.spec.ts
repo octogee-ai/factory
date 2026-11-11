@@ -8,7 +8,7 @@ describe("buildAnonymousOperationalArchive", () => {
       createdAt: Date.UTC(2026, 6, 1),
       deletionRequestedAt: Date.UTC(2026, 6, 29),
       environment: "test",
-      planTier: "builder",
+      productFields: {},
       gatewayClass: "builder",
       rollup: {
         models: {
@@ -40,7 +40,7 @@ describe("buildAnonymousOperationalArchive", () => {
       createdAt: Date.UTC(2025, 0, 2),
       deletionRequestedAt: Date.UTC(2026, 6, 1),
       environment: "test",
-      planTier: "builder",
+      productFields: { planTier: "builder" },
       gatewayClass: "builder",
       rollup: {
         costUsd: 12.34,
@@ -85,14 +85,14 @@ describe("buildAnonymousOperationalArchive", () => {
       createdAt: null,
       deletionRequestedAt: 2,
       environment: "alice@example.com",
-      planTier: "alice@example.com",
+      productFields: {},
       gatewayClass: "alice@example.com",
       rollup: { costUsd: -1, totalTokens: "many", requestCount: Number.NaN },
     });
     expect(archive.totals).toEqual({ costUsd: 0, totalTokens: 0, requestCount: 0 });
     expect(archive.accountCreatedMonth).toBeNull();
     expect(archive.environment).toBe("unknown");
-    expect(archive.planTier).toBeNull();
+    expect(archive).not.toHaveProperty("planTier");
     expect(archive.gatewayClass).toBeNull();
     expect(archive.models).toEqual([]);
   });

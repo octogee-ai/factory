@@ -10,15 +10,8 @@ import {
 import {
   assertUserRestoreNotInProgress,
   cancelUserMigrationsForSuspension,
-  cancelStripeSubscription,
   deactivateUserVisibility,
-  deleteStripeCustomer,
-  disableCreditAutoTopUp,
-  expireStripeCheckoutSession,
   invalidatePendingCredentialFlows,
-  listOpenStripeCheckoutSessionIds,
-  listLiveStripeSubscriptionIds,
-  listStripeCustomerIdsForUid,
   releaseUserPlacement,
   revokeOwnerModelBrokerTokens,
 } from "../lib/user-ops/user-suspension-runtime.js";
@@ -148,161 +141,6 @@ describe("releaseUserPlacement", () => {
     await releaseUserPlacement(createDocumentFixtureStore(records), "uid-1", "shared-0");
 
     expect(records).toEqual({ "gateways/shared-1/assignments/uid-1": assignment("shared-1") });
-  });
-});
-
-describe("cancelStripeSubscription", () => {
-  it("cancels the subscription through Stripe's idempotent DELETE endpoint", async () => {
-    const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
-    await cancelStripeSubscription(fetchImpl as typeof fetch, "sk_test_1", "sub_1");
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "https://api.stripe.com/v1/subscriptions/sub_1",
-      expect.objectContaining({
-        method: "DELETE",
-        headers: { Authorization: "Bearer sk_test_1" },
-      }),
-    );
-  });
-
-  it("treats Stripe resource_missing as already cancelled", async () => {
-    const fetchImpl = vi.fn(async () => new Response(
-      JSON.stringify({ error: { code: "resource_missing" } }),
-      { status: 404 },
-    ));
-    await expect(cancelStripeSubscription(
-      fetchImpl as typeof fetch,
-      "sk_test_1",
-      "sub_gone",
-    )).resolves.toBeUndefined();
-  });
-
-  it("surfaces every other Stripe failure", async () => {
-    const fetchImpl = vi.fn(async () => new Response("rate limited", { status: 429 }));
-    await expect(cancelStripeSubscription(
-      fetchImpl as typeof fetch,
-      "sk_test_1",
-      "sub_1",
-    )).rejects.toThrow(/429.*rate limited/);
-  });
-});
-
-describe("listLiveStripeSubscriptionIds", () => {
-  it("paginates every customer subscription and excludes terminal statuses", async () => {
-    const fetchImpl = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: [
-          { id: "sub_active", status: "active" },
-          { id: "sub_canceled", status: "canceled" },
-        ],
-        has_more: true,
-      }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: [
-          { id: "sub_trial", status: "trialing" },
-          { id: "sub_expired", status: "incomplete_expired" },
-        ],
-        has_more: false,
-      }), { status: 200 }));
-
-    await expect(listLiveStripeSubscriptionIds(
-      fetchImpl as typeof fetch,
-      "sk_test_1",
-      "cus_1",
-    )).resolves.toEqual(["sub_active", "sub_trial"]);
-    expect(fetchImpl.mock.calls[1]?.[0]).toContain("starting_after=sub_canceled");
-  });
-
-  it("fails loudly when Stripe returns a malformed or failed listing", async () => {
-    const failed = vi.fn(async () => new Response("rate limited", { status: 429 }));
-    await expect(listLiveStripeSubscriptionIds(
-      failed as typeof fetch,
-      "sk_test_1",
-      "cus_1",
-    )).rejects.toThrow(/429.*rate limited/);
-  });
-});
-
-describe("listStripeCustomerIdsForUid", () => {
-  it("paginates every Stripe customer tagged with the user uid", async () => {
-    const fetchImpl = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: [{ id: "cus_primary" }],
-        has_more: true,
-        next_page: "next-token",
-      }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: [{ id: "cus_orphan" }],
-        has_more: false,
-      }), { status: 200 }));
-
-    await expect(listStripeCustomerIdsForUid(
-      fetchImpl as typeof fetch,
-      "sk_test_1",
-      "uid-1",
-    )).resolves.toEqual(["cus_orphan", "cus_primary"]);
-    expect(fetchImpl.mock.calls[0]?.[0]).toContain("customers/search");
-    expect(fetchImpl.mock.calls[1]?.[0]).toContain("page=next-token");
-  });
-});
-
-describe("open Stripe checkout sessions", () => {
-  it("paginates every open session for a user", async () => {
-    const fetchImpl = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: [{ id: "cs_open_1" }],
-        has_more: true,
-      }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: [{ id: "cs_open_2" }],
-        has_more: false,
-      }), { status: 200 }));
-
-    await expect(listOpenStripeCheckoutSessionIds(
-      fetchImpl as typeof fetch,
-      "sk_test_1",
-      "cus_1",
-    )).resolves.toEqual(["cs_open_1", "cs_open_2"]);
-    expect(fetchImpl.mock.calls[1]?.[0]).toContain("starting_after=cs_open_1");
-  });
-
-  it("expires a checkout session and treats resource_missing as already closed", async () => {
-    const expired = vi.fn(async () => new Response("{}", { status: 200 }));
-    await expireStripeCheckoutSession(expired as typeof fetch, "sk_test_1", "cs_1");
-    expect(expired).toHaveBeenCalledWith(
-      "https://api.stripe.com/v1/checkout/sessions/cs_1/expire",
-      expect.objectContaining({ method: "POST" }),
-    );
-
-    const missing = vi.fn(async () => new Response(
-      JSON.stringify({ error: { code: "resource_missing" } }),
-      { status: 404 },
-    ));
-    await expect(expireStripeCheckoutSession(
-      missing as typeof fetch,
-      "sk_test_1",
-      "cs_gone",
-    )).resolves.toBeUndefined();
-  });
-});
-
-describe("deleteStripeCustomer", () => {
-  it("deletes the Stripe customer and treats resource_missing as already erased", async () => {
-    const deleted = vi.fn(async () => new Response("{}", { status: 200 }));
-    await deleteStripeCustomer(deleted as typeof fetch, "sk_test_1", "cus_1");
-    expect(deleted).toHaveBeenCalledWith(
-      "https://api.stripe.com/v1/customers/cus_1",
-      expect.objectContaining({ method: "DELETE" }),
-    );
-
-    const missing = vi.fn(async () => new Response(
-      JSON.stringify({ error: { code: "resource_missing" } }),
-      { status: 404 },
-    ));
-    await expect(deleteStripeCustomer(
-      missing as typeof fetch,
-      "sk_test_1",
-      "cus_gone",
-    )).resolves.toBeUndefined();
   });
 });
 
@@ -468,13 +306,5 @@ describe("Firestore suspension fences", () => {
     expect(records["modelBrokerTokens/t0"]).toEqual(token());
   });
 
-  it("disables automatic top-up without deleting the financial balance", async () => {
-    const set = vi.fn(async () => undefined);
-    const db = { collection: () => ({ doc: () => ({ set }) }) };
-    await disableCreditAutoTopUp(db as never, "uid-1", 60);
-    expect(set).toHaveBeenCalledWith({
-      autoTopUp: { enabled: false, disabledAt: 60, disabledReason: "account_suspended" },
-    }, { merge: true });
-  });
 
 });

@@ -36,10 +36,7 @@ export function buildUserDeletionPlan(input) {
             currentGatewayId: input.currentGatewayId,
             suspensionOperationId: input.suspensionOperationId,
             erasureOperationId: input.erasureOperationId,
-            productContext: {
-                stripeCustomerIds: input.stripeCustomerIds,
-                stripeSubscriptionIds: input.stripeSubscriptionIds,
-            },
+            productContext: input.productContext,
         },
         suspensionOperation: operationRecord({
             kind: "suspend-customer",

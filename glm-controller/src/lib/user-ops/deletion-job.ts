@@ -1,5 +1,5 @@
-import type { UserDeletionJob, UserDeletionJobPatch } from "@octogee/core/platform-state";
-import type { PostHogErasureState } from "./posthog-erasure.js";
+import type { PlatformStateStore, UserDeletionJobPatch } from "@octogee/core/platform-state";
+import type { ProductContext } from "./user-lifecycle-product.js";
 
 const CLEAR = { clear: true } as const;
 
@@ -14,19 +14,18 @@ const CLEARED_CLEANUP_FIELDS = {
   retiredGatewayProofs: CLEAR,
 } satisfies UserDeletionJobPatch;
 
-export function postHogMappingOnlyJobPatch(
-  job: Pick<UserDeletionJob, "productContext">,
+export function productVerificationJobPatch(
+  verificationContext: ProductContext | null,
   archiveId: string,
   now: number,
 ): UserDeletionJobPatch {
-  const posthogErasure = job.productContext?.posthogErasure;
   return {
     status: "product_verification_pending",
     archiveId,
     cloudErasedAt: now,
     updatedAt: now,
     ...CLEARED_CLEANUP_FIELDS,
-    productContext: posthogErasure === undefined ? CLEAR : { posthogErasure },
+    productContext: verificationContext ?? CLEAR,
   };
 }
 
@@ -42,29 +41,14 @@ export function verifiedDeletionJobPatch(archiveId: string, now: number): UserDe
   };
 }
 
-function isPersonUuidList(value: unknown): value is string[] {
-  return Array.isArray(value) &&
-    value.every((personUuid) => typeof personUuid === "string" && personUuid.length > 0);
-}
-
-export function readPostHogErasureState(
+export async function persistDeletionProductContext(
+  store: PlatformStateStore,
   deletionId: string,
-  job: Pick<UserDeletionJob, "productContext">,
-): PostHogErasureState | null {
-  const productContext = job.productContext ?? {};
-  if (!("posthogErasure" in productContext)) return null;
-  const persisted = productContext.posthogErasure as Partial<Record<keyof PostHogErasureState, unknown>> | null;
-  const requested = persisted?.requestedPersonUuids ?? [];
-  if (
-    !persisted ||
-    typeof persisted !== "object" ||
-    !isPersonUuidList(persisted.personUuids) ||
-    !isPersonUuidList(requested)
-  ) {
-    throw new Error(`deletion job has malformed PostHog erasure state: ${deletionId}`);
-  }
-  return {
-    personUuids: [...new Set(persisted.personUuids)].sort(),
-    requestedPersonUuids: [...new Set(requested)].sort(),
-  };
+  fields: ProductContext,
+): Promise<void> {
+  await store.transaction({ label: "customer-deletion.persist-product-context" }, async (tx) => {
+    const job = await tx.jobs.deletions.get(deletionId);
+    if (job === null) throw new Error(`deletion job missing: ${deletionId}`);
+    await tx.jobs.deletions.patch(deletionId, { productContext: { ...job.productContext, ...fields }, updatedAt: Date.now() });
+  });
 }

@@ -13,13 +13,7 @@ function millis(value) {
     const timestamp = value;
     return typeof timestamp?.toMillis === "function" ? timestamp.toMillis() : null;
 }
-function distinct(values) {
-    return [...new Set(values.filter((value) => value !== null))];
-}
 export function userAccountFromData(uid, data) {
-    const subscription = map(data.subscription);
-    const builderSubscription = map(data.builderSubscription);
-    const billing = map(data.billing);
     const mattermostUsername = map(data.mattermost).username;
     return {
         uid,
@@ -33,17 +27,6 @@ export function userAccountFromData(uid, data) {
         mattermostUsername: typeof mattermostUsername === "string" ? mattermostUsername : null,
         onboardingStep: nonEmptyString(data.onboardingStep),
         onboardingComplete: data.onboardingComplete === true,
-        stripeCustomerIds: distinct([
-            nonEmptyString(subscription.stripeCustomerId),
-            nonEmptyString(data.stripeCustomerId),
-            nonEmptyString(billing.stripeCustomerId),
-        ]),
-        stripeSubscriptionIds: distinct([
-            nonEmptyString(subscription.stripeSubscriptionId) ??
-                nonEmptyString(subscription.id) ??
-                nonEmptyString(billing.subscriptionId),
-            nonEmptyString(builderSubscription.stripeSubscriptionId) ?? nonEmptyString(builderSubscription.id),
-        ]),
     };
 }
 function accountOf(snapshot) {

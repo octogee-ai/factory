@@ -20,7 +20,6 @@ import {
   journalRowsIn,
   type FixtureDocuments,
 } from "./testing/journal-store.js";
-import { firestoreUserAccountReader } from "./user-account.js";
 import type { PlatformStateTransaction } from "./platform-state/store.js";
 import {
   GLM_GATEWAYS_COLLECTION,
@@ -2997,7 +2996,7 @@ describe("account deletion revokes connector grants at the provider first", () =
         return userDoc(uid!);
       },
     } as unknown as Firestore;
-    const accounts = firestoreUserAccountReader(db);
+    const discoverProductContext = vi.fn(async (_uid: string) => ({}));
 
     const app = express();
     app.use(express.json());
@@ -3019,18 +3018,20 @@ describe("account deletion revokes connector grants at the provider first", () =
       logger: { info: vi.fn(), warn: vi.fn() },
       provisionGatewayAuthSecret: vi.fn(async () => ({})),
       listGatewayBuilds: vi.fn(async () => []),
+      discoverDeletionProductContext: discoverProductContext,
       ...deletionDeps,
     });
-    return { app, store, accounts, deletionDeps, calls, added, remaining, otherDocs, operationQueries };
+    return { app, store, discoverProductContext, deletionDeps, calls, added, remaining, otherDocs, operationQueries };
   }
 
   it("lets a user schedule their own deletion on the 90-day retention path, journaled under their uid", async () => {
-    const { store, accounts, deletionDeps, calls, added, remaining, otherDocs } = makeDeleteApp({
+    const { store, discoverProductContext, deletionDeps, calls, added, remaining, otherDocs } = makeDeleteApp({
       u2: { username: "acme", email: "c@d.co" },
     });
+    discoverProductContext.mockResolvedValueOnce({ stripeCustomerIds: ["cus_1"] });
     const before = Date.now();
 
-    const outcome = await scheduleUserSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" });
+    const outcome = await scheduleUserSelfDeletion({ store, discoverProductContext, deps: deletionDeps, uid: "u2" });
 
     if (outcome.kind !== "scheduled") throw new Error(`unexpected outcome ${outcome.kind}`);
     expect(outcome.incompleteStep).toBeNull();
@@ -3040,7 +3041,7 @@ describe("account deletion revokes connector grants at the provider first", () =
       eraseAfter: outcome.eraseAfter,
     });
     expect(added).toEqual(expect.arrayContaining([
-      expect.objectContaining({ requestedBy: "u2", status: "suspension_pending" }),
+      expect.objectContaining({ requestedBy: "u2", status: "suspension_pending", stripeCustomerIds: ["cus_1"] }),
       expect.objectContaining({ kind: "suspend-customer", inputUid: "u2", createdBy: "u2" }),
       expect.objectContaining({ kind: "erase-customer", inputUid: "u2", nextAttemptAt: outcome.eraseAfter }),
     ]));
@@ -3049,15 +3050,16 @@ describe("account deletion revokes connector grants at the provider first", () =
     ]));
     expect(calls).toContain("suspend-auth:u2");
     expect(calls).toContain("revoke:u2");
+    expect(discoverProductContext).toHaveBeenCalledWith("u2");
   });
 
   it("reports a user's deletion as scheduled even when the immediate sign-out fails, naming the step", async () => {
-    const { store, accounts, deletionDeps, remaining } = makeDeleteApp({
+    const { store, discoverProductContext, deletionDeps, remaining } = makeDeleteApp({
       u2: { username: "acme", email: "c@d.co" },
     });
     deletionDeps.suspendAuthUser.mockRejectedValueOnce(new Error("identity platform unavailable"));
 
-    const outcome = await scheduleUserSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" });
+    const outcome = await scheduleUserSelfDeletion({ store, discoverProductContext, deps: deletionDeps, uid: "u2" });
 
     expect(outcome).toMatchObject({
       kind: "scheduled",
@@ -3069,11 +3071,11 @@ describe("account deletion revokes connector grants at the provider first", () =
   it.each(["restoreFence", "sourceTransferFence"])(
     "tells a user their workspace is busy, not already deleted, while a %s holds it",
     async (fence) => {
-      const { store, accounts, deletionDeps, calls, remaining } = makeDeleteApp({
+      const { store, discoverProductContext, deletionDeps, calls, remaining } = makeDeleteApp({
         u1: { username: "alice", provisioning: { openclaw: { [fence]: { phase: "dispatched" }, gatewayId: "shared-1" } } },
       });
 
-      await expect(scheduleUserSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u1" }))
+      await expect(scheduleUserSelfDeletion({ store, discoverProductContext, deps: deletionDeps, uid: "u1" }))
         .resolves.toEqual({ kind: "workspace-busy" });
       expect(remaining.u1.accountLifecycle).toBeUndefined();
       expect(calls).not.toContain("suspend-auth:u1");
@@ -3090,11 +3092,11 @@ describe("account deletion revokes connector grants at the provider first", () =
       ...input, slug: "alice", migrationId: "mig-move-1:scheduler:1:claim:100",
       forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 3 },
     } } : { customerMigrationV2: { operationId, uid: "u1", sourceGatewayId: "shared-1", targetGatewayId: "shared-2", phase: "sourceQuiesced" } };
-    const { store, accounts, deletionDeps, calls, remaining, otherDocs, added } = makeDeleteApp({ u1: user }, {
+    const { store, discoverProductContext, deletionDeps, calls, remaining, otherDocs, added } = makeDeleteApp({ u1: user }, {
       [assignmentPath]: assignment,
       [`glmOperations/${operationId}`]: { kind: "migrate-customer", status: scenario.endsWith("pending") ? "pending" : "running", inputUid: "u1", input, ...recovery },
     });
-    await expect(scheduleUserSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u1" })).resolves.toEqual({ kind: "workspace-busy" });
+    await expect(scheduleUserSelfDeletion({ store, discoverProductContext, deps: deletionDeps, uid: "u1" })).resolves.toEqual({ kind: "workspace-busy" });
     expect(remaining.u1).toEqual(user);
     expect(otherDocs[assignmentPath]).toEqual(assignment);
     expect(added.some(row => row.kind === "suspend-customer" || row.kind === "erase-customer" || row.status === "suspension_pending")).toBe(false);
@@ -3102,22 +3104,22 @@ describe("account deletion revokes connector grants at the provider first", () =
   });
 
   it("reports a deletion in progress when the user's suspension is already queued", async () => {
-    const { store, accounts, deletionDeps, calls } = makeDeleteApp(
+    const { store, discoverProductContext, deletionDeps, calls } = makeDeleteApp(
       { u2: { username: "acme" } },
       { "glmOperations/suspend-1": { kind: "suspend-customer", status: "pending", inputUid: "u2" } },
     );
 
-    await expect(scheduleUserSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" }))
+    await expect(scheduleUserSelfDeletion({ store, discoverProductContext, deps: deletionDeps, uid: "u2" }))
       .resolves.toEqual({ kind: "conflict" });
     expect(calls).not.toContain("suspend-auth:u2");
   });
 
   it("refuses a second self-deletion while one is already scheduled", async () => {
-    const { store, accounts, deletionDeps, calls } = makeDeleteApp({
+    const { store, discoverProductContext, deletionDeps, calls } = makeDeleteApp({
       u2: { username: "acme", accountLifecycle: { status: "deletion_scheduled", deletionId: "d1" } },
     });
 
-    await expect(scheduleUserSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" }))
+    await expect(scheduleUserSelfDeletion({ store, discoverProductContext, deps: deletionDeps, uid: "u2" }))
       .resolves.toEqual({ kind: "conflict" });
     expect(calls).not.toContain("suspend-auth:u2");
   });
@@ -3321,6 +3323,20 @@ describe("account deletion revokes connector grants at the provider first", () =
     ]));
     expect(calls).toContain("suspend-auth:u2");
     expect(calls).toContain("revoke:u2");
+  });
+
+  it("stores the product's discovered context on the deletion job an admin schedules", async () => {
+    const { app, added, discoverProductContext } = makeDeleteApp({
+      u2: { username: "acme", email: "c@d.co" },
+    });
+    discoverProductContext.mockResolvedValueOnce({ stripeCustomerIds: ["cus_1"] });
+
+    await request(app).post("/users/u2/delete").expect(202);
+
+    expect(discoverProductContext).toHaveBeenCalledWith("u2");
+    expect(added).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requestedBy: "admin-1", status: "suspension_pending", stripeCustomerIds: ["cus_1"] }),
+    ]));
   });
 
   it("atomically admits one deletion when two requests race for the same user", async () => {

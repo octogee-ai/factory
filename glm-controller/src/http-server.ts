@@ -68,6 +68,7 @@ export type ProductAdminRoutes = (
 export interface HttpServerDeps {
   addProductAdminRoutes?: ProductAdminRoutes;
   userAccounts?: UserAccounts | undefined;
+  discoverDeletionProductContext?: ((uid: string) => Promise<Readonly<Record<string, unknown>>>) | undefined;
   userSignIn?: UserSignInHosts | undefined;
   db: Firestore;
   store: PlatformStateStore;
@@ -337,6 +338,7 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     revokeConnectorGrantsForUser: deps.revokeConnectorGrantsForUser,
     userAccounts: deps.userAccounts,
     userSignIn: deps.userSignIn,
+    discoverDeletionProductContext: deps.discoverDeletionProductContext,
   });
   addAdminLogsRoutes(adminRouter, {
     source: deps.logs.source,

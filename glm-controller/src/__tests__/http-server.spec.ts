@@ -709,6 +709,23 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(order).toEqual(["suspend-auth", "revoke"]);
   });
 
+  it("forwards the product's deletion context discovery to the account deletion route", async () => {
+    store.users["delete-me"] = { email: "delete@example.com" };
+    const discoverDeletionProductContext = vi.fn(async () => ({ stripeCustomerIds: ["cus_1"] }));
+    const app = createHttpServer(buildDeps(store, {
+      revokeConnectorGrantsForUser: vi.fn(async () => undefined),
+      suspendAuthUser: vi.fn(async () => undefined),
+      discoverDeletionProductContext,
+    }));
+
+    const res = await request(app)
+      .post("/api/admin/users/delete-me/delete")
+      .set("Authorization", "Bearer admin-token");
+
+    expect(res.status, JSON.stringify(res.body)).toBe(202);
+    expect(discoverDeletionProductContext).toHaveBeenCalledWith("delete-me");
+  });
+
   it("rejects unauthenticated requests with 401", async () => {
     const app = createHttpServer(buildDeps(store));
     const res = await request(app).get("/api/admin/gateways");

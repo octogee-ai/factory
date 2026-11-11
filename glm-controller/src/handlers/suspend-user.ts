@@ -6,13 +6,17 @@ import type {
 } from "../operation-router.js";
 import type { UserCleanupContext } from "./deprovision-user.js";
 import type { UnmountOutcome } from "../lib/user-ops/unmount-gateway.js";
+import type {
+  ProductContext,
+  ProductUserSuspension,
+  SuspensionStepRunner,
+} from "../lib/user-ops/user-lifecycle-product.js";
 
 export interface UserDeletionJobForSuspension {
   uid: string;
   slug: string | null;
   currentGatewayId: string | null;
-  stripeCustomerIds: string[];
-  stripeSubscriptionIds: string[];
+  productContext: ProductContext;
   cleanupContext: UserCleanupContext | null;
 }
 
@@ -35,19 +39,8 @@ export interface UserSuspensionDeps {
     slug: string,
   ) => Promise<UnmountOutcome>;
   releasePlacement: (uid: string, capturedGatewayId: string | null) => Promise<void>;
-  cancelStripeSubscription: (subscriptionId: string) => Promise<void>;
-  listStripeCustomerIdsForUid: (uid: string) => Promise<string[]>;
-  listLiveStripeSubscriptionIds: (customerId: string) => Promise<string[]>;
-  listOpenStripeCheckoutSessionIds: (customerId: string) => Promise<string[]>;
-  expireStripeCheckoutSession: (sessionId: string) => Promise<void>;
-  persistStripeBillingRefs: (
-    deletionId: string,
-    customerIds: string[],
-    subscriptionIds: string[],
-  ) => Promise<void>;
   revokeConnectorGrants: (uid: string) => Promise<void>;
   revokeModelBrokerAccess: (uid: string) => Promise<void>;
-  disableAutoTopUp: (uid: string) => Promise<void>;
   deleteCredentialSecrets: (secretNames: string[]) => Promise<void>;
   retireProjectAgentMattermostUsers: (userIds: string[]) => Promise<void>;
   deleteProjectAgentCredentialDocs: (docPaths: string[]) => Promise<void>;
@@ -56,16 +49,13 @@ export interface UserSuspensionDeps {
     deletionId: string,
   ) => Promise<"not-owned" | "retirement-pending" | "retired">;
   markSuspended: (deletionId: string) => Promise<void>;
+  product?: ProductUserSuspension;
   now: () => number;
 }
 
 interface SuspensionInput {
   uid?: unknown;
   deletionId?: unknown;
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values)].sort();
 }
 
 async function report(
@@ -148,6 +138,8 @@ export function createSuspendUserHandler(
       }
     };
     const skip = (name: string) => report(ctx, deps, { name, status: "skipped" });
+    const steps: SuspensionStepRunner = { run, skip };
+    const productJob = { uid, deletionId, productContext: job.productContext };
 
     await run("suspend-auth", () => deps.suspendAuthUser(uid));
     let migrationPending = false;
@@ -175,74 +167,10 @@ export function createSuspendUserHandler(
         throw new Error("owned gateway retirement is pending");
       }
     });
-    let stripeCustomerIds = job.stripeCustomerIds;
-    let stripeSubscriptionIds = job.stripeSubscriptionIds;
-    await run("discover-stripe-billing", async () => {
-      stripeCustomerIds = uniqueStrings([
-        ...stripeCustomerIds,
-        ...await deps.listStripeCustomerIdsForUid(uid),
-      ]);
-      const discovered = await Promise.all(
-        stripeCustomerIds.map((customerId) => deps.listLiveStripeSubscriptionIds(customerId)),
-      );
-      stripeSubscriptionIds = uniqueStrings([
-        ...stripeSubscriptionIds,
-        ...discovered.flat(),
-      ]);
-      await deps.persistStripeBillingRefs(
-        deletionId,
-        stripeCustomerIds,
-        stripeSubscriptionIds,
-      );
-    });
-    if (stripeSubscriptionIds.length > 0) {
-      await Promise.all(stripeSubscriptionIds.map((subscriptionId) =>
-        run(`cancel-stripe-subscription:${subscriptionId}`, () =>
-          deps.cancelStripeSubscription(subscriptionId))));
-    } else {
-      await skip("cancel-stripe-subscription");
-    }
-    await run("verify-stripe-billing-stopped", async () => {
-      stripeCustomerIds = uniqueStrings([
-        ...stripeCustomerIds,
-        ...await deps.listStripeCustomerIdsForUid(uid),
-      ]);
-      const remaining = (await Promise.all(
-        stripeCustomerIds.map((customerId) => deps.listLiveStripeSubscriptionIds(customerId)),
-      )).flat();
-      await deps.persistStripeBillingRefs(
-        deletionId,
-        stripeCustomerIds,
-        uniqueStrings([...stripeSubscriptionIds, ...remaining]),
-      );
-      if (remaining.length > 0) {
-        throw new Error(`live subscriptions remain: ${uniqueStrings(remaining).join(", ")}`);
-      }
-    });
-    let stripeCheckoutSessionIds: string[] = [];
-    await run("discover-stripe-checkout-sessions", async () => {
-      stripeCheckoutSessionIds = uniqueStrings((await Promise.all(
-        stripeCustomerIds.map((customerId) => deps.listOpenStripeCheckoutSessionIds(customerId)),
-      )).flat());
-    });
-    if (stripeCheckoutSessionIds.length > 0) {
-      await Promise.all(stripeCheckoutSessionIds.map((sessionId) =>
-        run(`expire-stripe-checkout-session:${sessionId}`, () =>
-          deps.expireStripeCheckoutSession(sessionId))));
-    } else {
-      await skip("expire-stripe-checkout-session");
-    }
-    await run("verify-stripe-checkout-sessions-closed", async () => {
-      const remaining = uniqueStrings((await Promise.all(
-        stripeCustomerIds.map((customerId) => deps.listOpenStripeCheckoutSessionIds(customerId)),
-      )).flat());
-      if (remaining.length > 0) {
-        throw new Error(`open checkout sessions remain: ${remaining.join(", ")}`);
-      }
-    });
+    await deps.product?.afterGatewayRetirement(productJob, steps);
     await run("revoke-connector-grants", () => deps.revokeConnectorGrants(uid));
     await run("revoke-model-broker", () => deps.revokeModelBrokerAccess(uid));
-    await run("disable-auto-top-up", () => deps.disableAutoTopUp(uid));
+    await deps.product?.afterModelBrokerRevocation(productJob, steps);
     await run("delete-credential-secrets", () =>
       deps.deleteCredentialSecrets(cleanup.credentialSecretNames));
     await run("retire-project-agent-users", () =>

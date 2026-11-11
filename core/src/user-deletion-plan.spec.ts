@@ -13,8 +13,7 @@ describe("buildUserDeletionPlan", () => {
       deletionId: "delete-random",
       suspensionOperationId: "suspend-random",
       erasureOperationId: "erase-random",
-      stripeCustomerIds: ["cus_1"],
-      stripeSubscriptionIds: ["sub_personal", "sub_builder"],
+      productContext: { billingRefs: ["ref-1"] },
     });
 
     expect(plan.lifecycle).toEqual({
@@ -33,10 +32,7 @@ describe("buildUserDeletionPlan", () => {
       requestedAt: 10_000,
       eraseAfter: 20_000,
       currentGatewayId: "gw-alice",
-      productContext: {
-        stripeCustomerIds: ["cus_1"],
-        stripeSubscriptionIds: ["sub_personal", "sub_builder"],
-      },
+      productContext: { billingRefs: ["ref-1"] },
       suspensionOperationId: "suspend-random",
       erasureOperationId: "erase-random",
     });
@@ -68,8 +64,7 @@ describe("buildUserDeletionPlan", () => {
       deletionId: "delete-lite",
       suspensionOperationId: "suspend-lite",
       erasureOperationId: "erase-lite",
-      stripeCustomerIds: [],
-      stripeSubscriptionIds: [],
+      productContext: {},
     });
     expect(plan.job).toMatchObject({ uid: "uid-lite", slug: null, currentGatewayId: null });
   });
