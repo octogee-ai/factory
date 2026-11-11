@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Operation } from "@octogee/shared/types/glm";
 import type { AgentStoreErasureCustody, AgentStoreErasureTarget } from "@octogee/core/agent-store-credentials";
 import type {
+  AgentStoreRecord,
   PlatformUserRecord,
   UserDeletionJob,
   GatewayRoot,
@@ -16,6 +17,11 @@ import { assertActiveOperationClaim } from "../../operation-context.js";
 import type { UserGatewayRetirementProof } from "./user-gateway-retirement.js";
 import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import type { AgentStoreUnmountCoverage } from "@octogee/shared/types/fleet-controller";
+import { isSharedPoolSlotId } from "@octogee/shared/types/shared-gateway-pool";
+
+export class UserErasureBlockedError extends Error {
+  override readonly name = "UserErasureBlockedError";
+}
 
 export interface SharedAgentErasureSource {
   gatewayId: string;
@@ -35,7 +41,7 @@ export interface UserAgentStoreErasureDeps {
   ownerHomeAbsent(uid: string): Promise<boolean>;
   eraseVm?: (uid: string) => Promise<unknown>;
   readSharedSource(gatewayId: string): Promise<SharedAgentErasureSource | null>;
-  unmountSharedUser(cleanup: UserCleanupContext, coverage: AgentStoreUnmountCoverage, operation: Operation): Promise<void>;
+  unmountSharedUser(gatewayId: string, cleanup: UserCleanupContext, coverage: AgentStoreUnmountCoverage, operation: Operation): Promise<void>;
 }
 
 function isMap(value: unknown): value is Record<string, unknown> {
@@ -97,7 +103,7 @@ function transferConflicts(task: MigrationTransferTask, slug: string, gateways: 
 
 function deletionIdentityMatches(job: UserDeletionJob, cleanup: UserCleanupContext, operation: Operation): boolean {
   return job.version === 1 && job.uid === cleanup.uid && job.slug === cleanup.slug &&
-    job.currentGatewayId === cleanup.currentGatewayId && job.erasureOperationId === operation.id &&
+    (cleanup.currentGatewayId === null || job.currentGatewayId === cleanup.currentGatewayId) && job.erasureOperationId === operation.id &&
     job.status === "hibernating" && isDeepStrictEqual(job.cleanupContext, cleanup);
 }
 
@@ -129,7 +135,7 @@ async function assertDeletionAuthority(
       !userAuthorityMatches(user, cleanup, deletionId, job.eraseAfter) || assignments.length > 0) {
     throw new Error("User PostgreSQL erasure no longer owns its due deletion job");
   }
-  const gateways = new Set([cleanup.currentGatewayId, ...retirementProofs(job).map(proof => proof.gatewayId)].filter((id): id is string => typeof id === "string"));
+  const gateways = new Set([job.currentGatewayId, ...retirementProofs(job).map(proof => proof.gatewayId)].filter((id): id is string => typeof id === "string"));
   if (operations.some(candidate => candidate.id !== operation.id && operationConflicts(candidate, cleanup.uid, gateways)) ||
       transfers.some(task => transferConflicts(task, cleanup.slug, gateways)) ||
       roots.some(root => root.desiredStatus !== "retired" || root.runtimeRestartFence != null)) {
@@ -159,10 +165,33 @@ async function assertUserRetirementAbsent(deps: UserAgentStoreErasureDeps, clean
   }
 }
 
-async function assertRetiredUserWriters(deps: UserAgentStoreErasureDeps, cleanup: UserCleanupContext, job: UserDeletionJob): Promise<void> {
+function custodySourceGateway(records: readonly AgentStoreRecord[], slug: string): string {
+  const custodians = [...new Set(records.flatMap(record =>
+    record.kind === "agent" && agentIdBelongsToSlug(record.agentId, slug) ? [record.gatewayId] : []))];
+  const [gatewayId] = custodians;
+  if (custodians.length !== 1 || !isSharedPoolSlotId(gatewayId)) {
+    throw new UserErasureBlockedError(
+      "User PostgreSQL erasure has no source gateway: the user was unassigned before deletion and agent-store custody names " +
+      `${custodians.length === 0 ? "no gateway" : custodians.join(", ")}, not one shared gateway`);
+  }
+  return gatewayId;
+}
+
+async function recordCustodySourceGateway(
+  deps: UserAgentStoreErasureDeps, cleanup: UserCleanupContext, deletionId: string, operation: Operation,
+): Promise<string> {
+  return deps.store.transaction({ label: "customer-deletion.agent-store-erasure.record-source" }, async (transaction) => {
+    const job = await assertDeletionAuthority(deps, transaction, cleanup, deletionId, operation);
+    if (typeof job.currentGatewayId === "string") return job.currentGatewayId;
+    const currentGatewayId = custodySourceGateway(await transaction.users.agentStores.list(cleanup.uid), cleanup.slug);
+    await transaction.jobs.deletions.patch(deletionId, { currentGatewayId }, { revision: job.revision });
+    return currentGatewayId;
+  });
+}
+
+async function assertRetiredUserWriters(deps: UserAgentStoreErasureDeps, cleanup: UserCleanupContext, sourceGatewayId: string, job: UserDeletionJob): Promise<void> {
   const proofs = retirementProofs(job);
-  if (!cleanup.currentGatewayId) throw new Error("User PostgreSQL erasure lacks its captured source gateway");
-  if (!cleanup.currentGatewayId.startsWith("shared-") && !proofs.some(proof => proof.gatewayId === cleanup.currentGatewayId)) {
+  if (!sourceGatewayId.startsWith("shared-") && !proofs.some(proof => proof.gatewayId === sourceGatewayId)) {
     throw new Error("User PostgreSQL erasure lacks its captured user retirement proof");
   }
   for (const proof of proofs) await assertUserRetirementAbsent(deps, cleanup, proof);
@@ -177,10 +206,9 @@ function sharedSourceAvailable(source: SharedAgentErasureSource | null, gatewayI
 
 async function assertSharedUserStopped(
   deps: UserAgentStoreErasureDeps, cleanup: UserCleanupContext,
-  input: { deletionId: string; operation: Operation; targets: readonly AgentStoreErasureTarget[]; assertCurrent(): Promise<void> },
+  input: { gatewayId: string; deletionId: string; operation: Operation; targets: readonly AgentStoreErasureTarget[]; assertCurrent(): Promise<void> },
 ): Promise<void> {
-  const { deletionId, operation, targets, assertCurrent } = input;
-  const gatewayId = cleanup.currentGatewayId!;
+  const { gatewayId, deletionId, operation, targets, assertCurrent } = input;
   if (await deps.sharedGatewayRetired(gatewayId)) return;
   const source = await deps.readSharedSource(gatewayId);
   if (!sharedSourceAvailable(source, gatewayId) || source.migratingIn.includes(cleanup.slug)) {
@@ -193,7 +221,7 @@ async function assertSharedUserStopped(
     const suspensionId = job.suspensionOperationId;
     if (suspensionId === undefined) throw new Error("User PostgreSQL erasure lacks completed suspension cleanup");
     const suspension = await transaction.journal.operations.get(suspensionId);
-    if (!suspensionCleanupMatches(suspension, cleanup.uid, deletionId)) {
+    if (!suspensionCleanupMatches(suspension, cleanup, deletionId)) {
       throw new Error("User PostgreSQL erasure lacks completed suspension cleanup");
     }
     const prior = job.sharedAgentStoreCleanup;
@@ -214,7 +242,7 @@ async function assertSharedUserStopped(
   });
   if (!complete) {
     await assertCurrent();
-    await deps.unmountSharedUser(cleanup, { podUid: source.podUid, agentIds }, operation);
+    await deps.unmountSharedUser(gatewayId, cleanup, { podUid: source.podUid, agentIds }, operation);
     await assertCurrent();
   }
   const current = complete ? source : await deps.readSharedSource(gatewayId);
@@ -235,10 +263,11 @@ async function assertSharedUserStopped(
   }
 }
 
-function suspensionCleanupMatches(suspension: OperationRecord | null, uid: string, deletionId: string): boolean {
+function suspensionCleanupMatches(suspension: OperationRecord | null, cleanup: UserCleanupContext, deletionId: string): boolean {
+  const unmounted = cleanup.currentGatewayId === null ? "skipped" : "done";
   return suspension?.kind === "suspend-customer" && suspension.status === "succeeded" &&
-    suspension.input?.uid === uid && suspension.input?.deletionId === deletionId &&
-    Array.isArray(suspension.steps) && suspension.steps.some(step => step.name === "unmount-gateway" && step.status === "done");
+    suspension.input?.uid === cleanup.uid && suspension.input?.deletionId === deletionId &&
+    Array.isArray(suspension.steps) && suspension.steps.some(step => step.name === "unmount-gateway" && step.status === unmounted);
 }
 
 export function createUserAgentStoreErasure(deps: UserAgentStoreErasureDeps) {
@@ -248,15 +277,21 @@ export function createUserAgentStoreErasure(deps: UserAgentStoreErasureDeps) {
       { label: "customer-deletion.agent-store-erasure.authority", readOnly: true },
       transaction => assertDeletionAuthority(deps, transaction, cleanup, deletionId, operation),
     );
+    const readSourcedAuthority = async () => {
+      const job = await readAuthority();
+      if (typeof job.currentGatewayId === "string") return { job, sourceGatewayId: job.currentGatewayId };
+      const sourceGatewayId = await recordCustodySourceGateway(deps, cleanup, deletionId, operation);
+      return { job: await readAuthority(), sourceGatewayId };
+    };
     const assertCurrent = async () => { await assertActiveClaim(); await readAuthority(); };
     await assertCurrent();
     await deps.eraseStores(cleanup, {
       assertCurrent,
       assertWritersStopped: async targets => {
-        const job = await readAuthority();
-        await assertRetiredUserWriters(deps, cleanup, job);
-        if (cleanup.currentGatewayId!.startsWith("shared-")) {
-          await assertSharedUserStopped(deps, cleanup, { deletionId, operation, targets, assertCurrent });
+        const { job, sourceGatewayId } = await readSourcedAuthority();
+        await assertRetiredUserWriters(deps, cleanup, sourceGatewayId, job);
+        if (sourceGatewayId.startsWith("shared-")) {
+          await assertSharedUserStopped(deps, cleanup, { gatewayId: sourceGatewayId, deletionId, operation, targets, assertCurrent });
         }
         if (!await deps.ownerHomeAbsent(cleanup.uid)) {
           await assertCurrent();
@@ -266,7 +301,7 @@ export function createUserAgentStoreErasure(deps: UserAgentStoreErasureDeps) {
           if (!await deps.ownerHomeAbsent(cleanup.uid)) throw new Error("User PostgreSQL erasure retained a gateway VM or home");
         }
         await assertCurrent();
-        return [cleanup.currentGatewayId!, ...retirementProofs(job).map(proof => proof.gatewayId)];
+        return [sourceGatewayId, ...retirementProofs(job).map(proof => proof.gatewayId)];
       },
       bindTargets: targets => deps.store.transaction({ label: "customer-deletion.agent-store-erasure.bind-targets" }, async (transaction) => {
         const job = await assertDeletionAuthority(deps, transaction, cleanup, deletionId, operation);

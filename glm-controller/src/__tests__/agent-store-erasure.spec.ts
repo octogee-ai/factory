@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createUserAgentStoreErasure, preserveUserGatewayRetirement } from "../lib/user-ops/agent-store-erasure.js";
+import { UserErasureBlockedError, createUserAgentStoreErasure, preserveUserGatewayRetirement } from "../lib/user-ops/agent-store-erasure.js";
 import type { AgentStoreErasureCustody } from "@octogee/core/agent-store-credentials";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
@@ -20,7 +20,7 @@ function transferTask(fields: Record<string, unknown>): Record<string, unknown> 
 }
 
 function harness() {
-  const cleanup = { uid: "uid-1", slug: "alice", currentGatewayId: "shared-old", projectSlugs: [] };
+  const cleanup = { uid: "uid-1", slug: "alice", currentGatewayId: "shared-old" as string | null, projectSlugs: [] };
   const operation = { id: "erase-1", kind: "erase-customer", status: "running", startedAt: 10, input: { uid: "uid-1", deletionId: "delete-1" } };
   const records: Record<string, Record<string, any>> = {
     "customerDeletionJobs/delete-1": { version: 1, uid: cleanup.uid, slug: cleanup.slug, currentGatewayId: cleanup.currentGatewayId,
@@ -58,6 +58,81 @@ function liveSharedGateway() {
   return h;
 }
 
+function custody(agentId: string, gatewayId: string): Record<string, Record<string, unknown>> {
+  return { [`users/uid-1/agentStores/${agentId}`]: {
+    agentId, gatewayId, assignmentEpoch: 1, storeId: "d57c47b6-c455-4c58-a30e-30dc01d7d80a", schema: "octogee_agent_one", recordedAt: 1,
+  } };
+}
+
+function unassignedBeforeDeletion(custodyRecords = custody("octogee-alice-coach", "shared-old")) {
+  const h = liveSharedGateway();
+  h.cleanup.currentGatewayId = null;
+  h.records["customerDeletionJobs/delete-1"]!.currentGatewayId = null;
+  h.records["glmOperations/suspend-1"]!.steps = [{ name: "unmount-gateway", status: "skipped" }];
+  Object.assign(h.records, custodyRecords);
+  return h;
+}
+
+describe("PostgreSQL erasure of a user who was unassigned before deletion", () => {
+  it("stops writers on the shared gateway that last held the user's agent stores, then erases", async () => {
+    const h = unassignedBeforeDeletion();
+    await h.run();
+    expect(h.deps.unmountSharedUser).toHaveBeenCalledExactlyOnceWith("shared-old", h.cleanup, {
+      podUid: "pod-original", agentIds: [h.target.agentId],
+    }, h.operation);
+    expect(h.records["customerDeletionJobs/delete-1"]!.sharedAgentStoreCleanup).toMatchObject({ gatewayId: "shared-old", complete: true });
+    expect(h.records["customerDeletionJobs/delete-1"]!.postgresAgentStoreTargets).toEqual([h.target]);
+  });
+
+  it("records the source on the deletion job and reuses it once cloud cleanup has removed the user and their custody records", async () => {
+    const h = unassignedBeforeDeletion();
+    await h.run();
+    expect(h.records["customerDeletionJobs/delete-1"]!.currentGatewayId).toBe("shared-old");
+    delete h.records["users/uid-1"];
+    delete h.records["users/uid-1/agentStores/octogee-alice-coach"];
+
+    await h.run();
+
+    expect(h.deps.unmountSharedUser).toHaveBeenCalledOnce();
+    expect(h.records["customerDeletionJobs/delete-1"]!.currentGatewayId).toBe("shared-old");
+  });
+
+  it("treats a retired custody gateway as stopped", async () => {
+    const h = unassignedBeforeDeletion(); h.deps.sharedGatewayRetired.mockResolvedValue(true);
+    await h.run();
+    expect(h.deps.sharedGatewayRetired).toHaveBeenCalledWith("shared-old");
+    expect(h.deps.unmountSharedUser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no gateway", {}],
+    ["two gateways", { ...custody("octogee-alice-coach", "shared-old"), ...custody("octogee-alice-proj-orbit-coach", "shared-new") }],
+    ["an isolated gateway", custody("octogee-alice-coach", "builder-old")],
+  ])("ends as blocked when custody names %s", async (_label, custodyRecords) => {
+    const h = unassignedBeforeDeletion(custodyRecords);
+    const failure = await h.run().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(UserErasureBlockedError);
+    expect((failure as Error).message).toContain("unassigned before deletion");
+    expect(h.deps.unmountSharedUser).not.toHaveBeenCalled();
+    expect(h.records["customerDeletionJobs/delete-1"]!.postgresAgentStoreTargets).toBeUndefined();
+    expect(h.records["customerDeletionJobs/delete-1"]!.currentGatewayId).toBeNull();
+  });
+
+  it("refuses while other work touches the custody gateway", async () => {
+    const h = unassignedBeforeDeletion();
+    h.records["glmMigrationTransferTasks/move-1__final"] = transferTask({ sourceGatewayId: "shared-old" });
+    await expect(h.run()).rejects.toThrow("conflicting runtime work");
+    expect(h.deps.unmountSharedUser).not.toHaveBeenCalled();
+  });
+
+  it("still requires a completed unmount when the deletion captured its gateway", async () => {
+    const h = liveSharedGateway();
+    h.records["glmOperations/suspend-1"]!.steps = [{ name: "unmount-gateway", status: "skipped" }];
+    await expect(h.run()).rejects.toThrow("lacks completed suspension");
+    expect(h.deps.unmountSharedUser).not.toHaveBeenCalled();
+  });
+});
+
 describe("due user PostgreSQL erasure authority", () => {
   it("uses captured consent without current assignment and persists targets before erasure", async () => {
     const h = harness();
@@ -71,6 +146,7 @@ describe("due user PostgreSQL erasure authority", () => {
     ["early deadline", "customerDeletionJobs/delete-1", { eraseAfter: 30 }],
     ["foreign operation", "customerDeletionJobs/delete-1", { erasureOperationId: "other" }],
     ["changed cleanup", "customerDeletionJobs/delete-1", { cleanupContext: { uid: "other" } }],
+    ["captured gateway replaced on the job", "customerDeletionJobs/delete-1", { currentGatewayId: "shared-other" }],
     ["claimed again", "glmOperations/erase-1", { startedAt: 11 }],
     ["operation retargeted", "glmOperations/erase-1", { input: { uid: "uid-1", deletionId: "delete-other" } }],
     ["cancelled", "glmOperations/erase-1", { cancellationRequestedAt: 12 }],
@@ -101,7 +177,7 @@ describe("due user PostgreSQL erasure authority", () => {
   it("completes exact user cleanup on a live shared gateway that still serves another user", async () => {
     const h = liveSharedGateway();
     await h.run();
-    expect(h.deps.unmountSharedUser).toHaveBeenCalledExactlyOnceWith(h.cleanup, {
+    expect(h.deps.unmountSharedUser).toHaveBeenCalledExactlyOnceWith("shared-old", h.cleanup, {
       podUid: "pod-original", agentIds: [h.target.agentId],
     }, h.operation);
     expect(h.records["customerDeletionJobs/delete-1"]!.sharedAgentStoreCleanup).toMatchObject({
@@ -119,7 +195,7 @@ describe("due user PostgreSQL erasure authority", () => {
       await custody.bindTargets(targets);
     });
     await h.run();
-    expect(h.deps.unmountSharedUser).toHaveBeenCalledWith(h.cleanup, {
+    expect(h.deps.unmountSharedUser).toHaveBeenCalledWith("shared-old", h.cleanup, {
       podUid: "pod-original", agentIds: targets.map(target => target.agentId),
     }, h.operation);
   });

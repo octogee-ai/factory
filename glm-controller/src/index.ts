@@ -3713,8 +3713,8 @@ function buildEraseUserHandler({ db, store, logFn, kubeOps, privateKey, deleteHo
       if (source.podUid !== diagnostics.pods[0]!.uid) throw new Error("User PostgreSQL erasure source pod changed");
       return source;
     },
-    unmountSharedUser: (cleanup, agentStoreErasure, operation) => callUnmountRpc(store, { privateKey,
-      gatewayId: cleanup.currentGatewayId!, slug: cleanup.slug, log: logFn, tag: "erase",
+    unmountSharedUser: (gatewayId, cleanup, agentStoreErasure, operation) => callUnmountRpc(store, { privateKey,
+      gatewayId, slug: cleanup.slug, log: logFn, tag: "erase",
       migrationId: `erase-${operation.id}-claim-${operation.startedAt}`, agentStoreErasure }),
   });
   const postHogErasure = createPostHogErasureClient(

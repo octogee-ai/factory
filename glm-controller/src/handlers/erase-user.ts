@@ -12,6 +12,7 @@ import {
   PostHogRateLimitedError,
   type PostHogConfirmation,
 } from "../lib/user-ops/posthog-erasure.js";
+import { UserErasureBlockedError } from "../lib/user-ops/agent-store-erasure.js";
 
 export const POSTHOG_VERIFICATION_RECHECK_MS = 60 * 60_000;
 
@@ -338,7 +339,9 @@ async function runEraseUser(
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       await report(ctx, deps, { name: "erase-agent-stores", status: "failed", error });
-      return cleanupRetry(deletionId, error);
+      return err instanceof UserErasureBlockedError
+        ? deletionBlocked(deletionId, "erase-agent-stores", error)
+        : cleanupRetry(deletionId, error);
     }
     const cloudResults = await deps.cloudErase(cleanup, op.id);
     await reportCloudErasure(cloudResults, ctx, deps);
