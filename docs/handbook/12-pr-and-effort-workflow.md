@@ -10,7 +10,7 @@ updated: 2026-07-28
 
 # PR & Effort Workflow
 
-Octogee is pre-customer and operated by one person. Optimize for dependable
+Octogee is pre-launch and operated by one person. Optimize for dependable
 features reaching `main`, not for producing process artifacts.
 
 ## Default flow

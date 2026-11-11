@@ -29,7 +29,7 @@ export const JOBS = {
   desktopPackage: "desktop-package",
   firestoreRules: "firestore-rules",
   coreEmulator: "core-emulator",
-  customerLifecycleEmulator: "customer-lifecycle-emulator",
+  userLifecycleEmulator: "customer-lifecycle-emulator",
   functionsEmulator: "functions-emulator",
   gatewayEdgeEmulator: "gateway-edge-emulator",
   glmControllerEmulator: "glm-controller-emulator",
@@ -150,7 +150,7 @@ export const STANDALONE_JOBS: readonly JobKey[] = [
   JOBS.desktopPackage,
   JOBS.firestoreRules,
   JOBS.coreEmulator,
-  JOBS.customerLifecycleEmulator,
+  JOBS.userLifecycleEmulator,
   JOBS.functionsEmulator,
   JOBS.gatewayEdgeEmulator,
   JOBS.glmControllerEmulator,
@@ -184,7 +184,7 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: "tests/", jobs: [JOBS.tests] },
   { dir: "acceptance/", jobs: [JOBS.acceptance] },
   { dir: "desktop/", jobs: [JOBS.desktop, JOBS.desktopPackage] },
-  { dir: "scripts/", jobs: [JOBS.scripts, JOBS.customerLifecycleEmulator] },
+  { dir: "scripts/", jobs: [JOBS.scripts, JOBS.userLifecycleEmulator] },
   {
     dir: "infra/gateway/extensions/product/octogee-voice-tools/",
     jobs: [JOBS.octogeeVoiceTools, JOBS.tests],
@@ -284,7 +284,7 @@ export const EDGES: readonly ScopeEdge[] = [
     when: "core/",
     jobs: [
       JOBS.scripts,
-      JOBS.customerLifecycleEmulator,
+      JOBS.userLifecycleEmulator,
       JOBS.octogeeApi,
       JOBS.octogeeApiEmulator,
       JOBS.gatewayEdge,
@@ -294,6 +294,11 @@ export const EDGES: readonly ScopeEdge[] = [
     ],
     reason:
       "@octogee/core is consumed by scripts + octogee-api (via scripts/lib re-export shims) + gateway-edge + glm-controller (direct package import); tests/specs' readSrc() helpers (model-credential-materializer, byot-sync-apply, gateway-rpc-local-exceptions specs) also fall back to reading core/src directly for logic that moved out of scripts/lib",
+  },
+  {
+    when: "core/src/deployment-targets.json",
+    jobs: [JOBS.acceptance],
+    reason: "acceptance/lib/safety-preflight.ts and acceptance/lib/customer-session.ts import the deployment-target registry directly",
   },
   {
     when: "test-helpers/",
@@ -411,7 +416,7 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.opsAgent,
       JOBS.opsAgentRuntimeTools,
       JOBS.scripts,
-      JOBS.customerLifecycleEmulator,
+      JOBS.userLifecycleEmulator,
       JOBS.site,
       JOBS.tests,
     ],
