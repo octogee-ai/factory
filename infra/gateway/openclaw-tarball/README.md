@@ -167,22 +167,24 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay for the November 11 Gateway refresh
+## Current overlay for the November 11 final Gateway recut
 
-The operator selected OpenClaw main `cb4cd561dfb56d2ff8c49a21b89e935053e122a1`
-for independent qualification. The clean overlay is `7490657010a74a6ed5147d844db3897f86d4be1d`
-and the source branch is
-`ceckert/openclaw:codex/gateway-refresh-20261111`.
+OpenClaw main `eae3667ebf9f66217c44f6318a73188defd003b8` was frozen at fetch time for independent
+qualification. The clean overlay is `65c8c8aa14d045be317918a3635c0b529207af04` on
+`ceckert/openclaw:codex/gateway-refresh-20261111-final`.
 
-The frozen tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/43019134255)
-passed security-fast and skipped 42 jobs, including the build and PostgreSQL lanes. The frozen tip's
-[scheduled CI](https://github.com/openclaw/openclaw/actions/runs/43020804161) and
-[dispatched CI](https://github.com/openclaw/openclaw/actions/runs/43020908753)
-reported failures during independent qualification. These include dead-code
-checks and a Node startup shard timing out on `sessions.list`. The latest successful [scheduled full CI](https://github.com/openclaw/openclaw/actions/runs/42494775876)
-was on `ee2d00b13f786f568baa4c4c33376767e5c6f666` with 150 passing jobs and 11
-skips, including Node 24 compatibility, Control UI i18n, screenshots and mobile
-release e2e. That run qualified its own SHA.
+The frozen tip’s [push CI](https://github.com/openclaw/openclaw/actions/runs/43049595781) was cancelled before GitHub
+recorded any jobs. The latest successful [scheduled full CI](https://github.com/openclaw/openclaw/actions/runs/42494775876)
+was on `ee2d00b13f786f568baa4c4c33376767e5c6f666`, with 150 passing and 11 skipped jobs.
+The scheduled run qualifies its recorded SHA.
+
+Native [#197230](https://github.com/openclaw/openclaw/pull/197230) retires the
+Memory shadow database’s admission descriptor before deleting the completed
+reindex files. The duplicate overlay code is removed. The regression also
+checks that cleanup leaves the canonical database descriptor and data intact.
+The native worker-owned database close and published model-catalog paths are
+preserved. The first-config baseline repair in #193636 and the delegated
+Mattermost download scope repair in #186893 are carried in this overlay.
 
 Mattermost uses the native fence-aware Markdown chunker from
 [#196331](https://github.com/openclaw/openclaw/pull/196331). The grouped-media
@@ -540,54 +542,33 @@ permission, handoff and recovery controls pass.
 
 ### Qualification and publication
 
-The clean source built with pinned pnpm 12.15.0 and the frozen lockfile.
-`dist/build-info.json` matches the source SHA. Production, script and root-test
-typechecks passed. Channel metadata, config docs, Gateway validators and the
-canonical database schema passed generation checks. The build reported three
-Control UI size-budget warnings.
-
-Focused tests passed for startup admission and recovery, restricted membership
-and revocation, channel strict stop and supersession, queued reload receipts,
-Doctor repair authority, Mattermost delivery, scoped session start and plugin
-tool authority. The `sessions.list` startup control passed on both the unpatched
-tip and the overlay. PostgreSQL agent creation and secrets reload passed. The
-native AGENT 40 to 41 upgrade preserved retained transcript data on SQLite and
-PostgreSQL.
-
-The final aggregate `pnpm check` failed lint with errors in 22 files whose
-contents match the frozen upstream base. It passed preflight and typechecks. The guards after lint
-passed when run separately.
-
-Root and Mattermost were packed sequentially from the same build in a clean
-Octogee checkout. The native root archive check, isolated npm installation and
-Linux amd64 full-plugin installer passed. Both patched npm copies passed 24
-controls each. Parallel and Codex matched their packaged source, and the
-installer imported all three Codex native hooks. Hosted islands and the
-PostgreSQL routine catalog came from the same source. The catalog used
-disposable PostgreSQL 16.15 with pgvector 0.8.7. Complete-image qualification
-and image digests are recorded on the Octogee PR.
+The full package build used pinned pnpm 12.15.0 and the frozen lockfile.
+The clean build-info commit matches the source. Root and Mattermost were packed
+sequentially from that build and passed the native archive check, isolated npm
+installation and the actual Linux amd64 full-plugin installer. Both installed
+npm copies passed the 24 distribution controls. The Linux installer verified
+the bundled plugin registry, source-matched Codex and all three native hooks.
+Hosted islands and the PostgreSQL routine catalog share the same source pin.
+Current focused checks, incomplete checks and complete-image proof are tracked
+on the final recut PR.
 
 Published with generation-zero preconditions and verified by exact-generation SHA-256 readback:
 
 | Object | Generation | SHA-256 |
 | --- | --- | --- |
-| `openclaw-fork-898cf617.tgz` | `1794402315239758` | `898cf61793e47db98bde61880f0982e38ccfa5fafb03021a43825acecebd8c33` |
-| `openclaw-mattermost-84d13eb1.tgz` | `1794402341032015` | `84d13eb1ca2b7c1f262768074915764875bc81be9d735830ae37213cafad1f6e` |
+| `openclaw-fork-9d0f86ed.tgz` | `1794412511332941` | `9d0f86ed1bf12a70a2f44d0cd17ae3ac3ccf8a7bc4e7f0a66c4a00053364d6e5` |
+| `openclaw-mattermost-d1e21c56.tgz` | `1794412529249670` | `d1e21c5636f6a4d4147a72d782a92f37576924326f6b97ccdc12231adab731e8` |
 
 ### Upstream contributions
 
-As checked on November 11, #189036 (`bfc19c0c863`), #189418 (`6b4438cd188`),
-#186891 (`1d18f8eb784`), #186893 (`d4fd7a5c5de`), #167431 (`27193149bc2`)
-and #178755 (`d576caa76fe`) remain open and unmerged, as do #193596, #193636 and #193875. The
-contribution status check did not update the selected runtime SHA. Earlier reviewed-head checks and published
-contributions do not establish current-main merge readiness; this downstream
-cut is clean on the separately frozen selected base. The focused recovery PR #193596 includes independent exact-head local Gateway
-proof; its CI and upgrade compatibility claims remain separate merge gates. #177823 is closed unmerged after native adoption of its original
-bug fix, and its optional guard remains retired. #178973 is closed unmerged
-because its mixed-engine consumer was retired, not because native adopted its
-API unchanged. Earlier superseded PostgreSQL contributions remain recorded in
-repository history. Contribution status never substitutes for runtime necessity
-or installed-image qualification.
+The November 11 review pass covered ten open OpenClaw contributions. The Talk
+fixes (#189036 and #189418) and agent-removal latency change (#191463) remain
+useful on main. #193596 is ready for review and #193875 includes a CI lint fix.
+#186891 and #186893 were refreshed and have disposable Gateway and Mattermost
+evidence. #193636 remains a draft pending the public CLI option decision.
+#167431 needs maintainer security approval and a reload-contract decision.
+#178755 was refreshed and still needs PostgreSQL reattachment and maintainer
+review. Earlier closed or superseded contributions remain recorded in Git history.
 
 ## Native CUA desktop discovery
 
