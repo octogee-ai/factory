@@ -9,7 +9,6 @@ import type {
 import { WINDOW_LENGTH_HOURS } from "@octogee/shared/types/model-broker-usage";
 import { modelCatalogEntryFor } from "@octogee/shared/types/model-catalog";
 import {
-  MODEL_BROKER_CREDITS_COLLECTION,
   MODEL_BROKER_USAGE_EVENTS_COLLECTION,
   MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
   MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
@@ -81,10 +80,8 @@ export interface ModelBrokerUsageRecordInput {
   upstreamStatus: number;
   now?: number;
   countsTowardSpendWindow?: boolean;
-  // Prepaid rail (users): the metering transaction also debits the owner's
-  // modelBrokerCredits balance by the priced cost. The final call may push the
-  // balance slightly negative; the pre-flight gate blocks the next one.
-  debitsCreditBalance?: boolean;
+  priceMultiplier?: number;
+  balanceDebit?: BalanceLedgerRef | null;
   fundedBudget?: FundedBudgetLedgerRef;
   // The upstream's own USD accounting (OpenRouter `usage.cost`). Authoritative
   // over the static pricing table when present — the table is fallback only.
@@ -96,15 +93,14 @@ export interface ModelBrokerUsageRecordInput {
   providerMetadata?: Record<string, unknown>;
 }
 
-export interface ModelBrokerUsageStoreOptions {
-  prepaidCreditMarkupMultiplier: number;
+export interface BalanceLedgerRef {
+  collection: string;
+  ownerUid: string;
 }
 
-export function requirePrepaidCreditMarkupMultiplier(value: unknown): number {
+export function requirePriceMultiplier(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 1) {
-    throw new Error(
-      `prepaid credit markup multiplier must be a finite number >= 1, got ${String(value)}`,
-    );
+    throw new Error(`price multiplier must be a finite number >= 1, got ${String(value)}`);
   }
   return value;
 }
@@ -114,7 +110,7 @@ export interface ModelBrokerUsageStore {
   readWindowUsage?(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerUsageWindowSnapshot>;
   readWeekUsage?(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerWeekSnapshot>;
   reserveRateWindow?(input: ModelBrokerRateWindowReserveInput): Promise<ModelBrokerRateWindowSnapshot>;
-  readCreditBalance?(ownerUid: string): Promise<number>;
+  readBalance?(ref: BalanceLedgerRef): Promise<number>;
   readFundedBudgetLedger?(ref: FundedBudgetLedgerRef): Promise<FundedBudgetLedger | null>;
 }
 
@@ -420,16 +416,16 @@ export function resolveRecordedCost(
   };
 }
 
-function resolvedChargeUsd(
-  input: ModelBrokerUsageRecordInput,
-  cost: ModelBrokerUsageCost,
-  prepaidCreditMarkupMultiplier: number,
-): number {
+function resolvedChargeUsd(input: ModelBrokerUsageRecordInput, cost: ModelBrokerUsageCost): number {
   const charge = input.chargeUsd;
   if (typeof charge === "number" && Number.isFinite(charge) && charge >= 0) return charge;
-  return input.debitsCreditBalance === true
-    ? cost.total * prepaidCreditMarkupMultiplier
-    : cost.total;
+  return input.priceMultiplier === undefined
+    ? cost.total
+    : cost.total * requirePriceMultiplier(input.priceMultiplier);
+}
+
+function balanceDocKey(ref: BalanceLedgerRef): string {
+  return `${ref.collection}/${ref.ownerUid}`;
 }
 
 export function isUnknownOpenRouterPricingModel(pricingModel: string): boolean {
@@ -643,22 +639,19 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   readonly windows = new Map<string, ModelBrokerUsageWindowSnapshot & Record<string, unknown>>();
   readonly weekWindows = new Map<string, ModelBrokerWeekSnapshot & Record<string, unknown>>();
   readonly rateWindows = new Map<string, ModelBrokerRateWindowSnapshot>();
-  readonly creditBalances = new Map<string, number>();
+  readonly balances = new Map<string, number>();
   readonly fundedBudgetLedgers = new Map<string, Record<string, unknown>>();
   private readonly eventIds = new Set<string>();
-  private readonly prepaidCreditMarkupMultiplier: number;
 
-  constructor(options: ModelBrokerUsageStoreOptions = { prepaidCreditMarkupMultiplier: 1 }) {
-    this.prepaidCreditMarkupMultiplier = requirePrepaidCreditMarkupMultiplier(
-      options.prepaidCreditMarkupMultiplier,
-    );
+  setBalance(ref: BalanceLedgerRef, balanceUsd: number): void {
+    this.balances.set(balanceDocKey(ref), balanceUsd);
   }
 
   async recordUsage(input: ModelBrokerUsageRecordInput): Promise<void> {
     const now = input.now ?? Date.now();
     const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
     const cost = resolveRecordedCost(input, cacheWriteTtl);
-    const chargeUsd = resolvedChargeUsd(input, cost, this.prepaidCreditMarkupMultiplier);
+    const chargeUsd = resolvedChargeUsd(input, cost);
     const eventId = input.eventId ?? crypto.randomUUID();
     if (this.eventIds.has(eventId)) return;
     const fundedLedger = input.fundedBudget
@@ -739,11 +732,9 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
         ...latestTraceFields(input),
       });
     }
-    if (input.debitsCreditBalance === true && input.ownerUid) {
-      this.creditBalances.set(
-        input.ownerUid,
-        (this.creditBalances.get(input.ownerUid) ?? 0) - chargeUsd,
-      );
+    if (input.balanceDebit) {
+      const key = balanceDocKey(input.balanceDebit);
+      this.balances.set(key, (this.balances.get(key) ?? 0) - chargeUsd);
     }
     if (input.fundedBudget && fundedLedger) {
       const { ledgerKey } = input.fundedBudget;
@@ -754,8 +745,8 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
     }
   }
 
-  async readCreditBalance(ownerUid: string): Promise<number> {
-    return this.creditBalances.get(ownerUid) ?? 0;
+  async readBalance(ref: BalanceLedgerRef): Promise<number> {
+    return this.balances.get(balanceDocKey(ref)) ?? 0;
   }
 
   async readFundedBudgetLedger(ref: FundedBudgetLedgerRef): Promise<FundedBudgetLedger | null> {
@@ -827,14 +818,14 @@ interface UsageWriteArgs {
     rollupRef: DocumentReference;
     windowRef: DocumentReference;
     weekRef: DocumentReference;
-    creditRef: DocumentReference | null;
+    balanceRef: DocumentReference | null;
     fundedBudgetRef: DocumentReference | null;
   };
   snaps: {
     rollup: DocumentData;
     window: DocumentData;
     week: DocumentData;
-    credit: DocumentData;
+    balance: DocumentData;
     fundedBudget: DocumentData;
   };
 }
@@ -912,12 +903,12 @@ function applyUsageWrites(t: Transaction, a: UsageWriteArgs): void {
       { merge: true },
     );
   }
-  if (refs.creditRef) {
+  if (refs.balanceRef && input.balanceDebit) {
     t.set(
-      refs.creditRef,
+      refs.balanceRef,
       {
-        ownerUid: input.ownerUid,
-        balanceUsd: numberField(snaps.credit, "balanceUsd") - chargeUsd,
+        ownerUid: input.balanceDebit.ownerUid,
+        balanceUsd: numberField(snaps.balance, "balanceUsd") - chargeUsd,
         updatedAt: now,
       },
       { merge: true },
@@ -935,18 +926,14 @@ function applyUsageWrites(t: Transaction, a: UsageWriteArgs): void {
 
 export function createFirestoreModelBrokerUsageStore(
   db: Pick<Firestore, "collection" | "runTransaction">,
-  options: ModelBrokerUsageStoreOptions,
 ): ModelBrokerUsageStore {
-  const prepaidCreditMarkupMultiplier = requirePrepaidCreditMarkupMultiplier(
-    options.prepaidCreditMarkupMultiplier,
-  );
   return {
     async recordUsage(input) {
       const now = input.now ?? Date.now();
       const eventId = input.eventId ?? crypto.randomUUID();
       const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
       const cost = resolveRecordedCost(input, cacheWriteTtl);
-      const chargeUsd = resolvedChargeUsd(input, cost, prepaidCreditMarkupMultiplier);
+      const chargeUsd = resolvedChargeUsd(input, cost);
       const windowStartMs = usageWindowStartMs(now);
       const weekStartMs = weekWindowStartMs(now);
       const ownerKey = windowOwnerKey(input);
@@ -958,9 +945,8 @@ export function createFirestoreModelBrokerUsageStore(
       const weekRef = db
         .collection(MODEL_BROKER_WEEK_WINDOWS_COLLECTION)
         .doc(windowDocId(ownerKey, weekStartMs));
-      const debitsCredits = input.debitsCreditBalance === true && Boolean(input.ownerUid);
-      const creditRef = debitsCredits
-        ? db.collection(MODEL_BROKER_CREDITS_COLLECTION).doc(input.ownerUid as string)
+      const balanceRef = input.balanceDebit
+        ? db.collection(input.balanceDebit.collection).doc(input.balanceDebit.ownerUid)
         : null;
       const fundedBudgetRef = input.fundedBudget
         ? db.collection(input.fundedBudget.ledgerCollection).doc(input.fundedBudget.ledgerKey)
@@ -971,11 +957,11 @@ export function createFirestoreModelBrokerUsageStore(
       await db.runTransaction(async (t) => {
         const existingEvent = await t.get(eventRef);
         if (existingEvent.exists) return;
-        const [rollupSnap, windowSnap, weekSnap, creditSnap, fundedBudgetSnap] = await Promise.all([
+        const [rollupSnap, windowSnap, weekSnap, balanceSnap, fundedBudgetSnap] = await Promise.all([
           t.get(rollupRef),
           t.get(windowRef),
           countsTowardWindow ? t.get(weekRef) : Promise.resolve(null),
-          creditRef ? t.get(creditRef) : Promise.resolve(null),
+          balanceRef ? t.get(balanceRef) : Promise.resolve(null),
           fundedBudgetRef ? t.get(fundedBudgetRef) : Promise.resolve(null),
         ]);
         applyUsageWrites(t, {
@@ -990,12 +976,12 @@ export function createFirestoreModelBrokerUsageStore(
           windowStartMs,
           weekStartMs,
           countsTowardWindow,
-          refs: { eventRef, rollupRef, windowRef, weekRef, creditRef, fundedBudgetRef },
+          refs: { eventRef, rollupRef, windowRef, weekRef, balanceRef, fundedBudgetRef },
           snaps: {
             rollup: rollupSnap.data() ?? {},
             window: windowSnap.data() ?? {},
             week: weekSnap?.data() ?? {},
-            credit: creditSnap?.data() ?? {},
+            balance: balanceSnap?.data() ?? {},
             fundedBudget: fundedBudgetSnap?.data() ?? {},
           },
         });
@@ -1040,8 +1026,8 @@ export function createFirestoreModelBrokerUsageStore(
       };
     },
 
-    async readCreditBalance(ownerUid) {
-      const snap = await db.collection(MODEL_BROKER_CREDITS_COLLECTION).doc(ownerUid).get();
+    async readBalance(ref) {
+      const snap = await db.collection(ref.collection).doc(ref.ownerUid).get();
       return numberField((snap.data() ?? {}) as Record<string, unknown>, "balanceUsd");
     },
 

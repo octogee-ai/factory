@@ -6,10 +6,12 @@ import { readPlatformSpendState } from "./platform-usage-allowance.js";
 export interface GateDecisionAllowed {
   allowed: true;
   degrade: boolean;
-  degradeReason: "free" | "budget" | "credits" | null;
+  degradeReason: string | null;
+  houseModelDial: boolean;
+  decision: string | null;
   windowCostUsd: number | null;
   weekCostUsd: number | null;
-  creditBalanceUsd: number | null;
+  balanceUsd: number | null;
   budgetFunded: boolean;
   budgetChargeUsd: number | null;
 }
@@ -31,9 +33,11 @@ export type DegradeOutcome =
       kind: "state";
       degrade: boolean;
       degradeReason: GateDecisionAllowed["degradeReason"];
+      houseModelDial?: boolean;
+      decision?: string;
       windowCostUsd: number | null;
       weekCostUsd: number | null;
-      creditBalanceUsd: number | null;
+      balanceUsd: number | null;
       budgetFunded?: boolean;
       budgetChargeUsd?: number | null;
     };

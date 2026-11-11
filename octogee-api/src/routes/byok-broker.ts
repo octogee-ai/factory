@@ -15,7 +15,6 @@ import type { PlatformUserRecord, PlatformStateRepositories, PlatformStateStore 
 import { userEntitlements, type UserPlan } from "@octogee/shared/types/user-entitlements";
 import {
   spendWindowPercentUsed,
-  MODEL_BROKER_CREDITS_COLLECTION,
   MODEL_BROKER_USAGE_WINDOW_MS,
   MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
   MODEL_BROKER_WEEK_WINDOW_MS,
@@ -183,7 +182,7 @@ function deriveSpendStatus(input: {
   credentialPath: string;
   windowData: Record<string, unknown> | undefined;
   weekData: Record<string, unknown> | undefined;
-  creditData: Record<string, unknown> | undefined;
+  balanceData: Record<string, unknown> | undefined;
 }) {
   const { plan } = input;
   const windowCostUsd = financeNumber(
@@ -194,7 +193,7 @@ function deriveSpendStatus(input: {
   );
   const onOwnerCredential =
     input.credentialPath === "byok_api_key" || input.credentialPath === "byosub";
-  const creditBalanceUsd = financeNumber(input.creditData?.balanceUsd);
+  const balanceUsd = financeNumber(input.balanceData?.balanceUsd);
   const throttle = input.rails.rail(input.railId).throttle({
     modelAccess: plan.modelAccess,
     windowCostUsd,
@@ -203,13 +202,13 @@ function deriveSpendStatus(input: {
     weekBudgetUsd: plan.spendWeekUsd,
     onOwnerCredential,
     houseFallback: plan.houseFallback,
-    creditBalanceUsd,
+    balanceUsd,
   });
   return {
     windowCostUsd,
     weekCostUsd,
     onOwnerCredential,
-    creditBalanceUsd,
+    balanceUsd,
     throttle,
   };
 }
@@ -229,7 +228,8 @@ async function agentUsageStatusPayload(
 ): Promise<Record<string, unknown>> {
   const windowStartMs = usageWindowStartMs(nowMs);
   const weekStartMs = weekWindowStartMs(nowMs);
-  const [authorization, configSnap, windowSnap, weekSnap, creditSnap] =
+  const balanceLedger = rails.balanceLedger(assigned.uid);
+  const [authorization, configSnap, windowSnap, weekSnap, balanceSnap] =
     await Promise.all([
       readGatewayAuthorizationInStore(store, gatewayId),
       db
@@ -246,7 +246,7 @@ async function agentUsageStatusPayload(
         .collection(MODEL_BROKER_WEEK_WINDOWS_COLLECTION)
         .doc(modelBrokerWindowDocId(assigned.uid, weekStartMs))
         .get(),
-      db.collection(MODEL_BROKER_CREDITS_COLLECTION).doc(assigned.uid).get(),
+      balanceLedger ? db.collection(balanceLedger.collection).doc(balanceLedger.ownerUid).get() : null,
     ]);
 
   const plan = userEntitlements().plan(assigned.account.planInputs, new Date(nowMs));
@@ -267,7 +267,7 @@ async function agentUsageStatusPayload(
     credentialPath: credential.path,
     windowData: windowSnap.data(),
     weekData: weekSnap.data(),
-    creditData: creditSnap.data(),
+    balanceData: balanceSnap?.data(),
   });
 
   return {
@@ -292,7 +292,7 @@ async function agentUsageStatusPayload(
       blocked: spend.throttle.blocked,
       reason: spend.throttle.reason,
     },
-    credits: spend.throttle.creditBalanceVisible ? { balanceUsd: spend.creditBalanceUsd } : null,
+    credits: spend.throttle.balanceVisible ? { balanceUsd: spend.balanceUsd } : null,
     credential,
   };
 }

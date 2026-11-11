@@ -11,7 +11,7 @@ import type {
 } from "./model-broker-budget.js";
 import type { DegradeOutcome, GateDecisionAllowed, RailGateContext, SpendBudgets } from "./model-broker-gate.js";
 import type { OwnerModelBrokerGrant } from "./model-broker-limits.js";
-import type { ModelBrokerUsageStore } from "./model-broker-usage.js";
+import type { BalanceLedgerRef, ModelBrokerUsageStore } from "./model-broker-usage.js";
 import { readPlatformSpendState } from "./platform-usage-allowance.js";
 import { WebResearchError } from "./web-research-error.js";
 
@@ -35,10 +35,28 @@ export interface RailAllowanceInput {
   onError?: (error: unknown) => void;
 }
 
+export interface RailCharge {
+  priceMultiplier: number;
+  balanceDebit: BalanceLedgerRef | null;
+}
+
+export const CHARGE_AT_COST: RailCharge = Object.freeze({ priceMultiplier: 1, balanceDebit: null });
+
 export interface RailAllowanceResult {
-  debitsCreditBalance: boolean;
   countsTowardSpendWindow: boolean;
+  charge: RailCharge;
   fundedBudget?: FundedBudget;
+}
+
+export interface RailMeterInput {
+  grant: OwnerModelBrokerGrant;
+  gate: GateDecisionAllowed;
+  ownerUid: string | null;
+}
+
+export interface RailMeter {
+  countsTowardSpendWindow: boolean;
+  charge: RailCharge;
 }
 
 export interface RailSpendObservation {
@@ -49,11 +67,11 @@ export interface RailSpendObservation {
   weekBudgetUsd: number;
   onOwnerCredential: boolean;
   houseFallback: boolean;
-  creditBalanceUsd: number;
+  balanceUsd: number;
 }
 
 export interface RailSpendThrottle extends SpendThrottleState {
-  creditBalanceVisible: boolean;
+  balanceVisible: boolean;
 }
 
 export interface ModelBrokerRail {
@@ -61,7 +79,7 @@ export interface ModelBrokerRail {
   requiresGate(grant: OwnerModelBrokerGrant, ownerUid: string | null): boolean;
   gate(ctx: RailGateContext, budgets: SpendBudgets): Promise<DegradeOutcome | null>;
   budgetExhausted(ctx: RailGateContext): Promise<DegradeOutcome>;
-  usingCredits(grant: OwnerModelBrokerGrant, gate: GateDecisionAllowed, ownerUid: string | null): boolean;
+  meter(input: RailMeterInput): RailMeter;
   allowance(input: RailAllowanceInput): Promise<RailAllowanceResult>;
   throttle(observation: RailSpendObservation): RailSpendThrottle;
   logFields(grant: OwnerModelBrokerGrant): Record<string, unknown>;
@@ -69,9 +87,11 @@ export interface ModelBrokerRail {
 
 export interface ModelBrokerRailRegistry {
   readonly defaultRailId: string;
+  readonly railIds: readonly string[];
   rail(id: string): ModelBrokerRail;
   resolveOwnerProfile(ownerData: Record<string, unknown>, ownerUid: string, now: number): OwnerRailProfile | null;
   budgetInspection(budget: FundedBudget | null, ledger: FundedBudgetLedger | null): Record<string, unknown>;
+  balanceLedger(ownerUid: string): BalanceLedgerRef | null;
 }
 
 export class UnknownModelBrokerRailError extends Error {
@@ -86,6 +106,7 @@ export function createModelBrokerRailRegistry(input: {
   defaultRailId: string;
   resolveOwnerProfile?: ModelBrokerRailRegistry["resolveOwnerProfile"];
   budgetInspection?: ModelBrokerRailRegistry["budgetInspection"];
+  balanceLedger?: ModelBrokerRailRegistry["balanceLedger"];
 }): ModelBrokerRailRegistry {
   const byId = new Map(input.rails.map((rail) => [rail.id, rail] as const));
   if (byId.size !== input.rails.length) throw new Error("model broker rail ids must be unique");
@@ -94,6 +115,7 @@ export function createModelBrokerRailRegistry(input: {
   }
   return {
     defaultRailId: input.defaultRailId,
+    railIds: input.rails.map((rail) => rail.id),
     rail(id) {
       const rail = byId.get(id);
       if (!rail) throw new UnknownModelBrokerRailError(id);
@@ -101,6 +123,7 @@ export function createModelBrokerRailRegistry(input: {
     },
     resolveOwnerProfile: input.resolveOwnerProfile ?? (() => null),
     budgetInspection: input.budgetInspection ?? (() => ({})),
+    balanceLedger: input.balanceLedger ?? (() => null),
   };
 }
 
@@ -123,15 +146,20 @@ export async function requireSpendWindowAllowance(
     if (input.grant.policy.houseFallback === false) return onExhaustedWithoutHouse();
     throw new WebResearchError("allowance_exhausted", 429, "Platform allowance exhausted");
   }
-  return { debitsCreditBalance: false, countsTowardSpendWindow: true };
+  return { countsTowardSpendWindow: true, charge: CHARGE_AT_COST };
 }
 
 export const OPERATOR_RAIL_ID = "operator";
 
+const PRODUCT_POLICY_REFUSED: DegradeOutcome = {
+  kind: "denied",
+  decision: { allowed: false, status: 503, error: "free-tier policy needs a product model broker rail" },
+};
+
 export const operatorRail: ModelBrokerRail = {
   id: OPERATOR_RAIL_ID,
-  requiresGate: () => false,
-  gate: async () => null,
+  requiresGate: (grant) => grant.policy.freeTier,
+  gate: async (ctx) => (ctx.grant.policy.freeTier ? PRODUCT_POLICY_REFUSED : null),
   budgetExhausted: async () => ({
     kind: "denied",
     decision: {
@@ -140,19 +168,19 @@ export const operatorRail: ModelBrokerRail = {
       error: "model budget exhausted for this window and no house model is configured",
     },
   }),
-  usingCredits: () => false,
+  meter: ({ gate }) => ({ countsTowardSpendWindow: !gate.degrade, charge: CHARGE_AT_COST }),
   allowance: (input) =>
     requireSpendWindowAllowance(input, async () => {
       throw new WebResearchError("allowance_exhausted", 429, "Platform allowance exhausted");
     }),
   throttle: (observation) => {
     const exhausted = observation.onOwnerCredential ? null : exhaustedSpendBudget(observation);
-    if (!exhausted) return { degraded: false, blocked: false, reason: null, creditBalanceVisible: false };
+    if (!exhausted) return { degraded: false, blocked: false, reason: null, balanceVisible: false };
     return {
       degraded: observation.houseFallback,
       blocked: !observation.houseFallback,
       reason: `${exhausted}_exhausted`,
-      creditBalanceVisible: false,
+      balanceVisible: false,
     };
   },
   logFields: () => ({}),

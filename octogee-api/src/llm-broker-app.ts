@@ -32,13 +32,6 @@ import {
 } from "./lib/model-broker-usage.js";
 import type { ResolvedFreeTierModel } from "@octogee/shared/types/platform-config";
 import {
-  MODEL_BROKER_USAGE_WINDOW_MS,
-  MODEL_BROKER_WEEK_WINDOW_MS,
-  usageWindowStartMs,
-  weekWindowStartMs,
-} from "@octogee/shared/types/model-broker-usage";
-import { meterExhausted } from "./lib/platform-usage-allowance.js";
-import {
   spendWindowGate,
   type DegradeOutcome,
   type GateDecision,
@@ -46,7 +39,13 @@ import {
   type GateDecisionDenied,
   type RailGateContext,
 } from "./lib/model-broker-gate.js";
-import { operatorRailRegistry, type ModelBrokerRail, type ModelBrokerRailRegistry } from "./lib/model-broker-rails.js";
+import {
+  CHARGE_AT_COST,
+  type ModelBrokerRail,
+  type ModelBrokerRailRegistry,
+  type RailCharge,
+  type RailMeter,
+} from "./lib/model-broker-rails.js";
 import type { ModelBrokerOwnerAccessResolver } from "./lib/model-broker-owner-access.js";
 import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
 import {
@@ -70,13 +69,8 @@ export interface LlmBrokerAppDeps {
   vertex?: VertexBrokerConfig;
   upstreamBaseUrl?: string;
   providerUpstreamBaseUrls?: Partial<Record<ModelBrokerProvider, string | undefined>>;
-  // Model a user is degraded to when over budget (or always, on the free tier),
-  // served on the platform "house" key and not billed to the user's window.
   houseModel?: string;
   providerHouseModels?: Partial<Record<ModelBrokerProvider, string | undefined>>;
-  // The operator's free-tier dial (platformConfig/models). Free-tier degrades
-  // rewrite to this model when the token's provider matches; budget/credit
-  // degrades keep the per-provider house model.
   resolveFreeTierModel?: () => Promise<ResolvedFreeTierModel | null>;
   fetchImpl?: typeof fetch;
   upstreamHeaderTimeoutMs?: number;
@@ -92,13 +86,7 @@ export interface LlmBrokerAppDeps {
   // owner, budget, and model routing needed to verify billing in TEST.
   log?: (msg: string, fields?: Record<string, unknown>) => void;
   onBudgetInterruption?: FundedBudgetInterruptionHandler;
-  rails?: ModelBrokerRailRegistry;
-}
-
-const OPERATOR_RAILS = operatorRailRegistry();
-
-function railsFor(deps: LlmBrokerAppDeps): ModelBrokerRailRegistry {
-  return deps.rails ?? OPERATOR_RAILS;
+  rails: ModelBrokerRailRegistry;
 }
 
 const DEFAULT_ANTHROPIC_UPSTREAM_BASE_URL = "https://api.anthropic.com";
@@ -655,7 +643,7 @@ interface MeteringContext {
   now: () => number;
   onMeteringError: (err: unknown) => void;
   countsTowardSpendWindow: boolean;
-  debitsCreditBalance: boolean;
+  charge: RailCharge;
   fundedBudget?: NonNullable<OwnerModelBrokerGrant["fundedBudget"]>;
   vertexPricing?: { model: string; prices: VertexModelPriceTable };
 }
@@ -731,7 +719,8 @@ async function recordUsage(
       upstreamStatus: upstream.status,
       now: ctx.now(),
       countsTowardSpendWindow: ctx.countsTowardSpendWindow,
-      debitsCreditBalance: ctx.debitsCreditBalance,
+      priceMultiplier: ctx.charge.priceMultiplier,
+      balanceDebit: ctx.charge.balanceDebit,
       fundedBudget: ctx.fundedBudget,
       reportedCostUsd,
       usageKind:
@@ -787,10 +776,9 @@ async function rateWindowDenial(
 }
 
 function gateDecisionName(gate: GateDecisionAllowed): string {
-  if (gate.budgetChargeUsd !== null && gate.creditBalanceUsd !== null) return "credits";
+  if (gate.decision !== null) return gate.decision;
   if (!gate.degrade) return "forward";
-  if (gate.degradeReason === "free") return "degrade_free";
-  return gate.degradeReason === "credits" ? "degrade_credits" : "degrade_budget";
+  return `degrade_${gate.degradeReason ?? "budget"}`;
 }
 
 type GateLogger = (decision: string, extra?: Record<string, unknown>) => void;
@@ -829,7 +817,7 @@ async function grantForRecord(
     return {
       limits: record.limits,
       policy: record.policy,
-      rail: railsFor(deps).defaultRailId,
+      rail: deps.rails.defaultRailId,
       fundedBudget: null,
     };
   }
@@ -844,61 +832,14 @@ const GATE_PASS: GateDecisionAllowed = {
   allowed: true,
   degrade: false,
   degradeReason: null,
+  houseModelDial: false,
+  decision: null,
   windowCostUsd: null,
   weekCostUsd: null,
-  creditBalanceUsd: null,
+  balanceUsd: null,
   budgetFunded: false,
   budgetChargeUsd: null,
 };
-
-// Free tier rides the house model against the same weekly-ledger + burst
-// machinery as paid plans — but it is already on the floor model, so an
-// exhausted allowance locks until the meter refills instead of degrading.
-async function freeTierGateOutcome(
-  input: PreflightGateInput,
-  spendWindowUsd: number | null,
-  spendWeekUsd: number | null,
-): Promise<DegradeOutcome> {
-  if (spendWindowUsd === null && spendWeekUsd === null) {
-    return {
-      kind: "state",
-      degrade: true,
-      degradeReason: "free",
-      windowCostUsd: null,
-      weekCostUsd: null,
-      creditBalanceUsd: null,
-    };
-  }
-  const spend = await spendWindowGate(railGateContext(input), spendWindowUsd, spendWeekUsd);
-  if ("allowed" in spend) return { kind: "denied", decision: spend };
-  if (spend.degrade) {
-    const now = input.now();
-    const weekSpent = meterExhausted(spend.weekCostUsd, spendWeekUsd);
-    const refillAtMs = weekSpent
-      ? weekWindowStartMs(now) + MODEL_BROKER_WEEK_WINDOW_MS
-      : usageWindowStartMs(now) + MODEL_BROKER_USAGE_WINDOW_MS;
-    return {
-      kind: "denied",
-      decision: {
-        allowed: false,
-        status: 429,
-        error:
-          // Meter-neutral (weekly ledger OR burst window) and deliberately
-          // token/USD-free: user surfaces never see cost mechanics.
-          "free plan allowance exhausted — resumes at the next refill, or upgrade for a bigger budget",
-        retryAfterSeconds: Math.max(1, Math.ceil((refillAtMs - now) / 1000)),
-      },
-    };
-  }
-  return {
-    kind: "state",
-    degrade: true,
-    degradeReason: "free",
-    windowCostUsd: spend.windowCostUsd,
-    weekCostUsd: spend.weekCostUsd,
-    creditBalanceUsd: null,
-  };
-}
 
 function railGateContext(input: PreflightGateInput): RailGateContext {
   return {
@@ -918,9 +859,6 @@ async function degradeStateForGrant(
   const ctx = railGateContext(input);
   const railOutcome = await input.rail.gate(ctx, { spendWindowUsd, spendWeekUsd });
   if (railOutcome) return railOutcome;
-  if (input.grant.policy.freeTier) {
-    return freeTierGateOutcome(input, spendWindowUsd, spendWeekUsd);
-  }
   if (spendWindowUsd !== null || spendWeekUsd !== null) {
     const spend = await spendWindowGate(ctx, spendWindowUsd, spendWeekUsd);
     if ("allowed" in spend) return { kind: "denied", decision: spend };
@@ -933,7 +871,7 @@ async function degradeStateForGrant(
       degradeReason: spend.degrade ? "budget" : null,
       windowCostUsd: spend.windowCostUsd,
       weekCostUsd: spend.weekCostUsd,
-      creditBalanceUsd: null,
+      balanceUsd: null,
     };
   }
   return {
@@ -942,7 +880,7 @@ async function degradeStateForGrant(
     degradeReason: null,
     windowCostUsd: null,
     weekCostUsd: null,
-    creditBalanceUsd: null,
+    balanceUsd: null,
   };
 }
 
@@ -953,7 +891,7 @@ function requiresPreflightGate(input: PreflightGateInput): boolean {
   const spendWindowUsd = grant.limits.spendWindowUsd;
   const spendWeekUsd = grant.limits.spendWeekUsd;
   const requestsPerMinute = grant.limits.requestsPerMinute;
-  return input.rail.requiresGate(grant, input.record.ownerUid ?? null) || grant.policy.freeTier ||
+  return input.rail.requiresGate(grant, input.record.ownerUid ?? null) ||
     spendWindowUsd !== null || spendWeekUsd !== null || requestsPerMinute !== null;
 }
 
@@ -970,14 +908,16 @@ async function preflightGate(input: PreflightGateInput): Promise<GateDecision> {
       const denial = await rateWindowDenial(input, requestsPerMinute);
       if (denial) return denial;
     }
-    const { degrade, degradeReason, windowCostUsd, weekCostUsd, creditBalanceUsd } = outcome;
+    const { degrade, degradeReason, windowCostUsd, weekCostUsd, balanceUsd } = outcome;
     return {
       allowed: true,
       degrade,
       degradeReason,
+      houseModelDial: outcome.houseModelDial === true,
+      decision: outcome.decision ?? null,
       windowCostUsd,
       weekCostUsd,
-      creditBalanceUsd,
+      balanceUsd,
       budgetFunded: outcome.budgetFunded === true,
       budgetChargeUsd: outcome.budgetChargeUsd ?? null,
     };
@@ -1075,7 +1015,7 @@ async function effectiveHouseModel(args: {
   onError: (err: unknown) => void;
 }): Promise<string> {
   const houseModel = args.houseModels[args.provider];
-  if (!args.gate.degrade || args.gate.degradeReason !== "free" || !args.resolveFreeTierModel) {
+  if (!args.gate.degrade || !args.gate.houseModelDial || !args.resolveFreeTierModel) {
     return houseModel;
   }
   try {
@@ -1123,7 +1063,7 @@ async function logAndForwardAllowed(args: {
       effectiveModel: gate.degrade ? houseModel : args.requestModel,
       windowCostUsd: gate.windowCostUsd,
       weekCostUsd: gate.weekCostUsd,
-      creditBalanceUsd: gate.creditBalanceUsd,
+      balanceUsd: gate.balanceUsd,
       budgetChargeUsd: gate.budgetChargeUsd,
     });
   }
@@ -1162,13 +1102,13 @@ function meteringContextFor(args: {
   gate: GateDecisionAllowed;
   now: () => number;
   onMeteringError: (err: unknown) => void;
-  usingCredits: boolean;
+  meter: RailMeter;
   budgetFunded: boolean;
   fundedBudget: OwnerModelBrokerGrant["fundedBudget"];
   vertexPricing?: MeteringContext["vertexPricing"];
 }): MeteringContext {
-  const { providerKey, gate, usingCredits, budgetFunded } = args;
-  const platformFundedEmbedding = args.record.purpose === "embeddings";
+  const { providerKey, gate, meter, budgetFunded } = args;
+  const railMetered = args.record.purpose !== "embeddings" && providerKey.source !== "owner_model_credential";
   return {
     req: args.req,
     url: args.url,
@@ -1181,21 +1121,8 @@ function meteringContextFor(args: {
     degraded: gate.degrade,
     now: args.now,
     onMeteringError: args.onMeteringError,
-    // Prepaid traffic debits the credit balance; only subscription traffic
-    // counts toward spend windows. A paid plan's degraded house traffic is
-    // on the house — but for the free tier the house model IS the plan, so
-    // its traffic debits the weekly allowance ledger.
-    countsTowardSpendWindow:
-      !platformFundedEmbedding &&
-      providerKey.source !== "owner_model_credential" &&
-      !usingCredits &&
-      !budgetFunded &&
-      (!gate.degrade || gate.degradeReason === "free"),
-    debitsCreditBalance:
-      !platformFundedEmbedding &&
-      usingCredits &&
-      providerKey.source !== "owner_model_credential" &&
-      !gate.degrade,
+    countsTowardSpendWindow: railMetered && !budgetFunded && meter.countsTowardSpendWindow,
+    charge: railMetered ? meter.charge : CHARGE_AT_COST,
     ...(budgetFunded && args.fundedBudget
       ? { fundedBudget: args.fundedBudget }
       : {}),
@@ -1302,7 +1229,7 @@ async function forwardAllowed(args: {
   log?: (msg: string, fields?: Record<string, unknown>) => void;
 }): Promise<void> {
   const { req, res, url, record, providerKey, gate } = args;
-  const usingCredits = args.rail.usingCredits(args.grant, gate, record.ownerUid ?? null);
+  const meter = args.rail.meter({ grant: args.grant, gate, ownerUid: record.ownerUid ?? null });
   const rewrittenBody = rewriteRequestBody({
     body: req.body,
     degradeModel: degradeModelForRequest(gate, url, args.houseModel),
@@ -1364,7 +1291,7 @@ async function forwardAllowed(args: {
         gate,
         now: args.now,
         onMeteringError: args.onMeteringError,
-        usingCredits,
+        meter,
         budgetFunded: gate.budgetFunded,
         fundedBudget: args.fundedBudget,
         vertexPricing: call.vertexPricing,
@@ -1637,7 +1564,6 @@ function brokerGateLogger(
       spendWindowUsd: grant.limits.spendWindowUsd,
       spendWeekUsd: grant.limits.spendWeekUsd,
       requestsPerMinute: grant.limits.requestsPerMinute,
-      freeTier: grant.policy.freeTier,
       rail: grant.rail,
       ...context.rail.logFields(grant),
       requestModel,
@@ -1785,7 +1711,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
     express.raw({ type: "*/*", limit: deps.bodyLimit ?? DEFAULT_BODY_LIMIT }),
     createBrokerRequestHandler({
       deps,
-      rails: railsFor(deps),
+      rails: deps.rails,
       fetchImpl,
       upstreamBaseUrls,
       houseModels,

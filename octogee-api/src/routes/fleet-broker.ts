@@ -138,7 +138,6 @@ import { createCachedOwnerModelBrokerGrantResolver } from "../lib/model-broker-l
 import { operatorRailRegistry, type ModelBrokerRailRegistry } from "../lib/model-broker-rails.js";
 import type { FundedBudgetInterruptionHandler } from "../lib/model-broker-budget.js";
 import { createFirestoreModelBrokerUsageStore } from "../lib/model-broker-usage.js";
-import { prepaidCreditMarkupMultiplierFromEnv, webMarkupMultiplierFromEnv } from "../lib/prepaid-credit-markup.js";
 import { createWebResearchService, type WebResearchExtractInput, type WebResearchSearchInput } from "../lib/web-research-service.js";
 import { WebResearchError } from "../lib/web-research-error.js";
 import { createBraveSearchClient, createTavilyClient } from "../lib/web-provider-clients.js";
@@ -424,9 +423,7 @@ function createDefaultWebResearch(
   const brave = braveKey ? createBraveSearchClient({ apiKey: braveKey }) : null;
   const tavily = tavilyKey ? createTavilyClient({ apiKey: tavilyKey }) : null;
   return createWebResearchService({
-    usageStore: createFirestoreModelBrokerUsageStore(db, {
-      prepaidCreditMarkupMultiplier: prepaidCreditMarkupMultiplierFromEnv(),
-    }),
+    usageStore: createFirestoreModelBrokerUsageStore(db),
     resolveGrant: createCachedOwnerModelBrokerGrantResolver({
       rails,
       state: store,
@@ -447,7 +444,6 @@ function createDefaultWebResearch(
       0.008,
       "TAVILY_COST_PER_CREDIT_USD",
     ),
-    markupMultiplier: webMarkupMultiplierFromEnv(),
     onError: (error) => logger.error("web research usage recording failed", { error }),
     onBudgetInterruption,
   });

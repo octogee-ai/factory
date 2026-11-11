@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   exhaustedSpendBudget,
-  MODEL_BROKER_CREDITS_COLLECTION,
   MODEL_BROKER_RATE_WINDOW_MS,
   MODEL_BROKER_RATE_WINDOWS_COLLECTION,
   MODEL_BROKER_USAGE_EVENTS_COLLECTION,
@@ -17,6 +16,9 @@ import {
   weekWindowStartMs,
   windowOwnerKey,
 } from "./model-broker-usage.js";
+import {
+  MODEL_BROKER_CREDITS_COLLECTION,
+} from "./billing.js";
 
 describe("model broker usage storage contract", () => {
   it("keeps collection names and window durations stable", () => {

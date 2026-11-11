@@ -6,6 +6,7 @@ import {
   InMemoryModelBrokerTokenStore,
   type ModelBrokerProvider,
 } from "../lib/model-broker-tokens.js";
+import { operatorRailRegistry } from "../lib/model-broker-rails.js";
 
 async function credential(store: InMemoryModelBrokerTokenStore, provider: ModelBrokerProvider, owner = "alice", purpose: "model" | "embeddings" = "model") {
   return store.issueToken({
@@ -21,7 +22,7 @@ describe("credential-scoped broker catalog", () => {
     const { token } = await credential(store, provider);
     const fetchImpl = vi.fn();
     const resolveGrant = vi.fn();
-    const app = createLlmBrokerApp({ store, providerKeys: { [provider]: "private-provider-key" }, fetchImpl, resolveGrant, now: () => 2_000 });
+    const app = createLlmBrokerApp({ rails: operatorRailRegistry(), store, providerKeys: { [provider]: "private-provider-key" }, fetchImpl, resolveGrant, now: () => 2_000 });
 
     const result = await request(app).get("/v1/catalog")
       .set("authorization", `Bearer ${token}`)
@@ -50,7 +51,7 @@ describe("credential-scoped broker catalog", () => {
     const store = new InMemoryModelBrokerTokenStore();
     const alice = await credential(store, "anthropic");
     const bob = await credential(store, "openai", "bob");
-    const app = createLlmBrokerApp({ store, providerKeys: { anthropic: "a", openai: "b" }, now: () => 2_000 });
+    const app = createLlmBrokerApp({ rails: operatorRailRegistry(), store, providerKeys: { anthropic: "a", openai: "b" }, now: () => 2_000 });
     const [a, b] = await Promise.all([
       request(app).get("/v1/catalog").set("x-api-key", alice.token).expect(200),
       request(app).get("/v1/catalog").set("x-api-key", bob.token).expect(200),
@@ -70,6 +71,7 @@ describe("credential-scoped broker catalog", () => {
     if (reason === "revoked") await store.revokeGatewayToken({ gatewayId: "gateway-alice", provider: "openai", secretName: "private-alice" });
     const fetchImpl = vi.fn();
     const app = createLlmBrokerApp({
+      rails: operatorRailRegistry(),
       store, providerKeys: reason === "unconfigured" ? {} : { openai: "provider-key" },
       now: () => reason === "expired" ? 61_000 : 2_000,
       resolveOwnerAccess: async () => reason !== "owner-disabled", fetchImpl,
@@ -87,6 +89,7 @@ describe("credential-scoped broker catalog", () => {
     let clock = 2_000;
     let active = true;
     const app = createLlmBrokerApp({
+      rails: operatorRailRegistry(),
       store, providerKeys: {}, now: () => clock, resolveOwnerAccess: async () => active,
       providerKeyResolver: async () => {
         if (reason === "revoked") await store.revokeGatewayToken({ gatewayId: "gateway-alice", provider: "openai", secretName: "private-alice" });
@@ -105,6 +108,7 @@ describe("credential-scoped broker catalog", () => {
     const { token } = await credential(store, "openai");
     const onMeteringError = vi.fn();
     const app = createLlmBrokerApp({
+      rails: operatorRailRegistry(),
       store, providerKeys: {}, now: () => 2_000, onMeteringError,
       providerKeyResolver: async () => { throw new Error("private-credential-diagnostic"); },
     });
@@ -116,6 +120,7 @@ describe("credential-scoped broker catalog", () => {
   it("keeps token-store failures private", async () => {
     const onMeteringError = vi.fn();
     const app = createLlmBrokerApp({
+      rails: operatorRailRegistry(),
       store: { lookupToken: async () => { throw new Error("private-token-store-details"); } },
       providerKeys: {}, onMeteringError,
     });

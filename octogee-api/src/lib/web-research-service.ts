@@ -37,7 +37,6 @@ interface WebResearchServiceOptions {
   now?: () => number;
   braveCostPerRequestUsd: number;
   tavilyCostPerCreditUsd: number;
-  markupMultiplier: number;
   onError?: (error: unknown) => void;
   onBudgetInterruption?: FundedBudgetInterruptionHandler;
 }
@@ -153,8 +152,8 @@ export function createWebResearchService(options: WebResearchServiceOptions) {
         upstreamStatus: 200,
         now: input.at,
         reportedCostUsd: input.costUsd,
-        chargeUsd: input.costUsd * options.markupMultiplier,
-        debitsCreditBalance: input.billing.debitsCreditBalance,
+        chargeUsd: input.costUsd * input.billing.charge.priceMultiplier,
+        balanceDebit: input.billing.charge.balanceDebit,
         countsTowardSpendWindow: input.billing.countsTowardSpendWindow,
         fundedBudget: input.billing.fundedBudget,
         providerMetadata: input.metadata,

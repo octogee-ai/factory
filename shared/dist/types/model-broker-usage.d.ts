@@ -3,16 +3,8 @@ export declare const MODEL_BROKER_USAGE_ROLLUPS_COLLECTION = "modelBrokerUsageRo
 export declare const MODEL_BROKER_USAGE_WINDOWS_COLLECTION = "modelBrokerUsageWindows";
 export declare const MODEL_BROKER_WEEK_WINDOWS_COLLECTION = "modelBrokerWeekWindows";
 export declare const MODEL_BROKER_RATE_WINDOWS_COLLECTION = "modelBrokerRateWindows";
-export declare const MODEL_BROKER_CREDITS_COLLECTION = "modelBrokerCredits";
-export declare const MODEL_BROKER_CREDIT_TOPUPS_COLLECTION = "modelBrokerCreditTopups";
 export declare const MODEL_BROKER_TOKENS_COLLECTION = "modelBrokerTokens";
 export declare const MODEL_BROKER_GATEWAY_POINTERS_COLLECTION = "modelBrokerGatewayTokens";
-export type ModelBrokerCreditTopUpSource = "checkout" | "auto_top_up";
-export interface ModelBrokerCreditAutoTopUp {
-    enabled: boolean;
-    thresholdUsd: number;
-    amountUsd: number;
-}
 export declare const WINDOW_LENGTH_HOURS = 4;
 export declare const MODEL_BROKER_USAGE_WINDOW_MS: number;
 export declare const MODEL_BROKER_WEEK_WINDOW_MS: number;

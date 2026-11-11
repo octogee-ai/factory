@@ -5,6 +5,7 @@ import { createLlmBrokerApp, type LlmBrokerAppDeps } from "../llm-broker-app.js"
 import { InMemoryModelBrokerTokenStore } from "../lib/model-broker-tokens.js";
 import { InMemoryModelBrokerUsageStore } from "../lib/model-broker-usage.js";
 import { parseVertexModelPrices } from "../lib/vertex-provider.js";
+import { operatorRailRegistry } from "../lib/model-broker-rails.js";
 
 const PRICES = parseVertexModelPrices({
   "claude-haiku-4-5@20251001": {
@@ -47,6 +48,7 @@ describe("llm broker vertex rail", () => {
     const store = new InMemoryModelBrokerTokenStore();
     const fetchMock = vi.fn();
     const app = createLlmBrokerApp({
+      rails: operatorRailRegistry(),
       store,
       providerKeys: { anthropic: "sk-ant-platform" },
       fetchImpl: fetchMock as unknown as typeof fetch,
@@ -68,7 +70,7 @@ describe("llm broker vertex rail", () => {
   it("registers the rail from config and lists its catalog without an upstream call", async () => {
     const store = new InMemoryModelBrokerTokenStore();
     const vertex = vertexDeps();
-    const app = createLlmBrokerApp({ store, providerKeys: {}, vertex });
+    const app = createLlmBrokerApp({ rails: operatorRailRegistry(), store, providerKeys: {}, vertex });
     const token = await vertexToken(store);
 
     const health = await request(app).get("/healthz").expect(200);
@@ -95,6 +97,7 @@ describe("llm broker vertex rail", () => {
     }));
     const vertex = vertexDeps();
     const app = createLlmBrokerApp({
+      rails: operatorRailRegistry(),
       store,
       usageStore,
       providerKeys: {},
@@ -169,6 +172,7 @@ describe("llm broker vertex rail", () => {
       ),
     );
     const app = createLlmBrokerApp({
+      rails: operatorRailRegistry(),
       store,
       usageStore,
       providerKeys: {},
@@ -208,6 +212,7 @@ describe("llm broker vertex rail", () => {
     const fetchMock = vi.fn();
     const onMeteringError = vi.fn();
     const app = createLlmBrokerApp({
+      rails: operatorRailRegistry(),
       store,
       providerKeys: {},
       vertex: vertexDeps(),
@@ -231,6 +236,7 @@ describe("llm broker vertex rail", () => {
     const store = new InMemoryModelBrokerTokenStore();
     const fetchMock = vi.fn();
     const app = createLlmBrokerApp({
+      rails: operatorRailRegistry(),
       store,
       providerKeys: {},
       vertex: vertexDeps(),
@@ -278,6 +284,7 @@ describe("llm broker vertex rail", () => {
       usage: { input_tokens: 5, output_tokens: 2 },
     }));
     const app = createLlmBrokerApp({
+      rails: operatorRailRegistry(),
       store,
       usageStore,
       providerKeys: {},
@@ -308,6 +315,7 @@ describe("llm broker vertex rail", () => {
     const fetchMock = vi.fn();
     const onMeteringError = vi.fn();
     const app = createLlmBrokerApp({
+      rails: operatorRailRegistry(),
       store,
       providerKeys: {},
       vertex: vertexDeps({ accessToken: vi.fn(async () => { throw new Error("metadata server unreachable"); }) }),

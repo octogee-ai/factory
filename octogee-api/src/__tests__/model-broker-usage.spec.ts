@@ -13,7 +13,10 @@ import {
   usageWindowStartMs,
   windowOwnerKey,
 } from "../lib/model-broker-usage.js";
-import { prepaidCreditMarkupMultiplierFromEnv, webMarkupMultiplierFromEnv } from "../lib/prepaid-credit-markup.js";
+
+function ledger(ownerUid: string) {
+  return { collection: "balances", ownerUid };
+}
 
 const baseRecord = {
   requestId: "req",
@@ -386,7 +389,7 @@ describe("platform web usage charges", () => {
 
   it("defaults model charges to actual cost and debits prepaid credit by charge", async () => {
     const store = new InMemoryModelBrokerUsageStore();
-    store.creditBalances.set("uid-a", 1);
+    store.setBalance(ledger("uid-a"), 1);
     await store.recordUsage({
       ...baseRecord,
       eventId: "model-default-charge",
@@ -408,10 +411,10 @@ describe("platform web usage charges", () => {
       },
       reportedCostUsd: 0.008,
       chargeUsd: 0.01,
-      debitsCreditBalance: true,
+      balanceDebit: ledger("uid-a"),
       countsTowardSpendWindow: false,
     });
-    expect(await store.readCreditBalance("uid-a")).toBeCloseTo(0.99);
+    expect(await store.readBalance(ledger("uid-a"))).toBeCloseTo(0.99);
   });
 
   it("retains each model provider in the operational rollup", async () => {
@@ -523,41 +526,42 @@ describe("InMemoryModelBrokerUsageStore owner isolation", () => {
   });
 });
 
-describe("prepaid credit debits", () => {
+describe("balance debits", () => {
   it("debits the owner's credit balance atomically with the metering write", async () => {
     const store = new InMemoryModelBrokerUsageStore();
-    store.creditBalances.set("uid-user", 10);
+    store.setBalance(ledger("uid-user"), 10);
     await store.recordUsage({
       ...baseRecord,
       eventId: "c1",
       ownerUid: "uid-user",
-      debitsCreditBalance: true,
+      balanceDebit: ledger("uid-user"),
       countsTowardSpendWindow: false,
     });
     const cost = estimateAnthropicCost("claude-sonnet-4-6", baseRecord.usage).total;
-    expect(await store.readCreditBalance("uid-user")).toBeCloseTo(10 - cost, 8);
+    expect(await store.readBalance(ledger("uid-user"))).toBeCloseTo(10 - cost, 8);
     // still fully metered for the ledger
     expect(store.rollups.get("uid-user")?.requestCount).toBe(1);
   });
 
-  it("debits prepaid credits at provider cost times the configured markup and records that as the charge", async () => {
-    const store = new InMemoryModelBrokerUsageStore({ prepaidCreditMarkupMultiplier: 1.25 });
-    store.creditBalances.set("uid-user", 10);
+  it("debits the balance at provider cost times the price multiplier and records that as the charge", async () => {
+    const store = new InMemoryModelBrokerUsageStore();
+    store.setBalance(ledger("uid-user"), 10);
     await store.recordUsage({
       ...baseRecord,
       eventId: "m1",
       ownerUid: "uid-user",
       reportedCostUsd: 0.8,
-      debitsCreditBalance: true,
+      priceMultiplier: 1.25,
+      balanceDebit: ledger("uid-user"),
       countsTowardSpendWindow: false,
     });
-    expect(await store.readCreditBalance("uid-user")).toBeCloseTo(9, 8);
+    expect(await store.readBalance(ledger("uid-user"))).toBeCloseTo(9, 8);
     expect(store.events[0]).toMatchObject({ costUsd: 0.8, chargeUsd: 1 });
     expect(store.rollups.get("uid-user")).toMatchObject({ costUsd: 0.8, chargeUsd: 1 });
   });
 
-  it("leaves subscription-rail charges at provider cost when a markup is configured", async () => {
-    const store = new InMemoryModelBrokerUsageStore({ prepaidCreditMarkupMultiplier: 1.25 });
+  it("leaves charges at provider cost without a price multiplier", async () => {
+    const store = new InMemoryModelBrokerUsageStore();
     await store.recordUsage({
       ...baseRecord,
       eventId: "s-markup",
@@ -571,9 +575,9 @@ describe("prepaid credit debits", () => {
     ).resolves.toMatchObject({ costUsd: 0.8, chargeUsd: 0.8 });
   });
 
-  it("does not mark up an explicit charge a second time when it debits credits", async () => {
-    const store = new InMemoryModelBrokerUsageStore({ prepaidCreditMarkupMultiplier: 1.25 });
-    store.creditBalances.set("uid-a", 1);
+  it("does not multiply an explicit charge a second time when it debits a balance", async () => {
+    const store = new InMemoryModelBrokerUsageStore();
+    store.setBalance(ledger("uid-a"), 1);
     await store.recordUsage({
       ...baseRecord,
       eventId: "web-explicit",
@@ -583,63 +587,41 @@ describe("prepaid credit debits", () => {
       usage: { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
       reportedCostUsd: 0.008,
       chargeUsd: 0.01,
-      debitsCreditBalance: true,
+      priceMultiplier: 1.25,
+      balanceDebit: ledger("uid-a"),
       countsTowardSpendWindow: false,
     });
-    expect(await store.readCreditBalance("uid-a")).toBeCloseTo(0.99, 8);
+    expect(await store.readBalance(ledger("uid-a"))).toBeCloseTo(0.99, 8);
   });
 
   it.each([0, 0.5, Number.NaN, Number.POSITIVE_INFINITY])(
-    "refuses a prepaid credit markup multiplier of %s",
-    (multiplier) => {
-      expect(() => new InMemoryModelBrokerUsageStore({ prepaidCreditMarkupMultiplier: multiplier }))
-        .toThrow(/prepaid credit markup multiplier/);
+    "refuses to record a price multiplier of %s",
+    async (multiplier) => {
+      const store = new InMemoryModelBrokerUsageStore();
+      await expect(store.recordUsage({ ...baseRecord, eventId: "bad", priceMultiplier: multiplier }))
+        .rejects.toThrow(/price multiplier/);
+      expect(store.events).toHaveLength(0);
     },
   );
 
-  it("never debits subscription-rail traffic and defaults unknown owners to zero balance", async () => {
+  it("never debits traffic without a balance debit and defaults unknown owners to zero balance", async () => {
     const store = new InMemoryModelBrokerUsageStore();
-    store.creditBalances.set("uid-a", 5);
+    store.setBalance(ledger("uid-a"), 5);
     await store.recordUsage({ ...baseRecord, eventId: "s1", ownerUid: "uid-a" });
-    expect(await store.readCreditBalance("uid-a")).toBe(5);
-    expect(await store.readCreditBalance("uid-nobody")).toBe(0);
+    expect(await store.readBalance(ledger("uid-a"))).toBe(5);
+    expect(await store.readBalance(ledger("uid-nobody"))).toBe(0);
   });
 
   it("allows the final call to overshoot slightly negative — the gate blocks the next one", async () => {
     const store = new InMemoryModelBrokerUsageStore();
-    store.creditBalances.set("uid-user", 0.0001);
+    store.setBalance(ledger("uid-user"), 0.0001);
     await store.recordUsage({
       ...baseRecord,
       eventId: "c2",
       ownerUid: "uid-user",
-      debitsCreditBalance: true,
+      balanceDebit: ledger("uid-user"),
       countsTowardSpendWindow: false,
     });
-    expect(await store.readCreditBalance("uid-user")).toBeLessThan(0);
-  });
-});
-
-describe("prepaid credit markup config", () => {
-  it("fails loud when the env var is unset or blank instead of shipping a default", () => {
-    expect(() => prepaidCreditMarkupMultiplierFromEnv({}))
-      .toThrow(/PLATFORM_CREDIT_MARKUP_MULTIPLIER is required/);
-    expect(() => prepaidCreditMarkupMultiplierFromEnv({ PLATFORM_CREDIT_MARKUP_MULTIPLIER: " " }))
-      .toThrow(/PLATFORM_CREDIT_MARKUP_MULTIPLIER is required/);
-  });
-
-  it("reads a configured multiplier", () => {
-    expect(prepaidCreditMarkupMultiplierFromEnv({ PLATFORM_CREDIT_MARKUP_MULTIPLIER: "1.4" })).toBe(1.4);
-  });
-
-  it.each(["abc", "0", "0.9", "-1", "Infinity"])("throws on %s rather than defaulting", (raw) => {
-    expect(() => prepaidCreditMarkupMultiplierFromEnv({ PLATFORM_CREDIT_MARKUP_MULTIPLIER: raw }))
-      .toThrow(/PLATFORM_CREDIT_MARKUP_MULTIPLIER must be a finite number >= 1/);
-  });
-
-  it("reads the web research markup from its own env var with the same rules", () => {
-    expect(webMarkupMultiplierFromEnv({ PLATFORM_WEB_MARKUP_MULTIPLIER: "1.3" })).toBe(1.3);
-    expect(() => webMarkupMultiplierFromEnv({})).toThrow(/PLATFORM_WEB_MARKUP_MULTIPLIER is required/);
-    expect(() => webMarkupMultiplierFromEnv({ PLATFORM_WEB_MARKUP_MULTIPLIER: "0.5" }))
-      .toThrow(/PLATFORM_WEB_MARKUP_MULTIPLIER must be a finite number >= 1/);
+    expect(await store.readBalance(ledger("uid-user"))).toBeLessThan(0);
   });
 });

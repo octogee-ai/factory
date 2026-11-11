@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { OwnerModelBrokerGrant } from "../lib/model-broker-limits.js";
 import {
+  CHARGE_AT_COST,
   createModelBrokerRailRegistry,
   operatorRail,
   operatorRailRegistry,
@@ -25,10 +26,12 @@ function grant(overrides: Partial<OwnerModelBrokerGrant> = {}): OwnerModelBroker
 const allowed = {
   allowed: true as const,
   degrade: false,
-  degradeReason: null,
+  degradeReason: null as string | null,
+  houseModelDial: false,
+  decision: null as string | null,
   windowCostUsd: null,
   weekCostUsd: null,
-  creditBalanceUsd: null,
+  balanceUsd: null,
   budgetFunded: false,
   budgetChargeUsd: null,
 };
@@ -60,8 +63,21 @@ describe("operator rail", () => {
     const ctx = { grant: grant(), gatewayId: "g1", ownerUid: "u1", now: () => 0 };
     expect(operatorRail.requiresGate(grant(), "u1")).toBe(false);
     expect(await operatorRail.gate(ctx, { spendWindowUsd: 10, spendWeekUsd: 50 })).toBeNull();
-    expect(operatorRail.usingCredits(grant(), { ...allowed, creditBalanceUsd: 5 }, "u1")).toBe(false);
+    expect(operatorRail.meter({ grant: grant(), gate: { ...allowed, balanceUsd: 5 }, ownerUid: "u1" }))
+      .toEqual({ countsTowardSpendWindow: true, charge: CHARGE_AT_COST });
+    expect(operatorRail.meter({ grant: grant(), gate: { ...allowed, degrade: true }, ownerUid: "u1" }))
+      .toEqual({ countsTowardSpendWindow: false, charge: CHARGE_AT_COST });
     expect(operatorRail.logFields(grant())).toEqual({});
+  });
+
+  it("refuses a free-tier grant, which only a product rail can serve", async () => {
+    const freeTier = grant({ policy: { freeTier: true, houseFallback: true } });
+    const ctx = { grant: freeTier, gatewayId: "g1", ownerUid: "u1", now: () => 0 };
+    expect(operatorRail.requiresGate(freeTier, "u1")).toBe(true);
+    expect(await operatorRail.gate(ctx, { spendWindowUsd: null, spendWeekUsd: null })).toEqual({
+      kind: "denied",
+      decision: { allowed: false, status: 503, error: "free-tier policy needs a product model broker rail" },
+    });
   });
 
   it("denies with 402 when the budget is exhausted and no house model is configured", async () => {
@@ -73,7 +89,7 @@ describe("operator rail", () => {
   });
 
   it("meters web research against the spend window and refuses when exhausted", async () => {
-    const usageStore = new InMemoryModelBrokerUsageStore({ prepaidCreditMarkupMultiplier: 1 });
+    const usageStore = new InMemoryModelBrokerUsageStore();
     const within = await operatorRail.allowance({
       usageStore,
       grant: grant({ limits: { spendWindowUsd: 10, spendWeekUsd: null, requestsPerMinute: null } }),
@@ -81,7 +97,7 @@ describe("operator rail", () => {
       ownerUid: "u1",
       now: 1_000,
     });
-    expect(within).toEqual({ debitsCreditBalance: false, countsTowardSpendWindow: true });
+    expect(within).toEqual({ countsTowardSpendWindow: true, charge: CHARGE_AT_COST });
 
     await usageStore.recordUsage({
       eventId: "e1",
@@ -117,7 +133,7 @@ describe("operator rail", () => {
   });
 
   it("lets a rail decide what happens when the window is exhausted without a house model", async () => {
-    const usageStore = new InMemoryModelBrokerUsageStore({ prepaidCreditMarkupMultiplier: 1 });
+    const usageStore = new InMemoryModelBrokerUsageStore();
     await usageStore.recordUsage({
       eventId: "e1",
       requestId: "r1",
@@ -152,7 +168,7 @@ describe("operator rail", () => {
       ownerUid: "u1",
       now: 2_000,
     };
-    const fallback = { debitsCreditBalance: true, countsTowardSpendWindow: false };
+    const fallback = { countsTowardSpendWindow: false, charge: { priceMultiplier: 1, balanceDebit: { collection: "balances", ownerUid: "u1" } } };
     expect(await requireSpendWindowAllowance(input, async () => fallback)).toEqual(fallback);
     await expect(requireSpendWindowAllowance(input, async () => {
       throw new WebResearchError("credits_exhausted", 402, "none");
@@ -169,7 +185,7 @@ describe("operator rail spend throttle", () => {
     weekBudgetUsd: 20,
     onOwnerCredential: false,
     houseFallback: false,
-    creditBalanceUsd: 9,
+    balanceUsd: 9,
   };
 
   it("stays clear while budgets have room", () => {
@@ -177,7 +193,7 @@ describe("operator rail spend throttle", () => {
       degraded: false,
       blocked: false,
       reason: null,
-      creditBalanceVisible: false,
+      balanceVisible: false,
     });
   });
 
@@ -186,7 +202,7 @@ describe("operator rail spend throttle", () => {
       degraded: false,
       blocked: true,
       reason: "window_exhausted",
-      creditBalanceVisible: false,
+      balanceVisible: false,
     });
   });
 
@@ -195,7 +211,7 @@ describe("operator rail spend throttle", () => {
       degraded: true,
       blocked: false,
       reason: "week_exhausted",
-      creditBalanceVisible: false,
+      balanceVisible: false,
     });
   });
 
