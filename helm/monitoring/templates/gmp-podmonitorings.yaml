@@ -1,5 +1,5 @@
-# App metrics → GMP. ClusterPodMonitoring is cluster-scoped, so each covers both
-# octogee + octogee-test (matching the retired ServiceMonitors' namespaceSelector).
+# App metrics → GMP. ClusterPodMonitoring is cluster-scoped, so each covers every
+# namespace on the cluster.
 # GMP sets the `job` label to the resource name — kept identical to the old
 # ServiceMonitor jobs so dashboards/alerts (up{job="octogee-gateway"}, the
 # $gateway var, gateway-edge panels) keep working unchanged.

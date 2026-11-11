@@ -199,7 +199,7 @@ describe("monitoring setup", () => {
     expect(verifyMonitoring).toContain("rolebinding grafana");
   });
 
-  it("opens gateway-edge metrics to GMP in every active monitoring namespace", () => {
+  it("opens gateway-edge metrics to GMP in the selected target's namespace", () => {
     const rendered = execFileSync(
       "helm",
       [
@@ -208,6 +208,8 @@ describe("monitoring setup", () => {
         resolve(root, "helm/monitoring"),
         "--namespace",
         "monitoring",
+        "--set",
+        "monitoredNamespaces={octogee-test}",
       ],
       { encoding: "utf8" },
     );
@@ -221,7 +223,7 @@ describe("monitoring setup", () => {
 
     expect(policies.map((policy) =>
       (policy?.metadata as { namespace: string }).namespace,
-    ).sort()).toEqual(["octogee", "octogee-test"]);
+    ).sort()).toEqual(["octogee-test"]);
     for (const policy of policies) {
       const spec = policy?.spec as {
         podSelector: { matchLabels: Record<string, string> };

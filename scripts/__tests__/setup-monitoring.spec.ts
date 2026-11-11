@@ -55,6 +55,7 @@ function createHarness(): {
   TARGET_REGION=us-west1
   TARGET_CLUSTER_PROJECT=octogee
   TARGET_KUBE_CONTEXT=gke_us-west1_octogee
+  TARGET_NAMESPACE=octogee-west
 }
 `,
   );
@@ -149,6 +150,13 @@ describe("monitoring setup", () => {
     expect(result.calls[1]).toContain("helm:upgrade --install grafana");
     expect(result.calls.every((call) => !call.startsWith("computeclass:"))).toBe(true);
     expect(result.calls.at(-1)).toBe("verify:--target=test-west");
+  });
+
+  it("opens gateway-edge scraping in the selected target's namespace", () => {
+    const result = runHarness();
+    const helmCall = result.calls.find((call) => call.startsWith("helm:"));
+
+    expect(helmCall).toContain("--set monitoredNamespaces={octogee-west}");
   });
 
   it("passes no compute class to the monitoring Helm release", () => {

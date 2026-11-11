@@ -83,6 +83,7 @@ NODE
 
 helm_values=(
   --set "gmp.projectId=$TARGET_CLUSTER_PROJECT"
+  --set "monitoredNamespaces={$TARGET_NAMESPACE}"
   --set-string "grafana.podAnnotations.octogee\\.ai/dashboard-checksum=$DASHBOARD_CHECKSUM"
 )
 $IAP_ENABLED && helm_values+=(--set iap.enabled=true)

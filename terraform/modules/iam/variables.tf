@@ -12,11 +12,6 @@ variable "region" {
   type = string
 }
 
-variable "namespace" {
-  description = "Kubernetes namespace for Workload Identity binding"
-  type        = string
-}
-
 variable "gateway_sa_name" {
   description = "Service account ID for cattle gateways"
   type        = string
@@ -39,16 +34,6 @@ variable "ops_agent_sa_name" {
   description = "Service account ID for the read-only Ops Agent"
   type        = string
   default     = "octogee-ops-agent"
-}
-
-variable "cloudsql_project_id" {
-  description = "Project ID that owns the Cloud SQL instance"
-  type        = string
-}
-
-variable "cluster_project_id" {
-  description = "Project ID that owns the GKE cluster and its Workload Identity pool"
-  type        = string
 }
 
 variable "firebase_deployer_sa_name" {

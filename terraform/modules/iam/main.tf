@@ -1,5 +1,5 @@
 # ── IAM Module ───────────────────────────────────────────────────────────────
-# Service accounts, Workload Identity bindings, and IAM role grants.
+# Service accounts and their IAM role grants inside one project.
 
 terraform {
   required_providers {
@@ -37,65 +37,6 @@ resource "google_service_account" "ops_agent" {
   project      = var.project_id
 }
 
-# ── Workload Identity bindings ──────────────────────────────────────────────
-# Allows K8s SA "octogee-gateway" in namespace to act as the cattle GCP SA.
-# The WI pool is always in the cluster project (octogee), even when the SA
-# is in a different project (octogee-test). Both environments share one cluster.
-resource "google_service_account_iam_member" "workload_identity" {
-  service_account_id = google_service_account.gateway.name
-  role               = "roles/iam.workloadIdentityUser"
-  member             = "serviceAccount:${var.cluster_project_id}.svc.id.goog[${var.namespace}/octogee-gateway]"
-}
-
-resource "google_service_account_iam_member" "workload_identity_octogee_api" {
-  service_account_id = google_service_account.api.name
-  role               = "roles/iam.workloadIdentityUser"
-  member             = "serviceAccount:${var.cluster_project_id}.svc.id.goog[${var.namespace}/octogee-api]"
-}
-
-resource "google_service_account_iam_member" "workload_identity_llm_broker" {
-  service_account_id = google_service_account.llm_broker.name
-  role               = "roles/iam.workloadIdentityUser"
-  member             = "serviceAccount:${var.cluster_project_id}.svc.id.goog[${var.namespace}/llm-broker]"
-}
-
-resource "google_service_account_iam_member" "workload_identity_ops_agent" {
-  service_account_id = google_service_account.ops_agent.name
-  role               = "roles/iam.workloadIdentityUser"
-  member             = "serviceAccount:${var.cluster_project_id}.svc.id.goog[${var.namespace}/octogee-ops-agent]"
-}
-
-resource "google_logging_project_bucket_config" "ops_agent" {
-  project        = var.cluster_project_id
-  location       = "global"
-  bucket_id      = "ops-agent-${var.environment}"
-  retention_days = 7
-}
-
-resource "google_logging_project_sink" "ops_agent" {
-  project                = var.cluster_project_id
-  name                   = "ops-agent-${var.environment}"
-  destination            = "logging.googleapis.com/${google_logging_project_bucket_config.ops_agent.id}"
-  filter                 = "(resource.type=\"k8s_container\" AND resource.labels.namespace_name=\"${var.namespace}\") OR (resource.type=\"gce_instance\" AND jsonPayload.container.metadata.\"ai.octogee.namespace\"=\"${var.namespace}\")"
-  unique_writer_identity = true
-}
-
-resource "google_logging_log_view" "ops_agent" {
-  name        = "ops-agent"
-  bucket      = google_logging_project_bucket_config.ops_agent.id
-  description = "Read-only ${var.environment} pod and Builder VM container logs for the Octogee Ops Agent"
-  filter      = "resource.type=\"k8s_container\" OR resource.type=\"gce_instance\""
-}
-
-resource "google_logging_log_view_iam_member" "ops_agent" {
-  parent   = google_logging_log_view.ops_agent.parent
-  location = google_logging_log_view.ops_agent.location
-  bucket   = google_logging_log_view.ops_agent.bucket
-  name     = google_logging_log_view.ops_agent.name
-  role     = "roles/logging.viewAccessor"
-  member   = "serviceAccount:${google_service_account.ops_agent.email}"
-}
-
 # ── Data-access audit trail ─────────────────────────────────────────────────
 # Secret payload reads are Data Access audit logs, which GCP leaves off by
 # default. octogee-api writes one data-access record per brokered internal
@@ -107,29 +48,6 @@ resource "google_project_iam_audit_config" "secretmanager_data_read" {
   audit_log_config {
     log_type = "DATA_READ"
   }
-}
-
-resource "google_logging_project_bucket_config" "data_access_audit" {
-  project        = var.cluster_project_id
-  location       = "global"
-  bucket_id      = "data-access-audit-${var.environment}"
-  retention_days = 400
-}
-
-resource "google_logging_project_sink" "data_access_audit" {
-  project                = var.cluster_project_id
-  name                   = "data-access-audit-${var.environment}"
-  destination            = "logging.googleapis.com/${google_logging_project_bucket_config.data_access_audit.id}"
-  filter                 = "resource.type=\"k8s_container\" AND resource.labels.namespace_name=\"${var.namespace}\" AND jsonPayload.category=\"data-access\""
-  unique_writer_identity = true
-}
-
-# ── Cloud SQL Client role ───────────────────────────────────────────────────
-# Platform API SA needs cloudsql.client to back the Cloud SQL Proxy.
-resource "google_project_iam_member" "cloudsql_client" {
-  project = var.cloudsql_project_id
-  role    = "roles/cloudsql.client"
-  member  = "serviceAccount:${google_service_account.api.email}"
 }
 
 # ── Secret Manager admin ───────────────────────────────────────────────────
@@ -203,12 +121,6 @@ resource "google_service_account" "glm_controller" {
   account_id   = "octogee-glm-controller"
   display_name = "Octogee Cowboy / GLM Controller (${var.environment})"
   project      = var.project_id
-}
-
-resource "google_service_account_iam_member" "glm_controller_workload_identity" {
-  service_account_id = google_service_account.glm_controller.name
-  role               = "roles/iam.workloadIdentityUser"
-  member             = "serviceAccount:${var.cluster_project_id}.svc.id.goog[${var.namespace}/glm-controller]"
 }
 
 # Firestore (glmGateways / gateways docs) + Firebase Hosting (customer site

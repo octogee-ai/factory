@@ -6,7 +6,6 @@ gmp:
 
 monitoredNamespaces:
   - octogee
-  - octogee-test
 
 iap:
   enabled: false
