@@ -189,7 +189,8 @@ TEST and PROD run in separate GCP projects, each with its own GKE cluster. MM We
   gateway-edge sidecar for workspace git FS, deploy-preview,
   byosub-internal, MM WS proxy). gateway-edge keeps `/api/g/<gatewayId>/*` as its
   internal sidecar mount behind the router.
-- **Auth.** Firebase ID token → `requireAuth()`; admin role in `users/{uid}/system/config.role`.
+- **Auth.** Firebase ID token → `requireAuth()`; admin role is the platform-state Builder `role`
+  (`req.isAdmin`); the PWA reads it from `GET /api/account/role`.
   Service-to-service: tenant-bound K8s SA tokens + dedicated bearers/HMAC signing (see docs/operations/INTERNAL-SERVICE-AUTH.md).
 - **Chat.** Team-per-workspace in MM; Builder MM token in `users/{uid}/secrets/mattermost`.
   gateway-edge swaps Firebase→MM token, proxies via K8s DNS. WS tickets: UUID, 30s TTL,
