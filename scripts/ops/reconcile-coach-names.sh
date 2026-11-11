@@ -81,4 +81,4 @@ unset GOOGLE_APPLICATION_CREDENTIALS  # use gcloud application-default credentia
 
 echo "==> Running reconcile (env=$ENV)"
 cd "$SCRIPTS_DIR"
-npx tsx ops/reconcile-coach-names.ts "${PASSTHRU[@]+"${PASSTHRU[@]}"}"
+node ops/with-platform-state.mjs --env="$ENV" -- npx tsx ops/reconcile-coach-names.ts "${PASSTHRU[@]+"${PASSTHRU[@]}"}"

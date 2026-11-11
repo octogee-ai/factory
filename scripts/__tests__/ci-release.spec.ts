@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
-import { deployRelease, releaseOptions } from '../ci/release-plan.mjs';
+import { withFleetStore } from '../ci/fleet-store.mjs';
+import { deployRelease, fleetStoreStages, releaseOptions } from '../ci/release-plan.mjs';
 
 const options = releaseOptions(['--environment=test', `--sha=${'a'.repeat(40)}`, '--actor=operator:test']);
 function dependencies() {
@@ -100,4 +101,37 @@ it('runs the PROD fleet after platform, desktop and site deployment', async () =
 it('rejects a shipment targeting the wrong environment', () => {
   expect(() => releaseOptions(['--environment=prod', `--sha=${'a'.repeat(40)}`, '--actor=operator:test', '--ship-test'])).toThrow();
   expect(() => releaseOptions(['--environment=test', `--sha=${'a'.repeat(40)}`, '--actor=operator:test', '--ship-prod'])).toThrow();
+});
+it.each([
+  ['desktop', ['ops/release-desktop-image.ts']],
+  ['fleet', ['ops/deploy-fleet.ts', `--sha=${options.sha}`, '--timeout-ms=3600000']],
+] as const)('runs the %s stage against the deployed PostgreSQL store through a tunnel it closes afterwards', async (label, script) => {
+  const close = vi.fn(async () => {});
+  const inspect = vi.fn(async () => ({ backend: 'postgres', host: '10.89.0.11', port: 5432, database: 'platform', user: 'runtime', password: 'runtime-password', sslmode: 'require', image: 'cowboy@sha256:abc' }));
+  const tunnel = vi.fn(async () => ({ port: 15432, close }));
+  const storeDependencies = vi.fn(() => ({ inspect, tunnel }));
+  const stage = vi.fn(async () => undefined);
+
+  await fleetStoreStages({ environment: options.environment, sha: options.sha, stage, withStore: withFleetStore, storeDependencies })[label]();
+
+  expect(storeDependencies).toHaveBeenCalledWith('test');
+  expect(stage).toHaveBeenCalledWith(label, 'node', ['--import', './node_modules/tsx/dist/loader.mjs', ...script], {
+    cwd: 'scripts',
+    env: expect.objectContaining({ PLATFORM_STATE_BACKEND: 'postgres', PLATFORM_DB_HOST: '127.0.0.1', PLATFORM_DB_PORT: '15432', PLATFORM_DB_NAME: 'platform', PLATFORM_DB_USER: 'runtime', PLATFORM_DB_PASSWORD: 'runtime-password', PLATFORM_DB_SSLMODE: 'require' }),
+  });
+  expect(close.mock.invocationCallOrder[0]).toBeGreaterThan(stage.mock.invocationCallOrder[0]);
+});
+it('closes the store tunnel when a store-backed stage fails', async () => {
+  const close = vi.fn(async () => {});
+  const failure = new Error('desktop deployment exited with 1');
+  const stages = fleetStoreStages({
+    environment: options.environment,
+    sha: options.sha,
+    stage: vi.fn(async () => { throw failure; }),
+    withStore: withFleetStore,
+    storeDependencies: () => ({ inspect: async () => ({ backend: 'postgres', host: '10.89.0.11', port: 5432, database: 'platform', user: 'runtime', password: 'runtime-password', sslmode: 'require', image: 'cowboy@sha256:abc' }), tunnel: async () => ({ port: 15432, close }) }),
+  });
+
+  await expect(stages.desktop()).rejects.toBe(failure);
+  expect(close).toHaveBeenCalledTimes(1);
 });

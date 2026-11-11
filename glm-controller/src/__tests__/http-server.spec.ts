@@ -1194,6 +1194,40 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(supplied.status).toBe(200);
     expect(supplied.body).toEqual({ ok: true });
   });
+
+  it("answers a failed admin route with a JSON error and logs the stack instead of returning it", async () => {
+    const failure = new Error('orchestrator-config "orchestrator/sizingProfiles/hobby" does not exist');
+    const deps = buildDeps(store, {
+      addProductAdminRoutes: (router) => {
+        router.post("/users/:uid/explode", () => { throw failure; });
+      },
+    });
+
+    const res = await request(createHttpServer(deps))
+      .post("/api/admin/users/u1/explode").set("Authorization", "Bearer admin-token");
+
+    expect(res.status).toBe(500);
+    expect(res.headers["content-type"]).toMatch(/^application\/json/);
+    expect(res.body).toEqual({ error: "internal_error", message: failure.message });
+    expect(res.text).not.toContain("at ");
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("POST /api/admin/users/u1/explode failed"));
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining(failure.stack!));
+  });
+
+  it.each([
+    ["malformed", "{\"uid\":", 400],
+    ["oversized", JSON.stringify({ pad: "x".repeat(200_000) }), 413],
+  ])("answers a %s JSON body with its client error status", async (_kind, body, status) => {
+    const deps = buildDeps(store);
+
+    const res = await request(createHttpServer(deps))
+      .post("/api/admin/users/u1/explode").set("Authorization", "Bearer admin-token")
+      .set("Content-Type", "application/json").send(body);
+
+    expect(res.status).toBe(status);
+    expect(res.body).toEqual({ error: "invalid_request", message: expect.any(String) });
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("POST /api/admin/users/u1/explode failed"));
+  });
 });
 
 describe("createHttpServer — fleet-events watcher sharing", () => {

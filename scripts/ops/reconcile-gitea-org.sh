@@ -167,7 +167,7 @@ for slug in "${SLUGS[@]}"; do
   echo -e "${CYAN}── reconcile: $slug ($ENV) ──────────────────────────────${NC}"
   # The tool prints the ordered plan, refuses --apply if problems[], applies
   # in fixed order (Firestore LAST), then self-verifies (re-plan == empty).
-  npx tsx ops/reconcile-gitea-org.ts --env="$ENV" --slug="$slug" $TOOL_ARGS
+  node ops/with-platform-state.mjs --env="$ENV" -- npx tsx ops/reconcile-gitea-org.ts --env="$ENV" --slug="$slug" $TOOL_ARGS
 done
 
 echo ""

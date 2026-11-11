@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { releaseOptions, deployRelease } from './release-plan.mjs';
+import { releaseOptions, deployRelease, fleetStoreStages } from './release-plan.mjs';
 import { withBuildLock } from './build-lock.mjs';
 import { request } from './gcs.mjs';
 import { fleetStoreDependencies, withFleetStore } from './fleet-store.mjs';
@@ -37,7 +37,6 @@ try {
     lock: task => withBuildLock(`deploy-${options.environment}`, request, task, { takeOverFinishedRuns: true }),
     platform: () => stage('platform', 'bash', ['scripts/ci/platform-deploy.sh']),
     site: () => stage('site', 'node', ['scripts/ci/site-deploy.mjs']),
-    desktop: () => stage('desktop', 'node', ['--import', './node_modules/tsx/dist/loader.mjs', 'ops/release-desktop-image.ts'], { cwd: 'scripts' }),
-    fleet: () => withFleetStore(fleetStoreDependencies(options.environment), fleetEnv => stage('fleet', 'node', ['--import', './node_modules/tsx/dist/loader.mjs', 'ops/deploy-fleet.ts', `--sha=${options.sha}`, '--timeout-ms=3600000'], { cwd: 'scripts', env: fleetEnv })),
+    ...fleetStoreStages({ environment: options.environment, sha: options.sha, stage, withStore: withFleetStore, storeDependencies: fleetStoreDependencies }),
   });
 } finally { rmSync(temporary, { recursive: true, force: true }); }

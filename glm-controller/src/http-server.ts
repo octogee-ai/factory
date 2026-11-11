@@ -264,6 +264,30 @@ function addHealthAndMetricsRoutes(app: Express): void {
   });
 }
 
+function clientErrorStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const { status, expose } = error as { status?: unknown; expose?: unknown };
+  return expose === true && typeof status === "number" && status >= 400 && status < 500 ? status : undefined;
+}
+
+function jsonErrorHandler(log: (msg: string) => void) {
+  return (error: unknown, req: Request, res: Response, next: NextFunction): void => {
+    const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+    log(`[glm-controller] ${req.method} ${req.originalUrl} failed: ${detail}`);
+    if (res.headersSent) {
+      next(error);
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    const clientStatus = clientErrorStatus(error);
+    if (clientStatus !== undefined) {
+      res.status(clientStatus).json({ error: "invalid_request", message });
+      return;
+    }
+    res.status(500).json({ error: "internal_error", message });
+  };
+}
+
 export function createHttpServer(deps: HttpServerDeps): Express {
   const app = express();
   app.use(corsMiddleware);
@@ -320,6 +344,7 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     logger: adaptLogger(deps.log),
   });
   app.use("/api/admin", adminRouter);
+  app.use(jsonErrorHandler(deps.log));
 
   return app;
 }

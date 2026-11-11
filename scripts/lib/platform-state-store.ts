@@ -6,7 +6,15 @@ import {
   type PlatformStateStore,
 } from "@octogee/core/platform-state";
 
-export function operatorPlatformStateStore(db: Firestore, deploymentTargetId: string): Promise<PlatformStateStore> {
+export async function operatorPlatformStateStore(db: Firestore, deploymentTargetId: string): Promise<PlatformStateStore> {
+  const backend = process.env.PLATFORM_STATE_BACKEND;
+  if (backend !== "firestore" && backend !== "postgres") {
+    throw new Error(
+      `PLATFORM_STATE_BACKEND must name ${deploymentTargetId}'s platform state store (firestore or postgres). ` +
+      "Run this command through `npm run --prefix scripts with-platform-state -- --env=<test|prod> -- <command>`, " +
+      "which reads the deployed backend and opens the database tunnel.",
+    );
+  }
   return platformStateStoreForDeploymentTarget({
     deploymentTargetId,
     applicationName: "octogee-operator",

@@ -7,8 +7,15 @@ describe("operatorPlatformStateStore", () => {
     vi.unstubAllEnvs();
   });
 
-  it("opens the Firestore store by default", async () => {
-    vi.stubEnv("PLATFORM_STATE_BACKEND", "");
+  it.each([undefined, ""])("refuses to pick a store when no backend is named (%s)", async (backend) => {
+    vi.stubEnv("PLATFORM_STATE_BACKEND", backend);
+    await expect(operatorPlatformStateStore({} as Firestore, "test-central")).rejects.toThrow(
+      /PLATFORM_STATE_BACKEND must name test-central's platform state store.*with-platform-state/s,
+    );
+  });
+
+  it("opens the Firestore store only when Firestore is named", async () => {
+    vi.stubEnv("PLATFORM_STATE_BACKEND", "firestore");
     await expect(operatorPlatformStateStore({} as Firestore, "test-central")).resolves.toHaveProperty("builders");
   });
 

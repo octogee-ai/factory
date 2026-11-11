@@ -20,6 +20,14 @@ function validateReleaseOptions(options) {
   if (options.shipProd && options.environment !== 'prod') throw new Error('Ship PROD requires the PROD environment');
 }
 
+export function fleetStoreStages({ environment, sha, stage, withStore, storeDependencies }) {
+  const againstStore = (label, args) => withStore(storeDependencies(environment), storeEnv => stage(label, 'node', ['--import', './node_modules/tsx/dist/loader.mjs', ...args], { cwd: 'scripts', env: storeEnv }));
+  return {
+    desktop: () => againstStore('desktop', ['ops/release-desktop-image.ts']),
+    fleet: () => againstStore('fleet', ['ops/deploy-fleet.ts', `--sha=${sha}`, '--timeout-ms=3600000']),
+  };
+}
+
 export async function deployRelease(options, deps) {
   const manifest = await deps.manifest(options.sha);
   if (manifest.sourceSha !== options.sha) throw new Error('Selected immutable manifest differs from requested SHA');

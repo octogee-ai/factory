@@ -40,6 +40,7 @@ describe("Fleet forced migration customer lookup", () => {
     };
     mocks.transport = transport;
     vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+    vi.stubEnv("PLATFORM_STATE_BACKEND", "firestore");
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
     await main(["--env=test", "migrate-customer", "alice", "--to=shared-b", "--force", "--operation=move-1", ...(apply ? ["--apply"] : [])]);

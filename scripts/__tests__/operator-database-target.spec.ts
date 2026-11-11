@@ -47,6 +47,7 @@ describe("operator commands bind the platform database to their deployment targe
     vi.clearAllMocks();
     mocks.selectStore.mockImplementation(otherTargetsDatabase);
     vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+    vi.stubEnv("PLATFORM_STATE_BACKEND", "postgres");
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 

@@ -927,16 +927,19 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     expect(result.stdout).not.toContain("Still preserves PVCs");
   });
 
-  it("prints the explicit orchestrator seed before Helm so a fresh reset cannot reach release unconfigured", () => {
-    const source = readFileSync(teardown, "utf8");
-    const seed = source.indexOf("# 1b. Seed the Firestore operator dials");
-    const helm = source.indexOf("# 2. Helm install");
-    expect(seed).toBeGreaterThan(-1);
-    expect(seed).toBeLessThan(helm);
-    expect(source).toContain(
-      "npx tsx ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG",
+  it("prints the orchestrator seed after the pods roll onto platform state and before the platform deploy", () => {
+    const result = runPrivateCentralTeardown();
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    const roll = result.stdout.indexOf("kubectl rollout restart deploy -n octogee-test");
+    const seed = result.stdout.indexOf(
+      "npm run --prefix scripts with-platform-state -- --env=test -- npx tsx ops/seed-orchestrator-config.ts --env=test --deployment-target=test-central",
     );
-    expect(source).not.toContain("glm-controller self-seeds config/orchestrator");
+    const deploy = result.stdout.indexOf("npm run ci:deploy -- --environment=test");
+    expect(roll).toBeGreaterThan(-1);
+    expect(seed).toBeGreaterThan(roll);
+    expect(deploy).toBeGreaterThan(seed);
+    expect(result.calls).not.toContainEqual(expect.stringContaining("seed-orchestrator-config"));
   });
 
   it("resets test-central through target-owned in-cluster credentials without a local proxy", () => {
