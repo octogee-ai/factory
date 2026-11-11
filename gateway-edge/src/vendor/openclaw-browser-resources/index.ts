@@ -37,14 +37,14 @@ var It = (e, t, n) => (n = e != null ? uo(ho(e)) : {}, mo(
 ));
 
 // openclaw/packages/normalization-core/src/record-coerce.ts
-function $(e) {
+function q(e) {
   return e !== null && typeof e == "object" && !Array.isArray(e);
 }
 function F(e) {
-  return $(e) ? e : void 0;
+  return q(e) ? e : void 0;
 }
 function L(e) {
-  return $(e) ? e : null;
+  return q(e) ? e : null;
 }
 function Ve(e) {
   return e && typeof e == "object" ? e : void 0;
@@ -110,9 +110,9 @@ var B = I(() => {
 function te(e) {
   return typeof e == "number" && Number.isFinite(e) ? e : void 0;
 }
-var yo, sc, ne = I(() => {
+var yo, ac, ne = I(() => {
   B();
-  yo = 2147e6, sc = Math.floor(yo / 1e3);
+  yo = 2147e6, ac = Math.floor(yo / 1e3);
 });
 
 // openclaw/packages/normalization-core/src/string-normalization.ts
@@ -121,7 +121,7 @@ var Ie = I(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/connect-error-details.ts
-var T, hc, gc, Ye = I(() => {
+var T, gc, mc, Ye = I(() => {
   ne();
   Ie();
   T = {
@@ -164,7 +164,7 @@ var T, hc, gc, Ye = I(() => {
     PAIRING_REJECTED: "PAIRING_REJECTED",
     PAIRING_EXPIRED: "PAIRING_EXPIRED",
     CLIENT_VERSION_MISMATCH: "CLIENT_VERSION_MISMATCH"
-  }, hc = /* @__PURE__ */ new Map([
+  }, gc = /* @__PURE__ */ new Map([
     ["token_missing", T.AUTH_TOKEN_MISSING],
     ["token_mismatch", T.AUTH_TOKEN_MISMATCH],
     ["token_missing_config", T.AUTH_TOKEN_NOT_CONFIGURED],
@@ -180,7 +180,7 @@ var T, hc, gc, Ye = I(() => {
     ["device_token_mismatch", T.AUTH_DEVICE_TOKEN_MISMATCH],
     ["scope_mismatch", T.AUTH_SCOPE_MISMATCH],
     [void 0, T.AUTH_REQUIRED]
-  ]), gc = /* @__PURE__ */ new Map([
+  ]), mc = /* @__PURE__ */ new Map([
     ["device-id-mismatch", T.DEVICE_AUTH_DEVICE_ID_MISMATCH],
     ["device-signature-stale", T.DEVICE_AUTH_SIGNATURE_EXPIRED],
     ["device-nonce-missing", T.DEVICE_AUTH_NONCE_REQUIRED],
@@ -285,7 +285,7 @@ function xo(e = {}) {
     throw n(a);
   };
 }
-var Bt, Ut, kc, jt = I(() => {
+var Bt, Ut, _c, jt = I(() => {
   Bt = {
     attempts: 3,
     minDelayMs: 300,
@@ -300,7 +300,7 @@ var Bt, Ut, kc, jt = I(() => {
       }), t -= n;
     } while (t > 0);
   };
-  kc = xo();
+  _c = xo();
 });
 
 // openclaw/packages/gateway-protocol/src/startup-unavailable.ts
@@ -308,18 +308,18 @@ var zt = I(() => {
 });
 
 // openclaw/packages/gateway-client/src/protocol-client.ts
-var Nc, Gt = I(() => {
+var Fc, Gt = I(() => {
   D();
   Ie();
   Xe();
   jt();
-  Nc = Object.freeze({ closeCode: 1008, closeReason: "connect failed" });
+  Fc = Object.freeze({ closeCode: 1008, closeReason: "connect failed" });
 });
 
 // openclaw/packages/gateway-client/src/reconnect-policy.ts
-var jc, Ht = I(() => {
+var zc, Ht = I(() => {
   Ye();
-  jc = /* @__PURE__ */ new Set([
+  zc = /* @__PURE__ */ new Set([
     T.AUTH_TOKEN_MISSING,
     T.AUTH_TOKEN_NOT_CONFIGURED,
     T.AUTH_BOOTSTRAP_TOKEN_INVALID,
@@ -413,7 +413,7 @@ var Zt = I(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/client-info.ts
-var _o, To, dl, pl, Qt = I(() => {
+var _o, To, pl, fl, Qt = I(() => {
   B();
   _o = {
     WEBCHAT_UI: "webchat-ui",
@@ -443,9 +443,9 @@ var _o, To, dl, pl, Qt = I(() => {
     WORKER: "worker",
     PROBE: "probe",
     TEST: "test"
-  }, dl = new Map(
+  }, pl = new Map(
     Object.values(_o).map((e) => [e, e])
-  ), pl = new Map(
+  ), fl = new Map(
     Object.values(To).map((e) => [e, e])
   );
 });
@@ -522,7 +522,7 @@ var le = I(() => {
 });
 
 // openclaw/node_modules/.pnpm/punycode.js@2.3.1/node_modules/punycode.js/punycode.js
-var rr = Et((Up, nr) => {
+var rr = Et((Bp, nr) => {
   "use strict";
   var _i = /^xn--/, Ti = /[^\0-\x7F]/, Ei = /[\x2E\u3002\uFF0E\uFF61]/g, Si = {
     overflow: "Overflow: input needs wider integers to process",
@@ -1207,6 +1207,8 @@ var ga, fe, _t = I(() => {
       dashboard: "Dashboard"
     },
     common: {
+      reportBug: "Report a bug",
+      suggestFeature: "Suggest a feature",
       showDetails: "Show details",
       uploadsDisabled: "File and image uploads are disabled.",
       ok: "OK",
@@ -3020,8 +3022,8 @@ var Bo = "Delivery: Final assistant text is not automatically delivered in this 
 var rt = "\u27E6openclaw:ctx\u27E7";
 
 // openclaw/src/auto-reply/reply/strip-inbound-meta.ts
-var pd = `Context: ${rt}`;
-var zo = [rt, ...nt], fd = new RegExp(zo.map(ue).join("|"), "g");
+var fd = `Context: ${rt}`;
+var zo = [rt, ...nt], hd = new RegExp(zo.map(ue).join("|"), "g");
 
 // openclaw/packages/llm-core/src/types.ts
 var kn = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", _n = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>", Tn = "OpenClaw runtime context:", En = "End OpenClaw runtime context.";
@@ -3036,7 +3038,7 @@ D();
 // openclaw/src/agents/internal-runtime-context.ts
 var Wo = kn, qo = _n;
 var Sn = "This context is runtime-generated, not user-authored. Keep internal details private.";
-var Fd = ["OpenClaw runtime context (internal):", Sn, ""].join(`
+var Ld = ["OpenClaw runtime context (internal):", Sn, ""].join(`
 `) + `
 `;
 function Pe(e) {
@@ -3045,7 +3047,7 @@ function Pe(e) {
     pattern: new RegExp(`(?:^|\\r?\\n)[ \\t]*${ue(e)}[ \\t]*(?=\\r?\\n|$)`, "g")
   };
 }
-var Ld = Pe(Wo), Ud = Pe(qo), Bd = Pe(Tn), jd = Pe(En);
+var Ud = Pe(Wo), Bd = Pe(qo), jd = Pe(Tn), zd = Pe(En);
 var $o = [
   "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.",
   "OpenClaw runtime context for the immediately preceding user message.",
@@ -3057,7 +3059,7 @@ var $o = [
   }).map((e) => e.split(/\s+/).map(ue).join("\\s+")).join("|")
 ), Ko = new RegExp(
   Sn.split(/\s+/).map(ue).join("\\s+")
-), zd = new RegExp(
+), Gd = new RegExp(
   `^[ \\t]*(?:${Vo.source})\\s+${Ko.source}[ \\t]*(?:\\r?\\n|$)`,
   "gm"
 );
@@ -3330,7 +3332,7 @@ function Ln(e) {
 }
 
 // openclaw/node_modules/.pnpm/entities@8.1.0/node_modules/entities/dist/internal/decode-shared.js
-var q = /* @__PURE__ */ (() => {
+var $ = /* @__PURE__ */ (() => {
   let e = new Uint8Array(127), t = 0;
   for (let n = 33; n <= 126; n++)
     n !== 34 && n !== 36 && n !== 92 && (e[n] = t++);
@@ -3338,25 +3340,25 @@ var q = /* @__PURE__ */ (() => {
 })();
 function Un(e, t, n, r, o, i) {
   let a = e.length, u = i * 90, d = 0, h = () => {
-    let S = q[e.charCodeAt(d++)];
-    return S < i ? S : S * 91 - u + q[e.charCodeAt(d++)];
+    let S = $[e.charCodeAt(d++)];
+    return S < i ? S : S * 91 - u + $[e.charCodeAt(d++)];
   }, m = n - r, y = n + o, c = new Int32Array(y);
   c.fill(-1, r, i), c.fill(-1, i + m, y);
   let l = new Int32Array(y), b = new Int32Array(y);
   function p(S, A) {
     let E = 0, O = A, z = A + S;
     for (; O < z; ) {
-      let N = q[e.charCodeAt(d++)];
+      let N = $[e.charCodeAt(d++)];
       if (N < 89)
         E += N, c[O++] = E;
       else if (N === 89) {
-        let W = q[e.charCodeAt(d++)] + 2;
+        let W = $[e.charCodeAt(d++)] + 2;
         for (; W--; )
           c[O++] = ++E;
       } else {
-        let W = q[e.charCodeAt(d++)];
+        let W = $[e.charCodeAt(d++)];
         E += 89 + // eslint-disable-next-line unicorn/prefer-minimal-ternary -- branches read a different number of side-effecting input bytes
-        (W < 90 ? W * 91 + q[e.charCodeAt(d++)] : q[e.charCodeAt(d++)] * 8281 + q[e.charCodeAt(d++)] * 91 + q[e.charCodeAt(d++)]), c[O++] = E;
+        (W < 90 ? W * 91 + $[e.charCodeAt(d++)] : $[e.charCodeAt(d++)] * 8281 + $[e.charCodeAt(d++)] * 91 + $[e.charCodeAt(d++)]), c[O++] = E;
       }
     }
   }
@@ -3384,8 +3386,8 @@ function Un(e, t, n, r, o, i) {
     }
   let _ = new Uint16Array(t), v = 0;
   for (; d < a; ) {
-    let S = q[e.charCodeAt(d++)];
-    S >= i && (S = S * 91 - u + q[e.charCodeAt(d++)]);
+    let S = $[e.charCodeAt(d++)];
+    S >= i && (S = S * 91 - u + $[e.charCodeAt(d++)]);
     let A = c[S];
     if (A < 0) {
       let E = l[S], O = E + b[S];
@@ -6722,13 +6724,13 @@ var fa = yr(J);
 // openclaw/packages/net-policy/src/ip.ts
 B();
 var Fr = It(Nr(), 1);
-var nf = [Fr.default.IPv4.parse("198.18.0.0"), 15];
+var rf = [Fr.default.IPv4.parse("198.18.0.0"), 15];
 
 // openclaw/src/utils/directive-tags-batch.ts
 B();
 
 // openclaw/packages/tool-call-repair/src/grammar.ts
-var af = new TextEncoder();
+var cf = new TextEncoder();
 
 // openclaw/src/shared/clawhub-recommendations.ts
 D();
@@ -6741,11 +6743,14 @@ var Lr = [
   "installed",
   "official",
   "kind"
-], Yf = /* @__PURE__ */ new Set([...Lr, "pluginId"]), Xf = /* @__PURE__ */ new Set([...Lr, "registry", "skillRef"]);
+], Xf = /* @__PURE__ */ new Set([...Lr, "pluginId"]), Zf = /* @__PURE__ */ new Set([...Lr, "registry", "skillRef"]);
 
 // openclaw/src/shared/plugin-inline-view.ts
 D();
-var eh = 16 * 1024;
+var th = 16 * 1024;
+
+// openclaw/src/shared/template-install-notice.ts
+D();
 
 // openclaw/ui/src/lib/chat/message-normalizer-attachments.ts
 ne();
@@ -6781,7 +6786,7 @@ D();
 function se(e, t) {
   return t.map((n) => [n, e]);
 }
-var pg = new Map([
+var yg = new Map([
   // A launched subagent is a worker, not one more operation of the launcher.
   ...se("subagents", ["sessions_spawn"]),
   ...se("commands", ["exec", "bash", "shell", "run_command", "run_terminal_cmd"]),
@@ -7170,31 +7175,32 @@ function so(e) {
 function Ka(e) {
   return e.callId ?? e.messageId ?? e.previewRevision;
 }
-var ao = /* @__PURE__ */ new WeakMap();
+var ao = /* @__PURE__ */ new WeakMap(), Ja = /* @__PURE__ */ new Map();
 function co(e, t) {
   let n = ao.get(e);
   if (n?.toolMessages === t)
     return n.latest;
-  let r = /* @__PURE__ */ new Map();
-  for (let o of [e, t])
-    for (let i of o)
-      if ($(i))
-        for (let s of so(i)) {
-          let a = Ka(s);
-          if (s.browserTab && a && io(s, !1) === "succeeded") {
-            let u = vt(s.browserTab);
-            r.delete(u), r.set(u, { tab: s.browserTab, revision: a });
+  let r;
+  for (let i of [e, t])
+    for (let s of i)
+      if (q(s))
+        for (let a of so(s)) {
+          let u = Ka(a);
+          if (a.browserTab && u && io(a, !1) === "succeeded") {
+            let d = vt(a.browserTab);
+            r ??= /* @__PURE__ */ new Map(), r.delete(d), r.set(d, { tab: a.browserTab, revision: u });
           }
         }
-  return ao.set(e, { toolMessages: t, latest: r }), r;
+  let o = r ?? Ja;
+  return ao.set(e, { toolMessages: t, latest: o }), o;
 }
 
 // octogee/app/openclaw-browser/resources.ts
-function Jg(e, t) {
+function em(e, t) {
   return [...co(e, []).values()].filter((r) => r.tab.target === "host" && r.tab.profile === t).at(-1) ?? null;
 }
 export {
-  Jg as latestNativeBrowserTab
+  em as latestNativeBrowserTab
 };
 /*!
 TypeBox

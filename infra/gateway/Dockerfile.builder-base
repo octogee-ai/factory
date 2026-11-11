@@ -49,6 +49,11 @@ RUN set -eu; \
     fi; \
     printf '%s\n' "$BUILDER_TOOLCHAIN_LOCK_SHA256" > /tmp/builder-toolchain-verified
 
+USER root
+COPY infra/gateway/builder-toolchain/preinstall.mjs /tmp/builder-toolchain-preinstall.mjs
+RUN node /tmp/builder-toolchain-preinstall.mjs /tmp/builder-toolchain-validation \
+    && chmod -R a+rX /tmp/builder-toolchain-validation
+
 FROM ${GATEWAY_BASE_IMAGE} AS builder-base-system
 
 USER root
@@ -135,9 +140,6 @@ COPY --chown=node:node infra/gateway/builder-toolchain/package-lock.json /octoge
 COPY --chown=node:node infra/gateway/builder-toolchain/groups.json /octogee/toolchain/groups.json
 COPY --chown=node:node infra/gateway/stamp-claude-first-run.mjs /octogee/infra/gateway/stamp-claude-first-run.mjs
 COPY --from=builder-toolchain-validation /tmp/builder-toolchain-validation/ /opt/octogee/toolchains/image/
-COPY infra/gateway/builder-toolchain/preinstall.mjs /octogee/toolchain/preinstall.mjs
-RUN node /octogee/toolchain/preinstall.mjs /opt/octogee/toolchains/image \
-    && chmod -R a+rX /opt/octogee/toolchains/image
 COPY --from=builder-toolchain-validation --chown=node:node /tmp/builder-toolchain-verified /octogee/toolchain/.install-verified
 
 RUN test -n "$BUILDER_TOOLCHAIN_LOCK_SHA256" \

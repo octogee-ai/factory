@@ -167,15 +167,40 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: November 9 daily runtime refresh
+## Current overlay for the November 11 Gateway refresh
 
-The operator selected OpenClaw main `d53921ac1424b92692f084a16e3d6248cfc1c86d` for independent qualification. The clean built overlay is `e9c9cd30ff6db8b7422d508704cfda8b554dab00` on `ceckert/openclaw:codex/gateway-refresh-20261109`.
+The operator selected OpenClaw main `cb4cd561dfb56d2ff8c49a21b89e935053e122a1`
+for independent qualification. The clean overlay is `7490657010a74a6ed5147d844db3897f86d4be1d`
+and the source branch is
+`ceckert/openclaw:codex/gateway-refresh-20261111`.
 
-The frozen tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/42695766339) passed security-fast and skipped 39 jobs, including PostgreSQL conformance and build artifacts. The latest successful [scheduled full CI](https://github.com/openclaw/openclaw/actions/runs/42494775876) was on `ee2d00b13f786f568baa4c4c33376767e5c6f666`: 150 jobs passed and 11 were skipped, including Node 24 compatibility, screenshots and mobile release e2e. It does not qualify the frozen tip.
+The frozen tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/43019134255)
+passed security-fast and skipped 42 jobs, including the build and PostgreSQL lanes. The frozen tip's
+[scheduled CI](https://github.com/openclaw/openclaw/actions/runs/43020804161) and
+[dispatched CI](https://github.com/openclaw/openclaw/actions/runs/43020908753)
+reported failures during independent qualification. These include dead-code
+checks and a Node startup shard timing out on `sessions.list`. The latest successful [scheduled full CI](https://github.com/openclaw/openclaw/actions/runs/42494775876)
+was on `ee2d00b13f786f568baa4c4c33376767e5c6f666` with 150 passing jobs and 11
+skips, including Node 24 compatibility, Control UI i18n, screenshots and mobile
+release e2e. That run qualified its own SHA.
 
-Native #194541 and #194567 are in the selected base; their downstream drain changes are retired. Native #194791 skips membership lookups outside the invited policy. Octogee's restricted channel policy still grants synchronized members access, so its read, linked-row and list projections must also query membership under `none` and invalidate cached visibility on grants and revocations. The existing authorization and privacy boundaries remain in force. The selected base also adds startup read admission and publication withdrawal; the deferred model recheck preserves those owners. Remove these adaptations when native supplies equivalent behavior or the product policy changes.
+Mattermost uses the native fence-aware Markdown chunker from
+[#196331](https://github.com/openclaw/openclaw/pull/196331). The grouped-media
+adapter still keeps multiple attachments in one post. Native Doctor repairs
+remount-broadened private store modes under maintenance authority before
+capture. The explicit backup-skip option preserves that repair and still
+requires the same authority. Native config reload owns saved-but-deferred
+plugin application. The overlay retains strict channel teardown, supersession
+and waiting-root custody for accepted writes.
 
-The retained authorization, membership, strict-stop and recovery boundaries below remain subject to the corresponding affected tests and complete-image qualification. Earlier evidence identifies behaviors and removal conditions; it is not proof of this build.
+Native #194791 skips membership reads outside the invited policy. Octogee
+grants synchronized channel members access under its restricted policy, so
+channel reads and list projections still query membership under `none` and
+invalidate visibility on grants and revocations. Incognito and draft sessions
+remain excluded. Remove the adaptation when the native policy provides those
+semantics or the Octogee policy changes. The sections below describe retained
+behaviors and their removal conditions. Historical proofs apply to their own
+source and image.
 
 ### Deferred agent model preparation
 
@@ -270,8 +295,10 @@ creation, without failing creation or history checks.
 The source is rebased onto that exact tip. Previously adopted session-list,
 retained-PG creation, Talk initialization/consult and Doctor auth-alias fixes
 remain native; their fork copies are not restored. Native schemas remain
-canonical (GLOBAL39 and AGENT40). Native inbound-context composition, bot-loop
-protection, worker ownership and backup source-artifact preservation remain.
+canonical (GLOBAL 39 and AGENT 41). Native #193682 owns the AGENT 40 to 41
+upgrade and its active transcript facts. Native inbound-context composition,
+bot-loop protection, worker ownership and backup source-artifact preservation
+remain.
 
 Requested upstream fixes are included even while their PRs are open:
 [#189036](https://github.com/openclaw/openclaw/pull/189036) at reviewed head
@@ -513,25 +540,46 @@ permission, handoff and recovery controls pass.
 
 ### Qualification and publication
 
-The clean source built with pinned pnpm 12.15.0 and the frozen lockfile; `dist/build-info.json` matches the source SHA. Production typechecks, channel metadata, startup recovery and cancellation, membership grant/revocation, and focused channel, reload, voice and Mattermost controls were exercised. The full build reported four Control UI size-budget warnings. The frozen upstream tip has not passed full upstream CI.
+The clean source built with pinned pnpm 12.15.0 and the frozen lockfile.
+`dist/build-info.json` matches the source SHA. Production, script and root-test
+typechecks passed. Channel metadata, config docs, Gateway validators and the
+canonical database schema passed generation checks. The build reported three
+Control UI size-budget warnings.
 
-The aggregate `pnpm check` on the preceding source failed lint: 24 error-bearing files are unchanged from the frozen upstream base. Four downstream files also had lint findings; those were corrected and scoped type-aware lint passed on the current source. The other reported aggregate stages passed. The aggregate check has not been rerun in full on this corrected commit.
+Focused tests passed for startup admission and recovery, restricted membership
+and revocation, channel strict stop and supersession, queued reload receipts,
+Doctor repair authority, Mattermost delivery, scoped session start and plugin
+tool authority. The `sessions.list` startup control passed on both the unpatched
+tip and the overlay. PostgreSQL agent creation and secrets reload passed. The
+native AGENT 40 to 41 upgrade preserved retained transcript data on SQLite and
+PostgreSQL.
 
-Root and Mattermost were packed sequentially from that build in a clean Octogee checkout. The native root archive integrity check, independent installed pair and Linux amd64 full-plugin installer passed, including both patched npm copies, their 24 controls, bundled source matching and three native hooks. Hosted islands and the PostgreSQL routine catalog were regenerated from the same source; the catalog used disposable PostgreSQL 16 with pgvector 0.8.7. Complete-image qualification is recorded separately.
+The final aggregate `pnpm check` failed lint with errors in 22 files whose
+contents match the frozen upstream base. It passed preflight and typechecks. The guards after lint
+passed when run separately.
+
+Root and Mattermost were packed sequentially from the same build in a clean
+Octogee checkout. The native root archive check, isolated npm installation and
+Linux amd64 full-plugin installer passed. Both patched npm copies passed 24
+controls each. Parallel and Codex matched their packaged source, and the
+installer imported all three Codex native hooks. Hosted islands and the
+PostgreSQL routine catalog came from the same source. The catalog used
+disposable PostgreSQL 16.15 with pgvector 0.8.7. Complete-image qualification
+and image digests are recorded on the Octogee PR.
 
 Published with generation-zero preconditions and verified by exact-generation SHA-256 readback:
 
 | Object | Generation | SHA-256 |
 | --- | --- | --- |
-| `openclaw-fork-ff0f8c62.tgz` | `1794261747834210` | `ff0f8c62164c8b527b7cf7758da5c95c36b62b8d9b9b752fcc56c9114daf2371` |
-| `openclaw-mattermost-dc8bf5b4.tgz` | `1794260851889471` | `dc8bf5b43a50547758e6859ee6b6dca692bea71a28fe71927ec121fcf76bc886` |
+| `openclaw-fork-898cf617.tgz` | `1794402315239758` | `898cf61793e47db98bde61880f0982e38ccfa5fafb03021a43825acecebd8c33` |
+| `openclaw-mattermost-84d13eb1.tgz` | `1794402341032015` | `84d13eb1ca2b7c1f262768074915764875bc81be9d735830ae37213cafad1f6e` |
 
 ### Upstream contributions
 
-As checked on November 5, #189036 (`bfc19c0c863`), #189418 (`6b4438cd188`),
+As checked on November 11, #189036 (`bfc19c0c863`), #189418 (`6b4438cd188`),
 #186891 (`1d18f8eb784`), #186893 (`d4fd7a5c5de`), #167431 (`27193149bc2`)
-and #178755 (`d576caa76fe`) remain open and unmerged. Their prior conflict
-status against live upstream main has not been reassessed. Earlier reviewed-head checks and published
+and #178755 (`d576caa76fe`) remain open and unmerged, as do #193596, #193636 and #193875. The
+contribution status check did not update the selected runtime SHA. Earlier reviewed-head checks and published
 contributions do not establish current-main merge readiness; this downstream
 cut is clean on the separately frozen selected base. The focused recovery PR #193596 includes independent exact-head local Gateway
 proof; its CI and upgrade compatibility claims remain separate merge gates. #177823 is closed unmerged after native adoption of its original
