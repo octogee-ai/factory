@@ -1,6 +1,6 @@
 {
-  "sha": "8acf894634f2322502c1d960eb281ea844287b99",
-  "committedAt": "2026-11-11T09:31:53-08:00",
+  "sha": "4b5ca4b12194707de3f5c0be21547c807c8da6c6",
+  "committedAt": "2026-11-11T10:33:17-08:00",
   "sources": [
     "CLAUDE.md",
     "CODE_OF_CONDUCT.md",
@@ -20,6 +20,7 @@
     "scripts/lib/scope/resolve.ts",
     "scripts/ops/factory-repo/CONTRIBUTING.md",
     "scripts/ops/factory-repo/ISSUE_TEMPLATE/bug.md",
+    "scripts/ops/factory-repo/ISSUE_TEMPLATE/config.yml",
     "scripts/ops/factory-repo/ISSUE_TEMPLATE/question.md",
     "scripts/ops/factory-repo/README.md",
     "scripts/ops/factory-repo/SECURITY.md",
@@ -36,6 +37,7 @@
   ],
   "outputs": [
     ".github/ISSUE_TEMPLATE/bug.md",
+    ".github/ISSUE_TEMPLATE/config.yml",
     ".github/ISSUE_TEMPLATE/question.md",
     ".github/dependabot.yml",
     ".github/pull_request_template.md",
