@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "23 8 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,11 +21,19 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Review dependency changes
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294
+        with:
+          fail-on-severity: moderate
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 24.22.1
           cache: npm
       - run: npm ci
+      - run: npm audit --audit-level=moderate
       - run: npx tsc --noEmit
       - run: npx vitest run
       - run: npx tsx scripts/ci/factory-deny-list-scan.ts
