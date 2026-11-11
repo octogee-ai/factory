@@ -4,4 +4,15 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    versioning-strategy: lockfile-only
+    open-pull-requests-limit: 5
+    groups:
+      security-updates:
+        applies-to: security-updates
+        patterns: ['*']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
