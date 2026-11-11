@@ -157,6 +157,19 @@ spec:
           annotations:
             summary: "Builder computer {{ $labels.gateway_id }} stopped reporting its disk"
             description: "Cowboy still lists gateway {{ $labels.gateway_id }}'s computer as running, but the broker has not refreshed its disk observation for over 15 minutes (the vm-agent reports every poll and the broker persists at least every 10 minutes). The disk gauges for this gateway are stale, so the low/critical disk alerts cannot be trusted; check octo-gateway-agent on the VM and the vm-runtime broker route."
+        - alert: GlmControllerDown
+          expr: |
+            (
+              sum by (namespace) (kube_deployment_status_replicas_available{job="gmp-kube-state-metrics",namespace="octogee",deployment="glm-controller"})
+              or on(namespace)
+              (0 * kube_namespace_created{job="gmp-kube-state-metrics",namespace="octogee"})
+            ) < 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "PROD Cowboy has no available backend pods"
+            description: "Cowboy has had no available backend pods in PROD for 1 minute. Fleet Admin requests may fail. Check node readiness, the glm-controller pod, and PostgreSQL connection errors."
         - alert: GlmControllerReconcileStalled
           expr: (time() - glm_reconcile_last_success_timestamp_seconds{namespace=~"octogee|octogee-test"}) > 600
           for: 5m
