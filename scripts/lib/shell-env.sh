@@ -91,59 +91,6 @@ configured_secret_value() {
   printf '%s' "$value"
 }
 
-configured_stripe_price_ids_value() {
-  local value
-  value="$(configured_secret_value "$1")"
-  [[ -z "$value" || "$value" == "{}" ]] && return 0
-  printf '%s' "$value"
-}
-
-posthog_cloud_required_for_env() {
-  case "$1" in
-    test|prod) return 0 ;;
-    custom) return 1 ;;
-    *) return 1 ;;
-  esac
-}
-
-materialize_stripe_price_ids_json() {
-  if [[ -n "$1" ]]; then
-    printf '%s' "$1"
-  else
-    printf '{}'
-  fi
-}
-
-canonicalize_stripe_price_ids_json() {
-  node - "$1" <<'NODE'
-try {
-  const parsed = JSON.parse(process.argv[2]);
-  const sorted = Object.fromEntries(
-    Object.entries(parsed).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0),
-  );
-  process.stdout.write(JSON.stringify(sorted));
-} catch {
-  process.exit(1);
-}
-NODE
-}
-
-validate_stripe_secret_key_mode() {
-  local env="$1"
-  local key="$2"
-  case "$env" in
-    prod) [[ "$key" == sk_live_?* ]] ;;
-    test|custom) [[ "$key" == sk_test_?* ]] ;;
-    *) return 1 ;;
-  esac
-}
-
-validate_stripe_webhook_secret() {
-  local value
-  value="$(configured_secret_value "$1")"
-  [[ "$value" == whsec_?* ]]
-}
-
 select_environment_secret_value() {
   local env="$1"
   local secret_manager="$2"
@@ -198,32 +145,3 @@ save_env_file_value() {
   fi
 }
 
-validate_stripe_price_ids_json() {
-  node - "$1" <<'NODE'
-const allowed = new Set([
-  "personal_monthly",
-  "personal_pro_monthly",
-  "personal_pro_max_monthly",
-  "builder_hobby_monthly",
-  "builder_pro_monthly",
-  "builder_team_monthly",
-  "credit_10",
-  "credit_25",
-  "credit_50",
-  "credit_100",
-]);
-
-try {
-  const parsed = JSON.parse(process.argv[2]);
-  const entries = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? Object.entries(parsed)
-    : [];
-  const valid = entries.length === allowed.size && entries.every(
-    ([key, value]) => allowed.has(key) && typeof value === "string" && /^price_[A-Za-z0-9]+$/.test(value),
-  );
-  process.exit(valid ? 0 : 1);
-} catch {
-  process.exit(1);
-}
-NODE
-}

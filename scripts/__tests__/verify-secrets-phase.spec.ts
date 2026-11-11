@@ -112,6 +112,36 @@ describe("verify-secrets phases", () => {
     expect(output).toContain(`${MATTERMOST_GATEWAY_KEYS.length} issue(s) found`);
   });
 
+  it("requires the Stripe secret registered by the product secret extension", () => {
+    const { status, output } = verifySecrets({ missing: ["stripe-secrets"] });
+
+    expect(status).toBe(1);
+    expect(output).toContain("stripe-secrets — MISSING");
+  });
+
+  it("rejects Stripe values the product secret extension validates", () => {
+    const { status, output } = verifySecrets({
+      overrides: {
+        "stripe-secrets": { secret_key: "sk_live_fixture", webhook_secret: "not-a-webhook-secret", price_ids: priceIds },
+      },
+    });
+
+    expect(status).toBe(1);
+    expect(output).toContain("stripe-secrets/secret_key — INVALID MODE");
+    expect(output).toContain("stripe-secrets/webhook_secret — INVALID");
+    expect(output).toContain("stripe-secrets/price_ids");
+    expect(output).not.toContain("stripe-secrets/price_ids — INVALID");
+  });
+
+  it("requires PostHog Cloud keys on TEST through the product secret extension", () => {
+    const { status, output } = verifySecrets({
+      overrides: { "posthog-cloud": { project_token: "", personal_api_key: "phx_fixture" } },
+    });
+
+    expect(status).toBe(1);
+    expect(output).toContain("posthog-cloud/project_token — EMPTY");
+  });
+
   it("rejects an unknown phase", () => {
     const { status, output } = verifySecrets(bootstrapNamespace, "--phase=preflight");
 

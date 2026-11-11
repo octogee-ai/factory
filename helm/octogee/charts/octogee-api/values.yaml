@@ -70,25 +70,9 @@ env:
 # When gateway-edge is later renamed gateway-edge and slimmed to ~3
 # locality routes, this list shrinks back to only what octogee-api needs.
 secrets:
-  - envName: POSTHOG_PROJECT_TOKEN
-    secretName: posthog-cloud
-    secretKey: project_token
-    optional: true
   - envName: OPS_AGENT_BEARER_TOKEN
     secretName: ops-agent-bearer
     secretKey: bearer_token
-    optional: true
-  - envName: STRIPE_SECRET_KEY
-    secretName: stripe-secrets
-    secretKey: secret_key
-    optional: true
-  - envName: STRIPE_WEBHOOK_SECRET
-    secretName: stripe-secrets
-    secretKey: webhook_secret
-    optional: true
-  - envName: STRIPE_PRICE_IDS
-    secretName: stripe-secrets
-    secretKey: price_ids
     optional: true
   - envName: GITEA_TOKEN
     secretName: gitea-token
@@ -155,26 +139,6 @@ secrets:
   - envName: INVITE_SECRET
     secretName: invite-secret
     secretKey: secret
-    optional: true
-  - envName: RESEND_API_KEY
-    secretName: resend-secrets
-    secretKey: api_key
-    optional: true
-  - envName: RESEND_FROM_EMAIL
-    secretName: resend-secrets
-    secretKey: from_email
-    optional: true
-  - envName: RESEND_FROM_NAME
-    secretName: resend-secrets
-    secretKey: from_name
-    optional: true
-  - envName: RESEND_WEBHOOK_SECRET
-    secretName: resend-secrets
-    secretKey: webhook_secret
-    optional: true
-  - envName: EMAIL_UNSUBSCRIBE_SECRET
-    secretName: resend-secrets
-    secretKey: unsubscribe_secret
     optional: true
   - envName: GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN
     secretName: gateway-model-key-issuer

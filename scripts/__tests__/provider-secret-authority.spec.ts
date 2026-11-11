@@ -6,11 +6,14 @@ import { TEST_TARGET } from "./fixtures/deployment.js";
 
 const root = path.resolve(__dirname, "../..");
 const setup = readFileSync(path.join(root, "scripts/setup-secrets.sh"), "utf8");
+const productSecrets = readFileSync(path.join(root, "scripts/product/secrets.sh"), "utf8");
+const sectionEnd = "\n# ──";
+const functionEnd = "\n}\n";
 const providers = [
-  { name: "Anthropic", section: "octogee-anthropic", variable: "ANTHROPIC_API_KEY", field: "api_key", central: false },
-  { name: "OpenRouter", section: "octogee-openrouter", variable: "OPENROUTER_API_KEY", field: "api_key", central: false },
-  { name: "Brave", section: "octogee-brave", variable: "BRAVE_API_KEY", field: "key", central: true },
-  { name: "Resend", section: "resend-secrets", variable: "RESEND_API_KEY", field: "api_key", central: false },
+  { name: "Anthropic", section: "octogee-anthropic", variable: "ANTHROPIC_API_KEY", field: "api_key", central: false, source: setup, end: sectionEnd },
+  { name: "OpenRouter", section: "octogee-openrouter", variable: "OPENROUTER_API_KEY", field: "api_key", central: false, source: setup, end: sectionEnd },
+  { name: "Brave", section: "octogee-brave", variable: "BRAVE_API_KEY", field: "key", central: true, source: setup, end: sectionEnd },
+  { name: "Resend", section: "resend-secrets", variable: "RESEND_API_KEY", field: "api_key", central: false, source: productSecrets, end: functionEnd },
 ];
 
 function shellFunction(name: string): string {
@@ -20,9 +23,9 @@ function shellFunction(name: string): string {
 }
 
 function materialize(provider: typeof providers[number], environment: string, state = "present") {
-  const start = setup.indexOf(`info "${provider.section}"`);
+  const start = provider.source.indexOf(`info "${provider.section}"`);
   if (start < 0) throw new Error(`Missing provider section ${provider.section}`);
-  const block = setup.slice(start, setup.indexOf("\n# ──", start));
+  const block = provider.source.slice(start, provider.source.indexOf(provider.end, start));
   const script = [
     'source "$SHELL_ENV_HELPER"',
     shellFunction("read_authoritative_secret_manager_value"),

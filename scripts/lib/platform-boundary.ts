@@ -145,15 +145,20 @@ function endsName(source: string, end: number): boolean {
 
 const VARIABLE_ROOT = /(?:\$\{\w+\}|\$\w+|\$\([^()]*\))\/$/u;
 
-function startsPath(source: string, start: number): boolean {
+function startsPath(source: string, start: number, climbs = true): boolean {
   const before = source.charAt(start - 1);
   if (!NAME_CHARS.test(before) && before !== "." && before !== "/") return true;
   const head = source.slice(Math.max(0, start - 80), start);
+  if (head.endsWith("../")) return climbs;
   return head.endsWith("./") || VARIABLE_ROOT.test(head);
 }
 
 function mentionsRepoPath(source: string, path: string): boolean {
   return startsOf(source, path).some((start) => startsPath(source, start) && endsName(source, start + path.length));
+}
+
+function mentionsRootPath(source: string, path: string): boolean {
+  return startsOf(source, path).some((start) => startsPath(source, start, false) && source.charAt(start + path.length) === "/");
 }
 
 function mentionsRelativePath(source: string, path: string): boolean {
@@ -187,7 +192,13 @@ export function productReferencesOf(
   for (const entry of productAssetEntries(manifest)) {
     const repoPath = entry.replace(/\/$/u, "");
     const fromFile = relative(dirname(file), repoPath);
-    if (mentionsRepoPath(source, repoPath) || (fromFile.startsWith("../") && mentionsRelativePath(source, fromFile))) {
+    const sharedRoot = manifest.platformRoots.find((root) => file.startsWith(root) && entry.startsWith(root));
+    const fromRoot = sharedRoot ? entry.slice(sharedRoot.length).replace(/\/$/u, "") : null;
+    if (
+      mentionsRepoPath(source, repoPath)
+      || (fromFile.startsWith("../") && mentionsRelativePath(source, fromFile))
+      || (fromRoot !== null && mentionsRootPath(source, fromRoot))
+    ) {
       referenced.add(entry);
     }
   }

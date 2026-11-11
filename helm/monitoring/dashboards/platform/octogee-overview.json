@@ -881,73 +881,6 @@
     },
     {
       "id": 16,
-      "type": "stat",
-      "title": "Email failures (24h)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "(sum(increase(octogee_email_sent_total{namespace=\"$namespace\",result=\"error\"}[24h])) or vector(0)) + (sum(increase(octogee_email_delivery_total{namespace=\"$namespace\",event=\"failed\"}[24h])) or vector(0))",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          },
-          "links": [
-            {
-              "title": "Open email health",
-              "url": "/d/octogee-email/email-health?var-namespace=${namespace}&var-datasource=${datasource}&from=${__from}&to=${__to}"
-            }
-          ]
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 14
-      }
-    },
-    {
-      "id": 17,
       "type": "row",
       "title": "Trends",
       "collapsed": false,
@@ -960,7 +893,7 @@
       "panels": []
     },
     {
-      "id": 18,
+      "id": 17,
       "type": "timeseries",
       "title": "API + Edge request rate",
       "datasource": {
@@ -1014,7 +947,7 @@
       }
     },
     {
-      "id": 19,
+      "id": 18,
       "type": "timeseries",
       "title": "Agent turns / min",
       "datasource": {

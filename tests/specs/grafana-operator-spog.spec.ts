@@ -45,7 +45,6 @@ describe("Grafana solo-operator SPOG", () => {
       "API req/s",
       "API 5xx %",
       "Agent turns/min",
-      "Email failures (24h)",
     ]));
   });
 
@@ -63,7 +62,6 @@ describe("Grafana solo-operator SPOG", () => {
       "API req/s",
       "API 5xx %",
       "Agent turns/min",
-      "Email failures (24h)",
     ];
 
     for (const title of headlineTitles) {
@@ -114,7 +112,6 @@ describe("Grafana solo-operator SPOG", () => {
       "API req/s",
       "API 5xx %",
       "Agent turns/min",
-      "Email failures (24h)",
     ]) {
       const expr = overview.panels.find((panel) => panel.title === title)?.targets?.[0]?.expr;
       expect(expr, `${title} expression missing`).toContain("or vector(0)");

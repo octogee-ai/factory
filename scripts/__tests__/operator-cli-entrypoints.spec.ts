@@ -14,7 +14,7 @@ import {
 import {
   parseSeedOrchestratorConfigArgs,
   SEED_ORCHESTRATOR_CONFIG_USAGE,
-} from "../ops/seed-orchestrator-config.js";
+} from "../product/ops/seed-orchestrator-config.js";
 import {
   parseSetAdminRoleArgs,
   SET_ADMIN_ROLE_USAGE,

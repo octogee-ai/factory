@@ -308,9 +308,6 @@ def d_overview():
              drilldown=panel_link("Open API health", "/d/octogee-services/service-health")),
         stat("Agent turns/min", [f'sum(rate(octogee_agent_end_total{{namespace="{NS}"}}[5m]))*60 or vector(0)'],
              drilldown=panel_link("Open agent activity", "/d/octogee-gateway/agent-activity")),
-        stat("Email failures (24h)", [f'(sum(increase(octogee_email_sent_total{{namespace="{NS}",result="error"}}[24h])) or vector(0)) + (sum(increase(octogee_email_delivery_total{{namespace="{NS}",event="failed"}}[24h])) or vector(0))'],
-             thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}],
-             drilldown=panel_link("Open email health", "/d/octogee-email/email-health")),
         row("Trends"),
         ts("API + Edge request rate", [(f'sum(rate(http_requests_total{{namespace="{NS}",job=~"{PLAT_JOBS}"}}[5m])) by (job) or vector(0)', "{{job}}")], unit="reqps"),
         ts("Agent turns / min", [(f'sum(rate(octogee_agent_end_total{{namespace="{NS}"}}[5m]))*60 or vector(0)', "turns/min")]),
@@ -690,53 +687,6 @@ def d_tracing():
                      [tmpl_datasource()], refresh="", tags=["octogee", "tracing"])
 
 
-def d_email():
-    p = [
-        text("Transactional email (Resend)", "Send + delivery health for invites, digests, weeklies, "
-             "and auth (Phase 3). `octogee_email_sent_total{type,result}` for attempts, "
-             "`octogee_email_delivery_total{type,event}` for Resend webhook events, "
-             "`octogee_email_suppressions_total{reason}` for the suppression list. "
-             "Alerts: `ResendBounceRateHigh` (>5%/1h), `ResendComplaintRateHigh` (>0.1%/1h), "
-             "`ResendWebhookStale` (sends but no events in 1h).", h=5),
-        row("Send rate + outcomes"),
-        ts("Send rate by type", [(f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[5m])) by (type) or vector(0)', "{{type}}")], unit="ops", legend=True),
-        ts("Send outcomes (5m rate)", [
-            (f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[5m])) or vector(0)', "sent"),
-            (f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="suppressed"}}[5m])) or vector(0)', "suppressed"),
-            (f'sum(rate(octogee_email_sent_total{{namespace="{NS}",result="error"}}[5m])) or vector(0)', "error"),
-        ], unit="ops", legend=True),
-        stat("Sent (24h)", [f'sum(increase(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[24h])) or vector(0)']),
-        stat("Suppressed (24h)", [f'sum(increase(octogee_email_sent_total{{namespace="{NS}",result="suppressed"}}[24h])) or vector(0)'],
-             thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}]),
-        stat("Send errors (24h)", [f'sum(increase(octogee_email_sent_total{{namespace="{NS}",result="error"}}[24h])) or vector(0)'],
-             thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
-        row("Delivery feedback (Resend webhook)"),
-        ts("Delivery events by type", [
-            (f'sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="delivered"}}[5m])) by (type) or vector(0)', "delivered {{type}}"),
-            (f'sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="bounced"}}[5m])) by (type) or vector(0)', "bounced {{type}}"),
-            (f'sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="complained"}}[5m])) by (type) or vector(0)', "complained {{type}}"),
-        ], unit="ops", legend=True),
-        stat("Bounce rate (1h)",
-             [f'(100 * sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="bounced"}}[1h])) / clamp_min(sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[1h])), 0.001)) or vector(0)'],
-             unit="percent",
-             thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 2}, {"color": "red", "value": 5}]),
-        stat("Complaint rate (1h)",
-             [f'(100 * sum(rate(octogee_email_delivery_total{{namespace="{NS}",event="complained"}}[1h])) / clamp_min(sum(rate(octogee_email_sent_total{{namespace="{NS}",result="sent"}}[1h])), 0.001)) or vector(0)'],
-             unit="percent",
-             thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 0.05}, {"color": "red", "value": 0.1}]),
-        stat("Failed (24h)", [f'sum(increase(octogee_email_delivery_total{{namespace="{NS}",event="failed"}}[24h])) or vector(0)'],
-             thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
-        row("Suppression list"),
-        ts("New suppressions / hour", [
-            (f'sum(rate(octogee_email_suppressions_total{{namespace="{NS}",reason="bounce"}}[1h]))*3600 or vector(0)', "bounces/h"),
-            (f'sum(rate(octogee_email_suppressions_total{{namespace="{NS}",reason="complaint"}}[1h]))*3600 or vector(0)', "complaints/h"),
-        ], unit="short", legend=True),
-        stat("Total suppressed (cumulative)", [f'sum(octogee_email_suppressions_total{{namespace="{NS}"}}) or vector(0)']),
-    ]
-    return dashboard("octogee-email", "Platform — Email (Resend)", p,
-                     [tmpl_datasource(), tmpl_namespace()], tags=["octogee", "platform"])
-
-
 def d_spot_disruptions():
     logs_query = (
         "https://console.cloud.google.com/logs/query?project=octogee&query="
@@ -829,15 +779,15 @@ def d_spot_disruptions():
 
 
 GROUPS = {
-    "platform": [d_overview, d_services, d_container_health, d_gitea, d_mattermost, d_postgres, d_email, d_spot_disruptions],
+    "platform": [d_overview, d_services, d_container_health, d_gitea, d_mattermost, d_postgres, d_spot_disruptions],
     "gateways": [d_agent, d_runner, d_fleet, d_bridge, d_sizing],
     "tracing": [d_tracing],
 }
 
 
-def main():
-    for folder, builders in GROUPS.items():
-        out = os.path.join(HERE, folder)
+def write_groups(root, groups):
+    for folder, builders in groups.items():
+        out = os.path.join(root, folder)
         os.makedirs(out, exist_ok=True)
         for b in builders:
             _id[0] = 0
@@ -850,4 +800,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    write_groups(HERE, GROUPS)

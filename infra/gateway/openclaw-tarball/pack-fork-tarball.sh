@@ -51,8 +51,8 @@ if [ "${OPENCLAW_SKIP_BUILD:-0}" != "1" ]; then
   pnpm build >&2
 fi
 
-node "$PACKER_DIR/../verify-voice-plugin-contract.mjs" "$FORK_DIR" "$(git rev-parse HEAD)" >&2
-node "$PACKER_DIR/../verify-activity-plugin-contract.mjs" "$FORK_DIR" "$(git rev-parse HEAD)" >&2
+node "$PACKER_DIR/../product/verify-voice-plugin-contract.mjs" "$FORK_DIR" "$(git rev-parse HEAD)" >&2
+node "$PACKER_DIR/../product/verify-activity-plugin-contract.mjs" "$FORK_DIR" "$(git rev-parse HEAD)" >&2
 node "$PACKER_DIR/../verify-broker-plugin-contract.mjs" "$FORK_DIR" "$(git rev-parse HEAD)" >&2
 node "$PACKER_DIR/../verify-broker-plugin-runtime.mjs" "$FORK_DIR" "$(git rev-parse HEAD)" >&2
 

@@ -934,7 +934,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     const roll = result.stdout.indexOf(`kubectl rollout restart deploy -n ${TEST_TARGET.namespace}`);
     const seed = result.stdout.indexOf(
-      "npm run --prefix scripts with-platform-state -- --env=test -- npx tsx ops/seed-orchestrator-config.ts --env=test --deployment-target=test-central",
+      "npm run --prefix scripts with-platform-state -- --env=test -- npx tsx product/ops/seed-orchestrator-config.ts --env=test --deployment-target=test-central",
     );
     const deploy = result.stdout.indexOf("npm run ci:deploy -- --environment=test");
     expect(roll).toBeGreaterThan(-1);

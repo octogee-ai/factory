@@ -1,1 +1,4 @@
-{{ .Files.Get "files/gmp-rules.yaml" }}
+{{- range $path, $_ := .Files.Glob "**/gmp-rules.yaml" }}
+---
+{{ $.Files.Get $path }}
+{{- end }}

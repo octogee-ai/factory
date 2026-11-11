@@ -1341,7 +1341,7 @@ echo "  # 6b. Seed the operator dials (sizing profiles, shared pool autoscaling,
 echo "  #     into the platform state store the release just migrated. with-platform-state"
 echo "  #     reads the deployed backend and opens the database tunnel. Shared pool membership"
 echo "  #     is not seeded: the fleet controller mints shared-N slots from the platform release."
-echo "  npm run --prefix scripts with-platform-state -- --env=$ENV -- npx tsx ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG"
+echo "  npm run --prefix scripts with-platform-state -- --env=$ENV -- npx tsx product/ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG"
 echo ""
 echo "  # 7. Deploy the platform and site through CI (Firestore rules and indexes, Functions, site, hosting)"
 echo "  npm run ci:deploy -- --environment=$ENV --sha=\"\$PLATFORM_SOURCE_SHA\" --actor=operator:<you>"

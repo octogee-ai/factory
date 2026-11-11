@@ -160,7 +160,7 @@ kubectl config use-context "$K8S_CONTEXT" >/dev/null 2>&1 || true
 
 ORCH_OUTPUT=""
 if [[ "$ENV" != "custom" ]]; then
-  ORCH_OUTPUT=$(node "$REPO_DIR/scripts/node_modules/tsx/dist/cli.mjs" "$REPO_DIR/scripts/ops/seed-orchestrator-config.ts" --env="$ENV" --deployment-target="$TARGET_ID" --check 2>&1 || true)
+  ORCH_OUTPUT=$(node "$REPO_DIR/scripts/node_modules/tsx/dist/cli.mjs" "$REPO_DIR/scripts/product/ops/seed-orchestrator-config.ts" --env="$ENV" --deployment-target="$TARGET_ID" --check 2>&1 || true)
 fi
 
 # The shared pool is unnamed: the fleet controller mints `shared-N` slots on demand and the
@@ -949,7 +949,7 @@ else
   elif echo "$ORCH_OUTPUT" | grep -Eq "is missing or invalid"; then
     fail "operator dials are missing or invalid: $(echo "$ORCH_OUTPUT" | grep -E "is missing or invalid" | head -1)"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} node scripts/node_modules/tsx/dist/cli.mjs scripts/ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG"
+      echo -e "  ${YELLOW}FIX:${NC} node scripts/node_modules/tsx/dist/cli.mjs scripts/product/ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG"
     fi
   else
     warn "Orchestrator config probe failed; verify operator ADC: $(echo "$ORCH_OUTPUT" | head -1)"

@@ -123,7 +123,11 @@ spec:
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
-            {{- range .Values.secrets }}
+            {{- $secretEnv := .Values.secrets }}
+            {{- range $path, $_ := .Files.Glob "**/secret-env.yaml" }}
+            {{- $secretEnv = concat $secretEnv ($.Files.Get $path | fromYamlArray) }}
+            {{- end }}
+            {{- range $secretEnv }}
             - name: {{ .envName }}
               valueFrom:
                 secretKeyRef:

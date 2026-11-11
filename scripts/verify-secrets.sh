@@ -13,7 +13,6 @@ set -euo pipefail
 #   - gateway/templates/deployment.yaml  (secretKeyRef without optional: true)
 #   - gateway-edge/values.yaml          (optional: false)
 #   - gateway-edge/values.yaml           (optional: false)
-#   - gateway-edge/templates/product/cronjob-*  (secretKeyRef)
 #
 # Usage:
 #   ./scripts/verify-secrets.sh --env=prod [--deployment-target=prod-west]
@@ -35,6 +34,9 @@ source "$SCRIPT_DIR/lib/shell-env.sh"
 # shellcheck source=scripts/lib/deployment-target.sh
 source "$SCRIPT_DIR/lib/deployment-target.sh"
 source "$SCRIPT_DIR/lib/signature-key-validation.sh"
+# shellcheck source=scripts/lib/secret-extensions.sh
+source "$SCRIPT_DIR/lib/secret-extensions.sh"
+load_secret_extensions "$SCRIPT_DIR"
 
 ENV=""
 KUBE_CTX=""
@@ -90,7 +92,6 @@ esac
 # Keep in sync with:
 #   helm/octogee/charts/gateway/templates/deployment.yaml
 #   helm/octogee/charts/gateway-edge/values.yaml
-#   helm/octogee/charts/gateway-edge/templates/product/cronjob-trial-expiry.yaml
 REQUIRED_SECRETS=(
   "agent-store-postgres"
   "octogee-anthropic"       # setup/legacy only; gateway pods do not mount it
@@ -99,7 +100,6 @@ REQUIRED_SECRETS=(
   "ops-agent-bearer"        # octogee-api → octogee-ops-agent
   "social-notification-bearer"  # octogee-api /social + Cloud Functions social producer
   "mattermost-gateway"      # octogee-api + glm-controller; gateway pods do not mount admin_token
-  "stripe-secrets"          # octogee-api: Stripe API, webhook, and per-environment price map
   "google-oauth"             # octogee-api: Google OAuth + Drive picker
   "connect-state-secret"     # octogee-api: OAuth state HMAC
   "gitea-token"             # octogee-api + glm-controller
@@ -133,9 +133,6 @@ REQUIRED_KEYS=(
   "agent-control-router:public-key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "byot-sync-internal:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "byot-sync-internal:public-key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
-  "stripe-secrets:secret_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
-  "stripe-secrets:webhook_secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
-  "stripe-secrets:price_ids:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "google-oauth:client_id:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "google-oauth:client_secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "google-oauth:picker_client_id:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
@@ -144,13 +141,17 @@ REQUIRED_KEYS=(
   "connect-state-secret:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
 )
 
-if posthog_cloud_required_for_env "$ENV"; then
-  REQUIRED_SECRETS+=("posthog-cloud")
-  REQUIRED_KEYS+=(
-    "posthog-cloud:project_token:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
-    "posthog-cloud:personal_api_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
-  )
-fi
+# ── Optional-but-important secrets (warn only) ──────────────────────────────
+OPTIONAL_SECRETS=(
+  "mattermost-cloud-sql"
+  "octogee-brave"
+  "octogee-tavily"
+  "octogee-github"
+  "gitea-admin"
+  "gitea-credentials"
+)
+
+run_secret_steps ${SECRET_VERIFY_REGISTRATIONS[@]+"${SECRET_VERIFY_REGISTRATIONS[@]}"}
 
 if [[ "$ENV" != custom ]]; then
   REQUIRED_SECRETS+=("platform-state-postgres")
@@ -203,19 +204,8 @@ for entry in "${REQUIRED_KEYS[@]}"; do
     echo -e "  ${RED}✗${NC} ${secret}/${key} — ${RED}EMPTY${NC}"
     echo -e "    Fix: ${fix}"
     FAILURES=$((FAILURES + 1))
-  elif [[ "$secret:$key" == "stripe-secrets:secret_key" ]] \
-    && ! validate_stripe_secret_key_mode "$ENV" "$VALUE"; then
-    echo -e "  ${RED}✗${NC} ${secret}/${key} — ${RED}INVALID MODE${NC}"
-    echo -e "    Fix: ${fix}"
-    FAILURES=$((FAILURES + 1))
-  elif [[ "$secret:$key" == "stripe-secrets:webhook_secret" ]] \
-    && ! validate_stripe_webhook_secret "$VALUE"; then
-    echo -e "  ${RED}✗${NC} ${secret}/${key} — ${RED}INVALID${NC}"
-    echo -e "    Fix: ${fix}"
-    FAILURES=$((FAILURES + 1))
-  elif [[ "$secret:$key" == "stripe-secrets:price_ids" ]] \
-    && ! validate_stripe_price_ids_json "$VALUE"; then
-    echo -e "  ${RED}✗${NC} ${secret}/${key} — ${RED}INVALID${NC}"
+  elif INVALID_REASON="$(secret_key_invalid_reason "$secret" "$key" "$VALUE")" && [[ -n "$INVALID_REASON" ]]; then
+    echo -e "  ${RED}✗${NC} ${secret}/${key} — ${RED}${INVALID_REASON}${NC}"
     echo -e "    Fix: ${fix}"
     FAILURES=$((FAILURES + 1))
   else
@@ -262,36 +252,8 @@ else
 fi
 rm -f "$MM_K8S_PASSWORD_FILE" "$MM_SM_PASSWORD_FILE"
 
-if ! posthog_cloud_required_for_env "$ENV"; then
-  POSTHOG_PROJECT_TOKEN="$(kubectl get secret posthog-cloud -n "$NS" --context "$KUBE_CTX" \
-    -o jsonpath='{.data.project_token}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-  POSTHOG_PERSONAL_API_KEY="$(kubectl get secret posthog-cloud -n "$NS" --context "$KUBE_CTX" \
-    -o jsonpath='{.data.personal_api_key}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-  if [[ -n "$(configured_secret_value "$POSTHOG_PROJECT_TOKEN")" \
-    || -n "$(configured_secret_value "$POSTHOG_PERSONAL_API_KEY")" ]]; then
-    if [[ -z "$(configured_secret_value "$POSTHOG_PROJECT_TOKEN")" \
-      || -z "$(configured_secret_value "$POSTHOG_PERSONAL_API_KEY")" ]]; then
-      echo -e "  ${RED}✗${NC} posthog-cloud — ${RED}PARTIAL CONFIGURATION${NC}"
-      echo -e "    Fix: ./scripts/setup-secrets.sh ${FIX_SUFFIX}"
-      FAILURES=$((FAILURES + 1))
-    else
-      echo -e "  ${GREEN}✓${NC} posthog-cloud/project_token + personal_api_key"
-    fi
-  fi
-fi
+run_secret_steps ${SECRET_VERIFY_CHECKS[@]+"${SECRET_VERIFY_CHECKS[@]}"}
 
-# ── Optional-but-important secrets (warn only) ──────────────────────────────
-OPTIONAL_SECRETS=(
-  "mattermost-cloud-sql"
-  "octogee-brave"
-  "octogee-tavily"
-  "octogee-github"
-  "gitea-admin"
-  "gitea-credentials"
-)
-if ! posthog_cloud_required_for_env "$ENV"; then
-  OPTIONAL_SECRETS+=("posthog-cloud")
-fi
 
 echo ""
 echo -e "${BOLD}Optional secrets:${NC}"

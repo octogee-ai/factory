@@ -9,21 +9,6 @@ const helperPath = path.join(repoRoot, "scripts/lib/shell-env.sh");
 const setupSecretsPath = path.join(repoRoot, "scripts/setup-secrets.sh");
 const verifySecretsPath = path.join(repoRoot, "scripts/verify-secrets.sh");
 const envExamplePath = path.join(repoRoot, ".env.example");
-const completeStripePriceMap = JSON.stringify(Object.fromEntries([
-  "personal_monthly",
-  "personal_pro_monthly",
-  "personal_pro_max_monthly",
-  "builder_hobby_monthly",
-  "builder_pro_monthly",
-  "builder_team_monthly",
-  "credit_10",
-  "credit_25",
-  "credit_50",
-  "credit_100",
-].map((key) => [key, `price_${key.replaceAll("_", "")}`])));
-const canonicalStripePriceMap = JSON.stringify(Object.fromEntries(
-  Object.entries(JSON.parse(completeStripePriceMap)).sort(([left], [right]) => left.localeCompare(right)),
-));
 
 function runLoader(envFile: string, env: Record<string, string> = {}): string {
   const script = [
@@ -100,55 +85,6 @@ function readEnvValue(envFile: string, key: string): string {
   ].join("\n"));
 }
 
-function stripePriceMapValidity(value: string): string {
-  return runShell([
-    `source ${JSON.stringify(helperPath)}`,
-    `if validate_stripe_price_ids_json ${JSON.stringify(value)}; then printf valid; else printf invalid; fi`,
-  ].join("\n"));
-}
-
-function materializedStripePriceMap(value: string): string {
-  return runShell([
-    `source ${JSON.stringify(helperPath)}`,
-    `materialize_stripe_price_ids_json ${JSON.stringify(value)}`,
-  ].join("\n"));
-}
-
-function configuredStripePriceMap(value: string): string {
-  return runShell([
-    `source ${JSON.stringify(helperPath)}`,
-    `configured_stripe_price_ids_value ${JSON.stringify(value)}`,
-  ].join("\n"));
-}
-
-function canonicalizedStripePriceMap(value: string): string {
-  return runShell([
-    `source ${JSON.stringify(helperPath)}`,
-    'canonicalize_stripe_price_ids_json "$STRIPE_PRICE_MAP"',
-  ].join("\n"), { STRIPE_PRICE_MAP: value });
-}
-
-function stripeKeyModeValidity(env: string, value: string): string {
-  return runShell([
-    `source ${JSON.stringify(helperPath)}`,
-    `if validate_stripe_secret_key_mode ${JSON.stringify(env)} ${JSON.stringify(value)}; then printf valid; else printf invalid; fi`,
-  ].join("\n"));
-}
-
-function posthogCloudRequired(env: string): boolean {
-  return runShellStatus([
-    `source ${JSON.stringify(helperPath)}`,
-    `posthog_cloud_required_for_env ${JSON.stringify(env)}`,
-  ].join("\n")) === 0;
-}
-
-function stripeWebhookValidity(value: string): string {
-  return runShell([
-    `source ${JSON.stringify(helperPath)}`,
-    `if validate_stripe_webhook_secret ${JSON.stringify(value)}; then printf valid; else printf invalid; fi`,
-  ].join("\n"));
-}
-
 function selectedSecretValue(
   env: string,
   secretManager: string,
@@ -162,12 +98,6 @@ function selectedSecretValue(
 }
 
 describe("setup-secrets env loader", () => {
-  it("requires PostHog Cloud credentials exactly where Helm enables PostHog", () => {
-    expect(posthogCloudRequired("test")).toBe(true);
-    expect(posthogCloudRequired("prod")).toBe(true);
-    expect(posthogCloudRequired("custom")).toBe(false);
-  });
-
   it("reads one named env value without exporting unrelated secrets", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "octogee-env-reader-"));
     const envFile = path.join(dir, ".env.test-west");
@@ -255,46 +185,6 @@ describe("setup-secrets env loader", () => {
     expect(readFileSync(envFile, "utf-8")).toBe("UNCHANGED=keep\n");
   });
 
-  it("validates Stripe price maps without accepting unknown, empty, or malformed values", () => {
-    expect(stripePriceMapValidity(completeStripePriceMap)).toBe("valid");
-    expect(stripePriceMapValidity('{"personal_monthly":"price_test"}')).toBe("invalid");
-    expect(stripePriceMapValidity('{"unknown":"price_test"}')).toBe("invalid");
-    expect(stripePriceMapValidity(JSON.stringify({
-      ...JSON.parse(completeStripePriceMap),
-      personal_annual: "price_retired",
-    }))).toBe("invalid");
-    expect(stripePriceMapValidity('{"personal_monthly":""}')).toBe("invalid");
-    expect(stripePriceMapValidity("not-json")).toBe("invalid");
-  });
-
-  it("materializes a configured Stripe map byte-for-byte and defaults only an empty map", () => {
-    const configured = completeStripePriceMap;
-    const pretty = JSON.stringify(JSON.parse(completeStripePriceMap), null, 2);
-    const reversed = JSON.stringify(Object.fromEntries(
-      Object.entries(JSON.parse(completeStripePriceMap)).reverse(),
-    ));
-
-    expect(materializedStripePriceMap(configured)).toBe(configured);
-    expect(materializedStripePriceMap("")).toBe("{}");
-    expect(configuredStripePriceMap("{}")).toBe("");
-    expect(configuredStripePriceMap(configured)).toBe(configured);
-    expect(canonicalizedStripePriceMap(pretty)).toBe(canonicalStripePriceMap);
-    expect(canonicalizedStripePriceMap(reversed)).toBe(canonicalStripePriceMap);
-  });
-
-  it("rejects Stripe secret keys from the wrong environment mode", () => {
-    expect(stripeKeyModeValidity("test", "sk_test_example")).toBe("valid");
-    expect(stripeKeyModeValidity("custom", "sk_test_example")).toBe("valid");
-    expect(stripeKeyModeValidity("prod", "sk_live_example")).toBe("valid");
-    expect(stripeKeyModeValidity("test", "sk_live_example")).toBe("invalid");
-    expect(stripeKeyModeValidity("prod", "sk_test_example")).toBe("invalid");
-    expect(stripeKeyModeValidity("test", "sk_test_")).toBe("invalid");
-    expect(stripeWebhookValidity("whsec_example")).toBe("valid");
-    expect(stripeWebhookValidity("whsec_")).toBe("invalid");
-    expect(stripeWebhookValidity("placeholder")).toBe("invalid");
-    expect(stripeWebhookValidity("PLACEHOLDER-WEBHOOK")).toBe("invalid");
-  });
-
   it("keeps Secret Manager authoritative while custom namespaces prefer their local K8s state", () => {
     expect(selectedSecretValue("test", "from-sm", "from-env", "from-k8s")).toBe("from-sm");
     expect(selectedSecretValue("prod", "from-sm", "from-env", "from-k8s")).toBe("from-sm");
@@ -344,7 +234,7 @@ describe("setup-secrets env loader", () => {
     expect(setup).toContain("test-west|prod-west)");
   });
 
-  it("captures the Stripe price map durably and verifies all runtime keys", () => {
+  it("keeps Secret Manager authoritative for managed values and verifies the OAuth runtime keys", () => {
     const setup = readFileSync(setupSecretsPath, "utf-8");
     const verify = readFileSync(verifySecretsPath, "utf-8");
     const managedSecretSync = setup.slice(
@@ -352,18 +242,10 @@ describe("setup-secrets env loader", () => {
       setup.indexOf("read_authoritative_secret_manager_value()"),
     );
 
-    expect(setup).toContain('resolve_environment_secret_value "${STRIPE_PRICE_IDS:-}" STRIPE_PRICE_IDS stripe-secrets price_ids configured_stripe_price_ids_value');
-    expect(setup).toContain('sync_secret_manager_value STRIPE_PRICE_IDS "$STRIPE_PRICE_IDS" "$FIREBASE_PROJECT"');
-    expect(setup).toContain('--from-literal=price_ids="$STRIPE_PRICE_IDS_MATERIALIZED"');
     expect(setup).toContain('[[ "$ENV" != "custom" ]]');
     expect(setup).toContain("Secret Manager is authoritative for $name; rotate it there before running setup-secrets.sh");
     expect(managedSecretSync).not.toContain('gcloud secrets versions add "$name"');
-    expect(verify).toContain('validate_stripe_secret_key_mode "$ENV" "$VALUE"');
-    expect(verify).toContain('validate_stripe_webhook_secret "$VALUE"');
     for (const entry of [
-      "stripe-secrets:secret_key:",
-      "stripe-secrets:webhook_secret:",
-      "stripe-secrets:price_ids:",
       "google-oauth:client_id:",
       "google-oauth:client_secret:",
       "google-oauth:picker_client_id:",

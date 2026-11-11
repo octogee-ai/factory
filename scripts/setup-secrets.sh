@@ -41,6 +41,9 @@ source "$SCRIPT_DIR/lib/github-oauth-redirect.sh"
 # shellcheck source=scripts/lib/openai-key-validation.sh
 source "$SCRIPT_DIR/lib/openai-key-validation.sh"
 source "$SCRIPT_DIR/lib/signature-key-validation.sh"
+# shellcheck source=scripts/lib/secret-extensions.sh
+source "$SCRIPT_DIR/lib/secret-extensions.sh"
+load_secret_extensions "$SCRIPT_DIR"
 source "$SCRIPT_DIR/lib/agent-store-postgres-secret.sh"
 source "$SCRIPT_DIR/lib/platform-state-postgres-secret.sh"
 
@@ -932,95 +935,7 @@ for gw_id in "${GATEWAY_IDS[@]}"; do
     || warn "  Could not grant secretVersionManager on $SECRET_NAME"
 done
 
-# ── 10. Stripe secrets ────────────────────────────────────────────────────
-# Required by octogee-api at startup (not optional). Use placeholder if not
-# configured yet — billing is sandbox mode until real keys are set.
-info "stripe-secrets"
-STRIPE_SECRET_KEY="$(resolve_environment_secret_value "${STRIPE_SECRET_KEY:-}" STRIPE_SECRET_KEY stripe-secrets secret_key configured_secret_value)"
-STRIPE_WEBHOOK_SECRET="$(resolve_environment_secret_value "${STRIPE_WEBHOOK_SECRET:-}" STRIPE_WEBHOOK_SECRET stripe-secrets webhook_secret configured_secret_value)"
-STRIPE_PRICE_IDS="$(resolve_environment_secret_value "${STRIPE_PRICE_IDS:-}" STRIPE_PRICE_IDS stripe-secrets price_ids configured_stripe_price_ids_value)"
-[[ -z "$STRIPE_SECRET_KEY" ]]    && warn "STRIPE_SECRET_KEY not found — using placeholder (billing disabled)"
-[[ -z "$STRIPE_WEBHOOK_SECRET" ]] && warn "STRIPE_WEBHOOK_SECRET not found — using placeholder"
-[[ -z "$STRIPE_PRICE_IDS" ]] && warn "STRIPE_PRICE_IDS not found — checkout plans remain unavailable"
-if [[ -n "$STRIPE_SECRET_KEY" ]]; then
-  validate_stripe_secret_key_mode "$ENV" "$STRIPE_SECRET_KEY" \
-    || fail "STRIPE_SECRET_KEY mode does not match --env=$ENV"
-fi
-if [[ -n "$STRIPE_WEBHOOK_SECRET" ]]; then
-  validate_stripe_webhook_secret "$STRIPE_WEBHOOK_SECRET" \
-    || fail "STRIPE_WEBHOOK_SECRET must be a Stripe whsec_ signing secret"
-fi
-if [[ "$ENV" != "custom" ]]; then
-  [[ -n "$STRIPE_SECRET_KEY" ]] && sync_secret_manager_value STRIPE_SECRET_KEY "$STRIPE_SECRET_KEY" "$FIREBASE_PROJECT"
-  [[ -n "$STRIPE_WEBHOOK_SECRET" ]] && sync_secret_manager_value STRIPE_WEBHOOK_SECRET "$STRIPE_WEBHOOK_SECRET" "$FIREBASE_PROJECT"
-fi
-if [[ -n "$STRIPE_PRICE_IDS" ]]; then
-  validate_stripe_price_ids_json "$STRIPE_PRICE_IDS" \
-    || fail "STRIPE_PRICE_IDS must map every supported plan and credit key to a Stripe price ID"
-  STRIPE_PRICE_IDS="$(canonicalize_stripe_price_ids_json "$STRIPE_PRICE_IDS")" \
-    || fail "STRIPE_PRICE_IDS could not be canonicalized"
-  if [[ "$ENV" != "custom" ]]; then
-    sync_secret_manager_value STRIPE_PRICE_IDS "$STRIPE_PRICE_IDS" "$FIREBASE_PROJECT" canonicalize_stripe_price_ids_json
-  fi
-  save_env_file_value "$ENV_FILE" STRIPE_PRICE_IDS "$STRIPE_PRICE_IDS"
-fi
-STRIPE_PRICE_IDS_MATERIALIZED="$(materialize_stripe_price_ids_json "$STRIPE_PRICE_IDS")"
-ksecret stripe-secrets \
-  --from-literal=secret_key="${STRIPE_SECRET_KEY:-placeholder}" \
-  --from-literal=webhook_secret="${STRIPE_WEBHOOK_SECRET:-placeholder}" \
-  --from-literal=price_ids="$STRIPE_PRICE_IDS_MATERIALIZED"
-
-# ── 10a. PostHog Cloud ────────────────────────────────────────────────────
-info "posthog-cloud"
-POSTHOG_PROJECT_TOKEN="$(resolve_environment_secret_value "${POSTHOG_PROJECT_TOKEN:-}" POSTHOG_PROJECT_TOKEN posthog-cloud project_token configured_secret_value)"
-POSTHOG_PERSONAL_API_KEY="$(resolve_environment_secret_value "${POSTHOG_PERSONAL_API_KEY:-}" POSTHOG_PERSONAL_API_KEY posthog-cloud personal_api_key configured_secret_value)"
-if [[ "$ENV" != "custom" ]]; then
-  [[ -n "$POSTHOG_PROJECT_TOKEN" ]] && sync_secret_manager_value POSTHOG_PROJECT_TOKEN "$POSTHOG_PROJECT_TOKEN" "$FIREBASE_PROJECT"
-  [[ -n "$POSTHOG_PERSONAL_API_KEY" ]] && sync_secret_manager_value POSTHOG_PERSONAL_API_KEY "$POSTHOG_PERSONAL_API_KEY" "$FIREBASE_PROJECT"
-fi
-[[ -n "$POSTHOG_PROJECT_TOKEN" ]] || warn "POSTHOG_PROJECT_TOKEN not found — PostHog capture and flags remain disabled"
-[[ -n "$POSTHOG_PERSONAL_API_KEY" ]] || warn "POSTHOG_PERSONAL_API_KEY not found — do not configure a PostHog project for this environment yet"
-ksecret posthog-cloud \
-  --from-literal=project_token="$POSTHOG_PROJECT_TOKEN" \
-  --from-literal=personal_api_key="$POSTHOG_PERSONAL_API_KEY"
-
-# ── 11. Resend secrets (email digest delivery — P6) ──────────────────────
-# Used by gateway-edge for email digest delivery via Resend.
-# Required env vars: RESEND_API_KEY, RESEND_FROM_EMAIL
-# Optional: RESEND_FROM_NAME (defaults to "Octogee" in code)
-#
-# K8s Secret: resend-secrets
-#   api_key    → RESEND_API_KEY
-#   from_email → RESEND_FROM_EMAIL
-#   from_name  → RESEND_FROM_NAME
-info "resend-secrets"
-set +u
-RESEND_API_KEY="${RESEND_API_KEY:-}"
-RESEND_FROM_EMAIL="${RESEND_FROM_EMAIL:-}"
-RESEND_FROM_NAME="${RESEND_FROM_NAME:-Octo}"
-RESEND_WEBHOOK_SECRET="${RESEND_WEBHOOK_SECRET:-}"
-EMAIL_UNSUBSCRIBE_SECRET="${EMAIL_UNSUBSCRIBE_SECRET:-}"
-set -u
-RESEND_API_KEY="$(resolve_environment_secret_value \
-  "$RESEND_API_KEY" RESEND_API_KEY resend-secrets api_key configured_secret_value)" \
-  || fail "Could not resolve RESEND_API_KEY from its environment source of truth"
-if [[ -n "$RESEND_API_KEY" && "$ENV" != "custom" ]]; then
-  sync_secret_manager_value RESEND_API_KEY "$RESEND_API_KEY" "$FIREBASE_PROJECT"
-  save_env_file_value "$ENV_FILE" RESEND_API_KEY "$RESEND_API_KEY"
-fi
-[[ -z "$RESEND_FROM_EMAIL" ]] && RESEND_FROM_EMAIL=$(sm_get RESEND_FROM_EMAIL "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-[[ -z "$RESEND_WEBHOOK_SECRET" ]] && RESEND_WEBHOOK_SECRET=$(sm_get RESEND_WEBHOOK_SECRET "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-[[ -z "$EMAIL_UNSUBSCRIBE_SECRET" ]] && EMAIL_UNSUBSCRIBE_SECRET=$(sm_get EMAIL_UNSUBSCRIBE_SECRET "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-[[ -z "$RESEND_API_KEY" ]]   && warn "RESEND_API_KEY not found — emails will fail until configured"
-[[ -z "$RESEND_FROM_EMAIL" ]] && warn "RESEND_FROM_EMAIL not found — using placeholder"
-[[ -z "$RESEND_WEBHOOK_SECRET" ]] && warn "RESEND_WEBHOOK_SECRET not found — webhook will 503 until configured (Resend dashboard → Webhooks → signing secret)"
-[[ -z "$EMAIL_UNSUBSCRIBE_SECRET" ]] && warn "EMAIL_UNSUBSCRIBE_SECRET not found — one-click unsubscribe routes will 500 until configured (generate with: openssl rand -base64 48)"
-ksecret resend-secrets \
-  --from-literal=api_key="${RESEND_API_KEY:-placeholder}" \
-  --from-literal=from_email="${RESEND_FROM_EMAIL:-octo@octogee.com}" \
-  --from-literal=from_name="${RESEND_FROM_NAME}" \
-  --from-literal=webhook_secret="${RESEND_WEBHOOK_SECRET:-placeholder}" \
-  --from-literal=unsubscribe_secret="${EMAIL_UNSUBSCRIBE_SECRET:-placeholder}"
+run_secret_steps ${SECRET_SETUP_STEPS[@]+"${SECRET_SETUP_STEPS[@]}"}
 
 # ── 11c. Invite token signing secret ─────────────────────────────────────
 # HMAC key for signed invite tokens (gateway-edge/octogee-api inviteTokens.ts).
@@ -1098,8 +1013,6 @@ completeness_row "octogee-openrouter"                           "${OPENROUTER_AP
 completeness_row "openai-embeddings"                            "${OPENAI_API_KEY:-}"                       optional
 completeness_row "voice-provider / stt_api_key"                 "${VOICE_STT_API_KEY:-}"                    optional
 completeness_row "voice-provider / tts_api_key"                 "${VOICE_TTS_API_KEY:-}"                    optional
-completeness_row "resend-secrets / api_key"                     "${RESEND_API_KEY:-}"                       launch
-completeness_row "resend-secrets / from_email"                  "${RESEND_FROM_EMAIL:-}"                    launch
 completeness_row "github-oauth / client_id"                     "${GITHUB_CLIENT_ID:-}"                     "$(octogee_oauth_provider_requirement github)"
 completeness_row "github-oauth / client_secret"                 "${GITHUB_CLIENT_SECRET:-}"                 "$(octogee_oauth_provider_requirement github)"
 completeness_row "google-oauth / client_id"                     "${G_ID:-}"                                 "$(octogee_oauth_provider_requirement google)"
@@ -1110,9 +1023,7 @@ completeness_row "google-oauth / picker_app_id"                 "${G_PICKER_APP:
 completeness_row "microsoft-oauth / client_id"                  "${MICROSOFT_CLIENT_ID:-}"                  "$(octogee_oauth_provider_requirement microsoft)"
 completeness_row "microsoft-oauth / client_secret"              "${MICROSOFT_CLIENT_SECRET:-}"              "$(octogee_oauth_provider_requirement microsoft)"
 completeness_row "connect-state-secret"                         "${CONNECT_STATE_SECRET:-}"                 launch
-completeness_row "stripe-secrets / secret_key"                  "${STRIPE_SECRET_KEY:-}"                    launch
-completeness_row "stripe-secrets / webhook_secret"              "${STRIPE_WEBHOOK_SECRET:-}"                launch
-completeness_row "stripe-secrets / price_ids"                   "${STRIPE_PRICE_IDS:-}"                     launch
+run_secret_steps ${SECRET_COMPLETENESS_STEPS[@]+"${SECRET_COMPLETENESS_STEPS[@]}"}
 case "$TARGET_ID" in
   test-west|prod-west)
     completeness_row "identity-platform-login / google client_id"     "${FIREBASE_AUTH_GOOGLE_CLIENT_ID:-}"     launch
