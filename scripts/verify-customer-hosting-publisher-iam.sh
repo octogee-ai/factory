@@ -17,7 +17,7 @@ case "${DEPLOYMENT_TARGET}" in
     ;;
   test-central)
     HOSTING_PROJECT_ID="octogee-customer-hosting-test"
-    CLUSTER_PROJECT_ID="octogee"
+    CLUSTER_PROJECT_ID="octogee-test"
     NAMESPACE="octogee-test"
     ;;
   *) echo "Unsupported deployment target: ${DEPLOYMENT_TARGET:-<missing>}" >&2; exit 2 ;;

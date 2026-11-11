@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 const repoRoot = path.resolve(__dirname, "../..");
 const verifier = path.join(repoRoot, "scripts/verify-customer-hosting-publisher-iam.sh");
 const publisher = "serviceAccount:octogee-project-publisher@octogee-customer-hosting-test.iam.gserviceaccount.com";
-const ksa = "serviceAccount:octogee.svc.id.goog[octogee-test/octogee-project-publisher]";
+const ksa = "serviceAccount:octogee-test.svc.id.goog[octogee-test/octogee-project-publisher]";
 
 function policy(bindings: Array<{ role: string; members: string[] }>): string {
   return JSON.stringify({ bindings });
@@ -83,6 +83,20 @@ describe("customer Hosting publisher IAM verifier", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Forbidden API or runner IAM");
+  });
+
+  it("rejects Workload Identity from the PROD cluster's pool that TEST used before its own project", () => {
+    const result = runVerifier({
+      serviceAccountPolicy: policy([
+        {
+          role: "roles/iam.workloadIdentityUser",
+          members: ["serviceAccount:octogee.svc.id.goog[octogee-test/octogee-project-publisher]"],
+        },
+      ]),
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Unexpected publisher Workload Identity IAM");
   });
 
   it("rejects missing append-only journal authority", () => {
