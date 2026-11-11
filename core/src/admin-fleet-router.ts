@@ -102,6 +102,15 @@ import {
   placementRetireOperationId,
   requestUserActivationLease,
 } from "./user-activation-lease.js";
+import {
+  AdminDryRunPlanned,
+  adminDryRunBody,
+  admitAdminDryRunMarker,
+  isAdminDryRun,
+  refuseUnansweredAdminDryRun,
+  respondToAdminDryRun,
+  type AdminMutationPlan,
+} from "./admin-dry-run.js";
 import { addAdminComputerRoutes } from "./admin-vm-router.js";
 import { addAdminUserRoutes, type UserAccounts, type UserSignInHosts } from "./admin-user-router.js";
 import {
@@ -4423,6 +4432,7 @@ export function addAdminFleetRoutes(
     idempotencyScope?: string;
     aliasPlan?: OperationAuditAliasPlan[];
   }): Promise<T> {
+    if (isAdminDryRun(input.req)) throw new AdminDryRunPlanned(input);
     const actor = input.req as ActorRequest;
     const headerKey = input.req.get("Idempotency-Key")?.trim();
     return runNormalFleetMutation(store, {
@@ -4441,6 +4451,8 @@ export function addAdminFleetRoutes(
       : {}),
     });
   }
+
+  router.use(admitAdminDryRunMarker);
 
   addAdminComputerRoutes(router, { store, replacementEnabled: deps.computerReplacementEnabled, journal: runAdminFleetMutation });
   addAdminUserRoutes(router, { store, accounts: deps.userAccounts, signIn: deps.userSignIn, journal: runAdminFleetMutation });
@@ -4794,6 +4806,7 @@ router.get(
         const actor = req as ActorRequest;
         const createdBy = actor.uid ?? "unknown";
         const enqueued: Array<{ uid: string; operationId: string }> = [];
+        const plans: AdminMutationPlan[] = [];
         const adopted: Array<{ uid: string; operationId: string }> = [];
         const rejected: Array<{ uid: string; reason: string; currentGatewayId?: string | null }> = [];
         for (const uid of [...new Set(uids)]) {
@@ -4827,29 +4840,44 @@ router.get(
             toGatewayId,
             source: "admin-bulk-repair",
           };
-          const operationId = await runAdminFleetMutation({
-            req,
-            what: "migrate user",
-            why: "Admin bulk migration request",
-            target: { uid, gatewayId: toGatewayId },
-            preActionStatus: { gatewayId: currentGatewayId ?? null },
-            mutation: {
-              kind: OP_KIND_MIGRATE_USER,
-              uid,
-              ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
-              toGatewayId,
-              source: "admin-bulk-repair",
-            },
-            idempotencyScope: `bulk-migration:${uid}`,
-            action: async () => createOperation(store, {
-              kind: OP_KIND_MIGRATE_USER,
-              createdBy,
-              input: operationInput,
-            }),
-          });
-          enqueued.push({ uid, operationId });
+          try {
+            const operationId = await runAdminFleetMutation({
+              req,
+              what: "migrate user",
+              why: "Admin bulk migration request",
+              target: { uid, gatewayId: toGatewayId },
+              preActionStatus: { gatewayId: currentGatewayId ?? null },
+              mutation: {
+                kind: OP_KIND_MIGRATE_USER,
+                uid,
+                ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
+                toGatewayId,
+                source: "admin-bulk-repair",
+              },
+              idempotencyScope: `bulk-migration:${uid}`,
+              action: async () => createOperation(store, {
+                kind: OP_KIND_MIGRATE_USER,
+                createdBy,
+                input: operationInput,
+              }),
+            });
+            enqueued.push({ uid, operationId });
+          } catch (error) {
+            if (!(error instanceof AdminDryRunPlanned)) throw error;
+            plans.push(error.plan);
+          }
         }
 
+        if (isAdminDryRun(req)) {
+          res.status(200).json(adminDryRunBody(plans, {
+            targetGatewayId: toGatewayId,
+            sourceGatewayId: sourceGatewayId ?? null,
+            adopted,
+            rejected,
+            generatedAt: new Date().toISOString(),
+          }));
+          return;
+        }
         res.status(202).json({
           targetGatewayId: toGatewayId,
           sourceGatewayId: sourceGatewayId ?? null,
@@ -6470,7 +6498,10 @@ router.get(
     },
   );
 
+  router.use(refuseUnansweredAdminDryRun);
+
   router.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
+    if (respondToAdminDryRun(error, res)) return;
     if (error instanceof FleetMutationIdempotencyError) {
       res.status(409).json({
         error: error.message,

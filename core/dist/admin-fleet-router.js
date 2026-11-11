@@ -18,6 +18,7 @@ import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/sha
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { builderReturnOperationId, firestoreBuilderTierReader, placementRetireOperationId, requestUserActivationLease, } from "./user-activation-lease.js";
+import { AdminDryRunPlanned, adminDryRunBody, admitAdminDryRunMarker, isAdminDryRun, refuseUnansweredAdminDryRun, respondToAdminDryRun, } from "./admin-dry-run.js";
 import { addAdminComputerRoutes } from "./admin-vm-router.js";
 import { addAdminUserRoutes } from "./admin-user-router.js";
 import { GatewayRetirementConflictError, assertGatewayRuntimeMutationUnfencedInStore, isolatedRuntimeMutationFenced, claimGatewayRetirementInStore, } from "./gateway-retirement-claim.js";
@@ -3022,6 +3023,8 @@ export function addAdminFleetRoutes(router, deps) {
     const readBuilderTier = firestoreBuilderTierReader(db);
     const accounts = firestoreUserAccountReader(db);
     async function runAdminFleetMutation(input) {
+        if (isAdminDryRun(input.req))
+            throw new AdminDryRunPlanned(input);
         const actor = input.req;
         const headerKey = input.req.get("Idempotency-Key")?.trim();
         return runNormalFleetMutation(store, {
@@ -3040,6 +3043,7 @@ export function addAdminFleetRoutes(router, deps) {
                 : {}),
         });
     }
+    router.use(admitAdminDryRunMarker);
     addAdminComputerRoutes(router, { store, replacementEnabled: deps.computerReplacementEnabled, journal: runAdminFleetMutation });
     addAdminUserRoutes(router, { store, accounts: deps.userAccounts, signIn: deps.userSignIn, journal: runAdminFleetMutation });
     router.get("/platform-runtime-config", async (_req, res, next) => {
@@ -3334,6 +3338,7 @@ export function addAdminFleetRoutes(router, deps) {
             const actor = req;
             const createdBy = actor.uid ?? "unknown";
             const enqueued = [];
+            const plans = [];
             const adopted = [];
             const rejected = [];
             for (const uid of [...new Set(uids)]) {
@@ -3366,27 +3371,44 @@ export function addAdminFleetRoutes(router, deps) {
                     toGatewayId,
                     source: "admin-bulk-repair",
                 };
-                const operationId = await runAdminFleetMutation({
-                    req,
-                    what: "migrate user",
-                    why: "Admin bulk migration request",
-                    target: { uid, gatewayId: toGatewayId },
-                    preActionStatus: { gatewayId: currentGatewayId ?? null },
-                    mutation: {
-                        kind: OP_KIND_MIGRATE_USER,
-                        uid,
-                        ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
-                        toGatewayId,
-                        source: "admin-bulk-repair",
-                    },
-                    idempotencyScope: `bulk-migration:${uid}`,
-                    action: async () => createOperation(store, {
-                        kind: OP_KIND_MIGRATE_USER,
-                        createdBy,
-                        input: operationInput,
-                    }),
-                });
-                enqueued.push({ uid, operationId });
+                try {
+                    const operationId = await runAdminFleetMutation({
+                        req,
+                        what: "migrate user",
+                        why: "Admin bulk migration request",
+                        target: { uid, gatewayId: toGatewayId },
+                        preActionStatus: { gatewayId: currentGatewayId ?? null },
+                        mutation: {
+                            kind: OP_KIND_MIGRATE_USER,
+                            uid,
+                            ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
+                            toGatewayId,
+                            source: "admin-bulk-repair",
+                        },
+                        idempotencyScope: `bulk-migration:${uid}`,
+                        action: async () => createOperation(store, {
+                            kind: OP_KIND_MIGRATE_USER,
+                            createdBy,
+                            input: operationInput,
+                        }),
+                    });
+                    enqueued.push({ uid, operationId });
+                }
+                catch (error) {
+                    if (!(error instanceof AdminDryRunPlanned))
+                        throw error;
+                    plans.push(error.plan);
+                }
+            }
+            if (isAdminDryRun(req)) {
+                res.status(200).json(adminDryRunBody(plans, {
+                    targetGatewayId: toGatewayId,
+                    sourceGatewayId: sourceGatewayId ?? null,
+                    adopted,
+                    rejected,
+                    generatedAt: new Date().toISOString(),
+                }));
+                return;
             }
             res.status(202).json({
                 targetGatewayId: toGatewayId,
@@ -4883,7 +4905,10 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
+    router.use(refuseUnansweredAdminDryRun);
     router.use((error, _req, res, next) => {
+        if (respondToAdminDryRun(error, res))
+            return;
         if (error instanceof FleetMutationIdempotencyError) {
             res.status(409).json({
                 error: error.message,
