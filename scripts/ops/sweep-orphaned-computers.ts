@@ -9,9 +9,6 @@ import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
 
 import { BUILDER_COMPUTER_INSTANCE_PREFIX } from "../../shared/types/glm.js";
 
-const FIRESTORE_PROJECT_BY_ENV = { test: "octogee-test", prod: "octogee" } as const;
-const COMPUTE_PROJECT = "octogee";
-
 export interface SweepOrphanedComputersArgs {
   environment: "test" | "prod";
   apply: boolean;
@@ -24,7 +21,8 @@ export function parseSweepOrphanedComputersArgs(argv: string[]): SweepOrphanedCo
   if (envArg !== "test" && envArg !== "prod") throw new Error("sweep-orphaned-computers needs --env=test|prod");
   const unknown = argv.filter((arg) => !arg.startsWith("--env=") && arg !== "--apply");
   if (unknown.length > 0) throw new Error(`sweep-orphaned-computers: unexpected arguments ${unknown.join(" ")}`);
-  return { environment: envArg, apply: argv.includes("--apply"), firestoreProjectId: FIRESTORE_PROJECT_BY_ENV[envArg], computeProjectId: COMPUTE_PROJECT };
+  const settings = deploymentEnvironmentSettings(envArg);
+  return { environment: envArg, apply: argv.includes("--apply"), firestoreProjectId: settings.firebaseProjectId, computeProjectId: settings.clusterProjectId };
 }
 
 export interface TerminatedComputer {
