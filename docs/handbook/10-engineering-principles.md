@@ -10,7 +10,7 @@ updated: 2026-07-08
 
 # Engineering Principles
 
-Solo operator, pre-customer. Code like your sleep depends on it — because the
+Solo operator, pre-launch. Code like your sleep depends on it — because the
 operator is on call for every silent failure.
 
 ## Core
@@ -35,7 +35,7 @@ change break, and what is the cheapest signal that would catch that break?”
 
 ## Greenfield posture
 
-Pre-broad-customer, breaking changes are cheap and correctness is the priority.
+Before broad launch, breaking changes are cheap and correctness is the priority.
 
 - No migrations, no API versioning, no backwards-compat shims, no `_var` renames
   for compat. Just change the code — clean breaks over compat hacks.

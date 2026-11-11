@@ -12,7 +12,7 @@ and local.
    and manifest. A new push cancels an older automatic main build. Building never deploys.
 2. **Deploy platform** checks out an already-built SHA and deploys its platform
    and site surfaces to the selected environment. Shared gateway slots converge
-   to that build. Ordinary deployment never changes a isolated gateway's desired
+   to that build. Ordinary deployment never changes an isolated gateway's desired
    release.
 3. Every fleet mutation writes an operations-journal entry.
 
@@ -36,8 +36,8 @@ npm run ci:build
 Waits for the SHA's complete main build, dispatching one when none exists.
 Deploys the TEST platform and site in parallel, publishes the accepted desktop
 image when the build includes one, journals each isolated gateway's desired
-release, and waits for Shared and user live-image convergence. Paused
-Users receive the desired release without waking; retired gateways are
+release, and waits for shared and isolated gateway live-image convergence.
+Paused isolated gateways receive the desired release without waking; retired gateways are
 skipped. The end-to-end tests then run against the deployed environment. A
 failure there marks the shipment failed after the deployment itself has
 completed.
@@ -49,7 +49,7 @@ npm run ci:ship-test -- --sha=<full-main-sha> --actor=operator:<name> --local
 
 ## Ship PROD
 
-Deploys a SHA that has passed Ship TEST and converges the PROD user fleet
+Deploys a SHA that has passed Ship TEST and converges the PROD isolated gateways
 with the same checks. The operator is responsible for checking that TEST
 result; nothing promotes on its own.
 
