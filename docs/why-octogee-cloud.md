@@ -86,8 +86,10 @@ when it is idle.
 - octogee-cloud is not a fork of OCE and does not implement its API, IAM or
   resource model. Where the two name the same thing, we try to use the same
   word.
-- We run on a patched OpenClaw build and send fixes upstream as we find them.
-  We would rather carry no patches.
+- The fleet features are not proven on stock OpenClaw. They are developed on a
+  patched build, listed patch by patch in
+  [OpenClaw compatibility](openclaw-compatibility.md), and we send fixes
+  upstream as we find them. We would rather carry no patches.
 
 ## Where this may be useful to OpenClaw and OCE
 

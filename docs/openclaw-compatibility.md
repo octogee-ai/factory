@@ -1,0 +1,115 @@
+# OpenClaw compatibility
+
+## Where things stand
+
+The installer in this repository starts one gateway from the stock OpenClaw
+release image and the stock Mattermost Team Edition image. That is enough for
+what is published here today: one gateway, with chat and git.
+
+The fleet features that land here next are a different matter: many users on
+shared gateways, isolated gateways, and moving a user between the two. They are
+developed and run on a patched build, upstream OpenClaw `main` at commit
+[`eae3667e`](https://github.com/openclaw/openclaw/commit/eae3667ebf9f66217c44f6318a73188defd003b8)
+plus a public overlay of three commits, published as
+[`65c8c8aa`](https://github.com/octogee-ai/openclaw/commit/65c8c8aa14d045be317918a3635c0b529207af04)
+on the branch `octogee/overlay` of the fork `octogee-ai/openclaw`. We have not
+run those features end to end on a stock release. The goal is to carry no
+patches.
+
+Every recut starts from the question "does upstream already do this?". A patch
+stays only for a reproduced bug or a behavior the platform depends on, and each
+one has a written removal condition. Fixes that upstream accepted are dropped
+from the overlay once the selected base contains them. So far 22 of our
+pull requests have been merged upstream and many former patches are gone.
+
+For an operator this means two things. You can read every patch, because the
+overlay is public and each family is listed below. And you should expect the
+fleet features to fail in the ways the tables describe on a stock gateway
+image, most visibly when users move between gateways.
+
+## What octogee-cloud needs from OpenClaw
+
+These families support features the platform itself depends on. States are as
+of 2026-11-11. "No pull request" means the fix exists only in the overlay.
+
+| Capability | octogee-cloud feature | On stock OpenClaw | Upstream | The patch can go when |
+| --- | --- | --- | --- | --- |
+| Detach an agent and reattach it on another gateway, keeping its PostgreSQL store, identity and history | Moving a user between a shared and an isolated gateway | No public transfer that keeps store identity and history; a move would recreate the agent | [#178755](https://github.com/openclaw/openclaw/pull/178755), open, needs PostgreSQL reattachment work and review. Empty recreation of retained stores is now native ([#188350](https://github.com/openclaw/openclaw/pull/188350), merged) | Native transfer keeps namespace, history and rollback custody |
+| Recreate an agent during a live import onto a reused home | Moving a user back to an isolated gateway | `agents.create` fails in config preflight when the retained store is replaced | No pull request | The selected base carries an equivalent fix |
+| Refuse to retire an agent while it has unfinished outbound deliveries | Pending deliveries survive a move | Queued replies can be lost or sent from the wrong gateway | No dedicated pull request; related fix [#163685](https://github.com/openclaw/openclaw/pull/163685) merged | Native detach and deletion fence the same queue |
+| Hand over scheduled jobs with hold, export, activation, rollback and drain | Schedules move once and only once | Plain cron create and delete; no two-gateway handoff | No pull request | Native migration offers equivalent activation, rollback and drain |
+| Admit only recognized older schedule and state formats when restoring | Moving users whose data predates the current schema | Unknown partial schemas could be admitted | No pull request | Those retained input formats are retired |
+| Reload only the account that changed; leave siblings running | Adding or removing a user on a shared gateway | Unrelated accounts drain and reconnect | [#167431](https://github.com/openclaw/openclaw/pull/167431), open, needs maintainer security approval | Native scoped reload passes the same controls |
+| Strict channel stop that joins startup and cleanup and retires only removed accounts | Removing a user from a shared gateway | A hung startup or late stop can leave work running or stop a sibling | No dedicated pull request; part of the [#167431](https://github.com/openclaw/openclaw/pull/167431) area | Native proves hung-startup joins and sibling preservation |
+| Shared worker and lifecycle lease retirement with one visible deadline | Many agents on one gateway; agent removal | A failed concurrent admission can strand a shared worker and block secret reloads | No pull request | Native keeps serving leases through failed admission and refuses late authorization |
+| Channel membership as an authoritative, revocable grant | Chat-channel access on a shared gateway | Native filters invite-only and linked sessions but has no authoritative empty-set sync or revocation for this policy | No pull request; native [#194791](https://github.com/openclaw/openclaw/pull/194791) (merged) covers part | Native membership methods give equivalent revocation |
+| One session per Mattermost channel that keeps reply threads | Chat-channel semantics on a shared gateway | Thread-scoped sessions only | No pull request | Native supports the option, or the platform adopts thread sessions |
+| Requester identity carried through queued work, one approval reviewer, and a separate verified creator for scheduled runs | Knowing who asked for an action when approvals are involved | Requester facts can be lost across queued or held continuations | No pull request; earlier fix [#159396](https://github.com/openclaw/openclaw/pull/159396) merged | Native propagation passes delayed-continuation controls and exposes a verified job creator |
+| PostgreSQL startup during backup recovery | PostgreSQL agent stores; isolated gateways booting on a retained home | Startup fails during recovery | [#193596](https://github.com/openclaw/openclaw/pull/193596), open, ready for review | Merged into the selected base |
+| Offline config reduction kept across restart (`config patch --allow-size-drop`) and a first-write health baseline | Preparing an isolated gateway before it serves | Recovery restores the larger backup config | [#193636](https://github.com/openclaw/openclaw/pull/193636), open, draft | Merged, or the public option is decided another way |
+| Reconnect idle PostgreSQL connections after a host suspension | Suspending and resuming an isolated gateway's VM | The first request after resume fails | [#193875](https://github.com/openclaw/openclaw/pull/193875), open | Merged into the selected base |
+| Read the web-secret index through the async PostgreSQL reader | PostgreSQL agent stores | `secrets.reload` fails on a cold store | No pull request | Native awaits the worker-backed reader |
+| Republish a deferred agent's model after a concurrent refresh | Creating agents while the gateway reloads | The agent stays connected but cannot reply | No pull request | The selected base carries an equivalent fix |
+
+## Patches that are not platform requirements
+
+| Family | Why it exists | Upstream |
+| --- | --- | --- |
+| Voice relay and desktop control limits | Hosted voice and desktop features | Steering fixes [#189036](https://github.com/openclaw/openclaw/pull/189036) and [#189418](https://github.com/openclaw/openclaw/pull/189418), open |
+| Mattermost message actions, multi-file sends, acknowledgement reactions, channel events, compact tool progress | Richer chat in the hosted product | [#186893](https://github.com/openclaw/openclaw/pull/186893) and [#186891](https://github.com/openclaw/openclaw/pull/186891), open |
+| Final-reply notification flag | Activity view in the hosted app | No pull request |
+| Dashboard participant labels | Shows who said what in the embedded dashboard | No pull request |
+| `doctor --skip-recovery-backups` | Store import and upgrade paths that already keep their own backups | No pull request |
+| npm 12.2.1 pin and distribution patch | Packaging: dependency fixes that upstream npm does not ship yet | Not an OpenClaw change |
+| Generated schemas and test support | Describe the retained APIs above | Go with their features |
+| Memory shadow database retirement | Listed in the overlay table, but the build notes say native [#197230](https://github.com/openclaw/openclaw/pull/197230) (merged) replaced it | None needed |
+
+[#191463](https://github.com/openclaw/openclaw/pull/191463) (agent removal
+latency, open) is a contribution, not a carried patch.
+
+## Mattermost
+
+octogee-cloud installs the stock Mattermost Team Edition image. A stock install
+lives with two limits.
+
+- **Concurrent thread replies.** Replies sent to the same root post at the same
+  moment can fail or leave reply counts and participants wrong. Upstream issue
+  [mattermost/mattermost#31650](https://github.com/mattermost/mattermost/issues/31650)
+  is open, and the proposed fix
+  [mattermost/mattermost#33825](https://github.com/mattermost/mattermost/pull/33825)
+  is open. Agents reply often, so this shows up more than in human chat.
+- **User limit without a license.** Mattermost's
+  [editions page](https://docs.mattermost.com/product-overview/editions-and-offerings)
+  says Team Edition is for use under 250 activated users, and its
+  [error codes page](https://docs.mattermost.com/administration-guide/manage/admin/error-codes.html)
+  describes the safety-limit error. In the
+  [v12.0.1 source](https://github.com/mattermost/mattermost/blob/v12.0.1/server/channels/app/limits.go),
+  an unlicensed server has a hard limit of 250 and counts active users with
+  default options, which exclude bots and deactivated accounts. The limit is
+  server-wide. Each agent is a bot, so the limit counts people. At the limit, the
+  same source refuses to create or reactivate user accounts. octogee-cloud does not work
+  around it: an operator expecting more people needs a Mattermost license.
+
+## How to check this yourself
+
+The overlay source is the branch `octogee/overlay` on
+[`octogee-ai/openclaw`](https://github.com/octogee-ai/openclaw/tree/octogee/overlay).
+Each cut is also tagged; this one is `octogee-overlay-2026-11-11`. Diff the
+branch against the upstream base commit above to see every changed line. The
+tables are drawn from the build notes we keep for each cut, which are not in
+this repository: a table of retained families with removal conditions, notes on
+individual fixes, and a list of open contributions. Pull request states come from the GitHub API on the date
+above. We decided "platform needs it" by matching each family to the
+platform's architecture and security documents.
+
+## What we have not done
+
+- No end-to-end run of the fleet features on a stock OpenClaw release, so we
+  cannot say exactly what breaks first.
+- Some classifications are judgment calls: the legacy-format restore row, the
+  deferred model republish row, the delivery-custody and strict-stop rows (whose
+  upstream links are related work, not the same change), and the scheduled-run
+  creator, which mainly serves a product connector.
+- Several removal conditions need upstream to adopt a behavior it may not want,
+  such as one session per channel or authoritative membership sync. Where that
+  happens, we expect to change octogee-cloud rather than keep the patch.
