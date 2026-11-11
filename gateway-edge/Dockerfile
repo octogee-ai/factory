@@ -1,4 +1,4 @@
-FROM node:26.13.0-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS platform-npm
+FROM node:26.13.0-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS platform-npm
 ARG NPM_VERSION=12.2.1
 RUN apt-get update && apt-get install -y --no-install-recommends patch && rm -rf /var/lib/apt/lists/*
 COPY infra/gateway/openclaw-tarball/npm-12.2.1.patch infra/gateway/openclaw-tarball/npm-distribution.test.mjs /tmp/
@@ -15,7 +15,7 @@ RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fun
 # mirror each source file's location relative to rootDir ("..", the container
 # root /) — produce dist/gateway-edge/src/product-main.js, matching package.json
 # main + CMD.
-FROM node:26.13.0-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS builder
+FROM node:26.13.0-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS builder
 RUN rm -rf /usr/local/lib/node_modules/npm
 COPY --from=platform-npm /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 WORKDIR /gateway-edge
@@ -37,15 +37,15 @@ COPY gateway-edge/src/ ./src/
 # MODULE_NOT_FOUND @shared/* runtime failure. See README "Shared code".
 RUN npm run build
 
-FROM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS gitleaks-builder
+FROM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS gitleaks-builder
 ARG GITLEAKS_VERSION=8.30.1
 RUN GODEBUG=http2client=0 CGO_ENABLED=0 go install \
       -ldflags="-X github.com/zricethezav/gitleaks/v8/version.Version=${GITLEAKS_VERSION} -X github.com/zricethezav/gitleaks/v8/version.DefaultMsg=${GITLEAKS_VERSION}" \
       github.com/zricethezav/gitleaks/v8@v${GITLEAKS_VERSION} \
     && test "$(/go/bin/gitleaks version)" = "${GITLEAKS_VERSION}"
 
-FROM node:26.13.0-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39
-ARG OS_PACKAGE_REFRESH=2026-11-02
+FROM node:26.13.0-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072
+ARG OS_PACKAGE_REFRESH=2026-11-11
 RUN test -n "$OS_PACKAGE_REFRESH" && apt-get update && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules/npm
 COPY --from=platform-npm /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm

@@ -1,7 +1,7 @@
-FROM node:26.13.0-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9 AS gateway-core-system
+FROM node:26.13.0-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68 AS gateway-core-system
 
 ARG NPM_VERSION=12.2.1
-ARG OS_PACKAGE_REFRESH=2026-11-02
+ARG OS_PACKAGE_REFRESH=2026-11-11
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -24,9 +24,9 @@ ENV HOME=/home/node
 
 FROM gateway-core-system AS gateway-system
 
-ARG FD_VERSION=10.5.0
-ARG CLAUDE_CODE_VERSION=2.1.316
-ARG CODEX_VERSION=0.166.0
+ARG FD_VERSION=10.5.2
+ARG CLAUDE_CODE_VERSION=2.1.322
+ARG CODEX_VERSION=0.167.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv sqlite3 xxd \
@@ -35,8 +35,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg imagemagick chromium fonts-liberation fonts-noto-color-emoji \
     pandoc htop strace dnsutils net-tools fzf \
     && case "$(dpkg --print-architecture)" in \
-      amd64) FD_SHA256=1fca9f8fb221f26fe37b425db4935dc8180099bdecfd8e031538bfc9396e95f8 ;; \
-      arm64) FD_SHA256=a3128d8e206dd646a27f4637ca081f311df2d6f21cd87bbead7fc92cc0952192 ;; \
+      amd64) FD_SHA256=342a9d1618c4340668cb7ad96d353064bf226ac403add80e587103975d5fa49c ;; \
+      arm64) FD_SHA256=5e42e06db345fe3b0b337c7efb2ec6b29eb2cf955e3826a152160940770c6db6 ;; \
       *) echo "Unsupported fd architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
     esac \
     && curl -fsSL "https://github.com/sharkdp/fd/releases/download/v${FD_VERSION}/fd_${FD_VERSION}_$(dpkg --print-architecture).deb" -o /tmp/fd.deb \

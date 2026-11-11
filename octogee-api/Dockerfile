@@ -1,4 +1,4 @@
-FROM node:26.13.0-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS platform-npm
+FROM node:26.13.0-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS platform-npm
 ARG NPM_VERSION=12.2.1
 RUN apt-get update && apt-get install -y --no-install-recommends patch && rm -rf /var/lib/apt/lists/*
 COPY infra/gateway/openclaw-tarball/npm-12.2.1.patch infra/gateway/openclaw-tarball/npm-distribution.test.mjs /tmp/
@@ -19,7 +19,7 @@ RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fun
 #
 # Mirror of gateway-edge's build pattern: rootDir=.. so tsc emits
 # dist/octogee-api/src/ alongside dist/gateway-edge/src/ (the routes).
-FROM node:26.13.0-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS builder
+FROM node:26.13.0-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS builder
 RUN rm -rf /usr/local/lib/node_modules/npm
 COPY --from=platform-npm /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 WORKDIR /octogee-api
@@ -58,8 +58,8 @@ RUN npm run build
 # Project code runs only in this deliberately narrow image. It contains the
 # fixed runner wrapper, archive validator, npm, and JSZip—no API routes, core
 # runtime, cloud SDKs, platform credentials, or production dependency tree.
-FROM node:26.13.0-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS project-runner
-ARG OS_PACKAGE_REFRESH=2026-11-02
+FROM node:26.13.0-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS project-runner
+ARG OS_PACKAGE_REFRESH=2026-11-11
 RUN test -n "$OS_PACKAGE_REFRESH" && apt-get update && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules/npm
 COPY --from=platform-npm /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
@@ -73,8 +73,8 @@ USER node
 ENTRYPOINT ["node", "dist/octogee-api/src/project-runner.js"]
 
 # ── Runtime stage ────────────────────────────────────────────────────
-FROM node:26.13.0-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39
-ARG OS_PACKAGE_REFRESH=2026-11-02
+FROM node:26.13.0-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072
+ARG OS_PACKAGE_REFRESH=2026-11-11
 RUN test -n "$OS_PACKAGE_REFRESH" && apt-get update && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules/npm
 COPY --from=platform-npm /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm

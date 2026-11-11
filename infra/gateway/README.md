@@ -27,12 +27,10 @@ the no-transformation requirement applies to freshly authored platform defaults.
 
 ## Builder dependency audit
 
-The remaining five moderate audit entries derive from minimatch's broad
-`<11.0.1` advisory range. Installed minimatch 3.1.5, 5.1.9, and 6.2.3 do not
-implement the preprocessing expansion described by GHSA-g3hv-75wg-m249. Their
-legacy APIs remain required by native consumers; retain them until those owners
-migrate, without suppressing the advisory or forcing an incompatible major.
-The Builder toolchain dependency graph uses glob 14.0.3 and minimatch 11.0.4.
+GHSA-g3hv-75wg-m249 covers minimatch `>=7.0.0 <11.0.1`. The legacy minimatch
+3.1.5, 5.1.9, and 6.2.3 copies that native consumers still require sit outside
+that range. The Builder toolchain dependency graph uses glob 14.0.3 and
+minimatch 11.0.4, and `npm audit` reports no advisories against its lock.
 
 ## Build
 

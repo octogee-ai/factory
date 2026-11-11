@@ -128,8 +128,8 @@ describe("gateway base image", () => {
     ) as { packages: Record<string, { version?: string; integrity?: string }> };
 
     expect(packageJson.dependencies).toEqual({
-      "@anthropic-ai/claude-code": "2.1.317",
-      "@openai/codex": "0.166.0",
+      "@anthropic-ai/claude-code": "2.1.322",
+      "@openai/codex": "0.167.1",
       "@sparticuz/chromium": "153.0.0",
       "firebase-tools": "15.34.2",
       "npm-check-updates": "23.1.1",
@@ -138,18 +138,18 @@ describe("gateway base image", () => {
       "typescript": "7.0.2",
     });
     expect(packageJson.allowScripts).toEqual({
-      "@anthropic-ai/claude-code@2.1.317": true,
+      "@anthropic-ai/claude-code@2.1.322": true,
       "esbuild@0.28.2": true,
       "pnpm@12.17.0": true,
       "protobufjs@7.6.6": true,
-      "re2@1.26.1": true,
+      "re2@1.27.0": true,
     });
     expect(packageLock.packages["node_modules/@anthropic-ai/claude-code"]).toMatchObject({
-      version: "2.1.317",
+      version: "2.1.322",
       integrity: expect.stringMatching(/^sha512-/),
     });
     expect(packageLock.packages["node_modules/@openai/codex"]).toMatchObject({
-      version: "0.166.0",
+      version: "0.167.1",
       integrity: expect.stringMatching(/^sha512-/),
     });
     expect(packageLock.packages["node_modules/@sparticuz/chromium"]).toMatchObject({
@@ -213,9 +213,9 @@ describe("gateway base image", () => {
 
     expect(installed.has("ripgrep")).toBe(true);
     expect(installed.has("fd-find")).toBe(false);
-    expect(baseDockerfile).toContain("ARG FD_VERSION=10.5.0");
+    expect(baseDockerfile).toContain("ARG FD_VERSION=10.5.2");
     expect(baseDockerfile).toContain(
-      "1fca9f8fb221f26fe37b425db4935dc8180099bdecfd8e031538bfc9396e95f8",
+      "342a9d1618c4340668cb7ad96d353064bf226ac403add80e587103975d5fa49c",
     );
     expect(baseDockerfile).toContain(
       'echo "${FD_SHA256}  /tmp/fd.deb" | sha256sum -c -',
