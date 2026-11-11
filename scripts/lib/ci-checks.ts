@@ -14,7 +14,7 @@ export interface CheckJob {
 
 const emulatorDirectories: Partial<Record<JobKey, string>> = {
   [JOBS.coreEmulator]: "core",
-  [JOBS.customerLifecycleEmulator]: "scripts",
+  [JOBS.userLifecycleEmulator]: "scripts",
   [JOBS.functionsEmulator]: "functions",
   [JOBS.gatewayEdgeEmulator]: "gateway-edge",
   [JOBS.glmControllerEmulator]: "glm-controller",

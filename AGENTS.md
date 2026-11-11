@@ -5,9 +5,9 @@ file — Claude, Codex, and anything else working here share one context). Just-
 
 ## What Is Octogee
 
-Personal AI partner platform — "Eight arms. One dream." Each Builder gets an AI coach
+Personal AI partner platform — "Eight arms. One dream." Each user gets an AI agent
 (their Agent), a workspace with chat (Mattermost) + git (Gitea) + a managed hosting
-pipeline. Builders create projects (each with a chat channel, repo, and canvas home
+pipeline. Users create projects (each with a chat channel, repo, and canvas home
 page); others can join workspaces or projects independently. Admins operate via a
 separate dashboard.
 
@@ -21,7 +21,7 @@ site/            Astro 5 — marketing + public SSR (octogee.com)
 app/             Vite + React PWA, all roles (app.octogee.com)
 octogee-api/     Express cluster singleton — the HTTP API (api.octogee.com)
 gateway-edge/    Express sidecar on each gateway pod — locality routes + MM WS proxy
-glm-controller/  "Cowboy" — gateway-fleet lifecycle (provision/retire/roll, /g routing)
+glm-controller/  Fleet controller — gateway-fleet lifecycle (provision/retire/roll, /g routing)
 functions/       Firebase Functions (Firestore triggers + scheduled)
 shared/          @octogee/shared — TypeScript types only (no React)
 scripts/         in-pod provisioner + operator tooling
@@ -30,7 +30,7 @@ tests/ firestore-rules-tests/  cross-package + security-rules tests
 docs/            start at docs/INDEX.md
 ```
 
-The per-customer Agent runtime is the OpenClaw **gateway pod** (built from
+The per-user Agent runtime is the OpenClaw **gateway pod** (built from
 `infra/gateway/`); gateway-edge and the provisioner run inside it. Ready-to-serve
 `static-site` build/test/preview uses a bounded, non-executing API materializer.
 Vite/Astro build/test/preview use external ephemeral gVisor Jobs, and publish
@@ -75,7 +75,7 @@ cd octogee-api && npm run dev  # :3001 (the API)
 - **Coverage gaps:** `npm run --prefix scripts audit-coverage` (import-graph, both suffixes +
   `@/`/`@shared` aliases) — never a `*.spec.ts` glob, which false-flags repeatedly.
 - **`scripts/` test-gate:** throwaway operator tooling is exempt, but shared/runtime code
-  under `scripts/lib/` (e.g. `customer-lifecycle`, `provision-reconcile`, `git`, `config`)
+  under `scripts/lib/` (e.g. `user-lifecycle`, `provision-reconcile`, `git`, `config`)
   requires behavioral coverage. Blast radius decides, not the directory.
 
 ## Workflow — keep it small
@@ -121,13 +121,13 @@ npm run ci:ship-prod -- --sha=<test-passed-main-sha> --actor=operator:<name>
 Hosted operator commands dispatch and wait for an exact GitHub Actions run.
 `ci:build` builds committed main locally; `ci:deploy -- --local` and
 `ci:ship-test -- --local` and `ci:ship-prod -- --local` use the operator host. Desktop installer builds remain explicit. Build main constructs and accepts the
-Desktop VM after the container images, bound to the exact Builder Gateway digest.
+Desktop VM after the container images, bound to the exact isolated Gateway digest.
 Ship TEST requires that complete build before deploying. Public desktop downloads stay on GitHub Releases.
 Do not add deployment or fleet authority to the main/check identities.
 See [Handbook 21](docs/handbook/21-deploy-and-cicd.md) for credentials and cutover.
 
-For a change confined to `glm-controller/`, test it on TEST with the one-off Cowboy image swap in
-[Handbook 21](docs/handbook/21-deploy-and-cicd.md#cowboy-only-changes) before merging, rather than waiting for Build main and Ship TEST.
+For a change confined to `glm-controller/`, test it on TEST with the one-off fleet controller image swap in
+[Handbook 21](docs/handbook/21-deploy-and-cicd.md#fleet-controller-only-changes) before merging, rather than waiting for Build main and Ship TEST.
 
 The deployment path preserves three invariants:
 
@@ -135,30 +135,30 @@ The deployment path preserves three invariants:
    digest-addressed image family and manifest. Building never deploys.
 2. **Deploy platform** (`npm run ci:deploy`) checks out an already-built SHA and
    deploys its platform and site surfaces (in parallel) to the selected environment. The shared pool
-   rides it: Cowboy converges every `shared-N` slot to the build's gateway
-   image. It never mutates Builder gateway desired state.
+   rides it: the fleet controller converges every `shared-N` slot to the build's gateway
+   image. It never mutates isolated gateway desired state.
 3. Every fleet mutation writes an operations-journal entry.
 
-Builder gateway deployment is an operator command, independent of platform
+Isolated gateway deployment is an operator command, independent of platform
 deployment: `fleet --env=<test|prod> gw deploy <gateway-id> --sha=<full-sha> --apply`.
-The command may target any non-retired Builder gateway (shared slots are
+The command may target any non-retired isolated gateway (shared slots are
 rejected), resolves the existing immutable manifest, writes that gateway's
-desired release, and returns. Cowboy owns live convergence. There is no semver release, TEST-to-PROD promotion,
+desired release, and returns. The fleet controller owns live convergence. There is no semver release, TEST-to-PROD promotion,
 release reservation, or automatic CI fleet authority. **Ship TEST** is an explicit
 operator command (`npm run ci:ship-test`) that waits for the SHA's running Build main run (dispatching one
 when there is no manifest or running build), deploys TEST platform/site, publishes the desktop
-image when included in the build, journals Builder desired releases, and waits for
-Shared/Builder live image convergence. Paused Builders receive the desired release
+image when included in the build, journals isolated gateway desired releases, and waits for
+shared and isolated live image convergence. Paused isolated gateways receive the desired release
 without waking; retired gateways are skipped. **Ship PROD** deploys a TEST-passed SHA and
-converges the PROD Builder fleet. Cowboy attempts the latest accepted computer image when
-a stopped computer boots or restarts after preemption, retaining the home disk and logging
-any skipped upgrade. Project autosave and shutdown flush are best effort. Active computers
-stay running and suspended computers resume on their current boot when the Gateway image is unchanged.
-A suspended computer changing Gateway images is stopped before rebinding and cold-started on the retained home.
+converges the PROD isolated gateways. The fleet controller attempts the latest accepted VM image when
+a stopped VM boots or restarts after preemption, retaining the home disk and logging
+any skipped upgrade. Project autosave and shutdown flush are best effort. Active VMs
+stay running and suspended VMs resume on their current boot when the Gateway image is unchanged.
+A suspended VM changing Gateway images is stopped before rebinding and cold-started on the retained home.
 Admin **Replace
 computer** forces a rollout.
 Build main constructs the desktop VM before it succeeds, so the boot image carries
-that build's Gateway image and new computers skip the image pull. The image is
+that build's Gateway image and new VMs skip the image pull. The image is
 keyed on the Gateway digest and desktop inputs and reused when unchanged. The
 accepted companion is immutable and bound to the main manifest and Gateway digest.
 Ship TEST, including `--local`, waits for this complete build; it never constructs
@@ -189,22 +189,22 @@ TEST and PROD run in separate GCP projects, each with its own GKE cluster. MM We
   gateway-edge sidecar for workspace git FS, deploy-preview,
   byosub-internal, MM WS proxy). gateway-edge keeps `/api/g/<gatewayId>/*` as its
   internal sidecar mount behind the router.
-- **Auth.** Firebase ID token → `requireAuth()`; admin role is the platform-state Builder `role`
+- **Auth.** Firebase ID token → `requireAuth()`; admin role is the platform-state user `role`
   (`req.isAdmin`); the PWA reads it from `GET /api/account/role`.
   Service-to-service: tenant-bound K8s SA tokens + dedicated bearers/HMAC signing (see docs/operations/INTERNAL-SERVICE-AUTH.md).
-- **Chat.** Team-per-workspace in MM; Builder MM token in `users/{uid}/secrets/mattermost`.
+- **Chat.** Team-per-workspace in MM; user MM token in `users/{uid}/secrets/mattermost`.
   gateway-edge swaps Firebase→MM token, proxies via K8s DNS. WS tickets: UUID, 30s TTL,
   one-time. Channels: `{slug}-general`, `{slug}-{projectSlug}`, `octogee-{slug}-coach`.
 - **Gitea.** Workspace repo `{slug}-workspace`, project repo `{workspaceSlug}-{projectSlug}`;
-  text in Gitea, binaries in GCS (`.files/manifest.json`); per-customer `GITEA_TOKEN`.
+  text in Gitea, binaries in GCS (`.files/manifest.json`); per-user `GITEA_TOKEN`.
 - **Membership.** Workspace and project membership are independent; `{slug}-general` channel
   membership is the canonical workspace-membership signal.
-- **Provisioning.** Onboarding done → Cloud Function records `signupAdmission` → Cowboy
+- **Provisioning.** Onboarding done → Cloud Function records `signupAdmission` → the fleet controller
   admits through the platform store (sets `provisioning.status`) → in-pod provisioner
-  (scripts, in the gateway pod) creates MM team + Builder + Agent (`octogee-{slug}-coach`)
+  (scripts, in the gateway pod) creates MM team + user + Agent (`octogee-{slug}-coach`)
   + Gitea org + workspace repo. Project create = `POST /api/projects`
   (octogee-api): Firestore doc + MM channel + Gitea repo; client reacts to the doc.
-- **Gateways.** glm-controller ("Cowboy") provisions/retires/rolls per-customer gateway pods
+- **Gateways.** glm-controller (the fleet controller) provisions/retires/rolls per-user gateway pods
   and reconciles the static shared edge routes; per-gateway state in `glmGateways/{id}`.
 - **Canvas.** Workspace/project home page — markdown (a repo file, default `README.md`) or
   app-preview iframe.
@@ -219,7 +219,7 @@ in the repo only; the operator reads it via the Playbook surface (dogfood), not 
 Start at **[docs/INDEX.md](docs/INDEX.md)**. Essentials:
 [Handbook](docs/handbook/00-index.md) (deploy/verify/troubleshoot/rotate + dev workflow) ·
 [SURFACE-ARCHITECTURE](docs/architecture/SURFACE-ARCHITECTURE.md) ·
-[GATEWAY-PLATFORM-SPEC](docs/architecture/GATEWAY-PLATFORM-SPEC.md) (fleet/Cowboy) ·
+[GATEWAY-PLATFORM-SPEC](docs/architecture/GATEWAY-PLATFORM-SPEC.md) (fleet controller) ·
 [SECURITY](docs/operations/SECURITY.md) · [MATTERMOST](docs/operations/MATTERMOST.md) ·
 [DECISIONS](docs/decisions/DECISIONS.md) (why).
 Code anchors: `app/src/routes/appRoutes.ts`, `octogee-api/src/index.ts`,
