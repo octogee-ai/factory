@@ -1,10 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
-  TIER_CREW_ACCESS,
   getProvisioning,
   CREW_ROLES,
   CREW_IDENTITY,
-  TIERS,
 } from "@octogee/core/crew";
 
 describe("CREW_ROLES", () => {
@@ -18,20 +16,6 @@ describe("CREW_IDENTITY", () => {
     expect(CREW_IDENTITY.coach.name).toBe("Octo");
     expect(CREW_IDENTITY.coach.emoji).toBe("🐙");
     expect(CREW_IDENTITY.coach.model).toBe("platform-openai/gpt-6.1-terra");
-  });
-});
-
-describe("TIERS", () => {
-  it("has 5 tiers", () => {
-    expect(TIERS).toEqual(["trial", "free", "hobby", "pro", "max"]);
-  });
-});
-
-describe("TIER_CREW_ACCESS", () => {
-  it("all tiers get only agent", () => {
-    for (const tier of TIERS) {
-      expect(TIER_CREW_ACCESS[tier]).toEqual(["coach"]);
-    }
   });
 });
 

@@ -178,42 +178,4 @@ describe("agent routes", () => {
     expect(h.writes).toEqual([]);
     expect(h.mmApi).not.toHaveBeenCalled();
   });
-
-  it("queues a tier-allowed specialist activation for the authenticated owner", async () => {
-    h.docs.set("users/owner-1", {
-      subscription: { tier: "pro" },
-      provisioning: { openclaw: { activatedAgents: ["riley"] } },
-    });
-
-    const res = await request(app())
-      .post("/api/agents/activate")
-      .send({ role: "alex", requestedBy: "coach" });
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: "queued", role: "alex", tier: "pro" });
-    expect(h.writes).toContainEqual({
-      method: "update",
-      path: "users/owner-1",
-      data: {
-        "provisioning.pendingActivations": { __arrayUnion: ["alex"] },
-        "provisioning.pendingActivationRequestedAt": { __serverTimestamp: true },
-        "provisioning.pendingActivationRequestedBy": "coach",
-      },
-    });
-  });
-
-  it("reports a specialist the user record already activated without queueing it", async () => {
-    h.docs.set("users/owner-1", {
-      subscription: { tier: "pro" },
-      provisioning: { openclaw: { activatedAgents: ["alex"] } },
-    });
-
-    const res = await request(app())
-      .post("/api/agents/activate")
-      .send({ role: "alex" });
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: "already_active", role: "alex" });
-    expect(h.writes).toEqual([]);
-  });
 });

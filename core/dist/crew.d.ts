@@ -6,10 +6,6 @@ export declare const CREW_IDENTITY: Record<CrewRole, {
     emoji: string;
     model: string;
 }>;
-export declare const TIERS: readonly ["trial", "free", "hobby", "pro", "max"];
-export type Tier = typeof TIERS[number];
-export declare const TIER_CREW_ACCESS: Record<string, CrewRole[]>;
-export declare const TIER_COLLABORATOR_LIMITS: Record<string, number>;
 export interface UserProvisioning {
     slug: string;
     status: string;

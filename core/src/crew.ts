@@ -8,25 +8,6 @@ export const CREW_IDENTITY: Record<CrewRole, { name: string; emoji: string; mode
   coach: { name: "Octo", emoji: "🐙", model: DEFAULT_USER_AGENT_MODEL_REF },
 };
 
-export const TIERS = ["trial", "free", "hobby", "pro", "max"] as const;
-export type Tier = typeof TIERS[number];
-
-export const TIER_CREW_ACCESS: Record<string, CrewRole[]> = {
-  trial: ["coach"],
-  free:  ["coach"],
-  hobby: ["coach"],
-  pro:   ["coach"],
-  max:   ["coach"],
-};
-
-export const TIER_COLLABORATOR_LIMITS: Record<string, number> = {
-  free:  0,
-  trial: 3,
-  hobby: 3,
-  pro:   10,
-  max:   Infinity,
-};
-
 export interface UserProvisioning {
   slug: string;
   status: string;
