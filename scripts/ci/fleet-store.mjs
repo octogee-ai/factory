@@ -81,6 +81,7 @@ export function fleetStoreDependencies(environment) {
       let forward;
       try {
         await kubectl(['run', name, `--image=${settings.image}`, '--restart=Never', '--labels=app=platform-state-migrate', `--overrides=${JSON.stringify(pod)}`]);
+        await kubectl(['wait', '--for=create', `pod/${name}`, '--timeout=60s']);
         await kubectl(['wait', '--for=condition=Ready', `pod/${name}`, '--timeout=180s']);
         // eslint-disable-next-line sonarjs/no-os-command-from-path
         forward = spawn('kubectl', [...base, 'port-forward', '--address=127.0.0.1', `pod/${name}`, ':15432'], { stdio: ['ignore', 'pipe', 'pipe'] });

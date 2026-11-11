@@ -1,5 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
-import { withFleetStore } from "../ci/fleet-store.mjs";
+import { fleetStoreDependencies, withFleetStore } from "../ci/fleet-store.mjs";
+
+const cluster = vi.hoisted(() => ({ calls: [] as string[][], readable: new Set<string>() }));
+
+vi.mock("node:child_process", async () => {
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  return {
+    execFile: (_file: string, args: string[], _options: unknown, callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void) => {
+      const command = args.slice(4);
+      cluster.calls.push(command);
+      const pod = command.find((arg) => arg.startsWith("pod/"))?.slice("pod/".length);
+      if (command[0] === "wait" && command.includes("--for=create") && pod) cluster.readable.add(pod);
+      if (command[0] === "wait" && command.includes("--for=condition=Ready") && pod && !cluster.readable.has(pod)) {
+        callback(new Error(`Error from server (NotFound): pods "${pod}" not found`));
+        return;
+      }
+      callback(null, { stdout: "", stderr: "" });
+    },
+    spawn: () => {
+      const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn() });
+      setImmediate(() => child.stdout.write("Forwarding from 127.0.0.1:43210 -> 15432\n"));
+      return child;
+    },
+  };
+});
 
 describe("release fleet store", () => {
   it("uses the existing environment for a Firestore deployment", async () => {
@@ -54,5 +79,18 @@ describe("release fleet store", () => {
     const tunnel = vi.fn();
     await expect(withFleetStore({ inspect: async () => ({ backend: "postgres", sslmode: "disable" }), tunnel }, async () => {})).rejects.toThrow("disable");
     expect(tunnel).not.toHaveBeenCalled();
+  });
+});
+
+describe("platform database tunnel", () => {
+  it("waits for its pod to be readable before waiting for it to become ready", async () => {
+    const tunnel = await fleetStoreDependencies("prod").tunnel({ host: "10.89.0.12", port: 5432, image: "cowboy@sha256:abc" });
+
+    expect(tunnel.port).toBe(43210);
+    const verbs = cluster.calls.map((command) => command.slice(0, 2).join(" "));
+    expect(verbs.indexOf("wait --for=create")).toBeGreaterThan(verbs.indexOf(`run ${cluster.calls[0][1]}`));
+    expect(verbs.indexOf("wait --for=condition=Ready")).toBeGreaterThan(verbs.indexOf("wait --for=create"));
+    await tunnel.close();
+    expect(cluster.calls.at(-1)).toEqual(expect.arrayContaining(["delete", "pod", cluster.calls[0][1]]));
   });
 });
