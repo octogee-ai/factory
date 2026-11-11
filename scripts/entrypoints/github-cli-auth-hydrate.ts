@@ -20,8 +20,8 @@ export async function runGithubCliAuthConvergence(opts: {
     try {
       const result = await hydrate();
       if (result === "skipped") return;
-      if (result === "hydrated") log("[github-cli-auth] refreshed Builder GitHub CLI authentication");
-      if (result === "cleared" && lastResult !== result) log("[github-cli-auth] GitHub authentication disconnected or unavailable to this Builder");
+      if (result === "hydrated") log("[github-cli-auth] refreshed user GitHub CLI authentication");
+      if (result === "cleared" && lastResult !== result) log("[github-cli-auth] GitHub authentication disconnected or unavailable to this user");
       lastResult = result;
     } catch (error) {
       const reason = error instanceof GithubCliAuthError ? error.message : "local filesystem, gateway credential, or network failure";

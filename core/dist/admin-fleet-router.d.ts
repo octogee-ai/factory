@@ -8,7 +8,7 @@ import { type SizingTier } from "@octogee/shared/types/sizing";
 import { type GatewayPricingMode } from "@octogee/shared/types/cost-estimator";
 import { type UserAccounts, type UserSignInHosts } from "./admin-user-router.js";
 import { type DurableGatewayRoot } from "./gateway-release-append.js";
-import { type BuilderAccountReader } from "./builder-account.js";
+import { type UserAccountReader } from "./user-account.js";
 import type { PlatformStateStore } from "./platform-state/store.js";
 import { type CentralReleaseAuthority } from "./artifact-registry.js";
 export interface FleetLogger {
@@ -152,11 +152,11 @@ export declare function projectGatewaySummary(doc: FirestoreDocLike, glmDoc: Glm
     disposableRuntime: ReturnType<typeof projectDisposableRuntime>;
     podReplacements: GatewayPodReplacementSummary | null;
 };
-export type AdminBuilderRuntimeLifecycle = "requested" | "provisioning" | "activating" | "active" | "returning" | "retiring" | "failed";
-export declare function projectBuilderRuntime(userDoc: FirestoreDocLike, gatewaysById: ReadonlyMap<string, GlmDoc>, operationsById: ReadonlyMap<string, GlmDoc>, now: number): {
+export type AdminIsolatedRuntimeLifecycle = "requested" | "provisioning" | "activating" | "active" | "returning" | "retiring" | "failed";
+export declare function projectIsolatedRuntime(userDoc: FirestoreDocLike, gatewaysById: ReadonlyMap<string, GlmDoc>, operationsById: ReadonlyMap<string, GlmDoc>, now: number): {
     uid: string;
     builderSlug: string;
-    lifecycle: AdminBuilderRuntimeLifecycle;
+    lifecycle: AdminIsolatedRuntimeLifecycle;
     phase: "activation" | "runtime" | "return" | "retirement";
     leaseId: string;
     generation: number;
@@ -188,12 +188,12 @@ export declare function projectBuilderRuntime(userDoc: FirestoreDocLike, gateway
     targetPodStatus: GatewayPodDiagnosticsStatus | null;
     targetPodCount: number | null;
 } | null;
-export declare function projectDisposableFleetCapacity(gateways: ReadonlyArray<ReturnType<typeof projectGatewaySummary>>, builderRuntimes?: ReadonlyArray<NonNullable<ReturnType<typeof projectBuilderRuntime>>>, parkedBuilders?: number): {
+export declare function projectDisposableFleetCapacity(gateways: ReadonlyArray<ReturnType<typeof projectGatewaySummary>>, isolatedRuntimes?: ReadonlyArray<NonNullable<ReturnType<typeof projectIsolatedRuntime>>>, parkedBuilders?: number): {
     disposableInstances: number;
     stagedInstances: 0;
     byTier: Record<string, number>;
     parkedBuilders: number;
-    byLifecycle: Record<AdminBuilderRuntimeLifecycle | "parked", number>;
+    byLifecycle: Record<AdminIsolatedRuntimeLifecycle | "parked", number>;
     failedBuilders: number;
     staleActivations: number;
     oldestActivationAgeMs: number | null;
@@ -240,7 +240,7 @@ export declare function validateDeployBody(body: unknown): {
 };
 export declare function projectHandoffProgress(assignments: readonly AssignmentDoc[]): Map<string, Record<string, MigrationProgressRecord[]>>;
 export declare function shapeOperationsHistoryRecord(id: string, data: Record<string, unknown>): Record<string, unknown>;
-export type CustomerSelfDeletionOutcome = {
+export type UserSelfDeletionOutcome = {
     kind: "not-found";
 } | {
     kind: "conflict";
@@ -255,11 +255,11 @@ export type CustomerSelfDeletionOutcome = {
         error: Error;
     } | null;
 };
-export declare function scheduleCustomerSelfDeletion(opts: {
+export declare function scheduleUserSelfDeletion(opts: {
     store: PlatformStateStore;
-    accounts: BuilderAccountReader;
+    accounts: UserAccountReader;
     deps: Pick<FleetRouterDeps, "suspendAuthUser" | "revokeConnectorGrantsForUser">;
     uid: string;
-}): Promise<CustomerSelfDeletionOutcome>;
+}): Promise<UserSelfDeletionOutcome>;
 export declare function addAdminFleetRoutes(router: Router, deps: FleetRouterDeps): Router;
 export {};

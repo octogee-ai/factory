@@ -28,11 +28,11 @@ function app(options: { bound?: boolean; caller?: Caller; store?: PlatformStateS
     if (options.bound !== false) {
       req.boundTenant = {
         kind: "gateway",
-        gatewayId: "bender",
-        podName: "octogee-gateway-bender-r2-5bc5949d46-p946t",
+        gatewayId: "walter",
+        podName: "octogee-gateway-walter-r2-5bc5949d46-p946t",
         actor: "gateway",
-        subject: "system:serviceaccount:octogee:octogee-gw-bender",
-        serviceAccountName: "octogee-gw-bender",
+        subject: "system:serviceaccount:octogee:octogee-gw-walter",
+        serviceAccountName: "octogee-gw-walter",
       } as Express.Request["boundTenant"];
     }
     const caller = options.caller ?? { uid: "uid-member", user: { displayName: "Mem Ber", email: "member@example.com" }, workspaceSlug: "member" };
@@ -42,14 +42,14 @@ function app(options: { bound?: boolean; caller?: Caller; store?: PlatformStateS
     next();
   });
   instance.use("/internal/workspace-git", createWorkspaceGitAuthorizationBrokerRoutes({
-    store: options.store ?? assignedStore([{ uid: "uid-alice", gatewayId: "bender", slug: "alice" }]),
+    store: options.store ?? assignedStore([{ uid: "uid-alice", gatewayId: "walter", slug: "alice" }]),
     resolveTarget,
   }));
   return instance;
 }
 
 const body = {
-  gatewayId: "bender",
+  gatewayId: "walter",
   slug: "alice",
   projectSlug: "orbit",
   access: "write",
@@ -118,7 +118,7 @@ describe("POST /internal/workspace-git/authorize", () => {
       { access: "write", resolveGithubToken: true },
     );
     expect(res.body).toEqual({
-      gatewayId: "bender",
+      gatewayId: "walter",
       uid: "uid-member",
       slug: "alice",
       projectSlug: "orbit",
@@ -148,7 +148,7 @@ describe("POST /internal/workspace-git/authorize", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
-      gatewayId: "bender",
+      gatewayId: "walter",
       uid: "uid-alice",
       slug: "alice",
       projectSlug: null,

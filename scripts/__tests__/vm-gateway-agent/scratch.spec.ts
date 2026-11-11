@@ -26,7 +26,7 @@ function fixture() {
   }) };
   const log = vi.fn();
   return { volumes, containers, calls, replies, engine, log,
-    inspect: (computerId = "b-current") => inspectInactiveScratchVolumes({ engine, computerId, stateRoot: "/srv/octogee", log }) };
+    inspect: (vmId = "b-current") => inspectInactiveScratchVolumes({ engine, vmId, stateRoot: "/srv/octogee", log }) };
 }
 
 describe("inactive gateway scratch inspection", () => {

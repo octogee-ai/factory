@@ -16,7 +16,7 @@ function fixture() {
   return { owner, docs, store: createDocumentFixtureStore(docs) };
 }
 describe("authored export custody", () => {
-  it("admits an owned serving Barn coach and project without requiring dedicated Native surfaces", async () => {
+  it("admits an owned serving shared gateway agent and project without requiring dedicated Native surfaces", async () => {
     const f = fixture();
     expect(await authorizeAgentExport(f.store, f.owner, "octogee-alice-coach")).toMatchObject({ project: null, epoch: 4 });
     expect(await authorizeAgentExport(f.store, f.owner, "octogee-alice-proj-demo-coach")).toMatchObject({ project: "demo" });

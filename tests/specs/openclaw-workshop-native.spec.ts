@@ -19,7 +19,7 @@ describe.skipIf(!binary || !runtimePlugins || !extensions)("pinned Native Worksh
     symlinkSync(extensions!, path.join(state, "extensions"));
     symlinkSync(runtimePlugins!, path.join(state, "npm"));
     const file = path.join(state, "openclaw.json");
-    const template = gatewayClass === "shared" ? "openclaw.template.json" : "openclaw.builder.template.json";
+    const template = gatewayClass === "shared" ? "openclaw.template.json" : "openclaw.isolated.template.json";
     const config = JSON.parse(readFileSync(path.join(repo, "infra/gateway", template), "utf8"));
     config.agents.defaults.workspace = path.join(home, "workspace");
     config.database.postgres.schemaPrefix = `workshop_${path.basename(home).slice(-6).toLowerCase()}`;

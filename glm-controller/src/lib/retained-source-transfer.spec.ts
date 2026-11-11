@@ -1,11 +1,11 @@
 import {describe,expect,it,vi} from 'vitest';
 import {createDocumentFixtureStore} from '@octogee/core/testing/journal-store';
-import type {CustomerMigrationV2State,Operation,SourceTransferExecution} from '@octogee/shared/types/glm';
+import type {UserMigrationV2State,Operation,SourceTransferExecution} from '@octogee/shared/types/glm';
 import {createRetainedSourceTransfer} from './retained-source-transfer.js';
 import {runGatewayRuntimeExclusive} from './gateway-runtime-mutation.js';
 
 function harness() {
- const state = {phase:'sourceQuiesced',operationId:'op-1',migrationId:'mig-1',uid:'uid-1',slug:'builder',sourceGatewayId:'shared-one',sourceEpoch:3,sourceRelease:1,targetRelease:2,sourceAssignmentMode:'assigned',targetGatewayId:'target'} as CustomerMigrationV2State;
+ const state = {phase:'sourceQuiesced',operationId:'op-1',migrationId:'mig-1',uid:'uid-1',slug:'builder',sourceGatewayId:'shared-one',sourceEpoch:3,sourceRelease:1,targetRelease:2,sourceAssignmentMode:'assigned',targetGatewayId:'target'} as UserMigrationV2State;
  const op = {id:'op-1',kind:'migrate-customer',status:'running',startedAt:100,input:{uid:'uid-1',fromGatewayId:'shared-one',toGatewayId:'target',sourceTransferMode:'retained-pod'},customerMigrationV2:state} as Operation;
  const user = {username:'builder',provisioning:{openclaw:{gatewayId:'shared-one'}}};
  const assignment={uid:'uid-1',slug:'builder',gatewayId:'shared-one',source:'onboarding',epoch:3,state:'quiescing',updatedByOperationId:'op-1'};
@@ -92,7 +92,7 @@ describe('retained source controller',()=>{
  });
  it('withholds credentials when cancelled durable custody changes after dispatch but retains the fence until termination',async()=>{
   const h=harness();const original=h.runCommand.getMockImplementation()!;
-  h.runCommand.mockImplementation(async(command,args)=>{if(args.includes('patch')){const fresh=h.docs.get('glmOperations/op-1')!;fresh.cancellationRequestedAt=1;(fresh.customerMigrationV2 as CustomerMigrationV2State).phase='preSynced';}return original(command,args);});
+  h.runCommand.mockImplementation(async(command,args)=>{if(args.includes('patch')){const fresh=h.docs.get('glmOperations/op-1')!;fresh.cancellationRequestedAt=1;(fresh.customerMigrationV2 as UserMigrationV2State).phase='preSynced';}return original(command,args);});
   await expect(h.controller().execute(h.input)).rejects.toThrow('active claim changed');
   expect(h.record().status).toBe('dispatched');expect(h.user.provisioning.openclaw).toHaveProperty('sourceTransferFence');expect(h.attach).not.toHaveBeenCalled();
  });
@@ -203,7 +203,7 @@ describe('retained source controller',()=>{
  it.each(['claim','cancel','slug','epoch','state','owner','root','retirement','stopped','restore','existing-fence'])('rejects changed %s authority before target prepare',async change=>{
   const h=harness();const op=h.docs.get('glmOperations/op-1')!;
   if(change==='claim')op.startedAt=101;
-  if(change==='cancel'){op.cancellationRequestedAt=1;(op.customerMigrationV2 as CustomerMigrationV2State).phase='preSynced';}
+  if(change==='cancel'){op.cancellationRequestedAt=1;(op.customerMigrationV2 as UserMigrationV2State).phase='preSynced';}
   if(change==='slug')h.user.username='other';
   if(change==='epoch')h.assignment.epoch=4;
   if(change==='state')h.assignment.state='serving';

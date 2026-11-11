@@ -27,7 +27,7 @@ export declare const TALK_SETTINGS_DEFAULTS: ResolvedTalkSettings;
 export declare const TALK_SPEED_MIN = 0.5;
 export declare const TALK_SPEED_MAX = 2;
 export declare const TALK_HANDS_FREE_MAX_MS = 60000;
-/** A speech-engine voice a Builder can pick for their coach; `id` is what the provider accepts. */
+/** A speech-engine voice a user can pick for their agent; `id` is what the provider accepts. */
 export interface TalkVoice {
     id: string;
     name: string;
@@ -42,7 +42,7 @@ export interface TalkVoiceCatalog {
     voices: TalkVoice[];
 }
 export declare const TALK_VOICE_ID_MAX = 128;
-/** A voice id as stored on the coach: provider-shaped (slug, uuid, `kokoro/af_heart`), or empty for the engine default. */
+/** A voice id as stored on the agent: provider-shaped (slug, uuid, `kokoro/af_heart`), or empty for the engine default. */
 export declare function isTalkVoiceId(value: unknown): value is string;
 export type TalkClientMessage = {
     type: "session.start";

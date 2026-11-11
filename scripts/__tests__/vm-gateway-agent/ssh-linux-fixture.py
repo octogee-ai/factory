@@ -61,7 +61,7 @@ class FreshBootAuthorization(unittest.TestCase):
                 shutil.chown(authorized, user='octo', group='octo')
                 authorized.chmod(0o600)
                 private = ssh_home / 'id_user_preserved'
-                private.write_text('customer private state')
+                private.write_text('user private state')
                 shutil.chown(private, user='octo', group='octo')
                 private.chmod(0o600)
                 inode = ssh_home.stat().st_ino
@@ -149,7 +149,7 @@ StrictModes yes
                 self.assertFalse(authenticate('B'))
                 self.assertTrue(authenticate('C'))
                 self.assertEqual(ssh_home.stat().st_ino, inode)
-                self.assertEqual(private.read_text(), 'customer private state')
+                self.assertEqual(private.read_text(), 'user private state')
             finally:
                 if daemon is not None:
                     daemon.terminate()

@@ -92,7 +92,7 @@ describe("deferred project workspace transfer", () => {
 
   it("transfers authored AGENTS instructions instead of treating all project context as disposable", () => {
     seedDeferredProjectWorkspace("alice", "octogee");
-    fs.appendFileSync(path.join(source, relative, "AGENTS.md"), "Customer authored instructions.\n");
+    fs.appendFileSync(path.join(source, relative, "AGENTS.md"), "User authored instructions.\n");
 
     transfer("final");
     installStage();
@@ -102,7 +102,7 @@ describe("deferred project workspace transfer", () => {
   });
 });
 
-describe("customer Git metadata transfer", () => {
+describe("user Git metadata transfer", () => {
   it.each([
     ["customers/alice", "git-metadata/alice/workspace.git"],
     ["customers/alice/projects/octogee", "git-metadata/alice/projects/octogee.git"],
@@ -118,7 +118,7 @@ describe("customer Git metadata transfer", () => {
     fs.writeFileSync(path.join(worktree, "notes.md"), "staged\n");
     execFileSync("git", ["-C", worktree, "add", "notes.md"]);
     fs.writeFileSync(path.join(worktree, "notes.md"), "unstaged\n");
-    fs.writeFileSync(path.join(worktree, "package.lock"), "customer lock\n");
+    fs.writeFileSync(path.join(worktree, "package.lock"), "user lock\n");
     const locks = ["index.lock", "config.lock", "packed-refs.lock", "refs/heads/main.lock"];
     for (const lock of locks) fs.writeFileSync(path.join(metadata, lock), "Git transaction\n");
     const index = fs.readFileSync(path.join(metadata, "index"));
@@ -152,7 +152,7 @@ describe("customer Git metadata transfer", () => {
     expect(execFileSync("git", [`--git-dir=${imported}`, "ls-files", "--stage"], { encoding: "utf8" })).toBe(staged);
     expect(execFileSync("git", [`--git-dir=${imported}`, "show", ":notes.md"], { encoding: "utf8" })).toBe("staged\n");
     expect(fs.readFileSync(path.join(target, worktreeRelative, "notes.md"), "utf8")).toBe("unstaged\n");
-    expect(fs.readFileSync(path.join(target, worktreeRelative, "package.lock"), "utf8")).toBe("customer lock\n");
+    expect(fs.readFileSync(path.join(target, worktreeRelative, "package.lock"), "utf8")).toBe("user lock\n");
     expect(fs.existsSync(path.join(metadata, "refs/heads/main.lock"))).toBe(true);
   });
 });

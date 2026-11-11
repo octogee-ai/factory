@@ -4,7 +4,7 @@ import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import { isDeepStrictEqual } from "node:util";
 import type { DocumentData } from "firebase-admin/firestore";
 import { operationAuditMutationFingerprint } from "./operation-audit.js";
-import type { AgentStoreRecord, BuilderRecord } from "./platform-state/builders.js";
+import type { AgentStoreRecord, PlatformUserRecord } from "./platform-state/users.js";
 import type { GatewayAssignment, GatewayRoot } from "./platform-state/gateways.js";
 import type { OperationRecord } from "./platform-state/operations.js";
 import type { PlatformStateTransaction, Stored } from "./platform-state/store.js";
@@ -37,9 +37,9 @@ function assignmentIdentity(stored: Stored<GatewayAssignment>): SourceRecoveryAs
   if (assignment.state !== "serving" || !/^[a-z0-9][a-z0-9-]*$/.test(slug)) conflict("source recovery assignment is unavailable");
   return { uid: assignment.uid, slug, agentId: `octogee-${slug}-coach`, assignmentEpoch: assignment.epoch, assignment };
 }
-function builderMatches(builder: Stored<BuilderRecord> | undefined, identity: SourceRecoveryAssignment, gatewayId: string): boolean {
-  return builder !== undefined && [builder.slug === identity.slug, builder.gateway?.gatewayId === gatewayId, builder.openclaw.status === "complete",
-    builder.fences.migration === undefined, builder.fences.restoreFence === undefined, builder.fences.sourceTransferFence === undefined].every(Boolean);
+function userMatches(user: Stored<PlatformUserRecord> | undefined, identity: SourceRecoveryAssignment, gatewayId: string): boolean {
+  return user !== undefined && [user.slug === identity.slug, user.gateway?.gatewayId === gatewayId, user.openclaw.status === "complete",
+    user.fences.migration === undefined, user.fences.restoreFence === undefined, user.fences.sourceTransferFence === undefined].every(Boolean);
 }
 function liveProjectAgent(project: WorkspaceProject): boolean {
   return projectAgentConfigured(project.agent) && project.status !== "archived" && project.commercialLifecycleStatus !== "archived";
@@ -59,7 +59,7 @@ export async function readPostgresSourceAgentStores(transaction: PlatformStateTr
   const stores: SourceRecoveryAgentStore[] = [];
   for (const identity of assignments) {
     const [records, projects] = await Promise.all([
-      transaction.builders.agentStores.list(identity.uid),
+      transaction.users.agentStores.list(identity.uid),
       transaction.workspaces.projects.list(identity.slug),
     ]);
     const required = [identity.agentId, ...projects.filter(liveProjectAgent).map(project => projectAgentId(identity.slug, project.projectSlug))];
@@ -117,8 +117,8 @@ export async function readSharedSourceRecoveryAuthority(transaction: PlatformSta
   if (active.some(operation => competingSourceOperation(operation, { gatewayId, ownOperationId, sourceUids, fenced }))) {
     conflict("another source operation is active");
   }
-  const builders = await transaction.builders.records.getMany(assignments.map(row => row.uid));
-  if (assignments.some(identity => !builderMatches(builders.get(identity.uid), identity, gatewayId))) conflict("source recovery customer authority changed");
+  const users = await transaction.users.records.getMany(assignments.map(row => row.uid));
+  if (assignments.some(identity => !userMatches(users.get(identity.uid), identity, gatewayId))) conflict("source recovery user authority changed");
   await assertNoSourceTransferTask(transaction, gatewayId);
   const postgresAgentStores = await readPostgresSourceAgentStores(transaction, assignments);
   return { root: rootIdentity(root), assignments, postgresAgentStores, schedulerStateRecovery: true };

@@ -1,21 +1,21 @@
 import { type AgentModelSelections } from "@octogee/shared/types/agent-models";
 import { type ModelCredentialConfigInput } from "./model-credential-materializer.js";
 export type ByotInput = ModelCredentialConfigInput;
-export interface FreeTierCoachModelInput {
+export interface FreeTierDefaultAgentModelInput {
     slug: string;
     model: string;
     source: "free-tier";
 }
-export type ByotCoachModelInput = ByotInput & {
+export type ByotDefaultAgentModelInput = ByotInput & {
     houseModelRef?: string;
 };
-export type CoachModelInput = ByotCoachModelInput | FreeTierCoachModelInput;
+export type DefaultAgentModelInput = ByotDefaultAgentModelInput | FreeTierDefaultAgentModelInput;
 type RuntimeModelsDef = Record<string, {
     agentRuntime?: {
         id: string;
     };
 }>;
-type CoachModelRef = string | {
+type DefaultAgentModelRef = string | {
     primary: string;
     fallbacks: string[];
 };
@@ -23,17 +23,17 @@ export interface CodexAppServerPatch {
     sandbox: string;
     approvalPolicy: string;
 }
-export interface FreeTierCoachToolsBlock {
+export interface FreeTierDefaultAgentToolsBlock {
     profile: "minimal";
     alsoAllow: string[];
 }
-export declare const FREE_TIER_COACH_TOOLS: FreeTierCoachToolsBlock;
-export interface CoachModelPatch {
+export declare const FREE_TIER_DEFAULT_AGENT_TOOLS: FreeTierDefaultAgentToolsBlock;
+export interface DefaultAgentModelPatch {
     agents: {
         list: Array<{
             id: string;
-            model: CoachModelRef;
-            tools?: FreeTierCoachToolsBlock;
+            model: DefaultAgentModelRef;
+            tools?: FreeTierDefaultAgentToolsBlock;
         }>;
         defaults?: {
             models: RuntimeModelsDef;
@@ -41,19 +41,19 @@ export interface CoachModelPatch {
     };
 }
 export declare const STANDARD_CODEX_APP_SERVER: CodexAppServerPatch;
-export declare const BUILDER_CODEX_APP_SERVER: CodexAppServerPatch;
+export declare const ISOLATED_CODEX_APP_SERVER: CodexAppServerPatch;
 export declare function isPlatformProviderRef(ref: string): boolean;
-export declare function byosCoachConfigPatch(input: CoachModelInput | null): CoachModelPatch | null;
-export declare function convergedCoachToolsValue(existing: unknown, tools: FreeTierCoachToolsBlock | null): Record<string, unknown> | undefined;
-export declare function coachFullAgentList(current: unknown, agentId: string, model: CoachModelPatch["agents"]["list"][number]["model"] | null, tools?: FreeTierCoachToolsBlock | null): unknown[];
-export type CoachAgentPatch = {
+export declare function byosDefaultAgentConfigPatch(input: DefaultAgentModelInput | null): DefaultAgentModelPatch | null;
+export declare function convergedDefaultAgentToolsValue(existing: unknown, tools: FreeTierDefaultAgentToolsBlock | null): Record<string, unknown> | undefined;
+export declare function defaultAgentFullAgentList(current: unknown, agentId: string, model: DefaultAgentModelPatch["agents"]["list"][number]["model"] | null, tools?: FreeTierDefaultAgentToolsBlock | null): unknown[];
+export type DefaultAgentPatch = {
     list: unknown[];
 } | {
     entries: Record<string, Record<string, unknown>>;
 };
-export declare function coachAgentPatch(current: unknown, agentId: string, model: CoachModelPatch["agents"]["list"][number]["model"] | null, tools?: FreeTierCoachToolsBlock | null): CoachAgentPatch;
-export declare function coachAgentExists(current: unknown, agentId: string): boolean;
-export declare function coachAgentPatchReplacePaths(current: unknown, agentId: string): string[];
+export declare function defaultAgentPatch(current: unknown, agentId: string, model: DefaultAgentModelPatch["agents"]["list"][number]["model"] | null, tools?: FreeTierDefaultAgentToolsBlock | null): DefaultAgentPatch;
+export declare function defaultAgentExists(current: unknown, agentId: string): boolean;
+export declare function defaultAgentPatchReplacePaths(current: unknown, agentId: string): string[];
 export declare function deriveDesiredByotState(userData: {
     byotActive?: boolean;
     username?: string;
@@ -81,9 +81,9 @@ export declare function deriveDesiredByotState(userData: {
 }): {
     enabled: boolean;
     input: ByotInput | null;
-    coachModelInput: CoachModelInput | null;
+    defaultAgentModelInput: DefaultAgentModelInput | null;
 };
-export declare function platformCoachModelInputForUser(slug: string, userData: Parameters<typeof deriveDesiredByotState>[0]): CoachModelInput | null;
+export declare function platformDefaultAgentModelInputForUser(slug: string, userData: Parameters<typeof deriveDesiredByotState>[0]): DefaultAgentModelInput | null;
 export declare function applyByotState(slug: string, input: ByotInput | null, agentsDir?: string, opts?: {
     preserveAuthProfileStore?: boolean;
 }): Promise<boolean>;

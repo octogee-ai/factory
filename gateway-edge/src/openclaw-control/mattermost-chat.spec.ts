@@ -112,9 +112,9 @@ function session(): OpenClawControlSession {
   return {
     sessionId: "browser-session",
     uid: "uid-owner",
-    gatewayId: "bender",
+    gatewayId: "walter",
     workspaceSlug: "alice",
-    revisionId: "bender-r7",
+    revisionId: "walter-r7",
 
 
 
@@ -873,7 +873,7 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
     }).map((message) => message.__openclaw.id)).toEqual([rootId, answerId, commitId]);
   });
 
-  it("attributes chat to the existing profile and builder slug while retaining the agent's native identity", async () => {
+  it("attributes chat to the existing profile and user slug while retaining the agent's native identity", async () => {
     const authorize = vi.fn(async () => authorized({ listChannelPosts: async () => ({ posts: committedPosts(), reachedEnd: true }) }));
     const resolveChatProfile = vi.fn(async () => ({ mattermostUserId: humanId, profileId: "existing-profile", username: "alice", avatarUrl: "/api/users/existing-profile/avatar?v=7" }));
     const prepared = await createMattermostControlChat({ authorize, resolveChatProfile }).prepare({
@@ -1796,7 +1796,7 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
       },
     });
     expect(log).toHaveBeenCalledWith("Mattermost Dashboard request failed", {
-      gatewayId: "bender", method: "sessions.list", stage: "session-list",
+      gatewayId: "walter", method: "sessions.list", stage: "session-list",
       failure: "Error", durationMs: expect.any(Number),
     });
     expect(JSON.stringify(log.mock.calls)).not.toContain("Firestore unavailable");

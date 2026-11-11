@@ -20,7 +20,7 @@ function limiterApp() {
   app.get("/health", (_req, res) => res.json({ ok: true }));
   app.get("/internal/gitea/user-pubkey", (_req, res) => res.json({ ok: true }));
   app.get("/api/probe", (_req, res) => res.json({ ok: true }));
-  app.get("/api/g/bender/openclaw/assets/app.js", (_req, res) => res.send("asset"));
+  app.get("/api/g/walter/openclaw/assets/app.js", (_req, res) => res.send("asset"));
   return app;
 }
 
@@ -42,7 +42,7 @@ describe("security middleware", () => {
       const response = await request(app).get(path).expect(200);
       expect(response.headers.ratelimit).toBeUndefined();
     }
-    await request(app).get("/api/g/bender/openclaw/assets/app.js").expect(200);
+    await request(app).get("/api/g/walter/openclaw/assets/app.js").expect(200);
   });
 });
 

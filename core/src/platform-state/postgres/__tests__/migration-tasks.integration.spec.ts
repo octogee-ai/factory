@@ -16,7 +16,7 @@ function runningTask(overrides: Partial<MigrationTransferTask> = {}): MigrationT
     slug: "ceckert",
     mode: "pre",
     sourceGatewayId: "shared-0",
-    targetGatewayId: "bender",
+    targetGatewayId: "walter",
     status: "running",
     attempt: 1,
     attemptId: "attempt-1",

@@ -1,7 +1,7 @@
 import {
   createGceIdentityReviewer,
   createIssuerDispatchingReviewer,
-  parseGatewayComputerIdentity,
+  parseGatewayVmIdentity,
 } from "./gce-identity-review.js";
 import {
   createKubernetesTokenReviewer,
@@ -15,12 +15,12 @@ export function createGatewayIdentityReviewer(
   input: { namespace: string; env?: Record<string, string | undefined> },
 ): Reviewer {
   const k8s = createKubernetesTokenReviewer(kubernetes);
-  const computer = parseGatewayComputerIdentity(input.env ?? process.env);
-  if (!computer) return k8s;
+  const vm = parseGatewayVmIdentity(input.env ?? process.env);
+  if (!vm) return k8s;
   return createIssuerDispatchingReviewer({
     kubernetes: k8s,
     gce: createGceIdentityReviewer({
-      ...computer,
+      ...vm,
       audience: kubernetes.audience ?? TENANT_BINDING_AUDIENCE,
       namespace: input.namespace,
     }),

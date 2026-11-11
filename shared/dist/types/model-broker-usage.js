@@ -18,8 +18,8 @@ export const MODEL_BROKER_USAGE_WINDOW_MS = WINDOW_LENGTH_HOURS * 60 * 60 * 1000
 export const MODEL_BROKER_WEEK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const MODEL_BROKER_RATE_WINDOW_MS = 60 * 1000;
 // Counters key on the billing owner, not the gateway: a shared pool hosts N
-// builders behind one gatewayId, and ownerUid is null only for single-tenant
-// builder/operator pods where the gateway *is* the owner.
+// users behind one gatewayId, and ownerUid is null only for single-tenant
+// user/operator pods where the gateway *is* the owner.
 export function windowOwnerKey(input) {
     return input.ownerUid ?? input.gatewayId;
 }

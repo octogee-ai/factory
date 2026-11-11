@@ -196,7 +196,7 @@ describe("OpenClaw runtime broker env", () => {
         const identity = {
           agentId: "octogee-alice-coach",
           uid: "uid-alice",
-          coachToken: "coach-pat",
+          coachToken: "default-agent-pat",
         };
         return new Response(JSON.stringify(
           String(input).endsWith("agent-identity") ? { identity } : { target: null },
@@ -277,7 +277,7 @@ describe("OpenClaw runtime broker env", () => {
 
     const broker = createOpenClawRuntimeBroker({
       baseUrl: "http://octogee-api:3001/",
-      gatewayId: "gw-bender",
+      gatewayId: "gw-walter",
       fetchImpl,
     });
 
@@ -286,11 +286,11 @@ describe("OpenClaw runtime broker env", () => {
     expect(calls).toEqual([
       {
         url: "http://octogee-api:3001/internal/openclaw/activity/channel-owner",
-        body: { gatewayId: "gw-bender", channelId: "mm-channel" },
+        body: { gatewayId: "gw-walter", channelId: "mm-channel" },
       },
       {
         url: "http://octogee-api:3001/internal/openclaw/activity/user-by-mm",
-        body: { gatewayId: "gw-bender", mmUserId: "mm-user" },
+        body: { gatewayId: "gw-walter", mmUserId: "mm-user" },
       },
     ]);
   });
@@ -310,7 +310,7 @@ describe("OpenClaw runtime broker env", () => {
     });
     const broker = createOpenClawRuntimeBroker({
       baseUrl: "http://octogee-api:3001/",
-      gatewayId: "gw-bender",
+      gatewayId: "gw-walter",
       fetchImpl,
     });
     const activity = {
@@ -331,7 +331,7 @@ describe("OpenClaw runtime broker env", () => {
     await expect(broker.requestChatActivityDemand(activity)).rejects.toMatchObject({ status: 409 });
     expect(calls[0]).toEqual({
       url: "http://octogee-api:3001/internal/openclaw/activity/chat-demand",
-      body: { gatewayId: "gw-bender", ...activity },
+      body: { gatewayId: "gw-walter", ...activity },
     });
   });
 
@@ -348,7 +348,7 @@ describe("OpenClaw runtime broker env", () => {
     });
     const broker = createOpenClawRuntimeBroker({
       baseUrl: "http://octogee-api:3001/",
-      gatewayId: "gw-bender",
+      gatewayId: "gw-walter",
       fetchImpl,
     });
 
@@ -362,7 +362,7 @@ describe("OpenClaw runtime broker env", () => {
       {
         url: "http://octogee-api:3001/internal/openclaw/previews/authorize",
         body: {
-          gatewayId: "gw-bender",
+          gatewayId: "gw-walter",
           uid: "uid-member",
           workspaceSlug: "acme",
           projectSlug: "launch-room",
@@ -371,7 +371,7 @@ describe("OpenClaw runtime broker env", () => {
       {
         url: "http://octogee-api:3001/internal/openclaw/previews/authorize",
         body: {
-          gatewayId: "gw-bender",
+          gatewayId: "gw-walter",
           uid: "uid-outsider",
           workspaceSlug: "acme",
           projectSlug: null,
@@ -417,7 +417,7 @@ describe("activity write receipts", () => {
     });
     const broker = createOpenClawRuntimeBroker({
       baseUrl: "http://octogee-api:3001/",
-      gatewayId: "gw-bender",
+      gatewayId: "gw-walter",
       fetchImpl,
     });
     const store = broker.activityWriteReceiptsFor("workspaces/bob/channels/coach-dm");
@@ -447,7 +447,7 @@ describe("activity write receipts", () => {
       {
         path: "/internal/openclaw/activity/write-receipts/claim",
         body: {
-          gatewayId: "gw-bender",
+          gatewayId: "gw-walter",
           channelDocPath: "workspaces/bob/channels/coach-dm",
           input: {
             eventKey,
@@ -461,12 +461,12 @@ describe("activity write receipts", () => {
       },
       {
         path: "/internal/openclaw/activity/write-receipts/read",
-        body: { gatewayId: "gw-bender", channelDocPath: "workspaces/bob/channels/coach-dm", eventKey },
+        body: { gatewayId: "gw-walter", channelDocPath: "workspaces/bob/channels/coach-dm", eventKey },
       },
       {
         path: "/internal/openclaw/activity/write-receipts/mark-posted",
         body: {
-          gatewayId: "gw-bender",
+          gatewayId: "gw-walter",
           channelDocPath: "workspaces/bob/channels/coach-dm",
           eventKey,
           leaseToken: "lease-1",
@@ -477,7 +477,7 @@ describe("activity write receipts", () => {
       {
         path: "/internal/openclaw/activity/write-receipts/attachment",
         body: {
-          gatewayId: "gw-bender",
+          gatewayId: "gw-walter",
           channelDocPath: "workspaces/bob/channels/coach-dm",
           eventKey,
           leaseToken: "lease-1",
@@ -493,7 +493,7 @@ describe("activity write receipts", () => {
       {
         path: "/internal/openclaw/activity/write-receipts/commit",
         body: {
-          gatewayId: "gw-bender",
+          gatewayId: "gw-walter",
           channelDocPath: "workspaces/bob/channels/coach-dm",
           eventKey,
           leaseToken: "lease-1",
@@ -506,7 +506,7 @@ describe("activity write receipts", () => {
   it("preserves receipt conflict and lease semantics across the broker", async () => {
     const broker = createOpenClawRuntimeBroker({
       baseUrl: "http://octogee-api:3001/",
-      gatewayId: "gw-bender",
+      gatewayId: "gw-walter",
       fetchImpl: vi.fn(async (input) => new Response(
         JSON.stringify({
           error: String(input).endsWith("/claim") ? "receipt_conflict" : "receipt_leased",

@@ -553,7 +553,7 @@ describe("workspace targets — member access, brokered through the owner's toke
 
   it("a member saves even when the owner has NO per-user token — the Sudo broker needs none (bug class retired)", async () => {
     // dora's workspace owner has no users/{uid}/secrets/gitea token. Under the old PAT
-    // model this 422'd (owner_gitea_not_provisioned — the ceckert/Bender incident).
+    // model this 422'd (owner_gitea_not_provisioned).
     // Sudo rides the platform admin token, so membership alone is enough.
     mockGiteaApiAs.mockImplementation(async (_sudo, _org, _path, method) => {
       if (method === undefined || method === "GET") throw new Error("Gitea API 404");

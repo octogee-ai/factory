@@ -1,17 +1,17 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AlreadyExistsError, FenceMismatchError, MissingRecordError } from "../../errors.js";
-import type { BuilderSecretInput, ModelBrokerGatewayToken, ModelBrokerToken } from "../../secrets.js";
+import type { UserSecretInput, ModelBrokerGatewayToken, ModelBrokerToken } from "../../secrets.js";
 import { createHarness, dsn, type PlatformStateHarness } from "./fixtures/harness.js";
 
 const NOW = 1_762_500_000_000;
 const hashOf = (value: string) => createHash("sha256").update(value).digest("hex");
 
-const coachSecret: BuilderSecretInput = {
+const defaultAgentSecret: UserSecretInput = {
   kind: "coach-mattermost",
   secretId: "coachMattermost",
   projectId: null,
-  personalToken: "coach-pat",
+  personalToken: "default-agent-pat",
   mattermostUserId: "mm-coach",
   createdAt: NOW,
   rotatedAt: NOW + 1,
@@ -28,22 +28,22 @@ describe.skipIf(!dsn)("PostgreSQL secrets and access repositories", { timeout: 3
     await harness.dispose();
   });
 
-  async function builder(uid: string): Promise<void> {
+  async function user(uid: string): Promise<void> {
     await harness.query("INSERT INTO $schema.users (uid) VALUES ($1::text)", [uid]);
   }
 
-  describe("Builder secrets", () => {
+  describe("User secrets", () => {
     beforeEach(async () => {
-      await builder("u1");
+      await user("u1");
     });
 
     it("round-trips each Mattermost secret kind with its project and a server createdAt", async () => {
-      await harness.store.secrets.put("u1", coachSecret);
+      await harness.store.secrets.put("u1", defaultAgentSecret);
       await harness.store.secrets.put("u1", {
         kind: "builder-mattermost",
         secretId: "mattermost",
         projectId: null,
-        personalToken: "builder-pat",
+        personalToken: "user-pat",
         mattermostUserId: null,
         createdAt: { serverNow: true },
         rotatedAt: null,
@@ -58,12 +58,12 @@ describe.skipIf(!dsn)("PostgreSQL secrets and access repositories", { timeout: 3
         rotatedAt: null,
       });
 
-      expect(await harness.store.secrets.get("u1", "coachMattermost")).toEqual({ ...coachSecret, revision: expect.any(String) });
+      expect(await harness.store.secrets.get("u1", "coachMattermost")).toEqual({ ...defaultAgentSecret, revision: expect.any(String) });
       expect(await harness.store.secrets.get("u1", "mattermost")).toEqual({
         kind: "builder-mattermost",
         secretId: "mattermost",
         projectId: null,
-        personalToken: "builder-pat",
+        personalToken: "user-pat",
         mattermostUserId: null,
         createdAt: expect.any(Number),
         rotatedAt: null,
@@ -78,10 +78,10 @@ describe.skipIf(!dsn)("PostgreSQL secrets and access repositories", { timeout: 3
     });
 
     it("replaces a secret whole and moves its revision", async () => {
-      await harness.store.secrets.put("u1", coachSecret);
+      await harness.store.secrets.put("u1", defaultAgentSecret);
       const before = (await harness.store.secrets.get("u1", "coachMattermost"))!;
 
-      await harness.store.secrets.put("u1", { ...coachSecret, personalToken: "rotated", mattermostUserId: null, rotatedAt: null });
+      await harness.store.secrets.put("u1", { ...defaultAgentSecret, personalToken: "rotated", mattermostUserId: null, rotatedAt: null });
 
       const after = await harness.store.secrets.get("u1", "coachMattermost");
       expect(after).toMatchObject({ personalToken: "rotated", mattermostUserId: null, createdAt: NOW, rotatedAt: null });
@@ -89,10 +89,10 @@ describe.skipIf(!dsn)("PostgreSQL secrets and access repositories", { timeout: 3
     });
 
     it("rejects a secret whose kind or project disagrees with its id and writes nothing", async () => {
-      await expect(harness.store.secrets.put("u1", { ...coachSecret, secretId: "mattermost" })).rejects.toBeInstanceOf(TypeError);
+      await expect(harness.store.secrets.put("u1", { ...defaultAgentSecret, secretId: "mattermost" })).rejects.toBeInstanceOf(TypeError);
       await expect(
         harness.store.secrets.put("u1", {
-          ...coachSecret,
+          ...defaultAgentSecret,
           kind: "project-agent-mattermost",
           secretId: "projectAgentMattermost-site",
           projectId: "docs",
@@ -102,7 +102,7 @@ describe.skipIf(!dsn)("PostgreSQL secrets and access repositories", { timeout: 3
     });
 
     it("round-trips a connector secret, keeping other token fields in the detail", async () => {
-      const connector: BuilderSecretInput = {
+      const connector: UserSecretInput = {
         kind: "connector",
         secretId: "google",
         encryptedAccessToken: "enc-access",
@@ -135,8 +135,8 @@ describe.skipIf(!dsn)("PostgreSQL secrets and access repositories", { timeout: 3
     });
 
     it("lists secrets by kind and deletes one", async () => {
-      await harness.store.secrets.put("u1", coachSecret);
-      await harness.store.secrets.put("u1", { ...coachSecret, kind: "builder-mattermost", secretId: "mattermost" });
+      await harness.store.secrets.put("u1", defaultAgentSecret);
+      await harness.store.secrets.put("u1", { ...defaultAgentSecret, kind: "builder-mattermost", secretId: "mattermost" });
       await harness.store.secrets.put("u1", {
         kind: "connector",
         secretId: "google",
@@ -156,12 +156,12 @@ describe.skipIf(!dsn)("PostgreSQL secrets and access repositories", { timeout: 3
       expect(await harness.store.secrets.get("u1", "google")).toBeNull();
     });
 
-    it("refuses a secret for an unknown Builder and drops a Builder's secrets with the Builder", async () => {
-      await expect(harness.store.secrets.put("ghost", coachSecret)).rejects.toMatchObject({
+    it("refuses a secret for an unknown user and drops a user's secrets with the user", async () => {
+      await expect(harness.store.secrets.put("ghost", defaultAgentSecret)).rejects.toMatchObject({
         constructor: MissingRecordError,
         record: { aggregate: "builder", key: "ghost" },
       });
-      await harness.store.secrets.put("u1", coachSecret);
+      await harness.store.secrets.put("u1", defaultAgentSecret);
 
       await harness.query("DELETE FROM $schema.users WHERE uid = 'u1'");
 
@@ -467,7 +467,7 @@ describe.skipIf(!dsn)("PostgreSQL secrets and access repositories", { timeout: 3
     });
   });
 
-  describe("customer erasure", () => {
+  describe("user erasure", () => {
     const seedFor = async (uid: string, suffix: string) => {
       await harness.store.access.gatewayTickets.create({ ticketId: `t-${suffix}`, uid, gatewayId: "g1", expiresAt: NOW + 30_000, grant: { purpose: "preview" } });
       await harness.store.access.gatewayTickets.recordMint({ uid, purpose: "voice-ws", mintedAt: NOW, expiresAt: NOW + 10 });

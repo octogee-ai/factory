@@ -29,11 +29,11 @@ describe("serviceAccountManifest", () => {
     });
   });
 
-  it("renders the Workload Identity annotation for Builder gateways", () => {
+  it("renders the Workload Identity annotation for isolated gateways", () => {
     const m = serviceAccountManifest({
       namespace: "octogee",
-      serviceAccountName: "octogee-gw-bender",
-      identity: { ...identity, gatewayId: "bender", releaseName: "octogee-gw-bender", lifecycleIdentity: "gateway-bender" },
+      serviceAccountName: "octogee-gw-walter",
+      identity: { ...identity, gatewayId: "walter", releaseName: "octogee-gw-walter", lifecycleIdentity: "gateway-walter" },
       annotations: { "iam.gke.io/gcp-service-account": "gw@proj.iam.gserviceaccount.com" },
     });
     expect(JSON.parse(m).metadata.annotations).toMatchObject({
@@ -42,7 +42,7 @@ describe("serviceAccountManifest", () => {
     });
   });
 
-  it("stamps Cowboy lifecycle ownership onto every dynamic gateway KSA", () => {
+  it("stamps fleet controller lifecycle ownership onto every dynamic gateway KSA", () => {
     const m = serviceAccountManifest({
       namespace: "octogee-test-west",
       serviceAccountName: "octogee-gw-builder-a",
@@ -50,7 +50,7 @@ describe("serviceAccountManifest", () => {
         gatewayId: "builder-a",
         deploymentTargetId: "test-west",
         releaseName: "octogee-gw-builder-a",
-        lifecycleIdentity: "gateway-builder-a",
+        lifecycleIdentity: "gateway-user-a",
       },
     });
 
@@ -60,7 +60,7 @@ describe("serviceAccountManifest", () => {
       "octogee.ai/gateway-id": "builder-a",
       "octogee.ai/deployment-target": "test-west",
       "octogee.ai/release": "octogee-gw-builder-a",
-      "octogee.ai/lifecycle-identity": "gateway-builder-a",
+      "octogee.ai/lifecycle-identity": "gateway-user-a",
     });
   });
 
@@ -129,8 +129,8 @@ describe("createGatewayServiceAccountEnsurer", () => {
 
     await ensurer.ensureServiceAccount({
       namespace: "octogee",
-      serviceAccountName: "octogee-gw-bender",
-      identity: { ...identity, gatewayId: "bender", releaseName: "octogee-gw-bender", lifecycleIdentity: "gateway-bender" },
+      serviceAccountName: "octogee-gw-walter",
+      identity: { ...identity, gatewayId: "walter", releaseName: "octogee-gw-walter", lifecycleIdentity: "gateway-walter" },
       annotations: { "iam.gke.io/gcp-service-account": "gw@proj.iam.gserviceaccount.com" },
     });
 

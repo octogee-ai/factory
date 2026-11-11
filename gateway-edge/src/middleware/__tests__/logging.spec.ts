@@ -12,7 +12,7 @@ import { logger, requestLogger } from "../logging.js";
 //
 //   2) `requestLogger` routes /health-style kubelet-probe paths through
 //      `debug` when status<400 (probe success is pure noise — the line
-//      that triggered this work fired every 10s on gw-bender). Status
+//      that triggered this work fired every 10s on gw-walter). Status
 //      >=400 still goes to warn/error so probe failures stay loud.
 //      Non-probe paths are unchanged.
 
@@ -263,7 +263,7 @@ describe("middleware/logging — requestLogger probe-path noise gating", () => {
     const ticket = "ticket-secret-that-must-never-be-logged";
     const { req, res, fire } = fakeReqRes(
       "GET",
-      `/api/g/bender/openclaw/launch/${ticket}`,
+      `/api/g/walter/openclaw/launch/${ticket}`,
       303,
     );
     requestLogger(req, res, vi.fn());
@@ -271,7 +271,7 @@ describe("middleware/logging — requestLogger probe-path noise gating", () => {
     const logged = logSpy.mock.calls[0][0] as string;
     expect(logged).not.toContain(ticket);
     expect(JSON.parse(logged)).toMatchObject({
-      path: "/api/g/bender/openclaw/launch/<redacted>",
+      path: "/api/g/walter/openclaw/launch/<redacted>",
     });
   });
 

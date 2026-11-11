@@ -19,7 +19,7 @@ describe("service logging contract", () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).not.toContain("\u001b");
   });
-  it("keeps concurrent Builder contexts isolated and carries them across async work", async () => {
+  it("keeps concurrent user contexts isolated and carries them across async work", async () => {
     const lines = capture();
     const log = createServiceLogger("api");
     await Promise.all(["alice", "bob"].map(builderSlug => withLogContext({ builderSlug }, async () => {

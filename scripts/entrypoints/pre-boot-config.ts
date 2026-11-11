@@ -15,9 +15,9 @@ import {
   gatewayAgentRoster,
   platformOpenAiEmbeddingMemorySearch,
   platformOpenAiEmbeddingsEnabled,
-} from "../lib/openclaw-config-builders.js";
+} from "../lib/openclaw-config-users.js";
 import { applyOpenClawComputerBrowserConfig } from "../lib/openclaw-computer-browser.js";
-import { clusterBuilderGateway, localStateStoreKind, localStateStorePath, openclawStateRoot, type LocalStateStoreKind } from "../lib/openclaw-state-store.js";
+import { clusterIsolatedGateway, localStateStoreKind, localStateStorePath, openclawStateRoot, type LocalStateStoreKind } from "../lib/openclaw-state-store.js";
 import { applyConnectorApprovalDelivery } from "../lib/openclaw-connector-approvals.js";
 import { platformBrokerProviderDeclarations } from "../lib/system-config-invariants.js";
 import { openClawConfigPath } from "../lib/openclaw-config-path.js";
@@ -26,7 +26,7 @@ import {
   OPENROUTER_PLATFORM_PROVIDER_ID,
   VERTEX_PLATFORM_PROVIDER_ID,
   platformModelRefs,
-  canonicalCustomerModelDefinition,
+  canonicalUserModelDefinition,
 } from "@octogee/shared/types/agent-models";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
@@ -34,7 +34,7 @@ const CONFIG_PATH = openClawConfigPath();
 
 const log = runtimeLogger.info;
 
-// Builders reach platform credits through the LLM broker exactly like Barns;
+// Users reach platform credits through the LLM broker exactly like shared gateways;
 // only BYOSUB bypasses it, and no gateway class ever holds a provider key.
 export function shouldMaterializeAnthropicBrokerProfiles(
   env: NodeJS.ProcessEnv = process.env,
@@ -66,7 +66,7 @@ export function platformBrokerCatalogOpts(env: NodeJS.ProcessEnv): {
 
 type OpenClawConfig = Record<string, unknown>;
 
-const COACH_AGENT_ID_RE = /^octogee-[a-z0-9][a-z0-9-]{0,62}-coach$/;
+const MANAGED_AGENT_ID_RE = /^octogee-[a-z0-9][a-z0-9-]{0,62}-coach$/;
 const MM_URL_PLACEHOLDER = "${MM_URL}";
 
 function objectProperty(
@@ -102,8 +102,8 @@ function applyToolsProfilePatch(
   return true;
 }
 
-function isCoachAgentEntry(value: unknown): value is Record<string, unknown> & { id: string } {
-  return isPlainObject(value) && typeof value.id === "string" && COACH_AGENT_ID_RE.test(value.id);
+function isManagedAgentEntry(value: unknown): value is Record<string, unknown> & { id: string } {
+  return isPlainObject(value) && typeof value.id === "string" && MANAGED_AGENT_ID_RE.test(value.id);
 }
 
 function applyMattermostAccountSessionPolicy(
@@ -532,10 +532,10 @@ export function applyMemorySearchPlatformEmbeddingsPatch(
   const entries = objectProperty(agents, "entries");
   const candidates = [
     ...list
-      .filter(isCoachAgentEntry)
+      .filter(isManagedAgentEntry)
       .map((entry) => ({ id: entry.id, entry })),
     ...Object.entries(entries ?? {})
-      .filter(([id, entry]) => COACH_AGENT_ID_RE.test(id) && isPlainObject(entry))
+      .filter(([id, entry]) => MANAGED_AGENT_ID_RE.test(id) && isPlainObject(entry))
       .map(([id, entry]) => ({ id, entry: entry as Record<string, unknown> })),
   ];
   const patched = candidates.flatMap(({ id, entry }) => {
@@ -546,7 +546,7 @@ export function applyMemorySearchPlatformEmbeddingsPatch(
     return [id];
   });
   if (patched.length === 0) return false;
-  logFn(`memory search embeddings configured for ${patched.length} coach agent(s)`);
+  logFn(`memory search embeddings configured for ${patched.length} agent(s)`);
   return true;
 }
 
@@ -632,7 +632,7 @@ function applyPlatformModelAllowlist(config: OpenClawConfig, env: NodeJS.Process
   let changed = false;
   for (const ref of refs) {
     if (models[ref] !== undefined) continue;
-    models[ref] = canonicalCustomerModelDefinition(ref);
+    models[ref] = canonicalUserModelDefinition(ref);
     changed = true;
   }
   return changed;
@@ -695,7 +695,7 @@ export function applyOpenClawBeta5CompatibilityPatch(
 }
 
 // OpenClaw starts typing at the first reply text for a group chat without a
-// mention, and the coach channel is a private channel, so a Builder saw nothing
+// mention, and the agent channel is a private channel, so a user saw nothing
 // while a turn prepared. Existing durable configs never re-read the template,
 // so the default converges here on every boot; an explicit choice stays.
 export function applyTypingModeDefault(
@@ -757,12 +757,12 @@ export function applyPreBootPatches(
   logFn: (msg: string) => void = () => {},
   options: { stateStore?: LocalStateStoreKind } = {},
 ): boolean {
-  const builderGateway = env.GATEWAY_CLASS?.trim() === "builder";
+  const isolatedGateway = env.GATEWAY_CLASS?.trim() === "builder";
   return [
     applyAgentStoreDatabasePatch(config, env, options.stateStore),
     applyWorkspaceIdentityBootstrapPolicy(config, env, logFn),
     applyOpenClawBeta5CompatibilityPatch(config, logFn),
-    builderGateway ? false : applyToolsProfilePatch(config, logFn),
+    isolatedGateway ? false : applyToolsProfilePatch(config, logFn),
     applyMattermostPreBootPatches(config, env, logFn),
     applySharedMattermostRoutingSafetyPatch(config, env, logFn),
     applyOpenClawComputerBrowserConfig(config, env),
@@ -777,9 +777,9 @@ export function applyPreBootPatches(
   ].some(Boolean);
 }
 
-const BUILDER_STATE_STORE_LOG: Record<LocalStateStoreKind, string> = {
-  absent: "Builder state family on PostgreSQL (fresh store)",
-  anchor: "Builder state family on PostgreSQL (anchor present)",
+const USER_STATE_STORE_LOG: Record<LocalStateStoreKind, string> = {
+  absent: "User state family on PostgreSQL (fresh store)",
+  anchor: "User state family on PostgreSQL (anchor present)",
   sqlite: "Retained SQLite state requires the native PostgreSQL port before startup",
 };
 
@@ -838,7 +838,7 @@ const FALLBACK_NAME = "Octogee Builder";
 const FALLBACK_EMAIL_DOMAIN = "users.noreply.octogee.com";
 const FALLBACK_GENERIC_LOCAL = "builder";
 
-export function slugFromCoachAgentId(agentId: string): string | null {
+export function slugFromManagedAgentId(agentId: string): string | null {
   const m = /^octogee-(.+)-coach$/.exec(agentId);
   return m ? m[1] : null;
 }
@@ -846,7 +846,7 @@ export function slugFromCoachAgentId(agentId: string): string | null {
 export function pickSoleTenantSlug(agentIds: readonly string[]): string | null {
   const slugs = new Set<string>();
   for (const id of agentIds) {
-    const slug = slugFromCoachAgentId(id);
+    const slug = slugFromManagedAgentId(id);
     if (slug) slugs.add(slug);
   }
   return slugs.size === 1 ? [...slugs][0] : null;
@@ -949,7 +949,7 @@ export async function materializeBrokerProfilesBeforeBoot(
 ): Promise<void> {
   if (!shouldMaterializeAnthropicBrokerProfiles(env)) return;
   if (env.GATEWAY_CLASS?.trim() === "builder") {
-    logFn("model-ready: Builder gateway broker profiles are materialized by the post-boot sweep");
+    logFn("model-ready: Isolated gateway broker profiles are materialized by the post-boot sweep");
     return;
   }
   const result = await sweep(agentIdsFromConfig(config));
@@ -976,7 +976,7 @@ async function main(): Promise<void> {
   }
   const config = JSON.parse(configRaw);
   const stateStore = localStateStoreKind(localStateStorePath(openclawStateRoot(process.env)));
-  if (clusterBuilderGateway(process.env)) log(BUILDER_STATE_STORE_LOG[stateStore]);
+  if (clusterIsolatedGateway(process.env)) log(USER_STATE_STORE_LOG[stateStore]);
 
   let changed: boolean;
   try {
@@ -984,7 +984,7 @@ async function main(): Promise<void> {
   } catch (error) {
     if (process.argv.includes("--defer-builder-store-migration") && process.env.GATEWAY_CLASS === "builder" &&
         error instanceof GatewayStoreMigrationRequiredError) {
-      log("Builder stores require migration; preserving config for the held supervisor (startup remains blocked)");
+      log("User stores require migration; preserving config for the held supervisor (startup remains blocked)");
       return;
     }
     throw error;

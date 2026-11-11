@@ -31,7 +31,7 @@ function matchesThread(post, route) {
     return route.peerKind !== "direct" || post.rootId === "";
 }
 function authorizedPost(post, input, route, identity) {
-    return Boolean(post && post.id === input.messageId && post.userId === identity.coachMmUserId
+    return Boolean(post && post.id === input.messageId && post.userId === identity.defaultAgentMmUserId
         && !post.deleteAt && matchesThread(post, route)
         && (route.peerKind === "direct" || post.channelId === route.primaryChannelId));
 }
@@ -41,7 +41,7 @@ function authorizedTarget(target, route, identity, channelId) {
     if (route.peerKind === "direct") {
         return target.expectedChannelType === "D" && target.recipientUid === identity.uid
             && target.recipientMmUserId === route.primaryChannelId && target.expectedMemberIds?.length === 2
-            && target.expectedMemberIds.includes(identity.coachMmUserId)
+            && target.expectedMemberIds.includes(identity.defaultAgentMmUserId)
             && target.expectedMemberIds.includes(route.primaryChannelId);
     }
     return target.expectedChannelType === "P" && target.expectedMemberIds === undefined
@@ -50,7 +50,7 @@ function authorizedTarget(target, route, identity, channelId) {
 export async function notifyNativeFinalReply(input, deps) {
     const route = authorizedRoute(input);
     const identity = await deps.resolveAgentIdentity(route.agentId);
-    if (!identity || identity.agentId !== route.agentId || !identity.coachMmUserId || !identity.coachToken) {
+    if (!identity || identity.agentId !== route.agentId || !identity.defaultAgentMmUserId || !identity.coachToken) {
         throw new ReplyBindingDeniedError();
     }
     const post = await deps.getPost(identity, input.messageId);
@@ -63,6 +63,6 @@ export async function notifyNativeFinalReply(input, deps) {
     const message = post.message?.trim() || (post.fileIds.length ? "Sent an attachment" : "");
     if (!message)
         return;
-    await deps.notify({ coachMmUserId: identity.coachMmUserId, channelId: post.channelId,
+    await deps.notify({ defaultAgentMmUserId: identity.defaultAgentMmUserId, channelId: post.channelId,
         postId: post.id, message }, target.recipientUid);
 }

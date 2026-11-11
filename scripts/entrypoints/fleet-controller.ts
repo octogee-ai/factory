@@ -1,6 +1,6 @@
 import "../lib/octogee-entitlements.js";
 import { createBrokeredProjectBlobHydrator } from "../lib/project-blob-materialization.js";
-import { persistBuilderProjects, persistSharedCustomerFiles, persistAssignedSharedCustomers, startProjectAutosave } from "../lib/project-persistence.js";
+import { persistUserProjects, persistSharedUserFiles, persistAssignedSharedUsers, startProjectAutosave } from "../lib/project-persistence.js";
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("provisioner");
 import { CONFIG_RELOAD_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
@@ -12,17 +12,17 @@ import {
   GATEWAY_ID,
   GATEWAY_PROFILE,
   BLOB_SYNC_INTERVAL_MS,
-  isBuilderGateway,
+  isIsolatedGateway,
   log,
   OPENCLAW_DIR,
 } from "../lib/config.js";
 import { createGatewayRpc } from "../lib/gateway-rpc.js";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
-import { flushCustomerFiles } from "../lib/customer-file-state.js";
+import { flushUserFiles } from "../lib/user-file-state.js";
 import {
   buildBrokeredLifecycleAdapter,
   projectCheckoutScopeForRuntime,
-} from "../lib/customer-lifecycle-broker-adapter.js";
+} from "../lib/user-lifecycle-broker-adapter.js";
 import { blobSyncAllWithOptions, blobSyncForSlug } from "../lib/blob-sync.js";
 import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
 import {
@@ -30,7 +30,7 @@ import {
 } from "../lib/fleet-broker-client.js";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { startFleetController } from "../lib/fleet-provisioner.js";
-import { desiredCustomers, type DesiredCustomer } from "../lib/snapshot-fingerprint.js";
+import { desiredUsers, type DesiredUser } from "../lib/snapshot-fingerprint.js";
 import { probeOpenClawVersion } from "../lib/probe-openclaw-version.js";
 import { startUsageEventTailer } from "../lib/usage-log-tailer.js";
 import { startBlobSyncLoop } from "../lib/blob-sync-runner.js";
@@ -51,8 +51,8 @@ import {
 import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
-import { configuredBuilderReport } from "../lib/builder-claim.js";
+import { userClaimSlug } from "@octogee/shared/server/user-claim";
+import { configuredUserReport } from "../lib/user-claim.js";
 
 
 export interface FleetControllerEntrypointConfig {
@@ -79,7 +79,7 @@ export function resolveFleetControllerEntrypointConfig(
   const rawGatewayId = runtime.gatewayId ?? "local";
   return {
     gatewayId: rawGatewayId === "local" ? "default" : rawGatewayId,
-    builderSlug: builderClaimSlug(env) ?? "",
+    builderSlug: userClaimSlug(env) ?? "",
     port: parseInt(env.FLEET_CONTROLLER_PORT ?? "3003", 10),
     publicKey: env.FLEET_CONTROLLER_PUBLIC_KEY || "",
     version: env.GATEWAY_IMAGE_TAG?.trim() || env.BUILD_SHA || "unknown",
@@ -119,13 +119,13 @@ export function createFleetSystemConfigVerifyFlush(
   };
 }
 
-// Shared pods hold no per-builder durable config: their builders have no
+// Shared pods hold no per-user durable config: their users have no
 // {slug}/system_config repo, so a migration flush has no durable step to run
 // and a converge fence commit aimed at one is a caller contract violation.
 export function createFleetFlushSystemConfigSync(input: {
   slug: string;
   builderSlug: string;
-  builder: boolean;
+  isolated: boolean;
   expectedSystemConfigCommit?: string;
   log?: (message: string) => void;
   sync?: typeof syncSystemConfigForSlug;
@@ -139,7 +139,7 @@ export function createFleetFlushSystemConfigSync(input: {
     }
     return undefined;
   }
-  return input.builder
+  return input.isolated
     ? createFleetSystemConfigFlush(
         input.slug,
         input.log ?? log,
@@ -157,7 +157,7 @@ export interface FleetControllerRequestedFlushDeps {
   gatewayId: string;
   gatewayClass: string;
   builderSlug: string;
-  builder: boolean;
+  isolated: boolean;
   flushFiles: (slug: string) => Promise<unknown>;
   syncBlobs?: (slug: string) => Promise<void>;
   log: (message: string) => void;
@@ -180,13 +180,13 @@ export function createFleetControllerRequestedFlush(input: FleetControllerReques
       throw new Error(`migration converge is missing expected system config commit for ${slug}`);
     }
     const nativeReturn = reason === "native-return";
-    if (nativeReturn && (!input.builder || input.gatewayClass !== "builder" || input.builderSlug !== slug || expectedSystemConfigCommit)) {
-      throw new Error("native return requires the configured Builder and a full-home checkpoint, not a config transfer");
+    if (nativeReturn && (!input.isolated || input.gatewayClass !== "builder" || input.builderSlug !== slug || expectedSystemConfigCommit)) {
+      throw new Error("native return requires the configured user and a full-home checkpoint, not a config transfer");
     }
     const syncSystemConfig = nativeReturn ? undefined : createFleetFlushSystemConfigSync({
       slug,
       builderSlug: input.builderSlug,
-      builder: input.builder,
+      isolated: input.isolated,
       expectedSystemConfigCommit,
       log: input.log,
       sync: input.syncSystemConfig,
@@ -214,20 +214,20 @@ export function createFleetControllerRequestedFlush(input: FleetControllerReques
   };
 }
 
-export function createAssignedCustomerReader(
+export function createAssignedUserReader(
   brokerClient: Pick<FleetBrokerClient, "assignedUsers" | "assignmentRoster">,
-  seedSnapshot: Parameters<typeof desiredCustomers>[2],
-): () => Promise<Map<string, DesiredCustomer>> {
+  seedSnapshot: Parameters<typeof desiredUsers>[2],
+): () => Promise<Map<string, DesiredUser>> {
   return async () => {
     const [users, assignments] = await Promise.all([
       brokerClient.assignedUsers({ completeOnly: false }),
       brokerClient.assignmentRoster(),
     ]);
-    return desiredCustomers(users, assignments, seedSnapshot);
+    return desiredUsers(users, assignments, seedSnapshot);
   };
 }
 
-export async function readCustomerEnsureAdmission(
+export async function readUserEnsureAdmission(
   brokerClient: Pick<FleetBrokerClient, "assignmentRoster">,
   uid: string,
 ): Promise<boolean> {
@@ -306,14 +306,14 @@ async function main(): Promise<void> {
   if (!entrypointConfig.publicKey) {
     throw new Error("fleet controller public key unavailable: expected FLEET_CONTROLLER_PUBLIC_KEY");
   }
-  const builder = isBuilderGateway();
+  const isolated = isIsolatedGateway();
   let persistProjects: ((slug: string) => Promise<void>) | undefined;
-  if (builder) persistProjects = persistBuilderProjects;
-  else if (GATEWAY_CLASS === "shared") persistProjects = persistSharedCustomerFiles;
+  if (isolated) persistProjects = persistUserProjects;
+  else if (GATEWAY_CLASS === "shared") persistProjects = persistSharedUserFiles;
   const brokerClient = createFleetBrokerClient(entrypointConfig.gatewayId);
   const builderSlug = entrypointConfig.builderSlug;
-  let stopBuilderServices: (() => void) | undefined;
-  const startBuilderServices = (slug: string): void => {
+  let stopUserServices: (() => void) | undefined;
+  const startUserServices = (slug: string): void => {
     const runtimeHealthPublisher = createSystemConfigStatusPublisher({
       openclawDir: OPENCLAW_DIR,
       refreshRuntimeHealth: () => refreshSystemConfigRuntimeHealth({
@@ -325,10 +325,10 @@ async function main(): Promise<void> {
       log,
     });
     void runtimeHealthPublisher.publishNow();
-    const stopProjectAutosave = builder
-      ? startProjectAutosave({ save: () => persistBuilderProjects(slug), log })
+    const stopProjectAutosave = isolated
+      ? startProjectAutosave({ save: () => persistUserProjects(slug), log })
       : undefined;
-    stopBuilderServices = () => {
+    stopUserServices = () => {
       stopProjectAutosave?.();
       runtimeHealthPublisher.close();
     };
@@ -337,7 +337,7 @@ async function main(): Promise<void> {
     client: brokerClient,
     rpc,
     log,
-    isBuilderGateway,
+    isIsolatedGateway,
     projectCheckoutScope: (slug) => projectCheckoutScopeForRuntime(slug),
   });
   const fleetHandle = await startFleetController({
@@ -350,15 +350,15 @@ async function main(): Promise<void> {
     version: entrypointConfig.version,
     openclawVersion,
     openclawDir: OPENCLAW_DIR,
-    projectBlobHydrator: builder ? createBrokeredProjectBlobHydrator(brokerClient) : undefined,
+    projectBlobHydrator: isolated ? createBrokeredProjectBlobHydrator(brokerClient) : undefined,
     localReconcile: true,
     subscribeDesiredChanges: (wake) => brokerClient.watchAssignments(wake, log),
-    configuredBuilderReport: () => configuredBuilderReport(process.env),
-    readDesiredCustomers: createAssignedCustomerReader(
+    configuredUserReport: () => configuredUserReport(process.env),
+    readDesiredUsers: createAssignedUserReader(
       brokerClient,
       adapter.seedUserSnapshotForMigration,
     ),
-    readEnsureAdmission: (uid) => readCustomerEnsureAdmission(brokerClient, uid),
+    readEnsureAdmission: (uid) => readUserEnsureAdmission(brokerClient, uid),
     stampMounted: (uid, mounted) => brokerClient.setMounted(uid, mounted),
     readUserSnapshotForRuntimeReset: (uid) => brokerClient.userSnapshot(uid),
     acknowledgeRuntimeReset: (uid, operationId, generation) =>
@@ -369,9 +369,9 @@ async function main(): Promise<void> {
       gatewayId: entrypointConfig.gatewayId,
       gatewayClass: GATEWAY_CLASS,
       builderSlug,
-      builder,
-      flushFiles: (slug) => flushCustomerFiles(slug, { persistProjects }),
-      syncBlobs: builder
+      isolated,
+      flushFiles: (slug) => flushUserFiles(slug, { persistProjects }),
+      syncBlobs: isolated
         ? undefined
         : (slug) => blobSyncForSlug(slug, {
           strict: true,
@@ -384,11 +384,11 @@ async function main(): Promise<void> {
   // Durable-config runtime health: refresh + broker publish, replacing the
   // retired status server (the probes moved to :3003/health and OpenClaw's own
   // :18789; GATEWAY-SIMPLE-ROLL-SPEC).
-  if (builderSlug) startBuilderServices(builderSlug);
+  if (builderSlug) startUserServices(builderSlug);
   const stopSharedAutosave = GATEWAY_CLASS === "shared" ? startProjectAutosave({
-    save: () => persistAssignedSharedCustomers({
-      readCustomers: () => brokerClient.assignedUsers({ completeOnly: true }),
-      persist: persistSharedCustomerFiles,
+    save: () => persistAssignedSharedUsers({
+      readUsers: () => brokerClient.assignedUsers({ completeOnly: true }),
+      persist: persistSharedUserFiles,
       log,
     }), log,
   }) : undefined;
@@ -399,7 +399,7 @@ async function main(): Promise<void> {
     }),
     log,
   }, BLOB_SYNC_INTERVAL_MS);
-  const usageTimer = builder
+  const usageTimer = isolated
     ? null
     : startUsageEventTailer({
         agentPrefix: AGENT_PREFIX,
@@ -415,7 +415,7 @@ async function main(): Promise<void> {
       });
   log(`Local fleet controller running (profile=${GATEWAY_PROFILE}). Press Ctrl+C to stop.`);
   const cleanup = async () => {
-    stopBuilderServices?.();
+    stopUserServices?.();
     stopSharedAutosave?.();
     clearInterval(blobSyncTimer);
     if (usageTimer) clearInterval(usageTimer);

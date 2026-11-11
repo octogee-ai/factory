@@ -35,7 +35,7 @@ describe("private Mattermost callback router", () => {
     if (!vmAddress || typeof vmAddress === "string" || !sharedAddress || typeof sharedAddress === "string") {
       throw new Error("missing upstream address");
     }
-    let routes = '{"bender":"127.0.0.1"}';
+    let routes = '{"walter":"127.0.0.1"}';
     let mtime = 1;
     const resolveVmOrigin = createVmRoutesResolver({
       filePath: "/routes.json",
@@ -65,21 +65,21 @@ describe("private Mattermost callback router", () => {
       expect(response.status).toBe(200);
       return response.text();
     };
-    expect(await send("bender")).toBe("vm");
+    expect(await send("walter")).toBe("vm");
     expect(sharedOrigin).not.toHaveBeenCalled();
-    expect(deliveries).toEqual(["/api/g/bender/internal/openclaw/mattermost/interactions/default"]);
+    expect(deliveries).toEqual(["/api/g/walter/internal/openclaw/mattermost/interactions/default"]);
     expect(await send("shared-0")).toBe("shared");
     expect(sharedOrigin).toHaveBeenLastCalledWith("shared-0");
     routes = "{}";
     mtime += 1;
-    expect(await send("bender")).toBe("shared");
-    expect(sharedOrigin).toHaveBeenLastCalledWith("bender");
+    expect(await send("walter")).toBe("shared");
+    expect(sharedOrigin).toHaveBeenLastCalledWith("walter");
     expect(deliveries).toHaveLength(1);
   });
 
   it("forwards only explicit bounded routes to the stable gateway service and strips forged headers", async () => {
     const upstream = createServer((req, res) => {
-      expect(req.url).toBe("/api/g/bender/internal/openclaw/mattermost/interactions/default");
+      expect(req.url).toBe("/api/g/walter/internal/openclaw/mattermost/interactions/default");
       expect(req.headers["x-octogee-forged"]).toBeUndefined();
       expect(req.headers["x-octogee-agent-control-signature"]).toBeTypeOf("string");
       res.writeHead(200, {
@@ -107,7 +107,7 @@ describe("private Mattermost callback router", () => {
     if (!routerAddress || typeof routerAddress === "string") throw new Error("missing router address");
 
     const response = await fetch(
-      `http://127.0.0.1:${routerAddress.port}/internal/openclaw/mattermost/bender/mattermost/interactions/default`,
+      `http://127.0.0.1:${routerAddress.port}/internal/openclaw/mattermost/walter/mattermost/interactions/default`,
       {
         method: "POST",
         headers: { "content-type": "application/json", "x-octogee-forged": "yes" },
@@ -141,7 +141,7 @@ describe("private Mattermost callback router", () => {
     const address = router.address();
     if (!address || typeof address === "string") throw new Error("missing address");
     const response = await fetch(
-      `http://127.0.0.1:${address.port}/internal/openclaw/mattermost/bender/mattermost/interactions/default`,
+      `http://127.0.0.1:${address.port}/internal/openclaw/mattermost/walter/mattermost/interactions/default`,
       { method: "POST", body: "{}" },
     );
     expect(response.status).toBe(502);
@@ -163,7 +163,7 @@ describe("private Mattermost callback router", () => {
     const timeoutAddress = timeoutRouter.address();
     if (!timeoutAddress || typeof timeoutAddress === "string") throw new Error("missing address");
     const timedOut = await fetch(
-      `http://127.0.0.1:${timeoutAddress.port}/internal/openclaw/mattermost/bender/mattermost/interactions/default`,
+      `http://127.0.0.1:${timeoutAddress.port}/internal/openclaw/mattermost/walter/mattermost/interactions/default`,
       { method: "POST", body: "{}" },
     );
     expect(timedOut.status).toBe(502);
@@ -182,11 +182,11 @@ describe("private Mattermost callback router", () => {
     const address = router.address();
     if (!address || typeof address === "string") throw new Error("missing router address");
     expect((await fetch(`http://127.0.0.1:${address.port}/api/openclaw/approval/callback`, { method: "POST" })).status).toBe(404);
-    expect((await fetch(`http://127.0.0.1:${address.port}/internal/openclaw/agent-control/bender/callback`, { method: "POST" })).status).toBe(404);
+    expect((await fetch(`http://127.0.0.1:${address.port}/internal/openclaw/agent-control/walter/callback`, { method: "POST" })).status).toBe(404);
 
     const body = Buffer.from('{"ok":true}');
     const proof = {
-      gatewayId: "bender",
+      gatewayId: "walter",
       timestamp: "1000",
       signature: "invalid",
     };

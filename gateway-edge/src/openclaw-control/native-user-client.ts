@@ -52,7 +52,7 @@ async function synchronizeConnectedChannelMembership(input: {
 
 export async function openNativeUserSocket(uid: string, gatewayId: string, env: NodeJS.ProcessEnv = process.env, options: NativeUserSocketOptions = {}): Promise<NativeUserSocket> {
   if (env.OPENCLAW_CONTROL_IDENTITY !== "per-user" || env.GATEWAY_CLASS !== "builder" || env.GATEWAY_ID !== gatewayId) {
-    throw new Error("Native workspace permissions require the local per-user Builder gateway");
+    throw new Error("Native workspace permissions require the local per-user isolated gateway");
   }
   const channel = nativeChannelIdentity(options);
   if (options.purpose === 'voice' && (!channel || !options.threadRootPostId)) throw new Error('Voice requires a bound conversation');

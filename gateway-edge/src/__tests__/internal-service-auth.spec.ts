@@ -38,7 +38,7 @@ describe("requireInternalServiceAuth — gateway-bound only (legacy key retired)
   it("passes a gateway-bound caller", () => {
     const r = run(requireInternalServiceAuth, {
       headers: {},
-      boundTenant: { kind: "gateway", gatewayId: "bender" },
+      boundTenant: { kind: "gateway", gatewayId: "walter" },
     } as unknown as Request);
     expect(r.nextCalled).toBe(true);
   });
@@ -68,7 +68,7 @@ describe("requireInternalPlatformAuth — gateway or platform (cron routes)", ()
   it("passes a gateway-bound caller", () => {
     const r = run(requireInternalPlatformAuth, {
       headers: {},
-      boundTenant: { kind: "gateway", gatewayId: "bender" },
+      boundTenant: { kind: "gateway", gatewayId: "walter" },
     } as unknown as Request);
     expect(r.nextCalled).toBe(true);
   });

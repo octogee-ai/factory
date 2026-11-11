@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAnonymousOperationalArchive } from "../lib/customer-ops/deletion-archive.js";
+import { buildAnonymousOperationalArchive } from "../lib/user-ops/deletion-archive.js";
 
 describe("buildAnonymousOperationalArchive", () => {
   it("keeps GPT-5.6 Luna as a closed OpenRouter billing dimension", () => {

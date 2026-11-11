@@ -115,7 +115,7 @@ describe("brokeredGitHost → Gitea admin broker", () => {
     });
   });
 
-  it("ensureRepo project-coaches POSTs slug to the coach repo route", async () => {
+  it("ensureRepo project-agents POSTs slug to the agent repo route", async () => {
     mockFetch.mockResolvedValueOnce(reply(204));
     await broker.ensureRepo("acme", { kind: "project-coaches" });
     expect(lastCall()).toMatchObject({

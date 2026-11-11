@@ -3,7 +3,7 @@ import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { isValidUsername } from "@octogee/shared/types/identity";
-import { builderAllowsInteractiveAccess } from "../lib/assigned-builder.js";
+import { userAllowsInteractiveAccess } from "../lib/assigned-user.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -54,17 +54,17 @@ function authorizationContext(
   return { bound, uid: req.uid };
 }
 
-type AutomationAuthorizationStore = Pick<PlatformStateRepositories, "builders" | "workspaces">;
+type AutomationAuthorizationStore = Pick<PlatformStateRepositories, "users" | "workspaces">;
 
 async function assignedOwnerSlug(
   store: AutomationAuthorizationStore,
   uid: string,
   gatewayId: string,
 ): Promise<{ slug: string | null; active: boolean }> {
-  const builder = await store.builders.records.get(uid);
-  if (builder && !builderAllowsInteractiveAccess(builder)) return { slug: null, active: false };
-  const slug = builder?.slug ?? null;
-  if (!slug || !isValidUsername(slug) || builder?.gateway?.gatewayId !== gatewayId) {
+  const user = await store.users.records.get(uid);
+  if (user && !userAllowsInteractiveAccess(user)) return { slug: null, active: false };
+  const slug = user?.slug ?? null;
+  if (!slug || !isValidUsername(slug) || user?.gateway?.gatewayId !== gatewayId) {
     return { slug: null, active: true };
   }
   return { slug, active: true };
@@ -98,15 +98,15 @@ async function authorizeRequest(req: Request, res: Response, store: AutomationAu
     res.status(403).json(FORBIDDEN);
     return;
   }
-  const authorizedCoachChannelId = await coachChannelId(store, slug);
-  if (!authorizedCoachChannelId) {
+  const authorizedDefaultAgentChannelId = await coachChannelId(store, slug);
+  if (!authorizedDefaultAgentChannelId) {
     res.status(409).json({ error: "coach_channel_not_ready" });
     return;
   }
   res.json({
     slug,
     gatewayId: context.bound.gatewayId,
-    coachChannelId: authorizedCoachChannelId,
+    coachChannelId: authorizedDefaultAgentChannelId,
   });
 }
 

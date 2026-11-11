@@ -62,13 +62,13 @@
       "types": "./dist/types/gateway-control.d.ts",
       "default": "./dist/types/gateway-control.js"
     },
-    "./types/builder-gateway-id": {
-      "types": "./dist/types/builder-gateway-id.d.ts",
-      "default": "./dist/types/builder-gateway-id.js"
+    "./types/isolated-gateway-id": {
+      "types": "./dist/types/isolated-gateway-id.d.ts",
+      "default": "./dist/types/isolated-gateway-id.js"
     },
     "./types/builder-identity": {
-      "types": "./dist/types/builder-identity.d.ts",
-      "default": "./dist/types/builder-identity.js"
+      "types": "./dist/types/user-identity.d.ts",
+      "default": "./dist/types/user-identity.js"
     },
     "./types/placement-receipts": {
       "types": "./dist/types/placement-receipts.d.ts",
@@ -282,9 +282,9 @@
       "types": "./dist/server/repeat-squelch.d.ts",
       "default": "./dist/server/repeat-squelch.js"
     },
-    "./server/builder-claim": {
-      "types": "./dist/server/builder-claim.d.ts",
-      "default": "./dist/server/builder-claim.js"
+    "./server/user-claim": {
+      "types": "./dist/server/user-claim.d.ts",
+      "default": "./dist/server/user-claim.js"
     },
     "./types/native-mobile": {
       "types": "./dist/types/native-mobile.d.ts",
@@ -323,11 +323,11 @@
       "types/gateway-control": [
         "dist/types/gateway-control.d.ts"
       ],
-      "types/builder-gateway-id": [
-        "dist/types/builder-gateway-id.d.ts"
+      "types/isolated-gateway-id": [
+        "dist/types/isolated-gateway-id.d.ts"
       ],
       "types/builder-identity": [
-        "dist/types/builder-identity.d.ts"
+        "dist/types/user-identity.d.ts"
       ],
       "types/placement-receipts": [
         "dist/types/placement-receipts.d.ts"
@@ -470,8 +470,8 @@
       "server/repeat-squelch": [
         "dist/server/repeat-squelch.d.ts"
       ],
-      "server/builder-claim": [
-        "dist/server/builder-claim.d.ts"
+      "server/user-claim": [
+        "dist/server/user-claim.d.ts"
       ]
     }
   },

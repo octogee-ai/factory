@@ -180,7 +180,7 @@ describe("admin platform-config", () => {
     expect(res.body.error).toBe("platform_config_invalid");
   });
 
-  it("GET serves the Builder Agent default dial with its compiled defaults", async () => {
+  it("GET serves the default agent dial with its compiled defaults", async () => {
     const res = await request(app).get("/api/admin/platform-config");
     expect(res.status).toBe(200);
     expect(res.body.builderAgentModelRef).toBe("platform-openai/gpt-6.1-terra");
@@ -232,7 +232,7 @@ describe("admin platform-config", () => {
     });
   });
 
-  it("PUT rejects a Builder Agent ref outside the catalog", async () => {
+  it("PUT rejects a default agent ref outside the catalog", async () => {
     const res = await request(app).put("/api/admin/platform-config").send({
       freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
       builderAgentModelRef: "z-ai/glm-5.2",
@@ -500,7 +500,7 @@ describe("admin platform-trial-config", () => {
     });
   });
 
-  it("PUT writes a Personal-only default with no Builder gateway plan", async () => {
+  it("PUT writes a Personal-only default with no isolated gateway plan", async () => {
     const res = await request(app)
       .put("/api/admin/platform-trial-config")
       .send({

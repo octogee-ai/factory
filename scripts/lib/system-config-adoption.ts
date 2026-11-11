@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { customerSshKeyPath, gitExec } from "./git.js";
+import { userSshKeyPath, gitExec } from "./git.js";
 import {
   mattermostAccountSecretRef,
   mattermostAccountSecretsPath,
@@ -178,7 +178,7 @@ function changedJsonPaths(
   return paths;
 }
 
-// A Builder overlay owns its account ids and may point any account at any key in
+// A user overlay owns its account ids and may point any account at any key in
 // the tenant-scoped Mattermost secrets file, so the retained secrets are the keys
 // the adopted config references, not the account ids it happens to use.
 function referencedMattermostSecretKey(value: unknown): string | null {
@@ -257,7 +257,7 @@ function adoptionBaseline(
   targetPath: string,
 ): AdoptionBaseline {
   const repoDir = path.dirname(targetPath);
-  const keyPath = customerSshKeyPath(options.slug);
+  const keyPath = userSshKeyPath(options.slug);
   const localHead = gitExec(repoDir, ["rev-parse", "HEAD"], keyPath);
   const status = readSystemConfigStatus(options.openclawDir);
   if (

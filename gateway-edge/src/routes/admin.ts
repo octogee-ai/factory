@@ -12,14 +12,14 @@ import {
   listGatewayBuilds,
 } from "@octogee/core/artifact-registry";
 import { addAdminFleetRoutes } from "@octogee/core/admin-fleet-router";
-import { addAdminCustomerRoutes } from "@octogee/core/admin-customer-router";
-import { customerDeletionDeps } from "../lib/customer-deletion-deps.js";
+import { addAdminUserDirectoryRoutes } from "@octogee/core/admin-user-directory-router";
+import { userDeletionDeps } from "../lib/user-deletion-deps.js";
 import { platformStateStore } from "../lib/platform-state.js";
 import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
 import { modelRefForCatalogEntry } from "@octogee/shared/types/agent-models";
 import {
-  DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF,
-  DEFAULT_BUILDER_AGENT_MODEL_REF,
+  DEFAULT_USER_AGENT_FALLBACK_MODEL_REF,
+  DEFAULT_USER_AGENT_MODEL_REF,
   DEFAULT_FREE_TIER_MODEL_REF,
   DEFAULT_OPS_AGENT_MODEL_REF,
   parsePlatformConnectConfig,
@@ -73,7 +73,7 @@ export function centralReleaseRouteDeps(
 
 const centralRelease = centralReleaseRouteDeps();
 
-addAdminCustomerRoutes(router, {
+addAdminUserDirectoryRoutes(router, {
   db,
   store: platformStateStore,
   FieldValue,
@@ -88,8 +88,8 @@ addAdminFleetRoutes(router, {
   provisionGatewayAuthSecret,
   listGatewayBuilds,
   ...centralRelease,
-  suspendAuthUser: customerDeletionDeps.suspendAuthUser,
-  revokeConnectorGrantsForUser: customerDeletionDeps.revokeConnectorGrantsForUser,
+  suspendAuthUser: userDeletionDeps.suspendAuthUser,
+  revokeConnectorGrantsForUser: userDeletionDeps.revokeConnectorGrantsForUser,
 });
 
 const SERVER_NOW = { serverNow: true } as const;
@@ -111,7 +111,7 @@ function validCatalogRef(value: unknown): value is string {
 
 function resolvedFallbackDial(value: unknown): string | null {
   if (value === null) return null;
-  return validCatalogRef(value) ? value : DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF;
+  return validCatalogRef(value) ? value : DEFAULT_USER_AGENT_FALLBACK_MODEL_REF;
 }
 
 function postHogProjectUrl(value: string | undefined): string | null {
@@ -143,7 +143,7 @@ function resolvePlatformModelDials(data: PlatformModelConfig | undefined): {
     : DEFAULT_OPS_AGENT_MODEL_REF;
   const builderAgentModelRef = validCatalogRef(data?.builderAgentModelRef)
     ? data.builderAgentModelRef
-    : DEFAULT_BUILDER_AGENT_MODEL_REF;
+    : DEFAULT_USER_AGENT_MODEL_REF;
   const builderAgentFallbackModelRef = resolvedFallbackDial(data?.builderAgentFallbackModelRef);
   const invalidFields = data !== undefined && (
     freeTierModelRef !== data.freeTierModelRef ||
@@ -178,9 +178,9 @@ router.get("/platform-config", async (_req, res) => {
       opsAgentModelRef: dials.opsAgentModelRef,
       defaultOpsAgentModelRef: DEFAULT_OPS_AGENT_MODEL_REF,
       builderAgentModelRef: dials.builderAgentModelRef,
-      defaultBuilderAgentModelRef: DEFAULT_BUILDER_AGENT_MODEL_REF,
+      defaultBuilderAgentModelRef: DEFAULT_USER_AGENT_MODEL_REF,
       builderAgentFallbackModelRef: dials.builderAgentFallbackModelRef,
-      defaultBuilderAgentFallbackModelRef: DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF,
+      defaultBuilderAgentFallbackModelRef: DEFAULT_USER_AGENT_FALLBACK_MODEL_REF,
       catalog: platformCatalog,
       opsCatalog: platformCatalog.filter((entry) => entry.provider === "openrouter"),
       posthogProjectUrl: postHogProjectUrl(process.env.POSTHOG_PROJECT_URL),

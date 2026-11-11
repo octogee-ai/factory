@@ -2,16 +2,16 @@ import { describe, it, expect } from "vitest";
 import {
   startFlow,
   nextFlowState,
-  coachAgentId,
+  userDefaultAgentId,
   type FlowState,
 } from "./byosub-onboarding.js";
 
 const AW = (): FlowState =>
   startFlow({ url: "https://auth.openai.com/codex/device", code: "5BLJ-IWPLN", expiresAt: 1000 });
 
-describe("coachAgentId", () => {
-  it("derives the coach agent id from a workspace slug", () => {
-    expect(coachAgentId("ceckert")).toBe("octogee-ceckert-coach");
+describe("userDefaultAgentId", () => {
+  it("derives the agent agent id from a workspace slug", () => {
+    expect(userDefaultAgentId("ceckert")).toBe("octogee-ceckert-coach");
   });
 });
 

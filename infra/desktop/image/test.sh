@@ -154,7 +154,7 @@ fi
 vssh 'python3 -' < "$HERE/../acceptance/display-resize.py"
 accessibility="$(vssh 'bash -s' < "$HERE/../acceptance/accessibility-bus.sh")" \
   || { echo "desktop accessibility bus does not serve Chromium" >&2; exit 1; }
-builder_power="$(vssh 'bash -s builder-power' < "$HERE/../acceptance/builder-power.sh")" \
+user_power="$(vssh 'bash -s user-power' < "$HERE/../acceptance/user-power.sh")" \
   || { echo "builder power acceptance failed" >&2; exit 1; }
 desk="$(vssh 'bash -s desk' < "$HERE/../acceptance/desk.sh")" \
   || { echo "desk acceptance failed" >&2; vssh 'curl -sS http://127.0.0.1:7777/desk/state | head -c 600; tail -20 ~/.local/state/octo-desktop/control.log' >&2 || true; exit 1; }
@@ -205,7 +205,7 @@ cat <<RESULT
 | Accessibility bus | ${accessibility} |
 | Desk | ${desk} |
 | Familiar desktop | ${familiar} |
-| Builder power (sudo, polkit, boot entry after regen, tips, updates) | ${builder_power} |
+| Builder power (sudo, polkit, boot entry after regen, tips, updates) | ${user_power} |
 | Resize + screenshot + XWayland geometry | 800x600, 1024x768, restored 1440x900 |
 | Screenshot size | ${screenshot_size} (expected ${RESOLUTION}) |
 | Home survives stop/start | ${persist} |

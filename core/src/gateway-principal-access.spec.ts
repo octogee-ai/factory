@@ -31,11 +31,11 @@ describe("workspace gateway membership", () => {
 });
 
 
-describe("Builder workspace permission availability", () => {
+describe("User workspace permission availability", () => {
   const config = { gatewayClass: "builder", builderAccess: { controlIdentity: "per-user" } };
   const paid = { builderSubscription: { tier: "hobby", status: "active" } };
   const now = new Date("2026-09-15");
-  it("admits paid and active-trial Builders, and excludes free, expired, shared, and shared-identity gateways", () => {
+  it("admits paid and active-trial users, and excludes free, expired, shared, and shared-identity gateways", () => {
     const trialGrant = { schemaVersion: 3, offerId: "builder-signup", offerVersion: 1, personalTier: "personal", builderTier: "hobby",
       configHash: "trial", claimedAt: new Date("2026-09-14"), endsAt: new Date("2026-09-20") };
     expect(workspacePermissionsEnabled(config, paid, now)).toBe(true);

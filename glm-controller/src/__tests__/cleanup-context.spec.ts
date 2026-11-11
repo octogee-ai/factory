@@ -1,10 +1,10 @@
 
 
 import { describe, it, expect } from "vitest";
-import { builderAccountFromData, type BuilderAccountReader } from "@octogee/core/builder-account";
+import { userAccountFromData, type UserAccountReader } from "@octogee/core/user-account";
 import { MalformedRecordError } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
-import { loadCustomerCleanupContext, type ContextDeps } from "../lib/customer-ops/cleanup-context";
+import { loadUserCleanupContext, type ContextDeps } from "../lib/user-ops/cleanup-context";
 
 interface DocSnap {
   exists: boolean;
@@ -95,9 +95,9 @@ function agentImportDoc(uid: string, importId: string): Record<string, unknown> 
 function contextDeps(initialDocs: Record<string, Record<string, unknown> | undefined>): ContextDeps {
   const account = (uid: string) => {
     const data = initialDocs[`users/${uid}`];
-    return data === undefined ? null : builderAccountFromData(uid, data);
+    return data === undefined ? null : userAccountFromData(uid, data);
   };
-  const accounts: BuilderAccountReader = {
+  const accounts: UserAccountReader = {
     get: async (uid) => account(uid),
     getMany: async () => { throw new Error("cleanup context reads one account"); },
     list: async () => { throw new Error("cleanup context reads one account"); },
@@ -109,10 +109,10 @@ function contextDeps(initialDocs: Record<string, Record<string, unknown> | undef
   };
 }
 
-describe("loadCustomerCleanupContext", () => {
+describe("loadUserCleanupContext", () => {
   it("returns null when the user doc does not exist", async () => {
     const deps = contextDeps({});
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-missing",
     );
@@ -126,7 +126,7 @@ describe("loadCustomerCleanupContext", () => {
         provisioning: { openclaw: { slug: "alice-canon", gatewayId: "gw-test" } },
       },
     });
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-alice",
     );
@@ -139,7 +139,7 @@ describe("loadCustomerCleanupContext", () => {
     const deps = contextDeps({
       "users/uid-alice": { username: "alice", email: " Alice@Example.COM " },
     });
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-alice",
     );
@@ -150,7 +150,7 @@ describe("loadCustomerCleanupContext", () => {
     const deps = contextDeps({
       "users/uid-bob": { username: "bob-legacy" },
     });
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-bob",
     );
@@ -162,7 +162,7 @@ describe("loadCustomerCleanupContext", () => {
     const deps = contextDeps({
       "users/uid-bare": { email: "bare@example.com" },
     });
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-bare",
     );
@@ -181,7 +181,7 @@ describe("loadCustomerCleanupContext", () => {
       "workspaces/alice/projects/blog": { slug: "blog", ownerUid: "uid-alice" },
       "workspaces/alice/projects/shop": { projectSlug: "shop", ownerUid: "uid-alice" },
     });
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-alice",
     );
@@ -200,7 +200,7 @@ describe("loadCustomerCleanupContext", () => {
         ownerUid: "uid-alice",
       },
     });
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-alice",
     );
@@ -216,7 +216,7 @@ describe("loadCustomerCleanupContext", () => {
       },
       "workspaces/alice/projects/legacy-doc-id": { ownerUid: "uid-alice" },
     });
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-alice",
     );
@@ -234,7 +234,7 @@ const deps = contextDeps({
       "workspaces/alice/projects/shop": { projectSlug: "shop", ownerUid: "uid-alice" },
       "workspaces/alice/projects/legacy-id": { ownerUid: "uid-alice" },
     });
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-alice",
     );
@@ -247,7 +247,7 @@ const deps = contextDeps({
       "users/uid-alice": { username: "alice", provisioning: { openclaw: { slug: "alice" } } },
       "workspaces/alice/projects/blog": { slug: "legacy-blog", projectSlug: "legacy-blog", ownerUid: "uid-alice" },
     });
-    const ctx = await loadCustomerCleanupContext(deps, "uid-alice");
+    const ctx = await loadUserCleanupContext(deps, "uid-alice");
     expect(ctx?.projectSlugs).toEqual(["blog"]);
     expect(ctx?.repoNames).toEqual(["workspace", "system_config", "blog"]);
   });
@@ -257,25 +257,25 @@ const deps = contextDeps({
       "users/uid-alice": { username: "alice", provisioning: { openclaw: { slug: "alice" } } },
       "workspaces/alice/projects/blog": { slug: "blog" },
     });
-    await expect(loadCustomerCleanupContext(deps, "uid-alice")).rejects.toBeInstanceOf(MalformedRecordError);
+    await expect(loadUserCleanupContext(deps, "uid-alice")).rejects.toBeInstanceOf(MalformedRecordError);
   });
 
-  it("returns projectSlugs: [] when the customer has no projects", async () => {
+  it("returns projectSlugs: [] when the user has no projects", async () => {
     const deps = contextDeps({
       "users/uid-bob": { username: "bob", provisioning: { openclaw: { slug: "bob" } } },
     });
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-bob",
     );
     expect(ctx?.projectSlugs).toEqual([]);
   });
 
-  it("returns projectSlugs: [] when the customer has no slug (no workspace path to scan)", async () => {
+  it("returns projectSlugs: [] when the user has no slug (no workspace path to scan)", async () => {
     const deps = contextDeps({
       "users/uid-bare": { email: "bare@example.com" },
     });
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-bare",
     );
@@ -294,7 +294,7 @@ const deps = contextDeps({
       "agents/uid-alice": { mattermost: { userId: "mm-coach-1" } },
       "workspaces/alice/channels/admin": { mattermost: { channelId: "mm-c-admin" } },
     });
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-alice",
     );
@@ -323,7 +323,7 @@ const deps = contextDeps({
         },
       },
     });
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-alice",
     );
@@ -342,7 +342,7 @@ const deps = contextDeps({
   it("captures deterministic BYOS secret names even when a callback has not persisted its integration", async () => {
     const deps = contextDeps({ "users/uid-alice": { username: "alice" } });
 
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-alice",
     );
@@ -374,7 +374,7 @@ const deps = contextDeps({
         coachMmUserId: "mm-coach",
       },
     });
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-alice",
     );
@@ -404,7 +404,7 @@ const deps = contextDeps({
         workspaceSlug: "other",
       },
     });
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-alice",
     );
@@ -418,7 +418,7 @@ const deps = contextDeps({
       "users/uid-other/agentImports/import-other": agentImportDoc("uid-other", "import-other"),
     });
 
-    const ctx = await loadCustomerCleanupContext(
+    const ctx = await loadUserCleanupContext(
       deps,
       "uid-alice",
     );
@@ -433,7 +433,7 @@ const deps = contextDeps({
         providers: { openai: { connected: true, status: "connected" } },
       },
     });
-    await expect(loadCustomerCleanupContext(
+    await expect(loadUserCleanupContext(
       deps,
       "uid-alice",
     )).rejects.toThrow(/malformed provider leaf/);

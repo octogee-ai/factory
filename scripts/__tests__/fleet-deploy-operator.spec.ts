@@ -13,7 +13,7 @@ vi.mock("@octogee/core/gateway-release-append", async (importOriginal) => ({
   appendGatewayRelease: mocks.append,
 }));
 vi.mock("@octogee/core/normal-fleet-mutation", () => ({ runNormalFleetMutation: mocks.mutate }));
-import { deployFleetBuilder, parseFleetDeployArgs, readFleetSnapshot } from "../ops/deploy-fleet.js";
+import { deployFleetUser, parseFleetDeployArgs, readFleetSnapshot } from "../ops/deploy-fleet.js";
 
 const manifest: ReleaseDigestManifest = {
   sourceSha: "a".repeat(40), manifestDigest: `sha256:${"d".repeat(64)}`, openclawVersion: "2026.10.2", repository: "registry/images",
@@ -61,14 +61,14 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("TEST fleet operator release mutation", () => {
-  it("journals a PROD Builder release in the PROD environment", async () => {
+  it("journals a PROD user release in the PROD environment", async () => {
     const { store } = fixture();
-    await deployFleetBuilder(store, { gatewayId: "b-paused" }, manifest, payload, "prod");
+    await deployFleetUser(store, { gatewayId: "b-paused" }, manifest, payload, "prod");
     expect(mocks.mutate).toHaveBeenCalledWith(store, expect.objectContaining({ target: { gatewayId: "b-paused", environment: "prod" } }));
   });
   it("uses the ordinary audit wrapper and immutable append without changing paused status", async () => {
     const { store, records } = fixture();
-    expect(await deployFleetBuilder(store, { gatewayId: "b-paused" }, manifest, payload, "test")).toEqual({ release: 2, operationId: "roll-2" });
+    expect(await deployFleetUser(store, { gatewayId: "b-paused" }, manifest, payload, "test")).toEqual({ release: 2, operationId: "roll-2" });
     expect(mocks.mutate).toHaveBeenCalledWith(store, expect.objectContaining({
       forced: false, target: { gatewayId: "b-paused", environment: "test" },
       mutation: { kind: "deploy-gateway-build", gatewayId: "b-paused", sourceSha: manifest.sourceSha, manifestDigest: manifest.manifestDigest },
@@ -79,50 +79,50 @@ describe("TEST fleet operator release mutation", () => {
   it.each([new GatewayRetirementConflictError("transfer busy"), new StaleGatewayReleaseError("b-paused", 1, 2)])("defers typed owned mutation races: %s", async (error) => {
     const { store } = fixture();
     mocks.append.mockRejectedValue(error);
-    await expect(deployFleetBuilder(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toBeInstanceOf(FleetDeploymentDeferredError);
+    await expect(deployFleetUser(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toBeInstanceOf(FleetDeploymentDeferredError);
     expect(mocks.mutate).toHaveBeenCalledOnce();
   });
   it.each([true, false])("requires succeeded owned retirement proof for a root deleted during append: %s", async (succeeded) => {
     const { store } = fixture({ "glmOperations/retire-1": retirement(succeeded ? "succeeded" : "running") });
     mocks.append.mockRejectedValue(new InvalidGatewayRootError("b-paused"));
-    await expect(deployFleetBuilder(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toBeInstanceOf(succeeded ? FleetDeploymentDeferredError : InvalidGatewayRootError);
+    await expect(deployFleetUser(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toBeInstanceOf(succeeded ? FleetDeploymentDeferredError : InvalidGatewayRootError);
   });
   it("ignores a succeeded retirement of another gateway as proof for a deleted root", async () => {
     const { store } = fixture({ "glmOperations/retire-1": retirement("succeeded", { input: { gatewayId: "b-other" }, gatewayId: "b-other" }) });
     mocks.append.mockRejectedValue(new InvalidGatewayRootError("b-paused"));
-    await expect(deployFleetBuilder(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toBeInstanceOf(InvalidGatewayRootError);
+    await expect(deployFleetUser(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toBeInstanceOf(InvalidGatewayRootError);
   });
   it.each([true, false])("requires succeeded owned retirement proof for a root missing before the mutation: %s", async (succeeded) => {
     const { store, records } = fixture({ "glmOperations/retire-1": retirement(succeeded ? "succeeded" : "running") });
     records.delete("gateways/b-paused");
-    await expect(deployFleetBuilder(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toBeInstanceOf(succeeded ? FleetDeploymentDeferredError : InvalidGatewayRootError);
+    await expect(deployFleetUser(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toBeInstanceOf(succeeded ? FleetDeploymentDeferredError : InvalidGatewayRootError);
     expect(mocks.mutate).not.toHaveBeenCalled();
   });
-  it("defers a Builder that retired during deployment selection", async () => {
+  it("defers a user that retired during deployment selection", async () => {
     const { store } = fixture({ "gateways/b-paused": gatewayRoot("b-paused", { desiredStatus: "retired" }) });
-    await expect(deployFleetBuilder(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toBeInstanceOf(FleetDeploymentDeferredError);
+    await expect(deployFleetUser(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toBeInstanceOf(FleetDeploymentDeferredError);
     expect(mocks.mutate).not.toHaveBeenCalled();
   });
   it("fails closed on a stored root that is not a durable gateway root", async () => {
     const { store } = fixture({ "gateways/b-paused": { gatewayId: "b-paused", gatewayClass: "builder" } });
-    await expect(deployFleetBuilder(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toBeInstanceOf(MalformedRecordError);
+    await expect(deployFleetUser(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toBeInstanceOf(MalformedRecordError);
     expect(mocks.mutate).not.toHaveBeenCalled();
   });
   it("retains the explicit operator identity and reason in the operations journal", async () => {
     vi.stubEnv("RELEASE_ACTOR", "operator:chris");
     vi.stubEnv("RELEASE_REASON", "Ship TEST from Cloud Build 123");
     const { store } = fixture();
-    await deployFleetBuilder(store, { gatewayId: "b-paused" }, manifest, payload, "test");
+    await deployFleetUser(store, { gatewayId: "b-paused" }, manifest, payload, "test");
     expect(mocks.mutate).toHaveBeenCalledWith(store, expect.objectContaining({ actor: "operator:chris", why: "Ship TEST from Cloud Build 123" }));
   });
-  it("revalidates Builder class before writing an audit or release", async () => {
+  it("revalidates isolated class before writing an audit or release", async () => {
     const { store } = fixture({ "gateways/b-paused": gatewayRoot("b-paused", { gatewayClass: "shared", imageProfile: "standard", ownerUid: null, builderSlug: null }) });
-    await expect(deployFleetBuilder(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toThrow("non-retired Builder");
+    await expect(deployFleetUser(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toThrow("non-retired isolated gateway");
     expect(mocks.mutate).not.toHaveBeenCalled();
   });
-  it("rechecks platform supersession immediately before a Builder mutation", async () => {
+  it("rechecks platform supersession immediately before a user mutation", async () => {
     const { store } = fixture({ [PLATFORM_RELEASE_RECORD_DOC_PATH]: platformRecord("e".repeat(64)) });
-    await expect(deployFleetBuilder(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toThrow("superseded");
+    await expect(deployFleetUser(store, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toThrow("superseded");
     expect(mocks.mutate).not.toHaveBeenCalled();
   });
   it("requires an immutable SHA and exposes no environment override", () => {

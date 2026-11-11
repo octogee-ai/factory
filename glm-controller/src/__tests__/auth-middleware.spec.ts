@@ -1,7 +1,7 @@
 import express, { type Express } from "express";
 import request from "supertest";
 import { describe, it, expect, vi } from "vitest";
-import { builderAccountFromData, type BuilderAccountReader } from "@octogee/core/builder-account";
+import { userAccountFromData, type UserAccountReader } from "@octogee/core/user-account";
 import type { IdentityProvider } from "@octogee/core/identity-provider";
 import type { PlatformStateStore } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
@@ -19,11 +19,11 @@ function seededStore(seed: Seed): PlatformStateStore {
   });
 }
 
-function seededAccounts(seed: Seed): Pick<BuilderAccountReader, "get"> {
+function seededAccounts(seed: Seed): Pick<UserAccountReader, "get"> {
   return {
     get: async (uid) => {
       const data = seed.users[uid];
-      return data === undefined ? null : builderAccountFromData(uid, data);
+      return data === undefined ? null : userAccountFromData(uid, data);
     },
   };
 }
@@ -179,7 +179,7 @@ describe("createRequireAdmin", () => {
     const app = express();
     const seed: Seed = { users: { alice: { email: "alice@octogee.com" } }, configs: { alice: { role: "admin" } } };
     const store = seededStore(seed);
-    vi.spyOn(store.builders.records, "get").mockRejectedValue(new Error("firestore unreachable"));
+    vi.spyOn(store.users.records, "get").mockRejectedValue(new Error("firestore unreachable"));
     app.use(
       createRequireAdmin({
         identity: { issuers: [], verifyBearer: async () => ({ ownerId: "alice", email: null, operator: false }) },

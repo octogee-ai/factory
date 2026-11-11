@@ -9,7 +9,7 @@ import {
   activatePendingMattermostRouting,
   activateMattermostRoutingAfterConfigPatch,
   captureMattermostRoutingActivationBaseline,
-  discardMattermostRoutingActivationForCustomers,
+  discardMattermostRoutingActivationForUsers,
   markMattermostRoutingActivationPending,
   mattermostRoutingActivationPending,
   stopStaleMattermostRoutingAccounts,
@@ -120,7 +120,7 @@ describe("Mattermost routing activation", () => {
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
   });
 
-  it("restarts the unchanged coach monitor after a binding-only config patch", async () => {
+  it("restarts the unchanged agent monitor after a binding-only config patch", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const accountId = "alice-coach";
     markMattermostRoutingActivationPending(openclawDir, "binding changed", [accountId], { [accountId]: 100 });
@@ -142,7 +142,7 @@ describe("Mattermost routing activation", () => {
     expect(rpc.channelsStart).toHaveBeenCalledOnce();
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
   });
-  it("discards only an unmounted customer's pending accounts before the next import", async () => {
+  it("discards only an unmounted user's pending accounts before the next import", async () => {
     const openclawDir = await temporaryOpenClawDir();
     markMattermostRoutingActivationPending(
       openclawDir,
@@ -151,7 +151,7 @@ describe("Mattermost routing activation", () => {
       { "s510-coach": 100, "s510-proj-retired": 200, "aug09-coach": 300 },
     );
 
-    discardMattermostRoutingActivationForCustomers(openclawDir, ["s510"]);
+    discardMattermostRoutingActivationForUsers(openclawDir, ["s510"]);
 
     const snapshots = [
       { channelAccounts: { mattermost: [{ accountId: "aug09-coach", lastStartAt: 300 }] } },

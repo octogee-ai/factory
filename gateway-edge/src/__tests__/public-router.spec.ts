@@ -54,14 +54,14 @@ describe("gatewaySurfaceTarget", () => {
   it("maps public api gateway paths to the selected gateway-edge sidecar route", () => {
     expect(gatewaySurfaceTarget({
       host: "api.octogee.com",
-      url: "/g/bender-green/byosub/health?probe=1",
+      url: "/g/walter-green/byosub/health?probe=1",
       namespace: "octogee",
     })).toEqual({
-      gatewayId: "bender-green",
+      gatewayId: "walter-green",
       revision: null,
       surface: "api",
-      origin: "http://gateway-edge-bender-green.octogee.svc.cluster.local:3001",
-      path: "/api/g/bender-green/byosub/health?probe=1",
+      origin: "http://gateway-edge-walter-green.octogee.svc.cluster.local:3001",
+      path: "/api/g/walter-green/byosub/health?probe=1",
     });
   });
 
@@ -74,12 +74,12 @@ describe("gatewaySurfaceTarget", () => {
       ]) {
         expect(gatewaySurfaceTarget({
           host,
-          url: `/g/bender/${suffix}`,
+          url: `/g/walter/${suffix}`,
           namespace: host.startsWith("api-test") ? "octogee-test" : "octogee",
         })).toMatchObject({
-          gatewayId: "bender",
+          gatewayId: "walter",
           surface: "api",
-          path: `/api/g/bender/${suffix}`,
+          path: `/api/g/walter/${suffix}`,
         });
       }
     }
@@ -88,36 +88,36 @@ describe("gatewaySurfaceTarget", () => {
   it("never selects a gateway-local preview origin, even for the preview host", () => {
     expect(gatewaySurfaceTarget({
       host: "preview.octogee.com",
-      url: "/g/bender-green/a1b2c3d4e5f6/",
+      url: "/g/walter-green/a1b2c3d4e5f6/",
       namespace: "octogee-test",
     })).toEqual({
-      gatewayId: "bender-green",
+      gatewayId: "walter-green",
       revision: null,
       surface: "api",
-      origin: "http://gateway-edge-bender-green.octogee-test.svc.cluster.local:3001",
-      path: "/api/g/bender-green/a1b2c3d4e5f6/",
+      origin: "http://gateway-edge-walter-green.octogee-test.svc.cluster.local:3001",
+      path: "/api/g/walter-green/a1b2c3d4e5f6/",
     });
   });
 
   it("rejects non-locality paths and malformed gateway ids", () => {
     expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/api/workspace/git", namespace: "octogee" })).toBeNull();
-    expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/g/Bender/byosub/health", namespace: "octogee" })).toBeNull();
+    expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/g/Walter/byosub/health", namespace: "octogee" })).toBeNull();
     expect(gatewaySurfaceTarget({ host: "preview.octogee.com", url: "/g/../token", namespace: "octogee" })).toBeNull();
     expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/g/%ZZ/byosub/health", namespace: "octogee" })).toBeNull();
-    expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/g/bender/internal/openclaw/agent-control/callback", namespace: "octogee" })).toBeNull();
-    expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/g/bender/r/3/internal/openclaw/agent-control/callback", namespace: "octogee" })).toBeNull();
-    expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/g/bender/%69nternal/openclaw/agent-control/callback", namespace: "octogee" })).toBeNull();
-    expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/g/bender/%2569nternal/openclaw/agent-control/callback", namespace: "octogee" })).toBeNull();
+    expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/g/walter/internal/openclaw/agent-control/callback", namespace: "octogee" })).toBeNull();
+    expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/g/walter/r/3/internal/openclaw/agent-control/callback", namespace: "octogee" })).toBeNull();
+    expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/g/walter/%69nternal/openclaw/agent-control/callback", namespace: "octogee" })).toBeNull();
+    expect(gatewaySurfaceTarget({ host: "api.octogee.com", url: "/g/walter/%2569nternal/openclaw/agent-control/callback", namespace: "octogee" })).toBeNull();
   });
 
   it("defaults unmatched or missing hosts to the api surface", () => {
     expect(gatewaySurfaceTarget({
-      url: "/g/bender/byosub/health",
+      url: "/g/walter/byosub/health",
       namespace: "octogee",
     })?.surface).toBe("api");
     expect(gatewaySurfaceTarget({
       host: "localhost:3001",
-      url: "/g/bender/byosub/health",
+      url: "/g/walter/byosub/health",
       namespace: "octogee",
     })?.surface).toBe("api");
   });
@@ -272,7 +272,7 @@ describe("createGatewayRouter", () => {
     });
     const routerPort = await listen(router);
 
-    const res = await fetch(`http://127.0.0.1:${routerPort}/g/bender-blue/byosub/health`, {
+    const res = await fetch(`http://127.0.0.1:${routerPort}/g/walter-blue/byosub/health`, {
       method: "POST",
       headers: { "host": "api.octogee.com", "x-router-test": "kept" },
       body: "hello",
@@ -282,7 +282,7 @@ describe("createGatewayRouter", () => {
     expect(await res.json()).toEqual({ ok: true });
     expect(upstreamSeen).toHaveBeenCalledWith({
       method: "POST",
-      url: "/api/g/bender-blue/byosub/health",
+      url: "/api/g/walter-blue/byosub/health",
       body: "hello",
       header: "kept",
     });
@@ -341,7 +341,7 @@ describe("createGatewayRouter", () => {
     });
     const routerPort = await listen(router);
 
-    const res = await requestText(`http://127.0.0.1:${routerPort}/g/bender-blue/byosub/health`, {
+    const res = await requestText(`http://127.0.0.1:${routerPort}/g/walter-blue/byosub/health`, {
       host: "api.octogee.com",
     });
 
@@ -364,7 +364,7 @@ describe("createGatewayRouter", () => {
     });
     const routerPort = await listen(router);
 
-    const res = await requestText(`http://127.0.0.1:${routerPort}/g/bender-blue/ticket123/`, {
+    const res = await requestText(`http://127.0.0.1:${routerPort}/g/walter-blue/ticket123/`, {
       host: "preview.octogee.com",
     });
 
@@ -372,7 +372,7 @@ describe("createGatewayRouter", () => {
     expect(res.body).toBe("preview");
     expect(upstreamSeen).toHaveBeenCalledWith({
       method: "GET",
-      url: "/api/g/bender-blue/ticket123/",
+      url: "/api/g/walter-blue/ticket123/",
       host: `127.0.0.1:${upstreamPort}`,
     });
   });
@@ -392,7 +392,7 @@ describe("createGatewayRouter", () => {
     });
     const routerPort = await listen(router);
 
-    const ws = new WebSocket(`ws://127.0.0.1:${routerPort}/g/bender-blue/mm/websocket`, {
+    const ws = new WebSocket(`ws://127.0.0.1:${routerPort}/g/walter-blue/mm/websocket`, {
       headers: { host: "api.octogee.com" },
     });
     const messages: string[] = [];
@@ -413,7 +413,7 @@ describe("createGatewayRouter", () => {
       ws.on("error", reject);
     });
 
-    expect(messages).toEqual(["path:/api/g/bender-blue/mm/websocket", "ping"]);
+    expect(messages).toEqual(["path:/api/g/walter-blue/mm/websocket", "ping"]);
   });
 
   it("returns 404 for malformed gateway ids without throwing on HTTP or WS requests", async () => {
@@ -484,7 +484,7 @@ describe("createGatewayRouter socket resilience — a proxied socket error must 
   }
 
   async function openProxiedWs(routerPort: number): Promise<WebSocket> {
-    const ws = new WebSocket(`ws://127.0.0.1:${routerPort}/g/bender-blue/mm/websocket`, {
+    const ws = new WebSocket(`ws://127.0.0.1:${routerPort}/g/walter-blue/mm/websocket`, {
       headers: { host: "api.octogee.com" },
     });
     await new Promise<void>((resolve, reject) => {
@@ -513,7 +513,7 @@ describe("createGatewayRouter socket resilience — a proxied socket error must 
       harness.logged.some(
         (entry) =>
           entry.message.includes("socket error") &&
-          entry.meta?.gatewayId === "bender-blue" &&
+          entry.meta?.gatewayId === "walter-blue" &&
           String(entry.meta?.error).includes("read ETIMEDOUT"),
       ),
     ).toBe(true);
@@ -529,7 +529,7 @@ describe("createGatewayRouter socket resilience — a proxied socket error must 
     await clientClosed;
     expect(
       harness.logged.some(
-        (entry) => entry.message.includes("socket error") && entry.meta?.gatewayId === "bender-blue",
+        (entry) => entry.message.includes("socket error") && entry.meta?.gatewayId === "walter-blue",
       ),
     ).toBe(true);
   });
@@ -545,7 +545,7 @@ describe("createGatewayRouter socket resilience — a proxied socket error must 
     });
     const harness = await startProxiedPair(upstream);
 
-    const ws = new WebSocket(`ws://127.0.0.1:${harness.routerPort}/g/bender-blue/mm/websocket`, {
+    const ws = new WebSocket(`ws://127.0.0.1:${harness.routerPort}/g/walter-blue/mm/websocket`, {
       headers: { host: "api.octogee.com" },
     });
     ws.on("error", () => undefined);
@@ -571,7 +571,7 @@ describe("createGatewayRouter socket resilience — a proxied socket error must 
     const harness = await startProxiedPair(upstream);
 
     await expect(
-      requestText(`http://127.0.0.1:${harness.routerPort}/g/bender-blue/byosub/health`, {
+      requestText(`http://127.0.0.1:${harness.routerPort}/g/walter-blue/byosub/health`, {
         host: "api.octogee.com",
       }),
     ).rejects.toThrow();
@@ -652,7 +652,7 @@ describe("createGatewayRouter — a non-101 upstream upgrade response is forward
     });
     const routerPort = await listen(router);
 
-    const ws = new WebSocket(`ws://127.0.0.1:${routerPort}/g/bender-blue/mm/websocket`, {
+    const ws = new WebSocket(`ws://127.0.0.1:${routerPort}/g/walter-blue/mm/websocket`, {
       headers: { host: "api.octogee.com" },
     });
     try {

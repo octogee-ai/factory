@@ -1,4 +1,4 @@
-import type { BuilderIdentity } from "@octogee/shared/types/builder-identity";
+import type { UserIdentity } from "@octogee/shared/types/builder-identity";
 import type { RollRosterStore } from "../roll-roster.js";
 
 export type WorkspaceServingState = "serving" | "not-serving" | "roster-loading";
@@ -14,7 +14,7 @@ export function workspaceServingDenial(state: WorkspaceServingState): WorkspaceS
 
 export function workspaceServingResolver(input: {
   gatewayClass: "shared" | "builder";
-  identity: () => BuilderIdentity | null;
+  identity: () => UserIdentity | null;
   store: Pick<RollRosterStore, "loaded" | "get"> | null;
 }): WorkspaceServingResolver {
   if (input.gatewayClass === "shared") return () => "serving";

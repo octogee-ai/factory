@@ -222,7 +222,7 @@ describe("entities routes", () => {
     ]);
   });
 
-  it("fails the members list when two Builders claim the same Mattermost user", async () => {
+  it("fails the members list when two users claim the same Mattermost user", async () => {
     h.resolveWorkspaceUid.mockResolvedValue("owner-1");
     h.getWorkspaceMmContext.mockResolvedValue({ generalChannelId: "general-ch" });
     h.docs.set("users/owner-1", { mattermost: { userId: "mm-owner" } });
@@ -242,7 +242,7 @@ describe("entities routes", () => {
 
   it("excludes deactivated MM users — a retired project-agent bot must not linger in Members", async () => {
     // MM's DELETE /users/{id} only deactivates; deactivated users stay channel
-    // members. The Vegas toggle-off retires the project bot this way, so the
+    // members. The multi-agent toggle-off retires the project bot this way, so the
     // members list must drop delete_at>0 users or the bot appears still-active.
     h.resolveWorkspaceUid.mockResolvedValue("owner-1");
     h.getWorkspaceMmContext.mockResolvedValue({ generalChannelId: "general-ch" });

@@ -3,7 +3,7 @@ import request from "supertest";
 import * as crypto from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const syncModelCredentialsForCustomerSpy = vi.fn(async () => {});
+const syncModelCredentialsForUserSpy = vi.fn(async () => {});
 const refreshModelCredentialRuntimeSessionsSpy = vi.fn(async () => ({ refreshed: false, resetCount: 0 }));
 const applyConfigPatchSpy = vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 }));
 const releaseLeaseSpy = vi.fn(async () => {});
@@ -13,10 +13,10 @@ const acquireLeaseSpy = vi.fn(async () => ({
 }));
 
 vi.mock("@octogee/core/model-credential-sync-runtime", () => ({
-  syncModelCredentialsForCustomer: (
+  syncModelCredentialsForUser: (
     userData: Record<string, unknown>,
     deps?: Record<string, unknown>,
-  ) => syncModelCredentialsForCustomerSpy(userData, deps),
+  ) => syncModelCredentialsForUserSpy(userData, deps),
   refreshModelCredentialRuntimeSessions: refreshModelCredentialRuntimeSessionsSpy,
 }));
 vi.mock("@octogee/core/apply-config-patch", () => ({
@@ -39,8 +39,8 @@ const userData = {
   systemConfig: { byot: { provider: "openai" } },
 };
 
-const PRIMARY_SYNC_PATH = "/api/g/bender/internal/model-credential-sync";
-const LEGACY_SYNC_PATH = "/api/g/bender/internal/byot-sync";
+const PRIMARY_SYNC_PATH = "/api/g/walter/internal/model-credential-sync";
+const LEGACY_SYNC_PATH = "/api/g/walter/internal/byot-sync";
 
 type RouteLayer = {
   route?: {
@@ -79,20 +79,20 @@ function canonicalJson(value: unknown): string {
 function byotSyncHeaders(body: unknown, secret = signingKey, timestamp = `${Date.now()}`): Record<string, string> {
   return {
     "X-Byot-Sync-Timestamp": timestamp,
-    "X-Byot-Sync-Signature": crypto.sign(null, Buffer.from(`v1\nbender\n${timestamp}\n${canonicalJson(body)}`), secret).toString("hex"),
+    "X-Byot-Sync-Signature": crypto.sign(null, Buffer.from(`v1\nwalter\n${timestamp}\n${canonicalJson(body)}`), secret).toString("hex"),
   };
 }
 
 describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
   beforeEach(() => {
-    syncModelCredentialsForCustomerSpy.mockClear();
+    syncModelCredentialsForUserSpy.mockClear();
     refreshModelCredentialRuntimeSessionsSpy.mockClear();
     applyConfigPatchSpy.mockClear();
     releaseLeaseSpy.mockClear();
     acquireLeaseSpy.mockClear();
     delete process.env.INTERNAL_SERVICE_KEY;
     process.env.BYOT_SYNC_INTERNAL_PUBLIC_KEY = verificationKey;
-    process.env.GATEWAY_ID = "bender";
+    process.env.GATEWAY_ID = "walter";
     delete process.env.GATEWAY_PROFILE;
     process.env.K8S_NAMESPACE = "octogee-test";
     process.env.OPENCLAW_DIR = "/home/node/.openclaw";
@@ -112,7 +112,7 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
       .post(PRIMARY_SYNC_PATH)
       .send(userData);
     expect(res.status).toBe(401);
-    expect(syncModelCredentialsForCustomerSpy).not.toHaveBeenCalled();
+    expect(syncModelCredentialsForUserSpy).not.toHaveBeenCalled();
   });
 
   it("mounts both canonical and legacy sync route aliases", () => {
@@ -128,7 +128,7 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
       .set(byotSyncHeaders(body))
       .send(body);
     expect(res.status).toBe(400);
-    expect(syncModelCredentialsForCustomerSpy).not.toHaveBeenCalled();
+    expect(syncModelCredentialsForUserSpy).not.toHaveBeenCalled();
   });
 
   it("runs model config writes under the shared system-config lease", async () => {
@@ -138,15 +138,15 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
       .send(userData);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(syncModelCredentialsForCustomerSpy).toHaveBeenCalledWith(
+    expect(syncModelCredentialsForUserSpy).toHaveBeenCalledWith(
       userData,
       expect.objectContaining({
         applyConfigPatch: expect.any(Function),
-        refreshCoachRuntimeSessions: refreshModelCredentialRuntimeSessionsSpy,
+        refreshDefaultAgentRuntimeSessions: refreshModelCredentialRuntimeSessionsSpy,
       }),
     );
 
-    const deps = syncModelCredentialsForCustomerSpy.mock.calls[0]?.[1];
+    const deps = syncModelCredentialsForUserSpy.mock.calls[0]?.[1];
     await deps.applyConfigPatch({ buildPatch: () => ({}) }, { maxRetries: 2 });
 
     expect(acquireLeaseSpy).toHaveBeenCalledWith({ openclawDir: "/home/node/.openclaw" });
@@ -204,7 +204,7 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
       .send(userData);
 
     expect(res.status).toBe(200);
-    expect(syncModelCredentialsForCustomerSpy).toHaveBeenCalledWith(
+    expect(syncModelCredentialsForUserSpy).toHaveBeenCalledWith(
       userData,
       expect.objectContaining({ applyConfigPatch: expect.any(Function) }),
     );
@@ -229,7 +229,7 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
       .send(body);
 
     expect(res.status).toBe(200);
-    expect(syncModelCredentialsForCustomerSpy).toHaveBeenCalledWith(
+    expect(syncModelCredentialsForUserSpy).toHaveBeenCalledWith(
       body,
       expect.objectContaining({ applyConfigPatch: expect.any(Function) }),
     );
@@ -244,7 +244,7 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
       .send(userData);
 
     expect(res.status).toBe(401);
-    expect(syncModelCredentialsForCustomerSpy).not.toHaveBeenCalled();
+    expect(syncModelCredentialsForUserSpy).not.toHaveBeenCalled();
   });
 
   it("rejects stale BYOT sync signatures", async () => {
@@ -255,11 +255,11 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
       .send(userData);
 
     expect(res.status).toBe(401);
-    expect(syncModelCredentialsForCustomerSpy).not.toHaveBeenCalled();
+    expect(syncModelCredentialsForUserSpy).not.toHaveBeenCalled();
   });
 
   it("surfaces sync failures to the internal caller", async () => {
-    syncModelCredentialsForCustomerSpy.mockRejectedValueOnce(new Error("config.patch failed"));
+    syncModelCredentialsForUserSpy.mockRejectedValueOnce(new Error("config.patch failed"));
     const res = await request(createApp({ surface: "sidecar" }))
       .post(PRIMARY_SYNC_PATH)
       .set(byotSyncHeaders(userData))

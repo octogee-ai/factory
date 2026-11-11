@@ -4,13 +4,13 @@ import {
   isGatewayControlIdentity,
   isGatewayProfile,
   isValidGatewayId,
-  builderGatewayServiceAccountName,
+  isolatedGatewayServiceAccountName,
   type GatewayClass,
   type GatewayImageProfile,
   type GatewayModelBrokerLimits,
   type GatewayProfile,
   type GatewayServiceAccountSpec,
-  type BuilderGatewayAccessSpec,
+  type IsolatedGatewayAccessSpec,
 } from "./glm.js";
 import { isSizingTier, type SizingTier } from "./sizing.js";
 
@@ -40,15 +40,15 @@ export interface GatewayMutableConfig {
   gatewayContainerSecurityContext: Record<string, unknown> | null;
   serviceAccountName: string | null;
   serviceAccount: GatewayServiceAccountSpec | null;
-  builderAccess: BuilderGatewayAccessSpec | null;
+  builderAccess: IsolatedGatewayAccessSpec | null;
   ownerUid: string | null;
   builderSlug: string | null;
   modelBrokerLimits: GatewayModelBrokerLimits | null;
   preemption?: null;
-  allocation?: DisposableBuilderGatewayAllocation | null;
+  allocation?: IsolatedGatewayAllocation | null;
 }
 
-export interface DisposableBuilderGatewayAllocation {
+export interface IsolatedGatewayAllocation {
   kind: "disposable-builder";
   schemaVersion: 1;
   leaseId: string;
@@ -96,7 +96,7 @@ function isNullableSizingTier(value: unknown): value is SizingTier | null {
   return value === null || isSizingTier(value);
 }
 
-function isNullableBuilderAccess(value: unknown): value is BuilderGatewayAccessSpec | null {
+function isNullableIsolatedAccess(value: unknown): value is IsolatedGatewayAccessSpec | null {
   if (value === null) return true;
   if (!isRecord(value)) return false;
   const fields = new Set([
@@ -148,9 +148,9 @@ function isNullableModelBrokerLimits(value: unknown): value is GatewayModelBroke
   );
 }
 
-export function isDisposableBuilderGatewayAllocation(
+export function isIsolatedGatewayAllocation(
   value: unknown,
-): value is DisposableBuilderGatewayAllocation {
+): value is IsolatedGatewayAllocation {
   if (!isRecord(value)) return false;
   const fields = new Set(["kind", "schemaVersion", "leaseId", "generation", "claimedByUid"]);
   return Object.keys(value).every((field) => fields.has(field)) &&
@@ -164,10 +164,10 @@ export function isDisposableBuilderGatewayAllocation(
     value.claimedByUid.length > 0;
 }
 
-function isOptionalDisposableBuilderGatewayAllocation(
+function isOptionalIsolatedGatewayAllocation(
   value: unknown,
-): value is DisposableBuilderGatewayAllocation | null | undefined {
-  return value === undefined || value === null || isDisposableBuilderGatewayAllocation(value);
+): value is IsolatedGatewayAllocation | null | undefined {
+  return value === undefined || value === null || isIsolatedGatewayAllocation(value);
 }
 
 function isOwnedGateway(value: Record<string, unknown>): boolean {
@@ -178,7 +178,7 @@ function isOwnedGateway(value: Record<string, unknown>): boolean {
 function hasLegalOwnedAllocation(value: Record<string, unknown>): boolean {
   const allocation = value.allocation;
   if (allocation === undefined || allocation === null) return true;
-  return isDisposableBuilderGatewayAllocation(allocation) &&
+  return isIsolatedGatewayAllocation(allocation) &&
     allocation.claimedByUid === value.ownerUid;
 }
 
@@ -223,12 +223,12 @@ export function isGatewayMutableConfig(value: unknown): value is GatewayMutableC
     isNullableRecord(value.gatewayContainerSecurityContext) &&
     isNullableServiceAccountName(value.serviceAccountName) &&
     isNullableServiceAccount(value.serviceAccount) &&
-    isNullableBuilderAccess(value.builderAccess) &&
+    isNullableIsolatedAccess(value.builderAccess) &&
     isNullableString(value.ownerUid) &&
     isNullableString(value.builderSlug) &&
     isNullableModelBrokerLimits(value.modelBrokerLimits) &&
     (value.preemption === undefined || value.preemption === null) &&
-    isOptionalDisposableBuilderGatewayAllocation(value.allocation) &&
+    isOptionalIsolatedGatewayAllocation(value.allocation) &&
     hasLegalClassProfiles(value) &&
     hasLegalOwnershipAndAllocation(value)
   );
@@ -242,7 +242,7 @@ export function isGatewayMutableConfigForGateway(
   const serviceAccountName = value.serviceAccountName;
   if (serviceAccountName === null || serviceAccountName === "") return true;
   if (PLATFORM_SERVICE_ACCOUNT_NAMES.has(serviceAccountName)) return false;
-  const generatedName = builderGatewayServiceAccountName(gatewayId);
+  const generatedName = isolatedGatewayServiceAccountName(gatewayId);
   const legacyName = `${LEGACY_GATEWAY_SERVICE_ACCOUNT_PREFIX}${gatewayId}`;
   if (serviceAccountName.startsWith(GATEWAY_SERVICE_ACCOUNT_PREFIX)) {
     return serviceAccountName === generatedName;
@@ -271,5 +271,5 @@ export function effectiveGatewayServiceAccountNameForGateway(
   config: GatewayMutableConfig,
   gatewayId: string,
 ): string {
-  return config.serviceAccountName || builderGatewayServiceAccountName(gatewayId);
+  return config.serviceAccountName || isolatedGatewayServiceAccountName(gatewayId);
 }

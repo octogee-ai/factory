@@ -40,7 +40,7 @@ docker compose version >/dev/null 2>&1 || fail "Docker Compose not available"
 
 # --- Reset (nuclear option) ---
 if [[ "$RESET" == true ]]; then
-  echo "==> WARNING: This will wipe $OPENCLAW_DIR and all customer data."
+  echo "==> WARNING: This will wipe $OPENCLAW_DIR and all user data."
   read -r -p "    Type 'yes' to confirm: " confirm
   [[ "$confirm" == "yes" ]] || { echo "Aborted."; exit 0; }
   $COMPOSE down 2>/dev/null || true

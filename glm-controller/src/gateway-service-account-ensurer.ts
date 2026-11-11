@@ -40,8 +40,8 @@ function ownershipMetadata(identity: GatewayServiceAccountIdentity): Record<stri
 /**
  * Render the gateway-scoped ServiceAccount manifest. The KSA
  * (`octogee-gw-<gatewayId>`) is gateway-scoped, NOT revision-scoped: it is
- * created once by Cowboy and referenced by every revision Helm release, so two
- * simultaneous revisions never race on ownership metadata. Builder gateways
+ * created once by the fleet controller and referenced by every revision Helm release, so two
+ * simultaneous revisions never race on ownership metadata. Isolated gateways
  * carry the Workload Identity annotation binding the KSA to the gateway GSA.
  */
 export function serviceAccountManifest(opts: {
@@ -72,7 +72,7 @@ export function serviceAccountManifest(opts: {
  * Ensures the gateway-scoped K8s ServiceAccount exists before `helm upgrade`
  * runs. KSA creation moved OUT of the chart (GATEWAY-RELEASES-SPEC): the chart
  * rendered it per Helm release, so two simultaneous revision releases would race
- * or fail on ownership metadata. Cowboy owns it once, gateway-scoped.
+ * or fail on ownership metadata. The fleet controller owns it once, gateway-scoped.
  *
  * `kubectl apply -f -` is idempotent create-or-update: it converges the KSA
  * (including the Workload Identity annotation) without churning ownership on an

@@ -133,7 +133,7 @@ class DesktopEntryTest(unittest.TestCase):
             entry(fx.system_apps, 'Hyprok', Categories='Office;', OnlyShowIn='Hyprland;KDE;')
             self.assertEqual([a['name'] for a in control.desktop_entries()], ['Hyprok', 'Shown'])
 
-    def test_pins_follow_the_builders_own_dock_configuration(self):
+    def test_pins_follow_the_users_own_dock_configuration(self):
         with _stack() as stack:
             fx = Fixture(stack)
             for name in ('Alpha', 'Chromium', 'Obsidian'):

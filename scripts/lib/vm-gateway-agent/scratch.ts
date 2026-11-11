@@ -2,10 +2,10 @@ import { posix } from "node:path";
 import { createHash } from "node:crypto";
 import { createContainer, removeContainer, startContainer, waitContainer, DockerEngineError, type DockerEngine } from "./docker-engine.js";
 
-export function scratchVolumeName(computerId: string, name: string): string {
-  if (!computerId) throw new Error("missing computer scratch identity");
+export function scratchVolumeName(vmId: string, name: string): string {
+  if (!vmId) throw new Error("missing VM scratch identity");
   if (!/^[a-z][a-z0-9-]{0,62}$/u.test(name)) throw new Error("invalid scratch volume name");
-  return `octogee-scratch-${createHash("sha256").update(computerId).digest("hex").slice(0, 16)}-${name}`;
+  return `octogee-scratch-${createHash("sha256").update(vmId).digest("hex").slice(0, 16)}-${name}`;
 }
 
 function assertResponse(status: number, what: string): void {
@@ -22,8 +22,8 @@ async function scratchRoot(engine: DockerEngine, stateRoot: string): Promise<str
   return root;
 }
 
-async function prepareVolume(input: { engine: DockerEngine; name: string; computerId: string; root: string; beforeCreate: () => Promise<void> }): Promise<void> {
-  const labels = { "ai.octogee.computer-id": input.computerId, "ai.octogee.storage": "ephemeral" };
+async function prepareVolume(input: { engine: DockerEngine; name: string; vmId: string; root: string; beforeCreate: () => Promise<void> }): Promise<void> {
+  const labels = { "ai.octogee.computer-id": input.vmId, "ai.octogee.storage": "ephemeral" };
   let inspected = await input.engine.request<ScratchVolume>("GET", `/volumes/${input.name}`);
   if (inspected.status === 404) {
     await input.beforeCreate();
@@ -40,14 +40,14 @@ async function prepareVolume(input: { engine: DockerEngine; name: string; comput
 }
 
 export async function prepareScratchVolumes(input: {
-  engine: DockerEngine; image: string; computerId: string; stateRoot: string; names: string[];
+  engine: DockerEngine; image: string; vmId: string; stateRoot: string; names: string[];
   beforeCreate: () => Promise<void>;
 }): Promise<void> {
   if (!input.names.length) return;
   const root = await scratchRoot(input.engine, input.stateRoot);
-  const names = input.names.map(name => scratchVolumeName(input.computerId, name));
-  for (const name of names) await prepareVolume({ engine: input.engine, name, root, computerId: input.computerId, beforeCreate: input.beforeCreate });
-  const helper = `octogee-scratch-permissions-${createHash("sha256").update(input.computerId).digest("hex").slice(0, 16)}`;
+  const names = input.names.map(name => scratchVolumeName(input.vmId, name));
+  for (const name of names) await prepareVolume({ engine: input.engine, name, root, vmId: input.vmId, beforeCreate: input.beforeCreate });
+  const helper = `octogee-scratch-permissions-${createHash("sha256").update(input.vmId).digest("hex").slice(0, 16)}`;
   await removeContainer(input.engine, helper);
   try {
     await createContainer(input.engine, helper, { Image: input.image, User: "0:0", NetworkDisabled: true,
@@ -100,7 +100,7 @@ async function scratchConsumers(engine: DockerEngine): Promise<ContainerMount[]>
 }
 
 export async function inspectInactiveScratchVolumes(input: {
-  engine: DockerEngine; computerId: string; stateRoot: string; log: (message: string) => void;
+  engine: DockerEngine; vmId: string; stateRoot: string; log: (message: string) => void;
 }): Promise<string[]> {
   const root = await scratchRoot(input.engine, input.stateRoot);
   const filters = encodeURIComponent(JSON.stringify({ label: ["ai.octogee.storage=ephemeral"] }));
@@ -112,7 +112,7 @@ export async function inspectInactiveScratchVolumes(input: {
   for (const volume of candidates) {
     const owner = verifiedScratch(volume, root);
     if (!owner) { input.log(`[vm-agent] retaining unverified scratch ${volume.Name ?? "unknown"}`); continue; }
-    if (owner !== input.computerId) obsolete.push({ volume, owner });
+    if (owner !== input.vmId) obsolete.push({ volume, owner });
   }
   if (!obsolete.length) return [];
   const mounts = await scratchConsumers(input.engine);

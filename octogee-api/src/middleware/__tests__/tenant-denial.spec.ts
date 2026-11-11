@@ -68,7 +68,7 @@ describe("tenant denial reporter", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
-  it("logs but never notifies a placement denial, so a Builder moving between gateways sees no inbox noise", async () => {
+  it("logs but never notifies a placement denial, so a user moving between gateways sees no inbox noise", async () => {
     const { report, fanOut, logger } = harness();
     await report(PLACEMENT_DENIAL);
     await report({ ...PLACEMENT_DENIAL, path: "/internal/fleet/configured-builder-bootstrap", reason: "request names a gatewayId other than the bound gateway" });
@@ -77,7 +77,7 @@ describe("tenant denial reporter", () => {
     expect(logger.warn).toHaveBeenCalledWith("[tenant-enforcement] denied", expect.objectContaining({ cause: "placement", tenant: PLACEMENT_DENIAL.tenant }));
   });
 
-  it("notifies the Builder whose agent was denied, deduplicated per gateway, route, and hour", async () => {
+  it("notifies the user whose agent was denied, deduplicated per gateway, route, and hour", async () => {
     const { report, fanOut } = harness();
     await report(DELEGATE_DENIAL);
     const bucket = Math.floor(NOW / TENANT_DENIAL_NOTIFICATION_BUCKET_MS);
@@ -109,7 +109,7 @@ describe("tenant denial reporter", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
-  it("names the project for a project agent and resolves that agent's Builder", async () => {
+  it("names the project for a project agent and resolves that agent's user", async () => {
     const { report, fanOut } = harness();
     await report({ ...DELEGATE_DENIAL, path: "/internal/agent-projects/identity", agentId: "octogee-alice-proj-orbit-coach" });
     const [event, targets] = fanOut.mock.calls[0]!;
@@ -124,12 +124,12 @@ describe("tenant denial reporter", () => {
     expect(fanOut.mock.calls[0]![0].body).toMatch(/^Your workspace agent/);
   });
 
-  it("skips the notification when no Builder can be resolved and says so", async () => {
+  it("skips the notification when no user can be resolved and says so", async () => {
     const { report, fanOut, logger } = harness();
     await report({ ...DELEGATE_DENIAL, agentId: null });
     expect(fanOut).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
-      "[tenant-enforcement] denial names no assigned Builder; inbox notification skipped",
+      "[tenant-enforcement] denial names no assigned user; inbox notification skipped",
       expect.objectContaining({ path: "/internal/agent-projects/delegate" }),
     );
   });

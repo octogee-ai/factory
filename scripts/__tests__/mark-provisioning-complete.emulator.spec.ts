@@ -234,14 +234,14 @@ describe("markProvisioningComplete — workspace doc + channels + members", () =
     await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), []);
 
     const general = await readDoc(`workspaces/${slug}/channels/general`);
-    const coachDm = await readDoc(`workspaces/${slug}/channels/coach-dm`);
+    const defaultAgentDm = await readDoc(`workspaces/${slug}/channels/coach-dm`);
 
     expect(general).toMatchObject({ id: "general", kind: "general", name: "general", mattermost: { channelId: `mm-general-${slug}` } });
-    expect(coachDm).toMatchObject({ id: "coach-dm", kind: "coach-dm", mattermost: { channelId: `mm-coach-dm-${slug}` } });
+    expect(defaultAgentDm).toMatchObject({ id: "coach-dm", kind: "coach-dm", mattermost: { channelId: `mm-coach-dm-${slug}` } });
     expect(await readDoc(`workspaces/${slug}/channels/admin`)).toBeNull();
   });
 
-  it("persists only supplied primary channels when the coach channel is absent", async () => {
+  it("persists only supplied primary channels when the agent channel is absent", async () => {
     const { uid, slug } = freshIds();
     await seedUser(uid, { username: slug });
 
@@ -277,7 +277,7 @@ describe("markProvisioningComplete — workspace doc + channels + members", () =
 });
 
 describe("markProvisioningComplete — agents/{uid} doc", () => {
-  it("creates agents/{uid} with name='Octo' + avatarEmoji + coach mattermost userId when present", async () => {
+  it("creates agents/{uid} with name='Octo' + avatarEmoji + agent mattermost userId when present", async () => {
     const { uid, slug } = freshIds();
     await seedUser(uid, { username: slug });
 
@@ -352,18 +352,18 @@ describe("markProvisioningComplete — per-user workspaces subcollection", () =>
 describe("coach completion preserves project authorization", () => {
   it("keeps existing project IDs in the user and workspace mirror across retries and retirement", async () => {
     const { uid, slug } = freshIds();
-    const coach = `octogee-${slug}-coach`, project = `octogee-${slug}-proj-orbit-coach`;
+    const defaultAgent = `octogee-${slug}-coach`, project = `octogee-${slug}-proj-orbit-coach`;
     await seedUser(uid, { username: slug, provisioning: { openclaw: { agentIds: [project] } } });
     const workspace = db.doc(`users/${uid}/workspaces/mirror`);
     await workspace.set({ workspaceSlug: slug, provisioning: { openclaw: { agentIds: [project], gatewayId: "retained-gateway" } } });
-    for (let i = 0; i < 2; i++) await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), [coach]);
+    for (let i = 0; i < 2; i++) await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), [defaultAgent]);
     await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), []);
     for (const path of [`users/${uid}`, workspace.path]) {
-      expect((await readDoc(path))?.provisioning.openclaw.agentIds).toEqual([project, coach]);
+      expect((await readDoc(path))?.provisioning.openclaw.agentIds).toEqual([project, defaultAgent]);
     }
     expect((await readDoc(workspace.path))?.provisioning.openclaw.gatewayId).toBe("retained-gateway");
     for (const path of [`users/${uid}`, workspace.path]) await db.doc(path).update({ "provisioning.openclaw.agentIds": FieldValue.arrayRemove(project) });
-    await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), [coach]);
-    for (const path of [`users/${uid}`, workspace.path]) expect((await readDoc(path))?.provisioning.openclaw.agentIds).toEqual([coach]);
+    await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), [defaultAgent]);
+    for (const path of [`users/${uid}`, workspace.path]) expect((await readDoc(path))?.provisioning.openclaw.agentIds).toEqual([defaultAgent]);
   });
 });

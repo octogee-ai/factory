@@ -46,7 +46,7 @@ export function forceMigrationHarness() {
   });
   const db = {
     collection: (path: string) => {
-      if (path !== "users") throw new Error(`the force migration fake only answers Builder account lookups, not ${path}`);
+      if (path !== "users") throw new Error(`the force migration fake only answers user account lookups, not ${path}`);
       return {
         where: (field: string, _op: string, value: unknown) => {
           if (field !== "username") throw new Error(`the force migration fake only looks up usernames, not ${field}`);

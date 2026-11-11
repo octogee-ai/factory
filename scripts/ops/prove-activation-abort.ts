@@ -36,8 +36,8 @@ const { reconcilePlatformInvariants } = await import("@octogee/core/system-confi
 const { readPostgresAgentAnchor, queryAgentStore } = await import("@octogee/core/agent-postgres");
 const { generateIdentity } = await import("@octogee/core/gateway-device-identity");
 const { createGatewayRpc } = await import("../lib/gateway-rpc.js");
-const { buildSafeDefaultAgent, SAFE_DEFAULT_AGENT_ID } = await import("../lib/openclaw-config-builders.js");
-const { buildBrokeredLifecycleAdapter } = await import("../lib/customer-lifecycle-broker-adapter.js");
+const { buildSafeDefaultAgent, SAFE_DEFAULT_AGENT_ID } = await import("../lib/openclaw-config-users.js");
+const { buildBrokeredLifecycleAdapter } = await import("../lib/user-lifecycle-broker-adapter.js");
 const { createAbortRsyncImportHandler } = await import("../lib/fleet-http-migration.js");
 const { signFleetRequest, gatewayScopedJobId } = await import("../lib/fleet-signature.js");
 const express = (await import("express")).default;
@@ -88,7 +88,7 @@ supervisor.listen(path.join(state, ".surge-openclaw-process-gate.sock"));
 await once(supervisor, "listening");
 const rpc = createGatewayRpc({ url: "ws://127.0.0.1:9", token: "synthetic-offline-target", identity: generateIdentity(), callTimeoutMs: 1000 });
 const logs: string[] = [];
-const adapter = buildBrokeredLifecycleAdapter({ client: {} as FleetBrokerClient, rpc, isBuilderGateway: () => true, log: message => { logs.push(message); console.log(message); } });
+const adapter = buildBrokeredLifecycleAdapter({ client: {} as FleetBrokerClient, rpc, isIsolatedGateway: () => true, log: message => { logs.push(message); console.log(message); } });
 const keys = generateKeyPairSync("ed25519", { publicKeyEncoding: { type: "spki", format: "pem" }, privateKeyEncoding: { type: "pkcs8", format: "pem" } });
 const app = express();
 app.use(express.json({ verify: (request, _response, buffer) => { Object.assign(request, { rawBody: buffer.toString() }); } }));
@@ -150,7 +150,7 @@ try {
   await wait(async () => { try { return (await fetch("http://127.0.0.1:18894/readyz")).ok; } catch { return false; } }, "Source must become ready");
   const mm = "http://host.docker.internal:62065";
   await new Promise(resolve => setTimeout(resolve, 2000));
-  const post = await fetch(`${mm}/api/v4/posts`, { method: "POST", headers: { authorization: `Bearer ${fixture.adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ channel_id: keeper.channelId, message: "Hold this synthetic reply until the Builder activation abort completes." }) });
+  const post = await fetch(`${mm}/api/v4/posts`, { method: "POST", headers: { authorization: `Bearer ${fixture.adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ channel_id: keeper.channelId, message: "Hold this synthetic reply until the user activation abort completes." }) });
   assert(post.ok);
   await Promise.race([providerStarted, new Promise((_, reject) => setTimeout(() => reject(new Error("Source chat did not reach the held provider")), 60_000).unref())]);
   assert(heldReply && !heldReply.writableEnded, "Source chat must remain active");

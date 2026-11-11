@@ -16,7 +16,7 @@ describe("operatorPlatformStateStore", () => {
 
   it("opens the Firestore store only when Firestore is named", async () => {
     vi.stubEnv("PLATFORM_STATE_BACKEND", "firestore");
-    await expect(operatorPlatformStateStore({} as Firestore, "test-central")).resolves.toHaveProperty("builders");
+    await expect(operatorPlatformStateStore({} as Firestore, "test-central")).resolves.toHaveProperty("users");
   });
 
   it("requires database settings once PostgreSQL is chosen", async () => {

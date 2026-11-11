@@ -1,4 +1,4 @@
-import { createComputerHomeClient } from "../lib/compute-home.js";
+import { createVmHomeClient } from "../lib/compute-home.js";
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { MissingRecordError, type FleetRegistryRecord } from "@octogee/core/platform-state";
@@ -11,12 +11,12 @@ import {
   createRuntimeDispatchingHelmRunner,
   createVmGatewayRuntime,
   parseGatewayVmSpec,
-  resolveBuilderComputerPolicy,
-  resolveDisposableBuilderParking,
+  resolveGatewayVmPolicy,
+  resolveIsolatedParking,
   stampGatewayRuntime,
   vmRoutesFromRecords,
 } from "../vm-gateway-runtime";
-import { ComputerCreationPendingError, builderComputerInstanceInput } from "../vm-computer-lifecycle";
+import { VmCreationPendingError, gatewayVmInstanceInput } from "../vm-lifecycle";
 
 const renderedJson = readFileSync(new URL("./fixtures/vm-runtime-render.json", import.meta.url), "utf8");
 const concatenated = (JSON.parse(renderedJson) as unknown[]).map((item) => JSON.stringify(item)).join("\n");
@@ -79,19 +79,19 @@ function initialRuntime(gatewayId: string): FleetRegistryRecord {
 
 const initialRuntimeDoc = (gatewayId: string) => ({ docKind: "runtime", ...initialRuntime(gatewayId) });
 
-const COMPUTER = "octogee-computer-test-uida";
+const VM = "octogee-computer-test-uida";
 const OWNER_LABELS = { "octogee-owner-uid": "uida", "octogee-environment": "test", purpose: "octogee-computer" };
 const running: GatewayVmDescription = {
   machineType: "n2-standard-4",
   serviceAccounts: [{ email: spec.serviceAccountEmail, scopes: [...GATEWAY_VM_ACCESS_SCOPES] }],
-  name: COMPUTER, zone: "us-west1-b", status: "RUNNING", instanceId: "4242", internalIp: "172.20.0.9", provisioningModel: "SPOT", gatewayId: "b-x",
+  name: VM, zone: "us-west1-b", status: "RUNNING", instanceId: "4242", internalIp: "172.20.0.9", provisioningModel: "SPOT", gatewayId: "b-x",
   labels: { ...OWNER_LABELS, "octogee-gateway-id": "b-x" }, metadata: { "gateway-id": "b-x", "gateway-image": "us-docker.pkg.dev/octogee/octogee/gateway:main.abc123", "octogee-api-url": "http://172.20.7.7:3001" }, lastStartedAt: 100,
 };
 const stopped: GatewayVmDescription = { ...running, status: "TERMINATED", internalIp: null };
 const suspended: GatewayVmDescription = { ...running, status: "SUSPENDED", internalIp: null };
 const CURRENT_IMAGE = { name: "octogee-computer-20260927", id: "2027" };
 const OLD_IMAGE = { name: "octogee-computer-20260914", id: "1914" };
-const recorded = { instanceName: COMPUTER, zone: "us-west1-b", instanceId: "4242", internalIp: "172.20.0.9", status: "RUNNING", startedAt: 100, provisioningModel: "SPOT", stopReason: null, updatedAt: 1 };
+const recorded = { instanceName: VM, zone: "us-west1-b", instanceId: "4242", internalIp: "172.20.0.9", status: "RUNNING", startedAt: 100, provisioningModel: "SPOT", stopReason: null, updatedAt: 1 };
 
 function harness(
   docs: Docs,
@@ -157,7 +157,7 @@ function harness(
     disposableParking: extra.disposableParking,
     homeCheckpointTimeoutMs: extra.homeCheckpointTimeoutMs ?? 60_000,
     homeCheckpointPollMs: 10_000,
-    onComputerCreationSettled: creationSettled,
+    onVmCreationSettled: creationSettled,
     now: () => clock.now, log,
   });
   const routesPublished = () => kubectlCalls.filter((c) => c.args[0] === "apply").map((c) => JSON.parse(JSON.parse(c.stdin!).data["routes.json"]) as Record<string, string>);
@@ -170,23 +170,23 @@ const upsertOpts = {
   imageProfile: "builder" as const, chartFingerprint: "cf", deploymentIntentFingerprint: "dif",
 };
 
-async function createComputer(h: ReturnType<typeof harness>, opts: typeof upsertOpts = upsertOpts): Promise<void> {
+async function createVm(h: ReturnType<typeof harness>, opts: typeof upsertOpts = upsertOpts): Promise<void> {
   const settled = h.creationSettled.mock.calls.length;
-  await expect(h.runtime.upsertInstance(opts)).rejects.toBeInstanceOf(ComputerCreationPendingError);
+  await expect(h.runtime.upsertInstance(opts)).rejects.toBeInstanceOf(VmCreationPendingError);
   await vi.waitFor(() => expect(h.creationSettled.mock.calls.length).toBeGreaterThan(settled));
 }
 
-async function deployCreatingComputer(h: ReturnType<typeof harness>, opts: typeof upsertOpts = upsertOpts): Promise<void> {
-  await createComputer(h, opts);
+async function deployCreatingVm(h: ReturnType<typeof harness>, opts: typeof upsertOpts = upsertOpts): Promise<void> {
+  await createVm(h, opts);
   await h.runtime.upsertInstance(opts);
 }
 
-describe("builderComputerInstanceInput", () => {
+describe("gatewayVmInstanceInput", () => {
   const source = { gatewayId: "b-X", ownerUid: "UidA", spec, environment: "test", image: "us-docker.pkg.dev/octogee/octogee/gateway:main.abc123", bridgeIp: "172.20.7.7" };
 
-  it("names the computer for the Builder, labels it for the tenant, and carries the boot contract in metadata", () => {
-    expect(builderComputerInstanceInput(source)).toEqual({
-      instanceName: COMPUTER,
+  it("names the VM for the user, labels it for the tenant, and carries the boot contract in metadata", () => {
+    expect(gatewayVmInstanceInput(source)).toEqual({
+      instanceName: VM,
       ...spec,
       labels: { "octogee-gateway-id": "b-x", "octogee-environment": "test", purpose: "octogee-computer", "octogee-owner-uid": "uida" },
       metadata: {
@@ -198,8 +198,8 @@ describe("builderComputerInstanceInput", () => {
         "octogee-computer-desktop": "omarchy",
       },
     });
-    expect(builderComputerInstanceInput({ ...source, spec: { ...spec, imageProject: "octogee-images" } }).imageProject).toBe("octogee-images");
-    expect(builderComputerInstanceInput({ ...source, spec: { ...spec, desktop: "x11" } }).metadata["octogee-computer-desktop"]).toBe("x11");
+    expect(gatewayVmInstanceInput({ ...source, spec: { ...spec, imageProject: "octogee-images" } }).imageProject).toBe("octogee-images");
+    expect(gatewayVmInstanceInput({ ...source, spec: { ...spec, desktop: "x11" } }).metadata["octogee-computer-desktop"]).toBe("x11");
   });
 
   it("sets every metadata attribute the octo-gateway-agent unit reads at boot, on a create and a rebind", async () => {
@@ -209,7 +209,7 @@ describe("builderComputerInstanceInput", () => {
     const gatewayDoc = { "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } };
 
     const created = harness({ ...gatewayDoc });
-    await deployCreatingComputer(created);
+    await deployCreatingVm(created);
     const parkedElsewhere = { ...stopped, gatewayId: "b-old" };
     const rebound = harness({ ...gatewayDoc }, {
       findByLabels: vi.fn(async () => parkedElsewhere),
@@ -237,7 +237,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     const firstApply = new Promise<void>(resolve => { entered = resolve; });
     const applied: Record<string, string>[] = [];
     let calls = 0;
-    const createdComputers = new Map<string, GatewayVmDescription>();
+    const createdVms = new Map<string, GatewayVmDescription>();
     const h = harness({
       "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded } },
       "glmGateways/b-y": { docKind: "runtime", gatewayId: "b-y", runtime: "gce-vm" },
@@ -245,10 +245,10 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     }, {
       create: vi.fn(async input => {
         const description = { ...running, name: input.instanceName, gatewayId: "b-y", internalIp: "172.20.0.10", labels: input.labels, metadata: input.metadata };
-        createdComputers.set(input.instanceName, description);
+        createdVms.set(input.instanceName, description);
         return { description, provisioningModel: "SPOT" as const, fellBackToStandard: false, alreadyExisted: false };
       }),
-      describe: vi.fn(async (name: string) => createdComputers.get(name) ?? running),
+      describe: vi.fn(async (name: string) => createdVms.get(name) ?? running),
     }, "172.20.7.7", {}, {
       onApply: async routes => {
         if (calls++ === 0) { entered(); await held; }
@@ -257,7 +257,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     });
     const first = h.runtime.upsertInstance(upsertOpts);
     await firstApply;
-    const second = deployCreatingComputer(h, { ...upsertOpts, gatewayId: "b-y", builderIdentity: { ownerUid: "UidB", builderSlug: "bob" } });
+    const second = deployCreatingVm(h, { ...upsertOpts, gatewayId: "b-y", builderIdentity: { ownerUid: "UidB", builderSlug: "bob" } });
     try {
       await vi.waitFor(() => expect(h.docs["glmGateways/b-y/vm/runtime"]).toBeDefined());
       expect(h.routesPublished()).toHaveLength(1);
@@ -282,7 +282,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.docs["glmGateways/b-x"].vmInstance).toMatchObject({ gatewayId: "b-x" });
   });
 
-  it("resizes a parked Team computer to the recorded Pro shape before starting it", async () => {
+  it("resizes a parked Team VM to the recorded Pro shape before starting it", async () => {
     let computer = { ...stopped };
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, machineType: "n2-standard-2" }, vm: recorded } }, {
       describe: vi.fn(async () => computer),
@@ -290,12 +290,12 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
       start: vi.fn(async () => { computer = { ...computer, status: "RUNNING" }; return { fellBackToStandard: false }; }),
     });
     await h.runtime.upsertInstance(upsertOpts);
-    expect(h.vm.setMachineType).toHaveBeenCalledWith(COMPUTER, "us-west1-b", "n2-standard-2");
+    expect(h.vm.setMachineType).toHaveBeenCalledWith(VM, "us-west1-b", "n2-standard-2");
     expect(h.vm.setMachineType.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
     expect(h.vm.delete).not.toHaveBeenCalled();
   });
 
-  it("renders an X11 computer's runtime with the X11 desktop in its gateway and no host desktop node", async () => {
+  it("renders an X11 VM's runtime with the X11 desktop in its gateway and no host desktop node", async () => {
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, desktop: "x11" }, vm: recorded } }, {
       describe: vi.fn(async () => ({ ...running, metadata: { ...running.metadata, "octogee-owner-uid": "UidA", "octogee-computer-desktop": "x11" } })),
     });
@@ -306,7 +306,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect((bundle.containers as Array<{ name: string }>).map((container) => container.name)).toEqual(["gateway", "gateway-edge"]);
   });
 
-  it("reads a recorded spec from before desktops and boot disk types as the Omarchy pd-ssd computer it describes", async () => {
+  it("reads a recorded spec from before desktops and boot disk types as the Omarchy pd-ssd VM it describes", async () => {
     const { desktop: _desktop, bootDiskType: _bootDiskType, ...omarchyEra } = spec;
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: omarchyEra, vm: recorded } }, {
       describe: vi.fn(async () => ({ ...running, metadata: { ...running.metadata, "octogee-owner-uid": "UidA" } })),
@@ -324,7 +324,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     }
   });
 
-  it("stops a suspended computer before giving it another desktop, so it boots into that desktop", async () => {
+  it("stops a suspended VM before giving it another desktop, so it boots into that desktop", async () => {
     let computer: GatewayVmDescription = { ...suspended, metadata: { ...suspended.metadata, "octogee-owner-uid": "UidA" } };
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, desktop: "x11" }, vm: recorded } }, {
       describe: vi.fn(async () => computer),
@@ -333,13 +333,13 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
       start: vi.fn(async () => { computer = { ...computer, status: "RUNNING" }; return { fellBackToStandard: false }; }),
     });
     await h.runtime.upsertInstance(upsertOpts);
-    expect(h.vm.bind).toHaveBeenCalledWith(COMPUTER, "us-west1-b", expect.objectContaining({ metadata: expect.objectContaining({ "octogee-computer-desktop": "x11" }) }));
+    expect(h.vm.bind).toHaveBeenCalledWith(VM, "us-west1-b", expect.objectContaining({ metadata: expect.objectContaining({ "octogee-computer-desktop": "x11" }) }));
     expect(h.vm.stop.mock.invocationCallOrder[0]).toBeLessThan(h.vm.bind.mock.invocationCallOrder[0]);
-    expect(h.vm.start).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.start).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.vm.resume).not.toHaveBeenCalled();
   });
 
-  it("stops a suspended computer bound to an earlier gateway before rebinding it to another desktop", async () => {
+  it("stops a suspended VM bound to an earlier gateway before rebinding it to another desktop", async () => {
     let computer: GatewayVmDescription = { ...suspended, gatewayId: "b-old", metadata: { ...suspended.metadata, "gateway-id": "b-old", "octogee-owner-uid": "UidA" } };
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, desktop: "x11" } } }, {
       findByLabels: vi.fn(async () => computer),
@@ -350,12 +350,12 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     });
     await h.runtime.upsertInstance(upsertOpts);
     expect(h.vm.stop.mock.invocationCallOrder[0]).toBeLessThan(h.vm.bind.mock.invocationCallOrder[0]);
-    expect(h.vm.bind).toHaveBeenCalledWith(COMPUTER, "us-west1-b", expect.objectContaining({ metadata: expect.objectContaining({ "gateway-id": "b-x", "octogee-computer-desktop": "x11" }) }));
-    expect(h.vm.start).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.bind).toHaveBeenCalledWith(VM, "us-west1-b", expect.objectContaining({ metadata: expect.objectContaining({ "gateway-id": "b-x", "octogee-computer-desktop": "x11" }) }));
+    expect(h.vm.start).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.vm.resume).not.toHaveBeenCalled();
   });
 
-  it("leaves a running computer's desktop for its next park", async () => {
+  it("leaves a running VM's desktop for its next park", async () => {
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, desktop: "x11" }, vm: recorded } }, {
       describe: vi.fn(async () => ({ ...running, metadata: { ...running.metadata, "octogee-owner-uid": "UidA" } })),
     });
@@ -364,7 +364,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.vm.stop).not.toHaveBeenCalled();
   });
 
-  it("moves a parked Spot computer to the recorded on-demand capacity before starting it", async () => {
+  it("moves a parked Spot VM to the recorded on-demand capacity before starting it", async () => {
     let computer = { ...stopped };
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, provisioningModel: "STANDARD" }, vm: recorded } }, {
       describe: vi.fn(async () => computer),
@@ -372,12 +372,12 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
       start: vi.fn(async () => { computer = { ...computer, status: "RUNNING" }; return { fellBackToStandard: false }; }),
     });
     await h.runtime.upsertInstance(upsertOpts);
-    expect(h.vm.setProvisioningModel).toHaveBeenCalledExactlyOnceWith(COMPUTER, "us-west1-b", "STANDARD");
+    expect(h.vm.setProvisioningModel).toHaveBeenCalledExactlyOnceWith(VM, "us-west1-b", "STANDARD");
     expect(h.vm.setProvisioningModel.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
     expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ provisioningModel: "STANDARD", status: "RUNNING" });
   });
 
-  it("stops a suspended Spot computer before moving it to on-demand capacity", async () => {
+  it("stops a suspended Spot VM before moving it to on-demand capacity", async () => {
     let computer = { ...suspended };
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, provisioningModel: "STANDARD" }, vm: recorded } }, {
       describe: vi.fn(async () => computer),
@@ -391,7 +391,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.vm.resume).not.toHaveBeenCalled();
   });
 
-  it("refuses to start a parked computer whose provisioning model did not converge", async () => {
+  it("refuses to start a parked VM whose provisioning model did not converge", async () => {
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, provisioningModel: "STANDARD" }, vm: recorded } }, {
       describe: vi.fn(async () => stopped),
     });
@@ -399,7 +399,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.vm.start).not.toHaveBeenCalled();
   });
 
-  it("leaves a running Spot computer's capacity for its next park", async () => {
+  it("leaves a running Spot VM's capacity for its next park", async () => {
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, provisioningModel: "STANDARD" }, vm: recorded } });
     await h.runtime.upsertInstance(upsertOpts);
     expect(h.vm.setProvisioningModel).not.toHaveBeenCalled();
@@ -452,7 +452,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.docs["users/UidA"].provisioning.homeCapacity).toMatchObject({ desiredGiB: homeDiskSizeGb, allocatedGiB: 30, status, applyOnResume: true });
   });
 
-  it("repairs a parked computer's identity scopes before starting it without replacing its disk", async () => {
+  it("repairs a parked VM's identity scopes before starting it without replacing its disk", async () => {
     const old = { ...stopped, serviceAccounts: [{ email: spec.serviceAccountEmail, scopes: ["https://www.googleapis.com/auth/cloud-platform"] }] };
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: recorded } }, {
       describe: vi.fn(async () => running).mockResolvedValueOnce(old),
@@ -463,13 +463,13 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     setServiceAccount: vi.fn(async () => {}),
     });
     await h.runtime.upsertInstance(upsertOpts);
-    expect(h.vm.setServiceAccount).toHaveBeenCalledWith(COMPUTER, "us-west1-b", spec.serviceAccountEmail);
+    expect(h.vm.setServiceAccount).toHaveBeenCalledWith(VM, "us-west1-b", spec.serviceAccountEmail);
     expect(h.vm.setServiceAccount.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
     expect(h.vm.delete).not.toHaveBeenCalled();
     expect(h.vm.create).not.toHaveBeenCalled();
   });
 
-  it("rejects a running computer with stale scopes before publishing a new gateway image", async () => {
+  it("rejects a running VM with stale scopes before publishing a new gateway image", async () => {
     const old = { ...running, serviceAccounts: [{ email: spec.serviceAccountEmail, scopes: [] }] };
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: recorded } }, {
       describe: vi.fn(async () => old),
@@ -486,7 +486,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.docs["glmGateways/b-x/vm/runtime"]).toBeUndefined();
   });
 
-  it("repairs stale scopes through pause and resume while retaining the same Builder computer", async () => {
+  it("repairs stale scopes through pause and resume while retaining the same gateway VM", async () => {
     let description: GatewayVmDescription = { ...running, serviceAccounts: [{ email: spec.serviceAccountEmail, scopes: ["https://www.googleapis.com/auth/cloud-platform"] }] };
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: recorded } }, {
       describe: vi.fn(async () => description),
@@ -504,7 +504,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.vm.setServiceAccount).not.toHaveBeenCalled();
     expect(h.vm.start).not.toHaveBeenCalled();
     await h.runtime.upsertInstance(upsertOpts);
-    expect(h.vm.setServiceAccount).toHaveBeenCalledWith(COMPUTER, "us-west1-b", spec.serviceAccountEmail);
+    expect(h.vm.setServiceAccount).toHaveBeenCalledWith(VM, "us-west1-b", spec.serviceAccountEmail);
     expect(h.vm.stop.mock.invocationCallOrder[0]).toBeLessThan(h.vm.setServiceAccount.mock.invocationCallOrder[0]);
     expect(h.vm.setServiceAccount.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
     expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ instanceId: "4242", status: "RUNNING", stopReason: null });
@@ -512,10 +512,10 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.vm.create).not.toHaveBeenCalled();
   });
 
-  it("updates the bootstrap image on an existing gateway without restarting its computer", async () => {
+  it("updates the bootstrap image on an existing gateway without restarting its VM", async () => {
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: recorded } });
     await h.runtime.upsertInstance({ ...upsertOpts, imageTag: "main.new-agent" });
-    expect(h.vm.bind).toHaveBeenCalledWith(COMPUTER, running.zone, expect.objectContaining({
+    expect(h.vm.bind).toHaveBeenCalledWith(VM, running.zone, expect.objectContaining({
       metadata: expect.objectContaining({ "gateway-image": `${upsertOpts.imageRepository}:main.new-agent` }),
     }));
     expect(h.vm.stop).not.toHaveBeenCalled();
@@ -523,7 +523,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
   it("renders the chart through helm template, stores the bundle and instance, creates the VM, and publishes routes", async () => {
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } });
 
-    await deployCreatingComputer(h);
+    await deployCreatingVm(h);
 
     expect(h.helmCalls[0].slice(0, 3)).toEqual(["template", "octogee-gw-b-x", "/chart"]);
     expect(h.helmCalls[0]).not.toContain("--wait");
@@ -542,7 +542,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.vm.findByLabels).toHaveBeenCalledWith(OWNER_LABELS);
     expect(h.vm.find).not.toHaveBeenCalled();
     expect(h.vm.create).toHaveBeenCalledWith(expect.objectContaining({
-      instanceName: COMPUTER, zones: ["us-west1-b"], provisioningModel: "SPOT",
+      instanceName: VM, zones: ["us-west1-b"], provisioningModel: "SPOT",
       labels: expect.objectContaining({ "octogee-gateway-id": "b-x", "octogee-owner-uid": "uida" }),
       metadata: { "gateway-id": "b-x", "octogee-owner-uid": "UidA", "octogee-environment": "test", "gateway-image": `${upsertOpts.imageRepository}:main.abc123`, "octogee-api-url": "http://172.20.7.7:3001", "octogee-computer-desktop": "omarchy" },
     }));
@@ -551,7 +551,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(JSON.parse(apply!.stdin!)).toMatchObject({ kind: "ConfigMap", metadata: { name: "octogee-vm-routes" }, data: { "routes.json": JSON.stringify({ "b-x": "172.20.0.9" }) } });
   });
 
-  it("places a cold computer in the configured zones, least-occupied first, even when the gateway recorded an older single-zone spec", async () => {
+  it("places a cold VM in the configured zones, least-occupied first, even when the gateway recorded an older single-zone spec", async () => {
     const zones = ["us-central1-b", "us-central1-c", "us-central1-f"];
     const { zones: _zones, ...shape } = spec;
     const recordedSpec = { ...shape, machineType: "n2-standard-8", zone: "us-central1-a", fallbackZones: zones };
@@ -562,11 +562,11 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
       "172.20.7.7", {}, { vmSpec: { ...spec, zones } },
     );
 
-    await deployCreatingComputer(h);
+    await deployCreatingVm(h);
 
     expect(h.vm.list).toHaveBeenCalledWith({ labels: { "octogee-environment": "test", purpose: "octogee-computer" } });
     const created = vi.mocked(h.vm.create).mock.calls[0][0];
-    expect(created).toMatchObject({ instanceName: COMPUTER, machineType: "n2-standard-8", zones: ["us-central1-c", "us-central1-f", "us-central1-b"] });
+    expect(created).toMatchObject({ instanceName: VM, machineType: "n2-standard-8", zones: ["us-central1-c", "us-central1-f", "us-central1-b"] });
     expect(created).not.toHaveProperty("zone");
     expect(created).not.toHaveProperty("fallbackZones");
     expect(h.docs["glmGateways/b-x"].vmSpec).toMatchObject({ machineType: "n2-standard-8", zones });
@@ -587,7 +587,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
       start: vi.fn(async () => ({ fellBackToStandard: true })),
     });
     await parked.runtime.upsertInstance(upsertOpts);
-    expect(parked.vm.start).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(parked.vm.start).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(parked.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 1_000 });
     expect(parked.log).toHaveBeenCalledWith(expect.stringMatching(/started octogee-computer-test-uida -> RUNNING \(on-demand fallback\)/));
     expect(parked.routesPublished().at(-1)).toEqual({ "b-x": "172.20.0.9" });
@@ -597,7 +597,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(noBridge.docs["glmGateways/b-x/vm/runtime"]).toBeUndefined();
   });
 
-  it("replaces the recorded instance and computer state whole, dropping fields the new deployment no longer carries", async () => {
+  it("replaces the recorded instance and VM state whole, dropping fields the new deployment no longer carries", async () => {
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm",
       vm: { ...recorded, status: "TERMINATED", internalIp: null, stopReason: "idle", parkedCheckpoint: { outcome: "fresh", requestedAt: 1, completedAt: 2 } },
       vmInstance: { enabled: true, gatewayId: "b-x", sizingTier: "l", replicas: 1 } } }, {
@@ -630,18 +630,18 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
       "users/UidA": { provisioning: { openclaw: { gatewayId: "b-x" }, homeStorage: { disk: { id: 777 } } } },
     });
 
-    await expect(h.runtime.upsertInstance(upsertOpts)).rejects.toThrow("Builder UidA: home storage disk id is malformed");
+    await expect(h.runtime.upsertInstance(upsertOpts)).rejects.toThrow("User UidA: home storage disk id is malformed");
 
     expect(h.docs["glmGateways/b-x/vm/runtime"]).toBeUndefined();
   });
 
-  it("records the deployment only after the computer and its route exist, so a failed allocation is retried", async () => {
+  it("records the deployment only after the VM and its route exist, so a failed allocation is retried", async () => {
     const gatewayDoc = { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" };
     const create = vi.fn(async () => ({ description: running, provisioningModel: "SPOT" as const, fellBackToStandard: false, alreadyExisted: false }))
       .mockRejectedValueOnce(new Error("ZONE_RESOURCE_POOL_EXHAUSTED"));
     const h = harness({ "glmGateways/b-x": { ...gatewayDoc } }, { create });
 
-    await createComputer(h);
+    await createVm(h);
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/⚠ b-x: creating octogee-computer-test-uida failed: ZONE_RESOURCE_POOL_EXHAUSTED/));
     expect(h.docs["glmGateways/b-x/vm/runtime"]).toBeUndefined();
     expect(h.docs["glmGateways/b-x"].vmInstance).toBeUndefined();
@@ -649,50 +649,50 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(await h.runtime.readDeployedInstance({ namespace: "octogee-test", gatewayId: "b-x" })).toBeNull();
     expect(h.waits).toEqual([30_000]);
 
-    await deployCreatingComputer(h);
+    await deployCreatingVm(h);
     expect(create).toHaveBeenCalledTimes(2);
     expect(h.docs["glmGateways/b-x"].vmInstance).toMatchObject({ gatewayId: "b-x", deploymentIntentFingerprint: "dif" });
     expect(h.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 31_000 });
 
     const routesFail = harness({ "glmGateways/b-x": { ...gatewayDoc } }, {}, "172.20.7.7", {}, { applyFails: true });
-    await createComputer(routesFail);
+    await createVm(routesFail);
     await expect(routesFail.runtime.upsertInstance(upsertOpts)).rejects.toThrow(/configmaps is forbidden/);
     expect(routesFail.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 1_000 });
     expect(routesFail.docs["glmGateways/b-x"].vmInstance).toBeUndefined();
   });
 
-  it("pauses by suspending the Builder's running computer instead of claiming or starting one, and records the paused deployment", async () => {
+  it("pauses by suspending the user's running VM instead of claiming or starting one, and records the paused deployment", async () => {
     const paused = { ...upsertOpts, replicas: 0 };
     let current = running;
-    const withComputer = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded } } }, {
+    const withVm = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded } } }, {
       describe: vi.fn(async () => current),
       suspend: vi.fn(async () => { current = suspended; }),
       resume: vi.fn(async () => { current = running; return { fellBackToStandard: false }; }),
     });
-    await withComputer.runtime.upsertInstance(paused);
-    expect(withComputer.vm.suspend).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
-    expect(withComputer.vm.stop).not.toHaveBeenCalled();
-    expect(withComputer.vm.start).not.toHaveBeenCalled();
-    expect(withComputer.vm.create).not.toHaveBeenCalled();
-    expect(withComputer.vm.findByLabels).not.toHaveBeenCalled();
-    expect(withComputer.vm.list).not.toHaveBeenCalled();
-    expect(withComputer.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "operator", updatedAt: 1_000 });
-    expect(withComputer.docs["glmGateways/b-x"].vmInstance).toMatchObject({ gatewayId: "b-x", replicas: 0 });
-    expect(withComputer.docs["glmGateways/b-x/vm/runtime"]).toBeDefined();
-    expect(withComputer.routesPublished().at(-1)).toEqual({});
-    expect(withComputer.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: suspended octogee-computer-test-uida for operator -> SUSPENDED; boot and home disks retained/));
+    await withVm.runtime.upsertInstance(paused);
+    expect(withVm.vm.suspend).toHaveBeenCalledWith(VM, "us-west1-b");
+    expect(withVm.vm.stop).not.toHaveBeenCalled();
+    expect(withVm.vm.start).not.toHaveBeenCalled();
+    expect(withVm.vm.create).not.toHaveBeenCalled();
+    expect(withVm.vm.findByLabels).not.toHaveBeenCalled();
+    expect(withVm.vm.list).not.toHaveBeenCalled();
+    expect(withVm.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "operator", updatedAt: 1_000 });
+    expect(withVm.docs["glmGateways/b-x"].vmInstance).toMatchObject({ gatewayId: "b-x", replicas: 0 });
+    expect(withVm.docs["glmGateways/b-x/vm/runtime"]).toBeDefined();
+    expect(withVm.routesPublished().at(-1)).toEqual({});
+    expect(withVm.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: suspended octogee-computer-test-uida for operator -> SUSPENDED; boot and home disks retained/));
 
-    await withComputer.runtime.recoverUnreachable("b-x");
-    expect(withComputer.vm.resume).not.toHaveBeenCalled();
-    expect(withComputer.vm.start).not.toHaveBeenCalled();
+    await withVm.runtime.recoverUnreachable("b-x");
+    expect(withVm.vm.resume).not.toHaveBeenCalled();
+    expect(withVm.vm.start).not.toHaveBeenCalled();
 
-    await withComputer.runtime.upsertInstance({ ...upsertOpts, replicas: 1 });
-    expect(withComputer.vm.resume).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
-    expect(withComputer.vm.start).not.toHaveBeenCalled();
-    expect(withComputer.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: resumed octogee-computer-test-uida -> RUNNING/));
-    expect(withComputer.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 1_000 });
-    expect(withComputer.docs["glmGateways/b-x"].vmInstance).toMatchObject({ replicas: 1 });
-    expect(withComputer.routesPublished().at(-1)).toEqual({ "b-x": "172.20.0.9" });
+    await withVm.runtime.upsertInstance({ ...upsertOpts, replicas: 1 });
+    expect(withVm.vm.resume).toHaveBeenCalledWith(VM, "us-west1-b");
+    expect(withVm.vm.start).not.toHaveBeenCalled();
+    expect(withVm.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: resumed octogee-computer-test-uida -> RUNNING/));
+    expect(withVm.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 1_000 });
+    expect(withVm.docs["glmGateways/b-x"].vmInstance).toMatchObject({ replicas: 1 });
+    expect(withVm.routesPublished().at(-1)).toEqual({ "b-x": "172.20.0.9" });
 
     const alreadyStopped = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "TERMINATED", internalIp: null, stopReason: "idle" } } }, {
       describe: vi.fn(async () => stopped),
@@ -711,15 +711,15 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(vanished.docs["glmGateways/b-x"].vm).toEqual(recorded);
     expect(vanished.docs["glmGateways/b-x"].vmInstance).toMatchObject({ replicas: 0 });
 
-    const noComputer = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } });
-    await noComputer.runtime.upsertInstance(paused);
-    expect(noComputer.vm.describe).not.toHaveBeenCalled();
-    expect(noComputer.vm.findByLabels).not.toHaveBeenCalled();
-    expect(noComputer.vm.list).not.toHaveBeenCalled();
-    expect(noComputer.vm.create).not.toHaveBeenCalled();
-    expect(noComputer.vm.stop).not.toHaveBeenCalled();
-    expect(noComputer.docs["glmGateways/b-x"].vm).toBeUndefined();
-    expect(noComputer.docs["glmGateways/b-x"].vmInstance).toMatchObject({ replicas: 0 });
+    const noVm = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } });
+    await noVm.runtime.upsertInstance(paused);
+    expect(noVm.vm.describe).not.toHaveBeenCalled();
+    expect(noVm.vm.findByLabels).not.toHaveBeenCalled();
+    expect(noVm.vm.list).not.toHaveBeenCalled();
+    expect(noVm.vm.create).not.toHaveBeenCalled();
+    expect(noVm.vm.stop).not.toHaveBeenCalled();
+    expect(noVm.docs["glmGateways/b-x"].vm).toBeUndefined();
+    expect(noVm.docs["glmGateways/b-x"].vmInstance).toMatchObject({ replicas: 0 });
   });
 
   it("retains an absent source identity while a native return checkpoint remains held", async () => {
@@ -736,7 +736,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.docs["glmGateways/b-x"].vm).toEqual(recorded);
   });
 
-  it.each(["b-x", null])("never stops a same-name replacement computer while pausing (binding %s)", async gatewayId => {
+  it.each(["b-x", null])("never stops a same-name replacement VM while pausing (binding %s)", async gatewayId => {
     const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vm: { ...recorded } } }, {
       describe: vi.fn(async () => ({ ...running, instanceId: "replacement", gatewayId })),
     });
@@ -745,7 +745,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.docs["glmGateways/b-x"].vm).toEqual(recorded);
   });
 
-  it("binds the Builder's parked computer to the new lease's gateway and starts it", async () => {
+  it("binds the user's parked VM to the new lease's gateway and starts it", async () => {
     const parkedElsewhere = { ...stopped, gatewayId: "b-old" };
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
       findByLabels: vi.fn(async () => parkedElsewhere),
@@ -758,17 +758,17 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.vm.list).not.toHaveBeenCalled();
     expect(h.vm.create).not.toHaveBeenCalled();
     expect(h.vm.stop).not.toHaveBeenCalled();
-    expect(h.vm.bind).toHaveBeenCalledWith(COMPUTER, "us-west1-b", {
+    expect(h.vm.bind).toHaveBeenCalledWith(VM, "us-west1-b", {
       labels: { "octogee-gateway-id": "b-x", "octogee-environment": "test", purpose: "octogee-computer", "octogee-owner-uid": "uida" },
       metadata: { "gateway-id": "b-x", "octogee-owner-uid": "UidA", "octogee-environment": "test", "gateway-image": `${upsertOpts.imageRepository}:main.abc123`, "octogee-api-url": "http://172.20.7.7:3001", "octogee-computer-desktop": "omarchy" },
     });
-    expect(h.vm.start).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.start).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 1_000 });
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/bound octogee-computer-test-uida to b-x \(was b-old\)/));
     expect(h.routesPublished().at(-1)).toEqual({ "b-x": "172.20.0.9" });
   });
 
-  it("stops a running computer before rebinding it so the agent boots into the new gateway", async () => {
+  it("stops a running VM before rebinding it so the agent boots into the new gateway", async () => {
     const runningElsewhere = { ...running, gatewayId: "b-old" };
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
       findByLabels: vi.fn(async () => runningElsewhere),
@@ -777,21 +777,21 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
 
     await h.runtime.upsertInstance(upsertOpts);
 
-    expect(h.vm.stop).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.stop).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.vm.bind).toHaveBeenCalled();
-    expect(h.vm.start).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.start).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.vm.stop.mock.invocationCallOrder[0]).toBeLessThan(h.vm.bind.mock.invocationCallOrder[0]);
     expect(h.vm.bind.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
   });
 
-  it.each(["RUNNING", "STOPPING", "missing", "recreated"])("does not rebind after stop when the observed computer is %s", async (status) => {
+  it.each(["RUNNING", "STOPPING", "missing", "recreated"])("does not rebind after stop when the observed VM is %s", async (status) => {
     const previous = { ...running, gatewayId: "b-old" };
     const observed = status === "missing" ? null : { ...previous, status: status === "recreated" ? "TERMINATED" : status,
       instanceId: status === "recreated" ? "4243" : previous.instanceId };
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
       findByLabels: vi.fn(async () => previous), describe: vi.fn(async () => observed),
     });
-    await expect(h.runtime.upsertInstance(upsertOpts)).rejects.toThrow(/verified stopped computer/);
+    await expect(h.runtime.upsertInstance(upsertOpts)).rejects.toThrow(/verified stopped VM/);
     expect(h.vm.stop).toHaveBeenCalledOnce();
     expect(h.vm.bind).not.toHaveBeenCalled();
     expect(h.vm.setServiceAccount).not.toHaveBeenCalled();
@@ -805,12 +805,12 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
       findByLabels: vi.fn(async () => previous), describe: vi.fn(async () => observed),
     });
-    await expect(h.runtime.upsertInstance(upsertOpts)).rejects.toThrow(/verified stopped computer/);
+    await expect(h.runtime.upsertInstance(upsertOpts)).rejects.toThrow(/verified stopped VM/);
     expect(h.vm.bind).not.toHaveBeenCalled();
     expect(h.vm.start).not.toHaveBeenCalled();
   });
 
-  it("refuses to bind while another gateway record still holds the computer", async () => {
+  it("refuses to bind while another gateway record still holds the VM", async () => {
     const h = harness({
       "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" },
       "glmGateways/b-old": { docKind: "runtime", gatewayId: "b-old", runtime: "gce-vm", vm: { ...recorded, status: "TERMINATED", stopReason: "idle" } },
@@ -823,7 +823,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.docs["glmGateways/b-x"].vm).toBeUndefined();
   });
 
-  it("requires an owner and waits out a computer Compute is still stopping", async () => {
+  it("requires an owner and waits out a VM Compute is still stopping", async () => {
     const ownerless = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } });
     await expect(ownerless.runtime.upsertInstance({ ...upsertOpts, builderIdentity: undefined })).rejects.toThrow(/needs an owner/);
     expect(ownerless.vm.findByLabels).not.toHaveBeenCalled();
@@ -837,8 +837,8 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
   });
 });
 
-describe("createVmGatewayRuntime creating a fresh computer", () => {
-  const otherBuilder = { ...upsertOpts, gatewayId: "b-y", builderIdentity: { ownerUid: "UidB", builderSlug: "papa" } };
+describe("createVmGatewayRuntime creating a fresh VM", () => {
+  const otherUser = { ...upsertOpts, gatewayId: "b-y", builderIdentity: { ownerUid: "UidB", builderSlug: "papa" } };
 
   function heldInserts() {
     const finish = new Map<string, (outcome: GatewayVmDescription | Error) => void>();
@@ -857,16 +857,16 @@ describe("createVmGatewayRuntime creating a fresh computer", () => {
     ]);
   }
 
-  it("returns while Compute inserts the computer, so another Builder's converge starts its own insert, then adopts the computer", async () => {
+  it("returns while Compute inserts the VM, so another user's converge starts its own insert, then adopts the VM", async () => {
     const { create, finish } = heldInserts();
     const h = harness({
       "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" },
       "glmGateways/b-y": { docKind: "runtime", gatewayId: "b-y", runtime: "gce-vm" },
     }, { create });
 
-    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
-    expect(await settledOrWaiting(h.runtime.upsertInstance(otherBuilder))).toMatchObject({ name: "ComputerCreationPendingError" });
-    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "VmCreationPendingError" });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(otherUser))).toMatchObject({ name: "VmCreationPendingError" });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "VmCreationPendingError" });
     expect(create.mock.calls.map(([input]) => input.labels["octogee-owner-uid"])).toEqual(["uida", "uidb"]);
     expect(h.docs["glmGateways/b-x"].vm).toBeUndefined();
     expect(h.docs["glmGateways/b-x"].vmInstance).toBeUndefined();
@@ -885,12 +885,12 @@ describe("createVmGatewayRuntime creating a fresh computer", () => {
     expect(h.routesPublished().at(-1)).toEqual({ "b-x": "172.20.0.9" });
   });
 
-  it("waits for a computer it is still creating before parking it, so retiring mid-insert parks the new computer", async () => {
+  it("waits for a VM it is still creating before parking it, so retiring mid-insert parks the new VM", async () => {
     const { create, finish } = heldInserts();
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
       create, describe: vi.fn(async () => suspended).mockResolvedValueOnce(running),
     });
-    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "VmCreationPendingError" });
 
     await h.runtime.recoverUnreachable("b-x");
     const removing = h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
@@ -899,8 +899,8 @@ describe("createVmGatewayRuntime creating a fresh computer", () => {
 
     finish.get("uida")!(running);
     await removing;
-    expect(h.vm.suspend).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
-    expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ instanceName: COMPUTER, instanceId: "4242", status: "SUSPENDED", stopReason: "idle" });
+    expect(h.vm.suspend).toHaveBeenCalledWith(VM, "us-west1-b");
+    expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ instanceName: VM, instanceId: "4242", status: "SUSPENDED", stopReason: "idle" });
     expect(h.log).not.toHaveBeenCalledWith(expect.stringMatching(/absent from Compute/));
   });
 
@@ -910,7 +910,7 @@ describe("createVmGatewayRuntime creating a fresh computer", () => {
     const backoff = new Promise<void>((resolve) => { endBackoff = resolve; });
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, { create },
       "172.20.7.7", {}, { onWait: (ms) => (ms === 30_000 ? backoff : undefined) });
-    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "VmCreationPendingError" });
 
     finish.get("uida")!(new ComputeOperationError("insert octogee-computer-test-uida: ZONE_RESOURCE_POOL_EXHAUSTED: no capacity", ["ZONE_RESOURCE_POOL_EXHAUSTED"]));
     await vi.waitFor(() => expect(h.waits).toContain(30_000));
@@ -922,26 +922,26 @@ describe("createVmGatewayRuntime creating a fresh computer", () => {
 
     endBackoff();
     await vi.waitFor(() => expect(h.creationSettled).toHaveBeenCalledWith("b-x"));
-    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "VmCreationPendingError" });
     expect(create).toHaveBeenCalledTimes(2);
   });
 
-  it("fails another gateway of the same owner loudly while the owner's computer is being created, so its converge is retried", async () => {
+  it("fails another gateway of the same owner loudly while the owner's VM is being created, so its converge is retried", async () => {
     const { create, finish } = heldInserts();
     const h = harness({
       "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" },
       "glmGateways/b-z": { docKind: "runtime", gatewayId: "b-z", runtime: "gce-vm" },
     }, { create });
-    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "VmCreationPendingError" });
 
     const sameOwner = await settledOrWaiting(h.runtime.upsertInstance({ ...upsertOpts, gatewayId: "b-z" }));
-    expect(sameOwner).not.toBeInstanceOf(ComputerCreationPendingError);
-    expect(sameOwner).toMatchObject({ message: "computer octogee-computer-test-uida is being created for b-x; retrying once it exists" });
+    expect(sameOwner).not.toBeInstanceOf(VmCreationPendingError);
+    expect(sameOwner).toMatchObject({ message: "VM octogee-computer-test-uida is being created for b-x; retrying once it exists" });
     expect(create).toHaveBeenCalledOnce();
     finish.get("uida")!(running);
   });
 
-  it("inserts one computer when two gateways of the same owner converge concurrently, failing the other loudly", async () => {
+  it("inserts one VM when two gateways of the same owner converge concurrently, failing the other loudly", async () => {
     const { create, finish } = heldInserts();
     const h = harness({
       "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" },
@@ -953,55 +953,55 @@ describe("createVmGatewayRuntime creating a fresh computer", () => {
       settledOrWaiting(h.runtime.upsertInstance({ ...upsertOpts, gatewayId: "b-z" })),
     ]);
     expect(create).toHaveBeenCalledOnce();
-    expect(first).toMatchObject({ name: "ComputerCreationPendingError" });
-    expect(sameOwner).toMatchObject({ message: "computer octogee-computer-test-uida is being created for b-x; retrying once it exists" });
+    expect(first).toMatchObject({ name: "VmCreationPendingError" });
+    expect(sameOwner).toMatchObject({ message: "VM octogee-computer-test-uida is being created for b-x; retrying once it exists" });
     finish.get("uida")!(running);
   });
 
-  it("stops a computer whose runtime record was deleted while Compute created it", async () => {
+  it("stops a VM whose runtime record was deleted while Compute created it", async () => {
     const { create, finish } = heldInserts();
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, { create });
-    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "VmCreationPendingError" });
 
     delete h.docs["glmGateways/b-x"];
     finish.get("uida")!(running);
     await vi.waitFor(() => expect(h.creationSettled).toHaveBeenCalledWith("b-x"));
-    expect(h.vm.stop).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.stop).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.docs["glmGateways/b-x"]).toBeUndefined();
-    expect(h.log).toHaveBeenCalledWith("[vm-gateway-runtime] ⚠ b-x: created octogee-computer-test-uida in us-west1-b after its runtime record was deleted; stopped it for the owner's next Builder or erasure");
+    expect(h.log).toHaveBeenCalledWith("[vm-gateway-runtime] ⚠ b-x: created octogee-computer-test-uida in us-west1-b after its runtime record was deleted; stopped it for the owner's next user or erasure");
   });
 
-  it("creates no computer for an owner while that owner's computer is being deleted", async () => {
+  it("creates no VM for an owner while that owner's VM is being deleted", async () => {
     const { create, finish } = heldInserts();
     let endLookup!: (description: GatewayVmDescription | null) => void;
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, { create });
     vi.mocked(h.vm.findByLabels).mockImplementationOnce(() => new Promise((resolve) => { endLookup = resolve; }));
 
-    const deleting = h.runtime.deleteComputer("UidA");
-    await expect(h.runtime.upsertInstance(upsertOpts)).rejects.toThrow("the computer of UidA is being deleted; not creating one until the deletion finishes");
+    const deleting = h.runtime.deleteVm("UidA");
+    await expect(h.runtime.upsertInstance(upsertOpts)).rejects.toThrow("the VM of UidA is being deleted; not creating one until the deletion finishes");
     expect(create).not.toHaveBeenCalled();
 
     endLookup(null);
     expect(await deleting).toBe(false);
-    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "VmCreationPendingError" });
     finish.get("uida")!(running);
   });
 
-  it("waits for an owner's computer still being created before deleting it", async () => {
+  it("waits for an owner's VM still being created before deleting it", async () => {
     const { create, finish } = heldInserts();
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
       create, findByLabels: vi.fn(async () => running),
     });
     vi.mocked(h.vm.findByLabels).mockResolvedValueOnce(null);
-    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "VmCreationPendingError" });
 
-    const deleting = h.runtime.deleteComputer("UidA");
+    const deleting = h.runtime.deleteVm("UidA");
     expect(await settledOrWaiting(deleting)).toBe("still waiting on the insert");
     expect(h.vm.delete).not.toHaveBeenCalled();
 
     finish.get("uida")!(running);
     expect(await deleting).toBe(true);
-    expect(h.vm.delete).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.delete).toHaveBeenCalledWith(VM, "us-west1-b");
   });
 });
 
@@ -1016,15 +1016,15 @@ describe("suspend parking", () => {
       stop: vi.fn(async () => { current = stopped; }),
     });
     await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
-    expect(h.vm.suspend).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
-    expect(h.vm.stop).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.suspend).toHaveBeenCalledWith(VM, "us-west1-b");
+    expect(h.vm.stop).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.vm.suspend.mock.invocationCallOrder[0]).toBeLessThan(h.vm.stop.mock.invocationCallOrder[0]);
     expect(h.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, status: "TERMINATED", internalIp: null, stopReason: "operator", updatedAt: 1_000 });
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/⚠ b-x: could not suspend octogee-computer-test-uida \(UNSUPPORTED_OPERATION: instance cannot be suspended\); stopping it instead/));
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: stopped octogee-computer-test-uida for operator -> TERMINATED; boot and home disks retained/));
   });
 
-  it("stops instead of suspending a computer whose return asked for a stop", async () => {
+  it("stops instead of suspending a VM whose return asked for a stop", async () => {
     let current = running;
     const stopOnPark = { operationId: "builder-return-b-x-g1", reason: "live source cleanup failed: unmount refused" };
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded }, vmStopOnPark: stopOnPark } }, {
@@ -1036,7 +1036,7 @@ describe("suspend parking", () => {
     });
     await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
     expect(h.vm.suspend).not.toHaveBeenCalled();
-    expect(h.vm.stop).toHaveBeenCalledExactlyOnceWith(COMPUTER, "us-west1-b");
+    expect(h.vm.stop).toHaveBeenCalledExactlyOnceWith(VM, "us-west1-b");
     expect(h.docs["glmGateways/b-x"].vmStopOnPark).toBeUndefined();
     expect(h.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, status: "TERMINATED", internalIp: null, stopReason: "operator", updatedAt: 1_000 });
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: stopping octogee-computer-test-uida instead of suspending it for builder-return-b-x-g1: live source cleanup failed: unmount refused/));
@@ -1058,7 +1058,7 @@ describe("suspend parking", () => {
     });
     await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
     expect(h.vm.stop).not.toHaveBeenCalled();
-    expect(h.vm.suspend).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.suspend).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ status: "SUSPENDED", stopReason: "operator" });
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: the stop request of builder-return-b-x-g1 was withdrawn; parking normally/));
   });
@@ -1072,7 +1072,7 @@ describe("suspend parking", () => {
     });
     await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
     expect(h.vm.suspend).not.toHaveBeenCalled();
-    expect(h.vm.stop).toHaveBeenCalledExactlyOnceWith(COMPUTER, "us-west1-b");
+    expect(h.vm.stop).toHaveBeenCalledExactlyOnceWith(VM, "us-west1-b");
     expect(h.docs["glmGateways/b-x"].vmStopOnPark).toBeUndefined();
   });
 
@@ -1087,16 +1087,16 @@ describe("suspend parking", () => {
     expect(h.docs["glmGateways/b-x"].vmStopOnPark).toEqual(claimed);
   });
 
-  it("stops an already suspended computer whose return asked for a stop", async () => {
+  it("stops an already suspended VM whose return asked for a stop", async () => {
     let current = suspended;
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "operator" },
-      vmStopOnPark: { operationId: "builder-return-b-x-g1", reason: "source computer is SUSPENDED" } } }, {
+      vmStopOnPark: { operationId: "builder-return-b-x-g1", reason: "source VM is SUSPENDED" } } }, {
       describe: vi.fn(async () => current),
       stop: vi.fn(async () => { current = stopped; }),
     });
     await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
     expect(h.vm.suspend).not.toHaveBeenCalled();
-    expect(h.vm.stop).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.stop).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ status: "TERMINATED", stopReason: "operator" });
   });
 
@@ -1115,7 +1115,7 @@ describe("suspend parking", () => {
     expect(h.docs["glmGateways/b-x"].vmStopOnPark).toEqual(stopOnPark);
     await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
     expect(h.vm.suspend).not.toHaveBeenCalled();
-    expect(h.vm.stop).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.stop).toHaveBeenCalledWith(VM, "us-west1-b");
   });
 
   it("keeps a stop request whose return is still running even while the root reads running", async () => {
@@ -1129,7 +1129,7 @@ describe("suspend parking", () => {
     expect(h.docs["glmGateways/b-x"].vmStopOnPark).toEqual(stopOnPark);
   });
 
-  it("clears a finished return's leftover stop request when the gateway wakes its computer", async () => {
+  it("clears a finished return's leftover stop request when the gateway wakes its VM", async () => {
     const h = harness({
       "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "operator" },
         vmStopOnPark: { operationId: "builder-return-b-x-g1", reason: "live source cleanup failed: abandoned" } },
@@ -1140,7 +1140,7 @@ describe("suspend parking", () => {
       resume: vi.fn(async () => ({ fellBackToStandard: false })),
     });
     await h.runtime.upsertInstance(upsertOpts);
-    expect(h.vm.resume).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.resume).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.docs["glmGateways/b-x"].vmStopOnPark).toBeUndefined();
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: cleared the leftover stop request of builder-return-b-x-g1/));
   });
@@ -1154,13 +1154,13 @@ describe("suspend parking", () => {
     expect(h.vm.stop).not.toHaveBeenCalled();
   });
 
-  it("wakes a suspended computer by resuming it instead of starting it", async () => {
+  it("wakes a suspended VM by resuming it instead of starting it", async () => {
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "idle" } } }, {
       describe: vi.fn(async () => running).mockResolvedValueOnce(suspended),
       resume: vi.fn(async () => ({ fellBackToStandard: true })),
     });
     await h.runtime.upsertInstance(upsertOpts);
-    expect(h.vm.resume).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.resume).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.vm.start).not.toHaveBeenCalled();
     expect(h.vm.stop).not.toHaveBeenCalled();
     expect(h.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 1_000 });
@@ -1168,8 +1168,8 @@ describe("suspend parking", () => {
     expect(h.routesPublished().at(-1)).toEqual({ "b-x": "172.20.0.9" });
   });
 
-  it("releases the owner's parked-computer record when the same gateway resumes its suspended computer", async () => {
-    const parked = { instanceName: COMPUTER, zone: "us-west1-b", instanceId: "4242", gatewayId: "b-x", parkedAt: 1, checkpoint: { outcome: "fresh", requestedAt: null, completedAt: null } };
+  it("releases the owner's parked-vm record when the same gateway resumes its suspended VM", async () => {
+    const parked = { instanceName: VM, zone: "us-west1-b", instanceId: "4242", gatewayId: "b-x", parkedAt: 1, checkpoint: { outcome: "fresh", requestedAt: null, completedAt: null } };
     const h = harness({
       "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "idle" } },
       "users/UidA": { provisioning: { computer: parked } },
@@ -1178,12 +1178,12 @@ describe("suspend parking", () => {
       resume: vi.fn(async () => ({ fellBackToStandard: false })),
     });
     await h.runtime.upsertInstance(upsertOpts);
-    expect(h.vm.resume).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.resume).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.vm.stop).not.toHaveBeenCalled();
     expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toBeUndefined();
   });
 
-  it("stops a suspended computer before rebinding it so the guest boots into the new gateway", async () => {
+  it("stops a suspended VM before rebinding it so the guest boots into the new gateway", async () => {
     let current: GatewayVmDescription = suspendedElsewhere;
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
       findByLabels: vi.fn(async () => current),
@@ -1202,7 +1202,7 @@ describe("suspend parking", () => {
     expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ status: "RUNNING", instanceId: "4242", stopReason: null });
   });
 
-  it("cold-starts a suspended computer before changing its Gateway image", async () => {
+  it("cold-starts a suspended VM before changing its Gateway image", async () => {
     let current: GatewayVmDescription = suspended;
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "operator" } } }, {
       describe: vi.fn(async () => current),
@@ -1210,15 +1210,15 @@ describe("suspend parking", () => {
       start: vi.fn(async () => { current = running; return { fellBackToStandard: false }; }),
     });
     await h.runtime.upsertInstance({ ...upsertOpts, imageTag: "main.new-agent" });
-    expect(h.vm.bind).toHaveBeenCalledWith(COMPUTER, "us-west1-b", expect.objectContaining({ metadata: expect.objectContaining({ "gateway-image": `${upsertOpts.imageRepository}:main.new-agent` }) }));
+    expect(h.vm.bind).toHaveBeenCalledWith(VM, "us-west1-b", expect.objectContaining({ metadata: expect.objectContaining({ "gateway-image": `${upsertOpts.imageRepository}:main.new-agent` }) }));
     expect(h.vm.resume).not.toHaveBeenCalled();
-    expect(h.vm.stop).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
-    expect(h.vm.start).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.stop).toHaveBeenCalledWith(VM, "us-west1-b");
+    expect(h.vm.start).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.vm.stop.mock.invocationCallOrder[0]).toBeLessThan(h.vm.bind.mock.invocationCallOrder[0]);
     expect(h.vm.bind.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
   });
 
-  it("checks the accepted Desktop image after cold-stopping an owned computer for a Gateway image change", async () => {
+  it("checks the accepted Desktop image after cold-stopping an owned VM for a Gateway image change", async () => {
     let current: GatewayVmDescription = { ...suspended, metadata: { ...suspended.metadata, "octogee-owner-uid": "UidA" } };
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "operator" } } }, {
       describe: vi.fn(async () => current),
@@ -1231,7 +1231,7 @@ describe("suspend parking", () => {
     expect(h.vm.readFamilyImage.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
   });
 
-  it("stops a suspended same-gateway computer and refreshes again when Compute rejects the metadata refresh, then starts it", async () => {
+  it("stops a suspended same-gateway VM and refreshes again when Compute rejects the metadata refresh, then starts it", async () => {
     let current: GatewayVmDescription = { ...suspended, metadata: { ...suspended.metadata, "octogee-api-url": "http://172.20.7.8:3001" } };
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "operator" } } }, {
       describe: vi.fn(async () => current),
@@ -1248,7 +1248,7 @@ describe("suspend parking", () => {
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/⚠ b-x: could not bind suspended octogee-computer-test-uida \(UNSUPPORTED_OPERATION: instance is suspended\); stopping it to refresh its bootstrap metadata/));
   });
 
-  it("stops a suspended computer before changing its machine type, then starts it", async () => {
+  it("stops a suspended VM before changing its machine type, then starts it", async () => {
     let computer: GatewayVmDescription = { ...suspended };
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, machineType: "n2-standard-2" }, vm: { ...recorded, status: "SUSPENDED", stopReason: "idle" } } }, {
       describe: vi.fn(async () => computer),
@@ -1263,7 +1263,7 @@ describe("suspend parking", () => {
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: stopped suspended octogee-computer-test-uida to change its machine type/));
   });
 
-  it("stops a suspended computer before repairing its identity scopes", async () => {
+  it("stops a suspended VM before repairing its identity scopes", async () => {
     let computer: GatewayVmDescription = { ...suspended, serviceAccounts: [{ email: spec.serviceAccountEmail, scopes: [] }] };
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", stopReason: "operator" } } }, {
       describe: vi.fn(async () => computer),
@@ -1277,7 +1277,7 @@ describe("suspend parking", () => {
     expect(h.vm.resume).not.toHaveBeenCalled();
   });
 
-  it("does not restart a suspended computer Cowboy parked, and warns about one suspended outside Cowboy", async () => {
+  it("does not restart a suspended VM the fleet controller parked, and warns about one suspended outside the fleet controller", async () => {
     const parked = harness({ "glmGateways/b-x": { runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", stopReason: "idle" } } }, { describe: vi.fn(async () => suspended) });
     await parked.runtime.recoverUnreachable("b-x");
     expect(parked.vm.describe).not.toHaveBeenCalled();
@@ -1287,14 +1287,14 @@ describe("suspend parking", () => {
     await outside.runtime.recoverUnreachable("b-x");
     expect(outside.vm.resume).not.toHaveBeenCalled();
     expect(outside.vm.start).not.toHaveBeenCalled();
-    expect(outside.log).toHaveBeenCalledWith(expect.stringMatching(/⚠ b-x: octogee-computer-test-uida is SUSPENDED outside Cowboy; not resuming it/));
+    expect(outside.log).toHaveBeenCalledWith(expect.stringMatching(/⚠ b-x: octogee-computer-test-uida is SUSPENDED outside the fleet controller; not resuming it/));
   });
 });
 
 describe("createVmGatewayRuntime.removeInstance + reads", () => {
   const otherVm = { ...recorded, instanceName: "octogee-computer-test-uidb", instanceId: "4343", internalIp: "172.20.0.10" };
 
-  it("suspends the computer instead of deleting it, records the idle park, and republishes routes without it", async () => {
+  it("suspends the VM instead of deleting it, records the idle park, and republishes routes without it", async () => {
     const h = harness({
       "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded }, vmInstance: { enabled: true } },
       "glmGateways/b-x/vm/runtime": { version: "v" },
@@ -1305,7 +1305,7 @@ describe("createVmGatewayRuntime.removeInstance + reads", () => {
 
     await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
 
-    expect(h.vm.suspend).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.suspend).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.vm.stop).not.toHaveBeenCalled();
     expect(h.vm.delete).not.toHaveBeenCalled();
     expect(h.deletes).toContain("glmGateways/b-x/vm/runtime");
@@ -1320,7 +1320,7 @@ describe("createVmGatewayRuntime.removeInstance + reads", () => {
     expect(await h.runtime.listPendingReleases({ namespace: "octogee-test" })).toEqual([]);
   });
 
-  it("re-drives against an already stopped computer and leaves one that another gateway has since bound", async () => {
+  it("re-drives against an already stopped VM and leaves one that another gateway has since bound", async () => {
     const already = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded } } }, {
       describe: vi.fn(async () => stopped),
     });
@@ -1345,7 +1345,7 @@ describe("createVmGatewayRuntime.removeInstance + reads", () => {
   const ownedDoc = { docKind: "runtime", gatewayId: "b-x", release: 1, lifecycle: "serving", runtime: "gce-vm", vm: { ...recorded }, vmInstance: { enabled: true, ownerUid: "UidA" } };
   const userDoc = { provisioning: { openclaw: { gatewayId: "b-x", slug: "mama" } }, tier: "builder" };
 
-  it("records the parked computer on the Builder's provisioning record with the checkpoint outcome, keeping the rest of the record", async () => {
+  it("records the parked VM on the user's provisioning record with the checkpoint outcome, keeping the rest of the record", async () => {
     const h = harness({ "glmGateways/b-x": { ...ownedDoc, vmHome: { checkpointRequestedAt: 1_000, checkpointAcknowledgedAt: 1_000, parkRequestedAt: 1_000, lastCheckpoint: { completedAt: 1_500 } } }, "users/UidA": { ...userDoc } }, {
       describe: vi.fn(async () => suspended).mockResolvedValueOnce(running),
     }, "172.20.7.7", {}, { clock: { now: 2_000 } });
@@ -1356,7 +1356,7 @@ describe("createVmGatewayRuntime.removeInstance + reads", () => {
       ...userDoc,
       provisioning: {
         ...userDoc.provisioning,
-        computer: { instanceName: COMPUTER, zone: "us-west1-b", instanceId: "4242", gatewayId: "b-x", parkedAt: 2_000, checkpoint: { outcome: "fresh", requestedAt: 1_000, completedAt: 1_500 } },
+        computer: { instanceName: VM, zone: "us-west1-b", instanceId: "4242", gatewayId: "b-x", parkedAt: 2_000, checkpoint: { outcome: "fresh", requestedAt: 1_000, completedAt: 1_500 } },
       },
     });
 
@@ -1365,7 +1365,7 @@ describe("createVmGatewayRuntime.removeInstance + reads", () => {
       describe: vi.fn(async () => ({ ...stopped, metadata: { ...stopped.metadata, "octogee-owner-uid": "UidA" } })).mockResolvedValueOnce({ ...running, metadata: { ...running.metadata, "octogee-owner-uid": "UidA" } }),
     }, "172.20.7.7", {}, { clock: { now: 2_000 } });
     await unstamped.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
-    expect(readPath(unstamped.docs["users/UidA"], "provisioning.computer")).toMatchObject({ instanceName: COMPUTER, gatewayId: "b-x", parkedAt: 2_000 });
+    expect(readPath(unstamped.docs["users/UidA"], "provisioning.computer")).toMatchObject({ instanceName: VM, gatewayId: "b-x", parkedAt: 2_000 });
 
     const ownerless = harness({ "glmGateways/b-x": { ...ownedDoc, vmInstance: { enabled: true }, vmHome } }, {
       describe: vi.fn(async () => suspended).mockResolvedValueOnce(running),
@@ -1382,19 +1382,19 @@ describe("createVmGatewayRuntime.removeInstance + reads", () => {
       describe: vi.fn(async () => suspended).mockResolvedValueOnce(running),
     }, "172.20.7.7", {}, { clock: { now: 200_000 } });
     await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
-    expect(h.vm.suspend).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.suspend).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.waits).toEqual([]);
     expect(readPath(h.docs["glmGateways/b-x"], "vmHome")).toEqual(vmHome);
     expect(h.vm.delete).not.toHaveBeenCalled();
     expect(h.deletes).toContain("glmGateways/b-x/vm/runtime");
   });
 
-  it.each(["RUNNING", "STOPPING", "missing", "recreated"])("does not release a retained computer after an unverified stop (%s)", async status => {
+  it.each(["RUNNING", "STOPPING", "missing", "recreated"])("does not release a retained VM after an unverified stop (%s)", async status => {
     const observed = status === "missing" ? null : status === "recreated" ? { ...stopped, instanceId: "9999" } : { ...stopped, status };
     const h = harness({ "glmGateways/b-x": { ...ownedDoc }, "glmGateways/b-x/vm/runtime": { version: "v" }, "users/UidA": { ...userDoc } }, {
       describe: vi.fn().mockResolvedValueOnce(running).mockResolvedValue(observed),
     });
-    await expect(h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" })).rejects.toThrow(/verified stopped computer/);
+    await expect(h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" })).rejects.toThrow(/verified stopped VM/);
     expect(h.deletes).not.toContain("glmGateways/b-x/vm/runtime");
     expect(h.docs["glmGateways/b-x"].vmInstance).toEqual(ownedDoc.vmInstance);
     expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toBeUndefined();
@@ -1411,7 +1411,7 @@ describe("createVmGatewayRuntime.removeInstance + reads", () => {
     await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x", awaitHomeCheckpoint: true });
 
     expect(h.waits).toEqual([10_000, 10_000]);
-    expect(h.vm.suspend).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.suspend).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ stopReason: "idle", updatedAt: 21_000, parkedCheckpoint: { outcome: "fresh", requestedAt: 1_000, completedAt: 21_000 } });
     expect(h.deletes).toContain("glmGateways/b-x/vm/runtime");
 
@@ -1420,12 +1420,12 @@ describe("createVmGatewayRuntime.removeInstance + reads", () => {
     });
     await never.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x", awaitHomeCheckpoint: true });
     expect(never.waits).toEqual([10_000, 10_000, 10_000, 10_000, 10_000, 10_000]);
-    expect(never.vm.suspend).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(never.vm.suspend).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(never.docs["glmGateways/b-x"].vm).toMatchObject({ stopReason: "idle", parkedCheckpoint: { outcome: "stale", requestedAt: 1_000, completedAt: null } });
     expect(readPath(never.docs["users/UidA"], "provisioning.computer")).toMatchObject({ checkpoint: { outcome: "stale" } });
   });
 
-  it("derives the outcome from the record for a computer that is already stopped: fresh only when the park's own request completed", async () => {
+  it("derives the outcome from the record for a VM that is already stopped: fresh only when the park's own request completed", async () => {
     const h = harness({ "glmGateways/b-x": { ...ownedDoc, vmHome: { checkpointRequestedAt: 500, checkpointAcknowledgedAt: 500, parkRequestedAt: 500, lastCheckpoint: { completedAt: 600 } } }, "users/UidA": { ...userDoc } }, {
       describe: vi.fn(async () => stopped),
     });
@@ -1452,17 +1452,17 @@ describe("createVmGatewayRuntime.removeInstance + reads", () => {
 
     await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
 
-    expect(h.vm.suspend).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.suspend).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.docs["glmGateways/b-x"]).toBeUndefined();
     expect(h.deletes).toContain("glmGateways/b-x/vm/runtime");
-    expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toMatchObject({ instanceName: COMPUTER, gatewayId: "b-x", checkpoint: { outcome: "fresh" } });
+    expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toMatchObject({ instanceName: VM, gatewayId: "b-x", checkpoint: { outcome: "fresh" } });
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: runtime record is gone; dropped the park observation/));
   });
 });
 
 describe("createVmGatewayRuntime.removeInstance with disposable parking", () => {
   const vmHome = { checkpointRequestedAt: 1_000, checkpointAcknowledgedAt: 1_000, parkRequestedAt: 1_000, lastCheckpoint: { name: "20260905T101500Z.tar.gz", size: 2048, sha256: "a".repeat(64), generation: "9007199254740995", coverage: "builder-home-v2" as const, writerProtocol: 3 as const, instanceId: "4242", completedAt: 1_500 } };
-  const earlierPark = { instanceName: COMPUTER, zone: "us-west1-b", instanceId: "4242", gatewayId: "b-x", parkedAt: 500, checkpoint: { outcome: "fresh", requestedAt: 400, completedAt: 450 } };
+  const earlierPark = { instanceName: VM, zone: "us-west1-b", instanceId: "4242", gatewayId: "b-x", parkedAt: 500, checkpoint: { outcome: "fresh", requestedAt: 400, completedAt: 450 } };
   const parkDocs = (home: Record<string, unknown> = vmHome) => ({
     "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded }, vmSpec: spec, vmInstance: { enabled: true, ownerUid: "UidA" }, vmHome: { ...home } },
     "glmGateways/b-x/vm/runtime": { version: "v" },
@@ -1475,22 +1475,22 @@ describe("createVmGatewayRuntime.removeInstance with disposable parking", () => 
     expect(h.vm.delete).not.toHaveBeenCalled();
     expect(h.vm.suspend).toHaveBeenCalled();
     expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ instanceId: "4242", status: "SUSPENDED" });
-    expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toMatchObject({ instanceName: COMPUTER });
+    expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toMatchObject({ instanceName: VM });
     expect(h.docs["glmGateways/b-x"].vmSpec).toEqual(spec);
   });
 
-  it("parks a computer already on the family's current image exactly as before", async () => {
+  it("parks a VM already on the family's current image exactly as before", async () => {
     const h = harness(parkDocs(), { describe: vi.fn(async () => suspended).mockResolvedValueOnce(running) }, "172.20.7.7", {}, { clock: { now: 2_000 } });
 
     await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
 
-    expect(h.vm.suspend).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.suspend).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.vm.delete).not.toHaveBeenCalled();
     expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ stopReason: "idle", parkedCheckpoint: { outcome: "fresh", completedAt: 1_500 } });
-    expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toMatchObject({ instanceName: COMPUTER, parkedAt: 2_000, checkpoint: { outcome: "fresh" } });
+    expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toMatchObject({ instanceName: VM, parkedAt: 2_000, checkpoint: { outcome: "fresh" } });
   });
 
-  it("stops rather than deletes a computer whose final home checkpoint is stale, and says why", async () => {
+  it("stops rather than deletes a VM whose final home checkpoint is stale, and says why", async () => {
     const h = harness(parkDocs({ checkpointRequestedAt: 500, lastCheckpoint: { completedAt: 600 } }), {
       describe: vi.fn(async () => stopped),
       readBootImage: vi.fn(async () => OLD_IMAGE),
@@ -1513,15 +1513,15 @@ describe("createVmGatewayRuntime.removeInstance with disposable parking", () => 
 
     await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
 
-    expect(h.vm.suspend).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.suspend).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.vm.delete).not.toHaveBeenCalled();
     expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ stopReason: "idle", parkedCheckpoint: { outcome: "fresh" } });
     expect(h.vm.readFamilyImage).not.toHaveBeenCalled();
   });
 });
 
-describe("createVmGatewayRuntime.upsertInstance waking a parked computer whose boot image the family has moved past", () => {
-  const parkedRecord = (outcome: "fresh" | "stale") => ({ instanceName: COMPUTER, zone: "us-west1-b", instanceId: "4242", gatewayId: "b-x", parkedAt: 500, checkpoint: { outcome, requestedAt: 400, completedAt: 450 }, homeCheckpoint: { name: "20260905T101500Z.tar.gz", size: 2048, sha256: "a".repeat(64), generation: "9007199254740995", coverage: "builder-home-v2" as const, writerProtocol: 3 as const, instanceId: "4242", completedAt: 450 } });
+describe("createVmGatewayRuntime.upsertInstance waking a parked VM whose boot image the family has moved past", () => {
+  const parkedRecord = (outcome: "fresh" | "stale") => ({ instanceName: VM, zone: "us-west1-b", instanceId: "4242", gatewayId: "b-x", parkedAt: 500, checkpoint: { outcome, requestedAt: 400, completedAt: 450 }, homeCheckpoint: { name: "20260905T101500Z.tar.gz", size: 2048, sha256: "a".repeat(64), generation: "9007199254740995", coverage: "builder-home-v2" as const, writerProtocol: 3 as const, instanceId: "4242", completedAt: 450 } });
   const wakeDocs = (computer?: ReturnType<typeof parkedRecord>) => ({
     "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "TERMINATED", internalIp: null, stopReason: "idle" }, vmSpec: { ...spec, machineType: "n2-standard-2" } },
     "users/UidA": { tier: "builder", provisioning: { openclaw: { gatewayId: "b-x" }, ...(computer ? { computer } : {}) } },
@@ -1546,7 +1546,7 @@ describe("createVmGatewayRuntime.upsertInstance waking a parked computer whose b
 
       expect(h.vm.delete).not.toHaveBeenCalled();
       expect(h.vm.create).not.toHaveBeenCalled();
-      expect(h.vm.start).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+      expect(h.vm.start).toHaveBeenCalledWith(VM, "us-west1-b");
       expect(h.docs["users/UidA"]).toMatchObject({ tier: "builder", provisioning: { openclaw: { gatewayId: "b-x" }, homeDisk: { id: "777", sizeGb: 30 } } });
     expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toBeUndefined();
     }
@@ -1561,10 +1561,10 @@ describe("createVmGatewayRuntime.upsertInstance waking a parked computer whose b
     await h.runtime.upsertInstance(upsertOpts);
 
     expect(h.vm.delete).not.toHaveBeenCalled();
-    expect(h.vm.start).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.start).toHaveBeenCalledWith(VM, "us-west1-b");
   });
 
-  it("clears the parked record before starting the computer, so a failed clear leaves it stopped", async () => {
+  it("clears the parked record before starting the VM, so a failed clear leaves it stopped", async () => {
     const h = harness(wakeDocs(parkedRecord("stale")), { describe: vi.fn(async () => ({ ...running, machineType: "n2-standard-2" })).mockResolvedValueOnce({ ...stopped, machineType: "n2-standard-2" }) }, "172.20.7.7", {}, {
       beforeWrite: (path) => { if (path.startsWith("users/")) throw new Error("firestore unavailable"); },
     });
@@ -1584,14 +1584,14 @@ describe("createVmGatewayRuntime.upsertInstance waking a parked computer whose b
     await h.runtime.upsertInstance(upsertOpts);
 
     expect(h.vm.delete).not.toHaveBeenCalled();
-    expect(h.vm.start).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.start).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.vm.readFamilyImage).toHaveBeenCalled();
   });
 });
 
 describe("createVmGatewayRuntime.upsertInstance after a park", () => {
-  it("clears the Builder's parked record when the computer is bound to the new gateway, leaving the rest of the record", async () => {
-    const parkedRecord = { instanceName: COMPUTER, zone: "us-west1-b", instanceId: "4242", gatewayId: "b-old", parkedAt: 500, checkpoint: { outcome: "fresh", requestedAt: 400, completedAt: 450 } };
+  it("clears the user's parked record when the VM is bound to the new gateway, leaving the rest of the record", async () => {
+    const parkedRecord = { instanceName: VM, zone: "us-west1-b", instanceId: "4242", gatewayId: "b-old", parkedAt: 500, checkpoint: { outcome: "fresh", requestedAt: 400, completedAt: 450 } };
     const parkedVm = { ...stopped, gatewayId: "b-old", labels: { ...OWNER_LABELS, "octogee-gateway-id": "b-old" }, metadata: { "gateway-id": "b-old" } };
     const h = harness({
       "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" },
@@ -1600,7 +1600,7 @@ describe("createVmGatewayRuntime.upsertInstance after a park", () => {
 
     await h.runtime.upsertInstance(upsertOpts);
 
-    expect(h.vm.bind).toHaveBeenCalledWith(COMPUTER, "us-west1-b", expect.objectContaining({ metadata: expect.objectContaining({ "gateway-id": "b-x" }) }));
+    expect(h.vm.bind).toHaveBeenCalledWith(VM, "us-west1-b", expect.objectContaining({ metadata: expect.objectContaining({ "gateway-id": "b-x" }) }));
     expect(h.docs["users/UidA"]).toMatchObject({ tier: "builder", provisioning: { openclaw: { gatewayId: "b-x" }, homeDisk: { id: "777", sizeGb: 30 } } });
     expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toBeUndefined();
 
@@ -1615,7 +1615,7 @@ describe("createVmGatewayRuntime.upsertInstance after a park", () => {
 describe("createVmGatewayRuntime.recoverUnreachable", () => {
   const live = (vm: Record<string, unknown> = recorded) => ({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm, vmInstance: { enabled: true, gatewayId: "b-x" } } });
 
-  it("restarts a preempted computer, records the preemption first, and republishes its route", async () => {
+  it("restarts a preempted VM, records the preemption first, and republishes its route", async () => {
     const h = harness(live(), {
       describe: vi.fn(async () => running).mockResolvedValueOnce(stopped),
       start: vi.fn(async () => ({ fellBackToStandard: true })),
@@ -1623,7 +1623,7 @@ describe("createVmGatewayRuntime.recoverUnreachable", () => {
 
     await h.runtime.recoverUnreachable("b-x");
 
-    expect(h.vm.start).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.start).toHaveBeenCalledWith(VM, "us-west1-b");
     const vmWrites = h.writes.filter((w) => w.path === "glmGateways/b-x").map((w) => (w.data as { vm: unknown }).vm);
     expect(vmWrites[0]).toEqual({ ...recorded, status: "TERMINATED", internalIp: null, stopReason: "preempted", updatedAt: 1_000 });
     expect(h.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 1_000 });
@@ -1632,7 +1632,7 @@ describe("createVmGatewayRuntime.recoverUnreachable", () => {
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: restarted octogee-computer-test-uida -> RUNNING \(on-demand fallback\)/));
   });
 
-  it("never restarts a computer Cowboy stopped, a retired gateway's, or one bound to another gateway", async () => {
+  it("never restarts a VM the fleet controller stopped, a retired gateway's, or one bound to another gateway", async () => {
     for (const stopReason of ["idle", "operator"] as const) {
       const h = harness(live({ ...recorded, status: "TERMINATED", stopReason }));
       await h.runtime.recoverUnreachable("b-x");
@@ -1654,7 +1654,7 @@ describe("createVmGatewayRuntime.recoverUnreachable", () => {
     expect(cluster.vm.describe).not.toHaveBeenCalled();
   });
 
-  it("records a computer Compute is still stopping and waits, without write churn", async () => {
+  it("records a VM Compute is still stopping and waits, without write churn", async () => {
     const h = harness(live(), { describe: vi.fn(async () => ({ ...running, status: "STOPPING" })) });
 
     await h.runtime.recoverUnreachable("b-x");
@@ -1666,7 +1666,7 @@ describe("createVmGatewayRuntime.recoverUnreachable", () => {
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/being stopped by Compute/));
   });
 
-  it("refreshes a stale record when the computer is already back and reports a vanished one", async () => {
+  it("refreshes a stale record when the VM is already back and reports a vanished one", async () => {
     const stale = harness(live({ ...recorded, status: "TERMINATED", internalIp: null, stopReason: "preempted" }));
     await stale.runtime.recoverUnreachable("b-x");
     expect(stale.vm.start).not.toHaveBeenCalled();
@@ -1679,7 +1679,7 @@ describe("createVmGatewayRuntime.recoverUnreachable", () => {
     expect(gone.docs["glmGateways/b-x"].vm).toEqual(recorded);
   });
 
-  it("records the computer's start time when the running record lacks it or Compute restarted it", async () => {
+  it("records the VM's start time when the running record lacks it or Compute restarted it", async () => {
     const { startedAt: _startedAt, ...unstamped } = recorded;
     const legacy = harness(live(unstamped));
     await legacy.runtime.recoverUnreachable("b-x");
@@ -1705,15 +1705,15 @@ describe("createVmGatewayRuntime.recoverUnreachable", () => {
   });
 });
 
-describe("createVmGatewayRuntime.deleteComputer", () => {
-  it("deletes the owner's computer wherever it is and reports absence", async () => {
+describe("createVmGatewayRuntime.deleteVm", () => {
+  it("deletes the owner's VM wherever it is and reports absence", async () => {
     const h = harness({}, { findByLabels: vi.fn(async () => ({ ...stopped, name: "octogee-computer-test-uida-2", zone: "us-central1-a" })) });
-    expect(await h.runtime.deleteComputer("UidA")).toBe(true);
+    expect(await h.runtime.deleteVm("UidA")).toBe(true);
     expect(h.vm.findByLabels).toHaveBeenCalledWith(OWNER_LABELS);
     expect(h.vm.delete).toHaveBeenCalledWith("octogee-computer-test-uida-2", "us-central1-a");
 
     const none = harness({});
-    expect(await none.runtime.deleteComputer("UidA")).toBe(false);
+    expect(await none.runtime.deleteVm("UidA")).toBe(false);
     expect(none.vm.delete).not.toHaveBeenCalled();
   });
 });
@@ -1731,12 +1731,12 @@ describe("vmRoutesFromRecords", () => {
 });
 
 describe("runtime policy and stamping", () => {
-  it("resolves computer policy from the stored profiles and validates VM configuration", async () => {
+  it("resolves VM policy from the stored profiles and validates VM configuration", async () => {
     const { store } = recordingStore({});
-    await expect(resolveBuilderComputerPolicy(store, "s")).resolves.toMatchObject({ runtime: "gce-vm", machineType: "e2-medium" });
-    await expect(resolveBuilderComputerPolicy(store, "m")).resolves.toMatchObject({ runtime: "gce-vm", machineType: "e2-standard-2" });
-    await expect(resolveBuilderComputerPolicy(store, "l")).resolves.toMatchObject({ machineType: "e2-standard-4" });
-    await expect(resolveBuilderComputerPolicy(store, "xs")).rejects.toThrow("No Builder computer policy for sizing tier xs");
+    await expect(resolveGatewayVmPolicy(store, "s")).resolves.toMatchObject({ runtime: "gce-vm", machineType: "e2-medium" });
+    await expect(resolveGatewayVmPolicy(store, "m")).resolves.toMatchObject({ runtime: "gce-vm", machineType: "e2-standard-2" });
+    await expect(resolveGatewayVmPolicy(store, "l")).resolves.toMatchObject({ machineType: "e2-standard-4" });
+    await expect(resolveGatewayVmPolicy(store, "xs")).rejects.toThrow("No gateway VM policy for sizing tier xs");
     expect(parseGatewayVmSpec(JSON.stringify(spec))).toEqual(spec);
     expect(() => parseGatewayVmSpec(undefined)).toThrow(/required/);
     expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, diskSizeGb: "40" }))).toThrow(/diskSizeGb/);
@@ -1758,7 +1758,7 @@ describe("runtime policy and stamping", () => {
 
   it.each([
     ["s", "e2-medium", 80, "pd-balanced", 10, "x11"], ["m", "e2-standard-2", 80, "pd-ssd", 50, "omarchy"], ["l", "e2-standard-4", 80, "pd-ssd", 100, "omarchy"],
-  ] as const)("stamps new %s Builders as on-demand computers with their tier's machine, boot disk, desktop and home", async (sizingTier, machineType, diskSizeGb, bootDiskType, homeDiskSizeGb, desktop) => {
+  ] as const)("stamps new %s users as on-demand VMs with their tier's machine, boot disk, desktop and home", async (sizingTier, machineType, diskSizeGb, bootDiskType, homeDiskSizeGb, desktop) => {
     const { store, docs } = recordingStore({});
     expect(await stampGatewayRuntime({ store, gatewayId: "b-new", initial: initialRuntime("b-new"), gatewayClass: "builder", sizingTier, vmSpec: spec, log: vi.fn() })).toBe("gce-vm");
     expect(docs["glmGateways/b-new"]).toEqual({ ...initialRuntimeDoc("b-new"), runtime: "gce-vm", vmSpec: { ...spec, machineType, diskSizeGb, bootDiskType, homeDiskSizeGb, provisioningModel: "STANDARD", desktop } });
@@ -1797,14 +1797,14 @@ describe("runtime policy and stamping", () => {
     expect(docs["glmGateways/b-x"].vmSpec).toMatchObject({ machineType: "e2-standard-2", homeDiskSizeGb: 50 });
   });
 
-  it("moves a persisted computer spec to its tier's desktop", async () => {
+  it("moves a persisted VM spec to its tier's desktop", async () => {
     const persisted = { ...spec, machineType: "e2-medium", diskSizeGb: 40, bootDiskType: "pd-balanced" as const, homeDiskSizeGb: 10, provisioningModel: "STANDARD" as const, desktop: "omarchy" as const };
     const { store, docs } = recordingStore({ "glmGateways/b-x": { runtime: "gce-vm", vmSpec: persisted } });
     await stampGatewayRuntime({ store, gatewayId: "b-x", initial: initialRuntime("b-x"), gatewayClass: "builder", sizingTier: "s", vmSpec: spec, log: vi.fn() });
     expect(docs["glmGateways/b-x"].vmSpec).toEqual({ ...persisted, desktop: "x11", diskSizeGb: 80 });
   });
 
-  it("moves a persisted Spot computer spec to its tier's on-demand capacity", async () => {
+  it("moves a persisted Spot VM spec to its tier's on-demand capacity", async () => {
     const persisted = { ...spec, machineType: "e2-standard-2", diskSizeGb: 50, homeDiskSizeGb: 50, provisioningModel: "SPOT" as const };
     const { store, docs } = recordingStore({ "glmGateways/b-x": { runtime: "gce-vm", vmSpec: persisted } });
     await stampGatewayRuntime({ store, gatewayId: "b-x", initial: initialRuntime("b-x"), gatewayClass: "builder", sizingTier: "m", vmSpec: spec, log: vi.fn() });
@@ -1818,7 +1818,7 @@ describe("runtime policy and stamping", () => {
     kubernetes: { status: "ready", totalPods: 1, readyPods: 1, observedAt: 120 },
   };
 
-  it("preserves an unstamped deployed cluster Builder when computers become the new default", async () => {
+  it("preserves an unstamped deployed cluster user when VMs become the new default", async () => {
     const { store, docs } = recordingStore({ "glmGateways/b-x": deployedCluster });
     expect(await stampGatewayRuntime({ store, gatewayId: "b-x", initial: initialRuntime("b-x"), gatewayClass: "builder", sizingTier: "l", vmSpec: spec, log: vi.fn() })).toBe("cluster");
     expect(docs["glmGateways/b-x"]).toEqual({ ...deployedCluster, release: 1, runtime: "cluster" });
@@ -1831,7 +1831,7 @@ describe("runtime policy and stamping", () => {
     expect(docs["glmGateways/b-x"].runtime).toBe("cluster");
   });
 
-  it("chooses the VM default only before a new Builder has a deployed identity", async () => {
+  it("chooses the VM default only before a new user has a deployed identity", async () => {
     const { store, docs } = recordingStore({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", lifecycle: "provisioning", helm: { lastAppliedAt: null }, heartbeat: { status: "unknown" } } });
     expect(await stampGatewayRuntime({ store, gatewayId: "b-x", initial: initialRuntime("b-x"), gatewayClass: "builder", sizingTier: "l", vmSpec: spec, log: vi.fn() })).toBe("gce-vm");
     expect(docs["glmGateways/b-x"].runtime).toBe("gce-vm");
@@ -1859,7 +1859,7 @@ describe("runtime policy and stamping", () => {
     expect(writes).toEqual([]);
   });
 
-  it("stamps a Builder gateway with the policy runtime once and never rewrites an existing runtime", async () => {
+  it("stamps a isolated gateway with the policy runtime once and never rewrites an existing runtime", async () => {
     const { store, docs, writes } = recordingStore({});
     const log = vi.fn();
     expect(await stampGatewayRuntime({ store, gatewayId: "b-x", initial: initialRuntime("b-x"), gatewayClass: "builder", sizingTier: "l", vmSpec: spec, log })).toBe("gce-vm");
@@ -1926,7 +1926,7 @@ describe("createRuntimeDispatchingHelmRunner", () => {
 
 
 describe("readDeploymentPrerequisiteError", () => {
-  it("reports the running computer's missing email scope without mutating it", async () => {
+  it("reports the running VM's missing email scope without mutating it", async () => {
     const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vm: recorded } }, {
       describe: vi.fn(async () => ({ ...running, serviceAccounts: [{ email: spec.serviceAccountEmail, scopes: [GATEWAY_VM_ACCESS_SCOPES[0]] }] })),
     });
@@ -1937,7 +1937,7 @@ describe("readDeploymentPrerequisiteError", () => {
     expect(h.writes).toEqual([]);
   });
 
-  it.each(["TERMINATED", "STOPPED", "STOPPING"])("allows a %s computer to complete normal identity repair", async (status) => {
+  it.each(["TERMINATED", "STOPPED", "STOPPING"])("allows a %s VM to complete normal identity repair", async (status) => {
     const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vm: recorded } }, {
       describe: vi.fn(async () => ({ ...running, status, serviceAccounts: [] })),
     });
@@ -1950,12 +1950,12 @@ describe("readDeploymentPrerequisiteError", () => {
     expect(await h.runtime.readDeploymentPrerequisiteError("b-x")).toContain("identity scopes are outdated");
   });
 
-  it("allows a computer with the expected identity", async () => {
+  it("allows a VM with the expected identity", async () => {
     const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vm: recorded } });
     expect(await h.runtime.readDeploymentPrerequisiteError("b-x")).toBeNull();
   });
 
-  it("allows first deployment or replacement when no computer exists", async () => {
+  it("allows first deployment or replacement when no VM exists", async () => {
     const empty = harness({ "gateways/b-x": { ownerUid: "UidA" } });
     expect(await empty.runtime.readDeploymentPrerequisiteError("b-x")).toBeNull();
     expect(empty.vm.describe).not.toHaveBeenCalled();
@@ -1963,7 +1963,7 @@ describe("readDeploymentPrerequisiteError", () => {
     expect(await missing.runtime.readDeploymentPrerequisiteError("b-x")).toBeNull();
   });
 
-  it.each([false, true])("checks the authoritative owner's computer when the recorded VM is absent (stale reference: %s)", async (staleReference) => {
+  it.each([false, true])("checks the authoritative owner's VM when the recorded VM is absent (stale reference: %s)", async (staleReference) => {
     const h = harness({
       "gateways/b-x": { ownerUid: "UidA" },
       "glmGateways/b-x": { runtime: "gce-vm", ...(staleReference ? { vm: recorded } : {}), vmInstance: { ownerUid: "stale-owner" } },
@@ -1980,7 +1980,7 @@ describe("readDeploymentPrerequisiteError", () => {
     expect(h.writes).toEqual([]);
   });
 
-  it("allows the owner-labeled stopped computer to use normal identity repair", async () => {
+  it("allows the owner-labeled stopped VM to use normal identity repair", async () => {
     const h = harness({ "gateways/b-x": { ownerUid: "UidA" } }, {
       findByLabels: vi.fn(async () => ({ ...stopped, serviceAccounts: [] })),
     });
@@ -1989,7 +1989,7 @@ describe("readDeploymentPrerequisiteError", () => {
     expect(h.vm.setServiceAccount).not.toHaveBeenCalled();
   });
 
-  it("fails before discovery when there is no authoritative Builder owner", async () => {
+  it("fails before discovery when there is no authoritative user owner", async () => {
     const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vmInstance: { ownerUid: "stale-owner" } } });
     expect(await h.runtime.readDeploymentPrerequisiteError("b-x")).toContain("needs an owner");
     expect(h.vm.findByLabels).not.toHaveBeenCalled();
@@ -2008,20 +2008,20 @@ describe("readDeploymentPrerequisiteError", () => {
   });
 });
 
-describe("computer preemption", () => {
+describe("VM preemption", () => {
   const vmDoc = (vm: Record<string, unknown> = {}) => ({
     "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, ...vm }, vmInstance: { enabled: true } },
   });
 
-  it("names the computer Compute preempted at or after the migration started", async () => {
+  it("names the VM Compute preempted at or after the migration started", async () => {
     const h = harness(vmDoc(), { lastPreemptedAt: vi.fn(async () => 5_000) });
 
-    expect(await h.runtime.detectPreemption("b-x", 5_000)).toBe(COMPUTER);
-    expect(h.vm.lastPreemptedAt).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(await h.runtime.detectPreemption("b-x", 5_000)).toBe(VM);
+    expect(h.vm.lastPreemptedAt).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: Compute preempted octogee-computer-test-uida at 1970-01-01T00:00:05.000Z/));
   });
 
-  it("does not blame a preemption that predates the migration, a computer never preempted, or a gateway without a computer", async () => {
+  it("does not blame a preemption that predates the migration, a VM never preempted, or a gateway without a VM", async () => {
     expect(await harness(vmDoc(), { lastPreemptedAt: vi.fn(async () => 4_999) }).runtime.detectPreemption("b-x", 5_000)).toBeNull();
     expect(await harness(vmDoc()).runtime.detectPreemption("b-x", 5_000)).toBeNull();
     const cluster = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "cluster" } }, { lastPreemptedAt: vi.fn(async () => 9_000) });
@@ -2029,12 +2029,12 @@ describe("computer preemption", () => {
     expect(cluster.vm.lastPreemptedAt).not.toHaveBeenCalled();
   });
 
-  it("trusts the computer's own preemption notice before Compute has recorded the preemption", async () => {
+  it("trusts the VM's own preemption notice before Compute has recorded the preemption", async () => {
     const docs = vmDoc();
     docs["glmGateways/b-x"].vmPreemption = { instanceId: "4242", announcedAt: 5_500 };
     const h = harness(docs);
 
-    expect(await h.runtime.detectPreemption("b-x", 5_000)).toBe(COMPUTER);
+    expect(await h.runtime.detectPreemption("b-x", 5_000)).toBe(VM);
     expect(h.vm.lastPreemptedAt).not.toHaveBeenCalled();
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: octogee-computer-test-uida announced its preemption at 1970-01-01T00:00:05.500Z/));
   });
@@ -2048,7 +2048,7 @@ describe("computer preemption", () => {
     expect(await harness(replaced).runtime.detectPreemption("b-x", 5_000)).toBeNull();
   });
 
-  it("says a computer Compute preempted was preempted when retirement parks it, instead of claiming an idle stop", async () => {
+  it("says a VM Compute preempted was preempted when retirement parks it, instead of claiming an idle stop", async () => {
     const h = harness(vmDoc(), { describe: vi.fn(async () => stopped), lastPreemptedAt: vi.fn(async () => 900) });
 
     await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
@@ -2060,15 +2060,15 @@ describe("computer preemption", () => {
     expect(h.log).not.toHaveBeenCalledWith(expect.stringMatching(/stopped octogee-computer-test-uida for idle/));
   });
 
-  it("says a computer that stopped without Cowboy or a preemption stopped outside Cowboy", async () => {
+  it("says a VM that stopped without the fleet controller or a preemption stopped outside the fleet controller", async () => {
     const h = harness(vmDoc(), { describe: vi.fn(async () => stopped) });
 
     await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
 
-    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: octogee-computer-test-uida was already TERMINATED \(stopped outside Cowboy\); parked for idle/));
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: octogee-computer-test-uida was already TERMINATED \(stopped outside the fleet controller\); parked for idle/));
   });
 
-  it("still parks the computer when the preemption lookup fails, and says so", async () => {
+  it("still parks the VM when the preemption lookup fails, and says so", async () => {
     const h = harness(vmDoc(), { describe: vi.fn(async () => stopped), lastPreemptedAt: vi.fn(async () => { throw new Error("http 403"); }) });
 
     await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
@@ -2079,23 +2079,23 @@ describe("computer preemption", () => {
 });
 
 
-describe("GCS-backed disposable Builder parking", () => {
+describe("GCS-backed disposable isolated parking", () => {
   const saved = { name: "20260905T101500Z.tar.gz", size: 2048, sha256: "a".repeat(64), generation: "9007199254740995", coverage: "builder-home-v2" as const, writerProtocol: 3 as const, instanceId: "4242", completedAt: 1500 };
   const docs = () => ({
     "glmGateways/b-x": { runtime: "gce-vm", vm: { ...recorded }, vmInstance: { ownerUid: "UidA" }, vmHome: { checkpointRequestedAt: 1000, parkRequestedAt: 1000, checkpointAcknowledgedAt: 1000, lastCheckpoint: { ...saved } } },
     "users/UidA": { provisioning: { openclaw: { gatewayId: "b-x" } } },
   });
   it("defaults off and rejects an invalid rollout setting", () => {
-    expect(resolveDisposableBuilderParking({})).toBe(false);
-    expect(() => resolveDisposableBuilderParking({ GATEWAY_BUILDER_DISPOSABLE_PARKING: "true", GATEWAY_BUILDER_DISPOSABLE_STATE_CONTRACT: "checkpointed-home-only-v2" })).toThrow(/withdrawn/);
-    expect(() => resolveDisposableBuilderParking({ GATEWAY_BUILDER_DISPOSABLE_PARKING: "yes" })).toThrow();
+    expect(resolveIsolatedParking({})).toBe(false);
+    expect(() => resolveIsolatedParking({ GATEWAY_BUILDER_DISPOSABLE_PARKING: "true", GATEWAY_BUILDER_DISPOSABLE_STATE_CONTRACT: "checkpointed-home-only-v2" })).toThrow(/withdrawn/);
+    expect(() => resolveIsolatedParking({ GATEWAY_BUILDER_DISPOSABLE_PARKING: "yes" })).toThrow();
   });
   it("retains both disks when protocol 2 leaves SSH writers unfenced, even with disposal enabled and a fresh held checkpoint", async () => {
     const records = docs();
     (records["glmGateways/b-x"].vmHome.lastCheckpoint as { writerProtocol: 2 | 3 }).writerProtocol = 2;
     const h = harness(records, { describe: vi.fn(async () => suspended).mockResolvedValueOnce(running) }, "172.20.7.7", { "b-x": "retired" }, { disposableParking: true, clock: { now: 2000 } });
     await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
-    expect(h.vm.suspend).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.suspend).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.vm.delete).not.toHaveBeenCalled();
     expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ instanceId: "4242", stopReason: "idle" });
     expect(readPath(h.docs["users/UidA"], "provisioning.computer")).not.toMatchObject({ disposable: true });
@@ -2157,7 +2157,7 @@ describe("GCS-backed disposable Builder parking", () => {
     expect(readPath(h.docs["glmGateways/b-x"], "vmHome.restoreCheckpoint")).toEqual(saved);
     expect(readPath(h.docs["users/UidA"], "provisioning.homeCheckpoint")).toEqual(saved);
   });
-  it("does not release an active checkpoint when an existing restored computer is rerendered", async () => {
+  it("does not release an active checkpoint when an existing restored VM is rerendered", async () => {
     const records: Docs = docs();
     records["users/UidA"].provisioning = { homeCheckpoint: saved };
     records["glmGateways/b-x"].vm = { ...recorded, instanceId: "5252" };
@@ -2175,7 +2175,7 @@ describe("GCS-backed disposable Builder parking", () => {
 
 });
 
-describe("idle computer storage coverage", () => {
+describe("idle VM storage coverage", () => {
   it("retains both Omarchy disks even with a fresh checkpoint and obsolete boot image", async () => {
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmInstance: { ownerUid: "UidA" }, vm: recorded, vmSpec: spec,
       vmHome: { parkRequestedAt: 1000, checkpointRequestedAt: 1000, checkpointAcknowledgedAt: 1000, lastCheckpoint: { completedAt: 1500 } } },
@@ -2183,19 +2183,19 @@ describe("idle computer storage coverage", () => {
       describe: vi.fn(async () => suspended).mockResolvedValueOnce(running), readBootImage: vi.fn(async () => OLD_IMAGE),
     }, "172.20.7.7", {}, { clock: { now: 2000 } });
     await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
-    expect(h.vm.suspend).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.suspend).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.vm.delete).not.toHaveBeenCalled();
     expect(h.docs["glmGateways/b-x"].vmSpec).toEqual(spec);
-    expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toMatchObject({ instanceName: COMPUTER, checkpoint: { outcome: "fresh" } });
+    expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toMatchObject({ instanceName: VM, checkpoint: { outcome: "fresh" } });
   });
 
-  it("wakes the original parked computer instead of deleting an unarchived system disk", async () => {
+  it("wakes the original parked VM instead of deleting an unarchived system disk", async () => {
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: recorded, vmSpec: spec },
-      "users/UidA": { provisioning: { computer: { instanceName: COMPUTER, zone: "us-west1-b", instanceId: "4242", gatewayId: "b-x", parkedAt: 500, checkpoint: { outcome: "fresh", requestedAt: 400, completedAt: 450 } } } } }, {
+      "users/UidA": { provisioning: { computer: { instanceName: VM, zone: "us-west1-b", instanceId: "4242", gatewayId: "b-x", parkedAt: 500, checkpoint: { outcome: "fresh", requestedAt: 400, completedAt: 450 } } } } }, {
       describe: vi.fn(async () => stopped), readBootImage: vi.fn(async () => OLD_IMAGE),
     });
     await h.runtime.upsertInstance(upsertOpts);
-    expect(h.vm.start).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.start).toHaveBeenCalledWith(VM, "us-west1-b");
     expect(h.vm.delete).not.toHaveBeenCalled();
     expect(h.vm.create).not.toHaveBeenCalled();
   });
@@ -2210,7 +2210,7 @@ describe("idle computer storage coverage", () => {
     });
     await stampGatewayRuntime({ store: h.store, gatewayId: "b-x", initial: initialRuntime("b-x"), gatewayClass: "builder", sizingTier: target, vmSpec: spec, log: h.log });
     await h.runtime.upsertInstance({ ...upsertOpts, sizingTier: target });
-    expect(h.vm.setMachineType).toHaveBeenCalledWith(COMPUTER, "us-west1-b", newType);
+    expect(h.vm.setMachineType).toHaveBeenCalledWith(VM, "us-west1-b", newType);
     expect(h.vm.setMachineType.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
     expect(h.vm.delete).not.toHaveBeenCalled();
     expect(h.vm.create).not.toHaveBeenCalled();
@@ -2251,7 +2251,7 @@ describe("retained home disk recovery", () => {
     let exists = true;
     let deletes = 0;
     let failClear = true;
-    const client = createComputerHomeClient({ projectId: home.projectId, readInstance: async () => null,
+    const client = createVmHomeClient({ projectId: home.projectId, readInstance: async () => null,
       waitForOperation: async () => {}, request: async request => {
         if (request.method === "DELETE") { exists = false; deletes++; return { status: 200, data: { status: "DONE" } }; }
         if (!exists) throw Object.assign(new Error("missing disk"), { response: { status: 404 } });
@@ -2262,15 +2262,15 @@ describe("retained home disk recovery", () => {
         const clearsAnchor = path === "users/UidA" && readPath(data, "provisioning.homeDisk") === undefined;
         if (failClear && clearsAnchor) { failClear = false; throw new Error("anchor clear unavailable"); }
       } });
-    await expect(h.runtime.deleteComputer("UidA")).rejects.toThrow("anchor clear unavailable");
+    await expect(h.runtime.deleteVm("UidA")).rejects.toThrow("anchor clear unavailable");
     expect(readPath(h.docs["users/UidA"], "provisioning.homeDisk")).toEqual(home);
-    await expect(h.runtime.deleteComputer("UidA")).resolves.toBe(true);
+    await expect(h.runtime.deleteVm("UidA")).resolves.toBe(true);
     expect(readPath(h.docs["users/UidA"], "provisioning.homeDisk")).toBeUndefined();
     expect(deletes).toBe(1);
   });
   it("erases an orphaned retained home only through explicit account erase", async () => {
     const h = harness({ "users/UidA": { provisioning: { homeDisk: home } } });
-    await expect(h.runtime.deleteComputer("UidA")).resolves.toBe(true);
+    await expect(h.runtime.deleteVm("UidA")).resolves.toBe(true);
     expect(h.vm.deleteRetainedHome).toHaveBeenCalledWith(home, "UidA");
     expect(h.vm.delete).not.toHaveBeenCalled();
     expect(readPath(h.docs["users/UidA"], "provisioning.homeDisk")).toBeUndefined();
@@ -2284,7 +2284,7 @@ describe("stopped retained-home boot replacement", () => {
   const vmDoc = (): Docs => ({ "glmGateways/b-x": { runtime: "gce-vm", vm: recorded, vmSpec: spec, vmBootRecovery: receipt } });
   const ownedStopped = { ...stopped, metadata: { ...stopped.metadata, "octogee-owner-uid": "UidA" } };
   const accepted = { name: "octogee-computer-accepted", id: "222", homeAdmission: true as const };
-  it("updates an outdated stopped computer on boot while retaining its home", async () => {
+  it("updates an outdated stopped VM on boot while retaining its home", async () => {
     let deleted = false;
     const h = harness(vmDoc(), {
       describe: vi.fn(async () => deleted ? null : ownedStopped),
@@ -2294,11 +2294,11 @@ describe("stopped retained-home boot replacement", () => {
       readImage: vi.fn(async () => accepted),
     });
     await h.runtime.upsertInstance(upsertOpts);
-    expect(h.vm.deleteRetainingHome).toHaveBeenCalledWith(COMPUTER, ownedStopped.zone, "UidA", expect.objectContaining(home), "4242");
+    expect(h.vm.deleteRetainingHome).toHaveBeenCalledWith(VM, ownedStopped.zone, "UidA", expect.objectContaining(home), "4242");
     expect(h.vm.create).toHaveBeenCalledWith(expect.objectContaining({ retainedHome: expect.objectContaining(home), image: expect.objectContaining(accepted) }));
     expect(h.vm.start).not.toHaveBeenCalled();
   });
-  it("resumes a suspended computer on an outdated boot instead of stopping and replacing it", async () => {
+  it("resumes a suspended VM on an outdated boot instead of stopping and replacing it", async () => {
     const h = harness(vmDoc(), {
       describe: vi.fn(async () => ({ ...ownedStopped, status: "SUSPENDED" })),
       readBootImage: vi.fn(async () => CURRENT_IMAGE),
@@ -2306,16 +2306,16 @@ describe("stopped retained-home boot replacement", () => {
       readImage: vi.fn(async () => accepted),
     });
     await h.runtime.upsertInstance(upsertOpts);
-    expect(h.vm.resume).toHaveBeenCalledWith(COMPUTER, ownedStopped.zone);
+    expect(h.vm.resume).toHaveBeenCalledWith(VM, ownedStopped.zone);
     expect(h.vm.stop).not.toHaveBeenCalled();
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
     expect(h.vm.create).not.toHaveBeenCalled();
     expect(h.vm.readFamilyImage).not.toHaveBeenCalled();
   });
-  it("updates a parked computer when a new Builder gateway claims it from Shared", async () => {
+  it("updates a parked VM when a new isolated gateway claims it from Shared", async () => {
     let deleted = false;
     let source = { ...ownedStopped, gatewayId: "b-old", labels: { ...ownedStopped.labels, "octogee-gateway-id": "b-old" }, metadata: { ...ownedStopped.metadata, "gateway-id": "b-old" } };
-    const parked = { instanceName: COMPUTER, zone: source.zone, instanceId: "4242", gatewayId: "b-old", parkedAt: 1000, checkpoint: { outcome: "fresh", requestedAt: 400, completedAt: 450 }, bootRecovery: receipt, vmSpec: spec };
+    const parked = { instanceName: VM, zone: source.zone, instanceId: "4242", gatewayId: "b-old", parkedAt: 1000, checkpoint: { outcome: "fresh", requestedAt: 400, completedAt: 450 }, bootRecovery: receipt, vmSpec: spec };
     const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vmSpec: spec }, "gateways/shared-0": { gatewayClass: "shared" }, "users/UidA": { provisioning: { openclaw: { gatewayId: "shared-0" }, computer: parked } } }, {
       describe: vi.fn(async () => deleted ? null : source), findByLabels: vi.fn(async () => deleted ? null : source),
       bind: vi.fn(async (_name, _zone, binding) => { source = { ...source, gatewayId: "b-x", labels: binding.labels, metadata: binding.metadata }; }),
@@ -2337,7 +2337,7 @@ describe("stopped retained-home boot replacement", () => {
     expect(h.vm.create).toHaveBeenCalledWith(expect.objectContaining({ retainedHome: expect.objectContaining(home) }));
     expect(h.log).toHaveBeenCalledWith(expect.stringContaining("unsaved project work"));
   });
-  it("upgrades a preempted computer when it restarts, retaining its home and runtime binding", async () => {
+  it("upgrades a preempted VM when it restarts, retaining its home and runtime binding", async () => {
     let deleted = false;
     const source = { ...ownedStopped, metadata: { ...ownedStopped.metadata, "gateway-image": "registry/gateway:old", "octogee-api-url": "http://172.20.7.7:3001" } };
     const instance = { ownerUid: "UidA", image: { repository: "registry/gateway", tag: "old" } };
@@ -2353,7 +2353,7 @@ describe("stopped retained-home boot replacement", () => {
     expect(h.docs["glmGateways/b-x"].vmInstance).toEqual(instance);
     expect(h.vm.start).not.toHaveBeenCalled();
   });
-  it("recovers a preemption upgrade when the old computer was deleted but its acknowledgement was lost", async () => {
+  it("recovers a preemption upgrade when the old VM was deleted but its acknowledgement was lost", async () => {
     let deleted = false;
     const source = { ...ownedStopped, metadata: { ...ownedStopped.metadata, "gateway-image": "registry/gateway:old", "octogee-api-url": "http://172.20.7.7:3001" } };
     const docs = vmDoc();
@@ -2366,7 +2366,7 @@ describe("stopped retained-home boot replacement", () => {
     await h.runtime.recoverUnreachable("b-x");
     expect(h.vm.create).toHaveBeenCalledWith(expect.objectContaining({ retainedHome: expect.objectContaining(home), image: expect.objectContaining(accepted) }));
   });
-  it("restarts the preempted computer when the latest image cannot be checked", async () => {
+  it("restarts the preempted VM when the latest image cannot be checked", async () => {
     const source = { ...ownedStopped, metadata: { ...ownedStopped.metadata, "gateway-image": "registry/gateway:old", "octogee-api-url": "http://172.20.7.7:3001" } };
     const h = harness(vmDoc(), {
       describe: vi.fn(async () => source), readBootImage: vi.fn(async () => CURRENT_IMAGE),
@@ -2374,7 +2374,7 @@ describe("stopped retained-home boot replacement", () => {
     });
     await h.runtime.recoverUnreachable("b-x");
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
-    expect(h.vm.start).toHaveBeenCalledWith(COMPUTER, source.zone);
+    expect(h.vm.start).toHaveBeenCalledWith(VM, source.zone);
     expect(h.log).toHaveBeenCalledWith(expect.stringContaining("image service unavailable"));
   });
   it("does not start a missing source after a lost replacement acknowledgement", async () => {
@@ -2400,44 +2400,44 @@ describe("stopped retained-home boot replacement", () => {
   });
   it("keeps a stopped native boot that may hold unpublished project work", async () => {
     const h = harness({ ...vmDoc(), "users/UidA": { provisioning: { projectStorage: { nativeBoot: true } } } }, { describe: vi.fn(async () => ownedStopped), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-projects", async () => {})).rejects.toThrow(/project work/);
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-projects", async () => {})).rejects.toThrow(/project work/);
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
-  it("permits operator force recovery of a stopped computer while retaining its exact home", async () => {
+  it("permits operator force recovery of a stopped VM while retaining its exact home", async () => {
     const docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "UidA", gatewayClass: "builder", desiredStatus: "paused" }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 }, "users/UidA": { provisioning: { projectStorage: { nativeBoot: true }, openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } } };
     delete docs["glmGateways/b-x"].vmBootRecovery;
     const h = harness(docs, { describe: vi.fn(async () => ownedStopped), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).resolves.toMatchObject({ bootDeleted: true, force: true });
-    expect(h.vm.retainHome).toHaveBeenCalledWith(COMPUTER, ownedStopped.zone, "UidA");
-    expect(h.vm.deleteRetainingHome).toHaveBeenCalledWith(COMPUTER, ownedStopped.zone, "UidA", expect.objectContaining(home), "4242");
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).resolves.toMatchObject({ bootDeleted: true, force: true });
+    expect(h.vm.retainHome).toHaveBeenCalledWith(VM, ownedStopped.zone, "UidA");
+    expect(h.vm.deleteRetainingHome).toHaveBeenCalledWith(VM, ownedStopped.zone, "UidA", expect.objectContaining(home), "4242");
   });
-  it("never force-replaces a running or foreign computer", async () => {
+  it("never force-replaces a running or foreign VM", async () => {
     for (const { observed, owner } of [
       { observed: { ...ownedStopped, status: "RUNNING" }, owner: "UidA" },
       { observed: { ...ownedStopped, instanceId: "foreign" }, owner: "UidA" },
       { observed: ownedStopped, owner: "another-owner" },
     ]) {
       const h = harness({ ...vmDoc(), "gateways/b-x": { ownerUid: "UidA", gatewayClass: "builder", desiredStatus: "paused" }, "users/UidA": { provisioning: { openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 } }, { describe: vi.fn(async () => observed) }, undefined, { "b-x": "paused" });
-      await expect(h.runtime.replaceStoppedComputer("b-x", "op-force", async () => {}, { forceOwnerUid: owner, expectedInstanceId: "4242" })).rejects.toThrow();
+      await expect(h.runtime.replaceStoppedVm("b-x", "op-force", async () => {}, { forceOwnerUid: owner, expectedInstanceId: "4242" })).rejects.toThrow();
       expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
     }
   });
-  it("force-recovers the exact parked computer after its gateway root was deleted", async () => {
-    const parked = { instanceName: COMPUTER, zone: ownedStopped.zone, instanceId: "4242", gatewayId: "b-x", parkedAt: 1000,
+  it("force-recovers the exact parked VM after its gateway root was deleted", async () => {
+    const parked = { instanceName: VM, zone: ownedStopped.zone, instanceId: "4242", gatewayId: "b-x", parkedAt: 1000,
       checkpoint: { outcome: "stale", requestedAt: null, completedAt: null }, vmSpec: spec };
     const docs: Docs = { "users/UidA": { provisioning: { computer: parked, homeDisk: home, openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 } };
     const h = harness(docs, { describe: vi.fn(async () => ownedStopped), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": null });
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).resolves.toMatchObject({ bootDeleted: true });
-    expect(h.vm.deleteRetainingHome).toHaveBeenCalledWith(COMPUTER, ownedStopped.zone, "UidA", expect.objectContaining(home), "4242");
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).resolves.toMatchObject({ bootDeleted: true });
+    expect(h.vm.deleteRetainingHome).toHaveBeenCalledWith(VM, ownedStopped.zone, "UidA", expect.objectContaining(home), "4242");
     expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toBeUndefined();
     expect(readPath(h.docs["users/UidA"], "provisioning.computerRecovery")).toBeUndefined();
   });
   it("retains the recovery fence on lost delete acknowledgement and finishes the same operation", async () => {
     let deleted = false;
-    const parked = { instanceName: COMPUTER, zone: ownedStopped.zone, instanceId: "4242", gatewayId: "b-x", parkedAt: 1000, checkpoint: { outcome: "stale", requestedAt: null, completedAt: null }, vmSpec: spec };
+    const parked = { instanceName: VM, zone: ownedStopped.zone, instanceId: "4242", gatewayId: "b-x", parkedAt: 1000, checkpoint: { outcome: "stale", requestedAt: null, completedAt: null }, vmSpec: spec };
     const docs: Docs = { "users/UidA": { provisioning: { computer: parked, homeDisk: home, openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 } };
     const h = harness(docs, { describe: vi.fn(async () => deleted ? null : ownedStopped), deleteRetainingHome: vi.fn(async () => { deleted = true; throw new Error("delete acknowledgement lost"); }), readFamilyImage: vi.fn(async () => accepted), readImage: vi.fn(async () => accepted) }, undefined, { "b-x": null });
-    const run = () => h.runtime.replaceStoppedComputer("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" });
+    const run = () => h.runtime.replaceStoppedVm("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" });
     await expect(run()).rejects.toThrow("delete acknowledgement lost");
     expect(readPath(h.docs["users/UidA"], "provisioning.computerRecovery.operationId")).toBe("op-force");
     await expect(run()).resolves.toMatchObject({ bootDeleted: true, resumeRequired: true });
@@ -2445,26 +2445,26 @@ describe("stopped retained-home boot replacement", () => {
     expect(readPath(h.docs["users/UidA"], "provisioning.computerRecovery")).toBeUndefined();
   });
   it("keeps the boot if the Shared assignment changes before force deletion", async () => {
-    const parked = { instanceName: COMPUTER, zone: ownedStopped.zone, instanceId: "4242", gatewayId: "b-x", parkedAt: 1000, checkpoint: { outcome: "stale", requestedAt: null, completedAt: null }, vmSpec: spec };
+    const parked = { instanceName: VM, zone: ownedStopped.zone, instanceId: "4242", gatewayId: "b-x", parkedAt: 1000, checkpoint: { outcome: "stale", requestedAt: null, completedAt: null }, vmSpec: spec };
     const docs: Docs = { "users/UidA": { provisioning: { computer: parked, homeDisk: home, openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 } };
     const h = harness(docs, { describe: vi.fn(async () => ownedStopped), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": null });
     let checks = 0;
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-force", async () => { if (++checks === 2) (h.docs["users/UidA"].provisioning as { openclaw: { gatewayId: string } }).openclaw.gatewayId = "other"; }, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow(/fence/);
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-force", async () => { if (++checks === 2) (h.docs["users/UidA"].provisioning as { openclaw: { gatewayId: string } }).openclaw.gatewayId = "other"; }, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow(/fence/);
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
-  it("keeps the boot if the parked computer identity changes before force deletion", async () => {
-    const parked = { instanceName: COMPUTER, zone: ownedStopped.zone, instanceId: "4242", gatewayId: "b-x", parkedAt: 1000, checkpoint: { outcome: "stale", requestedAt: null, completedAt: null }, vmSpec: spec };
+  it("keeps the boot if the parked VM identity changes before force deletion", async () => {
+    const parked = { instanceName: VM, zone: ownedStopped.zone, instanceId: "4242", gatewayId: "b-x", parkedAt: 1000, checkpoint: { outcome: "stale", requestedAt: null, completedAt: null }, vmSpec: spec };
     const docs: Docs = { "users/UidA": { provisioning: { computer: parked, homeDisk: home, openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 } };
     const h = harness(docs, { describe: vi.fn(async () => ownedStopped), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": null });
     let checks = 0;
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-force", async () => { if (++checks === 3) (h.docs["users/UidA"].provisioning as { computer: { instanceId: string } }).computer.instanceId = "other"; }, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow(/fence/);
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-force", async () => { if (++checks === 3) (h.docs["users/UidA"].provisioning as { computer: { instanceId: string } }).computer.instanceId = "other"; }, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow(/fence/);
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
   it("does not clear a different runtime that appears after force deletion", async () => {
     const docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "UidA", gatewayClass: "builder", desiredStatus: "paused" }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 }, "users/UidA": { provisioning: { openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } } };
     const h = harness(docs, { describe: vi.fn(async () => ownedStopped), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
     h.vm.deleteRetainingHome = vi.fn(async () => { h.docs["glmGateways/b-x"].vm = { instanceId: "new-instance" }; });
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow("runtime identity changed");
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow("runtime identity changed");
     expect(readPath(h.docs["glmGateways/b-x"], "vm.instanceId")).toBe("new-instance");
     expect(readPath(h.docs["users/UidA"], "provisioning.computerRecovery.operationId")).toBe("op-force");
   });
@@ -2472,14 +2472,14 @@ describe("stopped retained-home boot replacement", () => {
     const docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "UidA", gatewayClass: "builder", desiredStatus: "paused" }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 }, "users/UidA": { provisioning: { openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } } };
     const h = harness(docs, { describe: vi.fn(async () => ownedStopped), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
     h.vm.deleteRetainingHome = vi.fn(async () => { if (change === "class") h.docs["gateways/b-x"].gatewayClass = "shared"; else h.docs["gateways/b-x"].desiredStatus = "running"; });
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow("gateway identity changed");
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow("gateway identity changed");
     expect(readPath(h.docs["glmGateways/b-x"], "vm.instanceId")).toBe("4242");
     expect(readPath(h.docs["users/UidA"], "provisioning.computerRecovery.operationId")).toBe("op-force");
   });
-  it("does not stop a suspended computer when its existing gateway root belongs to another owner", async () => {
+  it("does not stop a suspended VM when its existing gateway root belongs to another owner", async () => {
     const docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "Other", gatewayClass: "builder", desiredStatus: "paused" }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 }, "users/UidA": { provisioning: { openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } } };
     const h = harness(docs, { describe: vi.fn(async () => ({ ...ownedStopped, status: "SUSPENDED" })) }, undefined, { "b-x": "paused" });
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow("gateway owner changed");
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow("gateway owner changed");
     expect(h.vm.stop).not.toHaveBeenCalled();
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
@@ -2487,15 +2487,15 @@ describe("stopped retained-home boot replacement", () => {
     const docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "UidA", gatewayClass: "builder", desiredStatus: "paused" }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 }, "users/UidA": { provisioning: { openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } } };
     const h = harness(docs, { describe: vi.fn(async () => ownedStopped), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
     let checks = 0;
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-force", async () => { if (++checks === changeAt) h.docs["gateways/b-x"].ownerUid = "Other"; }, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow("gateway owner changed");
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-force", async () => { if (++checks === changeAt) h.docs["gateways/b-x"].ownerUid = "Other"; }, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow("gateway owner changed");
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
-  it.each(["missing", "status", "class"])("keeps the computer when its root is %s", async scenario => {
+  it.each(["missing", "status", "class"])("keeps the VM when its root is %s", async scenario => {
     const root = { ownerUid: "UidA", gatewayClass: scenario === "class" ? "shared" : "builder", desiredStatus: scenario === "status" ? "running" : "paused" };
     const docs: Docs = { ...vmDoc(), "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 }, "users/UidA": { provisioning: { openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } } };
     if (scenario !== "missing") docs["gateways/b-x"] = root;
     const h = harness(docs, { describe: vi.fn(async () => ownedStopped) }, undefined, { "b-x": "paused" });
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow(/gateway/);
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow(/gateway/);
     expect(h.vm.stop).not.toHaveBeenCalled();
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
@@ -2518,12 +2518,12 @@ describe("stopped retained-home boot replacement", () => {
     expect(family).toHaveBeenCalledTimes(1);
     expect(create.mock.calls[1][0].image.id).toBe(accepted.id);
   });
-  it("replaces only the boot of the same paused, stopped computer and defers creation to resume", async () => {
+  it("replaces only the boot of the same paused, stopped VM and defers creation to resume", async () => {
     const h = harness(vmDoc(), { describe: vi.fn(async () => ownedStopped), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
     const authority = vi.fn(async () => {});
-    await h.runtime.replaceStoppedComputer("b-x", "op-one", authority);
-    expect(h.vm.retainHome).toHaveBeenCalledWith(COMPUTER, ownedStopped.zone, "UidA");
-    expect(h.vm.deleteRetainingHome).toHaveBeenCalledWith(COMPUTER, ownedStopped.zone, "UidA", expect.objectContaining(home), "4242");
+    await h.runtime.replaceStoppedVm("b-x", "op-one", authority);
+    expect(h.vm.retainHome).toHaveBeenCalledWith(VM, ownedStopped.zone, "UidA");
+    expect(h.vm.deleteRetainingHome).toHaveBeenCalledWith(VM, ownedStopped.zone, "UidA", expect.objectContaining(home), "4242");
     expect(h.vm.create).not.toHaveBeenCalled();
     expect(h.vm.deleteRetainedHome).not.toHaveBeenCalled();
     expect(readPath(h.docs["users/UidA"], "provisioning.homeDisk.id")).toBe(home.id);
@@ -2531,10 +2531,10 @@ describe("stopped retained-home boot replacement", () => {
     expect(h.docs["glmGateways/b-x"].vm).toBeNull();
     expect(authority).toHaveBeenCalledTimes(2);
   });
-  it("stops a suspended paused computer before replacing its boot", async () => {
+  it("stops a suspended paused VM before replacing its boot", async () => {
     let current: GatewayVmDescription = { ...ownedStopped, status: "SUSPENDED" };
     const h = harness(vmDoc(), { describe: vi.fn(async () => current), stop: vi.fn(async () => { current = ownedStopped; }), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
-    await h.runtime.replaceStoppedComputer("b-x", "op-suspended", async () => {});
+    await h.runtime.replaceStoppedVm("b-x", "op-suspended", async () => {});
     expect(h.vm.stop).toHaveBeenCalledOnce();
     expect(h.vm.stop.mock.invocationCallOrder[0]).toBeLessThan(h.vm.deleteRetainingHome.mock.invocationCallOrder[0]);
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: stopped suspended octogee-computer-test-uida to replace its boot/));
@@ -2544,7 +2544,7 @@ describe("stopped retained-home boot replacement", () => {
     await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
     expect(readPath(h.docs["users/UidA"], "provisioning.computer.bootRecovery")).toEqual(receipt);
     delete h.docs["glmGateways/b-x"];
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-retired", async () => {})).resolves.toMatchObject({ bootDeleted: true });
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-retired", async () => {})).resolves.toMatchObject({ bootDeleted: true });
     expect(h.docs["glmGateways/b-x"]).toBeUndefined();
     expect(h.vm.deleteRetainingHome).toHaveBeenCalledTimes(1);
     expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toBeUndefined();
@@ -2557,7 +2557,7 @@ describe("stopped retained-home boot replacement", () => {
     await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
     expect(readPath(h.docs["users/UidA"], "provisioning.computer.bootRecovery.ready")).toBe(false);
     delete h.docs["glmGateways/b-x"];
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-retired", async () => {})).rejects.toThrow(/recovery reports not ready/);
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-retired", async () => {})).rejects.toThrow(/recovery reports not ready/);
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
   it.each(["missing", "foreign", "unready"])("retired replacement preserves both disks for unusable owner-anchored evidence: %s", async fault => {
@@ -2566,7 +2566,7 @@ describe("stopped retained-home boot replacement", () => {
     delete h.docs["glmGateways/b-x"];
     const computer = readPath(h.docs["users/UidA"], "provisioning.computer") as Record<string, unknown>;
     computer.bootRecovery = fault === "missing" ? undefined : { ...receipt, instanceId: fault === "foreign" ? "other" : receipt.instanceId, ready: fault !== "unready" };
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-retired", async () => {})).rejects.toThrow();
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-retired", async () => {})).rejects.toThrow();
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
   it("preserves the actual stopped timestamp across later paused-intent reconciliation", async () => {
@@ -2577,13 +2577,13 @@ describe("stopped retained-home boot replacement", () => {
     h.docs["glmGateways/b-x"].deploymentIntentFingerprint = "changed-while-paused";
     await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
     expect(readPath(h.docs["glmGateways/b-x"], "vm.updatedAt")).toBe(stoppedAt);
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-later", async () => {})).resolves.toMatchObject({ bootDeleted: true });
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-later", async () => {})).resolves.toMatchObject({ bootDeleted: true });
   });
   it("refuses the old stopped receipt after an intervening native restart", async () => {
     const h = harness(vmDoc(), { describe: vi.fn(async () => ({ ...ownedStopped, lastStartedAt: 200000 })) }, undefined, { "b-x": "paused" });
     h.clock.now = 300000;
     await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-restarted", async () => {})).rejects.toThrow(/recovery receipt observed at/);
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-restarted", async () => {})).rejects.toThrow(/recovery receipt observed at/);
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
   it.each(["RUNNING", "STOPPING", "owner-changed", "instance-changed"])("never deletes an unsafe replacement source: %s", async scenario => {
@@ -2591,7 +2591,7 @@ describe("stopped retained-home boot replacement", () => {
     const description = scenario === "owner-changed" ? { ...ownedStopped, metadata: { ...ownedStopped.metadata, "octogee-owner-uid": "Other" } }
       : scenario === "instance-changed" ? ownedStopped : { ...ownedStopped, status: scenario };
     const h = harness(vmDoc(), { describe: vi.fn(async () => ++describes > 1 && scenario === "instance-changed" ? { ...ownedStopped, instanceId: "999" } : description), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-one", async () => {})).rejects.toThrow();
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-one", async () => {})).rejects.toThrow();
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
   it("recovers a lost delete acknowledgement from the same operation and detached home without another delete", async () => {
@@ -2599,9 +2599,9 @@ describe("stopped retained-home boot replacement", () => {
     const docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "UidA" } };
     const deletion = vi.fn(async () => { deleted = true; throw new Error("delete acknowledgement lost"); });
     const h = harness(docs, { describe: vi.fn(async () => deleted ? null : ownedStopped), deleteRetainingHome: deletion, readFamilyImage: vi.fn(async () => accepted), readImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-one", async () => {})).rejects.toThrow("acknowledgement lost");
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-one", async () => {})).resolves.toMatchObject({ bootDeleted: true, resumeRequired: true });
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-one", async () => {})).resolves.toMatchObject({ bootDeleted: true });
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-one", async () => {})).rejects.toThrow("acknowledgement lost");
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-one", async () => {})).resolves.toMatchObject({ bootDeleted: true, resumeRequired: true });
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-one", async () => {})).resolves.toMatchObject({ bootDeleted: true });
     expect(deletion).toHaveBeenCalledTimes(1);
     expect(h.vm.verifyDetachedHome).toHaveBeenCalledTimes(2);
     expect(h.vm.readFamilyImage).toHaveBeenCalledTimes(1);
@@ -2610,7 +2610,7 @@ describe("stopped retained-home boot replacement", () => {
     ["missing", /no native recovery report/],
     ["not-ready", /recovery reports not ready/],
     ["two-points", /2 retained recovery points/],
-    ["wrong-instance", /recovery receipt from instance 999.*computer is 4242/],
+    ["wrong-instance", /recovery receipt from instance 999.*VM is 4242/],
     ["stale", /recovery receipt observed at -100000/],
     ["no-headroom", /recovery point needs .* free, found 100 bytes/],
   ])("keeps the old boot before predictable recovery admission failure and says why: %s", async (fault, reason) => {
@@ -2620,14 +2620,14 @@ describe("stopped retained-home boot replacement", () => {
       instanceId: fault === "wrong-instance" ? "999" : "4242", observedAt: fault === "stale" ? -100000 : 1000,
       freeBytes: fault === "no-headroom" ? 100 : receipt.freeBytes };
     const h = harness(docs, { describe: vi.fn(async () => ownedStopped) }, undefined, { "b-x": "paused" });
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-one", async () => {})).rejects.toThrow(reason);
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-one", async () => {})).rejects.toThrow(reason);
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
     expect(h.vm.retainHome).not.toHaveBeenCalled();
     expect(h.vm.readFamilyImage).not.toHaveBeenCalled();
   });
-  it("never reuses an old operation pin to delete a different source computer", async () => {
-    const h = harness({ ...vmDoc(), "users/UidA": { provisioning: { openclaw: { gatewayId: "b-x" }, homeDisk: { ...home, bootImage: { ...accepted, project: home.projectId, homeId: home.id, operationId: "op-one", previous: CURRENT_IMAGE, sourceComputer: { name: COMPUTER, zone: home.zone, instanceId: "1111", gatewayId: "b-x" } } } } } }, { describe: vi.fn(async () => ownedStopped), readImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-one", async () => {})).rejects.toThrow("operation source changed");
+  it("never reuses an old operation pin to delete a different source VM", async () => {
+    const h = harness({ ...vmDoc(), "users/UidA": { provisioning: { openclaw: { gatewayId: "b-x" }, homeDisk: { ...home, bootImage: { ...accepted, project: home.projectId, homeId: home.id, operationId: "op-one", previous: CURRENT_IMAGE, sourceComputer: { name: VM, zone: home.zone, instanceId: "1111", gatewayId: "b-x" } } } } } }, { describe: vi.fn(async () => ownedStopped), readImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-one", async () => {})).rejects.toThrow("operation source changed");
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
   it("refuses a changed pinned image before trying retained-home creation", async () => {
@@ -2639,7 +2639,7 @@ describe("stopped retained-home boot replacement", () => {
     const statuses: Record<string, string> = { "b-x": "paused" };
     const h = harness(vmDoc(), { describe: vi.fn(async () => ownedStopped), readFamilyImage: vi.fn(async () => accepted) }, undefined, statuses);
     let checks = 0;
-    await expect(h.runtime.replaceStoppedComputer("b-x", "op-one", async () => { if (++checks === 2) statuses["b-x"] = "running"; })).rejects.toThrow(/paused|retired/);
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-one", async () => { if (++checks === 2) statuses["b-x"] = "running"; })).rejects.toThrow(/paused|retired/);
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
 });

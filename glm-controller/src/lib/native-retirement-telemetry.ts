@@ -23,7 +23,7 @@ function pausedRetirementClaimMatches(root: GatewayRoot, input: NativeRetirement
     claim.phase === "claimed" && claim.previousDesiredStatus === "paused";
 }
 
-function stoppedComputerMatches(
+function stoppedVmMatches(
   current: GatewayVmDescription,
   vm: Record<string, unknown>,
   root: GatewayRoot,
@@ -50,5 +50,5 @@ export async function pausedNativeRetirementSourceFencedOff(
   const vm = record(runtime.vm);
   if (!nonEmpty(vm.instanceName) || !nonEmpty(vm.instanceId) || !nonEmpty(vm.zone)) return false;
   const current = await deps.describe(vm.instanceName, vm.zone);
-  return current === null || stoppedComputerMatches(current, vm, root, input.gatewayId);
+  return current === null || stoppedVmMatches(current, vm, root, input.gatewayId);
 }

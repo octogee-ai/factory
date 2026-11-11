@@ -34,8 +34,8 @@ export type ProjectBlobHydrator = (input: {
     markRestoreReady?: boolean;
     requireRestoredCheckout?: boolean;
 }) => Promise<ProjectBlobHydration>;
-export declare function createBrokeredProjectBlobHydrator(client: ProjectBlobHydrationClient, customersRoot?: string): ProjectBlobHydrator;
-export declare function prepareBuilderProjectAssets(input: {
+export declare function createBrokeredProjectBlobHydrator(client: ProjectBlobHydrationClient, usersRoot?: string): ProjectBlobHydrator;
+export declare function prepareUserProjectAssets(input: {
     projects: string;
     slug: string;
     project: string;

@@ -1,5 +1,5 @@
-import type { MmUpdate } from "./customer-lifecycle.js";
-import type { BuilderPatch } from "./platform-state/builders.js";
+import type { MmUpdate } from "./user-lifecycle.js";
+import type { UserPatch } from "./platform-state/users.js";
 import type { ManagedChannelHost } from "./channel-host/types.js";
 export { listTierTemplateFiles, writeTierTemplateFiles, } from "./tier-template-files.js";
 export interface AgentBinding {
@@ -63,12 +63,12 @@ export interface ProvisioningContext {
     userData: Record<string, unknown>;
 }
 export declare function buildProvisioningContext(uid: string, userData: Record<string, unknown>): ProvisioningContext;
-export declare function createCustomerDirectories(ctx: ProvisioningContext): void;
-export declare function writeCustomerTemplateFiles(ctx: ProvisioningContext): Promise<void>;
-export declare function registerCoachAgent(ctx: ProvisioningContext, config: OpenclawConfigShape): string;
-export declare function buildCoachAgentEntry(ctx: ProvisioningContext): AgentEntry;
-export declare function buildCoachBindings(current: unknown, coachAgentId: string, slug: string, mmUpdate: MmUpdate): AgentBinding[];
-export declare function buildRemoveCustomerConfig(current: OpenclawConfigShape & Record<string, unknown>, slug: string, agentId: string): OpenclawConfigShape & Record<string, unknown>;
+export declare function createUserDirectories(ctx: ProvisioningContext): void;
+export declare function writeUserTemplateFiles(ctx: ProvisioningContext): Promise<void>;
+export declare function registerDefaultAgent(ctx: ProvisioningContext, config: OpenclawConfigShape): string;
+export declare function buildDefaultAgentEntry(ctx: ProvisioningContext): AgentEntry;
+export declare function buildDefaultAgentBindings(current: unknown, userDefaultAgentId: string, slug: string, mmUpdate: MmUpdate): AgentBinding[];
+export declare function buildRemoveUserConfig(current: OpenclawConfigShape & Record<string, unknown>, slug: string, agentId: string): OpenclawConfigShape & Record<string, unknown>;
 export declare function provisionMattermost(ctx: ProvisioningContext, channelHost: ManagedChannelHost): Promise<MmUpdate>;
 export declare function upsertMattermostBindingByAgentAndPeer(bindings: AgentBinding[], binding: AgentBinding & {
     match: {
@@ -77,9 +77,9 @@ export declare function upsertMattermostBindingByAgentAndPeer(bindings: AgentBin
         };
     };
 }): void;
-export declare function wireCoachMattermostBindings(config: OpenclawConfigShape, coachAgentId: string, slug: string, mmUpdate: MmUpdate): void;
+export declare function wireDefaultAgentMattermostBindings(config: OpenclawConfigShape, userDefaultAgentId: string, slug: string, mmUpdate: MmUpdate): void;
 export declare function markProvisioningComplete(ctx: ProvisioningContext, mmUpdate: MmUpdate, allAgentIds: string[]): Promise<void>;
-export declare function buildProvisionedBuilderPatch(ctx: ProvisioningContext, mmUpdate: MmUpdate): BuilderPatch;
+export declare function buildProvisionedUserPatch(ctx: ProvisioningContext, mmUpdate: MmUpdate): UserPatch;
 export declare function buildUserProductFields(ctx: ProvisioningContext, mmUpdate: MmUpdate): Record<string, unknown>;
-export declare function buildCoachAgentDoc(uid: string): Record<string, unknown>;
+export declare function buildDefaultAgentDoc(uid: string): Record<string, unknown>;
 export declare function notifyOpsOfSignup(ctx: ProvisioningContext): Promise<void>;

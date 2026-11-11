@@ -6,14 +6,14 @@ import {
   createSecretMaterialLedger,
 } from "../lib/secret-material-change.js";
 
-const coachRef = { source: "file", provider: "octogee-mattermost", id: "/alice-coach" };
+const defaultAgentRef = { source: "file", provider: "octogee-mattermost", id: "/alice-coach" };
 const projectRef = { source: "file", provider: "octogee-mattermost", id: "/alice-proj-orbit" };
 
 function config(overrides: Record<string, unknown> = {}) {
   return {
     secrets: { providers: { "octogee-mattermost": { source: "file", path: "/secrets/mm.json" } } },
     agents: { list: [{ id: "octogee-alice-coach", model: "anthropic/claude" }] },
-    channels: { mattermost: { accounts: { "alice-coach": { botToken: coachRef, url: "https://mm" } } } },
+    channels: { mattermost: { accounts: { "alice-coach": { botToken: defaultAgentRef, url: "https://mm" } } } },
     ...overrides,
   };
 }
@@ -57,7 +57,7 @@ describe("configSecretMaterialChangeReasons", () => {
   it("reports an added SecretRef", () => {
     const after = config({
       channels: { mattermost: { accounts: {
-        "alice-coach": { botToken: coachRef },
+        "alice-coach": { botToken: defaultAgentRef },
         "alice-proj-orbit": { botToken: projectRef },
       } } },
     });
@@ -76,7 +76,7 @@ describe("configSecretMaterialChangeReasons", () => {
   it("reports a SecretRef whose target changed in place", () => {
     const after = config({
       channels: { mattermost: { accounts: {
-        "alice-coach": { botToken: { ...coachRef, id: "/alice-coach-rotated" } },
+        "alice-coach": { botToken: { ...defaultAgentRef, id: "/alice-coach-rotated" } },
       } } },
     });
     expect(configSecretMaterialChangeReasons(config(), after)).toEqual([

@@ -15,7 +15,7 @@ rules:
   # / configmaps was tried and reverted in TEST when helm patched all
   # three on a routine reconcile and the controller couldn't proceed.
   # deployments/scale is a distinct RBAC subresource — the bare `deployments`
-  # grant does NOT cover it. Cowboy's pause/resume path runs `kubectl scale
+  # grant does NOT cover it. The fleet controller's pause/resume path runs `kubectl scale
   # deploy/octogee-gateway-<inst>` (kube-ops.ts), which patches
   # deployments/scale; without this the SA 403s with "cannot patch resource
   # deployments/scale" (TEST, 2026-05-28, after the helm→kubectl pause switch
@@ -53,13 +53,13 @@ rules:
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["roles", "rolebindings"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Cowboy needs create/patch/delete on PVCs to reconcile personal/pet
-  # gateway volumes (rendered by the Cowboy-owned octogee-gateway chart).
+  # The fleet controller needs create/patch/delete on PVCs to reconcile personal/pet
+  # gateway volumes (rendered by the controller-owned octogee-gateway chart).
   # K8s RBAC Role verbs CANNOT be name-prefix-scoped, so this grant is
-  # namespace-wide — it does NOT by itself confine Cowboy to gw PVCs.
+  # namespace-wide — it does NOT by itself confine the fleet controller to gw PVCs.
   # The actual protection of the Mattermost/Gitea pet PVCs is two real,
   # tested layers, not this RBAC:
-  #   1. Cowboy's mutating helm ops are structurally release-scoped to
+  #   1. The fleet controller's mutating helm ops are structurally release-scoped to
   #      `octogee-gw-*` (RELEASE_PREFIX / releaseNameForInstance in
   #      helm-runner.ts; pinned by helm-runner.spec.ts "^octogee-gw-").
   #   2. The MM + Gitea PVCs carry `helm.sh/resource-policy: keep`, so

@@ -7,7 +7,7 @@ import {
   withCurrentBuilderTier,
   type BuilderTierReader,
   type CurrentBuilderTier,
-} from "@octogee/core/builder-activation-lease";
+} from "@octogee/core/user-activation-lease";
 import { gatewayAuthorizationFromRootDocument, readGatewayArtifactInStore } from "@octogee/core/gateway-live-release";
 import {
   inspectOpenClawControlTicket,
@@ -21,7 +21,7 @@ import {
   type ResolvedGatewayAccess,
 } from "@octogee/core/gateway-principal-access";
 import type {
-  BuilderRecord,
+  PlatformUserRecord,
   ControlSession as StoredControlSession,
   ControlSessionChecks,
   ControlTicket,
@@ -163,7 +163,7 @@ function perUserControlIdentity(config: GatewayRootAuthorization["config"]): boo
 function perUserIdentityEnabled(
   config: GatewayRootAuthorization["config"],
   ownerTier: OwnerTier | null,
-  owner: Stored<BuilderRecord> | null,
+  owner: Stored<PlatformUserRecord> | null,
 ): boolean {
   if (!perUserControlIdentity(config) || ownerTier === null || ownerTier.uid !== owner?.uid) return false;
   ownerTier.assertCurrent(owner);
@@ -208,7 +208,7 @@ async function storedOwnerScope(
     : authorization.config.ownerUid;
   if (typeof ownerUid !== "string" || !ownerUid) return null;
   const [owner, assignment] = await Promise.all([
-    args.tx.builders.records.get(ownerUid),
+    args.tx.users.records.get(ownerUid),
     args.tx.gateways.assignments.get(args.gatewayId, ownerUid),
   ]);
   const scope = { gatewayId: args.gatewayId, workspaceSlug: args.workspaceSlug, ownerUid,
@@ -850,7 +850,7 @@ async function controlMattermostRequest(
       return;
     }
     const channel = await mattermost.authorize(uid, body.channelId as string, workspaceSlug, {
-      requireActiveLedger: body.requireActiveLedger === true, includeCoachConversation: true, signal,
+      requireActiveLedger: body.requireActiveLedger === true, includeDefaultAgentConversation: true, signal,
     });
     if (!channel || channel.forbidden) {
       res.status(channel?.forbidden ? 403 : 404).json({ error: "channel-unavailable" });

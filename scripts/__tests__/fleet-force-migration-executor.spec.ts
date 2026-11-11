@@ -42,7 +42,7 @@ describe("synchronous Fleet force migration recovery", () => {
     expect(h.writes).toEqual([]);
   });
 
-  it("reports the unsupported GCE VM transport before auditing a Builder force", async () => {
+  it("reports the unsupported GCE VM transport before auditing a user force", async () => {
     const h = setup();
     h.docs.get("gateways/builder-a")!.runtime = "gce-vm";
     await expect(h.run()).rejects.toThrow("GCE VM transport is not available");

@@ -69,8 +69,8 @@ beforeEach(() => {
   h.docs.set('workspaces/alice/channels/coach-dm', { mattermost: { channelId: 'coach-dm' } });
   h.docs.set('users/u/secrets/coachMattermost', { personalToken: 'coach-token' });
   h.docs.set('agents/u', { mattermost: { userId: 'coach' }, name: 'Piper' });
-  h.docs.set('users/u', { displayName: 'Private Builder Name' });
-  h.docs.set('users/u/secrets/mattermost', { personalToken: 'builder-token' });
+  h.docs.set('users/u', { displayName: 'Private user Name' });
+  h.docs.set('users/u/secrets/mattermost', { personalToken: 'user-token' });
   h.docs.set(`users/u/secrets/${projectAgentSecretDocId('golf')}`, { personalToken: 'chip-token', mmUserId: 'chip' });
   h.mm.mockImplementation(async (path: string, method: string) => {
     if (path.includes('/posts?')) return { order: [], posts: {} };
@@ -80,7 +80,7 @@ beforeEach(() => {
   });
   h.seed.mockResolvedValue(undefined); h.avatar.mockResolvedValue(true); h.blob.mockResolvedValue({ gcsPath: 'private/avatar' });
 });
-it('queues a distinct identity and context, honoring the Builder’s requested name', async () => {
+it('queues a distinct identity and context, honoring the user’s requested name', async () => {
   h.docs.get(projectPath).agent.requestedName = 'Birdie';
   await queueProjectHandoff('u', 'alice', 'golf', handoff);
   expect(h.docs.get(projectPath).agent.identity).toEqual({ name: 'Birdie', emoji: '⛳', persona: handoff.persona });
@@ -92,7 +92,7 @@ it('queues a distinct identity and context, honoring the Builder’s requested n
   expect(h.docs.get(`${projectPath}/agentState/handoff`).message).toBe('Different task');
   expect(h.docs.get(projectPath).agent.identity.persona).toBe('Patient golf tutor');
 });
-it('rejects a handoff to another Builder’s project and malformed input', async () => {
+it('rejects a handoff to another user’s project and malformed input', async () => {
   await expect(queueProjectHandoff('other', 'alice', 'golf', handoff)).rejects.toThrow('active project');
   expect(parseProjectHandoff({ ...handoff, emoji: '' })).toBeNull();
   expect(parseProjectHandoff(handoff)).toEqual(handoff);
@@ -160,12 +160,12 @@ it('waits for readiness, then delivers the complete handoff once without writing
   await deliverProjectAgentOnboarding('u', 'alice', 'golf');
   expect(h.mm.mock.calls.filter(c => c[0] === '/posts')).toHaveLength(1);
 });
-it('sends GitHub-backed coaches to their private workspace for persona files', async () => {
+it('sends GitHub-backed agents to their private workspace for persona files', async () => {
   h.docs.get(projectPath).repoSource = { provider: 'github', owner: 'alice', repo: 'golf' };
   await queueProjectHandoff('u', 'alice', 'golf', handoff);
   await deliverProjectAgentOnboarding('u', 'alice', 'golf');
   const message = h.mm.mock.calls.find(call => call[0] === '/posts')[2].message;
-  expect(message).toContain('private coach workspace');
+  expect(message).toContain('private agent workspace');
   expect(message).toContain('Use the GitHub checkout, when available, for source');
   expect(message).not.toContain('octogee_project_commit');
   expect(h.seed).not.toHaveBeenCalled();
@@ -343,7 +343,7 @@ it('does not post after preparation outlives its delivery lease', async () => {
   await expect(deliverProjectAgentOnboarding('u', 'alice', 'golf')).rejects.toThrow('lease expired');
   expect(h.mm.mock.calls.some(c => c[0] === '/posts')).toBe(false);
 });
-it('asks the new project agent to greet the Builder and wait when no idea was provided', async () => {
+it('asks the new project agent to greet the user and wait when no idea was provided', async () => {
   h.docs.get(projectPath).tagline = '';
   h.docs.get(projectPath).agent.kickoff = { status: 'pending' };
   await deliverProjectAgentOnboarding('u', 'alice', 'golf');
@@ -353,7 +353,7 @@ it('asks the new project agent to greet the Builder and wait when no idea was pr
   expect(post.message).not.toContain('I created');
 });
 
-it('keeps the workspace coach in project general after the handoff', async () => {
+it('keeps the workspace agent in project general after the handoff', async () => {
   await queueProjectHandoff('u', 'alice', 'golf', handoff);
   await deliverProjectAgentOnboarding('u', 'alice', 'golf');
   expect(h.mm).toHaveBeenCalledWith('/channels/general/members', 'POST', { user_id: 'coach' });
@@ -406,7 +406,7 @@ it('does not seed a UI-created agent with a placeholder identity or instruction-
   expect(h.mm.mock.calls.find(c => c[0] === '/posts')[2].message).toContain('identity files');
 });
 
-it('lets an already-cloned project checkpoint its first implementation after the coach handoff', async () => {
+it('lets an already-cloned project checkpoint its first implementation after the agent handoff', async () => {
   const root = mkdtempSync(join(tmpdir(), 'project-handoff-'));
   const remote = join(root, 'remote.git');
   const server = join(root, 'server');

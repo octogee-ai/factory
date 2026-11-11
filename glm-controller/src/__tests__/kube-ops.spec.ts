@@ -29,7 +29,7 @@ describe("createKubeSubprocessRunner — scaleDeployment", () => {
 
     await kube.scaleDeployment({
       namespace: "octogee-test",
-      name: "octogee-gateway-bender",
+      name: "octogee-gateway-walter",
       replicas: 0,
     });
 
@@ -38,7 +38,7 @@ describe("createKubeSubprocessRunner — scaleDeployment", () => {
         "-n",
         "octogee-test",
         "scale",
-        "deploy/octogee-gateway-bender",
+        "deploy/octogee-gateway-walter",
         "--replicas=0",
       ],
     ]);
@@ -61,7 +61,7 @@ describe("createKubeSubprocessRunner — scaleDeployment", () => {
     const log = vi.fn();
     const { runKubectl } = mockSubprocess([
       {
-        stderr: 'Error from server (NotFound): deployments.apps "octogee-gateway-bender" not found',
+        stderr: 'Error from server (NotFound): deployments.apps "octogee-gateway-walter" not found',
         code: 1,
       },
     ]);
@@ -70,12 +70,12 @@ describe("createKubeSubprocessRunner — scaleDeployment", () => {
     await expect(
       kube.scaleDeployment({
         namespace: "octogee-test",
-        name: "octogee-gateway-bender",
+        name: "octogee-gateway-walter",
         replicas: 0,
       }),
     ).resolves.toBeUndefined();
     expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("octogee-gateway-bender"),
+      expect.stringContaining("octogee-gateway-walter"),
     );
   });
 
@@ -88,7 +88,7 @@ describe("createKubeSubprocessRunner — scaleDeployment", () => {
     await expect(
       kube.scaleDeployment({
         namespace: "octogee-test",
-        name: "octogee-gateway-bender",
+        name: "octogee-gateway-walter",
         replicas: 0,
       }),
     ).rejects.toThrow(/connection refused/);
@@ -101,7 +101,7 @@ describe("createKubeSubprocessRunner — scaleDeployment", () => {
     await expect(
       kube.scaleDeployment({
         namespace: "octogee-test",
-        name: "octogee-gateway-bender",
+        name: "octogee-gateway-walter",
         replicas: -1,
       }),
     ).rejects.toThrow(/replicas/);
@@ -118,7 +118,7 @@ describe("createKubeSubprocessRunner — restartOpenClawInPlace", () => {
 
     await kube.restartOpenClawInPlace({
       namespace: "octogee-test",
-      name: "octogee-gateway-bender",
+      name: "octogee-gateway-walter",
     });
 
     // In-process OpenClaw restart via the local gateway RPC (self-authorizing,
@@ -131,7 +131,7 @@ describe("createKubeSubprocessRunner — restartOpenClawInPlace", () => {
         "-n",
         "octogee-test",
         "exec",
-        "deploy/octogee-gateway-bender",
+        "deploy/octogee-gateway-walter",
         "-c",
         "gateway",
         "--",
@@ -147,7 +147,7 @@ describe("createKubeSubprocessRunner — restartOpenClawInPlace", () => {
   it("throws on NotFound (restart against a gateway that isn't there is a real mistake)", async () => {
     const { runKubectl } = mockSubprocess([
       {
-        stderr: 'Error from server (NotFound): deployments.apps "octogee-gateway-bender" not found',
+        stderr: 'Error from server (NotFound): deployments.apps "octogee-gateway-walter" not found',
         code: 1,
       },
     ]);
@@ -156,7 +156,7 @@ describe("createKubeSubprocessRunner — restartOpenClawInPlace", () => {
     await expect(
       kube.restartOpenClawInPlace({
         namespace: "octogee-test",
-        name: "octogee-gateway-bender",
+        name: "octogee-gateway-walter",
       }),
     ).rejects.toThrow(/NotFound/);
   });
@@ -174,7 +174,7 @@ describe("createKubeSubprocessRunner — restartOpenClawInPlace", () => {
     await expect(
       kube.restartOpenClawInPlace({
         namespace: "octogee-test",
-        name: "octogee-gateway-bender",
+        name: "octogee-gateway-walter",
       }),
     ).rejects.toThrow(/commands\.restart=false/);
   });
@@ -187,7 +187,7 @@ describe("createKubeSubprocessRunner — readDeployedReplicas", () => {
 
     const replicas = await kube.readDeployedReplicas({
       namespace: "octogee-test",
-      name: "octogee-gateway-bender",
+      name: "octogee-gateway-walter",
     });
 
     expect(replicas).toBe(0);
@@ -195,7 +195,7 @@ describe("createKubeSubprocessRunner — readDeployedReplicas", () => {
       "-n",
       "octogee-test",
       "get",
-      "deploy/octogee-gateway-bender",
+      "deploy/octogee-gateway-walter",
       "-o",
       "jsonpath={.spec.replicas}",
     ]);
@@ -212,7 +212,7 @@ describe("createKubeSubprocessRunner — readDeployedReplicas", () => {
 
     const replicas = await kube.readDeployedReplicas({
       namespace: "octogee-test",
-      name: "octogee-gateway-bender",
+      name: "octogee-gateway-walter",
     });
 
     expect(replicas).toBeNull();
@@ -225,7 +225,7 @@ describe("createKubeSubprocessRunner — readDeployedReplicas", () => {
     await expect(
       kube.readDeployedReplicas({
         namespace: "octogee-test",
-        name: "octogee-gateway-bender",
+        name: "octogee-gateway-walter",
       }),
     ).rejects.toThrow(/replicas/);
   });
@@ -238,7 +238,7 @@ describe("createKubeSubprocessRunner — readAvailableReplicas", () => {
 
     const replicas = await kube.readAvailableReplicas({
       namespace: "octogee-test",
-      name: "octogee-gateway-bender",
+      name: "octogee-gateway-walter",
     });
 
     expect(replicas).toBe(1);
@@ -246,7 +246,7 @@ describe("createKubeSubprocessRunner — readAvailableReplicas", () => {
       "-n",
       "octogee-test",
       "get",
-      "deploy/octogee-gateway-bender",
+      "deploy/octogee-gateway-walter",
       "-o",
       "jsonpath={.status.availableReplicas}",
     ]);
@@ -259,7 +259,7 @@ describe("createKubeSubprocessRunner — readAvailableReplicas", () => {
     await expect(
       kube.readAvailableReplicas({
         namespace: "octogee-test",
-        name: "octogee-gateway-bender",
+        name: "octogee-gateway-walter",
       }),
     ).resolves.toBe(0);
   });
@@ -275,7 +275,7 @@ describe("createKubeSubprocessRunner — readAvailableReplicas", () => {
 
     const replicas = await kube.readAvailableReplicas({
       namespace: "octogee-test",
-      name: "octogee-gateway-bender",
+      name: "octogee-gateway-walter",
     });
 
     expect(replicas).toBeNull();
@@ -288,7 +288,7 @@ describe("createKubeSubprocessRunner — readAvailableReplicas", () => {
     await expect(
       kube.readAvailableReplicas({
         namespace: "octogee-test",
-        name: "octogee-gateway-bender",
+        name: "octogee-gateway-walter",
       }),
     ).rejects.toThrow(/availableReplicas/);
   });
@@ -302,7 +302,7 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
           items: [
             {
               metadata: {
-                name: "octogee-gateway-bender-abc",
+                name: "octogee-gateway-walter-abc",
                 creationTimestamp: "2026-06-27T10:00:00.000Z",
               },
               spec: { nodeName: "gke-node-1" },
@@ -338,7 +338,7 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
 
     const diagnostics = await kube.readGatewayPodDiagnostics({
       namespace: "octogee-test",
-      gatewayId: "bender",
+      gatewayId: "walter",
     });
 
     expect(calls[0]).toEqual([
@@ -347,7 +347,7 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
       "get",
       "pods",
       "-l",
-      "gateway-instance=bender",
+      "gateway-instance=walter",
       "-o",
       "json",
     ]);
@@ -359,7 +359,7 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
       totalRestarts: 3,
       pods: [
         {
-          name: "octogee-gateway-bender-abc",
+          name: "octogee-gateway-walter-abc",
           phase: "Running",
           readyContainers: 2,
           totalContainers: 2,
@@ -382,7 +382,7 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
         stdout: JSON.stringify({
           items: [
             {
-              metadata: { name: "octogee-gateway-bender-def" },
+              metadata: { name: "octogee-gateway-walter-def" },
               status: {
                 phase: "Pending",
                 containerStatuses: [
@@ -405,7 +405,7 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
     await expect(
       kube.readGatewayPodDiagnostics({
         namespace: "octogee-test",
-        gatewayId: "bender",
+        gatewayId: "walter",
       }),
     ).resolves.toMatchObject({
       status: "not-ready",
@@ -751,13 +751,13 @@ describe("createKubeSubprocessRunner — pod identity and ReplicaSet intent", ()
 describe("createKubeSubprocessRunner — deletePersistentVolumeClaim", () => {
   it("deletes the named PVC idempotently", async () => {
     const { runKubectl, calls } = mockSubprocess([
-      { stdout: "persistentvolumeclaim/octogee-gateway-bender-data deleted" },
+      { stdout: "persistentvolumeclaim/octogee-gateway-walter-data deleted" },
     ]);
     const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
 
     await kube.deletePersistentVolumeClaim({
       namespace: "octogee-test",
-      name: "octogee-gateway-bender-data",
+      name: "octogee-gateway-walter-data",
     });
 
     expect(calls).toEqual([
@@ -765,7 +765,7 @@ describe("createKubeSubprocessRunner — deletePersistentVolumeClaim", () => {
         "-n",
         "octogee-test",
         "delete",
-        "pvc/octogee-gateway-bender-data",
+        "pvc/octogee-gateway-walter-data",
         "--ignore-not-found=true",
       ],
     ]);
@@ -774,16 +774,16 @@ describe("createKubeSubprocessRunner — deletePersistentVolumeClaim", () => {
   it("reports a PVC that was never allocated as absent, not deleted", async () => {
     const log = vi.fn();
     const { runKubectl } = mockSubprocess([
-      { stdout: "persistentvolumeclaim/octogee-gateway-bender-data deleted\n" },
+      { stdout: "persistentvolumeclaim/octogee-gateway-walter-data deleted\n" },
       { stdout: "" },
     ]);
     const kube = createKubeSubprocessRunner({ runKubectl, log });
 
-    await kube.deletePersistentVolumeClaim({ namespace: "octogee-test", name: "octogee-gateway-bender-data" });
+    await kube.deletePersistentVolumeClaim({ namespace: "octogee-test", name: "octogee-gateway-walter-data" });
     await kube.deletePersistentVolumeClaim({ namespace: "octogee-test", name: "octogee-gateway-sep092-s-77f99da1-data" });
 
     expect(log.mock.calls.flat()).toEqual([
-      "[kube-ops] deleted pvc/octogee-gateway-bender-data ns=octogee-test",
+      "[kube-ops] deleted pvc/octogee-gateway-walter-data ns=octogee-test",
       "[kube-ops] pvc/octogee-gateway-sep092-s-77f99da1-data ns=octogee-test already absent",
     ]);
   });
@@ -797,7 +797,7 @@ describe("createKubeSubprocessRunner — deletePersistentVolumeClaim", () => {
     await expect(
       kube.deletePersistentVolumeClaim({
         namespace: "octogee-test",
-        name: "octogee-gateway-bender-data",
+        name: "octogee-gateway-walter-data",
       }),
     ).rejects.toThrow(/Forbidden/);
   });
@@ -806,13 +806,13 @@ describe("createKubeSubprocessRunner — deletePersistentVolumeClaim", () => {
 describe("createKubeSubprocessRunner — deleteSecret", () => {
   it("deletes the named secret idempotently", async () => {
     const { runKubectl, calls } = mockSubprocess([
-      { stdout: "secret/gateway-auth-token-bender deleted" },
+      { stdout: "secret/gateway-auth-token-walter deleted" },
     ]);
     const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
 
     await kube.deleteSecret({
       namespace: "octogee-test",
-      name: "gateway-auth-token-bender",
+      name: "gateway-auth-token-walter",
     });
 
     expect(calls).toEqual([
@@ -820,7 +820,7 @@ describe("createKubeSubprocessRunner — deleteSecret", () => {
         "-n",
         "octogee-test",
         "delete",
-        "secret/gateway-auth-token-bender",
+        "secret/gateway-auth-token-walter",
         "--ignore-not-found=true",
       ],
     ]);
@@ -835,7 +835,7 @@ describe("createKubeSubprocessRunner — deleteSecret", () => {
     await expect(
       kube.deleteSecret({
         namespace: "octogee-test",
-        name: "gateway-auth-token-bender",
+        name: "gateway-auth-token-walter",
       }),
     ).rejects.toThrow(/Forbidden/);
   });
@@ -846,12 +846,12 @@ describe("createKubeSubprocessRunner — delete gateway-owned identity and servi
     const { runKubectl, calls } = mockSubprocess([{}, {}]);
     const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
 
-    await kube.deleteServiceAccount({ namespace: "octogee-test", name: "octogee-gw-bender" });
-    await kube.deleteService({ namespace: "octogee-test", name: "gateway-edge-bender" });
+    await kube.deleteServiceAccount({ namespace: "octogee-test", name: "octogee-gw-walter" });
+    await kube.deleteService({ namespace: "octogee-test", name: "gateway-edge-walter" });
 
     expect(calls).toEqual([
-      ["-n", "octogee-test", "delete", "serviceaccount/octogee-gw-bender", "--ignore-not-found=true"],
-      ["-n", "octogee-test", "delete", "service/gateway-edge-bender", "--ignore-not-found=true"],
+      ["-n", "octogee-test", "delete", "serviceaccount/octogee-gw-walter", "--ignore-not-found=true"],
+      ["-n", "octogee-test", "delete", "service/gateway-edge-walter", "--ignore-not-found=true"],
     ]);
   });
 
@@ -860,7 +860,7 @@ describe("createKubeSubprocessRunner — delete gateway-owned identity and servi
     const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn() });
 
     await expect(
-      kube.deleteServiceAccount({ namespace: "octogee-test", name: "octogee-gw-bender" }),
+      kube.deleteServiceAccount({ namespace: "octogee-test", name: "octogee-gw-walter" }),
     ).rejects.toThrow(/Forbidden/);
   });
 });

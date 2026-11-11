@@ -1,22 +1,22 @@
 import { installDefaultUserEntitlements } from "@octogee/shared/types/user-entitlements";
-import { createBuilderActivationRollRecoveryOwner } from './builder-activation-roll-recovery-owner.js';
-import { hasBuilderActivationTargetRollback, readBuilderActivationRollRecoveryCustody } from './builder-activation-roll-recovery.js';
-import { createMigrationAgentStorePreparer, readBuilderAgentStoreInventory, type PrepareMigrationAgentStores } from "./migration-agent-stores.js";
-import { prepareBuilderRecoveryTarget } from "./builder-recovery-target.js";
+import { createUserActivationRollRecoveryOwner } from './user-activation-roll-recovery-owner.js';
+import { hasUserActivationTargetRollback, readUserActivationRollRecoveryCustody } from './user-activation-roll-recovery.js';
+import { createMigrationAgentStorePreparer, readUserAgentStoreInventory, type PrepareMigrationAgentStores } from "./migration-agent-stores.js";
+import { prepareIsolatedRecoveryTarget } from "./isolated-recovery-target.js";
 import { createGatewayCredentialEnsurers } from "./gateway-credential-ensurers.js";
-import { createAgentStoreCredentialProvisioner, createAgentStoreCredentialRevoker, createAgentStoreCredentialRetirementVerifier, createAgentStoreOwnershipTransferer, assertNoBuilderAgentStores, eraseBuilderAgentStores } from "@octogee/core/agent-store-credentials";
-import { createCustomerAgentStoreErasure, preserveCustomerGatewayRetirement, type SharedAgentErasureSource } from "./lib/customer-ops/agent-store-erasure.js";
-import { eraseBuilderHomeMigrationStorage } from "./lib/builder-home-erasure.js";
-import { createBuilderHomeMigrator } from "./builder-home-migration.js";
-import { createBuilderHomeProvider } from "./lib/builder-home-provider.js";
+import { createAgentStoreCredentialProvisioner, createAgentStoreCredentialRevoker, createAgentStoreCredentialRetirementVerifier, createAgentStoreOwnershipTransferer, assertNoUserAgentStores, eraseUserAgentStores } from "@octogee/core/agent-store-credentials";
+import { createUserAgentStoreErasure, preserveUserGatewayRetirement, type SharedAgentErasureSource } from "./lib/user-ops/agent-store-erasure.js";
+import { eraseUserHomeMigrationStorage } from "./lib/user-home-erasure.js";
+import { createUserHomeMigrator } from "./user-home-migration.js";
+import { createUserHomeProvider } from "./lib/user-home-provider.js";
 import { createHomeCopyClient } from "./lib/compute-home-copy.js";
 import type { ComputeRequest } from "./lib/compute-vm.js";
-import { assertBuilderRuntimeStorage } from "./builder-runtime-storage.js";
+import { assertIsolatedRuntimeStorage } from "./isolated-runtime-storage.js";
 import { runNormalFleetMutation } from "@octogee/core/normal-fleet-mutation";
-import { createFirestorePlatformStateStore, platformStateStoreFromEnvironment, MissingRecordError, type WorkspaceProject, type CustomerDeletionJob, type FleetRegistryRecord, type GatewayRoot, type OpaqueMap, type GatewayRootFields, type GatewayRootPatch, type OperationRecord, type PlatformStateStore, type Stored, type WatchChange, type WatchEvent, type FleetRegistryInventory, type PlacementAdmissionPolicy } from "@octogee/core/platform-state";
+import { createFirestorePlatformStateStore, platformStateStoreFromEnvironment, MissingRecordError, type WorkspaceProject, type UserDeletionJob, type FleetRegistryRecord, type GatewayRoot, type OpaqueMap, type GatewayRootFields, type GatewayRootPatch, type OperationRecord, type PlatformStateStore, type Stored, type WatchChange, type WatchEvent, type FleetRegistryInventory, type PlacementAdmissionPolicy } from "@octogee/core/platform-state";
 import { restartGatewayProcess, restartGatewayDeployment } from './lib/runtime-restart-transport.js';
 import { assertMigrationRestartUnfenced } from './lib/runtime-restart-coordinator.js';
-import { assertOwnerOperationUnfenced } from './lib/computer-recovery-fence.js';
+import { assertOwnerOperationUnfenced } from './lib/vm-recovery-fence.js';
 import { runGatewayRuntimeExclusive, withGatewayRuntimeMutation } from './lib/gateway-runtime-mutation.js';
 import { createRetainedSourceTransfer, type RetainedSourceContext } from './lib/retained-source-transfer.js';
 import { sourceTransferBlocksRelease } from './lib/source-transfer-execution.js';
@@ -26,7 +26,7 @@ import { journalHandoffProgress, journalOperationProgress, type ProgressJournalD
 import { operationScopedLog } from "./operation-log-scope.js";
 import { createNativeReturnSourceRecoveryOwner } from "./native-return-source-recovery.js";
 import { createNativeReturnTargetRetirementVerifier } from "./lib/native-return-target-retirement.js";
-import { prepareNativeComputerReturn, releaseNativeReturnSourceRecoveryHold } from "./lib/native-computer-return.js";
+import { prepareNativeVmReturn, releaseNativeReturnSourceRecoveryHold } from "./lib/native-vm-return.js";
 import { retireNativeSchedulerBeforeStage } from "./lib/native-scheduler-retirement.js";
 import { createAbandonedNativeSchedulerRecovery } from "./lib/native-return-scheduler-recovery.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS } from "@octogee/shared/types/platform-config";
@@ -40,7 +40,7 @@ import {
   GLM_GATEWAYS_COLLECTION,
   resolveGatewayRuntime,
   isOperationAuditRow,
-  builderGatewayServiceAccountName,
+  isolatedGatewayServiceAccountName,
   resolveGatewayClass,
   isGatewayClass,
   isGatewayProfile,
@@ -48,7 +48,7 @@ import {
   type HelmInstancesMap,
   type OperationAuditRecord,
   type Operation,
-  type RuntimeBuilderIdentity,
+  type RuntimeUserIdentity,
 } from "@octogee/shared/types/glm";
 import {
   type GatewayMutableConfig,
@@ -61,7 +61,7 @@ import {
   startGatewayHeartbeatPoller,
   type GatewayHeartbeatPollerDeps,
 } from "./gateway-heartbeat-poller.js";
-import { createFleetStateFetcher, readPrivateProjectCoachWorkspace, requestFleetState } from "./fleet-state-client.js";
+import { createFleetStateFetcher, readPrivateProjectAgentWorkspace, requestFleetState } from "./fleet-state-client.js";
 import {
   createHelmSubprocessRunner,
   createLoggingHelmRunner,
@@ -78,12 +78,12 @@ import {
   defaultRandomTokenHex,
   type AuthSecretEnsurer,
 } from "./auth-secret-ensurer.js";
-import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
+import { MIGRATE_USER_KIND } from "./operation-kinds.js";
 import { createGatewayServiceAccountEnsurer } from "./gateway-service-account-ensurer.js";
 import {
   pollerHeartbeatReport,
   readHeartbeatLiveness,
-  readMountedCustomers,
+  readMountedUsers,
   heartbeatReportIsRedundant,
 } from "./heartbeat-relocation.js";
 import { createGatewayRuntimeConfigPreparer } from "./gateway-runtime-config.js";
@@ -93,7 +93,7 @@ import {
   type ReleasePayload,
 } from "@octogee/shared/types/gateway-releases";
 import {
-  cowboyMayMarkGatewayLive,
+  fleetControllerMayMarkGatewayLive,
   gatewayImageFor,
   gatewayReleaseAuthorizesChartDrift,
   gatewayUpsertOptsFromRelease,
@@ -101,22 +101,22 @@ import {
   deploymentIntentFingerprintForComparison,
   planGatewayConvergence,
   provisioningRuntimeDoc,
-  requiresSurgeCustomerMigration,
+  requiresSurgeUserMigration,
   supersedingGatewayImageTag,
   type DurableGateway,
   type GatewayConvergenceAction,
   type GatewayUpsertOpts,
   type ObservedHelmInstance,
 } from "./converge-gateway.js";
-import { disposableBuilderPrelaunchReserved, readDisposableBuilderPrelaunchRefresh, runtimeMatchesPrelaunchRelease } from "./disposable-builder-prelaunch.js";
+import { isolatedPrelaunchReserved, readIsolatedPrelaunchRefresh, runtimeMatchesPrelaunchRelease } from "./isolated-prelaunch.js";
 
 import {
   assertSurgeAssignmentCoverage,
-  reconcileSurgeCustomerHandoff,
+  reconcileSurgeUserHandoff,
   SurgeAssignmentBusyError,
-  type SurgeCustomerHandoffDeps,
-  type SurgeCustomerHandoffResult,
-} from "./surge-customer-handoff.js";
+  type SurgeUserHandoffDeps,
+  type SurgeUserHandoffResult,
+} from "./surge-user-handoff.js";
 
 import { pruneSurgeOrphanAssignments } from "./surge-orphan-assignment.js";
 import {
@@ -125,7 +125,7 @@ import {
   deleteCancelledSurgePod,
   listSurgePods,
   readPodSystemConfigCommit,
-} from "./surge-customer-handoff-runtime.js";
+} from "./surge-user-handoff-runtime.js";
 import {
   createGatewayModelKeySecretEnsurer,
   gatewayModelKeySecretName,
@@ -146,12 +146,12 @@ import {
   routeOperation,
   type OperationHandlers,
 } from "./operation-router.js";
-import { assertActiveOperationClaim, assertCustomerRestoreSettled, createOperationContext, operationElapsed } from "./operation-context.js";
+import { assertActiveOperationClaim, assertUserRestoreSettled, createOperationContext, operationElapsed } from "./operation-context.js";
 import {
   compareOperationQueueOrder,
   decideOperationClaim,
   isSeriallyExclusiveKind,
-  isUnstartedBuilderReturn,
+  isUnstartedUserReturn,
   type OperationRef,
   type PendingOperationRef,
 } from "./operation-queue.js";
@@ -164,7 +164,7 @@ import {
   verifiedDeletionCompletion,
 } from "./operation-retry.js";
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
-import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
+import { createMigrateUserHandler } from "./handlers/migrate-user.js";
 import {
   migrationSourceReady,
   migrationTargetRootIsStable,
@@ -176,14 +176,14 @@ import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
 import { readFileSync } from "node:fs";
 import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
 import { gatewayFleetBaseUrl, gatewayVmAddress } from "./lib/gateway-address.js";
-import { createComputerReadinessProbe, createSurgeEndpointLister } from "./vm-computer-endpoints.js";
+import { createVmReadinessProbe, createSurgeEndpointLister } from "./vm-endpoints.js";
 import {
   createRuntimeDispatchingHelmRunner,
   createVmGatewayRuntime,
   type VmGatewayRuntime,
   type VmGatewayRuntimeDeps,
   parseGatewayVmSpec,
-  resolveDisposableBuilderParking,
+  resolveIsolatedParking,
   stampGatewayRuntime,
 } from "./vm-gateway-runtime.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
@@ -195,56 +195,56 @@ import { createGatewayVmHandler } from "./handlers/gateway-vm.js";
 import { createGatewayVmClient } from "./lib/compute-vm.js";
 import { pausedNativeRetirementSourceFencedOff } from "./lib/native-retirement-telemetry.js";
 import { clearHomeCheckpointRequest, readHomeCheckpointCompletedAt, requestHomeCheckpoint } from "./lib/home-checkpoint.js";
-import { clearParkedComputer, readParkedComputer } from "./lib/parked-computer.js";
+import { clearParkedVm, readParkedVm } from "./lib/parked-vm.js";
 import {
   createRolloutHandler,
   planDesiredReleaseActivation,
 } from "./handlers/rollout.js";
 import {
-  createDeprovisionCustomerHandler,
-  type CustomerCleanupContext,
-} from "./handlers/deprovision-customer.js";
-import { createSuspendCustomerHandler } from "./handlers/suspend-customer.js";
-import { createEraseCustomerHandler } from "./handlers/erase-customer.js";
+  createDeprovisionUserHandler,
+  type UserCleanupContext,
+} from "./handlers/deprovision-user.js";
+import { createSuspendUserHandler } from "./handlers/suspend-user.js";
+import { createEraseUserHandler } from "./handlers/erase-user.js";
 import {
-  deleteCustomerStorageObjects,
-  verifyCustomerStorageErasure,
-} from "./lib/customer-ops/avatars.js";
-import { loadCustomerCleanupContext } from "./lib/customer-ops/cleanup-context.js";
+  deleteUserStorageObjects,
+  verifyUserStorageErasure,
+} from "./lib/user-ops/avatars.js";
+import { loadUserCleanupContext } from "./lib/user-ops/cleanup-context.js";
 import type { UserAccounts, UserSignInHosts } from "@octogee/core/admin-user-router";
 import { createMattermostChannelHost } from "@octogee/core/channel-host";
 import { createGiteaGitHost } from "@octogee/core/git-host";
-import { firestoreBuilderAccountReader } from "@octogee/core/builder-account";
-import { createUnmountFromGateway } from "./lib/customer-ops/unmount-gateway.js";
-import { isRetiredSharedGateway, retiredSharedGatewayRuntimeAbsent } from "./lib/customer-ops/retired-shared-gateway.js";
-import { nukeUserCloudSide, type NukeCloudDeps } from "./lib/customer-ops/nuke-cloud.js";
-import { markSuspendedAndReleaseErasure } from "./lib/customer-ops/erasure-release.js";
+import { firestoreUserAccountReader } from "@octogee/core/user-account";
+import { createUnmountFromGateway } from "./lib/user-ops/unmount-gateway.js";
+import { isRetiredSharedGateway, retiredSharedGatewayRuntimeAbsent } from "./lib/user-ops/retired-shared-gateway.js";
+import { nukeUserCloudSide, type NukeCloudDeps } from "./lib/user-ops/nuke-cloud.js";
+import { markSuspendedAndReleaseErasure } from "./lib/user-ops/erasure-release.js";
 import {
   createPostHogErasureClient,
   postHogErasureConfigFromEnvironment,
   type PostHogErasureRequest,
   type PostHogErasureState,
-} from "./lib/customer-ops/posthog-erasure.js";
+} from "./lib/user-ops/posthog-erasure.js";
 import {
   postHogMappingOnlyJobPatch,
   readPostHogErasureState,
   verifiedDeletionJobPatch,
-} from "./lib/customer-ops/deletion-job.js";
-import { buildAnonymousOperationalArchive } from "./lib/customer-ops/deletion-archive.js";
+} from "./lib/user-ops/deletion-job.js";
+import { buildAnonymousOperationalArchive } from "./lib/user-ops/deletion-archive.js";
 import {
-  eraseCustomerFirestore,
-  verifyCustomerFirestoreErasure,
-} from "./lib/customer-ops/customer-firestore-erasure.js";
+  eraseUserFirestore,
+  verifyUserFirestoreErasure,
+} from "./lib/user-ops/user-firestore-erasure.js";
 import { resolveDefaultStorageBucket } from "./gcp-project.js";
-import { createS3UserBlobErasure } from "./lib/customer-ops/s3-blob-erasure.js";
-import { deleteComputerHomeObjects } from "./lib/customer-ops/computer-home.js";
+import { createS3UserBlobErasure } from "./lib/user-ops/s3-blob-erasure.js";
+import { deleteVmHomeObjects } from "./lib/user-ops/vm-home.js";
 import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
 import {
 } from "@octogee/core/assigned-roster";
 import {
   byotSystemConfigFromDoc,
   collectStoredProjectAgentStates,
-} from "@octogee/core/customer-snapshot-mapping";
+} from "@octogee/core/user-snapshot-mapping";
 import {
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   SIGNATURE_HEADER,
@@ -263,14 +263,14 @@ import { getAuth } from "firebase-admin/auth";
 import { combineIdentityProviders, googleIdentityFromEnvironment, type IdentityProvider } from "@octogee/core/identity-provider";
 import { createMigrationClient } from "@octogee/core/fleet-migration-client";
 import {
-  customerMigrationV2GatewayRootFence,
-  isCustomerMigrationV2Transition,
-} from "@octogee/core/customer-migration-v2";
+  userMigrationV2GatewayRootFence,
+  isUserMigrationV2Transition,
+} from "@octogee/core/user-migration-v2";
 import { abortRetainedSourceImport, createRsyncMigrationTransfer, createSubprocessCommandRunner, resolveMigrationRecoveryUrl } from "./lib/migration-rsync-transfer.js";
 import { readTransferAttemptForCleanup } from "./lib/migration-transfer-lease.js";
 import {
-  beginCustomerRestore,
-  acknowledgeCustomerRestore,
+  beginUserRestore,
+  acknowledgeUserRestore,
   commitCutoverAtomic,
   markAssignmentState,
   markSharedSurgeForwardRecovery,
@@ -283,7 +283,7 @@ import {
   type CutoverDeps,
   type FleetStateDeps,
 } from "@octogee/core/fleet-state";
-import { firestoreBuilderTierReader } from "@octogee/core/builder-activation-lease";
+import { firestoreBuilderTierReader } from "@octogee/core/user-activation-lease";
 import {
   provisionGatewayAuthSecret,
   deleteSecret,
@@ -311,10 +311,10 @@ import { startHttpServer, type ProductAdminRoutes } from "./http-server.js";
 import { createCloudLoggingSource } from "./cloud-logging-source.js";
 import { createConnectorSecretDecryptor } from "./connector-secret-decryption.js";
 import {
-  assertCustomerRestoreNotInProgress,
-  cancelCustomerMigrationsForSuspension,
+  assertUserRestoreNotInProgress,
+  cancelUserMigrationsForSuspension,
   cancelStripeSubscription,
-  deactivateCustomerVisibility,
+  deactivateUserVisibility,
   deleteStripeCustomer,
   disableCreditAutoTopUp,
   expireStripeCheckoutSession,
@@ -322,12 +322,12 @@ import {
   listLiveStripeSubscriptionIds,
   listOpenStripeCheckoutSessionIds,
   listStripeCustomerIdsForUid,
-  releaseCustomerPlacement,
+  releaseUserPlacement,
   revokeOwnerModelBrokerTokens,
-} from "./lib/customer-ops/customer-suspension-runtime.js";
+} from "./lib/user-ops/user-suspension-runtime.js";
 import {
   ensureOwnedGatewaysRetired,
-} from "./lib/customer-ops/customer-gateway-retirement.js";
+} from "./lib/user-ops/user-gateway-retirement.js";
 import { MODEL_BROKER_USAGE_ROLLUPS_COLLECTION } from "@octogee/shared/types/model-broker-usage";
 import {
   recordReconcile,
@@ -339,7 +339,7 @@ import { applyVmDiskDelivery, type VmDiskSample } from "./lib/vm-disk-usage.js";
 import { startDisruptionObserver } from "./disruption-observer.js";
 import { createLogger, debugFromEnv } from "./lib/logger.js";
 import {
-  assignedSlugsFromBuilderMirror,
+  assignedSlugsFromUserMirror,
   createFleetInformer,
   type FleetInformer,
   type MirrorDelivery,
@@ -362,7 +362,7 @@ import {
   writePlatformReleaseRecord,
   sharedPoolReplicaBoundsFromEnvironment,
 } from "./platform-release.js";
-import { ComputerCreationPendingError, FinalHomeCheckpointPendingError, clearReplacedComputer } from "./vm-computer-lifecycle.js";
+import { VmCreationPendingError, FinalHomeCheckpointPendingError, clearReplacedVm } from "./vm-lifecycle.js";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
 import {
   PLACEMENT_ACTIVE_OPERATION_STATUSES,
@@ -371,9 +371,9 @@ import {
   reconcilePlacementPolicyOnce,
   startPlacementPolicyReconciler,
 } from "./placement-policy-reconciler.js";
-import { placementPassOptions, type BuilderAdmissionSourceFactory } from "./builder-admission.js";
+import { placementPassOptions, type UserAdmissionSourceFactory } from "./user-admission.js";
 import { openPlacementAdmission } from "./initial-placement.js";
-import { noBuilderPolicyInputs, type BuilderPolicyInputsSource } from "./builder-placement-document.js";
+import { noUserPolicyInputs, type UserPolicyInputsSource } from "./user-placement-document.js";
 import type {
   FleetBrokerChannelBinding,
   FleetBrokerProjectCheckoutScope,
@@ -398,7 +398,7 @@ const DISRUPTION_OBSERVER_MS = parseNonNegativeInt(
 const RECONCILE_SAFETY_REFRESH_MS_DEFAULT = 10 * 60_000;
 
 const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
-const BUILDER_VM_SPEC = process.env.GATEWAY_VM_SPEC_JSON ? parseGatewayVmSpec(process.env.GATEWAY_VM_SPEC_JSON) : null;
+const GATEWAY_VM_SPEC = process.env.GATEWAY_VM_SPEC_JSON ? parseGatewayVmSpec(process.env.GATEWAY_VM_SPEC_JSON) : null;
 const GATEWAY_VM_HOST_ALIASES = ["octogee-api", "mattermost", "octogee-gitea-http", "octogee-gitea-ssh", "llm-broker", "octogee-npm-cache-proxy"] as const;
 const vmGatewayRuntimeRef: { current?: VmGatewayRuntime } = {};
 const NAMESPACE = (function () {
@@ -432,7 +432,7 @@ const GATEWAY_VALUES_FILE = (function () {
   if (explicit) return explicit;
   return `${GATEWAY_CHART}/${ENVIRONMENT_SETTINGS.gatewayValuesFile}`;
 })();
-const COMPUTER_ENVIRONMENT = NAMESPACE.endsWith("-test") ? "test" : "prod";
+const VM_ENVIRONMENT = NAMESPACE.endsWith("-test") ? "test" : "prod";
 
 const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 const GATEWAY_HEARTBEAT_POLL_MS = 15_000;
@@ -465,7 +465,7 @@ const HELM_RECOVERY_STALE_MS = parseNonNegativeInt(
 );
 
 // One shared edge ingress carries the api host (/g/<id>/* gateway-local public
-// routes) and the preview host (/g/<id>/*). Cowboy owns its .spec.rules; the
+// routes) and the preview host (/g/<id>/*). The fleet controller owns its .spec.rules; the
 // umbrella chart publishes the static base routes via the EDGE_ROUTES_CONFIGMAP
 // ConfigMap and owns only the Ingress object + metadata.
 const GATEWAY_EDGE_INGRESS_NAME =
@@ -548,13 +548,13 @@ function createGatewayComputeClient(store: PlatformStateStore, logFn: (msg: stri
   return createGatewayVmClient({
     projectId: gatewayComputeProjectId(),
     journalHomeResize: (input, action) => runNormalFleetMutation(store, {
-      actor: "cowboy", forced: false, what: "expand-builder-home", why: "Apply the Builder tier home allowance", target: { ownerUid: input.ownerUid, disk: input.home.name, zone: input.home.zone, projectId: input.home.projectId }, preActionStatus: { diskId: input.home.id, sizeGb: input.home.sizeGb }, mutation: { sizeGb: input.sizeGb }, action,
+      actor: "cowboy", forced: false, what: "expand-builder-home", why: "Apply the user tier home allowance", target: { ownerUid: input.ownerUid, disk: input.home.name, zone: input.home.zone, projectId: input.home.projectId }, preActionStatus: { diskId: input.home.id, sizeGb: input.home.sizeGb }, mutation: { sizeGb: input.sizeGb }, action,
     }),
     journalMachineType: (input, action) => runNormalFleetMutation(store, {
-      actor: "cowboy", forced: false, what: "resize-builder-computer", why: "Apply the Builder tier capacity before starting its parked computer", target: { instanceName: input.instanceName, zone: input.zone, projectId: gatewayComputeProjectId() }, preActionStatus: {}, mutation: { machineType: input.machineType }, action,
+      actor: "cowboy", forced: false, what: "resize-builder-computer", why: "Apply the user tier capacity before starting its parked VM", target: { instanceName: input.instanceName, zone: input.zone, projectId: gatewayComputeProjectId() }, preActionStatus: {}, mutation: { machineType: input.machineType }, action,
     }),
     journalProvisioningModel: (input, action) => runNormalFleetMutation(store, {
-      actor: "cowboy", forced: false, what: "reprovision-builder-computer", why: "Apply the Builder tier provisioning model before starting its parked computer", target: { instanceName: input.instanceName, zone: input.zone, projectId: gatewayComputeProjectId() }, preActionStatus: {}, mutation: { provisioningModel: input.provisioningModel }, action,
+      actor: "cowboy", forced: false, what: "reprovision-builder-computer", why: "Apply the user tier provisioning model before starting its parked VM", target: { instanceName: input.instanceName, zone: input.zone, projectId: gatewayComputeProjectId() }, preActionStatus: {}, mutation: { provisioningModel: input.provisioningModel }, action,
     }),
     log: logFn,
     wait: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -877,20 +877,20 @@ interface GatewayConvergencePassDeps {
   reconcileSurgeHandoff: (input: {
     gatewayId: string;
     desiredImageTag: string;
-    requiresCustomerMigration: boolean;
-    disposableBuilderGateway: boolean;
+    requiresUserMigration: boolean;
+    isolatedGateway: boolean;
     ownerlessOperatorPrewarm: boolean;
-  }) => Promise<SurgeCustomerHandoffResult>;
+  }) => Promise<SurgeUserHandoffResult>;
   log: (msg: string) => void;
 }
 
-function isDisposableBuilderGateway(gateway: DurableGateway): boolean {
+function isIsolatedGateway(gateway: DurableGateway): boolean {
   return gateway.gatewayClass === "builder" &&
     gateway.allocation?.kind === "disposable-builder";
 }
 
-function isInitialDisposableBuilderPrelaunch(gateway: DurableGateway): boolean {
-  return isDisposableBuilderGateway(gateway) && gateway.liveRelease === null;
+function isInitialIsolatedPrelaunch(gateway: DurableGateway): boolean {
+  return isIsolatedGateway(gateway) && gateway.liveRelease === null;
 }
 
 export async function shouldReconcileDisposablePrelaunch(
@@ -898,9 +898,9 @@ export async function shouldReconcileDisposablePrelaunch(
   gateway: DurableGateway | null,
 ): Promise<boolean> {
   if (gateway === null) return false;
-  if (isInitialDisposableBuilderPrelaunch(gateway)) return true;
+  if (isInitialIsolatedPrelaunch(gateway)) return true;
   if (gateway.liveRelease === null || gateway.liveRelease > gateway.desiredRelease ||
-    !(await disposableBuilderPrelaunchReserved({ reader: store, gateway }))) return false;
+    !(await isolatedPrelaunchReserved({ reader: store, gateway }))) return false;
   const runtime = await store.fleetRegistry.get(gateway.gatewayId);
   return runtime?.runtime === "gce-vm" &&
     (gateway.liveRelease !== gateway.desiredRelease || runtime.lifecycle === "provisioning");
@@ -926,7 +926,7 @@ function reportsDesiredBuildOrVerifiedInitialPrelaunch(input: {
   handoffReady: boolean;
 }): boolean {
   const { runtime, desiredImageTag, gateway, handoffReady } = input;
-  const initialDisposablePrelaunch = isInitialDisposableBuilderPrelaunch(gateway);
+  const initialDisposablePrelaunch = isInitialIsolatedPrelaunch(gateway);
   return runtimeReportsDesiredBuild(runtime, desiredImageTag, initialDisposablePrelaunch) || (
     initialDisposablePrelaunch && handoffReady
   );
@@ -940,7 +940,7 @@ function reconcileGatewaySurgeHandoff(input: {
   pendingArtifact: ReleasePayload | null;
   helmObserved: ObservedHelmInstance | null;
   prelaunchRefresh: boolean;
-}): Promise<SurgeCustomerHandoffResult> {
+}): Promise<SurgeUserHandoffResult> {
   const {
     passDeps,
     gateway,
@@ -959,8 +959,8 @@ function reconcileGatewaySurgeHandoff(input: {
   return passDeps.reconcileSurgeHandoff({
     gatewayId: gateway.gatewayId,
     desiredImageTag: desiredImage.imageTag,
-    requiresCustomerMigration: !input.prelaunchRefresh && requiresSurgeCustomerMigration(gateway),
-    disposableBuilderGateway: isDisposableBuilderGateway(gateway),
+    requiresUserMigration: !input.prelaunchRefresh && requiresSurgeUserMigration(gateway),
+    isolatedGateway: isIsolatedGateway(gateway),
     ownerlessOperatorPrewarm: false,
     ...(supersedingImageTag ? { supersedingImageTag } : {}),
   });
@@ -1000,7 +1000,7 @@ export async function refineGatewayConvergenceAction(input: {
     return { kind: "steady" };
   }
   const desiredImage = gatewayImageFor(gateway, artifact);
-  const prelaunchRefresh = await readDisposableBuilderPrelaunchRefresh({
+  const prelaunchRefresh = await readIsolatedPrelaunchRefresh({
     reader: passDeps.store, gateway, runtime, image: desiredImage, observedImage: helmObserved,
   });
   const handoff = await reconcileGatewaySurgeHandoff({
@@ -1073,7 +1073,7 @@ export async function runGatewayConvergencePass(
       try {
         await convergeOneGateway(passDeps, gateway, instances, runtimeById);
       } catch (err) {
-        if (err instanceof FinalHomeCheckpointPendingError || err instanceof ComputerCreationPendingError) continue;
+        if (err instanceof FinalHomeCheckpointPendingError || err instanceof VmCreationPendingError) continue;
         const message = err instanceof Error ? err.message : String(err);
         if (err instanceof SurgeAssignmentBusyError) {
           log(`[converge-gateway] ${gateway.gatewayId} deferred: ${message}`);
@@ -1109,9 +1109,9 @@ async function convergeOneGateway(
   instances: HelmInstancesMap,
   runtimeById: Map<string, GatewayRuntimeDoc>,
 ): Promise<void> {
-  if (isDisposableBuilderGateway(gateway) && gateway.liveRelease !== null && gateway.liveRelease < gateway.desiredRelease) {
-    const recovery = await readBuilderActivationRollRecoveryCustody({ state: passDeps.store, gatewayId: gateway.gatewayId });
-    if (recovery && hasBuilderActivationTargetRollback(recovery.operation, recovery.recovery)) {
+  if (isIsolatedGateway(gateway) && gateway.liveRelease !== null && gateway.liveRelease < gateway.desiredRelease) {
+    const recovery = await readUserActivationRollRecoveryCustody({ state: passDeps.store, gatewayId: gateway.gatewayId });
+    if (recovery && hasUserActivationTargetRollback(recovery.operation, recovery.recovery)) {
       passDeps.log(`[converge-gateway] ${gateway.gatewayId} retained target rollout while source recovery ${recovery.recovery.operationId} owns custody`);
       return;
     }
@@ -1232,9 +1232,9 @@ async function upsertGateway(
     initial: initialRuntime,
     gatewayClass: gateway.gatewayClass,
     sizingTier: gateway.sizingTier,
-    vmSpec: BUILDER_VM_SPEC,
+    vmSpec: GATEWAY_VM_SPEC,
     assertStorage: gateway.gatewayClass === "builder" && replicas > 0
-      ? (runtime) => assertBuilderRuntimeStorage({ store, runtime, ownerUid: gateway.ownerUid })
+      ? (runtime) => assertIsolatedRuntimeStorage({ store, runtime, ownerUid: gateway.ownerUid })
       : undefined,
     log,
   });
@@ -1250,10 +1250,10 @@ async function upsertGateway(
     await transaction.fleetRegistry.patch(gateway.gatewayId, runtimePatch, { revision: current.revision });
   });
   if (!(await gatewayRuntimeMutationAllowed(store, gateway.gatewayId))) return;
-  await helm.upsertInstance({ ...desiredOpts, ...runtimeBuilderIdentity(gateway) });
+  await helm.upsertInstance({ ...desiredOpts, ...runtimeUserIdentity(gateway) });
 }
 
-function runtimeBuilderIdentity(gateway: DurableGateway): { builderIdentity?: RuntimeBuilderIdentity } {
+function runtimeUserIdentity(gateway: DurableGateway): { builderIdentity?: RuntimeUserIdentity } {
   return gateway.ownerUid && gateway.builderSlug
     ? { builderIdentity: { ownerUid: gateway.ownerUid, builderSlug: gateway.builderSlug } }
     : {};
@@ -1266,18 +1266,18 @@ export async function markGatewayLive(
   prelaunchRefresh = false,
 ): Promise<void> {
   const { store, log } = passDeps;
-  const initialDisposablePrelaunch = isInitialDisposableBuilderPrelaunch(gateway);
+  const initialDisposablePrelaunch = isInitialIsolatedPrelaunch(gateway);
   const imageTag = gatewayImageFor(gateway, artifact).imageTag;
   const now = Date.now();
   const markedLive = await store.transaction({ label: "converge-gateway.mark-live" }, async (transaction) => {
     const root = await transaction.gateways.roots.get(gateway.gatewayId);
-    if (!root || !cowboyMayMarkGatewayLive(root, gateway.desiredRelease) ||
+    if (!root || !fleetControllerMayMarkGatewayLive(root, gateway.desiredRelease) ||
       root.desiredStatus !== gateway.desiredStatus || root.runtimeRestartFence !== undefined ||
       root.retirementClaim != null) return false;
     const runtimePatch = markLiveRuntimePatch(gateway);
     const runtime = prelaunchRefresh || runtimePatch ? await transaction.fleetRegistry.get(gateway.gatewayId) : null;
     if (prelaunchRefresh && (!runtimeMatchesPrelaunchRelease(root, runtime, gatewayImageFor(root, artifact)) ||
-      !(await disposableBuilderPrelaunchReserved({ reader: transaction, gateway: root, expectedGateway: gateway })))) {
+      !(await isolatedPrelaunchReserved({ reader: transaction, gateway: root, expectedGateway: gateway })))) {
       log(`[converge-gateway] ${gateway.gatewayId} prelaunch reservation changed; deferring release`);
       return false;
     }
@@ -1370,13 +1370,13 @@ async function convergeGatewaysIfConfigured(
   }
 }
 
-function convergeAfterComputerCreation(
+function convergeAfterVmCreation(
   convergeGateways: (gatewayIds: readonly string[]) => Promise<void>,
   log: (msg: string) => void,
 ): (gatewayId: string) => void {
   return (gatewayId) => {
     void convergeGateways([gatewayId]).catch((err: unknown) => {
-      log(`[converge-gateway] ⚠ ${gatewayId}: converge after its computer creation settled failed: ${err instanceof Error ? err.message : String(err)}; requeued`);
+      log(`[converge-gateway] ⚠ ${gatewayId}: converge after its VM creation settled failed: ${err instanceof Error ? err.message : String(err)}; requeued`);
       requestReconcileTickRef.fire?.(gatewayId);
     });
   };
@@ -1502,7 +1502,7 @@ function reconcileRelevantFingerprint(record: object): string {
 }
 
 // Root lastError is a gateway pod's self-report, not desired state, and it churns
-// for as long as a customer mount keeps failing. updatedAt/updatedBy stay in the
+// for as long as a user mount keeps failing. updatedAt/updatedBy stay in the
 // fingerprint: they are the durable migration fence (rootUpdatedAt).
 function rootReconcileRelevantFingerprint(record: object): string {
   const { lastError: _lastError, ...rest } = record as Record<string, unknown>;
@@ -1712,7 +1712,7 @@ export const OPERATION_QUEUE_DRAIN_MS_DEFAULT = 20_000;
 const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set([
   "rollout",
   "restart-gateway",
-  MIGRATE_CUSTOMER_KIND,
+  MIGRATE_USER_KIND,
   "suspend-customer",
   "erase-customer",
 ]);
@@ -1753,7 +1753,7 @@ async function attemptClaimOrQueueOperation(
             id: pendingOperation.id,
             kind: pendingOperation.kind,
             origin: pendingOperation.origin,
-            unstartedBuilderReturn: isUnstartedBuilderReturn(pendingOperation),
+            unstartedBuilderReturn: isUnstartedUserReturn(pendingOperation),
             gatewayCompatibilityPending: pendingOperation.output?.gatewayCompatibilityPending === true,
             input: pendingOperation.input,
             output: pendingOperation.output,
@@ -1776,7 +1776,7 @@ async function attemptClaimOrQueueOperation(
           kind: op.kind,
           status: freshOperation.status,
           origin: freshOperation.origin,
-          unstartedBuilderReturn: isUnstartedBuilderReturn(freshOperation),
+          unstartedBuilderReturn: isUnstartedUserReturn(freshOperation),
           gatewayCompatibilityPending: freshOperation.output?.gatewayCompatibilityPending === true,
           createdAt: freshOperation.createdAt,
           queuedAt: freshOperation.queuedAt,
@@ -1944,21 +1944,21 @@ async function runClaimedOperation(
     assertActiveClaim: async (allowCancelled) => {
       assertActiveOperationClaim(op, await operations.get(op.id), allowCancelled);
     },
-    customerRestore: {
+    userRestore: {
       assertSettled: async () => {
         const fresh = await operations.get(op.id);
         assertActiveOperationClaim(op, fresh);
-        assertCustomerRestoreSettled(op, fresh?.restoreAttempt);
+        assertUserRestoreSettled(op, fresh?.restoreAttempt);
       },
       begin: async (input) => {
-        if (typeof op.startedAt !== "number") throw new Error("customer restore requires an active claim");
+        if (typeof op.startedAt !== "number") throw new Error("user restore requires an active claim");
         const { resume, ...scope } = input;
         const restore = {
           ...scope, operationId: op.id, claimStartedAt: op.startedAt, attemptId: randomUUID(),
         };
         const stateDeps: FleetStateDeps = { store: deps.store };
-        const owned = await runGatewayRuntimeExclusive(() => beginCustomerRestore(stateDeps, restore, { resume }));
-        return () => acknowledgeCustomerRestore(stateDeps, owned);
+        const owned = await runGatewayRuntimeExclusive(() => beginUserRestore(stateDeps, restore, { resume }));
+        return () => acknowledgeUserRestore(stateDeps, owned);
       },
     },
     persist: async (next) => {
@@ -1994,25 +1994,25 @@ async function runClaimedOperation(
         );
       });
     },
-    persistCustomerMigrationV2: async (state) => {
+    persistUserMigrationV2: async (state) => {
       await deps.store.transaction({ label: "operation-worker.persist-customer-migration" }, async (tx) => {
         const data = await tx.journal.operations.get(op.id);
         assertActiveOperationClaim(op,data,true);
-        if (!data) throw new Error("customer migration V2 operation unavailable");
+        if (!data) throw new Error("user migration V2 operation unavailable");
         if (sourceTransferBlocksRelease(data.sourceTransferExecution) && state.phase !== "sourceQuiesced") throw new Error("source transfer termination not observed");
         const current = data.customerMigrationV2;
         if (current) {
           if (
             current.operationId !== state.operationId ||
             current.migrationId !== state.migrationId ||
-            !isCustomerMigrationV2Transition(current.phase, state.phase)
+            !isUserMigrationV2Transition(current.phase, state.phase)
           ) {
             throw new Error(
-              `customer migration V2 state conflict: ${current.phase} -> ${state.phase}`,
+              `user migration V2 state conflict: ${current.phase} -> ${state.phase}`,
             );
           }
         } else if (state.phase !== "initialized" || state.operationId !== op.id) {
-          throw new Error("customer migration V2 must start with its operation-bound initialized state");
+          throw new Error("user migration V2 must start with its operation-bound initialized state");
         }
         await tx.journal.operations.patch(op.id, {
           customerMigrationV2: state,
@@ -2114,9 +2114,9 @@ function buildHeartbeatPollerCoreDeps(
       const runtime = informer.fleetRegistryWithoutMalformed()?.records.find((record) => record.gatewayId === instanceId) ??
         await store.fleetRegistry.get(instanceId);
       if (runtime === null) return [];
-      const mirroredBuilders = informer.buildersWithoutMalformed()?.records;
-      return assignedSlugsFromBuilderMirror(
-        mirroredBuilders ?? await store.builders.records.listByGateway(runtime.gatewayId),
+      const mirroredUsers = informer.usersWithoutMalformed()?.records;
+      return assignedSlugsFromUserMirror(
+        mirroredUsers ?? await store.users.records.listByGateway(runtime.gatewayId),
         runtime.gatewayId,
       );
     },
@@ -2136,7 +2136,7 @@ export function buildGatewayHeartbeatPollerDeps(
   privateKey: string,
   informer: FleetInformer,
 ): GatewayHeartbeatPollerDeps {
-  const recoverComputer = createBackgroundGatewayRecovery(
+  const recoverVm = createBackgroundGatewayRecovery(
     (gatewayId) => runGatewayRuntimeExclusive(async () => { await vmGatewayRuntimeRef.current?.recoverUnreachable(gatewayId); }),
     log,
   );
@@ -2161,7 +2161,7 @@ export function buildGatewayHeartbeatPollerDeps(
     },
     onUnreachable: async (gatewayId: string) => {
       const gateway = await readDesiredRoot(store, gatewayId) as DurableGateway | null;
-      if (gateway?.desiredStatus === "running" && gateway.gatewayClass === "builder") recoverComputer(gatewayId);
+      if (gateway?.desiredStatus === "running" && gateway.gatewayClass === "builder") recoverVm(gatewayId);
       if (await shouldReconcileDisposablePrelaunch(store, gateway)) {
         requestReconcileTickRef.fire?.(gatewayId);
       }
@@ -2180,8 +2180,8 @@ interface ControllerBackgroundTasksDeps {
   userAccounts?: UserAccounts | undefined;
   adminIdentity: IdentityProvider;
   placementAdmission: PlacementAdmissionPolicy;
-  policyInputs: BuilderPolicyInputsSource;
-  builderAdmission?: BuilderAdmissionSourceFactory | undefined;
+  policyInputs: UserPolicyInputsSource;
+  userAdmission?: UserAdmissionSourceFactory | undefined;
   db: Firestore;
   deps: ControllerDeps;
   helm: HelmRunner;
@@ -2201,7 +2201,7 @@ function startControllerBackgroundTasks({
   adminIdentity,
   placementAdmission,
   policyInputs,
-  builderAdmission,
+  userAdmission,
   db,
   deps,
   helm,
@@ -2228,7 +2228,7 @@ function startControllerBackgroundTasks({
     now: () => Date.now(),
     controllerStartedAt,
   });
-  const migrationClient = createMigrationClientBuilder(deps.store, fleetControllerPrivateKey, log);
+  const migrationClient = createMigrationClientUser(deps.store, fleetControllerPrivateKey, log);
   const stopSchedulerHandoffRelease = startSchedulerHandoffRelease({
     store: deps.store,
     log,
@@ -2285,15 +2285,15 @@ function startControllerBackgroundTasks({
     intervalMs: HELM_RECOVERY_SWEEP_MS,
     log,
   });
-  const homeServices = BUILDER_VM_SPEC ? createBuilderHomeServices(deps.store, log) : undefined;
-  const prepareBuilderHome = homeServices ? createBuilderHomeMigrator({
-    store: deps.store, readBuilderTier: firestoreBuilderTierReader(db), environment: COMPUTER_ENVIRONMENT, now: Date.now, subnetwork: BUILDER_VM_SPEC!.subnetwork, nativeZones: BUILDER_VM_SPEC!.zones, log,
+  const homeServices = GATEWAY_VM_SPEC ? createUserHomeServices(deps.store, log) : undefined;
+  const prepareUserHome = homeServices ? createUserHomeMigrator({
+    store: deps.store, readBuilderTier: firestoreBuilderTierReader(db), environment: VM_ENVIRONMENT, now: Date.now, subnetwork: GATEWAY_VM_SPEC!.subnetwork, nativeZones: GATEWAY_VM_SPEC!.zones, log,
     ...homeServices.provider, copy: homeServices.copy,
   }) : undefined;
   const stopPlacementPolicyReconciler = startPlacementPolicyReconciler(
     createFirestorePlacementPolicyReconcilerDeps({
       store: deps.store,
-      prepareBuilderHome,
+      prepareUserHome,
       informer,
       policyInputs,
       namespace: NAMESPACE,
@@ -2310,7 +2310,7 @@ function startControllerBackgroundTasks({
     }),
     PLACEMENT_POLICY_RECONCILE_MS,
     placementPassOptions({
-      admission: builderAdmission ? { store: deps.store, source: builderAdmission(log), log } : null,
+      admission: userAdmission ? { store: deps.store, source: userAdmission(log), log } : null,
       runPlacementPass: reconcilePlacementPolicyOnce,
       subscribeUnassigned: informer.subscribeUnassignedUsers?.bind(informer),
     }),
@@ -2324,7 +2324,7 @@ function startControllerBackgroundTasks({
     userSignIn: buildUserSignInHosts(log),
     db,
     store: deps.store,
-    accounts: firestoreBuilderAccountReader(db),
+    accounts: firestoreUserAccountReader(db),
     log,
     port: HTTP_PORT,
     identity: adminIdentity,
@@ -2397,7 +2397,7 @@ function buildSurgeHandoffDeps(input: {
   store: PlatformStateStore;
   runKubectl: KubectlSubprocess;
   privateKey: string;
-}): SurgeCustomerHandoffDeps {
+}): SurgeUserHandoffDeps {
   const { store, runKubectl, privateKey } = input;
   return {
     ...createSurgePodTransport({
@@ -2409,7 +2409,7 @@ function buildSurgeHandoffDeps(input: {
     listPods: createSurgeEndpointLister({
       readRuntimeDoc: (gatewayId) => store.fleetRegistry.get(gatewayId),
       listPods: (gatewayId) => listSurgePods(runKubectl, NAMESPACE, gatewayId),
-      readComputerReady: createComputerReadinessProbe({
+      readVmReady: createVmReadinessProbe({
         port: FLEET_CONTROLLER_PORT,
         timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS,
         log,
@@ -2420,9 +2420,9 @@ function buildSurgeHandoffDeps(input: {
     claimCrashLoopEviction: ({ gatewayId, imageTag, pod }) =>
       claimCrashLoopEviction(store, { gatewayId, imageTag, pod, now: Date.now() }),
     readAssignments: async (gatewayId) => {
-      const [assignments, builders] = await Promise.all([
+      const [assignments, userRecords] = await Promise.all([
         store.gateways.assignments.list(gatewayId),
-        store.builders.records.listByGateway(gatewayId),
+        store.users.records.listByGateway(gatewayId),
       ]);
       const projected = assignments.map((assignment) => ({
         uid: assignment.uid,
@@ -2433,9 +2433,9 @@ function buildSurgeHandoffDeps(input: {
         updatedByOperationId: assignment.updatedByOperationId,
         ...(assignment.sharedSurgeForwardRecovery ? { sharedSurgeForwardRecovery: assignment.sharedSurgeForwardRecovery } : {}),
       }));
-      const assignedUsers = builders.map((builder) => {
-        if (!builder.slug) throw new Error(`assigned user ${builder.uid} has no gateway slug`);
-        return { uid: builder.uid, slug: builder.slug };
+      const assignedUsers = userRecords.map((userRecord) => {
+        if (!userRecord.slug) throw new Error(`assigned user ${userRecord.uid} has no gateway slug`);
+        return { uid: userRecord.uid, slug: userRecord.slug };
       });
       const retained = await pruneSurgeOrphanAssignments({
         store,
@@ -2482,7 +2482,7 @@ function buildNativeReturnSourceRecoveryOwner(store: PlatformStateStore, kubeOps
       wait: ms => new Promise(resolve => setTimeout(resolve, ms)) }, input),
     sourceClient: async (gatewayId, authority) => {
       const url = await resolveGatewayFleetUrl(store, gatewayId);
-      return createMigrationClientBuilder(store, privateKey, log,
+      return createMigrationClientUser(store, privateKey, log,
         (id, slug) => prepareMigrationAgentStores(id, slug, authority))(id => {
           if (id !== gatewayId) throw new Error("native return recovery source transport changed");
           return url;
@@ -2493,21 +2493,21 @@ function buildNativeReturnSourceRecoveryOwner(store: PlatformStateStore, kubeOps
 
 function buildAbandonedNativeSchedulerRecovery(store: PlatformStateStore, kubeOps: KubeOps, logFn: (msg: string) => void) {
   const vm = createGatewayComputeClient(store, logFn);
-  const { provider } = createBuilderHomeServices(store, logFn);
+  const { provider } = createUserHomeServices(store, logFn);
   return createAbandonedNativeSchedulerRecovery({
     store,
     verifyRetiredTarget: buildNativeReturnTargetRetirementVerifier(store, kubeOps),
     oldSourceAbsent: async gatewayId => {
       if (!await retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(gatewayId))) return false;
-      return !await vm.findByLabels({ "octogee-gateway-id": gatewayId, "octogee-environment": COMPUTER_ENVIRONMENT });
+      return !await vm.findByLabels({ "octogee-gateway-id": gatewayId, "octogee-environment": VM_ENVIRONMENT });
     },
-    verifyComputer: async (computer, input) => {
-      const [instance, home] = await Promise.all([vm.describe(computer.instanceName, computer.zone), provider.readDisk(computer.homeSource)]);
-      const instancePath = `projects/${home.projectId}/zones/${computer.zone}/instances/${computer.instanceName}`;
-      return instance?.instanceId === computer.instanceId && instance.gatewayId === input.fromGatewayId &&
-        instance.internalIp === computer.internalIp && instance.status === "RUNNING" &&
+    verifyVm: async (recorded, input) => {
+      const [instance, home] = await Promise.all([vm.describe(recorded.instanceName, recorded.zone), provider.readDisk(recorded.homeSource)]);
+      const instancePath = `projects/${home.projectId}/zones/${recorded.zone}/instances/${recorded.instanceName}`;
+      return instance?.instanceId === recorded.instanceId && instance.gatewayId === input.fromGatewayId &&
+        instance.internalIp === recorded.internalIp && instance.status === "RUNNING" &&
         instance.metadata["octogee-owner-uid"] === input.uid && home.ownerUid === input.uid.toLowerCase() &&
-        home.id === computer.homeId && home.users?.length === 1 && home.users[0].endsWith(instancePath);
+        home.id === recorded.homeId && home.users?.length === 1 && home.users[0].endsWith(instancePath);
     },
   });
 }
@@ -2519,7 +2519,7 @@ function createBootUpgradeJournal(store: PlatformStateStore): VmGatewayRuntimeDe
       if (authorization?.gateway.desiredStatus !== "running" || authorization.config.ownerUid !== input.ownerUid) throw new Error("gateway is no longer starting for this computer owner");
     });
     await runNormalFleetMutation(store, {
-      actor: "cowboy", forced: false, what: "upgrade-builder-boot", why: "Use the current computer image on boot while retaining the Builder home",
+      actor: "cowboy", forced: false, what: "upgrade-builder-boot", why: "Use the current VM image on boot while retaining the user home",
       target: { gatewayId: input.gatewayId }, preActionStatus: { instanceId: input.instanceId }, mutation: { imageId: input.imageId },
       action: () => work(assertAuthority),
     });
@@ -2555,13 +2555,13 @@ async function createControllerRuntime(
   });
   const prepareMigrationAgentStores = createMigrationAgentStorePreparer({
     readGateway: gatewayId => readDesiredRoot(store, gatewayId),
-    readBuilder: async slug => {
-      const builder = await store.builders.records.findBySlug(slug);
-      if (builder === null) throw new Error(`Agent-store handoff requires one Builder for slug ${slug}`);
-      return { uid: builder.uid, slug };
+    readUserBySlug: async slug => {
+      const userRecord = await store.users.records.findBySlug(slug);
+      if (userRecord === null) throw new Error(`Agent-store handoff requires one user for slug ${slug}`);
+      return { uid: userRecord.uid, slug };
     },
     ensureCredentials: gatewayId => ensureGatewayCredentials({ namespace: NAMESPACE, gatewayId }),
-    transferOwnership: createAgentStoreOwnershipTransferer(agentStore.adminDsn, builder => readBuilderAgentStoreInventory(store.builders.agentStores, builder.uid)),
+    transferOwnership: createAgentStoreOwnershipTransferer(agentStore.adminDsn, userRecord => readUserAgentStoreInventory(store.users.agentStores, userRecord.uid)),
   });
   const serviceAccountEnsurer = createGatewayServiceAccountEnsurer({
     runKubectl,
@@ -2605,16 +2605,16 @@ async function createControllerRuntime(
           ensureServiceAccount: serviceAccountEnsurer.ensureServiceAccount,
           runKubectl,
         });
-  const vmRuntime = BUILDER_VM_SPEC
+  const vmRuntime = GATEWAY_VM_SPEC
     ? createVmGatewayRuntime({
       store,
       namespace: NAMESPACE,
-      environment: COMPUTER_ENVIRONMENT,
+      environment: VM_ENVIRONMENT,
       runHelm: spawnHelm,
       runKubectl,
       vm: createGatewayComputeClient(store, log),
-      vmSpec: BUILDER_VM_SPEC,
-      disposableParking: resolveDisposableBuilderParking(process.env),
+      vmSpec: GATEWAY_VM_SPEC,
+      disposableParking: resolveIsolatedParking(process.env),
       computeProjectId: gatewayComputeProjectId(),
       bridgeServiceName: process.env.GATEWAY_VM_BRIDGE_SERVICE ?? "octogee-vm-bridge",
       hostAliasNames: GATEWAY_VM_HOST_ALIASES.map((service) => `${service}.${NAMESPACE}.svc.cluster.local`),
@@ -2628,7 +2628,7 @@ async function createControllerRuntime(
       readDesiredStatus: async (gatewayId) => (await readDesiredRoot(store, gatewayId))?.desiredStatus ?? null,
       journalBootUpgrade: createBootUpgradeJournal(store),
       wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      onComputerCreationSettled: (gatewayId) => convergeSettledComputer(gatewayId),
+      onVmCreationSettled: (gatewayId) => convergeSettledVm(gatewayId),
       now: () => Date.now(),
       log,
     })
@@ -2689,11 +2689,11 @@ async function createControllerRuntime(
       kubeOps,
       chartFingerprint,
       prepareGatewayConfig,
-      reconcileSurgeHandoff: (input) => reconcileSurgeCustomerHandoff(surgeHandoffDeps, input),
+      reconcileSurgeHandoff: (input) => reconcileSurgeUserHandoff(surgeHandoffDeps, input),
       log,
     }, gatewayIds);
   const convergeGateways = serializeGatewayConvergence(runGatewayConvergence);
-  const convergeSettledComputer = convergeAfterComputerCreation(convergeGateways, log);
+  const convergeSettledVm = convergeAfterVmCreation(convergeGateways, log);
   const nativeReturnRecovery = buildNativeReturnSourceRecoveryOwner(store, kubeOps, fleetControllerPrivateKey, prepareMigrationAgentStores);
   const handlers = await buildHandlers(db, log, helm, kubeOps, {
     syncFleetIngress: handlerSyncFleetIngress, privateKey: fleetControllerPrivateKey,
@@ -2740,8 +2740,8 @@ export interface ControllerProduct {
   userAccounts?: (db: Firestore) => UserAccounts;
   adminIdentity?: IdentityProvider;
   placementAdmission?: PlacementAdmissionPolicy;
-  builderAdmission?: BuilderAdmissionSourceFactory;
-  builderPolicyInputs?: (db: Firestore, log: (message: string) => void) => BuilderPolicyInputsSource;
+  userAdmission?: UserAdmissionSourceFactory;
+  userPolicyInputs?: (db: Firestore, log: (message: string) => void) => UserPolicyInputsSource;
   startProjection?: (deps: {
     db: Firestore;
     store: PlatformStateStore;
@@ -2818,7 +2818,7 @@ export async function main(product: ControllerProduct = {}): Promise<void> {
     );
   }
 
-  const policyInputs = product.builderPolicyInputs?.(db, log) ?? noBuilderPolicyInputs;
+  const policyInputs = product.userPolicyInputs?.(db, log) ?? noUserPolicyInputs;
   const adminIdentity = combineIdentityProviders([
     product.adminIdentity,
     googleIdentityFromEnvironment(process.env),
@@ -2828,7 +2828,7 @@ export async function main(product: ControllerProduct = {}): Promise<void> {
     adminIdentity,
     placementAdmission: product.placementAdmission ?? openPlacementAdmission,
     policyInputs,
-    builderAdmission: product.builderAdmission,
+    userAdmission: product.userAdmission,
     db,
     deps,
     helm: deps.helm,
@@ -2868,7 +2868,7 @@ async function cleanupRetainedSource(store: PlatformStateStore, privateKey:strin
   await abortRetainedSourceImport({store,namespace:NAMESPACE,privateKey,fleetControllerPort:FLEET_CONTROLLER_PORT,resolveGatewayUrl:()=>'',resolveGatewayVm:transportId=>readGatewayVmAddress(store,transportId),retainedSource:retainedSourceRunner(store,context)}, {migrationId:context.state.migrationId,slug:context.state.slug,toGatewayId:context.state.targetGatewayId});
 }
 
-function createMigrationClientBuilder(
+function createMigrationClientUser(
   store: PlatformStateStore,
   privateKey: string,
   logFn: (msg: string) => void,
@@ -2977,16 +2977,16 @@ function migrationProjectCheckoutScope(
 // eslint-disable-next-line complexity -- Mirrors the octogee-api fleet broker snapshot shape.
 export async function readMigrationUserSnapshot(
   db: Firestore,
-  store: Pick<PlatformStateStore, "secrets" | "gateways" | "builders" | "workspaces">,
+  store: Pick<PlatformStateStore, "secrets" | "gateways" | "users" | "workspaces">,
   uid: string,
   toGatewayId?: string,
 ): Promise<FleetBrokerUserSnapshot | null> {
-  const [builder, userSnap] = await Promise.all([store.builders.records.get(uid), db.collection("users").doc(uid).get()]);
+  const [userRecord, userSnap] = await Promise.all([store.users.records.get(uid), db.collection("users").doc(uid).get()]);
   const data = userSnap.data() as Record<string, unknown> | undefined;
-  if (builder === null || !userSnap.exists || !data) return null;
-  const slug = builder.slug;
+  if (userRecord === null || !userSnap.exists || !data) return null;
+  const slug = userRecord.slug;
   if (!slug) return null;
-  const [workspaceProjects, coachSecret, agentSnap, sysConfig, targetGateway, projectAgents] = await Promise.all([
+  const [workspaceProjects, defaultAgentSecret, agentSnap, sysConfig, targetGateway, projectAgents] = await Promise.all([
     store.workspaces.projects.list(slug),
     store.secrets.get(uid, "coachMattermost"),
     db.collection("agents").doc(uid).get(),
@@ -3004,14 +3004,14 @@ export async function readMigrationUserSnapshot(
   const projects = projectCheckoutScope === "workspace-and-projects"
     ? collectMigrationProjects(workspaceProjects)
     : [];
-  const coachCredential = coachSecret !== null && coachSecret.kind === "coach-mattermost" ? coachSecret : null;
+  const defaultAgentCredential = defaultAgentSecret !== null && defaultAgentSecret.kind === "coach-mattermost" ? defaultAgentSecret : null;
   const agentData = agentSnap.data() as Record<string, unknown> | undefined;
   const name = typeof agentData?.name === "string" ? agentData.name : "";
   const emoji = typeof agentData?.avatarEmoji === "string" ? agentData.avatarEmoji : "";
-  const status = builder.openclaw.status;
+  const status = userRecord.openclaw.status;
   // byotActive + the system/config byot subdoc must ride along so the migration target's
-  // mount re-assert (reassertByot) sees the customer's real BYOT state — without it a
-  // non-anthropic BYOK customer's models.json is not re-written on the new pod.
+  // mount re-assert (reassertByot) sees the user's real BYOT state — without it a
+  // non-anthropic BYOK user's models.json is not re-written on the new pod.
   const systemConfig = byotSystemConfigFromDoc(
     sysConfig.data() as Record<string, unknown> | undefined,
   );
@@ -3019,12 +3019,12 @@ export async function readMigrationUserSnapshot(
     uid,
     slug,
     tier: stringAt(data, "tier") || stringAt(data, "subscription.tier") || "trial",
-    gatewayId: builder.gateway?.gatewayId ?? "",
+    gatewayId: userRecord.gateway?.gatewayId ?? "",
     status: status === "provisioning" || status === "complete" ? status : "",
-    agentIds: [...builder.agents.agentIds],
-    repoUrl: builder.provisioning.gitRepoUrl ?? "",
-    mattermostUserId: builder.mattermostUserId,
-    customerMmUserId: builder.mattermostUserId,
+    agentIds: [...userRecord.agents.agentIds],
+    repoUrl: userRecord.provisioning.gitRepoUrl ?? "",
+    mattermostUserId: userRecord.mattermostUserId,
+    customerMmUserId: userRecord.mattermostUserId,
     channels,
     projectCheckoutScope,
     projects,
@@ -3038,8 +3038,8 @@ export async function readMigrationUserSnapshot(
       typeof readPath(data, "onboarding.vibe") === "string"
         ? (readPath(data, "onboarding.vibe") as string)
         : null,
-    coachToken: coachCredential?.personalToken ?? null,
-    coachMmUserId: coachCredential?.mattermostUserId ?? null,
+    coachToken: defaultAgentCredential?.personalToken ?? null,
+    coachMmUserId: defaultAgentCredential?.mattermostUserId ?? null,
     byotActive: data.byotActive === true,
     ...(systemConfig ? { systemConfig } : {}),
     ...(name || emoji ? { coachIdentity: { name, emoji } } : {}),
@@ -3119,17 +3119,17 @@ async function buildHandlers(
   const recoveryTargetEndpoints = createSurgeEndpointLister({
     readRuntimeDoc: gatewayId => store.fleetRegistry.get(gatewayId),
     listPods: gatewayId => listSurgePods(spawnKubectl, NAMESPACE, gatewayId),
-    readComputerReady: createComputerReadinessProbe({ port: FLEET_CONTROLLER_PORT, timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS, log: logFn }),
+    readVmReady: createVmReadinessProbe({ port: FLEET_CONTROLLER_PORT, timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS, log: logFn }),
   });
-  const migrateCustomer = createMigrateCustomerHandler({
-    prepareBuilderRecoveryTarget: input => prepareBuilderRecoveryTarget({
+  const migrateUser = createMigrateUserHandler({
+    prepareIsolatedRecoveryTarget: input => prepareIsolatedRecoveryTarget({
       assertAuthority: recovery => assertWorkspaceMigrationRecoveryAuthority(stateDeps, recovery),
       targetAssigned: async gatewayId => {
-        const [unassigned, builders] = await Promise.all([
+        const [unassigned, userRecords] = await Promise.all([
           store.gateways.assignments.isEmpty(gatewayId),
-          store.builders.records.listByGateway(gatewayId, { limit: 1 }),
+          store.users.records.listByGateway(gatewayId, { limit: 1 }),
         ]);
-        return !unassigned || builders.length > 0;
+        return !unassigned || userRecords.length > 0;
       },
       listPods: recoveryTargetEndpoints,
       holdTargetOpenClaw: recoveryTargetTransport.holdTargetOpenClaw!,
@@ -3148,7 +3148,7 @@ async function buildHandlers(
       journalOperationProgress(progressJournalDeps(store, logFn), operation, event),
     recoverNativeReturnSource: fleetOps.nativeReturnRecovery.recover,
     recoverAbandonedNativeScheduler: buildAbandonedNativeSchedulerRecovery(store, kubeOps, logFn),
-    prepareNativeComputerReturn: (input) => prepareNativeComputerReturn({
+    prepareNativeVmReturn: (input) => prepareNativeVmReturn({
       store, vm: createGatewayComputeClient(store, logFn),
       now: Date.now, wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     }, input),
@@ -3156,21 +3156,21 @@ async function buildHandlers(
       store, vm: createGatewayComputeClient(store, logFn), log: logFn,
     }, input, scheduler),
     readUser: async (uid) => {
-      const builder = await store.builders.records.get(uid);
-      const slug = builder?.slug;
-      const currentGatewayId = builder?.gateway?.gatewayId;
+      const userRecord = await store.users.records.get(uid);
+      const slug = userRecord?.slug;
+      const currentGatewayId = userRecord?.gateway?.gatewayId;
       if (!slug || !currentGatewayId) return null;
       return { slug, currentGatewayId };
     },
     readUserSnapshot: (uid, toGatewayId) => readMigrationUserSnapshot(db, store, uid, toGatewayId),
-    readPrivateProjectCoachWorkspace: async (gatewayId, slug) => readPrivateProjectCoachWorkspace({
+    readPrivateProjectAgentWorkspace: async (gatewayId, slug) => readPrivateProjectAgentWorkspace({
       baseUrl: await resolveGatewayFleetUrl(store, gatewayId, { allowUnready: true }),
       gatewayId, privateKey, privateProjectCoachSlug: slug, timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS,
       fetchImpl: fetch, newRequestId: randomUUID,
     }),
-    readScheduleTransfer: (uid, migrationId) => store.builders.scheduleTransfers.get(uid, migrationId),
-    saveScheduleTransfer: (uid, doc) => store.builders.scheduleTransfers.put(uid, doc),
-    recordScheduleRestore: (uid, migrationId, restore) => store.builders.scheduleTransfers.patch(uid, migrationId, restore),
+    readScheduleTransfer: (uid, migrationId) => store.users.scheduleTransfers.get(uid, migrationId),
+    saveScheduleTransfer: (uid, doc) => store.users.scheduleTransfers.put(uid, doc),
+    recordScheduleRestore: (uid, migrationId, restore) => store.users.scheduleTransfers.patch(uid, migrationId, restore),
     readGatewaySystemConfigCommit: (gatewayId) => readGatewaySystemConfigCommit(store, gatewayId),
     readOpenClawBuild: async (gatewayId, release) =>
       (await readGatewayArtifactInStore(store, gatewayId, release))?.openclawSourceSha ?? null,
@@ -3184,7 +3184,7 @@ async function buildHandlers(
           fromGatewayId: commit.fromGatewayId,
           flipMirror: commit.flipMirror,
           assignment: {
-            source: MIGRATE_CUSTOMER_KIND,
+            source: MIGRATE_USER_KIND,
             updatedByOperationId: null,
           },
           automatic: commit.automatic,
@@ -3201,7 +3201,7 @@ async function buildHandlers(
       return retainedSourceRunner(store,context).observe();
     },
     cleanupSourceTransfer: (op,state)=>cleanupRetainedSource(store,privateKey,{op,state}),
-    buildClient: createMigrationClientBuilder(
+    buildClient: createMigrationClientUser(
       store,
       privateKey,
       logFn,
@@ -3231,7 +3231,7 @@ async function buildHandlers(
     setAssignmentState: async (input) => {
       await markAssignmentState(stateDeps, input);
     },
-    readGatewayRootFence: async (gatewayId) => customerMigrationV2GatewayRootFence(await readDesiredRoot(store, gatewayId), gatewayId),
+    readGatewayRootFence: async (gatewayId) => userMigrationV2GatewayRootFence(await readDesiredRoot(store, gatewayId), gatewayId),
     commitV2Cutover: async (input) => {
       await commitCutoverAtomic(
         cutoverDeps,
@@ -3242,10 +3242,10 @@ async function buildHandlers(
           fromGatewayId: input.sourceGatewayId,
           flipMirror: input.sourceGatewayId !== input.targetGatewayId,
           assignment: {
-            source: MIGRATE_CUSTOMER_KIND,
+            source: MIGRATE_USER_KIND,
             updatedByOperationId: input.operationId,
           },
-          customerMigrationV2Fence: {
+          userMigrationV2Fence: {
             ...(input.claimStartedAt !== undefined ? {claimStartedAt:input.claimStartedAt} : {}),
             operationId: input.operationId,
             migrationId: input.migrationId,
@@ -3298,12 +3298,12 @@ async function buildHandlers(
       });
       return gatewayClass(sourceData) !== "shared" && gatewayClass(targetData) !== "shared";
     },
-    findPreemptedComputer: async (gatewayId, sinceMs) => {
+    findPreemptedVm: async (gatewayId, sinceMs) => {
       const runtime = vmGatewayRuntimeRef.current;
       const instanceName = runtime ? await runtime.detectPreemption(gatewayId, sinceMs) : null;
       if (runtime && instanceName) {
         await runGatewayRuntimeExclusive(() => runtime.recoverUnreachable(gatewayId)).catch((error: unknown) => {
-          logFn(`[migrate-customer] ⚠ ${gatewayId}: restart of preempted computer ${instanceName} deferred to the heartbeat recovery: ${error instanceof Error ? error.message : String(error)}`);
+          logFn(`[migrate-customer] ⚠ ${gatewayId}: restart of preempted VM ${instanceName} deferred to the heartbeat recovery: ${error instanceof Error ? error.message : String(error)}`);
         });
       }
       return instanceName;
@@ -3329,9 +3329,9 @@ async function buildHandlers(
         now: Date.now(),
         updatedBy: "cowboy-retire-gateway",
       }),
-    readMountedCustomers: async (gatewayId) => {
+    readMountedUsers: async (gatewayId) => {
       const runtime = await store.fleetRegistry.get(gatewayId);
-      return runtime === null ? [] : readMountedCustomers(runtime as unknown as Record<string, unknown>);
+      return runtime === null ? [] : readMountedUsers(runtime as unknown as Record<string, unknown>);
     },
     helmUninstallGateway: async (gatewayId) => {
       await runGatewayRuntimeExclusive(async () => {
@@ -3353,7 +3353,7 @@ async function buildHandlers(
     deleteGatewayServiceAccount: async (gatewayId) =>
       kubeOps.deleteServiceAccount({
         namespace: NAMESPACE,
-        name: builderGatewayServiceAccountName(gatewayId),
+        name: isolatedGatewayServiceAccountName(gatewayId),
       }),
     deleteGatewayModelKeyKubeSecret: async (gatewayId) =>
       kubeOps.deleteSecret({ namespace: NAMESPACE, name: gatewayModelKeySecretName(gatewayId) }),
@@ -3387,13 +3387,13 @@ async function buildHandlers(
   });
 
   const rollbackTransport = createSurgePodTransport({ privateKey, log: logFn });
-  const rollbackUnadmittedActivationTarget = createBuilderActivationRollRecoveryOwner({
+  const rollbackUnadmittedActivationTarget = createUserActivationRollRecoveryOwner({
     store, namespace: NAMESPACE, helm, chartFingerprint: fleetOps.chartFingerprint,
     runExclusive: fleetOps.runRuntimeRecovery,
     readRelease: (gatewayId, release) => readGatewayArtifactInStore(store, gatewayId, release),
     prepareIntent: async (gateway, artifact) => {
       const intent = await prepareDesiredGatewayIntent({ passDeps: fleetOps, gateway, artifact, instance: undefined });
-      if (!intent) throw new Error('Builder rollback immutable live intent is unavailable');
+      if (!intent) throw new Error('User rollback immutable live intent is unavailable');
       return intent.opts;
     },
     listPods: gatewayId => listSurgePods(spawnKubectl, NAMESPACE, gatewayId),
@@ -3401,7 +3401,7 @@ async function buildHandlers(
     holdTarget: rollbackTransport.holdTargetOpenClaw!, unreserveTarget: rollbackTransport.unreserveTargetOpenClaw!,
     readTemplateObjects: async gatewayId => {
       const result = await spawnKubectl(['-n', NAMESPACE, 'get', 'deployment,replicaset,pod', '-l', `app=octogee-gateway,gateway-instance=${gatewayId}`, '-o', 'json']);
-      if (result.code !== 0) throw new Error(`Builder rollback template inspection failed: ${result.stderr.trim()}`);
+      if (result.code !== 0) throw new Error(`User rollback template inspection failed: ${result.stderr.trim()}`);
       return JSON.parse(result.stdout) as unknown;
     },
     now: Date.now, wait: () => new Promise(resolve => setTimeout(resolve, 1000)), log: logFn,
@@ -3445,15 +3445,15 @@ async function buildHandlers(
   });
 
   const removal = { db, store, logFn, kubeOps, privateKey, deleteHostingSites };
-  const deprovisionCustomer = buildDeprovisionCustomerHandler(removal);
-  const suspendCustomer = buildSuspendCustomerHandler(
+  const deprovisionUser = buildDeprovisionUserHandler(removal);
+  const suspendUser = buildSuspendUserHandler(
     db,
     store,
     privateKey,
     logFn,
     kubeOps,
   );
-  const eraseCustomer = buildEraseCustomerHandler(removal);
+  const eraseUser = buildEraseUserHandler(removal);
 
   const restartGateway = createRestartGatewayHandler({
     recoverRestore: (op, ctx) => fleetOps.runRuntimeRecovery(() => recoverSharedRestoreRuntime({ store, namespace: NAMESPACE, sourceSha: process.env.BUILD_SHA ?? '', runKubectl: spawnKubectl }, op, ctx)),
@@ -3492,7 +3492,7 @@ async function buildHandlers(
   });
 
   const gatewayVm = createGatewayVmHandler({
-    replaceStoppedComputer: async (gatewayId, operationId, assertAuthority, options) => {
+    replaceStoppedVm: async (gatewayId, operationId, assertAuthority, options) => {
       const runtime = vmGatewayRuntimeRef.current;
       if (!runtime) throw new Error("retained-home boot replacement requires configured GCE runtime");
       const assertCurrent = async () => {
@@ -3500,9 +3500,9 @@ async function buildHandlers(
         await withGatewayRuntimeMutation(store, gatewayId, async () => undefined, options?.forceOwnerUid ? operationId : undefined);
       };
       return runNormalFleetMutation(store, {
-        actor: "cowboy", forced: !!options?.forceOwnerUid, what: "replace-builder-platform-boot", why: options?.forceOwnerUid ? "Operator accepted possible boot data loss for retained computer recovery" : "Replace a stopped platform image while retaining the exact Builder home and pinned recovery images",
+        actor: "cowboy", forced: !!options?.forceOwnerUid, what: "replace-builder-platform-boot", why: options?.forceOwnerUid ? "Operator accepted possible boot data loss for retained VM recovery" : "Replace a stopped platform image while retaining the exact user home and pinned recovery images",
         target: { gatewayId, operationId }, preActionStatus: {}, mutation: { retainedHome: true, ...(options?.forceOwnerUid ? { forceOwnerUid: options.forceOwnerUid } : {}) },
-        action: () => runtime.replaceStoppedComputer(gatewayId, operationId, assertCurrent, options),
+        action: () => runtime.replaceStoppedVm(gatewayId, operationId, assertCurrent, options),
       });
     },
     vm: createGatewayComputeClient(store, logFn),
@@ -3515,10 +3515,10 @@ async function buildHandlers(
     readHomeCheckpointCompletedAt: (gatewayId) => readHomeCheckpointCompletedAt(store, gatewayId),
     clearHomeCheckpointRequest: (gatewayId) => clearHomeCheckpointRequest(store, gatewayId),
     clearVmForReplacement: async (gatewayId) => {
-      await clearReplacedComputer({ store, log: logFn }, gatewayId);
+      await clearReplacedVm({ store, log: logFn }, gatewayId);
     },
-    readParkedComputer: (ownerUid) => readParkedComputer(store, ownerUid),
-    clearParkedComputer: (ownerUid) => clearParkedComputer(store, ownerUid),
+    readParkedVm: (ownerUid) => readParkedVm(store, ownerUid),
+    clearParkedVm: (ownerUid) => clearParkedVm(store, ownerUid),
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
     log: logFn,
@@ -3527,19 +3527,19 @@ async function buildHandlers(
   return {
     "add-gateway": addGateway,
     "gateway-vm": (op, ctx) => runGatewayRuntimeExclusive(() => gatewayVm(op, ctx)),
-    [MIGRATE_CUSTOMER_KIND]: migrateCustomer,
+    [MIGRATE_USER_KIND]: migrateUser,
     "retire-gateway": retireGateway,
     "restart-gateway": restartGateway,
     "recycle-gateway": recycleGateway,
     "scale-shared-member": async () => ({
       steps: [],
       success: false,
-      error: "terminal Shared Barn autoscaler journals cannot be executed",
+      error: "terminal Shared gateway autoscaler journals cannot be executed",
     }),
     rollout,
-    "deprovision-customer": deprovisionCustomer,
-    "suspend-customer": suspendCustomer,
-    "erase-customer": eraseCustomer,
+    "deprovision-customer": deprovisionUser,
+    "suspend-customer": suspendUser,
+    "erase-customer": eraseUser,
   };
 }
 
@@ -3619,7 +3619,7 @@ export async function ensureAnonymousDeletionArchive(
   });
 }
 
-function productIds(productContext: CustomerDeletionJob["productContext"], field: "stripeCustomerIds" | "stripeSubscriptionIds"): string[] {
+function productIds(productContext: UserDeletionJob["productContext"], field: "stripeCustomerIds" | "stripeSubscriptionIds"): string[] {
   const ids = productContext?.[field];
   return Array.isArray(ids) ? ids.filter((value): value is string => typeof value === "string" && value.length > 0) : [];
 }
@@ -3641,7 +3641,7 @@ const PROJECT_AGENT_SECRET_PATH = /^users\/([^/]+)\/secrets\/([^/]+)$/u;
 export async function deleteProjectAgentCredentialSecrets(store: PlatformStateStore, docPaths: readonly string[]): Promise<void> {
   const secrets = docPaths.map((docPath) => {
     const match = PROJECT_AGENT_SECRET_PATH.exec(docPath);
-    if (match === null) throw new Error(`project-agent credential is not a Builder secret: ${docPath}`);
+    if (match === null) throw new Error(`project-agent credential is not a user secret: ${docPath}`);
     return { uid: match[1], secretId: match[2] };
   });
   await store.transaction({ label: "suspend-customer.delete-project-agent-secrets" }, async (tx) => {
@@ -3670,7 +3670,7 @@ async function retainPostHogMappingOnly(store: PlatformStateStore, deletionId: s
   });
 }
 
-interface CustomerRemovalOptions {
+interface UserRemovalOptions {
   db: Firestore;
   store: PlatformStateStore;
   logFn: (message: string) => void;
@@ -3679,26 +3679,26 @@ interface CustomerRemovalOptions {
   deleteHostingSites?: HostingCleanup;
 }
 
-function buildEraseCustomerHandler({ db, store, logFn, kubeOps, privateKey, deleteHostingSites }: CustomerRemovalOptions) {
-  const cloudCleanup = buildCustomerCloudCleanupDeps(db, store, logFn, deleteHostingSites);
+function buildEraseUserHandler({ db, store, logFn, kubeOps, privateKey, deleteHostingSites }: UserRemovalOptions) {
+  const cloudCleanup = buildUserCloudCleanupDeps(db, store, logFn, deleteHostingSites);
   const clusterAbsent = async (gatewayId: string) => {
     if (!await retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(gatewayId))) return false;
     const pvc = await spawnKubectl(["-n", NAMESPACE, "get", `pvc/octogee-gateway-${gatewayId}-data`, "--ignore-not-found=true", "-o", "name"]);
-    if (pvc.code !== 0) throw new Error("Customer PostgreSQL erasure could not inspect retained gateway home storage");
+    if (pvc.code !== 0) throw new Error("User PostgreSQL erasure could not inspect retained gateway home storage");
     return !pvc.stdout.trim();
   };
-  const eraseAgentStores = createCustomerAgentStoreErasure({
+  const eraseAgentStores = createUserAgentStoreErasure({
     store, now: Date.now,
-    eraseStores: (cleanup, custody) => eraseBuilderAgentStores(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "account erasure requires the PostgreSQL agent-store administration URL"), cleanup, custody),
+    eraseStores: (cleanup, custody) => eraseUserAgentStores(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "account erasure requires the PostgreSQL agent-store administration URL"), cleanup, custody),
     sharedGatewayRetired: gatewayId => isRetiredSharedGateway(store, gatewayId, clusterAbsent),
     runtimeAbsent: async (gatewayId, runtime) => runtime === "cluster" ? clusterAbsent(gatewayId) :
-      !await createGatewayComputeClient(store, logFn).findByLabels({ "octogee-gateway-id": gatewayId.toLowerCase(), "octogee-environment": COMPUTER_ENVIRONMENT }),
+      !await createGatewayComputeClient(store, logFn).findByLabels({ "octogee-gateway-id": gatewayId.toLowerCase(), "octogee-environment": VM_ENVIRONMENT }),
     ownerHomeAbsent: async uid => {
-      const instances = await createGatewayComputeClient(store, logFn).list({ labels: { "octogee-owner-uid": uid.toLowerCase(), "octogee-environment": COMPUTER_ENVIRONMENT } });
-      const homes = await createBuilderHomeServices(store, logFn).provider.remainingOwnerHomes(uid);
+      const instances = await createGatewayComputeClient(store, logFn).list({ labels: { "octogee-owner-uid": uid.toLowerCase(), "octogee-environment": VM_ENVIRONMENT } });
+      const homes = await createUserHomeServices(store, logFn).provider.remainingOwnerHomes(uid);
       return instances.length === 0 && homes.length === 0;
     },
-    eraseComputer: cloudCleanup.deleteComputer,
+    eraseVm: cloudCleanup.deleteVm,
     readSharedSource: async gatewayId => {
       const gateway = await readDesiredRoot(store, gatewayId) as DurableGateway | null;
       if (!gateway || gateway.gatewayClass !== "shared" || gateway.ownerUid != null ||
@@ -3708,12 +3708,12 @@ function buildEraseCustomerHandler({ db, store, logFn, kubeOps, privateKey, dele
           diagnostics.pods[0]!.deleting || !diagnostics.pods[0]!.uid) return null;
       const response = await requestFleetState({ baseUrl: await resolveGatewayFleetUrl(store, gatewayId), gatewayId,
         privateKey, timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS, fetchImpl: fetch, newRequestId: randomUUID });
-      if (!response.ok) throw new Error(`Customer PostgreSQL erasure source read refused: ${response.status}`);
+      if (!response.ok) throw new Error(`User PostgreSQL erasure source read refused: ${response.status}`);
       const source = await response.json() as SharedAgentErasureSource;
-      if (source.podUid !== diagnostics.pods[0]!.uid) throw new Error("Customer PostgreSQL erasure source pod changed");
+      if (source.podUid !== diagnostics.pods[0]!.uid) throw new Error("User PostgreSQL erasure source pod changed");
       return source;
     },
-    unmountSharedCustomer: (cleanup, agentStoreErasure, operation) => callUnmountRpc(store, { privateKey,
+    unmountSharedUser: (cleanup, agentStoreErasure, operation) => callUnmountRpc(store, { privateKey,
       gatewayId: cleanup.currentGatewayId!, slug: cleanup.slug, log: logFn, tag: "erase",
       migrationId: `erase-${operation.id}-claim-${operation.startedAt}`, agentStoreErasure }),
   });
@@ -3721,9 +3721,9 @@ function buildEraseCustomerHandler({ db, store, logFn, kubeOps, privateKey, dele
     postHogErasureConfigFromEnvironment(),
     {
       fetch,
-      isOtherCustomerUid: async (distinctId) =>
+      isOtherUserUid: async (distinctId) =>
         FIRESTORE_DOC_ID.test(distinctId) &&
-        (await store.builders.records.get(distinctId)) !== null,
+        (await store.users.records.get(distinctId)) !== null,
     },
   );
   const postHogErasureRequest = async (
@@ -3739,7 +3739,7 @@ function buildEraseCustomerHandler({ db, store, logFn, kubeOps, privateKey, dele
       persistState: (nextState) => persistPostHogErasureState(store, deletionId, nextState),
     };
   };
-  return createEraseCustomerHandler({
+  return createEraseUserHandler({
     loadDeletionJob: async (deletionId) => {
       const job = await store.jobs.deletions.get(deletionId);
       if (job === null) return null;
@@ -3750,7 +3750,7 @@ function buildEraseCustomerHandler({ db, store, logFn, kubeOps, privateKey, dele
         eraseAfter: job.eraseAfter,
         stripeCustomerIds: productIds(job.productContext, "stripeCustomerIds"),
         archiveId: job.archiveId ?? null,
-        cleanupContext: (job.cleanupContext as CustomerCleanupContext | undefined) ?? null,
+        cleanupContext: (job.cleanupContext as UserCleanupContext | undefined) ?? null,
       };
     },
     ensureAnonymousArchive: (deletionId) => ensureAnonymousDeletionArchive(db, store, deletionId),
@@ -3779,7 +3779,7 @@ function buildEraseCustomerHandler({ db, store, logFn, kubeOps, privateKey, dele
         uid: cleanup.uid,
         deletionId,
         now: Date.now(),
-        preserveRetirementProof: proof => preserveCustomerGatewayRetirement(store, cleanup.uid, deletionId, proof),
+        preserveRetirementProof: proof => preserveUserGatewayRetirement(store, cleanup.uid, deletionId, proof),
       }),
     findUndrainedArtifactIds: async (artifactIds) => {
       const snapshots = await Promise.all(
@@ -3799,11 +3799,11 @@ function buildEraseCustomerHandler({ db, store, logFn, kubeOps, privateKey, dele
     },
     eraseAgentStores,
     cloudErase: async (cleanup, currentOperationId) => {
-      await assertNoBuilderAgentStores(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "account-deletion verification requires the PostgreSQL agent-store administration URL"), cleanup);
+      await assertNoUserAgentStores(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "account-deletion verification requires the PostgreSQL agent-store administration URL"), cleanup);
       return nukeUserCloudSide({ ...cleanup, currentOperationId }, cloudCleanup);
     },
     verifyErasure: async (cleanup, currentOperationId) => {
-      const remaining = await verifyCustomerFirestoreErasure(
+      const remaining = await verifyUserFirestoreErasure(
         { store, db },
         cleanup.uid,
         cleanup.slug,
@@ -3844,7 +3844,7 @@ function buildEraseCustomerHandler({ db, store, logFn, kubeOps, privateKey, dele
   });
 }
 
-function buildSuspendCustomerHandler(
+function buildSuspendUserHandler(
   db: Firestore,
   store: PlatformStateStore,
   privateKey: string,
@@ -3852,8 +3852,8 @@ function buildSuspendCustomerHandler(
   kubeOps: Pick<KubeOps, "readAvailableReplicas" | "readGatewayPodDiagnostics">,
 ) {
   const decryptConnectorSecret = createConnectorSecretDecryptor();
-  return createSuspendCustomerHandler({
-    assertRestoreNotInProgress: (uid) => assertCustomerRestoreNotInProgress(store, uid),
+  return createSuspendUserHandler({
+    assertRestoreNotInProgress: (uid) => assertUserRestoreNotInProgress(store, uid),
     loadDeletionJob: async (deletionId) => {
       const job = await store.jobs.deletions.get(deletionId);
       if (job === null) return null;
@@ -3863,19 +3863,19 @@ function buildSuspendCustomerHandler(
         currentGatewayId: job.currentGatewayId ?? null,
         stripeCustomerIds: productIds(job.productContext, "stripeCustomerIds"),
         stripeSubscriptionIds: productIds(job.productContext, "stripeSubscriptionIds"),
-        cleanupContext: (job.cleanupContext as CustomerCleanupContext | undefined) ?? null,
+        cleanupContext: (job.cleanupContext as UserCleanupContext | undefined) ?? null,
       };
     },
-    loadCleanupContext: (uid) => loadCustomerCleanupContext({ store, accounts: firestoreBuilderAccountReader(db), db }, uid),
+    loadCleanupContext: (uid) => loadUserCleanupContext({ store, accounts: firestoreUserAccountReader(db), db }, uid),
     persistCleanupContext: (deletionId, cleanupContext) =>
       store.jobs.deletions.patch(deletionId, { cleanupContext: cleanupContext as unknown as OpaqueMap, status: "suspending", updatedAt: Date.now() }),
     suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
-    cancelCustomerMigrations: (uid, deletionId) =>
-      cancelCustomerMigrationsForSuspension(store, uid, deletionId, Date.now()),
-    deactivateCustomerVisibility: (uid) => deactivateCustomerVisibility(store, db, uid),
+    cancelUserMigrations: (uid, deletionId) =>
+      cancelUserMigrationsForSuspension(store, uid, deletionId, Date.now()),
+    deactivateUserVisibility: (uid) => deactivateUserVisibility(store, db, uid),
     invalidatePendingCredentialFlows: (uid) => invalidatePendingCredentialFlows(db, uid),
-    unmountFromGateway: createCustomerDeletionUnmount(db, store, privateKey, logFn, kubeOps),
-    releasePlacement: (uid, gatewayId) => releaseCustomerPlacement(store, uid, gatewayId),
+    unmountFromGateway: createUserDeletionUnmount(db, store, privateKey, logFn, kubeOps),
+    releasePlacement: (uid, gatewayId) => releaseUserPlacement(store, uid, gatewayId),
     cancelStripeSubscription: (subscriptionId) =>
       cancelStripeSubscription(
         fetch,
@@ -3935,14 +3935,14 @@ function buildSuspendCustomerHandler(
         uid,
         deletionId,
         now: Date.now(),
-        preserveRetirementProof: proof => preserveCustomerGatewayRetirement(store, uid, deletionId, proof),
+        preserveRetirementProof: proof => preserveUserGatewayRetirement(store, uid, deletionId, proof),
       }),
     markSuspended: (deletionId) => markSuspendedAndReleaseErasure(store, deletionId, Date.now()),
     now: () => Date.now(),
   });
 }
 
-function createCustomerDeletionUnmount(
+function createUserDeletionUnmount(
   db: Firestore,
   store: PlatformStateStore,
   privateKey: string,
@@ -3953,13 +3953,13 @@ function createCustomerDeletionUnmount(
     isRetiredSharedGateway: (gatewayId) => isRetiredSharedGateway(store, gatewayId,
       (id) => retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, id, deploymentNameForInstance(id))),
     isGatewayAbsent: async (gatewayId) => {
-      const [root, runtime, unassigned, builders] = await Promise.all([
+      const [root, runtime, unassigned, userRecords] = await Promise.all([
         store.gateways.roots.get(gatewayId),
         store.fleetRegistry.get(gatewayId),
         store.gateways.assignments.isEmpty(gatewayId),
-        store.builders.records.listByGateway(gatewayId, { limit: 1 }),
+        store.users.records.listByGateway(gatewayId, { limit: 1 }),
       ]);
-      return root === null && runtime === null && unassigned && builders.length === 0 &&
+      return root === null && runtime === null && unassigned && userRecords.length === 0 &&
         await retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(gatewayId));
     },
     resolveGatewayUnmountTarget: async (gatewayId) => {
@@ -3992,17 +3992,17 @@ function requireEnv(name: string, why: string): string {
   return value;
 }
 
-function buildDeprovisionCustomerHandler({ db, store, logFn, kubeOps, privateKey, deleteHostingSites }: CustomerRemovalOptions) {
-  return createDeprovisionCustomerHandler({
-    loadCleanupContext: (uid) => loadCustomerCleanupContext({ store, accounts: firestoreBuilderAccountReader(db), db }, uid),
-    unmountFromGateway: createCustomerDeletionUnmount(db, store, privateKey, logFn, kubeOps),
-    cloudCleanup: buildCustomerCloudCleanupDeps(db, store, logFn, deleteHostingSites),
+function buildDeprovisionUserHandler({ db, store, logFn, kubeOps, privateKey, deleteHostingSites }: UserRemovalOptions) {
+  return createDeprovisionUserHandler({
+    loadCleanupContext: (uid) => loadUserCleanupContext({ store, accounts: firestoreUserAccountReader(db), db }, uid),
+    unmountFromGateway: createUserDeletionUnmount(db, store, privateKey, logFn, kubeOps),
+    cloudCleanup: buildUserCloudCleanupDeps(db, store, logFn, deleteHostingSites),
     now: () => Date.now(),
     log: logFn,
   });
 }
 
-function createBuilderHomeServices(store: PlatformStateStore, log: (message: string) => void) {
+function createUserHomeServices(store: PlatformStateStore, log: (message: string) => void) {
   const homeCopyRequest: ComputeRequest = async ({ url, method, body }) => {
     const auth = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
     const client = await auth.getClient();
@@ -4010,9 +4010,9 @@ function createBuilderHomeServices(store: PlatformStateStore, log: (message: str
     return { status: result.status, data: result.data };
   };
   const homeJournal = <T>(what: string, uid: string, action: () => Promise<T>) => runNormalFleetMutation(store, {
-    actor: "cowboy", forced: false, what, why: "Migrate the Builder home without removing its verified source", target: { ownerUid: uid }, preActionStatus: {}, mutation: { action: what }, action,
+    actor: "cowboy", forced: false, what, why: "Migrate the user home without removing its verified source", target: { ownerUid: uid }, preActionStatus: {}, mutation: { action: what }, action,
   });
-  const provider = createBuilderHomeProvider({ store, projectId: gatewayComputeProjectId(), environment: COMPUTER_ENVIRONMENT,
+  const provider = createUserHomeProvider({ store, projectId: gatewayComputeProjectId(), environment: VM_ENVIRONMENT,
     request: homeCopyRequest, vm: createGatewayComputeClient(store, log), journal: homeJournal });
   return {
     provider,
@@ -4033,14 +4033,14 @@ function buildUserSignInHosts(log: (message: string) => void): UserSignInHosts {
   };
 }
 
-function buildCustomerCloudCleanupDeps(
+function buildUserCloudCleanupDeps(
   db: Firestore,
   store: PlatformStateStore,
   logFn: (msg: string) => void,
   deleteHostingSites?: HostingCleanup,
 ) {
   const cleanupEnv = (name: string) =>
-    requireEnv(name, "customer erasure cloud cleanup requires it");
+    requireEnv(name, "user erasure cloud cleanup requires it");
   const gitApiUrl = cleanupEnv("GIT_API_URL");
   const gitApiToken = cleanupEnv("GIT_API_TOKEN");
   const git = createGiteaGitHost({
@@ -4062,13 +4062,13 @@ function buildCustomerCloudCleanupDeps(
       slug: string,
       email: string | null,
       currentOperationId: string,
-    ) => eraseCustomerFirestore({ store, db }, uid, slug, email, currentOperationId),
-    deleteCustomerStorage: async (uid: string, slug: string, chatArtifactIds: string[], agentImportIds: string[]) => {
-      await deleteCustomerStorageObjects(getStorage().bucket(), uid, slug, chatArtifactIds, agentImportIds);
+    ) => eraseUserFirestore({ store, db }, uid, slug, email, currentOperationId),
+    deleteUserStorage: async (uid: string, slug: string, chatArtifactIds: string[], agentImportIds: string[]) => {
+      await deleteUserStorageObjects(getStorage().bucket(), uid, slug, chatArtifactIds, agentImportIds);
       await s3?.erase(uid, slug);
     },
     verifyStorageErasure: async (uid: string, slug: string, chatArtifactIds: string[], agentImportIds: string[]) => {
-      const remaining = await verifyCustomerStorageErasure(getStorage().bucket(), uid, slug, chatArtifactIds, agentImportIds);
+      const remaining = await verifyUserStorageErasure(getStorage().bucket(), uid, slug, chatArtifactIds, agentImportIds);
       if (s3) remaining.push(...await s3.remaining(uid, slug));
       return remaining;
     },
@@ -4076,16 +4076,16 @@ function buildCustomerCloudCleanupDeps(
       for (const secretName of secretNames) await deleteSecret(secretName);
     },
     deleteAuthUser: (uid: string) => deleteAuthUserTolerantOfMissing(uid, getAuth()),
-    deleteComputerHome: (_uid: string, slug: string) => deleteComputerHomeObjects(getStorage().bucket(), slug),
-    ...(BUILDER_VM_SPEC
+    deleteVmHome: (_uid: string, slug: string) => deleteVmHomeObjects(getStorage().bucket(), slug),
+    ...(GATEWAY_VM_SPEC
       ? {
-          deleteComputer: async (uid: string) => {
+          deleteVm: async (uid: string) => {
             const runtime = vmGatewayRuntimeRef.current;
-            if (!runtime) throw new Error("the VM gateway runtime is not initialised; cannot delete the Builder's computer");
-            const deleted = await runtime.deleteComputer(uid);
-            const homes = createBuilderHomeServices(store, logFn);
-            if (!await eraseBuilderHomeMigrationStorage({ store, removeStoppedHome: homes.provider.removeStoppedHome, copy: homes.copy, remainingOwnerHomes: homes.provider.remainingOwnerHomes, log: logFn }, uid)) {
-              throw new Error("Builder home cleanup is still converging; erasure tracking retained for retry");
+            if (!runtime) throw new Error("the VM gateway runtime is not initialised; cannot delete the user's VM");
+            const deleted = await runtime.deleteVm(uid);
+            const homes = createUserHomeServices(store, logFn);
+            if (!await eraseUserHomeMigrationStorage({ store, removeStoppedHome: homes.provider.removeStoppedHome, copy: homes.copy, remainingOwnerHomes: homes.provider.remainingOwnerHomes, log: logFn }, uid)) {
+              throw new Error("User home cleanup is still converging; erasure tracking retained for retry");
             }
             return deleted;
           },
@@ -4158,18 +4158,18 @@ export async function callUnmountRpc(
     const text = await resp.text().catch(() => "<no body>");
     throw new Error(`unmount failed: ${resp.status} ${text.slice(0, 200)}`);
   }
-  if (opts.agentStoreErasure) assertExactCustomerUnmountResponse(await resp.json(), migrationId, slug, opts.agentStoreErasure);
+  if (opts.agentStoreErasure) assertExactUserUnmountResponse(await resp.json(), migrationId, slug, opts.agentStoreErasure);
   log(`[${tag}] unmount RPC ok gatewayId=${gatewayId} slug=${slug}`);
 }
 
-function assertExactCustomerUnmountResponse(value: unknown, migrationId: string, slug: string, coverage: import("@octogee/shared/types/fleet-controller").AgentStoreUnmountCoverage): void {
+function assertExactUserUnmountResponse(value: unknown, migrationId: string, slug: string, coverage: import("@octogee/shared/types/fleet-controller").AgentStoreUnmountCoverage): void {
   const response = value as import("@octogee/shared/types/fleet-controller").UnmountResponse | null;
   const confirmed = response?.agentStoreErasure;
   const expectedIds = [...coverage.agentIds].sort();
   if (response?.migrationId !== migrationId || response.slug !== slug || confirmed?.podUid !== coverage.podUid ||
       !Array.isArray(confirmed.agentIds) || confirmed.agentIds.length !== expectedIds.length ||
       [...confirmed.agentIds].sort().some((id, index) => id !== expectedIds[index])) {
-    throw new Error("unmount did not confirm exact customer Native cleanup and source pod");
+    throw new Error("unmount did not confirm exact user Native cleanup and source pod");
   }
 }
 

@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { parse, stringify } from "yaml";
 import { internalFetch } from "./internal-fetch.js";
-import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
+import { userClaimSlug } from "@octogee/shared/server/user-claim";
 
 const execFile = promisify(execFileCallback);
 const GITHUB_HOST = "github.com";
@@ -131,7 +131,7 @@ async function readMaterializedGithubToken(env: NodeJS.ProcessEnv, fetchImpl?: t
 export async function hydrateGithubCliAuth(deps: GithubCliAuthDeps = {}): Promise<GithubCliAuthResult> {
   const env = deps.env ?? process.env;
   if (env.GATEWAY_CLASS !== "builder") return "skipped";
-  if (!builderClaimSlug(env)) throw new GithubCliAuthError("Builder identity is required for GitHub authentication");
+  if (!userClaimSlug(env)) throw new GithubCliAuthError("User identity is required for GitHub authentication");
   const accessToken = await readMaterializedGithubToken(env, deps.fetchImpl);
   const configDir = ghConfigDir(env);
   const file = path.join(configDir, "hosts.yml");

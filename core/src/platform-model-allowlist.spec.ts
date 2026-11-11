@@ -25,7 +25,7 @@ describe("native model picker allowlist", () => {
     expect(await applyPlatformModelAllowlist(applyConfigPatch, true)).toBe(false);
   });
 
-  it("uses provider-wide model permissions for customer broker routes", async () => {
+  it("uses provider-wide model permissions for user broker routes", async () => {
     await applyPlatformModelAllowlist(async (args) => {
       expect(args.buildPatch({})).toMatchObject({ agents: { defaults: {
         modelPolicy: { allow: ["anthropic/*", "platform-openrouter/*", "platform-openai/*", "platform-vertex/*"] },
@@ -34,7 +34,7 @@ describe("native model picker allowlist", () => {
     }, false);
   });
 
-  it.each([true, false])("removes retired broker models while retaining authenticated providers (Builder: %s)", async (builder) => {
+  it.each([true, false])("removes retired broker models while retaining authenticated providers (User: %s)", async (user) => {
     await applyPlatformModelAllowlist(async (args) => {
       const patch = args.buildPatch({ agents: { defaults: { models: {
         "platform-openrouter/provider/retired-model": { alias: "retired" },
@@ -52,7 +52,7 @@ describe("native model picker allowlist", () => {
         expect(patch.agents.defaults.models).not.toHaveProperty(ref);
       }
       return { mode: "rpc", attempts: 1 };
-    }, builder);
+    }, user);
   });
 
   it("propagates a rejected config update so the sync can retry", async () => {

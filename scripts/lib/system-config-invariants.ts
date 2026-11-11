@@ -11,7 +11,7 @@ import {
   type SystemConfigInvariantContext,
 } from "@octogee/core/system-config-invariants";
 import { resolveControlIdentityFromEnv } from "@octogee/shared/types/openclaw-proxy-identity";
-import { readBuilderClaimFromEnv } from "@octogee/shared/server/builder-claim";
+import { readUserClaimFromEnv } from "@octogee/shared/server/user-claim";
 
 export {
   PlatformInvariantPolicyError,
@@ -25,7 +25,7 @@ export function systemConfigInvariantContextFromEnv(
 ): SystemConfigInvariantContext {
   const rawClass = env.GATEWAY_CLASS ?? env.GATEWAY_PROFILE ?? "shared";
   const gatewayClass: GatewayConfigClass = rawClass === "builder" ? "builder" : "shared";
-  const claim = gatewayClass === "builder" ? readBuilderClaimFromEnv(env) : null;
+  const claim = gatewayClass === "builder" ? readUserClaimFromEnv(env) : null;
   return {
     gatewayClass,
     ...(env.GATEWAY_ID ? { gatewayId: env.GATEWAY_ID } : {}),

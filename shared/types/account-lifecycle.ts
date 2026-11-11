@@ -13,7 +13,7 @@ export interface AccountLifecycle {
   eraseAfter?: number;
 }
 
-export const CUSTOMER_DELETION_JOBS_COLLECTION = "customerDeletionJobs";
+export const USER_DELETION_JOBS_COLLECTION = "customerDeletionJobs";
 export const ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION =
   "anonymousOperationalArchives";
 
@@ -111,7 +111,7 @@ export function accountAllowsInteractiveAccess(
   return status === undefined || status === "active";
 }
 
-export function buildCustomerDeletionSchedule(input: {
+export function buildUserDeletionSchedule(input: {
   now: number;
   eraseNow: boolean;
 }): { requestedAt: number; eraseAfter: number } {

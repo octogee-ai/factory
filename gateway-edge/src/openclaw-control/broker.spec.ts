@@ -18,9 +18,9 @@ describe("OpenClaw Dashboard broker client", () => {
       return bodies.length === 1
         ? new Response(JSON.stringify({
             uid: "uid-owner",
-            gatewayId: "bender",
+            gatewayId: "walter",
             workspaceSlug: "alice",
-            revisionId: "bender-r7",
+            revisionId: "walter-r7",
 
 
 
@@ -31,8 +31,8 @@ describe("OpenClaw Dashboard broker client", () => {
     await expect(redeemOpenClawControlTicket({
       ticket: "ticket",
       sessionId,
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       env: { OPENCLAW_CONTROL_BROKER_URL: "https://broker.test" },
       fetchImpl,
     })).resolves.toMatchObject({
@@ -42,14 +42,14 @@ describe("OpenClaw Dashboard broker client", () => {
     });
     await expect(authorizeOpenClawControlSession({
       sessionId,
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       env: { OPENCLAW_CONTROL_BROKER_URL: "https://broker.test" },
       fetchImpl,
     })).resolves.toBe(true);
     expect(bodies).toEqual([
-      { gatewayId: "bender", revisionId: "bender-r7", sessionId, ticket: "ticket" },
-      { gatewayId: "bender", revisionId: "bender-r7", sessionId },
+      { gatewayId: "walter", revisionId: "walter-r7", sessionId, ticket: "ticket" },
+      { gatewayId: "walter", revisionId: "walter-r7", sessionId },
     ]);
   });
 
@@ -64,8 +64,8 @@ describe("OpenClaw Dashboard broker client", () => {
 
     await expect(authorizeOpenClawControlSession({
       sessionId,
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       env: { OPENCLAW_CONTROL_BROKER_URL: "https://broker.test" },
       fetchImpl,
     })).rejects.toThrow("authorization broker returned 409");
@@ -74,16 +74,16 @@ describe("OpenClaw Dashboard broker client", () => {
   it("rejects a malformed redemption response before issuing a local session", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       uid: "",
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       expiresAt: "later",
     }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
 
     await expect(redeemOpenClawControlTicket({
       ticket: "ticket",
       sessionId,
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       env: { OPENCLAW_CONTROL_BROKER_URL: "https://broker.test" },
       fetchImpl,
     })).rejects.toThrow(/invalid JSON/i);
@@ -97,8 +97,8 @@ describe("OpenClaw Dashboard broker client", () => {
 
     await expect(authorizeOpenClawControlSession({
       sessionId,
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       env: { OPENCLAW_CONTROL_BROKER_URL: "https://broker.test" },
       fetchImpl: timedOutFetch,
     })).rejects.toSatisfy((error) => openClawControlBrokerFailureKind(error) === "timeout");
@@ -110,8 +110,8 @@ describe("OpenClaw Dashboard broker client", () => {
     }) as unknown as typeof fetch;
     await expect(authorizeOpenClawControlSession({
       sessionId,
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       env: { OPENCLAW_CONTROL_BROKER_URL: "https://broker.test" },
       fetchImpl: unavailableFetch,
     })).rejects.toSatisfy((error) => openClawControlBrokerFailureKind(error) === "unavailable");
@@ -127,7 +127,7 @@ describe("OpenClaw Dashboard broker client", () => {
       return new Promise<boolean>((resolve) => { resolveAuthorization = resolve; });
     });
     const cache = createOpenClawControlAuthorizationCache({ authorize, now: () => now, ttlMs: 10_000 });
-    const input = { sessionId, gatewayId: "bender", revisionId: "bender-r7" };
+    const input = { sessionId, gatewayId: "walter", revisionId: "walter-r7" };
 
     const concurrent = Promise.all([
       cache.authorize(input),
@@ -153,7 +153,7 @@ describe("OpenClaw Dashboard broker client", () => {
       .mockRejectedValueOnce(new Error("broker unavailable"))
       .mockResolvedValueOnce(true);
     const cache = createOpenClawControlAuthorizationCache({ authorize, now: () => now, ttlMs: 10_000 });
-    const input = { sessionId, gatewayId: "bender", revisionId: "bender-r7" };
+    const input = { sessionId, gatewayId: "walter", revisionId: "walter-r7" };
 
     await expect(cache.authorize(input)).resolves.toBe(true);
     await expect(cache.authorize(input, { forceRefresh: true })).resolves.toBe(false);

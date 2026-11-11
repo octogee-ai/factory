@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { loadOpenClawProfileAppearance, loadOpenClawChatProfileAppearance } from "./profile-appearance.js";
 
 vi.mock("../lib/db.js", () => { throw new Error("Gateway profile reads must not use Google ADC"); });
-const session = { uid: "uid-A", gatewayId: "bender", revisionId: "bender", sessionId: "opaque-session"};
+const session = { uid: "uid-A", gatewayId: "walter", revisionId: "walter", sessionId: "opaque-session"};
 const env = { OPENCLAW_CONTROL_BROKER_URL: "https://broker.test" };
 
 describe("Gateway profile broker client", () => {
@@ -10,7 +10,7 @@ describe("Gateway profile broker client", () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ displayName: "Chris", avatar: { revision: "one", avatarBase64: Buffer.from("jpeg").toString("base64") } })));
     const result = await loadOpenClawProfileAppearance(session, env, fetchImpl);
     expect(fetchImpl).toHaveBeenCalledWith("https://broker.test/internal/openclaw-control/profile", expect.objectContaining({
-      method: "POST", body: JSON.stringify({ gatewayId: "bender", revisionId: "bender", sessionId: "opaque-session" }), signal: expect.any(AbortSignal),
+      method: "POST", body: JSON.stringify({ gatewayId: "walter", revisionId: "walter", sessionId: "opaque-session" }), signal: expect.any(AbortSignal),
     }));
     expect(result.displayName).toBe("Chris");
     expect(result.avatar!.revision).toBe("one");

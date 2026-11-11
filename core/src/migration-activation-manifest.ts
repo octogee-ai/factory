@@ -1,5 +1,5 @@
 import { withPinnedDirectory } from "./pinned-directory.js";
-import { PROJECT_COACH_WORKSPACE_PARTS } from "@octogee/shared/types/project";
+import { PROJECT_AGENT_WORKSPACE_PARTS } from "@octogee/shared/types/project";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -9,11 +9,11 @@ import { parseAgentId } from "@octogee/shared/types/identity";
 import { mattermostAccountEndpointsForTarget } from "@octogee/shared/types/openclaw-mattermost-accounts";
 import {
   applyConfigPatch,
-  customerAgentRosterPatch,
-  customerConfigAgentRosterReplacePaths,
-  filterOutCustomerBindings,
-  orderBuilderGatewayRoster,
-  replaceCustomerAgentsInFullAgentList,
+  userAgentRosterPatch,
+  userConfigAgentRosterReplacePaths,
+  filterOutUserBindings,
+  orderIsolatedGatewayRoster,
+  replaceUserAgentsInFullAgentList,
   staleProjectAgentAccountNulls,
   upsertAgentInFullAgentList,
   type ConfigCache,
@@ -21,8 +21,8 @@ import {
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 import { rebindPlatformEmbeddingRefs } from "./platform-embedding-refs.js";
 import {
-  reconcileBuilderAgentEntry,
-  reconcileCustomerAgentEntry,
+  reconcileIsolatedGatewayAgentEntry,
+  reconcileSharedGatewayAgentEntry,
   type GatewayConfigClass,
 } from "./system-config-invariants.js";
 
@@ -318,7 +318,7 @@ function validateWorkspaceIdentityFiles(rawFiles: unknown, agents: readonly { ag
 function identityWorkspaceParts(slug: string, agentId: string, privateWorkspace = false): string[] {
   const parsed = parseAgentId(agentId);
   if (parsed.kind === "unknown" || parsed.username !== slug) throw new Error("Source workspace identity agent is foreign");
-  return ["customers", slug, ...(parsed.kind === "project" ? [...(privateWorkspace ? PROJECT_COACH_WORKSPACE_PARTS : ["projects"]), parsed.project] : [])];
+  return ["customers", slug, ...(parsed.kind === "project" ? [...(privateWorkspace ? PROJECT_AGENT_WORKSPACE_PARTS : ["projects"]), parsed.project] : [])];
 }
 
 export function privateProjectWorkspaceAgentIds(manifest: MigrationActivationManifest): Set<string> {
@@ -753,8 +753,8 @@ export async function applyOpenClawActivationManifest(
   const privateProjects = privateProjectWorkspaceAgentIds(manifest);
   const authInheritanceAnchor = opts.authInheritanceAnchor;
   const reconcileAgent = opts.gatewayClass === "builder"
-    ? reconcileBuilderAgentEntry
-    : reconcileCustomerAgentEntry;
+    ? reconcileIsolatedGatewayAgentEntry
+    : reconcileSharedGatewayAgentEntry;
   if (
     authInheritanceAnchor &&
     rosterAgentId(authInheritanceAnchor.agent) !== authInheritanceAnchor.agentId
@@ -822,16 +822,16 @@ export async function applyOpenClawActivationManifest(
               rosterAgentId(agent),
               agent,
             ),
-            replaceCustomerAgentsInFullAgentList(current, manifest.slug, []),
+            replaceUserAgentsInFullAgentList(current, manifest.slug, []),
           );
         const orderedAgents = normalizedAuthInheritanceAnchor
-          ? orderBuilderGatewayRoster(
+          ? orderIsolatedGatewayRoster(
             nextAgents,
             manifest.agentId,
             normalizedAuthInheritanceAnchor.agentId,
           )
           : nextAgents;
-        const rosterPatch = customerAgentRosterPatch(
+        const rosterPatch = userAgentRosterPatch(
           current,
           manifest.slug,
           rebindPlatformEmbeddingRefs(orderedAgents),
@@ -845,7 +845,7 @@ export async function applyOpenClawActivationManifest(
             ...(Object.keys(activationDefaults).length > 0 ? { defaults: activationDefaults } : {}),
           },
           bindings: [
-            ...filterOutCustomerBindings(currentBindings, manifest.slug),
+            ...filterOutUserBindings(currentBindings, manifest.slug),
             ...activationAgents.flatMap((entry) => entry.bindings),
           ],
           channels: {
@@ -864,7 +864,7 @@ export async function applyOpenClawActivationManifest(
           },
         };
       },
-      buildReplacePaths: (current) => customerConfigAgentRosterReplacePaths(
+      buildReplacePaths: (current) => userConfigAgentRosterReplacePaths(
         current,
         manifest.slug,
         normalizedAuthInheritanceAnchor ? [normalizedAuthInheritanceAnchor.agentId] : [],

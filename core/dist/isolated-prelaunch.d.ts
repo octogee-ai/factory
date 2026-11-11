@@ -1,0 +1,19 @@
+import type { GatewayDoc } from "@octogee/shared/types/gateway-releases";
+import type { GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
+import type { PlatformStateRepositories } from "./platform-state/store.js";
+type DurableGateway = GatewayDoc & GatewayMutableConfig;
+export type PrelaunchAuthorityReader = Pick<PlatformStateRepositories, "users" | "gateways">;
+export declare function isolatedPrelaunchReserved(input: {
+    reader: PrelaunchAuthorityReader;
+    gateway: DurableGateway;
+    expectedGateway?: DurableGateway;
+    activationBoot?: true;
+}): Promise<boolean>;
+export declare function isolatedBootMode(input: {
+    reader: PrelaunchAuthorityReader;
+    gateway: DurableGateway;
+}): Promise<{
+    mode: "prelaunch" | "normal" | "activating";
+    migrationId?: string;
+}>;
+export {};

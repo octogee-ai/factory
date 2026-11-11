@@ -105,22 +105,22 @@ describe('native mobile admission proof', () => {
   );
   it('routes only canonical enrollment IDs and the selected gateway', () => {
     const id = '2b7d671e-180d-4dab-a486-5224ad783155';
-    expect(mobileRoute(`/g/bender/openclaw/mobile/${id}`, 'bender')).toEqual({
+    expect(mobileRoute(`/g/walter/openclaw/mobile/${id}`, 'walter')).toEqual({
       enrollmentId: id,
       upstreamPath: '/',
     });
     expect(
-      mobileRoute(`/api/g/bender/openclaw/mobile/${id}/__openclaw__/assistant-media?q=1`, 'bender')
+      mobileRoute(`/api/g/walter/openclaw/mobile/${id}/__openclaw__/assistant-media?q=1`, 'walter')
         ?.upstreamPath,
     ).toBe('/__openclaw__/assistant-media?q=1');
-    expect(mobileRoute(`/g/other/openclaw/mobile/${id}`, 'bender')).toBeNull();
-    expect(mobileRoute(`/g/bender/openclaw/mobile/${id}/../config`, 'bender')).toBeNull();
-    expect(mobileRoute(`/g/bender/openclaw/mobile/${id}//outside.example/assets/app.js`, 'bender')).toBeNull();
-    expect(mobileRoute(`/g/bender/openclaw/mobile/${id}/\t/outside.example/assets/app.js`, 'bender')).toBeNull();
+    expect(mobileRoute(`/g/other/openclaw/mobile/${id}`, 'walter')).toBeNull();
+    expect(mobileRoute(`/g/walter/openclaw/mobile/${id}/../config`, 'walter')).toBeNull();
+    expect(mobileRoute(`/g/walter/openclaw/mobile/${id}//outside.example/assets/app.js`, 'walter')).toBeNull();
+    expect(mobileRoute(`/g/walter/openclaw/mobile/${id}/\t/outside.example/assets/app.js`, 'walter')).toBeNull();
     expect(
       mobileRoute(
-        `/g/bender/openclaw/mobile/${id}/__openclaw__/assistant-media?source=files%2Fphoto.png`,
-        'bender',
+        `/g/walter/openclaw/mobile/${id}/__openclaw__/assistant-media?source=files%2Fphoto.png`,
+        'walter',
       )?.upstreamPath,
     ).toBe('/__openclaw__/assistant-media?source=files%2Fphoto.png');
   });
@@ -137,21 +137,21 @@ describe('native mobile admission proof', () => {
         payload: { type: 'hello-ok', auth, controlUiUrl: 'http://127.0.0.1:18789/' },
       },
       'https://api.octogee.com',
-      '/g/bender/openclaw/mobile/id',
+      '/g/walter/openclaw/mobile/id',
     );
     expect(result.payload).toMatchObject({
       auth,
-      controlUiBasePath: '/g/bender/openclaw/mobile/id',
-      controlUiUrl: 'https://api.octogee.com/g/bender/openclaw/mobile/id',
+      controlUiBasePath: '/g/walter/openclaw/mobile/id',
+      controlUiUrl: 'https://api.octogee.com/g/walter/openclaw/mobile/id',
     });
   });
   it('mounts embedded native documents and their bootstrap metadata without changing external links', () => {
     const html =
       '<html data-openclaw-control-ui-base-path="" data-openclaw-bootstrap-config="{&quot;basePath&quot;:&quot;&quot;}"><head><script src="/assets/app.js"></script></head><a href="https://example.com/">Link</a></html>';
-    const result = projectMobileDocument(html, '/g/bender/openclaw/mobile/id');
-    expect(result).toContain('<base href="/g/bender/openclaw/mobile/id/">');
-    expect(result).toContain('src="/g/bender/openclaw/mobile/id/assets/app.js"');
-    expect(result).toContain('&quot;basePath&quot;:&quot;/g/bender/openclaw/mobile/id&quot;');
+    const result = projectMobileDocument(html, '/g/walter/openclaw/mobile/id');
+    expect(result).toContain('<base href="/g/walter/openclaw/mobile/id/">');
+    expect(result).toContain('src="/g/walter/openclaw/mobile/id/assets/app.js"');
+    expect(result).toContain('&quot;basePath&quot;:&quot;/g/walter/openclaw/mobile/id&quot;');
     expect(result).toContain('href="https://example.com/"');
   });
   it('recognizes iOS main aliases and Android device-owned defaults without redirecting explicit conversations', () => {

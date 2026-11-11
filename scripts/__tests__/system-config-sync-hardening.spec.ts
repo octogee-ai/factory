@@ -16,9 +16,9 @@ import {
 const dirs: string[] = [];
 const env = {
   GATEWAY_CLASS: "shared",
-  GATEWAY_ID: "bender",
+  GATEWAY_ID: "walter",
   API_PUBLIC_URL: "https://api-test.octogee.com",
-  GATEWAY_REVISION_ID: "bender-r8",
+  GATEWAY_REVISION_ID: "walter-r8",
   OPENCLAW_VERSION: "2026.7.1",
 };
 
@@ -30,7 +30,7 @@ function fixture(
   dirs.push(openclawDir);
   const repoDir = path.join(openclawDir, "system_config");
   fs.mkdirSync(path.join(repoDir, ".git"), { recursive: true });
-  const config: Record<string, unknown> = { customerSetting: true };
+  const config: Record<string, unknown> = { userSetting: true };
   reconcilePlatformInvariants(config, fixtureEnv);
   mutator?.(config);
   fs.writeFileSync(path.join(repoDir, "openclaw.json"), `${JSON.stringify(config, null, 2)}\n`);
@@ -44,7 +44,7 @@ afterEach(() => {
 });
 
 describe("system config sync hardening", () => {
-  const builderEnv = { ...env, GATEWAY_CLASS: "builder", GATEWAY_ID: "ceckert-s-1", GATEWAY_BUILDER_SLUG: "ceckert" };
+  const userEnv = { ...env, GATEWAY_CLASS: "builder", GATEWAY_ID: "ceckert-s-1", GATEWAY_BUILDER_SLUG: "ceckert" };
   const driftedPlatformAccount = (config: Record<string, unknown>) => {
     config.agents = { list: [{ id: "octogee-ceckert-coach" }] };
     const channels = (config.channels ??= {}) as Record<string, unknown>;
@@ -63,19 +63,19 @@ describe("system config sync hardening", () => {
     });
 
   it("reconciles platform-owned projection drift at a migration checkpoint instead of rejecting it", () => {
-    const h = fixture(driftedPlatformAccount, builderEnv);
-    const acceptedBytes = fs.readFileSync(path.join(fixture(undefined, builderEnv).repoDir, "openclaw.json"), "utf8");
+    const h = fixture(driftedPlatformAccount, userEnv);
+    const acceptedBytes = fs.readFileSync(path.join(fixture(undefined, userEnv).repoDir, "openclaw.json"), "utf8");
     const committed: string[] = [];
     const logs: string[] = [];
 
     const result = syncSystemConfigForSlug("ceckert", {
       openclawDir: h.openclawDir,
-      env: builderEnv,
+      env: userEnv,
       durablePolicy: true,
       source: "migration-checkpoint",
       gitExec: acceptedGit(h.repoDir, acceptedBytes, committed),
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
       readCommitBlob: () => Buffer.from(acceptedBytes),
       log: (message: string) => logs.push(message),
@@ -94,25 +94,25 @@ describe("system config sync hardening", () => {
       line.includes("reconciled platform-owned projections before checkpoint (channels.mattermost.accounts)"))).toBe(true);
   });
 
-  it("accepts a Builder migration checkpoint after Doctor moves the Mattermost URL into the default account", () => {
+  it("accepts a user migration checkpoint after Doctor moves the Mattermost URL into the default account", () => {
     const h = fixture((config) => {
       const channels = config.channels as Record<string, Record<string, unknown>>;
       const mattermost = channels.mattermost;
       mattermost.accounts = { default: { baseUrl: mattermost.baseUrl } };
       delete mattermost.baseUrl;
-    }, builderEnv);
+    }, userEnv);
     const configPath = path.join(h.repoDir, "openclaw.json");
-    const acceptedBytes = fs.readFileSync(path.join(fixture(undefined, builderEnv).repoDir, "openclaw.json"), "utf8");
+    const acceptedBytes = fs.readFileSync(path.join(fixture(undefined, userEnv).repoDir, "openclaw.json"), "utf8");
     const committed: string[] = [];
 
     const result = syncSystemConfigForSlug("ceckert", {
       openclawDir: h.openclawDir,
-      env: builderEnv,
+      env: userEnv,
       durablePolicy: true,
       source: "migration-checkpoint",
       gitExec: acceptedGit(h.repoDir, acceptedBytes, committed),
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
       readCommitBlob: () => Buffer.from(acceptedBytes),
     });
@@ -126,15 +126,15 @@ describe("system config sync hardening", () => {
   });
 
   it("leaves a config edit that races the projection reconcile for the ordinary candidate path", () => {
-    const h = fixture(driftedPlatformAccount, builderEnv);
+    const h = fixture(driftedPlatformAccount, userEnv);
     const configPath = path.join(h.repoDir, "openclaw.json");
     const drifted = fs.readFileSync(configPath, "utf8");
-    const racedEdit = drifted.replace('"customerSetting": true', '"customerSetting": false');
+    const racedEdit = drifted.replace('"userSetting": true', '"userSetting": false');
     const reads: string[] = [];
     const logs: string[] = [];
 
     reconcilePlatformProjectionsAtPath(
-      { repoConfigPath: configPath, env: builderEnv, slug: "ceckert", log: (message) => logs.push(message) },
+      { repoConfigPath: configPath, env: userEnv, slug: "ceckert", log: (message) => logs.push(message) },
       (file) => {
         reads.push(file);
         if (reads.length === 2) fs.writeFileSync(file, racedEdit);
@@ -150,16 +150,16 @@ describe("system config sync hardening", () => {
   });
 
   it("still rejects the same projection drift when it arrives as a watched edit", () => {
-    const h = fixture(driftedPlatformAccount, builderEnv);
-    const acceptedBytes = fs.readFileSync(path.join(fixture(undefined, builderEnv).repoDir, "openclaw.json"), "utf8");
+    const h = fixture(driftedPlatformAccount, userEnv);
+    const acceptedBytes = fs.readFileSync(path.join(fixture(undefined, userEnv).repoDir, "openclaw.json"), "utf8");
 
     const result = syncSystemConfigForSlug("ceckert", {
       openclawDir: h.openclawDir,
-      env: builderEnv,
+      env: userEnv,
       durablePolicy: true,
       gitExec: acceptedGit(h.repoDir, acceptedBytes, []),
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
       readCommitBlob: () => Buffer.from(acceptedBytes),
     });
@@ -193,7 +193,7 @@ describe("system config sync hardening", () => {
       durablePolicy: true,
       gitExec,
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
       readCommitBlob: () => Buffer.from(acceptedBytes),
     });
@@ -211,7 +211,7 @@ describe("system config sync hardening", () => {
     });
   });
 
-  it("restores customer execution and trusted chat-hook invariants after a watched edit", () => {
+  it("restores user execution and trusted chat-hook invariants after a watched edit", () => {
     const h = fixture((config) => {
       const gateway = config.gateway as Record<string, unknown>;
       (gateway.terminal as Record<string, unknown>).enabled = true;
@@ -289,7 +289,7 @@ describe("system config sync hardening", () => {
       durablePolicy: true,
       gitExec,
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
       readCommitBlob: () => Buffer.from(acceptedBytes),
     });
@@ -338,7 +338,7 @@ describe("system config sync hardening", () => {
       ".gitignore": fs.readFileSync(path.join(accepted, ".gitignore")),
     };
     const configPath = path.join(h.repoDir, "openclaw.json");
-    const newer = Buffer.from('{"customerSetting":"newer"}\n');
+    const newer = Buffer.from('{"userSetting":"newer"}\n');
     const reads: string[] = [];
     const readCommitBlob = vi.fn((_repoDir: string, _commit: string, filename: keyof typeof acceptedFiles) => {
       reads.push(filename);
@@ -358,7 +358,7 @@ describe("system config sync hardening", () => {
         return "";
       }),
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
       readCommitBlob,
     });
@@ -412,7 +412,7 @@ describe("system config sync hardening", () => {
       durablePolicy: true,
       gitExec,
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
       readCommitBlob: readSystemConfigCommitBlob,
     })).toMatchObject({
@@ -441,7 +441,7 @@ describe("system config sync hardening", () => {
     };
     const configPath = path.join(h.repoDir, "openclaw.json");
     fs.rmSync(configPath);
-    const recreated = Buffer.from('{"customerSetting":"recreated"}\n');
+    const recreated = Buffer.from('{"userSetting":"recreated"}\n');
     const reads: string[] = [];
     const readCommitBlob = vi.fn((_repoDir: string, _commit: string, filename: keyof typeof accepted) => {
       reads.push(filename);
@@ -462,7 +462,7 @@ describe("system config sync hardening", () => {
         return "";
       }),
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
       readCommitBlob,
     });
@@ -500,7 +500,7 @@ describe("system config sync hardening", () => {
       durablePolicy: true,
       gitExec,
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
       readCommitBlob: (_repoDir, _commit, filename) => accepted[filename],
     })).toMatchObject({
@@ -537,7 +537,7 @@ describe("system config sync hardening", () => {
       source: "auto-watch",
       gitExec,
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
       now: () => new Date("2026-07-14T20:00:00.000Z"),
     })).toMatchObject({ committed: true, pushed: true, acceptedCommit: "b".repeat(40) });
@@ -576,7 +576,7 @@ describe("system config sync hardening", () => {
       durablePolicy: true,
       gitExec,
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
     })).toMatchObject({
       committed: true,
@@ -604,7 +604,7 @@ describe("system config sync hardening", () => {
       durablePolicy: true,
       gitExec,
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
     })).toMatchObject({
       committed: false,
@@ -641,7 +641,7 @@ describe("system config sync hardening", () => {
       durablePolicy: true,
       gitExec,
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
     })).toMatchObject({
       committed: false,
@@ -673,7 +673,7 @@ describe("system config sync hardening", () => {
       durablePolicy: true,
       gitExec,
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       validateConfig: vi.fn(),
     })).toMatchObject({
       committed: false,
@@ -702,7 +702,7 @@ describe("system config sync hardening", () => {
     expect(auditSystemConfigForSlug("ceckert", {
       openclawDir: h.openclawDir,
       gitExec,
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
     })).toMatchObject({
       state: "dirty",
       needsSync: true,
@@ -721,7 +721,7 @@ describe("system config sync hardening", () => {
     expect(auditSystemConfigForSlug("ceckert", {
       openclawDir: h.openclawDir,
       gitExec: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
     })).toEqual({
       state: "error",
       needsSync: true,

@@ -1,5 +1,5 @@
 import type { SchedulerHandoffState } from "@octogee/shared/types/glm";
-import type { CustomerMigrationV2State, Operation, OperationStep } from "@octogee/shared/types/glm";
+import type { UserMigrationV2State, Operation, OperationStep } from "@octogee/shared/types/glm";
 import type { OperationContext } from "./operation-router.js";
 
 export interface PersistFn {
@@ -8,14 +8,14 @@ export interface PersistFn {
 
 export interface CreateOperationContextDeps {
   assertActiveClaim?: (allowCancelled?: boolean) => Promise<void>;
-  customerRestore?: {
+  userRestore?: {
     assertSettled: () => Promise<void>;
-    begin: (input: Parameters<NonNullable<OperationContext["withCustomerRestoreFence"]>>[0]) => Promise<() => Promise<void>>;
+    begin: (input: Parameters<NonNullable<OperationContext["withUserRestoreFence"]>>[0]) => Promise<() => Promise<void>>;
   };
   
   persist: PersistFn;
   persistSchedulerHandoff?: (state: SchedulerHandoffState) => Promise<void>;
-  persistCustomerMigrationV2?: (state: CustomerMigrationV2State) => Promise<void>;
+  persistUserMigrationV2?: (state: UserMigrationV2State) => Promise<void>;
   persistCutoverCommitted?: (at: number) => Promise<void>;
   cancellationRequested?: () => Promise<boolean>;
   log: (msg: string) => void;
@@ -44,10 +44,10 @@ export function createOperationContext(deps: CreateOperationContextDeps): {
 
   const ctx: OperationContext = {
     ...(deps.assertActiveClaim ? { assertActiveClaim: deps.assertActiveClaim } : {}),
-    ...(deps.customerRestore ? {
-      assertCustomerRestoreSettled: deps.customerRestore.assertSettled,
-      withCustomerRestoreFence: async (input, work) => {
-        const acknowledge = await deps.customerRestore!.begin(input);
+    ...(deps.userRestore ? {
+      assertUserRestoreSettled: deps.userRestore.assertSettled,
+      withUserRestoreFence: async (input, work) => {
+        const acknowledge = await deps.userRestore!.begin(input);
         await work();
         await acknowledge();
       },
@@ -69,8 +69,8 @@ export function createOperationContext(deps: CreateOperationContextDeps): {
       }
     },
     ...(deps.persistSchedulerHandoff ? { persistSchedulerHandoff: deps.persistSchedulerHandoff } : {}),
-    ...(deps.persistCustomerMigrationV2
-      ? { persistCustomerMigrationV2: deps.persistCustomerMigrationV2 }
+    ...(deps.persistUserMigrationV2
+      ? { persistUserMigrationV2: deps.persistUserMigrationV2 }
       : {}),
     ...(deps.persistCutoverCommitted
       ? { persistCutoverCommitted: deps.persistCutoverCommitted }
@@ -105,14 +105,14 @@ function nonblankRestoreIdentifier(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-export class PendingCustomerRestoreError extends Error {
-  override readonly name = "PendingCustomerRestoreError";
+export class PendingUserRestoreError extends Error {
+  override readonly name = "PendingUserRestoreError";
 }
 
-export function assertCustomerRestoreSettled(operation: Operation, attempt: unknown): void {
+export function assertUserRestoreSettled(operation: Operation, attempt: unknown): void {
   if (attempt === undefined) return;
   if (attempt === null || typeof attempt !== "object" || Array.isArray(attempt)) {
-    throw new Error("customer restore receipt is malformed; assignment fence retained");
+    throw new Error("user restore receipt is malformed; assignment fence retained");
   }
   const receipt = attempt as Record<string, unknown>;
   const identifiers = [receipt.slug, receipt.attemptId, receipt.operationId, receipt.uid, receipt.fromGatewayId, receipt.gatewayId];
@@ -128,9 +128,9 @@ export function assertCustomerRestoreSettled(operation: Operation, attempt: unkn
     positiveRestoreTimestamp(receipt.claimStartedAt),
     positiveRestoreTimestamp(receipt.dispatchedAt),
   ].every(Boolean);
-  if (!exact) throw new Error("customer restore delivery remains ambiguous; assignment fence retained");
-  if (receipt.phase === "dispatched") throw new PendingCustomerRestoreError("customer restore awaits native target resumption; assignment fence retained");
+  if (!exact) throw new Error("user restore delivery remains ambiguous; assignment fence retained");
+  if (receipt.phase === "dispatched") throw new PendingUserRestoreError("user restore awaits native target resumption; assignment fence retained");
   if (!positiveRestoreTimestamp(receipt.acknowledgedAt) || receipt.acknowledgedAt < (receipt.dispatchedAt as number)) {
-    throw new Error("customer restore acknowledgement is malformed; assignment fence retained");
+    throw new Error("user restore acknowledgement is malformed; assignment fence retained");
   }
 }

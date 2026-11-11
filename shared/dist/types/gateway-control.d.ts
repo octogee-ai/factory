@@ -30,11 +30,11 @@ export interface OpenClawControlTicketResponse {
 export interface GatewayControlListResponse {
     gateways: GatewayControlListEntry[];
 }
-export declare const BUILDER_ACTIVATION_STATUSES: readonly ["requested", "provisioning", "activating", "active", "returning"];
-export type BuilderActivationStatus = (typeof BUILDER_ACTIVATION_STATUSES)[number];
-export declare function isBuilderActivationStatus(value: unknown): value is BuilderActivationStatus;
-export interface BuilderActivationSummary {
-    status: BuilderActivationStatus;
+export declare const USER_ACTIVATION_STATUSES: readonly ["requested", "provisioning", "activating", "active", "returning"];
+export type UserActivationStatus = (typeof USER_ACTIVATION_STATUSES)[number];
+export declare function isUserActivationStatus(value: unknown): value is UserActivationStatus;
+export interface UserActivationSummary {
+    status: UserActivationStatus;
     targetGatewayId: string | null;
 }
 export declare const WORKSPACE_GATEWAY_STATUS_MAX_SLUGS = 50;
@@ -43,7 +43,7 @@ export interface WorkspaceGatewayStatus {
     gatewayId: string | null;
     gatewayClass: GatewayClass | null;
     runtimeStatus: GatewayHeartbeatStatus;
-    activation: BuilderActivationSummary | null;
+    activation: UserActivationSummary | null;
 }
 export interface WorkspaceGatewayStatusResponse {
     workspaces: WorkspaceGatewayStatus[];

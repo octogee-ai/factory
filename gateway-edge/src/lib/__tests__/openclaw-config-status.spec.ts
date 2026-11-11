@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { projectOpenClawConfigStatus } from "../openclaw-config-status.js";
 
 describe("projectOpenClawConfigStatus", () => {
-  it("returns only the customer-safe bounded status projection", () => {
+  it("returns only the user-safe bounded status projection", () => {
     expect(projectOpenClawConfigStatus({
       configStatus: {
         state: "error",

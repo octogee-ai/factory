@@ -19,8 +19,8 @@ const UID = "ro-uid";
 const WS = "rowsowner";
 const PID = "ghproj";
 
-let customersRoot = "";
-let originalCustomersDir: string | undefined;
+let usersRoot = "";
+let originalUsersDir: string | undefined;
 
 async function seedGithubProject(): Promise<void> {
   await db.collection("workspaces").doc(WS).set({ id: WS, slug: WS, ownerUid: UID });
@@ -47,15 +47,15 @@ async function seedGithubProject(): Promise<void> {
 }
 
 beforeAll(async () => {
-  customersRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gh-provider-gate-"));
-  originalCustomersDir = process.env.CUSTOMERS_DIR;
-  process.env.CUSTOMERS_DIR = customersRoot;
+  usersRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gh-provider-gate-"));
+  originalUsersDir = process.env.CUSTOMERS_DIR;
+  process.env.CUSTOMERS_DIR = usersRoot;
 });
 
 afterAll(async () => {
-  if (originalCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
-  else process.env.CUSTOMERS_DIR = originalCustomersDir;
-  await fs.rm(customersRoot, { recursive: true, force: true });
+  if (originalUsersDir === undefined) delete process.env.CUSTOMERS_DIR;
+  else process.env.CUSTOMERS_DIR = originalUsersDir;
+  await fs.rm(usersRoot, { recursive: true, force: true });
 });
 
 describe("GitHub-backed project provider gate", () => {

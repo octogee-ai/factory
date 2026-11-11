@@ -4,7 +4,7 @@ import { notifyNativeFinalReply } from "./native-final-reply.js";
 const channelId = "c".repeat(26);
 const postId = "p".repeat(26);
 const rootId = "r".repeat(26);
-const coachId = "b".repeat(26);
+const userDefaultAgentId = "b".repeat(26);
 const ownerId = "u".repeat(26);
 const agentId = "octogee-alice-coach";
 const signal = {
@@ -16,9 +16,9 @@ const signal = {
 };
 
 function setup() {
-  const identity = { agentId, uid: "uid-alice", coachMmUserId: coachId,
+  const identity = { agentId, uid: "uid-alice", defaultAgentMmUserId: userDefaultAgentId,
     coachToken: "agent-token", workspaceSlug: "alice", projectSlug: "" };
-  const post = { id: postId, channelId, rootId, userId: coachId, message: "Delivered answer",
+  const post = { id: postId, channelId, rootId, userId: userDefaultAgentId, message: "Delivered answer",
     fileIds: [] as string[], props: {}, deleteAt: 0 };
   const target = { primaryChannelId: channelId, channelDocPath: "workspaces/alice/channels/coach-dm",
     expectedChannelType: "P" as "P" | "D", expectedChannelName: "alice-coach",
@@ -42,7 +42,7 @@ describe("native final reply notifications", () => {
     expect(h.deps.verifyChannel).toHaveBeenCalledWith(h.identity, h.target);
     expect(h.deps.notify).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       postId, message: "Delivered answer",
-      channelId, coachMmUserId: coachId,
+      channelId, defaultAgentMmUserId: userDefaultAgentId,
     }), "uid-alice");
   });
 
@@ -73,7 +73,7 @@ describe("native final reply notifications", () => {
   it("rejects a threaded direct reply whose session omits its native thread", async () => {
     const h = setup();
     h.target.expectedChannelType = "D";
-    h.target.expectedMemberIds = [ownerId, coachId];
+    h.target.expectedMemberIds = [ownerId, userDefaultAgentId];
     await expect(notifyNativeFinalReply({ ...signal, to: `user:${ownerId}`,
       sessionKey: `agent:${agentId}:mattermost:direct:${ownerId}`,
     }, h.deps)).rejects.toThrow("reply_binding_denied");
@@ -83,7 +83,7 @@ describe("native final reply notifications", () => {
   it("resolves a direct recipient through the authoritative owner and exact member roster", async () => {
     const h = setup();
     h.target.expectedChannelType = "D";
-    h.target.expectedMemberIds = [ownerId, coachId];
+    h.target.expectedMemberIds = [ownerId, userDefaultAgentId];
     await notifyNativeFinalReply({ ...signal, to: `user:${ownerId}`,
       sessionKey: `agent:${agentId}:mattermost:direct:${ownerId}:thread:${rootId}`,
     }, h.deps);
@@ -95,7 +95,7 @@ describe("native final reply notifications", () => {
   it("rejects a direct recipient that is absent from the authoritative roster", async () => {
     const h = setup();
     h.target.expectedChannelType = "D";
-    h.target.expectedMemberIds = ["z".repeat(26), coachId];
+    h.target.expectedMemberIds = ["z".repeat(26), userDefaultAgentId];
     await expect(notifyNativeFinalReply({ ...signal, to: `user:${ownerId}`,
       sessionKey: `agent:${agentId}:mattermost:direct:${ownerId}:thread:${rootId}`,
     }, h.deps)).rejects.toThrow("reply_binding_denied");

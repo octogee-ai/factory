@@ -45,7 +45,7 @@ describe("claimed scheduler recovery evidence", () => {
   });
 });
 
-describe("released forward-only Builder activation recovery admission", () => {
+describe("released forward-only user activation recovery admission", () => {
   it.each(["released", "history-evicted", "held", "committed", "source-moved", "epoch-changed", "shared-target", "wrong-generation"] as const)("admits only the released target while the source still owns the activation: %s", async scenario => {
     const target = "alice-s-12345678", id = `builder-activate-${target}-g1`;
     const h = fixture(`mig-${id}:scheduler:1:claim:1000`, id);

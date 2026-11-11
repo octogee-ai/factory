@@ -28,8 +28,8 @@ import { main } from "../ops/fleet.js";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
-describe("Fleet forced migration customer lookup", () => {
-  it.each([false, true])("resolves the customer by canonical slug for apply=%s", async apply => {
+describe("Fleet forced migration user lookup", () => {
+  it.each([false, true])("resolves the user by canonical slug for apply=%s", async apply => {
     const h = forceMigrationHarness();
     h.docs.get("users/u1")!.provisioning.openclaw.slug = "alice";
     mocks.db = h.db;

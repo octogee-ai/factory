@@ -278,7 +278,7 @@ The existing PostgreSQL transport now applies the same pre-query reconnect and
 validation to retained connections whose last completed response was idle. The
 one-second idle threshold uses wall time, which includes guest suspension.
 Transactions, uncertain outcomes and already dispatched SQL are never replayed.
-Cowboy still suspends computers; no startup repair or restart path is added.
+The fleet controller still suspends VMs; no startup repair or restart path is added.
 The focused contribution is [OpenClaw #193875](https://github.com/openclaw/openclaw/pull/193875).
 Remove this patch when the selected upstream source supplies equivalent behavior.
 The transport owners remain unchanged on independently inspected upstream main

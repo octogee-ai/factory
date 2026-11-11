@@ -1,4 +1,4 @@
-import type { BuilderRecord } from '@octogee/core/platform-state';
+import type { PlatformUserRecord } from '@octogee/core/platform-state';
 import { accountAllowsInteractiveAccess } from '@octogee/shared/types/account-lifecycle';
 import { isValidGatewayId } from '@octogee/shared/types/glm';
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
@@ -15,7 +15,7 @@ export interface ActivityConversation {
 }
 
 interface ActivityConversationInput {
-  builders: { get(uid: string): Promise<BuilderRecord | null> };
+  users: { get(uid: string): Promise<PlatformUserRecord | null> };
   uid: string;
   channelId: string;
   threadRootPostId?: string;
@@ -23,7 +23,7 @@ interface ActivityConversationInput {
 }
 
 async function assignedGateway(input: ActivityConversationInput, { target }: AuthorizedChannel): Promise<string | null> {
-  const [owner, caller] = await Promise.all([input.builders.get(target.ownerUid), input.builders.get(input.uid)]);
+  const [owner, caller] = await Promise.all([input.users.get(target.ownerUid), input.users.get(input.uid)]);
   if (!owner || !caller || !accountAllowsInteractiveAccess({ accountLifecycle: owner.accountLifecycle }) || !accountAllowsInteractiveAccess({ accountLifecycle: caller.accountLifecycle })) return null;
   const gatewayId = owner.gateway?.gatewayId;
   if (!isValidGatewayId(gatewayId) || !target.workspaceSlug || owner.slug !== target.workspaceSlug) return null;
@@ -70,7 +70,7 @@ export async function resolveActivityConversation(input: ActivityConversationInp
   const { threadRootPostId } = input;
   if (threadRootPostId !== undefined && !isMattermostPostId(threadRootPostId)) return null;
   const access = await (input.authorize ?? authorizeChannel)(input.uid, input.channelId, undefined, {
-    requireActiveLedger: true, includeCoachConversation: true,
+    requireActiveLedger: true, includeDefaultAgentConversation: true,
   });
   if (!access || access.forbidden) return null;
   const { target } = access;

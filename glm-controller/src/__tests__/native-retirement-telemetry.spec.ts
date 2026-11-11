@@ -25,15 +25,15 @@ function fixture() {
     get [`glmGateways/${input.gatewayId}`]() { return runtime; },
   };
   const store = createDocumentFixtureStore(records);
-  const describeComputer = vi.fn(async () => current);
+  const describeVm = vi.fn(async () => current);
   return {
     root,
     runtime: () => runtime!,
     current: () => current!,
     removeRuntime: () => { runtime = undefined; },
-    removeComputer: () => { current = null; },
-    describeComputer,
-    check: () => pausedNativeRetirementSourceFencedOff({ store, describe: describeComputer }, input),
+    removeVm: () => { current = null; },
+    describeVm,
+    check: () => pausedNativeRetirementSourceFencedOff({ store, describe: describeVm }, input),
   };
 }
 
@@ -41,18 +41,18 @@ describe("paused native retirement telemetry", () => {
   it("accepts exact stopped Compute identity despite stale mounted telemetry", async () => {
     const h = fixture();
     expect(await h.check()).toBe(true);
-    expect(h.describeComputer).toHaveBeenCalledWith("computer", "zone");
+    expect(h.describeVm).toHaveBeenCalledWith("computer", "zone");
   });
 
   it("accepts an absent Compute source with its recorded immutable identity", async () => {
-    const h = fixture(); h.removeComputer();
+    const h = fixture(); h.removeVm();
     expect(await h.check()).toBe(true);
   });
 
   it("does not authorize ignoring stale mounts without a native runtime identity", async () => {
     const h = fixture(); h.removeRuntime();
     expect(await h.check()).toBe(false);
-    expect(h.describeComputer).not.toHaveBeenCalled();
+    expect(h.describeVm).not.toHaveBeenCalled();
     h.root.retirementClaim = { ...h.root.retirementClaim as object, version: 3 };
     expect(await h.check()).toBe(false);
   });
@@ -60,7 +60,7 @@ describe("paused native retirement telemetry", () => {
   it("fails closed on a root stored under another gateway before Compute reads", async () => {
     const h = fixture(); h.root.gatewayId = "other";
     await expect(h.check()).rejects.toBeInstanceOf(MalformedRecordError);
-    expect(h.describeComputer).not.toHaveBeenCalled();
+    expect(h.describeVm).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -70,7 +70,7 @@ describe("paused native retirement telemetry", () => {
   ])("rejects %s before Compute reads", async (_name, field, value) => {
     const h = fixture(); h.root[field as string] = value;
     expect(await h.check()).toBe(false);
-    expect(h.describeComputer).not.toHaveBeenCalled();
+    expect(h.describeVm).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -81,7 +81,7 @@ describe("paused native retirement telemetry", () => {
   ])("rejects %s retirement claim", async (_name, field, value) => {
     const h = fixture(); (h.root.retirementClaim as Record<string, unknown>)[field as string] = value;
     expect(await h.check()).toBe(false);
-    expect(h.describeComputer).not.toHaveBeenCalled();
+    expect(h.describeVm).not.toHaveBeenCalled();
   });
 
   it.each(["TERMINATED", "STOPPED", "SUSPENDED"])("accepts parked Compute status %s", async (status) => {
@@ -121,7 +121,7 @@ describe("paused native retirement telemetry", () => {
     expect(await h.check()).toBe(false);
   });
 
-  it("does not retire a retained computer already running for the next allocation", async () => {
+  it("does not retire a retained VM already running for the next allocation", async () => {
     const h = fixture(); h.current().status = "RUNNING"; h.current().gatewayId = "builder-new";
     expect(await h.check()).toBe(false);
   });
@@ -129,17 +129,17 @@ describe("paused native retirement telemetry", () => {
   it.each(["cluster", undefined])("rejects non-native runtime %s", async (runtime) => {
     const h = fixture(); h.runtime().runtime = runtime;
     expect(await h.check()).toBe(false);
-    expect(h.describeComputer).not.toHaveBeenCalled();
+    expect(h.describeVm).not.toHaveBeenCalled();
   });
 
   it.each(["instanceId", "instanceName", "zone"])("rejects missing recorded %s even when Compute is absent", async (field) => {
-    const h = fixture(); delete (h.runtime().vm as Record<string, unknown>)[field]; h.removeComputer();
+    const h = fixture(); delete (h.runtime().vm as Record<string, unknown>)[field]; h.removeVm();
     expect(await h.check()).toBe(false);
-    expect(h.describeComputer).not.toHaveBeenCalled();
+    expect(h.describeVm).not.toHaveBeenCalled();
   });
 
   it("propagates Compute failures", async () => {
-    const h = fixture(); h.describeComputer.mockRejectedValueOnce(new Error("Compute denied"));
+    const h = fixture(); h.describeVm.mockRejectedValueOnce(new Error("Compute denied"));
     await expect(h.check()).rejects.toThrow("Compute denied");
   });
 });

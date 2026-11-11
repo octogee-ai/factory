@@ -3,7 +3,7 @@ import { bootRecoveryReport } from "./boot-recovery.js";
 import { prepareScratchVolumes, inspectInactiveScratchVolumes } from "./scratch.js";
 import { captureHomeSnapshot, discardHomeSnapshot } from "./home-snapshot.js";
 import { basename, dirname } from "node:path";
-import { BUILDER_CLAIM_FILE, builderClaimFromIdentity, parseBuilderClaimRecord } from "@octogee/shared/types/builder-identity";
+import { USER_CLAIM_FILE, userClaimFromIdentity, parseUserClaimRecord } from "@octogee/shared/types/builder-identity";
 import {
   isGatewayVmRuntimeBundle,
   type GatewayVmDiskSample,
@@ -44,7 +44,7 @@ import type { DesktopControl } from "./desktop-control.js";
 import {
   CA_FILE,
   SERVICE_RESTART_POLICY,
-  bundleBuilderIdentity,
+  bundleUserIdentity,
   containerName,
   TOKEN_FILE,
   imagesToPull,
@@ -175,17 +175,17 @@ export async function writeTokens(deps: VmAgentDeps, bundle: GatewayVmRuntimeBun
   }
 }
 
-export async function ensureVolumes(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, computerId: string): Promise<void> {
+export async function ensureVolumes(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, vmId: string): Promise<void> {
   const names = bundle.volumes.filter(volume => volume.kind === "ephemeral").map(volume => volume.name);
   if (names.length) {
     const agent = await inspectContainer(deps.engine, AGENT_CONTAINER);
     if (!agent?.Image) throw new Error("scratch preparation requires the running platform agent image");
     const groups = new Map<string, string[]>();
     for (const name of names) {
-      const owner = scratchOwner(bundle, computerId, name);
+      const owner = scratchOwner(bundle, vmId, name);
       groups.set(owner, [...(groups.get(owner) ?? []), name]);
     }
-    for (const [owner, selected] of groups) await prepareScratchVolumes({ engine: deps.engine, image: agent.Image, computerId: owner, stateRoot: deps.stateRoot, names: selected,
+    for (const [owner, selected] of groups) await prepareScratchVolumes({ engine: deps.engine, image: agent.Image, vmId: owner, stateRoot: deps.stateRoot, names: selected,
       beforeCreate: async () => {
         const boot = await deps.fs.diskUsage("/");
         if (!Number.isFinite(boot.freeBytes) || boot.freeBytes < 2 * 1024 ** 3) throw new Error("scratch preparation requires at least 2 GiB boot headroom; retained home and existing scratch kept");
@@ -282,7 +282,7 @@ export async function restoreHomeIfEmpty(deps: VmAgentDeps, bundle: GatewayVmRun
   const result = await restoreHome(homeDeps(deps, bundle), scope);
   await deps.home.desktop.run("start");
   if (result.status === "restored") deps.log(`[vm-agent] home restore restored ${result.name} (${result.size} bytes)`);
-  else if (result.status === "none") deps.log("[vm-agent] home restore none: no checkpoint for this customer yet");
+  else if (result.status === "none") deps.log("[vm-agent] home restore none: no checkpoint for this user yet");
 }
 
 async function assertHomeClaimOwner(
@@ -292,13 +292,13 @@ async function assertHomeClaimOwner(
 ): Promise<void> {
   const raw = await deps.fs.readFile(file);
   if (raw === null) return;
-  let existing: ReturnType<typeof parseBuilderClaimRecord> = null;
+  let existing: ReturnType<typeof parseUserClaimRecord> = null;
   try {
-    existing = parseBuilderClaimRecord(JSON.parse(raw));
+    existing = parseUserClaimRecord(JSON.parse(raw));
   } catch {
     existing = null;
   }
-  if (!existing) throw new Error(`[vm-agent] Builder claim ${file} in this home is malformed; refusing to start ${claim.gatewayId}`);
+  if (!existing) throw new Error(`[vm-agent] User claim ${file} in this home is malformed; refusing to start ${claim.gatewayId}`);
   if (existing.ownerUid !== claim.ownerUid || existing.builderSlug !== claim.builderSlug) {
     throw new Error(
       `[vm-agent] this home is claimed by ${existing.ownerUid}/${existing.builderSlug} on ${existing.gatewayId}, ` +
@@ -310,16 +310,16 @@ async function assertHomeClaimOwner(
   }
 }
 
-export async function writeBundleBuilderClaim(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle): Promise<void> {
-  const identity = bundleBuilderIdentity(bundle);
+export async function writeBundleUserClaim(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle): Promise<void> {
+  const identity = bundleUserIdentity(bundle);
   const data = bundle.volumes.find((volume) => volume.name === HOME_VOLUME_NAME && volume.kind === "emptyDir");
   if (!identity || !data) {
-    deps.log(`[vm-agent] bundle ${bundle.version} carries no Builder identity; the gateway reads its claim from the broker`);
+    deps.log(`[vm-agent] bundle ${bundle.version} carries no user identity; the gateway reads its claim from the broker`);
     return;
   }
   const dir = `${volumeHostPath(deps.stateRoot, data)}/.openclaw`;
-  const file = `${dir}/${BUILDER_CLAIM_FILE}`;
-  const claim = builderClaimFromIdentity({ gatewayId: bundle.gatewayId, state: "claimed", leaseId: null, generation: null, ...identity }, deps.now());
+  const file = `${dir}/${USER_CLAIM_FILE}`;
+  const claim = userClaimFromIdentity({ gatewayId: bundle.gatewayId, state: "claimed", leaseId: null, generation: null, ...identity }, deps.now());
   await assertHomeClaimOwner(deps, file, claim);
   await deps.fs.mkdir(dir);
   await deps.fs.chown(dir, RUNTIME_UID, RUNTIME_GID);
@@ -346,7 +346,7 @@ export async function applyBundle(deps: VmAgentDeps, bundle: GatewayVmRuntimeBun
   await holdGatewayForReplacement(deps, bundle, plan.services);
   for (const service of plan.services) await removeContainer(deps.engine, service.name);
   await restoreHomeIfEmpty(deps, bundle);
-  await writeBundleBuilderClaim(deps, bundle);
+  await writeBundleUserClaim(deps, bundle);
   if (plan.init) {
     deps.log(`[vm-agent] running init ${plan.init.name}`);
     await replaceContainer(deps.engine, plan.init);
@@ -381,13 +381,13 @@ async function holdGatewayForReplacement(deps: VmAgentDeps, bundle: GatewayVmRun
   deps.log(`[vm-agent] Native supervisor stopped gateway for replacement in ${deps.now() - startedAt}ms`);
 }
 
-export async function syncBuilderDesk(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle): Promise<void> {
+export async function syncUserDesk(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle): Promise<void> {
   const scope = homeScope(deps.stateRoot, bundle);
   if (!scope) return;
   try {
     const desk = await fetchDesk(deps, scope.slug);
     if (!desk) {
-      deps.log(`[vm-agent] desk sync waiting: ${scope.slug} has no configured Builder bootstrap yet`);
+      deps.log(`[vm-agent] desk sync waiting: ${scope.slug} has no configured user bootstrap yet`);
       return;
     }
     const { written } = await syncDesk(deps, scope, desk);
@@ -415,7 +415,7 @@ export async function checkpointHomeIfDue(
   const scope = homeScope(deps.stateRoot, bundle);
   if (!scope) {
     const requested = force ? ` (requested at ${signal.requestedAt})` : "";
-    deps.log(`[vm-agent] home checkpoint skipped${requested}: bundle ${bundle.version} carries no Builder home (data emptyDir + Builder identity)`);
+    deps.log(`[vm-agent] home checkpoint skipped${requested}: bundle ${bundle.version} carries no user home (data emptyDir + user identity)`);
     return { ...state, homeCheckpointCheckedAt: now };
   }
   let reporting: Promise<void> | undefined;
@@ -500,12 +500,12 @@ export async function convergeOnce(deps: VmAgentDeps, state: VmAgentState): Prom
   const decision = decideConvergence(plan, running);
   if (decision.kind === "steady") {
     if (next.appliedVersion !== bundle.version) next = { ...next, appliedVersion: bundle.version };
-    await syncBuilderDesk(deps, bundle);
+    await syncUserDesk(deps, bundle);
     await inspectUnusedScratch(deps, identity.instanceId);
     return checkpointHomeIfDue(deps, bundle, fetched.homeCheckpoint, next);
   }
-  await applyDecision(deps, bundle, plan, decision, { running, computerId: identity.instanceId });
-  await syncBuilderDesk(deps, bundle);
+  await applyDecision(deps, bundle, plan, decision, { running, vmId: identity.instanceId });
+  await syncUserDesk(deps, bundle);
   return { ...next, appliedVersion: bundle.version };
 }
 
@@ -521,21 +521,21 @@ async function applyDecision(
   bundle: GatewayVmRuntimeBundle,
   plan: BundlePlan,
   decision: Exclude<ConvergenceDecision, { kind: "steady" }>,
-  computer: { running: ContainerInspection[]; computerId: string },
+  computer: { running: ContainerInspection[]; vmId: string },
 ): Promise<void> {
-  const { running, computerId } = computer;
+  const { running, vmId } = computer;
   const runningVersions = running.map((inspection) => runningVersion(inspection) ?? "none").join(",");
   const action = decision.kind === "full" ? "full apply" : `replacing ${decision.services.map((service) => service.name).join(",")}`;
   deps.log(`[vm-agent] converging to bundle ${bundle.version} (running: ${runningVersions}; ${action})`);
   if (decision.kind === "full") await applyBundle(deps, bundle, plan);
   else await applyServices(deps, bundle, decision.services);
-  await inspectUnusedScratch(deps, computerId);
+  await inspectUnusedScratch(deps, vmId);
   await reclaimUnusedImages(deps, bundle);
 }
 
-async function inspectUnusedScratch(deps: VmAgentDeps, computerId: string): Promise<void> {
+async function inspectUnusedScratch(deps: VmAgentDeps, vmId: string): Promise<void> {
   try {
-    await inspectInactiveScratchVolumes({ ...deps, computerId });
+    await inspectInactiveScratchVolumes({ ...deps, vmId });
   } catch (error) {
     deps.log(`[vm-agent] scratch inspection failed; preserving storage for retry: ${String(error)}`);
   }
@@ -563,7 +563,7 @@ export function decideConvergence(plan: BundlePlan, running: ContainerInspection
 async function reportPreemption(deps: VmAgentDeps): Promise<void> {
   const res = await brokerPost(deps, VM_RUNTIME_ROUTE, { preempted: true });
   if (!res.ok) throw await brokerFailure(VM_RUNTIME_ROUTE, res);
-  deps.log("[vm-agent] Cowboy has this computer's preemption notice");
+  deps.log("[vm-agent] the fleet controller has this computer's preemption notice");
 }
 
 export async function watchPreemption(deps: VmAgentDeps, opts: { sleep: (ms: number) => Promise<void>; stop?: () => boolean }): Promise<void> {
@@ -571,7 +571,7 @@ export async function watchPreemption(deps: VmAgentDeps, opts: { sleep: (ms: num
   while (!opts.stop?.()) {
     try {
       if (await deps.metadata.preempted(waitForChange)) {
-        deps.log("[vm-agent] ⚠ GCE announced this Spot computer's preemption; it stops in about 30 s");
+        deps.log("[vm-agent] ⚠ GCE announced this Spot VM's preemption; it stops in about 30 s");
         await reportPreemption(deps);
         return;
       }

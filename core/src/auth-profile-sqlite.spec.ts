@@ -162,7 +162,7 @@ describe("writeAuthProfileStore — openclaw owns creation; we only update", () 
 });
 
 describe("deleteAuthProfileStore — clears the singleton row on disable", () => {
-  it("is a no-op when the DB does not exist (BYOT disabled on a fresh customer)", () => {
+  it("is a no-op when the DB does not exist (BYOT disabled on a fresh user)", () => {
     expect(() => deleteAuthProfileStore(mk())).not.toThrow();
   });
 
@@ -409,13 +409,13 @@ describe("the shared main store — OpenClaw's state-db ownership", () => {
   it("leaves every other agent on its own database", () => {
     const openclawDir = mk();
     const db = seedStateDb(openclawDir, JSON.stringify({ location: "state-db" }));
-    const coachDir = path.join(openclawDir, "agents", "octogee-x-coach", "agent");
-    seedOpenClawAgentDb(coachDir);
+    const defaultAgentDir = path.join(openclawDir, "agents", "octogee-x-coach", "agent");
+    seedOpenClawAgentDb(defaultAgentDir);
 
-    writeAuthProfileStore(coachDir, { version: 1, profiles: { p: {} } });
+    writeAuthProfileStore(defaultAgentDir, { version: 1, profiles: { p: {} } });
 
     expect(cell(db, "authProfiles.store")).toBeUndefined();
-    expect(readAuthProfileStore(coachDir)).toEqual({ version: 1, profiles: { p: {} } });
+    expect(readAuthProfileStore(defaultAgentDir)).toEqual({ version: 1, profiles: { p: {} } });
     db.close();
   });
 });

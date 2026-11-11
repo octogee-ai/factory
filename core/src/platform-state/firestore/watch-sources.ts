@@ -1,6 +1,6 @@
 import type { Firestore } from "firebase-admin/firestore";
 import type { WatchAggregate, WatchRecords, WatchRequest } from "../store.js";
-import { firestoreBuildersWatchSource } from "./builders.js";
+import { firestoreUsersWatchSource } from "./users.js";
 import { firestoreConfigWatchSource } from "./config.js";
 import { firestoreFleetRegistryWatchSource } from "./fleet-registry.js";
 import { firestoreAssignmentsWatchSource, firestoreGatewaysWatchSource } from "./gateways.js";
@@ -21,7 +21,7 @@ const FIRESTORE_WATCH_SOURCES: { readonly [A in WatchAggregate]: FirestoreWatchS
   gateways: firestoreGatewaysWatchSource,
   assignments: firestoreAssignmentsWatchSource,
   fleetRegistry: firestoreFleetRegistryWatchSource,
-  builders: firestoreBuildersWatchSource,
+  builders: firestoreUsersWatchSource,
   config: firestoreConfigWatchSource,
   migrationTasks: firestoreMigrationTasksWatchSource,
   workspaces: firestoreWorkspacesWatchSource,

@@ -1,6 +1,6 @@
 ---
 name: cua-omarchy
-description: Omarchy and Hyprland specifics for operating this Builder computer's desktop through the `computer` tool. Complements the cua-driver skill; use for computer-use tasks on the Omarchy desktop, not for desktop customization or package management.
+description: Omarchy and Hyprland specifics for operating this gateway VM's desktop through the `computer` tool. Complements the cua-driver skill; use for computer-use tasks on the Omarchy desktop, not for desktop customization or package management.
 metadata:
   openclaw:
     requires:
@@ -15,13 +15,13 @@ Read the `cua-driver` skill first for the observe-act-verify loop and the
 
 ## This desktop
 
-- Omarchy on Hyprland with one visible output. The Builder can watch and take
+- Omarchy on Hyprland with one visible output. The user can watch and take
   over the same screen from the Computer pane.
 - The desktop is the paired node `octogee-desktop`: call `computer` with
   `target: "node"` and `node: "octogee-desktop"`, never `target: "gateway"`.
 - Chromium on this desktop is the attach-only `computer` browser profile.
   Pass `profile: "computer"` explicitly on every `browser` call; `user` and
-  `chrome` do not select the browser shared with the Builder.
+  `chrome` do not select the browser shared with the user.
 - The platform manages the Cua Driver and its desktop node. Do not install,
   update, or reconfigure Cua Driver or the Cua Hyprland plugin, do not run
   Omarchy's Cua install or toggle commands, and do not load, unload, or
@@ -60,7 +60,7 @@ capture.
 
 Honor `background_unavailable`, `surface_identity_unproven`, and other
 refusals. Foreground delivery changes focus, workspace, and the real pointer on
-the Builder's screen, so use it only within their authorization. Do not work
+the user's screen, so use it only within their authorization. Do not work
 around a refusal with `hyprctl` focus dispatches or generic input injection.
 Verify the requested postcondition from fresh state; a delivery acknowledgment
 alone is not enough.
@@ -75,7 +75,7 @@ may already have landed.
 ## When the desktop itself looks wrong
 
 If every window observation is `degraded`, or `list_windows` omits running
-applications, the desktop's accessibility bus may be down. Tell the Builder
+applications, the desktop's accessibility bus may be down. Tell the user
 what you observed instead of switching to raw input to compensate.
 
 ## Testing

@@ -157,13 +157,13 @@ export function markMattermostRoutingActivationPending(
   return pending.token;
 }
 
-function accountBelongsToCustomer(accountId: string, slugs: ReadonlySet<string>): boolean {
+function accountBelongsToUser(accountId: string, slugs: ReadonlySet<string>): boolean {
   return [...slugs].some((slug) =>
     accountId === `${slug}-coach` || accountId.startsWith(`${slug}-proj-`)
   );
 }
 
-export function discardMattermostRoutingActivationForCustomers(
+export function discardMattermostRoutingActivationForUsers(
   openclawDir: string,
   slugs: readonly string[],
 ): void {
@@ -173,7 +173,7 @@ export function discardMattermostRoutingActivationForCustomers(
     const pending = readPendingActivationFile(filePath);
     if (!pending) continue;
     const retainedAccountIds = pending.accountIds.filter((accountId) =>
-      !accountBelongsToCustomer(accountId, managedSlugs)
+      !accountBelongsToUser(accountId, managedSlugs)
     );
     if (retainedAccountIds.length === pending.accountIds.length) continue;
     if (retainedAccountIds.length === 0) {

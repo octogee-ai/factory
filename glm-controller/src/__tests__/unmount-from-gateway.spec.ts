@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { retiredSharedGatewayRuntimeAbsent } from "../lib/customer-ops/retired-shared-gateway.js";
+import { retiredSharedGatewayRuntimeAbsent } from "../lib/user-ops/retired-shared-gateway.js";
 import {
   createUnmountFromGateway,
   type UnmountFromGatewayDeps,
-} from "../lib/customer-ops/unmount-gateway";
+} from "../lib/user-ops/unmount-gateway";
 
 function connectionError(): TypeError {
   return new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } });
@@ -49,7 +49,7 @@ describe("createUnmountFromGateway — durable runtime resolution", () => {
     expect(deps.isRetiredSharedGateway).not.toHaveBeenCalled();
   });
 
-  it("skips a Builder gateway whose root, runtime, deployment and pods are all gone", async () => {
+  it("skips a isolated gateway whose root, runtime, deployment and pods are all gone", async () => {
     const deps = mkDeps({
       resolveGatewayUnmountTarget: vi.fn(async () => null),
       isGatewayAbsent: vi.fn(async () => true),
@@ -144,20 +144,20 @@ describe("createUnmountFromGateway — live pod unmount", () => {
     });
   });
 
-  it("uses the same platform-signed unmount RPC for Builder gateways", async () => {
+  it("uses the same platform-signed unmount RPC for isolated gateways", async () => {
     const deps = mkDeps({
       resolveGatewayUnmountTarget: vi.fn(async () => ({
-        gatewayId: "bender",
-        revisionId: "bender-r7",
+        gatewayId: "walter",
+        revisionId: "walter-r7",
         profile: "builder" as const,
         runtime: "cluster" as const,
       })),
     });
     const unmount = createUnmountFromGateway(deps);
-    await expect(unmount("bender", "theo")).resolves.toBe("unmounted");
+    await expect(unmount("walter", "theo")).resolves.toBe("unmounted");
     expect(deps.unmountRpc).toHaveBeenCalledWith({
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       slug: "theo",
     });
   });
@@ -248,18 +248,18 @@ describe("createUnmountFromGateway — connection-error retry", () => {
     expect(deps.wait).not.toHaveBeenCalled();
   });
 
-  it("does not call the unmount RPC when a Builder gateway has no live pod", async () => {
+  it("does not call the unmount RPC when a isolated gateway has no live pod", async () => {
     const deps = mkDeps({
       resolveGatewayUnmountTarget: vi.fn(async () => ({
-        gatewayId: "bender",
-        revisionId: "bender-r7",
+        gatewayId: "walter",
+        revisionId: "walter-r7",
         profile: "builder" as const,
         runtime: "cluster" as const,
       })),
       isRuntimeAbsent: vi.fn(async () => true),
     });
     const unmount = createUnmountFromGateway(deps);
-    await expect(unmount("bender", "theo")).resolves.toBe("skipped-no-live-pod");
+    await expect(unmount("walter", "theo")).resolves.toBe("skipped-no-live-pod");
     expect(deps.unmountRpc).not.toHaveBeenCalled();
   });
 });

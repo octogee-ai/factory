@@ -10,7 +10,7 @@ import {
 import {
 } from "@octogee/core/assigned-roster";
 import {
-  configuredBuilderBootstrapAllowed,
+  configuredUserBootstrapAllowed,
 } from "@octogee/core/gateway-live-release";
 import {
   gatewayKeyOwnerId,
@@ -171,20 +171,20 @@ function gatewayKeyOwnerForRequest(req: Request, res: Response): string | null {
 }
 
 async function assignedSlugsForGateway(gatewayId: string): Promise<string[]> {
-  const builders = await platformStateStore.builders.records.listByGateway(gatewayId);
-  return builders.flatMap((builder) => (builder.slug ? [builder.slug] : []));
+  const users = await platformStateStore.users.records.listByGateway(gatewayId);
+  return users.flatMap((user) => (user.slug ? [user.slug] : []));
 }
 
 async function inboundMigrationRunning(gatewayId: string, slug: string): Promise<boolean> {
-  const builder = await platformStateStore.builders.records.findBySlug(slug);
-  if (!builder) return false;
-  const operations = await platformStateStore.journal.operations.listForUid(builder.uid, {
+  const user = await platformStateStore.users.records.findBySlug(slug);
+  if (!user) return false;
+  const operations = await platformStateStore.journal.operations.listForUid(user.uid, {
     kind: "migrate-customer",
     statuses: ["running"],
   });
   return operations.some((operation) => {
     const input = operation.input as { uid?: unknown; toGatewayId?: unknown } | undefined;
-    return input?.uid === builder.uid && input.toGatewayId === gatewayId;
+    return input?.uid === user.uid && input.toGatewayId === gatewayId;
   });
 }
 
@@ -201,12 +201,12 @@ async function requireAssignedHere(req: Request, res: Response, slug: string): P
     const assigned = await assignedSlugsForGateway(gatewayId);
     if (assigned.includes(slug)) return true;
     const gateway = await platformStateStore.gateways.roots.get(gatewayId);
-    const configuredIsolatedBuilder = configuredBuilderBootstrapAllowed(gateway, {
+    const configuredIsolatedUser = configuredUserBootstrapAllowed(gateway, {
       gatewayId,
       podName,
       slug,
     });
-    if (configuredIsolatedBuilder) return true;
+    if (configuredIsolatedUser) return true;
     if (!(await inboundMigrationRunning(gatewayId, slug))) {
       res.status(403).json({ error: "slug is not assigned to this gateway" });
       return false;

@@ -232,7 +232,7 @@ describe("runGiteaKeySweep legacy keys", () => {
     expect(result.passCompleted).toBe(true);
   });
 
-  it("deletes a Builder's old legacy keys even while a live gateway has not registered its owner key", async () => {
+  it("deletes a user's old legacy keys even while a live gateway has not registered its owner key", async () => {
     const otherLiveOwner = gatewayKeyOwnerId("shared-0", "octogee-gateway-shared-0-7d9f-other");
     const gitea = new FakeGitea(new Map([
       ["ws-jill", [managedKey(1, LIVE_OWNER), legacyKey(4, "OLDBARE"), legacyKey(5, "OLDPUB")]],
@@ -244,7 +244,7 @@ describe("runGiteaKeySweep legacy keys", () => {
     expect(gitea.deleted).toEqual([{ username: "ws-jill", id: 4 }, { username: "ws-jill", id: 5 }]);
   });
 
-  it("deletes old legacy keys for a Builder no live gateway serves", async () => {
+  it("deletes old legacy keys for a user no live gateway serves", async () => {
     const gitea = new FakeGitea(new Map([["ws-parked", [legacyKey(4, "OLDBARE"), legacyKey(5, "OLDPUB")]]]));
 
     await runGiteaKeySweep(deps(gitea), createGitKeySweepState());
@@ -252,7 +252,7 @@ describe("runGiteaKeySweep legacy keys", () => {
     expect(gitea.deleted).toEqual([{ username: "ws-parked", id: 4 }, { username: "ws-parked", id: 5 }]);
   });
 
-  it("never deletes legacy keys of a Gitea user that is not a Builder", async () => {
+  it("never deletes legacy keys of a Gitea user that is not a user", async () => {
     const gitea = new FakeGitea(new Map([["octogee-admin", [legacyKey(4, "OLDBARE")]]]));
 
     await runGiteaKeySweep(deps(gitea), createGitKeySweepState());

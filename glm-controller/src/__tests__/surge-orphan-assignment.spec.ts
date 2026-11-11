@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MalformedRecordError } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { pruneSurgeOrphanAssignments } from "../surge-orphan-assignment.js";
-import type { SurgeAssignment } from "../surge-customer-handoff.js";
+import type { SurgeAssignment } from "../surge-user-handoff.js";
 
 type Data = Record<string, unknown>;
 

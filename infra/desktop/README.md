@@ -1,6 +1,6 @@
-# Agent Computer spike — Omarchy desktop, headless
+# Agent VM spike — Omarchy desktop, headless
 
-Spike for [AGENT-COMPUTER-SPEC](../../docs/specs/AGENT-COMPUTER-SPEC.md) §7
+Spike for [GATEWAY-VM-SPEC](../../docs/specs/GATEWAY-VM-SPEC.md) §7
 phase 1. Proves that the Omarchy userspace runs headless in a plain container on
 software rendering, that an agent can drive it by screenshot and input without
 any kernel device, and that a human can watch it through noVNC. Records the
@@ -50,7 +50,7 @@ immediately with the aquamarine error above. If the host has more than one
 DRM device, set `AQ_DRM_DEVICES=/dev/dri/cardN` to pick one. Host port 5900 is
 often taken by macOS Screen Sharing; override with `OCTO_VNC_PORT=15900`.
 
-Chromium's sandbox is enabled by default in the launcher and on Builder VMs.
+Chromium's sandbox is enabled by default in the launcher and on gateway VMs.
 The Docker development recipe explicitly sets `OCTO_CHROMIUM_NO_SANDBOX=1`
 because the container's default restrictions block Chromium's user namespaces
 (`unshare --user --map-root-user true` fails with `Operation not permitted`).
@@ -60,7 +60,7 @@ that permits the sandbox. The launcher accepts only `0` or `1` and fails before
 starting Chromium for any other value. Docker acceptance with the opt-out does
 not verify Chromium sandbox isolation; native VM acceptance does.
 
-Chromium connects directly unless the Builder routes the computer's web
+Chromium connects directly unless the user routes the VM's web
 traffic through their desktop shell. gateway-edge records the mode through the
 control API (`POST /egress`) in `~/.config/octogee/egress-mode`, and
 the supervisor restarts Chromium when it changes. Only in `desktop` mode does
@@ -72,7 +72,7 @@ fails before Chromium starts. The Docker development recipe has no
 gateway-edge, so it sets `OCTO_CHROMIUM_EGRESS_PROXY=0`, which keeps Chromium
 direct whatever the file says; the VM image keeps the default `1`. A missing
 file reads as `cloud` because gateway-edge releases before the egress tunnel
-have no SOCKS listener at all; the cost is that a Builder already in desktop
+have no SOCKS listener at all; the cost is that a user already in desktop
 mode on the first tunnel release (which never writes the file) browses
 directly on an image with this launcher, so deploy a gateway-edge that writes
 the mode before publishing that image to a gateway using desktop mode.
@@ -107,7 +107,7 @@ below.
 
 The Browser panel uses the gateway's attach-only `computer` CDP profile.
 `gateway.nodes.browser.mode=off` prevents automatic delegation to the native
-computer node, whose `nodeHost.browserProxy.enabled` is false.
+VM node, whose `nodeHost.browserProxy.enabled` is false.
 Keep both settings: the attach-only profile reaches the Chromium the human
 watches, without a second node browser profile or browser process.
 
@@ -116,7 +116,7 @@ Native pairing approval grants it, and the node sets `desktop.host.enabled=true`
 `managed=false`, and port `5901`. The existing local pairing loop approves the
 node's expanded manifest on reconnection.
 
-Builder VMs use OpenClaw's `full` tool profile, without an Octogee node-command
+Gateway VMs use OpenClaw's `full` tool profile, without an Octogee node-command
 deny list. The same loopback pairing approves shell, files, MCP and local
 inference as well as the desktop. Native file-transfer commands are explicitly
 opted in and their plugin is loaded; `octogee-desktop` asks on an unapproved
@@ -124,7 +124,7 @@ path. Exec approvals, file grants, workspace bindings and dangerous-command
 checks still apply. No additional shell daemon, Ollama server, or broad file
 grant is provisioned. Ollama's ambient model discovery defaults off. Native
 Tool Search/harness defaults keep tools discoverable without putting every
-schema upfront. The owner coach has access;
+schema upfront. The owner agent has access;
 non-owner computer/browser/nodes requests still require owner approval, and project
 agent restrictions remain. Shared gateways are unchanged and have no node.
 
@@ -143,27 +143,27 @@ uses the dashboard's origin, authorization, socket limits, and periodic access
 checks. OpenClaw continues to enforce observation versus control at its RFB
 boundary.
 
-Rollout requires both the gateway build and a computer image containing the
-reflector package/helper. A gateway-only rollout against an older computer image
-cannot serve port 5901. Build the computer image and replace the parked computer
+Rollout requires both the gateway build and a VM image containing the
+reflector package/helper. A gateway-only rollout against an older VM image
+cannot serve port 5901. Build the VM image and replace the parked VM
 through the normal fleet lifecycle so its home checkpoint is restored.
 
 ## OpenClaw browser acceptance
 
-The Builder VM uses OpenClaw's built-in `browser` tool with the `computer`
+The gateway VM uses OpenClaw's built-in `browser` tool with the `computer`
 profile. That profile attaches to Chromium at `127.0.0.1:9222` and cannot launch
 another browser. `/usr/local/bin/octo-desktop-browser` is the common launcher for the
 session and desktop app opens. Its profile is
 `/home/octo/.config/octogee-chromium`, uses `--password-store=basic`, and is
 included in desktop-home checkpoints. CDP is not published by Docker or the
-VM bridge. Only the owner coach receives the first-class browser tool; project
+VM bridge. Only the owner agent receives the first-class browser tool; project
 agents are denied it. This tool policy does not isolate processes or prevent
 an agent with unrestricted exec from reaching the VM's loopback services.
 
 `acceptance/openclaw-browser.mts` runs the real OpenClaw browser implementation,
 opens a local fixture, types and clicks through snapshot references, evaluates
 the result, and records both the tool screenshot and the desktop capture.
-Run it in an isolated computer's network namespace with the Octogee worktree
+Run it in an isolated VM's network namespace with the Octogee worktree
 and an installed OpenClaw source checkout available:
 
 ```bash
@@ -176,7 +176,7 @@ OCTOGEE_ACCEPT_PHASE=seed node --import "$OPENCLAW_SOURCE_DIR/node_modules/tsx/d
 
 The seed phase stores a persistent HttpOnly cookie and localStorage value in
 the isolated profile. Stop/start the desktop or restore its checkpoint onto a
-fresh computer, then run the same command with `OCTOGEE_ACCEPT_PHASE=verify`.
+fresh VM, then run the same command with `OCTOGEE_ACCEPT_PHASE=verify`.
 Verification refuses to reseed the cookie or storage; both must survive.
 The output directory holds JSON tool results, native screenshots and a
 throwaway OpenClaw state directory. The fixture's permission to navigate
@@ -208,7 +208,7 @@ the `octogee-desktop` node is connected and paired with `computer.act` and
 `computer.act` and waits for the window title to change. It then requires the
 Chromium window in `get_accessibility_tree` and accessibility elements from
 `get_window_state` before it drives the pointer. Run it inside the
-Builder VM's gateway container:
+Gateway VM's gateway container:
 
 ```bash
 gcloud compute ssh <instance> --project octogee --zone us-central1-a --tunnel-through-iap \
@@ -223,7 +223,7 @@ verifies only the observation routes; this script is the input acceptance.
 Observation endpoints for gateway-edge and the PWA viewer. Agent input does not
 pass through here: the `desktop-node` container (gateway image, OpenClaw
 `cua-computer` node host) runs inside this Wayland session and fulfils the
-coach's built-in `computer` tool.
+agent's built-in `computer` tool.
 
 | Route | Effect |
 | --- | --- |
@@ -234,7 +234,7 @@ coach's built-in `computer` tool.
 Every `POST` (resize, launch, note, style, time zone) is refused with 403
 unless it is `Content-Type: application/json` and either carries no `Origin`
 (gateway-edge and the vm-agent) or carries the API's own loopback origin (the
-Desk page). Pages in the computer's own Chromium can reach 127.0.0.1:7777;
+Desk page). Pages in the VM's own Chromium can reach 127.0.0.1:7777;
 browsers always send `Origin` on a POST, and a cross-origin JSON POST needs a
 CORS preflight the server never answers.
 

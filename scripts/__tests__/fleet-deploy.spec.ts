@@ -46,7 +46,7 @@ function harness(snapshots: FleetSnapshot[]) {
 const snapshot = (...gateways: FleetGateway[]): FleetSnapshot => ({ gateways, sharedReplacements: [], platform: platformReleaseRecord(payload, 100), retirements: [] });
 
 describe("complete TEST fleet deployment", () => {
-  it("deploys PROD Builders and retains paused gateways without starting them", async () => {
+  it("deploys PROD users and retains paused gateways without starting them", async () => {
     const h = harness([
       snapshot(gateway("shared-0"), gateway("b-live", { latestPayload: old, desiredPayload: old }), gateway("b-paused", { desiredStatus: "paused", latestPayload: old, desiredPayload: old })),
       snapshot(gateway("shared-0"), gateway("b-live"), gateway("b-paused", { desiredStatus: "paused", runtime: null, live: null })),
@@ -57,7 +57,7 @@ describe("complete TEST fleet deployment", () => {
     expect(h.deploy.mock.calls.map(([target]) => target.gatewayId)).toEqual(["b-live", "b-paused"]);
     expect(report.targets.find((target) => target.gatewayId === "b-paused")?.status).toBe("paused-desired-only");
   });
-  it("deploys every Builder including paused roots, never shared or retired roots, and reports paused desired-only", async () => {
+  it("deploys every user including paused roots, never shared or retired roots, and reports paused desired-only", async () => {
     const shared = gateway("shared-0");
     const before = (id: string, desiredStatus: "running" | "paused") => gateway(id, { desiredStatus, latestRelease: 1, desiredRelease: 1, latestPayload: old, desiredPayload: old });
     const h = harness([
@@ -72,7 +72,7 @@ describe("complete TEST fleet deployment", () => {
     expect(h.readSnapshot).toHaveBeenCalledTimes(3);
   });
 
-  it("rescans and deploys Builders created while the ship is converging", async () => {
+  it("rescans and deploys users created while the ship is converging", async () => {
     const h = harness([
       snapshot(gateway("shared-0")),
       snapshot(gateway("shared-0"), gateway("b-new", { latestPayload: old, desiredPayload: old, latestRelease: 1, desiredRelease: 1 })),
@@ -85,15 +85,15 @@ describe("complete TEST fleet deployment", () => {
   });
 
   it("rescans a typed transient ownership fence and deploys once the source becomes idle", async () => {
-    const oldBuilder = gateway("b-busy", { latestPayload: old, desiredPayload: old, latestRelease: 1, desiredRelease: 1 });
-    const h = harness([snapshot(gateway("shared-0"), oldBuilder), snapshot(gateway("shared-0"), oldBuilder), snapshot(gateway("shared-0"), gateway("b-busy"))]);
+    const oldUser = gateway("b-busy", { latestPayload: old, desiredPayload: old, latestRelease: 1, desiredRelease: 1 });
+    const h = harness([snapshot(gateway("shared-0"), oldUser), snapshot(gateway("shared-0"), oldUser), snapshot(gateway("shared-0"), gateway("b-busy"))]);
     h.deploy.mockRejectedValueOnce(new FleetDeploymentDeferredError("source transfer outcome is unresolved"));
     expect((await h.run()).outcome).toBe("converged");
     expect(h.deploy).toHaveBeenCalledTimes(2);
     expect(h.deps.log.mock.calls[0][0]).toContain("source transfer outcome is unresolved");
   });
 
-  it("reports an eventually retired Builder after a transient retirement race", async () => {
+  it("reports an eventually retired user after a transient retirement race", async () => {
     const h = harness([snapshot(gateway("shared-0"), gateway("b-retiring", { latestPayload: old })), snapshot(gateway("shared-0"), gateway("b-retiring", { desiredStatus: "retired" }))]);
     h.deploy.mockRejectedValue(new FleetDeploymentDeferredError("retirement claim"));
     const report = await h.run();
@@ -162,7 +162,7 @@ describe("complete TEST fleet deployment", () => {
     expect(h.deploy).not.toHaveBeenCalled();
   });
 
-  it("accepts deployed short-SHA Shared tags while keeping Builder releases canonical", async () => {
+  it("accepts deployed short-SHA Shared tags while keeping user releases canonical", async () => {
     const deployed: ReleasePayload = {
       ...payload, imageTag: payload.imageTag.replace(tag, "aaaaaaa"),
       profileImages: { builder: { ...payload.profileImages!.builder, imageTag: payload.profileImages!.builder.imageTag.replace(tag, "aaaaaaa") } },
@@ -193,11 +193,11 @@ describe("complete TEST fleet deployment", () => {
     expect(report.targets.find((target) => target.gatewayId === "shared-old")).toMatchObject({ status: "shared-retired", retirementOperationId: "retire-old" });
   });
 
-  it("reports a deleted Builder with a succeeded retirement journal as skipped without live image claims", async () => {
-    const gone = { ...snapshot(gateway("shared-0")), retirements: [{ gatewayId: "b-old", operationId: "retire-builder", completedAt: 150, live: { observedAt: 200, instances: [] } }] };
+  it("reports a deleted user with a succeeded retirement journal as skipped without live image claims", async () => {
+    const gone = { ...snapshot(gateway("shared-0")), retirements: [{ gatewayId: "b-old", operationId: "retire-user", completedAt: 150, live: { observedAt: 200, instances: [] } }] };
     const report = await harness([snapshot(gateway("shared-0"), gateway("b-old")), gone]).run();
     expect(report.outcome).toBe("converged");
-    expect(report.targets.find((target) => target.gatewayId === "b-old")).toMatchObject({ status: "retired-skipped", observed: null, retirementOperationId: "retire-builder" });
+    expect(report.targets.find((target) => target.gatewayId === "b-old")).toMatchObject({ status: "retired-skipped", observed: null, retirementOperationId: "retire-user" });
   });
 
   it("bounds the final job summary and keeps target text inside table cells", async () => {

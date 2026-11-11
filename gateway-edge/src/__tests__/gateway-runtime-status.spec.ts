@@ -11,7 +11,7 @@ const NOW = 1_800_000_000_000;
 function runtimeDoc(overrides: Record<string, unknown> = {}, heartbeat: Record<string, unknown> = {}) {
   return {
     docKind: "runtime",
-    gatewayId: "bender",
+    gatewayId: "walter",
     release: 2,
     lifecycle: "serving",
     createdAt: 1,
@@ -35,34 +35,34 @@ function runtimeDoc(overrides: Record<string, unknown> = {}, heartbeat: Record<s
 
 describe("projectGatewayRuntimeStatus", () => {
   it("reports a fresh serving heartbeat status as-is", () => {
-    expect(projectGatewayRuntimeStatus(runtimeDoc(), { gatewayId: "bender", now: NOW })).toBe("ready");
-    expect(projectGatewayRuntimeStatus(runtimeDoc({}, { status: "booting" }), { gatewayId: "bender", now: NOW })).toBe("booting");
-    expect(projectGatewayRuntimeStatus(runtimeDoc({}, { status: "error" }), { gatewayId: "bender", now: NOW })).toBe("error");
+    expect(projectGatewayRuntimeStatus(runtimeDoc(), { gatewayId: "walter", now: NOW })).toBe("ready");
+    expect(projectGatewayRuntimeStatus(runtimeDoc({}, { status: "booting" }), { gatewayId: "walter", now: NOW })).toBe("booting");
+    expect(projectGatewayRuntimeStatus(runtimeDoc({}, { status: "error" }), { gatewayId: "walter", now: NOW })).toBe("error");
   });
 
   it("turns a stale ready or booting heartbeat into unreachable", () => {
     const stale = NOW - GATEWAY_UNREACHABLE_AFTER_MS - 1;
-    expect(projectGatewayRuntimeStatus(runtimeDoc({}, { lastHeartbeatAt: stale }), { gatewayId: "bender", now: NOW })).toBe("unreachable");
-    expect(projectGatewayRuntimeStatus(runtimeDoc({}, { status: "booting", lastHeartbeatAt: stale }), { gatewayId: "bender", now: NOW })).toBe("unreachable");
-    expect(projectGatewayRuntimeStatus(runtimeDoc({}, { lastHeartbeatAt: null }), { gatewayId: "bender", now: NOW })).toBe("unreachable");
+    expect(projectGatewayRuntimeStatus(runtimeDoc({}, { lastHeartbeatAt: stale }), { gatewayId: "walter", now: NOW })).toBe("unreachable");
+    expect(projectGatewayRuntimeStatus(runtimeDoc({}, { status: "booting", lastHeartbeatAt: stale }), { gatewayId: "walter", now: NOW })).toBe("unreachable");
+    expect(projectGatewayRuntimeStatus(runtimeDoc({}, { lastHeartbeatAt: null }), { gatewayId: "walter", now: NOW })).toBe("unreachable");
   });
 
   it("accepts Firestore Timestamp-shaped heartbeat times", () => {
     const fresh = { seconds: Math.floor((NOW - 1_000) / 1_000), nanoseconds: 0 };
-    expect(projectGatewayRuntimeStatus(runtimeDoc({}, { lastHeartbeatAt: fresh }), { gatewayId: "bender", now: NOW })).toBe("ready");
+    expect(projectGatewayRuntimeStatus(runtimeDoc({}, { lastHeartbeatAt: fresh }), { gatewayId: "walter", now: NOW })).toBe("ready");
     const stale = { toMillis: () => NOW - GATEWAY_UNREACHABLE_AFTER_MS - 1 };
-    expect(projectGatewayRuntimeStatus(runtimeDoc({}, { lastHeartbeatAt: stale }), { gatewayId: "bender", now: NOW })).toBe("unreachable");
+    expect(projectGatewayRuntimeStatus(runtimeDoc({}, { lastHeartbeatAt: stale }), { gatewayId: "walter", now: NOW })).toBe("unreachable");
   });
 
   it("maps the runtime lifecycle before the pod ever reports", () => {
-    expect(projectGatewayRuntimeStatus(runtimeDoc({ lifecycle: "provisioning" }), { gatewayId: "bender", now: NOW })).toBe("booting");
-    expect(projectGatewayRuntimeStatus(runtimeDoc({ lifecycle: "failed" }), { gatewayId: "bender", now: NOW })).toBe("error");
+    expect(projectGatewayRuntimeStatus(runtimeDoc({ lifecycle: "provisioning" }), { gatewayId: "walter", now: NOW })).toBe("booting");
+    expect(projectGatewayRuntimeStatus(runtimeDoc({ lifecycle: "failed" }), { gatewayId: "walter", now: NOW })).toBe("error");
   });
 
   it("is unknown without a runtime doc for this gateway", () => {
-    expect(projectGatewayRuntimeStatus(undefined, { gatewayId: "bender", now: NOW })).toBe("unknown");
-    expect(projectGatewayRuntimeStatus(runtimeDoc({ gatewayId: "other" }), { gatewayId: "bender", now: NOW })).toBe("unknown");
-    expect(projectGatewayRuntimeStatus({ docKind: "runtime", gatewayId: "bender" }, { gatewayId: "bender", now: NOW })).toBe("unknown");
+    expect(projectGatewayRuntimeStatus(undefined, { gatewayId: "walter", now: NOW })).toBe("unknown");
+    expect(projectGatewayRuntimeStatus(runtimeDoc({ gatewayId: "other" }), { gatewayId: "walter", now: NOW })).toBe("unknown");
+    expect(projectGatewayRuntimeStatus({ docKind: "runtime", gatewayId: "walter" }, { gatewayId: "walter", now: NOW })).toBe("unknown");
   });
 });
 

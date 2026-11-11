@@ -2,19 +2,19 @@ import { isDeepStrictEqual } from "node:util";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import { isGatewayDesiredDoc, isGatewayRuntimeDoc, isReleasePayload, parsePlatformReleaseRecord, PLATFORM_RELEASE_RECORD_DOC_PATH, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
 import { gatewayVmRuntimeDocPath, isGatewayVmRuntimeBundle, isOperationAuditRecord, isOperationAuditRow, } from "@octogee/shared/types/glm";
-import { CUSTOMER_DELETION_JOBS_COLLECTION } from "@octogee/shared/types/account-lifecycle";
+import { USER_DELETION_JOBS_COLLECTION } from "@octogee/shared/types/account-lifecycle";
 import { MODEL_BROKER_GATEWAY_POINTERS_COLLECTION, MODEL_BROKER_TOKENS_COLLECTION } from "@octogee/shared/types/model-broker-usage";
 import { placementReceiptDocId } from "@octogee/shared/types/placement-receipts";
 import { requireSizingProfile, } from "../platform-state/config.js";
 import { AlreadyExistsError, DuplicateRecordError, FenceMismatchError, MalformedRecordError, MissingRecordError, UnsupportedOperationError, } from "../platform-state/errors.js";
-import { agentStoreFromData, agentStoreKeyOf, BUILDER_ACTIVATION_LEASE_PATH, BUILDER_FENCE_PATHS, BUILDER_MIRROR_PATHS, builderPatchPaths, builderRecordFromData, builderRoleFromData, } from "../platform-state/firestore/builders.js";
+import { agentStoreFromData, agentStoreKeyOf, USER_ACTIVATION_LEASE_PATH, USER_FENCE_PATHS, USER_MIRROR_PATHS, userPatchPaths, userRecordFromData, userRoleFromData, } from "../platform-state/firestore/users.js";
 import { parseOrchestratorConfig, parsePlatformConfigValue, platformConfigEntryFromData, seedSizingProfiles } from "../platform-state/firestore/config.js";
 import { parseSharedPoolScalerState } from "../platform-state/firestore/controller-state.js";
 import { assertAbsentFence, assertFenceEquals, assertFenceOneOf } from "../platform-state/firestore/fences.js";
 import { migrationTransferTaskFromData } from "../platform-state/firestore/migration-tasks.js";
 import { decodeGatewayAssignmentData } from "../platform-state/firestore/gateways.js";
 import { agentImportDocument, agentImportPointerDocument, agentImportPointerFromData, agentImportRecordFromData, anonymousArchiveFromData, storedDeletionStatus, } from "../platform-state/firestore/jobs.js";
-import { builderSecretFromData, builderSecretToData, CONTROL_SESSION_FIELDS, controlSessionFromData, controlTicketFromData, GATEWAY_TICKET_FIELDS, gatewayAccessDenialAuditId, gatewayTicketFromData, modelBrokerGatewayTokenFromData, modelBrokerTokenDocument, modelBrokerTokenFromData, secretKindOf, } from "../platform-state/firestore/secrets.js";
+import { userSecretFromData, userSecretToData, CONTROL_SESSION_FIELDS, controlSessionFromData, controlTicketFromData, GATEWAY_TICKET_FIELDS, gatewayAccessDenialAuditId, gatewayTicketFromData, modelBrokerGatewayTokenFromData, modelBrokerTokenDocument, modelBrokerTokenFromData, secretKindOf, } from "../platform-state/firestore/secrets.js";
 import { agentIdentityFromData, workspaceChannelFromData, workspaceMemberFromData, workspaceProjectFromData, workspaceProjectMemberFromData, isWorkspaceReservation, workspaceRecordFromData, } from "../platform-state/firestore/workspaces.js";
 export function journalRowsIn(records) {
     return {
@@ -579,16 +579,16 @@ function fixturePage(items, idOf, page, missing) {
     const pageItems = items.slice(start, start + page.limit);
     return { items: pageItems, next: start + page.limit < items.length ? idOf(pageItems[pageItems.length - 1]) : null };
 }
-function fixtureBuilderRecord(documents, uid, row) {
-    const role = builderRoleFromData(uid, documents.get(`users/${uid}/system/config`));
-    return { ...builderRecordFromData(uid, structuredClone(row), 0, role), revision: FIXTURE_REVISION };
+function fixtureUserRecord(documents, uid, row) {
+    const role = userRoleFromData(uid, documents.get(`users/${uid}/system/config`));
+    return { ...userRecordFromData(uid, structuredClone(row), 0, role), revision: FIXTURE_REVISION };
 }
-function builderRecordRepository(documents, write, transactional) {
+function userRecordRepository(documents, write, transactional) {
     const path = (uid) => `users/${uid}`;
     const key = (uid) => ({ aggregate: "builder", key: uid });
     const decodeRecord = (uid) => {
         const row = documents.get(path(uid));
-        return row === undefined ? null : fixtureBuilderRecord(documents, uid, row);
+        return row === undefined ? null : fixtureUserRecord(documents, uid, row);
     };
     const present = (uid) => {
         const record = decodeRecord(uid);
@@ -603,7 +603,7 @@ function builderRecordRepository(documents, write, transactional) {
             throw new MissingRecordError(key(uid));
         documents.set(path(uid), withDottedFields(latest, fields));
     });
-    const assertBuilderFence = (uid, current, fence) => {
+    const assertUserFence = (uid, current, fence) => {
         if (fence?.gatewayId !== undefined && fence.gatewayId !== (current.gateway?.gatewayId ?? null)) {
             throw mismatch(uid, "gatewayId", fence.gatewayId, current.gateway?.gatewayId ?? null);
         }
@@ -677,22 +677,22 @@ function builderRecordRepository(documents, write, transactional) {
             const current = present(uid).agents.agentIds;
             update(uid, { "provisioning.openclaw.agentIds": current.filter((agentId) => !agentIds.includes(agentId)) });
         },
-        findByComputerInstanceId: async (instanceId) => {
+        findByVmInstanceId: async (instanceId) => {
             const found = documents.children("users")
                 .filter(([, row]) => valueAt(row, ["provisioning", "computer", "instanceId"]) === instanceId)
                 .map(([uid]) => present(uid));
             if (found.length > 1) {
-                throw new DuplicateRecordError("builder", "computerInstanceId", instanceId, found.map((record) => record.uid));
+                throw new DuplicateRecordError("builder", "vmInstanceId", instanceId, found.map((record) => record.uid));
             }
             return found[0] ?? null;
         },
         patch: async (uid, patch, fence) => {
-            assertBuilderFence(uid, present(uid), fence);
-            update(uid, builderPatchPaths(patch));
+            assertUserFence(uid, present(uid), fence);
+            update(uid, userPatchPaths(patch));
         },
         setActivationLease: async (uid, lease, fence) => {
             assertLeaseFence(uid, present(uid), fence);
-            update(uid, { [BUILDER_ACTIVATION_LEASE_PATH]: lease });
+            update(uid, { [USER_ACTIVATION_LEASE_PATH]: lease });
         },
         setFence: async (uid, name, value, expected) => {
             const current = present(uid);
@@ -702,14 +702,14 @@ function builderRecordRepository(documents, write, transactional) {
                 if (!isDeepStrictEqual(actual, wanted))
                     throw mismatch(uid, name, wanted ?? null, actual ?? null);
             }
-            update(uid, { [BUILDER_FENCE_PATHS[name]]: value });
+            update(uid, { [USER_FENCE_PATHS[name]]: value });
         },
         setGatewayMirror: async (uid, mirror, fence) => {
             const current = present(uid);
             if (fence?.gatewayId !== undefined && fence.gatewayId !== (current.gateway?.gatewayId ?? null)) {
                 throw mismatch(uid, "gatewayId", fence.gatewayId, current.gateway?.gatewayId ?? null);
             }
-            const paths = BUILDER_MIRROR_PATHS;
+            const paths = USER_MIRROR_PATHS;
             update(uid, isClear(mirror)
                 ? Object.fromEntries(Object.values(paths).map((field) => [field, mirror]))
                 : Object.fromEntries(Object.entries(mirror).map(([field, value]) => [paths[field], value])));
@@ -721,7 +721,7 @@ function builderRecordRepository(documents, write, transactional) {
             assertFenceOneOf(key(uid), "status", fence.status, lease?.status);
             if (lease === null)
                 throw mismatch(uid, "activationLease", "present", null);
-            update(uid, Object.fromEntries(Object.entries(patch).map(([field, value]) => [`${BUILDER_ACTIVATION_LEASE_PATH}.${field}`, value])));
+            update(uid, Object.fromEntries(Object.entries(patch).map(([field, value]) => [`${USER_ACTIVATION_LEASE_PATH}.${field}`, value])));
         },
     };
 }
@@ -743,13 +743,13 @@ function fixtureAgentStoreRow(record) {
 function valueAt(row, path) {
     return path.reduce((value, segment) => (isMap(value) ? value[segment] : undefined), row);
 }
-function builderRepositories(documents, write, transactional) {
-    const holding = (path, gatewayId) => documents.children("users").flatMap(([uid, row]) => valueAt(row, path) === gatewayId ? [fixtureBuilderRecord(documents, uid, row)] : []);
-    const records = partialRepository("builders.records", {
-        ...builderRecordRepository(documents, write, transactional),
+function userRepositories(documents, write, transactional) {
+    const holding = (path, gatewayId) => documents.children("users").flatMap(([uid, row]) => valueAt(row, path) === gatewayId ? [fixtureUserRecord(documents, uid, row)] : []);
+    const records = partialRepository("users.records", {
+        ...userRecordRepository(documents, write, transactional),
         getRole: async (uid) => {
             const config = documents.get(`users/${uid}/system/config`);
-            return config === undefined ? null : builderRoleFromData(uid, structuredClone(config));
+            return config === undefined ? null : userRoleFromData(uid, structuredClone(config));
         },
         listGatewayFenceHolders: async (gatewayId) => ({
             assigned: holding(["provisioning", "openclaw", "gatewayId"], gatewayId),
@@ -759,7 +759,7 @@ function builderRepositories(documents, write, transactional) {
         }),
     });
     const receiptPath = (uid, receiptId) => `users/${uid}/placement_receipts/${receiptId}`;
-    const placementReceipts = partialRepository("builders.placementReceipts", {
+    const placementReceipts = partialRepository("users.placementReceipts", {
         get: async (uid, leaseId, generation, kind) => {
             const row = documents.get(receiptPath(uid, placementReceiptDocId(leaseId, generation, kind)));
             return row === undefined ? null : structuredClone(row);
@@ -775,7 +775,7 @@ function builderRepositories(documents, write, transactional) {
             .map(([, row]) => structuredClone(row))
             .sort((a, b) => b.at - a.at), (receipt) => placementReceiptDocId(receipt.leaseId, receipt.generation, receipt.kind), page, (receiptId) => new MissingRecordError({ aggregate: "placement-receipt", key: `${uid}/${receiptId}` })),
     });
-    const agentStores = partialRepository("builders.agentStores", {
+    const agentStores = partialRepository("users.agentStores", {
         list: async (uid) => documents.children(`users/${uid}/agentStores`).map(([storeKey, row]) => ({
             ...agentStoreFromData(uid, storeKey, structuredClone(row)),
             revision: FIXTURE_REVISION,
@@ -1208,13 +1208,13 @@ function secretsRepository(documents, write) {
     return partialRepository("secrets", {
         get: async (uid, secretId) => {
             const row = documents.get(path(uid, secretId));
-            return row === undefined ? null : { ...builderSecretFromData(uid, secretId, structuredClone(row)), revision: FIXTURE_REVISION };
+            return row === undefined ? null : { ...userSecretFromData(uid, secretId, structuredClone(row)), revision: FIXTURE_REVISION };
         },
         list: async (uid, kind) => documents.children(`users/${uid}/secrets`)
             .filter(([secretId]) => kind === undefined || secretKindOf(secretId) === kind)
-            .map(([secretId, row]) => ({ ...builderSecretFromData(uid, secretId, structuredClone(row)), revision: FIXTURE_REVISION })),
+            .map(([secretId, row]) => ({ ...userSecretFromData(uid, secretId, structuredClone(row)), revision: FIXTURE_REVISION })),
         put: async (uid, secret) => {
-            const row = resolveServerNow(structuredClone(builderSecretToData(secret)));
+            const row = resolveServerNow(structuredClone(userSecretToData(secret)));
             write(() => documents.set(path(uid, secret.secretId), row));
         },
         delete: async (uid, secretId) => {
@@ -1396,7 +1396,7 @@ function productContextFields(productContext) {
     ]));
 }
 function deletionJobsRepository(documents, write) {
-    const path = (deletionId) => `${CUSTOMER_DELETION_JOBS_COLLECTION}/${deletionId}`;
+    const path = (deletionId) => `${USER_DELETION_JOBS_COLLECTION}/${deletionId}`;
     const key = (deletionId) => ({ aggregate: "customer-deletion-job", key: deletionId });
     const statusOf = (stored) => stored === storedDeletionStatus("product_verification_pending")
         ? "product_verification_pending"
@@ -1524,7 +1524,7 @@ function fixtureRepositories(rows, write, transactional, documents) {
     return {
         journal,
         gateways: gatewayRepositories(documents, write),
-        builders: builderRepositories(documents, write, transactional),
+        users: userRepositories(documents, write, transactional),
         workspaces: workspaceRepositories(documents, write, transactional),
         secrets: secretsRepository(documents, write),
         access: accessRepositories(documents, write),

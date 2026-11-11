@@ -304,7 +304,7 @@ describe("createSessionChannel", () => {
     expect(h.writes).toEqual([]);
   });
 
-  it("creates the MM channel with purpose, adds owner + coach, and writes the session doc", async () => {
+  it("creates the MM channel with purpose, adds owner + defaultAgent, and writes the session doc", async () => {
     const result = await createSessionChannel(actor(), input);
 
     expect(result).toEqual({

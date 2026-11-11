@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { makeChatActivityDemandHandler } from "../chat-activity-demand.js";
 
 const activity = {
-  coachMmUserId: "coach-1",
+  defaultAgentMmUserId: "coach-1",
   kind: "reaction" as const,
   channelId: "channel-1",
   postId: "post-1",
@@ -12,7 +12,7 @@ const activity = {
 };
 
 describe("chat activity demand handler", () => {
-  it("reports the observed activity without the coach identity", async () => {
+  it("reports the observed activity without the agent identity", async () => {
     const requestChatActivityDemand = vi.fn(async () => ({ recorded: true }));
     const log = vi.fn();
 

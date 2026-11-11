@@ -32,12 +32,12 @@ export function createInternalConnectorApprovalRouter() {
       if (command.gatewayId !== process.env.GATEWAY_ID || command.gatewayId !== req.params.gatewayId) {
         res.status(409).json({ error: "gateway_mismatch" }); return;
       }
-      const builder = process.env.GATEWAY_CLASS === "builder";
-      if (builder && command.operation !== "create" && command.reviewerUid) {
+      const isolated = process.env.GATEWAY_CLASS === "builder";
+      if (isolated && command.operation !== "create" && command.reviewerUid) {
         const identity = await resolveWorkspaceNativeIdentity({ gatewayId: command.gatewayId, authorization: req.body.authorization });
         if (identity.uid !== command.reviewerUid) { res.status(403).json({ error: "reviewer_mismatch" }); return; }
       }
-      res.set("cache-control", "no-store").json(await runNativeConnectorApproval(command, { builder, openService, openUser: openNativeUserClient }));
+      res.set("cache-control", "no-store").json(await runNativeConnectorApproval(command, { isolated, openService, openUser: openNativeUserClient }));
     } catch (error) {
       if (error instanceof NativeConnectorApprovalAccessError) {
         res.status(error.status).set("cache-control", "no-store").json({ error: error.code });

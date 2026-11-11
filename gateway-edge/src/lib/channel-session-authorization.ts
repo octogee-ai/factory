@@ -1,7 +1,7 @@
 import {
   projectAgentId,
   USERNAME_RE,
-  workspaceCoachAgentId,
+  workspaceDefaultAgentId,
 } from "@octogee/shared/types/identity";
 import { projectAgentConfigured } from "@octogee/shared/types/project";
 import {
@@ -58,7 +58,7 @@ export interface WorkspaceChannelCandidate {
 
 export interface ChannelAuthorizationOptions {
   requireActiveLedger?: boolean;
-  includeCoachConversation?: boolean;
+  includeDefaultAgentConversation?: boolean;
   workspaceConversation?: boolean;
   voiceConversation?: boolean;
   signal?: AbortSignal;
@@ -188,20 +188,20 @@ async function resolveProjectTarget(
   };
 }
 
-async function resolveCoachTarget(
+async function resolveDefaultAgentTarget(
   scope: ChannelScope,
   ownerUid: string,
   signal?: AbortSignal,
 ): Promise<ChannelTarget | null> {
-  const coachSecret = await abortable(readMattermostSecret(platformStateStore, ownerUid, "coachMattermost"), signal);
-  const agentMmUserId = coachSecret?.mattermostUserId;
+  const defaultAgentSecret = await abortable(readMattermostSecret(platformStateStore, ownerUid, "coachMattermost"), signal);
+  const agentMmUserId = defaultAgentSecret?.mattermostUserId;
   if (!agentMmUserId || !MATTERMOST_ID.test(agentMmUserId)) {
     return null;
   }
   return {
     ...scope,
     ownerUid,
-    agentId: workspaceCoachAgentId(scope.workspaceSlug),
+    agentId: workspaceDefaultAgentId(scope.workspaceSlug),
     agentMmUserId,
   };
 }
@@ -218,7 +218,7 @@ function activeChannelLedger(
   channelId: string,
   options: ChannelAuthorizationOptions,
 ): boolean {
-  if (options.includeCoachConversation && channel.channelId === "coach-dm" && channel.scope.projectSlug === null) {
+  if (options.includeDefaultAgentConversation && channel.channelId === "coach-dm" && channel.scope.projectSlug === null) {
     return workspaceConversationLedger(channel, channelId);
   }
   return discoverableChannelId(channel) === channelId;
@@ -272,20 +272,20 @@ async function resolveTarget(
     );
     if (project.archived) return null;
     if (options.voiceConversation) return project.target;
-    return project.target ?? resolveCoachTarget(scope, ownerUid, options.signal);
+    return project.target ?? resolveDefaultAgentTarget(scope, ownerUid, options.signal);
   }
-  return resolveCoachTarget(scope, ownerUid, options.signal);
+  return resolveDefaultAgentTarget(scope, ownerUid, options.signal);
 }
 
 async function callerCredentials(
   uid: string,
   signal?: AbortSignal,
 ): Promise<{ storedUserId: string; token: string } | null> {
-  const [builder, secret] = await abortable(Promise.all([
-    platformStateStore.builders.records.get(uid),
+  const [user, secret] = await abortable(Promise.all([
+    platformStateStore.users.records.get(uid),
     readMattermostSecret(platformStateStore, uid, "mattermost"),
   ]), signal);
-  const storedUserId = builder?.mattermostUserId;
+  const storedUserId = user?.mattermostUserId;
   return storedUserId && MATTERMOST_ID.test(storedUserId) && secret
     ? { storedUserId, token: secret.personalToken }
     : null;

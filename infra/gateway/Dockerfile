@@ -44,7 +44,7 @@ COPY --chown=node:node scripts/tsconfig.json /octogee/scripts/
 COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
 COPY --chown=node:node .github/actions/release-digest-manifest/desktop-image.mjs .github/actions/release-digest-manifest/desktop-image.d.mts /octogee/.github/actions/release-digest-manifest/
 COPY --chown=node:node scripts/ops/verify-native-modules.mjs /octogee/scripts/ops/
-COPY --chown=node:node scripts/ops/migrate-builder-stores.ts /octogee/scripts/ops/
+COPY --chown=node:node scripts/ops/migrate-user-stores.ts /octogee/scripts/ops/
 RUN /octogee/scripts/node_modules/.bin/esbuild /octogee/scripts/secret-resolver.mjs \
       --bundle --platform=node --format=esm \
       --outfile=/tmp/octogee-secret-resolver.mjs \
@@ -177,10 +177,10 @@ RUN node /tmp/install-cua-skills.mjs "$(npm root -g)/openclaw" /tmp/cua-skills /
 
 # ── Entrypoint + config templates ──────────────────────────────────────────
 COPY --chown=node:node infra/gateway/openclaw.template.json /octogee/infra/gateway/openclaw.template.json
-COPY --chown=node:node infra/gateway/openclaw.builder.template.json /octogee/infra/gateway/openclaw.builder.template.json
+COPY --chown=node:node infra/gateway/openclaw.isolated.template.json /octogee/infra/gateway/openclaw.isolated.template.json
 COPY --chown=node:node infra/gateway/workflow-tools.mjs /octogee/infra/gateway/workflow-tools.mjs
 COPY --chown=node:node infra/gateway/apply-gateway-class-policy.mjs /octogee/infra/gateway/apply-gateway-class-policy.mjs
-COPY --chown=node:node infra/gateway/quarantine-customer-cron-jobs.mjs /octogee/infra/gateway/quarantine-customer-cron-jobs.mjs
+COPY --chown=node:node infra/gateway/quarantine-user-cron-jobs.mjs /octogee/infra/gateway/quarantine-user-cron-jobs.mjs
 COPY --chmod=755 infra/gateway/shared-auxiliary-runner.sh /octogee/infra/gateway/shared-auxiliary-runner.sh
 COPY infra/gateway/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY infra/gateway/desktop-node.sh /usr/local/bin/octogee-desktop-node
@@ -198,13 +198,13 @@ COPY infra/gateway/octogee /usr/local/bin/octogee
 COPY infra/gateway/octo-desk /usr/local/bin/octo-desk
 COPY --chmod=755 infra/gateway/octo-project /usr/local/bin/octo-project
 COPY infra/gateway/octo-desktop-style /usr/local/bin/octo-desktop-style
-COPY infra/gateway/builder-toolchain-wrapper.sh /usr/local/libexec/octogee-builder-toolchain
+COPY infra/gateway/isolated-toolchain-wrapper.sh /usr/local/libexec/octogee-isolated-toolchain
 COPY infra/gateway/verify-openclaw-runtime-deps.sh /usr/local/bin/verify-openclaw-runtime-deps
 COPY infra/gateway/verify-runtime-image.sh /usr/local/bin/verify-runtime-image
 COPY infra/gateway/verify-config-templates.mjs /usr/local/libexec/verify-config-templates.mjs
 ARG OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin,codex
 ARG ENABLE_BUILDER_TOOLCHAIN_WRAPPER=false
-RUN chmod 755 /usr/local/bin/octogee-hobby-desktop /usr/local/bin/octogee-hobby-session /usr/local/bin/octo-desktop-browser /usr/local/bin/octo-desktop-control /usr/local/bin/entrypoint.sh /usr/local/bin/octogee-desktop-node /usr/local/bin/octogee /usr/local/bin/octo-desk /usr/local/bin/octo-desktop-style /usr/local/bin/verify-openclaw-runtime-deps /usr/local/bin/verify-runtime-image /usr/local/libexec/octogee-builder-toolchain \
+RUN chmod 755 /usr/local/bin/octogee-hobby-desktop /usr/local/bin/octogee-hobby-session /usr/local/bin/octo-desktop-browser /usr/local/bin/octo-desktop-control /usr/local/bin/entrypoint.sh /usr/local/bin/octogee-desktop-node /usr/local/bin/octogee /usr/local/bin/octo-desk /usr/local/bin/octo-desktop-style /usr/local/bin/verify-openclaw-runtime-deps /usr/local/bin/verify-runtime-image /usr/local/libexec/octogee-isolated-toolchain \
     && /usr/local/bin/verify-openclaw-runtime-deps "$OPENCLAW_RUNTIME_PLUGINS" \
     && case "$ENABLE_BUILDER_TOOLCHAIN_WRAPPER" in \
       false) \
@@ -224,9 +224,9 @@ RUN chmod 755 /usr/local/bin/octogee-hobby-desktop /usr/local/bin/octogee-hobby-
         ;; \
       true) \
         rm -f /usr/local/bin/claude /usr/local/bin/codex /usr/bin/chromium \
-        && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/claude \
-        && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/codex \
-        && ln -s /usr/local/libexec/octogee-builder-toolchain /usr/bin/chromium \
+        && ln -s /usr/local/libexec/octogee-isolated-toolchain /usr/local/bin/claude \
+        && ln -s /usr/local/libexec/octogee-isolated-toolchain /usr/local/bin/codex \
+        && ln -s /usr/local/libexec/octogee-isolated-toolchain /usr/bin/chromium \
         ;; \
       *) \
         echo "ENABLE_BUILDER_TOOLCHAIN_WRAPPER must be true or false" >&2 \

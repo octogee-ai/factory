@@ -29,9 +29,9 @@ afterEach(() => {
 function seedProjectPlaceholder() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "github-project-checkout-"));
   roots.push(root);
-  const customersRoot = path.join(root, "customers");
-  vi.stubEnv("CUSTOMERS_DIR", customersRoot);
-  const destination = path.join(customersRoot, "alice", "projects", "octo");
+  const usersRoot = path.join(root, "customers");
+  vi.stubEnv("CUSTOMERS_DIR", usersRoot);
+  const destination = path.join(usersRoot, "alice", "projects", "octo");
   fs.mkdirSync(destination, { recursive: true });
   fs.writeFileSync(path.join(destination, "SOUL.md"), "preserve this identity\n");
   const source = path.join(root, "source");
@@ -47,7 +47,7 @@ function seedProjectPlaceholder() {
       return arg;
     }),
   ], options));
-  const input = { customersRoot, builderSlug: "alice", projectSlug: "octo",
+  const input = { usersRoot, builderSlug: "alice", projectSlug: "octo",
     repository: { owner: "octogee-ai", repo: "octogee" }, accessToken: "test-token" };
   return { root, destination, input };
 }
@@ -133,7 +133,7 @@ describe("GitHub project clone broker", () => {
 
   it("rejects an unsafe destination before attempting a clone", async () => {
     await expect(cloneGithubProjectCheckout({
-      customersRoot: "/tmp/customers",
+      usersRoot: "/tmp/customers",
       builderSlug: "../alice",
       projectSlug: "octo",
       repository: { owner: "octogee-ai", repo: "octogee" },

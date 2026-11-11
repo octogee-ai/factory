@@ -17,7 +17,7 @@ function harness(secret: Record<string, string> = { token: "synthetic-token" }) 
     ({ code: 0, stdout: args[args.indexOf("-o") + 1] === "json" ? secretJson(secret) : b64(secret.token!), stderr: "" }));
   return { auth, readGateway, provisionAgentStore, runKubectl, stages: createGatewayCredentialEnsurers({ auth, readGateway, provisionAgentStore, runKubectl, agentStoreClientDsn }) };
 }
-const request = { namespace: "test", gatewayId: "fresh-builder" };
+const request = { namespace: "test", gatewayId: "fresh-user" };
 
 function capturePublication(h: ReturnType<typeof harness>, secret: Record<string, string> = { token: "synthetic-token" }) {
   const captured = { args: [] as string[], patch: undefined as unknown, path: "", mode: 0 };
@@ -43,7 +43,7 @@ describe("Gateway credential provisioning stages", () => {
     expect(h.provisionAgentStore).not.toHaveBeenCalled();
     h.readGateway.mockResolvedValue({ desiredStatus: "running", gatewayClass: "builder", ownerUid: "uid-alice", builderSlug: "alice" });
     await h.stages.ensureGatewayCredentials(request);
-    expect(h.provisionAgentStore).toHaveBeenCalledExactlyOnceWith({ gatewayId: request.gatewayId, gatewayClass: "builder", token: "synthetic-token", builder: { uid: "uid-alice", slug: "alice" } }, expect.any(Function));
+    expect(h.provisionAgentStore).toHaveBeenCalledExactlyOnceWith({ gatewayId: request.gatewayId, gatewayClass: "builder", token: "synthetic-token", user: { uid: "uid-alice", slug: "alice" } }, expect.any(Function));
   });
 
   it.each([{ desiredStatus: "retired" }, { retirementClaim: { operationId: "retire" } }, { retirementClaim: false }, { retirementClaim: "" }])("rejects issuance when retirement begins while waiting for SQL custody: %j", async retirement => {
@@ -86,7 +86,7 @@ describe("Gateway credential provisioning stages", () => {
     const publication = capturePublication(h);
     h.readGateway.mockResolvedValue({ desiredStatus: "running", gatewayClass: "shared", ownerUid: null, builderSlug: null });
     await h.stages.ensureGatewayCredentials(request);
-    expect(publication.args).toEqual(["patch", "secret", "gateway-auth-token-fresh-builder", "-n", "test", "--type=json", `--patch-file=${publication.path}`]);
+    expect(publication.args).toEqual(["patch", "secret", "gateway-auth-token-fresh-user", "-n", "test", "--type=json", `--patch-file=${publication.path}`]);
     expect(publication.patch).toEqual([
       { op: "test", path: "/data/token", value: b64("synthetic-token") },
       { op: "add", path: "/data/agent-store-dsn", value: b64("postgresql://gateway:synthetic@private/agents_test") },

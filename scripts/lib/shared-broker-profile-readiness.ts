@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { parseAgentId } from "../../shared/types/identity.js";
 import type { DegradedSecretOwner } from "./gateway-rpc.js";
-import { configuredBuilderManagedProjectIds } from "./configured-builder-project-agents.js";
+import { configuredUserManagedProjectIds } from "./configured-user-project-agents.js";
 import { readMattermostAccountSecret } from "./mattermost-account-secrets.js";
 
 const PROJECT_ACCOUNT_OWNER_PREFIX = "mattermost:";
@@ -32,7 +32,7 @@ export async function unmaterializedProjectAccountIds(input: {
 }): Promise<Set<string>> {
   const accountIds = new Set<string>();
   for (const slug of input.assignedSlugs) {
-    for (const projectId of configuredBuilderManagedProjectIds(input.config, slug, [])) {
+    for (const projectId of configuredUserManagedProjectIds(input.config, slug, [])) {
       const accountId = `${slug}-proj-${projectId}`;
       if (await readMattermostAccountSecret(input.openclawDir, accountId) === null) accountIds.add(accountId);
     }

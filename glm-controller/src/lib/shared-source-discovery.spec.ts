@@ -52,7 +52,7 @@ function bytes(root: string): Record<string, string> {
   visit(root); return entries;
 }
 describe('retained PostgreSQL source discovery preflight', () => {
-  it.each([true, false])('reads the full owned coach/project and selected service anchors without changing bytes, service=%s', service => {
+  it.each([true, false])('reads the full owned agent/project and selected service anchors without changing bytes, service=%s', service => {
     const f = fixture(service), before = bytes(f.root);
     for (let attempt = 0; attempt < 2; attempt++) {
       const result = f.run(); expect(result.stderr).not.toContain('Error'); expect(result.status).toBe(0);

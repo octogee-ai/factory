@@ -6,14 +6,14 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { hydrateGithubCliAuth } from "../lib/github-cli-auth-hydrate.js";
-import { withBuilderClaim, writeTestBuilderClaim } from "./helpers/builder-claim.js";
+import { withUserClaim, writeTestUserClaim } from "./helpers/user-claim.js";
 
 const execFile = promisify(execFileCallback);
 const connected = (token = "gho_test_owner") => Response.json({
   status: "connected", connectorId: "github", accessToken: token,
 });
 
-describe("Builder GitHub CLI authentication", () => {
+describe("User GitHub CLI authentication", () => {
   let root: string;
   let env: NodeJS.ProcessEnv;
   let hostsPath: string;
@@ -22,9 +22,9 @@ describe("Builder GitHub CLI authentication", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    root = await mkdtemp(path.join(os.tmpdir(), "builder-gh-auth-"));
+    root = await mkdtemp(path.join(os.tmpdir(), "user-gh-auth-"));
     hostsPath = path.join(root, "gh", "hosts.yml");
-    env = withBuilderClaim({
+    env = withUserClaim({
       HOME: root,
       GH_CONFIG_DIR: path.dirname(hostsPath),
       GATEWAY_CLASS: "builder",
@@ -100,10 +100,10 @@ describe("Builder GitHub CLI authentication", () => {
     await expect(stat(hostsPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("fails before fetching when the Builder identity or gateway token is absent", async () => {
+  it("fails before fetching when the user identity or gateway token is absent", async () => {
     await rm(path.join(env.OPENCLAW_DIR!, "builder-claim.json"));
-    await expect(hydrateGithubCliAuth({ env, fetchImpl, setupGit })).rejects.toThrow("Builder identity");
-    writeTestBuilderClaim(env.OPENCLAW_DIR!, "alice");
+    await expect(hydrateGithubCliAuth({ env, fetchImpl, setupGit })).rejects.toThrow("User identity");
+    writeTestUserClaim(env.OPENCLAW_DIR!, "alice");
     await rm(env.OCTOGEE_API_SA_TOKEN_PATH!);
     await expect(hydrateGithubCliAuth({ env, fetchImpl, setupGit })).rejects.toThrow("projected service-account token");
     expect(fetchImpl).not.toHaveBeenCalled();

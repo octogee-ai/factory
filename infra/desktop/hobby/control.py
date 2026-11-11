@@ -2,7 +2,7 @@ import http.server
 import json
 import subprocess
 
-FIXTURE = b'''<!doctype html><html><head><title>Hobby benchmark fixture</title></head><body style="font:24px sans-serif;padding:60px;background:#162430;color:white"><h1>Octogee Hobby computer</h1><label>Your message <input aria-label="Your message" id="message"></label><button onclick="document.querySelector('#result').textContent=document.querySelector('#message').value">Show on shared desktop</button><h2 id="result">Waiting</h2></body></html>'''
+FIXTURE = b'''<!doctype html><html><head><title>Hobby benchmark fixture</title></head><body style="font:24px sans-serif;padding:60px;background:#162430;color:white"><h1>Octogee Hobby VM</h1><label>Your message <input aria-label="Your message" id="message"></label><button onclick="document.querySelector('#result').textContent=document.querySelector('#message').value">Show on shared desktop</button><h2 id="result">Waiting</h2></body></html>'''
 
 
 class Handler(http.server.BaseHTTPRequestHandler):

@@ -28,7 +28,7 @@ describe("byosub sidecar broker", () => {
         user: {
           uid: "uid-tester5",
           slug: "tester5",
-          gatewayId: "bender",
+          gatewayId: "walter",
           refProvider: "anthropic",
         },
       }),
@@ -36,7 +36,7 @@ describe("byosub sidecar broker", () => {
 
     await expect(resolveByosubUserGateway("uid-tester5")).resolves.toEqual({
       slug: "tester5",
-      gatewayId: "bender",
+      gatewayId: "walter",
       refProvider: "anthropic",
     });
     expect(internalFetch).toHaveBeenCalledWith(
@@ -52,7 +52,7 @@ describe("byosub sidecar broker", () => {
       jsonResponse({
         flow: {
           uid: "uid-tester5",
-          gatewayId: "bender",
+          gatewayId: "walter",
           agentId: "octogee-tester5-coach",
           provider: "openai",
           modelCredentialProvider: "openai-codex",
@@ -62,7 +62,7 @@ describe("byosub sidecar broker", () => {
 
     await expect(readByosubFlow("flow-abc123")).resolves.toMatchObject({
       uid: "uid-tester5",
-      gatewayId: "bender",
+      gatewayId: "walter",
       provider: "openai",
     });
     expect(internalFetch).toHaveBeenCalledWith(

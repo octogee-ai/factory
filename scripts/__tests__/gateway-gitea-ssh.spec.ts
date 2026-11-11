@@ -25,7 +25,7 @@ function resolved(config: string, host: string): string {
 afterEach(() => homes.splice(0).forEach((home) => rmSync(home, { recursive: true, force: true })));
 
 describe("gateway Gitea SSH identity", () => {
-  it("selects the Builder's key for an ordinary Git SSH connection", () => {
+  it("selects the user's key for an ordinary Git SSH connection", () => {
     const config = configure("builder");
     const effective = resolved(config, "gitea");
     expect(effective).toContain("hostname gitea.test.internal\n");
@@ -35,15 +35,15 @@ describe("gateway Gitea SSH identity", () => {
     expect(statSync(config).mode & 0o777).toBe(0o600);
   });
 
-  it("does not offer the Builder key to other SSH hosts", () => {
+  it("does not offer the user key to other SSH hosts", () => {
     expect(resolved(configure("builder"), "github.com")).not.toContain("customer-keys");
   });
 
-  it("keeps shared gateways without a default customer identity even when a slug is present", () => {
+  it("keeps shared gateways without a default user identity even when a slug is present", () => {
     expect(readFileSync(configure("shared"), "utf8")).not.toContain("IdentityFile");
   });
 
-  it.each(["", "../another-builder", "sep091\nHost *"])("rejects an invalid Builder slug: %j", (slug) => {
+  it.each(["", "../another-user", "sep091\nHost *"])("rejects an invalid user slug: %j", (slug) => {
     expect(() => configure("builder", slug)).toThrow();
   });
 });

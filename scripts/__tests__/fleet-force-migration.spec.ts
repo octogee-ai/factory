@@ -4,7 +4,7 @@ import { parseFleetArgs, resolveFleetMigrationForce } from "../ops/fleet.js";
 import { forceMigrationAssignment, forceMigrationHarness as harness, forceMigrationTarget as target } from "./fleet-force-migration.test-support.js";
 
 describe("Fleet force migration request", () => {
-  it("denies an authoritative Shared source even when its gateway ID looks like a Builder", async () => {
+  it("denies an authoritative Shared source even when its gateway ID looks like a user", async () => {
     const h = harness();
     h.docs.get("gateways/builder-a")!.gatewayClass = "shared";
     await expect(readForceMigrationPlan(h.store, target)).rejects.toThrow("Shared");
@@ -13,15 +13,15 @@ describe("Fleet force migration request", () => {
 
   it("uses the authoritative class rather than the gateway name", async () => {
     const h = harness();
-    h.docs.set("gateways/shared-named-builder", { ...h.docs.get("gateways/builder-a")!, gatewayId: "shared-named-builder" });
-    await expect(readForceMigrationSource(h.store, { ...target, fromGatewayId: "shared-named-builder" })).resolves.toBeUndefined();
+    h.docs.set("gateways/shared-named-user", { ...h.docs.get("gateways/builder-a")!, gatewayId: "shared-named-user" });
+    await expect(readForceMigrationSource(h.store, { ...target, fromGatewayId: "shared-named-user" })).resolves.toBeUndefined();
     expect(h.writes).toEqual([]);
   });
 
   it.each([
-    ["unknown class", { gatewayClass: undefined }, "Builder"],
-    ["another Builder owner", { ownerUid: "u2" }, "ownership changed"],
-    ["another Builder slug", { builderSlug: "bob" }, "ownership changed"],
+    ["unknown class", { gatewayClass: undefined }, "isolated gateway"],
+    ["another user owner", { ownerUid: "u2" }, "ownership changed"],
+    ["another user slug", { builderSlug: "bob" }, "ownership changed"],
     ["GCE VM", { runtime: "gce-vm" }, "GCE VM transport is not available"],
   ])("refuses %s before mutation", async (_name, changes, error) => {
     const h = harness();
@@ -53,7 +53,7 @@ describe("Fleet force migration request", () => {
     expect(await readForceMigrationPlan(h.store, target)).toMatchObject({ sourceEpoch: 75, attempts: 0 });
   });
 
-  it("permits observation under only its exact runtime fence and retains customer custody checks", async () => {
+  it("permits observation under only its exact runtime fence and retains user custody checks", async () => {
     const h = harness();
     const request = { auditId: "audit-force", uid: "u1", sourceGatewayId: "builder-a", targetGatewayId: "shared-b", sourceEpoch: 75 };
     const fence = { auditId: "audit-force", gatewayId: "builder-a", attemptId: "attempt-1", phase: "dispatched" };
@@ -99,8 +99,8 @@ describe("Fleet force migration request", () => {
     ["accepted transfer", (h: ReturnType<typeof harness>) => { h.op().sourceTransferExecution = { status: "dispatched" }; }],
     ["cancellation", (h: ReturnType<typeof harness>) => { h.op().cancellationRequestedAt = 500; }],
     ["advanced V2 custody", (h: ReturnType<typeof harness>) => { h.op().customerMigrationV2 = { phase: "sourceQuiesced" }; }],
-    ["customer restore fence", (h: ReturnType<typeof harness>) => { h.docs.get("users/u1")!.provisioning.openclaw.restoreFence = {}; }],
-    ["customer transfer fence", (h: ReturnType<typeof harness>) => { h.docs.get("users/u1")!.provisioning.openclaw.sourceTransferFence = {}; }],
+    ["user restore fence", (h: ReturnType<typeof harness>) => { h.docs.get("users/u1")!.provisioning.openclaw.restoreFence = {}; }],
+    ["user transfer fence", (h: ReturnType<typeof harness>) => { h.docs.get("users/u1")!.provisioning.openclaw.sourceTransferFence = {}; }],
     ["source restart fence", (h: ReturnType<typeof harness>) => { h.docs.get("gateways/builder-a")!.runtimeRestartFence = {}; }],
     ["target restart fence", (h: ReturnType<typeof harness>) => { h.docs.get("gateways/shared-b")!.runtimeRestartFence = {}; }],
     ["retirement", (h: ReturnType<typeof harness>) => { h.docs.get("gateways/builder-a")!.retirementClaim = {}; }],

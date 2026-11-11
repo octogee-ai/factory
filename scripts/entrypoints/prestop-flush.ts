@@ -1,8 +1,8 @@
 import "../lib/octogee-entitlements.js";
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("prestop-flush");
-import { flushCustomerFiles, flushAllCustomerFiles } from "../lib/customer-file-state.js";
-import { persistBuilderProjects, persistSharedCustomerFiles } from "../lib/project-persistence.js";
+import { flushUserFiles, flushAllUserFiles } from "../lib/user-file-state.js";
+import { persistUserProjects, persistSharedUserFiles } from "../lib/project-persistence.js";
 import { blobSyncAllWithOptions, blobSyncForSlug } from "../lib/blob-sync.js";
 import {
   GATEWAY_CLASS,
@@ -15,19 +15,19 @@ import {
 } from "../lib/fleet-broker-client.js";
 import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
 import {
-  listLocalCustomerPubKeys,
-  listOnDiskCustomerSlugs,
-  readLocalCustomerPubKey,
-  type LocalCustomerPubKey,
+  listLocalUserPubKeys,
+  listOnDiskUserSlugs,
+  readLocalUserPubKey,
+  type LocalUserPubKey,
 } from "../lib/git.js";
-import { quiesceCustomerSessions } from "../lib/customer-session-quiesce.js";
+import { quiesceUserSessions } from "../lib/user-session-quiesce.js";
 import { brokeredGitHost, type BrokeredGitHost } from "../lib/gitea-admin-broker-client.js";
 import {
   checkpointDurableSystemConfigForSlug,
   syncSystemConfigForSlug,
 } from "../lib/system-config.js";
 import { pathToFileURL } from "node:url";
-import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
+import { userClaimSlug } from "@octogee/shared/server/user-claim";
 
 export interface PreStopFlushConfig {
   builderSlug: string;
@@ -40,15 +40,15 @@ export const PRESTOP_SESSION_QUIESCE_TIMEOUT_MS = 5_000;
 export function createPreStopSessionQuiesce(
   builderSlug: string,
   deps: {
-    listCustomerSlugs: () => string[];
-    quiesce: typeof quiesceCustomerSessions;
+    listUserSlugs: () => string[];
+    quiesce: typeof quiesceUserSessions;
   } = {
-    listCustomerSlugs: listOnDiskCustomerSlugs,
-    quiesce: quiesceCustomerSessions,
+    listUserSlugs: listOnDiskUserSlugs,
+    quiesce: quiesceUserSessions,
   },
 ): () => Promise<void> {
   return async () => {
-    const slugs = builderSlug ? [builderSlug] : deps.listCustomerSlugs();
+    const slugs = builderSlug ? [builderSlug] : deps.listUserSlugs();
     const failures = (await Promise.all(slugs.map(async (slug) => {
       try {
         const result = await deps.quiesce(slug, {
@@ -77,7 +77,7 @@ export function resolvePreStopFlushConfig(
   return {
     gatewayId: rawGatewayId === "local" ? "default" : rawGatewayId,
     gatewayClass: runtime.gatewayClass ?? "",
-    builderSlug: builderClaimSlug(env) ?? "",
+    builderSlug: userClaimSlug(env) ?? "",
   };
 }
 
@@ -96,21 +96,21 @@ export function createPreStopSystemConfigFlush(
 export function createPreStopGiteaKeyRelease(
   builderSlug: string,
   deps: {
-    readLocalCustomerPubKey: typeof readLocalCustomerPubKey;
-    listLocalCustomerPubKeys?: () => LocalCustomerPubKey[];
+    readLocalUserPubKey: typeof readLocalUserPubKey;
+    listLocalUserPubKeys?: () => LocalUserPubKey[];
     releaseKey: BrokeredGitHost["releaseKey"];
-  } = { readLocalCustomerPubKey, listLocalCustomerPubKeys, releaseKey: brokeredGitHost.releaseKey },
+  } = { readLocalUserPubKey, listLocalUserPubKeys, releaseKey: brokeredGitHost.releaseKey },
 ): () => Promise<void> {
   return async () => {
-    let keys: LocalCustomerPubKey[];
+    let keys: LocalUserPubKey[];
     if (builderSlug) {
-      const pubKey = deps.readLocalCustomerPubKey(builderSlug);
+      const pubKey = deps.readLocalUserPubKey(builderSlug);
       if (pubKey === null) {
         throw new Error(`[prestop-flush] local SSH public key is missing for ${builderSlug}`);
       }
       keys = [{ slug: builderSlug, pubKey }];
     } else {
-      keys = (deps.listLocalCustomerPubKeys ?? listLocalCustomerPubKeys)();
+      keys = (deps.listLocalUserPubKeys ?? listLocalUserPubKeys)();
     }
     const failures: string[] = [];
     for (const key of keys) {
@@ -145,11 +145,11 @@ async function main(): Promise<void> {
     gatewayClass,
     quiesceSessions: createPreStopSessionQuiesce(builderSlug),
     flushFiles: builderSlug
-      ? () => flushCustomerFiles(builderSlug, { persistProjects: gatewayClass === "builder" ? persistBuilderProjects : undefined })
-      : async () => flushAllCustomerFiles({
+      ? () => flushUserFiles(builderSlug, { persistProjects: gatewayClass === "builder" ? persistUserProjects : undefined })
+      : async () => flushAllUserFiles({
         ...(gatewayClass === "shared" ? {
-          slugs: (await brokerClient.assignedUsers({ completeOnly: true })).map(customer => customer.slug),
-          persistProjects: persistSharedCustomerFiles,
+          slugs: (await brokerClient.assignedUsers({ completeOnly: true })).map(user => user.slug),
+          persistProjects: persistSharedUserFiles,
         } : {}),
       }),
     syncBlobs: builderSlug

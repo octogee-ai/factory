@@ -81,8 +81,8 @@ async function authorize(req: Request, res: Response, deps: WorkspaceGitAuthoriz
     res.status(401).json({ error: "Unauthenticated" });
     return;
   }
-  const assigned = await deps.store.builders.records.listByGateway(body.gatewayId);
-  if (!assigned.some((builder) => builder.slug === body.slug)) {
+  const assigned = await deps.store.users.records.listByGateway(body.gatewayId);
+  if (!assigned.some((user) => user.slug === body.slug)) {
     res.status(404).json(NOT_FOUND);
     return;
   }

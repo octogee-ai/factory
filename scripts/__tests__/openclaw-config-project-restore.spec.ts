@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { projectsNeedingClone, type ProjectRestoreInput } from "../lib/openclaw-config-builders.js";
+import { projectsNeedingClone, type ProjectRestoreInput } from "../lib/openclaw-config-users.js";
 
 const never = (_: string, __: string) => false;
 const always = (_: string, __: string) => true;
@@ -8,7 +8,7 @@ function input(
   overrides: Partial<ProjectRestoreInput> = {},
 ): ProjectRestoreInput {
   return {
-    customerSlug: "alice",
+    userSlug: "alice",
     projectSlug: "mygame",
     giteaRepoName: "alice-proj-mygame",
     provisioningState: "active",
@@ -57,7 +57,7 @@ describe("projectsNeedingClone", () => {
     expect(out).toHaveLength(1);
   });
 
-  it("picks per-project based on the fs check — mixed result across one customer", () => {
+  it("picks per-project based on the fs check — mixed result across one user", () => {
     const onDisk = new Set(["alice/mygame"]);
     const isCloned = (slug: string, proj: string) => onDisk.has(`${slug}/${proj}`);
     const out = projectsNeedingClone(

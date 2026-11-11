@@ -4,12 +4,12 @@ export interface FleetGateway {
   gatewayId: string;
 }
 
-// Ingress spec.rules[].http.paths[] shape. Cowboy is the sole writer of the
+// Ingress spec.rules[].http.paths[] shape. The fleet controller is the sole writer of the
 // octogee-edge-ingress .spec.rules (an atomic server-side-apply field): it
 // reads the static base routes the umbrella chart publishes via the
 // octogee-edge-routes ConfigMap and applies them under its own field manager.
 // Helm owns the Ingress object + metadata but never .spec.rules, so the
-// umbrella deploy and Cowboy no longer fight over ownership.
+// umbrella deploy and the fleet controller no longer fight over ownership.
 export interface IngressBackendPort {
   number?: number;
   name?: string;

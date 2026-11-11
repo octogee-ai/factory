@@ -4,7 +4,7 @@ import {
   parseOctogeeConfigArgs,
   runOctogeeConfig,
 } from "../entrypoints/octogee-config.js";
-import { withBuilderClaim } from "./helpers/builder-claim.js";
+import { withUserClaim } from "./helpers/user-claim.js";
 
 describe("octogee config CLI", () => {
   it("prints only redacted durable status fields", async () => {
@@ -31,18 +31,18 @@ describe("octogee config CLI", () => {
   });
 
   it("parses dry-run-first adoption and exact hash approval", () => {
-    expect(parseOctogeeConfigArgs(["config", "adopt", "--from", "/tmp/bender.json"])).toEqual({
+    expect(parseOctogeeConfigArgs(["config", "adopt", "--from", "/tmp/walter.json"])).toEqual({
       command: "adopt",
-      sourcePath: "/tmp/bender.json",
+      sourcePath: "/tmp/walter.json",
     });
     expect(parseOctogeeConfigArgs([
       "config",
       "adopt",
-      "--from=/tmp/bender.json",
+      "--from=/tmp/walter.json",
       `--approve-hash=sha256:${"a".repeat(64)}`,
     ])).toEqual({
       command: "adopt",
-      sourcePath: "/tmp/bender.json",
+      sourcePath: "/tmp/walter.json",
       approveHash: `sha256:${"a".repeat(64)}`,
     });
   });
@@ -55,8 +55,8 @@ describe("octogee config CLI", () => {
       changedPaths: ["channels.mattermost.accounts.ceckert-coach.botToken"],
     }));
 
-    const env = withBuilderClaim({}, "ceckert");
-    await runOctogeeConfig(["config", "adopt", "--from=/tmp/bender.json"], {
+    const env = withUserClaim({}, "ceckert");
+    await runOctogeeConfig(["config", "adopt", "--from=/tmp/walter.json"], {
       env,
       readStatus: vi.fn(),
       write: (line) => lines.push(line),
@@ -65,20 +65,20 @@ describe("octogee config CLI", () => {
 
     expect(lines.join("\n")).toContain("adoption: preview");
     expect(lines.join("\n")).toContain("channels.mattermost.accounts.ceckert-coach.botToken");
-    expect(lines.join("\n")).not.toContain("bender-live-pat");
+    expect(lines.join("\n")).not.toContain("walter-live-pat");
     expect(adopt).toHaveBeenCalledWith(expect.objectContaining({
       slug: "ceckert",
-      sourcePath: "/tmp/bender.json",
+      sourcePath: "/tmp/walter.json",
       openclawDir: env.OPENCLAW_DIR,
     }));
   });
 
-  it("rejects adoption without an isolated builder slug", async () => {
-    await expect(runOctogeeConfig(["config", "adopt", "--from=/tmp/bender.json"], {
+  it("rejects adoption without an isolated user slug", async () => {
+    await expect(runOctogeeConfig(["config", "adopt", "--from=/tmp/walter.json"], {
       env: { OPENCLAW_DIR: "/durable" },
       readStatus: vi.fn(),
       write: vi.fn(),
       adopt: vi.fn(),
-    })).rejects.toThrow("Builder claim");
+    })).rejects.toThrow("user claim");
   });
 });

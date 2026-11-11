@@ -24,14 +24,14 @@ import {
   readGatewayRuntimeHeartbeat,
   type GatewayStateReader,
 } from "@octogee/core/gateway-live-release";
-import { firestoreBuilderAccountReader } from "@octogee/core/builder-account";
+import { firestoreUserAccountReader } from "@octogee/core/user-account";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import {
   runNormalFleetMutation,
   type NormalFleetMutationInput,
 } from "@octogee/core/normal-fleet-mutation";
 import {
-  type BuilderRecord,
+  type PlatformUserRecord,
   type PlatformStateStore,
   type Stored,
 } from "@octogee/core/platform-state";
@@ -53,7 +53,7 @@ import {
 } from "../lib/admin-fleet-client.js";
 
 import { runDesktopImagePublication } from "../lib/desktop-image-publication.js";
-import { addCustomerAssignmentRefusal, commitAddCustomerPlacement } from "../lib/fleet-add-customer.js";
+import { addUserAssignmentRefusal, commitAddUserPlacement } from "../lib/fleet-place-user.js";
 import { runFleetLogsCommand } from "../lib/fleet-logs-command.js";
 import { requireOperatorEmail } from "../lib/operator-email.js";
 import { resolveForcedGatewayRestart } from "./fleet-resolve-forced-restart.js";
@@ -111,7 +111,7 @@ interface VerbHelp {
 const VERBS: readonly VerbHelp[] = [
   {
     verb: "ls gateways",
-    summary: "List gateways with pod status + customer count.",
+    summary: "List gateways with pod status + user count.",
     args: "",
     description:
       "Joins Firestore `gateways/*` with `kubectl get pods -l app=octogee-gateway`. Surfaces stuck pods + heartbeat age that are otherwise invisible without dropping into kubectl directly.",
@@ -120,7 +120,7 @@ const VERBS: readonly VerbHelp[] = [
   },
   {
     verb: "ls customers",
-    summary: "List customers; optionally filter by gateway. Reports drift in both directions.",
+    summary: "List users; optionally filter by gateway. Reports drift in both directions.",
     args: "[--gateway=<gw-id>]",
     description:
       "MISSING = Firestore says assigned, gateway doesn't claim mounted.\nORPHANS = mounted on a gateway but not assigned in Firestore (separate table at the bottom).",
@@ -132,7 +132,7 @@ const VERBS: readonly VerbHelp[] = [
   },
   {
     verb: "inspect customer",
-    summary: "Full diagnostic for one customer.",
+    summary: "Full diagnostic for one user.",
     args: "<slug>",
     description:
       "Shows user state, gateway state focused on this slug, drift verdict, and gateways/{id}.lastError when it names this slug. The verb-shaped version of the ad-hoc fix-ceckert.ts triage script.",
@@ -150,19 +150,19 @@ const VERBS: readonly VerbHelp[] = [
   },
   {
     verb: "release status",
-    summary: "Show Cowboy's one-shot release convergence view.",
+    summary: "Show the fleet controller's one-shot release convergence view.",
     args: "",
     description:
-      "Reads Firestore desired roots, selected immutable release payloads, and Cowboy runtime observations once. Reports desired/live/runtime release state and heartbeat status/version; it never waits for convergence or changes fleet state.",
+      "Reads Firestore desired roots, selected immutable release payloads, and the fleet controller runtime observations once. Reports desired/live/runtime release state and heartbeat status/version; it never waits for convergence or changes fleet state.",
     examples: ["fleet --env=test release status"],
     writes: false,
   },
   {
     verb: "logs",
-    summary: "Tail Shared (GKE) and Builder (GCE VM) gateway logs together, live.",
+    summary: "Tail shared (GKE) and isolated (GCE VM) gateway logs together, live.",
     args: "[--level=<level>] [--service=<names>] [--builder=<slugs>] [--migration=<id>] [options]",
     description:
-      "Streams Cloud Logging from GKE and Builder VMs using your gcloud credentials.\n--level=<level> Minimum severity (default info); --level-exact=<levels> selects exact levels.\n--service=<names> and --builder=<slugs> accept comma lists (OR within a list, AND between filters).\nServices: api, cowboy, gateway, gateway-edge, provisioner, mattermost, gitea, nginx, or emitted service name.\nBuilder filtering matches structured builderSlug or explicit dedicated VM labels; untagged events are excluded.\n--gateway=<id> / --container=<name> narrow the Cloud Logging query.\n--migration=<id> keeps only lines mentioning that operation id: Cowboy tags every migrate-customer and surge-handoff line with op=<id>, and gateway-side migration ids embed it.\n--no-follow reads recent history; --since=10m and --limit=1000 control the fetched records, before local filters.\n--format=pretty|json (JSON Lines); --timestamps=short|full; --color=auto|always|never.\n--buffer-window=2s sets live arrival ordering (0s–60s). DEFAULT entries remain visible at info.\nLive tail requires gcloud alpha and its gRPC prerequisites: https://cloud.google.com/logging/docs/reference/tools/gcloud-logging#live-tailing",
+      "Streams Cloud Logging from GKE and isolated gateway VMs using your gcloud credentials.\n--level=<level> Minimum severity (default info); --level-exact=<levels> selects exact levels.\n--service=<names> and --builder=<slugs> accept comma lists (OR within a list, AND between filters).\nServices: api, cowboy, gateway, gateway-edge, provisioner, mattermost, gitea, nginx, or emitted service name.\nUser filtering matches structured builderSlug or explicit dedicated VM labels; untagged events are excluded.\n--gateway=<id> / --container=<name> narrow the Cloud Logging query.\n--migration=<id> keeps only lines mentioning that operation id: the fleet controller tags every migrate-customer and surge-handoff line with op=<id>, and gateway-side migration ids embed it.\n--no-follow reads recent history; --since=10m and --limit=1000 control the fetched records, before local filters.\n--format=pretty|json (JSON Lines); --timestamps=short|full; --color=auto|always|never.\n--buffer-window=2s sets live arrival ordering (0s–60s). DEFAULT entries remain visible at info.\nLive tail requires gcloud alpha and its gRPC prerequisites: https://cloud.google.com/logging/docs/reference/tools/gcloud-logging#live-tailing",
     examples: [
       "fleet --env=prod logs",
       "fleet --env=prod logs --gateway=shared-0",
@@ -207,7 +207,7 @@ const VERBS: readonly VerbHelp[] = [
     verb: "desktop-image publish",
     summary: "Publish the tested desktop image from an immutable build manifest.",
     args: "--sha=<full-main-sha> [--apply]",
-    description: "Deploy platform build runs this for its SHA; use it directly for a desktop-only rollback or retry. Dry-run by default. A no-op when the family already serves that image; otherwise copies the tested image when needed and journals publication. Computers pick up the new image on their next boot.",
+    description: "Deploy platform build runs this for its SHA; use it directly for a desktop-only rollback or retry. Dry-run by default. A no-op when the family already serves that image; otherwise copies the tested image when needed and journals publication. VMs pick up the new image on their next boot.",
     examples: ["fleet --env=test desktop-image publish --sha=0123456789abcdef0123456789abcdef01234567 --apply"],
     writes: true,
   },
@@ -216,7 +216,7 @@ const VERBS: readonly VerbHelp[] = [
     summary: "Deploy an existing immutable build to one gateway.",
     args: "<gw-id> --sha=<full-main-sha> [--idempotency-key=<key>] [--apply]",
     description:
-      "Selects the build's immutable digest manifest and asks Cowboy to converge only the named gateway. Building and deployment are independent. Dry-run by default; pass --apply to send the instruction.",
+      "Selects the build's immutable digest manifest and asks the fleet controller to converge only the named gateway. Building and deployment are independent. Dry-run by default; pass --apply to send the instruction.",
     examples: [
       "fleet --env=test gw deploy canary --sha=0123456789abcdef0123456789abcdef01234567",
       "fleet --env=test gw deploy canary --sha=0123456789abcdef0123456789abcdef01234567 --apply",
@@ -227,7 +227,7 @@ const VERBS: readonly VerbHelp[] = [
     verb: "gw recover-source",
     summary: "Repair a Shared source after database export failures while retaining its pod storage.",
     args: "<gw-id> --sha=<full-main-sha> [--supersede-recovery=<failed-recovery-id>] [--idempotency-key=<key>] [--apply]",
-    description: "Journals a Cowboy recovery using an immutable build. The API verifies current assignments and failed exports; Cowboy updates the existing pod images and requires Doctor to repair the affected stores before completion. Briefly interrupts the pod's tenants. Dry-run by default.",
+    description: "Journals a fleet controller recovery using an immutable build. The API verifies current assignments and failed exports; the fleet controller updates the existing pod images and requires Doctor to repair the affected stores before completion. Briefly interrupts the pod's tenants. Dry-run by default.",
     examples: ["fleet --env=test gw recover-source shared-example --sha=0123456789abcdef0123456789abcdef01234567 --apply"],
     writes: true,
   },
@@ -235,7 +235,7 @@ const VERBS: readonly VerbHelp[] = [
     verb: "gw recover-restore",
     summary: "Upgrade a fenced Shared restore target without replacing its pod storage.",
     args: "<gw-id> --sha=<full-main-sha> --operation=<return-operation-id> [--reauthorize-attempt=<retained-attempt-id>] [--supersede-recovery=<failed-recovery-id>] [--idempotency-key=<key>] [--apply]",
-    description: "Journals a Cowboy recovery that changes only the images of the exact existing Shared pod. Requires a paired pending return fence; never clears customer state or changes release policy. An explicit failed predecessor can transfer its retained runtime fence to this new recovery when the paired restore attempt is reauthorized. Briefly interrupts the pod's tenants. Dry-run by default.",
+    description: "Journals a fleet controller recovery that changes only the images of the exact existing Shared pod. Requires a paired pending return fence; never clears user state or changes release policy. An explicit failed predecessor can transfer its retained runtime fence to this new recovery when the paired restore attempt is reauthorized. Briefly interrupts the pod's tenants. Dry-run by default.",
     examples: ["fleet --env=test gw recover-restore shared-example --sha=0123456789abcdef0123456789abcdef01234567 --operation=return-example --apply"],
     writes: true,
   },
@@ -259,10 +259,10 @@ const VERBS: readonly VerbHelp[] = [
   },
   {
     verb: "gw replace-computer",
-    summary: "Replace a VM gateway's computer with a fresh one from the current image family.",
+    summary: "Replace the VM behind a VM gateway with a fresh one from the current image family.",
     args: "<gw-id> | --owner-uid=<uid> [--force --accept-boot-data-loss] [--idempotency-key=<key>] [--apply]",
     description:
-      "Uses the gateway or parked-owner computer replacement API. The owner form normally requires a fresh checkpoint and recovery proof. Break-glass --force --accept-boot-data-loss may delete unpublished project work and other boot-disk data; the exact home is retained. Stopped-computer and ownership checks still apply. Dry-run by default; pass --apply to send the request.",
+      "Uses the gateway or parked-owner VM replacement API. The owner form normally requires a fresh checkpoint and recovery proof. Break-glass --force --accept-boot-data-loss may delete unpublished project work and other boot-disk data; the exact home is retained. Stopped-VM and ownership checks still apply. Dry-run by default; pass --apply to send the request.",
     examples: [
       "fleet --env=test gw replace-computer ceckert-test-s-19a28b9e",
       "fleet --env=test gw replace-computer ceckert-test-s-19a28b9e --apply",
@@ -273,10 +273,10 @@ const VERBS: readonly VerbHelp[] = [
   },
   {
     verb: "gw restart",
-    summary: "Restart through the Admin API, or force-delete an exact Builder pod.",
+    summary: "Restart through the Admin API, or force-delete an exact isolated pod.",
     args: "<gw-id> [--force | --resolve-force=<audit-id>] [--idempotency-key=<key>] [--apply]",
     description:
-      "Normally uses POST /api/admin/gateways/:id/restart so the operations journal matches the Admin UI. --force requires an authoritative Builder gateway; Shared gateways are rejected. With --force --apply, it journals a break-glass operation, selects exactly one fresh gateway pod, verifies its UID again, and deletes only that pod without waiting; Cowboy keeps reconciling the gateway throughout, so the deployment recreates the pod on its own. --resolve-force=<completed-audit-id> observes that exact replacement and journals resolution of its matching failed process restart fence, without restarting. Requires unchanged release images, native health and no active custody. Dry-run by default.",
+      "Normally uses POST /api/admin/gateways/:id/restart so the operations journal matches the Admin UI. --force requires an authoritative isolated gateway; Shared gateways are rejected. With --force --apply, it journals a break-glass operation, selects exactly one fresh gateway pod, verifies its UID again, and deletes only that pod without waiting; the fleet controller keeps reconciling the gateway throughout, so the deployment recreates the pod on its own. --resolve-force=<completed-audit-id> observes that exact replacement and journals resolution of its matching failed process restart fence, without restarting. Requires unchanged release images, native health and no active custody. Dry-run by default.",
     examples: [
       "fleet --env=test gw restart canary",
       "fleet --env=test gw restart canary --apply",
@@ -287,10 +287,10 @@ const VERBS: readonly VerbHelp[] = [
   },
   {
     verb: "add-customer",
-    summary: "Override placement: assign customer to a specific gateway.",
+    summary: "Override placement: assign user to a specific gateway.",
     args: "<slug> --to=<gw-id> [--apply]",
     description:
-      "Writes `users/{uid}.provisioning.openclaw.gatewayId` and the mirrored `gatewayProfile` to place an unassigned Builder (canary placement, repair). Refuses if the gateway doesn't exist or is `unreachable`, and refuses a Builder whose serving assignment lives on another gateway: move those with `migrate-customer`.\n\nDry-run by default. Pass `--apply` to commit.",
+      "Writes `users/{uid}.provisioning.openclaw.gatewayId` and the mirrored `gatewayProfile` to place an unassigned user (canary placement, repair). Refuses if the gateway doesn't exist or is `unreachable`, and refuses a user whose serving assignment lives on another gateway: move those with `migrate-customer`.\n\nDry-run by default. Pass `--apply` to commit.",
     examples: [
       "fleet --env=prod add-customer ceckert --to=canary",
       "fleet --env=prod add-customer ceckert --to=canary --apply",
@@ -299,10 +299,10 @@ const VERBS: readonly VerbHelp[] = [
   },
   {
     verb: "migrate-customer",
-    summary: "Move a customer between gateways through a journaled migration.",
+    summary: "Move a user between gateways through a journaled migration.",
     args: "<slug> --to=<gw-id> [--source-transfer=retained-pod | --force --operation=<existing-operation-id>] [--apply]",
     description:
-      "Plans (or executes with --apply) a journaled migration: prepare target → quiesce source → transfer and verify state → commit placement → release source. Before final transfer, the controller can safely abort; once schema upgrades may begin it recovers forward using the same handoff.\n\nDry-run by default — pass --apply to execute. Ordinary migrations run server-side in glm-controller; the CLI enqueues the operation and streams its reported steps. Forced recovery runs the native restart from Fleet, then Cowboy continues the same migration. --source-transfer=retained-pod explicitly selects the bounded transfer helper on a retained Shared pod; ambiguous target preparation or helper execution keeps the durable safety fence until its outcome is proven. --force requires the exact existing pending drain operation. It recovers the source gateway on that same operation, preserving disk and migration history. Repeating the same forced command observes an accepted restart without dispatching it again. Force recovery is restricted to the assigned customer’s dedicated Builder gateway on Kubernetes; Shared sources are always rejected and GCE VM transport is not available. Native acknowledgement and target verification remain required.",
+      "Plans (or executes with --apply) a journaled migration: prepare target → quiesce source → transfer and verify state → commit placement → release source. Before final transfer, the controller can safely abort; once schema upgrades may begin it recovers forward using the same handoff.\n\nDry-run by default — pass --apply to execute. Ordinary migrations run server-side in glm-controller; the CLI enqueues the operation and streams its reported steps. Forced recovery runs the native restart from Fleet, then the fleet controller continues the same migration. --source-transfer=retained-pod explicitly selects the bounded transfer helper on a retained Shared pod; ambiguous target preparation or helper execution keeps the durable safety fence until its outcome is proven. --force requires the exact existing pending drain operation. It recovers the source gateway on that same operation, preserving disk and migration history. Repeating the same forced command observes an accepted restart without dispatching it again. Force recovery is restricted to the assigned user’s dedicated isolated gateway on Kubernetes; Shared sources are always rejected and GCE VM transport is not available. Native acknowledgement and target verification remain required.",
     examples: [
       "fleet --env=test migrate-customer ceckert --to=canary",
       "fleet --env=test migrate-customer ceckert --to=canary --apply",
@@ -908,7 +908,7 @@ async function assertForcedGatewayRestartDeleteFence(
       tx.gateways.roots.get(gatewayId),
       tx.journal.audits.get(claim.auditId),
     ]);
-    assertBuilderForceRestart(gateway);
+    assertUserForceRestart(gateway);
     const durableGateway = gateway === null ? null : projectGatewayDesiredRootForGateway(withoutRevision(gateway), gatewayId);
     if (!durableGateway) {
       throw new Error(`gateway ${gatewayId} has no valid durable root configuration`);
@@ -937,9 +937,9 @@ function withoutRevision<T extends { readonly revision: unknown }>(record: T): O
   return rest;
 }
 
-function assertBuilderForceRestart(root: { readonly gatewayClass?: unknown } | null): void {
+function assertUserForceRestart(root: { readonly gatewayClass?: unknown } | null): void {
   if (root?.gatewayClass !== "builder") {
-    throw new Error("Shared gateways cannot be force restarted; a dedicated Builder gateway is required");
+    throw new Error("Shared gateways cannot be force restarted; a dedicated isolated gateway is required");
   }
 }
 
@@ -957,7 +957,7 @@ function forceRestartKubectlArgs(input: {
 export async function runForcedGatewayRestart(
   input: ForcedGatewayRestartInput,
 ): Promise<{ auditId: string; podName: string; podUid: string }> {
-  assertBuilderForceRestart(await input.store.gateways.roots.get(input.gatewayId));
+  assertUserForceRestart(await input.store.gateways.roots.get(input.gatewayId));
   const runKubectl = input.runKubectl ?? localFleetKubectl;
   const runMutation: ForcedGatewayRestartMutationRunner = input.runMutation ??
     ((mutation) => runNormalFleetMutation(input.store, mutation));
@@ -1133,7 +1133,7 @@ function fleetOperatorUid(): Promise<string> {
   resolvedOperatorUid ??= resolveFleetOperatorUid(process.env, {
     getUser: (uid) => getAuth().getUser(uid),
     getUserByEmail: (email) => getAuth().getUserByEmail(email),
-    readRole: async (uid) => (await platformState.builders.records.get(uid))?.role ?? null,
+    readRole: async (uid) => (await platformState.users.records.get(uid))?.role ?? null,
   });
   return resolvedOperatorUid;
 }
@@ -1293,8 +1293,8 @@ function table(rows: Array<Record<string, string | number>>): string {
   return [header, sep, ...body].join("\n");
 }
 
-async function findBuilderBySlug(slug: string): Promise<Stored<BuilderRecord> | null> {
-  return platformState.builders.records.findBySlug(slug);
+async function findUserBySlug(slug: string): Promise<Stored<PlatformUserRecord> | null> {
+  return platformState.users.records.findBySlug(slug);
 }
 
 export function retirementFinished(entry: FleetGatewayRuntimeEntry, podNames: readonly string[]): boolean {
@@ -1344,7 +1344,7 @@ async function lsGateways(): Promise<void> {
   }
 }
 
-async function lsCustomers(): Promise<void> {
+async function lsUsers(): Promise<void> {
   const filter = typeof args.flags.gateway === "string" ? args.flags.gateway : null;
   const gateways = await listFleetGatewayRuntimes(platformState);
   const gwMounted: Record<string, Set<string>> = {};
@@ -1354,16 +1354,16 @@ async function lsCustomers(): Promise<void> {
     }
   }
 
-  const builders = filter
-    ? await platformState.builders.records.listByGateway(filter)
-    : await platformState.builders.records.listAll();
-  const accounts = await firestoreBuilderAccountReader(db).getMany(builders.map((builder) => builder.uid));
+  const userRecords = filter
+    ? await platformState.users.records.listByGateway(filter)
+    : await platformState.users.records.listAll();
+  const accounts = await firestoreUserAccountReader(db).getMany(userRecords.map((userRecord) => userRecord.uid));
 
-  const rows = builders
-    .map((builder) => {
-      const slug = builder.slug ?? "?";
-      const gw = builder.gateway?.gatewayId ?? "-";
-      const status = builder.openclaw.status ?? "-";
+  const rows = userRecords
+    .map((userRecord) => {
+      const slug = userRecord.slug ?? "?";
+      const gw = userRecord.gateway?.gatewayId ?? "-";
+      const status = userRecord.openclaw.status ?? "-";
       const onGateway = gw !== "-" && gwMounted[gw]?.has(slug);
       const drift =
         gw !== "-" && status === "complete"
@@ -1373,7 +1373,7 @@ async function lsCustomers(): Promise<void> {
           : "-";
       return {
         slug,
-        username: accounts.get(builder.uid)?.username ?? "-",
+        username: accounts.get(userRecord.uid)?.username ?? "-",
         gatewayId: gw,
         status,
         drift,
@@ -1388,9 +1388,9 @@ async function lsCustomers(): Promise<void> {
   for (const [gwId, mountedSet] of Object.entries(gwMounted)) {
     if (filter && gwId !== filter) continue;
     if (mountedSet.size === 0) continue;
-    const assigned = await platformState.builders.records.listByGateway(gwId);
+    const assigned = await platformState.users.records.listByGateway(gwId);
     const assignedSlugs = new Set(
-      assigned.map((builder) => builder.slug).filter((s): s is string => s !== null),
+      assigned.map((userRecord) => userRecord.slug).filter((s): s is string => s !== null),
     );
     for (const slug of mountedSet) {
       if (!assignedSlugs.has(slug)) {
@@ -1404,13 +1404,13 @@ async function lsCustomers(): Promise<void> {
   }
 }
 
-async function inspectCustomer(slug: string): Promise<void> {
-  const user = await findBuilderBySlug(slug);
+async function inspectUser(slug: string): Promise<void> {
+  const user = await findUserBySlug(slug);
   if (!user) {
     console.error(red(`${CROSS} No user found with slug '${slug}'.`));
     process.exit(1);
   }
-  const account = await firestoreBuilderAccountReader(db).get(user.uid);
+  const account = await firestoreUserAccountReader(db).get(user.uid);
   const gatewayId = user.gateway?.gatewayId;
   const openclawStatus = user.openclaw.status;
   console.log(bold(`USER ${slug}`) + dim(`  uid=${user.uid}`));
@@ -1541,7 +1541,7 @@ async function runFleetGatewayRestart(): Promise<void> {
     return;
   }
   if (!restart.force) return runFleetGatewayMutation(restart.apply);
-  assertBuilderForceRestart(await platformState.gateways.roots.get(restart.gatewayId));
+  assertUserForceRestart(await platformState.gateways.roots.get(restart.gatewayId));
   console.log(bold(`GW FORCE RESTART ${restart.gatewayId.toUpperCase()}`));
   console.log(dim(`  delete exactly one pod selected by gateway-instance=${restart.gatewayId}`));
   if (!restart.apply) {
@@ -1591,13 +1591,13 @@ async function releaseStatus(): Promise<void> {
     ),
   );
   console.log(`Gateway release convergence: ${summary.status} — ${summary.converged}/${summary.serving} serving gateways at their own desired release; ${summary.excluded} paused/retired excluded.`);
-  console.log(dim("Platform workflow success is separate. This snapshot does not verify Builder migration completion or a fleet-wide SHA."));
+  console.log(dim("Platform workflow success is separate. This snapshot does not verify user migration completion or a fleet-wide SHA."));
   if (summary.blockers.length > 0) console.log(`Outstanding: ${summary.blockers.join("; ")}`);
   console.log(table(releaseStatusRows(status)));
 }
 
-async function addCustomer(slug: string, gatewayId: string, apply: boolean): Promise<void> {
-  const user = await findBuilderBySlug(slug);
+async function addUser(slug: string, gatewayId: string, apply: boolean): Promise<void> {
+  const user = await findUserBySlug(slug);
   if (!user) {
     console.error(red(`${CROSS} No user found with slug '${slug}'.`));
     process.exit(1);
@@ -1611,17 +1611,17 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
   const gatewayProfile = runtime.profile;
   if (runtime.desiredStatus !== "running") {
     console.error(red(`${CROSS} Gateway '${gatewayId}' is ${runtime.desiredStatus}, not running.`));
-    console.error(dim(`  Refusing to assign — the customer would not be mounted.`));
+    console.error(dim(`  Refusing to assign — the user would not be mounted.`));
     process.exit(1);
   }
   if (gw.status === "unreachable") {
     console.error(red(`${CROSS} Gateway '${gatewayId}' is in 'unreachable' status.`));
-    console.error(dim(`  Refusing to assign — the customer would never get mounted.`));
+    console.error(dim(`  Refusing to assign — the user would never get mounted.`));
     process.exit(1);
   }
   const assignments = await platformState.gateways.assignments.listForUid(user.uid);
   const current = user.gateway?.gatewayId ?? null;
-  const refusal = addCustomerAssignmentRefusal({
+  const refusal = addUserAssignmentRefusal({
     targetGatewayId: gatewayId,
     currentGatewayId: current,
     assignmentGatewayIds: assignments.map((assignment) => assignment.gatewayId),
@@ -1651,7 +1651,7 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
     return;
   }
 
-  const outcome = await commitAddCustomerPlacement(platformState, {
+  const outcome = await commitAddUserPlacement(platformState, {
     uid: user.uid,
     gatewayId,
     gatewayProfile,
@@ -1666,14 +1666,14 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
   console.log(dim(`  The ${gatewayId} reconcile loop mounts ${slug} within ~15s (desired−observed → ensure); watch gateways/${gatewayId}.mountedCustomers.`));
 }
 
-async function migrateCustomerPlan(
+async function migrateUserPlan(
   slug: string,
   toGatewayId: string,
   apply: boolean,
   sourceTransferMode?: "retained-pod",
   forceOperationId?: string,
 ): Promise<void> {
-  const user = await findBuilderBySlug(slug);
+  const user = await findUserBySlug(slug);
   if (!user) {
     console.error(red(`${CROSS} No user found with slug '${slug}'.`));
     process.exit(1);
@@ -1719,7 +1719,7 @@ async function migrateCustomerPlan(
     console.log(`  existing operation  ${plan.operationId}  source epoch ${plan.sourceEpoch}`);
     if (recovery.completed) console.log(dim("  Native restart already completed; observing the existing migration."));
     else if (recovery.owned) console.log(dim("  Native restart already reserved; observing its outcome without dispatching again."));
-    console.log(yellow("  Force recovery interrupts this dedicated Builder gateway. Disk, migration history, and native acknowledgement are preserved. Shared gateways are excluded; only Kubernetes Builder gateways are supported."));
+    console.log(yellow("  Force recovery interrupts this dedicated isolated gateway. Disk, migration history, and native acknowledgement are preserved. Shared gateways are excluded; only Kubernetes isolated gateways are supported."));
   }
 
   console.log("\n" + bold("FORWARD PLAN"));
@@ -1748,7 +1748,7 @@ export function resolveFleetMigrationForce(args: ParsedFleetArgs): string | unde
   }
   if (args.flags["source-transfer"] !== undefined) throw new Error("force migration cannot change source transfer mode");
   if (args.flags.apply !== undefined && args.flags.apply !== true) throw new Error("migrate-customer --apply must be a bare flag");
-  if (args.positional.length !== 2) throw new Error("migrate-customer requires exactly one customer slug");
+  if (args.positional.length !== 2) throw new Error("migrate-customer requires exactly one user slug");
   for (const flag of Object.keys(args.flags)) {
     if (!["to", "force", "operation", "apply"].includes(flag)) throw new Error(`force migration does not accept --${flag}`);
   }
@@ -1837,7 +1837,7 @@ async function executeMigration(
   console.error(
     dim(
       finalOp.rolledBack
-        ? `  Rollback was attempted. Source should still own the customer; verify with \`fleet --env=${args.env} inspect customer ${slug}\`.`
+        ? `  Rollback was attempted. Source should still own the user; verify with \`fleet --env=${args.env} inspect customer ${slug}\`.`
         : `  No rollback attempted (or post-unmount). Operator must intervene.`,
     ),
   );
@@ -1855,12 +1855,12 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     case "gw ls":
       return lsGateways();
     case "ls customers":
-      return lsCustomers();
+      return lsUsers();
     case "inspect customer":
       if (!args.positional[2]) {
         return missingArg("inspect customer");
       }
-      return inspectCustomer(args.positional[2]);
+      return inspectUser(args.positional[2]);
     case "inspect gateway":
       if (!args.positional[2]) {
         return missingArg("inspect gateway");
@@ -1892,7 +1892,7 @@ const to = typeof args.flags.to === "string" ? args.flags.to : undefined;
       if (!args.positional[1] || !to) {
         return missingArg("add-customer");
       }
-      return addCustomer(args.positional[1], to, apply);
+      return addUser(args.positional[1], to, apply);
     }
     case "migrate-customer": {
 const forceOperationId = resolveFleetMigrationForce(args);
@@ -1900,7 +1900,7 @@ const to = typeof args.flags.to === "string" ? args.flags.to : undefined;
       if (!args.positional[1] || !to) {
         return missingArg("migrate-customer");
       }
-      return migrateCustomerPlan(args.positional[1], to, apply, resolveFleetSourceTransferMode(args.flags["source-transfer"]), forceOperationId);
+      return migrateUserPlan(args.positional[1], to, apply, resolveFleetSourceTransferMode(args.flags["source-transfer"]), forceOperationId);
     }
   }
 

@@ -277,7 +277,7 @@ gatewayFleet:
   networkPolicy:
     enabled: true
   # Platform-owned TokenReview capability for dynamic gateway KSAs.
-  # Per-gateway releases are installed by Cowboy and intentionally remain
+  # Per-gateway releases are installed by the fleet controller and intentionally remain
   # namespace-scoped; this umbrella binding is cluster-scoped but grants only
   # authentication.k8s.io/tokenreviews.create to service accounts in the
   # release namespace.
@@ -294,8 +294,8 @@ gatewayFleet:
       enabled: false
       policyName: ""
 
-# Warm-node placeholder for disposable Builder gateway pods. Requests mirror
-# the Builder "s" tier pod (gateway + gateway-edge containers); 0 disables.
+# Warm-node placeholder for disposable isolated gateway pods. Requests mirror
+# the user "s" tier pod (gateway + gateway-edge containers); 0 disables.
 builderBalloon:
   replicas: 0
   priority: -10
@@ -318,7 +318,7 @@ projectRunner:
 
 # ── llm-broker ───────────────────────────────────────────────────────────────
 # Dedicated cluster service that holds the real platform model key
-# and accepts only per-gateway broker tokens from exec-capable builder pods.
+# and accepts only per-gateway broker tokens from exec-capable isolated pods.
 # It runs from the octogee-api image for now so the platform release carries one
 # singleton image tag; split to a separate image only when traffic/load demands.
 llmBroker:
@@ -480,13 +480,13 @@ serviceAccount:
 # block the glm-controller subchart sees gcpServiceAccount: "" and renders
 # a KSA missing the iam.gke.io/gcp-service-account annotation, so Workload
 # Identity falls back to the cluster's default node identity which lacks
-# Firestore access. Cowboy runs as its OWN dedicated GSA (octogee-glm-controller)
+# Firestore access. The fleet controller runs as its OWN dedicated GSA (octogee-glm-controller)
 # rather than the shared gateway SA, so its privileged teardown grants — Secret
 # Manager admin + per-gateway SA delete — are not inherited by cattle gateway
 # pods. Per-env override in values.test.yaml swaps to the env's GSA.
 glm-controller:
   gcpServiceAccount: "octogee-glm-controller@octogee.iam.gserviceaccount.com"
   kmsKeyName: ""
-  # Gateway-pod consumer GSA for new per-gateway auth-token secrets (NOT Cowboy's).
+  # Gateway-pod consumer GSA for new per-gateway auth-token secrets (NOT the fleet controller's).
   gatewayServiceAccount: "octogee-gateway@octogee.iam.gserviceaccount.com"
   workloadIdentityProject: "octogee"

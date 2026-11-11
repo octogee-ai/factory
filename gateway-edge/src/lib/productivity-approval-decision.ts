@@ -88,7 +88,7 @@ function storedDigest(stored: Record<string, unknown>): string {
 
 export async function recordApprovalDecision(
   db: Firestore,
-  store: Pick<PlatformStateStore, "builders" | "workspaces">,
+  store: Pick<PlatformStateStore, "users" | "workspaces">,
   approvalId: string,
   input: RecordApprovalDecisionInput,
 ): Promise<RecordedApprovalDecision> {

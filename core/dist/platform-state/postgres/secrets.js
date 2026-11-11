@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { deleteRecord, equalsFence, insertRecord, mergeJsonColumn, revisionFence, selectByKey, selectRecords, updateRecord } from "./records.js";
 import { column, columnFor, decodeStored } from "./values.js";
-const BUILDER_MATTERMOST_SECRET_ID = "mattermost";
-const COACH_MATTERMOST_SECRET_ID = "coachMattermost";
+const USER_MATTERMOST_SECRET_ID = "mattermost";
+const DEFAULT_AGENT_MATTERMOST_SECRET_ID = "coachMattermost";
 const PROJECT_AGENT_SECRET_PREFIX = "projectAgentMattermost-";
 const ACCESS_DENIAL_BUCKET_MS = 60_000;
 const GATEWAY_TICKET_RESERVED = ["uid", "gatewayId", "expiresAt", "expireAt"];
@@ -123,9 +123,9 @@ function assertNoReservedKeys(operation, map, reserved) {
     }
 }
 export function secretKindOf(secretId) {
-    if (secretId === BUILDER_MATTERMOST_SECRET_ID)
+    if (secretId === USER_MATTERMOST_SECRET_ID)
         return "builder-mattermost";
-    if (secretId === COACH_MATTERMOST_SECRET_ID)
+    if (secretId === DEFAULT_AGENT_MATTERMOST_SECRET_ID)
         return "coach-mattermost";
     if (secretId.startsWith(PROJECT_AGENT_SECRET_PREFIX))
         return "project-agent-mattermost";

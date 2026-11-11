@@ -280,7 +280,7 @@ export interface GatewayRpcClient {
 declare const SCHEDULE_TRANSFER_CRON_METHODS: readonly ["cron.list", "cron.add", "cron.remove", "cron.scratch.get", "cron.scratch.set", "cron.update"];
 export type ScheduleTransferCronMethod = (typeof SCHEDULE_TRANSFER_CRON_METHODS)[number];
 export declare function createGatewayRpc(opts?: GatewayRpcClientOptions): GatewayRpcClient;
-export declare function provisionCoachAutomation(rpc: Pick<GatewayRpcClient, "cronAdd">, customer: {
+export declare function provisionDefaultAgentAutomation(rpc: Pick<GatewayRpcClient, "cronAdd">, user: {
     slug: string;
     coachChannelId: string | null;
 }): Promise<CronAddResult>;

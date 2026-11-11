@@ -13,7 +13,7 @@ vi.mock("../lib/config.js", () => ({
   GIT_API_URL: "https://gitea.test/api/v1",
   GIT_SSH_HOST: "gitea.test",
   OPENCLAW_DIR: "/tmp/octogee-test",
-  CUSTOMERS_DIR: "/tmp/octogee-test/customers-doesnt-exist",
+  CUSTOMERS_DIR: "/tmp/octogee-test/users-doesnt-exist",
   CUSTOMER_KEYS_DIR: "/tmp/octogee-test/keys",
   AGENTS_DIR: "/tmp/octogee-test/agents",
 }));
@@ -21,8 +21,8 @@ vi.mock("../lib/config.js", () => ({
 const {
   errMessage,
   execErrStderr,
-  listOnDiskCustomerSlugs,
-  customerSshKeyPath,
+  listOnDiskUserSlugs,
+  userSshKeyPath,
   adoptProjectClone,
 } = await import("../lib/git.js");
 
@@ -121,19 +121,19 @@ describe("execErrStderr", () => {
   });
 });
 
-describe("customerSshKeyPath", () => {
+describe("userSshKeyPath", () => {
   it("composes the per-slug key path under CUSTOMER_KEYS_DIR", () => {
-    expect(customerSshKeyPath("acme")).toBe(
+    expect(userSshKeyPath("acme")).toBe(
       "/tmp/octogee-test/keys/acme/id_ed25519",
     );
   });
 });
 
-describe("listOnDiskCustomerSlugs", () => {
+describe("listOnDiskUserSlugs", () => {
   it("returns [] when CUSTOMERS_DIR doesn't exist (no throw)", () => {
     // Mocked CUSTOMERS_DIR points at a path that doesn't exist;
     // the function must short-circuit cleanly so syncAllWorkspaces
     // is a no-op on fresh gateway boots before any provisioning.
-    expect(listOnDiskCustomerSlugs()).toEqual([]);
+    expect(listOnDiskUserSlugs()).toEqual([]);
   });
 });

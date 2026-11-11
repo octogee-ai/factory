@@ -14,7 +14,7 @@ import {
   codexAuthStatePath,
   shouldRestoreCodexCredential,
   isSafeAgentId,
-  purgeCustomerOauthRuntimeArtifacts,
+  purgeUserOauthRuntimeArtifacts,
   readCodexAuthStateText,
 } from "./byosub-restore.js";
 import * as authProfileSqlite from "./auth-profile-sqlite.js";
@@ -78,7 +78,7 @@ const canonicalAuthProfiles = (agentId: string) => ({
 });
 
 describe("isSafeAgentId (shared path-safety boundary)", () => {
-  it("accepts real coach agent ids", () => {
+  it("accepts real agent agent ids", () => {
     expect(isSafeAgentId("octogee-smile-wring-011b-coach")).toBe(true);
     expect(isSafeAgentId("octogee-a-coach")).toBe(true);
   });
@@ -143,8 +143,8 @@ describe("codexHomeDir / codexAuthJsonPath (shared codex-home path atom)", () =>
 
 });
 
-describe("purgeCustomerOauthRuntimeArtifacts", () => {
-  it("removes every customer native OAuth artifact and resets owned sessions while preserving unrelated state", async () => {
+describe("purgeUserOauthRuntimeArtifacts", () => {
+  it("removes every user native OAuth artifact and resets owned sessions while preserving unrelated state", async () => {
     const oc = mkTmp();
     const home = mkTmp();
     const agentId = "octogee-a-coach";
@@ -186,7 +186,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     });
 
     expect(
-      (await purgeCustomerOauthRuntimeArtifacts({
+      (await purgeUserOauthRuntimeArtifacts({
         openclawDir: oc,
         homeDir: home,
         agentIds: [agentId],
@@ -222,21 +222,21 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     const agentId = "octogee-a-coach";
     seedAgent(oc, agentId);
     const options = { openclawDir: oc, homeDir: home, agentIds: [agentId] };
-    expect((await purgeCustomerOauthRuntimeArtifacts(options))).toEqual({
+    expect((await purgeUserOauthRuntimeArtifacts(options))).toEqual({
       removedFiles: 0,
       removedDirectories: 0,
       scrubbedProfileStores: 1,
       resetSessions: 0,
       affectedAgentIds: [agentId],
     });
-    expect((await purgeCustomerOauthRuntimeArtifacts(options))).toEqual({
+    expect((await purgeUserOauthRuntimeArtifacts(options))).toEqual({
       removedFiles: 0,
       removedDirectories: 0,
       scrubbedProfileStores: 0,
       resetSessions: 0,
       affectedAgentIds: [],
     });
-    await expect(purgeCustomerOauthRuntimeArtifacts({
+    await expect(purgeUserOauthRuntimeArtifacts({
       openclawDir: oc, homeDir: home, agentIds: ["../../victim"],
     })).rejects.toThrow("unsafe agent id");
   });
@@ -262,7 +262,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     );
 
     expect(
-      (await purgeCustomerOauthRuntimeArtifacts({
+      (await purgeUserOauthRuntimeArtifacts({
         openclawDir: oc,
         homeDir: home,
         agentIds: [agentId],
@@ -315,7 +315,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
         },
       }),
     );
-    expect((await purgeCustomerOauthRuntimeArtifacts(options))).toMatchObject({
+    expect((await purgeUserOauthRuntimeArtifacts(options))).toMatchObject({
       resetSessions: 0,
       affectedAgentIds: [],
     });
@@ -329,7 +329,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
         },
       }),
     );
-    expect((await purgeCustomerOauthRuntimeArtifacts(options))).toMatchObject({
+    expect((await purgeUserOauthRuntimeArtifacts(options))).toMatchObject({
       resetSessions: 1,
       affectedAgentIds: [agentId],
     });
@@ -387,7 +387,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     db.close();
 
     expect(
-      (await purgeCustomerOauthRuntimeArtifacts({
+      (await purgeUserOauthRuntimeArtifacts({
         openclawDir: oc,
         homeDir: home,
         agentIds: [agentId],
@@ -438,7 +438,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     `], { stdio: ["ignore", "pipe", "inherit"] });
     await new Promise((resolve) => writer.stdout!.once("data", resolve));
 
-    const result = (await purgeCustomerOauthRuntimeArtifacts({
+    const result = (await purgeUserOauthRuntimeArtifacts({
       openclawDir: oc,
       homeDir: home,
       agentIds: [agentId],
@@ -484,7 +484,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     };
 
     expect(
-      (await purgeCustomerOauthRuntimeArtifacts({
+      (await purgeUserOauthRuntimeArtifacts({
         openclawDir: oc,
         homeDir: home,
         agentIds: [agentId],
@@ -501,7 +501,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
   });
 });
 
-describe("purgeCustomerOauthRuntimeArtifacts — vertex rail", () => {
+describe("purgeUserOauthRuntimeArtifacts — vertex rail", () => {
   it("projects the platform-vertex broker profile only when the pod carries the rail", async () => {
     const oc = mkTmp();
     const home = mkTmp();
@@ -511,7 +511,7 @@ describe("purgeCustomerOauthRuntimeArtifacts — vertex rail", () => {
     writeAuthProfileStore(agentDir, { version: 1, profiles: { "foreign:default": { provider: "foreign", key: "x" } } });
     vi.stubEnv("PLATFORM_VERTEX_BASE_URL", "http://broker.invalid/vertex");
     try {
-      await purgeCustomerOauthRuntimeArtifacts({ openclawDir: oc, homeDir: home, agentIds: [agentId], modelProviders: {} });
+      await purgeUserOauthRuntimeArtifacts({ openclawDir: oc, homeDir: home, agentIds: [agentId], modelProviders: {} });
       expect(readAuthProfileStore(agentDir)).toEqual({
         version: 1,
         profiles: { ...canonicalAuthProfiles(agentId), "platform-vertex:default": vertexBrokerProfileEntry(agentId) },
@@ -519,7 +519,7 @@ describe("purgeCustomerOauthRuntimeArtifacts — vertex rail", () => {
     } finally {
       vi.unstubAllEnvs();
     }
-    await purgeCustomerOauthRuntimeArtifacts({ openclawDir: oc, homeDir: home, agentIds: [agentId], modelProviders: {} });
+    await purgeUserOauthRuntimeArtifacts({ openclawDir: oc, homeDir: home, agentIds: [agentId], modelProviders: {} });
     expect(readAuthProfileStore(agentDir)).toEqual({ version: 1, profiles: canonicalAuthProfiles(agentId) });
   });
 });
@@ -1280,7 +1280,7 @@ describe("agentIdsFromConfig", () => {
         agents: {
           list: [
             { id: "octogee-ceckert-coach" },
-            { id: "octogee-ops-gw-bender" },
+            { id: "octogee-ops-gw-walter" },
             {},
             { id: "" },
             { id: 5 },
@@ -1288,7 +1288,7 @@ describe("agentIdsFromConfig", () => {
           ],
         },
       }),
-    ).toEqual(["octogee-ceckert-coach", "octogee-ops-gw-bender"]);
+    ).toEqual(["octogee-ceckert-coach", "octogee-ops-gw-walter"]);
   });
 
   // OpenClaw 2026.7.2 migrates agents.list to keyed agents.entries at pre-boot

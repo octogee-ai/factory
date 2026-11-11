@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import {
-  CUSTOMER_WORKFLOW_TOOLS,
+  USER_WORKFLOW_TOOLS,
   PROJECT_AGENT_ALLOWED_TOOLS,
   platformInvariantViolations,
   reconcilePlatformInvariants,
@@ -16,8 +16,8 @@ import { openClawOperatorRoles } from "../../shared/dist/types/openclaw-proxy-id
 
 const repoRoot = path.resolve(__dirname, "../..");
 const script = path.join(repoRoot, "infra/gateway/apply-gateway-class-policy.mjs");
-const workflowTools = [...CUSTOMER_WORKFLOW_TOOLS];
-const customerStructuredTools = [
+const workflowTools = [...USER_WORKFLOW_TOOLS];
+const userStructuredTools = [
   "automations",
   "workspace_commit",
   "octogee_project_commit",
@@ -75,7 +75,7 @@ it("keeps Shared Workshop configuration valid through both final config writers"
   expect(config.plugins.entries["skill-workshop"]).toEqual(workshop);
 });
 
-it("marks retained Builder Workshop choices as current without replacing them", () => {
+it("marks retained user Workshop choices as current without replacing them", () => {
   const workshop = { enabled: false, config: { autonomous: { mode: "propose" } } };
   const config = runPolicy("builder", {
     meta: { migrations: { unrelated: true } },
@@ -85,8 +85,8 @@ it("marks retained Builder Workshop choices as current without replacing them", 
   expect(config.plugins.entries["skill-workshop"]).toEqual(workshop);
 });
 
-it("keeps native Codex available in fresh Builder config without overriding a Builder opt-out", () => {
-  const fresh = JSON.parse(readFileSync(path.join(repoRoot, "infra/gateway/openclaw.builder.template.json"), "utf8"));
+it("keeps native Codex available in fresh user config without overriding a user opt-out", () => {
+  const fresh = JSON.parse(readFileSync(path.join(repoRoot, "infra/gateway/openclaw.isolated.template.json"), "utf8"));
   const out = runPolicy("builder", fresh);
   expect(out.plugins.entries.codex).toEqual({ enabled: true });
   expect(out.plugins.allow).toContain("codex");
@@ -135,7 +135,7 @@ function seedCanonicalAgentRuntimeDisk(
   db.close();
 }
 
-function builderClaim(ownerUid: string, builderSlug: string) {
+function userClaim(ownerUid: string, builderSlug: string) {
   return {
     setup: (dir: string) => writeFileSync(path.join(dir, "builder-claim.json"), JSON.stringify({
       schemaVersion: 1, gatewayId: "gw-test", ownerUid, builderSlug,
@@ -144,7 +144,7 @@ function builderClaim(ownerUid: string, builderSlug: string) {
     env: { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_ID: "gw-test" },
   };
 }
-const JEFE = builderClaim("owner", "jefe");
+const JEFE = userClaim("owner", "jefe");
 
 function runPolicyWithDir(
   gatewayClass: string,
@@ -286,7 +286,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
   it("keeps the boot workflow and project policies identical to the runtime invariants", () => {
     const result = spawnSync("node", ["--input-type=module", "-e", `import { OCTOGEE_WORKFLOW_TOOLS } from ${JSON.stringify(script)}; console.log(JSON.stringify(OCTOGEE_WORKFLOW_TOOLS));`], { encoding: "utf8" });
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual(CUSTOMER_WORKFLOW_TOOLS);
+    expect(JSON.parse(result.stdout)).toEqual(USER_WORKFLOW_TOOLS);
     const out = runPolicy("shared", { agents: { list: [{ id: "octogee-acme-proj-site-coach" }] } });
     expect(out.agents.list[0].tools.alsoAllow).toEqual(PROJECT_AGENT_ALLOWED_TOOLS);
   });
@@ -342,7 +342,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(JSON.parse(readFileSync(path.join(sessionsDir, "sessions.json"), "utf8"))).toEqual(sessions);
   });
 
-  it("clears a restored Builder allow list while preserving subscription model definitions", () => {
+  it("clears a restored user allow list while preserving subscription model definitions", () => {
     const out = runPolicy("builder", {
       agents: { defaults: {
         modelPolicy: { allow: ["platform-openai/gpt-5.4-mini"] },
@@ -368,7 +368,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
               profile: "full",
               allow: ["browser"],
               alsoAllow: ["nodes"],
-              deny: [...customerStructuredTools],
+              deny: [...userStructuredTools],
               fs: { workspaceOnly: false },
               keep: true,
             },
@@ -386,7 +386,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         profile: "full",
         allow: ["browser", "nodes"],
         alsoAllow: ["browser", "nodes"],
-        deny: ["read", ...customerStructuredTools],
+        deny: ["read", ...userStructuredTools],
         subagents: { tools: { deny: ["write"] } },
       },
       cron: { triggers: { enabled: true }, keep: true },
@@ -448,7 +448,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "computer",
     ]);
     expect(out.tools.alsoAllow).toEqual(workflowTools);
-    expect(out.tools.deny).not.toEqual(expect.arrayContaining(customerStructuredTools));
+    expect(out.tools.deny).not.toEqual(expect.arrayContaining(userStructuredTools));
     expect(out.tools.profile).toBe("coding");
     expect(out.tools.allow).toBeUndefined();
     expect(out.tools.exec).toEqual({ mode: "deny" });
@@ -458,7 +458,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.agents.defaults.subagents).toBeUndefined();
     expect(out.agents.list[0].tools).toMatchObject({ profile: "coding", fs: { workspaceOnly: true }, keep: true });
     expect(out.agents.list[0].tools.alsoAllow).toEqual(workflowTools);
-    expect(out.agents.list[0].tools.deny).not.toEqual(expect.arrayContaining(customerStructuredTools));
+    expect(out.agents.list[0].tools.deny).not.toEqual(expect.arrayContaining(userStructuredTools));
     expect(out.agents.list[0].tools.toolsBySender).toEqual({});
     expect(out.agents.list[0].tools.alsoAllow).toContain("octogee_google_gmail_search");
     expect(out.agents.list[0].tools.alsoAllow).toEqual(expect.arrayContaining([
@@ -608,7 +608,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     }
   });
 
-  it("disables platform-agent DMs on shared and Builder gateways alike", () => {
+  it("disables platform-agent DMs on shared and isolated gateways alike", () => {
     const accountId = "alice-coach";
     const projectAccountId = "alice-proj-orbit";
     const shared = runPolicy("shared", {
@@ -637,7 +637,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(shared.channels.mattermost.accounts[projectAccountId].dmPolicy).toBe("disabled");
     expect(shared.channels.mattermost.accounts[projectAccountId].allowFrom).toBeUndefined();
 
-    const builder = runPolicy("builder", {
+    const user = runPolicy("builder", {
       agents: {
         list: [{ id: "octogee-alice-coach" }, { id: "octogee-alice-proj-orbit-coach" }],
       },
@@ -657,11 +657,11 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         },
       },
     });
-    expect(builder.channels.mattermost.accounts[accountId].dmPolicy).toBe("disabled");
-    expect(builder.channels.mattermost.accounts[accountId].allowFrom).toBeUndefined();
-    expect(builder.commands.ownerAllowFrom).toEqual(["a".repeat(26)]);
-    expect(builder.channels.mattermost.accounts[projectAccountId].dmPolicy).toBe("disabled");
-    expect(builder.channels.mattermost.accounts[projectAccountId].allowFrom).toBeUndefined();
+    expect(user.channels.mattermost.accounts[accountId].dmPolicy).toBe("disabled");
+    expect(user.channels.mattermost.accounts[accountId].allowFrom).toBeUndefined();
+    expect(user.commands.ownerAllowFrom).toEqual(["a".repeat(26)]);
+    expect(user.channels.mattermost.accounts[projectAccountId].dmPolicy).toBe("disabled");
+    expect(user.channels.mattermost.accounts[projectAccountId].allowFrom).toBeUndefined();
   });
 
   it.each([
@@ -734,7 +734,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
   });
 
-  it("keeps Builder policy output compatible with durable config validation", () => {
+  it("keeps user policy output compatible with durable config validation", () => {
     const context = {
       gatewayClass: "builder" as const,
       gatewayId: "alice-xs-12345678",
@@ -758,7 +758,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     )).toEqual([]);
   });
 
-  it("builder class keeps the overlay at full power, adding only the platform capability surface and the tenant secret boundary", () => {
+  it("isolated class keeps the overlay at full power, adding only the platform capability surface and the tenant secret boundary", () => {
     const out = runPolicy("builder", {
       auth: {
         profiles: {
@@ -767,7 +767,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       },
       models: {
         providers: {
-          "builder-provider": { baseUrl: "https://builder.example/v1", keep: true },
+          "user-provider": { baseUrl: "https://user.example/v1", keep: true },
         },
       },
       browser: {
@@ -780,7 +780,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       },
       agents: {
         defaults: {
-          models: { "builder/provider-model": { label: "Builder model" } },
+          models: { "builder/provider-model": { label: "User model" } },
         },
         list: [{
           id: "discord-helper",
@@ -788,20 +788,20 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
             profile: "research",
             allow: ["read", "discord_send", "exec"],
             alsoAllow: ["discord_admin", "exec"],
-            deny: ["builder-agent-tool"],
+            deny: ["user-agent-tool"],
             fs: { workspaceOnly: false },
           },
         }],
       },
       bindings: [
         { agentId: "discord-helper", match: { channel: "mattermost", accountId: "*" } },
-        { agentId: "discord-helper", match: { channel: "discord", accountId: "builder-discord" } },
+        { agentId: "discord-helper", match: { channel: "discord", accountId: "user-discord" } },
       ],
       tools: {
         profile: "research",
         allow: ["read", "discord_send", "exec", "browser"],
         alsoAllow: ["discord_admin", "exec", "browser"],
-        deny: ["builder-tool"],
+        deny: ["isolated-tool"],
         exec: { mode: "unrestricted", keep: true },
         fs: { workspaceOnly: false },
       },
@@ -813,7 +813,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
           "discord-bridge": {
             enabled: true,
             config: {
-              guildId: "builder-guild",
+              guildId: "user-guild",
               relayMentions: true,
               tokenRef: {
                 source: "exec",
@@ -849,14 +849,14 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         },
         discord: {
           accounts: {
-            "builder-discord": {
+            "user-discord": {
               token: "inline-token-must-not-survive",
               tokenRef: {
                 source: "exec",
                 provider: "gcp-secret-manager",
                 id: "byok-alice-openai",
               },
-              guildId: "builder-guild",
+              guildId: "user-guild",
             },
           },
         },
@@ -874,27 +874,27 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       },
     });
 
-    expect(out.models.providers["builder-provider"]).toEqual({
-      baseUrl: "https://builder.example/v1",
+    expect(out.models.providers["user-provider"]).toEqual({
+      baseUrl: "https://user.example/v1",
       keep: true,
     });
-    expect(out.agents.defaults.models["builder/provider-model"]).toEqual({ label: "Builder model" });
+    expect(out.agents.defaults.models["builder/provider-model"]).toEqual({ label: "User model" });
     expect(out.bindings).toEqual([
       { agentId: "discord-helper", match: { channel: "mattermost", accountId: "*" } },
-      { agentId: "discord-helper", match: { channel: "discord", accountId: "builder-discord" } },
+      { agentId: "discord-helper", match: { channel: "discord", accountId: "user-discord" } },
     ]);
     expect(out.channels.mattermost.accounts["alice-coach"]).toEqual({
       botToken: { source: "file", provider: "octogee-mattermost", id: "/other-account" },
       baseUrl: "https://builder-mattermost.example",
       commands: { native: true },
     });
-    expect(out.channels.discord.accounts["builder-discord"]).toEqual({
+    expect(out.channels.discord.accounts["user-discord"]).toEqual({
       tokenRef: {
         source: "exec",
         provider: "gcp-secret-manager",
         id: "byok-alice-openai",
       },
-      guildId: "builder-guild",
+      guildId: "user-guild",
     });
     expect(out.browser).toEqual({
       enabled: true,
@@ -918,7 +918,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.entries["discord-bridge"]).toEqual({
       enabled: true,
       config: {
-        guildId: "builder-guild",
+        guildId: "user-guild",
         relayMentions: true,
         tokenRef: {
           source: "exec",
@@ -963,7 +963,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.tools).toEqual({
       profile: "research",
       allow: ["read", "discord_send", "exec", "browser", "discord_admin", ...workflowTools],
-      deny: ["builder-tool"],
+      deny: ["isolated-tool"],
       exec: { mode: "unrestricted", keep: true },
       fs: { workspaceOnly: false },
     });
@@ -971,7 +971,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       profile: "research",
       allow: ["read", "discord_send", "exec"],
       alsoAllow: ["discord_admin", "exec"],
-      deny: ["builder-agent-tool"],
+      deny: ["user-agent-tool"],
       fs: { workspaceOnly: false },
     });
     expect(out.gateway).toBeUndefined();
@@ -988,7 +988,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
   });
 
-  it("converges the platform capability surface onto a legacy builder gateway", () => {
+  it("converges the platform capability surface onto a legacy isolated gateway", () => {
     const out = runPolicy("builder", {
       tools: {
         profile: "research",
@@ -1000,7 +1000,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
           "octogee_ask_ops",
           "discord_admin",
         ],
-        deny: ["builder-tool"],
+        deny: ["isolated-tool"],
       },
       plugins: {
         allow: ["mattermost", "octogee-project-tools"],
@@ -1013,7 +1013,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.tools.profile).toBe("research");
     expect(out.tools.allow).toEqual(expect.arrayContaining(["read", "exec"]));
     expect(out.tools.alsoAllow).toBeUndefined();
-    expect(out.tools.deny).toEqual(["builder-tool"]);
+    expect(out.tools.deny).toEqual(["isolated-tool"]);
     expect(out.plugins.allow).toEqual(expect.arrayContaining([
       "octogee-board-tools",
       "octogee-ops-tools",
@@ -1023,7 +1023,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.entries["octogee-board-tools"].enabled).toBe(true);
   });
 
-  it("does not narrow a permissive builder plugin allowlist while converging capabilities", () => {
+  it("does not narrow a permissive user plugin allowlist while converging capabilities", () => {
     const out = runPolicy("builder", { tools: { profile: "research" } });
 
     expect(out.plugins.allow).toBeUndefined();
@@ -1050,7 +1050,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     ]));
   });
 
-  it("does not invent a plugin allowlist under per-user control identity when the builder had none", () => {
+  it("does not invent a plugin allowlist under per-user control identity when the user had none", () => {
     const out = runPolicyWithDir(
       "builder",
       { tools: { profile: "research" } },
@@ -1062,7 +1062,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.entries["octogee-project-tools"].enabled).toBe(true);
   });
 
-  it("respects a builder's deliberate platform-plugin opt-out", () => {
+  it("respects a user's deliberate platform-plugin opt-out", () => {
     const out = runPolicy("builder", {
       plugins: { entries: { "octogee-board-tools": { enabled: false } } },
     });
@@ -1071,7 +1071,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.entries["octogee-ops-tools"].enabled).toBe(true);
   });
 
-  it("builder class leaves user-owned runtime stores untouched", () => {
+  it("isolated class leaves user-owned runtime stores untouched", () => {
     const agentId = "octogee-alice-coach";
     const result = runPolicyWithDir(
       "builder",
@@ -1083,7 +1083,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         },
         agents: {
           defaults: {
-            models: { "builder/provider-model": { label: "Builder model" } },
+            models: { "builder/provider-model": { label: "User model" } },
           },
           list: [{ id: agentId, model: "builder/provider-model" }],
         },
@@ -1123,7 +1123,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(result.config.plugins.allow).toContain("codex");
     expect(result.config.plugins.entries.codex).toEqual({ enabled: true });
     expect(result.config.agents.defaults.models["builder/provider-model"]).toEqual({
-      label: "Builder model",
+      label: "User model",
     });
     expect(existsSync(path.join(result.home, ".claude", ".credentials.json"))).toBe(true);
     const agentDir = path.join(result.dir, "agents", agentId, "agent");
@@ -1140,7 +1140,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
   });
 
-  it("builder class does not materialize missing agent runtime stores", () => {
+  it("isolated class does not materialize missing agent runtime stores", () => {
     const agentId = "octogee-alice-coach";
     const result = runPolicyWithDir("builder", {
       auth: {
@@ -1150,7 +1150,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       },
       agents: {
         defaults: {
-          models: { "builder/provider-model": { label: "Builder model" } },
+          models: { "builder/provider-model": { label: "User model" } },
         },
         list: [{ id: agentId, model: "builder/provider-model" }],
       },
@@ -1332,7 +1332,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
   });
 
   it("shared class purges native OAuth credentials, runtime pins, and affected sessions before startup", () => {
-    const coachId = "octogee-acme-coach";
+    const userDefaultAgentId = "octogee-acme-coach";
     const projectId = "octogee-acme-proj-garden-coach";
     const result = runPolicyWithDir(
       "shared",
@@ -1363,7 +1363,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
           },
           list: [
             {
-              id: coachId,
+              id: userDefaultAgentId,
               model: { primary: "openai/gpt-5.5", fallbacks: ["anthropic/claude-sonnet-4-6"] },
               untouched: "coach",
             },
@@ -1384,7 +1384,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         mkdirSync(path.dirname(native), { recursive: true });
         writeFileSync(native, "claude-secret");
         writeFileSync(`${native}.tmp`, "claude-temp");
-        for (const agentId of [coachId, projectId]) {
+        for (const agentId of [userDefaultAgentId, projectId]) {
           const agentDir = path.join(dir, "agents", agentId, "agent");
           const codexHome = path.join(agentDir, "codex-home");
           const staging = path.join(agentDir, "codex-home.staging");
@@ -1687,7 +1687,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     db.close();
   });
 
-  it("exact-projects restored customer plugins, secrets, models, and spawn namespaces", () => {
+  it("exact-projects restored user plugins, secrets, models, and spawn namespaces", () => {
     const agentId = "octogee-acme-coach";
     const result = runPolicyWithDir(
       "shared",
@@ -1972,7 +1972,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
   });
 
-  it("treats the retired operator class as customer-safe instead of bypassing policy", () => {
+  it("treats the retired operator class as user-safe instead of bypassing policy", () => {
     const config = {
       tools: { profile: "full", allow: ["browser"], alsoAllow: ["nodes"], deny: ["exec"], exec: { mode: "deny" } },
       cron: { triggers: { enabled: true } },
@@ -2010,7 +2010,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(existsSync(path.join(result.home, ".claude", ".credentials.json"))).toBe(false);
   });
 
-  it("defaults authenticated Builder Talk to platform OpenAI without replacing their chosen provider", () => {
+  it("defaults authenticated user Talk to platform OpenAI without replacing their chosen provider", () => {
     const out = runPolicyWithDir("builder", {}, JEFE.setup, JEFE.env).config;
     expect(out.plugins.entries["octogee-voice-tools"]).toMatchObject({ enabled: true, config: brokerPluginConfig });
     expect(out.talk.realtime).toMatchObject({ provider: "octogee-openai", providers: { "octogee-openai": { model: "gpt-live-1" } }, brain: "agent-consult", transport: "gateway-relay" });
@@ -2024,7 +2024,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
   it("restores platform voice broker wiring from an existing native plugin config", () => {
     const out = runPolicyWithDir("builder", {
       plugins: { entries: { "octogee-voice-tools": { config: {
-        brokerUrl: "http://127.0.0.1:9999", tokenPath: "/home/node/customer-file",
+        brokerUrl: "http://127.0.0.1:9999", tokenPath: "/home/node/user-file",
       } } } },
       talk: { realtime: { provider: "google", providers: { google: { voice: "custom-voice" } } } },
     }, JEFE.setup, JEFE.env).config;
@@ -2033,7 +2033,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.talk.realtime).toEqual({ provider: "google", providers: { google: { voice: "custom-voice" } } });
   });
 
-  it("makes native presentation and narration reachable through an existing Builder allowlist", () => {
+  it("makes native presentation and narration reachable through an existing user allowlist", () => {
     const out = runPolicyWithDir("builder", {
       plugins: { allow: ["mattermost"] },
       tools: { profile: "coding" },
@@ -2045,7 +2045,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.entries["talk-voice"]?.enabled).not.toBe(false);
   });
 
-  it("keeps native Builder plugin and tool opt-outs while adding hosted voice defaults", () => {
+  it("keeps native user plugin and tool opt-outs while adding hosted voice defaults", () => {
     const config = {
       plugins: {
         enabled: false,
@@ -2081,12 +2081,12 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     }
   });
 
-  it("switches a per-user Builder gateway to trusted-proxy auth with authenticated identities for services and the owner", () => {
+  it("switches a per-user isolated gateway to trusted-proxy auth with authenticated identities for services and the owner", () => {
     const { config: out } = runPolicyWithDir(
       "builder",
       { gateway: { auth: { mode: "token", token: "pod-token", rateLimit: { maxAttempts: 10 } } } },
-      builderClaim("uid-owner", "team-workspace").setup,
-      builderClaim("uid-owner", "team-workspace").env,
+      userClaim("uid-owner", "team-workspace").setup,
+      userClaim("uid-owner", "team-workspace").env,
     );
     expect(out.gateway.auth).toEqual({
       mode: "trusted-proxy",
@@ -2113,7 +2113,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.gateway.roles.definitions.member.agents).toEqual(["octogee-team-workspace-coach"]);
   });
 
-  it("grants no owner identity scope or member agents without a Builder claim, whatever the environment says", () => {
+  it("grants no owner identity scope or member agents without a user claim, whatever the environment says", () => {
     const { config: out } = runPolicyWithDir("builder", {}, undefined, {
       OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_ID: "gw-test",
       GATEWAY_OWNER_UID: "uid-mallory", GATEWAY_BUILDER_SLUG: "mallory",
@@ -2142,7 +2142,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(config.gateway.roles.definitions.service).toEqual(canonical.service);
   });
 
-  it("keeps Builder-defined roles and the Builder's default across gateway restarts", () => {
+  it("keeps User-defined roles and the user's default across gateway restarts", () => {
     const roles = { default: "reader", definitions: { reader: { scopes: ["operator.read"], sessions: { others: "none" }, agents: "*" } } };
     const { config } = runPolicyWithDir("builder", { gateway: { roles } }, JEFE.setup, JEFE.env);
     expect(config.gateway.roles).toEqual({
@@ -2151,7 +2151,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
   });
 
-  it("returns a Builder gateway to token auth when the control identity is not per-user", () => {
+  it("returns a isolated gateway to token auth when the control identity is not per-user", () => {
     const { config: out } = runPolicyWithDir(
       "builder",
       {

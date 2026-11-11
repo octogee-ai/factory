@@ -5,12 +5,12 @@ import type { Firestore } from "firebase-admin/firestore";
 
 import {
   addAdminFleetRoutes,
-  projectBuilderRuntime,
+  projectIsolatedRuntime,
   projectDisposableFleetCapacity,
   projectGatewayReservation,
   projectGatewayControl,
   projectGatewaySummary,
-  scheduleCustomerSelfDeletion,
+  scheduleUserSelfDeletion,
   shapeOperationsHistoryRecord,
   type GatewayPodDiagnostics,
 } from "./admin-fleet-router.js";
@@ -20,7 +20,7 @@ import {
   journalRowsIn,
   type FixtureDocuments,
 } from "./testing/journal-store.js";
-import { firestoreBuilderAccountReader } from "./builder-account.js";
+import { firestoreUserAccountReader } from "./user-account.js";
 import type { PlatformStateTransaction } from "./platform-state/store.js";
 import {
   GLM_GATEWAYS_COLLECTION,
@@ -123,7 +123,7 @@ describe("shapeOperationsHistoryRecord", () => {
       forced: true,
       what: "move release alias",
       why: "candidate verified in TEST",
-      target: { gatewayId: "bender" },
+      target: { gatewayId: "walter" },
       preActionStatus: { alias: "stable", target: "sha-old" },
       aliasPlan: [],
       createdAt: 1,
@@ -147,7 +147,7 @@ describe("shapeOperationsHistoryRecord", () => {
       forced: true,
       what: "move release alias",
       why: "candidate verified in TEST",
-      target: { gatewayId: "bender" },
+      target: { gatewayId: "walter" },
       preActionStatus: { alias: "stable", target: "sha-old" },
       aliasPlan: [],
       createdAt: 1,
@@ -231,7 +231,7 @@ describe("projectGatewaySummary — pod replacement projection", () => {
     expect(summary.podReplacements?.warn).toBe(true);
   });
 
-  it("projects null for a gateway Cowboy has not tracked yet", () => {
+  it("projects null for a gateway the fleet controller has not tracked yet", () => {
     expect(summaryWith(undefined).podReplacements).toBeNull();
   });
 
@@ -252,11 +252,11 @@ describe("projectGatewaySummary — gateway identity projection", () => {
 
   it("falls back to convention-parse (strip trailing -blue/-green) when the field is absent", () => {
     const summary = projectGatewaySummary(
-      { id: "bender-green", data: () => ({ gatewayId: "bender-green" }) },
-      { gatewayId: "bender-green" },
+      { id: "walter-green", data: () => ({ gatewayId: "walter-green" }) },
+      { gatewayId: "walter-green" },
       Date.now(),
     );
-    expect(summary.gateway).toBe("bender");
+    expect(summary.gateway).toBe("walter");
   });
 
   it("treats an unsuffixed id as its own bare gateway identity", () => {
@@ -268,7 +268,7 @@ describe("projectGatewaySummary — gateway identity projection", () => {
     expect(summary.gateway).toBe("jack");
   });
 
-  it("marks an allocated builder gateway as one disposable Builder generation", () => {
+  it("marks an allocated isolated gateway as one disposable isolated generation", () => {
     const summary = projectGatewaySummary(
       { id: "run-alice-12345678", data: () => ({ gatewayId: "run-alice-12345678" }) },
       {
@@ -324,7 +324,7 @@ describe("projectGatewaySummary — openclaw version projection", () => {
   );
 });
 
-describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
+describe("projectIsolatedRuntime — disposable lifecycle visibility", () => {
   const now = 1_722_000_900_000;
 
   function user(activationLease: Record<string, unknown>) {
@@ -346,11 +346,11 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
   it("does not present an operator-parked source as a failed active return", () => {
     const snapshot = user({ leaseId: "lease-1", generation: 1, status: "returning", targetGatewayId: "builder-alice", requestedAt: now - 90_000 });
     const data = snapshot.data();
-    expect(projectBuilderRuntime({ ...snapshot, data: () => ({ ...data, provisioning: { openclaw: { ...data.provisioning.openclaw, managedBy: "operator" } } }) }, new Map(), new Map(), now)).toBeNull();
+    expect(projectIsolatedRuntime({ ...snapshot, data: () => ({ ...data, provisioning: { openclaw: { ...data.provisioning.openclaw, managedBy: "operator" } } }) }, new Map(), new Map(), now)).toBeNull();
   });
 
   it("projects requestedAt as the wake duration origin", () => {
-    expect(projectBuilderRuntime(
+    expect(projectIsolatedRuntime(
       user({
         leaseId: "lease-1",
         generation: 1,
@@ -376,7 +376,7 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
   });
 
   it("keeps stale provisioning visible with the exact disposable target", () => {
-    expect(projectBuilderRuntime(
+    expect(projectIsolatedRuntime(
       user({
         leaseId: "lease-1",
         generation: 1,
@@ -400,7 +400,7 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
   });
 
   it("freezes wake duration at cutover and never marks an active runtime stale", () => {
-    expect(projectBuilderRuntime(
+    expect(projectIsolatedRuntime(
       user({
         leaseId: "lease-1",
         generation: 1,
@@ -430,7 +430,7 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
     (operationStatus, lifecycle, error) => {
       const targetGatewayId = "run-alice-12345678";
       const operationId = `placement-retire-uid-alice-${targetGatewayId}-g1`;
-      const projected = projectBuilderRuntime(
+      const projected = projectIsolatedRuntime(
         user({
           leaseId: "lease-1",
           generation: 1,
@@ -465,7 +465,7 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
     const targetGatewayId = "run-alice-12345678";
     const activationOperationId = `builder-activate-${targetGatewayId}-g1`;
     const cleanupOperationId = `placement-retire-uid-alice-${targetGatewayId}-g1`;
-    const projected = projectBuilderRuntime(
+    const projected = projectIsolatedRuntime(
       user({
         leaseId: "lease-1",
         generation: 1,
@@ -536,7 +536,7 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
       targetGatewayId,
     };
 
-    expect(projectBuilderRuntime(
+    expect(projectIsolatedRuntime(
       user(failedLease),
       new Map([[targetGatewayId, {
         gatewayId: targetGatewayId,
@@ -547,11 +547,11 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
       now,
     )).toBeNull();
 
-    expect(projectBuilderRuntime(user(failedLease), new Map(), new Map(), now)).toBeNull();
+    expect(projectIsolatedRuntime(user(failedLease), new Map(), new Map(), now)).toBeNull();
   });
 
   it("omits parked leases after teardown receipts have completed", () => {
-    expect(projectBuilderRuntime(
+    expect(projectIsolatedRuntime(
       user({
         leaseId: "lease-1",
         generation: 1,
@@ -567,7 +567,7 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
   it("keeps a parked lease visible until its disposable teardown completes", () => {
     const targetGatewayId = "run-alice-12345678";
     const operationId = `placement-retire-uid-alice-${targetGatewayId}-g1`;
-    expect(projectBuilderRuntime(
+    expect(projectIsolatedRuntime(
       user({
         leaseId: "lease-1",
         generation: 1,
@@ -592,9 +592,9 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
     });
   });
 
-  it("omits a parked lease whose computer gateway is retained paused", () => {
+  it("omits a parked lease whose VM gateway is retained paused", () => {
     const targetGatewayId = "alice-m-12345678";
-    expect(projectBuilderRuntime(
+    expect(projectIsolatedRuntime(
       user({
         leaseId: "lease-1",
         generation: 1,
@@ -613,7 +613,7 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
   it("omits a parked lease after its disposable teardown succeeds", () => {
     const targetGatewayId = "run-alice-12345678";
     const operationId = `placement-retire-uid-alice-${targetGatewayId}-g1`;
-    expect(projectBuilderRuntime(
+    expect(projectIsolatedRuntime(
       user({
         leaseId: "lease-1",
         generation: 1,
@@ -983,7 +983,7 @@ function durableGatewayRoot(
   };
 }
 
-function builderGatewayRoot(
+function isolatedGatewayRoot(
   gatewayId: string,
   ownerUid: string,
   builderSlug: string,
@@ -1126,7 +1126,7 @@ describe("fleet gateway projection", () => {
     expect(fleet.body.disposableCapacity.operatorParkedBuilders).toBe(1);
   });
 
-  it("keeps disposable retirement intent and Builder lifecycle in the Fleet response", async () => {
+  it("keeps disposable retirement intent and user lifecycle in the Fleet response", async () => {
     const targetGatewayId = "run-alice-12345678";
     const retirementOperationId = `placement-retire-uid-alice-${targetGatewayId}-g1`;
     const { app } = mkAdminFleetRouteApp({
@@ -1538,7 +1538,7 @@ describe("fleet gateway projection", () => {
     expect(fleet.body.disposableCapacity.disposableInstances).toBe(1);
   });
 
-  it("summarizes parked Builders, lifecycle failures, staleness, and oldest activation", async () => {
+  it("summarizes parked users, lifecycle failures, staleness, and oldest activation", async () => {
     const now = Date.now();
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "shared-blue", sharedGatewayIds: ["shared-blue", "shared-green"] },
@@ -1750,7 +1750,7 @@ describe("fleet gateway projection", () => {
     ]);
   });
 
-  it("excludes retired gateways from the customer distribution", async () => {
+  it("excludes retired gateways from the user distribution", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "default" },
       users: {},
@@ -1792,16 +1792,16 @@ describe("fleet gateway projection", () => {
           desiredRelease: 2,
           liveRelease: 2,
         }),
-        bender: durableGatewayRoot("bender", {
+        walter: durableGatewayRoot("walter", {
           latestRelease: 2,
           desiredRelease: 2,
           liveRelease: 2,
         }),
       },
       glmGateways: {
-        bender: {
+        walter: {
           docKind: "runtime",
-          gatewayId: "bender",
+          gatewayId: "walter",
           release: 2,
           lifecycle: "serving",
           helm: {
@@ -1829,8 +1829,8 @@ describe("fleet gateway projection", () => {
     const res = await request(app).get("/gateways").expect(200);
 
     expect(res.body.gateways.map((gateway: { gatewayId: string }) => gateway.gatewayId).sort()).toEqual([
-      "bender",
       "default",
+      "walter",
     ]);
   });
 
@@ -2272,7 +2272,7 @@ describe("manual disposable runtime return", () => {
     expect(state.operations[operationId].retryRequestedAt).toBeUndefined();
   });
 
-  it("refuses to rearm a manual migration as a Builder return", async () => {
+  it("refuses to rearm a manual migration as a user return", async () => {
     const targetGatewayId = "run-alice";
     const operationId = `builder-return-${targetGatewayId}-g3`;
     const { app, state } = mkAdminFleetRouteApp({
@@ -2472,7 +2472,7 @@ describe("manual disposable runtime return", () => {
 });
 
 describe("onboarding placement (post-cohorts)", () => {
-  it("labels in-flight operations with the builder slug and uid", async () => {
+  it("labels in-flight operations with the user slug and uid", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "default" },
       users: {
@@ -2506,28 +2506,28 @@ describe("onboarding placement (post-cohorts)", () => {
     );
   });
 
-  it("excludes non-interactive accounts from the active Builder roster", async () => {
+  it("excludes non-interactive accounts from the active user roster", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "default" },
       users: {
         "uid-active": {
-          username: "active-builder",
-          provisioning: { openclaw: { slug: "active-builder", gatewayId: "default" } },
+          username: "active-user",
+          provisioning: { openclaw: { slug: "active-user", gatewayId: "default" } },
         },
         "uid-scheduled": {
-          username: "scheduled-builder",
+          username: "scheduled-user",
           accountLifecycle: { status: "deletion_scheduled", eraseAfter: 1_800_000_000_000 },
-          provisioning: { openclaw: { slug: "scheduled-builder", gatewayId: "default" } },
+          provisioning: { openclaw: { slug: "scheduled-user", gatewayId: "default" } },
         },
         "uid-erasing": {
-          username: "erasing-builder",
+          username: "erasing-user",
           accountLifecycle: { status: "erasing" },
-          provisioning: { openclaw: { slug: "erasing-builder", gatewayId: "default" } },
+          provisioning: { openclaw: { slug: "erasing-user", gatewayId: "default" } },
         },
         "uid-suspended": {
-          username: "suspended-builder",
+          username: "suspended-user",
           accountLifecycle: { status: "suspended" },
-          provisioning: { openclaw: { slug: "suspended-builder", gatewayId: "default" } },
+          provisioning: { openclaw: { slug: "suspended-user", gatewayId: "default" } },
         },
       },
       glmGateways: { default: { gatewayClass: "shared", desiredStatus: "running" } },
@@ -2551,10 +2551,10 @@ describe("onboarding placement (post-cohorts)", () => {
         expect.objectContaining({
           code: "account-deletion-pending",
           uid: "uid-scheduled",
-          slug: "scheduled-builder",
+          slug: "scheduled-user",
           operationId: "erase-operation",
           expiresAt: 1_800_000_000_000,
-          message: "scheduled-builder (uid-scheduled) is scheduled for deletion",
+          message: "scheduled-user (uid-scheduled) is scheduled for deletion",
         }),
       ]),
     );
@@ -2564,7 +2564,7 @@ describe("onboarding placement (post-cohorts)", () => {
     const { app } = mkAdminFleetRouteApp({
       config: {},
       users: {},
-      gateways: { "gw-builder": builderGatewayRoot("gw-builder", "uid-owner", "owner") },
+      gateways: { "gw-user": isolatedGatewayRoot("gw-user", "uid-owner", "owner") },
     });
 
     const res = await request(app).get("/placement").expect(200);
@@ -2579,10 +2579,10 @@ describe("onboarding placement (post-cohorts)", () => {
         expect.objectContaining({ code: "default-gateway-missing", severity: "error" }),
       ]),
     );
-    const builder = res.body.gateways.find(
-      (g: { gatewayId: string }) => g.gatewayId === "gw-builder",
+    const userRecord = res.body.gateways.find(
+      (g: { gatewayId: string }) => g.gatewayId === "gw-user",
     );
-    expect(builder).toMatchObject({ assignableAsDefault: false, defaultTarget: false });
+    expect(userRecord).toMatchObject({ assignableAsDefault: false, defaultTarget: false });
   });
 
   it("surfaces the DURABLE roster state + epoch from the assignment doc", async () => {
@@ -2611,8 +2611,8 @@ describe("onboarding placement (post-cohorts)", () => {
     });
 
     const res = await request(app).get("/placement").expect(200);
-    const customer = res.body.users.find((user: { id: string }) => user.id === "uid-a");
-    expect(customer).toMatchObject({
+    const user = res.body.users.find((user: { id: string }) => user.id === "uid-a");
+    expect(user).toMatchObject({
       rosterState: "quiescing",
       rosterRevisionId: "default",
       rosterEpoch: 5,
@@ -2669,7 +2669,7 @@ describe("onboarding placement (post-cohorts)", () => {
     });
   });
 
-  it("reports null roster fields for a customer with no assignment doc (legacy/un-backfilled)", async () => {
+  it("reports null roster fields for a user with no assignment doc (legacy/un-backfilled)", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "default" },
       users: {
@@ -2683,8 +2683,8 @@ describe("onboarding placement (post-cohorts)", () => {
     });
 
     const res = await request(app).get("/placement").expect(200);
-    const customer = res.body.users.find((user: { id: string }) => user.id === "uid-a");
-    expect(customer).toMatchObject({
+    const user = res.body.users.find((user: { id: string }) => user.id === "uid-a");
+    expect(user).toMatchObject({
       rosterState: null,
       rosterRevisionId: null,
       rosterEpoch: null,
@@ -2729,10 +2729,10 @@ describe("onboarding placement (post-cohorts)", () => {
         "shared-1": durableGatewayRoot("shared-1"),
         "shared-0": durableGatewayRoot("shared-0", { desiredStatus: "paused" }),
         "shared-a": durableGatewayRoot("shared-a", { desiredStatus: "draining" }),
-        bender: durableGatewayRoot("bender", {
+        walter: durableGatewayRoot("walter", {
           gatewayClass: "builder",
-          ownerUid: "uid-bender",
-          builderSlug: "bender",
+          ownerUid: "uid-walter",
+          builderSlug: "walter",
         }),
       },
       glmGateways: {
@@ -2783,7 +2783,7 @@ describe("onboarding placement (post-cohorts)", () => {
     await request(app).delete("/placement/overrides/uid-alice").expect(404);
   });
 
-  it("does not report pointer drift for an active disposable builder runtime outside onboarding placement", async () => {
+  it("does not report pointer drift for an active disposable isolated runtime outside onboarding placement", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "default-blue" },
       users: {
@@ -2794,12 +2794,12 @@ describe("onboarding placement (post-cohorts)", () => {
           provisioning: {
             openclaw: {
               slug: "ceckert",
-              gatewayId: "bender-blue",
+              gatewayId: "walter-blue",
               activationLease: {
                 leaseId: "lease-one",
                 generation: 1,
                 status: "active",
-                targetGatewayId: "bender-blue",
+                targetGatewayId: "walter-blue",
                 requestedAt: 1_000,
                 activeAt: 2_000,
               },
@@ -2809,7 +2809,7 @@ describe("onboarding placement (post-cohorts)", () => {
       },
       gateways: {
         "default-blue": durableGatewayRoot("default-blue", { liveRelease: 1 }),
-        "bender-blue": builderGatewayRoot("bender-blue", "uid-ceckert", "ceckert", {
+        "walter-blue": isolatedGatewayRoot("walter-blue", "uid-ceckert", "ceckert", {
           allocation: {
             kind: "disposable-builder",
             schemaVersion: 1,
@@ -2821,21 +2821,21 @@ describe("onboarding placement (post-cohorts)", () => {
       },
       glmGateways: {
         "default-blue": runtimeDoc("default-blue"),
-        "bender-blue": runtimeDoc("bender-blue", { status: "ready", mountedCustomers: ["ceckert"] }),
+        "walter-blue": runtimeDoc("walter-blue", { status: "ready", mountedCustomers: ["ceckert"] }),
       },
     });
 
     const res = await request(app).get("/placement").expect(200);
 
-    const customer = res.body.users.find((user: { id: string }) => user.id === "uid-ceckert");
-    expect(customer).toMatchObject({
+    const user = res.body.users.find((user: { id: string }) => user.id === "uid-ceckert");
+    expect(user).toMatchObject({
       id: "uid-ceckert",
-      assignedGatewayId: "bender-blue",
-      mountedGatewayId: "bender-blue",
-      policyTargetGatewayId: "bender-blue",
+      assignedGatewayId: "walter-blue",
+      mountedGatewayId: "walter-blue",
+      policyTargetGatewayId: "walter-blue",
       driftState: "healthy",
     });
-    expect(customer.warnings).toEqual([]);
+    expect(user.warnings).toEqual([]);
     expect(res.body.driftSummary).toMatchObject({
       healthy: 1,
       "pointer-drift": 0,
@@ -2880,12 +2880,12 @@ describe("onboarding placement (post-cohorts)", () => {
       users: {
         "uid-stale": {
           username: "stale",
-          provisioning: { openclaw: { slug: "stale", gatewayId: "stale-builder" } },
+          provisioning: { openclaw: { slug: "stale", gatewayId: "stale-user" } },
         },
       },
       gateways: {
         "default-blue": durableGatewayRoot("default-blue", { liveRelease: 1 }),
-        "stale-builder": builderGatewayRoot("stale-builder", "uid-stale", "stale", {
+        "stale-user": isolatedGatewayRoot("stale-user", "uid-stale", "stale", {
           allocation: {
             kind: "disposable-builder",
             schemaVersion: 1,
@@ -2897,7 +2897,7 @@ describe("onboarding placement (post-cohorts)", () => {
       },
       glmGateways: {
         "default-blue": runtimeDoc("default-blue"),
-        "stale-builder": runtimeDoc("stale-builder", { status: "ready", mountedCustomers: ["stale"] }),
+        "stale-user": runtimeDoc("stale-user", { status: "ready", mountedCustomers: ["stale"] }),
       },
     });
 
@@ -2906,7 +2906,7 @@ describe("onboarding placement (post-cohorts)", () => {
     expect(res.body.users[0]).toMatchObject({
       id: "uid-stale",
       policyTargetGatewayId: "default-blue",
-      assignedGatewayId: "stale-builder",
+      assignedGatewayId: "stale-user",
       driftState: "pointer-drift",
     });
   });
@@ -2997,7 +2997,7 @@ describe("account deletion revokes connector grants at the provider first", () =
         return userDoc(uid!);
       },
     } as unknown as Firestore;
-    const accounts = firestoreBuilderAccountReader(db);
+    const accounts = firestoreUserAccountReader(db);
 
     const app = express();
     app.use(express.json());
@@ -3024,13 +3024,13 @@ describe("account deletion revokes connector grants at the provider first", () =
     return { app, store, accounts, deletionDeps, calls, added, remaining, otherDocs, operationQueries };
   }
 
-  it("lets a customer schedule their own deletion on the 90-day retention path, journaled under their uid", async () => {
+  it("lets a user schedule their own deletion on the 90-day retention path, journaled under their uid", async () => {
     const { store, accounts, deletionDeps, calls, added, remaining, otherDocs } = makeDeleteApp({
       u2: { username: "acme", email: "c@d.co" },
     });
     const before = Date.now();
 
-    const outcome = await scheduleCustomerSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" });
+    const outcome = await scheduleUserSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" });
 
     if (outcome.kind !== "scheduled") throw new Error(`unexpected outcome ${outcome.kind}`);
     expect(outcome.incompleteStep).toBeNull();
@@ -3045,19 +3045,19 @@ describe("account deletion revokes connector grants at the provider first", () =
       expect.objectContaining({ kind: "erase-customer", inputUid: "u2", nextAttemptAt: outcome.eraseAfter }),
     ]));
     expect(Object.values(otherDocs)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ recordType: "audit", actor: "u2", why: "Customer account deletion request", status: "completed" }),
+      expect.objectContaining({ recordType: "audit", actor: "u2", why: "User account deletion request", status: "completed" }),
     ]));
     expect(calls).toContain("suspend-auth:u2");
     expect(calls).toContain("revoke:u2");
   });
 
-  it("reports a customer's deletion as scheduled even when the immediate sign-out fails, naming the step", async () => {
+  it("reports a user's deletion as scheduled even when the immediate sign-out fails, naming the step", async () => {
     const { store, accounts, deletionDeps, remaining } = makeDeleteApp({
       u2: { username: "acme", email: "c@d.co" },
     });
     deletionDeps.suspendAuthUser.mockRejectedValueOnce(new Error("identity platform unavailable"));
 
-    const outcome = await scheduleCustomerSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" });
+    const outcome = await scheduleUserSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" });
 
     expect(outcome).toMatchObject({
       kind: "scheduled",
@@ -3067,13 +3067,13 @@ describe("account deletion revokes connector grants at the provider first", () =
   });
 
   it.each(["restoreFence", "sourceTransferFence"])(
-    "tells a customer their workspace is busy, not already deleted, while a %s holds it",
+    "tells a user their workspace is busy, not already deleted, while a %s holds it",
     async (fence) => {
       const { store, accounts, deletionDeps, calls, remaining } = makeDeleteApp({
         u1: { username: "alice", provisioning: { openclaw: { [fence]: { phase: "dispatched" }, gatewayId: "shared-1" } } },
       });
 
-      await expect(scheduleCustomerSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u1" }))
+      await expect(scheduleUserSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u1" }))
         .resolves.toEqual({ kind: "workspace-busy" });
       expect(remaining.u1.accountLifecycle).toBeUndefined();
       expect(calls).not.toContain("suspend-auth:u1");
@@ -3094,20 +3094,20 @@ describe("account deletion revokes connector grants at the provider first", () =
       [assignmentPath]: assignment,
       [`glmOperations/${operationId}`]: { kind: "migrate-customer", status: scenario.endsWith("pending") ? "pending" : "running", inputUid: "u1", input, ...recovery },
     });
-    await expect(scheduleCustomerSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u1" })).resolves.toEqual({ kind: "workspace-busy" });
+    await expect(scheduleUserSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u1" })).resolves.toEqual({ kind: "workspace-busy" });
     expect(remaining.u1).toEqual(user);
     expect(otherDocs[assignmentPath]).toEqual(assignment);
     expect(added.some(row => row.kind === "suspend-customer" || row.kind === "erase-customer" || row.status === "suspension_pending")).toBe(false);
     expect(calls).not.toContain("suspend-auth:u1");
   });
 
-  it("reports a deletion in progress when the customer's suspension is already queued", async () => {
+  it("reports a deletion in progress when the user's suspension is already queued", async () => {
     const { store, accounts, deletionDeps, calls } = makeDeleteApp(
       { u2: { username: "acme" } },
       { "glmOperations/suspend-1": { kind: "suspend-customer", status: "pending", inputUid: "u2" } },
     );
 
-    await expect(scheduleCustomerSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" }))
+    await expect(scheduleUserSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" }))
       .resolves.toEqual({ kind: "conflict" });
     expect(calls).not.toContain("suspend-auth:u2");
   });
@@ -3117,12 +3117,12 @@ describe("account deletion revokes connector grants at the provider first", () =
       u2: { username: "acme", accountLifecycle: { status: "deletion_scheduled", deletionId: "d1" } },
     });
 
-    await expect(scheduleCustomerSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" }))
+    await expect(scheduleUserSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" }))
       .resolves.toEqual({ kind: "conflict" });
     expect(calls).not.toContain("suspend-auth:u2");
   });
 
-  it("reads only a customer's in-flight operations, never their terminal history", async () => {
+  it("reads only a user's in-flight operations, never their terminal history", async () => {
     const history = Object.fromEntries(
       Array.from({ length: 40 }, (_, index) => [
         `glmOperations/failed-${index}`,
@@ -3158,7 +3158,7 @@ describe("account deletion revokes connector grants at the provider first", () =
     expect(calls).not.toContain(`delete:${assignmentPath}`);
   });
 
-  it("restores the operator Park command without migrating a serving Builder", async () => {
+  it("restores the operator Park command without migrating a serving user", async () => {
     const user = { username: "alice", provisioning: { status: "complete", openclaw: { gatewayId: "shared-1", status: "complete", agentIds: ["octogee-alice-coach"] } } };
     const path = "gateways/shared-1/assignments/u1";
     const { app, remaining, otherDocs } = makeDeleteApp({ u1: user }, {
@@ -3173,14 +3173,14 @@ describe("account deletion revokes connector grants at the provider first", () =
     expect(remaining.u1.provisioning.openclaw.managedBy).toBe("cowboy");
   });
 
-  it("releases an old provisioned parked Builder through the current placement eligibility gate", async () => {
+  it("releases an old provisioned parked user through the current placement eligibility gate", async () => {
     const { app, remaining } = makeDeleteApp({ u1: { username: "alice", provisioning: { openclaw: { managedBy: "operator", status: "complete" } } } });
     await request(app).patch("/users/u1/placement").send({ managedBy: "cowboy" }).expect(200);
     expect(remaining.u1.provisioning.status).toBe("complete");
     expect(remaining.u1.provisioning.openclaw.managedBy).toBe("cowboy");
   });
 
-  it("also pauses the Builder's dedicated gateway when parking it", async () => {
+  it("also pauses the user's dedicated gateway when parking it", async () => {
     const { app, otherDocs } = makeDeleteApp({ u1: { username: "alice", provisioning: { openclaw: { gatewayId: "builder-alice" } } } }, {
       "gateways/builder-alice": durableGatewayRoot("builder-alice", { gatewayClass: "builder", ownerUid: "u1", desiredStatus: "running" }),
       "gateways/builder-alice/assignments/u1": { uid: "u1", slug: "alice", gatewayId: "builder-alice", source: "repair", state: "serving", epoch: 3 },
@@ -3206,7 +3206,7 @@ describe("account deletion revokes connector grants at the provider first", () =
     expect(otherDocs["gateways/builder-alice"].desiredStatus).toBe("running");
   });
 
-  it("preserves the generation of a parked computer while holding its Shared coach offline", async () => {
+  it("preserves the generation of a parked VM while holding its Shared agent offline", async () => {
     const lease = { leaseId: "parked", generation: 24, status: "parked", targetGatewayId: "builder-alice" };
     const { app, remaining } = makeDeleteApp({ u1: { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1", activationLease: lease } } } });
     await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
@@ -3258,7 +3258,7 @@ describe("account deletion revokes connector grants at the provider first", () =
     expect(remaining.u1).toEqual(user);
   });
 
-  it("refuses suspension while an ambiguous restore holds customer authority", async () => {
+  it("refuses suspension while an ambiguous restore holds user authority", async () => {
     const { app, calls, remaining } = makeDeleteApp({
       u1: { username: "alice", provisioning: { openclaw: { restoreFence: { phase: "dispatched" }, gatewayId: "shared-1" } } },
     });
@@ -3287,7 +3287,7 @@ describe("account deletion revokes connector grants at the provider first", () =
     expect(calls).not.toContain(`delete:${assignmentPath}`);
   });
 
-  it("refuses suspension while an ambiguous source transfer holds customer authority", async () => {
+  it("refuses suspension while an ambiguous source transfer holds user authority", async () => {
     const { app, calls, remaining } = makeDeleteApp({
       u1: { username: "alice", provisioning: { openclaw: { sourceTransferFence: { phase: "dispatched" }, gatewayId: "shared-1" } } },
     });
@@ -3444,7 +3444,7 @@ describe("roll handoff progress on the fleet response", () => {
   const record = (slug: string, phase: string, status: string, at: number) =>
     ({ phase, status, at, migrationId: "surge-shared-blue-pod", slug, source: "pod-old" });
 
-  it("shows a handoff while the roster holds the builder out of serving or its last report failed, never a finished one", async () => {
+  it("shows a handoff while the roster holds the user out of serving or its last report failed, never a finished one", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "shared-blue" },
       users: {},

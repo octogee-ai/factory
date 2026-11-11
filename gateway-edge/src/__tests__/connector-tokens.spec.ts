@@ -43,7 +43,7 @@ import { decryptSecret } from '../lib/kms.js';
 import { internalFetch } from '../lib/internal-fetch.js';
 import { sidecarBrokerHeaders } from '@octogee/core/internal-fetch';
 import { MalformedRecordError } from '@octogee/core/platform-state';
-import { claimedTestBuilder, installTestBuilderIdentity } from "./helpers/builder-identity.js";
+import { claimedTestUser, installTestUserIdentity } from "./helpers/user-identity.js";
 
 beforeEach(() => {
   for (const k of Object.keys(firestoreData)) delete firestoreData[k];
@@ -57,7 +57,7 @@ afterEach(() => {
   delete process.env.GOOGLE_CLIENT_SECRET;
   delete process.env.CONNECTOR_TOKEN_BROKER_URL;
   delete process.env.GATEWAY_ID;
-  installTestBuilderIdentity(null);
+  installTestUserIdentity(null);
   delete process.env.CONNECTOR_TOKEN_AUTHORITY;
 });
 
@@ -183,8 +183,8 @@ describe('readConnectorAccessToken', () => {
 
   it('forwards owner-runtime access context for agent-side materialization', async () => {
     process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
-    process.env.GATEWAY_ID = 'bender';
-    installTestBuilderIdentity(claimedTestBuilder('alice'));
+    process.env.GATEWAY_ID = 'walter';
+    installTestUserIdentity(claimedTestUser('alice'));
     vi.mocked(internalFetch).mockResolvedValue(
       new Response(JSON.stringify({ accessToken: 'cf_brokered' }), {
         status: 200,
@@ -199,7 +199,7 @@ describe('readConnectorAccessToken', () => {
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
-          gatewayId: 'bender',
+          gatewayId: 'walter',
           connectorId: 'cloudflare',
           access: { kind: 'owner-runtime', builderSlug: 'alice' },
         }),
@@ -208,9 +208,9 @@ describe('readConnectorAccessToken', () => {
     );
   });
 
-  it('fails closed when the Builder identity is not claimed', async () => {
+  it('fails closed when the user identity is not claimed', async () => {
     process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
-    process.env.GATEWAY_ID = 'bender';
+    process.env.GATEWAY_ID = 'walter';
     vi.mocked(internalFetch).mockResolvedValue(
       new Response(JSON.stringify({ accessToken: 'cf_brokered' }), {
         status: 200,
@@ -226,8 +226,8 @@ describe('readConnectorAccessToken', () => {
 
   it('uses the sidecar capability to obtain a GitHub project clone credential', async () => {
     process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
-    process.env.GATEWAY_ID = 'bender';
-    installTestBuilderIdentity(claimedTestBuilder('alice'));
+    process.env.GATEWAY_ID = 'walter';
+    installTestUserIdentity(claimedTestUser('alice'));
     vi.mocked(internalFetch).mockResolvedValue(
       new Response(JSON.stringify({
         accessToken: 'gho_brokered',
@@ -249,7 +249,7 @@ describe('readConnectorAccessToken', () => {
           'x-octogee-sidecar-broker-token': 'sidecar-token',
         },
         body: JSON.stringify({
-          gatewayId: 'bender',
+          gatewayId: 'walter',
           connectorId: 'github',
           access: { kind: 'project-clone', builderSlug: 'alice', projectSlug: 'octo' },
         }),
@@ -260,8 +260,8 @@ describe('readConnectorAccessToken', () => {
 
   it('reports an unavailable sidecar capability as a typed broker failure', async () => {
     process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
-    process.env.GATEWAY_ID = 'bender';
-    installTestBuilderIdentity(claimedTestBuilder('alice'));
+    process.env.GATEWAY_ID = 'walter';
+    installTestUserIdentity(claimedTestUser('alice'));
     vi.mocked(sidecarBrokerHeaders).mockRejectedValueOnce(
       new Error('projected sidecar broker token unavailable'),
     );
@@ -537,7 +537,7 @@ describe('getFreshAccessToken — refresh-aware access', () => {
     expect(stored.tokens.encryptedAccessToken).toBe('ENC:fresh-access');
   });
 
-  it('does not resurrect a connector the Builder disconnected while the refresh was in flight', async () => {
+  it('does not resurrect a connector the user disconnected while the refresh was in flight', async () => {
     process.env.GOOGLE_CLIENT_ID = 'env-id';
     process.env.GOOGLE_CLIENT_SECRET = 'env-secret';
     seedGoogleTokens({ expiresAt: Date.now() - 1000 });

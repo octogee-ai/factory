@@ -1,6 +1,6 @@
 import type { AgentLook } from "@octogee/shared/types/agent-look";
 import { characterSvg } from "@octogee/shared/types/agent-characters";
-import type { FleetBrokerConfiguredBuilderBootstrap, FleetBrokerConfiguredBuilderDesk } from "@octogee/shared/types/fleet-broker";
+import type { FleetBrokerConfiguredUserBootstrap, FleetBrokerConfiguredUserDesk } from "@octogee/shared/types/fleet-broker";
 import { DESK_CONFIG_DIR, parseDeskIdentity } from "../desk-identity.js";
 import { brokerFailure, brokerPost, type BrokerClientDeps } from "./broker.js";
 import type { HomeScope } from "./home-checkpoint.js";
@@ -27,15 +27,15 @@ export interface DeskDeps extends BrokerClientDeps {
   controlUrl?: string;
 }
 
-interface DeskFile extends FleetBrokerConfiguredBuilderDesk {
+interface DeskFile extends FleetBrokerConfiguredUserDesk {
   note?: string;
 }
 
-export async function fetchDesk(deps: DeskDeps, slug: string): Promise<FleetBrokerConfiguredBuilderDesk | null> {
+export async function fetchDesk(deps: DeskDeps, slug: string): Promise<FleetBrokerConfiguredUserDesk | null> {
   const res = await brokerPost(deps, "configured-builder-bootstrap", { slug, revisionId: deps.gatewayId });
   if (res.status === 404) return null;
   if (!res.ok) throw await brokerFailure("configured-builder-bootstrap", res);
-  const body = (await res.json()) as { bootstrap?: Partial<FleetBrokerConfiguredBuilderBootstrap> };
+  const body = (await res.json()) as { bootstrap?: Partial<FleetBrokerConfiguredUserBootstrap> };
   const desk = parseDeskIdentity(body.bootstrap?.desk);
   if (!desk) throw new Error("configured-builder-bootstrap: payload carries no valid desk identity");
   return desk;
@@ -95,10 +95,10 @@ async function reconcileTimeZone(deps: DeskDeps, timeZone: string | null): Promi
   if (installed === timeZone) return;
   const res = await control(deps, "POST", "/timezone", { timeZone });
   if (!res.ok) throw await controlFailure("desktop time zone set", res);
-  deps.log(`[vm-agent] computer time zone set to ${timeZone} (was ${String(installed)})`);
+  deps.log(`[vm-agent] VM time zone set to ${timeZone} (was ${String(installed)})`);
 }
 
-export async function syncDesk(deps: DeskDeps, scope: HomeScope, desk: FleetBrokerConfiguredBuilderDesk): Promise<{ written: boolean }> {
+export async function syncDesk(deps: DeskDeps, scope: HomeScope, desk: FleetBrokerConfiguredUserDesk): Promise<{ written: boolean }> {
   const dir = `${scope.desktopDir}/${DESK_CONFIG_DIR}`;
   const jsonPath = `${dir}/desk.json`;
   const svgPath = `${dir}/desk.svg`;

@@ -7,9 +7,9 @@ const res = (id: string, payload: unknown) => JSON.stringify({ type: 'res', id, 
 describe('conversation-owned native terminals', () => {
   it('initializes the authorized channel through native synchronization before returning the terminal socket', async () => {
     const open = vi.fn().mockResolvedValue({ ws: {}, scopes: new Set(['operator.admin']) });
-    const session = { uid: 'builder', gatewayId: 'builder-gateway', workspaceSlug: 'builder', conversation: binding, reauthorize: async () => true };
+    const session = { uid: 'builder', gatewayId: 'isolated-gateway', workspaceSlug: 'builder', conversation: binding, reauthorize: async () => true };
     await openTerminalUserSocket(session, open);
-    expect(open.mock.calls[0].slice(0, 2)).toEqual(['builder', 'builder-gateway']);
+    expect(open.mock.calls[0].slice(0, 2)).toEqual(['builder', 'isolated-gateway']);
     expect(open.mock.calls[0][3]).toEqual({ channelSessionKey: binding.sessionKey });
   });
   it('injects canonical session ownership and refuses client-selected ownership', () => {
@@ -18,7 +18,7 @@ describe('conversation-owned native terminals', () => {
     expect(scope.request(req('2', 'terminal.open', { agentId: 'other', cols: 80, rows: 24 }))).toBeNull();
   });
   it('projects the resolved workspace conversation onto the native terminal schema', () => {
-    const resolved = { ...binding, uid: 'builder-uid', gatewayId: 'builder-gateway', workspaceSlug: 'builder', channelId: 'channel', ownerUid: 'owner-uid' };
+    const resolved = { ...binding, uid: 'builder-uid', gatewayId: 'isolated-gateway', workspaceSlug: 'builder', channelId: 'channel', ownerUid: 'owner-uid' };
     const scope = new TerminalConversationScope(resolved);
     const opened = JSON.parse(scope.request(req('open', 'terminal.open', { cols: 80, rows: 24 }))!);
     expect(opened.params).toEqual({ cols: 80, rows: 24, agentId: binding.agentId, sessionKey: binding.sessionKey });

@@ -41,7 +41,7 @@
  *   1. Strict id grammar — reject anything that isn't `byok-{slug}-{provider}`
  *      with a known provider and a sane slug.
  *   2. Known-slug allowlist — only resolve for slugs that have a
- *      corresponding agent dir on disk or the validated Builder identity.
+ *      corresponding agent dir on disk or the validated user identity.
  *   3. Audit log — every accepted/rejected id goes to stderr with id +
  *      outcome so we have a forensic trail. Cloud Logging captures stderr.
  */
@@ -50,7 +50,7 @@ import * as path from "path";
 import { randomUUID } from "crypto";
 import { pathToFileURL } from "url";
 import { isValidUsername, parseAgentId } from "../shared/dist/types/identity.js";
-import { readBuilderClaimFromEnv } from "../shared/dist/server/builder-claim.js";
+import { readUserClaimFromEnv } from "../shared/dist/server/user-claim.js";
 
 // Cattle gateways are egress-blocked from the GCP metadata server, so this
 // resolver materializes byok-* keys through the octogee-api broker
@@ -114,8 +114,8 @@ function parseByokApiKeyId(id) {
   return { slug, provider: match.provider, version: m.groups?.version };
 }
 
-// Per-customer broker-token ref for shared (multi-tenant) gateways. Each
-// customer-agent's anthropic auth-profile resolves through this id; the broker
+// Per-user broker-token ref for shared (multi-tenant) gateways. Each
+// agent's anthropic auth-profile resolves through this id; the broker
 // mints an owner-scoped, meter-only token for it. The agentId is embedded — the
 // exec protocol passes no requesting-agent context (see the header note), so the
 // id IS the per-agent scope — and the slug is allowlisted exactly like byok.
@@ -137,14 +137,14 @@ function parseAgentScopedId(id, pattern) {
 /** Scan AGENTS_DIR once at startup for the set of provisioned slugs. The
  *  gateway pod spawns a fresh resolver per resolve call (per OpenClaw's
  *  exec-provider contract — see fork src/secrets/resolve.ts:452), so any
- *  new customer becomes visible on the next spawn. No TOCTOU concern
+ *  new user becomes visible on the next spawn. No TOCTOU concern
  *  within a single resolver invocation. Same env var as the provisioner's
  *  AGENTS_DIR (scripts/lib/config.ts:18-19). */
-function claimedBuilderSlug() {
+function claimedUserSlug() {
   try {
-    return readBuilderClaimFromEnv(process.env)?.builderSlug ?? null;
+    return readUserClaimFromEnv(process.env)?.builderSlug ?? null;
   } catch (err) {
-    process.stderr.write(`[secret-resolver] Builder claim unreadable; no Builder slug is admitted: ${err?.message || err}\n`);
+    process.stderr.write(`[secret-resolver] user claim unreadable; no user slug is admitted: ${err?.message || err}\n`);
     return null;
   }
 }
@@ -152,7 +152,7 @@ function claimedBuilderSlug() {
 function loadKnownAgentRoster() {
   const slugs = new Set();
   const agentIds = new Set();
-  const builderSlug = claimedBuilderSlug();
+  const builderSlug = claimedUserSlug();
   if (builderSlug && isValidUsername(builderSlug)) slugs.add(builderSlug);
   try {
     const entries = fs.readdirSync(AGENTS_DIR, { withFileTypes: true });
@@ -217,7 +217,7 @@ async function readRequest() {
 }
 
 function brokerRouteFor(id) {
-  // agent-model-token-{agentId} → the per-customer broker-token route; every
+  // agent-model-token-{agentId} → the per-user broker-token route; every
   // other id is a byok-* key. Both routes return { value } and roster-scope
   // server-side (the resolver holds no GCP creds and no agent identity).
   const agentToken = id.match(AGENT_MODEL_TOKEN_ID_RE);

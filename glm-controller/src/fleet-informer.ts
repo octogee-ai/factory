@@ -1,6 +1,6 @@
 import { resolveOnboardingPlacementEligibility } from "@octogee/shared/types/orchestrator-placement";
 import type {
-  BuilderRecord,
+  PlatformUserRecord,
   PlatformStateError,
   PlatformStateStore,
   Stored,
@@ -10,7 +10,7 @@ import type {
   WatchRecords,
   WatchSubscription,
 } from "@octogee/core/platform-state";
-import { builderPlacementDocument } from "./builder-placement-document.js";
+import { userPlacementDocument } from "./user-placement-document.js";
 
 export const FLEET_INFORMER_REATTACH_MS_DEFAULT = 60_000;
 
@@ -32,8 +32,8 @@ export interface FleetInformer {
   fleetRegistry(): readonly Stored<WatchRecords["fleetRegistry"]>[] | null;
   fleetRegistryWithoutMalformed(): MirrorWithoutMalformed<"fleetRegistry"> | null;
   assignments(): readonly Stored<WatchRecords["assignments"]>[] | null;
-  builders(): readonly Stored<BuilderRecord>[] | null;
-  buildersWithoutMalformed(): MirrorWithoutMalformed<"builders"> | null;
+  users(): readonly Stored<PlatformUserRecord>[] | null;
+  usersWithoutMalformed(): MirrorWithoutMalformed<"builders"> | null;
   subscribe<A extends MirroredAggregate>(aggregate: A, subscriber: MirrorSubscriber<A>): () => void;
   subscribeUnassignedUsers?(wake: () => void): () => void;
   stop(): void;
@@ -144,15 +144,15 @@ class RecordMirror<A extends MirroredAggregate> {
   }
 }
 
-export function assignedSlugsFromBuilderMirror(
-  builders: readonly Pick<BuilderRecord, "uid" | "slug" | "gateway">[],
+export function assignedSlugsFromUserMirror(
+  users: readonly Pick<PlatformUserRecord, "uid" | "slug" | "gateway">[],
   gatewayId: string,
 ): string[] {
-  return builders.flatMap((builder) => (builder.gateway?.gatewayId === gatewayId && builder.slug ? [builder.slug] : []));
+  return users.flatMap((user) => (user.gateway?.gatewayId === gatewayId && user.slug ? [user.slug] : []));
 }
 
-function placementIsPending(builder: Stored<BuilderRecord>): boolean {
-  return builder.gateway === null && resolveOnboardingPlacementEligibility(builderPlacementDocument(builder, {})).eligible;
+function placementIsPending(user: Stored<PlatformUserRecord>): boolean {
+  return user.gateway === null && resolveOnboardingPlacementEligibility(userPlacementDocument(user, {})).eligible;
 }
 
 function errorMessage(error: unknown): string {
@@ -178,9 +178,9 @@ export function createFleetInformer(deps: FleetInformerDeps): FleetInformer {
   const placementListeners = new Set<() => void>();
   let pendingUsers = "";
   const notifyUnassignedChanges = () => {
-    const builders = mirrors.builders.readWithoutMalformed();
-    if (builders === null) return;
-    const pending = builders.records.filter(placementIsPending).map((builder) => builder.uid).join("\n");
+    const users = mirrors.builders.readWithoutMalformed();
+    if (users === null) return;
+    const pending = users.records.filter(placementIsPending).map((user) => user.uid).join("\n");
     if (pending === pendingUsers) return;
     pendingUsers = pending;
     for (const wake of placementListeners) wake();
@@ -277,8 +277,8 @@ export function createFleetInformer(deps: FleetInformerDeps): FleetInformer {
     fleetRegistry: () => mirrors.fleetRegistry.read(),
     fleetRegistryWithoutMalformed: () => mirrors.fleetRegistry.readWithoutMalformed(),
     assignments: () => mirrors.assignments.read(),
-    builders: () => mirrors.builders.read(),
-    buildersWithoutMalformed: () => mirrors.builders.readWithoutMalformed(),
+    users: () => mirrors.builders.read(),
+    usersWithoutMalformed: () => mirrors.builders.readWithoutMalformed(),
     subscribe: <A extends MirroredAggregate>(aggregate: A, subscriber: MirrorSubscriber<A>) => {
       const registered: Set<MirrorSubscriber<A>> = subscribers[aggregate];
       registered.add(subscriber);

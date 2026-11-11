@@ -16,12 +16,12 @@ async function main(): Promise<void> {
   } });
   if (!values.plan) throw new Error("Usage: gateway-load-test.ts --plan=<json> [--out=<new-directory> --execute --coach-turns]");
   const plan = parseLoadPlan(JSON.parse(await readFile(values.plan, "utf8")));
-  const turnCount = plan.coachConcurrency.reduce((a, b) => a + b, 0);
+  const turnCount = plan.defaultAgentConcurrency.reduce((a, b) => a + b, 0);
   console.log(JSON.stringify({ origin: TEST_API_ORIGIN, gatewayId: plan.gatewayId, targets: plan.targets.length,
-    readConcurrency: plan.readConcurrency, readRounds: plan.readRounds, coachConcurrency: plan.coachConcurrency,
-    coachTurns: turnCount, maxCoachTurns: plan.maxCoachTurns, execute: values.execute }));
+    readConcurrency: plan.readConcurrency, readRounds: plan.readRounds, defaultAgentConcurrency: plan.defaultAgentConcurrency,
+    defaultAgentTurns: turnCount, maxDefaultAgentTurns: plan.maxDefaultAgentTurns, execute: values.execute }));
   if (!values.execute) return;
-  if (turnCount && !values["coach-turns"]) throw new Error("Coach stages post real TEST messages and incur model usage; add --coach-turns to execute them");
+  if (turnCount && !values["coach-turns"]) throw new Error("Agent stages post real TEST messages and incur model usage; add --coach-turns to execute them");
   if (!values.out) throw new Error("Execution requires --out=<new-directory>");
   phase = "TEST credential validation";
   const tokens = testTokens(plan.targets, process.env);
@@ -71,7 +71,7 @@ async function main(): Promise<void> {
     process.removeListener("SIGINT", interrupt); process.removeListener("SIGTERM", interrupt);
     await writeFile(resolve(out, "requests.jsonl"), rows.map((r) => JSON.stringify(r)).join("\n") + "\n", { mode: 0o600 });
     await writeFile(resolve(out, "summary.json"), JSON.stringify({ success, telemetryFailure,
-      completedAt: new Date().toISOString(), plannedCoachTurns: turnCount, measurements: summarizeMeasurements(rows),
+      completedAt: new Date().toISOString(), plannedDefaultAgentTurns: turnCount, measurements: summarizeMeasurements(rows),
       resourceSamples: samples.length }, null, 2) + "\n", { mode: 0o600 });
   }
 }

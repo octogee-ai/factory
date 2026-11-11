@@ -117,42 +117,42 @@ chmod 600 "$MATTERMOST_ACCOUNT_SECRETS"
 # GATEWAY_ID is set by the deployment's env block. Fail fast if it is missing.
 export GATEWAY_ID="${GATEWAY_ID:?GATEWAY_ID env var is required (set via Helm values.env.gatewayId)}"
 
-# ── Builder identity ───────────────────────────────────────────────────────
+# ── User identity ───────────────────────────────────────────────────────
 BUILDER_SLUG=""
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
-  log "Pre-boot: reading Builder identity for ${GATEWAY_ID}..."
+  log "Pre-boot: reading user identity for ${GATEWAY_ID}..."
   while true; do
-    if BUILDER_SLUG=$("$TSX" /octogee/scripts/entrypoints/builder-identity.ts); then
+    if BUILDER_SLUG=$("$TSX" /octogee/scripts/entrypoints/user-identity.ts); then
       break
     else
       identity_status=$?
     fi
     if [ "$identity_status" -eq 72 ]; then
-      log "FATAL: Builder identity for ${GATEWAY_ID} belongs to a rebound computer"
+      log "FATAL: User identity for ${GATEWAY_ID} belongs to a rebound VM"
       if [ "${GATEWAY_RUNTIME_KIND:-}" = gce-vm ] && [ "${GATEWAY_COMPUTER_DESKTOP:-}" != x11 ]; then
         exit 0
       fi
       exit 72
     fi
     if [ "$identity_status" -eq 2 ]; then
-      log "FATAL: Builder identity for ${GATEWAY_ID} is unavailable or conflicts with this pod's claim"
+      log "FATAL: User identity for ${GATEWAY_ID} is unavailable or conflicts with this pod's claim"
       exit 2
     fi
-    log "Pre-boot: Builder identity unavailable; retrying in 5s..."
+    log "Pre-boot: User identity unavailable; retrying in 5s..."
     sleep 5
   done
-  log "Pre-boot: Builder identity claimed for ${BUILDER_SLUG}"
+  log "Pre-boot: User identity claimed for ${BUILDER_SLUG}"
 fi
 
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
-  log "Pre-boot: removing empty Builder project placeholders..."
-  "$TSX" /octogee/scripts/entrypoints/clean-builder-project-placeholders.ts
+  log "Pre-boot: removing empty user project placeholders..."
+  "$TSX" /octogee/scripts/entrypoints/clean-user-project-placeholders.ts
 fi
 
 GIT_SSH_HOST="${GIT_SSH_HOST:-octogee-gitea-ssh.octogee.svc.cluster.local}"
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
   case "${BUILDER_SLUG}" in
-    ""|*[!a-z0-9-]*) log "FATAL: a valid Builder slug is required for Builder SSH"; exit 1 ;;
+    ""|*[!a-z0-9-]*) log "FATAL: a valid user slug is required for user SSH"; exit 1 ;;
   esac
 fi
 mkdir -p "$HOME/.ssh"
@@ -180,25 +180,19 @@ export MM_INTERACTIONS_CALLBACK_BASE_URL="${MM_INTERACTIONS_CALLBACK_BASE_URL:-}
 export MM_INTERACTIONS_ALLOWED_SOURCE_IPS="${MM_INTERACTIONS_ALLOWED_SOURCE_IPS:-}"
 
 # ── Require OPENCLAW_GATEWAY_TOKEN from the K8s secret ─────────────────────
-# Platform-owned: Cowboy ensures the per-gateway K8s secret
+# Platform-owned: the fleet controller ensures the per-gateway K8s secret
 # `gateway-auth-token-<gatewayId>` exists before `helm upgrade`; the chart
 # threads it via secretKeyRef on init/gateway/gateway-edge. No fallback —
 # absent env means the secretKeyRef binding broke or someone trimmed the
 # chart's env block. Crash-loop loudly so the failure shows up in
 # `kubectl describe pod` instead of silently producing a gateway that
 # nobody can authenticate against.
-#
-# (Bender 2026-05-24 post-mortem: the previous three-tier resolver — env >
-# openclaw.json > fresh random per boot — drifted on owner-bound gateways
-# where openclaw.json was edited out-of-band, and the kubectl-set-env
-# workaround filling the gateway-edge gap caused field-manager collision
-# that silently dropped INTERNAL_SERVICE_KEY when #1159's dedup landed.)
 if [ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]; then
   echo "████████████████████████████████████████████████████████████████" >&2
   echo "FATAL: OPENCLAW_GATEWAY_TOKEN is empty or unset." >&2
   echo "The chart's secretKeyRef → gateway-auth-token-<gatewayId> didn't" >&2
   echo "resolve. Likely causes:" >&2
-  echo "  - Cowboy hasn't created the K8s secret yet (check glmGateways/<id>)" >&2
+  echo "  - The fleet controller hasn't created the K8s secret yet (check glmGateways/<id>)" >&2
   echo "  - The chart's env block was edited to omit OPENCLAW_GATEWAY_TOKEN" >&2
   echo "  - The K8s secret was deleted out-of-band" >&2
   echo "████████████████████████████████████████████████████████████████" >&2
@@ -220,32 +214,32 @@ else
 fi
 
 # ── Owner-bound runtime system_config restore ───────────────────────────────
-# Builder gateways run the tracked Gitea checkout as OpenClaw's active
+# Isolated gateways run the tracked Gitea checkout as OpenClaw's active
 # regular config file. Restore includes the idempotent schema migration
 # (roll-forward only; reconcileSystemConfigSchema).
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
-  log "Pre-boot: restoring system_config for builder slug ${BUILDER_SLUG}..."
+  log "Pre-boot: restoring system_config for user slug ${BUILDER_SLUG}..."
   until "$TSX" /octogee/scripts/entrypoints/system-config-restore.ts; do
     log "Pre-boot: system_config restore unavailable; retrying in 5s..."
     sleep 5
   done
-  log "Pre-boot: hydrating the configured builder credential for ${GATEWAY_ID}..."
-  until "$TSX" /octogee/scripts/entrypoints/configured-builder-bootstrap.ts; do
-    log "Pre-boot: configured builder credential unavailable; retrying in 5s..."
+  log "Pre-boot: hydrating the configured user credential for ${GATEWAY_ID}..."
+  until "$TSX" /octogee/scripts/entrypoints/configured-user-bootstrap.ts; do
+    log "Pre-boot: configured user credential unavailable; retrying in 5s..."
     sleep 5
   done
-  log "Pre-boot: restoring Builder OpenClaw runtime state for ${BUILDER_SLUG}..."
+  log "Pre-boot: restoring user OpenClaw runtime state for ${BUILDER_SLUG}..."
   while true; do
-    if "$TSX" /octogee/scripts/entrypoints/builder-runtime-state-restore.ts --defer-builder-store-migration; then
+    if "$TSX" /octogee/scripts/entrypoints/isolated-runtime-state-restore.ts --defer-builder-store-migration; then
       break
     else
       restore_status=$?
     fi
     if [ "$restore_status" -eq 2 ]; then
-      log "FATAL: Builder runtime state recovery stopped for a permanent local-state or policy refusal"
+      log "FATAL: Isolated runtime state recovery stopped for a permanent local-state or policy refusal"
       exit 2
     fi
-    log "Pre-boot: Builder runtime state restore unavailable; retrying in 5s..."
+    log "Pre-boot: Isolated runtime state restore unavailable; retrying in 5s..."
     sleep 5
   done
   log "Pre-boot: landing recorded PostgreSQL agent anchors for ${BUILDER_SLUG}..."
@@ -297,7 +291,7 @@ fi
 chmod 600 "$OPENCLAW_CONFIG_PATH"
 
 # Enforce the class-level OpenClaw policy before startup. The base template is
-# customer-safe (host execution denied, Codex disabled).
+# user-safe (host execution denied, Codex disabled).
 CLASS_POLICY=/octogee/infra/gateway/apply-gateway-class-policy.mjs
 if [ -f "$CLASS_POLICY" ]; then
   node "$CLASS_POLICY"
@@ -393,7 +387,7 @@ else
 fi
 
 # ── Pre-boot: sync env/runtime config into openclaw.json ─────────────────
-# Must run on db-less Builder gateways too: system_config restore can
+# Must run on db-less isolated gateways too: system_config restore can
 # bring back an old auth profile, but ANTHROPIC_BASE_URL is env-owned and is
 # what keeps capped broker tokens from being sent directly to Anthropic.
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$OPENCLAW_CONFIG_PATH" ]; then
@@ -414,29 +408,29 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
 fi
 
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
-  log "Pre-boot: initializing configured Builder agent runtime directories..."
+  log "Pre-boot: initializing configured user agent runtime directories..."
   "$TSX" /octogee/scripts/entrypoints/ensure-configured-agent-runtime-dirs.ts \
-    || log "⚠ configured Builder agent runtime directories failed to initialize (exit $?); the OpenClaw supervisor re-runs this before every start"
+    || log "⚠ configured user agent runtime directories failed to initialize (exit $?); the OpenClaw supervisor re-runs this before every start"
 fi
 
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
-  "$TSX" /octogee/scripts/entrypoints/builder-claim.ts mark-overlay-applied
+  "$TSX" /octogee/scripts/entrypoints/user-claim.ts mark-overlay-applied
 fi
 
-CUSTOMER_CRON_QUARANTINE=/octogee/infra/gateway/quarantine-customer-cron-jobs.mjs
-if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$CUSTOMER_CRON_QUARANTINE" ]; then
-  log "Pre-boot: quarantining unsafe persisted customer cron jobs..."
-  node "$CUSTOMER_CRON_QUARANTINE"
+USER_CRON_QUARANTINE=/octogee/infra/gateway/quarantine-user-cron-jobs.mjs
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$USER_CRON_QUARANTINE" ]; then
+  log "Pre-boot: quarantining unsafe persisted user cron jobs..."
+  node "$USER_CRON_QUARANTINE"
 fi
 
 # ── Start OpenClaw before auxiliary runners compete for cold CPU ────────────
-# Builder gateways delegate the OpenClaw process to the surge supervisor: a new
+# Isolated gateways delegate the OpenClaw process to the surge supervisor: a new
 # pod boots with OpenClaw held until the surge readiness path permits it, so the
 # entrypoint must not gate the auxiliary runners on OpenClaw health — the fleet
 # controller is what hydrates and releases a held pod.
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
   supervise_runner github-cli-auth 5000 "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts
-  log "Starting OpenClaw process supervisor (hold-capable Builder boot: ${BUILD_SHA:-unknown})..."
+  log "Starting OpenClaw process supervisor (hold-capable isolated boot: ${BUILD_SHA:-unknown})..."
   supervise_runner surge-openclaw-supervisor 5000 "$TSX" /octogee/scripts/entrypoints/surge-openclaw-supervisor.ts
   OPENCLAW_PID=$!
 else
@@ -466,8 +460,8 @@ fi
 # child's crash-loop. Replaces the bare per-runner respawn loops, which were
 # invisible to monitoring (PID 1 stays alive, so a crash-looping child never
 # showed as a container restart). See GATEWAY-RUNNER-OBSERVABILITY-SPEC.md.
-# The local fleet controller is db-less for every class. Cowboy owns liveness
-# writes, and standard-image gateways mount customers from tenant-bound
+# The local fleet controller is db-less for every class. The fleet controller owns liveness
+# writes, and standard-image gateways mount users from tenant-bound
 # octogee-api broker reads rather than local Firestore credentials.
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ]; then
   TSX=/octogee/infra/gateway/shared-auxiliary-runner.sh
@@ -475,7 +469,7 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ]; then
 fi
 supervise_runner fleet-controller 5000 "$TSX" /octogee/scripts/entrypoints/fleet-controller.ts
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
-  supervise_runner builder-toolchain-hydrator 30000 "$TSX" /octogee/scripts/entrypoints/builder-toolchain-hydrator.ts
+  supervise_runner isolated-toolchain-hydrator 30000 "$TSX" /octogee/scripts/entrypoints/isolated-toolchain-hydrator.ts
 fi
 log "In-gateway project code runners disabled: previews and publishing use the isolated build service"
 log "site-build-api disabled: site publishing runs through trusted CI/CD, not the gateway pod"

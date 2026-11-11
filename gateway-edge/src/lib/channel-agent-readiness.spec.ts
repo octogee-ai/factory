@@ -94,7 +94,7 @@ describe("channel Agent readiness", () => {
     if (failure === "account-fallback") Reflect.deleteProperty(binding.match, "peer");
     expect(channelAgentReady(scope, snapshot)).toBe(false);
   });
-  it("requires an explicit peer binding for the private Coach channel", () => {
+  it("requires an explicit peer binding for the private Agent channel", () => {
     const snapshot = ready();
     Reflect.deleteProperty(snapshot.config.config.bindings[0].match, "peer");
     expect(channelAgentReady({ ...scope, peerKind: "group" }, snapshot)).toBe(false);

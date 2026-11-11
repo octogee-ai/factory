@@ -7,4 +7,4 @@ export declare function reassertConvergedContextFiles(slug: string, customerDir:
 export declare function reassertConvergedContextFilesForSlug(userData: UserEntitlementInputs & {
     username?: unknown;
     timeZone?: unknown;
-}, customersDir?: string): string[];
+}, usersDir?: string): string[];

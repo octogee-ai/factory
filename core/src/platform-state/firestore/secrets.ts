@@ -6,9 +6,9 @@ import { OPENCLAW_CONTROL_TICKETS_COLLECTION } from "../../openclaw-control-tick
 import { MalformedRecordError, MissingRecordError, UnsupportedOperationError, type RecordKey } from "../errors.js";
 import type {
   AccessRepositories,
-  BuilderSecret,
-  BuilderSecretInput,
-  BuilderSecretKind,
+  UserSecret,
+  UserSecretInput,
+  UserSecretKind,
   ControlSession,
   ControlSessionsRepository,
   ControlTicket,
@@ -41,8 +41,8 @@ export const GATEWAY_TICKETS_COLLECTION = "gatewayTickets";
 export const GATEWAY_TICKET_MINT_LOG_COLLECTION = "gatewayTicketMintLog";
 export const OPENCLAW_CONTROL_SESSIONS_COLLECTION = "openclawControlSessions";
 
-const BUILDER_MATTERMOST_SECRET_ID = "mattermost";
-const COACH_MATTERMOST_SECRET_ID = "coachMattermost";
+const USER_MATTERMOST_SECRET_ID = "mattermost";
+const DEFAULT_AGENT_MATTERMOST_SECRET_ID = "coachMattermost";
 const PROJECT_AGENT_SECRET_PREFIX = "projectAgentMattermost-";
 const SECRET_TIMES = storedAsTimestamps("createdAt", "rotatedAt", "updatedAt");
 const TICKET_TIMES = storedAsTimestamps("expireAt");
@@ -81,14 +81,14 @@ function nonNull(map: PlainObject): PlainObject {
   return Object.fromEntries(Object.entries(map).filter(([, value]) => value !== null && value !== undefined));
 }
 
-export function secretKindOf(secretId: string): BuilderSecretKind {
-  if (secretId === BUILDER_MATTERMOST_SECRET_ID) return "builder-mattermost";
-  if (secretId === COACH_MATTERMOST_SECRET_ID) return "coach-mattermost";
+export function secretKindOf(secretId: string): UserSecretKind {
+  if (secretId === USER_MATTERMOST_SECRET_ID) return "builder-mattermost";
+  if (secretId === DEFAULT_AGENT_MATTERMOST_SECRET_ID) return "coach-mattermost";
   if (secretId.startsWith(PROJECT_AGENT_SECRET_PREFIX)) return "project-agent-mattermost";
   return "connector";
 }
 
-function mattermostUserIdField(kind: BuilderSecretKind): string {
+function mattermostUserIdField(kind: UserSecretKind): string {
   return kind === "coach-mattermost" ? "coachMmUserId" : "mmUserId";
 }
 
@@ -104,12 +104,12 @@ function secretsCollection(session: FirestoreSession, uid: string): CollectionRe
   return session.db.collection("users").doc(uid).collection("secrets");
 }
 
-function decodeSecret(uid: string, snapshot: DocumentSnapshot): Stored<BuilderSecret> | null {
+function decodeSecret(uid: string, snapshot: DocumentSnapshot): Stored<UserSecret> | null {
   if (!snapshot.exists) return null;
-  return withStoredRevision(snapshot, builderSecretFromData(uid, snapshot.id, decodeDocumentData(snapshot)));
+  return withStoredRevision(snapshot, userSecretFromData(uid, snapshot.id, decodeDocumentData(snapshot)));
 }
 
-export function builderSecretFromData(uid: string, secretId: string, data: Record<string, unknown>): BuilderSecret {
+export function userSecretFromData(uid: string, secretId: string, data: Record<string, unknown>): UserSecret {
   const kind = secretKindOf(secretId);
   const fields = new FirestoreFields(secretKey(uid, secretId), data);
   if (kind === "connector") {
@@ -135,7 +135,7 @@ export function builderSecretFromData(uid: string, secretId: string, data: Recor
   };
 }
 
-export function builderSecretToData(secret: BuilderSecretInput): PlainObject {
+export function userSecretToData(secret: UserSecretInput): PlainObject {
   const derivedKind = secretKindOf(secret.secretId);
   if (derivedKind !== secret.kind) {
     throw new TypeError(`secrets.put: secret id ${secret.secretId} holds a ${derivedKind} secret, not ${secret.kind}`);
@@ -161,8 +161,8 @@ export function builderSecretToData(secret: BuilderSecretInput): PlainObject {
   });
 }
 
-function encodeSecret(secret: BuilderSecretInput): DocumentData {
-  return encodeDocument(builderSecretToData(secret), SECRET_TIMES);
+function encodeSecret(secret: UserSecretInput): DocumentData {
+  return encodeDocument(userSecretToData(secret), SECRET_TIMES);
 }
 
 export function createFirestoreSecretsRepository(session: FirestoreSession): SecretsRepository {

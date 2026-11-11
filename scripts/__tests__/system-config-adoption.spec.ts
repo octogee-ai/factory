@@ -15,9 +15,9 @@ import { updateSystemConfigStatus } from "../lib/system-config-status.js";
 const dirs: string[] = [];
 const env = {
   GATEWAY_CLASS: "builder",
-  GATEWAY_ID: "bender",
+  GATEWAY_ID: "walter",
   API_PUBLIC_URL: "https://api.octogee.com",
-  GATEWAY_REVISION_ID: "bender-r12",
+  GATEWAY_REVISION_ID: "walter-r12",
   OPENCLAW_VERSION: "2026.7.1",
 };
 
@@ -27,7 +27,7 @@ function fixture() {
   const repoDir = path.join(openclawDir, "system_config");
   fs.mkdirSync(path.join(repoDir, ".git"), { recursive: true });
   const targetPath = path.join(repoDir, "openclaw.json");
-  const current: Record<string, unknown> = { customerSetting: "old" };
+  const current: Record<string, unknown> = { userSetting: "old" };
   reconcilePlatformInvariants(current, env);
   fs.writeFileSync(targetPath, `${JSON.stringify(current, null, 2)}\n`);
   execFileSync("git", ["init", "-q", repoDir]);
@@ -39,15 +39,15 @@ function fixture() {
     state: "clean",
     acceptedCommit: execFileSync("git", ["-C", repoDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
   });
-  const sourcePath = path.join(openclawDir, "bender-live.json");
+  const sourcePath = path.join(openclawDir, "walter-live.json");
   fs.writeFileSync(sourcePath, JSON.stringify({
-    customerSetting: "new",
+    userSetting: "new",
     gateway: { port: 9000 },
     agents: { list: [{ id: "octogee-ceckert-coach" }] },
     channels: {
       mattermost: {
         accounts: {
-          "ceckert-coach": { botToken: "bender-live-pat", enabled: true },
+          "ceckert-coach": { botToken: "walter-live-pat", enabled: true },
         },
       },
     },
@@ -83,7 +83,7 @@ describe("system config adoption", () => {
     let validationSecretPath = "";
     const validateConfig = vi.fn((candidatePath: string) => {
       const candidate = fs.readFileSync(candidatePath, "utf8");
-      expect(candidate).not.toContain("bender-live-pat");
+      expect(candidate).not.toContain("walter-live-pat");
       expect(fs.statSync(candidatePath).mode & 0o777).toBe(0o600);
       const parsed = JSON.parse(candidate);
       validationSecretPath = parsed.secrets.providers["octogee-mattermost"].path;
@@ -93,7 +93,7 @@ describe("system config adoption", () => {
         "mattermost-accounts.json",
       ));
       expect(JSON.parse(fs.readFileSync(validationSecretPath, "utf8"))).toEqual({
-        "ceckert-coach": "bender-live-pat",
+        "ceckert-coach": "walter-live-pat",
       });
       expect(fs.statSync(validationSecretPath).mode & 0o777).toBe(0o600);
     });
@@ -111,10 +111,10 @@ describe("system config adoption", () => {
     expect(plan).toMatchObject({ applied: false });
     expect(plan.approvalHash).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(plan.changedPaths).toEqual(expect.arrayContaining([
-      "customerSetting",
+      "userSetting",
       "channels.mattermost.accounts.ceckert-coach.botToken.source",
     ]));
-    expect(JSON.stringify(plan)).not.toContain("bender-live-pat");
+    expect(JSON.stringify(plan)).not.toContain("walter-live-pat");
     expect(fs.readFileSync(h.targetPath, "utf8")).toBe(before);
     expect(fs.existsSync(validationSecretPath)).toBe(false);
     expect(fs.existsSync(path.join(h.openclawDir, "secrets", "mattermost-accounts.json"))).toBe(false);
@@ -122,7 +122,7 @@ describe("system config adoption", () => {
     expect(checkpoint).not.toHaveBeenCalled();
   });
 
-  it("keeps a Builder overlay's authored accounts and every referenced secret while projecting platform wiring", async () => {
+  it("keeps a user overlay's authored accounts and every referenced secret while projecting platform wiring", async () => {
     const h = fixture();
     fs.writeFileSync(h.sourcePath, JSON.stringify({
       agents: {
@@ -141,7 +141,7 @@ describe("system config adoption", () => {
                 provider: "octogee-mattermost",
                 id: "/ceckert-proj-garden",
               },
-              baseUrl: "https://mm.builder.example",
+              baseUrl: "https://mm.user.example",
             },
             "ceckert-proj-garden": {
               botToken: {
@@ -149,7 +149,7 @@ describe("system config adoption", () => {
                 provider: "octogee-mattermost",
                 id: "/ceckert-coach",
               },
-              interactions: { callbackBaseUrl: "https://hooks.builder.example" },
+              interactions: { callbackBaseUrl: "https://hooks.user.example" },
             },
             "support-bot": {
               botToken: { source: "file", provider: "octogee-mattermost", id: "/support-bot" },
@@ -164,7 +164,7 @@ describe("system config adoption", () => {
     const secretsPath = path.join(h.openclawDir, "secrets", "mattermost-accounts.json");
     fs.mkdirSync(path.dirname(secretsPath), { recursive: true });
     fs.writeFileSync(secretsPath, JSON.stringify({
-      "ceckert-coach": "coach-pat",
+      "ceckert-coach": "default-agent-pat",
       "ceckert-proj-garden": "project-pat",
       "support-bot": "support-pat",
       "orphaned": "stale-pat",
@@ -181,11 +181,11 @@ describe("system config adoption", () => {
         accounts: {
           "ceckert-coach": {
             botToken: { source: "file", provider: "octogee-mattermost", id: "/ceckert-proj-garden" },
-            baseUrl: "https://mm.builder.example",
+            baseUrl: "https://mm.user.example",
           },
           "ceckert-proj-garden": {
             botToken: { source: "file", provider: "octogee-mattermost", id: "/ceckert-coach" },
-            interactions: { callbackBaseUrl: "https://hooks.builder.example" },
+            interactions: { callbackBaseUrl: "https://hooks.user.example" },
           },
           "support-bot": {
             botToken: { source: "file", provider: "octogee-mattermost", id: "/support-bot" },
@@ -194,7 +194,7 @@ describe("system config adoption", () => {
       });
       const validationSecrets = candidate.secrets.providers["octogee-mattermost"].path;
       expect(JSON.parse(fs.readFileSync(validationSecrets, "utf8"))).toEqual({
-        "ceckert-coach": "coach-pat",
+        "ceckert-coach": "default-agent-pat",
         "ceckert-proj-garden": "project-pat",
         "support-bot": "support-pat",
       });
@@ -261,7 +261,7 @@ describe("system config adoption", () => {
 
     expect(result).toMatchObject({ applied: true, acceptedCommit: "a".repeat(40) });
     expect(writeSecrets).toHaveBeenCalledWith(h.openclawDir, {
-      set: { "ceckert-coach": "bender-live-pat" },
+      set: { "ceckert-coach": "walter-live-pat" },
     });
     expect(checkpoint).toHaveBeenCalledWith("ceckert", expect.objectContaining({
       openclawDir: h.openclawDir,
@@ -270,9 +270,9 @@ describe("system config adoption", () => {
       lockHeld: true,
     }));
     const tracked = fs.readFileSync(h.targetPath, "utf8");
-    expect(tracked).not.toContain("bender-live-pat");
+    expect(tracked).not.toContain("walter-live-pat");
     expect(JSON.parse(tracked)).toMatchObject({
-      customerSetting: "new",
+      userSetting: "new",
       gateway: { port: 18789 },
       channels: {
         mattermost: {
@@ -408,7 +408,7 @@ describe("system config adoption", () => {
     });
     fs.writeFileSync(
       h.sourcePath,
-      fs.readFileSync(h.sourcePath, "utf8").replace("bender-live-pat", "rotated-live-pat"),
+      fs.readFileSync(h.sourcePath, "utf8").replace("walter-live-pat", "rotated-live-pat"),
     );
 
     await expect(adoptSystemConfig({
@@ -421,7 +421,7 @@ describe("system config adoption", () => {
       writeSecrets: vi.fn(),
       checkpoint: vi.fn(),
     })).rejects.toMatchObject({ code: "adoption-approval-mismatch" });
-    expect(preview.approvalHash).not.toContain("bender-live-pat");
+    expect(preview.approvalHash).not.toContain("walter-live-pat");
   });
 
   it("binds approval to the accepted durable head and rejects an intervening commit", async () => {
@@ -513,7 +513,7 @@ describe("system config adoption", () => {
     });
 
     expect(JSON.parse(fs.readFileSync(secretsPath, "utf8"))).toEqual({
-      "ceckert-coach": "bender-live-pat",
+      "ceckert-coach": "walter-live-pat",
     });
   });
 
@@ -605,7 +605,7 @@ describe("system config adoption", () => {
 
     expect(fs.readFileSync(h.targetPath, "utf8")).toBe(before);
     expect(writeSecrets).toHaveBeenNthCalledWith(1, h.openclawDir, {
-      set: { "ceckert-coach": "bender-live-pat" },
+      set: { "ceckert-coach": "walter-live-pat" },
     });
     expect(writeSecrets).toHaveBeenNthCalledWith(2, h.openclawDir, {
       set: {},
@@ -649,7 +649,7 @@ describe("system config adoption", () => {
       localState: "committed-pending",
     });
     expect(JSON.parse(fs.readFileSync(h.targetPath, "utf8"))).toMatchObject({
-      customerSetting: "new",
+      userSetting: "new",
     });
   });
 });

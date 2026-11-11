@@ -75,9 +75,9 @@ export async function isOpenClawControlServingRevision(root, runtime, input) {
         return false;
     if (gateway.desiredRelease === gateway.liveRelease)
         return runtime.release === gateway.liveRelease;
-    return isServingBuilderDuringRoll(root, gateway, runtime, input);
+    return isServingUserDuringRoll(root, gateway, runtime, input);
 }
-async function isServingBuilderDuringRoll(root, gateway, runtime, input) {
+async function isServingUserDuringRoll(root, gateway, runtime, input) {
     if (gateway.gatewayClass !== "builder" || gateway.liveRelease === null || gateway.desiredRelease < gateway.liveRelease ||
         gateway.retireAfter != null ||
         record(root)?.retirementClaim != null || record(root)?.runtimeRestartFence !== undefined ||

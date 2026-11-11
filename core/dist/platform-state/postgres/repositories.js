@@ -1,5 +1,5 @@
 import { createPostgresChannelIdentitiesRepository } from "./channel-identities.js";
-import { createPostgresBuilderRepositories } from "./builders.js";
+import { createPostgresUserRepositories } from "./users.js";
 import { createPostgresConfigRepositories } from "./config.js";
 import { createPostgresControllerStateRepositories } from "./controller-state.js";
 import { createPostgresFleetRegistryRepository } from "./fleet-registry.js";
@@ -17,7 +17,7 @@ export function createPostgresRepositories(session) {
         controllerState: createPostgresControllerStateRepositories(session),
         migrationTasks: createPostgresMigrationTasksRepository(session),
         config: createPostgresConfigRepositories(session),
-        builders: createPostgresBuilderRepositories(session),
+        users: createPostgresUserRepositories(session),
         workspaces: createPostgresWorkspaceRepositories(session),
         secrets: createPostgresSecretsRepository(session),
         channelIdentities: createPostgresChannelIdentitiesRepository(session),

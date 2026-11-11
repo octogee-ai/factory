@@ -63,7 +63,7 @@ export interface Project {
     pendingVisibility?: ProjectVisibility | null;
     giteaRepoName: string | null;
     repoSource?: ProjectRepoSource | null;
-    /** Owner-controlled: should this project be checked out on the Builder's gateway?
+    /** Owner-controlled: should this project be checked out on the user's gateway?
      *  Distinct from provisioningState, which is the server's record of what provisioning
      *  did. A repo the gateway cannot reach (a GitHub project on a shared pod) is turned
      *  off here rather than misreported as a provisioning failure. Absent means enabled. */
@@ -81,5 +81,5 @@ export interface Project {
     createdAt: unknown;
     updatedAt: unknown;
 }
-export declare const PROJECT_COACH_WORKSPACE_PARTS: readonly [".system", "project-coaches"];
-export declare const PROJECT_COACH_REPO = "project_coaches";
+export declare const PROJECT_AGENT_WORKSPACE_PARTS: readonly [".system", "project-coaches"];
+export declare const PROJECT_AGENT_REPO = "project_coaches";

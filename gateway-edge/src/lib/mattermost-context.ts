@@ -1,4 +1,4 @@
-import type { BuilderRecord, BuilderAgentIdentity, WorkspaceChannel, WorkspaceRecord } from "@octogee/core/platform-state";
+import type { PlatformUserRecord, UserAgentIdentity, WorkspaceChannel, WorkspaceRecord } from "@octogee/core/platform-state";
 import { db } from "./db.js";
 import { platformStateStore } from "./platform-state.js";
 
@@ -19,9 +19,9 @@ type RawDocData = Record<string, unknown>;
 interface MattermostContextParts {
   workspace: WorkspaceRecord | null;
   generalChan: WorkspaceChannel | null;
-  coachDmChan: WorkspaceChannel | null;
+  defaultAgentDmChan: WorkspaceChannel | null;
   adminChan: WorkspaceChannel | null;
-  agent: BuilderAgentIdentity | null;
+  agent: UserAgentIdentity | null;
 }
 
 export async function getWorkspaceMmContext(
@@ -29,16 +29,16 @@ export async function getWorkspaceMmContext(
   ownerSlug?: string,
   userDataHint?: unknown,
 ): Promise<WorkspaceMmContext | null> {
-  const [userData, builder] = await Promise.all([
+  const [userData, user] = await Promise.all([
     loadUserData(ownerUid, userDataHint),
-    platformStateStore.builders.records.get(ownerUid),
+    platformStateStore.users.records.get(ownerUid),
   ]);
   if (!userData) return null;
-  const slug = resolveWorkspaceSlug(ownerSlug, userData, builder);
+  const slug = resolveWorkspaceSlug(ownerSlug, userData, user);
   if (!slug) return null;
 
   const parts = await loadMattermostContextParts(ownerUid, slug);
-  return buildWorkspaceMmContext(ownerUid, slug, userData, builder, parts);
+  return buildWorkspaceMmContext(ownerUid, slug, userData, user, parts);
 }
 
 async function loadUserData(ownerUid: string, userDataHint: unknown): Promise<RawDocData | null> {
@@ -47,28 +47,28 @@ async function loadUserData(ownerUid: string, userDataHint: unknown): Promise<Ra
   return asRecord((await db.doc(`users/${ownerUid}`).get()).data());
 }
 
-function resolveWorkspaceSlug(ownerSlug: string | undefined, userData: RawDocData, builder: BuilderRecord | null): string | null {
-  return ownerSlug || stringField(userData, "username") || builder?.workspaceId || null;
+function resolveWorkspaceSlug(ownerSlug: string | undefined, userData: RawDocData, user: PlatformUserRecord | null): string | null {
+  return ownerSlug || stringField(userData, "username") || user?.workspaceId || null;
 }
 
 async function loadMattermostContextParts(ownerUid: string, slug: string): Promise<MattermostContextParts> {
   const scope = { workspaceSlug: slug, projectSlug: null };
   const { records, channels, agentIdentities } = platformStateStore.workspaces;
-  const [workspace, generalChan, coachDmChan, adminChan, agent] = await Promise.all([
+  const [workspace, generalChan, defaultAgentDmChan, adminChan, agent] = await Promise.all([
     records.get(slug),
     channels.get(scope, "general"),
     channels.get(scope, "coach-dm"),
     channels.get(scope, "admin"),
     agentIdentities.get(ownerUid),
   ]);
-  return { workspace, generalChan, coachDmChan, adminChan, agent };
+  return { workspace, generalChan, defaultAgentDmChan, adminChan, agent };
 }
 
 function buildWorkspaceMmContext(
   ownerUid: string,
   slug: string,
   userData: RawDocData,
-  builder: BuilderRecord | null,
+  user: PlatformUserRecord | null,
   parts: MattermostContextParts,
 ): WorkspaceMmContext {
   const userMattermost = asRecord(userData.mattermost);
@@ -76,10 +76,10 @@ function buildWorkspaceMmContext(
     ownerUid,
     slug,
     teamId: parts.workspace?.mattermostTeamId ?? null,
-    userId: builder?.mattermostUserId ?? null,
+    userId: user?.mattermostUserId ?? null,
     username: stringField(userMattermost, "username"),
     coachUserId: parts.agent?.mattermostUserId ?? null,
-    coachDmChannelId: parts.coachDmChan?.mattermostChannelId ?? null,
+    coachDmChannelId: parts.defaultAgentDmChan?.mattermostChannelId ?? null,
     generalChannelId: parts.generalChan?.mattermostChannelId ?? null,
     adminChannelId: parts.adminChan?.mattermostChannelId ?? null,
   };

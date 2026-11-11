@@ -90,7 +90,7 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Customers on fleet",
+      "title": "Users on fleet",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -510,7 +510,7 @@
     {
       "id": 10,
       "type": "timeseries",
-      "title": "Customers per gateway",
+      "title": "Users per gateway",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"

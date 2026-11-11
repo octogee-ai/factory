@@ -16,7 +16,7 @@ import {
   type PlatformStateRepositories,
   type PlatformStateStore,
 } from "@octogee/core/platform-state";
-import { builderAllowsInteractiveAccess } from "./assigned-builder.js";
+import { userAllowsInteractiveAccess } from "./assigned-user.js";
 
 interface FirestoreArtifactSnapshot {
   exists: boolean;
@@ -488,9 +488,9 @@ function firestoreWrite(job: ArtifactJob): Record<string, unknown> {
   return withoutUndefined(structuredClone(job)) as Record<string, unknown>;
 }
 
-async function workspaceOwnerActive(state: Pick<PlatformStateRepositories, "builders">, ownerUid: string): Promise<boolean> {
-  const owner = await state.builders.records.get(ownerUid);
-  return owner !== null && builderAllowsInteractiveAccess(owner);
+async function workspaceOwnerActive(state: Pick<PlatformStateRepositories, "users">, ownerUid: string): Promise<boolean> {
+  const owner = await state.users.records.get(ownerUid);
+  return owner !== null && userAllowsInteractiveAccess(owner);
 }
 
 export function createFirestoreArtifactJobStore(db: FirestoreArtifactDb, platformState: PlatformStateStore): ArtifactJobStore {

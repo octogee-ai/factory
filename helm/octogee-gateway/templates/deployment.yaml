@@ -13,7 +13,7 @@
 {{- end -}}
 {{- $gatewayImageLabel := include "octogee-gateway.imageLabel" . -}}
 {{- $gatewayImageTag := .Values.image.tag | default .Values.imageTag -}}
-{{- $builderControlUiEnabled := and (eq $gatewayClass "builder") (.Values.builderAccess.controlUiEnabled | default false) -}}
+{{- $isolatedControlUiEnabled := and (eq $gatewayClass "builder") (.Values.builderAccess.controlUiEnabled | default false) -}}
 {{- $controlIdentity := ternary (.Values.builderAccess.controlIdentity | default "shared-operator") "shared-operator" (eq $gatewayClass "builder") -}}
 {{- if not $preset -}}
 {{- fail (printf "octogee-gateway: no preset defined for sizingTier=%q (add it under .Values.tiers in values.yaml)" $tier) -}}
@@ -140,7 +140,7 @@ spec:
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
             {{- end }}
-            # OPENCLAW_GATEWAY_TOKEN is platform-owned: Cowboy creates the
+            # OPENCLAW_GATEWAY_TOKEN is platform-owned: the fleet controller creates the
             # per-gateway K8s secret `gateway-auth-token-<gatewayId>` with a
             # random hex value before this chart installs, and the same
             # secretKeyRef appears on all three containers (init / gateway /
@@ -227,7 +227,7 @@ spec:
               value: "/home/node/.openclaw"
             - name: OPENCLAW_CONFIG_PATH
               value: {{ if eq $gatewayClass "shared" }}"/home/node/.openclaw/openclaw.json"{{ else }}"/home/node/.openclaw/system_config/openclaw.json"{{ end }}
-            {{- if $builderControlUiEnabled }}
+            {{- if $isolatedControlUiEnabled }}
             - name: OPENCLAW_DASHBOARD_BRIDGE_REQUIRED
               value: "true"
             {{- end }}
@@ -314,7 +314,7 @@ spec:
               value: {{ .Values.env.openaiEmbeddingsModel | toString | quote }}
             {{- if eq $gatewayClass "shared" }}
             # Shared (multi-tenant) pods carry NO pod-level provider key. Each
-            # customer-agent's anthropic:default is its OWN per-customer broker token
+            # agent's anthropic:default is its OWN per-user broker token
             # (agent-model-token-<agentId>), materialized into the agent's auth-profile
             # store by pre-boot-config.ts / byot-sync and fetched at runtime via the
             # secret-resolver → POST /internal/byok/agent-model-token. The broker
@@ -368,7 +368,7 @@ spec:
             # Where legacy in-pod callers reach gateway-edge. The platform
             # INTERNAL_SERVICE_KEY is intentionally not present in this
             # OpenClaw gateway container; callers that still require it fail closed
-            # until they move behind octogee-api/Cowboy.
+            # until they move behind octogee-api/fleet controller.
             - name: GATEWAY_EDGE_INTERNAL_URL
               value: "http://127.0.0.1:{{ .Values.gatewayEdge.port }}"
             # Gitea admin lifecycle operations are brokered by octogee-api,
@@ -436,8 +436,8 @@ spec:
             # is this gateway's KSA identity for tenant-bound broker calls.
           # Non-shared startup and liveness probe the fleet controller, which
           # starts after durable-config repair; the startup budget bounds one
-          # identity-pure attempt. Readiness stays closed until Cowboy finishes
-          # the surge customer handoff and OpenClaw is healthy.
+          # identity-pure attempt. Readiness stays closed until the fleet controller finishes
+          # the surge user handoff and OpenClaw is healthy.
           startupProbe:
             {{- if eq $gatewayClass "shared" }}
             httpGet:
@@ -487,7 +487,7 @@ spec:
 
         {{- if .Values.gatewayEdge.enabled }}
         # chat-proxy folded in — one container, one port (3001) serves the
-        # API, the chat WS surface, and /metrics (POST-BENDER-CLEANUP-SPEC §2.6).
+        # API, the chat WS surface, and /metrics.
         - name: gateway-edge
           image: "{{ required "gatewayEdge.image.repository is required" .Values.gatewayEdge.image.repository }}:{{ .Values.gatewayEdge.image.tag | default .Values.imageTag }}"
           ports:
@@ -527,7 +527,7 @@ spec:
               value: {{ if eq $gatewayClass "shared" }}"/home/node/.openclaw/openclaw.json"{{ else }}"/home/node/.openclaw/system_config/openclaw.json"{{ end }}
             - name: OPENCLAW_CONTROL_IDENTITY
               value: {{ $controlIdentity | quote }}
-            {{- if $builderControlUiEnabled }}
+            {{- if $isolatedControlUiEnabled }}
             - name: OPENCLAW_DIR
               value: "/home/node/.openclaw"
             - name: OPENCLAW_CONFIG_PATH
@@ -623,7 +623,7 @@ spec:
                   key: token
             {{- /* Platform secrets are intentionally absent. Locality routes
                 that still need platform authority fail closed or are served by
-                octogee-api/Cowboy, while gateway-local callers use the
+                octogee-api/fleet controller, while gateway-local callers use the
                 per-gateway token and TokenReview paths. */}}
             {{- if eq $gatewayClass "builder" }}
             - name: GATEWAY_EDGE_INTERNAL_URL

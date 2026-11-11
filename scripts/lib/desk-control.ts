@@ -62,7 +62,7 @@ async function postCommand(io: DeskCliIo, edge: string, token: string, command: 
 }
 
 function failureLine(name: DeskCliName, status: number, answer: Record<string, unknown>): string | null {
-  if (status === 404 && answer.error === "computer_unavailable") return "This workspace has no computer, so there is no Desk to change.";
+  if (status === 404 && answer.error === "computer_unavailable") return "This workspace has no VM, so there is no Desk to change.";
   if (status < 200 || status >= 300) return `${name} failed (HTTP ${status}): ${String(answer.error ?? "unexpected answer")}`;
   return null;
 }

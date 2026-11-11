@@ -29,7 +29,7 @@ interface RevisionFixture {
 function revision(now: number): RevisionFixture {
   return {
     docKind: "runtime",
-    gatewayId: "bender",
+    gatewayId: "walter",
     lifecycle: "serving",
     heartbeat: {
       status: "ready",
@@ -53,8 +53,8 @@ describe("OpenClaw Dashboard revision runtime gate", () => {
   it("accepts a serving gateway with fresh runtime health and Dashboard proof", () => {
     const now = Date.UTC(2026, 6, 14, 20);
     expect(isOpenClawControlRevisionRuntimeReady(revision(now), {
-      gatewayId: "bender",
-      revisionId: "bender",
+      gatewayId: "walter",
+      revisionId: "walter",
       now,
     })).toBe(true);
   });
@@ -77,8 +77,8 @@ describe("OpenClaw Dashboard revision runtime gate", () => {
       const value = revision(now);
       mutate(value);
       expect(isOpenClawControlRevisionRuntimeReady(value, {
-        gatewayId: "bender",
-        revisionId: "bender",
+        gatewayId: "walter",
+        revisionId: "walter",
         now,
       })).toBe(false);
     }

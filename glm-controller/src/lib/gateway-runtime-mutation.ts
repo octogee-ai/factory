@@ -13,10 +13,10 @@ export async function withGatewayRuntimeMutation<T>(
   store: PlatformStateStore,
   gatewayId: string,
   mutation: (transaction: PlatformStateTransaction) => Promise<T>,
-  allowedComputerRecoveryOperationId?: string,
+  allowedVmRecoveryOperationId?: string,
 ): Promise<T> {
   return store.transaction({ label: 'gateway-runtime-mutation' }, async transaction => {
-    await assertGatewayRuntimeMutationUnfencedInStore(transaction, gatewayId, allowedComputerRecoveryOperationId);
+    await assertGatewayRuntimeMutationUnfencedInStore(transaction, gatewayId, allowedVmRecoveryOperationId);
     return mutation(transaction);
   });
 }

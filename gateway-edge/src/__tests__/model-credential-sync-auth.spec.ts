@@ -34,7 +34,7 @@ describe("model credential sync internal auth", () => {
     const headers = createModelCredentialSyncAuthHeaders({
       body,
       secret: signingKey,
-      gatewayId: "bender",
+      gatewayId: "walter",
       nowMs: 42,
     });
 
@@ -42,7 +42,7 @@ describe("model credential sync internal auth", () => {
       isValidModelCredentialSyncSignature({
         body,
         publicKey: verificationKey,
-        gatewayId: "bender",
+        gatewayId: "walter",
         timestamp: headers[MODEL_CREDENTIAL_SYNC_TIMESTAMP_HEADER],
         signature: headers[MODEL_CREDENTIAL_SYNC_SIGNATURE_HEADER],
         nowMs: 42,
@@ -52,7 +52,7 @@ describe("model credential sync internal auth", () => {
 
   it("uses model credential wording for missing signing secret errors", () => {
     expect(() =>
-      createModelCredentialSyncAuthHeaders({ body: {}, gatewayId: "bender", secret: " " }),
+      createModelCredentialSyncAuthHeaders({ body: {}, gatewayId: "walter", secret: " " }),
     ).toThrow(/model credential sync/);
   });
 

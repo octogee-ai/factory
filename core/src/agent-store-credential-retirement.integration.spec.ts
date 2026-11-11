@@ -33,16 +33,16 @@ describe.skipIf(!dsn)("retired Gateway PostgreSQL login", () => {
 
   it("disables only the stopped Gateway login, preserves ownership, terminates its lingering sessions and rejects stale issuance", async () => {
     const gatewayId = `retirement-${randomUUID()}`;
-    const builder = { uid: gatewayId, slug: gatewayId };
+    const user = { uid: gatewayId, slug: gatewayId };
     const scope = decodeURIComponent(new URL(dsn!).pathname.slice(1));
     const login = roleFor("gateway", `${scope}:${gatewayId}`);
-    const owner = roleFor("builder", `${scope}:${builder.uid}`);
+    const owner = roleFor("builder", `${scope}:${user.uid}`);
     const schema = `retirement_${randomUUID().replaceAll("-", "")}`;
     const admin = new pg.Client({ connectionString: dsn });
     const provision = createAgentStoreCredentialProvisioner(dsn!, dsn!);
     const revoke = createAgentStoreCredentialRevoker(dsn!);
     const verify = createAgentStoreCredentialRetirementVerifier(dsn!);
-    const identity = { gatewayId, gatewayClass: "builder" as const, builder, token: "synthetic-retirement" };
+    const identity = { gatewayId, gatewayClass: "builder" as const, user, token: "synthetic-retirement" };
     const neighbourGatewayId = `retirement-neighbour-${randomUUID()}`;
     const neighbourLogin = roleFor("gateway", `${scope}:${neighbourGatewayId}`);
     let active: pg.Client | undefined;

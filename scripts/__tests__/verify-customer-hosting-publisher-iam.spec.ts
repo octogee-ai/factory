@@ -53,7 +53,7 @@ esac
   });
 }
 
-describe("customer Hosting publisher IAM verifier", () => {
+describe("user Hosting publisher IAM verifier", () => {
   it("accepts only the exact publisher, Workload Identity, and journal grants", () => {
     const result = runVerifier();
 
@@ -73,7 +73,7 @@ describe("customer Hosting publisher IAM verifier", () => {
     expect(result.stderr).toContain("Unexpected publisher project IAM");
   });
 
-  it("rejects API or runner authority in the customer Hosting project", () => {
+  it("rejects API or runner authority in the user Hosting project", () => {
     const result = runVerifier({
       projectPolicy: policy([
         { role: "roles/firebasehosting.admin", members: [publisher] },

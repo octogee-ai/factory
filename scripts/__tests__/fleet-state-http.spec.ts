@@ -4,7 +4,7 @@ import request from "supertest";
 import { describe, expect, it } from "vitest";
 
 import { signFleetRequest } from "../lib/fleet-signature.js";
-import { fleetStatePrivateProjectCoachWorkspace } from "../lib/fleet-provisioner.js";
+import { fleetStatePrivateProjectAgentWorkspace } from "../lib/fleet-provisioner.js";
 import { createFleetStateHandler } from "../lib/fleet-state-http.js";
 import {
   FLEET_STATE_PATH,
@@ -20,7 +20,7 @@ function ed25519Pair(): { privateKey: string; publicKey: string } {
   };
 }
 
-const COWBOY = ed25519Pair();
+const FLEET_CONTROLLER = ed25519Pair();
 const IMPOSTOR = ed25519Pair();
 
 const STATE: FleetStateResponse = {
@@ -30,7 +30,7 @@ const STATE: FleetStateResponse = {
   version: "sha-1",
   openclawVersion: "2026.8.1-beta.2",
   startedAt: 42,
-  customers: ["alice", "bob"],
+  users: ["alice", "bob"],
   migratingIn: ["carol"],
   configuredBuilder: null,
 };
@@ -45,10 +45,10 @@ function appWith(gatewayId = "shared-a"): express.Express {
   app.post(
     `${FLEET_STATE_PATH}/:gatewayId`,
     createFleetStateHandler({
-      publicKey: COWBOY.publicKey,
+      publicKey: FLEET_CONTROLLER.publicKey,
       gatewayId,
       readState: ({ privateProjectCoachSlug }) => ({ ...STATE, gatewayId,
-        ...(privateProjectCoachSlug ? { privateProjectCoachWorkspace: fleetStatePrivateProjectCoachWorkspace({
+        ...(privateProjectCoachSlug ? { privateProjectCoachWorkspace: fleetStatePrivateProjectAgentWorkspace({
           agents: { entries: { "octogee-alice-proj-orbit-coach": { workspace: "/openclaw/customers/alice/.system/project-coaches/orbit" },
             "octogee-bob-proj-orbit-coach": { workspace: "/openclaw/customers/bob/projects/orbit" } } },
         }, "/openclaw", privateProjectCoachSlug) } : {}),
@@ -63,7 +63,7 @@ function signedPost(
   app: express.Express,
   pathGatewayId: string,
   body: Record<string, unknown>,
-  privateKey = COWBOY.privateKey,
+  privateKey = FLEET_CONTROLLER.privateKey,
 ) {
   const rawBody = JSON.stringify(body);
   return request(app)
@@ -84,7 +84,7 @@ describe("signed fleet state endpoint", () => {
     expect(res.body).toEqual(STATE);
   });
 
-  it("reports the addressed tenant's configured workspace only to Cowboy", async () => {
+  it("reports the addressed tenant's configured workspace only to the fleet controller", async () => {
     const body = { requestId: "req-private", gatewayId: "shared-a", privateProjectCoachSlug: "alice" };
     const own = await signedPost(appWith(), "shared-a", body);
     expect(own.body.privateProjectCoachWorkspace).toBe(true);
@@ -150,7 +150,7 @@ describe("signed fleet state endpoint", () => {
     const res = await request(appWith())
       .post(`${FLEET_STATE_PATH}/shared-a`)
       .set("content-type", "application/json")
-      .set(SIGNATURE_HEADER, signFleetRequest(COWBOY.privateKey, "req-1", "not json"))
+      .set(SIGNATURE_HEADER, signFleetRequest(FLEET_CONTROLLER.privateKey, "req-1", "not json"))
       .send("not json");
 
     expect(res.status).toBe(400);

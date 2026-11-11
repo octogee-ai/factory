@@ -272,10 +272,10 @@ function configGet(value: unknown): { config: JsonObject; hash: string } {
   return { config, hash };
 }
 
-function coachFromConfig(config: JsonObject, coachId: string): JsonObject {
-  const matches = agentList(config).filter((agent) => agent.id === coachId);
+function defaultAgentFromConfig(config: JsonObject, userDefaultAgentId: string): JsonObject {
+  const matches = agentList(config).filter((agent) => agent.id === userDefaultAgentId);
   if (matches.length !== 1) {
-    throw new AgentImportServiceError("coach_config_missing", "Octogee coach config is missing or ambiguous");
+    throw new AgentImportServiceError("coach_config_missing", "Octogee agent config is missing or ambiguous");
   }
   return matches[0];
 }
@@ -292,20 +292,20 @@ function restorationValue(previous: unknown, patch: unknown, wasPresent: boolean
   return wasPresent ? cloneValue(previous) : null;
 }
 
-function previousRuntime(coach: JsonObject, patch: JsonObject): JsonObject {
+function previousRuntime(defaultAgent: JsonObject, patch: JsonObject): JsonObject {
   return Object.fromEntries(Object.entries(patch).map(([key, value]) => [
     key,
-    restorationValue(coach[key], value, Object.prototype.hasOwnProperty.call(coach, key)),
+    restorationValue(defaultAgent[key], value, Object.prototype.hasOwnProperty.call(defaultAgent, key)),
   ]));
 }
 
 function mergedPreviousRuntime(
-  coach: JsonObject,
+  defaultAgent: JsonObject,
   patch: JsonObject,
   checkpointedPrevious: JsonObject | undefined,
 ): JsonObject {
   return {
-    ...previousRuntime(coach, patch),
+    ...previousRuntime(defaultAgent, patch),
     ...(checkpointedPrevious ?? {}),
   };
 }
@@ -333,11 +333,11 @@ function mergePatchValue(previous: unknown, patch: unknown): unknown {
 function assertRuntimePatchApplied(
   beforeConfig: JsonObject,
   afterConfig: JsonObject,
-  coachId: string,
+  userDefaultAgentId: string,
   patch: JsonObject,
 ): void {
-  const before = coachFromConfig(beforeConfig, coachId);
-  const after = coachFromConfig(afterConfig, coachId);
+  const before = defaultAgentFromConfig(beforeConfig, userDefaultAgentId);
+  const after = defaultAgentFromConfig(afterConfig, userDefaultAgentId);
   for (const [key, value] of Object.entries(patch)) {
     const expected = mergePatchValue(before[key], value);
     if (expected === DELETED) {
@@ -353,11 +353,11 @@ function assertRuntimePatchApplied(
 function runtimePatchState(
   beforeConfig: JsonObject,
   currentConfig: JsonObject,
-  coachId: string,
+  userDefaultAgentId: string,
   patch: JsonObject,
 ): "unchanged" | "applied" | "diverged" {
-  const before = coachFromConfig(beforeConfig, coachId);
-  const current = coachFromConfig(currentConfig, coachId);
+  const before = defaultAgentFromConfig(beforeConfig, userDefaultAgentId);
+  const current = defaultAgentFromConfig(currentConfig, userDefaultAgentId);
   let unchanged = true;
   let applied = true;
   for (const [key, value] of Object.entries(patch)) {
@@ -404,13 +404,13 @@ function safelyIdKeyedAgentList(config: JsonObject): boolean {
 
 /** A keyed entry carries no `id` — the key is the id, and shipping one anyway
  *  would add a stray field to the agent. */
-function coachPatch(config: JsonObject, coachId: string, patch: JsonObject): JsonObject {
+function defaultAgentPatch(config: JsonObject, userDefaultAgentId: string, patch: JsonObject): JsonObject {
   return keyedAgentEntries(config)
-    ? { agents: { entries: { [coachId]: cloneValue(patch) } } }
-    : { agents: { list: [{ id: coachId, ...cloneValue(patch) }] } };
+    ? { agents: { entries: { [userDefaultAgentId]: cloneValue(patch) } } }
+    : { agents: { list: [{ id: userDefaultAgentId, ...cloneValue(patch) }] } };
 }
 
-function assertUnpatchedAgentConfig(before: JsonObject, after: JsonObject, coachId: string, patch: JsonObject): void {
+function assertUnpatchedAgentConfig(before: JsonObject, after: JsonObject, userDefaultAgentId: string, patch: JsonObject): void {
   const beforeList = agentList(before);
   const afterList = agentList(after);
   if (beforeList.length !== afterList.length) {
@@ -419,7 +419,7 @@ function assertUnpatchedAgentConfig(before: JsonObject, after: JsonObject, coach
   for (let index = 0; index < beforeList.length; index += 1) {
     const prior = beforeList[index];
     const current = afterList[index];
-    if (prior.id !== coachId) {
+    if (prior.id !== userDefaultAgentId) {
       if (!deepEqual(current, prior)) {
         throw new AgentImportServiceError("config_readback_failed", "OpenClaw changed a sibling agent");
       }
@@ -427,7 +427,7 @@ function assertUnpatchedAgentConfig(before: JsonObject, after: JsonObject, coach
     }
     for (const [key, value] of Object.entries(prior)) {
       if (!(key in patch) && !deepEqual(current[key], value)) {
-        throw new AgentImportServiceError("config_readback_failed", `OpenClaw changed coach field ${key}`);
+        throw new AgentImportServiceError("config_readback_failed", `OpenClaw changed agent field ${key}`);
       }
     }
   }
@@ -786,11 +786,11 @@ export class AgentImportService {
     checkpoint: (previous: JsonObject) => Promise<void>,
   ): Promise<JsonObject> {
     if (Object.keys(runtimePatch).length === 0) return checkpointedPrevious ?? {};
-    const coachId = `octogee-${slug}-coach`;
+    const userDefaultAgentId = `octogee-${slug}-coach`;
     return this.deps.withConfigLock(async () => {
       const before = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
       const previous = mergedPreviousRuntime(
-        coachFromConfig(before.config, coachId),
+        defaultAgentFromConfig(before.config, userDefaultAgentId),
         runtimePatch,
         checkpointedPrevious,
       );
@@ -805,12 +805,12 @@ export class AgentImportService {
       }
       try {
         await this.deps.invokeOpenClaw("config.patch", {
-          raw: JSON.stringify(coachPatch(before.config, coachId, runtimePatch)),
+          raw: JSON.stringify(defaultAgentPatch(before.config, userDefaultAgentId, runtimePatch)),
           baseHash: before.hash,
         });
       } catch {
         const current = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
-        const patchState = runtimePatchState(before.config, current.config, coachId, runtimePatch);
+        const patchState = runtimePatchState(before.config, current.config, userDefaultAgentId, runtimePatch);
         if (patchState === "unchanged") {
           throw new AgentImportServiceError(
             "workspace_runtime_policy_failed",
@@ -822,8 +822,8 @@ export class AgentImportService {
         }
       }
       const after = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
-      assertRuntimePatchApplied(before.config, after.config, coachId, runtimePatch);
-      assertUnpatchedAgentConfig(before.config, after.config, coachId, runtimePatch);
+      assertRuntimePatchApplied(before.config, after.config, userDefaultAgentId, runtimePatch);
+      assertUnpatchedAgentConfig(before.config, after.config, userDefaultAgentId, runtimePatch);
       await this.deps.invokeOpenClaw("health", {});
       return previous;
     });
@@ -935,7 +935,7 @@ export class AgentImportService {
   async latest(input: { uid: string }): Promise<AgentImportRecord | null> {
     const record = await this.deps.getLatestRecord();
     if (!record) return null;
-    if (record.uid !== input.uid) throw new AgentImportServiceError("forbidden", "agent import belongs to another builder");
+    if (record.uid !== input.uid) throw new AgentImportServiceError("forbidden", "agent import belongs to another user");
     return record;
   }
 
@@ -971,12 +971,12 @@ export class AgentImportService {
       if (!checkpointedPrevious) await checkpoint({});
       return { outcome: "unchanged", previous: checkpointedPrevious ?? {} };
     }
-    const coachId = `octogee-${slug}-coach`;
+    const userDefaultAgentId = `octogee-${slug}-coach`;
     return this.deps.withConfigLock(async () => {
       const before = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
-      const reversePatch = previousRuntime(coachFromConfig(before.config, coachId), runtimePatch);
+      const reversePatch = previousRuntime(defaultAgentFromConfig(before.config, userDefaultAgentId), runtimePatch);
       const previous = mergedPreviousRuntime(
-        coachFromConfig(before.config, coachId),
+        defaultAgentFromConfig(before.config, userDefaultAgentId),
         runtimePatch,
         checkpointedPrevious,
       );
@@ -988,17 +988,17 @@ export class AgentImportService {
       }
       try {
         await this.deps.invokeOpenClaw("config.patch", {
-          raw: JSON.stringify(coachPatch(before.config, coachId, runtimePatch)),
+          raw: JSON.stringify(defaultAgentPatch(before.config, userDefaultAgentId, runtimePatch)),
           baseHash: before.hash,
         });
         const after = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
-        assertRuntimePatchApplied(before.config, after.config, coachId, runtimePatch);
-        assertUnpatchedAgentConfig(before.config, after.config, coachId, runtimePatch);
+        assertRuntimePatchApplied(before.config, after.config, userDefaultAgentId, runtimePatch);
+        assertUnpatchedAgentConfig(before.config, after.config, userDefaultAgentId, runtimePatch);
         await this.deps.invokeOpenClaw("health", {});
         return { outcome: "applied", previous };
       } catch {
         const rollbackBase = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
-        const patchState = runtimePatchState(before.config, rollbackBase.config, coachId, runtimePatch);
+        const patchState = runtimePatchState(before.config, rollbackBase.config, userDefaultAgentId, runtimePatch);
         if (patchState === "unchanged") {
           await this.deps.invokeOpenClaw("health", {});
           return { outcome: "safe_baseline", previous };
@@ -1010,12 +1010,12 @@ export class AgentImportService {
           throw new AgentImportServiceError("config_rollback_unsafe", "OpenClaw agent list cannot be safely restored");
         }
         await this.deps.invokeOpenClaw("config.patch", {
-          raw: JSON.stringify(coachPatch(rollbackBase.config, coachId, reversePatch)),
+          raw: JSON.stringify(defaultAgentPatch(rollbackBase.config, userDefaultAgentId, reversePatch)),
           baseHash: rollbackBase.hash,
         });
         const restored = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
-        assertRuntimePatchApplied(rollbackBase.config, restored.config, coachId, reversePatch);
-        assertUnpatchedAgentConfig(before.config, restored.config, coachId, reversePatch);
+        assertRuntimePatchApplied(rollbackBase.config, restored.config, userDefaultAgentId, reversePatch);
+        assertUnpatchedAgentConfig(before.config, restored.config, userDefaultAgentId, reversePatch);
         await this.deps.invokeOpenClaw("health", {});
         return { outcome: "safe_baseline", previous };
       }
@@ -1024,19 +1024,19 @@ export class AgentImportService {
 
   private async patchRuntime(slug: string, patch: JsonObject): Promise<void> {
     if (Object.keys(patch).length === 0) return;
-    const coachId = `octogee-${slug}-coach`;
+    const userDefaultAgentId = `octogee-${slug}-coach`;
     await this.deps.withConfigLock(async () => {
       const before = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
       if (!safelyIdKeyedAgentList(before.config)) {
         throw new AgentImportServiceError("config_rollback_unsafe", "OpenClaw agent list cannot be safely restored");
       }
       await this.deps.invokeOpenClaw("config.patch", {
-        raw: JSON.stringify(coachPatch(before.config, coachId, patch)),
+        raw: JSON.stringify(defaultAgentPatch(before.config, userDefaultAgentId, patch)),
         baseHash: before.hash,
       });
       const after = configGet(await this.deps.invokeOpenClaw(CONFIG_GET_METHOD, {}));
-      assertRuntimePatchApplied(before.config, after.config, coachId, patch);
-      assertUnpatchedAgentConfig(before.config, after.config, coachId, patch);
+      assertRuntimePatchApplied(before.config, after.config, userDefaultAgentId, patch);
+      assertUnpatchedAgentConfig(before.config, after.config, userDefaultAgentId, patch);
       await this.deps.invokeOpenClaw("health", {});
     });
   }
@@ -1044,7 +1044,7 @@ export class AgentImportService {
   private async ownedRecord(importId: string, uid: string): Promise<AgentImportRecord> {
     const record = await this.deps.getRecord(importId);
     if (!record) throw new AgentImportServiceError("import_not_found", "agent import was not found");
-    if (record.uid !== uid) throw new AgentImportServiceError("forbidden", "agent import belongs to another builder");
+    if (record.uid !== uid) throw new AgentImportServiceError("forbidden", "agent import belongs to another user");
     return record;
   }
 

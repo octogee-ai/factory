@@ -219,7 +219,7 @@ interface MutationState {
   deferred: Map<string, string>;
 }
 
-async function deployMissingBuilders(snapshot: FleetSnapshot, options: FleetDeployOptions, deps: FleetDeployDeps, state: MutationState): Promise<void> {
+async function deployMissingUsers(snapshot: FleetSnapshot, options: FleetDeployOptions, deps: FleetDeployDeps, state: MutationState): Promise<void> {
   const { attempts, failures, deferred } = state;
   deferred.clear();
   for (const gateway of snapshot.gateways) {
@@ -289,7 +289,7 @@ export async function deployFleet(options: FleetDeployOptions, deps: FleetDeploy
       reasons = ["platform gateway image family is missing or superseded the requested build"];
       return report("failed");
     }
-    await deployMissingBuilders(snapshot, options, deps, mutations);
+    await deployMissingUsers(snapshot, options, deps, mutations);
     const timing = { now: deps.now(), startedAt, maxAge: options.maxObservationAgeMs ?? 180_000 };
     targets = assessTargets(snapshot, options, timing, mutations, previousTargets);
     reasons = snapshotProblems(snapshot);
@@ -316,6 +316,6 @@ export function formatFleetSummary(report: FleetDeployReport): string {
     "| Gateway | Status | Desired release | Live release | Operation |", "| --- | --- | --- | --- | --- |",
     ...rows.map((row) => `| ${row} |`), "",
     `Showing ${targets.length} of ${report.targets.length} targets. Full digest observations and failure reasons are in the job log.`,
-    "Paused Builders report desired release only; their computers were not started.", "",
+    "Paused users report desired release only; their VMs were not started.", "",
   ].join("\n");
 }

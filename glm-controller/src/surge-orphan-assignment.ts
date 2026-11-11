@@ -1,7 +1,7 @@
-import { builderRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
+import { isolatedRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
 import type { FleetRegistryRecord, PlatformStateStore } from "@octogee/core/platform-state";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
-import type { SurgeAssignment } from "./surge-customer-handoff.js";
+import type { SurgeAssignment } from "./surge-user-handoff.js";
 
 type AssignedUser = { uid: string; slug: string };
 
@@ -39,12 +39,12 @@ async function pruneOne(input: {
   return store.transaction({ label: "surge-orphan-assignment.prune" }, async (tx) => {
     const [stored, owner, runtime, journal] = await Promise.all([
       tx.gateways.assignments.get(gatewayId, assignment.uid),
-      tx.builders.records.get(assignment.uid),
+      tx.users.records.get(assignment.uid),
       tx.fleetRegistry.get(gatewayId),
       tx.journal.operations.get(id),
     ]);
     if (!stored) return true;
-    if (owner && builderRuntimeMutationFenced(owner)) return "restore-fenced";
+    if (owner && isolatedRuntimeMutationFenced(owner)) return "restore-fenced";
     if (stored.slug !== assignment.slug || stored.epoch !== assignment.epoch) return false;
     if (owner?.gateway?.gatewayId === gatewayId && owner.slug === assignment.slug) return false;
     if (!runtimeProvesAbsent(runtime, gatewayId, assignment.slug, now)) return false;

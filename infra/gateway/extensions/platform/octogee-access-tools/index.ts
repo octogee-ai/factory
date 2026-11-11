@@ -4,8 +4,8 @@ import { computerApprovalHook } from "./computer-approval.js";
 
 export default definePluginEntry({
   id: "octogee-access-tools",
-  name: "Octogee Computer Authorization",
-  description: "Authorize agent computer operations in the owning workspace.",
+  name: "Octogee VM Authorization",
+  description: "Authorize agent VM operations in the owning workspace.",
   register(api: OpenClawPluginApi) {
     const config = (api.pluginConfig ?? {}) as { brokerUrl?: string; tokenPath?: string };
     api.on("before_tool_call", computerApprovalHook(config));

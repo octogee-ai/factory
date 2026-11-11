@@ -95,7 +95,7 @@ vi.setSystemTime(new Date("2026-03-14T08:30:00Z"));
     ]);
   });
 
-  it("seeds USER.md with the Builder's captured time zone and 'unknown' until one is captured or when it is malformed", () => {
+  it("seeds USER.md with the user's captured time zone and 'unknown' until one is captured or when it is malformed", () => {
     expect(buildProvisioningContext("uid-1", { username: "acme", preferences: { timeZone: "America/Chicago" } }).templateVars.timeZone).toBe("America/Chicago");
     expect(buildProvisioningContext("uid-1", { username: "acme", preferences: { timeZone: "../etc" } }).templateVars.timeZone).toBe("unknown");
     expect(buildProvisioningContext("uid-1", { username: "acme" }).templateVars.timeZone).toBe("unknown");
@@ -164,7 +164,7 @@ vi.setSystemTime(new Date("2026-03-14T08:30:00Z"));
     ).toThrow(/not a valid slug/);
   });
 
-  it("rejects reserved usernames (general, coach, admin, town-square, etc.)", () => {
+  it("rejects reserved usernames (general, defaultAgent, admin, town-square, etc.)", () => {
     for (const reserved of ["general", "coach", "admin", "town-square", "proj"]) {
       expect(() =>
         buildProvisioningContext("uid-1", { username: reserved }),

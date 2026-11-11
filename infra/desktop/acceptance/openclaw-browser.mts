@@ -8,7 +8,7 @@ import { loadOpenClawBundledFunction } from "./openclaw-bundled-runtime.mts";
 const packageRoot = process.env.OPENCLAW_PACKAGE_DIR;
 const source = packageRoot ?? process.env.OPENCLAW_SOURCE_DIR;
 assert.ok(source, "Set OPENCLAW_PACKAGE_DIR for an installed artifact or OPENCLAW_SOURCE_DIR for a local checkout");
-assert.equal(process.env.OCTOGEE_ACCEPT_ISOLATED_COMPUTER, "1", "Run only against an isolated acceptance computer");
+assert.equal(process.env.OCTOGEE_ACCEPT_ISOLATED_COMPUTER, "1", "Run only against an isolated acceptance VM");
 const phase = process.env.OCTOGEE_ACCEPT_PHASE ?? "seed";
 assert.ok(["discover", "seed", "verify"].includes(phase));
 const output = process.env.OCTOGEE_ACCEPT_OUTPUT;
@@ -31,10 +31,10 @@ const config = {
   agents: { entries: { "octogee-native-coach": {}, "octogee-native-proj-site-coach": {}, arbitrary: { tools: { profile: "full" } } } },
   plugins: { load: { paths: [`${source}/${packageRoot ? "dist/" : ""}extensions/browser`] } },
 };
-const { builderClaimFromIdentity, writeBuilderClaim } = await import("../../../shared/server/builder-claim.ts");
+const { userClaimFromIdentity, writeUserClaim } = await import("../../../shared/server/user-claim.ts");
 const claimDir = `${output}/builder-claim`;
 await mkdir(claimDir, { recursive: true });
-writeBuilderClaim(claimDir, builderClaimFromIdentity({
+writeUserClaim(claimDir, userClaimFromIdentity({
   gatewayId: "acceptance", state: "claimed", ownerUid: "uid-native", builderSlug: "native", leaseId: null, generation: null,
 }, Date.now()));
 applyOpenClawComputerBrowserConfig(config, { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "gce-vm", OPENCLAW_DIR: claimDir, GATEWAY_ID: "acceptance" });
@@ -91,7 +91,7 @@ const server = createServer((req, res) => {
   sawPersistentCookie ||= (req.headers.cookie ?? "").includes("octogee_native_session=one-visible-browser");
   if (phase === "seed") res.setHeader("set-cookie", "octogee_native_session=one-visible-browser; Max-Age=86400; HttpOnly; SameSite=Lax; Path=/");
   res.setHeader("content-type", "text/html");
-  res.end(`<!doctype html><html><head><title>Octogee visible computer CDP acceptance</title></head><body style="background:#162430;color:white;font:24px sans-serif;padding:80px"><h1>OpenClaw is driving this Builder computer</h1><p>The human and agent share this visible Chromium session.</p><label>Your message <input aria-label="Your message" id="message" style="font:24px sans-serif;width:500px"></label><button id="commit" style="font:24px sans-serif" onclick="document.querySelector('#result').textContent=document.querySelector('#message').value">Show on shared desktop</button><h2 id="result">Waiting for agent action</h2></body></html>`);
+  res.end(`<!doctype html><html><head><title>Octogee visible VM CDP acceptance</title></head><body style="background:#162430;color:white;font:24px sans-serif;padding:80px"><h1>OpenClaw is driving this gateway VM</h1><p>The human and agent share this visible Chromium session.</p><label>Your message <input aria-label="Your message" id="message" style="font:24px sans-serif;width:500px"></label><button id="commit" style="font:24px sans-serif" onclick="document.querySelector('#result').textContent=document.querySelector('#message').value">Show on shared desktop</button><h2 id="result">Waiting for agent action</h2></body></html>`);
 });
 await new Promise<void>((resolve) => server.listen(18080, "127.0.0.1", resolve));
 try {

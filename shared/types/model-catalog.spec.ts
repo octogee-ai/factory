@@ -163,7 +163,7 @@ describe("MODEL_CATALOG", () => {
       expect(modelCatalogForProvider("vertex")).toEqual(VERTEX_MODEL_CATALOG);
     });
 
-    it("keeps the Vertex rail out of the customer-selectable catalog", () => {
+    it("keeps the Vertex rail out of the user-selectable catalog", () => {
       expect(MODEL_CATALOG.some((entry) => entry.provider === "vertex")).toBe(false);
     });
   });

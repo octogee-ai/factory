@@ -16,7 +16,7 @@ import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
 import { findUnsafeGitMetadataEntry } from "@octogee/core/git-metadata";
 import type { ProjectRepoSource } from "@octogee/shared/types/project";
-import { ADD_CUSTOMER_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
+import { ADD_USER_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
 
 export function errMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -49,11 +49,11 @@ function execErrStream(err: unknown, stream: "stderr" | "stdout"): string {
   return "";
 }
 
-export function customerSshKeyPath(slug: string): string {
+export function userSshKeyPath(slug: string): string {
   return path.join(CUSTOMER_KEYS_DIR, slug, "id_ed25519");
 }
 
-export interface CustomerGitRefreshDeps {
+export interface UserGitRefreshDeps {
   fetchCanonical?: (repoDir: string, gitDir: string) => void;
   repoSource?: ProjectRepoSource | null;
   giteaRepoName?: string;
@@ -63,15 +63,15 @@ export interface CustomerGitRefreshDeps {
 export function setRepoSshCommand(
   repoDir: string,
   slug: string,
-  deps: CustomerGitRefreshDeps = {},
+  deps: UserGitRefreshDeps = {},
 ): void {
-  const gitDir = externalizeCustomerGitDir(repoDir, deps);
+  const gitDir = externalizeUserGitDir(repoDir, deps);
   if (gitDir) {
-    const identity = customerGitIdentity(repoDir);
+    const identity = userGitIdentity(repoDir);
     if (!identity || identity.slug !== slug || identity.metadataDir !== gitDir) {
-      throw new Error(`[git] customer repository identity does not match ${repoDir}`);
+      throw new Error(`[git] user repository identity does not match ${repoDir}`);
     }
-    writeCanonicalGitConfig(gitDir, slug, canonicalCustomerGitSource(identity, deps));
+    writeCanonicalGitConfig(gitDir, slug, canonicalUserGitSource(identity, deps));
     return;
   }
   if (path.resolve(repoDir) === path.resolve(OPENCLAW_DIR, "system_config")) {
@@ -87,25 +87,25 @@ export function setRepoSshCommand(
   removePersistedRepoSshCommand(repoDir);
 }
 
-const CUSTOMER_GIT_METADATA_ROOT = path.join(OPENCLAW_DIR, "git-metadata");
-const CUSTOMER_GIT_TRUST_RECEIPT_VERSION = "octogee-customer-git-v3";
+const USER_GIT_METADATA_ROOT = path.join(OPENCLAW_DIR, "git-metadata");
+const USER_GIT_TRUST_RECEIPT_VERSION = "octogee-customer-git-v3";
 const SAFE_GIT_IDENTITY_RE = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 const SAFE_GITHUB_OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u;
 const SAFE_GITHUB_REPO_RE = /^[A-Za-z0-9._-]{1,100}$/u;
 const GIT_BINARY = "/usr/bin/git";
 const DISABLED_EXECUTABLE = "/bin/false";
 
-interface CustomerGitIdentity {
+interface UserGitIdentity {
   slug: string;
   repoName: string;
   metadataDir: string;
 }
 
-type CanonicalCustomerGitSource =
+type CanonicalUserGitSource =
   | { kind: "gitea"; repoName: string; remoteUrl: string }
   | { kind: "github"; owner: string; repo: string; remoteUrl: string };
 
-function customerGitIdentity(repoDir: string): CustomerGitIdentity | null {
+function userGitIdentity(repoDir: string): UserGitIdentity | null {
   const relative = path.relative(path.resolve(CUSTOMERS_DIR), path.resolve(repoDir));
   if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
   const parts = relative.split(path.sep);
@@ -115,7 +115,7 @@ function customerGitIdentity(repoDir: string): CustomerGitIdentity | null {
     return {
       slug,
       repoName: workspaceRepoName(),
-      metadataDir: path.join(CUSTOMER_GIT_METADATA_ROOT, slug, "workspace.git"),
+      metadataDir: path.join(USER_GIT_METADATA_ROOT, slug, "workspace.git"),
     };
   }
   const projectSlug = parts[2] ?? "";
@@ -123,17 +123,17 @@ function customerGitIdentity(repoDir: string): CustomerGitIdentity | null {
     return {
       slug,
       repoName: projectRepoName(projectSlug),
-      metadataDir: path.join(CUSTOMER_GIT_METADATA_ROOT, slug, "projects", `${projectSlug}.git`),
+      metadataDir: path.join(USER_GIT_METADATA_ROOT, slug, "projects", `${projectSlug}.git`),
     };
   }
   return null;
 }
 
-function customerGitMetadataDir(repoDir: string): string | null {
-  return customerGitIdentity(repoDir)?.metadataDir ?? null;
+function userGitMetadataDir(repoDir: string): string | null {
+  return userGitIdentity(repoDir)?.metadataDir ?? null;
 }
 
-function githubSource(repoSource: ProjectRepoSource): CanonicalCustomerGitSource {
+function githubSource(repoSource: ProjectRepoSource): CanonicalUserGitSource {
   if (!SAFE_GITHUB_OWNER_RE.test(repoSource.owner) || !SAFE_GITHUB_REPO_RE.test(repoSource.repo)) {
     throw new Error("[git] invalid GitHub repository source");
   }
@@ -145,7 +145,7 @@ function githubSource(repoSource: ProjectRepoSource): CanonicalCustomerGitSource
   };
 }
 
-function giteaSource(slug: string, repoName: string): CanonicalCustomerGitSource {
+function giteaSource(slug: string, repoName: string): CanonicalUserGitSource {
   if (!SAFE_GIT_IDENTITY_RE.test(repoName)) throw new Error("[git] invalid Gitea repository name");
   return {
     kind: "gitea",
@@ -154,27 +154,27 @@ function giteaSource(slug: string, repoName: string): CanonicalCustomerGitSource
   };
 }
 
-function canonicalCustomerGitSource(
-  identity: CustomerGitIdentity,
-  deps: CustomerGitRefreshDeps,
-): CanonicalCustomerGitSource {
+function canonicalUserGitSource(
+  identity: UserGitIdentity,
+  deps: UserGitRefreshDeps,
+): CanonicalUserGitSource {
   if (deps.repoSource?.provider === "github") return githubSource(deps.repoSource);
   if (deps.giteaRepoName) return giteaSource(identity.slug, deps.giteaRepoName);
-  return trustedCustomerGitSource(identity) ?? giteaSource(identity.slug, identity.repoName);
+  return trustedUserGitSource(identity) ?? giteaSource(identity.slug, identity.repoName);
 }
 
-function sourceReceiptValue(source: CanonicalCustomerGitSource): string {
+function sourceReceiptValue(source: CanonicalUserGitSource): string {
   return source.kind === "github"
     ? `github:${source.owner}/${source.repo}`
     : `gitea:${source.repoName}`;
 }
 
 function sourceFromReceipt(
-  identity: CustomerGitIdentity,
+  identity: UserGitIdentity,
   receipt: string,
-): CanonicalCustomerGitSource | null {
+): CanonicalUserGitSource | null {
   const lines = receipt.split("\n");
-  if (lines.length !== 3 || lines[0] !== CUSTOMER_GIT_TRUST_RECEIPT_VERSION || lines[2] !== "") return null;
+  if (lines.length !== 3 || lines[0] !== USER_GIT_TRUST_RECEIPT_VERSION || lines[2] !== "") return null;
   const source = lines[1] ?? "";
   if (source.startsWith("gitea:")) {
     const repoName = source.slice("gitea:".length);
@@ -191,7 +191,7 @@ function sourceFromReceipt(
 function writeCanonicalGitConfig(
   gitDir: string,
   slug: string,
-  source: CanonicalCustomerGitSource,
+  source: CanonicalUserGitSource,
 ): void {
   const configPath = path.join(gitDir, "config");
   const configTmp = `${configPath}.octogee.tmp`;
@@ -216,11 +216,11 @@ function writeCanonicalGitConfig(
   fs.renameSync(configTmp, configPath);
 }
 
-function customerGitTrustReceipt(target: string): string {
+function userGitTrustReceipt(target: string): string {
   return `${target}.octogee-trusted-v3`;
 }
 
-function customerGitRefreshMarker(target: string): string {
+function userGitRefreshMarker(target: string): string {
   return `${target}.octogee-refresh-required`;
 }
 
@@ -245,7 +245,7 @@ function moveQuarantinedGitEntry(source: string, target: string, sourceDevice = 
   }
 }
 
-function quarantineCustomerGitEntry(source: string, identity: CustomerGitIdentity): void {
+function quarantineUserGitEntry(source: string, identity: UserGitIdentity): void {
   let sourceStat: fs.Stats;
   try {
     sourceStat = fs.lstatSync(source);
@@ -280,7 +280,7 @@ function quarantineCustomerGitEntry(source: string, identity: CustomerGitIdentit
   }
 }
 
-function customerGitEnvironmentForRefresh(
+function userGitEnvironmentForRefresh(
   slug: string,
   githubToken?: string | null,
 ): NodeJS.ProcessEnv {
@@ -298,11 +298,11 @@ function customerGitEnvironmentForRefresh(
     GIT_PAGER: "cat",
     GIT_PROTOCOL_FROM_USER: "0",
     GIT_OPTIONAL_LOCKS: "0",
-    GIT_SSH_COMMAND: `/usr/bin/ssh -i "${customerSshKeyPath(slug)}" -F /home/node/.ssh/config -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`,
+    GIT_SSH_COMMAND: `/usr/bin/ssh -i "${userSshKeyPath(slug)}" -F /home/node/.ssh/config -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`,
   };
 }
 
-function runFreshCustomerGit(
+function runFreshUserGit(
   repoDir: string,
   gitDir: string,
   slug: string,
@@ -324,17 +324,17 @@ function runFreshCustomerGit(
       cwd: repoDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      env: customerGitEnvironmentForRefresh(slug, githubToken),
+      env: userGitEnvironmentForRefresh(slug, githubToken),
     },
   ).trim();
 }
 
-function initializeFreshCustomerGit(
+function initializeFreshUserGit(
   repoDir: string,
-  identity: CustomerGitIdentity,
-  deps: CustomerGitRefreshDeps,
+  identity: UserGitIdentity,
+  deps: UserGitRefreshDeps,
 ): void {
-  const source = canonicalCustomerGitSource(identity, deps);
+  const source = canonicalUserGitSource(identity, deps);
   const staging = `${identity.metadataDir}.octogee-new-${randomUUID()}`;
   fs.mkdirSync(path.dirname(identity.metadataDir), { recursive: true, mode: 0o700 });
   try {
@@ -344,25 +344,25 @@ function initializeFreshCustomerGit(
       {
         cwd: repoDir,
         stdio: ["ignore", "pipe", "pipe"],
-        env: customerGitEnvironmentForRefresh(identity.slug, deps.githubToken),
+        env: userGitEnvironmentForRefresh(identity.slug, deps.githubToken),
       },
     );
     writeCanonicalGitConfig(staging, identity.slug, source);
     if (deps.fetchCanonical) deps.fetchCanonical(repoDir, staging);
-    else runFreshCustomerGit(repoDir, staging, identity.slug, [
+    else runFreshUserGit(repoDir, staging, identity.slug, [
       "fetch",
       "--prune",
       "origin",
       "+refs/heads/*:refs/remotes/origin/*",
     ], deps.githubToken);
-    const remoteMain = runFreshCustomerGit(
+    const remoteMain = runFreshUserGit(
       repoDir,
       staging,
       identity.slug,
       ["for-each-ref", "--format=%(objectname)", "refs/remotes/origin/main"],
       deps.githubToken,
     );
-    runFreshCustomerGit(
+    runFreshUserGit(
       repoDir,
       staging,
       identity.slug,
@@ -370,14 +370,14 @@ function initializeFreshCustomerGit(
       deps.githubToken,
     );
     if (remoteMain) {
-      runFreshCustomerGit(
+      runFreshUserGit(
         repoDir,
         staging,
         identity.slug,
         ["update-ref", "refs/heads/main", remoteMain],
         deps.githubToken,
       );
-      runFreshCustomerGit(
+      runFreshUserGit(
         repoDir,
         staging,
         identity.slug,
@@ -385,7 +385,7 @@ function initializeFreshCustomerGit(
         deps.githubToken,
       );
     } else {
-      runFreshCustomerGit(
+      runFreshUserGit(
         repoDir,
         staging,
         identity.slug,
@@ -394,19 +394,19 @@ function initializeFreshCustomerGit(
       );
     }
     fs.renameSync(staging, identity.metadataDir);
-    const receipt = customerGitTrustReceipt(identity.metadataDir);
+    const receipt = userGitTrustReceipt(identity.metadataDir);
     const receiptTmp = `${receipt}.octogee.tmp`;
-    fs.writeFileSync(receiptTmp, `${CUSTOMER_GIT_TRUST_RECEIPT_VERSION}\n${sourceReceiptValue(source)}\n`, { encoding: "utf8", mode: 0o400 });
+    fs.writeFileSync(receiptTmp, `${USER_GIT_TRUST_RECEIPT_VERSION}\n${sourceReceiptValue(source)}\n`, { encoding: "utf8", mode: 0o400 });
     fs.renameSync(receiptTmp, receipt);
-    fs.rmSync(customerGitRefreshMarker(identity.metadataDir), { force: true });
+    fs.rmSync(userGitRefreshMarker(identity.metadataDir), { force: true });
   } catch (error) {
     fs.rmSync(staging, { recursive: true, force: true });
     throw error;
   }
 }
 
-function trustedCustomerGitSource(identity: CustomerGitIdentity): CanonicalCustomerGitSource | null {
-  const receipt = customerGitTrustReceipt(identity.metadataDir);
+function trustedUserGitSource(identity: UserGitIdentity): CanonicalUserGitSource | null {
+  const receipt = userGitTrustReceipt(identity.metadataDir);
   try {
     const targetStat = fs.lstatSync(identity.metadataDir);
     const receiptStat = fs.lstatSync(receipt);
@@ -418,15 +418,15 @@ function trustedCustomerGitSource(identity: CustomerGitIdentity): CanonicalCusto
   }
 }
 
-export function customerRepositoryHasCanonicalRemote(repoDir: string): boolean {
-  const identity = customerGitIdentity(repoDir);
+export function userRepositoryHasCanonicalRemote(repoDir: string): boolean {
+  const identity = userGitIdentity(repoDir);
   if (!identity) return false;
-  const source = trustedCustomerGitSource(identity);
+  const source = trustedUserGitSource(identity);
   if (!source) return false;
   const localGit = path.join(repoDir, ".git");
   const configPath = path.join(identity.metadataDir, "config");
   try {
-    if (findUnsafeGitMetadataEntry(identity.metadataDir, CUSTOMER_GIT_METADATA_ROOT)) return false;
+    if (findUnsafeGitMetadataEntry(identity.metadataDir, USER_GIT_METADATA_ROOT)) return false;
     const localGitStat = fs.lstatSync(localGit);
     const configStat = fs.lstatSync(configPath);
     if (!localGitStat.isFile() || localGitStat.isSymbolicLink()
@@ -454,7 +454,7 @@ export function customerRepositoryHasCanonicalRemote(repoDir: string): boolean {
   }
 }
 
-function currentCustomerGitPointer(filename: string, pointer: string): boolean {
+function currentUserGitPointer(filename: string, pointer: string): boolean {
   try {
     const stat = fs.lstatSync(filename);
     return stat.isFile() && stat.nlink === 1 && (stat.mode & 0o400) !== 0 && (stat.mode & 0o333) === 0 &&
@@ -465,42 +465,42 @@ function currentCustomerGitPointer(filename: string, pointer: string): boolean {
   }
 }
 
-export function externalizeCustomerGitDir(
+export function externalizeUserGitDir(
   repoDir: string,
-  deps: CustomerGitRefreshDeps = {},
+  deps: UserGitRefreshDeps = {},
 ): string | null {
-  const identity = customerGitIdentity(repoDir);
+  const identity = userGitIdentity(repoDir);
   if (!identity) return null;
   fs.mkdirSync(repoDir, { recursive: true, mode: 0o700 });
   const target = identity.metadataDir;
   const localGit = path.join(repoDir, ".git");
-  const expectedSource = canonicalCustomerGitSource(identity, deps);
-  const trustedSource = trustedCustomerGitSource(identity);
+  const expectedSource = canonicalUserGitSource(identity, deps);
+  const trustedSource = trustedUserGitSource(identity);
   if (trustedSource) {
-    const unsafeEntry = findUnsafeGitMetadataEntry(target, CUSTOMER_GIT_METADATA_ROOT);
-    if (unsafeEntry) throw new Error(`[git] unsafe customer Git metadata: ${unsafeEntry}`);
+    const unsafeEntry = findUnsafeGitMetadataEntry(target, USER_GIT_METADATA_ROOT);
+    if (unsafeEntry) throw new Error(`[git] unsafe user Git metadata: ${unsafeEntry}`);
   }
   if (!trustedSource || sourceReceiptValue(trustedSource) !== sourceReceiptValue(expectedSource)) {
-    const refreshMarker = customerGitRefreshMarker(target);
+    const refreshMarker = userGitRefreshMarker(target);
     fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
     const refreshMarkerTmp = `${refreshMarker}.octogee-${randomUUID()}`;
-    fs.writeFileSync(refreshMarkerTmp, `${CUSTOMER_GIT_TRUST_RECEIPT_VERSION}\n`, { encoding: "utf8", mode: 0o400 });
+    fs.writeFileSync(refreshMarkerTmp, `${USER_GIT_TRUST_RECEIPT_VERSION}\n`, { encoding: "utf8", mode: 0o400 });
     fs.renameSync(refreshMarkerTmp, refreshMarker);
-    quarantineCustomerGitEntry(target, identity);
-    quarantineCustomerGitEntry(customerGitTrustReceipt(target), identity);
-    quarantineCustomerGitEntry(localGit, identity);
-    initializeFreshCustomerGit(repoDir, identity, deps);
+    quarantineUserGitEntry(target, identity);
+    quarantineUserGitEntry(userGitTrustReceipt(target), identity);
+    quarantineUserGitEntry(localGit, identity);
+    initializeFreshUserGit(repoDir, identity, deps);
   }
-  fs.rmSync(customerGitRefreshMarker(target), { force: true });
+  fs.rmSync(userGitRefreshMarker(target), { force: true });
   const pointer = `gitdir: ${target}\n`;
-  if (currentCustomerGitPointer(localGit, pointer)) return target;
-  publishCustomerGitPointer(repoDir);
+  if (currentUserGitPointer(localGit, pointer)) return target;
+  publishUserGitPointer(repoDir);
   return target;
 }
 
-function publishCustomerGitPointer(repoDir: string): void {
-  const target = customerGitMetadataDir(repoDir);
-  if (!target) throw new Error(`[git] customer Git pointer owner is missing for ${repoDir}`);
+function publishUserGitPointer(repoDir: string): void {
+  const target = userGitMetadataDir(repoDir);
+  if (!target) throw new Error(`[git] user Git pointer owner is missing for ${repoDir}`);
   const localGit = path.join(repoDir, ".git");
   const pointer = `gitdir: ${target}\n`;
   const pointerTmp = `${localGit}.octogee-${randomUUID()}.tmp`;
@@ -518,8 +518,8 @@ function publishCustomerGitPointer(repoDir: string): void {
 }
 
 function trustedGitDir(cwd: string): string | null {
-  const customerMetadata = customerGitMetadataDir(cwd);
-  if (customerMetadata) return customerMetadata;
+  const userMetadata = userGitMetadataDir(cwd);
+  if (userMetadata) return userMetadata;
   const localGit = path.join(cwd, ".git");
   try {
     const stat = fs.lstatSync(localGit);
@@ -530,10 +530,10 @@ function trustedGitDir(cwd: string): string | null {
 }
 
 function repositoryMetadataExists(repoDir: string): boolean {
-  const customerMetadata = customerGitMetadataDir(repoDir);
+  const userMetadata = userGitMetadataDir(repoDir);
   const candidates = [
-    customerMetadata,
-    ...(customerMetadata ? [customerGitRefreshMarker(customerMetadata)] : []),
+    userMetadata,
+    ...(userMetadata ? [userGitRefreshMarker(userMetadata)] : []),
     path.join(repoDir, ".git"),
   ]
     .filter((candidate): candidate is string => candidate !== null);
@@ -556,11 +556,11 @@ export function projectCheckoutMatchesSource(
 ): boolean {
   const repoDir = path.join(CUSTOMERS_DIR, slug, "projects", projectSlug);
   if (!repositoryMetadataExists(repoDir)) return false;
-  const identity = customerGitIdentity(repoDir);
+  const identity = userGitIdentity(repoDir);
   if (!identity) return false;
-  const current = trustedCustomerGitSource(identity);
+  const current = trustedUserGitSource(identity);
   if (!current) return false;
-  const expected = canonicalCustomerGitSource(identity, { giteaRepoName, repoSource });
+  const expected = canonicalUserGitSource(identity, { giteaRepoName, repoSource });
   return sourceReceiptValue(current) === sourceReceiptValue(expected);
 }
 
@@ -580,7 +580,7 @@ export function removePersistedRepoSshCommand(repoDir: string): void {
   }
 }
 
-export function generateCustomerSshKey(slug: string): string {
+export function generateUserSshKey(slug: string): string {
   const keyDir = path.join(CUSTOMER_KEYS_DIR, slug);
   const keyPath = path.join(keyDir, "id_ed25519");
   const pubPath = keyPath + ".pub";
@@ -604,12 +604,12 @@ export function generateCustomerSshKey(slug: string): string {
   return fs.readFileSync(pubPath, "utf-8").trim();
 }
 
-export async function deleteCustomerSshKey(slug: string): Promise<void> {
+export async function deleteUserSshKey(slug: string): Promise<void> {
   const keyDir = path.join(CUSTOMER_KEYS_DIR, slug);
   await fs.promises.rm(keyDir, { recursive: true, force: true });
 }
 
-export function readLocalCustomerPubKey(slug: string): string | null {
+export function readLocalUserPubKey(slug: string): string | null {
   const pubPath = path.join(CUSTOMER_KEYS_DIR, slug, "id_ed25519.pub");
   try {
     return fs.readFileSync(pubPath, "utf-8").trim();
@@ -618,17 +618,17 @@ export function readLocalCustomerPubKey(slug: string): string | null {
   }
 }
 
-export interface LocalCustomerPubKey {
+export interface LocalUserPubKey {
   slug: string;
   pubKey: string;
 }
 
-export function listLocalCustomerPubKeys(): LocalCustomerPubKey[] {
+export function listLocalUserPubKeys(): LocalUserPubKey[] {
   if (!fs.existsSync(CUSTOMER_KEYS_DIR)) return [];
   return fs.readdirSync(CUSTOMER_KEYS_DIR, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => {
-      const pubKey = readLocalCustomerPubKey(entry.name);
+      const pubKey = readLocalUserPubKey(entry.name);
       if (pubKey === null) {
         throw new Error(`[git] local SSH public key is missing for ${entry.name}`);
       }
@@ -675,9 +675,9 @@ export function gitExec(
       GIT_PROTOCOL_FROM_USER: "0",
       GIT_OPTIONAL_LOCKS: "0",
     };
-    const customerIdentity = customerGitIdentity(cwd);
+    const userIdentity = userGitIdentity(cwd);
     const effectiveSshKeyPath = sshKeyPath ?? (
-      customerIdentity ? customerSshKeyPath(customerIdentity.slug) : undefined
+      userIdentity ? userSshKeyPath(userIdentity.slug) : undefined
     );
     if (effectiveSshKeyPath) {
       env.GIT_SSH_COMMAND = `ssh -i "${effectiveSshKeyPath}" -F /home/node/.ssh/config -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
@@ -748,8 +748,8 @@ function unsafeLocalRepositoryConfigKey(cwd: string): string | null {
   if (!gitDir) return null;
   const configPath = path.join(gitDir, "config");
   try {
-    if (customerGitIdentity(cwd)) {
-      const unsafeEntry = findUnsafeGitMetadataEntry(gitDir, CUSTOMER_GIT_METADATA_ROOT);
+    if (userGitIdentity(cwd)) {
+      const unsafeEntry = findUnsafeGitMetadataEntry(gitDir, USER_GIT_METADATA_ROOT);
       if (unsafeEntry) return `<unsafe-metadata:${unsafeEntry}>`;
     }
     if (!fs.existsSync(configPath)) return null;
@@ -775,7 +775,7 @@ function unsafeLocalRepositoryConfigKey(cwd: string): string | null {
   }
 }
 
-// Workspace + project clones run over the per-customer SSH key. The key is
+// Workspace + project clones run over the per-user SSH key. The key is
 // registered (registerKey) before any clone in the mount flow, so there is
 // no admin-token HTTP fallback: a missing key is a loud failure the reconcile
 // heals by regenerating + re-registering. Repo existence is checked through the
@@ -871,9 +871,9 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
 
   const org = workspaceGiteaOrg(slug);
   const repoName = workspaceRepoName();
-  const sshKey = customerSshKeyPath(slug);
+  const sshKey = userSshKeyPath(slug);
   if (!fs.existsSync(sshKey)) {
-    log(`⚠ [git] Cannot clone ${slug} — per-customer SSH key missing (registered before clone in the mount flow)`);
+    log(`⚠ [git] Cannot clone ${slug} — per-user SSH key missing (registered before clone in the mount flow)`);
     return false;
   }
 
@@ -939,7 +939,7 @@ export async function cloneProjectRepo(
       githubToken: opts.githubToken,
     })) return false;
     if (!projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)
-      || !customerRepositoryHasCanonicalRemote(dest)) return false;
+      || !userRepositoryHasCanonicalRemote(dest)) return false;
     return refreshProjectCheckout(slug, projectSlug, dest, opts);
   }
 
@@ -964,11 +964,11 @@ export async function cloneProjectRepo(
   );
 }
 
-function restoreProjectCheckoutTree(dest: string, slug: string, deps: CustomerGitRefreshDeps): boolean {
+function restoreProjectCheckoutTree(dest: string, slug: string, deps: UserGitRefreshDeps): boolean {
   const restored = restoreEmptiedWorkspaceTree(dest, `${slug}/${path.basename(dest)}`);
   if (restored === null) return false;
   setRepoSshCommand(dest, slug, deps);
-  if (restored) publishCustomerGitPointer(dest);
+  if (restored) publishUserGitPointer(dest);
   return true;
 }
 
@@ -1007,7 +1007,7 @@ async function acquireProjectRefreshLease(
     slug,
     projectSlug,
   );
-  const deadline = opts.refreshLeaseDeadlineMs ?? performance.now() + ADD_CUSTOMER_DEADLINE_MS;
+  const deadline = opts.refreshLeaseDeadlineMs ?? performance.now() + ADD_USER_DEADLINE_MS;
   opts.signal?.throwIfAborted();
   let lease = acquire();
   while (!lease) {
@@ -1039,7 +1039,7 @@ async function refreshProjectCheckout(
   try {
     opts.signal?.throwIfAborted();
     const run = (args: string[]) => (opts.gitExec ?? gitExec)(
-      dest, args, customerSshKeyPath(slug), opts.githubToken,
+      dest, args, userSshKeyPath(slug), opts.githubToken,
     );
     if (run(["fetch", "--no-tags", "origin"]) === null) return false;
     const remoteMain = run(["for-each-ref", "--format=%(objectname)", "refs/remotes/origin/main"]);
@@ -1080,7 +1080,7 @@ function restoreMissingProjectGitMetadata(
   }
   if (
     !projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)
-    || !customerRepositoryHasCanonicalRemote(dest)
+    || !userRepositoryHasCanonicalRemote(dest)
   ) {
     log(`⚠ [git] Cannot restore ${slug}/${projectSlug} metadata — canonical source verification failed`);
     return false;
@@ -1112,10 +1112,10 @@ async function replaceProjectRepoCheckout(
   const source = opts.repoSource?.provider === "github"
     ? githubSource(opts.repoSource)
     : giteaSource(slug, giteaRepoName);
-  const sshKey = source.kind === "gitea" ? customerSshKeyPath(slug) : undefined;
+  const sshKey = source.kind === "gitea" ? userSshKeyPath(slug) : undefined;
   if (source.kind === "gitea") {
     if (!fs.existsSync(sshKey!)) {
-      log(`⚠ [git] Cannot switch ${slug}/${projectSlug} — per-customer SSH key missing`);
+      log(`⚠ [git] Cannot switch ${slug}/${projectSlug} — per-user SSH key missing`);
       return false;
     }
     if (!(await brokeredGitHost.repoExists({ owner: workspaceGiteaOrg(slug), repo: giteaRepoName }))) return false;
@@ -1165,7 +1165,7 @@ async function replaceProjectRepoCheckout(
     slug,
     `${projectSlug}-${randomUUID()}`,
   );
-  const identity = customerGitIdentity(dest);
+  const identity = userGitIdentity(dest);
   const metadataBackups: Array<{ original: string; backup: string }> = [];
   let previousMoved = false;
   let replacementInstalled = false;
@@ -1175,8 +1175,8 @@ async function replaceProjectRepoCheckout(
     if (identity) {
       for (const original of [
         identity.metadataDir,
-        customerGitTrustReceipt(identity.metadataDir),
-        customerGitRefreshMarker(identity.metadataDir),
+        userGitTrustReceipt(identity.metadataDir),
+        userGitRefreshMarker(identity.metadataDir),
       ]) {
         if (!fs.existsSync(original)) continue;
         const backup = path.join(metadataBackupRoot, path.basename(original));
@@ -1195,7 +1195,7 @@ async function replaceProjectRepoCheckout(
     });
     if (
       !projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)
-      || !customerRepositoryHasCanonicalRemote(dest)
+      || !userRepositoryHasCanonicalRemote(dest)
     ) {
       throw new Error("replacement repository source was not prepared canonically");
     }
@@ -1212,11 +1212,11 @@ async function replaceProjectRepoCheckout(
     if (identity) {
       for (const current of [
         identity.metadataDir,
-        customerGitTrustReceipt(identity.metadataDir),
-        customerGitRefreshMarker(identity.metadataDir),
+        userGitTrustReceipt(identity.metadataDir),
+        userGitRefreshMarker(identity.metadataDir),
       ]) {
         try {
-          quarantineCustomerGitEntry(current, identity);
+          quarantineUserGitEntry(current, identity);
         } catch (rollbackError) {
           log(`⚠ [git] Failed to quarantine replacement metadata for ${slug}/${projectSlug}: ${errMessage(rollbackError)}`);
         }
@@ -1265,7 +1265,7 @@ function acquireProjectSourceSwitchLease(
 }
 
 function existingProjectGitDir(repoDir: string): string | null {
-  const external = customerGitMetadataDir(repoDir);
+  const external = userGitMetadataDir(repoDir);
   const candidates = [external, path.join(repoDir, ".git")]
     .filter((candidate): candidate is string => candidate !== null);
   for (const candidate of candidates) {
@@ -1289,9 +1289,9 @@ async function cloneGiteaProjectRepo(
   prepareRepository: typeof setRepoSshCommand,
 ): Promise<boolean> {
   const org = workspaceGiteaOrg(slug);
-  const sshKey = customerSshKeyPath(slug);
+  const sshKey = userSshKeyPath(slug);
   if (!fs.existsSync(sshKey)) {
-    log(`⚠ [git] Cannot clone ${slug}/${projectSlug} — per-customer SSH key missing`);
+    log(`⚠ [git] Cannot clone ${slug}/${projectSlug} — per-user SSH key missing`);
     return false;
   }
 
@@ -1371,7 +1371,7 @@ async function cloneGithubProjectViaBrokerCanonically(
     return false;
   }
   if (!localGitStat.isDirectory() || localGitStat.isSymbolicLink()) {
-    if (projectCheckoutMatchesSource(slug, projectSlug, "", repoSource) && customerRepositoryHasCanonicalRemote(dest)) {
+    if (projectCheckoutMatchesSource(slug, projectSlug, "", repoSource) && userRepositoryHasCanonicalRemote(dest)) {
       return true;
     }
     log(`⚠ [git] brokered GitHub checkout for ${label} carries metadata that does not verify`);
@@ -1402,7 +1402,7 @@ async function cloneGithubProjectViaBrokerCanonically(
             sideline,
             "+refs/heads/*:refs/remotes/origin/*",
           ],
-          { cwd: dest, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: customerGitEnvironmentForRefresh(slug) },
+          { cwd: dest, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: userGitEnvironmentForRefresh(slug) },
         );
       },
     });
@@ -1413,7 +1413,7 @@ async function cloneGithubProjectViaBrokerCanonically(
     return false;
   }
   fs.rmSync(sideline, { recursive: true, force: true });
-  if (!projectCheckoutMatchesSource(slug, projectSlug, "", repoSource) || !customerRepositoryHasCanonicalRemote(dest)) {
+  if (!projectCheckoutMatchesSource(slug, projectSlug, "", repoSource) || !userRepositoryHasCanonicalRemote(dest)) {
     log(`⚠ [git] brokered GitHub checkout for ${label} did not verify against its canonical source`);
     return false;
   }
@@ -1444,16 +1444,16 @@ async function switchProjectCheckoutViaBroker(
   if (!lease) return false;
   const quarantineRoot = path.join(OPENCLAW_DIR, "git-worktree-quarantine", slug);
   const quarantine = path.join(quarantineRoot, `${projectSlug}-${randomUUID()}`);
-  const identity = customerGitIdentity(dest);
+  const identity = userGitIdentity(dest);
   try {
     fs.mkdirSync(quarantineRoot, { recursive: true, mode: 0o700 });
     if (identity) {
       for (const entry of [
         identity.metadataDir,
-        customerGitTrustReceipt(identity.metadataDir),
-        customerGitRefreshMarker(identity.metadataDir),
+        userGitTrustReceipt(identity.metadataDir),
+        userGitRefreshMarker(identity.metadataDir),
       ]) {
-        quarantineCustomerGitEntry(entry, identity);
+        quarantineUserGitEntry(entry, identity);
       }
     }
     moveQuarantinedGitEntry(dest, quarantine);
@@ -1663,7 +1663,7 @@ interface InitWorkspaceRepoDeps {
 }
 
 function runWorkspaceBootstrapGit(
-  coachDir: string,
+  defaultAgentDir: string,
   gitDir: string,
   slug: string,
   argv: string[],
@@ -1676,13 +1676,13 @@ function runWorkspaceBootstrapGit(
       "--git-dir",
       gitDir,
       "--work-tree",
-      coachDir,
+      defaultAgentDir,
       ...argv,
     ], {
-      cwd: coachDir,
+      cwd: defaultAgentDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      env: customerGitEnvironmentForRefresh(slug),
+      env: userGitEnvironmentForRefresh(slug),
     }).trim();
   } catch (err: unknown) {
     const detail =
@@ -1693,7 +1693,7 @@ function runWorkspaceBootstrapGit(
 }
 
 function pushWorkspaceBootstrap(
-  coachDir: string,
+  defaultAgentDir: string,
   slug: string,
   originUrl: string,
 ): boolean {
@@ -1704,12 +1704,12 @@ function pushWorkspaceBootstrap(
   const gitDir = path.join(stagingRoot, "workspace.git");
   try {
     execFileSync(GIT_BINARY, ["init", "--bare", "--initial-branch=main", gitDir], {
-      cwd: coachDir,
+      cwd: defaultAgentDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      env: customerGitEnvironmentForRefresh(slug),
+      env: userGitEnvironmentForRefresh(slug),
     });
-    const run = (argv: string[]) => runWorkspaceBootstrapGit(coachDir, gitDir, slug, argv);
+    const run = (argv: string[]) => runWorkspaceBootstrapGit(defaultAgentDir, gitDir, slug, argv);
     if (run(["config", "user.email", `${slug}@octogee.com`]) === null) return false;
     if (run(["config", "user.name", `Octo (${slug})`]) === null) return false;
     if (run(["remote", "add", "origin", originUrl]) === null) return false;
@@ -1734,17 +1734,17 @@ function pushWorkspaceBootstrap(
   }
 }
 
-function invalidateWorkspaceGitProjection(coachDir: string): void {
-  const identity = customerGitIdentity(coachDir);
+function invalidateWorkspaceGitProjection(defaultAgentDir: string): void {
+  const identity = userGitIdentity(defaultAgentDir);
   if (!identity) return;
-  quarantineCustomerGitEntry(identity.metadataDir, identity);
-  quarantineCustomerGitEntry(customerGitTrustReceipt(identity.metadataDir), identity);
-  quarantineCustomerGitEntry(customerGitRefreshMarker(identity.metadataDir), identity);
-  quarantineCustomerGitEntry(path.join(coachDir, ".git"), identity);
+  quarantineUserGitEntry(identity.metadataDir, identity);
+  quarantineUserGitEntry(userGitTrustReceipt(identity.metadataDir), identity);
+  quarantineUserGitEntry(userGitRefreshMarker(identity.metadataDir), identity);
+  quarantineUserGitEntry(path.join(defaultAgentDir, ".git"), identity);
 }
 
 export async function initWorkspaceRepo(
-  coachDir: string,
+  defaultAgentDir: string,
   slug: string,
   deps: InitWorkspaceRepoDeps = {
     ensureWorkspaceRepo: (workspaceSlug) => brokeredGitHost.ensureRepo(workspaceSlug, { kind: "workspace" }),
@@ -1754,10 +1754,10 @@ export async function initWorkspaceRepo(
   const org = workspaceGiteaOrg(slug);
   const repoName = workspaceRepoName();
 
-  fs.writeFileSync(path.join(coachDir, ".gitignore"), workspaceGitignore(), "utf-8");
+  fs.writeFileSync(path.join(defaultAgentDir, ".gitignore"), workspaceGitignore(), "utf-8");
 
   const welcome = notesWelcomeSeed("this workspace");
-  const welcomeDest = path.join(coachDir, welcome.relPath);
+  const welcomeDest = path.join(defaultAgentDir, welcome.relPath);
   fs.mkdirSync(path.dirname(welcomeDest), { recursive: true });
   if (!fs.existsSync(welcomeDest)) fs.writeFileSync(welcomeDest, welcome.content, "utf-8");
 
@@ -1769,13 +1769,13 @@ export async function initWorkspaceRepo(
   }
 
   const originUrl = deps.workspaceRemoteUrl?.(slug) ?? sshRemoteUrl(org, repoName);
-  log(`[git] Initializing repo in ${coachDir}`);
-  if (!pushWorkspaceBootstrap(coachDir, slug, originUrl)) {
+  log(`[git] Initializing repo in ${defaultAgentDir}`);
+  if (!pushWorkspaceBootstrap(defaultAgentDir, slug, originUrl)) {
     log(`⚠ [git] initial workspace push failed for ${slug} — aborting repo setup`);
     return null;
   }
-  invalidateWorkspaceGitProjection(coachDir);
-  deps.prepareRepository(coachDir, slug);
+  invalidateWorkspaceGitProjection(defaultAgentDir);
+  deps.prepareRepository(defaultAgentDir, slug);
 
   const gitHost = new URL(GIT_API_URL).origin;
   const repoUrlDisplay = `${gitHost}/${org}/${repoName}`;
@@ -1845,7 +1845,7 @@ export async function initProjectRepo(
 ): Promise<string | null> {
   const org = workspaceGiteaOrg(slug);
   const repoName = projectRepoName(projectName);
-  const sshKey = customerSshKeyPath(slug);
+  const sshKey = userSshKeyPath(slug);
   const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
 
   fs.writeFileSync(path.join(projectDir, ".gitignore"), projectGitignore(), "utf-8");
@@ -1887,17 +1887,17 @@ export async function initProjectRepo(
 }
 
 export function pushInitialSkeleton(
-  coachDir: string,
+  defaultAgentDir: string,
   slug: string,
   sshKeyPath?: string,
 ): void {
-  if (gitExec(coachDir, ["status", "--porcelain"])) {
-    gitExec(coachDir, ["add", "-A"]);
-    if (gitExec(coachDir, ["commit", "-m", "initial workspace skeleton"]) === null) {
+  if (gitExec(defaultAgentDir, ["status", "--porcelain"])) {
+    gitExec(defaultAgentDir, ["add", "-A"]);
+    if (gitExec(defaultAgentDir, ["commit", "-m", "initial workspace skeleton"]) === null) {
       log(`⚠ [git] ${slug} initial commit failed — sync will retry`);
     }
   }
-  if (gitExec(coachDir, ["push", "-u", "origin", "main"], sshKeyPath) === null) {
+  if (gitExec(defaultAgentDir, ["push", "-u", "origin", "main"], sshKeyPath) === null) {
     log(`⚠ [git] ${slug} initial push failed — sync will retry`);
   } else {
     log(`[git] ${slug} initial push: OK`);
@@ -1907,7 +1907,7 @@ export function pushInitialSkeleton(
 export async function commitAndPush(repoDir: string, message: string): Promise<boolean> {
   const relPath = path.relative(CUSTOMERS_DIR, repoDir);
   const slug = relPath.split(path.sep)[0];
-  const sshKey = customerSshKeyPath(slug);
+  const sshKey = userSshKeyPath(slug);
   const keyArg = fs.existsSync(sshKey) ? sshKey : undefined;
 
   const status = gitExec(repoDir, ["status", "--porcelain"]);
@@ -1930,7 +1930,7 @@ export async function commitAndPush(repoDir: string, message: string): Promise<b
   return true;
 }
 
-export function listOnDiskCustomerSlugs(): string[] {
+export function listOnDiskUserSlugs(): string[] {
   if (!fs.existsSync(CUSTOMERS_DIR)) return [];
   return fs.readdirSync(CUSTOMERS_DIR).filter((d) => {
     try {

@@ -2,7 +2,7 @@ import type { Operation, OperationStatus } from "../../shared/types/glm.js";
 
 // The durability harness drives a real pod reroll the same way the admin Fleet panel
 // would — by writing a `recycle-gateway` Operation into glmOperations and
-// waiting for Cowboy (glm-controller) to reconcile it (scale 0→1, fresh pod,
+// waiting for the fleet controller (glm-controller) to reconcile it (scale 0→1, fresh pod,
 // emptyDir cleared, boot-sync re-materializes). NOT `restart-gateway`, which
 // is an in-process RPC restart that leaves the pod + auth dir untouched.
 

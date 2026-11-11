@@ -9,7 +9,7 @@ export function isSizingTier(value) {
 }
 export const TIER_PRESETS = {
     xs: {
-        description: 'One-builder floor — Spot/emptyDir active session',
+        description: 'One-user floor — Spot/emptyDir active session',
         resources: {
             requests: { cpu: '500m', memory: '2Gi', 'ephemeral-storage': '4Gi' },
             limits: { cpu: '1000m', memory: '2Gi', 'ephemeral-storage': '4Gi' },
@@ -18,7 +18,7 @@ export const TIER_PRESETS = {
         capacity: { targetActiveBuilders: 1, typicalBuilders: 1 },
     },
     s: {
-        description: 'One active builder with browser and desktop headroom',
+        description: 'One active user with browser and desktop headroom',
         resources: {
             requests: { cpu: '2000m', memory: '8Gi', 'ephemeral-storage': '4Gi' },
             limits: { cpu: '2000m', memory: '8Gi', 'ephemeral-storage': '4Gi' },

@@ -40,7 +40,7 @@ interface JournaledUserMutation<T> {
 }
 
 export interface AdminUserRouterDeps {
-  store: Pick<PlatformStateStore, "builders" | "workspaces" | "transaction">;
+  store: Pick<PlatformStateStore, "users" | "workspaces" | "transaction">;
   accounts?: UserAccounts;
   signIn?: UserSignInHosts;
   journal: <T>(input: JournaledUserMutation<T>) => Promise<T>;
@@ -72,11 +72,11 @@ function parseNewAccount(body: unknown): Omit<NewUserAccount, "userId"> | { erro
 }
 
 async function nameIsTaken(store: AdminUserRouterDeps["store"], name: string): Promise<boolean> {
-  const [workspace, builder] = await Promise.all([
+  const [workspace, userRecord] = await Promise.all([
     store.workspaces.records.get(name),
-    store.builders.records.findBySlug(name),
+    store.users.records.findBySlug(name),
   ]);
-  return workspace !== null || builder !== null;
+  return workspace !== null || userRecord !== null;
 }
 
 async function createWithReservedName(
@@ -153,7 +153,7 @@ export function addAdminUserRoutes(router: Router, deps: AdminUserRouterDeps): v
         res.status(501).json({ error: UNAVAILABLE });
         return;
       }
-      const user = await store.builders.records.get(uid);
+      const user = await store.users.records.get(uid);
       if (!user) {
         res.status(404).json({ error: "user not found", uid });
         return;

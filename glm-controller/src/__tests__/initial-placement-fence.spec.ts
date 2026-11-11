@@ -60,7 +60,7 @@ describe("initialTargetFenceFailures", () => {
     expect(fence(overrides as never)).toContain(failure);
   });
 
-  it("lets a Builder already assigned to the target through a full gateway", () => {
+  it("lets a user already assigned to the target through a full gateway", () => {
     expect(fence({ load: { assignmentCount: 10 }, buildersPerGateway: null })).toEqual([]);
   });
 

@@ -3,8 +3,8 @@ import { linkChannelIdentity, managedExternalUserIdOf } from "./channel-identiti
 import { DuplicateRecordError, MissingRecordError, type RecordKey } from "../errors.js";
 import type { Stored, WatchFilters } from "../store.js";
 import type {
-  BuilderAgentIdentitiesRepository,
-  BuilderAgentIdentity,
+  UserAgentIdentitiesRepository,
+  UserAgentIdentity,
   WorkspaceChannel,
   WorkspaceChannelScope,
   WorkspaceChannelsRepository,
@@ -268,9 +268,9 @@ function decodeChannel(row: Row): Stored<WorkspaceChannel> {
   };
 }
 
-function decodeAgentIdentity(row: Row): Stored<BuilderAgentIdentity> {
+function decodeAgentIdentity(row: Row): Stored<UserAgentIdentity> {
   return {
-    ...decodeStored<Omit<BuilderAgentIdentity, "mattermostUserId">>(AGENT_IDENTITIES_TABLE, row),
+    ...decodeStored<Omit<UserAgentIdentity, "mattermostUserId">>(AGENT_IDENTITIES_TABLE, row),
     mattermostUserId: (row.channel_host_user_id as string | null) ?? null,
   };
 }
@@ -565,7 +565,7 @@ function createWorkspaceChannelsRepository(session: PostgresSession): WorkspaceC
   };
 }
 
-function createAgentIdentitiesRepository(session: PostgresSession): BuilderAgentIdentitiesRepository {
+function createAgentIdentitiesRepository(session: PostgresSession): UserAgentIdentitiesRepository {
   return {
     async get(uid) {
       const rows = await selectRecords(

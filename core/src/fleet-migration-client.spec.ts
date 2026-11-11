@@ -104,7 +104,7 @@ const SNAPSHOT: FleetBrokerUserSnapshot = {
   photoURL: "",
   onboardingVibe: null,
   coachToken: "coach-token",
-  coachMmUserId: "mm-coach",
+  defaultAgentMmUserId: "mm-coach",
 };
 
 describe("isDefinitiveConfigRpcRejection", () => {

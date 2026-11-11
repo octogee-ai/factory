@@ -43,7 +43,7 @@ function app(): express.Express {
 describe("requireByotSyncInternalAuth", () => {
   beforeEach(() => {
     restoreEnv();
-    process.env.GATEWAY_ID = "bender";
+    process.env.GATEWAY_ID = "walter";
     h.logger.error.mockClear();
     h.logger.warn.mockClear();
     h.logger.info.mockClear();
@@ -87,7 +87,7 @@ describe("requireByotSyncInternalAuth", () => {
 
     const res = await request(app())
       .post("/sync")
-      .set(createModelCredentialSyncAuthHeaders({ body, secret: signingKey, gatewayId: "bender", nowMs: Date.now() }))
+      .set(createModelCredentialSyncAuthHeaders({ body, secret: signingKey, gatewayId: "walter", nowMs: Date.now() }))
       .send(body)
       .expect(200, { ok: true });
 

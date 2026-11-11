@@ -1,6 +1,6 @@
 {
   "uid": "octogee-fleet",
-  "title": "Gateways \u2014 Fleet / Cowboy",
+  "title": "Gateways \u2014 Fleet / Fleet controller",
   "schemaVersion": 39,
   "version": 1,
   "editable": true,
@@ -71,7 +71,7 @@
     {
       "id": 2,
       "type": "row",
-      "title": "Fleet reconcile (Cowboy / glm-controller)",
+      "title": "Fleet reconcile (fleet controller / glm-controller)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -324,7 +324,7 @@
     {
       "id": 7,
       "type": "row",
-      "title": "Shared Barn capacity",
+      "title": "Shared gateway capacity",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -337,7 +337,7 @@
     {
       "id": 8,
       "type": "stat",
-      "title": "Barn assignments at last ceiling",
+      "title": "Shared gateway assignments at last ceiling",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -394,7 +394,7 @@
     {
       "id": 9,
       "type": "stat",
-      "title": "Barn hot members at last ceiling",
+      "title": "Shared gateway hot members at last ceiling",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -451,7 +451,7 @@
     {
       "id": 10,
       "type": "stat",
-      "title": "Barn ceiling observations (1h)",
+      "title": "Shared gateway ceiling observations (1h)",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"

@@ -1,6 +1,6 @@
 ---
 name: cua-x11
-description: Operate native applications on this Builder computer's X11 desktop through the `computer` tool, which Cua Driver 0.38.0 fulfils. Covers the observe-act-verify loop, accessibility-first targeting, background versus foreground delivery, and honest handling of refusals. Use for GUI tasks in desktop applications; use the `browser` tool for web page content.
+description: Operate native applications on this gateway VM's X11 desktop through the `computer` tool, which Cua Driver 0.38.0 fulfils. Covers the observe-act-verify loop, accessibility-first targeting, background versus foreground delivery, and honest handling of refusals. Use for GUI tasks in desktop applications; use the `browser` tool for web page content.
 version: 0.38.0
 metadata:
   openclaw:
@@ -64,7 +64,7 @@ it in the same domain:
 3. **Pixel action inside the window**, using coordinates from the image of the
    same observation.
 4. **Foreground delivery** of only the action that evidence says could not land
-   in the background, and only within the Builder's authorization.
+   in the background, and only within the user's authorization.
 5. **Desktop coordinates** from `screenshot` and its `frameId`, after the window
    routes have been tried and verified ineffective.
 
@@ -115,13 +115,13 @@ image, and do not use an element you only saw in the image as an `elementRef`.
 
 Hobby runs Openbox on X11 with one TigerVNC display. It has no Hyprland
 compositor or Omarchy settings, but it offers the same shape as the Omarchy
-Builder computer: the Desk (a frameless Chromium app window showing the
-Builder's agent, note, clock, and app grid) opens at start, a dock along the
+Gateway VM: the Desk (a frameless Chromium app window showing the
+user's agent, note, clock, and app grid) opens at start, a dock along the
 bottom edge launches Web, Files, Terminal, and Text and lists open windows,
 windows float centred with Mac-style title bars (close, minimize, maximize on
 the left), and a right-click on the desktop opens the same launcher menu.
 Minimized windows reappear from the dock. Applications: Chromium, PCManFM
-(Files), Sakura (Terminal), and Mousepad (Text). The Builder sees and controls
+(Files), Sakura (Terminal), and Mousepad (Text). The user sees and controls
 this same desktop through the Computer pane. The platform manages display,
 accessibility bus, driver, dock, and browser startup; closing the Desk or the
 dock brings it back.
@@ -132,10 +132,10 @@ returned by the same observation. Observe again after a display size change.
 
 Accessibility delivery and raw background input have different capabilities.
 Honor each action's refusal or escalation result. Use foreground delivery only
-within the Builder's authorization, then verify the actual postcondition from
+within the user's authorization, then verify the actual postcondition from
 fresh pixels and accessibility. Do not replace refused input with shell commands.
 
 Keep `profile: "computer"` on every browser call. Its attach-only CDP connection
-shares the visible Chromium profile and persisted cookies with the Builder.
+shares the visible Chromium profile and persisted cookies with the user.
 The desktop node is always `octogee-desktop`; the node's name in a session label
 or a process ID does not establish its native identity.

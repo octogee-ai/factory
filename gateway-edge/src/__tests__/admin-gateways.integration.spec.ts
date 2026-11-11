@@ -205,7 +205,7 @@ describe("GET /api/admin/gateways", () => {
     expect(stale.gateway).toBe("gw-test-stale");
   });
 
-  it("rolls up gateway counts including derived unreachable, and customers mounted", async () => {
+  it("rolls up gateway counts including derived unreachable, and users mounted", async () => {
     const res = await request(app).get("/api/admin/gateways");
     expect(res.status).toBe(200);
     expect(res.body.stats).toMatchObject({

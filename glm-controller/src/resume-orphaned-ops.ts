@@ -24,7 +24,7 @@ export interface ResumeOrphanedOpsResult {
 // `running` glmOperations record outlived the process driving it. For resumable
 // kinds, re-drive it instead of leaving it for the stuck-op reaper: a reaped roll
 // that already repointed the shared pointer at its (still-empty) target strands the
-// customers on the source pool. Re-driving is safe because the orchestrator is
+// users on the source pool. Re-driving is safe because the orchestrator is
 // idempotent (spawn=set, migrate reads the shrinking source-assignment, repoint=set,
 // retire=ensure-gone).
 export async function resumeOrphanedRunningOps(

@@ -14,9 +14,9 @@ export interface RetireGatewayDeps {
   }) => Promise<{ ok: true } | { ok: false; error: string }>;
 
 
-  // Mounted-customer telemetry from the gateway's runtime doc — retirement
-  // refuses while any customer is still mounted.
-  readMountedCustomers: (gatewayId: string) => Promise<string[]>;
+  // Mounted-user telemetry from the gateway's runtime doc — retirement
+  // refuses while any user is still mounted.
+  readMountedUsers: (gatewayId: string) => Promise<string[]>;
 
   isPausedNativeSourceFencedOff?: (input: {
     gatewayId: string;
@@ -48,7 +48,7 @@ export interface RetireGatewayDeps {
   teardownGatewayServiceAccount?: (gatewayId: string) => Promise<void>;
 
   // Assignment docs for the gateway (gateways/{id}/assignments/*). Retirement
-  // refuses while any exists — customers must be migrated off first.
+  // refuses while any exists — users must be migrated off first.
   readAssignmentsForGateway: (
     gatewayId: string,
   ) => Promise<Array<{ uid: string; slug: string }>>;
@@ -125,7 +125,7 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     if ("error" in request) return failure(request.error);
     const { gatewayId, retirementClaimVersion, retainData, retainServiceAccount } = request;
 
-    // Refuse while any customer is still assigned — the operator must migrate
+    // Refuse while any user is still assigned — the operator must migrate
     // them off first. Naming the slugs makes the next action obvious.
     const assignmentFailure = await assertNoAssignments(deps, gatewayId);
     if (assignmentFailure) return assignmentFailure;
@@ -138,7 +138,7 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     );
     if (claimFailure) return claimFailure;
 
-    const mountedFailure = await assertNoMountedCustomers(deps, gatewayId, op.id, retirementClaimVersion);
+    const mountedFailure = await assertNoMountedUsers(deps, gatewayId, op.id, retirementClaimVersion);
     if (mountedFailure) return mountedFailure;
 
     const uninstall = await runReportedStep(ctx, deps, "helm-uninstall", () =>
@@ -206,13 +206,13 @@ async function verifyRetirementClaim(
   }
 }
 
-async function assertNoMountedCustomers(
+async function assertNoMountedUsers(
   deps: RetireGatewayDeps,
   gatewayId: string,
   operationId: string,
   version: number,
 ): Promise<OperationResult | null> {
-  const mounted = [...(await deps.readMountedCustomers(gatewayId))].sort(compareStrings);
+  const mounted = [...(await deps.readMountedUsers(gatewayId))].sort(compareStrings);
   if (mounted.length === 0) return null;
   try {
     if (await deps.isPausedNativeSourceFencedOff?.({ gatewayId, operationId, version })) {
@@ -225,7 +225,7 @@ async function assertNoMountedCustomers(
     return failure(`gateway ${gatewayId} native retirement fence unreadable: ${error instanceof Error ? error.message : String(error)}`);
   }
   return failure(
-    `gateway ${gatewayId} still has ${mounted.length} mounted customer(s): ` +
+    `gateway ${gatewayId} still has ${mounted.length} mounted user(s): ` +
       `${mounted.join(", ")} — migrate them off before retiring`,
   );
 }
@@ -281,7 +281,7 @@ async function teardownResources(input: TeardownResourcesInput): Promise<string[
   // is aggregate-gated like the other resources (the op fails and is
   // re-drivable). A 404 "no GSA" is a clean no-op in gateway-gsa.ts, so cattle
   // gateways still pass. retainServiceAccount skips it entirely — for a
-  // terraform-managed GSA (gw-bender), decommissioned via terraform, not here.
+  // terraform-managed GSA, decommissioned via terraform, not here.
   const teardownGsa = deps.teardownGatewayServiceAccount;
   if (retainServiceAccount) {
     deps.log(
@@ -315,7 +315,7 @@ async function assertNoAssignments(
   if (assignments.length === 0) return null;
   const slugs = assignments.map((a) => a.slug).sort(compareStrings);
   return failure(
-    `gateway ${gatewayId} still has ${assignments.length} assigned customer(s): ` +
+    `gateway ${gatewayId} still has ${assignments.length} assigned user(s): ` +
       `${slugs.join(", ")} — migrate them off before retiring`,
   );
 }

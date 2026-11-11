@@ -1,8 +1,8 @@
-import { landAuxiliaryAnchors, type AuxiliaryAnchorVerifier } from "../lib/builder-auxiliary-anchors.js";
+import { landAuxiliaryAnchors, type AuxiliaryAnchorVerifier } from "../lib/user-auxiliary-anchors.js";
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("agent-anchor-restore");
 import { pathToFileURL } from "node:url";
-import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
+import { userClaimSlug } from "@octogee/shared/server/user-claim";
 import { agentIdsFromConfig } from "@octogee/core/byosub-restore";
 import { readOpenClawConfig } from "@octogee/core/config";
 import {
@@ -12,9 +12,9 @@ import {
   type AgentAnchorVerifier,
   type GatewayStateAnchorVerifier,
 } from "../lib/agent-anchor-record.js";
-import { clusterBuilderGateway, openclawStateRoot } from "../lib/openclaw-state-store.js";
+import { clusterIsolatedGateway, openclawStateRoot } from "../lib/openclaw-state-store.js";
 import { createFleetBrokerClient, type FleetBrokerClient } from "../lib/fleet-broker-client.js";
-import { initializeBuilderNativeState } from "../lib/builder-native-bootstrap.js";
+import { initializeIsolatedNativeState } from "../lib/isolated-native-bootstrap.js";
 
 export interface AgentAnchorRestoreResult {
   landed: string[];
@@ -38,17 +38,17 @@ export async function runAgentAnchorRestore(input: {
   log: (message: string) => void;
 }): Promise<AgentAnchorRestoreResult> {
   const env = input.env ?? process.env;
-  const slug = nonBlank(env.GATEWAY_CLASS) === "shared" ? null : builderClaimSlug(env);
+  const slug = nonBlank(env.GATEWAY_CLASS) === "shared" ? null : userClaimSlug(env);
   if (!slug) return { landed: [], preserved: [], skipped: true };
   const configured = new Set(agentIdsFromConfig((input.readConfig ?? readOpenClawConfig)()));
   const { anchors, state, auxiliary = [] } = await input.broker.readAgentAnchors({ slug });
   const stateRoot = openclawStateRoot(env);
-  const landedState = state && clusterBuilderGateway(env)
+  const landedState = state && clusterIsolatedGateway(env)
     ? await landGatewayStateAnchor(stateRoot, state, input.verifyState)
     : undefined;
   await landAuxiliaryAnchors(stateRoot, auxiliary, input.verifyAuxiliary);
   if (auxiliary.length) input.log(`[agent-anchors] restored and verified ${auxiliary.length} auxiliary anchor(s) for ${slug}`);
-  await (input.initializeHost ?? ((root) => initializeBuilderNativeState(root, undefined, env)))(stateRoot);
+  await (input.initializeHost ?? ((root) => initializeIsolatedNativeState(root, undefined, env)))(stateRoot);
   const result = await landAgentAnchors(
     stateRoot,
     anchors.filter((anchor) => configured.has(anchor.agentId)),

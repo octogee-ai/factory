@@ -14,7 +14,7 @@ describe("gateway image build workflow", () => {
 });
 
 describe("verify-env shared pool selection", () => {
-  it("probes the shared slots Cowboy minted instead of the first Deployment", () => {
+  it("probes the shared slots the fleet controller minted instead of the first Deployment", () => {
     expect(verifyEnv).toContain("octogee_list_shared_gateway_deployments <<<");
     expect(verifyEnv).toContain("SHARED_POOL_MIN_REPLICAS");
     expect(verifyEnv).not.toContain("octogee_resolve_default_gateway_deployment");

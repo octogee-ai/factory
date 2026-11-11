@@ -9,7 +9,7 @@ const WAIT = { timeout: 20_000, interval: 20 };
 
 function vm(instanceId: string | null): GatewayVmState {
   return {
-    instanceName: "octogee-gw-bender",
+    instanceName: "octogee-gw-walter",
     zone: "us-central1-a",
     instanceId,
     internalIp: "10.0.0.7",
@@ -81,24 +81,24 @@ describe.skipIf(!dsn)("PostgreSQL fleet registry", { timeout: 30_000 }, () => {
   });
 
   it("creates a runtime record once and reads it back exactly, with a revision", async () => {
-    await registry().create(runtimeRecord("bender"));
+    await registry().create(runtimeRecord("walter"));
 
-    expect(await registry().get("bender")).toEqual({ ...runtimeRecord("bender"), revision: expect.stringMatching(/^\d+$/) });
+    expect(await registry().get("walter")).toEqual({ ...runtimeRecord("walter"), revision: expect.stringMatching(/^\d+$/) });
     expect(await registry().get("ghost")).toBeNull();
-    expect(await failure(registry().create(runtimeRecord("bender")))).toMatchObject({
+    expect(await failure(registry().create(runtimeRecord("walter")))).toMatchObject({
       constructor: AlreadyExistsError,
-      record: { aggregate: "fleet-registry", key: "bender" },
+      record: { aggregate: "fleet-registry", key: "walter" },
     });
   });
 
   it("refuses runtime rows without a heartbeat map", async () => {
-    await registry().create(runtimeRecord("bender"));
-    await harness.query("UPDATE $schema.fleet_registry SET heartbeat = 'null'::jsonb WHERE gateway_id = 'bender'");
-    await expect(registry().get("bender")).rejects.toMatchObject({ name: "MalformedRecordError" });
+    await registry().create(runtimeRecord("walter"));
+    await harness.query("UPDATE $schema.fleet_registry SET heartbeat = 'null'::jsonb WHERE gateway_id = 'walter'");
+    await expect(registry().get("walter")).rejects.toMatchObject({ name: "MalformedRecordError" });
   });
 
   it("round-trips every VM field and keeps a null vm apart from an absent one", async () => {
-    const full = runtimeRecord("bender", {
+    const full = runtimeRecord("walter", {
       runtime: "gce-vm",
       retiredAt: NOW + 1,
       createdByOperationId: "op-add",
@@ -106,8 +106,8 @@ describe.skipIf(!dsn)("PostgreSQL fleet registry", { timeout: 30_000 }, () => {
       podReplacements: { count: 1 } as never,
       vmSpec: { machineType: "e2-medium" } as never,
       vm: vm("i-1"),
-      vmInstance: { name: "octogee-gw-bender" },
-      vmHome: { diskName: "home-bender" },
+      vmInstance: { name: "octogee-gw-walter" },
+      vmHome: { diskName: "home-walter" },
       vmStopOnPark: { requestedAt: NOW },
       vmBootRecovery: { attempts: 1 },
       vmPreemption: { at: NOW },
@@ -120,7 +120,7 @@ describe.skipIf(!dsn)("PostgreSQL fleet registry", { timeout: 30_000 }, () => {
     await registry().create(full);
     await registry().create(runtimeRecord("flexo", { runtime: "gce-vm", vm: null }));
 
-    const { revision: _revision, ...stored } = (await registry().get("bender"))!;
+    const { revision: _revision, ...stored } = (await registry().get("walter"))!;
     expect(stored).toEqual(full);
     expect((await registry().get("flexo"))?.vm).toBeNull();
     expect(await registry().get("flexo")).toHaveProperty("vm", null);
@@ -128,18 +128,18 @@ describe.skipIf(!dsn)("PostgreSQL fleet registry", { timeout: 30_000 }, () => {
   });
 
   it("deep-merges a partial heartbeat into the heartbeat map under server time", async () => {
-    const heartbeat = { ...runtimeRecord("bender").heartbeat, migratingIn: ["ceckert"], configStatus: { runtimeReady: false, openclawVersion: "7.1" } };
-    await registry().create(runtimeRecord("bender", { heartbeat }));
-    const before = await registry().get("bender");
+    const heartbeat = { ...runtimeRecord("walter").heartbeat, migratingIn: ["ceckert"], configStatus: { runtimeReady: false, openclawVersion: "7.1" } };
+    await registry().create(runtimeRecord("walter", { heartbeat }));
+    const before = await registry().get("walter");
 
-    await registry().recordHeartbeat("bender", {
+    await registry().recordHeartbeat("walter", {
       status: "ready",
       mountedCustomers: ["ceckert"],
       version: "1.2.3",
       configStatus: { runtimeReady: true },
     });
 
-    const stored = await registry().get("bender");
+    const stored = await registry().get("walter");
     expect(stored?.heartbeat).toEqual({
       ...heartbeat,
       status: "ready",
@@ -151,7 +151,7 @@ describe.skipIf(!dsn)("PostgreSQL fleet registry", { timeout: 30_000 }, () => {
     });
     expect(Math.abs((stored?.heartbeat.lastHeartbeatAt ?? 0) - Date.now())).toBeLessThan(60_000);
     expect(stored?.revision).not.toBe(before?.revision);
-    const [row] = await harness.query("SELECT heartbeat_status, heartbeat_at FROM $schema.fleet_registry WHERE gateway_id = 'bender'");
+    const [row] = await harness.query("SELECT heartbeat_status, heartbeat_at FROM $schema.fleet_registry WHERE gateway_id = 'walter'");
     expect(row).toEqual({ heartbeat_status: "ready", heartbeat_at: stored?.heartbeat.lastHeartbeatAt });
   });
 
@@ -163,50 +163,50 @@ describe.skipIf(!dsn)("PostgreSQL fleet registry", { timeout: 30_000 }, () => {
   });
 
   it("upserts the patched initial record when absent and only the patch when present", async () => {
-    await registry().upsert("bender", runtimeRecord("bender", { retiredAt: NOW }), { lifecycle: "serving", retiredAt: { clear: true } });
-    const { revision: _revision, ...created } = (await registry().get("bender"))!;
-    expect(created).toEqual(runtimeRecord("bender", { lifecycle: "serving" }));
+    await registry().upsert("walter", runtimeRecord("walter", { retiredAt: NOW }), { lifecycle: "serving", retiredAt: { clear: true } });
+    const { revision: _revision, ...created } = (await registry().get("walter"))!;
+    expect(created).toEqual(runtimeRecord("walter", { lifecycle: "serving" }));
 
-    await registry().upsert("bender", runtimeRecord("bender", { release: 9 }), { release: 2 });
-    expect(await registry().get("bender")).toMatchObject({ lifecycle: "serving", release: 2 });
+    await registry().upsert("walter", runtimeRecord("walter", { release: 9 }), { release: 2 });
+    expect(await registry().get("walter")).toMatchObject({ lifecycle: "serving", release: 2 });
 
-    const unchanged = await registry().get("bender");
-    await registry().upsert("bender", runtimeRecord("bender", { release: 9 }), {});
-    expect(await registry().get("bender")).toEqual(unchanged);
+    const unchanged = await registry().get("walter");
+    await registry().upsert("walter", runtimeRecord("walter", { release: 9 }), {});
+    expect(await registry().get("walter")).toEqual(unchanged);
 
-    expect(await failure(registry().upsert("bender", runtimeRecord("flexo"), {}))).toBeInstanceOf(MalformedRecordError);
-    expect(await failure(registry().upsert("bender", runtimeRecord("bender"), { createdAt: 1 } as never))).toBeInstanceOf(TypeError);
+    expect(await failure(registry().upsert("walter", runtimeRecord("flexo"), {}))).toBeInstanceOf(MalformedRecordError);
+    expect(await failure(registry().upsert("walter", runtimeRecord("walter"), { createdAt: 1 } as never))).toBeInstanceOf(TypeError);
   });
 
   it("patches under lifecycle and VM instance fences and refuses a missing record", async () => {
-    await registry().create(runtimeRecord("bender", { vm: vm("i-1"), runtime: "gce-vm" }));
-    const current = await registry().get("bender");
+    await registry().create(runtimeRecord("walter", { vm: vm("i-1"), runtime: "gce-vm" }));
+    const current = await registry().get("walter");
 
-    await registry().patch("bender", { lifecycle: "serving", retiredAt: NOW }, { revision: current?.revision, lifecycle: ["provisioning"], vmInstanceId: "i-1" });
-    await registry().patch("bender", { retiredAt: { clear: true } });
-    expect(await registry().get("bender")).toMatchObject({ lifecycle: "serving" });
-    expect(await registry().get("bender")).not.toHaveProperty("retiredAt");
+    await registry().patch("walter", { lifecycle: "serving", retiredAt: NOW }, { revision: current?.revision, lifecycle: ["provisioning"], vmInstanceId: "i-1" });
+    await registry().patch("walter", { retiredAt: { clear: true } });
+    expect(await registry().get("walter")).toMatchObject({ lifecycle: "serving" });
+    expect(await registry().get("walter")).not.toHaveProperty("retiredAt");
 
     const mismatches = await Promise.all([
-      failure(registry().patch("bender", { release: 3 }, { revision: current?.revision })),
-      failure(registry().patch("bender", { release: 3 }, { lifecycle: ["provisioning"] })),
-      failure(registry().patch("bender", { release: 3 }, { vmInstanceId: null })),
-      failure(registry().patch("bender", { release: 3 }, { vmInstanceId: "i-2" })),
+      failure(registry().patch("walter", { release: 3 }, { revision: current?.revision })),
+      failure(registry().patch("walter", { release: 3 }, { lifecycle: ["provisioning"] })),
+      failure(registry().patch("walter", { release: 3 }, { vmInstanceId: null })),
+      failure(registry().patch("walter", { release: 3 }, { vmInstanceId: "i-2" })),
     ]);
     expect(mismatches.map((error) => (error as FenceMismatchError).fence)).toEqual(["revision", "status", "present", "present"]);
     expect(mismatches[2]).toMatchObject({ expected: null, actual: "i-1" });
-    expect((await registry().get("bender"))?.release).toBe(1);
+    expect((await registry().get("walter"))?.release).toBe(1);
 
-    await registry().patch("bender", { vm: null }, { vmInstanceId: "i-1" });
-    await registry().patch("bender", { release: 3 }, { vmInstanceId: null });
-    expect(await registry().get("bender")).toMatchObject({ vm: null, release: 3 });
+    await registry().patch("walter", { vm: null }, { vmInstanceId: "i-1" });
+    await registry().patch("walter", { release: 3 }, { vmInstanceId: null });
+    expect(await registry().get("walter")).toMatchObject({ vm: null, release: 3 });
     expect(await failure(registry().patch("ghost", { release: 3 }))).toBeInstanceOf(MissingRecordError);
     expect(await failure(registry().patch("ghost", { release: 3 }, { lifecycle: ["serving"] }))).toBeInstanceOf(MissingRecordError);
   });
 
   it("finds a record by VM instance id and refuses a second record with that instance", async () => {
-    await registry().create(runtimeRecord("bender", { vm: vm("i-1") }));
-    expect((await registry().findByVmInstanceId("i-1"))?.gatewayId).toBe("bender");
+    await registry().create(runtimeRecord("walter", { vm: vm("i-1") }));
+    expect((await registry().findByVmInstanceId("i-1"))?.gatewayId).toBe("walter");
     expect(await registry().findByVmInstanceId("i-2")).toBeNull();
 
     expect(await failure(registry().create(runtimeRecord("flexo", { vm: vm("i-1") })))).toMatchObject({
@@ -220,47 +220,47 @@ describe.skipIf(!dsn)("PostgreSQL fleet registry", { timeout: 30_000 }, () => {
   });
 
   it("inventories every runtime record, or only the named gateways, with nothing foreign", async () => {
-    await registry().create(runtimeRecord("bender"));
+    await registry().create(runtimeRecord("walter"));
     await registry().create(runtimeRecord("shared-a"));
 
     const everything = await registry().inventory();
     const named = await registry().inventory(["shared-a", "ghost"]);
 
-    expect(everything.records.map((record) => record.gatewayId)).toEqual(["bender", "shared-a"]);
+    expect(everything.records.map((record) => record.gatewayId)).toEqual(["shared-a", "walter"]);
     expect(everything.foreign).toEqual([]);
     expect(named.records.map((record) => record.gatewayId)).toEqual(["shared-a"]);
     expect(named.foreign).toEqual([]);
   });
 
   it("lists by runtime, reads many and deletes", async () => {
-    await registry().create(runtimeRecord("bender", { runtime: "gce-vm", vm: null }));
+    await registry().create(runtimeRecord("walter", { runtime: "gce-vm", vm: null }));
     await registry().create(runtimeRecord("shared-a", { runtime: "cluster" }));
 
-    expect((await registry().list({ runtime: "gce-vm" })).map((record) => record.gatewayId)).toEqual(["bender"]);
-    expect((await registry().list()).map((record) => record.gatewayId)).toEqual(["bender", "shared-a"]);
-    expect([...(await registry().getMany(["shared-a", "ghost", "bender"])).keys()].sort()).toEqual(["bender", "shared-a"]);
+    expect((await registry().list({ runtime: "gce-vm" })).map((record) => record.gatewayId)).toEqual(["walter"]);
+    expect((await registry().list()).map((record) => record.gatewayId)).toEqual(["shared-a", "walter"]);
+    expect([...(await registry().getMany(["shared-a", "ghost", "walter"])).keys()].sort()).toEqual(["shared-a", "walter"]);
 
-    await registry().delete("bender");
-    await registry().delete("bender");
-    expect(await registry().get("bender")).toBeNull();
+    await registry().delete("walter");
+    await registry().delete("walter");
+    expect(await registry().get("walter")).toBeNull();
   });
 
   it("watches the registry as a snapshot followed by changes, for all gateways or one", async () => {
-    await registry().create(runtimeRecord("bender"));
+    await registry().create(runtimeRecord("walter"));
     const all = recordingListener<"fleetRegistry">();
     const one = recordingListener<"fleetRegistry">();
     harness.store.watch({ aggregate: "fleetRegistry", filter: {} }, all);
-    harness.store.watch({ aggregate: "fleetRegistry", filter: { gatewayId: "bender" } }, one);
+    harness.store.watch({ aggregate: "fleetRegistry", filter: { gatewayId: "walter" } }, one);
 
-    await vi.waitFor(() => expect(all.events[0]).toMatchObject({ kind: "snapshot", records: [expect.objectContaining({ gatewayId: "bender" })] }), WAIT);
-    await vi.waitFor(() => expect(one.events[0]).toMatchObject({ kind: "snapshot", records: [expect.objectContaining({ gatewayId: "bender" })] }), WAIT);
+    await vi.waitFor(() => expect(all.events[0]).toMatchObject({ kind: "snapshot", records: [expect.objectContaining({ gatewayId: "walter" })] }), WAIT);
+    await vi.waitFor(() => expect(one.events[0]).toMatchObject({ kind: "snapshot", records: [expect.objectContaining({ gatewayId: "walter" })] }), WAIT);
     await registry().create(runtimeRecord("flexo"));
     await vi.waitFor(() => expect(changeKeys(all)).toEqual(["added:flexo"]), WAIT);
-    await registry().recordHeartbeat("bender", { status: "ready", mountedCustomers: [] });
-    await vi.waitFor(() => expect(changeKeys(all)).toEqual(["added:flexo", "modified:bender"]), WAIT);
-    await registry().delete("bender");
-    await vi.waitFor(() => expect(changeKeys(all)).toEqual(["added:flexo", "modified:bender", "removed:bender"]), WAIT);
-    await vi.waitFor(() => expect(changeKeys(one)).toEqual(["modified:bender", "removed:bender"]), WAIT);
+    await registry().recordHeartbeat("walter", { status: "ready", mountedCustomers: [] });
+    await vi.waitFor(() => expect(changeKeys(all)).toEqual(["added:flexo", "modified:walter"]), WAIT);
+    await registry().delete("walter");
+    await vi.waitFor(() => expect(changeKeys(all)).toEqual(["added:flexo", "modified:walter", "removed:walter"]), WAIT);
+    await vi.waitFor(() => expect(changeKeys(one)).toEqual(["modified:walter", "removed:walter"]), WAIT);
     expect(all.errors).toEqual([]);
   });
 });

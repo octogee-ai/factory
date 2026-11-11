@@ -7,11 +7,11 @@ import {
   systemConfigInvariantContextFromEnv,
 } from "../lib/system-config-invariants.js";
 import {
-  buildCustomerAgent,
+  buildUserAgent,
   buildProjectAgents,
   buildSafeDefaultAgent,
-} from "../lib/openclaw-config-builders.js";
-import { withBuilderClaim } from "./helpers/builder-claim.js";
+} from "../lib/openclaw-config-users.js";
+import { withUserClaim } from "./helpers/user-claim.js";
 
 function config(): Record<string, unknown> {
   return {
@@ -25,8 +25,8 @@ function config(): Record<string, unknown> {
     },
     secrets: { providers: {} },
     channels: { mattermost: { enabled: false, commands: { native: true } } },
-    plugins: { enabled: false, allow: ["customer-plugin"], entries: {} },
-    tools: { deny: ["exec", "customer-deny"], exec: { mode: "deny" } },
+    plugins: { enabled: false, allow: ["user-plugin"], entries: {} },
+    tools: { deny: ["exec", "user-deny"], exec: { mode: "deny" } },
     commands: { bash: true, config: true, mcp: true, plugins: true, debug: true },
     mcp: { servers: { stale: { command: "sh" } } },
   };
@@ -34,12 +34,12 @@ function config(): Record<string, unknown> {
 
 const env = {
   GATEWAY_CLASS: "shared",
-  GATEWAY_ID: "bender",
+  GATEWAY_ID: "walter",
   API_PUBLIC_URL: "https://api-test.octogee.com",
 };
 
 describe("system config platform invariants", () => {
-  it("reconciles the typed platform paths without removing customer-owned values", () => {
+  it("reconciles the typed platform paths without removing user-owned values", () => {
     const candidate = config();
 
     const result = reconcilePlatformInvariants(candidate, env);
@@ -79,7 +79,7 @@ describe("system config platform invariants", () => {
       channels: { mattermost: { enabled: true, commands: { native: false } } },
       plugins: {
         enabled: true,
-        allow: expect.arrayContaining(["customer-plugin", "mattermost"]),
+        allow: expect.arrayContaining(["user-plugin", "mattermost"]),
         entries: {
           codex: { enabled: false },
           "octogee-chat-tools": {
@@ -94,7 +94,7 @@ describe("system config platform invariants", () => {
       tools: {
         deny: [
           "exec",
-          "customer-deny",
+          "user-deny",
           "process",
           "subagents",
           "sessions_spawn",
@@ -126,7 +126,7 @@ describe("system config platform invariants", () => {
     expect((candidate.mcp as Record<string, unknown>)).not.toHaveProperty("servers");
   });
 
-  it("fails a retired operator class value closed to the shared customer policy", () => {
+  it("fails a retired operator class value closed to the shared user policy", () => {
     const candidate = config();
     const retiredClassEnv = {
       ...env,
@@ -145,7 +145,7 @@ describe("system config platform invariants", () => {
         },
       },
       tools: {
-        deny: expect.arrayContaining(["exec", "process", "terminal", "customer-deny"]),
+        deny: expect.arrayContaining(["exec", "process", "terminal", "user-deny"]),
         exec: { mode: "deny" },
       },
     });
@@ -173,26 +173,26 @@ describe("system config platform invariants", () => {
     expect(() => assertPlatformInvariants(candidate, env)).not.toThrow();
   });
 
-  it("accepts generated Builder agents at a durable checkpoint", () => {
+  it("accepts generated user agents at a durable checkpoint", () => {
     const candidate = config();
-    const builderEnv = { ...env, GATEWAY_CLASS: "builder" };
-    reconcilePlatformInvariants(candidate, builderEnv);
+    const userEnv = { ...env, GATEWAY_CLASS: "builder" };
+    reconcilePlatformInvariants(candidate, userEnv);
     candidate.agents = {
       list: [
         buildSafeDefaultAgent(),
-        buildCustomerAgent({
+        buildUserAgent({
           uid: "uid-chris",
           slug: "chris",
           customerDir: "/customers/chris",
           agentDir: "/agents/octogee-chris-coach/agent",
-          coach: { name: "Coach", emoji: "🤖", model: "house" },
+          defaultAgent: { name: "Coach", emoji: "🤖", model: "house" },
           default: true,
         }),
         ...buildProjectAgents({
           slug: "chris",
           customerDir: "/customers/chris",
           agentsDir: "/agents",
-          coach: { name: "Coach", emoji: "🤖", model: "house" },
+          defaultAgent: { name: "Coach", emoji: "🤖", model: "house" },
           projectAgents: [{
             projectId: "garden",
             enabled: true,
@@ -203,7 +203,7 @@ describe("system config platform invariants", () => {
       ],
     };
 
-    expect(() => assertPlatformInvariants(candidate, builderEnv)).not.toThrow();
+    expect(() => assertPlatformInvariants(candidate, userEnv)).not.toThrow();
   });
 
   it("reads the control identity from the pod environment and defaults it to the shared operator", () => {
@@ -215,7 +215,7 @@ describe("system config platform invariants", () => {
     }).controlIdentity).toBe("per-user");
 
     const candidate = config();
-    reconcilePlatformInvariants(candidate, withBuilderClaim({
+    reconcilePlatformInvariants(candidate, withUserClaim({
       ...env,
       GATEWAY_CLASS: "builder",
       OPENCLAW_CONTROL_IDENTITY: "per-user",

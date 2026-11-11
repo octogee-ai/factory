@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stagedSecretOwnersOnly, unassignedConfiguredAgents } from "../lib/shared-broker-profile-readiness.js";
 import type { DegradedSecretOwner } from "../lib/gateway-rpc.js";
 import { mattermostAccountSecretRef, updateMattermostAccountSecrets } from "../lib/mattermost-account-secrets.js";
-import { clearBuilderClaim, stubBuilderClaim } from "./helpers/builder-claim.js";
+import { clearUserClaim, stubUserClaim } from "./helpers/user-claim.js";
 
 import { DatabaseSync } from "node:sqlite";
 
@@ -77,7 +77,7 @@ function writeAppliedProfiles(
  * can refuse at any moment a one-shot materialization happens to run — leaving
  * the catalog written but the broker profile absent, so the agent's first turn
  * fails on credentials. This sweep is therefore retried on a timer until every
- * rostered coach has its profile, and must stay quiet once it has nothing left
+ * rostered agent has its profile, and must stay quiet once it has nothing left
  * to do.
  */
 describe("broker profile retry (level-triggered)", () => {
@@ -130,14 +130,14 @@ describe("broker profile retry (level-triggered)", () => {
     );
   });
 
-  it("materializes every Builder agent whose store the final import replaced, without a pre-boot pass", async () => {
-    const builderAgents = [AGENT, "octogee-alice-proj-orbit-coach"];
-    for (const agentId of builderAgents) seedAgentStore(agentsDir, agentId);
+  it("materializes every user agent whose store the final import replaced, without a pre-boot pass", async () => {
+    const userAgents = [AGENT, "octogee-alice-proj-orbit-coach"];
+    for (const agentId of userAgents) seedAgentStore(agentsDir, agentId);
     applyOutcome = "accept";
 
     const readiness = await materializeDeferredBrokerProfiles((m) => logs.push(m), {
       agentsDir,
-      readConfig: () => ({ agents: { entries: Object.fromEntries(builderAgents.map((id) => [id, { model: "house" }])) } }),
+      readConfig: () => ({ agents: { entries: Object.fromEntries(userAgents.map((id) => [id, { model: "house" }])) } }),
       secretsApply: { apply },
       secretsReload: { secretsReload: reload },
     });
@@ -145,7 +145,7 @@ describe("broker profile retry (level-triggered)", () => {
     const appliedAgents = new Set(
       apply.mock.calls.flatMap(([plan]) => (plan as { targets: Array<{ agentId: string }> }).targets.map((t) => t.agentId)),
     );
-    expect([...appliedAgents].sort()).toEqual([...builderAgents].sort());
+    expect([...appliedAgents].sort()).toEqual([...userAgents].sort());
     expect(readiness).toMatchObject({ settled: true, deferred: [] });
     expect(logs).toContain("[agent-model-token] post-boot sweep materialized 2 agent(s)");
   });
@@ -365,20 +365,20 @@ describe("broker profile retry (level-triggered)", () => {
     expect(apply.mock.calls.flatMap(([plan]) => plan.targets).some((target) => target.agentId === staged)).toBe(true);
   });
 
-  describe("project accounts the Builder reconciler retires", () => {
+  describe("project accounts the user reconciler retires", () => {
     const retiredAccount = "alice-proj-old";
     const retiredOwner: DegradedSecretOwner = {
       ownerKind: "account", ownerId: `mattermost:${retiredAccount}`, state: "unavailable", degradationState: "cold",
       paths: [`channels.mattermost.accounts.${retiredAccount}.botToken`], reason: "secret reference was not found",
     };
-    const builderConfig = () => ({
+    const userConfig = () => ({
       agents: { entries: { [AGENT]: { model: "house" } } },
       channels: { mattermost: { accounts: { [retiredAccount]: { botToken: mattermostAccountSecretRef(retiredAccount) } } } },
     });
     let openclawDir: string;
     let reloadWithWarning: ReturnType<typeof vi.fn>;
     const scoped = () => materializeDeferredBrokerProfiles((m) => logs.push(m), {
-      agentsDir, openclawDir, readConfig: builderConfig,
+      agentsDir, openclawDir, readConfig: userConfig,
       readAssignedSlugs: async () => ["alice"],
       secretsApply: { apply },
       secretsReload: { secretsReload: reloadWithWarning, degradedSecretsStatus: async () => [retiredOwner] },
@@ -419,15 +419,15 @@ describe("broker profile retry (level-triggered)", () => {
   });
 
   describe("broker profile roster per gateway class", () => {
-    afterEach(() => clearBuilderClaim());
+    afterEach(() => clearUserClaim());
 
-    it("reads the Shared assignment roster and the Builder's claimed slug, and an empty roster before a claim", async () => {
+    it("reads the Shared assignment roster and the user's claimed slug, and an empty roster before a claim", async () => {
       const readDesiredSlugs = async () => ["alice", "bravo"];
       await expect(brokerProfileRoster({ gatewayId: "shared-a", readDesiredSlugs })!()).resolves.toEqual(["alice", "bravo"]);
-      const builder = brokerProfileRoster({ gatewayId: "alice-s-abc", readDesiredSlugs })!;
-      await expect(builder()).resolves.toEqual([]);
-      stubBuilderClaim("alice");
-      await expect(builder()).resolves.toEqual(["alice"]);
+      const user = brokerProfileRoster({ gatewayId: "alice-s-abc", readDesiredSlugs })!;
+      await expect(user()).resolves.toEqual([]);
+      stubUserClaim("alice");
+      await expect(user()).resolves.toEqual(["alice"]);
     });
   });
 

@@ -1,20 +1,20 @@
 import {
-  COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE,
-  COMPUTER_HOME_CHECKPOINT_MAX_BYTES,
-  COMPUTER_HOME_CHECKPOINT_NAME_RE,
+  VM_HOME_CHECKPOINT_CONTENT_TYPE,
+  VM_HOME_CHECKPOINT_MAX_BYTES,
+  VM_HOME_CHECKPOINT_NAME_RE,
   isDisposableHomeCheckpoint,
   sameHomeCheckpoint,
   type GatewayVmHomeCheckpoint,
   type GatewayVmRuntimeBundle,
 } from "@octogee/shared/types/glm";
 import type {
-  FleetBrokerComputerHomeCheckpointCommit,
-  FleetBrokerComputerHomeCheckpointUrl,
-  FleetBrokerComputerHomeDownload,
-  FleetBrokerComputerHomePruneResult,
+  FleetBrokerVmHomeCheckpointCommit,
+  FleetBrokerVmHomeCheckpointUrl,
+  FleetBrokerVmHomeDownload,
+  FleetBrokerVmHomePruneResult,
 } from "@octogee/shared/types/fleet-broker";
 import { brokerFailure, brokerPost, type BrokerClientDeps } from "./broker.js";
-import { bundleBuilderIdentity, volumeHostPath } from "./plan.js";
+import { bundleUserIdentity, volumeHostPath } from "./plan.js";
 import type { DesktopControl } from "./desktop-control.js";
 
 export const HOME_VOLUME_NAME = "data";
@@ -91,7 +91,7 @@ export type HomeRestoreResult =
 
 export function homeScope(stateRoot: string, bundle: GatewayVmRuntimeBundle): HomeScope | null {
   const volume = bundle.volumes.find((candidate) => candidate.name === HOME_VOLUME_NAME && candidate.kind === "emptyDir");
-  const slug = bundleBuilderIdentity(bundle)?.builderSlug;
+  const slug = bundleUserIdentity(bundle)?.builderSlug;
   if (!volume || !slug) return null;
   return {
     slug, dataDir: volumeHostPath(stateRoot, volume), marker: `${stateRoot}/${HOME_CHECKPOINT_MARKER}`,
@@ -158,7 +158,7 @@ async function post<T>(deps: HomeCheckpointDeps, path: string, body: Record<stri
 
 async function pruneCheckpoints(deps: HomeCheckpointDeps, slug: string): Promise<number | null> {
   try {
-    const pruned = await post<FleetBrokerComputerHomePruneResult>(deps, "prune", { slug }, "computer-home prune");
+    const pruned = await post<FleetBrokerVmHomePruneResult>(deps, "prune", { slug }, "vm-home prune");
     return pruned.deleted;
   } catch (err) {
     deps.log(`[vm-agent] home checkpoint prune failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -190,24 +190,24 @@ async function createAndUploadCheckpoint(
   await sh(deps, "tar", tarCreateArgs(archive, capturedScope), [0]);
   const size = await deps.fs.fileSize(archive);
   if (size <= 0) throw new Error("home checkpoint archive is empty");
-  if (size > COMPUTER_HOME_CHECKPOINT_MAX_BYTES) {
-    throw new Error(`home checkpoint archive is ${size} bytes, over the ${COMPUTER_HOME_CHECKPOINT_MAX_BYTES} byte cap`);
+  if (size > VM_HOME_CHECKPOINT_MAX_BYTES) {
+    throw new Error(`home checkpoint archive is ${size} bytes, over the ${VM_HOME_CHECKPOINT_MAX_BYTES} byte cap`);
   }
   const sha256 = await deps.fs.sha256(archive);
-  const signed = await post<FleetBrokerComputerHomeCheckpointUrl>(deps, "checkpoint-url", { slug: scope.slug, size }, "computer-home checkpoint-url");
-  if (!COMPUTER_HOME_CHECKPOINT_NAME_RE.test(signed.name)) throw new Error(`computer-home checkpoint-url returned an invalid name ${signed.name}`);
+  const signed = await post<FleetBrokerVmHomeCheckpointUrl>(deps, "checkpoint-url", { slug: scope.slug, size }, "vm-home checkpoint-url");
+  if (!VM_HOME_CHECKPOINT_NAME_RE.test(signed.name)) throw new Error(`vm-home checkpoint-url returned an invalid name ${signed.name}`);
   const upload = await deps.fetchImpl(signed.upload.url, {
     method: signed.upload.method,
     signal: AbortSignal.timeout(10 * 60_000),
-    headers: { "content-type": COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE, ...signed.upload.requiredHeaders },
+    headers: { "content-type": VM_HOME_CHECKPOINT_CONTENT_TYPE, ...signed.upload.requiredHeaders },
     body: await deps.fs.uploadBody(archive),
   });
-  if (!upload.ok) throw await brokerFailure("computer-home upload", upload);
-  const committed = await post<FleetBrokerComputerHomeCheckpointCommit>(
+  if (!upload.ok) throw await brokerFailure("vm-home upload", upload);
+  const committed = await post<FleetBrokerVmHomeCheckpointCommit>(
     deps,
     "commit",
     { slug: scope.slug, name: signed.name, size, sha256, requestedAt, coverage: "builder-home-v2", writerProtocol: 2 },
-    "computer-home commit",
+    "vm-home commit",
   );
   await deps.fs.touch(scope.marker, startedAt);
   const pruned = await pruneCheckpoints(deps, scope.slug);
@@ -241,23 +241,23 @@ export async function checkpointHome(deps: HomeCheckpointDeps, scope: HomeScope,
   return checkpoint.value;
 }
 
-function validateHomeDownload(current: FleetBrokerComputerHomeDownload): void {
-  if (!COMPUTER_HOME_CHECKPOINT_NAME_RE.test(current.name) || !SHA256_RE.test(current.sha256) || !Number.isSafeInteger(current.size) || current.size <= 0) {
-    throw new Error("computer-home download-url returned an invalid checkpoint record");
+function validateHomeDownload(current: FleetBrokerVmHomeDownload): void {
+  if (!VM_HOME_CHECKPOINT_NAME_RE.test(current.name) || !SHA256_RE.test(current.sha256) || !Number.isSafeInteger(current.size) || current.size <= 0) {
+    throw new Error("vm-home download-url returned an invalid checkpoint record");
   }
 }
 
-async function fetchHomeRestoreDownload(deps: HomeCheckpointDeps, scope: HomeScope, pending: boolean): Promise<FleetBrokerComputerHomeDownload | null> {
+async function fetchHomeRestoreDownload(deps: HomeCheckpointDeps, scope: HomeScope, pending: boolean): Promise<FleetBrokerVmHomeDownload | null> {
   const expected = scope.restoreCheckpoint;
   const res = await brokerPost(deps, "computer-home/download-url", { slug: scope.slug });
   if (res.status === 404) {
     if (pending || expected) throw new Error("required home checkpoint is unavailable");
     return null;
   }
-  if (!res.ok) throw await brokerFailure("computer-home download-url", res);
-  const current = (await res.json()) as FleetBrokerComputerHomeDownload;
+  if (!res.ok) throw await brokerFailure("vm-home download-url", res);
+  const current = (await res.json()) as FleetBrokerVmHomeDownload;
   validateHomeDownload(current);
-  if (expected && !sameHomeCheckpoint(expected, current as GatewayVmHomeCheckpoint)) throw new Error("computer-home download does not match the required checkpoint");
+  if (expected && !sameHomeCheckpoint(expected, current as GatewayVmHomeCheckpoint)) throw new Error("vm-home download does not match the required checkpoint");
   return current;
 }
 
@@ -265,7 +265,7 @@ async function homeRestoreInstalled(deps: HomeCheckpointDeps, scope: HomeScope, 
   return !pending && (!receipt || await deps.fs.exists(receipt)) && (await deps.fs.listDir(scope.dataDir)).length > 0;
 }
 
-async function installHomeRestore(deps: HomeCheckpointDeps, scope: HomeScope, current: FleetBrokerComputerHomeDownload, staged: string, receipt: string | null): Promise<void> {
+async function installHomeRestore(deps: HomeCheckpointDeps, scope: HomeScope, current: FleetBrokerVmHomeDownload, staged: string, receipt: string | null): Promise<void> {
   if (!(await deps.fs.exists(`${staged}/data`))) throw new Error("home checkpoint has no gateway data directory");
   if (current.coverage === "builder-home-v2" && !(await deps.fs.exists(`${staged}/desktop-home`))) throw new Error("home checkpoint has no full desktop home");
   await deps.desktop.run(current.coverage === "builder-home-v2" ? "stop-home" : "stop");
@@ -304,7 +304,7 @@ export async function restoreHome(deps: HomeCheckpointDeps, scope: HomeScope): P
   const staged = `${tempDir}/staged`;
   try {
     const download = await deps.fetchImpl(current.download.url, { method: current.download.method, signal: AbortSignal.timeout(10 * 60_000) });
-    if (!download.ok) throw await brokerFailure("computer-home download", download);
+    if (!download.ok) throw await brokerFailure("vm-home download", download);
     await deps.fs.saveResponse(download, archive);
     const size = await deps.fs.fileSize(archive);
     if (size !== current.size) throw new Error(`home checkpoint ${current.name} downloaded ${size} bytes, expected ${current.size}`);

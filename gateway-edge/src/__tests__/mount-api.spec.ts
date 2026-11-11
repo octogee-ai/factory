@@ -14,7 +14,7 @@ describe("mountApi — fleet path-affinity seam (FLEET-API-ROUTING-SPEC)", () =>
     mountApi(app, "/workspace", r);
 
     const unscoped = await request(app).get("/api/workspace/files");
-    const scoped = await request(app).get("/api/g/gw-bender/workspace/files");
+    const scoped = await request(app).get("/api/g/gw-walter/workspace/files");
     expect(unscoped.status).toBe(200);
     expect(scoped.status).toBe(200);
     expect(unscoped.body).toEqual({ ok: true });
@@ -29,9 +29,9 @@ describe("mountApi — fleet path-affinity seam (FLEET-API-ROUTING-SPEC)", () =>
     });
     mountApi(app, "/x", r);
 
-    const scoped = await request(app).get("/api/g/gw-bender/x/probe");
+    const scoped = await request(app).get("/api/g/gw-walter/x/probe");
     const unscoped = await request(app).get("/api/x/probe");
-    expect(scoped.body).toEqual({ gatewayId: "gw-bender" });
+    expect(scoped.body).toEqual({ gatewayId: "gw-walter" });
     expect(unscoped.body).toEqual({ gatewayId: null });
   });
 

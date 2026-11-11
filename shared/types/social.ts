@@ -1,4 +1,4 @@
-export interface StarTargetBuilder {
+export interface StarTargetUser {
   type: 'builder';
   
   ownerUid: string;
@@ -24,9 +24,9 @@ export interface StarTargetPost {
   ownerUid: string;
 }
 
-export type StarTarget = StarTargetBuilder | StarTargetProject | StarTargetPost;
+export type StarTarget = StarTargetUser | StarTargetProject | StarTargetPost;
 
-export type FollowTarget = StarTargetBuilder | StarTargetProject;
+export type FollowTarget = StarTargetUser | StarTargetProject;
 
 export function starDocId(actorUid: string, target: StarTarget): string {
   switch (target.type) {
@@ -52,7 +52,7 @@ export function isStarTarget(v: unknown): v is StarTarget {
   if (!v || typeof v !== 'object') return false;
   const t = (v as { type?: unknown }).type;
   if (t === 'builder') {
-    const b = v as Partial<StarTargetBuilder>;
+    const b = v as Partial<StarTargetUser>;
     return typeof b.ownerUid === 'string' && typeof b.username === 'string';
   }
   if (t === 'project') {

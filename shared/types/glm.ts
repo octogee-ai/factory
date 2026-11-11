@@ -15,7 +15,7 @@ export interface GatewayDesiredState {
   gatewayId: string;
 
   /**
-   * Durable identity this instance belongs to (`shared-a`, `bender`) — bare,
+   * Durable identity this instance belongs to (`shared-a`, `walter`) — bare,
    * never blue/green-suffixed. Explicit on every instance written after the
    * gateway field landed; older docs derive it from gatewayId by convention
    * via deriveGatewayIdentity until backfilled.
@@ -46,7 +46,7 @@ export interface GatewayDesiredState {
 
   gatewayContainerSecurityContext?: Record<string, unknown>;
 
-  builderAccess?: BuilderGatewayAccessSpec;
+  builderAccess?: IsolatedGatewayAccessSpec;
 
   lastError?: { at: number; message: string } | null;
 
@@ -109,7 +109,7 @@ export interface GatewayVmSpec {
   subnetwork: string;
 }
 
-export interface RetainedBuilderHome {
+export interface RetainedUserHome {
   projectId: string;
   zone: string;
   name: string;
@@ -176,9 +176,9 @@ export function isGatewayVmParkedCheckpoint(value: unknown): value is GatewayVmP
     && (c.completedAt === null || typeof c.completedAt === "number");
 }
 
-export const BUILDER_PARKED_COMPUTER_FIELD = "provisioning.computer";
+export const USER_PARKED_VM_FIELD = "provisioning.computer";
 
-export interface BuilderParkedComputer {
+export interface UserParkedVm {
   instanceName: string;
   zone: string;
   instanceId: string | null;
@@ -191,15 +191,15 @@ export interface BuilderParkedComputer {
   disposable?: true;
 }
 
-function parkedComputerRecoveryValid(p: Partial<BuilderParkedComputer>): boolean {
+function parkedVmRecoveryValid(p: Partial<UserParkedVm>): boolean {
   return (p.homeCheckpoint === undefined || isGatewayVmHomeCheckpoint(p.homeCheckpoint))
     && (p.disposable === undefined || (p.disposable === true && isDisposableHomeCheckpoint(p.homeCheckpoint)))
     && (p.bootRecovery === undefined || isGatewayVmBootRecoverySample(p.bootRecovery)
       && typeof p.bootRecovery.instanceId === "string" && Number.isFinite(p.bootRecovery.observedAt));
 }
 
-export function isBuilderParkedComputer(value: unknown): value is BuilderParkedComputer {
-  const p = value as Partial<BuilderParkedComputer> | null;
+export function isUserParkedVm(value: unknown): value is UserParkedVm {
+  const p = value as Partial<UserParkedVm> | null;
   return !!p
     && typeof p.instanceName === "string" && p.instanceName.length > 0
     && typeof p.zone === "string" && p.zone.length > 0
@@ -207,14 +207,14 @@ export function isBuilderParkedComputer(value: unknown): value is BuilderParkedC
     && typeof p.gatewayId === "string" && p.gatewayId.length > 0
     && typeof p.parkedAt === "number" && Number.isFinite(p.parkedAt)
     && isGatewayVmParkedCheckpoint(p.checkpoint)
-    && parkedComputerRecoveryValid(p);
+    && parkedVmRecoveryValid(p);
 }
 
-export function readBuilderParkedComputer(userData: Record<string, unknown> | undefined): BuilderParkedComputer | null {
+export function readUserParkedVm(userData: Record<string, unknown> | undefined): UserParkedVm | null {
   const provisioning = userData?.provisioning;
   if (!provisioning || typeof provisioning !== "object" || Array.isArray(provisioning)) return null;
   const computer = (provisioning as Record<string, unknown>).computer;
-  return isBuilderParkedComputer(computer) ? computer : null;
+  return isUserParkedVm(computer) ? computer : null;
 }
 
 export const GLM_GATEWAY_VM_SUBCOLLECTION = "vm";
@@ -245,13 +245,13 @@ export type GatewayVmRuntimeVolume =
   | { name: string; kind: "identityToken"; audience: string }
   | { name: string; kind: "kubernetesApi" };
 
-export interface RuntimeBuilderIdentity {
+export interface RuntimeUserIdentity {
   ownerUid: string;
   builderSlug: string;
 }
 
-export function isRuntimeBuilderIdentity(value: unknown): value is RuntimeBuilderIdentity {
-  const identity = value as Partial<RuntimeBuilderIdentity> | null;
+export function isRuntimeUserIdentity(value: unknown): value is RuntimeUserIdentity {
+  const identity = value as Partial<RuntimeUserIdentity> | null;
   return !!identity && typeof identity === "object" &&
     typeof identity.ownerUid === "string" && identity.ownerUid.length > 0 &&
     typeof identity.builderSlug === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(identity.builderSlug);
@@ -260,11 +260,11 @@ export function isRuntimeBuilderIdentity(value: unknown): value is RuntimeBuilde
 export interface GatewayVmRuntimeBundle {
   version: string;
   gatewayId: string;
-  builderIdentity?: RuntimeBuilderIdentity;
+  builderIdentity?: RuntimeUserIdentity;
   namespace?: string;
   imageRepository: string;
   imageTag: string;
-  /** Absent on bundles rendered before computers named their desktop; those computers run Omarchy. */
+  /** Absent on bundles rendered before VMs named their desktop; those VMs run Omarchy. */
   desktop?: GatewayVmDesktop;
   init: GatewayVmRuntimeContainer | null;
   containers: GatewayVmRuntimeContainer[];
@@ -293,7 +293,7 @@ export function isGatewayVmRuntimeBundle(value: unknown): value is GatewayVmRunt
     && Array.isArray(b.containers) && b.containers.length > 0
     && Array.isArray(b.volumes)
     && runtimeBundleHostsValid(b)
-    && (b.builderIdentity === undefined || isRuntimeBuilderIdentity(b.builderIdentity))
+    && (b.builderIdentity === undefined || isRuntimeUserIdentity(b.builderIdentity))
     && (b.homeRestoreCheckpoint === undefined || isDisposableHomeCheckpoint(b.homeRestoreCheckpoint));
 }
 
@@ -394,10 +394,10 @@ export function vmDiskFreePercent(sample: GatewayVmDiskSample): number {
   return Math.floor((sample.freeBytes / sample.sizeBytes) * 100);
 }
 
-export const COMPUTER_HOME_CHECKPOINT_MAX_BYTES = 4 * 1024 * 1024 * 1024;
-export const COMPUTER_HOME_CHECKPOINT_KEEP = 5;
-export const COMPUTER_HOME_CHECKPOINT_NAME_RE = /^\d{8}T\d{6}Z\.tar\.gz$/u;
-export const COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE = "application/gzip";
+export const VM_HOME_CHECKPOINT_MAX_BYTES = 4 * 1024 * 1024 * 1024;
+export const VM_HOME_CHECKPOINT_KEEP = 5;
+export const VM_HOME_CHECKPOINT_NAME_RE = /^\d{8}T\d{6}Z\.tar\.gz$/u;
+export const VM_HOME_CHECKPOINT_CONTENT_TYPE = "application/gzip";
 
 export interface GatewayVmHomeCheckpoint {
   generation?: string;
@@ -435,8 +435,8 @@ function homeCheckpointProtocolValid(c: Partial<GatewayVmHomeCheckpoint>): boole
 export function isGatewayVmHomeCheckpoint(value: unknown): value is GatewayVmHomeCheckpoint {
   const c = value as Partial<GatewayVmHomeCheckpoint> | null;
   return !!c
-    && typeof c.name === "string" && COMPUTER_HOME_CHECKPOINT_NAME_RE.test(c.name)
-    && typeof c.size === "number" && Number.isSafeInteger(c.size) && c.size > 0 && c.size <= COMPUTER_HOME_CHECKPOINT_MAX_BYTES
+    && typeof c.name === "string" && VM_HOME_CHECKPOINT_NAME_RE.test(c.name)
+    && typeof c.size === "number" && Number.isSafeInteger(c.size) && c.size > 0 && c.size <= VM_HOME_CHECKPOINT_MAX_BYTES
     && typeof c.sha256 === "string" && /^[a-f0-9]{64}$/u.test(c.sha256)
     && (c.instanceId === null || typeof c.instanceId === "string")
     && typeof c.completedAt === "number" && Number.isFinite(c.completedAt)
@@ -453,9 +453,9 @@ export function sameHomeCheckpoint(a: GatewayVmHomeCheckpoint, b: GatewayVmHomeC
     && a.coverage === b.coverage && a.writerProtocol === b.writerProtocol;
 }
 
-export function computerHomeCheckpointName(at: number): string {
+export function vmHomeCheckpointName(at: number): string {
   const date = new Date(at);
-  if (!Number.isFinite(date.getTime())) throw new Error("computer-home checkpoint time is invalid");
+  if (!Number.isFinite(date.getTime())) throw new Error("vm-home checkpoint time is invalid");
   return `${date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}.tar.gz`;
 }
 
@@ -464,7 +464,7 @@ export function gatewayVmPodName(gatewayId: string, instanceId: string): string 
   return `octogee-gateway-${gatewayId}-vm-${instanceId}`;
 }
 
-export const BUILDER_COMPUTER_INSTANCE_PREFIX = "octogee-computer-";
+export const GATEWAY_VM_INSTANCE_PREFIX = "octogee-computer-";
 export const GATEWAY_DESKTOP_NODE_CONTAINER = "desktop-node";
 export const GATEWAY_DESKTOP_NODE_STATE_VOLUME = "desktop-node-state";
 export const GATEWAY_DESKTOP_NODE_IDENTITY_VOLUME = "desktop-node-identity";
@@ -500,10 +500,10 @@ function gceInstanceName(prefix: string, raw: string, what: string): string {
   return `${prefix}${normalized.slice(0, budget).replace(/-$/, "")}-${suffix}`;
 }
 
-export function builderComputerInstanceName(environment: string, ownerUid: string): string {
+export function gatewayVmInstanceName(environment: string, ownerUid: string): string {
   const env = environment.trim().toLowerCase();
-  if (!/^[a-z0-9]+$/.test(env)) throw new Error(`builderComputerInstanceName: environment ${JSON.stringify(environment)} is not a name segment`);
-  return gceInstanceName(`${BUILDER_COMPUTER_INSTANCE_PREFIX}${env}-`, ownerUid, "builderComputerInstanceName: ownerUid");
+  if (!/^[a-z0-9]+$/.test(env)) throw new Error(`gatewayVmInstanceName: environment ${JSON.stringify(environment)} is not a name segment`);
+  return gceInstanceName(`${GATEWAY_VM_INSTANCE_PREFIX}${env}-`, ownerUid, "gatewayVmInstanceName: ownerUid");
 }
 
 export interface GatewayModelBrokerLimits {
@@ -532,7 +532,7 @@ export function resolveGatewayControlIdentity(value: unknown): GatewayControlIde
   return value === "per-user" ? "per-user" : DEFAULT_GATEWAY_CONTROL_IDENTITY;
 }
 
-export interface BuilderGatewayAccessSpec {
+export interface IsolatedGatewayAccessSpec {
   controlUiEnabled?: boolean;
   controlIdentity?: GatewayControlIdentity;
   kubeApiServerEgressCidrs?: string[];
@@ -541,39 +541,39 @@ export interface BuilderGatewayAccessSpec {
   verifiedBy?: string;
 }
 
-export const BUILDER_GATEWAY_LOCKED_ACCESS: BuilderGatewayAccessSpec = {
+export const ISOLATED_GATEWAY_LOCKED_ACCESS: IsolatedGatewayAccessSpec = {
   controlUiEnabled: false,
   reason: "runtime-trust-boundary-not-provisioned",
 };
 
-export function defaultBuilderGatewayAccess(
+export function defaultIsolatedGatewayAccess(
   ownerUid: string | null | undefined,
-): BuilderGatewayAccessSpec {
+): IsolatedGatewayAccessSpec {
   return ownerUid
     ? {
       controlUiEnabled: true,
       reason: "owned-runtime-gateway",
     }
-    : BUILDER_GATEWAY_LOCKED_ACCESS;
+    : ISOLATED_GATEWAY_LOCKED_ACCESS;
 }
 
-export function resolveBuilderGatewayAccess(
+export function resolveIsolatedGatewayAccess(
   ownerUid: string | null | undefined,
-  builderAccess: BuilderGatewayAccessSpec | null | undefined,
-): BuilderGatewayAccessSpec {
+  builderAccess: IsolatedGatewayAccessSpec | null | undefined,
+): IsolatedGatewayAccessSpec {
   return {
-    ...defaultBuilderGatewayAccess(ownerUid),
+    ...defaultIsolatedGatewayAccess(ownerUid),
     ...(builderAccess ?? {}),
   };
 }
 
-export const BUILDER_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
+export const ISOLATED_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
 export const GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME = "octogee-gateway";
 export const GATEWAY_ID_MAX_LENGTH = 32;
 export const GATEWAY_ID_REQUIREMENT =
   "gatewayId must be a lowercase DNS-safe id, 1-32 chars, starting and ending with a letter or digit";
 
-export const BUILDER_GATEWAY_LOCKED_SERVICE_ACCOUNT: GatewayServiceAccountSpec = {
+export const ISOLATED_GATEWAY_LOCKED_SERVICE_ACCOUNT: GatewayServiceAccountSpec = {
   create: true,
 };
 
@@ -625,13 +625,13 @@ export function deriveGatewayIdentity(
   return gatewayId;
 }
 
-export function builderGatewayServiceAccountName(gatewayId: string): string {
-  return `${BUILDER_GATEWAY_SERVICE_ACCOUNT_PREFIX}${gatewayId}`;
+export function isolatedGatewayServiceAccountName(gatewayId: string): string {
+  return `${ISOLATED_GATEWAY_SERVICE_ACCOUNT_PREFIX}${gatewayId}`;
 }
 
 export function isGatewayClassControlUiAccessEnabled(
   gatewayClass: GatewayClass | undefined,
-  builderAccess: BuilderGatewayAccessSpec | undefined,
+  builderAccess: IsolatedGatewayAccessSpec | undefined,
 ): boolean {
   return gatewayClass === "builder" && builderAccess?.controlUiEnabled === true;
 }
@@ -643,7 +643,7 @@ export function resolveUserGatewayControlState(
         profile?: unknown;
         imageProfile?: unknown;
         ownerUid?: unknown;
-        builderAccess?: BuilderGatewayAccessSpec;
+        builderAccess?: IsolatedGatewayAccessSpec;
       }
     | undefined,
   uid: string,
@@ -974,7 +974,7 @@ export function readSchedulerMigrationIdentity(operationId: unknown, migrationId
   return { attempt, claimStartedAt };
 }
 
-export interface BuilderActivationTargetRollbackProof {
+export interface UserActivationTargetRollbackProof {
   operationId: string;
   migrationId: string;
   uid: string;
@@ -1003,7 +1003,7 @@ export interface MigrationForwardRecovery {
 }
 
 export interface SchedulerHandoffState {
-  /** New customer moves use best-effort schedule snapshots, not native handoff. */
+  /** New user moves use best-effort schedule snapshots, not native handoff. */
   scheduleTransfer?: true;
   forwardRecovery?: MigrationForwardRecovery;
   migrationId: string;
@@ -1017,7 +1017,7 @@ export interface SchedulerHandoffState {
     migrationId: string;
     sourceEpoch: number;
     steps: OperationStep[];
-    targetRollback?: BuilderActivationTargetRollbackProof;
+    targetRollback?: UserActivationTargetRollbackProof;
   };
 }
 
@@ -1070,7 +1070,7 @@ export interface Operation {
   // Incremented each time a controller re-adopts this op after a restart (observability).
   resumeCount?: number;
   // A serially-exclusive op (e.g. rollout) parked pending because a conflicting op of
-  // the same kind is running. Human-readable, e.g. "bender-blue → bender-green". Cleared
+  // the same kind is running. Human-readable, e.g. "walter-blue → walter-green". Cleared
   // once the op is claimed.
   waitingOn?: string | null;
   // Set when a transient failure schedules an automatic retry; the op stays `pending`
@@ -1085,7 +1085,7 @@ export interface Operation {
   attemptHistory?: OperationAttemptRecord[];
   output?: Record<string, unknown>;
   progress?: MigrationProgressRecord[];
-  customerMigrationV2?: CustomerMigrationV2State;
+  customerMigrationV2?: UserMigrationV2State;
   sourceTransferExecution?: SourceTransferExecution;
   schedulerHandoff?: SchedulerHandoffState;
   schedulerHandoffReleased?: boolean;
@@ -1094,7 +1094,7 @@ export interface Operation {
   cutoverCommittedAt?: number;
 }
 
-export type CustomerMigrationV2Phase =
+export type UserMigrationV2Phase =
   | "initialized"
   | "keysSynced"
   | "preSynced"
@@ -1108,7 +1108,7 @@ export type CustomerMigrationV2Phase =
   | "abortTargetUnmounted"
   | "aborted";
 
-export interface CustomerMigrationV2GatewayRootFence {
+export interface UserMigrationV2GatewayRootFence {
   gatewayId: string;
   updatedAt: number;
   latestRelease: number;
@@ -1120,8 +1120,8 @@ export interface CustomerMigrationV2GatewayRootFence {
   configHash: string;
 }
 
-export interface CustomerMigrationV2State {
-  phase: CustomerMigrationV2Phase;
+export interface UserMigrationV2State {
+  phase: UserMigrationV2Phase;
   operationId: string;
   migrationId: string;
   uid: string;
@@ -1130,16 +1130,16 @@ export interface CustomerMigrationV2State {
   sourceRelease: number;
   sourceEpoch: number;
   sourceAssignmentMode: "assigned" | "unassigned-live";
-  sourceRootFence: CustomerMigrationV2GatewayRootFence;
+  sourceRootFence: UserMigrationV2GatewayRootFence;
   targetGatewayId: string;
   targetRelease: number;
-  targetRootFence: CustomerMigrationV2GatewayRootFence;
+  targetRootFence: UserMigrationV2GatewayRootFence;
   sourceSystemConfigCommit?: string;
   cutoverAt?: number;
   schedulerStagedAt?: number;
   sourceRetiredAt?: number;
   completedAt?: number;
-  abortFromPhase?: CustomerMigrationV2Phase;
+  abortFromPhase?: UserMigrationV2Phase;
   abortReason?: string;
   abortIntentAt?: number;
   abortedAt?: number;
@@ -1164,7 +1164,7 @@ export interface HelmInstanceValue {
   serviceAccountName?: string;
   serviceAccount?: GatewayServiceAccountSpec;
   gatewayContainerSecurityContext?: Record<string, unknown>;
-  builderAccess?: BuilderGatewayAccessSpec;
+  builderAccess?: IsolatedGatewayAccessSpec;
 
   profile?: GatewayProfile;
   gatewayClass?: GatewayClass;

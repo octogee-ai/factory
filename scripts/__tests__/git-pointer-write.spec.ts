@@ -22,7 +22,7 @@ vi.mock("../lib/config.js", () => ({
   AGENTS_DIR: `${paths.root}/agents`,
 }));
 
-const { externalizeCustomerGitDir, setRepoSshCommand } = await import("../lib/git.js");
+const { externalizeUserGitDir, setRepoSshCommand } = await import("../lib/git.js");
 const repo = path.join(paths.root, "customers", "alice");
 const pointer = path.join(repo, ".git");
 const legacyTemporary = path.join(repo, ".git.octogee.tmp");
@@ -42,14 +42,14 @@ function git(args: string[]): string {
 }
 
 function refresh(): string | null {
-  return externalizeCustomerGitDir(repo, {
+  return externalizeUserGitDir(repo, {
     fetchCanonical: () => { throw new Error("Trusted metadata must not be fetched"); },
   });
 }
 
 beforeEach(() => {
   fs.rmSync(paths.root, { recursive: true, force: true });
-  externalizeCustomerGitDir(repo, { fetchCanonical: () => {} });
+  externalizeUserGitDir(repo, { fetchCanonical: () => {} });
 });
 
 afterEach(() => {
@@ -57,7 +57,7 @@ afterEach(() => {
   fs.rmSync(paths.root, { recursive: true, force: true });
 });
 
-describe("customer Git pointer replacement", () => {
+describe("user Git pointer replacement", () => {
   it.each(["existing", "dangling"])("refreshes a Gitea workspace with a tracked temporary-name symlink to a sibling's %s file", (kind) => {
     const outside = path.join(paths.root, "customers", "bob", "notes.txt");
     fs.mkdirSync(path.dirname(outside), { recursive: true });
@@ -85,11 +85,11 @@ describe("customer Git pointer replacement", () => {
   });
 
   it("preserves a regular file at the former temporary pathname", () => {
-    fs.writeFileSync(legacyTemporary, "customer file\n");
+    fs.writeFileSync(legacyTemporary, "user file\n");
 
     refresh();
 
-    expect(fs.readFileSync(legacyTemporary, "utf8")).toBe("customer file\n");
+    expect(fs.readFileSync(legacyTemporary, "utf8")).toBe("user file\n");
     expect(git(["status", "--porcelain"])).toBe("?? .git.octogee.tmp");
   });
 

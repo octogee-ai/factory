@@ -221,9 +221,9 @@ point itself.
 Ship TEST runs these against deployed TEST (api-test.octogee.com +
 `octogee-test` Firestore) after every deployment, through
 `scripts/ci/end-to-end-tests.mjs`. Any live spec that provisions real
-resources (reservations, customers, gateways) must tear them down on **every**
+resources (reservations, users, gateways) must tear them down on **every**
 depth/branch it can run, not only its deepest "activate" path — a provisioning
-live spec that cleaned up only on `activate` once minted a ghost disposable Builder
+live spec that cleaned up only on `activate` once minted a ghost disposable isolated
 gateway in TEST on every run because the default depth was the shallower
 `request` (reserve-only). Before adding or reviewing a provisioning
 `*.live.spec.ts`, verify cleanup runs on the default path specifically, not only
@@ -268,7 +268,7 @@ Judge by **blast radius, never the directory**:
 - **Behavioral coverage required** — critical runtime code that merely *lives* under
   `scripts/lib/` and is imported by services / shared across packages
   (`admin-fleet-router.ts`, `config.ts`, `provision-reconcile.ts`, `git.ts`,
-  `customer-lifecycle.ts`, …). These are product code; the path grants zero
+  `user-lifecycle.ts`, …). These are product code; the path grants zero
   exemption.
 
 Before invoking the carve-out, ask: "is this imported by a running service /

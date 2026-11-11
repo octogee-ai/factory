@@ -9,14 +9,14 @@ import { WsUpgradeRouter } from '@octogee/core/ws/upgrade-router';
 import type { NativeMobileBinding } from '@octogee/shared/types/native-mobile';
 import { createMobileGateway } from './mobile.js';
 import { mobileDigest } from './mobile-proof.js';
-import { installTestBuilderIdentity } from '../__tests__/helpers/builder-identity.js';
+import { installTestUserIdentity } from '../__tests__/helpers/user-identity.js';
 
 const ID = '2b7d671e-180d-4dab-a486-5224ad783155';
-const MOUNT = `/api/g/bender/openclaw/mobile/${ID}`;
-const NATIVE_MOUNT = '/g/bender/openclaw';
+const MOUNT = `/api/g/walter/openclaw/mobile/${ID}`;
+const NATIVE_MOUNT = '/g/walter/openclaw';
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
-  installTestBuilderIdentity(null);
+  installTestUserIdentity(null);
   for (const fn of cleanup.splice(0).reverse()) await fn();
 });
 async function listen(server: http.Server) {
@@ -28,8 +28,8 @@ async function listen(server: http.Server) {
   return (server.address() as AddressInfo).port;
 }
 async function harness() {
-  installTestBuilderIdentity({
-    gatewayId: 'bender',
+  installTestUserIdentity({
+    gatewayId: 'walter',
     state: 'claimed',
     ownerUid: 'owner',
     builderSlug: 'alice',
@@ -38,7 +38,7 @@ async function harness() {
   });
   let binding: NativeMobileBinding = {
     id: ID,
-    gatewayId: 'bender',
+    gatewayId: 'walter',
     uid: 'owner',
     workspaceSlug: 'alice',
     allocation: 'allocation',
@@ -51,7 +51,7 @@ async function harness() {
     omitHandoff = false;
   const expiresAtMs = Date.now() + 300000;
   const setupPayload = {
-    url: `wss://api.octogee.com/g/bender/openclaw/mobile/${ID}`,
+    url: `wss://api.octogee.com/g/walter/openclaw/mobile/${ID}`,
     bootstrapToken: 'native-setup-bootstrap',
     expiresAtMs,
   };
@@ -214,8 +214,8 @@ async function harness() {
   const identity = generateIdentity();
   const gateway = createMobileGateway({
     env: {
-      GATEWAY_ID: 'bender',
-      GATEWAY_REVISION_ID: 'bender',
+      GATEWAY_ID: 'walter',
+      GATEWAY_REVISION_ID: 'walter',
       GATEWAY_CLASS: 'builder',
       GATEWAY_PROFILE: 'builder',
       OPENCLAW_CONTROL_IDENTITY: 'per-user',
@@ -503,13 +503,13 @@ it.each(['main', 'android', 'canonical'])(
         type: 'req',
         id: 'send',
         method: 'chat.send',
-        params: { sessionKey: key, message: 'Hello Coach', idempotencyKey: 'phone-send' },
+        params: { sessionKey: key, message: 'Hello Agent', idempotencyKey: 'phone-send' },
       }),
     );
     expect(await reply).toMatchObject({ id: 'send', ok: true, payload: { sessionKey: key } });
     expect(h.prepareChat).toHaveBeenCalledWith(
       expect.objectContaining({
-        params: expect.objectContaining({ sessionKey: h.conversation, message: 'Hello Coach' }),
+        params: expect.objectContaining({ sessionKey: h.conversation, message: 'Hello Agent' }),
       }),
       expect.any(Object),
       expect.any(AbortSignal),

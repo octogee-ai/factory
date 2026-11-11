@@ -38,28 +38,28 @@ export interface FleetBrokerAssignmentRosterEntry {
   epoch: number;
 }
 
-export interface FleetBrokerConfiguredBuilderProjectCredential {
+export interface FleetBrokerConfiguredUserProjectCredential {
   projectId: string;
   agentId: string;
   accountId: string;
   token: string;
 }
 
-export interface FleetBrokerConfiguredBuilderDesk {
+export interface FleetBrokerConfiguredUserDesk {
   builderName: string;
   agentName: string;
   look: AgentLook;
   timeZone: string | null;
 }
 
-export interface FleetBrokerConfiguredBuilderBootstrap {
+export interface FleetBrokerConfiguredUserBootstrap {
   uid: string;
   slug: string;
   agentId: string;
   accountId: string;
   coachToken: string;
-  projectCredentials: FleetBrokerConfiguredBuilderProjectCredential[];
-  desk: FleetBrokerConfiguredBuilderDesk;
+  projectCredentials: FleetBrokerConfiguredUserProjectCredential[];
+  desk: FleetBrokerConfiguredUserDesk;
 }
 
 export interface FleetBrokerProjectAgentReadiness {
@@ -81,7 +81,7 @@ export interface FleetBrokerProjectAgent {
   token: string | null;
 }
 
-export interface FleetBrokerCoachIdentity {
+export interface FleetBrokerDefaultAgentIdentity {
   name: string;
   emoji: string;
 }
@@ -147,7 +147,7 @@ export interface FleetBrokerNpmRegistryCredentials {
   expiresAt: string;
 }
 
-export interface FleetBrokerCustomerRuntimeReset {
+export interface FleetBrokerUserRuntimeReset {
   status: "pending";
   uid: string;
   slug: string;
@@ -160,7 +160,7 @@ export interface FleetBrokerCustomerRuntimeReset {
   requestedAt: number;
 }
 
-export const RETIRED_COMPUTER_BINDING_DENIAL_REASON =
+export const RETIRED_VM_BINDING_DENIAL_REASON =
   "retired computer bindings may only reach final-checkpoint routes";
 export const GATEWAY_BINDING_MISMATCH_REASON = "request names a gatewayId other than the bound gateway";
 
@@ -169,12 +169,12 @@ export const BUILDER_RUNTIME_STATE_RECOVERY_TIERS = ["minute", "hour", "day"] as
 export type BuilderRuntimeStateRecoveryTier =
   (typeof BUILDER_RUNTIME_STATE_RECOVERY_TIERS)[number];
 
-export interface FleetBrokerBuilderRuntimeStateSnapshotUrls {
+export interface FleetBrokerIsolatedRuntimeStateSnapshotUrls {
   live: FleetBrokerBlobSignedUrl;
   recovery: FleetBrokerBlobSignedUrl[];
 }
 
-export interface FleetBrokerBuilderRuntimeStatePruneResult {
+export interface FleetBrokerIsolatedRuntimeStatePruneResult {
   deleted: number;
 }
 
@@ -189,10 +189,10 @@ export interface FleetBrokerGatewayStateAnchor {
   schema: string;
 }
 
-export type BuilderAuxiliaryFamily = "workboard" | "logbook" | "team-reports";
+export type UserAuxiliaryFamily = "workboard" | "logbook" | "team-reports";
 
 export interface FleetBrokerAuxiliaryAnchor extends FleetBrokerGatewayStateAnchor {
-  family: BuilderAuxiliaryFamily;
+  family: UserAuxiliaryFamily;
 }
 
 export interface FleetBrokerAgentAnchorMigration {
@@ -210,19 +210,19 @@ export interface FleetBrokerAgentAnchors {
   assignment?: FleetBrokerAssignmentRosterEntry;
 }
 
-export interface FleetBrokerComputerHomeCheckpointUrl {
+export interface FleetBrokerVmHomeCheckpointUrl {
   name: string;
   upload: FleetBrokerBlobSignedUrl;
 }
 
-export interface FleetBrokerComputerHomeCheckpointCommit {
+export interface FleetBrokerVmHomeCheckpointCommit {
   name: string;
   size: number;
   sha256: string;
   completedAt: number;
 }
 
-export interface FleetBrokerComputerHomeDownload extends FleetBrokerComputerHomeCheckpointCommit {
+export interface FleetBrokerVmHomeDownload extends FleetBrokerVmHomeCheckpointCommit {
   coverage?: "builder-home-v2";
   writerProtocol?: 2 | 3;
   instanceId?: string | null;
@@ -230,11 +230,11 @@ export interface FleetBrokerComputerHomeDownload extends FleetBrokerComputerHome
   download: FleetBrokerBlobSignedUrl;
 }
 
-export interface FleetBrokerComputerHomePruneResult {
+export interface FleetBrokerVmHomePruneResult {
   deleted: number;
 }
 
-export interface FleetBrokerComputerEgress {
+export interface FleetBrokerVmEgress {
   egress: GatewayVmEgressState | null;
 }
 
@@ -265,7 +265,7 @@ export interface FleetBrokerPreStopFlushEvent {
   result?: FleetBrokerPreStopFlushResult;
 }
 
-export interface FleetBrokerCustomerRestoreAuthority {
+export interface FleetBrokerUserRestoreAuthority {
   uid: string;
   slug: string;
   gatewayId: string;
@@ -287,8 +287,8 @@ export interface FleetBrokerUserSnapshot {
   gatewayId: string;
   status: FleetBrokerProvisioningStatus;
   agentIds: string[];
-  runtimeReset?: FleetBrokerCustomerRuntimeReset;
-  restoreAuthority?: FleetBrokerCustomerRestoreAuthority;
+  runtimeReset?: FleetBrokerUserRuntimeReset;
+  restoreAuthority?: FleetBrokerUserRestoreAuthority;
   runtimeMutationFenced?: boolean;
   repoUrl: string;
   mattermostUserId: string | null;
@@ -303,18 +303,18 @@ export interface FleetBrokerUserSnapshot {
   // resolved instead of silently degrading to house_only.
   selectedTier?: unknown;
   subscription?: unknown;
-  // Builder infra subscription (pricing v3) — travels so the pod resolves a
-  // credits-rail builder as catalog, not house_only.
+  // User infra subscription (pricing v3) — travels so the pod resolves a
+  // credits-rail user as catalog, not house_only.
   builderSubscription?: unknown;
   trialGrant?: unknown;
   signupOfferConvertedAt?: unknown;
   // The operator's free-tier model dial (platformConfig/models), resolved
   // server-side: the house pin for house_only plans and the BYOK fallback.
-  // Fingerprinted — a dial flip re-ensures mounted house-only customers.
+  // Fingerprinted — a dial flip re-ensures mounted house-only users.
   freeTierModelRef?: string;
-  // The operator's Builder Agent default dial (platformConfig/models): the
-  // {primary, fallbacks} a catalog-plan Agent runs until its Builder picks
-  // their own. Fingerprinted — a dial flip re-ensures mounted customers.
+  // The operator's user agent default dial (platformConfig/models): the
+  // {primary, fallbacks} a catalog-plan Agent runs until its user picks
+  // their own. Fingerprinted — a dial flip re-ensures mounted users.
   builderAgentDefault?: { primary: string; fallbacks: string[] };
   ownerName: string;
   email: string;
@@ -325,7 +325,7 @@ export interface FleetBrokerUserSnapshot {
   onboardingVibe: string | null;
   coachToken: string | null;
   coachMmUserId: string | null;
-  coachIdentity?: FleetBrokerCoachIdentity;
+  coachIdentity?: FleetBrokerDefaultAgentIdentity;
   byotActive?: boolean;
   systemConfig?: {
     byot?: { provider?: string; baseUrl?: string; model?: string };

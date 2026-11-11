@@ -25,11 +25,11 @@ async function fixture() {
   await mkdir(`${root}/tokens`, { recursive: true });
   await writeFile(`${scope.dataDir}/gateway.txt`, "gateway state");
   await writeFile(`${scope.desktopDir}/.config/octogee-chromium/Default/Preferences`, "browser profile");
-  await symlink("replaced-computer-1234", `${scope.desktopDir}/.config/octogee-chromium/SingletonLock`);
+  await symlink("replaced-vm-1234", `${scope.desktopDir}/.config/octogee-chromium/SingletonLock`);
   await symlink("/tmp/old-chromium/socket", `${scope.desktopDir}/.config/octogee-chromium/SingletonSocket`);
   await writeFile(`${scope.desktopDir}/.config/octogee-chromium/DevToolsActivePort`, "9222");
   await writeFile(`${scope.desktopDir}/.config/octogee-chromium/Default/Cache/disposable`, "cache");
-  await writeFile(`${scope.desktopDir}/Documents/project.txt`, "Builder document");
+  await writeFile(`${scope.desktopDir}/Documents/project.txt`, "User document");
   await writeFile(`${root}/tokens/secret`, "not part of home");
   let uploaded = new Uint8Array();
   let current: Record<string, unknown> | null = null;
@@ -115,7 +115,7 @@ describe.skipIf(process.platform === "darwin" && !nativeDocker)("native home arc
     expect(await homeIsDirty(h.deps, h.scope)).toBe(true);
   });
 
-  it("creates an absent SSH directory with private customer ownership while metadata is unavailable", async () => {
+  it("creates an absent SSH directory with private user ownership while metadata is unavailable", async () => {
     const h = await fixture();
     const { chmod, chown, stat } = await import("node:fs/promises");
     const owner = process.getuid?.() === 0 ? { uid: 1000, gid: 1000 } : await stat(h.scope.desktopDir);
@@ -123,7 +123,7 @@ describe.skipIf(process.platform === "darwin" && !nativeDocker)("native home arc
     await chown(h.scope.desktopDir, owner.uid, owner.gid);
     await mkdir(`${h.scope.desktopDir}/.ssh`, { mode: 0o700 });
     await chown(`${h.scope.desktopDir}/.ssh`, owner.uid, owner.gid);
-    await writeFile(`${h.scope.desktopDir}/.ssh/config`, "customer SSH config\n");
+    await writeFile(`${h.scope.desktopDir}/.ssh/config`, "user SSH config\n");
     await checkpointHome(h.deps, h.scope, { force: true });
     h.required();
     await rm(`${h.scope.desktopDir}/.ssh`, { recursive: true });
@@ -181,11 +181,11 @@ describe.skipIf(process.platform === "darwin" && !nativeDocker)("native home arc
       await writeFile(archive, h.archive());
       const captured = await homeShell.run("tar", ["--extract", "--gzip", "--to-stdout", `--file=${archive}`, "desktop-home/Documents/project.txt"]);
       expect(captured.code).toBe(0);
-      expect(captured.stdout).toBe("Builder document");
+      expect(captured.stdout).toBe("User document");
       h.required();
       h.deps.desktop.run = async () => { throw new Error("SSH session writers have no verified host fence"); };
       await expect(restoreHome(h.deps, h.scope)).rejects.toThrow("SSH session writers");
-      expect(await readFile(document, "utf8")).toBe("Builder documentlate SSH write");
+      expect(await readFile(document, "utf8")).toBe("User documentlate SSH write");
     } finally {
       await auth.close();
     }
@@ -199,7 +199,7 @@ describe.skipIf(process.platform === "darwin" && !nativeDocker)("native home arc
     try {
       await writeFile(`${ssh}/authorized_keys`, await auth.publicKey("A"));
       expect(await auth.authenticate("A")).toBe(true);
-      await writeFile(`${ssh}/config`, "customer SSH config\n");
+      await writeFile(`${ssh}/config`, "user SSH config\n");
       const shell = h.deps.shell;
       h.deps.shell = { run: (command, args) => shell.run(command, command === "tar" && args.includes("--create") ? args.filter((arg) => !arg.startsWith("--exclude=desktop-home/.ssh/authorized_keys")) : args) };
       await checkpointHome(h.deps, h.scope, { force: true });
@@ -249,8 +249,8 @@ describe.skipIf(process.platform === "darwin" && !nativeDocker)("native home arc
     await mkdir(ssh, { mode: 0o700 });
     await writeFile(`${ssh}/authorized_keys`, "revoked-key-A\n", { mode: 0o600 });
     await writeFile(`${ssh}/authorized_keys.metadata`, "revoked-key-A\n", { mode: 0o600 });
-    await writeFile(`${ssh}/config`, "customer SSH config\n");
-    await writeFile(`${ssh}/id_ed25519`, "customer private key\n", { mode: 0o600 });
+    await writeFile(`${ssh}/config`, "user SSH config\n");
+    await writeFile(`${ssh}/id_ed25519`, "user private key\n", { mode: 0o600 });
     const shell = h.deps.shell;
     h.deps.shell = { run: (command, args) => shell.run(command, command === "tar" && args.includes("--create") ? args.filter((arg) => !arg.startsWith("--exclude=desktop-home/.ssh/authorized_keys")) : args) };
     await checkpointHome(h.deps, h.scope, { force: true });
@@ -277,8 +277,8 @@ describe.skipIf(process.platform === "darwin" && !nativeDocker)("native home arc
     if (scenario === "no-current-key") expect(await h.deps.fs.exists(`${ssh}/authorized_keys`)).toBe(false);
     else expect(await readFile(`${ssh}/authorized_keys`, "utf8")).toBe(scenario === "metadata-race" ? "current-key-C\n" : "current-key-B\n");
     expect(await h.deps.fs.exists(`${ssh}/authorized_keys.metadata`)).toBe(false);
-    expect(await readFile(`${ssh}/config`, "utf8")).toBe("customer SSH config\n");
-    expect(await readFile(`${ssh}/id_ed25519`, "utf8")).toBe("customer private key\n");
+    expect(await readFile(`${ssh}/config`, "utf8")).toBe("user SSH config\n");
+    expect(await readFile(`${ssh}/id_ed25519`, "utf8")).toBe("user private key\n");
   });
 
   it("detects deletion of an entire desktop persistence directory", async () => {
@@ -317,7 +317,7 @@ describe.skipIf(process.platform === "darwin" && !nativeDocker)("native home arc
     expect(await restoreHome(h.deps, h.scope)).toMatchObject({ status: "restored" });
     expect(await readFile(`${h.scope.dataDir}/gateway.txt`, "utf8")).toBe("gateway state");
     expect(await readFile(`${h.scope.desktopDir}/.config/octogee-chromium/Default/Preferences`, "utf8")).toBe("browser profile");
-    expect(await readFile(`${h.scope.desktopDir}/Documents/project.txt`, "utf8")).toBe("Builder document");
+    expect(await readFile(`${h.scope.desktopDir}/Documents/project.txt`, "utf8")).toBe("User document");
     expect(await h.deps.fs.exists(`${h.scope.desktopDir}/.config/octogee-chromium/Default/Cache/disposable`)).toBe(false);
     expect(await h.deps.fs.exists(`${h.scope.dataDir}/tokens`)).toBe(false);
     const { readdir } = await import("node:fs/promises");

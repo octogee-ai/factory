@@ -23,17 +23,8 @@ function mockKubectl(
   return { runKubectl, calls };
 }
 
-// Why this ensurer exists (gw-bender 2026-05-24 post-mortem):
-// OPENCLAW_GATEWAY_TOKEN used to be generated inside the gateway pod by
-// entrypoint.sh and mirrored to GCP Secret Manager. K8s/helm were blind to
-// it. When an operator manually `kubectl set env`'d a missing OPENCLAW_*
-// var into Bender's gateway-edge container to unbreak boot, K8s
-// server-side apply remembered the `kubectl-set` field manager and
-// collided with helm's strategic-merge patch on the next chart upgrade —
-// silently dropping INTERNAL_SERVICE_KEY from the live Deployment.
-//
-// Fix: platform owns the token via a per-gateway K8s secret threaded by
-// the chart via secretKeyRef. Cowboy ensures the secret exists with a
+// The platform owns OPENCLAW_GATEWAY_TOKEN via a per-gateway K8s secret threaded by
+// the chart via secretKeyRef. The fleet controller ensures the secret exists with a
 // random hex value before each upsertInstance — idempotent, no
 // re-rotation on subsequent reconciles.
 describe("createAuthSecretEnsurer", () => {
@@ -172,7 +163,7 @@ describe("createAuthSecretEnsurer", () => {
 
   it("namespaces the secret name by gatewayId so two gateways never share a token", async () => {
     const { runKubectl, calls } = mockKubectl([
-      { stdout: "secret/gateway-auth-token-gw-bender\n", code: 0 },
+      { stdout: "secret/gateway-auth-token-gw-walter\n", code: 0 },
     ]);
     const ensurer = createAuthSecretEnsurer({
       runKubectl,
@@ -182,10 +173,10 @@ describe("createAuthSecretEnsurer", () => {
 
     await ensurer.ensureAuthSecret({
       namespace: "octogee",
-      gatewayId: "gw-bender",
+      gatewayId: "gw-walter",
     });
 
-    expect(calls[0]).toContain("gateway-auth-token-gw-bender");
+    expect(calls[0]).toContain("gateway-auth-token-gw-walter");
   });
 });
 

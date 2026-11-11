@@ -44,21 +44,21 @@ export interface GatewayControlListResponse {
   gateways: GatewayControlListEntry[];
 }
 
-export const BUILDER_ACTIVATION_STATUSES = [
+export const USER_ACTIVATION_STATUSES = [
   "requested",
   "provisioning",
   "activating",
   "active",
   "returning",
 ] as const;
-export type BuilderActivationStatus = (typeof BUILDER_ACTIVATION_STATUSES)[number];
+export type UserActivationStatus = (typeof USER_ACTIVATION_STATUSES)[number];
 
-export function isBuilderActivationStatus(value: unknown): value is BuilderActivationStatus {
-  return (BUILDER_ACTIVATION_STATUSES as readonly unknown[]).includes(value);
+export function isUserActivationStatus(value: unknown): value is UserActivationStatus {
+  return (USER_ACTIVATION_STATUSES as readonly unknown[]).includes(value);
 }
 
-export interface BuilderActivationSummary {
-  status: BuilderActivationStatus;
+export interface UserActivationSummary {
+  status: UserActivationStatus;
   targetGatewayId: string | null;
 }
 
@@ -69,7 +69,7 @@ export interface WorkspaceGatewayStatus {
   gatewayId: string | null;
   gatewayClass: GatewayClass | null;
   runtimeStatus: GatewayHeartbeatStatus;
-  activation: BuilderActivationSummary | null;
+  activation: UserActivationSummary | null;
 }
 
 export interface WorkspaceGatewayStatusResponse {

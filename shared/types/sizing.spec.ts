@@ -66,16 +66,16 @@ describe('sizing-tier SSOT', () => {
     }
   });
 
-  it('builder class defaults to s and the Barn defaults to l', () => {
+  it('isolated class defaults to s and the shared gateway defaults to l', () => {
     expect(GATEWAY_CLASS_DEFAULT_TIER.builder).toBe('s');
     expect(GATEWAY_CLASS_DEFAULT_TIER.shared).toBe('m');
   });
 
-  it('provisions the entry Builder entitlement with browser headroom', () => {
+  it('provisions the entry user entitlement with browser headroom', () => {
     expect(BUILDER_TIERS.hobby.instance).toBe('s');
   });
 
-  it('s gives the one active Hobby Builder browser and desktop headroom', () => {
+  it('s gives the one active Hobby user browser and desktop headroom', () => {
     expect(TIER_PRESETS.s.resources.requests.cpu).toBe('2000m');
     expect(TIER_PRESETS.s.resources.requests.memory).toBe('8Gi');
     expect(TIER_PRESETS.s.nodejs.maxOldSpaceSizeMb).toBe('3072');

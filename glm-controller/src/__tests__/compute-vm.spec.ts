@@ -86,7 +86,7 @@ describe("instanceInsertBody", () => {
       .toBe("zones/us-west1-b/diskTypes/pd-balanced");
   });
 
-  it("refuses a computer without an owner", () => {
+  it("refuses a VM without an owner", () => {
     const { "octogee-owner-uid": _owner, ...unowned } = input.labels;
     expect(() => instanceInsertBody("octogee-test", { ...input, labels: unowned }, "us-west1-b", "SPOT", IMAGE)).toThrow(/owner-uid/);
   });
@@ -259,7 +259,7 @@ describe("createGatewayVmClient lifecycle", () => {
     expect((await clientWith(request).client.describe(input.instanceName, "us-west1-b"))?.serviceAccounts).toEqual(serviceAccounts);
   });
 
-  it("sets the computer identity and waits for Compute to finish before returning", async () => {
+  it("sets the VM identity and waits for Compute to finish before returning", async () => {
     const { request, calls } = fakeCompute((call) => {
       if (call.method === "POST") return { status: 200, data: { name: "identity", status: "RUNNING" } };
       return { status: 200, data: { name: "identity", status: "DONE" } };
@@ -399,7 +399,7 @@ describe("createGatewayVmClient lifecycle", () => {
     expect(other.calls.filter((c) => c.method === "POST")).toHaveLength(1);
   });
 
-  it("find locates a computer by name across zones and refuses an ambiguous answer", async () => {
+  it("find locates a VM by name across zones and refuses an ambiguous answer", async () => {
     const aggregated = (zones: string[]) => ({
       status: 200,
       data: {
@@ -500,7 +500,7 @@ describe("createGatewayVmClient listing", () => {
     });
   });
 
-  it("list finds computers in every zone of the aggregated listing and follows pagination", async () => {
+  it("list finds VMs in every zone of the aggregated listing and follows pagination", async () => {
     const inZone = (zone: string, name: string) => ({ ...pooled, name, zone: `https://www.googleapis.com/compute/v1/projects/octogee-test/zones/${zone}` });
     const { request, calls } = fakeCompute((call) => {
       if (call.method !== "GET" || !call.url.startsWith(`${BASE}/aggregated/instances?`)) return new Error(`unexpected ${call.method} ${call.url}`);
@@ -603,7 +603,7 @@ describe("createGatewayVmClient — zone walk", () => {
     return { request, posts, gets };
   };
 
-  it("places the computer in the first zone of the given order and describes it there", async () => {
+  it("places the VM in the first zone of the given order and describes it there", async () => {
     const { request, posts, gets } = exhaustedIn([]);
     const { client } = clientWith(request);
 
@@ -683,7 +683,7 @@ describe("createGatewayVmClient — zone walk", () => {
     expect(result.fellBackToStandard).toBe(true);
   });
 
-  it("refuses to place a computer with no zones", async () => {
+  it("refuses to place a VM with no zones", async () => {
     const { request, posts } = exhaustedIn([]);
     await expect(clientWith(request).client.create({ ...input, zones: [] })).rejects.toThrow(/octogee-computer-test-abc: no zones to place it in/);
     expect(posts).toEqual([]);
@@ -879,7 +879,7 @@ describe("cold placement image identity", () => {
     const request: ComputeRequest = vi.fn(async call => {
       if (call.url.includes("/images/family/")) {
         familyReads.push(call.url);
-        return { status: 200, data: { name: familyReads.length === 1 ? "computer-image-a" : "computer-image-b", id: "111" } };
+        return { status: 200, data: { name: familyReads.length === 1 ? "vm-image-a" : "vm-image-b", id: "111" } };
       }
       if (call.method === "POST" && call.url.endsWith("/instances")) {
         posts.push(call.body as Record<string, any>);
@@ -891,7 +891,7 @@ describe("cold placement image identity", () => {
     await clientWith(request).client.create({ ...input, zones: ["us-west1-b", "us-west1-c"], imageProject: "octogee" });
     expect(familyReads).toEqual(["https://compute.googleapis.com/compute/v1/projects/octogee/global/images/family/octogee-computer"]);
     expect(posts).toHaveLength(3);
-    expect(posts.map(post => post.disks[0].initializeParams.sourceImage)).toEqual(Array(3).fill("projects/octogee/global/images/computer-image-a"));
+    expect(posts.map(post => post.disks[0].initializeParams.sourceImage)).toEqual(Array(3).fill("projects/octogee/global/images/vm-image-a"));
   });
   it.each(["changed-id", "missing-admission"])("rejects an unsafe pinned retained-home image before insertion: %s", async scenario => {
     const request: ComputeRequest = vi.fn(async () => ({ status: 200, data: { ...IMAGE, id: scenario === "changed-id" ? "333" : IMAGE.id } }));
@@ -899,7 +899,7 @@ describe("cold placement image identity", () => {
     expect(vi.mocked(request).mock.calls.every(([call]) => call.method === "GET")).toBe(true);
     expect(vi.mocked(request).mock.calls[0][0].url).toBe(`${BASE}/global/images/${IMAGE.name}`);
   });
-  it.each([{}, { name: "computer-image-a" }, { name: "../family/other", id: "111" }])("rejects an unresolvable image identity before Compute mutations", async data => {
+  it.each([{}, { name: "vm-image-a" }, { name: "../family/other", id: "111" }])("rejects an unresolvable image identity before Compute mutations", async data => {
     const request: ComputeRequest = vi.fn(async call => call.url.includes("/images/family/") ? { status: 200, data }
       : call.method === "POST" ? { status: 200, data: { name: "created", status: "DONE" } } : instance());
     await expect(clientWith(request).client.create(input)).rejects.toThrow(/image/);

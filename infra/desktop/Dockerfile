@@ -1,4 +1,4 @@
-# Octogee Agent Computer spike: Omarchy userspace, headless Hyprland, software
+# Octogee Agent VM spike: Omarchy userspace, headless Hyprland, software
 # rendering, VNC capture, and an HTTP control surface for the agent.
 # x86_64 only: Omarchy's package mirrors do not publish arm64.
 

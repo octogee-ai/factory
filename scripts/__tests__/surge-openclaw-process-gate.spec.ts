@@ -14,10 +14,10 @@ import {
 } from "../lib/surge-openclaw-process-gate.js";
 import { createSurgeReadinessGate } from "../lib/surge-readiness.js";
 import { createSurgeOpenClawBootWatcher, startSurgeOpenClawSupervisor } from "../entrypoints/surge-openclaw-supervisor.js";
-import { createBuilderSurgeGateWiring } from "../lib/fleet-provisioner.js";
-import * as builderStores from "../lib/openclaw-builder-store-preflight.js";
-import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
-import { stubBuilderClaim } from "./helpers/builder-claim.js";
+import { createIsolatedSurgeGateWiring } from "../lib/fleet-provisioner.js";
+import * as userStores from "../lib/openclaw-user-store-preflight.js";
+import type { UserLifecycleAdapter } from "../lib/user-lifecycle.js";
+import { stubUserClaim } from "./helpers/user-claim.js";
 
 const roots: string[] = [];
 
@@ -338,7 +338,7 @@ describe("surge OpenClaw process gate", () => {
     });
   });
 
-  it("permits a proven no-sibling Builder without inventing a migration identity", async () => {
+  it("permits a proven no-sibling user without inventing a migration identity", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const gate = createSurgeOpenClawProcessGate(openclawDir);
     await gate.ensure({ podUid: "pod-self", readinessReleased: false });
@@ -516,7 +516,7 @@ describe("surge OpenClaw process supervisor", () => {
     });
   });
 
-  it("keeps a Builder boot held until a migration releases it", async () => {
+  it("keeps a user boot held until a migration releases it", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
     const spawnOpenClaw = vi.fn(() => new FakeChild());
@@ -550,13 +550,13 @@ describe("surge OpenClaw process supervisor", () => {
       await expect(client.status()).resolves.toMatchObject({ phase: "held" });
     } finally { await supervisor.stop(); }
   });
-  it("validates configured Builder anchors before normal startup on a new build", async () => {
+  it("validates configured user anchors before normal startup on a new build", async () => {
     const openclawDir = await temporaryOpenClawDir(), socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
     const order: string[] = [], children: FakeChild[] = [];
-    const inspection = vi.spyOn(builderStores, "inspectConfiguredBuilderAgentStores")
+    const inspection = vi.spyOn(userStores, "inspectConfiguredUserAgentStores")
       .mockImplementationOnce(async () => { expect(children).toHaveLength(0); order.push("inspect"); return "exact"; });
     const bootWatcher = createSurgeOpenClawBootWatcher({
-      openclawDir, releaseKey: "builder-release", log: () => {}, env: { GATEWAY_CLASS: "builder", OPENCLAW_CONFIG_PATH: path.join(openclawDir, "system_config/openclaw.json") },
+      openclawDir, releaseKey: "isolated-release", log: () => {}, env: { GATEWAY_CLASS: "builder", OPENCLAW_CONFIG_PATH: path.join(openclawDir, "system_config/openclaw.json") },
       client: { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "start" }), completeOpenClawBoot: vi.fn(), completeOpenClawDoctor: vi.fn() },
       installedOpenClawBuild: async () => "b".repeat(40),
     });
@@ -574,11 +574,11 @@ describe("surge OpenClaw process supervisor", () => {
     } finally { await supervisor.stop(); inspection.mockRestore(); }
   });
 
-  it("keeps the Builder process held when configured-store inspection refuses startup", async () => {
+  it("keeps the user process held when configured-store inspection refuses startup", async () => {
     const openclawDir = await temporaryOpenClawDir(), socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
-    const inspection = vi.spyOn(builderStores, "inspectConfiguredBuilderAgentStores").mockRejectedValue(new Error("newer store schema refused"));
+    const inspection = vi.spyOn(userStores, "inspectConfiguredUserAgentStores").mockRejectedValue(new Error("newer store schema refused"));
     const spawnOpenClaw = vi.fn(() => new FakeChild());
-    const bootWatcher = createSurgeOpenClawBootWatcher({ openclawDir, releaseKey: "builder-release", log: () => {}, env: { GATEWAY_CLASS: "builder" },
+    const bootWatcher = createSurgeOpenClawBootWatcher({ openclawDir, releaseKey: "isolated-release", log: () => {}, env: { GATEWAY_CLASS: "builder" },
       client: { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "start" }), completeOpenClawBoot: vi.fn(), completeOpenClawDoctor: vi.fn() } });
     const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid: "builder-pod", socketPath, log: () => {},
       readinessReleased: async () => false, prepareTarget: async () => {}, prepareDatabases: async () => {}, bootWatcher, spawnOpenClaw, probeHealthz: async () => false });
@@ -588,7 +588,7 @@ describe("surge OpenClaw process supervisor", () => {
     } finally { await supervisor.stop(); inspection.mockRestore(); }
   });
 
-  it("keeps the Builder held when native system-store maintenance refuses startup", async () => {
+  it("keeps the user held when native system-store maintenance refuses startup", async () => {
     const openclawDir = await temporaryOpenClawDir(), socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
     const spawnOpenClaw = vi.fn(() => new FakeChild()), prepareTarget = vi.fn(async () => {});
     const supervisor = await startSurgeOpenClawSupervisor({
@@ -604,16 +604,16 @@ describe("surge OpenClaw process supervisor", () => {
     } finally { await supervisor.stop(); }
   });
 
-  it("does not apply Builder configured-store inspection to a Shared supervisor", async () => {
-    const inspection = vi.spyOn(builderStores, "inspectConfiguredBuilderAgentStores");
+  it("does not apply user configured-store inspection to a Shared supervisor", async () => {
+    const inspection = vi.spyOn(userStores, "inspectConfiguredUserAgentStores");
     try { await createSurgeOpenClawBootWatcher({ openclawDir: "/unused/shared", releaseKey: "shared-release", log: () => {}, env: { GATEWAY_CLASS: "shared" },
       client: { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "start" }), completeOpenClawBoot: vi.fn(), completeOpenClawDoctor: vi.fn() } }).beforeStart();
       expect(inspection).not.toHaveBeenCalled();
     } finally { inspection.mockRestore(); }
   });
 
-  it.each(["retry", "cancel"] as const)("retains failed Builder database admission for an explicit %s", async scenario => {
-    stubBuilderClaim("ceckert-test");
+  it.each(["retry", "cancel"] as const)("retains failed user database admission for an explicit %s", async scenario => {
+    stubUserClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     const openclawDir = await temporaryOpenClawDir();
     const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
@@ -638,21 +638,21 @@ describe("surge OpenClaw process supervisor", () => {
     });
     const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
     const adapter = {
-      isBuilderGateway: () => true,
-      isConfiguredBuilderCustomer: (slug: string) => slug === request.slug,
-      configuredBuilderOverlayPresent: () => true,
-      listLocalCustomerSlugs: () => [request.slug], customerMountMarked: () => true,
+      isIsolatedGateway: () => true,
+      isConfiguredUser: (slug: string) => slug === request.slug,
+      configuredUserOverlayPresent: () => true,
+      listLocalUserSlugs: () => [request.slug], userMountMarked: () => true,
       hasWorkspaceGitDir: () => true, hasGitRemote: () => true,
-    } as unknown as CustomerLifecycleAdapter;
+    } as unknown as UserLifecycleAdapter;
     const waitForGatewayReady = vi.fn(async () => {
       expect(await client.status()).toMatchObject({ role: "target", mode: "permitted", phase: "running", ...request });
       expect(await readiness.released()).toBe(false);
       expect(prepareDatabases).toHaveBeenCalledTimes(2);
     });
-    const wiring = createBuilderSurgeGateWiring({
+    const wiring = createIsolatedSurgeGateWiring({
       openclawDir, adapter, processGate: client, surgeReadiness: readiness, log: () => undefined,
       provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
-      attachConfiguredBuilderBeforeOpenClaw: async () => request.slug,
+      attachConfiguredUserBeforeOpenClaw: async () => request.slug,
       waitForGatewayHealthy: async () => undefined, waitForGatewayReady,
     });
     try {
@@ -1227,25 +1227,25 @@ it("preserves a held source fence during a returning lease restart", async () =>
 });
 
 
-describe("held Builder store migration", () => {
+describe("held user store migration", () => {
   it("stops the source and serializes repair ahead of a concurrent permit", async () => {
     const openclawDir = await temporaryOpenClawDir(), children: FakeChild[] = [];
     let release!: () => void, entered!: () => void;
     const started = new Promise<void>(resolve => { entered = resolve; });
     const blocked = new Promise<void>(resolve => { release = resolve; });
-    const migrateBuilderStores = vi.fn(async (assertHeld: () => Promise<void>) => {
+    const migrateUserStores = vi.fn(async (assertHeld: () => Promise<void>) => {
       await assertHeld(); expect(children[0]!.alive).toBe(false); entered(); await blocked; await assertHeld();
     });
     const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
     const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid: "source-pod", socketPath,
       log: () => {}, readinessReleased: async () => true, prepareTarget: async () => {}, prepareDatabases: async () => {},
-      migrateBuilderStores, spawnOpenClaw: () => { const child = new FakeChild(); children.push(child); return child; },
+      migrateUserStores, spawnOpenClaw: () => { const child = new FakeChild(); children.push(child); return child; },
       probeHealthz: healthzOf(children),
     });
     const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
     try {
       await vi.waitFor(() => expect(children).toHaveLength(1));
-      const repair = client.migrateBuilderStores("source-pod");
+      const repair = client.migrateUserStores("source-pod");
       await started;
       const permit = client.permitNormal();
       await expect(client.status()).resolves.toMatchObject({ mode: "held", phase: "held" });
@@ -1258,17 +1258,17 @@ describe("held Builder store migration", () => {
   it("rejects another allocation or a migration-owned target before running repair", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
-    const migrateBuilderStores = vi.fn(async () => {});
+    const migrateUserStores = vi.fn(async () => {});
     const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid: "target-pod", socketPath,
-      log: () => {}, readinessReleased: async () => false, migrateBuilderStores, probeHealthz: async () => false,
+      log: () => {}, readinessReleased: async () => false, migrateUserStores, probeHealthz: async () => false,
     });
     const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
     try {
-      await expect(client.migrateBuilderStores("other-pod")).rejects.toThrow("allocation");
-      await expect(client.migrateBuilderStores("target-pod")).rejects.toThrow("retained source");
+      await expect(client.migrateUserStores("other-pod")).rejects.toThrow("allocation");
+      await expect(client.migrateUserStores("target-pod")).rejects.toThrow("retained source");
       await client.hold({ migrationId: "migration", slug: "alice", targetPodUid: "target-pod" });
-      await expect(client.migrateBuilderStores("target-pod")).rejects.toThrow("normal");
-      expect(migrateBuilderStores).not.toHaveBeenCalled();
+      await expect(client.migrateUserStores("target-pod")).rejects.toThrow("normal");
+      expect(migrateUserStores).not.toHaveBeenCalled();
     } finally { await supervisor.stop(); }
   });
 
@@ -1281,18 +1281,18 @@ describe("held Builder store migration", () => {
     await gate.markHeld({ podUid: "source-pod" });
     const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid: "source-pod", socketPath,
       log: () => {}, readinessReleased: async () => true, probeHealthz: async () => false,
-      migrateBuilderStores: async () => { throw new Error("retained workboard"); },
+      migrateUserStores: async () => { throw new Error("retained workboard"); },
     });
     const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
     try {
-      await expect(client.migrateBuilderStores("source-pod")).rejects.toThrow("retained workboard");
+      await expect(client.migrateUserStores("source-pod")).rejects.toThrow("retained workboard");
       await expect(client.status()).resolves.toMatchObject({ role: "normal", mode: "held", phase: "held" });
     } finally { await supervisor.stop(); }
   });
 });
 
 
-it("keeps initial Builder startup held when store migration was deferred", async () => {
+it("keeps initial user startup held when store migration was deferred", async () => {
   const openclawDir = await temporaryOpenClawDir();
   const configPath = path.join(openclawDir, "openclaw.json");
   await fs.writeFile(configPath, JSON.stringify({ database: { engine: "sqlite", families: { state: { engine: "postgres" }, agent: { engine: "postgres" } } } }));

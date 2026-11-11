@@ -1,8 +1,8 @@
 /**
  * Lane-aware PAT resolution for the chat broker.
  *
- * The broker is the WORKSPACE capability boundary: it uses the Builder PAT but
- * returns data only from canonical channels the Builder owns or has joined.
+ * The broker is the WORKSPACE capability boundary: it uses the user PAT but
+ * returns data only from canonical channels the user owns or has joined.
  *   - A PROJECT agent reads with its own bot PAT, whose MM channel membership
  *     is that project's channels ONLY. Under injection it cannot reach what the
  *     PAT cannot see.
@@ -59,10 +59,10 @@ export interface ResolvedChatIdentity {
   lane: "workspace" | "project";
   pat: string;
   /** The agent's own MM user id — its authored posts are labeled `self: true` in results. */
-  coachMmUserId: string;
+  defaultAgentMmUserId: string;
   /** Credential for the `unread` direction: the AGENT's own catch-up cursor. MM only
    *  serves a user's unread state to that user, so this must be the bot's own PAT —
-   *  running unread under the builder PAT would either 403 (coach id) or advance the
+   *  running unread under the user PAT would either 403 (agent id) or advance the
    *  HUMAN's read marker (`me`), silently clearing their unread badges. */
   unread: { pat: string; mmUserId: string };
   canReadChannel?: (channelId: string) => Promise<boolean>;
@@ -162,7 +162,7 @@ async function projectAgentIdentity(
   return {
     lane: "project",
     pat,
-    coachMmUserId: mmUserId,
+    defaultAgentMmUserId: mmUserId,
     unread: { pat, mmUserId },
   };
 }
@@ -194,18 +194,18 @@ export async function resolveChatIdentity(
     return projectAgentIdentity(deps, input, parsed.project);
   }
 
-  const builderSecret = await mattermostSecret(deps, input.uid, "mattermost");
-  const builderPat = nonEmptyString(builderSecret?.personalToken);
-  if (!builderPat) {
+  const userSecret = await mattermostSecret(deps, input.uid, "mattermost");
+  const userPat = nonEmptyString(userSecret?.personalToken);
+  if (!userPat) {
     throw new ChatPatError(
       "no-builder-pat",
-      `no builder MM PAT at users/{uid}/secrets/mattermost for ${input.slug} — re-run provisioning`,
+      `no user MM PAT at users/{uid}/secrets/mattermost for ${input.slug} — re-run provisioning`,
     );
   }
-  const coachSecret = await mattermostSecret(deps, input.uid, "coachMattermost");
-  const coachMmUserId = nonEmptyString(coachSecret?.mattermostUserId);
-  const coachPat = nonEmptyString(coachSecret?.personalToken);
-  if (!coachMmUserId || !coachPat) {
+  const defaultAgentSecret = await mattermostSecret(deps, input.uid, "coachMattermost");
+  const defaultAgentMmUserId = nonEmptyString(defaultAgentSecret?.mattermostUserId);
+  const defaultAgentPat = nonEmptyString(defaultAgentSecret?.personalToken);
+  if (!defaultAgentMmUserId || !defaultAgentPat) {
     throw new ChatPatError(
       "no-coach-identity",
       `incomplete users/{uid}/secrets/coachMattermost for ${input.slug} — cannot self-label the agent's own posts or read its unread cursor`,
@@ -213,9 +213,9 @@ export async function resolveChatIdentity(
   }
   return {
     lane: "workspace",
-    pat: builderPat,
-    coachMmUserId,
-    unread: { pat: coachPat, mmUserId: coachMmUserId },
+    pat: userPat,
+    defaultAgentMmUserId,
+    unread: { pat: defaultAgentPat, mmUserId: defaultAgentMmUserId },
     canReadChannel: (channelId) =>
       canonicalChannelReadable(deps, input.uid, input.slug, channelId),
     ...(archiveAccess.historyReadable ? { includeArchivedProjectHistory: true as const } : {}),

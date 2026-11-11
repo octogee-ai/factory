@@ -1,5 +1,5 @@
-import { createComputerHomeClient } from "./compute-home.js";
-import type { GatewayVmBootDiskType, GatewayVmDesktop, GatewayVmProvisioningModel, RetainedBuilderHome } from "@octogee/shared/types/glm";
+import { createVmHomeClient } from "./compute-home.js";
+import type { GatewayVmBootDiskType, GatewayVmDesktop, GatewayVmProvisioningModel, RetainedUserHome } from "@octogee/shared/types/glm";
 
 export interface ComputeRequest {
   (opts: { url: string; method: string; body?: unknown }): Promise<{ status: number; data?: unknown }>;
@@ -13,7 +13,7 @@ export interface GatewayVmClientDeps {
   now: () => number;
   journalMachineType?: (input: { instanceName: string; zone: string; machineType: string }, action: () => Promise<void>) => Promise<void>;
   journalProvisioningModel?: (input: { instanceName: string; zone: string; provisioningModel: GatewayVmProvisioningModel }, action: () => Promise<void>) => Promise<void>;
-  journalHomeResize?: (input: { home: RetainedBuilderHome; ownerUid: string; sizeGb: number }, action: () => Promise<void>) => Promise<void>;
+  journalHomeResize?: (input: { home: RetainedUserHome; ownerUid: string; sizeGb: number }, action: () => Promise<void>) => Promise<void>;
   operationTimeoutMs?: number;
   pollIntervalMs?: number;
 }
@@ -27,7 +27,7 @@ export interface CreateGatewayVmInput {
   diskSizeGb: number;
   bootDiskType: GatewayVmBootDiskType;
   homeDiskSizeGb: number;
-  retainedHome?: RetainedBuilderHome;
+  retainedHome?: RetainedUserHome;
   image?: ComputeImageRef;
   provisioningModel: GatewayVmProvisioningModel;
   desktop: GatewayVmDesktop;
@@ -79,11 +79,11 @@ export interface CreateGatewayVmResult {
 }
 
 export interface GatewayVmClient {
-  expandHome(home: RetainedBuilderHome, ownerUid: string, sizeGb: number): Promise<RetainedBuilderHome>;
-  retainHome(instanceName: string, zone: string, ownerUid: string): Promise<RetainedBuilderHome>;
-  verifyDetachedHome(home: RetainedBuilderHome, ownerUid: string): Promise<void>;
-  deleteRetainedHome(home: RetainedBuilderHome, ownerUid: string): Promise<void>;
-  deleteRetainingHome(instanceName: string, zone: string, ownerUid: string, home: RetainedBuilderHome, instanceId: string): Promise<void>;
+  expandHome(home: RetainedUserHome, ownerUid: string, sizeGb: number): Promise<RetainedUserHome>;
+  retainHome(instanceName: string, zone: string, ownerUid: string): Promise<RetainedUserHome>;
+  verifyDetachedHome(home: RetainedUserHome, ownerUid: string): Promise<void>;
+  deleteRetainedHome(home: RetainedUserHome, ownerUid: string): Promise<void>;
+  deleteRetainingHome(instanceName: string, zone: string, ownerUid: string, home: RetainedUserHome, instanceId: string): Promise<void>;
   create(input: CreateGatewayVmInput): Promise<CreateGatewayVmResult>;
   describe(instanceName: string, zone: string): Promise<GatewayVmDescription | null>;
   find(instanceName: string): Promise<GatewayVmDescription | null>;
@@ -301,14 +301,14 @@ async function placeAcrossZones(input: CreateGatewayVmInput, insert: InsertInZon
   throw lastError;
 }
 
-export const COMPUTER_HOME_DISK_DEVICE_NAME = "octogee-home";
+export const VM_HOME_DISK_DEVICE_NAME = "octogee-home";
 
 export const GATEWAY_VM_ACCESS_SCOPES = [
   "https://www.googleapis.com/auth/cloud-platform",
   "https://www.googleapis.com/auth/userinfo.email",
 ] as const;
 
-export function hasComputerIdentity(description: GatewayVmDescription, email: string): boolean {
+export function hasVmIdentity(description: GatewayVmDescription, email: string): boolean {
   return description.serviceAccounts.some((account) =>
     account.email === email && GATEWAY_VM_ACCESS_SCOPES.every((scope) => account.scopes.includes(scope)),
   );
@@ -322,7 +322,7 @@ export function instanceInsertBody(
   image: ComputeImageRef,
 ): Record<string, unknown> {
   const ownerUid = input.labels["octogee-owner-uid"];
-  if (!ownerUid) throw new Error(`${input.instanceName}: a computer needs its octogee-owner-uid label`);
+  if (!ownerUid) throw new Error(`${input.instanceName}: a VM needs its octogee-owner-uid label`);
   return {
     name: input.instanceName,
     machineType: `zones/${zone}/machineTypes/${input.machineType}`,
@@ -337,12 +337,12 @@ export function instanceInsertBody(
         },
       },
       input.retainedHome ? {
-        boot: false, autoDelete: false, deviceName: COMPUTER_HOME_DISK_DEVICE_NAME,
+        boot: false, autoDelete: false, deviceName: VM_HOME_DISK_DEVICE_NAME,
         source: input.retainedHome.source, mode: "READ_WRITE",
       } : {
         boot: false,
         autoDelete: false,
-        deviceName: COMPUTER_HOME_DISK_DEVICE_NAME,
+        deviceName: VM_HOME_DISK_DEVICE_NAME,
         initializeParams: {
           diskName: `${input.instanceName}-home`,
           diskSizeGb: String(input.homeDiskSizeGb),
@@ -533,7 +533,7 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     const image = input.image
       ? await readImageRef(deps.request, input.image.name, input.imageProject ?? deps.projectId)
       : await readFamilyImage(deps.request, input.imageFamily, input.imageProject ?? deps.projectId);
-    if (input.image && (image.name !== input.image.name || image.id !== input.image.id)) throw new Error("pinned computer image identity changed before creation");
+    if (input.image && (image.name !== input.image.name || image.id !== input.image.id)) throw new Error("pinned VM image identity changed before creation");
     if (input.retainedHome && !image.homeAdmission) throw new Error("retained home requires the platform image's native migration and current-SSH admission contract");
     const placement = await placeAcrossZones(input, (zone, model) => insert(input, zone, model, image), deps.log);
     const { outcome, zone, provisioningModel, fellBackToStandard } = placement;
@@ -615,7 +615,7 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
 
 
   return {
-    ...createComputerHomeClient({ request: deps.request, projectId: deps.projectId, readInstance, journalHomeResize: deps.journalHomeResize,
+    ...createVmHomeClient({ request: deps.request, projectId: deps.projectId, readInstance, journalHomeResize: deps.journalHomeResize,
       waitForOperation: (zone, operation, what) => waitForOperation(zone, operation as ComputeOperation, what) }),
     create,
     describe,

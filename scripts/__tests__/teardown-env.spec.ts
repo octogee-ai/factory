@@ -196,7 +196,7 @@ case "$1 $2" in
     }
     printf 'gateway-model-key-issuer\\n'
     printf 'gitea-token\\n'
-    for secret in gateway-auth-token-default gateway-auth-token-builder-one gateway-model-key-builder-one; do
+    for secret in gateway-auth-token-default gateway-auth-token-user-one gateway-model-key-user-one; do
       if [[ "$FAKE_GATEWAY_RUNTIME_FAILURE" == "secret-residual" ]] \
         || ! grep -Fxq "secret:$secret" "$FAKE_DELETED_GATEWAY_RESOURCES"; then
         printf '%s\\n' "$secret"
@@ -536,8 +536,8 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     }
     for (const name of [
       "gateway-auth-token-default",
-      "gateway-auth-token-builder-one",
-      "gateway-model-key-builder-one",
+      "gateway-auth-token-user-one",
+      "gateway-model-key-user-one",
     ]) {
       expect(result.calls).toContain(
         `kubectl delete secret ${name} -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --wait=true`,
@@ -578,7 +578,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
       call.startsWith("helm uninstall octogee-gw-stale "),
     );
     const runtimeIdentityRemoval = result.calls.indexOf(
-      "kubectl delete secret gateway-model-key-builder-one -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --wait=true",
+      "kubectl delete secret gateway-model-key-user-one -n octogee-test --context gke_octogee-test_us-central1_octogee-gateway --wait=true",
     );
 
     expect(kubernetesDelete).toBeGreaterThan(-1);
@@ -813,7 +813,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     expect(install).toContain("kubectl rollout status deployment/octogee-gitea");
   });
 
-  it("prints a pod restart that leaves Cowboy's gateway Deployments alone", () => {
+  it("prints a pod restart that leaves the fleet controller's gateway Deployments alone", () => {
     const result = runPrivateCentralTeardown();
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);

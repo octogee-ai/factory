@@ -20,7 +20,7 @@ import {
 } from '../ops/migrate-platform-content.js'
 
 describe('platform content migration plan', () => {
-  it('resolves the exact-commit Builder image to its Artifact Registry digest', () => {
+  it('resolves the exact-commit isolated image to its Artifact Registry digest', () => {
     const commands: Array<{ command: string; args: readonly string[] }> = []
     const image = resolvePlatformContentMigrationOperatorImage({
       artifactRegistryLocation: 'us-west1',
@@ -108,7 +108,7 @@ describe('platform content migration plan', () => {
       },
       results: { images: [{ name: 'us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder:aaaaaaa', digest: `sha256:${'c'.repeat(64)}` }] },
     }]],
-  ])('rejects a Builder digest backed by %s', (_label, builds) => {
+  ])('rejects a user digest backed by %s', (_label, builds) => {
     expect(() => resolvePlatformContentMigrationOperatorImage({
       artifactRegistryLocation: 'us-west1',
       artifactRegistryProjectId: 'octogee',

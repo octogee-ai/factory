@@ -18,13 +18,13 @@ describe("placementPodDiagnosticsScope", () => {
   });
 });
 
-describe("agent computer wiring", () => {
+describe("agent VM wiring", () => {
   const indexSource = readFileSync(resolve(import.meta.dirname, "../index.ts"), "utf8");
   const reconcilerSource = readFileSync(resolve(import.meta.dirname, "../placement-policy-reconciler.ts"), "utf8");
 
-  it("scopes the placement pod scan by runtime and recovers preempted computers from the heartbeat poller", () => {
+  it("scopes the placement pod scan by runtime and recovers preempted VMs from the heartbeat poller", () => {
     expect(reconcilerSource).toMatch(/placementPodDiagnosticsScope\(roots\.map\(\(root\) => root\.gatewayId\), runtimes\)/u);
     expect(indexSource).toMatch(/createBackgroundGatewayRecovery\(\s*\(gatewayId\) => runGatewayRuntimeExclusive\(async \(\) => \{ await vmGatewayRuntimeRef\.current\?\.recoverUnreachable\(gatewayId\); \}\)/u);
-    expect(indexSource).toMatch(/deleteComputer: async \(uid: string\) => \{/u);
+    expect(indexSource).toMatch(/deleteVm: async \(uid: string\) => \{/u);
   });
 });

@@ -242,7 +242,7 @@ function writeWorkspaceUsageDocuments(
   },
 ): void {
   // usage_models is the surviving per-workspace telemetry (token volume incl.
-  // BYOSUB, read by the customer usage panel + admin detail). usage_sessions and
+  // BYOSUB, read by the user usage panel + admin detail). usage_sessions and
   // usage_summary were retired: their only reader was the admin usage panel,
   // which now sources sessions + summary from the broker event stream (the
   // billing truth). A one-shot deletes their legacy docs.

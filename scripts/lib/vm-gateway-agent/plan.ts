@@ -7,7 +7,7 @@ import {
   type GatewayVmRuntimeBundle,
   type GatewayVmRuntimeContainer,
   type GatewayVmRuntimeVolume,
-  type RuntimeBuilderIdentity,
+  type RuntimeUserIdentity,
 } from "@octogee/shared/types/glm";
 import { GATEWAY_HOST_DESKTOP_AUTH_DIR } from "../openclaw-computer-browser.js";
 
@@ -19,7 +19,7 @@ export const GATEWAY_ID_LABEL = "ai.octogee.gateway-id";
 export const NAMESPACE_LABEL = "ai.octogee.namespace";
 export const CONTAINER_NAME_LABEL = "ai.octogee.container";
 export const CONTAINER_ROLE_LABEL = "ai.octogee.role";
-export const BUILDER_SLUG_LABEL = "ai.octogee.builder-slug";
+export const USER_SLUG_LABEL = "ai.octogee.builder-slug";
 export const LOGGED_LABELS = [GATEWAY_ID_LABEL, NAMESPACE_LABEL, CONTAINER_NAME_LABEL, CONTAINER_ROLE_LABEL] as const;
 
 function homeRestoreVersion(bundle: GatewayVmRuntimeBundle): string | null {
@@ -33,25 +33,25 @@ type IdentityBundle = Pick<GatewayVmRuntimeBundle, "containers" | "init" | "buil
 
 function renderedEnvValue(bundle: IdentityBundle, name: string): string | undefined {
   const values = new Set([bundle.init, ...bundle.containers].flatMap(container => container?.env[name] ? [container.env[name]] : []));
-  if (values.size > 1) throw new Error(`VM bundle contains conflicting Builder identities in ${name}`);
+  if (values.size > 1) throw new Error(`VM bundle contains conflicting user identities in ${name}`);
   return [...values][0];
 }
 
-export function bundleBuilderIdentity(bundle: IdentityBundle): RuntimeBuilderIdentity | null {
+export function bundleUserIdentity(bundle: IdentityBundle): RuntimeUserIdentity | null {
   if (bundle.builderIdentity) return bundle.builderIdentity;
   const builderSlug = renderedEnvValue(bundle, OLDER_PLATFORM_SLUG_ENV);
   const ownerUid = renderedEnvValue(bundle, OLDER_PLATFORM_OWNER_ENV);
   return builderSlug && ownerUid ? { ownerUid, builderSlug } : null;
 }
 
-function bundleBuilderSlug(bundle: IdentityBundle): string | undefined {
-  return bundleBuilderIdentity(bundle)?.builderSlug;
+function bundleUserSlug(bundle: IdentityBundle): string | undefined {
+  return bundleUserIdentity(bundle)?.builderSlug;
 }
 
 export function loggedLabelsFor(bundle: Pick<GatewayVmRuntimeBundle, "namespace" | "containers" | "init" | "builderIdentity">): string[] {
   return [
     ...LOGGED_LABELS.filter(label => label !== NAMESPACE_LABEL || Boolean(bundle.namespace)),
-    ...(bundleBuilderSlug(bundle) ? [BUILDER_SLUG_LABEL] : []),
+    ...(bundleUserSlug(bundle) ? [USER_SLUG_LABEL] : []),
   ];
 }
 export const RUNTIME_UID = "1000:1000";
@@ -140,7 +140,7 @@ export function envFor(bundle: GatewayVmRuntimeBundle, container: GatewayVmRunti
 export function containerSpecVersion(config: Record<string, unknown>): string {
   const { Labels, ...spec } = config;
   const labels = Labels as Record<string, string> | undefined;
-  const builderSlug = labels?.[BUILDER_SLUG_LABEL];
+  const builderSlug = labels?.[USER_SLUG_LABEL];
   const homeRestore = labels?.["ai.octogee.home-restore"];
   return createHash("sha256").update(JSON.stringify({ ...spec, ...(builderSlug ? { builderSlug } : {}), ...(homeRestore ? { homeRestore } : {}) })).digest("hex").slice(0, 16);
 }
@@ -209,7 +209,7 @@ function containerLabels(bundle: GatewayVmRuntimeBundle, container: GatewayVmRun
     [BUNDLE_VERSION_LABEL]: bundle.version,
     [GATEWAY_ID_LABEL]: bundle.gatewayId,
     ...(homeRestore ? { "ai.octogee.home-restore": homeRestore } : {}),
-    ...(bundleBuilderSlug(bundle) ? { [BUILDER_SLUG_LABEL]: bundleBuilderSlug(bundle) } : {}),
+    ...(bundleUserSlug(bundle) ? { [USER_SLUG_LABEL]: bundleUserSlug(bundle) } : {}),
     ...(bundle.namespace ? { [NAMESPACE_LABEL]: bundle.namespace } : {}),
     [CONTAINER_NAME_LABEL]: container.name,
     [CONTAINER_ROLE_LABEL]: role,

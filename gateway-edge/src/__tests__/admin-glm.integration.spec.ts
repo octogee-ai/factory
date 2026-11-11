@@ -284,7 +284,7 @@ vi.mock("../lib/db", () => {
               },
             }),
             // Retire enumerates the gateway's assignments to refuse while
-            // customers are still assigned.
+            // users are still assigned.
             get: async () => {
               const prefix = `${docId}/`;
               const docs = Object.entries(gatewayAssignmentsDocs)
@@ -462,13 +462,13 @@ vi.mock("@octogee/core/secret-store", () => ({
 }));
 
 type BuildResult = { tag: string; pushedAt: string; digest: string };
-const builderCalls: Array<{ service: string; limit?: number }> = [];
+const userCalls: Array<{ service: string; limit?: number }> = [];
 let nextBuildsResult: BuildResult[] = [];
 let nextBuildsError: Error | null = null;
 
 vi.mock("@octogee/core/artifact-registry", () => ({
   listGatewayBuilds: async (opts: { service: string; limit?: number }) => {
-    builderCalls.push({ service: opts.service, limit: opts.limit });
+    userCalls.push({ service: opts.service, limit: opts.limit });
     if (nextBuildsError) {
       const e = nextBuildsError;
       nextBuildsError = null;
@@ -604,7 +604,7 @@ beforeEach(() => {
   provisionerCalls.length = 0;
   provisionerNextError = null;
   provisionerConcurrentGatewayId = null;
-  builderCalls.length = 0;
+  userCalls.length = 0;
   nextBuildsResult = [];
   nextBuildsError = null;
   sideEffects = [];
@@ -855,7 +855,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     expect(gatewaysDocs.jack).toBeUndefined();
   });
 
-  it("rejects manually creating an owner builder gateway before side effects", async () => {
+  it("rejects manually creating an owner isolated gateway before side effects", async () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "jack",
@@ -997,7 +997,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
 });
 
 describe("PATCH /api/admin/gateways/:id — durable config only", () => {
-  it("rejects an imageTag write when the gateway has mounted customers", async () => {
+  it("rejects an imageTag write when the gateway has mounted users", async () => {
     seedDurableGateway("default", {
       heartbeat: { status: "ready", mountedCustomers: ["u1", "u2"] },
     });
@@ -1036,26 +1036,26 @@ describe("PATCH /api/admin/gateways/:id — durable config only", () => {
 
 describe("GET /api/admin/gateways — sizing enrichment", () => {
   it("attaches sizing.tier from the durable root and marks it explicit", async () => {
-    seedDurableGateway("bender", {
+    seedDurableGateway("walter", {
       heartbeat: { status: "ready", mountedCustomers: ["alice"] },
       root: {
         sizingTier: "l",
         profile: "builder",
         gatewayClass: "builder",
         imageProfile: "builder",
-        ownerUid: "uid-bender",
-        builderSlug: "bender",
+        ownerUid: "uid-walter",
+        builderSlug: "walter",
       },
     });
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
     expect(res.status).toBe(200);
-    const bender = res.body.gateways.find((g: any) => g.gatewayId === "bender");
-    expect(bender.sizing.tier).toBe("l");
-    expect(bender.sizing.resolvedFrom).toBe("explicit");
-    expect(bender.sizing.resources.requests.cpu).toBe("4000m");
-    expect(bender.sizing.monthlyCostUsd.compute).toBeGreaterThan(0);
-    expect(bender.desiredStatus).toBe("running");
+    const walter = res.body.gateways.find((g: any) => g.gatewayId === "walter");
+    expect(walter.sizing.tier).toBe("l");
+    expect(walter.sizing.resolvedFrom).toBe("explicit");
+    expect(walter.sizing.resources.requests.cpu).toBe("4000m");
+    expect(walter.sizing.monthlyCostUsd.compute).toBeGreaterThan(0);
+    expect(walter.desiredStatus).toBe("running");
   });
 
   it("falls back to class-default tier when sizingTier is unset (resolvedFrom='class-default')", async () => {
@@ -1097,14 +1097,14 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
   });
 
   it("drops any legacy persistence to emptyDir and keeps the PROD operator Spot reservation default", async () => {
-    seedDurableGateway("bender", {
+    seedDurableGateway("walter", {
       heartbeat: { status: "ready", mountedCustomers: [] },
       root: {
         gatewayClass: "builder",
         profile: "builder",
         imageProfile: "builder",
-        ownerUid: "uid-bender",
-        builderSlug: "bender",
+        ownerUid: "uid-walter",
+        builderSlug: "walter",
         sizingTier: "m",
         persistence: {
           enabled: true,
@@ -1116,18 +1116,18 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     });
     const app = buildApp();
     const res = await request(app).get("/api/admin/gateways");
-    const bender = res.body.gateways.find((g: any) => g.gatewayId === "bender");
-    expect(bender.storage).toMatchObject({ mode: "emptyDir", pvcName: null });
-    expect(bender.reservation).toMatchObject({
+    const walter = res.body.gateways.find((g: any) => g.gatewayId === "walter");
+    expect(walter.storage).toMatchObject({ mode: "emptyDir", pvcName: null });
+    expect(walter.reservation).toMatchObject({
       type: "spot",
     });
-    expect(bender.sizing.monthlyCostUsd.compute).toBeLessThan(
-      bender.sizing.monthlyCostUsd.onDemandCompute,
+    expect(walter.sizing.monthlyCostUsd.compute).toBeLessThan(
+      walter.sizing.monthlyCostUsd.onDemandCompute,
     );
     expect(res.body.stats.fleetCost.savingsUsd).toBeGreaterThan(0);
   });
 
-  it("defaults Builder gateways to Spot even with a residual computeClass", async () => {
+  it("defaults isolated gateways to Spot even with a residual computeClass", async () => {
     seedDurableGateway("dedicated", {
       heartbeat: { status: "ready", mountedCustomers: [] },
       root: {
@@ -1173,7 +1173,7 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
   });
 
   it("rolls up stats.fleetCost.byTier and stats.fleetCost.monthlyUsd across the fleet", async () => {
-    seedDurableGateway("bender", {
+    seedDurableGateway("walter", {
       heartbeat: { status: "ready", mountedCustomers: [] },
       root: { sizingTier: "l" },
     });
@@ -1281,10 +1281,10 @@ describe("POST /api/admin/gateways — body type guards", () => {
   it("rejects gatewayIds that cannot render as fleet Kubernetes resource names", async () => {
     const app = buildApp();
     for (const gatewayId of [
-      "Bender",
+      "Walter",
       "gw_test",
-      "-bender",
-      "bender-",
+      "-walter",
+      "walter-",
       "a".repeat(33),
     ]) {
       const res = await request(app).post("/api/admin/gateways").send({
@@ -1322,7 +1322,7 @@ describe("POST /api/admin/rollouts — body type guards", () => {
 });
 
 describe("DELETE /api/admin/gateways/:id — retire", () => {
-  it("atomically claims a converged gateway for retirement when no customers are mounted", async () => {
+  it("atomically claims a converged gateway for retirement when no users are mounted", async () => {
     seedRetirableGateway("canary");
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/canary");
@@ -1374,14 +1374,14 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     expect(res.status).toBe(404);
   });
 
-  it("returns 409 with the customer list when the gateway still has mounted customers", async () => {
+  it("returns 409 with the user list when the gateway still has mounted users", async () => {
     seedDurableGateway("canary", {
       heartbeat: { status: "ready", mountedCustomers: ["alice", "bob"] },
     });
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/still has mounted customers/i);
+    expect(res.body.error).toMatch(/still has mounted users/i);
     expect(res.body.mountedUsers).toEqual(["alice", "bob"]);
     expect(gatewaysDocs.canary).toMatchObject({ desiredStatus: "running" });
     expect(gatewaysDocs.canary.retirementClaim).toBeUndefined();
@@ -1432,15 +1432,15 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
 
 describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl rollout restart", () => {
   it("creates a restart-gateway operation (kind carried in input)", async () => {
-    seedDurableGateway("bender", { imageTag: "abcdef1" });
+    seedDurableGateway("walter", { imageTag: "abcdef1" });
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/gateways/bender/restart")
+      .post("/api/admin/gateways/walter/restart")
       .send({});
     expect(res.status).toBe(202);
     expect(commandOperation()).toMatchObject({
       kind: "restart-gateway",
-      input: { gatewayId: "bender" },
+      input: { gatewayId: "walter" },
       createdBy: "admin-user",
     });
   });
@@ -1455,30 +1455,30 @@ describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl ro
   });
 
   it("does NOT gate on mountedCustomers — restart is operator intent", async () => {
-    seedDurableGateway("bender", {
+    seedDurableGateway("walter", {
       imageTag: "abcdef1",
       heartbeat: { status: "ready", mountedCustomers: ["alice", "bob"] },
     });
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/gateways/bender/restart")
+      .post("/api/admin/gateways/walter/restart")
       .send({});
     expect(res.status).toBe(202);
   });
 
   it("returns 409 when another op is already pending or running for this gateway", async () => {
-    seedDurableGateway("bender", { imageTag: "abcdef1" });
+    seedDurableGateway("walter", { imageTag: "abcdef1" });
     glmOperationsDocs.push({
       id: "op-running-99",
       data: {
         kind: "rollout",
         status: "running",
-        input: { gatewayId: "bender", imageTag: "feedbee" },
+        input: { gatewayId: "walter", imageTag: "feedbee" },
       },
     });
     const app = buildApp();
     const res = await request(app)
-      .post("/api/admin/gateways/bender/restart")
+      .post("/api/admin/gateways/walter/restart")
       .send({});
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/already pending or running/);
@@ -1541,7 +1541,7 @@ describe("POST /api/admin/users/:uid/migrate — start migration", () => {
     expect(res.status).toBe(409);
   });
 
-  it("returns 409 when the target equals the customer's current gateway (migrate-to-self)", async () => {
+  it("returns 409 when the target equals the user's current gateway (migrate-to-self)", async () => {
     seedDurableGateway("canary", {
       heartbeat: { status: "ready", mountedCustomers: [] },
     });
@@ -1556,7 +1556,7 @@ describe("POST /api/admin/users/:uid/migrate — start migration", () => {
     expect(res.body.error).toMatch(/already/i);
   });
 
-  it("returns 409 with the blocking op while a migration for the customer is already pending or running (Retry double-click)", async () => {
+  it("returns 409 with the blocking op while a migration for the user is already pending or running (Retry double-click)", async () => {
     usersDocs["uid-alice"] = {
       username: "alice",
       provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
@@ -1582,7 +1582,7 @@ describe("POST /api/admin/users/:uid/migrate — start migration", () => {
 });
 
 describe("POST /api/admin/users/:uid/unassign — clear assignment, let reconcile evict", () => {
-  it("clears provisioning.openclaw.gatewayId and reports where the customer was", async () => {
+  it("clears provisioning.openclaw.gatewayId and reports where the user was", async () => {
     usersDocs["uid-alice"] = {
       username: "alice",
       provisioning: { openclaw: { slug: "alice", gatewayId: "default-green" } },
@@ -1596,7 +1596,7 @@ describe("POST /api/admin/users/:uid/unassign — clear assignment, let reconcil
     expect(usersDocs["uid-alice"].provisioning).toEqual({ openclaw: { slug: "alice" } });
   });
 
-  it("returns 404 for an unknown customer", async () => {
+  it("returns 404 for an unknown user", async () => {
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/users/uid-ghost/unassign")
@@ -1604,7 +1604,7 @@ describe("POST /api/admin/users/:uid/unassign — clear assignment, let reconcil
     expect(res.status).toBe(404);
   });
 
-  it("returns 409 when the customer is already unassigned", async () => {
+  it("returns 409 when the user is already unassigned", async () => {
     usersDocs["uid-alice"] = { username: "alice", provisioning: { openclaw: { slug: "alice" } } };
     const app = buildApp();
     const res = await request(app)
@@ -1614,7 +1614,7 @@ describe("POST /api/admin/users/:uid/unassign — clear assignment, let reconcil
     expect(res.body.error).toMatch(/already unassigned/i);
   });
 
-  it("returns 409 while a migration for the customer is pending or running", async () => {
+  it("returns 409 while a migration for the user is pending or running", async () => {
     usersDocs["uid-alice"] = {
       username: "alice",
       provisioning: { openclaw: { slug: "alice", gatewayId: "default-green" } },
@@ -1733,7 +1733,7 @@ describe("GET /api/admin/user-by-slug/:slug — slug→uid lookup", () => {
 });
 
 describe("GET /api/admin/user-distribution — fleet-wide ops view", () => {
-  it("buckets every builder into mounted / assigned-not-mounted / unassigned", async () => {
+  it("buckets every user into mounted / assigned-not-mounted / unassigned", async () => {
     seedDurableGateway("default", {
       heartbeat: { status: "ready", mountedCustomers: ["alice", "bob"] },
     });
@@ -1813,7 +1813,7 @@ describe("GET /api/admin/user-distribution — fleet-wide ops view", () => {
     });
   });
 
-  it("returns empty buckets when no builders exist", async () => {
+  it("returns empty buckets when no userRecords exist", async () => {
     seedDurableGateway("default", {
       heartbeat: { status: "ready", mountedCustomers: [] },
     });
@@ -1848,7 +1848,7 @@ describe("POST /api/admin/users/:uid/assign — initial placement", () => {
     expect(usersDocs["uid-dave"]).toHaveProperty("provisioning.openclaw.gatewayId", "default");
   });
 
-  it("rejects assigning a Builder to an owner gateway", async () => {
+  it("rejects assigning a user to an owner gateway", async () => {
     seedDurableGateway("gw-operator", {
       heartbeat: { status: "ready", mountedCustomers: [] },
       root: {
@@ -1871,7 +1871,7 @@ describe("POST /api/admin/users/:uid/assign — initial placement", () => {
       .post("/api/admin/users/uid-dave/assign")
       .send({ gatewayId: "gw-operator" });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Builder gateway placement is managed by the disposable lifecycle/);
+    expect(res.body.error).toMatch(/Isolated gateway placement is managed by the disposable lifecycle/);
 
     expect(sideEffects).not.toContain("set glmGateways/gw-operator");
     expect(sideEffects).not.toContain("set users/uid-dave");
@@ -1968,7 +1968,7 @@ describe("POST /api/admin/users/:uid/assign — initial placement", () => {
     expect(sideEffects).not.toContain("set gateways/default/assignments/uid-alice");
   });
 
-  it("rejects assignment when the builder has no canonical slug", async () => {
+  it("rejects assignment when the user has no canonical slug", async () => {
     seedDurableGateway("default", {
       heartbeat: { status: "ready", mountedCustomers: [] },
     });
@@ -1989,7 +1989,7 @@ describe("POST /api/admin/users/:uid/assign — initial placement", () => {
 });
 
 describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
-  it("returns mounted-customer details + recent ops for the gateway", async () => {
+  it("returns mounted-user details + recent ops for the gateway", async () => {
     seedDurableGateway("default", {
       imageTag: "abc1234",
       heartbeat: { status: "ready", mountedCustomers: ["alice", "bob"] },
@@ -2141,7 +2141,7 @@ describe("GET /api/admin/builds — Artifact Registry SHA picker", () => {
     expect(res.body.builds[0].tag).toBe("abc1234");
     expect(res.body.service).toBe("octogee-gateway");
     expect(res.body.generatedAt).toBeTruthy();
-    expect(builderCalls[0].service).toBe("octogee-gateway");
+    expect(userCalls[0].service).toBe("octogee-gateway");
   });
 
   it("defaults to octogee-gateway when no service is provided", async () => {
@@ -2150,7 +2150,7 @@ describe("GET /api/admin/builds — Artifact Registry SHA picker", () => {
     const res = await request(app).get("/api/admin/builds");
     expect(res.status).toBe(200);
     expect(res.body.service).toBe("octogee-gateway");
-    expect(builderCalls[0].service).toBe("octogee-gateway");
+    expect(userCalls[0].service).toBe("octogee-gateway");
   });
 
   it("rejects services outside the allowlist", async () => {
@@ -2158,7 +2158,7 @@ describe("GET /api/admin/builds — Artifact Registry SHA picker", () => {
     const res = await request(app).get("/api/admin/builds?service=evil-image");
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/service/i);
-    expect(builderCalls).toHaveLength(0);
+    expect(userCalls).toHaveLength(0);
   });
 
   it("accepts the gateway-edge service; rejects the retired chat-proxy image", async () => {
@@ -2169,7 +2169,7 @@ const a = await request(app).get("/api/admin/builds?service=octogee-chat-proxy")
     const b = await request(app).get("/api/admin/builds?service=gateway-edge");
     expect(a.status).toBe(400);
     expect(b.status).toBe(200);
-    expect(builderCalls.map((c) => c.service)).toEqual(["gateway-edge"]);
+    expect(userCalls.map((c) => c.service)).toEqual(["gateway-edge"]);
   });
 
   it("clamps limit to a sane maximum", async () => {
@@ -2177,7 +2177,7 @@ const a = await request(app).get("/api/admin/builds?service=octogee-chat-proxy")
     const app = buildApp();
     const res = await request(app).get("/api/admin/builds?limit=500");
     expect(res.status).toBe(200);
-    expect(builderCalls[0].limit).toBeLessThanOrEqual(100);
+    expect(userCalls[0].limit).toBeLessThanOrEqual(100);
   });
 
   it("propagates Artifact Registry failures as 502", async () => {

@@ -37,7 +37,7 @@ function base(over: Partial<ReconcileState> = {}): ReconcileState {
 }
 
 describe("planGiteaReconcile", () => {
-  it("legacy customer → full ordered, non-destructive plan", () => {
+  it("legacy user → full ordered, non-destructive plan", () => {
     const plan = planGiteaReconcile(
       base({
         repos: [

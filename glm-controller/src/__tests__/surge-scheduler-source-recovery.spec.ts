@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { recoverAbandonedSurgeSchedulerSource } from "../surge-scheduler-source-recovery.js";
 import { surgeSchedulerOperationId } from "../surge-scheduler-handoff.js";
-import type { SurgeAssignment, SurgeCustomerHandoffDeps, SurgePod, SurgePodHealth } from "../surge-customer-handoff.js";
+import type { SurgeAssignment, SurgeUserHandoffDeps, SurgePod, SurgePodHealth } from "../surge-user-handoff.js";
 import type { SchedulerMigrationResult } from "@octogee/shared/types/fleet-controller";
 
 const SOURCE_UID = "11111111-1111-4111-8111-111111111111";
@@ -19,7 +19,7 @@ function setup(kind: "source" | "target" = "source") {
   const operationId = surgeSchedulerOperationId({ gatewayId: input.gatewayId, assignment: input.assignment, target: { uid: formerTargetUid } });
   const agentIds = ["octogee-alice-coach", "octogee-alice-proj-orbit-coach"];
   let state: "held" | "exported" | "staged" | "activated" | "missing" | "resumed" = kind === "source" ? "held" : "staged";
-  const scheduler = vi.fn<NonNullable<SurgeCustomerHandoffDeps["scheduler"]>>(async request => {
+  const scheduler = vi.fn<NonNullable<SurgeUserHandoffDeps["scheduler"]>>(async request => {
     expect(request.operationId).toBe(operationId);
     expect(request.gatewayId).toBe(input.gatewayId);
     expect(request.slug).toBe("alice");

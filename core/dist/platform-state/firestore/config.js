@@ -1,6 +1,6 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 import { GATEWAY_VM_PROVISIONING_MODELS, isGatewayVmBootDiskType, isGatewayVmDesktop, } from "@octogee/shared/types/glm";
-import { DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF, DEFAULT_BUILDER_AGENT_MODEL_REF, DEFAULT_FREE_TIER_MODEL_REF, DEFAULT_OPS_AGENT_MODEL_REF, parsePlatformConnectConfig, parsePlatformFreeConfig, parsePlatformModelConfig, PLATFORM_CONFIG_COLLECTION, } from "@octogee/shared/types/platform-config";
+import { DEFAULT_USER_AGENT_FALLBACK_MODEL_REF, DEFAULT_USER_AGENT_MODEL_REF, DEFAULT_FREE_TIER_MODEL_REF, DEFAULT_OPS_AGENT_MODEL_REF, parsePlatformConnectConfig, parsePlatformFreeConfig, parsePlatformModelConfig, PLATFORM_CONFIG_COLLECTION, } from "@octogee/shared/types/platform-config";
 import { parseSharedGatewayAutoscalingConfig } from "@octogee/shared/types/shared-gateway-pool";
 import { isSizingTier } from "@octogee/shared/types/sizing";
 import { MalformedRecordError, MissingRecordError } from "../errors.js";
@@ -13,7 +13,7 @@ const PLATFORM_CONFIG_KEYS = ["models", "free", "connect"];
 export function parseStoredPlatformModelConfig(value) {
     if (typeof value !== "object" || value === null || Array.isArray(value))
         return null;
-    const { freeTierModelRef = DEFAULT_FREE_TIER_MODEL_REF, opsAgentModelRef = DEFAULT_OPS_AGENT_MODEL_REF, builderAgentModelRef = DEFAULT_BUILDER_AGENT_MODEL_REF, builderAgentFallbackModelRef = DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF, } = value;
+    const { freeTierModelRef = DEFAULT_FREE_TIER_MODEL_REF, opsAgentModelRef = DEFAULT_OPS_AGENT_MODEL_REF, builderAgentModelRef = DEFAULT_USER_AGENT_MODEL_REF, builderAgentFallbackModelRef = DEFAULT_USER_AGENT_FALLBACK_MODEL_REF, } = value;
     if (typeof freeTierModelRef !== "string" || typeof opsAgentModelRef !== "string" || typeof builderAgentModelRef !== "string") {
         return null;
     }
@@ -46,7 +46,7 @@ function isNonNegativeSafeInteger(value) {
 function withoutClearedFields(patch) {
     return Object.fromEntries(Object.entries(patch).filter(([, value]) => !isClearField(value)));
 }
-function isComputerProfile(value) {
+function isVmProfile(value) {
     if (!isPlainMap(value))
         return false;
     const { runtime, desktop, machineType, provisioningModel, bootDisk, homeSizeGiB } = value;
@@ -65,7 +65,7 @@ export function isGatewaySizingProfile(value) {
         return true;
     return (value.isolation === "isolated" &&
         isSizingTier(value.sizingTier) &&
-        isComputerProfile(value.computer) &&
+        isVmProfile(value.computer) &&
         (value.fallbackStorageGb === null || typeof value.fallbackStorageGb === "number"));
 }
 export function seedSizingProfiles(tiers) {
@@ -83,7 +83,7 @@ export function seedSizingProfiles(tiers) {
             };
         }
         else {
-            throw new Error(`sizing key ${sizingKey} names an instance or a computer without the other`);
+            throw new Error(`sizing key ${sizingKey} names an instance or a VM without the other`);
         }
     }
     return profiles;

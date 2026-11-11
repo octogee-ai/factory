@@ -4,14 +4,14 @@ image:
   digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 # Workload Identity binding — KSA `glm-controller` impersonates THIS GSA:
-# Cowboy's own dedicated identity (octogee-glm-controller), which carries the
+# The fleet controller's own dedicated identity (octogee-glm-controller), which carries the
 # privileged teardown grants. Per-env values.yaml overrides with the
 # env-suffixed GSA.
 gcpServiceAccount: ""
 
 # The gateway-POD consumer GSA (octogee-gateway) that new per-gateway
 # auth-token Secret Manager secrets are bound to when an admin adds a gateway.
-# Distinct from gcpServiceAccount above — Cowboy's identity must NOT be granted
+# Distinct from gcpServiceAccount above — the fleet controller's identity must NOT be granted
 # access to gateway token secrets. Per-env values.yaml sets the env-suffixed GSA.
 gatewayServiceAccount: ""
 
@@ -29,7 +29,7 @@ kmsKeyName: ""
 # chart. Override only for tests / non-standard image layouts.
 gatewayChart: /charts/octogee-gateway
 
-# Shared pool bounds. Cowboy mints `shared-N` slots on demand between these,
+# Shared pool bounds. The fleet controller mints `shared-N` slots on demand between these,
 # from the platform release image below. Per-environment values set the floor:
 # TEST 1 (0 allowed), PROD 2.
 sharedPool:
@@ -38,19 +38,19 @@ sharedPool:
 
 # The gateway and gateway-edge images every shared slot converges to. The
 # platform release (Deploy platform) sets the digest-qualified tags from the
-# deployed build's immutable manifest; Cowboy rolls each slot with surge.
+# deployed build's immutable manifest; the fleet controller rolls each slot with surge.
 platformRelease:
   sourceSha: ""
   gatewayImageRepository: ""
   gatewayImageTag: ""
-  # Same build's octogee-gateway-builder digest; disposable Builders allocated
+  # Same build's octogee-gateway-builder digest; disposable isolated gateways allocated
   # from a shared slot inherit the slot's release payload and need it.
   builderImageTag: ""
   gatewayEdgeImageRepository: ""
   gatewayEdgeImageTag: ""
   openclawSourceSha: ""
 
-# Customer-cleanup target endpoints (Gitea + Mattermost). Defaults
+# User-cleanup target endpoints (Gitea + Mattermost). Defaults
 # resolve to in-cluster ClusterIP Services for the same Helm release;
 # operator can override per-env if cluster topology changes.
 env:
@@ -66,9 +66,9 @@ fleetIdentity:
   operatorEmails: []
 
 # Gitea gateway SSH key sweep: dry-run logs per-user managed-key counts,
-# enforce deletes keys whose owning gateway pod or computer VM is gone.
+# enforce deletes keys whose owning gateway pod or VM is gone.
 # legacy governs legacy-titled keys separately: enforce deletes those whose key
-# material no live gateway serving that Builder holds under its owner title.
+# material no live gateway serving that user holds under its owner title.
 giteaGatewayKeyGc:
   mode: enforce
 
@@ -86,7 +86,7 @@ modelKeyIssuer:
   bearerSecretKey: bearer_token
   timeoutMs: "10000"
 
-# Ingress shells whose dynamic per-gateway paths are owned by Cowboy.
+# Ingress shells whose dynamic per-gateway paths are owned by the fleet controller.
 # `sharedName` points all writers at the consolidated app Ingress; leave
 # it empty for the legacy per-host Ingress names below.
 ingress:
@@ -104,7 +104,7 @@ resources:
     cpu: "1"
     memory: "1Gi"
 
-# Cowboy HTTP — admin / fleet API surface served from the control
+# The fleet controller HTTP — admin / fleet API surface served from the control
 # plane. Mounts the same admin-fleet-router factory gateway-edge uses,
 # so the admin Gateways tab keeps responding when no gateway pods are
 # booted. The api[-test].octogee.com Ingress (in gateway-edge chart)

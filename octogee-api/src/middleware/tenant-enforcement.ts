@@ -2,11 +2,11 @@ import type { NextFunction, Request, Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import {
-  configuredBuilderBootstrapAllowed,
+  configuredUserBootstrapAllowed,
 } from "@octogee/core/gateway-live-release";
-import { GATEWAY_BINDING_MISMATCH_REASON, RETIRED_COMPUTER_BINDING_DENIAL_REASON } from "@octogee/shared/types/fleet-broker";
+import { GATEWAY_BINDING_MISMATCH_REASON, RETIRED_VM_BINDING_DENIAL_REASON } from "@octogee/shared/types/fleet-broker";
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
-import { hasRunningCustomerMigration } from "../lib/running-customer-migration.js";
+import { hasRunningUserMigration } from "../lib/running-user-migration.js";
 import { normalizeTenantPolicyPath } from "../lib/tenant-route-policy.js";
 import type { UserNotifier } from "../lib/user-notifications.js";
 import { logger, redactRequestPath } from "../../../gateway-edge/src/middleware/logging.js";
@@ -252,12 +252,12 @@ async function uidBelongsToGateway(
   uid: string,
   gatewayId: string,
 ): Promise<boolean> {
-  const builder = await store.builders.records.get(uid);
-  if (builder?.gateway?.gatewayId === gatewayId) return true;
+  const user = await store.users.records.get(uid);
+  if (user?.gateway?.gatewayId === gatewayId) return true;
   return uidHoldsDisposableClaim(store, uid, gatewayId);
 }
 
-// The user mirror only names a disposable builder once activation finishes, and
+// The user mirror only names a disposable isolated once activation finishes, and
 // activation cannot finish without the bootstrap calls this check guards. The
 // gateway's own allocation is the platform-written record of that pending
 // binding, so an active claim binds the uid for exactly as long as it stands.
@@ -294,8 +294,8 @@ async function slugBelongsToGateway(
   slug: string,
   gatewayId: string,
 ): Promise<boolean> {
-  const assigned = await store.builders.records.listByGateway(gatewayId);
-  return assigned.some((builder) => builder.slug === slug);
+  const assigned = await store.users.records.listByGateway(gatewayId);
+  return assigned.some((user) => user.slug === slug);
 }
 
 async function slugHasRunningInboundMigration(
@@ -303,8 +303,8 @@ async function slugHasRunningInboundMigration(
   gatewayId: string,
   slug: string,
 ): Promise<boolean> {
-  const builder = await store.builders.records.findBySlug(slug);
-  return builder !== null && hasRunningCustomerMigration(store, builder.uid, gatewayId, "inbound");
+  const user = await store.users.records.findBySlug(slug);
+  return user !== null && hasRunningUserMigration(store, user.uid, gatewayId, "inbound");
 }
 
 function routeAllowsInboundMigrationSlug(req: Request): boolean {
@@ -330,7 +330,7 @@ async function slugAllowedForRequest(
   if (!routeAllowsInboundMigrationSlug(req)) return false;
   if (await slugHasRunningInboundMigration(store, bound.gatewayId, slug)) return true;
   const gateway = await store.gateways.roots.get(bound.gatewayId);
-  return configuredBuilderBootstrapAllowed(gateway ?? undefined, {
+  return configuredUserBootstrapAllowed(gateway ?? undefined, {
     gatewayId: bound.gatewayId,
     podName: bound.podName,
     slug,
@@ -386,7 +386,7 @@ async function gatewayDenialReason(
   if (bound.finalHomeCheckpoint) {
     return FINAL_HOME_CHECKPOINT_ROUTES.has(req.path)
       ? null
-      : RETIRED_COMPUTER_BINDING_DENIAL_REASON;
+      : RETIRED_VM_BINDING_DENIAL_REASON;
   }
 
   // These brokers perform route-specific authorization from their own body
@@ -428,7 +428,7 @@ const PLACEMENT_DENIAL_REASONS: ReadonlySet<string> = new Set([
   GATEWAY_BINDING_MISMATCH_REASON,
   "request names a user not assigned to the bound gateway",
   "request names a workspace slug not assigned to the bound gateway",
-  RETIRED_COMPUTER_BINDING_DENIAL_REASON,
+  RETIRED_VM_BINDING_DENIAL_REASON,
 ]);
 
 export function tenantDenialCause(reason: string): TenantDenialCause {

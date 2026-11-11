@@ -1,5 +1,5 @@
 import type { PlatformStateStore } from "@octogee/core/platform-state";
-import { isRetiredSharedGateway } from "./customer-ops/retired-shared-gateway.js";
+import { isRetiredSharedGateway } from "./user-ops/retired-shared-gateway.js";
 
 export function createNativeReturnTargetRetirementVerifier(input: {
   store: PlatformStateStore;

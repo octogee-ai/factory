@@ -21,7 +21,7 @@ const env = {
 };
 
 describe("platformGatewayArtifactFromEnvironment", () => {
-  it("builds a complete release payload including the Builder image disposable allocations need", () => {
+  it("builds a complete release payload including the isolated image disposable allocations need", () => {
     const artifact = platformGatewayArtifactFromEnvironment(env);
     expect(artifact).toEqual({
       imageRepository: `${REPOSITORY}/octogee-gateway`,

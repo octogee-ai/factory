@@ -123,7 +123,7 @@ describe("native workspace identity initialization", () => {
     expect(() => assertWorkspaceIdentityReady(env)).toThrow("not initialized");
   });
 
-  it("refuses to admit an owner that is not the Builder claim's", async () => {
+  it("refuses to admit an owner that is not the user claim's", async () => {
     const { env, profiles, args, createProfile } = fixture();
     fs.rmSync(path.join(env.OPENCLAW_DIR, "builder-claim.json"));
     await expect(bootstrapWorkspaceIdentities({ ...args, env: { ...env, GATEWAY_OWNER_UID: "mallory" } as typeof env })).rejects.toThrow("claimed owner");
@@ -132,7 +132,7 @@ describe("native workspace identity initialization", () => {
     expect(() => assertWorkspaceIdentityReady(env)).toThrow("not initialized");
   });
 
-  it("refuses to initialize identities for a Builder with no claim", async () => {
+  it("refuses to initialize identities for a user with no claim", async () => {
     const { env, profiles, args, createProfile } = fixture();
     fs.rmSync(path.join(env.OPENCLAW_DIR, "builder-claim.json"));
     await expect(bootstrapWorkspaceIdentities(args)).rejects.toThrow("claimed owner");

@@ -230,14 +230,14 @@ async function conversationAgentCredential(deps: WorkspaceConversationDeps, owne
   const secret = await deps.store.secrets.get(ownerUid, secretId);
   if (!secret || secret.kind === 'connector' || !secret.personalToken.trim() ||
     secret.mattermostUserId === null || !MATTERMOST_ID.test(secret.mattermostUserId)) deny();
-  return { coachMmUserId: secret.mattermostUserId, coachToken: secret.personalToken };
+  return { defaultAgentMmUserId: secret.mattermostUserId, coachToken: secret.personalToken };
 }
 export async function startWorkspaceVoiceConversation(deps: WorkspaceConversationDeps, claim: { uid: string; channelId: string; threadRootPostId?: string }) {
   if (claim.threadRootPostId !== undefined) return resolveVoiceConversationContext(deps, { ...claim, threadRootPostId: claim.threadRootPostId });
   const resolved = await resolveVoiceChannel(deps, claim);
   if (!resolved) return null;
-  const { coachMmUserId, coachToken } = await conversationAgentCredential(deps, resolved.scope.ownerUid, resolved.context.agentId);
-  if (coachMmUserId !== resolved.agentMmUserId) deny();
+  const { defaultAgentMmUserId, coachToken } = await conversationAgentCredential(deps, resolved.scope.ownerUid, resolved.context.agentId);
+  if (defaultAgentMmUserId !== resolved.agentMmUserId) deny();
   const body = { channel_id: claim.channelId, root_id: '', message: '🎙 Voice conversation',
     props: { octogee: { kind: 'voice-conversation', participantMmUserId: resolved.context.callerMmUserId } } };
   let createPost = deps.createPost;
@@ -247,21 +247,21 @@ export async function startWorkspaceVoiceConversation(deps: WorkspaceConversatio
     createPost = (_credential, post) => client.postJson(['posts'], post);
   }
   const posted = record(await createPost(coachToken, body));
-  if (!posted || !isMattermostPostId(posted.id) || posted.channel_id !== claim.channelId || posted.root_id !== '' || posted.user_id !== coachMmUserId) {
+  if (!posted || !isMattermostPostId(posted.id) || posted.channel_id !== claim.channelId || posted.root_id !== '' || posted.user_id !== defaultAgentMmUserId) {
     throw new VoicePostingGrantError(502, 'voice_conversation_unverified');
   }
   return resolveVoiceConversationContext(deps, { ...claim, threadRootPostId: posted.id });
 }
-function verifiedArchivePost(value: unknown, current: GrantDocument, coachMmUserId: string): VoiceTurnPost {
+function verifiedArchivePost(value: unknown, current: GrantDocument, defaultAgentMmUserId: string): VoiceTurnPost {
   const posted = record(value);
-  if (!posted || typeof posted.id !== 'string' || !MATTERMOST_ID.test(posted.id) || posted.channel_id !== current.channelId || posted.root_id !== current.threadRootPostId || posted.user_id !== coachMmUserId) throw new VoicePostingGrantError(502, 'voice_archive_unverified');
-  return { postId: posted.id, channelId: current.channelId, threadRootPostId: current.threadRootPostId, userId: coachMmUserId };
+  if (!posted || typeof posted.id !== 'string' || !MATTERMOST_ID.test(posted.id) || posted.channel_id !== current.channelId || posted.root_id !== current.threadRootPostId || posted.user_id !== defaultAgentMmUserId) throw new VoicePostingGrantError(502, 'voice_archive_unverified');
+  return { postId: posted.id, channelId: current.channelId, threadRootPostId: current.threadRootPostId, userId: defaultAgentMmUserId };
 }
 export async function archiveWorkspaceVoiceCall(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceArchiveRequest): Promise<VoiceTurnPost> {
   const initial = activeGrant(await readGrant(deps, request.voiceGrant), gatewayId);
   if (initial.sessionId !== request.sessionId || initial.callerMmUserId === null) deny();
   const resolved = await authorizeGrant(deps, initial);
-  const { coachMmUserId, coachToken } = await conversationAgentCredential(deps, initial.ownerUid, initial.agentId);
+  const { defaultAgentMmUserId, coachToken } = await conversationAgentCredential(deps, initial.ownerUid, initial.agentId);
   let createPost = deps.createPost;
   if (!createPost) {
     const { createChannelSessionMattermostClient } = await import('../../../gateway-edge/src/lib/channel-session-model-control.js');
@@ -274,9 +274,9 @@ export async function archiveWorkspaceVoiceCall(deps: WorkspaceConversationDeps,
   try {
     const fresh = await authorizeGrant(deps, initial);
     const current = activeGrant(await readGrant(deps, request.voiceGrant), gatewayId);
-    if (current.sessionId !== request.sessionId || !matchesResolved(current, fresh) || fresh.agentMmUserId !== coachMmUserId) deny();
+    if (current.sessionId !== request.sessionId || !matchesResolved(current, fresh) || fresh.agentMmUserId !== defaultAgentMmUserId) deny();
     if (replay) {
-      if (replay.channelId !== current.channelId || replay.threadRootPostId !== current.threadRootPostId || replay.userId !== coachMmUserId) deny();
+      if (replay.channelId !== current.channelId || replay.threadRootPostId !== current.threadRootPostId || replay.userId !== defaultAgentMmUserId) deny();
       return replay;
     }
     post = verifiedArchivePost(await createPost(coachToken, {
@@ -284,7 +284,7 @@ export async function archiveWorkspaceVoiceCall(deps: WorkspaceConversationDeps,
       root_id: current.threadRootPostId,
       message: archiveMessage(request, fresh.context.callerMmUserId),
       props: { octogee: { kind: VOICE_ARCHIVE_POST_KIND, sessionId: request.sessionId, participantMmUserId: fresh.context.callerMmUserId, truncated: request.truncated } },
-    }), current, coachMmUserId);
+    }), current, defaultAgentMmUserId);
   } catch (error) {
     if (!replay) await finishArchive(deps, gatewayId, request, { digest, state: 'failed' });
     if (error instanceof VoicePostingGrantError) throw error;

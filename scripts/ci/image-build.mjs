@@ -71,4 +71,4 @@ const recipe = (dockerfile, cwd) => [...new Set([dockerfile, ...copiedFiles(dock
   .filter(file => !(file.startsWith("infra/gateway/openclaw-tarball/") && file.endsWith(".tgz")));
 
 export const gatewayBaseRecipe = (cwd = process.cwd()) => [".dockerignore", ...recipe("infra/gateway/Dockerfile.base", cwd)];
-export const builderBaseRecipe = (cwd = process.cwd()) => recipe("infra/gateway/Dockerfile.builder-base", cwd);
+export const isolatedBaseRecipe = (cwd = process.cwd()) => recipe("infra/gateway/Dockerfile.isolated-base", cwd);

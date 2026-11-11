@@ -27,7 +27,7 @@ vi.mock("child_process", async (importOriginal) => {
     ...actual,
     execFileSync: ((file: string, args: string[], options: object) => {
       if (file !== "/usr/bin/git" || !origin.path) return actual.execFileSync(file, args, options);
-      const remote = `git@gitea.test:${workspaceGiteaOrg("bender")}/${workspaceRepoName()}.git`;
+      const remote = `git@gitea.test:${workspaceGiteaOrg("walter")}/${workspaceRepoName()}.git`;
       const local = [
         "-c", `url.${origin.path}.insteadOf=${remote}`,
         ...args.map(arg => arg === "protocol.file.allow=never" ? "protocol.file.allow=always" : arg),
@@ -41,7 +41,7 @@ vi.mock("../lib/gitea-admin-broker-client.js", () => ({ brokeredGitHost: { repoE
 const { OPENCLAW_DIR, CUSTOMERS_DIR, CUSTOMER_KEYS_DIR } = await import("../lib/config.js");
 const { cloneWorkspaceRepo, workspaceTreeState } = await import("../lib/git.js");
 
-const SLUG = "bender";
+const SLUG = "walter";
 const TRACKED = {
   "SOUL.md": "# SOUL.md - Who You Are\nYou're BenderEcho.\n",
   "MEMORY.md": "# MEMORY.md\n- Chris\n",

@@ -13,7 +13,7 @@ import { parseAgentLook } from "./agent-look.js";
 const count = (svg: string, needle: string) => svg.split(needle).length - 1;
 
 describe("agent characters", () => {
-  it("defaults every new coach to the coral Octo", () => {
+  it("defaults every new defaultAgent to the coral Octo", () => {
     expect(DEFAULT_AGENT_LOOK).toEqual({ style: "octo", color: BRAND_LOOK_COLOR });
     expect(parseAgentLook(DEFAULT_AGENT_LOOK)).toEqual(DEFAULT_AGENT_LOOK);
     expect(LOOK_COLORS[0]).toEqual({ name: "Coral", value: BRAND_LOOK_COLOR });

@@ -70,8 +70,8 @@ export interface LlmBrokerAppDeps {
   vertex?: VertexBrokerConfig;
   upstreamBaseUrl?: string;
   providerUpstreamBaseUrls?: Partial<Record<ModelBrokerProvider, string | undefined>>;
-  // Model a builder is degraded to when over budget (or always, on the free tier),
-  // served on the platform "house" key and not billed to the builder's window.
+  // Model a user is degraded to when over budget (or always, on the free tier),
+  // served on the platform "house" key and not billed to the user's window.
   houseModel?: string;
   providerHouseModels?: Partial<Record<ModelBrokerProvider, string | undefined>>;
   // The operator's free-tier dial (platformConfig/models). Free-tier degrades

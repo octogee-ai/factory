@@ -6,14 +6,14 @@ export interface AccountLifecycle {
     suspendedAt?: number;
     eraseAfter?: number;
 }
-export declare const CUSTOMER_DELETION_JOBS_COLLECTION = "customerDeletionJobs";
+export declare const USER_DELETION_JOBS_COLLECTION = "customerDeletionJobs";
 export declare const ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION = "anonymousOperationalArchives";
 export declare function isAnonymousOperationalModelDimension(provider: unknown, model: unknown): boolean;
 export declare function anonymousOperationalEnvironment(value: unknown): string;
 export declare function anonymousOperationalPlanTier(value: unknown): string | null;
 export declare function anonymousOperationalGatewayClass(value: unknown): string | null;
 export declare function accountAllowsInteractiveAccess(userData: Record<string, unknown> | undefined): boolean;
-export declare function buildCustomerDeletionSchedule(input: {
+export declare function buildUserDeletionSchedule(input: {
     now: number;
     eraseNow: boolean;
 }): {

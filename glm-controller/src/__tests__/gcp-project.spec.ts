@@ -4,8 +4,8 @@ import { resolveDefaultStorageBucket, resolveGatewayGcpProject } from "../gcp-pr
 describe("resolveGatewayGcpProject", () => {
   it("uses the per-gateway gcpProject when set (BYO-GCP)", () => {
     expect(
-      resolveGatewayGcpProject({ gcpProject: "builder-acme-prod", platformDefault: "octogee" }),
-    ).toBe("builder-acme-prod");
+      resolveGatewayGcpProject({ gcpProject: "user-acme-prod", platformDefault: "octogee" }),
+    ).toBe("user-acme-prod");
   });
 
   it("falls back to the platform default when gcpProject is absent (cattle / today)", () => {

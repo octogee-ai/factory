@@ -22,7 +22,7 @@ describe("OpenClaw Dashboard capability heartbeat", () => {
       env: {
         OPENCLAW_DASHBOARD_BRIDGE_ENABLED: "true",
         OPENCLAW_DIR: openclawDir,
-        GATEWAY_REVISION_ID: "bender-r7",
+        GATEWAY_REVISION_ID: "walter-r7",
       },
       instanceId: "edge-instance-1",
       now: () => now,
@@ -33,7 +33,7 @@ describe("OpenClaw Dashboard capability heartbeat", () => {
     expect(JSON.parse(fs.readFileSync(capabilityPath, "utf8"))).toEqual({
       protocol: OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
       version: OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
-      revisionId: "bender-r7",
+      revisionId: "walter-r7",
       openclawVersion: "main",
       openclawForkSha: "current",
       instanceId: "edge-instance-1",
@@ -59,7 +59,7 @@ describe("OpenClaw Dashboard capability heartbeat", () => {
       env: {
         OPENCLAW_DASHBOARD_BRIDGE_ENABLED: "true",
         OPENCLAW_DIR: openclawDir,
-        GATEWAY_REVISION_ID: "bender-r7",
+        GATEWAY_REVISION_ID: "walter-r7",
       },
       intervalMs: 60_000,
       logError,

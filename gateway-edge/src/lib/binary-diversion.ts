@@ -98,7 +98,7 @@ function confinedPathSegments(relativePath: string): string[] {
     segments.length === 0 ||
     segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")
   ) {
-    throw new Error("path is outside the customer workspace");
+    throw new Error("path is outside the user workspace");
   }
   return segments;
 }

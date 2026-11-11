@@ -145,7 +145,7 @@ describe("channel session model routes", () => {
     await request(app()).get(`/api/channel-session-models/${"c".repeat(26)}`).expect(500);
   });
 
-  it("uses the workspace coach for a project channel without an agent record", async () => {
+  it("uses the workspace agent for a project channel without an agent record", async () => {
     bindChannel("workspaces/alice/projects/orbit/channels/general");
     h.docs.set("workspaces/alice/projects/orbit", { ownerUid: "owner-uid" });
     h.docs.set("users/owner-uid/secrets/projectAgentMattermost-orbit", {

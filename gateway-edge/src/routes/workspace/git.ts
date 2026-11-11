@@ -16,7 +16,7 @@ import {
   gitLog,
   gitPush,
   gitStatus,
-  resolveCustomerDir,
+  resolveUserDir,
   resolveProjectDir,
   runWorkspaceGitMutation,
   type WorkspaceGitError,
@@ -39,7 +39,7 @@ type AuthorizedHandler = (
   target: WorkspaceGitAuthorization,
 ) => Promise<void>;
 
-function customersRoot(): string {
+function usersRoot(): string {
   return process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
 }
 
@@ -50,7 +50,7 @@ async function resolveTargetDir(
   if (target.projectSlug) {
     return resolveProjectDir(root, target.slug, target.projectSlug);
   }
-  return resolveCustomerDir(root, target.slug);
+  return resolveUserDir(root, target.slug);
 }
 
 function requestedGatewayId(req: Request): string | null {
@@ -162,7 +162,7 @@ async function withSlugLimit<T>(
   }
 }
 
-function respondCustomerDirMissing(res: Response, slug: string): void {
+function respondUserDirMissing(res: Response, slug: string): void {
   logger.warn(`git: working tree not accessible for slug=${slug} — verify sidecar volume mount`);
   res.status(503).json({
     error: "Working tree temporarily unavailable; retry in a few seconds.",
@@ -219,9 +219,9 @@ function isSafeRefName(ref: string): boolean {
 const gitStatusHandler: AuthorizedHandler = async (req, res, _next, target) => {
     const start = Date.now();
     await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveTargetDir(customersRoot(), target);
+      const dir = await resolveTargetDir(usersRoot(), target);
       if (!dir) {
-        respondCustomerDirMissing(res, target.slug);
+        respondUserDirMissing(res, target.slug);
         return;
       }
       const r = await gitStatus(dir);
@@ -247,9 +247,9 @@ const gitDiffHandler: AuthorizedHandler = async (req, res, _next, target) => {
       return;
     }
     await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveTargetDir(customersRoot(), target);
+      const dir = await resolveTargetDir(usersRoot(), target);
       if (!dir) {
-        respondCustomerDirMissing(res, target.slug);
+        respondUserDirMissing(res, target.slug);
         return;
       }
       const r = await gitDiff(dir, { path: filePath, ref });
@@ -270,9 +270,9 @@ const gitCommitDiffHandler: AuthorizedHandler = async (req, res, _next, target) 
       return;
     }
     await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveTargetDir(customersRoot(), target);
+      const dir = await resolveTargetDir(usersRoot(), target);
       if (!dir) {
-        respondCustomerDirMissing(res, target.slug);
+        respondUserDirMissing(res, target.slug);
         return;
       }
       const r = await gitCommitDiff(dir, commit);
@@ -294,9 +294,9 @@ const gitLogHandler: AuthorizedHandler = async (req, res, _next, target) => {
       return;
     }
     await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveTargetDir(customersRoot(), target);
+      const dir = await resolveTargetDir(usersRoot(), target);
       if (!dir) {
-        respondCustomerDirMissing(res, target.slug);
+        respondUserDirMissing(res, target.slug);
         return;
       }
       const r = await gitLog(dir, { limit, branch });
@@ -312,9 +312,9 @@ const gitLogHandler: AuthorizedHandler = async (req, res, _next, target) => {
 const gitBranchesHandler: AuthorizedHandler = async (req, res, _next, target) => {
     const start = Date.now();
     await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveTargetDir(customersRoot(), target);
+      const dir = await resolveTargetDir(usersRoot(), target);
       if (!dir) {
-        respondCustomerDirMissing(res, target.slug);
+        respondUserDirMissing(res, target.slug);
         return;
       }
       const r = await gitBranches(dir);
@@ -339,9 +339,9 @@ const gitCommitHandler: AuthorizedHandler = async (req, res, _next, target) => {
     }
     const start = Date.now();
     await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveTargetDir(customersRoot(), target);
+      const dir = await resolveTargetDir(usersRoot(), target);
       if (!dir) {
-        respondCustomerDirMissing(res, target.slug);
+        respondUserDirMissing(res, target.slug);
         return;
       }
       const mutation = await runWorkspaceGitMutation(
@@ -370,9 +370,9 @@ const gitPushHandler: AuthorizedHandler = async (req, res, _next, target) => {
     }
     const start = Date.now();
     await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveTargetDir(customersRoot(), target);
+      const dir = await resolveTargetDir(usersRoot(), target);
       if (!dir) {
-        respondCustomerDirMissing(res, target.slug);
+        respondUserDirMissing(res, target.slug);
         return;
       }
       const mutation = await runWorkspaceGitMutation(
@@ -402,9 +402,9 @@ const gitBranchCheckoutHandler: AuthorizedHandler = async (req, res, _next, targ
     }
     const start = Date.now();
     await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveTargetDir(customersRoot(), target);
+      const dir = await resolveTargetDir(usersRoot(), target);
       if (!dir) {
-        respondCustomerDirMissing(res, target.slug);
+        respondUserDirMissing(res, target.slug);
         return;
       }
       const mutation = await runWorkspaceGitMutation(

@@ -8,7 +8,7 @@ import {
 } from "@octogee/core/crew";
 
 describe("CREW_ROLES", () => {
-  it("contains only coach", () => {
+  it("contains only agent", () => {
     expect(CREW_ROLES).toEqual(["coach"]);
   });
 });
@@ -28,7 +28,7 @@ describe("TIERS", () => {
 });
 
 describe("TIER_CREW_ACCESS", () => {
-  it("all tiers get only coach", () => {
+  it("all tiers get only agent", () => {
     for (const tier of TIERS) {
       expect(TIER_CREW_ACCESS[tier]).toEqual(["coach"]);
     }

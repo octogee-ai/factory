@@ -260,7 +260,7 @@ export function createActivityBindingRegistry(
         ...(ref.inputPostId ? { inputPostId: ref.inputPostId } : {}),
         channelDocPath: target.channelDocPath,
         channelCreateAt,
-        coachMmUserId: identity.coachMmUserId,
+        defaultAgentMmUserId: identity.coachMmUserId,
         coachToken: identity.coachToken,
         attentionMention: `@${identity.workspaceSlug}`,
       });

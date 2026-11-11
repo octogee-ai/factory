@@ -9,12 +9,12 @@ export type GatewayRootReader = Pick<PlatformStateRepositories, "gateways">;
 export type GatewayRuntimeReader = Pick<PlatformStateRepositories, "fleetRegistry">;
 export type GatewayStateReader = GatewayRootReader & GatewayRuntimeReader;
 export declare function podBelongsToGateway(gatewayId: string, podName: string | undefined): boolean;
-export declare function configuredBuilderBootstrapAllowed(value: unknown, input: {
+export declare function configuredUserBootstrapAllowed(value: unknown, input: {
     gatewayId: string;
     podName: string | undefined;
     slug: string;
 }): boolean;
-export declare function configuredBuilderCredentialBootstrapAllowed(value: unknown, input: {
+export declare function configuredUserCredentialBootstrapAllowed(value: unknown, input: {
     gatewayId: string;
     podName: string | undefined;
     slug: string;

@@ -8,7 +8,7 @@ export interface ResolvedGateway {
 }
 
 export function rosteredAgentIdsForSlug(userData: unknown, slug: string): string[] {
-  const coach = `octogee-${slug}-coach`;
+  const defaultAgent = `octogee-${slug}-coach`;
   const openclaw = (userData as { provisioning?: { openclaw?: { agentIds?: unknown } | null } | null } | null)
     ?.provisioning?.openclaw;
   const listed = Array.isArray(openclaw?.agentIds) ? openclaw.agentIds : [];
@@ -16,17 +16,17 @@ export function rosteredAgentIdsForSlug(userData: unknown, slug: string): string
     (id): id is string =>
       typeof id === "string" && isSafeAgentId(id) && id.startsWith(`octogee-${slug}-`),
   );
-  return [coach, ...own.filter((id) => id !== coach)];
+  return [defaultAgent, ...own.filter((id) => id !== defaultAgent)];
 }
 
 export async function resolveUserGateway(uid: string): Promise<ResolvedGateway | null> {
-  const builder = await platformStateStore.builders.records.get(uid);
-  const slug = builder?.slug;
-  const gatewayId = builder?.gateway?.gatewayId;
+  const user = await platformStateStore.users.records.get(uid);
+  const slug = user?.slug;
+  const gatewayId = user?.gateway?.gatewayId;
   if (!slug || !gatewayId) return null;
   return {
     slug,
     gatewayId,
-    agentIds: rosteredAgentIdsForSlug({ provisioning: { openclaw: { agentIds: builder.agents.agentIds } } }, slug),
+    agentIds: rosteredAgentIdsForSlug({ provisioning: { openclaw: { agentIds: user.agents.agentIds } } }, slug),
   };
 }

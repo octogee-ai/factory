@@ -210,10 +210,10 @@ case "$SECRET" in
     # llm-broker is the SOLE consumer of octogee-anthropic — the platform
     # provider-key resolver lives there. No gateway carries this key: shared pods
     # route every agent turn through the broker (ANTHROPIC_BASE_URL), and
-    # builder/operator pods hold their own per-gateway broker token
+    # user/operator pods hold their own per-gateway broker token
     # (gateway-model-key-<id>), never octogee-anthropic. So restarting gateways
     # here is pure downtime — and a shared-gateway bounce is a hard reset of a
-    # live multi-tenant pod, NOT a Cowboy blue/green roll. Restart only the broker;
+    # live multi-tenant pod, NOT a fleet controller blue/green roll. Restart only the broker;
     # its rollout is a graceful 2-replica roll.
     info "Restarting llm-broker..."
     rollout_restart llm-broker

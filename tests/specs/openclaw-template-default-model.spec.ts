@@ -31,7 +31,7 @@ describe("infra/gateway/openclaw.template.json — platform default model", () =
     expect(modelRefForCatalogEntry(entry!)).toBe(DEFAULT_MODEL_REF);
   });
 
-  it("keeps the platform model allowlist metadata for mounted customer agents", () => {
+  it("keeps the platform model allowlist metadata for mounted user agents", () => {
     const template = readTemplate();
     const entry = catalogEntryForModelRef(DEFAULT_MODEL_REF)!;
 

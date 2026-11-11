@@ -9,7 +9,7 @@ vi.mock("../lib/platform-state.js", async () => {
   return { platformStateStore: createDocumentFixtureStore(h.docs) };
 });
 
-const { accountActiveInStore, userDataWithBuilderState } = await import("../lib/user-platform-state.js");
+const { accountActiveInStore, userDataWithUserState } = await import("../lib/user-platform-state.js");
 const { platformStateStore } = await import("../lib/platform-state.js");
 
 beforeEach(() => {
@@ -34,14 +34,14 @@ describe("accountActiveInStore", () => {
   });
 
   it("propagates a store failure rather than deciding from the product document", async () => {
-    const get = vi.spyOn(platformStateStore.builders.records, "get").mockRejectedValueOnce(new Error("store unavailable"));
+    const get = vi.spyOn(platformStateStore.users.records, "get").mockRejectedValueOnce(new Error("store unavailable"));
 
     await expect(accountActiveInStore("u1")).rejects.toThrow("store unavailable");
     get.mockRestore();
   });
 });
 
-describe("userDataWithBuilderState", () => {
+describe("userDataWithUserState", () => {
   it("replaces stale projected fields with the authoritative record and keeps product fields", async () => {
     h.docs.set("users/u1", {
       workspaceId: "mira",
@@ -49,9 +49,9 @@ describe("userDataWithBuilderState", () => {
       mattermost: { userId: "mm-current" },
       provisioning: { openclaw: { gatewayId: "gw-current", slug: "mira", agentIds: ["octogee-mira-coach"] } },
     });
-    const builder = await platformStateStore.builders.records.get("u1");
+    const user = await platformStateStore.users.records.get("u1");
 
-    const merged = userDataWithBuilderState(
+    const merged = userDataWithUserState(
       {
         username: "mira",
         firstName: "Mira",
@@ -59,7 +59,7 @@ describe("userDataWithBuilderState", () => {
         mattermost: { userId: "mm-stale", username: "mira-mm" },
         provisioning: { openclaw: { gatewayId: "gw-stale", slug: "old", agentIds: [] } },
       },
-      builder,
+      user,
     );
 
     expect(merged).toMatchObject({
@@ -73,7 +73,7 @@ describe("userDataWithBuilderState", () => {
   });
 
   it("clears projected authority when the store has no record", () => {
-    const merged = userDataWithBuilderState(
+    const merged = userDataWithUserState(
       { username: "mira", accountLifecycle: { status: "active" }, mattermost: { userId: "mm-stale" } },
       null,
     );
@@ -83,15 +83,15 @@ describe("userDataWithBuilderState", () => {
 
   it("returns the same object when the projection already matches", async () => {
     h.docs.set("users/u1", { workspaceId: "mira", username: "mira" });
-    const builder = await platformStateStore.builders.records.get("u1");
+    const user = await platformStateStore.users.records.get("u1");
     const userData = {
       username: "mira",
       workspaceId: "mira",
-      accountLifecycle: builder?.accountLifecycle ?? null,
-      mattermost: { userId: builder?.mattermostUserId ?? null },
-      provisioning: { openclaw: { gatewayId: null, agentIds: builder?.agents.agentIds ?? [], slug: builder?.slug ?? null } },
+      accountLifecycle: user?.accountLifecycle ?? null,
+      mattermost: { userId: user?.mattermostUserId ?? null },
+      provisioning: { openclaw: { gatewayId: null, agentIds: user?.agents.agentIds ?? [], slug: user?.slug ?? null } },
     };
 
-    expect(userDataWithBuilderState(userData, builder)).toBe(userData);
+    expect(userDataWithUserState(userData, user)).toBe(userData);
   });
 });

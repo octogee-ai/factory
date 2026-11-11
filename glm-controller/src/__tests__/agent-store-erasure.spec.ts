@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCustomerAgentStoreErasure, preserveCustomerGatewayRetirement } from "../lib/customer-ops/agent-store-erasure.js";
+import { createUserAgentStoreErasure, preserveUserGatewayRetirement } from "../lib/user-ops/agent-store-erasure.js";
 import type { AgentStoreErasureCustody } from "@octogee/core/agent-store-credentials";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
@@ -34,10 +34,10 @@ function harness() {
   const deps = {
     store, now: () => 20,
     sharedGatewayRetired: vi.fn(async () => true), runtimeAbsent: vi.fn(async () => true), ownerHomeAbsent: vi.fn(async () => true),
-    eraseComputer: vi.fn(async (_uid: string) => undefined),
+    eraseVm: vi.fn(async (_uid: string) => undefined),
     readSharedSource: vi.fn(async (_gatewayId: string) => ({ gatewayId: "shared-old", podUid: "pod-original", startedAt: 1,
       status: "ready", customers: ["ceckert-test"], migratingIn: [] })),
-    unmountSharedCustomer: vi.fn(async () => undefined),
+    unmountSharedUser: vi.fn(async () => undefined),
     eraseStores: vi.fn(async (_cleanup, custody: AgentStoreErasureCustody) => {
       await custody.assertWritersStopped([target]);
       const bound = await custody.bindTargets([target]);
@@ -47,10 +47,10 @@ function harness() {
   };
   const claim = vi.fn(async () => undefined);
   return { records, store, deps, target, cleanup, operation, claim,
-    run: () => createCustomerAgentStoreErasure(deps)(cleanup as never, "delete-1", operation as never, claim) };
+    run: () => createUserAgentStoreErasure(deps)(cleanup as never, "delete-1", operation as never, claim) };
 }
 
-function liveBarn() {
+function liveSharedGateway() {
   const h = harness(); h.deps.sharedGatewayRetired.mockResolvedValue(false);
   h.records["customerDeletionJobs/delete-1"]!.suspensionOperationId = "suspend-1";
   h.records["glmOperations/suspend-1"] = { id: "suspend-1", kind: "suspend-customer", status: "succeeded",
@@ -58,7 +58,7 @@ function liveBarn() {
   return h;
 }
 
-describe("due customer PostgreSQL erasure authority", () => {
+describe("due user PostgreSQL erasure authority", () => {
   it("uses captured consent without current assignment and persists targets before erasure", async () => {
     const h = harness();
     await h.run();
@@ -80,7 +80,7 @@ describe("due customer PostgreSQL erasure authority", () => {
     ["assignment", "gateways/shared-new/assignments/uid-1", assignment("shared-new", "uid-1")],
     ["migration", "glmOperations/migration", { status: "running", input: { uid: "uid-1" } }],
     ["owned running host", "gateways/builder-old", root("builder-old", { ownerUid: "uid-1", gatewayClass: "builder", desiredStatus: "running" })],
-    ["customer transfer", "glmMigrationTransferTasks/move-1__final", transferTask({ slug: "alice" })],
+    ["user transfer", "glmMigrationTransferTasks/move-1__final", transferTask({ slug: "alice" })],
     ["transfer from the captured gateway", "glmMigrationTransferTasks/move-1__final", transferTask({ sourceGatewayId: "shared-old" })],
     ["transfer into the captured gateway", "glmMigrationTransferTasks/move-1__final", transferTask({ targetGatewayId: "shared-old" })],
   ])("refuses %s before invoking the database owner", async (_label, path, patch) => {
@@ -95,62 +95,62 @@ describe("due customer PostgreSQL erasure authority", () => {
     h.deps.readSharedSource.mockResolvedValue(null as never);
     await expect(h.run()).rejects.toThrow("awaits captured Shared retirement");
     expect(h.records["customerDeletionJobs/delete-1"]!.postgresAgentStoreTargets).toBeUndefined();
-    expect(h.deps.eraseComputer).not.toHaveBeenCalled();
+    expect(h.deps.eraseVm).not.toHaveBeenCalled();
   });
 
-  it("completes exact customer cleanup on a live Barn that still serves another customer", async () => {
-    const h = liveBarn();
+  it("completes exact user cleanup on a live shared gateway that still serves another user", async () => {
+    const h = liveSharedGateway();
     await h.run();
-    expect(h.deps.unmountSharedCustomer).toHaveBeenCalledExactlyOnceWith(h.cleanup, {
+    expect(h.deps.unmountSharedUser).toHaveBeenCalledExactlyOnceWith(h.cleanup, {
       podUid: "pod-original", agentIds: [h.target.agentId],
     }, h.operation);
     expect(h.records["customerDeletionJobs/delete-1"]!.sharedAgentStoreCleanup).toMatchObject({
       gatewayId: "shared-old", podUid: "pod-original", startedAt: 1, agentIds: [h.target.agentId], complete: true,
     });
     await h.run();
-    expect(h.deps.unmountSharedCustomer).toHaveBeenCalledOnce();
+    expect(h.deps.unmountSharedUser).toHaveBeenCalledOnce();
   });
 
   it("requires exact Native cleanup coverage for a PG-only project", async () => {
-    const h = liveBarn();
+    const h = liveSharedGateway();
     const targets = [h.target, { ...h.target, namespace: "project", agentId: "octogee-alice-proj-hidden-coach" }];
     h.deps.eraseStores.mockImplementation(async (_cleanup, custody) => {
       await custody.assertWritersStopped(targets);
       await custody.bindTargets(targets);
     });
     await h.run();
-    expect(h.deps.unmountSharedCustomer).toHaveBeenCalledWith(h.cleanup, {
+    expect(h.deps.unmountSharedUser).toHaveBeenCalledWith(h.cleanup, {
       podUid: "pod-original", agentIds: targets.map(target => target.agentId),
     }, h.operation);
   });
 
   it.each([null, { status: "booting" }, { gatewayId: "shared-replacement" }, { podUid: "" }, { startedAt: NaN }])(
     "refuses missing or invalid Shared runtime before Native effects: %j", async change => {
-      const h = liveBarn();
+      const h = liveSharedGateway();
       h.deps.readSharedSource.mockResolvedValue(change === null ? null as never : { ...await h.deps.readSharedSource("shared-old"), ...change });
       await expect(h.run()).rejects.toThrow("awaits captured Shared retirement");
-      expect(h.deps.unmountSharedCustomer).not.toHaveBeenCalled();
+      expect(h.deps.unmountSharedUser).not.toHaveBeenCalled();
     });
 
   it.each([{ podUid: "recreated-pod" }, { startedAt: 2 }, { status: "booting" }, { customers: ["alice", "ceckert-test"] }])(
     "does not publish completion after the Shared source changes: %j", async change => {
-      const h = liveBarn(); const source = await h.deps.readSharedSource("shared-old");
+      const h = liveSharedGateway(); const source = await h.deps.readSharedSource("shared-old");
       h.deps.readSharedSource.mockResolvedValueOnce(source).mockResolvedValueOnce({ ...source, ...change });
       await expect(h.run()).rejects.toThrow("Shared runtime changed");
       expect(h.records["customerDeletionJobs/delete-1"]!.sharedAgentStoreCleanup.complete).toBe(false);
     });
 
   it("refuses a recreated Shared process instead of adopting its old cleanup proof", async () => {
-    const h = liveBarn(); await h.run();
+    const h = liveSharedGateway(); await h.run();
     h.deps.readSharedSource.mockResolvedValue({ ...await h.deps.readSharedSource("shared-old"), startedAt: 2 });
     await expect(h.run()).rejects.toThrow("Shared source or agent coverage changed");
-    expect(h.deps.unmountSharedCustomer).toHaveBeenCalledOnce();
+    expect(h.deps.unmountSharedUser).toHaveBeenCalledOnce();
   });
 
   it("requires succeeded suspension for this exact due deletion before Native effects", async () => {
-    const h = liveBarn(); h.records["glmOperations/suspend-1"]!.input.deletionId = "other";
+    const h = liveSharedGateway(); h.records["glmOperations/suspend-1"]!.input.deletionId = "other";
     await expect(h.run()).rejects.toThrow("lacks completed suspension");
-    expect(h.deps.unmountSharedCustomer).not.toHaveBeenCalled();
+    expect(h.deps.unmountSharedUser).not.toHaveBeenCalled();
   });
 
   it("rechecks deletion authority after waiting for retirement", async () => {
@@ -163,19 +163,19 @@ describe("due customer PostgreSQL erasure authority", () => {
     expect(h.records["customerDeletionJobs/delete-1"]!.postgresAgentStoreTargets).toBeUndefined();
   });
 
-  it("uses existing computer erasure and refuses while its home remains", async () => {
+  it("uses existing VM erasure and refuses while its home remains", async () => {
     const h = harness(); h.deps.ownerHomeAbsent.mockResolvedValue(false);
-    await expect(h.run()).rejects.toThrow("retained a Builder computer or home");
-    expect(h.deps.eraseComputer).toHaveBeenCalledWith("uid-1");
+    await expect(h.run()).rejects.toThrow("retained a gateway VM or home");
+    expect(h.deps.eraseVm).toHaveBeenCalledWith("uid-1");
     expect(h.records["customerDeletionJobs/delete-1"]!.postgresAgentStoreTargets).toBeUndefined();
   });
 
-  it("requires preserved Builder retirement and actual runtime absence", async () => {
+  it("requires preserved user retirement and actual runtime absence", async () => {
     const h = harness(); h.cleanup.currentGatewayId = "builder-old";
     h.records["customerDeletionJobs/delete-1"]!.currentGatewayId = "builder-old";
-    await expect(h.run()).rejects.toThrow("lacks its captured Builder retirement proof");
+    await expect(h.run()).rejects.toThrow("lacks its captured user retirement proof");
     const proof = { gatewayId: "builder-old", operationId: "retire-old", version: 1, completedAt: 15, runtime: "cluster" as const };
-    await preserveCustomerGatewayRetirement(h.store, "uid-1", "delete-1", proof);
+    await preserveUserGatewayRetirement(h.store, "uid-1", "delete-1", proof);
     h.deps.runtimeAbsent.mockResolvedValue(false);
     await expect(h.run()).rejects.toThrow("retained a gateway runtime");
     h.deps.runtimeAbsent.mockResolvedValue(true);

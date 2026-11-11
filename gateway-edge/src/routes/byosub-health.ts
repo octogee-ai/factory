@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import * as fs from "fs";
 import * as path from "path";
 import {
-  coachAgentId,
+  userDefaultAgentId,
   deriveByosubHealth,
   isSafeGatewayId,
 } from "../lib/byosub.js";
@@ -25,7 +25,7 @@ import {
 //
 // /api/model-credentials/subscription/connection (cluster) reads only the user integration
 // authority, which survives a reroll/relocation regardless of whether the destination
-// pod re-materialized a working credential. This route runs ON the customer's
+// pod re-materialized a working credential. This route runs ON the user's
 // own pod (locality seam) and crosses that expectation with pod reality — is the
 // auth-profile store actually present, and does codex consider it alive — so a
 // silent boot-sync materialization failure reports `missing` instead of a false
@@ -76,7 +76,7 @@ export function createByosubHealthRouter(deps: ByosubHealthDeps): Router {
           notOnThisPod(res);
           return;
         }
-        const agentId = coachAgentId(resolved.slug);
+        const agentId = userDefaultAgentId(resolved.slug);
         // The slug can fall back to the client-writable `username`, and below it
         // feeds filesystem paths (codexAgentDir / CUSTOMERS_DIR). isSafeAgentId
         // ([a-z0-9-]{1,64}) on the derived id transitively constrains the slug to

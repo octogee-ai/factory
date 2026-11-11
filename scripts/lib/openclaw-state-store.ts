@@ -4,7 +4,7 @@ import { readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
 
 export type LocalStateStoreKind = "absent" | "anchor" | "sqlite";
 
-export function clusterBuilderGateway(env: NodeJS.ProcessEnv): boolean {
+export function clusterIsolatedGateway(env: NodeJS.ProcessEnv): boolean {
   return env.GATEWAY_CLASS === "builder" && env.GATEWAY_RUNTIME_KIND === "cluster";
 }
 

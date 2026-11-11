@@ -19,9 +19,9 @@ export interface LoadPlan {
   gatewayId: string;
   targets: LoadTarget[];
   readConcurrency: number[];
-  coachConcurrency: number[];
+  defaultAgentConcurrency: number[];
   readRounds: number;
-  maxCoachTurns: number;
+  maxDefaultAgentTurns: number;
   turnTimeoutMs: number;
 }
 
@@ -65,17 +65,17 @@ function parseTargets(input: unknown): LoadTarget[] {
 export function parseLoadPlan(input: unknown): LoadPlan {
   const plan = object(input);
   if (Object.keys(plan).some((key) => ![
-    "gatewayId", "targets", "readConcurrency", "coachConcurrency", "readRounds", "maxCoachTurns", "turnTimeoutMs",
+    "gatewayId", "targets", "readConcurrency", "defaultAgentConcurrency", "readRounds", "maxDefaultAgentTurns", "turnTimeoutMs",
   ].includes(key))) throw new Error("Unknown plan field; API origin and namespace cannot be overridden");
   if (typeof plan.gatewayId !== "string" || !SHARED_SLOT_RE.test(plan.gatewayId)) throw new Error("Expected a shared gateway ID");
   const targets = parseTargets(plan.targets);
   const readConcurrency = concurrency(plan.readConcurrency ?? [1, Math.min(2, targets.length), targets.length], targets.length, "readConcurrency");
-  const coachConcurrency = concurrency(plan.coachConcurrency ?? [], targets.length, "coachConcurrency");
-  const maxCoachTurns = integer(plan.maxCoachTurns ?? 0, 0, 64, "maxCoachTurns");
-  if (coachConcurrency.reduce((a, b) => a + b, 0) > maxCoachTurns) throw new Error("Coach stages exceed maxCoachTurns");
-  if (readConcurrency.length + coachConcurrency.length === 0) throw new Error("At least one stage is required");
+  const defaultAgentConcurrency = concurrency(plan.defaultAgentConcurrency ?? [], targets.length, "defaultAgentConcurrency");
+  const maxDefaultAgentTurns = integer(plan.maxDefaultAgentTurns ?? 0, 0, 64, "maxDefaultAgentTurns");
+  if (defaultAgentConcurrency.reduce((a, b) => a + b, 0) > maxDefaultAgentTurns) throw new Error("Agent stages exceed maxDefaultAgentTurns");
+  if (readConcurrency.length + defaultAgentConcurrency.length === 0) throw new Error("At least one stage is required");
   return {
-    gatewayId: plan.gatewayId, targets, readConcurrency, coachConcurrency, maxCoachTurns,
+    gatewayId: plan.gatewayId, targets, readConcurrency, defaultAgentConcurrency, maxDefaultAgentTurns,
     readRounds: integer(plan.readRounds ?? 2, 1, 5, "readRounds"),
     turnTimeoutMs: integer(plan.turnTimeoutMs ?? 120_000, 1_000, 180_000, "turnTimeoutMs"),
   };
@@ -101,7 +101,7 @@ export interface LoadMeasurement {
   failure?: { code: "http" | "cancelled" | "operation-failed"; httpStatus?: number };
 }
 
-export function hasCoachReply(history: unknown, marker: string): boolean {
+export function hasDefaultAgentReply(history: unknown, marker: string): boolean {
   const messages = object(history).messages;
   if (!Array.isArray(messages)) throw new Error("Invalid chat history response");
   return messages.some((raw) => {
@@ -125,8 +125,8 @@ export async function runLoadPlan(plan: LoadPlan, deps: {
   const signal = AbortSignal.any([deps.signal, stop.signal]);
   const clients = new Set<LoadClient>();
   const stages = [
-    ...plan.readConcurrency.map((n, index) => ({ n, coach: false, name: `reads-${index + 1}-${n}` })),
-    ...plan.coachConcurrency.map((n, index) => ({ n, coach: true, name: `coaches-${index + 1}-${n}` })),
+    ...plan.readConcurrency.map((n, index) => ({ n, defaultAgent: false, name: `reads-${index + 1}-${n}` })),
+    ...plan.defaultAgentConcurrency.map((n, index) => ({ n, defaultAgent: true, name: `default-agents-${index + 1}-${n}` })),
   ];
   try {
     for (const [index, stage] of stages.entries()) {
@@ -147,7 +147,7 @@ export async function runLoadPlan(plan: LoadPlan, deps: {
         let client = await timed("connect", () => deps.connect(target, signal));
         clients.add(client);
         try {
-          if (!stage.coach) {
+          if (!stage.defaultAgent) {
             for (let round = 0; round < plan.readRounds; round++) {
               await timed("read", () => client.read());
               await deps.sleep(1_000, signal);
@@ -158,7 +158,7 @@ export async function runLoadPlan(plan: LoadPlan, deps: {
               await timed("read", () => client.read());
             }
           } else {
-            await timed("coach_complete", () => performCoachTurn(client, {
+            await timed("coach_complete", () => performDefaultAgentTurn(client, {
               timeoutMs: plan.turnTimeoutMs, signal, now, sleep: deps.sleep,
               send: (message, id) => timed("send_ack", () => client.send(message, id)),
             }));
@@ -176,7 +176,7 @@ export async function runLoadPlan(plan: LoadPlan, deps: {
   } finally { for (const client of clients) client.close(); }
 }
 
-export async function performCoachTurn(client: LoadClient, opts: {
+export async function performDefaultAgentTurn(client: LoadClient, opts: {
   timeoutMs: number;
   signal: AbortSignal;
   sleep(ms: number, signal: AbortSignal): Promise<void>;
@@ -195,9 +195,9 @@ export async function performCoachTurn(client: LoadClient, opts: {
     await send(`Capacity test. Reply with exactly ${marker}. Do not use tools or perform any other action.`, id);
     for (;;) {
       opts.signal.throwIfAborted();
-      if (now() >= deadline) throw new Error("Coach completion deadline exceeded");
+      if (now() >= deadline) throw new Error("Agent completion deadline exceeded");
       const history = await client.read();
-      if (now() < deadline && hasCoachReply(history, marker)) return;
+      if (now() < deadline && hasDefaultAgentReply(history, marker)) return;
       await opts.sleep(Math.min(pollMs, Math.max(0, deadline - now())), opts.signal);
     }
   } finally { clearTimeout(timeout); }

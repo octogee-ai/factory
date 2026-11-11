@@ -77,8 +77,8 @@ describe("workspace save helpers", () => {
           gcsPrefix: "customers/alice/projects/lantern",
         },
         {
-          customersRoot: "/customers",
-          resolveCustomerDir: vi.fn(async () => null),
+          usersRoot: "/customers",
+          resolveUserDir: vi.fn(async () => null),
           resolveProjectDir,
           syncCleanWorkspaceToRemote,
         },

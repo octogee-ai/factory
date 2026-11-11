@@ -24,11 +24,11 @@ import {
   restoreSourceWorkspaceIdentities,
   type MigrationActivationManifest,
 } from "./migration-activation-manifest";
-import { initializeRelocatedProjectCoach, projectCoachWorkspace } from "./project-coach-workspaces.js";
+import { initializeRelocatedProjectAgent, projectAgentWorkspace } from "./project-agent-workspaces.js";
 import { platformOpenAiEmbeddingSecretId } from "./platform-embedding-refs";
 import {
-  CUSTOMER_CODE_DENIED_TOOLS,
-  CUSTOMER_WORKFLOW_TOOLS,
+  USER_CODE_DENIED_TOOLS,
+  USER_WORKFLOW_TOOLS,
   PRODUCTIVITY_TOOL_NAMES,
   PROJECT_AGENT_ALLOWED_TOOLS,
   PROJECT_AGENT_DENIED_TOOLS,
@@ -57,7 +57,7 @@ function manifest(): MigrationActivationManifest {
     agentId: "octogee-alice-coach",
     accountId: "alice-coach",
     agent: { id: "octogee-alice-coach", model: "custom-model" },
-    mattermostAccount: { botToken: "coach-pat", groupAllowFrom: ["mm-user"] },
+    mattermostAccount: { botToken: "default-agent-pat", groupAllowFrom: ["mm-user"] },
     bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } }],
     projectAgents: [],
   };
@@ -68,7 +68,7 @@ function withoutTools(agents: Array<Record<string, unknown>>): Array<Record<stri
 }
 
 describe("activationManifestAgentIds", () => {
-  it("lists the coach and every project agent the activation installs", () => {
+  it("lists the agent and every project agent the activation installs", () => {
     expect(
       activationManifestAgentIds({
         ...manifest(),
@@ -119,7 +119,7 @@ describe("migration activation manifest", () => {
     expect(patch.agents.entries).not.toHaveProperty("octogee-alice-proj-residue-coach");
   });
 
-  it("extracts only the per-customer OpenClaw fragments needed for local activation", async () => {
+  it("extracts only the per-user OpenClaw fragments needed for local activation", async () => {
     const dir = await mkTmp();
     const configPath = path.join(dir, "openclaw.json");
     await fs.writeFile(
@@ -134,7 +134,7 @@ describe("migration activation manifest", () => {
         channels: {
           mattermost: {
             accounts: {
-              "alice-coach": { botToken: "coach-pat" },
+              "alice-coach": { botToken: "default-agent-pat" },
               "bob-coach": { botToken: "other-pat" },
             },
           },
@@ -151,7 +151,7 @@ describe("migration activation manifest", () => {
     })).resolves.toMatchObject({
       slug: "alice",
       agent: { id: "octogee-alice-coach", model: "custom-model" },
-      mattermostAccount: { botToken: "coach-pat" },
+      mattermostAccount: { botToken: "default-agent-pat" },
       bindings: [{ agentId: "octogee-alice-coach" }],
     });
   });
@@ -163,7 +163,7 @@ describe("migration activation manifest", () => {
       configPath,
       JSON.stringify({
         agents: { entries: { "octogee-alice-coach": { model: "custom-model" } } },
-        channels: { mattermost: { accounts: { "alice-coach": { botToken: "coach-pat" } } } },
+        channels: { mattermost: { accounts: { "alice-coach": { botToken: "default-agent-pat" } } } },
         bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } }],
       }),
     );
@@ -175,12 +175,12 @@ describe("migration activation manifest", () => {
     });
   });
 
-  it("rejects a source agent binding that claims another customer's account", async () => {
+  it("rejects a source agent binding that claims another user's account", async () => {
     const dir = await mkTmp();
     const configPath = path.join(dir, "openclaw.json");
     await fs.writeFile(configPath, JSON.stringify({
       agents: { list: [{ id: "octogee-alice-coach", model: "custom-model" }] },
-      channels: { mattermost: { accounts: { "alice-coach": { botToken: "coach-pat" } } } },
+      channels: { mattermost: { accounts: { "alice-coach": { botToken: "default-agent-pat" } } } },
       bindings: [{
         agentId: "octogee-alice-coach",
         match: { channel: "mattermost", accountId: "mike-coach" },
@@ -192,7 +192,7 @@ describe("migration activation manifest", () => {
     })).rejects.toThrow("foreign binding scope");
   });
 
-  it("adds the stable account route when reading a peer-only customer manifest", async () => {
+  it("adds the stable account route when reading a peer-only user manifest", async () => {
     const dir = await mkTmp();
     const peerOnly = {
       ...manifest(),
@@ -218,7 +218,7 @@ describe("migration activation manifest", () => {
     });
   });
 
-  it("carries every active project agent's account and bindings without carrying another builder", async () => {
+  it("carries every active project agent's account and bindings without carrying another user", async () => {
     const dir = await mkTmp();
     const configPath = path.join(dir, "openclaw.json");
     await fs.writeFile(
@@ -283,7 +283,7 @@ describe("migration activation manifest", () => {
     });
     await expect(readActivationManifest(dir, "alice")).resolves.toMatchObject({
       slug: "alice",
-      mattermostAccount: { botToken: "coach-pat" },
+      mattermostAccount: { botToken: "default-agent-pat" },
     });
   });
 
@@ -331,7 +331,7 @@ describe("migration activation manifest", () => {
     expect(accounts["alice-proj-scout"].baseUrl).toBe("${MM_URL}");
   });
 
-  it.each(["builder", "shared"] as const)("only sets the imported coach as system agent on a Builder: %s", async (gatewayClass) => {
+  it.each(["builder", "shared"] as const)("only sets the imported agent as system agent on a Builder: %s", async (gatewayClass) => {
     const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
     const rpc = {
       configGet: vi.fn(async () => ({ hash: "h1", config: {
@@ -383,7 +383,7 @@ describe("migration activation manifest", () => {
       { agentId: "octogee-bob-coach", keep: true },
       { agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } },
     ]);
-    // Dropping stale customer entries can shrink customer-scoped arrays — the OC
+    // Dropping stale user entries can shrink user-scoped arrays — the OC
     // destructive-array guard requires the intent confirmed via replacePaths. (No
     // alice-coach account in this base config, so the derived set is agents+bindings.)
     expect(configPatch.mock.calls[0][2]).toEqual({
@@ -396,7 +396,7 @@ describe("migration activation manifest", () => {
     });
   });
 
-  it("does not import a dedicated source coach's default flag into a shared roster", async () => {
+  it("does not import a dedicated source agent's default flag into a shared roster", async () => {
     const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
     const rpc = {
       configGet: vi.fn(async () => ({
@@ -429,7 +429,7 @@ describe("migration activation manifest", () => {
     ]);
   });
 
-  it("declares explicit roster ownership on a Barn activation that carries no auth anchor", async () => {
+  it("declares explicit roster ownership on a shared gateway activation that carries no auth anchor", async () => {
     const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
     const rpc = {
       configGet: vi.fn(async () => ({
@@ -511,7 +511,7 @@ describe("migration activation manifest", () => {
     expect(configPatch.mock.calls[0]?.[0]).not.toHaveProperty("commands");
   });
 
-  it("anchors Builder auth inheritance while retaining the coach routing default", async () => {
+  it("anchors user auth inheritance while retaining the agent routing default", async () => {
     const anchor = {
       id: "octogee-unmatched-route",
       name: "Unmatched Mattermost route",
@@ -609,7 +609,7 @@ describe("migration activation manifest", () => {
     });
   });
 
-  it("adds the Builder auth anchor to a default-less list roster", async () => {
+  it("adds the user auth anchor to a default-less list roster", async () => {
     const anchor = { id: "octogee-unmatched-route", heartbeat: { every: "0m" } };
     const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
     const rpc = {
@@ -664,7 +664,7 @@ describe("migration activation manifest", () => {
       .not.toHaveProperty("tools");
   });
 
-  it("lifts the exact shared coach tool fence when activating a Builder", async () => {
+  it("lifts the exact shared agent tool fence when activating a user", async () => {
     const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
     const rpc = {
       configGet: vi.fn(async () => ({
@@ -678,17 +678,17 @@ describe("migration activation manifest", () => {
       configPatch,
       close: vi.fn(async () => undefined),
     };
-    const sharedCoachTools = {
+    const sharedDefaultAgentTools = {
       profile: "coding",
-      alsoAllow: [...CUSTOMER_WORKFLOW_TOOLS],
-      deny: [...CUSTOMER_CODE_DENIED_TOOLS],
+      alsoAllow: [...USER_WORKFLOW_TOOLS],
+      deny: [...USER_CODE_DENIED_TOOLS],
       fs: { workspaceOnly: true },
       toolsBySender: {},
     };
 
     await applyOpenClawActivationManifest({
       ...manifest(),
-      agent: { ...manifest().agent, tools: sharedCoachTools },
+      agent: { ...manifest().agent, tools: sharedDefaultAgentTools },
     }, {
       rpc: rpc as never,
       log: vi.fn(),
@@ -701,7 +701,7 @@ describe("migration activation manifest", () => {
     expect(patch.agents.entries["octogee-alice-coach"]).not.toHaveProperty("tools");
   });
 
-  it("lifts the exact shared project-agent tool fence when activating a Builder", async () => {
+  it("lifts the exact shared project-agent tool fence when activating a user", async () => {
     const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
     const rpc = {
       configGet: vi.fn(async () => ({
@@ -746,7 +746,7 @@ describe("migration activation manifest", () => {
     expect(patch.agents.entries[projectAgentId]).not.toHaveProperty("tools");
   });
 
-  it("lifts drifted shared tool fences when a Builder returns from the Barn", async () => {
+  it("lifts drifted shared tool fences when a user returns from the shared gateway", async () => {
     const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
     const rpc = {
       configGet: vi.fn(async () => ({
@@ -761,10 +761,10 @@ describe("migration activation manifest", () => {
       close: vi.fn(async () => undefined),
     };
     const projectAgentId = "octogee-alice-proj-orbit-coach";
-    const driftedCoachTools = {
+    const driftedDefaultAgentTools = {
       profile: "full",
       alsoAllow: ["octogee_project_create", "delegated_access", "browser", "computer", "message"],
-      deny: [...CUSTOMER_CODE_DENIED_TOOLS, "automations"],
+      deny: [...USER_CODE_DENIED_TOOLS, "automations"],
       toolsBySender: {},
       fs: { workspaceOnly: true },
     };
@@ -779,7 +779,7 @@ describe("migration activation manifest", () => {
 
     await applyOpenClawActivationManifest({
       ...manifest(),
-      agent: { ...manifest().agent, tools: driftedCoachTools },
+      agent: { ...manifest().agent, tools: driftedDefaultAgentTools },
       projectAgents: [{
         agentId: projectAgentId,
         accountId: "alice-proj-orbit",
@@ -800,7 +800,7 @@ describe("migration activation manifest", () => {
     expect(patch.agents.entries[projectAgentId]).not.toHaveProperty("tools");
   });
 
-  it("preserves a Builder-owned coach tool policy during activation", async () => {
+  it("preserves a User-owned agent tool policy during activation", async () => {
     const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
     const rpc = {
       configGet: vi.fn(async () => ({
@@ -1130,7 +1130,7 @@ describe("migration activation manifest", () => {
           model: "beta-model",
           tools: {
             profile: "coding",
-            alsoAllow: CUSTOMER_WORKFLOW_TOOLS,
+            alsoAllow: USER_WORKFLOW_TOOLS,
             deny: ["preview_start", "preview_stop", "preview_list", "octogee_publish"],
             fs: { workspaceOnly: true },
             toolsBySender: {},
@@ -1138,7 +1138,7 @@ describe("migration activation manifest", () => {
           memory: { search: { provider: "openai-compatible", model: "text-embedding-3-small" } },
         }],
       },
-      channels: { mattermost: { accounts: { "alice-coach": { botToken: "coach-pat" } } } },
+      channels: { mattermost: { accounts: { "alice-coach": { botToken: "default-agent-pat" } } } },
       bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } }],
     }));
     const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
@@ -1213,7 +1213,7 @@ describe("migration activation manifest", () => {
     expect(configPatch).not.toHaveBeenCalled();
   });
 
-  it("preserves the target gateway's current coach model when activation replays stale agent metadata", async () => {
+  it("preserves the target gateway's current agent model when activation replays stale agent metadata", async () => {
     const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
       hash: "h2",
       config: patch,
@@ -1338,7 +1338,7 @@ describe.skipIf(process.platform !== "linux")("source rollback workspace identit
     return { root, workspace, project, value };
   }
 
-  it("preserves the private coach identity in a transfer without opening the checkout identity", async () => {
+  it("preserves the private agent identity in a transfer without opening the checkout identity", async () => {
     const f = await source();
     const project = path.join(f.workspace, ".system", "project-coaches", "orbit");
     await fs.mkdir(project, { recursive: true });
@@ -1368,8 +1368,8 @@ describe.skipIf(process.platform !== "linux")("source rollback workspace identit
     const incoming = await readActivationManifest(f.root, "alice");
     expect(privateProjectWorkspaceAgentIds(incoming).size).toBe(0);
     await restoreSourceWorkspaceIdentities(incoming, f.root, custody, async () => undefined);
-    await initializeRelocatedProjectCoach({ customerDir: f.workspace, project: "orbit", name: "Private Persona", emoji: "🐙" });
-    const privateIdentity = path.join(projectCoachWorkspace(f.workspace, "orbit"), "IDENTITY.md");
+    await initializeRelocatedProjectAgent({ customerDir: f.workspace, project: "orbit", name: "Private Persona", emoji: "🐙" });
+    const privateIdentity = path.join(projectAgentWorkspace(f.workspace, "orbit"), "IDENTITY.md");
     expect(await fs.readFile(privateIdentity, "utf8")).toContain("Private Persona");
     expect(await fs.readFile(oldIdentity, "utf8")).toBe("legacy repo identity");
   });
@@ -1490,18 +1490,18 @@ describe.skipIf(process.platform !== "linux")("source rollback workspace identit
     await expect(result).rejects.toThrow();
   });
 
-  it("restores only missing-agent target captures without rewriting a live coach", async () => {
+  it("restores only missing-agent target captures without rewriting a live agent", async () => {
     const f = await source(), ids = [f.value.agentId, f.value.projectAgents[0].agentId];
     const binding = { assignmentEpoch: 4, uid: "uid-alice", gatewayId: "shared-target", podUid: "target-pod" };
     await fs.writeFile(path.join(f.project, "IDENTITY.md"), "authored project");
     const capture = await captureTargetWorkspaceIdentities("alice", [ids[1]], f.root, binding);
     await writeActivationManifest(f.root, { ...f.value, targetWorkspaceIdentities: capture });
     await fs.writeFile(path.join(f.project, "IDENTITY.md"), "Native Name");
-    await fs.writeFile(path.join(f.workspace, "IDENTITY.md"), "live coach edit");
+    await fs.writeFile(path.join(f.workspace, "IDENTITY.md"), "live agent edit");
     const retained = await readActivationManifest(f.root, "alice");
     await restoreTargetWorkspaceIdentities(retained.targetWorkspaceIdentities!, "alice", ids, f.root, { custody: binding, assertCurrent: async () => undefined });
     expect(await fs.readFile(path.join(f.project, "IDENTITY.md"), "utf8")).toBe("authored project");
-    expect(await fs.readFile(path.join(f.workspace, "IDENTITY.md"), "utf8")).toBe("live coach edit");
+    expect(await fs.readFile(path.join(f.workspace, "IDENTITY.md"), "utf8")).toBe("live agent edit");
   });
 
   it("keeps source identity captures out of the Native config RPC payload", async () => {

@@ -1,6 +1,6 @@
 import {
   resolveGatewayRuntime,
-  type BuilderParkedComputer,
+  type UserParkedVm,
   type GatewayVmState,
   type GatewayVmStopReason,
   type Operation,
@@ -11,7 +11,7 @@ import type { GatewayVmClient, GatewayVmDescription } from "../lib/compute-vm.js
 
 export const GATEWAY_VM_ACTIONS = ["stop", "start", "delete", "replace"] as const;
 export type GatewayVmAction = (typeof GATEWAY_VM_ACTIONS)[number];
-const REPLACE_DISABLED = "State-preserving computer replacement is disabled until coverage, writer fencing, and recovery-anchor checks are implemented; VM and disks kept";
+const REPLACE_DISABLED = "State-preserving VM replacement is disabled until coverage, writer fencing, and recovery-anchor checks are implemented; VM and disks kept";
 
 export interface GatewayVmRecord {
   runtime: unknown;
@@ -20,15 +20,15 @@ export interface GatewayVmRecord {
 
 export interface GatewayVmDeps {
   vm: GatewayVmClient;
-  replaceStoppedComputer?: (gatewayId: string, operationId: string, assertAuthority: () => Promise<void>, options?: { forceOwnerUid: string; expectedInstanceId: string }) => Promise<Record<string, unknown>>;
+  replaceStoppedVm?: (gatewayId: string, operationId: string, assertAuthority: () => Promise<void>, options?: { forceOwnerUid: string; expectedInstanceId: string }) => Promise<Record<string, unknown>>;
   readGateway: (gatewayId: string) => Promise<GatewayVmRecord | null>;
   writeVmState: (gatewayId: string, vm: GatewayVmState | null) => Promise<void>;
   requestHomeCheckpoint: (gatewayId: string, requestedAt: number) => Promise<void>;
   clearHomeCheckpointRequest: (gatewayId: string) => Promise<void>;
   readHomeCheckpointCompletedAt: (gatewayId: string) => Promise<number | null>;
   clearVmForReplacement: (gatewayId: string) => Promise<void>;
-  readParkedComputer: (ownerUid: string) => Promise<BuilderParkedComputer | null>;
-  clearParkedComputer: (ownerUid: string) => Promise<void>;
+  readParkedVm: (ownerUid: string) => Promise<UserParkedVm | null>;
+  clearParkedVm: (ownerUid: string) => Promise<void>;
   wait: (ms: number) => Promise<void>;
   now: () => number;
   log: (msg: string) => void;
@@ -80,18 +80,18 @@ function invalidForceRequest(input: GatewayVmInput, op: Operation, gatewayId: st
   return input.force !== undefined && (input.force !== true || !!gatewayId || !ownerUid || input.uid !== ownerUid || op.origin !== "operator" || !nonEmptyString(op.createdBy));
 }
 
-async function replaceOwnerComputer(deps: GatewayVmDeps, op: Operation, ctx: OperationContext, input: GatewayVmInput, ownerUid: string): Promise<OperationResult> {
+async function replaceOwnerVm(deps: GatewayVmDeps, op: Operation, ctx: OperationContext, input: GatewayVmInput, ownerUid: string): Promise<OperationResult> {
   if (input.action !== "replace") return { steps: [], success: false, error: "gateway-vm ownerUid form supports only replace" };
-  if (!deps.replaceStoppedComputer) return { steps: [], success: false, error: REPLACE_DISABLED };
-  const parked = await deps.readParkedComputer(ownerUid);
+  if (!deps.replaceStoppedVm) return { steps: [], success: false, error: REPLACE_DISABLED };
+  const parked = await deps.readParkedVm(ownerUid);
   if (input.force !== true) {
-    if (!parked) return { steps: [], success: false, error: `Builder ${ownerUid} has no parked computer` };
+    if (!parked) return { steps: [], success: false, error: `User ${ownerUid} has no parked VM` };
     return replaceStopped(deps, parked.gatewayId, op, ctx);
   }
   const expectedInstanceId = nonEmptyString(input.expectedInstanceId);
   const expectedGatewayId = nonEmptyString(input.expectedGatewayId);
   if (!expectedInstanceId || !expectedGatewayId || (parked && (expectedGatewayId !== parked.gatewayId || expectedInstanceId !== parked.instanceId))) {
-    return { steps: [], success: false, error: "force replacement parked computer changed" };
+    return { steps: [], success: false, error: "force replacement parked VM changed" };
   }
   return replaceStopped(deps, expectedGatewayId, op, ctx, { forceOwnerUid: ownerUid, expectedInstanceId });
 }
@@ -105,7 +105,7 @@ export function createGatewayVmHandler(deps: GatewayVmDeps): OperationHandler {
       return { steps: [], success: false, error: "force replacement requires a journaled operator owner request" };
     }
     if (!gatewayId && ownerUid) {
-      return replaceOwnerComputer(deps, op, ctx, input, ownerUid);
+      return replaceOwnerVm(deps, op, ctx, input, ownerUid);
     }
     if (!gatewayId) return { steps: [], success: false, error: "missing gatewayId in op.input" };
     if (!isAction(input.action)) {
@@ -137,12 +137,12 @@ export function createGatewayVmHandler(deps: GatewayVmDeps): OperationHandler {
 }
 
 async function replaceStopped(deps: GatewayVmDeps, gatewayId: string, op: Operation, ctx: OperationContext, force?: { forceOwnerUid: string; expectedInstanceId: string }): Promise<OperationResult> {
-  if (!deps.replaceStoppedComputer) return { steps: [], success: false, error: REPLACE_DISABLED };
+  if (!deps.replaceStoppedVm) return { steps: [], success: false, error: REPLACE_DISABLED };
   const startedAt = deps.now();
   try {
-    const output = await deps.replaceStoppedComputer(gatewayId, op.id, async () => {
+    const output = await deps.replaceStoppedVm(gatewayId, op.id, async () => {
       await ctx.assertActiveClaim?.();
-      if (await ctx.cancellationRequested?.()) throw new Error("boot replacement cancelled; retained home and source computer kept");
+      if (await ctx.cancellationRequested?.()) throw new Error("boot replacement cancelled; retained home and source VM kept");
     }, ...(force ? [force] as const : [] as const));
     const done = step("vm-replace-boot", "done", startedAt, deps.now());
     await ctx.reportStep(done);

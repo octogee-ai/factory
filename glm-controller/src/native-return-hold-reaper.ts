@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type {
-  BuilderRecord,
+  PlatformUserRecord,
   FleetRegistryRecord,
   FleetRegistryVmHome,
   GatewayRoot,
@@ -40,7 +40,7 @@ interface HoldAuthority {
   runtime: Stored<FleetRegistryRecord> | null;
   operation: Stored<OperationRecord> | null;
   desired: Stored<GatewayRoot> | null;
-  owner: Stored<BuilderRecord> | null;
+  owner: Stored<PlatformUserRecord> | null;
 }
 
 const TERMINAL: ReadonlySet<ReturnOperationStatus> = new Set(["succeeded", "failed", "rolled-back", "missing"]);
@@ -90,7 +90,7 @@ async function releaseTerminalHold(
   if (heldReturnOperationId(runtime?.vmHome) !== returnOperationId || !TERMINAL.has(returnOperationStatus(returnOperationId, operation))) return null;
   if (desired?.gatewayClass !== "builder" || typeof desired.ownerUid !== "string") throw new Error("source ownership unavailable; hold retained");
   const ownerUid = desired.ownerUid;
-  const authority: HoldAuthority = { runtime, operation, desired, owner: await deps.store.builders.records.get(ownerUid) };
+  const authority: HoldAuthority = { runtime, operation, desired, owner: await deps.store.users.records.get(ownerUid) };
   if (!rollbackStillOwnsSource(authority, desired, gatewayId)) {
     const identity = nativeReturnSourceIdentity(runtime ?? undefined, desired);
     if (!identity || !await nativeReturnSourceStopped(deps.vm, identity)) throw new Error("exact source is not stopped or absent; hold retained");
@@ -101,7 +101,7 @@ async function releaseTerminalHold(
         tx.fleetRegistry.get(gatewayId),
         tx.journal.operations.get(returnOperationId),
         tx.gateways.roots.get(gatewayId),
-        tx.builders.records.get(ownerUid),
+        tx.users.records.get(ownerUid),
       ]).then(([runtime, operation, desired, owner]): HoldAuthority => ({ runtime, operation, desired, owner })),
       tx.journal.operations.get(journalId),
     ]);

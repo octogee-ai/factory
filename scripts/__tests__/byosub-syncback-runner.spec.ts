@@ -49,7 +49,7 @@ describe("byosub-syncback-runner loadTargets", () => {
   });
 });
 
-const COACH = "octogee-tester19-coach";
+const DEFAULT_AGENT = "octogee-tester19-coach";
 const PROJECT_AGENT = "octogee-tester19-proj-garden-coach";
 
 const jwt = (claims: Record<string, unknown>) =>
@@ -102,9 +102,9 @@ function writeStaleCodexHomeAuth(home: string, agentId: string): void {
   fs.writeFileSync(authPath, JSON.stringify({ tokens: { access_token: "stale", refresh_token: "r0" } }));
 }
 
-function builderHome(): string {
+function userHome(): string {
   const home = mkHome({
-    agents: { entries: { [COACH]: {}, [PROJECT_AGENT]: {}, "../../not-an-agent": {} } },
+    agents: { entries: { [DEFAULT_AGENT]: {}, [PROJECT_AGENT]: {}, "../../not-an-agent": {} } },
   });
   process.env.HOME = home;
   process.env.GATEWAY_ID = "tester19-m-abc";
@@ -116,7 +116,7 @@ it.skipIf(!postgresDsn)("syncs rotated credentials from a PostgreSQL shared stat
   const pg = createRequire(path.resolve(__dirname, "../../core/package.json"))("pg");
   const client = new pg.Client({ connectionString: postgresDsn });
   await client.connect();
-  const home = builderHome(), openclaw = path.join(home, ".openclaw");
+  const home = userHome(), openclaw = path.join(home, ".openclaw");
   const schema = "shared_auth_" + randomUUID().replaceAll("-", ""), storeId = randomUUID();
   const table = (name: string) => `${pg.escapeIdentifier(schema)}.${pg.escapeIdentifier(name)}`;
   try {
@@ -130,18 +130,18 @@ it.skipIf(!postgresDsn)("syncs rotated credentials from a PostgreSQL shared stat
     anchor.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)");
     anchor.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)").run(storeId, schema); anchor.close();
     writeAgentStore(home, "main", codexStore("stale-main", 1_789_736_200));
-    writeAgentStore(home, COACH, codexStore("stale-coach", 1_789_736_200));
+    writeAgentStore(home, DEFAULT_AGENT, codexStore("stale-coach", 1_789_736_200));
     writeAgentStore(home, PROJECT_AGENT, codexStore("stale-project", 1_789_736_200));
     process.env.OPENCLAW_AGENT_STORE_DSN = postgresDsn;
     const { push, sweepOnce } = await loadRunner();
     const first = await sweepOnce(new Map());
-    expect(pushedTokens(push).map(({ agentId, refresh }) => ({ agentId, refresh }))).toEqual([{ agentId: COACH, refresh: "r1-pg" }]);
+    expect(pushedTokens(push).map(({ agentId, refresh }) => ({ agentId, refresh }))).toEqual([{ agentId: DEFAULT_AGENT, refresh: "r1-pg" }]);
     push.mockClear();
     const second = await sweepOnce(first.prev);
     expect(push).not.toHaveBeenCalled();
     await client.query(`UPDATE ${table("config_machine_state")} SET value_json = $1 WHERE state_key = 'authProfiles.store'`, [JSON.stringify(codexStore("r2-pg", 1_789_740_000))]);
     await sweepOnce(second.prev);
-    expect(pushedTokens(push).map(({ agentId, refresh }) => ({ agentId, refresh }))).toEqual([{ agentId: COACH, refresh: "r2-pg" }]);
+    expect(pushedTokens(push).map(({ agentId, refresh }) => ({ agentId, refresh }))).toEqual([{ agentId: DEFAULT_AGENT, refresh: "r2-pg" }]);
     push.mockClear();
     await client.query(`UPDATE ${table("openclaw_schema_meta")} SET store_id = $1 WHERE store = 'state'`, [randomUUID()]);
     await expect(sweepOnce(second.prev)).rejects.toThrow("state store identity");
@@ -168,15 +168,15 @@ function pushedTokens(push: ReturnType<typeof vi.fn>): Array<{ agentId: string; 
 }
 
 describe("byosub-syncback-runner sweepOnce", () => {
-  it("pushes the rotated credential from OpenClaw's shared auth store under the coach, ignoring codex-home auth.json", async () => {
-    const home = builderHome();
-    writeStaleCodexHomeAuth(home, COACH);
+  it("pushes the rotated credential from OpenClaw's shared auth store under the defaultAgent, ignoring codex-home auth.json", async () => {
+    const home = userHome();
+    writeStaleCodexHomeAuth(home, DEFAULT_AGENT);
     writeSharedStore(home, codexStore("r1", 1_789_736_218));
     const { push, sweepOnce } = await loadRunner();
 
     const first = await sweepOnce(new Map());
     expect(pushedTokens(push)).toEqual([
-      { agentId: COACH, refresh: "r1", lastRefresh: "2026-09-18T12:56:58.000Z" },
+      { agentId: DEFAULT_AGENT, refresh: "r1", lastRefresh: "2026-09-18T12:56:58.000Z" },
     ]);
 
     push.mockClear();
@@ -186,26 +186,26 @@ describe("byosub-syncback-runner sweepOnce", () => {
     writeSharedStore(home, codexStore("r2", 1_789_740_000));
     await sweepOnce(second.prev);
     expect(pushedTokens(push)).toEqual([
-      { agentId: COACH, refresh: "r2", lastRefresh: "2026-09-18T14:00:00.000Z" },
+      { agentId: DEFAULT_AGENT, refresh: "r2", lastRefresh: "2026-09-18T14:00:00.000Z" },
     ]);
   });
 
   it("reads each agent's own auth store when OpenClaw has no shared store", async () => {
-    const home = builderHome();
-    writeStaleCodexHomeAuth(home, COACH);
-    writeAgentStore(home, COACH, codexStore("r1", 1_789_736_218));
+    const home = userHome();
+    writeStaleCodexHomeAuth(home, DEFAULT_AGENT);
+    writeAgentStore(home, DEFAULT_AGENT, codexStore("r1", 1_789_736_218));
     const { push, sweepOnce } = await loadRunner();
 
     await sweepOnce(new Map());
 
     expect(pushedTokens(push)).toEqual([
-      { agentId: COACH, refresh: "r1", lastRefresh: "2026-09-18T12:56:58.000Z" },
+      { agentId: DEFAULT_AGENT, refresh: "r1", lastRefresh: "2026-09-18T12:56:58.000Z" },
     ]);
   });
 
   it("pushes nothing while the auth store holds no ChatGPT credential", async () => {
-    const home = builderHome();
-    writeStaleCodexHomeAuth(home, COACH);
+    const home = userHome();
+    writeStaleCodexHomeAuth(home, DEFAULT_AGENT);
     writeSharedStore(home, { version: 1, profiles: {} });
     const { push, sweepOnce } = await loadRunner();
 

@@ -13,7 +13,7 @@ export interface ModelBrokerTokenLimits {
 // Plan/routing policy, distinct from spend limits. `freeTier` means "always serve
 // the house model on the house key, never billed" — degrade unconditionally rather
 // than only on window exhaustion. Paid tiers carry `freeTier: false` and degrade
-// only when their `spendWindowUsd` is exhausted. `houseFallback: false` (builders
+// only when their `spendWindowUsd` is exhausted. `houseFallback: false` (users
 // paying for infrastructure with no live token path) turns exhaustion into a hard
 // deny instead of a house-model degrade — pricing v3's "paying customers pay for
 // tokens" rule.
@@ -54,7 +54,7 @@ export interface IssueModelBrokerTokenInput {
   purpose?: ModelBrokerTokenPurpose;
   secretName: string;
   pointerKey?: string;
-  // Mint a standalone token with NO pointer (no revoke-on-reissue). Per-customer
+  // Mint a standalone token with NO pointer (no revoke-on-reissue). Per-user
   // shared tokens are re-minted whenever the secret-resolver re-resolves the keyRef,
   // so skipPointer prevents a re-mint from yanking a still-in-flight token — stale
   // tokens expire by TTL instead. Requires ttlSeconds to bound accumulation.

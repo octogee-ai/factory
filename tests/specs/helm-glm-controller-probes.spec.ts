@@ -30,7 +30,7 @@ function probes(): Record<string, Probe> {
   };
 }
 
-// A convergence pass holds Cowboy's event loop for seconds — one measured at
+// A convergence pass holds the fleet controller's event loop for seconds — one measured at
 // 11.9s over the shared pool — so /healthz cannot answer inside kubelet's 1s
 // default. When it could not, liveness killed the controller mid-reconcile and
 // orphaned whatever operation it had claimed, leaving rollouts "running" with

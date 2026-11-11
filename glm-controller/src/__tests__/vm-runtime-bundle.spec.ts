@@ -73,7 +73,7 @@ describe("renderVmRuntimeBundle", () => {
     expect(readSecret).not.toHaveBeenCalledWith(name, key);
   });
 
-  it("keeps home durable while translating Builder scratch volumes to boot storage", async () => {
+  it("keeps home durable while translating user scratch volumes to boot storage", async () => {
     const changed = structuredClone(manifests) as Array<{ kind: string; spec?: { template: { spec: { volumes: unknown[] } } } }>;
     const pod = changed.find(item => item.kind === "Deployment")!.spec!.template.spec;
     pod.volumes.push({ name: "builder-cache", emptyDir: { sizeLimit: "4Gi" } }, { name: "project-materializations", emptyDir: { sizeLimit: "4Gi" } });
@@ -83,7 +83,7 @@ describe("renderVmRuntimeBundle", () => {
     expect(bundle.volumes).toContainEqual({ name: "project-materializations", kind: "ephemeral" });
   });
 
-  it("binds the Builder identity and mounts its projects at the Builder's own customer path", async () => {
+  it("binds the user identity and mounts its projects at the user's own user path", async () => {
     const changed = structuredClone(manifests) as Array<{ kind: string; spec?: { template: { spec: {
       volumes: unknown[];
       initContainers: Array<{ volumeMounts: unknown[] }>;
@@ -108,7 +108,7 @@ describe("renderVmRuntimeBundle", () => {
     expect(Object.values(bundle.containers.map(container => container.env))).not.toContainEqual(expect.objectContaining({ GATEWAY_BUILDER_SLUG: expect.anything() }));
   });
 
-  it("renders a bundle without Builder identity when the gateway has none", async () => {
+  it("renders a bundle without user identity when the gateway has none", async () => {
     const bundle = await render();
     expect(bundle).not.toHaveProperty("builderIdentity");
     expect(isGatewayVmRuntimeBundle(bundle)).toBe(true);
@@ -183,7 +183,7 @@ describe("renderVmRuntimeBundle", () => {
     expect(bundle.init?.env).not.toHaveProperty("GATEWAY_RUNTIME_KIND");
   });
 
-  it("runs an X11 computer's desktop in its gateway container with no host desktop node", async () => {
+  it("runs an X11 VM's desktop in its gateway container with no host desktop node", async () => {
     const omarchy = await render();
     const bundle = await render({ desktop: "x11" });
     expect(omarchy.desktop).toBe("omarchy");
@@ -261,6 +261,6 @@ it("gives a native Gateway only its own PostgreSQL credential", async () => {
   gateway.env.push({ name: "OPENCLAW_AGENT_STORE_DSN", valueFrom: { secretKeyRef: { name: "gateway-auth-token-b-x", key: "agent-store-dsn" } } });
   const bundle = await render({ manifests: withStore, readSecret: async (name, key) => key === "agent-store-dsn" ? "postgresql://scoped-fixture" : secrets[`${name}/${key}`]! });
   expect(bundle.containers.find(item => item.name === "gateway")?.env.OPENCLAW_AGENT_STORE_DSN).toBe("postgresql://scoped-fixture");
-  gateway.env.at(-1).valueFrom.secretKeyRef.name = "gateway-auth-token-other-builder";
+  gateway.env.at(-1).valueFrom.secretKeyRef.name = "gateway-auth-token-other-user";
   await expect(render({ manifests: withStore })).rejects.toThrow("not permitted in a tenant VM");
 });

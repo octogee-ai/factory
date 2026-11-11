@@ -116,7 +116,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     expect(events).toEqual(["rollout", "migration"]);
   });
 
-  it("rolls a Builder ahead of its untouched idle return blocked by another Shared migration", async () => {
+  it("rolls a user ahead of its untouched idle return blocked by another Shared migration", async () => {
     const returnId = "builder-return-builder-a-g2";
     const blockedReturn = baseOp({ id: returnId, kind: "migrate-customer", origin: "automatic",
       createdBy: "glm-controller-placement-policy", createdAt: 2,
@@ -138,14 +138,14 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     expect(store.get("older-shared-move")).toEqual(olderMigration);
   });
 
-  it("runs the older return when an intervening Shared rollout blocks the operator Builder roll", async () => {
+  it("runs the older return when an intervening Shared rollout blocks the operator user roll", async () => {
     const returnId = "builder-return-builder-a-g2";
     const returning = baseOp({ id: returnId, kind: "migrate-customer", origin: "automatic", createdAt: 1,
       input: { source: "builder-activation-lease", fromGatewayId: "builder-a", toGatewayId: "shared-target" } });
     const sharedRoll = baseOp({ id: "shared-roll", createdAt: 2, input: { gatewayId: "shared-target" } });
-    const builderRoll = baseOp({ id: "builder-roll", origin: "operator", createdAt: 3, input: { gatewayId: "builder-a" } });
+    const userRoll = baseOp({ id: "user-roll", origin: "operator", createdAt: 3, input: { gatewayId: "builder-a" } });
     const handler: OperationHandler = vi.fn(async () => ({ success: true, steps: [] }));
-    const { db, store } = createOperationsFixture({ [returnId]: returning, "shared-roll": sharedRoll, "builder-roll": builderRoll }, {
+    const { db, store } = createOperationsFixture({ [returnId]: returning, "shared-roll": sharedRoll, "user-roll": userRoll }, {
       gateways: { "builder-a": { gatewayId: "builder-a", gatewayClass: "builder" }, "shared-target": { gatewayId: "shared-target", gatewayClass: "shared" } },
       runtimes: { "builder-a": { runtime: "cluster" }, "shared-target": { runtime: "cluster" } },
     });
@@ -155,7 +155,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     expect(handler).toHaveBeenCalledOnce();
     expect(store.get(returnId)?.status).toBe("succeeded");
     expect(store.get("shared-roll")).toEqual(sharedRoll);
-    expect(store.get("builder-roll")).toEqual(builderRoll);
+    expect(store.get("user-roll")).toEqual(userRoll);
   });
 
   it.each([
@@ -212,7 +212,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
         kind: "rollout",
         createdAt: 1,
       },
-      "op-rollout": baseOp({ id: "op-rollout", createdAt: 2, input: { gatewayId: "bender" } }),
+      "op-rollout": baseOp({ id: "op-rollout", createdAt: 2, input: { gatewayId: "walter" } }),
     });
 
     await drainPendingOperationsOnce(buildDeps(db, { rollout: rolloutHandler }));
@@ -249,7 +249,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
       releaseFirst = resolve;
     });
     const rolloutHandler: OperationHandler = vi.fn(async (op) => {
-      if (op.id === "op-bender") {
+      if (op.id === "op-walter") {
         await firstGate;
         return { steps: [], success: true };
       }
@@ -257,18 +257,18 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     });
 
     const { db, store } = createOperationsFixture({
-      "op-bender": baseOp({ id: "op-bender", createdAt: 1, input: { gatewayId: "bender-blue" } }),
+      "op-walter": baseOp({ id: "op-walter", createdAt: 1, input: { gatewayId: "walter-blue" } }),
     });
     const deps = buildDeps(db, { rollout: rolloutHandler });
 
     const firstDrain = drainPendingOperationsOnce(deps);
-    // Let op-bender's claim transaction commit and its handler start (and
+    // Let op-walter's claim transaction commit and its handler start (and
     // suspend on firstGate) before the second gateway's roll is requested —
-    // matching the real sequence: bender-blue's roll is already running when
+    // matching the real sequence: walter-blue's roll is already running when
     // default-green is clicked. A macrotask tick drains every microtask the
     // fake-Firestore claim path schedules.
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(store.get("op-bender")?.status).toBe("running");
+    expect(store.get("op-walter")?.status).toBe("running");
 
     store.set(
       "op-default",
@@ -279,19 +279,19 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
 
     const queued = store.get("op-default");
     expect(queued?.status).toBe("pending");
-    expect(queued?.waitingOn).toBe("roll bender-blue");
+    expect(queued?.waitingOn).toBe("roll walter-blue");
     expect(queued?.error).toBeUndefined();
 
     releaseFirst();
     await firstDrain;
-    expect(store.get("op-bender")?.status).toBe("succeeded");
+    expect(store.get("op-walter")?.status).toBe("succeeded");
 
     await drainPendingOperationsOnce(deps);
     expect(store.get("op-default")?.status).toBe("succeeded");
     expect(store.get("op-default")?.waitingOn).toBeUndefined();
   });
 
-  it("runs a Shared rollout while an unrelated Builder VM rollout is blocked", async () => {
+  it("runs a Shared rollout while an unrelated gateway VM rollout is blocked", async () => {
     const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
     const { db, store } = createOperationsFixture({
       "vm-roll": baseOp({ id: "vm-roll", status: "running", input: { gatewayId: "sep092" } }),
@@ -313,8 +313,8 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
 
   it.each([
     ["another Shared", "shared-1", "shared", "cluster", "roll shared-0"],
-    ["another Builder VM", "builder-2", "builder", "gce-vm", "roll builder-1"],
-    ["a Builder on Kubernetes", "builder-2", "builder", "cluster", "roll shared-0"],
+    ["another isolated VM", "builder-2", "builder", "gce-vm", "roll builder-1"],
+    ["an isolated gateway on Kubernetes", "builder-2", "builder", "cluster", "roll shared-0"],
   ] as const)("queues %s rollout when both rollout lanes are occupied", async (_name, gatewayId, gatewayClass, runtime, waitingOn) => {
     const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
     const { db, store } = createOperationsFixture({
@@ -355,8 +355,8 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
       },
       "shared-roll": baseOp({ id: "shared-roll", createdAt: 2, input: { gatewayId: "shared-0" } }),
     }, {
-      gateways: { "shared-0": { gatewayId: "shared-0", gatewayClass: "shared" }, ...(root ? { builder: root } : {}) },
-      runtimes: { "shared-0": { runtime: "cluster" }, ...(runtime ? { builder: runtime } : {}) },
+      gateways: { "shared-0": { gatewayId: "shared-0", gatewayClass: "shared" }, ...(root ? { user: root } : {}) },
+      runtimes: { "shared-0": { runtime: "cluster" }, ...(runtime ? { user: runtime } : {}) },
     });
 
     await drainPendingOperationsOnce(buildDeps(db, { rollout: handler }));
@@ -516,7 +516,7 @@ describe("gateway operation queue — FIFO per scope across the fast path", () =
         completedAt: 10,
       },
       "op-old": {
-        ...baseOp({ id: "op-old", createdAt: 2, input: { gatewayId: "bender-blue" } }),
+        ...baseOp({ id: "op-old", createdAt: 2, input: { gatewayId: "walter-blue" } }),
         waitingOn: "canary → canary-blue",
       },
     });
@@ -533,7 +533,7 @@ describe("gateway operation queue — FIFO per scope across the fast path", () =
 
     expect(rolloutHandler).not.toHaveBeenCalled();
     expect(store.get("op-new")?.status).toBe("pending");
-    expect(store.get("op-new")?.waitingOn).toBe("roll bender-blue");
+    expect(store.get("op-new")?.waitingOn).toBe("roll walter-blue");
 
     await drainPendingOperationsOnce(deps);
 
@@ -553,7 +553,7 @@ describe("gateway operation queue — FIFO per scope across the fast path", () =
     });
     const { db, store } = createOperationsFixture({
       "op-retry": {
-        ...baseOp({ id: "op-retry", createdAt: 1, input: { gatewayId: "bender-blue" } }),
+        ...baseOp({ id: "op-retry", createdAt: 1, input: { gatewayId: "walter-blue" } }),
         attempts: 1,
         nextAttemptAt: 1,
       },
@@ -580,7 +580,7 @@ describe("gateway operation queue — automatic retry with backoff", () => {
     vi.useRealTimers();
   });
 
-  it.each([1_010_000, 1_031_000])("moves a rolled-back failure behind queued Builders at %i", async (retryAt) => {
+  it.each([1_010_000, 1_031_000])("moves a rolled-back failure behind queued users at %i", async (retryAt) => {
     vi.setSystemTime(1_000_000);
     const calls: string[] = [];
     let failed = false;
@@ -687,19 +687,19 @@ describe("gateway operation queue — automatic retry with backoff", () => {
 
   it("releases a scope-blocked rollout immediately so the next Shared rollout can run", async () => {
     vi.setSystemTime(1_000_000);
-    const error = "computer sep092: identity scopes are outdated; pause and resume the gateway through Admin to repair them";
-    const handler: OperationHandler = vi.fn(async (op) => op.id === "op-builder"
+    const error = "VM sep092: identity scopes are outdated; pause and resume the gateway through Admin to repair them";
+    const handler: OperationHandler = vi.fn(async (op) => op.id === "op-user"
       ? { steps: [], success: false, error }
       : { steps: [], success: true });
     const { db, store } = createOperationsFixture({
-      "op-builder": baseOp({ id: "op-builder", kind: "rollout", createdAt: 1, input: { gatewayId: "sep092" } }),
+      "op-user": baseOp({ id: "op-user", kind: "rollout", createdAt: 1, input: { gatewayId: "sep092" } }),
       "op-shared": baseOp({ id: "op-shared", kind: "rollout", createdAt: 2, input: { gatewayId: "shared-0" } }),
     });
 
     await drainPendingOperationsOnce(buildDeps(db, { rollout: handler }));
 
-    expect(store.get("op-builder")).toMatchObject({ status: "failed", attempts: 1, completedAt: 1_000_000, error });
-    expect(store.get("op-builder")?.nextAttemptAt).toBeUndefined();
+    expect(store.get("op-user")).toMatchObject({ status: "failed", attempts: 1, completedAt: 1_000_000, error });
+    expect(store.get("op-user")?.nextAttemptAt).toBeUndefined();
     expect(store.get("op-shared")?.status).toBe("succeeded");
     expect(handler).toHaveBeenCalledTimes(2);
     expect(Date.now()).toBe(1_000_000);
@@ -732,7 +732,7 @@ describe("gateway operation queue — automatic retry with backoff", () => {
   it.each([
     "/restore/default transport failed: fetch failed",
     "10 ABORTED: Too much contention on these documents. Please try again.",
-  ])("keeps an automatic Builder return pending beyond the generic cap after %s", async (error) => {
+  ])("keeps an automatic user return pending beyond the generic cap after %s", async (error) => {
     vi.setSystemTime(1_000_000);
     const handler: OperationHandler = vi.fn(async () => { throw new Error(error); });
     const priorAttempts = [
@@ -808,10 +808,10 @@ describe("queue drain — composite-index-free FIFO", () => {
 
 describe("completion bookkeeping reads the fresh doc, not the caller's snapshot", () => {
   it("re-adopts a committed migration and completes its persisted handoff through the boot sweep", async () => {
-    const schedulerHandoff = { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "alice-builder",
+    const schedulerHandoff = { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "alice-user",
       migrationId: "migration:scheduler:1:claim:100", stageAfterCutover: true as const };
     const original = baseOp({ id: "committed-migration", kind: "migrate-customer", status: "running", startedAt: 100,
-      input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "alice-builder" }, schedulerHandoff,
+      input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "alice-user" }, schedulerHandoff,
       cutoverCommittedAt: 200 });
     const { db, store } = createOperationsFixture({ "committed-migration": original });
     const handler: OperationHandler = vi.fn(async op => {
@@ -977,7 +977,7 @@ describe("pending operation watch", () => {
   });
 });
 
-describe("verified customer erasure completion", () => {
+describe("verified user erasure completion", () => {
   const erasure = () => baseOp({ id: "erase-1", kind: "erase-customer", createdBy: "alice", input: { uid: "alice", deletionId: "del-1" } });
   const verified = vi.fn(async () => ({
     steps: [], success: true, scrubInputOnSuccess: true,
@@ -1017,7 +1017,7 @@ describe("verified customer erasure completion", () => {
 
 describe("claim admission fences", () => {
   it.each([
-    ["another computer recovery owns the Builder", { users: { alice: { provisioning: { computerRecovery: { operationId: "recover-1" } } } } }],
+    ["another VM recovery owns the user", { users: { alice: { provisioning: { computerRecovery: { operationId: "recover-1" } } } } }],
     ["a gateway runtime restart outcome is unresolved", { gateways: { "shared-a": { gatewayId: "shared-a", gatewayClass: "shared",
       runtimeRestartFence: { attemptId: "attempt-1", gatewayId: "shared-a", kind: "process", phase: "dispatched", startedAt: 1 } } } }],
   ] as const)("leaves a migration pending while %s", async (_name, seeds) => {
@@ -1031,10 +1031,10 @@ describe("claim admission fences", () => {
 
     expect(handler).not.toHaveBeenCalled();
     expect(store.get("op-move")?.status).toBe("pending");
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/claim transaction failed op=op-move: .*(computer recovery is in progress|restart outcome is unresolved)/));
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/claim transaction failed op=op-move: .*(VM recovery is in progress|restart outcome is unresolved)/));
   });
 
-  it("lets the recovery's own operation claim the fenced Builder", async () => {
+  it("lets the recovery's own operation claim the fenced user", async () => {
     const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
     const { db, store } = createOperationsFixture({
       "recover-1": baseOp({ id: "recover-1", kind: "add-gateway", input: { uid: "alice" } }),

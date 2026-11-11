@@ -41,7 +41,7 @@ export async function ensureProjectGiteaRepo(input: {
   recipe: ProjectRecipeId;
   // GitHub-backed projects still get this Gitea repo, but their Board reads
   // the GitHub repo — a welcome issue here would be invisible (and seeding
-  // into a Builder's imported GitHub repo is not ours to do).
+  // into a user's imported GitHub repo is not ours to do).
   githubBacked?: boolean;
 }): Promise<{ created: boolean }> {
   const org = workspaceGiteaOrg(input.workspaceId);

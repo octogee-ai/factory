@@ -43,7 +43,7 @@ describe("API-signed connector approval bridge", () => {
   it("requires an API signature over the exact operation and passes the authenticated delegate to native roles", async () => {
     expect((await send()).status).toBe(200);
     expect(h.identity).toHaveBeenCalledWith({ gatewayId, authorization: "Bearer firebase-token" });
-    expect(h.run).toHaveBeenCalledWith(command, expect.objectContaining({ builder: true }));
+    expect(h.run).toHaveBeenCalledWith(command, expect.objectContaining({ isolated: true }));
   });
   it("rejects a tampered reviewer before opening a native connection", async () => {
     const body = { purpose: "connector-approval", command, authorization: "Bearer firebase-token" };

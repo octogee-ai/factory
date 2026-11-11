@@ -9,7 +9,7 @@ vi.mock("../lib/config.js", () => ({
   OPENCLAW_DIR: paths.root, CUSTOMERS_DIR: `${paths.root}/customers`,
   CUSTOMER_KEYS_DIR: `${paths.root}/keys`, AGENTS_DIR: `${paths.root}/agents`,
 }));
-const { externalizeCustomerGitDir, gitExec } = await import("../lib/git.js");
+const { externalizeUserGitDir, gitExec } = await import("../lib/git.js");
 const repo = path.join(paths.root, "customers", "alice");
 const metadata = path.join(paths.root, "git-metadata", "alice", "workspace.git");
 
@@ -22,7 +22,7 @@ function git(args: string[]): string {
 
 beforeEach(() => {
   fs.rmSync(paths.root, { recursive: true, force: true });
-  externalizeCustomerGitDir(repo, { fetchCanonical: () => {} });
+  externalizeUserGitDir(repo, { fetchCanonical: () => {} });
   fs.writeFileSync(path.join(repo, "README.md"), "unpublished\n");
   git(["add", "."]);
   git(["commit", "-m", "unpublished"]);
@@ -42,7 +42,7 @@ describe("provisioner Git metadata containment", () => {
     const fetchCanonical = vi.fn();
 
     expect(gitExec(repo, ["log", "--oneline"])).toBeNull();
-    expect(() => externalizeCustomerGitDir(repo, { fetchCanonical })).toThrow("unsafe customer Git metadata");
+    expect(() => externalizeUserGitDir(repo, { fetchCanonical })).toThrow("unsafe user Git metadata");
     expect(fetchCanonical).not.toHaveBeenCalled();
     expect(fs.readFileSync(path.join(metadata, "index"))).toEqual(index);
     expect(fs.readlinkSync(linked)).toBe(original);
@@ -53,7 +53,7 @@ describe("provisioner Git metadata containment", () => {
     fs.mkdirSync(path.dirname(path.join(metadata, entry)), { recursive: true });
     fs.writeFileSync(path.join(metadata, entry), `${metadata}\n`);
     expect(gitExec(repo, ["log", "--oneline"])).toBeNull();
-    expect(() => externalizeCustomerGitDir(repo)).toThrow("unsafe customer Git metadata");
+    expect(() => externalizeUserGitDir(repo)).toThrow("unsafe user Git metadata");
   });
 
   it("preserves unpublished commits, stash, branch, index and working files", () => {
@@ -70,7 +70,7 @@ describe("provisioner Git metadata containment", () => {
     };
     const fetchCanonical = vi.fn();
 
-    expect(externalizeCustomerGitDir(repo, { fetchCanonical })).toBe(metadata);
+    expect(externalizeUserGitDir(repo, { fetchCanonical })).toBe(metadata);
     expect(gitExec(repo, ["log", "--oneline"])).toContain("unpublished");
     expect(fetchCanonical).not.toHaveBeenCalled();
     expect(git(["show-ref"])).toBe(before.refs);

@@ -6,12 +6,12 @@ import type {
 import { projectCheckoutEnabled } from "../../shared/types/project.js";
 import type { MountLane } from "./reconcile-loop.js";
 
-// A stable fingerprint of the fields of a customer snapshot that shape what an ensure
+// A stable fingerprint of the fields of a user snapshot that shape what an ensure
 // applies on disk — the generated OpenClaw config (agents.list,
 // channels.mattermost.accounts, bindings) AND the project checkouts the ensure clones. The
-// reconcile compares a mounted customer's desired fingerprint against the one applied at
+// reconcile compares a mounted user's desired fingerprint against the one applied at
 // its last successful ensure; a mismatch means the on-disk state is stale and the
-// customer must be re-ensured even though its mounted membership is unchanged. This is
+// user must be re-ensured even though its mounted membership is unchanged. This is
 // what makes a project-agent toggle converge on the next tick instead of only on remount.
 //
 // `projectCloneSet` is fingerprinted for targets that restore project checkouts because the
@@ -63,25 +63,25 @@ function fnv1a64Hex(input: string): string {
 // fingerprint described — the broker adapter's cache has no TTL, so without the seed a
 // drift-triggered ensure would re-apply the boot-time state while the bookkeeping records
 // the new fingerprint as applied.
-export interface DesiredCustomer {
+export interface DesiredUser {
   uid: string;
   fingerprint: string;
   lane: MountLane;
   ensureAllowed: boolean;
 }
 
-export function desiredCustomers(
+export function desiredUsers(
   users: readonly FleetBrokerUserSnapshot[],
   assignments: readonly FleetBrokerAssignmentRosterEntry[],
   seedSnapshot?: (snapshot: FleetBrokerUserSnapshot) => void,
-): Map<string, DesiredCustomer> {
+): Map<string, DesiredUser> {
   const byUid = new Map(assignments.map((entry) => [entry.uid, entry]));
   const joined = users.map((user) => {
     const assignment = byUid.get(user.uid);
     if (!assignment) throw new Error(`missing canonical assignment for ${user.uid}`);
     return { user, assignment };
   });
-  const map = new Map<string, DesiredCustomer>();
+  const map = new Map<string, DesiredUser>();
   for (const { user, assignment } of joined) {
     seedSnapshot?.(user);
     map.set(user.slug, {
@@ -136,7 +136,7 @@ export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): st
     systemConfig: snapshot.systemConfig ?? null,
     byotActive: snapshot.byotActive ?? false,
     // Plan fields shape the effective model config through the ensure's byot reassert —
-    // an upgrade (or signup-offer grant) must reconverge a mounted customer's model picks.
+    // an upgrade (or signup-offer grant) must reconverge a mounted user's model picks.
     // Only the fields plan resolution reads: hashing the whole subscription object would
     // re-ensure every customer on routine Stripe churn (currentPeriodEnd on renewal).
     tier: snapshot.tier,
@@ -146,13 +146,13 @@ export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): st
     trialGrant: snapshot.trialGrant ?? null,
     signupOfferConvertedAt: snapshot.signupOfferConvertedAt ?? null,
     // The operator's free-tier dial: a flip must re-ensure every mounted
-    // house-only customer, not wait for the next roll.
+    // house-only user, not wait for the next roll.
     freeTierModelRef: snapshot.freeTierModelRef ?? null,
-    // The Builder Agent default dial: a flip must re-ensure every mounted
-    // catalog customer running the platform default.
+    // The user agent default dial: a flip must re-ensure every mounted
+    // catalog user running the platform default.
     builderAgentDefault: snapshot.builderAgentDefault ?? null,
-    // The Builder's time zone lands in USER.md at reassert time, so a change
-    // must re-ensure the mounted customer.
+    // The user's time zone lands in USER.md at reassert time, so a change
+    // must re-ensure the mounted user.
     timeZone: snapshot.timeZone ?? null,
   };
   return fnv1a64Hex(stableStringify(configSlice));

@@ -108,10 +108,10 @@ function git(targetDir: string, args: string[]): Promise<string> {
 
 export async function readAgentImportWorkspaceState(
   slug: string,
-  options: { customersRoot?: string; targetDir?: string } = {},
+  options: { usersRoot?: string; targetDir?: string } = {},
 ): Promise<{ targetDir: string; head: string; clean: boolean }> {
   const targetDir = options.targetDir ?? path.join(
-    options.customersRoot ?? process.env.CUSTOMERS_DIR ?? "/home/node/.openclaw/customers",
+    options.usersRoot ?? process.env.CUSTOMERS_DIR ?? "/home/node/.openclaw/customers",
     slug,
   );
   const branch = await git(targetDir, ["symbolic-ref", "--short", "HEAD"]);

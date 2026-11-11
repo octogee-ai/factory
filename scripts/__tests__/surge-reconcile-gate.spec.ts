@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { startAfterSurgeReadiness } from "../lib/surge-reconcile-gate.js";
 
 describe("surge reconcile gate", () => {
-  it("does not start customer reconcile until the pod handoff marker is released", async () => {
+  it("does not start user reconcile until the pod handoff marker is released", async () => {
     let released = false;
     let retry: (() => void) | null = null;
     const stopInner = vi.fn();

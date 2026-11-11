@@ -32,7 +32,7 @@ export function createMigrationProgress(deps: {
         return;
       } catch (error) {
         forwarding = false;
-        deps.log(`🔴 [migration] destination progress unavailable: ${String(error)}; continuing progress in Cowboy logs`);
+        deps.log(`🔴 [migration] destination progress unavailable: ${String(error)}; continuing progress in the fleet controller logs`);
       }
     }
     const icons = { done: "🟢", failed: "🔴", pending: "🟡", running: "🟡", skipped: "🟡" };

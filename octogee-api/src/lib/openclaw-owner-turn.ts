@@ -1,11 +1,11 @@
 import type { Request } from "express";
 
 import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
-import type { BuilderRecord, PlatformStateRepositories, WorkspaceChannel } from "@octogee/core/platform-state";
+import type { PlatformUserRecord, PlatformStateRepositories, WorkspaceChannel } from "@octogee/core/platform-state";
 import {
   isValidCustomChannelName,
   parseAgentId,
-  workspaceCoachMmUsername,
+  workspaceDefaultAgentMmUsername,
 } from "@octogee/shared/types/identity";
 
 import { isRunnableWorkspaceProject } from "./active-workspace-project.js";
@@ -26,7 +26,7 @@ const SCHEDULED_REQUEST_CONTEXT_FIELDS = new Set([
   "to",
 ]);
 
-export type OwnerTurnBuilder = Pick<BuilderRecord, "workspaceId" | "mattermostUserId">;
+export type OwnerTurnUser = Pick<PlatformUserRecord, "workspaceId" | "mattermostUserId">;
 
 export type OwnerTurnStore = Pick<PlatformStateRepositories, "workspaces">;
 
@@ -35,7 +35,7 @@ export interface OwnerWorkspaceTurnInput {
   gatewayId: string;
   agentId: string;
   ownerUid: string;
-  owner: OwnerTurnBuilder;
+  owner: OwnerTurnUser;
 }
 
 export type OwnerWorkspaceTurnVerifier = (
@@ -177,7 +177,7 @@ export function parseOwnerWorkspaceRequestContext(value: unknown): OwnerWorkspac
   };
 }
 
-function ownerMattermostUserIdOf(owner: OwnerTurnBuilder): string | null {
+function ownerMattermostUserIdOf(owner: OwnerTurnUser): string | null {
   const userId = owner.mattermostUserId;
   return userId !== null && MATTERMOST_ID_RE.test(userId) ? userId : null;
 }
@@ -219,7 +219,7 @@ async function isActiveWorkspaceMember(
 async function trustedWorkspaceSender(
   store: OwnerTurnStore,
   slug: string,
-  owner: OwnerTurnBuilder,
+  owner: OwnerTurnUser,
   senderId: string,
 ): Promise<boolean> {
   if (ownerMattermostUserIdOf(owner) === senderId) return true;
@@ -228,14 +228,14 @@ async function trustedWorkspaceSender(
 
 export function isOwnerDirectRoute(
   context: Pick<OwnerWorkspaceRequestContext, "routeKind" | "routeId" | "requesterSenderId">,
-  owner: OwnerTurnBuilder,
+  owner: OwnerTurnUser,
 ): boolean {
   return context.routeKind === "user"
     && context.routeId === context.requesterSenderId
     && ownerMattermostUserIdOf(owner) === context.requesterSenderId;
 }
 
-export async function activeCoachChannelId(store: OwnerTurnStore, slug: string): Promise<string | null> {
+export async function activeDefaultAgentChannelId(store: OwnerTurnStore, slug: string): Promise<string | null> {
   const channel = await store.workspaces.channels.get({ workspaceSlug: slug, projectSlug: null }, "coach-dm");
   const channelId = channel?.mattermostChannelId ?? null;
   return channel?.archivedAt === null && channelId !== null && MATTERMOST_ID_RE.test(channelId)
@@ -247,14 +247,14 @@ export async function isOwnerScheduledRoute(
   store: OwnerTurnStore,
   agentId: string,
   context: Pick<OwnerWorkspaceRequestContext, "routeKind" | "routeId" | "requesterSenderId">,
-  owner: OwnerTurnBuilder,
+  owner: OwnerTurnUser,
 ): Promise<boolean> {
   if (isOwnerDirectRoute(context, owner)) return true;
   const parsed = parseAgentId(agentId);
   return parsed.kind === "coach"
     && context.routeKind === "channel"
     && ownerMattermostUserIdOf(owner) === context.requesterSenderId
-    && context.routeId === await activeCoachChannelId(store, parsed.username);
+    && context.routeId === await activeDefaultAgentChannelId(store, parsed.username);
 }
 
 export interface OwnerAutomationTurn {
@@ -267,7 +267,7 @@ export async function verifyOwnerAutomationTurn(
   input: {
     agentId: string;
     ownerUid: string;
-    owner: OwnerTurnBuilder;
+    owner: OwnerTurnUser;
     requestContext: unknown;
   },
 ): Promise<OwnerAutomationTurn | null> {
@@ -277,7 +277,7 @@ export async function verifyOwnerAutomationTurn(
   if (
     parsed.kind !== "coach"
     || context?.origin !== "turn"
-    || context.accountId !== workspaceCoachMmUsername(parsed.username)
+    || context.accountId !== workspaceDefaultAgentMmUsername(parsed.username)
     || input.owner.workspaceId !== parsed.username
     || !ownerMattermostUserId
     || context.requesterSenderId !== ownerMattermostUserId
@@ -286,7 +286,7 @@ export async function verifyOwnerAutomationTurn(
   const channelRoute = context.routeKind === "channel" && context.routeId === context.nativeChannelId;
   if (!directRoute && !channelRoute) return null;
   if (!await activeOwnedWorkspace(store, parsed.username, input.ownerUid)) return null;
-  const coachChannelId = await activeCoachChannelId(store, parsed.username);
+  const coachChannelId = await activeDefaultAgentChannelId(store, parsed.username);
   return coachChannelId === context.nativeChannelId
     ? { ownerMattermostUserId, coachChannelId }
     : null;
@@ -301,7 +301,7 @@ export function createGoogleTurnVerifier(
     if (
       parsed.kind !== "coach"
       || !context
-      || context.accountId !== workspaceCoachMmUsername(parsed.username)
+      || context.accountId !== workspaceDefaultAgentMmUsername(parsed.username)
       || owner.workspaceId !== parsed.username
     ) return false;
 
@@ -353,12 +353,12 @@ export function createProjectWorkspaceTurnVerifier(
 export function createAgentSupportTurnVerifier(
   store: OwnerTurnStore,
 ): OwnerWorkspaceTurnVerifier {
-  const verifyCoach = createOwnerWorkspaceTurnVerifier(store);
+  const verifyDefaultAgent = createOwnerWorkspaceTurnVerifier(store);
   const verifyProject = createProjectWorkspaceTurnVerifier(store);
   return async (turn) => {
     const kind = parseAgentId(turn.agentId).kind;
     if (kind === "project") return verifyProject(turn);
-    if (kind === "coach") return verifyCoach(turn);
+    if (kind === "coach") return verifyDefaultAgent(turn);
     return false;
   };
 }

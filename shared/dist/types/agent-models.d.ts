@@ -25,4 +25,4 @@ export declare function simpleModelTierForRef(ref: string): SimpleModelTier | nu
 export declare function parseAgentModelSelection(value: unknown): AgentModelSelection | null;
 export declare function parseAgentModelSelections(value: unknown): AgentModelSelections;
 export declare function agentIdBelongsToSlug(agentId: string, slug: string): boolean;
-export declare function canonicalCustomerModelDefinition(modelRef: string): Record<string, unknown>;
+export declare function canonicalUserModelDefinition(modelRef: string): Record<string, unknown>;

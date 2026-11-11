@@ -42,7 +42,7 @@ describe("advisory mode removal", () => {
 });
 
 describe("ensureGatewayDefaults — config transformation", () => {
-  it("applies gateway, tool, concurrency, and coach workspace defaults without touching model or deny ownership", () => {
+  it("applies gateway, tool, concurrency, and agent workspace defaults without touching model or deny ownership", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
@@ -149,7 +149,7 @@ it("sets maxConcurrent to 8 when missing", () => {
     expect(config.agents.defaults.maxConcurrent).toBe(16);
   });
 
-  it("enforces fs.workspaceOnly on coach agents", () => {
+  it("enforces fs.workspaceOnly on agents", () => {
     const agent: any = { id: "octogee-test-coach", tools: {} };
     if (/^octogee-.+-coach$/.test(agent.id)) {
       agent.tools.fs = { workspaceOnly: true };
@@ -178,7 +178,7 @@ it("sets maxConcurrent to 8 when missing", () => {
     expect(config.tools?.subagents?.tools?.deny).toEqual(["exec", "process", "other"]);
   });
 
-  it("does not write coach or subagent model defaults", () => {
+  it("does not write agent or subagent model defaults", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {},

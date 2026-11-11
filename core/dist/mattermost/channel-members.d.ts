@@ -1,7 +1,7 @@
-export type CustomerChannelKind = "coach" | "general" | "admin" | "project";
-export interface CustomerChannelMemberIds {
+export type UserChannelKind = "coach" | "general" | "admin" | "project";
+export interface UserChannelMemberIds {
     customerMmUserId: string | null;
-    coachMmUserId: string | null;
+    defaultAgentMmUserId: string | null;
     adminMmUserId: string | null;
 }
-export declare function customerChannelMembers(kind: CustomerChannelKind, ids: CustomerChannelMemberIds): string[];
+export declare function userChannelMembers(kind: UserChannelKind, ids: UserChannelMemberIds): string[];

@@ -60,7 +60,7 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
         ? { ok: true as const }
         : { ok: false as const, error: "gateway canary retirement claim does not match this operation" },
     ),
-    readMountedCustomers: vi.fn(async () => state.mounted),
+    readMountedUsers: vi.fn(async () => state.mounted),
     readAssignmentsForGateway: vi.fn(async () => state.assignments),
     helmUninstallGateway: vi.fn(async (gatewayId: string) => {
       state.helmUninstalled.push(gatewayId);
@@ -167,7 +167,7 @@ describe("createRetireGatewayHandler — simple-roll retirement", () => {
     expect(deps.teardownGatewayServiceAccount).toHaveBeenCalledTimes(2);
   });
 
-  it("refuses while customers are still assigned, naming the slugs", async () => {
+  it("refuses while users are still assigned, naming the slugs", async () => {
     const state = baseState({
       assignments: [
         { uid: "u2", slug: "bob" },
@@ -184,7 +184,7 @@ describe("createRetireGatewayHandler — simple-roll retirement", () => {
     expect(state.teardownCalls).toEqual([]);
   });
 
-  it("refuses while customers are still mounted, naming the slugs", async () => {
+  it("refuses while users are still mounted, naming the slugs", async () => {
     const state = baseState({ mounted: ["ceckert"] });
     const deps = makeDeps(state);
 

@@ -747,7 +747,7 @@ ksecret connect-state-secret --from-literal=secret="$CONNECT_STATE_SECRET"
 
 # ── 9a. Gateway model-key issuer bearer (glm-controller → octogee-api) ─
 # A dedicated bearer, separate from the gateway tenant-binding auth. It only
-# authorizes Cowboy to mint and revoke opaque LLM broker tokens via
+# authorizes the fleet controller to mint and revoke opaque LLM broker tokens via
 # /internal/model-keys, and is never mounted into gateway pods.
 info "gateway-model-key-issuer"
 GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN=$(sm_get "GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN" "$FIREBASE_PROJECT" 2>/dev/null || echo "")
@@ -870,8 +870,8 @@ rm -f "$FLEET_PRIVATE_TMP" "$FLEET_PUBLIC_TMP" "$FLEET_DERIVED_PUBLIC_TMP"
 # for gateway auth. Legacy opt-in publishing overwrites the placeholder at
 # boot if explicitly enabled.
 #
-# Each stable Barn member and disposable gateway gets its own secret so
-# gateway-edge can route an assigned Builder without mixing tokens.
+# Each stable shared gateway member and disposable gateway gets its own secret so
+# gateway-edge can route an assigned user without mixing tokens.
 #
 # Gateway IDs by env (match helm/octogee/values.{test,prod}.yaml):
 info "gateway-auth-token (Secret Manager, per-gatewayId)"
@@ -1024,7 +1024,7 @@ ksecret resend-secrets \
 
 # ── 11c. Invite token signing secret ─────────────────────────────────────
 # HMAC key for signed invite tokens (gateway-edge/octogee-api inviteTokens.ts).
-# Required for Builder invites; the route 500s without it. K8s Secret:
+# Required for user invites; the route 500s without it. K8s Secret:
 # invite-secret { secret → INVITE_SECRET }.
 info "invite-secret"
 set +u

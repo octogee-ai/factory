@@ -44,7 +44,7 @@ describe("writeDeskIdentity", () => {
     expect([...h.store.keys()].sort()).toEqual([JSON_PATH, SVG_PATH]);
   });
 
-  it("keeps the Builder's note, leaves an unchanged identity alone, and repairs a missing or stale drawing", async () => {
+  it("keeps the user's note, leaves an unchanged identity alone, and repairs a missing or stale drawing", async () => {
     const h = fakeFs({ [JSON_PATH]: JSON.stringify({ ...DESK, note: "Back at 3." }), [SVG_PATH]: characterSvg(OCEAN) });
     await expect(writeDeskIdentity(h.fs, "/home/octo", DESK)).resolves.toEqual({ written: false });
     expect(h.written).toEqual([]);

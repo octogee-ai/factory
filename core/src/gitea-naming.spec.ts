@@ -24,7 +24,7 @@ describe("gitea-naming", () => {
     expect(workspaceRepoName()).not.toContain("acme");
   });
 
-  it("system config repo is the fixed per-builder runtime-config repo", () => {
+  it("system config repo is the fixed per-user runtime-config repo", () => {
     expect(systemConfigRepoName()).toBe("system_config");
     expect(SYSTEM_CONFIG_REPO).toBe("system_config");
   });

@@ -3,54 +3,54 @@ import { readFileSync } from "node:fs";
 import { describe, it, expect, vi } from "vitest";
 import {
   activeAgentProjectIds,
-  buildCustomerAgent,
+  buildUserAgent,
   buildMattermostAccounts,
-  buildCustomerBindings,
+  buildUserBindings,
   buildProjectAgentAccounts,
   buildProjectAgents,
   gatewayAgentRoster,
-  gatewayAgentRosterBuilderSlug,
+  gatewayAgentRosterUserSlug,
   mattermostAccountBindingsNeedActivation,
   mattermostAccountBindingsNeedingActivation,
   PRODUCTIVITY_TOOL_NAMES,
   PROJECT_AGENT_ALLOWED_TOOLS,
   PROJECT_AGENT_DENIED_TOOLS,
   SAFE_DEFAULT_AGENT_ID,
-} from "../lib/openclaw-config-builders.js";
+} from "../lib/openclaw-config-users.js";
 
 const CHRIS_MM_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SAM_MM_ID = "cccccccccccccccccccccccccc";
 const PAT_MM_ID = "dddddddddddddddddddddddddd";
 
-describe("buildCustomerAgent", () => {
-  it("marks the isolated gateway Builder coach as OpenClaw's explicit default", () => {
-    expect(buildCustomerAgent({
+describe("buildUserAgent", () => {
+  it("marks the isolated gateway user agent as OpenClaw's explicit default", () => {
+    expect(buildUserAgent({
       uid: "uid-chris",
       slug: "chris",
       customerDir: "/customers/chris",
       agentDir: "/agents/octogee-chris-coach/agent",
-      coach: { name: "Coach", emoji: "🤖", model: "house" },
+      defaultAgent: { name: "Coach", emoji: "🤖", model: "house" },
       default: true,
     })).toMatchObject({ id: "octogee-chris-coach", default: true });
   });
 
-  it("does not claim default routing for a shared-gateway customer", () => {
-    expect(buildCustomerAgent({
+  it("does not claim default routing for a shared-gateway user", () => {
+    expect(buildUserAgent({
       uid: "uid-sam",
       slug: "sam",
       customerDir: "/customers/sam",
       agentDir: "/agents/octogee-sam-coach/agent",
-      coach: { name: "Coach", emoji: "🤖", model: "house" },
+      defaultAgent: { name: "Coach", emoji: "🤖", model: "house" },
     })).not.toHaveProperty("default");
   });
 
-  it("keeps productivity tools catalog-visible for the workspace coach", () => {
-    const agent = buildCustomerAgent({
+  it("keeps productivity tools catalog-visible for the workspace agent", () => {
+    const agent = buildUserAgent({
       uid: "uid-chris",
       slug: "chris",
       customerDir: "/customers/chris",
       agentDir: "/agents/octogee-chris-coach/agent",
-      coach: { name: "Coach", emoji: "🤖", model: "house" },
+      defaultAgent: { name: "Coach", emoji: "🤖", model: "house" },
       customerMmUserId: CHRIS_MM_ID,
     });
 
@@ -60,13 +60,13 @@ describe("buildCustomerAgent", () => {
     );
   });
 
-  it("allows workspace and project-scoped commits for the workspace coach", () => {
-    const agent = buildCustomerAgent({
+  it("allows workspace and project-scoped commits for the workspace agent", () => {
+    const agent = buildUserAgent({
       uid: "uid-chris",
       slug: "chris",
       customerDir: "/customers/chris",
       agentDir: "/agents/octogee-chris-coach/agent",
-      coach: { name: "Coach", emoji: "🤖", model: "house" },
+      defaultAgent: { name: "Coach", emoji: "🤖", model: "house" },
     });
 
     expect((agent.tools as { alsoAllow: string[] }).alsoAllow).toEqual(
@@ -88,27 +88,27 @@ describe("buildCustomerAgent", () => {
     expect(PROJECT_AGENT_DENIED_TOOLS).not.toContain("octogee_ask_ops");
   });
 
-  it("exposes capability and isolated runs only through customer project lanes", () => {
-    const coach = buildCustomerAgent({
+  it("exposes capability and isolated runs only through user project lanes", () => {
+    const defaultAgent = buildUserAgent({
       uid: "uid-chris",
       slug: "chris",
       customerDir: "/customers/chris",
       agentDir: "/agents/octogee-chris-coach/agent",
-      coach: { name: "Coach", emoji: "🤖", model: "house" },
+      defaultAgent: { name: "Coach", emoji: "🤖", model: "house" },
     });
     const runTools = ["octogee_project_capability", "octogee_project_build", "octogee_project_test", "octogee_project_preview", "octogee_project_run_status"];
-    expect((coach.tools as { alsoAllow: string[] }).alsoAllow).toEqual(expect.arrayContaining(runTools));
+    expect((defaultAgent.tools as { alsoAllow: string[] }).alsoAllow).toEqual(expect.arrayContaining(runTools));
     expect(PROJECT_AGENT_ALLOWED_TOOLS).toEqual(expect.arrayContaining(runTools));
     expect(PROJECT_AGENT_DENIED_TOOLS).not.toEqual(expect.arrayContaining(runTools));
   });
 
-  it("keeps recipe and Board workflows available to coaches and project-locked agents", () => {
-    const coach = buildCustomerAgent({
+  it("keeps recipe and Board workflows available to agents and project-locked agents", () => {
+    const defaultAgent = buildUserAgent({
       uid: "uid-chris",
       slug: "chris",
       customerDir: "/customers/chris",
       agentDir: "/agents/octogee-chris-coach/agent",
-      coach: { name: "Coach", emoji: "🤖", model: "house" },
+      defaultAgent: { name: "Coach", emoji: "🤖", model: "house" },
     });
     const projectTools = [
       "octogee_project_set_recipe",
@@ -119,33 +119,33 @@ describe("buildCustomerAgent", () => {
       "octogee_board_card_move",
       "octogee_board_card_comment",
     ];
-    expect((coach.tools as { alsoAllow: string[] }).alsoAllow).toEqual(expect.arrayContaining(projectTools));
+    expect((defaultAgent.tools as { alsoAllow: string[] }).alsoAllow).toEqual(expect.arrayContaining(projectTools));
     expect(PROJECT_AGENT_ALLOWED_TOOLS).toEqual(expect.arrayContaining(projectTools));
     expect(PROJECT_AGENT_DENIED_TOOLS).not.toEqual(expect.arrayContaining(projectTools));
   });
 
-  it("exposes publish only to the Workspace Coach", () => {
-    const coach = buildCustomerAgent({
+  it("exposes publish only to the Workspace Agent", () => {
+    const defaultAgent = buildUserAgent({
       uid: "uid-chris",
       slug: "chris",
       customerDir: "/customers/chris",
       agentDir: "/agents/octogee-chris-coach/agent",
-      coach: { name: "Coach", emoji: "🤖", model: "house" },
+      defaultAgent: { name: "Coach", emoji: "🤖", model: "house" },
     });
-    expect((coach.tools as { alsoAllow: string[] }).alsoAllow).toContain("octogee_project_publish");
+    expect((defaultAgent.tools as { alsoAllow: string[] }).alsoAllow).toContain("octogee_project_publish");
     expect(PROJECT_AGENT_ALLOWED_TOOLS).not.toContain("octogee_project_publish");
     expect(PROJECT_AGENT_DENIED_TOOLS).toContain("octogee_project_publish");
   });
 
   it("retires every in-gateway preview and publish tool", () => {
-    const coach = buildCustomerAgent({
+    const defaultAgent = buildUserAgent({
       uid: "uid-chris",
       slug: "chris",
       customerDir: "/customers/chris",
       agentDir: "/agents/octogee-chris-coach/agent",
-      coach: { name: "Coach", emoji: "🤖", model: "house" },
+      defaultAgent: { name: "Coach", emoji: "🤖", model: "house" },
     });
-    const tools = coach.tools as { alsoAllow: string[]; deny: string[] };
+    const tools = defaultAgent.tools as { alsoAllow: string[]; deny: string[] };
     const retired = ["preview_start", "preview_stop", "preview_list", "octogee_publish"];
     expect(tools.alsoAllow).not.toEqual(expect.arrayContaining(retired));
     expect(tools.deny).toEqual(expect.arrayContaining(retired));
@@ -154,12 +154,12 @@ describe("buildCustomerAgent", () => {
 
   it("keeps tool visibility independent of the inbound sender projection", () => {
     for (const customerMmUserId of [undefined, "mm-chris", "A".repeat(26)]) {
-      const agent = buildCustomerAgent({
+      const agent = buildUserAgent({
         uid: "uid-chris",
         slug: "chris",
         customerDir: "/customers/chris",
         agentDir: "/agents/octogee-chris-coach/agent",
-        coach: { name: "Coach", emoji: "🤖", model: "house" },
+        defaultAgent: { name: "Coach", emoji: "🤖", model: "house" },
         customerMmUserId,
       });
       expect(agent.tools).toMatchObject({ toolsBySender: {} });
@@ -168,7 +168,7 @@ describe("buildCustomerAgent", () => {
     }
   });
 
-  it("keeps productivity policy synchronized, excluding setup-only connection requests and coach-only owner automations", () => {
+  it("keeps productivity policy synchronized, excluding setup-only connection requests and default-agent-only owner automations", () => {
     const manifest = JSON.parse(readFileSync(
       new URL(
         "../../infra/gateway/extensions/product/octogee-connector-tools/openclaw.plugin.json",
@@ -185,7 +185,7 @@ describe("buildCustomerAgent", () => {
 });
 
 describe("gatewayAgentRoster", () => {
-  it("uses a non-customer sentinel without a legacy default marker on a shared gateway", () => {
+  it("uses a non-user sentinel without a legacy default marker on a shared gateway", () => {
     const roster = gatewayAgentRoster([
       { id: "octogee-mike-coach", default: true },
       { id: "octogee-ceckert-coach" },
@@ -218,22 +218,22 @@ describe("gatewayAgentRoster", () => {
         { id: "octogee-ops", default: true },
         { id: SAFE_DEFAULT_AGENT_ID, default: true },
       ],
-      gatewayAgentRosterBuilderSlug({ GATEWAY_CLASS: "operator" }),
+      gatewayAgentRosterUserSlug({ GATEWAY_CLASS: "operator" }),
     )).toEqual([
       expect.objectContaining({ id: SAFE_DEFAULT_AGENT_ID }),
       { id: "octogee-ops" },
     ]);
   });
 
-  it("treats shared class as authoritative over a stale Builder slug", () => {
-    expect(gatewayAgentRosterBuilderSlug({
+  it("treats shared class as authoritative over a stale user slug", () => {
+    expect(gatewayAgentRosterUserSlug({
       GATEWAY_CLASS: "shared",
       GATEWAY_BUILDER_SLUG: "mike",
     })).toBe("");
   });
 
   it("fails a retired operator class closed to the shared routing sentinel", () => {
-    expect(gatewayAgentRosterBuilderSlug({ GATEWAY_CLASS: "operator" })).toBe("");
+    expect(gatewayAgentRosterUserSlug({ GATEWAY_CLASS: "operator" })).toBe("");
   });
 });
 
@@ -260,7 +260,7 @@ describe("mattermostAccountBindingsNeedActivation", () => {
       agentId: "octogee-ceckert-coach",
       match: { channel: "mattermost", accountId: "ceckert-coach" },
     }];
-    const desired = buildCustomerBindings([{
+    const desired = buildUserBindings([{
       slug: "ceckert",
       channels: [],
       agentProjects: new Set(["gardyn"]),
@@ -270,7 +270,7 @@ describe("mattermostAccountBindingsNeedActivation", () => {
   });
 
   it("requires activation when a foreign agent still owns a desired account route", () => {
-    const desired = buildCustomerBindings([{
+    const desired = buildUserBindings([{
       slug: "ceckert",
       channels: [{ channelId: "gardyn" }],
     }]);
@@ -289,8 +289,8 @@ describe("mattermostAccountBindingsNeedActivation", () => {
     expect(mattermostAccountBindingsNeedActivation(current, desired)).toBe(true);
   });
 
-  it("marks a still-configured foreign account when its poisoned customer route is removed", () => {
-    const desired = buildCustomerBindings([{
+  it("marks a still-configured foreign account when its poisoned user route is removed", () => {
+    const desired = buildUserBindings([{
       slug: "ceckert",
       channels: [{ channelId: "gardyn" }],
     }]);
@@ -398,7 +398,7 @@ describe("buildMattermostAccounts", () => {
     });
   });
 
-  it("OMITS customers without a PAT — never emits a null/empty botToken", () => {
+  it("OMITS users without a PAT — never emits a null/empty botToken", () => {
     const accounts = buildMattermostAccounts(
       [
         { uid: "uid-a", slug: "chris", customerMmUserId: CHRIS_MM_ID },
@@ -485,9 +485,9 @@ describe("buildMattermostAccounts", () => {
   });
 });
 
-describe("buildCustomerBindings", () => {
-  it("pins the customer account before its peer bindings so a new channel cannot fall through to another tenant", () => {
-    const bindings = buildCustomerBindings([
+describe("buildUserBindings", () => {
+  it("pins the user account before its peer bindings so a new channel cannot fall through to another tenant", () => {
+    const bindings = buildUserBindings([
       {
         slug: "chris",
         channels: [{ channelId: "ch-general-1" }, { channelId: "ch-coach-1" }],
@@ -521,7 +521,7 @@ describe("buildCustomerBindings", () => {
   });
 
   it("NEVER emits a binding without accountId (multi-tenant isolation lock)", () => {
-    const bindings = buildCustomerBindings([
+    const bindings = buildUserBindings([
       { slug: "chris", channels: [{ channelId: "ch-1" }] },
       { slug: "sam", channels: [{ channelId: "ch-2" }] },
     ]);
@@ -531,8 +531,8 @@ describe("buildCustomerBindings", () => {
     }
   });
 
-  it("routes each customer's channels to their own accountId — no cross-tenant bleed", () => {
-    const bindings = buildCustomerBindings([
+  it("routes each user's channels to their own accountId — no cross-tenant bleed", () => {
+    const bindings = buildUserBindings([
       { slug: "chris", channels: [{ channelId: "chris-general" }] },
       { slug: "sam", channels: [{ channelId: "sam-general" }] },
     ]);
@@ -548,8 +548,8 @@ describe("buildCustomerBindings", () => {
     expect(samBinding?.agentId).toBe("octogee-sam-coach");
   });
 
-  it("still pins a provisioned customer account when it has no discovered channels yet", () => {
-    const bindings = buildCustomerBindings([
+  it("still pins a provisioned user account when it has no discovered channels yet", () => {
+    const bindings = buildUserBindings([
       { slug: "chris", channels: [] },
     ]);
     expect(bindings).toEqual([
@@ -560,8 +560,8 @@ describe("buildCustomerBindings", () => {
     ]);
   });
 
-  it("leaves the retired Admin channel unbound while retaining the Builder Coach channel", () => {
-    const bindings = buildCustomerBindings([
+  it("leaves the retired Admin channel unbound while retaining the user Agent channel", () => {
+    const bindings = buildUserBindings([
       {
         slug: "chris",
         channels: [
@@ -597,9 +597,9 @@ describe("activeAgentProjectIds", () => {
 });
 
 describe("buildProjectAgents", () => {
-  it("uses the project's identity independently of the workspace coach", () => {
+  it("uses the project's identity independently of the workspace agent", () => {
     const [agent] = buildProjectAgents({ slug: "chris", customerDir: "/customers/chris", agentsDir: "/agents",
-      coach: { name: "Piper", emoji: "🧭", model: "house" },
+      defaultAgent: { name: "Piper", emoji: "🧭", model: "house" },
       projectAgents: [{ projectId: "fairway", enabled: true, token: "pat", mmUserId: "bot",
         identity: { name: "Chip", emoji: "⛳", persona: "Friendly caddie" } }],
     });
@@ -611,9 +611,9 @@ describe("buildProjectAgents", () => {
     { hostCode: "builder-full", checkoutEnabled: false, sandboxMode: "off" },
     { hostCode: "builder-full", checkoutEnabled: true, sandboxMode: "all" },
     { hostCode: "customer-restricted", checkoutEnabled: true, sandboxMode: "off" },
-  ] as const)("keeps GitHub coach files private with $hostCode, checkout=$checkoutEnabled, sandbox=$sandboxMode", row => {
+  ] as const)("keeps GitHub agent files private with $hostCode, checkout=$checkoutEnabled, sandbox=$sandboxMode", row => {
     const [agent] = buildProjectAgents({ slug: "chris", customerDir: "/customers/chris", agentsDir: "/agents",
-      coach: { name: "Piper", emoji: "🧭", model: "house" }, hostCode: row.hostCode,
+      defaultAgent: { name: "Piper", emoji: "🧭", model: "house" }, hostCode: row.hostCode,
       projectAgents: [{ projectId: "orbit", enabled: true, token: "pat", mmUserId: "bot" }],
       githubWorkspaces: new Map([["orbit", { checkoutReady: row.checkoutEnabled, sandboxMode: row.sandboxMode }]]),
     });
@@ -633,7 +633,7 @@ describe("buildProjectAgents", () => {
       slug: "chris",
       customerDir: "/customers/chris",
       agentsDir: "/agents",
-      coach: { name: "BenderEcho", emoji: "🤖", model: "anthropic/claude-sonnet-4-6" },
+      defaultAgent: { name: "BenderEcho", emoji: "🤖", model: "anthropic/claude-sonnet-4-6" },
       projectAgents,
       ownerMmUserId: CHRIS_MM_ID,
     });
@@ -679,12 +679,12 @@ describe("buildProjectAgents", () => {
     expect(agents[0].tools.deny).not.toContain("octogee_project_commit");
   });
 
-  it("lets project agents inherit the full-power tool policy on a Builder gateway", () => {
+  it("lets project agents inherit the full-power tool policy on a isolated gateway", () => {
     const [agent] = buildProjectAgents({
       slug: "chris",
       customerDir: "/customers/chris",
       agentsDir: "/agents",
-      coach: { name: "BenderEcho", emoji: "🤖", model: "anthropic/claude-sonnet-4-6" },
+      defaultAgent: { name: "BenderEcho", emoji: "🤖", model: "anthropic/claude-sonnet-4-6" },
       projectAgents,
       ownerMmUserId: CHRIS_MM_ID,
       hostCode: "builder-full",
@@ -717,7 +717,7 @@ describe("buildProjectAgentAccounts", () => {
     });
   });
 
-  it("disables project-agent DMs on Builder gateways while keeping owner approval identity", () => {
+  it("disables project-agent DMs on isolated gateways while keeping owner approval identity", () => {
     const accounts = buildProjectAgentAccounts("chris", [
       { projectId: "orbit", enabled: true, token: "pat-1", mmUserId: "bot-1" },
     ], CHRIS_MM_ID);
@@ -735,15 +735,15 @@ describe("buildProjectAgentAccounts", () => {
   });
 });
 
-describe("buildCustomerBindings — Vegas partition", () => {
+describe("buildUserBindings — multi-agent partition", () => {
   const channels = [
     { channelId: "ws-general", scope: "workspace" as const },
     { channelId: "proj-orbit-gen", scope: "project" as const, projectId: "orbit" },
     { channelId: "proj-nova-gen", scope: "project" as const, projectId: "nova" },
   ];
 
-  it("routes only workspace channels to the coach and leaves projects without an active agent unbound", () => {
-    const bindings = buildCustomerBindings([
+  it("routes only workspace channels to the agent and leaves projects without an active agent unbound", () => {
+    const bindings = buildUserBindings([
       { slug: "chris", channels, agentProjects: new Set(["orbit"]) },
     ]);
 
@@ -776,7 +776,7 @@ describe("buildCustomerBindings — Vegas partition", () => {
   });
 
   it("partition invariant: exactly one binding per channel; workspace channels never bind to a project agent", () => {
-    const bindings = buildCustomerBindings([
+    const bindings = buildUserBindings([
       { slug: "chris", channels, agentProjects: new Set(["orbit", "nova"]) },
     ]);
 
@@ -793,8 +793,8 @@ describe("buildCustomerBindings — Vegas partition", () => {
     expect(byChannel.get("ws-general")).toEqual(["octogee-chris-coach"]);
   });
 
-  it("never falls back to the workspace coach for projects without an active agent", () => {
-    const bindings = buildCustomerBindings([{ slug: "chris", channels }]);
+  it("never falls back to the workspace agent for projects without an active agent", () => {
+    const bindings = buildUserBindings([{ slug: "chris", channels }]);
     expect(bindings.flatMap(b => b.match.peer ? [b.match.peer.id] : [])).toEqual(["ws-general"]);
     for (const b of bindings) {
       expect(b.agentId).toBe("octogee-chris-coach");
@@ -803,7 +803,7 @@ describe("buildCustomerBindings — Vegas partition", () => {
   });
 
   it("pins every active project bot account even before its channel-specific binding is live", () => {
-    const bindings = buildCustomerBindings([
+    const bindings = buildUserBindings([
       {
         slug: "chris",
         channels: [],
@@ -833,5 +833,5 @@ it('excludes an agent in error from all runtime accounts and bindings without us
   expect([...activeAgentProjectIds(projectAgents)]).toEqual([]);
   expect(buildProjectAgentAccounts('chris', projectAgents, CHRIS_MM_ID)).toEqual({});
   expect(buildProjectAgents({ slug: 'chris', customerDir: '/customers/chris', agentsDir: '/agents',
-    coach: { name: 'Piper', emoji: '🤖', model: 'house' }, projectAgents })).toEqual([]);
+    defaultAgent: { name: 'Piper', emoji: '🤖', model: 'house' }, projectAgents })).toEqual([]);
 });

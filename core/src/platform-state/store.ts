@@ -1,5 +1,5 @@
 import type { OperationStatus } from "@octogee/shared/types/glm";
-import type { BuilderRepositories, BuilderRecord } from "./builders.js";
+import type { UserRepositories, PlatformUserRecord } from "./users.js";
 import type { ChannelIdentitiesRepository } from "./channel-identities.js";
 import type { ConfigRepositories, ConfigRecord } from "./config.js";
 import type { ControllerStateRepositories } from "./controller-state.js";
@@ -15,7 +15,7 @@ import type {
 import type { JournalRepositories, OperationRecord } from "./operations.js";
 import type { AccessRepositories, SecretsRepository } from "./secrets.js";
 import type {
-  BuilderAgentIdentity,
+  UserAgentIdentity,
   WorkspaceChannel,
   WorkspaceMember,
   WorkspaceProject,
@@ -67,7 +67,7 @@ export interface PlatformStateRepositories {
   readonly controllerState: ControllerStateRepositories;
   readonly migrationTasks: MigrationTasksRepository;
   readonly config: ConfigRepositories;
-  readonly builders: BuilderRepositories;
+  readonly users: UserRepositories;
   readonly workspaces: WorkspaceRepositories;
   readonly secrets: SecretsRepository;
   readonly channelIdentities: ChannelIdentitiesRepository;
@@ -108,7 +108,7 @@ export interface WatchRecords {
   readonly gateways: GatewayRoot;
   readonly assignments: GatewayAssignment;
   readonly fleetRegistry: FleetRegistryRecord;
-  readonly builders: BuilderRecord;
+  readonly builders: PlatformUserRecord;
   readonly config: ConfigRecord;
   readonly migrationTasks: MigrationTransferTask;
   readonly workspaces: WorkspaceRecord;
@@ -116,7 +116,7 @@ export interface WatchRecords {
   readonly workspaceProjects: WorkspaceProject;
   readonly workspaceProjectMembers: WorkspaceProjectMember;
   readonly workspaceChannels: WorkspaceChannel;
-  readonly agentIdentities: BuilderAgentIdentity;
+  readonly agentIdentities: UserAgentIdentity;
 }
 
 export type WatchAggregate = keyof WatchFilters;

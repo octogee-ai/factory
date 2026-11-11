@@ -14,6 +14,6 @@ describe("isRequestedRevisionAllowed", () => {
 
   it("rejects a revision-suffixed or foreign identity", () => {
     expect(isRequestedRevisionAllowed("default", "default-r2")).toBe(false);
-    expect(isRequestedRevisionAllowed("default", "bender")).toBe(false);
+    expect(isRequestedRevisionAllowed("default", "walter")).toBe(false);
   });
 });

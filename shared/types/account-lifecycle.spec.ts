@@ -5,7 +5,7 @@ import {
   anonymousOperationalEnvironment,
   anonymousOperationalGatewayClass,
   anonymousOperationalPlanTier,
-  buildCustomerDeletionSchedule,
+  buildUserDeletionSchedule,
   isAnonymousOperationalModelDimension,
 } from "./account-lifecycle.js";
 
@@ -23,12 +23,12 @@ describe("account deletion lifecycle", () => {
   );
 
   it("schedules ordinary erasure exactly 90 days after suspension", () => {
-    const schedule = buildCustomerDeletionSchedule({ now: 1_000, eraseNow: false });
+    const schedule = buildUserDeletionSchedule({ now: 1_000, eraseNow: false });
     expect(schedule).toEqual({ requestedAt: 1_000, eraseAfter: 1_000 + ACCOUNT_DELETION_RETENTION_MS });
   });
 
   it("schedules verified immediate erasure at the request time", () => {
-    expect(buildCustomerDeletionSchedule({ now: 4_000, eraseNow: true })).toEqual({
+    expect(buildUserDeletionSchedule({ now: 4_000, eraseNow: true })).toEqual({
       requestedAt: 4_000,
       eraseAfter: 4_000,
     });

@@ -210,7 +210,7 @@ describe("MODEL_CREDENTIAL_CATALOG", () => {
     });
   });
 
-  it("keeps Gemini honest until coach model routing is implemented", () => {
+  it("keeps Gemini honest until agent model routing is implemented", () => {
     expect(modelCredentialEntryById("gemini")).toMatchObject({
       activeSlotEligible: false,
       connectorOnlyUntilRouted: true,

@@ -16,7 +16,7 @@ import {
   type PushRsyncStateRequestBody,
   SIGNATURE_HEADER,
 } from "@octogee/shared/types/fleet-controller";
-import { isBuilderActivateOperationIdFor } from "@octogee/core/builder-activation-lease";
+import { isUserActivateOperationIdFor } from "@octogee/core/user-activation-lease";
 import type { MigrationSyncMode } from "@octogee/core/fleet-migration";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
@@ -226,9 +226,9 @@ async function assertTargetTransferFencing(fetchImpl: typeof globalThis.fetch, b
   }
 }
 
-function builderActivationGeneration(migrationId: unknown, gatewayId: string): number | undefined {
+function userActivationGeneration(migrationId: unknown, gatewayId: string): number | undefined {
   if (typeof migrationId !== "string" || !migrationId.startsWith("mig-") ||
-      !isBuilderActivateOperationIdFor(migrationId.slice(4), gatewayId)) return undefined;
+      !isUserActivateOperationIdFor(migrationId.slice(4), gatewayId)) return undefined;
   const generation = Number(migrationId.slice(migrationId.lastIndexOf("-g") + 2));
   return Number.isSafeInteger(generation) ? generation : undefined;
 }
@@ -246,8 +246,8 @@ async function assertFinalImportNotReleased(fetchImpl: typeof globalThis.fetch, 
   if (terminal.migrationId === input.migrationId) {
     throw new Error(`target import already released for migration ${input.migrationId} on ${input.toGatewayId}`);
   }
-  const previous = builderActivationGeneration(terminal.migrationId, input.toGatewayId);
-  const current = builderActivationGeneration(input.migrationId, input.toGatewayId);
+  const previous = userActivationGeneration(terminal.migrationId, input.toGatewayId);
+  const current = userActivationGeneration(input.migrationId, input.toGatewayId);
   if ((response.ok || terminal.processHeld === true) && previous !== undefined && current !== undefined && previous < current) return;
   throw new Error("migration target terminal identity does not match the reclaimed transfer");
 }

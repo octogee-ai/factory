@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import {
-  type BuilderRecord,
+  type PlatformUserRecord,
   type FleetRegistryRecord,
-  type GatewayComputerProfile,
+  type GatewayVmProfile,
   type PlatformStateStore,
 } from "@octogee/core/platform-state";
 import type { SizingTier } from "@octogee/shared/types/sizing";
@@ -16,10 +16,10 @@ import {
   type GatewayVmSpec,
   type GatewayVmState,
   type HelmInstancesMap,
-  type RuntimeBuilderIdentity,
+  type RuntimeUserIdentity,
 } from "@octogee/shared/types/glm";
 import type { GatewayVmClient } from "./lib/compute-vm.js";
-import { createComputerLifecycle, recordVmObservation, vmSpecDesktop } from "./vm-computer-lifecycle.js";
+import { createVmLifecycle, recordVmObservation, vmSpecDesktop } from "./vm-lifecycle.js";
 import type { KubectlSubprocess } from "./fleet-ingress.js";
 import {
   helmTemplateArgsFromUpgradeArgs,
@@ -33,8 +33,8 @@ const VM_ROUTES_CONFIGMAP_KEY = "routes.json";
 export interface VmGatewayRuntime extends HelmRunner {
   readDeploymentPrerequisiteError(gatewayId: string): Promise<string | null>;
   recoverUnreachable(gatewayId: string): Promise<void>;
-  deleteComputer(ownerUid: string): Promise<boolean>;
-  replaceStoppedComputer(gatewayId: string, operationId: string, assertAuthority: () => Promise<void>, options?: { forceOwnerUid: string; expectedInstanceId: string }): Promise<Record<string, unknown>>;
+  deleteVm(ownerUid: string): Promise<boolean>;
+  replaceStoppedVm(gatewayId: string, operationId: string, assertAuthority: () => Promise<void>, options?: { forceOwnerUid: string; expectedInstanceId: string }): Promise<Record<string, unknown>>;
   detectPreemption(gatewayId: string, sinceMs: number): Promise<string | null>;
 }
 
@@ -59,31 +59,31 @@ export interface VmGatewayRuntimeDeps {
   disposableParking?: boolean;
   homeCheckpointTimeoutMs?: number;
   homeCheckpointPollMs?: number;
-  onComputerCreationSettled: (gatewayId: string) => void;
+  onVmCreationSettled: (gatewayId: string) => void;
   now: () => number;
   log: (msg: string) => void;
 }
 
-export async function resolveBuilderComputerPolicy(
+export async function resolveGatewayVmPolicy(
   store: Pick<PlatformStateStore, "config">,
   sizingTier: SizingTier | null | undefined,
-): Promise<GatewayComputerProfile> {
+): Promise<GatewayVmProfile> {
   const tier = sizingTier ?? "s";
   const config = await store.config.orchestrator.get();
   const matches = Object.entries(config?.sizingProfiles ?? {}).flatMap(([key, entry]) =>
-    entry.isolation === "isolated" && entry.sizingTier === tier ? [{ key, computer: entry.computer }] : []);
+    entry.isolation === "isolated" && entry.sizingTier === tier ? [{ key, policy: entry.computer }] : []);
   const [first] = matches;
-  if (!first) throw new Error(`No Builder computer policy for sizing tier ${tier}`);
-  if (matches.some(({ computer }) => !isDeepStrictEqual(computer, first.computer))) {
-    throw new Error(`Conflicting Builder computer policies for sizing tier ${tier}: ${matches.map(({ key }) => key).join(", ")}`);
+  if (!first) throw new Error(`No gateway VM policy for sizing tier ${tier}`);
+  if (matches.some(({ policy }) => !isDeepStrictEqual(policy, first.policy))) {
+    throw new Error(`Conflicting gateway VM policies for sizing tier ${tier}: ${matches.map(({ key }) => key).join(", ")}`);
   }
-  return first.computer;
+  return first.policy;
 }
 
-export function resolveDisposableBuilderParking(env: Record<string, string | undefined>): boolean {
+export function resolveIsolatedParking(env: Record<string, string | undefined>): boolean {
   const raw = env.GATEWAY_BUILDER_DISPOSABLE_PARKING?.trim();
   if (!raw || raw === "false") return false;
-  if (raw === "true") throw new Error("disposable-home parking was withdrawn; customer home disks must be retained");
+  if (raw === "true") throw new Error("disposable-home parking was withdrawn; user home disks must be retained");
   throw new Error(`GATEWAY_BUILDER_DISPOSABLE_PARKING must be true or false (got ${raw})`);
 }
 
@@ -95,7 +95,7 @@ function assertZones(zones: unknown): void {
 }
 
 export function parseGatewayVmSpec(raw: string | undefined): GatewayVmSpec {
-  if (!raw?.trim()) throw new Error("GATEWAY_VM_SPEC_JSON is required for GCE Builder computers");
+  if (!raw?.trim()) throw new Error("GATEWAY_VM_SPEC_JSON is required for GCE gateway VMs");
   const spec = JSON.parse(raw) as Partial<GatewayVmSpec>;
   const strings = ["machineType", "imageFamily", "serviceAccountEmail", "subnetwork"] as const;
   for (const key of strings) {
@@ -121,11 +121,11 @@ function assertSpecChoices(spec: Partial<GatewayVmSpec>): void {
 
 type TierVmShape = Pick<GatewayVmSpec, "machineType" | "diskSizeGb" | "bootDiskType" | "homeDiskSizeGb" | "provisioningModel" | "desktop">;
 
-function tierVmShape(computer: GatewayComputerProfile): TierVmShape {
-  if (!computer.machineType || !computer.provisioningModel || !computer.bootDisk) throw new Error("a gce-vm Builder tier needs a machine type, provisioning model and boot disk");
+function tierVmShape(policy: GatewayVmProfile): TierVmShape {
+  if (!policy.machineType || !policy.provisioningModel || !policy.bootDisk) throw new Error("a gce-vm user tier needs a machine type, provisioning model and boot disk");
   return {
-    machineType: computer.machineType, diskSizeGb: computer.bootDisk.sizeGb, bootDiskType: computer.bootDisk.type,
-    homeDiskSizeGb: computer.homeSizeGiB, provisioningModel: computer.provisioningModel, desktop: computer.desktop,
+    machineType: policy.machineType, diskSizeGb: policy.bootDisk.sizeGb, bootDiskType: policy.bootDisk.type,
+    homeDiskSizeGb: policy.homeSizeGiB, provisioningModel: policy.provisioningModel, desktop: policy.desktop,
   };
 }
 
@@ -170,9 +170,9 @@ interface GatewayRuntimeStampInput {
 
 async function reconcileStampedVmSpec(input: GatewayRuntimeStampInput, data: Partial<FleetRegistryRecord>): Promise<void> {
   if (data.runtime !== "gce-vm" || input.gatewayClass !== "builder" || !input.vmSpec) return;
-  const computer = await resolveBuilderComputerPolicy(input.store, input.sizingTier);
-  if (computer.runtime !== "gce-vm") return;
-  const shape = tierVmShape(computer);
+  const policy = await resolveGatewayVmPolicy(input.store, input.sizingTier);
+  if (policy.runtime !== "gce-vm") return;
+  const shape = tierVmShape(policy);
   await input.store.transaction({ label: "gateway-runtime.reconcile-vm-spec" }, async (transaction) => {
     const current = await transaction.fleetRegistry.get(input.gatewayId);
     if (current?.runtime !== "gce-vm") throw new Error(`gateway ${input.gatewayId}: runtime changed during VM specification reconciliation`);
@@ -194,18 +194,18 @@ export async function stampGatewayRuntime(input: GatewayRuntimeStampInput): Prom
     return data.runtime;
   }
   const deployedCluster = hasObservedClusterPods(data) || hasPriorClusterDeployment(data, input.gatewayId);
-  const computer = input.gatewayClass === "builder" && !deployedCluster ? await resolveBuilderComputerPolicy(input.store, input.sizingTier) : null;
-  const runtime: GatewayRuntime = computer?.runtime ?? "cluster";
+  const policy = input.gatewayClass === "builder" && !deployedCluster ? await resolveGatewayVmPolicy(input.store, input.sizingTier) : null;
+  const runtime: GatewayRuntime = policy?.runtime ?? "cluster";
   if (runtime === "gce-vm" && !input.vmSpec) throw new Error(`gateway ${input.gatewayId}: gce-vm runtime needs a vmSpec`);
   await input.assertStorage?.(runtime);
   await input.store.fleetRegistry.upsert(input.gatewayId, input.initial, {
-    runtime, ...(runtime === "gce-vm" ? { vmSpec: { ...input.vmSpec!, ...tierVmShape(computer!) } } : {}),
+    runtime, ...(runtime === "gce-vm" ? { vmSpec: { ...input.vmSpec!, ...tierVmShape(policy!) } } : {}),
   });
   input.log(`[vm-gateway-runtime] ${input.gatewayId}: runtime stamped ${runtime}`);
   return runtime;
 }
 
-type VmInstanceRecord = HelmInstancesMap[string] & Partial<RuntimeBuilderIdentity>;
+type VmInstanceRecord = HelmInstancesMap[string] & Partial<RuntimeUserIdentity>;
 
 function withoutUndefined<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -223,10 +223,10 @@ export function vmRoutesFromRecords(records: readonly FleetRegistryRecord[]): Re
   return routes;
 }
 
-function homeStorageIdOf(uid: string, builder: BuilderRecord | null): string | undefined {
-  const disk = builder?.home.homeStorage?.disk as { id?: unknown } | undefined;
+function homeStorageIdOf(uid: string, user: PlatformUserRecord | null): string | undefined {
+  const disk = user?.home.homeStorage?.disk as { id?: unknown } | undefined;
   if (disk?.id === undefined) return undefined;
-  if (typeof disk.id !== "string" || disk.id.length === 0) throw new Error(`Builder ${uid}: home storage disk id is malformed`);
+  if (typeof disk.id !== "string" || disk.id.length === 0) throw new Error(`User ${uid}: home storage disk id is malformed`);
   return disk.id;
 }
 
@@ -286,7 +286,7 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
     deps.log(`[vm-gateway-runtime] routes reconciled: ${Object.keys(routes).length} VM gateway(s)`);
   }
 
-  const computers = createComputerLifecycle({
+  const vmLifecycle = createVmLifecycle({
     store: deps.store,
     vm: deps.vm,
     environment: deps.environment,
@@ -299,7 +299,7 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
     disposableParking: deps.disposableParking,
     homeCheckpointTimeoutMs: deps.homeCheckpointTimeoutMs,
     homeCheckpointPollMs: deps.homeCheckpointPollMs,
-    onComputerCreationSettled: deps.onComputerCreationSettled,
+    onVmCreationSettled: deps.onVmCreationSettled,
     now: deps.now,
     log: deps.log,
   });
@@ -325,7 +325,7 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
       const desktop = vmSpecDesktop((await deps.store.fleetRegistry.get(gatewayId))?.vmSpec, deps.vmSpec);
       const [manifests, bridge] = await Promise.all([renderManifests(opts, desktop), bridgeIp()]);
       const ownerUid = opts.builderIdentity?.ownerUid;
-      const homeStorageId = ownerUid ? homeStorageIdOf(ownerUid, await deps.store.builders.records.get(ownerUid)) : undefined;
+      const homeStorageId = ownerUid ? homeStorageIdOf(ownerUid, await deps.store.users.records.get(ownerUid)) : undefined;
       const bundle = await renderVmRuntimeBundle({
         ...(homeStorageId ? { homeStorageId } : {}),
         ...(opts.builderIdentity ? { builderIdentity: opts.builderIdentity } : {}),
@@ -360,12 +360,12 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
         replicas: opts.replicas,
       });
       if (opts.replicas === 0) {
-        await computers.pauseComputer(gatewayId);
+        await vmLifecycle.pauseVm(gatewayId);
       } else {
-        await computers.ensureVm(gatewayId, `${opts.imageRepository}:${opts.imageTag}`, ownerUid, bridge);
+        await vmLifecycle.ensureVm(gatewayId, `${opts.imageRepository}:${opts.imageTag}`, ownerUid, bridge);
       }
       if (ownerUid && bundle.volumes.some(volume => volume.name === "project-materializations" && volume.kind === "ephemeral")) {
-        await deps.store.builders.records.patch(ownerUid, { home: { projectStorageNativeBoot: true } });
+        await deps.store.users.records.patch(ownerUid, { home: { projectStorageNativeBoot: true } });
       }
       await deps.store.gateways.vmRuntime.put(gatewayId, bundle);
       deps.log(`[vm-gateway-runtime] ${gatewayId}: runtime bundle ${bundle.version} rendered (${opts.imageTag})`);
@@ -374,7 +374,7 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
     },
 
     async removeInstance({ gatewayId, awaitHomeCheckpoint }) {
-      const parked = await computers.parkComputer(gatewayId, { awaitHomeCheckpoint: awaitHomeCheckpoint === true });
+      const parked = await vmLifecycle.parkVm(gatewayId, { awaitHomeCheckpoint: awaitHomeCheckpoint === true });
       await deps.store.gateways.vmRuntime.delete(gatewayId);
       await recordVmObservation(deps, gatewayId, { vm: parked, vmInstance: { clear: true } }, "park");
       await reconcileRoutes();
@@ -388,11 +388,11 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
       return `${gatewayId}: VM runtime has no Helm release to recover`;
     },
 
-    readDeploymentPrerequisiteError: computers.readDeploymentPrerequisiteError,
-    recoverUnreachable: computers.recoverUnreachable,
-    deleteComputer: computers.deleteComputer,
-    replaceStoppedComputer: computers.replaceStoppedComputer,
-    detectPreemption: computers.detectPreemption,
+    readDeploymentPrerequisiteError: vmLifecycle.readDeploymentPrerequisiteError,
+    recoverUnreachable: vmLifecycle.recoverUnreachable,
+    deleteVm: vmLifecycle.deleteVm,
+    replaceStoppedVm: vmLifecycle.replaceStoppedVm,
+    detectPreemption: vmLifecycle.detectPreemption,
   };
 }
 

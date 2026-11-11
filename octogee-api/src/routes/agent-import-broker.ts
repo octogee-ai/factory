@@ -5,11 +5,11 @@ import { randomUUID } from "node:crypto";
 import { Transform, type Readable, type Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
-import type { BuilderAccountReader } from "@octogee/core/builder-account";
+import type { UserAccountReader } from "@octogee/core/user-account";
 import {
   agentImportRecordFromPayload,
   type AgentImportRecord,
-  type BuilderRecord,
+  type PlatformUserRecord,
   type PlatformStateStore,
 } from "@octogee/core/platform-state";
 import { classifyAgentImportArchivePath } from "@octogee/shared/types/agent-import";
@@ -56,7 +56,7 @@ interface BucketLike {
 
 export interface AgentImportBrokerDeps {
   store: PlatformStateStore;
-  accounts: BuilderAccountReader;
+  accounts: UserAccountReader;
   bucket: BucketLike;
   exportBlobs?: () => BlobStore;
   readGithubToken(uid: string): Promise<string | null>;
@@ -102,13 +102,13 @@ function boundGateway(req: Request, res: Response): GatewayBinding | null {
   return bound;
 }
 
-function assignedWorkspaceSlug(builder: BuilderRecord | null, gatewayId: string, res: Response): string | null {
-  const slug = builder?.slug ?? null;
-  if (!builder || !slug || !isValidUsername(slug) || builder.gateway?.gatewayId !== gatewayId) {
+function assignedWorkspaceSlug(user: PlatformUserRecord | null, gatewayId: string, res: Response): string | null {
+  const slug = user?.slug ?? null;
+  if (!user || !slug || !isValidUsername(slug) || user.gateway?.gatewayId !== gatewayId) {
     res.status(404).json({ error: "not_found" });
     return null;
   }
-  if (builder.openclaw.status !== "complete") {
+  if (user.openclaw.status !== "complete") {
     res.status(409).json({ error: "openclaw_not_ready" });
     return null;
   }
@@ -124,8 +124,8 @@ async function ownerContext(
   if (!bound) return null;
   const uid = authenticatedUid(req, res, bound);
   if (!uid) return null;
-  const builder = await deps.store.builders.records.get(uid);
-  const slug = assignedWorkspaceSlug(builder, bound.gatewayId, res);
+  const user = await deps.store.users.records.get(uid);
+  const slug = assignedWorkspaceSlug(user, bound.gatewayId, res);
   if (!slug) return null;
   const [workspace, account] = await Promise.all([deps.store.workspaces.records.get(slug), deps.accounts.get(uid)]);
   if (workspace?.ownerUid !== uid) {
@@ -137,7 +137,7 @@ async function ownerContext(
     uid,
     slug,
     gatewayId: bound.gatewayId,
-    isAdmin: builder?.role === "admin",
+    isAdmin: user?.role === "admin",
     ...(typeof planInputs.selectedTier === "string" ? { planTier: planInputs.selectedTier } : {}),
     workspacePolicy: {
       preserveConvergedContextFiles: userEntitlements().plan(planInputs, deps.now()).modelAccess === "house_only",

@@ -10,21 +10,21 @@ import { bundleFixture } from "./fixture.js";
 
 const native = process.env.OCTOGEE_NATIVE_DOCKER_TEST === "1";
 describe.skipIf(!native)("native host Docker scratch custody", () => {
-  it("retains one writable scratch backing across five gateway rebindings on the same computer", async () => {
+  it("retains one writable scratch backing across five gateway rebindings on the same VM", async () => {
     const engine = createDockerEngine({ socketPath: process.env.OCTOGEE_NATIVE_DOCKER_SOCKET });
-    const computerId = BigInt(`0x${randomUUID().replaceAll("-", "")}`).toString();
+    const vmId = BigInt(`0x${randomUUID().replaceAll("-", "")}`).toString();
     const image = process.env.OCTOGEE_NATIVE_DOCKER_IMAGE || "node:22-bookworm-slim";
-    const name = scratchVolumeName(computerId, "builder-cache");
+    const name = scratchVolumeName(vmId, "builder-cache");
     const writer = `scratch-writer-${randomUUID()}`;
     try {
       for (let lease = 0; lease < 5; lease++) {
-        await prepareScratchVolumes({ engine, image, computerId, stateRoot: "/srv/octogee", names: ["builder-cache"], beforeCreate: async () => {
+        await prepareScratchVolumes({ engine, image, vmId, stateRoot: "/srv/octogee", names: ["builder-cache"], beforeCreate: async () => {
           if (lease > 0) throw new Error("no boot headroom for a new allocation");
         } });
         const bundle = bundleFixture({ gatewayId: `b-${lease}` });
         bundle.volumes.push({ name: "builder-cache", kind: "ephemeral" });
         bundle.containers[0].mounts.push({ volume: "builder-cache", mountPath: "/scratch", readOnly: false, subPath: null });
-        const binds = (planBundle(bundle, { stateRoot: "/srv/octogee", instanceId: computerId, desktopAuth: false }).services[0].config.HostConfig as { Binds: string[] }).Binds.filter(bind => bind.endsWith(":/scratch"));
+        const binds = (planBundle(bundle, { stateRoot: "/srv/octogee", instanceId: vmId, desktopAuth: false }).services[0].config.HostConfig as { Binds: string[] }).Binds.filter(bind => bind.endsWith(":/scratch"));
         expect(binds).toEqual([`${name}:/scratch`]);
         const code = lease === 0 ? "require('fs').writeFileSync('/scratch/acknowledged.txt','native write');"
           : "if(require('fs').readFileSync('/scratch/acknowledged.txt','utf8')!=='native write')process.exit(2);";
@@ -35,13 +35,13 @@ describe.skipIf(!native)("native host Docker scratch custody", () => {
         await removeContainer(engine, writer);
       }
       const inventory = await engine.request<{ Volumes: Array<{ Name: string; Labels: Record<string, string> }> }>("GET", "/volumes");
-      expect(inventory.body.Volumes.filter(volume => volume.Labels?.["ai.octogee.computer-id"] === computerId).map(volume => volume.Name)).toEqual([name]);
+      expect(inventory.body.Volumes.filter(volume => volume.Labels?.["ai.octogee.computer-id"] === vmId).map(volume => volume.Name)).toEqual([name]);
     } finally {
       await removeContainer(engine, writer);
       await engine.request("DELETE", `/volumes/${name}`);
     }
   }, 60_000);
-  it("retains caches of other computers, including running/paused/stopped references and durable volumes", async () => {
+  it("retains caches of other VMs, including running/paused/stopped references and durable volumes", async () => {
     const engine = createDockerEngine({ socketPath: process.env.OCTOGEE_NATIVE_DOCKER_SOCKET });
     const run = randomUUID();
     const image = process.env.OCTOGEE_NATIVE_DOCKER_IMAGE || "node:22-bookworm-slim";
@@ -61,15 +61,15 @@ describe.skipIf(!native)("native host Docker scratch custody", () => {
       return response;
     } };
     const log = (message: string) => expect(message).toContain("exclusive writer custody unavailable");
-    const inspect = (computerId: string) => inspectInactiveScratchVolumes({ engine: scoped, computerId, stateRoot: "/srv/octogee", log });
+    const inspect = (vmId: string) => inspectInactiveScratchVolumes({ engine: scoped, vmId, stateRoot: "/srv/octogee", log });
     try {
       expect((await engine.request("POST", "/volumes/create", { Name: durable, Driver: "local" })).status).toBe(201);
-      await prepareScratchVolumes({ engine, image, computerId: owners[0], stateRoot: "/srv/octogee", names: ["builder-cache"], beforeCreate: async () => {} });
+      await prepareScratchVolumes({ engine, image, vmId: owners[0], stateRoot: "/srv/octogee", names: ["builder-cache"], beforeCreate: async () => {} });
       await createContainer(engine, actor, { Image: image, User: "1000:1000", NetworkDisabled: true,
         Entrypoint: ["node", "-e", "setInterval(()=>{},1000)"],
         HostConfig: { Binds: [`${scratchVolumeName(owners[0], "builder-cache")}:/scratch`], ReadonlyRootfs: true } });
       await startContainer(engine, actor);
-      await prepareScratchVolumes({ engine, image, computerId: owners[1], stateRoot: "/srv/octogee", names: ["builder-cache"], beforeCreate: async () => {} });
+      await prepareScratchVolumes({ engine, image, vmId: owners[1], stateRoot: "/srv/octogee", names: ["builder-cache"], beforeCreate: async () => {} });
       expect(await inspect(owners[1])).toEqual([]);
       await setContainerPaused(engine, actor, true);
       expect(await inspect(owners[1])).toEqual([]);
@@ -80,7 +80,7 @@ describe.skipIf(!native)("native host Docker scratch custody", () => {
       expect(await inspect(owners[1])).toEqual([scratchVolumeName(owners[0], "builder-cache")]);
       const retainedNames = [scratchVolumeName(owners[0], "builder-cache")];
       for (const owner of owners.slice(1)) {
-        await prepareScratchVolumes({ engine, image, computerId: owner, stateRoot: "/srv/octogee", names: ["builder-cache"], beforeCreate: async () => {} });
+        await prepareScratchVolumes({ engine, image, vmId: owner, stateRoot: "/srv/octogee", names: ["builder-cache"], beforeCreate: async () => {} });
         const name = scratchVolumeName(owner, "builder-cache");
         retainedNames.push(name);
         await createContainer(engine, actor, { Image: image, User: "1000:1000", NetworkDisabled: true,
@@ -135,8 +135,8 @@ describe.skipIf(!native)("native host Docker scratch custody", () => {
       return response;
     } };
     try {
-      await prepareScratchVolumes({ engine, image, computerId: owner, stateRoot: "/srv/octogee", names: ["builder-cache"], beforeCreate: async () => {} });
-      await inspectInactiveScratchVolumes({ engine: scoped, computerId: "current-race-owner", stateRoot: "/srv/octogee", log: () => {} });
+      await prepareScratchVolumes({ engine, image, vmId: owner, stateRoot: "/srv/octogee", names: ["builder-cache"], beforeCreate: async () => {} });
+      await inspectInactiveScratchVolumes({ engine: scoped, vmId: "current-race-owner", stateRoot: "/srv/octogee", log: () => {} });
       expect(acknowledged).toBe(true);
       const state = await engine.request<{ State: { Running: boolean } }>("GET", `/containers/${actor}/json`);
       expect(state.body.State.Running).toBe(true);

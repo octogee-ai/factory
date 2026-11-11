@@ -1,7 +1,7 @@
 import request from "supertest";
 import type { Express } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { builderAccountFromData, type BuilderAccountReader } from "@octogee/core/builder-account";
+import { userAccountFromData, type UserAccountReader } from "@octogee/core/user-account";
 import {
   MalformedRecordError,
   type PlatformStateError,
@@ -41,7 +41,7 @@ function emptyStore(): FakeStore {
   };
 }
 
-function durableBuilderGateway(
+function durableIsolatedGateway(
   gatewayId: string,
   desiredStatus: "running" | "paused",
 ): Record<string, unknown> {
@@ -233,10 +233,10 @@ function storeWithWatch(store: PlatformStateStore, watch: PlatformStateStore["wa
   });
 }
 
-function accountsOver(store: FakeStore): BuilderAccountReader {
+function accountsOver(store: FakeStore): UserAccountReader {
   const account = (uid: string) => {
     const data = store.users[uid];
-    return data === undefined ? null : builderAccountFromData(uid, data);
+    return data === undefined ? null : userAccountFromData(uid, data);
   };
   return {
     get: async (uid) => account(uid),
@@ -748,7 +748,7 @@ describe("createHttpServer — admin gateway routes", () => {
       surfaces: { gateway: {}, platform: {} },
     }));
     store.gateways["gw-alice"] = {
-      ...durableBuilderGateway("gw-alice", "running"),
+      ...durableIsolatedGateway("gw-alice", "running"),
       profile: "builder",
       imageProfile: "builder",
     };
@@ -948,9 +948,9 @@ describe("createHttpServer — admin gateway routes", () => {
     ]);
   });
 
-  it("includes Cowboy pod diagnostics in the gateway summaries when available", async () => {
-    store.gateways["bender"] = durableSharedGateway("bender");
-    store.glmGateways["bender"] = servingRuntime("bender", {
+  it("includes fleet controller pod diagnostics in the gateway summaries when available", async () => {
+    store.gateways["walter"] = durableSharedGateway("walter");
+    store.glmGateways["walter"] = servingRuntime("walter", {
       heartbeat: {
         status: "ready",
         version: "8507a63",
@@ -968,7 +968,7 @@ describe("createHttpServer — admin gateway routes", () => {
       unknownCapacityPods: 0,
       pods: [
         {
-          name: "octogee-gateway-bender-abc",
+          name: "octogee-gateway-walter-abc",
           phase: "Running",
           readyContainers: 2,
           totalContainers: 2,
@@ -988,13 +988,13 @@ describe("createHttpServer — admin gateway routes", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.gateways).toHaveLength(1);
-    expect(readGatewayPodDiagnostics).toHaveBeenCalledWith("bender");
+    expect(readGatewayPodDiagnostics).toHaveBeenCalledWith("walter");
     expect(res.body.gateways[0].podDiagnostics).toMatchObject({
       status: "ready",
       totalPods: 1,
       readyPods: 1,
       totalRestarts: 2,
-      pods: [{ name: "octogee-gateway-bender-abc", nodeName: "gke-node-1" }],
+      pods: [{ name: "octogee-gateway-walter-abc", nodeName: "gke-node-1" }],
     });
     expect(res.body.gateways[0]).toMatchObject({
       reservation: { type: "spot", source: "kubernetes" },
@@ -1059,7 +1059,7 @@ describe("createHttpServer — admin gateway routes", () => {
     );
   });
 
-  it("serves gateways requested by Cowboy before their heartbeat docs exist", async () => {
+  it("serves gateways requested by the fleet controller before their heartbeat docs exist", async () => {
     store.gateways["canary"] = { ...durableSharedGateway("canary"), sizingTier: "xs" };
     store.glmGateways["canary"] = {
       ...servingRuntime("canary", { imageTag: "8507a63-oc2026.6.10" }),
@@ -1114,9 +1114,9 @@ describe("createHttpServer — admin gateway routes", () => {
     });
   });
 
-  it("derives OpenClaw from Cowboy image tags when heartbeat reports unknown", async () => {
-    store.gateways["bender"] = durableSharedGateway("bender");
-    store.glmGateways["bender"] = servingRuntime("bender", {
+  it("derives OpenClaw from fleet controller image tags when heartbeat reports unknown", async () => {
+    store.gateways["walter"] = durableSharedGateway("walter");
+    store.glmGateways["walter"] = servingRuntime("walter", {
       imageTag: "5b287cb-oc2026.6.10",
       heartbeat: {
         status: "ready",
@@ -1134,7 +1134,7 @@ describe("createHttpServer — admin gateway routes", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.gateways[0]).toMatchObject({
-      gatewayId: "bender",
+      gatewayId: "walter",
       imageTag: "5b287cb",
       openclawVersion: "2026.6.10",
     });
@@ -1163,7 +1163,7 @@ describe("createHttpServer — admin gateway routes", () => {
     });
   });
 
-  it("mounts addAdminCustomerRoutes and returns 404 for unknown customer (factory wired)", async () => {
+  it("mounts addAdminUserDirectoryRoutes and returns 404 for unknown user (factory wired)", async () => {
     const app = createHttpServer(buildDeps(store));
     const res = await request(app)
       .get("/api/admin/users/does-not-exist")

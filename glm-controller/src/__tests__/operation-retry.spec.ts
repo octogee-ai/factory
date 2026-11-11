@@ -16,7 +16,7 @@ import {
 } from "../operation-retry";
 
 const UNCONVERGED_SOURCE_ERROR =
-  '/push-rsync-state/shared-45b73f50e990: 409 {"error":"source mount refused","message":"[migration-activation:livefixture] source has no converged configuration for livefixture: its configuration was permanently refused (config.patch would remove entries from array path(s): agents.entries.octogee-unmatched-route.tools.deny); nothing converged to carry; park and release the customer so placement mounts it fresh, or erase it"}';
+  '/push-rsync-state/shared-45b73f50e990: 409 {"error":"source mount refused","message":"[migration-activation:livefixture] source has no converged configuration for livefixture: its configuration was permanently refused (config.patch would remove entries from array path(s): agents.entries.octogee-unmatched-route.tools.deny); nothing converged to carry; park and release the user so placement mounts it fresh, or erase it"}';
 
 describe("PostgreSQL source recovery health retries", () => {
   const error = "source management health unconfirmed; outcome remains fenced";
@@ -133,8 +133,8 @@ describe("verifiedDeletionCompletion", () => {
     expect(classifyOperationFailure("rsync import credentials rejected")).toBe("terminal");
   });
   it.each([
-    "/quiesce/builder: 500 Agent alice-coach has not completed startup inspection and preparation. Inspection and writable admission continue after the Gateway listener binds.",
-    "/quiesce/builder: 500 agent alice-coach startup preparation was superseded",
+    "/quiesce/user: 500 Agent alice-coach has not completed startup inspection and preparation. Inspection and writable admission continue after the Gateway listener binds.",
+    "/quiesce/user: 500 agent alice-coach startup preparation was superseded",
     "/resume/shared: 500 gateway starting; retry shortly",
   ])("retries native startup availability without classifying database corruption as transient: %s", (error) => {
     expect(classifyOperationFailure(error)).toBe("transient");
@@ -188,7 +188,7 @@ describe("operationNeedsDurableRestartResume", () => {
     expect(operationNeedsDurableRestartResume({ kind: 'restart-gateway', input: { restoreRecovery: {} } })).toBe(true);
     expect(operationNeedsDurableRestartResume({ kind: 'restart-gateway', input: { gatewayId: 'shared-1' } })).toBe(false);
   });
-  it("resumes an interrupted automatic Builder return rather than reaping its coordinated handoff", () => {
+  it("resumes an interrupted automatic user return rather than reaping its coordinated handoff", () => {
     const op = { id: "builder-return-native-g1", kind: "migrate-customer", origin: "automatic", input: {
       source: "builder-activation-lease", fromGatewayId: "native", toGatewayId: "shared-0",
     } };
@@ -221,11 +221,11 @@ describe("classifyOperationFailure", () => {
   });
 
   it("classifies timeouts, K8s API hiccups, and preemption as transient", () => {
-    expect(classifyOperationFailure("helm did not render bender-green@sha within 60000ms")).toBe(
+    expect(classifyOperationFailure("helm did not render walter-green@sha within 60000ms")).toBe(
       "transient",
     );
     expect(
-      classifyOperationFailure("gateway bender-green never published a heartbeat with version=sha within 300000ms"),
+      classifyOperationFailure("gateway walter-green never published a heartbeat with version=sha within 300000ms"),
     ).toBe("transient");
     expect(classifyOperationFailure("connect ECONNREFUSED 10.0.0.1:443")).toBe("transient");
     expect(classifyOperationFailure("request failed with status 503")).toBe("transient");
@@ -248,7 +248,7 @@ describe("classifyOperationFailure", () => {
     expect(classifyOperationFailure("Unexpected end of JSON input")).toBe("transient");
     expect(classifyOperationFailure("14 UNAVAILABLE: Firestore request failed")).toBe("transient");
     expect(
-      classifyOperationFailure("gateway bender durable desired revision did not materialize within 120000ms"),
+      classifyOperationFailure("gateway walter durable desired revision did not materialize within 120000ms"),
     ).toBe("transient");
     expect(classifyOperationFailure("config unfreeze cleanup pending: source RPC unavailable")).toBe(
       "transient",
@@ -258,7 +258,7 @@ describe("classifyOperationFailure", () => {
     );
     expect(
       classifyOperationFailure(
-        "gateway bender retirement config freeze failed: openclaw config is dirty",
+        "gateway walter retirement config freeze failed: openclaw config is dirty",
       ),
     ).toBe("transient");
     expect(
@@ -290,23 +290,23 @@ describe("classifyOperationFailure", () => {
     ).toBe("transient");
   });
 
-  it("classifies a source with no converged configuration for the customer as terminal", () => {
+  it("classifies a source with no converged configuration for the user as terminal", () => {
     expect(classifyOperationFailure(UNCONVERGED_SOURCE_ERROR)).toBe("terminal");
   });
 
   it("classifies validation and the #2137 fail-fast target-state guard as terminal", () => {
     expect(classifyOperationFailure("missing gatewayId in op.input")).toBe("terminal");
-    expect(classifyOperationFailure("glmGateways/bender-green not found — cannot roll out")).toBe(
+    expect(classifyOperationFailure("glmGateways/walter-green not found — cannot roll out")).toBe(
       "terminal",
     );
     expect(
       classifyOperationFailure(
-        "target bender-green already holds customers at sha-1 — re-drive the roll at that tag first",
+        "target walter-green already holds users at sha-1 — re-drive the roll at that tag first",
       ),
     ).toBe("terminal");
     expect(
       classifyOperationFailure(
-        'blue/green sibling id "bender-blue-blue" is invalid (source "bender-blue" leaves no room for a colour suffix under the gateway-id limit)',
+        'blue/green sibling id "walter-blue-blue" is invalid (source "walter-blue" leaves no room for a colour suffix under the gateway-id limit)',
       ),
     ).toBe("terminal");
   });
@@ -322,7 +322,7 @@ describe("classifyOperationFailure", () => {
     ["source gateway with no ready pod while OpenClaw restarts", "expected exactly one ready pod for transport=shared-50fedc9f5f74; found 0"],
     ["gateway with no running pod", "expected exactly one running pod for transport=shared-0; found 0"],
     ["gateway mid-roll with two ready pods", "expected exactly one ready pod for transport=shared-0; found 2"],
-    ["Builder computer whose OpenClaw has not initialized this boot's workspace identities", 'target gateway ceckert-s-7b9a4acb scheduler did not become ready within 120000ms: /scheduler/ceckert-s-7b9a4acb: 500 {"error":"scheduler migration failed","message":"OpenClaw workspace identities are not initialized for this boot"}'],
+    ["Gateway VM whose OpenClaw has not initialized this boot's workspace identities", 'target gateway ceckert-s-7b9a4acb scheduler did not become ready within 120000ms: /scheduler/ceckert-s-7b9a4acb: 500 {"error":"scheduler migration failed","message":"OpenClaw workspace identities are not initialized for this boot"}'],
   ])("classifies a pre-cutover %s as transient so placement re-arms it", (_name, error) => {
     expect(classifyOperationFailure(error)).toBe("transient");
   });
@@ -330,7 +330,7 @@ describe("classifyOperationFailure", () => {
   it.each([
     ["cutover already committed but the customer moved on", "migration cutover already committed to shared-1; customer now owned by shared-2 — source cleanup left to the eviction sweep"],
     ["declared source mismatch", "declared source shared-0 does not match resolved source shared-1"],
-    ["customer already on target", "customer already on shared-1"],
+    ["user already on target", "user already on shared-1"],
     ["scheduler proof failure", "scheduler hold did not prove a drained matching operation"],
     ["a socket message that is not the connect drop", "socket hang up while writing"],
   ])("keeps %s terminal", (_name, error) => {
@@ -354,7 +354,7 @@ describe("classifyOperationFailure", () => {
   });
 });
 
-describe("drain migration whose source has no converged configuration for the customer", () => {
+describe("drain migration whose source has no converged configuration for the user", () => {
   const now = 2_000_000;
 
   it("fails terminally instead of re-queuing the level-triggered placement move", () => {
@@ -582,7 +582,7 @@ describe("buildOperationCompletionUpdate", () => {
 
   it("keeps a durable retirement freeze obligation level-triggered after the normal retry cap", () => {
     const retirementFencePending = {
-      gatewayId: "bender",
+      gatewayId: "walter",
       operationId: "retire-1",
     };
     const update = buildOperationCompletionUpdate({
@@ -590,7 +590,7 @@ describe("buildOperationCompletionUpdate", () => {
       result: {
         steps: [],
         success: false,
-        error: "gateway bender retirement config checkpoint changed before teardown",
+        error: "gateway walter retirement config checkpoint changed before teardown",
         output: { retirementFencePending },
       },
       steps: [],
@@ -602,14 +602,14 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
   });
 
-  it("keeps a customer deletion context fence level-triggered after the normal retry cap", () => {
+  it("keeps a user deletion context fence level-triggered after the normal retry cap", () => {
     const deletionFencePending = { deletionId: "delete-1" };
     const update = buildOperationCompletionUpdate({
       op: { attempts: MAX_OPERATION_ATTEMPTS, attemptHistory: [] },
       result: {
         steps: [],
         success: false,
-        error: "customer suspension cleanup context pending",
+        error: "user suspension cleanup context pending",
         output: { deletionFencePending },
       },
       steps: [],
@@ -620,7 +620,7 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.output).toEqual({ deletionFencePending });
   });
 
-  it("keeps an ordinary customer cleanup failure level-triggered after the normal retry cap", () => {
+  it("keeps an ordinary user cleanup failure level-triggered after the normal retry cap", () => {
     const deletionCleanupRetry = { deletionId: "delete-1" };
     const update = buildOperationCompletionUpdate({
       op: { attempts: MAX_OPERATION_ATTEMPTS, attemptHistory: [] },
@@ -637,14 +637,14 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.output).toEqual({ deletionCleanupRetry });
   });
 
-  it("fails a blocked customer deletion terminally instead of level-triggered retry", () => {
+  it("fails a blocked user deletion terminally instead of level-triggered retry", () => {
     const deletionBlocked = { deletionId: "delete-1", step: "delete-posthog-person-data" };
     const update = buildOperationCompletionUpdate({
       op: { kind: "erase-customer", attempts: 0, attemptHistory: [] },
       result: {
         steps: [],
         success: false,
-        error: "PostHog person deletion refused: merged with another customer (uid-2)",
+        error: "PostHog person deletion refused: merged with another user (uid-2)",
         output: { deletionBlocked },
       },
       steps: [],
@@ -802,7 +802,7 @@ describe("buildOperationCompletionUpdate", () => {
     expect((update.attemptHistory as unknown[]).length).toBe(3);
   });
 
-  it("keeps an active durable customer migration V2 retryable beyond the normal cap", () => {
+  it("keeps an active durable user migration V2 retryable beyond the normal cap", () => {
     const update = buildOperationCompletionUpdate({
       op: {
         attempts: MAX_OPERATION_ATTEMPTS,
@@ -812,7 +812,7 @@ describe("buildOperationCompletionUpdate", () => {
       result: {
         steps: [],
         success: false,
-        error: "customer migration V2 retry pending: status 503: response lost",
+        error: "user migration V2 retry pending: status 503: response lost",
       },
       steps: [],
       now,
@@ -822,7 +822,7 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
   });
 
-  it("keeps an automatic Builder return retryable beyond the cap for a transient cause", () => {
+  it("keeps an automatic user return retryable beyond the cap for a transient cause", () => {
     const update = buildOperationCompletionUpdate({
       op: {
         id: "builder-return-run-alice-g1",
@@ -849,7 +849,7 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
   });
 
-  it("fails a Builder return after the migration-ready precondition exhausts its retry budget", () => {
+  it("fails a user return after the migration-ready precondition exhausts its retry budget", () => {
     const update = buildOperationCompletionUpdate({
       op: {
         id: "builder-return-run-alice-g1",
@@ -957,7 +957,7 @@ describe("buildOperationCompletionUpdate", () => {
     expect((update.attemptHistory as Array<{ attempt: number }>)[0]?.attempt).toBe(2);
   });
 
-  it("still terminalizes a validation failure for an automatic Builder return", () => {
+  it("still terminalizes a validation failure for an automatic user return", () => {
     const update = buildOperationCompletionUpdate({
       op: {
         id: "builder-return-run-alice-g1",
@@ -972,7 +972,7 @@ describe("buildOperationCompletionUpdate", () => {
       result: {
         steps: [],
         success: false,
-        error: "target assignment belongs to another Builder",
+        error: "target assignment belongs to another user",
       },
       steps: [],
       now,
@@ -991,7 +991,7 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.rolledBack).toBe(true);
   });
 
-  describe("a migration whose computer was preempted", () => {
+  describe("a migration whose VM was preempted", () => {
     const rsyncReset = "push-rsync-state: 500 rsync code=12 errno=104 Connection reset";
     const preempted = `target computer octogee-pool-44847785 was preempted: ${rsyncReset}`;
     const activation = (attempts: number, customerMigrationV2?: unknown) => ({
@@ -1033,7 +1033,7 @@ describe("buildOperationCompletionUpdate", () => {
     it("keeps an unfinished migration's durable state across the retry so it resumes rather than restarts", () => {
       const update = buildOperationCompletionUpdate({
         op: activation(1, { phase: "abortIntent", abortReason: rsyncReset }),
-        result: { steps: [], success: false, error: `source computer octogee-computer-prod-uida was preempted: customer migration V2 retry pending: status 503: abort cleanup blocked: fetch failed`, rolledBack: false },
+        result: { steps: [], success: false, error: `source computer octogee-computer-prod-uida was preempted: user migration V2 retry pending: status 503: abort cleanup blocked: fetch failed`, rolledBack: false },
         steps: [],
         now,
       });
@@ -1081,10 +1081,10 @@ describe("retained source execution completion", () => {
   });
 });
 
-it("waits for active Builder work without consuming attempts or recording a failure", () => {
+it("waits for active user work without consuming attempts or recording a failure", () => {
   const update = buildOperationCompletionUpdate({
     op: { kind: "migrate-customer", attempts: 17, startedAt: 500 },
-    result: { success: false, steps: [], waitingForBuilderIdle: true }, steps: [], now: 1_000,
+    result: { success: false, steps: [], waitingForUserIdle: true }, steps: [], now: 1_000,
   });
   expect(update).toMatchObject({ status: "pending", startedAt: null, nextAttemptAt: 16_000, waitingOn: "builder-idle", rolledBack: false });
   expect(update).not.toHaveProperty("attempts");
@@ -1138,7 +1138,7 @@ it.each([false, true])("keeps recovery on an assigned target pending beyond the 
 it("resumes a durable handoff after a lost cutover acknowledgment without a recorded commit", () => {
   const op = { kind: "migrate-customer", attempts: 20,
     schedulerHandoff: { migrationId: "stable", uid: "alice", slug: "alice", fromGatewayId: "shared-blue",
-      toGatewayId: "alice-builder", stageAfterCutover: true as const } };
+      toGatewayId: "alice-user", stageAfterCutover: true as const } };
   expect(operationNeedsDurableRestartResume(op)).toBe(true);
   expect(buildOperationCompletionUpdate({ op,
     result: { steps: [], success: false, error: "migration ownership lookup pending: status 503: unavailable" },

@@ -40,7 +40,7 @@ const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
 describe("helm-runner helpers", () => {
   it("reads supported personal knobs while dropping invalid values from helm values", () => {
     expect(readPersonalKnobs({
-      serviceAccountName: "octogee-gateway-bender",
+      serviceAccountName: "octogee-gateway-walter",
       serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
       gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
       builderAccess: { enabled: true, audiences: ["octogee-api"] },
@@ -50,7 +50,7 @@ describe("helm-runner helpers", () => {
       sizingTier: "l",
       replicas: 0,
     })).toEqual({
-      serviceAccountName: "octogee-gateway-bender",
+      serviceAccountName: "octogee-gateway-walter",
       serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
       gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
       builderAccess: { enabled: true, audiences: ["octogee-api"] },
@@ -80,10 +80,10 @@ describe("helm-runner helpers", () => {
 
   it("builds upgrade args with string, numeric, JSON, and values-file knobs", () => {
     const args = buildUpgradeArgs({
-      release: "octogee-gw-bender",
+      release: "octogee-gw-walter",
       chartPath: "/charts/octogee-gateway",
       namespace: "octogee",
-      gatewayId: "bender",
+      gatewayId: "walter",
       imageTag: "3280519",
       imageRepository: REPO,
       upgradeTimeout: "10m",
@@ -95,11 +95,11 @@ describe("helm-runner helpers", () => {
       imageProfile: "builder",
       sizingTier: "l",
       replicas: 0,
-      serviceAccountName: "octogee-gateway-bender",
+      serviceAccountName: "octogee-gateway-walter",
       serviceAccount: { annotations: { "iam.gke.io/gcp-service-account": "gw@example.iam.gserviceaccount.com" } },
       gatewayContainerSecurityContext: { allowPrivilegeEscalation: false },
       builderAccess: { enabled: true },
-      gcpProject: "builder-bender",
+      gcpProject: "builder-walter",
       kmsKeyName: "projects/octogee/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
       deploymentTargetId: "prod-central",
       deploymentProjectId: "octogee",
@@ -111,9 +111,9 @@ describe("helm-runner helpers", () => {
       const idx = args.findIndex((arg, index) => arg === "--set-string" && args[index + 1]?.startsWith(`${key}=`));
       return idx === -1 ? undefined : args[idx + 1];
     };
-    expect(stringPair("gatewayId")).toBe("gatewayId=bender");
+    expect(stringPair("gatewayId")).toBe("gatewayId=walter");
     expect(stringPair("imageTag")).toBe("imageTag=3280519");
-    expect(stringPair("serviceAccountName")).toBe("serviceAccountName=octogee-gateway-bender");
+    expect(stringPair("serviceAccountName")).toBe("serviceAccountName=octogee-gateway-walter");
     expect(stringPair("deploymentIntentFingerprint")).toBe(
       `deploymentIntentFingerprint=${"d".repeat(64)}`,
     );
@@ -164,7 +164,7 @@ describe("helm-runner helpers", () => {
     expect(args).not.toContain("env.mmInternalUrl=http://mattermost.octogee.svc.cluster.local:8065");
   });
 
-  it("never passes Builder owner identity to the chart", () => {
+  it("never passes user owner identity to the chart", () => {
     const args = buildUpgradeArgs({
       release: "octogee-gw-trial-op-000001",
       chartPath: "/charts/octogee-gateway",
@@ -181,15 +181,15 @@ describe("helm-runner helpers", () => {
   });
 
   // Regression: a leftover resource (e.g. a hand-created operator WI SA) without
-  // Helm ownership metadata wedged a bender blue/green roll forever. Cowboy owns
+  // Helm ownership metadata wedged a walter blue/green roll forever. The fleet controller owns
   // every gateway resource, so the upgrade must ALWAYS --take-ownership, with no
   // opt-in knob to forget.
   it("always passes --take-ownership so a leftover unowned resource can't wedge the roll", () => {
     const args = buildUpgradeArgs({
-      release: "octogee-gw-bender-green",
+      release: "octogee-gw-walter-green",
       chartPath: "/charts/octogee-gateway",
       namespace: "octogee",
-      gatewayId: "bender-green",
+      gatewayId: "walter-green",
       imageTag: "abc1234",
       imageRepository: REPO,
       upgradeTimeout: "10m",
@@ -199,10 +199,10 @@ describe("helm-runner helpers", () => {
 
   it("can apply a surge upgrade without waiting for the controller-owned readiness gate", () => {
     const args = buildUpgradeArgs({
-      release: "octogee-gw-bender",
+      release: "octogee-gw-walter",
       chartPath: "/charts/octogee-gateway",
       namespace: "octogee-test",
-      gatewayId: "bender",
+      gatewayId: "walter",
       imageTag: "def5678",
       imageRepository: REPO,
       upgradeTimeout: "10m",
@@ -380,17 +380,17 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
     const { runHelm } = mockSubprocess([
       {
         stdout: JSON.stringify([
-          { name: "octogee-gw-bender", namespace: "octogee", status: "deployed" },
+          { name: "octogee-gw-walter", namespace: "octogee", status: "deployed" },
         ]),
       },
       {
         stdout: JSON.stringify({
-          gatewayId: "bender",
+          gatewayId: "walter",
           ownerUid: "uid-ceckert",
           builderSlug: "ceckert",
           imageTag: "abc1234",
           image: { repository: REPO },
-          serviceAccountName: "octogee-gateway-bender",
+          serviceAccountName: "octogee-gateway-walter",
           gatewayContainerSecurityContext: {
             allowPrivilegeEscalation: true,
             capabilities: { drop: ["ALL"] },
@@ -400,10 +400,10 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
     ]);
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
     const map = await runner.readDeployedInstances({ namespace: "octogee" });
-    expect(map.bender).not.toHaveProperty("ownerUid");
-    expect(map.bender).not.toHaveProperty("builderSlug");
-    expect(map.bender).toMatchObject({
-      serviceAccountName: "octogee-gateway-bender",
+    expect(map.walter).not.toHaveProperty("ownerUid");
+    expect(map.walter).not.toHaveProperty("builderSlug");
+    expect(map.walter).toMatchObject({
+      serviceAccountName: "octogee-gateway-walter",
       gatewayContainerSecurityContext: {
         allowPrivilegeEscalation: true,
       },
@@ -553,12 +553,10 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     expect(args.some((a) => a.startsWith("--timeout="))).toBe(true);
   });
 
-  it("uses server-side apply with --force-conflicts so kubectl-set / other field-manager ownership doesn't poison helm upgrades (gw-bender 2026-05-24 root cause; matches umbrella path bumped in #913 / pinned in #1056)", async () => {
-    // Bender's helm rev 33 was rejected by K8s because the live Deployment
-    // had `kubectl-set`-owned env entries with `value:` for OPENCLAW_GATEWAY_TOKEN
-    // that strategic-merged with helm's new `valueFrom:` on the same name
-    // into a single entry with BOTH fields — which K8s schema-validation
-    // rejects. Server-side apply with --force-conflicts lets helm
+  it("uses server-side apply with --force-conflicts so kubectl-set / other field-manager ownership doesn't poison helm upgrades (matches umbrella path bumped in #913 / pinned in #1056)", async () => {
+    // A `kubectl-set`-owned env entry with `value:` for OPENCLAW_GATEWAY_TOKEN
+    // strategic-merges with helm's `valueFrom:` on the same name into a
+    // single entry with BOTH fields, which K8s schema validation rejects. Server-side apply with --force-conflicts lets helm
     // unconditionally reclaim ownership of fields it manages, preventing
     // any future kubectl-set / kubectl-patch / kubectl-rollout side-channel
     // from poisoning the next upgrade.
@@ -590,7 +588,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     expect(upgrade).not.toContain("--server-side");
   });
 
-  it("always passes --take-ownership (Cowboy owns every gateway resource; adopt leftovers, never wedge)", async () => {
+  it("always passes --take-ownership (the fleet controller owns every gateway resource; adopt leftovers, never wedge)", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
@@ -646,11 +644,11 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee",
-      gatewayId: "bender",
+      gatewayId: "walter",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
-      serviceAccountName: "octogee-gateway-bender",
+      serviceAccountName: "octogee-gateway-walter",
       gatewayContainerSecurityContext: {
         allowPrivilegeEscalation: true,
         capabilities: { drop: ["ALL"] },
@@ -658,20 +656,20 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     });
 
     const args = calls[0];
-    expect(args).toContain("serviceAccountName=octogee-gateway-bender");
+    expect(args).toContain("serviceAccountName=octogee-gateway-walter");
     expect(args).toContain("--set-json");
     expect(args).toContain(
       'gatewayContainerSecurityContext={"allowPrivilegeEscalation":true,"capabilities":{"drop":["ALL"]}}',
     );
   });
 
-  it("passes --set profile=<profile> when the Builder profile is provided", async () => {
+  it("passes --set profile=<profile> when the user profile is provided", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await runner.upsertInstance({
       namespace: "octogee",
-      gatewayId: "bender",
+      gatewayId: "walter",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -697,13 +695,13 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     expect(calls[0].some((a) => a.startsWith("profile="))).toBe(false);
   });
 
-  it("passes string-typed fields via --set-string so a digit-only imageTag isn't coerced to a number (gw-bender 2026-05-25 root cause)", async () => {
+  it("passes string-typed fields via --set-string so a digit-only imageTag isn't coerced to a number", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "ok" }]);
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
     await runner.upsertInstance({
       namespace: "octogee",
-      gatewayId: "bender",
+      gatewayId: "walter",
       builderIdentity: { ownerUid: "uid-ceckert", builderSlug: "ceckert" },
       imageRepository: REPO,
       imageTag: "3280519", // digits only — would be coerced to number by plain --set
@@ -720,7 +718,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
       return idx === -1 ? undefined : args[idx + 1];
     };
     expect(stringPair("imageTag")).toBe("imageTag=3280519");
-    expect(stringPair("gatewayId")).toBe("gatewayId=bender");
+    expect(stringPair("gatewayId")).toBe("gatewayId=walter");
     expect(args.join(" ")).not.toMatch(/ceckert/);
     expect(stringPair("profile")).toBe("profile=builder");
     expect(stringPair("sizingTier")).toBe("sizingTier=l");
@@ -737,7 +735,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee",
-      gatewayId: "bender",
+      gatewayId: "walter",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -753,7 +751,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee",
-      gatewayId: "bender-green",
+      gatewayId: "walter-green",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -829,7 +827,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     await runner.upsertInstance({
       namespace: "octogee",
-      gatewayId: "bender",
+      gatewayId: "walter",
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
@@ -837,7 +835,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
 
     expect(ensureAuthSecret).toHaveBeenCalledWith({
       namespace: "octogee",
-      gatewayId: "bender",
+      gatewayId: "walter",
     });
     const ensureIdx = events.indexOf("ensure");
     const upgradeIdx = events.indexOf("upgrade");
@@ -860,7 +858,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     await expect(
       runner.upsertInstance({
         namespace: "octogee",
-        gatewayId: "bender",
+        gatewayId: "walter",
         imageRepository: REPO,
         imageTag: "abc1234",
         chartPath: "/charts/octogee-gateway",
@@ -903,11 +901,11 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
       imageRepository: REPO,
       imageTag: "abc1234",
       chartPath: "/charts/octogee-gateway",
-      gcpProject: "builder-acme-prod",
+      gcpProject: "user-acme-prod",
     });
 
     const upgrade = calls.find((c) => c[0] === "upgrade") ?? [];
-    expect(upgrade).toContain("gatewayEdge.env.GCP_PROJECT_ID=builder-acme-prod");
+    expect(upgrade).toContain("gatewayEdge.env.GCP_PROJECT_ID=user-acme-prod");
   });
 });
 
@@ -1116,7 +1114,7 @@ describe("createHelmSubprocessRunner — upsertInstance self-heal for a stuck pe
     expect(upgrades).toBe(2);
   });
 
-  it("re-wedge: recovers a release stuck in pending-rollback (Cowboy killed during a prior recovery)", async () => {
+  it("re-wedge: recovers a release stuck in pending-rollback (the fleet controller killed during a prior recovery)", async () => {
     let upgrades = 0;
     const calls: string[][] = [];
     const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
@@ -1266,7 +1264,7 @@ expect(calls.find((c) => c[0] === "rollback")).toContain("2");
     expect(calls.map((c) => c[0])).toEqual(["upgrade", "history"]);
   });
 
-it("pre-flight detects pending-upgrade and rolls back BEFORE attempting upgrade (the bender-OOM wedge class)", async () => {
+it("pre-flight detects pending-upgrade and rolls back BEFORE attempting upgrade", async () => {
     const calls: string[][] = [];
     const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
       calls.push(args);
@@ -1310,7 +1308,7 @@ expect(calls.map((c) => c[0])).toEqual([
     );
   });
 
-  it("pre-flight detects pending-rollback (Cowboy killed mid-recovery) — same shape, recovers + upgrades", async () => {
+  it("pre-flight detects pending-rollback (the fleet controller killed mid-recovery) — same shape, recovers + upgrades", async () => {
     const calls: string[][] = [];
     const runHelm: HelmSubprocess = vi.fn(async (args: string[]) => {
       calls.push(args);
@@ -1486,7 +1484,7 @@ describe("createHelmSubprocessRunner — gateway ServiceAccount ownership", () =
     expect(ensureServiceAccount).not.toHaveBeenCalled();
   });
 
-  it("leaves a prefixed but non-generated ServiceAccount outside Cowboy ownership", async () => {
+  it("leaves a prefixed but non-generated ServiceAccount outside fleet controller ownership", async () => {
     const ensureServiceAccount = vi.fn(async () => undefined);
     const { runHelm } = mockSubprocess([{ stdout: "ok" }]);
     const runner = createHelmSubprocessRunner({
@@ -1971,13 +1969,13 @@ describe("createHelmSubprocessRunner — listPendingReleases", () => {
         stdout: JSON.stringify([
           { name: "octogee-gw-default-green", namespace: "octogee", status: "deployed" },
           { name: "octogee-gw-default-blue", namespace: "octogee", status: "pending-upgrade" },
-          { name: "octogee-gw-bender", namespace: "octogee", status: "pending-install" },
+          { name: "octogee-gw-walter", namespace: "octogee", status: "pending-install" },
         ]),
       },
     ]);
     const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
     const pending = await runner.listPendingReleases({ namespace: "octogee" });
-    expect(pending.sort()).toEqual(["bender", "default-blue"]);
+    expect(pending.sort()).toEqual(["default-blue", "walter"]);
   });
 
   it("returns empty when every release is deployed", async () => {
@@ -2022,16 +2020,16 @@ describe("createHelmSubprocessRunner — recoverRelease", () => {
   });
 });
 
- it("renders a cluster Builder without creating or selecting a home claim", async () => {
+ it("renders a cluster user without creating or selecting a home claim", async () => {
    const runKubectl = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));
    const { runHelm } = mockSubprocess([{ stdout: "ok" }, { stdout: "ok" }]);
    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn(), runKubectl });
    await runner.upsertInstance({ namespace: "octogee", gatewayId: "b-hobby", gatewayClass: "builder", sizingTier: "s", imageRepository: REPO, imageTag: "abc", chartPath: "/charts/octogee-gateway" });
    expect(runKubectl.mock.calls.flat(2)).not.toContain("pvc");
    const upgrade = runHelm.mock.calls.map(([args]) => args).find(args => args.includes("upgrade"))!;
-   expect(upgrade.filter(arg => arg.startsWith("builderHome"))).toEqual([]);
+   expect(upgrade.filter(arg => arg.startsWith("userHome"))).toEqual([]);
  });
- it("leaves the Builder home size to the chart for shared gateways", async () => {
+ it("leaves the user home size to the chart for shared gateways", async () => {
    const args = buildUpgradeArgs({ release: "octogee-gw-shared-0", chartPath: "/c", namespace: "octogee", gatewayId: "shared-0", gatewayClass: "shared", imageRepository: REPO, imageTag: "abc", upgradeTimeout: "10m" });
-   expect(args.some(arg => arg.startsWith("builderHome"))).toBe(false);
+   expect(args.some(arg => arg.startsWith("userHome"))).toBe(false);
  });

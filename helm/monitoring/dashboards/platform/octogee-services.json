@@ -1,6 +1,6 @@
 {
   "uid": "octogee-services",
-  "title": "Platform \u2014 API / Edge / Cowboy",
+  "title": "Platform \u2014 API / Edge / Fleet controller",
   "schemaVersion": 39,
   "version": 1,
   "editable": true,
@@ -427,7 +427,7 @@
     {
       "id": 9,
       "type": "row",
-      "title": "Cowboy (glm-controller) \u2014 fleet reconcile",
+      "title": "Fleet controller (glm-controller) \u2014 fleet reconcile",
       "collapsed": false,
       "gridPos": {
         "h": 1,

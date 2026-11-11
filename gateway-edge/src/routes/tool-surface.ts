@@ -126,7 +126,7 @@ function desktopInventoryParams(frame: ToolRequest, nodeId: string | undefined):
     : Object.keys(params).length === 0;
   if (!valid) throw new Error('Desktop inventory is unavailable');
 }
-async function requestComputer(frame: ToolRequest, owner: ToolRequests): Promise<unknown> {
+async function requestVm(frame: ToolRequest, owner: ToolRequests): Promise<unknown> {
   if (frame.method === 'desktop.observe') return observeDesktop(frame.params, owner);
   if (frame.method === 'desktop.release') return releaseDesktop(frame.params, owner);
   if (frame.method !== 'environments.status' && frame.method !== 'environments.list') throw new Error('Tool operation is unavailable');
@@ -144,7 +144,7 @@ function themeRequestParams(frame: ToolRequest): Record<string, unknown> {
 }
 async function toolOperation(frame: ToolRequest, owner: ToolRequests): Promise<unknown> {
   if (owner.live.surface === 'browser' && frame.method === 'browser.request') return requestBrowser(frame, owner);
-  if (owner.live.surface === 'computer') return requestComputer(frame, owner);
+  if (owner.live.surface === 'computer') return requestVm(frame, owner);
   if (owner.live.surface === 'themes' && (frame.method === 'themes.list' || frame.method === 'themes.get')) return owner.rpc.call(frame.method, themeRequestParams(frame));
   throw new Error('Tool operation is unavailable');
 }

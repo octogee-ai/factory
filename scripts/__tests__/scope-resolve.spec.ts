@@ -57,7 +57,7 @@ describe("resolveScope — ownership", () => {
     );
   });
 
-  it("scripts owns the customer-lifecycle emulator suite", () => {
+  it("scripts owns the user-lifecycle emulator suite", () => {
     expectJobs(
       ["scripts/ops/fleet.ts"],
       // + the scripts/ edge pulls tests (internal-routing-guard.spec.ts walks

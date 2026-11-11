@@ -45,12 +45,12 @@ if [ "$profile" = builder ]; then
     OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_LOCK_PATH \
     OCTOGEE_BUILDER_TOOL_GROUPS_SHA256 \
     OCTOGEE_BUILDER_TOOL_GROUPS_PATH; do
-    test -n "${!name:-}" || fail "$name is unset in the Builder image"
+    test -n "${!name:-}" || fail "$name is unset in the isolated image"
   done
   echo "$OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256  $OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_LOCK_PATH" | sha256sum -c - >/dev/null \
-    || fail "Builder toolchain lock does not match OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256"
+    || fail "Isolated toolchain lock does not match OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256"
   echo "$OCTOGEE_BUILDER_TOOL_GROUPS_SHA256  $OCTOGEE_BUILDER_TOOL_GROUPS_PATH" | sha256sum -c - >/dev/null \
-    || fail "Builder tool groups do not match OCTOGEE_BUILDER_TOOL_GROUPS_SHA256"
+    || fail "Isolated tool groups do not match OCTOGEE_BUILDER_TOOL_GROUPS_SHA256"
 fi
 
 echo "OpenClaw runtime image gate: PASS ($profile)"

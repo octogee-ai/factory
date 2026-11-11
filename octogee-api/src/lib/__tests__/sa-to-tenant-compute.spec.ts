@@ -34,7 +34,7 @@ const review = (instanceId: string, namespace = "octogee-test") => ({
   computeInstance: { projectId: "octogee", zone: "us-west1-b", instanceId, instanceName: "octogee-gw-b-x" },
 });
 
-describe("mapReviewToTenant for a GCE computer identity", () => {
+describe("mapReviewToTenant for a GCE VM identity", () => {
   it("binds the instance id to the one gce-vm gateway that recorded it", async () => {
     const db = createDocumentFixtureStore({
       "gateways/b-x": durableGateway("b-x"),
@@ -61,7 +61,7 @@ describe("mapReviewToTenant for a GCE computer identity", () => {
     expect(await mapReviewToTenant(ok, review("4242", "octogee"), "octogee-test")).toMatchObject({ attached: false, result: "ns_mismatch" });
   });
 
-  it("keeps a retired gateway's computer bound for its final home checkpoint only while Cowboy's request is outstanding", async () => {
+  it("keeps a retired gateway's VM bound for its final home checkpoint only while the fleet controller's request is outstanding", async () => {
     const retired = (vmHome: Record<string, unknown> | undefined) => createDocumentFixtureStore({
       "gateways/b-x": durableGateway("b-x", { desiredStatus: "retired", retirementClaim: { operationId: "op-1", version: 1 } }),
       "glmGateways/b-x": runtimeDoc("b-x", "4242", vmHome ? { vmHome } : {}),

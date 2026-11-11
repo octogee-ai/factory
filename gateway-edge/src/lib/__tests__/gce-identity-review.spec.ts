@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  ComputerIdentityVerifierUnavailableError,
+  VmIdentityVerifierUnavailableError,
   computeInstanceFromPayload,
   createGceIdentityReviewer,
   createIssuerDispatchingReviewer,
   isGoogleIssuedJwt,
-  parseGatewayComputerIdentity,
+  parseGatewayVmIdentity,
 } from "../gce-identity-review.js";
 import type { Reviewer } from "../kubernetes-token-review.js";
 
@@ -70,7 +70,7 @@ describe("computeInstanceFromPayload", () => {
 describe("createGceIdentityReviewer", () => {
   const options = { ...EXPECTED, audience: "octogee-api", namespace: "octogee-test" };
 
-  it("reviews a verified computer identity token as the computer service account in the gateway's namespace", async () => {
+  it("reviews a verified VM identity token as the VM service account in the gateway's namespace", async () => {
     const verify = vi.fn(async () => payload());
     const review = await createGceIdentityReviewer({ ...options, verify })(jwt(payload()));
     expect(verify).toHaveBeenCalledWith(jwt(payload()), "octogee-api");
@@ -94,11 +94,11 @@ describe("createGceIdentityReviewer", () => {
       "token verification failed: Invalid token signature",
       "token verification returned no payload",
       "issuer https://evil.example is not Google",
-      "token is not the computer service account on a Compute Engine instance in this project",
+      "token is not the VM service account on a Compute Engine instance in this project",
     ]);
   });
 
-  it("rejects a token minted on another computer that shares the service account", async () => {
+  it("rejects a token minted on another VM that shares the service account", async () => {
     const reasons: string[] = [];
     const other = payload({
       google: { compute_engine: { project_id: "octogee", zone: "us-central1-a", instance_id: "999", instance_name: "octogee-pool-other" } },
@@ -111,7 +111,7 @@ describe("createGceIdentityReviewer", () => {
   it("surfaces a verifier outage instead of reporting a bad token", async () => {
     const dns = Object.assign(new Error("getaddrinfo ENOTFOUND www.googleapis.com"), { code: "ENOTFOUND" });
     await expect(createGceIdentityReviewer({ ...options, verify: async () => { throw dns; } })("x.y.z"))
-      .rejects.toBeInstanceOf(ComputerIdentityVerifierUnavailableError);
+      .rejects.toBeInstanceOf(VmIdentityVerifierUnavailableError);
     const fetchFailed = new TypeError("fetch failed", { cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }) });
     await expect(createGceIdentityReviewer({ ...options, verify: async () => { throw fetchFailed; } })("x.y.z"))
       .rejects.toThrow(/verifier unavailable/);
@@ -131,21 +131,21 @@ describe("createIssuerDispatchingReviewer", () => {
   });
 });
 
-describe("parseGatewayComputerIdentity", () => {
+describe("parseGatewayVmIdentity", () => {
   it("is off when nothing is set, on when all three are, and loud when the set is partial or the instance id is not numeric", () => {
-    expect(parseGatewayComputerIdentity({})).toBeNull();
-    expect(parseGatewayComputerIdentity({
+    expect(parseGatewayVmIdentity({})).toBeNull();
+    expect(parseGatewayVmIdentity({
       GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: " sa@p.iam.gserviceaccount.com ",
       GATEWAY_COMPUTER_PROJECT_ID: "p",
       GATEWAY_COMPUTER_INSTANCE_ID: "4242",
     })).toEqual({ serviceAccountEmail: "sa@p.iam.gserviceaccount.com", projectId: "p", instanceId: "4242" });
-    expect(() => parseGatewayComputerIdentity({ GATEWAY_COMPUTER_PROJECT_ID: "p" })).toThrow(/set together/);
-    expect(() => parseGatewayComputerIdentity({
+    expect(() => parseGatewayVmIdentity({ GATEWAY_COMPUTER_PROJECT_ID: "p" })).toThrow(/set together/);
+    expect(() => parseGatewayVmIdentity({
       GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: "sa@p.iam.gserviceaccount.com",
       GATEWAY_COMPUTER_PROJECT_ID: "p",
       GATEWAY_COMPUTER_INSTANCE_ID: "",
     })).toThrow(/set together/);
-    expect(() => parseGatewayComputerIdentity({
+    expect(() => parseGatewayVmIdentity({
       GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: "sa@p.iam.gserviceaccount.com",
       GATEWAY_COMPUTER_PROJECT_ID: "p",
       GATEWAY_COMPUTER_INSTANCE_ID: "octogee-pool-x",

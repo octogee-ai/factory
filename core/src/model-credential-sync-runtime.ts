@@ -1,15 +1,15 @@
 import {
   PLATFORM_MODEL_POLICY_ALLOW_PATH,
-  applyCoachModelPatch,
-  customerMountConfigPatch,
-  customerSecurityProjectionReplacePaths,
+  applyDefaultAgentModelPatch,
+  userMountConfigPatch,
+  userSecurityProjectionReplacePaths,
   platformModelAllowlistPatch,
   brokerFetchByosubCreds,
   restoreOauthStoreForSlug,
-  refreshCoachRuntimeSessions,
-  syncByotForCustomer,
+  refreshDefaultAgentRuntimeSessions,
+  syncByotForUser,
   triggerSecretsReload,
-  type SyncByotForCustomerDeps,
+  type SyncByotForUserDeps,
 } from "./byot-sync-runtime.js";
 import {
   applyModelCredentialState,
@@ -17,13 +17,13 @@ import {
   type ModelCredentialSyncUserData,
 } from "./model-credential-sync.js";
 
-export type SyncModelCredentialsForCustomerDeps = SyncByotForCustomerDeps & {
+export type SyncModelCredentialsForUserDeps = SyncByotForUserDeps & {
   applyModelCredentialState?: typeof applyModelCredentialState;
 };
 
 function legacyDepsFromModelCredentialDeps(
-  deps: SyncModelCredentialsForCustomerDeps | undefined,
-): SyncByotForCustomerDeps | undefined {
+  deps: SyncModelCredentialsForUserDeps | undefined,
+): SyncByotForUserDeps | undefined {
   if (!deps) return undefined;
   const { applyModelCredentialState: modelCredentialApply, ...legacyDeps } = deps;
   return {
@@ -32,11 +32,11 @@ function legacyDepsFromModelCredentialDeps(
   };
 }
 
-export async function syncModelCredentialsForCustomer(
+export async function syncModelCredentialsForUser(
   userData: ModelCredentialSyncUserData,
-  deps?: SyncModelCredentialsForCustomerDeps,
+  deps?: SyncModelCredentialsForUserDeps,
 ): Promise<void> {
-  await syncByotForCustomer(
+  await syncByotForUser(
     legacyByotSyncUserDataFromModelCredentialState(userData),
     legacyDepsFromModelCredentialDeps(deps),
   );
@@ -44,12 +44,12 @@ export async function syncModelCredentialsForCustomer(
 
 export {
   PLATFORM_MODEL_POLICY_ALLOW_PATH,
-  customerMountConfigPatch,
-  customerSecurityProjectionReplacePaths,
+  userMountConfigPatch,
+  userSecurityProjectionReplacePaths,
   platformModelAllowlistPatch,
-  applyCoachModelPatch as applyModelCredentialCoachPatch,
+  applyDefaultAgentModelPatch as applyModelCredentialDefaultAgentPatch,
   brokerFetchByosubCreds as brokerFetchModelCredentialOauthCreds,
-  refreshCoachRuntimeSessions as refreshModelCredentialRuntimeSessions,
+  refreshDefaultAgentRuntimeSessions as refreshModelCredentialRuntimeSessions,
   restoreOauthStoreForSlug as restoreModelCredentialOauthStoreForSlug,
   triggerSecretsReload as triggerModelCredentialSecretsReload,
 };

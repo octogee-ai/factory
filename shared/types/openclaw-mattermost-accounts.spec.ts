@@ -30,7 +30,7 @@ describe("mattermostAccountEndpointsForTarget", () => {
       .toEqual({ ...account, baseUrl: PLATFORM_MATTERMOST_BASE_URL });
   });
 
-  it("leaves Builder-owned endpoints to the current config or the submitted account", () => {
+  it("leaves User-owned endpoints to the current config or the submitted account", () => {
     expect(mattermostAccountEndpointsForTarget(currentWith("https://owner.example"), { "alice-coach": account }, false, { MM_URL })["alice-coach"])
       .toEqual({ ...account, baseUrl: "https://owner.example" });
     expect(mattermostAccountEndpointsForTarget(currentWith(), { "alice-coach": { ...account, baseUrl: "https://submitted.example" } }, false, { MM_URL })["alice-coach"])

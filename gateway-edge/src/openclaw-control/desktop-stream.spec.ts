@@ -4,7 +4,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { describe, expect, it, vi } from "vitest";
 import { bridgeDesktopObserver, DesktopObserverTickets } from "./desktop-stream.js";
 
-const session = { sessionId: "session-a", gatewayId: "bender", revisionId: "r1" };
+const session = { sessionId: "session-a", gatewayId: "walter", revisionId: "r1" };
 const response = () => ({ type: "res", ok: true, payload: { transport: "rfb", wsPath: "/desktop/observe?token=upstream-token", expiresAtMs: 20_000, control: true } });
 
 describe("desktop observer tickets", () => {
@@ -12,7 +12,7 @@ describe("desktop observer tickets", () => {
     const tickets = new DesktopObserverTickets(() => 1_000);
     const frame = tickets.project(response(), session);
     const url = new URL((frame.payload as any).wsPath, "https://api.test");
-    expect(url.pathname).toBe("/g/bender/openclaw/desktop/observe");
+    expect(url.pathname).toBe("/g/walter/openclaw/desktop/observe");
     expect(url.searchParams.get("token")).not.toBe("upstream-token");
     const token = url.searchParams.get("token")!;
     expect(tickets.redeem(token, { ...session, sessionId: "other" })).toBeNull();

@@ -14,7 +14,7 @@ import { queryAgentStore, readPostgresAgentAnchor, type PostgresAgentAnchor } fr
 import { createGatewayRpc, type GatewayRpcClient } from "../lib/gateway-rpc.js";
 import { deleteRosterAgents } from "../lib/agent-roster-deletion.js";
 import { createRosterAgents } from "../lib/agent-roster-creation.js";
-import { setCustomerChannelsRunning } from "../lib/customer-channel-quiesce.js";
+import { setUserChannelsRunning } from "../lib/user-channel-quiesce.js";
 import { exportAgentStoreSnapshots, prepareAgentStoreSnapshots, installPreparedAgentStores } from "../lib/agent-store-snapshot.js";
 
 type Account = { agentId: string; accountId: string; botUserId: string; channelId: string; token: string };
@@ -219,7 +219,7 @@ try {
     await fs.writeFile(path.join(source.home, "workspaces", entry.agentId, "retained.txt"), entry.agentId);
   }
   const quiesceStarted = performance.now();
-  await setCustomerChannelsRunning(source.rpc, "detachproof", false);
+  await setUserChannelsRunning(source.rpc, "detachproof", false);
   const channelStopMs = performance.now() - quiesceStarted;
   for (const entry of travelers) assert.equal((await channelAccounts(source.rpc)).find(account => account.accountId === entry.accountId)?.running, false);
   const samples = [];

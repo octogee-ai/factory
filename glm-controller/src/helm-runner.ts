@@ -4,7 +4,7 @@ import type {
   GatewayImageProfile,
   GatewayProfile,
   HelmInstancesMap,
-  RuntimeBuilderIdentity,
+  RuntimeUserIdentity,
 } from "@octogee/shared/types/glm";
 import type { SizingTier } from "@octogee/shared/types/sizing";
 import { SIZING_TIERS } from "@octogee/shared/types/sizing";
@@ -29,7 +29,7 @@ upsertInstance(opts: {
     // Disposable revision instance id ({gatewayId}-r{n}). Names the Helm release
     // + per-instance resources; defaults to gatewayId (legacy single-revision).
     revisionId?: string;
-    builderIdentity?: RuntimeBuilderIdentity;
+    builderIdentity?: RuntimeUserIdentity;
     imageRepository: string;
     imageTag: string;
     gatewayEdgeImageRepository?: string;
@@ -134,7 +134,7 @@ const SHARED_PLATFORM_SA = "octogee-gateway";
 
 // Mirror the chart's octogee-gateway.serviceAccountName helper: an empty or the
 // legacy shared value resolves to the gateway-scoped KSA; anything else is used
-// verbatim. Cowboy must ensure exactly the name the Deployment will reference.
+// verbatim. The fleet controller must ensure exactly the name the Deployment will reference.
 export function effectiveGatewayServiceAccountName(
   gatewayId: string,
   requested: string | undefined,
@@ -575,29 +575,24 @@ function appendUpgradeApplyArgs(args: string[], opts: BuildUpgradeArgsOpts): voi
  * Note: gcpProject is the BYO-GCP escape hatch — when set, overrides the
  * chart's gatewayEdge.env.GCP_PROJECT_ID. Otherwise the chart's
  * values.yaml + values.{prod,test}.yaml are the single source of truth
- * (no Cowboy --set, no kubectl-set-env field-manager collision risk on
+ * (no fleet controller --set, no kubectl-set-env field-manager collision risk on
  * the next upgrade — see post-mortem in PR #TBD).
  */
 export function buildUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
   // String-typed fields use `--set-string` so a digit-only value (e.g.
   // imageTag="3280519" from a CI build-number tag without a SHA suffix)
   // doesn't get coerced to a number by helm's `--set` parser and rejected
-  // by the chart schema. Discovered the hard way 2026-05-25 when gw-bender's
-  // imageTag carried just digits and every reconcile failed with
-  // "at '/imageTag': got number, want string". Numeric fields (replicas)
-  // still use `--set` — they want number semantics.
+  // by the chart schema. Numeric fields (replicas) still use `--set` — they
+  // want number semantics.
   const args = baseUpgradeArgs(opts);
   appendOptionalStringArgs(args, opts);
   appendOptionalNumberArgs(args, opts);
   appendOptionalJsonArgs(args, opts);
   appendOptionalFileArgs(args, opts);
   // Server-side apply + force-conflicts: matches the umbrella install path
-  // that the CI deploy job has used since #913 + #1056. Cowboy was left
-  // behind on strategic-merge through v3.16.4 of helm in glm-controller's
-  // image, which is what caused gw-bender's helm rev 33 to fail K8s
-  // schema validation on 2026-05-24 — strategic-merge collided the
-  // live kubectl-set `OPENCLAW_GATEWAY_TOKEN: value=<hex>` with the new
-  // chart's `OPENCLAW_GATEWAY_TOKEN: valueFrom={secretKeyRef}` into one
+  // that the CI deploy job has used since #913 + #1056. Strategic merge
+  // collides a live kubectl-set `OPENCLAW_GATEWAY_TOKEN: value=<hex>` with
+  // the chart's `OPENCLAW_GATEWAY_TOKEN: valueFrom={secretKeyRef}` into one
   // env entry with both fields. SSA + force-conflicts lets helm
   // unconditionally reclaim ownership of fields it manages from any
   // earlier kubectl-set / kubectl-patch / kubectl-rollout side-channel.

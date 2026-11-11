@@ -10,18 +10,18 @@ export async function prepareGatewayRuntimeConfig<T extends GatewayMutableConfig
   if (config.gatewayClass !== "builder") {
     return config;
   }
-  const builderAccess = config.builderAccess ?? {};
+  const isolatedAccess = config.builderAccess ?? {};
   const kubeApiServerEgressCidrs = await resolveApiServerEgressCidrs();
   if (kubeApiServerEgressCidrs.length === 0) {
-    if ((builderAccess.kubeApiServerEgressCidrs?.length ?? 0) > 0) {
+    if ((isolatedAccess.kubeApiServerEgressCidrs?.length ?? 0) > 0) {
       return config;
     }
-    throw new Error(`builder gateway ${gatewayId} has no API-server egress CIDRs`);
+    throw new Error(`isolated gateway ${gatewayId} has no API-server egress CIDRs`);
   }
   return {
     ...config,
     builderAccess: {
-      ...builderAccess,
+      ...isolatedAccess,
       kubeApiServerEgressCidrs,
     },
   } as T;

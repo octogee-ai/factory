@@ -11,7 +11,7 @@ import {
 import { logger } from "../../middleware/logging.js";
 import { invalidateWorkspaceFileResponseCache } from "./file-response-cache.js";
 import {
-  resolveCustomerDir,
+  resolveUserDir,
   resolveProjectDir,
   syncCleanWorkspaceToRemote,
   type WorkspaceRemoteSyncState,
@@ -35,15 +35,15 @@ interface SavePayload {
 }
 
 export interface SavedGiteaCheckoutSyncDeps {
-  customersRoot: string;
-  resolveCustomerDir: typeof resolveCustomerDir;
+  usersRoot: string;
+  resolveUserDir: typeof resolveUserDir;
   resolveProjectDir: typeof resolveProjectDir;
   syncCleanWorkspaceToRemote: typeof syncCleanWorkspaceToRemote;
 }
 
 const SAVED_GITEA_CHECKOUT_SYNC_DEPS: SavedGiteaCheckoutSyncDeps = {
-  customersRoot: process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers",
-  resolveCustomerDir,
+  usersRoot: process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers",
+  resolveUserDir,
   resolveProjectDir,
   syncCleanWorkspaceToRemote,
 };
@@ -53,8 +53,8 @@ export async function syncSavedGiteaCheckout(
   deps: SavedGiteaCheckoutSyncDeps = SAVED_GITEA_CHECKOUT_SYNC_DEPS,
 ): Promise<WorkspaceRemoteSyncState | "checkout-missing" | "sync-failed"> {
   const dir = target.projectSlug
-    ? await deps.resolveProjectDir(deps.customersRoot, target.slug, target.projectSlug)
-    : await deps.resolveCustomerDir(deps.customersRoot, target.slug);
+    ? await deps.resolveProjectDir(deps.usersRoot, target.slug, target.projectSlug)
+    : await deps.resolveUserDir(deps.usersRoot, target.slug);
   if (!dir) {
     logger.warn(
       `save gitea checkout missing repo=${target.org}/${target.repoName}`,

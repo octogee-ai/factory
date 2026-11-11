@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { hasCoachReply, parseLoadPlan, performCoachTurn, runLoadPlan, summarizeMeasurements, TEST_CONTEXT, type LoadClient, type LoadMeasurement, LoadHttpError } from "../lib/gateway-load-test.js";
+import { hasDefaultAgentReply, parseLoadPlan, performDefaultAgentTurn, runLoadPlan, summarizeMeasurements, TEST_CONTEXT, type LoadClient, type LoadMeasurement, LoadHttpError } from "../lib/gateway-load-test.js";
 import { createSharedPoolSampler, parseCgroup, slotObservation, stableMediumPod } from "../lib/gateway-load-sampler.js";
 import { testToken, testTokens } from "../lib/gateway-load-client.js";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
@@ -24,7 +24,7 @@ describe("TEST gateway load boundaries", () => {
   it("accepts numbered and minted shared slot IDs and nothing else", () => {
     expect(parseLoadPlan({ ...input, gatewayId: "shared-1d4ef9d5a9da" }).gatewayId).toBe("shared-1d4ef9d5a9da");
     expect(parseLoadPlan({ ...input, gatewayId: "shared-0" }).gatewayId).toBe("shared-0");
-    for (const gatewayId of ["shared-1D4EF9D5A9DA", "shared-1d4ef9d5a9", "shared-", "builder-1d4ef9d5a9da"]) {
+    for (const gatewayId of ["shared-1D4EF9D5A9DA", "shared-1d4ef9d5a9", "shared-", "user-1d4ef9d5a9da"]) {
       expect(() => parseLoadPlan({ ...input, gatewayId })).toThrow("shared");
     }
   });
@@ -34,8 +34,8 @@ describe("TEST gateway load boundaries", () => {
   });
 
   it("requires an explicit total turn budget, rather than a per-stage budget", () => {
-    expect(() => parseLoadPlan({ ...input, coachConcurrency: [1, 2], maxCoachTurns: 2 })).toThrow("exceed");
-    expect(parseLoadPlan({ ...input, coachConcurrency: [1, 2], maxCoachTurns: 3 }).maxCoachTurns).toBe(3);
+    expect(() => parseLoadPlan({ ...input, defaultAgentConcurrency: [1, 2], maxDefaultAgentTurns: 2 })).toThrow("exceed");
+    expect(parseLoadPlan({ ...input, defaultAgentConcurrency: [1, 2], maxDefaultAgentTurns: 3 }).maxDefaultAgentTurns).toBe(3);
   });
 
   it("rejects different environment variables for the same Firebase identity", () => {
@@ -73,7 +73,7 @@ describe("staged gateway exercises", () => {
     const waits: number[] = [];
     const clients: LoadClient[] = [];
     let time = 0;
-    const plan = parseLoadPlan({ ...input, readRounds: 1, coachConcurrency: [1, 2], maxCoachTurns: 3 });
+    const plan = parseLoadPlan({ ...input, readRounds: 1, defaultAgentConcurrency: [1, 2], maxDefaultAgentTurns: 3 });
     await runLoadPlan(plan, {
       now: () => time, signal: new AbortController().signal, emit: (r) => rows.push(r),
       sleep: async (ms) => { waits.push(ms); time += ms; },
@@ -104,25 +104,25 @@ describe("staged gateway exercises", () => {
     const waits: number[] = [];
     const client: LoadClient = { close: vi.fn(), send: async (message) => { marker = message.match(/OCTOGEE_LOAD_[a-f0-9-]+/)![0]; },
       read: async () => ({ messages: time >= 9_000 ? [{ role: "assistant", content: marker }] : [] }) };
-    await performCoachTurn(client, { timeoutMs: 60_000, pollMs: 3_000, signal: new AbortController().signal, now: () => time,
+    await performDefaultAgentTurn(client, { timeoutMs: 60_000, pollMs: 3_000, signal: new AbortController().signal, now: () => time,
       sleep: async (ms) => { waits.push(ms); time += ms; } });
     expect(waits).toEqual([3_000, 3_000, 3_000]);
-    await expect(performCoachTurn(client, { timeoutMs: 5_000, pollMs: 3_000, signal: new AbortController().signal, now: () => time,
+    await expect(performDefaultAgentTurn(client, { timeoutMs: 5_000, pollMs: 3_000, signal: new AbortController().signal, now: () => time,
       sleep: async (ms) => { time += ms; }, send: async () => { marker = "never"; } })).rejects.toThrow("deadline");
   });
 
   it("does not count echoed user messages or unrelated assistant replies as completion", () => {
-    expect(hasCoachReply({ messages: [{ role: "user", content: "marker" }, { role: "assistant", content: "old" }] }, "marker")).toBe(false);
-    expect(hasCoachReply({ messages: [{ role: "assistant", content: "User asked for marker" }] }, "marker")).toBe(false);
-    expect(() => hasCoachReply({}, "marker")).toThrow("history");
+    expect(hasDefaultAgentReply({ messages: [{ role: "user", content: "marker" }, { role: "assistant", content: "old" }] }, "marker")).toBe(false);
+    expect(hasDefaultAgentReply({ messages: [{ role: "assistant", content: "User asked for marker" }] }, "marker")).toBe(false);
+    expect(() => hasDefaultAgentReply({}, "marker")).toThrow("history");
   });
 
-  it("stops subsequent stages after a timeout and never resends a coach turn", async () => {
+  it("stops subsequent stages after a timeout and never resends a agent turn", async () => {
     let time = 0;
     const client = { read: vi.fn(async () => ({ messages: [] })), send: vi.fn(async () => {}), close: vi.fn() };
     const connect = vi.fn(async () => client);
     const rows: LoadMeasurement[] = [];
-    await expect(runLoadPlan(parseLoadPlan({ ...input, readConcurrency: [], coachConcurrency: [1, 2], maxCoachTurns: 3, turnTimeoutMs: 1_000 }), {
+    await expect(runLoadPlan(parseLoadPlan({ ...input, readConcurrency: [], defaultAgentConcurrency: [1, 2], maxDefaultAgentTurns: 3, turnTimeoutMs: 1_000 }), {
       connect, signal: new AbortController().signal, emit: (r) => rows.push(r), now: () => time,
       sleep: async (ms) => { time += ms; },
     })).rejects.toThrow("deadline");
@@ -203,7 +203,7 @@ describe("shared pool sampler", () => {
     return ready;
   };
 
-  it("samples every Ready shared-N slot, lists starting slots without exec, and ignores builder gateways", async () => {
+  it("samples every Ready shared-N slot, lists starting slots without exec, and ignores isolated gateways", async () => {
     const { kubectl, calls } = fakeKubectl({ pods: [pod("shared-0"), pod("shared-1", { ready: false }), pod("builder-7")], oom: {} });
     const sample = await createSharedPoolSampler(kubectl)();
     expect(sample.slots.map((s) => s.slot)).toEqual(["shared-0"]);

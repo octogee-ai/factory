@@ -35,7 +35,7 @@ describe("gateway internal auth", () => {
     });
   });
 
-  it("uses a Builder gateway projected service-account token when the platform key is absent", async () => {
+  it("uses a isolated gateway projected service-account token when the platform key is absent", async () => {
     await withTokenFile("projected-sa-token\n", (tokenPath) => {
       expect(
         resolveGatewayInternalAuthSecret({
@@ -51,7 +51,7 @@ describe("gateway internal auth", () => {
     });
   });
 
-  it("does not use a projected token outside the Builder runtime", async () => {
+  it("does not use a projected token outside the isolated runtime", async () => {
     await withTokenFile("projected-sa-token\n", (tokenPath) => {
       expect(
         resolveGatewayInternalAuthSecret({
@@ -74,7 +74,7 @@ describe("gateway internal auth", () => {
       ? {
           authenticated: true,
           namespace: "octogee-test",
-          saName: "octogee-gw-bender",
+          saName: "octogee-gw-walter",
           audiences: ["octogee-api"],
         }
       : { authenticated: false };
@@ -82,7 +82,7 @@ describe("gateway internal auth", () => {
       const env = {
         GATEWAY_CLASS: "builder",
         GATEWAY_PROFILE: "builder",
-        GATEWAY_ID: "bender",
+        GATEWAY_ID: "walter",
         K8S_NAMESPACE: "octogee-test",
         OCTOGEE_API_SA_TOKEN_PATH: tokenPath,
       };
@@ -92,12 +92,12 @@ describe("gateway internal auth", () => {
   });
 });
 
-describe("gateway internal auth on a Builder computer", () => {
-  const computerEmail = "octogee-computer-test@octogee.iam.gserviceaccount.com";
+describe("gateway internal auth on a gateway VM", () => {
+  const vmEmail = "octogee-computer-test@octogee.iam.gserviceaccount.com";
   const googlePayload = (overrides: Record<string, unknown> = {}) => ({
     iss: "https://accounts.google.com",
     aud: "octogee-api",
-    email: computerEmail,
+    email: vmEmail,
     email_verified: true,
     google: {
       compute_engine: {
@@ -116,18 +116,18 @@ describe("gateway internal auth on a Builder computer", () => {
   const env = {
     GATEWAY_CLASS: "builder",
     GATEWAY_PROFILE: "builder",
-    GATEWAY_ID: "bender",
+    GATEWAY_ID: "walter",
     K8S_NAMESPACE: "octogee-test",
-    GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: computerEmail,
+    GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: vmEmail,
     GATEWAY_COMPUTER_PROJECT_ID: "octogee",
     GATEWAY_COMPUTER_INSTANCE_ID: "5114356976453632468",
   };
   const kubernetes: Reviewer = async (jwt) => jwt === "k8s-caller-jwt"
-    ? { authenticated: true, namespace: "octogee-test", saName: "octogee-gw-bender", audiences: ["octogee-api"] }
+    ? { authenticated: true, namespace: "octogee-test", saName: "octogee-gw-walter", audiences: ["octogee-api"] }
     : { authenticated: false };
 
-  it("accepts the computer's Google identity token as the gateway service-account credential", async () => {
-    const reviewer = createGatewayInternalAuthReviewer(env, { kubernetes, verify: async () => googlePayload(), onComputerTokenRejected: () => {} });
+  it("accepts the VM's Google identity token as the gateway service-account credential", async () => {
+    const reviewer = createGatewayInternalAuthReviewer(env, { kubernetes, verify: async () => googlePayload(), onVmTokenRejected: () => {} });
     await withTokenFile("projected-sa-token\n", async (tokenPath) => {
       const fullEnv = { ...env, OCTOGEE_API_SA_TOKEN_PATH: tokenPath };
       await expect(isValidGatewayInternalAuth(googleJwt, fullEnv, { reviewer })).resolves.toBe(true);
@@ -135,24 +135,24 @@ describe("gateway internal auth on a Builder computer", () => {
     });
   });
 
-  it("rejects another service account's Google token and does not consult Google without computer identity", async () => {
+  it("rejects another service account's Google token and does not consult Google without VM identity", async () => {
     const rejected: string[] = [];
     const otherSa = createGatewayInternalAuthReviewer(env, {
       kubernetes,
       verify: async () => googlePayload({ email: "someone-else@octogee.iam.gserviceaccount.com" }),
-      onComputerTokenRejected: (reason) => rejected.push(reason),
+      onVmTokenRejected: (reason) => rejected.push(reason),
     });
     const verify = vi.fn(async () => googlePayload());
-    const noComputer = createGatewayInternalAuthReviewer(
-      { GATEWAY_CLASS: "builder", GATEWAY_PROFILE: "builder", GATEWAY_ID: "bender", K8S_NAMESPACE: "octogee-test" },
+    const noVm = createGatewayInternalAuthReviewer(
+      { GATEWAY_CLASS: "builder", GATEWAY_PROFILE: "builder", GATEWAY_ID: "walter", K8S_NAMESPACE: "octogee-test" },
       { kubernetes, verify },
     );
     await withTokenFile("projected-sa-token\n", async (tokenPath) => {
       const fullEnv = { ...env, OCTOGEE_API_SA_TOKEN_PATH: tokenPath };
       await expect(isValidGatewayInternalAuth(googleJwt, fullEnv, { reviewer: otherSa })).resolves.toBe(false);
-      await expect(isValidGatewayInternalAuth(googleJwt, fullEnv, { reviewer: noComputer })).resolves.toBe(false);
+      await expect(isValidGatewayInternalAuth(googleJwt, fullEnv, { reviewer: noVm })).resolves.toBe(false);
     });
     expect(verify).not.toHaveBeenCalled();
-    expect(rejected).toEqual(["token is not the computer service account on a Compute Engine instance in this project"]);
+    expect(rejected).toEqual(["token is not the VM service account on a Compute Engine instance in this project"]);
   });
 });

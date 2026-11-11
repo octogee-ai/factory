@@ -66,7 +66,7 @@ describe('desktop Chromium startup', () => {
   it.each([
     ['no recorded mode', undefined],
     ['cloud mode', 'cloud\n'],
-  ])('connects Chromium directly with %s, so the computer never depends on the egress listener', (_label, mode) => {
+  ])('connects Chromium directly with %s, so the VM never depends on the egress listener', (_label, mode) => {
     const state = fixture();
     if (mode !== undefined) state.recordEgressMode(mode);
     const args = state.launch();
@@ -86,7 +86,7 @@ describe('desktop Chromium startup', () => {
     expect(forcedOff.launch([], undefined, undefined, { OCTO_CHROMIUM_EGRESS_PROXY: '0' }).some((arg) => arg.startsWith('--proxy-server'))).toBe(false);
   });
 
-  it('keeps the recorded egress mode in a home folder the computer checkpoint carries across image replacement', () => {
+  it('keeps the recorded egress mode in a home folder the VM checkpoint carries across image replacement', () => {
     expect(DESKTOP_HOME_PATHS).toContain(EGRESS_MODE_DIR);
   });
 

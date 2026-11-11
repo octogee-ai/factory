@@ -1,9 +1,9 @@
-import { coachAgentId } from "@octogee/core/byosub-onboarding";
+import { userDefaultAgentId } from "@octogee/core/byosub-onboarding";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { deriveCodexAuthHealth } from "@octogee/core/codex-auth-health";
 import { internalFetch } from "./internal-fetch.js";
 
-export { coachAgentId };
+export { userDefaultAgentId };
 
 export function byosubSecretName(uid: string, provider: string): string {
   return `byosub-${uid}-${provider}`;
@@ -185,7 +185,7 @@ export function byosubConnectionView(
 // working credential. This crosses that expectation with pod REALITY — is the
 // auth-profile store actually present on this pod, and does codex consider it
 // alive — so a silent boot-sync materialization failure surfaces as `missing`
-// instead of a false `connected`. Used by /api/g/<gatewayId>/byosub/health on the customer's
+// instead of a false `connected`. Used by /api/g/<gatewayId>/byosub/health on the user's
 // own pod (the durability harness's real proof) and to fix the product
 // false-"connected" the ref-only read can't catch.
 export type ByosubHealthStatus =

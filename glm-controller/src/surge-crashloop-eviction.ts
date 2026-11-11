@@ -1,5 +1,5 @@
 import type { PlatformStateStore } from "@octogee/core/platform-state";
-import type { SurgePod } from "./surge-customer-handoff.js";
+import type { SurgePod } from "./surge-user-handoff.js";
 
 export const CRASH_LOOP_EVICTION_BUDGET = 3;
 

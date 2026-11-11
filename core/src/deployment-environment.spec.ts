@@ -140,7 +140,7 @@ describe("deployment environment registry", () => {
       .toBe(deploymentTargetSettings("prod-central").edgeStaticIpName);
   });
 
-  it("requires a distinct dedicated customer Hosting project for every target", () => {
+  it("requires a distinct dedicated user Hosting project for every target", () => {
     const missing = structuredClone(deploymentTargetsDocument) as { targets: Record<string, Record<string, unknown>> };
     delete missing.targets["test-central"].customerHostingProjectId;
     expect(() => validateDeploymentTargetsDocument(missing)).toThrow(

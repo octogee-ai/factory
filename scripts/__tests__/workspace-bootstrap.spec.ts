@@ -18,7 +18,7 @@ vi.mock("../lib/config.js", () => ({
   AGENTS_DIR: path.join(TEST_ROOT, "agents"),
 }));
 
-const { externalizeCustomerGitDir, initWorkspaceRepo } = await import("../lib/git.js");
+const { externalizeUserGitDir, initWorkspaceRepo } = await import("../lib/git.js");
 
 function git(cwd: string, argv: string[]): string {
   return execFileSync("/usr/bin/git", argv, {
@@ -39,7 +39,7 @@ describe("fresh workspace bootstrap", () => {
 
   function prepareFrom(remote: string) {
     return (repoDir: string) => {
-      externalizeCustomerGitDir(repoDir, {
+      externalizeUserGitDir(repoDir, {
         fetchCanonical: (_workTree, gitDir) => {
           git(gitDir, [
             "--git-dir",
@@ -66,12 +66,12 @@ describe("fresh workspace bootstrap", () => {
 
   it("pushes the initial skeleton before replacing local metadata with a canonical fetch", async () => {
     const slug = "aug09";
-    const coachDir = path.join(CUSTOMERS_DIR, slug);
+    const defaultAgentDir = path.join(CUSTOMERS_DIR, slug);
     const remote = path.join(remoteRoot, "workspace.git");
-    fs.mkdirSync(coachDir, { recursive: true });
+    fs.mkdirSync(defaultAgentDir, { recursive: true });
     git(remoteRoot, ["init", "--bare", "--initial-branch=main", remote]);
 
-    const result = await initWorkspaceRepo(coachDir, slug, {
+    const result = await initWorkspaceRepo(defaultAgentDir, slug, {
       ensureWorkspaceRepo: async () => {},
       workspaceRemoteUrl: () => remote,
       prepareRepository: prepareFrom(remote),
@@ -80,27 +80,27 @@ describe("fresh workspace bootstrap", () => {
     expect(result).not.toBeNull();
     expect(git(remote, ["--git-dir", remote, "log", "-1", "--format=%s"]))
       .toBe("initial workspace skeleton");
-    expect(fs.readFileSync(path.join(coachDir, ".git"), "utf8"))
+    expect(fs.readFileSync(path.join(defaultAgentDir, ".git"), "utf8"))
       .toBe(`gitdir: ${path.join(TEST_ROOT, "git-metadata", slug, "workspace.git")}\n`);
   });
 
   it("leaves an unreachable canonical repository retryable without partial metadata", async () => {
     const slug = "aug09";
-    const coachDir = path.join(CUSTOMERS_DIR, slug);
+    const defaultAgentDir = path.join(CUSTOMERS_DIR, slug);
     const remote = path.join(remoteRoot, "workspace.git");
-    fs.mkdirSync(coachDir, { recursive: true });
+    fs.mkdirSync(defaultAgentDir, { recursive: true });
     const deps = {
       ensureWorkspaceRepo: async () => {},
       workspaceRemoteUrl: () => remote,
       prepareRepository: prepareFrom(remote),
     };
 
-    await expect(initWorkspaceRepo(coachDir, slug, deps)).resolves.toBeNull();
+    await expect(initWorkspaceRepo(defaultAgentDir, slug, deps)).resolves.toBeNull();
     expect(fs.existsSync(path.join(TEST_ROOT, "git-metadata", slug, "workspace.git")))
       .toBe(false);
 
     git(remoteRoot, ["init", "--bare", "--initial-branch=main", remote]);
-    await expect(initWorkspaceRepo(coachDir, slug, deps)).resolves.not.toBeNull();
+    await expect(initWorkspaceRepo(defaultAgentDir, slug, deps)).resolves.not.toBeNull();
     expect(git(remote, ["--git-dir", remote, "log", "-1", "--format=%s"]))
       .toBe("initial workspace skeleton");
   });

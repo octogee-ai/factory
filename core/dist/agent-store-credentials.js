@@ -151,14 +151,14 @@ export function createAgentStoreCredentialProvisioner(adminDsn, clientDsn) {
     const pool = new pg.Pool({ connectionString: adminDsn, max: 2, connectionTimeoutMillis: 10_000, allowExitOnIdle: true });
     pool.on("error", error => console.error("Agent-store credential connection failed", error.message));
     return async (identity, assertCurrent) => {
-        if (!identity.gatewayId || !identity.token || (identity.builder && (!identity.builder.uid || !identity.builder.slug))) {
+        if (!identity.gatewayId || !identity.token || (identity.user && (!identity.user.uid || !identity.user.slug))) {
             throw new Error("Agent-store credentials require a complete Gateway identity");
         }
         const login = roleFor("gateway", `${scope}:${identity.gatewayId}`);
         const unclaimedRole = roleFor("unclaimed", `${scope}:${identity.gatewayId}`);
         let owner = identity.gatewayClass === "shared" ? sharedRole : unclaimedRole;
-        if (identity.builder)
-            owner = roleFor("builder", `${scope}:${identity.builder.uid}`);
+        if (identity.user)
+            owner = roleFor("builder", `${scope}:${identity.user.uid}`);
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
@@ -173,10 +173,10 @@ export function createAgentStoreCredentialProvisioner(adminDsn, clientDsn) {
             await client.query(`GRANT ${identifier(owner)} TO ${identifier(admin)} WITH INHERIT TRUE, SET TRUE`);
             await isolateSharedRole(client, sharedRole);
             await client.query(`GRANT CONNECT, CREATE ON DATABASE ${identifier(database)} TO ${identifier(owner)}`);
-            await grantGatewayOwner(client, login, owner, unclaimedRole, Boolean(identity.builder));
+            await grantGatewayOwner(client, login, owner, unclaimedRole, Boolean(identity.user));
             await client.query(`ALTER ROLE ${identifier(login)} LOGIN PASSWORD ${literal(identity.token)}`);
             await client.query(`ALTER ROLE ${identifier(login)} SET role = ${literal(owner)}`);
-            if (identity.builder) {
+            if (identity.user) {
                 await claimNeutralStores(client, unclaimedRole, owner);
             }
             await assertCurrent();
@@ -291,10 +291,10 @@ export function createAgentStoreOwnershipTransferer(adminDsn, readStores) {
     const sharedRole = roleFor("shared", scope);
     const pool = new pg.Pool({ connectionString: adminDsn, max: 2, connectionTimeoutMillis: 10_000, allowExitOnIdle: true });
     pool.on("error", error => console.error("Agent-store ownership connection failed", error.message));
-    return async (builder, target, assertCurrent) => {
-        if (!builder.uid || !builder.slug)
-            throw new Error("Agent-store ownership transfer requires a complete Builder identity");
-        const owner = roleFor("builder", `${scope}:${builder.uid}`);
+    return async (user, target, assertCurrent) => {
+        if (!user.uid || !user.slug)
+            throw new Error("Agent-store ownership transfer requires a complete user identity");
+        const owner = roleFor("builder", `${scope}:${user.uid}`);
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
@@ -304,11 +304,11 @@ export function createAgentStoreOwnershipTransferer(adminDsn, readStores) {
             await client.query(AGENT_STORE_RELATION_LOCK_WAIT);
             await client.query(AGENT_STORE_HANDOFF_STATEMENT_TIMEOUT);
             await assertCurrent?.();
-            const stores = await readStores(builder);
+            const stores = await readStores(user);
             if (new Set(stores.map(store => store.schema)).size !== stores.length ||
                 new Set(stores.map(store => store.storeId)).size !== stores.length ||
                 new Set(stores.map(store => store.agentId)).size !== stores.length ||
-                stores.some(store => !agentIdBelongsToSlug(store.agentId, builder.slug) ||
+                stores.some(store => !agentIdBelongsToSlug(store.agentId, user.slug) ||
                     !/^[a-z_][a-z0-9_]{0,62}$/.test(store.schema) ||
                     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(store.storeId))) {
                 throw new Error("Agent-store handoff inventory is invalid or ambiguous");
@@ -332,11 +332,11 @@ export function createAgentStoreOwnershipTransferer(adminDsn, readStores) {
         }
     };
 }
-export async function assertNoBuilderAgentStores(adminDsn, builder) {
-    if (!builder.uid || !builder.slug)
-        throw new Error("Agent-store verification requires a complete Builder identity");
+export async function assertNoUserAgentStores(adminDsn, user) {
+    if (!user.uid || !user.slug)
+        throw new Error("Agent-store verification requires a complete user identity");
     const scope = decodeURIComponent(new URL(adminDsn).pathname.slice(1));
-    const owner = roleFor("builder", `${scope}:${builder.uid}`);
+    const owner = roleFor("builder", `${scope}:${user.uid}`);
     const shared = roleFor("shared", scope);
     const client = new pg.Client({ connectionString: adminDsn, connectionTimeoutMillis: 10_000 });
     await client.connect();
@@ -350,10 +350,10 @@ export async function assertNoBuilderAgentStores(adminDsn, builder) {
                     continue;
                 // eslint-disable-next-line sonarjs/sql-queries -- The schema identifier is escaped; metadata filters are constants.
                 const metadata = await client.query(`SELECT agent_id FROM ${identifier(nspname)}.schema_meta WHERE meta_key = 'primary' AND role = 'agent'`);
-                if (!metadata.rows.length || !agentIdBelongsToSlug(metadata.rows[0].agent_id, builder.slug))
+                if (!metadata.rows.length || !agentIdBelongsToSlug(metadata.rows[0].agent_id, user.slug))
                     continue;
             }
-            throw new Error(`PostgreSQL agent stores remain for Builder ${builder.slug}; explicit database erasure is required before account deletion can complete`);
+            throw new Error(`PostgreSQL agent stores remain for user ${user.slug}; explicit database erasure is required before account deletion can complete`);
         }
     }
     finally {
@@ -395,14 +395,14 @@ async function agentStoreErasureIdentity(client, namespace) {
     }
     throw new Error(`Agent-store erasure identity is unavailable: ${namespace}`);
 }
-function erasureIdentityBelongsToBuilder(identity, slug, sharedOwner) {
+function erasureIdentityBelongsToUser(identity, slug, sharedOwner) {
     if (identity.family === "agent") {
         return identity.role === "agent" && (agentIdBelongsToSlug(identity.agentId, slug) ||
             (!sharedOwner && identity.agentId === "octogee-unmatched-route"));
     }
     return !sharedOwner && identity.family === "state" && identity.role === "global" && identity.agentId === null;
 }
-async function discoverAgentStoreErasureTargets(client, builder, owner, shared) {
+async function discoverAgentStoreErasureTargets(client, user, owner, shared) {
     const candidates = await client.query(`
     SELECT n.nspname, n.oid::text AS oid, r.rolname FROM pg_catalog.pg_namespace n
     JOIN pg_catalog.pg_roles r ON r.oid = n.nspowner
@@ -418,12 +418,12 @@ async function discoverAgentStoreErasureTargets(client, builder, owner, shared) 
                 continue;
             await assertAgentErasureMetadataTypes(client, row.nspname);
             const metadata = await client.query(`SELECT agent_id FROM ${identifier(row.nspname)}.schema_meta WHERE meta_key = 'primary' AND role = 'agent'`);
-            if (!metadata.rows.some(row => agentIdBelongsToSlug(row.agent_id, builder.slug)))
+            if (!metadata.rows.some(row => agentIdBelongsToSlug(row.agent_id, user.slug)))
                 continue;
         }
         const identity = await agentStoreErasureIdentity(client, row.nspname);
-        if (!erasureIdentityBelongsToBuilder(identity, builder.slug, row.rolname === shared)) {
-            throw new Error(`Agent-store erasure found foreign Builder data: ${row.nspname}`);
+        if (!erasureIdentityBelongsToUser(identity, user.slug, row.rolname === shared)) {
+            throw new Error(`Agent-store erasure found foreign user data: ${row.nspname}`);
         }
         targets.push({ namespace: row.nspname, namespaceOid: row.oid, owner: row.rolname, ...identity });
     }
@@ -466,13 +466,13 @@ async function assertAgentStoreErasureDependencies(client, target) {
     if (dependencies.rowCount)
         throw new Error(`Agent-store erasure has an external or foreign-owned dependency: ${target.namespace}`);
 }
-export async function eraseBuilderAgentStores(adminDsn, builder, custody) {
-    if (!builder.uid || !builder.slug)
-        throw new Error("Agent-store erasure requires a complete Builder identity");
+export async function eraseUserAgentStores(adminDsn, user, custody) {
+    if (!user.uid || !user.slug)
+        throw new Error("Agent-store erasure requires a complete user identity");
     const scope = decodeURIComponent(new URL(adminDsn).pathname.slice(1));
     if (!scope)
         throw new Error("Agent-store erasure requires a database");
-    const owner = roleFor("builder", `${scope}:${builder.uid}`), shared = roleFor("shared", scope);
+    const owner = roleFor("builder", `${scope}:${user.uid}`), shared = roleFor("shared", scope);
     const client = new pg.Client({ connectionString: adminDsn, connectionTimeoutMillis: 10_000 });
     await client.connect();
     try {
@@ -481,7 +481,7 @@ export async function eraseBuilderAgentStores(adminDsn, builder, custody) {
         await client.query("SET LOCAL row_security = off");
         await client.query(AGENT_STORE_CREDENTIAL_LOCK);
         await custody.assertCurrent();
-        const discovered = await discoverAgentStoreErasureTargets(client, builder, owner, shared);
+        const discovered = await discoverAgentStoreErasureTargets(client, user, owner, shared);
         const assertStopped = async (targets, gateways) => {
             if (!targets.some(target => target.owner !== shared))
                 return;
@@ -491,7 +491,7 @@ export async function eraseBuilderAgentStores(adminDsn, builder, custody) {
         SELECT r.rolname FROM members m JOIN pg_catalog.pg_roles r ON r.oid = m.oid WHERE r.rolcanlogin AND r.rolname <> current_user`, [owner]);
             const stoppedLogins = new Set(gateways.map(id => roleFor("gateway", `${scope}:${id}`)));
             if (logins.rows.some(row => !stoppedLogins.has(row.rolname)))
-                throw new Error("Agent-store erasure retains a Builder Gateway login without proved runtime retirement");
+                throw new Error("Agent-store erasure retains a user Gateway login without proved runtime retirement");
         };
         let stoppedGateways = discovered.length ? await custody.assertWritersStopped(discovered) : [];
         if (discovered.length)
@@ -505,7 +505,7 @@ export async function eraseBuilderAgentStores(adminDsn, builder, custody) {
         if (bound.length)
             await assertStopped(bound, stoppedGateways);
         for (const target of bound) {
-            if (!erasureIdentityBelongsToBuilder(target, builder.slug, target.owner === shared))
+            if (!erasureIdentityBelongsToUser(target, user.slug, target.owner === shared))
                 throw new Error("Agent-store erasure target changed");
             await dropBoundAgentStore(client, target, discovered, async () => {
                 await assertStopped(bound, stoppedGateways);

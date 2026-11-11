@@ -359,7 +359,7 @@ describe.skipIf(!dsn)("PostgreSQL workspace repositories", { timeout: 30_000 }, 
         archivedAt: NOW - 7,
         commercialLifecycleStatus: "active",
         repoSource: { provider: "github", owner: "ada", repo: "site" },
-        agent: { model: "anthropic/claude", persona: "Builder", updatedAt: NOW - 50 },
+        agent: { model: "anthropic/claude", persona: "User", updatedAt: NOW - 50 },
       });
       await harness.store.workspaces.projects.put(full);
 
@@ -372,7 +372,7 @@ describe.skipIf(!dsn)("PostgreSQL workspace repositories", { timeout: 30_000 }, 
         project("acme", "site", {
           ownerActive: true,
           checkoutEnabled: false,
-          agent: { model: "anthropic/claude", persona: "Builder", tools: { web: true, shell: false }, updatedAt: NOW - 50 },
+          agent: { model: "anthropic/claude", persona: "User", tools: { web: true, shell: false }, updatedAt: NOW - 50 },
           repoSource: { provider: "github", owner: "ada", repo: "site" },
         }),
       );
@@ -723,7 +723,7 @@ describe.skipIf(!dsn)("PostgreSQL workspace repositories", { timeout: 30_000 }, 
       expect(byUid.errors).toEqual([]);
     });
 
-    it("watches a Builder's workspaces: snapshot, then additions, modifications and removals", async () => {
+    it("watches a user's workspaces: snapshot, then additions, modifications and removals", async () => {
       await harness.store.workspaces.records.put(workspace("acme", "u1"));
       await harness.store.workspaces.records.put(workspace("beta", "u2"));
       const listener = await watch({ aggregate: "workspaces", filter: { ownerUid: "u1" } });
@@ -838,7 +838,7 @@ describe.skipIf(!dsn)("PostgreSQL workspace repositories", { timeout: 30_000 }, 
       await vi.waitFor(() => expect(changeLog(listener)).toEqual(["added:beta/docs/c9"]), WAIT);
     });
 
-    it("follows one Builder's agent identity", async () => {
+    it("follows one user's agent identity", async () => {
       const listener = await watch({ aggregate: "agentIdentities", filter: { uid: "u1" } });
       expect(snapshotOf(listener)).toEqual([]);
 

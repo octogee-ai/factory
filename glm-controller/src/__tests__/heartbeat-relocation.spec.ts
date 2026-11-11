@@ -9,11 +9,11 @@ import {
   heartbeatReportIsRedundant,
   pollerHeartbeatReport,
   readHeartbeatLiveness,
-  readMountedCustomers,
+  readMountedUsers,
 } from "../heartbeat-relocation.js";
 
 describe("pollerHeartbeatReport — the poller's live telemetry report", () => {
-  const INTERNAL_URL = "http://octogee-gateway-bender.octogee.svc.cluster.local:18789";
+  const INTERNAL_URL = "http://octogee-gateway-walter.octogee.svc.cluster.local:18789";
 
   it("reports the polled telemetry with the gateway's internal URL", () => {
     expect(pollerHeartbeatReport(
@@ -27,7 +27,7 @@ describe("pollerHeartbeatReport — the poller's live telemetry report", () => {
     });
   });
 
-  it("writes the configured Builder report, including an explicit null, only when the poll carried one", () => {
+  it("writes the configured user report, including an explicit null, only when the poll carried one", () => {
     expect(pollerHeartbeatReport(
       { status: "ready", mountedCustomers: [], configuredBuilder: { state: "claimed", generation: 2 } }, INTERNAL_URL,
     ).configuredBuilder).toEqual({ state: "claimed", generation: 2 });
@@ -65,7 +65,7 @@ describe("pollerHeartbeatReport — the poller's live telemetry report", () => {
 
 describe("heartbeatReportIsRedundant — a converged poll writes nothing", () => {
   const NOW = 1_000_000;
-  const INTERNAL_URL = "http://octogee-gateway-bender.octogee.svc.cluster.local:18789";
+  const INTERNAL_URL = "http://octogee-gateway-walter.octogee.svc.cluster.local:18789";
   const REPORTED = {
     status: "ready",
     mountedCustomers: ["ceckert"],
@@ -101,7 +101,7 @@ describe("heartbeatReportIsRedundant — a converged poll writes nothing", () =>
 
   it.each([
     ["status", { status: "degraded" }],
-    ["mountedCustomers", { mountedCustomers: ["ceckert", "bender"] }],
+    ["mountedCustomers", { mountedCustomers: ["ceckert", "walter"] }],
     ["startedAt", { startedAt: 41 }],
     ["version", { version: "0000000" }],
     ["openclawVersion", { openclawVersion: "2026.7.0" }],
@@ -181,13 +181,13 @@ describe("readHeartbeatLiveness", () => {
   });
 });
 
-describe("readMountedCustomers", () => {
+describe("readMountedUsers", () => {
   it("reads the mounted set from runtime telemetry", () => {
-    expect(readMountedCustomers({ heartbeat: { mountedCustomers: ["x", "y"] } }))
+    expect(readMountedUsers({ heartbeat: { mountedCustomers: ["x", "y"] } }))
       .toEqual(["x", "y"]);
   });
 
-  it("returns an empty set without runtime mounted customers", () => {
-    expect(readMountedCustomers(undefined)).toEqual([]);
+  it("returns an empty set without runtime mounted users", () => {
+    expect(readMountedUsers(undefined)).toEqual([]);
   });
 });

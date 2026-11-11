@@ -52,7 +52,7 @@ describe("platformStateStoreFromEnvironment", () => {
 
   it("builds a PostgreSQL store from the database settings without touching Firestore", () => {
     const { store, createFirestoreStore } = selectStore({ PLATFORM_STATE_BACKEND: "postgres", ...DATABASE_SETTINGS });
-    expect(store().builders).toBeDefined();
+    expect(store().users).toBeDefined();
     expect(createFirestoreStore).not.toHaveBeenCalled();
   });
 

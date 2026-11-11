@@ -107,7 +107,7 @@ describe.skipIf(!dsn)("platform database deployment target", () => {
       deploymentTargetId: "test-central",
     });
     try {
-      await expect(store.builders.records.get("no-such-user")).resolves.toBeNull();
+      await expect(store.users.records.get("no-such-user")).resolves.toBeNull();
     } finally {
       await store.close();
     }

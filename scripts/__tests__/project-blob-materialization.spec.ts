@@ -7,10 +7,10 @@ import { readProjectRestoreReady, withMaterializedProjectAssets } from "@octogee
 import { createBrokeredProjectBlobHydrator } from "../lib/project-blob-materialization.js";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 
-const storageRoots = vi.hoisted(() => ({ customers: "" }));
-vi.mock("../lib/config.js", () => ({ get CUSTOMERS_DIR() { return storageRoots.customers; } }));
+const storageRoots = vi.hoisted(() => ({ users: "" }));
+vi.mock("../lib/config.js", () => ({ get CUSTOMERS_DIR() { return storageRoots.users; } }));
 const roots: string[] = [];
-afterEach(async () => { vi.unstubAllGlobals(); storageRoots.customers = ""; await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true }))); });
+afterEach(async () => { vi.unstubAllGlobals(); storageRoots.users = ""; await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true }))); });
 async function fixture() {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "project-blobs-")); roots.push(parent);
   const root = path.join(parent, "app"); await fs.mkdir(root); await fs.mkdir(path.join(root, ".git"));
@@ -115,8 +115,8 @@ describe("verified GCS project cache hydration", () => {
   it("hydrates a managed checkout with external Git metadata under the shared mutation lease", async () => {
     const h = await fixture();
     const parent = path.dirname(h.root);
-    storageRoots.customers = path.join(parent, "customers");
-    const destination = path.join(storageRoots.customers, "owner/projects/app");
+    storageRoots.users = path.join(parent, "customers");
+    const destination = path.join(storageRoots.users, "owner/projects/app");
     const metadata = path.join(parent, "git-metadata/owner/projects/app.git");
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.rename(h.root, destination);

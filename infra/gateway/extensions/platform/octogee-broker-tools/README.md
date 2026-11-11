@@ -40,6 +40,6 @@ node infra/gateway/verify-broker-plugin-runtime.mjs <source> <full-sha>
 The runtime check builds the actual shipped bundle, loads the installed public
 SDK/registry with the original Anthropic owner, checks usage suppression, and
 resolves a synthetic agent credential through the public catalog callback.
-It does not exercise live inference, a deployed image or customer credentials.
+It does not exercise live inference, a deployed image or user credentials.
 Explicit Native provider-filtered discovery may exclude this separate owner;
 it must not be enabled by claiming another provider's ownership or aliases.

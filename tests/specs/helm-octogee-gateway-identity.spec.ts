@@ -15,7 +15,7 @@ const REQUIRED_VALUES: Record<string, string> = {
   "gatewayEdge.publicAppOrigins[0]": "https://app-test.octogee.com",
 };
 
-const BUILDER_VALUES: Record<string, string> = {
+const USER_VALUES: Record<string, string> = {
   gatewayClass: "builder",
   imageProfile: "builder",
   profile: "builder",
@@ -25,7 +25,7 @@ const BUILDER_VALUES: Record<string, string> = {
   "builderAccess.controlIdentity": "per-user",
 };
 
-const VM_VALUES: Record<string, string> = { ...BUILDER_VALUES, computerDesktop: "omarchy" };
+const VM_VALUES: Record<string, string> = { ...USER_VALUES, computerDesktop: "omarchy" };
 
 interface Container {
   name: string;
@@ -60,11 +60,11 @@ function allContainers(pod: Pod): Container[] {
   return [...(pod.spec.initContainers ?? []), ...pod.spec.containers];
 }
 
-describe("helm/octogee-gateway/ — Builder identity is never rendered", () => {
+describe("helm/octogee-gateway/ — User identity is never rendered", () => {
   it.each([
     ["Shared", { gatewayClass: "shared" }],
-    ["X11 Builder VM", BUILDER_VALUES],
-    ["Omarchy Builder VM", { ...VM_VALUES, sizingTier: "m" }],
+    ["X11 gateway VM", USER_VALUES],
+    ["Omarchy gateway VM", { ...VM_VALUES, sizingTier: "m" }],
   ])("supplies declared browser origins to the %s edge process", (_label, values) => {
     const { pod } = renderPod("origin-proof", values);
     const edge = pod.spec.containers.find((container) => container.name === "gateway-edge")!;
@@ -73,9 +73,9 @@ describe("helm/octogee-gateway/ — Builder identity is never rendered", () => {
   });
 
   it.each([
-    ["X11 VM", BUILDER_VALUES],
+    ["X11 VM", USER_VALUES],
     ["Omarchy VM", { ...VM_VALUES, sizingTier: "m" }],
-  ])("renders a %s Builder pod with no owner or slug env, annotation, label, or path", (_label, values) => {
+  ])("renders a %s isolated pod with no owner or slug env, annotation, label, or path", (_label, values) => {
     const { pod, rendered } = renderPod("b-alice", values);
 
     expect(pod.metadata.annotations ?? {}).not.toHaveProperty("octogee.ai/owner-uid");
@@ -93,17 +93,17 @@ describe("helm/octogee-gateway/ — Builder identity is never rendered", () => {
   });
 
   it("ignores owner values a caller still passes", () => {
-    const { rendered } = renderPod("b-x", { ...BUILDER_VALUES, ownerUid: "uid-alice", builderSlug: "alice" });
+    const { rendered } = renderPod("b-x", { ...USER_VALUES, ownerUid: "uid-alice", builderSlug: "alice" });
     expect(rendered).not.toContain("uid-alice");
     expect(rendered).not.toMatch(/\balice\b/);
   });
 
-  it("renders a Builder without an owner", () => {
-    expect(() => renderPod("b-unowned", BUILDER_VALUES)).not.toThrow();
+  it("renders a user without an owner", () => {
+    expect(() => renderPod("b-unowned", USER_VALUES)).not.toThrow();
   });
 
-  it.each(["x11", "omarchy", "none"])("refuses to render a %s Builder as a Kubernetes Deployment", (computerDesktop) => {
-    expect(() => renderPod("b-alice", { ...BUILDER_VALUES, computerDesktop, sizingTier: "m", runtimeKind: "cluster" }))
+  it.each(["x11", "omarchy", "none"])("refuses to render a %s user as a Kubernetes Deployment", (computerDesktop) => {
+    expect(() => renderPod("b-alice", { ...USER_VALUES, computerDesktop, sizingTier: "m", runtimeKind: "cluster" }))
       .toThrow(/renders only as a GCE VM bundle/);
   });
 

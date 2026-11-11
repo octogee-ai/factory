@@ -1,10 +1,10 @@
-import { PROJECT_COACH_WORKSPACE_PARTS } from "@octogee/shared/types/project";
+import { PROJECT_AGENT_WORKSPACE_PARTS } from "@octogee/shared/types/project";
 import { Router, type Request, type Response } from "express";
 import {
-  resolveCustomerDir,
+  resolveUserDir,
   resolveProjectDir,
   commitAndPushWorkspace,
-  isTrustedGithubCustomerCheckout,
+  isTrustedGithubUserCheckout,
   isSafeSlug,
   type WorkspaceGitError,
 } from "../../lib/workspace-git.js";
@@ -28,7 +28,7 @@ async function onDemandGithubToken(
   dir: string,
   res: Response,
 ): Promise<string | undefined | null> {
-  if (!isTrustedGithubCustomerCheckout(dir)) return undefined;
+  if (!isTrustedGithubUserCheckout(dir)) return undefined;
   try {
     const token = await readOwnerRuntimeConnectorAccessToken("github");
     if (token) return token;
@@ -56,7 +56,7 @@ async function onDemandGithubToken(
   }
 }
 
-function customersRoot(): string {
+function usersRoot(): string {
   return process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
 }
 
@@ -75,7 +75,7 @@ async function divertBinaries(
 ): Promise<{ diverted: Array<{ path: string; size: number }>; failures: string[]; failedPaths: string[] }> {
   const result = project
     ? await divertWorktreeBinaries(dir, blobTarget(slug, project), undefined, { retainLocalFiles: true })
-    : await divertWorktreeBinaries(dir, blobTarget(slug, project), undefined, { excludePaths: [PROJECT_COACH_WORKSPACE_PARTS.join("/")] });
+    : await divertWorktreeBinaries(dir, blobTarget(slug, project), undefined, { excludePaths: [PROJECT_AGENT_WORKSPACE_PARTS.join("/")] });
   if (result.failures.length > 0) {
     logger.warn(
       `internal/workspace/commit: blob diversion incomplete slug=${slug}: ${result.failures.join("; ")}`,
@@ -145,7 +145,7 @@ router.post("/commit", async (req: Request, res: Response) => {
   }
 
   const start = Date.now();
-  const customerDir = await resolveCustomerDir(customersRoot(), slug);
+  const customerDir = await resolveUserDir(usersRoot(), slug);
   if (!customerDir) {
     logger.warn(`internal/workspace/commit: working tree not accessible slug=${slug}`);
     res.status(503).json({
@@ -159,7 +159,7 @@ router.post("/commit", async (req: Request, res: Response) => {
   // rather than fall back to the workspace repo.
   let dir = customerDir;
   if (project) {
-    const projectDir = await resolveProjectDir(customersRoot(), slug, project);
+    const projectDir = await resolveProjectDir(usersRoot(), slug, project);
     if (!projectDir) {
       logger.warn(`internal/workspace/commit: project clone missing slug=${slug} project=${project}`);
       res.status(503).json({

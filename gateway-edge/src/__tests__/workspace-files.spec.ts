@@ -120,7 +120,7 @@ describe("workspace file list helpers", () => {
     expect(storage.bucket).not.toHaveBeenCalled();
   });
 
-  it("maps visible repo entries, including customer-owned context files, and hides reserved or dot-prefixed names", () => {
+  it("maps visible repo entries, including user-owned context files, and hides reserved or dot-prefixed names", () => {
     const files = repoFileEntries([
       { name: "src", path: "src", type: "dir" },
       { name: "README.md", path: "README.md", type: "file", size: 12 },

@@ -66,7 +66,7 @@ function app(opts: {
       opts.users ?? {
         alice: {
           username: "alice",
-          provisioning: { openclaw: { slug: "alice", gatewayId: "bender" } },
+          provisioning: { openclaw: { slug: "alice", gatewayId: "walter" } },
         },
         victim: {
           username: "victim",
@@ -160,21 +160,21 @@ function app(opts: {
   return a;
 }
 
-const BENDER: Express.Request["boundTenant"] = {
+const WALTER: Express.Request["boundTenant"] = {
   kind: "gateway",
-  gatewayId: "bender",
-  ownerUid: "owner-bender",
+  gatewayId: "walter",
+  ownerUid: "owner-walter",
 };
 
-const BENDER_R2: Express.Request["boundTenant"] = {
-  ...BENDER,
-  podName: "octogee-gateway-bender-r2-5bc5949d46-p946t",
+const WALTER_R2: Express.Request["boundTenant"] = {
+  ...WALTER,
+  podName: "octogee-gateway-walter-r2-5bc5949d46-p946t",
   podUid: "b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef",
 };
 
-function configuredBender(overrides: Record<string, unknown> = {}) {
+function configuredWalter(overrides: Record<string, unknown> = {}) {
   return {
-    gatewayId: "bender",
+    gatewayId: "walter",
     createdAt: 1,
     createdBy: "admin",
     updatedAt: 2,
@@ -182,16 +182,16 @@ function configuredBender(overrides: Record<string, unknown> = {}) {
     latestRelease: 2,
     desiredRelease: 2,
     liveRelease: 1,
-    liveRevisionId: "bender-r1",
-    trafficRevisionId: "bender-r1",
+    liveRevisionId: "walter-r1",
+    trafficRevisionId: "walter-r1",
     desiredStatus: "running",
     roll: {
       operationId: "roll-1",
       status: "warming",
       fromRelease: 1,
       toRelease: 2,
-      sourceRevisionId: "bender-r1",
-      targetRevisionId: "bender-r2",
+      sourceRevisionId: "walter-r1",
+      targetRevisionId: "walter-r2",
       acceptingNewAssignments: false,
       startedAt: 2,
       updatedAt: 2,
@@ -205,10 +205,10 @@ function configuredBender(overrides: Record<string, unknown> = {}) {
     sizingTier: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
-    serviceAccountName: "octogee-gw-bender",
+    serviceAccountName: "octogee-gw-walter",
     serviceAccount: null,
     builderAccess: null,
-    ownerUid: "owner-bender",
+    ownerUid: "owner-walter",
     builderSlug: "victim",
     modelBrokerLimits: null,
     preemption: null,
@@ -265,7 +265,7 @@ const CLAIMING_GATEWAY = {
 } as const;
 
 // The user mirror still names the shared slot until activation completes, so a
-// booting disposable builder cannot bootstrap unless its own claim counts.
+// booting disposable isolated cannot bootstrap unless its own claim counts.
 const STILL_ON_SHARED = {
   "uid-ceckert": {
     username: "ceckert",
@@ -273,7 +273,7 @@ const STILL_ON_SHARED = {
   },
 };
 
-  it("lets a booting disposable builder bootstrap the user it has claimed", async () => {
+  it("lets a booting disposable isolated bootstrap the user it has claimed", async () => {
     const res = await request(app({
       boundTenant: CLAIMING_GATEWAY,
       users: STILL_ON_SHARED,
@@ -285,7 +285,7 @@ const STILL_ON_SHARED = {
     expect(res.status).toBe(200);
   });
 
-  it("refuses a disposable builder naming a user it has not claimed", async () => {
+  it("refuses a disposable isolated naming a user it has not claimed", async () => {
     const res = await request(app({
       boundTenant: CLAIMING_GATEWAY,
       users: {
@@ -411,7 +411,7 @@ const STILL_ON_SHARED = {
 
     it("reports a fall-through deny with the reason, the bound tenant, and the calling agent", async () => {
       const { denials, onDenied } = denialCapture();
-      const res = await request(app({ boundTenant: BENDER, onDenied }))
+      const res = await request(app({ boundTenant: WALTER, onDenied }))
         .post("/internal/probe")
         .send({ agentId: "octogee-alice-coach" });
 
@@ -425,22 +425,22 @@ const STILL_ON_SHARED = {
         path: "/internal/probe",
         reason: "route is not admitted for gateway tenants and the request names no owned user, slug, gateway, or flow",
         cause: "policy",
-        tenant: { kind: "gateway", gatewayId: "bender", ownerUid: "owner-bender" },
+        tenant: { kind: "gateway", gatewayId: "walter", ownerUid: "owner-walter" },
         agentId: "octogee-alice-coach",
       }]);
     });
 
-    it("marks assignment-skew denials as placement so they stay out of the Builder's inbox", async () => {
+    it("marks assignment-skew denials as placement so they stay out of the user's inbox", async () => {
       const { denials, onDenied } = denialCapture();
-      await request(app({ boundTenant: BENDER, onDenied }))
+      await request(app({ boundTenant: WALTER, onDenied }))
         .post("/internal/agent-projects/list")
         .send({ gatewayId: "other", agentId: "octogee-alice-coach" })
         .expect(403);
-      await request(app({ boundTenant: BENDER, onDenied }))
+      await request(app({ boundTenant: WALTER, onDenied }))
         .post("/internal/probe")
         .send({ workspaceSlug: "stranger" })
         .expect(403);
-      await request(app({ boundTenant: BENDER, onDenied }))
+      await request(app({ boundTenant: WALTER, onDenied }))
         .post("/internal/probe")
         .send({ agentId: "octogee-alice-coach" })
         .expect(403);
@@ -453,7 +453,7 @@ const STILL_ON_SHARED = {
 
     it("reports a foreign-gateway deny and a platform-actor deny with their own reasons", async () => {
       const { denials, onDenied } = denialCapture();
-      await request(app({ boundTenant: BENDER, onDenied }))
+      await request(app({ boundTenant: WALTER, onDenied }))
         .post("/internal/agent-projects/list")
         .send({ gatewayId: "other", agentId: "octogee-alice-coach" })
         .expect(403);
@@ -464,7 +464,7 @@ const STILL_ON_SHARED = {
 
       expect(denials.map((d) => [d.tenant, d.reason, d.agentId])).toEqual([
         [
-          { kind: "gateway", gatewayId: "bender", ownerUid: "owner-bender" },
+          { kind: "gateway", gatewayId: "walter", ownerUid: "owner-walter" },
           "request names a gatewayId other than the bound gateway",
           "octogee-alice-coach",
         ],
@@ -487,7 +487,7 @@ const STILL_ON_SHARED = {
 
     it("does not report an admitted call", async () => {
       const { denials, onDenied } = denialCapture();
-      await request(app({ boundTenant: BENDER, onDenied }))
+      await request(app({ boundTenant: WALTER, onDenied }))
         .post("/internal/agent-projects/list")
         .send({ agentId: "octogee-alice-coach" })
         .expect(200);
@@ -496,7 +496,7 @@ const STILL_ON_SHARED = {
 
     it("still answers 403 when the reporter rejects", async () => {
       const onDenied = vi.fn(async () => { throw new Error("inbox down"); });
-      const res = await request(app({ boundTenant: BENDER, onDenied })).post("/internal/probe").send({});
+      const res = await request(app({ boundTenant: WALTER, onDenied })).post("/internal/probe").send({});
       expect(res.status).toBe(403);
       expect(onDenied).toHaveBeenCalledOnce();
     });
@@ -511,7 +511,7 @@ const STILL_ON_SHARED = {
 
     it("records an admitted call with the bound tenant, calling agent, and final status", async () => {
       const { records, onAccess } = accessCapture();
-      await request(app({ boundTenant: BENDER_R2, onAccess, handlerStatus: 404 }))
+      await request(app({ boundTenant: WALTER_R2, onAccess, handlerStatus: 404 }))
         .post("/internal/agent-projects/list")
         .send({ agentId: "octogee-alice-coach" })
         .expect(404);
@@ -522,8 +522,8 @@ const STILL_ON_SHARED = {
         decision: "admitted",
         status: 404,
         responseCompleted: true,
-        tenant: { kind: "gateway", gatewayId: "bender", ownerUid: "owner-bender" },
-        podName: "octogee-gateway-bender-r2-5bc5949d46-p946t",
+        tenant: { kind: "gateway", gatewayId: "walter", ownerUid: "owner-walter" },
+        podName: "octogee-gateway-walter-r2-5bc5949d46-p946t",
         agentId: "octogee-alice-coach",
       }]);
     });
@@ -566,7 +566,7 @@ const STILL_ON_SHARED = {
 
     it("does not mark a disconnect during authorization as admitted", () => {
       const { records, onAccess } = accessCapture();
-      const req = { method: "POST", path: "/internal/agent-projects/list", boundTenant: BENDER } as express.Request;
+      const req = { method: "POST", path: "/internal/agent-projects/list", boundTenant: WALTER } as express.Request;
       const res = Object.assign(new EventEmitter(), { statusCode: 200, writableFinished: false });
       createTenantEnforcementMiddleware({ onAccess, db: flowDb(), store: fixtureStore({ users: {} }), onDenied: async () => {} })(
         req, res as unknown as express.Response, () => {},
@@ -577,7 +577,7 @@ const STILL_ON_SHARED = {
 
     it("records a denied call with its reason", async () => {
       const { records, onAccess } = accessCapture();
-      await request(app({ boundTenant: BENDER, onAccess }))
+      await request(app({ boundTenant: WALTER, onAccess }))
         .post("/internal/agent-projects/list")
         .send({ gatewayId: "other", agentId: "octogee-alice-coach" })
         .expect(403);
@@ -589,7 +589,7 @@ const STILL_ON_SHARED = {
         status: 403,
         responseCompleted: true,
         reason: "request names a gatewayId other than the bound gateway",
-        tenant: { kind: "gateway", gatewayId: "bender", ownerUid: "owner-bender" },
+        tenant: { kind: "gateway", gatewayId: "walter", ownerUid: "owner-walter" },
         agentId: "octogee-alice-coach",
       }]);
     });
@@ -609,16 +609,16 @@ const STILL_ON_SHARED = {
 
     it("does not record the once-a-second assignment roster poll", async () => {
       const { records, onAccess } = accessCapture();
-      await request(app({ boundTenant: BENDER, onAccess }))
+      await request(app({ boundTenant: WALTER, onAccess }))
         .post("/internal/fleet/assignment-roster")
-        .send({ revisionId: "bender" });
+        .send({ revisionId: "walter" });
 
       expect(records).toEqual([]);
     });
 
     it("still answers when the access recorder throws", async () => {
       const onAccess = vi.fn(() => { throw new Error("log sink down"); });
-      await request(app({ boundTenant: BENDER, onAccess }))
+      await request(app({ boundTenant: WALTER, onAccess }))
         .post("/internal/agent-projects/list")
         .send({ agentId: "octogee-alice-coach" })
         .expect(200);
@@ -627,11 +627,11 @@ const STILL_ON_SHARED = {
   });
 
   it("allows a gateway-bound caller to target its own gatewayId only", async () => {
-    const owned = await request(app({ boundTenant: BENDER }))
+    const owned = await request(app({ boundTenant: WALTER }))
       .post("/internal/probe")
-      .send({ gatewayId: "bender" });
+      .send({ gatewayId: "walter" });
 
-    const foreign = await request(app({ boundTenant: BENDER }))
+    const foreign = await request(app({ boundTenant: WALTER }))
       .post("/internal/probe")
       .send({ gatewayId: "other" });
 
@@ -641,19 +641,19 @@ const STILL_ON_SHARED = {
 
   it("admits the exact web-extension body only when it claims the bound gateway", async () => {
     const extensionBody = {
-      gatewayId: "bender",
+      gatewayId: "walter",
       agentId: "octogee-alice-coach",
       requestId: "tool-1",
       provider: "brave",
       query: "octopus research",
     };
-    const admitted = await request(app({ boundTenant: BENDER }))
+    const admitted = await request(app({ boundTenant: WALTER }))
       .post("/internal/fleet/agent/web-search")
       .send(extensionBody);
-    const missingGateway = await request(app({ boundTenant: BENDER }))
+    const missingGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/fleet/agent/web-search")
       .send({ ...extensionBody, gatewayId: undefined });
-    const foreignGateway = await request(app({ boundTenant: BENDER }))
+    const foreignGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/fleet/agent/web-extract")
       .send({ ...extensionBody, gatewayId: "other", urls: ["https://example.com"] });
 
@@ -663,11 +663,11 @@ const STILL_ON_SHARED = {
   });
 
   it("allows a gateway-bound caller to target only users assigned to that gateway", async () => {
-    const owned = await request(app({ boundTenant: BENDER }))
+    const owned = await request(app({ boundTenant: WALTER }))
       .post("/internal/probe")
       .send({ uid: "alice" });
 
-    const foreign = await request(app({ boundTenant: BENDER }))
+    const foreign = await request(app({ boundTenant: WALTER }))
       .post("/internal/probe")
       .send({ uid: "victim" });
 
@@ -676,13 +676,13 @@ const STILL_ON_SHARED = {
   });
 
   it("does not let a matching gatewayId bypass uid ownership checks on ordinary routes", async () => {
-    const owned = await request(app({ boundTenant: BENDER }))
+    const owned = await request(app({ boundTenant: WALTER }))
       .post("/internal/probe")
-      .send({ gatewayId: "bender", uid: "alice" });
+      .send({ gatewayId: "walter", uid: "alice" });
 
-    const foreign = await request(app({ boundTenant: BENDER }))
+    const foreign = await request(app({ boundTenant: WALTER }))
       .post("/internal/probe")
-      .send({ gatewayId: "bender", uid: "victim" });
+      .send({ gatewayId: "walter", uid: "victim" });
 
     expect(owned.status).toBe(200);
     expect(foreign.status).toBe(403);
@@ -690,29 +690,29 @@ const STILL_ON_SHARED = {
 
   it("admits only a bound gateway to the final reply route's own recipient authorization", async () => {
     const path = "/internal/openclaw/notifications/final-reply";
-    expect((await request(app({ boundTenant: BENDER })).post(path).send({ gatewayId: "bender" })).status).toBe(200);
-    expect((await request(app({ boundTenant: BENDER })).post(path).send({ gatewayId: "other" })).status).toBe(403);
-    expect((await request(app({})).post(path).send({ gatewayId: "bender" })).status).toBe(403);
-    expect((await request(app({ boundTenant: { kind: "platform", actor: "cron" } })).post(path).send({ gatewayId: "bender" })).status).toBe(403);
+    expect((await request(app({ boundTenant: WALTER })).post(path).send({ gatewayId: "walter" })).status).toBe(200);
+    expect((await request(app({ boundTenant: WALTER })).post(path).send({ gatewayId: "other" })).status).toBe(403);
+    expect((await request(app({})).post(path).send({ gatewayId: "walter" })).status).toBe(403);
+    expect((await request(app({ boundTenant: { kind: "platform", actor: "cron" } })).post(path).send({ gatewayId: "walter" })).status).toBe(403);
   });
 
   it("does not let a matching gatewayId bypass foreign notification recipients", async () => {
-    const owned = await request(app({ boundTenant: BENDER }))
+    const owned = await request(app({ boundTenant: WALTER }))
       .post("/api/notifications/ingest")
-      .send({ gatewayId: "bender", targetUserIds: ["alice"] });
-    const foreign = await request(app({ boundTenant: BENDER }))
+      .send({ gatewayId: "walter", targetUserIds: ["alice"] });
+    const foreign = await request(app({ boundTenant: WALTER }))
       .post("/api/notifications/ingest")
-      .send({ gatewayId: "bender", targetUserIds: ["victim"] });
+      .send({ gatewayId: "walter", targetUserIds: ["victim"] });
 
     expect(owned.status).toBe(200);
     expect(foreign.status).toBe(403);
   });
 
   it("never lends gateway authority to the platform-wide social fanout", async () => {
-    const res = await request(app({ boundTenant: BENDER }))
+    const res = await request(app({ boundTenant: WALTER }))
       .post("/internal/notifications/social")
       .send({
-        gatewayId: "bender",
+        gatewayId: "walter",
         actorUid: "alice",
         type: "announcement",
         targetUserIds: [],
@@ -735,27 +735,27 @@ const STILL_ON_SHARED = {
   });
 
   it("lets the connector-token broker perform its own project-membership authorization", async () => {
-    const ownedGateway = await request(app({ boundTenant: BENDER }))
+    const ownedGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/connectors/access-token")
       .send({
-        gatewayId: "bender",
+        gatewayId: "walter",
         uid: "victim",
         access: {
           kind: "project",
-          requestingUid: "owner-bender",
+          requestingUid: "owner-walter",
           workspaceSlug: "victim",
           projectSlug: "octo",
         },
       });
 
-    const foreignGateway = await request(app({ boundTenant: BENDER }))
+    const foreignGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/connectors/access-token")
       .send({
         gatewayId: "other",
         uid: "victim",
         access: {
           kind: "project",
-          requestingUid: "owner-bender",
+          requestingUid: "owner-walter",
           workspaceSlug: "victim",
           projectSlug: "octo",
         },
@@ -766,11 +766,11 @@ const STILL_ON_SHARED = {
   });
 
   it("lets the fleet broker resolve an unassigned stale slug for idempotent eviction", async () => {
-    const stale = await request(app({ boundTenant: BENDER }))
+    const stale = await request(app({ boundTenant: WALTER }))
       .post("/internal/fleet/uid-for-slug")
-      .send({ gatewayId: "bender", slug: "departed" });
+      .send({ gatewayId: "walter", slug: "departed" });
 
-    const foreignGateway = await request(app({ boundTenant: BENDER }))
+    const foreignGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/fleet/uid-for-slug")
       .send({ gatewayId: "other", slug: "alice" });
 
@@ -778,30 +778,30 @@ const STILL_ON_SHARED = {
     expect(foreignGateway.status).toBe(403);
   });
 
-  it("passes a configured Builder owner snapshot to the route-level admission", async () => {
+  it("passes a configured user owner snapshot to the route-level admission", async () => {
     const target = app({
-      boundTenant: BENDER_R2,
-      gateways: { bender: configuredBender() },
+      boundTenant: WALTER_R2,
+      gateways: { walter: configuredWalter() },
     });
     const owner = await request(target)
       .post("/internal/fleet/user-snapshot")
-      .send({ gatewayId: "bender", uid: "owner-bender" });
+      .send({ gatewayId: "walter", uid: "owner-walter" });
     const foreignGateway = await request(target)
       .post("/internal/fleet/user-snapshot")
-      .send({ gatewayId: "other", uid: "owner-bender" });
+      .send({ gatewayId: "other", uid: "owner-walter" });
 
     expect(owner.status).toBe(200);
     expect(foreignGateway.status).toBe(403);
   });
 
-  it("lets computer context resolve its own assigned-agent authorization", async () => {
-    const target = app({ boundTenant: BENDER });
+  it("lets VM context resolve its own assigned-agent authorization", async () => {
+    const target = app({ boundTenant: WALTER });
     const response = await request(target).post("/internal/computer/agent-context").send({ agentId: "octogee-alice-coach" });
     expect(response.status).toBe(200);
   });
 
   it("lets the byosub flow broker perform its own roster authorization for new flows", async () => {
-    const ownedGateway = await request(app({ boundTenant: BENDER, flows: {} }))
+    const ownedGateway = await request(app({ boundTenant: WALTER, flows: {} }))
       .post("/internal/byok/byosub-flow")
       .send({
         flowId: "fresh-flow-123",
@@ -809,7 +809,7 @@ const STILL_ON_SHARED = {
         provider: "anthropic",
       });
 
-    const foreignGateway = await request(app({ boundTenant: BENDER, flows: {} }))
+    const foreignGateway = await request(app({ boundTenant: WALTER, flows: {} }))
       .post("/internal/byok/byosub-flow")
       .send({
         gatewayId: "other",
@@ -823,10 +823,10 @@ const STILL_ON_SHARED = {
   });
 
   it("passes byosub credential syncback to route-level roster authorization", async () => {
-    const ownedGateway = await request(app({ boundTenant: BENDER }))
+    const ownedGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/byok/byosub-cred-syncback")
       .send({ agentId: "octogee-alice-coach", provider: "openai", credential: "{}" });
-    const foreignGateway = await request(app({ boundTenant: BENDER }))
+    const foreignGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/byok/byosub-cred-syncback")
       .send({ gatewayId: "other", agentId: "octogee-alice-coach", provider: "openai", credential: "{}" });
 
@@ -835,10 +835,10 @@ const STILL_ON_SHARED = {
   });
 
   it.each(["agent-usage-status", "broker-inspect"])("passes %s to route-level roster authorization", async route => {
-    const ownedGateway = await request(app({ boundTenant: BENDER }))
+    const ownedGateway = await request(app({ boundTenant: WALTER }))
       .post(`/internal/byok/${route}`)
       .send({ agentId: "octogee-alice-coach" });
-    const foreignGateway = await request(app({ boundTenant: BENDER }))
+    const foreignGateway = await request(app({ boundTenant: WALTER }))
       .post(`/internal/byok/${route}`)
       .send({ gatewayId: "other", agentId: "octogee-alice-coach" });
 
@@ -847,10 +847,10 @@ const STILL_ON_SHARED = {
   });
 
   it("passes agent support to route-level roster authorization without trusting body context", async () => {
-    const ownedGateway = await request(app({ boundTenant: BENDER }))
+    const ownedGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/agent-support/ask")
       .send({ agentId: "octogee-alice-coach", question: "Help", uid: "victim" });
-    const foreignGateway = await request(app({ boundTenant: BENDER }))
+    const foreignGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/agent-support/ask")
       .send({ gatewayId: "other", agentId: "octogee-alice-coach", question: "Help" });
 
@@ -859,13 +859,13 @@ const STILL_ON_SHARED = {
   });
 
   it("passes session context to route-level agent and channel authorization", async () => {
-    const ownedGateway = await request(app({ boundTenant: BENDER }))
+    const ownedGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/openclaw/activity/session-context")
       .send({
         agentId: "octogee-alice-coach",
         channelId: "mattermost-task-channel",
       });
-    const foreignGateway = await request(app({ boundTenant: BENDER }))
+    const foreignGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/openclaw/activity/session-context")
       .send({
         gatewayId: "other",
@@ -888,16 +888,16 @@ const STILL_ON_SHARED = {
 
   it.each(['inspect', 'authorize', 'issued', 'reserve', 'commit', 'active', 'http', 'tokens', 'revoke', 'session'])('binds mobile %s to the authenticated gateway workload', async operation => {
     const path = `/internal/mobile-devices/${operation}`;
-    expect((await request(app({ boundTenant: BENDER })).post(path).send({ gatewayId: 'bender' })).status).toBe(200);
-    expect((await request(app({ boundTenant: BENDER })).post(path).send({ gatewayId: 'other' })).status).toBe(403);
-    expect((await request(app({ boundTenant: { kind: 'platform', actor: 'cron' } })).post(path).send({ gatewayId: 'bender' })).status).toBe(403);
+    expect((await request(app({ boundTenant: WALTER })).post(path).send({ gatewayId: 'walter' })).status).toBe(200);
+    expect((await request(app({ boundTenant: WALTER })).post(path).send({ gatewayId: 'other' })).status).toBe(403);
+    expect((await request(app({ boundTenant: { kind: 'platform', actor: 'cron' } })).post(path).send({ gatewayId: 'walter' })).status).toBe(403);
   });
 
   it("passes dispatch context only to the bound gateway tenant", async () => {
-    const ownedGateway = await request(app({ boundTenant: BENDER }))
+    const ownedGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/openclaw/activity/dispatch-context")
       .send({ agentId: "octogee-alice-coach" });
-    const foreignGateway = await request(app({ boundTenant: BENDER }))
+    const foreignGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/openclaw/activity/dispatch-context")
       .send({ gatewayId: "other", agentId: "octogee-alice-coach" });
     const platform = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
@@ -911,10 +911,10 @@ const STILL_ON_SHARED = {
 
   it("delegates exact OpenClaw Control routes only for the bound gateway tenant", async () => {
     for (const route of ["redeem", "authorize", "profile", "tool-conversation", "mattermost/authorize", "mattermost/channels"]) {
-      const ownedGateway = await request(app({ boundTenant: BENDER }))
+      const ownedGateway = await request(app({ boundTenant: WALTER }))
         .post(`/internal/openclaw-control/${route}`)
-        .send({ gatewayId: "bender", uid: "victim" });
-      const foreignGateway = await request(app({ boundTenant: BENDER }))
+        .send({ gatewayId: "walter", uid: "victim" });
+      const foreignGateway = await request(app({ boundTenant: WALTER }))
         .post(`/internal/openclaw-control/${route}`)
         .send({ gatewayId: "other" });
 
@@ -925,10 +925,10 @@ const STILL_ON_SHARED = {
 
   it("delegates voice conversation and turn brokering only for the bound gateway tenant", async () => {
     for (const route of ["conversation", "turn"]) {
-      const ownedGateway = await request(app({ boundTenant: BENDER }))
+      const ownedGateway = await request(app({ boundTenant: WALTER }))
         .post(`/internal/voice/${route}`)
-        .send({ gatewayId: "bender", uid: "victim", channelId: "c".repeat(26), text: "hello" });
-      const foreignGateway = await request(app({ boundTenant: BENDER }))
+        .send({ gatewayId: "walter", uid: "victim", channelId: "c".repeat(26), text: "hello" });
+      const foreignGateway = await request(app({ boundTenant: WALTER }))
         .post(`/internal/voice/${route}`)
         .send({ gatewayId: "other", uid: "victim", channelId: "c".repeat(26), text: "hello" });
 
@@ -939,22 +939,22 @@ const STILL_ON_SHARED = {
 
   it("delegates opaque voice archive custody only to a gateway tenant for route-local authorization", async () => {
     const body = { voiceGrant: "g".repeat(43), sessionId: "native", entries: [{ transcriptId: "voice:native:1", role: "user", text: "Hello" }], truncated: false };
-    expect((await request(app({ boundTenant: BENDER })).post("/internal/voice/archive").send(body)).status).toBe(200);
+    expect((await request(app({ boundTenant: WALTER })).post("/internal/voice/archive").send(body)).status).toBe(200);
     expect((await request(app({})).post("/internal/voice/archive").send(body)).status).toBe(403);
     expect((await request(app({ boundTenant: { kind: "platform", actor: "cron" } })).post("/internal/voice/archive").send(body)).status).toBe(403);
-    expect((await request(app({ boundTenant: BENDER })).post("/internal/voice/archive").send({ ...body, gatewayId: "other" })).status).toBe(403);
+    expect((await request(app({ boundTenant: WALTER })).post("/internal/voice/archive").send({ ...body, gatewayId: "other" })).status).toBe(403);
   });
 
   it("lets preview authorization evaluate a member whose own agent is on another gateway", async () => {
-    const delegated = await request(app({ boundTenant: BENDER }))
+    const delegated = await request(app({ boundTenant: WALTER }))
       .post("/internal/openclaw/previews/authorize")
       .send({
-        gatewayId: "bender",
+        gatewayId: "walter",
         uid: "victim",
         workspaceSlug: "alice",
         projectSlug: "launch-room",
       });
-    const foreignGateway = await request(app({ boundTenant: BENDER }))
+    const foreignGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/openclaw/previews/authorize")
       .send({
         gatewayId: "other",
@@ -969,10 +969,10 @@ const STILL_ON_SHARED = {
 
   it("delegates agent project routes only for the bound gateway tenant", async () => {
     for (const route of ["create", "list", "set-recipe", "delegate", "identity"]) {
-      const ownedGateway = await request(app({ boundTenant: BENDER }))
+      const ownedGateway = await request(app({ boundTenant: WALTER }))
         .post(`/internal/agent-projects/${route}`)
         .send({ agentId: "octogee-alice-coach" });
-      const foreignGateway = await request(app({ boundTenant: BENDER }))
+      const foreignGateway = await request(app({ boundTenant: WALTER }))
         .post(`/internal/agent-projects/${route}`)
         .send({ gatewayId: "other", agentId: "octogee-alice-coach" });
 
@@ -983,10 +983,10 @@ const STILL_ON_SHARED = {
 
   it("delegates agent board routes only for the bound gateway tenant", async () => {
     for (const route of ["list", "card-read", "card-create", "card-update", "card-move", "card-comment"]) {
-      const ownedGateway = await request(app({ boundTenant: BENDER }))
+      const ownedGateway = await request(app({ boundTenant: WALTER }))
         .post(`/internal/agent-board/${route}`)
         .send({ agentId: "octogee-alice-coach" });
-      const foreignGateway = await request(app({ boundTenant: BENDER }))
+      const foreignGateway = await request(app({ boundTenant: WALTER }))
         .post(`/internal/agent-board/${route}`)
         .send({ gatewayId: "other", agentId: "octogee-alice-coach" });
 
@@ -996,10 +996,10 @@ const STILL_ON_SHARED = {
   });
 
   it("delegates bearer-blind productivity routes only for the bound gateway tenant", async () => {
-    const ownedGateway = await request(app({ boundTenant: BENDER }))
+    const ownedGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/agent-productivity/google/calendar/events")
       .send({ agentId: "octogee-alice-coach", params: {} });
-    const foreignGateway = await request(app({ boundTenant: BENDER }))
+    const foreignGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/agent-productivity/google/calendar/events")
       .send({ gatewayId: "other", agentId: "octogee-alice-coach", params: {} });
 
@@ -1008,11 +1008,11 @@ const STILL_ON_SHARED = {
   });
 
   it("allows a gateway-bound caller to target only slugs assigned to that gateway", async () => {
-    const owned = await request(app({ boundTenant: BENDER }))
+    const owned = await request(app({ boundTenant: WALTER }))
       .post("/internal/probe")
       .send({ slug: "alice" });
 
-    const foreign = await request(app({ boundTenant: BENDER }))
+    const foreign = await request(app({ boundTenant: WALTER }))
       .post("/internal/probe")
       .send({ slug: "victim" });
 
@@ -1021,28 +1021,28 @@ const STILL_ON_SHARED = {
   });
 
   it("does not let a matching gatewayId bypass slug ownership checks on ordinary routes", async () => {
-    const owned = await request(app({ boundTenant: BENDER }))
+    const owned = await request(app({ boundTenant: WALTER }))
       .post("/internal/probe")
-      .send({ gatewayId: "bender", slug: "alice" });
+      .send({ gatewayId: "walter", slug: "alice" });
 
-    const foreign = await request(app({ boundTenant: BENDER }))
+    const foreign = await request(app({ boundTenant: WALTER }))
       .post("/internal/probe")
-      .send({ gatewayId: "bender", slug: "victim" });
+      .send({ gatewayId: "walter", slug: "victim" });
 
     expect(owned.status).toBe(200);
     expect(foreign.status).toBe(403);
   });
 
-  it("allows Gitea broker slug access during a running inbound customer migration", async () => {
+  it("allows Gitea broker slug access during a running inbound user migration", async () => {
     const inbound = await request(
       app({
-        boundTenant: BENDER,
+        boundTenant: WALTER,
         operations: {
           inbound: {
             kind: "migrate-customer",
             status: "running",
             inputUid: "victim",
-            input: { uid: "victim", toGatewayId: "bender" },
+            input: { uid: "victim", toGatewayId: "walter" },
           },
         },
       }),
@@ -1052,13 +1052,13 @@ const STILL_ON_SHARED = {
 
     const ordinaryRoute = await request(
       app({
-        boundTenant: BENDER,
+        boundTenant: WALTER,
         operations: {
           inbound: {
             kind: "migrate-customer",
             status: "running",
             inputUid: "victim",
-            input: { uid: "victim", toGatewayId: "bender" },
+            input: { uid: "victim", toGatewayId: "walter" },
           },
         },
       }),
@@ -1070,11 +1070,11 @@ const STILL_ON_SHARED = {
     expect(ordinaryRoute.status).toBe(403);
   });
 
-  it("refuses the Gitea inbound migration allowance when two Builders claim the slug", async () => {
+  it("refuses the Gitea inbound migration allowance when two users claim the slug", async () => {
     const onDenied = vi.fn(async () => {});
     const res = await request(
       app({
-        boundTenant: BENDER,
+        boundTenant: WALTER,
         users: {
           victim: { username: "victim", provisioning: { openclaw: { slug: "victim", gatewayId: "other" } } },
           impostor: { username: "victim" },
@@ -1084,7 +1084,7 @@ const STILL_ON_SHARED = {
             kind: "migrate-customer",
             status: "running",
             inputUid: "victim",
-            input: { uid: "victim", toGatewayId: "bender" },
+            input: { uid: "victim", toGatewayId: "walter" },
           },
         },
         onDenied,
@@ -1102,7 +1102,7 @@ const STILL_ON_SHARED = {
   it("keeps the Gitea inbound migration allowance scoped to the target gateway", async () => {
     const res = await request(
       app({
-        boundTenant: BENDER,
+        boundTenant: WALTER,
         operations: {
           inbound: {
             kind: "migrate-customer",
@@ -1119,10 +1119,10 @@ const STILL_ON_SHARED = {
     expect(res.status).toBe(403);
   });
 
-  it("allows an authenticated stable gateway pod to bootstrap its configured builder", async () => {
+  it("allows an authenticated stable gateway pod to bootstrap its configured user", async () => {
     const res = await request(app({
-      boundTenant: BENDER_R2,
-      gateways: { bender: configuredBender() },
+      boundTenant: WALTER_R2,
+      gateways: { walter: configuredWalter() },
     }))
       .get("/internal/gitea/user-pubkey")
       .query({ slug: "victim" });
@@ -1130,21 +1130,21 @@ const STILL_ON_SHARED = {
     expect(res.status).toBe(200);
   });
 
-  it("passes configured builder credential bootstrap to its stricter route-level authorization", async () => {
+  it("passes configured user credential bootstrap to its stricter route-level authorization", async () => {
     const res = await request(app({
-      boundTenant: BENDER_R2,
-      gateways: { bender: configuredBender() },
+      boundTenant: WALTER_R2,
+      gateways: { walter: configuredWalter() },
     }))
       .post("/internal/fleet/configured-builder-bootstrap")
-      .send({ gatewayId: "bender", revisionId: "bender-r2", slug: "victim" });
+      .send({ gatewayId: "walter", revisionId: "walter-r2", slug: "victim" });
 
     expect(res.status).toBe(200);
   });
 
-  it("passes Builder identity reads to their route-level authorization without a named gateway", async () => {
+  it("passes user identity reads to their route-level authorization without a named gateway", async () => {
     const res = await request(app({
-      boundTenant: BENDER_R2,
-      gateways: { bender: configuredBender() },
+      boundTenant: WALTER_R2,
+      gateways: { walter: configuredWalter() },
     }))
       .post("/internal/fleet/builder-identity")
       .send({});
@@ -1152,15 +1152,15 @@ const STILL_ON_SHARED = {
     expect(res.status).toBe(200);
   });
 
-  it("passes configured builder owner snapshots to their stricter route-level authorization", async () => {
+  it("passes configured user owner snapshots to their stricter route-level authorization", async () => {
     const target = app({
-      boundTenant: BENDER_R2,
-      gateways: { bender: configuredBender() },
+      boundTenant: WALTER_R2,
+      gateways: { walter: configuredWalter() },
     });
 
     const owner = await request(target)
       .post("/internal/fleet/user-snapshot")
-      .send({ gatewayId: "bender", uid: "victim" });
+      .send({ gatewayId: "walter", uid: "victim" });
     const foreignGateway = await request(target)
       .post("/internal/fleet/user-snapshot")
       .send({ gatewayId: "other", uid: "victim" });
@@ -1169,36 +1169,36 @@ const STILL_ON_SHARED = {
     expect(foreignGateway.status).toBe(403);
   });
 
-  it("passes builder runtime state snapshot and prune routes to their allocation-bound authorization", async () => {
+  it("passes isolated runtime state snapshot and prune routes to their allocation-bound authorization", async () => {
     const target = app({
-      boundTenant: BENDER_R2,
-      gateways: { bender: configuredBender() },
+      boundTenant: WALTER_R2,
+      gateways: { walter: configuredWalter() },
     });
 
     const download = await request(target)
       .post("/internal/fleet/builder-runtime-state/download-url")
-      .send({ gatewayId: "bender", revisionId: "bender-r2", slug: "victim" });
+      .send({ gatewayId: "walter", revisionId: "walter-r2", slug: "victim" });
     const snapshot = await request(target)
       .post("/internal/fleet/builder-runtime-state/snapshot-urls")
       .send({
-        gatewayId: "bender",
-        revisionId: "bender-r2",
+        gatewayId: "walter",
+        revisionId: "walter-r2",
         slug: "victim",
         size: 1024,
         recoveryTiers: ["minute"],
       });
     const prune = await request(target)
       .post("/internal/fleet/builder-runtime-state/prune")
-      .send({ gatewayId: "bender", revisionId: "bender-r2", slug: "victim" });
+      .send({ gatewayId: "walter", revisionId: "walter-r2", slug: "victim" });
     const foreign = await request(target)
       .post("/internal/fleet/builder-runtime-state/download-url")
       .send({ gatewayId: "other", revisionId: "other", slug: "victim" });
     const anchorReport = await request(target)
       .post("/internal/fleet/agent-anchors/report")
-      .send({ gatewayId: "bender", revisionId: "bender-r2", slug: "victim", anchors: [{ agentId: "octogee-victim-coach", storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_agent_92c817cc770f466d" }], configuredAgentIds: ["octogee-victim-coach"] });
+      .send({ gatewayId: "walter", revisionId: "walter-r2", slug: "victim", anchors: [{ agentId: "octogee-victim-coach", storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_agent_92c817cc770f466d" }], configuredAgentIds: ["octogee-victim-coach"] });
     const anchorRead = await request(target)
       .post("/internal/fleet/agent-anchors/read")
-      .send({ gatewayId: "bender", revisionId: "bender-r2", slug: "victim" });
+      .send({ gatewayId: "walter", revisionId: "walter-r2", slug: "victim" });
     const foreignAnchors = await request(target)
       .post("/internal/fleet/agent-anchors/read")
       .send({ gatewayId: "other", revisionId: "other", slug: "victim" });
@@ -1213,23 +1213,23 @@ const STILL_ON_SHARED = {
   });
 
   it("passes channel readiness to its user-membership broker and rejects a foreign gateway", async () => {
-    const target = app({ boundTenant: BENDER, gateways: { bender: configuredBender() } });
+    const target = app({ boundTenant: WALTER, gateways: { walter: configuredWalter() } });
     const route = "/internal/channel-agent-readiness/authorize";
-    expect((await request(target).post(route).send({ gatewayId: "bender", channelId: "a".repeat(26) })).status).toBe(200);
+    expect((await request(target).post(route).send({ gatewayId: "walter", channelId: "a".repeat(26) })).status).toBe(200);
     expect((await request(target).post(route).send({ gatewayId: "other", channelId: "a".repeat(26) })).status).toBe(403);
   });
 
-  it("passes computer-home checkpoint routes to their VM-bound authorization and rejects a claimed foreign gateway", async () => {
+  it("passes vm-home checkpoint routes to their VM-bound authorization and rejects a claimed foreign gateway", async () => {
     const target = app({
-      boundTenant: { ...BENDER, podName: "octogee-gw-bender", podUid: "4242" },
-      gateways: { bender: configuredBender() },
+      boundTenant: { ...WALTER, podName: "octogee-gw-walter", podUid: "4242" },
+      gateways: { walter: configuredWalter() },
     });
     const routes = ["checkpoint-url", "commit", "download-url", "prune"] as const;
 
     for (const route of routes) {
       const own = await request(target)
         .post(`/internal/fleet/computer-home/${route}`)
-        .send({ gatewayId: "bender", slug: "victim", size: 1 });
+        .send({ gatewayId: "walter", slug: "victim", size: 1 });
       const foreign = await request(target)
         .post(`/internal/fleet/computer-home/${route}`)
         .send({ gatewayId: "other", slug: "victim", size: 1 });
@@ -1238,22 +1238,22 @@ const STILL_ON_SHARED = {
     }
   });
 
-  it("admits the computer egress mode route for the gateway's own binding with an empty body and refuses a foreign gateway claim", async () => {
+  it("admits the VM egress mode route for the gateway's own binding with an empty body and refuses a foreign gateway claim", async () => {
     const target = app({
-      boundTenant: { ...BENDER, podName: "octogee-gw-bender", podUid: "4242" },
-      gateways: { bender: configuredBender() },
+      boundTenant: { ...WALTER, podName: "octogee-gw-walter", podUid: "4242" },
+      gateways: { walter: configuredWalter() },
     });
     expect((await request(target).post("/internal/fleet/computer-egress").send({})).status).toBe(200);
     expect((await request(target).post("/internal/fleet/computer-egress").send({ mode: "desktop" })).status).toBe(200);
     expect((await request(target).post("/internal/fleet/computer-egress").send({ gatewayId: "other", mode: "desktop" })).status).toBe(403);
   });
 
-  it("limits a retired computer's final-checkpoint binding to the runtime bundle and checkpoint upload routes", async () => {
+  it("limits a retired VM's final-checkpoint binding to the runtime bundle and checkpoint upload routes", async () => {
     const target = app({
-      boundTenant: { ...BENDER, podName: "octogee-gw-bender", podUid: "4242", finalHomeCheckpoint: true },
-      gateways: { bender: configuredBender({ desiredStatus: "retired" }) },
+      boundTenant: { ...WALTER, podName: "octogee-gw-walter", podUid: "4242", finalHomeCheckpoint: true },
+      gateways: { walter: configuredWalter({ desiredStatus: "retired" }) },
     });
-    const send = (path: string, body: Record<string, unknown> = { gatewayId: "bender", slug: "alice", size: 1 }) =>
+    const send = (path: string, body: Record<string, unknown> = { gatewayId: "walter", slug: "alice", size: 1 }) =>
       request(target).post(path).send(body);
 
     for (const path of ["/internal/fleet/vm-runtime", "/internal/fleet/computer-home/checkpoint-url", "/internal/fleet/computer-home/commit", "/internal/fleet/computer-home/prune"]) {
@@ -1276,17 +1276,31 @@ const STILL_ON_SHARED = {
       expect((await send(path)).status, path).toBe(403);
     }
     expect((await send("/internal/probe", { uid: "alice" })).status).toBe(403);
-    expect((await send("/internal/probe", { gatewayId: "bender" })).status).toBe(403);
+    expect((await send("/internal/probe", { gatewayId: "walter" })).status).toBe(403);
     expect((await send("/internal/fleet/computer-home/commit", { gatewayId: "other", slug: "alice", size: 1 })).status).toBe(403);
+  });
+
+  it("answers a retired VM with the denial text that released gateways compare against", async () => {
+    const target = app({
+      boundTenant: { ...WALTER, podName: "octogee-gw-walter", podUid: "4242", finalHomeCheckpoint: true },
+      gateways: { walter: configuredWalter({ desiredStatus: "retired" }) },
+    });
+
+    const denied = await request(target)
+      .post("/internal/fleet/npm-registry-credentials")
+      .send({ gatewayId: "walter", slug: "alice" });
+
+    expect(denied.status).toBe(403);
+    expect(denied.body.error).toBe("forbidden: retired computer bindings may only reach final-checkpoint routes");
   });
 
   it("allows any pod of the gateway's own Deployment — identity, never lifecycle (GATEWAY-SIMPLE-ROLL-SPEC)", async () => {
     const anyPod = await request(app({
       boundTenant: {
-        ...BENDER_R2,
-        podName: "octogee-gateway-bender-r1-5bc5949d46-p946t",
+        ...WALTER_R2,
+        podName: "octogee-gateway-walter-r1-5bc5949d46-p946t",
       },
-      gateways: { bender: configuredBender() },
+      gateways: { walter: configuredWalter() },
     }))
       .get("/internal/gitea/user-pubkey")
       .query({ slug: "victim" });
@@ -1294,17 +1308,17 @@ const STILL_ON_SHARED = {
     expect(anyPod.status).toBe(200);
   });
 
-  it("rejects unbound callers and revokes configured-builder bootstrap while retiring", async () => {
+  it("rejects unbound callers and revokes configured-user bootstrap while retiring", async () => {
     const unbound = await request(app({
-      boundTenant: BENDER,
-      gateways: { bender: configuredBender() },
+      boundTenant: WALTER,
+      gateways: { walter: configuredWalter() },
     }))
       .get("/internal/gitea/user-pubkey")
       .query({ slug: "victim" });
     const retiring = await request(app({
-      boundTenant: BENDER_R2,
+      boundTenant: WALTER_R2,
       gateways: {
-        bender: configuredBender({
+        walter: configuredWalter({
           retirementClaim: { operationId: "retire-1", version: 1 },
         }),
       },
@@ -1319,9 +1333,9 @@ const STILL_ON_SHARED = {
   it("allows BYOS capture only for flows owned by the bound gateway", async () => {
     const owned = await request(
       app({
-        boundTenant: BENDER,
+        boundTenant: WALTER,
         flows: {
-          owned: { gatewayId: "bender" },
+          owned: { gatewayId: "walter" },
           foreign: { gatewayId: "other" },
         },
       }),
@@ -1331,22 +1345,22 @@ const STILL_ON_SHARED = {
 
     const foreign = await request(
       app({
-        boundTenant: BENDER,
+        boundTenant: WALTER,
         flows: {
-          owned: { gatewayId: "bender" },
+          owned: { gatewayId: "walter" },
           foreign: { gatewayId: "other" },
         },
       }),
     )
       .post("/internal/probe")
-      .send({ gatewayId: "bender", flowId: "foreign" });
+      .send({ gatewayId: "walter", flowId: "foreign" });
 
     expect(owned.status).toBe(200);
     expect(foreign.status).toBe(403);
   });
 
   it("rejects unknown BYOS capture flows before the route handler runs", async () => {
-    const res = await request(app({ boundTenant: BENDER, flows: {} }))
+    const res = await request(app({ boundTenant: WALTER, flows: {} }))
       .post("/internal/probe")
       .send({ flowId: "missing" });
 
@@ -1354,7 +1368,7 @@ const STILL_ON_SHARED = {
   });
 
   it("rejects targetless gateway-bound calls so global jobs stay platform-only", async () => {
-    const res = await request(app({ boundTenant: BENDER }))
+    const res = await request(app({ boundTenant: WALTER }))
       .post("/internal/probe")
       .send({});
 
@@ -1362,7 +1376,7 @@ const STILL_ON_SHARED = {
   });
 
   it("admits targetless agent-import broker calls for route-local owner authorization", async () => {
-    const target = app({ boundTenant: BENDER });
+    const target = app({ boundTenant: WALTER });
     const responses = await Promise.all([
       request(target).get("/internal/agent-imports/github/sources"),
       request(target).get("/internal/agent-imports/records/import-1"),
@@ -1376,9 +1390,9 @@ const STILL_ON_SHARED = {
 
 it.each(["/internal/fleet/npm-registry-credentials", "/internal/connectors/github-project-clone-access"])(
   "passes %s preparation to its operation-bound authorization while rejecting a foreign gateway", async (route) => {
-    const target = app({ boundTenant: BENDER_R2 });
+    const target = app({ boundTenant: WALTER_R2 });
     const responses = await Promise.all([
-      request(target).post(route).send({ gatewayId: "bender", slug: "victim", access: { kind: "project-clone", builderSlug: "victim", projectSlug: "project" } }),
+      request(target).post(route).send({ gatewayId: "walter", slug: "victim", access: { kind: "project-clone", builderSlug: "victim", projectSlug: "project" } }),
       request(target).post(route).send({ gatewayId: "other", slug: "victim", access: { kind: "project-clone", builderSlug: "victim", projectSlug: "project" } }),
     ]);
     expect(responses.map(response => response.status)).toEqual([200, 403]);

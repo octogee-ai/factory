@@ -198,10 +198,10 @@ function readPersistedSessions(openclawDir, agentId) {
         sessions = JSON.parse(raw);
     }
     catch {
-        throw new Error(`customer oauth purge: ${sessionsPath} is not valid JSON`);
+        throw new Error(`user oauth purge: ${sessionsPath} is not valid JSON`);
     }
     if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) {
-        throw new Error(`customer oauth purge: ${sessionsPath} is not a session map`);
+        throw new Error(`user oauth purge: ${sessionsPath} is not a session map`);
     }
     return { sessionsPath, sessions: sessions };
 }
@@ -287,7 +287,7 @@ function unsafeSessionFallback(entry, directRuntimeModelRefs, allowedModelRefs) 
         return true;
     return unsupportedModel(fallback.prevProvider, model, allowedModelRefs);
 }
-function sessionUsesCustomerOauthRuntime(value, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds) {
+function sessionUsesUserOauthRuntime(value, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds) {
     if (!value || typeof value !== "object" || Array.isArray(value))
         return false;
     const entry = value;
@@ -343,9 +343,9 @@ async function scrubUnsafeAgentSessions(openclawDir, agentId, directRuntimeModel
             for (const row of rows) {
                 const entry = typeof row.entry_json === "string" ? JSON.parse(row.entry_json) : row.entry_json;
                 if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-                    throw new Error(`customer oauth purge: ${dbPath} session ${String(row.session_key)} is not an object`);
+                    throw new Error(`user oauth purge: ${dbPath} session ${String(row.session_key)} is not an object`);
                 }
-                if (!sessionUsesCustomerOauthRuntime(entry, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds) ||
+                if (!sessionUsesUserOauthRuntime(entry, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds) ||
                     !clearSessionRuntimeState(entry))
                     continue;
                 await client.query(`UPDATE ${schema}.session_nodes SET entry_json = $1 WHERE session_key = $2`, [JSON.stringify(entry), row.session_key]);
@@ -371,12 +371,12 @@ async function scrubUnsafeAgentSessions(openclawDir, agentId, directRuntimeModel
                 entry = JSON.parse(row.entry_json);
             }
             catch {
-                throw new Error(`customer oauth purge: ${dbPath} session ${String(row.session_key)} is not valid JSON`);
+                throw new Error(`user oauth purge: ${dbPath} session ${String(row.session_key)} is not valid JSON`);
             }
             if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-                throw new Error(`customer oauth purge: ${dbPath} session ${String(row.session_key)} is not an object`);
+                throw new Error(`user oauth purge: ${dbPath} session ${String(row.session_key)} is not an object`);
             }
-            if (!sessionUsesCustomerOauthRuntime(entry, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds) ||
+            if (!sessionUsesUserOauthRuntime(entry, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds) ||
                 !clearSessionRuntimeState(entry))
                 continue;
             update.run(JSON.stringify(entry), row.session_key);
@@ -411,7 +411,7 @@ function purgeNativeCredentialArtifacts(homeDir, agentIds, affectedAgentIds) {
 }
 async function purgeAgentOauthRuntime(opts, agentId, runtime) {
     const persistedSessions = readPersistedSessions(opts.openclawDir, agentId);
-    const unsafePersistedSession = Object.values(persistedSessions?.sessions ?? {}).some((session) => sessionUsesCustomerOauthRuntime(session, runtime.directRuntimeModelRefs, runtime.allowedModelRefs, runtime.allowedProviderIds));
+    const unsafePersistedSession = Object.values(persistedSessions?.sessions ?? {}).some((session) => sessionUsesUserOauthRuntime(session, runtime.directRuntimeModelRefs, runtime.allowedModelRefs, runtime.allowedProviderIds));
     if (unsafePersistedSession)
         runtime.affectedAgentIds.add(agentId);
     let resetSessions = await scrubUnsafeAgentSessions(opts.openclawDir, agentId, runtime.directRuntimeModelRefs, runtime.allowedModelRefs, runtime.allowedProviderIds);
@@ -440,11 +440,11 @@ async function purgeAgentOauthRuntime(opts, agentId, runtime) {
     }
     return { removedFiles, removedDirectories, scrubbedProfileStores, resetSessions };
 }
-export async function purgeCustomerOauthRuntimeArtifacts(opts) {
+export async function purgeUserOauthRuntimeArtifacts(opts) {
     const agentIds = Array.from(new Set(opts.agentIds));
     for (const agentId of agentIds) {
         if (!isSafeAgentId(agentId)) {
-            throw new Error(`customer oauth purge: unsafe agent id ${JSON.stringify(agentId)}`);
+            throw new Error(`user oauth purge: unsafe agent id ${JSON.stringify(agentId)}`);
         }
     }
     let removedFiles = 0;

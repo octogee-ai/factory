@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  parseConfiguredBuilderReport,
-  ADD_CUSTOMER_DEADLINE_MS,
+  parseConfiguredUserReport,
+  ADD_USER_DEADLINE_MS,
   MIGRATION_IMPORT_FINISH_TIMEOUT_MS,
   MIGRATION_IMPORT_DOCTOR_PHASE_TIMEOUT_MS,
   MIGRATION_IMPORT_DESCRIPTOR_TIMEOUT_MS,
@@ -23,7 +23,7 @@ describe("fleet-controller migration budgets", () => {
 
   it("budgets Shared final import copies, two Native Doctor phases, and activation", () => {
     expect(MIGRATION_IMPORT_FINISH_TIMEOUT_MS).toBeGreaterThanOrEqual(
-      3 * MIGRATION_TRANSFER_TIMEOUT_MS + 2 * MIGRATION_IMPORT_DOCTOR_PHASE_TIMEOUT_MS + MIGRATION_IMPORT_DESCRIPTOR_TIMEOUT_MS + ADD_CUSTOMER_DEADLINE_MS +
+      3 * MIGRATION_TRANSFER_TIMEOUT_MS + 2 * MIGRATION_IMPORT_DOCTOR_PHASE_TIMEOUT_MS + MIGRATION_IMPORT_DESCRIPTOR_TIMEOUT_MS + ADD_USER_DEADLINE_MS +
       IMPORT_ACTIVATION_PATCH_DEADLINE_MS + CONFIG_RELOAD_DEADLINE_MS + VERIFY_ACCOUNT_TIMEOUT_MS + 30_000,
     );
   });
@@ -35,14 +35,14 @@ describe("fleet-controller migration budgets", () => {
   });
 });
 
-describe("configured Builder report", () => {
+describe("configured user report", () => {
   it("parses the claimed state and nothing else", () => {
-    expect(parseConfiguredBuilderReport({ state: "claimed", generation: 3 })).toEqual({ state: "claimed", generation: 3 });
-    expect(parseConfiguredBuilderReport({ state: "claimed", generation: null })).toEqual({ state: "claimed", generation: null });
+    expect(parseConfiguredUserReport({ state: "claimed", generation: 3 })).toEqual({ state: "claimed", generation: 3 });
+    expect(parseConfiguredUserReport({ state: "claimed", generation: null })).toEqual({ state: "claimed", generation: null });
     for (const value of [null, "claimed", { state: "booting" }, { state: "applying", generation: 4 },
       { state: "failed", generation: 4, error: "clone failed" }, { state: "claimed", generation: 0 },
       { state: "claimed" }, { state: "claimed", generation: 3, slug: "alice" }]) {
-      expect(parseConfiguredBuilderReport(value)).toBeNull();
+      expect(parseConfiguredUserReport(value)).toBeNull();
     }
   });
 });

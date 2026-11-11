@@ -3,7 +3,7 @@ import path from "node:path";
 
 const LINUX_HOST_SPECS = [
   "__tests__/cleanup-agents.spec.ts",
-  "__tests__/customer-file-state.spec.ts",
+  "__tests__/user-file-state.spec.ts",
   "__tests__/desktop-browser-start.spec.ts",
   "__tests__/fleet-http-migration.spec.ts",
   "__tests__/native-computer-acceptance.spec.ts",

@@ -52,7 +52,7 @@ pending_migrations() {
 if pending_migrations; then
   native_migrate
   if pending_migrations; then
-    echo "octo-home-migrate: native migrations remain pending; customer admission stays closed: $pending" >&2
+    echo "octo-home-migrate: native migrations remain pending; user admission stays closed: $pending" >&2
     exit 1
   fi
 fi

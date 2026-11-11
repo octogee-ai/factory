@@ -39,7 +39,7 @@ export interface FleetLogsOptions {
   level?: string;
   levelExact?: string[];
   services?: string[];
-  builders?: string[];
+  users?: string[];
   gatewayId?: string;
   container?: string;
   migrationId?: string;
@@ -99,7 +99,7 @@ export function parseFleetLogsOptions(argv: string[]): FleetLogsOptions {
   return {
     environment: v.env, level: v["level-exact"] ? undefined : validatedLevel(v.level ?? "info"),
     levelExact: v["level-exact"]?.split(",").map(validatedLevel),
-    services: list(v.service, "service")?.map(s => SERVICE_NAMES[s] ?? s), builders: list(v.builder, "Builder slug"),
+    services: list(v.service, "service")?.map(s => SERVICE_NAMES[s] ?? s), users: list(v.builder, "user slug"),
     gatewayId: optionalName(v.gateway, "gateway"), container: optionalName(v.container, "container"),
     migrationId: v.migration === undefined ? undefined : migrationId(v.migration),
     ...historyOptions(v.since, v["no-follow"], v.limit),
@@ -197,12 +197,12 @@ export function normalizeFleetLog(value: unknown): FleetLogLine {
   };
 }
 
-export function matchesFleetLog(entry: FleetLogLine, filter: Pick<FleetLogsOptions, "level" | "levelExact" | "services" | "builders">): boolean {
+export function matchesFleetLog(entry: FleetLogLine, filter: Pick<FleetLogsOptions, "level" | "levelExact" | "services" | "users">): boolean {
   if (filter.levelExact && !filter.levelExact.includes(entry.severity)) return false;
   const rank = entry.severity === "DEFAULT" ? LEVELS.indexOf("INFO") : LEVELS.indexOf(entry.severity);
   if (filter.level && rank < LEVELS.indexOf(filter.level)) return false;
   if (filter.services && !filter.services.includes(entry.service)) return false;
-  return !filter.builders || (entry.builderSlug !== undefined && filter.builders.includes(entry.builderSlug));
+  return !filter.users || (entry.builderSlug !== undefined && filter.users.includes(entry.builderSlug));
 }
 
 function oneLine(value: string): string { return stripVTControlCharacters(value).replace(/[\r\n\t]/g, c => ({ "\r": "\\r", "\n": "\\n", "\t": "\\t" })[c]!); }
@@ -243,7 +243,7 @@ export function renderFleetLogLine(entry: FleetLogLine, options: { color: boolea
   const icon = icons[entry.status ?? ""] ?? icons[entry.severity] ?? "·";
   const instance = logInstance(entry);
   const parts = [colors.dim(options.timestamps === "full" ? entry.timestamp : entry.timestamp.slice(11)), severity(entry.severity), colors.cyan(entry.service), sourceColor(instance)];
-  if (entry.builderSlug) parts.push(colors.green(`builder=${entry.builderSlug}`));
+  if (entry.builderSlug) parts.push(colors.green(`user=${entry.builderSlug}`));
   if (entry.category) parts.push(`[${entry.category}]`);
   parts.push(icon, entry.message);
   parts.push(...logDetails(entry));

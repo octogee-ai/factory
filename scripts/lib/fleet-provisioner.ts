@@ -1,12 +1,12 @@
 import { createRepeatSquelch } from "@octogee/shared/server/repeat-squelch";
 import { isValidUsername, parseAgentId } from "@octogee/shared/types/identity";
-import { PROJECT_COACH_WORKSPACE_PARTS } from "@octogee/shared/types/project";
+import { PROJECT_AGENT_WORKSPACE_PARTS } from "@octogee/shared/types/project";
 import type { ProjectBlobHydrator } from "./project-blob-materialization.js";
 import { unassignedConfiguredAgents, stagedSecretOwnersOnly, unmaterializedProjectAccountIds } from "./shared-broker-profile-readiness.js";
 import { createAgentAnchorReporter } from "./agent-anchor-record.js";
 import { createFleetBrokerClient } from "./fleet-broker-client.js";
-import { builderToolchainRoot } from "./builder-storage.js";
-import { waitForPreparedBuilderToolchain } from "./builder-toolchain-preparation.js";
+import { isolatedToolchainRoot } from "./user-storage.js";
+import { waitForPreparedIsolatedToolchain } from "./isolated-toolchain-preparation.js";
 import express from "express";
 import { workspaceIdentityReady } from "@octogee/core/openclaw-workspace-bootstrap";
 import { OpenclawWireError } from "@octogee/shared/types/openclaw-wire-core";
@@ -14,7 +14,7 @@ import * as path from "node:path";
 import { agentIdsFromConfig } from "./byosub-restore.js";
 import { OPENCLAW_DIR, readOpenClawConfig } from "./config.js";
 import { readActivationManifest } from "./migration-activation-manifest.js";
-import { withCustomerRemoval } from "./customer-removal-exclusion.js";
+import { withUserRemoval } from "./user-removal-exclusion.js";
 import {
   materializeBrokerProfilesForAgents,
   openAiCatalogInputForBaseUrl,
@@ -75,24 +75,24 @@ import {
 } from "./surge-openclaw-process-http.js";
 import { startAfterSurgeReadiness } from "./surge-reconcile-gate.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
-import { agentIdsForMigration } from "./customer-lifecycle-broker-adapter.js";
+import { agentIdsForMigration } from "./user-lifecycle-broker-adapter.js";
 import { createScheduleTransfer } from "./schedule-transfer.js";
 import {
-  addCustomerToGateway,
+  addUserToGateway,
   cloneMissingProjects,
-  removeCustomerFromGateway,
-} from "./customer-lifecycle.js";
-import type { AddCustomerOptions } from "./customer-lifecycle.js";
-import type { AddCustomerResult, CustomerLifecycleAdapter } from "./customer-lifecycle.js";
+  removeUserFromGateway,
+} from "./user-lifecycle.js";
+import type { AddUserOptions } from "./user-lifecycle.js";
+import type { AddUserResult, UserLifecycleAdapter } from "./user-lifecycle.js";
 import { isPermanentConfigPatchFailure } from "@octogee/core/apply-config-patch";
 import {
-  customerAttachPending,
+  userAttachPending,
   startReconcileLoop,
   type EnsureOutcome,
   type MountLane,
   type UnmountOutcome,
 } from "./reconcile-loop.js";
-import type { DesiredCustomer } from "./snapshot-fingerprint.js";
+import type { DesiredUser } from "./snapshot-fingerprint.js";
 import { loadAppliedFingerprints, saveAppliedFingerprints } from "./applied-fingerprint-store.js";
 import { createDeviceAuthManager } from "./byosub-device-auth.js";
 import { realDeviceAuthDeps } from "./byosub-device-auth-io.js";
@@ -109,16 +109,16 @@ import {
   observeDashboardControl,
   probeOpenClawHealth,
 } from "./system-config-runtime-health.js";
-import { prepareBuilderPrelaunchConfig } from "./system-config.js";
+import { prepareIsolatedPrelaunchConfig } from "./system-config.js";
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
 import {
-  resetRecoveredCustomerRuntime,
-  type RecoveredCustomerRuntimeResetResult,
-} from "./recovered-customer-runtime-reset.js";
+  resetRecoveredUserRuntime,
+  type RecoveredUserRuntimeResetResult,
+} from "./recovered-user-runtime-reset.js";
 
 const RECONCILE_LOOP_INTERVAL_MS = 2 * 1000;
 export const MOUNT_CONCURRENCY = 4;
-const BUILDER_POST_START_HEALTH_TIMEOUT_MS = 600_000;
+const USER_POST_START_HEALTH_TIMEOUT_MS = 600_000;
 
 export const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
 
@@ -188,7 +188,7 @@ export function cloneRetryReady(
   return now >= prior.nextAt;
 }
 
-export interface CustomerEnsureRetryInput {
+export interface UserEnsureRetryInput {
   ensureAllowed: boolean;
   cloneRetry: CloneRetryState | undefined;
   desiredFingerprint: string | undefined;
@@ -196,7 +196,7 @@ export interface CustomerEnsureRetryInput {
   permanentConfigPatchRetry: PermanentConfigPatchRetryState | undefined;
 }
 
-export function customerEnsureRetryReady(input: CustomerEnsureRetryInput): boolean {
+export function userEnsureRetryReady(input: UserEnsureRetryInput): boolean {
   return input.ensureAllowed && permanentConfigPatchRetryReady(
     input.permanentConfigPatchRetry,
     input.desiredFingerprint,
@@ -210,8 +210,8 @@ export interface ConvergenceHooks {
   forgetRetry: (slug: string) => void;
 }
 
-// A pending optional project checkout must not hold the whole customer stale: re-running
-// the full attach re-patches config and restarts the coach on every retry (observed live
+// A pending optional project checkout must not hold the whole user stale: re-running
+// the full attach re-patches config and restarts the agent on every retry (observed live
 // 2026-08-14 on shared-a: 205 consecutive ~50s re-attaches, two agent restarts each). The
 // applied store instead records this marker — unequal to every real fingerprint, so the
 // level-triggered loop keeps selecting the slug — and ensureSlug recognizes it and retries
@@ -219,22 +219,22 @@ export interface ConvergenceHooks {
 // applied-fingerprint store.
 export { pendingCloneAppliedFingerprint, pendingCloneOnlyStale } from "./pending-clone-fingerprint.js";
 import { pendingCloneAppliedFingerprint, pendingCloneOnlyStale } from "./pending-clone-fingerprint.js";
-import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
-import { configuredBuilderReport } from "./builder-claim.js";
+import { userClaimSlug } from "@octogee/shared/server/user-claim";
+import { configuredUserReport } from "./user-claim.js";
 
 export interface SettleConvergenceInput {
   now: number;
   slug: string;
   desiredFingerprint: string | undefined;
   prior: CloneRetryState | undefined;
-  result: Pick<AddCustomerResult, "pendingProjectClones" | "appliedFingerprint">;
+  result: Pick<AddUserResult, "pendingProjectClones" | "appliedFingerprint">;
 }
 
 // A converge that left a project checkout absent has NOT reached desired state, so its real
-// fingerprint must not be recorded — that would mark the customer clean and strand the
+// fingerprint must not be recorded — that would mark the user clean and strand the
 // checkout until unrelated drift. It records the pending-clone MARKER instead: still stale
 // against every real fingerprint, so the loop keeps converging, but recognizably so — the
-// retry re-runs only the checkout, never the full attach with its config write and coach
+// retry re-runs only the checkout, never the full attach with its config write and agent
 // restart.
 //
 // It THROWS rather than returning, and that is load-bearing. reconcile-loop fires
@@ -268,9 +268,9 @@ export interface FinalizeConvergedMountInput extends SettleConvergenceInput {
   writeMountMarker?: (slug: string) => void;
 }
 
-// The mount itself is complete once the attach returns — the coach is wired and verified —
+// The mount itself is complete once the attach returns — the agent is wired and verified —
 // so it is stamped and marked BEFORE settleConvergence's pending-clone throw. Leaving the
-// customer unmounted over an absent optional checkout would re-run the full attach on every
+// user unmounted over an absent optional checkout would re-run the full attach on every
 // retry instead of the checkout-only converge the pending-clone marker selects.
 export async function finalizeConvergedMount(input: FinalizeConvergedMountInput): Promise<void> {
   const {
@@ -305,8 +305,8 @@ export function createMountRefusalReader(state: {
   };
 }
 
-export async function ensureCustomerCheckoutsOnly(
-  adapter: CustomerLifecycleAdapter,
+export async function ensureUserCheckoutsOnly(
+  adapter: UserLifecycleAdapter,
   input: Omit<SettleConvergenceInput, "result">,
   hooks: ConvergenceHooks,
 ): Promise<EnsureOutcome> {
@@ -348,7 +348,7 @@ export function registerByosubDeviceAuth(
 
 export interface StartFleetOptions {
   rpc: GatewayRpcClient;
-  adapter: CustomerLifecycleAdapter;
+  adapter: UserLifecycleAdapter;
   gatewayId: string;
   log: (msg: string) => void;
   port: number;
@@ -362,13 +362,13 @@ export interface StartFleetOptions {
    * assigned roster for this gateway identity. */
   readDesiredSlugs?: () => Promise<string[]>;
   subscribeDesiredChanges?: (wake: () => void) => () => void;
-  configuredBuilderReport?: () => FleetStateResponse["configuredBuilder"];
-  /** Desired-customer source: slug → config fingerprint + mount lane (see
+  configuredUserReport?: () => FleetStateResponse["configuredBuilder"];
+  /** Desired-user source: slug → config fingerprint + mount lane (see
    *  snapshot-fingerprint.ts). When provided, it drives the desired roster (its keys), lets
-   *  the reconcile re-ensure an already-mounted customer whose fingerprint drifted — the
+   *  the reconcile re-ensure an already-mounted user whose fingerprint drifted — the
    *  level-triggered path a project-agent toggle rides — and orders the mount pool so
-   *  first-time builders mount ahead of movers. Takes precedence over readDesiredSlugs. */
-  readDesiredCustomers?: () => Promise<Map<string, DesiredCustomer>>;
+   *  first-time users mount ahead of movers. Takes precedence over readDesiredSlugs. */
+  readDesiredUsers?: () => Promise<Map<string, DesiredUser>>;
   readEnsureAdmission?: (uid: string) => Promise<boolean>;
   stampMounted: (uid: string, mounted: boolean) => Promise<void>;
   readUserSnapshotForRuntimeReset?: (
@@ -394,16 +394,16 @@ export interface StartFleetOptions {
   }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
 }
 
-export async function consumeRecoveredCustomerRuntimeReset(input: {
+export async function consumeRecoveredUserRuntimeReset(input: {
   gatewayId: string;
   uid: string;
   slug: string;
   openclawDir: string;
   readSnapshot: (uid: string) => Promise<FleetBrokerUserSnapshot | null>;
   acknowledge: (uid: string, operationId: string, generation: number) => Promise<void>;
-  reset?: typeof resetRecoveredCustomerRuntime;
+  reset?: typeof resetRecoveredUserRuntime;
   log?: (message: string) => void;
-}): Promise<RecoveredCustomerRuntimeResetResult | null> {
+}): Promise<RecoveredUserRuntimeResetResult | null> {
   const snapshot = await input.readSnapshot(input.uid);
   if (!snapshot) throw new Error(`[runtime-reset:${input.slug}] assigned user snapshot unavailable`);
   const marker = snapshot.runtimeReset;
@@ -417,7 +417,7 @@ export async function consumeRecoveredCustomerRuntimeReset(input: {
     marker.targetGatewayId === input.gatewayId,
   ].every(Boolean);
   if (!exact) throw new Error(`[runtime-reset:${input.slug}] recovery marker identity fence changed`);
-  const result = (input.reset ?? resetRecoveredCustomerRuntime)({
+  const result = (input.reset ?? resetRecoveredUserRuntime)({
     openclawDir: input.openclawDir,
     uid: input.uid,
     slug: input.slug,
@@ -450,11 +450,11 @@ export function registerAgentImportDoctor(
   }));
 }
 
-export function reconcileAddCustomerOptions(
+export function reconcileAddUserOptions(
   contentConvergenceEnabled: boolean,
   evictionBatch: readonly string[] = [],
   currentEvictionBatch?: () => Promise<readonly string[]>,
-): AddCustomerOptions {
+): AddUserOptions {
   return {
     ...(contentConvergenceEnabled ? { convergeContent: true } : {}),
     ...(evictionBatch.length > 0 ? { evictionBatch } : {}),
@@ -463,7 +463,7 @@ export function reconcileAddCustomerOptions(
 }
 
 export function cancelRemovedEviction(
-  adapter: CustomerLifecycleAdapter,
+  adapter: UserLifecycleAdapter,
   slug: string,
   invalidate: (slug: string) => void,
 ): boolean {
@@ -493,24 +493,24 @@ export function resolveFleetCapabilities(opts: {
 
 function hasMountedRuntimeAndWorkspace(
   adapter: Pick<
-    CustomerLifecycleAdapter,
-    | "isBuilderGateway"
-    | "isConfiguredBuilderCustomer"
-    | "configuredBuilderOverlayPresent"
-    | "hasCustomerAgentRuntime"
+    UserLifecycleAdapter,
+    | "isIsolatedGateway"
+    | "isConfiguredUser"
+    | "configuredUserOverlayPresent"
+    | "hasUserAgentRuntime"
     | "hasWorkspaceGitDir"
     | "hasGitRemote"
   >,
   slug: string,
 ): boolean {
-  if (adapter.isBuilderGateway?.()) {
-    return adapter.isConfiguredBuilderCustomer?.(slug) === true
-      && adapter.configuredBuilderOverlayPresent?.(slug) === true
+  if (adapter.isIsolatedGateway?.()) {
+    return adapter.isConfiguredUser?.(slug) === true
+      && adapter.configuredUserOverlayPresent?.(slug) === true
       && adapter.hasWorkspaceGitDir(slug)
       && adapter.hasGitRemote(slug);
   }
   return (
-    (!adapter.hasCustomerAgentRuntime || adapter.hasCustomerAgentRuntime(slug))
+    (!adapter.hasUserAgentRuntime || adapter.hasUserAgentRuntime(slug))
     && adapter.hasWorkspaceGitDir(slug)
     && adapter.hasGitRemote(slug)
   );
@@ -519,7 +519,7 @@ function hasMountedRuntimeAndWorkspace(
 
 // The kubelet probes this and cannot sign, and the fleet ingress policy admits
 // every gateway pod on this port, so the probe body stays tenant-free: mounted
-// slugs and the gatewayId (which names its Builder) belong to the signed
+// slugs and the gatewayId (which names its user) belong to the signed
 // buildFleetStateResponse below.
 export function buildFleetHealthResponse(input: {
   status: FleetRuntime["status"];
@@ -534,13 +534,13 @@ export function buildFleetHealthResponse(input: {
   };
 }
 
-export function fleetStatePrivateProjectCoachWorkspace(config: unknown, stateDir: string, slug: string): boolean {
+export function fleetStatePrivateProjectAgentWorkspace(config: unknown, stateDir: string, slug: string): boolean {
   const agents = (config as { agents?: { entries?: Record<string, { workspace?: unknown }>; list?: Array<{ id?: string; workspace?: unknown }> } })?.agents;
   const entries = agents?.entries ? Object.entries(agents.entries) : (agents?.list ?? []).map(agent => [agent.id, agent] as const);
   return entries.some(([id, entry]) => {
     const parsed = parseAgentId(id ?? "");
     return parsed.kind === "project" && parsed.username === slug &&
-      entry?.workspace === path.join(stateDir, "customers", slug, ...PROJECT_COACH_WORKSPACE_PARTS, parsed.project);
+      entry?.workspace === path.join(stateDir, "customers", slug, ...PROJECT_AGENT_WORKSPACE_PARTS, parsed.project);
   });
 }
 
@@ -551,7 +551,7 @@ export function buildFleetStateResponse(input: {
   version: string;
   openclawVersion: string;
   startedAt: number;
-  customers: string[];
+  users: string[];
   migratingIn: string[];
   configuredBuilder: FleetStateResponse["configuredBuilder"];
 }): FleetStateResponse {
@@ -562,7 +562,7 @@ export function buildFleetStateResponse(input: {
     version: input.version,
     openclawVersion: input.openclawVersion,
     startedAt: input.startedAt,
-    customers: input.customers,
+    customers: input.users,
     migratingIn: input.migratingIn,
     configuredBuilder: input.configuredBuilder,
   };
@@ -661,7 +661,7 @@ function createFleetRuntime(): FleetRuntime {
 // mount's own retry — leaving the catalog in place but the broker profile
 // unwritten, so the agent's first turn fails on credentials instead of on an
 // unknown model. So this is level-triggered: retried on a timer until every
-// rostered coach has its profile, rather than fired at two hopeful moments.
+// rostered agent has its profile, rather than fired at two hopeful moments.
 const BROKER_PROFILE_RETRY_INTERVAL_MS = 20 * 1000;
 
 /** Last deferral set reported, so a steady state stays quiet — this runs on a
@@ -814,7 +814,7 @@ function reportBrokerProfileSweep(log: (msg: string) => void, sweep: BrokerProfi
         }s`,
     );
   } else if (lastDeferredSignature !== null) {
-    log("[agent-model-token] broker profiles settled — every rostered coach has its profile");
+    log("[agent-model-token] broker profiles settled — every rostered agent has its profile");
   }
   lastDeferredSignature = signature;
 }
@@ -894,8 +894,8 @@ export async function waitForBrokerProfilesSettled(input: {
 }
 
 /** The level-triggered half of broker-profile materialization: retried until
- *  openclaw has accepted every rostered coach's profiles. Null on gateways that
- *  do not provision — they mount no customers, so there is nothing to converge. */
+ *  openclaw has accepted every rostered agent's profiles. Null on gateways that
+ *  do not provision — they mount no users, so there is nothing to converge. */
 function startBrokerProfileRetry(
   provisions: boolean,
   log: (msg: string) => void,
@@ -1089,7 +1089,7 @@ async function probeFleetReadiness(
 export function createSurgeReadinessHandler(input: {
   surgeReadiness: SurgeReadinessGate;
   readiness: FleetReadinessInput;
-  prelaunchState?: (state?: SurgeOpenClawProcessGateState) => Promise<BuilderPrelaunchState>;
+  prelaunchState?: (state?: SurgeOpenClawProcessGateState) => Promise<IsolatedPrelaunchState>;
   processGateState?: () => Promise<SurgeOpenClawProcessGateState | undefined>;
   log: (message: string) => void;
 }): express.RequestHandler {
@@ -1124,21 +1124,21 @@ export function createSurgeReadinessHandler(input: {
 const readinessFailures = createRepeatSquelch({ windowMs: 60_000 });
 
 export function createToolchainReadinessHandler(input: {
-  adapter: CustomerLifecycleAdapter;
-  prelaunchState: () => Promise<BuilderPrelaunchState>;
+  adapter: UserLifecycleAdapter;
+  prelaunchState: () => Promise<IsolatedPrelaunchState>;
   log: (message: string) => void;
 }): express.RequestHandler {
   return async (_req, res) => {
     try {
-      const slug = configuredBuilderSlug(input.adapter);
+      const slug = configuredUserSlug(input.adapter);
       const prelaunchState = await input.prelaunchState();
-      const ready = Boolean(slug && configuredBuilderMountProven(input.adapter) &&
+      const ready = Boolean(slug && configuredUserMountProven(input.adapter) &&
         ["hydrated", "starting", "serving", "none"].includes(prelaunchState));
       res.status(ready ? 200 : 503).json({ ready, prelaunchState });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const admitted = readinessFailures.admit("builder-toolchain", message);
-      if (admitted) input.log(`[builder-toolchain] readiness failed: ${message}${admitted.note}`);
+      if (admitted) input.log(`[isolated-toolchain] readiness failed: ${message}${admitted.note}`);
       res.status(500).json({ ready: false, error: message });
     }
   };
@@ -1146,7 +1146,7 @@ export function createToolchainReadinessHandler(input: {
 
 export function createStartupReadinessHandler(input: {
   readiness: FleetReadinessInput;
-  prelaunchState?: () => Promise<BuilderPrelaunchState>;
+  prelaunchState?: () => Promise<IsolatedPrelaunchState>;
   log: (message: string) => void;
 }): express.RequestHandler {
   return async (_req, res) => {
@@ -1178,31 +1178,31 @@ export function createStartupReadinessHandler(input: {
   };
 }
 
-// Evict-observed: RAW on-disk dir presence (NOT coach-wired), minus migrating-in. Drives the
+// Evict-observed: RAW on-disk dir presence (NOT default-agent-wired), minus migrating-in. Drives the
 // reconcile's evict direction only. Raw — so a partial/junk dir left by a mount that died
-// before its config patch is still drained once it's unassigned (a coach-wired-only view
-// would never see it). Minus migrating-in — so a freshly-imported customer (present before
+// before its config patch is still drained once it's unassigned (a default-agent-wired-only view
+// would never see it). Minus migrating-in — so a freshly-imported user (present before
 // cutover makes it desired-here) isn't drained mid-migration. This is the ONLY consumer of
 // the migrating-in pin: the heartbeat report and mount-observed are deliberately pin-blind,
-// so a successfully-migrated customer is reported + considered mounted the moment it's
-// coach-wired, not suppressed for the pin's TTL.
-export function getEvictObservedSlugs(adapter: CustomerLifecycleAdapter): string[] {
-  const dirs = adapter.listLocalCustomerDirs?.() ?? adapter.listLocalCustomerSlugs?.() ?? [];
-  const migratingIn = adapter.customerMigratingIn;
+// so a successfully-migrated user is reported + considered mounted the moment it's
+// default-agent-wired, not suppressed for the pin's TTL.
+export function getEvictObservedSlugs(adapter: UserLifecycleAdapter): string[] {
+  const dirs = adapter.listLocalUserDirs?.() ?? adapter.listLocalUserSlugs?.() ?? [];
+  const migratingIn = adapter.userMigratingIn;
   return dirs
     .filter((slug) => {
       if (migratingIn?.(slug)) return false;
       return !(
-        adapter.isBuilderGateway?.() &&
-        adapter.isConfiguredBuilderCustomer?.(slug)
+        adapter.isIsolatedGateway?.() &&
+        adapter.isConfiguredUser?.(slug)
       );
     })
     .sort((a, b) => a.localeCompare(b));
 }
 
-export function getMountObservedSlugs(adapter: CustomerLifecycleAdapter): string[] {
-  const locallyAdmitted = adapter.listLocalCustomerSlugs?.() ?? [];
-  const marked = adapter.customerMountMarked;
+export function getMountObservedSlugs(adapter: UserLifecycleAdapter): string[] {
+  const locallyAdmitted = adapter.listLocalUserSlugs?.() ?? [];
+  const marked = adapter.userMountMarked;
   return locallyAdmitted
     .filter(
       (slug) =>
@@ -1224,8 +1224,8 @@ function clearReconcileError(opts: StartFleetOptions, slug: string): void {
     .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ broker lastError clear failed: ${String(err)}`));
 }
 
-interface EvictLocalCustomerInput {
-  adapter: CustomerLifecycleAdapter;
+interface EvictLocalUserInput {
+  adapter: UserLifecycleAdapter;
   slug: string;
   evictionBatch?: readonly string[];
   currentEvictionBatch?: () => Promise<readonly string[]>;
@@ -1234,66 +1234,66 @@ interface EvictLocalCustomerInput {
   onLocalStateRemoved: (slug: string) => void;
 }
 
-function retainLocalCustomer(input: EvictLocalCustomerInput): UnmountOutcome {
+function retainLocalUser(input: EvictLocalUserInput): UnmountOutcome {
   input.onRetainedAfterConfigRemoval?.(input.slug);
   return "noop";
 }
 
-function configuredBuilderOverlayIsOwned(
-  adapter: CustomerLifecycleAdapter,
+function configuredUserOverlayIsOwned(
+  adapter: UserLifecycleAdapter,
   slug: string,
 ): boolean {
-  return adapter.isBuilderGateway?.() === true &&
-    adapter.isConfiguredBuilderCustomer?.(slug) === true;
+  return adapter.isIsolatedGateway?.() === true &&
+    adapter.isConfiguredUser?.(slug) === true;
 }
 
-function retainConfiguredBuilderOverlay(input: EvictLocalCustomerInput): UnmountOutcome {
+function retainConfiguredUserOverlay(input: EvictLocalUserInput): UnmountOutcome {
   const { adapter, slug } = input;
-  if (!adapter.configuredBuilderOverlayPresent?.(slug)) {
-    throw new Error(`[evict:${slug}] configured Builder system-config overlay is unavailable`);
+  if (!adapter.configuredUserOverlayPresent?.(slug)) {
+    throw new Error(`[evict:${slug}] configured user system-config overlay is unavailable`);
   }
   adapter.clearMountMarker?.(slug);
-  adapter.clearCustomerMigratingIn?.(slug);
+  adapter.clearUserMigratingIn?.(slug);
   adapter.onUnmounted?.(slug);
-  return retainLocalCustomer(input);
+  return retainLocalUser(input);
 }
 
-async function evictKnownCustomer(
-  input: EvictLocalCustomerInput,
+async function evictKnownUser(
+  input: EvictLocalUserInput,
   uid: string,
 ): Promise<UnmountOutcome> {
-  const result = await removeCustomerFromGateway(input.adapter, uid, {
+  const result = await removeUserFromGateway(input.adapter, uid, {
     evictionBatch: input.evictionBatch,
     currentEvictionBatch: input.currentEvictionBatch,
   });
-  if (result.retained) return retainLocalCustomer(input);
+  if (result.retained) return retainLocalUser(input);
   await input.stampMounted(uid, false);
   input.onLocalStateRemoved(input.slug);
   return result.wasMounted ? "drained" : "noop";
 }
 
-async function evictImportedCustomer(
-  input: EvictLocalCustomerInput,
-  removeImported: NonNullable<CustomerLifecycleAdapter["removeImportedCustomerBySlug"]>,
+async function evictImportedUser(
+  input: EvictLocalUserInput,
+  removeImported: NonNullable<UserLifecycleAdapter["removeImportedUserBySlug"]>,
 ): Promise<UnmountOutcome> {
   const result = await removeImported(
     input.slug,
     input.evictionBatch,
     input.currentEvictionBatch,
   );
-  if (result.retained) return retainLocalCustomer(input);
+  if (result.retained) return retainLocalUser(input);
   if (!result.wasMounted) input.adapter.cancelPendingEviction?.(input.slug);
   input.adapter.onUnmounted?.(input.slug);
   input.onLocalStateRemoved(input.slug);
   return result.wasMounted ? "deleted-user" : "noop";
 }
 
-async function evictSlugOnlyCustomer(
-  input: EvictLocalCustomerInput,
+async function evictSlugOnlyUser(
+  input: EvictLocalUserInput,
 ): Promise<UnmountOutcome> {
   const { adapter, slug, evictionBatch, currentEvictionBatch } = input;
   const agentId = `octogee-${slug}-coach`;
-  const remaining = await adapter.applyRemoveCustomerConfigPatch(
+  const remaining = await adapter.applyRemoveUserConfigPatch(
     slug,
     agentId,
     evictionBatch,
@@ -1301,37 +1301,37 @@ async function evictSlugOnlyCustomer(
   );
   if (remaining && !remaining.includes(slug)) {
     adapter.cancelPendingEviction?.(slug);
-    return retainLocalCustomer(input);
+    return retainLocalUser(input);
   }
   if (currentEvictionBatch && !(await currentEvictionBatch()).includes(slug)) {
     adapter.cancelPendingEviction?.(slug);
-    return retainLocalCustomer(input);
+    return retainLocalUser(input);
   }
-  await adapter.deleteDepartedCustomerState(slug);
+  await adapter.deleteDepartedUserState(slug);
   adapter.onUnmounted?.(slug);
   input.onLocalStateRemoved(slug);
   return "deleted-user";
 }
 
-export function evictLocalCustomer(
-  input: EvictLocalCustomerInput,
+export function evictLocalUser(
+  input: EvictLocalUserInput,
 ): Promise<UnmountOutcome> {
-  return withCustomerRemoval(input.slug, () => evictLocalCustomerNow(input));
+  return withUserRemoval(input.slug, () => evictLocalUserNow(input));
 }
 
-async function evictLocalCustomerNow(
-  input: EvictLocalCustomerInput,
+async function evictLocalUserNow(
+  input: EvictLocalUserInput,
 ): Promise<UnmountOutcome> {
-  if (configuredBuilderOverlayIsOwned(input.adapter, input.slug)) {
-    return retainConfiguredBuilderOverlay(input);
+  if (configuredUserOverlayIsOwned(input.adapter, input.slug)) {
+    return retainConfiguredUserOverlay(input);
   }
   const uid = await input.adapter.uidForSlug(input.slug);
-  if (uid) return evictKnownCustomer(input, uid);
+  if (uid) return evictKnownUser(input, uid);
   try {
-    const removeImported = input.adapter.removeImportedCustomerBySlug;
+    const removeImported = input.adapter.removeImportedUserBySlug;
     return removeImported
-      ? evictImportedCustomer(input, removeImported)
-      : evictSlugOnlyCustomer(input);
+      ? evictImportedUser(input, removeImported)
+      : evictSlugOnlyUser(input);
   } catch (err) {
     throw new Error(
       `slug-only cleanup failed for ${input.slug} (no user doc): ${err instanceof Error ? err.message : String(err)}`,
@@ -1339,7 +1339,7 @@ async function evictLocalCustomerNow(
   }
 }
 
-export async function evictLocalCustomerIfStillUndesired(input: {
+export async function evictLocalUserIfStillUndesired(input: {
   slug: string;
   evictionBatch: readonly string[];
   readDesired: () => Promise<string[]>;
@@ -1384,7 +1384,7 @@ function createReconcileUnmountSlug(input: {
   canReconcile?: () => Promise<boolean>;
   readDesired: () => Promise<string[]>;
   cancelPendingEviction: (slug: string) => void;
-  wrappedAdapter: CustomerLifecycleAdapter;
+  wrappedAdapter: UserLifecycleAdapter;
   stampMounted: (uid: string, mounted: boolean) => Promise<void>;
   invalidateConfigRemovedSlug: (slug: string) => void;
   onLocalStateRemoved: (slug: string) => void;
@@ -1393,12 +1393,12 @@ function createReconcileUnmountSlug(input: {
     input.runtime.beginProvisioning();
     try {
       if (input.canReconcile && !(await input.canReconcile())) return "noop";
-      return await evictLocalCustomerIfStillUndesired({
+      return await evictLocalUserIfStillUndesired({
         slug,
         evictionBatch,
         readDesired: input.readDesired,
         cancelPendingEviction: input.cancelPendingEviction,
-        evict: (currentEvictionBatch, readCurrentEvictionBatch) => evictLocalCustomer({
+        evict: (currentEvictionBatch, readCurrentEvictionBatch) => evictLocalUser({
           adapter: input.wrappedAdapter,
           slug,
           evictionBatch: currentEvictionBatch,
@@ -1415,13 +1415,13 @@ function createReconcileUnmountSlug(input: {
 }
 
 export function createReconcileConvergenceHooks(input: {
-  customerSource: StartFleetOptions["readDesiredCustomers"];
+  userSource: StartFleetOptions["readDesiredUsers"];
   appliedFp: Map<string, string>;
   cloneRetry: Map<string, CloneRetryState>;
   persistAppliedFp: () => void;
 }): ConvergenceHooks {
   const recordApplied = (slug: string, fingerprint: string | undefined): void => {
-    if (!input.customerSource || fingerprint === undefined) return;
+    if (!input.userSource || fingerprint === undefined) return;
     const previous = input.appliedFp.get(slug);
     input.appliedFp.set(slug, fingerprint);
     try {
@@ -1442,21 +1442,21 @@ export function createReconcileConvergenceHooks(input: {
 }
 
 type AssignedSlugReader = () => Promise<string[]>;
-type RosterSourceOptions = Pick<StartFleetOptions, "gatewayId" | "readDesiredCustomers" | "readDesiredSlugs">;
+type RosterSourceOptions = Pick<StartFleetOptions, "gatewayId" | "readDesiredUsers" | "readDesiredSlugs">;
 
 function assignedRosterReader(
   opts: RosterSourceOptions,
 ): AssignedSlugReader | null {
-  const customers = opts.readDesiredCustomers;
-  if (customers) return async () => [...(await customers()).keys()];
+  const users = opts.readDesiredUsers;
+  if (users) return async () => [...(await users()).keys()];
   return opts.readDesiredSlugs ?? null;
 }
 
-function createBuilderAgentAnchorReporter(opts: Pick<StartFleetOptions, "gatewayId" | "log">): () => Promise<void> {
+function createUserAgentAnchorReporter(opts: Pick<StartFleetOptions, "gatewayId" | "log">): () => Promise<void> {
   let report: (() => Promise<void>) | null = null;
   return async () => {
     if (opts.gatewayId.startsWith("shared-")) return;
-    const slug = builderClaimSlug();
+    const slug = userClaimSlug();
     if (!slug) return;
     report ??= createAgentAnchorReporter({
       stateDir: process.env.OPENCLAW_STATE_DIR?.trim() || OPENCLAW_DIR,
@@ -1474,7 +1474,7 @@ export function brokerProfileRoster(
 ): AssignedSlugReader | undefined {
   if (opts.gatewayId.startsWith("shared-")) return assignedRosterReader(opts) ?? undefined;
   return async () => {
-    const slug = builderClaimSlug();
+    const slug = userClaimSlug();
     return slug ? [slug] : [];
   };
 }
@@ -1485,30 +1485,30 @@ export function createVerifyAttachPending(input: {
 }): ((slug: string) => Promise<boolean>) | undefined {
   const readAssigned = input.provision ? assignedRosterReader(input.opts) : null;
   if (!readAssigned) return undefined;
-  return (slug) => customerAttachPending(slug, async () => (await readAssigned()).includes(slug));
+  return (slug) => userAttachPending(slug, async () => (await readAssigned()).includes(slug));
 }
 
 function createDesiredRosterReader(input: {
   opts: StartFleetOptions;
-  customerSource: StartFleetOptions["readDesiredCustomers"];
+  userSource: StartFleetOptions["readDesiredUsers"];
   desiredFingerprints: Map<string, string>;
   desiredUids: Map<string, string>;
   desiredLanes: Map<string, MountLane>;
   ensureAllowed: Map<string, boolean>;
 }): AssignedSlugReader | null {
-  const customerSource = input.customerSource;
-  if (customerSource) {
+  const userSource = input.userSource;
+  if (userSource) {
     return async () => {
-      const next = await customerSource();
+      const next = await userSource();
       input.desiredFingerprints.clear();
       input.desiredUids.clear();
       input.desiredLanes.clear();
       input.ensureAllowed.clear();
-      for (const [slug, customer] of next) {
-        input.desiredFingerprints.set(slug, customer.fingerprint);
-        input.desiredUids.set(slug, customer.uid);
-        input.desiredLanes.set(slug, customer.lane);
-        input.ensureAllowed.set(slug, customer.ensureAllowed);
+      for (const [slug, user] of next) {
+        input.desiredFingerprints.set(slug, user.fingerprint);
+        input.desiredUids.set(slug, user.uid);
+        input.desiredLanes.set(slug, user.lane);
+        input.ensureAllowed.set(slug, user.ensureAllowed);
       }
       return [...next.keys()];
     };
@@ -1516,13 +1516,13 @@ function createDesiredRosterReader(input: {
   return input.opts.readDesiredSlugs ?? null;
 }
 
-async function mountCustomerWithPublication(input: {
-  adapter: CustomerLifecycleAdapter;
+async function mountUserWithPublication(input: {
+  adapter: UserLifecycleAdapter;
   uid: string;
   slug: string;
   desiredFingerprint: string | undefined;
   prior: CloneRetryState | undefined;
-  options: AddCustomerOptions;
+  options: AddUserOptions;
   hooks: ConvergenceHooks;
   stampMounted: (uid: string, mounted: boolean) => Promise<void>;
   onWorkSettled: (work: Promise<void>) => void;
@@ -1531,7 +1531,7 @@ async function mountCustomerWithPublication(input: {
   const settled = new Promise<void>((resolve) => { releasePublication = resolve; });
   let mountSettled = Promise.resolve();
   try {
-    const result = await addCustomerToGateway(input.adapter, input.uid, {
+    const result = await addUserToGateway(input.adapter, input.uid, {
       ...input.options,
       onWorkSettled: (work) => {
         mountSettled = work;
@@ -1553,7 +1553,7 @@ async function mountCustomerWithPublication(input: {
       stampMounted: input.stampMounted,
       writeMountMarker: input.adapter.writeMountMarker,
     });
-    return result.newCustomer ? "mounted" : "noop";
+    return result.newUser ? "mounted" : "noop";
   } finally {
     void mountSettled.then(releasePublication, releasePublication);
   }
@@ -1562,7 +1562,7 @@ async function mountCustomerWithPublication(input: {
 function startMaybeReconcileLoop(params: {
   provision: boolean;
   opts: StartFleetOptions;
-  wrappedAdapter: CustomerLifecycleAdapter;
+  wrappedAdapter: UserLifecycleAdapter;
   runtime: FleetRuntime;
   stampMounted: (uid: string, mounted: boolean) => Promise<void>;
   surgeReadiness: SurgeReadinessGate;
@@ -1580,20 +1580,20 @@ function startMaybeReconcileLoop(params: {
 
   // Content-convergence bookkeeping (only when a fingerprint source is wired). desiredFp
   // is refreshed every tick by readDesired; appliedFp records the fingerprint that was
-  // live at each customer's last successful ensure. getContentStale reports mounted
-  // customers where the two diverge — the signal that makes a snapshot-only change (e.g.
+  // live at each user's last successful ensure. getContentStale reports mounted
+  // users where the two diverge — the signal that makes a snapshot-only change (e.g.
   // a project-agent toggle) reconverge without a remount. appliedFp mirrors to disk
   // (when openclawDir is known) so a container restart with the emptyDir intact does not
   // re-ensure an unchanged fleet; a MISSING entry is stale by definition — see
   // applied-fingerprint-store.ts.
-  const { readDesiredCustomers: customerSource, readEnsureAdmission } = opts;
-  if (customerSource && !readEnsureAdmission) throw new Error("customer roster requires canonical ensure admission");
+  const { readDesiredUsers: userSource, readEnsureAdmission } = opts;
+  if (userSource && !readEnsureAdmission) throw new Error("user roster requires canonical ensure admission");
   const desiredUids = new Map<string, string>();
   const desiredFp = new Map<string, string>();
   const desiredLanes = new Map<string, MountLane>();
   const ensureAllowed = new Map<string, boolean>();
   const appliedFpFile =
-    customerSource && opts.openclawDir
+    userSource && opts.openclawDir
       ? path.join(opts.openclawDir, "applied-fingerprints.json")
       : null;
   const appliedFp = appliedFpFile ? loadAppliedFingerprints(appliedFpFile) : new Map<string, string>();
@@ -1628,7 +1628,7 @@ function startMaybeReconcileLoop(params: {
   runtime.mountRefusal = createMountRefusalReader({ permanentConfigPatchRetry, desiredFingerprints: desiredFp, appliedFingerprints: appliedFp });
   const readDesired = createDesiredRosterReader({
     opts,
-    customerSource,
+    userSource,
     desiredUids,
     desiredLanes,
     ensureAllowed,
@@ -1636,7 +1636,7 @@ function startMaybeReconcileLoop(params: {
   });
   if (!provision || !readDesired) return () => undefined;
 
-  const getContentStale = customerSource
+  const getContentStale = userSource
     ? (): string[] =>
         selectStableContentStale(
           getMountObservedSlugs(wrappedAdapter),
@@ -1646,15 +1646,15 @@ function startMaybeReconcileLoop(params: {
         )
     : undefined;
   const convergenceHooks = createReconcileConvergenceHooks(
-    { customerSource, appliedFp, cloneRetry, persistAppliedFp },
+    { userSource, appliedFp, cloneRetry, persistAppliedFp },
   );
-  if (customerSource) wrappedAdapter.recordAppliedFingerprint = convergenceHooks.recordApplied;
+  if (userSource) wrappedAdapter.recordAppliedFingerprint = convergenceHooks.recordApplied;
   const start = () => startReconcileLoop({
     gatewayId: opts.gatewayId,
     intervalMs: opts.subscribeDesiredChanges ? 60_000 : RECONCILE_LOOP_INTERVAL_MS,
     subscribe: opts.subscribeDesiredChanges,
     maxConcurrent: MOUNT_CONCURRENCY,
-    ...(customerSource ? { mountLane: (slug: string) => desiredLanes.get(slug) ?? "move" } : {}),
+    ...(userSource ? { mountLane: (slug: string) => desiredLanes.get(slug) ?? "move" } : {}),
     log: opts.log,
     getMountObserved: () => {
       const mounted = getMountObservedSlugs(wrappedAdapter);
@@ -1665,17 +1665,17 @@ function startMaybeReconcileLoop(params: {
     ...(getContentStale ? { getContentStale } : {}),
     ...(canReconcile ? { canReconcile } : {}),
     readDesired,
-    shouldEnsureSlug: (slug) => customerEnsureRetryReady({
-      ensureAllowed: customerSource ? ensureAllowed.get(slug) === true : true,
+    shouldEnsureSlug: (slug) => userEnsureRetryReady({
+      ensureAllowed: userSource ? ensureAllowed.get(slug) === true : true,
       cloneRetry: cloneRetry.get(slug),
       desiredFingerprint: desiredFp.get(slug),
       now: Date.now(),
       permanentConfigPatchRetry: permanentConfigPatchRetry.get(slug),
     }),
-    ...(customerSource && readEnsureAdmission ? {
+    ...(userSource && readEnsureAdmission ? {
       canEnsureSlug: async (slug: string) => {
         const uid = desiredUids.get(slug);
-        if (!uid) throw new Error(`missing desired customer UID for ${slug}`);
+        if (!uid) throw new Error(`missing desired user UID for ${slug}`);
         return readEnsureAdmission(uid);
       },
     } : {}),
@@ -1701,7 +1701,7 @@ function startMaybeReconcileLoop(params: {
           if (!opts.readUserSnapshotForRuntimeReset || !opts.acknowledgeRuntimeReset) {
             throw new Error("recovered runtime reset requires both snapshot read and acknowledgement");
           }
-          await consumeRecoveredCustomerRuntimeReset({
+          await consumeRecoveredUserRuntimeReset({
             gatewayId: opts.gatewayId,
             uid,
             slug,
@@ -1712,7 +1712,7 @@ function startMaybeReconcileLoop(params: {
           });
         }
         if (pendingCloneOnlyStale(appliedFp.get(slug), desiredFp.get(slug))) {
-          return ensureCustomerCheckoutsOnly(
+          return ensureUserCheckoutsOnly(
             wrappedAdapter,
             {
               now: Date.now(),
@@ -1728,14 +1728,14 @@ function startMaybeReconcileLoop(params: {
           pendingEvictions,
           cancelPendingEviction,
         });
-        return mountCustomerWithPublication({
+        return mountUserWithPublication({
           adapter: wrappedAdapter,
           uid,
           slug,
           desiredFingerprint: desiredFp.get(slug),
           prior: cloneRetry.get(slug),
-          options: reconcileAddCustomerOptions(
-            customerSource !== undefined, evictionBatch, readCurrentEvictionBatch,
+          options: reconcileAddUserOptions(
+            userSource !== undefined, evictionBatch, readCurrentEvictionBatch,
           ),
           hooks: convergenceHooks,
           stampMounted,
@@ -1770,24 +1770,24 @@ function startMaybeReconcileLoop(params: {
 }
 
 
-function configuredBuilderSlug(adapter: CustomerLifecycleAdapter): string | null {
-  const slug = builderClaimSlug();
-  if (!slug || adapter.isBuilderGateway?.() !== true) return null;
-  return adapter.isConfiguredBuilderCustomer?.(slug) === true &&
-      adapter.configuredBuilderOverlayPresent?.(slug) === true
+function configuredUserSlug(adapter: UserLifecycleAdapter): string | null {
+  const slug = userClaimSlug();
+  if (!slug || adapter.isIsolatedGateway?.() !== true) return null;
+  return adapter.isConfiguredUser?.(slug) === true &&
+      adapter.configuredUserOverlayPresent?.(slug) === true
     ? slug
     : null;
 }
 
-export function createConfiguredBuilderAssignmentMatcher(
+export function createConfiguredUserAssignmentMatcher(
   opts: Pick<
     StartFleetOptions,
-    "readDesiredCustomers" | "readDesiredSlugs"
+    "readDesiredUsers" | "readDesiredSlugs"
   >,
 ): (slug: string) => Promise<boolean> {
-  const readDesiredCustomers = opts.readDesiredCustomers;
-  if (readDesiredCustomers) {
-    return async (slug) => (await readDesiredCustomers()).has(slug);
+  const readDesiredUsers = opts.readDesiredUsers;
+  if (readDesiredUsers) {
+    return async (slug) => (await readDesiredUsers()).has(slug);
   }
   const readDesiredSlugs = opts.readDesiredSlugs;
   if (readDesiredSlugs) {
@@ -1796,7 +1796,7 @@ export function createConfiguredBuilderAssignmentMatcher(
   return async () => false;
 }
 
-export function createConfiguredBuilderReconcileAdmission(input: {
+export function createConfiguredUserReconcileAdmission(input: {
   processGate: Pick<SurgeOpenClawProcessSupervisorClient, "status"> | null;
   hasServingAssignment: () => Promise<boolean>;
   log: (message: string) => void;
@@ -1812,17 +1812,17 @@ export function createConfiguredBuilderReconcileAdmission(input: {
           lastBlocked = null;
           return true;
         }
-        blocked = "awaiting canonical Builder assignment";
+        blocked = "awaiting canonical user assignment";
       }
       if (lastBlocked !== blocked) {
-        input.log(`[surge-handoff] reconcile paused while configured Builder process gate is ${blocked}`);
+        input.log(`[surge-handoff] reconcile paused while configured user process gate is ${blocked}`);
         lastBlocked = blocked;
       }
       return false;
     } catch (error) {
       const blocked = `status error: ${error instanceof Error ? error.message : String(error)}`;
       if (lastBlocked !== blocked) {
-        input.log(`[surge-handoff] reconcile paused while configured Builder process gate has ${blocked}`);
+        input.log(`[surge-handoff] reconcile paused while configured user process gate has ${blocked}`);
         lastBlocked = blocked;
       }
       return false;
@@ -1830,37 +1830,37 @@ export function createConfiguredBuilderReconcileAdmission(input: {
   };
 }
 
-function configuredBuilderMountProven(adapter: CustomerLifecycleAdapter): boolean {
-  const slug = configuredBuilderSlug(adapter);
+function configuredUserMountProven(adapter: UserLifecycleAdapter): boolean {
+  const slug = configuredUserSlug(adapter);
   return slug !== null && getMountObservedSlugs(adapter).includes(slug);
 }
 
-type BuilderPrelaunchState = "none" | "held" | "hydrated" | "starting" | "serving";
+type IsolatedPrelaunchState = "none" | "held" | "hydrated" | "starting" | "serving";
 
-async function clearInheritedBuilderMountProof(
-  adapter: CustomerLifecycleAdapter,
+async function clearInheritedUserMountProof(
+  adapter: UserLifecycleAdapter,
   processGate: Pick<SurgeOpenClawProcessSupervisorClient, "status"> | null,
   log: (message: string) => void,
 ): Promise<void> {
-  const slug = configuredBuilderSlug(adapter);
-  if (!slug || !processGate || !adapter.customerMountMarked?.(slug)) return;
+  const slug = configuredUserSlug(adapter);
+  if (!slug || !processGate || !adapter.userMountMarked?.(slug)) return;
   const state = await processGate.status();
   if (state.podUid !== process.env.POD_UID?.trim() || state.role !== "normal" ||
       state.mode !== "held" || state.phase !== "held") return;
-  if (!adapter.clearMountMarker) throw new Error("configured Builder cannot invalidate its inherited mount proof");
+  if (!adapter.clearMountMarker) throw new Error("configured user cannot invalidate its inherited mount proof");
   adapter.clearMountMarker(slug);
-  log(`[fleet] cleared inherited mount proof before configured Builder prelaunch: ${slug}`);
+  log(`[fleet] cleared inherited mount proof before configured isolated prelaunch: ${slug}`);
 }
 
-async function builderPrelaunchState(
-  adapter: CustomerLifecycleAdapter,
+async function isolatedPrelaunchState(
+  adapter: UserLifecycleAdapter,
   processGate: Pick<SurgeOpenClawProcessSupervisorClient, "status"> | null,
   observedState?: SurgeOpenClawProcessGateState,
-): Promise<BuilderPrelaunchState> {
-  if (!processGate || configuredBuilderSlug(adapter) === null) return "none";
+): Promise<IsolatedPrelaunchState> {
+  if (!processGate || configuredUserSlug(adapter) === null) return "none";
   const state = observedState ?? await processGate.status();
   if (state.mode === "held") {
-    return state.role === "target" && configuredBuilderMountProven(adapter)
+    return state.role === "target" && configuredUserMountProven(adapter)
       ? "hydrated"
       : "held";
   }
@@ -1869,16 +1869,16 @@ async function builderPrelaunchState(
 
 // Pending project checkouts never block the mount (see finalizeConvergedMount):
 // OpenClaw starts with the workspace and the reconcile loop converges the rest.
-async function attachConfiguredBuilderBeforeOpenClaw(input: {
-  adapter: CustomerLifecycleAdapter;
+async function attachConfiguredUserBeforeOpenClaw(input: {
+  adapter: UserLifecycleAdapter;
   log?: (message: string) => void;
   onWorkSettled?: (settled: Promise<void>) => void;
 }): Promise<string> {
-  const slug = configuredBuilderSlug(input.adapter);
-  if (!slug) throw new Error("configured Builder overlay is unavailable for prelaunch attach");
+  const slug = configuredUserSlug(input.adapter);
+  if (!slug) throw new Error("configured user overlay is unavailable for prelaunch attach");
   const uid = await input.adapter.uidForSlug(slug);
-  if (!uid) throw new Error(`configured Builder user is unavailable for prelaunch attach: ${slug}`);
-  const result = await addCustomerToGateway(input.adapter, uid, {
+  if (!uid) throw new Error(`configured user is unavailable for prelaunch attach: ${slug}`);
+  const result = await addUserToGateway(input.adapter, uid, {
     convergeContent: true,
     deferRuntimeVerification: true,
     reclaimExistingSshKey: true,
@@ -1886,40 +1886,40 @@ async function attachConfiguredBuilderBeforeOpenClaw(input: {
   });
   input.adapter.recordAppliedFingerprint?.(slug, NEEDS_FULL_ATTACH_FINGERPRINT);
   if (result.pendingProjectClones.length > 0) {
-    if (process.env.OCTOGEE_PROJECTS_MOUNT) throw new Error(`Builder project restoration is incomplete: ${result.pendingProjectClones.join(", ")}`);
+    if (process.env.OCTOGEE_PROJECTS_MOUNT) throw new Error(`User project restoration is incomplete: ${result.pendingProjectClones.join(", ")}`);
     input.log?.(
-      `[surge-handoff] configured Builder project checkouts still pending for ${slug}; ` +
+      `[surge-handoff] configured user project checkouts still pending for ${slug}; ` +
       `the reconcile loop converges them: ${result.pendingProjectClones.join(", ")}`,
     );
   }
   input.adapter.writeMountMarker?.(slug);
-  if (!input.adapter.customerMountMarked?.(slug) || !configuredBuilderMountProven(input.adapter)) {
-    throw new Error(`configured Builder prelaunch mount proof failed for ${slug}`);
+  if (!input.adapter.userMountMarked?.(slug) || !configuredUserMountProven(input.adapter)) {
+    throw new Error(`configured isolated prelaunch mount proof failed for ${slug}`);
   }
   return slug;
 }
 
-async function verifyConfiguredBuilderAfterOpenClaw(input: {
-  adapter: CustomerLifecycleAdapter;
+async function verifyConfiguredUserAfterOpenClaw(input: {
+  adapter: UserLifecycleAdapter;
   waitForGatewayReady: () => Promise<void>;
   log: (message: string) => void;
   permittedAt?: number;
 }): Promise<string> {
-  const slug = configuredBuilderSlug(input.adapter);
-  if (!slug || !configuredBuilderMountProven(input.adapter)) {
-    throw new Error("configured Builder is not durably mounted after OpenClaw start");
+  const slug = configuredUserSlug(input.adapter);
+  if (!slug || !configuredUserMountProven(input.adapter)) {
+    throw new Error("configured user is not durably mounted after OpenClaw start");
   }
   await input.waitForGatewayReady();
   if (input.permittedAt !== undefined) {
-    input.log(`[surge-handoff] configured Builder OpenClaw ready ${Date.now() - input.permittedAt}ms after permit: ${slug}`);
+    input.log(`[surge-handoff] configured user OpenClaw ready ${Date.now() - input.permittedAt}ms after permit: ${slug}`);
   }
   return slug;
 }
 
 function wrapAdapterWithRuntime(
-  adapter: CustomerLifecycleAdapter,
+  adapter: UserLifecycleAdapter,
   runtime: FleetRuntime,
-): CustomerLifecycleAdapter {
+): UserLifecycleAdapter {
   return {
     ...adapter,
     onMounted: (slug: string) => {
@@ -1980,37 +1980,37 @@ function registerMigrationRoutes(
   app.post("/unmount/:gatewayId", createUnmountHandler(migrationDeps));
 }
 
-interface BuilderSurgeGateWiring {
-  prepareSurgeTarget: (input: BuilderSurgeTargetRequest, signal?: AbortSignal) => Promise<void>;
+interface IsolatedSurgeGateWiring {
+  prepareSurgeTarget: (input: IsolatedSurgeTargetRequest, signal?: AbortSignal) => Promise<void>;
   reserveSurgeTarget: (input: { migrationId: string; slug: string }) => Promise<void>;
   unreserveSurgeTarget: (input: {
     migrationId: string;
     slug: string;
     targetPodUid: string;
   }, cleanup?: (assertCurrent: () => Promise<void>) => Promise<void>) => Promise<SurgeOpenClawProcessGateState>;
-  surgeTargetOpenClawHeld: (input: BuilderSurgeTargetRequest) => Promise<boolean>;
-  surgeTargetLive: (input: BuilderSurgeTargetRequest) => Promise<boolean>;
-  admitLiveSurgeTarget: (input: BuilderSurgeTargetRequest) => Promise<void>;
-  liveSurgeTargetAssigned: (input: BuilderSurgeTargetRequest) => Promise<boolean>;
+  surgeTargetOpenClawHeld: (input: IsolatedSurgeTargetRequest) => Promise<boolean>;
+  surgeTargetLive: (input: IsolatedSurgeTargetRequest) => Promise<boolean>;
+  admitLiveSurgeTarget: (input: IsolatedSurgeTargetRequest) => Promise<void>;
+  liveSurgeTargetAssigned: (input: IsolatedSurgeTargetRequest) => Promise<boolean>;
   releaseSurgeReadiness: (input: { migrationId: string; targetPodUid: string; importSlug?: string }) => Promise<void>;
   surgeReleaseInProgress: () => boolean;
 }
 
-interface ActiveBuilderSurgeRelease {
+interface ActiveIsolatedSurgeRelease {
   migrationId: string;
   targetPodUid: string;
   cancelled: boolean;
   promise: Promise<void> | null;
 }
 
-interface BuilderSurgeTargetRequest {
+interface IsolatedSurgeTargetRequest {
   migrationId: string;
   slug: string;
   targetPodUid: string;
 }
 
-type ConfiguredBuilderAttach = (input: {
-  adapter: CustomerLifecycleAdapter;
+type ConfiguredUserAttach = (input: {
+  adapter: UserLifecycleAdapter;
   log?: (message: string) => void;
   onWorkSettled?: (settled: Promise<void>) => void;
 }) => Promise<string>;
@@ -2034,15 +2034,15 @@ async function returnToHoldAfterFailure(
   throw error;
 }
 
-function throwIfBuilderSurgeReleaseCancelled(release: ActiveBuilderSurgeRelease): void {
-  if (release.cancelled) throw new Error("configured Builder target release was cancelled");
+function throwIfIsolatedSurgeReleaseCancelled(release: ActiveIsolatedSurgeRelease): void {
+  if (release.cancelled) throw new Error("configured isolated target release was cancelled");
 }
 
-function scheduleBuilderTargetHoldFinalization(input: {
+function scheduleIsolatedTargetHoldFinalization(input: {
   log: (message: string) => void;
   processGate: SurgeOpenClawProcessSupervisorClient;
-  release: ActiveBuilderSurgeRelease;
-  request: BuilderSurgeTargetRequest;
+  release: ActiveIsolatedSurgeRelease;
+  request: IsolatedSurgeTargetRequest;
   runCancellation: <T>(work: () => Promise<T>) => Promise<T>;
   waitForActiveProvisioningDrain: () => Promise<void>;
 }): void {
@@ -2052,67 +2052,67 @@ function scheduleBuilderTargetHoldFinalization(input: {
     await input.processGate.finalizeTargetCancellation(input.request);
   }).catch((error) => {
     input.log(
-      `[surge-handoff] configured Builder target cancellation could not be finalized: ` +
+      `[surge-handoff] configured isolated target cancellation could not be finalized: ` +
       `${error instanceof Error ? error.message : String(error)}`,
     );
   });
 }
 
-function releasedBuilderTargetMatches(
+function releasedIsolatedTargetMatches(
   state: SurgeOpenClawProcessGateState,
-  request: BuilderSurgeTargetRequest,
+  request: IsolatedSurgeTargetRequest,
 ): boolean {
   const terminal = state.terminalTarget;
   return terminal?.migrationId === request.migrationId && terminal.slug === request.slug &&
     terminal.targetPodUid === request.targetPodUid;
 }
 
-function reservedBuilderTargetMatches(state: SurgeOpenClawProcessGateState, request: BuilderSurgeTargetRequest): boolean {
+function reservedIsolatedTargetMatches(state: SurgeOpenClawProcessGateState, request: IsolatedSurgeTargetRequest): boolean {
   return state.role === "target" && state.migrationId === request.migrationId &&
     state.slug === request.slug && state.targetPodUid === request.targetPodUid;
 }
 
-function settledBuilderCancellation(state: SurgeOpenClawProcessGateState): boolean {
+function settledUserCancellation(state: SurgeOpenClawProcessGateState): boolean {
   return state.mode === "held" && state.phase === "held";
 }
 
-async function assertBuilderTargetCleanupCurrent(
+async function assertIsolatedTargetCleanupCurrent(
   processGate: SurgeOpenClawProcessSupervisorClient,
-  request: BuilderSurgeTargetRequest,
-  configuredBuilderAssigned: (slug: string) => Promise<boolean>,
+  request: IsolatedSurgeTargetRequest,
+  configuredUserAssigned: (slug: string) => Promise<boolean>,
 ): Promise<void> {
   const current = await processGate.status();
   if (current.role !== "target" || current.mode !== "held" ||
       !["held", "cancelling"].includes(current.phase) ||
       current.migrationId !== request.migrationId || current.slug !== request.slug ||
       current.targetPodUid !== request.targetPodUid || current.podUid !== request.targetPodUid) {
-    throw new Error("Builder import cleanup no longer owns its held target");
+    throw new Error("User import cleanup no longer owns its held target");
   }
-  if (await configuredBuilderAssigned(request.slug)) throw new Error("cannot clean a Builder with a serving assignment");
+  if (await configuredUserAssigned(request.slug)) throw new Error("cannot clean a user with a serving assignment");
 }
 
-async function unreserveWarmBuilderTarget(
-  input: Parameters<typeof unreserveConfiguredBuilderTarget>[0],
+async function unreserveWarmIsolatedTarget(
+  input: Parameters<typeof unreserveConfiguredIsolatedTarget>[0],
   cleanup: () => Promise<void>,
   observed: SurgeOpenClawProcessGateState,
 ): Promise<SurgeOpenClawProcessGateState> {
   const { processGate, request } = input;
   if (!input.cleanup) return processGate.unreserve(request);
-  if (await input.configuredBuilderAssigned(request.slug)) throw new Error("cannot clean a Builder with a serving assignment");
+  if (await input.configuredUserAssigned(request.slug)) throw new Error("cannot clean a user with a serving assignment");
   await processGate.holdNormal();
   await processGate.hydrate(request);
   await input.waitForActiveProvisioningDrain();
   await cleanup();
   const released = await processGate.unreserve(request);
   if (observed.mode !== "permitted") return released;
-  return restartBuilderPrelaunch(input);
+  return restartIsolatedPrelaunch(input);
 }
 
-async function restartBuilderPrelaunch(
-  input: Pick<Parameters<typeof unreserveConfiguredBuilderTarget>[0], "processGate" | "request" | "prepareBuilderPrelaunch">,
+async function restartIsolatedPrelaunch(
+  input: Pick<Parameters<typeof unreserveConfiguredIsolatedTarget>[0], "processGate" | "request" | "prepareIsolatedPrelaunch">,
 ): Promise<SurgeOpenClawProcessGateState> {
   return openClawRuntimeUpdateGuard.run(async () => {
-    await input.prepareBuilderPrelaunch(input.request.slug);
+    await input.prepareIsolatedPrelaunch(input.request.slug);
     return input.processGate.permitNormal();
   });
 }
@@ -2121,30 +2121,30 @@ function servingAfterWarmCleanup(state: SurgeOpenClawProcessGateState): boolean 
   return state.mode === "permitted" && state.terminalTarget?.completionStarted === false;
 }
 
-async function cancelReleasedBuilderTarget(
-  input: Parameters<typeof unreserveConfiguredBuilderTarget>[0],
+async function cancelReleasedIsolatedTarget(
+  input: Parameters<typeof unreserveConfiguredIsolatedTarget>[0],
   cleanup: () => Promise<void>,
   observed: SurgeOpenClawProcessGateState,
 ): Promise<SurgeOpenClawProcessGateState> {
   const { processGate, request } = input;
-  if (await input.configuredBuilderAssigned(request.slug)) {
-    throw new Error("cannot cancel a released Builder with a serving assignment");
+  if (await input.configuredUserAssigned(request.slug)) {
+    throw new Error("cannot cancel a released user with a serving assignment");
   }
-  if (!input.cleanup && settledBuilderCancellation(observed)) return observed;
+  if (!input.cleanup && settledUserCancellation(observed)) return observed;
   await processGate.reholdReleasedTarget(request);
   await input.waitForActiveProvisioningDrain();
   await cleanup();
   const cancelled = await processGate.finalizeTargetCancellation(request);
-  return input.cleanup && servingAfterWarmCleanup(observed) ? restartBuilderPrelaunch(input) : cancelled;
+  return input.cleanup && servingAfterWarmCleanup(observed) ? restartIsolatedPrelaunch(input) : cancelled;
 }
 
-async function unreserveConfiguredBuilderTarget(input: {
-  activeRelease: ActiveBuilderSurgeRelease | null;
-  configuredBuilderAssigned: (slug: string) => Promise<boolean>;
+async function unreserveConfiguredIsolatedTarget(input: {
+  activeRelease: ActiveIsolatedSurgeRelease | null;
+  configuredUserAssigned: (slug: string) => Promise<boolean>;
   processGate: SurgeOpenClawProcessSupervisorClient;
-  request: BuilderSurgeTargetRequest;
+  request: IsolatedSurgeTargetRequest;
   waitForActiveProvisioningDrain: () => Promise<void>;
-  prepareBuilderPrelaunch: (slug: string) => Promise<void>;
+  prepareIsolatedPrelaunch: (slug: string) => Promise<void>;
   cleanup?: (assertCurrent: () => Promise<void>) => Promise<void>;
 }): Promise<SurgeOpenClawProcessGateState> {
   const { activeRelease, processGate, request, waitForActiveProvisioningDrain } = input;
@@ -2153,7 +2153,7 @@ async function unreserveConfiguredBuilderTarget(input: {
     ? activeRelease
     : null;
   if (release) release.cancelled = true;
-  const assertCleanupCurrent = () => assertBuilderTargetCleanupCurrent(processGate, request, input.configuredBuilderAssigned);
+  const assertCleanupCurrent = () => assertIsolatedTargetCleanupCurrent(processGate, request, input.configuredUserAssigned);
   const cleanup = async () => {
     if (!input.cleanup) return;
     await assertCleanupCurrent();
@@ -2162,16 +2162,16 @@ async function unreserveConfiguredBuilderTarget(input: {
   };
   const state = await processGate.status();
   if (state.role === "normal") {
-    return releasedBuilderTargetMatches(state, request)
-      ? cancelReleasedBuilderTarget(input, cleanup, state)
-      : unreserveWarmBuilderTarget(input, cleanup, state);
+    return releasedIsolatedTargetMatches(state, request)
+      ? cancelReleasedIsolatedTarget(input, cleanup, state)
+      : unreserveWarmIsolatedTarget(input, cleanup, state);
   }
-  if (!reservedBuilderTargetMatches(state, request)) {
-    if (input.cleanup) throw new Error("Builder import cleanup has no matching target reservation");
+  if (!reservedIsolatedTargetMatches(state, request)) {
+    if (input.cleanup) throw new Error("User import cleanup has no matching target reservation");
     return processGate.unreserve(request);
   }
-  if (await input.configuredBuilderAssigned(request.slug)) {
-    throw new Error("cannot cancel a Builder with a serving assignment");
+  if (await input.configuredUserAssigned(request.slug)) {
+    throw new Error("cannot cancel a user with a serving assignment");
   }
   const reheld = await processGate.rehold(request);
   await waitForActiveProvisioningDrain();
@@ -2180,24 +2180,24 @@ async function unreserveConfiguredBuilderTarget(input: {
   return processGate.finalizeTargetCancellation(request);
 }
 
-interface BuilderSurgeGateWiringOptions {
+interface IsolatedSurgeGateWiringOptions {
   openclawDir?: string;
   projectBlobHydrator?: ProjectBlobHydrator;
-  adapter: CustomerLifecycleAdapter;
+  adapter: UserLifecycleAdapter;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
   surgeReadiness: SurgeReadinessGate;
   waitForGatewayReady: () => Promise<void>;
   log: (message: string) => void;
   provisioning: ProvisioningCounter;
   waitForActiveProvisioningDrain?: () => Promise<void>;
-  attachConfiguredBuilderBeforeOpenClaw?: ConfiguredBuilderAttach;
-  configuredBuilderAssigned?: (slug: string) => Promise<boolean>;
-  prepareBuilderPrelaunch?: (slug: string) => Promise<void>;
+  attachConfiguredUserBeforeOpenClaw?: ConfiguredUserAttach;
+  configuredUserAssigned?: (slug: string) => Promise<boolean>;
+  prepareIsolatedPrelaunch?: (slug: string) => Promise<void>;
 }
 
 function reservedTargetOpenClawHeld(
   state: SurgeOpenClawProcessGateState,
-  request: BuilderSurgeTargetRequest,
+  request: IsolatedSurgeTargetRequest,
 ): boolean {
   if (
     state.role !== "target" ||
@@ -2205,17 +2205,17 @@ function reservedTargetOpenClawHeld(
     state.slug !== request.slug ||
     state.targetPodUid !== request.targetPodUid
   ) {
-    throw new Error("configured Builder target is not reserved by this migration");
+    throw new Error("configured isolated target is not reserved by this migration");
   }
   if (state.mode === "permitted") return false;
-  if (state.completionStarted) throw new Error("configured Builder Native completion has already started");
+  if (state.completionStarted) throw new Error("configured user Native completion has already started");
   if (state.phase !== "held") {
-    throw new Error(`configured Builder OpenClaw is still stopping (phase ${state.phase})`);
+    throw new Error(`configured user OpenClaw is still stopping (phase ${state.phase})`);
   }
   return true;
 }
 
-export async function builderSourceOpenClawHeld(
+export async function userSourceOpenClawHeld(
   processGate: Pick<SurgeOpenClawProcessSupervisorClient, "status"> | null,
   request: { migrationId: string; slug: string },
 ): Promise<boolean> {
@@ -2223,120 +2223,120 @@ export async function builderSourceOpenClawHeld(
   const state = await processGate.status();
   if (state.role !== "source" || state.mode === "permitted") return false;
   if (state.migrationId !== request.migrationId || state.slug !== request.slug) {
-    throw new Error("configured Builder source is held by another migration");
+    throw new Error("configured user source is held by another migration");
   }
   if (state.phase !== "held") {
-    throw new Error(`configured Builder source OpenClaw is still stopping (phase ${state.phase})`);
+    throw new Error(`configured user source OpenClaw is still stopping (phase ${state.phase})`);
   }
   return true;
 }
 
-function liveBuilderTarget(
+function liveIsolatedTarget(
   state: SurgeOpenClawProcessGateState,
-  request: BuilderSurgeTargetRequest,
+  request: IsolatedSurgeTargetRequest,
 ): boolean {
-  return state.role === "normal" && state.mode === "permitted" && !releasedBuilderTargetMatches(state, request);
+  return state.role === "normal" && state.mode === "permitted" && !releasedIsolatedTargetMatches(state, request);
 }
 
-async function admitLiveBuilderTarget(input: {
-  adapter: CustomerLifecycleAdapter;
+async function admitLiveIsolatedTarget(input: {
+  adapter: UserLifecycleAdapter;
   processGate: SurgeOpenClawProcessSupervisorClient;
   surgeReadiness: SurgeReadinessGate;
-  request: BuilderSurgeTargetRequest;
+  request: IsolatedSurgeTargetRequest;
 }): Promise<void> {
   const { adapter, request } = input;
   const state = await input.processGate.status();
-  if (state.podUid !== request.targetPodUid || !liveBuilderTarget(state, request)) {
-    throw new Error("configured Builder target is not a live permitted OpenClaw on this pod");
+  if (state.podUid !== request.targetPodUid || !liveIsolatedTarget(state, request)) {
+    throw new Error("configured isolated target is not a live permitted OpenClaw on this pod");
   }
   if (state.phase !== "running") {
-    throw new Error(`configured Builder OpenClaw is not running for a live import (phase ${state.phase})`);
+    throw new Error(`configured user OpenClaw is not running for a live import (phase ${state.phase})`);
   }
   if (!(await input.surgeReadiness.released())) {
-    throw new Error("configured Builder live import requires released readiness");
+    throw new Error("configured user live import requires released readiness");
   }
-  if (configuredBuilderSlug(adapter) !== request.slug) {
-    throw new Error("configured Builder live import requires its retained overlay");
+  if (configuredUserSlug(adapter) !== request.slug) {
+    throw new Error("configured user live import requires its retained overlay");
   }
-  if (configuredBuilderMountProven(adapter)) {
-    throw new Error("configured Builder live import target already mounts its customer");
+  if (configuredUserMountProven(adapter)) {
+    throw new Error("configured user live import target already mounts its user");
   }
 }
 
-function liveBuilderTargetOperations(input: {
-  adapter: CustomerLifecycleAdapter;
+function liveIsolatedTargetOperations(input: {
+  adapter: UserLifecycleAdapter;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
   surgeReadiness: SurgeReadinessGate;
-  configuredBuilderAssigned: (slug: string) => Promise<boolean>;
-}): Pick<BuilderSurgeGateWiring, "surgeTargetLive" | "admitLiveSurgeTarget" | "liveSurgeTargetAssigned"> {
+  configuredUserAssigned: (slug: string) => Promise<boolean>;
+}): Pick<IsolatedSurgeGateWiring, "surgeTargetLive" | "admitLiveSurgeTarget" | "liveSurgeTargetAssigned"> {
   const requireGate = (): SurgeOpenClawProcessSupervisorClient => {
-    if (!input.processGate) throw new Error("configured Builder OpenClaw process gate is unavailable");
+    if (!input.processGate) throw new Error("configured user OpenClaw process gate is unavailable");
     return input.processGate;
   };
   return {
-    surgeTargetLive: async (request) => liveBuilderTarget(await requireGate().status(), request),
-    admitLiveSurgeTarget: async (request) => admitLiveBuilderTarget({
+    surgeTargetLive: async (request) => liveIsolatedTarget(await requireGate().status(), request),
+    admitLiveSurgeTarget: async (request) => admitLiveIsolatedTarget({
       adapter: input.adapter, processGate: requireGate(), surgeReadiness: input.surgeReadiness, request,
     }),
-    liveSurgeTargetAssigned: (request) => input.configuredBuilderAssigned(request.slug),
+    liveSurgeTargetAssigned: (request) => input.configuredUserAssigned(request.slug),
   };
 }
 
-type PreparedBuilderTarget = BuilderSurgeTargetRequest & { inputs: string };
+type PreparedIsolatedTarget = IsolatedSurgeTargetRequest & { inputs: string };
 
-async function builderPreparationInputs(adapter: CustomerLifecycleAdapter, openclawDir: string, slug: string) {
+async function userPreparationInputs(adapter: UserLifecycleAdapter, openclawDir: string, slug: string) {
   const uid = await adapter.uidForSlug(slug);
-  if (!uid) throw new Error("prepared Builder no longer has an owner");
+  if (!uid) throw new Error("prepared user no longer has an owner");
   const snapshot = await adapter.loadUserSnapshot(uid, { refresh: true });
-  if (!snapshot || snapshot.slug !== slug) throw new Error("prepared Builder ownership changed");
+  if (!snapshot || snapshot.slug !== slug) throw new Error("prepared user ownership changed");
   return { snapshot, manifest: await readActivationManifest(openclawDir, slug) };
 }
 
-async function builderPreparationFingerprint(adapter: CustomerLifecycleAdapter, openclawDir: string, slug: string): Promise<string> {
-  return JSON.stringify(await builderPreparationInputs(adapter, openclawDir, slug));
+async function userPreparationFingerprint(adapter: UserLifecycleAdapter, openclawDir: string, slug: string): Promise<string> {
+  return JSON.stringify(await userPreparationInputs(adapter, openclawDir, slug));
 }
 
-async function prepareConfiguredBuilderTarget(input: {
-  request: BuilderSurgeTargetRequest;
+async function prepareConfiguredIsolatedTarget(input: {
+  request: IsolatedSurgeTargetRequest;
   signal?: AbortSignal;
-  adapter: CustomerLifecycleAdapter;
+  adapter: UserLifecycleAdapter;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
-  attachConfigured: ConfiguredBuilderAttach;
+  attachConfigured: ConfiguredUserAttach;
   log: (message: string) => void;
   provisioning: ProvisioningCounter;
   waitForActiveProvisioningDrain: () => Promise<void>;
   openclawDir: string;
   projectBlobHydrator?: ProjectBlobHydrator;
-}): Promise<PreparedBuilderTarget> {
+}): Promise<PreparedIsolatedTarget> {
   const { request, adapter, processGate, attachConfigured, log, provisioning } = input;
   input.signal?.throwIfAborted();
   if (!processGate || !reservedTargetOpenClawHeld(await processGate.status(), request)) {
-    throw new Error("Builder preparation requires its reserved OpenClaw process to remain held");
+    throw new Error("User preparation requires its reserved OpenClaw process to remain held");
   }
   await input.waitForActiveProvisioningDrain();
-  const prepared = await builderPreparationInputs(adapter, input.openclawDir, request.slug);
+  const prepared = await userPreparationInputs(adapter, input.openclawDir, request.slug);
   const inputs = JSON.stringify(prepared);
   await runProvisioningWork({ provisioning, work: async (onWorkSettled) => {
     const attachedSlug = await attachConfigured({ adapter, log, onWorkSettled });
-    if (attachedSlug !== request.slug) throw new Error("Builder preparation attached the wrong customer");
+    if (attachedSlug !== request.slug) throw new Error("User preparation attached the wrong user");
     input.signal?.throwIfAborted();
     const checkouts = await cloneMissingProjects(adapter, request.slug, { signal: input.signal });
     input.signal?.throwIfAborted();
-    if (checkouts.pending.length > 0) throw new Error(`Builder preparation has pending repositories: ${checkouts.pending.join(", ")}`);
+    if (checkouts.pending.length > 0) throw new Error(`User preparation has pending repositories: ${checkouts.pending.join(", ")}`);
   } });
   const lockSha256 = process.env.OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256?.trim();
   const groupsSha256 = process.env.OCTOGEE_BUILDER_TOOL_GROUPS_SHA256?.trim();
   if (lockSha256 && groupsSha256) {
-    await waitForPreparedBuilderToolchain({ root: builderToolchainRoot(), lockSha256, groupsSha256 });
+    await waitForPreparedIsolatedToolchain({ root: isolatedToolchainRoot(), lockSha256, groupsSha256 });
   }
-  if (!reservedTargetOpenClawHeld(await processGate.status(), request)) throw new Error("Builder process started during preparation");
-  log(`[surge-handoff] Builder prepared while OpenClaw remains held slug=${request.slug} migrationId=${request.migrationId}`);
+  if (!reservedTargetOpenClawHeld(await processGate.status(), request)) throw new Error("User process started during preparation");
+  log(`[surge-handoff] User prepared while OpenClaw remains held slug=${request.slug} migrationId=${request.migrationId}`);
   return { ...request, inputs };
 }
 
-async function reholdFailedBuilderTarget(input: {
-  request: BuilderSurgeTargetRequest;
-  release: ActiveBuilderSurgeRelease;
+async function reholdFailedIsolatedTarget(input: {
+  request: IsolatedSurgeTargetRequest;
+  release: ActiveIsolatedSurgeRelease;
   processGate: SurgeOpenClawProcessSupervisorClient;
   log: (message: string) => void;
   runCancellation: <T>(work: () => Promise<T>) => Promise<T>;
@@ -2344,15 +2344,15 @@ async function reholdFailedBuilderTarget(input: {
 }): Promise<void> {
   if (input.release.cancelled) return;
   const current = await input.processGate.status();
-  if (current.podUid === input.request.targetPodUid && reservedBuilderTargetMatches(current, input.request) &&
+  if (current.podUid === input.request.targetPodUid && reservedIsolatedTargetMatches(current, input.request) &&
       current.mode === "held" && current.phase === "held") return;
   const state = await input.processGate.rehold(input.request);
   if (state.phase === "cancelling" && !input.release.cancelled) {
-    scheduleBuilderTargetHoldFinalization(input);
+    scheduleIsolatedTargetHoldFinalization(input);
   }
 }
 
-export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOptions): BuilderSurgeGateWiring {
+export function createIsolatedSurgeGateWiring(input: IsolatedSurgeGateWiringOptions): IsolatedSurgeGateWiring {
   const {
     adapter,
     openclawDir = OPENCLAW_DIR,
@@ -2362,12 +2362,12 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
     log,
     provisioning,
     waitForActiveProvisioningDrain = async () => undefined,
-    attachConfiguredBuilderBeforeOpenClaw: attachConfigured = attachConfiguredBuilderBeforeOpenClaw,
-    configuredBuilderAssigned = async () => false,
-    prepareBuilderPrelaunch = (slug: string) => prepareBuilderPrelaunchConfig(openclawDir, slug),
+    attachConfiguredUserBeforeOpenClaw: attachConfigured = attachConfiguredUserBeforeOpenClaw,
+    configuredUserAssigned = async () => false,
+    prepareIsolatedPrelaunch = (slug: string) => prepareIsolatedPrelaunchConfig(openclawDir, slug),
   } = input;
-  let activeRelease: ActiveBuilderSurgeRelease | null = null;
-  let preparedTarget: PreparedBuilderTarget | null = null;
+  let activeRelease: ActiveIsolatedSurgeRelease | null = null;
+  let preparedTarget: PreparedIsolatedTarget | null = null;
   let cancellationQueue = Promise.resolve();
   const runCancellation = <T>(work: () => Promise<T>): Promise<T> => {
     const result = cancellationQueue.then(work, work);
@@ -2376,48 +2376,48 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
   };
   const reholdAfterReleaseFailure = (
     request: { migrationId: string; slug: string; targetPodUid: string },
-    release: ActiveBuilderSurgeRelease,
-  ): Promise<void> => runCancellation(() => reholdFailedBuilderTarget({
+    release: ActiveIsolatedSurgeRelease,
+  ): Promise<void> => runCancellation(() => reholdFailedIsolatedTarget({
     request, release, processGate: processGate!, log, runCancellation, waitForActiveProvisioningDrain,
   }));
   const attachClaimedTargetWithProvisioning = (
     request: { migrationId: string; slug: string; targetPodUid: string },
-    release: ActiveBuilderSurgeRelease,
+    release: ActiveIsolatedSurgeRelease,
   ): Promise<void> => runProvisioningWork({
     provisioning,
     onDeferredReleaseError: (error) => {
       log(
-        `[surge-handoff] configured Builder completion lease release failed: ` +
+        `[surge-handoff] configured user completion lease release failed: ` +
         `${error instanceof Error ? error.message : String(error)}`,
       );
     },
     work: async (onWorkSettled) => {
-      throwIfBuilderSurgeReleaseCancelled(release);
+      throwIfIsolatedSurgeReleaseCancelled(release);
       await processGate!.claimTargetCompletion(request);
-      throwIfBuilderSurgeReleaseCancelled(release);
+      throwIfIsolatedSurgeReleaseCancelled(release);
       await processGate!.claimTargetCompletion(request);
-      throwIfBuilderSurgeReleaseCancelled(release);
+      throwIfIsolatedSurgeReleaseCancelled(release);
       await processGate!.claimTargetCompletion(request);
       const attachedSlug = preparedTarget?.migrationId === request.migrationId && preparedTarget.targetPodUid === request.targetPodUid &&
-        preparedTarget.slug === request.slug && configuredBuilderMountProven(adapter) &&
-        preparedTarget.inputs === await builderPreparationFingerprint(adapter, openclawDir, request.slug)
+        preparedTarget.slug === request.slug && configuredUserMountProven(adapter) &&
+        preparedTarget.inputs === await userPreparationFingerprint(adapter, openclawDir, request.slug)
         ? preparedTarget.slug
         : await attachConfigured({ adapter, log, onWorkSettled });
       if (attachedSlug !== request.slug) {
         throw new Error(
-          `configured Builder prelaunch attach returned ${attachedSlug}, expected ${request.slug}`,
+          `configured isolated prelaunch attach returned ${attachedSlug}, expected ${request.slug}`,
         );
       }
     },
   });
   const releasePermittedTarget = async (
     request: { migrationId: string; slug: string; targetPodUid: string },
-    release: ActiveBuilderSurgeRelease,
+    release: ActiveIsolatedSurgeRelease,
     permittedAt?: number,
   ): Promise<void> => {
-    throwIfBuilderSurgeReleaseCancelled(release);
-    await verifyConfiguredBuilderAfterOpenClaw({ adapter, waitForGatewayReady, log, permittedAt });
-    throwIfBuilderSurgeReleaseCancelled(release);
+    throwIfIsolatedSurgeReleaseCancelled(release);
+    await verifyConfiguredUserAfterOpenClaw({ adapter, waitForGatewayReady, log, permittedAt });
+    throwIfIsolatedSurgeReleaseCancelled(release);
     await processGate!.releaseTarget(request);
   };
   const releaseSurgeReadinessOnce = async ({
@@ -2427,7 +2427,7 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
   }: {
     migrationId: string;
     targetPodUid: string;
-    release: ActiveBuilderSurgeRelease;
+    release: ActiveIsolatedSurgeRelease;
   }): Promise<void> => {
     const ownPodUid = process.env.POD_UID?.trim();
     if (ownPodUid && ownPodUid !== targetPodUid) {
@@ -2437,9 +2437,9 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
       await surgeReadiness.release({ targetPodUid });
       return;
     }
-    if (!ownPodUid) throw new Error("POD_UID is required to permit configured Builder OpenClaw");
-    const slug = configuredBuilderSlug(adapter);
-    if (!slug) throw new Error("configured Builder overlay is unavailable for surge release");
+    if (!ownPodUid) throw new Error("POD_UID is required to permit configured user OpenClaw");
+    const slug = configuredUserSlug(adapter);
+    if (!slug) throw new Error("configured user overlay is unavailable for surge release");
     const reservation = await processGate.status();
     if (
       reservation.role !== "target" ||
@@ -2447,7 +2447,7 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
       reservation.slug !== slug ||
       reservation.targetPodUid !== targetPodUid
     ) {
-      throw new Error("configured Builder target is not reserved by this migration");
+      throw new Error("configured isolated target is not reserved by this migration");
     }
     const request = { migrationId, slug, targetPodUid };
     if (reservation.mode === "held") {
@@ -2461,11 +2461,11 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
         await returnToHoldAfterFailure(
           error,
           () => reholdAfterReleaseFailure(request, release),
-          "configured Builder target failed prelaunch attach and could not be returned to hold",
+          "configured isolated target failed prelaunch attach and could not be returned to hold",
         );
       }
     } else if (reservation.mode !== "permitted") {
-      throw new Error("configured Builder target has an invalid surge reservation mode");
+      throw new Error("configured isolated target has an invalid surge reservation mode");
     } else {
       try {
         await releasePermittedTarget(request, release);
@@ -2473,36 +2473,36 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
         await returnToHoldAfterFailure(
           error,
           () => reholdAfterReleaseFailure(request, release),
-          "configured Builder target failed to release and could not be returned to hold",
+          "configured isolated target failed to release and could not be returned to hold",
         );
       }
     }
   };
   return {
     async prepareSurgeTarget(request, signal) {
-      preparedTarget = await prepareConfiguredBuilderTarget({ request, signal, adapter, processGate, attachConfigured,
+      preparedTarget = await prepareConfiguredIsolatedTarget({ request, signal, adapter, processGate, attachConfigured,
         log, provisioning, waitForActiveProvisioningDrain, openclawDir, projectBlobHydrator: input.projectBlobHydrator });
     },
     async reserveSurgeTarget({ migrationId, slug }) {
-      if (!processGate || configuredBuilderSlug(adapter) !== slug) return;
+      if (!processGate || configuredUserSlug(adapter) !== slug) return;
       await processGate.hydrate({
         migrationId,
         slug,
-        targetPodUid: requireOwnPodUid("reserve the configured Builder migration target"),
+        targetPodUid: requireOwnPodUid("reserve the configured user migration target"),
       });
       await waitForActiveProvisioningDrain();
     },
     async surgeTargetOpenClawHeld(request) {
-      if (!processGate) throw new Error("configured Builder OpenClaw process gate is unavailable");
+      if (!processGate) throw new Error("configured user OpenClaw process gate is unavailable");
       return reservedTargetOpenClawHeld(await processGate.status(), request);
     },
-    ...liveBuilderTargetOperations({ adapter, processGate, surgeReadiness, configuredBuilderAssigned }),
+    ...liveIsolatedTargetOperations({ adapter, processGate, surgeReadiness, configuredUserAssigned }),
     async unreserveSurgeTarget(request, cleanup) {
       preparedTarget = null;
-      if (!processGate) throw new Error("configured Builder OpenClaw process gate is unavailable");
-      return runCancellation(() => unreserveConfiguredBuilderTarget({
-        activeRelease, configuredBuilderAssigned, processGate, request,
-        waitForActiveProvisioningDrain, prepareBuilderPrelaunch, cleanup,
+      if (!processGate) throw new Error("configured user OpenClaw process gate is unavailable");
+      return runCancellation(() => unreserveConfiguredIsolatedTarget({
+        activeRelease, configuredUserAssigned, processGate, request,
+        waitForActiveProvisioningDrain, prepareIsolatedPrelaunch, cleanup,
       }));
     },
     releaseSurgeReadiness(input) {
@@ -2513,14 +2513,14 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
         ) {
           return activeRelease.promise!;
         }
-        return Promise.reject(new Error("configured Builder target already has a release in progress"));
+        return Promise.reject(new Error("configured isolated target already has a release in progress"));
       }
       if (processGate && migrationImportBusy() &&
-          (!input.importSlug || configuredBuilderSlug(adapter) !== input.importSlug ||
+          (!input.importSlug || configuredUserSlug(adapter) !== input.importSlug ||
             !ownsFinalMigrationImport(input.migrationId, input.importSlug))) {
-        return Promise.reject(new Error("configured Builder import is in progress"));
+        return Promise.reject(new Error("configured user import is in progress"));
       }
-      const release: ActiveBuilderSurgeRelease = { ...input, cancelled: false, promise: null };
+      const release: ActiveIsolatedSurgeRelease = { ...input, cancelled: false, promise: null };
       activeRelease = release;
       const promise = releaseSurgeReadinessOnce({ ...input, release });
       release.promise = promise;
@@ -2546,7 +2546,7 @@ export async function startFleetController(
 ): Promise<StartedFleetController> {
   const caps = resolveFleetCapabilities({
     localReconcile: opts.localReconcile,
-    hasBrokeredRoster: !!opts.readDesiredSlugs || !!opts.readDesiredCustomers,
+    hasBrokeredRoster: !!opts.readDesiredSlugs || !!opts.readDesiredUsers,
   });
   const adapter = opts.adapter;
 
@@ -2554,16 +2554,16 @@ export async function startFleetController(
   const openclawDir = opts.openclawDir ?? path.join(process.env.HOME ?? "/home/node", ".openclaw");
   const surgeReadiness = createSurgeReadinessGate(openclawDir, process.env.POD_UID?.trim() || undefined);
   const wrappedAdapter = wrapAdapterWithRuntime(adapter, runtime);
-  const builderProcessGate = adapter.isBuilderGateway?.() === true
+  const userProcessGate = adapter.isIsolatedGateway?.() === true
     ? opts.surgeOpenClawProcessGate ?? createSurgeOpenClawProcessSupervisorClient(openclawDir)
     : null;
-  await clearInheritedBuilderMountProof(wrappedAdapter, builderProcessGate, opts.log);
-  const configuredBuilderAssigned = createConfiguredBuilderAssignmentMatcher(opts);
-  const canReconcile = createConfiguredBuilderReconcileAdmission({
-    processGate: builderProcessGate,
+  await clearInheritedUserMountProof(wrappedAdapter, userProcessGate, opts.log);
+  const configuredUserAssigned = createConfiguredUserAssignmentMatcher(opts);
+  const canReconcile = createConfiguredUserReconcileAdmission({
+    processGate: userProcessGate,
     hasServingAssignment: async () => {
-      const slug = configuredBuilderSlug(wrappedAdapter);
-      return slug !== null && await configuredBuilderAssigned(slug);
+      const slug = configuredUserSlug(wrappedAdapter);
+      return slug !== null && await configuredUserAssigned(slug);
     },
     log: opts.log,
   });
@@ -2650,7 +2650,7 @@ export async function startFleetController(
 
   app.get("/toolchain-ready", createToolchainReadinessHandler({
     adapter: wrappedAdapter,
-    prelaunchState: () => builderPrelaunchState(wrappedAdapter, builderProcessGate),
+    prelaunchState: () => isolatedPrelaunchState(wrappedAdapter, userProcessGate),
     log: opts.log,
   }));
 
@@ -2674,31 +2674,31 @@ export async function startFleetController(
         version: opts.version,
         openclawVersion: opts.openclawVersion,
         startedAt: PROCESS_STARTED_AT_MS,
-        customers: getMountObservedSlugs(adapter),
+        users: getMountObservedSlugs(adapter),
         migratingIn: adapter.listMigratingInSlugs?.() ?? [],
-        configuredBuilder: (opts.configuredBuilderReport ?? configuredBuilderReport)(),
+        configuredBuilder: (opts.configuredUserReport ?? configuredUserReport)(),
       }),
       ...(isValidUsername(privateProjectCoachSlug) ? {
-        privateProjectCoachWorkspace: fleetStatePrivateProjectCoachWorkspace(readOpenClawConfig(), openclawDir, privateProjectCoachSlug),
+        privateProjectCoachWorkspace: fleetStatePrivateProjectAgentWorkspace(readOpenClawConfig(), openclawDir, privateProjectCoachSlug),
       } : {}),
     }),
   }));
 
   app.get("/startup-ready", createStartupReadinessHandler({
     readiness,
-    prelaunchState: () => builderPrelaunchState(wrappedAdapter, builderProcessGate),
+    prelaunchState: () => isolatedPrelaunchState(wrappedAdapter, userProcessGate),
     log: opts.log,
   }));
 
   app.get("/surge-ready", createSurgeReadinessHandler({
     surgeReadiness,
     readiness,
-    prelaunchState: (state) => builderPrelaunchState(wrappedAdapter, builderProcessGate, state),
-    processGateState: async () => builderProcessGate?.status(),
+    prelaunchState: (state) => isolatedPrelaunchState(wrappedAdapter, userProcessGate, state),
+    processGateState: async () => userProcessGate?.status(),
     log: opts.log,
   }));
 
-  const reportBuilderAgentAnchors = createBuilderAgentAnchorReporter(opts);
+  const reportUserAgentAnchors = createUserAgentAnchorReporter(opts);
   const brokerProfileTimer = startBrokerProfileRetry(
     caps.provision,
     opts.log,
@@ -2706,37 +2706,37 @@ export async function startFleetController(
     (profileReadiness) => {
       brokerProfilesSettled = profileReadiness.settled;
       if (profileReadiness.settled) {
-        reportBuilderAgentAnchors().catch((error: unknown) => opts.log(`⚠ [agent-anchors] report pass failed: ${String(error)}`));
+        reportUserAgentAnchors().catch((error: unknown) => opts.log(`⚠ [agent-anchors] report pass failed: ${String(error)}`));
       }
     },
     sharedProfileRoster,
   );
 
-  const surgeGate = createBuilderSurgeGateWiring({
+  const surgeGate = createIsolatedSurgeGateWiring({
     openclawDir: opts.openclawDir,
     projectBlobHydrator: opts.projectBlobHydrator,
     adapter: wrappedAdapter,
-    processGate: builderProcessGate,
+    processGate: userProcessGate,
     surgeReadiness,
-    waitForGatewayReady: () => waitForOpenClawUp(BUILDER_POST_START_HEALTH_TIMEOUT_MS),
+    waitForGatewayReady: () => waitForOpenClawUp(USER_POST_START_HEALTH_TIMEOUT_MS),
     log: opts.log,
     provisioning: runtime,
     waitForActiveProvisioningDrain: runtime.waitForProvisioningDrain,
-    configuredBuilderAssigned,
+    configuredUserAssigned,
   });
   const migrationDeps = {
     publicKey: opts.publicKey,
     gatewayId: opts.gatewayId,
     adapter: wrappedAdapter,
     log: opts.log,
-    getMountedCustomers: () => runtime.mountedCustomers,
+    getMountedUsers: () => runtime.mountedCustomers,
     sourceMountRefusal: (slug: string) => runtime.mountRefusal(slug),
-    customerAttachPending: createVerifyAttachPending({ provision: caps.provision, opts }),
+    userAttachPending: createVerifyAttachPending({ provision: caps.provision, opts }),
     flushLocalState: opts.flushLocalState,
     prepareSurgeTarget: surgeGate.prepareSurgeTarget,
     reserveSurgeTarget: surgeGate.reserveSurgeTarget,
     surgeTargetOpenClawHeld: surgeGate.surgeTargetOpenClawHeld,
-    surgeSourceOpenClawHeld: (request: { migrationId: string; slug: string }) => builderSourceOpenClawHeld(builderProcessGate, request),
+    surgeSourceOpenClawHeld: (request: { migrationId: string; slug: string }) => userSourceOpenClawHeld(userProcessGate, request),
     surgeTargetLive: surgeGate.surgeTargetLive,
     admitLiveSurgeTarget: surgeGate.admitLiveSurgeTarget,
     liveSurgeTargetAssigned: surgeGate.liveSurgeTargetAssigned,
@@ -2753,9 +2753,9 @@ export async function startFleetController(
   registerMigrationRoutes(app, migrationDeps, {
     publicKey: opts.publicKey,
     gatewayId: opts.gatewayId,
-    configuredBuilder: (slug) => configuredBuilderSlug(wrappedAdapter) === slug,
-    processGate: builderProcessGate ?? undefined,
-    unreserveConfiguredBuilderTarget: surgeGate.unreserveSurgeTarget,
+    configuredBuilder: (slug) => configuredUserSlug(wrappedAdapter) === slug,
+    processGate: userProcessGate ?? undefined,
+    unreserveConfiguredIsolatedTarget: surgeGate.unreserveSurgeTarget,
     waitForActiveProvisioningDrain: runtime.waitForProvisioningDrain,
     log: opts.log,
   });

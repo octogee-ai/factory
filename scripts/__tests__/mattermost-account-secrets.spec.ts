@@ -49,13 +49,13 @@ describe("Mattermost account SecretRefs", () => {
     const openclawDir = tempOpenClawDir();
 
     await updateMattermostAccountSecrets(openclawDir, {
-      set: { "ceckert-coach": "coach-pat" },
+      set: { "ceckert-coach": "default-agent-pat" },
     });
 
     const secretPath = mattermostAccountSecretsPath(openclawDir);
     expect(secretPath).not.toContain("system_config");
     expect(JSON.parse(fs.readFileSync(secretPath, "utf8"))).toEqual({
-      "ceckert-coach": "coach-pat",
+      "ceckert-coach": "default-agent-pat",
     });
     expect(fs.statSync(secretPath).mode & 0o777).toBe(0o600);
     expect(fs.readdirSync(path.dirname(secretPath))).toEqual(["mattermost-accounts.json"]);
@@ -142,7 +142,7 @@ describe("Mattermost account SecretRefs", () => {
     await expect(readMattermostAccountSecret(openclawDir, "bob-coach")).resolves.toBe("pat-b");
   });
 
-  it("prunes a Builder's stale project tokens before setting its current active tokens", async () => {
+  it("prunes a user's stale project tokens before setting its current active tokens", async () => {
     const openclawDir = tempOpenClawDir();
     await updateMattermostAccountSecrets(openclawDir, {
       set: {

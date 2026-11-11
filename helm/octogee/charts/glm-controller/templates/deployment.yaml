@@ -133,9 +133,9 @@ spec:
                   name: octogee-fleet-controller
                   key: private-key
             # Gitea + Mattermost admin credentials for cloud-side
-            # customer cleanup (deprovision-customer op handler). Same
+            # user cleanup (deprovision-customer op handler). Same
             # secrets the gateway pod uses; glm-controller now needs
-            # them too because customer lifecycle moved off the gateway.
+            # them too because user lifecycle moved off the gateway.
             - name: GIT_API_URL
               value: {{ .Values.env.gitApiUrl | default (printf "http://octogee-gitea-http.%s.svc.cluster.local:3000/api/v1" .Release.Namespace) | quote }}
             - name: GIT_ORG
@@ -186,7 +186,7 @@ spec:
             # The umbrella's gateway-fleet.yaml renders Service +
             # BackendConfig + Ingress paths off the same value, so a
             # change updates both consumers atomically (no drift between
-            # what the LB targets and what Cowboy writes). Parentheses
+            # what the LB targets and what the fleet controller writes). Parentheses
             # around `.Values.global` guard against nil when this
             # subchart is rendered standalone (helm-glm-controller test
             # cases don't merge umbrella values).
@@ -198,7 +198,7 @@ spec:
               value: {{ .Values.ingress.apiHost | default "" | quote }}
             - name: PREVIEW_INGRESS_HOST
               value: {{ .Values.ingress.previewHost | default "" | quote }}
-            # The static base routing table Cowboy merges with per-gateway paths;
+            # The static base routing table the fleet controller merges with per-gateway paths;
             # published by the umbrella's edge-routes-configmap.yaml.
             - name: EDGE_ROUTES_CONFIGMAP
               value: "octogee-edge-routes"
@@ -209,7 +209,7 @@ spec:
             # Without this env, the request 500s with "GATEWAY_SERVICE_
             # ACCOUNT not configured — admin cannot provision gateway
             # auth-token secret". This is the gateway-POD consumer GSA
-            # (octogee-gateway), NOT Cowboy's own gcpServiceAccount — the
+            # (octogee-gateway), NOT the fleet controller's own gcpServiceAccount — the
             # token secret must be readable by the gateway pod, and must
             # never be bound to the control-plane identity.
             - name: GATEWAY_SERVICE_ACCOUNT
@@ -251,7 +251,7 @@ spec:
           # A reconcile pass holds the event loop for seconds at a time — a full
           # convergence over the shared pool has been measured near 12s — so
           # /healthz cannot answer inside kubelet's 1s default. At that default
-          # the liveness probe killed Cowboy mid-reconcile every few minutes,
+          # the liveness probe killed the fleet controller mid-reconcile every few minutes,
           # abandoning whatever operation it had claimed: that is how a rollout
           # sat "running" with no worker while migrations queued behind it.
           startupProbe:

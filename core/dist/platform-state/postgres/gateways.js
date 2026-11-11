@@ -107,7 +107,7 @@ function allocationColumns(gatewayId, allocation) {
     }
     const value = allocation;
     if (value.kind !== ALLOCATION_KIND || value.schemaVersion !== ALLOCATION_SCHEMA_VERSION) {
-        throw new MalformedRecordError(rootKey(gatewayId), `allocation ${JSON.stringify(allocation)} is not a disposable Builder allocation`);
+        throw new MalformedRecordError(rootKey(gatewayId), `allocation ${JSON.stringify(allocation)} is not a disposable isolated allocation`);
     }
     return { allocationLeaseId: value.leaseId, allocationGeneration: value.generation, allocationClaimedByUid: value.claimedByUid };
 }

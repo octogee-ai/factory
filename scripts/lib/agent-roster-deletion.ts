@@ -19,7 +19,7 @@ export interface DeleteRosterAgentsOptions {
 
 const AGENT_DELETE_PROGRESS_INTERVAL_MS = 15_000;
 
-export function customerAgentIdsInRoster(current: unknown, slug: string): string[] {
+export function userAgentIdsInRoster(current: unknown, slug: string): string[] {
   return agentIdsFromConfig(current).filter((agentId) => agentIdBelongsToSlug(agentId, slug));
 }
 
@@ -32,7 +32,7 @@ export function schedulerHandoffAgentIds(
   const handedOver = partialHandoff
     ? localAgentIds.filter((agentId) => agentIdBelongsToSlug(agentId, slug))
     : localAgentIds;
-  return [...new Set([...handedOver, ...customerAgentIdsInRoster(current, slug)])].sort();
+  return [...new Set([...handedOver, ...userAgentIdsInRoster(current, slug)])].sort();
 }
 
 async function removeRosterAgent(opts: DeleteRosterAgentsOptions, agentId: string) {

@@ -2,12 +2,12 @@ import { Router, Request, Response, NextFunction } from "express";
 import { requireAuth } from "../middleware/auth.js";
 import { db, FieldValue } from "../lib/db.js";
 import { platformStateStore } from "../lib/platform-state.js";
-import { syncCoachIdentity } from "../lib/coach-identity.js";
+import { syncDefaultAgentIdentity } from "../lib/default-agent-identity.js";
 
 const router = Router();
 
-const ALLOWED_COACH_PATCH_FIELDS = ["name", "persona"] as const;
-type CoachPatchField = (typeof ALLOWED_COACH_PATCH_FIELDS)[number];
+const ALLOWED_DEFAULT_AGENT_PATCH_FIELDS = ["name", "persona"] as const;
+type DefaultAgentPatchField = (typeof ALLOWED_DEFAULT_AGENT_PATCH_FIELDS)[number];
 
 interface RouteError {
   status: number;
@@ -26,10 +26,10 @@ function sendRouteError(res: Response, error: RouteError): void {
   res.status(error.status).json(error.body);
 }
 
-function coachPatchFromBody(body: unknown): Partial<Record<CoachPatchField, string>> {
+function defaultAgentPatchFromBody(body: unknown): Partial<Record<DefaultAgentPatchField, string>> {
   const source = (body ?? {}) as Record<string, unknown>;
-  const patch: Partial<Record<CoachPatchField, string>> = {};
-  for (const key of ALLOWED_COACH_PATCH_FIELDS) {
+  const patch: Partial<Record<DefaultAgentPatchField, string>> = {};
+  for (const key of ALLOWED_DEFAULT_AGENT_PATCH_FIELDS) {
     const value = source[key];
     if (typeof value === "string") patch[key] = value;
   }
@@ -44,13 +44,13 @@ router.patch("/me", requireAuth, async (req: Request, res: Response, next: NextF
       return;
     }
 
-    const patch = coachPatchFromBody(req.body);
+    const patch = defaultAgentPatchFromBody(req.body);
     if (Object.keys(patch).length === 0) {
-      res.status(400).json({ error: "no_valid_fields", allowed: ALLOWED_COACH_PATCH_FIELDS });
+      res.status(400).json({ error: "no_valid_fields", allowed: ALLOWED_DEFAULT_AGENT_PATCH_FIELDS });
       return;
     }
 
-    const updated = await syncCoachIdentity(uid, patch);
+    const updated = await syncDefaultAgentIdentity(uid, patch);
 
     res.json({ ok: true, updated });
   } catch (e) { next(e); }
@@ -125,9 +125,9 @@ router.post("/activate", requireAuth, async (req: Request, res: Response, next: 
       return;
     }
 
-    const [userSnap, builder] = await Promise.all([
+    const [userSnap, user] = await Promise.all([
       db.doc(`users/${request.targetUid}`).get(),
-      platformStateStore.builders.records.get(request.targetUid),
+      platformStateStore.users.records.get(request.targetUid),
     ]);
     if (!userSnap.exists) {
       res.status(404).json({ error: "user_not_found", uid: request.targetUid });
@@ -142,7 +142,7 @@ router.post("/activate", requireAuth, async (req: Request, res: Response, next: 
       return;
     }
 
-    if (builder?.agents.activatedAgents.includes(request.role)) {
+    if (user?.agents.activatedAgents.includes(request.role)) {
       res.json({ status: "already_active", role: request.role });
       return;
     }

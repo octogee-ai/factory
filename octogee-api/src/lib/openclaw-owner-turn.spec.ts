@@ -6,7 +6,7 @@ import {
   createAgentSupportTurnVerifier,
   createOwnerWorkspaceTurnVerifier,
   createProjectWorkspaceTurnVerifier,
-  type OwnerTurnBuilder,
+  type OwnerTurnUser,
 } from "./openclaw-owner-turn.js";
 
 const OWNER = "uid-eggman";
@@ -36,7 +36,7 @@ const activeWorkspace = { id: "eggman", ownerUid: OWNER, ownerActive: true };
 function turn(overrides: Partial<{
   agentId: string;
   ownerUid: string;
-  owner: OwnerTurnBuilder;
+  owner: OwnerTurnUser;
 }> = {}) {
   return {
     req: { body: {} } as Request,
@@ -50,7 +50,7 @@ function turn(overrides: Partial<{
 const projectAgent = "octogee-eggman-proj-orbit-coach";
 
 describe("createOwnerWorkspaceTurnVerifier", () => {
-  it("allows the workspace coach without any originating Mattermost turn", async () => {
+  it("allows the workspace agent without any originating Mattermost turn", async () => {
     const verify = createOwnerWorkspaceTurnVerifier(turnStore({ workspace: activeWorkspace }));
 
     await expect(verify(turn())).resolves.toBe(true);
@@ -66,7 +66,7 @@ describe("createOwnerWorkspaceTurnVerifier", () => {
     await expect(verify(turn())).resolves.toBe(false);
   });
 
-  it("refuses a coach of a workspace the calling gateway is not serving", async () => {
+  it("refuses a agent of a workspace the calling gateway is not serving", async () => {
     const verify = createOwnerWorkspaceTurnVerifier(turnStore({ workspace: activeWorkspace }));
 
     await expect(verify(turn({ owner: { workspaceId: "tails", mattermostUserId: null } }))).resolves.toBe(false);
@@ -110,7 +110,7 @@ describe("createProjectWorkspaceTurnVerifier", () => {
     await expect(verify(turn({ agentId: projectAgent }))).resolves.toBe(false);
   });
 
-  it("refuses the workspace coach", async () => {
+  it("refuses the workspace agent", async () => {
     const verify = createProjectWorkspaceTurnVerifier(
       turnStore({ workspace: activeWorkspace, project: runnableProject() }),
     );
@@ -126,11 +126,11 @@ describe("createAgentSupportTurnVerifier", () => {
     await expect(createAgentSupportTurnVerifier(store)(turn({ agentId: projectAgent }))).resolves.toBe(true);
   });
 
-  it("verifies a workspace coach through the owner lane", async () => {
+  it("verifies a workspace agent through the owner lane", async () => {
     await expect(createAgentSupportTurnVerifier(store)(turn())).resolves.toBe(true);
   });
 
-  it("refuses an identity that is neither a coach nor a project agent", async () => {
+  it("refuses an identity that is neither a agent nor a project agent", async () => {
     await expect(createAgentSupportTurnVerifier(store)(turn({ agentId: "some-other-agent" }))).resolves.toBe(false);
   });
 });

@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import {
-  builderGatewayServiceAccountName,
+  isolatedGatewayServiceAccountName,
   resolveGatewayClass,
   resolveGatewayImageProfile,
-  resolveBuilderGatewayAccess,
+  resolveIsolatedGatewayAccess,
   GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME,
   type HelmInstanceValue,
 } from "@octogee/shared/types/glm";
@@ -19,18 +19,18 @@ import { withoutGatewayWorkloadIdentity } from "./gateway-service-account-policy
 // ONE stable-name Helm release; a roll is a desiredRelease write that surfaces
 // here as image drift and applies in place (the chart's surge strategy replaces
 // the pod). No revisions or durable roll state machine; readiness opens only
-// after the surge customer handoff converges.
+// after the surge user handoff converges.
 
 export type DurableGateway = GatewayDoc & GatewayMutableConfig;
 
-export function cowboyMayMarkGatewayLive(
+export function fleetControllerMayMarkGatewayLive(
   gateway: GatewayDoc | null,
   desiredRelease: number,
 ): boolean {
   return gateway !== null && gateway.desiredRelease === desiredRelease;
 }
 
-export function requiresSurgeCustomerMigration(gateway: DurableGateway): boolean {
+export function requiresSurgeUserMigration(gateway: DurableGateway): boolean {
   return (gateway.desiredStatus === "running" || gateway.desiredStatus === "draining") &&
     gateway.liveRelease !== null &&
     gateway.liveRelease !== gateway.desiredRelease;
@@ -82,7 +82,7 @@ export function gatewayImageFor(
   const image = gatewayImageIn(gateway, artifact);
   if (!image) {
     throw new Error(
-      `gateway ${gateway.gatewayId} release is missing its immutable Builder gateway image reference`,
+      `gateway ${gateway.gatewayId} release is missing its immutable isolated gateway image reference`,
     );
   }
   return image;
@@ -313,7 +313,7 @@ export function gatewayUpsertOptsFromRelease(input: {
     serviceAccountName: gatewayServiceAccountName(gateway),
     serviceAccount: withoutGatewayWorkloadIdentity(gateway.serviceAccount),
     gatewayContainerSecurityContext: gateway.gatewayContainerSecurityContext ?? undefined,
-    builderAccess: gatewayBuilderAccess(gateway, gatewayClass),
+    builderAccess: gatewayIsolatedAccess(gateway, gatewayClass),
     chartPath: input.chartPath,
     valuesFile: input.valuesFile,
     chartFingerprint: input.chartFingerprint,
@@ -340,15 +340,15 @@ function gatewayServiceAccountName(gateway: DurableGateway): string {
   const configured = gateway.serviceAccountName;
   return configured && configured !== GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME
     ? configured
-    : builderGatewayServiceAccountName(gateway.gatewayId);
+    : isolatedGatewayServiceAccountName(gateway.gatewayId);
 }
 
-function gatewayBuilderAccess(
+function gatewayIsolatedAccess(
   gateway: DurableGateway,
   gatewayClass: "shared" | "builder",
 ): HelmInstanceValue["builderAccess"] | undefined {
   if (gatewayClass === "shared") return gateway.builderAccess ?? undefined;
-  return resolveBuilderGatewayAccess(gateway.ownerUid, gateway.builderAccess ?? undefined);
+  return resolveIsolatedGatewayAccess(gateway.ownerUid, gateway.builderAccess ?? undefined);
 }
 
 function provisioningRuntimeObservations(
@@ -403,7 +403,7 @@ export function provisioningRuntimeDoc(input: {
       deploymentName: `octogee-gateway-${gateway.gatewayId}`,
       gatewayServiceName: `octogee-gateway-${gateway.gatewayId}`,
       gatewayEdgeServiceName: `gateway-edge-${gateway.gatewayId}`,
-      serviceAccountName: builderGatewayServiceAccountName(gateway.gatewayId),
+      serviceAccountName: isolatedGatewayServiceAccountName(gateway.gatewayId),
       imageRepository: gatewayImage.imageRepository,
       imageTag: gatewayImage.imageTag,
       replicas: gateway.desiredStatus === "paused" ? 0 : 1,

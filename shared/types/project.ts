@@ -114,7 +114,7 @@ pendingVisibility?: ProjectVisibility | null;
   giteaRepoName: string | null;
   repoSource?: ProjectRepoSource | null;
 
-/** Owner-controlled: should this project be checked out on the Builder's gateway?
+/** Owner-controlled: should this project be checked out on the user's gateway?
  *  Distinct from provisioningState, which is the server's record of what provisioning
  *  did. A repo the gateway cannot reach (a GitHub project on a shared pod) is turned
  *  off here rather than misreported as a provisioning failure. Absent means enabled. */
@@ -134,5 +134,5 @@ canvasFile: string;
   updatedAt: unknown; 
 }
 
-export const PROJECT_COACH_WORKSPACE_PARTS = [".system", "project-coaches"] as const;
-export const PROJECT_COACH_REPO = "project_coaches";
+export const PROJECT_AGENT_WORKSPACE_PARTS = [".system", "project-coaches"] as const;
+export const PROJECT_AGENT_REPO = "project_coaches";

@@ -160,7 +160,7 @@ describe("gatewayDeviceAuthClient — uses the local fleet controller", () => {
   const realFetch = globalThis.fetch;
   beforeEach(() => {
     process.env.INTERNAL_SERVICE_KEY = "k";
-    vi.stubEnv("GATEWAY_ID", "bender");
+    vi.stubEnv("GATEWAY_ID", "walter");
     vi.stubEnv("FLEET_CONTROLLER_PORT", "");
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
   });
@@ -176,7 +176,7 @@ describe("gatewayDeviceAuthClient — uses the local fleet controller", () => {
       seen.push(String(url));
       return { ok: true, json: async () => ({ flowId: "f" }) } as any;
     }) as any;
-    await gatewayDeviceAuthClient().start({ gatewayId: "bender", agentId: "octogee-x-coach" });
+    await gatewayDeviceAuthClient().start({ gatewayId: "walter", agentId: "octogee-x-coach" });
     expect(seen[0]).toBe(
       "http://127.0.0.1:3003/internal/byosub/device-auth/start",
     );
@@ -189,7 +189,7 @@ describe("gatewayDeviceAuthClient — uses the local fleet controller", () => {
       seen.push(String(url));
       return { ok: true, json: async () => ({ state: "x" }) } as any;
     }) as any;
-    await gatewayDeviceAuthClient().status({ gatewayId: "bender", flowId: "f1" });
+    await gatewayDeviceAuthClient().status({ gatewayId: "walter", flowId: "f1" });
     expect(seen[0]).toBe(
       "http://127.0.0.1:9009/internal/byosub/device-auth/status/f1",
     );
@@ -199,7 +199,7 @@ describe("gatewayDeviceAuthClient — uses the local fleet controller", () => {
     vi.stubEnv("GATEWAY_ID", localGatewayId);
     globalThis.fetch = vi.fn();
     await expect(
-      gatewayDeviceAuthClient().start({ gatewayId: "bender", agentId: "a" }),
+      gatewayDeviceAuthClient().start({ gatewayId: "walter", agentId: "a" }),
     ).rejects.toThrow("Subscription auth must run on the assigned gateway");
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
@@ -211,7 +211,7 @@ describe("gatewayDeviceAuthClient — uses the local fleet controller", () => {
       text: async () => "bad gateway",
     })) as any;
     await expect(
-      gatewayDeviceAuthClient().start({ gatewayId: "bender", agentId: "a" }),
+      gatewayDeviceAuthClient().start({ gatewayId: "walter", agentId: "a" }),
     ).rejects.toThrow(/502/);
   });
 });
@@ -220,7 +220,7 @@ describe("gatewayClaudeSsoClient — uses the local fleet controller", () => {
   const realFetch = globalThis.fetch;
   beforeEach(() => {
     process.env.INTERNAL_SERVICE_KEY = "k";
-    vi.stubEnv("GATEWAY_ID", "bender");
+    vi.stubEnv("GATEWAY_ID", "walter");
     vi.stubEnv("FLEET_CONTROLLER_PORT", "");
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
   });
@@ -237,7 +237,7 @@ describe("gatewayClaudeSsoClient — uses the local fleet controller", () => {
       return { ok: true, json: async () => ({ flowId: "f" }) } as any;
     }) as any;
     await gatewayClaudeSsoClient().start({
-      gatewayId: "bender",
+      gatewayId: "walter",
       agentId: "octogee-x-coach",
     });
     expect(seen[0]).toBe(
@@ -250,7 +250,7 @@ describe("gatewayClaudeSsoClient — uses the local fleet controller", () => {
     globalThis.fetch = vi.fn(async () => ({
       ok: true, json: async () => ({ state: "pending" }),
     })) as any;
-    await gatewayClaudeSsoClient().status({ gatewayId: "bender", flowId: "f1" });
+    await gatewayClaudeSsoClient().status({ gatewayId: "walter", flowId: "f1" });
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://127.0.0.1:9009/internal/byosub/claude-sso/status/f1",
       expect.anything(),
@@ -266,7 +266,7 @@ describe("gatewayClaudeSsoClient — uses the local fleet controller", () => {
       return { ok: true, json: async () => ({ flowId: "f" }) } as any;
     }) as any;
     await gatewayClaudeSsoClient().start({
-      gatewayId: "bender",
+      gatewayId: "walter",
       agentId: "octogee-x-coach",
     });
     expect(seen).toEqual(["gateway-token"]);
@@ -279,7 +279,7 @@ describe("gatewayClaudeSsoClient — uses the local fleet controller", () => {
       return { ok: true, json: async () => ({ state: "submitting" }) } as any;
     }) as any;
     await gatewayClaudeSsoClient().submit({
-      gatewayId: "bender",
+      gatewayId: "walter",
       flowId: "flow-1",
       code: "code#state",
     });
@@ -329,8 +329,8 @@ describe("byosubConnectionView — provider-set connection status", () => {
 describe("isSafeGatewayId (Copilot #992 — Firestore doc-id safety; clean 400 not 500)", () => {
   it("accepts real slug-like gateway ids", () => {
     expect(isSafeGatewayId("default")).toBe(true);
-    expect(isSafeGatewayId("bender")).toBe(true);
-    expect(isSafeGatewayId("bender-echo")).toBe(true);
+    expect(isSafeGatewayId("walter")).toBe(true);
+    expect(isSafeGatewayId("walter-echo")).toBe(true);
   });
   it("rejects path-traversal / empty / overlong / non-string (would throw in .doc())", () => {
     expect(isSafeGatewayId("gw/evil")).toBe(false);

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { isBuilderReturnOperationIdFor } from "@octogee/core/builder-activation-lease";
+import { isUserReturnOperationIdFor } from "@octogee/core/user-activation-lease";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { MigrationTransferTask, PlatformStateStore, PlatformStateTransaction, Stored } from "@octogee/core/platform-state";
 import type { CommandRunner } from "./migration-rsync-transfer.js";
@@ -110,7 +110,7 @@ function isTerminalReturnTransfer(task: MigrationTransferTask, input: TransferSc
 async function retiredReturnTransfer(tx: PlatformStateTransaction, input: TransferScope, task: MigrationTransferTask): Promise<boolean> {
   const { sourceGatewayId: source, targetGatewayId: retired } = task;
   const operationId = input.migrationId.slice(4);
-  if (!input.migrationId.startsWith("mig-") || !isBuilderReturnOperationIdFor(operationId, source) ||
+  if (!input.migrationId.startsWith("mig-") || !isUserReturnOperationIdFor(operationId, source) ||
       ![retired, input.gatewayId].every(id => /^shared-[a-z0-9]+$/.test(id)) || !isTerminalReturnTransfer(task, input)) return false;
   const { completedAt } = task;
   const op = await tx.journal.operations.get(operationId);

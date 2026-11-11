@@ -4,7 +4,7 @@ import { isValidUsername } from "@octogee/shared/types/identity";
 import type { SchedulerMigrationResult } from "@octogee/shared/types/fleet-controller";
 import { surgeSchedulerOperationId } from "./surge-scheduler-handoff.js";
 import { isSurgeSchedulerAlreadyResumed } from "./surge-scheduler-receipt.js";
-import type { SurgeAssignment, SurgeCustomerHandoffDeps, SurgePod, SurgePodHealth, SurgePodSnapshot } from "./surge-customer-handoff.js";
+import type { SurgeAssignment, SurgeUserHandoffDeps, SurgePod, SurgePodHealth, SurgePodSnapshot } from "./surge-user-handoff.js";
 
 export interface SurgeSchedulerSourceRecoveryInput {
   gatewayId: string;
@@ -20,7 +20,7 @@ export interface SurgeSchedulerSourceRecoveryProof extends SurgeSchedulerSourceR
   observationFingerprint: string;
 }
 
-type RecoveryDeps = Pick<SurgeCustomerHandoffDeps, "readAssignments" | "listPods" | "readPodHealth" | "scheduler">;
+type RecoveryDeps = Pick<SurgeUserHandoffDeps, "readAssignments" | "listPods" | "readPodHealth" | "scheduler">;
 const POD_UID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 function formerTargetUid({ gatewayId, assignment }: SurgeSchedulerSourceRecoveryInput): string {

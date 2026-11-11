@@ -66,7 +66,7 @@ describe("same-channel Activity binding registry", () => {
     })).resolves.toMatchObject({
       runId: "run-1",
       mainChannelId: "channel-1",
-      coachMmUserId: AGENT_MM_USER_ID,
+      defaultAgentMmUserId: AGENT_MM_USER_ID,
       coachToken: "pat-1",
     });
   });
@@ -234,7 +234,7 @@ describe("same-channel Activity binding registry", () => {
       agentId: childAgentId,
       sessionKey: childRef.sessionKey,
       requesterSessionKey,
-      coachMmUserId: AGENT_MM_USER_ID,
+      defaultAgentMmUserId: AGENT_MM_USER_ID,
       coachToken: "pat-1",
     });
     expect(resolveAgentIdentity).toHaveBeenCalledWith(ref.agentId);
@@ -263,13 +263,13 @@ describe("same-channel Activity binding registry", () => {
     await expect(registry.resolve(childRef("child-1", "direct-parent-1", "researcher")))
       .resolves.toMatchObject({
         agentId: "researcher",
-        coachMmUserId: AGENT_MM_USER_ID,
+        defaultAgentMmUserId: AGENT_MM_USER_ID,
         coachToken: "pat-1",
       });
     await expect(registry.resolve(childRef("grandchild-1", "child-1", "writer")))
       .resolves.toMatchObject({
         agentId: "writer",
-        coachMmUserId: AGENT_MM_USER_ID,
+        defaultAgentMmUserId: AGENT_MM_USER_ID,
         coachToken: "pat-1",
       });
 
@@ -320,7 +320,7 @@ describe("same-channel Activity binding registry", () => {
     await expect(readMattermostChannelCreateAt({
       baseUrl: "https://mattermost.test",
       channelId: "channel-1",
-      token: "coach-pat",
+      token: "default-agent-pat",
       expectedTeamId: "",
       expectedName: `${AGENT_MM_USER_ID}__${OWNER_MM_USER_ID}`,
       expectedType: "D",
@@ -349,7 +349,7 @@ describe("same-channel Activity binding registry", () => {
     await expect(readMattermostChannelCreateAt({
       baseUrl: "https://mattermost.test",
       channelId: "channel-1",
-      token: "coach-pat",
+      token: "default-agent-pat",
       expectedTeamId: "",
       expectedName: `${AGENT_MM_USER_ID}__${OWNER_MM_USER_ID}`,
       expectedType: "D",

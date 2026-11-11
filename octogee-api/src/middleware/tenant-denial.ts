@@ -97,7 +97,7 @@ export function createTenantDenialReporter(opts: TenantDenialReporterOptions): T
     try {
       const uid = await resolveAffectedUid(opts.store, gatewayDenial.tenant, denial.agentId);
       if (!uid) {
-        logger.warn("[tenant-enforcement] denial names no assigned Builder; inbox notification skipped", fields);
+        logger.warn("[tenant-enforcement] denial names no assigned user; inbox notification skipped", fields);
         return;
       }
       if (!opts.notifyUsers) return;

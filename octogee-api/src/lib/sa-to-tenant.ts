@@ -5,7 +5,7 @@ import {
   type Stored,
 } from "@octogee/core/platform-state";
 import { homeCheckpointOutstanding } from "@octogee/shared/types/glm";
-import { findComputerRuntimeForInstance } from "./computer-runtime-observation.js";
+import { findVmRuntimeForInstance } from "./vm-runtime-observation.js";
 import type { ReviewResult } from "./token-review.js";
 import {
   effectiveGatewayServiceAccountNameForGateway,
@@ -195,7 +195,7 @@ export async function mapComputeInstanceToTenant(
   identity: ComputeInstanceTenantIdentity,
 ): Promise<SaToTenantResult> {
   if (!identity.instanceId) return { attached: false, result: "malformed_sa" };
-  const runtime = await findComputerRuntimeForInstance(store, identity.instanceId);
+  const runtime = await findVmRuntimeForInstance(store, identity.instanceId);
   if (!runtime) return { attached: false, result: "unknown_tenant" };
   const authorization = await readGatewayAuthorizationInStore(store, runtime.gatewayId);
   if (!authorization) return { attached: false, result: "unknown_tenant" };

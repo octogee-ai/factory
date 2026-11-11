@@ -1,4 +1,4 @@
-import { isBuilderReturnOperationIdFor } from "./builder-activation-lease.js";
+import { isUserReturnOperationIdFor } from "./user-activation-lease.js";
 
 export type RolloutLane = "cluster" | "builder-vm";
 
@@ -59,7 +59,7 @@ function nativeReturnBlocksSourceRollout(rollout: FleetOperationLockRef, returni
   const input = returning.input as { source?: unknown; toGatewayId?: unknown } | undefined;
   return source !== undefined && source === rolloutGateway && input?.source === "builder-activation-lease" &&
     typeof input.toGatewayId === "string" && input.toGatewayId.startsWith("shared-") &&
-    isBuilderReturnOperationIdFor(returning.id, source);
+    isUserReturnOperationIdFor(returning.id, source);
 }
 
 export function serialFleetOperationsConflict(
@@ -95,7 +95,7 @@ export class GatewayMigrationInFlightError extends Error {
     readonly gatewayId: string,
     readonly operationId: string,
   ) {
-    super(`customer migration is in flight for gateway ${gatewayId}`);
+    super(`user migration is in flight for gateway ${gatewayId}`);
     this.name = "GatewayMigrationInFlightError";
   }
 }

@@ -9,7 +9,7 @@ import {
   CHANNEL_NAME_MAX_LENGTH,
   projectChannelName,
   workspaceAdminChannelName,
-  workspaceCoachChannelName,
+  workspaceDefaultAgentChannelName,
   workspaceCustomChannelName,
   workspaceGeneralChannelName,
 } from "@octogee/shared/types/identity";
@@ -346,7 +346,7 @@ async function expectedBinding(channelDocPath: string): Promise<ExpectedBinding>
 
 function workspacePrimaryName(workspaceId: string, channelId: string): string {
   if (channelId === "general") return workspaceGeneralChannelName(workspaceId);
-  if (channelId === "coach-dm") return workspaceCoachChannelName(workspaceId);
+  if (channelId === "coach-dm") return workspaceDefaultAgentChannelName(workspaceId);
   if (channelId === "admin") return workspaceAdminChannelName(workspaceId);
   return workspaceCustomChannelName(workspaceId, channelId);
 }

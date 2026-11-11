@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  CUSTOMER_WORKFLOW_TOOLS,
+  USER_WORKFLOW_TOOLS,
   reconcilePlatformProjections,
   PROJECT_AGENT_ALLOWED_TOOLS,
   PlatformInvariantPolicyError,
@@ -9,20 +9,20 @@ import {
   platformInvariantTable,
   platformInvariantViolations,
   reconcilePlatformInvariants,
-  CUSTOMER_CODE_DENIED_TOOLS,
+  USER_CODE_DENIED_TOOLS,
 } from "./system-config-invariants.js";
 import { openClawOperatorRoles } from "@octogee/shared/types/openclaw-proxy-identity";
 
-const builder = {
+const user = {
   gatewayClass: "builder" as const,
-  gatewayId: "bender",
+  gatewayId: "walter",
   apiOrigin: "https://api.octogee.com",
 };
 
-const barn = { gatewayClass: "shared" as const };
+const sharedGateway = { gatewayClass: "shared" as const };
 
 describe("system config platform invariants", () => {
-  it.each([barn, builder])("marks platform-authored Workshop policy as current for $gatewayClass", (context) => {
+  it.each([sharedGateway, user])("marks platform-authored Workshop policy as current for $gatewayClass", (context) => {
     const config = { meta: { migrations: { unrelated: true } } };
     reconcilePlatformInvariants(config, context);
     expect(config.meta.migrations).toEqual({ unrelated: true, skillWorkshopPlugin: true });
@@ -30,7 +30,7 @@ describe("system config platform invariants", () => {
   });
 
   it("pins authless broker declarations while retaining unrelated providers and endpoint-unaware callers", () => {
-    const context = { ...barn, brokerProviderEnv: { OPENROUTER_BASE_URL: "https://broker.example/openrouter" } };
+    const context = { ...sharedGateway, brokerProviderEnv: { OPENROUTER_BASE_URL: "https://broker.example/openrouter" } };
     const config: { models: { providers: Record<string, unknown> } } = { models: { providers: {
       "platform-openrouter": { apiKey: "foreign-key", headers: { authorization: "foreign" }, models: [{ id: "foreign" }] },
       "platform-openai": { baseUrl: "https://retired.example", models: [] },
@@ -42,11 +42,11 @@ describe("system config platform invariants", () => {
     expect(config.models.providers.local).toEqual({ baseUrl: "http://localhost:8000", models: [] });
     expect(platformInvariantViolations(config, context)).toEqual([]);
     expect(reconcilePlatformInvariants(config, context).changedPaths).toEqual([]);
-    reconcilePlatformInvariants(config, barn);
+    reconcilePlatformInvariants(config, sharedGateway);
     expect(config.models.providers["platform-openrouter"]).toEqual({ baseUrl: "https://broker.example/openrouter", models: [] });
   });
 
-  it("restores coach automations through reconciliation while project agents and host execution remain restricted", () => {
+  it("restores agent automations through reconciliation while project agents and host execution remain restricted", () => {
     const config = {
       tools: { deny: ["automations"] },
       agents: {
@@ -56,30 +56,30 @@ describe("system config platform invariants", () => {
         },
       },
     };
-    reconcilePlatformInvariants(config, barn);
-    const coach = config.agents.entries["octogee-sep091-coach"].tools as Record<string, unknown>;
+    reconcilePlatformInvariants(config, sharedGateway);
+    const defaultAgent = config.agents.entries["octogee-sep091-coach"].tools as Record<string, unknown>;
     const project = config.agents.entries["octogee-sep091-proj-garden-coach"].tools as Record<string, unknown>;
     expect(config.tools.deny).not.toContain("automations");
-    expect(coach.deny).not.toContain("automations");
-    expect(coach.alsoAllow).toContain("automations");
+    expect(defaultAgent.deny).not.toContain("automations");
+    expect(defaultAgent.alsoAllow).toContain("automations");
     expect(project.deny).toContain("automations");
     expect(project.alsoAllow).toContain("octogee_chat_set_identity");
     expect(project.deny).not.toContain("octogee_chat_set_identity");
-    expect(coach.alsoAllow).toContain("octogee_project_delegate");
+    expect(defaultAgent.alsoAllow).toContain("octogee_project_delegate");
     expect(project.alsoAllow).not.toContain("automations");
-    expect(coach.deny).toEqual(expect.arrayContaining(["exec", "process", "terminal"]));
+    expect(defaultAgent.deny).toEqual(expect.arrayContaining(["exec", "process", "terminal"]));
     expect(config).toHaveProperty("cron.triggers.enabled", false);
-    expect(platformInvariantViolations(config, barn)).toEqual([]);
-    expect(reconcilePlatformInvariants(config, barn).changedPaths).toEqual([]);
+    expect(platformInvariantViolations(config, sharedGateway)).toEqual([]);
+    expect(reconcilePlatformInvariants(config, sharedGateway).changedPaths).toEqual([]);
   });
 
   it.each([
-    ["Barn", barn],
-    ["Builder", builder],
+    ["Shared gateway", sharedGateway],
+    ["User", user],
   ] as const)("keeps the %s voice relay enabled while disabling Mattermost activity publishing", (_name, context) => {
     const config: Record<string, unknown> = {
       plugins: {
-        allow: ["customer-plugin"],
+        allow: ["user-plugin"],
         entries: {
           "octogee-activity-tools": {
             enabled: false,
@@ -115,11 +115,11 @@ describe("system config platform invariants", () => {
     expect(platformInvariantViolations(config, context)).toEqual([]);
   });
 
-  it("pins native voice broker wiring while preserving Builder voice choices and opt-outs", () => {
-    const context = { ...builder, controlIdentity: "per-user" as const, ownerUid: "owner", workspaceSlug: "alice" };
+  it("pins native voice broker wiring while preserving user voice choices and opt-outs", () => {
+    const context = { ...user, controlIdentity: "per-user" as const, ownerUid: "owner", workspaceSlug: "alice" };
     const config = {
       plugins: { entries: { "octogee-voice-tools": { enabled: false, config: {
-        brokerUrl: "http://127.0.0.1:9999", tokenPath: "/home/node/customer-file",
+        brokerUrl: "http://127.0.0.1:9999", tokenPath: "/home/node/user-file",
       } } } },
       talk: { realtime: { provider: "google", providers: { google: { voice: "custom-voice" } } } },
     };
@@ -139,7 +139,7 @@ describe("system config platform invariants", () => {
     expect(reconcilePlatformInvariants(config, context).changedPaths).toEqual([]);
   });
 
-  it.each([barn, builder])("does not install native voice on gateways without per-user control identity", (context) => {
+  it.each([sharedGateway, user])("does not install native voice on gateways without per-user control identity", (context) => {
     const config: Record<string, unknown> = {};
     reconcilePlatformInvariants(config, context);
     expect(config).not.toHaveProperty("plugins.entries.octogee-voice-tools");
@@ -148,17 +148,17 @@ describe("system config platform invariants", () => {
   it("removes restored retired computer plugin config while preserving user plugins", () => {
     const config = {
       plugins: {
-        allow: ["octogee-computer-tools", "customer-plugin"],
+        allow: ["octogee-computer-tools", "user-plugin"],
         entries: {
           "octogee-computer-tools": { enabled: true },
-          "customer-plugin": { enabled: true },
+          "user-plugin": { enabled: true },
         },
       },
     };
-    reconcilePlatformInvariants(config, builder);
+    reconcilePlatformInvariants(config, user);
     expect(config.plugins.allow).not.toContain("octogee-computer-tools");
     expect(config.plugins.entries).not.toHaveProperty("octogee-computer-tools");
-    expect(config.plugins.entries["customer-plugin"]).toEqual({ enabled: true });
+    expect(config.plugins.entries["user-plugin"]).toEqual({ enabled: true });
   });
 
   it("strips config keys OpenClaw retired instead of stamping them back", () => {
@@ -167,35 +167,35 @@ describe("system config platform invariants", () => {
       logging: { redactSensitive: "tools" },
     };
 
-    reconcilePlatformInvariants(config, barn);
+    reconcilePlatformInvariants(config, sharedGateway);
 
     const gateway = config.gateway as { controlUi: Record<string, unknown> };
     expect(gateway.controlUi).not.toHaveProperty("allowInsecureAuth");
     expect(config.logging as Record<string, unknown>).not.toHaveProperty("redactSensitive");
-    expect(platformInvariantViolations(config, barn)).toEqual([]);
+    expect(platformInvariantViolations(config, sharedGateway)).toEqual([]);
   });
 
-  it("lets OpenClaw retire the Builder Control UI device-auth bypass", () => {
+  it("lets OpenClaw retire the user Control UI device-auth bypass", () => {
     const config: Record<string, unknown> = {
       gateway: { controlUi: { dangerouslyDisableDeviceAuth: false } },
     };
 
-    reconcilePlatformInvariants(config, builder);
+    reconcilePlatformInvariants(config, user);
 
     const gateway = config.gateway as { controlUi: Record<string, unknown> };
     expect(gateway.controlUi).not.toHaveProperty("dangerouslyDisableDeviceAuth");
-    expect(platformInvariantViolations(config, builder)).toEqual([]);
+    expect(platformInvariantViolations(config, user)).toEqual([]);
   });
 
-  it("accepts a Builder config OpenClaw doctor already stripped the bypass from", () => {
+  it("accepts a user config OpenClaw doctor already stripped the bypass from", () => {
     const config: Record<string, unknown> = { gateway: { controlUi: {} } };
 
-    expect(platformInvariantViolations(config, builder))
+    expect(platformInvariantViolations(config, user))
       .not.toContain("gateway.controlUi.dangerouslyDisableDeviceAuth");
   });
 
-  it("switches a per-user Builder gateway to trusted-proxy auth with grants for services and the owner", () => {
-    const perUser = { ...builder, controlIdentity: "per-user" as const, ownerUid: "uid-owner", workspaceSlug: "alice" };
+  it("switches a per-user isolated gateway to trusted-proxy auth with grants for services and the owner", () => {
+    const perUser = { ...user, controlIdentity: "per-user" as const, ownerUid: "uid-owner", workspaceSlug: "alice" };
     const config: Record<string, unknown> = {
       gateway: { auth: { mode: "token", token: "leaked", identityScopes: { "x@y": ["operator.admin"] } } },
     };
@@ -234,7 +234,7 @@ describe("system config platform invariants", () => {
   });
 
   it("grants only the service identities when the owner uid is unknown", () => {
-    const perUser = { ...builder, controlIdentity: "per-user" as const };
+    const perUser = { ...user, controlIdentity: "per-user" as const };
     const config: Record<string, unknown> = {};
 
     reconcilePlatformInvariants(config, perUser);
@@ -252,36 +252,36 @@ describe("system config platform invariants", () => {
       },
     };
 
-    reconcilePlatformInvariants(config, builder);
+    reconcilePlatformInvariants(config, user);
 
     const gateway = config.gateway as Record<string, unknown>;
     expect((gateway.auth as Record<string, unknown>).mode).toBe("token");
     expect(gateway.auth).not.toHaveProperty("trustedProxy");
     expect(gateway).not.toHaveProperty("trustedProxies");
     expect(gateway).not.toHaveProperty("roles");
-    expect(platformInvariantViolations(config, builder)).toEqual([]);
+    expect(platformInvariantViolations(config, user)).toEqual([]);
   });
 
   it("never lets a shared gateway adopt per-user identity", () => {
     const config: Record<string, unknown> = { gateway: { auth: { mode: "trusted-proxy" } } };
 
-    reconcilePlatformInvariants(config, { ...barn, controlIdentity: "per-user" });
+    reconcilePlatformInvariants(config, { ...sharedGateway, controlIdentity: "per-user" });
 
     expect((config.gateway as { auth: { mode: string } }).auth.mode).toBe("token");
   });
 
-  it("reconciles Barn auth, integration, plugin, and tool policy from one typed table", () => {
+  it("reconciles shared gateway auth, integration, plugin, and tool policy from one typed table", () => {
     const config: Record<string, unknown> = {
       gateway: { port: 9000 },
-      plugins: { allow: ["customer-plugin"] },
+      plugins: { allow: ["user-plugin"] },
       tools: {
         profile: "full",
         allow: ["browser", "nodes"],
-        alsoAllow: ["browser", "customer-tool"],
+        alsoAllow: ["browser", "user-tool"],
         deny: [
           "exec",
           "process",
-          "customer-tool",
+          "user-tool",
           "workspace_commit",
           "octogee_project_commit",
           "octogee_project_build",
@@ -386,10 +386,10 @@ describe("system config platform invariants", () => {
       mcp: { servers: { attacker: { command: "sh" } } },
     };
 
-    const result = reconcilePlatformInvariants(config, barn);
+    const result = reconcilePlatformInvariants(config, sharedGateway);
 
     expect(result.changedPaths).toContain("gateway.controlUi.allowedOrigins");
-    expect(platformInvariantViolations(config, barn)).toEqual([]);
+    expect(platformInvariantViolations(config, sharedGateway)).toEqual([]);
     expect(config).toMatchObject({
       gateway: {
         port: 18789,
@@ -414,7 +414,7 @@ describe("system config platform invariants", () => {
       tools: {
         profile: "coding",
         deny: expect.arrayContaining([
-          "customer-tool",
+          "user-tool",
           "exec",
           "process",
           "subagents",
@@ -442,7 +442,7 @@ describe("system config platform invariants", () => {
         load: { watch: true },
       },
       plugins: {
-        allow: expect.arrayContaining(["customer-plugin", "octogee-chat-tools"]),
+        allow: expect.arrayContaining(["user-plugin", "octogee-chat-tools"]),
         entries: {
           codex: {
             enabled: false,
@@ -665,7 +665,7 @@ describe("system config platform invariants", () => {
     });
   });
 
-  it("keeps a Builder gateway at full power: only wiring and tenant secret providers are platform-owned", () => {
+  it("keeps a isolated gateway at full power: only wiring and tenant secret providers are platform-owned", () => {
     const config: Record<string, unknown> = {
       gateway: { terminal: { enabled: true } },
       commands: { bash: true, config: true, mcp: true, plugins: true, debug: true },
@@ -680,7 +680,7 @@ describe("system config platform invariants", () => {
         entries: {
           "discord-bridge": {
             enabled: true,
-            config: { guildId: "builder-guild", relayMentions: true },
+            config: { guildId: "user-guild", relayMentions: true },
           },
           codex: {
             enabled: true,
@@ -691,12 +691,12 @@ describe("system config platform invariants", () => {
         },
       },
       tools: {
-        deny: ["builder-tool"],
+        deny: ["isolated-tool"],
         elevated: { enabled: true },
         exec: { mode: "unrestricted" },
         fs: { workspaceOnly: false },
         sessions: { visibility: "all" },
-        subagents: { tools: { deny: ["customer-subagent-deny"] } },
+        subagents: { tools: { deny: ["user-subagent-deny"] } },
       },
       agents: {
         list: [{
@@ -705,7 +705,7 @@ describe("system config platform invariants", () => {
             profile: "full",
             allow: ["read", "discord_send", "exec"],
             alsoAllow: ["discord_admin", "exec"],
-            deny: ["builder-agent-tool"],
+            deny: ["user-agent-tool"],
             fs: { workspaceOnly: false },
           },
         }],
@@ -720,7 +720,7 @@ describe("system config platform invariants", () => {
         match: { channel: "mattermost", accountId: "*" },
       }, {
         agentId: "discord-helper",
-        match: { channel: "discord", accountId: "builder-discord" },
+        match: { channel: "discord", accountId: "user-discord" },
       }],
       channels: {
         mattermost: {
@@ -734,19 +734,19 @@ describe("system config platform invariants", () => {
         },
         discord: {
           accounts: {
-            "builder-discord": {
+            "user-discord": {
               tokenRef: {
                 source: "exec",
                 provider: "gcp-secret-manager",
-                id: "byok-bender-openai",
+                id: "byok-walter-openai",
               },
-              guildId: "builder-guild",
+              guildId: "user-guild",
             },
           },
         },
       },
     };
-    const builderOwned = structuredClone({
+    const userOwned = structuredClone({
       gateway: { terminal: config.gateway && (config.gateway as Record<string, unknown>).terminal },
       commands: config.commands,
       mcp: config.mcp,
@@ -760,7 +760,7 @@ describe("system config platform invariants", () => {
       discordBridge: ((config.plugins as Record<string, unknown>).entries as Record<string, unknown>)["discord-bridge"],
       channels: config.channels,
     });
-    (builderOwned.channels as Record<string, Record<string, Record<string, unknown>>>).mattermost.accounts = {
+    (userOwned.channels as Record<string, Record<string, Record<string, unknown>>>).mattermost.accounts = {
       "operator-coach": {
         botToken: { source: "file", provider: "octogee-mattermost", id: "/victim-coach" },
         baseUrl: "https://attacker.example",
@@ -769,44 +769,44 @@ describe("system config platform invariants", () => {
       },
     };
 
-    reconcilePlatformInvariants(config, builder);
+    reconcilePlatformInvariants(config, user);
 
-    expect(platformInvariantViolations(config, builder)).toEqual([]);
+    expect(platformInvariantViolations(config, user)).toEqual([]);
     expect(config).toMatchObject({
       gateway: {
-        terminal: builderOwned.gateway.terminal,
+        terminal: userOwned.gateway.terminal,
         controlUi: {
           allowedOrigins: ["https://api.octogee.com"],
-          basePath: "/g/bender/openclaw",
+          basePath: "/g/walter/openclaw",
         },
       },
-      commands: builderOwned.commands,
-      mcp: builderOwned.mcp,
-      cron: builderOwned.cron,
-      skills: builderOwned.skills,
-      tools: builderOwned.tools,
-      agents: builderOwned.agents,
-      bindings: builderOwned.bindings,
-      channels: builderOwned.channels,
+      commands: userOwned.commands,
+      mcp: userOwned.mcp,
+      cron: userOwned.cron,
+      skills: userOwned.skills,
+      tools: userOwned.tools,
+      agents: userOwned.agents,
+      bindings: userOwned.bindings,
+      channels: userOwned.channels,
       plugins: {
-        allow: expect.arrayContaining(builderOwned.pluginsAllow as unknown[]),
+        allow: expect.arrayContaining(userOwned.pluginsAllow as unknown[]),
         entries: {
-          codex: builderOwned.codex,
-          "discord-bridge": builderOwned.discordBridge,
+          codex: userOwned.codex,
+          "discord-bridge": userOwned.discordBridge,
         },
       },
     });
-    expect(config.tools).toEqual(builderOwned.tools);
-    expect(config.agents).toEqual(builderOwned.agents);
+    expect(config.tools).toEqual(userOwned.tools);
+    expect(config.agents).toEqual(userOwned.agents);
   });
 
   it("reports exact invariant paths through the shared typed policy error", () => {
     const config: Record<string, unknown> = {};
-    reconcilePlatformInvariants(config, builder);
+    reconcilePlatformInvariants(config, user);
     (config.gateway as Record<string, unknown>).port = 9999;
     ((config.gateway as Record<string, unknown>).controlUi as Record<string, unknown>).basePath = "/wrong";
 
-    expect(() => assertPlatformInvariants(config, builder)).toThrowError(
+    expect(() => assertPlatformInvariants(config, user)).toThrowError(
       expect.objectContaining<Partial<PlatformInvariantPolicyError>>({
         code: "platform-invariant-violation",
         paths: ["gateway.port", "gateway.controlUi.basePath"],
@@ -856,20 +856,20 @@ describe("system config platform invariants", () => {
         },
       },
     };
-    reconcilePlatformInvariants(config, builder);
+    reconcilePlatformInvariants(config, user);
     (config.gateway as Record<string, unknown>).port = 9000;
     const account = ((((config.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
       .accounts as Record<string, Record<string, unknown>>)["alice-coach"]);
     account.dmPolicy = "allowlist";
     account.allowFrom = ["a".repeat(26)];
 
-    const { changedPaths } = reconcilePlatformProjections(config, builder);
+    const { changedPaths } = reconcilePlatformProjections(config, user);
 
     expect(changedPaths).toEqual(["channels.mattermost.accounts"]);
     expect(account.dmPolicy).toBe("disabled");
     expect(account.allowFrom).toEqual(["a".repeat(26)]);
     expect((config.gateway as Record<string, unknown>).port).toBe(9000);
-    expect(platformInvariantViolations(config, builder)).toEqual(["gateway.port"]);
+    expect(platformInvariantViolations(config, user)).toEqual(["gateway.port"]);
   });
 
   it.each([undefined, "https://attacker.example", "${MM_URL}"])(
@@ -884,23 +884,23 @@ describe("system config platform invariants", () => {
         agents: { list: [{ id: "octogee-alice-coach" }] },
         channels: { mattermost: { accounts: { [accountId]: account } } },
       };
-      reconcilePlatformInvariants(config, barn);
+      reconcilePlatformInvariants(config, sharedGateway);
       if (baseUrl === undefined) delete account.baseUrl;
       else account.baseUrl = baseUrl;
 
-      expect(platformInvariantViolations(config, barn)).toEqual(
+      expect(platformInvariantViolations(config, sharedGateway)).toEqual(
         baseUrl === "${MM_URL}" ? [] : ["channels.mattermost.accounts"],
       );
-      expect(reconcilePlatformProjections(config, barn).changedPaths).toEqual(
+      expect(reconcilePlatformProjections(config, sharedGateway).changedPaths).toEqual(
         baseUrl === "${MM_URL}" ? [] : ["channels.mattermost.accounts"],
       );
       expect(account.baseUrl).toBe("${MM_URL}");
-      expect(platformInvariantViolations(config, barn)).toEqual([]);
-      expect(reconcilePlatformProjections(config, barn).changedPaths).toEqual([]);
+      expect(platformInvariantViolations(config, sharedGateway)).toEqual([]);
+      expect(reconcilePlatformProjections(config, sharedGateway).changedPaths).toEqual([]);
     },
   );
 
-  it("disables platform-agent Mattermost DMs on shared and Builder gateways alike", () => {
+  it("disables platform-agent Mattermost DMs on shared and isolated gateways alike", () => {
     const accountId = "alice-coach";
     const shared: Record<string, unknown> = {
       agents: { list: [{ id: "octogee-alice-coach" }] },
@@ -915,14 +915,14 @@ describe("system config platform invariants", () => {
         },
       },
     };
-    reconcilePlatformInvariants(shared, barn);
+    reconcilePlatformInvariants(shared, sharedGateway);
 
     const sharedAccount = ((((shared.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
       .accounts as Record<string, Record<string, unknown>>)[accountId]);
     expect(sharedAccount.dmPolicy).toBe("disabled");
     expect(sharedAccount).not.toHaveProperty("allowFrom");
 
-    const builderConfig: Record<string, unknown> = {
+    const userConfig: Record<string, unknown> = {
       agents: { list: [{ id: "octogee-alice-coach" }] },
       channels: {
         mattermost: {
@@ -935,18 +935,18 @@ describe("system config platform invariants", () => {
         },
       },
     };
-    reconcilePlatformInvariants(builderConfig, builder);
+    reconcilePlatformInvariants(userConfig, user);
 
-    const builderAccount = ((((builderConfig.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
+    const userAccount = ((((userConfig.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
       .accounts as Record<string, Record<string, unknown>>)[accountId]);
-    expect(builderAccount.dmPolicy).toBe("disabled");
-    expect(builderAccount).not.toHaveProperty("allowFrom");
-    expect(platformInvariantViolations(builderConfig, builder)).toEqual([]);
+    expect(userAccount.dmPolicy).toBe("disabled");
+    expect(userAccount).not.toHaveProperty("allowFrom");
+    expect(platformInvariantViolations(userConfig, user)).toEqual([]);
   });
 
   it.each([
-    ["strips an imported single-id allowFrom from shared", barn, false],
-    ["keeps the single-owner command and approval authority on Builder", builder, true],
+    ["strips an imported single-id allowFrom from shared", sharedGateway, false],
+    ["keeps the single-owner command and approval authority on user", user, true],
   ])("%s platform-agent accounts", (_label, context, kept) => {
     const owner = "a".repeat(26);
     const config: Record<string, unknown> = {
@@ -972,31 +972,31 @@ describe("system config platform invariants", () => {
     expect(platformInvariantViolations(config, context)).toEqual([]);
   });
 
-  it("removes paired command ownership on shared gateways but leaves Builder ownership settings alone", () => {
+  it("removes paired command ownership on shared gateways but leaves user ownership settings alone", () => {
     const ownerAllowFrom = ["a".repeat(26)];
     const shared: Record<string, unknown> = { commands: { ownerAllowFrom } };
-    reconcilePlatformInvariants(shared, barn);
+    reconcilePlatformInvariants(shared, sharedGateway);
     expect(shared.commands as Record<string, unknown>).not.toHaveProperty("ownerAllowFrom");
 
-    const builderConfig: Record<string, unknown> = { commands: { ownerAllowFrom } };
-    reconcilePlatformInvariants(builderConfig, builder);
-    expect((builderConfig.commands as Record<string, unknown>).ownerAllowFrom).toEqual(ownerAllowFrom);
-    expect(platformInvariantViolations(builderConfig, builder)).toEqual([]);
+    const userConfig: Record<string, unknown> = { commands: { ownerAllowFrom } };
+    reconcilePlatformInvariants(userConfig, user);
+    expect((userConfig.commands as Record<string, unknown>).ownerAllowFrom).toEqual(ownerAllowFrom);
+    expect(platformInvariantViolations(userConfig, user)).toEqual([]);
   });
 
-  it("disables project-agent DMs on shared and Builder gateways alike", () => {
+  it("disables project-agent DMs on shared and isolated gateways alike", () => {
     const accountId = "alice-proj-orbit";
     const shared: Record<string, unknown> = {
       agents: { list: [{ id: "octogee-alice-proj-orbit-coach" }] },
       channels: { mattermost: { accounts: { [accountId]: { allowFrom: ["a".repeat(26)] } } } },
     };
-    reconcilePlatformInvariants(shared, barn);
+    reconcilePlatformInvariants(shared, sharedGateway);
     const sharedAccount = ((((shared.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
       .accounts as Record<string, Record<string, unknown>>)[accountId]);
     expect(sharedAccount.dmPolicy).toBe("disabled");
     expect(sharedAccount).not.toHaveProperty("allowFrom");
 
-    const builderConfig: Record<string, unknown> = {
+    const userConfig: Record<string, unknown> = {
       agents: { list: [{ id: "octogee-alice-proj-orbit-coach" }] },
       channels: {
         mattermost: {
@@ -1004,20 +1004,20 @@ describe("system config platform invariants", () => {
         },
       },
     };
-    reconcilePlatformInvariants(builderConfig, builder);
-    const builderAccount = ((((builderConfig.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
+    reconcilePlatformInvariants(userConfig, user);
+    const userAccount = ((((userConfig.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
       .accounts as Record<string, Record<string, unknown>>)[accountId]);
-    expect(builderAccount.dmPolicy).toBe("disabled");
-    expect(builderAccount).not.toHaveProperty("allowFrom");
+    expect(userAccount.dmPolicy).toBe("disabled");
+    expect(userAccount).not.toHaveProperty("allowFrom");
   });
 
   it("exposes the same exact paths to RPC and filesystem consumers", () => {
-    const builderPaths = platformInvariantTable(builder).map((entry) => entry.path);
-    expect(builderPaths).not.toContain("gateway.terminal.enabled");
-    expect(builderPaths).not.toContain("tools.elevated.enabled");
-    expect(builderPaths).not.toContain("tools.exec");
-    expect(builderPaths).not.toContain("plugins.entries.codex");
-    expect(builderPaths).toEqual(
+    const userPaths = platformInvariantTable(user).map((entry) => entry.path);
+    expect(userPaths).not.toContain("gateway.terminal.enabled");
+    expect(userPaths).not.toContain("tools.elevated.enabled");
+    expect(userPaths).not.toContain("tools.exec");
+    expect(userPaths).not.toContain("plugins.entries.codex");
+    expect(userPaths).toEqual(
       expect.arrayContaining([
         "gateway.controlUi.basePath",
         "gateway.controlUi.dangerouslyDisableDeviceAuth",
@@ -1045,14 +1045,14 @@ describe("system config platform invariants", () => {
         "plugins.entries.octogee-ops-tools.config",
       ]),
     );
-    expect(platformInvariantTable(barn).map((entry) => entry.path)).toEqual(
+    expect(platformInvariantTable(sharedGateway).map((entry) => entry.path)).toEqual(
       expect.arrayContaining(["gateway.terminal.enabled", "tools.elevated.enabled", "tools.exec"]),
     );
   });
 
   it("treats reordered invariant object keys as semantically equal", () => {
     const config: Record<string, unknown> = {};
-    reconcilePlatformInvariants(config, builder);
+    reconcilePlatformInvariants(config, user);
     const plugins = config.plugins as Record<string, unknown>;
     const entries = plugins.entries as Record<string, Record<string, unknown>>;
     entries["octogee-chat-tools"].config = {
@@ -1062,14 +1062,14 @@ describe("system config platform invariants", () => {
       siteUrl: "${MM_SITE_URL}",
     };
 
-    expect(platformInvariantViolations(config, builder)).not.toContain(
+    expect(platformInvariantViolations(config, user)).not.toContain(
       "plugins.entries.octogee-chat-tools.config",
     );
   });
 
   it("rejects changes to every projected-token plugin broker credential", () => {
     const config: Record<string, unknown> = {};
-    reconcilePlatformInvariants(config, builder);
+    reconcilePlatformInvariants(config, user);
     const entries = ((config.plugins as Record<string, unknown>).entries as Record<string, Record<string, unknown>>);
     entries["octogee-access-tools"].config = {
       brokerUrl: "https://attacker.example",
@@ -1085,7 +1085,7 @@ describe("system config platform invariants", () => {
       requireWriteApproval: false,
     };
 
-    expect(platformInvariantViolations(config, builder)).toEqual(expect.arrayContaining([
+    expect(platformInvariantViolations(config, user)).toEqual(expect.arrayContaining([
       "plugins.entries.octogee-access-tools.config",
       "plugins.entries.octogee-connector-tools.config.brokerUrl",
       "plugins.entries.octogee-connector-tools.config.requireWriteApproval",
@@ -1098,14 +1098,14 @@ describe("system config platform invariants", () => {
     const config: Record<string, unknown> = {
       plugins: {
         allow: [
-          "customer-plugin",
+          "user-plugin",
           "octogee-mattermost-tools",
           "octogee-router",
           "octogee-preview-tools",
           "octogee-publish-tools",
         ],
         entries: {
-          "customer-plugin": { enabled: true },
+          "user-plugin": { enabled: true },
           "octogee-mattermost-tools": { enabled: true },
           "octogee-router": { enabled: true },
           "octogee-preview-tools": { enabled: true },
@@ -1114,7 +1114,7 @@ describe("system config platform invariants", () => {
       },
     };
 
-    const result = reconcilePlatformInvariants(config, builder);
+    const result = reconcilePlatformInvariants(config, user);
 
     expect(result.changedPaths).toEqual(expect.arrayContaining([
       "plugins.allow",
@@ -1125,24 +1125,24 @@ describe("system config platform invariants", () => {
     ]));
     expect(result.changedPaths.filter((path) => path === "plugins.allow")).toHaveLength(1);
     const plugins = config.plugins as Record<string, unknown>;
-    expect(plugins.allow).toEqual(expect.arrayContaining(["customer-plugin", "octogee-chat-tools"]));
+    expect(plugins.allow).toEqual(expect.arrayContaining(["user-plugin", "octogee-chat-tools"]));
     expect(plugins.allow).not.toEqual(expect.arrayContaining([
       "octogee-mattermost-tools",
       "octogee-router",
       "octogee-preview-tools",
       "octogee-publish-tools",
     ]));
-    expect(plugins.entries).toMatchObject({ "customer-plugin": { enabled: true } });
+    expect(plugins.entries).toMatchObject({ "user-plugin": { enabled: true } });
     expect(plugins.entries).not.toHaveProperty("octogee-mattermost-tools");
     expect(plugins.entries).not.toHaveProperty("octogee-preview-tools");
     expect(plugins.entries).not.toHaveProperty("octogee-publish-tools");
     expect(plugins.entries).not.toHaveProperty("octogee-router");
-    expect(platformInvariantViolations(config, builder)).toEqual([]);
+    expect(platformInvariantViolations(config, user)).toEqual([]);
   });
 });
 
-it("makes native Mattermost reactions available to coach and project coding policies", () => {
-  expect(CUSTOMER_WORKFLOW_TOOLS).toContain("message");
+it("makes native Mattermost reactions available to agent and project coding policies", () => {
+  expect(USER_WORKFLOW_TOOLS).toContain("message");
   expect(PROJECT_AGENT_ALLOWED_TOOLS).toContain("message");
 });
 
@@ -1160,7 +1160,7 @@ const PRE_NATIVE_ROLE_SET = {
   },
 };
 
-describe("per-user Builder role definitions", () => {
+describe("per-user user role definitions", () => {
   const context = {
     gatewayClass: "builder" as const, gatewayId: "jefe", apiOrigin: "https://api.octogee.com",
     controlIdentity: "per-user" as const, workspaceSlug: "jefe",
@@ -1176,7 +1176,7 @@ describe("per-user Builder role definitions", () => {
     expect(platformInvariantViolations(config, context)).toEqual([]);
   });
 
-  it("keeps Builder-defined roles and the Builder's default alongside the canonical definitions", () => {
+  it("keeps User-defined roles and the user's default alongside the canonical definitions", () => {
     const roles = { default: "collaborator", definitions: { collaborator: { scopes: ["operator.read"], sessions: { others: "none" } } } };
     const config = { gateway: { roles: structuredClone(roles) } };
     reconcilePlatformInvariants(config, context);
@@ -1195,9 +1195,9 @@ describe("per-user Builder role definitions", () => {
   });
 });
 
-describe("customer code tool fences", () => {
+describe("user code tool fences", () => {
   it("denies the skill library beside the skill workshop, so OpenClaw's skill-library tool split never widens a booted deny list past the patch", () => {
-    expect(CUSTOMER_CODE_DENIED_TOOLS).toContain("skill_workshop");
-    expect(CUSTOMER_CODE_DENIED_TOOLS).toContain("skill_library");
+    expect(USER_CODE_DENIED_TOOLS).toContain("skill_workshop");
+    expect(USER_CODE_DENIED_TOOLS).toContain("skill_library");
   });
 });

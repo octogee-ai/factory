@@ -481,7 +481,7 @@ describe("rollout op — awaits the roll arm's convergence", () => {
 
 describe("rollout deployment prerequisites", () => {
   const input = { gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" };
-  const scopeError = "computer sep092: identity scopes are outdated; pause and resume the gateway through Admin to repair them";
+  const scopeError = "VM sep092: identity scopes are outdated; pause and resume the gateway through Admin to repair them";
 
   it("fails a known prerequisite before activating desired release or waiting for readiness", async () => {
     const gateway = mkGateway({ desiredRelease: 1 });
@@ -554,7 +554,7 @@ describe("rollout deployment prerequisites", () => {
 });
 
 
-it("permits a paused rollout without requiring the running computer's identity to be repaired first", async () => {
+it("permits a paused rollout without requiring the running VM's identity to be repaired first", async () => {
   const deps = mkDeps({
     readGatewayDoc: async () => mkGateway({ desiredStatus: "paused" }),
     readDeploymentPrerequisiteError: vi.fn(async () => "identity scopes are outdated"),

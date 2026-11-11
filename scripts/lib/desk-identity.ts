@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { characterSvg } from "@octogee/shared/types/agent-characters";
 import { parseAgentLook } from "@octogee/shared/types/agent-look";
-import type { FleetBrokerConfiguredBuilderDesk } from "@octogee/shared/types/fleet-broker";
+import type { FleetBrokerConfiguredUserDesk } from "@octogee/shared/types/fleet-broker";
 import { parseTimeZone } from "@octogee/shared/types/time-zone";
 
 export const DESK_CONFIG_DIR = ".config/octogee";
@@ -24,7 +24,7 @@ export const localDeskIdentityFs: DeskIdentityFs = {
   rename: (from, to) => rename(from, to),
 };
 
-export function parseDeskIdentity(value: unknown): FleetBrokerConfiguredBuilderDesk | null {
+export function parseDeskIdentity(value: unknown): FleetBrokerConfiguredUserDesk | null {
   if (!value || typeof value !== "object") return null;
   const { builderName, agentName, look, timeZone } = value as Record<string, unknown>;
   const valid = parseAgentLook(look);
@@ -54,7 +54,7 @@ async function readStoredDesk(fs: DeskIdentityFs, file: string, now: () => numbe
   throw new MalformedDeskFileError(file, quarantined);
 }
 
-export function deskIdentityUnchanged(stored: Record<string, unknown> | null, desk: FleetBrokerConfiguredBuilderDesk): boolean {
+export function deskIdentityUnchanged(stored: Record<string, unknown> | null, desk: FleetBrokerConfiguredUserDesk): boolean {
   if (!stored) return false;
   const look = parseAgentLook(stored.look);
   return stored.builderName === desk.builderName
@@ -66,7 +66,7 @@ export function deskIdentityUnchanged(stored: Record<string, unknown> | null, de
 export async function writeDeskIdentity(
   fs: DeskIdentityFs,
   desktopHome: string,
-  desk: FleetBrokerConfiguredBuilderDesk,
+  desk: FleetBrokerConfiguredUserDesk,
   now: () => number = Date.now,
 ): Promise<{ written: boolean }> {
   const dir = path.join(desktopHome, DESK_CONFIG_DIR);

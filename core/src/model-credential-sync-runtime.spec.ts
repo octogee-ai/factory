@@ -1,18 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
-  syncByotForCustomer: vi.fn(),
+  syncByotForUser: vi.fn(),
   legacyUserData: vi.fn(),
   applyModelCredentialState: vi.fn(),
-  applyCoachModelPatch: vi.fn(),
+  applyDefaultAgentModelPatch: vi.fn(),
   brokerFetchByosubCreds: vi.fn(),
   restoreOauthStoreForSlug: vi.fn(),
   triggerSecretsReload: vi.fn(),
 }));
 
 vi.mock("./byot-sync-runtime.js", () => ({
-  syncByotForCustomer: h.syncByotForCustomer,
-  applyCoachModelPatch: h.applyCoachModelPatch,
+  syncByotForUser: h.syncByotForUser,
+  applyDefaultAgentModelPatch: h.applyDefaultAgentModelPatch,
   brokerFetchByosubCreds: h.brokerFetchByosubCreds,
   restoreOauthStoreForSlug: h.restoreOauthStoreForSlug,
   triggerSecretsReload: h.triggerSecretsReload,
@@ -24,14 +24,14 @@ vi.mock("./model-credential-sync.js", () => ({
 }));
 
 import {
-  applyModelCredentialCoachPatch,
+  applyModelCredentialDefaultAgentPatch,
   brokerFetchModelCredentialOauthCreds,
   restoreModelCredentialOauthStoreForSlug,
-  syncModelCredentialsForCustomer,
+  syncModelCredentialsForUser,
   triggerModelCredentialSecretsReload,
 } from "./model-credential-sync-runtime.js";
 
-describe("syncModelCredentialsForCustomer", () => {
+describe("syncModelCredentialsForUser", () => {
   it("translates model credential user data and maps the model apply dependency to legacy BYOT state", async () => {
     const modelApply = vi.fn();
     const userData = {
@@ -41,22 +41,22 @@ describe("syncModelCredentialsForCustomer", () => {
     };
     const legacyData = { username: "mira", byotActive: true };
     h.legacyUserData.mockReturnValue(legacyData);
-    h.syncByotForCustomer.mockResolvedValue(undefined);
+    h.syncByotForUser.mockResolvedValue(undefined);
 
-    await syncModelCredentialsForCustomer(userData, {
+    await syncModelCredentialsForUser(userData, {
       applyModelCredentialState: modelApply,
       triggerSecretsReload: h.triggerSecretsReload,
     });
 
     expect(h.legacyUserData).toHaveBeenCalledWith(userData);
-    expect(h.syncByotForCustomer).toHaveBeenCalledWith(legacyData, {
+    expect(h.syncByotForUser).toHaveBeenCalledWith(legacyData, {
       triggerSecretsReload: h.triggerSecretsReload,
       applyByotState: modelApply,
     });
   });
 
   it("re-exports model credential names for the legacy runtime helpers", () => {
-    expect(applyModelCredentialCoachPatch).toBe(h.applyCoachModelPatch);
+    expect(applyModelCredentialDefaultAgentPatch).toBe(h.applyDefaultAgentModelPatch);
     expect(brokerFetchModelCredentialOauthCreds).toBe(h.brokerFetchByosubCreds);
     expect(restoreModelCredentialOauthStoreForSlug).toBe(h.restoreOauthStoreForSlug);
     expect(triggerModelCredentialSecretsReload).toBe(h.triggerSecretsReload);

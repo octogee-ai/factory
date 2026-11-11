@@ -98,7 +98,7 @@ describe("Mattermost credential mint", () => {
     return request(app).post("/mint").set("x-test-uid", uid);
   }
 
-  it("returns the Builder's own Mattermost user and personal token", async () => {
+  it("returns the user's own Mattermost user and personal token", async () => {
     const res = await mint({
       "users/uid-mira": { mattermost: { userId: MM_USER_ID } },
       "users/uid-mira/secrets/mattermost": { personalToken: "mira-pat" },

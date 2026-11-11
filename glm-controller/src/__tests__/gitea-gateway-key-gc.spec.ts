@@ -40,7 +40,7 @@ function runtime(gatewayId: string, vm: { instanceId: string } | null = null) {
 }
 
 describe("readLiveGatewayKeyHolders", () => {
-  it("names every existing gateway pod and every recorded computer VM as a live key owner", async () => {
+  it("names every existing gateway pod and every recorded VM VM as a live key owner", async () => {
     const readBatch = vi.fn(async (gatewayIds: readonly string[]) =>
       Object.fromEntries(gatewayIds.map((id) => [
         id,

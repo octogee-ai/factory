@@ -9,7 +9,7 @@ import {
   userEntitlements,
 } from "@octogee/shared/types/user-entitlements";
 
-import { CUSTOMER_OWNED_CONTEXT_FILES, listTierTemplateFiles, writeTierTemplateFiles } from "./tier-template-files.js";
+import { USER_OWNED_CONTEXT_FILES, listTierTemplateFiles, writeTierTemplateFiles } from "./tier-template-files.js";
 
 let tmpRoot: string;
 let prevTemplatesDir: string | undefined;
@@ -40,9 +40,9 @@ function customerDir(name = "alice"): string {
   return dir;
 }
 
-describe("CUSTOMER_OWNED_CONTEXT_FILES", () => {
-  it("names the files that belong to the customer once seeded", () => {
-    expect([...CUSTOMER_OWNED_CONTEXT_FILES].sort()).toEqual(["MEMORY.md", "SOUL.md", "USER.md"]);
+describe("USER_OWNED_CONTEXT_FILES", () => {
+  it("names the files that belong to the user once seeded", () => {
+    expect([...USER_OWNED_CONTEXT_FILES].sort()).toEqual(["MEMORY.md", "SOUL.md", "USER.md"]);
   });
 });
 
@@ -65,19 +65,19 @@ describe("listTierTemplateFiles", () => {
 });
 
 describe("writeTierTemplateFiles", () => {
-  it("writes missing tier files without clobbering customer edits", () => {
+  it("writes missing tier files without clobbering user edits", () => {
     seedTier("default", {
       "AGENTS.md": "Hello {{slug}}\n",
       "SOUL.md": "Template soul\n",
     });
     const dir = customerDir();
-    fs.writeFileSync(path.join(dir, "SOUL.md"), "Customer soul\n", "utf-8");
+    fs.writeFileSync(path.join(dir, "SOUL.md"), "User soul\n", "utf-8");
 
     const written = writeTierTemplateFiles(dir, "hobby", { slug: "alice" });
 
     expect(written).toEqual(["AGENTS.md"]);
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("Hello alice\n");
-    expect(fs.readFileSync(path.join(dir, "SOUL.md"), "utf-8")).toBe("Customer soul\n");
+    expect(fs.readFileSync(path.join(dir, "SOUL.md"), "utf-8")).toBe("User soul\n");
   });
 
   it("seeds from the template the installed resolver names for the provisioned tier", () => {

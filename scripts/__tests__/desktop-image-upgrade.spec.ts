@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { expect, it } from 'vitest';
 
 it('opts the disposable image provisioner into a full Omarchy package upgrade', () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'computer-upgrade-'));
+  const dir = mkdtempSync(path.join(tmpdir(), 'vm-upgrade-'));
   try {
     const probe = path.join(dir, 'invocation');
     writeFileSync(path.join(dir, 'pacman'), '#!/bin/sh\nprintf "%s\\n" "${OMARCHY_ALLOW_DIRECT_PACMAN:-}" "$@" > "$UPGRADE_PROBE"\nexit 42\n', { mode: 0o755 });
@@ -72,7 +72,7 @@ function stageMigrationRun(dir: string) {
 }
 
 it.each([0, 37])('runs migrations inside the desktop user\'s session without sudo prompts and propagates migration status %s', async (migrationStatus) => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'computer-migration-'));
+  const dir = mkdtempSync(path.join(tmpdir(), 'vm-migration-'));
   let bus: Server | undefined;
   try {
     const { runtimeDir, probes, run } = stageMigrationRun(dir);
@@ -97,7 +97,7 @@ it.each([0, 37])('runs migrations inside the desktop user\'s session without sud
 });
 
 it('refuses to migrate when the desktop user\'s session bus never appears', () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'computer-migration-'));
+  const dir = mkdtempSync(path.join(tmpdir(), 'vm-migration-'));
   try {
     const { runtimeDir, probes, run } = stageMigrationRun(dir);
     const result = run(0);
@@ -112,11 +112,11 @@ it('refuses to migrate when the desktop user\'s session bus never appears', () =
 });
 
 it.each(["4.5.0-2", "4.0.6-1", ""])("records the installed Omarchy version and refuses a stale or missing result (%s)", version => {
-  const dir = mkdtempSync(path.join(tmpdir(), "computer-version-"));
+  const dir = mkdtempSync(path.join(tmpdir(), "vm-version-"));
   try {
     const source = readFileSync(path.resolve("../infra/desktop/image/customize.sh"), "utf8");
     const fn = source.match(/^record_image_identity\(\) \{[\s\S]*?^\}/m)?.[0] ?? "";
-    const envFile = path.join(dir, "computer.env");
+    const envFile = path.join(dir, "vm.env");
     const result = spawnSync("bash", ["-c", `${fn.replaceAll("/etc/octogee-computer.env", envFile)}
 omarchy() { printf '%s\\n' "$TEST_VERSION"; }
 record_image_identity`], {

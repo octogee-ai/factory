@@ -62,9 +62,9 @@ function configureGatewayServiceAccountAuth() {
   delete process.env.INTERNAL_SERVICE_KEY;
   process.env.GATEWAY_CLASS = "builder";
   process.env.GATEWAY_PROFILE = "builder";
-  process.env.GATEWAY_ID = "bender";
+  process.env.GATEWAY_ID = "walter";
   process.env.K8S_NAMESPACE = "octogee-test";
-  process.env.K8S_SERVICE_ACCOUNT_NAME = "octogee-gw-bender";
+  process.env.K8S_SERVICE_ACCOUNT_NAME = "octogee-gw-walter";
   process.env.OCTOGEE_API_SA_TOKEN_PATH = tokenPath;
 
   const reviewer = vi.fn(async (jwt: string) =>
@@ -72,7 +72,7 @@ function configureGatewayServiceAccountAuth() {
       ? {
           authenticated: true as const,
           namespace: "octogee-test",
-          saName: "octogee-gw-bender",
+          saName: "octogee-gw-walter",
           audiences: ["octogee-api"],
         }
       : { authenticated: false as const },
@@ -136,11 +136,11 @@ describe("gateway-edge sidecar surface", () => {
   it("keeps intended sidecar locality leaves mounted at the auth boundary", async () => {
     const app = createApp({ surface: "sidecar" });
 
-    expect((await request(app).get("/api/g/gw-bender/workspace/git/status")).status).toBe(401);
-    expect((await request(app).get("/api/g/gw-bender/byosub/health")).status).toBe(401);
-    expect((await request(app).get("/api/g/gw-bender/agent-imports/sources/github")).status).toBe(401);
+    expect((await request(app).get("/api/g/gw-walter/workspace/git/status")).status).toBe(401);
+    expect((await request(app).get("/api/g/gw-walter/byosub/health")).status).toBe(401);
+    expect((await request(app).get("/api/g/gw-walter/agent-imports/sources/github")).status).toBe(401);
     expect(
-      (await request(app).post("/api/g/gw-bender/projects/acme/widget/publish").send({}))
+      (await request(app).post("/api/g/gw-walter/projects/acme/widget/publish").send({}))
         .status,
     ).toBe(404);
   });
@@ -156,7 +156,7 @@ describe("gateway-edge sidecar surface", () => {
     const app = createApp({ surface: "sidecar" });
 
     const res = await request(app)
-      .get("/api/g/bender/workspace/git/status?slug=alice&project=orbit")
+      .get("/api/g/walter/workspace/git/status?slug=alice&project=orbit")
       .set("authorization", "Bearer firebase-token");
 
     expect(res.status).toBe(403);
@@ -168,7 +168,7 @@ describe("gateway-edge sidecar surface", () => {
     expect(headers.get("authorization")).toBe("Bearer firebase-token");
     expect(headers.get("x-k8s-sa-token")).toBe("projected-reviewer-token");
     expect(JSON.parse(String(init.body))).toEqual({
-      gatewayId: "bender",
+      gatewayId: "walter",
       slug: "alice",
       projectSlug: "orbit",
       access: "read",
@@ -202,13 +202,13 @@ describe("gateway-edge sidecar surface", () => {
     expect((await request(createApp({ surface: "cluster", productRoutes: productClusterRoutes() })).post("/internal/owner-automations").send(invalid)).status).toBe(404);
   });
 
-  it("fronts the Builder computer's style and Desk note for the gateway's own identity only, on the sidecar alone", async () => {
+  it("fronts the gateway VM's style and Desk note for the gateway's own identity only, on the sidecar alone", async () => {
     configureGatewayServiceAccountAuth();
     const sidecar = createApp({ surface: "sidecar" });
     expect((await request(sidecar).post("/internal/computer/style").send({ style: "familiar" })).status).toBe(401);
-    const noComputer = await request(sidecar).post("/internal/computer/desk/note").set("x-k8s-sa-token", "valid-ksa-token").send({ note: "hi" });
-    expect(noComputer.status).toBe(404);
-    expect(noComputer.body).toEqual({ error: "computer_unavailable" });
+    const noVm = await request(sidecar).post("/internal/computer/desk/note").set("x-k8s-sa-token", "valid-ksa-token").send({ note: "hi" });
+    expect(noVm.status).toBe(404);
+    expect(noVm.body).toEqual({ error: "computer_unavailable" });
     expect((await request(createApp({ surface: "cluster", productRoutes: productClusterRoutes() })).post("/internal/computer/style").send({ style: "familiar" })).status).toBe(404);
   });
 

@@ -76,8 +76,8 @@ function app(routes: express.Router = createRoutes) {
 }
 
 function seedGateway(gatewayClass: string) {
-  h.docs.set("gateways/gw-builder", {
-    gatewayId: "gw-builder",
+  h.docs.set("gateways/gw-user", {
+    gatewayId: "gw-user",
     createdAt: 1,
     createdBy: "admin",
     updatedAt: 2,
@@ -92,7 +92,7 @@ function seedGateway(gatewayClass: string) {
     sizingTier: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
-    serviceAccountName: "octogee-gw-builder",
+    serviceAccountName: "octogee-gw-user",
     serviceAccount: null,
     builderAccess: null,
     modelBrokerLimits: null,
@@ -111,7 +111,7 @@ beforeEach(() => {
   h.uid = "owner-1";
   h.user = {
     username: "mira",
-    provisioning: { openclaw: { gatewayId: "gw-builder" } },
+    provisioning: { openclaw: { gatewayId: "gw-user" } },
   };
   h.workspaceSlug = "mira";
   h.isAdmin = false;
@@ -222,7 +222,7 @@ describe("POST /api/projects", () => {
     expect(h.githubRepoApi).toHaveBeenCalledWith("octogee-ai", "seed", "gho-token");
   });
 
-  it("hands a disabled decision to the service for a Barn workspace without evaluating the flag", async () => {
+  it("hands a disabled decision to the service for a shared gateway workspace without evaluating the flag", async () => {
     seedGateway("shared");
     const body = {
       name: "Orbit",

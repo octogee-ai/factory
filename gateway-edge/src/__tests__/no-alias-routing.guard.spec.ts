@@ -10,7 +10,7 @@ import { dirname, join, resolve } from 'path';
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 // The bare Service alias `octogee-gateway.<ns>.svc.cluster.local` (note the DOT
-// right after "octogee-gateway") round-robins a request to a RANDOM customer's
+// right after "octogee-gateway") round-robins a request to a RANDOM user's
 // pod. Per-instance routing uses `octogee-gateway-<instance>.…` (a DASH) or the
 // `/api/g/<gid>` path. Client-routing code must never build the bare alias.
 // The char class after the dot covers alnum + `$` (template `${ns}`) + quote and
@@ -52,7 +52,7 @@ describe('no-alias routing guard (GATEWAY-ROUTING-PATTERN D4)', () => {
     expect(BARE_ALIAS.test("'octogee-gateway.' + namespace")).toBe(true);
     expect(BARE_ALIAS.test('`octogee-gateway.` + ns')).toBe(true);
     // per-instance routing + the bare Service name are legitimate, never flagged
-    expect(BARE_ALIAS.test('octogee-gateway-bender.octogee.svc.cluster.local')).toBe(false);
+    expect(BARE_ALIAS.test('octogee-gateway-walter.octogee.svc.cluster.local')).toBe(false);
     expect(BARE_ALIAS.test('name: octogee-gateway')).toBe(false);
   });
 });

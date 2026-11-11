@@ -1,4 +1,4 @@
-import { applyByotState, byosCoachConfigPatch, coachFullAgentList, deriveDesiredByotState, } from "./byot-sync.js";
+import { applyByotState, byosDefaultAgentConfigPatch, defaultAgentFullAgentList, deriveDesiredByotState, } from "./byot-sync.js";
 function byotSystemConfigFromModelCredential(credential) {
     const byot = {};
     if (typeof credential.provider === "string")
@@ -37,5 +37,5 @@ export function deriveDesiredModelCredentialState(userData) {
     return deriveDesiredByotState(legacyByotSyncUserDataFromModelCredentialState(userData));
 }
 export const applyModelCredentialState = applyByotState;
-export const modelCredentialCoachConfigPatch = byosCoachConfigPatch;
-export const modelCredentialFullAgentList = coachFullAgentList;
+export const modelCredentialDefaultAgentConfigPatch = byosDefaultAgentConfigPatch;
+export const modelCredentialFullAgentList = defaultAgentFullAgentList;

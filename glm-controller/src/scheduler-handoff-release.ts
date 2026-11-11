@@ -1,8 +1,8 @@
 import type { DocumentData } from "firebase-admin/firestore";
-import type { BuilderRecord, OperationRecord, PlatformStateStore, Stored } from "@octogee/core/platform-state";
+import type { PlatformUserRecord, OperationRecord, PlatformStateStore, Stored } from "@octogee/core/platform-state";
 import type { Operation, SchedulerHandoffState } from "@octogee/shared/types/glm";
 import type { SchedulerMigrationRequestBody } from "@octogee/shared/types/fleet-controller";
-import { builderActivationSourceRecoveryPending } from "./legacy-migration-recovery.js";
+import { userActivationSourceRecoveryPending } from "./legacy-migration-recovery.js";
 import { queuedSharedMigrationOwnsSourceInStore } from './lib/queued-shared-migration.js';
 
 export interface SchedulerHandoffReleaseDeps {
@@ -26,7 +26,7 @@ function isHandoff(value: unknown): value is SchedulerHandoffState {
 const UNSETTLED_OPERATION_STATUSES: ReadonlySet<unknown> = new Set(["pending", "running", "failed"]);
 
 export function schedulerHandoffAwaitingRelease(operation: DocumentData | undefined): boolean {
-  if (operation && builderActivationSourceRecoveryPending(operation as Operation)) return true;
+  if (operation && userActivationSourceRecoveryPending(operation as Operation)) return true;
   return operation?.schedulerHandoffReleased === false &&
     UNSETTLED_OPERATION_STATUSES.has(operation.status) &&
     isHandoff(operation.schedulerHandoff);
@@ -44,7 +44,7 @@ function handoffProgress(operation: DocumentData): HandoffProgress {
 
 type ListedOperation = Stored<OperationRecord>;
 
-function committedOwnerMatches(op: OperationRecord, owner: Stored<BuilderRecord> | null, handoff: SchedulerHandoffState): boolean {
+function committedOwnerMatches(op: OperationRecord, owner: Stored<PlatformUserRecord> | null, handoff: SchedulerHandoffState): boolean {
   return op.kind === "migrate-customer" && op.input?.uid === handoff.uid &&
     op.input.fromGatewayId === handoff.fromGatewayId && op.input.toGatewayId === handoff.toGatewayId &&
     owner?.gateway?.gatewayId === handoff.toGatewayId;
@@ -55,7 +55,7 @@ async function retryCommittedHandoff(deps: SchedulerHandoffReleaseDeps, listed: 
     const op = await tx.journal.operations.get(listed.id);
     if (!op || op.revision !== listed.revision) return false;
     const handoff = op.schedulerHandoff as SchedulerHandoffState;
-    const owner = await tx.builders.records.get(handoff.uid);
+    const owner = await tx.users.records.get(handoff.uid);
     const matches = op.status === "failed" && op.schedulerHandoffReleased === false && op.cancellationRequestedAt === undefined &&
       committedOwnerMatches(op, owner, handoff);
     if (!matches) return false;
@@ -92,7 +92,7 @@ async function acknowledgeCurrentHandoff(
 }
 
 function sourceRecoveryOwns(operation: DocumentData, id: string): boolean {
-  return builderActivationSourceRecoveryPending({ ...operation, id } as Operation) ||
+  return userActivationSourceRecoveryPending({ ...operation, id } as Operation) ||
     operation.input?.recoverSourceOnly === true && typeof operation.cutoverCommittedAt !== "number";
 }
 

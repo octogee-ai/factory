@@ -2,7 +2,7 @@
 //  - usage_sessions + usage_summary are RETIRED (their only reader, the admin
 //    usage panel, now sources sessions/summary from the broker event stream) —
 //    delete every doc.
-//  - usage_models SURVIVES (customer + admin telemetry) and now stamps expiresAt
+//  - usage_models SURVIVES (user + admin telemetry) and now stamps expiresAt
 //    on write, but legacy docs written before that have none, so the TTL policy
 //    never drains them. Backfill expiresAt from each doc's last use.
 //

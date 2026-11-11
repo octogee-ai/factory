@@ -11,9 +11,9 @@ import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 
 const PRIVATE_KEY = FLEET_KEY_PAIR.privateKey;
 const PUBLIC_KEY = FLEET_KEY_PAIR.publicKey;
-const GATEWAY_ID = "builder-ceckert-test";
+const GATEWAY_ID = "user-ceckert-test";
 
-// Cowboy scopes each pod-addressed signature to the gateway it addresses.
+// The fleet controller scopes each pod-addressed signature to the gateway it addresses.
 function signForPod(jobId: string, rawBody: string, gatewayId: string = GATEWAY_ID): string {
   return signFleetRequest(PRIVATE_KEY, gatewayScopedJobId(jobId, gatewayId), rawBody);
 }
@@ -71,7 +71,7 @@ describe("surge OpenClaw process control handlers", () => {
     expect(drain).not.toHaveBeenCalled();
   });
 
-  it("requires a signed configured Builder hold and returns only after the child is held", async () => {
+  it("requires a signed configured user hold and returns only after the child is held", async () => {
     const hold = vi.fn(async () => ({ ...GATE_STATE, completionStarted: false }));
     const handler = createHoldSurgeOpenClawHandler({
       publicKey: PUBLIC_KEY,
@@ -101,7 +101,7 @@ describe("surge OpenClaw process control handlers", () => {
     });
   });
 
-  it("waits for an active source reconcile after holding the Builder process", async () => {
+  it("waits for an active source reconcile after holding the user process", async () => {
     vi.stubEnv("POD_UID", "source-pod");
     let releaseDrain: (() => void) | undefined;
     const hold = vi.fn(async () => ({ ...GATE_STATE, role: "source" as const }));
@@ -147,7 +147,7 @@ describe("surge OpenClaw process control handlers", () => {
     });
   });
 
-  it("finalizes a signed target cancellation only after Builder provisioning drains", async () => {
+  it("finalizes a signed target cancellation only after user provisioning drains", async () => {
     let releaseDrain!: () => void;
     const hold = vi.fn(async () => ({ ...GATE_STATE, phase: "cancelling" as const }));
     const finalizeTargetCancellation = vi.fn(async () => ({
@@ -196,7 +196,7 @@ describe("surge OpenClaw process control handlers", () => {
     });
   });
 
-  it("refuses unsigned and foreign Builder resume attempts", async () => {
+  it("refuses unsigned and foreign user resume attempts", async () => {
     const resume = vi.fn();
     const handler = createResumeSurgeOpenClawHandler({
       publicKey: PUBLIC_KEY,
@@ -225,7 +225,7 @@ describe("surge OpenClaw process control handlers", () => {
     expect(resume).not.toHaveBeenCalled();
   });
 
-  it("unreserves a signed configured Builder target through the gate", async () => {
+  it("unreserves a signed configured isolated target through the gate", async () => {
     const unreserve = vi.fn(async () => ({
       ...GATE_STATE,
       role: "normal" as const,

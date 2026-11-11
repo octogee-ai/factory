@@ -42,7 +42,7 @@ export interface MigrationRunnerDeps {
   prepareRollbackTarget?: (gatewayId: string, slug: string) => Promise<void>;
 
   // Roster-state gate: written to "quiescing" on the SOURCE assignment before
-  // the quiesce RPC — blocking the source edge from serving this customer
+  // the quiesce RPC — blocking the source edge from serving this user
   // BEFORE the target ever does — and restored to "serving" when a pre-cutover
   // failure rolls the migration back.
   setAssignmentState?: (input: {
@@ -92,7 +92,7 @@ export interface MigrationRunnerInput {
   fromGatewayId: string;
   toGatewayId: string;
   crossGateway?: boolean;
-  // Present when the customer has a roster assignment to gate (the quiescing
+  // Present when the user has a roster assignment to gate (the quiescing
   // mark before quiesce, restored on rollback). Absent = legacy migration with
   // no assignment layer.
   gateAssignment?: boolean;
@@ -105,7 +105,7 @@ export interface MigrationRunnerInput {
 export type TargetSystemConfigConvergence = "source-commit" | "target-commit";
 
 export interface MigrationRunnerResult {
-  waitingForBuilderIdle?: boolean;
+  waitingForUserIdle?: boolean;
   success: boolean;
   finalPhase: MigrationPhase;
   errorAt?: { phase: MigrationPhase; error: string };
@@ -639,7 +639,7 @@ async function handleStepFailure(
     if (execution.quiescingMarked) await deps.setAssignmentState!({ gatewayId: input.fromGatewayId, uid: input.uid, state: "serving" });
     await deps.setMigrationPhase?.("waiting");
     await report(deps, { name, status: "skipped", error: message });
-    return { success: false, finalPhase: execution.state.phase, rolledBack: false, waitingForBuilderIdle: true };
+    return { success: false, finalPhase: execution.state.phase, rolledBack: false, waitingForUserIdle: true };
   }
   if (isPostCutoverSourceCleanup(execution.state, step)) {
     await report(deps, { name, status: "skipped", error: message });
@@ -818,9 +818,9 @@ async function tryRollback(
   return { rolledBack: true };
 }
 
-// Revert the pre-quiesce "quiescing" roster mark so the customer keeps serving
+// Revert the pre-quiesce "quiescing" roster mark so the user keeps serving
 // on the source after a pre-cutover rollback. Failure here is LOUD (the edge
-// keeps 503ing the customer until a retry re-drives the migration or the
+// keeps 503ing the user until a retry re-drives the migration or the
 // operator repairs the assignment).
 async function restoreSourceServing(
   deps: MigrationRunnerDeps,
@@ -833,7 +833,7 @@ async function restoreSourceServing(
     const msg = err instanceof Error ? err.message : String(err);
     deps.log(
       `[migration-runner] ❌ FAILED to restore assignment serving for uid=${target.uid} on ${target.gatewayId}: ${msg} — ` +
-        `the customer stays quiescing (edge answers 503) until the next retry or an operator repair`,
+        `the user stays quiescing (edge answers 503) until the next retry or an operator repair`,
     );
     throw err;
   }

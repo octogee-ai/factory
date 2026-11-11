@@ -23,7 +23,7 @@ function requiredEnv(env: PlatformReleaseEnvironment, name: string): string {
 }
 
 // The umbrella Helm upgrade sets these from the deployed build's immutable
-// digest manifest. Cowboy converges every shared slot to this artifact.
+// digest manifest. The fleet controller converges every shared slot to this artifact.
 export function platformGatewayArtifactFromEnvironment(
   env: PlatformReleaseEnvironment = process.env,
 ): GatewayArtifact {

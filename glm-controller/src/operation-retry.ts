@@ -1,9 +1,9 @@
-import { isBuilderActivateOperationIdFor, isBuilderReturnOperationIdFor } from "@octogee/core/builder-activation-lease";
+import { isUserActivateOperationIdFor, isUserReturnOperationIdFor } from "@octogee/core/user-activation-lease";
 import { sourceTransferBlocksRelease } from './lib/source-transfer-execution.js';
 import type { SourceTransferExecution } from '@octogee/shared/types/glm';
 import type { OperationPatch } from "@octogee/core/platform-state";
 import type {
-  CustomerMigrationV2State,
+  UserMigrationV2State,
   OperationAttemptRecord,
   Operation,
   OperationStep,
@@ -11,7 +11,7 @@ import type {
 } from "@octogee/shared/types/glm";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import type { OperationResult } from "./operation-router.js";
-import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
+import { MIGRATE_USER_KIND } from "./operation-kinds.js";
 
 export type OperationFailureClassification = "transient" | "terminal";
 
@@ -132,12 +132,12 @@ export function operationFirstStartedAt(op: Pick<Operation,
   return neverClaimed ? now : null;
 }
 
-export function operationNeedsDurableCustomerMigrationV2Resume(op: {
+export function operationNeedsDurableUserMigrationV2Resume(op: {
   kind?: string;
-  customerMigrationV2?: CustomerMigrationV2State;
+  customerMigrationV2?: UserMigrationV2State;
   sourceTransferExecution?: SourceTransferExecution;
 }): boolean {
-  return op.kind === MIGRATE_CUSTOMER_KIND && op.customerMigrationV2 !== undefined;
+  return op.kind === MIGRATE_USER_KIND && op.customerMigrationV2 !== undefined;
 }
 
 export function operationNeedsDurableRestartResume(op: {
@@ -145,7 +145,7 @@ export function operationNeedsDurableRestartResume(op: {
   kind?: string;
   origin?: string;
   input?: Record<string, unknown>;
-  customerMigrationV2?: CustomerMigrationV2State;
+  customerMigrationV2?: UserMigrationV2State;
   schedulerHandoff?: SchedulerHandoffState;
   schedulerHandoffReleased?: boolean;
   cutoverCommittedAt?: number;
@@ -156,8 +156,8 @@ export function operationNeedsDurableRestartResume(op: {
     sourceTransferBlocksRelease(op.sourceTransferExecution) || op.kind === "suspend-customer" ||
     (op.kind === "restart-gateway" && (op.input?.restoreRecovery !== undefined || op.input?.sourceRecovery !== undefined)) ||
     op.kind === "erase-customer" ||
-    isLevelTriggeredBuilderReturn(op) ||
-    operationNeedsDurableCustomerMigrationV2Resume(op);
+    isLevelTriggeredUserReturn(op) ||
+    operationNeedsDurableUserMigrationV2Resume(op);
 }
 
 export function supersededRollMigrationAction(op: {
@@ -183,7 +183,7 @@ export interface OperationCompletionInput {
     attempts?: number;
     attemptHistory?: OperationAttemptRecord[];
     startedAt?: number | null;
-    customerMigrationV2?: CustomerMigrationV2State;
+    customerMigrationV2?: UserMigrationV2State;
     schedulerHandoff?: SchedulerHandoffState;
     schedulerHandoffReleased?: boolean;
     cutoverCommittedAt?: number;
@@ -244,24 +244,24 @@ function hasLevelTriggeredFence(input: OperationCompletionInput): boolean {
   return recordOutput(result.output?.retirementFencePending) ||
     recordOutput(result.output?.deletionFencePending) ||
     recordOutput(result.output?.deletionCleanupRetry) ||
-    op.kind === MIGRATE_CUSTOMER_KIND && result.output?.gatewayCompatibilityPending === true ||
+    op.kind === MIGRATE_USER_KIND && result.output?.gatewayCompatibilityPending === true ||
     op.kind === "suspend-customer" ||
     op.kind === "erase-customer";
 }
 
-function isLevelTriggeredBuilderReturn(op: OperationCompletionInput["op"]): boolean {
+function isLevelTriggeredUserReturn(op: OperationCompletionInput["op"]): boolean {
   const fromGatewayId = op.input?.fromGatewayId;
-  return op.kind === MIGRATE_CUSTOMER_KIND &&
+  return op.kind === MIGRATE_USER_KIND &&
     op.origin === "automatic" &&
     op.input?.source === "builder-activation-lease" &&
-    isBuilderReturnOperationIdFor(op.id, fromGatewayId);
+    isUserReturnOperationIdFor(op.id, fromGatewayId);
 }
 
-export function computerPreemptionError(role: "source" | "target", instanceName: string, cause: string): string {
+export function vmPreemptionError(role: "source" | "target", instanceName: string, cause: string): string {
   return `${role} computer ${instanceName} was preempted: ${cause}`;
 }
 
-function isComputerPreemptionFailure(error: string): boolean {
+function isVmPreemptionFailure(error: string): boolean {
   return /^(source|target) computer \S+ was preempted: /.test(error);
 }
 
@@ -272,7 +272,7 @@ function isGatewayMigrationReadinessFailure(error: string): boolean {
 function isLevelTriggeredContinuousPlacement(
   op: OperationCompletionInput["op"],
 ): boolean {
-  return op.kind === MIGRATE_CUSTOMER_KIND &&
+  return op.kind === MIGRATE_USER_KIND &&
     op.origin === "automatic" &&
     op.input?.source === "continuous-placement-policy" &&
     typeof op.id === "string" &&
@@ -338,7 +338,7 @@ function pendingCompletion(
     expireAt: CLEAR,
     attempts,
     attemptHistory: failure.attemptHistory,
-    queuedAt: input.op.kind === MIGRATE_CUSTOMER_KIND && input.result.rolledBack === true &&
+    queuedAt: input.op.kind === MIGRATE_USER_KIND && input.result.rolledBack === true &&
       !recordOutput(input.result.output?.configCleanup) &&
       (input.op.customerMigrationV2 === undefined || input.op.customerMigrationV2.phase === "aborted")
       ? input.now : CLEAR,
@@ -387,8 +387,8 @@ export function buildOperationCompletionUpdate(
     status:'pending',startedAt:null,completedAt:null,expireAt:CLEAR,steps:persistedSteps,
     nextAttemptAt:input.now+30_000,lastProgressAt:input.now,error:'source transfer termination not observed',
   };
-  if (result.waitingForBuilderIdle === true) {
-    if (op.kind !== MIGRATE_CUSTOMER_KIND || result.success) throw new Error("only pending customer migrations can wait for active Builder work");
+  if (result.waitingForUserIdle === true) {
+    if (op.kind !== MIGRATE_USER_KIND || result.success) throw new Error("only pending user migrations can wait for active user work");
     return {
       status: "pending", startedAt: null, completedAt: null, expireAt: CLEAR,
       steps: persistedSteps, nextAttemptAt: input.now + 15_000, lastProgressAt: input.now,
@@ -414,24 +414,24 @@ export function buildOperationCompletionUpdate(
 function migrationCutoverNeedsRecovery(
   op: Pick<OperationCompletionInput["op"], "kind" | "cutoverCommittedAt" | "schedulerHandoff" | "schedulerHandoffReleased">,
 ): boolean {
-  return op.kind === MIGRATE_CUSTOMER_KIND &&
+  return op.kind === MIGRATE_USER_KIND &&
     (op.cutoverCommittedAt !== undefined || op.schedulerHandoff?.stageAfterCutover === true && op.schedulerHandoffReleased !== true);
 }
 
-function builderActivationRolledBack(op: OperationCompletionInput["op"], result: OperationResult): boolean {
-  return result.rolledBack === true && op.kind === MIGRATE_CUSTOMER_KIND &&
+function userActivationRolledBack(op: OperationCompletionInput["op"], result: OperationResult): boolean {
+  return result.rolledBack === true && op.kind === MIGRATE_USER_KIND &&
     op.customerMigrationV2 === undefined && op.schedulerHandoff?.forwardRecovery === undefined &&
     op.input?.source === "builder-activation-lease" &&
-    isBuilderActivateOperationIdFor(op.id, op.input.toGatewayId);
+    isUserActivateOperationIdFor(op.id, op.input.toGatewayId);
 }
 
 function retriesBeyondAttemptCap(op: OperationCompletionInput["op"], failure: FailureCompletionContext, attempts: number): boolean {
   return failure.levelTriggeredFence ||
     migrationCutoverNeedsRecovery(op) ||
-    op.kind === MIGRATE_CUSTOMER_KIND && failure.error.startsWith("migration cutover committed; destination recovery pending:") ||
+    op.kind === MIGRATE_USER_KIND && failure.error.startsWith("migration cutover committed; destination recovery pending:") ||
     isFencedManagementHealthFailure(op, failure.error) ||
-    (isComputerPreemptionFailure(failure.error) && attempts < MAX_PREEMPTED_OPERATION_ATTEMPTS) ||
-    (isLevelTriggeredBuilderReturn(op) && !isGatewayMigrationReadinessFailure(failure.error)) ||
+    (isVmPreemptionFailure(failure.error) && attempts < MAX_PREEMPTED_OPERATION_ATTEMPTS) ||
+    (isLevelTriggeredUserReturn(op) && !isGatewayMigrationReadinessFailure(failure.error)) ||
     isLevelTriggeredContinuousPlacement(op);
 }
 
@@ -443,23 +443,23 @@ function shouldRetry(
   retryBeyondCap: boolean,
 ): boolean {
   if (classification !== "transient") return false;
-  if (builderActivationRolledBack(op, result)) return false;
+  if (userActivationRolledBack(op, result)) return false;
   const hasDurableCleanup =
     result.output?.configCleanup !== null &&
     typeof result.output?.configCleanup === "object";
   const activeMigration = op.customerMigrationV2;
-  const hasActiveCustomerMigrationV2 = activeMigration !== undefined &&
+  const hasActiveUserMigrationV2 = activeMigration !== undefined &&
     activeMigration.phase !== "complete" &&
     activeMigration.phase !== "aborted";
   return attempts < MAX_OPERATION_ATTEMPTS ||
     hasDurableCleanup ||
     retryBeyondCap ||
-    hasActiveCustomerMigrationV2 ||
+    hasActiveUserMigrationV2 ||
     op.schedulerHandoff?.forwardRecovery !== undefined;
 }
 
 function needsSharedRollbackRecovery(input: OperationCompletionInput, steps: OperationStep[]): boolean {
-  return input.op.kind === MIGRATE_CUSTOMER_KIND &&
+  return input.op.kind === MIGRATE_USER_KIND &&
     input.op.customerMigrationV2 === undefined &&
     typeof input.op.input?.fromGatewayId === "string" &&
     input.op.input.fromGatewayId.startsWith("shared-") &&

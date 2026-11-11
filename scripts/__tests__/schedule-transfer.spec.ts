@@ -91,7 +91,7 @@ function fakeGateway(initial: Job[], options: {
 }
 
 describe("schedule snapshot", () => {
-  it("records only the customer's agents' jobs and leaves every other job running", async () => {
+  it("records only the user's agents' jobs and leaves every other job running", async () => {
     const gateway = fakeGateway([
       listedJob("a1"),
       listedJob("p1", { agentId: ALICE_PROJECT, effectiveAgentId: ALICE_PROJECT }),
@@ -182,7 +182,7 @@ describe("schedule snapshot", () => {
     expect(record.job).toMatchObject({ scheduledToolPolicy, toolsAllowProvenance });
   });
 
-  it("pins a default-agent job to the customer agent that runs it", async () => {
+  it("pins a default-agent job to the user agent that runs it", async () => {
     const gateway = fakeGateway([listedJob("d1", { agentId: undefined, effectiveAgentId: ALICE })]);
 
     const [record] = (await snapshotSchedules(gateway.call, ALICE_AGENTS, vi.fn())).records;
@@ -191,7 +191,7 @@ describe("schedule snapshot", () => {
     expect(record.job.agentId).toBe(ALICE);
   });
 
-  it("carries the coach monitor with its own declaration key, since only first provisioning creates it", async () => {
+  it("carries the agent monitor with its own declaration key, since only first provisioning creates it", async () => {
     const key = `octogee:coach-monitor:${ALICE}`;
     const source = fakeGateway([listedJob("monitor", { name: `Proactive check (${ALICE})`, declarationKey: key })]);
     const { records, skipped } = await snapshotSchedules(source.call, ALICE_AGENTS, vi.fn());
@@ -387,7 +387,7 @@ describe("schedule restore", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("add Brief a2 refused"));
   });
 
-  it("refuses a record for an agent the customer does not own here", async () => {
+  it("refuses a record for an agent the user does not own here", async () => {
     const [record] = await snapshotOf([listedJob("a1")]);
     const forged = { ...record, agentId: "octogee-bob-coach", job: { ...record.job, agentId: "octogee-bob-coach" } };
     const target = fakeGateway([]);
@@ -426,12 +426,12 @@ describe("schedule restore", () => {
 });
 
 describe("schedule remove", () => {
-  it("removes only this customer's jobs and counts a job already gone as removed", async () => {
+  it("removes only this user's jobs and counts a job already gone as removed", async () => {
     const gateway = fakeGateway([listedJob("a1"), listedJob("b1", { agentId: "octogee-bob-coach", effectiveAgentId: "octogee-bob-coach" })]);
 
     const result = await removeSchedules(gateway.call, ALICE_AGENTS, ["a1", "b1", "gone"], vi.fn());
 
-    expect(result).toEqual({ removed: 2, failed: [{ jobId: "b1", error: "not this customer's job" }] });
+    expect(result).toEqual({ removed: 2, failed: [{ jobId: "b1", error: "not this user's job" }] });
     expect(gateway.store.map(job => job.id)).toEqual(["b1"]);
   });
 
@@ -462,7 +462,7 @@ describe("schedule transfer wiring", () => {
     };
   }
 
-  it("snapshots the customer's local and rostered agents and answers with the transfer envelope", async () => {
+  it("snapshots the user's local and rostered agents and answers with the transfer envelope", async () => {
     const { gateway, close, deps: transferDeps } = deps([
       listedJob("a1"),
       listedJob("p1", { agentId: ALICE_PROJECT, effectiveAgentId: ALICE_PROJECT }),

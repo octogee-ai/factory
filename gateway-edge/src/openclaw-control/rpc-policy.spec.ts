@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { reconcilePlatformInvariants } from "@octogee/core/system-config-invariants";
 import { evaluateOpenClawControlRpc, openClawConfigSnapshotFromGetResponse, installedMethodsFromHello } from "./rpc-policy.js";
 
-const invariantContext = { gatewayClass: "builder" as const, gatewayId: "bender", apiOrigin: "https://api.octogee.com" };
+const invariantContext = { gatewayClass: "builder" as const, gatewayId: "walter", apiOrigin: "https://api.octogee.com" };
 function request(method: string, params: Record<string, unknown> = {}) {
   return { type: "req", id: "rpc-1", method, params };
 }
@@ -71,7 +71,7 @@ describe("native Dashboard permissions and managed configuration", () => {
 
   it.each([
     { brokerUrl: "http://127.0.0.1:9999" },
-    { tokenPath: "/home/node/customer-file" },
+    { tokenPath: "/home/node/user-file" },
   ])("rejects Admin native voice broker rewiring through config.patch: %j", (config) => {
     const perUser = { ...invariantContext, controlIdentity: "per-user" as const, ownerUid: "owner", workspaceSlug: "alice" };
     const current = {};

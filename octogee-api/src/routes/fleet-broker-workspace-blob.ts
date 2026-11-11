@@ -1,6 +1,6 @@
 import { runtimeBlobStore } from "../lib/runtime-blob-store.js";
 import type { Request, Response, Router } from "express";
-import type { BuilderRecord, GatewayAssignment, PlatformStateStore, WorkspaceRecord } from "@octogee/core/platform-state";
+import type { PlatformUserRecord, GatewayAssignment, PlatformStateStore, WorkspaceRecord } from "@octogee/core/platform-state";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { isManifestPath } from "@octogee/core/workspace-manifest";
 import { parseMultipart, MAX_UPLOAD_BYTES, UploadTooLargeError } from "../../../gateway-edge/src/routes/workspace/upload.js";
@@ -18,10 +18,10 @@ interface WorkspaceBlobBrokerDeps {
   blobStore?: WorkspaceBlobStore;
 }
 
-function workspaceOwnerMatches(builder: BuilderRecord | null, workspace: WorkspaceRecord | null, scope: AssignedWorkspace): boolean {
-  return builder !== null && accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined }) &&
-    builder.slug === scope.slug && builder.gateway?.gatewayId === scope.gatewayId && builder.openclaw.status === "complete" &&
-    builder.fences.restoreFence === undefined && workspace?.ownerUid === scope.uid && workspace.ownerActive !== false;
+function workspaceOwnerMatches(user: PlatformUserRecord | null, workspace: WorkspaceRecord | null, scope: AssignedWorkspace): boolean {
+  return user !== null && accountAllowsInteractiveAccess({ accountLifecycle: user.accountLifecycle ?? undefined }) &&
+    user.slug === scope.slug && user.gateway?.gatewayId === scope.gatewayId && user.openclaw.status === "complete" &&
+    user.fences.restoreFence === undefined && workspace?.ownerUid === scope.uid && workspace.ownerActive !== false;
 }
 
 function checkpointAssignmentMatches(assignment: GatewayAssignment | null, scope: AssignedWorkspace): boolean {
@@ -30,10 +30,10 @@ function checkpointAssignmentMatches(assignment: GatewayAssignment | null, scope
 
 async function canonicalWorkspaceOwned(store: PlatformStateStore, scope: AssignedWorkspace): Promise<boolean> {
   return store.transaction({ label: "fleet-broker.workspace-blob-owner", readOnly: true }, async (tx) => {
-    const [builder, workspace, assignment] = await Promise.all([
-      tx.builders.records.get(scope.uid), tx.workspaces.records.get(scope.slug), tx.gateways.assignments.get(scope.gatewayId, scope.uid),
+    const [user, workspace, assignment] = await Promise.all([
+      tx.users.records.get(scope.uid), tx.workspaces.records.get(scope.slug), tx.gateways.assignments.get(scope.gatewayId, scope.uid),
     ]);
-    return workspaceOwnerMatches(builder, workspace, scope) && checkpointAssignmentMatches(assignment, scope);
+    return workspaceOwnerMatches(user, workspace, scope) && checkpointAssignmentMatches(assignment, scope);
   });
 }
 

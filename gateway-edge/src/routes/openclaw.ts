@@ -9,11 +9,11 @@ import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-li
 import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import {
-  requestBuilderActivationLease,
-  recordBuilderRuntimeActivity,
-  type BuilderActivationLeaseResult,
-  type BuilderRuntimeDemandCause,
-} from "@octogee/core/builder-activation-lease";
+  requestUserActivationLease,
+  recordIsolatedRuntimeActivity,
+  type UserActivationLeaseResult,
+  type IsolatedRuntimeDemandCause,
+} from "@octogee/core/user-activation-lease";
 
 const router = Router();
 
@@ -25,7 +25,7 @@ router.post("/runtime-activity", requireAuth, async (req: Request, res: Response
       res.status(400).json({ error: "gatewayId is required" });
       return;
     }
-    const recorded = await recordBuilderRuntimeActivity({
+    const recorded = await recordIsolatedRuntimeActivity({
       store: platformStateStore,
       readBuilderTier,
       uid: req.uid!,
@@ -44,25 +44,25 @@ async function activationGatewayId(
   if (!builderTier) return null;
   const sizingProfile = await platformStateStore.config.orchestrator.getSizingProfile(builderTier);
   if (sizingProfile.isolation !== "isolated") return null;
-  const builder = await platformStateStore.builders.records.get(uid);
-  if (!builder || !accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined })) {
+  const user = await platformStateStore.users.records.get(uid);
+  if (!user || !accountAllowsInteractiveAccess({ accountLifecycle: user.accountLifecycle ?? undefined })) {
     return null;
   }
-  const gatewayId = builder.gateway?.gatewayId;
-  return builder.slug !== null && isValidGatewayId(gatewayId) ? gatewayId : null;
+  const gatewayId = user.gateway?.gatewayId;
+  return user.slug !== null && isValidGatewayId(gatewayId) ? gatewayId : null;
 }
 
 async function requestRuntimeDemand(input: {
   uid: string;
   userData: Record<string, unknown> | undefined;
-  cause: BuilderRuntimeDemandCause;
+  cause: IsolatedRuntimeDemandCause;
   eventKey: string;
   createdBy: string;
-}): Promise<BuilderActivationLeaseResult | null> {
+}): Promise<UserActivationLeaseResult | null> {
   const reportingGatewayId = await activationGatewayId(input.uid, input.userData);
   if (!reportingGatewayId) return null;
   const assignment = await platformStateStore.gateways.assignments.get(reportingGatewayId, input.uid);
-  return requestBuilderActivationLease({
+  return requestUserActivationLease({
     store: platformStateStore,
     readBuilderTier,
     uid: input.uid,
@@ -89,14 +89,14 @@ router.post("/ticket", requireAuth, async (req: Request, res: Response, next: Ne
       if (!isMattermostActivitySelection(req.body)) {
         res.status(400).json({ error: 'invalid_activity_channel' }); return;
       }
-      const scope = await resolveActivityConversation({ builders: platformStateStore.builders.records, uid, ...req.body });
+      const scope = await resolveActivityConversation({ users: platformStateStore.users.records, uid, ...req.body });
       if (!scope) { res.status(403).json({ error: 'activity_channel_forbidden' }); return; }
       const { gatewayId, ...payload } = scope;
       const ticket = await mintTicket({ uid, gatewayId, purpose: 'openclaw-ws', payload });
       res.set('Cache-Control', 'no-store').json({ wsTicket: ticket.ticket, proxyUrl: process.env.API_PUBLIC_URL || '', gatewayId, sessionKey: scope.sessionKey });
       return;
     }
-    const rawGatewayId = (await platformStateStore.builders.records.get(uid))?.gateway?.gatewayId;
+    const rawGatewayId = (await platformStateStore.users.records.get(uid))?.gateway?.gatewayId;
     const gatewayId = isValidGatewayId(rawGatewayId) ? rawGatewayId : "";
 
     const t = await mintTicket({ uid, gatewayId, purpose: "openclaw-ws" });

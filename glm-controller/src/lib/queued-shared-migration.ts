@@ -2,8 +2,8 @@ import { readSchedulerMigrationIdentity } from "@octogee/shared/types/glm";
 import type { DocumentData } from 'firebase-admin/firestore';
 import type { AssignmentDoc } from '@octogee/shared/types/gateway-releases';
 import { readWorkspaceMigrationMarker } from '@octogee/shared/types/workspace-migration';
-import { builderRuntimeMutationFenced } from '@octogee/core/gateway-retirement-claim';
-import type { BuilderRecord, PlatformStateRepositories, Stored } from '@octogee/core/platform-state';
+import { isolatedRuntimeMutationFenced } from '@octogee/core/gateway-retirement-claim';
+import type { PlatformUserRecord, PlatformStateRepositories, Stored } from '@octogee/core/platform-state';
 import { MAX_OPERATION_ATTEMPT_HISTORY } from '../operation-retry.js';
 
 function positiveInteger(value: unknown): boolean {
@@ -60,10 +60,10 @@ function queuedSharedMigrationBeforeTransport(row: DocumentData, id: string): bo
   return queuedSharedScope(row) && unclaimedRetry(row) && handoffMatches(row, id) && untouchedTransportHistory(row);
 }
 
-function builderOwnerMatches(row: DocumentData, id: string, owner: Stored<BuilderRecord> | null): boolean {
+function userOwnerMatches(row: DocumentData, id: string, owner: Stored<PlatformUserRecord> | null): boolean {
   if (!owner) return false;
   const marker = readWorkspaceMigrationMarker({ migration: owner.fences.migration });
-  return !builderRuntimeMutationFenced(owner) && owner.gateway?.gatewayId === row.input.fromGatewayId &&
+  return !isolatedRuntimeMutationFenced(owner) && owner.gateway?.gatewayId === row.input.fromGatewayId &&
     ['complete', 'provisioning'].includes(owner.openclaw.status ?? '') && marker?.operationId === id && marker.state === 'preparing' && marker.phase === 'preparing';
 }
 
@@ -76,12 +76,12 @@ function sourceAssignmentMatches(row: DocumentData, id: string, assignment: Docu
 }
 
 export async function queuedSharedMigrationOwnsSourceInStore(
-  state: Pick<PlatformStateRepositories, 'builders' | 'gateways'>, row: DocumentData, id: string,
+  state: Pick<PlatformStateRepositories, 'users' | 'gateways'>, row: DocumentData, id: string,
 ): Promise<boolean> {
   if (!queuedSharedMigrationBeforeTransport(row, id)) return false;
   const { uid, fromGatewayId, toGatewayId } = row.input;
   const [owner, source, target] = await Promise.all([
-    state.builders.records.get(uid), state.gateways.assignments.get(fromGatewayId, uid), state.gateways.assignments.get(toGatewayId, uid),
+    state.users.records.get(uid), state.gateways.assignments.get(fromGatewayId, uid), state.gateways.assignments.get(toGatewayId, uid),
   ]);
-  return target === null && builderOwnerMatches(row, id, owner) && sourceAssignmentMatches(row, id, source);
+  return target === null && userOwnerMatches(row, id, owner) && sourceAssignmentMatches(row, id, source);
 }

@@ -11,13 +11,13 @@ export type ModelBrokerOwnerAccessResolver = (
 ) => Promise<boolean>;
 
 export function createModelBrokerOwnerAccessResolver(
-  state: Pick<PlatformStateRepositories, "gateways" | "builders">,
+  state: Pick<PlatformStateRepositories, "gateways" | "users">,
 ): ModelBrokerOwnerAccessResolver {
   return async (input) => {
     const ownerUid = input.ownerUid || (await state.gateways.roots.get(input.gatewayId))?.ownerUid || null;
     if (!ownerUid) return false;
-    const builder = await state.builders.records.get(ownerUid);
-    return builder !== null &&
-      accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined });
+    const user = await state.users.records.get(ownerUid);
+    return user !== null &&
+      accountAllowsInteractiveAccess({ accountLifecycle: user.accountLifecycle ?? undefined });
   };
 }

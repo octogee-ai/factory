@@ -15,10 +15,10 @@ import { createFleetInformer } from "../fleet-informer.js";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { MalformedRecordError, type FleetRegistryRecord } from "@octogee/core/platform-state";
 
-const BENDER_RUNTIME = { docKind: "runtime", gatewayId: "bender", release: 2, lifecycle: "serving" };
+const WALTER_RUNTIME = { docKind: "runtime", gatewayId: "walter", release: 2, lifecycle: "serving" };
 
 function runtimeRegistry() {
-  return createDocumentFixtureStore({ "glmGateways/bender": { ...BENDER_RUNTIME } });
+  return createDocumentFixtureStore({ "glmGateways/walter": { ...WALTER_RUNTIME } });
 }
 
 class RecordingDocuments extends Map<string, Record<string, unknown>> {
@@ -51,13 +51,13 @@ describe("callUnmountRpc", () => {
       .mockResolvedValue("http://10.0.0.7:3003");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
     await callUnmountRpc(runtimeRegistry(), {
-      privateKey: FLEET_KEY_PAIR.privateKey, gatewayId: "bender", slug: "alice", log: vi.fn(),
+      privateKey: FLEET_KEY_PAIR.privateKey, gatewayId: "walter", slug: "alice", log: vi.fn(),
       ...(allowUnready ? { allowUnready: true } : {}),
     });
     const [url, init] = fetchMock.mock.calls[0];
     if (allowUnready) {
-      expect(recovery).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ gatewayId: "bender", port: "3003" }));
-      expect(url).toBe("http://10.0.0.7:3003/unmount/bender");
+      expect(recovery).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ gatewayId: "walter", port: "3003" }));
+      expect(url).toBe("http://10.0.0.7:3003/unmount/walter");
     } else {
       expect(recovery).not.toHaveBeenCalled();
       expect(url).not.toContain("10.0.0.7");
@@ -66,11 +66,11 @@ describe("callUnmountRpc", () => {
     const body = JSON.parse(rawBody);
     const signature = (init?.headers as Record<string, string>)[SIGNATURE_HEADER];
     expect(body.slug).toBe("alice");
-    expect(verifyFleetRequest(FLEET_KEY_PAIR.publicKey, gatewayScopedJobId(body.migrationId, "bender"), rawBody, signature)).toBe(true);
+    expect(verifyFleetRequest(FLEET_KEY_PAIR.publicKey, gatewayScopedJobId(body.migrationId, "walter"), rawBody, signature)).toBe(true);
     expect(verifyFleetRequest(FLEET_KEY_PAIR.publicKey, gatewayScopedJobId(body.migrationId, "other"), rawBody, signature)).toBe(false);
   });
 
-  it("aborts a stuck unmount RPC instead of hanging the Builder gateway poller", async () => {
+  it("aborts a stuck unmount RPC instead of hanging the isolated gateway poller", async () => {
     vi.useFakeTimers();
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -85,20 +85,20 @@ describe("callUnmountRpc", () => {
 
     const pending = callUnmountRpc(runtimeRegistry(), {
       privateKey: FLEET_KEY_PAIR.privateKey,
-      gatewayId: "bender",
+      gatewayId: "walter",
       slug: "ghost",
       log: vi.fn(),
       timeoutMs: 25,
     });
     const rejection = expect(pending).rejects.toThrow(
-      /unmount timed out after 25ms gatewayId=bender slug=ghost/,
+      /unmount timed out after 25ms gatewayId=walter slug=ghost/,
     );
 
     await vi.advanceTimersByTimeAsync(25);
 
     await rejection;
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/unmount/bender"),
+      expect.stringContaining("/unmount/walter"),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
@@ -118,9 +118,9 @@ describe("callUnmountRpc", () => {
         return new Response(JSON.stringify(result));
       });
       const promise = callUnmountRpc(runtimeRegistry(), { privateKey: FLEET_KEY_PAIR.privateKey,
-        gatewayId: "bender", slug: "alice", log: vi.fn(), migrationId: "erase-op-claim-10", agentStoreErasure: coverage });
+        gatewayId: "walter", slug: "alice", log: vi.fn(), migrationId: "erase-op-claim-10", agentStoreErasure: coverage });
       if (mode === "matching") await expect(promise).resolves.toBeUndefined();
-      else await expect(promise).rejects.toThrow("did not confirm exact customer Native cleanup");
+      else await expect(promise).rejects.toThrow("did not confirm exact user Native cleanup");
     });
 });
 
@@ -130,18 +130,18 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
   });
 
   it("writeHeartbeat writes ONLY glmGateways/{id}.heartbeat — never the flat gateways/{id} doc", async () => {
-    const documents = recordingDocuments({ "glmGateways/bender": { ...BENDER_RUNTIME } });
+    const documents = recordingDocuments({ "glmGateways/walter": { ...WALTER_RUNTIME } });
     const deps = buildGatewayHeartbeatPollerDeps({} as Firestore, createDocumentFixtureStore(documents), vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
-    await deps.writeHeartbeat("bender", { status: "ready", mountedCustomers: ["ceckert"], startedAt: 42 });
+    await deps.writeHeartbeat("walter", { status: "ready", mountedCustomers: ["ceckert"], startedAt: 42 });
 
-    expect(documents.writes.map((write) => write.path)).toEqual(["glmGateways/bender"]);
-    expect(documents.get("glmGateways/bender")).toMatchObject({
-      ...BENDER_RUNTIME,
+    expect(documents.writes.map((write) => write.path)).toEqual(["glmGateways/walter"]);
+    expect(documents.get("glmGateways/walter")).toMatchObject({
+      ...WALTER_RUNTIME,
       heartbeat: {
         status: "ready",
         mountedCustomers: ["ceckert"],
         startedAt: 42,
-        internalUrl: expect.stringContaining("octogee-gateway-bender"),
+        internalUrl: expect.stringContaining("octogee-gateway-walter"),
         lastHeartbeatAt: expect.any(Number),
       },
     });
@@ -161,7 +161,7 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
       stubInformer(),
     );
 
-    await deps.evictSlug?.("bender", "ghost");
+    await deps.evictSlug?.("walter", "ghost");
 
     const rawBody = capturedInit?.body as string;
     const body = JSON.parse(rawBody) as { migrationId: string };
@@ -170,7 +170,7 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
     expect(
       verifyFleetRequest(
         FLEET_KEY_PAIR.publicKey,
-        gatewayScopedJobId(body.migrationId, "bender"),
+        gatewayScopedJobId(body.migrationId, "walter"),
         rawBody,
         signature,
       ),
@@ -189,9 +189,9 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
     ).toBe(false);
   });
 
-  it("leaves shared eviction to the in-pod reconciler and owns builder eviction", async () => {
+  it("leaves shared eviction to the in-pod reconciler and owns user eviction", async () => {
     const durableGateway = (gatewayClass: "shared" | "builder") => ({
-      gatewayId: "bender",
+      gatewayId: "walter",
       latestRelease: 1,
       desiredRelease: 1,
       desiredStatus: "running",
@@ -205,23 +205,23 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
       serviceAccountName: null,
       serviceAccount: null,
       builderAccess: null,
-      ownerUid: gatewayClass === "shared" ? null : "uid-bender",
-      builderSlug: gatewayClass === "shared" ? null : "bender",
+      ownerUid: gatewayClass === "shared" ? null : "uid-walter",
+      builderSlug: gatewayClass === "shared" ? null : "walter",
       modelBrokerLimits: null,
       preemption: null,
     });
-    const documents = new Map<string, Record<string, unknown>>([["gateways/bender", durableGateway("shared")]]);
+    const documents = new Map<string, Record<string, unknown>>([["gateways/walter", durableGateway("shared")]]);
     const deps = buildGatewayHeartbeatPollerDeps({} as Firestore, createDocumentFixtureStore(documents), vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
 
-    await expect(deps.ownsEviction?.("bender")).resolves.toBe(false);
-    documents.set("gateways/bender", durableGateway("builder"));
-    await expect(deps.ownsEviction?.("bender")).resolves.toBe(true);
+    await expect(deps.ownsEviction?.("walter")).resolves.toBe(false);
+    documents.set("gateways/walter", durableGateway("builder"));
+    await expect(deps.ownsEviction?.("walter")).resolves.toBe(true);
   });
 });
 
 describe("gateway heartbeat poll — a converged gateway writes nothing", () => {
   function poller() {
-    const documents = recordingDocuments({ "glmGateways/bender": { ...BENDER_RUNTIME } });
+    const documents = recordingDocuments({ "glmGateways/walter": { ...WALTER_RUNTIME } });
     const deps = buildGatewayHeartbeatPollerDeps({} as Firestore, createDocumentFixtureStore(documents), vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
     return { deps, writes: documents.writes };
   }
@@ -230,12 +230,12 @@ describe("gateway heartbeat poll — a converged gateway writes nothing", () => 
     const { deps, writes } = poller();
     const health = { status: "ready", mountedCustomers: ["ceckert"], startedAt: 42 };
 
-    expect(await deps.listGatewayIds()).toEqual(["bender"]);
-    await deps.writeHeartbeat("bender", health);
+    expect(await deps.listGatewayIds()).toEqual(["walter"]);
+    await deps.writeHeartbeat("walter", health);
     expect(writes).toHaveLength(1);
 
     await deps.listGatewayIds();
-    await deps.writeHeartbeat("bender", health);
+    await deps.writeHeartbeat("walter", health);
 
     expect(writes).toHaveLength(1);
   });
@@ -244,14 +244,14 @@ describe("gateway heartbeat poll — a converged gateway writes nothing", () => 
     const { deps, writes } = poller();
 
     await deps.listGatewayIds();
-    await deps.writeHeartbeat("bender", {
+    await deps.writeHeartbeat("walter", {
       status: "ready",
       mountedCustomers: ["ceckert"],
       startedAt: 42,
     });
 
     await deps.listGatewayIds();
-    await deps.writeHeartbeat("bender", {
+    await deps.writeHeartbeat("walter", {
       status: "ready",
       mountedCustomers: [],
       startedAt: 42,
@@ -277,7 +277,7 @@ describe("runtime heartbeat polling", () => {
 
   it("fails the whole poll listing on a runtime document that claims another gateway identity", async () => {
     const store = createDocumentFixtureStore({
-      "glmGateways/bender": { ...BENDER_RUNTIME },
+      "glmGateways/walter": { ...WALTER_RUNTIME },
       "glmGateways/default-shadow": { docKind: "runtime", gatewayId: "default", release: 2, lifecycle: "serving" },
     });
     const deps = buildGatewayHeartbeatPollerDeps({} as Firestore, store, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
@@ -287,23 +287,23 @@ describe("runtime heartbeat polling", () => {
 
   it("does not list non-runtime glmGateways documents", async () => {
     const store = createDocumentFixtureStore({
-      "glmGateways/bender": { ...BENDER_RUNTIME },
-      "glmGateways/bender-r2": { docKind: "revision", gatewayId: "bender", release: 2, lifecycle: "serving" },
+      "glmGateways/walter": { ...WALTER_RUNTIME },
+      "glmGateways/walter-r2": { docKind: "revision", gatewayId: "walter", release: 2, lifecycle: "serving" },
     });
     const deps = buildGatewayHeartbeatPollerDeps({} as Firestore, store, vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
 
-    expect(await deps.listGatewayIds()).toEqual(["bender"]);
+    expect(await deps.listGatewayIds()).toEqual(["walter"]);
   });
 
   it("keeps polling every other gateway when one runtime record is malformed", async () => {
     const store = createDocumentFixtureStore({
-      "glmGateways/bender": { ...BENDER_RUNTIME },
-      "glmGateways/flexo": { ...BENDER_RUNTIME, gatewayId: "flexo" },
+      "glmGateways/walter": { ...WALTER_RUNTIME },
+      "glmGateways/flexo": { ...WALTER_RUNTIME, gatewayId: "flexo" },
       "glmGateways/broken": { docKind: "runtime", gatewayId: "other", release: 2, lifecycle: "serving" },
     });
     const valid = await createDocumentFixtureStore({
-      "glmGateways/bender": { ...BENDER_RUNTIME },
-      "glmGateways/flexo": { ...BENDER_RUNTIME, gatewayId: "flexo" },
+      "glmGateways/walter": { ...WALTER_RUNTIME },
+      "glmGateways/flexo": { ...WALTER_RUNTIME, gatewayId: "flexo" },
     }).fleetRegistry.list();
     const watches = createScriptedWatches();
     const usersDb = { collection: () => ({ onSnapshot: () => () => undefined }) } as unknown as Firestore;
@@ -313,8 +313,8 @@ describe("runtime heartbeat polling", () => {
     const log = vi.fn();
     const deps = buildGatewayHeartbeatPollerDeps({} as Firestore, store, log, FLEET_KEY_PAIR.privateKey, informer);
 
-    expect(await deps.listGatewayIds()).toEqual(["bender", "flexo"]);
-    expect(await deps.listGatewayIds()).toEqual(["bender", "flexo"]);
+    expect(await deps.listGatewayIds()).toEqual(["flexo", "walter"]);
+    expect(await deps.listGatewayIds()).toEqual(["flexo", "walter"]);
     await expect(store.fleetRegistry.list()).rejects.toBeInstanceOf(MalformedRecordError);
     expect(log.mock.calls.filter(([message]) =>
       message === "[glm-controller] ⚠ heartbeat poll skips malformed runtime record(s): broken")).toHaveLength(2);
@@ -331,12 +331,12 @@ describe("runtime heartbeat polling", () => {
 describe("gateway heartbeat poll — a converged poll reads nothing", () => {
   const runtime = {
     docKind: "runtime",
-    gatewayId: "bender",
+    gatewayId: "walter",
     release: 2,
     lifecycle: "serving",
   };
-  const builderRoot = {
-    gatewayId: "bender",
+  const userRoot = {
+    gatewayId: "walter",
     latestRelease: 1,
     desiredRelease: 1,
     desiredStatus: "running",
@@ -350,14 +350,14 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
     serviceAccountName: null,
     serviceAccount: null,
     builderAccess: null,
-    ownerUid: "uid-bender",
-    builderSlug: "bender",
+    ownerUid: "uid-walter",
+    builderSlug: "walter",
     modelBrokerLimits: null,
     preemption: null,
   };
   const assignedUser = {
-    username: "bender",
-    provisioning: { openclaw: { gatewayId: "bender", slug: "bender" } },
+    username: "walter",
+    provisioning: { openclaw: { gatewayId: "walter", slug: "walter" } },
   };
 
   function countingDb() {
@@ -366,12 +366,12 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
       collection: (name: string) => ({
         get: async () => {
           reads.push(`scan:${name}`);
-          return { docs: [{ id: "bender", data: () => runtime }] };
+          return { docs: [{ id: "walter", data: () => runtime }] };
         },
         where: () => ({
           get: async () => {
             reads.push(`query:${name}`);
-            return { docs: [{ id: "uid-bender", data: () => assignedUser }] };
+            return { docs: [{ id: "uid-walter", data: () => assignedUser }] };
           },
         }),
         doc: (id: string) => ({
@@ -379,7 +379,7 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
             reads.push(`get:${name}/${id}`);
             return {
               exists: true,
-              data: () => (name === "gateways" ? builderRoot : runtime),
+              data: () => (name === "gateways" ? userRoot : runtime),
             };
           },
         }),
@@ -389,22 +389,22 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
   }
 
   const seededDocuments = () => recordingDocuments({
-    "glmGateways/bender": runtime,
-    "gateways/bender": builderRoot,
-    "users/uid-bender": assignedUser,
+    "glmGateways/walter": runtime,
+    "gateways/walter": userRoot,
+    "users/uid-walter": assignedUser,
   });
 
   const warmInformer = async () => {
     const seeded = createDocumentFixtureStore(seededDocuments());
-    const [runtimes, roots, builders] = await Promise.all([
-      seeded.fleetRegistry.list(), seeded.gateways.roots.list(), seeded.builders.records.listAll(),
+    const [runtimes, roots, userRecords] = await Promise.all([
+      seeded.fleetRegistry.list(), seeded.gateways.roots.list(), seeded.users.records.listAll(),
     ]);
     return stubInformer({
       fleetRegistry: () => runtimes,
       fleetRegistryWithoutMalformed: () => ({ records: runtimes, malformedKeys: [] }),
       gateways: () => roots,
-      builders: () => builders,
-      buildersWithoutMalformed: () => ({ records: builders, malformedKeys: [] }),
+      users: () => userRecords,
+      usersWithoutMalformed: () => ({ records: userRecords, malformedKeys: [] }),
     });
   };
 
@@ -419,9 +419,9 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
       await warmInformer(),
     );
 
-    expect(await deps.listGatewayIds()).toEqual(["bender"]);
-    expect(await deps.readAssignedSlugs("bender")).toEqual(["bender"]);
-    expect(await deps.ownsEviction?.("bender")).toBe(true);
+    expect(await deps.listGatewayIds()).toEqual(["walter"]);
+    expect(await deps.readAssignedSlugs("walter")).toEqual(["walter"]);
+    expect(await deps.ownsEviction?.("walter")).toBe(true);
 
     expect(reads).toEqual([]);
     expect(documents.reads).toEqual([]);
@@ -438,18 +438,18 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
       stubInformer(),
     );
 
-    expect(await deps.listGatewayIds()).toEqual(["bender"]);
-    expect(await deps.readAssignedSlugs("bender")).toEqual(["bender"]);
-    expect(await deps.ownsEviction?.("bender")).toBe(true);
+    expect(await deps.listGatewayIds()).toEqual(["walter"]);
+    expect(await deps.readAssignedSlugs("walter")).toEqual(["walter"]);
+    expect(await deps.ownsEviction?.("walter")).toBe(true);
 
     expect(reads).toEqual([]);
-    expect(documents.reads).toEqual(expect.arrayContaining(["glmGateways/bender", "gateways/bender"]));
+    expect(documents.reads).toEqual(expect.arrayContaining(["glmGateways/walter", "gateways/walter"]));
   });
 
   it("re-reads the runtime record from the store, never the mirror, before an eviction RPC", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
     const { db, reads } = countingDb();
-    const documents = recordingDocuments({ "glmGateways/bender": { ...BENDER_RUNTIME } });
+    const documents = recordingDocuments({ "glmGateways/walter": { ...WALTER_RUNTIME } });
     const deps = buildGatewayHeartbeatPollerDeps(
       db,
       createDocumentFixtureStore(documents),
@@ -458,9 +458,9 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
       await warmInformer(),
     );
 
-    await deps.evictSlug?.("bender", "ghost");
+    await deps.evictSlug?.("walter", "ghost");
 
     expect(reads).toEqual([]);
-    expect(documents.reads).toEqual(["glmGateways/bender", "glmGateways/bender"]);
+    expect(documents.reads).toEqual(["glmGateways/walter", "glmGateways/walter"]);
   });
 });

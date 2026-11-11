@@ -13,7 +13,7 @@ function mkOp(overrides: Partial<Operation> = {}): Operation {
     createdAt: 0,
     startedAt: null,
     completedAt: null,
-    input: { gatewayId: "bender" },
+    input: { gatewayId: "walter" },
     steps: [],
     ...overrides,
   };
@@ -94,7 +94,7 @@ describe("createRestartGatewayHandler", () => {
     expect(deps.kubeOps.restartOpenClawInPlace).toHaveBeenCalledTimes(1);
     expect(deps.kubeOps.restartOpenClawInPlace).toHaveBeenCalledWith({
       namespace: "octogee-test",
-      name: "octogee-gateway-bender-r7",
+      name: "octogee-gateway-walter-r7",
     });
     expect(result.success).toBe(true);
   });
@@ -208,7 +208,7 @@ describe("createRestartGatewayHandler", () => {
       "openclaw-restart:skipped",
     ]);
     expect(reported[1]?.error).toMatch(/ECONNREFUSED/);
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/bender OpenClaw process is not running/));
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/walter OpenClaw process is not running/));
   });
 
   it("treats a restart against a disappeared pod as idempotently satisfied", async () => {
@@ -216,7 +216,7 @@ describe("createRestartGatewayHandler", () => {
       kubeOps: {
         scaleDeployment: vi.fn(async () => undefined),
         restartOpenClawInPlace: vi.fn(async () => {
-          throw new Error('Error from server (NotFound): pods "octogee-gateway-bender-abc" not found');
+          throw new Error('Error from server (NotFound): pods "octogee-gateway-walter-abc" not found');
         }),
         readDeployedReplicas: vi.fn(async () => 1),
         deletePersistentVolumeClaim: vi.fn(async () => undefined),
@@ -239,13 +239,13 @@ describe("createRestartGatewayHandler", () => {
     expect(deps.kubeOps.readDeployedReplicas).not.toHaveBeenCalled();
   });
 
-  it("does NOT gate on mounted customers (restart is operator intent)", async () => {
+  it("does NOT gate on mounted users (restart is operator intent)", async () => {
     const deps = mkDeps();
     const handler = createRestartGatewayHandler(deps);
     const { ctx } = mkCtx();
 
     const result = await handler(
-      mkOp({ input: { gatewayId: "bender", mountedCustomers: ["alice", "bob"] } }),
+      mkOp({ input: { gatewayId: "walter", mountedCustomers: ["alice", "bob"] } }),
       ctx,
     );
 

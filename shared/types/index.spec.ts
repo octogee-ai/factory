@@ -24,7 +24,7 @@ describe("shared type barrel", () => {
     const agent: Agent = {
       id: "agent-1",
       name: "Scout",
-      persona: "calm builder coach",
+      persona: "calm user agent",
       avatar: {
         path: "Scout-avatar.png",
         gcsPath: "workspaces/scout/Scout-avatar.png",

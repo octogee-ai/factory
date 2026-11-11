@@ -4,9 +4,9 @@ import {
   staticUserEntitlements,
   userEntitlements,
 } from "@octogee/shared/types/user-entitlements";
-import { buildCustomerSummary, type BrokerCustomerUsage } from "./admin-shape.js";
-import { builderAccountFromData } from "./builder-account.js";
-import { builderRecordFromData } from "./platform-state/firestore/builders.js";
+import { buildUserSummary, type BrokerUserUsage } from "./admin-shape.js";
+import { userAccountFromData } from "./user-account.js";
+import { userRecordFromData } from "./platform-state/firestore/users.js";
 
 const NOW = Date.UTC(2026, 6, 2, 13, 30);
 const LIVE_SIGNUP_OFFER = {
@@ -20,12 +20,12 @@ const LIVE_SIGNUP_OFFER = {
   endsAt: new Date(NOW + 7 * 24 * 60 * 60 * 1000),
 };
 
-function summarize(uid: string, data: Record<string, unknown>, broker?: BrokerCustomerUsage) {
-  return buildCustomerSummary(builderRecordFromData(uid, data, 0, null), builderAccountFromData(uid, data), broker);
+function summarize(uid: string, data: Record<string, unknown>, broker?: BrokerUserUsage) {
+  return buildUserSummary(userRecordFromData(uid, data, 0, null), userAccountFromData(uid, data), broker);
 }
 
-describe("buildCustomerSummary", () => {
-  it("carries the account lifecycle so a list can mark customers scheduled for deletion", () => {
+describe("buildUserSummary", () => {
+  it("carries the account lifecycle so a list can mark users scheduled for deletion", () => {
     expect(summarize("u1", { email: "a@b.co" }).accountLifecycleStatus).toBe("active");
     expect(summarize("u1", {
       email: "a@b.co",
@@ -33,9 +33,9 @@ describe("buildCustomerSummary", () => {
     }).accountLifecycleStatus).toBe("deletion_scheduled");
   });
 
-  it("normalizes malformed nested customer fields instead of leaking them", () => {
+  it("normalizes malformed nested user fields instead of leaking them", () => {
     const summary = summarize("uid-1", {
-      email: "builder@example.com",
+      email: "user@example.com",
       subscription: {
         tier: { name: "pro" },
         status: 42,
@@ -55,8 +55,8 @@ describe("buildCustomerSummary", () => {
 
     expect(summary).toMatchObject({
       uid: "uid-1",
-      displayName: "builder",
-      email: "builder@example.com",
+      displayName: "user",
+      email: "user@example.com",
       tier: "personal_free",
       subscriptionStatus: "trial",
       costUsd: 0,
@@ -73,7 +73,7 @@ describe("buildCustomerSummary", () => {
     // free tier is always on the house model
     expect(summarize("u", { subscription: { tier: "free" } }).degraded).toBe(true);
 
-    // a builder on their own credential (BYOT) is never throttled
+    // a user on their own credential (BYOT) is never throttled
     expect(
       summarize("u", { subscription: { tier: "free" }, byotActive: true }).degraded,
     ).toBe(false);
@@ -92,7 +92,7 @@ describe("buildCustomerSummary", () => {
     ).toBe(false);
   });
 
-  it("shows 0% (not a zero-budget 100%) for owner-credential customers — mirrors the customer surfaces", () => {
+  it("shows 0% (not a zero-budget 100%) for owner-credential users — mirrors the user surfaces", () => {
     // free/house-only tier + BYOT: weeklyBudgetUsd is 0, so an unguarded percentage
     // would read 100% despite the broker never metering or throttling this traffic.
     const summary = summarize(
@@ -183,7 +183,7 @@ describe("buildCustomerSummary", () => {
   });
 });
 
-describe("buildCustomerSummary commercial fields", () => {
+describe("buildUserSummary commercial fields", () => {
   const productResolver = userEntitlements();
   const paying = { email: "a@b.co", subscription: { tier: "personal", status: "active" } };
 

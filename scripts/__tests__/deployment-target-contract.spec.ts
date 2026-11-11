@@ -89,7 +89,7 @@ describe("deployment target consumers", () => {
       "scripts/shell-gateway-ui.sh",
       "scripts/setup-monitoring.sh",
       "scripts/setup-monitoring-iap.sh",
-      "scripts/ops/reconcile-coach-names.sh",
+      "scripts/ops/reconcile-default-agent-names.sh",
       "scripts/ops/reconcile-gitea-org.sh",
       "scripts/ops/migrate-secrets-single-region.sh",
     ]) {
@@ -287,7 +287,7 @@ describe("deployment target consumers", () => {
     );
     expect(teardown).not.toContain("BOOTSTRAP_GATEWAY_TAG=");
     expect(teardown).not.toContain(
-      "Cowboy auto-installs octogee-gw-default after step 2",
+      "The fleet controller auto-installs octogee-gw-default after step 2",
     );
   });
 

@@ -11,7 +11,7 @@ import type {
   StartedFleetController,
 } from "../lib/fleet-provisioner.js";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
-import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
+import type { UserLifecycleAdapter } from "../lib/user-lifecycle.js";
 
 const KEY = "internal-key-123";
 
@@ -29,9 +29,9 @@ const BYOSUB_ROUTES = [
 function operatorOpts(port: number): StartFleetOptions {
   return {
     rpc: {} as GatewayRpcClient,
-    adapter: {} as CustomerLifecycleAdapter,
-    gatewayId: "bender-test",
-    revisionId: "bender-test-r1",
+    adapter: {} as UserLifecycleAdapter,
+    gatewayId: "walter-test",
+    revisionId: "walter-test-r1",
     log: () => undefined,
     port,
     publicKey: "pk",

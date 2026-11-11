@@ -88,7 +88,7 @@ async function ssrReadProject(workspaceSlug: string, projectSlug: string): Promi
 
 const CALLER_UID = "project-owner-uid";
 const USERNAME = "projowner";
-const BUILDER_GATEWAY_ID = "builder-projowner";
+const BUILDER_GATEWAY_ID = "user-projowner";
 const ORIGINAL_FLEET_BROKER_URL = process.env.FLEET_BROKER_URL;
 const ORIGINAL_CONNECTOR_TOKEN_BROKER_URL = process.env.CONNECTOR_TOKEN_BROKER_URL;
 const ORIGINAL_GATEWAY_ID = process.env.GATEWAY_ID;
@@ -117,7 +117,7 @@ async function seedCaller(): Promise<void> {
     .set({ role: "user" });
 }
 
-async function seedEligibleBuilderGateway(): Promise<void> {
+async function seedEligibleIsolatedGateway(): Promise<void> {
   await db.doc(`users/${CALLER_UID}`).update({
     "provisioning.openclaw.gatewayId": BUILDER_GATEWAY_ID,
   });
@@ -380,7 +380,7 @@ describe("github-backed project create", () => {
   const GH_REPO_SOURCE = { provider: "github", owner: "octogee-ai", repo: "octogee" };
 
   async function promoteToAdmin(): Promise<void> {
-    await seedEligibleBuilderGateway();
+    await seedEligibleIsolatedGateway();
     await db
       .collection("users")
       .doc(CALLER_UID)
@@ -390,7 +390,7 @@ describe("github-backed project create", () => {
   }
 
   it("rejects a caller without the GitHub project feature with 403 and writes no doc", async () => {
-    await seedEligibleBuilderGateway();
+    await seedEligibleIsolatedGateway();
     mockMmContextOk();
     const app = createApp();
 

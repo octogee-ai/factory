@@ -1,9 +1,9 @@
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import {
-  isBuilderActivationStatus,
-  type BuilderActivationSummary,
+  isUserActivationStatus,
+  type UserActivationSummary,
 } from "@octogee/shared/types/gateway-control";
-import type { BuilderActivationLease } from "@octogee/core/platform-state";
+import type { UserActivationLease } from "@octogee/core/platform-state";
 import {
   isGatewayRuntimeDoc,
   type GatewayHeartbeatStatus,
@@ -61,8 +61,8 @@ export function projectGatewayRuntimeStatus(
   return status;
 }
 
-export function projectOwnerActivation(lease: BuilderActivationLease | null): BuilderActivationSummary | null {
-  if (!lease || !isBuilderActivationStatus(lease.status)) return null;
+export function projectOwnerActivation(lease: UserActivationLease | null): UserActivationSummary | null {
+  if (!lease || !isUserActivationStatus(lease.status)) return null;
   return {
     status: lease.status,
     targetGatewayId: typeof lease.targetGatewayId === "string" && lease.targetGatewayId.length > 0

@@ -4,7 +4,7 @@ import type { SharedGatewayAutoscalingConfig } from "@octogee/shared/types/share
 import type { SizingTier } from "@octogee/shared/types/sizing";
 import type { OpaqueMap, RecordPatch, Revision, Stored, TimeInput } from "./store.js";
 export type GatewayIsolation = "shared" | "isolated";
-export interface GatewayComputerProfile {
+export interface GatewayVmProfile {
     readonly runtime: Extract<GatewayRuntime, "gce-vm">;
     readonly desktop: GatewayVmDesktop;
     readonly machineType: string | null;
@@ -20,7 +20,7 @@ export type GatewaySizingProfile = {
 } | {
     readonly isolation: "isolated";
     readonly sizingTier: SizingTier;
-    readonly computer: GatewayComputerProfile;
+    readonly computer: GatewayVmProfile;
     readonly fallbackStorageGb: number | null;
 };
 export declare function isolatedSizingTier(profile: GatewaySizingProfile | null): SizingTier | null;

@@ -22,23 +22,23 @@ import {
   parseAgentId,
   projectChannelName,
   projectGeneralChannelName,
-  workspaceCoachChannelName,
+  workspaceDefaultAgentChannelName,
   workspaceCustomChannelName,
   workspaceGeneralChannelName,
   type ParsedAgentId,
-  workspaceCoachAgentId,
+  workspaceDefaultAgentId,
 } from "@octogee/shared/types/identity";
 import { projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 import {
   firestoreBuilderTierReader,
-  requestBuilderActivationLease,
+  requestUserActivationLease,
   type BuilderTierReader,
-} from "@octogee/core/builder-activation-lease";
+} from "@octogee/core/user-activation-lease";
 import {
   DuplicateRecordError,
-  type BuilderRecord,
-  type BuilderSecret,
+  type PlatformUserRecord,
+  type UserSecret,
   type GatewayRoot,
   MalformedRecordError,
   type GatewayTicket,
@@ -115,9 +115,9 @@ export function safeDocId(value: string): boolean {
   return value.length > 0 && !value.includes("/");
 }
 
-export function interactiveBuilder(builder: BuilderRecord | null | undefined): builder is BuilderRecord {
-  return builder !== null && builder !== undefined &&
-    accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined });
+export function interactiveUser(user: PlatformUserRecord | null | undefined): user is PlatformUserRecord {
+  return user !== null && user !== undefined &&
+    accountAllowsInteractiveAccess({ accountLifecycle: user.accountLifecycle ?? undefined });
 }
 
 function workspaceChannelPath(channel: WorkspaceChannel): string {
@@ -194,12 +194,12 @@ function ordinaryChannelKind(binding: BoundChannelPath): string | null {
 }
 
 export async function assignedHere(store: PlatformStateStore, gatewayId: string, slug: string): Promise<boolean> {
-  const assigned = await store.builders.records.listByGateway(gatewayId);
-  return assigned.some((builder) => builder.slug === slug);
+  const assigned = await store.users.records.listByGateway(gatewayId);
+  return assigned.some((user) => user.slug === slug);
 }
 
 async function userGatewayId(store: PlatformStateStore, uid: string): Promise<string | null> {
-  const gatewayId = (await store.builders.records.get(uid))?.gateway?.gatewayId;
+  const gatewayId = (await store.users.records.get(uid))?.gateway?.gatewayId;
   return gatewayId ? gatewayId : null;
 }
 
@@ -207,7 +207,7 @@ export function forbidden(res: Response): void {
   res.status(403).json(FORBIDDEN);
 }
 
-async function uniqueBuilder(lookup: Promise<Stored<BuilderRecord> | null>): Promise<Stored<BuilderRecord> | null | "duplicate"> {
+async function uniqueUser(lookup: Promise<Stored<PlatformUserRecord> | null>): Promise<Stored<PlatformUserRecord> | null | "duplicate"> {
   try {
     return await lookup;
   } catch (error) {
@@ -217,18 +217,18 @@ async function uniqueBuilder(lookup: Promise<Stored<BuilderRecord> | null>): Pro
 }
 
 async function resolveUidBySlug(store: PlatformStateStore, slug: string): Promise<string | null> {
-  const builder = await uniqueBuilder(store.builders.records.findBySlug(slug));
-  return builder === null || builder === "duplicate" ? null : builder.uid;
+  const user = await uniqueUser(store.users.records.findBySlug(slug));
+  return user === null || user === "duplicate" ? null : user.uid;
 }
 
-interface CoachSecret {
+interface DefaultAgentSecret {
   coachToken: string;
   coachMmUserId: string;
 }
 
 type AgentScope = Omit<AgentIdentity, "coachMmUserId" | "coachToken">;
 
-function agentSecret(secret: BuilderSecret | null): CoachSecret | null {
+function agentSecret(secret: UserSecret | null): DefaultAgentSecret | null {
   if (!secret || secret.kind === "connector") return null;
   return secret.personalToken && secret.mattermostUserId
     ? { coachToken: secret.personalToken, coachMmUserId: secret.mattermostUserId }
@@ -360,7 +360,7 @@ function mattermostChannelName(binding: BoundChannelPath): string | null {
       : projectChannelName(binding.workspaceSlug, binding.projectSlug!, binding.channelName);
   }
   if (binding.channelName === "general") return workspaceGeneralChannelName(binding.workspaceSlug);
-  if (binding.channelName === "coach-dm") return workspaceCoachChannelName(binding.workspaceSlug);
+  if (binding.channelName === "coach-dm") return workspaceDefaultAgentChannelName(binding.workspaceSlug);
   if (binding.channelName === "admin") return null;
   return workspaceCustomChannelName(binding.workspaceSlug, binding.channelName);
 }
@@ -518,7 +518,7 @@ function dispatchEnvelope(
   return route;
 }
 
-async function resolveCoachOwnerDispatchContext(
+async function resolveDefaultAgentOwnerDispatchContext(
   input: DispatchContextInput,
   identity: AgentScope,
   parsed: KnownAgentId,
@@ -526,7 +526,7 @@ async function resolveCoachOwnerDispatchContext(
   if (parsed.kind !== "coach") return "forbidden";
   const [workspace, owner] = await Promise.all([
     input.store.workspaces.records.get(parsed.username),
-    input.store.builders.records.get(identity.uid),
+    input.store.users.records.get(identity.uid),
   ]);
   if (
     workspace?.ownerUid === identity.uid
@@ -563,7 +563,7 @@ async function resolveGroupDispatchContext(
       channel.binding.lane !== "workspace"
       || channel.binding.workspaceSlug !== parsed.username
     ) return "forbidden";
-    return resolveCoachOwnerDispatchContext(input, identity, parsed);
+    return resolveDefaultAgentOwnerDispatchContext(input, identity, parsed);
   }
   if (!isExactDispatchLane(channel.binding, parsed)) return "forbidden";
   if (!(await sessionOwnerIsActive(input.store, channel.binding))) return null;
@@ -728,11 +728,11 @@ async function resolveUidByMmUser(
   mmUserId: string,
 ): Promise<string | null | "forbidden"> {
   if (!mmUserId) return null;
-  const builder = await uniqueBuilder(store.builders.records.findByMattermostUserId(mmUserId));
-  if (builder === "duplicate") return "forbidden";
-  if (!builder) return null;
-  if (!builder.slug || !(await assignedHere(store, gatewayId, builder.slug))) return "forbidden";
-  return builder.uid;
+  const user = await uniqueUser(store.users.records.findByMattermostUserId(mmUserId));
+  if (user === "duplicate") return "forbidden";
+  if (!user) return null;
+  if (!user.slug || !(await assignedHere(store, gatewayId, user.slug))) return "forbidden";
+  return user.uid;
 }
 
 interface ChatActivity {
@@ -766,12 +766,12 @@ function chatActivityBody(req: Request): ChatActivity | null {
 }
 
 async function isOctogeeUser(store: PlatformStateStore, mmUserId: string): Promise<boolean> {
-  const builder = await uniqueBuilder(store.builders.records.findByMattermostUserId(mmUserId));
-  return builder !== null && builder !== "duplicate";
+  const user = await uniqueUser(store.users.records.findByMattermostUserId(mmUserId));
+  return user !== null && user !== "duplicate";
 }
 
-async function hasDisposableBuilderRuntime(deps: RuntimeBrokerDeps, owner: BuilderRecord, now: number): Promise<boolean> {
-  if (!interactiveBuilder(owner)) return false;
+async function hasIsolatedRuntime(deps: RuntimeBrokerDeps, owner: PlatformUserRecord, now: number): Promise<boolean> {
+  if (!interactiveUser(owner)) return false;
   const tier = await deps.readBuilderTier(owner.uid, now);
   if (tier === null) return false;
   return (await deps.store.config.orchestrator.getSizingProfile(tier)).isolation === "isolated";
@@ -789,13 +789,13 @@ async function requestChatActivityDemand(
   if (!(await isOctogeeUser(store, activity.mmUserId))) {
     return { statusCode: 200, body: { recorded: false, reason: "actor-not-human" } };
   }
-  const owner = await store.builders.records.get(ownerUid);
+  const owner = await store.users.records.get(ownerUid);
   const observedAt = Date.now();
-  if (!owner || !(await hasDisposableBuilderRuntime(deps, owner, observedAt))) {
+  if (!owner || !(await hasIsolatedRuntime(deps, owner, observedAt))) {
     return { statusCode: 200, body: { recorded: false, reason: "owner-not-disposable-builder" } };
   }
   const assignment = await store.gateways.assignments.get(gatewayId, ownerUid);
-  const result = await requestBuilderActivationLease({
+  const result = await requestUserActivationLease({
     store,
     readBuilderTier: deps.readBuilderTier,
     uid: ownerUid,
@@ -881,7 +881,7 @@ const DENIED: RedeemPrelude = { kind: "denied" };
 async function prepareActivityRedeem(deps: RuntimeBrokerDeps, payload: Record<string, unknown>, uid: string, gatewayId: string): Promise<RedeemPrelude> {
   if (Object.keys(payload).some(key => !['channelId', 'threadRootPostId', 'ownerUid', 'expectedAgentId', 'sessionKey'].includes(key)) || !isMattermostPostId(payload.channelId)
     || (payload.threadRootPostId !== undefined && !isMattermostPostId(payload.threadRootPostId))) return DENIED;
-  const scope = await resolveActivityConversation({ builders: deps.store.builders.records, uid, channelId: payload.channelId, ...(payload.threadRootPostId === undefined ? {} : { threadRootPostId: payload.threadRootPostId }) });
+  const scope = await resolveActivityConversation({ users: deps.store.users.records, uid, channelId: payload.channelId, ...(payload.threadRootPostId === undefined ? {} : { threadRootPostId: payload.threadRootPostId }) });
   return scope && matchesActivityTicket(scope, gatewayId, payload) ? { kind: "activity", scope } : DENIED;
 }
 
@@ -942,13 +942,13 @@ async function redeemWsIdentity(
   if (prelude.kind === "denied") return null;
   if (prelude.kind === "voice") return redeemVoiceIdentity(tx, prelude);
   const mirrorUid = prelude.kind === "activity" ? prelude.scope.ownerUid : uid;
-  const mirror = await tx.builders.records.get(mirrorUid);
+  const mirror = await tx.users.records.get(mirrorUid);
   if (mirror?.gateway?.gatewayId !== gatewayId) return null;
   if (prelude.kind === "activity") {
     return { expectedAgentId: prelude.scope.expectedAgentId, activityConversation: prelude.scope };
   }
-  if (mirror.slug === null) throw new Error(`Builder ${uid} has no slug`);
-  return { expectedAgentId: workspaceCoachAgentId(mirror.slug) };
+  if (mirror.slug === null) throw new Error(`User ${uid} has no slug`);
+  return { expectedAgentId: workspaceDefaultAgentId(mirror.slug) };
 }
 
 function redeemableTicket(ticket: Stored<GatewayTicket> | null, purpose: string, now: number): ticket is Stored<GatewayTicket> {
@@ -1018,7 +1018,7 @@ function mountUserAndWsRoutes(router: Router, deps: RuntimeBrokerDeps): void {
     const rawThreadRootPostId = (req.body as Record<string, unknown> | undefined)?.threadRootPostId;
     const threadRootPostId = rawThreadRootPostId === undefined ? undefined : stringBody(req, 'threadRootPostId');
     if (!safeDocId(uid) || !MATTERMOST_ID_RE.test(channelId) || (threadRootPostId !== undefined && !isMattermostPostId(threadRootPostId))) { res.status(400).json({ error: 'invalid_activity_channel' }); return; }
-    const scope = await resolveActivityConversation({ builders: deps.store.builders.records, uid, channelId, ...(threadRootPostId === undefined ? {} : { threadRootPostId }) });
+    const scope = await resolveActivityConversation({ users: deps.store.users.records, uid, channelId, ...(threadRootPostId === undefined ? {} : { threadRootPostId }) });
     if (!scope || scope.gatewayId !== bound.gatewayId) { forbidden(res); return; }
     res.set('Cache-Control', 'no-store').json(scope);
   });
@@ -1325,9 +1325,9 @@ function mountActivityReceiptRoutes(router: Router, deps: RuntimeBrokerDeps): vo
 
 async function activeReplyRecipient(store: PlatformStateStore, uid: string) {
   if (!safeDocId(uid)) return null;
-  const recipient = await store.builders.records.get(uid);
+  const recipient = await store.users.records.get(uid);
   const mmUserId = recipient?.mattermostUserId;
-  if (!interactiveBuilder(recipient) || typeof mmUserId !== "string" || !MATTERMOST_ID_RE.test(mmUserId)) return null;
+  if (!interactiveUser(recipient) || typeof mmUserId !== "string" || !MATTERMOST_ID_RE.test(mmUserId)) return null;
   return { uid, mmUserId };
 }
 
@@ -1366,16 +1366,16 @@ async function resolveFinalReplyTarget(
   const owner = await activeReplyRecipient(deps.store, identity.uid);
   if (!owner) return null;
   if (directPeerId !== undefined) {
-    if (parseAgentId(identity.agentId).kind !== "coach" || owner.mmUserId !== directPeerId || directPeerId === identity.coachMmUserId) return null;
+    if (parseAgentId(identity.agentId).kind !== "coach" || owner.mmUserId !== directPeerId || directPeerId === identity.defaultAgentMmUserId) return null;
     return { primaryChannelId: channelId, expectedChannelType: "D", expectedChannelName: null, expectedChannelTeamId: null,
-      expectedMemberIds: [identity.coachMmUserId, directPeerId], recipientUid: identity.uid, recipientMmUserId: directPeerId };
+      expectedMemberIds: [identity.defaultAgentMmUserId, directPeerId], recipientUid: identity.uid, recipientMmUserId: directPeerId };
   }
   const target = await resolveAuthorizedConversationTarget(deps.store, gatewayId, identity.agentId, channelId);
   if (!target || target === "forbidden") return null;
   const recipientUid = await resolveChannelOwnerUid(deps.store, gatewayId, channelId);
   if (!recipientUid || recipientUid === "forbidden") return null;
   const recipient = await activeReplyRecipient(deps.store, recipientUid);
-  if (!recipient || recipient.mmUserId === identity.coachMmUserId || !await finalReplyMembershipAuthorized(deps, target, identity, recipient)) return null;
+  if (!recipient || recipient.mmUserId === identity.defaultAgentMmUserId || !await finalReplyMembershipAuthorized(deps, target, identity, recipient)) return null;
   return { ...target, recipientUid, recipientMmUserId: recipient.mmUserId };
 }
 
@@ -1391,7 +1391,8 @@ function mountFinalReplyRoutes(router: Router, deps: RuntimeBrokerDeps): void {
       await notifyNativeFinalReply(input, {
         resolveAgentIdentity: async agentId => {
           const identity = await resolveAgentIdentity(deps.store, bound.gatewayId, agentId);
-          return identity === "forbidden" ? null : identity;
+          if (!identity || identity === "forbidden") return null;
+          return { agentId: identity.agentId, uid: identity.uid, defaultAgentMmUserId: identity.coachMmUserId, coachToken: identity.coachToken };
         },
         resolveReplyTarget: (identity, channelId, peerId) => resolveFinalReplyTarget(deps, bound.gatewayId, identity, channelId, peerId),
         getPost: readFinalReplyPost,

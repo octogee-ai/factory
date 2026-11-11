@@ -9,22 +9,22 @@ import {
   type AssignmentState,
 } from "@octogee/shared/types/gateway-releases";
 
-// Per-customer admission at the edge (GATEWAY-SIMPLE-ROLL-SPEC). One stable pod
+// Per-user admission at the edge (GATEWAY-SIMPLE-ROLL-SPEC). One stable pod
 // serves each gateway, so there is nothing to forward between revisions — the
-// roster's only job is the migration quiesce gate: a customer whose assignment
+// roster's only job is the migration quiesce gate: a user whose assignment
 // is quiescing/migrating is refused with 503 + Retry-After on EVERY surface
 // until the atomic cutover stamps the target serving (no double-serve window;
 // see commitCutoverAtomic in @octogee/core/fleet-state).
 //
 // SECURITY INVARIANTS (each pinned by roll-roster.spec.ts):
-//  - The roster is READ-ONLY here (Cowboy/octogee-api are the writers) and
+//  - The roster is READ-ONLY here (fleet controller/octogee-api are the writers) and
 //    scoped to this pod's own gateway.
 //  - The uid used for admission comes from an UNVERIFIED bearer decode: it only
 //    selects between serving and 503-retry for a tenant this pod already
 //    serves, so a forged token cannot cross any tenant boundary; real auth
 //    still runs downstream.
 //  - Fails CLOSED: until the first roster snapshot lands (and after a terminal
-//    roster-source error) customer-state traffic answers 503 + Retry-After.
+//    roster-source error) user-state traffic answers 503 + Retry-After.
 
 export interface RosterEntry {
   uid: string;
@@ -73,10 +73,10 @@ function parseRosterEntry(id: string, data: Record<string, unknown> | undefined)
 
 // Fails CLOSED: until the first snapshot lands, loaded() is false and the gate
 // answers 503 + Retry-After — an edge booting mid-migration must never default
-// to serve-local for a quiescing customer (council-resolved).
+// to serve-local for a quiescing user (council-resolved).
 //
 // A terminal roster-source error is ALSO fail-closed: an edge that misses a
-// quiescing/cutover update could keep admitting a customer after the migration
+// quiescing/cutover update could keep admitting a user after the migration
 // target begins serving. On error readiness drops, the detached roster is
 // discarded, and the edge reconnects with backoff.
 export function createRollRosterStore(opts: CreateRollRosterStoreOptions): RollRosterStore {
@@ -149,10 +149,10 @@ export interface ServiceRouteInput {
 export function resolveServiceRoute(input: ServiceRouteInput): ServiceRouteDecision {
   if (!input.rosterLoaded) return { action: "unavailable", reason: "roster-loading" };
   const entry = input.entry;
-  // Gap user / unknown customer: this pod is the gateway's only pod — serve
+  // Gap user / unknown user: this pod is the gateway's only pod — serve
   // locally, exactly like the mount driver's rule.
   if (!entry) return { action: "serve" };
-  // quiescing/migrating blocks the customer until the atomic roster flip
+  // quiescing/migrating blocks the user until the atomic roster flip
   // stamps the migration target serving — no double-serve window.
   if (entry.state !== "serving") {
     return { action: "unavailable", reason: "customer-quiescing" };
@@ -241,14 +241,14 @@ export function createRollRosterGate(opts: CreateRollRosterGateOptions): Request
 // ---------------------------------------------------------------------------
 //
 // Upgrades bypass Express, so they get their own enforcement at the upgrade
-// path itself. A quiescing customer is REFUSED attach (503 + Retry-After) and
+// path itself. A quiescing user is REFUSED attach (503 + Retry-After) and
 // the client reconnects after the migration cutover settles. checkRequest runs
 // pre-dispatch (roster boot gate + bearer uid when resolvable); checkUid runs
-// post-auth wherever a flow resolves the customer (OpenClaw ticket redemption)
+// post-auth wherever a flow resolves the user (OpenClaw ticket redemption)
 // — so a stale attach is impossible even for
 // flows whose identity only appears after the handshake starts.
 
-// The single retryable "customer not admitted" WS-upgrade response: 503 + a
+// The single retryable "user not admitted" WS-upgrade response: 503 + a
 // Retry-After hint + a typed body the client keys on to reconnect after the
 // migration settles (NEVER an opaque 500).
 export function revisionUnavailableUpgradeResponse(
@@ -364,8 +364,8 @@ export async function mmRosterVerdictFor(
   return gate.checkUid(uid);
 }
 
-// Wrap a ticket-redemption fn so the redeemed customer's roster verdict gates
-// the attach: a refused customer's redeem throws, and
+// Wrap a ticket-redemption fn so the redeemed user's roster verdict gates
+// the attach: a refused user's redeem throws, and
 // the bridge closes the WS with its standard retry semantics.
 export function wrapRedeemWithRosterGate<T extends { uid: string }>(
   redeem: (ticket: string) => Promise<T>,

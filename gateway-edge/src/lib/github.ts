@@ -27,7 +27,7 @@ function githubConditionalCacheKey(url: string, token: string | undefined): stri
   return `${repoScope(url)}||${createHash("sha256").update(token ?? "").digest("hex")}:${url}`;
 }
 
-// Drop only the validators for the mutated repo — a write to one customer's repo
+// Drop only the validators for the mutated repo — a write to one user's repo
 // must not flush every other tenant's ETags in the shared octogee-api process.
 export function invalidateGithubConditionalCacheForUrl(url: string): void {
   const prefix = `${repoScope(url)}||`;

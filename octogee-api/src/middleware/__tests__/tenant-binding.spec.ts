@@ -24,7 +24,7 @@ function gatewayRootStore(roots: Record<string, Record<string, unknown>>) {
 
 function gatewayRoot(serviceAccountName: string | null = null): Record<string, unknown> {
   return {
-    gatewayId: "bender",
+    gatewayId: "walter",
     createdAt: 1,
     createdBy: "test",
     updatedAt: 1,
@@ -32,8 +32,8 @@ function gatewayRoot(serviceAccountName: string | null = null): Record<string, u
     latestRelease: 1,
     desiredRelease: 1,
     liveRelease: 1,
-    liveRevisionId: "bender-r1",
-    trafficRevisionId: "bender-r1",
+    liveRevisionId: "walter-r1",
+    trafficRevisionId: "walter-r1",
     desiredStatus: "running",
     roll: null,
     configSchemaVersion: 1,
@@ -46,8 +46,8 @@ function gatewayRoot(serviceAccountName: string | null = null): Record<string, u
     serviceAccountName,
     serviceAccount: null,
     builderAccess: null,
-    ownerUid: "uid-bender",
-    builderSlug: "bender",
+    ownerUid: "uid-walter",
+    builderSlug: "walter",
     modelBrokerLimits: null,
     preemption: null,
   };
@@ -59,7 +59,7 @@ function retiringGatewayRoot(): Record<string, unknown> {
     desiredStatus: "retired",
     retirementVersion: 1,
     retirementClaim: {
-      operationId: "op-retire-bender",
+      operationId: "op-retire-walter",
       version: 1,
       claimedAt: 1,
       phase: "claimed",
@@ -70,13 +70,13 @@ function retiringGatewayRoot(): Record<string, unknown> {
   };
 }
 
-function benderPodReview(): Awaited<ReturnType<Reviewer>> {
+function walterPodReview(): Awaited<ReturnType<Reviewer>> {
   return {
     authenticated: true,
     namespace: "octogee",
-    saName: "octogee-gw-bender",
+    saName: "octogee-gw-walter",
     audiences: ["octogee-api"],
-    podName: "octogee-gateway-bender-r7-5bc5949d46-p946t",
+    podName: "octogee-gateway-walter-r7-5bc5949d46-p946t",
     podUid: "b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef",
   };
 }
@@ -96,7 +96,7 @@ function buildApp(opts: {
       reviewer: opts.reviewer,
       store: gatewayRootStore(
         opts.docs ?? {
-          bender: gatewayRoot(),
+          walter: gatewayRoot(),
         },
       ),
       namespace: "octogee",
@@ -137,9 +137,9 @@ describe("tenant binding middleware", () => {
       reviewer: async () => ({
         authenticated: true,
         namespace: "octogee",
-        saName: "octogee-gw-bender",
+        saName: "octogee-gw-walter",
         audiences: ["octogee-api"],
-        podName: "octogee-gateway-bender-r7-5bc5949d46-p946t",
+        podName: "octogee-gateway-walter-r7-5bc5949d46-p946t",
         podUid: "b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef",
       }),
     });
@@ -147,15 +147,15 @@ describe("tenant binding middleware", () => {
     const res = await request(app)
       .post("/internal/probe")
       .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
-      .send({ gatewayId: "bender" });
+      .send({ gatewayId: "walter" });
 
     expect(res.status).toBe(200);
     expect(res.body.boundTenant).toEqual({
       kind: "gateway",
-      gatewayId: "bender",
-      ownerUid: "uid-bender",
-      saName: "octogee-gw-bender",
-      podName: "octogee-gateway-bender-r7-5bc5949d46-p946t",
+      gatewayId: "walter",
+      ownerUid: "uid-walter",
+      saName: "octogee-gw-walter",
+      podName: "octogee-gateway-walter-r7-5bc5949d46-p946t",
       podUid: "b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef",
     });
     await expect(registry.metrics()).resolves.toContain('result="ok"');
@@ -163,17 +163,17 @@ describe("tenant binding middleware", () => {
 
   it("binds a retiring gateway's live pod token on a fresh review so its preStop flush is admitted", async () => {
     const warn = vi.fn();
-    const reviewer = vi.fn<Reviewer>(async () => benderPodReview());
-    const { app } = buildApp({ warn, docs: { bender: retiringGatewayRoot() }, reviewer });
+    const reviewer = vi.fn<Reviewer>(async () => walterPodReview());
+    const { app } = buildApp({ warn, docs: { walter: retiringGatewayRoot() }, reviewer });
 
     const res = await request(app)
       .post("/internal/probe")
       .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
-      .send({ gatewayId: "bender" });
+      .send({ gatewayId: "walter" });
 
     expect(res.body.boundTenant).toMatchObject({
       kind: "gateway",
-      gatewayId: "bender",
+      gatewayId: "walter",
       podUid: "b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef",
     });
     expect(reviewer).toHaveBeenLastCalledWith(WELL_FORMED_SA_TOKEN, { fresh: true });
@@ -183,33 +183,33 @@ describe("tenant binding middleware", () => {
   it("refuses a retiring gateway's cached pod token once a fresh review shows the pod is gone", async () => {
     const warn = vi.fn();
     const reviewer = vi.fn<Reviewer>(async (_jwt, opts) =>
-      opts?.fresh ? { authenticated: false } : benderPodReview(),
+      opts?.fresh ? { authenticated: false } : walterPodReview(),
     );
-    const { app, registry } = buildApp({ warn, docs: { bender: retiringGatewayRoot() }, reviewer });
+    const { app, registry } = buildApp({ warn, docs: { walter: retiringGatewayRoot() }, reviewer });
 
     const res = await request(app)
       .post("/internal/probe")
       .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
-      .send({ gatewayId: "bender" });
+      .send({ gatewayId: "walter" });
 
     expect(res.body.boundTenant).toBeNull();
     expect(warn).toHaveBeenCalledWith(
       "[tenant-binding] retiring gateway pod token failed fresh review",
-      expect.objectContaining({ saName: "octogee-gw-bender" }),
+      expect.objectContaining({ saName: "octogee-gw-walter" }),
     );
     await expect(registry.metrics()).resolves.toContain('result="invalid"');
   });
 
   it("keeps the cached review for a serving gateway", async () => {
-    const reviewer = vi.fn<Reviewer>(async () => benderPodReview());
+    const reviewer = vi.fn<Reviewer>(async () => walterPodReview());
     const { app } = buildApp({ reviewer });
 
     const res = await request(app)
       .post("/internal/probe")
       .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
-      .send({ gatewayId: "bender" });
+      .send({ gatewayId: "walter" });
 
-    expect(res.body.boundTenant).toMatchObject({ gatewayId: "bender" });
+    expect(res.body.boundTenant).toMatchObject({ gatewayId: "walter" });
     expect(reviewer).toHaveBeenCalledTimes(1);
     expect(reviewer).toHaveBeenCalledWith(WELL_FORMED_SA_TOKEN);
   });
@@ -219,7 +219,7 @@ describe("tenant binding middleware", () => {
       reviewer: async () => ({
         authenticated: true,
         namespace: "octogee",
-        saName: "octogee-gw-bender",
+        saName: "octogee-gw-walter",
         audiences: ["octogee-api"],
       }),
     });
@@ -232,8 +232,8 @@ describe("tenant binding middleware", () => {
     expect(res.status).toBe(200);
     expect(res.body.boundTenant).toEqual({
       kind: "gateway",
-      gatewayId: "bender",
-      ownerUid: "uid-bender",
+      gatewayId: "walter",
+      ownerUid: "uid-walter",
     });
   });
 
@@ -282,11 +282,11 @@ describe("tenant binding middleware", () => {
 
   it("rejects a retired operator gateway service-account token", async () => {
     const { app, registry } = buildApp({
-      docs: { bender: gatewayRoot("octogee-gateway-bender") },
+      docs: { walter: gatewayRoot("octogee-gateway-walter") },
       reviewer: async () => ({
         authenticated: true,
         namespace: "octogee",
-        saName: "octogee-gateway-bender",
+        saName: "octogee-gateway-walter",
         audiences: ["octogee-api"],
       }),
     });
@@ -294,7 +294,7 @@ describe("tenant binding middleware", () => {
     const res = await request(app)
       .post("/internal/probe")
       .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
-      .send({ gatewayId: "bender" });
+      .send({ gatewayId: "walter" });
 
     expect(res.status).toBe(200);
     expect(res.body.boundTenant).toBeNull();
@@ -306,7 +306,7 @@ describe("tenant binding middleware", () => {
       reviewer: async () => ({
         authenticated: true,
         namespace: "octogee",
-        saName: "octogee-gw-bender",
+        saName: "octogee-gw-walter",
         audiences: ["octogee-api"],
       }),
     });
@@ -318,7 +318,7 @@ describe("tenant binding middleware", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.requestedGatewayId).toBe("other");
-    expect(res.body.boundTenant.gatewayId).toBe("bender");
+    expect(res.body.boundTenant.gatewayId).toBe("walter");
   });
 
   it("binds known platform callers", async () => {
@@ -384,7 +384,7 @@ describe("tenant binding middleware", () => {
       reviewer: async () => ({
         authenticated: true,
         namespace: "octogee",
-        saName: "octogee-gw-bender",
+        saName: "octogee-gw-walter",
         audiences: ["octogee-api"],
       }),
     });

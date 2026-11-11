@@ -114,7 +114,7 @@ export async function upgradeImportedAgentStores(input: {
       return;
     }
     if (input.allowUpgrade === false) {
-      throw new Error("Builder import requires the source and target to use the same current agent schema; source retained");
+      throw new Error("User import requires the source and target to use the same current agent schema; source retained");
     }
     input.log("[import-upgrade] upgrade=required schemas=older");
     const options = { env: { PATH: env.PATH ?? "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", NO_COLOR: "1", HOME: root,

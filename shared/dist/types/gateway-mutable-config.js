@@ -1,4 +1,4 @@
-import { GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME, isGatewayClass, isGatewayControlIdentity, isGatewayProfile, isValidGatewayId, builderGatewayServiceAccountName, } from "./glm.js";
+import { GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME, isGatewayClass, isGatewayControlIdentity, isGatewayProfile, isValidGatewayId, isolatedGatewayServiceAccountName, } from "./glm.js";
 import { isSizingTier } from "./sizing.js";
 export const GATEWAY_CONFIG_SCHEMA_VERSION = 1;
 const KUBERNETES_SERVICE_ACCOUNT_NAME = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/u;
@@ -42,7 +42,7 @@ function isOptionalString(value) {
 function isNullableSizingTier(value) {
     return value === null || isSizingTier(value);
 }
-function isNullableBuilderAccess(value) {
+function isNullableIsolatedAccess(value) {
     if (value === null)
         return true;
     if (!isRecord(value))
@@ -93,7 +93,7 @@ function isNullableModelBrokerLimits(value) {
         isNonNegative(spendWeekUsd) &&
         isNonNegative(requestsPerMinute));
 }
-export function isDisposableBuilderGatewayAllocation(value) {
+export function isIsolatedGatewayAllocation(value) {
     if (!isRecord(value))
         return false;
     const fields = new Set(["kind", "schemaVersion", "leaseId", "generation", "claimedByUid"]);
@@ -107,8 +107,8 @@ export function isDisposableBuilderGatewayAllocation(value) {
         typeof value.claimedByUid === "string" &&
         value.claimedByUid.length > 0;
 }
-function isOptionalDisposableBuilderGatewayAllocation(value) {
-    return value === undefined || value === null || isDisposableBuilderGatewayAllocation(value);
+function isOptionalIsolatedGatewayAllocation(value) {
+    return value === undefined || value === null || isIsolatedGatewayAllocation(value);
 }
 function isOwnedGateway(value) {
     return typeof value.ownerUid === "string" && value.ownerUid.length > 0 &&
@@ -118,7 +118,7 @@ function hasLegalOwnedAllocation(value) {
     const allocation = value.allocation;
     if (allocation === undefined || allocation === null)
         return true;
-    return isDisposableBuilderGatewayAllocation(allocation) &&
+    return isIsolatedGatewayAllocation(allocation) &&
         allocation.claimedByUid === value.ownerUid;
 }
 function isUnallocated(value) {
@@ -157,12 +157,12 @@ export function isGatewayMutableConfig(value) {
         isNullableRecord(value.gatewayContainerSecurityContext) &&
         isNullableServiceAccountName(value.serviceAccountName) &&
         isNullableServiceAccount(value.serviceAccount) &&
-        isNullableBuilderAccess(value.builderAccess) &&
+        isNullableIsolatedAccess(value.builderAccess) &&
         isNullableString(value.ownerUid) &&
         isNullableString(value.builderSlug) &&
         isNullableModelBrokerLimits(value.modelBrokerLimits) &&
         (value.preemption === undefined || value.preemption === null) &&
-        isOptionalDisposableBuilderGatewayAllocation(value.allocation) &&
+        isOptionalIsolatedGatewayAllocation(value.allocation) &&
         hasLegalClassProfiles(value) &&
         hasLegalOwnershipAndAllocation(value));
 }
@@ -174,7 +174,7 @@ export function isGatewayMutableConfigForGateway(value, gatewayId) {
         return true;
     if (PLATFORM_SERVICE_ACCOUNT_NAMES.has(serviceAccountName))
         return false;
-    const generatedName = builderGatewayServiceAccountName(gatewayId);
+    const generatedName = isolatedGatewayServiceAccountName(gatewayId);
     const legacyName = `${LEGACY_GATEWAY_SERVICE_ACCOUNT_PREFIX}${gatewayId}`;
     if (serviceAccountName.startsWith(GATEWAY_SERVICE_ACCOUNT_PREFIX)) {
         return serviceAccountName === generatedName;
@@ -197,5 +197,5 @@ export function projectGatewayMutableConfigForGateway(value, gatewayId) {
     return isGatewayMutableConfigForGateway(projected, gatewayId) ? projected : null;
 }
 export function effectiveGatewayServiceAccountNameForGateway(config, gatewayId) {
-    return config.serviceAccountName || builderGatewayServiceAccountName(gatewayId);
+    return config.serviceAccountName || isolatedGatewayServiceAccountName(gatewayId);
 }

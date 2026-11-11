@@ -2,11 +2,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  assertConfiguredBuilderPortableStatePlanOnDisk,
-  configuredBuilderPortableStatePlanFromConfig,
+  assertConfiguredUserPortableStatePlanOnDisk,
+  configuredUserPortableStatePlanFromConfig,
   isPortableConfiguredAgentId,
   type OpenclawConfig,
-} from "@octogee/core/local-coach-wired";
+} from "@octogee/core/local-default-agent-wired";
 import { agentIdsFromConfig } from "../lib/byosub-restore.js";
 
 export interface EnsureConfiguredAgentRuntimeDirsOptions {
@@ -32,14 +32,14 @@ export function ensureConfiguredAgentRuntimeDirs(
     );
   }
   const stateDir = options.stateDir ?? path.dirname(path.resolve(options.agentsDir));
-  const plan = configuredBuilderPortableStatePlanFromConfig(config as OpenclawConfig, stateDir);
-  assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, plan);
+  const plan = configuredUserPortableStatePlanFromConfig(config as OpenclawConfig, stateDir);
+  assertConfiguredUserPortableStatePlanOnDisk(stateDir, plan);
   for (const relativeAgentDir of plan.agentDirs) {
     const agentDir = path.join(stateDir, ...relativeAgentDir.split("/"));
     fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
     fs.chmodSync(agentDir, 0o700);
   }
-  assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, plan);
+  assertConfiguredUserPortableStatePlanOnDisk(stateDir, plan);
   return plan.agentIds;
 }
 

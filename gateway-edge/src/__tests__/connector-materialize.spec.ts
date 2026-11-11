@@ -58,7 +58,7 @@ import {
   readOwnerRuntimeConnectorAccessToken,
 } from "../lib/connector-tokens.js";
 import { cloneGithubProjectCheckout } from "../lib/github-project-clone.js";
-import { claimedTestBuilder, installTestBuilderIdentity } from "./helpers/builder-identity.js";
+import { claimedTestUser, installTestUserIdentity } from "./helpers/user-identity.js";
 
 function app() {
   const a = express();
@@ -72,10 +72,10 @@ describe("internal connector materialize route", () => {
     vi.clearAllMocks();
     process.env.GATEWAY_CLASS = "builder";
     process.env.GATEWAY_PROFILE = "builder";
-    installTestBuilderIdentity(null);
+    installTestUserIdentity(null);
   });
 
-  it("refuses a project clone before the Builder identity is claimed", async () => {
+  it("refuses a project clone before the user identity is claimed", async () => {
     const res = await request(app())
       .post("/internal/connectors/github/clone")
       .send({ builderSlug: "alice", projectSlug: "octo" });
@@ -111,7 +111,7 @@ describe("internal connector materialize route", () => {
     });
   });
 
-  it("materializes the connected Builder owner's GitHub token", async () => {
+  it("materializes the connected user owner's GitHub token", async () => {
     vi.mocked(readOwnerRuntimeConnectorAccessToken).mockResolvedValue("gho_owner");
 
     const res = await request(app()).get("/internal/connectors/github/materialize");
@@ -129,7 +129,7 @@ describe("internal connector materialize route", () => {
     expect(readOwnerRuntimeConnectorAccessToken).not.toHaveBeenCalled();
   });
 
-  it("allows builder-class gateways because they are isolated exec-capable runtimes", async () => {
+  it("allows isolated-class gateways because they are isolated exec-capable runtimes", async () => {
     process.env.GATEWAY_CLASS = "builder";
     process.env.GATEWAY_PROFILE = "standard";
     vi.mocked(readOwnerRuntimeConnectorAccessToken).mockResolvedValue("cf_secret");
@@ -150,7 +150,7 @@ describe("internal connector materialize route", () => {
     expect(readOwnerRuntimeConnectorAccessToken).not.toHaveBeenCalled();
   });
 
-  it("rejects the retired customer operator class and profile", async () => {
+  it("rejects the retired user operator class and profile", async () => {
     delete process.env.GATEWAY_CLASS;
     process.env.GATEWAY_PROFILE = "operator";
 
@@ -175,7 +175,7 @@ describe("internal connector materialize route", () => {
   });
 
   it("clones through the sidecar broker without returning the GitHub credential", async () => {
-    installTestBuilderIdentity(claimedTestBuilder("alice"));
+    installTestUserIdentity(claimedTestUser("alice"));
     vi.mocked(readOwnerGithubProjectCloneAccess).mockResolvedValue({
       accessToken: "gho_secret",
       repository: { owner: "octogee-ai", repo: "octogee" },
@@ -196,7 +196,7 @@ describe("internal connector materialize route", () => {
   });
 
   it("preserves the owner reauthorization signal from the broker", async () => {
-    installTestBuilderIdentity(claimedTestBuilder("alice"));
+    installTestUserIdentity(claimedTestUser("alice"));
     vi.mocked(readOwnerGithubProjectCloneAccess).mockRejectedValue(
       new mocks.ConnectorTokenBrokerError(409, "reauth_required"),
     );

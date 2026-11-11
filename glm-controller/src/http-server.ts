@@ -6,7 +6,7 @@ import { publicAppOriginsFromEnv } from "@octogee/core/public-app-origins";
 import { renderMetrics } from "./metrics.js";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import type { UserAccounts, UserSignInHosts } from "@octogee/core/admin-user-router";
-import type { BuilderAccountReader } from "@octogee/core/builder-account";
+import type { UserAccountReader } from "@octogee/core/user-account";
 import {
   addAdminFleetRoutes,
   type FleetLogger,
@@ -23,7 +23,7 @@ import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
 } from "@octogee/shared/types/glm";
-import { addAdminCustomerRoutes } from "@octogee/core/admin-customer-router";
+import { addAdminUserDirectoryRoutes } from "@octogee/core/admin-user-directory-router";
 import { addAdminLogsRoutes } from "@octogee/core/admin-logs-router";
 import type { LogEntriesSource } from "@octogee/core/fleet-logs";
 import {
@@ -71,7 +71,7 @@ export interface HttpServerDeps {
   userSignIn?: UserSignInHosts | undefined;
   db: Firestore;
   store: PlatformStateStore;
-  accounts: BuilderAccountReader;
+  accounts: UserAccountReader;
   identity: RequireAdminDeps["identity"];
   log: (msg: string) => void;
   provisionGatewayAuthSecret: (opts: {
@@ -314,7 +314,7 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     }),
   );
 
-  addAdminCustomerRoutes(adminRouter, {
+  addAdminUserDirectoryRoutes(adminRouter, {
     db: deps.db,
     store: deps.store,
     FieldValue,

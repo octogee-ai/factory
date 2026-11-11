@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  parseRotateBuilderMmPatArgs,
-  ROTATE_BUILDER_MM_PAT_USAGE,
-} from "../ops/rotate-builder-mm-pat.js";
+  parseRotateUserMmPatArgs,
+  ROTATE_USER_MM_PAT_USAGE,
+} from "../ops/rotate-user-mm-pat.js";
 import {
   resolveScopeCli,
   scopeSummary,
@@ -81,12 +81,12 @@ describe("one-shot operator CLI parsers", () => {
   });
 
   it("parses role and token maintenance targets", () => {
-    expect(parseRotateBuilderMmPatArgs([
+    expect(parseRotateUserMmPatArgs([
       "alice@example.com",
       "--project=octogee",
     ], {})).toEqual({ target: "alice@example.com", project: "octogee" });
-    expect(parseRotateBuilderMmPatArgs([], {})).toBeNull();
-    expect(ROTATE_BUILDER_MM_PAT_USAGE).toContain("<email-or-uid>");
+    expect(parseRotateUserMmPatArgs([], {})).toBeNull();
+    expect(ROTATE_USER_MM_PAT_USAGE).toContain("<email-or-uid>");
 
     expect(parseSetAdminRoleArgs([
       "uid-1",
@@ -151,13 +151,13 @@ describe("setup-stripe-plans catalog", () => {
   });
 
   it("sells the self-serve Builder ladder at infra-only prices, monthly only", () => {
-    const builders = SUBSCRIPTIONS.filter((sub) => sub.key.startsWith("builder_"));
-    expect(builders.map((sub) => sub.key)).toEqual([
+    const users = SUBSCRIPTIONS.filter((sub) => sub.key.startsWith("builder_"));
+    expect(users.map((sub) => sub.key)).toEqual([
       "builder_hobby",
       "builder_pro",
       "builder_team",
     ]);
-    for (const sub of builders) {
+    for (const sub of users) {
       const builderTier = BUILDER_TIERS[sub.key.replace("builder_", "") as keyof typeof BUILDER_TIERS];
       const monthly = builderTier.monthlyPrice;
       if (monthly === null) throw new Error(`${sub.key} is not self-serve sellable`);
@@ -170,18 +170,18 @@ describe("setup-stripe-plans catalog", () => {
       ]);
       expect(sub.metadata.builderTier).toBe(builderTier.name);
     }
-    for (const builder of builders) {
-      expect(builder.metadata).toMatchObject({
+    for (const user of users) {
+      expect(user.metadata).toMatchObject({
         trialDays: "7",
         trialEligibility: "first_builder_gateway",
         trialPaymentMethodRequired: "true",
       });
-      expect(builder.marketingFeatures.join(" ")).toMatch(/7-day free trial/i);
-      expect(builder.description).toMatch(/first self-serve Builder gateway/i);
+      expect(user.marketingFeatures.join(" ")).toMatch(/7-day free trial/i);
+      expect(user.description).toMatch(/first self-serve Builder gateway/i);
     }
-    expect(builders[0].metadata.instance).toBe("small");
-    expect(builders[0].description).toMatch(/Small isolated gateway/i);
-    expect(builders.map((builder) => builder.marketingFeatures[1])).toEqual([
+    expect(users[0].metadata.instance).toBe("small");
+    expect(users[0].description).toMatch(/Small isolated gateway/i);
+    expect(users.map((user) => user.marketingFeatures[1])).toEqual([
       "Small (2 vCPU / 8GB RAM) isolated gateway",
       "2 vCPU / 8GB RAM isolated gateway",
       "4 vCPU / 16GB RAM isolated gateway",

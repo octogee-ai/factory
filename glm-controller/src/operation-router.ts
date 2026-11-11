@@ -1,6 +1,6 @@
 import type { SchedulerHandoffState } from "@octogee/shared/types/glm";
 import type {
-  CustomerMigrationV2State,
+  UserMigrationV2State,
   Operation,
   OperationKind,
   OperationStep,
@@ -14,13 +14,13 @@ export interface OperationResult {
   output?: Record<string, unknown>;
   scrubInputOnSuccess?: boolean;
   retryAfterMs?: number;
-  waitingForBuilderIdle?: boolean;
+  waitingForUserIdle?: boolean;
 }
 
 export interface OperationContext {
   assertActiveClaim?: (allowCancelled?: boolean) => Promise<void>;
-  assertCustomerRestoreSettled?: () => Promise<void>;
-  withCustomerRestoreFence?: (input: {
+  assertUserRestoreSettled?: () => Promise<void>;
+  withUserRestoreFence?: (input: {
     resume?: boolean;
     uid: string;
     slug: string;
@@ -30,7 +30,7 @@ export interface OperationContext {
   }, work: () => Promise<void>) => Promise<void>;
   reportStep: (step: OperationStep) => Promise<void> | void;
   persistSchedulerHandoff?: (state: SchedulerHandoffState) => Promise<void>;
-  persistCustomerMigrationV2?: (state: CustomerMigrationV2State) => Promise<void>;
+  persistUserMigrationV2?: (state: UserMigrationV2State) => Promise<void>;
   persistCutoverCommitted?: (at: number) => Promise<void>;
   cancellationRequested?: () => Promise<boolean>;
 }

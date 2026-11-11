@@ -8,8 +8,8 @@ describe("OpenClaw Dashboard metrics", () => {
     const registry = new Registry();
     const metrics = createOpenClawControlMetrics(registry);
     const identity = {
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       gatewayClass: "builder",
     };
     metrics.http(identity, "asset", "ok", 0.01);
@@ -20,8 +20,8 @@ describe("OpenClaw Dashboard metrics", () => {
     const output = await registry.metrics();
     expect(output).toContain("openclaw_dashboard_http_total");
     expect(output).toContain("openclaw_dashboard_rpc_total");
-    expect(output).toContain('gateway_id="bender"');
-    expect(output).toContain('revision_id="bender-r7"');
+    expect(output).toContain('gateway_id="walter"');
+    expect(output).toContain('revision_id="walter-r7"');
     expect(output).not.toContain("uid-owner");
     expect(output).not.toContain("gateway-token");
   });

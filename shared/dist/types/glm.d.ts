@@ -9,7 +9,7 @@ export type GatewayImageProfile = (typeof GATEWAY_IMAGE_PROFILES)[number];
 export interface GatewayDesiredState {
     gatewayId: string;
     /**
-     * Durable identity this instance belongs to (`shared-a`, `bender`) — bare,
+     * Durable identity this instance belongs to (`shared-a`, `walter`) — bare,
      * never blue/green-suffixed. Explicit on every instance written after the
      * gateway field landed; older docs derive it from gatewayId by convention
      * via deriveGatewayIdentity until backfilled.
@@ -32,7 +32,7 @@ export interface GatewayDesiredState {
     serviceAccount?: GatewayServiceAccountSpec;
     gcpProject?: string;
     gatewayContainerSecurityContext?: Record<string, unknown>;
-    builderAccess?: BuilderGatewayAccessSpec;
+    builderAccess?: IsolatedGatewayAccessSpec;
     lastError?: {
         at: number;
         message: string;
@@ -71,7 +71,7 @@ export interface GatewayVmSpec {
     serviceAccountEmail: string;
     subnetwork: string;
 }
-export interface RetainedBuilderHome {
+export interface RetainedUserHome {
     projectId: string;
     zone: string;
     name: string;
@@ -113,8 +113,8 @@ export interface GatewayVmParkedCheckpoint {
     completedAt: number | null;
 }
 export declare function isGatewayVmParkedCheckpoint(value: unknown): value is GatewayVmParkedCheckpoint;
-export declare const BUILDER_PARKED_COMPUTER_FIELD = "provisioning.computer";
-export interface BuilderParkedComputer {
+export declare const USER_PARKED_VM_FIELD = "provisioning.computer";
+export interface UserParkedVm {
     instanceName: string;
     zone: string;
     instanceId: string | null;
@@ -129,8 +129,8 @@ export interface BuilderParkedComputer {
     vmSpec?: GatewayVmSpec;
     disposable?: true;
 }
-export declare function isBuilderParkedComputer(value: unknown): value is BuilderParkedComputer;
-export declare function readBuilderParkedComputer(userData: Record<string, unknown> | undefined): BuilderParkedComputer | null;
+export declare function isUserParkedVm(value: unknown): value is UserParkedVm;
+export declare function readUserParkedVm(userData: Record<string, unknown> | undefined): UserParkedVm | null;
 export declare const GLM_GATEWAY_VM_SUBCOLLECTION = "vm";
 export declare const GLM_GATEWAY_VM_RUNTIME_DOC = "runtime";
 export declare function gatewayVmRuntimeDocPath(gatewayId: string): string;
@@ -159,19 +159,19 @@ export type GatewayVmRuntimeVolume = {
     name: string;
     kind: "kubernetesApi";
 };
-export interface RuntimeBuilderIdentity {
+export interface RuntimeUserIdentity {
     ownerUid: string;
     builderSlug: string;
 }
-export declare function isRuntimeBuilderIdentity(value: unknown): value is RuntimeBuilderIdentity;
+export declare function isRuntimeUserIdentity(value: unknown): value is RuntimeUserIdentity;
 export interface GatewayVmRuntimeBundle {
     version: string;
     gatewayId: string;
-    builderIdentity?: RuntimeBuilderIdentity;
+    builderIdentity?: RuntimeUserIdentity;
     namespace?: string;
     imageRepository: string;
     imageTag: string;
-    /** Absent on bundles rendered before computers named their desktop; those computers run Omarchy. */
+    /** Absent on bundles rendered before VMs named their desktop; those VMs run Omarchy. */
     desktop?: GatewayVmDesktop;
     init: GatewayVmRuntimeContainer | null;
     containers: GatewayVmRuntimeContainer[];
@@ -231,10 +231,10 @@ export interface GatewayVmDiskObservation extends GatewayVmDiskSample {
 export declare function isGatewayVmDiskSample(value: unknown): value is GatewayVmDiskSample;
 export declare function isGatewayVmDiskObservation(value: unknown): value is GatewayVmDiskObservation;
 export declare function vmDiskFreePercent(sample: GatewayVmDiskSample): number;
-export declare const COMPUTER_HOME_CHECKPOINT_MAX_BYTES: number;
-export declare const COMPUTER_HOME_CHECKPOINT_KEEP = 5;
-export declare const COMPUTER_HOME_CHECKPOINT_NAME_RE: RegExp;
-export declare const COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE = "application/gzip";
+export declare const VM_HOME_CHECKPOINT_MAX_BYTES: number;
+export declare const VM_HOME_CHECKPOINT_KEEP = 5;
+export declare const VM_HOME_CHECKPOINT_NAME_RE: RegExp;
+export declare const VM_HOME_CHECKPOINT_CONTENT_TYPE = "application/gzip";
 export interface GatewayVmHomeCheckpoint {
     generation?: string;
     coverage?: "builder-home-v2";
@@ -259,9 +259,9 @@ export declare function isDisposableHomeCheckpoint(value: unknown): value is Gat
     instanceId: string;
 };
 export declare function sameHomeCheckpoint(a: GatewayVmHomeCheckpoint, b: GatewayVmHomeCheckpoint): boolean;
-export declare function computerHomeCheckpointName(at: number): string;
+export declare function vmHomeCheckpointName(at: number): string;
 export declare function gatewayVmPodName(gatewayId: string, instanceId: string): string;
-export declare const BUILDER_COMPUTER_INSTANCE_PREFIX = "octogee-computer-";
+export declare const GATEWAY_VM_INSTANCE_PREFIX = "octogee-computer-";
 export declare const GATEWAY_DESKTOP_NODE_CONTAINER = "desktop-node";
 export declare const GATEWAY_DESKTOP_NODE_STATE_VOLUME = "desktop-node-state";
 export declare const GATEWAY_DESKTOP_NODE_IDENTITY_VOLUME = "desktop-node-identity";
@@ -269,7 +269,7 @@ export declare const GATEWAY_DESKTOP_NODE_IDENTITY_DIR = "/run/octogee/desktop-n
 export declare const GATEWAY_DESKTOP_NODE_IDENTITY_PATH = "/run/octogee/desktop-node-identity/identity.json";
 export declare const GATEWAY_DESKTOP_NODE_NAME = "octogee-desktop";
 export declare const GATEWAY_DESKTOP_RUNTIME_DIR = "/run/user/1000";
-export declare function builderComputerInstanceName(environment: string, ownerUid: string): string;
+export declare function gatewayVmInstanceName(environment: string, ownerUid: string): string;
 export interface GatewayModelBrokerLimits {
     spendWindowUsd?: number | null;
     spendWeekUsd?: number | null;
@@ -284,7 +284,7 @@ export type GatewayControlIdentity = (typeof GATEWAY_CONTROL_IDENTITY_MODES)[num
 export declare const DEFAULT_GATEWAY_CONTROL_IDENTITY: GatewayControlIdentity;
 export declare function isGatewayControlIdentity(value: unknown): value is GatewayControlIdentity;
 export declare function resolveGatewayControlIdentity(value: unknown): GatewayControlIdentity;
-export interface BuilderGatewayAccessSpec {
+export interface IsolatedGatewayAccessSpec {
     controlUiEnabled?: boolean;
     controlIdentity?: GatewayControlIdentity;
     kubeApiServerEgressCidrs?: string[];
@@ -292,26 +292,26 @@ export interface BuilderGatewayAccessSpec {
     verifiedAt?: number;
     verifiedBy?: string;
 }
-export declare const BUILDER_GATEWAY_LOCKED_ACCESS: BuilderGatewayAccessSpec;
-export declare function defaultBuilderGatewayAccess(ownerUid: string | null | undefined): BuilderGatewayAccessSpec;
-export declare function resolveBuilderGatewayAccess(ownerUid: string | null | undefined, builderAccess: BuilderGatewayAccessSpec | null | undefined): BuilderGatewayAccessSpec;
-export declare const BUILDER_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
+export declare const ISOLATED_GATEWAY_LOCKED_ACCESS: IsolatedGatewayAccessSpec;
+export declare function defaultIsolatedGatewayAccess(ownerUid: string | null | undefined): IsolatedGatewayAccessSpec;
+export declare function resolveIsolatedGatewayAccess(ownerUid: string | null | undefined, builderAccess: IsolatedGatewayAccessSpec | null | undefined): IsolatedGatewayAccessSpec;
+export declare const ISOLATED_GATEWAY_SERVICE_ACCOUNT_PREFIX = "octogee-gw-";
 export declare const GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME = "octogee-gateway";
 export declare const GATEWAY_ID_MAX_LENGTH = 32;
 export declare const GATEWAY_ID_REQUIREMENT = "gatewayId must be a lowercase DNS-safe id, 1-32 chars, starting and ending with a letter or digit";
-export declare const BUILDER_GATEWAY_LOCKED_SERVICE_ACCOUNT: GatewayServiceAccountSpec;
+export declare const ISOLATED_GATEWAY_LOCKED_SERVICE_ACCOUNT: GatewayServiceAccountSpec;
 export declare function isValidGatewayId(id: unknown): id is string;
 export declare const NEW_GATEWAY_ID_REQUIREMENT = "gatewayId must be a lowercase DNS-safe id, 1-32 chars, starting and ending with a letter or digit; the -blue/-green suffixes are reserved for roll roles";
 export declare function isValidNewGatewayId(id: unknown): id is string;
 export declare function deriveGatewayIdentity(gatewayId: string, explicitGateway?: unknown): string;
-export declare function builderGatewayServiceAccountName(gatewayId: string): string;
-export declare function isGatewayClassControlUiAccessEnabled(gatewayClass: GatewayClass | undefined, builderAccess: BuilderGatewayAccessSpec | undefined): boolean;
+export declare function isolatedGatewayServiceAccountName(gatewayId: string): string;
+export declare function isGatewayClassControlUiAccessEnabled(gatewayClass: GatewayClass | undefined, builderAccess: IsolatedGatewayAccessSpec | undefined): boolean;
 export declare function resolveUserGatewayControlState(data: {
     gatewayClass?: unknown;
     profile?: unknown;
     imageProfile?: unknown;
     ownerUid?: unknown;
-    builderAccess?: BuilderGatewayAccessSpec;
+    builderAccess?: IsolatedGatewayAccessSpec;
 } | undefined, uid: string): {
     gatewayProfile: GatewayProfile;
     controlUiEnabled: boolean;
@@ -413,7 +413,7 @@ export declare function readSchedulerMigrationIdentity(operationId: unknown, mig
     attempt: number;
     claimStartedAt: number;
 } | null;
-export interface BuilderActivationTargetRollbackProof {
+export interface UserActivationTargetRollbackProof {
     operationId: string;
     migrationId: string;
     uid: string;
@@ -440,7 +440,7 @@ export interface MigrationForwardRecovery {
     targetReleased?: true;
 }
 export interface SchedulerHandoffState {
-    /** New customer moves use best-effort schedule snapshots, not native handoff. */
+    /** New user moves use best-effort schedule snapshots, not native handoff. */
     scheduleTransfer?: true;
     forwardRecovery?: MigrationForwardRecovery;
     migrationId: string;
@@ -454,7 +454,7 @@ export interface SchedulerHandoffState {
         migrationId: string;
         sourceEpoch: number;
         steps: OperationStep[];
-        targetRollback?: BuilderActivationTargetRollbackProof;
+        targetRollback?: UserActivationTargetRollbackProof;
     };
 }
 export interface SourceTransferAuthority {
@@ -506,7 +506,7 @@ export interface Operation {
     attemptHistory?: OperationAttemptRecord[];
     output?: Record<string, unknown>;
     progress?: MigrationProgressRecord[];
-    customerMigrationV2?: CustomerMigrationV2State;
+    customerMigrationV2?: UserMigrationV2State;
     sourceTransferExecution?: SourceTransferExecution;
     schedulerHandoff?: SchedulerHandoffState;
     schedulerHandoffReleased?: boolean;
@@ -514,8 +514,8 @@ export interface Operation {
     schedulerHandoffLost?: string;
     cutoverCommittedAt?: number;
 }
-export type CustomerMigrationV2Phase = "initialized" | "keysSynced" | "preSynced" | "sourceQuiesced" | "finalSynced" | "targetVerified" | "cutover" | "sourceRetired" | "complete" | "abortIntent" | "abortTargetUnmounted" | "aborted";
-export interface CustomerMigrationV2GatewayRootFence {
+export type UserMigrationV2Phase = "initialized" | "keysSynced" | "preSynced" | "sourceQuiesced" | "finalSynced" | "targetVerified" | "cutover" | "sourceRetired" | "complete" | "abortIntent" | "abortTargetUnmounted" | "aborted";
+export interface UserMigrationV2GatewayRootFence {
     gatewayId: string;
     updatedAt: number;
     latestRelease: number;
@@ -526,8 +526,8 @@ export interface CustomerMigrationV2GatewayRootFence {
     builderSlug: string;
     configHash: string;
 }
-export interface CustomerMigrationV2State {
-    phase: CustomerMigrationV2Phase;
+export interface UserMigrationV2State {
+    phase: UserMigrationV2Phase;
     operationId: string;
     migrationId: string;
     uid: string;
@@ -536,16 +536,16 @@ export interface CustomerMigrationV2State {
     sourceRelease: number;
     sourceEpoch: number;
     sourceAssignmentMode: "assigned" | "unassigned-live";
-    sourceRootFence: CustomerMigrationV2GatewayRootFence;
+    sourceRootFence: UserMigrationV2GatewayRootFence;
     targetGatewayId: string;
     targetRelease: number;
-    targetRootFence: CustomerMigrationV2GatewayRootFence;
+    targetRootFence: UserMigrationV2GatewayRootFence;
     sourceSystemConfigCommit?: string;
     cutoverAt?: number;
     schedulerStagedAt?: number;
     sourceRetiredAt?: number;
     completedAt?: number;
-    abortFromPhase?: CustomerMigrationV2Phase;
+    abortFromPhase?: UserMigrationV2Phase;
     abortReason?: string;
     abortIntentAt?: number;
     abortedAt?: number;
@@ -570,7 +570,7 @@ export interface HelmInstanceValue {
     serviceAccountName?: string;
     serviceAccount?: GatewayServiceAccountSpec;
     gatewayContainerSecurityContext?: Record<string, unknown>;
-    builderAccess?: BuilderGatewayAccessSpec;
+    builderAccess?: IsolatedGatewayAccessSpec;
     profile?: GatewayProfile;
     gatewayClass?: GatewayClass;
     imageProfile?: GatewayImageProfile;

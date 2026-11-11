@@ -16,12 +16,12 @@ describe("projectGatewaySummary — gatewayId", () => {
 
   it("surfaces the bare gatewayId from the status doc", () => {
     const summary = projectGatewaySummary(
-      gatewayDoc("bender"),
+      gatewayDoc("walter"),
       [],
       { profile: "builder" },
       now,
     );
-    expect(summary.gatewayId).toBe("bender");
+    expect(summary.gatewayId).toBe("walter");
   });
 
   it("falls back to the doc id when the status doc omits gatewayId", () => {
@@ -38,9 +38,9 @@ describe("projectGatewaySummary — gatewayId", () => {
 describe("projectGatewaySummary — desired gateway metadata", () => {
   const now = 1_750_000_000_000;
 
-  it("derives OpenClaw from the Cowboy image tag when the heartbeat has not learned it yet", () => {
+  it("derives OpenClaw from the fleet controller image tag when the heartbeat has not learned it yet", () => {
     const summary = projectGatewaySummary(
-      gatewayDoc("bender", {
+      gatewayDoc("walter", {
         version: "5b287cb",
         openclawVersion: "unknown",
       }),

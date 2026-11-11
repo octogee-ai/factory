@@ -92,7 +92,7 @@ describe('requireAuth — admin role only; no per-user gitea secret read (retire
   });
 
   it('takes isAdmin from the platform state store', async () => {
-    const getRole = vi.spyOn(platformStateStore.builders.records, 'getRole').mockResolvedValueOnce('admin');
+    const getRole = vi.spyOn(platformStateStore.users.records, 'getRole').mockResolvedValueOnce('admin');
 
     const { req } = await runAuth();
 
@@ -102,7 +102,7 @@ describe('requireAuth — admin role only; no per-user gitea secret read (retire
   });
 
   it('fails closed and logs when the role cannot be read', async () => {
-    const getRole = vi.spyOn(platformStateStore.builders.records, 'getRole').mockRejectedValueOnce(new Error('store unavailable'));
+    const getRole = vi.spyOn(platformStateStore.users.records, 'getRole').mockRejectedValueOnce(new Error('store unavailable'));
 
     const { req, nextCalled } = await runAuth();
 
@@ -113,9 +113,9 @@ describe('requireAuth — admin role only; no per-user gitea secret read (retire
   });
 
   it('denies a suspended account from the store even when the product document reads active', async () => {
-    const builder = await platformStateStore.builders.records.get('u1');
-    const get = vi.spyOn(platformStateStore.builders.records, 'get')
-      .mockResolvedValueOnce({ ...builder!, accountLifecycle: { status: 'suspended' } as never });
+    const user = await platformStateStore.users.records.get('u1');
+    const get = vi.spyOn(platformStateStore.users.records, 'get')
+      .mockResolvedValueOnce({ ...user!, accountLifecycle: { status: 'suspended' } as never });
 
     const { req, nextCalled, status } = await runAuth();
 

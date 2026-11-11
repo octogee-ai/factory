@@ -74,7 +74,7 @@ function adminDeleteGateway(
   if (!glm) return { status: 404, error: "not found" };
   const hb = state.gateways.get(gatewayId);
   if (hb && hb.mountedCustomers.length > 0) {
-    return { status: 409, error: "still has mounted customers" };
+    return { status: 409, error: "still has mounted users" };
   }
 
   const operationId = `op-${state.operations.size + 1}`;
@@ -102,7 +102,7 @@ function makeRetireDeps(state: SharedState) {
       }
       return { ok: true as const };
     },
-    readMountedCustomers: async (gatewayId: string) =>
+    readMountedUsers: async (gatewayId: string) =>
       state.gateways.get(gatewayId)?.mountedCustomers ?? [],
     readAssignmentsForGateway: async () => [],
     helmUninstallGateway: async (gatewayId: string) => {
@@ -210,7 +210,7 @@ expect(state.helmReleases.size).toBe(0);
     ]);
   });
 
-  it("admin refuses (409) when gateway has mounted customers — reconciler not engaged, no helm uninstall", async () => {
+  it("admin refuses (409) when gateway has mounted users — reconciler not engaged, no helm uninstall", async () => {
     const state: SharedState = {
       helmReleases: new Map([
         [
@@ -251,7 +251,7 @@ await reconcilerTick(state, helm);
     expect(state.helmReleases.size).toBe(1);
   });
 
-  it("retire while drained-with-zero-customers but heartbeat is missing (stranded crash-loop) still cleans up", async () => {
+  it("retire while drained-with-zero-users but heartbeat is missing (stranded crash-loop) still cleans up", async () => {
     const state: SharedState = {
       helmReleases: new Map([
         [

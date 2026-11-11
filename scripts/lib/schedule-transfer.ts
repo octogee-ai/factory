@@ -105,7 +105,7 @@ export async function removeSchedules(
     try {
       if (owners.has(jobId)) {
         const owner = owners.get(jobId);
-        if (!owner || !agentIds.has(owner)) throw new Error("not this customer's job");
+        if (!owner || !agentIds.has(owner)) throw new Error("not this user's job");
         await call("cron.remove", { id: jobId });
       }
       result.removed++;
@@ -152,7 +152,7 @@ async function restoreRecord(
   record: ScheduleRecord,
 ): Promise<boolean> {
   if (!agentIds.has(record.agentId)) {
-    throw new Error(`agent ${record.agentId} is not this customer's agent on this gateway`);
+    throw new Error(`agent ${record.agentId} is not this user's agent on this gateway`);
   }
   const declarationKey = transferKey(record);
   const key = identityKey(record.agentId, declarationKey);

@@ -31,13 +31,13 @@ async function guestRemovable(ctx: ProjectCtx, guestUid: string, res: Response):
 }
 
 async function readGuestActor(guestUid: string): Promise<GuestActor> {
-  const [guestDoc, builder] = await Promise.all([
+  const [guestDoc, user] = await Promise.all([
     db.doc(`users/${guestUid}`).get(),
-    platformStateStore.builders.records.get(guestUid),
+    platformStateStore.users.records.get(guestUid),
   ]);
   const username = guestDoc.data()?.username;
   return {
-    mmUserId: builder?.mattermostUserId ?? undefined,
+    mmUserId: user?.mattermostUserId ?? undefined,
     giteaUser: username ? `ws-${username}` : null,
   };
 }

@@ -139,7 +139,7 @@ describe("release digest manifest — generator/authority contract", () => {
     // new package name, so a v1 manifest cannot supply the digest the gateway
     // release needs. Everything else about a v1 manifest resolves fine.
     // Operational consequence: the first PROD promotion after this ships must
-    // use a build whose manifest carries the Builder image.
+    // use a build whose manifest carries the isolated image.
     serveManifest({
       schemaVersion: 1,
       sourceSha,

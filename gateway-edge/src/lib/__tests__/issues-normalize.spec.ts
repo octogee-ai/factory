@@ -11,7 +11,7 @@ import {
 const githubIssue = {
   number: 42,
   title: "Onboard Mountain Mama",
-  body: "Walk a builder to first ship.",
+  body: "Walk a user to first ship.",
   state: "open",
   labels: [{ id: 1, name: "status:todo", color: "d73a4a" }, { id: 2, name: "ux", color: "00ff00" }],
   user: { login: "dan" },
@@ -52,7 +52,7 @@ describe("normalizeIssue", () => {
     expect(normalizeIssue(githubIssue)).toEqual({
       number: 42,
       title: "Onboard Mountain Mama",
-      body: "Walk a builder to first ship.",
+      body: "Walk a user to first ship.",
       state: "open",
       labels: ["status:todo", "ux"],
       assignees: ["chris", "dan"],

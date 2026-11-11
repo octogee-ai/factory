@@ -129,7 +129,7 @@ interface Observation {
 }
 
 /**
- * The Agent behind a Talk session is the Builder's coach reached the same way
+ * The Agent behind a Talk session is the user's agent reached the same way
  * typing reaches it: a Mattermost post in the conversation channel. The reply is
  * read back live from the OpenClaw event stream, correlated exactly: OpenClaw
  * reports which post it received (`message.received` carries the post id and the

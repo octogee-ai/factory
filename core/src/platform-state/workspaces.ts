@@ -171,17 +171,17 @@ export interface WorkspaceChannelsRepository {
   delete(scope: WorkspaceChannelScope, channelId: string): Promise<void>;
 }
 
-export interface BuilderAgentIdentity {
+export interface UserAgentIdentity {
   readonly uid: string;
   readonly mattermostUserId: string | null;
   readonly createdAt: number | null;
   readonly updatedAt: number | null;
 }
 
-export interface BuilderAgentIdentitiesRepository {
-  get(uid: string): Promise<Stored<BuilderAgentIdentity> | null>;
-  listAll(): Promise<readonly Stored<BuilderAgentIdentity>[]>;
-  put(identity: Omit<BuilderAgentIdentity, "createdAt" | "updatedAt"> & { readonly at: TimeInput }): Promise<void>;
+export interface UserAgentIdentitiesRepository {
+  get(uid: string): Promise<Stored<UserAgentIdentity> | null>;
+  listAll(): Promise<readonly Stored<UserAgentIdentity>[]>;
+  put(identity: Omit<UserAgentIdentity, "createdAt" | "updatedAt"> & { readonly at: TimeInput }): Promise<void>;
   delete(uid: string): Promise<void>;
 }
 
@@ -191,5 +191,5 @@ export interface WorkspaceRepositories {
   readonly projects: WorkspaceProjectsRepository;
   readonly projectMembers: WorkspaceProjectMembersRepository;
   readonly channels: WorkspaceChannelsRepository;
-  readonly agentIdentities: BuilderAgentIdentitiesRepository;
+  readonly agentIdentities: UserAgentIdentitiesRepository;
 }

@@ -108,7 +108,7 @@ function createOperationsRepository(session) {
             const lists = await Promise.all(["inputUid", "input.uid", "createdBy"].map((field) => list("journal.operations.listReferencingUid", collection().where(field, "==", uid))));
             return mergeById(lists);
         },
-        async listByInputBuilderSlugPrefix(prefix) {
+        async listByInputUserSlugPrefix(prefix) {
             return list("journal.operations.listByInputBuilderSlugPrefix", collection().where("input.builderSlug", ">=", prefix).where("input.builderSlug", "<", `${prefix}`));
         },
         async enqueue(operation) {

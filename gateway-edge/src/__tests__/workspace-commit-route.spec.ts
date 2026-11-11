@@ -13,11 +13,11 @@ const h = vi.hoisted(() => {
   }
   return {
     ConnectorTokenReadError: MockConnectorTokenReadError,
-    resolveCustomerDir: vi.fn(),
+    resolveUserDir: vi.fn(),
     resolveProjectDir: vi.fn(),
     commitAndPushWorkspace: vi.fn(),
     isSafeSlug: vi.fn(),
-    isTrustedGithubCustomerCheckout: vi.fn(),
+    isTrustedGithubUserCheckout: vi.fn(),
     readOwnerRuntimeConnectorAccessToken: vi.fn(),
     resolveCommitAuthor: vi.fn(),
     warn: vi.fn(),
@@ -29,11 +29,11 @@ const h = vi.hoisted(() => {
 });
 
 vi.mock("../lib/workspace-git.js", () => ({
-  resolveCustomerDir: h.resolveCustomerDir,
+  resolveUserDir: h.resolveUserDir,
   resolveProjectDir: h.resolveProjectDir,
   commitAndPushWorkspace: h.commitAndPushWorkspace,
   isSafeSlug: h.isSafeSlug,
-  isTrustedGithubCustomerCheckout: h.isTrustedGithubCustomerCheckout,
+  isTrustedGithubUserCheckout: h.isTrustedGithubUserCheckout,
 }));
 
 vi.mock("../lib/connector-tokens.js", () => ({
@@ -59,7 +59,7 @@ vi.mock("../lib/binary-diversion.js", () => ({
 
 import workspaceCommitRouter from "../routes/internal/workspace-commit.js";
 
-const originalCustomersDir = process.env.CUSTOMERS_DIR;
+const originalUsersDir = process.env.CUSTOMERS_DIR;
 
 function app() {
   const server = express();
@@ -71,8 +71,8 @@ function app() {
 beforeEach(() => {
   vi.clearAllMocks();
   h.isSafeSlug.mockImplementation((slug: string) => /^[a-z0-9-]+$/.test(slug));
-  h.resolveCustomerDir.mockResolvedValue("/customers/acme");
-  h.isTrustedGithubCustomerCheckout.mockReturnValue(false);
+  h.resolveUserDir.mockResolvedValue("/customers/acme");
+  h.isTrustedGithubUserCheckout.mockReturnValue(false);
   h.readOwnerRuntimeConnectorAccessToken.mockResolvedValue("gh-owner-token");
   h.resolveCommitAuthor.mockReturnValue({ name: "Octogee Agent", email: "agent@octogee.test" });
   h.commitAndPushWorkspace.mockImplementation(async (_dir, options) => {
@@ -85,10 +85,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (originalCustomersDir === undefined) {
+  if (originalUsersDir === undefined) {
     delete process.env.CUSTOMERS_DIR;
   } else {
-    process.env.CUSTOMERS_DIR = originalCustomersDir;
+    process.env.CUSTOMERS_DIR = originalUsersDir;
   }
 });
 
@@ -106,7 +106,7 @@ describe("internal workspace commit route", () => {
         code: "MESSAGE_TOO_LONG",
       });
 
-    expect(h.resolveCustomerDir).not.toHaveBeenCalled();
+    expect(h.resolveUserDir).not.toHaveBeenCalled();
     expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
   });
 
@@ -122,7 +122,7 @@ describe("internal workspace commit route", () => {
       .send({ agentId: "octogee-acme-coach", slug: "acme" })
       .expect(403, { error: "Agent identity proof rejected.", code: "PROOF_REJECTED" });
 
-    expect(h.resolveCustomerDir).not.toHaveBeenCalled();
+    expect(h.resolveUserDir).not.toHaveBeenCalled();
     expect(h.commitAndPushWorkspace).not.toHaveBeenCalled();
     expect(h.readOwnerRuntimeConnectorAccessToken).not.toHaveBeenCalled();
   });
@@ -137,11 +137,11 @@ describe("internal workspace commit route", () => {
         code: "PROOF_UNAVAILABLE",
       });
     expect(h.warn).toHaveBeenCalledWith(expect.stringContaining("identity proof lookup failed slug=acme"));
-    expect(h.resolveCustomerDir).not.toHaveBeenCalled();
+    expect(h.resolveUserDir).not.toHaveBeenCalled();
   });
 
-  it("returns a retryable 503 when the customer working tree is unavailable", async () => {
-    h.resolveCustomerDir.mockResolvedValue(null);
+  it("returns a retryable 503 when the user working tree is unavailable", async () => {
+    h.resolveUserDir.mockResolvedValue(null);
 
     await request(app()).post("/internal/workspace/commit").send({ agentId: "octogee-acme-coach", slug: "acme" }).expect(503, {
       error: "Working tree temporarily unavailable; retry shortly.",
@@ -158,7 +158,7 @@ describe("internal workspace commit route", () => {
       .send({ agentId: "octogee-acme-coach", slug: "acme", message: "  checkpoint work  " })
       .expect(200);
 
-    expect(h.resolveCustomerDir).toHaveBeenCalledWith("/home/node/.openclaw/customers", "acme");
+    expect(h.resolveUserDir).toHaveBeenCalledWith("/home/node/.openclaw/customers", "acme");
     expect(h.resolveCommitAuthor).toHaveBeenCalledWith(undefined, "acme");
     expect(h.commitAndPushWorkspace).toHaveBeenCalledWith("/customers/acme", expect.objectContaining({
       message: "checkpoint work",
@@ -169,12 +169,12 @@ describe("internal workspace commit route", () => {
     expect(h.info).toHaveBeenCalledWith(expect.stringContaining("internal/workspace/commit slug=acme"));
   });
 
-  it("uses the default commit message and custom customer root when no message is provided", async () => {
+  it("uses the default commit message and custom user root when no message is provided", async () => {
     process.env.CUSTOMERS_DIR = "/custom/customers";
 
     await request(app()).post("/internal/workspace/commit").send({ agentId: "octogee-acme-coach", slug: "acme" }).expect(200);
 
-    expect(h.resolveCustomerDir).toHaveBeenCalledWith("/custom/customers", "acme");
+    expect(h.resolveUserDir).toHaveBeenCalledWith("/custom/customers", "acme");
     expect(h.commitAndPushWorkspace).toHaveBeenCalledWith("/customers/acme", expect.objectContaining({
       message: "agent: workspace commit",
     }));
@@ -241,7 +241,7 @@ describe("internal workspace commit route", () => {
   });
 });
 
-describe("internal workspace commit route — Vegas project lane", () => {
+describe("internal workspace commit route — multi-agent project lane", () => {
   it("commits the project clone when a project is given", async () => {
     h.resolveProjectDir.mockResolvedValue("/customers/acme/projects/orbit");
 
@@ -259,7 +259,7 @@ describe("internal workspace commit route — Vegas project lane", () => {
 
   it("fetches GitHub auth on demand and confines it to the commit operation", async () => {
     h.resolveProjectDir.mockResolvedValue("/customers/acme/projects/orbit");
-    h.isTrustedGithubCustomerCheckout.mockReturnValue(true);
+    h.isTrustedGithubUserCheckout.mockReturnValue(true);
 
     await request(app())
       .post("/internal/workspace/commit")
@@ -275,7 +275,7 @@ describe("internal workspace commit route — Vegas project lane", () => {
 
   it("does not create a local commit when GitHub is disconnected", async () => {
     h.resolveProjectDir.mockResolvedValue("/customers/acme/projects/orbit");
-    h.isTrustedGithubCustomerCheckout.mockReturnValue(true);
+    h.isTrustedGithubUserCheckout.mockReturnValue(true);
     h.readOwnerRuntimeConnectorAccessToken.mockResolvedValue(null);
 
     await request(app())
@@ -291,7 +291,7 @@ describe("internal workspace commit route — Vegas project lane", () => {
 
   it("fails explicitly before committing when the GitHub broker is unavailable", async () => {
     h.resolveProjectDir.mockResolvedValue("/customers/acme/projects/orbit");
-    h.isTrustedGithubCustomerCheckout.mockReturnValue(true);
+    h.isTrustedGithubUserCheckout.mockReturnValue(true);
     h.readOwnerRuntimeConnectorAccessToken.mockRejectedValue(new Error("broker down"));
 
     await request(app())
@@ -311,7 +311,7 @@ describe("internal workspace commit route — Vegas project lane", () => {
 
   it("directs the user to reconnect before committing when GitHub requires reauthorization", async () => {
     h.resolveProjectDir.mockResolvedValue("/customers/acme/projects/orbit");
-    h.isTrustedGithubCustomerCheckout.mockReturnValue(true);
+    h.isTrustedGithubUserCheckout.mockReturnValue(true);
     h.readOwnerRuntimeConnectorAccessToken.mockRejectedValue(
       new h.ConnectorTokenReadError(409, "reauth_required"),
     );
@@ -389,7 +389,7 @@ describe("binary diversion on the commit path", () => {
   });
 
   it("stores GitHub-backed checkout binaries with the rest of the workspace blobs", async () => {
-    h.isTrustedGithubCustomerCheckout.mockReturnValue(true);
+    h.isTrustedGithubUserCheckout.mockReturnValue(true);
 
     await request(app())
       .post("/internal/workspace/commit")

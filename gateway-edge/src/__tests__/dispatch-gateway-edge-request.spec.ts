@@ -20,7 +20,7 @@ function mockRes(): ServerResponse {
 describe("dispatchGatewayEdgeRequest — fleet-prefix raw-passthrough seam", () => {
   it("hands a non-chat-proxy scoped path to the app with req.url UNCHANGED — fleet prefix intact, no blanket strip", () => {
     const app = vi.fn();
-    const url = "/api/g/gw-bender/internal/connectors/materialize";
+    const url = "/api/g/gw-walter/internal/connectors/materialize";
     const req = mockReq(url, "POST");
     const res = mockRes();
 
@@ -45,7 +45,7 @@ describe("dispatchGatewayEdgeRequest — fleet-prefix raw-passthrough seam", () 
   );
 
   it.each([
-    "/api/g/gw-bender/healthz",
+    "/api/g/gw-walter/healthz",
   ])(
     "strips the fleet prefix before the chat-proxy ownership check — %s routes to the proxy, never the app",
     (path) => {

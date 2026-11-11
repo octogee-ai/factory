@@ -16,7 +16,7 @@ import {
   syncCleanWorkspaceToRemote,
   parseLog,
   parsePorcelain,
-  resolveCustomerDir,
+  resolveUserDir,
   workspaceGitCommandArgs,
   workspaceGitEnvironment,
 } from "../lib/workspace-git.js";
@@ -122,7 +122,7 @@ describe("parseLog", () => {
   });
 });
 
-describe("resolveCustomerDir", () => {
+describe("resolveUserDir", () => {
   let repo: string;
   let root: string;
   beforeAll(async () => {
@@ -137,31 +137,31 @@ describe("resolveCustomerDir", () => {
   });
 
   it("returns the dir when it exists and contains .git", async () => {
-    expect(await resolveCustomerDir(root, "alice")).toBe(repo);
+    expect(await resolveUserDir(root, "alice")).toBe(repo);
   });
 
   it("returns null for a missing slug dir", async () => {
-    expect(await resolveCustomerDir(root, "nope")).toBeNull();
+    expect(await resolveUserDir(root, "nope")).toBeNull();
   });
 
   it("returns null when the dir lacks .git (not a working tree)", async () => {
     const slugDir = path.join(root, "no-git");
     await fs.mkdir(slugDir);
-    expect(await resolveCustomerDir(root, "no-git")).toBeNull();
+    expect(await resolveUserDir(root, "no-git")).toBeNull();
   });
 
   it("rejects slugs containing path-traversal segments", async () => {
-    expect(await resolveCustomerDir(root, "..")).toBeNull();
-    expect(await resolveCustomerDir(root, "alice/..")).toBeNull();
-    expect(await resolveCustomerDir(root, "../etc/passwd")).toBeNull();
+    expect(await resolveUserDir(root, "..")).toBeNull();
+    expect(await resolveUserDir(root, "alice/..")).toBeNull();
+    expect(await resolveUserDir(root, "../etc/passwd")).toBeNull();
   });
 
   it("rejects bare-dot, empty, leading-dash, oversize slugs (#841 review allowlist)", async () => {
-    expect(await resolveCustomerDir(root, ".")).toBeNull();
-    expect(await resolveCustomerDir(root, "")).toBeNull();
-    expect(await resolveCustomerDir(root, "-evil")).toBeNull();
-    expect(await resolveCustomerDir(root, "a".repeat(64))).toBeNull();
-    expect(await resolveCustomerDir(root, " alice")).toBeNull();
+    expect(await resolveUserDir(root, ".")).toBeNull();
+    expect(await resolveUserDir(root, "")).toBeNull();
+    expect(await resolveUserDir(root, "-evil")).toBeNull();
+    expect(await resolveUserDir(root, "a".repeat(64))).toBeNull();
+    expect(await resolveUserDir(root, " alice")).toBeNull();
   });
 });
 
@@ -220,7 +220,7 @@ describe("gitStatus / gitDiff / gitLog (real git)", () => {
     }
   });
 
-  it("hardening: customer-controlled diff.external in .git/config fails closed", async () => {
+  it("hardening: user-controlled diff.external in .git/config fails closed", async () => {
 
 const canary = path.join(repo, ".pwned-canary");
     const driver = path.join(repo, "evil-driver.sh");
@@ -258,13 +258,13 @@ git(repo, ["config", "--unset", "diff.external"]);
   });
 });
 
-describe("platform-owned customer Git metadata", () => {
+describe("platform-owned user Git metadata", () => {
   it.each(["prepare", "divert"])("rechecks custody after awaited %s work before its next Git effect", async phase => {
     let current = true;
     const release = vi.fn();
     const gitCommit = vi.fn(async () => ({ ok: true as const, result: { sha: "local", empty: false } }));
     const gitPush = vi.fn(async () => ({ ok: true as const }));
-    const save = commitAndPushWorkspace("/private/synthetic/customer", {
+    const save = commitAndPushWorkspace("/private/synthetic/user", {
       message: "checkpoint", author: { name: "Alice", email: "alice@example.test" },
       beforeCommit: async () => { if (phase === "divert") { current = false; } return { ok: true }; },
       assertCurrent: async () => { if (!current) throw new Error("custody changed"); },
@@ -278,14 +278,14 @@ describe("platform-owned customer Git metadata", () => {
     expect(gitPush).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
   });
-  it("never inherits the Builder's ambient GitHub credential", async () => {
-    const previousCustomersDir = process.env.CUSTOMERS_DIR;
+  it("never inherits the user's ambient GitHub credential", async () => {
+    const previousUsersDir = process.env.CUSTOMERS_DIR;
     const previousGatewayClass = process.env.GATEWAY_CLASS;
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "wsgit-builder-github-"));
-    const customersRoot = path.join(root, "customers");
-    const projectDir = path.join(customersRoot, "alice", "projects", "orbit");
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "wsgit-user-github-"));
+    const usersRoot = path.join(root, "customers");
+    const projectDir = path.join(usersRoot, "alice", "projects", "orbit");
     const metadataDir = path.join(root, "git-metadata", "alice", "projects", "orbit.git");
-    process.env.CUSTOMERS_DIR = customersRoot;
+    process.env.CUSTOMERS_DIR = usersRoot;
     process.env.GATEWAY_CLASS = "builder";
     try {
       await fs.mkdir(projectDir, { recursive: true });
@@ -310,22 +310,22 @@ describe("platform-owned customer Git metadata", () => {
       expect(workspaceGitEnvironment({ GATEWAY_CLASS: "shared" }, projectDir).GIT_CONFIG_GLOBAL)
         .toBe("/dev/null");
     } finally {
-      if (previousCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
-      else process.env.CUSTOMERS_DIR = previousCustomersDir;
+      if (previousUsersDir === undefined) delete process.env.CUSTOMERS_DIR;
+      else process.env.CUSTOMERS_DIR = previousUsersDir;
       if (previousGatewayClass === undefined) delete process.env.GATEWAY_CLASS;
       else process.env.GATEWAY_CLASS = previousGatewayClass;
       await fs.rm(root, { recursive: true, force: true });
     }
   });
 
-  it("isolates an explicit caller GitHub credential from the Builder's ambient credential", async () => {
-    const previousCustomersDir = process.env.CUSTOMERS_DIR;
+  it("isolates an explicit caller GitHub credential from the user's ambient credential", async () => {
+    const previousUsersDir = process.env.CUSTOMERS_DIR;
     const previousGatewayClass = process.env.GATEWAY_CLASS;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "wsgit-caller-github-"));
-    const customersRoot = path.join(root, "customers");
-    const projectDir = path.join(customersRoot, "alice", "projects", "orbit");
+    const usersRoot = path.join(root, "customers");
+    const projectDir = path.join(usersRoot, "alice", "projects", "orbit");
     const metadataDir = path.join(root, "git-metadata", "alice", "projects", "orbit.git");
-    process.env.CUSTOMERS_DIR = customersRoot;
+    process.env.CUSTOMERS_DIR = usersRoot;
     process.env.GATEWAY_CLASS = "builder";
     try {
       await fs.mkdir(projectDir, { recursive: true });
@@ -365,16 +365,16 @@ describe("platform-owned customer Git metadata", () => {
       expect(env.GIT_CONFIG_KEY_0).toBeUndefined();
       expect(env.GIT_CONFIG_VALUE_0).toBeUndefined();
     } finally {
-      if (previousCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
-      else process.env.CUSTOMERS_DIR = previousCustomersDir;
+      if (previousUsersDir === undefined) delete process.env.CUSTOMERS_DIR;
+      else process.env.CUSTOMERS_DIR = previousUsersDir;
       if (previousGatewayClass === undefined) delete process.env.GATEWAY_CLASS;
       else process.env.GATEWAY_CLASS = previousGatewayClass;
       await fs.rm(root, { recursive: true, force: true });
     }
   });
 
-  it("pins workspace and project SSH to the owning customer's platform key", () => {
-    const previousCustomersDir = process.env.CUSTOMERS_DIR;
+  it("pins workspace and project SSH to the owning user's platform key", () => {
+    const previousUsersDir = process.env.CUSTOMERS_DIR;
     process.env.CUSTOMERS_DIR = "/srv/openclaw/customers";
     try {
       const workspaceEnv = workspaceGitEnvironment({}, "/srv/openclaw/customers/mike");
@@ -391,17 +391,17 @@ describe("platform-owned customer Git metadata", () => {
       expect(projectEnv.GIT_SSH_COMMAND).not.toContain("garden/id_ed25519");
       expect(projectEnv.GIT_SSH_COMMAND).toContain("IdentitiesOnly=yes");
     } finally {
-      if (previousCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
-      else process.env.CUSTOMERS_DIR = previousCustomersDir;
+      if (previousUsersDir === undefined) delete process.env.CUSTOMERS_DIR;
+      else process.env.CUSTOMERS_DIR = previousUsersDir;
     }
   });
 
   it("passes the external metadata directory to the workspace mutation lease", async () => {
-    const previousCustomersDir = process.env.CUSTOMERS_DIR;
+    const previousUsersDir = process.env.CUSTOMERS_DIR;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "wsgit-lease-"));
-    const customersRoot = path.join(root, "customers");
-    const customerDir = path.join(customersRoot, "alice");
-    process.env.CUSTOMERS_DIR = customersRoot;
+    const usersRoot = path.join(root, "customers");
+    const customerDir = path.join(usersRoot, "alice");
+    process.env.CUSTOMERS_DIR = usersRoot;
     const release = vi.fn();
     const acquireMutationLease = vi.fn(() => ({ release }));
     try {
@@ -426,20 +426,20 @@ describe("platform-owned customer Git metadata", () => {
       });
       expect(release).toHaveBeenCalledOnce();
     } finally {
-      if (previousCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
-      else process.env.CUSTOMERS_DIR = previousCustomersDir;
+      if (previousUsersDir === undefined) delete process.env.CUSTOMERS_DIR;
+      else process.env.CUSTOMERS_DIR = previousUsersDir;
       await fs.rm(root, { recursive: true, force: true });
     }
   });
 
   it("accepts only the canonical main upstream in platform-owned project metadata", async () => {
-    const previousCustomersDir = process.env.CUSTOMERS_DIR;
+    const previousUsersDir = process.env.CUSTOMERS_DIR;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "wsgit-canonical-upstream-"));
-    const customersRoot = path.join(root, "customers");
-    const repo = path.join(customersRoot, "alice", "projects", "orbit");
+    const usersRoot = path.join(root, "customers");
+    const repo = path.join(usersRoot, "alice", "projects", "orbit");
     const trustedGitDir = path.join(root, "git-metadata", "alice", "projects", "orbit.git");
     const configPath = path.join(trustedGitDir, "config");
-    process.env.CUSTOMERS_DIR = customersRoot;
+    process.env.CUSTOMERS_DIR = usersRoot;
     try {
       await fs.mkdir(repo, { recursive: true });
       git(repo, ["init", "--initial-branch=main"]);
@@ -496,8 +496,8 @@ describe("platform-owned customer Git metadata", () => {
         },
       });
     } finally {
-      if (previousCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
-      else process.env.CUSTOMERS_DIR = previousCustomersDir;
+      if (previousUsersDir === undefined) delete process.env.CUSTOMERS_DIR;
+      else process.env.CUSTOMERS_DIR = previousUsersDir;
       await fs.rm(root, { recursive: true, force: true });
     }
   });
@@ -525,13 +525,13 @@ describe("platform-owned customer Git metadata", () => {
   });
 
   it("ignores an agent-controlled .git pointer while staging workspace files", async () => {
-    const previousCustomersDir = process.env.CUSTOMERS_DIR;
+    const previousUsersDir = process.env.CUSTOMERS_DIR;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "wsgit-external-"));
-    const customersRoot = path.join(root, "customers");
-    const repo = path.join(customersRoot, "alice");
+    const usersRoot = path.join(root, "customers");
+    const repo = path.join(usersRoot, "alice");
     const trustedGitDir = path.join(root, "git-metadata", "alice", "workspace.git");
     const attacker = path.join(root, "attacker");
-    process.env.CUSTOMERS_DIR = customersRoot;
+    process.env.CUSTOMERS_DIR = usersRoot;
     try {
       await fs.mkdir(repo, { recursive: true });
       git(repo, ["init", "--initial-branch=main"]);
@@ -563,20 +563,20 @@ describe("platform-owned customer Git metadata", () => {
       expect(result).toMatchObject({ ok: true, result: { empty: false } });
       await expect(fs.access(marker)).rejects.toThrow();
     } finally {
-      if (previousCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
-      else process.env.CUSTOMERS_DIR = previousCustomersDir;
+      if (previousUsersDir === undefined) delete process.env.CUSTOMERS_DIR;
+      else process.env.CUSTOMERS_DIR = previousUsersDir;
       await fs.rm(root, { recursive: true, force: true });
     }
   });
 
   it("rejects an unsafe clean filter in platform-owned project metadata before staging", async () => {
-    const previousCustomersDir = process.env.CUSTOMERS_DIR;
+    const previousUsersDir = process.env.CUSTOMERS_DIR;
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "wsgit-project-filter-"));
-    const customersRoot = path.join(root, "customers");
-    const repo = path.join(customersRoot, "alice", "projects", "orbit");
+    const usersRoot = path.join(root, "customers");
+    const repo = path.join(usersRoot, "alice", "projects", "orbit");
     const trustedGitDir = path.join(root, "git-metadata", "alice", "projects", "orbit.git");
     const marker = path.join(root, "project-filter-ran");
-    process.env.CUSTOMERS_DIR = customersRoot;
+    process.env.CUSTOMERS_DIR = usersRoot;
     try {
       await fs.mkdir(repo, { recursive: true });
       git(repo, ["init", "--initial-branch=main"]);
@@ -589,7 +589,7 @@ describe("platform-owned customer Git metadata", () => {
       git(repo, ["config", "filter.octogee-test.clean", `touch ${marker}; cat`]);
       await fs.mkdir(path.dirname(trustedGitDir), { recursive: true });
       await fs.rename(path.join(repo, ".git"), trustedGitDir);
-      await fs.writeFile(`${trustedGitDir}.octogee-trusted-v2`, "octogee-customer-git-v2\n");
+      await fs.writeFile(`${trustedGitDir}.octogee-trusted-v2`, "octogee-user-git-v2\n");
       await fs.writeFile(path.join(repo, ".gitattributes"), "payload.txt filter=octogee-test\n");
       await fs.writeFile(path.join(repo, "payload.txt"), "payload\n");
 
@@ -601,8 +601,8 @@ describe("platform-owned customer Git metadata", () => {
       expect(result).toMatchObject({ ok: false, error: { code: "INTERNAL" } });
       await expect(fs.access(marker)).rejects.toThrow();
     } finally {
-      if (previousCustomersDir === undefined) delete process.env.CUSTOMERS_DIR;
-      else process.env.CUSTOMERS_DIR = previousCustomersDir;
+      if (previousUsersDir === undefined) delete process.env.CUSTOMERS_DIR;
+      else process.env.CUSTOMERS_DIR = previousUsersDir;
       await fs.rm(root, { recursive: true, force: true });
     }
   });
@@ -757,7 +757,7 @@ const r = await gitPush(repo, { branch: "-deletes-everything" });
 expect(r.error.code).toMatch(/GIT_FAILED|NOT_A_REPO/);
   });
 
-  it("hardening: customer-controlled `protocol.ext.allow=always` does NOT enable ext::-as-exec on push (#839 Copilot P0)", async () => {
+  it("hardening: user-controlled `protocol.ext.allow=always` does NOT enable ext::-as-exec on push (#839 Copilot P0)", async () => {
 
 const canary = path.join(repo, ".pwned-via-ext-canary");
     git(repo, ["config", "protocol.ext.allow", "always"]);
@@ -1001,7 +1001,7 @@ let repo: string;
     await fs.rm(repo, { recursive: true, force: true });
   });
 
-  it("customer-controlled .git/hooks/pre-commit does not execute on owner commit", async () => {
+  it("user-controlled .git/hooks/pre-commit does not execute on owner commit", async () => {
     const canary = path.join(repo, ".pwned-via-hook-canary");
     const hook = path.join(repo, ".git", "hooks", "pre-commit");
     await fs.writeFile(hook, `#!/bin/sh\ntouch "${canary}"\nexit 0\n`);
@@ -1022,7 +1022,7 @@ await expect(fs.access(canary)).rejects.toThrow();
     }
   });
 
-  it("customer-controlled core.hooksPath in .git/config fails closed", async () => {
+  it("user-controlled core.hooksPath in .git/config fails closed", async () => {
 
 const canary = path.join(repo, ".pwned-via-hookspath-canary");
     const hooksDir = await fs.mkdtemp(path.join(os.tmpdir(), "evil-hooks-"));

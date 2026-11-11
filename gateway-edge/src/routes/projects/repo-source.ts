@@ -52,7 +52,7 @@ export async function projectRepoSourceAccess(
 ): Promise<RepoSourceAccess> {
   if (
     typeof req.workspaceSlug !== "string"
-    || !(await builderGatewayAssigned(req, req.uid!, req.workspaceSlug))
+    || !(await isolatedGatewayAssigned(req, req.uid!, req.workspaceSlug))
   ) return "disabled";
   const subject = featureSubject(req);
   if (featureFlagBypassedForAdmin(PROJECT_REPO_SOURCE_FLAG, subject)) return "enabled";
@@ -95,7 +95,7 @@ function assignedGatewayId(req: Request): string | null {
   return typeof gatewayId === "string" && gatewayId.length > 0 ? gatewayId : null;
 }
 
-async function builderGatewayAssigned(
+async function isolatedGatewayAssigned(
   req: Request,
   uid: string,
   workspaceSlug: string,

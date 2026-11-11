@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { findUnsafeCustomerGitMetadataEntry, findUnsafeGitMetadataEntry } from "./git-metadata.js";
+import { findUnsafeUserGitMetadataEntry, findUnsafeGitMetadataEntry } from "./git-metadata.js";
 
 describe("Git metadata containment", () => {
   let root: string;
@@ -22,7 +22,7 @@ describe("Git metadata containment", () => {
     fs.mkdirSync(path.dirname(path.join(metadata, entry)), { recursive: true });
     fs.writeFileSync(path.join(metadata, entry), "external\n");
     expect(findUnsafeGitMetadataEntry(metadata, root)).toBe(entry);
-    expect(findUnsafeCustomerGitMetadataEntry(path.join(root, "alice"))).toBe(`workspace.git/${entry}`);
+    expect(findUnsafeUserGitMetadataEntry(path.join(root, "alice"))).toBe(`workspace.git/${entry}`);
   });
 
   it.each(["refs/heads/main", "objects/ab/1234", "logs/refs/heads/main"])("rejects a dangling nested link at %s", (entry) => {
@@ -48,7 +48,7 @@ describe("Git metadata containment", () => {
     }
     const before = fs.readdirSync(path.join(metadata, "refs", "heads"));
     expect(findUnsafeGitMetadataEntry(metadata, root)).toBeNull();
-    expect(findUnsafeCustomerGitMetadataEntry(path.join(root, "alice"))).toBeNull();
+    expect(findUnsafeUserGitMetadataEntry(path.join(root, "alice"))).toBeNull();
     expect(fs.readdirSync(path.join(metadata, "refs", "heads"))).toEqual(before);
   });
 

@@ -5,7 +5,7 @@
 // here touches the filesystem, the path component is constrained to
 // /^[a-z0-9]+(-[a-z0-9]+)*$/ minus a reserved set. That validator is the
 // path-traversal defense.
-import { filterOutCustomerBindings } from "./apply-config-patch.js";
+import { filterOutUserBindings } from "./apply-config-patch.js";
 import { parseTimeZone } from "@octogee/shared/types/time-zone";
 import { UNKNOWN_TIME_ZONE } from "./context-file-convergence.js";
 import { FieldValue } from "firebase-admin/firestore";
@@ -17,14 +17,14 @@ import {
   isValidUsername,
   usernameValidationError,
 } from "@octogee/shared/types/identity";
-import type { MmUpdate } from "./customer-lifecycle.js";
+import type { MmUpdate } from "./user-lifecycle.js";
 import {
   log, OPENCLAW_DIR, CUSTOMERS_DIR,
   agentExists,
 } from "./config.js";
 import { db, platformStateStore } from "./firebase.js";
 import { MissingRecordError } from "./platform-state/errors.js";
-import type { BuilderPatch } from "./platform-state/builders.js";
+import type { UserPatch } from "./platform-state/users.js";
 import { CREW_IDENTITY } from "./crew.js";
 import { workspaceRepoName } from "./gitea-naming.js";
 import { provisionMattermostUser } from "./mattermost.js";
@@ -145,13 +145,13 @@ export function buildProvisioningContext(
   };
 }
 
-export function createCustomerDirectories(ctx: ProvisioningContext): void {
+export function createUserDirectories(ctx: ProvisioningContext): void {
   fs.mkdirSync(path.join(ctx.customerDir, "projects"), { recursive: true });
   fs.mkdirSync(path.join(ctx.customerDir, "ideas"), { recursive: true });
   fs.mkdirSync(path.join(ctx.customerDir, ".system"), { recursive: true });
 }
 
-export async function writeCustomerTemplateFiles(
+export async function writeUserTemplateFiles(
   ctx: ProvisioningContext,
 ): Promise<void> {
   const written = writeTierTemplateFilesImpl(ctx.customerDir, ctx.tier, ctx.templateVars);
@@ -162,7 +162,7 @@ export async function writeCustomerTemplateFiles(
   );
 }
 
-export function registerCoachAgent(
+export function registerDefaultAgent(
   ctx: ProvisioningContext,
   config: OpenclawConfigShape,
 ): string {
@@ -188,27 +188,27 @@ export function registerCoachAgent(
     };
     config.agents.list.push(agentEntry);
     fs.mkdirSync(agentDir, { recursive: true });
-    log(`Agent: ${agentId} → Coach, tools: fs.workspaceOnly=true`);
+    log(`Agent: ${agentId} → Agent, tools: fs.workspaceOnly=true`);
   }
 
   return agentId;
 }
 
-export function buildCoachAgentEntry(ctx: ProvisioningContext): AgentEntry {
+export function buildDefaultAgentEntry(ctx: ProvisioningContext): AgentEntry {
   const clone: OpenclawConfigShape = { agents: { list: [] }, bindings: [] };
-  const agentId = registerCoachAgent(ctx, clone);
+  const agentId = registerDefaultAgent(ctx, clone);
   const entry = clone.agents?.list?.find((a) => a.id === agentId);
   if (!entry) {
     throw new Error(
-      `buildCoachAgentEntry: registerCoachAgent did not produce an entry for ${agentId}`,
+      `buildDefaultAgentEntry: registerDefaultAgent did not produce an entry for ${agentId}`,
     );
   }
   return entry;
 }
 
-export function buildCoachBindings(
+export function buildDefaultAgentBindings(
   current: unknown,
-  coachAgentId: string,
+  userDefaultAgentId: string,
   slug: string,
   mmUpdate: MmUpdate,
 ): AgentBinding[] {
@@ -218,11 +218,11 @@ export function buildCoachBindings(
     : [];
 
   const clone: OpenclawConfigShape = { bindings: currentBindings };
-  wireCoachMattermostBindings(clone, coachAgentId, slug, mmUpdate);
+  wireDefaultAgentMattermostBindings(clone, userDefaultAgentId, slug, mmUpdate);
   return clone.bindings ?? [];
 }
 
-export function buildRemoveCustomerConfig(
+export function buildRemoveUserConfig(
   current: OpenclawConfigShape & Record<string, unknown>,
   slug: string,
   agentId: string,
@@ -237,7 +237,7 @@ export function buildRemoveCustomerConfig(
       (agent) => agent.id !== agentId && !agent.id.startsWith(projectAgentPrefix),
     );
   }
-  config.bindings = filterOutCustomerBindings(
+  config.bindings = filterOutUserBindings(
     bindings.filter((binding) => binding.agentId !== agentId),
     slug,
   );
@@ -289,9 +289,9 @@ export function upsertMattermostBindingByAgentAndPeer(
   }
 }
 
-export function wireCoachMattermostBindings(
+export function wireDefaultAgentMattermostBindings(
   config: OpenclawConfigShape,
-  coachAgentId: string,
+  userDefaultAgentId: string,
   slug: string,
   mmUpdate: MmUpdate,
 ): void {
@@ -306,7 +306,7 @@ export function wireCoachMattermostBindings(
     if (typeof channelIdRaw !== "string" || !channelIdRaw) continue;
     const channelId = channelIdRaw;
     const binding: AgentBinding & { match: { peer: { id: string } } } = {
-      agentId: coachAgentId,
+      agentId: userDefaultAgentId,
       match: {
         channel: "mattermost",
         accountId,
@@ -314,7 +314,7 @@ export function wireCoachMattermostBindings(
       },
     };
     upsertMattermostBindingByAgentAndPeer(config.bindings, binding);
-    log(`[mattermost] binding: ${coachAgentId} ← ${label} group:${channelId} (account=${accountId})`);
+    log(`[mattermost] binding: ${userDefaultAgentId} ← ${label} group:${channelId} (account=${accountId})`);
   }
 }
 
@@ -326,7 +326,7 @@ export async function markProvisioningComplete(
   const provisioningObj = buildProvisioningSnapshot(ctx, allAgentIds);
 
   await writeSystemConfig(ctx);
-  await writeProvisionedBuilder(ctx, allAgentIds, mmUpdate);
+  await writeProvisionedUser(ctx, allAgentIds, mmUpdate);
   await db.collection("users").doc(ctx.uid).update(buildUserProductFields(ctx, mmUpdate));
   await writeWorkspaceRecord(ctx, mmUpdate);
   await seedWorkspaceChannels(ctx, mmUpdate);
@@ -354,9 +354,9 @@ function buildProvisioningSnapshot(
 
 async function writeSystemConfig(ctx: ProvisioningContext): Promise<void> {
   await platformStateStore.transaction({ label: "provisioning.default-role" }, async (transaction) => {
-    const builder = await transaction.builders.records.get(ctx.uid);
-    if (builder === null) throw new MissingRecordError({ aggregate: "builder", key: ctx.uid });
-    if (builder.role === null) await transaction.builders.records.patch(ctx.uid, { role: "user" });
+    const user = await transaction.users.records.get(ctx.uid);
+    if (user === null) throw new MissingRecordError({ aggregate: "builder", key: ctx.uid });
+    if (user.role === null) await transaction.users.records.patch(ctx.uid, { role: "user" });
   });
 
   const systemConfigData: Record<string, unknown> = {
@@ -375,7 +375,7 @@ async function writeSystemConfig(ctx: ProvisioningContext): Promise<void> {
   await db.doc(`users/${ctx.uid}/system/config`).set(systemConfigData, { merge: true });
 }
 
-export function buildProvisionedBuilderPatch(ctx: ProvisioningContext, mmUpdate: MmUpdate): BuilderPatch {
+export function buildProvisionedUserPatch(ctx: ProvisioningContext, mmUpdate: MmUpdate): UserPatch {
   const mattermostUserId = mmUpdate["mattermost.userId"];
   return {
     workspaceId: ctx.slug,
@@ -385,15 +385,15 @@ export function buildProvisionedBuilderPatch(ctx: ProvisioningContext, mmUpdate:
   };
 }
 
-async function writeProvisionedBuilder(
+async function writeProvisionedUser(
   ctx: ProvisioningContext,
   allAgentIds: string[],
   mmUpdate: MmUpdate,
 ): Promise<void> {
   await platformStateStore.transaction({ label: "provisioning.complete" }, async (transaction) => {
-    await transaction.builders.records.patch(ctx.uid, buildProvisionedBuilderPatch(ctx, mmUpdate));
-    if (allAgentIds.length > 0) await transaction.builders.records.addAgents(ctx.uid, allAgentIds);
-    await transaction.builders.records.setActivatedAgents(ctx.uid, ["coach"]);
+    await transaction.users.records.patch(ctx.uid, buildProvisionedUserPatch(ctx, mmUpdate));
+    if (allAgentIds.length > 0) await transaction.users.records.addAgents(ctx.uid, allAgentIds);
+    await transaction.users.records.setActivatedAgents(ctx.uid, ["coach"]);
   });
 }
 
@@ -487,17 +487,17 @@ async function seedWorkspaceOwner(ctx: ProvisioningContext, mmUpdate: MmUpdate):
 }
 
 async function writeAgentIdentity(ctx: ProvisioningContext, mmUpdate: MmUpdate): Promise<void> {
-  const coachMmUserId = mmUpdate["mattermost.coachUserId"] as string | undefined;
-  if (!coachMmUserId) return;
+  const defaultAgentMmUserId = mmUpdate["mattermost.coachUserId"] as string | undefined;
+  if (!defaultAgentMmUserId) return;
   await platformStateStore.workspaces.agentIdentities.put({
     uid: ctx.uid,
-    mattermostUserId: coachMmUserId,
+    mattermostUserId: defaultAgentMmUserId,
     at: SERVER_NOW,
   });
-  await db.doc(`agents/${ctx.uid}`).set(buildCoachAgentDoc(ctx.uid), { merge: true });
+  await db.doc(`agents/${ctx.uid}`).set(buildDefaultAgentDoc(ctx.uid), { merge: true });
 }
 
-export function buildCoachAgentDoc(uid: string): Record<string, unknown> {
+export function buildDefaultAgentDoc(uid: string): Record<string, unknown> {
   return {
     id: uid,
     name: "Octo",

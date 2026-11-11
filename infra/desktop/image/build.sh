@@ -31,7 +31,7 @@ usage: $0 --project <gcp-project> [--zone $ZONE] [--fallback-zones <zone,zone>] 
           [--bucket gs://...] [--builder-name $BUILDER] [--keep-builder] [--candidate] [--image-name <name>] [--service-account <email>]
        OCTOGEE_GCE_SSH_KEY=<ed25519 key> (default ~/.ssh/octogee_gce_ed25519, created if absent)
 
-Builds the Octogee computer image (Omarchy + the desktop session + Docker) from
+Builds the Octogee VM image (Omarchy + the desktop session + Docker) from
 the pinned Omarchy ISO with an unattended install inside a nested-virt GCE
 builder VM onto a persistent disk attached to the builder, and registers that
 disk as a GCE image in family "$FAMILY". --candidate leaves the image outside

@@ -2,13 +2,13 @@ import { describe, it, expect } from "vitest";
 import {
   GATEWAY_CLASSES,
   readSchedulerMigrationIdentity,
-  defaultBuilderGatewayAccess,
+  defaultIsolatedGatewayAccess,
   deriveGatewayIdentity,
-  BUILDER_GATEWAY_LOCKED_ACCESS,
+  ISOLATED_GATEWAY_LOCKED_ACCESS,
   isValidGatewayId,
   isValidNewGatewayId,
-  builderGatewayServiceAccountName,
-  builderComputerInstanceName,
+  isolatedGatewayServiceAccountName,
+  gatewayVmInstanceName,
   isGatewayRuntime,
   resolveGatewayRuntime,
   resolveGatewayClass,
@@ -25,7 +25,7 @@ import {
   homeCheckpointOutstanding,
   isGatewayVmHomeCheckpoint,
   isDisposableHomeCheckpoint,
-  readBuilderParkedComputer,
+  readUserParkedVm,
   isGatewayVmImageObservation,
 } from "./glm";
 
@@ -40,7 +40,7 @@ describe("operation origin", () => {
 describe("deriveGatewayIdentity", () => {
   it("uses the explicit gateway field when present", () => {
     expect(deriveGatewayIdentity("default-blue", "default")).toBe("default");
-    expect(deriveGatewayIdentity("bender", "bender")).toBe("bender");
+    expect(deriveGatewayIdentity("walter", "walter")).toBe("walter");
   });
 
   it("ignores a non-string explicit value and falls back to convention-parse", () => {
@@ -55,7 +55,7 @@ describe("deriveGatewayIdentity", () => {
   });
 
   it("treats an id without a roll-role suffix as its own bare identity", () => {
-    expect(deriveGatewayIdentity("bender")).toBe("bender");
+    expect(deriveGatewayIdentity("walter")).toBe("walter");
     expect(deriveGatewayIdentity("jack")).toBe("jack");
   });
 
@@ -65,14 +65,14 @@ describe("deriveGatewayIdentity", () => {
   });
 });
 
-describe("builderGatewayServiceAccountName", () => {
-  it("prefixes the bare gateway id with the Builder KSA prefix", () => {
-    expect(builderGatewayServiceAccountName("bender")).toBe("octogee-gw-bender");
-    expect(builderGatewayServiceAccountName("default")).toBe("octogee-gw-default");
+describe("isolatedGatewayServiceAccountName", () => {
+  it("prefixes the bare gateway id with the user KSA prefix", () => {
+    expect(isolatedGatewayServiceAccountName("walter")).toBe("octogee-gw-walter");
+    expect(isolatedGatewayServiceAccountName("default")).toBe("octogee-gw-default");
   });
 
   it("uses the gateway id verbatim — ids are bare, no prefix manipulation", () => {
-    expect(builderGatewayServiceAccountName("mountain-mama")).toBe(
+    expect(isolatedGatewayServiceAccountName("mountain-mama")).toBe(
       "octogee-gw-mountain-mama",
     );
   });
@@ -81,7 +81,7 @@ describe("builderGatewayServiceAccountName", () => {
 describe("isValidGatewayId", () => {
   it("accepts bare gateway identities that fit rendered Kubernetes resource names", () => {
     expect(isValidGatewayId("default")).toBe(true);
-    expect(isValidGatewayId("bender")).toBe(true);
+    expect(isValidGatewayId("walter")).toBe(true);
     expect(isValidGatewayId("mountain-mama")).toBe(true);
     expect(isValidGatewayId("g")).toBe(true);
     expect(isValidGatewayId("a".repeat(32))).toBe(true);
@@ -90,10 +90,10 @@ describe("isValidGatewayId", () => {
   it("rejects values that would break routing, secrets, or Kubernetes names", () => {
     for (const bad of [
       "",
-      "Bender",
+      "Walter",
       "gw_test",
-      "-bender",
-      "bender-",
+      "-walter",
+      "walter-",
       "has space",
       "gw/evil",
       "../x",
@@ -109,7 +109,7 @@ describe("isValidGatewayId", () => {
 describe("isValidNewGatewayId", () => {
   it("accepts ordinary bare identities", () => {
     expect(isValidNewGatewayId("default")).toBe(true);
-    expect(isValidNewGatewayId("bender")).toBe(true);
+    expect(isValidNewGatewayId("walter")).toBe(true);
     expect(isValidNewGatewayId("mountain-mama")).toBe(true);
   });
 
@@ -127,7 +127,7 @@ describe("isValidNewGatewayId", () => {
   });
 
   it("keeps every base isValidGatewayId rejection", () => {
-    for (const bad of ["", "Bender", "-bender", "a".repeat(33), undefined, 123]) {
+    for (const bad of ["", "Walter", "-walter", "a".repeat(33), undefined, 123]) {
       expect(isValidNewGatewayId(bad)).toBe(false);
     }
   });
@@ -139,15 +139,15 @@ describe("isValidNewGatewayId", () => {
 });
 
 describe("gateway class/profile resolution", () => {
-  it("exposes exactly the Barn and disposable Builder customer classes", () => {
+  it("exposes exactly the shared and disposable isolated user classes", () => {
     expect(GATEWAY_CLASSES).toEqual(["shared", "builder"]);
   });
 
-  it("does not infer a customer class from a legacy runtime profile", () => {
+  it("does not infer a user class from a legacy runtime profile", () => {
     expect(resolveGatewayClass({ profile: "operator" as never })).toBe("shared");
   });
 
-  it("fails stale customer class and image values closed at runtime", () => {
+  it("fails stale user class and image values closed at runtime", () => {
     expect(resolveGatewayClass({ gatewayClass: "operator" as never })).toBe("shared");
     expect(resolveGatewayImageProfile({ imageProfile: "operator" as never })).toBe("standard");
   });
@@ -157,7 +157,7 @@ describe("gateway class/profile resolution", () => {
     expect(resolveGatewayImageProfile({})).toBe("standard");
   });
 
-  it("maps the Builder class to its Builder image profile", () => {
+  it("maps the isolated class to its isolated image profile", () => {
     expect(resolveGatewayClass({ gatewayClass: "builder", profile: "standard" })).toBe("builder");
     expect(resolveGatewayImageProfile({ gatewayClass: "builder", profile: "standard" })).toBe("builder");
   });
@@ -168,14 +168,14 @@ describe("gateway class/profile resolution", () => {
   });
 });
 
-describe("defaultBuilderGatewayAccess", () => {
+describe("defaultIsolatedGatewayAccess", () => {
   it("grants Control UI to an owned runtime gateway and locks an un-owned one", () => {
-    expect(defaultBuilderGatewayAccess("uid-chris")).toEqual({
+    expect(defaultIsolatedGatewayAccess("uid-chris")).toEqual({
       controlUiEnabled: true,
       reason: "owned-runtime-gateway",
     });
-    expect(defaultBuilderGatewayAccess(null)).toEqual(BUILDER_GATEWAY_LOCKED_ACCESS);
-    expect(defaultBuilderGatewayAccess(undefined)).toEqual(BUILDER_GATEWAY_LOCKED_ACCESS);
+    expect(defaultIsolatedGatewayAccess(null)).toEqual(ISOLATED_GATEWAY_LOCKED_ACCESS);
+    expect(defaultIsolatedGatewayAccess(undefined)).toEqual(ISOLATED_GATEWAY_LOCKED_ACCESS);
   });
 });
 
@@ -212,7 +212,7 @@ describe("resolveUserGatewayControlState", () => {
     ).toEqual({ gatewayProfile: "standard", controlUiEnabled: false });
   });
 
-  it("enables Control UI for the owner of an explicitly enabled builder gateway", () => {
+  it("enables Control UI for the owner of an explicitly enabled isolated gateway", () => {
     expect(
       resolveUserGatewayControlState(
         {
@@ -229,16 +229,16 @@ describe("resolveUserGatewayControlState", () => {
   it("does not grant Control UI to a non-owner", () => {
     expect(
       resolveUserGatewayControlState(
-        { gatewayClass: "builder", ownerUid: "uid-bender", builderAccess: { controlUiEnabled: true } },
+        { gatewayClass: "builder", ownerUid: "uid-walter", builderAccess: { controlUiEnabled: true } },
         "uid-jack",
       ).controlUiEnabled,
     ).toBe(false);
   });
 
-  it("denies Control UI to a guest migrated onto someone else's Builder gateway", () => {
+  it("denies Control UI to a guest migrated onto someone else's isolated gateway", () => {
     expect(
       resolveUserGatewayControlState(
-        { gatewayClass: "builder", ownerUid: "uid-bender", builderAccess: { controlUiEnabled: true } },
+        { gatewayClass: "builder", ownerUid: "uid-walter", builderAccess: { controlUiEnabled: true } },
         "uid-jack",
       ),
     ).toEqual({ gatewayProfile: "builder", controlUiEnabled: false });
@@ -250,7 +250,7 @@ describe("resolveUserGatewayControlState", () => {
     ).toEqual({ gatewayProfile: "standard", controlUiEnabled: false });
   });
 
-  it("respects explicitly locked Builder access even for the owner", () => {
+  it("respects explicitly locked user access even for the owner", () => {
     expect(
       resolveUserGatewayControlState(
         { gatewayClass: "builder", ownerUid: "uid-chris", builderAccess: { controlUiEnabled: false } },
@@ -352,25 +352,25 @@ describe("gateway runtime + VM naming", () => {
     expect(isGatewayRuntime("local")).toBe(false);
   });
 
-  it("names the Builder's computer by environment and owner, not by the per-lease gateway id", () => {
-    expect(builderComputerInstanceName("test", "UidAbc123")).toBe("octogee-computer-test-uidabc123");
-    expect(builderComputerInstanceName("prod", "UidAbc123")).toBe("octogee-computer-prod-uidabc123");
-    expect(builderComputerInstanceName("test", "  x_y  ")).toBe("octogee-computer-test-x-y");
-    expect(() => builderComputerInstanceName("octogee-test", "uid")).toThrow(/not a name segment/);
+  it("names the user's VM by environment and owner, not by the per-lease gateway id", () => {
+    expect(gatewayVmInstanceName("test", "UidAbc123")).toBe("octogee-computer-test-uidabc123");
+    expect(gatewayVmInstanceName("prod", "UidAbc123")).toBe("octogee-computer-prod-uidabc123");
+    expect(gatewayVmInstanceName("test", "  x_y  ")).toBe("octogee-computer-test-x-y");
+    expect(() => gatewayVmInstanceName("octogee-test", "uid")).toThrow(/not a name segment/);
   });
 
   it("keeps long owner ids within the 63-character GCE limit with a stable hash suffix", () => {
     const longUid = `${"mountain-mama-".repeat(6)}7-lease-pro`;
-    const name = builderComputerInstanceName("prod", longUid);
+    const name = gatewayVmInstanceName("prod", longUid);
     expect(name.length).toBeLessThanOrEqual(63);
     expect(name).toMatch(/^octogee-computer-prod-[a-z0-9-]+-[0-9a-f]{8}$/);
-    expect(builderComputerInstanceName("prod", longUid)).toBe(name);
-    expect(builderComputerInstanceName("prod", `${longUid}-x`)).not.toBe(name);
+    expect(gatewayVmInstanceName("prod", longUid)).toBe(name);
+    expect(gatewayVmInstanceName("prod", `${longUid}-x`)).not.toBe(name);
   });
 
   it("refuses an id with nothing to name", () => {
-    expect(() => builderComputerInstanceName("test", "")).toThrow(/empty/);
-    expect(() => builderComputerInstanceName("test", "___")).toThrow(/no usable characters/);
+    expect(() => gatewayVmInstanceName("test", "")).toThrow(/empty/);
+    expect(() => gatewayVmInstanceName("test", "___")).toThrow(/no usable characters/);
   });
 });
 
@@ -390,7 +390,7 @@ describe("homeCheckpointOutstanding", () => {
   });
 });
 
-describe("readBuilderParkedComputer", () => {
+describe("readUserParkedVm", () => {
   const parked = {
     instanceName: "octogee-computer-test-uida",
     zone: "us-west1-b",
@@ -400,19 +400,19 @@ describe("readBuilderParkedComputer", () => {
     checkpoint: { outcome: "fresh", requestedAt: 1_000, completedAt: 1_500 },
   };
 
-  it("reads a well-formed parked computer from the Builder's provisioning record", () => {
-    expect(readBuilderParkedComputer({ provisioning: { computer: parked } })).toEqual(parked);
-    expect(readBuilderParkedComputer({ provisioning: { computer: { ...parked, instanceId: null, checkpoint: { outcome: "stale", requestedAt: null, completedAt: null } } } }))
+  it("reads a well-formed parked VM from the user's provisioning record", () => {
+    expect(readUserParkedVm({ provisioning: { computer: parked } })).toEqual(parked);
+    expect(readUserParkedVm({ provisioning: { computer: { ...parked, instanceId: null, checkpoint: { outcome: "stale", requestedAt: null, completedAt: null } } } }))
       .toMatchObject({ instanceId: null, checkpoint: { outcome: "stale" } });
   });
 
   it("returns null for a missing or malformed record instead of a partial one", () => {
-    expect(readBuilderParkedComputer(undefined)).toBeNull();
-    expect(readBuilderParkedComputer({})).toBeNull();
-    expect(readBuilderParkedComputer({ provisioning: { openclaw: { gatewayId: "b-x" } } })).toBeNull();
-    expect(readBuilderParkedComputer({ provisioning: { computer: { ...parked, zone: "" } } })).toBeNull();
-    expect(readBuilderParkedComputer({ provisioning: { computer: { ...parked, checkpoint: { outcome: "fresh" } } } })).toBeNull();
-    expect(readBuilderParkedComputer({ provisioning: { computer: { ...parked, checkpoint: { ...parked.checkpoint, outcome: "unknown" } } } })).toBeNull();
+    expect(readUserParkedVm(undefined)).toBeNull();
+    expect(readUserParkedVm({})).toBeNull();
+    expect(readUserParkedVm({ provisioning: { openclaw: { gatewayId: "b-x" } } })).toBeNull();
+    expect(readUserParkedVm({ provisioning: { computer: { ...parked, zone: "" } } })).toBeNull();
+    expect(readUserParkedVm({ provisioning: { computer: { ...parked, checkpoint: { outcome: "fresh" } } } })).toBeNull();
+    expect(readUserParkedVm({ provisioning: { computer: { ...parked, checkpoint: { ...parked.checkpoint, outcome: "unknown" } } } })).toBeNull();
   });
 });
 
@@ -428,7 +428,7 @@ describe("VM image observations", () => {
 });
 
 
-describe("computer recovery checkpoint validation", () => {
+describe("VM recovery checkpoint validation", () => {
   const saved = { name: "20260905T101500Z.tar.gz", size: 2048, sha256: "a".repeat(64), instanceId: "4242", generation: "9007199254740995", completedAt: 1000, coverage: "builder-home-v2", writerProtocol: 2 };
   it("preserves exact generation strings and refuses malformed protocol/coverage", () => {
     expect(isDisposableHomeCheckpoint(saved)).toBe(true);

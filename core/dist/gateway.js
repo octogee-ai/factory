@@ -39,20 +39,20 @@ function setStringDefault(target, key, value, message) {
     log(message);
     return true;
 }
-function isCoachAgent(agent) {
+function isManagedAgent(agent) {
     return /^octogee-.+-coach$/.test(agent.id);
 }
-function ensureCoachWorkspaceFs(agent) {
+function ensureDefaultAgentWorkspaceFs(agent) {
     agent.tools ??= {};
     if (agent.tools.fs?.workspaceOnly)
         return false;
     agent.tools.fs = { workspaceOnly: true };
     return true;
 }
-function applyCoachAgentDefaults(agent) {
-    if (!isCoachAgent(agent))
+function applyDefaultAgentDefaults(agent) {
+    if (!isManagedAgent(agent))
         return false;
-    const changed = ensureCoachWorkspaceFs(agent);
+    const changed = ensureDefaultAgentWorkspaceFs(agent);
     if (changed) {
         log(`Gateway defaults: ${agent.id} → fs.workspaceOnly=true`);
     }
@@ -68,7 +68,7 @@ function applyAgentDefaults(defaults) {
     ].some(Boolean);
 }
 function applyAgentListDefaults(agents) {
-    return (agents ?? []).map((agent) => applyCoachAgentDefaults(agent)).some(Boolean);
+    return (agents ?? []).map((agent) => applyDefaultAgentDefaults(agent)).some(Boolean);
 }
 function applyElevatedToolDefaults(tools) {
     if (tools.elevated?.enabled === false)

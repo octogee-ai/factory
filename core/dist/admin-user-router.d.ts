@@ -34,7 +34,7 @@ interface JournaledUserMutation<T> {
     classifyResult?: (result: T) => NormalFleetMutationResult;
 }
 export interface AdminUserRouterDeps {
-    store: Pick<PlatformStateStore, "builders" | "workspaces" | "transaction">;
+    store: Pick<PlatformStateStore, "users" | "workspaces" | "transaction">;
     accounts?: UserAccounts;
     signIn?: UserSignInHosts;
     journal: <T>(input: JournaledUserMutation<T>) => Promise<T>;

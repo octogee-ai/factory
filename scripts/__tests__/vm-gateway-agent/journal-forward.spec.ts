@@ -39,7 +39,7 @@ const hostConfig = spec.config.HostConfig as Record<string, unknown>;
 const command = spec.config.Entrypoint as string[];
 
 describe("the host journal forwarder", () => {
-  it("covers every octo service the computer image installs", () => {
+  it("covers every octo service the VM image installs", () => {
     const installed = readdirSync(UNIT_DIR).filter(name => name.startsWith("octo-") && name.endsWith(".service"));
     expect([...JOURNAL_FORWARDED_UNITS].sort()).toEqual(installed.sort());
   });

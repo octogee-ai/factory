@@ -1,19 +1,19 @@
 # helm/octogee-gateway/values.yaml — defaults for ONE gateway instance.
 #
-# Cowboy (glm-controller) installs this chart once per gateway instance
+# The fleet controller (glm-controller) installs this chart once per gateway instance
 # under release name `octogee-gw-<gatewayId>`. The umbrella `octogee`
 # release no longer manages gateway pods.
 
-# Logical, stable, Cowboy-set gateway identity — a bare name (`shared-a`,
-# `bender`, `canary`). Written to Firestore `gateways/{gatewayId}`
-# heartbeats and matched against customer `provisioning.openclaw.gatewayId`.
+# Logical, stable, controller-set gateway identity — a bare name (`shared-a`,
+# `walter`, `canary`). Written to Firestore `gateways/{gatewayId}`
+# heartbeats and matched against user `provisioning.openclaw.gatewayId`.
 # Also forms the per-instance K8s resource names
 # (`octogee-gateway-<gatewayId>`, `gateway-edge-<gatewayId>`) that the shared
 # gateway-router forwards public `/g/<id>/*` requests to. Must be a lowercase
 # DNS-safe id that fits every rendered suffix.
 gatewayId: ""
 
-# Disposable revision instance id ({gatewayId}-r{n}). Cowboy sets it per
+# Disposable revision instance id ({gatewayId}-r{n}). The fleet controller sets it per
 # revision Helm release; every per-instance K8s resource NAME and the
 # `gateway-instance` selector derive from it so two simultaneous revisions of
 # one gateway never collide. Empty → defaults to gatewayId (legacy single-
@@ -22,7 +22,7 @@ gatewayId: ""
 revisionId: ""
 
 # Where this render runs: "cluster" for a Kubernetes Deployment, "gce-vm" when
-# Cowboy renders a Builder VM's runtime bundle from this chart.
+# the fleet controller renders a gateway VM's runtime bundle from this chart.
 runtimeKind: cluster
 
 # Bundle SHA. All three sidecars (gateway, gateway-edge, chat-proxy)
@@ -42,28 +42,28 @@ serviceAccount:
   annotations: {}
 
 builderAccess:
-  # Locked by default. Cowboy may enable this only after a customer has a
-  # tenant-owned disposable Builder runtime and the app/user mirror has been
+  # Locked by default. The fleet controller may enable this only after a user has a
+  # tenant-owned disposable isolated runtime and the app/user mirror has been
   # updated.
   controlUiEnabled: false
   # How Control UI sessions identify to OpenClaw. "shared-operator" keeps the
   # pod token and one operator profile; "per-user" switches the gateway to
   # trusted-proxy auth so every Octogee user carries their own identity and
-  # role. Builder class only; ignored on shared gateways.
+  # role. Isolated class only; ignored on shared gateways.
   controlIdentity: shared-operator
-  # Builder gateway TokenReview path. Internal gateway identity checks
+  # Isolated gateway TokenReview path. Internal gateway identity checks
   # call the Kubernetes API server; the fleet-wide gateway-egress policy blocks
   # RFC1918, so GKE Dataplane V2 needs the real API-server endpoint /32 CIDR(s)
   # from the default/kubernetes EndpointSlice, not the Service ClusterIP.
-  # Default off; set per Builder gateway only.
+  # Default off; set per isolated gateway only.
   kubeApiServerEgressCidrs: []
 
-# Replica count — Cowboy passes `--set replicas=0` for desiredStatus=paused and
+# Replica count — the fleet controller passes `--set replicas=0` for desiredStatus=paused and
 # `--set replicas=1` for a running or draining member.
 replicas: 1
 
 # Roll strategy — "recreate" (default) or "surge" (RollingUpdate maxSurge=1 /
-# maxUnavailable=0: new pod Ready before the old one dies). Cowboy passes
+# maxUnavailable=0: new pod Ready before the old one dies). The fleet controller passes
 # surge for managed releases so unpublished files transfer before source removal.
 rollStrategy: recreate
 
@@ -79,7 +79,7 @@ preStopFlush:
   terminationGracePeriodSeconds: 30
   timeoutSeconds: 10
 
-# Product/security class. Empty means the shared Barn. Builder is the
+# Product/security class. Empty means the shared gateway. `builder` is the
 # owner-bound disposable gateway class.
 gatewayClass: ""
 
@@ -100,7 +100,7 @@ gatewayContainerSecurityContext:
     drop:
       - ALL
 
-# Chart fingerprint — Cowboy passes its SHA-256 of the chart bytes via
+# Chart fingerprint — the fleet controller passes its SHA-256 of the chart bytes via
 # `--set chartFingerprint=...` so subsequent reconciles can detect chart
 # template drift even when image-tag is unchanged. Stored on the helm
 # release; never authored by humans. The release default is empty
@@ -134,7 +134,7 @@ env:
   discordOpsWebhookUrl: ""
   gitApiUrl: ""
   gitSshHost: ""
-  llmBrokerUrl: ""  # auto-computed from release namespace for builder-class gateways
+  llmBrokerUrl: ""  # auto-computed from release namespace for isolated-class gateways
   openaiEmbeddingsEnabled: "true"
   platformVertexEnabled: "false"
   openaiEmbeddingsModel: "text-embedding-3-small"
@@ -146,13 +146,13 @@ env:
   migrationRsyncPort: "30873"
   builderNpmFallbackRegistry: "https://registry.npmjs.org/"
 
-# Gateway storage is emptyDir for every class. Shared Barn gateways use stable
-# identities and on-demand capacity; disposable Builder gateways are Spot-first with
+# Gateway storage is emptyDir for every class. Shared gateways use stable
+# identities and on-demand capacity; disposable isolated gateways are Spot-first with
 # on-demand fallback. Durable product state rehydrates from the substrate.
 
 # Per-pod sizing tier. Operator-facing enum that maps to the matching
 # .Values.tiers entry below — drives resources + node-runtime tuning
-# together. Cowboy passes `--set sizingTier=<tier>` per gateway; when
+# together. The fleet controller passes `--set sizingTier=<tier>` per gateway; when
 # empty the chart falls back to .Values.classDefaults[gatewayClass],
 # then legacy .Values.profileDefaults[imageProfile].
 sizingTier: ""

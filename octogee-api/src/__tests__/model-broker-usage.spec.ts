@@ -352,7 +352,7 @@ describe("reported upstream cost", () => {
 });
 
 describe("platform web usage charges", () => {
-  it("stores actual provider cost separately from the marked-up customer charge", async () => {
+  it("stores actual provider cost separately from the marked-up user charge", async () => {
     const store = new InMemoryModelBrokerUsageStore();
     await store.recordUsage({
       ...baseRecord,
@@ -496,7 +496,7 @@ describe("weekly spend ledger", () => {
 });
 
 describe("InMemoryModelBrokerUsageStore owner isolation", () => {
-  it("never lets one builder's spend bleed into another's window on a shared gateway", async () => {
+  it("never lets one user's spend bleed into another's window on a shared gateway", async () => {
     const store = new InMemoryModelBrokerUsageStore();
     await store.recordUsage({ ...baseRecord, eventId: "a", ownerUid: "uid-a" });
     await store.recordUsage({ ...baseRecord, eventId: "b1", ownerUid: "uid-b" });
@@ -526,34 +526,34 @@ describe("InMemoryModelBrokerUsageStore owner isolation", () => {
 describe("prepaid credit debits", () => {
   it("debits the owner's credit balance atomically with the metering write", async () => {
     const store = new InMemoryModelBrokerUsageStore();
-    store.creditBalances.set("uid-builder", 10);
+    store.creditBalances.set("uid-user", 10);
     await store.recordUsage({
       ...baseRecord,
       eventId: "c1",
-      ownerUid: "uid-builder",
+      ownerUid: "uid-user",
       debitsCreditBalance: true,
       countsTowardSpendWindow: false,
     });
     const cost = estimateAnthropicCost("claude-sonnet-4-6", baseRecord.usage).total;
-    expect(await store.readCreditBalance("uid-builder")).toBeCloseTo(10 - cost, 8);
+    expect(await store.readCreditBalance("uid-user")).toBeCloseTo(10 - cost, 8);
     // still fully metered for the ledger
-    expect(store.rollups.get("uid-builder")?.requestCount).toBe(1);
+    expect(store.rollups.get("uid-user")?.requestCount).toBe(1);
   });
 
   it("debits prepaid credits at provider cost times the configured markup and records that as the charge", async () => {
     const store = new InMemoryModelBrokerUsageStore({ prepaidCreditMarkupMultiplier: 1.25 });
-    store.creditBalances.set("uid-builder", 10);
+    store.creditBalances.set("uid-user", 10);
     await store.recordUsage({
       ...baseRecord,
       eventId: "m1",
-      ownerUid: "uid-builder",
+      ownerUid: "uid-user",
       reportedCostUsd: 0.8,
       debitsCreditBalance: true,
       countsTowardSpendWindow: false,
     });
-    expect(await store.readCreditBalance("uid-builder")).toBeCloseTo(9, 8);
+    expect(await store.readCreditBalance("uid-user")).toBeCloseTo(9, 8);
     expect(store.events[0]).toMatchObject({ costUsd: 0.8, chargeUsd: 1 });
-    expect(store.rollups.get("uid-builder")).toMatchObject({ costUsd: 0.8, chargeUsd: 1 });
+    expect(store.rollups.get("uid-user")).toMatchObject({ costUsd: 0.8, chargeUsd: 1 });
   });
 
   it("leaves subscription-rail charges at provider cost when a markup is configured", async () => {
@@ -607,15 +607,15 @@ describe("prepaid credit debits", () => {
 
   it("allows the final call to overshoot slightly negative — the gate blocks the next one", async () => {
     const store = new InMemoryModelBrokerUsageStore();
-    store.creditBalances.set("uid-builder", 0.0001);
+    store.creditBalances.set("uid-user", 0.0001);
     await store.recordUsage({
       ...baseRecord,
       eventId: "c2",
-      ownerUid: "uid-builder",
+      ownerUid: "uid-user",
       debitsCreditBalance: true,
       countsTowardSpendWindow: false,
     });
-    expect(await store.readCreditBalance("uid-builder")).toBeLessThan(0);
+    expect(await store.readCreditBalance("uid-user")).toBeLessThan(0);
   });
 });
 

@@ -16,9 +16,9 @@ describe("OpenClaw Control tickets", () => {
   it("mints 256-bit URL-safe material while persisting only its hash", () => {
     const minted = createOpenClawControlTicket({
       uid: "uid-owner",
-      gatewayId: "bender",
+      gatewayId: "walter",
       workspaceSlug: "alex",
-      revisionId: "bender-r7",
+      revisionId: "walter-r7",
 
 
 
@@ -30,9 +30,9 @@ describe("OpenClaw Control tickets", () => {
     expect(minted.ticketHash).toBe(openClawControlTicketHash(minted.ticket));
     expect(minted.document).toMatchObject({
       uid: "uid-owner",
-      gatewayId: "bender",
+      gatewayId: "walter",
       workspaceSlug: "alex",
-      revisionId: "bender-r7",
+      revisionId: "walter-r7",
 
 
 
@@ -44,9 +44,9 @@ describe("OpenClaw Control tickets", () => {
   it("rejects expired, malformed, and cross-revision redemption", () => {
     const document = {
       uid: "uid-owner",
-      gatewayId: "bender",
+      gatewayId: "walter",
       workspaceSlug: "alex",
-      revisionId: "bender-r7",
+      revisionId: "walter-r7",
       expiresAt: 20_000,
 
 
@@ -54,26 +54,26 @@ describe("OpenClaw Control tickets", () => {
     };
     expect(redeemableOpenClawControlTicket({
       document,
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       now: 19_999,
     })).toMatchObject({ uid: "uid-owner" });
     expect(redeemableOpenClawControlTicket({
       document,
-      gatewayId: "bender",
-      revisionId: "bender-r8",
+      gatewayId: "walter",
+      revisionId: "walter-r8",
       now: 19_999,
     })).toBeNull();
     expect(redeemableOpenClawControlTicket({
       document,
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       now: 20_000,
     })).toBeNull();
     expect(redeemableOpenClawControlTicket({
       document: { ...document, uid: "" },
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       now: 19_999,
     })).toBeNull();
   });
@@ -81,9 +81,9 @@ describe("OpenClaw Control tickets", () => {
   it("classifies replay, expiry, and scope mismatch without exposing ticket material", () => {
     const document = {
       uid: "uid-owner",
-      gatewayId: "bender",
+      gatewayId: "walter",
       workspaceSlug: "alex",
-      revisionId: "bender-r7",
+      revisionId: "walter-r7",
       expiresAt: 20_000,
 
 
@@ -91,14 +91,14 @@ describe("OpenClaw Control tickets", () => {
     };
     expect(inspectOpenClawControlTicket({
       document,
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       now: 19_999,
     })).toMatchObject({ kind: "redeemable", uid: "uid-owner" });
     expect(inspectOpenClawControlTicket({
       document: { ...document, redeemedAt: 19_000 },
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       now: 19_999,
     })).toMatchObject({ kind: "rejected", reason: "ticket_replay", uid: "uid-owner" });
     expect(inspectOpenClawControlTicket({
@@ -109,20 +109,20 @@ describe("OpenClaw Control tickets", () => {
     })).toMatchObject({ kind: "rejected", reason: "gateway_mismatch", uid: "uid-owner" });
     expect(inspectOpenClawControlTicket({
       document,
-      gatewayId: "bender",
-      revisionId: "bender-r8",
+      gatewayId: "walter",
+      revisionId: "walter-r8",
       now: 19_999,
     })).toMatchObject({ kind: "rejected", reason: "revision_mismatch", uid: "uid-owner" });
     expect(inspectOpenClawControlTicket({
       document,
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       now: 20_000,
     })).toMatchObject({ kind: "rejected", reason: "ticket_expired", uid: "uid-owner" });
     expect(inspectOpenClawControlTicket({
       document: undefined,
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       now: 19_999,
     })).toEqual({ kind: "rejected", reason: "ticket_invalid" });
   });

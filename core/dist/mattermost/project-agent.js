@@ -20,7 +20,7 @@ async function createOrAdoptBotUser(deps, botUsername, displayName, description)
     const existing = (await deps.mmApiCall("GET", `/users/username/${botUsername}`));
     if (typeof existing?.id === "string" && existing.id) {
         // MM usernames are server-global and MM does not enforce our reserved-
-        // segment rules — a builder could rename their own account to squat this
+        // segment rules — a user could rename their own account to squat this
         // username. Adopting a human account would hand it the project PAT.
         if (existing.is_bot !== true) {
             throw new Error(`[project-agent] username ${botUsername} is taken by a user that is not a bot - refusing to adopt`);

@@ -85,7 +85,7 @@ function brokerOptions(
   };
 }
 
-function builderApp(options = brokerOptions()) {
+function userApp(options = brokerOptions()) {
   const app = express();
   app.use(express.json());
   app.use(((req, _res, next) => {
@@ -137,7 +137,7 @@ describe("npm cache capability broker", () => {
 
   it("hydrates the exact destination instance during its owner's active migration before assignment", async () => {
     const options = brokerOptions(undefined, { store: platformStore(null, preparation()) });
-    const response = await request(builderApp(options))
+    const response = await request(userApp(options))
       .post("/internal/fleet/npm-registry-credentials")
       .set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT)
       .send({ gatewayId: GATEWAY_ID, slug: "alice" });
@@ -155,7 +155,7 @@ describe("npm cache capability broker", () => {
     if (scenario === "foreign-target") (state.operation!.input as Record<string, unknown>).toGatewayId = "other-target";
     if (scenario === "replaced-instance") state.runtime!.vm = { instanceId: "previous-instance" };
     if (scenario === "moved-user") state.user = { username: "alice", provisioning: { openclaw: { slug: "alice", gatewayId: "another-source" } } };
-    const response = await request(builderApp(brokerOptions(undefined, { store: platformStore(null, state) })))
+    const response = await request(userApp(brokerOptions(undefined, { store: platformStore(null, state) })))
       .post("/internal/fleet/npm-registry-credentials")
       .set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT)
       .send({ gatewayId: GATEWAY_ID, slug: "alice" });
@@ -165,15 +165,15 @@ describe("npm cache capability broker", () => {
   it("requires the second purpose-audience KSA credential", async () => {
     expect(GATEWAY_CREDENTIAL_ROUTES.has("/internal/fleet/npm-registry-credentials"))
       .toBe(true);
-    const response = await request(builderApp())
+    const response = await request(userApp())
       .post("/internal/fleet/npm-registry-credentials")
       .send({ gatewayId: GATEWAY_ID, slug: "alice" });
 
     expect(response.status).toBe(403);
   });
 
-  it("issues only to the exact assigned Builder pod and marks the response no-store", async () => {
-    const response = await request(builderApp())
+  it("issues only to the exact assigned isolated pod and marks the response no-store", async () => {
+    const response = await request(userApp())
       .post("/internal/fleet/npm-registry-credentials")
       .set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT)
       .send({ gatewayId: GATEWAY_ID, slug: "alice" });
@@ -187,10 +187,10 @@ describe("npm cache capability broker", () => {
     });
   });
 
-  it("rejects a configured Builder before its assignment exists", async () => {
+  it("rejects a configured user before its assignment exists", async () => {
     const options = brokerOptions();
     options.store = platformStore(null);
-    const response = await request(builderApp(options))
+    const response = await request(userApp(options))
       .post("/internal/fleet/npm-registry-credentials")
       .set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT)
       .send({ gatewayId: GATEWAY_ID, slug: "alice" });
@@ -201,7 +201,7 @@ describe("npm cache capability broker", () => {
   it("rejects a slug that is not the gateway assignment", async () => {
     const options = brokerOptions();
     options.store = platformStore("mallory");
-    const response = await request(builderApp(options))
+    const response = await request(userApp(options))
       .post("/internal/fleet/npm-registry-credentials")
       .set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT)
       .send({ gatewayId: GATEWAY_ID, slug: "alice" });
@@ -212,7 +212,7 @@ describe("npm cache capability broker", () => {
   it("lets only the npm proxy actor authorize the opaque capability", async () => {
     const store = new InMemoryNpmCacheCapabilityStore(() => TOKEN);
     const options = brokerOptions(store);
-    await request(builderApp(options))
+    await request(userApp(options))
       .post("/internal/fleet/npm-registry-credentials")
       .set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT)
       .send({ gatewayId: GATEWAY_ID, slug: "alice" })
@@ -238,7 +238,7 @@ describe("npm cache capability broker", () => {
       issue: () => { throw new Error("upstream secret capability-token-value"); },
       authorize: () => null,
     };
-    const response = await request(builderApp(brokerOptions(store as never, {
+    const response = await request(userApp(brokerOptions(store as never, {
       reportNpmCacheCapabilityFailure: report,
     })))
       .post("/internal/fleet/npm-registry-credentials")

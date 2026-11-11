@@ -150,7 +150,7 @@ function createOperationsRepository(session: FirestoreSession): OperationsReposi
       return mergeById(lists);
     },
 
-    async listByInputBuilderSlugPrefix(prefix) {
+    async listByInputUserSlugPrefix(prefix) {
       return list(
         "journal.operations.listByInputBuilderSlugPrefix",
         collection().where("input.builderSlug", ">=", prefix).where("input.builderSlug", "<", `${prefix}`),

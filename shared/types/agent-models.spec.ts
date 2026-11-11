@@ -146,7 +146,7 @@ describe("parseAgentModelSelections", () => {
 });
 
 describe("agentIdBelongsToSlug", () => {
-  it("accepts only the slug's coach and project agents", () => {
+  it("accepts only the slug's agent and project agents", () => {
     expect(agentIdBelongsToSlug("octogee-alice-coach", "alice")).toBe(true);
     expect(agentIdBelongsToSlug("octogee-alice-proj-web-app-coach", "alice")).toBe(true);
     expect(agentIdBelongsToSlug("octogee-bob-coach", "alice")).toBe(false);

@@ -29,7 +29,7 @@ const records = {
 };
 
 describe("workspace commit agent proof", () => {
-  it("accepts the selected workspace coach for workspace and project checkpoints", async () => {
+  it("accepts the selected workspace agent for workspace and project checkpoints", async () => {
     const workspace = { agentId: "octogee-acme-coach", slug: "acme" };
     expect(await verifyWorkspaceCommitProof(
       proof(workspace, "acme-coach-pat"),

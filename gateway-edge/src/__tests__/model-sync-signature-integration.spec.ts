@@ -10,7 +10,7 @@ vi.mock("../lib/db.js", () => ({
   db: { collection: () => ({ doc: () => ({ get: async () => ({ data: () => undefined }) }) }) },
 }));
 vi.mock("@octogee/core/model-credential-sync-runtime", () => ({
-  syncModelCredentialsForCustomer: syncRuntime,
+  syncModelCredentialsForUser: syncRuntime,
   refreshModelCredentialRuntimeSessions: vi.fn(),
 }));
 
@@ -39,7 +39,7 @@ function canonicalLegacyBody(value: unknown): string {
 
 beforeEach(() => {
   syncRuntime.mockClear();
-  vi.stubEnv("GATEWAY_ID", "bender");
+  vi.stubEnv("GATEWAY_ID", "walter");
   vi.stubEnv("BYOT_SYNC_INTERNAL_PUBLIC_KEY", verificationKey);
   vi.stubEnv("INTERNAL_SERVICE_KEY", "");
   vi.stubEnv("OCTOGEE_API_SA_TOKEN_PATH", "/dev/null");
@@ -73,7 +73,7 @@ async function syncReceiver() {
   return {
     received,
     push: (fetchImpl?: typeof fetch) => postGatewayModelCredentialSync({
-      gatewayId: "bender", userData,
+      gatewayId: "walter", userData,
       env: {
         GATEWAY_EDGE_INTERNAL_URL_TEMPLATE: `http://127.0.0.1:${address.port}`,
         BYOT_SYNC_INTERNAL_SIGNING_SECRET: signingKey,
@@ -89,7 +89,7 @@ describe("model sync signatures across the platform trigger and runtime route", 
     await expect(receiver.push()).resolves.toBeUndefined();
     expect(receiver.received).toHaveLength(1);
     const wire = receiver.received[0];
-    expect(wire.url).toBe("/api/g/bender/internal/model-credential-sync");
+    expect(wire.url).toBe("/api/g/walter/internal/model-credential-sync");
     expect(wire.signature).toMatch(/^[a-f0-9]{128}$/);
     expect(wire.body).toMatchObject({
       username: "alice", byotActive: true,
@@ -100,13 +100,13 @@ describe("model sync signatures across the platform trigger and runtime route", 
     });
     expect(wire.body).not.toHaveProperty("systemConfig.byot.baseUrl");
     expect(syncRuntime).toHaveBeenCalledExactlyOnceWith(wire.body, expect.objectContaining({
-      applyConfigPatch: expect.any(Function), refreshCoachRuntimeSessions: expect.any(Function),
+      applyConfigPatch: expect.any(Function), refreshDefaultAgentRuntimeSessions: expect.any(Function),
     }));
   });
 
   it.each([
     { name: "another public key", field: "BYOT_SYNC_INTERNAL_PUBLIC_KEY", value: otherKey, status: 401 },
-    { name: "another gateway", field: "GATEWAY_ID", value: "other-builder", status: 401 },
+    { name: "another gateway", field: "GATEWAY_ID", value: "other-user", status: 401 },
     { name: "an unconfigured public key", field: "BYOT_SYNC_INTERNAL_PUBLIC_KEY", value: "", status: 503 },
     { name: "a legacy secret in the public-key slot", field: "BYOT_SYNC_INTERNAL_PUBLIC_KEY", value: legacySecret, status: 503 },
   ])("reports $status for $name without writing runtime state", async ({ field, value, status }) => {
@@ -120,7 +120,7 @@ describe("model sync signatures across the platform trigger and runtime route", 
   it("rejects a selection changed after the real trigger signs it", async () => {
     const receiver = await syncReceiver();
     const alteredFetch: typeof fetch = (url, init) => fetch(url, {
-      ...init, body: JSON.stringify({ ...JSON.parse(String(init?.body)), username: "other-builder" }),
+      ...init, body: JSON.stringify({ ...JSON.parse(String(init?.body)), username: "other-user" }),
     });
     await expect(receiver.push(alteredFetch)).rejects.toThrow("gateway model credential sync 401");
     expect(syncRuntime).not.toHaveBeenCalled();

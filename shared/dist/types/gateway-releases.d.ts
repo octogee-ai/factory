@@ -119,7 +119,7 @@ export interface GatewayHeartbeatObservation {
     mountedCustomers: string[];
     migratingIn: string[];
     configStatus?: import("./fleet-controller.js").GatewayConfigStatus;
-    configuredBuilder?: import("./fleet-controller.js").ConfiguredBuilderReport | null;
+    configuredBuilder?: import("./fleet-controller.js").ConfiguredUserReport | null;
 }
 export interface GatewayRuntimeDoc {
     docKind: "runtime";
@@ -178,5 +178,5 @@ export type CommitPlacementResult = {
     kind: "rejected";
     reason: PlacementRejectReason;
 };
-export declare function customerRestoreFencePresent(user: unknown): boolean;
-export declare function customerRuntimeMutationFenced(user: unknown): boolean;
+export declare function userRestoreFencePresent(user: unknown): boolean;
+export declare function userRuntimeMutationFenced(user: unknown): boolean;

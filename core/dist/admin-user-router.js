@@ -25,11 +25,11 @@ function parseNewAccount(body) {
     return { name: name, email: email.trim().toLowerCase() };
 }
 async function nameIsTaken(store, name) {
-    const [workspace, builder] = await Promise.all([
+    const [workspace, userRecord] = await Promise.all([
         store.workspaces.records.get(name),
-        store.builders.records.findBySlug(name),
+        store.users.records.findBySlug(name),
     ]);
-    return workspace !== null || builder !== null;
+    return workspace !== null || userRecord !== null;
 }
 async function createWithReservedName(store, accounts, account) {
     const userId = randomBytes(USER_ID_BYTES).toString("hex");
@@ -100,7 +100,7 @@ export function addAdminUserRoutes(router, deps) {
                 res.status(501).json({ error: UNAVAILABLE });
                 return;
             }
-            const user = await store.builders.records.get(uid);
+            const user = await store.users.records.get(uid);
             if (!user) {
                 res.status(404).json({ error: "user not found", uid });
                 return;

@@ -7,7 +7,7 @@ export const POD_REPLACEMENT_MAX_RETAINED = 64;
 
 export const GATEWAY_POD_REPLACEMENT_SCHEMA = "octogee.gateway-pod-replacement.v1" as const;
 
-// A gateway pod as Cowboy last saw it: its identity, the ReplicaSet that owns
+// A gateway pod as the fleet controller last saw it: its identity, the ReplicaSet that owns
 // it, and the GCE identity of its node. The node facts are captured while the
 // node still exists — a Spot preemption destroys the instance, so they can never
 // be recovered afterwards, and they are what joins a lost pod to the

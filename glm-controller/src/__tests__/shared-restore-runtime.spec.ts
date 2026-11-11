@@ -5,7 +5,7 @@ import { assertSharedSourceRecoveryPredecessor, readSharedSourceRecoveryAuthorit
 import { recoverSharedSourceRuntime } from "../lib/shared-source-runtime.js";
 import { describe, expect, it, vi } from 'vitest';
 import { FieldValue } from 'firebase-admin/firestore';
-import { acknowledgeCustomerRestore, beginCustomerRestore, type FleetStateDeps } from '@octogee/core/fleet-state';
+import { acknowledgeUserRestore, beginUserRestore, type FleetStateDeps } from '@octogee/core/fleet-state';
 import { createDocumentFixtureStore } from '@octogee/core/testing/journal-store';
 import { MalformedRecordError } from '@octogee/core/platform-state';
 import type { Operation } from '@octogee/shared/types/glm';
@@ -475,10 +475,10 @@ describe('journaled Shared restore runtime recovery', () => {
     const claimStartedAt = h.store['glmOperations/return'].restoreAttempt.claimStartedAt + 1;
     Object.assign(h.store['glmOperations/return'], { status: 'running', startedAt: claimStartedAt, attemptHistory: [] });
     const stateDeps: FleetStateDeps = { store: createDocumentFixtureStore(h.store) };
-    const owned = await beginCustomerRestore(stateDeps, { uid: intent.uid, slug: intent.slug, gatewayId: intent.gatewayId,
+    const owned = await beginUserRestore(stateDeps, { uid: intent.uid, slug: intent.slug, gatewayId: intent.gatewayId,
       fromGatewayId: intent.fromGatewayId, assignmentEpoch: intent.assignmentEpoch, operationId: intent.operationId,
       claimStartedAt, attemptId: 'native-resume' }, { resume: true });
-    await acknowledgeCustomerRestore(stateDeps, owned);
+    await acknowledgeUserRestore(stateDeps, owned);
     expect(h.store['users/u'].provisioning.openclaw.restoreFence).toBeUndefined();
     await queued.run();
     expect(queued.handler).toHaveBeenCalledOnce();
@@ -543,10 +543,10 @@ describe('journaled Shared restore runtime recovery', () => {
     const claimStartedAt = renewed.claimStartedAt + 1;
     Object.assign(h.store['glmOperations/return'], { status: 'running', startedAt: claimStartedAt, attemptHistory: [] });
     const stateDeps: FleetStateDeps = { store: createDocumentFixtureStore(h.store) };
-    const owned = await beginCustomerRestore(stateDeps, { uid: intent.uid, slug: intent.slug, gatewayId: intent.gatewayId,
+    const owned = await beginUserRestore(stateDeps, { uid: intent.uid, slug: intent.slug, gatewayId: intent.gatewayId,
       fromGatewayId: intent.fromGatewayId, assignmentEpoch: intent.assignmentEpoch, operationId: intent.operationId,
       claimStartedAt, attemptId: 'native-resume' }, { resume: true });
-    await acknowledgeCustomerRestore(stateDeps, owned);
+    await acknowledgeUserRestore(stateDeps, owned);
     expect(h.store['users/u'].provisioning.openclaw.restoreFence).toBeUndefined();
     expect(h.store['glmOperations/return'].restoreAttempt.phase).toBe('acknowledged');
   });
@@ -621,7 +621,7 @@ describe('journaled Shared restore runtime recovery', () => {
       assignmentEpoch: before.assignmentEpoch, operationId: before.operationId, attemptId: 'new-request', claimStartedAt: 300 };
     const stateDeps: FleetStateDeps = { store: createDocumentFixtureStore(h.store) };
     Object.assign(h.store['glmOperations/return'], { status: 'running', startedAt: 300, attemptHistory: [] });
-    await expect(beginCustomerRestore(stateDeps, scope, { resume: true })).rejects.toThrow('resumption');
+    await expect(beginUserRestore(stateDeps, scope, { resume: true })).rejects.toThrow('resumption');
     h.store['glmOperations/return'].status = 'pending';
     await recoverSharedRestoreRuntime(h.deps, h.op, h.ctx);
     const renewed = h.store['glmOperations/return'].restoreAttempt;
@@ -639,9 +639,9 @@ describe('journaled Shared restore runtime recovery', () => {
     expect(h.store['glmOperations/return'].restoreAttempt).toEqual(renewed);
     const nextClaim = renewed.claimStartedAt + 1;
     Object.assign(h.store['glmOperations/return'], { status: 'running', startedAt: nextClaim, attemptHistory: [] });
-    const owned = await beginCustomerRestore(stateDeps, { ...scope, claimStartedAt: nextClaim }, { resume: true });
+    const owned = await beginUserRestore(stateDeps, { ...scope, claimStartedAt: nextClaim }, { resume: true });
     expect(h.store['users/u'].provisioning.openclaw.restoreFence).toBeDefined();
-    await acknowledgeCustomerRestore(stateDeps, owned);
+    await acknowledgeUserRestore(stateDeps, owned);
     expect(h.store['users/u'].provisioning.openclaw.restoreFence).toBeUndefined();
     expect(h.store['glmOperations/return'].restoreAttempt.phase).toBe('acknowledged');
   });
@@ -681,7 +681,7 @@ describe('journaled Shared restore runtime recovery', () => {
     await recoverSharedRestoreRuntime(h.deps, h.op, h.ctx);
     expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
   });
-  it('changes only same-pod images and preserves customer intent and release policy', async () => {
+  it('changes only same-pod images and preserves user intent and release policy', async () => {
     const h = harness(); const before = structuredClone(h.store['users/u']); const root = structuredClone(h.store['gateways/shared-1']);
     await recoverSharedRestoreRuntime(h.deps, h.op, h.ctx);
     expect(h.store['users/u']).toEqual(before);
@@ -1068,7 +1068,7 @@ describe('journaled Shared source schema repair', () => {
       if (changed === 'paused' || changed === 'retired') root.desiredStatus = changed;
       if (changed === 'gateway-class') root.gatewayClass = 'builder';
       if (changed === 'owner') root.ownerUid = 'foreign-owner';
-      if (changed === 'builder-slug') root.builderSlug = 'foreign-builder';
+      if (changed === 'builder-slug') root.builderSlug = 'foreign-user';
     });
     await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('completed source recovery release custody changed');
     expect(h.store['glmOperations/recover'].sourceRuntimeRecovery.completedAt).toBeGreaterThan(0);

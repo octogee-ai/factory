@@ -37,8 +37,8 @@ export declare const VERIFY_ACCOUNT_TIMEOUT_MS = 120000;
 export declare const CONFIG_PATCH_DEADLINE_MS = 120000;
 export declare const CONFIG_RELOAD_DEADLINE_MS = 120000;
 export declare const IMPORT_ACTIVATION_PATCH_DEADLINE_MS: number;
-export declare const ADD_CUSTOMER_DEADLINE_MS = 300000;
-export declare const BUILDER_IMPORT_STARTUP_TIMEOUT_MS = 600000;
+export declare const ADD_USER_DEADLINE_MS = 300000;
+export declare const USER_IMPORT_STARTUP_TIMEOUT_MS = 600000;
 export declare const MIGRATION_IMPORT_DOCTOR_PHASE_TIMEOUT_MS = 300000;
 export declare const MIGRATION_IMPORT_DESCRIPTOR_TIMEOUT_MS = 180000;
 export declare const MIGRATION_TRANSFER_TIMEOUT_MS: number;
@@ -47,7 +47,7 @@ export declare const MIGRATION_QUIESCE_TIMEOUT_MS = 60000;
 export declare const MIGRATION_TRANSFER_LEASE_MS: number;
 export declare const MIGRATION_UNMOUNT_TIMEOUT_MS: number;
 export declare const MIGRATION_VERIFY_TIMEOUT_MS: number;
-export declare const MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS = "coach-attach-in-progress";
+export declare const MIGRATION_VERIFY_DEFAULT_AGENT_ATTACH_IN_PROGRESS = "coach-attach-in-progress";
 export declare const MIGRATING_IN_PIN_TTL_MS: number;
 export declare const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
 export interface FleetHealthResponse {
@@ -71,13 +71,13 @@ export interface FleetStateResponse {
     startedAt: number;
     customers: string[];
     migratingIn: string[];
-    configuredBuilder: ConfiguredBuilderReport | null;
+    configuredBuilder: ConfiguredUserReport | null;
 }
-export interface ConfiguredBuilderReport {
+export interface ConfiguredUserReport {
     state: "claimed";
     generation: number | null;
 }
-export declare function parseConfiguredBuilderReport(value: unknown): ConfiguredBuilderReport | null;
+export declare function parseConfiguredUserReport(value: unknown): ConfiguredUserReport | null;
 export declare const FLEET_STATE_PATH = "/fleet-state";
 export declare const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL: "openclaw-dashboard-bridge";
 export declare const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION: 1;
@@ -261,7 +261,7 @@ export type VerifyMigrationResponse = {
     slug: string;
     ready: boolean;
     configTransferMode?: "activation-manifest";
-    code?: typeof MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS;
+    code?: typeof MIGRATION_VERIFY_DEFAULT_AGENT_ATTACH_IN_PROGRESS;
     checks: {
         customerDir: boolean;
         coachWired: boolean;

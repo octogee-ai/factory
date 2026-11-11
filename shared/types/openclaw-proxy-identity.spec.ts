@@ -21,7 +21,7 @@ import {
 } from "./openclaw-proxy-identity";
 
 describe("OpenClaw proxy identity contract", () => {
-  it("limits ordinary Team members to the workspace coach and their own sessions", () => {
+  it("limits ordinary Team members to the workspace agent and their own sessions", () => {
     const roles = openClawOperatorRoles("ceckert-test");
     expect(roles.definitions.member).toEqual({
       sessions: { others: "none" }, agents: ["octogee-ceckert-test-coach"],
@@ -95,10 +95,10 @@ describe("OpenClaw proxy identity contract", () => {
   });
 
   it("derives one stable device per gateway, person and role from the pod secret", () => {
-    const subject = openClawDeviceSubject("bender", "uid-alice");
+    const subject = openClawDeviceSubject("walter", "uid-alice");
     const first = deriveDeviceIdentity({ secret: "pod-secret", subject });
     const again = deriveDeviceIdentity({ secret: "pod-secret", subject });
-    const otherPerson = deriveDeviceIdentity({ secret: "pod-secret", subject: openClawDeviceSubject("bender", "uid-bob") });
+    const otherPerson = deriveDeviceIdentity({ secret: "pod-secret", subject: openClawDeviceSubject("walter", "uid-bob") });
     const otherSecret = deriveDeviceIdentity({ secret: "rotated", subject });
     expect(again).toEqual(first);
     expect(otherPerson.deviceId).not.toBe(first.deviceId);

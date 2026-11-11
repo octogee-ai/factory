@@ -4,7 +4,7 @@ import { buildInstancesMap, buildHelmTargetMap, diffInstancesMap } from "../reco
 import type { GatewayDesiredState } from "@octogee/shared/types/glm";
 
 const STD_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
-const BUILDER_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder";
+const USER_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder";
 const ORIGINAL_GATEWAY_SERVICE_ACCOUNT = process.env.GATEWAY_SERVICE_ACCOUNT;
 
 beforeEach(() => {
@@ -39,8 +39,8 @@ describe("resolveGatewayImageRepository", () => {
     expect(resolveGatewayImageRepository(mkDesired({ profile: "standard" }))).toBe(STD_REPO);
   });
 
-  it("Builder profile selects the Builder image in the same registry and project", () => {
-    expect(resolveGatewayImageRepository(mkDesired({ imageProfile: "builder" }))).toBe(BUILDER_REPO);
+  it("isolated profile selects the isolated image in the same registry and project", () => {
+    expect(resolveGatewayImageRepository(mkDesired({ imageProfile: "builder" }))).toBe(USER_REPO);
     expect(PROFILE_IMAGE_NAME.builder).toBe("octogee-gateway-builder");
   });
 
@@ -54,13 +54,13 @@ expect(
   });
 });
 
-describe("Cowboy resolves profile in the helm maps (image name, NOT the tag)", () => {
-  it("buildInstancesMap: Builder profile selects the Builder repository with the fleet SHA", () => {
+describe("The fleet controller resolves profile in the helm maps (image name, NOT the tag)", () => {
+  it("buildInstancesMap: user profile selects the user repository with the fleet SHA", () => {
     const map = buildInstancesMap([
-      mkDesired({ gatewayId: "bender", imageProfile: "builder" }),
+      mkDesired({ gatewayId: "walter", imageProfile: "builder" }),
     ]);
-    expect(map.bender.image.repository).toBe(BUILDER_REPO);
-    expect(map.bender.image.tag).toBe("abc1234");
+    expect(map.walter.image.repository).toBe(USER_REPO);
+    expect(map.walter.image.tag).toBe("abc1234");
   });
 
   it("buildInstancesMap: no profile → repo is byte-unchanged (regression guard)", () => {
@@ -68,21 +68,21 @@ describe("Cowboy resolves profile in the helm maps (image name, NOT the tag)", (
     expect(map.default.image.repository).toBe(STD_REPO);
   });
 
-  it("buildHelmTargetMap: Builder profile resolves the same way", () => {
+  it("buildHelmTargetMap: User profile resolves the same way", () => {
     const map = buildHelmTargetMap([
-      mkDesired({ gatewayId: "bender", imageProfile: "builder" }),
+      mkDesired({ gatewayId: "walter", imageProfile: "builder" }),
     ], {});
-    expect(map.bender.image.repository).toBe(BUILDER_REPO);
+    expect(map.walter.image.repository).toBe(USER_REPO);
   });
 
-  it("changing profile is a reconcile `update` (Cowboy rolls the instance onto the profile image)", () => {
-    const actual = buildInstancesMap([mkDesired({ gatewayId: "bender" })]);
+  it("changing profile is a reconcile `update` (the fleet controller rolls the instance onto the profile image)", () => {
+    const actual = buildInstancesMap([mkDesired({ gatewayId: "walter" })]);
     const desired = buildInstancesMap([
-      mkDesired({ gatewayId: "bender", imageProfile: "builder" }),
+      mkDesired({ gatewayId: "walter", imageProfile: "builder" }),
     ]);
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toEqual([
-      { kind: "update", gatewayId: "bender", from: actual.bender, to: desired.bender },
+      { kind: "update", gatewayId: "walter", from: actual.walter, to: desired.walter },
     ]);
   });
 });

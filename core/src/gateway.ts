@@ -66,11 +66,11 @@ function setStringDefault(target: object, key: string, value: string, message: s
   return true;
 }
 
-function isCoachAgent(agent: OpenClawAgentConfig): boolean {
+function isManagedAgent(agent: OpenClawAgentConfig): boolean {
   return /^octogee-.+-coach$/.test(agent.id);
 }
 
-function ensureCoachWorkspaceFs(agent: OpenClawAgentConfig): boolean {
+function ensureDefaultAgentWorkspaceFs(agent: OpenClawAgentConfig): boolean {
   agent.tools ??= {};
   if (agent.tools.fs?.workspaceOnly) return false;
 
@@ -78,10 +78,10 @@ function ensureCoachWorkspaceFs(agent: OpenClawAgentConfig): boolean {
   return true;
 }
 
-function applyCoachAgentDefaults(agent: OpenClawAgentConfig): boolean {
-  if (!isCoachAgent(agent)) return false;
+function applyDefaultAgentDefaults(agent: OpenClawAgentConfig): boolean {
+  if (!isManagedAgent(agent)) return false;
 
-  const changed = ensureCoachWorkspaceFs(agent);
+  const changed = ensureDefaultAgentWorkspaceFs(agent);
 
   if (changed) {
     log(`Gateway defaults: ${agent.id} → fs.workspaceOnly=true`);
@@ -120,7 +120,7 @@ function applyAgentDefaults(defaults: AgentDefaults): boolean {
 }
 
 function applyAgentListDefaults(agents: OpenClawAgentConfig[] | undefined): boolean {
-  return (agents ?? []).map((agent) => applyCoachAgentDefaults(agent)).some(Boolean);
+  return (agents ?? []).map((agent) => applyDefaultAgentDefaults(agent)).some(Boolean);
 }
 
 function applyElevatedToolDefaults(tools: ToolsConfig): boolean {

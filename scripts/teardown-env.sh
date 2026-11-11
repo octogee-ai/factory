@@ -6,8 +6,8 @@ set -euo pipefail
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # Uninstalls the umbrella helm release AND every per-instance gateway
-# helm release (octogee-gw-*) Cowboy provisioned. Leaving the per-instance
-# releases behind made Cowboy re-register them on the next install via
+# helm release (octogee-gw-*) the fleet controller provisioned. Leaving the per-instance
+# releases behind made the fleet controller re-register them on the next install via
 # bootstrapGlmGateways with whatever stale image tag was last deployed.
 #
 # Default teardown preserves PVCs. Full teardown deletes the two durable
@@ -176,7 +176,7 @@ if $FULL; then
   echo -e "  ${RED}  + Firestore collections (all)${NC}"
   echo -e "  ${RED}  + Cloud Functions (chat proxy preserved)${NC}"
   echo -e "  ${RED}  + Firebase Auth users (all)${NC}"
-  echo -e "  ${RED}  + Secret Manager: byok-* (per-customer BYOK keys orphaned by Firestore wipe)${NC}"
+  echo -e "  ${RED}  + Secret Manager: byok-* (per-user BYOK keys orphaned by Firestore wipe)${NC}"
   echo -e "  ${RED}  + Dynamic gateway K8s ServiceAccounts + auth/model-key secrets${NC}"
   echo -e "  ${RED}  + Gitea API token material (K8s + Secret Manager; invalid after DB reset)${NC}"
 fi
@@ -1140,15 +1140,15 @@ if $FULL; then
   fi
 fi
 
-# ── 6. Secret Manager: preserve infra secrets, wipe per-customer byok-* ──
+# ── 6. Secret Manager: preserve infra secrets, wipe per-user byok-* ──
 # Infra secrets (ANTHROPIC_API_KEY, STRIPE_*, RESEND_*,
 # Firebase web config, DB passwords) are preserved across teardown — they're
 # the source of truth, rotating them is a deliberate operation, use
 # scripts/rotate-secret.sh, not teardown.
 #
-# Per-customer `byok-{slug}-{provider}` secrets (set by customers via the
-# admin UI for bring-your-own-key) are env-coupled through the customer's
-# slug: --full wipes Firestore + Auth, which deletes the customer record
+# Per-user `byok-{slug}-{provider}` secrets (set by users via the
+# admin UI for bring-your-own-key) are env-coupled through the user's
+# slug: --full wipes Firestore + Auth, which deletes the user record
 # that owned the byok. The corresponding Secret Manager entry becomes an
 # orphan with no Firestore pointer. Wipe under --full to keep SM clean.
 #
@@ -1162,7 +1162,7 @@ if $FULL; then
     byok_count=0
   fi
   if [[ "$byok_count" -gt 0 ]]; then
-    if confirm "Delete $byok_count byok-* secret(s) in Secret Manager (customer BYOK keys)?"; then
+    if confirm "Delete $byok_count byok-* secret(s) in Secret Manager (user BYOK keys)?"; then
       while read -r sm; do
         [[ -z "$sm" ]] && continue
         gcloud secrets delete "$sm" --project="$FIREBASE_PROJECT" --quiet >/dev/null \
@@ -1329,10 +1329,10 @@ echo "  # 5. Post-bootstrap secrets (picks up the values steps 3+4 wrote to .env
 echo "  ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG --phase=launch${YES_FLAG}"
 echo ""
 echo "  # 6. Roll pods so they pick up the freshly-populated secret env vars"
-echo "  # Skip the gateway Deployments: Cowboy owns their rollouts, and restarting a"
+echo "  # Skip the gateway Deployments: the fleet controller owns their rollouts, and restarting a"
 echo "  # just-minted Shared slot leaves two unreleased pods waiting on each other."
 echo "  kubectl rollout restart deploy -n $K8S_NAMESPACE --context $K8S_CONTEXT -l 'app!=octogee-gateway'"
-echo "  # Cowboy mints shared-<id> slots from the platform release; existing durable"
+echo "  # the fleet controller mints shared-<id> slots from the platform release; existing durable"
 echo "  # roots/releases are never reconstructed or overwritten."
 echo "  until kubectl get deploy -n $K8S_NAMESPACE --context $K8S_CONTEXT -l app=octogee-gateway,gateway-class=shared -o name | grep -q .; do sleep 15; done"
 echo "  kubectl wait --for=condition=Available deploy -l app=octogee-gateway,gateway-class=shared -n $K8S_NAMESPACE --context $K8S_CONTEXT --timeout=30m"
@@ -1340,7 +1340,7 @@ echo ""
 echo "  # 6b. Seed the operator dials (sizing profiles, shared pool autoscaling, Signup Offer)"
 echo "  #     into the platform state store the release just migrated. with-platform-state"
 echo "  #     reads the deployed backend and opens the database tunnel. Shared pool membership"
-echo "  #     is not seeded: Cowboy mints shared-N slots from the platform release."
+echo "  #     is not seeded: the fleet controller mints shared-N slots from the platform release."
 echo "  npm run --prefix scripts with-platform-state -- --env=$ENV -- npx tsx ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG"
 echo ""
 echo "  # 7. Deploy the platform and site through CI (Firestore rules and indexes, Functions, site, hosting)"

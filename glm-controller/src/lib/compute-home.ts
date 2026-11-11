@@ -1,4 +1,4 @@
-import type { RetainedBuilderHome } from "@octogee/shared/types/glm";
+import type { RetainedUserHome } from "@octogee/shared/types/glm";
 import type { ComputeRequest } from "./compute-vm.js";
 
 interface HomeDisk {
@@ -12,28 +12,28 @@ interface HomeInstance {
   disks?: Array<{ boot?: boolean; source?: string; deviceName?: string; autoDelete?: boolean }>;
 }
 const missing = (error: unknown): boolean => (error as { response?: { status?: number }; code?: number })?.response?.status === 404 || (error as { code?: number })?.code === 404;
-const COMPUTER_HOME_DISK_DEVICE_NAME = "octogee-home";
+const VM_HOME_DISK_DEVICE_NAME = "octogee-home";
 const ownerOf = (instance: HomeInstance | null): string | undefined => instance?.metadata?.items?.find(item => item.key === "octogee-owner-uid")?.value;
 
 function assertStoppedHomeOwner(instance: HomeInstance | null, instanceId: string, ownerUid: string): void {
-  if (!instance || instance.id !== instanceId || ownerOf(instance) !== ownerUid || !["STOPPED", "TERMINATED"].includes(instance.status ?? "")) throw new Error("boot deletion requires the same stopped owner computer");
+  if (!instance || instance.id !== instanceId || ownerOf(instance) !== ownerUid || !["STOPPED", "TERMINATED"].includes(instance.status ?? "")) throw new Error("boot deletion requires the same stopped owner VM");
 }
-function assertRetainedHomeDisks(disks: HomeInstance["disks"], home: RetainedBuilderHome, parseName: (source: string) => string): void {
-  const attached = disks?.find(disk => disk.deviceName === COMPUTER_HOME_DISK_DEVICE_NAME && !disk.boot);
+function assertRetainedHomeDisks(disks: HomeInstance["disks"], home: RetainedUserHome, parseName: (source: string) => string): void {
+  const attached = disks?.find(disk => disk.deviceName === VM_HOME_DISK_DEVICE_NAME && !disk.boot);
   const boot = disks?.filter(disk => disk.boot) ?? [];
   if (!attached?.source || parseName(home.source) !== home.name || parseName(attached.source) !== home.name || attached?.autoDelete !== false || boot.length !== 1 || boot[0].autoDelete !== true
     || disks?.some(disk => !disk.boot && disk.autoDelete !== false)) throw new Error("boot deletion would delete unverified non-boot storage");
 }
-function assertRetainedHomeDisk(disk: HomeDisk, home: RetainedBuilderHome, ownerUid: string): void {
+function assertRetainedHomeDisk(disk: HomeDisk, home: RetainedUserHome, ownerUid: string): void {
   if (disk.id !== home.id || disk.labels?.["octogee-owner-uid"] !== ownerUid.toLowerCase() || disk.labels?.["octogee-storage"] !== "customer-home") throw new Error("retained home changed before boot deletion");
 }
 
-export function createComputerHomeClient(deps: {
+export function createVmHomeClient(deps: {
   request: ComputeRequest;
   projectId: string;
   readInstance: (name: string, zone: string) => Promise<HomeInstance | null>;
   waitForOperation: (zone: string, operation: unknown, what: string) => Promise<void>;
-  journalHomeResize?: (input: { home: RetainedBuilderHome; ownerUid: string; sizeGb: number }, action: () => Promise<void>) => Promise<void>;
+  journalHomeResize?: (input: { home: RetainedUserHome; ownerUid: string; sizeGb: number }, action: () => Promise<void>) => Promise<void>;
 }) {
   const base = `https://compute.googleapis.com/compute/v1/projects/${deps.projectId}`;
   const readInstance = deps.readInstance;
@@ -52,7 +52,7 @@ export function createComputerHomeClient(deps: {
     return res.data as HomeDisk;
   }
 
-  function retainedHome(disk: HomeDisk, name: string, zone: string): RetainedBuilderHome {
+  function retainedHome(disk: HomeDisk, name: string, zone: string): RetainedUserHome {
     const sizeGb = Number(disk.sizeGb);
     const diskType = disk.type?.split("/").at(-1);
     if (!/^\d+$/u.test(disk.id ?? "") || disk.name !== name || !Number.isSafeInteger(sizeGb) || sizeGb < 10
@@ -67,7 +67,7 @@ export function createComputerHomeClient(deps: {
     if (!attached.autoDelete) {
       if (attached.autoDelete !== false) throw new Error("home disk auto-delete state is unknown");
     } else {
-      const response = await deps.request({ url: `${base}/zones/${zone}/instances/${instanceName}/setDiskAutoDelete?autoDelete=false&deviceName=${COMPUTER_HOME_DISK_DEVICE_NAME}`, method: "POST" });
+      const response = await deps.request({ url: `${base}/zones/${zone}/instances/${instanceName}/setDiskAutoDelete?autoDelete=false&deviceName=${VM_HOME_DISK_DEVICE_NAME}`, method: "POST" });
       await waitForOperation(zone, (response.data ?? {}), `retain home ${instanceName}`);
     }
     if (disk.labels?.["octogee-storage"] !== "customer-home" || disk.labels?.["octogee-owner-uid"] !== ownerUid.toLowerCase()) {
@@ -81,20 +81,20 @@ export function createComputerHomeClient(deps: {
 
   function assertConfirmedHome(input: { instance: HomeInstance; confirmed: HomeInstance | null;
     attached: NonNullable<HomeInstance["disks"]>[number]; after: NonNullable<HomeInstance["disks"]>[number] | undefined;
-    confirmedDisk: HomeDisk; home: RetainedBuilderHome; ownerUid: string }): void {
+    confirmedDisk: HomeDisk; home: RetainedUserHome; ownerUid: string }): void {
     const { instance, confirmed, attached, after, confirmedDisk, home, ownerUid } = input;
     if (!confirmed || confirmed.id !== instance.id || ownerOf(confirmed) !== ownerUid
       || after?.source !== attached.source || after?.autoDelete !== false || confirmedDisk.id !== home.id
-      || confirmedDisk.labels?.["octogee-owner-uid"] !== ownerUid.toLowerCase()) throw new Error("home retention did not converge; refusing computer replacement");
+      || confirmedDisk.labels?.["octogee-owner-uid"] !== ownerUid.toLowerCase()) throw new Error("home retention did not converge; refusing VM replacement");
   }
 
-  async function retainHome(instanceName: string, zone: string, ownerUid: string): Promise<RetainedBuilderHome> {
+  async function retainHome(instanceName: string, zone: string, ownerUid: string): Promise<RetainedUserHome> {
     const instance = await readInstance(instanceName, zone);
     if (!instance || ownerOf(instance) !== ownerUid) {
-      throw new Error("cannot retain home for an unverified computer owner");
+      throw new Error("cannot retain home for an unverified VM owner");
     }
-    const attached = instance.disks?.find(disk => disk.deviceName === COMPUTER_HOME_DISK_DEVICE_NAME && !disk.boot);
-    if (!attached?.source) throw new Error("computer has no identifiable home disk");
+    const attached = instance.disks?.find(disk => disk.deviceName === VM_HOME_DISK_DEVICE_NAME && !disk.boot);
+    if (!attached?.source) throw new Error("VM has no identifiable home disk");
     const name = homeName(attached.source, zone);
     const disk = await readHome(name, zone);
     if (disk.labels?.["octogee-owner-uid"] && disk.labels["octogee-owner-uid"] !== ownerUid.toLowerCase()) {
@@ -103,13 +103,13 @@ export function createComputerHomeClient(deps: {
     const home = retainedHome(disk, name, zone);
     await protectHome({ instanceName, zone, ownerUid, attached, disk, name });
     const confirmed = await readInstance(instanceName, zone);
-    const after = confirmed?.disks?.find(value => value.deviceName === COMPUTER_HOME_DISK_DEVICE_NAME);
+    const after = confirmed?.disks?.find(value => value.deviceName === VM_HOME_DISK_DEVICE_NAME);
     const confirmedDisk = await readHome(name, zone);
     assertConfirmedHome({ instance, confirmed, attached, after, confirmedDisk, home, ownerUid });
     return home;
   }
 
-  async function verifyDetachedHome(home: RetainedBuilderHome, ownerUid: string): Promise<void> {
+  async function verifyDetachedHome(home: RetainedUserHome, ownerUid: string): Promise<void> {
     if (home.projectId !== deps.projectId || homeName(home.source, home.zone) !== home.name) throw new Error("retained home project/zone mismatch");
     const disk = await readHome(home.name, home.zone);
     if (disk.id !== home.id || disk.labels?.["octogee-owner-uid"] !== ownerUid.toLowerCase()
@@ -118,7 +118,7 @@ export function createComputerHomeClient(deps: {
     }
   }
 
-  async function deleteRetainingHome(instanceName: string, zone: string, ownerUid: string, home: RetainedBuilderHome, instanceId: string): Promise<void> {
+  async function deleteRetainingHome(instanceName: string, zone: string, ownerUid: string, home: RetainedUserHome, instanceId: string): Promise<void> {
     const instance = await readInstance(instanceName, zone);
     assertStoppedHomeOwner(instance, instanceId, ownerUid);
     if (home.projectId !== deps.projectId || home.zone !== zone) throw new Error("boot replacement home escaped configured project/zone");
@@ -130,7 +130,7 @@ export function createComputerHomeClient(deps: {
     await waitForOperation(zone, response.data ?? {}, `delete retained-home boot ${instanceName}`);
   }
 
-  async function deleteRetainedHome(home: RetainedBuilderHome, ownerUid: string): Promise<void> {
+  async function deleteRetainedHome(home: RetainedUserHome, ownerUid: string): Promise<void> {
     try { await verifyDetachedHome(home, ownerUid); }
     catch (error) {
       if (missing(error)) return;
@@ -147,8 +147,8 @@ export function createComputerHomeClient(deps: {
     await waitForOperation(home.zone, (response.data ?? {}), `erase home ${home.name}`);
   }
 
-  async function expandHome(home: RetainedBuilderHome, ownerUid: string, sizeGb: number): Promise<RetainedBuilderHome> {
-    if (!Number.isSafeInteger(sizeGb) || sizeGb < 10 || sizeGb > 100) throw new Error("invalid Builder home capacity");
+  async function expandHome(home: RetainedUserHome, ownerUid: string, sizeGb: number): Promise<RetainedUserHome> {
+    if (!Number.isSafeInteger(sizeGb) || sizeGb < 10 || sizeGb > 100) throw new Error("invalid user home capacity");
     if (home.projectId !== deps.projectId || homeName(home.source, home.zone) !== home.name) throw new Error("home expansion project/zone mismatch");
     const read = async () => {
       const disk = await readHome(home.name, home.zone);

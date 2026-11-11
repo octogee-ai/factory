@@ -71,7 +71,7 @@ import {
 } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import {
-  resolveContinuousBuilderPlacement,
+  resolveContinuousUserPlacement,
   resolveLiveActivationTargetGatewayId,
 } from "@octogee/shared/types/orchestrator-placement";
 import {
@@ -100,14 +100,14 @@ import {
   builderReturnOperationId,
   firestoreBuilderTierReader,
   placementRetireOperationId,
-  requestBuilderActivationLease,
-} from "./builder-activation-lease.js";
-import { addAdminComputerRoutes } from "./admin-computer-router.js";
+  requestUserActivationLease,
+} from "./user-activation-lease.js";
+import { addAdminComputerRoutes } from "./admin-vm-router.js";
 import { addAdminUserRoutes, type UserAccounts, type UserSignInHosts } from "./admin-user-router.js";
 import {
   GatewayRetirementConflictError,
   assertGatewayRuntimeMutationUnfencedInStore,
-  builderRuntimeMutationFenced,
+  isolatedRuntimeMutationFenced,
   claimGatewayRetirementInStore,
 } from "./gateway-retirement-claim.js";
 import {
@@ -121,8 +121,8 @@ import {
   findActiveGatewayMigration,
   GatewayMigrationInFlightError,
 } from "./fleet-operation-lock.js";
-import { buildCustomerDeletionSchedule } from "@octogee/shared/types/account-lifecycle";
-import { buildCustomerDeletionPlan } from "./customer-deletion-plan.js";
+import { buildUserDeletionSchedule } from "@octogee/shared/types/account-lifecycle";
+import { buildUserDeletionPlan } from "./user-deletion-plan.js";
 import {
   FleetMutationIdempotencyError,
   runNormalFleetMutation,
@@ -130,15 +130,15 @@ import {
 } from "./normal-fleet-mutation.js";
 import { OperationAuditIdempotencyConflictError, type OperationAuditActionClaim } from "./operation-audit.js";
 import {
-  firestoreBuilderAccountReader,
-  type BuilderAccount,
-  type BuilderAccountReader,
-} from "./builder-account.js";
+  firestoreUserAccountReader,
+  type UserAccount,
+  type UserAccountReader,
+} from "./user-account.js";
 import type {
-  BuilderActivationLease,
-  BuilderGatewayMirrorInput,
-  BuilderRecord,
-} from "./platform-state/builders.js";
+  UserActivationLease,
+  IsolatedGatewayMirrorInput,
+  PlatformUserRecord,
+} from "./platform-state/users.js";
 import type { OrchestratorConfig } from "./platform-state/config.js";
 import type { FleetRegistryRecord } from "./platform-state/fleet-registry.js";
 import { readReleaseStatus, summarizeReleaseStatus } from "./release-status.js";
@@ -419,7 +419,7 @@ function withAdminGatewayClass<T extends { gatewayClass: GatewayClass }>(
   return { ...gateway, gatewayClass: adminGatewayClass(gateway.gatewayClass) };
 }
 
-interface AdminOnboardingCustomerProjection {
+interface AdminOnboardingUserProjection {
   uid: string;
   username: string;
   email: string;
@@ -430,7 +430,7 @@ interface AdminOnboardingCustomerProjection {
   provisioningStatus: string | null;
   driftState: AdminOnboardingDriftState;
   // Durable roster truth from gateways/{gw}/assignments/{uid}. null when
-  // the customer has no assignment doc (legacy/un-backfilled gateway) — the
+  // the user has no assignment doc (legacy/un-backfilled gateway) — the
   // client falls back to derivation only in that case.
   rosterState: AssignmentState | null;
   rosterRevisionId: string | null;
@@ -439,7 +439,7 @@ interface AdminOnboardingCustomerProjection {
   latestOperation: AdminOnboardingLatestOperation | null;
 }
 
-type AdminPlacementUser = Omit<AdminOnboardingCustomerProjection, "uid" | "slug"> & {
+type AdminPlacementUser = Omit<AdminOnboardingUserProjection, "uid" | "slug"> & {
   id: string;
   name: string | null;
 };
@@ -487,35 +487,35 @@ function presentFields(fields: GlmDoc): GlmDoc {
   return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined && value !== null));
 }
 
-function builderUserData(builder: BuilderRecord, account: BuilderAccount | null | undefined): GlmDoc {
+function userDocData(userRecord: PlatformUserRecord, account: UserAccount | null | undefined): GlmDoc {
   return presentFields({
     ...account?.planInputs,
     username: account?.username,
     email: account?.email,
     lastActive: account?.lastActive,
-    accountLifecycle: builder.accountLifecycle,
+    accountLifecycle: userRecord.accountLifecycle,
     provisioning: presentFields({
-      ...builder.provisioning,
-      ...builder.home,
-      computerRecovery: builder.fences.computerRecovery,
-      pendingNativeSchedulerRetirement: builder.fences.pendingNativeSchedulerRetirement,
+      ...userRecord.provisioning,
+      ...userRecord.home,
+      computerRecovery: userRecord.fences.computerRecovery,
+      pendingNativeSchedulerRetirement: userRecord.fences.pendingNativeSchedulerRetirement,
       openclaw: presentFields({
-        ...builder.openclaw,
-        ...builder.gateway,
-        slug: builder.slug,
-        activationLease: builder.activationLease,
-        restoreFence: builder.fences.restoreFence,
-        sourceTransferFence: builder.fences.sourceTransferFence,
-        migration: builder.fences.migration,
-        runtimeReset: builder.fences.runtimeReset,
+        ...userRecord.openclaw,
+        ...userRecord.gateway,
+        slug: userRecord.slug,
+        activationLease: userRecord.activationLease,
+        restoreFence: userRecord.fences.restoreFence,
+        sourceTransferFence: userRecord.fences.sourceTransferFence,
+        migration: userRecord.fences.migration,
+        runtimeReset: userRecord.fences.runtimeReset,
       }),
     }),
   });
 }
 
-function builderUserDoc(builder: BuilderRecord, account: BuilderAccount | null | undefined): FirestoreDocLike {
-  const data = builderUserData(builder, account);
-  return { id: builder.uid, data: () => data };
+function userDocument(userRecord: PlatformUserRecord, account: UserAccount | null | undefined): FirestoreDocLike {
+  const data = userDocData(userRecord, account);
+  return { id: userRecord.uid, data: () => data };
 }
 
 function recordDoc(id: string, record: object): FirestoreDocLike {
@@ -534,25 +534,25 @@ function runtimeRecordDoc(record: FleetRegistryRecord): FirestoreDocLike {
 interface FleetSnapshot {
   roots: readonly Stored<GatewayRoot>[];
   runtimes: readonly Stored<FleetRegistryRecord>[];
-  builders: readonly Stored<BuilderRecord>[];
+  users: readonly Stored<PlatformUserRecord>[];
   assignments: readonly Stored<GatewayAssignment>[];
 }
 
 async function readFleetSnapshot(store: PlatformStateStore): Promise<FleetSnapshot> {
-  const [roots, runtimes, builders, assignments] = await Promise.all([
+  const [roots, runtimes, userRecords, assignments] = await Promise.all([
     store.gateways.roots.list(),
     store.fleetRegistry.list(),
-    store.builders.records.listAll(),
+    store.users.records.listAll(),
     store.gateways.assignments.listAll(),
   ]);
-  return { roots, runtimes, builders, assignments };
+  return { roots, runtimes, users: userRecords, assignments };
 }
 
-function builderUserDocs(
-  builders: readonly BuilderRecord[],
-  accounts: ReadonlyMap<string, BuilderAccount>,
+function userDocuments(
+  users: readonly PlatformUserRecord[],
+  accounts: ReadonlyMap<string, UserAccount>,
 ): FirestoreDocLike[] {
-  return builders.map((builder) => builderUserDoc(builder, accounts.get(builder.uid)));
+  return users.map((userRecord) => userDocument(userRecord, accounts.get(userRecord.uid)));
 }
 
 function fleetGatewayDocs(snapshot: Pick<FleetSnapshot, "roots" | "runtimes">): {
@@ -638,7 +638,7 @@ function mountedGatewayBySlug(
   return out;
 }
 
-function shouldIncludeOnboardingCustomer(input: {
+function shouldIncludeOnboardingUser(input: {
   data: Record<string, unknown>;
 }): boolean {
   return (
@@ -698,7 +698,7 @@ function userPlacementWarnings(input: {
       uid: input.uid,
       slug: input.slug ?? undefined,
       operationId: input.latestOperation.id,
-      message: `${input.latestOperation.kind} ${input.slug ?? "unresolved-builder"} (${input.uid}) is ${input.latestOperation.status}`,
+      message: `${input.latestOperation.kind} ${input.slug ?? "unresolved-user"} (${input.uid}) is ${input.latestOperation.status}`,
     });
   }
   return warnings;
@@ -720,7 +720,7 @@ function accountLifecycleWarning(input: {
     (candidate) =>
       candidate.kind === "erase-customer" && operationUid(candidate) === input.uid,
   );
-  const slug = resolveCustomerSlug(input.data) ?? asStringOrNull(operation?.input.builderSlug);
+  const slug = resolveUserSlug(input.data) ?? asStringOrNull(operation?.input.builderSlug);
   const expiresAt = toMillis(lifecycle.eraseAfter);
   return {
     code: "account-deletion-pending",
@@ -729,7 +729,7 @@ function accountLifecycleWarning(input: {
     slug: slug ?? undefined,
     ...(operation ? { operationId: operation.id } : {}),
     ...(expiresAt !== null ? { expiresAt } : {}),
-    message: `${slug ?? "unresolved-builder"} (${input.uid}) is ${lifecycle.status === "erasing" ? "being deleted" : "scheduled for deletion"}`,
+    message: `${slug ?? "unresolved-user"} (${input.uid}) is ${lifecycle.status === "erasing" ? "being deleted" : "scheduled for deletion"}`,
   };
 }
 
@@ -746,7 +746,7 @@ function accountLifecycleWarnings(
     .filter((warning): warning is AdminOnboardingPlacementWarning => warning !== null);
 }
 
-function driftStateForCustomer(input: {
+function driftStateForUser(input: {
   assignedGatewayId: string | null;
   mountedGatewayId: string | null;
   policyTargetGatewayId: string | null;
@@ -795,7 +795,7 @@ function activationPolicyGatewayId(input: {
     userData: input.data,
   });
   const gateway = candidate ? input.glmByGatewayId.get(candidate) : undefined;
-  const placement = resolveContinuousBuilderPlacement({
+  const placement = resolveContinuousUserPlacement({
     uid: input.uid,
     userData: input.data,
     currentGatewayId: input.assignedGatewayId,
@@ -825,7 +825,7 @@ function projectionAssignment(
     (assignments.length === 1 ? assignments[0]! : null);
 }
 
-function buildCustomerPlacementProjection(input: {
+function buildUserPlacementProjection(input: {
   uid: string;
   data: Record<string, unknown>;
   config: SharedGatewayPoolConfig;
@@ -833,8 +833,8 @@ function buildCustomerPlacementProjection(input: {
   operations: ReadonlyArray<AdminOnboardingLatestOperation>;
   glmByGatewayId: Map<string, GlmDoc>;
   assignmentsByUid: Map<string, AssignmentDoc[]>;
-}): AdminOnboardingCustomerProjection {
-  const slug = resolveCustomerSlug(input.data);
+}): AdminOnboardingUserProjection {
+  const slug = resolveUserSlug(input.data);
   const mirroredGatewayId = readUserGatewayId(input.data);
   const assignment = projectionAssignment(
     input.assignmentsByUid,
@@ -857,7 +857,7 @@ function buildCustomerPlacementProjection(input: {
     input.operations,
     (operation: AdminOnboardingLatestOperation) => operationUid(operation) === input.uid,
   );
-  const driftState = driftStateForCustomer({
+  const driftState = driftStateForUser({
     assignedGatewayId,
     mountedGatewayId,
     policyTargetGatewayId,
@@ -892,8 +892,8 @@ function buildCustomerPlacementProjection(input: {
 }
 
 function countBy<T extends string | null>(
-  items: ReadonlyArray<AdminOnboardingCustomerProjection>,
-  key: (item: AdminOnboardingCustomerProjection) => T,
+  items: ReadonlyArray<AdminOnboardingUserProjection>,
+  key: (item: AdminOnboardingUserProjection) => T,
 ): Record<Exclude<T, null>, number> {
   const out = {} as Record<Exclude<T, null>, number>;
   for (const item of items) {
@@ -934,14 +934,14 @@ function buildOnboardingPlacementResponse(opts: {
     shapeOnboardingOperation(doc.id, doc.data()),
   );
   const mountedBySlug = mountedGatewayBySlug(glmByGatewayId);
-  const customers = opts.userDocs
+  const users = opts.userDocs
     .filter((doc) =>
-      shouldIncludeOnboardingCustomer({
+      shouldIncludeOnboardingUser({
         data: doc.data(),
       }),
     )
     .map((doc) =>
-      buildCustomerPlacementProjection({
+      buildUserPlacementProjection({
         uid: doc.id,
         data: doc.data(),
         config: opts.config,
@@ -959,16 +959,16 @@ function buildOnboardingPlacementResponse(opts: {
       ),
     );
 
-  const mountedCountsByGateway = countBy(customers, (customer) => customer.mountedGatewayId);
-  const assignedCountsByGateway = countBy(customers, (customer) => customer.assignedGatewayId);
+  const mountedCountsByGateway = countBy(users, (user) => user.mountedGatewayId);
+  const assignedCountsByGateway = countBy(users, (user) => user.assignedGatewayId);
   const driftCountsByGateway: Record<string, number> = {};
-  for (const customer of customers) {
-    if (customer.driftState === "healthy") continue;
+  for (const user of users) {
+    if (user.driftState === "healthy") continue;
     const touchedGatewayIds = new Set(
       [
-        customer.policyTargetGatewayId,
-        customer.assignedGatewayId,
-        customer.mountedGatewayId,
+        user.policyTargetGatewayId,
+        user.assignedGatewayId,
+        user.mountedGatewayId,
       ].filter((gatewayId): gatewayId is string => typeof gatewayId === "string"),
     );
     for (const gatewayId of touchedGatewayIds) {
@@ -983,16 +983,16 @@ function buildOnboardingPlacementResponse(opts: {
     "missing-gateway": 0,
     "in-flight": 0,
   };
-  for (const customer of customers) driftSummary[customer.driftState] += 1;
+  for (const user of users) driftSummary[user.driftState] += 1;
 
   const gatewayIds = new Set([
     ...glmByGatewayId.keys(),
     ...heartbeatByGatewayId.keys(),
-    ...customers.flatMap((customer) =>
+    ...users.flatMap((user) =>
       [
-        customer.policyTargetGatewayId,
-        customer.assignedGatewayId,
-        customer.mountedGatewayId,
+        user.policyTargetGatewayId,
+        user.assignedGatewayId,
+        user.mountedGatewayId,
       ].filter((gatewayId): gatewayId is string => typeof gatewayId === "string"),
     ),
   ]);
@@ -1002,15 +1002,15 @@ function buildOnboardingPlacementResponse(opts: {
     const desiredStatus = projectDesiredStatus(glmDoc);
     const gatewayClass = normalizeGatewayClass(glmDoc);
     const status = asStringOrNull(heartbeat?.status);
-    const warnings = customers
-      .filter((customer) =>
+    const warnings = users
+      .filter((user) =>
         [
-          customer.policyTargetGatewayId,
-          customer.assignedGatewayId,
-          customer.mountedGatewayId,
+          user.policyTargetGatewayId,
+          user.assignedGatewayId,
+          user.mountedGatewayId,
         ].includes(gatewayId),
       )
-      .flatMap((customer) => customer.warnings);
+      .flatMap((user) => user.warnings);
     return {
       gatewayId,
       gatewayClass: adminGatewayClass(gatewayClass),
@@ -1043,21 +1043,21 @@ function buildOnboardingPlacementResponse(opts: {
         code: "default-gateway-missing",
         severity: "error",
         gatewayId: defaultGatewayId,
-        message: `Shared Barn anchor ${defaultGatewayId} has no desired state`,
+        message: `Shared gateway anchor ${defaultGatewayId} has no desired state`,
       });
     } else if (projectDesiredStatus(glmDoc) === "retired") {
       warnings.push({
         code: "default-gateway-retired",
         severity: "error",
         gatewayId: defaultGatewayId,
-        message: `Shared Barn anchor ${defaultGatewayId} is retired`,
+        message: `Shared gateway anchor ${defaultGatewayId} is retired`,
       });
     } else if (normalizeGatewayClass(glmDoc) !== "shared") {
       warnings.push({
         code: "default-gateway-not-shared",
         severity: "warning",
         gatewayId: defaultGatewayId,
-        message: `Shared Barn anchor ${defaultGatewayId} is not a shared gateway`,
+        message: `Shared gateway anchor ${defaultGatewayId} is not a shared gateway`,
       });
     }
   } else {
@@ -1068,7 +1068,7 @@ function buildOnboardingPlacementResponse(opts: {
     });
   }
   warnings.push(...accountLifecycleWarnings(opts.userDocs, operations));
-  for (const customer of customers) warnings.push(...customer.warnings);
+  for (const user of users) warnings.push(...user.warnings);
 
   return {
     config: {
@@ -1080,7 +1080,7 @@ function buildOnboardingPlacementResponse(opts: {
       },
     },
     gateways,
-    users: customers.map(({ uid, slug, ...user }) => ({ ...user, id: uid, name: slug })),
+    users: users.map(({ uid, slug, ...user }) => ({ ...user, id: uid, name: slug })),
     driftSummary,
     warnings,
     generatedAt: new Date().toISOString(),
@@ -1089,7 +1089,7 @@ function buildOnboardingPlacementResponse(opts: {
 
 async function readAdminOnboardingPlacementResponse(
   store: PlatformStateStore,
-  accounts: BuilderAccountReader,
+  accounts: UserAccountReader,
 ): Promise<AdminOnboardingPlacementResponse> {
   const [config, snapshot, recent, accountsByUid] = await Promise.all([
     store.transaction(
@@ -1103,7 +1103,7 @@ async function readAdminOnboardingPlacementResponse(
   return buildOnboardingPlacementResponse({
     config,
     ...fleetGatewayDocs(snapshot),
-    userDocs: builderUserDocs(snapshot.builders, accountsByUid),
+    userDocs: userDocuments(snapshot.users, accountsByUid),
     operationDocs: operationDocs(recent.items),
     assignments: snapshot.assignments,
   });
@@ -1460,7 +1460,7 @@ function projectDisposableRuntime(
 
 // The stored window is a list of replacement timestamps, so the rolling counts
 // are derived against the request clock rather than read back from a number that
-// was accurate only when Cowboy last wrote the document.
+// was accurate only when the fleet controller last wrote the document.
 function projectGatewayPodReplacements(
   glmDoc: GlmDoc | undefined,
   now: number,
@@ -1522,7 +1522,7 @@ export function projectGatewaySummary(
   };
 }
 
-export type AdminBuilderRuntimeLifecycle =
+export type AdminIsolatedRuntimeLifecycle =
   | "requested"
   | "provisioning"
   | "activating"
@@ -1531,15 +1531,15 @@ export type AdminBuilderRuntimeLifecycle =
   | "retiring"
   | "failed";
 
-const LIVE_BUILDER_RUNTIME_STATUSES = new Set([
+const LIVE_ISOLATED_RUNTIME_STATUSES = new Set([
   "requested",
   "provisioning",
   "activating",
   "active",
   "returning",
 ]);
-const BUILDER_RUNTIME_STALE_AFTER_MS = 10 * 60_000;
-const BUILDER_RUNTIME_STATUS_FIELDS: Record<AdminBuilderRuntimeLifecycle, string> = {
+const ISOLATED_RUNTIME_STALE_AFTER_MS = 10 * 60_000;
+const ISOLATED_RUNTIME_STATUS_FIELDS: Record<AdminIsolatedRuntimeLifecycle, string> = {
   requested: "requestedAt",
   provisioning: "provisionedAt",
   activating: "activatingAt",
@@ -1567,8 +1567,8 @@ function activationLeaseFromUser(
   return openclaw && lease ? { openclaw, lease } : null;
 }
 
-function runtimeStatusAt(lease: GlmDoc, lifecycle: AdminBuilderRuntimeLifecycle): number | null {
-  const field = BUILDER_RUNTIME_STATUS_FIELDS[lifecycle];
+function runtimeStatusAt(lease: GlmDoc, lifecycle: AdminIsolatedRuntimeLifecycle): number | null {
+  const field = ISOLATED_RUNTIME_STATUS_FIELDS[lifecycle];
   return toMillis(lease[field]) ?? toMillis(lease.requestedAt);
 }
 
@@ -1609,7 +1609,7 @@ function projectOperationSteps(
     : [];
 }
 
-interface BuilderRuntimeLeaseContext {
+interface IsolatedRuntimeLeaseContext {
   data: GlmDoc;
   openclaw: GlmDoc;
   lease: GlmDoc;
@@ -1618,7 +1618,7 @@ interface BuilderRuntimeLeaseContext {
   leaseStatus: string;
 }
 
-interface BuilderRuntimeRetirementContext {
+interface IsolatedRuntimeRetirementContext {
   targetGatewayId: string | null;
   target: GlmDoc | undefined;
   operationId: string | null;
@@ -1628,11 +1628,11 @@ interface BuilderRuntimeRetirementContext {
   failed: boolean;
 }
 
-type AdminBuilderRuntimePhase = "activation" | "runtime" | "return" | "retirement";
+type AdminIsolatedRuntimePhase = "activation" | "runtime" | "return" | "retirement";
 
-function builderRuntimeLeaseContext(
+function isolatedRuntimeLeaseContext(
   userDoc: FirestoreDocLike,
-): BuilderRuntimeLeaseContext | null {
+): IsolatedRuntimeLeaseContext | null {
   const data = userDoc.data();
   const resolved = activationLeaseFromUser(data);
   if (!resolved) return null;
@@ -1653,12 +1653,12 @@ function builderRuntimeLeaseContext(
   };
 }
 
-function builderRuntimeRetirementContext(
+function isolatedRuntimeRetirementContext(
   uid: string,
   lease: GlmDoc,
   gatewaysById: ReadonlyMap<string, GlmDoc>,
   operationsById: ReadonlyMap<string, GlmDoc>,
-): BuilderRuntimeRetirementContext {
+): IsolatedRuntimeRetirementContext {
   const targetGatewayId = asStringOrNull(lease.targetGatewayId);
   const target = targetGatewayId ? gatewaysById.get(targetGatewayId) : undefined;
   const retirementClaim = isPlainRecord(target?.retirementClaim)
@@ -1684,25 +1684,25 @@ function builderRuntimeRetirementContext(
 
 function builderRuntimeLifecycle(
   leaseStatus: string,
-  retirement: BuilderRuntimeRetirementContext,
-): AdminBuilderRuntimeLifecycle | null {
+  retirement: IsolatedRuntimeRetirementContext,
+): AdminIsolatedRuntimeLifecycle | null {
   const targetRetained = leaseStatus === "parked" && !retirement.started && !retirement.failed &&
     projectDesiredStatus(retirement.target) === "paused";
   const teardownLingers = retirement.target !== undefined && !retirement.complete && !targetRetained;
   const visible =
-    LIVE_BUILDER_RUNTIME_STATUSES.has(leaseStatus) ||
+    LIVE_ISOLATED_RUNTIME_STATUSES.has(leaseStatus) ||
     ((leaseStatus === "parked" || leaseStatus === "failed") && teardownLingers);
   if (!visible) return null;
   if (retirement.failed || leaseStatus === "failed") return "failed";
   if (retirement.started || leaseStatus === "parked") return "retiring";
-  return leaseStatus as AdminBuilderRuntimeLifecycle;
+  return leaseStatus as AdminIsolatedRuntimeLifecycle;
 }
 
 function builderRuntimePhase(
   leaseStatus: string,
-  lifecycle: AdminBuilderRuntimeLifecycle,
+  lifecycle: AdminIsolatedRuntimeLifecycle,
   retirementStarted: boolean,
-): AdminBuilderRuntimePhase {
+): AdminIsolatedRuntimePhase {
   if (leaseStatus === "failed") return "activation";
   if (retirementStarted) return "retirement";
   if (lifecycle === "returning") return "return";
@@ -1711,7 +1711,7 @@ function builderRuntimePhase(
 }
 
 function builderRuntimeOperationId(
-  phase: AdminBuilderRuntimePhase,
+  phase: AdminIsolatedRuntimePhase,
   lease: GlmDoc,
   retirementOperationId: string | null,
 ): string | null {
@@ -1743,7 +1743,7 @@ function builderRuntimeIsStale(
     leaseStatus === "activating";
   return preCutover &&
     wakeDurationMs !== null &&
-    wakeDurationMs > BUILDER_RUNTIME_STALE_AFTER_MS;
+    wakeDurationMs > ISOLATED_RUNTIME_STALE_AFTER_MS;
 }
 
 function builderRuntimeTerminationAvailable(input: {
@@ -1763,7 +1763,7 @@ function isoFromMillis(value: number | null): string | null {
   return value === null ? null : new Date(value).toISOString();
 }
 
-export function projectBuilderRuntime(
+export function projectIsolatedRuntime(
   userDoc: FirestoreDocLike,
   gatewaysById: ReadonlyMap<string, GlmDoc>,
   operationsById: ReadonlyMap<string, GlmDoc>,
@@ -1771,7 +1771,7 @@ export function projectBuilderRuntime(
 ): {
   uid: string;
   builderSlug: string;
-  lifecycle: AdminBuilderRuntimeLifecycle;
+  lifecycle: AdminIsolatedRuntimeLifecycle;
   phase: "activation" | "runtime" | "return" | "retirement";
   leaseId: string;
   generation: number;
@@ -1797,11 +1797,11 @@ export function projectBuilderRuntime(
   targetPodStatus: GatewayPodDiagnosticsStatus | null;
   targetPodCount: number | null;
 } | null {
-  const leaseContext = builderRuntimeLeaseContext(userDoc);
+  const leaseContext = isolatedRuntimeLeaseContext(userDoc);
   if (!leaseContext) return null;
   const { data, openclaw, lease, leaseId, generation, leaseStatus } = leaseContext;
   if (openclaw.managedBy === "operator") return null;
-  const retirement = builderRuntimeRetirementContext(
+  const retirement = isolatedRuntimeRetirementContext(
     userDoc.id,
     lease,
     gatewaysById,
@@ -1882,21 +1882,21 @@ export function projectBuilderRuntime(
 
 export function projectDisposableFleetCapacity(
   gateways: ReadonlyArray<ReturnType<typeof projectGatewaySummary>>,
-  builderRuntimes: ReadonlyArray<NonNullable<ReturnType<typeof projectBuilderRuntime>>> = [],
+  isolatedRuntimes: ReadonlyArray<NonNullable<ReturnType<typeof projectIsolatedRuntime>>> = [],
   parkedBuilders = 0,
 ): {
   disposableInstances: number;
   stagedInstances: 0;
   byTier: Record<string, number>;
   parkedBuilders: number;
-  byLifecycle: Record<AdminBuilderRuntimeLifecycle | "parked", number>;
+  byLifecycle: Record<AdminIsolatedRuntimeLifecycle | "parked", number>;
   failedBuilders: number;
   staleActivations: number;
   oldestActivationAgeMs: number | null;
 } {
   const disposables = gateways.filter((gateway) => gateway.disposableRuntime !== null);
   const byTier: Record<string, number> = {};
-  const byLifecycle: Record<AdminBuilderRuntimeLifecycle | "parked", number> = {
+  const byLifecycle: Record<AdminIsolatedRuntimeLifecycle | "parked", number> = {
     requested: 0,
     provisioning: 0,
     activating: 0,
@@ -1909,10 +1909,10 @@ export function projectDisposableFleetCapacity(
   for (const gateway of disposables) {
     byTier[gateway.sizing.tier] = (byTier[gateway.sizing.tier] ?? 0) + 1;
   }
-  for (const runtime of builderRuntimes) {
+  for (const runtime of isolatedRuntimes) {
     byLifecycle[runtime.lifecycle] += 1;
   }
-  const activationAges = builderRuntimes.flatMap((runtime) =>
+  const activationAges = isolatedRuntimes.flatMap((runtime) =>
     (
       runtime.lifecycle === "requested" ||
       runtime.lifecycle === "provisioning" ||
@@ -1928,7 +1928,7 @@ export function projectDisposableFleetCapacity(
     parkedBuilders,
     byLifecycle,
     failedBuilders: byLifecycle.failed,
-    staleActivations: builderRuntimes.filter((runtime) => runtime.stale).length,
+    staleActivations: isolatedRuntimes.filter((runtime) => runtime.stale).length,
     oldestActivationAgeMs:
       activationAges.length === 0 ? null : Math.max(...activationAges),
   };
@@ -2082,7 +2082,7 @@ function restoreRecoveryOperationInput(input: {
     images: { gateway: `${payload.imageRepository}:${payload.imageTag}`,
       "gateway-edge": `${payload.gatewayEdgeImage!.imageRepository}:${payload.gatewayEdgeImage!.imageTag}` } } };
 }
-const OP_KIND_MIGRATE_CUSTOMER = "migrate-customer";
+const OP_KIND_MIGRATE_USER = "migrate-customer";
 const GATEWAY_IMAGE_REPO_PREFIXES = [...new Set(
   (["prod", "test"] as const).flatMap((environment) =>
     deploymentTargetsForEnvironment(environment).map(
@@ -2098,7 +2098,7 @@ const BUILDS_SERVICE_ALLOWLIST = new Set([
 
 const OP_KINDS = new Set([
   "add-gateway",
-  OP_KIND_MIGRATE_CUSTOMER,
+  OP_KIND_MIGRATE_USER,
   "retire-gateway",
   OP_KIND_RESTART_GATEWAY,
   "rollout",
@@ -2172,7 +2172,7 @@ function recordOrNull(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
-interface DrawerMountedCustomer {
+interface DrawerMountedUser {
   uid: string;
   slug: string;
   username: string;
@@ -2197,7 +2197,7 @@ interface DrawerOperation {
 interface NewOperationInput {
   kind:
     | "add-gateway"
-    | typeof OP_KIND_MIGRATE_CUSTOMER
+    | typeof OP_KIND_MIGRATE_USER
     | "retire-gateway"
     | "restart-gateway"
     | "rollout"
@@ -2504,7 +2504,7 @@ function readUserGatewayId(
   return asStringOrNull(openclaw.gatewayId);
 }
 
-function resolveCustomerSlug(userData: Record<string, unknown>): string | null {
+function resolveUserSlug(userData: Record<string, unknown>): string | null {
   return asStringOrNull(readUserOpenclaw(userData).slug) ?? asStringOrNull(userData.username);
 }
 
@@ -2582,11 +2582,11 @@ function readMountedSlugs(
   );
 }
 
-function buildMountedCustomer(
+function buildMountedUser(
   uid: string,
   data: Record<string, unknown>,
   slug: string,
-): DrawerMountedCustomer {
+): DrawerMountedUser {
   return {
     uid,
     slug,
@@ -2744,7 +2744,7 @@ export function projectHandoffProgress(
 }
 
 function isUnresolvedMigrationFailure(data: Record<string, unknown>): boolean {
-  return data.kind === OP_KIND_MIGRATE_CUSTOMER && (data.status === "failed" || data.status === "rolled-back");
+  return data.kind === OP_KIND_MIGRATE_USER && (data.status === "failed" || data.status === "rolled-back");
 }
 
 async function listUnresolvedOperationDocs(
@@ -3033,7 +3033,7 @@ function respondReleaseWriteConflict(res: Response, error: unknown): boolean {
       error: error.message,
       gatewayId: error.gatewayId,
       operationId: error.operationId,
-      kind: OP_KIND_MIGRATE_CUSTOMER,
+      kind: OP_KIND_MIGRATE_USER,
     });
     return true;
   }
@@ -3207,7 +3207,7 @@ function buildDurableGatewayPatch(args: {
     };
   }
   if (args.current.gatewayClass === "builder" && args.body.sizingTier === "xs") {
-    return { error: { status: 400, body: { error: "Builder sizingTier must be s, m, or l" } } };
+    return { error: { status: 400, body: { error: "User sizingTier must be s, m, or l" } } };
   }
   const configPatch = mutableConfigPatchFromBody(args.body);
   const patch: Record<string, unknown> = { ...configPatch };
@@ -3408,7 +3408,7 @@ async function ensureGatewayCreateIsUnique(
   return { ok: true };
 }
 
-async function accelerateScheduledCustomerErasure(opts: {
+async function accelerateScheduledUserErasure(opts: {
   store: PlatformStateStore;
   uid: string;
 }): Promise<
@@ -3416,7 +3416,7 @@ async function accelerateScheduledCustomerErasure(opts: {
   | { status: 409; body: Record<string, unknown> }
 > {
   return opts.store.transaction({ label: "admin.fleet.accelerateCustomerErasure" }, async (transaction) => {
-    const lifecycle = (await transaction.builders.records.get(opts.uid))?.accountLifecycle ?? null;
+    const lifecycle = (await transaction.users.records.get(opts.uid))?.accountLifecycle ?? null;
     const deletionId = asStringOrNull(lifecycle?.deletionId);
     if (!lifecycle || !deletionId) {
       return {
@@ -3449,7 +3449,7 @@ async function accelerateScheduledCustomerErasure(opts: {
       };
     }
     const now = Date.now();
-    await transaction.builders.records.patch(opts.uid, { accountLifecycle: { ...lifecycle, eraseAfter: now } });
+    await transaction.users.records.patch(opts.uid, { accountLifecycle: { ...lifecycle, eraseAfter: now } });
     await transaction.jobs.deletions.patch(deletionId, { eraseAfter: now, updatedAt: now });
     await transaction.journal.operations.patch(erasureOperationId, { nextAttemptAt: now });
     return {
@@ -3464,7 +3464,7 @@ async function accelerateScheduledCustomerErasure(opts: {
   });
 }
 
-type CustomerDeletionAdmission =
+type UserDeletionAdmission =
   | { kind: "not-found" }
   | { kind: "conflict"; runtimeFenced: boolean; deletionId: string | null; operationId: string | null }
   | {
@@ -3476,28 +3476,28 @@ type CustomerDeletionAdmission =
       slug: string | null;
     };
 
-type CustomerDeletionActionOutcome =
-  | CustomerDeletionAdmission
+type UserDeletionActionOutcome =
+  | UserDeletionAdmission
   | {
       kind: "partial";
       failedStep: "suspend-auth" | "revoke-connector-grants";
-      claimed: Extract<CustomerDeletionAdmission, { kind: "created" }>;
+      claimed: Extract<UserDeletionAdmission, { kind: "created" }>;
       error: Error;
     };
 
-function isCustomerDeletionConflict(operation: OperationRecord): boolean {
+function isUserDeletionConflict(operation: OperationRecord): boolean {
   return (operation.kind === "suspend-customer" || operation.kind === "erase-customer") &&
     (operation.status === "pending" || operation.status === "running");
 }
 
-async function customerDeletionConflict(
+async function userDeletionConflict(
   transaction: PlatformStateTransaction,
-  builder: Stored<BuilderRecord>,
-): Promise<CustomerDeletionAdmission | null> {
-  if (builderRuntimeMutationFenced(builder)) {
+  userRecord: Stored<PlatformUserRecord>,
+): Promise<UserDeletionAdmission | null> {
+  if (isolatedRuntimeMutationFenced(userRecord)) {
     return { kind: "conflict", runtimeFenced: true, deletionId: null, operationId: null };
   }
-  const lifecycle = builder.accountLifecycle;
+  const lifecycle = userRecord.accountLifecycle;
   if (lifecycle?.status === "deletion_scheduled" || lifecycle?.status === "erasing") {
     return {
       kind: "conflict",
@@ -3506,40 +3506,40 @@ async function customerDeletionConflict(
       operationId: null,
     };
   }
-  const inFlight = await inFlightOperationsForUid(transaction, builder.uid);
+  const inFlight = await inFlightOperationsForUid(transaction, userRecord.uid);
   const forwardMigration = inFlight.find((operation) =>
-    operation.kind === OP_KIND_MIGRATE_CUSTOMER && migrationCancellationDeferred({ ...operation }, operation.id));
+    operation.kind === OP_KIND_MIGRATE_USER && migrationCancellationDeferred({ ...operation }, operation.id));
   if (forwardMigration) {
     return { kind: "conflict", runtimeFenced: true, deletionId: null, operationId: forwardMigration.id };
   }
-  const conflict = inFlight.find(isCustomerDeletionConflict);
+  const conflict = inFlight.find(isUserDeletionConflict);
   return conflict
     ? { kind: "conflict", runtimeFenced: false, deletionId: null, operationId: conflict.id }
     : null;
 }
 
-async function claimCustomerDeletion(opts: {
+async function claimUserDeletion(opts: {
   store: PlatformStateStore;
-  accounts: BuilderAccountReader;
+  accounts: UserAccountReader;
   uid: string;
   requestedBy: string;
   eraseNow: boolean;
-}): Promise<CustomerDeletionAdmission> {
+}): Promise<UserDeletionAdmission> {
   const account = await opts.accounts.get(opts.uid);
   const deletionId = randomUUID();
   const suspensionOperationId = randomUUID();
   const erasureOperationId = randomUUID();
-  return opts.store.transaction({ label: "admin.fleet.claimCustomerDeletion" }, async (transaction): Promise<CustomerDeletionAdmission> => {
-    const builder = await transaction.builders.records.get(opts.uid);
-    if (!builder) return { kind: "not-found" };
-    const conflict = await customerDeletionConflict(transaction, builder);
+  return opts.store.transaction({ label: "admin.fleet.claimCustomerDeletion" }, async (transaction): Promise<UserDeletionAdmission> => {
+    const userRecord = await transaction.users.records.get(opts.uid);
+    if (!userRecord) return { kind: "not-found" };
+    const conflict = await userDeletionConflict(transaction, userRecord);
     if (conflict) return conflict;
     const now = Date.now();
-    const schedule = buildCustomerDeletionSchedule({ now, eraseNow: opts.eraseNow });
-    const currentGatewayId = builder.gateway?.gatewayId ?? null;
-    const plan = buildCustomerDeletionPlan({
+    const schedule = buildUserDeletionSchedule({ now, eraseNow: opts.eraseNow });
+    const currentGatewayId = userRecord.gateway?.gatewayId ?? null;
+    const plan = buildUserDeletionPlan({
       uid: opts.uid,
-      slug: builder.slug,
+      slug: userRecord.slug,
       currentGatewayId,
       requestedBy: opts.requestedBy,
       requestedAt: schedule.requestedAt,
@@ -3552,9 +3552,9 @@ async function claimCustomerDeletion(opts: {
     });
     if (currentGatewayId) {
       await transaction.gateways.assignments.delete(currentGatewayId, opts.uid);
-      await transaction.builders.records.setGatewayMirror(opts.uid, { clear: true });
+      await transaction.users.records.setGatewayMirror(opts.uid, { clear: true });
     }
-    await transaction.builders.records.patch(opts.uid, { accountLifecycle: plan.lifecycle });
+    await transaction.users.records.patch(opts.uid, { accountLifecycle: plan.lifecycle });
     await transaction.jobs.deletions.create(plan.job);
     await transaction.journal.operations.create(plan.suspensionOperation);
     await transaction.journal.operations.create(plan.erasureOperation);
@@ -3564,20 +3564,20 @@ async function claimCustomerDeletion(opts: {
       suspensionOperationId,
       erasureOperationId,
       eraseAfter: schedule.eraseAfter,
-      slug: builder.slug,
+      slug: userRecord.slug,
     };
   });
 }
 
 function classifyErasureAcceleration(
-  result: Awaited<ReturnType<typeof accelerateScheduledCustomerErasure>>,
+  result: Awaited<ReturnType<typeof accelerateScheduledUserErasure>>,
 ): NormalFleetMutationResult {
   if (result.status < 400) return { outcome: "completed" };
   return {
     outcome: "failed",
     error: typeof result.body.error === "string"
       ? result.body.error
-      : `customer erasure acceleration returned ${result.status}`,
+      : `user erasure acceleration returned ${result.status}`,
   };
 }
 
@@ -3585,22 +3585,22 @@ function eraseNowValueIsInvalid(value: unknown): boolean {
   return value !== undefined && typeof value !== "boolean";
 }
 
-function customerDeletionIsActive(
+function userDeletionIsActive(
   lifecycle: AccountLifecycle | undefined,
 ): lifecycle is AccountLifecycle {
   return lifecycle?.status === "deletion_scheduled" ||
     lifecycle?.status === "erasing";
 }
 
-function customerDeletionCanAccelerate(
+function userDeletionCanAccelerate(
   lifecycleStatus: unknown,
   eraseNow: unknown,
 ): boolean {
   return lifecycleStatus === "deletion_scheduled" && eraseNow === true;
 }
 
-function classifyCustomerDeletion(
-  result: CustomerDeletionActionOutcome,
+function classifyUserDeletion(
+  result: UserDeletionActionOutcome,
   uid: string,
 ): NormalFleetMutationResult {
   if (result.kind === "not-found") {
@@ -3611,8 +3611,8 @@ function classifyCustomerDeletion(
   }
   if (result.kind !== "partial") return { outcome: "completed" };
   const summary = result.failedStep === "suspend-auth"
-    ? "customer deletion was scheduled but identity suspension failed"
-    : "customer deletion was scheduled but connector grant revocation failed";
+    ? "user deletion was scheduled but identity suspension failed"
+    : "user deletion was scheduled but connector grant revocation failed";
   return {
     outcome: "partial",
     partialOutcome: {
@@ -3628,8 +3628,8 @@ function classifyCustomerDeletion(
   };
 }
 
-function respondToCustomerDeletionAdmission(
-  admission: CustomerDeletionActionOutcome,
+function respondToUserDeletionAdmission(
+  admission: UserDeletionActionOutcome,
   res: Response,
   logger: FleetLogger,
   uid: string,
@@ -3660,15 +3660,15 @@ function respondToCustomerDeletionAdmission(
   });
 }
 
-async function claimAndCleanupCustomerDeletion(opts: {
+async function claimAndCleanupUserDeletion(opts: {
   store: PlatformStateStore;
-  accounts: BuilderAccountReader;
+  accounts: UserAccountReader;
   deps: Pick<FleetRouterDeps, "suspendAuthUser" | "revokeConnectorGrantsForUser">;
   uid: string;
   requestedBy: string;
   eraseNow: boolean;
-}): Promise<CustomerDeletionActionOutcome> {
-  const claimed = await claimCustomerDeletion({
+}): Promise<UserDeletionActionOutcome> {
+  const claimed = await claimUserDeletion({
     store: opts.store,
     accounts: opts.accounts,
     uid: opts.uid,
@@ -3699,9 +3699,9 @@ async function claimAndCleanupCustomerDeletion(opts: {
   return claimed;
 }
 
-const CUSTOMER_SELF_DELETION_REASON = "Customer account deletion request";
+const USER_SELF_DELETION_REASON = "User account deletion request";
 
-export type CustomerSelfDeletionOutcome =
+export type UserSelfDeletionOutcome =
   | { kind: "not-found" }
   | { kind: "conflict" }
   | { kind: "workspace-busy" }
@@ -3712,27 +3712,27 @@ export type CustomerSelfDeletionOutcome =
       incompleteStep: { name: "suspend-auth" | "revoke-connector-grants"; error: Error } | null;
     };
 
-export async function scheduleCustomerSelfDeletion(opts: {
+export async function scheduleUserSelfDeletion(opts: {
   store: PlatformStateStore;
-  accounts: BuilderAccountReader;
+  accounts: UserAccountReader;
   deps: Pick<FleetRouterDeps, "suspendAuthUser" | "revokeConnectorGrantsForUser">;
   uid: string;
-}): Promise<CustomerSelfDeletionOutcome> {
-  const builder = await opts.store.builders.records.get(opts.uid);
-  if (!builder) return { kind: "not-found" };
-  const lifecycle = builder.accountLifecycle ?? undefined;
+}): Promise<UserSelfDeletionOutcome> {
+  const userRecord = await opts.store.users.records.get(opts.uid);
+  if (!userRecord) return { kind: "not-found" };
+  const lifecycle = userRecord.accountLifecycle ?? undefined;
   const lifecycleStatus = lifecycle?.status ?? null;
-  if (customerDeletionIsActive(lifecycle)) return { kind: "conflict" };
+  if (userDeletionIsActive(lifecycle)) return { kind: "conflict" };
   const outcome = await runNormalFleetMutation(opts.store, {
     actor: opts.uid,
     forced: false,
-    what: "schedule customer deletion",
-    why: CUSTOMER_SELF_DELETION_REASON,
+    what: "schedule user deletion",
+    why: USER_SELF_DELETION_REASON,
     target: { uid: opts.uid },
     preActionStatus: { lifecycleStatus },
     mutation: { kind: "schedule-customer-deletion", uid: opts.uid, eraseNow: false },
-    classifyResult: (result) => classifyCustomerDeletion(result, opts.uid),
-    action: async () => claimAndCleanupCustomerDeletion({
+    classifyResult: (result) => classifyUserDeletion(result, opts.uid),
+    action: async () => claimAndCleanupUserDeletion({
       store: opts.store,
       accounts: opts.accounts,
       deps: opts.deps,
@@ -3849,8 +3849,8 @@ function inFlightOperationsForUid(
   return transaction.journal.operations.listForUid(uid, { statuses: [...IN_FLIGHT_OPERATION_STATUSES] });
 }
 
-function isInFlightCustomerMigration(operation: OperationRecord): boolean {
-  return operation.kind === OP_KIND_MIGRATE_CUSTOMER &&
+function isInFlightUserMigration(operation: OperationRecord): boolean {
+  return operation.kind === OP_KIND_MIGRATE_USER &&
     (operation.status === "pending" || operation.status === "running");
 }
 
@@ -4013,7 +4013,7 @@ function activationLeaseForTermination(
   return resolved;
 }
 
-function sharedAssignmentServesBuilder(input: {
+function sharedAssignmentServesUser(input: {
   assignment: GatewayAssignment | null;
   uid: string;
   gatewayId: string;
@@ -4048,7 +4048,7 @@ function terminationStatusAt(lease: GlmDoc): number | null {
 function runtimeTerminationCanStart(lease: GlmDoc, now: number): boolean {
   const statusAt = terminationStatusAt(lease);
   const stale = statusAt !== null &&
-    now - statusAt > BUILDER_RUNTIME_STALE_AFTER_MS;
+    now - statusAt > ISOLATED_RUNTIME_STALE_AFTER_MS;
   return lease.status === "failed" || stale;
 }
 
@@ -4063,10 +4063,10 @@ async function requestActivationLeaseTermination(
     requestedBy: string;
   },
 ): Promise<ActivationLeaseTerminationOutcome> {
-  const builder = await transaction.builders.records.get(input.uid);
-  if (!builder) return { kind: "not-found" };
+  const userRecord = await transaction.users.records.get(input.uid);
+  if (!userRecord) return { kind: "not-found" };
   const resolved = activationLeaseForTermination(
-    builderUserData(builder, null),
+    userDocData(userRecord, null),
     input.leaseId,
     input.generation,
   );
@@ -4083,11 +4083,11 @@ async function requestActivationLeaseTermination(
   ) {
     return {
       kind: "conflict",
-      reason: "Builder is not authoritative on the shared gateway",
+      reason: "User is not authoritative on the shared gateway",
     };
   }
   const assignment = await transaction.gateways.assignments.get(sharedGatewayId, input.uid);
-  if (!sharedAssignmentServesBuilder({
+  if (!sharedAssignmentServesUser({
     assignment,
     uid: input.uid,
     gatewayId: sharedGatewayId,
@@ -4121,7 +4121,7 @@ async function requestActivationLeaseTermination(
       reason: "runtime is neither failed nor stale",
     };
   }
-  await transaction.builders.records.patchActivationLease(input.uid, {
+  await transaction.users.records.patchActivationLease(input.uid, {
     status: "returning",
     returnRequestedAt: input.requestedAt,
     returnRequestedBy: input.requestedBy,
@@ -4151,7 +4151,7 @@ function isEndpointPreflightError(error: string, operationInput: GlmDoc): boolea
   return preflightPrefix || schedulerIdentityNotReady || postgresRuntimeMismatch;
 }
 
-function rearmableBuilderReturnOperation(input: {
+function rearmableUserReturnOperation(input: {
   operation: GlmDoc | undefined;
   uid: string;
   targetGatewayId: string;
@@ -4169,7 +4169,7 @@ function rearmableBuilderReturnOperation(input: {
       isPlainRecord(steps[0]) && steps[0].name === "keys-sync-state" &&
       steps[0].status === "failed"));
   return [
-    operation.kind === OP_KIND_MIGRATE_CUSTOMER,
+    operation.kind === OP_KIND_MIGRATE_USER,
     terminalStatus,
     operation.rolledBack === true || failedBeforeSourceQuiesce,
     operation.origin === "automatic",
@@ -4184,16 +4184,16 @@ function rearmableBuilderReturnOperation(input: {
   ].every(Boolean);
 }
 
-type BuilderReturnRetryLease = {
+type UserReturnRetryLease = {
   lease: GlmDoc;
   targetGatewayId: string;
   returnOperationId: string;
 };
 
-function retryableBuilderReturnLease(
+function retryableUserReturnLease(
   data: GlmDoc,
   operationId: string,
-): BuilderReturnRetryLease | null {
+): UserReturnRetryLease | null {
   const resolved = activationLeaseFromUser(data);
   const lease = resolved?.lease;
   const targetGatewayId = asStringOrNull(lease?.targetGatewayId);
@@ -4213,16 +4213,16 @@ function retryableBuilderReturnLease(
   return { lease, targetGatewayId, returnOperationId };
 }
 
-type BuilderReturnRetryState = {
+type UserReturnRetryState = {
   assignment: GatewayAssignment | null;
   target: GatewayRoot | null;
   operation: GlmDoc | undefined;
 };
 
-async function readBuilderReturnRetryState(
+async function readUserReturnRetryState(
   transaction: PlatformStateTransaction,
   input: { uid: string; targetGatewayId: string; returnOperationId: string },
-): Promise<BuilderReturnRetryState> {
+): Promise<UserReturnRetryState> {
   const [assignment, target, operation] = await Promise.all([
     transaction.gateways.assignments.get(input.targetGatewayId, input.uid),
     transaction.gateways.roots.get(input.targetGatewayId),
@@ -4235,14 +4235,14 @@ async function readBuilderReturnRetryState(
   };
 }
 
-function matchesBuilderReturnRetryState(input: {
-  state: BuilderReturnRetryState;
+function matchesUserReturnRetryState(input: {
+  state: UserReturnRetryState;
   uid: string;
   targetGatewayId: string;
   lease: GlmDoc;
 }): boolean {
   return [
-    sharedAssignmentServesBuilder({
+    sharedAssignmentServesUser({
       assignment: input.state.assignment,
       uid: input.uid,
       gatewayId: input.targetGatewayId,
@@ -4254,7 +4254,7 @@ function matchesBuilderReturnRetryState(input: {
       leaseId: asStringOrNull(input.lease.leaseId) ?? "",
       generation: typeof input.lease.generation === "number" ? input.lease.generation : 0,
     }),
-    rearmableBuilderReturnOperation({
+    rearmableUserReturnOperation({
       operation: input.state.operation,
       uid: input.uid,
       targetGatewayId: input.targetGatewayId,
@@ -4271,24 +4271,24 @@ async function retryActivationLeaseReturn(
     requestedBy: string;
   },
 ): Promise<ReasonedActivationLeaseMutationOutcome> {
-  const builder = await transaction.builders.records.get(input.uid);
-  if (!builder) return { kind: "not-found" };
-  const retryLease = retryableBuilderReturnLease(builderUserData(builder, null), input.operationId);
+  const userRecord = await transaction.users.records.get(input.uid);
+  if (!userRecord) return { kind: "not-found" };
+  const retryLease = retryableUserReturnLease(userDocData(userRecord, null), input.operationId);
   if (!retryLease) {
-    return { kind: "conflict", reason: "Builder return is no longer retryable" };
+    return { kind: "conflict", reason: "User return is no longer retryable" };
   }
-  const state = await readBuilderReturnRetryState(transaction, {
+  const state = await readUserReturnRetryState(transaction, {
     uid: input.uid,
     targetGatewayId: retryLease.targetGatewayId,
     returnOperationId: retryLease.returnOperationId,
   });
-  if (!matchesBuilderReturnRetryState({
+  if (!matchesUserReturnRetryState({
     state,
     uid: input.uid,
     targetGatewayId: retryLease.targetGatewayId,
     lease: retryLease.lease,
   })) {
-    return { kind: "conflict", reason: "Builder return no longer matches its original lease" };
+    return { kind: "conflict", reason: "User return no longer matches its original lease" };
   }
   await transaction.journal.operations.patch(retryLease.returnOperationId, {
     retryRequestedAt: input.requestedAt,
@@ -4297,22 +4297,22 @@ async function retryActivationLeaseReturn(
   return { kind: "retried" };
 }
 
-async function placementBuilderRejection(
+async function placementUserRejection(
   transaction: PlatformStateTransaction,
-  builder: Stored<BuilderRecord> | null,
+  userRecord: Stored<PlatformUserRecord> | null,
   uid: string,
   gatewayId: string,
 ): Promise<CommitPlacementResult | null> {
-  if (builder !== null && builderRuntimeMutationFenced(builder)) {
+  if (userRecord !== null && isolatedRuntimeMutationFenced(userRecord)) {
     return {
       kind: "rejected",
-      reason: builder.fences.restoreFence !== undefined ? "restore-in-progress" : "source-transfer-in-progress",
+      reason: userRecord.fences.restoreFence !== undefined ? "restore-in-progress" : "source-transfer-in-progress",
     };
   }
-  if (!accountAllowsInteractiveAccess({ accountLifecycle: builder?.accountLifecycle })) {
+  if (!accountAllowsInteractiveAccess({ accountLifecycle: userRecord?.accountLifecycle })) {
     return { kind: "rejected", reason: "account-not-interactive" };
   }
-  const currentGatewayId = builder?.gateway?.gatewayId;
+  const currentGatewayId = userRecord?.gateway?.gatewayId;
   if (
     currentGatewayId !== undefined && currentGatewayId !== gatewayId &&
     await transaction.gateways.assignments.get(currentGatewayId, uid) !== null
@@ -4329,17 +4329,17 @@ async function commitAdminPlacementInStore(
     slug: string;
     now: number;
     assignmentWrite: "upsert" | "create-if-missing";
-    mirror: BuilderGatewayMirrorInput;
+    mirror: IsolatedGatewayMirrorInput;
   },
 ): Promise<CommitPlacementResult> {
   const gatewayId = input.mirror.gatewayId;
   return store.transaction({ label: "admin.fleet.assignCustomer" }, async (transaction): Promise<CommitPlacementResult> => {
-    const builder = await transaction.builders.records.get(input.uid);
-    const rejection = await placementBuilderRejection(transaction, builder, input.uid, gatewayId);
+    const userRecord = await transaction.users.records.get(input.uid);
+    const rejection = await placementUserRejection(transaction, userRecord, input.uid, gatewayId);
     if (rejection) return rejection;
     const stored = await transaction.gateways.roots.get(gatewayId);
     if (stored === null) {
-      await transaction.builders.records.setGatewayMirror(input.uid, input.mirror);
+      await transaction.users.records.setGatewayMirror(input.uid, input.mirror);
       return { kind: "mirror-only" };
     }
     const root = durableRootOf(stored, gatewayId);
@@ -4350,7 +4350,7 @@ async function commitAdminPlacementInStore(
     const existing = input.assignmentWrite === "create-if-missing"
       ? await transaction.gateways.assignments.get(gatewayId, input.uid)
       : null;
-    await transaction.builders.records.setGatewayMirror(input.uid, input.mirror);
+    await transaction.users.records.setGatewayMirror(input.uid, input.mirror);
     if (existing !== null) return { kind: "assignment-preserved" };
     await transaction.gateways.assignments.put({
       uid: input.uid,
@@ -4367,8 +4367,8 @@ async function commitAdminPlacementInStore(
   });
 }
 
-function builderMountOf(builder: BuilderRecord | null): { currentGatewayId: string | null; builderSlug: string | null } {
-  return { currentGatewayId: builder?.gateway?.gatewayId ?? null, builderSlug: builder?.slug ?? null };
+function userMountOf(userRecord: PlatformUserRecord | null): { currentGatewayId: string | null; builderSlug: string | null } {
+  return { currentGatewayId: userRecord?.gateway?.gatewayId ?? null, builderSlug: userRecord?.slug ?? null };
 }
 
 async function readPlatformRuntimeConfig(store: PlatformStateStore): Promise<PlatformRuntimeConfig> {
@@ -4376,7 +4376,7 @@ async function readPlatformRuntimeConfig(store: PlatformStateStore): Promise<Pla
   return { disposableGatewayIdleMs: config?.disposableGatewayIdleMs ?? DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS };
 }
 
-async function setOperatorParkedBuilderGatewayStatus(transaction: PlatformStateTransaction, gatewayId: string, input: { actor: string | undefined; uid: string; desiredStatus: "paused" | "running" }): Promise<{ dedicated: boolean; error?: string }> {
+async function setOperatorParkedIsolatedGatewayStatus(transaction: PlatformStateTransaction, gatewayId: string, input: { actor: string | undefined; uid: string; desiredStatus: "paused" | "running" }): Promise<{ dedicated: boolean; error?: string }> {
   const gateway = await transaction.gateways.roots.get(gatewayId);
   if (gateway?.gatewayClass !== "builder") return { dedicated: false };
   if (gateway.ownerUid !== input.uid || gateway.desiredStatus === "retired" || gateway.runtimeRestartFence !== undefined || gateway.retirementClaim != null) {
@@ -4389,14 +4389,14 @@ async function setOperatorParkedBuilderGatewayStatus(transaction: PlatformStateT
 async function updateOperatorParkingGateway(transaction: PlatformStateTransaction, input: { gatewayId: string | null; uid: string; actor: string | undefined; park: boolean }): Promise<{ dedicated: boolean; error?: string }> {
   if (!input.gatewayId) return { dedicated: false };
   const assignment = await transaction.gateways.assignments.get(input.gatewayId, input.uid);
-  if (assignment && assignment.state !== "serving") return { dedicated: false, error: `customer roster state ${assignment.state} must settle before changing parking` };
-  const gateway = await setOperatorParkedBuilderGatewayStatus(transaction, input.gatewayId, { ...input, desiredStatus: input.park ? "paused" : "running" });
+  if (assignment && assignment.state !== "serving") return { dedicated: false, error: `user roster state ${assignment.state} must settle before changing parking` };
+  const gateway = await setOperatorParkedIsolatedGatewayStatus(transaction, input.gatewayId, { ...input, desiredStatus: input.park ? "paused" : "running" });
   if (gateway.error) return gateway;
   if (input.park && !gateway.dedicated) await transaction.gateways.assignments.delete(input.gatewayId, input.uid);
   return gateway;
 }
 
-function parkingHasUnsettledAllocation(lease: BuilderActivationLease | null, gatewayId: string | null): boolean {
+function parkingHasUnsettledAllocation(lease: UserActivationLease | null, gatewayId: string | null): boolean {
   if (lease?.status === "requested") return true;
   return typeof lease?.targetGatewayId === "string" && lease.targetGatewayId !== gatewayId && lease.status !== "parked";
 }
@@ -4408,7 +4408,7 @@ export function addAdminFleetRoutes(
 ): Router {
   const { db, logger, store } = deps;
   const readBuilderTier = firestoreBuilderTierReader(db);
-  const accounts = firestoreBuilderAccountReader(db);
+  const accounts = firestoreUserAccountReader(db);
 
   async function runAdminFleetMutation<T>(input: {
     req: Request;
@@ -4481,7 +4481,7 @@ export function addAdminFleetRoutes(
     }
   });
 
-  async function handleActiveCustomerDeletion(input: {
+  async function handleActiveUserDeletion(input: {
     req: Request;
     res: Response;
     uid: string;
@@ -4489,9 +4489,9 @@ export function addAdminFleetRoutes(
     eraseNow: unknown;
   }): Promise<boolean> {
     const lifecycle = input.lifecycle;
-    if (!customerDeletionIsActive(lifecycle)) return false;
+    if (!userDeletionIsActive(lifecycle)) return false;
     const lifecycleStatus = lifecycle.status;
-    if (!customerDeletionCanAccelerate(lifecycleStatus, input.eraseNow)) {
+    if (!userDeletionCanAccelerate(lifecycleStatus, input.eraseNow)) {
       input.res.status(409).json({
         error: "Cleanup already in progress",
         deletionId: lifecycle.deletionId ?? null,
@@ -4500,13 +4500,13 @@ export function addAdminFleetRoutes(
     }
     const acceleration = await runAdminFleetMutation({
       req: input.req,
-      what: "accelerate scheduled customer erasure",
+      what: "accelerate scheduled user erasure",
       why: ADMIN_FLEET_REQUEST_REASON,
       target: { uid: input.uid, deletionId: lifecycle.deletionId ?? null },
       preActionStatus: { lifecycleStatus },
       mutation: { kind: "accelerate-customer-erasure", uid: input.uid },
       classifyResult: classifyErasureAcceleration,
-      action: async () => accelerateScheduledCustomerErasure({ store, uid: input.uid }),
+      action: async () => accelerateScheduledUserErasure({ store, uid: input.uid }),
     });
     input.res.status(acceleration.status).json(acceleration.body);
     return true;
@@ -4522,14 +4522,14 @@ router.post(
           res.status(400).json({ error: "eraseNow must be a boolean" });
           return;
         }
-        const builder = await store.builders.records.get(uid);
-        if (!builder) {
+        const userRecord = await store.users.records.get(uid);
+        if (!userRecord) {
           res.status(404).json({ error: "User not found", uid });
           return;
         }
-        const existingLifecycle = builder.accountLifecycle ?? undefined;
+        const existingLifecycle = userRecord.accountLifecycle ?? undefined;
         const existingStatus = existingLifecycle?.status;
-        const activeDeletionHandled = await handleActiveCustomerDeletion({
+        const activeDeletionHandled = await handleActiveUserDeletion({
           req,
           res,
           uid,
@@ -4540,13 +4540,13 @@ router.post(
         const actor = req as ActorRequest;
         const admission = await runAdminFleetMutation({
           req,
-          what: "schedule customer deletion",
+          what: "schedule user deletion",
           why: ADMIN_FLEET_REQUEST_REASON,
           target: { uid },
           preActionStatus: { lifecycleStatus: existingStatus ?? null },
           mutation: { kind: "schedule-customer-deletion", uid, eraseNow: body.eraseNow === true },
-          classifyResult: (result) => classifyCustomerDeletion(result, uid),
-          action: async () => claimAndCleanupCustomerDeletion({
+          classifyResult: (result) => classifyUserDeletion(result, uid),
+          action: async () => claimAndCleanupUserDeletion({
             store,
             accounts,
             deps,
@@ -4555,7 +4555,7 @@ router.post(
             eraseNow: body.eraseNow === true,
           }),
         });
-        respondToCustomerDeletionAdmission(admission, res, logger, uid);
+        respondToUserDeletionAdmission(admission, res, logger, uid);
       } catch (e) {
         next(e);
       }
@@ -4574,7 +4574,7 @@ router.get(
             readSharedGatewayPoolConfigInStore,
           ),
         ]);
-        const userDocs = builderUserDocs(snapshot.builders, new Map());
+        const userDocs = userDocuments(snapshot.users, new Map());
         const handoffProgressByGateway = projectHandoffProgress(snapshot.assignments);
         const glmByGatewayId = indexAdminGatewayRuntimeDocs(fleetGatewayDocs(snapshot));
         const projectionOperations = await readFleetProjectionOperations(
@@ -4583,8 +4583,8 @@ router.get(
         );
         const operationsById = indexGlmDocs(projectionOperations);
         const now = Date.now();
-        const builderRuntimes = userDocs.flatMap((doc) => {
-          const runtime = projectBuilderRuntime(
+        const isolatedRuntimes = userDocs.flatMap((doc) => {
+          const runtime = projectIsolatedRuntime(
             doc,
             glmByGatewayId,
             operationsById,
@@ -4593,7 +4593,7 @@ router.get(
           return runtime ? [runtime] : [];
         });
         const visibleRetiredGatewayIds = new Set(
-          builderRuntimes.flatMap((runtime) =>
+          isolatedRuntimes.flatMap((runtime) =>
             runtime.targetGatewayId &&
             (runtime.lifecycle === "failed" ||
               (runtime.cleanupOperationId &&
@@ -4644,7 +4644,7 @@ router.get(
         const gatewayById = new Map(
           gateways.map((gateway) => [gateway.gatewayId, gateway]),
         );
-        const builderRuntimeViews = builderRuntimes.map((runtime) => {
+        const builderRuntimeViews = isolatedRuntimes.map((runtime) => {
           const target = runtime.targetGatewayId
             ? gatewayById.get(runtime.targetGatewayId)
             : undefined;
@@ -4667,7 +4667,7 @@ router.get(
           builderRuntimes: builderRuntimeViews,
           disposableCapacity: {
             ...projectDisposableFleetCapacity(gateways, builderRuntimeViews, parkedBuilders),
-            operatorParkedBuilders: snapshot.builders.filter((builder) => builder.openclaw.managedBy === "operator").length,
+            operatorParkedBuilders: snapshot.users.filter((userRecord) => userRecord.openclaw.managedBy === "operator").length,
           },
           stats: rollupFleetStats(
             gateways.filter((gateway) => gateway.desiredStatus !== "retired"),
@@ -4797,13 +4797,13 @@ router.get(
         const adopted: Array<{ uid: string; operationId: string }> = [];
         const rejected: Array<{ uid: string; reason: string; currentGatewayId?: string | null }> = [];
         for (const uid of [...new Set(uids)]) {
-          const builder = await store.builders.records.get(uid);
-          if (!builder) {
+          const userRecord = await store.users.records.get(uid);
+          if (!userRecord) {
             rejected.push({ uid, reason: "user-not-found" });
             continue;
           }
-          const currentGatewayId = builder.gateway?.gatewayId ?? null;
-          const builderSlug = builder.slug;
+          const currentGatewayId = userRecord.gateway?.gatewayId ?? null;
+          const builderSlug = userRecord.slug;
           if (currentGatewayId === toGatewayId) {
             rejected.push({ uid, reason: "already-on-target", currentGatewayId });
             continue;
@@ -4813,7 +4813,7 @@ router.get(
             continue;
           }
           const existing = pendingOps.find((operation) =>
-            operation.kind === OP_KIND_MIGRATE_CUSTOMER &&
+            operation.kind === OP_KIND_MIGRATE_USER &&
             (operation.inputUid === uid || operation.input.uid === uid) &&
             operation.input.toGatewayId === toGatewayId);
           if (existing) {
@@ -4829,12 +4829,12 @@ router.get(
           };
           const operationId = await runAdminFleetMutation({
             req,
-            what: "migrate builder",
+            what: "migrate user",
             why: "Admin bulk migration request",
             target: { uid, gatewayId: toGatewayId },
             preActionStatus: { gatewayId: currentGatewayId ?? null },
             mutation: {
-              kind: OP_KIND_MIGRATE_CUSTOMER,
+              kind: OP_KIND_MIGRATE_USER,
               uid,
               ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
               toGatewayId,
@@ -4842,7 +4842,7 @@ router.get(
             },
             idempotencyScope: `bulk-migration:${uid}`,
             action: async () => createOperation(store, {
-              kind: OP_KIND_MIGRATE_CUSTOMER,
+              kind: OP_KIND_MIGRATE_USER,
               createdBy,
               input: operationInput,
             }),
@@ -4889,10 +4889,10 @@ router.get(
     "/user-distribution",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
-        const [roots, runtimes, builders, accountsByUid] = await Promise.all([
+        const [roots, runtimes, userRecords, accountsByUid] = await Promise.all([
           store.gateways.roots.list(),
           store.fleetRegistry.list(),
-          store.builders.records.listAll(),
+          store.users.records.listAll(),
           accounts.list(),
         ]);
 
@@ -4908,7 +4908,7 @@ router.get(
         let unassigned = 0;
         let mounted = 0;
 
-        for (const doc of builderUserDocs(builders, accountsByUid)) {
+        for (const doc of userDocuments(userRecords, accountsByUid)) {
           const data = doc.data();
           if (!userSlug(data)) continue;
           totalBuilders++;
@@ -4968,9 +4968,9 @@ router.get(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const id = req.params.id as string;
-        const [runtime, builders, accountsByUid, gatewayOperations] = await Promise.all([
+        const [runtime, userRecords, accountsByUid, gatewayOperations] = await Promise.all([
           readDurableGatewayRuntime(store, id),
-          store.builders.records.listAll(),
+          store.users.records.listAll(),
           accounts.list(),
           store.journal.operations.listByGateway(id, 50),
         ]);
@@ -4982,12 +4982,12 @@ router.get(
         }
         const mountedSlugs = readMountedSlugs(runtime.heartbeat ?? {});
 
-        const mountedCustomers: DrawerMountedCustomer[] = [];
-        for (const doc of builderUserDocs(builders, accountsByUid)) {
+        const mountedCustomers: DrawerMountedUser[] = [];
+        for (const doc of userDocuments(userRecords, accountsByUid)) {
           const data = doc.data();
           const slug = userSlug(data);
           if (!slug || !mountedSlugs.has(slug)) continue;
-          mountedCustomers.push(buildMountedCustomer(doc.id, data, slug));
+          mountedCustomers.push(buildMountedUser(doc.id, data, slug));
         }
         mountedCustomers.sort((a, b) => a.slug.localeCompare(b.slug));
 
@@ -5023,8 +5023,8 @@ router.post(
           return;
         }
         const targetGatewayId = body.gatewayId;
-        const builder = await store.builders.records.get(uid);
-        if (!builder) {
+        const userRecord = await store.users.records.get(uid);
+        if (!userRecord) {
           res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
           return;
         }
@@ -5038,7 +5038,7 @@ router.post(
         }
         if (target.root.gatewayClass !== "shared") {
           res.status(400).json({
-            error: "Builder gateway placement is managed by the disposable lifecycle",
+            error: "Isolated gateway placement is managed by the disposable lifecycle",
             gatewayId: targetGatewayId,
           });
           return;
@@ -5060,7 +5060,7 @@ router.post(
           });
           return;
         }
-        const currentGid = builder.gateway?.gatewayId;
+        const currentGid = userRecord.gateway?.gatewayId;
         const controlState = resolveUserGatewayControlState(
           {
             gatewayClass: target.root.gatewayClass,
@@ -5072,17 +5072,17 @@ router.post(
           uid,
         );
         const gatewayProfile = controlState.gatewayProfile;
-        const slug = builder.slug;
+        const slug = userRecord.slug;
         if (!slug) {
           res.status(409).json({
-            error: "customer has no canonical slug",
+            error: "user has no canonical slug",
             uid,
           });
           return;
         }
         const placement = await runAdminFleetMutation({
           req,
-          what: "assign builder to gateway",
+          what: "assign user to gateway",
           why: ADMIN_FLEET_REQUEST_REASON,
           target: { uid, gatewayId: targetGatewayId },
           preActionStatus: { gatewayId: currentGid ?? null },
@@ -5147,16 +5147,16 @@ router.post(
         const generation = body.generation as number;
         const outcome = await runAdminFleetMutation({
           req,
-          what: "cancel builder activation lease",
+          what: "cancel user activation lease",
           why: ADMIN_FLEET_REQUEST_REASON,
           target: { uid, leaseId, generation },
           preActionStatus: {},
           mutation: { kind: "cancel-activation-lease", uid, leaseId, generation },
           classifyResult: classifyReasonedActivationLeaseMutation,
           action: async () => store.transaction({ label: "admin.fleet.cancelActivationLease" }, async (transaction) => {
-            const builder = await transaction.builders.records.get(uid);
-            if (!builder) return { kind: "not-found" as const };
-            const lease = builder.activationLease;
+            const userRecord = await transaction.users.records.get(uid);
+            if (!userRecord) return { kind: "not-found" as const };
+            const lease = userRecord.activationLease;
             if (
               !lease ||
               lease.leaseId !== leaseId ||
@@ -5177,7 +5177,7 @@ router.post(
                 reason: "activation request has already allocated a disposable runtime",
               };
             }
-            await transaction.builders.records.setActivationLease(uid, { clear: true }, { leaseId, generation });
+            await transaction.users.records.setActivationLease(uid, { clear: true }, { leaseId, generation });
             return { kind: "cancelled" as const };
           }),
         });
@@ -5226,7 +5226,7 @@ router.post(
         }
         const outcome = await runAdminFleetMutation({
           req,
-          what: "terminate builder activation lease",
+          what: "terminate user activation lease",
           why: ADMIN_FLEET_REQUEST_REASON,
           target: { uid, leaseId, generation },
           preActionStatus: { defaultGatewayId: sharedPoolConfig.defaultGatewayId },
@@ -5283,7 +5283,7 @@ router.post(
         const requestedAt = Date.now();
         const outcome = await runAdminFleetMutation({
           req,
-          what: "return builder activation lease",
+          what: "return user activation lease",
           why: ADMIN_FLEET_REQUEST_REASON,
           target: { uid, leaseId: body.leaseId, generation: body.generation },
           preActionStatus: {},
@@ -5295,9 +5295,9 @@ router.post(
           },
           classifyResult: classifyActivationLeaseReturn,
           action: async () => store.transaction({ label: "admin.fleet.returnActivationLease" }, async (transaction) => {
-            const builder = await transaction.builders.records.get(uid);
-            if (!builder) return { kind: "not-found" as const };
-            const lease = builder.activationLease;
+            const userRecord = await transaction.users.records.get(uid);
+            if (!userRecord) return { kind: "not-found" as const };
+            const lease = userRecord.activationLease;
             if (
               !lease ||
               lease.leaseId !== body.leaseId ||
@@ -5312,7 +5312,7 @@ router.post(
             if (toMillis(lease.returnRequestedAt) !== null) {
               return { kind: "adopted" as const };
             }
-            await transaction.builders.records.patchActivationLease(uid, {
+            await transaction.users.records.patchActivationLease(uid, {
               returnRequestedAt: requestedAt,
               returnRequestedBy: actor.uid ?? "unknown",
             }, { leaseId: lease.leaseId, generation: lease.generation });
@@ -5360,7 +5360,7 @@ router.post(
         const inFlight = await findInFlightMigrateOp(uid);
         if (inFlight) {
           res.status(409).json({
-            error: "a migration for this customer is already pending or running",
+            error: "a migration for this user is already pending or running",
             operationId: inFlight.id,
             uid,
           });
@@ -5368,7 +5368,7 @@ router.post(
         }
         const outcome = await runAdminFleetMutation({
           req,
-          what: "retry builder activation lease return",
+          what: "retry user activation lease return",
           why: ADMIN_FLEET_REQUEST_REASON,
           target: { uid, operationId },
           preActionStatus: {},
@@ -5411,19 +5411,19 @@ router.post(
         const actor = req as ActorRequest;
         const createdBy = actor.uid ?? "unknown";
         const now = Date.now();
-        const builder = await store.builders.records.get(uid);
-        if (!builder) {
+        const userRecord = await store.users.records.get(uid);
+        if (!userRecord) {
           res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
           return;
         }
-        const reportingGatewayId = builder.gateway?.gatewayId ?? null;
+        const reportingGatewayId = userRecord.gateway?.gatewayId ?? null;
         const assignment = reportingGatewayId
           ? await store.gateways.assignments.get(reportingGatewayId, uid)
           : null;
         const assignmentEpoch = assignment?.epoch;
         const result = await runAdminFleetMutation({
           req,
-          what: "request builder activation lease",
+          what: "request user activation lease",
           why: ADMIN_FLEET_REQUEST_REASON,
           target: { uid },
           preActionStatus: {
@@ -5439,7 +5439,7 @@ router.post(
                   : `activation lease request returned ${result.statusCode}`,
               }
             : { outcome: "completed" },
-          action: async () => requestBuilderActivationLease({
+          action: async () => requestUserActivationLease({
             store,
             readBuilderTier,
             uid,
@@ -5606,7 +5606,7 @@ router.post(
             if (migrationConflict) {
               return {
                 ok: false as const,
-                error: `customer migration is in flight for gateway ${id}`,
+                error: `user migration is in flight for gateway ${id}`,
               };
             }
             try {
@@ -5656,7 +5656,7 @@ router.post(
         if (disposable) {
           res.status(409).json({
             error:
-              "disposable gateway termination is owned by the Builder runtime lifecycle",
+              "disposable gateway termination is owned by the isolated runtime lifecycle",
             gatewayId: id,
           });
           return;
@@ -5666,14 +5666,14 @@ router.post(
           res.status(409).json(retirementBlocker);
           return;
         }
-        // Refuse synchronously while any customer is still assigned — the
+        // Refuse synchronously while any user is still assigned — the
         // controller's retire arm enforces the same gate, but a 409 here spares
         // the operator a marked-retired-then-blocked gateway.
         const assignments = await store.gateways.assignments.list(id);
         if (assignments.length > 0) {
           res.status(409).json({
             error:
-              "gateway still has assigned customers; migrate them off before retiring",
+              "gateway still has assigned users; migrate them off before retiring",
             gatewayId: id,
             assignedCustomers: assignments.map((a) => a.slug),
           });
@@ -5683,7 +5683,7 @@ router.post(
         if (mounted.length > 0) {
           res.status(409).json({
             error:
-              "gateway still has mounted customers; migrate them off before retiring",
+              "gateway still has mounted users; migrate them off before retiring",
             gatewayId: id,
             mountedUsers: mounted,
           });
@@ -6043,12 +6043,12 @@ router.get(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const slug = req.params.slug as string;
-        const builder = await store.builders.records.findBySlug(slug);
-        if (builder) {
-          res.json({ uid: builder.uid, currentGatewayId: builder.gateway?.gatewayId ?? null });
+        const userRecord = await store.users.records.findBySlug(slug);
+        if (userRecord) {
+          res.json({ uid: userRecord.uid, currentGatewayId: userRecord.gateway?.gatewayId ?? null });
           return;
         }
-        res.status(404).json({ error: "customer not found", slug });
+        res.status(404).json({ error: "user not found", slug });
       } catch (e) {
         next(e);
       }
@@ -6058,7 +6058,7 @@ router.get(
   async function findInFlightMigrateOp(
     uid: string,
   ): Promise<{ id: string } | null> {
-    const operation = (await inFlightOperationsForUid(store, uid)).find(isInFlightCustomerMigration);
+    const operation = (await inFlightOperationsForUid(store, uid)).find(isInFlightUserMigration);
     return operation ? { id: operation.id } : null;
   }
 
@@ -6072,10 +6072,10 @@ router.get(
         return;
       }
       const uid = req.params.uid as string;
-      const before = await store.builders.records.get(uid);
+      const before = await store.users.records.get(uid);
       const outcome = await runAdminFleetMutation({
         req,
-        what: park ? "park builder" : "release builder to Cowboy",
+        what: park ? "park user" : "release user to the fleet controller",
         why: ADMIN_FLEET_REQUEST_REASON,
         target: { uid },
         preActionStatus: { gatewayId: before?.gateway?.gatewayId ?? null },
@@ -6084,33 +6084,33 @@ router.get(
           ? { outcome: "failed", error: String(result.body.error) }
           : { outcome: "completed" },
         action: () => store.transaction({ label: "admin.fleet.customerPlacement" }, async (transaction): Promise<{ status: number; body: Record<string, unknown> }> => {
-          const [builder, operations] = await Promise.all([
-            transaction.builders.records.get(uid),
+          const [userRecord, operations] = await Promise.all([
+            transaction.users.records.get(uid),
             inFlightOperationsForUid(transaction, uid),
           ]);
-          if (!builder) return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
-          if (builderRuntimeMutationFenced(builder)) return { status: 409, body: { error: "customer restore or source transfer is unresolved — cannot change placement", uid } };
-          const inFlight = operations.find(isInFlightCustomerMigration);
-          if (inFlight) return { status: 409, body: { error: "customer migration is pending or running — cannot change placement", operationId: inFlight.id, uid } };
-          const gatewayId = builder.gateway?.gatewayId ?? null;
-          if (park && parkingHasUnsettledAllocation(builder.activationLease, gatewayId)) {
+          if (!userRecord) return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
+          if (isolatedRuntimeMutationFenced(userRecord)) return { status: 409, body: { error: "user restore or source transfer is unresolved — cannot change placement", uid } };
+          const inFlight = operations.find(isInFlightUserMigration);
+          if (inFlight) return { status: 409, body: { error: "user migration is pending or running — cannot change placement", operationId: inFlight.id, uid } };
+          const gatewayId = userRecord.gateway?.gatewayId ?? null;
+          if (park && parkingHasUnsettledAllocation(userRecord.activationLease, gatewayId)) {
             return { status: 409, body: { error: "allocated activation target must settle before parking", uid } };
           }
           const gateway = await updateOperatorParkingGateway(transaction, { gatewayId, uid, actor: (req as ActorRequest).uid, park });
           if (gateway.error) return { status: 409, body: { error: gateway.error, uid } };
           if (release) {
-            const provisioningComplete = (builder.provisioning.status ?? builder.openclaw.status) === "complete";
-            await transaction.builders.records.patch(uid, {
+            const provisioningComplete = (userRecord.provisioning.status ?? userRecord.openclaw.status) === "complete";
+            await transaction.users.records.patch(uid, {
               openclaw: { managedBy: "cowboy" },
               ...(provisioningComplete ? { provisioning: { status: "complete" } } : {}),
             });
             return { status: 200, body: { uid, managedBy: "cowboy" } };
           }
-          await transaction.builders.records.patch(uid, { openclaw: { managedBy: "operator" } });
+          await transaction.users.records.patch(uid, { openclaw: { managedBy: "operator" } });
           if (gateway.dedicated) {
             return { status: 200, body: { uid, parked: true, gatewayId, managedBy: "operator" } };
           }
-          await transaction.builders.records.setGatewayMirror(uid, { clear: true });
+          await transaction.users.records.setGatewayMirror(uid, { clear: true });
           return { status: 200, body: { uid, parked: true, managedBy: "operator" } };
         }),
       });
@@ -6134,7 +6134,7 @@ router.get(
         if (inFlight) {
           res.status(409).json({
             error:
-              "a migration for this customer is already pending or running",
+              "a migration for this user is already pending or running",
             operationId: inFlight.id,
             uid,
           });
@@ -6165,10 +6165,10 @@ router.get(
           });
           return;
         }
-        const { currentGatewayId, builderSlug } = builderMountOf(await store.builders.records.get(uid));
+        const { currentGatewayId, builderSlug } = userMountOf(await store.users.records.get(uid));
         if (currentGatewayId === body.to) {
           res.status(409).json({
-            error: "customer is already mounted on the target gateway",
+            error: "user is already mounted on the target gateway",
             uid,
             gatewayId: body.to,
           });
@@ -6178,18 +6178,18 @@ router.get(
         const createdBy = actor.uid ?? "unknown";
         const operationId = await runAdminFleetMutation({
           req,
-          what: "migrate builder",
+          what: "migrate user",
           why: ADMIN_FLEET_REQUEST_REASON,
           target: { uid, gatewayId: body.to },
           preActionStatus: { gatewayId: currentGatewayId ?? null },
           mutation: {
-            kind: OP_KIND_MIGRATE_CUSTOMER,
+            kind: OP_KIND_MIGRATE_USER,
             uid,
             ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
             toGatewayId: body.to,
           },
           action: async () => createOperation(store, {
-            kind: OP_KIND_MIGRATE_CUSTOMER,
+            kind: OP_KIND_MIGRATE_USER,
             createdBy,
             input: {
               uid,
@@ -6206,25 +6206,25 @@ router.get(
     },
   );
 
-  // Clears the customer's gateway placement so they land in pending-placement:
+  // Clears the user's gateway placement so they land in pending-placement:
   // deletes gateways/{gw}/assignments/{uid} AND clears the user mirror fields in
   // ONE transaction (same all-or-nothing discipline as commitCutoverAtomic). The
   // guard runs INSIDE that transaction — it re-reads the in-flight migrate ops
   // (a migrate enqueued between check and commit conflicts the txn's query read
   // and retries) and the assignment doc's durable `state`, refusing (409) if a
   // migrate op is pending/running OR the durable roster state is not "serving"
-  // (a terminal failed roll can leave the customer quiescing with no live op).
+  // (a terminal failed roll can leave the user quiescing with no live op).
   // Never destructive beyond the placement: the user + workspace stay put.
   router.post(
     "/users/:uid/unassign",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const uid = req.params.uid as string;
-        const userBefore = await store.builders.records.get(uid);
+        const userBefore = await store.users.records.get(uid);
         const preActionGatewayId = userBefore?.gateway?.gatewayId ?? null;
         const outcome = await runAdminFleetMutation({
           req,
-          what: "unassign builder from gateway",
+          what: "unassign user from gateway",
           why: ADMIN_FLEET_REQUEST_REASON,
           target: { uid },
           preActionStatus: { gatewayId: preActionGatewayId },
@@ -6246,29 +6246,29 @@ router.get(
             body: Record<string, unknown>;
             from?: string;
           }> => {
-            const builder = await transaction.builders.records.get(uid);
-            if (!builder) {
+            const userRecord = await transaction.users.records.get(uid);
+            if (!userRecord) {
               return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
             }
-            if (builderRuntimeMutationFenced(builder)) {
-              const action = builder.fences.restoreFence !== undefined ? "restore" : "source transfer";
-              return { status: 409, body: { error: `customer ${action} outcome is unresolved — cannot unassign`, uid } };
+            if (isolatedRuntimeMutationFenced(userRecord)) {
+              const action = userRecord.fences.restoreFence !== undefined ? "restore" : "source transfer";
+              return { status: 409, body: { error: `user ${action} outcome is unresolved — cannot unassign`, uid } };
             }
-            const currentGatewayId = builder.gateway?.gatewayId ?? null;
+            const currentGatewayId = userRecord.gateway?.gatewayId ?? null;
             if (!currentGatewayId) {
-              return { status: 409, body: { error: "customer is already unassigned", uid } };
+              return { status: 409, body: { error: "user is already unassigned", uid } };
             }
             const [assignment, operations] = await Promise.all([
               transaction.gateways.assignments.get(currentGatewayId, uid),
               inFlightOperationsForUid(transaction, uid),
             ]);
-            const inFlight = operations.find(isInFlightCustomerMigration);
+            const inFlight = operations.find(isInFlightUserMigration);
             if (inFlight) {
               return {
                 status: 409,
                 body: {
                   error:
-                    "a migration for this customer is pending or running — let it finish or fail before unassigning",
+                    "a migration for this user is pending or running — let it finish or fail before unassigning",
                   operationId: inFlight.id,
                   uid,
                 },
@@ -6278,14 +6278,14 @@ router.get(
               return {
                 status: 409,
                 body: {
-                  error: `customer is mid-migration (roster state ${assignment.state}) — cannot unassign until the migration settles`,
+                  error: `user is mid-migration (roster state ${assignment.state}) — cannot unassign until the migration settles`,
                   uid,
                   state: assignment.state,
                 },
               };
             }
             await transaction.gateways.assignments.delete(currentGatewayId, uid);
-            await transaction.builders.records.setGatewayMirror(uid, { clear: true });
+            await transaction.users.records.setGatewayMirror(uid, { clear: true });
             return {
               status: 200,
               body: {
@@ -6299,7 +6299,7 @@ router.get(
         });
         if (outcome.status === 200) {
           const actor = (req as ActorRequest).uid ?? "unknown";
-          deps.logger.info("admin unassigned customer from gateway", {
+          deps.logger.info("admin unassigned user from gateway", {
             actor,
             uid,
             from: outcome.from,

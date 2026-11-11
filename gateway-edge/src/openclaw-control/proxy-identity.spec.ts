@@ -112,7 +112,7 @@ function identityFor(gateway: MockGateway, env: NodeJS.ProcessEnv = {}) {
   });
 }
 
-const helper = { uid: "uid-Helper", gatewayId: "bender", revisionId: "bender", sessionId: "session-id"};
+const helper = { uid: "uid-Helper", gatewayId: "walter", revisionId: "walter", sessionId: "session-id"};
 
 describe("OpenClaw control proxy identity", () => {
   it.each([false, true].map(firstVisit => ({ firstVisit })))(

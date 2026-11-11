@@ -164,13 +164,13 @@ export function googleConsentPermission(
 export const DEFAULT_FREE_TIER_MODEL_REF = SIMPLE_MODEL_TIERS.errands.ref;
 export const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/openai/gpt-6-luna";
 
-// The platform default every Builder's Agent starts on until they pick their
+// The platform default every user's Agent starts on until they pick their
 // own model in Account → Models: the Everyday tier. Fallback ref null = no fallback.
-export const DEFAULT_BUILDER_AGENT_MODEL_REF = SIMPLE_MODEL_TIERS.everyday.ref;
-export const DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF: string | null =
+export const DEFAULT_USER_AGENT_MODEL_REF = SIMPLE_MODEL_TIERS.everyday.ref;
+export const DEFAULT_USER_AGENT_FALLBACK_MODEL_REF: string | null =
   "platform-openrouter/z-ai/glm-5.2";
 
-export interface BuilderAgentModelDefault {
+export interface UserAgentModelDefault {
   primary: string;
   fallbacks: string[];
 }
@@ -211,12 +211,12 @@ export function parsePlatformModelConfig(value: unknown): PlatformModelConfig | 
     return null;
   }
   const builderAgentModelRef = catalogRefOrNull(
-    config.builderAgentModelRef ?? DEFAULT_BUILDER_AGENT_MODEL_REF,
+    config.builderAgentModelRef ?? DEFAULT_USER_AGENT_MODEL_REF,
   );
   if (builderAgentModelRef === null) return null;
   const fallbackInput =
     config.builderAgentFallbackModelRef === undefined
-      ? DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF
+      ? DEFAULT_USER_AGENT_FALLBACK_MODEL_REF
       : config.builderAgentFallbackModelRef;
   const builderAgentFallbackModelRef = fallbackInput === null ? null : catalogRefOrNull(fallbackInput);
   if (fallbackInput !== null && builderAgentFallbackModelRef === null) return null;
@@ -228,18 +228,18 @@ export function parsePlatformModelConfig(value: unknown): PlatformModelConfig | 
   };
 }
 
-// The {primary, fallbacks} selection every Builder Agent inherits, from the
+// The {primary, fallbacks} selection every user agent inherits, from the
 // stored platformConfig/models doc. Field-tolerant: an absent or invalid ref
 // falls back to the compiled default so a bad doc can never blank the fleet.
-export function builderAgentModelDefaultFromDoc(data: unknown): BuilderAgentModelDefault {
+export function userAgentModelDefaultFromDoc(data: unknown): UserAgentModelDefault {
   const raw = (data ?? {}) as {
     builderAgentModelRef?: unknown;
     builderAgentFallbackModelRef?: unknown;
   };
-  const primary = catalogRefOrNull(raw.builderAgentModelRef) ?? DEFAULT_BUILDER_AGENT_MODEL_REF;
+  const primary = catalogRefOrNull(raw.builderAgentModelRef) ?? DEFAULT_USER_AGENT_MODEL_REF;
   const fallbackRef = raw.builderAgentFallbackModelRef === null
     ? null
-    : catalogRefOrNull(raw.builderAgentFallbackModelRef) ?? DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF;
+    : catalogRefOrNull(raw.builderAgentFallbackModelRef) ?? DEFAULT_USER_AGENT_FALLBACK_MODEL_REF;
   return {
     primary,
     fallbacks: fallbackRef !== null && fallbackRef !== primary ? [fallbackRef] : [],
@@ -249,7 +249,7 @@ export function builderAgentModelDefaultFromDoc(data: unknown): BuilderAgentMode
 // Strict payload validation for the untrusted side of the sync wire: the pod
 // applies the default only when the trusted stamp arrives whole and every ref
 // resolves in the catalog; anything else means "leave the config default".
-export function parseBuilderAgentModelDefault(value: unknown): BuilderAgentModelDefault | null {
+export function parseUserAgentModelDefault(value: unknown): UserAgentModelDefault | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as { primary?: unknown; fallbacks?: unknown };
   if (typeof raw.primary !== "string" || resolveFreeTierModel(raw.primary) === null) return null;

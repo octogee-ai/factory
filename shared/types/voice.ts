@@ -50,7 +50,7 @@ export const TALK_SPEED_MIN = 0.5;
 export const TALK_SPEED_MAX = 2;
 export const TALK_HANDS_FREE_MAX_MS = 60_000;
 
-/** A speech-engine voice a Builder can pick for their coach; `id` is what the provider accepts. */
+/** A speech-engine voice a user can pick for their agent; `id` is what the provider accepts. */
 export interface TalkVoice {
   id: string;
   name: string;
@@ -69,7 +69,7 @@ export interface TalkVoiceCatalog {
 export const TALK_VOICE_ID_MAX = 128;
 const TALK_VOICE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9 _.:/-]*$/;
 
-/** A voice id as stored on the coach: provider-shaped (slug, uuid, `kokoro/af_heart`), or empty for the engine default. */
+/** A voice id as stored on the agent: provider-shaped (slug, uuid, `kokoro/af_heart`), or empty for the engine default. */
 export function isTalkVoiceId(value: unknown): value is string {
   return typeof value === "string" && value.length <= TALK_VOICE_ID_MAX && (value === "" || TALK_VOICE_ID_RE.test(value));
 }

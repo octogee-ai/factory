@@ -44,20 +44,20 @@ export function parseNativeApproval(value: unknown, binding: { nativeId: string;
 }
 
 interface NativeApprovalDeps {
-  builder: boolean;
+  isolated: boolean;
   openService: () => Promise<NativeApprovalClient>;
   openUser: (uid: string, gatewayId: string) => Promise<NativeApprovalClient>;
 }
 async function openClient(command: NativeConnectorCommand, deps: NativeApprovalDeps) {
   const reviewerUid = command.operation === "create" ? undefined : command.reviewerUid;
-  if (!deps.builder && reviewerUid && reviewerUid !== command.ownerUid) throw new NativeConnectorApprovalAccessError("Shared approval requires its owner");
-  return deps.builder && reviewerUid ? deps.openUser(reviewerUid, command.gatewayId) : deps.openService();
+  if (!deps.isolated && reviewerUid && reviewerUid !== command.ownerUid) throw new NativeConnectorApprovalAccessError("Shared approval requires its owner");
+  return deps.isolated && reviewerUid ? deps.openUser(reviewerUid, command.gatewayId) : deps.openService();
 }
 
 export async function runNativeConnectorApproval(command: NativeConnectorCommand, deps: NativeApprovalDeps): Promise<unknown> {
   const client = await openClient(command, deps);
   try {
-    if (command.operation !== "create" && command.reviewerUid && deps.builder && !client.scopes.has("operator.admin") && !client.scopes.has("operator.approvals")) {
+    if (command.operation !== "create" && command.reviewerUid && deps.isolated && !client.scopes.has("operator.admin") && !client.scopes.has("operator.approvals")) {
       throw new NativeConnectorApprovalAccessError("Native approval permission is required");
     }
     const call = async (method: string, params: Record<string, unknown>) => {

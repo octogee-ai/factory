@@ -11,11 +11,11 @@ import * as path from "node:path";
 // which had three fallback layers (env > openclaw.json > fresh random per
 // boot). The fresh-random branch caused token drift across reboots on
 // isolated gateways where openclaw.json was edited out-of-band, and the
-// kubectl-set-env workaround that filled the gap on bender's gateway-edge
+// kubectl-set-env workaround that filled the gap on walter's gateway-edge
 // container led to field-manager collision that silently dropped
 // INTERNAL_SERVICE_KEY when the helm chart did its next dedup pass.
 //
-// New model: platform-owned. Cowboy creates a per-gateway K8s secret
+// New model: platform-owned. The fleet controller creates a per-gateway K8s secret
 // `gateway-auth-token-<id>`; the chart threads OPENCLAW_GATEWAY_TOKEN via
 // secretKeyRef on every container that needs it. Entrypoint REQUIRES the
 // env to be non-empty — no fallback, no in-pod generation. If the secret
@@ -54,7 +54,7 @@ describe("infra/gateway/entrypoint.sh — OPENCLAW_GATEWAY_TOKEN platform-owned 
     expect(result.status).toBe(0);
   });
 
-  it("FATAL when OPENCLAW_GATEWAY_TOKEN is empty (Cowboy didn't seed gateway-auth-token-<id>, or chart-secret binding broke)", () => {
+  it("FATAL when OPENCLAW_GATEWAY_TOKEN is empty (the fleet controller didn't seed gateway-auth-token-<id>, or chart-secret binding broke)", () => {
     const result = runGuardBlock("");
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/OPENCLAW_GATEWAY_TOKEN/);
@@ -124,7 +124,7 @@ describe("infra/gateway/entrypoint.sh — gateway token Secret Manager publish b
     expect(result.stderr).toMatch(/skipping gateway auth token Secret Manager publish/);
   });
 
-  it("skips Secret Manager publish by default on Builder gateways", () => {
+  it("skips Secret Manager publish by default on isolated gateways", () => {
     const result = runPublishBlock({ profile: "builder", nodeExit: 2 });
     expect(result.status).toBe(0);
     expect(result.calledNode).toBe(false);
@@ -196,7 +196,7 @@ function runRunnerBlock(
 }
 
 describe("infra/gateway/entrypoint.sh — in-pod runner boundary", () => {
-  it("starts only the db-less controller and neutral side runners on Builder gateways", () => {
+  it("starts only the db-less controller and neutral side runners on isolated gateways", () => {
     const result = runRunnerBlock("builder");
     expect(result.status).toBe(0);
     expect(result.runners).toContain("fleet-controller");
@@ -205,25 +205,25 @@ describe("infra/gateway/entrypoint.sh — in-pod runner boundary", () => {
     expect(result.runners).not.toContain("site-build");
     expect(result.runners).toContain("byosub-syncback");
     expect(result.runners).toContain("system-config-watch");
-    expect(result.runners).toContain("builder-toolchain-hydrator");
+    expect(result.runners).toContain("isolated-toolchain-hydrator");
     expect(result.stderr).toMatch(/site-build-api disabled/);
   });
 
-  it("starts Builder customer runners immediately", () => {
+  it("starts isolated gateway user runners immediately", () => {
     const result = runRunnerBlock("builder");
     expect(result.status).toBe(0);
     expect(result.commands.get("system-config-watch")).toBe(
       "/octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/system-config-watch.ts",
     );
-    expect(result.commands.get("builder-toolchain-hydrator")).toBe(
-      "/octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/builder-toolchain-hydrator.ts",
+    expect(result.commands.get("isolated-toolchain-hydrator")).toBe(
+      "/octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/isolated-toolchain-hydrator.ts",
     );
   });
 
-  it("does not start optional Builder tool hydration on shared gateways", () => {
+  it("does not start optional user tool hydration on shared gateways", () => {
     const result = runRunnerBlock("standard", { gatewayClass: "shared" });
     expect(result.status).toBe(0);
-    expect(result.runners).not.toContain("builder-toolchain-hydrator");
+    expect(result.runners).not.toContain("isolated-toolchain-hydrator");
   });
 
   it("starts the db-less fleet controller and cattle side runners on standard gateways", () => {
@@ -296,7 +296,7 @@ describe("infra/gateway/entrypoint.sh — gateway token stays outside durable co
   });
 });
 
-describe("infra/gateway/entrypoint.sh — no per-customer sourced secret seam", () => {
+describe("infra/gateway/entrypoint.sh — no per-user sourced secret seam", () => {
   it("does not source the retired operator.env file", () => {
     const entrypoint = fs.readFileSync(ENTRYPOINT, "utf8");
     expect(entrypoint).not.toMatch(/operator\.env/);

@@ -35,7 +35,7 @@ function harness(options: { accounts?: boolean; signIn?: boolean; failGit?: bool
     return result;
   });
   const deps = {
-    store: { builders: { records }, workspaces, transaction },
+    store: { users: { records }, workspaces, transaction },
     journal,
     ...(options.accounts === false ? {} : { accounts: { create } }),
     ...(options.signIn === false

@@ -103,7 +103,7 @@ describe('native Talk transport', () => {
     expect(h.rpc.call.mock.invocationCallOrder[0]).toBeLessThan(h.bindSession.mock.invocationCallOrder[0]);
     h.session.close();
   });
-  it('selects OpenAI Live with the same canonical coach and reports its duplex engine', async () => {
+  it('selects OpenAI Live with the same canonical agent and reports its duplex engine', async () => {
     const h = setup({ provider: 'octogee-openai' });
     await h.session.handleText(start); h.event({ type: 'ready' });
     expect(h.rpc.call).toHaveBeenCalledWith('talk.session.create', expect.objectContaining({ provider: 'octogee-openai', sessionKey: key, brain: 'agent-consult' }));

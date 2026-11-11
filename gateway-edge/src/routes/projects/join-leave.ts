@@ -23,13 +23,13 @@ function errorIncludes(err: unknown, expected: string): boolean {
 }
 
 async function readProjectActor(uid: string): Promise<ProjectActor> {
-  const [actorDoc, builder] = await Promise.all([
+  const [actorDoc, user] = await Promise.all([
     db.doc(`users/${uid}`).get(),
-    platformStateStore.builders.records.get(uid),
+    platformStateStore.users.records.get(uid),
   ]);
   const username = actorDoc.data()?.username;
   return {
-    mmUserId: builder?.mattermostUserId ?? undefined,
+    mmUserId: user?.mattermostUserId ?? undefined,
     giteaUser: username ? `ws-${username}` : null,
   };
 }

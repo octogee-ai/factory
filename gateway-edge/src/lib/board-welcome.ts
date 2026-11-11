@@ -24,7 +24,7 @@ When you've had a look around, drag this card to **Done**. That's your first shi
 `;
 }
 
-// Seeded during project provisioning so a new Builder never opens an empty
+// Seeded during project provisioning so a new user never opens an empty
 // Board. A miss here must never fail project creation — the Board works
 // without it — but it is always logged.
 export async function seedBoardWelcomeIssue(input: {

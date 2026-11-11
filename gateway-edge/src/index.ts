@@ -1,5 +1,5 @@
 import { installDefaultUserEntitlements } from "@octogee/shared/types/user-entitlements";
-import { isBuilderComputer } from "./lib/builder-computer.js";
+import { isGatewayVm } from "./lib/gateway-vm.js";
 import { createChannelAgentReadinessRouter } from "./routes/channel-agent-readiness.js";
 import express, { Express, Request, RequestHandler, Response, Router } from "express";
 import http from "node:http";
@@ -26,7 +26,7 @@ import { createProjectPersistenceRouter } from "./routes/internal/project-persis
 import internalGiteaAdminRoutes from "./routes/internal/gitea-admin.js";
 import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
 import internalConnectorRoutes from "./routes/internal/connectors.js";
-import { createInternalComputerRouter, resolveComputerControlUrl } from "./routes/internal/computer.js";
+import { createInternalVmRouter, resolveVmControlUrl } from "./routes/internal/vm.js";
 import { createAgentImportsRouter } from "./routes/agent-imports.js";
 import { createAgentExportsRouter } from "./routes/agent-exports.js";
 import { createAgentImportRuntime, invokeLocalOpenClaw } from "./lib/agent-import-runtime.js";
@@ -48,12 +48,12 @@ import {
 import { createBrokerRollRosterSubscription } from "./broker-roll-roster.js";
 import { workspaceServingResolver } from "./openclaw-control/workspace-serving.js";
 import {
-  brokerBuilderIdentityReader,
+  brokerUserIdentityReader,
   builderIdentity,
-  claimedBuilderIdentity,
-  createBuilderIdentityStore,
-  installBuilderIdentityStore,
-} from "./lib/builder-identity.js";
+  claimedUserIdentity,
+  createUserIdentityStore,
+  installUserIdentityStore,
+} from "./lib/user-identity.js";
 import { chatProxyOwnsHttpPath } from "./chat-proxy/http-paths.js";
 import { stripGatewayPrefix } from "./chat-proxy/gateway-prefix.js";
 import { validateRequiredEnv } from "./lib/required-env.js";
@@ -81,21 +81,21 @@ import {
   type TerminalSession,
 } from "./routes/terminal.js";
 import { createToolSurface } from "./routes/tool-surface.js";
-import { createComputerEgressRouter } from "./routes/computer-egress.js";
-import { createComputerEgressService } from "./egress/service.js";
+import { createVmEgressRouter } from "./routes/vm-egress.js";
+import { createVmEgressService } from "./egress/service.js";
 import { createBrokerEgressStore } from "./egress/broker.js";
 import { controlApiModePoster, createBrowserModeSync } from "./egress/browser-mode.js";
-import { createComputerPasskeysRouter } from "./routes/computer-passkeys.js";
+import { createVmPasskeysRouter } from "./routes/vm-passkeys.js";
 import { createPasskeyLinkHost } from "./webauthn/link-host.js";
 import { createWebAuthnCdpProxy } from "./webauthn/cdp-proxy.js";
-import { createComputerSessionsRouter } from "./routes/computer-sessions.js";
+import { createVmSessionsRouter } from "./routes/vm-sessions.js";
 import { applyCookiesOverCdp, type CdpCookie } from "./lib/cdp-cookies.js";
 import { resolveToolChannelForUid } from "./lib/tool-conversation.js";
 import { isAllowedWsOrigin } from "./chat-proxy/openclaw/ws-origin.js";
 import { createWorkspaceRolesRouter } from "./routes/workspace-roles.js";
 import { resolveNativeAdminAccess } from "./lib/native-admin-access.js";
 import { createWsTicketStore } from "./lib/ws-ticket-store.js";
-import { workspaceCoachAgentId } from "@octogee/shared/types/identity";
+import { workspaceDefaultAgentId } from "@octogee/shared/types/identity";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 type ChatProxyModule = typeof import("./chat-proxy/proxy.js");
@@ -113,28 +113,28 @@ let activeChatProxyMetricsRegistry: Registry | null = null;
 let activeOpenClawControlMetrics: OpenClawControlMetrics | undefined;
 const openClawControlAuthorizationCache = createOpenClawControlAuthorizationCache();
 const terminalTickets = createWsTicketStore<TerminalSession>();
-const computerControlUrl = resolveComputerControlUrl(process.env);
-const computerEgress = createComputerEgressService({
+const vmControlUrl = resolveVmControlUrl(process.env);
+const vmEgress = createVmEgressService({
   store: createBrokerEgressStore(),
   log: (message, meta) => logger.info(message, meta),
-  browser: computerControlUrl
+  browser: vmControlUrl
     ? createBrowserModeSync({
-      post: controlApiModePoster(computerControlUrl),
+      post: controlApiModePoster(vmControlUrl),
       logger: { warn: (message, meta) => logger.warn(message, meta), error: (message, meta) => logger.error(message, meta) },
     })
-    : { apply: (mode) => { if (isBuilderComputer()) logger.error("[computer-egress] no desktop control URL; the computer's browser cannot follow the egress mode", { mode }); } },
+    : { apply: (mode) => { if (isGatewayVm()) logger.error("[computer-egress] no desktop control URL; the VM's browser cannot follow the egress mode", { mode }); } },
 });
-const computerEgressRoutes = createComputerEgressRouter({ service: computerEgress });
+const vmEgressRoutes = createVmEgressRouter({ service: vmEgress });
 const toolSurface = createToolSurface({ egressReport: () => {
-  const status = computerEgress.status();
+  const status = vmEgress.status();
   return status.listener === "off" ? null : { mode: status.mode, shell: status.shell, listener: status.listener };
 } });
-const computerPasskeys = createPasskeyLinkHost({ log: (message, meta) => logger.warn(message, meta) });
-const computerPasskeyRoutes = createComputerPasskeysRouter({ host: computerPasskeys, available: isBuilderComputer });
-const computerWebAuthn = createWebAuthnCdpProxy({
+const vmPasskeys = createPasskeyLinkHost({ log: (message, meta) => logger.warn(message, meta) });
+const vmPasskeyRoutes = createVmPasskeysRouter({ host: vmPasskeys, available: isGatewayVm });
+const vmWebAuthn = createWebAuthnCdpProxy({
   cdpUrl: process.env.GATEWAY_COMPUTER_CDP_URL?.trim() || "http://127.0.0.1:9222",
-  handle: (request, signal) => computerPasskeys.request(request, signal),
-  platformAvailable: () => computerPasskeys.platformAuthenticator(),
+  handle: (request, signal) => vmPasskeys.request(request, signal),
+  platformAvailable: () => vmPasskeys.platformAuthenticator(),
   log: (message, meta) => logger.info(message, meta),
 });
 
@@ -230,11 +230,11 @@ const healthHandler = (_req: Request, res: Response) => {
 app.get("/health", healthHandler);
 app.get("/api/health", healthHandler);
 
-// Mid-roll per-customer routing gate (roll-roster.ts). The slot sits after
+// Mid-roll per-user routing gate (roll-roster.ts). The slot sits after
 // health/metrics (probes never 503 on roster load) and before every
-// customer-state surface; production boot installs the real gate on revision
+// user-state surface; production boot installs the real gate on revision
 // pods only. Chat-proxy paths bypass Express by design — they proxy to the
-// shared Mattermost service, which carries no per-revision customer state.
+// shared Mattermost service, which carries no per-revision user state.
 app.use((req, res, next) =>
   activeRollRosterGate ? activeRollRosterGate(req, res, next) : next(),
 );
@@ -247,7 +247,7 @@ if (surface === "sidecar") {
   app.use("/internal/owner-automations", internalOwnerAutomationRoutes);
   app.use("/internal/projects", createProjectPersistenceRouter());
   app.use("/internal/connectors", internalConnectorRoutes);
-  app.use("/internal/computer", createInternalComputerRouter({ controlUrl: computerControlUrl }));
+  app.use("/internal/computer", createInternalVmRouter({ controlUrl: vmControlUrl }));
 }
 
 if (surface === "cluster") {
@@ -305,7 +305,7 @@ function mountSidecarLocalitySurface(app: Express, options: {
   workspaceLocality.use(gitRoutes);
   mountApi(app, "/workspace", workspaceLocality);
 
-  // Deep byosub health runs on the customer's own pod (reached via the
+  // Deep byosub health runs on the user's own pod (reached via the
   // /api/g/<gatewayId>/byosub/* locality seam), so it can read the pod's
   // auth-profile store — the proof /api/model-credentials/subscription/connection's ref-read can't give.
   const byosubLocality = Router();
@@ -336,25 +336,25 @@ function mountSidecarLocalitySurface(app: Express, options: {
     resolveChannel: resolveToolChannelForUid,
   }));
   mountApi(app, "/tools", toolSurface.router);
-  mountApi(app, "/computer", computerEgressRoutes.router);
-  mountApi(app, "/computer", computerPasskeyRoutes.router);
-  const computerCdpUrl = process.env.GATEWAY_COMPUTER_CDP_URL?.trim() || "http://127.0.0.1:9222";
-  const computerSessionsLocality = Router({ mergeParams: true });
-  computerSessionsLocality.use(requireAuthenticatedUid);
-  computerSessionsLocality.use(createComputerSessionsRouter({
+  mountApi(app, "/computer", vmEgressRoutes.router);
+  mountApi(app, "/computer", vmPasskeyRoutes.router);
+  const vmCdpUrl = process.env.GATEWAY_COMPUTER_CDP_URL?.trim() || "http://127.0.0.1:9222";
+  const vmSessionsLocality = Router({ mergeParams: true });
+  vmSessionsLocality.use(requireAuthenticatedUid);
+  vmSessionsLocality.use(createVmSessionsRouter({
     localGatewayId: () => process.env.GATEWAY_ID ?? null,
-    available: isBuilderComputer(),
+    available: isGatewayVm(),
     resolveAccess: resolveNativeAdminAccess,
-    applyCookies: (cookies: CdpCookie[]) => applyCookiesOverCdp(cookies, { cdpUrl: computerCdpUrl }),
+    applyCookies: (cookies: CdpCookie[]) => applyCookiesOverCdp(cookies, { cdpUrl: vmCdpUrl }),
   }));
-  mountApi(app, "/computer", computerSessionsLocality);
-  if (isBuilderComputer()) {
+  mountApi(app, "/computer", vmSessionsLocality);
+  if (isGatewayVm()) {
     startDesktopNodePairing({
       invoke: (method, params) => invokeLocalOpenClaw(method, params),
       log: (message, fields) => logger.info(message, fields),
     });
   }
-  // connect/status/sso-submit run HERE (the customer's own pod) so the in-pod
+  // connect/status/sso-submit run HERE (the user's own pod) so the in-pod
   // claude-sso/device-auth managers accept the pod's OPENCLAW_GATEWAY_TOKEN —
   // octogee-api can't hold a per-gateway token. The flow write brokers back.
   // Mount only on the fleet-scoped path; bare /api/byosub/* is a retired
@@ -444,7 +444,7 @@ if (process.env.NODE_ENV !== "test") {
     logger.error(
       `FATAL: required gateway-edge env unset: ${missing.join(", ")}. ` +
         "Supplied per-gateway via the chart's gatewayEdge.env/.secrets ranges " +
-        "(threaded by Cowboy); a missing one means a skewed render or a " +
+        "(threaded by the fleet controller); a missing one means a skewed render or a " +
         "dropped-on-apply duplicate. Refusing to boot rather than limp — the " +
         "OpenClaw projection, Activity intake, and git locality routes all " +
         "depend on these.",
@@ -454,19 +454,19 @@ if (process.env.NODE_ENV !== "test") {
 
   const edgeGatewayClass = process.env.GATEWAY_CLASS === "builder" ? "builder" : "shared";
   if (edgeGatewayClass === "builder") {
-    const identityStore = createBuilderIdentityStore({
-      read: brokerBuilderIdentityReader(process.env),
+    const identityStore = createUserIdentityStore({
+      read: brokerUserIdentityReader(process.env),
       log: (msg) => logger.error(msg),
     });
-    installBuilderIdentityStore(identityStore);
+    installUserIdentityStore(identityStore);
     process.once("exit", identityStore.start());
   }
 
-  // Gateway pods gate customer-state traffic on the durable assignment roster
+  // Gateway pods gate user-state traffic on the durable assignment roster
   // (the migration quiesce gate). The gate installs SYNCHRONOUSLY with a
   // not-yet-loaded store facade, so an edge booting mid-migration answers 503 +
   // Retry-After until the roster snapshot lands — it never defaults to
-  // serve-local for a quiescing customer (council-resolved). The roster read is
+  // serve-local for a quiescing user (council-resolved). The roster read is
   // scoped to this pod's own gateway and is read-only.
   const selfRevisionId = process.env.GATEWAY_REVISION_ID ?? "";
   const rosterGatewayId = process.env.GATEWAY_ID ?? "";
@@ -515,12 +515,12 @@ if (process.env.NODE_ENV !== "test") {
     chatProxy.attachChatProxyWsUpgrade(server, { upgradeGate: rollRosterUpgradeGate });
     mountApi(app, "/workspace-roles", createWorkspaceRolesRouter());
     toolSurface.attachWs((server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter, isAllowedWsOrigin);
-    computerEgressRoutes.attachWs((server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter, isAllowedWsOrigin);
-    computerPasskeyRoutes.attachWs((server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter, isAllowedWsOrigin);
-    if (isBuilderComputer()) {
-      computerWebAuthn.start();
-      computerEgress.boot().catch((err) => {
-        logger.error("[computer-egress] SOCKS5 listener failed to start; the computer's Chromium has no egress", {
+    vmEgressRoutes.attachWs((server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter, isAllowedWsOrigin);
+    vmPasskeyRoutes.attachWs((server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter, isAllowedWsOrigin);
+    if (isGatewayVm()) {
+      vmWebAuthn.start();
+      vmEgress.boot().catch((err) => {
+        logger.error("[computer-egress] SOCKS5 listener failed to start; the VM's Chromium has no egress", {
           err: err instanceof Error ? err.message : String(err),
         });
       });
@@ -530,8 +530,8 @@ if (process.env.NODE_ENV !== "test") {
         router: (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter,
         tickets: terminalTickets,
         defaultAgentId: () => {
-          const identity = claimedBuilderIdentity();
-          return identity ? workspaceCoachAgentId(identity.builderSlug) : null;
+          const identity = claimedUserIdentity();
+          return identity ? workspaceDefaultAgentId(identity.builderSlug) : null;
         },
         openUpstream: openTerminalUserSocket,
         isAllowedOrigin: isAllowedWsOrigin,

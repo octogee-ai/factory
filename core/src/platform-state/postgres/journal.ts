@@ -138,7 +138,7 @@ function createOperationsRepository(session: PostgresSession): OperationsReposit
       );
     },
 
-    listByInputBuilderSlugPrefix(prefix) {
+    listByInputUserSlugPrefix(prefix) {
       return list(
         "journal.operations.listByInputBuilderSlugPrefix",
         "input_user_slug LIKE $1::text ESCAPE '\\'",

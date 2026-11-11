@@ -4,22 +4,22 @@ import { isDeepStrictEqual } from 'node:util';
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const eventLogger = createServiceLogger("cowboy");
 import { isReapedOperationError, REARMED_RETIRE_OPERATION } from "./stuck-op-reaper.js";
-import { builderPlacementDocument, type BuilderPolicyInputsSource } from "./builder-placement-document.js";
+import { userPlacementDocument, type UserPolicyInputsSource } from "./user-placement-document.js";
 import { sourceRecoveryForwardRetryable } from "./legacy-migration-recovery.js";
 import { schedulerHandoffAwaitingRelease } from "./scheduler-handoff-release.js";
 import { createHash } from "node:crypto";
 
 import {
   GatewayRetirementConflictError,
-  builderRuntimeMutationFenced,
+  isolatedRuntimeMutationFenced,
   claimGatewayRetirementInStore,
 } from "@octogee/core/gateway-retirement-claim";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import {
   GATEWAY_UNREACHABLE_AFTER_MS,
-  parseConfiguredBuilderReport,
-  type ConfiguredBuilderReport,
+  parseConfiguredUserReport,
+  type ConfiguredUserReport,
 } from "@octogee/shared/types/fleet-controller";
 import {
   isGatewayRuntime,
@@ -68,14 +68,14 @@ import {
 } from "@octogee/core/shared-gateway-pool-read";
 import {
   builderActivateOperationId,
-  builderRecoverOperationId,
+  isolatedRecoverOperationId,
   builderReturnOperationId,
-  isBuilderReturnOperationIdFor,
+  isUserReturnOperationIdFor,
   placementRetireOperationId,
   type BuilderTierReader,
-} from "@octogee/core/builder-activation-lease";
+} from "@octogee/core/user-activation-lease";
 import {
-  clearRetiredBuilderActivationPreparation,
+  clearRetiredUserActivationPreparation,
   commitRecoveredDisposableRuntimeResetAtomic,
   commitUnavailableGatewayRecoveryAtomic,
   type RecoveredDisposableRuntimeResetParams,
@@ -85,7 +85,7 @@ import {
 import { supersedeRollingSharedGatewayRoll } from "@octogee/core/shared-gateway-roll-recovery";
 import {
   FenceMismatchError,
-  type BuilderRecord,
+  type PlatformUserRecord,
   type FleetRegistryRecord,
   type GatewayAssignment,
   type GatewayRecoveryReceipt,
@@ -102,7 +102,7 @@ import {
   type GatewaySizingProfile,
 } from "@octogee/core/platform-state";
 import {
-  resolveContinuousBuilderPlacement,
+  resolveContinuousUserPlacement,
   resolveLiveActivationTargetGatewayId,
   resolveOnboardingPlacementEligibility,
   type ContinuousPlacementOwnedGateway,
@@ -115,9 +115,9 @@ import {
   allocateDisposableGatewayFirestore,
   completeActivationLeaseFirestore,
   failActivationLeaseFirestore,
-  readBuilderActivityFirestore,
+  readUserActivityFirestore,
 } from "./disposable-gateway-lifecycle.js";
-import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
+import { MIGRATE_USER_KIND } from "./operation-kinds.js";
 import { commitInitialPlacement, type AssignInitialPlacementInput } from "./initial-placement.js";
 import { pairedReplacementTarget, readSharedPoolReplacements } from "./shared-pool-replacements.js";
 import type { FleetInformer } from "./fleet-informer.js";
@@ -136,8 +136,8 @@ export const DISPOSABLE_GATEWAY_TOTAL_PROVISION_TIMEOUT_MS =
   DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS + DISPOSABLE_GATEWAY_RUNTIME_STARTUP_TIMEOUT_MS;
 export const SHARED_GATEWAY_REBALANCE_STABILITY_MS = 10 * 60_000;
 const PLACEMENT_POLICY_ACTOR = "glm-controller-placement-policy";
-const BUILDER_ACTIVATION_LEASE_SOURCE = "builder-activation-lease";
-const DISPOSABLE_BUILDER_ALLOCATION_KIND = "disposable-builder";
+const USER_ACTIVATION_LEASE_SOURCE = "builder-activation-lease";
+const ISOLATED_GATEWAY_ALLOCATION_KIND = "disposable-builder";
 const ROLLED_BACK_STATUS = "rolled-back";
 const NO_ACCEPTING_SHARED_GATEWAY = "no-accepting-shared-gateway";
 const CONTINUOUS_PLACEMENT_POLICY_SOURCE = "continuous-placement-policy";
@@ -159,17 +159,17 @@ export class TerminalPlacementMigrationConflictError extends Error {
   }
 }
 
-export class HeldBuilderPlacementError extends GatewayRetirementConflictError {
+export class HeldUserPlacementError extends GatewayRetirementConflictError {
   constructor(readonly uid: string) {
-    super(`builder ${uid} is operator-managed`);
-    this.name = "HeldBuilderPlacementError";
+    super(`user ${uid} is operator-managed`);
+    this.name = "HeldUserPlacementError";
   }
 }
 
 function isSkippablePlacementConflict(
   error: unknown,
-): error is TerminalPlacementMigrationConflictError | HeldBuilderPlacementError {
-  return error instanceof TerminalPlacementMigrationConflictError || error instanceof HeldBuilderPlacementError;
+): error is TerminalPlacementMigrationConflictError | HeldUserPlacementError {
+  return error instanceof TerminalPlacementMigrationConflictError || error instanceof HeldUserPlacementError;
 }
 
 export interface PlacementPolicyUser {
@@ -237,7 +237,7 @@ export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway 
   serving?: boolean;
   runtimeStatus?: string;
   heartbeatFresh?: boolean;
-  computerStartedAt?: number | null;
+  vmStartedAt?: number | null;
   runtimeStartedAt?: number | null;
   liveReleaseReady?: boolean;
   rosterComplete?: boolean;
@@ -248,7 +248,7 @@ export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway 
   rollActive?: boolean;
   recoveryGraceUntil?: number;
   mountedCustomers?: readonly string[];
-  configuredBuilder?: ConfiguredBuilderReport | null;
+  configuredBuilder?: ConfiguredUserReport | null;
 }
 
 export const SHARED_GATEWAY_RECOVERY_GRACE_MS = GATEWAY_UNREACHABLE_AFTER_MS;
@@ -373,7 +373,7 @@ export interface SupersedeRollingSharedGatewayInput {
   targetHeartbeatMaxAgeMs: number;
 }
 
-export interface BuilderRuntimeActivity {
+export interface IsolatedRuntimeActivity {
   lastActiveAt: number | null;
 }
 
@@ -427,12 +427,12 @@ export interface PlacementPolicyReconcilerDeps {
   recoverUnreachableDisposableGateway(
     input: RecoverUnreachableDisposableGatewayInput,
   ): Promise<{ recovered: boolean; operationId: string }>;
-  readBuilderActivity(input: {
+  readUserActivity(input: {
     uid: string;
     builderSlug: string;
     gatewayId: string;
     userData: Record<string, unknown>;
-  }): Promise<BuilderRuntimeActivity>;
+  }): Promise<IsolatedRuntimeActivity>;
   enqueueMigration(input: EnqueuePlacementMigrationInput): Promise<string>;
   supersedePendingSharedDrainMove(input: SupersedePendingSharedDrainMoveInput): Promise<boolean>;
   retireOwnedGateway(input: RetireOwnedGatewayInput): Promise<boolean>;
@@ -497,7 +497,7 @@ function millis(value: unknown): number | null {
   return null;
 }
 
-interface BuilderActivationLease {
+interface UserActivationLease {
   raw: Record<string, unknown>;
   leaseId: string;
   generation: number;
@@ -510,7 +510,7 @@ interface ActivationTargetContext {
   user: PlacementPolicyUser;
   builderSlug: string;
   current: string | null;
-  lease: BuilderActivationLease;
+  lease: UserActivationLease;
   target: PlacementPolicyGateway;
 }
 
@@ -526,7 +526,7 @@ const TERMINAL_LEASE_OPERATION_STATUSES: ReadonlySet<string> = new Set([
 ]);
 
 export function leaseJournalOperationIds(userData: Record<string, unknown>): string[] {
-  const lease = builderActivationLease(userData);
+  const lease = userActivationLease(userData);
   if (!lease?.targetGatewayId) return [];
   return [
     builderActivateOperationId(lease.targetGatewayId, lease.generation),
@@ -534,11 +534,11 @@ export function leaseJournalOperationIds(userData: Record<string, unknown>): str
   ];
 }
 
-function builderActivationLease(data: Record<string, unknown>): BuilderActivationLease | null {
+function userActivationLease(data: Record<string, unknown>): UserActivationLease | null {
   return activationLeaseOf(record(record(data.provisioning)?.openclaw)?.activationLease);
 }
 
-function activationLeaseOf(value: unknown): BuilderActivationLease | null {
+function activationLeaseOf(value: unknown): UserActivationLease | null {
   const raw = record(value);
   const leaseId = nonEmptyString(raw?.leaseId);
   const generation = positiveInteger(raw?.generation);
@@ -583,7 +583,7 @@ function blockPlacement(
     uid: string;
     code: string;
     reason: string;
-    lease?: BuilderActivationLease;
+    lease?: UserActivationLease;
   },
 ): void {
   context.result.blocked += 1;
@@ -632,7 +632,7 @@ function sourceAssignmentEpoch(
   const epoch = context.assignments.get(placementAssignmentKey(gatewayId, uid))?.epoch;
   const parsed = nonNegativeInteger(epoch);
   if (parsed === null) {
-    throw new Error(`Builder ${uid} has no authoritative assignment epoch on ${gatewayId}`);
+    throw new Error(`User ${uid} has no authoritative assignment epoch on ${gatewayId}`);
   }
   return parsed;
 }
@@ -842,7 +842,7 @@ function selectPlatformPreferredSharedGateway(
 function initialPlacementSiblingGatewayIds(
   context: PlacementPolicyReconcileContext,
   uid: string,
-  placement: ReturnType<typeof resolveContinuousBuilderPlacement>,
+  placement: ReturnType<typeof resolveContinuousUserPlacement>,
 ): string[] {
   if (placement.ownedGatewayId !== null) return [];
   const config = sharedGatewayPlacementConfig(context);
@@ -893,8 +893,8 @@ function selectReturnSharedGateway(
     .map((replacement) => `${replacement.sourceGatewayId} is being replaced by ${replacement.targetGatewayId}`);
   return {
     blockedReason: pendingReplacements.length === 0
-      ? "no configured shared gateway can receive the returning Builder"
-      : `no configured shared gateway can receive the returning Builder while ${pendingReplacements.join(", ")}`,
+      ? "no configured shared gateway can receive the returning user"
+      : `no configured shared gateway can receive the returning user while ${pendingReplacements.join(", ")}`,
   };
 }
 
@@ -918,7 +918,7 @@ function projectSharedGatewayPlacement(
   }
 }
 
-function entitledComputerSizing(
+function entitledVmSizing(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
 ): SizingTier | null {
@@ -937,32 +937,32 @@ function ownedPausedDisposableGateway(gateway: PlacementPolicyGateway, uid: stri
     gateway.allocation?.claimedByUid === uid;
 }
 
-function ownedParkedComputer(gateway: PlacementPolicyGateway, uid: string): boolean {
+function ownedParkedVm(gateway: PlacementPolicyGateway, uid: string): boolean {
   return ownedPausedDisposableGateway(gateway, uid) && gateway.runtime === "gce-vm";
 }
 
-function parkedComputerGateway(
+function parkedVmGateway(
   gateway: PlacementPolicyGateway,
   uid: string,
   builderSlug: string,
   sizingTier: SizingTier | null,
 ): boolean {
   return sizingTier !== null &&
-    ownedParkedComputer(gateway, uid) &&
+    ownedParkedVm(gateway, uid) &&
     gateway.builderSlug === builderSlug &&
     gateway.sizingTier === sizingTier;
 }
 
-async function retireObsoleteParkedComputers(
+async function retireObsoleteParkedVms(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
   builderSlug: string,
-  lease: BuilderActivationLease,
+  lease: UserActivationLease,
   keptSizing: SizingTier | null,
 ): Promise<boolean> {
   const obsolete = context.state.gateways.filter((gateway) =>
     ownedPausedDisposableGateway(gateway, user.uid) &&
-    !parkedComputerGateway(gateway, user.uid, builderSlug, keptSizing));
+    !parkedVmGateway(gateway, user.uid, builderSlug, keptSizing));
   for (const gateway of obsolete) {
     const retired = await context.deps.retireOwnedGateway({
       uid: user.uid,
@@ -990,13 +990,13 @@ async function retireUnentitledOwnedGateways(
   user: PlacementPolicyUser,
   builderSlug: string,
 ): Promise<void> {
-  const keptSizing = entitledComputerSizing(context, user);
+  const keptSizing = entitledVmSizing(context, user);
   const ownedGateways = context.state.gateways.filter(
     (gateway) => gateway.ownerUid === user.uid &&
       gateway.disposable === true &&
       gateway.gatewayClass !== "shared" &&
       gateway.desiredStatus !== "retired" &&
-      !parkedComputerGateway(gateway, user.uid, builderSlug, keptSizing),
+      !parkedVmGateway(gateway, user.uid, builderSlug, keptSizing),
   );
   for (const gateway of ownedGateways) {
     const generation = gateway.allocation?.generation;
@@ -1030,7 +1030,7 @@ async function assignMissingPlacement(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
   builderSlug: string,
-  placement: ReturnType<typeof resolveContinuousBuilderPlacement>,
+  placement: ReturnType<typeof resolveContinuousUserPlacement>,
 ): Promise<void> {
   const targetGateway = context.gateways.get(placement.targetGatewayId);
   if (!targetGateway) throw new Error(`placement target ${placement.targetGatewayId} is missing`);
@@ -1087,19 +1087,19 @@ function activationMigrationMatches(
     operation.builderSlug === input.builderSlug &&
     operation.fromGatewayId === input.fromGatewayId &&
     operation.toGatewayId === input.toGatewayId &&
-    operation.source === BUILDER_ACTIVATION_LEASE_SOURCE;
+    operation.source === USER_ACTIVATION_LEASE_SOURCE;
 }
 
 function disposableTargetIdentityMatchesLease(
   gateway: ContinuousPlacementOwnedGateway,
   user: PlacementPolicyUser,
-  lease: BuilderActivationLease,
+  lease: UserActivationLease,
 ): boolean {
   const allocation = gateway.allocation;
   return gateway.gatewayClass === "builder" &&
     gateway.ownerUid === user.uid &&
     gateway.disposable === true &&
-    allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND &&
+    allocation?.kind === ISOLATED_GATEWAY_ALLOCATION_KIND &&
     allocation.claimedByUid === user.uid &&
     allocation.leaseId === lease.leaseId &&
     allocation.generation === lease.generation;
@@ -1108,7 +1108,7 @@ function disposableTargetIdentityMatchesLease(
 function disposableTargetMatchesLease(
   gateway: ContinuousPlacementOwnedGateway,
   user: PlacementPolicyUser,
-  lease: BuilderActivationLease,
+  lease: UserActivationLease,
 ): boolean {
   return gateway.desiredStatus === "running" &&
     disposableTargetIdentityMatchesLease(gateway, user, lease);
@@ -1333,7 +1333,7 @@ async function scheduleRollingSharedPeerRecovery(
 }
 
 function authoritativeLeaseStatus(
-  lease: BuilderActivationLease,
+  lease: UserActivationLease,
 ): AuthoritativeLeaseStatus {
   if (lease.status === "activating") return "activating";
   if (lease.status === "returning") return "returning";
@@ -1406,11 +1406,11 @@ function disposableGatewayProvisioningClockStartedAt(input: {
   target: PlacementPolicyGateway;
 }): number | null {
   if (input.target.runtime === "cluster") return input.provisionedAt;
-  const computerStartedAt = millis(input.target.computerStartedAt);
-  return computerStartedAt !== null &&
-    computerStartedAt >= input.provisionedAt &&
-    computerStartedAt <= input.now
-    ? computerStartedAt
+  const vmStartedAt = millis(input.target.vmStartedAt);
+  return vmStartedAt !== null &&
+    vmStartedAt >= input.provisionedAt &&
+    vmStartedAt <= input.now
+    ? vmStartedAt
     : null;
 }
 
@@ -1448,7 +1448,7 @@ async function cleanupUnreachableProvisioningTarget(
       uid: user.uid,
       lease,
       code: "unreachable-target-authority-fence",
-      reason: `Builder is assigned to ${current ?? "missing"}, not a configured shared gateway`,
+      reason: `User is assigned to ${current ?? "missing"}, not a configured shared gateway`,
     });
     return true;
   }
@@ -1491,7 +1491,7 @@ async function reconcileRequestedActivation(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
   builderSlug: string,
-  lease: BuilderActivationLease,
+  lease: UserActivationLease,
 ): Promise<void> {
   const sourceGatewayId = nonEmptyString(lease.raw.sourceGatewayId);
   const sourceAssignmentEpoch = Number.isSafeInteger(lease.raw.sourceAssignmentEpoch)
@@ -1513,10 +1513,10 @@ async function reconcileRequestedActivation(
     });
     return;
   }
-  const keptSizing = entitledComputerSizing(context, user) === sizingTier ? sizingTier : null;
-  if (!await retireObsoleteParkedComputers(context, user, builderSlug, lease, keptSizing)) return;
+  const keptSizing = entitledVmSizing(context, user) === sizingTier ? sizingTier : null;
+  if (!await retireObsoleteParkedVms(context, user, builderSlug, lease, keptSizing)) return;
   const parked = context.state.gateways.filter(
-    (gateway) => parkedComputerGateway(gateway, user.uid, builderSlug, keptSizing),
+    (gateway) => parkedVmGateway(gateway, user.uid, builderSlug, keptSizing),
   );
   if (parked.length > 1) {
     blockPlacement(context, {
@@ -1589,7 +1589,7 @@ async function cleanupUnauthorizedProvisioningTarget(
     generation: lease.generation,
     targetGatewayId: target.gatewayId,
     operationId: `builder-authorization-ended-${target.gatewayId}`,
-    message: "Builder authorization ended before activation cutover",
+    message: "User authorization ended before activation cutover",
   });
   return true;
 }
@@ -1636,13 +1636,13 @@ async function supersedeDrainMoveForActivation(
   return true;
 }
 
-function targetClaimedForLease(target: PlacementPolicyGateway, lease: BuilderActivationLease): boolean {
+function targetClaimedForLease(target: PlacementPolicyGateway, lease: UserActivationLease): boolean {
   const report = target.configuredBuilder;
   if (report?.state !== "claimed") return false;
   return report.generation === lease.generation || (target.runtime === "gce-vm" && report.generation === null);
 }
 
-function provisioningTargetActivationReady(target: PlacementPolicyGateway, lease: BuilderActivationLease): boolean {
+function provisioningTargetActivationReady(target: PlacementPolicyGateway, lease: UserActivationLease): boolean {
   return disposableTargetActivationReady(target) && targetClaimedForLease(target, lease);
 }
 
@@ -1684,7 +1684,7 @@ async function advanceReadyProvisioningTarget(
     builderSlug,
     fromGatewayId: current ?? sharedAuthorityGatewayId(context, null) ?? context.state.defaultGatewayId,
     toGatewayId: target.gatewayId,
-    source: BUILDER_ACTIVATION_LEASE_SOURCE,
+    source: USER_ACTIVATION_LEASE_SOURCE,
     operationId,
   });
   context.result.enqueued += 1;
@@ -1703,7 +1703,7 @@ async function reconcileProvisioningActivation(
   user: PlacementPolicyUser,
   builderSlug: string,
   current: string | null,
-  lease: BuilderActivationLease,
+  lease: UserActivationLease,
 ): Promise<void> {
   const targetGatewayId = lease.targetGatewayId;
   const target = targetGatewayId ? context.gateways.get(targetGatewayId) : null;
@@ -1777,7 +1777,7 @@ async function reconcileActivatingLease(
   user: PlacementPolicyUser,
   builderSlug: string,
   current: string | null,
-  lease: BuilderActivationLease,
+  lease: UserActivationLease,
 ): Promise<void> {
   const targetGatewayId = lease.targetGatewayId;
   const target = targetGatewayId ? context.gateways.get(targetGatewayId) : null;
@@ -1805,7 +1805,7 @@ async function reconcileActivatingLease(
       uid: user.uid,
       lease,
       code: "activating-authorization-ended",
-      reason: "activation migration must roll back because Builder authorization ended",
+      reason: "activation migration must roll back because user authorization ended",
     });
     return;
   }
@@ -1869,7 +1869,7 @@ async function queueLeaseReturn(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
   builderSlug: string,
-  lease: BuilderActivationLease,
+  lease: UserActivationLease,
 ): Promise<void> {
   const targetGatewayId = lease.targetGatewayId!;
   const active = context.migrations.get(user.uid);
@@ -1916,7 +1916,7 @@ async function queueLeaseReturn(
     builderSlug,
     fromGatewayId: targetGatewayId,
     toGatewayId: sharedGatewayId,
-    source: BUILDER_ACTIVATION_LEASE_SOURCE,
+    source: USER_ACTIVATION_LEASE_SOURCE,
     operationId: builderReturnOperationId(targetGatewayId, lease.generation),
   });
   projectSharedGatewayPlacement(context, sharedGatewayId);
@@ -1953,8 +1953,8 @@ function completedReturnMigration(input: ActivationTargetContext): PlacementPoli
   return operation;
 }
 
-function builderActivityRequiresRuntime(
-  activity: BuilderRuntimeActivity,
+function userActivityRequiresRuntime(
+  activity: IsolatedRuntimeActivity,
   returnRequested: boolean,
   now: () => number,
   idleMs: number,
@@ -1965,7 +1965,7 @@ function builderActivityRequiresRuntime(
   );
 }
 
-function leaseTierChanged(lease: BuilderActivationLease, tier: string): boolean {
+function leaseTierChanged(lease: UserActivationLease, tier: string): boolean {
   return typeof lease.raw.entitlementTier === "string" && lease.raw.entitlementTier !== tier;
 }
 
@@ -1974,7 +1974,7 @@ async function reconcileActiveLease(
   user: PlacementPolicyUser,
   builderSlug: string,
   current: string | null,
-  lease: BuilderActivationLease,
+  lease: UserActivationLease,
 ): Promise<void> {
   const targetGatewayId = lease.targetGatewayId;
   const target = targetGatewayId ? context.gateways.get(targetGatewayId) : null;
@@ -2021,13 +2021,13 @@ async function reconcileActiveLease(
   if (!returnRequested && context.state.idleMs <= 0) {
     return;
   }
-  const activity = await context.deps.readBuilderActivity({
+  const activity = await context.deps.readUserActivity({
     uid: user.uid,
     builderSlug,
     gatewayId: targetGatewayId!,
     userData: user.data,
   });
-  if (builderActivityRequiresRuntime(
+  if (userActivityRequiresRuntime(
     activity,
     returnRequested,
     context.deps.now,
@@ -2089,7 +2089,7 @@ async function reconcileReturnMigrationOnTarget(
     builderSlug,
     fromGatewayId: targetGatewayId,
     toGatewayId: sharedGatewayId,
-    source: BUILDER_ACTIVATION_LEASE_SOURCE,
+    source: USER_ACTIVATION_LEASE_SOURCE,
     operationId,
   });
   projectSharedGatewayPlacement(context, sharedGatewayId);
@@ -2100,7 +2100,7 @@ async function reconcileReturnMigrationOnTarget(
 function blockTerminalReturnOperation(
   context: PlacementPolicyReconcileContext,
   uid: string,
-  lease: BuilderActivationLease,
+  lease: UserActivationLease,
   operation: PlacementPolicyMigration,
 ): void {
   blockPlacement(context, {
@@ -2111,7 +2111,7 @@ function blockTerminalReturnOperation(
   });
 }
 
-function returnedComputerStaysParked(
+function returnedVmStaysParked(
   input: ActivationTargetContext,
   operation: PlacementPolicyMigration | undefined,
 ): boolean {
@@ -2119,10 +2119,10 @@ function returnedComputerStaysParked(
   return operation?.status === "succeeded" &&
     lease.raw.returnReason !== "source-unavailable" &&
     millis(lease.raw.operatorTerminateRequestedAt) === null &&
-    parkedComputerGateway(target, user.uid, builderSlug, entitledComputerSizing(context, user));
+    parkedVmGateway(target, user.uid, builderSlug, entitledVmSizing(context, user));
 }
 
-function returnRetirementReason(lease: BuilderActivationLease): PlacementRetirementReason {
+function returnRetirementReason(lease: UserActivationLease): PlacementRetirementReason {
   return millis(lease.raw.operatorTerminateRequestedAt) === null ? "builder-returned" : "operator-terminated";
 }
 
@@ -2147,7 +2147,7 @@ async function completeReturnedLease(
     });
     return;
   }
-  if (returnedComputerStaysParked(input, operation)) {
+  if (returnedVmStaysParked(input, operation)) {
     await context.deps.completeActivationLease({
       uid: user.uid,
       leaseId: lease.leaseId,
@@ -2223,7 +2223,7 @@ async function reconcileReturningLease(
   user: PlacementPolicyUser,
   builderSlug: string,
   current: string | null,
-  lease: BuilderActivationLease,
+  lease: UserActivationLease,
 ): Promise<void> {
   const targetGatewayId = lease.targetGatewayId;
   const target = targetGatewayId ? context.gateways.get(targetGatewayId) : null;
@@ -2247,7 +2247,7 @@ async function reconcileReturningLease(
       uid: user.uid,
       lease,
       code: "return-authority-fence",
-      reason: `Builder is assigned to ${current ?? "missing"}, not a configured shared gateway`,
+      reason: `User is assigned to ${current ?? "missing"}, not a configured shared gateway`,
     });
     return;
   }
@@ -2260,7 +2260,7 @@ async function reconcileActivationLease(
   builderSlug: string,
   current: string | null,
 ): Promise<boolean> {
-  const lease = builderActivationLease(user.data);
+  const lease = userActivationLease(user.data);
   if (!lease) return false;
   if (lease.status === "requested") {
     await reconcileRequestedActivation(context, user, builderSlug, lease);
@@ -2285,12 +2285,12 @@ async function reconcileActivationLease(
   return false;
 }
 
-function retainUnavailableActiveBuilder(
+function retainUnavailableActiveUser(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
   current: string | null,
 ): boolean {
-  const lease = builderActivationLease(user.data);
+  const lease = userActivationLease(user.data);
   const source = current ? context.gateways.get(current) : null;
   if (lease?.status === "active" && current === lease.targetGatewayId && source &&
     disposableTargetIdentityMatchesLease(source, user, lease) &&
@@ -2299,7 +2299,7 @@ function retainUnavailableActiveBuilder(
       uid: user.uid,
       lease,
       code: source.desiredStatus === "paused" ? "builder-paused" : "builder-runtime-unavailable",
-      reason: `retaining Builder authority and home on ${source.gatewayId}; ` +
+      reason: `retaining user authority and home on ${source.gatewayId}; ` +
         (source.desiredStatus === "paused" ? "waiting for resume" : "waiting for runtime recovery"),
     });
     return true;
@@ -2307,13 +2307,13 @@ function retainUnavailableActiveBuilder(
   return false;
 }
 
-async function reconcileEligibleBuilder(
+async function reconcileEligibleUser(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
   builderSlug: string,
 ): Promise<void> {
   const current = currentGatewayId(user.data);
-  if (retainUnavailableActiveBuilder(context, user, current)) return;
+  if (retainUnavailableActiveUser(context, user, current)) return;
   if (
     await reconcileRecoveredDisposableRuntimeReset(
       context,
@@ -2328,7 +2328,7 @@ async function reconcileEligibleBuilder(
     userData: user.data,
     now: new Date(context.deps.now()),
   });
-  const resolvedPlacement = resolveContinuousBuilderPlacement({
+  const resolvedPlacement = resolveContinuousUserPlacement({
     uid: user.uid,
     userData: user.data,
     currentGatewayId: current,
@@ -2360,7 +2360,7 @@ function eligiblePlacementTargetGatewayId(
   context: PlacementPolicyReconcileContext,
   uid: string,
   currentGatewayId: string | null,
-  placement: ReturnType<typeof resolveContinuousBuilderPlacement>,
+  placement: ReturnType<typeof resolveContinuousUserPlacement>,
   activeMigration: PlacementPolicyMigration | undefined,
 ): string | null {
   if (placement.ownedGatewayId !== null) return placement.targetGatewayId;
@@ -2380,7 +2380,7 @@ async function reconcileResolvedPlacement(
   user: PlacementPolicyUser,
   builderSlug: string,
   current: string | null,
-  placement: ReturnType<typeof resolveContinuousBuilderPlacement>,
+  placement: ReturnType<typeof resolveContinuousUserPlacement>,
 ): Promise<void> {
   if (!current) {
     await assignMissingPlacement(context, user, builderSlug, placement);
@@ -2430,7 +2430,7 @@ async function reconcilePlacementUser(
 ): Promise<void> {
   const eligibility = resolveOnboardingPlacementEligibility(user.data);
   if (!eligibility.eligible) return;
-  await reconcileEligibleBuilder(context, user, eligibility.slug);
+  await reconcileEligibleUser(context, user, eligibility.slug);
 }
 
 function settledSharedAssignment(
@@ -2441,7 +2441,7 @@ function settledSharedAssignment(
     now - assignment.createdAt >= SHARED_GATEWAY_REBALANCE_STABILITY_MS;
 }
 
-function sharedRebalanceBuilder(
+function sharedRebalanceUser(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
   fromGatewayId: string,
@@ -2449,7 +2449,7 @@ function sharedRebalanceBuilder(
 ): { uid: string; builderSlug: string; sourceAssignmentEpoch: number; settledAt: number } | null {
   if (scheduled.has(user.uid) || currentGatewayId(user.data) !== fromGatewayId) return null;
   if (record(record(user.data.provisioning)?.openclaw)?.status !== "complete") return null;
-  const lease = builderActivationLease(user.data);
+  const lease = userActivationLease(user.data);
   if (lease && LIVE_LEASE_STATUSES.has(lease.status)) return null;
   const eligibility = resolveOnboardingPlacementEligibility(user.data);
   if (!eligibility.eligible || context.migrations.has(user.uid)) return null;
@@ -2468,15 +2468,15 @@ function sharedRebalanceBuilder(
   };
 }
 
-function longestSettledSharedRebalanceBuilder(
+function longestSettledSharedRebalanceUser(
   context: PlacementPolicyReconcileContext,
   users: readonly PlacementPolicyUser[],
   fromGatewayId: string,
   scheduled: ReadonlySet<string>,
 ): { uid: string; builderSlug: string; sourceAssignmentEpoch: number } | null {
-  let chosen: ReturnType<typeof sharedRebalanceBuilder> = null;
+  let chosen: ReturnType<typeof sharedRebalanceUser> = null;
   for (const user of users) {
-    const candidate = sharedRebalanceBuilder(context, user, fromGatewayId, scheduled);
+    const candidate = sharedRebalanceUser(context, user, fromGatewayId, scheduled);
     if (!candidate) continue;
     if (!chosen || candidate.settledAt < chosen.settledAt) chosen = candidate;
   }
@@ -2542,17 +2542,17 @@ async function reconcileSharedGatewayRebalance(
   while (true) {
     const plan = planPlatformPreferredSharedGatewayRebalance(context, candidates);
     if (!plan) return;
-    const builder = longestSettledSharedRebalanceBuilder(context, users, plan.fromGatewayId, scheduled);
-    if (!builder) return;
+    const userRecord = longestSettledSharedRebalanceUser(context, users, plan.fromGatewayId, scheduled);
+    if (!userRecord) return;
     const operationId = continuousPlacementMigrationOperationId({
-      ...builder,
+      ...userRecord,
       fromGatewayId: plan.fromGatewayId,
       toGatewayId: plan.toGatewayId,
     });
     try {
       await context.deps.enqueueMigration({
-        uid: builder.uid,
-        builderSlug: builder.builderSlug,
+        uid: userRecord.uid,
+        builderSlug: userRecord.builderSlug,
         fromGatewayId: plan.fromGatewayId,
         toGatewayId: plan.toGatewayId,
         source: CONTINUOUS_PLACEMENT_POLICY_SOURCE,
@@ -2560,25 +2560,25 @@ async function reconcileSharedGatewayRebalance(
       });
     } catch (error) {
       if (!isSkippablePlacementConflict(error)) throw error;
-      scheduled.add(builder.uid);
+      scheduled.add(userRecord.uid);
       context.deps.log(
-        `[placement-policy] rebalance skipped uid=${builder.uid} operationId=${operationId}: ${error.message}`,
+        `[placement-policy] rebalance skipped uid=${userRecord.uid} operationId=${operationId}: ${error.message}`,
       );
       continue;
     }
-    scheduled.add(builder.uid);
+    scheduled.add(userRecord.uid);
     applyProjectedRebalance(candidates, plan.fromGatewayId, plan.toGatewayId);
     context.result.enqueued += 1;
   }
 }
 
-function drainingSharedGatewayBuilder(
+function drainingSharedGatewayUser(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
   fromGatewayId: string,
 ): { uid: string; builderSlug: string; sourceAssignmentEpoch: number } | null {
   if (context.migrations.has(user.uid)) return null;
-  const lease = builderActivationLease(user.data);
+  const lease = userActivationLease(user.data);
   if (lease && LIVE_LEASE_STATUSES.has(lease.status)) return null;
   const assignment = context.assignments.get(
     placementAssignmentKey(fromGatewayId, user.uid),
@@ -2608,8 +2608,8 @@ async function reconcileDrainingSharedGateway(
       : projectedCandidates.filter((candidate) => candidate.gatewayId === pairedTargetGatewayId);
     for (const user of [...context.state.users].sort((left, right) =>
       left.uid.localeCompare(right.uid))) {
-      const builder = drainingSharedGatewayBuilder(context, user, fromGatewayId);
-      if (!builder) continue;
+      const userRecord = drainingSharedGatewayUser(context, user, fromGatewayId);
+      if (!userRecord) continue;
       const selection = selectPlatformPreferredSharedGateway(context, {
         uid: user.uid,
         purpose: "migration",
@@ -2617,7 +2617,7 @@ async function reconcileDrainingSharedGateway(
       });
       if (selection.kind !== "selected") continue;
       const outcome = await enqueueDrainMove(context, {
-        builder, fromGatewayId, toGatewayId: selection.gatewayId, pairedTargetGatewayId,
+        userRecord, fromGatewayId, toGatewayId: selection.gatewayId, pairedTargetGatewayId,
       });
       if (outcome === "stopped") break;
       if (outcome === "skipped") continue;
@@ -2634,28 +2634,28 @@ async function reconcileDrainingSharedGateway(
 async function enqueueDrainMove(
   context: PlacementPolicyReconcileContext,
   move: {
-    builder: { uid: string; builderSlug: string; sourceAssignmentEpoch: number };
+    userRecord: { uid: string; builderSlug: string; sourceAssignmentEpoch: number };
     fromGatewayId: string;
     toGatewayId: string;
     pairedTargetGatewayId: string | null;
   },
 ): Promise<"enqueued" | "skipped" | "stopped"> {
-  const { builder, fromGatewayId, toGatewayId } = move;
+  const { userRecord, fromGatewayId, toGatewayId } = move;
   try {
     await context.deps.enqueueMigration({
-      uid: builder.uid,
-      builderSlug: builder.builderSlug,
+      uid: userRecord.uid,
+      builderSlug: userRecord.builderSlug,
       fromGatewayId,
       toGatewayId,
       source: CONTINUOUS_PLACEMENT_POLICY_SOURCE,
-      operationId: continuousPlacementMigrationOperationId({ ...builder, fromGatewayId, toGatewayId }),
+      operationId: continuousPlacementMigrationOperationId({ ...userRecord, fromGatewayId, toGatewayId }),
       sharedDrain: { pairedTargetGatewayId: move.pairedTargetGatewayId },
     });
     return "enqueued";
   } catch (error) {
     if (isSkippablePlacementConflict(error)) {
       context.deps.log(
-        `[placement-policy] drain of ${fromGatewayId} skipped uid=${builder.uid}: ${error.message}; an operator move is needed`,
+        `[placement-policy] drain of ${fromGatewayId} skipped uid=${userRecord.uid}: ${error.message}; an operator move is needed`,
       );
       return "skipped";
     }
@@ -2682,7 +2682,7 @@ export async function reconcilePlacementPolicyOnce(
     sharedGatewayIds: state.sharedGatewayIds,
   });
   if (!pool) {
-    deps.log("[placement-policy] idle: the shared pool has no Cowboy-managed members yet");
+    deps.log("[placement-policy] idle: the shared pool has no controller-managed members yet");
     return result;
   }
   const gateways = new Map(state.gateways.map((item) => [item.gatewayId, item]));
@@ -2767,7 +2767,7 @@ function liveLeaseTargetGatewayIds(
 }
 
 // Disposable runtimes leave no fleet tombstone: once retirement cleanup has
-// succeeded, the durable record is deleted and the Builder's placement
+// succeeded, the durable record is deleted and the user's placement
 // receipts become the audit trail.
 async function reconcileDisposableTombstones(
   context: PlacementPolicyReconcileContext,
@@ -2812,13 +2812,13 @@ function placementMigrationSource(
   value: unknown,
 ): PlacementPolicyMigration["source"] | null {
   if (value === CONTINUOUS_PLACEMENT_POLICY_SOURCE) return value;
-  if (value === BUILDER_ACTIVATION_LEASE_SOURCE) return value;
+  if (value === USER_ACTIVATION_LEASE_SOURCE) return value;
   return null;
 }
 
 function activeMigration(operation: Stored<OperationRecord>): PlacementPolicyMigration | null {
   const data = operation as unknown as Record<string, unknown>;
-  if (data.kind !== MIGRATE_CUSTOMER_KIND) return null;
+  if (data.kind !== MIGRATE_USER_KIND) return null;
   const input = record(data.input);
   if (!input) return null;
   const uid = nonEmptyString(input.uid) ?? nonEmptyString(data.inputUid);
@@ -2847,8 +2847,8 @@ interface FirestorePlacementPolicyInput {
   store: PlatformStateStore;
   readBuilderTier: BuilderTierReader;
   placementAdmission: PlacementAdmissionPolicy;
-  policyInputs: BuilderPolicyInputsSource;
-  prepareBuilderHome?: (request: AllocateDisposableGatewayInput) => Promise<boolean>;
+  policyInputs: UserPolicyInputsSource;
+  prepareUserHome?: (request: AllocateDisposableGatewayInput) => Promise<boolean>;
   informer: FleetInformer;
   namespace: string;
   idleMs: number;
@@ -2877,7 +2877,7 @@ function completedReturnOperationIds(
   sharedGatewayIds: readonly string[],
 ): string[] {
   return users.flatMap(({ data: userData }) => {
-    const lease = builderActivationLease(userData);
+    const lease = userActivationLease(userData);
     const onShared = sharedGatewayIds.includes(currentGatewayId(userData) ?? "");
     const returnMayHaveSucceeded = lease?.status === "returning" ||
       (lease?.status === "active" && onShared);
@@ -3219,7 +3219,7 @@ function gatewayPodStartedAt(
   return currentPods.length === 1 ? millis(currentPods[0].gatewayContainerStartedAt) : null;
 }
 
-function gatewayComputerStartedAt(runtime: FleetRegistryRecord | null): number | null {
+function gatewayVmStartedAt(runtime: FleetRegistryRecord | null): number | null {
   if (runtime?.runtime !== "gce-vm") return null;
   return runtime.vm?.status === "RUNNING" ? millis(runtime.vm.startedAt) : null;
 }
@@ -3227,13 +3227,13 @@ function gatewayComputerStartedAt(runtime: FleetRegistryRecord | null): number |
 function gatewayRuntimeObservation(runtime: FleetRegistryRecord | null) {
   return {
     runtime: isGatewayRuntime(runtime?.runtime) ? runtime.runtime : undefined,
-    computerStartedAt: gatewayComputerStartedAt(runtime),
+    vmStartedAt: gatewayVmStartedAt(runtime),
     runtimeStatus: runtime?.heartbeat.status,
   };
 }
 
-function runtimeConfiguredBuilder(runtime: FleetRegistryRecord | null): ConfiguredBuilderReport | null {
-  return runtime ? parseConfiguredBuilderReport(runtime.heartbeat.configuredBuilder) : null;
+function runtimeConfiguredUser(runtime: FleetRegistryRecord | null): ConfiguredUserReport | null {
+  return runtime ? parseConfiguredUserReport(runtime.heartbeat.configuredBuilder) : null;
 }
 
 function placementGatewayFromRoot(input: {
@@ -3270,8 +3270,8 @@ function placementGatewayFromRoot(input: {
     builderSlug: root.builderSlug,
     sizingTier: root.sizingTier,
     desiredStatus: root.desiredStatus,
-    disposable: root.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
-    configuredBuilder: runtimeConfiguredBuilder(runtime),
+    disposable: root.allocation?.kind === ISOLATED_GATEWAY_ALLOCATION_KIND,
+    configuredBuilder: runtimeConfiguredUser(runtime),
     allocation: root.allocation ?? null,
     ready: runtimeReady,
     ...gatewayRuntimeObservation(runtime),
@@ -3301,7 +3301,7 @@ function placementGatewayFromRoot(input: {
   };
 }
 
-function placementBuildersPerGateway(orchestrator: OrchestratorConfig | null): number {
+function placementUsersPerGateway(orchestrator: OrchestratorConfig | null): number {
   const config = orchestrator === null
     ? parseSharedGatewayAutoscalingConfig(undefined)
     : orchestrator.sharedGatewayAutoscaling;
@@ -3331,15 +3331,15 @@ async function readPlatformCurrentSharedGatewayIds(
     .map((gateway) => gateway.gatewayId);
 }
 
-async function readPlacementBuilders(
+async function readPlacementUsers(
   informer: FleetInformer,
   store: PlatformStateStore,
   log: (message: string) => void,
-): Promise<readonly Stored<BuilderRecord>[]> {
-  const mirrored = informer.buildersWithoutMalformed();
-  if (mirrored === null) return store.builders.records.listAll();
+): Promise<readonly Stored<PlatformUserRecord>[]> {
+  const mirrored = informer.usersWithoutMalformed();
+  if (mirrored === null) return store.users.records.listAll();
   if (mirrored.malformedKeys.length > 0) {
-    log(`[placement-policy] ⚠ skipping malformed Builder records: ${mirrored.malformedKeys.join(", ")}`);
+    log(`[placement-policy] ⚠ skipping malformed user records: ${mirrored.malformedKeys.join(", ")}`);
   }
   return mirrored.records;
 }
@@ -3349,10 +3349,10 @@ async function readPlacementPolicySnapshot(
 ): Promise<PlacementPolicySnapshot> {
   const { store, idleMs: fallbackIdleMs, now: nowFn, informer, policyInputs } = input;
   const now = nowFn();
-  const [orchestrator, builders, currentPolicyInputs, roots, runtimeRecords, activeOperations, assignmentRecords, sharedPoolReplacements] =
+  const [orchestrator, userRecords, currentPolicyInputs, roots, runtimeRecords, activeOperations, assignmentRecords, sharedPoolReplacements] =
     await Promise.all([
       store.config.orchestrator.get(),
-      readPlacementBuilders(informer, store, input.log),
+      readPlacementUsers(informer, store, input.log),
       policyInputs.current() ?? policyInputs.list(),
       informer.gateways() ?? store.gateways.roots.list(),
       informer.fleetRegistry() ?? store.fleetRegistry.list(),
@@ -3360,9 +3360,9 @@ async function readPlacementPolicySnapshot(
       informer.assignments() ?? store.gateways.assignments.listAll(),
       readSharedPoolReplacements(store),
     ]);
-  const users: PlacementPolicyUser[] = builders.map((builder) => ({
-    uid: builder.uid,
-    data: builderPlacementDocument(builder, currentPolicyInputs.get(builder.uid) ?? {}),
+  const users: PlacementPolicyUser[] = userRecords.map((userRecord) => ({
+    uid: userRecord.uid,
+    data: userPlacementDocument(userRecord, currentPolicyInputs.get(userRecord.uid) ?? {}),
   }));
   const pool = deriveSharedGatewayPoolConfig(roots.map((root) => ({
     gatewayId: root.gatewayId,
@@ -3376,7 +3376,7 @@ async function readPlacementPolicySnapshot(
     readTerminalLeaseOperations(store, users),
   ]);
   const idleMs = orchestrator?.disposableGatewayIdleMs ?? fallbackIdleMs;
-  const buildersPerGateway = placementBuildersPerGateway(orchestrator);
+  const buildersPerGateway = placementUsersPerGateway(orchestrator);
   const runtimes = new Map(runtimeRecords.map((runtime) => [runtime.gatewayId, runtime]));
   const diagnosticsScope = placementPodDiagnosticsScope(roots.map((root) => root.gatewayId), runtimes);
   const kubernetesByGatewayId = {
@@ -3496,7 +3496,7 @@ function existingPlacementMigrationMatchesDemand(
 ): boolean {
   const operationInput = record(data.input);
   return [
-    data.kind === MIGRATE_CUSTOMER_KIND,
+    data.kind === MIGRATE_USER_KIND,
     operationInput?.uid === request.uid,
     operationInput?.builderSlug === request.builderSlug,
     operationInput?.fromGatewayId === request.fromGatewayId,
@@ -3505,14 +3505,14 @@ function existingPlacementMigrationMatchesDemand(
   ].every(Boolean);
 }
 
-function operatorRetriedBuilderReturnMatchesDemand(
+function operatorRetriedUserReturnMatchesDemand(
   data: Record<string, unknown>,
   request: EnqueuePlacementMigrationInput,
 ): boolean {
   const operationInput = record(data.input);
   return [
-    request.source === BUILDER_ACTIVATION_LEASE_SOURCE,
-    data.kind === MIGRATE_CUSTOMER_KIND,
+    request.source === USER_ACTIVATION_LEASE_SOURCE,
+    data.kind === MIGRATE_USER_KIND,
     data.status === "failed" || data.status === ROLLED_BACK_STATUS,
     millis(data.retryRequestedAt) !== null,
     operationInput?.uid === request.uid,
@@ -3528,7 +3528,7 @@ function placementMigrationIsNonTerminal(data: Record<string, unknown>): boolean
 
 function startupFailedReturnMatchesDemand(data: Record<string, unknown>, request: EnqueuePlacementMigrationInput): boolean {
   const original = record(data.input);
-  return request.source === BUILDER_ACTIVATION_LEASE_SOURCE && data.kind === MIGRATE_CUSTOMER_KIND &&
+  return request.source === USER_ACTIVATION_LEASE_SOURCE && data.kind === MIGRATE_USER_KIND &&
     data.status === "failed" && data.origin === "automatic" && data.createdBy === PLACEMENT_POLICY_ACTOR &&
     data.customerMigrationV2 === undefined && data.cutoverCommittedAt === undefined && data.cancellationRequestedAt === undefined &&
     original?.uid === request.uid && original.builderSlug === request.builderSlug &&
@@ -3539,12 +3539,12 @@ function startupFailedReturnMatchesDemand(data: Record<string, unknown>, request
 function sharedRevisionPreflightReturnRetryable(data: Record<string, unknown>, operationId: string): boolean {
   const original = record(data.input);
   return [
-    data.kind === MIGRATE_CUSTOMER_KIND,
+    data.kind === MIGRATE_USER_KIND,
     data.status === "failed",
     data.origin === "automatic",
     data.createdBy === PLACEMENT_POLICY_ACTOR,
-    original?.source === BUILDER_ACTIVATION_LEASE_SOURCE,
-    isBuilderReturnOperationIdFor(operationId, original?.fromGatewayId),
+    original?.source === USER_ACTIVATION_LEASE_SOURCE,
+    isUserReturnOperationIdFor(operationId, original?.fromGatewayId),
     nonEmptyString(original?.toGatewayId) !== null,
     data.gatewayId === original?.toGatewayId,
     data.inputUid === original?.uid,
@@ -3565,7 +3565,7 @@ function sharedRevisionPreflightReturnRetryable(data: Record<string, unknown>, o
 function sharedRevisionReturnMatchesDemand(data: Record<string, unknown>, request: EnqueuePlacementMigrationInput): boolean {
   const original = record(data.input);
   return sharedRevisionPreflightReturnRetryable(data, request.operationId) &&
-    request.source === BUILDER_ACTIVATION_LEASE_SOURCE && original?.uid === request.uid &&
+    request.source === USER_ACTIVATION_LEASE_SOURCE && original?.uid === request.uid &&
     original.builderSlug === request.builderSlug && original.fromGatewayId === request.fromGatewayId;
 }
 
@@ -3588,26 +3588,26 @@ function sourceOnlyRollbackCompleted(data: Record<string, unknown>, request: Enq
     step?.name === "recover-source" && step.status === "done";
 }
 
-function builderGatewayId(builder: Stored<BuilderRecord> | null): string | null {
-  return nonEmptyString(builder?.gateway?.gatewayId);
+function userGatewayId(userRecord: Stored<PlatformUserRecord> | null): string | null {
+  return nonEmptyString(userRecord?.gateway?.gatewayId);
 }
 
-function builderMutationFenced(builder: Stored<BuilderRecord> | null): boolean {
-  return builder !== null && builderRuntimeMutationFenced(builder);
+function userMutationFenced(userRecord: Stored<PlatformUserRecord> | null): boolean {
+  return userRecord !== null && isolatedRuntimeMutationFenced(userRecord);
 }
 
 async function assertPreRpcRetryAuthority(
   transaction: PlatformStateTransaction,
-  builder: Stored<BuilderRecord> | null,
+  userRecord: Stored<PlatformUserRecord> | null,
   request: EnqueuePlacementMigrationInput,
 ): Promise<GatewayAssignment> {
   const [source, target] = await Promise.all([
     transaction.gateways.assignments.get(request.fromGatewayId, request.uid),
     transaction.gateways.assignments.get(request.toGatewayId, request.uid),
   ]);
-  const exact = !builderMutationFenced(builder) &&
-    builderGatewayId(builder) === request.fromGatewayId &&
-    builder?.fences.migration === undefined && target === null &&
+  const exact = !userMutationFenced(userRecord) &&
+    userGatewayId(userRecord) === request.fromGatewayId &&
+    userRecord?.fences.migration === undefined && target === null &&
     retrySourceAssignmentMatches(source, request) &&
     continuousPlacementMigrationOperationId({ ...request, sourceAssignmentEpoch: source.epoch }) === request.operationId;
   if (!exact) throw new Error("workspace migration retry authority remains blocked");
@@ -3619,15 +3619,15 @@ function retrySourceAssignmentMatches(assignment: GatewayAssignment | null, requ
     assignment.state === "serving" && Number.isSafeInteger(assignment.epoch) && assignment.epoch >= 0;
 }
 
-function startupReturnLeaseMatches(builder: Stored<BuilderRecord> | null, lease: BuilderActivationLease | null, request: EnqueuePlacementMigrationInput): lease is BuilderActivationLease {
-  return !builderMutationFenced(builder) && builderGatewayId(builder) === request.fromGatewayId &&
+function startupReturnLeaseMatches(userRecord: Stored<PlatformUserRecord> | null, lease: UserActivationLease | null, request: EnqueuePlacementMigrationInput): lease is UserActivationLease {
+  return !userMutationFenced(userRecord) && userGatewayId(userRecord) === request.fromGatewayId &&
     lease?.status === "returning" && lease.targetGatewayId === request.fromGatewayId && lease.raw.returnOperationId === request.operationId;
 }
 
-function startupReturnSourceMatches(root: ReturnType<typeof projectGatewayDesiredRootForGateway>, lease: BuilderActivationLease, request: EnqueuePlacementMigrationInput): boolean {
+function startupReturnSourceMatches(root: ReturnType<typeof projectGatewayDesiredRootForGateway>, lease: UserActivationLease, request: EnqueuePlacementMigrationInput): boolean {
   const allocation = root?.allocation;
   return root?.gatewayClass === "builder" && root.ownerUid === request.uid && root.desiredStatus !== "retired" &&
-    allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND && allocation.claimedByUid === request.uid &&
+    allocation?.kind === ISOLATED_GATEWAY_ALLOCATION_KIND && allocation.claimedByUid === request.uid &&
     allocation.leaseId === lease.leaseId && allocation.generation === lease.generation;
 }
 
@@ -3643,7 +3643,7 @@ function sharedReturnTargetReady(root: ReturnType<typeof projectGatewayDesiredRo
 async function assertStartupReturnAuthority(
   input: PlacementMigrationEnqueueInput,
   transaction: PlatformStateTransaction,
-  builder: Stored<BuilderRecord> | null,
+  userRecord: Stored<PlatformUserRecord> | null,
   request: EnqueuePlacementMigrationInput,
 ) {
   const [assignment, roots, runtime, pool, targetAssignment] = await Promise.all([
@@ -3655,30 +3655,30 @@ async function assertStartupReturnAuthority(
   ]);
   const source = roots.get(request.fromGatewayId) ?? null;
   const target = roots.get(request.toGatewayId) ?? null;
-  const lease = activationLeaseOf(builder?.activationLease);
+  const lease = activationLeaseOf(userRecord?.activationLease);
   const sourceRoot = projectGatewayDesiredRootForGateway(source, request.fromGatewayId);
   const targetRoot = projectGatewayDesiredRootForGateway(target, request.toGatewayId);
-  const exact = targetAssignment === null && startupReturnLeaseMatches(builder, lease, request) &&
+  const exact = targetAssignment === null && startupReturnLeaseMatches(userRecord, lease, request) &&
     startupReturnSourceMatches(sourceRoot, lease, request) && retrySourceAssignmentMatches(assignment, request) &&
     pool?.sharedGatewayIds.includes(request.toGatewayId) && sharedReturnTargetReady(targetRoot, runtime, request, input.now());
-  if (!exact) throw new Error("Builder startup return retry authority changed");
+  if (!exact) throw new Error("User startup return retry authority changed");
   return { assignment, source, target };
 }
 
 async function assertSharedRevisionReturnAuthority(
   input: PlacementMigrationEnqueueInput,
   transaction: PlatformStateTransaction,
-  builder: Stored<BuilderRecord> | null,
+  userRecord: Stored<PlatformUserRecord> | null,
   request: EnqueuePlacementMigrationInput & { previousTargetGatewayId: string },
 ): Promise<void> {
-  const authority = await assertStartupReturnAuthority(input, transaction, builder, request);
+  const authority = await assertStartupReturnAuthority(input, transaction, userRecord, request);
   const previousTargetAssignment = await transaction.gateways.assignments.get(request.previousTargetGatewayId, request.uid);
   const rootsUnfenced = [authority.source, authority.target].every(root =>
     root?.runtimeRestartFence === undefined && root?.retirementClaim === undefined);
   const exact = rootsUnfenced && authority.source?.desiredStatus === "running" &&
-    authority.assignment?.slug === request.builderSlug && builder?.fences.migration === undefined &&
+    authority.assignment?.slug === request.builderSlug && userRecord?.fences.migration === undefined &&
     previousTargetAssignment === null;
-  if (!exact) throw new Error("Builder revision return retry authority changed");
+  if (!exact) throw new Error("User revision return retry authority changed");
 }
 
 function proofRows(value: unknown): Array<Record<string, unknown>> {
@@ -3734,7 +3734,7 @@ export function repairedPlacementProofMatches(data: Record<string, unknown>, rep
 async function assertCurrentRepairTarget(
   input: PlacementMigrationEnqueueInput,
   transaction: PlatformStateTransaction,
-  builder: Stored<BuilderRecord> | null,
+  userRecord: Stored<PlatformUserRecord> | null,
   request: EnqueuePlacementMigrationInput,
   sourceImage: string,
 ): Promise<void> {
@@ -3752,7 +3752,7 @@ async function assertCurrentRepairTarget(
     target?.runtimeRestartFence === undefined, target?.retirementClaim == null,
     isReleasePayload(payload) && releasePayloadHash(payload) === releasePayloadHash(input.platformArtifact) &&
       sourceImage.startsWith(payload.imageRepository + ':') && sourceImage.endsWith('@' + payload.imageTag.split('@')[1]),
-    builder?.slug === request.builderSlug, builder?.openclaw.status === 'complete'].every(Boolean);
+    userRecord?.slug === request.builderSlug, userRecord?.openclaw.status === 'complete'].every(Boolean);
   if (!exact) throw new Error('repaired source placement current target authority changed');
 }
 interface RepairedPostgresSourceObservation {
@@ -3824,7 +3824,7 @@ async function assertCurrentPostgresRepairSource(
 async function findRepairedSourcePlacement(
   input: PlacementMigrationEnqueueInput,
   transaction: PlatformStateTransaction,
-  builder: Stored<BuilderRecord> | null,
+  userRecord: Stored<PlatformUserRecord> | null,
   request: EnqueuePlacementMigrationInput,
   data: Record<string, unknown>,
 ): Promise<boolean> {
@@ -3834,14 +3834,14 @@ async function findRepairedSourcePlacement(
     .filter(row => repairedPlacementProofMatches(data, row, request))
     .sort((left, right) => Number(record(right.sourceRuntimeRecovery)?.completedAt) - Number(record(left.sourceRuntimeRecovery)?.completedAt))[0];
   if (!repair) return false;
-  const assignment = await assertPreRpcRetryAuthority(transaction, builder, request);
+  const assignment = await assertPreRpcRetryAuthority(transaction, userRecord, request);
   const captured = record(record(repair.input)?.sourceRecovery) ?? {};
   const owner = proofRows(captured.assignments).find(row => row.uid === request.uid);
   if (assignment.epoch !== owner?.assignmentEpoch || assignment.slug !== request.builderSlug) throw new Error('source repair assignment changed');
   const sourceImage = record(record(repair.sourceRuntimeRecovery)?.images)?.gateway;
   if (typeof sourceImage !== 'string') throw new Error('source repair image receipt is unavailable');
   await assertCurrentPostgresRepairSource(input, transaction, repair, request);
-  await assertCurrentRepairTarget(input, transaction, builder, request, sourceImage);
+  await assertCurrentRepairTarget(input, transaction, userRecord, request, sourceImage);
   return true;
 }
 
@@ -3916,7 +3916,7 @@ function neverClaimedSharedDrainMove(
   if (data === undefined) return false;
   const operationInput = record(data.input);
   return [
-    data.kind === MIGRATE_CUSTOMER_KIND,
+    data.kind === MIGRATE_USER_KIND,
     data.origin === "automatic",
     data.createdBy === PLACEMENT_POLICY_ACTOR,
     sharedDrainMoveNeverClaimed(data),
@@ -3929,11 +3929,11 @@ function neverClaimedSharedDrainMove(
 }
 
 function supersedingActivationLeaseHolds(
-  builder: Stored<BuilderRecord> | null,
+  userRecord: Stored<PlatformUserRecord> | null,
   request: SupersedePendingSharedDrainMoveInput,
 ): boolean {
-  const lease = activationLeaseOf(builder?.activationLease);
-  return builderGatewayId(builder) === request.fromGatewayId &&
+  const lease = activationLeaseOf(userRecord?.activationLease);
+  return userGatewayId(userRecord) === request.fromGatewayId &&
     lease?.leaseId === request.leaseId &&
     lease.generation === request.generation &&
     lease.status === "provisioning" &&
@@ -3946,14 +3946,14 @@ export async function supersedePendingSharedDrainMove(
 ): Promise<boolean> {
   try {
     return await input.store.transaction({ label: "placement-policy.supersede-shared-drain-move" }, async (transaction) => {
-      const [operation, builder, source] = await Promise.all([
+      const [operation, userRecord, source] = await Promise.all([
         transaction.journal.operations.get(request.operationId),
-        transaction.builders.records.get(request.uid),
+        transaction.users.records.get(request.uid),
         transaction.gateways.roots.get(request.fromGatewayId),
       ]);
       if (
         !neverClaimedSharedDrainMove(operation === null ? undefined : operation as unknown as Record<string, unknown>, request) ||
-        !supersedingActivationLeaseHolds(builder, request) ||
+        !supersedingActivationLeaseHolds(userRecord, request) ||
         source?.desiredStatus !== "draining"
       ) {
         return false;
@@ -3964,7 +3964,7 @@ export async function supersedePendingSharedDrainMove(
         completedAt: now,
         expireAt: now + OPERATION_JOURNAL_RETENTION_MS,
         rolledBack: false,
-        error: `superseded before claim by Builder activation lease ${request.leaseId} ` +
+        error: `superseded before claim by user activation lease ${request.leaseId} ` +
           `generation ${request.generation} (operation ${request.activationOperationId})`,
         supersededBy: {
           kind: "builder-activation",
@@ -3999,8 +3999,8 @@ function supersededSharedDrainMoveCanRearm(
     data.customerMigrationV2 === undefined;
 }
 
-function assertBuilderPlacementNotHeld(builder: Stored<BuilderRecord> | null, uid: string): void {
-  if (builder?.openclaw.managedBy === "operator") throw new HeldBuilderPlacementError(uid);
+function assertUserPlacementNotHeld(userRecord: Stored<PlatformUserRecord> | null, uid: string): void {
+  if (userRecord?.openclaw.managedBy === "operator") throw new HeldUserPlacementError(uid);
 }
 
 function operationInputWithout(
@@ -4023,23 +4023,23 @@ type PlacementMigrationEnqueueInput = Pick<FirestorePlacementPolicyInput, "store
 async function placementMigrationRearm(
   input: PlacementMigrationEnqueueInput,
   transaction: PlatformStateTransaction,
-  builder: Stored<BuilderRecord> | null,
+  userRecord: Stored<PlatformUserRecord> | null,
   request: EnqueuePlacementMigrationInput,
   existing: Stored<OperationRecord>,
 ): Promise<OperationPatch | null> {
   const data = existing as unknown as Record<string, unknown>;
   const retarget = { input: operationInputWithout(existing, [], { toGatewayId: request.toGatewayId }), gatewayId: request.toGatewayId };
   if (sharedRevisionReturnMatchesDemand(data, request)) {
-    await assertSharedRevisionReturnAuthority(input, transaction, builder, {
+    await assertSharedRevisionReturnAuthority(input, transaction, userRecord, {
       ...request, previousTargetGatewayId: existing.input.toGatewayId as string,
     });
     return { ...rearmedPlacementMigrationPatch(), ...retarget };
   }
   if (startupFailedReturnMatchesDemand(data, request)) {
-    await assertStartupReturnAuthority(input, transaction, builder, request);
+    await assertStartupReturnAuthority(input, transaction, userRecord, request);
     return { ...rearmedPlacementMigrationPatch(), ...retarget };
   }
-  if (operatorRetriedBuilderReturnMatchesDemand(data, request)) {
+  if (operatorRetriedUserReturnMatchesDemand(data, request)) {
     const removed = nativeReturnRecoveryCompleted(existing) ? ["recoverSourceOnly", "nativeReturnSourceRecovery"] : [];
     return {
       ...rearmedPlacementMigrationPatch(),
@@ -4056,11 +4056,11 @@ async function placementMigrationRearm(
   if (supersededSharedDrainMoveCanRearm(data, request)) {
     return { ...rearmedPlacementMigrationPatch(), supersededBy: CLEAR };
   }
-  if (await findRepairedSourcePlacement(input, transaction, builder, request, data)) {
+  if (await findRepairedSourcePlacement(input, transaction, userRecord, request, data)) {
     return rearmedPlacementMigrationPatch();
   }
   if (preRpcAuthorityFailure(data, request) || sourceOnlyRollbackCompleted(data, request)) {
-    await assertPreRpcRetryAuthority(transaction, builder, request);
+    await assertPreRpcRetryAuthority(transaction, userRecord, request);
     return {
       ...rearmedPlacementMigrationPatch(),
       schedulerHandoff: CLEAR,
@@ -4082,7 +4082,7 @@ export async function enqueuePlacementMigration(
   const now = input.now();
   const operation: OperationRecord = {
     id: request.operationId,
-    kind: MIGRATE_CUSTOMER_KIND,
+    kind: MIGRATE_USER_KIND,
     status: "pending",
     origin: "automatic",
     createdBy: PLACEMENT_POLICY_ACTOR,
@@ -4101,8 +4101,8 @@ export async function enqueuePlacementMigration(
     inputUid: request.uid,
   };
   await input.store.transaction({ label: "placement-policy.enqueue-migration" }, async (transaction) => {
-    const builder = await transaction.builders.records.get(request.uid);
-    assertBuilderPlacementNotHeld(builder, request.uid);
+    const userRecord = await transaction.users.records.get(request.uid);
+    assertUserPlacementNotHeld(userRecord, request.uid);
     const sharedDrain = request.sharedDrain;
     if (sharedDrain) await assertSharedDrainAuthority(transaction, { ...request, sharedDrain });
     const existing = await transaction.journal.operations.get(request.operationId);
@@ -4110,7 +4110,7 @@ export async function enqueuePlacementMigration(
       await transaction.journal.operations.create(operation);
       return;
     }
-    const rearm = await placementMigrationRearm(input, transaction, builder, request, existing);
+    const rearm = await placementMigrationRearm(input, transaction, userRecord, request, existing);
     if (rearm === null) return;
     await transaction.journal.operations.patch(request.operationId, rearm, {
       status: [existing.status],
@@ -4129,7 +4129,7 @@ function recoveryTargetMatchesRequest(
     root.ownerUid === request.uid &&
     root.gatewayClass !== "shared" &&
     root.desiredStatus !== "retired" &&
-    allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND &&
+    allocation?.kind === ISOLATED_GATEWAY_ALLOCATION_KIND &&
     allocation.claimedByUid === request.uid &&
     allocation.leaseId === request.leaseId &&
     allocation.generation === request.generation;
@@ -4155,19 +4155,19 @@ function recoveryTargetBecameReady(input: {
 }
 
 function recoveryAuthorityMatches(input: {
-  builder: Stored<BuilderRecord> | null;
+  userRecord: Stored<PlatformUserRecord> | null;
   assignment: Stored<GatewayAssignment> | null;
   request: RecoverUnreachableDisposableGatewayInput;
 }): boolean {
-  const { builder, assignment, request } = input;
-  const lease = activationLeaseOf(builder?.activationLease);
+  const { userRecord, assignment, request } = input;
+  const lease = activationLeaseOf(userRecord?.activationLease);
   return (!request.sourceUnavailable || (
     lease?.leaseId === request.leaseId &&
     lease.generation === request.generation &&
     lease.status === "returning" &&
     lease.raw.returnReason === "source-unavailable"
   )) &&
-    builderGatewayId(builder) === request.authoritativeGatewayId &&
+    userGatewayId(userRecord) === request.authoritativeGatewayId &&
     assignment?.uid === request.uid &&
     assignment.gatewayId === request.authoritativeGatewayId &&
     assignment.state === "serving";
@@ -4178,9 +4178,9 @@ async function exactRecoveryState(
   transaction: PlatformStateTransaction,
   request: RecoverUnreachableDisposableGatewayInput,
 ): Promise<Stored<GatewayRoot>> {
-  const [stored, builder, assignment, runtime] = await Promise.all([
+  const [stored, userRecord, assignment, runtime] = await Promise.all([
     transaction.gateways.roots.get(request.gatewayId),
-    transaction.builders.records.get(request.uid),
+    transaction.users.records.get(request.uid),
     transaction.gateways.assignments.get(request.authoritativeGatewayId, request.uid),
     transaction.fleetRegistry.get(request.gatewayId),
   ]);
@@ -4195,9 +4195,9 @@ async function exactRecoveryState(
       `gateway ${request.gatewayId} became ready before recovery`,
     );
   }
-  if (!recoveryAuthorityMatches({ builder, assignment, request })) {
+  if (!recoveryAuthorityMatches({ userRecord, assignment, request })) {
     throw new GatewayRetirementConflictError(
-      `Builder ${request.uid} is no longer authoritative on ${request.authoritativeGatewayId}`,
+      `User ${request.uid} is no longer authoritative on ${request.authoritativeGatewayId}`,
     );
   }
   return stored;
@@ -4307,7 +4307,7 @@ async function recoverUnreachableDisposableGatewayFirestore(
   input: FirestorePlacementPolicyInput,
   request: RecoverUnreachableDisposableGatewayInput,
 ): Promise<{ recovered: boolean; operationId: string }> {
-  const operationId = builderRecoverOperationId(request.gatewayId, request.generation);
+  const operationId = isolatedRecoverOperationId(request.gatewayId, request.generation);
   await reserveUnreachableDisposableRecovery(input, request, operationId);
   const diagnostics = await input.readGatewayPodDiagnostics({
     namespace: input.namespace,
@@ -4335,14 +4335,14 @@ function retirementAllocationMatches(
   const allocation = record(root.allocation);
   const allocationIdentityMatches = request.leaseId === undefined ||
     (
-      allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND &&
+      allocation?.kind === ISOLATED_GATEWAY_ALLOCATION_KIND &&
       allocation.claimedByUid === request.uid &&
       allocation.leaseId === request.leaseId &&
       allocation.generation === request.generation
     );
   return root.ownerUid === request.uid &&
     root.gatewayClass !== "shared" &&
-    allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND &&
+    allocation?.kind === ISOLATED_GATEWAY_ALLOCATION_KIND &&
     allocation.generation === request.generation &&
     allocationIdentityMatches;
 }
@@ -4352,8 +4352,8 @@ async function assertRetirementAuthorityFence(
   request: RetireOwnedGatewayInput,
 ): Promise<void> {
   if (!request.authoritativeGatewayId) return;
-  const [builder, assignment] = await Promise.all([
-    transaction.builders.records.get(request.uid),
+  const [userRecord, assignment] = await Promise.all([
+    transaction.users.records.get(request.uid),
     transaction.gateways.assignments.get(request.authoritativeGatewayId, request.uid),
   ]);
   if (!retirementAuthorityFenceAllows({
@@ -4363,11 +4363,11 @@ async function assertRetirementAuthorityFence(
     leaseId: request.leaseId,
     generation: request.generation,
     expectedLeaseStatus: request.authoritativeLeaseStatus ?? "returning",
-    builder,
+    userRecord,
     assignment,
   })) {
     throw new GatewayRetirementConflictError(
-      `Builder ${request.uid} is no longer authoritatively returned to ${request.authoritativeGatewayId}`,
+      `User ${request.uid} is no longer authoritatively returned to ${request.authoritativeGatewayId}`,
     );
   }
 }
@@ -4481,14 +4481,14 @@ interface RetirementAuthorityFenceInput {
   leaseId: string | undefined;
   generation: number | undefined;
   expectedLeaseStatus: AuthoritativeLeaseStatus;
-  builder: Pick<BuilderRecord, "gateway" | "activationLease"> | null;
+  userRecord: Pick<PlatformUserRecord, "gateway" | "activationLease"> | null;
   assignment: Pick<GatewayAssignment, "uid" | "gatewayId" | "state"> | null;
 }
 
 function retirementLeaseFenceAllows(input: RetirementAuthorityFenceInput): boolean {
-  const lease = input.builder?.activationLease;
-  return input.builder !== null &&
-    input.builder.gateway?.gatewayId === input.authoritativeGatewayId &&
+  const lease = input.userRecord?.activationLease;
+  return input.userRecord !== null &&
+    input.userRecord.gateway?.gatewayId === input.authoritativeGatewayId &&
     lease?.leaseId === input.leaseId &&
     lease?.generation === input.generation &&
     lease?.status === input.expectedLeaseStatus &&
@@ -4521,7 +4521,7 @@ function retiredDisposableGatewayVerdict(input: {
     root !== null,
     root?.desiredStatus === "retired",
     root?.ownerUid === request.ownerUid,
-    root?.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
+    root?.allocation?.kind === ISOLATED_GATEWAY_ALLOCATION_KIND,
     root?.allocation?.generation === request.generation,
     input.claimOperationId === input.operationId,
     operation !== null,
@@ -4532,11 +4532,11 @@ function retiredDisposableGatewayVerdict(input: {
   if (operation?.status === "succeeded") {
     return input.unreleasedHandoffOperationId === null ? "delete" : "handoff-pending";
   }
-  if (operation?.status === "failed" && isRetryableBuilderRetirementFailure(operation.error, request.gatewayId)) return "rearmed";
+  if (operation?.status === "failed" && isRetryableUserRetirementFailure(operation.error, request.gatewayId)) return "rearmed";
   return "skip";
 }
 
-function isRetryableBuilderRetirementFailure(error: unknown, gatewayId: string): boolean {
+function isRetryableUserRetirementFailure(error: unknown, gatewayId: string): boolean {
   return isReapedOperationError(error) || isAgentStoreRetirementSessionDrain(error, gatewayId);
 }
 
@@ -4559,7 +4559,7 @@ async function readRetiredDisposableGatewayVerdict(
     const [stored, operation, owner, handoffs] = await Promise.all([
       transaction.gateways.roots.get(request.gatewayId),
       transaction.journal.operations.get(operationId),
-      transaction.builders.records.get(request.ownerUid),
+      transaction.users.records.get(request.ownerUid),
       transaction.journal.operations.getMany(handoffOperationIds),
     ]);
     const unreleasedHandoffOperationId = handoffOperationIds.find((id) => {
@@ -4572,7 +4572,7 @@ async function readRetiredDisposableGatewayVerdict(
       root: projectGatewayDesiredRootForGateway(stored, request.gatewayId),
       claimOperationId: record(stored?.retirementClaim)?.operationId,
       operation,
-      ownerMirrorGatewayId: builderGatewayId(owner),
+      ownerMirrorGatewayId: userGatewayId(owner),
       unreleasedHandoffOperationId,
     });
     if (verdict === "rearmed") {
@@ -4588,7 +4588,7 @@ async function deleteRetiredDisposableGatewayFirestore(
 ): Promise<boolean> {
   const { store } = input;
   const operationId = placementRetireOperationId(request.ownerUid, request.gatewayId, request.generation);
-  const recoverOperationId = builderRecoverOperationId(request.gatewayId, request.generation);
+  const recoverOperationId = isolatedRecoverOperationId(request.gatewayId, request.generation);
   const reading = await readRetiredDisposableGatewayVerdict(store, request, operationId);
   if (reading.verdict === "rearmed") {
     input.log(
@@ -4603,7 +4603,7 @@ async function deleteRetiredDisposableGatewayFirestore(
     return false;
   }
   if (reading.verdict !== "delete") return false;
-  const preparationCleared = await clearRetiredBuilderActivationPreparation({ store }, { uid: request.ownerUid, targetGatewayId: request.gatewayId, generation: request.generation, retirementOperationId: operationId });
+  const preparationCleared = await clearRetiredUserActivationPreparation({ store }, { uid: request.ownerUid, targetGatewayId: request.gatewayId, generation: request.generation, retirementOperationId: operationId });
   if (preparationCleared) input.log(`[placement-policy] cleared failed preparation for retired target ${request.gatewayId}`);
   await Promise.all([
     store.journal.operations.delete(recoverOperationId),
@@ -4640,7 +4640,7 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     assignInitialPlacement: (request) => assignInitialPlacementInStore(input, request),
     allocateDisposableGateway: async (request) => {
       if (await refreshRequestedAllocationFirestore(input, request)) return null;
-      if (input.prepareBuilderHome && !await input.prepareBuilderHome(request)) return null;
+      if (input.prepareUserHome && !await input.prepareUserHome(request)) return null;
       return allocateDisposableGatewayFirestore({
         ...input,
         retireParkedGateway: (parked) =>
@@ -4666,7 +4666,7 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     supersedeRollingSharedGateway: (request) => supersedeRollingSharedGatewayRoll({ store, now: input.now }, request),
     recoverUnreachableDisposableGateway: (request) =>
       recoverUnreachableDisposableGatewayFirestore(input, request),
-    readBuilderActivity: (request) => readBuilderActivityFirestore(input, request),
+    readUserActivity: (request) => readUserActivityFirestore(input, request),
     enqueueMigration: (request) => enqueuePlacementMigration(input, request),
     supersedePendingSharedDrainMove: (request) => supersedePendingSharedDrainMove(input, request),
     retireOwnedGateway: (request) => retireOwnedGatewayFirestore(input, request),

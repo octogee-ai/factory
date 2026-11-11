@@ -17,15 +17,15 @@ import {
   applyConfigPatch,
   configPatchRetryPlan,
   isPermanentConfigPatchFailure,
-  customerAgentRosterPatch,
-  customerConfigAgentRosterReplacePaths,
-  customerConfigFullAgentListReplacePaths,
-  customerConfigReplacePaths,
-  filterOutCustomerBindings,
+  userAgentRosterPatch,
+  userConfigAgentRosterReplacePaths,
+  userConfigFullAgentListReplacePaths,
+  userConfigReplacePaths,
+  filterOutUserBindings,
   fullAgentListReplacePaths,
-  mergeCustomerBindings,
-  orderBuilderGatewayRoster,
-  replaceCustomerAgentsInFullAgentList,
+  mergeUserBindings,
+  orderIsolatedGatewayRoster,
+  replaceUserAgentsInFullAgentList,
   staleProjectAgentAccountNulls,
 } from "./apply-config-patch.js";
 import { OpenclawWireError, type GatewayRpcClient } from "./gateway-rpc.js";
@@ -1201,13 +1201,13 @@ describe("fullAgentListReplacePaths — the guard confirmation set for full agen
   });
 });
 
-describe("customerConfigReplacePaths — the customer-scoped guard confirmation set", () => {
+describe("userConfigReplacePaths — the user-scoped guard confirmation set", () => {
   it("confirms bindings without flipping agents.list upserts into replacement", () => {
-    expect(customerConfigReplacePaths({}, "alice")).toEqual(["bindings"]);
+    expect(userConfigReplacePaths({}, "alice")).toEqual(["bindings"]);
   });
 
   it("adds the full-agent-list set only for callers that intentionally send the full replacement list", () => {
-    expect(customerConfigFullAgentListReplacePaths({}, "alice")).toEqual([
+    expect(userConfigFullAgentListReplacePaths({}, "alice")).toEqual([
       "agents.list",
       "agents.list[].model.fallbacks",
       "agents.list[].tools.alsoAllow",
@@ -1230,12 +1230,12 @@ describe("customerConfigReplacePaths — the customer-scoped guard confirmation 
         },
       },
     };
-    expect(customerConfigReplacePaths(current, "alice")).toEqual([
+    expect(userConfigReplacePaths(current, "alice")).toEqual([
       "bindings",
       "channels.mattermost.accounts.alice-coach.groupAllowFrom",
       "channels.mattermost.accounts.alice-coach.nested.deep.list",
     ]);
-    expect(customerConfigFullAgentListReplacePaths(current, "alice")).toEqual([
+    expect(userConfigFullAgentListReplacePaths(current, "alice")).toEqual([
       "agents.list",
       "agents.list[].model.fallbacks",
       "agents.list[].tools.alsoAllow",
@@ -1245,12 +1245,12 @@ describe("customerConfigReplacePaths — the customer-scoped guard confirmation 
     ]);
   });
 
-  it("handles an absent or non-object account (just customer-scoped arrays to confirm)", () => {
+  it("handles an absent or non-object account (just user-scoped arrays to confirm)", () => {
     expect(
-      customerConfigReplacePaths({ channels: { mattermost: { accounts: {} } } }, "alice"),
+      userConfigReplacePaths({ channels: { mattermost: { accounts: {} } } }, "alice"),
     ).toEqual(["bindings"]);
     expect(
-      customerConfigReplacePaths(
+      userConfigReplacePaths(
         { channels: { mattermost: { accounts: { "alice-coach": "garbage" } } } },
         "alice",
       ),
@@ -1258,7 +1258,7 @@ describe("customerConfigReplacePaths — the customer-scoped guard confirmation 
   });
 });
 
-describe("replaceCustomerAgentsInFullAgentList", () => {
+describe("replaceUserAgentsInFullAgentList", () => {
   const current = {
     agents: {
       list: [
@@ -1271,8 +1271,8 @@ describe("replaceCustomerAgentsInFullAgentList", () => {
     },
   };
 
-  it("drops ALL of the customer's agents (coach + project) and replaces them at the first customer-owned slot, leaving other tenants alone", () => {
-    const list = replaceCustomerAgentsInFullAgentList(current, "alice", [
+  it("drops ALL of the customer's agents (defaultAgent + project) and replaces them at the first user-owned slot, leaving other tenants alone", () => {
+    const list = replaceUserAgentsInFullAgentList(current, "alice", [
       { id: "octogee-alice-coach" },
       { id: "octogee-alice-proj-orbit-coach" },
     ]);
@@ -1287,7 +1287,7 @@ describe("replaceCustomerAgentsInFullAgentList", () => {
   });
 
   it("does not confuse hyphenated sibling slugs (alice vs alice-b)", () => {
-    const list = replaceCustomerAgentsInFullAgentList(
+    const list = replaceUserAgentsInFullAgentList(
       { agents: { list: [{ id: "octogee-alice-b-coach" }] } },
       "alice",
       [{ id: "octogee-alice-coach" }],
@@ -1298,8 +1298,8 @@ describe("replaceCustomerAgentsInFullAgentList", () => {
     ]);
   });
 
-  it("replaces the customer slice in place so redacted SecretRef paths for sibling agents stay stable", () => {
-    const list = replaceCustomerAgentsInFullAgentList(
+  it("replaces the user slice in place so redacted SecretRef paths for sibling agents stay stable", () => {
+    const list = replaceUserAgentsInFullAgentList(
       {
         agents: {
           list: [
@@ -1331,9 +1331,9 @@ describe("replaceCustomerAgentsInFullAgentList", () => {
   });
 });
 
-describe("orderBuilderGatewayRoster", () => {
-  it("leads with the configured coach and keeps the model-less anchor last", () => {
-    expect(orderBuilderGatewayRoster(
+describe("orderIsolatedGatewayRoster", () => {
+  it("leads with the configured agent and keeps the model-less anchor last", () => {
+    expect(orderIsolatedGatewayRoster(
       [
         { id: "octogee-unmatched-route" },
         { id: "octogee-alice-proj-orbit-coach", model: "house" },
@@ -1350,14 +1350,14 @@ describe("orderBuilderGatewayRoster", () => {
     ]);
   });
 
-  it("returns the roster unchanged when neither the coach nor the anchor is present", () => {
+  it("returns the roster unchanged when neither the agent nor the anchor is present", () => {
     const roster = [{ id: "octogee-bob-coach" }, { id: "octogee-carol-coach" }];
-    expect(orderBuilderGatewayRoster(roster, "octogee-alice-coach", "octogee-unmatched-route"))
+    expect(orderIsolatedGatewayRoster(roster, "octogee-alice-coach", "octogee-unmatched-route"))
       .toEqual(roster);
   });
 });
 
-describe("customerAgentRosterPatch", () => {
+describe("userAgentRosterPatch", () => {
   it("uses beta keyed entries, upserts only live agents, and translates memorySearch", () => {
     const current = {
       agents: {
@@ -1368,7 +1368,7 @@ describe("customerAgentRosterPatch", () => {
         },
       },
     };
-    const patch = customerAgentRosterPatch(current, "alice", [
+    const patch = userAgentRosterPatch(current, "alice", [
       {
         id: "octogee-alice-coach",
         model: "new",
@@ -1385,10 +1385,10 @@ describe("customerAgentRosterPatch", () => {
         },
       },
     });
-    expect(customerConfigAgentRosterReplacePaths(current, "alice")).toEqual(["bindings"]);
+    expect(userConfigAgentRosterReplacePaths(current, "alice")).toEqual(["bindings"]);
   });
 
-  it("never nulls a retired customer entry — 2026.7.2 refuses roster drops without agents.delete", () => {
+  it("never nulls a retired user entry — 2026.7.2 refuses roster drops without agents.delete", () => {
     const current = {
       agents: {
         entries: {
@@ -1398,7 +1398,7 @@ describe("customerAgentRosterPatch", () => {
       },
     };
 
-    const patch = customerAgentRosterPatch(current, "alice", [
+    const patch = userAgentRosterPatch(current, "alice", [
       { id: "octogee-alice-coach", model: "new" },
     ]) as { entries: Record<string, unknown> };
 
@@ -1408,11 +1408,11 @@ describe("customerAgentRosterPatch", () => {
 
   it("retains the stable list patch and destructive array guard confirmations", () => {
     const current = { agents: { list: [{ id: "octogee-bob-coach" }] } };
-    expect(customerAgentRosterPatch(current, "alice", [{ id: "octogee-alice-coach" }])).toEqual({
+    expect(userAgentRosterPatch(current, "alice", [{ id: "octogee-alice-coach" }])).toEqual({
       list: [{ id: "octogee-alice-coach" }],
     });
-    expect(customerConfigAgentRosterReplacePaths(current, "alice")).toEqual(
-      customerConfigFullAgentListReplacePaths(current, "alice"),
+    expect(userConfigAgentRosterReplacePaths(current, "alice")).toEqual(
+      userConfigFullAgentListReplacePaths(current, "alice"),
     );
   });
 
@@ -1424,7 +1424,7 @@ describe("customerAgentRosterPatch", () => {
     //   config.patch would remove entries from array path(s):
     //   agents.entries.octogee-alice-coach.model.fallbacks
     // That is what deadlocked the TEST shared-b surge handoff — imports landed,
-    // unmount never did, and Cowboy re-migrated the same customers in a loop.
+    // unmount never did, and the fleet controller re-migrated the same users in a loop.
     const current = {
       agents: {
         entries: {
@@ -1440,14 +1440,14 @@ describe("customerAgentRosterPatch", () => {
       },
     };
 
-    const paths = customerConfigAgentRosterReplacePaths(current, "alice");
+    const paths = userConfigAgentRosterReplacePaths(current, "alice");
 
     expect(paths).toEqual(expect.arrayContaining([
       "agents.entries.octogee-alice-coach.model.fallbacks",
       "agents.entries.octogee-alice-coach.tools.alsoAllow",
       "agents.entries.octogee-alice-proj-orbit-coach.model.fallbacks",
     ]));
-    // Another customer's arrays are not ours to confirm — a removal that could
+    // Another user's arrays are not ours to confirm — a removal that could
     // silently shrink them should still be refused.
     expect(paths).not.toContain("agents.entries.octogee-bob-coach.model.fallbacks");
   });
@@ -1458,10 +1458,10 @@ describe("customerAgentRosterPatch", () => {
     const current = {
       agents: { entries: { "octogee-alice-coach": { model: "house" } } },
     };
-    expect(customerConfigAgentRosterReplacePaths(current, "alice")).toEqual(["bindings"]);
+    expect(userConfigAgentRosterReplacePaths(current, "alice")).toEqual(["bindings"]);
   });
 
-  it("confirms arrays under every one of the customer's project accounts", () => {
+  it("confirms arrays under every one of the user's project accounts", () => {
     const current = {
       agents: { list: [] },
       channels: {
@@ -1476,7 +1476,7 @@ describe("customerAgentRosterPatch", () => {
       },
     };
 
-    expect(customerConfigAgentRosterReplacePaths(current, "alice")).toEqual([
+    expect(userConfigAgentRosterReplacePaths(current, "alice")).toEqual([
       "agents.list",
       "agents.list[].model.fallbacks",
       "agents.list[].tools.alsoAllow",
@@ -1488,8 +1488,8 @@ describe("customerAgentRosterPatch", () => {
   });
 });
 
-describe("filterOutCustomerBindings", () => {
-  it("removes coach AND project-agent bindings for the slug only", () => {
+describe("filterOutUserBindings", () => {
+  it("removes agent AND project-agent bindings for the slug only", () => {
     const bindings = [
       { agentId: "octogee-alice-coach" },
       { agentId: "octogee-alice-proj-old-coach" },
@@ -1508,7 +1508,7 @@ describe("filterOutCustomerBindings", () => {
       },
       { agentId: "octogee-mac-default" },
     ];
-    expect(filterOutCustomerBindings(bindings, "alice")).toEqual([
+    expect(filterOutUserBindings(bindings, "alice")).toEqual([
       { agentId: "octogee-bob-coach" },
       {
         agentId: "octogee-bob-coach",
@@ -1519,39 +1519,39 @@ describe("filterOutCustomerBindings", () => {
   });
 });
 
-describe("mergeCustomerBindings", () => {
-  const aliceCoach = {
+describe("mergeUserBindings", () => {
+  const aliceDefaultAgent = {
     agentId: "octogee-alice-coach",
     match: { channel: "mattermost", accountId: "alice-coach", peer: { kind: "group", id: "g1" } },
   };
-  const bobCoach = {
+  const bobDefaultAgent = {
     agentId: "octogee-bob-coach",
     match: { channel: "mattermost", accountId: "bob-coach", peer: { kind: "group", id: "g2" } },
   };
-  const carolCoach = {
+  const carolDefaultAgent = {
     agentId: "octogee-carol-coach",
     match: { channel: "mattermost", accountId: "carol-coach", peer: { kind: "group", id: "g3" } },
   };
 
-  it("returns the current array untouched when the customer's binding content is unchanged", () => {
-    const current = [aliceCoach, bobCoach, carolCoach];
-    const next = mergeCustomerBindings(current, ["bob"], [structuredClone(bobCoach)]);
+  it("returns the current array untouched when the user's binding content is unchanged", () => {
+    const current = [aliceDefaultAgent, bobDefaultAgent, carolDefaultAgent];
+    const next = mergeUserBindings(current, ["bob"], [structuredClone(bobDefaultAgent)]);
     expect(next).toBe(current);
   });
 
   it("keeps current order when unchanged even though rebuild would have appended", () => {
-    const current = [bobCoach, aliceCoach];
-    const next = mergeCustomerBindings(current, ["bob"], [structuredClone(bobCoach)]);
+    const current = [bobDefaultAgent, aliceDefaultAgent];
+    const next = mergeUserBindings(current, ["bob"], [structuredClone(bobDefaultAgent)]);
     expect(next.map((b) => b.agentId)).toEqual(["octogee-bob-coach", "octogee-alice-coach"]);
   });
 
-  it("rewrites when the customer gains a binding", () => {
+  it("rewrites when the user gains a binding", () => {
     const added = {
       agentId: "octogee-bob-proj-x-coach",
       match: { channel: "mattermost", accountId: "bob-proj-x", peer: { kind: "group", id: "g9" } },
     };
-    const current = [aliceCoach, bobCoach];
-    const next = mergeCustomerBindings(current, ["bob"], [bobCoach, added]);
+    const current = [aliceDefaultAgent, bobDefaultAgent];
+    const next = mergeUserBindings(current, ["bob"], [bobDefaultAgent, added]);
     expect(next).not.toBe(current);
     expect(next.map((b) => b.agentId)).toEqual([
       "octogee-alice-coach",
@@ -1561,24 +1561,24 @@ describe("mergeCustomerBindings", () => {
   });
 
   it("rewrites when a binding's content changes", () => {
-    const moved = structuredClone(bobCoach);
+    const moved = structuredClone(bobDefaultAgent);
     moved.match.peer.id = "g2-moved";
-    const current = [aliceCoach, bobCoach];
-    const next = mergeCustomerBindings(current, ["bob"], [moved]);
+    const current = [aliceDefaultAgent, bobDefaultAgent];
+    const next = mergeUserBindings(current, ["bob"], [moved]);
     expect(next).not.toBe(current);
     expect(next.map((b) => b.match.peer.id)).toEqual(["g1", "g2-moved"]);
   });
 
   it("rewrites to drop eviction slugs' bindings", () => {
-    const current = [aliceCoach, bobCoach, carolCoach];
-    const next = mergeCustomerBindings(current, ["bob", "carol"], [structuredClone(bobCoach)]);
+    const current = [aliceDefaultAgent, bobDefaultAgent, carolDefaultAgent];
+    const next = mergeUserBindings(current, ["bob", "carol"], [structuredClone(bobDefaultAgent)]);
     expect(next).not.toBe(current);
     expect(next.map((b) => b.agentId)).toEqual(["octogee-alice-coach", "octogee-bob-coach"]);
   });
 
-  it("appends a first-time customer's bindings", () => {
-    const current = [aliceCoach];
-    const next = mergeCustomerBindings(current, ["bob"], [bobCoach]);
+  it("appends a first-time user's bindings", () => {
+    const current = [aliceDefaultAgent];
+    const next = mergeUserBindings(current, ["bob"], [bobDefaultAgent]);
     expect(next.map((b) => b.agentId)).toEqual(["octogee-alice-coach", "octogee-bob-coach"]);
   });
 });
@@ -1598,7 +1598,7 @@ describe("staleProjectAgentAccountNulls", () => {
     },
   };
 
-  it("nulls the customer's project accounts that are no longer active (omission is not deletion in config.patch)", () => {
+  it("nulls the user's project accounts that are no longer active (omission is not deletion in config.patch)", () => {
     expect(staleProjectAgentAccountNulls(current, "alice", ["alice-proj-orbit"])).toEqual({
       "alice-proj-old": null,
     });

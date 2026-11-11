@@ -25,14 +25,14 @@ export interface FleetStateFetcherDeps {
 export function describeFleetStateRejection(status: number): string {
   if (status === 401 || status === 403) {
     return "the pod rejected the fleet controller signature — the pod's " +
-      "FLEET_CONTROLLER_PUBLIC_KEY does not match Cowboy's signing key";
+      "FLEET_CONTROLLER_PUBLIC_KEY does not match the fleet controller's signing key";
   }
   if (status === 404) {
     return "the pod has no /fleet-state route — it predates the signed roster read " +
       "and must be rolled";
   }
   if (status === 400) {
-    return "the pod refused the addressed gatewayId — Cowboy and the pod disagree " +
+    return "the pod refused the addressed gatewayId — the fleet controller and the pod disagree " +
       "about which gateway answers here";
   }
   return "the pod refused the fleet state read";
@@ -61,7 +61,7 @@ export interface FleetStateRequest {
   privateProjectCoachSlug?: string;
 }
 
-// Cowboy is the only holder of the fleet controller private key, so this signed
+// The fleet controller is the only holder of the fleet controller private key, so this signed
 // read is what separates the trusted fleet authority from any pod that the
 // gateway ingress policy lets reach the controller port. Callers address either
 // the gateway Service or one pod, and each keeps its own failure reporting.
@@ -83,7 +83,7 @@ export async function requestFleetState(input: FleetStateRequest): Promise<Respo
   });
 }
 
-export async function readPrivateProjectCoachWorkspace(input: FleetStateRequest & { privateProjectCoachSlug: string }): Promise<boolean | undefined> {
+export async function readPrivateProjectAgentWorkspace(input: FleetStateRequest & { privateProjectCoachSlug: string }): Promise<boolean | undefined> {
   const response = await requestFleetState(input);
   if (!response.ok) throw new Error(`Fleet state refused the workspace check: HTTP ${response.status}`);
   const state = await response.json() as { gatewayId?: unknown; privateProjectCoachWorkspace?: unknown } | null;

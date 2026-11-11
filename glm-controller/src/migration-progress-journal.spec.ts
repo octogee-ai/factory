@@ -73,7 +73,7 @@ describe("journalHandoffProgress", () => {
   const handoff = (migrationId: string, phase: string, at: number): MigrationProgressRecord =>
     ({ ...event, migrationId, phase, at });
 
-  it("keeps one record per phase of the current handoff on the builder's assignment document", async () => {
+  it("keeps one record per phase of the current handoff on the user's assignment document", async () => {
     const first = handoff("surge-a", "gate-source", 1_000);
     const h = harness({ [path]: assignment({ handoffProgress: [first, handoff("surge-a", "transfer-and-verify", 1_500)] }) });
     const next = handoff("surge-a", "transfer-and-verify", 2_000);

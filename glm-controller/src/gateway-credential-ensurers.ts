@@ -65,7 +65,7 @@ export function createGatewayCredentialEnsurers(deps: {
     const dsn = await deps.provisionAgentStore({
       gatewayId: input.gatewayId, gatewayClass: gateway.gatewayClass, token: secret.token,
       ...(gateway.gatewayClass === "builder" && gateway.ownerUid && gateway.builderSlug
-        ? { builder: { uid: gateway.ownerUid, slug: gateway.builderSlug } } : {}),
+        ? { user: { uid: gateway.ownerUid, slug: gateway.builderSlug } } : {}),
     }, assertCurrent);
     await assertCurrent();
     const directory = await mkdtemp(join(tmpdir(), "octogee-agent-store-secret-"));

@@ -297,7 +297,7 @@ describe("gateway capacity placement verifier", () => {
     expect(result.stdout).toContain("must use regional on-demand capacity");
   });
 
-  it("rejects the retired operator customer gateway class", () => {
+  it("rejects the retired operator user gateway class", () => {
     const retired = deployment("builder") as {
       metadata: { labels: Record<string, string> };
       spec: { template: { metadata: { labels: Record<string, string> } } };

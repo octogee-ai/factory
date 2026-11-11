@@ -1,7 +1,7 @@
 import { logger } from "../middleware/logging.js";
 import * as crypto from "crypto";
 import { readFileSync } from "node:fs";
-import { builderGatewayServiceAccountName } from "@octogee/shared/types/glm";
+import { isolatedGatewayServiceAccountName } from "@octogee/shared/types/glm";
 import {
   createKubernetesTokenReviewer,
   TOKEN_REVIEW_AUDIENCE,
@@ -10,7 +10,7 @@ import {
 import {
   createGceIdentityReviewer,
   createIssuerDispatchingReviewer,
-  parseGatewayComputerIdentity,
+  parseGatewayVmIdentity,
   serviceAccountLocalPart,
   type VerifyGoogleIdToken,
 } from "./gce-identity-review.js";
@@ -51,7 +51,7 @@ function readProjectedServiceAccountToken(env: Record<string, string | undefined
 export interface GatewayInternalAuthReviewerDeps {
   kubernetes?: Reviewer;
   verify?: VerifyGoogleIdToken;
-  onComputerTokenRejected?: (reason: string) => void;
+  onVmTokenRejected?: (reason: string) => void;
 }
 
 export function createGatewayInternalAuthReviewer(
@@ -59,17 +59,17 @@ export function createGatewayInternalAuthReviewer(
   deps: GatewayInternalAuthReviewerDeps = {},
 ): Reviewer {
   const kubernetes = deps.kubernetes ?? createKubernetesTokenReviewer();
-  const computer = parseGatewayComputerIdentity(env);
-  if (!computer) return kubernetes;
+  const vm = parseGatewayVmIdentity(env);
+  if (!vm) return kubernetes;
   return createIssuerDispatchingReviewer({
     kubernetes,
     gce: createGceIdentityReviewer({
-      ...computer,
+      ...vm,
       audience: TOKEN_REVIEW_AUDIENCE,
       namespace: expectedNamespace(env),
       verify: deps.verify,
-      onRejected: deps.onComputerTokenRejected ?? ((reason) => {
-        logger.warn(`Builder computer identity token rejected — ${reason}`);
+      onRejected: deps.onVmTokenRejected ?? ((reason) => {
+        logger.warn(`Gateway VM identity token rejected — ${reason}`);
       }),
     }),
   });
@@ -87,8 +87,8 @@ function expectedNamespace(env: Record<string, string | undefined>): string {
 
 function allowedGatewayServiceAccounts(env: Record<string, string | undefined>): Set<string> {
   const allowed = new Set<string>(["octogee-api"]);
-  const computer = parseGatewayComputerIdentity(env);
-  if (computer) allowed.add(serviceAccountLocalPart(computer.serviceAccountEmail));
+  const vm = parseGatewayVmIdentity(env);
+  if (vm) allowed.add(serviceAccountLocalPart(vm.serviceAccountEmail));
   const configured = nonBlank(env.GATEWAY_ALLOWED_K8S_SERVICE_ACCOUNTS);
   if (configured) {
     for (const item of configured.split(",")) {
@@ -101,7 +101,7 @@ function allowedGatewayServiceAccounts(env: Record<string, string | undefined>):
   if (own) allowed.add(own);
 
   const gatewayId = nonBlank(env.GATEWAY_ID);
-  if (gatewayId) allowed.add(builderGatewayServiceAccountName(gatewayId));
+  if (gatewayId) allowed.add(isolatedGatewayServiceAccountName(gatewayId));
   return allowed;
 }
 

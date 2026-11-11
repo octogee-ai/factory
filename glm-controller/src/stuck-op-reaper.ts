@@ -1,9 +1,9 @@
-import { builderRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
+import { isolatedRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
 import { FenceMismatchError, type OperationPatch, type PlatformStateStore } from "@octogee/core/platform-state";
 import type { Operation } from "@octogee/shared/types/glm";
 import { MIGRATION_TRANSFER_LEASE_MS } from "@octogee/shared/types/fleet-controller";
 import { operationNeedsDurableRestartResume } from "./operation-retry.js";
-import { MIGRATE_CUSTOMER_KIND, RETIRE_GATEWAY_KIND } from "./operation-kinds.js";
+import { MIGRATE_USER_KIND, RETIRE_GATEWAY_KIND } from "./operation-kinds.js";
 import { rearmOwnedLegacyMigration, recoverFailedLegacyMigrations } from "./legacy-migration-recovery.js";
 
 export const REAPED_OPERATION_ERROR_PREFIX = "reaped: ";
@@ -58,7 +58,7 @@ function operationIsStillStale(
 }
 
 function operationStalenessBudget(operation: Operation, stalenessMs: number): number {
-  const finalImportRunning = operation.kind === MIGRATE_CUSTOMER_KIND &&
+  const finalImportRunning = operation.kind === MIGRATE_USER_KIND &&
     operation.steps?.at(-1)?.name === "final-sync-state" && operation.steps.at(-1)?.status === "running";
   return finalImportRunning ? Math.max(stalenessMs, MIGRATION_TRANSFER_LEASE_MS + 60_000) : stalenessMs;
 }
@@ -84,11 +84,11 @@ async function reapWithLegacyGateRecovery(input: {
   return input.store.transaction({ label: "stuck-op-reaper.reap" }, async (tx) => {
     const [current, owner] = await Promise.all([
       tx.journal.operations.get(operationId),
-      gate ? tx.builders.records.get(gate.uid) : null,
+      gate ? tx.users.records.get(gate.uid) : null,
     ]);
     if (!current || !input.stillReapable(current)) return { reaped: false };
-    if (owner && builderRuntimeMutationFenced(owner)) {
-      return { reaped: false, gateMessage: `[${input.logLabel}] source assignment recovery blocked by unresolved customer restore or source transfer` };
+    if (owner && isolatedRuntimeMutationFenced(owner)) {
+      return { reaped: false, gateMessage: `[${input.logLabel}] source assignment recovery blocked by unresolved user restore or source transfer` };
     }
     const releasedRecovery = current.input.recoverSourceOnly === true && current.schedulerHandoffReleased === true;
     await tx.journal.operations.patch(operationId, {
@@ -192,7 +192,7 @@ export interface ControllerOrphanRecoveryResult {
 export const CONTROLLER_ORPHANED_OPERATION_ERROR =
   `${REAPED_OPERATION_ERROR_PREFIX}controller restarted mid-op — the claiming controller exited, so no worker can finish it; failed at boot`;
 
-const BOOT_RECOVERABLE_KINDS: ReadonlySet<string> = new Set([MIGRATE_CUSTOMER_KIND, RETIRE_GATEWAY_KIND]);
+const BOOT_RECOVERABLE_KINDS: ReadonlySet<string> = new Set([MIGRATE_USER_KIND, RETIRE_GATEWAY_KIND]);
 
 function claimedByPreviousController(operation: Operation, controllerStartedAt: number): boolean {
   const claimedAt = readMillis(operation.startedAt);

@@ -3,7 +3,7 @@ import { lstatSync, promises as fs, readFileSync } from "node:fs";
 import * as path from "node:path";
 
 import { acquireWorkspaceMutationLeaseSync, projectMutationLeaseGitDir } from "@octogee/core/workspace-mutation-lease";
-import { PROJECT_COACH_WORKSPACE_PARTS } from "@octogee/shared/types/project";
+import { PROJECT_AGENT_WORKSPACE_PARTS } from "@octogee/shared/types/project";
 import { findUnsafeGitMetadataEntry } from "@octogee/core/git-metadata";
 import { isDuplicateAssetUpload } from "./workspace-manifest-conflict.js";
 
@@ -47,22 +47,22 @@ export function isSafeSlug(slug: string): boolean {
   return SAFE_SLUG_RE.test(slug);
 }
 
-export async function resolveCustomerDir(
-  customersRoot: string,
+export async function resolveUserDir(
+  usersRoot: string,
   slug: string,
 ): Promise<string | null> {
   if (!isSafeSlug(slug)) return null;
-  const dir = path.join(customersRoot, slug);
+  const dir = path.join(usersRoot, slug);
   return verifyGitDir(dir);
 }
 
 export async function resolveProjectDir(
-  customersRoot: string,
+  usersRoot: string,
   slug: string,
   projectSlug: string,
 ): Promise<string | null> {
   if (!isSafeSlug(slug) || !isSafeSlug(projectSlug)) return null;
-  const dir = path.join(customersRoot, slug, "projects", projectSlug);
+  const dir = path.join(usersRoot, slug, "projects", projectSlug);
   return verifyGitDir(dir);
 }
 
@@ -176,9 +176,9 @@ export async function gitCommit(
     return { ok: false, error: { code: "INTERNAL", message: "commit message empty or too long" } };
   }
 
-  const identity = customerGitIdentity(customerDir);
-  const workspace = identity && path.resolve(customerDir) === path.join(identity.customersRoot, identity.slug);
-  const excluded = [...new Set([...(options.excludePaths ?? []), ...(workspace ? [PROJECT_COACH_WORKSPACE_PARTS.join("/")] : [])])];
+  const identity = userGitIdentity(customerDir);
+  const workspace = identity && path.resolve(customerDir) === path.join(identity.usersRoot, identity.slug);
+  const excluded = [...new Set([...(options.excludePaths ?? []), ...(workspace ? [PROJECT_AGENT_WORKSPACE_PARTS.join("/")] : [])])];
   const staged = await stageWorkspaceChanges(customerDir, excluded);
   if (!staged.ok) return staged;
 
@@ -656,8 +656,8 @@ async function hasRegularManifestConflict(cwd: string): Promise<boolean> {
 }
 
 async function resolveDuplicateAssetUpload(cwd: string, author: CommitAuthor): Promise<GitRunOk | null> {
-  const identity = customerGitIdentity(cwd);
-  if (!identity || path.relative(identity.customersRoot, cwd).split(path.sep).length !== 3) return null;
+  const identity = userGitIdentity(cwd);
+  if (!identity || path.relative(identity.usersRoot, cwd).split(path.sep).length !== 3) return null;
   if (!await hasRegularManifestConflict(cwd)) return null;
   const remote = await runGit(cwd, ["show", `:2:${ASSET_MANIFEST}`]);
   const local = await runGit(cwd, ["show", `:3:${ASSET_MANIFEST}`]);
@@ -734,26 +734,26 @@ function isUnsafeLocalConfigKey(key: string): boolean {
     || UNSAFE_LOCAL_CONFIG_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
-interface CustomerGitIdentity {
-  customersRoot: string;
+interface UserGitIdentity {
+  usersRoot: string;
   slug: string;
   repoName: string;
   metadataDir: string;
 }
 
-function customerGitIdentity(cwd: string): CustomerGitIdentity | null {
-  const customersRoot = path.resolve(
+function userGitIdentity(cwd: string): UserGitIdentity | null {
+  const usersRoot = path.resolve(
     process.env.CUSTOMERS_DIR ?? "/home/node/.openclaw/customers",
   );
-  const relative = path.relative(customersRoot, path.resolve(cwd));
+  const relative = path.relative(usersRoot, path.resolve(cwd));
   if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
   const parts = relative.split(path.sep);
-  const metadataRoot = path.join(path.dirname(customersRoot), "git-metadata");
+  const metadataRoot = path.join(path.dirname(usersRoot), "git-metadata");
   const slug = parts[0] ?? "";
   if (!isSafeSlug(slug)) return null;
   if (parts.length === 1) {
     return {
-      customersRoot,
+      usersRoot,
       slug,
       repoName: "workspace",
       metadataDir: path.join(metadataRoot, slug, "workspace.git"),
@@ -762,7 +762,7 @@ function customerGitIdentity(cwd: string): CustomerGitIdentity | null {
   const projectSlug = parts[2] ?? "";
   if (parts.length === 3 && parts[1] === "projects" && isSafeSlug(projectSlug)) {
     return {
-      customersRoot,
+      usersRoot,
       slug,
       repoName: projectSlug,
       metadataDir: path.join(metadataRoot, slug, "projects", `${projectSlug}.git`),
@@ -771,18 +771,18 @@ function customerGitIdentity(cwd: string): CustomerGitIdentity | null {
   return null;
 }
 
-export function customerGitMetadataDir(cwd: string): string | null {
-  return customerGitIdentity(cwd)?.metadataDir ?? null;
+export function userGitMetadataDir(cwd: string): string | null {
+  return userGitIdentity(cwd)?.metadataDir ?? null;
 }
 
 export function trustedWorkspaceGitDir(cwd: string): string {
-  return customerGitMetadataDir(cwd) ?? path.join(cwd, ".git");
+  return userGitMetadataDir(cwd) ?? path.join(cwd, ".git");
 }
 
 export function workspaceMutationLeaseGitDir(cwd: string): string {
-  const identity = customerGitIdentity(cwd);
+  const identity = userGitIdentity(cwd);
   if (!identity || identity.repoName === "workspace") return trustedWorkspaceGitDir(cwd);
-  return projectMutationLeaseGitDir(cwd, identity.customersRoot)!;
+  return projectMutationLeaseGitDir(cwd, identity.usersRoot)!;
 }
 
 export async function runWorkspaceGitMutation<T>(
@@ -851,10 +851,10 @@ export function workspaceGitEnvironment(
   if (githubToken) {
     environment.OCTOGEE_GITHUB_TOKEN = githubToken;
   }
-  const identity = cwd ? customerGitIdentity(cwd) : null;
+  const identity = cwd ? userGitIdentity(cwd) : null;
   if (identity) {
     const keyPath = path.join(
-      path.dirname(identity.customersRoot),
+      path.dirname(identity.usersRoot),
       "customer-keys",
       identity.slug,
       "id_ed25519",
@@ -872,8 +872,8 @@ export function workspaceGitEnvironment(
   return environment;
 }
 
-export function isTrustedGithubCustomerCheckout(cwd: string): boolean {
-  const identity = customerGitIdentity(cwd);
+export function isTrustedGithubUserCheckout(cwd: string): boolean {
+  const identity = userGitIdentity(cwd);
   if (!identity) return false;
   const receipt = `${identity.metadataDir}.octogee-trusted-v3`;
   try {
@@ -885,15 +885,15 @@ export function isTrustedGithubCustomerCheckout(cwd: string): boolean {
       || !receiptStat.isFile()
       || receiptStat.isSymbolicLink()
     ) return false;
-    return expectedCustomerRemoteUrl(cwd, readFileSync(receipt, "utf8"))
+    return expectedUserRemoteUrl(cwd, readFileSync(receipt, "utf8"))
       ?.startsWith("https://github.com/") === true;
   } catch {
     return false;
   }
 }
 
-export function isTrustedGiteaCustomerCheckout(cwd: string, repoName: string): boolean {
-  const identity = customerGitIdentity(cwd);
+export function isTrustedGiteaUserCheckout(cwd: string, repoName: string): boolean {
+  const identity = userGitIdentity(cwd);
   if (!identity || !isSafeSlug(repoName)) return false;
   try {
     return readFileSync(`${identity.metadataDir}.octogee-trusted-v3`, "utf8") ===
@@ -905,11 +905,11 @@ export function isTrustedGiteaCustomerCheckout(cwd: string, repoName: string): b
 }
 
 // eslint-disable-next-line complexity -- validates both canonical receipt grammars and their exact remote projections
-function expectedCustomerRemoteUrl(
+function expectedUserRemoteUrl(
   cwd: string,
   receiptContents: string,
 ): string | null {
-  const identity = customerGitIdentity(cwd);
+  const identity = userGitIdentity(cwd);
   if (!identity) return null;
   const lines = receiptContents.split("\n");
   if (lines.length !== 3 || lines[0] !== "octogee-customer-git-v3" || lines[2] !== "") {
@@ -1020,15 +1020,15 @@ function unsafeConfigEntry(entries: readonly string[], expectedRemote: string | 
 
 async function unsafeLocalRepositoryConfigKey(cwd: string): Promise<string | null> {
   const gitDir = trustedWorkspaceGitDir(cwd);
-  const identity = customerGitIdentity(cwd);
+  const identity = userGitIdentity(cwd);
   let receiptContents = "";
   if (identity) {
     const validation = await validateTrustedMetadata(
-      gitDir, identity.metadataDir, path.join(path.dirname(identity.customersRoot), "git-metadata"),
+      gitDir, identity.metadataDir, path.join(path.dirname(identity.usersRoot), "git-metadata"),
     );
     if (validation.error) return validation.error;
     receiptContents = validation.receiptContents;
-    if (expectedCustomerRemoteUrl(cwd, receiptContents) === null) return "<untrusted-metadata>";
+    if (expectedUserRemoteUrl(cwd, receiptContents) === null) return "<untrusted-metadata>";
   }
   const configPath = path.join(gitDir, "config");
   try {
@@ -1064,7 +1064,7 @@ async function unsafeLocalRepositoryConfigKey(cwd: string): Promise<string | nul
         return;
       }
       const entries = Buffer.concat(chunks).toString("utf8").split(NUL).filter(Boolean);
-      const expectedRemote = expectedCustomerRemoteUrl(cwd, receiptContents);
+      const expectedRemote = expectedUserRemoteUrl(cwd, receiptContents);
       resolve(unsafeConfigEntry(entries, expectedRemote));
     });
   });

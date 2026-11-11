@@ -115,7 +115,7 @@ describe("findSessionFiles", () => {
 });
 
 describe("extractRole", () => {
-  it("recognizes coach agents and treats unrecognized suffixes as coach usage", () => {
+  it("recognizes agent agents and treats unrecognized suffixes as agent usage", () => {
     expect(extractRole("octogee-acme-coach")).toBe("coach");
     expect(extractRole("octogee-acme-research")).toBe("coach");
     expect(extractRole("unknown")).toBe("coach");

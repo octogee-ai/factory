@@ -25,12 +25,12 @@ dependencies:
     repository: "file://charts/gateway-edge"
 
   # Cluster-singleton API service for non-locality routes lifted from
-  # gateway-edge. See docs/specs/POST-BENDER-CLEANUP-SPEC.md.
+  # gateway-edge.
   - name: octogee-api
     version: "0.1.0"
     repository: "file://charts/octogee-api"
 
-  # NOTE: the `gateway` sub-chart was removed in the Cowboy-ownership
+  # NOTE: the `gateway` sub-chart was removed in the controller-ownership
   # refactor. Per-instance gateway pods are now managed by glm-controller
   # via per-instance helm releases off helm/octogee-gateway/. Spanning
   # gateway-fleet resources (alias Service, NetworkPolicy, preview

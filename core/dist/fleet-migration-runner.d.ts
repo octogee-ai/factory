@@ -58,7 +58,7 @@ export interface MigrationRunnerInput {
 }
 export type TargetSystemConfigConvergence = "source-commit" | "target-commit";
 export interface MigrationRunnerResult {
-    waitingForBuilderIdle?: boolean;
+    waitingForUserIdle?: boolean;
     success: boolean;
     finalPhase: MigrationPhase;
     errorAt?: {

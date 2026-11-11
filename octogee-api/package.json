@@ -1,7 +1,7 @@
 {
   "name": "@octogee/octogee-api",
   "version": "1.0.0",
-  "description": "Octogee cluster-singleton API \u2014 non-locality routes lifted out of gateway-edge (POST-BENDER-CLEANUP-SPEC \u00a72)",
+  "description": "Octogee cluster-singleton API \u2014 non-locality routes lifted out of gateway-edge",
   "private": true,
   "license": "MIT",
   "type": "module",

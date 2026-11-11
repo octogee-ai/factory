@@ -67,7 +67,7 @@ async function uploadedAvatar(uid: string): Promise<OpenClawProfileAppearance["a
   };
 }
 
-type ProfileAppearanceStore = Pick<PlatformStateRepositories, "builders" | "secrets">;
+type ProfileAppearanceStore = Pick<PlatformStateRepositories, "users" | "secrets">;
 
 export type OpenClawProfileAppearanceLoader = (uid: string) => Promise<OpenClawProfileAppearance>;
 
@@ -98,16 +98,16 @@ export async function loadOpenClawProfileAppearance(
   store: ProfileAppearanceStore,
   uid: string,
 ): Promise<OpenClawProfileAppearance> {
-  const [builder, userSnap, publicSnap] = await Promise.all([
-    store.builders.records.get(uid),
+  const [userRecord, userSnap, publicSnap] = await Promise.all([
+    store.users.records.get(uid),
     db.doc(`users/${uid}`).get(),
     db.doc(`users/${uid}/profile/public`).get(),
   ]);
-  if (!builder) throw new Error("Octogee user not found for profile sync");
+  if (!userRecord) throw new Error("Octogee user not found for profile sync");
   const user = userSnap.data() ?? {};
   const profile = publicSnap.data() ?? {};
   const avatar = await uploadedAvatar(uid);
-  const mmUserId = text(builder.mattermostUserId);
+  const mmUserId = text(userRecord.mattermostUserId);
   const displayName = text(profile.displayName) || text(user.displayName)
     || fullName(user.firstName, user.lastName);
   const mattermost = mmUserId && (!displayName || !avatar)

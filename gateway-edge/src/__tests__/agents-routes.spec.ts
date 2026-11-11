@@ -140,7 +140,7 @@ describe("agent routes", () => {
     vi.restoreAllMocks();
   });
 
-  it("patches coach profile fields and syncs the Mattermost display name", async () => {
+  it("patches agent profile fields and syncs the Mattermost display name", async () => {
     h.docs.set("agents/owner-1", { mattermost: { userId: "coach-mm" } });
 
     const res = await request(app())
@@ -165,7 +165,7 @@ describe("agent routes", () => {
     });
   });
 
-  it("rejects a coach patch without allowed string fields", async () => {
+  it("rejects a agent patch without allowed string fields", async () => {
     const res = await request(app())
       .patch("/api/agents/me")
       .send({ name: 42, nickname: "Sage" });
@@ -202,7 +202,7 @@ describe("agent routes", () => {
     });
   });
 
-  it("reports a specialist the Builder record already activated without queueing it", async () => {
+  it("reports a specialist the user record already activated without queueing it", async () => {
     h.docs.set("users/owner-1", {
       subscription: { tier: "pro" },
       provisioning: { openclaw: { activatedAgents: ["alex"] } },

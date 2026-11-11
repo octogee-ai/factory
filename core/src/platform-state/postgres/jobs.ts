@@ -7,8 +7,8 @@ import type {
   AgentImportsRepository,
   AnonymousOperationalArchive,
   AnonymousOperationalArchivesRepository,
-  CustomerDeletionJob,
-  CustomerDeletionJobsRepository,
+  UserDeletionJob,
+  UserDeletionJobsRepository,
   JobRepositories,
 } from "../jobs.js";
 import type { OpaqueMap, Revision, Stored } from "../store.js";
@@ -107,11 +107,11 @@ const agentImportKey = (uid: string, importId: string): RecordKey => ({ aggregat
 
 const DELETION_STATUS = columnFor(DELETION_JOBS_TABLE, deletionKey(""), "status");
 
-function decodeDeletionJob(row: Row): Stored<CustomerDeletionJob> {
-  return decodeStored<CustomerDeletionJob>(DELETION_JOBS_TABLE, row);
+function decodeDeletionJob(row: Row): Stored<UserDeletionJob> {
+  return decodeStored<UserDeletionJob>(DELETION_JOBS_TABLE, row);
 }
 
-function createDeletionJobsRepository(session: PostgresSession): CustomerDeletionJobsRepository {
+function createDeletionJobsRepository(session: PostgresSession): UserDeletionJobsRepository {
   return {
     async get(deletionId) {
       const row = await selectByKey(session, "jobs.deletions.get", { table: DELETION_JOBS_TABLE, key: [deletionId] });

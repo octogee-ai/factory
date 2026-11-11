@@ -1,4 +1,4 @@
-import { postgresBuildersWatchSource } from "./builder-records.js";
+import { postgresUsersWatchSource } from "./user-records.js";
 import { postgresConfigWatchSource } from "./config.js";
 import { postgresFleetRegistryWatchSource } from "./fleet-registry.js";
 import { postgresAssignmentsWatchSource, postgresGatewaysWatchSource } from "./gateways.js";
@@ -19,7 +19,7 @@ const operationsWatchSource = (filter) => {
 };
 const WATCH_SOURCES = {
     operations: operationsWatchSource,
-    builders: postgresBuildersWatchSource,
+    builders: postgresUsersWatchSource,
     workspaces: postgresWorkspacesWatchSource,
     workspaceMembers: postgresWorkspaceMembersWatchSource,
     workspaceProjects: postgresWorkspaceProjectsWatchSource,

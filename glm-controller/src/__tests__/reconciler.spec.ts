@@ -9,7 +9,7 @@ import {
   serializeGatewayConvergence,
   startReconciler,
 } from "../index";
-import { acknowledgeCustomerRestore, beginCustomerRestore, type FleetStateDeps } from "@octogee/core/fleet-state";
+import { acknowledgeUserRestore, beginUserRestore, type FleetStateDeps } from "@octogee/core/fleet-state";
 import {
   MalformedRecordError,
   type FleetRegistryRecord,
@@ -19,10 +19,10 @@ import {
   type WatchChange,
 } from "@octogee/core/platform-state";
 import { createJournalFixtureStore, journalRowsIn, type FixtureDocuments } from "@octogee/core/testing/journal-store";
-import { ComputerCreationPendingError, FinalHomeCheckpointPendingError } from "../vm-computer-lifecycle";
+import { VmCreationPendingError, FinalHomeCheckpointPendingError } from "../vm-lifecycle";
 import { runGatewayRuntimeExclusive } from "../lib/gateway-runtime-mutation";
-import { reconcileSurgeCustomerHandoff } from "../surge-customer-handoff";
-import { assignment, createSurgeHandoffHarness } from "./fixtures/surge-customer-handoff";
+import { reconcileSurgeUserHandoff } from "../surge-user-handoff";
+import { assignment, createSurgeHandoffHarness } from "./fixtures/surge-user-handoff";
 import { stubInformer } from "./fixtures/fleet-informer-stub";
 import type { FleetInformer, MirroredAggregate, MirrorDelivery, MirrorSubscriber } from "../fleet-informer";
 
@@ -191,10 +191,10 @@ function fixtureStoreOver(collections: {
 }): PlatformStateStore {
   const releases: Rows = Object.fromEntries(Object.entries(collections.releases ?? {}).flatMap(([gatewayId, byRelease]) =>
     Object.entries(byRelease).map(([release, row]) => [`${gatewayId}/${release}`, row])));
-  const builderSystemConfigs: Rows = {};
+  const userSystemConfigs: Rows = {};
   const locate = (path: string): [Rows, string] => {
     const [collection, id, sub, uid, ...rest] = path.split("/");
-    if (rest.length === 0 && collection === "users" && sub === "system" && uid === "config") return [builderSystemConfigs, id];
+    if (rest.length === 0 && collection === "users" && sub === "system" && uid === "config") return [userSystemConfigs, id];
     if (rest.length === 0 && collection === "gateways" && sub === "assignments" && uid !== undefined) return [collections.assignments, `${id}/${uid}`];
     if (rest.length === 0 && collection === "gateways" && sub === "releases" && uid !== undefined) return [releases, `${id}/${uid}`];
     if (sub === undefined && collection === "gateways") return [collections.roots, id];
@@ -345,7 +345,7 @@ describe("snapshot reconciliation filters", () => {
     ).toBe(false);
   });
 
-  it("ignores Builder computer disk reports on the runtime doc", () => {
+  it("ignores gateway VM disk reports on the runtime doc", () => {
     const fingerprints = new Map<string, string>();
     const disk = (freeBytes: number, observedAt: number) => servingRuntime({
       runtime: "gce-vm",
@@ -358,7 +358,7 @@ describe("snapshot reconciliation filters", () => {
     ).toBe(false);
   });
 
-  it("ignores the Builder's computer egress routing choice", () => {
+  it("ignores the user's VM egress routing choice", () => {
     const fingerprints = new Map<string, string>();
     const routed = (mode: "cloud" | "desktop", updatedAt: number) => servingRuntime({ runtime: "gce-vm", vmEgress: { mode, updatedAt } });
     runtimeChangeIsRelevant([{ type: "added", doc: { id: "default", data: () => routed("cloud", 1) } }], fingerprints);
@@ -564,12 +564,12 @@ describe("mirror delivery reconciliation filters", () => {
     const fingerprints = new Map<string, string>();
     reconcileRelevantDeliveryGatewayIds(runtimeReset([
       { type: "added", doc: { id: "default", data: () => servingRuntime() } },
-      { type: "added", doc: { id: "bender", data: () => servingRuntime({ gatewayId: "bender" }) } },
+      { type: "added", doc: { id: "walter", data: () => servingRuntime({ gatewayId: "walter" }) } },
     ]), fingerprints);
 
     expect(reconcileRelevantDeliveryGatewayIds(runtimeReset([
       { type: "added", doc: { id: "default", data: () => servingRuntime() } },
-    ]), fingerprints)).toEqual(["bender"]);
+    ]), fingerprints)).toEqual(["walter"]);
     expect([...fingerprints.keys()]).toEqual(["default"]);
   });
 
@@ -801,8 +801,8 @@ describe("gateway convergence pass outcomes", () => {
     h.helm.upsertInstance.mockClear();
     const busy = assignment("u1", "alice", { state: "quiescing", updatedByOperationId: "builder-activate-alice" });
     const handoff = createSurgeHandoffHarness(vi.fn, { assignments: [busy], targetVersion: "abc1234" });
-    h.deps.reconcileSurgeHandoff.mockImplementation(input => reconcileSurgeCustomerHandoff(handoff.deps, {
-      ...input, requiresCustomerMigration: true,
+    h.deps.reconcileSurgeHandoff.mockImplementation(input => reconcileSurgeUserHandoff(handoff.deps, {
+      ...input, requiresUserMigration: true,
     }));
 
     await expect(runGatewayConvergencePass(h.deps)).resolves.toBeUndefined();
@@ -935,8 +935,8 @@ describe("gateway convergence pass outcomes", () => {
     h.helm.upsertInstance.mockClear();
     const blocked = assignment("u1", "alice", gate);
     const handoff = createSurgeHandoffHarness(vi.fn, { assignments: [blocked], targetVersion: "abc1234" });
-    h.deps.reconcileSurgeHandoff.mockImplementation(input => reconcileSurgeCustomerHandoff(handoff.deps, {
-      ...input, requiresCustomerMigration: true,
+    h.deps.reconcileSurgeHandoff.mockImplementation(input => reconcileSurgeUserHandoff(handoff.deps, {
+      ...input, requiresUserMigration: true,
     }));
 
     await expect(runGatewayConvergencePass(h.deps)).rejects.toThrow("(source=converge-gateway) default: foreign assignment gate");
@@ -997,13 +997,13 @@ describe("gateway convergence pass outcomes", () => {
     return { roots, runtimes, users, operations, deps, helm, stateDeps };
   }
 
-  it("converges an existing cluster Builder despite retained GCE computer state", async () => {
+  it("converges an existing cluster user despite retained GCE VM state", async () => {
     const roots = {
       hobby: durableRoot({ gatewayId: "hobby", gatewayClass: "builder", profile: null, imageProfile: "builder", sizingTier: "s", ownerUid: "u", builderSlug: "alice", liveRelease: null }),
       healthy: durableRoot({ gatewayId: "healthy", liveRelease: null }),
     };
     const runtimes: Record<string, Record<string, unknown>> = { hobby: servingRuntime({ gatewayId: "hobby", runtime: "cluster" }) };
-    const users = { u: { provisioning: { computer: { id: "retained-computer" } } } };
+    const users = { u: { provisioning: { computer: { id: "retained-vm" } } } };
     const helm = { upsertInstance: vi.fn(async () => {}), readDeployedInstances: vi.fn(async () => ({})) };
     const store = fixtureStoreOver({ roots, runtimes, users, operations: {}, assignments: {},
       releases: Object.fromEntries(Object.keys(roots).map(id => [id, { 2: releaseArtifact(id, 2, "abc1234", { profileImages: { builder: { imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder", imageTag: `abc1234@sha256:${"b".repeat(64)}` } } }) }])) });
@@ -1024,7 +1024,7 @@ describe("gateway convergence pass outcomes", () => {
     expect(healthy).not.toHaveProperty("builderIdentity");
   });
 
-  it("moves past a Builder whose computer Compute is still creating, so the next converge takes the runtime lock", async () => {
+  it("moves past a user whose VM Compute is still creating, so the next converge takes the runtime lock", async () => {
     const roots = {
       creating: durableRoot({ gatewayId: "creating", liveRelease: null }),
       next: durableRoot({ gatewayId: "next", liveRelease: null }),
@@ -1033,7 +1033,7 @@ describe("gateway convergence pass outcomes", () => {
     const store = fixtureStoreOver({ roots, runtimes, users: {}, operations: {}, assignments: {},
       releases: Object.fromEntries(Object.keys(roots).map(id => [id, { 2: releaseArtifact(id, 2, "abc1234") }])) });
     const upsertInstance = vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
-      if (gatewayId === "creating") throw new ComputerCreationPendingError("computer c is being created; converging it once Compute finishes");
+      if (gatewayId === "creating") throw new VmCreationPendingError("VM c is being created; converging it once Compute finishes");
     });
     const helm = { upsertInstance, readDeployedInstance: vi.fn(async () => null), readDeployedInstances: vi.fn(async () => ({})) };
     const log = vi.fn();
@@ -1047,23 +1047,23 @@ describe("gateway convergence pass outcomes", () => {
     expect(log.mock.calls.flat().filter((line) => String(line).includes("⚠"))).toEqual([]);
   });
 
-  it("holds same-release stale Helm intent until native restore acknowledges customer custody", async () => {
+  it("holds same-release stale Helm intent until native restore acknowledges user custody", async () => {
     const h = retainedGateway();
-    const intent = await beginCustomerRestore(h.stateDeps, { uid: "u", slug: "alice", gatewayId: "shared-1",
+    const intent = await beginUserRestore(h.stateDeps, { uid: "u", slug: "alice", gatewayId: "shared-1",
       fromGatewayId: "builder-alice", assignmentEpoch: 3, operationId: "return", claimStartedAt: 100, attemptId: "native" });
     const before = structuredClone(h.runtimes);
     await expect(runGatewayConvergencePass(h.deps)).rejects.toThrow("outcome is unresolved");
     expect(h.helm.upsertInstance).not.toHaveBeenCalled();
     expect(h.runtimes).toEqual(before);
     expect(h.users.u.provisioning.openclaw.restoreFence).toMatchObject({ phase: "dispatched", attemptId: "native" });
-    await acknowledgeCustomerRestore(h.stateDeps, intent);
+    await acknowledgeUserRestore(h.stateDeps, intent);
     await runGatewayConvergencePass(h.deps);
     expect(h.users.u.provisioning.openclaw.restoreFence).toBeUndefined();
     expect(h.operations.return).toMatchObject({ restoreAttempt: { phase: "acknowledged" } });
     expect(h.helm.upsertInstance).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ gatewayId: "shared-1", imageTag: "abc1234", replicas: 1 }));
   });
 
-  it("keeps native handoff progress available while customer restore custody remains", async () => {
+  it("keeps native handoff progress available while user restore custody remains", async () => {
     const h = retainedGateway();
     await runGatewayConvergencePass(h.deps);
     const applied = h.helm.upsertInstance.mock.calls[0][0];
@@ -1100,7 +1100,7 @@ describe("gateway convergence pass outcomes", () => {
     await entered;
     const restoring = runGatewayRuntimeExclusive(() => {
       events.push("restore-begin");
-      return beginCustomerRestore(h.stateDeps, { uid: "u", slug: "alice", gatewayId: "shared-1",
+      return beginUserRestore(h.stateDeps, { uid: "u", slug: "alice", gatewayId: "shared-1",
         fromGatewayId: "builder-alice", assignmentEpoch: 3, operationId: "return", claimStartedAt: 100, attemptId: "native" });
     });
     await Promise.resolve();
@@ -1111,22 +1111,22 @@ describe("gateway convergence pass outcomes", () => {
     expect(events).toEqual(["helm-start", "helm-end", "restore-begin"]);
     expect(desiredStatus === "retired" ? h.helm.removeInstance : h.helm.upsertInstance).toHaveBeenCalledOnce();
     expect(h.users.u.provisioning.openclaw.restoreFence).toMatchObject({ attemptId: "native", phase: "dispatched" });
-    await acknowledgeCustomerRestore(h.stateDeps, intent);
+    await acknowledgeUserRestore(h.stateDeps, intent);
     expect(h.users.u.provisioning.openclaw.restoreFence).toBeUndefined();
   });
 
-  it("keeps acquired customer custody after the queue releases until native acknowledgement", async () => {
+  it("keeps acquired user custody after the queue releases until native acknowledgement", async () => {
     const h = retainedGateway();
     const converge = serializeGatewayConvergence(() => runGatewayConvergencePass(h.deps));
-    const restoring = runGatewayRuntimeExclusive(() => beginCustomerRestore(h.stateDeps, { uid: "u", slug: "alice", gatewayId: "shared-1",
+    const restoring = runGatewayRuntimeExclusive(() => beginUserRestore(h.stateDeps, { uid: "u", slug: "alice", gatewayId: "shared-1",
       fromGatewayId: "builder-alice", assignmentEpoch: 3, operationId: "return", claimStartedAt: 100, attemptId: "native" }));
     const applying = converge();
     const intent = await restoring;
     await expect(applying).rejects.toThrow("outcome is unresolved");
     expect(h.helm.upsertInstance).not.toHaveBeenCalled();
-    await expect(acknowledgeCustomerRestore(h.stateDeps, { ...intent, attemptId: "wrong" })).rejects.toThrow();
+    await expect(acknowledgeUserRestore(h.stateDeps, { ...intent, attemptId: "wrong" })).rejects.toThrow();
     await expect(converge()).rejects.toThrow("outcome is unresolved");
-    await acknowledgeCustomerRestore(h.stateDeps, intent);
+    await acknowledgeUserRestore(h.stateDeps, intent);
     await converge();
     expect(h.helm.upsertInstance).toHaveBeenCalledOnce();
   });
@@ -1152,7 +1152,7 @@ describe("gateway convergence pass outcomes", () => {
     await entered;
     const handler = vi.fn(async (_op, ctx) => {
       handlerEntered();
-      await ctx.withCustomerRestoreFence({ uid: "u", slug: "alice", gatewayId: "shared-1",
+      await ctx.withUserRestoreFence({ uid: "u", slug: "alice", gatewayId: "shared-1",
         fromGatewayId: "builder-alice", assignmentEpoch: 3 }, async () => {
         events.push("restore-work");
         expect(h.users.u.provisioning.openclaw.restoreFence).toMatchObject({ phase: "dispatched" });
@@ -1176,15 +1176,15 @@ describe("gateway convergence pass outcomes", () => {
     h.helm.upsertInstance.mockRejectedValue(new Error("Helm failed"));
     const converge = serializeGatewayConvergence(() => runGatewayConvergencePass(h.deps));
     const applying = converge();
-    const restoring = runGatewayRuntimeExclusive(() => beginCustomerRestore(h.stateDeps, { uid: "u", slug: "alice", gatewayId: "shared-1",
+    const restoring = runGatewayRuntimeExclusive(() => beginUserRestore(h.stateDeps, { uid: "u", slug: "alice", gatewayId: "shared-1",
       fromGatewayId: "builder-alice", assignmentEpoch: 3, operationId: "return", claimStartedAt: 100, attemptId: "native" }));
     await expect(applying).rejects.toThrow("Helm failed");
     const intent = await restoring;
     expect(h.users.u.provisioning.openclaw.restoreFence).toMatchObject({ attemptId: "native" });
-    await acknowledgeCustomerRestore(h.stateDeps, intent);
+    await acknowledgeUserRestore(h.stateDeps, intent);
   });
 
-  it("rechecks customer custody immediately before applying Helm", async () => {
+  it("rechecks user custody immediately before applying Helm", async () => {
     const h = retainedGateway();
     h.deps.log.mockImplementation((message: string) => {
       if (message.startsWith("[converge-gateway]")) h.users.u.provisioning.openclaw.restoreFence = {};
@@ -1193,7 +1193,7 @@ describe("gateway convergence pass outcomes", () => {
     expect(h.helm.upsertInstance).not.toHaveBeenCalled();
   });
 
-  it("does not block a gateway for unrelated customer custody", async () => {
+  it("does not block a gateway for unrelated user custody", async () => {
     const h = retainedGateway();
     h.users.u.provisioning.openclaw = { gatewayId: "elsewhere", restoreFence: {},
       sourceTransferFence: { sourceGatewayId: "elsewhere", targetGatewayId: "another" } };
@@ -1216,7 +1216,7 @@ describe("gateway convergence pass outcomes", () => {
     expect(h.helm.removeInstance).not.toHaveBeenCalled();
   });
 
-  it.each(["paused", "retired"])("holds %s runtime mutation while customer restore custody remains", async (desiredStatus) => {
+  it.each(["paused", "retired"])("holds %s runtime mutation while user restore custody remains", async (desiredStatus) => {
     const h = retainedGateway({ desiredStatus });
     h.users.u.provisioning.openclaw.restoreFence = {};
     await expect(runGatewayConvergencePass(h.deps)).rejects.toThrow("outcome is unresolved");
@@ -1226,7 +1226,7 @@ describe("gateway convergence pass outcomes", () => {
 
   it("waits out a pending final home checkpoint quietly while still failing the pass for real errors", async () => {
     const removeInstance = vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
-      if (gatewayId === "parking") throw new FinalHomeCheckpointPendingError("computer c is taking its final home checkpoint (requested at 1); parking on a later converge");
+      if (gatewayId === "parking") throw new FinalHomeCheckpointPendingError("VM c is taking its final home checkpoint (requested at 1); parking on a later converge");
       throw new Error("compute API unavailable");
     });
     const log = vi.fn();
@@ -1661,7 +1661,7 @@ describe("startReconciler — targeted gateways ahead of a queued full reconcile
     vi.useRealTimers();
   });
 
-  function builderRoot(gatewayId: string): Record<string, unknown> {
+  function userRoot(gatewayId: string): Record<string, unknown> {
     return durableRoot({
       gatewayId,
       profile: "builder",
@@ -1708,20 +1708,20 @@ describe("startReconciler — targeted gateways ahead of a queued full reconcile
     await vi.advanceTimersByTimeAsync(1_000);
   }
 
-  async function openBuilderLease(): Promise<string[]> {
+  async function openUserLease(): Promise<string[]> {
     const { callbacks, events, roots, stop } = startRecordingReconciler();
     await primeListeners(callbacks);
     events.length = 0;
 
-    roots.fresh = builderRoot("fresh");
+    roots.fresh = userRoot("fresh");
     callbacks.gateways?.(rootChanges([{ type: "added", doc: { id: "fresh", data: () => roots.fresh } }]));
     await vi.advanceTimersByTimeAsync(1_000);
     stop();
     return events;
   }
 
-  it("converges a newly allocated Builder before the fleet's runtime dependencies sync", async () => {
-    const events = await openBuilderLease();
+  it("converges a newly allocated user before the fleet's runtime dependencies sync", async () => {
+    const events = await openUserLease();
 
     expect(events).toContain("converge:fresh");
     expect(events.indexOf("converge:fresh")).toBeLessThan(events.indexOf("source:default"));
@@ -1729,7 +1729,7 @@ describe("startReconciler — targeted gateways ahead of a queued full reconcile
   });
 
   it("syncs a targeted gateway's model-key source and secret before converging it", async () => {
-    const events = await openBuilderLease();
+    const events = await openUserLease();
 
     expect(events.slice(0, events.indexOf("converge:fresh"))).toEqual([
       "source:fresh",
@@ -1738,7 +1738,7 @@ describe("startReconciler — targeted gateways ahead of a queued full reconcile
   });
 
   it("does not resync the targeted gateways' dependencies in the same tick's full pass", async () => {
-    const events = await openBuilderLease();
+    const events = await openUserLease();
 
     expect(events.filter((event) => event.endsWith(":fresh"))).toEqual([
       "source:fresh",

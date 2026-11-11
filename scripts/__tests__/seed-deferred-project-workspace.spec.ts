@@ -26,11 +26,11 @@ describe("seedDeferredProjectWorkspace", () => {
     expect(present.length).toBeGreaterThan(0);
   });
 
-  it("says the checkout lives on the Builder runtime rather than pretending the project is empty", () => {
+  it("says the checkout lives on the isolated runtime rather than pretending the project is empty", () => {
     seedDeferredProjectWorkspace("bravo", "octogee");
 
     const body = fs.readFileSync(path.join(projectDir("bravo", "octogee"), "AGENTS.md"), "utf-8");
-    expect(body).toMatch(/Builder runtime/);
+    expect(body).toMatch(/isolated runtime/);
     expect(body).toMatch(/octogee/);
   });
 

@@ -47,7 +47,7 @@ spec:
             severity: critical
           annotations:
             summary: "Desired-running gateway {{ $labels.gateway_id }} has no available pod"
-            description: "Cowboy expects gateway {{ $labels.gateway_id }} to be running, but Kubernetes has reported zero available replicas for 3 minutes. Check the gateway card, rollout operation, and pod events."
+            description: "The fleet controller expects gateway {{ $labels.gateway_id }} to be running, but Kubernetes has reported zero available replicas for 3 minutes. Check the gateway card, rollout operation, and pod events."
         - alert: GatewayOnDemandFallback
           expr: |
             (
@@ -81,7 +81,7 @@ spec:
             severity: critical
           annotations:
             summary: "Shared gateway pool is degraded in {{ $labels.namespace }}"
-            description: "Fewer Ready shared gateway pods than the environment's minReplicas floor (Cowboy's octogee_shared_pool_min_replicas gauge) are available from the on-demand reliability floor. Each slot's minAvailable: 1 PDB protects its Ready gateway during voluntary disruption while AlwaysAllow permits eviction of an unhealthy stale pod. Inspect gateway pods, node capacity, and the shared pool scaler."
+            description: "Fewer Ready shared gateway pods than the environment's minReplicas floor (the fleet controller's octogee_shared_pool_min_replicas gauge) are available from the on-demand reliability floor. Each slot's minAvailable: 1 PDB protects its Ready gateway during voluntary disruption while AlwaysAllow permits eviction of an unhealthy stale pod. Inspect gateway pods, node capacity, and the shared pool scaler."
         - alert: SharedGatewayZoneDiversityLost
           expr: |
             (
@@ -115,8 +115,8 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: "Shared Barn reached its configured member limit"
-            description: "Cowboy needs another whole Shared Barn member but shared-a through shared-d are already running. Raise the configured member ceiling or reduce assignment pressure before another disposable gateway is preempted."
+            summary: "Shared gateway reached its configured member limit"
+            description: "The fleet controller needs another whole shared gateway member but shared-a through shared-d are already running. Raise the configured member ceiling or reduce assignment pressure before another disposable gateway is preempted."
         - alert: GatewayKubeletPreempted
           expr: increase(glm_disruption_observations_total{cause="kubelet_critical_preemption",namespace=~"octogee|octogee-test"}[10m]) > 0
           for: 0m
@@ -124,7 +124,7 @@ spec:
             severity: warning
           annotations:
             summary: "Kubelet preempted a gateway pod in {{ $labels.namespace }} to admit a critical pod"
-            description: "GKE Autopilot bound a system-node-critical pod (usually kube-system/gke-system-balloon-pod) to a full node and the kubelet evicted a gateway to admit it. PriorityClass and PodDisruptionBudget cannot prevent this. The Deployment replaces the pod; check Cowboy's 'Gateway disruption observed' log for the node and affected Builders."
+            description: "GKE Autopilot bound a system-node-critical pod (usually kube-system/gke-system-balloon-pod) to a full node and the kubelet evicted a gateway to admit it. PriorityClass and PodDisruptionBudget cannot prevent this. The Deployment replaces the pod; check the fleet controller's 'Gateway disruption observed' log for the node and affected users."
         - alert: BuilderComputerDiskLow
           expr: |
             (
@@ -135,8 +135,8 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: "Builder computer {{ $labels.gateway_id }} has {{ $value | humanizePercentage }} of its disk free"
-            description: "The vm-agent on gateway {{ $labels.gateway_id }} reports under 15% free on its boot disk. The home checkpoint stages a gzip archive of up to 4 GiB on that disk, so a full disk fails every checkpoint and hangs a return at checkpoint-native-computer. Grow the disk with `gcloud compute disks resize` and reboot the VM (octo-grow-root extends the partition and filesystem at boot), or clean up over SSH."
+            summary: "Gateway VM {{ $labels.gateway_id }} has {{ $value | humanizePercentage }} of its disk free"
+            description: "The vm-agent on gateway {{ $labels.gateway_id }} reports under 15% free on its boot disk. The home checkpoint stages a gzip archive of up to 4 GiB on that disk, so a full disk fails every checkpoint and hangs a return at checkpoint-native-vm. Grow the disk with `gcloud compute disks resize` and reboot the VM (octo-grow-root extends the partition and filesystem at boot), or clean up over SSH."
         - alert: BuilderComputerDiskCritical
           expr: |
             (
@@ -147,7 +147,7 @@ spec:
           labels:
             severity: critical
           annotations:
-            summary: "Builder computer {{ $labels.gateway_id }} is out of disk ({{ $value | humanizePercentage }} free)"
+            summary: "Gateway VM {{ $labels.gateway_id }} is out of disk ({{ $value | humanizePercentage }} free)"
             description: "Under 5% free on gateway {{ $labels.gateway_id }}'s boot disk. Home checkpoints are failing or about to; a Builder return will hang. Resize the disk and reboot the VM now."
         - alert: BuilderComputerDiskReportStale
           expr: (time() - glm_gateway_vm_disk_observed_timestamp_seconds{namespace=~"octogee|octogee-test"}) > 900
@@ -155,8 +155,8 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: "Builder computer {{ $labels.gateway_id }} stopped reporting its disk"
-            description: "Cowboy still lists gateway {{ $labels.gateway_id }}'s computer as running, but the broker has not refreshed its disk observation for over 15 minutes (the vm-agent reports every poll and the broker persists at least every 10 minutes). The disk gauges for this gateway are stale, so the low/critical disk alerts cannot be trusted; check octo-gateway-agent on the VM and the vm-runtime broker route."
+            summary: "Gateway VM {{ $labels.gateway_id }} stopped reporting its disk"
+            description: "The fleet controller still lists gateway {{ $labels.gateway_id }}'s VM as running, but the broker has not refreshed its disk observation for over 15 minutes (the vm-agent reports every poll and the broker persists at least every 10 minutes). The disk gauges for this gateway are stale, so the low/critical disk alerts cannot be trusted; check octo-gateway-agent on the VM and the vm-runtime broker route."
         - alert: GlmControllerDown
           expr: |
             (
@@ -168,15 +168,15 @@ spec:
           labels:
             severity: critical
           annotations:
-            summary: "PROD Cowboy has no available backend pods"
-            description: "Cowboy has had no available backend pods in PROD for 1 minute. Fleet Admin requests may fail. Check node readiness, the glm-controller pod, and PostgreSQL connection errors."
+            summary: "PROD fleet controller has no available backend pods"
+            description: "The fleet controller has had no available backend pods in PROD for 1 minute. Fleet Admin requests may fail. Check node readiness, the glm-controller pod, and PostgreSQL connection errors."
         - alert: GlmControllerReconcileStalled
           expr: (time() - glm_reconcile_last_success_timestamp_seconds{namespace=~"octogee|octogee-test"}) > 600
           for: 5m
           labels:
             severity: critical
           annotations:
-            summary: "Cowboy has not completed a successful reconcile in >10m"
+            summary: "The fleet controller has not completed a successful reconcile in >10m"
             description: "glm-controller reconcile success is stale. Gateway desired state may not be reaching Kubernetes; check glm-controller logs and /metrics."
     - name: octogee.mattermost
       rules:
@@ -187,7 +187,7 @@ spec:
             severity: critical
           annotations:
             summary: "Mattermost is unreachable"
-            description: "No Mattermost metrics for 2m. Chat is broken for all customers."
+            description: "No Mattermost metrics for 2m. Chat is broken for all users."
         - alert: MattermostPodNotReady
           expr: kube_pod_status_ready{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test",pod=~"mattermost-.*", condition="true"} == 0
           for: 3m
@@ -340,7 +340,7 @@ spec:
             severity: warning
           annotations:
             summary: "Daily digest cron hasn't succeeded in >25h"
-            description: "notification-digest-daily (ns octogee) last succeeded >25h ago, or its metric is absent — Builders are not getting digest emails. Check `kubectl -n octogee get cronjob notification-digest-daily` and recent job logs."
+            description: "notification-digest-daily (ns octogee) last succeeded >25h ago, or its metric is absent — users are not getting digest emails. Check `kubectl -n octogee get cronjob notification-digest-daily` and recent job logs."
         - alert: DigestWeeklyCronStale
           expr: (time() - kube_cronjob_status_last_successful_time{job="gmp-kube-state-metrics",namespace=~"octogee",cronjob="notification-digest-weekly"} > 691200) or absent(kube_cronjob_status_last_successful_time{job="gmp-kube-state-metrics",namespace=~"octogee",cronjob="notification-digest-weekly"})
           for: 30m
@@ -366,7 +366,7 @@ spec:
             severity: critical
           annotations:
             summary: "Firestore document reads are sustained at {{ $value }}/s"
-            description: "Reads have held above 150/s for 15m against a healthy fleet baseline near 27/s. A read storm is almost always amplification, not customer load: a listener whose watchers redeliver every document on each change, or a reconciler rewriting documents that did not change. Read-rate storms have run 750-1,150/s for days. Check the fleet-event listener hub, Cowboy's reconcile fingerprints, and the placement and heartbeat write paths."
+            description: "Reads have held above 150/s for 15m against a healthy fleet baseline near 27/s. A read storm is almost always amplification, not user load: a listener whose watchers redeliver every document on each change, or a reconciler rewriting documents that did not change. Read-rate storms have run 750-1,150/s for days. Check the fleet-event listener hub, the fleet controller's reconcile fingerprints, and the placement and heartbeat write paths."
         - alert: FirestoreWriteRateHigh
           expr: sum(rate(firestore_googleapis_com:document_write_count{monitored_resource="firestore.googleapis.com/Database"}[10m])) > 50
           for: 15m
@@ -374,4 +374,4 @@ spec:
             severity: warning
           annotations:
             summary: "Firestore document writes are sustained at {{ $value }}/s"
-            description: "Writes have held above 50/s for 15m. Each write republishes its document to every watcher, so a write loop is the leading indicator of a read storm. Check Cowboy's Kubernetes observation and operator-heartbeat writers, which suppress a write only when the observed state and its freshness stamp are both unchanged, and the operations journal."
+            description: "Writes have held above 50/s for 15m. Each write republishes its document to every watcher, so a write loop is the leading indicator of a read storm. Check the fleet controller's Kubernetes observation and operator-heartbeat writers, which suppress a write only when the observed state and its freshness stamp are both unchanged, and the operations journal."

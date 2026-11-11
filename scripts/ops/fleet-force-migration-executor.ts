@@ -69,7 +69,7 @@ export async function runForcedMigration(input: {
   const pod = recovery.owned ? boundPod(recovery.owned.fence) : await transport.capture(target.fromGatewayId);
   return runNormalFleetMutation(store, {
     actor, forced: true, what: recovery.owned ? "Observe forced migration recovery" : "Force source gateway restart for blocked migration",
-    why: "Operator accepts interruption of the dedicated Builder gateway while preserving its pod, disk, and existing migration",
+    why: "Operator accepts interruption of the dedicated isolated gateway while preserving its pod, disk, and existing migration",
     target: { ...target, sourceEpoch: plan.sourceEpoch }, preActionStatus: { ...plan },
     mutation: { kind: "force-migration", observationOnly: recovery.owned?.fence.phase === "dispatched" }, now,
     action: async claim => {

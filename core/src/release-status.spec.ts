@@ -238,7 +238,7 @@ describe("release status", () => {
     expect(summarizeReleaseStatus(status)).toMatchObject({ status: "incomplete", serving: 0, converged: 0 });
   });
 
-  it("reports rollout drift without waiting for Cowboy to reconcile", () => {
+  it("reports rollout drift without waiting for the fleet controller to reconcile", () => {
     const input: ReleaseStatusGatewayInput = {
       gatewayId: "default",
       desiredStatus: "running",
@@ -373,7 +373,7 @@ describe("release status", () => {
     }, NOW)).toBe("heartbeat-stale");
   });
 
-  it("accepts Cowboy's booting heartbeat and reports it as unhealthy", async () => {
+  it("accepts the fleet controller's booting heartbeat and reports it as unhealthy", async () => {
     const { store } = database({
       "config/orchestrator": { defaultGatewayId: "default" },
       "gateways/default": gatewayRoot("default"),

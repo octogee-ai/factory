@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED,
-  DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY,
+  DEFAULT_SHARED_GATEWAY_USERS_PER_GATEWAY,
 } from "@octogee/shared/types/shared-gateway-pool";
 import {
   InvalidSharedGatewayAutoscalingConfigError,
@@ -21,7 +21,7 @@ describe("readSharedGatewayAutoscalingConfigInStore", () => {
   it("reads the defaults when the orchestrator config is absent", async () => {
     await expect(readSharedGatewayAutoscalingConfigInStore(createDocumentFixtureStore({}))).resolves.toEqual({
       enabled: DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED,
-      buildersPerGateway: DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY,
+      buildersPerGateway: DEFAULT_SHARED_GATEWAY_USERS_PER_GATEWAY,
     });
   });
 

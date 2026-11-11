@@ -145,8 +145,8 @@ describe("helm/octogee-gateway/ — revision-aware render (revisionId != gateway
   });
 });
 
-describe("helm/octogee-gateway/ — KSA is out of the chart (Cowboy owns it)", () => {
-  it("never renders a ServiceAccount object (gateway-scoped KSA created by Cowboy)", () => {
+describe("helm/octogee-gateway/ — KSA is out of the chart (the fleet controller owns it)", () => {
+  it("never renders a ServiceAccount object (gateway-scoped KSA created by the fleet controller)", () => {
     expect(byKind(helmTemplate(), "ServiceAccount")).toHaveLength(0);
     expect(byKind(helmTemplate({ gatewayId: "default", revisionId: "default-r2" }), "ServiceAccount")).toHaveLength(0);
     expect(byKind(helmTemplate({ profile: "builder" }), "ServiceAccount")).toHaveLength(0);

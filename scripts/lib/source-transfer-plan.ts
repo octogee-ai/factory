@@ -40,7 +40,7 @@ export function parseSourceTransferRequest(value: unknown, executionId: string, 
  return r as unknown as SourceTransferRequest;
 }
 export function sharedMigrationAgentIds(stateDir: string, slug: string): string[] {
- if (!isValidUsername(slug)) throw new Error('invalid customer slug');
+ if (!isValidUsername(slug)) throw new Error('invalid user slug');
  const ids = new Set([`octogee-${slug}-coach`]);
  const dir = path.join(stateDir, 'agents');
  if (fs.existsSync(dir) && !fs.lstatSync(dir).isDirectory()) throw new Error('agent root is not a directory');
@@ -52,8 +52,8 @@ export function sharedMigrationAgentIds(stateDir: string, slug: string): string[
  return [...ids].sort();
 }
 export async function sharedMigrationExportPaths(root: string, slug: string): Promise<TransferSource[]> {
- const { customerFileStatePaths } = await import('./customer-file-state.js');
- const candidates = [...sharedMigrationAgentIds(root, slug).map(id => ({ cwd: root, path: path.join('agents', id) })), ...await customerFileStatePaths(root, slug)];
+ const { userFileStatePaths } = await import('./user-file-state.js');
+ const candidates = [...sharedMigrationAgentIds(root, slug).map(id => ({ cwd: root, path: path.join('agents', id) })), ...await userFileStatePaths(root, slug)];
  const result: TransferSource[] = [];
  for (const source of candidates) { try { await fsp.lstat(path.join(source.cwd, source.path)); result.push(source); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; } }
  return result;

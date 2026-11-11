@@ -6,7 +6,7 @@ import { WebSocket } from "ws";
 import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
 import { sendWsRequest, startConnectChallengeTracker, waitForWsOpen } from "@octogee/shared/types/openclaw-wire-core";
 import { OPENCLAW_EDGE_SERVICE_IDENTITY, OPENCLAW_PROVISIONER_SERVICE_IDENTITY, openClawProxyIdentityHeaders, openClawProxyOrigin } from "@octogee/shared/types/openclaw-proxy-identity";
-import { builderClaimOwnerUid } from "@octogee/shared/server/builder-claim";
+import { userClaimOwnerUid } from "@octogee/shared/server/user-claim";
 
 interface BootstrapIdentity { uid: string; role: "admin" | "service" }
 interface BootstrapJournal { ownerUid: string }
@@ -94,8 +94,8 @@ export async function bootstrapWorkspaceIdentities(args: {
   const env = args.env ?? process.env;
   if (!enabled(env)) return;
   const state = files(env);
-  const ownerUid = builderClaimOwnerUid(env);
-  if (!ownerUid) throw new Error("Workspace identity initialization requires this Builder's claimed owner");
+  const ownerUid = userClaimOwnerUid(env);
+  if (!ownerUid) throw new Error("Workspace identity initialization requires this user's claimed owner");
   const boot = fs.readFileSync(state.boot, "utf8");
   const identities: BootstrapIdentity[] = [
     { uid: OPENCLAW_EDGE_SERVICE_IDENTITY, role: "service" },

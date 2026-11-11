@@ -1,5 +1,5 @@
 import { isGatewayVmEgressState, type GatewayEgressMode, type GatewayVmEgressState } from "@octogee/shared/types/glm";
-import type { FleetBrokerComputerEgress } from "@octogee/shared/types/fleet-broker";
+import type { FleetBrokerVmEgress } from "@octogee/shared/types/fleet-broker";
 import { trustedBrokerBaseUrl } from "../lib/automation-authorization-broker.js";
 import { internalFetch } from "../lib/internal-fetch.js";
 import type { EgressStore } from "./service.js";
@@ -19,10 +19,10 @@ async function post(body: Record<string, unknown>, options: BrokerEgressStoreOpt
   const response = await internalFetch(`${trustedBrokerBaseUrl(raw, env)}${COMPUTER_EGRESS_BROKER_PATH}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), redirect: "error",
   }, { tokenPath: options.tokenPath, fetchImpl: options.fetchImpl, requireProjectedToken: true, timeoutMs: 10_000 });
-  if (!response.ok) throw new Error(`computer egress broker refused (${response.status})`);
-  const payload = await response.json() as Partial<FleetBrokerComputerEgress>;
+  if (!response.ok) throw new Error(`VM egress broker refused (${response.status})`);
+  const payload = await response.json() as Partial<FleetBrokerVmEgress>;
   if (payload.egress === null) return null;
-  if (!isGatewayVmEgressState(payload.egress)) throw new Error("computer egress broker returned an invalid record");
+  if (!isGatewayVmEgressState(payload.egress)) throw new Error("VM egress broker returned an invalid record");
   return payload.egress;
 }
 
@@ -31,7 +31,7 @@ export function createBrokerEgressStore(options: BrokerEgressStoreOptions = {}):
     read: () => post({}, options),
     async write(mode: GatewayEgressMode) {
       const stored = await post({ mode }, options);
-      if (!stored || stored.mode !== mode) throw new Error("computer egress broker did not record the requested mode");
+      if (!stored || stored.mode !== mode) throw new Error("VM egress broker did not record the requested mode");
       return stored;
     },
   };

@@ -36,7 +36,7 @@ function harness(overrides: Partial<MmChatActivityListenerDeps> = {}) {
     backoffSchedule: [10],
     ...overrides,
   });
-  manager.addCoach({ coachMmUserId: "coach-1", coachToken: "pat-1" });
+  manager.addDefaultAgent({ defaultAgentMmUserId: "coach-1", coachToken: "pat-1" });
   return { manager, onChatActivity, socket: sockets[0]! };
 }
 
@@ -54,12 +54,12 @@ function post(message: string, updateAt: number = 1): Record<string, unknown> {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Mattermost chat activity", () => {
-  it("reports a post by anyone other than the coach", () => {
+  it("reports a post by anyone other than the agent", () => {
     const { manager, onChatActivity, socket } = harness();
     socket.message("posted", { ...post("hello"), id: "post-9", user_id: "guest-1", type: "" });
 
     expect(onChatActivity).toHaveBeenCalledWith({
-      coachMmUserId: "coach-1",
+      defaultAgentMmUserId: "coach-1",
       kind: "post",
       channelId: "channel-1",
       postId: "post-9",
@@ -68,12 +68,12 @@ describe("Mattermost chat activity", () => {
     manager.stop();
   });
 
-  it("reports a reaction by anyone other than the coach", () => {
+  it("reports a reaction by anyone other than the agent", () => {
     const { manager, onChatActivity, socket } = harness();
     socket.reaction({ user_id: "builder-1", post_id: "post-1", emoji_name: "+1", create_at: 42 });
 
     expect(onChatActivity).toHaveBeenCalledWith({
-      coachMmUserId: "coach-1",
+      defaultAgentMmUserId: "coach-1",
       kind: "reaction",
       channelId: "channel-1",
       postId: "post-1",
@@ -84,7 +84,7 @@ describe("Mattermost chat activity", () => {
     manager.stop();
   });
 
-  it("ignores the coach's own posts and reactions, edits, bot posts, and system posts", () => {
+  it("ignores the agent's own posts and reactions, edits, bot posts, and system posts", () => {
     const { manager, onChatActivity, socket } = harness();
     socket.message("posted", post("coach reply"));
     socket.reaction({ user_id: "coach-1", post_id: "post-1", emoji_name: "eyes" });

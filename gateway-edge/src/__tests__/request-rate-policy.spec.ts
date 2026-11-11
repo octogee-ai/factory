@@ -21,7 +21,7 @@ describe("request rate-limit ownership", () => {
     }
   });
 
-  it("does not pool private Builder calls into a source-IP allowance", async () => {
+  it("does not pool private user calls into a source-IP allowance", async () => {
     const target = app();
     const serviceToken = `${"a".repeat(50)}.${"b".repeat(50)}.${"c".repeat(50)}`;
     for (let index = 0; index < 1201; index++) {
@@ -31,7 +31,7 @@ describe("request rate-limit ownership", () => {
     }
   });
 
-  it("shares mutation credit across one authenticated user but not across builders behind one IP", async () => {
+  it("shares mutation credit across one authenticated user but not across users behind one IP", async () => {
     const target = express();
     target.set("trust proxy", 1);
     target.use((req, _res, next) => {
@@ -45,9 +45,9 @@ describe("request rate-limit ownership", () => {
       await request(target).post("/api/channels").set("X-Forwarded-For", "198.51.100.13").set("Authorization", "Bearer token-a").expect(204);
     }
     await request(target).post("/api/projects").set("X-Forwarded-For", "198.51.100.14").set("Authorization", "Bearer token-a").expect(429);
-    const otherBuilder = await request(target).post("/api/channels")
+    const otherUser = await request(target).post("/api/channels")
       .set("X-Forwarded-For", "198.51.100.13").set("Authorization", "Bearer token-b");
-    expect(otherBuilder.status).toBe(204);
+    expect(otherUser.status).toBe(204);
   });
 
   it("keeps unverified callers in the same IP budget despite changing bearer text", async () => {

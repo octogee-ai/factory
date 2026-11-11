@@ -15,7 +15,7 @@ describe("fleet broker system config status", () => {
   });
 
   it("publishes the redacted status against the immutable revision", async () => {
-    await createFleetBrokerClient("bender", "bender-r9").recordSystemConfigStatus({
+    await createFleetBrokerClient("walter", "walter-r9").recordSystemConfigStatus({
       state: "error",
       acceptedCommit: "abc123",
       lastErrorCode: "non-fast-forward-conflict",
@@ -26,8 +26,8 @@ describe("fleet broker system config status", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
-          gatewayId: "bender",
-          revisionId: "bender-r9",
+          gatewayId: "walter",
+          revisionId: "walter-r9",
           status: {
             state: "error",
             acceptedCommit: "abc123",
@@ -38,8 +38,8 @@ describe("fleet broker system config status", () => {
     );
   });
 
-  it("publishes only the assigned Builder toolchain state", async () => {
-    await createFleetBrokerClient("bender", "bender-r9")
+  it("publishes only the assigned isolated toolchain state", async () => {
+    await createFleetBrokerClient("walter", "walter-r9")
       .setToolchainStatus("uid-alice", "verifying");
 
     expect(internalFetch).toHaveBeenCalledWith(
@@ -47,7 +47,7 @@ describe("fleet broker system config status", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
-          gatewayId: "bender",
+          gatewayId: "walter",
           uid: "uid-alice",
           status: "verifying",
         }),
@@ -91,7 +91,7 @@ describe("fleet broker system config status", () => {
       .rejects.toThrow("invalid assignment roster");
   });
 
-  it("requests the narrow configured-builder bootstrap against the immutable revision", async () => {
+  it("requests the narrow configured-user bootstrap against the immutable revision", async () => {
     const bootstrap = {
       uid: "uid-alice",
       slug: "alice",
@@ -106,11 +106,11 @@ describe("fleet broker system config status", () => {
     ));
 
     await expect(
-      createFleetBrokerClient("bender", "bender-r9", {
+      createFleetBrokerClient("walter", "walter-r9", {
         gatewayCredentialHeaders: async () => ({
           [GATEWAY_CREDENTIAL_TOKEN_HEADER]: "credential-jwt",
         }),
-      }).configuredBuilderBootstrap("alice"),
+      }).configuredUserBootstrap("alice"),
     ).resolves.toEqual(bootstrap);
     expect(internalFetch).toHaveBeenCalledWith(
       "http://broker/internal/fleet/configured-builder-bootstrap",
@@ -120,23 +120,23 @@ describe("fleet broker system config status", () => {
           [GATEWAY_CREDENTIAL_TOKEN_HEADER]: "credential-jwt",
         }),
         body: JSON.stringify({
-          gatewayId: "bender",
-          revisionId: "bender-r9",
+          gatewayId: "walter",
+          revisionId: "walter-r9",
           slug: "alice",
         }),
       }),
     );
   });
 
-  it("requests per-customer project coach membership reconciliation", async () => {
-    await createFleetBrokerClient("bender", "bender-r9")
-      .reconcileProjectCoachMembership("uid-alice");
+  it("requests per-user project agent membership reconciliation", async () => {
+    await createFleetBrokerClient("walter", "walter-r9")
+      .reconcileProjectAgentMembership("uid-alice");
 
     expect(internalFetch).toHaveBeenCalledWith(
       "http://broker/internal/fleet/reconcile-project-coach-membership",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ gatewayId: "bender", uid: "uid-alice" }),
+        body: JSON.stringify({ gatewayId: "walter", uid: "uid-alice" }),
       }),
     );
   });

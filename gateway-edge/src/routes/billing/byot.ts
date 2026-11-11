@@ -274,7 +274,7 @@ export async function saveModelCredentialKey(
 
     const slug = req.workspaceSlug;
     if (!slug) {
-      res.status(400).json({ error: "Customer has no provisioned workspace — cannot register BYOT" });
+      res.status(400).json({ error: "User has no provisioned workspace — cannot register BYOT" });
       return;
     }
 

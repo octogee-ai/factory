@@ -19,14 +19,14 @@ describe("surge OpenClaw supervisor process environment", () => {
       OPENCLAW_GATEWAY_TOKEN: "pod-token",
       OCTOGEE_POD_RELAY_TOKEN: "pod-token",
       OPENCLAW_CONTROL_IDENTITY: "per-user",
-      GATEWAY_ID: "bender",
+      GATEWAY_ID: "walter",
     };
 
     const env = openClawProcessEnv(source);
 
     expect(env).not.toHaveProperty("OPENCLAW_GATEWAY_TOKEN");
     expect(env.OCTOGEE_POD_RELAY_TOKEN).toBe("pod-token");
-    expect(env.GATEWAY_ID).toBe("bender");
+    expect(env.GATEWAY_ID).toBe("walter");
     expect(source.OPENCLAW_GATEWAY_TOKEN).toBe("pod-token");
   });
 
@@ -47,7 +47,7 @@ describe("surge OpenClaw supervisor process environment", () => {
     expect(env).not.toHaveProperty("OPENCLAW_GATEWAY_TOKEN");
   });
 
-  it("keeps cluster Builder gateways password-free", () => {
+  it("keeps cluster isolated gateways password-free", () => {
     const env = openClawProcessEnv({
       OPENCLAW_GATEWAY_TOKEN: "pod-token",
       OPENCLAW_CONTROL_IDENTITY: "per-user",

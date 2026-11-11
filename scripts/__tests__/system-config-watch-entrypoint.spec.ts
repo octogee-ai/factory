@@ -8,7 +8,7 @@ import {
   runSystemConfigWatch,
 } from "../entrypoints/system-config-watch.js";
 import { disableSystemConfigWatch } from "../lib/system-config-watch-state.js";
-import { withBuilderClaim } from "./helpers/builder-claim.js";
+import { withUserClaim } from "./helpers/user-claim.js";
 
 describe("system-config-watch entrypoint planning", () => {
   const dirs: string[] = [];
@@ -17,10 +17,10 @@ describe("system-config-watch entrypoint planning", () => {
     for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("runs only for isolated gateways with a builder slug and canonical path", () => {
+  it("runs only for isolated gateways with a user slug and canonical path", () => {
     expect(resolveSystemConfigWatchPlan({
       GATEWAY_CLASS: "builder",
-      ...withBuilderClaim({}, "alice"),
+      ...withUserClaim({}, "alice"),
       OPENCLAW_CONFIG_PATH: "/home/node/.openclaw/system_config/openclaw.json",
     })).toEqual({
       action: "watch",
@@ -36,7 +36,7 @@ describe("system-config-watch entrypoint planning", () => {
     });
     expect(() => resolveSystemConfigWatchPlan({
       GATEWAY_CLASS: "builder",
-      ...withBuilderClaim({}, "alice"),
+      ...withUserClaim({}, "alice"),
       HOME: "/home/node",
     })).toThrow(/OPENCLAW_CONFIG_PATH/);
   });
@@ -50,7 +50,7 @@ describe("system-config-watch entrypoint planning", () => {
     runSystemConfigWatch({
       env: {
         GATEWAY_CLASS: "builder",
-        ...withBuilderClaim({}, "alice"),
+        ...withUserClaim({}, "alice"),
         OPENCLAW_CONFIG_PATH: "/home/node/.openclaw/system_config/openclaw.json",
       },
       createWatcher,
@@ -88,7 +88,7 @@ describe("system-config-watch entrypoint planning", () => {
     runSystemConfigWatch({
       env: {
         GATEWAY_CLASS: "builder",
-        ...withBuilderClaim({}, "alice"),
+        ...withUserClaim({}, "alice"),
         OPENCLAW_CONFIG_PATH: configPath,
       },
       createWatcher,
@@ -122,7 +122,7 @@ describe("system-config-watch entrypoint planning", () => {
     runSystemConfigWatch({
       env: {
         GATEWAY_CLASS: "builder",
-        ...withBuilderClaim({}, "alice"),
+        ...withUserClaim({}, "alice"),
         OPENCLAW_CONFIG_PATH: configPath,
       },
       createWatcher,
@@ -150,7 +150,7 @@ describe("system-config-watch entrypoint planning", () => {
     runSystemConfigWatch({
       env: {
         GATEWAY_CLASS: "builder",
-        ...withBuilderClaim({}, "alice"),
+        ...withUserClaim({}, "alice"),
         OPENCLAW_CONFIG_PATH: configPath,
       },
       createWatcher,

@@ -2,9 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import type { RecordKey } from "../errors.js";
 import type {
   AccessRepositories,
-  BuilderSecret,
-  BuilderSecretInput,
-  BuilderSecretKind,
+  UserSecret,
+  UserSecretInput,
+  UserSecretKind,
   ControlSession,
   ControlSessionsRepository,
   ControlTicket,
@@ -24,8 +24,8 @@ import type { PostgresSession } from "./session.js";
 import type { Row } from "./sql.js";
 import { column, columnFor, decodeStored, type TableSpec } from "./values.js";
 
-const BUILDER_MATTERMOST_SECRET_ID = "mattermost";
-const COACH_MATTERMOST_SECRET_ID = "coachMattermost";
+const USER_MATTERMOST_SECRET_ID = "mattermost";
+const DEFAULT_AGENT_MATTERMOST_SECRET_ID = "coachMattermost";
 const PROJECT_AGENT_SECRET_PREFIX = "projectAgentMattermost-";
 const ACCESS_DENIAL_BUCKET_MS = 60_000;
 const GATEWAY_TICKET_RESERVED = ["uid", "gatewayId", "expiresAt", "expireAt"] as const;
@@ -159,9 +159,9 @@ function assertNoReservedKeys(operation: string, map: OpaqueMap, reserved: reado
   }
 }
 
-export function secretKindOf(secretId: string): BuilderSecretKind {
-  if (secretId === BUILDER_MATTERMOST_SECRET_ID) return "builder-mattermost";
-  if (secretId === COACH_MATTERMOST_SECRET_ID) return "coach-mattermost";
+export function secretKindOf(secretId: string): UserSecretKind {
+  if (secretId === USER_MATTERMOST_SECRET_ID) return "builder-mattermost";
+  if (secretId === DEFAULT_AGENT_MATTERMOST_SECRET_ID) return "coach-mattermost";
   if (secretId.startsWith(PROJECT_AGENT_SECRET_PREFIX)) return "project-agent-mattermost";
   return "connector";
 }
@@ -177,7 +177,7 @@ function encryptedToken(tokens: PlainObject, field: (typeof ENCRYPTED_TOKEN_FIEL
   return value;
 }
 
-function connectorRow(uid: string, secret: Extract<BuilderSecretInput, { kind: "connector" }>): PlainObject {
+function connectorRow(uid: string, secret: Extract<UserSecretInput, { kind: "connector" }>): PlainObject {
   const detailTokens = isPlainObject(secret.detail.tokens) ? secret.detail.tokens : {};
   const tokens: PlainObject = { ...detailTokens };
   if (secret.encryptedAccessToken !== null) tokens.encryptedAccessToken = secret.encryptedAccessToken;
@@ -193,7 +193,7 @@ function connectorRow(uid: string, secret: Extract<BuilderSecretInput, { kind: "
   };
 }
 
-function secretRow(uid: string, secret: BuilderSecretInput): PlainObject {
+function secretRow(uid: string, secret: UserSecretInput): PlainObject {
   const derivedKind = secretKindOf(secret.secretId);
   if (derivedKind !== secret.kind) {
     throw new TypeError(`secrets.put: secret id ${secret.secretId} holds a ${derivedKind} secret, not ${secret.kind}`);
@@ -213,7 +213,7 @@ function secretRow(uid: string, secret: BuilderSecretInput): PlainObject {
   };
 }
 
-function decodeSecret(row: Row): Stored<BuilderSecret> {
+function decodeSecret(row: Row): Stored<UserSecret> {
   const stored = decodeStored<{
     secretId: string;
     personalToken: string;
@@ -224,7 +224,7 @@ function decodeSecret(row: Row): Stored<BuilderSecret> {
     createdAt: number | null;
     rotatedAt: number | null;
   }>(SECRETS_TABLE, row);
-  const kind = row.secret_kind as BuilderSecretKind;
+  const kind = row.secret_kind as UserSecretKind;
   if (kind === "connector") {
     return {
       kind,

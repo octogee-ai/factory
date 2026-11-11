@@ -8,7 +8,7 @@ import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
 
 const paths = vi.hoisted(() => ({
-  customers: `/tmp/octogee-gh-project-${process.pid}`,
+  users: `/tmp/octogee-gh-project-${process.pid}`,
   keys: `/tmp/octogee-gh-project-keys-${process.pid}`,
   scratch: `/tmp/octogee-gh-project-scratch-${process.pid}`,
   openclaw: `${process.platform === "linux" ? "/dev/shm" : "/tmp"}/octogee-gh-project-openclaw-${process.pid}`,
@@ -27,7 +27,7 @@ vi.mock("../lib/config.js", () => ({
   GIT_API_URL: "http://gitea-http.octogee.svc.cluster.local:3000/api/v1",
   GIT_SSH_HOST: "gitea",
   OPENCLAW_DIR: paths.openclaw,
-  CUSTOMERS_DIR: paths.customers,
+  CUSTOMERS_DIR: paths.users,
   CUSTOMER_KEYS_DIR: paths.keys,
   AGENTS_DIR: "/tmp/octogee-test/agents",
 }));
@@ -60,12 +60,12 @@ vi.mock("../lib/gitea-admin-broker-client.js", async (importOriginal) => ({
 
 const {
   cloneProjectRepo,
-  externalizeCustomerGitDir,
+  externalizeUserGitDir,
   githubCloneCredentialEnv,
   projectCheckoutMatchesSource,
 } = await import("../lib/git.js");
 
-const { buildBrokeredLifecycleAdapter } = await import("../lib/customer-lifecycle-broker-adapter.js");
+const { buildBrokeredLifecycleAdapter } = await import("../lib/user-lifecycle-broker-adapter.js");
 
 const SLUG = "alice";
 const GITHUB_REMOTE = "https://github.com/octogee-ai/demo.git";
@@ -156,7 +156,7 @@ function rebuildTransferredGithubMetadata(
   _slug: string,
   deps: { repoSource?: { provider: "github"; owner: string; repo: string } | null },
 ): void {
-  externalizeCustomerGitDir(repoDir, {
+  externalizeUserGitDir(repoDir, {
     repoSource: deps.repoSource,
     fetchCanonical: (worktree, gitDir) => {
       execFileSync("git", [
@@ -184,12 +184,12 @@ function initRepoWithOrigin(repo: string, remoteUrl: string): void {
 }
 
 beforeEach(() => {
-  for (const dir of [paths.customers, paths.keys, paths.scratch, paths.openclaw]) {
+  for (const dir of [paths.users, paths.keys, paths.scratch, paths.openclaw]) {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
   }
   if (process.platform === "linux") {
-    expect(fs.statSync(paths.customers).dev).not.toBe(fs.statSync(paths.openclaw).dev);
+    expect(fs.statSync(paths.users).dev).not.toBe(fs.statSync(paths.openclaw).dev);
   }
   const origin = seedBareOrigin();
   canonicalOrigin = origin;
@@ -220,14 +220,14 @@ afterEach(() => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  for (const dir of [paths.customers, paths.keys, paths.scratch, paths.openclaw]) {
+  for (const dir of [paths.users, paths.keys, paths.scratch, paths.openclaw]) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
 describe("cloneProjectRepo for a GitHub-backed project", () => {
   it("rebuilds a transferred checkout's missing metadata without replacing local files", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
     const metadata = path.join(paths.openclaw, "git-metadata", SLUG, "projects", "demo.git");
     fs.mkdirSync(dest, { recursive: true });
     fs.writeFileSync(path.join(dest, ".git"), `gitdir: ${metadata}\n`);
@@ -249,7 +249,7 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
   });
 
   it("fails closed when rebuilt transferred metadata does not verify", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
     const metadata = path.join(paths.openclaw, "git-metadata", SLUG, "projects", "demo.git");
     fs.mkdirSync(dest, { recursive: true });
     fs.writeFileSync(path.join(dest, ".git"), `gitdir: ${metadata}\n`);
@@ -269,7 +269,7 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
   });
 
   it("checks the GitHub repo out at the shared project path with the workspace commit identity", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
 
     const ok = await cloneProjectRepo(SLUG, "demo", "", {
       repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
@@ -285,7 +285,7 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
   });
 
   it("keeps the materialized token out of the checkout's on-disk git config and remote URL", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
 
     await cloneProjectRepo(SLUG, "demo", "", {
       repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
@@ -300,7 +300,7 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
   });
 
   it("installs an exact GitHub checkout and quarantines a pre-existing local directory", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
     fs.mkdirSync(dest, { recursive: true });
     fs.writeFileSync(path.join(dest, "local-only.md"), "local work\n");
 
@@ -322,11 +322,11 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
   });
 
   it("refreshes a cached Gitea checkout on runtime restore while preserving local work", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     git(paths.scratch, ["clone", canonicalOrigin, dest]);
     git(dest, ["remote", "set-url", "origin", GITEA_SSH_REMOTE]);
-    externalizeCustomerGitDir(dest, {
+    externalizeUserGitDir(dest, {
       giteaRepoName: "demo",
       fetchCanonical: (_worktree, metadata) => {
         git(metadata, ["fetch", canonicalOrigin, "+refs/heads/*:refs/remotes/origin/*"]);
@@ -351,11 +351,11 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
   });
 
   it("refuses a cached project refresh that would overwrite conflicting local work", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     git(paths.scratch, ["clone", canonicalOrigin, dest]);
     git(dest, ["remote", "set-url", "origin", GITEA_SSH_REMOTE]);
-    externalizeCustomerGitDir(dest, {
+    externalizeUserGitDir(dest, {
       giteaRepoName: "demo",
       fetchCanonical: (_worktree, metadata) => {
         git(metadata, ["fetch", canonicalOrigin, "+refs/heads/*:refs/remotes/origin/*"]);
@@ -378,7 +378,7 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
   });
 
   it("switches one trusted GitHub source to another and quarantines old-only files", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
     initRepoWithOrigin(dest, GITHUB_REMOTE);
     prepareTrustedGithubRepository(dest, SLUG, {
       repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
@@ -401,7 +401,7 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
   });
 
   it("switches a legacy local-git checkout instead of assuming external metadata exists", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
     initRepoWithOrigin(dest, GITEA_SSH_REMOTE);
     fs.writeFileSync(path.join(dest, "legacy-only.md"), "legacy\n");
 
@@ -416,7 +416,7 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
   });
 
   it("leaves the prior checkout intact when the source-swap lease is unavailable", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
     initRepoWithOrigin(dest, GITEA_SSH_REMOTE);
     fs.writeFileSync(path.join(dest, "keep.md"), "keep\n");
 
@@ -431,7 +431,7 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
   });
 
   it("keeps an interrupted source clone outside the live project inventory", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
     initRepoWithOrigin(dest, GITEA_SSH_REMOTE);
     let temporary = "";
     const interruptedClone = (cwd: string, args: string[]): string | null => {
@@ -452,7 +452,7 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
   });
 
   it("rejects a redirected project state directory before cloning", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
     initRepoWithOrigin(dest, GITEA_SSH_REMOTE);
     fs.symlinkSync(paths.scratch, path.join(path.dirname(dest), ".octogee-state"));
     const before = fs.readdirSync(paths.scratch);
@@ -469,7 +469,7 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
   });
 
   it("restores the prior checkout when replacement preparation fails", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
     initRepoWithOrigin(dest, GITEA_SSH_REMOTE);
     fs.writeFileSync(path.join(dest, "keep.md"), "keep\n");
     const failPreparation = vi.fn(() => { throw new Error("prepare failed"); });
@@ -486,7 +486,7 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
   });
 
   it("restores prior trusted metadata when replacement preparation fails after writing new metadata", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
     initRepoWithOrigin(dest, GITHUB_REMOTE);
     prepareTrustedGithubRepository(dest, SLUG, {
       repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
@@ -528,7 +528,7 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
     const keyDir = path.join(paths.keys, SLUG);
     fs.mkdirSync(keyDir, { recursive: true });
     fs.writeFileSync(path.join(keyDir, "id_ed25519"), "not-a-real-key\n");
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
 
     const ok = await cloneProjectRepo(SLUG, "demo", "demo", {
       gitExec: localGitExec,
@@ -546,7 +546,7 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
 
   function edgeBrokerClone(): (slug: string, projectSlug: string) => Promise<boolean> {
     return async (slug, projectSlug) => {
-      const dest = path.join(paths.customers, slug, "projects", projectSlug);
+      const dest = path.join(paths.users, slug, "projects", projectSlug);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       git(path.dirname(dest), ["clone", "-q", canonicalOrigin, dest]);
       git(dest, ["remote", "set-url", "origin", GITHUB_REMOTE]);
@@ -566,7 +566,7 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
   });
 
   it("prepares a brokered clone canonically so the next probe recognises the checkout", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
 
     const ok = await cloneProjectRepo(SLUG, "demo", "", { repoSource });
 
@@ -586,7 +586,7 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
     let previousMount: string | undefined;
     beforeEach(() => {
       previousMount = process.env.OCTOGEE_PROJECTS_MOUNT;
-      process.env.OCTOGEE_PROJECTS_MOUNT = paths.customers;
+      process.env.OCTOGEE_PROJECTS_MOUNT = paths.users;
       vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 404 })));
     });
     afterEach(() => {
@@ -595,14 +595,14 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
       vi.unstubAllGlobals();
     });
 
-    function restoringAdapter(isBuilderGateway = () => true) {
+    function restoringAdapter(isIsolatedGateway = () => true) {
       const manifestRead = vi.fn(async () => ({
         url: "https://signed.test/manifest", method: "GET", gcsPath: "manifest", expiresAt: "later",
       }));
       const blobRead = vi.fn<FleetBrokerClient["blobMaterializationReadUrl"]>();
       const client = { workspaceManifestReadUrl: manifestRead, blobMaterializationReadUrl: blobRead } as unknown as FleetBrokerClient;
       return { manifestRead, blobRead, adapter: buildBrokeredLifecycleAdapter({
-        client, rpc: {} as GatewayRpcClient, log: vi.fn(), isBuilderGateway,
+        client, rpc: {} as GatewayRpcClient, log: vi.fn(), isIsolatedGateway,
       }) };
     }
 
@@ -614,13 +614,13 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
       const { adapter, manifestRead } = restoringAdapter(() => false);
       const options = { repoSource: provider === "github" ? repoSource : undefined, gitExec: localGitExec,
         prepareRepository: provider === "gitea" ? (worktree: string) => {
-          externalizeCustomerGitDir(worktree, { giteaRepoName: "demo", fetchCanonical: (_dest, metadata) => {
+          externalizeUserGitDir(worktree, { giteaRepoName: "demo", fetchCanonical: (_dest, metadata) => {
             git(metadata, ["fetch", canonicalOrigin, "+refs/heads/*:refs/remotes/origin/*"]);
           } });
         } : undefined,
       };
       await expect(adapter.cloneProjectRepo(SLUG, "demo", "demo", options)).resolves.toBe(true);
-      const dest = path.join(paths.customers, SLUG, "projects", "demo");
+      const dest = path.join(paths.users, SLUG, "projects", "demo");
       const pointer = fs.lstatSync(path.join(dest, ".git"), { bigint: true });
 
       await expect(adapter.cloneProjectRepo(SLUG, "demo", "demo", { ...options, refreshRemote: true })).resolves.toBe(true);
@@ -630,12 +630,12 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
       expect(manifestRead).not.toHaveBeenCalled();
     });
 
-    it("hydrates the first upstream commit of an unborn project when preparing a Builder", async () => {
+    it("hydrates the first upstream commit of an unborn project when preparing a user", async () => {
       git(canonicalOrigin, ["update-ref", "-d", "refs/heads/main"]);
-      let builder = false;
-      const { adapter, blobRead } = restoringAdapter(() => builder);
+      let user = false;
+      const { adapter, blobRead } = restoringAdapter(() => user);
       await adapter.cloneProjectRepo(SLUG, "demo", null, { repoSource });
-      const dest = path.join(paths.customers, SLUG, "projects", "demo");
+      const dest = path.join(paths.users, SLUG, "projects", "demo");
       const pointer = fs.lstatSync(path.join(dest, ".git"), { bigint: true });
       expect(git(dest, ["rev-parse", "--revs-only", "HEAD"])).toBe("");
       const seed = path.join(paths.scratch, "seed");
@@ -650,7 +650,7 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
       blobRead.mockResolvedValue({ generation: "17", size: 3, md5Hash: "kAFQmDzST7DWlj99KOF/cg==",
         download: { url: "https://signed.test/blob", method: "GET", gcsPath, expiresAt: "later" } });
       vi.stubGlobal("fetch", vi.fn(async () => new Response("abc", { headers: { "x-goog-generation": "17" } })));
-      builder = true;
+      user = true;
       const options = { repoSource, refreshRemote: true, gitExec: localGitExec };
 
       await expect(adapter.cloneProjectRepo(SLUG, "demo", null, options)).resolves.toBe(true);
@@ -666,7 +666,7 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
       const umask = Number.parseInt(mask, 8);
       const previousUmask = process.umask(umask);
       try {
-        const dest = path.join(paths.customers, SLUG, "projects", "demo");
+        const dest = path.join(paths.users, SLUG, "projects", "demo");
         const { adapter, manifestRead } = restoringAdapter();
         await expect(adapter.cloneProjectRepo(SLUG, "demo", null, { repoSource })).resolves.toBe(true);
         expect(await readProjectRestoreReady(dest, SLUG, "demo")).toBe(true);
@@ -679,7 +679,7 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
           return { ownerToken: lease!.ownerToken, release() {
             lease!.release();
             competingLease = acquireWorkspaceMutationLeaseSync({
-              workspaceDir: dest, gitDir: projectMutationLeaseGitDir(dest, paths.customers)!,
+              workspaceDir: dest, gitDir: projectMutationLeaseGitDir(dest, paths.users)!,
             });
             expect(competingLease).not.toBeNull();
           } };
@@ -704,7 +704,7 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
       git(seed, ["add", ".files/manifest.json"]);
       git(seed, ["commit", "-q", "-m", "initial asset manifest"]);
       git(seed, ["push", "-q", "origin", "main"]);
-      const dest = path.join(paths.customers, SLUG, "projects", "demo");
+      const dest = path.join(paths.users, SLUG, "projects", "demo");
       const { adapter, blobRead } = restoringAdapter();
       await adapter.cloneProjectRepo(SLUG, "demo", null, { repoSource });
       const pointer = fs.lstatSync(path.join(dest, ".git"), { bigint: true });
@@ -721,7 +721,7 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
       vi.stubGlobal("fetch", vi.fn(async () => new Response("abc", { headers: { "x-goog-generation": "17" } })));
       if (writer === "Canvas") {
         expect(git(dest, ["status", "--porcelain"])).toBe("");
-        const lease = acquireWorkspaceMutationLeaseSync({ workspaceDir: dest, gitDir: projectMutationLeaseGitDir(dest, paths.customers)! });
+        const lease = acquireWorkspaceMutationLeaseSync({ workspaceDir: dest, gitDir: projectMutationLeaseGitDir(dest, paths.users)! });
         expect(lease).not.toBeNull();
         try {
           git(dest, ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"]);
@@ -761,7 +761,7 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
       git(seed, ["add", ".files/manifest.json"]);
       git(seed, ["commit", "-q", "-m", "asset manifest"]);
       git(seed, ["push", "-q", "origin", "main"]);
-      const dest = path.join(paths.customers, SLUG, "projects", "demo");
+      const dest = path.join(paths.users, SLUG, "projects", "demo");
       const { adapter, blobRead } = restoringAdapter();
       blobRead.mockResolvedValue({ generation: "17", size: 3, md5Hash: "kAFQmDzST7DWlj99KOF/cg==",
         download: { url: "https://signed.test/blob", method: "GET", gcsPath, expiresAt: "later" } });
@@ -784,7 +784,7 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
     });
 
     it("normalizes retained same-origin Git configuration without invalidating asset readiness", async () => {
-      const dest = path.join(paths.customers, SLUG, "projects", "demo");
+      const dest = path.join(paths.users, SLUG, "projects", "demo");
       const { adapter, manifestRead } = restoringAdapter();
       await adapter.cloneProjectRepo(SLUG, "demo", null, { repoSource });
       expect(await readProjectRestoreReady(dest, SLUG, "demo")).toBe(true);
@@ -802,7 +802,7 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
     });
 
     it("requires new asset readiness when the canonical project source changes", async () => {
-      const dest = path.join(paths.customers, SLUG, "projects", "demo");
+      const dest = path.join(paths.users, SLUG, "projects", "demo");
       const { adapter, manifestRead } = restoringAdapter();
       await adapter.cloneProjectRepo(SLUG, "demo", null, { repoSource });
       expect(await readProjectRestoreReady(dest, SLUG, "demo")).toBe(true);
@@ -810,7 +810,7 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
       const clone = edgeBrokerClone();
       broker.clone = async (slug, project) => {
         await clone(slug, project);
-        git(path.join(paths.customers, slug, "projects", project), ["remote", "set-url", "origin", GITHUB_REMOTE_B]);
+        git(path.join(paths.users, slug, "projects", project), ["remote", "set-url", "origin", GITHUB_REMOTE_B]);
         return true;
       };
 
@@ -825,10 +825,10 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
   });
 
   it("sets a checkout that does not match its GitHub source aside and re-clones through the broker", async () => {
-    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    const dest = path.join(paths.users, SLUG, "projects", "demo");
     initRepoWithOrigin(dest, GITEA_SSH_REMOTE);
     fs.writeFileSync(path.join(dest, "local-only.md"), "local work\n");
-    externalizeCustomerGitDir(dest, {
+    externalizeUserGitDir(dest, {
       giteaRepoName: `${SLUG}-demo`,
       fetchCanonical: (worktree, gitDir) => {
         execFileSync("git", ["--git-dir", gitDir, "--work-tree", worktree, "fetch", canonicalOrigin, "+refs/heads/*:refs/remotes/origin/*"]);
@@ -850,7 +850,7 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
 
   it("reports a brokered clone whose origin is not the project's repository", async () => {
     broker.clone = async (slug, projectSlug) => {
-      const dest = path.join(paths.customers, slug, "projects", projectSlug);
+      const dest = path.join(paths.users, slug, "projects", projectSlug);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       git(path.dirname(dest), ["clone", "-q", canonicalOrigin, dest]);
       git(dest, ["remote", "set-url", "origin", GITHUB_REMOTE_B]);

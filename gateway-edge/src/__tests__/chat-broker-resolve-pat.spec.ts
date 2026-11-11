@@ -26,15 +26,15 @@ const UID = "uid-1";
 const SLUG = "alice";
 
 describe("resolveChatIdentity", () => {
-  it("keeps the Builder context but admits only canonical non-admin channels", async () => {
+  it("keeps the user context but admits only canonical non-admin channels", async () => {
     const generalId = "g".repeat(26);
     const adminId = "a".repeat(26);
     const joinedProjectId = "j".repeat(26);
     const foreignProjectId = "f".repeat(26);
     const db = dbOf({
-      [`users/${UID}/secrets/mattermost`]: { personalToken: "builder-pat" },
+      [`users/${UID}/secrets/mattermost`]: { personalToken: "user-pat" },
       [`users/${UID}/secrets/coachMattermost`]: {
-        personalToken: "coach-pat",
+        personalToken: "default-agent-pat",
         coachMmUserId: "mm-coach-bot",
       },
       [`workspaces/${SLUG}/channels/general`]: {
@@ -67,9 +67,9 @@ describe("resolveChatIdentity", () => {
     });
     expect(identity).toMatchObject({
       lane: "workspace",
-      pat: "builder-pat",
-      coachMmUserId: "mm-coach-bot",
-      unread: { pat: "coach-pat", mmUserId: "mm-coach-bot" },
+      pat: "user-pat",
+      defaultAgentMmUserId: "mm-coach-bot",
+      unread: { pat: "default-agent-pat", mmUserId: "mm-coach-bot" },
     });
     expect(await identity.canReadChannel(generalId)).toBe(true);
     expect(await identity.canReadChannel(adminId)).toBe(false);
@@ -78,7 +78,7 @@ describe("resolveChatIdentity", () => {
     expect(await identity.canReadChannel("d".repeat(26))).toBe(false);
   });
 
-  it("lets only the workspace coach retrieve archived project history before the deadline", async () => {
+  it("lets only the workspace agent retrieve archived project history before the deadline", async () => {
     const db = dbOf({
       [`users/${UID}`]: {
         projectRetention: {
@@ -89,9 +89,9 @@ describe("resolveChatIdentity", () => {
           warnedAt: null,
         },
       },
-      [`users/${UID}/secrets/mattermost`]: { personalToken: "builder-pat" },
+      [`users/${UID}/secrets/mattermost`]: { personalToken: "user-pat" },
       [`users/${UID}/secrets/coachMattermost`]: {
-        personalToken: "coach-pat",
+        personalToken: "default-agent-pat",
         coachMmUserId: "mm-coach-bot",
       },
     });
@@ -123,9 +123,9 @@ describe("resolveChatIdentity", () => {
           warnedAt: null,
         },
       },
-      [`users/${UID}/secrets/mattermost`]: { personalToken: "builder-pat" },
+      [`users/${UID}/secrets/mattermost`]: { personalToken: "user-pat" },
       [`users/${UID}/secrets/coachMattermost`]: {
-        personalToken: "coach-pat",
+        personalToken: "default-agent-pat",
         coachMmUserId: "mm-coach-bot",
       },
     });
@@ -152,7 +152,7 @@ describe("resolveChatIdentity", () => {
     expect(identity).toEqual({
       lane: "project",
       pat: "proj-pat",
-      coachMmUserId: "mm-proj-bot",
+      defaultAgentMmUserId: "mm-proj-bot",
       unread: { pat: "proj-pat", mmUserId: "mm-proj-bot" },
     });
   });
@@ -173,10 +173,10 @@ describe("resolveChatIdentity", () => {
     ).rejects.toMatchObject({ code: "invalid-agent" });
   });
 
-  it("fails loud when the Builder PAT is missing", async () => {
+  it("fails loud when the user PAT is missing", async () => {
     const db = dbOf({
       [`users/${UID}/secrets/coachMattermost`]: {
-        personalToken: "coach-pat",
+        personalToken: "default-agent-pat",
         coachMmUserId: "mm-coach-bot",
       },
     });
@@ -195,18 +195,18 @@ describe("resolveChatIdentity", () => {
     ).rejects.toMatchObject({ code: "no-project-pat" });
   });
 
-  it("fails loud when the coach bot's exclusion id is unavailable", async () => {
+  it("fails loud when the agent bot's exclusion id is unavailable", async () => {
     const db = dbOf({
-      [`users/${UID}/secrets/mattermost`]: { personalToken: "builder-pat" },
+      [`users/${UID}/secrets/mattermost`]: { personalToken: "user-pat" },
     });
     await expect(
       resolveChatIdentity(db, { uid: UID, slug: SLUG, agentId: "octogee-alice-coach" }),
     ).rejects.toMatchObject({ code: "no-coach-identity" });
   });
 
-  it("fails closed when the coach bot's secret stores no PAT (the unread cursor has no credential)", async () => {
+  it("fails closed when the agent bot's secret stores no PAT (the unread cursor has no credential)", async () => {
     const db = dbOf({
-      [`users/${UID}/secrets/mattermost`]: { personalToken: "builder-pat" },
+      [`users/${UID}/secrets/mattermost`]: { personalToken: "user-pat" },
       [`users/${UID}/secrets/coachMattermost`]: { coachMmUserId: "mm-coach-bot" },
     });
     await expect(
@@ -214,9 +214,9 @@ describe("resolveChatIdentity", () => {
     ).rejects.toBeInstanceOf(MalformedRecordError);
   });
 
-  it("fails loud when the coach bot's PAT is blank (the unread cursor has no credential)", async () => {
+  it("fails loud when the agent bot's PAT is blank (the unread cursor has no credential)", async () => {
     const db = dbOf({
-      [`users/${UID}/secrets/mattermost`]: { personalToken: "builder-pat" },
+      [`users/${UID}/secrets/mattermost`]: { personalToken: "user-pat" },
       [`users/${UID}/secrets/coachMattermost`]: { personalToken: "", coachMmUserId: "mm-coach-bot" },
     });
     await expect(
@@ -227,9 +227,9 @@ describe("resolveChatIdentity", () => {
   it("fails closed when two canonical channels claim one Mattermost channel", async () => {
     const sharedId = "s".repeat(26);
     const db = dbOf({
-      [`users/${UID}/secrets/mattermost`]: { personalToken: "builder-pat" },
+      [`users/${UID}/secrets/mattermost`]: { personalToken: "user-pat" },
       [`users/${UID}/secrets/coachMattermost`]: {
-        personalToken: "coach-pat",
+        personalToken: "default-agent-pat",
         coachMmUserId: "mm-coach-bot",
       },
       [`workspaces/${SLUG}/channels/general`]: { mattermost: { channelId: sharedId } },

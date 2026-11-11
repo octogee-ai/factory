@@ -3,8 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createSurgeOpenClawProcessGate } from "../../scripts/lib/surge-openclaw-process-gate.js";
-import { reconcileSurgeCustomerHandoff, type SurgePod } from "../../glm-controller/src/surge-customer-handoff.js";
-import { oldPod, targetPod, assignment, createSurgeHandoffHarness } from "../../glm-controller/src/__tests__/fixtures/surge-customer-handoff.js";
+import { reconcileSurgeUserHandoff, type SurgePod } from "../../glm-controller/src/surge-user-handoff.js";
+import { oldPod, targetPod, assignment, createSurgeHandoffHarness } from "../../glm-controller/src/__tests__/fixtures/surge-user-handoff.js";
 
 const harness = (input: Parameters<typeof createSurgeHandoffHarness>[1] = {}) => createSurgeHandoffHarness(vi.fn, input);
 
@@ -31,9 +31,9 @@ describe("real process-gate terminal target recovery", () => {
         if (held.phase === "cancelling") await gate.finalizeTargetCancellation(request);
         else await gate.markHeld(request);
       });
-      const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
-        disposableBuilderGateway: true };
-      await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow(superseding ? "source resume refused" : "first transfer failed");
+      const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresUserMigration: true,
+        isolatedGateway: true };
+      await expect(reconcileSurgeUserHandoff(h.deps, input)).rejects.toThrow(superseding ? "source resume refused" : "first transfer failed");
       expect(await gate.read()).toMatchObject({ role: "normal", mode: "held", phase: "held",
         terminalTarget: { migrationId: h.operationId, slug: "alice", targetPodUid: targetPod.uid } });
       expect(h.assignments()[0].state).toBe(superseding ? "quiescing" : "serving");
@@ -41,7 +41,7 @@ describe("real process-gate terminal target recovery", () => {
       if (superseding) scenario.pods[0] = { ...oldPod, ready: false };
       const firstAttempt = [...h.events];
       const drainCount = vi.mocked(h.deps.waitForSourceIdle).mock.calls.length;
-      await expect(reconcileSurgeCustomerHandoff(h.deps, { ...input,
+      await expect(reconcileSurgeUserHandoff(h.deps, { ...input,
         ...(superseding ? { supersedingImageTag: "next-sha" } : {}) })).resolves.toEqual({ ready: false });
       expect(h.events).toEqual(superseding ? [...firstAttempt, "resume-source:old-uid:alice", "assignment:u1:serving"] : firstAttempt);
       expect(h.deps.waitForSourceIdle).toHaveBeenCalledTimes(drainCount);
@@ -77,22 +77,22 @@ describe("real process-gate terminal target recovery", () => {
       }));
       const remove = vi.fn(async ({ pod }: { pod: SurgePod }) => { h.events.push(`delete-cancelled:${pod.uid}`); });
       Object.assign(h.deps, { deleteCancelledTarget: remove });
-      const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
-        disposableBuilderGateway: true };
-      expect(await reconcileSurgeCustomerHandoff(h.deps, input)).toEqual({ ready: false });
+      const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresUserMigration: true,
+        isolatedGateway: true };
+      expect(await reconcileSurgeUserHandoff(h.deps, input)).toEqual({ ready: false });
       expect(remove).toHaveBeenCalledExactlyOnceWith({ gatewayId: "default", pod: targetPod });
       expect(h.events).toEqual([`delete-cancelled:${targetPod.uid}`]);
       expect(h.deps.waitForSourceIdle).not.toHaveBeenCalled();
       expect(await gate.read()).toMatchObject({ terminalTarget: terminal, mode: "held", phase: "held" });
       pods[1] = { ...targetPod, terminating: true };
-      await reconcileSurgeCustomerHandoff(h.deps, input);
+      await reconcileSurgeUserHandoff(h.deps, input);
       expect(h.deps.waitForSourceIdle).not.toHaveBeenCalled();
       pods.push(fresh);
-      await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow("multiple source pods");
+      await expect(reconcileSurgeUserHandoff(h.deps, input)).rejects.toThrow("multiple source pods");
       expect(h.deps.waitForSourceIdle).not.toHaveBeenCalled();
       pods.splice(1, 1);
       vi.mocked(h.deps.listPods).mockResolvedValueOnce({ pods: [...pods], observedPodUids: [oldPod.uid, targetPod.uid, fresh.uid] });
-      await reconcileSurgeCustomerHandoff(h.deps, input);
+      await reconcileSurgeUserHandoff(h.deps, input);
       expect(h.deps.waitForSourceIdle).not.toHaveBeenCalled();
       await gate.ensure({ podUid: fresh.uid, readinessReleased: false });
       vi.mocked(h.deps.holdTargetOpenClaw!).mockImplementation(async ({ operationId, slug, targetPod: pod }) => {
@@ -100,12 +100,12 @@ describe("real process-gate terminal target recovery", () => {
         await gate.hold(next); await gate.markHeld(next);
       });
       vi.mocked(h.deps.releaseTarget).mockImplementation(async ({ pod }) => { released = true; h.events.push(`release:${pod.uid}`); });
-      await reconcileSurgeCustomerHandoff(h.deps, input);
+      await reconcileSurgeUserHandoff(h.deps, input);
       expect(h.deps.transfer).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ operationId: "surge-default-fresh-uid", targetPod: fresh }));
       expect(h.events).toContain(`release:${fresh.uid}`);
       expect(remove).toHaveBeenCalledTimes(1);
       pods.splice(0, 1); pods[0] = { ...fresh, ready: true };
-      expect(await reconcileSurgeCustomerHandoff(h.deps, input)).toEqual({ ready: true });
+      expect(await reconcileSurgeUserHandoff(h.deps, input)).toEqual({ ready: true });
     } finally { await fs.rm(root, { recursive: true, force: true }); }
   });
 
@@ -147,7 +147,7 @@ describe("real target reservation inspection during forward retry", () => {
         if (status !== 200) throw new Error(JSON.stringify(result));
         return { completionStarted: result.completionStarted as boolean | undefined };
       });
-      const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, disposableBuilderGateway: true };
+      const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresUserMigration: true, isolatedGateway: true };
       if (sourceless) vi.mocked(h.deps.releaseTarget).mockImplementationOnce(async () => {
         await gate.claimTargetCompletion(request);
         await gate.reholdTarget(request);
@@ -155,7 +155,7 @@ describe("real target reservation inspection during forward retry", () => {
         throw new Error("Native start failed");
       });
       for (let attempt = 0; attempt < 2; attempt++) {
-        const result = reconcileSurgeCustomerHandoff(h.deps, input);
+        const result = reconcileSurgeUserHandoff(h.deps, input);
         if (sourceless && attempt === 0) await expect(result).rejects.toThrow("Native start failed");
         else await expect(result).resolves.toEqual({ ready: false });
         expect(await gate.read()).toMatchObject({ role: "target", mode: "held", phase: "held", completionStarted: sourceless || completionStarted });

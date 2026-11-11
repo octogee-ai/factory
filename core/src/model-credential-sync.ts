@@ -1,12 +1,12 @@
 import {
   applyByotState,
-  byosCoachConfigPatch,
-  coachFullAgentList,
+  byosDefaultAgentConfigPatch,
+  defaultAgentFullAgentList,
   deriveDesiredByotState,
   type ByotInput,
-  type CoachModelInput,
-  type CoachModelPatch,
-  type FreeTierCoachModelInput,
+  type DefaultAgentModelInput,
+  type DefaultAgentModelPatch,
+  type FreeTierDefaultAgentModelInput,
 } from "./byot-sync.js";
 
 type LegacyByotSyncUserData = Parameters<typeof deriveDesiredByotState>[0];
@@ -29,9 +29,9 @@ export type ModelCredentialSyncUserData = Omit<LegacyByotSyncUserData, "systemCo
 };
 
 export type ModelCredentialSyncInput = ByotInput;
-export type ModelCredentialCoachModelInput = CoachModelInput;
-export type ModelCredentialFreeTierCoachModelInput = FreeTierCoachModelInput;
-export type ModelCredentialCoachModelPatch = CoachModelPatch;
+export type ModelCredentialDefaultAgentModelInput = DefaultAgentModelInput;
+export type ModelCredentialFreeTierDefaultAgentModelInput = FreeTierDefaultAgentModelInput;
+export type ModelCredentialDefaultAgentModelPatch = DefaultAgentModelPatch;
 
 function byotSystemConfigFromModelCredential(
   credential: ModelCredentialStateProjection,
@@ -88,5 +88,5 @@ export function deriveDesiredModelCredentialState(
 }
 
 export const applyModelCredentialState = applyByotState;
-export const modelCredentialCoachConfigPatch = byosCoachConfigPatch;
-export const modelCredentialFullAgentList = coachFullAgentList;
+export const modelCredentialDefaultAgentConfigPatch = byosDefaultAgentConfigPatch;
+export const modelCredentialFullAgentList = defaultAgentFullAgentList;

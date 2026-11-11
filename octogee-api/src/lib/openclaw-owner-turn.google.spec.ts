@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DuplicateRecordError, MalformedRecordError } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
-import { createGoogleTurnVerifier, type OwnerTurnBuilder } from "./openclaw-owner-turn.js";
+import { createGoogleTurnVerifier, type OwnerTurnUser } from "./openclaw-owner-turn.js";
 
 const REQUESTER_ID = "u".repeat(26);
 const CHANNEL_ID = "c".repeat(26);
@@ -34,7 +34,7 @@ function activeMember(overrides: FakeMember = {}): FakeMember {
 
 function turnStore(input: {
   workspaceOwner?: string;
-  coachDm?: Record<string, unknown>;
+  defaultAgentDm?: Record<string, unknown>;
   channels?: FakeChannel[];
   members?: FakeMember[];
 } = {}) {
@@ -42,7 +42,7 @@ function turnStore(input: {
   if (input.workspaceOwner !== undefined) {
     docs["workspaces/eggman"] = { id: "eggman", ownerUid: input.workspaceOwner, ownerActive: true };
   }
-  if (input.coachDm !== undefined) docs["workspaces/eggman/channels/coach-dm"] = input.coachDm;
+  if (input.defaultAgentDm !== undefined) docs["workspaces/eggman/channels/coach-dm"] = input.defaultAgentDm;
   for (const channel of input.channels ?? []) {
     docs[channel.path] = { mattermost: { channelId: CHANNEL_ID }, ...channel.data };
   }
@@ -62,12 +62,12 @@ function input(
   overrides: Partial<{
     agentId: string;
     ownerUid: string;
-    owner: OwnerTurnBuilder;
+    owner: OwnerTurnUser;
   }> = {},
 ) {
   return {
     req: { body: { requestContext } } as Request,
-    gatewayId: "builder-gateway",
+    gatewayId: "isolated-gateway",
     agentId: overrides.agentId ?? "octogee-eggman-coach",
     ownerUid: overrides.ownerUid ?? "uid-eggman",
     owner: overrides.owner ?? {
@@ -89,7 +89,7 @@ function context(to: string, overrides: Record<string, unknown> = {}) {
 }
 
 describe("createGoogleTurnVerifier", () => {
-  it("allows the assigned Builder's direct Coach DM only through the canonical coach-dm channel", async () => {
+  it("allows the assigned user's direct Agent DM only through the canonical coach-dm channel", async () => {
     const harness = turnStore({
       workspaceOwner: "uid-eggman",
       channels: [{ path: "workspaces/eggman/channels/coach-dm" }],
@@ -101,7 +101,7 @@ describe("createGoogleTurnVerifier", () => {
   });
 
   it.each(["general", "coach-dm", "launchroom"])(
-    "allows the assigned Builder in an active direct workspace %s channel",
+    "allows the assigned user in an active direct workspace %s channel",
     async (channelName) => {
       const harness = turnStore({
         workspaceOwner: "uid-eggman",
@@ -126,7 +126,7 @@ describe("createGoogleTurnVerifier", () => {
     expect(harness.listMembers).toHaveBeenCalledWith("eggman");
   });
 
-  it("does not consult the member mirror for the assigned Builder", async () => {
+  it("does not consult the member mirror for the assigned user", async () => {
     const harness = turnStore({
       workspaceOwner: "uid-eggman",
       channels: [{ path: "workspaces/eggman/channels/general" }],
@@ -154,7 +154,7 @@ describe("createGoogleTurnVerifier", () => {
     await expect(verify(input(context(`channel:${CHANNEL_ID}`, { requesterSenderId: MEMBER_ID })))).resolves.toBe(false);
   });
 
-  it("keeps the coach-dm direct lane for the assigned Builder only", async () => {
+  it("keeps the coach-dm direct lane for the assigned user only", async () => {
     const harness = turnStore({
       workspaceOwner: "uid-eggman",
       channels: [{ path: "workspaces/eggman/channels/coach-dm" }],
@@ -295,7 +295,7 @@ describe("createGoogleTurnVerifier", () => {
       };
     }
 
-    it("allows the assigned Builder's own scheduled job delivering to their Coach DM", async () => {
+    it("allows the assigned user's own scheduled job delivering to their Agent DM", async () => {
       const harness = turnStore({ workspaceOwner: "uid-eggman" });
       const verify = createGoogleTurnVerifier(harness.store);
 
@@ -311,7 +311,7 @@ describe("createGoogleTurnVerifier", () => {
       ["a creator who is not the gateway's owner", scheduled(), {
         owner: { workspaceId: "eggman", mattermostUserId: "v".repeat(26) },
       }],
-      ["another coach account", scheduled({ accountId: "victim-coach" }), {}],
+      ["another agent account", scheduled({ accountId: "victim-coach" }), {}],
       ["a project agent", scheduled(), { agentId: "octogee-eggman-proj-orbit-coach" }],
       ["a native channel claim", scheduled({ nativeChannelId: CHANNEL_ID }), {}],
       ["an unknown origin", scheduled({ origin: "replay" }), {}],
@@ -327,10 +327,10 @@ describe("createGoogleTurnVerifier", () => {
       await expect(verify(input(requestContext, overrides))).resolves.toBe(false);
     });
 
-    it("allows the assigned Builder's own scheduled job delivering to their Coach channel", async () => {
+    it("allows the assigned user's own scheduled job delivering to their Agent channel", async () => {
       const harness = turnStore({
         workspaceOwner: "uid-eggman",
-        coachDm: { mattermost: { channelId: CHANNEL_ID } },
+        defaultAgentDm: { mattermost: { channelId: CHANNEL_ID } },
       });
       const verify = createGoogleTurnVerifier(harness.store);
 
@@ -339,10 +339,10 @@ describe("createGoogleTurnVerifier", () => {
 
     it.each([
       ["another channel", { mattermost: { channelId: "o".repeat(26) } }, {}],
-      ["an archived Coach channel", { mattermost: { channelId: CHANNEL_ID }, archivedAt: 1 }, {}],
+      ["an archived Agent channel", { mattermost: { channelId: CHANNEL_ID }, archivedAt: 1 }, {}],
       ["a collaborator's job", { mattermost: { channelId: CHANNEL_ID } }, { requesterSenderId: MEMBER_ID }],
-    ])("rejects a scheduled channel route to %s", async (_label, coachDm, contextOverrides) => {
-      const harness = turnStore({ workspaceOwner: "uid-eggman", coachDm, members: [activeMember()] });
+    ])("rejects a scheduled channel route to %s", async (_label, defaultAgentDm, contextOverrides) => {
+      const harness = turnStore({ workspaceOwner: "uid-eggman", defaultAgentDm, members: [activeMember()] });
       const verify = createGoogleTurnVerifier(harness.store);
 
       await expect(verify(input(scheduled({ to: `channel:${CHANNEL_ID}`, ...contextOverrides })))).resolves.toBe(false);

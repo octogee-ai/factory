@@ -47,7 +47,7 @@ const captions = tour.scenes.map((scene, index) => {
 await writeFile(path.join(output, 'captions.en.srt'), captions.join('\n'));
 await writeFile(path.join(output, 'youtube.txt'), `${tour.title}
 
-Meet Octogee: a personal AI partner platform for builders and makers.
+Meet Octogee: a personal AI partner platform for users and makers.
 Follow a fictional neighborhood garden project from a conversation to a shared Canvas, project files, and a Board.
 
 Explore the code: ${tour.repository}

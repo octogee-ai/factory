@@ -224,31 +224,31 @@ describe("workspace conversation channel authority", () => {
 });
 
 
-describe("readiness active Coach conversation authority", () => {
-  const options = { requireActiveLedger: true, includeCoachConversation: true };
-  function coachLedger(): void {
+describe("readiness active Agent conversation authority", () => {
+  const options = { requireActiveLedger: true, includeDefaultAgentConversation: true };
+  function defaultAgentLedger(): void {
     setLedger("workspaces/alice/channels/coach-dm", { kind: "coach-dm", mattermost: { channelId } });
   }
-  it("authorizes the canonical private Coach conversation without making it discoverable", async () => {
-    coachLedger();
+  it("authorizes the canonical private Agent conversation without making it discoverable", async () => {
+    defaultAgentLedger();
     await expect(authorizeChannel("caller", channelId, "alice", options)).resolves.toMatchObject({
       target: { workspaceSlug: "alice", agentId: "octogee-alice-coach" },
     });
     await expect(authorizeChannel("caller", channelId, "alice", { requireActiveLedger: true })).resolves.toBeNull();
   });
-  it("still requires live Mattermost membership for the Coach conversation", async () => {
-    coachLedger(); h.denyMembership = true;
+  it("still requires live Mattermost membership for the Agent conversation", async () => {
+    defaultAgentLedger(); h.denyMembership = true;
     await expect(authorizeChannel("caller", channelId, "alice", options)).resolves.toEqual({ forbidden: true });
   });
-  it.each(["archived", "wrong-kind", "admin"])("rejects %s Coach ledger bindings", async (failure) => {
-    coachLedger();
+  it.each(["archived", "wrong-kind", "admin"])("rejects %s Agent ledger bindings", async (failure) => {
+    defaultAgentLedger();
     if (failure === "archived") patchLedger({ archivedAt: 100 });
     if (failure === "wrong-kind") patchLedger({ kind: "session" });
     if (failure === "admin") setLedger("workspaces/alice/channels/admin", { kind: "admin", mattermost: { channelId } });
     await expect(authorizeChannel("caller", channelId, "alice", options)).resolves.toBeNull();
     expect(h.createClientCalls).toBe(0);
   });
-  it("still rejects archived parent projects when Coach conversations are included", async () => {
+  it("still rejects archived parent projects when Agent conversations are included", async () => {
     setLedger("workspaces/alice/projects/orbit/channels/general", { kind: "general", mattermost: { channelId } });
     h.documents.set("workspaces/alice/projects/orbit", { ownerUid: "owner-uid", commercialLifecycle: { status: "archived" } });
     await expect(authorizeChannel("caller", channelId, "alice", options)).resolves.toBeNull();
@@ -266,7 +266,7 @@ describe('project voice channel authority', () => {
     await expect(authorizeChannel('caller', channelId, 'alice', { voiceConversation: true })).resolves.toMatchObject({ target: { projectId: 'orbit', agentId: 'octogee-alice-proj-orbit-coach' } });
     await expect(authorizeChannel('caller', channelId, 'alice', { workspaceConversation: true })).resolves.toBeNull();
   });
-  it.each(['missing-agent', 'missing-credential', 'archived-project', 'archived-channel', 'revoked-member'])('rejects %s without routing to the workspace coach', async failure => {
+  it.each(['missing-agent', 'missing-credential', 'archived-project', 'archived-channel', 'revoked-member'])('rejects %s without routing to the workspace agent', async failure => {
     project();
     if (failure === 'missing-agent') h.documents.set('workspaces/alice/projects/orbit', { ownerUid: 'owner-uid' });
     if (failure === 'missing-credential') h.documents.delete('users/owner-uid/secrets/projectAgentMattermost-orbit');

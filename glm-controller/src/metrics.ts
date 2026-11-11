@@ -1,4 +1,4 @@
-// Minimal Prometheus exposition for Cowboy (glm-controller). Hand-rolled (no
+// Minimal Prometheus exposition for the fleet controller (glm-controller). Hand-rolled (no
 // prom-client dep) — the high-value signals are: is the fleet reconciler ticking
 // and succeeding, and how often does it fail. Process metrics are deferred.
 // Scraped at /metrics by the glm-controller ServiceMonitor.
@@ -189,13 +189,13 @@ export function renderMetrics(): string {
           sample.availableReplicas > 0 ? 0 : 1
         }`,
     ),
-    "# HELP glm_gateway_vm_disk_size_bytes Boot disk filesystem size reported by each running Builder computer.",
+    "# HELP glm_gateway_vm_disk_size_bytes Boot disk filesystem size reported by each running gateway VM.",
     "# TYPE glm_gateway_vm_disk_size_bytes gauge",
     ...vmDiskUsage.map((sample) => `glm_gateway_vm_disk_size_bytes{gateway_id="${escapeLabel(sample.gatewayId)}"} ${sample.sizeBytes}`),
-    "# HELP glm_gateway_vm_disk_free_bytes Boot disk filesystem bytes still free on each running Builder computer.",
+    "# HELP glm_gateway_vm_disk_free_bytes Boot disk filesystem bytes still free on each running gateway VM.",
     "# TYPE glm_gateway_vm_disk_free_bytes gauge",
     ...vmDiskUsage.map((sample) => `glm_gateway_vm_disk_free_bytes{gateway_id="${escapeLabel(sample.gatewayId)}"} ${sample.freeBytes}`),
-    "# HELP glm_gateway_vm_disk_observed_timestamp_seconds Unix time of each running Builder computer's last disk report.",
+    "# HELP glm_gateway_vm_disk_observed_timestamp_seconds Unix time of each running gateway VM's last disk report.",
     "# TYPE glm_gateway_vm_disk_observed_timestamp_seconds gauge",
     ...vmDiskUsage.map((sample) => `glm_gateway_vm_disk_observed_timestamp_seconds{gateway_id="${escapeLabel(sample.gatewayId)}"} ${(sample.observedAt / 1000).toFixed(3)}`),
     "# HELP glm_config_roll_total Durable config roll fencing outcomes.",
@@ -224,19 +224,19 @@ export function renderMetrics(): string {
     "# HELP glm_disruption_pending_gateway_pods Current Pending gateway pods observed by the disruption observer.",
     "# TYPE glm_disruption_pending_gateway_pods gauge",
     `glm_disruption_pending_gateway_pods ${disruptionSnapshot.pendingGatewayPods}`,
-    "# HELP octogee_shared_pool_min_replicas The shared pool floor Cowboy converges to for this environment.",
+    "# HELP octogee_shared_pool_min_replicas The shared pool floor the fleet controller converges to for this environment.",
     "# TYPE octogee_shared_pool_min_replicas gauge",
     `octogee_shared_pool_min_replicas ${sharedPoolReplicaBounds.minReplicas}`,
-    "# HELP octogee_shared_pool_max_replicas The shared pool ceiling Cowboy will mint slots up to for this environment.",
+    "# HELP octogee_shared_pool_max_replicas The shared pool ceiling the fleet controller will mint slots up to for this environment.",
     "# TYPE octogee_shared_pool_max_replicas gauge",
     `octogee_shared_pool_max_replicas ${sharedPoolReplicaBounds.maxReplicas}`,
     "# HELP glm_shared_gateway_max_capacity_total Shared pool scaler observations at the replica ceiling.",
     "# TYPE glm_shared_gateway_max_capacity_total counter",
     `glm_shared_gateway_max_capacity_total ${sharedGatewayMaxCapacity}`,
-    "# HELP glm_shared_gateway_assignment_count Assigned builders observed when the Shared Barn most recently reached maximum capacity.",
+    "# HELP glm_shared_gateway_assignment_count Assigned users observed when the Shared gateway most recently reached maximum capacity.",
     "# TYPE glm_shared_gateway_assignment_count gauge",
     `glm_shared_gateway_assignment_count ${sharedGatewayCapacitySnapshot.assignmentCount}`,
-    "# HELP glm_shared_gateway_hot_members Running Shared Barn members observed when the pool most recently reached maximum capacity.",
+    "# HELP glm_shared_gateway_hot_members Running Shared gateway members observed when the pool most recently reached maximum capacity.",
     "# TYPE glm_shared_gateway_hot_members gauge",
     `glm_shared_gateway_hot_members ${sharedGatewayCapacitySnapshot.hotMemberCount}`,
     "",

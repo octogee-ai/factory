@@ -30,7 +30,7 @@ interface RevisionFixture {
 function revision(now: number): RevisionFixture {
   return {
     docKind: "runtime",
-    gatewayId: "bender",
+    gatewayId: "walter",
     lifecycle: "serving",
     heartbeat: {
       status: "ready",
@@ -54,8 +54,8 @@ describe("OpenClaw Dashboard revision runtime gate", () => {
   it("accepts a serving gateway with fresh runtime health and Dashboard proof", () => {
     const now = Date.UTC(2026, 6, 14, 20);
     expect(isOpenClawControlRevisionRuntimeReady(revision(now), {
-      gatewayId: "bender",
-      revisionId: "bender",
+      gatewayId: "walter",
+      revisionId: "walter",
       now,
     })).toBe(true);
   });
@@ -78,22 +78,22 @@ describe("OpenClaw Dashboard revision runtime gate", () => {
       const value = revision(now);
       mutate(value);
       expect(isOpenClawControlRevisionRuntimeReady(value, {
-        gatewayId: "bender",
-        revisionId: "bender",
+        gatewayId: "walter",
+        revisionId: "walter",
         now,
       })).toBe(false);
     }
   });
 });
 
-describe("serving Builder during an unconverged roll", () => {
+describe("serving isolated gateway during an unconverged roll", () => {
   const now = Date.UTC(2026, 6, 14, 20);
   function fixture() {
     const root: Record<string, unknown> = {
-      gatewayId: "bender", createdAt: 1, createdBy: "test", updatedAt: 1, updatedBy: "test",
+      gatewayId: "walter", createdAt: 1, createdBy: "test", updatedAt: 1, updatedBy: "test",
       latestRelease: 3, desiredRelease: 3, liveRelease: 2, desiredStatus: "running",
       configSchemaVersion: 1, gatewayClass: "builder", profile: "builder", imageProfile: "builder",
-      ownerUid: "owner", builderSlug: "bender", sizingTier: null, gcpProject: null,
+      ownerUid: "owner", builderSlug: "walter", sizingTier: null, gcpProject: null,
       gatewayContainerSecurityContext: null, serviceAccountName: null, serviceAccount: null,
       builderAccess: null, modelBrokerLimits: null, preemption: null,
     };
@@ -103,7 +103,7 @@ describe("serving Builder during an unconverged roll", () => {
     const readArtifact = vi.fn(async () => ({ imageRepository: "registry/octogee-gateway", imageTag: "def5678",
       profileImages: { builder: { imageRepository: "registry/octogee-gateway-builder", imageTag: `abc1234@sha256:${"b".repeat(64)}` } } }));
     return { root, runtime, readArtifact,
-      check: () => isOpenClawControlServingRevision(root, runtime, { gatewayId: "bender", revisionId: "bender", now, readArtifact }) };
+      check: () => isOpenClawControlServingRevision(root, runtime, { gatewayId: "walter", revisionId: "walter", now, readArtifact }) };
   }
 
   it.each([2, 3])("admits the fresh live image while runtime release records %i", async (release) => {
@@ -139,11 +139,11 @@ describe("serving Builder during an unconverged roll", () => {
     expect(await f.check()).toBe(false);
   });
 
-  it("refuses missing live artifacts and missing Builder images", async () => {
+  it("refuses missing live artifacts and missing isolated images", async () => {
     const f = fixture();
     for (const artifact of [null, { imageRepository: "registry/octogee-gateway", imageTag: "abc1234" }]) {
       expect(await isOpenClawControlServingRevision(f.root, f.runtime, {
-        gatewayId: "bender", revisionId: "bender", now, readArtifact: async () => artifact,
+        gatewayId: "walter", revisionId: "walter", now, readArtifact: async () => artifact,
       })).toBe(false);
     }
   });

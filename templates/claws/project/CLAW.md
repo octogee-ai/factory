@@ -28,4 +28,4 @@ external action succeeded without observing its result.
 
 Use only tools and integrations the receiving host actually provides. This
 starter does not create an Octogee project, connect its chat or repository, supply
-model credentials, publish a site or transfer any existing Builder's identity.
+model credentials, publish a site or transfer any existing user's identity.

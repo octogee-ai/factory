@@ -30,7 +30,7 @@ export interface EgressBootOptions {
   schedule?: (callback: () => void, delayMs: number) => void;
 }
 
-export interface ComputerEgressService {
+export interface VmEgressService {
   status(): EgressStatus;
   setMode(mode: GatewayEgressMode): Promise<EgressStatus>;
   load(): Promise<void>;
@@ -42,7 +42,7 @@ export interface ComputerEgressService {
   onChange(listener: (status: EgressStatus) => void): () => void;
 }
 
-export interface ComputerEgressServiceOptions {
+export interface VmEgressServiceOptions {
   store: EgressStore;
   listen?: { host: string; port: number };
   directDial?: EgressDialer;
@@ -106,7 +106,7 @@ async function loadWithRetry(load: () => Promise<void>, options: EgressBootOptio
     } catch (error) {
       if (control.settled()) return;
       const delayMs = Math.min(maxDelayMs, baseDelayMs * 2 ** Math.min(attempt - 1, 10));
-      log("computer egress mode could not be loaded; egress listener still closed, Chromium has no egress until it loads", { attempt, retryInMs: delayMs, error: error instanceof Error ? error.message : String(error) });
+      log("VM egress mode could not be loaded; egress listener still closed, Chromium has no egress until it loads", { attempt, retryInMs: delayMs, error: error instanceof Error ? error.message : String(error) });
       await new Promise<void>((resolve) => { control.onSleep(resolve); schedule(resolve, delayMs); });
     }
   }
@@ -114,7 +114,7 @@ async function loadWithRetry(load: () => Promise<void>, options: EgressBootOptio
 
 const WS_TRY_AGAIN_LATER = 1013;
 
-export function createComputerEgressService(options: ComputerEgressServiceOptions): ComputerEgressService {
+export function createVmEgressService(options: VmEgressServiceOptions): VmEgressService {
   const log = options.log ?? (() => {});
   const tunnel = options.tunnel ?? createEgressTunnelHost({ log });
   const direct = options.directDial ?? directDialer;
@@ -136,7 +136,7 @@ export function createComputerEgressService(options: ComputerEgressServiceOption
   };
   const applyStored = (stored: GatewayVmEgressState | null) => {
     if (stored) apply(stored);
-    else log("computer egress mode defaults to cloud; nothing stored", {});
+    else log("VM egress mode defaults to cloud; nothing stored", {});
   };
   const readAndApply = async () => applyStored(await options.store.read());
   const bootRead = async () => {
@@ -183,7 +183,7 @@ export function createComputerEgressService(options: ComputerEgressServiceOption
       if (!pendingMode) options.browser?.apply(mode);
       if (mode === "cloud") tunnel.detach(EGRESS_CLOSE_NOT_SELECTED, "Cloud egress selected");
       const terminated = server?.terminateRelays() ?? 0;
-      log("computer egress mode applied", { mode, terminatedRelays: terminated });
+      log("VM egress mode applied", { mode, terminatedRelays: terminated });
     }
     notify();
   };
@@ -194,12 +194,12 @@ export function createComputerEgressService(options: ComputerEgressServiceOption
     onChange(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     attachShell(socket) {
       if (pendingMode) {
-        log("computer egress asked a desktop to retry; the stored mode is still loading", {});
+        log("VM egress asked a desktop to retry; the stored mode is still loading", {});
         socket.close(WS_TRY_AGAIN_LATER, "Desktop egress mode is still loading");
         return;
       }
       if (mode !== "desktop") {
-        log("computer egress refused a desktop connection; desktop mode is not selected", { mode, pendingMode });
+        log("VM egress refused a desktop connection; desktop mode is not selected", { mode, pendingMode });
         socket.close(EGRESS_CLOSE_NOT_SELECTED, "Desktop egress is not selected");
         return;
       }
@@ -239,7 +239,7 @@ export function createComputerEgressService(options: ComputerEgressServiceOption
         socks.once("error", (error) => { server = null; reject(error); });
         socks.listen(address.port, address.host, () => {
           const listening = bound(socks);
-          log("computer egress SOCKS5 listener ready", listening);
+          log("VM egress SOCKS5 listener ready", listening);
           notify();
           resolve(listening);
         });

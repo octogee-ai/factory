@@ -1,10 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
-import type { BuilderRecord, PlatformStateRepositories, Stored } from "@octogee/core/platform-state";
+import type { PlatformUserRecord, PlatformStateRepositories, Stored } from "@octogee/core/platform-state";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
-import { builderAllowsInteractiveAccess } from "./assigned-builder.js";
+import { userAllowsInteractiveAccess } from "./assigned-user.js";
 import { verifyOwnerAutomationTurn } from "./openclaw-owner-turn.js";
 
 export const OWNER_AUTOMATIONS_PROOF_PATH = "/internal/owner-automations";
@@ -29,7 +29,7 @@ export type AssignedUserLookup = (
   store: PlatformStateRepositories,
   gatewayId: string,
   agentId: string,
-) => Promise<Stored<BuilderRecord> | null>;
+) => Promise<Stored<PlatformUserRecord> | null>;
 
 export function ownerAutomationProofSignature(
   secret: string,
@@ -69,7 +69,7 @@ function signedRequest(body: string): { agentId: string; requestContext: unknown
   return { agentId, requestContext: data.requestContext, readOnly: data.action === "list" };
 }
 
-async function coachProofSecret(store: PlatformStateRepositories, uid: string): Promise<string | null> {
+async function defaultAgentProofSecret(store: PlatformStateRepositories, uid: string): Promise<string | null> {
   const secret = await store.secrets.get(uid, "coachMattermost");
   return secret?.kind === "coach-mattermost" && secret.personalToken.length > 0 ? secret.personalToken : null;
 }
@@ -85,8 +85,8 @@ export async function authorizeOwnerAutomation(
   const request = signedRequest(proof.body);
   if (!request) return null;
   const assigned = await deps.findAssignedUser(store, gatewayId, request.agentId);
-  if (!assigned || !builderAllowsInteractiveAccess(assigned)) return null;
-  const secret = await coachProofSecret(store, assigned.uid);
+  if (!assigned || !userAllowsInteractiveAccess(assigned)) return null;
+  const secret = await defaultAgentProofSecret(store, assigned.uid);
   if (!secret) return null;
   const expected = ownerAutomationProofSignature(secret, timestamp, OWNER_AUTOMATIONS_PROOF_PATH, proof.body);
   if (!signaturesMatch(proof.signature.trim(), expected)) return null;

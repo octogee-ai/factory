@@ -1,7 +1,7 @@
 import express, { type Express } from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
-import type { BuilderRecord, PlatformStateRepositories, Stored } from "@octogee/core/platform-state";
+import type { PlatformUserRecord, PlatformStateRepositories, Stored } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
 import { createProductivityRateLimiter } from "../lib/agent-productivity/rate-limit.js";
@@ -9,13 +9,13 @@ import {
   OWNER_AUTOMATIONS_PROOF_PATH,
   ownerAutomationProofSignature,
 } from "../lib/owner-automation-authorization.js";
-import { fixtureBuilder } from "../test-helpers/fixture-builders.js";
+import { fixtureUser } from "../test-helpers/fixture-users.js";
 import { createOwnerAutomationAuthorizationBrokerRoutes } from "./owner-automation-authorization-broker.js";
 
 const NOW = 1_800_000_000_000;
 const OWNER_MM = "o".repeat(26);
 const MEMBER_MM = "m".repeat(26);
-const COACH_CHANNEL = "c".repeat(26);
+const DEFAULT_AGENT_CHANNEL = "c".repeat(26);
 const GENERAL_CHANNEL = "g".repeat(26);
 const AGENT = "octogee-acme-coach";
 
@@ -24,8 +24,8 @@ function liveContext(overrides: Record<string, unknown> = {}): Record<string, un
     channel: "mattermost",
     accountId: "acme-coach",
     requesterSenderId: OWNER_MM,
-    nativeChannelId: COACH_CHANNEL,
-    to: `channel:${COACH_CHANNEL}`,
+    nativeChannelId: DEFAULT_AGENT_CHANNEL,
+    to: `channel:${DEFAULT_AGENT_CHANNEL}`,
     ...overrides,
   };
 }
@@ -43,17 +43,17 @@ function signedBody(overrides: Record<string, unknown> = {}): Record<string, unk
 function records(overrides: Record<string, Record<string, unknown> | undefined> = {}) {
   return {
     "workspaces/acme": { id: "acme", ownerUid: "owner-acme", ownerActive: true },
-    "workspaces/acme/channels/coach-dm": { mattermost: { channelId: COACH_CHANNEL } },
+    "workspaces/acme/channels/coach-dm": { mattermost: { channelId: DEFAULT_AGENT_CHANNEL } },
     "users/owner-acme/secrets/coachMattermost": { personalToken: "acme-coach-pat" },
     ...overrides,
   };
 }
 
-const ASSIGNED = fixtureBuilder("owner-acme", { workspaceId: "acme", mattermostUserId: OWNER_MM });
+const ASSIGNED = fixtureUser("owner-acme", { workspaceId: "acme", mattermostUserId: OWNER_MM });
 
 function app(opts: {
   docs?: Record<string, Record<string, unknown> | undefined>;
-  assigned?: Stored<BuilderRecord> | null;
+  assigned?: Stored<PlatformUserRecord> | null;
   bound?: boolean;
   limit?: number;
   readLimit?: number;
@@ -104,7 +104,7 @@ function post(server: Express, body: Record<string, unknown>) {
 }
 
 describe("owner automation authorization broker", () => {
-  it("authorizes the assigned owner in their Coach channel and names the tenant", async () => {
+  it("authorizes the assigned owner in their Agent channel and names the tenant", async () => {
     const res = await post(app().server, authorizeBody());
 
     expect(res.status).toBe(200);
@@ -113,22 +113,22 @@ describe("owner automation authorization broker", () => {
       slug: "acme",
       agentId: AGENT,
       ownerMattermostUserId: OWNER_MM,
-      coachChannelId: COACH_CHANNEL,
+      coachChannelId: DEFAULT_AGENT_CHANNEL,
     });
   });
 
-  it("authorizes the owner's direct route from the Coach channel", async () => {
+  it("authorizes the owner's direct route from the Agent channel", async () => {
     const body = signedBody({ requestContext: liveContext({ to: `user:${OWNER_MM}` }) });
 
     expect((await post(app().server, authorizeBody(body))).status).toBe(200);
   });
 
   it.each([
-    ["a collaborator in the Coach channel", liveContext({ requesterSenderId: MEMBER_MM })],
+    ["a collaborator in the Agent channel", liveContext({ requesterSenderId: MEMBER_MM })],
     ["the owner in the general channel", liveContext({ nativeChannelId: GENERAL_CHANNEL, to: `channel:${GENERAL_CHANNEL}` })],
     ["a route to another channel", liveContext({ to: `channel:${GENERAL_CHANNEL}` })],
     ["a direct route to someone else", liveContext({ to: `user:${MEMBER_MM}` })],
-    ["another coach account", liveContext({ accountId: "victim-coach" })],
+    ["another agent account", liveContext({ accountId: "victim-coach" })],
     ["a scheduled run", { origin: "scheduled", channel: "mattermost", accountId: "acme-coach", requesterSenderId: OWNER_MM, to: `user:${OWNER_MM}` }],
     ["a missing context", undefined],
     ["an extra owner claim", liveContext({ senderIsOwner: true })],
@@ -147,8 +147,8 @@ describe("owner automation authorization broker", () => {
   it.each([
     ["a workspace owned by someone else", { "workspaces/acme": { id: "acme", ownerUid: "owner-victim", ownerActive: true } }],
     ["an inactive workspace owner", { "workspaces/acme": { id: "acme", ownerUid: "owner-acme", ownerActive: false } }],
-    ["an archived Coach channel", { "workspaces/acme/channels/coach-dm": { mattermost: { channelId: COACH_CHANNEL }, archivedAt: 1 } }],
-    ["a missing Coach channel", { "workspaces/acme/channels/coach-dm": undefined }],
+    ["an archived Agent channel", { "workspaces/acme/channels/coach-dm": { mattermost: { channelId: DEFAULT_AGENT_CHANNEL }, archivedAt: 1 } }],
+    ["a missing Agent channel", { "workspaces/acme/channels/coach-dm": undefined }],
     ["a missing proof secret", { "users/owner-acme/secrets/coachMattermost": undefined }],
   ])("rejects %s", async (_label, overrides) => {
     const res = await post(app({ docs: records(overrides) }).server, authorizeBody());
@@ -158,7 +158,7 @@ describe("owner automation authorization broker", () => {
 
   it("rejects an agent that is not assigned to this gateway or is suspended", async () => {
     expect((await post(app({ assigned: null }).server, authorizeBody())).status).toBe(403);
-    const suspended = fixtureBuilder("owner-acme", { ...ASSIGNED, accountLifecycle: { status: "suspended" } });
+    const suspended = fixtureUser("owner-acme", { ...ASSIGNED, accountLifecycle: { status: "suspended" } });
     expect((await post(app({ assigned: suspended }).server, authorizeBody())).status).toBe(403);
   });
 

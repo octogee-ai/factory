@@ -1,9 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import type { DocumentData } from "firebase-admin/firestore";
-import { DuplicateRecordError, type BuilderRecord, type GatewayAssignment, type GatewayRoot, type PlatformStateRepositories, type Stored } from "@octogee/core/platform-state";
-import { builderActivationRecoveryTargetMatches, sharedRecoveryTargetCleaned, migrationCancellationDeferred } from "@octogee/core/fleet-state";
-import { builderRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
-import { readSchedulerMigrationIdentity, type CustomerMigrationV2State } from "@octogee/shared/types/glm";
+import { DuplicateRecordError, type PlatformUserRecord, type GatewayAssignment, type GatewayRoot, type PlatformStateRepositories, type Stored } from "@octogee/core/platform-state";
+import { userActivationRecoveryTargetMatches, sharedRecoveryTargetCleaned, migrationCancellationDeferred } from "@octogee/core/fleet-state";
+import { isolatedRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
+import { readSchedulerMigrationIdentity, type UserMigrationV2State } from "@octogee/shared/types/glm";
 import { projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
 import type { FleetBrokerAgentAnchorMigration } from "@octogee/shared/types/fleet-broker";
 import { readWorkspaceMigrationMarker } from "@octogee/shared/types/workspace-migration";
@@ -33,33 +33,33 @@ async function sharedCrossGatewayAgentAnchorScope(tx: PlatformStateRepositories,
   if (!migrationOperationCurrent(operation, input, gatewayId, operationId)) return null;
   const sourceGatewayId: string = input.fromGatewayId, targetGatewayId: string = input.toGatewayId, uid: string = input.uid;
   const sourceRequest = gatewayId === sourceGatewayId;
-  const [gateway, source, builder, assignment, targetAssignment] = await Promise.all([
+  const [gateway, source, user, assignment, targetAssignment] = await Promise.all([
     tx.gateways.roots.get(targetGatewayId),
     tx.gateways.roots.get(sourceGatewayId),
-    tx.builders.records.get(uid),
+    tx.users.records.get(uid),
     tx.gateways.assignments.get(sourceGatewayId, uid),
     tx.gateways.assignments.get(targetGatewayId, uid),
   ]);
   const target = projectGatewayDesiredRootForGateway(gateway, targetGatewayId);
   const sourceRoot = projectGatewayDesiredRootForGateway(source, sourceGatewayId);
   if (!sourceRoot || !assignment) return null;
-  const activation = builderActivationTarget({ operationId, input, builder, sourceEpoch: assignment.epoch, targetRoot: gateway });
+  const activation = userActivationTarget({ operationId, input, user, sourceEpoch: assignment.epoch, targetRoot: gateway });
   const sourceTargetCurrent = activation
     ? activation.matches
     : target?.gatewayClass === "shared" || sharedRecoveryTargetCleaned(input, operation.schedulerHandoff);
   if (!migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationId, operation, input, slug, assigned: assignment, sourceTargetCurrent,
-    builderTargetActivating: activation?.activating === true, targetAssigned: targetAssignment !== null, builder, migrationId, sourceGatewayId, targetGatewayId })) return null;
+    isolatedTargetActivating: activation?.activating === true, targetAssigned: targetAssignment !== null, user, migrationId, sourceGatewayId, targetGatewayId })) return null;
   const migration: FleetBrokerAgentAnchorMigration = { migrationId, claimStartedAt: operation.startedAt, sourceGatewayId, sourceEpoch: assignment.epoch };
   if (!migrationAuthorityMatches(migration, expected)) return null;
   return { gatewayId, uid, slug, assignmentEpoch: assignment.epoch, assignmentState: "quiescing" as const, migration };
 }
 
-function builderActivationTarget({ operationId, input, builder, sourceEpoch, targetRoot }: {
-  operationId: string; input: DocumentData; builder: Stored<BuilderRecord> | null; sourceEpoch: number; targetRoot: unknown;
+function userActivationTarget({ operationId, input, user, sourceEpoch, targetRoot }: {
+  operationId: string; input: DocumentData; user: Stored<PlatformUserRecord> | null; sourceEpoch: number; targetRoot: unknown;
 }): { matches: boolean; activating: boolean } | null {
   if (input.source !== "builder-activation-lease") return null;
-  const activationLease = builder?.activationLease ?? undefined;
-  const matches = builderActivationRecoveryTargetMatches({ operationId, input, openclaw: { activationLease }, sourceEpoch, targetRoot });
+  const activationLease = user?.activationLease ?? undefined;
+  const matches = userActivationRecoveryTargetMatches({ operationId, input, openclaw: { activationLease }, sourceEpoch, targetRoot });
   return { matches, activating: matches && activationLease?.status === "activating" };
 }
 
@@ -85,8 +85,8 @@ async function sharedSurgeAgentAnchorScope(tx: PlatformStateRepositories, reques
   const uid = assigned.uid;
   if (!sharedSurgeAssignmentCurrent(assigned, uid, request) ||
       sharedSurgeReceivingPodUid(assigned, migrationId, logicalTargetPodUid) !== podUid) return null;
-  const builder = await tx.builders.records.get(uid);
-  if (!sharedSurgeCustomerCurrent(builder, request)) return null;
+  const user = await tx.users.records.get(uid);
+  if (!sharedSurgeUserCurrent(user, request)) return null;
   const migration: FleetBrokerAgentAnchorMigration = { migrationId, claimStartedAt: assigned.updatedAt, sourceGatewayId: gatewayId, sourceEpoch: assigned.epoch };
   if (!migrationAuthorityMatches(migration, expected)) return null;
   return { gatewayId, uid, slug, assignmentEpoch: assigned.epoch, assignmentState: "quiescing" as const, migration };
@@ -99,11 +99,11 @@ export async function sharedAssignedSourceSurgeAnchorScope(
   const prefix = `surge-${gatewayId}-`;
   const targetPodUid = typeof migrationId === "string" && migrationId.startsWith(prefix) ? migrationId.slice(prefix.length) : "";
   if (!podUid || !POD_UID_SHAPE.test(podUid) || !POD_UID_SHAPE.test(targetPodUid) || podUid === targetPodUid || !validDocumentId(uid)) return null;
-  const [gateway, assigned, builder] = await Promise.all([
-    tx.gateways.roots.get(gatewayId), tx.gateways.assignments.get(gatewayId, uid), tx.builders.records.get(uid),
+  const [gateway, assigned, user] = await Promise.all([
+    tx.gateways.roots.get(gatewayId), tx.gateways.assignments.get(gatewayId, uid), tx.users.records.get(uid),
   ]);
   if (!sharedSurgeGatewayCurrent(gateway, gatewayId) || !assigned || !sharedSurgeAssignmentCurrent(assigned, uid, request) ||
-      !sharedSurgeCustomerCurrent(builder, request) ||
+      !sharedSurgeUserCurrent(user, request) ||
       !sharedSurgeSourcePodCurrent(assigned, migrationId, targetPodUid, podUid)) return null;
   const sourceSurge: FleetBrokerAgentAnchorMigration = { migrationId: migrationId as string, claimStartedAt: assigned.updatedAt, sourceGatewayId: gatewayId, sourceEpoch: assigned.epoch };
   if (!migrationAuthorityMatches(sourceSurge, expected)) return null;
@@ -135,11 +135,11 @@ function sharedSurgeAssignmentCurrent(assigned: GatewayAssignment, uid: string, 
     Number.isSafeInteger(assigned.epoch), assigned.epoch >= 0, Number.isSafeInteger(assigned.updatedAt), assigned.updatedAt > 0].every(Boolean);
 }
 
-function sharedSurgeCustomerCurrent(builder: Stored<BuilderRecord> | null, { gatewayId, slug, migrationId }: AgentAnchorMigrationRequest): boolean {
-  if (!builder) return false;
-  const marker = readWorkspaceMigrationMarker({ migration: builder.fences.migration });
-  return [!builderRuntimeMutationFenced(builder), builder.slug === slug, builder.gateway?.gatewayId === gatewayId,
-    builder.openclaw.status === "complete", marker?.state === "moving", marker?.operationId === migrationId,
+function sharedSurgeUserCurrent(user: Stored<PlatformUserRecord> | null, { gatewayId, slug, migrationId }: AgentAnchorMigrationRequest): boolean {
+  if (!user) return false;
+  const marker = readWorkspaceMigrationMarker({ migration: user.fences.migration });
+  return [!isolatedRuntimeMutationFenced(user), user.slug === slug, user.gateway?.gatewayId === gatewayId,
+    user.openclaw.status === "complete", marker?.state === "moving", marker?.operationId === migrationId,
     Number.isSafeInteger(marker?.startedAt), (marker?.startedAt ?? 0) > 0].every(Boolean);
 }
 
@@ -154,7 +154,7 @@ function migrationOperationCurrent(operation: DocumentData, input: DocumentData,
 }
 
 function migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationId, operation, input, slug,
-  assigned, sourceTargetCurrent, builderTargetActivating, targetAssigned, builder, migrationId, sourceGatewayId, targetGatewayId }: {
+  assigned, sourceTargetCurrent, isolatedTargetActivating, targetAssigned, user, migrationId, sourceGatewayId, targetGatewayId }: {
   sourceRequest: boolean;
   sourceRoot: NonNullable<ReturnType<typeof projectGatewayDesiredRootForGateway>>;
   target: ReturnType<typeof projectGatewayDesiredRootForGateway>;
@@ -164,9 +164,9 @@ function migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationI
   slug: string;
   assigned: GatewayAssignment;
   sourceTargetCurrent: boolean;
-  builderTargetActivating: boolean;
+  isolatedTargetActivating: boolean;
   targetAssigned: boolean;
-  builder: Stored<BuilderRecord> | null;
+  user: Stored<PlatformUserRecord> | null;
   migrationId: string;
   sourceGatewayId: string;
   targetGatewayId: string;
@@ -175,8 +175,8 @@ function migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationI
     sourceRequest
       ? sourceRoot.gatewayClass === "shared" && ["running", "draining"].includes(sourceRoot.desiredStatus) &&
         assigned.updatedByOperationId === operationId && sourceRecoveryIntentCurrent(operationId, operation, input, slug, assigned.epoch) && sourceTargetCurrent
-      : (target?.gatewayClass === "shared" || builderTargetActivating) && target?.desiredStatus === "running" && target.retirementClaim == null,
-    sourceRoot.retirementClaim == null, !targetAssigned, builderMigrationCustodyCurrent(builder, { slug, sourceGatewayId, operationId }),
+      : (target?.gatewayClass === "shared" || isolatedTargetActivating) && target?.desiredStatus === "running" && target.retirementClaim == null,
+    sourceRoot.retirementClaim == null, !targetAssigned, userMigrationCustodyCurrent(user, { slug, sourceGatewayId, operationId }),
     assigned.uid === input.uid, assigned.slug === slug, assigned.gatewayId === sourceGatewayId, assigned.state === "quiescing",
     Number.isSafeInteger(assigned.epoch), assigned.epoch >= 0,
     cancelledImportCustodyCurrent(operation, slug, assigned.epoch),
@@ -184,11 +184,11 @@ function migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationI
   ].every(Boolean);
 }
 
-function builderMigrationCustodyCurrent(
-  builder: Stored<BuilderRecord> | null, { slug, sourceGatewayId, operationId }: { slug: string; sourceGatewayId: string; operationId: string },
+function userMigrationCustodyCurrent(
+  user: Stored<PlatformUserRecord> | null, { slug, sourceGatewayId, operationId }: { slug: string; sourceGatewayId: string; operationId: string },
 ): boolean {
-  if (builder === null || builderRuntimeMutationFenced(builder)) return false;
-  return builder.slug === slug && builder.gateway?.gatewayId === sourceGatewayId && builder.fences.migration?.operationId === operationId;
+  if (user === null || isolatedRuntimeMutationFenced(user)) return false;
+  return user.slug === slug && user.gateway?.gatewayId === sourceGatewayId && user.fences.migration?.operationId === operationId;
 }
 
 function cancelledImportCustodyCurrent(operation: DocumentData, slug: string, sourceEpoch: unknown): boolean {
@@ -220,8 +220,8 @@ function migrationAuthorityMatches(current: FleetBrokerAgentAnchorMigration, exp
 }
 
 function migrationV2ImportCurrent(
-  state: CustomerMigrationV2State | undefined,
-  expected: Pick<CustomerMigrationV2State, "operationId" | "migrationId" | "uid" | "slug" | "sourceGatewayId" | "targetGatewayId" | "sourceEpoch">,
+  state: UserMigrationV2State | undefined,
+  expected: Pick<UserMigrationV2State, "operationId" | "migrationId" | "uid" | "slug" | "sourceGatewayId" | "targetGatewayId" | "sourceEpoch">,
 ): boolean {
   if (state === undefined) return true;
   return [state.phase === "sourceQuiesced", state.cutoverAt === undefined,

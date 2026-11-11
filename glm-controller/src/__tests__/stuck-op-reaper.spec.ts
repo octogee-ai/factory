@@ -81,7 +81,7 @@ function makeStore(ops: FakeOpDoc[], state: FakeDbState = {}): PlatformStateStor
   });
   return {
     journal: fixture.journal,
-    builders: fixture.builders,
+    users: fixture.users,
     gateways: fixture.gateways,
     transaction: async (options, body) => {
       if (state.transactionState) state.transactionState.active = true;
@@ -266,7 +266,7 @@ describe("runStuckOpReaperTick", () => {
     expect(audit.updated).toBeUndefined();
     expect(log.mock.calls.flat().join("\n")).not.toContain("recovery admission failed");
   });
-  it("recovers a failed owned rsync conflict on a later tick without restarting Cowboy", async () => {
+  it("recovers a failed owned rsync conflict on a later tick without restarting the fleet controller", async () => {
     const op: FakeOpDoc = { id: "placement-owned", data: {
       kind: "migrate-customer", status: "failed", attempts: 1, startedAt: 100, steps: [{ name: "keys-sync-state", status: "failed" }],
       error: "rsync import port 30873 is already serving migrationId=other slug=bob",
@@ -364,7 +364,7 @@ describe("runStuckOpReaperTick", () => {
     expect(op.data.attemptHistory).toMatchObject([{ attempt: 1, steps: [{ name: "quiesce-source", status: "done" }] }]);
     expect(assignment.state).toBe("quiescing");
   });
-  it("preserves an ID-less persisted automatic Builder return for restart recovery", async () => {
+  it("preserves an ID-less persisted automatic user return for restart recovery", async () => {
     const ops: FakeOpDoc[] = [{
       id: "builder-return-builder-alice-g1",
       data: {
@@ -414,7 +414,7 @@ describe("runStuckOpReaperTick", () => {
 
   it("rechecks a newly running final-import budget inside the reap transaction", async () => {
     const ops: FakeOpDoc[] = [{ id: "changed-stage", data: { status: "running", kind: "migrate-customer",
-      startedAt: NOW - 1_100_000, input: { uid: "uid-mike", fromGatewayId: "shared-a", toGatewayId: "builder-target" },
+      startedAt: NOW - 1_100_000, input: { uid: "uid-mike", fromGatewayId: "shared-a", toGatewayId: "isolated-target" },
       steps: [{ name: "pre-sync-state", status: "running" }] } }];
     const db = makeStore(ops, { beforeTransaction: () => { ops[0].data.steps = [{ name: "final-sync-state", status: "running" }]; } });
     await expect(runStuckOpReaperTick({ store: db, log: vi.fn(), now: () => NOW,
@@ -997,7 +997,7 @@ describe("recoverControllerOrphanedOperations", () => {
     expect(raced.data.status).toBe("running");
   });
 
-  it("leaves a level-triggered Builder return to the resume sweep", async () => {
+  it("leaves a level-triggered user return to the resume sweep", async () => {
     const op: FakeOpDoc = {
       id: "builder-return-builder-alice-g1",
       data: {

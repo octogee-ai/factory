@@ -123,7 +123,7 @@ describe("createVoiceCatalog", () => {
 });
 
 describe("previewText", () => {
-  it("keeps the greeting short and strips markup from the coach name", () => {
+  it("keeps the greeting short and strips markup from the agent name", () => {
     expect(previewText(undefined)).toBe("Hi! This is how I sound. Shall we get started?");
     expect(previewText("O'Malley-Bot 2")).toBe("Hi, I'm O'Malley-Bot 2. This is how I sound. Shall we get started?");
     expect(previewText("x".repeat(200)).length).toBeLessThanOrEqual(160);

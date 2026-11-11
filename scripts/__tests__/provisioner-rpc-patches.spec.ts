@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
-  buildCoachAgentEntry,
-  buildCoachBindings,
+  buildDefaultAgentEntry,
+  buildDefaultAgentBindings,
   type ProvisioningContext,
 } from "@octogee/core/provisionSteps";
 
@@ -39,9 +39,9 @@ function mkMmUpdate(extra: Record<string, any> = {}): Record<string, any> {
   };
 }
 
-describe("buildCoachAgentEntry", () => {
+describe("buildDefaultAgentEntry", () => {
   it("produces an agent entry keyed by octogee-{slug}-coach", () => {
-    const entry = buildCoachAgentEntry(mkCtx()) as Record<string, unknown>;
+    const entry = buildDefaultAgentEntry(mkCtx()) as Record<string, unknown>;
     expect(entry.id).toBe(AGENT_ID);
     expect(entry.workspace).toBe("/var/empty/customers/marie");
     expect((entry.identity as any).name).toBeTruthy();
@@ -49,15 +49,15 @@ describe("buildCoachAgentEntry", () => {
   });
 
   it("is pure — repeated calls on the same ctx produce equal output", () => {
-    const a = buildCoachAgentEntry(mkCtx());
-    const b = buildCoachAgentEntry(mkCtx());
+    const a = buildDefaultAgentEntry(mkCtx());
+    const b = buildDefaultAgentEntry(mkCtx());
     expect(a).toEqual(b);
   });
 });
 
-describe("buildCoachBindings", () => {
-  it("emits bindings only for Builder-facing Coach and General channels", () => {
-    const bindings = buildCoachBindings({ bindings: [] }, AGENT_ID, SLUG, mkMmUpdate());
+describe("buildDefaultAgentBindings", () => {
+  it("emits bindings only for User-facing Agent and General channels", () => {
+    const bindings = buildDefaultAgentBindings({ bindings: [] }, AGENT_ID, SLUG, mkMmUpdate());
     expect(bindings).toHaveLength(2);
     for (const b of bindings) {
       expect(b.agentId).toBe(AGENT_ID);
@@ -73,7 +73,7 @@ describe("buildCoachBindings", () => {
         { agentId: "octogee-other-coach", match: { channel: "mattermost", accountId: "other-coach", peer: { kind: "group", id: "other-ch" } } },
       ],
     };
-    const bindings = buildCoachBindings(existing, AGENT_ID, SLUG, mkMmUpdate());
+    const bindings = buildDefaultAgentBindings(existing, AGENT_ID, SLUG, mkMmUpdate());
     const otherAgentEntries = bindings.filter((b: any) => b.agentId === "octogee-other-coach");
     expect(otherAgentEntries).toHaveLength(1);
     expect(existing.bindings).toHaveLength(1);
@@ -85,15 +85,15 @@ describe("buildCoachBindings", () => {
         { agentId: AGENT_ID, match: { channel: "mattermost", peer: { kind: "group", id: "ch-coach-dm" } } },
       ],
     };
-    const bindings = buildCoachBindings(existing, AGENT_ID, SLUG, mkMmUpdate());
-    const coachDmBindings = bindings.filter((b: any) => b.agentId === AGENT_ID && b.match?.peer?.id === "ch-coach-dm");
-    expect(coachDmBindings).toHaveLength(1);
-    expect(coachDmBindings[0].match.accountId).toBe(ACCOUNT_ID);
+    const bindings = buildDefaultAgentBindings(existing, AGENT_ID, SLUG, mkMmUpdate());
+    const defaultAgentDmBindings = bindings.filter((b: any) => b.agentId === AGENT_ID && b.match?.peer?.id === "ch-coach-dm");
+    expect(defaultAgentDmBindings).toHaveLength(1);
+    expect(defaultAgentDmBindings[0].match.accountId).toBe(ACCOUNT_ID);
   });
 
   it("does not mutate the `current` snapshot", () => {
     const existing = { bindings: [] };
-    buildCoachBindings(existing, AGENT_ID, SLUG, mkMmUpdate());
+    buildDefaultAgentBindings(existing, AGENT_ID, SLUG, mkMmUpdate());
     expect(existing.bindings).toEqual([]);
   });
 });

@@ -10,11 +10,11 @@ import type { DurableGateway } from "../converge-gateway.js";
 const openclawSourceSha = "a".repeat(40);
 
 const repository = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
-const builderRepository = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder";
+const userRepository = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder";
 
 function gateway(): DurableGateway {
   return {
-    gatewayId: "bender",
+    gatewayId: "walter",
     latestRelease: 2,
     desiredStatus: "running",
     desiredRelease: 2,
@@ -65,7 +65,7 @@ function passDeps(
 }
 
 describe("gateway convergence surge wiring", () => {
-  it("rechecks an initial disposable Builder prelaunch after an unavailable poll", async () => {
+  it("rechecks an initial disposable isolated prelaunch after an unavailable poll", async () => {
     const prelaunch = {
       ...gateway(),
       gatewayClass: "builder",
@@ -91,10 +91,10 @@ describe("gateway convergence surge wiring", () => {
       action: { kind: "steady" },
     })).resolves.toEqual({ kind: "mark-live" });
     expect(reconcileSurgeHandoff).toHaveBeenCalledWith({
-      gatewayId: "bender",
+      gatewayId: "walter",
       desiredImageTag: "def5678-oc2026.7.1",
-      requiresCustomerMigration: true,
-      disposableBuilderGateway: false,
+      requiresUserMigration: true,
+      isolatedGateway: false,
       ownerlessOperatorPrewarm: false,
     });
 
@@ -159,8 +159,8 @@ describe("gateway convergence surge wiring", () => {
     })).resolves.toEqual({ kind: "mark-live" });
 
     expect(reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({
-      gatewayId: "bender",
-      requiresCustomerMigration: true,
+      gatewayId: "walter",
+      requiresUserMigration: true,
     }));
   });
 
@@ -173,7 +173,7 @@ describe("gateway convergence surge wiring", () => {
       helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
       action: { kind: "steady" },
     })).resolves.toEqual({ kind: "mark-live" });
-    expect(reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({ requiresCustomerMigration: false }));
+    expect(reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({ requiresUserMigration: false }));
   });
 
   it.each([
@@ -210,30 +210,30 @@ describe("gateway convergence surge wiring", () => {
     expect(reconcileSurgeHandoff).not.toHaveBeenCalled();
   });
 
-  it("uses the Builder image receipt for Builder gateway handoff and readiness", async () => {
+  it("uses the isolated image receipt for isolated gateway handoff and readiness", async () => {
     const standardImageTag = `def5678-oc2026.7.1@sha256:${"a".repeat(64)}`;
     const builderImageTag = `def5678-oc2026.7.1@sha256:${"b".repeat(64)}`;
-    const builderGateway = {
+    const isolatedGateway = {
       ...gateway(),
       gatewayClass: "builder" as const,
       profile: "builder" as const,
       imageProfile: "builder" as const,
-      ownerUid: "uid-bender",
-      builderSlug: "bender",
+      ownerUid: "uid-walter",
+      builderSlug: "walter",
       allocation: {
         kind: "disposable-builder" as const,
         schemaVersion: 1 as const,
-        leaseId: "lease-bender",
+        leaseId: "lease-walter",
         generation: 1,
-        claimedByUid: "uid-bender",
+        claimedByUid: "uid-walter",
       },
     };
-    const builderArtifact: ReleasePayload = {
+    const userArtifact: ReleasePayload = {
       ...artifact,
       imageTag: standardImageTag,
       profileImages: {
         builder: {
-          imageRepository: builderRepository,
+          imageRepository: userRepository,
           imageTag: builderImageTag,
         },
       },
@@ -241,32 +241,32 @@ describe("gateway convergence surge wiring", () => {
     const reconcileSurgeHandoff = vi.fn(async () => ({ ready: true }));
 
     await expect(refineGatewayConvergenceAction({
-      passDeps: passDeps(reconcileSurgeHandoff, builderGateway),
-      gateway: builderGateway,
-      artifact: builderArtifact,
+      passDeps: passDeps(reconcileSurgeHandoff, isolatedGateway),
+      gateway: isolatedGateway,
+      artifact: userArtifact,
       runtime: runtime(builderImageTag, "2026.7.1"),
       helmObserved: {
-        imageRepository: builderRepository,
+        imageRepository: userRepository,
         imageTag: builderImageTag,
         replicas: 1,
-        ownerUid: "uid-bender",
-        builderSlug: "bender",
+        ownerUid: "uid-walter",
+        builderSlug: "walter",
       },
       action: { kind: "steady" },
     })).resolves.toEqual({ kind: "mark-live" });
 
     expect(reconcileSurgeHandoff).toHaveBeenCalledWith({
-      gatewayId: "bender",
+      gatewayId: "walter",
       desiredImageTag: builderImageTag,
-      requiresCustomerMigration: true,
-      disposableBuilderGateway: true,
+      requiresUserMigration: true,
+      isolatedGateway: true,
       ownerlessOperatorPrewarm: false,
     });
   });
 
-  it("marks an empty held disposable Builder live from its boot heartbeat", async () => {
+  it("marks an empty held disposable isolated live from its boot heartbeat", async () => {
     const builderImageTag = `def5678-oc2026.7.1@sha256:${"b".repeat(64)}`;
-    const builderGateway = {
+    const isolatedGateway = {
       ...gateway(),
       latestRelease: 1,
       desiredRelease: 1,
@@ -274,21 +274,21 @@ describe("gateway convergence surge wiring", () => {
       gatewayClass: "builder" as const,
       profile: "builder" as const,
       imageProfile: "builder" as const,
-      ownerUid: "uid-bender",
-      builderSlug: "bender",
+      ownerUid: "uid-walter",
+      builderSlug: "walter",
       allocation: {
         kind: "disposable-builder" as const,
         schemaVersion: 1 as const,
-        leaseId: "lease-bender",
+        leaseId: "lease-walter",
         generation: 1,
-        claimedByUid: "uid-bender",
+        claimedByUid: "uid-walter",
       },
     };
-    const builderArtifact: ReleasePayload = {
+    const userArtifact: ReleasePayload = {
       ...artifact,
       profileImages: {
         builder: {
-          imageRepository: builderRepository,
+          imageRepository: userRepository,
           imageTag: builderImageTag,
         },
       },
@@ -303,29 +303,29 @@ describe("gateway convergence surge wiring", () => {
     const reconcileSurgeHandoff = vi.fn(async () => ({ ready: true }));
 
     await expect(refineGatewayConvergenceAction({
-      passDeps: passDeps(reconcileSurgeHandoff, builderGateway),
-      gateway: builderGateway,
-      artifact: builderArtifact,
+      passDeps: passDeps(reconcileSurgeHandoff, isolatedGateway),
+      gateway: isolatedGateway,
+      artifact: userArtifact,
       runtime: bootingRuntime,
       helmObserved: {
-        imageRepository: builderRepository,
+        imageRepository: userRepository,
         imageTag: builderImageTag,
         replicas: 1,
-        ownerUid: "uid-bender",
-        builderSlug: "bender",
+        ownerUid: "uid-walter",
+        builderSlug: "walter",
       },
       action: { kind: "steady" },
     })).resolves.toEqual({ kind: "mark-live" });
 
     expect(reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({
-      requiresCustomerMigration: false,
-      disposableBuilderGateway: true,
+      requiresUserMigration: false,
+      isolatedGateway: true,
     }));
   });
 
-  it("marks an initial held Builder live after Cowboy directly verifies prelaunch", async () => {
+  it("marks an initial held user live after the fleet controller directly verifies prelaunch", async () => {
     const builderImageTag = `def5678-oc2026.7.1@sha256:${"c".repeat(64)}`;
-    const builderGateway = {
+    const isolatedGateway = {
       ...gateway(),
       latestRelease: 1,
       desiredRelease: 1,
@@ -333,37 +333,37 @@ describe("gateway convergence surge wiring", () => {
       gatewayClass: "builder" as const,
       profile: "builder" as const,
       imageProfile: "builder" as const,
-      ownerUid: "uid-bender",
-      builderSlug: "bender",
+      ownerUid: "uid-walter",
+      builderSlug: "walter",
       allocation: {
         kind: "disposable-builder" as const,
         schemaVersion: 1 as const,
-        leaseId: "lease-bender",
+        leaseId: "lease-walter",
         generation: 1,
-        claimedByUid: "uid-bender",
+        claimedByUid: "uid-walter",
       },
     };
-    const builderArtifact: ReleasePayload = {
+    const userArtifact: ReleasePayload = {
       ...artifact,
       profileImages: {
         builder: {
-          imageRepository: builderRepository,
+          imageRepository: userRepository,
           imageTag: builderImageTag,
         },
       },
     };
 
     await expect(refineGatewayConvergenceAction({
-      passDeps: passDeps(vi.fn(async () => ({ ready: true })), builderGateway),
-      gateway: builderGateway,
-      artifact: builderArtifact,
+      passDeps: passDeps(vi.fn(async () => ({ ready: true })), isolatedGateway),
+      gateway: isolatedGateway,
+      artifact: userArtifact,
       runtime: runtime("unknown"),
       helmObserved: {
-        imageRepository: builderRepository,
+        imageRepository: userRepository,
         imageTag: builderImageTag,
         replicas: 1,
-        ownerUid: "uid-bender",
-        builderSlug: "bender",
+        ownerUid: "uid-walter",
+        builderSlug: "walter",
       },
       action: { kind: "steady" },
     })).resolves.toEqual({ kind: "mark-live" });

@@ -1,5 +1,5 @@
 import type { PlatformStateRepositories } from "../store.js";
-import { createFirestoreBuilderRepositories } from "./builders.js";
+import { createFirestoreUserRepositories } from "./users.js";
 import { createFirestoreChannelIdentitiesRepository } from "./channel-identities.js";
 import { createFirestoreConfigRepositories } from "./config.js";
 import { createFirestoreControllerStateRepositories } from "./controller-state.js";
@@ -20,7 +20,7 @@ export function createFirestoreRepositories(session: FirestoreSession): Platform
     controllerState: createFirestoreControllerStateRepositories(session),
     migrationTasks: createFirestoreMigrationTasksRepository(session),
     config: createFirestoreConfigRepositories(session),
-    builders: createFirestoreBuilderRepositories(session),
+    users: createFirestoreUserRepositories(session),
     workspaces: createFirestoreWorkspaceRepositories(session),
     secrets: createFirestoreSecretsRepository(session),
     channelIdentities: createFirestoreChannelIdentitiesRepository(),

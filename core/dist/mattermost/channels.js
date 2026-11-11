@@ -2,7 +2,7 @@ import { log } from "../config.js";
 import { projectGeneralChannelName, } from "@octogee/shared/types/identity";
 import { computeProjectChannelDisplayName } from "@octogee/shared/types/display-names";
 import { mmApiCall } from "./client.js";
-import { customerChannelMembers } from "./channel-members.js";
+import { userChannelMembers } from "./channel-members.js";
 export async function createProjectChannel(teamId, // workspace team ID (Phase 4: team-per-workspace)
 slug, projectSlug, customerMmUserId, projectName) {
     const MM_ADMIN_USER_ID = process.env.MM_ADMIN_USER_ID;
@@ -27,9 +27,9 @@ slug, projectSlug, customerMmUserId, projectName) {
         log(`[mattermost] ⚠ failed to create project channel ${channelName}`);
         return null;
     }
-    for (const memberId of customerChannelMembers("project", {
+    for (const memberId of userChannelMembers("project", {
         customerMmUserId,
-        coachMmUserId: null,
+        defaultAgentMmUserId: null,
         adminMmUserId: MM_ADMIN_USER_ID ?? null,
     })) {
         await mmApiCall("POST", `/channels/${channel.id}/members`, { user_id: memberId });

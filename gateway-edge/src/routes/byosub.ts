@@ -6,20 +6,20 @@ import { FieldValue } from "firebase-admin/firestore";
 import { requireAuth, requireInternalServiceAuth } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
 import { platformStateStore, readBuilderTier } from "../lib/platform-state.js";
-import type { BuilderActivationLease, BuilderRecord } from "@octogee/core/platform-state";
+import type { UserActivationLease, PlatformUserRecord } from "@octogee/core/platform-state";
 import {
   deleteSecret,
   writeSecret,
   addSecretVersionIfExists,
 } from "@octogee/core/secret-store";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
-import { accountActiveInStore, userDataWithBuilderState } from "../lib/user-platform-state.js";
+import { accountActiveInStore, userDataWithUserState } from "../lib/user-platform-state.js";
 import {
   byosubSecretName,
   validateCodexCredential,
   validateClaudeCliCredential,
   validateClaudeCliToken,
-  coachAgentId,
+  userDefaultAgentId,
   byosubConnectionView,
   isSafeGatewayId,
   type ByosubProvider,
@@ -55,7 +55,7 @@ import {
   type ModelCredentialOAuthProviderId,
 } from "@octogee/shared/types/model-credentials";
 import { userEntitlements } from "@octogee/shared/types/user-entitlements";
-import { requestBuilderActivationLease } from "@octogee/core/builder-activation-lease";
+import { requestUserActivationLease } from "@octogee/core/user-activation-lease";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
 
 const router = Router();
@@ -63,7 +63,7 @@ const BYOSUB_PROVIDER_ORDER: ByosubProvider[] = ["openai", "anthropic"];
 
 type SubscriptionRuntimeState = "ready" | "activating" | "shared" | "unavailable";
 
-function activationIsPending(lease: BuilderActivationLease | null): boolean {
+function activationIsPending(lease: UserActivationLease | null): boolean {
   const status = lease?.status;
   return status === "requested" || status === "provisioning" || status === "activating" || status === "returning";
 }
@@ -72,13 +72,13 @@ async function subscriptionRuntimeFor(
   uid: string,
   resolved: { gatewayId: string },
 ): Promise<SubscriptionRuntimeState> {
-  const [authorization, builder] = await Promise.all([
+  const [authorization, userRecord] = await Promise.all([
     readGatewayAuthorizationInStore(platformStateStore, resolved.gatewayId),
-    platformStateStore.builders.records.get(uid),
+    platformStateStore.users.records.get(uid),
   ]);
-  if (authorization?.kind !== "durable" || !builder) return "unavailable";
+  if (authorization?.kind !== "durable" || !userRecord) return "unavailable";
   if (authorization.config.gatewayClass !== "shared") return "ready";
-  return activationIsPending(builder.activationLease) ? "activating" : "shared";
+  return activationIsPending(userRecord.activationLease) ? "activating" : "shared";
 }
 
 async function hasReadySubscriptionRuntime(
@@ -165,15 +165,15 @@ async function readFlow(flowId: string): Promise<FlowDoc | null> {
   return (snap.data() || null) as FlowDoc | null;
 }
 
-function agentBelongsToBuilder(builder: BuilderRecord, agentId: string): boolean {
-  return builder.openclaw.agentId === agentId ||
-    builder.agents.agentIds.includes(agentId) ||
-    (builder.slug !== null && coachAgentId(builder.slug) === agentId);
+function agentBelongsToUser(userRecord: PlatformUserRecord, agentId: string): boolean {
+  return userRecord.openclaw.agentId === agentId ||
+    userRecord.agents.agentIds.includes(agentId) ||
+    (userRecord.slug !== null && userDefaultAgentId(userRecord.slug) === agentId);
 }
 
 async function findGatewayUserByAgentId(gatewayId: string, agentId: string): Promise<string | null> {
-  const builders = await platformStateStore.builders.records.listByGateway(gatewayId);
-  return builders.find((builder) => agentBelongsToBuilder(builder, agentId))?.uid ?? null;
+  const userRecords = await platformStateStore.users.records.listByGateway(gatewayId);
+  return userRecords.find((userRecord) => agentBelongsToUser(userRecord, agentId))?.uid ?? null;
 }
 
 function requestGatewayMatchesBinding(req: Request, gatewayId: string): boolean {
@@ -258,7 +258,7 @@ router.post(
       }
       const assignment = await platformStateStore.gateways.assignments.get(resolved.gatewayId, uid);
       const observedAt = Date.now();
-      const result = await requestBuilderActivationLease({
+      const result = await requestUserActivationLease({
         store: platformStateStore,
         readBuilderTier,
         uid,
@@ -285,7 +285,7 @@ router.post(
 );
 
 // signalProvider is the PROVIDERS-registry key byot-sync reads to drive
-// materialization + the coach-model patch: "openai-codex" for ChatGPT Plus,
+// materialization + the default-agent-model patch: "openai-codex" for ChatGPT Plus,
 // "claude-cli" for a Claude subscription.
 async function flipUnifiedByosSignal(
   uid: string,
@@ -333,7 +333,7 @@ async function flipUnifiedByosSignal(
   await db.collection("users").doc(uid).set({ byotActive: true }, { merge: true });
 }
 
-function slugFromCoachAgentId(agentId: string): string | null {
+function slugFromManagedAgentId(agentId: string): string | null {
   const prefix = "octogee-";
   const suffix = "-coach";
   if (!agentId.startsWith(prefix) || !agentId.endsWith(suffix)) return null;
@@ -381,7 +381,7 @@ function triggerUnifiedByosSyncForFlow(
   flow: FlowDoc,
   provider: ModelCredentialOAuthProviderId,
 ): void {
-  const slug = slugFromCoachAgentId(flow.agentId);
+  const slug = slugFromManagedAgentId(flow.agentId);
   if (!slug) {
     logger.warn(`BYOS sync trigger skipped for malformed agentId=${flow.agentId}`);
     return;
@@ -460,13 +460,13 @@ async function commitByosubCapture(args: {
   const flowRef = db.collection("byosubFlows").doc(args.flowId);
   const addedAt = FieldValue.serverTimestamp();
   await db.runTransaction(async (tx) => {
-    const [owner, currentFlowSnap, builder] = await Promise.all([
+    const [owner, currentFlowSnap, userRecord] = await Promise.all([
       tx.get(ownerRef),
       tx.get(flowRef),
-      platformStateStore.builders.records.get(args.flow.uid),
+      platformStateStore.users.records.get(args.flow.uid),
     ]);
     const currentFlow = currentFlowSnap.data() as FlowDoc | undefined;
-    const ownerData = owner.exists ? userDataWithBuilderState(owner.data() ?? {}, builder) : undefined;
+    const ownerData = owner.exists ? userDataWithUserState(owner.data() ?? {}, userRecord) : undefined;
     if (!ownerData || !accountAllowsInteractiveAccess(ownerData)) {
       throw new Error("BYOS credential owner is not active");
     }
@@ -474,7 +474,7 @@ async function commitByosubCapture(args: {
       throw new Error("BYOS credential flow changed before commit");
     }
     const subscriptionModel = subscriptionDefaultModel(args.modelCredentialProvider);
-    const slug = slugFromCoachAgentId(args.flow.agentId);
+    const slug = slugFromManagedAgentId(args.flow.agentId);
     const agentIds = slug ? rosteredAgentIdsForSlug(ownerData, slug) : [args.flow.agentId];
     if (subscriptionModel) {
       tx.set(configRef, {
@@ -690,7 +690,7 @@ async function cleanupGeneratedByosubCredentialsBestEffort(
   }
 }
 
-// #1141 — let the Builder clear a connected BYOS credential. The inverse
+// #1141 — let the user clear a connected BYOS credential. The inverse
 // of /capture's unified-signal flip + user integration write. The
 // Secret Manager secret is intentionally NOT destroyed (disconnect-only,
 // not full-wipe); a future re-Connect rewrites a fresh version under the
@@ -741,12 +741,12 @@ router.post(
   },
 );
 
-// Claude SUBSCRIPTION capture — paste-token, no device-auth ceremony. The Builder
+// Claude SUBSCRIPTION capture — paste-token, no device-auth ceremony. The user
 // runs `claude setup-token` themselves and pastes the bearer here; we validate,
 // store it owner-scoped in Secret Manager, write the user integration, and flip the
 // unified BYOS signal to claude-cli. The pod's byot-sync watcher reacts to the
 // signal: materializes the per-agent claude-cli store from SM and patches the
-// coach model to the subscription's default on the customer's own plan. User-authed (the
+// agent model to the subscription's default on the customer's own plan. User-authed (the
 // token is provided directly), unlike codex's internal /capture callback.
 router.post(
   "/token",
@@ -781,7 +781,7 @@ router.post(
       if (!await hasReadySubscriptionRuntime(uid, resolved)) {
         res.status(409).json({
           code: "subscription-runtime-required",
-          error: "A private Builder runtime is required before connecting a personal subscription",
+          error: "A private isolated runtime is required before connecting a personal subscription",
         });
         return;
       }
@@ -834,7 +834,7 @@ router.post(
       if (!await hasPrivateSubscriptionGateway(flow.gatewayId)) {
         res.status(409).json({
           code: "subscription-runtime-required",
-          error: "A private Builder runtime is required before connecting a personal subscription",
+          error: "A private isolated runtime is required before connecting a personal subscription",
         });
         return;
       }

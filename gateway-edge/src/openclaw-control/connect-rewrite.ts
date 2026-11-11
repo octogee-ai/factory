@@ -5,7 +5,7 @@ import {
   OPENCLAW_CONTROL_UI_CLIENT_MODE,
 } from "@octogee/shared/types/openclaw-proxy-identity";
 
-const OPERATOR_BUILDER_DASHBOARD_SCOPES = [
+const OPERATOR_USER_DASHBOARD_SCOPES = [
   "operator.admin",
   "operator.read",
   "operator.write",
@@ -43,7 +43,7 @@ function connectAuthority(
   if (identity.mode === "shared-operator") {
     return {
       client: { id: "gateway-client", mode: "backend", ...shared },
-      scopes: [...OPERATOR_BUILDER_DASHBOARD_SCOPES],
+      scopes: [...OPERATOR_USER_DASHBOARD_SCOPES],
       auth: { token: identity.gatewayToken },
     };
   }

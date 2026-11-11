@@ -1,14 +1,14 @@
-# Octogee computer image
+# Octogee VM image
 
 Managed desktop sessions enable Omarchy's persistent stay-awake indicator
-before starting the compositor. Cowboy owns parking; the passwordless desktop
+before starting the compositor. The fleet controller owns parking; the passwordless desktop
 must remain available to the Agent and authenticated viewers while running.
 
 Reproducible build of the Builder gateway VM image: stock Omarchy from the
 pinned ISO, installed unattended, plus the desktop session, `vkms` + `vgem`
 for a display-less GCE guest, Docker for the gateway container, and a
 metadata-driven SSH key installer. Spec:
-[AGENT-COMPUTER-SPEC](../../../docs/specs/AGENT-COMPUTER-SPEC.md) §4 and §9.
+[GATEWAY-VM-SPEC](../../../docs/specs/GATEWAY-VM-SPEC.md) §4 and §9.
 
 ## Build
 
@@ -94,7 +94,7 @@ octo-desktop-style status
 a home with no recorded choice becomes Familiar; a recorded choice is kept,
 and only its structural pieces (plugin links, `shell.json` entries, the
 `require("octo-desktop.familiar")` line) are re-ensured, so a theme the
-Builder or coach picked later survives restarts and home restores. The choice
+user or agent picked later survives restarts and home restores. The choice
 and everything it writes live under `.config/hypr` and `.config/omarchy`,
 which the home checkpoint already carries.
 
@@ -137,9 +137,9 @@ agent name, `agents/{uid}.look`), rendering the shared character drawing, and
 keeps the stored `note`. Until the agent has written them the control API
 serves the shipped default drawing (`desk/character.svg`, pinned to the shared
 drawing by `scripts/__tests__/desktop-desk-page.spec.ts`) and the default note.
-The coach changes the note with `octo-desk note "<text>"` and the style with
+The agent changes the note with `octo-desk note "<text>"` and the style with
 `octo-desktop-style familiar|omarchy` from its gateway container; both reach
-`POST /desk/note` and `POST /style` through gateway-edge's internal computer
+`POST /desk/note` and `POST /style` through gateway-edge's internal VM
 route with the gateway's own credential. `.config/octogee` rides the home
 checkpoint, so the note survives VM replacement.
 
@@ -153,13 +153,13 @@ recorded style is Familiar and the current theme is still `octogee`; a plain
 The Builder's time zone comes from their browser: the PWA sends
 `Intl.DateTimeFormat().resolvedOptions().timeZone` with the signup claim and
 backfills `users/{uid}.preferences.timeZone` on app load for existing
-Builders (Firestore rules keep it IANA-shaped; every consumer re-parses it).
+users (Firestore rules keep it IANA-shaped; every consumer re-parses it).
 It rides the bootstrap `desk` field into `desk.json`, and the gateway agent
-sets the computer's system zone through `POST /timezone` on the control API
+sets the VM's system zone through `POST /timezone` on the control API
 (`timedatectl set-timezone`, validated against `/usr/share/zoneinfo`), only
 when `GET /timezone` disagrees. The Desk clock formats in that zone and falls
 back to the browser's only when `desk.json` has none. The same zone is seeded
-into the coach's USER.md (`- **Timezone:**`) and that one line is re-synced
+into the agent's USER.md (`- **Timezone:**`) and that one line is re-synced
 on change.
 
 Acceptance (`acceptance/desk.sh`, run before the style round trip so the
@@ -176,11 +176,11 @@ and Chromium actually showing the Desk.
 
 | Unit | Role |
 | --- | --- |
-| `octo-home-disk.service` | oneshot before Docker, the agent, and the desktop: mounts the attached `octogee-home` pd-ssd (formatting it btrfs only when blank) at `/srv/octogee` and binds `/home/octo` from its `desktop-home`, so the Builder home (gateway data, desktop profile, Documents, checkpoint staging) lives on its own quota-sized disk and image churn on the boot disk cannot fill it; refuses to start the agent or desktop when the disk is missing or holds another filesystem; on an `x11` computer (`octo-desktop-wanted` exits 1) it skips the `/home/octo` bind, so the login home stays on the boot disk and only the X11 gateway container mounts `desktop-home` |
-| `octo-grow-root.service` | oneshot before Docker and the agent: grows the root partition (`sfdisk` + `partx`) and the btrfs filesystem to fill the boot disk, so `gcloud compute disks resize` plus a reboot recovers a full computer; a no-op when the partition already fills the disk |
+| `octo-home-disk.service` | oneshot before Docker, the agent, and the desktop: mounts the attached `octogee-home` pd-ssd (formatting it btrfs only when blank) at `/srv/octogee` and binds `/home/octo` from its `desktop-home`, so the user home (gateway data, desktop profile, Documents, checkpoint staging) lives on its own quota-sized disk and image churn on the boot disk cannot fill it; refuses to start the agent or desktop when the disk is missing or holds another filesystem; on an `x11` VM (`octo-desktop-wanted` exits 1) it skips the `/home/octo` bind, so the login home stays on the boot disk and only the X11 gateway container mounts `desktop-home` |
+| `octo-grow-root.service` | oneshot before Docker and the agent: grows the root partition (`sfdisk` + `partx`) and the btrfs filesystem to fill the boot disk, so `gcloud compute disks resize` plus a reboot recovers a full VM; a no-op when the partition already fills the disk |
 | `systemd-zram-setup@zram0.service` | zstd-compressed swap in RAM sized to the machine's memory (`/etc/systemd/zram-generator.conf`), with Omarchy's zram reclaim tuning (`/etc/sysctl.d/99-omarchy-sysctl.conf`: `vm.swappiness=150`, `vm.page-cluster=0`), so a memory spike slows the desktop instead of OOM-killing it; acceptance requires it active with swappiness above 100 |
 | `octo-seatd.service` | seatd unbound from a VT, so the compositor gets a seat with no console |
-| `octo-desktop-wanted` | `ExecCondition` (run as root) of `octo-seatd` and `octo-desktop`: reads the `octogee-computer-desktop` instance attribute and skips both units when it is `x11`, because that computer runs the Hobby X11 desktop inside its gateway container; a missing attribute or `omarchy` starts them, and an unreachable metadata server or any other value fails the units |
+| `octo-desktop-wanted` | `ExecCondition` (run as root) of `octo-seatd` and `octo-desktop`: reads the `octogee-computer-desktop` instance attribute and skips both units when it is `x11`, because that VM runs the Hobby X11 desktop inside its gateway container; a missing attribute or `omarchy` starts them, and an unreachable metadata server or any other value fails the units |
 | `user-runtime-dir@1000.service` | creates the desktop user's runtime mount before compositor sockets; user linger keeps it alive without an SSH session |
 | `octo-desktop.service` | as `octo`, on the user manager's session bus `/run/user/1000/bus` with AT-SPI running: Hyprland on the `vkms` output at 1440x900, wayvnc, noVNC over websockify, the control API, Chromium with its accessibility tree exposed; everything bound to 127.0.0.1 |
 | `octo-desktop-lifecycle.service` | root-only Unix socket for checkpoint freeze/thaw and restore stop/start of the desktop plus applications in `user@1000.service` |
@@ -192,8 +192,8 @@ Power: `HandlePowerKey=poweroff`, so a GCE stop completes on the ACPI signal
 instead of waiting for the timeout. `octo` has passwordless sudo and a polkit rule
 (`/etc/polkit-1/rules.d/49-octogee-builder.rules`) that answers every polkit
 request for `octo` without a password, so Omarchy's own update, power and
-disk actions never raise a password prompt: this is the Builder's own
-computer and the Builder class is full power.
+disk actions never raise a password prompt: this is the user's own
+VM and the isolated class is full power.
 SDDM is masked because this image's desktop service owns the display. The
 runtime-directory dependency prevents logind from mounting over live Wayland
 sockets when the first SSH session opens.
@@ -263,10 +263,10 @@ candidate-family behavior run in the scripts CI suite.
 After acceptance, publication assigns that exact image to the environment's
 `octogee-computer` family. Record publication in the
 operations journal. Existing boot disks do not change when a family advances;
-Cowboy moves a parked computer to the current image on its next boot. Replace
-a computer immediately with `fleet --env=test gw replace-computer <gateway-id> --apply` when requested. This checkpoints and restores home.
-New Builder computers have 80 GiB boot disks. Enlarge an existing smaller boot disk
-and cold-start the computer to apply that capacity; a suspended computer does not
+The fleet controller moves a parked VM to the current image on its next boot. Replace
+a VM immediately with `fleet --env=test gw replace-computer <gateway-id> --apply` when requested. This checkpoints and restores home.
+New gateway VMs have 80 GiB boot disks. Enlarge an existing smaller boot disk
+and cold-start the VM to apply that capacity; a suspended VM does not
 run `octo-grow-root` until a cold boot.
 Check `fleet --help` before running an operator command.
 
@@ -302,9 +302,9 @@ npm run --prefix scripts fleet -- --env=test desktop-image publish --sha=<full-m
 ```
 
 The first command previews the artifact and the planned change. The second
-journals publication and advances the TEST family. Computers retain their
-current disks until Cowboy's next boot upgrade. Use the existing per-gateway
-`gw replace-computer` command for an explicitly selected computer.
+journals publication and advances the TEST family. VMs retain their
+current disks until the fleet controller's next boot upgrade. Use the existing per-gateway
+`gw replace-computer` command for an explicitly selected VM.
 
 For PROD, select `--env=prod`: Fleet copies the tested image from TEST into the
 PROD image project, verifies the copy's source image ID, then publishes it.
@@ -323,7 +323,7 @@ image job also removes abandoned CI VMs older than two hours. Operator builds
 are excluded from that cleanup.
 
 Image acceptance verifies the host desktop, browser input, resize, XWayland
-geometry, and reboot persistence. It does not start a paired OpenClaw coach;
+geometry, and reboot persistence. It does not start a paired OpenClaw agent;
 gateway container and node wiring remain covered by their existing tests.
 
 The accepted image `octogee-computer-4-0-2-20260907-1302` was published to TEST

@@ -9,7 +9,7 @@ export declare function parseFinalReply(value: unknown): NativeFinalReply | null
 export interface FinalReplyIdentity {
     agentId: string;
     uid: string;
-    coachMmUserId: string;
+    defaultAgentMmUserId: string;
     coachToken: string;
 }
 export interface FinalReplyPost {
@@ -31,7 +31,7 @@ export interface FinalReplyTarget {
     recipientMmUserId: string;
 }
 export interface FinalReplyNotification {
-    coachMmUserId: string;
+    defaultAgentMmUserId: string;
     channelId: string;
     postId: string;
     message: string;

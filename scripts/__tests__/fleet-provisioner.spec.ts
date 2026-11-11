@@ -8,22 +8,22 @@ import {
   buildFleetStateResponse,
   cloneRetryDelayMs,
   cloneRetryReady,
-  customerEnsureRetryReady,
-  consumeRecoveredCustomerRuntimeReset,
+  userEnsureRetryReady,
+  consumeRecoveredUserRuntimeReset,
   dashboardBridgeReady,
   cancelRemovedEviction,
-  createConfiguredBuilderAssignmentMatcher,
-  createConfiguredBuilderReconcileAdmission,
+  createConfiguredUserAssignmentMatcher,
+  createConfiguredUserReconcileAdmission,
   createReconcileConvergenceHooks,
-  builderSourceOpenClawHeld,
-  createBuilderSurgeGateWiring,
+  userSourceOpenClawHeld,
+  createIsolatedSurgeGateWiring,
   createVerifyAttachPending,
   permanentConfigPatchRetryReady,
   createMountRefusalReader,
-  ensureCustomerCheckoutsOnly,
+  ensureUserCheckoutsOnly,
   NEEDS_FULL_ATTACH_FINGERPRINT,
-  evictLocalCustomer,
-  evictLocalCustomerIfStillUndesired,
+  evictLocalUser,
+  evictLocalUserIfStillUndesired,
   finalizeConvergedMount,
   pendingCloneAppliedFingerprint,
   pendingCloneOnlyStale,
@@ -33,7 +33,7 @@ import {
   getMountObservedSlugs,
   probeSurgeReadiness,
   probeOpenClawRuntimeReady,
-  reconcileAddCustomerOptions,
+  reconcileAddUserOptions,
   resolveFleetCapabilities,
   runProvisioningWork,
   waitForBrokerProfilesSettled,
@@ -41,9 +41,9 @@ import {
   waitForOpenClawHealthz,
 } from "../lib/fleet-provisioner.js";
 import {
-  addCustomerToGateway,
-  type CustomerLifecycleAdapter,
-} from "../lib/customer-lifecycle.js";
+  addUserToGateway,
+  type UserLifecycleAdapter,
+} from "../lib/user-lifecycle.js";
 import { createSurgeOpenClawProcessGate } from "../lib/surge-openclaw-process-gate.js";
 import type {
   SurgeOpenClawProcessGateState,
@@ -57,12 +57,12 @@ import { startAfterSurgeReadiness } from "../lib/surge-reconcile-gate.js";
 import {
   _resetMigratingInProcessPinsForTests,
   isMigratingInPinned,
-  listLocalCustomerDirs,
+  listLocalUserDirs,
   writeMigratingInPin,
-} from "../lib/local-coach-wired.js";
-import { stubBuilderClaim } from "./helpers/builder-claim.js";
-import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-adapter.js";
-import { builderClaimFromIdentity, markBuilderClaimOverlayApplied, writeBuilderClaim } from "@octogee/shared/server/builder-claim";
+} from "../lib/local-default-agent-wired.js";
+import { stubUserClaim } from "./helpers/user-claim.js";
+import { buildBrokeredLifecycleAdapter } from "../lib/user-lifecycle-broker-adapter.js";
+import { userClaimFromIdentity, markUserClaimOverlayApplied, writeUserClaim } from "@octogee/shared/server/user-claim";
 
 const tmpDirs: string[] = [];
 
@@ -82,7 +82,7 @@ function recoveredSnapshot(overrides: Record<string, unknown> = {}) {
       uid: "uid-alice",
       slug: "alice",
       operationId: "recover-alice-7",
-      sourceGatewayId: "alice-builder",
+      sourceGatewayId: "alice-user",
       targetGatewayId: "shared-a",
       generation: 8,
       disposableLeaseId: "lease-alice",
@@ -93,7 +93,7 @@ function recoveredSnapshot(overrides: Record<string, unknown> = {}) {
   } as never;
 }
 
-describe("recovered customer runtime reset — mount admission", () => {
+describe("recovered user runtime reset — mount admission", () => {
   it("resets before acknowledging the exact pending marker", async () => {
     const events: string[] = [];
     const reset = vi.fn(() => {
@@ -108,7 +108,7 @@ describe("recovered customer runtime reset — mount admission", () => {
       events.push("ack");
     });
 
-    await expect(consumeRecoveredCustomerRuntimeReset({
+    await expect(consumeRecoveredUserRuntimeReset({
       gatewayId: "shared-a",
       uid: "uid-alice",
       slug: "alice",
@@ -125,7 +125,7 @@ describe("recovered customer runtime reset — mount admission", () => {
   it("does nothing on an ordinary add without a recovery marker", async () => {
     const reset = vi.fn();
     const acknowledge = vi.fn();
-    await expect(consumeRecoveredCustomerRuntimeReset({
+    await expect(consumeRecoveredUserRuntimeReset({
       gatewayId: "shared-a",
       uid: "uid-alice",
       slug: "alice",
@@ -140,7 +140,7 @@ describe("recovered customer runtime reset — mount admission", () => {
 
   it("fails closed and leaves acknowledgement pending when reset fails", async () => {
     const acknowledge = vi.fn();
-    await expect(consumeRecoveredCustomerRuntimeReset({
+    await expect(consumeRecoveredUserRuntimeReset({
       gatewayId: "shared-a",
       uid: "uid-alice",
       slug: "alice",
@@ -157,7 +157,7 @@ describe("recovered customer runtime reset — mount admission", () => {
   it("rejects a changed target identity before touching local state", async () => {
     const reset = vi.fn();
     const acknowledge = vi.fn();
-    await expect(consumeRecoveredCustomerRuntimeReset({
+    await expect(consumeRecoveredUserRuntimeReset({
       gatewayId: "shared-b",
       uid: "uid-alice",
       slug: "alice",
@@ -208,7 +208,7 @@ describe("settleConvergence — the applied-fingerprint gate", () => {
     expect(() => settleConvergence(pending(["camp"]), h)).toThrow(/camp/);
   });
 
-  it("parks the customer on the pending-clone marker and schedules a backed-off retry while a checkout is absent", () => {
+  it("parks the user on the pending-clone marker and schedules a backed-off retry while a checkout is absent", () => {
     const h = hooks();
     expect(() => settleConvergence(pending(["camp"]), h)).toThrow();
     expect(h.recordApplied).toHaveBeenCalledWith(
@@ -232,7 +232,7 @@ describe("settleConvergence — the applied-fingerprint gate", () => {
     expect(pendingCloneOnlyStale(undefined, "fp1")).toBe(false);
   });
 
-  it("records the post-attach fingerprint instead of relaunching a newly provisioned customer as stale", () => {
+  it("records the post-attach fingerprint instead of relaunching a newly provisioned user as stale", () => {
     const h = hooks();
     settleConvergence(
       {
@@ -262,7 +262,7 @@ describe("finalizeConvergedMount — the durable mount boundary", () => {
   it.each([undefined, ""])("retains prior retry state %s when fingerprint persistence fails", (previous) => {
     const appliedFp = new Map<string, string>(previous === undefined ? [] : [["alice", previous]]);
     const hooks = createReconcileConvergenceHooks({
-      customerSource: async () => new Map([["alice", { fingerprint: "new-fp", lane: "move" as const }]]),
+      userSource: async () => new Map([["alice", { fingerprint: "new-fp", lane: "move" as const }]]),
       appliedFp,
       cloneRetry: new Map(),
       persistAppliedFp: () => { throw new Error("fingerprint disk unavailable"); },
@@ -332,13 +332,13 @@ describe("finalizeConvergedMount — the durable mount boundary", () => {
   });
 });
 
-describe("ensureCustomerCheckoutsOnly — the pending-clone retry lane", () => {
+describe("ensureUserCheckoutsOnly — the pending-clone retry lane", () => {
   const adapterWith = (overrides: Record<string, unknown>) => ({
     log: vi.fn(),
     listProjectsNeedingClone: vi.fn(async () => []),
     cloneProjectRepo: vi.fn(async () => true),
     ...overrides,
-  }) as unknown as CustomerLifecycleAdapter;
+  }) as unknown as UserLifecycleAdapter;
 
   it("routes the next converge to a full attach once the checkout lands, so the held-out project agent gets wired", async () => {
     const adapter = adapterWith({
@@ -350,7 +350,7 @@ describe("ensureCustomerCheckoutsOnly — the pending-clone retry lane", () => {
       forgetRetry: vi.fn(),
     };
 
-    const outcome = await ensureCustomerCheckoutsOnly(
+    const outcome = await ensureUserCheckoutsOnly(
       adapter,
       { now: 1_000, slug: "alice", desiredFingerprint: "fp1", prior: undefined },
       hooks,
@@ -374,7 +374,7 @@ describe("ensureCustomerCheckoutsOnly — the pending-clone retry lane", () => {
       forgetRetry: vi.fn(),
     };
 
-    await expect(ensureCustomerCheckoutsOnly(
+    await expect(ensureUserCheckoutsOnly(
       adapter,
       {
         now: 1_000,
@@ -450,10 +450,10 @@ describe("selectStableContentStale", () => {
   });
 });
 
-describe("reconcileAddCustomerOptions", () => {
+describe("reconcileAddUserOptions", () => {
   it("forces the full lifecycle path when snapshot fingerprints drive convergence", () => {
-    expect(reconcileAddCustomerOptions(true)).toEqual({ convergeContent: true });
-    expect(reconcileAddCustomerOptions(false)).toEqual({});
+    expect(reconcileAddUserOptions(true)).toEqual({ convergeContent: true });
+    expect(reconcileAddUserOptions(false)).toEqual({});
   });
 });
 
@@ -462,7 +462,7 @@ describe("cloneRetryReady — holds a stranded slug off the hot path between att
     expect(cloneRetryReady(undefined, "fp1", 1_000)).toBe(true);
   });
 
-  it("waits out the backoff, so a wedged checkout cannot re-ensure the customer every 15s", () => {
+  it("waits out the backoff, so a wedged checkout cannot re-ensure the user every 15s", () => {
     const prior = { attempts: 2, nextAt: 5_000, fingerprint: "fp1" };
     expect(cloneRetryReady(prior, "fp1", 4_999)).toBe(false);
     expect(cloneRetryReady(prior, "fp1", 5_000)).toBe(true);
@@ -474,11 +474,11 @@ describe("cloneRetryReady — holds a stranded slug off the hot path between att
   });
 });
 
-describe("customerEnsureRetryReady", () => {
+describe("userEnsureRetryReady", () => {
   const pendingClone = { attempts: 1, nextAt: 5_000, fingerprint: "fp1" };
 
   it("does not retry a quiescing source even when a new channel changes its fingerprint", () => {
-    expect(customerEnsureRetryReady({
+    expect(userEnsureRetryReady({
       ensureAllowed: false,
       cloneRetry: pendingClone,
       desiredFingerprint: "new-empty-channel",
@@ -487,8 +487,8 @@ describe("customerEnsureRetryReady", () => {
     })).toBe(false);
   });
 
-  it("holds a cold or unmounted customer until its project-clone backoff expires", () => {
-    expect(customerEnsureRetryReady({
+  it("holds a cold or unmounted user until its project-clone backoff expires", () => {
+    expect(userEnsureRetryReady({
       ensureAllowed: true,
       cloneRetry: pendingClone,
       desiredFingerprint: "fp1",
@@ -497,8 +497,8 @@ describe("customerEnsureRetryReady", () => {
     })).toBe(false);
   });
 
-  it("bypasses clone backoff immediately when the desired customer fingerprint changes", () => {
-    expect(customerEnsureRetryReady({
+  it("bypasses clone backoff immediately when the desired user fingerprint changes", () => {
+    expect(userEnsureRetryReady({
       ensureAllowed: true,
       cloneRetry: pendingClone,
       desiredFingerprint: "fp2",
@@ -507,8 +507,8 @@ describe("customerEnsureRetryReady", () => {
     })).toBe(true);
   });
 
-  it("holds the failing customer until its config-patch retry is due", () => {
-    expect(customerEnsureRetryReady({
+  it("holds the failing user until its config-patch retry is due", () => {
+    expect(userEnsureRetryReady({
       ensureAllowed: true,
       cloneRetry: undefined,
       desiredFingerprint: "fp1",
@@ -526,8 +526,8 @@ describe("permanentConfigPatchRetryReady", () => {
   });
 
   it("holds an unchanged invalid patch and immediately re-enables it for a changed desired fingerprint", () => {
-    const unchanged = "customer-fp1";
-    const changed = "customer-fp2";
+    const unchanged = "user-fp1";
+    const changed = "user-fp2";
     expect(permanentConfigPatchRetryReady({ fingerprint: unchanged, nextAt: 60_000, reason: "invalid patch" }, unchanged, 0)).toBe(false);
     expect(permanentConfigPatchRetryReady({ fingerprint: unchanged, nextAt: 60_000, reason: "invalid patch" }, changed, 0)).toBe(true);
   });
@@ -539,12 +539,12 @@ describe("createMountRefusalReader", () => {
     const appliedFingerprints = new Map<string, string>();
     if (input.applied !== undefined) {
       createReconcileConvergenceHooks({
-        customerSource: async () => new Map(), appliedFp: appliedFingerprints, cloneRetry: new Map(), persistAppliedFp: () => undefined,
+        userSource: async () => new Map(), appliedFp: appliedFingerprints, cloneRetry: new Map(), persistAppliedFp: () => undefined,
       }).recordApplied("alice", input.applied);
     }
     return createMountRefusalReader({
-      permanentConfigPatchRetry: new Map(input.refused === false ? [] : [["alice", { fingerprint: "customer-fp1", nextAt: 60_000, reason }]]),
-      desiredFingerprints: new Map([["alice", input.desired ?? "customer-fp1"]]),
+      permanentConfigPatchRetry: new Map(input.refused === false ? [] : [["alice", { fingerprint: "user-fp1", nextAt: 60_000, reason }]]),
+      desiredFingerprints: new Map([["alice", input.desired ?? "user-fp1"]]),
       appliedFingerprints,
     });
   }
@@ -554,7 +554,7 @@ describe("createMountRefusalReader", () => {
   });
 
   it("reports nothing once the desired fingerprint moved past the refused one", () => {
-    expect(reader({ desired: "customer-fp2" })("alice")).toBeNull();
+    expect(reader({ desired: "user-fp2" })("alice")).toBeNull();
   });
 
   it("reports an unconverged refusal when nothing was ever applied", () => {
@@ -566,17 +566,17 @@ describe("createMountRefusalReader", () => {
   });
 
   it("reports a converged refusal when an earlier configuration applied", () => {
-    expect(reader({ applied: "customer-fp0" })("alice")).toEqual({ reason, converged: true });
+    expect(reader({ applied: "user-fp0" })("alice")).toEqual({ reason, converged: true });
   });
 });
 
-function mkObservedAdapter(over: Partial<CustomerLifecycleAdapter>): CustomerLifecycleAdapter {
+function mkObservedAdapter(over: Partial<UserLifecycleAdapter>): UserLifecycleAdapter {
   return {
-    hasCustomerAgentRuntime: () => true,
+    hasUserAgentRuntime: () => true,
     hasWorkspaceGitDir: () => true,
     hasGitRemote: () => true,
     ...over,
-  } as CustomerLifecycleAdapter;
+  } as UserLifecycleAdapter;
 }
 
 function createProvisioningCounter(): {
@@ -608,11 +608,11 @@ function createProvisioningCounter(): {
   };
 }
 
-function configuredBuilderLifecycleAdapter(input: {
+function configuredUserLifecycleAdapter(input: {
   cloneWorkspaceRepo?: () => Promise<boolean>;
   writeMountMarker?: () => void;
   registerKey?: () => Promise<void>;
-} = {}): { adapter: CustomerLifecycleAdapter; calls: string[] } {
+} = {}): { adapter: UserLifecycleAdapter; calls: string[] } {
   const calls: string[] = [];
   let customerDir = false;
   let workspaceGitDir = false;
@@ -622,24 +622,24 @@ function configuredBuilderLifecycleAdapter(input: {
   const adapter = {
     listProjectsNeedingClone: vi.fn(async () => []),
     log: () => undefined,
-    isBuilderGateway: () => true,
-    isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
-    configuredBuilderOverlayPresent: () => true,
-    uidForSlug: async () => "uid-builder",
+    isIsolatedGateway: () => true,
+    isConfiguredUser: (slug: string) => slug === "ceckert-test",
+    configuredUserOverlayPresent: () => true,
+    uidForSlug: async () => "uid-user",
     loadUserSnapshot: async () => ({
-      uid: "uid-builder",
+      uid: "uid-user",
       slug: "ceckert-test",
       tier: "trial",
-      gatewayId: "gw-builder",
+      gatewayId: "gw-user",
       status: "complete" as const,
       agentIds: [],
       repoUrl: "http://gitea/octogee/ceckert-test-workspace",
       mattermostUserId: null,
       channels: [],
-      ownerName: "Builder",
+      ownerName: "User",
     }),
-    hasCustomerSshKey: () => true,
-    readLocalCustomerPubKey: () => "ssh-pubkey",
+    hasUserSshKey: () => true,
+    readLocalUserPubKey: () => "ssh-pubkey",
     restoreByosubForAgent: async () => {
       calls.push("restore-byosub");
       return { restored: false, present: false };
@@ -651,7 +651,7 @@ function configuredBuilderLifecycleAdapter(input: {
         await input.registerKey?.();
       },
     },
-    hasCustomerDir: () => customerDir,
+    hasUserDir: () => customerDir,
     hasWorkspaceGitDir: () => workspaceGitDir,
     hasGitRemote: () => gitRemote,
     cloneWorkspaceRepo: async () => {
@@ -664,54 +664,54 @@ function configuredBuilderLifecycleAdapter(input: {
       }
       return cloned;
     },
-    ensureCustomerDirectories: () => {
-      calls.push("ensure-customer-directories");
+    ensureUserDirectories: () => {
+      calls.push("ensure-user-directories");
       customerDir = true;
     },
-    writeCustomerTemplateFiles: async () => {
-      calls.push("write-customer-template-files");
+    writeUserTemplateFiles: async () => {
+      calls.push("write-user-template-files");
     },
-    customerCoachWiredInOpenclawConfig: () => false,
+    userDefaultAgentWiredInOpenclawConfig: () => false,
     writeMountMarker: () => {
       calls.push("mount-marker");
       mountMarked = true;
       input.writeMountMarker?.();
     },
-    customerMountMarked: () => mountMarked,
-    listLocalCustomerSlugs: () => mountMarked ? ["ceckert-test"] : [],
-  } as unknown as CustomerLifecycleAdapter;
+    userMountMarked: () => mountMarked,
+    listLocalUserSlugs: () => mountMarked ? ["ceckert-test"] : [],
+  } as unknown as UserLifecycleAdapter;
   return { adapter, calls };
 }
 
-describe("configured Builder surge release", () => {
-  it("matches configured Builder ownership against the authoritative desired roster", async () => {
-    const readDesiredCustomers = vi.fn(async () => new Map([
-      ["ceckert-test", { uid: "uid-builder", fingerprint: "fingerprint", lane: "move" as const, ensureAllowed: true }],
+describe("configured user surge release", () => {
+  it("matches configured user ownership against the authoritative desired roster", async () => {
+    const readDesiredUsers = vi.fn(async () => new Map([
+      ["ceckert-test", { uid: "uid-user", fingerprint: "fingerprint", lane: "move" as const, ensureAllowed: true }],
     ]));
-    const matches = createConfiguredBuilderAssignmentMatcher({
-      readDesiredCustomers,
+    const matches = createConfiguredUserAssignmentMatcher({
+      readDesiredUsers,
     });
 
     await expect(matches("ceckert-test")).resolves.toBe(true);
-    await expect(matches("other-builder")).resolves.toBe(false);
-    expect(readDesiredCustomers).toHaveBeenCalledTimes(2);
+    await expect(matches("other-user")).resolves.toBe(false);
+    expect(readDesiredUsers).toHaveBeenCalledTimes(2);
   });
 
   it("keeps an unassigned prelaunch empty until canonical migration reserves it", async () => {
-    stubBuilderClaim("ceckert-test");
+    stubUserClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       let mounted = false;
       const events: string[] = [];
       const adapter = {
-        isBuilderGateway: () => true,
-        isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
-        configuredBuilderOverlayPresent: () => true,
-        listLocalCustomerSlugs: () => mounted ? ["ceckert-test"] : [],
-        customerMountMarked: () => mounted,
+        isIsolatedGateway: () => true,
+        isConfiguredUser: (slug: string) => slug === "ceckert-test",
+        configuredUserOverlayPresent: () => true,
+        listLocalUserSlugs: () => mounted ? ["ceckert-test"] : [],
+        userMountMarked: () => mounted,
         hasWorkspaceGitDir: () => true,
         hasGitRemote: () => true,
-      } as unknown as CustomerLifecycleAdapter;
+      } as unknown as UserLifecycleAdapter;
       let gateState: SurgeOpenClawProcessGateState = {
         version: 1,
         podUid: "target-pod",
@@ -761,7 +761,7 @@ describe("configured Builder surge release", () => {
         permitNormal: vi.fn(),
         holdNormal: vi.fn(),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
-      const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async () => {
+      const attachConfiguredUserBeforeOpenClaw = vi.fn(async () => {
         events.push("attach");
         mounted = true;
         return "ceckert-test";
@@ -771,7 +771,7 @@ describe("configured Builder surge release", () => {
           events.push("release");
         }),
       } as unknown as SurgeReadinessGate;
-      const wiring = createBuilderSurgeGateWiring({
+      const wiring = createIsolatedSurgeGateWiring({
         adapter,
         processGate,
         surgeReadiness,
@@ -781,27 +781,27 @@ describe("configured Builder surge release", () => {
         },
         log: () => undefined,
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
-        configuredBuilderAssigned: async () => false,
-        attachConfiguredBuilderBeforeOpenClaw,
+        configuredUserAssigned: async () => false,
+        attachConfiguredUserBeforeOpenClaw,
       });
       let assigned = false;
-      const reconcileAdmission = createConfiguredBuilderReconcileAdmission({
+      const reconcileAdmission = createConfiguredUserReconcileAdmission({
         processGate,
         hasServingAssignment: async () => assigned,
         log: () => undefined,
       });
 
       await expect(reconcileAdmission()).resolves.toBe(false);
-      expect(attachConfiguredBuilderBeforeOpenClaw).not.toHaveBeenCalled();
+      expect(attachConfiguredUserBeforeOpenClaw).not.toHaveBeenCalled();
       expect(vi.mocked(processGate.permitNormal)).not.toHaveBeenCalled();
       expect(vi.mocked(surgeReadiness.release)).not.toHaveBeenCalled();
 
       await wiring.reserveSurgeTarget({
-        migrationId: "mig-builder",
+        migrationId: "mig-user",
         slug: "ceckert-test",
       });
       await wiring.releaseSurgeReadiness({
-        migrationId: "mig-builder",
+        migrationId: "mig-user",
         targetPodUid: "target-pod",
       });
 
@@ -815,7 +815,7 @@ describe("configured Builder surge release", () => {
         "ready",
         "release-target",
       ]);
-      expect(attachConfiguredBuilderBeforeOpenClaw).toHaveBeenCalledTimes(1);
+      expect(attachConfiguredUserBeforeOpenClaw).toHaveBeenCalledTimes(1);
       await expect(reconcileAdmission()).resolves.toBe(false);
       assigned = true;
       await expect(reconcileAdmission()).resolves.toBe(true);
@@ -824,27 +824,27 @@ describe("configured Builder surge release", () => {
     }
   });
 
-  it("mounts the held imported tree before permitting OpenClaw and releases the target without waiting on its coach", async () => {
-    stubBuilderClaim("ceckert-test");
+  it("mounts the held imported tree before permitting OpenClaw and releases the target without waiting on its agent", async () => {
+    stubUserClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       const events: string[] = [];
       let mounted = false;
       const adapter = {
-        isBuilderGateway: () => true,
-        isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
-        configuredBuilderOverlayPresent: () => true,
-        listLocalCustomerSlugs: () => mounted ? ["ceckert-test"] : [],
-        customerMountMarked: () => mounted,
-        customerCoachWiredInOpenclawConfig: () => true,
+        isIsolatedGateway: () => true,
+        isConfiguredUser: (slug: string) => slug === "ceckert-test",
+        configuredUserOverlayPresent: () => true,
+        listLocalUserSlugs: () => mounted ? ["ceckert-test"] : [],
+        userMountMarked: () => mounted,
+        userDefaultAgentWiredInOpenclawConfig: () => true,
         waitForAccountHealthy: async () => {
           events.push("coach-health");
           return false;
         },
         hasWorkspaceGitDir: () => true,
         hasGitRemote: () => true,
-      } as unknown as CustomerLifecycleAdapter;
+      } as unknown as UserLifecycleAdapter;
       const processGate = {
         status: vi.fn(async () => {
           events.push("status");
@@ -854,7 +854,7 @@ describe("configured Builder surge release", () => {
             role: "target" as const,
             mode: "held" as const,
             phase: "held" as const,
-            migrationId: "mig-builder",
+            migrationId: "mig-user",
             slug: "ceckert-test",
             targetPodUid: "target-pod",
           };
@@ -867,7 +867,7 @@ describe("configured Builder surge release", () => {
             role: "target" as const,
             mode: "held" as const,
             phase: "completing" as const,
-            migrationId: "mig-builder",
+            migrationId: "mig-user",
             slug: "ceckert-test",
             targetPodUid: "target-pod",
           };
@@ -881,7 +881,7 @@ describe("configured Builder surge release", () => {
             role: "target" as const,
             mode: "permitted" as const,
             phase: "running" as const,
-            migrationId: "mig-builder",
+            migrationId: "mig-user",
             slug: "ceckert-test",
             targetPodUid: "target-pod",
           };
@@ -903,15 +903,15 @@ describe("configured Builder surge release", () => {
           events.push("release");
         }),
       } as unknown as SurgeReadinessGate;
-      const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async () => {
+      const attachConfiguredUserBeforeOpenClaw = vi.fn(async () => {
         events.push("attach");
         vi.setSystemTime(Date.now() + 5_000);
         mounted = true;
         return "ceckert-test";
       });
-      const configuredBuilderAssigned = vi.fn(async () => false);
+      const configuredUserAssigned = vi.fn(async () => false);
       const log = vi.fn();
-      const wiring = createBuilderSurgeGateWiring({
+      const wiring = createIsolatedSurgeGateWiring({
         adapter,
         processGate,
         surgeReadiness,
@@ -922,12 +922,12 @@ describe("configured Builder surge release", () => {
         },
         log,
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
-        configuredBuilderAssigned,
-        attachConfiguredBuilderBeforeOpenClaw,
+        configuredUserAssigned,
+        attachConfiguredUserBeforeOpenClaw,
       });
 
       await wiring.releaseSurgeReadiness({
-        migrationId: "mig-builder",
+        migrationId: "mig-user",
         targetPodUid: "target-pod",
       });
 
@@ -942,27 +942,27 @@ describe("configured Builder surge release", () => {
         "release-target",
       ]);
       expect(vi.mocked(processGate.permit)).toHaveBeenCalledWith({
-        migrationId: "mig-builder",
+        migrationId: "mig-user",
         slug: "ceckert-test",
         targetPodUid: "target-pod",
       });
       expect(vi.mocked(processGate.releaseTarget)).toHaveBeenCalledWith({
-        migrationId: "mig-builder",
+        migrationId: "mig-user",
         slug: "ceckert-test",
         targetPodUid: "target-pod",
       });
-      expect(configuredBuilderAssigned).not.toHaveBeenCalled();
+      expect(configuredUserAssigned).not.toHaveBeenCalled();
       expect(vi.mocked(surgeReadiness.release)).not.toHaveBeenCalled();
-      expect(log).toHaveBeenCalledWith("[surge-handoff] configured Builder OpenClaw ready 42000ms after permit: ceckert-test");
+      expect(log).toHaveBeenCalledWith("[surge-handoff] configured user OpenClaw ready 42000ms after permit: ceckert-test");
     } finally {
       vi.useRealTimers();
       vi.unstubAllEnvs();
     }
   });
 
-  it("does not reconcile a released-marker target until its Builder process gate is permitted", async () => {
+  it("does not reconcile a released-marker target until its user process gate is permitted", async () => {
     vi.useFakeTimers();
-    stubBuilderClaim("ceckert-test");
+    stubUserClaim("ceckert-test");
     try {
       let mode: "held" | "permitted" = "held";
       const logs: string[] = [];
@@ -973,12 +973,12 @@ describe("configured Builder surge release", () => {
           role: "target" as const,
           mode,
           phase: mode === "held" ? "held" as const : "running" as const,
-          migrationId: "mig-builder",
+          migrationId: "mig-user",
           slug: "ceckert-test",
           targetPodUid: "target-pod",
         })),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
-      const admission = createConfiguredBuilderReconcileAdmission({
+      const admission = createConfiguredUserReconcileAdmission({
         processGate,
         hasServingAssignment: async () => true,
         log: (message) => logs.push(message),
@@ -1026,7 +1026,7 @@ describe("configured Builder surge release", () => {
       expect(workspace).not.toHaveBeenCalled();
       expect(evict).not.toHaveBeenCalled();
       expect(logs).toContain(
-        "[surge-handoff] reconcile paused while configured Builder process gate is target/held",
+        "[surge-handoff] reconcile paused while configured user process gate is target/held",
       );
 
       mode = "permitted";
@@ -1043,9 +1043,9 @@ describe("configured Builder surge release", () => {
     }
   });
 
-  it("fails closed without repeating a Builder process-gate status error", async () => {
+  it("fails closed without repeating a user process-gate status error", async () => {
     const logs: string[] = [];
-    const admission = createConfiguredBuilderReconcileAdmission({
+    const admission = createConfiguredUserReconcileAdmission({
       hasServingAssignment: async () => true,
       processGate: {
         status: vi.fn(async () => {
@@ -1059,12 +1059,12 @@ describe("configured Builder surge release", () => {
     await expect(admission()).resolves.toBe(false);
 
     expect(logs).toEqual([
-      "[surge-handoff] reconcile paused while configured Builder process gate has status error: supervisor unavailable",
+      "[surge-handoff] reconcile paused while configured user process gate has status error: supervisor unavailable",
     ]);
   });
 
-  it("defers target release until an actual deadline-raced Builder clone settles", async () => {
-    stubBuilderClaim("ceckert-test");
+  it("defers target release until an actual deadline-raced user clone settles", async () => {
+    stubUserClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       const events: string[] = [];
@@ -1076,7 +1076,7 @@ describe("configured Builder surge release", () => {
       const cloneStartedPromise = new Promise<void>((resolve) => {
         cloneStarted = resolve;
       });
-      const { adapter, calls } = configuredBuilderLifecycleAdapter({
+      const { adapter, calls } = configuredUserLifecycleAdapter({
         cloneWorkspaceRepo: async () => {
           cloneStarted();
           await clone;
@@ -1086,7 +1086,7 @@ describe("configured Builder surge release", () => {
       const counter = createProvisioningCounter();
       const staleEnsure = runProvisioningWork({
         provisioning: counter.provisioning,
-        work: (onWorkSettled) => addCustomerToGateway(adapter, "uid-builder", {
+        work: (onWorkSettled) => addUserToGateway(adapter, "uid-user", {
           mountDeadlineMs: 25,
           onWorkSettled,
         }),
@@ -1106,7 +1106,7 @@ describe("configured Builder surge release", () => {
           role: "target" as const,
           mode: "held" as const,
           phase: "held" as const,
-          migrationId: "mig-builder",
+          migrationId: "mig-user",
           slug: "ceckert-test",
           targetPodUid: "target-pod",
         })),
@@ -1118,7 +1118,7 @@ describe("configured Builder surge release", () => {
             role: "target" as const,
             mode: "held" as const,
             phase: "completing" as const,
-            migrationId: "mig-builder",
+            migrationId: "mig-user",
             slug: "ceckert-test",
             targetPodUid: "target-pod",
           };
@@ -1131,7 +1131,7 @@ describe("configured Builder surge release", () => {
             role: "target" as const,
             mode: "permitted" as const,
             phase: "running" as const,
-            migrationId: "mig-builder",
+            migrationId: "mig-user",
             slug: "ceckert-test",
             targetPodUid: "target-pod",
           };
@@ -1149,12 +1149,12 @@ describe("configured Builder surge release", () => {
           };
         }),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
-      const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async (input: {
-        adapter: CustomerLifecycleAdapter;
+      const attachConfiguredUserBeforeOpenClaw = vi.fn(async (input: {
+        adapter: UserLifecycleAdapter;
         onWorkSettled?: (settled: Promise<void>) => void;
       }) => {
         events.push("attach");
-        await addCustomerToGateway(input.adapter, "uid-builder", {
+        await addUserToGateway(input.adapter, "uid-user", {
           onWorkSettled: input.onWorkSettled,
         });
         input.adapter.writeMountMarker?.("ceckert-test");
@@ -1165,7 +1165,7 @@ describe("configured Builder surge release", () => {
           events.push("release");
         }),
       } as unknown as SurgeReadinessGate;
-      const wiring = createBuilderSurgeGateWiring({
+      const wiring = createIsolatedSurgeGateWiring({
         adapter,
         processGate,
         surgeReadiness,
@@ -1177,15 +1177,15 @@ describe("configured Builder surge release", () => {
           releaseWaitStarted();
           return counter.waitForDrain();
         },
-        attachConfiguredBuilderBeforeOpenClaw,
+        attachConfiguredUserBeforeOpenClaw,
       });
       const released = wiring.releaseSurgeReadiness({
-        migrationId: "mig-builder",
+        migrationId: "mig-user",
         targetPodUid: "target-pod",
       });
       await releaseWaitStartedPromise;
 
-      expect(attachConfiguredBuilderBeforeOpenClaw).not.toHaveBeenCalled();
+      expect(attachConfiguredUserBeforeOpenClaw).not.toHaveBeenCalled();
       expect(vi.mocked(processGate.permit)).not.toHaveBeenCalled();
 
       releaseClone();
@@ -1193,8 +1193,8 @@ describe("configured Builder surge release", () => {
 
       expect(calls).toEqual([
         "clone-workspace",
-        "ensure-customer-directories",
-        "write-customer-template-files",
+        "ensure-user-directories",
+        "write-user-template-files",
         "restore-byosub",
         "mount-marker",
       ]);
@@ -1214,7 +1214,7 @@ describe("configured Builder surge release", () => {
   });
 
   it("holds reservation and release through the actual ensure stamp and marker tail", async () => {
-    stubBuilderClaim("ceckert-test");
+    stubUserClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       const events: string[] = [];
@@ -1226,19 +1226,19 @@ describe("configured Builder surge release", () => {
       const stampStartedPromise = new Promise<void>((resolve) => {
         stampStarted = resolve;
       });
-      const { adapter, calls } = configuredBuilderLifecycleAdapter({
+      const { adapter, calls } = configuredUserLifecycleAdapter({
         writeMountMarker: () => events.push("mount-marker"),
       });
       const counter = createProvisioningCounter();
       const ensuring = runProvisioningWork({
         provisioning: counter.provisioning,
         work: async (onWorkSettled) => {
-          const result = await addCustomerToGateway(adapter, "uid-builder", { onWorkSettled });
+          const result = await addUserToGateway(adapter, "uid-user", { onWorkSettled });
           await finalizeConvergedMount({
             now: 1_000,
             slug: "ceckert-test",
-            uid: "uid-builder",
-            desiredFingerprint: "fp-builder",
+            uid: "uid-user",
+            desiredFingerprint: "fp-user",
             prior: undefined,
             result,
             hooks: {
@@ -1264,7 +1264,7 @@ describe("configured Builder surge release", () => {
           role: "target" as const,
           mode: "held" as const,
           phase: "held" as const,
-          migrationId: "mig-builder",
+          migrationId: "mig-user",
           slug: "ceckert-test",
           targetPodUid: "target-pod",
         })),
@@ -1274,7 +1274,7 @@ describe("configured Builder surge release", () => {
           role: "target" as const,
           mode: "held" as const,
           phase: "held" as const,
-          migrationId: "mig-builder",
+          migrationId: "mig-user",
           slug: "ceckert-test",
           targetPodUid: "target-pod",
         })),
@@ -1286,7 +1286,7 @@ describe("configured Builder surge release", () => {
             role: "target" as const,
             mode: "held" as const,
             phase: "completing" as const,
-            migrationId: "mig-builder",
+            migrationId: "mig-user",
             slug: "ceckert-test",
             targetPodUid: "target-pod",
           };
@@ -1299,7 +1299,7 @@ describe("configured Builder surge release", () => {
             role: "target" as const,
             mode: "permitted" as const,
             phase: "running" as const,
-            migrationId: "mig-builder",
+            migrationId: "mig-user",
             slug: "ceckert-test",
             targetPodUid: "target-pod",
           };
@@ -1317,7 +1317,7 @@ describe("configured Builder surge release", () => {
           };
         }),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
-      const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async () => {
+      const attachConfiguredUserBeforeOpenClaw = vi.fn(async () => {
         events.push("attach");
         return "ceckert-test";
       });
@@ -1331,7 +1331,7 @@ describe("configured Builder surge release", () => {
       const bothInitialDrainsStartedPromise = new Promise<void>((resolve) => {
         bothInitialDrainsStarted = resolve;
       });
-      const wiring = createBuilderSurgeGateWiring({
+      const wiring = createIsolatedSurgeGateWiring({
         adapter,
         processGate,
         surgeReadiness,
@@ -1344,24 +1344,24 @@ describe("configured Builder surge release", () => {
           if (drainCalls === 2) bothInitialDrainsStarted();
           return counter.waitForDrain();
         },
-        attachConfiguredBuilderBeforeOpenClaw,
+        attachConfiguredUserBeforeOpenClaw,
       });
       let reserved = false;
       const reservation = wiring.reserveSurgeTarget({
-        migrationId: "mig-builder",
+        migrationId: "mig-user",
         slug: "ceckert-test",
       }).then(() => {
         reserved = true;
       });
       const released = wiring.releaseSurgeReadiness({
-        migrationId: "mig-builder",
+        migrationId: "mig-user",
         targetPodUid: "target-pod",
       });
       await bothInitialDrainsStartedPromise;
 
       expect(counter.active()).toBe(1);
       expect(calls).not.toContain("mount-marker");
-      expect(attachConfiguredBuilderBeforeOpenClaw).not.toHaveBeenCalled();
+      expect(attachConfiguredUserBeforeOpenClaw).not.toHaveBeenCalled();
       expect(vi.mocked(processGate.permit)).not.toHaveBeenCalled();
       expect(reserved).toBe(false);
 
@@ -1388,12 +1388,12 @@ describe("configured Builder surge release", () => {
   });
 
   it("does not mutate a target cancelled after its completion claim", async () => {
-    stubBuilderClaim("ceckert-test");
+    stubUserClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       const counter = createProvisioningCounter();
       const request = {
-        migrationId: "mig-builder",
+        migrationId: "mig-user",
         slug: "ceckert-test",
         targetPodUid: "target-pod",
       };
@@ -1440,17 +1440,17 @@ describe("configured Builder surge release", () => {
         permit: vi.fn(),
         hold: vi.fn(),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
-      const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async () => "ceckert-test");
-      const wiring = createBuilderSurgeGateWiring({
+      const attachConfiguredUserBeforeOpenClaw = vi.fn(async () => "ceckert-test");
+      const wiring = createIsolatedSurgeGateWiring({
         adapter: {
-          isBuilderGateway: () => true,
-          isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
-          configuredBuilderOverlayPresent: () => true,
-          listLocalCustomerSlugs: () => [],
-          customerMountMarked: () => false,
+          isIsolatedGateway: () => true,
+          isConfiguredUser: (slug: string) => slug === "ceckert-test",
+          configuredUserOverlayPresent: () => true,
+          listLocalUserSlugs: () => [],
+          userMountMarked: () => false,
           hasWorkspaceGitDir: () => true,
           hasGitRemote: () => true,
-        } as unknown as CustomerLifecycleAdapter,
+        } as unknown as UserLifecycleAdapter,
         processGate,
         surgeReadiness: { release: vi.fn(async () => undefined) } as unknown as SurgeReadinessGate,
         waitForGatewayHealthy: async () => undefined,
@@ -1458,7 +1458,7 @@ describe("configured Builder surge release", () => {
         log: () => undefined,
         provisioning: counter.provisioning,
         waitForActiveProvisioningDrain: counter.waitForDrain,
-        attachConfiguredBuilderBeforeOpenClaw,
+        attachConfiguredUserBeforeOpenClaw,
       });
 
       const release = wiring.releaseSurgeReadiness({
@@ -1474,7 +1474,7 @@ describe("configured Builder surge release", () => {
       await vi.waitFor(() => expect(state).toMatchObject({ role: "normal", mode: "held", phase: "held" }));
 
       expect(vi.mocked(processGate.claimTargetCompletion)).toHaveBeenCalledTimes(2);
-      expect(attachConfiguredBuilderBeforeOpenClaw).not.toHaveBeenCalled();
+      expect(attachConfiguredUserBeforeOpenClaw).not.toHaveBeenCalled();
       expect(vi.mocked(processGate.permit)).not.toHaveBeenCalled();
 
       await expect(wiring.reserveSurgeTarget({ migrationId: "mig-next", slug: request.slug })).resolves.toBeUndefined();
@@ -1489,12 +1489,12 @@ describe("configured Builder surge release", () => {
   });
 
   it("does not publish readiness when a matching hold finishes during post-permit verification", async () => {
-    stubBuilderClaim("ceckert-test");
+    stubUserClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       const counter = createProvisioningCounter();
       const request = {
-        migrationId: "mig-builder",
+        migrationId: "mig-user",
         slug: "ceckert-test",
         targetPodUid: "target-pod",
       };
@@ -1542,16 +1542,16 @@ describe("configured Builder surge release", () => {
         rehold: vi.fn(async () => state),
         hold: vi.fn(),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
-      const wiring = createBuilderSurgeGateWiring({
+      const wiring = createIsolatedSurgeGateWiring({
         adapter: {
-          isBuilderGateway: () => true,
-          isConfiguredBuilderCustomer: (slug: string) => slug === request.slug,
-          configuredBuilderOverlayPresent: () => true,
-          listLocalCustomerSlugs: () => mounted ? [request.slug] : [],
-          customerMountMarked: () => mounted,
+          isIsolatedGateway: () => true,
+          isConfiguredUser: (slug: string) => slug === request.slug,
+          configuredUserOverlayPresent: () => true,
+          listLocalUserSlugs: () => mounted ? [request.slug] : [],
+          userMountMarked: () => mounted,
           hasWorkspaceGitDir: () => true,
           hasGitRemote: () => true,
-        } as unknown as CustomerLifecycleAdapter,
+        } as unknown as UserLifecycleAdapter,
         processGate,
         surgeReadiness,
         waitForGatewayHealthy: async () => undefined,
@@ -1562,7 +1562,7 @@ describe("configured Builder surge release", () => {
         log: () => undefined,
         provisioning: counter.provisioning,
         waitForActiveProvisioningDrain: counter.waitForDrain,
-        attachConfiguredBuilderBeforeOpenClaw: async () => {
+        attachConfiguredUserBeforeOpenClaw: async () => {
           mounted = true;
           return request.slug;
         },
@@ -1602,9 +1602,9 @@ describe("configured Builder surge release", () => {
   });
 
   it.each(["podUid", "targetPodUid", "migrationId", "slug"] as const)("does not preserve a failed target with mismatched %s", async field => {
-    stubBuilderClaim("ceckert-test");
+    stubUserClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
-    const request = { migrationId: "mig-builder", slug: "ceckert-test", targetPodUid: "target-pod" };
+    const request = { migrationId: "mig-user", slug: "ceckert-test", targetPodUid: "target-pod" };
     const initial: SurgeOpenClawProcessGateState = { version: 1, podUid: "target-pod", role: "target", mode: "held", phase: "held", ...request };
     let state = initial;
     const processGate = {
@@ -1612,12 +1612,12 @@ describe("configured Builder surge release", () => {
       claimTargetCompletion: async () => state,
       rehold: vi.fn(async () => { throw new Error("reservation identity changed"); }),
     } as unknown as SurgeOpenClawProcessSupervisorClient;
-    const { adapter } = configuredBuilderLifecycleAdapter();
-    const wiring = createBuilderSurgeGateWiring({
+    const { adapter } = configuredUserLifecycleAdapter();
+    const wiring = createIsolatedSurgeGateWiring({
       adapter, processGate, surgeReadiness: {} as SurgeReadinessGate,
       waitForGatewayHealthy: async () => undefined, waitForGatewayReady: async () => undefined,
       log: () => undefined, provisioning: createProvisioningCounter().provisioning,
-      attachConfiguredBuilderBeforeOpenClaw: async () => {
+      attachConfiguredUserBeforeOpenClaw: async () => {
         state = { ...initial, [field]: "different" };
         throw new Error("attach failed");
       },
@@ -1629,12 +1629,12 @@ describe("configured Builder surge release", () => {
   });
 
   it("finishes explicit cancellation while failure cleanup is already finalizing", async () => {
-    stubBuilderClaim("ceckert-test");
+    stubUserClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-cancel-"));
     tmpDirs.push(dir);
     const gate = createSurgeOpenClawProcessGate(dir);
-    const request = { migrationId: "mig-builder", slug: "ceckert-test", targetPodUid: "target-pod" };
+    const request = { migrationId: "mig-user", slug: "ceckert-test", targetPodUid: "target-pod" };
     const identity = { ...request, podUid: request.targetPodUid };
     const finish = Promise.withResolvers<void>();
     let finalization: Promise<SurgeOpenClawProcessGateState> | undefined;
@@ -1655,15 +1655,15 @@ describe("configured Builder surge release", () => {
         },
         unreserve: () => gate.unreserveTarget(identity),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
-      const { adapter } = configuredBuilderLifecycleAdapter();
-      const wiring = createBuilderSurgeGateWiring({
+      const { adapter } = configuredUserLifecycleAdapter();
+      const wiring = createIsolatedSurgeGateWiring({
         adapter, processGate,
         surgeReadiness: {} as SurgeReadinessGate,
         waitForGatewayHealthy: async () => undefined,
         waitForGatewayReady: async () => undefined,
         log: () => undefined,
         provisioning: createProvisioningCounter().provisioning,
-        attachConfiguredBuilderBeforeOpenClaw: async () => { throw new Error("write EPIPE"); },
+        attachConfiguredUserBeforeOpenClaw: async () => { throw new Error("write EPIPE"); },
       });
 
       await expect(wiring.releaseSurgeReadiness(request)).rejects.toThrow("write EPIPE");
@@ -1681,7 +1681,7 @@ describe("configured Builder surge release", () => {
   });
 
   it.each(["success", "retry", "cleanup-failed", "hold-lost", "assigned", "assigned-after-drain", "residue", "warm", "warm-replay", "released", "prelaunch-failed"] as const)("keeps exact cancellation custody through imported cleanup: %s", async scenario => {
-    stubBuilderClaim("ceckert-test");
+    stubUserClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     const request = { migrationId: "cleanup-op", slug: "ceckert-test", targetPodUid: "target-pod" };
     let state: SurgeOpenClawProcessGateState = { version: 1, podUid: "target-pod", role: "target", mode: "permitted", phase: "running", ...request };
@@ -1707,15 +1707,15 @@ describe("configured Builder surge release", () => {
       if (scenario === "hold-lost") state = { ...state, mode: "permitted", phase: "running" };
     });
     try {
-      const wiring = createBuilderSurgeGateWiring({ adapter: {} as CustomerLifecycleAdapter, processGate,
+      const wiring = createIsolatedSurgeGateWiring({ adapter: {} as UserLifecycleAdapter, processGate,
         surgeReadiness: { release: vi.fn(async () => undefined) } as unknown as SurgeReadinessGate,
         waitForGatewayHealthy: async () => undefined, waitForGatewayReady: async () => undefined,
         log: () => undefined, provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
         waitForActiveProvisioningDrain: async () => { events.push("drain"); },
-        configuredBuilderAssigned: async () => scenario === "assigned" || (scenario === "assigned-after-drain" && events.includes("drain")),
-        prepareBuilderPrelaunch: async (slug) => {
+        configuredUserAssigned: async () => scenario === "assigned" || (scenario === "assigned-after-drain" && events.includes("drain")),
+        prepareIsolatedPrelaunch: async (slug) => {
           if (openClawRuntimeUpdateGuard.tryRun(async () => undefined) !== undefined) throw new Error("prelaunch config written outside the runtime update guard");
-          if (scenario === "prelaunch-failed") throw new Error("Builder prelaunch requires its accepted system config");
+          if (scenario === "prelaunch-failed") throw new Error("Isolated prelaunch requires its accepted system config");
           events.push(`prelaunch:${slug}`);
         },
       });
@@ -1728,7 +1728,7 @@ describe("configured Builder surge release", () => {
           expect(events).toEqual(["stop", "drain", "cleanup", "finalize", "restop", "drain", "cleanup", "finalize"]);
         }
       } else if (scenario === "prelaunch-failed") {
-        await expect(cancel).rejects.toThrow("Builder prelaunch requires its accepted system config");
+        await expect(cancel).rejects.toThrow("Isolated prelaunch requires its accepted system config");
         expect(state).toMatchObject({ role: "normal", mode: "held", terminalTarget: request });
         expect(processGate.permitNormal).not.toHaveBeenCalled();
       } else if (warm) {
@@ -1759,12 +1759,12 @@ describe("configured Builder surge release", () => {
   });
 
   it("reholds, drains, and finalizes a permitted target unreserve without raw fallback", async () => {
-    stubBuilderClaim("ceckert-test");
+    stubUserClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       const counter = createProvisioningCounter();
       const request = {
-        migrationId: "mig-builder",
+        migrationId: "mig-user",
         slug: "ceckert-test",
         targetPodUid: "target-pod",
       };
@@ -1796,8 +1796,8 @@ describe("configured Builder surge release", () => {
           throw new Error("raw unreserve must not handle a matching permitted target");
         }),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
-      const wiring = createBuilderSurgeGateWiring({
-        adapter: {} as CustomerLifecycleAdapter,
+      const wiring = createIsolatedSurgeGateWiring({
+        adapter: {} as UserLifecycleAdapter,
         processGate,
         surgeReadiness: { release: vi.fn(async () => undefined) } as unknown as SurgeReadinessGate,
         waitForGatewayHealthy: async () => undefined,
@@ -1838,13 +1838,13 @@ describe("configured Builder surge release", () => {
     ["held while still stopping", { mode: "held", phase: "stopping" }, "still stopping"],
     ["reserved by another migration", { mode: "held", phase: "held", migrationId: "activation-2" }, "not reserved by this migration"],
     ["no longer a target", { mode: "held", phase: "held", role: "normal" }, "not reserved by this migration"],
-  ] as const)("reports whether a reserved Builder target's OpenClaw is held for this boot: %s", async (_label, gate, expected) => {
+  ] as const)("reports whether a reserved isolated target's OpenClaw is held for this boot: %s", async (_label, gate, expected) => {
     const request = { migrationId: "activation-1", slug: "chris", targetPodUid: "target-pod" };
     const processGate = {
       status: vi.fn(async () => ({ version: 1, podUid: "target-pod", role: "target", ...request, ...gate })),
     } as unknown as SurgeOpenClawProcessSupervisorClient;
-    const wiring = createBuilderSurgeGateWiring({
-      adapter: {} as CustomerLifecycleAdapter, processGate,
+    const wiring = createIsolatedSurgeGateWiring({
+      adapter: {} as UserLifecycleAdapter, processGate,
       surgeReadiness: {} as SurgeReadinessGate,
       waitForGatewayHealthy: async () => undefined,
       waitForGatewayReady: async () => undefined, log: () => undefined,
@@ -1863,20 +1863,20 @@ describe("configured Builder surge release", () => {
     ["resumed after a rollback", { role: "source", mode: "permitted", phase: "starting" }, false],
     ["held while still stopping", { role: "source", mode: "held", phase: "stopping" }, "still stopping"],
     ["held by another migration", { role: "source", mode: "held", phase: "held", migrationId: "surge-2" }, "held by another migration"],
-  ] as const)("reports whether a Builder source's OpenClaw is held for this migration: %s", async (_label, gate, expected) => {
+  ] as const)("reports whether a user source's OpenClaw is held for this migration: %s", async (_label, gate, expected) => {
     const request = { migrationId: "surge-1", slug: "chris" };
     const processGate = {
       status: vi.fn(async () => ({ version: 1, podUid: "source-pod", targetPodUid: "target-pod", ...request, ...gate })),
     } as unknown as SurgeOpenClawProcessSupervisorClient;
     if (typeof expected === "string") {
-      await expect(builderSourceOpenClawHeld(processGate, request)).rejects.toThrow(expected);
+      await expect(userSourceOpenClawHeld(processGate, request)).rejects.toThrow(expected);
     } else {
-      await expect(builderSourceOpenClawHeld(processGate, request)).resolves.toBe(expected);
+      await expect(userSourceOpenClawHeld(processGate, request)).resolves.toBe(expected);
     }
   });
 
   it("reports a gateway without a process gate as never holding a source", async () => {
-    await expect(builderSourceOpenClawHeld(null, { migrationId: "shared-move", slug: "chris" })).resolves.toBe(false);
+    await expect(userSourceOpenClawHeld(null, { migrationId: "shared-move", slug: "chris" })).resolves.toBe(false);
   });
 
   it.each([
@@ -1886,13 +1886,13 @@ describe("configured Builder surge release", () => {
     ["held fresh boot", { role: "normal", mode: "held", phase: "held" }, false],
     ["reserved held target", { role: "target", mode: "held", phase: "held", migrationId: "activation-1", slug: "chris", targetPodUid: "target-pod" }, false],
     ["permitted held-path target", { role: "target", mode: "permitted", phase: "running", migrationId: "activation-1", slug: "chris", targetPodUid: "target-pod" }, false],
-  ] as const)("classifies a Builder target as live only when its OpenClaw already runs outside this migration: %s", async (_label, gate, expected) => {
+  ] as const)("classifies a isolated target as live only when its OpenClaw already runs outside this migration: %s", async (_label, gate, expected) => {
     const request = { migrationId: "activation-1", slug: "chris", targetPodUid: "target-pod" };
     const processGate = {
       status: vi.fn(async () => ({ version: 1, podUid: "target-pod", ...gate })),
     } as unknown as SurgeOpenClawProcessSupervisorClient;
-    const wiring = createBuilderSurgeGateWiring({
-      adapter: {} as CustomerLifecycleAdapter, processGate,
+    const wiring = createIsolatedSurgeGateWiring({
+      adapter: {} as UserLifecycleAdapter, processGate,
       surgeReadiness: {} as SurgeReadinessGate,
       waitForGatewayHealthy: async () => undefined,
       waitForGatewayReady: async () => undefined, log: () => undefined,
@@ -1908,9 +1908,9 @@ describe("configured Builder surge release", () => {
     ["held", { mode: "held", phase: "held" }, "not a live permitted OpenClaw on this pod"],
     ["readiness held", { readinessReleased: false }, "requires released readiness"],
     ["overlay missing", { overlayPresent: false }, "requires its retained overlay"],
-    ["customer mounted", { mounted: true }, "already mounts its customer"],
-  ] as const)("admits a live Builder import only for a running, Ready, unmounted retained overlay: %s", async (_label, variant, expected) => {
-    stubBuilderClaim("chris");
+    ["user mounted", { mounted: true }, "already mounts its user"],
+  ] as const)("admits a live user import only for a running, Ready, unmounted retained overlay: %s", async (_label, variant, expected) => {
+    stubUserClaim("chris");
     try {
       const { readinessReleased = true, overlayPresent = true, mounted = false, ...gate } = variant as Record<string, unknown>;
       const request = { migrationId: "activation-1", slug: "chris", targetPodUid: "target-pod" };
@@ -1918,17 +1918,17 @@ describe("configured Builder surge release", () => {
         status: vi.fn(async () => ({ version: 1, podUid: "target-pod", role: "normal", mode: "permitted", phase: "running", ...gate })),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
       const adapter = {
-        isBuilderGateway: () => true,
-        isConfiguredBuilderCustomer: (slug: string) => slug === "chris",
-        configuredBuilderOverlayPresent: () => overlayPresent,
-        listLocalCustomerSlugs: () => ["chris"],
-        hasCustomerAgentRuntime: () => true,
-        hasCustomerDir: () => true,
+        isIsolatedGateway: () => true,
+        isConfiguredUser: (slug: string) => slug === "chris",
+        configuredUserOverlayPresent: () => overlayPresent,
+        listLocalUserSlugs: () => ["chris"],
+        hasUserAgentRuntime: () => true,
+        hasUserDir: () => true,
         hasWorkspaceGitDir: () => true,
         hasGitRemote: () => true,
-        customerMountMarked: () => mounted,
-      } as unknown as CustomerLifecycleAdapter;
-      const wiring = createBuilderSurgeGateWiring({
+        userMountMarked: () => mounted,
+      } as unknown as UserLifecycleAdapter;
+      const wiring = createIsolatedSurgeGateWiring({
         adapter, processGate,
         surgeReadiness: { released: vi.fn(async () => readinessReleased) } as unknown as SurgeReadinessGate,
         waitForGatewayHealthy: async () => undefined,
@@ -1945,27 +1945,27 @@ describe("configured Builder surge release", () => {
     }
   });
 
-  it("admits a claimed Builder live only once its claim overlay is stamped", async () => {
-    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-claimed-builder-"));
+  it("admits a claimed user live only once its claim overlay is stamped", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-claimed-user-"));
     tmpDirs.push(openclawDir);
     vi.stubEnv("OPENCLAW_DIR", openclawDir);
     vi.stubEnv("GATEWAY_ID", "b-chris");
     vi.stubEnv("GATEWAY_CLASS", "builder");
     try {
-      writeBuilderClaim(openclawDir, builderClaimFromIdentity({
+      writeUserClaim(openclawDir, userClaimFromIdentity({
         gatewayId: "b-chris", state: "claimed", ownerUid: "uid-chris", builderSlug: "chris",
         leaseId: "lease-1", generation: 2,
       }, 1));
       const brokered = buildBrokeredLifecycleAdapter({
-        client: {} as never, rpc: {} as never, log: () => undefined, isBuilderGateway: () => true,
+        client: {} as never, rpc: {} as never, log: () => undefined, isIsolatedGateway: () => true,
       });
       const adapter = {
         ...brokered,
-        listLocalCustomerSlugs: () => [],
-        customerMountMarked: () => false,
-      } as CustomerLifecycleAdapter;
+        listLocalUserSlugs: () => [],
+        userMountMarked: () => false,
+      } as UserLifecycleAdapter;
       const request = { migrationId: "activation-1", slug: "chris", targetPodUid: "builder-pod" };
-      const wiring = createBuilderSurgeGateWiring({
+      const wiring = createIsolatedSurgeGateWiring({
         adapter,
         processGate: {
           status: vi.fn(async () => ({ version: 1, podUid: "builder-pod", role: "normal", mode: "permitted", phase: "running" })),
@@ -1976,20 +1976,20 @@ describe("configured Builder surge release", () => {
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
       });
 
-      expect(brokered.isConfiguredBuilderCustomer?.("chris")).toBe(true);
+      expect(brokered.isConfiguredUser?.("chris")).toBe(true);
       await expect(wiring.surgeTargetLive(request)).resolves.toBe(true);
       await expect(wiring.admitLiveSurgeTarget(request)).rejects.toThrow("requires its retained overlay");
 
-      markBuilderClaimOverlayApplied(openclawDir, "b-chris", 2);
+      markUserClaimOverlayApplied(openclawDir, "b-chris", 2);
       await expect(wiring.admitLiveSurgeTarget(request)).resolves.toBeUndefined();
-      expect(brokered.configuredBuilderOverlayPresent?.("bob")).toBe(false);
+      expect(brokered.configuredUserOverlayPresent?.("bob")).toBe(false);
     } finally {
       vi.unstubAllEnvs();
     }
   });
 
   it.each(["unassigned", "assigned", "assignment-read-failed"])(
-    "rolls back a released Builder only before canonical assignment: %s",
+    "rolls back a released user only before canonical assignment: %s",
     async (assignment) => {
       const request = { migrationId: "activation-1", slug: "chris", targetPodUid: "target-pod" };
       const events: string[] = [];
@@ -2007,14 +2007,14 @@ describe("configured Builder surge release", () => {
         finalizeTargetCancellation: vi.fn(async () => { events.push("finalize"); return held; }),
         unreserve: vi.fn(async () => state),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
-      const wiring = createBuilderSurgeGateWiring({
-        adapter: {} as CustomerLifecycleAdapter, processGate,
+      const wiring = createIsolatedSurgeGateWiring({
+        adapter: {} as UserLifecycleAdapter, processGate,
         surgeReadiness: {} as SurgeReadinessGate,
         waitForGatewayHealthy: async () => undefined,
         waitForGatewayReady: async () => undefined, log: () => undefined,
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
         waitForActiveProvisioningDrain: async () => { events.push("drain"); },
-        configuredBuilderAssigned: async () => {
+        configuredUserAssigned: async () => {
           if (assignment === "assignment-read-failed") throw new Error("assignment unavailable");
           return assignment === "assigned";
         },
@@ -2034,7 +2034,7 @@ describe("configured Builder surge release", () => {
   );
 
   it("shares an in-progress target release only with the same migration and target", async () => {
-    stubBuilderClaim("ceckert-test");
+    stubUserClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       const events: string[] = [];
@@ -2044,14 +2044,14 @@ describe("configured Builder surge release", () => {
       });
       let mounted = false;
       const adapter = {
-        isBuilderGateway: () => true,
-        isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
-        configuredBuilderOverlayPresent: () => true,
-        listLocalCustomerSlugs: () => mounted ? ["ceckert-test"] : [],
-        customerMountMarked: () => mounted,
+        isIsolatedGateway: () => true,
+        isConfiguredUser: (slug: string) => slug === "ceckert-test",
+        configuredUserOverlayPresent: () => true,
+        listLocalUserSlugs: () => mounted ? ["ceckert-test"] : [],
+        userMountMarked: () => mounted,
         hasWorkspaceGitDir: () => true,
         hasGitRemote: () => true,
-      } as unknown as CustomerLifecycleAdapter;
+      } as unknown as UserLifecycleAdapter;
       const processGate = {
         status: vi.fn(async () => {
           events.push("status");
@@ -2061,7 +2061,7 @@ describe("configured Builder surge release", () => {
             role: "target" as const,
             mode: "held" as const,
             phase: "held" as const,
-            migrationId: "mig-builder",
+            migrationId: "mig-user",
             slug: "ceckert-test",
             targetPodUid: "target-pod",
           };
@@ -2074,7 +2074,7 @@ describe("configured Builder surge release", () => {
             role: "target" as const,
             mode: "held" as const,
             phase: "completing" as const,
-            migrationId: "mig-builder",
+            migrationId: "mig-user",
             slug: "ceckert-test",
             targetPodUid: "target-pod",
           };
@@ -2087,7 +2087,7 @@ describe("configured Builder surge release", () => {
             role: "target" as const,
             mode: "permitted" as const,
             phase: "running" as const,
-            migrationId: "mig-builder",
+            migrationId: "mig-user",
             slug: "ceckert-test",
             targetPodUid: "target-pod",
           };
@@ -2104,7 +2104,7 @@ describe("configured Builder surge release", () => {
           };
         }),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
-      const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async () => {
+      const attachConfiguredUserBeforeOpenClaw = vi.fn(async () => {
         events.push("attach");
         await attach;
         mounted = true;
@@ -2115,7 +2115,7 @@ describe("configured Builder surge release", () => {
           events.push("release");
         }),
       } as unknown as SurgeReadinessGate;
-      const wiring = createBuilderSurgeGateWiring({
+      const wiring = createIsolatedSurgeGateWiring({
         adapter,
         processGate,
         surgeReadiness,
@@ -2123,16 +2123,16 @@ describe("configured Builder surge release", () => {
         waitForGatewayReady: async () => undefined,
         log: () => undefined,
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
-        attachConfiguredBuilderBeforeOpenClaw,
+        attachConfiguredUserBeforeOpenClaw,
       });
 
       const first = wiring.releaseSurgeReadiness({
-        migrationId: "mig-builder",
+        migrationId: "mig-user",
         targetPodUid: "target-pod",
       });
       await Promise.resolve();
       const duplicate = wiring.releaseSurgeReadiness({
-        migrationId: "mig-builder",
+        migrationId: "mig-user",
         targetPodUid: "target-pod",
       });
 
@@ -2156,7 +2156,7 @@ describe("configured Builder surge release", () => {
       ]);
       expect(vi.mocked(processGate.status)).toHaveBeenCalledOnce();
       expect(vi.mocked(processGate.claimTargetCompletion)).toHaveBeenCalledTimes(3);
-      expect(attachConfiguredBuilderBeforeOpenClaw).toHaveBeenCalledOnce();
+      expect(attachConfiguredUserBeforeOpenClaw).toHaveBeenCalledOnce();
       expect(vi.mocked(processGate.permit)).toHaveBeenCalledOnce();
       expect(vi.mocked(processGate.releaseTarget)).toHaveBeenCalledOnce();
       expect(vi.mocked(surgeReadiness.release)).not.toHaveBeenCalled();
@@ -2167,23 +2167,23 @@ describe("configured Builder surge release", () => {
 });
 
 describe("observed split — evict keys off raw presence, mount off completion", () => {
-  it("evict-observed = RAW on-disk dirs (not coach-wired), so a partial/junk dir is drainable", () => {
+  it("evict-observed = RAW on-disk dirs (not default-agent-wired), so a partial/junk dir is drainable", () => {
     const a = mkObservedAdapter({
-      listLocalCustomerDirs: () => ["alice", "bob", "partial"], // partial: dir present, no coach
-      listLocalCustomerSlugs: () => ["alice", "bob"], // coach-wired subset
+      listLocalUserDirs: () => ["alice", "bob", "partial"], // partial: dir present, no defaultAgent
+      listLocalUserSlugs: () => ["alice", "bob"], // default-agent-wired subset
     });
     expect(getEvictObservedSlugs(a)).toEqual(["alice", "bob", "partial"]);
   });
 
   it("evict-observed skips a migrating-in slug (no draining a fresh import pre-cutover)", () => {
     const a = mkObservedAdapter({
-      listLocalCustomerDirs: () => ["alice", "incoming"],
-      customerMigratingIn: (s) => s === "incoming",
+      listLocalUserDirs: () => ["alice", "incoming"],
+      userMigratingIn: (s) => s === "incoming",
     });
     expect(getEvictObservedSlugs(a)).toEqual(["alice"]); // incoming guarded from eviction
   });
 
-  it("evict-observed keeps a restored import guarded after the customer dir is replaced", () => {
+  it("evict-observed keeps a restored import guarded after the user dir is replaced", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-mig-pin-"));
     tmpDirs.push(root);
     fs.mkdirSync(path.join(root, "incoming"));
@@ -2191,19 +2191,19 @@ describe("observed split — evict keys off raw presence, mount off completion",
     fs.rmSync(path.join(root, "incoming"), { recursive: true, force: true });
     fs.mkdirSync(path.join(root, "incoming"));
     const a = mkObservedAdapter({
-      listLocalCustomerDirs: () => listLocalCustomerDirs(root),
-      customerMigratingIn: (s) => isMigratingInPinned(root, s, 5 * 60_000),
+      listLocalUserDirs: () => listLocalUserDirs(root),
+      userMigratingIn: (s) => isMigratingInPinned(root, s, 5 * 60_000),
     });
 
     expect(getEvictObservedSlugs(a)).toEqual([]);
   });
 
-  it("evict-observed retains only the admitted Builder overlay", () => {
+  it("evict-observed retains only the admitted user overlay", () => {
     const a = mkObservedAdapter({
-      isBuilderGateway: () => true,
-      isConfiguredBuilderCustomer: (slug) => slug === "builder",
-      configuredBuilderOverlayPresent: () => false,
-      listLocalCustomerDirs: () => ["builder", "foreign", "partial"],
+      isIsolatedGateway: () => true,
+      isConfiguredUser: (slug) => slug === "builder",
+      configuredUserOverlayPresent: () => false,
+      listLocalUserDirs: () => ["builder", "foreign", "partial"],
     });
 
     expect(getEvictObservedSlugs(a)).toEqual(["foreign", "partial"]);
@@ -2211,17 +2211,17 @@ describe("observed split — evict keys off raw presence, mount off completion",
 
   it("mount-observed excludes a coach-wired-but-unmarked slug (the post-config wedge)", () => {
     const a = mkObservedAdapter({
-      listLocalCustomerSlugs: () => ["alice", "bob"], // both coach-wired
-      customerMountMarked: (s) => s === "alice", // only alice fully mounted
+      listLocalUserSlugs: () => ["alice", "bob"], // both default-agent-wired
+      userMountMarked: (s) => s === "alice", // only alice fully mounted
     });
     expect(getMountObservedSlugs(a)).toEqual(["alice"]); // bob still in toMount
   });
 
-  it("mount-observed excludes marked customers missing runtime or durable workspace state", () => {
+  it("mount-observed excludes marked users missing runtime or durable workspace state", () => {
     const a = mkObservedAdapter({
-      listLocalCustomerSlugs: () => ["healthy", "no-runtime", "no-git", "no-origin"],
-      customerMountMarked: () => true,
-      hasCustomerAgentRuntime: (slug) => slug !== "no-runtime",
+      listLocalUserSlugs: () => ["healthy", "no-runtime", "no-git", "no-origin"],
+      userMountMarked: () => true,
+      hasUserAgentRuntime: (slug) => slug !== "no-runtime",
       hasWorkspaceGitDir: (slug) => slug !== "no-git",
       hasGitRemote: (slug) => slug !== "no-origin",
     });
@@ -2229,14 +2229,14 @@ describe("observed split — evict keys off raw presence, mount off completion",
     expect(getMountObservedSlugs(a)).toEqual(["healthy"]);
   });
 
-  it("mount-observed requires a readable Builder overlay even when runtime directories exist", () => {
+  it("mount-observed requires a readable user overlay even when runtime directories exist", () => {
     const a = mkObservedAdapter({
-      isBuilderGateway: () => true,
-      isConfiguredBuilderCustomer: () => true,
-      listLocalCustomerSlugs: () => ["discord-builder"],
-      customerMountMarked: () => true,
-      configuredBuilderOverlayPresent: () => false,
-      hasCustomerAgentRuntime: () => true,
+      isIsolatedGateway: () => true,
+      isConfiguredUser: () => true,
+      listLocalUserSlugs: () => ["discord-user"],
+      userMountMarked: () => true,
+      configuredUserOverlayPresent: () => false,
+      hasUserAgentRuntime: () => true,
       hasWorkspaceGitDir: () => true,
       hasGitRemote: () => true,
     });
@@ -2244,112 +2244,112 @@ describe("observed split — evict keys off raw presence, mount off completion",
     expect(getMountObservedSlugs(a)).toEqual([]);
   });
 
-  it("mount-observed counts every coach-wired slug when no marker probe exists", () => {
+  it("mount-observed counts every default-agent-wired slug when no marker probe exists", () => {
     const a = mkObservedAdapter({
-      listLocalCustomerSlugs: () => ["alice"],
-      // no customerMountMarked
+      listLocalUserSlugs: () => ["alice"],
+      // no userMountMarked
     });
     expect(getMountObservedSlugs(a)).toEqual(["alice"]);
   });
 
-  it("mount-observed is PIN-BLIND: a migrated coach-wired+marked slug is observed despite its pin", () => {
+  it("mount-observed is PIN-BLIND: a migrated default-agent-wired+marked slug is observed despite its pin", () => {
     // Regression guard: the migrating-in pin must NOT suppress mount-observed (or the
     // post-cutover target would re-ensure every tick for the pin's TTL). The pin only
     // gates eviction.
     const a = mkObservedAdapter({
-      listLocalCustomerSlugs: () => ["migrated"],
-      customerMountMarked: () => true,
-      customerMigratingIn: () => true,
+      listLocalUserSlugs: () => ["migrated"],
+      userMountMarked: () => true,
+      userMigratingIn: () => true,
     });
     expect(getMountObservedSlugs(a)).toEqual(["migrated"]);
   });
 });
 
-describe("evictLocalCustomer — complete local teardown", () => {
-  function adapter(overrides: Partial<CustomerLifecycleAdapter>): CustomerLifecycleAdapter {
+describe("evictLocalUser — complete local teardown", () => {
+  function adapter(overrides: Partial<UserLifecycleAdapter>): UserLifecycleAdapter {
     return {
       log: vi.fn(),
       uidForSlug: vi.fn(async () => null),
-      applyRemoveCustomerConfigPatch: vi.fn(async () => undefined),
-      hasCustomerDir: vi.fn(() => true),
+      applyRemoveUserConfigPatch: vi.fn(async () => undefined),
+      hasUserDir: vi.fn(() => true),
       removePartialWorkspace: vi.fn(async () => undefined),
-      deleteDepartedCustomerState: vi.fn(async () => undefined),
-      readLocalCustomerPubKey: vi.fn(() => null),
+      deleteDepartedUserState: vi.fn(async () => undefined),
+      readLocalUserPubKey: vi.fn(() => null),
       ...overrides,
-    } as CustomerLifecycleAdapter;
+    } as UserLifecycleAdapter;
   }
 
-  it("prefers the imported-customer teardown for an unassigned slug", async () => {
-    const removeImportedCustomerBySlug = vi.fn(async () => ({
+  it("prefers the imported-user teardown for an unassigned slug", async () => {
+    const removeImportedUserBySlug = vi.fn(async () => ({
       wasMounted: true,
       steps: ["config-patch-remove", "delete-dir"] as const,
     }));
     const onUnmounted = vi.fn();
     const stampMounted = vi.fn(async () => undefined);
     const onLocalStateRemoved = vi.fn();
-    const a = adapter({ removeImportedCustomerBySlug, onUnmounted });
+    const a = adapter({ removeImportedUserBySlug, onUnmounted });
 
-    await expect(evictLocalCustomer({
+    await expect(evictLocalUser({
       adapter: a,
       slug: "departed",
       stampMounted,
       onLocalStateRemoved,
     })).resolves.toBe("deleted-user");
 
-    expect(removeImportedCustomerBySlug).toHaveBeenCalledWith("departed", undefined, undefined);
-    expect(a.applyRemoveCustomerConfigPatch).not.toHaveBeenCalled();
-    expect(a.deleteDepartedCustomerState).not.toHaveBeenCalled();
+    expect(removeImportedUserBySlug).toHaveBeenCalledWith("departed", undefined, undefined);
+    expect(a.applyRemoveUserConfigPatch).not.toHaveBeenCalled();
+    expect(a.deleteDepartedUserState).not.toHaveBeenCalled();
     expect(onUnmounted).toHaveBeenCalledWith("departed");
     expect(stampMounted).not.toHaveBeenCalled();
     expect(onLocalStateRemoved).toHaveBeenCalledWith("departed");
   });
 
-  it("preserves the manual fallback for adapters without imported-customer teardown", async () => {
+  it("preserves the manual fallback for adapters without imported-user teardown", async () => {
     const onUnmounted = vi.fn();
     const onLocalStateRemoved = vi.fn();
     const a = adapter({ onUnmounted });
 
-    await expect(evictLocalCustomer({
+    await expect(evictLocalUser({
       adapter: a,
       slug: "departed",
       stampMounted: vi.fn(async () => undefined),
       onLocalStateRemoved,
     })).resolves.toBe("deleted-user");
 
-    expect(a.applyRemoveCustomerConfigPatch).toHaveBeenCalledWith(
+    expect(a.applyRemoveUserConfigPatch).toHaveBeenCalledWith(
       "departed",
       "octogee-departed-coach",
       undefined,
       undefined,
     );
-    expect(a.deleteDepartedCustomerState).toHaveBeenCalledWith("departed");
+    expect(a.deleteDepartedUserState).toHaveBeenCalledWith("departed");
     expect(a.removePartialWorkspace).not.toHaveBeenCalled();
     expect(onUnmounted).toHaveBeenCalledWith("departed");
     expect(onLocalStateRemoved).toHaveBeenCalledWith("departed");
   });
 
   it("deletes departed state in the manual fallback even when the workspace is already gone", async () => {
-    const a = adapter({ hasCustomerDir: vi.fn(() => false) });
+    const a = adapter({ hasUserDir: vi.fn(() => false) });
 
-    await expect(evictLocalCustomer({
+    await expect(evictLocalUser({
       adapter: a,
       slug: "departed",
       stampMounted: vi.fn(async () => undefined),
       onLocalStateRemoved: vi.fn(),
     })).resolves.toBe("deleted-user");
 
-    expect(a.deleteDepartedCustomerState).toHaveBeenCalledWith("departed");
+    expect(a.deleteDepartedUserState).toHaveBeenCalledWith("departed");
   });
 
   it("clears runtime and fingerprint bookkeeping when teardown races with another cleanup", async () => {
     const onUnmounted = vi.fn();
     const onLocalStateRemoved = vi.fn();
     const a = adapter({
-      removeImportedCustomerBySlug: vi.fn(async () => ({ wasMounted: false, steps: [] })),
+      removeImportedUserBySlug: vi.fn(async () => ({ wasMounted: false, steps: [] })),
       onUnmounted,
     });
 
-    await expect(evictLocalCustomer({
+    await expect(evictLocalUser({
       adapter: a,
       slug: "departed",
       stampMounted: vi.fn(async () => undefined),
@@ -2360,7 +2360,7 @@ describe("evictLocalCustomer — complete local teardown", () => {
     expect(onLocalStateRemoved).toHaveBeenCalledWith("departed");
   });
 
-  it("keeps assigned-customer mounted state and local bookkeeping cleanup", async () => {
+  it("keeps assigned-user mounted state and local bookkeeping cleanup", async () => {
     const stampMounted = vi.fn(async () => undefined);
     const onLocalStateRemoved = vi.fn();
     const a = adapter({
@@ -2369,7 +2369,7 @@ describe("evictLocalCustomer — complete local teardown", () => {
         uid: "uid-alice",
         slug: "alice",
         tier: "trial",
-        gatewayId: "bender",
+        gatewayId: "walter",
         status: "complete",
         agentIds: ["octogee-alice-coach"],
         repoUrl: "",
@@ -2380,7 +2380,7 @@ describe("evictLocalCustomer — complete local teardown", () => {
       })),
     });
 
-    await expect(evictLocalCustomer({
+    await expect(evictLocalUser({
       adapter: a,
       slug: "alice",
       stampMounted,
@@ -2395,14 +2395,14 @@ describe("evictLocalCustomer — complete local teardown", () => {
     const onRetainedAfterConfigRemoval = vi.fn();
     const onLocalStateRemoved = vi.fn();
     const a = adapter({
-      removeImportedCustomerBySlug: vi.fn(async () => ({
+      removeImportedUserBySlug: vi.fn(async () => ({
         wasMounted: true,
         steps: ["config-patch-remove"] as const,
         retained: true,
       })),
     });
 
-    await expect(evictLocalCustomer({
+    await expect(evictLocalUser({
       adapter: a,
       slug: "alice",
       currentEvictionBatch: vi.fn(async () => []),
@@ -2415,22 +2415,22 @@ describe("evictLocalCustomer — complete local teardown", () => {
     expect(onLocalStateRemoved).not.toHaveBeenCalled();
   });
 
-  it("retains a matching Builder overlay before the missing-user fallback can mutate it", async () => {
+  it("retains a matching user overlay before the missing-user fallback can mutate it", async () => {
     const onRetainedAfterConfigRemoval = vi.fn();
     const onLocalStateRemoved = vi.fn();
     const onUnmounted = vi.fn();
     const clearMountMarker = vi.fn();
-    const clearCustomerMigratingIn = vi.fn();
+    const clearUserMigratingIn = vi.fn();
     const a = adapter({
-      isBuilderGateway: () => true,
-      isConfiguredBuilderCustomer: (slug) => slug === "builder",
-      configuredBuilderOverlayPresent: (slug) => slug === "builder",
+      isIsolatedGateway: () => true,
+      isConfiguredUser: (slug) => slug === "builder",
+      configuredUserOverlayPresent: (slug) => slug === "builder",
       onUnmounted,
       clearMountMarker,
-      clearCustomerMigratingIn,
+      clearUserMigratingIn,
     });
 
-    await expect(evictLocalCustomer({
+    await expect(evictLocalUser({
       adapter: a,
       slug: "builder",
       onRetainedAfterConfigRemoval,
@@ -2439,44 +2439,44 @@ describe("evictLocalCustomer — complete local teardown", () => {
     })).resolves.toBe("noop");
 
     expect(a.uidForSlug).not.toHaveBeenCalled();
-    expect(a.applyRemoveCustomerConfigPatch).not.toHaveBeenCalled();
-    expect(a.deleteDepartedCustomerState).not.toHaveBeenCalled();
+    expect(a.applyRemoveUserConfigPatch).not.toHaveBeenCalled();
+    expect(a.deleteDepartedUserState).not.toHaveBeenCalled();
     expect(clearMountMarker).toHaveBeenCalledWith("builder");
-    expect(clearCustomerMigratingIn).toHaveBeenCalledWith("builder");
+    expect(clearUserMigratingIn).toHaveBeenCalledWith("builder");
     expect(onUnmounted).toHaveBeenCalledWith("builder");
     expect(onRetainedAfterConfigRemoval).toHaveBeenCalledWith("builder");
     expect(onLocalStateRemoved).not.toHaveBeenCalled();
   });
 
-  it("fails closed for a matching Builder owner with an unreadable overlay", async () => {
+  it("fails closed for a matching user owner with an unreadable overlay", async () => {
     const a = adapter({
-      isBuilderGateway: () => true,
-      isConfiguredBuilderCustomer: () => true,
-      configuredBuilderOverlayPresent: () => false,
+      isIsolatedGateway: () => true,
+      isConfiguredUser: () => true,
+      configuredUserOverlayPresent: () => false,
     });
 
-    await expect(evictLocalCustomer({
+    await expect(evictLocalUser({
       adapter: a,
       slug: "builder",
       stampMounted: vi.fn(async () => undefined),
       onLocalStateRemoved: vi.fn(),
-    })).rejects.toThrow(/configured Builder system-config overlay is unavailable/);
+    })).rejects.toThrow(/configured user system-config overlay is unavailable/);
 
     expect(a.uidForSlug).not.toHaveBeenCalled();
-    expect(a.applyRemoveCustomerConfigPatch).not.toHaveBeenCalled();
-    expect(a.deleteDepartedCustomerState).not.toHaveBeenCalled();
+    expect(a.applyRemoveUserConfigPatch).not.toHaveBeenCalled();
+    expect(a.deleteDepartedUserState).not.toHaveBeenCalled();
   });
 });
 
 describe("cancelRemovedEviction", () => {
-  it("invalidates a re-admitted Builder only when its config-removal marker existed", () => {
+  it("invalidates a re-admitted user only when its config-removal marker existed", () => {
     const invalidate = vi.fn();
     const removed = {
       cancelPendingEviction: vi.fn(() => true),
-    } as unknown as CustomerLifecycleAdapter;
+    } as unknown as UserLifecycleAdapter;
     const untouched = {
       cancelPendingEviction: vi.fn(() => false),
-    } as unknown as CustomerLifecycleAdapter;
+    } as unknown as UserLifecycleAdapter;
 
     expect(cancelRemovedEviction(removed, "b", invalidate)).toBe(true);
     expect(cancelRemovedEviction(untouched, "c", invalidate)).toBe(false);
@@ -2485,11 +2485,11 @@ describe("cancelRemovedEviction", () => {
   });
 });
 
-describe("evictLocalCustomerIfStillUndesired", () => {
-  it("does not run stale cleanup after the Builder is re-admitted", async () => {
+describe("evictLocalUserIfStillUndesired", () => {
+  it("does not run stale cleanup after the user is re-admitted", async () => {
     const evict = vi.fn(async () => "drained" as const);
 
-    await expect(evictLocalCustomerIfStillUndesired({
+    await expect(evictLocalUserIfStillUndesired({
       slug: "alice",
       evictionBatch: ["alice"],
       readDesired: vi.fn(async () => ["alice"]),
@@ -2499,10 +2499,10 @@ describe("evictLocalCustomerIfStillUndesired", () => {
     expect(evict).not.toHaveBeenCalled();
   });
 
-  it("runs cleanup once when the latest desired roster still excludes the Builder", async () => {
+  it("runs cleanup once when the latest desired roster still excludes the user", async () => {
     const evict = vi.fn(async () => "drained" as const);
 
-    await expect(evictLocalCustomerIfStillUndesired({
+    await expect(evictLocalUserIfStillUndesired({
       slug: "alice",
       evictionBatch: ["alice"],
       readDesired: vi.fn(async () => ["bob"]),
@@ -2512,10 +2512,10 @@ describe("evictLocalCustomerIfStillUndesired", () => {
     expect(evict).toHaveBeenCalledWith(["alice"], expect.any(Function));
   });
 
-  it("filters re-admitted Builders from the shared config-removal batch", async () => {
+  it("filters re-admitted users from the shared config-removal batch", async () => {
     const evict = vi.fn(async () => "drained" as const);
 
-    await expect(evictLocalCustomerIfStillUndesired({
+    await expect(evictLocalUserIfStillUndesired({
       slug: "alice",
       evictionBatch: ["alice", "bob"],
       readDesired: vi.fn(async () => ["bob"]),
@@ -2594,7 +2594,7 @@ describe("in-pod gateway heartbeat", () => {
     expect(probeHealthz).not.toHaveBeenCalled();
   });
 
-  it("keeps readiness open while a Builder is actively provisioning", async () => {
+  it("keeps readiness open while a user is actively provisioning", async () => {
     const probeHealthz = vi.fn(async () => false);
 
     await expect(probeSurgeReadiness({
@@ -2685,14 +2685,14 @@ describe("in-pod gateway heartbeat", () => {
         version: "sha-1",
         openclawVersion: "2026.7.1",
         startedAt: 42,
-        customers: ["alice"],
+        users: ["alice"],
         migratingIn: [],
         configuredBuilder: null,
       }),
     ).toMatchObject({ openclawVersion: "2026.7.1", podUid: "pod-uid-1", customers: ["alice"] });
   });
 
-  it("reports the configured Builder through the signed fleet state, never the unauthenticated probe", () => {
+  it("reports the configured user through the signed fleet state, never the unauthenticated probe", () => {
     const state = buildFleetStateResponse({
       status: "ready",
       gatewayId: "b-chris",
@@ -2700,7 +2700,7 @@ describe("in-pod gateway heartbeat", () => {
       version: "sha-1",
       openclawVersion: "2026.7.1",
       startedAt: 42,
-      customers: [],
+      users: [],
       migratingIn: [],
       configuredBuilder: { state: "claimed", generation: 2 },
     });
@@ -2747,7 +2747,7 @@ describe("createVerifyAttachPending", () => {
   it("reads the assignment from the content-convergence roster when one is wired", async () => {
     const pending = createVerifyAttachPending({
       provision: true,
-      opts: { gatewayId: "shared-1", readDesiredCustomers: async () => new Map([["alice", { uid: "uid-alice", fingerprint: "fp-1", lane: "move" as const, ensureAllowed: true }]]) },
+      opts: { gatewayId: "shared-1", readDesiredUsers: async () => new Map([["alice", { uid: "uid-alice", fingerprint: "fp-1", lane: "move" as const, ensureAllowed: true }]]) },
     });
 
     expect(await pending?.("alice")).toBe(true);

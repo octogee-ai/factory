@@ -9,8 +9,8 @@ import { FirestoreFields, withStoredRevision } from "./workspaces.js";
 export const GATEWAY_TICKETS_COLLECTION = "gatewayTickets";
 export const GATEWAY_TICKET_MINT_LOG_COLLECTION = "gatewayTicketMintLog";
 export const OPENCLAW_CONTROL_SESSIONS_COLLECTION = "openclawControlSessions";
-const BUILDER_MATTERMOST_SECRET_ID = "mattermost";
-const COACH_MATTERMOST_SECRET_ID = "coachMattermost";
+const USER_MATTERMOST_SECRET_ID = "mattermost";
+const DEFAULT_AGENT_MATTERMOST_SECRET_ID = "coachMattermost";
 const PROJECT_AGENT_SECRET_PREFIX = "projectAgentMattermost-";
 const SECRET_TIMES = storedAsTimestamps("createdAt", "rotatedAt", "updatedAt");
 const TICKET_TIMES = storedAsTimestamps("expireAt");
@@ -44,9 +44,9 @@ function nonNull(map) {
     return Object.fromEntries(Object.entries(map).filter(([, value]) => value !== null && value !== undefined));
 }
 export function secretKindOf(secretId) {
-    if (secretId === BUILDER_MATTERMOST_SECRET_ID)
+    if (secretId === USER_MATTERMOST_SECRET_ID)
         return "builder-mattermost";
-    if (secretId === COACH_MATTERMOST_SECRET_ID)
+    if (secretId === DEFAULT_AGENT_MATTERMOST_SECRET_ID)
         return "coach-mattermost";
     if (secretId.startsWith(PROJECT_AGENT_SECRET_PREFIX))
         return "project-agent-mattermost";
@@ -68,9 +68,9 @@ function secretsCollection(session, uid) {
 function decodeSecret(uid, snapshot) {
     if (!snapshot.exists)
         return null;
-    return withStoredRevision(snapshot, builderSecretFromData(uid, snapshot.id, decodeDocumentData(snapshot)));
+    return withStoredRevision(snapshot, userSecretFromData(uid, snapshot.id, decodeDocumentData(snapshot)));
 }
-export function builderSecretFromData(uid, secretId, data) {
+export function userSecretFromData(uid, secretId, data) {
     const kind = secretKindOf(secretId);
     const fields = new FirestoreFields(secretKey(uid, secretId), data);
     if (kind === "connector") {
@@ -95,7 +95,7 @@ export function builderSecretFromData(uid, secretId, data) {
         rotatedAt: fields.nullableNumber("rotatedAt"),
     };
 }
-export function builderSecretToData(secret) {
+export function userSecretToData(secret) {
     const derivedKind = secretKindOf(secret.secretId);
     if (derivedKind !== secret.kind) {
         throw new TypeError(`secrets.put: secret id ${secret.secretId} holds a ${derivedKind} secret, not ${secret.kind}`);
@@ -121,7 +121,7 @@ export function builderSecretToData(secret) {
     });
 }
 function encodeSecret(secret) {
-    return encodeDocument(builderSecretToData(secret), SECRET_TIMES);
+    return encodeDocument(userSecretToData(secret), SECRET_TIMES);
 }
 export function createFirestoreSecretsRepository(session) {
     const ref = (uid, secretId) => secretsCollection(session, uid).doc(secretId);

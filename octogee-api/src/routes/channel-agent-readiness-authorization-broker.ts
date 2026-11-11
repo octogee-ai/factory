@@ -5,7 +5,7 @@ import { authorizeChannel, type AuthorizedChannel } from "../../../gateway-edge/
 import type { ChannelReadinessAuthorization } from "../../../gateway-edge/src/lib/channel-agent-readiness-authorization-broker.js";
 
 export interface ChannelReadinessAuthorizationBrokerDeps {
-  store: Pick<PlatformStateRepositories, "builders">;
+  store: Pick<PlatformStateRepositories, "users">;
   authorize?: typeof authorizeChannel;
 }
 
@@ -43,10 +43,10 @@ async function authorize(req: Request, res: Response, deps: ChannelReadinessAuth
   const uid = req.uid;
   const signal = AbortSignal.timeout(5_000);
   const access = await withDeadline(() => (deps.authorize ?? authorizeChannel)(uid, body.channelId, undefined, {
-    requireActiveLedger: true, includeCoachConversation: true, signal,
+    requireActiveLedger: true, includeDefaultAgentConversation: true, signal,
   }), signal);
   if (!access || access.forbidden) { res.status(404).json({ error: "not_found" }); return; }
-  const owner = await withDeadline(() => deps.store.builders.records.get(access.target.ownerUid), signal);
+  const owner = await withDeadline(() => deps.store.users.records.get(access.target.ownerUid), signal);
   if (owner?.gateway?.gatewayId !== body.gatewayId) {
     res.status(404).json({ error: "not_found" }); return;
   }

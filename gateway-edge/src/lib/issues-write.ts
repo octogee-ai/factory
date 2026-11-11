@@ -34,7 +34,7 @@ export function targetState(key: ColumnKey): "open" | "closed" {
   return key === "done" ? "closed" : "open";
 }
 
-// Non-status labels a Builder can apply from the Board. `bug` matches Pulse's
+// Non-status labels a user can apply from the Board. `bug` matches Pulse's
 // bug-backlog counter; the rest mirror GitHub's default label vocabulary.
 export const KNOWN_LABEL_SEED: LabelSeed[] = [
   { name: "bug", color: "d73a4a" },

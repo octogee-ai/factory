@@ -54,21 +54,21 @@ describe("mapSaToTenant", () => {
   it("maps per-gateway KSAs from durable root ownership", async () => {
     const result = await mapSaToTenant(
       createDocumentFixtureStore({
-        "gateways/bender": durableGateway("bender", {
+        "gateways/walter": durableGateway("walter", {
           gatewayClass: "builder",
           imageProfile: "builder",
-          ownerUid: "uid-bender",
-          builderSlug: "bender",
+          ownerUid: "uid-walter",
+          builderSlug: "walter",
         }),
       }),
-      { namespace: "octogee", saName: "octogee-gw-bender" },
+      { namespace: "octogee", saName: "octogee-gw-walter" },
       "octogee",
     );
 
     expect(result).toEqual({
       attached: true,
       result: "ok",
-      tenant: { kind: "gateway", gatewayId: "bender", ownerUid: "uid-bender" },
+      tenant: { kind: "gateway", gatewayId: "walter", ownerUid: "uid-walter" },
     });
   });
 
@@ -76,35 +76,35 @@ describe("mapSaToTenant", () => {
     await expect(
       mapSaToTenant(
         createDocumentFixtureStore({
-          "gateways/bender": durableGateway("bender", {
+          "gateways/walter": durableGateway("walter", {
             gatewayClass: "builder",
             imageProfile: "builder",
-            ownerUid: "uid-bender",
-            builderSlug: "bender",
+            ownerUid: "uid-walter",
+            builderSlug: "walter",
             coOwnerUids: [],
           }),
         }),
-        { namespace: "octogee", saName: "octogee-gw-bender" },
+        { namespace: "octogee", saName: "octogee-gw-walter" },
         "octogee",
       ),
     ).resolves.toEqual({
       attached: true,
       result: "ok",
-      tenant: { kind: "gateway", gatewayId: "bender", ownerUid: "uid-bender" },
+      tenant: { kind: "gateway", gatewayId: "walter", ownerUid: "uid-walter" },
     });
 
     await expect(
       mapSaToTenant(
         createDocumentFixtureStore({
-          "gateways/bender": durableGateway("bender", {
+          "gateways/walter": durableGateway("walter", {
             gatewayClass: "builder",
             imageProfile: "builder",
-            ownerUid: "uid-bender",
-            builderSlug: "bender",
+            ownerUid: "uid-walter",
+            builderSlug: "walter",
             coOwnerUids: ["uid-former-helper"],
           }),
         }),
-        { namespace: "octogee", saName: "octogee-gw-bender" },
+        { namespace: "octogee", saName: "octogee-gw-walter" },
         "octogee",
       ),
     ).resolves.toEqual({ attached: false, result: "unknown_tenant" });
@@ -126,15 +126,15 @@ describe("mapSaToTenant", () => {
   it("rejects retired operator KSA names even when stale root config names one", async () => {
     const result = await mapSaToTenant(
       createDocumentFixtureStore({
-        "gateways/bender": durableGateway("bender", {
+        "gateways/walter": durableGateway("walter", {
           gatewayClass: "builder",
           imageProfile: "builder",
-          ownerUid: "uid-bender",
-          builderSlug: "bender",
-          serviceAccountName: "octogee-gateway-bender",
+          ownerUid: "uid-walter",
+          builderSlug: "walter",
+          serviceAccountName: "octogee-gateway-walter",
         }),
       }),
-      { namespace: "octogee", saName: "octogee-gateway-bender" },
+      { namespace: "octogee", saName: "octogee-gateway-walter" },
       "octogee",
     );
 
@@ -144,11 +144,11 @@ describe("mapSaToTenant", () => {
   it("maps a custom KSA through exactly one active durable root", async () => {
     const result = await mapSaToTenant(
       createDocumentFixtureStore({
-        "gateways/bender": durableGateway("bender", {
+        "gateways/walter": durableGateway("walter", {
           gatewayClass: "builder",
           imageProfile: "builder",
-          ownerUid: "uid-bender",
-          builderSlug: "bender",
+          ownerUid: "uid-walter",
+          builderSlug: "walter",
           serviceAccountName: "custom-operator-ksa",
         }),
       }),
@@ -159,7 +159,7 @@ describe("mapSaToTenant", () => {
     expect(result).toEqual({
       attached: true,
       result: "ok",
-      tenant: { kind: "gateway", gatewayId: "bender", ownerUid: "uid-bender" },
+      tenant: { kind: "gateway", gatewayId: "walter", ownerUid: "uid-walter" },
     });
   });
 
@@ -186,7 +186,7 @@ describe("mapSaToTenant", () => {
     await expect(
       mapSaToTenant(
         createDocumentFixtureStore({
-          "gateways/bender": durableGateway("bender", {
+          "gateways/walter": durableGateway("walter", {
             serviceAccountName: "custom-operator-ksa",
             desiredStatus: "retired",
           }),
@@ -201,11 +201,11 @@ describe("mapSaToTenant", () => {
     await expect(
       mapSaToTenant(
         createDocumentFixtureStore({
-          "gateways/bender": durableGateway("bender", {
+          "gateways/walter": durableGateway("walter", {
             serviceAccountName: "custom-operator-ksa",
           }),
         }),
-        { namespace: "octogee", saName: "octogee-gw-bender" },
+        { namespace: "octogee", saName: "octogee-gw-walter" },
         "octogee",
       ),
     ).resolves.toEqual({ attached: false, result: "unknown_tenant" });
@@ -213,11 +213,11 @@ describe("mapSaToTenant", () => {
     await expect(
       mapSaToTenant(
         createDocumentFixtureStore({
-          "gateways/bender": durableGateway("bender", {
+          "gateways/walter": durableGateway("walter", {
             serviceAccountName: "octogee-gw-other",
           }),
         }),
-        { namespace: "octogee", saName: "octogee-gw-bender" },
+        { namespace: "octogee", saName: "octogee-gw-walter" },
         "octogee",
       ),
     ).resolves.toEqual({ attached: false, result: "unknown_tenant" });
@@ -226,7 +226,7 @@ describe("mapSaToTenant", () => {
   it("soft-fails a namespace mismatch before the root lookup", async () => {
     const result = await mapSaToTenant(
       createDocumentFixtureStore({}),
-      { namespace: "octogee-test", saName: "octogee-gw-bender" },
+      { namespace: "octogee-test", saName: "octogee-gw-walter" },
       "octogee",
     );
 
@@ -235,15 +235,15 @@ describe("mapSaToTenant", () => {
 
   it("soft-fails a missing durable root", async () => {
     await expect(
-      mapSaToTenant(createDocumentFixtureStore({}), { namespace: "octogee", saName: "octogee-gw-bender" }, "octogee"),
+      mapSaToTenant(createDocumentFixtureStore({}), { namespace: "octogee", saName: "octogee-gw-walter" }, "octogee"),
     ).resolves.toEqual({ attached: false, result: "unknown_tenant" });
   });
 
   it("fails closed on a malformed durable root", async () => {
     await expect(
       mapSaToTenant(
-        createDocumentFixtureStore({ "gateways/bender": { gatewayId: "bender", desiredStatus: "running" } }),
-        { namespace: "octogee", saName: "octogee-gw-bender" },
+        createDocumentFixtureStore({ "gateways/walter": { gatewayId: "walter", desiredStatus: "running" } }),
+        { namespace: "octogee", saName: "octogee-gw-walter" },
         "octogee",
       ),
     ).rejects.toBeInstanceOf(MalformedRecordError);
@@ -251,8 +251,8 @@ describe("mapSaToTenant", () => {
 
   it("rejects a retired durable gateway", async () => {
     const result = await mapSaToTenant(
-      createDocumentFixtureStore({ "gateways/bender": durableGateway("bender", { desiredStatus: "retired" }) }),
-      { namespace: "octogee", saName: "octogee-gw-bender" },
+      createDocumentFixtureStore({ "gateways/walter": durableGateway("walter", { desiredStatus: "retired" }) }),
+      { namespace: "octogee", saName: "octogee-gw-walter" },
       "octogee",
     );
 
@@ -282,7 +282,7 @@ describe("mapSaToTenant", () => {
     await expect(
       mapSaToTenant(
         createDocumentFixtureStore({
-          "gateways/bender": durableGateway("bender", {
+          "gateways/walter": durableGateway("walter", {
             serviceAccountName: "custom-operator-ksa",
             desiredStatus: "retired",
             retirementVersion: 1,
@@ -292,19 +292,19 @@ describe("mapSaToTenant", () => {
         { namespace: "octogee", saName: "custom-operator-ksa", podUid: "pod-uid-1" },
         "octogee",
       ),
-    ).resolves.toMatchObject({ attached: true, retiring: true, tenant: { gatewayId: "bender" } });
+    ).resolves.toMatchObject({ attached: true, retiring: true, tenant: { gatewayId: "walter" } });
   });
 
   it("rejects a retiring gateway identity that is not bound to a pod", async () => {
     const result = await mapSaToTenant(
       createDocumentFixtureStore({
-        "gateways/bender": durableGateway("bender", {
+        "gateways/walter": durableGateway("walter", {
           desiredStatus: "retired",
           retirementVersion: 1,
           retirementClaim: inFlightRetirementClaim(),
         }),
       }),
-      { namespace: "octogee", saName: "octogee-gw-bender" },
+      { namespace: "octogee", saName: "octogee-gw-walter" },
       "octogee",
     );
 
@@ -313,8 +313,8 @@ describe("mapSaToTenant", () => {
 
   it("rejects a pod-bound identity of a retired gateway without a retirement claim", async () => {
     const result = await mapSaToTenant(
-      createDocumentFixtureStore({ "gateways/bender": durableGateway("bender", { desiredStatus: "retired" }) }),
-      { namespace: "octogee", saName: "octogee-gw-bender", podUid: "pod-uid-1" },
+      createDocumentFixtureStore({ "gateways/walter": durableGateway("walter", { desiredStatus: "retired" }) }),
+      { namespace: "octogee", saName: "octogee-gw-walter", podUid: "pod-uid-1" },
       "octogee",
     );
 
@@ -338,21 +338,21 @@ describe("mapSaToTenant", () => {
   it("never restores an owner from a stale release snapshot", async () => {
     const result = await mapSaToTenant(
       createDocumentFixtureStore({
-        "gateways/bender": durableGateway("bender", {
+        "gateways/walter": durableGateway("walter", {
           gatewayClass: "builder",
           imageProfile: "builder",
           ownerUid: "uid-current",
-          builderSlug: "bender",
+          builderSlug: "walter",
         }),
-        "gateways/bender/releases/1": { payload: { ownerUid: "uid-stale" } },
+        "gateways/walter/releases/1": { payload: { ownerUid: "uid-stale" } },
       }),
-      { namespace: "octogee", saName: "octogee-gw-bender" },
+      { namespace: "octogee", saName: "octogee-gw-walter" },
       "octogee",
     );
 
     expect(result).toMatchObject({
       attached: true,
-      tenant: { gatewayId: "bender", ownerUid: "uid-current" },
+      tenant: { gatewayId: "walter", ownerUid: "uid-current" },
     });
   });
 

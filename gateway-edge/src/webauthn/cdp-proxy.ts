@@ -82,7 +82,7 @@ function createCommandChannel(send: (frame: CdpCommand) => number | null) {
   return {
     call(frame: CdpCommand): Promise<Record<string, unknown>> {
       const id = send(frame);
-      if (id === null) return Promise.reject(new Error("the computer's Chromium is not attached"));
+      if (id === null) return Promise.reject(new Error("the VM's Chromium is not attached"));
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => { pending.delete(id); reject(new Error("CDP command timed out")); }, COMMAND_TIMEOUT_MS);
         timer.unref();
@@ -345,7 +345,7 @@ export function createWebAuthnCdpProxy(options: WebAuthnCdpProxyOptions): WebAut
       if (typeof version.webSocketDebuggerUrl !== "string") throw new Error("CDP version endpoint has no browser websocket url");
       wsUrl = version.webSocketDebuggerUrl;
     } catch (error) {
-      scheduleRetry("webauthn proxy cannot reach the computer's Chromium", { cdpUrl: options.cdpUrl, error: error instanceof Error ? error.message : String(error) });
+      scheduleRetry("webauthn proxy cannot reach the VM's Chromium", { cdpUrl: options.cdpUrl, error: error instanceof Error ? error.message : String(error) });
       return;
     }
     if (!running) return;
@@ -360,7 +360,7 @@ export function createWebAuthnCdpProxy(options: WebAuthnCdpProxyOptions): WebAut
     socket = connection;
     attempt = 0;
     lastFailure = null;
-    log("webauthn proxy attached to the computer's Chromium", { cdpUrl: options.cdpUrl });
+    log("webauthn proxy attached to the VM's Chromium", { cdpUrl: options.cdpUrl });
     connection.onMessage(onMessage);
     connection.onClose(() => {
       if (socket !== connection) return;
@@ -368,8 +368,8 @@ export function createWebAuthnCdpProxy(options: WebAuthnCdpProxyOptions): WebAut
       contexts.clear();
       embeddedSessions.clear();
       abortFlights();
-      commands.failAll("the computer's Chromium went away");
-      scheduleRetry("webauthn proxy lost the computer's Chromium", { cdpUrl: options.cdpUrl });
+      commands.failAll("the VM's Chromium went away");
+      scheduleRetry("webauthn proxy lost the VM's Chromium", { cdpUrl: options.cdpUrl });
     });
     send({ method: "Target.setAutoAttach", params: { autoAttach: true, waitForDebuggerOnStart: true, flatten: true } });
   };

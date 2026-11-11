@@ -82,8 +82,8 @@ async function sourceDoctorContext(transaction: PlatformStateTransaction, input:
   const op = record(await transaction.journal.operations.get(doctor.requestId)), recovery = record(op.input?.sourceRecovery);
   assertSourceRoot(record(root), recovery.root);
   assertSourceOperation(op, recovery, target, input.gatewayId);
-  const coaches = sourceAgentIds(recovery.assignments, target.agents);
-  const stores = sourcePostgresStores(recovery, target, coaches);
+  const defaultAgents = sourceAgentIds(recovery.assignments, target.agents);
+  const stores = sourcePostgresStores(recovery, target, defaultAgents);
   if (recovery.schedulerStateRecovery !== true || target.schedulerStateRecovery !== true) throw new Error("source Doctor scheduler custody mismatch");
   const current = await readSharedSourceRecoveryAuthority(transaction, input.gatewayId, doctor.requestId);
   assertSharedSourceRecoveryUnchanged(current, recovery as Parameters<typeof assertSharedSourceRecoveryUnchanged>[1]);
@@ -91,10 +91,10 @@ async function sourceDoctorContext(transaction: PlatformStateTransaction, input:
     schedulerStateRecovery: true as const, imageVerified: sourceImageVerified(fence, input.podUid) };
 }
 
-function sourcePostgresStores(recovery: DocumentData, target: DocumentData, coaches: string[]) {
+function sourcePostgresStores(recovery: DocumentData, target: DocumentData, defaultAgents: string[]) {
   const stores = recovery.postgresAgentStores;
   if (!Array.isArray(stores) || !stores.length || !isDeepStrictEqual(stores, target.postgresAgentStores) ||
-      coaches.some(id => !stores.some(s => s.agentId === id)) ||
+      defaultAgents.some(id => !stores.some(s => s.agentId === id)) ||
       new Set(stores.map(s => s.agentId)).size !== stores.length || new Set(stores.map(s => s.storeId)).size !== stores.length ||
       new Set(stores.map(s => s.schema)).size !== stores.length || stores.some(s => {
         const owner = recovery.assignments.find((a: DocumentData) => a.uid === s.uid);

@@ -32,7 +32,7 @@ describe("infra/gateway/entrypoint.sh — no permanent platform persona", () => 
   });
 });
 
-describe("Builder plugin-root preparation", () => {
+describe("User plugin-root preparation", () => {
   it("retires config-adjacent aliases without touching their runtime targets", () => {
     const root = mkdtempSync(path.join(tmpdir(), "plugin-roots-"));
     try {
@@ -55,15 +55,15 @@ describe("Builder plugin-root preparation", () => {
   it("refuses an unrecognized alias without replacing or following it", () => {
     const root = mkdtempSync(path.join(tmpdir(), "plugin-roots-"));
     try {
-      const config = path.join(root, "system_config"), unowned = path.join(root, "customer-plugins");
+      const config = path.join(root, "system_config"), unowned = path.join(root, "user-plugins");
       mkdirSync(config);
       mkdirSync(unowned);
-      writeFileSync(path.join(unowned, "retained"), "customer data");
+      writeFileSync(path.join(unowned, "retained"), "user data");
       symlinkSync(unowned, path.join(config, "npm"));
       const run = preparePluginRoots(root);
       expect(run.status).not.toBe(0);
       expect(readlinkSync(path.join(config, "npm"))).toBe(unowned);
-      expect(readFileSync(path.join(unowned, "retained"), "utf8")).toBe("customer data");
+      expect(readFileSync(path.join(unowned, "retained"), "utf8")).toBe("user data");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
@@ -110,25 +110,25 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(restoreIdx).toBeLessThan(openclawStartIdx);
   });
 
-  it("hydrates the configured builder credential after restore and before OpenClaw", () => {
+  it("hydrates the configured user credential after restore and before OpenClaw", () => {
     const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
-    const hydrateIdx = entrypoint.indexOf("configured-builder-bootstrap.ts");
+    const hydrateIdx = entrypoint.indexOf("configured-user-bootstrap.ts");
     const openclawIdx = entrypoint.indexOf("openclaw gateway run");
     expect(hydrateIdx).toBeGreaterThan(restoreIdx);
     expect(openclawIdx).toBeGreaterThan(hydrateIdx);
   });
 
-  it("quarantines persisted Barn customer cron host-execution rows before OpenClaw starts", () => {
-    const quarantineIdx = entrypoint.indexOf("quarantine-customer-cron-jobs.mjs");
+  it("quarantines persisted shared gateway user cron host-execution rows before OpenClaw starts", () => {
+    const quarantineIdx = entrypoint.indexOf("quarantine-user-cron-jobs.mjs");
     const openclawIdx = entrypoint.indexOf("openclaw gateway run");
     expect(quarantineIdx).toBeGreaterThan(-1);
     expect(quarantineIdx).toBeLessThan(openclawIdx);
     const block = entrypoint.slice(entrypoint.indexOf("if [", quarantineIdx), openclawIdx);
     expect(block).toMatch(/GATEWAY_CLASS_EFFECTIVE[^\n]*= "shared"/);
-    expect(block).toMatch(/node "\$CUSTOMER_CRON_QUARANTINE"/);
+    expect(block).toMatch(/node "\$USER_CRON_QUARANTINE"/);
   });
 
-  it("gates system_config restore on non-shared class and explicit builder slug", () => {
+  it("gates system_config restore on non-shared class and explicit user slug", () => {
     const restoreBlock = entrypoint.slice(
       entrypoint.indexOf("Owner-bound runtime system_config restore"),
       entrypoint.indexOf("apply-gateway-class-policy.mjs"),
@@ -138,13 +138,13 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(restoreBlock).toMatch(/\$\{BUILDER_SLUG\}/);
   });
 
-  it("reads the Builder identity from the broker before any owner-scoped pre-boot step", () => {
-    const identityIdx = entrypoint.indexOf("/octogee/scripts/entrypoints/builder-identity.ts");
-    const identityBlock = entrypoint.slice(entrypoint.indexOf("# ── Builder identity"), entrypoint.indexOf('GIT_SSH_HOST="'));
+  it("reads the user identity from the broker before any owner-scoped pre-boot step", () => {
+    const identityIdx = entrypoint.indexOf("/octogee/scripts/entrypoints/user-identity.ts");
+    const identityBlock = entrypoint.slice(entrypoint.indexOf("# ── User identity"), entrypoint.indexOf('GIT_SSH_HOST="'));
     expect(identityIdx).toBeGreaterThan(-1);
     expect(identityIdx).toBeLessThan(entrypoint.indexOf("IdentityFile"));
     expect(identityIdx).toBeLessThan(entrypoint.indexOf("system-config-restore.ts"));
-    expect(identityBlock).toMatch(/BUILDER_SLUG=\$\("\$TSX" \/octogee\/scripts\/entrypoints\/builder-identity\.ts\)/);
+    expect(identityBlock).toMatch(/BUILDER_SLUG=\$\("\$TSX" \/octogee\/scripts\/entrypoints\/user-identity\.ts\)/);
     expect(identityBlock).toMatch(/identity_status" -eq 2[\s\S]*?exit 2/);
     expect(identityBlock).toMatch(/sleep 5/);
     expect(entrypoint).not.toMatch(/GATEWAY_BUILDER_SLUG|GATEWAY_OWNER_UID/);
@@ -153,16 +153,16 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
 
   it("retries restore and hydration against the data plane without exiting", () => {
     expect(entrypoint).toMatch(/until "\$TSX" \/octogee\/scripts\/entrypoints\/system-config-restore\.ts/);
-    expect(entrypoint).toMatch(/until "\$TSX" \/octogee\/scripts\/entrypoints\/configured-builder-bootstrap\.ts/);
+    expect(entrypoint).toMatch(/until "\$TSX" \/octogee\/scripts\/entrypoints\/configured-user-bootstrap\.ts/);
     const retryIdx = entrypoint.indexOf("until \"$TSX\" /octogee/scripts/entrypoints/system-config-restore.ts");
     const retryBlock = entrypoint.slice(retryIdx, entrypoint.indexOf("else", retryIdx));
     expect(retryBlock).toMatch(/sleep 5/);
     expect(retryBlock).not.toMatch(/exit\s+[1-9]/);
   });
 
-  it("restores the Builder PostgreSQL identity before OpenClaw", () => {
-    const hydrateIdx = entrypoint.indexOf("configured-builder-bootstrap.ts");
-    const runtimeRestoreIdx = entrypoint.indexOf("builder-runtime-state-restore.ts");
+  it("restores the user PostgreSQL identity before OpenClaw", () => {
+    const hydrateIdx = entrypoint.indexOf("configured-user-bootstrap.ts");
+    const runtimeRestoreIdx = entrypoint.indexOf("isolated-runtime-state-restore.ts");
     const supervisorIdx = entrypoint.indexOf("supervise_runner surge-openclaw-supervisor");
 
     expect(runtimeRestoreIdx).toBeGreaterThan(hydrateIdx);
@@ -170,7 +170,7 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
   });
 
   it("lands recorded PostgreSQL agent anchors after the runtime-state restore and before OpenClaw", () => {
-    const runtimeRestoreIdx = entrypoint.indexOf("builder-runtime-state-restore.ts");
+    const runtimeRestoreIdx = entrypoint.indexOf("isolated-runtime-state-restore.ts");
     const anchorIdx = entrypoint.indexOf("agent-anchor-restore.ts");
     const supervisorIdx = entrypoint.indexOf("supervise_runner surge-openclaw-supervisor");
 
@@ -194,7 +194,7 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
 
   it("prepares canonical plugin roots before Native startup", () => {
     const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
-    const hydrateIdx = entrypoint.indexOf("configured-builder-bootstrap.ts");
+    const hydrateIdx = entrypoint.indexOf("configured-user-bootstrap.ts");
     const pluginRootsIdx = entrypoint.indexOf(
       "Prepare canonical plugin roots",
     );
@@ -213,7 +213,7 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(entrypoint).not.toMatch(/rm -rf "\$OPENCLAW_CONFIG_DIR\//);
   });
 
-  it("keeps one supervised config watcher for Builder gateways", () => {
+  it("keeps one supervised config watcher for isolated gateways", () => {
     expect(entrypoint).toMatch(/supervise_runner\s+system-config-watch\s+5000\s+"\$TSX"/);
     expect(entrypoint.match(/supervise_runner\s+system-config-watch/g)).toHaveLength(1);
     const watcherIdx = entrypoint.indexOf("supervise_runner system-config-watch");
@@ -221,25 +221,25 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(guard).toMatch(/"\$GATEWAY_CLASS_EFFECTIVE" = "builder"/);
   });
 
-  it("claims the Builder identity before any owner-scoped pre-boot step and never boots unclaimed", () => {
-    const identityBlock = entrypoint.slice(entrypoint.indexOf("# ── Builder identity"), entrypoint.indexOf('GIT_SSH_HOST="'));
+  it("claims the user identity before any owner-scoped pre-boot step and never boots unclaimed", () => {
+    const identityBlock = entrypoint.slice(entrypoint.indexOf("# ── User identity"), entrypoint.indexOf('GIT_SSH_HOST="'));
     expect(identityBlock).toMatch(/identity_status" -eq 2 \]; then\s+log "FATAL/);
     expect(identityBlock).not.toMatch(/-eq 3/);
     expect(entrypoint).not.toMatch(/STANDBY|OVERLAY_GATE|await-overlay/);
     const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
     expect(entrypoint.slice(entrypoint.lastIndexOf("if [", restoreIdx), restoreIdx)).toMatch(/"\$GATEWAY_CLASS_EFFECTIVE" != "shared"/);
-    for (const builderOnly of ["clean-builder-project-placeholders.ts", "IdentityFile", "mark-overlay-applied"]) {
-      const idx = entrypoint.indexOf(builderOnly);
-      expect(entrypoint.slice(entrypoint.lastIndexOf("if [", idx), idx), builderOnly).toMatch(/"\$GATEWAY_CLASS_EFFECTIVE" = "builder"/);
+    for (const userOnly of ["clean-user-project-placeholders.ts", "IdentityFile", "mark-overlay-applied"]) {
+      const idx = entrypoint.indexOf(userOnly);
+      expect(entrypoint.slice(entrypoint.lastIndexOf("if [", idx), idx), userOnly).toMatch(/"\$GATEWAY_CLASS_EFFECTIVE" = "builder"/);
     }
-    for (const runner of ["github-cli-auth-hydrate.ts", "builder-toolchain-hydrator.ts", "system-config-watch.ts"]) {
+    for (const runner of ["github-cli-auth-hydrate.ts", "isolated-toolchain-hydrator.ts", "system-config-watch.ts"]) {
       const idx = entrypoint.indexOf(`/octogee/scripts/entrypoints/${runner}`);
       expect(entrypoint.slice(entrypoint.lastIndexOf("\n", idx), idx), runner).toMatch(/supervise_runner \S+ \d+ "\$TSX" $/);
     }
   });
 
   it("stamps a claimed boot's overlay after its config is composed and before OpenClaw starts", () => {
-    const stampIdx = entrypoint.indexOf("builder-claim.ts mark-overlay-applied");
+    const stampIdx = entrypoint.indexOf("user-claim.ts mark-overlay-applied");
     expect(stampIdx).toBeGreaterThan(entrypoint.lastIndexOf('node "$CLASS_POLICY"'));
     expect(stampIdx).toBeGreaterThan(entrypoint.indexOf("ensure-configured-agent-runtime-dirs.ts"));
     expect(stampIdx).toBeLessThan(entrypoint.indexOf("supervise_runner surge-openclaw-supervisor"));
@@ -254,17 +254,17 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(entrypoint).toContain("OpenClaw gateway healthy; starting auxiliary runners");
   });
 
-  it("delegates the Builder OpenClaw process to the hold-capable surge supervisor", () => {
+  it("delegates the user OpenClaw process to the hold-capable surge supervisor", () => {
     const supervisorIdx = entrypoint.indexOf("supervise_runner surge-openclaw-supervisor");
     const directStartIdx = entrypoint.indexOf("openclaw gateway run");
     expect(supervisorIdx).toBeGreaterThan(-1);
     const branchIdx = entrypoint.lastIndexOf('if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then', supervisorIdx);
     expect(branchIdx).toBeGreaterThan(-1);
     const nearestGuard = entrypoint.lastIndexOf("if [", supervisorIdx);
-    expect(nearestGuard, "every Builder boot starts the supervisor").toBe(branchIdx);
+    expect(nearestGuard, "every user boot starts the supervisor").toBe(branchIdx);
     expect(supervisorIdx).toBeLessThan(directStartIdx);
-    const builderBranch = entrypoint.slice(supervisorIdx, directStartIdx);
-    expect(builderBranch).not.toMatch(/until curl/);
+    const userBranch = entrypoint.slice(supervisorIdx, directStartIdx);
+    expect(userBranch).not.toMatch(/until curl/);
     expect(entrypoint).not.toContain("OPENCLAW_SKIP_CHANNELS");
   });
 
@@ -297,25 +297,25 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
   });
 });
 
-describe("infra/gateway/entrypoint.sh — Builder-only customer runtime", () => {
-  it("rejects retired customer gateway classes and profiles", () => {
+describe("infra/gateway/entrypoint.sh — isolated-only user runtime", () => {
+  it("rejects retired user gateway classes and profiles", () => {
     expect(entrypoint).toMatch(/shared\|builder/);
     expect(entrypoint).toMatch(/GATEWAY_CLASS must be shared or builder/);
     expect(entrypoint).toMatch(/GATEWAY_PROFILE must be standard or builder/);
-    expect(entrypoint).not.toMatch(/shared\|builder\|operator|standard\|builder\|operator/);
+    expect(entrypoint).not.toMatch(/shared\|user\|operator|standard\|user\|operator/);
   });
 
-  it("loads the native-agent bootstrap only for Builder gateways without weakening Agent policy", () => {
+  it("loads the native-agent bootstrap only for isolated gateways without weakening Agent policy", () => {
     const stamperRegion = entrypoint.match(
       /[\s\S]{0,200}stamp-claude-first-run\.mjs[\s\S]{0,250}/,
     )?.[0];
     expect(stamperRegion).toMatch(/GATEWAY_CLASS_EFFECTIVE[\s\S]*= "builder"[\s\S]*-f/);
-    expect(entrypoint).not.toMatch(/apply-builder-codex-sandbox\.mjs/);
+    expect(entrypoint).not.toMatch(/apply-isolated-codex-sandbox\.mjs/);
     expect(entrypoint).not.toMatch(/apply-operator-codex-sandbox\.mjs/);
     expect(entrypoint).not.toMatch(/operator\.env/);
   });
 
-  it("converges Builder GitHub auth and defers native runtime stamping", () => {
+  it("converges user GitHub auth and defers native runtime stamping", () => {
     const healthyIdx = entrypoint.indexOf("OpenClaw gateway healthy");
     const fleetIdx = entrypoint.indexOf("supervise_runner fleet-controller");
     const stamperIdx = entrypoint.indexOf("stamp-claude-first-run.mjs");
@@ -327,11 +327,11 @@ describe("infra/gateway/entrypoint.sh — Builder-only customer runtime", () => 
 });
 
 describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", () => {
-  it("routes only non-code auxiliary runners through supervise-runner on customer gateways", () => {
+  it("routes only non-code auxiliary runners through supervise-runner on user gateways", () => {
     const runners: Record<string, string> = {
       "fleet-controller": "5000",
       "byosub-syncback": "30000",
-      "builder-toolchain-hydrator": "30000",
+      "isolated-toolchain-hydrator": "30000",
     };
     for (const [runner, restartDelayMs] of Object.entries(runners)) {
       expect(entrypoint).toMatch(
@@ -388,7 +388,7 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
 });
 
 describe("infra/gateway/entrypoint.sh — a dead OpenClaw process exits the shared container", () => {
-  it("waits on the OpenClaw PID after the runners start and leaves Builder pods on the supervisor", () => {
+  it("waits on the OpenClaw PID after the runners start and leaves isolated pods on the supervisor", () => {
     const tail = entrypoint.slice(entrypoint.indexOf("supervise_runner byosub-syncback"));
     expect(tail).toMatch(/if \[ "\$GATEWAY_CLASS_EFFECTIVE" = "shared" \]; then\s+exit_when_openclaw_dies "\$OPENCLAW_PID"\s+else\s+wait\s+fi/);
     expect(entrypoint.slice(0, entrypoint.indexOf("supervise_runner fleet-controller")))
@@ -488,7 +488,7 @@ describe("per-user control identity — pod token stays out of the OpenClaw proc
     expect(relayExport).toBeLessThan(openClawStart);
   });
 
-  it("spawns the Builder OpenClaw process through the identity-aware environment filter", () => {
+  it("spawns the user OpenClaw process through the identity-aware environment filter", () => {
     expect(supervisor).toMatch(/env:\s*openClawProcessEnv\(\)/);
     expect(supervisor).toMatch(/OPENCLAW_GATEWAY_TOKEN: podToken, \.\.\.rest/);
   });

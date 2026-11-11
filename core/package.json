@@ -17,13 +17,13 @@
       "types": "./dist/testing/journal-store.d.ts",
       "default": "./dist/testing/journal-store.js"
     },
-    "./project-coach-workspaces": {
-      "types": "./dist/project-coach-workspaces.d.ts",
-      "default": "./dist/project-coach-workspaces.js"
+    "./project-agent-workspaces": {
+      "types": "./dist/project-agent-workspaces.d.ts",
+      "default": "./dist/project-agent-workspaces.js"
     },
-    "./disposable-builder-prelaunch": {
-      "types": "./dist/disposable-builder-prelaunch.d.ts",
-      "default": "./dist/disposable-builder-prelaunch.js"
+    "./isolated-prelaunch": {
+      "types": "./dist/isolated-prelaunch.d.ts",
+      "default": "./dist/isolated-prelaunch.js"
     },
     "./gateway-runtime-restart": {
       "types": "./dist/gateway-runtime-restart.d.ts",
@@ -37,9 +37,9 @@
       "types": "./dist/admin-customer-reset.d.ts",
       "default": "./dist/admin-customer-reset.js"
     },
-    "./admin-customer-router": {
-      "types": "./dist/admin-customer-router.d.ts",
-      "default": "./dist/admin-customer-router.js"
+    "./admin-user-directory-router": {
+      "types": "./dist/admin-user-directory-router.d.ts",
+      "default": "./dist/admin-user-directory-router.js"
     },
     "./admin-fleet-router": {
       "types": "./dist/admin-fleet-router.d.ts",
@@ -89,13 +89,13 @@
       "types": "./dist/auth-profile-sqlite.d.ts",
       "default": "./dist/auth-profile-sqlite.js"
     },
-    "./builder-account": {
-      "types": "./dist/builder-account.d.ts",
-      "default": "./dist/builder-account.js"
+    "./user-account": {
+      "types": "./dist/user-account.d.ts",
+      "default": "./dist/user-account.js"
     },
-    "./builder-activation-lease": {
-      "types": "./dist/builder-activation-lease.d.ts",
-      "default": "./dist/builder-activation-lease.js"
+    "./user-activation-lease": {
+      "types": "./dist/user-activation-lease.d.ts",
+      "default": "./dist/user-activation-lease.js"
     },
     "./byosub-onboarding": {
       "types": "./dist/byosub-onboarding.d.ts",
@@ -141,21 +141,21 @@
       "types": "./dist/context-file-convergence.d.ts",
       "default": "./dist/context-file-convergence.js"
     },
-    "./customer-lifecycle": {
-      "types": "./dist/customer-lifecycle.d.ts",
-      "default": "./dist/customer-lifecycle.js"
+    "./user-lifecycle": {
+      "types": "./dist/user-lifecycle.d.ts",
+      "default": "./dist/user-lifecycle.js"
     },
     "./customer-hosting": {
       "types": "./dist/customer-hosting.d.ts",
       "default": "./dist/customer-hosting.js"
     },
-    "./customer-deletion-plan": {
-      "types": "./dist/customer-deletion-plan.d.ts",
-      "default": "./dist/customer-deletion-plan.js"
+    "./user-deletion-plan": {
+      "types": "./dist/user-deletion-plan.d.ts",
+      "default": "./dist/user-deletion-plan.js"
     },
-    "./customer-snapshot-mapping": {
-      "types": "./dist/customer-snapshot-mapping.d.ts",
-      "default": "./dist/customer-snapshot-mapping.js"
+    "./user-snapshot-mapping": {
+      "types": "./dist/user-snapshot-mapping.d.ts",
+      "default": "./dist/user-snapshot-mapping.js"
     },
     "./encryptor": {
       "types": "./dist/encryptor.d.ts",
@@ -173,9 +173,9 @@
       "types": "./dist/public-app-origins.d.ts",
       "default": "./dist/public-app-origins.js"
     },
-    "./customer-migration-v2": {
-      "types": "./dist/customer-migration-v2.d.ts",
-      "default": "./dist/customer-migration-v2.js"
+    "./user-migration-v2": {
+      "types": "./dist/user-migration-v2.d.ts",
+      "default": "./dist/user-migration-v2.js"
     },
     "./firebase-auth-helpers": {
       "types": "./dist/firebase-auth-helpers.d.ts",
@@ -249,9 +249,9 @@
       "types": "./dist/internal-fetch.d.ts",
       "default": "./dist/internal-fetch.js"
     },
-    "./local-coach-wired": {
-      "types": "./dist/local-coach-wired.d.ts",
-      "default": "./dist/local-coach-wired.js"
+    "./local-default-agent-wired": {
+      "types": "./dist/local-default-agent-wired.d.ts",
+      "default": "./dist/local-default-agent-wired.js"
     },
     "./migration-activation-manifest": {
       "types": "./dist/migration-activation-manifest.d.ts",
@@ -357,9 +357,9 @@
       "types": "./dist/mattermost/avatars.d.ts",
       "default": "./dist/mattermost/avatars.js"
     },
-    "./mattermost/builder-pat": {
-      "types": "./dist/mattermost/builder-pat.d.ts",
-      "default": "./dist/mattermost/builder-pat.js"
+    "./mattermost/user-pat": {
+      "types": "./dist/mattermost/user-pat.d.ts",
+      "default": "./dist/mattermost/user-pat.js"
     },
     "./mattermost/channel-members": {
       "types": "./dist/mattermost/channel-members.d.ts",
@@ -373,9 +373,9 @@
       "types": "./dist/mattermost/client.d.ts",
       "default": "./dist/mattermost/client.js"
     },
-    "./mattermost/coach-pat": {
-      "types": "./dist/mattermost/coach-pat.d.ts",
-      "default": "./dist/mattermost/coach-pat.js"
+    "./mattermost/default-agent-pat": {
+      "types": "./dist/mattermost/default-agent-pat.d.ts",
+      "default": "./dist/mattermost/default-agent-pat.js"
     },
     "./mattermost/community": {
       "types": "./dist/mattermost/community.d.ts",
@@ -500,8 +500,8 @@
       "admin-customer-reset": [
         "dist/admin-customer-reset.d.ts"
       ],
-      "admin-customer-router": [
-        "dist/admin-customer-router.d.ts"
+      "admin-user-directory-router": [
+        "dist/admin-user-directory-router.d.ts"
       ],
       "admin-fleet-router": [
         "dist/admin-fleet-router.d.ts"
@@ -540,7 +540,7 @@
         "dist/auth-profile-sqlite.d.ts"
       ],
       "builder-activation-lease": [
-        "dist/builder-activation-lease.d.ts"
+        "dist/user-activation-lease.d.ts"
       ],
       "byosub-onboarding": [
         "dist/byosub-onboarding.d.ts"
@@ -569,14 +569,14 @@
       "context-file-convergence": [
         "dist/context-file-convergence.d.ts"
       ],
-      "customer-lifecycle": [
-        "dist/customer-lifecycle.d.ts"
+      "user-lifecycle": [
+        "dist/user-lifecycle.d.ts"
       ],
       "customer-hosting": [
         "dist/customer-hosting.d.ts"
       ],
-      "customer-snapshot-mapping": [
-        "dist/customer-snapshot-mapping.d.ts"
+      "user-snapshot-mapping": [
+        "dist/user-snapshot-mapping.d.ts"
       ],
       "encryptor": [
         "dist/encryptor.d.ts"
@@ -587,8 +587,8 @@
       "deployment-environment": [
         "dist/deployment-environment.d.ts"
       ],
-      "customer-migration-v2": [
-        "dist/customer-migration-v2.d.ts"
+      "user-migration-v2": [
+        "dist/user-migration-v2.d.ts"
       ],
       "firebase-auth-helpers": [
         "dist/firebase-auth-helpers.d.ts"
@@ -644,8 +644,8 @@
       "internal-fetch": [
         "dist/internal-fetch.d.ts"
       ],
-      "local-coach-wired": [
-        "dist/local-coach-wired.d.ts"
+      "local-default-agent-wired": [
+        "dist/local-default-agent-wired.d.ts"
       ],
       "migration-activation-manifest": [
         "dist/migration-activation-manifest.d.ts"
@@ -725,8 +725,8 @@
       "mattermost/avatars": [
         "dist/mattermost/avatars.d.ts"
       ],
-      "mattermost/builder-pat": [
-        "dist/mattermost/builder-pat.d.ts"
+      "mattermost/user-pat": [
+        "dist/mattermost/user-pat.d.ts"
       ],
       "mattermost/channel-members": [
         "dist/mattermost/channel-members.d.ts"
@@ -737,8 +737,8 @@
       "mattermost/client": [
         "dist/mattermost/client.d.ts"
       ],
-      "mattermost/coach-pat": [
-        "dist/mattermost/coach-pat.d.ts"
+      "mattermost/default-agent-pat": [
+        "dist/mattermost/default-agent-pat.d.ts"
       ],
       "mattermost/community": [
         "dist/mattermost/community.d.ts"

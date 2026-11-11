@@ -692,7 +692,7 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
     );
   });
 
-  it("skips non-coach agent ids (no broker-token resolver grammar → fail closed)", async () => {
+  it("skips non-default-agent agent ids (no broker-token resolver grammar → fail closed)", async () => {
     const { secretsApply, apply } = fakeSecretsApply(agentsDir);
     const logFn = vi.fn();
     seedOpenClawAgentDbForId(agentsDir, "octogee-alice-coach");

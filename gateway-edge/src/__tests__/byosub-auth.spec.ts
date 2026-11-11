@@ -46,9 +46,9 @@ vi.mock("../lib/byosub.js", async (orig) => {
 });
 
 import { createByosubAuthRouter } from "../routes/byosub-auth.js";
-import { coachAgentId } from "../lib/byosub.js";
+import { userDefaultAgentId } from "../lib/byosub.js";
 
-const AGENT = coachAgentId("tester5");
+const AGENT = userDefaultAgentId("tester5");
 
 function app() {
   const a = express();
@@ -59,9 +59,9 @@ function app() {
 
 describe("byosub-auth sidecar router", () => {
   beforeEach(() => {
-    process.env.GATEWAY_ID = "bender";
+    process.env.GATEWAY_ID = "walter";
     process.env.GATEWAY_CLASS = "builder";
-    resolveByosubUserGateway.mockReset().mockResolvedValue({ slug: "tester5", gatewayId: "bender" });
+    resolveByosubUserGateway.mockReset().mockResolvedValue({ slug: "tester5", gatewayId: "walter" });
     readByosubFlow.mockReset();
     firestore.doc.mockReset();
     firestore.collection.mockReset();
@@ -82,7 +82,7 @@ describe("byosub-auth sidecar router", () => {
     const res = await request(app()).post("/byosub/connect").send({ provider: "anthropic" });
     expect(res.status).toBe(200);
     expect(res.body.flowId).toBe("f1");
-    expect(ssoStart).toHaveBeenCalledWith({ gatewayId: "bender", agentId: AGENT });
+    expect(ssoStart).toHaveBeenCalledWith({ gatewayId: "walter", agentId: AGENT });
     expect(brokerByosubFlow).toHaveBeenCalledWith({
       flowId: "f1",
       agentId: AGENT,
@@ -112,7 +112,7 @@ describe("byosub-auth sidecar router", () => {
     expect(firestore.collection).not.toHaveBeenCalled();
   });
 
-  it("connect: refuses when the pod does not declare a Builder class", async () => {
+  it("connect: refuses when the pod does not declare a isolated class", async () => {
     delete process.env.GATEWAY_CLASS;
 
     const res = await request(app()).post("/byosub/connect").send({ provider: "anthropic" });
@@ -122,7 +122,7 @@ describe("byosub-auth sidecar router", () => {
     expect(ssoStart).not.toHaveBeenCalled();
   });
 
-  it("connect: starts the Builder flow without touching Firestore", async () => {
+  it("connect: starts the user flow without touching Firestore", async () => {
     ssoStart.mockResolvedValue({ flowId: "f1", verificationUrl: "https://x", state: "pending" });
 
     const res = await request(app()).post("/byosub/connect").send({ provider: "anthropic" });
@@ -153,15 +153,15 @@ describe("byosub-auth sidecar router", () => {
   });
 
   it("status: reads the brokered flow and proxies the in-pod status for the owner", async () => {
-    readByosubFlow.mockResolvedValue({ uid: TEST_UID, gatewayId: "bender", agentId: AGENT, provider: "anthropic" });
+    readByosubFlow.mockResolvedValue({ uid: TEST_UID, gatewayId: "walter", agentId: AGENT, provider: "anthropic" });
     ssoStatus.mockResolvedValue({ state: "pending" });
     const res = await request(app()).get("/byosub/status/f1");
     expect(res.status).toBe(200);
-    expect(ssoStatus).toHaveBeenCalledWith({ gatewayId: "bender", flowId: "f1" });
+    expect(ssoStatus).toHaveBeenCalledWith({ gatewayId: "walter", flowId: "f1" });
   });
 
   it("status: 404 when the flow belongs to a different user", async () => {
-    readByosubFlow.mockResolvedValue({ uid: "someone-else", gatewayId: "bender", agentId: AGENT, provider: "anthropic" });
+    readByosubFlow.mockResolvedValue({ uid: "someone-else", gatewayId: "walter", agentId: AGENT, provider: "anthropic" });
     const res = await request(app()).get("/byosub/status/f1");
     expect(res.status).toBe(404);
     expect(ssoStatus).not.toHaveBeenCalled();
@@ -176,11 +176,11 @@ describe("byosub-auth sidecar router", () => {
   });
 
   it("sso/submit: proxies the in-pod submit for the owner", async () => {
-    readByosubFlow.mockResolvedValue({ uid: TEST_UID, gatewayId: "bender", agentId: AGENT, provider: "anthropic" });
+    readByosubFlow.mockResolvedValue({ uid: TEST_UID, gatewayId: "walter", agentId: AGENT, provider: "anthropic" });
     ssoSubmit.mockResolvedValue({ state: "connected" });
     const res = await request(app()).post("/byosub/sso/submit").send({ flowId: "f1", code: "abc" });
     expect(res.status).toBe(200);
-    expect(ssoSubmit).toHaveBeenCalledWith({ gatewayId: "bender", flowId: "f1", code: "abc" });
+    expect(ssoSubmit).toHaveBeenCalledWith({ gatewayId: "walter", flowId: "f1", code: "abc" });
   });
 
   it("sso/submit: 409 when the flow belongs to a different pod", async () => {

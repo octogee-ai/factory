@@ -53,7 +53,7 @@ function harness(overrides: {
       agentId: AGENT_ID,
       uid: "uid-alice",
       coachMmUserId: AGENT_MM_USER_ID,
-      coachToken: "coach-pat",
+      coachToken: "default-agent-pat",
       workspaceSlug: "alice",
       projectSlug: "workspace",
     })),

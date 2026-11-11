@@ -273,7 +273,7 @@ async function mattermostSourceFixture() {
   return { ...f, stale, pairs, config, configPath };
 }
 
-it("disables stale customer and project Mattermost accounts while preserving authoritative channels and selectors", async () => {
+it("disables stale user and project Mattermost accounts while preserving authoritative channels and selectors", async () => {
   const f = await mattermostSourceFixture();
   await repairSourceDoctorAgentStores(f.agentIds, f.input);
   const after = JSON.parse(await fs.readFile(f.configPath, "utf8"));

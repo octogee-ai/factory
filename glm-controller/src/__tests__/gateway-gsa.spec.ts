@@ -1,13 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import {
-  builderGatewayServiceAccountEmail,
+  isolatedGatewayServiceAccountEmail,
   createGatewayServiceAccountTeardown,
 } from "../lib/gateway-gsa";
 
-describe("builderGatewayServiceAccountEmail", () => {
+describe("isolatedGatewayServiceAccountEmail", () => {
   it("builds the per-gateway GSA email from the KSA naming convention + project", () => {
-    expect(builderGatewayServiceAccountEmail("bender", "octogee")).toBe(
-      "octogee-gw-bender@octogee.iam.gserviceaccount.com",
+    expect(isolatedGatewayServiceAccountEmail("walter", "octogee")).toBe(
+      "octogee-gw-walter@octogee.iam.gserviceaccount.com",
     );
   });
 });

@@ -177,7 +177,7 @@ export {
   VERIFY_ACCOUNT_TIMEOUT_MS,
   CONFIG_PATCH_DEADLINE_MS,
   CONFIG_RELOAD_DEADLINE_MS,
-  ADD_CUSTOMER_DEADLINE_MS,
+  ADD_USER_DEADLINE_MS,
   MIGRATION_QUIESCE_TIMEOUT_MS,
   MIGRATION_TRANSFER_TIMEOUT_MS,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
@@ -190,7 +190,7 @@ export type {
   OnboardingOrchestratorConfig,
 } from './orchestrator-placement.js';
 export {
-  resolveContinuousBuilderPlacement,
+  resolveContinuousUserPlacement,
   resolveLiveActivationTargetGatewayId,
 } from './orchestrator-placement.js';
 export type {
@@ -209,7 +209,7 @@ export type {
 } from './shared-gateway-pool.js';
 export {
   DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED,
-  DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY,
+  DEFAULT_SHARED_GATEWAY_USERS_PER_GATEWAY,
   SHARED_POOL_REPLACEMENT_STALL_MS,
   SHARED_POOL_SLOT_ID_PATTERN,
   authoritativeSharedGatewayLoad,
@@ -304,7 +304,7 @@ export type {
   FleetBrokerProjectCheckoutScope,
   FleetBrokerProjectRestore,
   FleetBrokerAssignmentRosterEntry,
-  FleetBrokerCoachIdentity,
+  FleetBrokerDefaultAgentIdentity,
   FleetBrokerUserSnapshot,
 } from './fleet-broker.js';
 
@@ -313,7 +313,7 @@ export type {
   GatewayDesiredState,
   GatewayProfile,
   GatewayServiceAccountSpec,
-  BuilderGatewayAccessSpec,
+  IsolatedGatewayAccessSpec,
   OperationKind,
   OperationOrigin,
   OperationStatus,
@@ -347,15 +347,15 @@ export {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
   GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME,
-  BUILDER_GATEWAY_LOCKED_ACCESS,
-  BUILDER_GATEWAY_LOCKED_SERVICE_ACCOUNT,
-  BUILDER_GATEWAY_SERVICE_ACCOUNT_PREFIX,
+  ISOLATED_GATEWAY_LOCKED_ACCESS,
+  ISOLATED_GATEWAY_LOCKED_SERVICE_ACCOUNT,
+  ISOLATED_GATEWAY_SERVICE_ACCOUNT_PREFIX,
   isGatewayClass,
   isOperationAuditRecord,
   isOperationAuditRow,
   isGatewayClassControlUiAccessEnabled,
   isGatewayProfile,
-  builderGatewayServiceAccountName,
+  isolatedGatewayServiceAccountName,
   resolveGatewayClass,
   resolveGatewayImageProfile,
   resolveOperationOrigin,
@@ -429,7 +429,7 @@ export {
 
 export { OPENCLAW_PROTOCOL_VERSION } from './openclaw-wire.js';
 
-export { builderGatewayIdForSlug, disposableBuilderGatewayId } from './builder-gateway-id.js';
+export { isolatedGatewayIdForSlug, isolatedGatewayId } from './isolated-gateway-id.js';
 
 export {
   PLACEMENT_RECEIPTS_SUBCOLLECTION,

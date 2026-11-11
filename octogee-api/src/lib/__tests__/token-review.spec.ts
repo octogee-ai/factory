@@ -23,7 +23,7 @@ afterEach(async () => {
 });
 
 function authenticatedBody(
-  saName = "octogee-gw-bender",
+  saName = "octogee-gw-walter",
   audiences: string[] = [TENANT_BINDING_AUDIENCE],
 ) {
   return {
@@ -33,7 +33,7 @@ function authenticatedBody(
       user: {
         username: `system:serviceaccount:octogee:${saName}`,
         extra: {
-          "authentication.kubernetes.io/pod-name": ["octogee-gateway-bender-r7-5bc5949d46-p946t"],
+          "authentication.kubernetes.io/pod-name": ["octogee-gateway-walter-r7-5bc5949d46-p946t"],
           "authentication.kubernetes.io/pod-uid": ["b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef"],
         },
       },
@@ -60,9 +60,9 @@ describe("createKubernetesTokenReviewer", () => {
     await expect(reviewer("caller-jwt")).resolves.toEqual({
       authenticated: true,
       namespace: "octogee",
-      saName: "octogee-gw-bender",
+      saName: "octogee-gw-walter",
       audiences: [TENANT_BINDING_AUDIENCE],
-      podName: "octogee-gateway-bender-r7-5bc5949d46-p946t",
+      podName: "octogee-gateway-walter-r7-5bc5949d46-p946t",
       podUid: "b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef",
     });
     expect(calls).toHaveLength(1);
@@ -81,7 +81,7 @@ describe("createKubernetesTokenReviewer", () => {
     const caPath = await tempFile("ca.crt", "ca-data");
     const bodies = [
       { status: { authenticated: false } },
-      authenticatedBody("octogee-gw-bender", ["wrong-audience"]),
+      authenticatedBody("octogee-gw-walter", ["wrong-audience"]),
       { status: { authenticated: true, audiences: [TENANT_BINDING_AUDIENCE], user: {} } },
     ];
     const reviewer = createKubernetesTokenReviewer({
@@ -108,7 +108,7 @@ describe("createKubernetesTokenReviewer", () => {
             authenticated: true,
             audiences: [TENANT_BINDING_AUDIENCE],
             user: {
-              username: "system:serviceaccount:octogee:octogee-gw-bender",
+              username: "system:serviceaccount:octogee:octogee-gw-walter",
               extra: {
                 "authentication.kubernetes.io/pod-name": ["one", "two"],
                 "authentication.kubernetes.io/pod-uid": "not-an-array",
@@ -122,7 +122,7 @@ describe("createKubernetesTokenReviewer", () => {
     await expect(reviewer("caller-jwt")).resolves.toEqual({
       authenticated: true,
       namespace: "octogee",
-      saName: "octogee-gw-bender",
+      saName: "octogee-gw-walter",
       audiences: [TENANT_BINDING_AUDIENCE],
     });
   });

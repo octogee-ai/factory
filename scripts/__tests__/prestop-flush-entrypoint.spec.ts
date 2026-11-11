@@ -6,12 +6,12 @@ import {
   PRESTOP_SESSION_QUIESCE_TIMEOUT_MS,
   resolvePreStopFlushConfig,
 } from "../entrypoints/prestop-flush.js";
-import { withBuilderClaim } from "./helpers/builder-claim.js";
+import { withUserClaim } from "./helpers/user-claim.js";
 
 describe("prestop-flush entrypoint config", () => {
   it("normalizes the local gateway id to default", () => {
     expect(resolvePreStopFlushConfig(
-      withBuilderClaim({}, "alice"),
+      withUserClaim({}, "alice"),
       { gatewayClass: "standard", gatewayId: "local" },
     )).toEqual({
       gatewayId: "default",
@@ -20,7 +20,7 @@ describe("prestop-flush entrypoint config", () => {
     });
   });
 
-  it("keeps dedicated gateway ids and leaves the builder slug empty when the pod is shared", () => {
+  it("keeps dedicated gateway ids and leaves the user slug empty when the pod is shared", () => {
     expect(resolvePreStopFlushConfig(
       {},
       { gatewayClass: "dedicated", gatewayId: "gw-alice" },
@@ -47,7 +47,7 @@ describe("prestop-flush entrypoint config", () => {
     }));
   });
 
-  it("reports the dedicated builder's accepted system config commit", async () => {
+  it("reports the dedicated user's accepted system config commit", async () => {
     const acceptedCommit = "a".repeat(40);
     const sync = vi.fn(() => ({
       committed: true,
@@ -67,10 +67,10 @@ describe("prestop-flush entrypoint config", () => {
     expect(sync).not.toHaveBeenCalled();
   });
 
-  it("quiesces only the dedicated builder before its preStop checkpoint", async () => {
+  it("quiesces only the dedicated user before its preStop checkpoint", async () => {
     const quiesce = vi.fn(async () => ({ drained: true, runningCount: 0 }));
     const run = createPreStopSessionQuiesce("alice", {
-      listCustomerSlugs: () => ["alice", "bob"],
+      listUserSlugs: () => ["alice", "bob"],
       quiesce,
     });
 
@@ -82,12 +82,12 @@ describe("prestop-flush entrypoint config", () => {
     }));
   });
 
-  it("attempts every shared customer and fails loud after bounded quiescence", async () => {
+  it("attempts every shared user and fails loud after bounded quiescence", async () => {
     const quiesce = vi.fn(async (slug: string) => slug === "alice"
       ? { drained: false, runningCount: 2 }
       : { drained: true, runningCount: 0 });
     const run = createPreStopSessionQuiesce("", {
-      listCustomerSlugs: () => ["alice", "bob"],
+      listUserSlugs: () => ["alice", "bob"],
       quiesce,
     });
 
@@ -98,7 +98,7 @@ describe("prestop-flush entrypoint config", () => {
   it("builds exact-key cleanup for a retiring tenant-bound pod", async () => {
     const releaseKey = vi.fn(async () => {});
     const release = createPreStopGiteaKeyRelease("alice", {
-      readLocalCustomerPubKey: () => "ssh-ed25519 OLD predecessor",
+      readLocalUserPubKey: () => "ssh-ed25519 OLD predecessor",
       releaseKey,
     });
 
@@ -108,18 +108,18 @@ describe("prestop-flush entrypoint config", () => {
 
   it("fails loud instead of reporting cleanup when the local public key is missing", async () => {
     const release = createPreStopGiteaKeyRelease("alice", {
-      readLocalCustomerPubKey: () => null,
-      listLocalCustomerPubKeys: () => [],
+      readLocalUserPubKey: () => null,
+      listLocalUserPubKeys: () => [],
       releaseKey: vi.fn(async () => {}),
     });
     await expect(release?.()).rejects.toThrow(/local SSH public key is missing/);
   });
 
-  it("releases every exact local customer key from a retiring shared gateway", async () => {
+  it("releases every exact local user key from a retiring shared gateway", async () => {
     const releaseKey = vi.fn(async () => {});
     const release = createPreStopGiteaKeyRelease("", {
-      readLocalCustomerPubKey: () => null,
-      listLocalCustomerPubKeys: () => [
+      readLocalUserPubKey: () => null,
+      listLocalUserPubKeys: () => [
         { slug: "alice", pubKey: "ssh-ed25519 ALICE predecessor" },
         { slug: "bob", pubKey: "ssh-ed25519 BOB predecessor" },
       ],
@@ -133,13 +133,13 @@ describe("prestop-flush entrypoint config", () => {
     ]);
   });
 
-  it("reports shared-gateway key cleanup failure after attempting every local customer", async () => {
+  it("reports shared-gateway key cleanup failure after attempting every local user", async () => {
     const releaseKey = vi.fn(async (slug: string) => {
       if (slug === "alice") throw new Error("broker unavailable");
     });
     const release = createPreStopGiteaKeyRelease("", {
-      readLocalCustomerPubKey: () => null,
-      listLocalCustomerPubKeys: () => [
+      readLocalUserPubKey: () => null,
+      listLocalUserPubKeys: () => [
         { slug: "alice", pubKey: "ssh-ed25519 ALICE predecessor" },
         { slug: "bob", pubKey: "ssh-ed25519 BOB predecessor" },
       ],

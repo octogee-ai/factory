@@ -45,7 +45,7 @@ describe("octo-desk and octo-desktop-style argument parsing", () => {
 });
 
 describe("runDeskCli", () => {
-  it("posts to the in-pod gateway-edge computer route with the gateway's own credential", async () => {
+  it("posts to the in-pod gateway-edge VM route with the gateway's own credential", async () => {
     const h = io({ status: 200, body: { note: "Deploying." } });
     await expect(runDeskCli("octo-desk", ["note", "Deploying."], h.opts)).resolves.toBe(0);
     const [url, init] = h.call();
@@ -72,10 +72,10 @@ describe("runDeskCli", () => {
     expect(h.fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("explains a workspace without a computer, relays control API errors, and names a dead edge", async () => {
+  it("explains a workspace without a VM, relays control API errors, and names a dead edge", async () => {
     const none = io({ status: 404, body: { error: "computer_unavailable" } });
     await expect(runDeskCli("octo-desk", ["note", "hi"], none.opts)).resolves.toBe(1);
-    expect(none.err).toEqual(["This workspace has no computer, so there is no Desk to change."]);
+    expect(none.err).toEqual(["This workspace has no VM, so there is no Desk to change."]);
 
     const refused = io({ status: 500, body: { error: "octo-desktop-style: could not update shell.json" } });
     await expect(runDeskCli("octo-desktop-style", ["familiar"], refused.opts)).resolves.toBe(1);

@@ -59,7 +59,7 @@ describe.skipIf(!RUN_LIVE)("gitea-admin — live against real Gitea (relocated p
     expect(await gitHost().listKeys(SLUG)).toEqual([successor]);
   }, 30_000);
 
-  it("ensures org + builders team + member, then creates the workspace repo (idempotent)", async () => {
+  it("ensures org + users team + member, then creates the workspace repo (idempotent)", async () => {
     await gitHost().ensureOwner(SLUG);
     await gitHost().ensureOwner(SLUG); // 422-tolerant re-ensure
 

@@ -15,7 +15,7 @@ export const AGENT_PREFIX = process.env.AGENT_PREFIX ?? "octogee-";
 export const GATEWAY_ID = process.env.GATEWAY_ID ?? "local";
 export const GATEWAY_PROFILE = process.env.GATEWAY_PROFILE ?? "default";
 export const GATEWAY_CLASS = process.env.GATEWAY_CLASS ?? "";
-export function isBuilderGateway() {
+export function isIsolatedGateway() {
     return GATEWAY_CLASS === "builder";
 }
 export function isSharedGateway() {

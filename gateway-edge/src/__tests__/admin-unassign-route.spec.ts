@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // deletes gateways/{gw}/assignments/{uid} AND clears the user mirror, and the
 // guard runs INSIDE that transaction: it refuses (409) if a migrate op is
 // pending/running OR the durable assignment state is not "serving" — so a
-// terminal failed roll that left the customer quiescing cannot be silently
+// terminal failed roll that left the user quiescing cannot be silently
 // unassigned. Never deletes the user or their workspace.
 
 interface StoredDoc {
@@ -209,7 +209,7 @@ describe("POST /api/admin/users/:uid/unassign", () => {
     expect(state.store["users/u-serving"]).toBeDefined();
   });
 
-  it("refuses a customer with a running migrate op (409) and writes nothing", async () => {
+  it("refuses a user with a running migrate op (409) and writes nothing", async () => {
     seedMountedUser("u-moving", "gw-blue");
     seedAssignment("gw-blue", "u-moving");
     state.store["glmOperations/op-1"] = {
@@ -246,19 +246,19 @@ describe("POST /api/admin/users/:uid/unassign", () => {
     expect(res.body.state).toBe("migrating");
   });
 
-  it("clears a serving customer that has no assignment doc (legacy) without erroring", async () => {
+  it("clears a serving user that has no assignment doc (legacy) without erroring", async () => {
     seedMountedUser("u-legacy", "gw-blue");
     const res = await request(app).post("/api/admin/users/u-legacy/unassign");
     expect(res.status).toBe(200);
   });
 
-  it("returns 409 when the customer is already unassigned", async () => {
+  it("returns 409 when the user is already unassigned", async () => {
     state.store["users/u-none"] = { provisioning: { openclaw: {} } };
     const res = await request(app).post("/api/admin/users/u-none/unassign");
     expect(res.status).toBe(409);
   });
 
-  it("returns 404 when the customer does not exist", async () => {
+  it("returns 404 when the user does not exist", async () => {
     const res = await request(app).post("/api/admin/users/ghost/unassign");
     expect(res.status).toBe(404);
   });

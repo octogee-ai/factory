@@ -7,7 +7,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import {
   OpenclawWireError,
   createGatewayRpc,
-  provisionCoachAutomation,
+  provisionDefaultAgentAutomation,
   isAgentAlreadyExistsRpcError,
   isAgentDeletionPendingRpcError,
   isAgentNotFoundRpcError,
@@ -2321,10 +2321,10 @@ await new Promise((r) => setTimeout(r, 50));
   });
 });
 
-describe("initial coach automation", () => {
+describe("initial agent automation", () => {
   it("uses the upstream proactive job contract through the existing scheduler", async () => {
     const cronAdd = vi.fn(async (_job: CronAddSpec) => ({ id: "monitor" }));
-    await provisionCoachAutomation({ cronAdd }, { slug: "test", coachChannelId: "c".repeat(26) });
+    await provisionDefaultAgentAutomation({ cronAdd }, { slug: "test", coachChannelId: "c".repeat(26) });
     expect(cronAdd).toHaveBeenCalledWith({
       declarationKey: "octogee:coach-monitor:octogee-test-coach",
       name: "Proactive check (octogee-test-coach)",
@@ -2344,20 +2344,20 @@ describe("initial coach automation", () => {
     });
   });
 
-  it("binds each coach job to its workspace's verified private coach channel", async () => {
+  it("binds each agent job to its workspace's verified private agent channel", async () => {
     const cronAdd = vi.fn(async (_job: CronAddSpec) => ({ id: "monitor" }));
-    await provisionCoachAutomation({ cronAdd }, { slug: "alice", coachChannelId: "a".repeat(26) });
-    await provisionCoachAutomation({ cronAdd }, { slug: "bob", coachChannelId: "b".repeat(26) });
+    await provisionDefaultAgentAutomation({ cronAdd }, { slug: "alice", coachChannelId: "a".repeat(26) });
+    await provisionDefaultAgentAutomation({ cronAdd }, { slug: "bob", coachChannelId: "b".repeat(26) });
     expect(cronAdd.mock.calls.map(([job]) => job.delivery)).toEqual([
       { mode: "announce", channel: "mattermost", accountId: "alice-coach", to: `channel:${"a".repeat(26)}` },
       { mode: "announce", channel: "mattermost", accountId: "bob-coach", to: `channel:${"b".repeat(26)}` },
     ]);
   });
 
-  it("refuses initial monitoring without a canonical customer destination", () => {
+  it("refuses initial monitoring without a canonical user destination", () => {
     const cronAdd = vi.fn();
-    expect(() => provisionCoachAutomation({ cronAdd }, { slug: "alice", coachChannelId: null }))
-      .toThrow("requires its workspace's private coach channel ID");
+    expect(() => provisionDefaultAgentAutomation({ cronAdd }, { slug: "alice", coachChannelId: null }))
+      .toThrow("requires its workspace's private agent channel ID");
     expect(cronAdd).not.toHaveBeenCalled();
   });
 });

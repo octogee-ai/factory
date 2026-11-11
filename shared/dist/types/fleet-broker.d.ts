@@ -26,26 +26,26 @@ export interface FleetBrokerAssignmentRosterEntry {
     state: AssignmentState;
     epoch: number;
 }
-export interface FleetBrokerConfiguredBuilderProjectCredential {
+export interface FleetBrokerConfiguredUserProjectCredential {
     projectId: string;
     agentId: string;
     accountId: string;
     token: string;
 }
-export interface FleetBrokerConfiguredBuilderDesk {
+export interface FleetBrokerConfiguredUserDesk {
     builderName: string;
     agentName: string;
     look: AgentLook;
     timeZone: string | null;
 }
-export interface FleetBrokerConfiguredBuilderBootstrap {
+export interface FleetBrokerConfiguredUserBootstrap {
     uid: string;
     slug: string;
     agentId: string;
     accountId: string;
     coachToken: string;
-    projectCredentials: FleetBrokerConfiguredBuilderProjectCredential[];
-    desk: FleetBrokerConfiguredBuilderDesk;
+    projectCredentials: FleetBrokerConfiguredUserProjectCredential[];
+    desk: FleetBrokerConfiguredUserDesk;
 }
 export interface FleetBrokerProjectAgentReadiness {
     projectId: string;
@@ -64,7 +64,7 @@ export interface FleetBrokerProjectAgent {
     mmUserId: string | null;
     token: string | null;
 }
-export interface FleetBrokerCoachIdentity {
+export interface FleetBrokerDefaultAgentIdentity {
     name: string;
     emoji: string;
 }
@@ -119,7 +119,7 @@ export interface FleetBrokerNpmRegistryCredentials {
     token: string;
     expiresAt: string;
 }
-export interface FleetBrokerCustomerRuntimeReset {
+export interface FleetBrokerUserRuntimeReset {
     status: "pending";
     uid: string;
     slug: string;
@@ -131,15 +131,15 @@ export interface FleetBrokerCustomerRuntimeReset {
     disposableLeaseGeneration: number;
     requestedAt: number;
 }
-export declare const RETIRED_COMPUTER_BINDING_DENIAL_REASON = "retired computer bindings may only reach final-checkpoint routes";
+export declare const RETIRED_VM_BINDING_DENIAL_REASON = "retired computer bindings may only reach final-checkpoint routes";
 export declare const GATEWAY_BINDING_MISMATCH_REASON = "request names a gatewayId other than the bound gateway";
 export declare const BUILDER_RUNTIME_STATE_RECOVERY_TIERS: readonly ["minute", "hour", "day"];
 export type BuilderRuntimeStateRecoveryTier = (typeof BUILDER_RUNTIME_STATE_RECOVERY_TIERS)[number];
-export interface FleetBrokerBuilderRuntimeStateSnapshotUrls {
+export interface FleetBrokerIsolatedRuntimeStateSnapshotUrls {
     live: FleetBrokerBlobSignedUrl;
     recovery: FleetBrokerBlobSignedUrl[];
 }
-export interface FleetBrokerBuilderRuntimeStatePruneResult {
+export interface FleetBrokerIsolatedRuntimeStatePruneResult {
     deleted: number;
 }
 export interface FleetBrokerAgentAnchor {
@@ -151,9 +151,9 @@ export interface FleetBrokerGatewayStateAnchor {
     storeId: string;
     schema: string;
 }
-export type BuilderAuxiliaryFamily = "workboard" | "logbook" | "team-reports";
+export type UserAuxiliaryFamily = "workboard" | "logbook" | "team-reports";
 export interface FleetBrokerAuxiliaryAnchor extends FleetBrokerGatewayStateAnchor {
-    family: BuilderAuxiliaryFamily;
+    family: UserAuxiliaryFamily;
 }
 export interface FleetBrokerAgentAnchorMigration {
     migrationId: string;
@@ -168,27 +168,27 @@ export interface FleetBrokerAgentAnchors {
     auxiliary?: FleetBrokerAuxiliaryAnchor[];
     assignment?: FleetBrokerAssignmentRosterEntry;
 }
-export interface FleetBrokerComputerHomeCheckpointUrl {
+export interface FleetBrokerVmHomeCheckpointUrl {
     name: string;
     upload: FleetBrokerBlobSignedUrl;
 }
-export interface FleetBrokerComputerHomeCheckpointCommit {
+export interface FleetBrokerVmHomeCheckpointCommit {
     name: string;
     size: number;
     sha256: string;
     completedAt: number;
 }
-export interface FleetBrokerComputerHomeDownload extends FleetBrokerComputerHomeCheckpointCommit {
+export interface FleetBrokerVmHomeDownload extends FleetBrokerVmHomeCheckpointCommit {
     coverage?: "builder-home-v2";
     writerProtocol?: 2 | 3;
     instanceId?: string | null;
     generation?: string;
     download: FleetBrokerBlobSignedUrl;
 }
-export interface FleetBrokerComputerHomePruneResult {
+export interface FleetBrokerVmHomePruneResult {
     deleted: number;
 }
-export interface FleetBrokerComputerEgress {
+export interface FleetBrokerVmEgress {
     egress: GatewayVmEgressState | null;
 }
 export type FleetBrokerOpenClawBootAction = "start" | "doctor" | "wait";
@@ -222,7 +222,7 @@ export interface FleetBrokerPreStopFlushEvent {
     reason: "prestop";
     result?: FleetBrokerPreStopFlushResult;
 }
-export interface FleetBrokerCustomerRestoreAuthority {
+export interface FleetBrokerUserRestoreAuthority {
     uid: string;
     slug: string;
     gatewayId: string;
@@ -243,8 +243,8 @@ export interface FleetBrokerUserSnapshot {
     gatewayId: string;
     status: FleetBrokerProvisioningStatus;
     agentIds: string[];
-    runtimeReset?: FleetBrokerCustomerRuntimeReset;
-    restoreAuthority?: FleetBrokerCustomerRestoreAuthority;
+    runtimeReset?: FleetBrokerUserRuntimeReset;
+    restoreAuthority?: FleetBrokerUserRestoreAuthority;
     runtimeMutationFenced?: boolean;
     repoUrl: string;
     mattermostUserId: string | null;
@@ -272,7 +272,7 @@ export interface FleetBrokerUserSnapshot {
     onboardingVibe: string | null;
     coachToken: string | null;
     coachMmUserId: string | null;
-    coachIdentity?: FleetBrokerCoachIdentity;
+    coachIdentity?: FleetBrokerDefaultAgentIdentity;
     byotActive?: boolean;
     systemConfig?: {
         byot?: {

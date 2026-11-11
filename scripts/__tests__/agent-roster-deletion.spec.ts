@@ -70,8 +70,8 @@ describe("deleteRosterAgents", () => {
     }
   });
 
-  // A coach's openclaw workspace IS the customer directory. Letting openclaw
-  // trash it would destroy a retained customer's checkout during a cancelled
+  // A agent's openclaw workspace IS the user directory. Letting openclaw
+  // trash it would destroy a retained user's checkout during a cancelled
   // eviction and would override a cleanup job's `deleteWorkspace: false`.
   it("never lets openclaw delete the departing agent's files", async () => {
     const rpc = mkRpc(async ({ agentId }) => ({ ok: true, agentId, removedBindings: 0 }));
@@ -165,12 +165,12 @@ describe("deleteRosterAgents", () => {
   });
 });
 
-describe("customerAgentIdsInRoster", () => {
+describe("userAgentIdsInRoster", () => {
   it("reads the keyed roster 2026.7.2 migrates to and keeps only the slug's agents", async () => {
-    const { customerAgentIdsInRoster } = await import("../lib/agent-roster-deletion.js");
+    const { userAgentIdsInRoster } = await import("../lib/agent-roster-deletion.js");
 
     expect(
-      customerAgentIdsInRoster(
+      userAgentIdsInRoster(
         {
           agents: {
             entries: {
@@ -188,10 +188,10 @@ describe("customerAgentIdsInRoster", () => {
   });
 
   it("still reads the legacy list roster", async () => {
-    const { customerAgentIdsInRoster } = await import("../lib/agent-roster-deletion.js");
+    const { userAgentIdsInRoster } = await import("../lib/agent-roster-deletion.js");
 
     expect(
-      customerAgentIdsInRoster(
+      userAgentIdsInRoster(
         { agents: { list: [{ id: "octogee-bob-coach" }, { id: "octogee-alice-coach" }] } },
         "alice",
       ),

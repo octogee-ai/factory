@@ -1,5 +1,5 @@
 import { withPinnedDirectory } from "./pinned-directory.js";
-import { PROJECT_COACH_WORKSPACE_PARTS } from "@octogee/shared/types/project";
+import { PROJECT_AGENT_WORKSPACE_PARTS } from "@octogee/shared/types/project";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -7,9 +7,9 @@ import * as path from "node:path";
 import { IMPORT_ACTIVATION_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
 import { parseAgentId } from "@octogee/shared/types/identity";
 import { mattermostAccountEndpointsForTarget } from "@octogee/shared/types/openclaw-mattermost-accounts";
-import { applyConfigPatch, customerAgentRosterPatch, customerConfigAgentRosterReplacePaths, filterOutCustomerBindings, orderBuilderGatewayRoster, replaceCustomerAgentsInFullAgentList, staleProjectAgentAccountNulls, upsertAgentInFullAgentList, } from "./apply-config-patch.js";
+import { applyConfigPatch, userAgentRosterPatch, userConfigAgentRosterReplacePaths, filterOutUserBindings, orderIsolatedGatewayRoster, replaceUserAgentsInFullAgentList, staleProjectAgentAccountNulls, upsertAgentInFullAgentList, } from "./apply-config-patch.js";
 import { rebindPlatformEmbeddingRefs } from "./platform-embedding-refs.js";
-import { reconcileBuilderAgentEntry, reconcileCustomerAgentEntry, } from "./system-config-invariants.js";
+import { reconcileIsolatedGatewayAgentEntry, reconcileSharedGatewayAgentEntry, } from "./system-config-invariants.js";
 export const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
 export const MIGRATION_ACTIVATION_FILE = "activation.json";
 export const MIGRATION_ACTIVATION_MAX_BYTES = 256 * 1024 ** 2;
@@ -216,7 +216,7 @@ function identityWorkspaceParts(slug, agentId, privateWorkspace = false) {
     const parsed = parseAgentId(agentId);
     if (parsed.kind === "unknown" || parsed.username !== slug)
         throw new Error("Source workspace identity agent is foreign");
-    return ["customers", slug, ...(parsed.kind === "project" ? [...(privateWorkspace ? PROJECT_COACH_WORKSPACE_PARTS : ["projects"]), parsed.project] : [])];
+    return ["customers", slug, ...(parsed.kind === "project" ? [...(privateWorkspace ? PROJECT_AGENT_WORKSPACE_PARTS : ["projects"]), parsed.project] : [])];
 }
 export function privateProjectWorkspaceAgentIds(manifest) {
     const root = manifest.agent.workspace;
@@ -619,8 +619,8 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
     const privateProjects = privateProjectWorkspaceAgentIds(manifest);
     const authInheritanceAnchor = opts.authInheritanceAnchor;
     const reconcileAgent = opts.gatewayClass === "builder"
-        ? reconcileBuilderAgentEntry
-        : reconcileCustomerAgentEntry;
+        ? reconcileIsolatedGatewayAgentEntry
+        : reconcileSharedGatewayAgentEntry;
     if (authInheritanceAnchor &&
         rosterAgentId(authInheritanceAnchor.agent) !== authInheritanceAnchor.agentId) {
         throw new Error("activation auth inheritance anchor id mismatch");
@@ -670,11 +670,11 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
                 : activationAgents.map((entry) => entry.agent);
             const nextAgents = targetUsesKeyedEntries
                 ? rosterAgents
-                : rosterAgents.reduce((agentList, agent) => upsertAgentInFullAgentList({ agents: { list: agentList } }, rosterAgentId(agent), agent), replaceCustomerAgentsInFullAgentList(current, manifest.slug, []));
+                : rosterAgents.reduce((agentList, agent) => upsertAgentInFullAgentList({ agents: { list: agentList } }, rosterAgentId(agent), agent), replaceUserAgentsInFullAgentList(current, manifest.slug, []));
             const orderedAgents = normalizedAuthInheritanceAnchor
-                ? orderBuilderGatewayRoster(nextAgents, manifest.agentId, normalizedAuthInheritanceAnchor.agentId)
+                ? orderIsolatedGatewayRoster(nextAgents, manifest.agentId, normalizedAuthInheritanceAnchor.agentId)
                 : nextAgents;
-            const rosterPatch = customerAgentRosterPatch(current, manifest.slug, rebindPlatformEmbeddingRefs(orderedAgents));
+            const rosterPatch = userAgentRosterPatch(current, manifest.slug, rebindPlatformEmbeddingRefs(orderedAgents));
             return {
                 ...ownerCommandsSection(opts.ownerCommandsPatch, current),
                 // openclaw rejects a multi-agent roster that declares no ownership.
@@ -684,7 +684,7 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
                     ...(Object.keys(activationDefaults).length > 0 ? { defaults: activationDefaults } : {}),
                 },
                 bindings: [
-                    ...filterOutCustomerBindings(currentBindings, manifest.slug),
+                    ...filterOutUserBindings(currentBindings, manifest.slug),
                     ...activationAgents.flatMap((entry) => entry.bindings),
                 ],
                 channels: {
@@ -697,7 +697,7 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
                 },
             };
         },
-        buildReplacePaths: (current) => customerConfigAgentRosterReplacePaths(current, manifest.slug, normalizedAuthInheritanceAnchor ? [normalizedAuthInheritanceAnchor.agentId] : []),
+        buildReplacePaths: (current) => userConfigAgentRosterReplacePaths(current, manifest.slug, normalizedAuthInheritanceAnchor ? [normalizedAuthInheritanceAnchor.agentId] : []),
         logPrefix: `[import:${manifest.slug}]`,
     }, {
         rpc: opts.rpc,

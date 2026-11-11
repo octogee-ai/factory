@@ -53,10 +53,10 @@ describe("enqueueOperation", () => {
     const { store, docs } = makeFixtureStore();
     const id = await enqueueOperation(store, {
       kind: "retire-gateway",
-      input: { gatewayId: "bender" },
+      input: { gatewayId: "walter" },
       createdBy: "fleet-cli",
     });
-    expect(docs.get(`glmOperations/${id}`)).toMatchObject({ gatewayId: "bender" });
+    expect(docs.get(`glmOperations/${id}`)).toMatchObject({ gatewayId: "walter" });
     expect(docs.get(`glmOperations/${id}`)).not.toHaveProperty("inputUid");
   });
 });
@@ -66,11 +66,11 @@ const auditIntent = {
   forced: true,
   what: "move release alias",
   why: "candidate verified in TEST",
-  target: { gatewayId: "bender" },
+  target: { gatewayId: "walter" },
   preActionStatus: { alias: "stable", target: "sha-old" },
   mutation: {
     aliases: [{ alias: "stable", target: "sha-next" }],
-    gatewayId: "bender",
+    gatewayId: "walter",
   },
   aliasPlan: [{ alias: "stable", expectedTarget: "sha-old", intendedTarget: "sha-next" }],
   releaseRollout: { releaseId: "v1.2.3", rolloutOperationId: "rollout-1" },
@@ -82,7 +82,7 @@ describe("operation audit journal", () => {
     const first = buildOperationAuditIntent({ ...auditIntent, now: () => 1234 });
     const second = buildOperationAuditIntent({
       ...auditIntent,
-      mutation: { gatewayId: "bender", aliases: [{ target: "sha-next", alias: "stable" }] },
+      mutation: { gatewayId: "walter", aliases: [{ target: "sha-next", alias: "stable" }] },
       now: () => 5678,
     });
 

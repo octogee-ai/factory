@@ -1,16 +1,16 @@
 import { type ProductFields } from "@octogee/shared/types/user-entitlements";
-import type { BuilderAccount } from "./builder-account.js";
-import type { BuilderRecord } from "./platform-state/builders.js";
+import type { UserAccount } from "./user-account.js";
+import type { PlatformUserRecord } from "./platform-state/users.js";
 export declare function toISODate(val: unknown): string | null;
 export declare function isoMillis(value: number | null): string | null;
-export interface BrokerCustomerUsage {
+export interface BrokerUserUsage {
     windowCostUsd?: number;
     weekCostUsd?: number;
     totalCostUsd?: number;
     totalTokens?: number;
     now?: number;
 }
-export interface PlatformCustomerSummary {
+export interface PlatformUserSummary {
     uid: string;
     displayName: string;
     email: string;
@@ -36,5 +36,5 @@ export interface PlatformCustomerSummary {
     provisioningStatus: string | null;
     accountLifecycleStatus: string;
 }
-export type CustomerSummary = PlatformCustomerSummary & ProductFields;
-export declare function buildCustomerSummary(builder: BuilderRecord, account: BuilderAccount, broker?: BrokerCustomerUsage): CustomerSummary;
+export type UserSummary = PlatformUserSummary & ProductFields;
+export declare function buildUserSummary(user: PlatformUserRecord, account: UserAccount, broker?: BrokerUserUsage): UserSummary;

@@ -84,7 +84,7 @@
       "title": "What this board proves",
       "options": {
         "mode": "markdown",
-        "content": "This is the substrate view for Spot and Kubernetes disruption. **A real Spot preemption is only confirmed by the Cloud Audit Log metric below** (`compute.instances.preempted`). Kubernetes events are correlated observations; `FailedScheduling: preemption` is scheduler fit logic, not Spot proof.\n\nThe controller emits `octogee.disruption.v1` JSON records with node UID, provider/instance ID, capacity class, taints, gateway identity, assignment roster, and active Cowboy operations.\n\nThe audit metric knows **which instance** was preempted but not which gateway was on it. Cowboy records each gateway pod's instance id while the node still exists and emits `octogee.gateway-pod-replacement.v1` when that pod disappears with no desired-state change, so `instance_id` joins the two. Pod `RESTARTS` stays 0 through a preemption and Kubernetes events expire in ~1h \u2014 pod age is only a point-in-time hint.\n\n[Authoritative Spot Audit Logs](https://console.cloud.google.com/logs/query?project=octogee&query=resource.type%3D%22gce_instance%22%0Alog_id%28%22cloudaudit.googleapis.com%2Fsystem_event%22%29%0AprotoPayload.methodName%3D%22compute.instances.preempted%22) \u00b7 [Kubernetes NodeShutdown events](https://console.cloud.google.com/logs/query?project=octogee&query=log_id%28%22events%22%29%0AjsonPayload.reason%3D%22NodeShutdown%22) \u00b7 [Preemption \u2194 gateway correlation](https://console.cloud.google.com/logs/query?project=octogee&query=%28log_id%28%22cloudaudit.googleapis.com%2Fsystem_event%22%29%20AND%20protoPayload.methodName%3D%22compute.instances.preempted%22%29%20OR%20jsonPayload.schema%3D%22octogee.gateway-pod-replacement.v1%22)"
+        "content": "This is the substrate view for Spot and Kubernetes disruption. **A real Spot preemption is only confirmed by the Cloud Audit Log metric below** (`compute.instances.preempted`). Kubernetes events are correlated observations; `FailedScheduling: preemption` is scheduler fit logic, not Spot proof.\n\nThe controller emits `octogee.disruption.v1` JSON records with node UID, provider/instance ID, capacity class, taints, gateway identity, assignment roster, and active fleet controller operations.\n\nThe audit metric knows **which instance** was preempted but not which gateway was on it. The fleet controller records each gateway pod's instance id while the node still exists and emits `octogee.gateway-pod-replacement.v1` when that pod disappears with no desired-state change, so `instance_id` joins the two. Pod `RESTARTS` stays 0 through a preemption and Kubernetes events expire in ~1h \u2014 pod age is only a point-in-time hint.\n\n[Authoritative Spot Audit Logs](https://console.cloud.google.com/logs/query?project=octogee&query=resource.type%3D%22gce_instance%22%0Alog_id%28%22cloudaudit.googleapis.com%2Fsystem_event%22%29%0AprotoPayload.methodName%3D%22compute.instances.preempted%22) \u00b7 [Kubernetes NodeShutdown events](https://console.cloud.google.com/logs/query?project=octogee&query=log_id%28%22events%22%29%0AjsonPayload.reason%3D%22NodeShutdown%22) \u00b7 [Preemption \u2194 gateway correlation](https://console.cloud.google.com/logs/query?project=octogee&query=%28log_id%28%22cloudaudit.googleapis.com%2Fsystem_event%22%29%20AND%20protoPayload.methodName%3D%22compute.instances.preempted%22%29%20OR%20jsonPayload.schema%3D%22octogee.gateway-pod-replacement.v1%22)"
       },
       "gridPos": {
         "h": 7,
@@ -966,7 +966,7 @@
     {
       "id": 19,
       "type": "row",
-      "title": "Replacement pressure and Cowboy context",
+      "title": "Replacement pressure and fleet controller context",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -1036,7 +1036,7 @@
     {
       "id": 21,
       "type": "timeseries",
-      "title": "Cowboy reconcile failures",
+      "title": "Fleet controller reconcile failures",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -1096,7 +1096,7 @@
       "title": "Action guide",
       "options": {
         "mode": "markdown",
-        "content": "- `compute.instances.preempted` + a node/pod event: **confirmed Spot preemption**.\n- Same `instance_id` in `octogee_gateway_pod_replacements` and `octogee_spot_preemptions`: **confirmed Spot preemption of that named gateway**.\n- An unplanned pod loss with no matching audit record is a node repair, an eviction, or an OOM-kill \u2014 the counter proves the loss, not the cause. `instance_id=unknown` means the pod was never observed on a node before it vanished, so no join is possible either way.\n- `NodeShutdown` without the audit event yet: **unconfirmed shutdown**, wait for the audit record.\n- `Killing` / `FailedPreStopHook`: termination behavior, not root cause.\n- `FailedScheduling` with `preemption: No preemption victims found`: scheduler capacity/fit, not Spot.\n- Shared Barn members are intentionally on-demand; Spot evidence should name only disposable builder gateways."
+        "content": "- `compute.instances.preempted` + a node/pod event: **confirmed Spot preemption**.\n- Same `instance_id` in `octogee_gateway_pod_replacements` and `octogee_spot_preemptions`: **confirmed Spot preemption of that named gateway**.\n- An unplanned pod loss with no matching audit record is a node repair, an eviction, or an OOM-kill \u2014 the counter proves the loss, not the cause. `instance_id=unknown` means the pod was never observed on a node before it vanished, so no join is possible either way.\n- `NodeShutdown` without the audit event yet: **unconfirmed shutdown**, wait for the audit record.\n- `Killing` / `FailedPreStopHook`: termination behavior, not root cause.\n- `FailedScheduling` with `preemption: No preemption victims found`: scheduler capacity/fit, not Spot.\n- Shared gateway members are intentionally on-demand; Spot evidence should name only disposable isolated gateways."
       },
       "gridPos": {
         "h": 7,

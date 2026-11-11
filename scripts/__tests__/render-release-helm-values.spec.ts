@@ -16,7 +16,7 @@ const manifest: ReleaseDigestManifest = {
 };
 
 describe("operator Helm release selection", () => {
-  it("resolves one selected immutable manifest and pins Cowboy, its source, and every image to that family", async () => {
+  it("resolves one selected immutable manifest and pins the fleet controller, its source, and every image to that family", async () => {
     const resolveManifest = vi.fn(async () => manifest);
     const values = JSON.parse(await renderReleaseHelmValues(sourceSha, { resolveManifest }));
     expect(resolveManifest).toHaveBeenCalledExactlyOnceWith(sourceSha);
@@ -32,7 +32,7 @@ describe("operator Helm release selection", () => {
     expect(values.global.projectRunnerImage).toMatchObject({ tag: sourceSha.slice(0, 7), digest });
   });
 
-  it("gives Shared allocation the exact canonical family used by Builder deployment", async () => {
+  it("gives Shared allocation the exact canonical family used by user deployment", async () => {
     const selected = structuredClone(manifest);
     selected.surfaces.gateway["octogee-gateway-builder"] = `sha256:${"d".repeat(64)}`;
     selected.surfaces.gateway["gateway-edge"] = `sha256:${"e".repeat(64)}`;

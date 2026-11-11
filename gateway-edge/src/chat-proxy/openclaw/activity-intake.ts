@@ -113,7 +113,7 @@ export interface ActiveActivityRunBinding {
   inputPostId?: string;
   channelDocPath: string;
   channelCreateAt: number;
-  coachMmUserId: string;
+  defaultAgentMmUserId: string;
   coachToken: string;
   attentionMention: string;
 }
@@ -196,7 +196,7 @@ export function freezeActiveActivityRunBinding(
     "mainChannelId",
     "mainRootPostId",
     "channelDocPath",
-    "coachMmUserId",
+    "defaultAgentMmUserId",
     "coachToken",
     "attentionMention",
   ] as const) {

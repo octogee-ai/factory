@@ -6,7 +6,7 @@ import {
 } from "@octogee/shared/types/fleet-controller";
 
 import { resolveMigrationRecoveryUrl } from "../lib/migration-rsync-transfer.js";
-import { createFleetStateFetcher, readPrivateProjectCoachWorkspace } from "../fleet-state-client.js";
+import { createFleetStateFetcher, readPrivateProjectAgentWorkspace } from "../fleet-state-client.js";
 import { FLEET_KEY_PAIR, OTHER_FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 
 const STATE_BODY = {
@@ -56,7 +56,7 @@ it("reads workspace support from the addressed running pod, including a held tar
       : STATE_BODY;
     return okResponse(body);
   });
-  const read = async () => readPrivateProjectCoachWorkspace({
+  const read = async () => readPrivateProjectAgentWorkspace({
     baseUrl: await resolve(), gatewayId, privateKey: FLEET_KEY_PAIR.privateKey,
     privateProjectCoachSlug: "jack", timeoutMs: 5_000, fetchImpl, newRequestId: () => "compat",
   });
@@ -73,7 +73,7 @@ describe("createFleetStateFetcher", () => {
 
     const state = await fetcherWith(fetchImpl as unknown as typeof fetch)("builder-jack");
 
-    expect(state).toMatchObject({ status: "ready", customers: ["jack"] });
+    expect(state).toMatchObject({ status: "ready", users: ["jack"] });
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(
       `http://octogee-gateway-builder-jack.ns.svc.cluster.local:3003${FLEET_STATE_PATH}/builder-jack`,

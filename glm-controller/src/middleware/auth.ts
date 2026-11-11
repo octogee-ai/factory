@@ -1,13 +1,13 @@
 import type { Request, Response, NextFunction } from "express";
-import type { BuilderAccount, BuilderAccountReader } from "@octogee/core/builder-account";
+import type { UserAccount, UserAccountReader } from "@octogee/core/user-account";
 import type { IdentityProvider, VerifiedIdentity } from "@octogee/core/identity-provider";
-import type { BuilderRecord, PlatformStateStore, Stored } from "@octogee/core/platform-state";
+import type { PlatformUserRecord, PlatformStateStore, Stored } from "@octogee/core/platform-state";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
 export interface RequireAdminDeps {
   identity: IdentityProvider;
-  store: Pick<PlatformStateStore, "builders">;
-  accounts: Pick<BuilderAccountReader, "get">;
+  store: Pick<PlatformStateStore, "users">;
+  accounts: Pick<UserAccountReader, "get">;
   log: (msg: string) => void;
 }
 
@@ -60,11 +60,11 @@ export function createRequireAdmin(
       return;
     }
 
-    let builder: Stored<BuilderRecord> | null;
-    let account: BuilderAccount | null;
+    let userRecord: Stored<PlatformUserRecord> | null;
+    let account: UserAccount | null;
     try {
-      [builder, account] = await Promise.all([
-        deps.store.builders.records.get(uid),
+      [userRecord, account] = await Promise.all([
+        deps.store.users.records.get(uid),
         deps.accounts.get(uid),
       ]);
     } catch (error) {
@@ -73,12 +73,12 @@ export function createRequireAdmin(
       next(error instanceof Error ? error : new Error(message));
       return;
     }
-    if (builder === null || !accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle })) {
+    if (userRecord === null || !accountAllowsInteractiveAccess({ accountLifecycle: userRecord.accountLifecycle })) {
       res.status(403).json({ error: "Account suspended" });
       return;
     }
     req.user = { email: account?.email ?? null };
-    req.isAdmin = builder.role === "admin";
+    req.isAdmin = userRecord.role === "admin";
 
     if (!req.isAdmin) {
       res.status(403).json({ error: "Admin access required" });

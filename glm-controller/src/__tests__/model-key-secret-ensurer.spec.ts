@@ -64,7 +64,7 @@ function mockKubectl(
 }
 
 describe("createGatewayModelKeySecretEnsurer", () => {
-  it("deletes the K8s model key secret for non-builder gateways", async () => {
+  it("deletes the K8s model key secret for non-isolated gateways", async () => {
     const { runKubectl, calls } = mockKubectl([
       { stdout: "secret/gateway-model-key-jack\n" },
       { stdout: "secret \"gateway-model-key-jack\" deleted\n" },
@@ -97,21 +97,21 @@ describe("createGatewayModelKeySecretEnsurer", () => {
     ]);
   });
 
-  it("applies a broker token secret for Builder gateways", async () => {
+  it("applies a broker token secret for isolated gateways", async () => {
     const { runKubectl, calls } = mockKubectl([
       {
         stderr:
-          'Error from server (NotFound): secrets "gateway-model-key-bender" not found',
+          'Error from server (NotFound): secrets "gateway-model-key-walter" not found',
         code: 1,
       },
-      { stdout: "secret/gateway-model-key-bender configured\n" },
+      { stdout: "secret/gateway-model-key-walter configured\n" },
     ]);
     const ensurer = createGatewayModelKeySecretEnsurer({
       runKubectl,
       readSourceSecret: vi.fn(async () =>
-        source("ogk_bender_token", {
+        source("ogk_walter_token", {
           octogee_kind: "gateway_model_key",
-          gateway_id: "bender",
+          gateway_id: "walter",
           provider: "anthropic",
           capped: "true",
         }),
@@ -121,7 +121,7 @@ describe("createGatewayModelKeySecretEnsurer", () => {
 
     const result = await ensurer.syncGatewayModelKeySecret({
       namespace: "octogee-test",
-      gatewayId: "bender",
+      gatewayId: "walter",
       gatewayClass: "builder",
     });
 
@@ -130,17 +130,17 @@ describe("createGatewayModelKeySecretEnsurer", () => {
     const manifest = JSON.parse(calls[1].stdin ?? "{}");
     expect(manifest).toMatchObject({
       metadata: {
-        name: "gateway-model-key-bender",
+        name: "gateway-model-key-walter",
         labels: {
-          "octogee.ai/gateway-id": "bender",
+          "octogee.ai/gateway-id": "walter",
           "octogee.ai/provider": "anthropic",
         },
       },
-      stringData: { anthropic_api_key: "ogk_bender_token" },
+      stringData: { anthropic_api_key: "ogk_walter_token" },
     });
   });
 
-  it("does not create a builder key when the Secret Manager source is missing", async () => {
+  it("does not create a user key when the Secret Manager source is missing", async () => {
     const { runKubectl } = mockKubectl([
       {
         stderr:

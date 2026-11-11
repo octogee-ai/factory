@@ -4,7 +4,7 @@ import { Request, Response, NextFunction } from "express";
 import { auth, db } from "../lib/db.js";
 import { resolveCanonicalWorkspaceSlug } from "../lib/canonical-workspace.js";
 import { platformStateStore } from "../lib/platform-state.js";
-import { userDataWithBuilderState } from "../lib/user-platform-state.js";
+import { userDataWithUserState } from "../lib/user-platform-state.js";
 import { logger } from "./logging.js";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
@@ -82,9 +82,9 @@ function attachActiveUser(
   allowUnregistered: boolean,
 ): void {
   void (async () => {
-    const [userSnap, builder] = await Promise.all([
+    const [userSnap, userRecord] = await Promise.all([
       db.collection("users").doc(req.uid!).get(),
-      platformStateStore.builders.records.get(req.uid!),
+      platformStateStore.users.records.get(req.uid!),
     ]);
     if (!userSnap.exists) {
       if (allowUnregistered) {
@@ -95,7 +95,7 @@ function attachActiveUser(
       res.status(403).json({ error: "Account is not active" });
       return;
     }
-    const userData = userDataWithBuilderState(userSnap.data()!, builder);
+    const userData = userDataWithUserState(userSnap.data()!, userRecord);
     if (!accountAllowsInteractiveAccess(userData)) {
       res.status(403).json({ error: "Account is not active" });
       return;
@@ -113,7 +113,7 @@ function attachAuthContext(req: Request, res: Response, next: NextFunction): voi
   void (async () => {
     req.workspaceSlug = await resolveCanonicalWorkspaceSlug(uid, req.user);
     try {
-      req.isAdmin = (await platformStateStore.builders.records.getRole(uid)) === "admin";
+      req.isAdmin = (await platformStateStore.users.records.getRole(uid)) === "admin";
     } catch (err) {
       logger.warn(`Admin role lookup failed: ${(err as Error).message}`);
       req.isAdmin = false;

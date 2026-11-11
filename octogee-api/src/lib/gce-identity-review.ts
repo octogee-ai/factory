@@ -13,7 +13,7 @@ export interface GceIdentityReviewerOptions {
   verify?: VerifyGoogleIdToken;
 }
 
-export interface GatewayComputerIdentityConfig {
+export interface GatewayVmIdentityConfig {
   serviceAccountEmail: string;
   projectId: string;
 }
@@ -34,9 +34,9 @@ export function isGoogleIssuedJwt(token: string): boolean {
   return issuer !== null && GOOGLE_TOKEN_ISSUERS.has(issuer);
 }
 
-export function parseGatewayComputerIdentity(
+export function parseGatewayVmIdentity(
   env: Record<string, string | undefined>,
-): GatewayComputerIdentityConfig | null {
+): GatewayVmIdentityConfig | null {
   const serviceAccountEmail = env.GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL?.trim();
   const projectId = env.GATEWAY_COMPUTER_PROJECT_ID?.trim();
   if (!serviceAccountEmail && !projectId) return null;

@@ -60,7 +60,7 @@ describe("npm cache proxy", () => {
     await request(proxy()).post("/@scope%2fpkg").set("authorization", `Bearer ${CAPABILITY}`).expect(405);
   });
 
-  it("replaces the opaque Builder capability with the proxy Google token", async () => {
+  it("replaces the opaque user capability with the proxy Google token", async () => {
     const authorizeCapability = vi.fn(async () => authorization());
     const fetchImpl = vi.fn<typeof fetch>(async (_input, _init) =>
       new Response(JSON.stringify({ name: "@scope/pkg" }), {

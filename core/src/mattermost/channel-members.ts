@@ -1,20 +1,20 @@
-export type CustomerChannelKind = "coach" | "general" | "admin" | "project";
+export type UserChannelKind = "coach" | "general" | "admin" | "project";
 
-export interface CustomerChannelMemberIds {
+export interface UserChannelMemberIds {
   customerMmUserId: string | null;
-  coachMmUserId: string | null;
+  defaultAgentMmUserId: string | null;
   adminMmUserId: string | null;
 }
 
-export function customerChannelMembers(
-  kind: CustomerChannelKind,
-  ids: CustomerChannelMemberIds,
+export function userChannelMembers(
+  kind: UserChannelKind,
+  ids: UserChannelMemberIds,
 ): string[] {
   const nonEmpty = (s: string | null | undefined): s is string =>
     typeof s === "string" && s.length > 0;
   if (kind === "admin") {
 
-return [ids.adminMmUserId, ids.coachMmUserId].filter(nonEmpty);
+return [ids.adminMmUserId, ids.defaultAgentMmUserId].filter(nonEmpty);
   }
-  return [ids.customerMmUserId, ids.coachMmUserId, ids.adminMmUserId].filter(nonEmpty);
+  return [ids.customerMmUserId, ids.defaultAgentMmUserId, ids.adminMmUserId].filter(nonEmpty);
 }

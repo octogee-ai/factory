@@ -5,7 +5,7 @@ vi.mock("openclaw/plugin-sdk/core", () => ({
   jsonResult: (result: unknown) => ({ result }),
 }));
 const broker = vi.hoisted(() => ({ context: vi.fn() }));
-vi.mock("../computer-client.js", () => ({ computerContext: broker.context }));
+vi.mock("../vm-client.js", () => ({ vmContext: broker.context }));
 
 const facts = { gatewayId: "gateway", ownerUid: "owner", computerInstanceId: "gce-vm:123", agentAccountId: "alex-coach", ownerMattermostUserId: "o".repeat(26) };
 const channelRequester = { channel: "mattermost", accountId: "alex-coach", senderId: "m".repeat(26) };
@@ -26,7 +26,7 @@ function context(requester: Record<string, unknown> = channelRequester) {
 describe("registered computer owner approval", () => {
   beforeEach(() => { vi.clearAllMocks(); broker.context.mockResolvedValue({ ...facts }); });
 
-  it("requires the gateway owner to approve another Builder's computer action", async () => {
+  it("requires the gateway owner to approve another user's computer action", async () => {
     const result = await (await registeredHook())({ toolName: "computer", params: { ownerUid: "attacker" } }, context());
     expect(result?.requireApproval?.allowedDecisions).toEqual(["allow-once", "deny"]);
     const guard = result.requireApproval.reviewerGuard;

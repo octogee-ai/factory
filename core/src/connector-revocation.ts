@@ -1,4 +1,4 @@
-import type { BuilderSecret, SecretsRepository } from "./platform-state/secrets.js";
+import type { UserSecret, SecretsRepository } from "./platform-state/secrets.js";
 
 export interface ConnectorRevocationTarget {
   connectorId: string;
@@ -13,7 +13,7 @@ export interface ConnectorRevocationDeps {
   timeoutMs?: number;
 }
 
-function revocableCiphertext(grant: BuilderSecret | null): string | null {
+function revocableCiphertext(grant: UserSecret | null): string | null {
   if (!grant) return null;
   if (grant.kind !== "connector") throw new Error(`secret ${grant.secretId} is not a connector grant`);
   return grant.encryptedRefreshToken || grant.encryptedAccessToken || null;

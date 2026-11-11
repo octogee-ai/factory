@@ -259,10 +259,10 @@ function readPersistedSessions(openclawDir: string, agentId: string): {
   try {
     sessions = JSON.parse(raw);
   } catch {
-    throw new Error(`customer oauth purge: ${sessionsPath} is not valid JSON`);
+    throw new Error(`user oauth purge: ${sessionsPath} is not valid JSON`);
   }
   if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) {
-    throw new Error(`customer oauth purge: ${sessionsPath} is not a session map`);
+    throw new Error(`user oauth purge: ${sessionsPath} is not a session map`);
   }
   return { sessionsPath, sessions: sessions as Record<string, unknown> };
 }
@@ -364,7 +364,7 @@ function unsafeSessionFallback(
   return unsupportedModel(fallback.prevProvider, model, allowedModelRefs);
 }
 
-function sessionUsesCustomerOauthRuntime(
+function sessionUsesUserOauthRuntime(
   value: unknown,
   directRuntimeModelRefs: ReadonlySet<string>,
   allowedModelRefs: ReadonlySet<string>,
@@ -435,9 +435,9 @@ async function scrubUnsafeAgentSessions(
     for (const row of rows) {
       const entry = typeof row.entry_json === "string" ? JSON.parse(row.entry_json) : row.entry_json;
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        throw new Error(`customer oauth purge: ${dbPath} session ${String(row.session_key)} is not an object`);
+        throw new Error(`user oauth purge: ${dbPath} session ${String(row.session_key)} is not an object`);
       }
-      if (!sessionUsesCustomerOauthRuntime(entry, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds) ||
+      if (!sessionUsesUserOauthRuntime(entry, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds) ||
           !clearSessionRuntimeState(entry)) continue;
       await client.query(`UPDATE ${schema}.session_nodes SET entry_json = $1 WHERE session_key = $2`,
         [JSON.stringify(entry), row.session_key]);
@@ -465,16 +465,16 @@ async function scrubUnsafeAgentSessions(
         entry = JSON.parse(row.entry_json);
       } catch {
         throw new Error(
-          `customer oauth purge: ${dbPath} session ${String(row.session_key)} is not valid JSON`,
+          `user oauth purge: ${dbPath} session ${String(row.session_key)} is not valid JSON`,
         );
       }
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
         throw new Error(
-          `customer oauth purge: ${dbPath} session ${String(row.session_key)} is not an object`,
+          `user oauth purge: ${dbPath} session ${String(row.session_key)} is not an object`,
         );
       }
       if (
-        !sessionUsesCustomerOauthRuntime(
+        !sessionUsesUserOauthRuntime(
           entry,
           directRuntimeModelRefs,
           allowedModelRefs,
@@ -499,7 +499,7 @@ async function scrubUnsafeAgentSessions(
   }
 }
 
-export interface CustomerOauthRuntimePurgeResult {
+export interface UserOauthRuntimePurgeResult {
   removedFiles: number;
   removedDirectories: number;
   scrubbedProfileStores: number;
@@ -507,7 +507,7 @@ export interface CustomerOauthRuntimePurgeResult {
   affectedAgentIds: string[];
 }
 
-interface CustomerOauthRuntimePurgeOptions {
+interface UserOauthRuntimePurgeOptions {
   openclawDir: string;
   homeDir: string;
   agentIds: readonly string[];
@@ -533,7 +533,7 @@ function purgeNativeCredentialArtifacts(
 }
 
 async function purgeAgentOauthRuntime(
-  opts: CustomerOauthRuntimePurgeOptions,
+  opts: UserOauthRuntimePurgeOptions,
   agentId: string,
   runtime: {
     directRuntimeModelRefs: ReadonlySet<string>;
@@ -541,10 +541,10 @@ async function purgeAgentOauthRuntime(
     allowedProviderIds: ReadonlySet<string>;
     affectedAgentIds: Set<string>;
   },
-): Promise<Pick<CustomerOauthRuntimePurgeResult, "removedFiles" | "removedDirectories" | "scrubbedProfileStores" | "resetSessions">> {
+): Promise<Pick<UserOauthRuntimePurgeResult, "removedFiles" | "removedDirectories" | "scrubbedProfileStores" | "resetSessions">> {
   const persistedSessions = readPersistedSessions(opts.openclawDir, agentId);
   const unsafePersistedSession = Object.values(persistedSessions?.sessions ?? {}).some((session) =>
-    sessionUsesCustomerOauthRuntime(
+    sessionUsesUserOauthRuntime(
       session,
       runtime.directRuntimeModelRefs,
       runtime.allowedModelRefs,
@@ -582,13 +582,13 @@ async function purgeAgentOauthRuntime(
   return { removedFiles, removedDirectories, scrubbedProfileStores, resetSessions };
 }
 
-export async function purgeCustomerOauthRuntimeArtifacts(
-  opts: CustomerOauthRuntimePurgeOptions,
-): Promise<CustomerOauthRuntimePurgeResult> {
+export async function purgeUserOauthRuntimeArtifacts(
+  opts: UserOauthRuntimePurgeOptions,
+): Promise<UserOauthRuntimePurgeResult> {
   const agentIds = Array.from(new Set(opts.agentIds));
   for (const agentId of agentIds) {
     if (!isSafeAgentId(agentId)) {
-      throw new Error(`customer oauth purge: unsafe agent id ${JSON.stringify(agentId)}`);
+      throw new Error(`user oauth purge: unsafe agent id ${JSON.stringify(agentId)}`);
     }
   }
 

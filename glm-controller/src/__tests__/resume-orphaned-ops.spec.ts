@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { resumeOrphanedRunningOps } from "../resume-orphaned-ops.js";
 import type { Operation } from "@octogee/shared/types/glm";
-import { operationNeedsDurableCustomerMigrationV2Resume } from "../operation-retry.js";
+import { operationNeedsDurableUserMigrationV2Resume } from "../operation-retry.js";
 
 interface FakeOpDoc {
   id: string;
@@ -107,7 +107,7 @@ describe("resumeOrphanedRunningOps", () => {
         store: makeStore([terminal] as FakeOpDoc[]),
         log: vi.fn(),
         resumableKinds: new Set(["rollout", "migrate-customer"]),
-        resumableOperation: operationNeedsDurableCustomerMigrationV2Resume,
+        resumableOperation: operationNeedsDurableUserMigrationV2Resume,
         redrive,
       });
 

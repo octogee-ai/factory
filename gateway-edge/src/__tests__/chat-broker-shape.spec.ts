@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { shapeBundle, type MmChannelMeta, type MmUserMeta } from "../lib/chat-broker/shape.js";
 
-const COACH_USER_ID = "coach-uid-26-chars-abcdefgh";
+const DEFAULT_AGENT_USER_ID = "coach-uid-26-chars-abcdefgh";
 const SITE = "https://mattermost.octogee.com";
 const TEAM = "christopher";
 
 const channels = new Map<string, MmChannelMeta>([
-  ["ch1", { id: "ch1", name: "builder-pulse", display_name: "Builder Pulse", team_id: "team-id-1" }],
+  ["ch1", { id: "ch1", name: "builder-pulse", display_name: "User Pulse", team_id: "team-id-1" }],
 ]);
 
 const users = new Map<string, MmUserMeta>([
@@ -15,7 +15,7 @@ const users = new Map<string, MmUserMeta>([
 ]);
 
 const baseCtx = {
-  coachMmUserId: COACH_USER_ID,
+  defaultAgentMmUserId: DEFAULT_AGENT_USER_ID,
   siteUrl: SITE,
   teamName: TEAM,
   channels,
@@ -37,11 +37,11 @@ describe("shapeBundle", () => {
     expect(out.posts.map((p) => p.post_id)).toEqual(["p1", "p2"]);
   });
 
-  it("includes coach-authored posts labeled self: true (full-fidelity re-prime)", () => {
+  it("includes default-agent-authored posts labeled self: true (full-fidelity re-prime)", () => {
     const out = shapeBundle(
       {
         posts: {
-          p1: { id: "p1", channel_id: "ch1", user_id: COACH_USER_ID, message: "my reply", create_at: 1_700_000_000_000 },
+          p1: { id: "p1", channel_id: "ch1", user_id: DEFAULT_AGENT_USER_ID, message: "my reply", create_at: 1_700_000_000_000 },
           p2: { id: "p2", channel_id: "ch1", user_id: "u-taylor", message: "real", create_at: 1_700_000_001_000 },
         },
         order: ["p1", "p2"],
@@ -55,17 +55,17 @@ describe("shapeBundle", () => {
     expect(out.posts[0].snippet).toBe("my reply");
   });
 
-  it("labels EVERY coach post in an interleaved bundle — guards against `find` vs `filter`", () => {
-    // Catches a regression where the impl labels only the first coach match
-    // or otherwise stops at the first hit. Posts arranged so coach and
-    // non-coach interleave — output must keep all four in order with the
+  it("labels EVERY agent post in an interleaved bundle — guards against `find` vs `filter`", () => {
+    // Catches a regression where the impl labels only the first agent match
+    // or otherwise stops at the first hit. Posts arranged so agent and
+    // non-default-agent interleave — output must keep all four in order with the
     // self flag correct on each.
     const out = shapeBundle(
       {
         posts: {
-          p1: { id: "p1", channel_id: "ch1", user_id: COACH_USER_ID, message: "coach one", create_at: 1 },
+          p1: { id: "p1", channel_id: "ch1", user_id: DEFAULT_AGENT_USER_ID, message: "coach one", create_at: 1 },
           p2: { id: "p2", channel_id: "ch1", user_id: "u-taylor", message: "real one", create_at: 2 },
-          p3: { id: "p3", channel_id: "ch1", user_id: COACH_USER_ID, message: "coach two", create_at: 3 },
+          p3: { id: "p3", channel_id: "ch1", user_id: DEFAULT_AGENT_USER_ID, message: "coach two", create_at: 3 },
           p4: { id: "p4", channel_id: "ch1", user_id: "u-other", message: "real two", create_at: 4 },
         },
         order: ["p1", "p2", "p3", "p4"],
@@ -80,24 +80,24 @@ describe("shapeBundle", () => {
     ]);
   });
 
-  it("keys the self label on post.user_id even when the coach has no user metadata", () => {
+  it("keys the self label on post.user_id even when the agent has no user metadata", () => {
     // If the impl ever swapped the comparison to author.username or
-    // author.display_name (they're easier to read in logs), a coach post
-    // would lose its self label whenever the coach's user metadata was
+    // author.display_name (they're easier to read in logs), a agent post
+    // would lose its self label whenever the agent's user metadata was
     // missing from the hydrated map. The label must come from user_id; the
     // author falls back to "(unknown)" without affecting it.
-    const usersWithCoachMissing = new Map<string, MmUserMeta>([
+    const usersWithDefaultAgentMissing = new Map<string, MmUserMeta>([
       ["u-taylor", { id: "u-taylor", username: "taylor" }],
     ]);
     const out = shapeBundle(
       {
         posts: {
-          p1: { id: "p1", channel_id: "ch1", user_id: COACH_USER_ID, message: "my reply", create_at: 1 },
+          p1: { id: "p1", channel_id: "ch1", user_id: DEFAULT_AGENT_USER_ID, message: "my reply", create_at: 1 },
           p2: { id: "p2", channel_id: "ch1", user_id: "u-taylor", message: "real", create_at: 2 },
         },
         order: ["p1", "p2"],
       },
-      { ...baseCtx, users: usersWithCoachMissing },
+      { ...baseCtx, users: usersWithDefaultAgentMissing },
     );
     expect(out.posts.map((p) => [p.post_id, p.self])).toEqual([
       ["p1", true],

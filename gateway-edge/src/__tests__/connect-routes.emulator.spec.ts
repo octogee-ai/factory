@@ -933,7 +933,7 @@ describe("connect — google platform capability flow", () => {
     expect(parsed.searchParams.get("prompt")).toBe("consent");
   });
 
-  it("mints one consent request for every capability the Builder selected", async () => {
+  it("mints one consent request for every capability the user selected", async () => {
     await setGoogleStage("on");
     const { url } = await mintAuthUrlState("google", "&capability=calendar,gmail");
     expect(new URL(url).searchParams.get("scope")).toBe(`${CAL} ${EMAIL} ${GMAIL}`);

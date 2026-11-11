@@ -6,7 +6,7 @@ import {
 } from "../lib/platform-usage-allowance.js";
 
 describe("shared platform usage allowance reader", () => {
-  it("gates on customer charge while preserving old cost-only window documents", async () => {
+  it("gates on user charge while preserving old cost-only window documents", async () => {
     const store = {
       readWindowUsage: vi.fn(async () => ({ costUsd: 0.5, chargeUsd: 0.75 })),
       readWeekUsage: vi.fn(async () => ({ costUsd: 1.5 })),

@@ -14,7 +14,7 @@ vi.mock("../mattermost/client.js", () => ({
 }));
 
 vi.mock("../mattermost/channel-members.js", () => ({
-  customerChannelMembers: vi.fn(() => ["mm-customer", "mm-admin"]),
+  userChannelMembers: vi.fn(() => ["mm-user", "mm-admin"]),
 }));
 
 import { createProjectChannel } from "../mattermost/channels.js";
@@ -39,7 +39,7 @@ describe("createProjectChannel", () => {
       "team-1",
       "acme",
       "mygame",
-      "mm-customer",
+      "mm-user",
       "My Game",
     );
 
@@ -47,7 +47,7 @@ describe("createProjectChannel", () => {
     expect(h.mmApiCall).toHaveBeenCalledWith(
       "POST",
       "/channels/project-channel-1/members",
-      { user_id: "mm-customer" },
+      { user_id: "mm-user" },
     );
     expect(h.mmApiCall).toHaveBeenCalledWith(
       "POST",

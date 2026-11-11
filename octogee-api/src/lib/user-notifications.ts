@@ -33,5 +33,5 @@ export interface CreatedPostObserver {
 export interface ProductNotifications {
   notifyUsers: UserNotifier;
   notifyFinalReply: FinalReplyNotifier;
-  createPostObserver(store: Pick<PlatformStateRepositories, "builders" | "workspaces">): CreatedPostObserver;
+  createPostObserver(store: Pick<PlatformStateRepositories, "users" | "workspaces">): CreatedPostObserver;
 }

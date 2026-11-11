@@ -9,7 +9,7 @@ const h = vi.hoisted(() => ({
   gitStatus: vi.fn(),
   gitCommit: vi.fn(),
   gitPush: vi.fn(),
-  resolveCustomerDir: vi.fn(),
+  resolveUserDir: vi.fn(),
   resolveProjectDir: vi.fn(),
   runWorkspaceGitMutation: vi.fn(),
 }));
@@ -23,7 +23,7 @@ vi.mock("../lib/workspace-git.js", () => ({
   gitLog: vi.fn(),
   gitPush: (...args: unknown[]) => h.gitPush(...args),
   gitStatus: (...args: unknown[]) => h.gitStatus(...args),
-  resolveCustomerDir: (...args: unknown[]) => h.resolveCustomerDir(...args),
+  resolveUserDir: (...args: unknown[]) => h.resolveUserDir(...args),
   resolveProjectDir: (...args: unknown[]) => h.resolveProjectDir(...args),
   runWorkspaceGitMutation: (...args: unknown[]) => h.runWorkspaceGitMutation(...args),
 }));
@@ -40,7 +40,7 @@ function grant(overrides: Partial<Extract<WorkspaceGitAuthorizationOutcome, { ki
   return {
     kind: "authorized" as const,
     authorization: {
-      gatewayId: "bender",
+      gatewayId: "walter",
       uid: "uid-member",
       slug: "alice",
       projectSlug: "orbit",
@@ -56,7 +56,7 @@ function app() {
   instance.use(express.json());
   const router = createWorkspaceGitRouter({
     authorize: (...args: unknown[]) => h.authorize(...args),
-    localGatewayId: () => "bender",
+    localGatewayId: () => "walter",
   });
   instance.use("/api/workspace", router);
   instance.use("/api/g/:gatewayId/workspace", router);
@@ -68,7 +68,7 @@ beforeEach(() => {
   h.gitStatus.mockReset().mockResolvedValue({ ok: true, entries: [] });
   h.gitCommit.mockReset().mockResolvedValue({ ok: true, result: { sha: "abc123", empty: false } });
   h.gitPush.mockReset().mockResolvedValue({ ok: true });
-  h.resolveCustomerDir.mockReset().mockResolvedValue("/customers/alice");
+  h.resolveUserDir.mockReset().mockResolvedValue("/customers/alice");
   h.resolveProjectDir.mockReset().mockResolvedValue("/customers/alice/projects/orbit");
   h.runWorkspaceGitMutation.mockReset().mockImplementation(async (_dir, work) => ({
     ok: true,
@@ -84,9 +84,9 @@ describe("gateway-local workspace git authorization", () => {
   });
 
   it("answers 401 without a bearer and 400 without a slug before reaching the broker", async () => {
-    const unauthenticated = await request(app()).get("/api/g/bender/workspace/git/status?slug=alice");
+    const unauthenticated = await request(app()).get("/api/g/walter/workspace/git/status?slug=alice");
     expect(unauthenticated.status).toBe(401);
-    const missingSlug = await request(app()).get("/api/g/bender/workspace/git/status").set("authorization", BEARER);
+    const missingSlug = await request(app()).get("/api/g/walter/workspace/git/status").set("authorization", BEARER);
     expect(missingSlug.status).toBe(400);
     expect(missingSlug.body).toEqual({ error: "Missing slug" });
     expect(h.authorize).not.toHaveBeenCalled();
@@ -94,13 +94,13 @@ describe("gateway-local workspace git authorization", () => {
 
   it("authorizes reads through the broker with the caller's bearer, the local gateway, and the read lane", async () => {
     const res = await request(app())
-      .get("/api/g/bender/workspace/git/status?slug=alice&project=orbit")
+      .get("/api/g/walter/workspace/git/status?slug=alice&project=orbit")
       .set("authorization", BEARER);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ entries: [] });
     expect(h.authorize).toHaveBeenCalledWith({
-      gatewayId: "bender",
+      gatewayId: "walter",
       authorization: BEARER,
       slug: "alice",
       projectSlug: "orbit",
@@ -111,9 +111,9 @@ describe("gateway-local workspace git authorization", () => {
 
   it.each(["status", "diff", "log", "branches"])("answers 503 CUSTOMER_DIR_MISSING for /git/%s when an authorized workspace is not mounted", async (name) => {
     h.authorize.mockResolvedValueOnce(grant({ projectSlug: null, githubToken: null }));
-    h.resolveCustomerDir.mockResolvedValueOnce(null);
+    h.resolveUserDir.mockResolvedValueOnce(null);
     const res = await request(app())
-      .get(`/api/g/bender/workspace/git/${name}?slug=alice`)
+      .get(`/api/g/walter/workspace/git/${name}?slug=alice`)
       .set("authorization", BEARER);
 
     expect(res.status).toBe(503);
@@ -121,16 +121,16 @@ describe("gateway-local workspace git authorization", () => {
       error: "Working tree temporarily unavailable; retry in a few seconds.",
       code: "CUSTOMER_DIR_MISSING",
     });
-    expect(h.resolveCustomerDir).toHaveBeenCalledWith(expect.any(String), "alice");
+    expect(h.resolveUserDir).toHaveBeenCalledWith(expect.any(String), "alice");
     expect(h.gitStatus).not.toHaveBeenCalled();
   });
 
   it("passes broker refusals through with their status and body", async () => {
     h.authorize.mockResolvedValueOnce({ kind: "unauthenticated" });
-    expect((await request(app()).get("/api/g/bender/workspace/git/status?slug=alice").set("authorization", BEARER)).status).toBe(401);
+    expect((await request(app()).get("/api/g/walter/workspace/git/status?slug=alice").set("authorization", BEARER)).status).toBe(401);
 
     h.authorize.mockResolvedValueOnce({ kind: "denied", status: 403, error: "Forbidden" });
-    const forbidden = await request(app()).get("/api/g/bender/workspace/git/status?slug=alice").set("authorization", BEARER);
+    const forbidden = await request(app()).get("/api/g/walter/workspace/git/status?slug=alice").set("authorization", BEARER);
     expect(forbidden.status).toBe(403);
     expect(forbidden.body).toEqual({ error: "Forbidden" });
 
@@ -138,7 +138,7 @@ describe("gateway-local workspace git authorization", () => {
       kind: "denied", status: 409, error: "Project is archived", reason: "project_archived",
     });
     const archived = await request(app())
-      .post("/api/g/bender/workspace/git/commit")
+      .post("/api/g/walter/workspace/git/commit")
       .set("authorization", BEARER)
       .send({ slug: "alice", project: "orbit", message: "wip" });
     expect(archived.status).toBe(409);
@@ -149,14 +149,14 @@ describe("gateway-local workspace git authorization", () => {
 
   it("answers 503 with a code when the broker is unreachable", async () => {
     h.authorize.mockRejectedValueOnce(new Error("workspace git authorization broker timed out"));
-    const res = await request(app()).get("/api/g/bender/workspace/git/status?slug=alice").set("authorization", BEARER);
+    const res = await request(app()).get("/api/g/walter/workspace/git/status?slug=alice").set("authorization", BEARER);
     expect(res.status).toBe(503);
     expect(res.body).toEqual({ error: "Authorization unavailable", code: "AUTH_BROKER_UNAVAILABLE" });
   });
 
   it("commits under the write lane as the broker-resolved author", async () => {
     const res = await request(app())
-      .post("/api/g/bender/workspace/git/commit")
+      .post("/api/g/walter/workspace/git/commit")
       .set("authorization", BEARER)
       .send({ slug: "alice", project: "orbit", message: "  ship it  " });
 
@@ -173,7 +173,7 @@ describe("gateway-local workspace git authorization", () => {
 
   it("resolves a caller token for remote writes and passes it only to git push", async () => {
     const res = await request(app())
-      .post("/api/g/bender/workspace/git/push")
+      .post("/api/g/walter/workspace/git/push")
       .set("authorization", BEARER)
       .send({ slug: "alice", project: "orbit", branch: "feature/member" });
 
@@ -190,12 +190,12 @@ describe("gateway-local workspace git authorization", () => {
   it("pushes a gitea-backed workspace tree without a github token", async () => {
     h.authorize.mockResolvedValueOnce(grant({ projectSlug: null, githubToken: null }));
     const res = await request(app())
-      .post("/api/g/bender/workspace/git/push")
+      .post("/api/g/walter/workspace/git/push")
       .set("authorization", BEARER)
       .send({ slug: "alice" });
 
     expect(res.status).toBe(200);
-    expect(h.resolveCustomerDir).toHaveBeenCalledWith(expect.any(String), "alice");
+    expect(h.resolveUserDir).toHaveBeenCalledWith(expect.any(String), "alice");
     expect(h.gitPush).toHaveBeenCalledWith("/customers/alice", { branch: undefined, githubToken: undefined });
   });
 });

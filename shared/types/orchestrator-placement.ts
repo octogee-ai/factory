@@ -1,6 +1,6 @@
 import { userEntitlements } from "./user-entitlements.js";
 import { accountAllowsInteractiveAccess } from "./account-lifecycle.js";
-import type { DisposableBuilderGatewayAllocation } from "./gateway-mutable-config.js";
+import type { IsolatedGatewayAllocation } from "./gateway-mutable-config.js";
 
 export interface OnboardingOrchestratorConfig {
   defaultGatewayId: string;
@@ -13,10 +13,10 @@ export interface ContinuousPlacementOwnedGateway {
   desiredStatus: string;
   ready: boolean;
   disposable?: boolean;
-  allocation?: DisposableBuilderGatewayAllocation | null;
+  allocation?: IsolatedGatewayAllocation | null;
 }
 
-export interface ContinuousBuilderPlacementInput {
+export interface ContinuousUserPlacementInput {
   uid: string;
   userData: Record<string, unknown>;
   currentGatewayId: string | null;
@@ -25,7 +25,7 @@ export interface ContinuousBuilderPlacementInput {
   now?: Date;
 }
 
-export interface ContinuousBuilderPlacement {
+export interface ContinuousUserPlacement {
   targetGatewayId: string;
   ownedGatewayId: string | null;
 }
@@ -35,7 +35,7 @@ function nonEmptyString(value: unknown): string | null {
 }
 
 export function resolveLiveActivationTargetGatewayId(input: Pick<
-  ContinuousBuilderPlacementInput,
+  ContinuousUserPlacementInput,
   "userData" | "now"
 >): string | null {
   if (!accountAllowsInteractiveAccess(input.userData)) return null;
@@ -51,9 +51,9 @@ export function resolveLiveActivationTargetGatewayId(input: Pick<
   return nonEmptyString((lease as Record<string, unknown>).targetGatewayId);
 }
 
-export function resolveContinuousBuilderPlacement(
-  input: ContinuousBuilderPlacementInput,
-): ContinuousBuilderPlacement {
+export function resolveContinuousUserPlacement(
+  input: ContinuousUserPlacementInput,
+): ContinuousUserPlacement {
   const ownedGatewayId = resolveLiveActivationTargetGatewayId(input);
   if (!ownedGatewayId) {
     return { targetGatewayId: input.defaultGatewayId, ownedGatewayId: null };

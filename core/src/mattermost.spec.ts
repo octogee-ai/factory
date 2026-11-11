@@ -5,9 +5,9 @@ describe("mattermost public barrel", () => {
   it("exports the Mattermost runtime surface used by scripts and services", () => {
     expect(mattermost).toEqual(expect.objectContaining({
       COMMUNITY_CHANNELS: expect.any(Array),
-      BUILDER_PAT_DESCRIPTION: expect.any(String),
-      COACH_PAT_DESCRIPTION: expect.any(String),
-      customerChannelMembers: expect.any(Function),
+      USER_PAT_DESCRIPTION: expect.any(String),
+      DEFAULT_AGENT_PAT_DESCRIPTION: expect.any(String),
+      userChannelMembers: expect.any(Function),
       createProjectChannel: expect.any(Function),
       destroyMmChannel: expect.any(Function),
       destroyMmUser: expect.any(Function),
@@ -15,12 +15,12 @@ describe("mattermost public barrel", () => {
       joinCommunityMembership: expect.any(Function),
       getMmAdminToken: expect.any(Function),
       getMmUserChannels: expect.any(Function),
-      mintAndPersistCoachToken: expect.any(Function),
+      mintAndPersistDefaultAgentToken: expect.any(Function),
       mmApiCall: expect.any(Function),
       mmUploadAvatar: expect.any(Function),
       provisionMattermostUser: expect.any(Function),
-      revokeAndMintBuilderPat: expect.any(Function),
-      syncCoachProfileToMattermost: expect.any(Function),
+      revokeAndMintUserPat: expect.any(Function),
+      syncDefaultAgentProfileToMattermost: expect.any(Function),
       syncProfileToMattermost: expect.any(Function),
     }));
   });

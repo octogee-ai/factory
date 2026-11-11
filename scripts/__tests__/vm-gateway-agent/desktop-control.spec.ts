@@ -57,7 +57,7 @@ it.each([
   ["keeps untested image candidates outside the family", "test_build.py"],
   ["validates resize requests and waits for output dimensions", "test_resize.py"],
   ["serves the Desk page, apps, launch, note and style endpoints", "test_desk.py"],
-  ["keeps the host desktop off only for an X11 computer", "test_desktop_wanted.py"],
+  ["keeps the host desktop off only for an X11 VM", "test_desktop_wanted.py"],
 ])("%s", async (_behavior, filename) => {
   const script = resolve(__dirname, "../../../infra/desktop/image", filename);
   await expect(promisify(execFile)("python3", [script])).resolves.toMatchObject({

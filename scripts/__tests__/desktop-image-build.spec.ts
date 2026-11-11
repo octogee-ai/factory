@@ -63,7 +63,7 @@ it('abandoned-run cleanup preserves recent VMs and rejects unexpected purposes',
   const old = { labels: { 'octogee-image-run': '123-1', purpose: 'octogee-computer-image-build' }, creationTimestamp: '2026-09-07T00:00:00Z' };
   const recent = { ...old, creationTimestamp: '2026-09-07T02:30:00Z' };
   expect(cleanupCandidates([old, recent], '124-1', true, Date.parse('2026-09-07T03:00:00Z'))).toEqual([old]);
-  expect(() => cleanupCandidates([{ ...old, labels: { ...old.labels, purpose: 'assigned-computer' } }], '123-1', false)).toThrow('refusing');
+  expect(() => cleanupCandidates([{ ...old, labels: { ...old.labels, purpose: 'assigned-vm' } }], '123-1', false)).toThrow('refusing');
 });
 
 const repository = 'us-central1-docker.pkg.dev/octogee/octogee';
@@ -76,7 +76,7 @@ it('includes the immutable gateway digest in the desktop fingerprint', () => {
   expect(first).not.toBe(desktopFingerprint(`${repository}/octogee-gateway-builder@${gatewayDigest}`, `${repository}/gateway-edge@sha256:${'f'.repeat(64)}`, files));
   expect(first).not.toBe(desktopFingerprint(`${repository}/octogee-gateway-builder@sha256:${'f'.repeat(64)}`, edgeImage, files));
 });
-it('resolves the exact main Builder image after gateway builds finish', () => {
+it('resolves the exact main isolated image after gateway builds finish', () => {
   const lookup = vi.fn(() => gatewayDigest);
   const baseline = vi.fn();
   expect(resolveDesktopGatewayImage({ repository, project: 'octogee', sourceSha, baseSha: 'c'.repeat(40), changedGateway: true }, lookup, baseline))

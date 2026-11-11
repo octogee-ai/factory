@@ -17,7 +17,7 @@ import type { NativeMobileBinding } from '@octogee/shared/types/native-mobile';
 import { createMobileGateway } from './mobile.js';
 import { createOpenClawControlProxyIdentity, openProxyIdentitySocket } from './proxy-identity.js';
 import { mobileDigest } from './mobile-proof.js';
-import { installTestBuilderIdentity } from '../__tests__/helpers/builder-identity.js';
+import { installTestUserIdentity } from '../__tests__/helpers/user-identity.js';
 
 const source = process.env.OPENCLAW_NATIVE_MOBILE_SOURCE;
 const ID = 'b57c9773-4598-41a0-b536-3e14e4689995';
@@ -62,7 +62,7 @@ it.skipIf(!source).each(['ios', 'android'])(
       await fs.mkdir(uiRoot);
       await fs.writeFile(
         path.join(uiRoot, 'index.html'),
-        '<html><head><script src="/g/bender/openclaw/assets/acceptance.js"></script></head><body><openclaw-app></openclaw-app></body></html>',
+        '<html><head><script src="/g/walter/openclaw/assets/acceptance.js"></script></head><body><openclaw-app></openclaw-app></body></html>',
       );
       await fs.mkdir(path.join(uiRoot, 'assets'));
       await fs.writeFile(path.join(uiRoot, 'assets/acceptance.js'), 'export const accepted = true;');
@@ -72,7 +72,7 @@ it.skipIf(!source).each(['ios', 'android'])(
           port: nativePort,
           bind: 'loopback',
           publicOrigin: 'https://api.octogee.com',
-          controlUi: { enabled: true, root: uiRoot, basePath: '/g/bender/openclaw' },
+          controlUi: { enabled: true, root: uiRoot, basePath: '/g/walter/openclaw' },
           trustedProxies: ['127.0.0.1', '::1'],
           auth: {
             mode: 'trusted-proxy',
@@ -154,8 +154,8 @@ it.skipIf(!source).each(['ios', 'android'])(
       }
       await startNative();
       const env = {
-        GATEWAY_ID: 'bender',
-        GATEWAY_REVISION_ID: 'bender',
+        GATEWAY_ID: 'walter',
+        GATEWAY_REVISION_ID: 'walter',
         GATEWAY_CLASS: 'builder',
         GATEWAY_PROFILE: 'builder',
         OPENCLAW_CONTROL_IDENTITY: 'per-user',
@@ -193,7 +193,7 @@ it.skipIf(!source).each(['ios', 'android'])(
       };
       let binding: NativeMobileBinding = {
         id: ID,
-        gatewayId: 'bender',
+        gatewayId: 'walter',
         uid: 'owner',
         workspaceSlug: 'alice',
         allocation: 'allocation',
@@ -213,15 +213,15 @@ it.skipIf(!source).each(['ios', 'android'])(
         if (operation === 'revoke') binding.state = 'revoked';
         return structuredClone(binding);
       };
-      installTestBuilderIdentity({
-        gatewayId: 'bender',
+      installTestUserIdentity({
+        gatewayId: 'walter',
         state: 'claimed',
         ownerUid: 'owner',
         builderSlug: 'alice',
         leaseId: null,
         generation: null,
       });
-      const mount = `/api/g/bender/openclaw/mobile/${ID}`;
+      const mount = `/api/g/walter/openclaw/mobile/${ID}`;
       async function startEdge() {
         const mobile = createMobileGateway({
           env,
@@ -249,7 +249,7 @@ it.skipIf(!source).each(['ios', 'android'])(
       const response = await request(`http://127.0.0.1:${port}`).post(`${mount}/setup`).send({});
       expect(response.status, JSON.stringify(response.body)).toBe(200);
       const setup = JSON.parse(Buffer.from(response.body.setupCode, 'base64url').toString());
-      expect(setup.url).toBe(`wss://api.octogee.com/g/bender/openclaw/mobile/${ID}`);
+      expect(setup.url).toBe(`wss://api.octogee.com/g/walter/openclaw/mobile/${ID}`);
       expect(binding.bootstrapHash).toBe(mobileDigest(setup.bootstrapToken));
       const phone = generateIdentity();
       async function connect(
@@ -432,7 +432,7 @@ it.skipIf(!source).each(['ios', 'android'])(
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
       if (child) await stop(child);
-      installTestBuilderIdentity(null);
+      installTestUserIdentity(null);
       await fs.rm(root, { recursive: true, force: true });
     }
   },

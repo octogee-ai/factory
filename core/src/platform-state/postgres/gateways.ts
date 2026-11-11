@@ -1,5 +1,5 @@
 import { isReleasePayload, upgradeReleasePayloadSchema } from "@octogee/shared/types/gateway-releases";
-import type { DisposableBuilderGatewayAllocation } from "@octogee/shared/types/gateway-mutable-config";
+import type { IsolatedGatewayAllocation } from "@octogee/shared/types/gateway-mutable-config";
 import { isGatewayVmRuntimeBundle, type GatewayVmRuntimeBundle } from "@octogee/shared/types/glm";
 import { parseAssignmentDoc } from "../../assignment-doc.js";
 import { DuplicateRecordError, MalformedRecordError, type RecordKey } from "../errors.js";
@@ -142,9 +142,9 @@ function allocationColumns(gatewayId: string, allocation: unknown): Fields {
   if (allocation === null || isClearField(allocation)) {
     return { allocationLeaseId: null, allocationGeneration: null, allocationClaimedByUid: null };
   }
-  const value = allocation as DisposableBuilderGatewayAllocation;
+  const value = allocation as IsolatedGatewayAllocation;
   if (value.kind !== ALLOCATION_KIND || value.schemaVersion !== ALLOCATION_SCHEMA_VERSION) {
-    throw new MalformedRecordError(rootKey(gatewayId), `allocation ${JSON.stringify(allocation)} is not a disposable Builder allocation`);
+    throw new MalformedRecordError(rootKey(gatewayId), `allocation ${JSON.stringify(allocation)} is not a disposable isolated allocation`);
   }
   return { allocationLeaseId: value.leaseId, allocationGeneration: value.generation, allocationClaimedByUid: value.claimedByUid };
 }
@@ -160,7 +160,7 @@ function rootColumns(gatewayId: string, input: object): Fields {
 export function decodeGatewayRoot(row: Row): Stored<GatewayRoot> {
   const { allocationLeaseId, allocationGeneration, allocationClaimedByUid, ...root } = decodeStored<Fields>(GATEWAYS_TABLE, row);
   if (allocationLeaseId === undefined) return root as unknown as Stored<GatewayRoot>;
-  const allocation: DisposableBuilderGatewayAllocation = {
+  const allocation: IsolatedGatewayAllocation = {
     kind: ALLOCATION_KIND,
     schemaVersion: ALLOCATION_SCHEMA_VERSION,
     leaseId: allocationLeaseId as string,

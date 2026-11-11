@@ -8,9 +8,9 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{/*
 Static base routing table for the edge load balancer, as a YAML list of
 Ingress spec.rules entries. This is NOT rendered onto the Ingress directly:
-Ingress .spec.rules is an atomic SSA field with a single owner, and Cowboy
+Ingress .spec.rules is an atomic SSA field with a single owner, and the fleet controller
 (glm-controller) is that owner. The chart publishes these base routes via the
-octogee-edge-routes ConfigMap; Cowboy reads them and applies the rule table.
+octogee-edge-routes ConfigMap; the fleet controller reads them and applies the rule table.
 Gateway-local public traffic is stable at /g/* and is forwarded by the shared
 gateway-router Service to the selected gateway's internal services.
 */}}

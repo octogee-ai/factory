@@ -99,7 +99,7 @@ describe("tenant binding for a VM gateway", () => {
   });
 });
 
-describe("builder runtime-state routes for a VM gateway", () => {
+describe("isolated runtime-state routes for a VM gateway", () => {
   it("authorize the VM's own snapshotter through binding, enforcement, and the route's pod-scoped check", async () => {
     const db = fakeDb(docs);
     const store = createDocumentFixtureStore(docs);
@@ -113,7 +113,7 @@ describe("builder runtime-state routes for a VM gateway", () => {
     app.use("/internal/fleet", createFleetBrokerRoutes({
       db: db as unknown as Firestore,
       store,
-      createBuilderRuntimeStateSignedUrl: async (input) => ({ url: `signed:${input.gcsPath}`, method: "GET", gcsPath: input.gcsPath, expiresAt: "later" }),
+      createIsolatedRuntimeStateSignedUrl: async (input) => ({ url: `signed:${input.gcsPath}`, method: "GET", gcsPath: input.gcsPath, expiresAt: "later" }),
     }));
 
     const res = await request(app)

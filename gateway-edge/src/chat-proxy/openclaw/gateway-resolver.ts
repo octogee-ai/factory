@@ -18,7 +18,7 @@ export class GatewayResolveError extends Error {
   }
 }
 
-export type GatewayResolverState = Pick<PlatformStateRepositories, "builders" | "gateways" | "fleetRegistry">;
+export type GatewayResolverState = Pick<PlatformStateRepositories, "users" | "gateways" | "fleetRegistry">;
 
 export interface ResolveGatewayOptions {
   store: GatewayResolverState;
@@ -57,8 +57,8 @@ async function readProvisionedGatewayId(
   store: GatewayResolverState,
   uid: string,
 ): Promise<string> {
-  const builder = await store.builders.records.get(uid);
-  const gatewayId = builder?.gateway?.gatewayId;
+  const user = await store.users.records.get(uid);
+  const gatewayId = user?.gateway?.gatewayId;
   if (gatewayId === undefined || gatewayId.length === 0) {
     throw new GatewayResolveError(
       "user-not-provisioned",

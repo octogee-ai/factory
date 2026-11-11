@@ -14,10 +14,10 @@ export function podBelongsToGateway(gatewayId, podName) {
     const suffix = podName.slice(prefix.length);
     return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(suffix);
 }
-export function configuredBuilderBootstrapAllowed(value, input) {
-    return eligibleConfiguredBuilderGateway(value, input) !== null;
+export function configuredUserBootstrapAllowed(value, input) {
+    return eligibleConfiguredIsolatedGateway(value, input) !== null;
 }
-function eligibleConfiguredBuilderGateway(value, input) {
+function eligibleConfiguredIsolatedGateway(value, input) {
     const gateway = projectGatewayDesiredRootForGateway(value, input.gatewayId);
     if (gateway === null)
         return null;
@@ -31,8 +31,8 @@ function eligibleConfiguredBuilderGateway(value, input) {
     }
     return gateway;
 }
-export function configuredBuilderCredentialBootstrapAllowed(value, input) {
-    const gateway = eligibleConfiguredBuilderGateway(value, input);
+export function configuredUserCredentialBootstrapAllowed(value, input) {
+    const gateway = eligibleConfiguredIsolatedGateway(value, input);
     return gateway !== null && gateway.ownerUid === input.uid;
 }
 export function initialGatewayReleaseDocuments(args) {

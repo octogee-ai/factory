@@ -48,7 +48,7 @@ describe("connector approval native creation", () => {
     await expect(connectorApprovalRpc(h.store, {})({ operation: "get", ownerUid: "owner", gatewayId: "b-alice", agentId: h.input.agentId, nativeId: "plugin:test" }))
       .rejects.toThrow("HTTP 500");
   });
-  it("uses the private canonical Coach channel and preserves the exact preview link and action hash", async () => {
+  it("uses the private canonical Agent channel and preserves the exact preview link and action hash", async () => {
     const h = harness();
     await expect(requestConnectorApproval(h.store, h.rpc, h.input)).resolves.toEqual({ nativeApprovalId: "plugin:native-request", expiresAtMs: 100_000 });
     expect(h.rpc).toHaveBeenCalledWith(expect.objectContaining({ operation: "create", coachChannelId: "c".repeat(26),
@@ -59,7 +59,7 @@ describe("connector approval native creation", () => {
     const h = harness();
     if (change === "missing-coach") delete h.docs["workspaces/alice/channels/coach-dm"];
     else h.docs["workspaces/alice"] = { id: "alice", ownerUid: "someone-else" };
-    await expect(requestConnectorApproval(h.store, h.rpc, h.input)).rejects.toThrow("Canonical Coach DM");
+    await expect(requestConnectorApproval(h.store, h.rpc, h.input)).rejects.toThrow("Canonical Agent DM");
     expect(h.rpc).not.toHaveBeenCalled();
   });
   it.each(["none", "default", undefined])("discloses %s reminders even when the native event preview exceeds the display limit", async reminders => {
@@ -86,7 +86,7 @@ describe("connector approval native creation", () => {
     expect(command.detail).toContain(h.input.actionUrl);
     expect(command.detail.length).toBeLessThan(16_384);
   });
-  it("does not follow a customer's new placement to resolve an old gateway approval", async () => {
+  it("does not follow a user's new placement to resolve an old gateway approval", async () => {
     const h = harness();
     await expect(connectorApprovalRpc(h.store, {})({ operation: "get", ownerUid: "owner", gatewayId: "old-gateway", agentId: h.input.agentId, nativeId: "plugin:old" })).rejects.toThrow("assignment changed");
   });

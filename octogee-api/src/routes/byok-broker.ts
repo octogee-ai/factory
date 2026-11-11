@@ -10,8 +10,8 @@ import { parseAgentId } from "@octogee/shared/types/identity";
 import { readSecret, addSecretVersionKeepingLatest, type SubscriptionSecretVersionResult } from "@octogee/core/secret-store";
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
-import { firestoreBuilderAccountReader, type BuilderAccount, type BuilderAccountReader } from "@octogee/core/builder-account";
-import type { BuilderRecord, PlatformStateRepositories, PlatformStateStore } from "@octogee/core/platform-state";
+import { firestoreUserAccountReader, type UserAccount, type UserAccountReader } from "@octogee/core/user-account";
+import type { PlatformUserRecord, PlatformStateRepositories, PlatformStateStore } from "@octogee/core/platform-state";
 import { userEntitlements, type UserPlan } from "@octogee/shared/types/user-entitlements";
 import {
   spendWindowPercentUsed,
@@ -39,9 +39,9 @@ import {
   createAgentModelTokenIssueCoordinator,
 } from "../lib/agent-model-token-issue-coordinator.js";
 import { findRunningOutboundMigrationUserByAgentId } from "../lib/agent-model-token-migration-admission.js";
-import { builderAllowsInteractiveAccess, requireBuilderAccount } from "../lib/assigned-builder.js";
+import { userAllowsInteractiveAccess, requireUserAccount } from "../lib/assigned-user.js";
 import {
-  configuredBuilderSlugCredentialBootstrapAllowed,
+  configuredUserSlugCredentialBootstrapAllowed,
   findAssignedOrInboundMigratingOrConfiguredUserByAgentId,
   findAssignedUserByAgentId,
 } from "./fleet-broker.js";
@@ -91,7 +91,7 @@ function parseByokApiKeyId(
   };
 }
 
-// Per-customer broker tokens are re-minted whenever the resolver re-resolves the
+// Per-user broker tokens are re-minted whenever the resolver re-resolves the
 // keyRef; a generous TTL spans a normal agent session (so it is not re-minted
 // mid-session) while still bounding how long stale tokens linger before TTL cleanup.
 const AGENT_MODEL_TOKEN_TTL_SECONDS = 24 * 60 * 60;
@@ -132,8 +132,8 @@ function warnSkippedUserByosubProviders(input: {
 }
 
 
-function ownerSlug(builder: Pick<BuilderRecord, "slug">): string | null {
-  return builder.slug !== null && SLUG_RE.test(builder.slug) ? builder.slug : null;
+function ownerSlug(userRecord: Pick<PlatformUserRecord, "slug">): string | null {
+  return userRecord.slug !== null && SLUG_RE.test(userRecord.slug) ? userRecord.slug : null;
 }
 
 function requestedModelProvider(value: unknown): ModelBrokerProvider | null {
@@ -217,14 +217,14 @@ function deriveSpendStatus(input: {
 interface UsageReaders {
   db: Firestore;
   store: PlatformStateRepositories;
-  accounts: BuilderAccountReader;
+  accounts: UserAccountReader;
   rails: ModelBrokerRailRegistry;
 }
 
 async function agentUsageStatusPayload(
   { db, store, rails }: Pick<UsageReaders, "db" | "store" | "rails">,
   gatewayId: string,
-  assigned: { uid: string; account: BuilderAccount },
+  assigned: { uid: string; account: UserAccount },
   nowMs: number,
 ): Promise<Record<string, unknown>> {
   const windowStartMs = usageWindowStartMs(nowMs);
@@ -318,9 +318,9 @@ async function apiKeyCredentialAllowed(
   bound: GatewayBinding,
   slug: string,
 ): Promise<boolean> {
-  const roster = await store.builders.records.listByGateway(bound.gatewayId);
-  const assigned = roster.some((builder) => builder.slug === slug) ||
-    await configuredBuilderSlugCredentialBootstrapAllowed(store, bound.gatewayId, bound.podName, slug);
+  const roster = await store.users.records.listByGateway(bound.gatewayId);
+  const assigned = roster.some((userRecord) => userRecord.slug === slug) ||
+    await configuredUserSlugCredentialBootstrapAllowed(store, bound.gatewayId, bound.podName, slug);
   const authorization = await readGatewayAuthorizationInStore(store, bound.gatewayId);
   return assigned && authorization?.config.gatewayClass === "builder";
 }
@@ -454,7 +454,7 @@ function isCodexAuthJson(credential: unknown): credential is string {
     typeof tokens.refresh_token === "string" && tokens.refresh_token.length > 0;
 }
 
-// A Builder gateway pushes its rotated codex auth.json back so the durable copy
+// A isolated gateway pushes its rotated codex auth.json back so the durable copy
 // stays restorable after the VM is replaced. Roster-scoped like /byosub-cred:
 // the owner is derived from the assignment, the provider must already be
 // connected, and only the codex shape rotates (claude-cli tokens are static).
@@ -617,7 +617,7 @@ function registerAgentUsageStatusRoute(
       await agentUsageStatusPayload(
         readers,
         bound.gatewayId,
-        { uid: assigned.uid, account: await requireBuilderAccount(readers.accounts, assigned.uid) },
+        { uid: assigned.uid, account: await requireUserAccount(readers.accounts, assigned.uid) },
         now(),
       ),
     );
@@ -626,7 +626,7 @@ function registerAgentUsageStatusRoute(
 
 async function fundedBudgetInspectionFields(
   readers: Pick<UsageReaders, "db" | "rails">,
-  assigned: { uid: string; account: BuilderAccount },
+  assigned: { uid: string; account: UserAccount },
   nowMs: number,
 ): Promise<Record<string, unknown>> {
   const budget = readers.rails.resolveOwnerProfile({ ...assigned.account.planInputs }, assigned.uid, nowMs)?.fundedBudget ?? null;
@@ -640,7 +640,7 @@ async function fundedBudgetInspectionFields(
 async function privateBrokerInspectionPayload(
   readers: Pick<UsageReaders, "db" | "store" | "rails">,
   gatewayId: string,
-  assigned: { uid: string; account: BuilderAccount },
+  assigned: { uid: string; account: UserAccount },
   agentId: string,
   nowMs: number,
 ): Promise<Record<string, unknown>> {
@@ -675,7 +675,7 @@ function registerPrivateBrokerInspection(
     const authorize = async () => {
       const assigned = await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(store, bound.gatewayId, bound.podName, agentId);
       if (!assigned || assigned.uid !== requesterUid || bound.ownerUid !== undefined && bound.ownerUid !== assigned.uid ||
-          !builderAllowsInteractiveAccess(assigned) ||
+          !userAllowsInteractiveAccess(assigned) ||
           !await verifyCanonicalOwner({ req, gatewayId: bound.gatewayId, agentId, ownerUid: assigned.uid, owner: assigned })) return null;
       return assigned;
     };
@@ -685,7 +685,7 @@ function registerPrivateBrokerInspection(
       const payload = await privateBrokerInspectionPayload(
         readers,
         bound.gatewayId,
-        { uid: assigned.uid, account: await requireBuilderAccount(accounts, assigned.uid) },
+        { uid: assigned.uid, account: await requireUserAccount(accounts, assigned.uid) },
         agentId,
         now(),
       );
@@ -707,13 +707,13 @@ function registerByosubUserRoute(router: Router, db: Firestore, store: PlatformS
       res.status(400).json({ error: "valid uid required" });
       return;
     }
-    const builder = await store.builders.records.get(uid);
-    const slug = builder ? ownerSlug(builder) : null;
+    const userRecord = await store.users.records.get(uid);
+    const slug = userRecord ? ownerSlug(userRecord) : null;
     if (
-      !builder ||
-      !builderAllowsInteractiveAccess(builder) ||
+      !userRecord ||
+      !userAllowsInteractiveAccess(userRecord) ||
       !slug ||
-      builder.gateway?.gatewayId !== bound.gatewayId
+      userRecord.gateway?.gatewayId !== bound.gatewayId
     ) {
       res.status(404).json({ error: "not_found" });
       return;
@@ -737,7 +737,7 @@ class AgentModelTokenForbiddenError extends Error {}
 function registerAgentModelTokenRoute(
   router: Router,
   store: PlatformStateStore,
-  accounts: BuilderAccountReader,
+  accounts: UserAccountReader,
   now: () => number,
   rails: ModelBrokerRailRegistry,
 ): void {
@@ -788,7 +788,7 @@ function registerAgentModelTokenRoute(
             bound.gatewayId,
             agentId,
           ));
-        if (!assigned || !builderAllowsInteractiveAccess(assigned)) {
+        if (!assigned || !userAllowsInteractiveAccess(assigned)) {
           logger.warn("[byok-broker] refused agent model token", {
             gatewayId: bound.gatewayId,
             agentId,
@@ -878,7 +878,7 @@ export function createByokBrokerRoutes(opts: {
   const readCredentialSecret = opts.readSecret ?? readSecret;
   const writeByosubCredential = opts.writeByosubCredential ?? addSecretVersionKeepingLatest;
   const rails = opts.rails ?? operatorRailRegistry();
-  const readers: UsageReaders = { db, store, accounts: firestoreBuilderAccountReader(db), rails };
+  const readers: UsageReaders = { db, store, accounts: firestoreUserAccountReader(db), rails };
 
   registerCredentialMaterializationRoutes(router, db, store, readCredentialSecret, writeByosubCredential);
   registerAgentModelTokenRoute(router, store, readers.accounts, now, rails);
@@ -891,13 +891,13 @@ export function createByokBrokerRoutes(opts: {
     opts.verifyOwnerWorkspaceTurn ?? createOwnerWorkspaceTurnVerifier(store),
   );
 
-  // Record a byosub OAuth flow's owner mapping for a customer-agent assigned to
+  // Record a byosub OAuth flow's owner mapping for a agent assigned to
   // this gateway. The sidecar /connect handler starts the in-pod auth flow
   // locally (its OPENCLAW_GATEWAY_TOKEN matches the in-pod manager), then brokers
   // the flowId->owner mapping here because cattle pods have no Firestore. The
   // in-pod /capture callback later reads byosubFlows to persist the captured
   // credential. Roster-scoped via findAssignedUserByAgentId — a gateway can only
-  // record flows for a customer assigned to it, and the owner uid is DERIVED from
+  // record flows for a user assigned to it, and the owner uid is DERIVED from
   // the assignment, never trusted from the caller.
   router.post("/byosub-flow", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -932,7 +932,7 @@ export function createByokBrokerRoutes(opts: {
       bound.gatewayId,
       body.agentId,
     );
-    if (!assigned || !builderAllowsInteractiveAccess(assigned)) {
+    if (!assigned || !userAllowsInteractiveAccess(assigned)) {
       res.status(403).json(FORBIDDEN);
       return;
     }
@@ -1005,8 +1005,8 @@ export function createByokBrokerRoutes(opts: {
       res.status(404).json({ error: "not_found" });
       return;
     }
-    const owner = await store.builders.records.get(data.uid);
-    if (!owner || !builderAllowsInteractiveAccess(owner)) {
+    const owner = await store.users.records.get(data.uid);
+    if (!owner || !userAllowsInteractiveAccess(owner)) {
       res.status(404).json({ error: "not_found" });
       return;
     }

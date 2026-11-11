@@ -30,16 +30,16 @@ describe("dashboard asset request classification", () => {
   });
 
   it.each([
-    "/api/g/bender/openclaw",
-    "/api/g/bender/openclaw/launch/ticket",
-    "/api/g/bender/openclaw/control-ui-config.json",
-    "/api/g/bender/api/v4/websocket",
-    "/api/g/bender/openclaw/assets/../config.json",
-    "/api/g/bender/openclaw/assets/%2e%2e/config.json",
-    "/api/g/bender/openclaw/assets/app.js/extra",
-    "/api/g/bender/openclaw/assets/app.html",
-    "/api/g/bender/openclaw/assets/app.js/",
-    "/api/g/bender/openclaw/assets/app.js;other",
+    "/api/g/walter/openclaw",
+    "/api/g/walter/openclaw/launch/ticket",
+    "/api/g/walter/openclaw/control-ui-config.json",
+    "/api/g/walter/api/v4/websocket",
+    "/api/g/walter/openclaw/assets/../config.json",
+    "/api/g/walter/openclaw/assets/%2e%2e/config.json",
+    "/api/g/walter/openclaw/assets/app.js/extra",
+    "/api/g/walter/openclaw/assets/app.html",
+    "/api/g/walter/openclaw/assets/app.js/",
+    "/api/g/walter/openclaw/assets/app.js;other",
   ])("keeps %s on the ordinary budget", (path) => {
     expect(isDashboardAssetRequest(assetRequest({ path }))).toBe(false);
   });

@@ -129,7 +129,7 @@ describe("isAuthChallengeFrame", () => {
 // ---------------------------------------------------------------------------
 // Roll roster verdict at authentication (Codex P0): the upstream MM socket is
 // dialed only AFTER the first auth challenge resolves the MM user and the
-// shared roster verdict allows — a moved/quiescing customer is closed with the
+// shared roster verdict allows — a moved/quiescing user is closed with the
 // reconnect-signaling code and NEVER reaches a stale revision's upstream.
 // ---------------------------------------------------------------------------
 
@@ -167,7 +167,7 @@ describe("attachMmWsBridge — roll roster verdict at authentication (Codex P0)"
     expect(h.openUpstream).not.toHaveBeenCalled();
   });
 
-  it("moved/quiescing customer: first auth frame → verdict → client closed with the reconnect code; upstream NEVER dialed", async () => {
+  it("moved/quiescing user: first auth frame → verdict → client closed with the reconnect code; upstream NEVER dialed", async () => {
     const h = mkBridge({
       verdict: () => ({ allow: false as const, reason: "serving-elsewhere" }),
     });
@@ -195,7 +195,7 @@ describe("attachMmWsBridge — roll roster verdict at authentication (Codex P0)"
     });
   });
 
-  it("serving customer: auth frame → verdict → upstream dialed and frames flow (steady-state regression pin)", async () => {
+  it("serving user: auth frame → verdict → upstream dialed and frames flow (steady-state regression pin)", async () => {
     const verdict = vi.fn(async (mmUserId: string | null) => {
       expect(mmUserId).toBe("mm-u1"); // verdict sees the RESOLVED user
       return { allow: true as const };

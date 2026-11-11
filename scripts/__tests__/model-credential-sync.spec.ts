@@ -5,7 +5,7 @@ import {
   deriveDesiredModelCredentialState,
   legacyByotSyncUserDataFromModelCredentialState,
 } from "../lib/model-credential-sync.js";
-import { syncModelCredentialsForCustomer } from "../lib/model-credential-sync-runtime.js";
+import { syncModelCredentialsForUser } from "../lib/model-credential-sync-runtime.js";
 
 const COMPLETE_USER = {
   username: "tester-70",
@@ -101,16 +101,16 @@ describe("deriveDesiredModelCredentialState", () => {
   });
 });
 
-describe("syncModelCredentialsForCustomer", () => {
-  it("suppresses customer OAuth state instead of materializing its runtime credential", async () => {
+describe("syncModelCredentialsForUser", () => {
+  it("suppresses user OAuth state instead of materializing its runtime credential", async () => {
     const applyModelCredentialState = vi.fn(() => true);
     const restoreOauthStoreForSlug = vi.fn(async () => ({ restored: true, present: true }));
-    const applyCoachModelPatch = vi.fn(async () => true);
+    const applyDefaultAgentModelPatch = vi.fn(async () => true);
     const triggerSecretsReload = vi.fn(async () => {});
-    const purgeCustomerOauthRuntime = vi.fn(async () => ({ changed: true, resetCount: 0 }));
+    const purgeUserOauthRuntime = vi.fn(async () => ({ changed: true, resetCount: 0 }));
     const requestGatewayRestart = vi.fn(async () => true);
 
-    await syncModelCredentialsForCustomer(
+    await syncModelCredentialsForUser(
       {
         ...COMPLETE_USER,
         systemConfig: {
@@ -126,9 +126,9 @@ describe("syncModelCredentialsForCustomer", () => {
         usesLlmBrokerToken: () => false,
         applyModelCredentialState,
         restoreOauthStoreForSlug,
-        applyCoachModelPatch,
+        applyDefaultAgentModelPatch,
         triggerSecretsReload,
-        purgeCustomerOauthRuntime,
+        purgeUserOauthRuntime,
         requestGatewayRestart,
       },
     );
@@ -139,13 +139,13 @@ describe("syncModelCredentialsForCustomer", () => {
       undefined,
       { preserveAuthProfileStore: false },
     );
-    expect(purgeCustomerOauthRuntime).toHaveBeenCalledWith(
+    expect(purgeUserOauthRuntime).toHaveBeenCalledWith(
       "tester-70",
       "platform-openai/gpt-6-luna",
       { forceSafeAll: true },
     );
     expect(restoreOauthStoreForSlug).not.toHaveBeenCalled();
-    expect(applyCoachModelPatch).toHaveBeenCalledWith({
+    expect(applyDefaultAgentModelPatch).toHaveBeenCalledWith({
       slug: "tester-70",
       source: "free-tier",
       model: "platform-openai/gpt-6-luna",
@@ -157,7 +157,7 @@ describe("syncModelCredentialsForCustomer", () => {
 
 describe("model credential sync facade adoption", () => {
   it.each([
-    "customer-lifecycle-broker-adapter.ts",
+    "user-lifecycle-broker-adapter.ts",
   ])("%s uses the model credential sync runtime facade", (file) => {
     const src = readFileSync(join(import.meta.dirname, "..", "lib", file), "utf8");
     expect(src).toContain("model-credential-sync-runtime");

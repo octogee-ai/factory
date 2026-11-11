@@ -22,11 +22,11 @@ async function getTicketDoc(id: string) {
 
 describe("mintTicket — unified gateway ticket (emulator)", () => {
   it("writes gatewayTickets/{uuid} with uid+gatewayId+purpose+future expiresAt+createdAt", async () => {
-    const t = await mintTicket({ uid: "u1", gatewayId: "gw-bender", purpose: "openclaw-ws" });
+    const t = await mintTicket({ uid: "u1", gatewayId: "gw-walter", purpose: "openclaw-ws" });
     expect(t.ticket).toMatch(/^[0-9a-f-]{36}$/);
     expect(t.purpose).toBe("openclaw-ws");
     const doc = await getTicketDoc(t.ticket);
-    expect(doc).toMatchObject({ uid: "u1", gatewayId: "gw-bender", purpose: "openclaw-ws" });
+    expect(doc).toMatchObject({ uid: "u1", gatewayId: "gw-walter", purpose: "openclaw-ws" });
     expect(typeof doc?.expiresAt).toBe("number");
     expect(doc?.expiresAt as number).toBeGreaterThan(Date.now());
     expect(doc?.createdAt).toBeTruthy();

@@ -54,7 +54,7 @@ export async function requestConnectorApproval(store: Pick<PlatformStateReposito
   ]);
   const coachChannelId = channel?.mattermostChannelId;
   if (workspace?.ownerUid !== input.ownerUid || typeof coachChannelId !== "string" || !/^[a-z0-9]{26}$/u.test(coachChannelId)) {
-    throw new Error("Canonical Coach DM is unavailable for connector approval");
+    throw new Error("Canonical Agent DM is unavailable for connector approval");
   }
   const preview = JSON.stringify(input.preview, null, 2);
   const detail = preview.length <= 12_000 ? preview : "This preview exceeds the native display limit. Open the full review link before approving.";

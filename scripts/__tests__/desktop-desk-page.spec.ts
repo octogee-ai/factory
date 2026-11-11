@@ -26,7 +26,7 @@ describe('the Desk page shipped on the desktop image', () => {
     expect(script).toMatch(/fetch\('\/launch', \{ method: 'POST', headers: \{ 'content-type': 'application\/json' \}/u);
     expect(desktop('rootfs/usr/share/omarchy/octo-desktop/desk/index.html')).toContain('Welcome back');
   });
-  it("formats the clock in the Builder's zone and falls back to the browser zone only without one", () => {
+  it("formats the clock in the user's zone and falls back to the browser zone only without one", () => {
     const sandbox: { octoDeskClock?: { clockText: (date: Date, zone: string | null) => string }; console: Console } = { console };
     runInNewContext(desktop('rootfs/usr/share/omarchy/octo-desktop/desk/desk-clock.js'), sandbox);
     const noon = new Date(Date.UTC(2026, 0, 1, 12, 0));

@@ -7,12 +7,12 @@ import { TEMPLATES_DIR } from "./config.js";
 import { applyTemplatePlaceholders } from "./helpers.js";
 
 // The platform owns exactly AGENTS.md + TOOLS.md; SOUL.md/USER.md/MEMORY.md are
-// the customer's, BOOTSTRAP.md is transient. These two carry no per-customer
+// the user's, BOOTSTRAP.md is transient. These two carry no per-user
 // personalization placeholders (unlike SOUL.md/USER.md's {{ownerName}}) — the
 // property that makes them safe for context-file-convergence.ts to re-assert
 // unconditionally on every plan.
 export const PLATFORM_CONVERGED_CONTEXT_FILES = new Set(["AGENTS.md", "TOOLS.md"]);
-export const CUSTOMER_OWNED_CONTEXT_FILES = new Set(["SOUL.md", "USER.md", "MEMORY.md"]);
+export const USER_OWNED_CONTEXT_FILES = new Set(["SOUL.md", "USER.md", "MEMORY.md"]);
 
 function templatesRoot(): string {
   return process.env.OCTOGEE_TEMPLATES_DIR || TEMPLATES_DIR;

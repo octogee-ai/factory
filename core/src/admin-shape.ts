@@ -6,8 +6,8 @@ import {
   usageWindowStartMs,
   weekWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";
-import type { BuilderAccount } from "./builder-account.js";
-import type { BuilderRecord } from "./platform-state/builders.js";
+import type { UserAccount } from "./user-account.js";
+import type { PlatformUserRecord } from "./platform-state/users.js";
 
 export function toISODate(val: unknown): string | null {
   if (!val) return null;
@@ -18,9 +18,9 @@ export function toISODate(val: unknown): string | null {
   return null;
 }
 
-type CustomerDoc = Readonly<Record<string, unknown>>;
+type UserDoc = Readonly<Record<string, unknown>>;
 
-function numberAt(src: CustomerDoc, key: string, fallback = 0): number {
+function numberAt(src: UserDoc, key: string, fallback = 0): number {
   const value = src[key];
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
@@ -29,7 +29,7 @@ export function isoMillis(value: number | null): string | null {
   return value === null ? null : new Date(value).toISOString();
 }
 
-function displayNameFor(account: BuilderAccount): string {
+function displayNameFor(account: UserAccount): string {
   return account.displayName || account.username || (account.email ?? "").split("@")[0] || "(unknown)";
 }
 
@@ -37,7 +37,7 @@ function displayNameFor(account: BuilderAccount): string {
 // source that may render a USD amount on the admin surface. Legacy
 // users/{uid}.usage carries openclaw-reported $0 costs and survives as token
 // telemetry only.
-export interface BrokerCustomerUsage {
+export interface BrokerUserUsage {
   windowCostUsd?: number;
   weekCostUsd?: number;
   totalCostUsd?: number;
@@ -45,7 +45,7 @@ export interface BrokerCustomerUsage {
   now?: number;
 }
 
-export interface PlatformCustomerSummary {
+export interface PlatformUserSummary {
   uid:                 string;
   displayName:         string;
   email:               string;
@@ -73,23 +73,23 @@ export interface PlatformCustomerSummary {
   accountLifecycleStatus: string;
 }
 
-export type CustomerSummary = PlatformCustomerSummary & ProductFields;
+export type UserSummary = PlatformUserSummary & ProductFields;
 
-function builderSummaryFields(builder: BuilderRecord) {
+function userSummaryFields(user: PlatformUserRecord) {
   return {
-    mattermostConnected: (builder.mattermostUserId ?? "").length > 0,
-    agentCount: builder.agents.agentIds.length,
-    createdAt: isoMillis(builder.createdAt),
-    provisioningStatus: builder.openclaw.status ?? builder.provisioning.status ?? null,
-    accountLifecycleStatus: builder.accountLifecycle?.status ?? "active",
+    mattermostConnected: (user.mattermostUserId ?? "").length > 0,
+    agentCount: user.agents.agentIds.length,
+    createdAt: isoMillis(user.createdAt),
+    provisioningStatus: user.openclaw.status ?? user.provisioning.status ?? null,
+    accountLifecycleStatus: user.accountLifecycle?.status ?? "active",
   };
 }
 
-export function buildCustomerSummary(
-  builder: BuilderRecord,
-  account: BuilderAccount,
-  broker: BrokerCustomerUsage = {},
-): CustomerSummary {
+export function buildUserSummary(
+  user: PlatformUserRecord,
+  account: UserAccount,
+  broker: BrokerUserUsage = {},
+): UserSummary {
   const now = broker.now ?? Date.now();
   const plan = userEntitlements().plan(account.planInputs, new Date(now));
   const usage = account.usage;
@@ -98,7 +98,7 @@ export function buildCustomerSummary(
   const costUsd = broker.totalCostUsd ?? 0;
   // Owner-credential (BYOSUB/BYOT) traffic never lands in a spend window, so a
   // percentage against a zero budget would misleadingly read 100% — mirror the
-  // customer surfaces and show 0. The broker never throttles them either.
+  // user surfaces and show 0. The broker never throttles them either.
   const onOwnerCredential = account.byotActive;
   const degraded = userEntitlements().spendThrottle(plan, {
     windowCostUsd,
@@ -107,11 +107,11 @@ export function buildCustomerSummary(
   }).degraded;
 
   return {
-    ...userEntitlements().productProjection?.adminCustomerSummary(account.planInputs, {
+    ...userEntitlements().productProjection?.adminUserSummary(account.planInputs, {
       costUsd,
       now: new Date(now),
     }),
-    uid: builder.uid,
+    uid: user.uid,
     displayName: displayNameFor(account),
     email: account.email ?? "",
     username: account.username ?? "",
@@ -130,6 +130,6 @@ export function buildCustomerSummary(
     lastActive: toISODate(usage.lastUpdated),
     mattermostUsername: account.mattermostUsername,
     percentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(windowCostUsd, plan.spendWindowUsd),
-    ...builderSummaryFields(builder),
+    ...userSummaryFields(user),
   };
 }

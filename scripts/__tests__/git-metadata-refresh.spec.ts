@@ -15,7 +15,7 @@ vi.mock("../lib/config.js", () => ({
   AGENTS_DIR: "/tmp/octogee-git-metadata-adversarial/agents",
 }));
 
-const { customerRepositoryHasCanonicalRemote, externalizeCustomerGitDir, gitExec } =
+const { userRepositoryHasCanonicalRemote, externalizeUserGitDir, gitExec } =
   await import("../lib/git.js");
 
 const TEST_ROOT = "/tmp/octogee-git-metadata-adversarial";
@@ -234,7 +234,7 @@ function metadataCases(): RepoCase[] {
   ];
 }
 
-describe("customer Git metadata refresh", () => {
+describe("user Git metadata refresh", () => {
   const temporaryRoots: string[] = [];
 
   beforeEach(() => {
@@ -266,7 +266,7 @@ describe("customer Git metadata refresh", () => {
       temporaryRoots.push(legacy.externalRoot, legacy.externalObjects);
       const before = treeSnapshot(repoCase.repoDir, true);
 
-      expect(externalizeCustomerGitDir(repoCase.repoDir, {
+      expect(externalizeUserGitDir(repoCase.repoDir, {
         fetchCanonical: fetchCanonicalFrom(canonical.bare),
       })).toBe(repoCase.metadataDir);
 
@@ -317,7 +317,7 @@ describe("customer Git metadata refresh", () => {
     writeWorktree(repoDir, { "local.txt": "untracked\n" });
     const before = treeSnapshot(repoDir, true);
 
-    const metadataDir = externalizeCustomerGitDir(repoDir, {
+    const metadataDir = externalizeUserGitDir(repoDir, {
       fetchCanonical: fetchCanonicalFrom(canonical.bare),
     });
 
@@ -349,7 +349,7 @@ describe("customer Git metadata refresh", () => {
     temporaryRoots.push(legacy.externalRoot, legacy.externalObjects);
     const before = treeSnapshot(repoDir, true);
 
-    expect(() => externalizeCustomerGitDir(repoDir, {
+    expect(() => externalizeUserGitDir(repoDir, {
       fetchCanonical: () => {
         throw new Error("injected canonical fetch failure");
       },
@@ -367,7 +367,7 @@ describe("customer Git metadata refresh", () => {
     const quarantinedHook = findNamed(quarantineRoot, "post-checkout");
     expect(quarantinedHook).not.toBeNull();
 
-    expect(externalizeCustomerGitDir(repoDir, {
+    expect(externalizeUserGitDir(repoDir, {
       fetchCanonical: fetchCanonicalFrom(canonical.bare),
     })).toBe(repoCase.metadataDir);
     expect(treeSnapshot(repoDir, true)).toEqual(before);
@@ -386,10 +386,10 @@ describe("customer Git metadata refresh", () => {
     writeWorktree(repoDir, { "README.md": "canonical\n" });
     let fetches = 0;
 
-    expect(externalizeCustomerGitDir(repoDir, {
+    expect(externalizeUserGitDir(repoDir, {
       fetchCanonical: fetchCanonicalFrom(canonical.bare, () => fetches++),
     })).toBe(metadataDir);
-    expect(customerRepositoryHasCanonicalRemote(repoDir)).toBe(true);
+    expect(userRepositoryHasCanonicalRemote(repoDir)).toBe(true);
     expect(fetches).toBe(1);
     expect(fs.readFileSync(receipt, "utf8")).toBe(
       "octogee-customer-git-v3\ngitea:workspace\n",
@@ -400,7 +400,7 @@ describe("customer Git metadata refresh", () => {
     expect(fs.statSync(path.join(repoDir, ".git")).mode & 0o777).toBe(0o444);
     const metadataBefore = treeSnapshot(metadataDir);
 
-    expect(externalizeCustomerGitDir(repoDir, {
+    expect(externalizeUserGitDir(repoDir, {
       fetchCanonical: () => {
         throw new Error("no-op path fetched unexpectedly");
       },
@@ -409,31 +409,31 @@ describe("customer Git metadata refresh", () => {
 
     fs.chmodSync(receipt, 0o600);
     fs.writeFileSync(receipt, "attacker receipt\n");
-    expect(customerRepositoryHasCanonicalRemote(repoDir)).toBe(false);
-    expect(externalizeCustomerGitDir(repoDir, {
+    expect(userRepositoryHasCanonicalRemote(repoDir)).toBe(false);
+    expect(externalizeUserGitDir(repoDir, {
       fetchCanonical: fetchCanonicalFrom(canonical.bare, () => fetches++),
     })).toBe(metadataDir);
     expect(fetches).toBe(2);
     expect(fs.readFileSync(receipt, "utf8")).toBe(
       "octogee-customer-git-v3\ngitea:workspace\n",
     );
-    expect(customerRepositoryHasCanonicalRemote(repoDir)).toBe(true);
+    expect(userRepositoryHasCanonicalRemote(repoDir)).toBe(true);
     expect(gitExec(repoDir, ["rev-parse", "HEAD"])).toBe(canonical.head);
   });
 
-  it("recreates a missing customer directory when canonical metadata is already trusted", () => {
+  it("recreates a missing user directory when canonical metadata is already trusted", () => {
     const canonical = createCanonicalRepo({ "README.md": "canonical\n" });
     temporaryRoots.push(canonical.root);
     const repoDir = path.join(CUSTOMERS_DIR, "missing-worktree");
     const metadataDir = path.join(METADATA_ROOT, "missing-worktree", "workspace.git");
     writeWorktree(repoDir, { "README.md": "canonical\n" });
 
-    expect(externalizeCustomerGitDir(repoDir, {
+    expect(externalizeUserGitDir(repoDir, {
       fetchCanonical: fetchCanonicalFrom(canonical.bare),
     })).toBe(metadataDir);
     fs.rmSync(repoDir, { recursive: true });
 
-    expect(externalizeCustomerGitDir(repoDir, {
+    expect(externalizeUserGitDir(repoDir, {
       fetchCanonical: () => {
         throw new Error("trusted metadata fetched unexpectedly");
       },
@@ -451,7 +451,7 @@ describe("customer Git metadata refresh", () => {
       "local-only.txt": "preserve me\n",
     });
 
-    expect(customerRepositoryHasCanonicalRemote(repoDir)).toBe(false);
+    expect(userRepositoryHasCanonicalRemote(repoDir)).toBe(false);
     expect(fs.readFileSync(path.join(repoDir, "local-only.txt"), "utf8")).toBe("preserve me\n");
   });
 });

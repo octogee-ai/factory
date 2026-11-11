@@ -300,7 +300,7 @@ describe("agent import config plan", () => {
     },
   );
 
-  it("applies doctor-validated customer fields, routes models to reauth, and drops unsafe inventory", () => {
+  it("applies doctor-validated user fields, routes models to reauth, and drops unsafe inventory", () => {
     const artifacts = buildAgentImportConfigArtifacts(sourceConfig(), "moof");
     const plan = planAgentImportConfig(artifacts, {
       doctorOutcome: "migrated",
@@ -319,7 +319,7 @@ describe("agent import config plan", () => {
     expect(plan.decisions).toContainEqual({
       path: "skipBootstrap",
       disposition: "apply",
-      reason: "Builder-owned context files must not be recreated after import",
+      reason: "User-owned context files must not be recreated after import",
     });
     expect(plan.decisions).toContainEqual(expect.objectContaining({
       path: "model.primary",

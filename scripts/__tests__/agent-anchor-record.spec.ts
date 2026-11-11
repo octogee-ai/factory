@@ -53,7 +53,7 @@ async function seedAnchor(dir: string, anchor: { agentId: string; storeId: strin
   return file;
 }
 
-const coach = { agentId: "octogee-alice-coach", storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_agent_92c817cc770f466d" };
+const defaultAgent = { agentId: "octogee-alice-coach", storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_agent_92c817cc770f466d" };
 const project = { agentId: "octogee-alice-proj-orbit-coach", storeId: "3313965d-1e56-4006-9d9c-1b0289fafcfa", schema: "octogee_agent_3313965d1e564006" };
 const unmatched = { agentId: "octogee-unmatched-route", storeId: "635e605d-f247-4162-b9b8-fe306fbbce7f", schema: "octogee_agent_635e605df2474162" };
 
@@ -63,32 +63,32 @@ describe("landAgentAnchors", () => {
     const existing = await seedAnchor(dir, { ...project, storeId: "11111111-2222-4333-8444-555555555555", schema: "octogee_agent_1111111122224333" });
     const before = await fs.readFile(existing);
 
-    const result = await landAgentAnchors(dir, [coach, project, unmatched]);
+    const result = await landAgentAnchors(dir, [defaultAgent, project, unmatched]);
 
-    expect(result).toEqual({ landed: [coach.agentId, unmatched.agentId], preserved: [project.agentId] });
-    expect(readPostgresAgentAnchor(storePath(dir, coach.agentId))).toEqual({ storeId: coach.storeId, schema: coach.schema });
+    expect(result).toEqual({ landed: [defaultAgent.agentId, unmatched.agentId], preserved: [project.agentId] });
+    expect(readPostgresAgentAnchor(storePath(dir, defaultAgent.agentId))).toEqual({ storeId: defaultAgent.storeId, schema: defaultAgent.schema });
     expect(readPostgresAgentAnchor(storePath(dir, unmatched.agentId))).toEqual({ storeId: unmatched.storeId, schema: unmatched.schema });
     expect(await fs.readFile(existing)).toEqual(before);
-    expect((await fs.stat(storePath(dir, coach.agentId))).mode & 0o777).toBe(0o600);
+    expect((await fs.stat(storePath(dir, defaultAgent.agentId))).mode & 0o777).toBe(0o600);
   });
 
   it("leaves no store behind when landing is interrupted, so a retry lands a complete anchor", async () => {
     const dir = await stateDir();
     sqliteFault.failAnchorInsert = true;
 
-    await expect(landAgentAnchors(dir, [coach])).rejects.toThrow("interrupted before the anchor row");
+    await expect(landAgentAnchors(dir, [defaultAgent])).rejects.toThrow("interrupted before the anchor row");
 
-    expect(await fs.readdir(path.dirname(storePath(dir, coach.agentId)))).toEqual([]);
-    expect(await landAgentAnchors(dir, [coach])).toEqual({ landed: [coach.agentId], preserved: [] });
-    expect(readPostgresAgentAnchor(storePath(dir, coach.agentId))).toEqual({ storeId: coach.storeId, schema: coach.schema });
+    expect(await fs.readdir(path.dirname(storePath(dir, defaultAgent.agentId)))).toEqual([]);
+    expect(await landAgentAnchors(dir, [defaultAgent])).toEqual({ landed: [defaultAgent.agentId], preserved: [] });
+    expect(readPostgresAgentAnchor(storePath(dir, defaultAgent.agentId))).toEqual({ storeId: defaultAgent.storeId, schema: defaultAgent.schema });
   });
 
   it("refuses an anchor that is not a PostgreSQL store identity and lands nothing", async () => {
     const dir = await stateDir();
-    await expect(landAgentAnchors(dir, [{ ...coach, storeId: "not-a-uuid" }])).rejects.toThrow("agent anchor identity is invalid");
-    await expect(landAgentAnchors(dir, [{ ...coach, schema: "Octogee-Agent" }])).rejects.toThrow("agent anchor identity is invalid");
-    await expect(landAgentAnchors(dir, [{ ...coach, agentId: "../escape" }])).rejects.toThrow("agent anchor identity is invalid");
-    await expect(fs.stat(storePath(dir, coach.agentId))).rejects.toThrow();
+    await expect(landAgentAnchors(dir, [{ ...defaultAgent, storeId: "not-a-uuid" }])).rejects.toThrow("agent anchor identity is invalid");
+    await expect(landAgentAnchors(dir, [{ ...defaultAgent, schema: "Octogee-Agent" }])).rejects.toThrow("agent anchor identity is invalid");
+    await expect(landAgentAnchors(dir, [{ ...defaultAgent, agentId: "../escape" }])).rejects.toThrow("agent anchor identity is invalid");
+    await expect(fs.stat(storePath(dir, defaultAgent.agentId))).rejects.toThrow();
   });
 });
 
@@ -100,10 +100,10 @@ describe("landAgentAnchors verification", () => {
       if (anchor.agentId === unmatched.agentId) throw new Error("PostgreSQL schema octogee_agent_635e605df2474162 for octogee-unmatched-route is missing");
     });
 
-    await expect(landAgentAnchors(dir, [coach, project, unmatched], verify)).rejects.toThrow("is missing");
+    await expect(landAgentAnchors(dir, [defaultAgent, project, unmatched], verify)).rejects.toThrow("is missing");
 
-    expect(verify.mock.calls.map(([anchor]) => anchor.agentId)).toEqual([coach.agentId, unmatched.agentId]);
-    await expect(fs.stat(storePath(dir, coach.agentId))).rejects.toThrow();
+    expect(verify.mock.calls.map(([anchor]) => anchor.agentId)).toEqual([defaultAgent.agentId, unmatched.agentId]);
+    await expect(fs.stat(storePath(dir, defaultAgent.agentId))).rejects.toThrow();
     await expect(fs.stat(storePath(dir, unmatched.agentId))).rejects.toThrow();
   });
 });
@@ -113,8 +113,8 @@ describe("verifyAgentAnchorInPostgres", () => {
     query.includes("openclaw_schema_meta") ? [{ store_id: storeId }] : [{ agent_id: agentId }]);
 
   it("accepts a schema whose store identity and primary agent match the anchor", async () => {
-    const query = meta(coach.storeId, coach.agentId);
-    await expect(verifyAgentAnchorInPostgres(coach, query)).resolves.toBeUndefined();
+    const query = meta(defaultAgent.storeId, defaultAgent.agentId);
+    await expect(verifyAgentAnchorInPostgres(defaultAgent, query)).resolves.toBeUndefined();
     expect(query.mock.calls.map(([, sql]) => sql)).toEqual([
       "SELECT store_id FROM $schema.openclaw_schema_meta WHERE store = 'agent'",
       "SELECT agent_id FROM $schema.schema_meta WHERE meta_key = 'primary'",
@@ -122,16 +122,16 @@ describe("verifyAgentAnchorInPostgres", () => {
   });
 
   it("refuses a different store identity or a schema owned by another agent", async () => {
-    await expect(verifyAgentAnchorInPostgres(coach, meta(project.storeId, coach.agentId))).rejects.toThrow("holds store 3313965d-1e56-4006-9d9c-1b0289fafcfa");
-    await expect(verifyAgentAnchorInPostgres(coach, meta(coach.storeId, project.agentId))).rejects.toThrow(`belongs to ${project.agentId}`);
+    await expect(verifyAgentAnchorInPostgres(defaultAgent, meta(project.storeId, defaultAgent.agentId))).rejects.toThrow("holds store 3313965d-1e56-4006-9d9c-1b0289fafcfa");
+    await expect(verifyAgentAnchorInPostgres(defaultAgent, meta(defaultAgent.storeId, project.agentId))).rejects.toThrow(`belongs to ${project.agentId}`);
   });
 
   it("refuses a schema that no longer exists instead of letting OpenClaw bootstrap an empty one", async () => {
     const missing = vi.fn(async () => { throw Object.assign(new Error("relation does not exist"), { code: "42P01" }); });
-    await expect(verifyAgentAnchorInPostgres(coach, missing)).rejects.toThrow(`PostgreSQL schema ${coach.schema} for ${coach.agentId} is missing`);
-    await expect(verifyAgentAnchorInPostgres(coach, vi.fn(async () => []))).rejects.toThrow("is missing");
+    await expect(verifyAgentAnchorInPostgres(defaultAgent, missing)).rejects.toThrow(`PostgreSQL schema ${defaultAgent.schema} for ${defaultAgent.agentId} is missing`);
+    await expect(verifyAgentAnchorInPostgres(defaultAgent, vi.fn(async () => []))).rejects.toThrow("is missing");
     const unavailable = vi.fn(async () => { throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }); });
-    await expect(verifyAgentAnchorInPostgres(coach, unavailable)).rejects.toThrow("ECONNREFUSED");
+    await expect(verifyAgentAnchorInPostgres(defaultAgent, unavailable)).rejects.toThrow("ECONNREFUSED");
   });
 });
 
@@ -142,7 +142,7 @@ describe("gateway state anchors", () => {
     const query = vi.fn(async () => [{ store_id: state.storeId }]);
     await expect(verifyGatewayStateAnchorInPostgres(state, query)).resolves.toBeUndefined();
     expect(query).toHaveBeenCalledExactlyOnceWith(state, "SELECT store_id FROM $schema.openclaw_schema_meta WHERE store = 'state'");
-    await expect(verifyGatewayStateAnchorInPostgres(state, vi.fn(async () => [{ store_id: coach.storeId }]))).rejects.toThrow(`holds state store ${coach.storeId}`);
+    await expect(verifyGatewayStateAnchorInPostgres(state, vi.fn(async () => [{ store_id: defaultAgent.storeId }]))).rejects.toThrow(`holds state store ${defaultAgent.storeId}`);
     const missing = vi.fn(async () => { throw Object.assign(new Error("relation does not exist"), { code: "42P01" }); });
     await expect(verifyGatewayStateAnchorInPostgres(state, missing)).rejects.toThrow(`PostgreSQL state schema ${state.schema} is missing`);
     await expect(verifyGatewayStateAnchorInPostgres(state, vi.fn(async () => []))).rejects.toThrow("is missing");
@@ -160,54 +160,54 @@ describe("gateway state anchors", () => {
 
   it("reports the local state anchor with the agent anchors", async () => {
     const dir = await stateDir();
-    await seedAnchor(dir, coach);
+    await seedAnchor(dir, defaultAgent);
     const reportAgentAnchors = vi.fn(async () => undefined);
-    const report = createAgentAnchorReporter({ stateDir: dir, slug: "alice", broker: { reportAgentAnchors }, readAgentIds: () => [coach.agentId], log: () => {} });
+    const report = createAgentAnchorReporter({ stateDir: dir, slug: "alice", broker: { reportAgentAnchors }, readAgentIds: () => [defaultAgent.agentId], log: () => {} });
     await report();
-    expect(reportAgentAnchors).toHaveBeenLastCalledWith({ slug: "alice", anchors: [coach], configuredAgentIds: [coach.agentId] });
+    expect(reportAgentAnchors).toHaveBeenLastCalledWith({ slug: "alice", anchors: [defaultAgent], configuredAgentIds: [defaultAgent.agentId] });
 
     await landGatewayStateAnchor(dir, state, async () => undefined);
     await report();
     expect(reportAgentAnchors).toHaveBeenCalledTimes(2);
-    expect(reportAgentAnchors).toHaveBeenLastCalledWith({ slug: "alice", anchors: [coach], configuredAgentIds: [coach.agentId], state });
+    expect(reportAgentAnchors).toHaveBeenLastCalledWith({ slug: "alice", anchors: [defaultAgent], configuredAgentIds: [defaultAgent.agentId], state });
   });
 });
 
 describe("readLocalAgentAnchors", () => {
   it("reads only the configured agents that hold a PostgreSQL anchor", async () => {
     const dir = await stateDir();
-    await seedAnchor(dir, coach);
+    await seedAnchor(dir, defaultAgent);
     await fs.mkdir(path.dirname(storePath(dir, project.agentId)), { recursive: true });
-    expect(await readLocalAgentAnchors(dir, [coach.agentId, project.agentId, "octogee-absent-coach"])).toEqual([coach]);
+    expect(await readLocalAgentAnchors(dir, [defaultAgent.agentId, project.agentId, "octogee-absent-coach"])).toEqual([defaultAgent]);
   });
 });
 
 describe("createAgentAnchorReporter", () => {
-  function reporter(dir: string, broker: { reportAgentAnchors: ReturnType<typeof vi.fn> }, logs: string[], readAgentIds: () => readonly string[] = () => [coach.agentId, project.agentId]) {
+  function reporter(dir: string, broker: { reportAgentAnchors: ReturnType<typeof vi.fn> }, logs: string[], readAgentIds: () => readonly string[] = () => [defaultAgent.agentId, project.agentId]) {
     return createAgentAnchorReporter({ stateDir: dir, slug: "alice", broker, readAgentIds, log: (m) => logs.push(m) });
   }
 
   it("reports once per anchor set and again when the set changes", async () => {
     const dir = await stateDir();
-    await seedAnchor(dir, coach);
+    await seedAnchor(dir, defaultAgent);
     const reportAgentAnchors = vi.fn(async () => undefined);
     const logs: string[] = [];
     const report = reporter(dir, { reportAgentAnchors }, logs);
 
     await report();
     await report();
-    expect(reportAgentAnchors).toHaveBeenCalledExactlyOnceWith({ slug: "alice", anchors: [coach], configuredAgentIds: [coach.agentId, project.agentId] });
+    expect(reportAgentAnchors).toHaveBeenCalledExactlyOnceWith({ slug: "alice", anchors: [defaultAgent], configuredAgentIds: [defaultAgent.agentId, project.agentId] });
 
     await seedAnchor(dir, project);
     await report();
     expect(reportAgentAnchors).toHaveBeenCalledTimes(2);
-    expect(reportAgentAnchors).toHaveBeenLastCalledWith({ slug: "alice", anchors: [coach, project], configuredAgentIds: [coach.agentId, project.agentId] });
+    expect(reportAgentAnchors).toHaveBeenLastCalledWith({ slug: "alice", anchors: [defaultAgent, project], configuredAgentIds: [defaultAgent.agentId, project.agentId] });
     expect(logs.some((m) => m.includes("recorded 2 agent anchor"))).toBe(true);
   });
 
   it("retries a failed report on the next pass and logs a repeated failure once", async () => {
     const dir = await stateDir();
-    await seedAnchor(dir, coach);
+    await seedAnchor(dir, defaultAgent);
     const reportAgentAnchors = vi.fn()
       .mockRejectedValueOnce(new Error("broker unavailable"))
       .mockRejectedValueOnce(new Error("broker unavailable"))
@@ -224,7 +224,7 @@ describe("createAgentAnchorReporter", () => {
 
   it("logs instead of rejecting when a local anchor or the configured roster cannot be read", async () => {
     const dir = await stateDir();
-    const file = storePath(dir, coach.agentId);
+    const file = storePath(dir, defaultAgent.agentId);
     await fs.mkdir(path.dirname(file), { recursive: true });
     const db = new DatabaseSync(file);
     db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)");

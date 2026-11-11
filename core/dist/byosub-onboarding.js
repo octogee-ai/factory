@@ -1,4 +1,4 @@
-export function coachAgentId(slug) {
+export function userDefaultAgentId(slug) {
     return `octogee-${slug}-coach`;
 }
 export function startFlow(p) {

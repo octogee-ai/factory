@@ -96,7 +96,7 @@ describe("isReleasePayload", () => {
     })).toBe(false);
   });
 
-  it("accepts a Builder profile image only from its paired package and release tag", () => {
+  it("accepts an isolated profile image only from its paired package and release tag", () => {
     const payload = samplePayload({
       imageTag: `abc1234@sha256:${"a".repeat(64)}`,
       profileImages: {
@@ -135,7 +135,7 @@ describe("isReleasePayload", () => {
 describe("stable-name helpers (GATEWAY-SIMPLE-ROLL-SPEC)", () => {
   it("names the Helm release by the bare gateway id", () => {
     expect(helmReleaseNameForGateway("default")).toBe("octogee-gw-default");
-    expect(helmReleaseNameForGateway("bender")).toBe("octogee-gw-bender");
+    expect(helmReleaseNameForGateway("walter")).toBe("octogee-gw-walter");
   });
 
   it("names the gateway-edge Service by the bare gateway id", () => {

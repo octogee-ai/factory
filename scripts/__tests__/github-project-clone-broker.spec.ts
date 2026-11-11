@@ -11,7 +11,7 @@ afterEach(() => {
 });
 
 describe("GitHub project clone sidecar client", () => {
-  it("binds the clone request to the caller's builder and project", async () => {
+  it("binds the clone request to the caller's user and project", async () => {
     process.env.GATEWAY_EDGE_INTERNAL_URL = "http://127.0.0.1:3001";
     vi.mocked(internalFetch).mockResolvedValue(new Response(JSON.stringify({ status: "cloned" }), {
       status: 201,

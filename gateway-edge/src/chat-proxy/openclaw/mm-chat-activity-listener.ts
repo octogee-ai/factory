@@ -2,7 +2,7 @@ import type { WebSocket } from "ws";
 import type { BridgeLog } from "../bridge-log.js";
 
 interface ChatActivityBase {
-  coachMmUserId: string;
+  defaultAgentMmUserId: string;
   channelId: string;
   postId: string;
   mmUserId: string;
@@ -12,8 +12,8 @@ export type ChatActivityPayload =
   | (ChatActivityBase & { kind: "post" })
   | (ChatActivityBase & { kind: "reaction"; emojiName: string; createdAt: number });
 
-export interface CoachWsSubject {
-  coachMmUserId: string;
+export interface DefaultAgentWsSubject {
+  defaultAgentMmUserId: string;
   coachToken: string;
 }
 
@@ -25,14 +25,14 @@ export interface MmChatActivityListenerDeps {
 }
 
 export interface MmChatActivityListenerManager {
-  addCoach(subject: CoachWsSubject): void;
-  removeCoach(coachMmUserId: string): void;
+  addDefaultAgent(subject: DefaultAgentWsSubject): void;
+  removeDefaultAgent(defaultAgentMmUserId: string): void;
   stop(): void;
 }
 
 const DEFAULT_BACKOFF = [1_000, 5_000, 15_000, 30_000] as const;
 
-interface CoachConnection {
+interface DefaultAgentConnection {
   token: string;
   stopped: boolean;
   attempt: number;
@@ -71,7 +71,7 @@ function parseJsonRecord(value: unknown): Record<string, unknown> | null {
 
 function postedChatActivity(
   data: unknown,
-  coachMmUserId: string,
+  defaultAgentMmUserId: string,
 ): ChatActivityPayload | null {
   const post = parseMattermostPost(data);
   if (!post) return null;
@@ -82,13 +82,13 @@ function postedChatActivity(
   const mmUserId = stringField(post, "user_id");
   const channelId = stringField(post, "channel_id");
   const postId = stringField(post, "id");
-  if (!mmUserId || !channelId || !postId || mmUserId === coachMmUserId) return null;
-  return { coachMmUserId, kind: "post", channelId, postId, mmUserId };
+  if (!mmUserId || !channelId || !postId || mmUserId === defaultAgentMmUserId) return null;
+  return { defaultAgentMmUserId, kind: "post", channelId, postId, mmUserId };
 }
 
 function reactionChatActivity(
   envelope: { data?: unknown; broadcast?: unknown },
-  coachMmUserId: string,
+  defaultAgentMmUserId: string,
 ): ChatActivityPayload | null {
   const reaction = parseJsonRecord((envelope.data as Record<string, unknown> | undefined)?.reaction);
   const broadcast = envelope.broadcast as Record<string, unknown> | undefined;
@@ -98,9 +98,9 @@ function reactionChatActivity(
   const postId = stringField(reaction, "post_id");
   const emojiName = stringField(reaction, "emoji_name");
   const createdAt = reaction.create_at;
-  if (!mmUserId || !postId || !emojiName || mmUserId === coachMmUserId) return null;
+  if (!mmUserId || !postId || !emojiName || mmUserId === defaultAgentMmUserId) return null;
   if (typeof createdAt !== "number") return null;
-  return { coachMmUserId, kind: "reaction", channelId, postId, mmUserId, emojiName, createdAt };
+  return { defaultAgentMmUserId, kind: "reaction", channelId, postId, mmUserId, emojiName, createdAt };
 }
 
 function safeToString(data: unknown): string {
@@ -113,7 +113,7 @@ export function startMmChatActivityListeners(
   deps: MmChatActivityListenerDeps,
 ): MmChatActivityListenerManager {
   const backoff = deps.backoffSchedule ?? DEFAULT_BACKOFF;
-  const connections = new Map<string, CoachConnection>();
+  const connections = new Map<string, DefaultAgentConnection>();
   let managerStopped = false;
 
   const reportChatActivity = (activity: ChatActivityPayload | null): void => {
@@ -130,30 +130,30 @@ export function startMmChatActivityListeners(
     }
   };
 
-  const scheduleReconnect = (coachMmUserId: string, conn: CoachConnection): void => {
+  const scheduleReconnect = (defaultAgentMmUserId: string, conn: DefaultAgentConnection): void => {
     if (conn.stopped || managerStopped || conn.reconnectTimer) return;
     const delayMs = backoff[Math.min(conn.attempt, backoff.length - 1)] ?? 30_000;
     conn.attempt += 1;
     conn.reconnectTimer = setTimeout(() => {
       conn.reconnectTimer = null;
-      connect(coachMmUserId, conn);
+      connect(defaultAgentMmUserId, conn);
     }, delayMs);
     conn.reconnectTimer.unref?.();
   };
 
-  const connect = (coachMmUserId: string, conn: CoachConnection): void => {
+  const connect = (defaultAgentMmUserId: string, conn: DefaultAgentConnection): void => {
     if (conn.stopped || managerStopped) return;
     let ws: WebSocket;
     try {
       ws = deps.openWebSocket();
     } catch (error) {
       deps.log(
-        `[mm-event-listener] openWebSocket threw for coach ${coachMmUserId}: ${
+        `[mm-event-listener] openWebSocket threw for agent ${defaultAgentMmUserId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
         "warn",
       );
-      scheduleReconnect(coachMmUserId, conn);
+      scheduleReconnect(defaultAgentMmUserId, conn);
       return;
     }
     conn.currentWs = ws;
@@ -166,7 +166,7 @@ export function startMmChatActivityListeners(
         }));
       } catch (error) {
         deps.log(
-          `[mm-event-listener] auth send failed for coach ${coachMmUserId}: ${
+          `[mm-event-listener] auth send failed for agent ${defaultAgentMmUserId}: ${
             error instanceof Error ? error.message : String(error)
           }`,
           "warn",
@@ -179,10 +179,10 @@ export function startMmChatActivityListeners(
       try {
         const envelope = JSON.parse(raw) as { event?: unknown; data?: unknown; broadcast?: unknown };
         if (envelope.event === "posted") {
-          reportChatActivity(postedChatActivity(envelope.data, coachMmUserId));
+          reportChatActivity(postedChatActivity(envelope.data, defaultAgentMmUserId));
         }
         if (envelope.event === "reaction_added") {
-          reportChatActivity(reactionChatActivity(envelope, coachMmUserId));
+          reportChatActivity(reactionChatActivity(envelope, defaultAgentMmUserId));
         }
       } catch {
         return;
@@ -190,12 +190,12 @@ export function startMmChatActivityListeners(
     });
     ws.on("close", () => {
       conn.currentWs = null;
-      scheduleReconnect(coachMmUserId, conn);
+      scheduleReconnect(defaultAgentMmUserId, conn);
     });
     ws.on("error", () => undefined);
   };
 
-  const teardown = (conn: CoachConnection): void => {
+  const teardown = (conn: DefaultAgentConnection): void => {
     conn.stopped = true;
     if (conn.reconnectTimer) clearTimeout(conn.reconnectTimer);
     conn.reconnectTimer = null;
@@ -207,26 +207,26 @@ export function startMmChatActivityListeners(
   };
 
   return {
-    addCoach(subject) {
-      if (managerStopped || !subject.coachMmUserId || !subject.coachToken) return;
-      const existing = connections.get(subject.coachMmUserId);
+    addDefaultAgent(subject) {
+      if (managerStopped || !subject.defaultAgentMmUserId || !subject.coachToken) return;
+      const existing = connections.get(subject.defaultAgentMmUserId);
       if (existing?.token === subject.coachToken) return;
       if (existing) teardown(existing);
-      const conn: CoachConnection = {
+      const conn: DefaultAgentConnection = {
         token: subject.coachToken,
         stopped: false,
         attempt: 0,
         currentWs: null,
         reconnectTimer: null,
       };
-      connections.set(subject.coachMmUserId, conn);
-      connect(subject.coachMmUserId, conn);
+      connections.set(subject.defaultAgentMmUserId, conn);
+      connect(subject.defaultAgentMmUserId, conn);
     },
-    removeCoach(coachMmUserId) {
-      const conn = connections.get(coachMmUserId);
+    removeDefaultAgent(defaultAgentMmUserId) {
+      const conn = connections.get(defaultAgentMmUserId);
       if (!conn) return;
       teardown(conn);
-      connections.delete(coachMmUserId);
+      connections.delete(defaultAgentMmUserId);
     },
     stop() {
       managerStopped = true;

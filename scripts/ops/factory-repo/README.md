@@ -6,6 +6,8 @@ start of every session, the checks they run before a change reaches `main`,
 and the commands that ship a build. You can read the factory yourself instead
 of taking my word for it.
 
+[How this differs from OpenClaw Enterprise](docs/why-octogee-cloud.md).
+
 Published from the Octogee monorepo at `{{sha}}`.
 
 ## Run it
@@ -29,13 +31,13 @@ also a billing account and a domain. [See every account and tier](docs/getting-s
 - `scripts/lib/ci-checks.ts` plans the pull-request checks from a diff, and
   `scripts/ci/quality.sh` runs the lint and security lanes.
 - `SHIP.md` shows the shape of the four commands that move a build to TEST, to
-  PROD, and to a single Builder gateway. Identities are placeholders.
+  PROD, and to a single isolated gateway. Identities are placeholders.
 
 ## What lands next
 
 The rest of the platform lands here as the split from the private product
-completes: the credential walls, the LLM broker, Cowboy (the fleet manager),
-Builder state on PostgreSQL, the CI/CD workflows, and the operations chapters
+completes: the credential walls, the LLM broker, the fleet controller,
+user state on PostgreSQL, the CI/CD workflows, and the operations chapters
 of the handbook. The Octogee product keeps its own private repository and
 builds on top of this one.
 

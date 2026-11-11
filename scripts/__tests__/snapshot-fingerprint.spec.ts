@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  desiredCustomers,
+  desiredUsers,
   snapshotConfigFingerprint,
 } from "../lib/snapshot-fingerprint.js";
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
@@ -28,8 +28,8 @@ function snap(over: Partial<FleetBrokerUserSnapshot> = {}): FleetBrokerUserSnaps
     lastName: "A",
     photoURL: "",
     onboardingVibe: null,
-    coachToken: "coach-pat",
-    coachMmUserId: "mm-coach",
+    coachToken: "default-agent-pat",
+    defaultAgentMmUserId: "mm-coach",
     coachIdentity: { name: "Octo", emoji: "🐙" },
     ...over,
   };
@@ -40,7 +40,7 @@ describe("snapshotConfigFingerprint", () => {
     expect(snapshotConfigFingerprint(snap())).toBe(snapshotConfigFingerprint(snap()));
   });
 
-  it("reconciles a legacy GitHub-backed coach after import even when checkout stays disabled", () => {
+  it("reconciles a legacy GitHub-backed agent after import even when checkout stays disabled", () => {
     const snapshot = snap({
       projects: [{ projectSlug: "orbit", giteaRepoName: "orbit", checkoutEnabled: false, repoSource: { provider: "github", owner: "alice", repo: "orbit" } }],
       projectAgents: [{ projectId: "orbit", enabled: true, mmUserId: "bot", token: "pat" }],
@@ -74,7 +74,7 @@ describe("snapshotConfigFingerprint", () => {
     expect(snapshotConfigFingerprint(a)).toBe(snapshotConfigFingerprint(b));
   });
 
-  it("changes when a project agent is enabled (the Vegas toggle)", () => {
+  it("changes when a project agent is enabled (the multi-agent toggle)", () => {
     const off = snap({ projectAgents: [] });
     const on = snap({
       projectAgents: [{ projectId: "camp", enabled: true, mmUserId: "mm-proj", token: "proj-pat" }],
@@ -110,7 +110,7 @@ describe("snapshotConfigFingerprint", () => {
     expect(snapshotConfigFingerprint(extra)).not.toBe(base);
   });
 
-  it("changes when the Builder's time zone changes (USER.md is re-synced at reassert)", () => {
+  it("changes when the user's time zone changes (USER.md is re-synced at reassert)", () => {
     expect(snapshotConfigFingerprint(snap({ timeZone: "America/Chicago" }))).not.toBe(snapshotConfigFingerprint(snap()));
     expect(snapshotConfigFingerprint(snap({ timeZone: null }))).toBe(snapshotConfigFingerprint(snap()));
   });
@@ -167,7 +167,7 @@ describe("snapshotConfigFingerprint", () => {
     ).not.toBe(base);
   });
 
-  it("changes when the operator flips the Builder Agent default dial", () => {
+  it("changes when the operator flips the user Agent default dial", () => {
     const base = snapshotConfigFingerprint(snap());
     expect(
       snapshotConfigFingerprint(
@@ -349,7 +349,7 @@ describe("snapshotConfigFingerprint", () => {
     expect(snapshotConfigFingerprint(a)).toBe(snapshotConfigFingerprint(b));
   });
 
-  it("changes when the coach identity, token, or model config changes", () => {
+  it("changes when the agent identity, token, or model config changes", () => {
     const base = snapshotConfigFingerprint(snap());
     expect(snapshotConfigFingerprint(snap({ coachIdentity: { name: "Buddy", emoji: "🐶" } }))).not.toBe(base);
     expect(snapshotConfigFingerprint(snap({ coachToken: "rotated-pat" }))).not.toBe(base);
@@ -359,12 +359,12 @@ describe("snapshotConfigFingerprint", () => {
   });
 });
 
-describe("desiredCustomers", () => {
+describe("desiredUsers", () => {
   it("returns slug→fingerprint for every snapshot AND seeds each snapshot into the adapter cache", () => {
     const seed = vi.fn();
     const users = [snap(), snap({ uid: "u2", slug: "bob" })];
 
-    const map = desiredCustomers(users, [
+    const map = desiredUsers(users, [
       { uid: "u1", state: "serving", epoch: 1 },
       { uid: "u2", state: "serving", epoch: 1 },
     ], seed);
@@ -379,12 +379,12 @@ describe("desiredCustomers", () => {
   });
 
   it("tolerates an absent seeder (operator-style callers without a cache)", () => {
-    const map = desiredCustomers([snap()], [{ uid: "u1", state: "serving", epoch: 1 }]);
+    const map = desiredUsers([snap()], [{ uid: "u1", state: "serving", epoch: 1 }]);
     expect(map.size).toBe(1);
   });
 
-  it("lanes a builder that has completed provisioning as a move and an unprovisioned one as a create", () => {
-    const map = desiredCustomers([
+  it("lanes a user that has completed provisioning as a move and an unprovisioned one as a create", () => {
+    const map = desiredUsers([
       snap({ status: "complete" }),
       snap({ uid: "u2", slug: "bob", status: "provisioning" }),
       snap({ uid: "u3", slug: "cara", status: "" }),

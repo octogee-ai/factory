@@ -1,11 +1,11 @@
 import { DocumentData } from "firebase-admin/firestore";
-import { DEFAULT_BUILDER_AGENT_MODEL_REF } from "@octogee/shared/types/platform-config";
+import { DEFAULT_USER_AGENT_MODEL_REF } from "@octogee/shared/types/platform-config";
 
 export const CREW_ROLES = ["coach"] as const;
 export type CrewRole = typeof CREW_ROLES[number];
 
 export const CREW_IDENTITY: Record<CrewRole, { name: string; emoji: string; model: string }> = {
-  coach: { name: "Octo", emoji: "🐙", model: DEFAULT_BUILDER_AGENT_MODEL_REF },
+  coach: { name: "Octo", emoji: "🐙", model: DEFAULT_USER_AGENT_MODEL_REF },
 };
 
 export const TIERS = ["trial", "free", "hobby", "pro", "max"] as const;
@@ -27,7 +27,7 @@ export const TIER_COLLABORATOR_LIMITS: Record<string, number> = {
   max:   Infinity,
 };
 
-export interface CustomerProvisioning {
+export interface UserProvisioning {
   slug: string;
   status: string;
   customerDir: string;
@@ -35,7 +35,7 @@ export interface CustomerProvisioning {
   activatedAgents: string[];
 }
 
-export function getProvisioning(data: DocumentData): CustomerProvisioning | null {
+export function getProvisioning(data: DocumentData): UserProvisioning | null {
   const oc = data.provisioning?.openclaw;
   if (!oc?.slug || !oc?.status) return null;
   return {

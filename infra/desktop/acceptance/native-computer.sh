@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${OPENCLAW_GATEWAY_TOKEN:?run inside the Builder VM gateway container}"
+: "${OPENCLAW_GATEWAY_TOKEN:?run inside the gateway VM gateway container}"
 node_name="${OCTOGEE_DESKTOP_NODE_NAME:-octogee-desktop}"
 control_url="${GATEWAY_COMPUTER_CONTROL_URL:-http://127.0.0.1:7777}"
 target_url="${OCTOGEE_ACCEPT_TARGET_URL:-https://example.com/}"

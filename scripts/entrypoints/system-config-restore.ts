@@ -2,7 +2,7 @@ import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("system-config-restore");
 import { restoreSystemConfigForSlug } from "../lib/system-config.js";
 import { pathToFileURL } from "node:url";
-import { DEFAULT_OPENCLAW_DIR, builderClaimSlug } from "@octogee/shared/server/builder-claim";
+import { DEFAULT_OPENCLAW_DIR, userClaimSlug } from "@octogee/shared/server/user-claim";
 
 const log = runtimeLogger.info;
 
@@ -22,12 +22,12 @@ export function resolveSystemConfigRestorePlan(
     };
   }
 
-  const slug = builderClaimSlug(env);
+  const slug = userClaimSlug(env);
   if (!slug) {
     return {
       action: "skip",
       gatewayClass,
-      reason: `skipping restore for ${gatewayClass}: this gateway has no Builder claim`,
+      reason: `skipping restore for ${gatewayClass}: this gateway has no user claim`,
     };
   }
 

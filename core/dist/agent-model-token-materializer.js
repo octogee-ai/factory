@@ -8,7 +8,7 @@ import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
 import { parseAgentId } from "@octogee/shared/types/identity";
 export { OpenClawSecretsApplyError, applyOpenClawSecretsPlan } from "./openclaw-secrets-apply.js";
 // The per-agent broker-token anthropic profile for shared (multi-tenant) pods.
-// Each customer-agent's anthropic:default resolves to its OWN owner-scoped broker
+// Each agent's anthropic:default resolves to its OWN owner-scoped broker
 // token (the secret-resolver fetches it via POST /internal/byok/agent-model-token);
 // the broker then resolves platform-or-BYOK per owner. The id is the static
 // `agent-model-token-<agentId>` the resolver grammar pins (AGENT_MODEL_TOKEN_ID_RE).
@@ -162,7 +162,7 @@ function asRecord(value) {
 /**
  * The per-agent platform profiles, each pinned to its own owner-scoped broker
  * token. `anthropic:default` is always the broker token: the platform /
- * anthropic-BYOK primary for plain customers and the Haiku-fallback credential
+ * anthropic-BYOK primary for plain users and the Haiku-fallback credential
  * for BYOS or non-anthropic-BYOK ones.
  */
 function desiredPlatformBrokerProfiles(agentId, surfaces) {

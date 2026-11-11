@@ -6,7 +6,7 @@ import * as path from "node:path";
 // missing entry is treated as STALE, so forgetting would mean
 // a needless-but-harmless re-ensure sweep, never a masked change.
 //
-// Corrupt or missing files load as empty — every mounted customer then re-ensures once,
+// Corrupt or missing files load as empty — every mounted user then re-ensures once,
 // which is the post-roll convergence sweep, not a failure mode.
 
 export function loadAppliedFingerprints(filePath: string): Map<string, string> {

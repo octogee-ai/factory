@@ -870,7 +870,7 @@ CREATE TRIGGER workspace_channels_change AFTER INSERT OR UPDATE OR DELETE ON wor
 CREATE TRIGGER user_agent_identities_change AFTER INSERT OR UPDATE OR DELETE ON user_agent_identities
   FOR EACH ROW EXECUTE FUNCTION record_change('agentIdentities', 'uid', 'filter:uid');
 `;
-const BUILDER_CONSTRAINTS = String.raw `
+const USER_CONSTRAINTS = String.raw `
 ALTER TABLE gateway_assignments
   ADD CONSTRAINT gateway_assignments_user_fk FOREIGN KEY (uid) REFERENCES users (uid) ON DELETE CASCADE;
 
@@ -1026,7 +1026,7 @@ CREATE TABLE runtime_secret_versions (
 export const PLATFORM_STATE_MIGRATIONS = [
     { version: 1, name: "core-schema", sql: CORE_SCHEMA },
     { version: 2, name: "change-feed", sql: CHANGE_FEED },
-    { version: 3, name: "user-constraints", sql: BUILDER_CONSTRAINTS },
+    { version: 3, name: "user-constraints", sql: USER_CONSTRAINTS },
     { version: 4, name: "workspace-and-job-fidelity", sql: WORKSPACE_AND_JOB_FIDELITY },
     { version: 5, name: "gateway-aggregate-fences", sql: GATEWAY_AGGREGATE_FENCES },
     { version: 6, name: "project-members", sql: PROJECT_MEMBERS },

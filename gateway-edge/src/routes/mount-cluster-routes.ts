@@ -10,7 +10,7 @@ import integrationRoutes from "./integrations.js";
 import connectRoutes from "./connect.js";
 import entitiesRoutes from "./entities.js";
 import agentRoutes from "./agents.js";
-import builderGatewaysRoutes from "./builder/gateways.js";
+import isolatedGatewaysRoutes from "./user/gateways.js";
 import productivityApprovalRoutes from "./productivity-approvals.js";
 import voiceRoutes from "./voice.js";
 
@@ -48,7 +48,7 @@ export interface MountClusterRoutesOpts {
   mmRestProxyHandler?: RequestHandler;
   mattermostMintRoutes?: Router;
   productRoutes?: ClusterRouteTable;
-  builderGatewaysRoutes?: Router;
+  isolatedGatewaysRoutes?: Router;
   projectsCreateRoutes?: Router;
   projectsDeleteRoutes?: Router;
   projectsRepoSourceRoutes?: Router;
@@ -102,7 +102,7 @@ const PUBLIC_API_ROUTES: readonly (readonly [string, RouteHandler])[] = [
   ["/api/integrations", integrationRoutes],
   ["/api/connect", connectRoutes],
   ["/api/agents", agentRoutes],
-  ["/api/builder", builderGatewaysRoutes],
+  ["/api/builder", isolatedGatewaysRoutes],
   ["/api/productivity-approvals", productivityApprovalRoutes],
   ["/api/voice", voiceRoutes],
 ];
@@ -126,7 +126,7 @@ export function mountClusterRoutes(app: Express, opts: MountClusterRoutesOpts = 
   }
 
   mountRouteTable(app, PUBLIC_API_ROUTES.map(([path, route]) => {
-    if (path === "/api/builder") return [path, opts.builderGatewaysRoutes ?? route] as const;
+    if (path === "/api/builder") return [path, opts.isolatedGatewaysRoutes ?? route] as const;
     if (path === "/api/productivity-approvals") {
       return [path, opts.productivityApprovalRoutes ?? route] as const;
     }

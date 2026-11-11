@@ -1,7 +1,7 @@
 import { type GatewayDesiredStatus } from "./glm.js";
 export declare const SHARED_POOL_SLOT_ID_PATTERN: RegExp;
 export declare const DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED = true;
-export declare const DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY = 10;
+export declare const DEFAULT_SHARED_GATEWAY_USERS_PER_GATEWAY = 10;
 export interface SharedGatewayAutoscalingConfig {
     enabled: boolean;
     buildersPerGateway: number;
@@ -30,7 +30,7 @@ export interface SharedPoolScalingInput {
     config: SharedGatewayAutoscalingConfig;
     bounds: SharedPoolReplicaBounds;
     members: readonly SharedPoolScalingMember[];
-    builderDemandCount: number;
+    userDemandCount: number;
     now: number;
     replacements?: readonly SharedPoolReplacement[];
 }

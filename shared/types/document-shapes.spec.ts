@@ -66,7 +66,7 @@ describe("shared document shapes", () => {
     const agent = {
       id: "agent-1",
       name: "Scout",
-      persona: "builder coach",
+      persona: "user agent",
       mattermost: { userId: "mm-agent-1" },
       createdAt: "server-time",
       updatedAt: "server-time",

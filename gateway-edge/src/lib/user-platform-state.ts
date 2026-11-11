@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { BuilderRecord, PlatformStateStore } from "@octogee/core/platform-state";
+import type { PlatformUserRecord, PlatformStateStore } from "@octogee/core/platform-state";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { platformStateStore } from "./platform-state.js";
 
@@ -40,22 +40,22 @@ function withStoredValue(document: UserDocument, path: readonly string[], stored
 const SLUG_PATH = ["provisioning", "openclaw", "slug"];
 const AGENT_IDS_PATH = ["provisioning", "openclaw", "agentIds"];
 
-export function userDataWithBuilderState(userData: UserDocument, builder: BuilderRecord | null): UserDocument {
+export function userDataWithUserState(userData: UserDocument, user: PlatformUserRecord | null): UserDocument {
   const fields: readonly (readonly [readonly string[], unknown])[] = [
-    [["workspaceId"], builder?.workspaceId],
-    [["accountLifecycle"], builder?.accountLifecycle],
-    [["mattermost", "userId"], builder?.mattermostUserId],
-    [["provisioning", "openclaw", "gatewayId"], builder?.gateway?.gatewayId],
+    [["workspaceId"], user?.workspaceId],
+    [["accountLifecycle"], user?.accountLifecycle],
+    [["mattermost", "userId"], user?.mattermostUserId],
+    [["provisioning", "openclaw", "gatewayId"], user?.gateway?.gatewayId],
   ];
   const projected = fields.reduce<UserDocument>((document, [path, stored]) => withStoredValue(document, path, stored), userData);
-  const withAgents = withStoredValue(projected, AGENT_IDS_PATH, builder?.agents.agentIds ?? [], valueAt(userData, AGENT_IDS_PATH) ?? []);
-  return withStoredValue(withAgents, SLUG_PATH, builder?.slug, valueAt(userData, SLUG_PATH) ?? userData.username);
+  const withAgents = withStoredValue(projected, AGENT_IDS_PATH, user?.agents.agentIds ?? [], valueAt(userData, AGENT_IDS_PATH) ?? []);
+  return withStoredValue(withAgents, SLUG_PATH, user?.slug, valueAt(userData, SLUG_PATH) ?? userData.username);
 }
 
 export async function accountActiveInStore(
   uid: string,
-  store: Pick<PlatformStateStore, "builders"> = platformStateStore,
+  store: Pick<PlatformStateStore, "users"> = platformStateStore,
 ): Promise<boolean> {
-  const builder = await store.builders.records.get(uid);
-  return accountAllowsInteractiveAccess(builder ? { accountLifecycle: builder.accountLifecycle ?? undefined } : undefined);
+  const user = await store.users.records.get(uid);
+  return accountAllowsInteractiveAccess(user ? { accountLifecycle: user.accountLifecycle ?? undefined } : undefined);
 }

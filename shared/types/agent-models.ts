@@ -117,7 +117,7 @@ export function agentIdBelongsToSlug(agentId: string, slug: string): boolean {
   );
 }
 
-export function canonicalCustomerModelDefinition(modelRef: string): Record<string, unknown> {
+export function canonicalUserModelDefinition(modelRef: string): Record<string, unknown> {
   const popularAliases: Record<string, string> = {
     "platform-openai/gpt-6-astra": "astra",
     "platform-openrouter/openai/gpt-6-astra": "astra-openrouter",

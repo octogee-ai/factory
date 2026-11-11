@@ -26,14 +26,14 @@ export declare function codexAgentDir(openclawDir: string, agentId: string): str
 export declare function sharedAuthAgentDir(openclawDir: string): string;
 export declare function removeSubscriptionProfiles(agentDir: string, providers: readonly ByosubProvider[]): Promise<boolean>;
 export declare function codexAuthStatePath(openclawDir: string, agentId: string): string;
-export interface CustomerOauthRuntimePurgeResult {
+export interface UserOauthRuntimePurgeResult {
     removedFiles: number;
     removedDirectories: number;
     scrubbedProfileStores: number;
     resetSessions: number;
     affectedAgentIds: string[];
 }
-interface CustomerOauthRuntimePurgeOptions {
+interface UserOauthRuntimePurgeOptions {
     openclawDir: string;
     homeDir: string;
     agentIds: readonly string[];
@@ -43,7 +43,7 @@ interface CustomerOauthRuntimePurgeOptions {
     allowedProviderIds?: readonly string[];
     modelProviders?: Record<string, unknown>;
 }
-export declare function purgeCustomerOauthRuntimeArtifacts(opts: CustomerOauthRuntimePurgeOptions): Promise<CustomerOauthRuntimePurgeResult>;
+export declare function purgeUserOauthRuntimeArtifacts(opts: UserOauthRuntimePurgeOptions): Promise<UserOauthRuntimePurgeResult>;
 /**
  * Reads the codex auth-state payload as text — preferring the SQLite
  * auth_profile_state row (openclaw v2026.6.5+) and falling back to the

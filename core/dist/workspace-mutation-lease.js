@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { acquireSystemConfigSyncLeaseSync, } from "./system-config-mutation-lease.js";
 const WORKSPACE_MUTATION_LOCK_NAME = "octogee.workspace-mutation.lock";
-export function projectMutationLeaseGitDir(workspaceDir, customersRoot) {
-    const parts = path.relative(path.resolve(customersRoot), path.resolve(workspaceDir)).split(path.sep);
+export function projectMutationLeaseGitDir(workspaceDir, usersRoot) {
+    const parts = path.relative(path.resolve(usersRoot), path.resolve(workspaceDir)).split(path.sep);
     if (parts.length !== 3 || parts[1] !== "projects" || ![parts[0], parts[2]].every(part => /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/u.test(part)))
         return null;
-    const lockDir = path.join(path.dirname(customersRoot), "git-source-switch-locks", parts[0], `${parts[2]}.git`);
+    const lockDir = path.join(path.dirname(usersRoot), "git-source-switch-locks", parts[0], `${parts[2]}.git`);
     fs.mkdirSync(lockDir, { recursive: true, mode: 0o700 });
     return lockDir;
 }

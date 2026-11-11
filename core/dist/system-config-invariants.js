@@ -4,8 +4,8 @@ import { platformAgentMattermostAccountsProjected, projectPlatformAgentMattermos
 import { openClawOperatorRoles, OPENCLAW_TRUSTED_PROXIES, OPENCLAW_TRUSTED_PROXY_AUTH, openClawIdentityScopes, withOpenClawOperatorRoles, } from "@octogee/shared/types/openclaw-proxy-identity";
 const ABSENT = Symbol("absent");
 const REQUIRED_ARRAY = "required-array";
-const CUSTOMER_AGENT_WORKSPACE = "customer-agent-workspace";
-const CUSTOMER_AGENT_TOOL_POLICY = "customer-agent-tool-policy";
+const USER_AGENT_WORKSPACE = "customer-agent-workspace";
+const USER_AGENT_TOOL_POLICY = "customer-agent-tool-policy";
 const PROJECT_AGENT_TOOL_POLICY = "project-agent-tool-policy";
 const FORBIDDEN_ARRAY = "forbidden-array";
 const PLUGIN_ALLOWLIST_PATH = "plugins.allow";
@@ -22,7 +22,7 @@ export function platformBrokerProviderDeclarations(env) {
     }));
 }
 /** Missing public declarations are a safe addition; existing routes and auth must match exactly. */
-export function customerModelProviderDeclarationsMatch(current, expected) {
+export function userModelProviderDeclarationsMatch(current, expected) {
     const required = { ...expected };
     for (const [id] of BROKER_PROVIDER_DECLARATIONS) {
         if (!Object.hasOwn(current, id))
@@ -109,7 +109,7 @@ const PLATFORM_PLUGIN_CONFIG_FIELDS = {
     "plugins.entries.octogee-chat-tools.hooks.timeouts.before_prompt_build": 3000,
     "plugins.entries.octogee-chat-tools.hooks.timeouts.before_agent_run": 3000,
 };
-export const CUSTOMER_CODE_DENIED_TOOLS = [
+export const USER_CODE_DENIED_TOOLS = [
     "exec",
     "process",
     "subagents",
@@ -128,7 +128,7 @@ export const CUSTOMER_CODE_DENIED_TOOLS = [
     "browser",
     "computer",
 ];
-const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
+const USER_STRUCTURED_AVAILABLE_TOOLS = [
     "automations",
     "workspace_commit",
     "octogee_project_commit",
@@ -146,7 +146,7 @@ const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
     "octogee_board_card_move",
     "octogee_board_card_comment",
 ];
-export const CUSTOMER_WORKFLOW_TOOLS = [
+export const USER_WORKFLOW_TOOLS = [
     "automations",
     "message",
     "octogee_project_create",
@@ -207,7 +207,7 @@ export const CUSTOMER_WORKFLOW_TOOLS = [
     "octogee_obsidian_write",
     "octogee_owner_automations",
 ];
-export const PRODUCTIVITY_TOOL_NAMES = CUSTOMER_WORKFLOW_TOOLS.filter((tool) => tool.startsWith("octogee_google_") || tool.startsWith("octogee_obsidian_"));
+export const PRODUCTIVITY_TOOL_NAMES = USER_WORKFLOW_TOOLS.filter((tool) => tool.startsWith("octogee_google_") || tool.startsWith("octogee_obsidian_"));
 export const PROJECT_AGENT_ALLOWED_TOOLS = [
     "octogee_chat_set_identity",
     "octogee_connection_request",
@@ -265,22 +265,22 @@ export const PROJECT_AGENT_DENIED_TOOLS = [
     "conversations_turn",
     "browser",
 ];
-function customerToolInvariants() {
+function userToolInvariants() {
     return [
         { kind: "exact", path: "tools.elevated.enabled", value: false },
         {
             kind: REQUIRED_ARRAY,
             path: "tools.deny",
-            values: CUSTOMER_CODE_DENIED_TOOLS,
+            values: USER_CODE_DENIED_TOOLS,
         },
         {
             kind: FORBIDDEN_ARRAY,
             path: "tools.deny",
-            values: CUSTOMER_STRUCTURED_AVAILABLE_TOOLS,
+            values: USER_STRUCTURED_AVAILABLE_TOOLS,
         },
         { kind: "exact", path: "tools.profile", value: "coding" },
         { kind: "exact", path: "tools.allow", value: ABSENT },
-        { kind: "exact", path: "tools.alsoAllow", value: CUSTOMER_WORKFLOW_TOOLS },
+        { kind: "exact", path: "tools.alsoAllow", value: USER_WORKFLOW_TOOLS },
         { kind: "exact", path: "tools.exec", value: { mode: "deny" } },
         { kind: "exact", path: "tools.fs.workspaceOnly", value: true },
         { kind: "exact", path: "tools.sessions.visibility", value: "self" },
@@ -325,15 +325,15 @@ function customerToolInvariants() {
             },
         },
         {
-            kind: CUSTOMER_AGENT_WORKSPACE,
+            kind: USER_AGENT_WORKSPACE,
             path: "agents.list[].tools.fs.workspaceOnly",
         },
         {
-            kind: CUSTOMER_AGENT_WORKSPACE,
+            kind: USER_AGENT_WORKSPACE,
             path: "agents.entries.*.tools.fs.workspaceOnly",
         },
-        { kind: CUSTOMER_AGENT_TOOL_POLICY, path: "agents.list[].tools" },
-        { kind: CUSTOMER_AGENT_TOOL_POLICY, path: "agents.entries.*.tools" },
+        { kind: USER_AGENT_TOOL_POLICY, path: "agents.list[].tools" },
+        { kind: USER_AGENT_TOOL_POLICY, path: "agents.entries.*.tools" },
     ];
 }
 function controlIdentityInvariants(perUser, ownerUid, workspaceSlug) {
@@ -456,13 +456,13 @@ export function platformInvariantTable(context) {
         base.push({ kind: "exact", path: "commands.ownerAllowFrom", value: ABSENT });
     }
     const platformProjection = base;
-    // A Builder gateway is the Builder's own OpenClaw: no platform credential lives
+    // An isolated gateway is the user's own OpenClaw: no platform credential lives
     // in the pod, so host code, terminals, MCP servers, cron, skills, sub-agents,
-    // and the codex BYOSUB plugin stay at the Builder's discretion. The platform
+    // and the codex BYOSUB plugin stay at the user's discretion. The platform
     // keeps only wiring and tenant-scoped secret providers.
     return context.gatewayClass === "builder"
         ? platformProjection
-        : [...platformProjection, ...customerToolInvariants()];
+        : [...platformProjection, ...userToolInvariants()];
 }
 function asObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -514,7 +514,7 @@ function equal(left, right) {
     }
     return Object.is(left, right);
 }
-function customerAgentRecords(config, path) {
+function userAgentRecords(config, path) {
     const agents = asObject(config.agents);
     if (!agents)
         return [];
@@ -544,7 +544,7 @@ function forceAgentWorkspaceOnly(agent) {
     tools.fs = fs;
     fs.workspaceOnly = true;
 }
-function customerAgentEntries(config, path) {
+function userAgentEntries(config, path) {
     const agents = asObject(config.agents);
     if (!agents)
         return [];
@@ -571,15 +571,15 @@ function agentToolPolicySatisfied(config, agent, agentId) {
     const tools = asObject(agent.tools);
     const deny = Array.isArray(tools?.deny) ? tools.deny : [];
     const expectedAlsoAllow = allowedToolsForAgent(parsed.kind);
-    const expectedSenderPolicy = customerToolsBySenderPolicy(config, agentId);
+    const expectedSenderPolicy = userToolsBySenderPolicy(config, agentId);
     return tools !== null
         && tools.profile === (parsed.kind === "coach" ? "coding" : "minimal")
         && equal(tools.alsoAllow, expectedAlsoAllow)
         && !Object.prototype.hasOwnProperty.call(tools, "allow")
         && (parsed.kind === "project"
             ? equal(deny, PROJECT_AGENT_DENIED_TOOLS)
-            : CUSTOMER_CODE_DENIED_TOOLS.every((tool) => deny.includes(tool))
-                && CUSTOMER_STRUCTURED_AVAILABLE_TOOLS.every((tool) => !deny.includes(tool)))
+            : USER_CODE_DENIED_TOOLS.every((tool) => deny.includes(tool))
+                && USER_STRUCTURED_AVAILABLE_TOOLS.every((tool) => !deny.includes(tool)))
         && equal(tools.toolsBySender, expectedSenderPolicy);
 }
 function forceAgentToolPolicy(config, agent, agentId) {
@@ -594,19 +594,19 @@ function forceAgentToolPolicy(config, agent, agentId) {
     tools.deny = parsed.kind === "project"
         ? structuredClone(PROJECT_AGENT_DENIED_TOOLS)
         : [
-            ...deny.filter((tool) => !CUSTOMER_STRUCTURED_AVAILABLE_TOOLS.includes(tool)),
-            ...CUSTOMER_CODE_DENIED_TOOLS.filter((tool) => !deny.includes(tool)),
+            ...deny.filter((tool) => !USER_STRUCTURED_AVAILABLE_TOOLS.includes(tool)),
+            ...USER_CODE_DENIED_TOOLS.filter((tool) => !deny.includes(tool)),
         ];
-    tools.toolsBySender = customerToolsBySenderPolicy(config, agentId);
+    tools.toolsBySender = userToolsBySenderPolicy(config, agentId);
     delete tools.allow;
 }
-export function reconcileCustomerAgentEntry(agentId, entry) {
+export function reconcileSharedGatewayAgentEntry(agentId, entry) {
     const agent = structuredClone(entry);
     forceAgentWorkspaceOnly(agent);
     forceAgentToolPolicy({}, agent, agentId);
     return agent;
 }
-export function reconcileBuilderAgentEntry(agentId, entry) {
+export function reconcileIsolatedGatewayAgentEntry(agentId, entry) {
     const agent = structuredClone(entry);
     const parsed = parseAgentId(agentId);
     const tools = asObject(agent.tools);
@@ -624,12 +624,12 @@ function carriesSharedHostCodeFence(tools) {
 }
 function allowedToolsForAgent(kind) {
     if (kind === "coach")
-        return CUSTOMER_WORKFLOW_TOOLS;
+        return USER_WORKFLOW_TOOLS;
     if (kind === "project")
         return PROJECT_AGENT_ALLOWED_TOOLS;
     return [];
 }
-function customerToolsBySenderPolicy(_config, agentId) {
+function userToolsBySenderPolicy(_config, agentId) {
     return parseAgentId(agentId).kind === "project"
         ? { "*": { deny: structuredClone(PRODUCTIVITY_TOOL_NAMES) } }
         : {};
@@ -658,14 +658,14 @@ function reconcileMattermostAccounts(config, platformOwned) {
     projectPlatformAgentMattermostAccounts(config, current, platformOwned);
 }
 function invariantSatisfied(config, invariant) {
-    if (invariant.kind === CUSTOMER_AGENT_WORKSPACE) {
-        return customerAgentRecords(config, invariant.path).every(agentWorkspaceOnly);
+    if (invariant.kind === USER_AGENT_WORKSPACE) {
+        return userAgentRecords(config, invariant.path).every(agentWorkspaceOnly);
     }
-    if (invariant.kind === CUSTOMER_AGENT_TOOL_POLICY) {
-        return customerAgentEntries(config, invariant.path).every(({ agent, agentId }) => agentToolPolicySatisfied(config, agent, agentId));
+    if (invariant.kind === USER_AGENT_TOOL_POLICY) {
+        return userAgentEntries(config, invariant.path).every(({ agent, agentId }) => agentToolPolicySatisfied(config, agent, agentId));
     }
     if (invariant.kind === PROJECT_AGENT_TOOL_POLICY) {
-        return customerAgentEntries(config, invariant.path)
+        return userAgentEntries(config, invariant.path)
             .filter(({ agentId }) => parseAgentId(agentId).kind === "project")
             .every(({ agent, agentId }) => agentToolPolicySatisfied(config, agent, agentId));
     }
@@ -681,18 +681,18 @@ function invariantSatisfied(config, invariant) {
     return !Array.isArray(actual) || invariant.values.every((value) => !actual.includes(value));
 }
 function applyInvariant(config, invariant) {
-    if (invariant.kind === CUSTOMER_AGENT_WORKSPACE) {
-        customerAgentRecords(config, invariant.path).forEach(forceAgentWorkspaceOnly);
+    if (invariant.kind === USER_AGENT_WORKSPACE) {
+        userAgentRecords(config, invariant.path).forEach(forceAgentWorkspaceOnly);
         return;
     }
-    if (invariant.kind === CUSTOMER_AGENT_TOOL_POLICY) {
-        for (const { agent, agentId } of customerAgentEntries(config, invariant.path)) {
+    if (invariant.kind === USER_AGENT_TOOL_POLICY) {
+        for (const { agent, agentId } of userAgentEntries(config, invariant.path)) {
             forceAgentToolPolicy(config, agent, agentId);
         }
         return;
     }
     if (invariant.kind === PROJECT_AGENT_TOOL_POLICY) {
-        for (const { agent, agentId } of customerAgentEntries(config, invariant.path)) {
+        for (const { agent, agentId } of userAgentEntries(config, invariant.path)) {
             if (parseAgentId(agentId).kind === "project")
                 forceAgentToolPolicy(config, agent, agentId);
         }
@@ -738,8 +738,8 @@ export function assertPlatformInvariants(config, context) {
 }
 const PLATFORM_PROJECTION_KINDS = new Set([
     "mattermost-account-projection",
-    CUSTOMER_AGENT_WORKSPACE,
-    CUSTOMER_AGENT_TOOL_POLICY,
+    USER_AGENT_WORKSPACE,
+    USER_AGENT_TOOL_POLICY,
     PROJECT_AGENT_TOOL_POLICY,
 ]);
 export function reconcilePlatformProjections(config, context) {

@@ -4,7 +4,7 @@ import {
   createGceIdentityReviewer,
   createIssuerDispatchingReviewer,
   isGoogleIssuedJwt,
-  parseGatewayComputerIdentity,
+  parseGatewayVmIdentity,
 } from "../gce-identity-review.js";
 import type { Reviewer } from "../token-review.js";
 
@@ -68,7 +68,7 @@ describe("computeInstanceFromPayload", () => {
 describe("createGceIdentityReviewer", () => {
   const options = { ...EXPECTED, audience: "octogee-api", namespace: "octogee-test" };
 
-  it("reviews a verified GCE identity token as the computer SA bound to its instance", async () => {
+  it("reviews a verified GCE identity token as the VM SA bound to its instance", async () => {
     const verify = vi.fn(async () => payload());
     const review = await createGceIdentityReviewer({ ...options, verify })(jwt(payload()));
     expect(verify).toHaveBeenCalledWith(jwt(payload()), "octogee-api");
@@ -117,13 +117,13 @@ describe("createIssuerDispatchingReviewer", () => {
   });
 });
 
-describe("parseGatewayComputerIdentity", () => {
+describe("parseGatewayVmIdentity", () => {
   it("is off when neither variable is set, on when both are, and loud when only one is", () => {
-    expect(parseGatewayComputerIdentity({})).toBeNull();
-    expect(parseGatewayComputerIdentity({
+    expect(parseGatewayVmIdentity({})).toBeNull();
+    expect(parseGatewayVmIdentity({
       GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: " sa@p.iam.gserviceaccount.com ",
       GATEWAY_COMPUTER_PROJECT_ID: "p",
     })).toEqual({ serviceAccountEmail: "sa@p.iam.gserviceaccount.com", projectId: "p" });
-    expect(() => parseGatewayComputerIdentity({ GATEWAY_COMPUTER_PROJECT_ID: "p" })).toThrow(/set together/);
+    expect(() => parseGatewayVmIdentity({ GATEWAY_COMPUTER_PROJECT_ID: "p" })).toThrow(/set together/);
   });
 });

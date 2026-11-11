@@ -81,7 +81,7 @@ export interface ModelBrokerUsageRecordInput {
   upstreamStatus: number;
   now?: number;
   countsTowardSpendWindow?: boolean;
-  // Prepaid rail (Builders): the metering transaction also debits the owner's
+  // Prepaid rail (users): the metering transaction also debits the owner's
   // modelBrokerCredits balance by the priced cost. The final call may push the
   // balance slightly negative; the pre-flight gate blocks the next one.
   debitsCreditBalance?: boolean;

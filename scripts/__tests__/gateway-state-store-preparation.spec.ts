@@ -133,15 +133,15 @@ describe("prepareGatewayStateStore", () => {
     return root;
   }
 
-  const builderEnv = (root: string) => ({ GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "cluster", GATEWAY_ID: GATEWAY, OPENCLAW_STATE_DIR: root });
+  const userEnv = (root: string) => ({ GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "cluster", GATEWAY_ID: GATEWAY, OPENCLAW_STATE_DIR: root });
 
-  it("does nothing outside a cluster Builder or for SQLite state", async () => {
+  it("does nothing outside a cluster user or for SQLite state", async () => {
     const waitForOwner = vi.fn();
     const run = vi.fn();
     const anchored = stateRoot("anchor", false);
-    await prepareGatewayStateStore({ log: () => {}, env: { ...builderEnv(anchored), GATEWAY_RUNTIME_KIND: "gce-vm" }, waitForOwner });
-    await prepareGatewayStateStore({ log: () => {}, env: { ...builderEnv(anchored), GATEWAY_CLASS: "shared" }, waitForOwner });
-    await prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("sqlite", false)), waitForOwner });
+    await prepareGatewayStateStore({ log: () => {}, env: { ...userEnv(anchored), GATEWAY_RUNTIME_KIND: "gce-vm" }, waitForOwner });
+    await prepareGatewayStateStore({ log: () => {}, env: { ...userEnv(anchored), GATEWAY_CLASS: "shared" }, waitForOwner });
+    await prepareGatewayStateStore({ log: () => {}, env: userEnv(stateRoot("sqlite", false)), waitForOwner });
     expect(waitForOwner).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
   });
@@ -149,7 +149,7 @@ describe("prepareGatewayStateStore", () => {
   it("keeps existing local credentials after the previous owner releases", async () => {
     const waitForOwner = vi.fn(async () => "absent" as const);
     const run = vi.fn();
-    await prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("anchor", true)), hostname: THIS_POD, waitForOwner });
+    await prepareGatewayStateStore({ log: () => {}, env: userEnv(stateRoot("anchor", true)), hostname: THIS_POD, waitForOwner });
     expect(waitForOwner).toHaveBeenCalledWith(expect.objectContaining({ anchor, gatewayId: GATEWAY, hostname: THIS_POD }));
     expect(run).not.toHaveBeenCalled();
   });
@@ -157,7 +157,7 @@ describe("prepareGatewayStateStore", () => {
   it("allows normal startup with missing credentials after the previous owner releases", async () => {
     const waitForOwner = vi.fn(async () => "absent" as const);
     const logs: string[] = [];
-    await prepareGatewayStateStore({ log: message => logs.push(message), env: builderEnv(stateRoot("anchor", false)), waitForOwner });
+    await prepareGatewayStateStore({ log: message => logs.push(message), env: userEnv(stateRoot("anchor", false)), waitForOwner });
     expect(waitForOwner).toHaveBeenCalledOnce();
     expect(logs.join("\n")).toContain("OpenClaw prepares new local client identities at startup");
   });
@@ -165,7 +165,7 @@ describe("prepareGatewayStateStore", () => {
   it("does not run Doctor or rebind credentials while a foreign owner remains", async () => {
     const departed = leaseStore({ owner: "o1", heartbeatAt: 1, host: PREVIOUS_POD });
     const time = clock(1_000_000), run = vi.fn(async () => ({ code: 0, stdout: "" }));
-    await expect(prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("anchor", false)), hostname: THIS_POD,
+    await expect(prepareGatewayStateStore({ log: () => {}, env: userEnv(stateRoot("anchor", false)), hostname: THIS_POD,
       waitForOwner: input => waitForGatewayOwnerRelease({ ...input, query: departed.query, ...time }) }))
       .rejects.toThrow(/independent physical-stop proof/);
     expect(run).not.toHaveBeenCalled();

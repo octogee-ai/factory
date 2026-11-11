@@ -1,4 +1,4 @@
-import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
+import { userClaimSlug } from "@octogee/shared/server/user-claim";
 type JsonObject = Record<string, unknown>;
 
 function objectAt(parent: JsonObject, key: string): JsonObject {
@@ -38,7 +38,7 @@ const FILE_TRANSFER_NODE_COMMANDS = [
   "workspace.skills",
 ] as const;
 
-function builderComputer(env: NodeJS.ProcessEnv): boolean {
+function gatewayVm(env: NodeJS.ProcessEnv): boolean {
   return env.GATEWAY_CLASS === "builder" && (env.GATEWAY_RUNTIME_KIND === "gce-vm" ||
     (env.GATEWAY_RUNTIME_KIND === "cluster" && env.GATEWAY_COMPUTER_DESKTOP === "x11"));
 }
@@ -47,10 +47,10 @@ export function applyComputerBrowserAgentPolicy(
   agent: JsonObject,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
-  if (!builderComputer(env)) return;
-  const ownerSlug = builderClaimSlug(env);
-  const ownerCoach = ownerSlug && agent.id === `octogee-${ownerSlug}-coach`;
-  if (ownerCoach) {
+  if (!gatewayVm(env)) return;
+  const ownerSlug = userClaimSlug(env);
+  const ownerDefaultAgent = ownerSlug && agent.id === `octogee-${ownerSlug}-coach`;
+  if (ownerDefaultAgent) {
     const tools = agent.tools;
     if (!tools || typeof tools !== "object" || Array.isArray(tools)) return;
     const policy = tools as JsonObject;
@@ -69,7 +69,7 @@ export function applyOpenClawComputerBrowserConfig(
   config: JsonObject,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  if (!builderComputer(env)) return false;
+  if (!gatewayVm(env)) return false;
   const before = JSON.stringify(config);
   Object.assign(objectAt(objectAt(config, "desktop"), "host"), {
     enabled: true,

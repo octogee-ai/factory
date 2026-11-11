@@ -1,17 +1,17 @@
 import { isDeepStrictEqual } from 'node:util';
 import { spawn } from 'node:child_process';
-import type { CustomerMigrationV2State, Operation, SourceTransferExecution } from '@octogee/shared/types/glm';
+import type { UserMigrationV2State, Operation, SourceTransferExecution } from '@octogee/shared/types/glm';
 import type { AssignmentDoc } from '@octogee/shared/types/gateway-releases';
 import { accountAllowsInteractiveAccess } from '@octogee/shared/types/account-lifecycle';
-import { isCustomerMigrationV2ForwardOnly } from '@octogee/core/customer-migration-v2';
-import { builderRuntimeMutationFenced } from '@octogee/core/gateway-retirement-claim';
-import type { BuilderRecord, GatewayRoot, OperationRecord, PlatformStateStore, PlatformStateTransaction, SourceTransferFence, Stored } from '@octogee/core/platform-state';
+import { isUserMigrationV2ForwardOnly } from '@octogee/core/user-migration-v2';
+import { isolatedRuntimeMutationFenced } from '@octogee/core/gateway-retirement-claim';
+import type { PlatformUserRecord, GatewayRoot, OperationRecord, PlatformStateStore, PlatformStateTransaction, SourceTransferFence, Stored } from '@octogee/core/platform-state';
 import type { PushRsyncStateRequestBody } from '@octogee/shared/types/fleet-controller';
 import type { CommandRunner } from './migration-rsync-transfer.js';
 import { planSourceTransfer, observeSourceTransfer, sourceTransferBlocksRelease, type SourceTransferPod } from './source-transfer-execution.js';
 import { runGatewayRuntimeExclusive } from './gateway-runtime-mutation.js';
 
-export interface RetainedSourceContext { op: Operation; state: CustomerMigrationV2State }
+export interface RetainedSourceContext { op: Operation; state: UserMigrationV2State }
 export interface RetainedSourceTarget { name: string; podIP: string; vm: boolean }
 export interface RetainedSourceTransfer {
   observe(): Promise<SourceTransferExecution | undefined>;
@@ -28,27 +28,27 @@ function retainedSourceCancellationDeferred(context: RetainedSourceContext, fres
   return [fresh?.kind==='migrate-customer',state.operationId===op.id,
     fresh?.input?.sourceTransferMode==='retained-pod',fresh?.input?.uid===state.uid,
     fresh?.input?.fromGatewayId===state.sourceGatewayId,fresh?.input?.toGatewayId===state.targetGatewayId,
-    isCustomerMigrationV2ForwardOnly(state),isDeepStrictEqual(fresh?.customerMigrationV2,state)].every(Boolean);
+    isUserMigrationV2ForwardOnly(state),isDeepStrictEqual(fresh?.customerMigrationV2,state)].every(Boolean);
 }
 
-export function assertRetainedSourceAuthority(input: RetainedSourceContext, fresh: OperationRecord | null, builder: Stored<BuilderRecord> | null, assignment: AssignmentDoc | null, roots: {source:GatewayRoot|null;target:GatewayRoot|null}): void {
+export function assertRetainedSourceAuthority(input: RetainedSourceContext, fresh: OperationRecord | null, user: Stored<PlatformUserRecord> | null, assignment: AssignmentDoc | null, roots: {source:GatewayRoot|null;target:GatewayRoot|null}): void {
   const {op,state} = input;
   const {source:root,target}=roots;
   if (!fresh) throw new Error('source transfer operation unavailable');
   const durable = fresh.customerMigrationV2;
   if (!durable) throw new Error('retained source transfer has no durable migration');
-  const exact = builder !== null && assignment !== null && root !== null && target !== null && [
+  const exact = user !== null && assignment !== null && root !== null && target !== null && [
     fresh.kind === 'migrate-customer', fresh.status === 'running', fresh.startedAt === op.startedAt,
     fresh.input.sourceTransferMode === 'retained-pod', fresh.input.uid === state.uid,
     fresh.input.fromGatewayId === state.sourceGatewayId, fresh.input.toGatewayId === state.targetGatewayId,
-    fresh.cancellationRequestedAt === undefined || retainedSourceCancellationDeferred(input,fresh), !builderRuntimeMutationFenced(builder),
+    fresh.cancellationRequestedAt === undefined || retainedSourceCancellationDeferred(input,fresh), !isolatedRuntimeMutationFenced(user),
     fresh.restoreAttempt === undefined || fresh.restoreAttempt.phase === 'acknowledged',
     durable.phase === 'sourceQuiesced', durable.operationId === op.id,
     durable.migrationId === state.migrationId, durable.uid === state.uid, durable.slug === state.slug,
     durable.sourceGatewayId === state.sourceGatewayId, durable.sourceEpoch === state.sourceEpoch,
     durable.targetGatewayId === state.targetGatewayId, state.sourceGatewayId.startsWith('shared-'),
-    state.sourceAssignmentMode === 'assigned', builder.slug === state.slug,
-    builder.gateway?.gatewayId === state.sourceGatewayId, accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined }),
+    state.sourceAssignmentMode === 'assigned', user.slug === state.slug,
+    user.gateway?.gatewayId === state.sourceGatewayId, accountAllowsInteractiveAccess({ accountLifecycle: user.accountLifecycle ?? undefined }),
     assignment.uid === state.uid, assignment.slug === state.slug, assignment.gatewayId === state.sourceGatewayId,
     assignment.epoch === state.sourceEpoch, assignment.state === 'quiescing',
     assignment.updatedByOperationId === op.id, root.gatewayClass === 'shared',
@@ -120,16 +120,16 @@ export function createRetainedSourceTransfer(deps: Deps, context: RetainedSource
   }
   async function persistObservation(current: SourceTransferExecution, observed: SourceTransferExecution, requireClaim = false): Promise<SourceTransferExecution> {
     await deps.store.transaction({label:'retained-source-transfer.persist-observation'},async tx => {
-      const [fresh,builder] = await Promise.all([tx.journal.operations.get(context.op.id),tx.builders.records.get(current.uid)]);
+      const [fresh,user] = await Promise.all([tx.journal.operations.get(context.op.id),tx.users.records.get(current.uid)]);
       if (requireClaim) requireActiveClaim(fresh,true);
       if (fresh?.sourceTransferExecution?.executionId !== current.executionId) throw new Error('source transfer execution changed');
       if (!isDeepStrictEqual(fresh.sourceTransferExecution,current)) return;
-      const fence = builder?.fences.sourceTransferFence;
+      const fence = user?.fences.sourceTransferFence;
       if (!sourceTransferBlocksRelease(observed)) {
         const {status: _status,exitCode: _exitCode,failureReason: _reason,targetCleanup: _cleanup,...identity} = current;
         if (fence !== undefined || current.status !== 'transferred') {
           if (!isDeepStrictEqual(fence,identity)) throw new Error('source transfer user fence changed');
-          await tx.builders.records.setFence(current.uid,'sourceTransferFence',{clear:true},fence);
+          await tx.users.records.setFence(current.uid,'sourceTransferFence',{clear:true},fence);
         }
       }
       await tx.journal.operations.patch(context.op.id,{sourceTransferExecution:observed,lastProgressAt:deps.now()});
@@ -158,11 +158,11 @@ export function createRetainedSourceTransfer(deps: Deps, context: RetainedSource
   async function transitionAuthority(record: SourceTransferExecution, status: 'preparing'|'prepared'|'dispatched', requireClaim: boolean): Promise<SourceTransferExecution> {
     const next={...record,status};
     await deps.store.transaction({label:'retained-source-transfer.transition'},async tx => {
-      const [fresh,builder] = await Promise.all([tx.journal.operations.get(context.op.id),tx.builders.records.get(record.uid)]);
+      const [fresh,user] = await Promise.all([tx.journal.operations.get(context.op.id),tx.users.records.get(record.uid)]);
       const {status: _status,...identity}=record;
       const claimValid=!requireClaim || (fresh?.status === 'running' && fresh?.startedAt === context.op.startedAt && (fresh?.cancellationRequestedAt === undefined || retainedSourceCancellationDeferred(context,fresh)));
       const exact=[claimValid,isDeepStrictEqual(fresh?.sourceTransferExecution,record),
-        isDeepStrictEqual(builder?.fences.sourceTransferFence,identity)].every(Boolean);
+        isDeepStrictEqual(user?.fences.sourceTransferFence,identity)].every(Boolean);
       if (!exact) throw new Error('source transfer dispatch authority changed');
       await tx.journal.operations.patch(context.op.id,{sourceTransferExecution:next,lastProgressAt:deps.now()});
     });
@@ -181,8 +181,8 @@ export function createRetainedSourceTransfer(deps: Deps, context: RetainedSource
   }
   async function reserveAuthority(tx: PlatformStateTransaction): Promise<OperationRecord> {
     const {uid,sourceGatewayId,targetGatewayId}=context.state;
-    const [fresh,builder,assignment,roots] = await Promise.all([tx.journal.operations.get(context.op.id),tx.builders.records.get(uid),tx.gateways.assignments.get(sourceGatewayId,uid),tx.gateways.roots.getMany([sourceGatewayId,targetGatewayId])]);
-    assertRetainedSourceAuthority(context,fresh,builder,assignment,{source:roots.get(sourceGatewayId) ?? null,target:roots.get(targetGatewayId) ?? null});
+    const [fresh,user,assignment,roots] = await Promise.all([tx.journal.operations.get(context.op.id),tx.users.records.get(uid),tx.gateways.assignments.get(sourceGatewayId,uid),tx.gateways.roots.getMany([sourceGatewayId,targetGatewayId])]);
+    assertRetainedSourceAuthority(context,fresh,user,assignment,{source:roots.get(sourceGatewayId) ?? null,target:roots.get(targetGatewayId) ?? null});
     return fresh!;
   }
   async function probeResources(record: SourceTransferExecution, container: string) {
@@ -230,7 +230,7 @@ export function createRetainedSourceTransfer(deps: Deps, context: RetainedSource
         if (fresh.sourceTransferExecution) throw new Error('source transfer already reserved');
         await tx.journal.operations.patch(context.op.id,{sourceTransferExecution:source.planned.record,lastProgressAt:deps.now()});
         const {status: _status,...identity} = source.planned.record;
-        await tx.builders.records.setFence(context.state.uid,'sourceTransferFence',identity as SourceTransferFence,'absent');
+        await tx.users.records.setFence(context.state.uid,'sourceTransferFence',identity as SourceTransferFence,'absent');
       });
       return { kind: 'reserved' as const, ...source };
     });

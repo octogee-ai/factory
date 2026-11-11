@@ -186,7 +186,7 @@ describe("removeBrokerTokenExpiriesForSlug", () => {
     return filename;
   }
 
-  it("removes every expiry record of the customer's agents and nobody else's", () => {
+  it("removes every expiry record of the user's agents and nobody else's", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-token-expiry-"));
     const log = vi.fn();
     try {

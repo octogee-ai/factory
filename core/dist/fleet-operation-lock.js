@@ -1,4 +1,4 @@
-import { isBuilderReturnOperationIdFor } from "./builder-activation-lease.js";
+import { isUserReturnOperationIdFor } from "./user-activation-lease.js";
 const SERIAL_KINDS = new Set([
     "rollout",
     "migrate-customer",
@@ -40,7 +40,7 @@ function nativeReturnBlocksSourceRollout(rollout, returning) {
     const input = returning.input;
     return source !== undefined && source === rolloutGateway && input?.source === "builder-activation-lease" &&
         typeof input.toGatewayId === "string" && input.toGatewayId.startsWith("shared-") &&
-        isBuilderReturnOperationIdFor(returning.id, source);
+        isUserReturnOperationIdFor(returning.id, source);
 }
 export function serialFleetOperationsConflict(candidate, other) {
     if (!SERIAL_KINDS.has(candidate.kind) || !SERIAL_KINDS.has(other.kind))
@@ -66,7 +66,7 @@ export class GatewayMigrationInFlightError extends Error {
     gatewayId;
     operationId;
     constructor(gatewayId, operationId) {
-        super(`customer migration is in flight for gateway ${gatewayId}`);
+        super(`user migration is in flight for gateway ${gatewayId}`);
         this.gatewayId = gatewayId;
         this.operationId = operationId;
         this.name = "GatewayMigrationInFlightError";

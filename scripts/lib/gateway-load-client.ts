@@ -29,13 +29,13 @@ function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-export function coachMessages(history: unknown, channelId: string, coachId: string) {
+export function defaultAgentMessages(history: unknown, channelId: string, userDefaultAgentId: string) {
   const data = record(history), posts = record(data.posts);
   if (!Array.isArray(data.order) || !data.posts || typeof data.posts !== "object" || Array.isArray(data.posts)) throw new Error("Invalid Mattermost history");
   const messages: { role: string; content: string }[] = [];
   for (const id of data.order) {
     const post = record(posts[String(id)]), meta = record(record(post.props).octogee);
-    if (post.channel_id === channelId && post.user_id === coachId && post.delete_at === 0 && post.type === ""
+    if (post.channel_id === channelId && post.user_id === userDefaultAgentId && post.delete_at === 0 && post.type === ""
       && !meta.kind && !meta.itemId && typeof post.message === "string") messages.push({ role: "assistant", content: post.message });
   }
   return { messages };
@@ -79,15 +79,15 @@ export async function connectLoadClient(input: {
     return record(await response.json());
   };
   const route = await request("/api/mattermost/token", token);
-  if (route.gatewayId !== gatewayId || typeof route.coachMmUserId !== "string" || !/^[a-z0-9]{26}$/.test(route.coachMmUserId)) {
-    throw new Error("Unexpected TEST gateway route or coach");
+  if (route.gatewayId !== gatewayId || typeof route.defaultAgentMmUserId !== "string" || !/^[a-z0-9]{26}$/.test(route.defaultAgentMmUserId)) {
+    throw new Error("Unexpected TEST gateway route or agent");
   }
   const credentials = await request("/api/auth/mattermost", token, { method: "POST" });
   if (credentials.mmUrl !== TEST_API_ORIGIN || typeof credentials.mmToken !== "string" || !credentials.mmToken
     || typeof credentials.mmUserId !== "string" || !/^[a-z0-9]{26}$/.test(credentials.mmUserId) || credentials.mmUserId !== route.mmUserId) {
     throw new Error("Unexpected TEST Mattermost credentials");
   }
-  const mmToken = credentials.mmToken, coachId = route.coachMmUserId;
+  const mmToken = credentials.mmToken, userDefaultAgentId = route.defaultAgentMmUserId;
   signal.throwIfAborted();
   const ws = new WebSocket(`wss://api-test.octogee.com/g/${gatewayId}/api/v4/websocket`, {
     headers: { Origin: "https://app-test.octogee.com" }, maxPayload: 4 * 1024 * 1024,
@@ -107,7 +107,7 @@ export async function connectLoadClient(input: {
         check();
         const history = await request(`/api/v4/channels/${target.channelId}/posts?page=0&per_page=100`, mmToken);
         check();
-        return coachMessages(history, target.channelId, coachId);
+        return defaultAgentMessages(history, target.channelId, userDefaultAgentId);
       },
       send: async (message, idempotencyKey) => {
         check();

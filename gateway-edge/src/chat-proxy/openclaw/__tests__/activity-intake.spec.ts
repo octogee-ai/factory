@@ -79,7 +79,7 @@ const binding = {
   inputPostId: "turn-1",
   channelDocPath: "workspaces/acme/channels/build",
   channelCreateAt: 100,
-  coachMmUserId: "agent-mm-user",
+  defaultAgentMmUserId: "agent-mm-user",
   coachToken: "coach-token",
   attentionMention: "@builder",
 };

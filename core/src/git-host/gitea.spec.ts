@@ -124,7 +124,7 @@ describe("createGiteaGitHost — managed Gitea admin operations", () => {
         .mockResolvedValueOnce(res(204))
         .mockResolvedValueOnce(res(201, {}));
       await expect(
-        host.registerKey("acme", "ssh-ed25519 WANT successor-pod", "bender/pod-new"),
+        host.registerKey("acme", "ssh-ed25519 WANT successor-pod", "walter/pod-new"),
       ).resolves.toBeUndefined();
 
       expect(callsTo(fetchMock)).toEqual([
@@ -135,7 +135,7 @@ describe("createGiteaGitHost — managed Gitea admin operations", () => {
           method: "POST",
           url: `${BASE}/admin/users/ws-acme/keys`,
           body: {
-            title: "octogee-gateway-b1171f5ba2aca02a",
+            title: "octogee-gateway-95330059c99a4eab",
             key: "ssh-ed25519 WANT successor-pod",
           },
         }),
@@ -143,7 +143,7 @@ describe("createGiteaGitHost — managed Gitea admin operations", () => {
     });
 
     it("restores the predecessor key when inherited-key ownership transfer fails", async () => {
-      const predecessorOwner = "bender/pod-old";
+      const predecessorOwner = "walter/pod-old";
       const predecessorTitle = keyTitle(predecessorOwner);
       const inheritedKey = "ssh-ed25519 WANT inherited-from-source";
       fetchMock
@@ -158,7 +158,7 @@ describe("createGiteaGitHost — managed Gitea admin operations", () => {
         .mockResolvedValueOnce(res(200, []))
         .mockResolvedValueOnce(res(201, {}));
       await expect(
-        host.registerKey("acme", inheritedKey, "bender/pod-new"),
+        host.registerKey("acme", inheritedKey, "walter/pod-new"),
       ).rejects.toThrow(/register-key.*500.*target registration failed/);
 
       const calls = callsTo(fetchMock);
@@ -169,7 +169,7 @@ describe("createGiteaGitHost — managed Gitea admin operations", () => {
         expect.objectContaining({
           method: "POST",
           url: `${BASE}/admin/users/ws-acme/keys`,
-          body: { title: keyTitle("bender/pod-new"), key: inheritedKey },
+          body: { title: keyTitle("walter/pod-new"), key: inheritedKey },
         }),
         expect.objectContaining({ method: "GET", url: `${BASE}/users/ws-acme/keys?limit=50&page=1` }),
         expect.objectContaining({
@@ -181,8 +181,8 @@ describe("createGiteaGitHost — managed Gitea admin operations", () => {
     });
 
     it("transfers an inherited key to the target so source release cannot remove it", async () => {
-      const predecessorOwner = "bender/pod-old";
-      const successorOwner = "bender/pod-new";
+      const predecessorOwner = "walter/pod-old";
+      const successorOwner = "walter/pod-new";
       const inheritedKey = "ssh-ed25519 WANT inherited-from-source";
       let keys = [{ id: 9, title: keyTitle(predecessorOwner), key: inheritedKey }];
       let nextKeyId = 10;
@@ -221,11 +221,11 @@ describe("createGiteaGitHost — managed Gitea admin operations", () => {
         .mockResolvedValueOnce(res(422, {}))
         .mockResolvedValueOnce(res(200, [
           { id: 7, title: "octogee-gateway-predecessor", key: "ssh-ed25519 OLD" },
-          { id: 9, title: "octogee-gateway-b1171f5ba2aca02a", key: "ssh-ed25519 STALE" },
+          { id: 9, title: "octogee-gateway-95330059c99a4eab", key: "ssh-ed25519 STALE" },
         ]))
         .mockResolvedValueOnce(res(204))
         .mockResolvedValueOnce(res(201, {}));
-      await host.registerKey("acme", "ssh-ed25519 NEW", "bender/pod-new");
+      await host.registerKey("acme", "ssh-ed25519 NEW", "walter/pod-new");
 
       const calls = callsTo(fetchMock);
       expect(calls.filter((call) => call.method === "DELETE")).toEqual([
@@ -233,7 +233,7 @@ describe("createGiteaGitHost — managed Gitea admin operations", () => {
       ]);
       expect(calls.at(-1)).toMatchObject({
         method: "POST",
-        body: { title: "octogee-gateway-b1171f5ba2aca02a", key: "ssh-ed25519 NEW" },
+        body: { title: "octogee-gateway-95330059c99a4eab", key: "ssh-ed25519 NEW" },
       });
     });
 
@@ -343,7 +343,7 @@ describe("createGiteaGitHost — managed Gitea admin operations", () => {
       fetchMock.mockResolvedValueOnce(res(200, [
         { id: 7, title: "octogee-gateway-predecessor", key: "ssh-ed25519 OLD" },
       ]));
-      await host.releaseKey("acme", "ssh-ed25519 OLD", "bender/pod-new");
+      await host.releaseKey("acme", "ssh-ed25519 OLD", "walter/pod-new");
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
@@ -482,8 +482,8 @@ describe("createGiteaGitHost — managed Gitea admin operations", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  describe("ensureRepo project-coaches", () => {
-    it("creates the private project coaches repo on main", async () => {
+  describe("ensureRepo project-agents", () => {
+    it("creates the private project agents repo on main", async () => {
       fetchMock.mockResolvedValueOnce(res(201, {}));
       await host.ensureRepo("acme", { kind: "project-coaches" });
 

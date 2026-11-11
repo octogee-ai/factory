@@ -56,7 +56,7 @@ function legacyManifest() {
   };
 }
 
-function preBuilderManifest() {
+function preUserManifest() {
   return {
     schemaVersion: 2,
     sourceSha,
@@ -182,8 +182,8 @@ describe("release digest manifest", () => {
     expect(validateBaselineReleaseDigestManifest(legacyManifest(), sourceSha, repository)).toEqual(
       legacyManifest(),
     );
-    expect(validateBaselineReleaseDigestManifest(preBuilderManifest(), sourceSha, repository)).toEqual(
-      preBuilderManifest(),
+    expect(validateBaselineReleaseDigestManifest(preUserManifest(), sourceSha, repository)).toEqual(
+      preUserManifest(),
     );
     expect(validateBaselineReleaseDigestManifest(
       preOpenclawSourceManifest,
@@ -194,7 +194,7 @@ describe("release digest manifest", () => {
     expect(() => validateReleaseDigestManifest(legacyManifest(), sourceSha, repository)).toThrow(
       "manifest schemaVersion must be 4",
     );
-    expect(() => validateReleaseDigestManifest(preBuilderManifest(), sourceSha, repository)).toThrow(
+    expect(() => validateReleaseDigestManifest(preUserManifest(), sourceSha, repository)).toThrow(
       "manifest schemaVersion must be 4",
     );
   });

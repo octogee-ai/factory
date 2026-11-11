@@ -38,13 +38,13 @@ async function resolveInviteeByEmail(email: string): Promise<InviteeResolution> 
   const snap = await db.collection("users").where("email", "==", normalizedEmail).limit(1).get();
   if (snap.empty) return { ok: false, status: 404, error: "No Octogee user found with that email" };
   const data = snap.docs[0].data();
-  const builder = await platformStateStore.builders.records.get(snap.docs[0].id);
-  if (!builder?.mattermostUserId) return { ok: false, status: 400, error: "That user's workspace isn't set up yet" };
+  const userRecord = await platformStateStore.users.records.get(snap.docs[0].id);
+  if (!userRecord?.mattermostUserId) return { ok: false, status: 400, error: "That user's workspace isn't set up yet" };
   return {
     ok: true,
     id: snap.docs[0].id,
     firstName: data.firstName || "",
-    mmUserId: builder.mattermostUserId,
+    mmUserId: userRecord.mattermostUserId,
     normalizedEmail,
   };
 }
@@ -113,11 +113,11 @@ router.get("/token", requireAuth, async (req: Request, res: Response, next: Next
     }
 
     const proxyUrl = process.env.API_PUBLIC_URL || "";
-    const coachMmUserId = ctx.coachUserId || null;
+    const defaultAgentMmUserId = ctx.coachUserId || null;
     const coachName = userData.onboarding?.coachName || null;
     const gatewayId = extractValidGatewayId(userData);
 
-    res.json({ mmUserId, dmChannelId, proxyUrl, gatewayId, coachMmUserId, coachName });
+    res.json({ mmUserId, dmChannelId, proxyUrl, gatewayId, coachMmUserId: defaultAgentMmUserId, coachName });
   } catch (e) { next(e); }
 });
 

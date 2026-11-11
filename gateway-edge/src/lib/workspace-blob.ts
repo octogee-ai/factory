@@ -164,7 +164,7 @@ async function saveBlobObject(blobs: BlobStore, key: string, fileBuffer: Buffer,
  * The single way a binary lands in a workspace: save to GCS, generate a 128²
  * thumbnail for images, and write the `.files/manifest.json` placeholder in
  * Gitea. GCS durability + boot-time recovery come for free via blob-sync, and
- * the Files view reads the manifest. Used by `/upload-blob` and by the coach
+ * the Files view reads the manifest. Used by `/upload-blob` and by the agent
  * avatar path — one path, no duplication.
  */
 export async function storeWorkspaceBlob(

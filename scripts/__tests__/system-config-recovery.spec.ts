@@ -15,9 +15,9 @@ import {
 const dirs: string[] = [];
 const env = {
   GATEWAY_CLASS: "shared",
-  GATEWAY_ID: "bender",
+  GATEWAY_ID: "walter",
   API_PUBLIC_URL: "https://api-test.octogee.com",
-  GATEWAY_REVISION_ID: "bender-r9",
+  GATEWAY_REVISION_ID: "walter-r9",
   OPENCLAW_VERSION: "2026.7.1",
 };
 
@@ -141,7 +141,7 @@ describe("system config accepted-head recovery", () => {
       "migration-checkpoint: sync openclaw config 2026-07-21T10:00:00.000Z",
       "",
       "Octogee-Config-Source: migration-checkpoint",
-      "Octogee-Gateway: bender",
+      "Octogee-Gateway: walter",
       "OpenClaw-Version: 2026.7.1",
       `Octogee-Migration-Source: ${sourceCommit}`,
     ].join("\n");
@@ -185,7 +185,7 @@ describe("system config accepted-head recovery", () => {
       "boot-migration: sync openclaw config 2026-07-21T10:00:00.000Z",
       "",
       "Octogee-Config-Source: boot-migration",
-      "Octogee-Gateway: bender",
+      "Octogee-Gateway: walter",
       "OpenClaw-Version: 2026.7.1",
     ].join("\n");
     const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
@@ -221,11 +221,11 @@ describe("system config accepted-head recovery", () => {
   });
 
   it.each([
-    ["a non-direct descendant", "c".repeat(40), "migration-checkpoint", "bender", "a".repeat(40)],
+    ["a non-direct descendant", "c".repeat(40), "migration-checkpoint", "walter", "a".repeat(40)],
     ["another gateway", "a".repeat(40), "migration-checkpoint", "other", "a".repeat(40)],
-    ["an ordinary config commit", "a".repeat(40), "auto-watch", "bender", "a".repeat(40)],
+    ["an ordinary config commit", "a".repeat(40), "auto-watch", "walter", "a".repeat(40)],
     ["another gateway boot checkpoint", "a".repeat(40), "boot-migration", "other", "a".repeat(40)],
-    ["another source pin", "a".repeat(40), "migration-checkpoint", "bender", "c".repeat(40)],
+    ["another source pin", "a".repeat(40), "migration-checkpoint", "walter", "c".repeat(40)],
   ])("rejects a fetched target tip attributed to %s", (
     _case,
     parentCommit,
@@ -286,7 +286,7 @@ describe("system config accepted-head recovery", () => {
       readCommitBlob: readSystemConfigCommitBlob,
       validateConfig: vi.fn(),
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       log: () => {},
     });
 
@@ -362,8 +362,8 @@ describe("system config accepted-head recovery", () => {
       commands.push(command);
       if (command === "rev-parse HEAD") return head;
       if (command === "rev-list HEAD") return `bad111\n${newestValidAncestor}\n${olderValidAncestor}`;
-      if (command === `show ${newestValidAncestor}:openclaw.json`) return '{"customerSetting":true}\n';
-      if (command === `show ${olderValidAncestor}:openclaw.json`) return validConfig({ customerSetting: false });
+      if (command === `show ${newestValidAncestor}:openclaw.json`) return '{"userSetting":true}\n';
+      if (command === `show ${olderValidAncestor}:openclaw.json`) return validConfig({ userSetting: false });
       if (command === `show ${newestValidAncestor}:.octogee.json` ||
           command === `show ${olderValidAncestor}:.octogee.json`) return '{"schemaVersion":1}\n';
       if (command === `show ${newestValidAncestor}:.gitignore` ||
@@ -384,7 +384,7 @@ describe("system config accepted-head recovery", () => {
       gitExec,
       validateConfig: (candidatePath) => {
         const parsed = JSON.parse(fs.readFileSync(candidatePath, "utf8")) as Record<string, unknown>;
-        if (parsed.customerSetting === undefined) throw new Error("invalid head");
+        if (parsed.userSetting === undefined) throw new Error("invalid head");
       },
       now: () => new Date("2026-07-14T20:00:00.000Z"),
     });
@@ -395,7 +395,7 @@ describe("system config accepted-head recovery", () => {
       recoveredFromCommit: newestValidAncestor,
       acceptedCommit: "recovered444",
     });
-    expect(JSON.parse(fs.readFileSync(h.configPath, "utf8"))).toMatchObject({ customerSetting: true });
+    expect(JSON.parse(fs.readFileSync(h.configPath, "utf8"))).toMatchObject({ userSetting: true });
     expect(JSON.parse(fs.readFileSync(h.configPath, "utf8"))).toMatchObject({
       gateway: {
         port: 18789,
@@ -405,7 +405,7 @@ describe("system config accepted-head recovery", () => {
       },
     });
     expect(commands.some((command) => command.includes("Octogee-Config-Source: recovery"))).toBe(true);
-    expect(commands.some((command) => command.includes("Octogee-Gateway: bender"))).toBe(true);
+    expect(commands.some((command) => command.includes("Octogee-Gateway: walter"))).toBe(true);
     expect(commands.some((command) => command.includes("OpenClaw-Version: 2026.7.1"))).toBe(true);
     expect(commands.at(-1)).toBe("rev-parse HEAD");
   });
@@ -529,17 +529,17 @@ describe("system config accepted-head recovery", () => {
   it("reconciles the latest committed config before considering an older ancestor", () => {
     const latest = "a".repeat(40);
     const ancestor = "b".repeat(40);
-    const h = fixture('{"gateway":{"port":9000},"customerSetting":"latest"}\n');
+    const h = fixture('{"gateway":{"port":9000},"userSetting":"latest"}\n');
     let head = latest;
     const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
       const command = commandArgv.join(" ");
       if (command === "rev-parse HEAD") return head;
       if (command === "rev-list HEAD") return `${latest}\n${ancestor}`;
       if (command === `show ${latest}:openclaw.json`) {
-        return '{"gateway":{"port":9000},"customerSetting":"latest"}\n';
+        return '{"gateway":{"port":9000},"userSetting":"latest"}\n';
       }
       if (command === `show ${ancestor}:openclaw.json`) {
-        return validConfig({ customerSetting: "ancestor" });
+        return validConfig({ userSetting: "ancestor" });
       }
       if (command.endsWith(":.octogee.json")) return '{"schemaVersion":1}\n';
       if (command.endsWith(":.gitignore")) return "*.bak\n*.tmp\n";
@@ -566,7 +566,7 @@ describe("system config accepted-head recovery", () => {
     });
     expect(JSON.parse(fs.readFileSync(h.configPath, "utf8"))).toMatchObject({
       gateway: { port: 18789, mode: "local", bind: "lan" },
-      customerSetting: "latest",
+      userSetting: "latest",
     });
     expect(gitExec.mock.calls.filter(([, argv]) => argv[0] === "commit")).toHaveLength(1);
     expect(gitExec.mock.calls.filter(([, argv]) => argv.join(" ") === "push origin main")).toHaveLength(1);

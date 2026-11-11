@@ -16,14 +16,14 @@ export interface ContextFilePolicy {
 export type ProductFields = Readonly<Record<string, unknown>>;
 export interface UserProductProjection {
     agentUsageStatus(user: UserEntitlementInputs, now: Date): ProductFields;
-    agentSupportBuilder(user: UserEntitlementInputs): ProductFields;
+    agentSupportUser(user: UserEntitlementInputs): ProductFields;
     agentModels(user: UserEntitlementInputs): ProductFields;
-    adminCustomerSummary(user: UserEntitlementInputs, usage: {
+    adminUserSummary(user: UserEntitlementInputs, usage: {
         costUsd: number;
         now: Date;
     }): ProductFields;
-    adminCustomerDetail(user: UserEntitlementInputs): ProductFields;
-    adminCustomerStats(summaries: readonly ProductFields[]): ProductFields;
+    adminUserDetail(user: UserEntitlementInputs): ProductFields;
+    adminUserStats(summaries: readonly ProductFields[]): ProductFields;
 }
 export interface UserSpendObservation {
     windowCostUsd: number;

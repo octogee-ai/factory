@@ -26,7 +26,7 @@ export function parseFinalReply(value: unknown): NativeFinalReply | null {
 export interface FinalReplyIdentity {
   agentId: string;
   uid: string;
-  coachMmUserId: string;
+  defaultAgentMmUserId: string;
   coachToken: string;
 }
 
@@ -51,7 +51,7 @@ export interface FinalReplyTarget {
 }
 
 export interface FinalReplyNotification {
-  coachMmUserId: string;
+  defaultAgentMmUserId: string;
   channelId: string;
   postId: string;
   message: string;
@@ -89,7 +89,7 @@ function authorizedPost(
   route: MattermostSessionRoute,
   identity: FinalReplyIdentity,
 ): post is FinalReplyPost {
-  return Boolean(post && post.id === input.messageId && post.userId === identity.coachMmUserId
+  return Boolean(post && post.id === input.messageId && post.userId === identity.defaultAgentMmUserId
     && !post.deleteAt && matchesThread(post, route)
     && (route.peerKind === "direct" || post.channelId === route.primaryChannelId));
 }
@@ -104,7 +104,7 @@ function authorizedTarget(
   if (route.peerKind === "direct") {
     return target.expectedChannelType === "D" && target.recipientUid === identity.uid
       && target.recipientMmUserId === route.primaryChannelId && target.expectedMemberIds?.length === 2
-      && target.expectedMemberIds.includes(identity.coachMmUserId)
+      && target.expectedMemberIds.includes(identity.defaultAgentMmUserId)
       && target.expectedMemberIds.includes(route.primaryChannelId);
   }
   return target.expectedChannelType === "P" && target.expectedMemberIds === undefined
@@ -114,7 +114,7 @@ function authorizedTarget(
 export async function notifyNativeFinalReply(input: NativeFinalReply, deps: NativeFinalReplyDeps): Promise<void> {
   const route = authorizedRoute(input);
   const identity = await deps.resolveAgentIdentity(route.agentId);
-  if (!identity || identity.agentId !== route.agentId || !identity.coachMmUserId || !identity.coachToken) {
+  if (!identity || identity.agentId !== route.agentId || !identity.defaultAgentMmUserId || !identity.coachToken) {
     throw new ReplyBindingDeniedError();
   }
   const post = await deps.getPost(identity, input.messageId);
@@ -125,6 +125,6 @@ export async function notifyNativeFinalReply(input: NativeFinalReply, deps: Nati
   await deps.verifyChannel(identity, target);
   const message = post.message?.trim() || (post.fileIds.length ? "Sent an attachment" : "");
   if (!message) return;
-  await deps.notify({ coachMmUserId: identity.coachMmUserId, channelId: post.channelId,
+  await deps.notify({ defaultAgentMmUserId: identity.defaultAgentMmUserId, channelId: post.channelId,
     postId: post.id, message }, target.recipientUid);
 }

@@ -68,8 +68,8 @@ import {
   type MattermostChatPreparation,
   type MattermostControlChat,
 } from "./mattermost-chat.js";
-import type { ClaimedBuilderIdentity } from "@octogee/shared/types/builder-identity";
-import { claimedBuilderIdentity } from "../lib/builder-identity.js";
+import type { ClaimedUserIdentity } from "@octogee/shared/types/builder-identity";
+import { claimedUserIdentity } from "../lib/user-identity.js";
 
 const MAX_BROWSER_WS_FRAME_BYTES = 1_048_576;
 const MAX_UPSTREAM_WS_FRAME_BYTES = 25 * 1024 * 1024;
@@ -251,7 +251,7 @@ function metricIdentity(env: NodeJS.ProcessEnv): OpenClawControlMetricIdentity {
 export function invariantContext(
   env: NodeJS.ProcessEnv,
   gatewayId: string,
-  identity: ClaimedBuilderIdentity | null,
+  identity: ClaimedUserIdentity | null,
 ): SystemConfigInvariantContext | null {
   const value = gatewayClass(env);
   const brokerProviderEnv = {
@@ -1709,7 +1709,7 @@ class OpenClawControlSocketBridge {
       return;
     }
     const evaluated = this.args.proxyIdentity.enabled && !managedConfigWrite;
-    const context = evaluated ? null : invariantContext(this.args.env, this.activeSession.gatewayId, claimedBuilderIdentity());
+    const context = evaluated ? null : invariantContext(this.args.env, this.activeSession.gatewayId, claimedUserIdentity());
     if (!evaluated && !context) {
       this.deny(frame, { allowed: false, category, reason: "workspace-not-serving" }, "workspace-not-serving");
       return;

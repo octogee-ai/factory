@@ -1,13 +1,13 @@
-import { applyByotState, deriveDesiredByotState, type CoachModelInput, type CodexAppServerPatch } from "./byot-sync.js";
+import { applyByotState, deriveDesiredByotState, type DefaultAgentModelInput, type CodexAppServerPatch } from "./byot-sync.js";
 import { type GatewayRpcClient } from "./gateway-rpc.js";
 import { type ByosubProvider } from "./byosub-restore.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
 import { type AgentModelSelections } from "@octogee/shared/types/agent-models";
-export declare function applyCoachModelPatch(input: CoachModelInput | null, deps?: {
+export declare function applyDefaultAgentModelPatch(input: DefaultAgentModelInput | null, deps?: {
     applyConfigPatch?: typeof applyConfigPatch;
     logFn?: (m: string) => void;
 }): Promise<boolean>;
-export declare function applyCoachToolsConvergence(slug: string, houseOnly: boolean, deps?: {
+export declare function applyDefaultAgentToolsConvergence(slug: string, houseOnly: boolean, deps?: {
     applyConfigPatch?: typeof applyConfigPatch;
     logFn?: (m: string) => void;
 }): Promise<boolean>;
@@ -55,41 +55,41 @@ export declare function restoreOauthStoreForSlug(slug: string, deps?: {
     agentIds?: readonly string[];
     logFn?: (m: string) => void;
 }): Promise<OauthStoreRestoreResult>;
-export interface SyncByotForCustomerDeps {
-    isBuilderGateway?: () => boolean;
+export interface SyncByotForUserDeps {
+    isIsolatedGateway?: () => boolean;
     isSharedGateway?: () => boolean;
     usesLlmBrokerToken?: () => boolean;
     logFn?: (m: string) => void;
     applyConfigPatch?: typeof applyConfigPatch;
     applyByotState?: typeof applyByotState;
     restoreOauthStoreForSlug?: typeof restoreOauthStoreForSlug;
-    applyCoachModelPatch?: typeof applyCoachModelPatch;
-    applyCoachToolsConvergence?: typeof applyCoachToolsConvergence;
+    applyDefaultAgentModelPatch?: typeof applyDefaultAgentModelPatch;
+    applyDefaultAgentToolsConvergence?: typeof applyDefaultAgentToolsConvergence;
     applyOauthRuntimeModelAllowlist?: typeof applyOauthRuntimeModelAllowlist;
     requestGatewayRestart?: typeof requestGatewayRestartForRuntimeChange;
     triggerSecretsReload?: typeof triggerSecretsReload;
     materializePlatformBrokerSurfaces?: (slug: string) => Promise<boolean> | boolean;
-    purgeCustomerOauthRuntime?: typeof purgeCustomerOauthRuntime;
+    purgeUserOauthRuntime?: typeof purgeUserOauthRuntime;
     applyAgentModelOverrides?: typeof applyAgentModelOverrides;
-    refreshCoachRuntimeSessions?: typeof refreshCoachRuntimeSessions;
+    refreshDefaultAgentRuntimeSessions?: typeof refreshDefaultAgentRuntimeSessions;
     hasPendingPlatformCatalogRestart?: () => boolean;
     markPlatformCatalogRestartPending?: () => void;
     clearPlatformCatalogRestartPending?: () => void;
 }
 type SyncByotUserData = Parameters<typeof deriveDesiredByotState>[0];
 export declare function agentIdsForSlug(slug: string, config: unknown): string[];
-export declare const CUSTOMER_APPROVED_PLUGINS: readonly ["mattermost", "anthropic", "memory-core", "octogee-chat-tools", "octogee-activity-tools", "octogee-connector-tools", "octogee-access-tools", "octogee-project-tools", "octogee-board-tools", "octogee-status-tools", "octogee-broker-tools", "octogee-ops-tools", "octogee-web-tools", "octogee-workspace-tools", "parallel", "openai"];
+export declare const USER_APPROVED_PLUGINS: readonly ["mattermost", "anthropic", "memory-core", "octogee-chat-tools", "octogee-activity-tools", "octogee-connector-tools", "octogee-access-tools", "octogee-project-tools", "octogee-board-tools", "octogee-status-tools", "octogee-broker-tools", "octogee-ops-tools", "octogee-web-tools", "octogee-workspace-tools", "parallel", "openai"];
 export type GatewayResolutionEnv = Readonly<Record<string, string | undefined>>;
-export declare function customerSecurityProjectionReplacePaths(current: unknown): string[];
-export declare function customerOauthRuntimeConfigPatch(current: unknown, slug: string, safeModelRef: string, opts?: {
+export declare function userSecurityProjectionReplacePaths(current: unknown): string[];
+export declare function userOauthRuntimeConfigPatch(current: unknown, slug: string, safeModelRef: string, opts?: {
     forceSafeAll?: boolean;
     gatewayEnv?: GatewayResolutionEnv;
 }): Record<string, unknown>;
-export declare function customerMountConfigPatch(current: unknown, mountPatch: Record<string, unknown>, slug: string, safeModelRef: string, opts?: {
+export declare function userMountConfigPatch(current: unknown, mountPatch: Record<string, unknown>, slug: string, safeModelRef: string, opts?: {
     gatewayEnv?: GatewayResolutionEnv;
     forceSafeAll?: boolean;
 }): Record<string, unknown>;
-type PurgeCustomerOauthRuntimeDeps = {
+type PurgeUserOauthRuntimeDeps = {
     config?: unknown;
     openclawDir?: string;
     homeDir?: string;
@@ -98,12 +98,12 @@ type PurgeCustomerOauthRuntimeDeps = {
     logFn?: (message: string) => void;
     forceSafeAll?: boolean;
 };
-export declare function purgeCustomerOauthRuntime(slug: string, safeModelRef: string, deps?: PurgeCustomerOauthRuntimeDeps): Promise<{
+export declare function purgeUserOauthRuntime(slug: string, safeModelRef: string, deps?: PurgeUserOauthRuntimeDeps): Promise<{
     changed: boolean;
     resetCount: number;
 }>;
 type SessionPolicyRpc = Pick<GatewayRpcClient, "sessionsList" | "sessionsReset" | "close">;
-export declare function refreshCoachRuntimeSessions(slug: string, deps?: {
+export declare function refreshDefaultAgentRuntimeSessions(slug: string, deps?: {
     agentDir?: string;
     config?: unknown;
     rpc?: SessionPolicyRpc;
@@ -122,7 +122,7 @@ export interface PlatformModelAllowlistPatch {
         };
     };
 }
-export declare function platformModelAllowlistPatch(current: unknown, builder: boolean): PlatformModelAllowlistPatch;
-export declare function applyPlatformModelAllowlist(applyConfigPatchFn?: typeof applyConfigPatch, builder?: boolean): Promise<boolean>;
-export declare function syncByotForCustomer(userData: SyncByotUserData, deps?: SyncByotForCustomerDeps): Promise<void>;
+export declare function platformModelAllowlistPatch(current: unknown, user: boolean): PlatformModelAllowlistPatch;
+export declare function applyPlatformModelAllowlist(applyConfigPatchFn?: typeof applyConfigPatch, user?: boolean): Promise<boolean>;
+export declare function syncByotForUser(userData: SyncByotUserData, deps?: SyncByotForUserDeps): Promise<void>;
 export {};

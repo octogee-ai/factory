@@ -39,7 +39,7 @@ import {
 import { gatewayScopedJobId, signFleetRequest } from "../lib/fleet-signature.js";
 import { liveImportAdmissionPath } from "../lib/migration-staging.js";
 import {
-  MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
+  MIGRATION_VERIFY_DEFAULT_AGENT_ATTACH_IN_PROGRESS,
   SIGNATURE_HEADER,
   type QuiesceRequestBody,
   type UnmountRequestBody,
@@ -53,22 +53,22 @@ import {
   type PushRsyncStateRequestBody,
   type CompleteSurgeHandoffRequestBody,
 } from "../../shared/types/fleet-controller.js";
-import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
-import type { ConfiguredBuilderPortableStatePlan } from "../lib/local-coach-wired.js";
+import type { UserLifecycleAdapter } from "../lib/user-lifecycle.js";
+import type { ConfiguredUserPortableStatePlan } from "../lib/local-default-agent-wired.js";
 import {
   hasMountedMarker,
   writeMigratingInPin,
   writeMountedMarker,
-} from "../lib/local-coach-wired.js";
+} from "../lib/local-default-agent-wired.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import { OpenclawWireError } from "../lib/gateway-rpc.js";
 import { OpenClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
-import { stubBuilderClaim } from "./helpers/builder-claim.js";
+import { stubUserClaim } from "./helpers/user-claim.js";
 import { exportCodexStoreSnapshots } from "../lib/codex-store-snapshot.js";
 import { OPENCLAW_DIR } from "../lib/config.js";
 import { readActivationManifest, writeActivationManifest, activationManifestTarPath } from "../lib/migration-activation-manifest.js";
 
-import { createBuilderSurgeGateWiring } from "../lib/fleet-provisioner.js";
+import { createIsolatedSurgeGateWiring } from "../lib/fleet-provisioner.js";
 
 const spawnMock = vi.fn();
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -116,10 +116,10 @@ const SAMPLE_COMPLETE_SURGE: CompleteSurgeHandoffRequestBody = {
   targetPodUid: "pod-123",
 };
 
-const HELD_BUILDER_GATE_STATE = {
+const HELD_USER_GATE_STATE = {
   version: 1, podUid: "builder-pod", role: "normal", mode: "held", phase: "held",
 } as const;
-const PRELAUNCH_BUILDER_GATE_STATE = { ...HELD_BUILDER_GATE_STATE, mode: "permitted", phase: "starting" } as const;
+const PRELAUNCH_USER_GATE_STATE = { ...HELD_USER_GATE_STATE, mode: "permitted", phase: "starting" } as const;
 
 const RESTORE_SNAPSHOT = {
   uid: "uid-chris",
@@ -140,10 +140,10 @@ const RESTORE_SNAPSHOT = {
   photoURL: "",
   onboardingVibe: null,
   coachToken: "coach-token",
-  coachMmUserId: "mm-coach",
+  defaultAgentMmUserId: "mm-coach",
 } as const;
 
-// Cowboy scopes every pod-addressed signature to the gateway it addresses; the
+// The fleet controller scopes every pod-addressed signature to the gateway it addresses; the
 // handlers reject anything minted for a sibling.
 function signForPod(jobId: string, rawBody: string, gatewayId: string = GATEWAY_ID): string {
   return signFleetRequest(PRIVATE_KEY, gatewayScopedJobId(jobId, gatewayId), rawBody);
@@ -224,15 +224,15 @@ const sink = new Writable({
   };
 }
 
-it("transfers only the selected customer's Git metadata", () => {
+it("transfers only the selected user's Git metadata", () => {
   expect(findPathTraversalViolation(["git-metadata/alice/projects/app.git/refs/heads/work", "git-metadata/alice/projects/app.git/index"], "alice", "final")).toBeNull();
   expect(findPathTraversalViolation(["git-metadata/bob/projects/app.git/index"], "alice", "final")).not.toBeNull();
   expect(findPathTraversalViolation(["git-metadata/alice/../../bob/index"], "alice", "final")).not.toBeNull();
 });
 
 function mkGitHost(
-  overrides: Partial<CustomerLifecycleAdapter["gitHost"]> = {},
-): CustomerLifecycleAdapter["gitHost"] {
+  overrides: Partial<UserLifecycleAdapter["gitHost"]> = {},
+): UserLifecycleAdapter["gitHost"] {
   const unexpected = (name: string) => vi.fn(async () => {
     throw new Error(`unexpected call to gitHost.${name} in migration handler test`);
   });
@@ -246,7 +246,7 @@ function mkGitHost(
   };
 }
 
-function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerLifecycleAdapter {
+function mkAdapter(overrides: Partial<UserLifecycleAdapter> = {}): UserLifecycleAdapter {
   const everythingElseThrows = new Proxy(
     {},
     {
@@ -255,41 +255,41 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
           throw new Error(`unexpected call to adapter.${prop} in migration handler test`);
         }),
     },
-  ) as CustomerLifecycleAdapter;
+  ) as UserLifecycleAdapter;
 
   return {
     ...everythingElseThrows,
     log: vi.fn(),
     uidForSlug: vi.fn(async () => "uid-chris"),
     targetMigrationIdentityCustody: vi.fn(async (slug, migrationId) => sharedTargetAuthority(slug, migrationId)),
-    resumeCustomer: vi.fn(async () => undefined),
+    resumeUser: vi.fn(async () => undefined),
     sourceMigrationIdentityCustody: vi.fn(async (_slug, migrationId) => ({ migrationId, uid: "uid-chris", gatewayId: GATEWAY_ID, podUid: "source-pod", epoch: 4 })),
     exportOpenClawActivationManifest: vi.fn(async () => ({ version: 2, slug: "chris", appliedFingerprint: "fp-chris", agentId: "octogee-chris-coach", accountId: "chris-coach", agent: { id: "octogee-chris-coach", workspace: path.join(process.env.OPENCLAW_STATE_DIR || OPENCLAW_DIR, "customers", "chris") }, projectAgents: [], mattermostAccount: { botToken: "synthetic-coach-token" }, bindings: [{ agentId: "octogee-chris-coach", match: { channel: "mattermost", accountId: "chris-coach" } }] })),
-    quiesceCustomer: vi.fn(async () => ({ drained: true, runningCount: 0 })),
+    quiesceUser: vi.fn(async () => ({ drained: true, runningCount: 0 })),
     listExportPaths: vi.fn(async () => [
       { cwd: "/tmp/state", path: "agents/octogee-chris-coach" },
     ]),
     prepareImportDir: vi.fn(async () => "/tmp/import"),
     prepareKeyImportDir: vi.fn(async () => "/tmp/import"),
-    readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 LOCAL chris@gateway"),
+    readLocalUserPubKey: vi.fn(() => "ssh-ed25519 LOCAL chris@gateway"),
     gitHost: mkGitHost(),
-    activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
+    activateImportedUser: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
     projectCheckoutScope: vi.fn(() => "workspace-and-projects"),
     listProjectsNeedingClone: vi.fn(async () => []),
     cloneProjectRepo: vi.fn(async () => true),
     seedDeferredProjectWorkspace: vi.fn(async () => undefined),
-    reassertByotForCustomer: vi.fn(async () => undefined),
+    reassertByotForUser: vi.fn(async () => undefined),
     writeMountMarker: vi.fn(),
     onMounted: vi.fn(),
-    isConfiguredBuilderCustomer: vi.fn(() => true),
+    isConfiguredUser: vi.fn(() => true),
     waitForAccountHealthy: vi.fn(async () => true),
     projectAgentsHealthy: vi.fn(async () => true),
-    hasCustomerDir: vi.fn(() => true),
-    customerCoachWiredInOpenclawConfig: vi.fn(() => true),
-    customerMountMarked: vi.fn(() => true),
-    applyRemoveCustomerConfigPatch: vi.fn(async () => {}),
+    hasUserDir: vi.fn(() => true),
+    userDefaultAgentWiredInOpenclawConfig: vi.fn(() => true),
+    userMountMarked: vi.fn(() => true),
+    applyRemoveUserConfigPatch: vi.fn(async () => {}),
     removePartialWorkspace: vi.fn(async () => {}),
-    deleteDepartedCustomerState: vi.fn(async () => {}),
+    deleteDepartedUserState: vi.fn(async () => {}),
     loadUserSnapshot: vi.fn(async () => ({
       uid: "uid-chris",
       slug: "chris",
@@ -313,7 +313,7 @@ const RSYNC_DAEMON_LOOPBACK_PORT = 41873;
 function sharedTargetAuthority(slug: string, migrationId: string) {
   if (!process.env.POD_UID) vi.stubEnv("POD_UID", "shared-target-pod");
   return { custody: { uid: `uid-${slug}`, gatewayId: GATEWAY_ID, podUid: process.env.POD_UID!, migrationId },
-    migration: { migrationId, claimStartedAt: 123, sourceGatewayId: "source-builder", sourceEpoch: 4 }, anchors: [] };
+    migration: { migrationId, claimStartedAt: 123, sourceGatewayId: "source-user", sourceEpoch: 4 }, anchors: [] };
 }
 
 async function writeSharedTargetManifest(root: string, workspaceRoot: string, migrationId?: string) {
@@ -339,7 +339,7 @@ function mkDeps(overrides: Partial<MigrationHandlerDeps> = {}): MigrationHandler
     })),
     surgeTargetLive: vi.fn(async () => false),
     admitLiveSurgeTarget: vi.fn(async () => {
-      throw new Error("held Builder target was admitted as live");
+      throw new Error("held isolated target was admitted as live");
     }),
     liveSurgeTargetAssigned: vi.fn(async () => false),
     ...overrides,
@@ -448,26 +448,26 @@ const armOnClose = (event: string | symbol) => {
 }
 
 describe("createQuiesceHandler", () => {
-  it("does not pause the coach if the live voice registry cannot be checked", async () => {
+  it("does not pause the agent if the live voice registry cannot be checked", async () => {
     const adapter = mkAdapter();
     const response = mkResponse();
     const voiceMigration = vi.fn(async () => { throw new Error("voice registry unavailable"); });
     await createQuiesceHandler(mkDeps({ adapter, voiceMigration }))(mkRequest(SAMPLE_QUIESCE, { signature: signForPod(SAMPLE_QUIESCE.migrationId, JSON.stringify(SAMPLE_QUIESCE)) }), response.res, vi.fn());
     expect(response.getStatus()).toBe(500);
-    expect(adapter.quiesceCustomer).not.toHaveBeenCalled();
+    expect(adapter.quiesceUser).not.toHaveBeenCalled();
   });
 
-  it("defers before touching the coach while a voice call is active", async () => {
+  it("defers before touching the agent while a voice call is active", async () => {
     const adapter = mkAdapter();
     const voiceMigration = vi.fn(async () => ({ activeCalls: 1 }));
     const response = mkResponse();
     await createQuiesceHandler(mkDeps({ adapter, voiceMigration }))(mkRequest(SAMPLE_QUIESCE, { signature: signForPod(SAMPLE_QUIESCE.migrationId, JSON.stringify(SAMPLE_QUIESCE)) }), response.res, vi.fn());
     expect(response.getStatus()).toBe(200);
     expect(response.getBody()).toMatchObject({ drained: false, runningCount: 1 });
-    expect(adapter.quiesceCustomer).not.toHaveBeenCalled();
+    expect(adapter.quiesceUser).not.toHaveBeenCalled();
   });
 
-  it("waits for voice finalization before quiescing the coach", async () => {
+  it("waits for voice finalization before quiescing the agent", async () => {
     const adapter = mkAdapter();
     const voiceMigration = vi.fn().mockResolvedValueOnce({ activeCalls: 1 }).mockResolvedValue({ activeCalls: 0 });
     const voiceDrainSleep = vi.fn(async () => undefined);
@@ -476,7 +476,7 @@ describe("createQuiesceHandler", () => {
       mkRequest(SAMPLE_QUIESCE, { signature: signForPod(SAMPLE_QUIESCE.migrationId, JSON.stringify(SAMPLE_QUIESCE)) }), response.res, vi.fn());
     expect(response.getStatus()).toBe(200);
     expect(voiceDrainSleep).toHaveBeenCalledWith(1_000);
-    expect(adapter.quiesceCustomer).toHaveBeenCalled();
+    expect(adapter.quiesceUser).toHaveBeenCalled();
   });
 
   it("passes the whole-process rollout's ingress ownership through", async () => {
@@ -486,16 +486,16 @@ describe("createQuiesceHandler", () => {
     await createQuiesceHandler(mkDeps({ adapter }))(
       mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
     );
-    expect(adapter.quiesceCustomer).toHaveBeenCalledWith("chris", 5_000, { stopMattermost: false });
+    expect(adapter.quiesceUser).toHaveBeenCalledWith("chris", 5_000, { stopMattermost: false });
   });
-  it("passes a partial scheduler handoff through to the customer quiesce", async () => {
+  it("passes a partial scheduler handoff through to the user quiesce", async () => {
     const adapter = mkAdapter();
     const body = { ...SAMPLE_QUIESCE, schedulerHandoff: true, schedulerMigrationId: "mig-1:scheduler:1", retainNonportable: true };
     const response = mkResponse();
     await createQuiesceHandler(mkDeps({ adapter }))(
       mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
     );
-    expect(adapter.quiesceCustomer).toHaveBeenCalledWith("chris", 5_000, { stopMattermost: true, schedulerMigrationId: "mig-1:scheduler:1", retainNonportable: true });
+    expect(adapter.quiesceUser).toHaveBeenCalledWith("chris", 5_000, { stopMattermost: true, schedulerMigrationId: "mig-1:scheduler:1", retainNonportable: true });
   });
   it("ignores the partial flag outside a scheduler handoff", async () => {
     const adapter = mkAdapter();
@@ -504,7 +504,7 @@ describe("createQuiesceHandler", () => {
     await createQuiesceHandler(mkDeps({ adapter }))(
       mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
     );
-    expect(adapter.quiesceCustomer).toHaveBeenCalledWith("chris", 5_000);
+    expect(adapter.quiesceUser).toHaveBeenCalledWith("chris", 5_000);
   });
   it("rejects bad signature with 401", async () => {
     const handler = createQuiesceHandler(mkDeps());
@@ -538,7 +538,7 @@ describe("createQuiesceHandler", () => {
     const handler = createQuiesceHandler(mkDeps());
     const rawBody = JSON.stringify(SAMPLE_QUIESCE);
     // What a sibling pod would hold after receiving its own signed quiesce: a
-    // valid Cowboy signature whose scope names that other gateway.
+    // valid fleet controller signature whose scope names that other gateway.
     const relayed = mkRequest(SAMPLE_QUIESCE, {
       signature: signForPod(SAMPLE_QUIESCE.migrationId, rawBody, "someone-else"),
     });
@@ -602,12 +602,12 @@ describe("createQuiesceHandler", () => {
       drained: true,
       runningCount: 0,
     });
-    expect(adapter.quiesceCustomer).toHaveBeenCalledWith("chris", 5_000);
+    expect(adapter.quiesceUser).toHaveBeenCalledWith("chris", 5_000);
   });
 
   it("returns 200 + drained:false when active work defers the move", async () => {
     const adapter = mkAdapter({
-      quiesceCustomer: vi.fn(async () => ({ drained: false, runningCount: 2 })),
+      quiesceUser: vi.fn(async () => ({ drained: false, runningCount: 2 })),
     });
     const handler = createQuiesceHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_QUIESCE);
@@ -628,12 +628,12 @@ describe("createQuiesceHandler", () => {
     const req = mkRequest(body, { signature: sig });
     const { res } = mkResponse();
     await handler(req, res, vi.fn());
-    expect(adapter.quiesceCustomer).toHaveBeenCalledWith("chris", 60_000);
+    expect(adapter.quiesceUser).toHaveBeenCalledWith("chris", 60_000);
   });
 
   it("returns 500 when adapter throws", async () => {
     const adapter = mkAdapter({
-      quiesceCustomer: vi.fn(async () => {
+      quiesceUser: vi.fn(async () => {
         throw new Error("boom");
       }),
     });
@@ -657,7 +657,7 @@ describe("createFlushHandler", () => {
       steps: [],
     }));
     const adapter = mkAdapter({
-      readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 SOURCE chris@gateway"),
+      readLocalUserPubKey: vi.fn(() => "ssh-ed25519 SOURCE chris@gateway"),
       gitHost: mkGitHost({ registerKey }),
     });
     const handler = createFlushHandler(mkDeps({ adapter, flushLocalState }));
@@ -849,7 +849,7 @@ describe("createFlushHandler", () => {
       activeFence = "unmount-fence";
       return activeFence;
     });
-    const removeImportedCustomerBySlug = vi.fn(async () => ({
+    const removeImportedUserBySlug = vi.fn(async () => ({
       wasMounted: true,
       steps: [],
     }));
@@ -858,7 +858,7 @@ describe("createFlushHandler", () => {
       readSystemConfigWatchFence,
       resumeSystemConfigWatch,
       pauseSystemConfigWatch,
-      adapter: mkAdapter({ removeImportedCustomerBySlug }),
+      adapter: mkAdapter({ removeImportedUserBySlug }),
     });
     const flushBody = {
       migrationId: "mig-1",
@@ -922,7 +922,7 @@ describe("createFlushHandler", () => {
 });
 
 describe("createVerifyHandler", () => {
-  it("preserves Coach verification before the target can read the assignment-gated snapshot", async () => {
+  it("preserves Agent verification before the target can read the assignment-gated snapshot", async () => {
     const adapter = mkAdapter({ uidForSlug: vi.fn(async () => null) });
     const body = { migrationId: "mig-before-cutover", slug: "chris" };
     const response = mkResponse();
@@ -944,7 +944,7 @@ describe("createVerifyHandler", () => {
     expect(getStatus()).toBe(401);
   });
 
-  it("returns 200 ready=true from the mount structure without waiting on the coach account", async () => {
+  it("returns 200 ready=true from the mount structure without waiting on the agent account", async () => {
     const adapter = mkAdapter({ waitForAccountHealthy: vi.fn(async () => false) });
     const log = vi.fn();
     const handler = createVerifyHandler(mkDeps({ adapter, log }));
@@ -972,7 +972,7 @@ describe("createVerifyHandler", () => {
 
   it("returns 409 ready=false when any readiness check fails", async () => {
     const adapter = mkAdapter({
-      customerMountMarked: vi.fn(() => false),
+      userMountMarked: vi.fn(() => false),
     });
     const log = vi.fn();
     const handler = createVerifyHandler(mkDeps({ adapter, log }));
@@ -993,11 +993,11 @@ describe("createVerifyHandler", () => {
 
   async function verifyMidAttach(input: { attachPending: boolean; coachWired: boolean; mountMarked: boolean }) {
     const adapter = mkAdapter({
-      customerCoachWiredInOpenclawConfig: vi.fn(() => input.coachWired),
-      customerMountMarked: vi.fn(() => input.mountMarked),
+      userDefaultAgentWiredInOpenclawConfig: vi.fn(() => input.coachWired),
+      userMountMarked: vi.fn(() => input.mountMarked),
     });
-    const customerAttachPending = vi.fn(async () => input.attachPending);
-    const handler = createVerifyHandler(mkDeps({ adapter, customerAttachPending }));
+    const userAttachPending = vi.fn(async () => input.attachPending);
+    const handler = createVerifyHandler(mkDeps({ adapter, userAttachPending }));
     const body = { migrationId: "mig-1", slug: "chris" };
     const response = mkResponse();
     await handler(
@@ -1005,26 +1005,26 @@ describe("createVerifyHandler", () => {
       response.res,
       vi.fn(),
     );
-    return { adapter, customerAttachPending, status: response.getStatus(), body: response.getBody() };
+    return { adapter, userAttachPending, status: response.getStatus(), body: response.getBody() };
   }
 
   it.each([
     { coachWired: false, mountMarked: true },
     { coachWired: true, mountMarked: false },
-  ])("reports a coach attach still in progress without waiting on the account (wired=$coachWired, marked=$mountMarked)", async (wiring) => {
+  ])("reports an agent attach still in progress without waiting on the account (wired=$coachWired, marked=$mountMarked)", async (wiring) => {
     const result = await verifyMidAttach({ attachPending: true, ...wiring });
 
     expect(result.status).toBe(409);
     expect(result.body).toMatchObject({
       ready: false,
-      code: MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
+      code: MIGRATION_VERIFY_DEFAULT_AGENT_ATTACH_IN_PROGRESS,
       checks: { customerDir: true, ...wiring },
     });
-    expect(result.customerAttachPending).toHaveBeenCalledWith("chris");
+    expect(result.userAttachPending).toHaveBeenCalledWith("chris");
     expect(result.adapter.waitForAccountHealthy).not.toHaveBeenCalled();
   });
 
-  it("reports an unwired coach with no attach in progress as plainly not ready", async () => {
+  it("reports an unwired agent with no attach in progress as plainly not ready", async () => {
     const result = await verifyMidAttach({ attachPending: false, coachWired: false, mountMarked: true });
 
     expect(result.status).toBe(409);
@@ -1032,7 +1032,7 @@ describe("createVerifyHandler", () => {
     expect(result.body).not.toHaveProperty("code");
   });
 
-  it("verifies a fully mounted coach normally while a content re-ensure is pending", async () => {
+  it("verifies a fully mounted agent normally while a content re-ensure is pending", async () => {
     const result = await verifyMidAttach({ attachPending: true, coachWired: true, mountMarked: true });
 
     expect(result.status).toBe(200);
@@ -1043,18 +1043,18 @@ describe("createVerifyHandler", () => {
     { configTransferMode: undefined, overlayPresent: true },
     { configTransferMode: "configured-builder-system-config", overlayPresent: true },
     { configTransferMode: undefined, overlayPresent: false },
-  ])("verifies configured Builder readiness (mode=$configTransferMode, overlay=$overlayPresent)", async ({ configTransferMode, overlayPresent }) => {
-    stubBuilderClaim("chris");
+  ])("verifies configured user readiness (mode=$configTransferMode, overlay=$overlayPresent)", async ({ configTransferMode, overlayPresent }) => {
+    stubUserClaim("chris");
     const adapter = mkAdapter({
-      isBuilderGateway: vi.fn(() => true),
-      configuredBuilderOverlayPresent: vi.fn(() => overlayPresent),
+      isIsolatedGateway: vi.fn(() => true),
+      configuredUserOverlayPresent: vi.fn(() => overlayPresent),
       hasWorkspaceGitDir: vi.fn(() => true),
       hasGitRemote: vi.fn(() => true),
-      customerCoachWiredInOpenclawConfig: vi.fn(() => false),
+      userDefaultAgentWiredInOpenclawConfig: vi.fn(() => false),
     });
     const handler = createVerifyHandler(mkDeps({ adapter }));
     const body = {
-      migrationId: "mig-builder-verify",
+      migrationId: "mig-user-verify",
       slug: "chris",
       ...(configTransferMode ? { configTransferMode } : {}),
     };
@@ -1068,7 +1068,7 @@ describe("createVerifyHandler", () => {
 
     expect(response.getStatus()).toBe(overlayPresent ? 200 : 409);
     expect(response.getBody()).toEqual({
-      migrationId: "mig-builder-verify",
+      migrationId: "mig-user-verify",
       slug: "chris",
       ready: overlayPresent,
       configTransferMode: "configured-builder-system-config",
@@ -1089,16 +1089,16 @@ describe("createRestoreHandler", () => {
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => { release = resolve; });
     const adapter = mkAdapter({
-      hasCustomerSshKey: vi.fn(() => true),
-      readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 TEST"),
+      hasUserSshKey: vi.fn(() => true),
+      readLocalUserPubKey: vi.fn(() => "ssh-ed25519 TEST"),
       gitHost: mkGitHost({ listKeys: vi.fn(async () => ["ssh-ed25519 TEST"]), ensureOwner: vi.fn(async () => undefined) }),
       hasWorkspaceGitDir: vi.fn(() => false),
       cloneWorkspaceRepo: vi.fn(async () => true),
-      ensureCustomerDirectories: vi.fn(),
-      writeCustomerTemplateFiles: vi.fn(async () => undefined),
+      ensureUserDirectories: vi.fn(),
+      writeUserTemplateFiles: vi.fn(async () => undefined),
       blobSyncForSlug: vi.fn(async () => undefined),
       restoreByosubForAgent: vi.fn(async () => ({ restored: false, present: false })),
-      applyAddCustomerConfigPatch: vi.fn(async () => { await blocked; return { elapsedMs: 1 }; }),
+      applyAddUserConfigPatch: vi.fn(async () => { await blocked; return { elapsedMs: 1 }; }),
     });
     const handler = createRestoreHandler(mkDeps({ adapter }));
     const body = { migrationId: "mig-1", uid: "uid-chris", slug: "chris", snapshot: RESTORE_SNAPSHOT };
@@ -1106,7 +1106,7 @@ describe("createRestoreHandler", () => {
     const one = response(), two = response();
     const request = () => mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) });
     const first = handler(request(), one.res, vi.fn());
-    await vi.waitFor(() => expect(adapter.applyAddCustomerConfigPatch).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(adapter.applyAddUserConfigPatch).toHaveBeenCalledOnce());
     const foreignBody = { ...body, migrationId: "foreign" };
     const foreign = response();
     await handler(mkRequest(foreignBody, { signature: signForPod(foreignBody.migrationId, JSON.stringify(foreignBody)) }), foreign.res, vi.fn());
@@ -1116,18 +1116,18 @@ describe("createRestoreHandler", () => {
     await Promise.all([first, second]);
     expect(one.getStatus()).toBe(200);
     expect(two.getStatus()).toBe(200);
-    expect(adapter.applyAddCustomerConfigPatch).toHaveBeenCalledOnce();
+    expect(adapter.applyAddUserConfigPatch).toHaveBeenCalledOnce();
   });
   it("keeps late restore work exclusive after its response deadline until the work actually settles", async () => {
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => { release = resolve; });
     const adapter = mkAdapter({
-      hasCustomerSshKey: vi.fn(() => true), readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 TEST"),
+      hasUserSshKey: vi.fn(() => true), readLocalUserPubKey: vi.fn(() => "ssh-ed25519 TEST"),
       gitHost: mkGitHost({ listKeys: vi.fn(async () => ["ssh-ed25519 TEST"]), ensureOwner: vi.fn(async () => undefined) }),
       hasWorkspaceGitDir: vi.fn(() => false), cloneWorkspaceRepo: vi.fn(async () => true),
-      ensureCustomerDirectories: vi.fn(), writeCustomerTemplateFiles: vi.fn(async () => undefined),
+      ensureUserDirectories: vi.fn(), writeUserTemplateFiles: vi.fn(async () => undefined),
       blobSyncForSlug: vi.fn(async () => undefined), restoreByosubForAgent: vi.fn(async () => ({ restored: false, present: false })),
-      applyAddCustomerConfigPatch: vi.fn(async () => { await blocked; return { elapsedMs: 1 }; }),
+      applyAddUserConfigPatch: vi.fn(async () => { await blocked; return { elapsedMs: 1 }; }),
     });
     const handler = createRestoreHandler(mkDeps({ adapter }));
     const body = { migrationId: "mig-1", uid: "uid-chris", slug: "chris", snapshot: RESTORE_SNAPSHOT };
@@ -1137,20 +1137,20 @@ describe("createRestoreHandler", () => {
       const first = mkResponse();
       const pending = handler(request(), first.res, vi.fn());
       await vi.advanceTimersByTimeAsync(0);
-      expect(adapter.applyAddCustomerConfigPatch).toHaveBeenCalledOnce();
+      expect(adapter.applyAddUserConfigPatch).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(300_001);
       await pending;
       expect(first.getStatus()).toBe(500);
       const second = mkResponse();
       await handler(request(), second.res, vi.fn());
       expect(second.getStatus()).toBe(500);
-      expect(adapter.applyAddCustomerConfigPatch).toHaveBeenCalledOnce();
+      expect(adapter.applyAddUserConfigPatch).toHaveBeenCalledOnce();
       release();
       await vi.advanceTimersByTimeAsync(0);
       const third = mkResponse();
       await handler(request(), third.res, vi.fn());
       expect(third.getStatus()).toBe(200);
-      expect(adapter.applyAddCustomerConfigPatch).toHaveBeenCalledTimes(2);
+      expect(adapter.applyAddUserConfigPatch).toHaveBeenCalledTimes(2);
     } finally {
       release();
       vi.useRealTimers();
@@ -1171,21 +1171,21 @@ describe("createRestoreHandler", () => {
   });
 
   it("passes signed Shared restore scope through the post-Git roster publication owner", async () => {
-    const applyAddCustomerConfigPatch = vi.fn(async () => ({ elapsedMs: 1 }));
-    const adapter = mkAdapter({ isBuilderGateway: () => false, hasCustomerSshKey: () => true,
-      readLocalCustomerPubKey: () => "ssh-ed25519 TEST", gitHost: mkGitHost({ listKeys: async () => ["ssh-ed25519 TEST"], ensureOwner: async () => undefined }),
-      hasWorkspaceGitDir: () => false, cloneWorkspaceRepo: async () => true, ensureCustomerDirectories: () => undefined,
-      writeCustomerTemplateFiles: async () => undefined, blobSyncForSlug: async () => undefined,
-      restoreByosubForAgent: async () => ({ restored: false, present: false }), applyAddCustomerConfigPatch });
+    const applyAddUserConfigPatch = vi.fn(async () => ({ elapsedMs: 1 }));
+    const adapter = mkAdapter({ isIsolatedGateway: () => false, hasUserSshKey: () => true,
+      readLocalUserPubKey: () => "ssh-ed25519 TEST", gitHost: mkGitHost({ listKeys: async () => ["ssh-ed25519 TEST"], ensureOwner: async () => undefined }),
+      hasWorkspaceGitDir: () => false, cloneWorkspaceRepo: async () => true, ensureUserDirectories: () => undefined,
+      writeUserTemplateFiles: async () => undefined, blobSyncForSlug: async () => undefined,
+      restoreByosubForAgent: async () => ({ restored: false, present: false }), applyAddUserConfigPatch });
     const body = { migrationId: "mig-postcutover-restore", uid: "uid-chris", slug: "chris", snapshot: RESTORE_SNAPSHOT };
     const response = mkResponse();
     await createRestoreHandler(mkDeps({ adapter }))(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn());
     expect(response.getStatus(), JSON.stringify(response.getBody())).toBe(200);
-    expect(applyAddCustomerConfigPatch).toHaveBeenCalledWith(expect.anything(), null, expect.objectContaining({ migrationId: body.migrationId }));
+    expect(applyAddUserConfigPatch).toHaveBeenCalledWith(expect.anything(), null, expect.objectContaining({ migrationId: body.migrationId }));
   });
 
   it("restores runtime state from the controller-provided durable snapshot and leaves the mount marker intact", async () => {
-    const customersDir = await fs.mkdtemp(path.join(os.tmpdir(), "restore-marker-"));
+    const usersDir = await fs.mkdtemp(path.join(os.tmpdir(), "restore-marker-"));
     let watcherFenced = false;
     const pauseSystemConfigWatch = vi.fn(async (slug: string) => {
       expect(slug).toBe("chris");
@@ -1195,21 +1195,21 @@ describe("createRestoreHandler", () => {
       loadUserSnapshot: vi.fn(async () => {
         throw new Error("restore should use the signed snapshot, not broker lookup");
       }),
-      hasCustomerSshKey: vi.fn(() => true),
-      readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 local"),
+      hasUserSshKey: vi.fn(() => true),
+      readLocalUserPubKey: vi.fn(() => "ssh-ed25519 local"),
       gitHost: mkGitHost({ listKeys: vi.fn(async () => ["ssh-ed25519 local"]), ensureOwner: vi.fn(async () => undefined) }),
       hasWorkspaceGitDir: vi.fn(() => false),
       cloneWorkspaceRepo: vi.fn(async () => true),
-      ensureCustomerDirectories: vi.fn(),
-      writeCustomerTemplateFiles: vi.fn(async () => undefined),
+      ensureUserDirectories: vi.fn(),
+      writeUserTemplateFiles: vi.fn(async () => undefined),
       blobSyncForSlug: vi.fn(async () => undefined),
       restoreByosubForAgent: vi.fn(async () => ({ restored: false, present: false })),
-      applyAddCustomerConfigPatch: vi.fn(async () => {
+      applyAddUserConfigPatch: vi.fn(async () => {
         expect(watcherFenced).toBe(true);
         return { elapsedMs: 1 };
       }),
-      writeMountMarker: vi.fn((slug) => writeMountedMarker(customersDir, slug)),
-      markCustomerMigratingIn: vi.fn((slug) => writeMigratingInPin(customersDir, slug)),
+      writeMountMarker: vi.fn((slug) => writeMountedMarker(usersDir, slug)),
+      markUserMigratingIn: vi.fn((slug) => writeMigratingInPin(usersDir, slug)),
     });
     const handler = createRestoreHandler(mkDeps({ adapter, pauseSystemConfigWatch }));
     const body = {
@@ -1255,7 +1255,7 @@ describe("createRestoreHandler", () => {
         "chris",
         "git@gitea:octogee/chris.git",
       );
-      expect(adapter.applyAddCustomerConfigPatch).toHaveBeenCalledWith(
+      expect(adapter.applyAddUserConfigPatch).toHaveBeenCalledWith(
         expect.objectContaining({
           uid: "uid-chris", slug: "chris", projectCheckoutScope: "workspace-and-projects",
           projectAgents: body.snapshot.projectAgents,
@@ -1263,7 +1263,7 @@ describe("createRestoreHandler", () => {
         null,
         expect.objectContaining({ byosActive: false }),
       );
-      expect(adapter.reassertByotForCustomer).toHaveBeenCalledWith(
+      expect(adapter.reassertByotForUser).toHaveBeenCalledWith(
         expect.objectContaining({
           byotActive: true,
           selectedTier: "personal_free",
@@ -1285,12 +1285,12 @@ describe("createRestoreHandler", () => {
       );
       expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
       expect(adapter.cloneProjectRepo).toHaveBeenCalledWith("chris", "demo", "chris-demo", expect.objectContaining({ refreshRemote: true }));
-      expect(adapter.markCustomerMigratingIn).toHaveBeenCalledTimes(1);
-      expect(adapter.markCustomerMigratingIn).toHaveBeenCalledWith("chris");
+      expect(adapter.markUserMigratingIn).toHaveBeenCalledTimes(1);
+      expect(adapter.markUserMigratingIn).toHaveBeenCalledWith("chris");
       expect(pauseSystemConfigWatch).toHaveBeenCalledOnce();
-      expect(hasMountedMarker(customersDir, "chris")).toBe(true);
+      expect(hasMountedMarker(usersDir, "chris")).toBe(true);
     } finally {
-      await fs.rm(customersDir, { recursive: true, force: true });
+      await fs.rm(usersDir, { recursive: true, force: true });
     }
   });
 
@@ -1302,16 +1302,16 @@ describe("createRestoreHandler", () => {
     };
     const adapter = mkAdapter({
       loadUserSnapshot: vi.fn(async () => currentSnapshot),
-      hasCustomerSshKey: vi.fn(() => true),
-      readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 local"),
+      hasUserSshKey: vi.fn(() => true),
+      readLocalUserPubKey: vi.fn(() => "ssh-ed25519 local"),
       gitHost: mkGitHost({ listKeys: vi.fn(async () => ["ssh-ed25519 local"]), ensureOwner: vi.fn(async () => undefined) }),
       hasWorkspaceGitDir: vi.fn(() => false),
       cloneWorkspaceRepo: vi.fn(async () => true),
-      ensureCustomerDirectories: vi.fn(),
-      writeCustomerTemplateFiles: vi.fn(async () => undefined),
+      ensureUserDirectories: vi.fn(),
+      writeUserTemplateFiles: vi.fn(async () => undefined),
       blobSyncForSlug: vi.fn(async () => undefined),
       restoreByosubForAgent: vi.fn(async () => ({ restored: false, present: false })),
-      applyAddCustomerConfigPatch: vi.fn(async () => ({ elapsedMs: 1 })),
+      applyAddUserConfigPatch: vi.fn(async () => ({ elapsedMs: 1 })),
     });
     const handler = createRestoreHandler(mkDeps({ adapter }));
     const body = {
@@ -1329,7 +1329,7 @@ describe("createRestoreHandler", () => {
 
     expect(getStatus()).toBe(200);
     expect(adapter.loadUserSnapshot).toHaveBeenCalledWith("uid-chris");
-    expect(adapter.reassertByotForCustomer).toHaveBeenCalledWith(
+    expect(adapter.reassertByotForUser).toHaveBeenCalledWith(
       expect.objectContaining({
         byotActive: true,
         systemConfig: { byot: { provider: "anthropic" } },
@@ -1378,7 +1378,7 @@ describe("createRestoreHandler", () => {
 describe("createUnmountHandler", () => {
   it("releases the source voice hold after successful unmount", async () => {
     const voiceMigration = vi.fn(async () => ({ activeCalls: 0 }));
-    const adapter = mkAdapter({ removeImportedCustomerBySlug: vi.fn(async () => ({ wasMounted: true, steps: [] })) });
+    const adapter = mkAdapter({ removeImportedUserBySlug: vi.fn(async () => ({ wasMounted: true, steps: [] })) });
     const response = mkResponse();
     await createUnmountHandler(mkDeps({ adapter, voiceMigration }))(mkRequest(SAMPLE_UNMOUNT, {
       signature: signForPod(SAMPLE_UNMOUNT.migrationId, JSON.stringify(SAMPLE_UNMOUNT)),
@@ -1389,7 +1389,7 @@ describe("createUnmountHandler", () => {
 
   it("does not release voice when unmount fails", async () => {
     const voiceMigration = vi.fn(async () => ({ activeCalls: 0 }));
-    const adapter = mkAdapter({ removeImportedCustomerBySlug: vi.fn(async () => { throw new Error('unmount failed'); }) });
+    const adapter = mkAdapter({ removeImportedUserBySlug: vi.fn(async () => { throw new Error('unmount failed'); }) });
     const response = mkResponse();
     await createUnmountHandler(mkDeps({ adapter, voiceMigration }))(mkRequest(SAMPLE_UNMOUNT, {
       signature: signForPod(SAMPLE_UNMOUNT.migrationId, JSON.stringify(SAMPLE_UNMOUNT)),
@@ -1397,12 +1397,12 @@ describe("createUnmountHandler", () => {
     expect(response.getStatus()).toBe(500);
     expect(voiceMigration).not.toHaveBeenCalled();
   });
-  it.each([false, true])("cancels a Builder activation before rollback unmount; cancellation fails: %s", async (fails) => {
+  it.each([false, true])("cancels a user activation before rollback unmount; cancellation fails: %s", async (fails) => {
     vi.stubEnv("POD_UID", "builder-pod");
     const events: string[] = [];
     const adapter = mkAdapter({
-      isBuilderGateway: () => true,
-      removeImportedCustomerBySlug: vi.fn(async () => {
+      isIsolatedGateway: () => true,
+      removeImportedUserBySlug: vi.fn(async () => {
         events.push("unmount");
         return { wasMounted: true, steps: [] };
       }),
@@ -1411,7 +1411,7 @@ describe("createUnmountHandler", () => {
       events.push("cancel");
       if (fails) throw new Error("cannot cancel serving assignment");
       await cleanup?.(async () => {});
-      return HELD_BUILDER_GATE_STATE;
+      return HELD_USER_GATE_STATE;
     });
     const handler = createUnmountHandler(mkDeps({
       adapter, unreserveSurgeTarget,
@@ -1473,7 +1473,7 @@ describe("createUnmountHandler", () => {
       const remove = vi.fn(async () => ({ wasMounted: false, steps: [],
         ...(mode === "early-noop" ? {} : { releasedAgentIds: agentIds }) }));
       const voiceMigration = vi.fn(async () => ({ activeCalls: 0 }));
-      const handler = createUnmountHandler(mkDeps({ gatewayId, voiceMigration, adapter: mkAdapter({ removeImportedCustomerBySlug: remove }) }));
+      const handler = createUnmountHandler(mkDeps({ gatewayId, voiceMigration, adapter: mkAdapter({ removeImportedUserBySlug: remove }) }));
       const response = mkResponse();
       await handler(mkRequest(body, { pathGatewayId: gatewayId,
         signature: signForPod(body.migrationId, JSON.stringify(body), gatewayId) }), response.res, vi.fn());
@@ -1486,9 +1486,9 @@ describe("createUnmountHandler", () => {
       if (mode === "foreign-agent" || mode === "changed-pod") expect(remove).not.toHaveBeenCalled();
     });
 
-  it("keeps a duplicate imported-customer unmount fenced after response loss", async () => {
+  it("keeps a duplicate imported-user unmount fenced after response loss", async () => {
     const adapter = mkAdapter({
-      removeImportedCustomerBySlug: vi.fn(async () => ({ wasMounted: false, steps: [] })),
+      removeImportedUserBySlug: vi.fn(async () => ({ wasMounted: false, steps: [] })),
     });
     const pauseSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
     const resumeSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
@@ -1511,9 +1511,9 @@ describe("createUnmountHandler", () => {
   });
 
   it("rejects an unmount that crosses the dedicated watcher tenant boundary", async () => {
-    stubBuilderClaim("alice");
-    const removeImportedCustomerBySlug = vi.fn(async () => ({ wasMounted: false, steps: [] }));
-    const adapter = mkAdapter({ removeImportedCustomerBySlug });
+    stubUserClaim("alice");
+    const removeImportedUserBySlug = vi.fn(async () => ({ wasMounted: false, steps: [] }));
+    const adapter = mkAdapter({ removeImportedUserBySlug });
     const handler = createUnmountHandler(mkDeps({ adapter }));
     const rawBody = JSON.stringify(SAMPLE_UNMOUNT);
     const sig = signForPod(SAMPLE_UNMOUNT.migrationId, rawBody);
@@ -1525,12 +1525,12 @@ describe("createUnmountHandler", () => {
     expect(getStatus()).toBe(500);
     expect(getBody()).toMatchObject({
       error: "unmount failed",
-      message: "system config watcher belongs to alice, not migration builder chris",
+      message: "system config watcher belongs to alice, not migration user chris",
     });
-    expect(removeImportedCustomerBySlug).not.toHaveBeenCalled();
+    expect(removeImportedUserBySlug).not.toHaveBeenCalled();
   });
 
-  it("returns 200 + unmounted:true when removeCustomerFromGateway succeeded", async () => {
+  it("returns 200 + unmounted:true when removeUserFromGateway succeeded", async () => {
 
 const adapter = mkAdapter();
     const pauseSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
@@ -1542,15 +1542,15 @@ const adapter = mkAdapter();
     await handler(req, res, vi.fn());
     expect(getStatus()).toBe(200);
     expect(getBody()).toMatchObject({ unmounted: true });
-    expect(adapter.applyRemoveCustomerConfigPatch).toHaveBeenCalled();
-    expect(adapter.deleteDepartedCustomerState).toHaveBeenCalled();
+    expect(adapter.applyRemoveUserConfigPatch).toHaveBeenCalled();
+    expect(adapter.deleteDepartedUserState).toHaveBeenCalled();
     expect(pauseSystemConfigWatch).toHaveBeenCalledWith("chris");
   });
 
   it("keeps the retired watcher fenced when unmount fails after an ambiguous partial removal", async () => {
     let removalPatchApplied = false;
     const adapter = mkAdapter({
-      removeImportedCustomerBySlug: vi.fn(async () => {
+      removeImportedUserBySlug: vi.fn(async () => {
         removalPatchApplied = true;
         throw new Error("response lost after config remove");
       }),
@@ -1577,7 +1577,7 @@ const adapter = mkAdapter();
 
   it("returns a structured config hash race for the surge controller's bounded retry", async () => {
     const adapter = mkAdapter({
-      removeImportedCustomerBySlug: vi.fn(async () => {
+      removeImportedUserBySlug: vi.fn(async () => {
         throw new OpenclawWireError("hash-mismatch", "config changed");
       }),
     });
@@ -1603,26 +1603,26 @@ const adapter = mkAdapter();
 });
 
 describe("queued-rsync migration control handlers", () => {
-  it("unmounts a held Builder and closes its fenced transfer without a transfer attempt ID", async () => {
+  it("unmounts a held user and closes its fenced transfer without a transfer attempt ID", async () => {
     vi.stubEnv("POD_UID", "builder-pod");
-    const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "builder-unmount-"));
+    const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "user-unmount-"));
     migrationTempRoots.push(importDir);
     const close = vi.fn(async () => {});
-    const removeImportedCustomerBySlug = vi.fn(async () => {
+    const removeImportedUserBySlug = vi.fn(async () => {
       expect(close).toHaveBeenCalledOnce();
       return { wasMounted: true, steps: [] };
     });
     const unreserveSurgeTarget: NonNullable<MigrationHandlerDeps["unreserveSurgeTarget"]> = async (_request, cleanup) => {
       await cleanup?.(async () => undefined);
-      return HELD_BUILDER_GATE_STATE;
+      return HELD_USER_GATE_STATE;
     };
     const deps = mkDeps({
-      adapter: mkAdapter({ isBuilderGateway: () => true, prepareImportDir: async () => importDir, removeImportedCustomerBySlug }),
+      adapter: mkAdapter({ isIsolatedGateway: () => true, prepareImportDir: async () => importDir, removeImportedUserBySlug }),
       reserveSurgeTarget: async () => undefined, releaseSurgeReadiness: async () => undefined, unreserveSurgeTarget,
       waitForRsyncReady: async () => undefined,
       openMigrationTlsEndpoint: async () => ({ certificatePem: TARGET_CERTIFICATE_PEM, close }),
     });
-    const migrationId = "builder-unmount-fenced";
+    const migrationId = "user-unmount-fenced";
     const send = async (handler: ReturnType<typeof createPrepareRsyncImportHandler>, body: object) => {
       const response = mkResponse();
       await handler(mkRequest(body, { signature: signForPod(migrationId, JSON.stringify(body)) }), response.res, vi.fn());
@@ -1636,7 +1636,7 @@ describe("queued-rsync migration control handlers", () => {
       expect((await send(createUnmountHandler(deps), { migrationId, slug: "chris" })).getBody()).toEqual({
         migrationId, slug: "chris", unmounted: true,
       });
-      expect(removeImportedCustomerBySlug).toHaveBeenCalledOnce();
+      expect(removeImportedUserBySlug).toHaveBeenCalledOnce();
     } finally {
       await send(createAbortRsyncImportHandler(mkDeps({ adapter: mkAdapter() })), { ...prepare, rpcPhase: "abort-rsync-import" });
     }
@@ -1714,7 +1714,7 @@ describe("queued-rsync migration control handlers", () => {
     }
   });
 
-  it("createExportPathsHandler filters key-only mode down to the customer key dir", async () => {
+  it("createExportPathsHandler filters key-only mode down to the user key dir", async () => {
     const adapter = mkAdapter({
       listExportPaths: vi.fn(async () => [
         { cwd: "/state", path: "agents/octogee-chris-coach" },
@@ -1746,7 +1746,7 @@ describe("queued-rsync migration control handlers", () => {
   });
 
   it.each(["pre", "final"] as const)(
-    "createExportPathsHandler keeps pod-local customer keys out of %s surge state",
+    "createExportPathsHandler keeps pod-local user keys out of %s surge state",
     async (mode) => {
       const adapter = mkAdapter({
         listExportPaths: vi.fn(async () => [
@@ -1805,11 +1805,11 @@ describe("queued-rsync migration control handlers", () => {
   });
 
   it("createPrepareImportHandler uses the key-only import prep without stamping migrating-in", async () => {
-    const markCustomerMigratingIn = vi.fn();
+    const markUserMigratingIn = vi.fn();
     const adapter = mkAdapter({
       prepareKeyImportDir: vi.fn(async () => "/openclaw"),
       prepareImportDir: vi.fn(async () => "/openclaw"),
-      markCustomerMigratingIn,
+      markUserMigratingIn,
     });
     const body: PrepareImportRequestBody = {
       migrationId: "mig-1",
@@ -1827,7 +1827,7 @@ describe("queued-rsync migration control handlers", () => {
     expect(getStatus()).toBe(200);
     expect(adapter.prepareKeyImportDir).toHaveBeenCalledWith("chris");
     expect(adapter.prepareImportDir).not.toHaveBeenCalled();
-    expect(markCustomerMigratingIn).not.toHaveBeenCalled();
+    expect(markUserMigratingIn).not.toHaveBeenCalled();
     expect(getBody()).toMatchObject({ migrationId: "mig-1", slug: "chris", imported: true });
   });
 
@@ -1855,10 +1855,10 @@ describe("queued-rsync migration control handlers", () => {
   });
 
   it("createPrepareImportHandler wipes normal import paths and stamps the migrating-in pin", async () => {
-    const markCustomerMigratingIn = vi.fn();
+    const markUserMigratingIn = vi.fn();
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => "/openclaw"),
-      markCustomerMigratingIn,
+      markUserMigratingIn,
     });
     const body: PrepareImportRequestBody = {
       migrationId: "mig-1",
@@ -1875,7 +1875,7 @@ describe("queued-rsync migration control handlers", () => {
 
     expect(getStatus()).toBe(200);
     expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris", "pre");
-    expect(markCustomerMigratingIn).toHaveBeenCalledWith("chris");
+    expect(markUserMigratingIn).toHaveBeenCalledWith("chris");
   });
 
   it("createActivationManifestExportHandler returns the source manifest as signed JSON", async () => {
@@ -1909,7 +1909,7 @@ describe("queued-rsync migration control handlers", () => {
   });
 
   it("createActivateImportHandler records a completed standard activation", async () => {
-    const markCustomerMigratingIn = vi.fn();
+    const markUserMigratingIn = vi.fn();
     const onMounted = vi.fn();
     const recordAppliedFingerprint = vi.fn();
     const registerKey = vi.fn(async () => undefined);
@@ -1919,10 +1919,10 @@ describe("queued-rsync migration control handlers", () => {
       return true;
     });
     const adapter = mkAdapter({
-      markCustomerMigratingIn,
-      readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 TARGET chris@gateway"),
+      markUserMigratingIn,
+      readLocalUserPubKey: vi.fn(() => "ssh-ed25519 TARGET chris@gateway"),
       gitHost: mkGitHost({ registerKey }),
-      activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
+      activateImportedUser: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
       listProjectsNeedingClone: vi.fn(async () => pendingProjects),
       cloneProjectRepo,
       recordAppliedFingerprint,
@@ -1941,14 +1941,14 @@ describe("queued-rsync migration control handlers", () => {
     await handler(req, res, vi.fn());
 
     expect(getStatus()).toBe(200);
-    expect(markCustomerMigratingIn).toHaveBeenCalledWith("chris");
+    expect(markUserMigratingIn).toHaveBeenCalledWith("chris");
     expect(registerKey).toHaveBeenCalledWith(
       "chris",
       "ssh-ed25519 TARGET chris@gateway",
     );
-    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", expect.objectContaining({ migrationId: body.migrationId }));
+    expect(adapter.activateImportedUser).toHaveBeenCalledWith("chris", expect.objectContaining({ migrationId: body.migrationId }));
     expect(registerKey.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(adapter.activateImportedCustomer).mock.invocationCallOrder[0],
+      vi.mocked(adapter.activateImportedUser).mock.invocationCallOrder[0],
     );
     expect(cloneProjectRepo).toHaveBeenCalledWith(
       "chris",
@@ -1957,7 +1957,7 @@ describe("queued-rsync migration control handlers", () => {
       undefined,
     );
     expect(cloneProjectRepo.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(adapter.activateImportedCustomer).mock.invocationCallOrder[0],
+      vi.mocked(adapter.activateImportedUser).mock.invocationCallOrder[0],
     );
     expect(recordAppliedFingerprint).toHaveBeenCalledWith("chris", "fp-chris");
     expect(onMounted).toHaveBeenCalledWith("chris");
@@ -1966,15 +1966,15 @@ describe("queued-rsync migration control handlers", () => {
 
   it("refuses a direct Shared activation without retained original identities before Native or key effects", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "direct-shared-target-")); migrationTempRoots.push(root); vi.stubEnv("OPENCLAW_STATE_DIR", root); vi.stubEnv("POD_UID", "target-pod");
-    const adapter = mkAdapter({ isBuilderGateway: () => false, targetMigrationIdentityCustody: async () => ({
+    const adapter = mkAdapter({ isIsolatedGateway: () => false, targetMigrationIdentityCustody: async () => ({
       custody: { uid: "uid-chris", gatewayId: GATEWAY_ID, podUid: "target-pod", migrationId: "mig-direct-missing" },
-      migration: { migrationId: "mig-direct-missing", claimStartedAt: 123, sourceGatewayId: "builder-source", sourceEpoch: 4 },
+      migration: { migrationId: "mig-direct-missing", claimStartedAt: 123, sourceGatewayId: "user-source", sourceEpoch: 4 },
     }) });
     const body = { migrationId: "mig-direct-missing", slug: "chris" };
     const response = mkResponse();
     await createActivateImportHandler(mkDeps({ adapter }))(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn());
     expect(response.getStatus()).toBe(500);
-    expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(adapter.activateImportedUser).not.toHaveBeenCalled();
     expect(adapter.gitHost.registerKey).not.toHaveBeenCalled();
   });
 
@@ -2002,21 +2002,21 @@ describe("queued-rsync migration control handlers", () => {
       error: "activate-import failed",
       message: expect.stringContaining("project checkout hydration incomplete"),
     });
-    expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(adapter.activateImportedUser).not.toHaveBeenCalled();
   });
 
-  it("activates a standard migration when the only missing checkout is a GitHub project that hydrates on the owner's Builder runtime", async () => {
+  it("activates a standard migration when the only missing checkout is a GitHub project that hydrates on the owner's isolated runtime", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "direct-shared-github-")); migrationTempRoots.push(root); vi.stubEnv("OPENCLAW_STATE_DIR", root); vi.stubEnv("POD_UID", "shared-target-pod");
     await writeSharedTargetManifest(root, root, "mig-github-deferred");
     const cloneProjectRepo = vi.fn(async () => false);
     const adapter = mkAdapter({
-      isBuilderGateway: vi.fn(() => false),
-      isConfiguredBuilderCustomer: vi.fn(() => false),
+      isIsolatedGateway: vi.fn(() => false),
+      isConfiguredUser: vi.fn(() => false),
       listProjectsNeedingClone: vi.fn(async () => [
         { projectSlug: "octogee", giteaRepoName: null, repoSource: { provider: "github", owner: "octogee-ai", repo: "octogee" } },
       ]),
       cloneProjectRepo,
-      activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
+      activateImportedUser: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
     });
     const body: ActivateImportRequestBody = {
       migrationId: "mig-github-deferred",
@@ -2032,21 +2032,21 @@ describe("queued-rsync migration control handlers", () => {
 
     expect(getStatus()).toBe(200);
     expect(cloneProjectRepo).not.toHaveBeenCalled();
-    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", expect.objectContaining({ migrationId: body.migrationId }));
+    expect(adapter.activateImportedUser).toHaveBeenCalledWith("chris", expect.objectContaining({ migrationId: body.migrationId }));
     expect(getBody()).toMatchObject({ migrationId: "mig-github-deferred", slug: "chris", imported: true });
   });
 
-  it("activates an import onto the owner's own Builder runtime with its GitHub checkout left for the post-cutover reconcile", async () => {
+  it("activates an import onto the owner's own isolated runtime with its GitHub checkout left for the post-cutover reconcile", async () => {
     const cloneProjectRepo = vi.fn(async () => false);
     const recordAppliedFingerprint = vi.fn();
     const adapter = mkAdapter({
-      isBuilderGateway: vi.fn(() => true),
-      isConfiguredBuilderCustomer: vi.fn(() => true),
+      isIsolatedGateway: vi.fn(() => true),
+      isConfiguredUser: vi.fn(() => true),
       listProjectsNeedingClone: vi.fn(async () => [
         { projectSlug: "octogee", giteaRepoName: null, repoSource: { provider: "github", owner: "octogee-ai", repo: "octogee" } },
       ]),
       cloneProjectRepo,
-      activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
+      activateImportedUser: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
       recordAppliedFingerprint,
     });
     const body: ActivateImportRequestBody = {
@@ -2063,7 +2063,7 @@ describe("queued-rsync migration control handlers", () => {
 
     expect(getStatus()).toBe(200);
     expect(cloneProjectRepo).not.toHaveBeenCalled();
-    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", expect.objectContaining({ migrationId: body.migrationId }));
+    expect(adapter.activateImportedUser).toHaveBeenCalledWith("chris", expect.objectContaining({ migrationId: body.migrationId }));
     expect(recordAppliedFingerprint).toHaveBeenCalledWith("chris", pendingCloneAppliedFingerprint("fp-chris"));
     expect(getBody()).toMatchObject({ migrationId: "mig-github-owner-runtime", slug: "chris", imported: true });
   });
@@ -2071,7 +2071,7 @@ describe("queued-rsync migration control handlers", () => {
   it("createPrepareRsyncImportHandler opens a one-time target rsync import session", async () => {
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => "/openclaw"),
-      markCustomerMigratingIn: vi.fn(),
+      markUserMigratingIn: vi.fn(),
     });
     const waitForRsyncReady = vi.fn(async () => undefined);
     const closeTransport = vi.fn(async () => undefined);
@@ -2110,7 +2110,7 @@ describe("queued-rsync migration control handlers", () => {
       certificatePem: TARGET_CERTIFICATE_PEM,
     });
     expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris", "pre");
-    expect(adapter.markCustomerMigratingIn).toHaveBeenCalledWith("chris");
+    expect(adapter.markUserMigratingIn).toHaveBeenCalledWith("chris");
     expect(waitForRsyncReady).toHaveBeenCalledWith(RSYNC_DAEMON_LOOPBACK_PORT);
     expect(openMigrationTlsEndpoint).toHaveBeenCalledWith(expect.objectContaining({
       publicPort: 30873,
@@ -2158,13 +2158,13 @@ describe("queued-rsync migration control handlers", () => {
     expect(closeTransport).toHaveBeenCalled();
   });
 
-  it("reserves the surge target only for a configured Builder final import, before opening its session, and fails closed", async () => {
-    stubBuilderClaim("chris");
+  it("reserves the surge target only for a configured user final import, before opening its session, and fails closed", async () => {
+    stubUserClaim("chris");
     const adapter = mkAdapter({
-      isBuilderGateway: vi.fn(() => true),
+      isIsolatedGateway: vi.fn(() => true),
       prepareKeyImportDir: vi.fn(async () => "/openclaw-keys"),
       prepareImportDir: vi.fn(async () => "/openclaw"),
-      markCustomerMigratingIn: vi.fn(),
+      markUserMigratingIn: vi.fn(),
     });
     const reserveSurgeTarget = vi.fn(async () => undefined);
     const waitForRsyncReady = vi.fn(async () => undefined);
@@ -2228,7 +2228,7 @@ describe("queued-rsync migration control handlers", () => {
   it("reclaims an interrupted rsync session only for its owning migration", async () => {
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => "/openclaw"),
-      markCustomerMigratingIn: vi.fn(),
+      markUserMigratingIn: vi.fn(),
     });
     const waitForRsyncReady = vi.fn(async () => undefined);
     const interruptedDaemon = mkFakeChild();
@@ -2310,10 +2310,10 @@ describe("queued-rsync migration control handlers", () => {
     const manifest = {
       version: 2 as const, slug: "chris", appliedFingerprint: "fp-chris",
       agentId: "octogee-chris-coach", accountId: "chris-coach",
-      agent: { id: "octogee-chris-coach", workspace: path.join(process.env.OPENCLAW_STATE_DIR || OPENCLAW_DIR, "customers", "chris") }, projectAgents: [], mattermostAccount: { botToken: "coach-pat" }, bindings: [],
+      agent: { id: "octogee-chris-coach", workspace: path.join(process.env.OPENCLAW_STATE_DIR || OPENCLAW_DIR, "customers", "chris") }, projectAgents: [], mattermostAccount: { botToken: "default-agent-pat" }, bindings: [],
     };
     const sources = [{ cwd: "/state", path: "agents/octogee-chris-coach" }];
-    function push(adapter: CustomerLifecycleAdapter, timeoutMs = 330_000) {
+    function push(adapter: UserLifecycleAdapter, timeoutMs = 330_000) {
       const body: PushRsyncStateRequestBody = {
         migrationId: "mig-export-deadline", slug: "chris", rpcPhase: "push-rsync-state", mode: "pre",
         targetHost: TARGET_POD_IP, targetPort: 30873, targetCertificatePem: TARGET_CERTIFICATE_PEM,
@@ -2486,7 +2486,7 @@ describe("queued-rsync migration control handlers", () => {
       version: 2 as const, slug: "livefixture", appliedFingerprint: "fp-livefixture",
       agentId: "octogee-livefixture-coach", accountId: "livefixture-coach",
       agent: { id: "octogee-livefixture-coach", workspace: path.join(process.env.OPENCLAW_STATE_DIR || OPENCLAW_DIR, "customers", "livefixture") },
-      projectAgents: [], mattermostAccount: { botToken: "coach-pat" }, bindings: [],
+      projectAgents: [], mattermostAccount: { botToken: "default-agent-pat" }, bindings: [],
     };
     const sources = [{ cwd: "/state", path: "agents/octogee-livefixture-coach" }];
     function push(deps: Partial<MigrationHandlerDeps>, mode: "pre" | "final" = "pre") {
@@ -2500,7 +2500,7 @@ describe("queued-rsync migration control handlers", () => {
       return { ...response, work: handler(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn()) };
     }
 
-    it("refuses the pre-copy at once when the source has no converged configuration for the customer", async () => {
+    it("refuses the pre-copy at once when the source has no converged configuration for the user", async () => {
       const listExportPaths = vi.fn(async () => sources);
       const exportManifest = vi.fn(async () => manifest);
       const log = vi.fn();
@@ -2562,7 +2562,7 @@ describe("queued-rsync migration control handlers", () => {
         agentId: "octogee-chris-coach",
         accountId: "chris-coach",
         agent: { id: "octogee-chris-coach" },
-        mattermostAccount: { botToken: "coach-pat" },
+        mattermostAccount: { botToken: "default-agent-pat" },
         bindings: [{ agentId: "octogee-chris-coach" }],
       })),
     });
@@ -2628,10 +2628,10 @@ describe("queued-rsync migration control handlers", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("does not materialize an activation manifest for a configured Builder final transfer", async () => {
-    stubBuilderClaim("chris");
+  it("does not materialize an activation manifest for a configured user final transfer", async () => {
+    stubUserClaim("chris");
     const exportOpenClawActivationManifest = vi.fn(async () => {
-      throw new Error("Builder transfer must not materialize an activation manifest");
+      throw new Error("User transfer must not materialize an activation manifest");
     });
     const adapter = mkAdapter({
       listExportPaths: vi.fn(async () => [
@@ -2644,7 +2644,7 @@ describe("queued-rsync migration control handlers", () => {
     });
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
     const body: PushRsyncStateRequestBody = {
-      migrationId: "mig-builder-push",
+      migrationId: "mig-user-push",
       slug: "chris",
       rpcPhase: "push-rsync-state",
       mode: "final",
@@ -2672,10 +2672,10 @@ describe("queued-rsync migration control handlers", () => {
     expect(args.some((arg) => arg.includes(".octogee-migration-activation"))).toBe(false);
   });
 
-  it("rejects a configured Builder transfer on a nonmatching gateway", async () => {
-    stubBuilderClaim("alice");
+  it("rejects a configured user transfer on a nonmatching gateway", async () => {
+    stubUserClaim("alice");
     const body: PrepareRsyncImportRequestBody = {
-      migrationId: "mig-builder-wrong-target",
+      migrationId: "mig-user-wrong-target",
       slug: "chris",
       rpcPhase: "prepare-rsync-import",
       mode: "final",
@@ -2694,33 +2694,33 @@ describe("queued-rsync migration control handlers", () => {
 
     expect(response.getStatus()).toBe(409);
     expect(response.getBody()).toEqual({
-      error: "configured Builder system config transfer requires the matching Builder gateway",
+      error: "configured user system config transfer requires the matching isolated gateway",
     });
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it.each(["ready", "activation-failed", "verification-pending", "startup-failed", "disconnected", "cancellation-failed"])(
-    "activates a held Barn-to-Builder target through its process gate: %s",
+    "activates a held shared-to-isolated target through its process gate: %s",
     async (outcome) => {
       vi.stubEnv("POD_UID", "builder-pod");
       const events: string[] = [];
       const response = mkResponse();
       const adapter = mkAdapter({
-        isBuilderGateway: () => true,
-        isConfiguredBuilderCustomer: (slug) => slug === "chris",
+        isIsolatedGateway: () => true,
+        isConfiguredUser: (slug) => slug === "chris",
         prepareImportDir: vi.fn(async () => "/openclaw"),
-        activateImportedCustomer: vi.fn(async () => {
+        activateImportedUser: vi.fn(async () => {
           expect(events).toContain("attach-permit-verify");
           events.push("activate-manifest");
-          if (outcome === "activation-failed") throw new Error("Coach activation failed");
-          return { appliedFingerprint: "imported-coach", ...(outcome === "verification-pending" ? { verificationPending: "Coach disconnected" } : {}) };
+          if (outcome === "activation-failed") throw new Error("Agent activation failed");
+          return { appliedFingerprint: "imported-coach", ...(outcome === "verification-pending" ? { verificationPending: "Agent disconnected" } : {}) };
         }),
       });
       const reserveSurgeTarget = vi.fn(async () => { events.push("reserve"); });
       const unreserveSurgeTarget = vi.fn(async () => {
         events.push("cancel");
         if (outcome === "cancellation-failed") throw new Error("supervisor unavailable");
-        return HELD_BUILDER_GATE_STATE;
+        return HELD_USER_GATE_STATE;
       });
       const releaseSurgeReadiness = vi.fn(async () => {
         events.push("attach-permit-verify");
@@ -2753,9 +2753,9 @@ describe("queued-rsync migration control handlers", () => {
       }), response.res, vi.fn());
       expect(events.slice(0, 4)).toEqual(["reserve", "copy", "pause-config-watch", "attach-permit-verify"]);
       if (["ready", "activation-failed", "verification-pending"].includes(outcome)) {
-        expect(adapter.activateImportedCustomer).toHaveBeenCalledExactlyOnceWith("chris", { signal: expect.any(AbortSignal) });
+        expect(adapter.activateImportedUser).toHaveBeenCalledExactlyOnceWith("chris", { signal: expect.any(AbortSignal) });
       } else {
-        expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
+        expect(adapter.activateImportedUser).not.toHaveBeenCalled();
       }
       expect(releaseSurgeReadiness).toHaveBeenCalledWith({
         migrationId: prepare.migrationId, targetPodUid: "builder-pod", importSlug: "chris",
@@ -2764,7 +2764,7 @@ describe("queued-rsync migration control handlers", () => {
         expect(response.getStatus()).toBe(200);
         expect(response.getBody()).toEqual({
           migrationId: prepare.migrationId, slug: "chris", imported: true,
-          ...(outcome === "verification-pending" ? { verificationPending: "Coach disconnected" } : {}),
+          ...(outcome === "verification-pending" ? { verificationPending: "Agent disconnected" } : {}),
         });
         expect(adapter.onMounted).toHaveBeenCalledWith("chris");
         expect(unreserveSurgeTarget).not.toHaveBeenCalled();
@@ -2777,29 +2777,29 @@ describe("queued-rsync migration control handlers", () => {
         if (outcome === "cancellation-failed") {
           expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("OpenClaw startup failed"));
           expect(response.getBody()).toMatchObject({
-            message: "Builder activation failed and could not be cancelled",
+            message: "User activation failed and could not be cancelled",
           });
         }
       }
     },
   );
 
-  it.each(["missing-gate", "missing-pod", "wrong-builder"])(
-    "rejects unsafe cold Builder import before transferring state: %s",
+  it.each(["missing-gate", "missing-pod", "wrong-user"])(
+    "rejects unsafe cold user import before transferring state: %s",
     async (scenario) => {
       vi.stubEnv("POD_UID", scenario === "missing-pod" ? "" : "builder-pod");
       const adapter = mkAdapter({
-        isBuilderGateway: () => true,
-        isConfiguredBuilderCustomer: () => scenario !== "wrong-builder",
+        isIsolatedGateway: () => true,
+        isConfiguredUser: () => scenario !== "wrong-user",
       });
       const reserveSurgeTarget = vi.fn(async () => undefined);
       const deps = mkDeps({
         adapter, reserveSurgeTarget,
         releaseSurgeReadiness: scenario === "missing-gate" ? undefined : async () => undefined,
-        unreserveSurgeTarget: async () => HELD_BUILDER_GATE_STATE,
+        unreserveSurgeTarget: async () => HELD_USER_GATE_STATE,
       });
       const body: PrepareRsyncImportRequestBody = {
-        migrationId: "unsafe-builder", slug: "chris", mode: "final", rpcPhase: "prepare-rsync-import",
+        migrationId: "unsafe-user", slug: "chris", mode: "final", rpcPhase: "prepare-rsync-import",
         transferUser: "migration", transferKey: "c".repeat(64),
       };
       const response = mkResponse();
@@ -2813,23 +2813,23 @@ describe("queued-rsync migration control handlers", () => {
     },
   );
 
-  it.each([false, true])("cancels a cold Builder reservation when import preparation fails; cancellation fails: %s", async (fails) => {
+  it.each([false, true])("cancels a cold user reservation when import preparation fails; cancellation fails: %s", async (fails) => {
     vi.stubEnv("POD_UID", "builder-pod");
     const adapter = mkAdapter({
-      isBuilderGateway: () => true,
+      isIsolatedGateway: () => true,
       prepareImportDir: vi.fn(async () => { throw new Error("cannot prepare import root"); }),
     });
     const reserveSurgeTarget = vi.fn(async () => undefined);
     const unreserveSurgeTarget = vi.fn(async () => {
       if (fails) throw new Error("supervisor unavailable");
-      return HELD_BUILDER_GATE_STATE;
+      return HELD_USER_GATE_STATE;
     });
     const deps = mkDeps({
       adapter, reserveSurgeTarget,
       releaseSurgeReadiness: async () => undefined, unreserveSurgeTarget,
     });
     const body: PrepareRsyncImportRequestBody = {
-      migrationId: "prepare-failed-builder", slug: "chris", mode: "final", rpcPhase: "prepare-rsync-import",
+      migrationId: "prepare-failed-user", slug: "chris", mode: "final", rpcPhase: "prepare-rsync-import",
       transferUser: "migration", transferKey: "c".repeat(64),
     };
     const response = mkResponse();
@@ -2846,13 +2846,13 @@ describe("queued-rsync migration control handlers", () => {
     if (fails) expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("supervisor unavailable"));
   });
 
-  it.each(["held", "failed", "permitted", "cleanup-failed"])("cancels a prepared cold Builder import; result: %s", async (outcome) => {
+  it.each(["held", "failed", "permitted", "cleanup-failed"])("cancels a prepared cold user import; result: %s", async (outcome) => {
     vi.stubEnv("POD_UID", "builder-pod");
     const adapter = mkAdapter({
-      isBuilderGateway: () => true,
+      isIsolatedGateway: () => true,
       clearMountMarker: vi.fn(),
-      clearCustomerMigratingIn: vi.fn(),
-      removeImportedCustomerBySlug: vi.fn(async () => {
+      clearUserMigratingIn: vi.fn(),
+      removeImportedUserBySlug: vi.fn(async () => {
         if (outcome === "cleanup-failed") throw new Error("Native journal unavailable");
         return { wasMounted: true, steps: [] };
       }),
@@ -2860,14 +2860,14 @@ describe("queued-rsync migration control handlers", () => {
     const unreserveSurgeTarget = vi.fn<NonNullable<MigrationHandlerDeps["unreserveSurgeTarget"]>>(async (_request, cleanup) => {
       if (outcome === "failed") throw new Error("supervisor unavailable");
       await cleanup?.(async () => undefined);
-      return { ...HELD_BUILDER_GATE_STATE, mode: outcome === "held" ? "held" as const : "permitted" as const };
+      return { ...HELD_USER_GATE_STATE, mode: outcome === "held" ? "held" as const : "permitted" as const };
     });
     const deps = mkDeps({
       adapter, reserveSurgeTarget: async () => undefined,
       releaseSurgeReadiness: async () => undefined, unreserveSurgeTarget,
     });
     const body: AbortRsyncImportRequestBody = {
-      migrationId: "cancel-builder", slug: "chris", mode: "final", rpcPhase: "abort-rsync-import",
+      migrationId: "cancel-user", slug: "chris", mode: "final", rpcPhase: "abort-rsync-import",
     };
     const response = mkResponse();
     await createAbortRsyncImportHandler(deps)(mkRequest(body, {
@@ -2880,7 +2880,7 @@ describe("queued-rsync migration control handlers", () => {
     if (outcome !== "held") {
       expect(adapter.onUnmounted).not.toHaveBeenCalled();
       expect(adapter.clearMountMarker).not.toHaveBeenCalled();
-      expect(adapter.clearCustomerMigratingIn).not.toHaveBeenCalled();
+      expect(adapter.clearUserMigratingIn).not.toHaveBeenCalled();
       expect(deps.log).toHaveBeenCalledWith(expect.stringContaining(
         outcome === "failed" ? "supervisor unavailable" : outcome === "cleanup-failed" ? "Native journal unavailable" : "process is permitted",
       ), { status: "failed" });
@@ -2894,8 +2894,8 @@ describe("queued-rsync migration control handlers", () => {
     const recordAppliedFingerprint = vi.fn();
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => "/openclaw"),
-      activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
-      markCustomerMigratingIn: vi.fn(),
+      activateImportedUser: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
+      markUserMigratingIn: vi.fn(),
       recordAppliedFingerprint,
       onMounted: vi.fn(),
     });
@@ -2957,7 +2957,7 @@ describe("queued-rsync migration control handlers", () => {
     expect(getStatus()).toBe(200);
     expect(getBody()).toMatchObject({ migrationId: "mig-finish", slug: "chris", imported: true });
     expect(daemon.kill).toHaveBeenCalled();
-    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", expect.any(Object));
+    expect(adapter.activateImportedUser).toHaveBeenCalledWith("chris", expect.any(Object));
     expect(deps.pauseSystemConfigWatch).toHaveBeenCalledWith("chris");
     expect(deps.resumeSystemConfigWatch).not.toHaveBeenCalled();
     expect(recordAppliedFingerprint).not.toHaveBeenCalled();
@@ -2969,8 +2969,8 @@ describe("queued-rsync migration control handlers", () => {
     expect(copyArgs.at(-1)).toBe("/openclaw/");
   });
 
-  it("replaces only the imported customer's files and Git refs with the final source state", async () => {
-    const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "final-customer-state-"));
+  it("replaces only the imported user's files and Git refs with the final source state", async () => {
+    const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "final-user-state-"));
     migrationTempRoots.push(importDir);
     const adapter = mkAdapter({ prepareImportDir: vi.fn(async () => importDir) });
     const spawn = await realMigrationSpawn();
@@ -3018,11 +3018,11 @@ describe("queued-rsync migration control handlers", () => {
   it("keeps a committed import whose activation could not finish verifying", async () => {
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => "/openclaw"),
-      activateImportedCustomer: vi.fn(async () => ({
+      activateImportedUser: vi.fn(async () => ({
         appliedFingerprint: "fp-chris",
         verificationPending: "connect response timed out after 30000ms",
       })),
-      markCustomerMigratingIn: vi.fn(),
+      markUserMigratingIn: vi.fn(),
       onMounted: vi.fn(),
     });
     const daemon = mkFakeChild();
@@ -3078,8 +3078,8 @@ describe("queued-rsync migration control handlers", () => {
     expect(adapter.onMounted).toHaveBeenCalledWith("chris");
   });
 
-  it("omits neutral fallback state from a configured Builder final import before surge release", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "builder-finish-"));
+  it("omits neutral fallback state from a configured user final import before surge release", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "user-finish-"));
     migrationTempRoots.push(stateDir);
     const configPath = path.join(stateDir, "openclaw.json");
     await fs.writeFile(configPath, JSON.stringify({
@@ -3088,27 +3088,27 @@ describe("queued-rsync migration control handlers", () => {
     vi.stubEnv("OPENCLAW_DIR", stateDir);
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-    stubBuilderClaim("chris");
+    stubUserClaim("chris");
     vi.stubEnv("POD_UID", "builder-pod");
     const mounted: string[] = [];
     const onMounted = vi.fn((slug: string) => {
       if (!mounted.includes(slug)) mounted.push(slug);
     });
-    const markCustomerMigratingIn = vi.fn();
+    const markUserMigratingIn = vi.fn();
     const adapter = mkAdapter({
-      isBuilderGateway: vi.fn(() => true),
-      isConfiguredBuilderCustomer: vi.fn(slug => slug === "chris"),
-      configuredBuilderOverlayPresent: vi.fn(() => true),
-      hasCustomerSshKey: vi.fn(() => true),
+      isIsolatedGateway: vi.fn(() => true),
+      isConfiguredUser: vi.fn(slug => slug === "chris"),
+      configuredUserOverlayPresent: vi.fn(() => true),
+      hasUserSshKey: vi.fn(() => true),
       gitHost: mkGitHost({ listKeys: vi.fn(async () => ["ssh-ed25519 LOCAL chris@gateway"]) }),
       hasWorkspaceGitDir: vi.fn(() => true),
       hasGitRemote: vi.fn(() => true),
       prepareImportDir: vi.fn(async () => stateDir),
-      activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "unexpected" })),
-      applyAddCustomerConfigPatch: vi.fn(async () => ({ elapsedMs: 1 })),
-      markCustomerMigratingIn,
+      activateImportedUser: vi.fn(async () => ({ appliedFingerprint: "unexpected" })),
+      applyAddUserConfigPatch: vi.fn(async () => ({ elapsedMs: 1 })),
+      markUserMigratingIn,
       writeMountMarker: vi.fn(),
-      customerMountMarked: vi.fn(() => true),
+      userMountMarked: vi.fn(() => true),
       onMounted,
     });
     const daemon = mkFakeChild();
@@ -3129,14 +3129,14 @@ describe("queued-rsync migration control handlers", () => {
       adapter,
       migrationRsyncPort: 30873,
       waitForRsyncReady: vi.fn(async () => undefined),
-      getMountedCustomers: () => mounted,
+      getMountedUsers: () => mounted,
       surgeTargetOpenClawHeld: vi.fn(async request => {
-        expect(request).toEqual({ migrationId: "mig-builder-finish", slug: "chris", targetPodUid: "builder-pod" });
+        expect(request).toEqual({ migrationId: "mig-user-finish", slug: "chris", targetPodUid: "builder-pod" });
         return true;
       }),
     });
     const prepareBody: PrepareRsyncImportRequestBody = {
-      migrationId: "mig-builder-finish",
+      migrationId: "mig-user-finish",
       slug: "chris",
       rpcPhase: "prepare-rsync-import",
       mode: "final",
@@ -3165,7 +3165,7 @@ describe("queued-rsync migration control handlers", () => {
     }
 
     const finishBody: FinishRsyncImportRequestBody = {
-      migrationId: "mig-builder-finish",
+      migrationId: "mig-user-finish",
       slug: "chris",
       rpcPhase: "finish-rsync-import",
       mode: "final",
@@ -3181,20 +3181,20 @@ describe("queued-rsync migration control handlers", () => {
     );
 
     expect(finishResponse.getStatus()).toBe(200);
-    expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
-    expect(adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();
+    expect(adapter.activateImportedUser).not.toHaveBeenCalled();
+    expect(adapter.applyAddUserConfigPatch).not.toHaveBeenCalled();
     expect(adapter.loadUserSnapshot).not.toHaveBeenCalled();
     expect(adapter.writeMountMarker).not.toHaveBeenCalled();
     expect(onMounted).not.toHaveBeenCalled();
-    expect(markCustomerMigratingIn).toHaveBeenCalledWith("chris");
+    expect(markUserMigratingIn).toHaveBeenCalledWith("chris");
     expect(mounted).toEqual([]);
     expect(deps.log).toHaveBeenCalledWith(
       expect.stringContaining("omitted system fallback state from staged import"),
     );
   });
 
-  it("rejects a final import whose config transfer mode does not match the prepared Builder session", async () => {
-    stubBuilderClaim("chris");
+  it("rejects a final import whose config transfer mode does not match the prepared user session", async () => {
+    stubUserClaim("chris");
     const adapter = mkAdapter({ prepareImportDir: vi.fn(async () => "/openclaw") });
     const daemon = mkFakeChild();
     spawnMock.mockReturnValueOnce(daemon);
@@ -3204,7 +3204,7 @@ describe("queued-rsync migration control handlers", () => {
       waitForRsyncReady: vi.fn(async () => undefined),
     });
     const prepareBody: PrepareRsyncImportRequestBody = {
-      migrationId: "mig-builder-mismatch",
+      migrationId: "mig-user-mismatch",
       slug: "chris",
       rpcPhase: "prepare-rsync-import",
       mode: "final",
@@ -3220,7 +3220,7 @@ describe("queued-rsync migration control handlers", () => {
       vi.fn(),
     );
     const finishBody: FinishRsyncImportRequestBody = {
-      migrationId: "mig-builder-mismatch",
+      migrationId: "mig-user-mismatch",
       slug: "chris",
       rpcPhase: "finish-rsync-import",
       mode: "final",
@@ -3240,7 +3240,7 @@ describe("queued-rsync migration control handlers", () => {
       error: "rsync import config transfer mode does not match prepared session",
     });
     const abortBody: AbortRsyncImportRequestBody = {
-      migrationId: "mig-builder-mismatch",
+      migrationId: "mig-user-mismatch",
       slug: "chris",
       rpcPhase: "abort-rsync-import",
       mode: "final",
@@ -3256,18 +3256,18 @@ describe("queued-rsync migration control handlers", () => {
     expect(daemon.kill).toHaveBeenCalled();
   });
 
-  it("clears only Builder migration observation when a final import is aborted", async () => {
-    stubBuilderClaim("chris");
+  it("clears only user migration observation when a final import is aborted", async () => {
+    stubUserClaim("chris");
     const clearMountMarker = vi.fn();
-    const clearCustomerMigratingIn = vi.fn();
+    const clearUserMigratingIn = vi.fn();
     const onUnmounted = vi.fn();
     const adapter = mkAdapter({
       clearMountMarker,
-      clearCustomerMigratingIn,
+      clearUserMigratingIn,
       onUnmounted,
     });
     const body: AbortRsyncImportRequestBody = {
-      migrationId: "mig-builder-abort",
+      migrationId: "mig-user-abort",
       slug: "chris",
       rpcPhase: "abort-rsync-import",
       mode: "final",
@@ -3285,10 +3285,10 @@ describe("queued-rsync migration control handlers", () => {
 
     expect(response.getStatus()).toBe(200);
     expect(clearMountMarker).toHaveBeenCalledWith("chris");
-    expect(clearCustomerMigratingIn).toHaveBeenCalledWith("chris");
+    expect(clearUserMigratingIn).toHaveBeenCalledWith("chris");
     expect(onUnmounted).toHaveBeenCalledWith("chris");
-    expect(adapter.applyRemoveCustomerConfigPatch).not.toHaveBeenCalled();
-    expect(adapter.deleteDepartedCustomerState).not.toHaveBeenCalled();
+    expect(adapter.applyRemoveUserConfigPatch).not.toHaveBeenCalled();
+    expect(adapter.deleteDepartedUserState).not.toHaveBeenCalled();
   });
 
   it("does not acknowledge a finished key import until its rsync listener exits", async () => {
@@ -3542,7 +3542,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     ]));
   });
 
-  it.each([false, true])("carries a fresh held Builder source without a captured manifest (uncaptured=%s)", async (uncaptured) => {
+  it.each([false, true])("carries a fresh held user source without a captured manifest (uncaptured=%s)", async (uncaptured) => {
     const stateDir = await mkTempRoot();
     await writeStore(stateDir, CARRIED_STORE, () => {});
     const surgeSourceOpenClawHeld = vi.fn(async () => true);
@@ -3709,14 +3709,14 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     daemon: ReturnType<typeof mkFakeChild>;
     mode?: "pre" | "final";
     configTransferMode?: PrepareRsyncImportRequestBody["configTransferMode"];
-    adapter?: Partial<CustomerLifecycleAdapter>;
+    adapter?: Partial<UserLifecycleAdapter>;
     deps?: Partial<MigrationHandlerDeps>;
   }): Promise<{ deps: MigrationHandlerDeps; stageDir: string }> {
-    if (input.adapter?.isBuilderGateway?.() === false && !process.env.POD_UID) vi.stubEnv("POD_UID", "shared-target-pod");
+    if (input.adapter?.isIsolatedGateway?.() === false && !process.env.POD_UID) vi.stubEnv("POD_UID", "shared-target-pod");
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => input.importDir),
-      activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
-      markCustomerMigratingIn: vi.fn(),
+      activateImportedUser: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
+      markUserMigratingIn: vi.fn(),
       onMounted: vi.fn(),
       ...input.adapter,
     });
@@ -3752,7 +3752,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       .find((arg) => arg.startsWith("--config="))!
       .slice("--config=".length);
     const stageDir = /^\s*path = (.+)$/mu.exec(await fs.readFile(configPath, "utf-8"))![1]!;
-    if (input.adapter?.isBuilderGateway?.() === false) await writeSharedTargetManifest(stageDir, input.importDir);
+    if (input.adapter?.isIsolatedGateway?.() === false) await writeSharedTargetManifest(stageDir, input.importDir);
     return { deps, stageDir };
   }
 
@@ -3888,7 +3888,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     const { getStatus, getBody } = await finishImport(deps, migrationId);
     expect(getStatus(), JSON.stringify(getBody())).toBe(200);
     expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
-    expect(deps.adapter.activateImportedCustomer).toHaveBeenCalledOnce();
+    expect(deps.adapter.activateImportedUser).toHaveBeenCalledOnce();
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("omitted optional database"));
     await expect(fs.access(path.join(importDir, "agents/octogee-chris-coach/agent/codex-home/goals_1.sqlite"))).rejects.toThrow();
   });
@@ -3912,7 +3912,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       message: expect.stringContaining("carried agent store customers/chris/app.sqlite does not open"),
     });
     expect(spawnMock.mock.calls).toHaveLength(1);
-    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(deps.adapter.activateImportedUser).not.toHaveBeenCalled();
   });
 
   it("rejects live agent database files carried instead of a snapshot", async () => {
@@ -3942,8 +3942,8 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     const targetMigrationIdentityCustody = vi.fn(async () => ({ ...sharedTargetAuthority("chris", migrationId),
       anchors: [{ agentId: "octogee-chris-coach", storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" }] }));
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
-      adapter: { isBuilderGateway: () => false, targetMigrationIdentityCustody,
-        activateImportedCustomer: vi.fn(async () => { order.push("activate"); return { appliedFingerprint: "fp-chris" }; }) },
+      adapter: { isIsolatedGateway: () => false, targetMigrationIdentityCustody,
+        activateImportedUser: vi.fn(async () => { order.push("activate"); return { appliedFingerprint: "fp-chris" }; }) },
       deps: { procRoot, upgradeImportedAgents } as Partial<MigrationHandlerDeps> });
     await stageSnapshot(stageDir, () => {});
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
@@ -3961,8 +3961,8 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       anchors: failure === "roster" ? [] : [{ ...anchor, ...(changed ? { schema: "octogee_agent_foreign" } : {}) }] }));
     const upgradeImportedAgents = vi.fn(async (input: { assertCurrent: () => Promise<void> }) => { changed = true; await input.assertCurrent(); });
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
-      adapter: { isBuilderGateway: () => false, targetMigrationIdentityCustody,
-        activateImportedCustomer: vi.fn(async () => { order.push("activate"); return { appliedFingerprint: "fp-chris" }; }) },
+      adapter: { isIsolatedGateway: () => false, targetMigrationIdentityCustody,
+        activateImportedUser: vi.fn(async () => { order.push("activate"); return { appliedFingerprint: "fp-chris" }; }) },
       deps: { procRoot, upgradeImportedAgents } as Partial<MigrationHandlerDeps> });
     await stageSnapshot(stageDir, () => {});
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
@@ -3973,16 +3973,16 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     else expect(upgradeImportedAgents).toHaveBeenCalledOnce();
   });
 
-  it("rejects a delayed Builder release while final import holds its in-process claim", async () => {
-    stubBuilderClaim("chris");
+  it("rejects a delayed user release while final import holds its in-process claim", async () => {
+    stubUserClaim("chris");
     vi.stubEnv("POD_UID", "target-pod");
     const importDir = await mkTempRoot(), daemon = mkFakeChild({ holdExit: true });
     const { deps } = await prepareImport({ migrationId: "copy-release-race", importDir, daemon });
     const finishing = finishImport(deps, "copy-release-race");
     try {
       await vi.waitFor(() => expect(migrationImportBusy()).toBe(true));
-      const wiring = createBuilderSurgeGateWiring({ adapter: { isBuilderGateway: () => true,
-        isConfiguredBuilderCustomer: () => true, configuredBuilderOverlayPresent: () => true } as never,
+      const wiring = createIsolatedSurgeGateWiring({ adapter: { isIsolatedGateway: () => true,
+        isConfiguredUser: () => true, configuredUserOverlayPresent: () => true } as never,
         processGate: { status: async () => { throw new Error("owned release entered"); } } as never,
         surgeReadiness: {} as never, waitForGatewayReady: async () => {}, log: () => {},
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() } });
@@ -3999,15 +3999,15 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     }
   });
 
-  it("rejects Builder final import while surge release owns the in-process claim", async () => {
-    stubBuilderClaim("chris");
-    const importDir = await mkTempRoot(), target = builderTargetImport(async () => true);
+  it("rejects user final import while surge release owns the in-process claim", async () => {
+    stubUserClaim("chris");
+    const importDir = await mkTempRoot(), target = isolatedTargetImport(async () => true);
     const { deps } = await prepareImport({ migrationId: "release-copy-race", importDir, daemon: mkFakeChild(),
       adapter: target.adapter, deps: { ...target.deps } });
     let unblock!: () => void;
     const blocked = new Promise<void>(resolve => { unblock = resolve; });
     const status = vi.fn(async () => { await blocked; throw new Error("test release stopped"); });
-    const wiring = createBuilderSurgeGateWiring({ adapter: { ...target.adapter, configuredBuilderOverlayPresent: () => true } as never,
+    const wiring = createIsolatedSurgeGateWiring({ adapter: { ...target.adapter, configuredUserOverlayPresent: () => true } as never,
       processGate: { status } as never, surgeReadiness: {} as never, waitForGatewayReady: async () => {}, log: () => {},
       provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() } });
     const release = wiring.releaseSurgeReadiness({ migrationId: "release-copy-race", targetPodUid: "builder-pod" }).catch(() => {});
@@ -4016,7 +4016,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       deps.surgeReleaseInProgress = wiring.surgeReleaseInProgress;
       const result = await finishImport(deps, "release-copy-race");
       expect(result.getStatus()).toBe(409);
-      expect(result.getBody()).toMatchObject({ error: "Builder surge release is already in progress" });
+      expect(result.getBody()).toMatchObject({ error: "User surge release is already in progress" });
     } finally {
       unblock(); await release;
       const body: AbortRsyncImportRequestBody = { migrationId: "release-copy-race", slug: "chris", mode: "final", rpcPhase: "abort-rsync-import" };
@@ -4032,7 +4032,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       importDir,
       daemon: mkFakeChild(),
       adapter: {
-        activateImportedCustomer: vi.fn(async () => {
+        activateImportedUser: vi.fn(async () => {
           landedAtActivation.push(fsSync.existsSync(path.join(importDir, CARRIED_STORE)));
           return { appliedFingerprint: "fp-chris" };
         }),
@@ -4058,7 +4058,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     const procRoot = await mkTempRoot();
     const migrationId = "mig-shared-undiscoverable-pre";
     const releaseAgent = vi.fn(async () => undefined);
-    const adapter = { isBuilderGateway: () => false, releaseAgent, targetMigrationIdentityCustody: vi.fn(async () => ({
+    const adapter = { isIsolatedGateway: () => false, releaseAgent, targetMigrationIdentityCustody: vi.fn(async () => ({
       ...sharedTargetAuthority("chris", migrationId), anchors: [{ agentId: "octogee-chris-coach", storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" }] })) };
     const pre = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode: "pre", adapter, deps: { procRoot } });
     await fs.mkdir(path.join(pre.stageDir, "agents/octogee-chris-coach/agent"), { recursive: true });
@@ -4080,7 +4080,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(result.getStatus()).toBe(200);
     expect(rowCount(liveDatabase)).toBe(2);
     expect(releaseAgent).not.toHaveBeenCalled();
-    expect(final.deps.adapter.activateImportedCustomer).toHaveBeenCalledOnce();
+    expect(final.deps.adapter.activateImportedUser).toHaveBeenCalledOnce();
     await expect(fs.access(path.dirname(pre.stageDir))).rejects.toThrow();
   });
 
@@ -4102,7 +4102,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     await expect(fs.access(path.join(importDir, "agents"))).rejects.toThrow();
     await expect(fs.access(path.join(path.dirname(stageDir), ".octogee-import"))).rejects.toThrow();
     expect(deps.runOpenClaw).not.toHaveBeenCalled();
-    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(deps.adapter.activateImportedUser).not.toHaveBeenCalled();
 
     const body: AbortRsyncImportRequestBody = { migrationId, slug: "chris", mode: "pre", rpcPhase: "abort-rsync-import" };
     const aborted = mkResponse();
@@ -4112,16 +4112,16 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(await fs.readFile(path.join(importDir, "customers/chris/projects/project/README.md"), "utf8")).toBe("source checkout");
   });
 
-  it("rejects Builder pre-copy without a configured activation gate before staging agent state", async () => {
-    vi.stubEnv("POD_UID", "builder-without-gate");
-    const prepareImportDir = vi.fn(async () => "/unused-builder-state");
+  it("rejects user pre-copy without a configured activation gate before staging agent state", async () => {
+    vi.stubEnv("POD_UID", "user-without-gate");
+    const prepareImportDir = vi.fn(async () => "/unused-user-state");
     const deps = mkDeps({ adapter: mkAdapter({
-      isBuilderGateway: () => true,
-      isConfiguredBuilderCustomer: () => true,
+      isIsolatedGateway: () => true,
+      isConfiguredUser: () => true,
       prepareImportDir,
     }) });
     const body: PrepareRsyncImportRequestBody = {
-      migrationId: "mig-builder-without-gate", slug: "chris", mode: "pre",
+      migrationId: "mig-user-without-gate", slug: "chris", mode: "pre",
       rpcPhase: "prepare-rsync-import", transferUser: "migration", transferKey: "c".repeat(64),
     };
     const response = mkResponse();
@@ -4131,7 +4131,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     }), response.res, vi.fn());
 
     expect(response.getStatus()).toBe(500);
-    expect(response.getBody()).toMatchObject({ message: "configured Builder activation requires its pod-bound process gate" });
+    expect(response.getBody()).toMatchObject({ message: "configured user activation requires its pod-bound process gate" });
     expect(prepareImportDir).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
@@ -4181,7 +4181,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(getStatus()).toBe(500);
     expect(getBody()).toMatchObject({ message: `agent database files are still held open: ${previous}-shm` });
     expect(rowCount(previous)).toBe(1);
-    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(deps.adapter.activateImportedUser).not.toHaveBeenCalled();
   });
 
   it("refuses to replace an occupied database when the gateway cannot release agents", async () => {
@@ -4196,7 +4196,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(getStatus()).toBe(500);
     expect(getBody()).toMatchObject({ message: expect.stringContaining("cannot release agents") });
     expect(fsSync.existsSync(previous)).toBe(true);
-    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(deps.adapter.activateImportedUser).not.toHaveBeenCalled();
   });
 
   function carriedAgentAuthority(agentIds: readonly string[]) {
@@ -4204,29 +4204,29 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       anchors: agentIds.map(agentId => ({ agentId, storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" })) }));
   }
 
-  function builderTargetImport(openClawHeld: MigrationHandlerDeps["surgeTargetOpenClawHeld"], carriedAgentIds: readonly string[] = ["octogee-chris-coach"]): {
-    adapter: Partial<CustomerLifecycleAdapter>;
+  function isolatedTargetImport(openClawHeld: MigrationHandlerDeps["surgeTargetOpenClawHeld"], carriedAgentIds: readonly string[] = ["octogee-chris-coach"]): {
+    adapter: Partial<UserLifecycleAdapter>;
     deps: Partial<MigrationHandlerDeps>;
   } {
     vi.stubEnv("POD_UID", "builder-pod");
     return {
       adapter: {
-        isBuilderGateway: () => true,
-        isConfiguredBuilderCustomer: (slug) => slug === "chris",
+        isIsolatedGateway: () => true,
+        isConfiguredUser: (slug) => slug === "chris",
         releaseAgent: vi.fn(async () => undefined),
         targetMigrationIdentityCustody: carriedAgentAuthority(carriedAgentIds),
       },
       deps: {
         reserveSurgeTarget: vi.fn(async () => undefined),
         releaseSurgeReadiness: vi.fn(async () => undefined),
-        unreserveSurgeTarget: vi.fn(async () => HELD_BUILDER_GATE_STATE),
+        unreserveSurgeTarget: vi.fn(async () => HELD_USER_GATE_STATE),
         ...(openClawHeld ? { surgeTargetOpenClawHeld: openClawHeld } : {}),
       },
     };
   }
 
   it("retains Shared when a source-preserving import finds the target stopped", async () => {
-    const target = builderTargetImport(async () => true), migrationId = "mig-source-safe-stopped";
+    const target = isolatedTargetImport(async () => true), migrationId = "mig-source-safe-stopped";
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), adapter: target.adapter, deps: { ...target.deps, procRoot } });
     await stageSnapshot(stageDir, () => {});
@@ -4236,17 +4236,17 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     await createFinishRsyncImportHandler(deps)(mkRequest(body, { signature: signForPod(migrationId, JSON.stringify(body)) }), response.res, vi.fn());
     expect(response.getStatus()).toBe(500);
     expect(response.getBody()).toMatchObject({ message: expect.stringContaining("source retained") });
-    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(deps.adapter.activateImportedUser).not.toHaveBeenCalled();
     expect(deps.releaseSurgeReadiness).not.toHaveBeenCalled();
   });
 
-  it("runs the scoped agent upgrade on a held Builder activation target before its OpenClaw starts", async () => {
-    const importDir = await mkTempRoot(), procRoot = await mkTempRoot(), migrationId = "mig-held-builder-upgrade";
+  it("runs the scoped agent upgrade on a held user activation target before its OpenClaw starts", async () => {
+    const importDir = await mkTempRoot(), procRoot = await mkTempRoot(), migrationId = "mig-held-user-upgrade";
     const upgradeImportedAgents = vi.fn(async (input: { stores: Array<{ agentId: string; anchorPath: string }>; assertCurrent: () => Promise<void> }) => {
       await input.assertCurrent();
       expect(input.stores).toMatchObject([{ agentId: "octogee-chris-coach", anchorPath: path.join(importDir, CARRIED_STORE) }]);
     });
-    const target = builderTargetImport(vi.fn(async () => true));
+    const target = isolatedTargetImport(vi.fn(async () => true));
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), adapter: target.adapter,
       deps: { ...target.deps, procRoot, upgradeImportedAgents } });
     await stageSnapshot(stageDir, () => {});
@@ -4264,13 +4264,13 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     const importDir = await mkTempRoot(); vi.stubEnv("OPENCLAW_STATE_DIR", importDir); vi.stubEnv("POD_UID", "target-pod");
     const migrationId = `mig-target-persona-${mode}`, projectId = "octogee-chris-proj-persona-coach";
     const workspace = path.join(importDir, "customers/chris"), project = path.join(workspace, "projects/persona");
-    const originals = new Map([[workspace, Buffer.from("# Coach\r\n- Name: Human coach 🐙\r\n")], [project, Buffer.from("# Project\n- Name: Human project\nNotes.\n")]]);
-    const authority = { custody: { migrationId, uid: "uid-chris", gatewayId: GATEWAY_ID, podUid: "target-pod" }, migration: { migrationId, claimStartedAt: 123, sourceGatewayId: "source-builder", sourceEpoch: 4 }, anchors: [{ agentId: "octogee-chris-coach", storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" }] };
+    const originals = new Map([[workspace, Buffer.from("# Agent\r\n- Name: Human agent 🐙\r\n")], [project, Buffer.from("# Project\n- Name: Human project\nNotes.\n")]]);
+    const authority = { custody: { migrationId, uid: "uid-chris", gatewayId: GATEWAY_ID, podUid: "target-pod" }, migration: { migrationId, claimStartedAt: 123, sourceGatewayId: "source-user", sourceEpoch: 4 }, anchors: [{ agentId: "octogee-chris-coach", storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" }] };
     let currentAuthority = authority, lateWrite: (() => Promise<void>) | undefined;
     let calls = 0, published = false;
-    const adapter: Partial<CustomerLifecycleAdapter> = { isBuilderGateway: () => false, releaseAgent: async () => undefined,
+    const adapter: Partial<UserLifecycleAdapter> = { isIsolatedGateway: () => false, releaseAgent: async () => undefined,
       targetMigrationIdentityCustody: vi.fn(async () => currentAuthority),
-      activateImportedCustomer: vi.fn(async (_slug, opts) => {
+      activateImportedUser: vi.fn(async (_slug, opts) => {
         calls++;
         expect(opts?.beforeRuntimePublish).toBeTypeOf("function");
         const writeNative = async () => {
@@ -4328,11 +4328,11 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     else await expect(fs.stat(path.join(importDir, relative))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("prepares a held Builder from a file-only pre-copy without touching its agent database", async () => {
+  it("prepares a held user from a file-only pre-copy without touching its agent database", async () => {
     const importDir = await mkTempRoot();
     const procRoot = await mkTempRoot();
-    const migrationId = "mig-builder-pre-files-only";
-    const target = builderTargetImport(async () => true);
+    const migrationId = "mig-user-pre-files-only";
+    const target = isolatedTargetImport(async () => true);
     const previous = await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native')"));
     const prepareSurgeTarget = vi.fn(async () => {
       expect(rowCount(previous)).toBe(1);
@@ -4372,10 +4372,10 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     await expect(fs.access(path.join(importDir, SNAPSHOT_REPOSITORY))).rejects.toThrow();
   });
 
-  it.each([false, true])("reattaches carried Builder agents offline before permitting Native (restoration fails: %s)", async (refused) => {
+  it.each([false, true])("reattaches carried user agents offline before permitting Native (restoration fails: %s)", async (refused) => {
     const importDir = await mkTempRoot();
     const procRoot = await mkTempRoot();
-    const target = builderTargetImport(async () => true);
+    const target = isolatedTargetImport(async () => true);
     const destination = path.join(importDir, CARRIED_STORE);
     const workspace = path.join(importDir, "customers", "chris");
     const runOpenClaw = vi.fn(async (args: string[]) => {
@@ -4388,7 +4388,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
         ? { code: 1, stdout: JSON.stringify({ ok: false, error: { type: "cli_error", message: "deletion cleanup is still pending" } }) }
         : { code: 0, stdout: JSON.stringify({ agentId: "octogee-chris-coach", workspace, agentDir: path.dirname(destination) }) };
     });
-    const migrationId = `mig-builder-restore-${refused}`;
+    const migrationId = `mig-user-restore-${refused}`;
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), adapter: target.adapter,
       deps: { ...target.deps, procRoot, runOpenClaw } });
     await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('carried'), ('carried')"));
@@ -4404,20 +4404,20 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(target.deps.releaseSurgeReadiness).toHaveBeenCalledTimes(refused ? 0 : 1);
     expect(rowCount(destination)).toBe(2);
     if (!refused) {
-      for (const step of ["final-import agent-reattach", "final-import file-copy", "builder-release"]) {
+      for (const step of ["final-import agent-reattach", "final-import file-copy", "isolated-release"]) {
         expect(deps.log).toHaveBeenCalledWith(expect.stringContaining(`[migration-rsync] ${step} migrationId=${migrationId} slug=chris`),
           { durationMs: expect.any(Number) });
       }
     }
   });
 
-  it.each([false, true])("reattaches a missing carried Builder coach only for the current owner (owner changed=%s)", async ownerChanged => {
+  it.each([false, true])("reattaches a missing carried user agent only for the current owner (owner changed=%s)", async ownerChanged => {
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
     const migrationId = `mig-builder-missing-coach-${ownerChanged}`;
     const agentId = "octogee-chris-coach";
     const workspace = path.join(importDir, "customers", "chris");
     const agentDir = path.dirname(path.join(importDir, CARRIED_STORE));
-    const target = builderTargetImport(async () => true);
+    const target = isolatedTargetImport(async () => true);
     const runOpenClaw = vi.fn(async (args: string[]) => {
       if (args[1] === "list") return { code: 0, stdout: "[]" };
       expect(target.deps.releaseSurgeReadiness).not.toHaveBeenCalled();
@@ -4441,11 +4441,11 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(target.deps.releaseSurgeReadiness).toHaveBeenCalledTimes(ownerChanged ? 0 : 1);
   });
 
-  it.each(["active", "disabled", "missing-token", "owner-changed", "hold-lost"] as const)("checks current ownership before admitting a carried project absent from a fresh Builder roster: %s", async mode => {
+  it.each(["active", "disabled", "missing-token", "owner-changed", "hold-lost"] as const)("checks current ownership before admitting a carried project absent from a fresh user roster: %s", async mode => {
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
     let held = true;
     const agentId = "octogee-chris-proj-demo-coach";
-    const target = builderTargetImport(async () => held, [agentId]);
+    const target = isolatedTargetImport(async () => held, [agentId]);
     const workspace = path.join(importDir, "customers", "chris", "projects", "demo");
     const agentDir = path.join(importDir, "agents", agentId, "agent");
     const runOpenClaw = vi.fn(async (args: string[]) => {
@@ -4457,7 +4457,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       expect(rowCount(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(2);
       return { code: 0, stdout: JSON.stringify({ agentId, workspace, agentDir }) };
     });
-    const { deps, stageDir } = await prepareImport({ migrationId: "mig-builder-unconfigured-project", importDir, daemon: mkFakeChild(),
+    const { deps, stageDir } = await prepareImport({ migrationId: "mig-user-unconfigured-project", importDir, daemon: mkFakeChild(),
       adapter: { ...target.adapter, loadUserSnapshot: vi.fn(async () => {
         if (mode === "hold-lost") held = false;
         return { ...RESTORE_SNAPSHOT, uid: mode === "owner-changed" ? "other-owner" : "uid-chris",
@@ -4468,7 +4468,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('project'), ('project')"), agentId);
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
 
-    const result = await finishImport(deps, "mig-builder-unconfigured-project");
+    const result = await finishImport(deps, "mig-user-unconfigured-project");
 
     expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(mode === "active" ? 200 : 500);
     expect(runOpenClaw).toHaveBeenCalledTimes(mode === "active" ? 2 : 1);
@@ -4476,10 +4476,10 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(rowCount(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(2);
   });
 
-  it("preserves carried project persona files after Native registration of a fresh Builder roster", async () => {
+  it("preserves carried project persona files after Native registration of a fresh user roster", async () => {
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
     const agentId = "octogee-chris-proj-demo-coach";
-    const target = builderTargetImport(async () => true, [agentId]);
+    const target = isolatedTargetImport(async () => true, [agentId]);
     const workspace = path.join(importDir, "customers", "chris", "projects", "demo");
     const agentDir = path.join(importDir, "agents", agentId, "agent");
     const identity = "# IDENTITY.md\n\n- **Name:** Harbor\n\nAuthored project personality.\n";
@@ -4490,7 +4490,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       await fs.writeFile(path.join(workspace, "IDENTITY.md"), `# IDENTITY.md\n\n- Name: ${agentId}\n`);
       return { code: 0, stdout: JSON.stringify({ agentId, workspace, agentDir }) };
     });
-    const { deps, stageDir } = await prepareImport({ migrationId: "mig-builder-project-persona", importDir, daemon: mkFakeChild(),
+    const { deps, stageDir } = await prepareImport({ migrationId: "mig-user-project-persona", importDir, daemon: mkFakeChild(),
       adapter: { ...target.adapter, loadUserSnapshot: vi.fn(async () => ({ ...RESTORE_SNAPSHOT,
         projectAgents: [{ projectId: "demo", enabled: true, status: "ready" as const, token: "fixture-project-token" }],
       })) }, deps: { ...target.deps, procRoot, runOpenClaw } });
@@ -4500,7 +4500,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     await fs.writeFile(path.join(sourceWorkspace, "IDENTITY.md"), identity);
     spawnMock.mockImplementation(await realMigrationSpawn());
 
-    const result = await finishImport(deps, "mig-builder-project-persona");
+    const result = await finishImport(deps, "mig-user-project-persona");
 
     expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200);
     expect(await fs.readFile(path.join(workspace, "IDENTITY.md"), "utf8")).toBe(identity);
@@ -4508,10 +4508,10 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(target.deps.releaseSurgeReadiness).toHaveBeenCalledOnce();
   });
 
-  it("restores a late-created Codex home after held Builder registration and final copy", async () => {
+  it("restores a late-created Codex home after held user registration and final copy", async () => {
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
-    const target = builderTargetImport(async () => true);
-    const migrationId = `mig-builder-late-codex-${path.basename(importDir)}`;
+    const target = isolatedTargetImport(async () => true);
+    const migrationId = `mig-user-late-codex-${path.basename(importDir)}`;
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
       adapter: target.adapter, deps: { ...target.deps, procRoot } });
     await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('required')"));
@@ -4538,13 +4538,13 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(target.deps.releaseSurgeReadiness).toHaveBeenCalledOnce();
   });
 
-  it("refuses Native startup when the Builder hold is lost during anchor installation", async () => {
+  it("refuses Native startup when the user hold is lost during anchor installation", async () => {
     const importDir = await mkTempRoot();
     const procRoot = await mkTempRoot();
     await writeStore(importDir, CARRIED_STORE, () => {});
     const held = vi.fn(async () => true);
-    const target = builderTargetImport(held);
-    const migrationId = "mig-builder-restore-hold-lost";
+    const target = isolatedTargetImport(held);
+    const migrationId = "mig-user-restore-hold-lost";
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
       adapter: target.adapter, deps: { ...target.deps, procRoot } });
     await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('carried')"));
@@ -4554,20 +4554,20 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     const { getStatus, getBody } = await finishImport(deps, migrationId);
 
     expect(getStatus()).toBe(500);
-    expect(getBody()).toMatchObject({ message: "Native Builder restoration requires the migration target to remain held" });
+    expect(getBody()).toMatchObject({ message: "Native user restoration requires the migration target to remain held" });
     expect(deps.runOpenClaw).not.toHaveBeenCalled();
     expect(target.deps.releaseSurgeReadiness).not.toHaveBeenCalled();
   });
 
-  it("replaces an occupied database on a held Builder target without using its unavailable RPC", async () => {
+  it("replaces an occupied database on a held isolated target without using its unavailable RPC", async () => {
     const importDir = await mkTempRoot();
     const procRoot = await mkTempRoot();
     const previous = await writeStore(importDir, CARRIED_STORE, (db) => db.exec("INSERT INTO transcript_events VALUES ('previous')"));
     await fs.writeFile(`${previous}-wal`, "previous session wal");
     const surgeTargetOpenClawHeld = vi.fn(async () => true);
-    const target = builderTargetImport(surgeTargetOpenClawHeld);
+    const target = isolatedTargetImport(surgeTargetOpenClawHeld);
     const { deps, stageDir } = await prepareImport({
-      migrationId: "mig-carry-held-builder",
+      migrationId: "mig-carry-held-user",
       importDir,
       daemon: mkFakeChild(),
       adapter: target.adapter,
@@ -4576,11 +4576,11 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     await stageSnapshot(stageDir, (db) => db.exec("INSERT INTO transcript_events VALUES ('carried'), ('carried')"));
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
 
-    const { getStatus } = await finishImport(deps, "mig-carry-held-builder");
+    const { getStatus } = await finishImport(deps, "mig-carry-held-user");
 
     expect(getStatus()).toBe(200);
     expect(surgeTargetOpenClawHeld).toHaveBeenCalledWith({
-      migrationId: "mig-carry-held-builder", slug: "chris", targetPodUid: "builder-pod",
+      migrationId: "mig-carry-held-user", slug: "chris", targetPodUid: "builder-pod",
     });
     expect(deps.adapter.releaseAgent).not.toHaveBeenCalled();
     expect(rowCount(previous)).toBe(2);
@@ -4588,7 +4588,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(deps.releaseSurgeReadiness).toHaveBeenCalledOnce();
   });
 
-  it.each(["held", "missing-status", "permitted", "foreign-owner", "pod-changed", "hold-lost"])("protects an occupied system-config Builder store (%s)", async boundary => {
+  it.each(["held", "missing-status", "permitted", "foreign-owner", "pod-changed", "hold-lost"])("protects an occupied system-config user store (%s)", async boundary => {
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
     const configPath = path.join(importDir, "openclaw.json");
     const config = { agents: { list: [{ id: "octogee-chris-coach",
@@ -4598,7 +4598,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     vi.stubEnv("OPENCLAW_DIR", importDir);
     vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-    stubBuilderClaim("chris");
+    stubUserClaim("chris");
     const previous = await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('previous')"));
     const workspaceFile = path.join(importDir, "customers/chris/README.md");
     await fs.mkdir(path.dirname(workspaceFile), { recursive: true });
@@ -4607,13 +4607,13 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     if (boundary === "permitted") held.mockResolvedValue(false);
     if (boundary === "hold-lost") held.mockResolvedValue(false).mockResolvedValueOnce(true);
     if (boundary === "pod-changed") held.mockImplementationOnce(async () => { vi.stubEnv("POD_UID", "foreign-pod"); return true; });
-    const target = builderTargetImport(boundary === "missing-status" ? undefined : held);
-    if (boundary === "foreign-owner") target.adapter.isConfiguredBuilderCustomer = () => false;
+    const target = isolatedTargetImport(boundary === "missing-status" ? undefined : held);
+    if (boundary === "foreign-owner") target.adapter.isConfiguredUser = () => false;
     const releaseAgent = vi.fn(async () => { throw new Error("OpenClaw workspace identities are not initialized for this boot"); });
     const migrationId = "mig-system-config-occupied-held";
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
       configTransferMode: "configured-builder-system-config",
-      adapter: { ...target.adapter, releaseAgent, applyAddCustomerConfigPatch: vi.fn(async () => ({ elapsedMs: 1 })),
+      adapter: { ...target.adapter, releaseAgent, applyAddUserConfigPatch: vi.fn(async () => ({ elapsedMs: 1 })),
         writeMountMarker: vi.fn(), onMounted: vi.fn() }, deps: { ...target.deps, procRoot } });
     await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('carried'), ('carried')"));
     const carriedWorkspace = path.join(stageDir, "customers/chris/README.md");
@@ -4637,22 +4637,22 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(await fs.readFile(workspaceFile, "utf8")).toBe(boundary === "held" ? "carried workspace" : "original workspace");
     expect(deps.runOpenClaw).not.toHaveBeenCalled();
     expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(config);
-    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
-    expect(deps.adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();
+    expect(deps.adapter.activateImportedUser).not.toHaveBeenCalled();
+    expect(deps.adapter.applyAddUserConfigPatch).not.toHaveBeenCalled();
     expect(deps.releaseSurgeReadiness).not.toHaveBeenCalled();
     expect(deps.adapter.writeMountMarker).not.toHaveBeenCalled();
     expect(deps.adapter.onMounted).not.toHaveBeenCalled();
   });
 
-  it("still refuses to replace a held Builder target's database while a process holds it", async () => {
+  it("still refuses to replace a held isolated target's database while a process holds it", async () => {
     const importDir = await mkTempRoot();
     const procRoot = await mkTempRoot();
     const previous = await writeStore(importDir, CARRIED_STORE, (db) => db.exec("INSERT INTO transcript_events VALUES ('previous')"));
     await fs.mkdir(path.join(procRoot, "77", "fd"), { recursive: true });
     await fs.symlink(`${previous}-wal`, path.join(procRoot, "77", "fd", "9"));
-    const target = builderTargetImport(async () => true);
+    const target = isolatedTargetImport(async () => true);
     const { deps, stageDir } = await prepareImport({
-      migrationId: "mig-carry-held-builder-open",
+      migrationId: "mig-carry-held-user-open",
       importDir,
       daemon: mkFakeChild(),
       adapter: target.adapter,
@@ -4661,7 +4661,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     await stageSnapshot(stageDir, () => {});
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
 
-    const { getStatus, getBody } = await finishImport(deps, "mig-carry-held-builder-open");
+    const { getStatus, getBody } = await finishImport(deps, "mig-carry-held-user-open");
 
     expect(getStatus()).toBe(500);
     expect(getBody()).toMatchObject({ message: `agent database files are still held open: ${previous}-wal` });
@@ -4669,13 +4669,13 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(deps.releaseSurgeReadiness).not.toHaveBeenCalled();
   });
 
-  it("releases an occupied database through OpenClaw on a Builder target whose OpenClaw is permitted", async () => {
+  it("releases an occupied database through OpenClaw on a isolated target whose OpenClaw is permitted", async () => {
     const importDir = await mkTempRoot();
     const procRoot = await mkTempRoot();
     const previous = await writeStore(importDir, CARRIED_STORE, () => {});
-    const target = builderTargetImport(async () => false);
+    const target = isolatedTargetImport(async () => false);
     const { deps, stageDir } = await prepareImport({
-      migrationId: "mig-carry-permitted-builder",
+      migrationId: "mig-carry-permitted-user",
       importDir,
       daemon: mkFakeChild(),
       adapter: target.adapter,
@@ -4684,7 +4684,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     await stageSnapshot(stageDir, (db) => db.exec("INSERT INTO transcript_events VALUES ('carried')"));
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
 
-    const { getStatus, getBody } = await finishImport(deps, "mig-carry-permitted-builder");
+    const { getStatus, getBody } = await finishImport(deps, "mig-carry-permitted-user");
 
     expect(getStatus(), JSON.stringify(getBody())).toBe(200);
     expect(deps.adapter.releaseAgent).toHaveBeenCalledExactlyOnceWith("octogee-chris-coach");
@@ -4692,32 +4692,32 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(rowCount(previous)).toBe(1);
   });
 
-  function liveBuilderTargetImport(carriedAgentIds: readonly string[] = ["octogee-chris-coach"]): {
-    adapter: Partial<CustomerLifecycleAdapter>;
+  function liveIsolatedTargetImport(carriedAgentIds: readonly string[] = ["octogee-chris-coach"]): {
+    adapter: Partial<UserLifecycleAdapter>;
     deps: Partial<MigrationHandlerDeps>;
   } {
     vi.stubEnv("POD_UID", "builder-pod");
     const permitted = (message: string) => vi.fn(async () => { throw new Error(message); });
     return {
       adapter: {
-        isBuilderGateway: () => true,
-        isConfiguredBuilderCustomer: (slug) => slug === "chris",
-        customerMountMarked: vi.fn(() => false),
+        isIsolatedGateway: () => true,
+        isConfiguredUser: (slug) => slug === "chris",
+        userMountMarked: vi.fn(() => false),
         targetMigrationIdentityCustody: carriedAgentAuthority(carriedAgentIds),
         releaseAgent: vi.fn(async () => undefined),
-        removeImportedCustomerBySlug: vi.fn(async () => ({ wasMounted: true, steps: [], retained: true })),
+        removeImportedUserBySlug: vi.fn(async () => ({ wasMounted: true, steps: [], retained: true })),
         clearMountMarker: vi.fn(),
-        clearCustomerMigratingIn: vi.fn(),
+        clearUserMigratingIn: vi.fn(),
       },
       deps: {
         reserveSurgeTarget: permitted("cannot hydrate a permitted surge OpenClaw process gate"),
-        prepareSurgeTarget: permitted("Builder preparation requires its reserved OpenClaw process to remain held"),
-        releaseSurgeReadiness: permitted("configured Builder target is not reserved by this migration"),
+        prepareSurgeTarget: permitted("User preparation requires its reserved OpenClaw process to remain held"),
+        releaseSurgeReadiness: permitted("configured isolated target is not reserved by this migration"),
         unreserveSurgeTarget: vi.fn(async (_request, cleanup) => {
           await cleanup?.(async () => {});
-          return PRELAUNCH_BUILDER_GATE_STATE;
+          return PRELAUNCH_USER_GATE_STATE;
         }),
-        surgeTargetOpenClawHeld: permitted("configured Builder target is not reserved by this migration"),
+        surgeTargetOpenClawHeld: permitted("configured isolated target is not reserved by this migration"),
         surgeTargetLive: vi.fn(async (request) => {
           liveAdmissionRecords.push({ ...request, instanceId: process.env.POD_UID ?? "" });
           return true;
@@ -4743,11 +4743,11 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(deps.surgeTargetOpenClawHeld).not.toHaveBeenCalled();
   }
 
-  it("pre-copies files into a live Builder without reserving, preparing, or touching its agent databases", async () => {
+  it("pre-copies files into a live user without reserving, preparing, or touching its agent databases", async () => {
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
     const previous = await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native')"));
-    const target = liveBuilderTargetImport();
-    const migrationId = "mig-live-builder-pre";
+    const target = liveIsolatedTargetImport();
+    const migrationId = "mig-live-user-pre";
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode: "pre",
       adapter: target.adapter, deps: { ...target.deps, procRoot } });
     await fs.mkdir(path.join(stageDir, "agents", "octogee-chris-coach", "agent"), { recursive: true });
@@ -4760,7 +4760,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(deps.admitLiveSurgeTarget).toHaveBeenCalledExactlyOnceWith({ migrationId, slug: "chris", targetPodUid: "builder-pod" });
     expectNoHeldGateCalls(deps);
     expect(deps.adapter.releaseAgent).not.toHaveBeenCalled();
-    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(deps.adapter.activateImportedUser).not.toHaveBeenCalled();
     const copy = spawnMock.mock.calls.find(([command, args]) => command === "/usr/bin/rsync" && args[0] === "-a");
     expect(copy![1]).toContain("--exclude=/agents/");
     expect(rowCount(previous)).toBe(1);
@@ -4768,19 +4768,19 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
   });
 
   it.each(["ready", "verification-pending"] as const)(
-    "activates a live Builder by releasing each carried agent through its running OpenClaw: %s",
+    "activates a live user by releasing each carried agent through its running OpenClaw: %s",
     async (outcome) => {
       const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
       const previous = await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native')"));
       await fs.writeFile(`${previous}-wal`, "native wal");
-      const target = liveBuilderTargetImport();
-      const migrationId = `mig-live-builder-${outcome}`;
+      const target = liveIsolatedTargetImport();
+      const migrationId = `mig-live-user-${outcome}`;
       const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
         adapter: {
           ...target.adapter,
-          activateImportedCustomer: vi.fn(async () => {
+          activateImportedUser: vi.fn(async () => {
             expect(rowCount(previous)).toBe(2);
-            return { appliedFingerprint: "fp-chris", ...(outcome === "verification-pending" ? { verificationPending: "Coach disconnected" } : {}) };
+            return { appliedFingerprint: "fp-chris", ...(outcome === "verification-pending" ? { verificationPending: "Agent disconnected" } : {}) };
           }),
         },
         deps: { ...target.deps, procRoot } });
@@ -4791,21 +4791,21 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
 
       expectNoHeldGateCalls(deps);
       expect(deps.adapter.releaseAgent).toHaveBeenCalledExactlyOnceWith("octogee-chris-coach");
-      expect(deps.adapter.activateImportedCustomer).toHaveBeenCalledExactlyOnceWith("chris", { signal: expect.any(AbortSignal) });
+      expect(deps.adapter.activateImportedUser).toHaveBeenCalledExactlyOnceWith("chris", { signal: expect.any(AbortSignal) });
       expect(rowCount(previous)).toBe(2);
       expect(result.getStatus()).toBe(200);
       expect(result.getBody()).toEqual({
         migrationId, slug: "chris", imported: true,
-        ...(outcome === "verification-pending" ? { verificationPending: "Coach disconnected" } : {}),
+        ...(outcome === "verification-pending" ? { verificationPending: "Agent disconnected" } : {}),
       });
       expect(deps.adapter.writeMountMarker).toHaveBeenCalledWith("chris");
       expect(deps.adapter.onMounted).toHaveBeenCalledWith("chris");
     },
   );
 
-  it("accepts Native activation without an additional coach connection probe", async () => {
+  it("accepts Native activation without an additional agent connection probe", async () => {
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
-    const target = liveBuilderTargetImport(), migrationId = "mig-live-native-activation";
+    const target = liveIsolatedTargetImport(), migrationId = "mig-live-native-activation";
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
       adapter: { ...target.adapter, waitForAccountHealthy: vi.fn(async () => false) }, deps: { ...target.deps, procRoot } });
     await stageSnapshot(stageDir, () => {});
@@ -4814,7 +4814,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     const response = mkResponse();
     await createFinishRsyncImportHandler(deps)(mkRequest(body, { signature: signForPod(migrationId, JSON.stringify(body)) }), response.res, vi.fn());
     expect(response.getStatus(), JSON.stringify(response.getBody())).toBe(200);
-    expect(deps.adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", { signal: expect.any(AbortSignal), deferRuntimeVerification: true });
+    expect(deps.adapter.activateImportedUser).toHaveBeenCalledWith("chris", { signal: expect.any(AbortSignal), deferRuntimeVerification: true });
     expect(deps.adapter.waitForAccountHealthy).not.toHaveBeenCalled();
     expect(deps.adapter.writeMountMarker).toHaveBeenCalledWith("chris");
   });
@@ -4822,10 +4822,10 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
   it("resumes a live release that left native cleanup pending before swapping the agent database", async () => {
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
     const previous = await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native')"));
-    const target = liveBuilderTargetImport();
+    const target = liveIsolatedTargetImport();
     const releaseAgent = vi.fn(async () => undefined)
       .mockRejectedValueOnce(new Error("[release:octogee-chris-coach] agents.delete failed for octogee-chris-coach (native cleanup incomplete: purgeFailed=true failed=[])"));
-    const migrationId = "mig-live-builder-pending-cleanup";
+    const migrationId = "mig-live-user-pending-cleanup";
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
       adapter: { ...target.adapter, releaseAgent }, deps: { ...target.deps, procRoot } });
     await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('carried'), ('carried')"));
@@ -4836,15 +4836,15 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(result.getStatus()).toBe(200);
     expect(releaseAgent.mock.calls).toEqual([["octogee-chris-coach"], ["octogee-chris-coach"]]);
     expect(rowCount(previous)).toBe(2);
-    expect(deps.adapter.activateImportedCustomer).toHaveBeenCalledOnce();
+    expect(deps.adapter.activateImportedUser).toHaveBeenCalledOnce();
   });
 
   it("does not resume a live release that failed for another reason", async () => {
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
     await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native')"));
-    const target = liveBuilderTargetImport();
+    const target = liveIsolatedTargetImport();
     const releaseAgent = vi.fn(async () => { throw new Error("config mutation lock timed out"); });
-    const migrationId = "mig-live-builder-release-refused";
+    const migrationId = "mig-live-isolated-release-refused";
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
       adapter: { ...target.adapter, releaseAgent }, deps: { ...target.deps, procRoot } });
     await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('carried')"));
@@ -4854,7 +4854,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
 
     expect(result.getStatus()).toBe(500);
     expect(releaseAgent).toHaveBeenCalledOnce();
-    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(deps.adapter.activateImportedUser).not.toHaveBeenCalled();
   });
 
   async function prepareLiveImport(deps: MigrationHandlerDeps, migrationId: string): Promise<number> {
@@ -4887,90 +4887,90 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     return response;
   }
 
-  function mountedLiveBuilderDeps(): MigrationHandlerDeps {
-    const target = liveBuilderTargetImport();
-    return mkDeps({ ...target.deps, adapter: mkAdapter({ ...target.adapter, customerMountMarked: vi.fn(() => true) }) });
+  function mountedLiveUserDeps(): MigrationHandlerDeps {
+    const target = liveIsolatedTargetImport();
+    return mkDeps({ ...target.deps, adapter: mkAdapter({ ...target.adapter, userMountMarked: vi.fn(() => true) }) });
   }
 
-  it("refuses a live Builder import when the configured customer is still mounted", async () => {
-    const deps = mountedLiveBuilderDeps();
-    expect(await prepareLiveImport(deps, "mig-live-builder-mounted")).toBe(500);
+  it("refuses a live user import when the configured user is still mounted", async () => {
+    const deps = mountedLiveUserDeps();
+    expect(await prepareLiveImport(deps, "mig-live-user-mounted")).toBe(500);
     expect(spawnMock).not.toHaveBeenCalled();
     expect(deps.admitLiveSurgeTarget).not.toHaveBeenCalled();
     expect(deps.adapter.prepareImportDir).not.toHaveBeenCalled();
-    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("requires the configured customer to be unmounted"), { status: "failed" });
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("requires the configured user to be unmounted"), { status: "failed" });
     expectNoHeldGateCalls(deps);
   });
 
-  it("leaves a serving Builder untouched when aborting a live import it refused to admit", async () => {
-    const deps = mountedLiveBuilderDeps();
+  it("leaves a serving user untouched when aborting a live import it refused to admit", async () => {
+    const deps = mountedLiveUserDeps();
     expect(await prepareLiveImport(deps, "mig-live-refused-abort")).toBe(500);
     expect(await abortLiveImport(deps, "mig-live-refused-abort")).toBe(200);
-    expect(deps.adapter.removeImportedCustomerBySlug).not.toHaveBeenCalled();
+    expect(deps.adapter.removeImportedUserBySlug).not.toHaveBeenCalled();
     expect(deps.adapter.clearMountMarker).not.toHaveBeenCalled();
-    expect(deps.adapter.clearCustomerMigratingIn).not.toHaveBeenCalled();
+    expect(deps.adapter.clearUserMigratingIn).not.toHaveBeenCalled();
     expect(deps.adapter.onUnmounted).not.toHaveBeenCalled();
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("import was never admitted migrationId=mig-live-refused-abort"));
     expectNoHeldGateCalls(deps);
   });
 
-  it("leaves a serving Builder mounted when rolling back a live import it refused to admit", async () => {
-    const deps = mountedLiveBuilderDeps();
+  it("leaves a serving user mounted when rolling back a live import it refused to admit", async () => {
+    const deps = mountedLiveUserDeps();
     expect(await prepareLiveImport(deps, "mig-live-refused-unmount")).toBe(500);
     const response = await unmountLiveImport(deps, "mig-live-refused-unmount");
     expect(response.getStatus()).toBe(200);
     expect(response.getBody()).toEqual({ migrationId: "mig-live-refused-unmount", slug: "chris", unmounted: false });
-    expect(deps.adapter.removeImportedCustomerBySlug).not.toHaveBeenCalled();
+    expect(deps.adapter.removeImportedUserBySlug).not.toHaveBeenCalled();
     expectNoHeldGateCalls(deps);
   });
 
-  it("returns an admitted live Builder import like a Builder return on abort, leaving its OpenClaw permitted", async () => {
-    const target = liveBuilderTargetImport();
+  it("returns an admitted live user import like a user return on abort, leaving its OpenClaw permitted", async () => {
+    const target = liveIsolatedTargetImport();
     const deps = mkDeps({ ...target.deps, adapter: mkAdapter(target.adapter) });
     spawnMock.mockReturnValueOnce(mkFakeChild());
-    expect(await prepareLiveImport(deps, "mig-live-builder-abort")).toBe(200);
-    expect(await abortLiveImport(deps, "mig-live-builder-abort")).toBe(200);
+    expect(await prepareLiveImport(deps, "mig-live-user-abort")).toBe(200);
+    expect(await abortLiveImport(deps, "mig-live-user-abort")).toBe(200);
     expectNoHeldGateCalls(deps);
-    expect(deps.liveSurgeTargetAssigned).toHaveBeenCalledWith({ migrationId: "mig-live-builder-abort", slug: "chris", targetPodUid: "builder-pod" });
+    expect(deps.liveSurgeTargetAssigned).toHaveBeenCalledWith({ migrationId: "mig-live-user-abort", slug: "chris", targetPodUid: "builder-pod" });
     expect(deps.pauseSystemConfigWatch).toHaveBeenCalledWith("chris");
-    expect(deps.adapter.removeImportedCustomerBySlug).toHaveBeenCalledExactlyOnceWith("chris");
+    expect(deps.adapter.removeImportedUserBySlug).toHaveBeenCalledExactlyOnceWith("chris");
     expect(deps.adapter.onUnmounted).toHaveBeenCalledWith("chris");
   });
 
-  it.each(["abort", "unmount"] as const)("refuses to %s an admitted live Builder import once its assignment serves it", async (call) => {
-    const target = liveBuilderTargetImport();
+  it.each(["abort", "unmount"] as const)("refuses to %s an admitted live user import once its assignment serves it", async (call) => {
+    const target = liveIsolatedTargetImport();
     const deps = mkDeps({ ...target.deps, adapter: mkAdapter(target.adapter), liveSurgeTargetAssigned: vi.fn(async () => true) });
-    const migrationId = `mig-live-builder-served-${call}`;
+    const migrationId = `mig-live-user-served-${call}`;
     spawnMock.mockReturnValueOnce(mkFakeChild());
     expect(await prepareLiveImport(deps, migrationId)).toBe(200);
     const status = call === "abort" ? await abortLiveImport(deps, migrationId) : (await unmountLiveImport(deps, migrationId)).getStatus();
     expect(status).toBe(500);
-    expect(deps.adapter.removeImportedCustomerBySlug).not.toHaveBeenCalled();
+    expect(deps.adapter.removeImportedUserBySlug).not.toHaveBeenCalled();
     expectNoHeldGateCalls(deps);
     await abortLiveImport({ ...deps, liveSurgeTargetAssigned: vi.fn(async () => false) }, migrationId);
   });
 
-  it("rolls back an admitted live Builder import through held target cleanup", async () => {
-    const target = liveBuilderTargetImport();
+  it("rolls back an admitted live user import through held target cleanup", async () => {
+    const target = liveIsolatedTargetImport();
     const deps = mkDeps({ ...target.deps, adapter: mkAdapter(target.adapter) });
     spawnMock.mockReturnValueOnce(mkFakeChild());
-    expect(await prepareLiveImport(deps, "mig-live-builder-unmount")).toBe(200);
-    const response = await unmountLiveImport(deps, "mig-live-builder-unmount");
+    expect(await prepareLiveImport(deps, "mig-live-user-unmount")).toBe(200);
+    const response = await unmountLiveImport(deps, "mig-live-user-unmount");
     expect(response.getStatus()).toBe(200);
     expect(deps.unreserveSurgeTarget).toHaveBeenCalledOnce();
     expect(deps.liveSurgeTargetAssigned).toHaveBeenCalledOnce();
-    expect(deps.adapter.removeImportedCustomerBySlug).toHaveBeenCalledWith("chris", undefined, undefined, expect.objectContaining({ slug: "chris", assertCurrent: expect.any(Function) }));
-    expect(await abortLiveImport(deps, "mig-live-builder-unmount")).toBe(200);
+    expect(deps.adapter.removeImportedUserBySlug).toHaveBeenCalledWith("chris", undefined, undefined, expect.objectContaining({ slug: "chris", assertCurrent: expect.any(Function) }));
+    expect(await abortLiveImport(deps, "mig-live-user-unmount")).toBe(200);
   });
 
   it.each([
-    { case: "live Builder restarted in prelaunch", live: true, gate: PRELAUNCH_BUILDER_GATE_STATE, status: 200 },
-    { case: "live Builder left held", live: true, gate: HELD_BUILDER_GATE_STATE, status: 500 },
-    { case: "replayed return already restarted in prelaunch", live: false, gate: PRELAUNCH_BUILDER_GATE_STATE, status: 200 },
-    { case: "cancelled import left held", live: false, gate: HELD_BUILDER_GATE_STATE, status: 200 },
-    { case: "target custody never released", live: false, gate: { ...HELD_BUILDER_GATE_STATE, role: "target" }, status: 500 },
-  ] as const)("unmount after Builder cleanup: $case → $status", async ({ live, gate, status }) => {
-    const target = liveBuilderTargetImport();
+    { case: "live user restarted in prelaunch", live: true, gate: PRELAUNCH_USER_GATE_STATE, status: 200 },
+    { case: "live user left held", live: true, gate: HELD_USER_GATE_STATE, status: 500 },
+    { case: "replayed return already restarted in prelaunch", live: false, gate: PRELAUNCH_USER_GATE_STATE, status: 200 },
+    { case: "cancelled import left held", live: false, gate: HELD_USER_GATE_STATE, status: 200 },
+    { case: "target custody never released", live: false, gate: { ...HELD_USER_GATE_STATE, role: "target" }, status: 500 },
+  ] as const)("unmount after user cleanup: $case → $status", async ({ live, gate, status }) => {
+    const target = liveIsolatedTargetImport();
     const deps = mkDeps({
       ...target.deps,
       adapter: mkAdapter(target.adapter),
@@ -4982,22 +4982,22 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     });
     const response = await unmountLiveImport(deps, `mig-builder-return-${live}-${gate.role}-${gate.mode}`);
     expect(response.getStatus()).toBe(status);
-    expect(deps.adapter.removeImportedCustomerBySlug).toHaveBeenCalledOnce();
+    expect(deps.adapter.removeImportedUserBySlug).toHaveBeenCalledOnce();
   });
 
-  it("fails the unmount when a live Builder cannot restart in prelaunch after cleanup", async () => {
-    const target = liveBuilderTargetImport();
+  it("fails the unmount when a live user cannot restart in prelaunch after cleanup", async () => {
+    const target = liveIsolatedTargetImport();
     const deps = mkDeps({
       ...target.deps,
       adapter: mkAdapter(target.adapter),
       unreserveSurgeTarget: vi.fn(async (_request, cleanup) => {
         await cleanup?.(async () => {});
-        throw new Error("Builder prelaunch requires its accepted system config");
+        throw new Error("Isolated prelaunch requires its accepted system config");
       }),
     });
     const response = await unmountLiveImport(deps, "mig-builder-return-prelaunch-failed");
     expect(response.getStatus()).toBe(500);
-    expect(deps.adapter.removeImportedCustomerBySlug).toHaveBeenCalledOnce();
+    expect(deps.adapter.removeImportedUserBySlug).toHaveBeenCalledOnce();
   });
 
   async function unmountAfterRestart(deps: MigrationHandlerDeps, migrationId: string): Promise<ReturnType<typeof mkResponse>> {
@@ -5010,54 +5010,54 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     return response;
   }
 
-  it("leaves a serving Builder mounted when a restarted gateway rolls back a live import it refused", async () => {
-    const deps = mountedLiveBuilderDeps();
+  it("leaves a serving user mounted when a restarted gateway rolls back a live import it refused", async () => {
+    const deps = mountedLiveUserDeps();
     expect(await prepareLiveImport(deps, "mig-live-refused-restart")).toBe(500);
     const response = await unmountAfterRestart(deps, "mig-live-refused-restart");
     expect(response.getStatus()).toBe(200);
     expect(response.getBody()).toEqual({ migrationId: "mig-live-refused-restart", slug: "chris", unmounted: false });
-    expect(deps.adapter.removeImportedCustomerBySlug).not.toHaveBeenCalled();
+    expect(deps.adapter.removeImportedUserBySlug).not.toHaveBeenCalled();
   });
 
-  it("returns an admitted live Builder import when a restarted gateway rolls it back", async () => {
-    const target = liveBuilderTargetImport();
+  it("returns an admitted live user import when a restarted gateway rolls it back", async () => {
+    const target = liveIsolatedTargetImport();
     const deps = mkDeps({ ...target.deps, adapter: mkAdapter(target.adapter) });
     spawnMock.mockReturnValueOnce(mkFakeChild());
     expect(await prepareLiveImport(deps, "mig-live-admitted-restart")).toBe(200);
     const response = await unmountAfterRestart(deps, "mig-live-admitted-restart");
     expect(response.getStatus()).toBe(200);
     expect(deps.liveSurgeTargetAssigned).toHaveBeenCalledOnce();
-    expect(deps.adapter.removeImportedCustomerBySlug).toHaveBeenCalledWith("chris", undefined, undefined, expect.objectContaining({ slug: "chris", assertCurrent: expect.any(Function) }));
+    expect(deps.adapter.removeImportedUserBySlug).toHaveBeenCalledWith("chris", undefined, undefined, expect.objectContaining({ slug: "chris", assertCurrent: expect.any(Function) }));
     expect(await abortLiveImport(deps, "mig-live-admitted-restart")).toBe(200);
   });
 
-  it("returns a live Builder that imported nothing on its own return unmount", async () => {
-    const target = liveBuilderTargetImport();
+  it("returns a live user that imported nothing on its own return unmount", async () => {
+    const target = liveIsolatedTargetImport();
     const deps = mkDeps({ ...target.deps, adapter: mkAdapter(target.adapter) });
-    const response = await unmountLiveImport(deps, "mig-builder-return");
+    const response = await unmountLiveImport(deps, "mig-user-return");
     expect(response.getStatus()).toBe(200);
     expect(deps.unreserveSurgeTarget).toHaveBeenCalledOnce();
     expect(deps.liveSurgeTargetAssigned).toHaveBeenCalledExactlyOnceWith({
-      migrationId: "mig-builder-return", slug: "chris", targetPodUid: "builder-pod",
+      migrationId: "mig-user-return", slug: "chris", targetPodUid: "builder-pod",
     });
-    expect(deps.adapter.removeImportedCustomerBySlug).toHaveBeenCalledWith("chris", undefined, undefined, expect.objectContaining({ slug: "chris", assertCurrent: expect.any(Function) }));
+    expect(deps.adapter.removeImportedUserBySlug).toHaveBeenCalledWith("chris", undefined, undefined, expect.objectContaining({ slug: "chris", assertCurrent: expect.any(Function) }));
   });
 
-  it("refuses to unmount a serving live Builder that recorded no import for the migration", async () => {
-    const target = liveBuilderTargetImport();
+  it("refuses to unmount a serving live user that recorded no import for the migration", async () => {
+    const target = liveIsolatedTargetImport();
     const deps = mkDeps({ ...target.deps, adapter: mkAdapter(target.adapter), liveSurgeTargetAssigned: vi.fn(async () => true) });
     const response = await unmountLiveImport(deps, "mig-live-unrecorded-serving");
     expect(response.getStatus()).toBe(500);
-    expect(deps.adapter.removeImportedCustomerBySlug).not.toHaveBeenCalled();
+    expect(deps.adapter.removeImportedUserBySlug).not.toHaveBeenCalled();
     expectNoHeldGateCalls(deps);
   });
 
-  it("refuses to replace a Builder target's database without its process gate status", async () => {
+  it("refuses to replace a isolated target's database without its process gate status", async () => {
     const importDir = await mkTempRoot();
     const previous = await writeStore(importDir, CARRIED_STORE, () => {});
-    const target = builderTargetImport(undefined);
+    const target = isolatedTargetImport(undefined);
     const { deps, stageDir } = await prepareImport({
-      migrationId: "mig-carry-builder-no-status",
+      migrationId: "mig-carry-user-no-status",
       importDir,
       daemon: mkFakeChild(),
       adapter: target.adapter,
@@ -5066,7 +5066,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     await stageSnapshot(stageDir, () => {});
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
 
-    const { getStatus, getBody } = await finishImport(deps, "mig-carry-builder-no-status");
+    const { getStatus, getBody } = await finishImport(deps, "mig-carry-user-no-status");
 
     expect(getStatus()).toBe(500);
     expect(getBody()).toMatchObject({ message: expect.stringContaining("process gate status") });
@@ -5094,7 +5094,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(getStatus()).toBe(500);
     expect(getBody()).toMatchObject({ message: "SQLite agent handoff is unsupported after the PostgreSQL cutover" });
     expect(spawnMock).toHaveBeenCalledTimes(1);
-    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(deps.adapter.activateImportedUser).not.toHaveBeenCalled();
     await expect(fs.access(path.join(importDir, CARRIED_STORE))).rejects.toThrow();
   });
 });
@@ -5149,10 +5149,10 @@ describe("Git metadata across migration imports", () => {
       const sourceDir = await tempRoot();
       const importDir = await tempRoot();
       const outsideDir = await tempRoot();
-      const customerFile = "customers/chris/draft.txt";
+      const userFile = "customers/chris/draft.txt";
       for (const [root, content] of [[sourceDir, "source draft"], [importDir, "destination draft"]]) {
-        await fs.mkdir(path.dirname(path.join(root, customerFile)), { recursive: true });
-        await fs.writeFile(path.join(root, customerFile), content);
+        await fs.mkdir(path.dirname(path.join(root, userFile)), { recursive: true });
+        await fs.writeFile(path.join(root, userFile), content);
       }
       await fs.writeFile(path.join(outsideDir, "sentinel"), "outside metadata");
       const unsafePath = path.join(sourceDir, relative);
@@ -5169,20 +5169,20 @@ describe("Git metadata across migration imports", () => {
         message: expect.stringContaining("unsafe Git metadata"),
       });
       expect(spawnMock.mock.calls).toHaveLength(1);
-        expect(result.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+        expect(result.adapter.activateImportedUser).not.toHaveBeenCalled();
       expect(result.adapter.writeMountMarker).not.toHaveBeenCalled();
       expect(result.adapter.onMounted).not.toHaveBeenCalled();
       expect(result.adapter.removePartialWorkspace).not.toHaveBeenCalled();
-      expect(result.adapter.deleteDepartedCustomerState).not.toHaveBeenCalled();
+      expect(result.adapter.deleteDepartedUserState).not.toHaveBeenCalled();
       expect(result.adapter.onUnmounted).not.toHaveBeenCalled();
-      expect(await fs.readFile(path.join(importDir, customerFile), "utf8")).toBe("destination draft");
-      expect(await fs.readFile(path.join(sourceDir, customerFile), "utf8")).toBe("source draft");
+      expect(await fs.readFile(path.join(importDir, userFile), "utf8")).toBe("destination draft");
+      expect(await fs.readFile(path.join(sourceDir, userFile), "utf8")).toBe("source draft");
       expect(await fs.readFile(path.join(outsideDir, "sentinel"), "utf8")).toBe("outside metadata");
       if (kind === "symlink") expect(await fs.readlink(unsafePath)).toBe(outsideDir);
       else expect(await fs.readFile(unsafePath, "utf8")).toBe(unsafeContent);
     });
 
-    it("imports customer files without Git metadata", async () => {
+    it("imports user files without Git metadata", async () => {
       const sourceDir = await tempRoot();
       const importDir = await tempRoot();
       await fs.mkdir(path.join(sourceDir, "customers/chris"), { recursive: true });
@@ -5197,7 +5197,7 @@ describe("Git metadata across migration imports", () => {
       expect(copies).toHaveLength(2);
       expect(copies.every(([, args]) => args.includes("--munge-links"))).toBe(true);
       expect(await fs.readFile(path.join(importDir, "customers/chris/draft.txt"), "utf8")).toBe("source draft");
-      expect(result.adapter.activateImportedCustomer).toHaveBeenCalledOnce();
+      expect(result.adapter.activateImportedUser).toHaveBeenCalledOnce();
     });
 
     it("copies normal Git metadata unchanged and activates", async () => {
@@ -5223,7 +5223,7 @@ describe("Git metadata across migration imports", () => {
       for (const [relative, content] of files) {
         expect(await fs.readFile(path.join(importDir, relative), "utf8")).toBe(content);
       }
-      expect(result.adapter.activateImportedCustomer).toHaveBeenCalledOnce();
+      expect(result.adapter.activateImportedUser).toHaveBeenCalledOnce();
     });
   });
 });
@@ -5254,7 +5254,7 @@ describe("findPathTraversalViolation", () => {
     ], slug)).toBeNull();
   });
 
-  it("accepts project-agent state paths owned by the migrating builder", () => {
+  it("accepts project-agent state paths owned by the migrating user", () => {
     expect(findPathTraversalViolation([
       "agents/octogee-chris-proj-cityscout-coach/sessions/sessions.json",
       "agents/octogee-chris-proj-cityscout-coach/",
@@ -5264,7 +5264,7 @@ describe("findPathTraversalViolation", () => {
     ], slug)).toBeNull();
   });
 
-  it("accepts opaque Builder agent state only when the configured safe ID is allowlisted", () => {
+  it("accepts opaque user agent state only when the configured safe ID is allowlisted", () => {
     const state = [
       "agents/discord-helper/agent/auth.json",
       "agents/discord-helper/sessions/session.json",
@@ -5319,7 +5319,7 @@ describe("findPathTraversalViolation", () => {
   );
 
   it.each(["pre", "final"] as const)(
-    "rejects pod-local customer keys during %s surge import",
+    "rejects pod-local user keys during %s surge import",
     (mode) => {
       expect(findPathTraversalViolation([
         "customer-keys/chris/id_ed25519",
@@ -5345,7 +5345,7 @@ describe("findPathTraversalViolation", () => {
     ], slug)).toBeNull();
   });
 
-  it("rejects a path for a different slug (cross-customer escape)", () => {
+  it("rejects a path for a different slug (cross-user escape)", () => {
     expect(findPathTraversalViolation([
       "customers/other/secrets",
     ], slug)).toContain("outside the per-slug allowlist");
@@ -5376,7 +5376,7 @@ describe("findPathTraversalViolation", () => {
     ], slug)).toContain("outside the per-slug allowlist");
   });
 
-  it("rejects project agent state for another builder", () => {
+  it("rejects project agent state for another user", () => {
     expect(findPathTraversalViolation([
       "agents/octogee-attacker-proj-cityscout-coach/sessions.json",
     ], slug)).toContain("outside the per-slug allowlist");
@@ -5385,8 +5385,8 @@ describe("findPathTraversalViolation", () => {
     ], slug)).toContain("outside the per-slug allowlist");
   });
 
-  it("rejects neutral route agent state even when a configured Builder plan includes it", () => {
-    const configuredBuilderStatePlan: ConfiguredBuilderPortableStatePlan = {
+  it("rejects neutral route agent state even when a configured user plan includes it", () => {
+    const configuredUserStatePlan: ConfiguredUserPortableStatePlan = {
       agentIds: ["octogee-unmatched-route"],
       agentDirs: ["agents/octogee-unmatched-route/agent"],
       sessionStorePaths: ["agents/octogee-unmatched-route/sessions/sessions.json"],
@@ -5402,7 +5402,7 @@ describe("findPathTraversalViolation", () => {
       "workspace-octogee-unmatched-route/",
       "workspaces/octogee-unmatched-route/",
       "memory/octogee-unmatched-route.sqlite",
-    ], slug, "final", [], configuredBuilderStatePlan)).toContain("outside the per-slug allowlist");
+    ], slug, "final", [], configuredUserStatePlan)).toContain("outside the per-slug allowlist");
   });
 
   it("returns the FIRST violation found (deterministic for ops messages)", () => {
@@ -5446,7 +5446,7 @@ describe("destination migration progress", () => {
 });
 
 describe("createResumeHandler", () => {
-  it("reclaims the retained key before resuming the signed customer's channels and voice", async () => {
+  it("reclaims the retained key before resuming the signed user's channels and voice", async () => {
     let releaseClaim!: () => void;
     const claimPending = new Promise<void>(resolve => { releaseClaim = resolve; });
     const adapter = mkAdapter({ gitHost: mkGitHost({ registerKey: vi.fn(() => claimPending) }) });
@@ -5458,20 +5458,20 @@ describe("createResumeHandler", () => {
     );
     try {
       expect(adapter.gitHost.registerKey).toHaveBeenCalledExactlyOnceWith("chris", "ssh-ed25519 LOCAL chris@gateway");
-      expect(adapter.resumeCustomer).not.toHaveBeenCalled();
+      expect(adapter.resumeUser).not.toHaveBeenCalled();
       expect(deps.voiceMigration).not.toHaveBeenCalled();
     } finally {
       releaseClaim();
       await resumed;
     }
     expect(response.getStatus()).toBe(200);
-    expect(adapter.resumeCustomer).toHaveBeenCalledExactlyOnceWith("chris", { migrationId: body.migrationId });
+    expect(adapter.resumeUser).toHaveBeenCalledExactlyOnceWith("chris", { migrationId: body.migrationId });
     expect(deps.voiceMigration).toHaveBeenCalledExactlyOnceWith({ slug: "chris", operationId: body.migrationId, phase: "resume" });
   });
 
   it.each(["missing-key", "broker-failure"])("refuses resume effects after %s", async failure => {
     const adapter = mkAdapter(failure === "missing-key"
-      ? { readLocalCustomerPubKey: vi.fn(() => null) }
+      ? { readLocalUserPubKey: vi.fn(() => null) }
       : { gitHost: mkGitHost({ registerKey: vi.fn(async () => { throw new Error("key reclaim denied"); }) }) });
     const deps = mkDeps({ adapter });
     const body = { migrationId: SAMPLE_QUIESCE.migrationId, slug: "chris" };
@@ -5484,7 +5484,7 @@ describe("createResumeHandler", () => {
       error: "resume failed",
       message: failure === "missing-key" ? "[migration-http] local SSH public key is missing for chris" : "key reclaim denied",
     });
-    expect(adapter.resumeCustomer).not.toHaveBeenCalled();
+    expect(adapter.resumeUser).not.toHaveBeenCalled();
     expect(deps.voiceMigration).not.toHaveBeenCalled();
     if (failure === "missing-key") expect(adapter.gitHost.registerKey).not.toHaveBeenCalled();
   });
@@ -5523,9 +5523,9 @@ describe("createResumeHandler", () => {
       await gitea.registerKey("chris", inheritedKey, targetOwner);
       expect(keys).toEqual([{ id: 2, title: keyTitle(targetOwner), key: inheritedKey }]);
       const adapter = mkAdapter({
-        readLocalCustomerPubKey: vi.fn(() => inheritedKey),
+        readLocalUserPubKey: vi.fn(() => inheritedKey),
         gitHost: mkGitHost({ registerKey: vi.fn((slug, key) => gitea.registerKey(slug, key, sourceOwner)) }),
-        resumeCustomer: vi.fn(async () => {
+        resumeUser: vi.fn(async () => {
           expect(keys).toEqual([{ id: 3, title: keyTitle(sourceOwner), key: inheritedKey }]);
         }),
       });
@@ -5536,7 +5536,7 @@ describe("createResumeHandler", () => {
         mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
       );
       expect(response.getStatus()).toBe(200);
-      expect(adapter.resumeCustomer).toHaveBeenCalledExactlyOnceWith("chris", { migrationId: body.migrationId });
+      expect(adapter.resumeUser).toHaveBeenCalledExactlyOnceWith("chris", { migrationId: body.migrationId });
       await gitea.releaseKey("chris", inheritedKey, targetOwner);
       expect(keys).toEqual([{ id: 3, title: keyTitle(sourceOwner), key: inheritedKey }]);
       const retried = mkResponse();
@@ -5546,7 +5546,7 @@ describe("createResumeHandler", () => {
       expect(retried.getStatus()).toBe(200);
       expect(keys).toEqual([{ id: 3, title: keyTitle(sourceOwner), key: inheritedKey }]);
       expect(adapter.gitHost.registerKey).toHaveBeenCalledTimes(2);
-      expect(adapter.resumeCustomer).toHaveBeenCalledTimes(2);
+      expect(adapter.resumeUser).toHaveBeenCalledTimes(2);
       expect(deps.voiceMigration).toHaveBeenCalledTimes(2);
     } finally {
       vi.unstubAllGlobals();
@@ -5559,9 +5559,9 @@ describe("createResumeHandler", () => {
     const response = mkResponse();
     await createResumeHandler(deps)(mkRequest(SAMPLE_QUIESCE, { signature: "bad" }), response.res, vi.fn());
     expect(response.getStatus()).toBe(401);
-    expect(adapter.readLocalCustomerPubKey).not.toHaveBeenCalled();
+    expect(adapter.readLocalUserPubKey).not.toHaveBeenCalled();
     expect(adapter.gitHost.registerKey).not.toHaveBeenCalled();
-    expect(adapter.resumeCustomer).not.toHaveBeenCalled();
+    expect(adapter.resumeUser).not.toHaveBeenCalled();
     expect(deps.voiceMigration).not.toHaveBeenCalled();
   });
 });
@@ -5694,7 +5694,7 @@ describe("schedule transfer signed endpoint", () => {
     expect(response.getStatus()).toBe(401);
     expect(scheduleTransfer).not.toHaveBeenCalled();
   });
-  it("snapshots the customer's schedules under the authenticated migration", async () => {
+  it("snapshots the user's schedules under the authenticated migration", async () => {
     const result = { ...snapshot, records: [record], skipped: [] };
     const scheduleTransfer = vi.fn(async () => result);
     const response = mkResponse();
@@ -5816,7 +5816,7 @@ describe("prepared migration staging", () => {
     const uidForSlug = vi.fn(async () => null);
     const loadUserSnapshot = vi.fn();
     const deps = mkDeps({
-      adapter: mkAdapter({ isBuilderGateway: () => false, uidForSlug, loadUserSnapshot,
+      adapter: mkAdapter({ isIsolatedGateway: () => false, uidForSlug, loadUserSnapshot,
         prepareImportDir: vi.fn(async () => importDir) }),
       waitForRsyncReady: vi.fn(async () => undefined),
     });
@@ -5867,17 +5867,17 @@ describe("prepared migration staging", () => {
   });
 
   it("does not finish an existing import while another phase prepares its staging", async () => {
-    vi.stubEnv("POD_UID", "concurrent-builder-pod");
+    vi.stubEnv("POD_UID", "concurrent-isolated-pod");
     const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "concurrent-import-"));
     migrationTempRoots.push(importDir);
     let releasePreparation!: () => void;
     const blocked = new Promise<void>(resolve => { releasePreparation = resolve; });
     const reserveSurgeTarget = vi.fn(async () => blocked);
     const deps = mkDeps({
-      adapter: mkAdapter({ isBuilderGateway: () => true,
+      adapter: mkAdapter({ isIsolatedGateway: () => true,
         prepareKeyImportDir: vi.fn(async () => importDir), prepareImportDir: vi.fn(async () => importDir) }),
       reserveSurgeTarget, releaseSurgeReadiness: vi.fn(async () => undefined),
-      unreserveSurgeTarget: vi.fn(async () => HELD_BUILDER_GATE_STATE),
+      unreserveSurgeTarget: vi.fn(async () => HELD_USER_GATE_STATE),
       waitForRsyncReady: vi.fn(async () => undefined),
     });
     const migrationId = "concurrent-preparation";
@@ -5904,7 +5904,7 @@ describe("prepared migration staging", () => {
     }
   });
 
-  it.each(["generated", "authored"] as const)("handles a removed %s AGENTS baseline through final Builder import", async kind => {
+  it.each(["generated", "authored"] as const)("handles a removed %s AGENTS baseline through final user import", async kind => {
     vi.stubEnv("POD_UID", "placeholder-prepared-pod");
     const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "placeholder-prepared-import-"));
     migrationTempRoots.push(importDir);
@@ -5919,7 +5919,7 @@ describe("prepared migration staging", () => {
       }
     });
     const deps = mkDeps({
-      adapter: mkAdapter({ isBuilderGateway: () => true, prepareImportDir: vi.fn(async () => importDir),
+      adapter: mkAdapter({ isIsolatedGateway: () => true, prepareImportDir: vi.fn(async () => importDir),
         loadUserSnapshot: vi.fn(async () => ({ ...RESTORE_SNAPSHOT, agentIds: [...RESTORE_SNAPSHOT.agentIds], channels: [],
           projects: [{ projectId: "octogee", projectSlug: "octogee", giteaRepoName: null,
             repoSource: { provider: "github", owner: "octogee-ai", repo: "octogee" } }],
@@ -5927,7 +5927,7 @@ describe("prepared migration staging", () => {
       }),
       reserveSurgeTarget: vi.fn(async () => undefined), prepareSurgeTarget,
       releaseSurgeReadiness: vi.fn(async () => undefined),
-      unreserveSurgeTarget: vi.fn(async () => HELD_BUILDER_GATE_STATE),
+      unreserveSurgeTarget: vi.fn(async () => HELD_USER_GATE_STATE),
       waitForRsyncReady: vi.fn(async () => undefined),
     });
     const spawn = await realMigrationSpawn();
@@ -5975,18 +5975,18 @@ describe("prepared migration staging", () => {
     await expect(fs.lstat(path.join(importDir, obsoletePath))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("reuses the prepared file tree for final synchronization and holds Builder startup", async () => {
-    vi.stubEnv("POD_UID", "builder-prepared-pod");
+  it("reuses the prepared file tree for final synchronization and holds user startup", async () => {
+    vi.stubEnv("POD_UID", "user-prepared-pod");
     const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "prepared-import-"));
     migrationTempRoots.push(importDir);
     const prepareSurgeTarget = vi.fn(async () => undefined);
     const releaseSurgeReadiness = vi.fn(async () => undefined);
     const deps = mkDeps({
-      adapter: mkAdapter({ isBuilderGateway: () => true, prepareImportDir: vi.fn(async () => importDir),
+      adapter: mkAdapter({ isIsolatedGateway: () => true, prepareImportDir: vi.fn(async () => importDir),
         loadUserSnapshot: vi.fn(async () => ({ ...RESTORE_SNAPSHOT, agentIds: [...RESTORE_SNAPSHOT.agentIds], channels: [], projects: [{ projectId: "new", projectSlug: "new-repo", giteaRepoName: "chris-new-repo" }] })),
       }),
       reserveSurgeTarget: vi.fn(async () => undefined), prepareSurgeTarget,
-      releaseSurgeReadiness, unreserveSurgeTarget: vi.fn(async () => HELD_BUILDER_GATE_STATE),
+      releaseSurgeReadiness, unreserveSurgeTarget: vi.fn(async () => HELD_USER_GATE_STATE),
       waitForRsyncReady: vi.fn(async () => undefined),
     });
     const migrationId = "prepared-persistent-stage";
@@ -6008,7 +6008,7 @@ describe("prepared migration staging", () => {
     const finished = mkResponse();
     await createFinishRsyncImportHandler(deps)(mkRequest(finish, { signature: signForPod(migrationId, JSON.stringify(finish)) }), finished.res, vi.fn());
     expect(finished.getStatus()).toBe(200);
-    expect(prepareSurgeTarget).toHaveBeenCalledWith({ migrationId, slug: "chris", targetPodUid: "builder-prepared-pod" }, expect.any(AbortSignal));
+    expect(prepareSurgeTarget).toHaveBeenCalledWith({ migrationId, slug: "chris", targetPodUid: "user-prepared-pod" }, expect.any(AbortSignal));
     expect(releaseSurgeReadiness).not.toHaveBeenCalled();
     const finalStage = await prepare("final");
     expect(finalStage).toBe(stageDir);

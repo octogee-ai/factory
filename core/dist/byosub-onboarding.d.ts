@@ -25,7 +25,7 @@ export type FlowEvent = {
     ok: boolean;
     reason?: string;
 };
-export declare function coachAgentId(slug: string): string;
+export declare function userDefaultAgentId(slug: string): string;
 export declare function startFlow(p: {
     url: string;
     code: string;

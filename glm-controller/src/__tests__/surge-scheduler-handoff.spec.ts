@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { abortSurgeSchedulerTarget, activateSurgeScheduler, inspectExistingSurgeScheduler, resumeSurgeSchedulerSource, stageSurgeScheduler, surgeSchedulerOperationId, type SurgeSchedulerCustody } from "../surge-scheduler-handoff.js";
-import { assignment, createSurgeHandoffHarness, oldPod, targetPod } from "./fixtures/surge-customer-handoff.js";
+import { assignment, createSurgeHandoffHarness, oldPod, targetPod } from "./fixtures/surge-user-handoff.js";
 
 function setup() {
   const row = assignment("u1", "alice", { state: "quiescing", updatedByOperationId: "surge-default-target-uid", updatedAt: 2 });

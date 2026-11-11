@@ -241,8 +241,8 @@ describe("native user RPC identity", () => {
 
   it("does not connect across gateway identities or on shared gateways", async () => {
     const { state, env } = await gateway();
-    await expect(openNativeUserClient("alice", "other", env)).rejects.toThrow("local per-user Builder");
-    await expect(openNativeUserClient("alice", "b-alice", { ...env, GATEWAY_CLASS: "shared" })).rejects.toThrow("local per-user Builder");
+    await expect(openNativeUserClient("alice", "other", env)).rejects.toThrow("local per-user isolated gateway");
+    await expect(openNativeUserClient("alice", "b-alice", { ...env, GATEWAY_CLASS: "shared" })).rejects.toThrow("local per-user isolated gateway");
     expect(state.connects).toEqual([]);
   });
 });

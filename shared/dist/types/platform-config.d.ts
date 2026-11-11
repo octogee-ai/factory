@@ -37,9 +37,9 @@ export interface GoogleConsentPermission {
 export declare function googleConsentPermission(config: PlatformConnectConfig | null, uid: string, requested: readonly GoogleConnectCapabilityKey[]): GoogleConsentPermission;
 export declare const DEFAULT_FREE_TIER_MODEL_REF: string;
 export declare const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/openai/gpt-6-luna";
-export declare const DEFAULT_BUILDER_AGENT_MODEL_REF: string;
-export declare const DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF: string | null;
-export interface BuilderAgentModelDefault {
+export declare const DEFAULT_USER_AGENT_MODEL_REF: string;
+export declare const DEFAULT_USER_AGENT_FALLBACK_MODEL_REF: string | null;
+export interface UserAgentModelDefault {
     primary: string;
     fallbacks: string[];
 }
@@ -58,7 +58,7 @@ export interface ResolvedOpsAgentModel extends ResolvedFreeTierModel {
     runtimeModelRef: string;
 }
 export declare function parsePlatformModelConfig(value: unknown): PlatformModelConfig | null;
-export declare function builderAgentModelDefaultFromDoc(data: unknown): BuilderAgentModelDefault;
-export declare function parseBuilderAgentModelDefault(value: unknown): BuilderAgentModelDefault | null;
+export declare function userAgentModelDefaultFromDoc(data: unknown): UserAgentModelDefault;
+export declare function parseUserAgentModelDefault(value: unknown): UserAgentModelDefault | null;
 export declare function resolveFreeTierModel(ref: string): ResolvedFreeTierModel | null;
 export declare function resolveOpsAgentModel(ref: string): ResolvedOpsAgentModel | null;

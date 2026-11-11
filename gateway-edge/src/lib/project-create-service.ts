@@ -204,7 +204,7 @@ async function prewarmProjectCapacity(plan: ProjectCreatePlan, prewarm: () => Pr
 }
 
 // Per-plan project ceiling (pricing v3): Personal Free 0, Personal 1, Pro 5,
-// Pro Max + any Builder unlimited. Counts only the actor's OWN projects in the
+// Pro Max + any user unlimited. Counts only the actor's OWN projects in the
 // workspace (membership is independent), and skips the read entirely on an
 // unlimited plan. A 402 so the client can route to upgrade.
 async function enforceProjectLimit(
@@ -645,7 +645,7 @@ async function markProjectActive(plan: ProjectCreatePlan): Promise<void> {
 }
 
 // Every new project gets its agent, so a project is useful the moment it
-// exists and nothing has to reach in from the workspace coach. A mint failure is
+// exists and nothing has to reach in from the workspace agent. A mint failure is
 // not a create failure — the project is already active and the owner retries
 // from project settings.
 async function provisionProjectAgentByDefault(plan: ProjectCreatePlan): Promise<void> {

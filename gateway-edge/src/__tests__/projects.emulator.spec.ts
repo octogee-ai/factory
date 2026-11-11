@@ -659,7 +659,7 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
     });
   });
 
-  it("succeeds without a workspace coach Mattermost user", async () => {
+  it("succeeds without a workspace agent Mattermost user", async () => {
     mockGetWorkspaceMmContext.mockResolvedValue({
       ownerUid: CALLER_UID,
       slug: "alice",
@@ -1089,7 +1089,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     expect(await getProjectChannel("alice", "mygame", "general")).toBeUndefined();
   });
 
-  it("retries successfully without a workspace coach Mattermost user", async () => {
+  it("retries successfully without a workspace agent Mattermost user", async () => {
     await seedProject("alice", "mygame", {
       id: "mygame",
       ownerUid: CALLER_UID,

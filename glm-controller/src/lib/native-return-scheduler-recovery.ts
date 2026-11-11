@@ -1,14 +1,14 @@
 import { isDeepStrictEqual } from "node:util";
-import { builderReturnOperationId, isBuilderReturnOperationIdFor } from "@octogee/core/builder-activation-lease";
+import { builderReturnOperationId, isUserReturnOperationIdFor } from "@octogee/core/user-activation-lease";
 import { MigrationRpcError, type MigrationClient } from "@octogee/core/fleet-migration-client";
 import { runNormalFleetMutation } from "@octogee/core/normal-fleet-mutation";
-import type { BuilderRecord, FleetRegistryRecord, GatewayRoot, OperationRecord, PlatformStateStore, Stored } from "@octogee/core/platform-state";
+import type { PlatformUserRecord, FleetRegistryRecord, GatewayRoot, OperationRecord, PlatformStateStore, Stored } from "@octogee/core/platform-state";
 import { readSchedulerMigrationIdentity } from "@octogee/shared/types/glm";
 import { parseAgentId } from "@octogee/shared/types/identity";
-import type { NativeComputerReturnInput } from "./native-computer-return.js";
+import type { NativeVmReturnInput } from "./native-vm-return.js";
 
 interface SchedulerHold { agentId: string; migrationId: string; operationId: string }
-type RecoveryInput = NativeComputerReturnInput & { sourceEpoch: number; hold: SchedulerHold };
+type RecoveryInput = NativeVmReturnInput & { sourceEpoch: number; hold: SchedulerHold };
 export type RecoverAbandonedNativeScheduler = (
   input: RecoveryInput, scheduler: MigrationClient["scheduler"], assertActiveClaim: () => Promise<void>,
 ) => Promise<void>;
@@ -31,7 +31,7 @@ export function reportedAbandonedNativeScheduler(
   return { agentId: match[1], migrationId: match[2], operationId: match[3] };
 }
 
-interface CurrentComputer {
+interface CurrentVm {
   instanceName: string;
   instanceId: string;
   zone: string;
@@ -44,7 +44,7 @@ interface SchedulerRecoveryDeps {
   store: PlatformStateStore;
   verifyRetiredTarget(gatewayId: string, assertCurrent: () => Promise<void>): Promise<boolean>;
   oldSourceAbsent(gatewayId: string): Promise<boolean>;
-  verifyComputer(computer: CurrentComputer, input: RecoveryInput): Promise<boolean>;
+  verifyVm(computer: CurrentVm, input: RecoveryInput): Promise<boolean>;
 }
 
 function nativeReturnScope(op: OperationRecord | null, uid: string, slug: string): op is OperationRecord & {
@@ -66,7 +66,7 @@ function priorAbandonedReturn(op: Stored<OperationRecord> | null, input: Recover
   const { fromGatewayId: source, toGatewayId: target } = op.input;
   const handoff = op.schedulerHandoff;
   const priorGeneration = Number(op.id.split("-g").at(-1));
-  if (!handoff || !isBuilderReturnOperationIdFor(op.id, source) || !Number.isSafeInteger(priorGeneration)) return null;
+  if (!handoff || !isUserReturnOperationIdFor(op.id, source) || !Number.isSafeInteger(priorGeneration)) return null;
   return [
     /^shared-[a-z0-9]+$/.test(target), source !== input.fromGatewayId, priorGeneration < generation,
     op.status === "failed", typeof op.completedAt === "number", Number(op.completedAt) < Number(input.claimedStartedAt),
@@ -90,13 +90,13 @@ function activeReturnMatches(op: OperationRecord, input: RecoveryInput): boolean
   ].every(Boolean);
 }
 
-function owningLeaseMatches(builder: BuilderRecord, root: GatewayRoot, input: RecoveryInput): boolean {
+function owningLeaseMatches(user: PlatformUserRecord, root: GatewayRoot, input: RecoveryInput): boolean {
   const { uid, slug, fromGatewayId: source, operationId } = input;
-  const { activationLease: lease, fences } = builder;
+  const { activationLease: lease, fences } = user;
   const { allocation } = root;
   if (!lease || !allocation || !fences.migration) return false;
   return [
-    builder.gateway?.gatewayId === source, builder.slug === slug, lease.status === "returning",
+    user.gateway?.gatewayId === source, user.slug === slug, lease.status === "returning",
     lease.targetGatewayId === source, lease.returnOperationId === operationId,
     builderReturnOperationId(source, lease.generation) === operationId,
     Object.keys(fences).every(name => name === "migration"),
@@ -109,13 +109,13 @@ function owningLeaseMatches(builder: BuilderRecord, root: GatewayRoot, input: Re
   ].every(Boolean);
 }
 
-function currentComputer(builder: BuilderRecord, runtime: FleetRegistryRecord): CurrentComputer {
-  const home = builder.home.homeDisk;
+function currentVm(user: PlatformUserRecord, runtime: FleetRegistryRecord): CurrentVm {
+  const home = user.home.homeDisk;
   const { vm, vmHome = {} } = runtime;
   const checkpointHeld = [vmHome.returnOperationId, vmHome.checkpointRequestedAt, vmHome.parkRequestedAt].some(value => value !== undefined);
   if (runtime.runtime !== "gce-vm" || !vm || vm.status !== "RUNNING" || !vm.instanceName || !vm.instanceId ||
       !vm.zone || !vm.internalIp || typeof home?.id !== "string" || typeof home.source !== "string" || checkpointHeld) {
-    throw new Error("abandoned scheduler computer or checkpoint custody changed");
+    throw new Error("abandoned scheduler VM or checkpoint custody changed");
   }
   return { instanceName: vm.instanceName, instanceId: vm.instanceId, zone: vm.zone, internalIp: vm.internalIp,
     homeId: home.id, homeSource: home.source };
@@ -124,16 +124,16 @@ function currentComputer(builder: BuilderRecord, runtime: FleetRegistryRecord): 
 async function readAuthority(store: PlatformStateStore, input: RecoveryInput) {
   const { uid, slug, fromGatewayId: source, operationId, hold } = input;
   return store.transaction({ label: "native-return-scheduler-recovery.authority", readOnly: true }, async tx => {
-    const [builder, op, old, root, runtime, assignment, assigned, active] = await Promise.all([
-      tx.builders.records.get(uid), tx.journal.operations.get(operationId), tx.journal.operations.get(hold.operationId),
+    const [user, op, old, root, runtime, assignment, assigned, active] = await Promise.all([
+      tx.users.records.get(uid), tx.journal.operations.get(operationId), tx.journal.operations.get(hold.operationId),
       tx.gateways.roots.get(source), tx.fleetRegistry.get(source), tx.gateways.assignments.get(source, uid),
       tx.gateways.assignments.listAll(), tx.journal.operations.listForUid(uid, { statuses: ["pending", "running"] }),
     ]);
-    if (!builder?.activationLease || !root || !runtime || !assignment || !nativeReturnScope(op, uid, slug)) {
+    if (!user?.activationLease || !root || !runtime || !assignment || !nativeReturnScope(op, uid, slug)) {
       throw new Error("abandoned scheduler return authority is unavailable");
     }
-    const previous = priorAbandonedReturn(old, input, builder.activationLease.generation);
-    if (!previous || !activeReturnMatches(op, input) || !owningLeaseMatches(builder, root, input)) {
+    const previous = priorAbandonedReturn(old, input, user.activationLease.generation);
+    if (!previous || !activeReturnMatches(op, input) || !owningLeaseMatches(user, root, input)) {
       throw new Error("abandoned scheduler return authority changed");
     }
     const [oldRoot, oldRuntime] = await Promise.all([tx.gateways.roots.get(previous.source), tx.fleetRegistry.get(previous.source)]);
@@ -145,7 +145,7 @@ async function readAuthority(store: PlatformStateStore, input: RecoveryInput) {
       active.length === 1, active[0]?.id === operationId,
     ].every(Boolean);
     if (!matches) throw new Error("abandoned scheduler source or assignment changed");
-    return { previous, computer: currentComputer(builder, runtime), liveRelease: root.liveRelease };
+    return { previous, computer: currentVm(user, runtime), liveRelease: root.liveRelease };
   });
 }
 
@@ -160,13 +160,13 @@ export function createAbandonedNativeSchedulerRecovery(deps: SchedulerRecoveryDe
     const verifyPhysical = async () => {
       if (!await deps.oldSourceAbsent(observed.previous.source) ||
           !await deps.verifyRetiredTarget(observed.previous.target, assertCurrent) ||
-          !await deps.verifyComputer(observed.computer, input)) throw new Error("abandoned scheduler physical custody is unverified");
+          !await deps.verifyVm(observed.computer, input)) throw new Error("abandoned scheduler physical custody is unverified");
       await assertCurrent();
     };
     await verifyPhysical();
     await runNormalFleetMutation(deps.store, {
       actor: "cowboy", forced: false, what: "resume an abandoned Native Builder scheduler",
-      why: "The current return reported the exact prior uncommitted scheduler hold on the retained computer",
+      why: "The current return reported the exact prior uncommitted scheduler hold on the retained VM",
       target: { uid: input.uid, gatewayId: input.fromGatewayId, operationId: input.operationId },
       preActionStatus: { ...observed, previousOperationId: input.hold.operationId },
       mutation: { kind: "resume-abandoned-native-scheduler", migrationId: input.hold.migrationId },

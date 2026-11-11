@@ -93,7 +93,7 @@ export async function readGatewayAuthSecret(
  * Short version: the chart now threads OPENCLAW_GATEWAY_TOKEN via
  * secretKeyRef on every container that needs it, so the secret MUST
  * exist before `helm upgrade` runs or pod boot fails on the missing
- * secretKeyRef. Cowboy calls this before each upsertInstance.
+ * secretKeyRef. The fleet controller calls this before each upsertInstance.
  */
 export function createAuthSecretEnsurer(
   deps: AuthSecretEnsurerDeps,

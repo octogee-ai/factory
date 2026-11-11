@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { isSurgeSchedulerAlreadyResumed } from "./surge-scheduler-receipt.js";
 import type { SchedulerMigrationRequest, SchedulerMigrationResult } from "@octogee/shared/types/fleet-controller";
-import type { SurgeAssignment, SurgeCustomerHandoffDeps, SurgePod } from "./surge-customer-handoff.js";
+import type { SurgeAssignment, SurgeUserHandoffDeps, SurgePod } from "./surge-user-handoff.js";
 
 export interface SurgeSchedulerCustody {
   gatewayId: string;
@@ -23,7 +23,7 @@ export function surgeSchedulerOperationId(custody: Pick<SurgeSchedulerCustody, "
   return `surge-cron:${digest}`;
 }
 
-export async function assertSurgeSchedulerCustody(deps: SurgeCustomerHandoffDeps, custody: SurgeSchedulerCustody): Promise<void> {
+export async function assertSurgeSchedulerCustody(deps: SurgeUserHandoffDeps, custody: SurgeSchedulerCustody): Promise<void> {
   const { gatewayId, owner, assignment, source, target } = custody;
   surgeSchedulerOperationId(custody);
   const current = (await deps.readAssignments(gatewayId)).find(row => row.uid === assignment.uid);
@@ -42,7 +42,7 @@ export async function assertSurgeSchedulerCustody(deps: SurgeCustomerHandoffDeps
 }
 
 async function schedulerPhase(
-  deps: SurgeCustomerHandoffDeps,
+  deps: SurgeUserHandoffDeps,
   custody: SurgeSchedulerCustody,
   pod: SurgePod,
   request: Omit<SchedulerMigrationRequest, "operationId">,
@@ -69,7 +69,7 @@ function assertFullSchedulerSnapshot(snapshot: unknown, operationId: string, age
   }
 }
 
-export async function stageSurgeScheduler(deps: SurgeCustomerHandoffDeps, custody: SurgeSchedulerCustody): Promise<void> {
+export async function stageSurgeScheduler(deps: SurgeUserHandoffDeps, custody: SurgeSchedulerCustody): Promise<void> {
   if (!custody.source) throw new Error("scheduler export requires the physical source");
   const exported = await schedulerPhase(deps, custody, custody.source, {
     phase: "export", ...(custody.assignment.sharedSurgeForwardRecovery ? {} : { resolveAgentScope: true, retainNonportable: true }),
@@ -84,7 +84,7 @@ export async function stageSurgeScheduler(deps: SurgeCustomerHandoffDeps, custod
   }
 }
 
-export async function inspectExistingSurgeScheduler(deps: SurgeCustomerHandoffDeps, custody: SurgeSchedulerCustody): Promise<void> {
+export async function inspectExistingSurgeScheduler(deps: SurgeUserHandoffDeps, custody: SurgeSchedulerCustody): Promise<void> {
   if (!custody.source) throw new Error("scheduler inspection requires the physical source");
   try {
     const exported = await schedulerPhase(deps, custody, custody.source, { phase: "export" });
@@ -98,12 +98,12 @@ export async function inspectExistingSurgeScheduler(deps: SurgeCustomerHandoffDe
   }
 }
 
-export async function abortSurgeSchedulerTarget(deps: SurgeCustomerHandoffDeps, custody: SurgeSchedulerCustody): Promise<void> {
+export async function abortSurgeSchedulerTarget(deps: SurgeUserHandoffDeps, custody: SurgeSchedulerCustody): Promise<void> {
   if (!custody.source) throw new Error("scheduler rollback requires the physical source");
   await schedulerPhase(deps, custody, custody.target, { phase: "abort" });
 }
 
-export async function resumeSurgeSchedulerSource(deps: SurgeCustomerHandoffDeps, custody: SurgeSchedulerCustody): Promise<void> {
+export async function resumeSurgeSchedulerSource(deps: SurgeUserHandoffDeps, custody: SurgeSchedulerCustody): Promise<void> {
   if (!custody.source) throw new Error("scheduler resume requires the physical source");
   const resumed = await schedulerPhase(deps, custody, custody.source, { phase: "resume" });
   if (resumed.agentIds.length === 0 || (custody.agentIds && JSON.stringify(resumed.agentIds) !== JSON.stringify(custody.agentIds))) {
@@ -113,7 +113,7 @@ export async function resumeSurgeSchedulerSource(deps: SurgeCustomerHandoffDeps,
 }
 
 
-export async function activateSurgeScheduler(deps: SurgeCustomerHandoffDeps, custody: SurgeSchedulerCustody): Promise<void> {
+export async function activateSurgeScheduler(deps: SurgeUserHandoffDeps, custody: SurgeSchedulerCustody): Promise<void> {
   if (custody.source) throw new Error("scheduler activation requires the physical source to be absent");
   await schedulerPhase(deps, custody, custody.target, { phase: "activate" });
   await assertSurgeSchedulerCustody(deps, custody);

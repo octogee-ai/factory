@@ -83,14 +83,14 @@ describe("POST /api/openclaw/ticket — real Firebase Auth + Firestore (emulator
 
 it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set", async () => {
     await db.doc("users/caller-uid").set({
-      provisioning: { openclaw: { gatewayId: "gw-bender" } },
+      provisioning: { openclaw: { gatewayId: "gw-walter" } },
     });
     const token = await getActiveIdToken("caller-uid");
     const res = await request(buildApp())
       .post("/api/openclaw/ticket")
       .set("Authorization", `Bearer ${token}`);
     expect(res.status).toBe(200);
-    expect(res.body.gatewayId).toBe("gw-bender");
+    expect(res.body.gatewayId).toBe("gw-walter");
   });
 
   it("returns gatewayId='' when the user doc has no openclaw provisioning (legacy / pre-provisioning fallback to bare /api path)", async () => {
@@ -132,7 +132,7 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
 
   it.each([
     ["a Personal user", { subscription: { tier: "personal", status: "active" } }],
-    ["an Enterprise Builder", { builderSubscription: { tier: "enterprise", status: "active" } }],
+    ["an Enterprise user", { builderSubscription: { tier: "enterprise", status: "active" } }],
   ])("mints the current shared ticket for %s", async (
     _label,
     entitlement,

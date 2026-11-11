@@ -6,7 +6,7 @@ import {
   readSystemConfigStatus,
   type SystemConfigObservedStatus,
 } from "../lib/system-config-status.js";
-import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
+import { userClaimSlug } from "@octogee/shared/server/user-claim";
 
 type ParsedArgs =
   | { command: "status" }
@@ -73,8 +73,8 @@ async function adoptConfig(
   dependencies: OctogeeConfigDependencies,
   write: (line: string) => void,
 ): Promise<void> {
-  const slug = builderClaimSlug(env);
-  if (!slug) throw new Error("a Builder claim is required for config adoption");
+  const slug = userClaimSlug(env);
+  if (!slug) throw new Error("a user claim is required for config adoption");
   const result = await (dependencies.adopt ?? adoptSystemConfig)({
     slug,
     sourcePath: parsed.sourcePath,

@@ -81,7 +81,7 @@ describe("applyGatewayDefaults", () => {
     expect(applyGatewayDefaults(config)).toBe(false);
   });
 
-  it("does not apply coach-only defaults to non-coach agent ids", () => {
+  it("does not apply default-agent-only defaults to non-default-agent agent ids", () => {
     const config: OpenClawConfig = {
       agents: {
         list: [{ id: "octogee-acme-research" }],

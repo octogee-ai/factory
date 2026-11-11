@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { Timestamp } from "firebase-admin/firestore";
-import { ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION, CUSTOMER_DELETION_JOBS_COLLECTION, } from "@octogee/shared/types/account-lifecycle";
+import { ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION, USER_DELETION_JOBS_COLLECTION, } from "@octogee/shared/types/account-lifecycle";
 import { MalformedRecordError, MissingRecordError } from "../errors.js";
 import { assertFenceOneOf, assertRevisionFence } from "./fences.js";
 import { decodeDocumentData, encodeDocument, encodeMergeDocument, encodePatch, isClearField, STORED_AS_NUMBERS, storedAsTimestamps, } from "./values.js";
@@ -110,7 +110,7 @@ function encodeDeletionPatch(patch) {
     }, STORED_AS_NUMBERS);
 }
 function createDeletionJobsRepository(session) {
-    const collection = () => session.db.collection(CUSTOMER_DELETION_JOBS_COLLECTION);
+    const collection = () => session.db.collection(USER_DELETION_JOBS_COLLECTION);
     const ref = (deletionId) => collection().doc(deletionId);
     return {
         async get(deletionId) {

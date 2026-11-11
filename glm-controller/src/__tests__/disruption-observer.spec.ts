@@ -29,7 +29,7 @@ describe("disruption observer classification", () => {
     expect(node.zone).toBe("us-central1-a");
   });
 
-  it("extracts gateway identity from pod metadata and leaves Builder identity to the gateway root", () => {
+  it("extracts gateway identity from pod metadata and leaves user identity to the gateway root", () => {
     const pod = disruptionObserverTest.parsePod({
       metadata: {
         name: "octogee-gateway-default-abc",
@@ -117,11 +117,11 @@ describe("disruption observer environment isolation", () => {
   });
 });
 
-describe("disruption observer Builder attribution", () => {
+describe("disruption observer user attribution", () => {
   it.each([
     ["an owned Builder root", { gatewayClass: "builder", ownerUid: "uid-ada", builderSlug: "ada" }, "ada"],
     ["an unowned Builder root", { gatewayClass: "builder", ownerUid: null, builderSlug: null }, null],
-  ])("attributes a Builder pod disruption from %s", async (_label, root, builderSlug) => {
+  ])("attributes a isolated pod disruption from %s", async (_label, root, builderSlug) => {
     const pod = {
       metadata: { name: "octogee-gateway-b-ada-abc", uid: "pod-uid", namespace: "octogee-test", labels: { "gateway-id": "b-ada", "gateway-class": "builder" } },
       spec: { nodeName: "node-a" },

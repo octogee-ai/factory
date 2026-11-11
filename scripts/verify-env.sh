@@ -163,7 +163,7 @@ if [[ "$ENV" != "custom" ]]; then
   ORCH_OUTPUT=$(node "$REPO_DIR/scripts/node_modules/tsx/dist/cli.mjs" "$REPO_DIR/scripts/ops/seed-orchestrator-config.ts" --env="$ENV" --deployment-target="$TARGET_ID" --check 2>&1 || true)
 fi
 
-# The shared pool is unnamed: Cowboy mints `shared-N` slots on demand and the
+# The shared pool is unnamed: the fleet controller mints `shared-N` slots on demand and the
 # floor lives on its Deployment as SHARED_POOL_MIN_REPLICAS. Every Ready slot is
 # an equivalent probe target; the first one drives the single-gateway checks.
 GW_DEPLOYMENTS=$(kubectl get deploy -n "$NAMESPACE" --context "$K8S_CONTEXT" \
@@ -438,7 +438,7 @@ if [[ -z "$GW_DEPLOYMENT" ]]; then
   else
     fail "No Ready shared gateway deployment found."
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} kubectl logs deployment/glm-controller -n $NAMESPACE --tail=50    # check Cowboy reconciler"
+      echo -e "  ${YELLOW}FIX:${NC} kubectl logs deployment/glm-controller -n $NAMESPACE --tail=50    # check fleet controller reconciler"
     fi
   fi
 else
@@ -463,12 +463,12 @@ else
   fi
 
   if [[ "${GW_DESIRED:-0}" -eq 0 ]]; then
-    fail "Gateway scaled to 0 replicas — Cowboy's glmGateways doc may have desiredStatus=retired"
+    fail "Gateway scaled to 0 replicas — the fleet controller's glmGateways doc may have desiredStatus=retired"
   elif [[ "${GW_READY:-0}" -ge 1 ]]; then
     pass "Running ($GW_READY/$GW_DESIRED replicas)"
     info "Image: $GW_IMAGE"
     if [[ "$GW_IMAGE" == *":latest" ]]; then
-      pass "Build: :latest (Cowboy auto-bootstrap default)"
+      pass "Build: :latest (fleet controller auto-bootstrap default)"
     elif [[ -n "$GW_SHA" && "$GW_SHA" == "$LATEST_SHA" ]]; then
       pass "Build: $GW_SHA (matches HEAD ✓)"
     elif [[ -n "$GW_SHA" ]]; then
@@ -537,16 +537,16 @@ NODE
   else
     fail "gateway capacity placement is invalid: $CAPACITY_PLACEMENT_ERRORS"
     if $FIX; then
-      echo -e "  ${YELLOW}FIX:${NC} reconcile the affected Cowboy gateway release, then rerun this verifier"
+      echo -e "  ${YELLOW}FIX:${NC} reconcile the affected fleet controller gateway release, then rerun this verifier"
     fi
   fi
 else
   fail "could not read configured gateway capacity policy"
 fi
 
-# ── 5c. Cowboy gateway ServiceAccount ownership ──────────────────────────────
+# ── 5c. Fleet controller gateway ServiceAccount ownership ──────────────────────────────
 set_section infra
-header "5c. Cowboy gateway ServiceAccount ownership"
+header "5c. Fleet controller gateway ServiceAccount ownership"
 if KSA_OWNERSHIP_ERRORS=$(kubectl --context "$K8S_CONTEXT" get serviceaccounts -n "$NAMESPACE" -o json 2>/dev/null | \
   python3 -c '
 import json
@@ -577,7 +577,7 @@ for item in payload.get("items", []):
 print("\n".join(errors))
 sys.exit(1 if errors else 0)
 ' "$TARGET_ID"); then
-  pass "all dynamic gateway KSAs are explicitly Cowboy-owned"
+  pass "all dynamic gateway KSAs are explicitly controller-owned"
 elif [[ -n "$KSA_OWNERSHIP_ERRORS" ]]; then
   fail "unlabeled or incorrectly owned dynamic gateway KSA: $KSA_OWNERSHIP_ERRORS"
 else
@@ -586,9 +586,9 @@ fi
 
 # ── 5e. Gateway Storage Mode ──────────────────────────────────────────────────
 # Gateway is always emptyDir. Pod-local state is disposable: the fleet
-# controller restores customer workspaces from Gitea post-boot, MEMORY.md
+# controller restores user workspaces from Gitea post-boot, MEMORY.md
 # rides the workspace tree (so it persists via the same Gitea path), and
-# coach session continuity on restart comes from octogee_chat_history. This
+# agent session continuity on restart comes from octogee_chat_history. This
 # check catches accidental PVC reintroductions.
 set_section infra
 header "5e. Gateway Storage Mode"
@@ -879,14 +879,14 @@ else
 fi
 
 # ── 8. Chat (folded into gateway-edge + octogee-api) ──────────────────────────
-# POST-BENDER-CLEANUP-SPEC §2.7: chat-proxy is gone as a separate container.
+# chat-proxy is gone as a separate container.
 # - MM REST (/api/v4/*) + credential mint (/api/auth/mattermost) → octogee-api
 #   (the mint route was preflighted in 5d.b above).
 # - MM WS bridge + OpenClaw WS → gateway-router /g/<gw>/*
 #   publicly, then the gateway-edge sidecar's internal /api/g/<gw>/* mount.
 set_section infra
 header "8. chat (gateway-edge sidecar + octogee-api)"
-# Iterate EVERY running gateway pod (cattle fleet: bender, default, …) and
+# Iterate EVERY running gateway pod (cattle fleet: walter, default, …) and
 # assert each is on the post-fold architecture:
 #   - has a gateway-edge container (WS surfaces live here),
 #   - does NOT still carry a chat-proxy sidecar (the fold deleted it — a
@@ -907,12 +907,12 @@ else
     GE_IMG=$(kubectl get pod "$POD" -n "$NAMESPACE" -o jsonpath='{.spec.containers[?(@.name=="gateway-edge")].image}' 2>/dev/null)
     GW_IMG=$(kubectl get pod "$POD" -n "$NAMESPACE" -o jsonpath='{.spec.containers[?(@.name=="gateway")].image}' 2>/dev/null)
     if [[ -z "$GE_IMG" ]]; then
-      fail "$POD: no gateway-edge container — stale pre-fold pod, needs a Cowboy roll"
+      fail "$POD: no gateway-edge container — stale pre-fold pod, needs a fleet controller roll"
     else
       pass "$POD: gateway-edge present (${GE_IMG##*/})"
     fi
     if echo " $CONTAINERS " | grep -q " chat-proxy "; then
-      fail "$POD: chat-proxy sidecar still present — STALE pre-fold image; Cowboy must roll it to the folded gateway-edge"
+      fail "$POD: chat-proxy sidecar still present — STALE pre-fold image; the fleet controller must roll it to the folded gateway-edge"
     else
       pass "$POD: chat-proxy sidecar gone (folded into gateway-edge)"
     fi
@@ -957,7 +957,7 @@ else
 fi
 
 set_section bootstrap
-# ── Env contract (POST-BENDER-CLEANUP-SPEC §2.7) ──────────────────────
+# ── Env contract ──────────────────────────────────────────────────────
 # The gateway-edge sidecar runs the folded MM WS proxy and Activity intake,
 # so it MUST have MM_INTERNAL_URL (in-cluster MM Service DNS). The
 # browser-facing URL is no longer an env on this container — octogee-api's

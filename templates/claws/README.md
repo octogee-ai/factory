@@ -23,7 +23,7 @@ the receiving host's Labs settings; authoring and inspection do not. Add always
 chooses an unused agent ID and never updates an existing agent. The receiving
 host's tool and permission policy remains authoritative.
 
-These are optional starters, separate from hosted provisioning and Barn/Builder
+These are optional starters, separate from hosted provisioning and shared-to-isolated
 migration. They do not include an existing agent's store UUID, conversations,
 memory or files. Existing authored-workspace portability uses Octogee's GitHub
 integration model; Claw Add does not export an existing agent. Full runtime

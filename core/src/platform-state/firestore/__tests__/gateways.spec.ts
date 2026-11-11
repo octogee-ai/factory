@@ -9,7 +9,7 @@ function stored(overrides: Record<string, unknown> = {}): Record<string, unknown
   return {
     uid: "uid-a",
     slug: "ceckert",
-    gatewayId: "bender",
+    gatewayId: "walter",
     source: "migrate-customer",
     state: "quiescing",
     epoch: 3,
@@ -22,7 +22,7 @@ function stored(overrides: Record<string, unknown> = {}): Record<string, unknown
 
 function decodeFailure(data: Record<string, unknown>): unknown {
   try {
-    decodeGatewayAssignmentData("bender", "uid-a", data);
+    decodeGatewayAssignmentData("walter", "uid-a", data);
   } catch (error) {
     return error;
   }
@@ -31,10 +31,10 @@ function decodeFailure(data: Record<string, unknown>): unknown {
 
 describe("decodeGatewayAssignmentData", () => {
   it("returns exactly the fence and identity values the document stores", () => {
-    expect(decodeGatewayAssignmentData("bender", "uid-a", stored())).toEqual({
+    expect(decodeGatewayAssignmentData("walter", "uid-a", stored())).toEqual({
       uid: "uid-a",
       slug: "ceckert",
-      gatewayId: "bender",
+      gatewayId: "walter",
       source: "migrate-customer",
       state: "quiescing",
       epoch: 3,
@@ -47,13 +47,13 @@ describe("decodeGatewayAssignmentData", () => {
   it("reads a document written before createdAt existed as serving since its updatedAt", () => {
     const { createdAt: _createdAt, ...legacy } = stored();
 
-    expect(decodeGatewayAssignmentData("bender", "uid-a", legacy)).toMatchObject({ createdAt: NOW, updatedAt: NOW });
+    expect(decodeGatewayAssignmentData("walter", "uid-a", legacy)).toMatchObject({ createdAt: NOW, updatedAt: NOW });
   });
 
   it("reads a document written without updatedAt with its clock at zero", () => {
     const { updatedAt: _updatedAt, ...unclocked } = stored();
 
-    expect(decodeGatewayAssignmentData("bender", "uid-a", unclocked)).toMatchObject({ createdAt: NOW - 1_000, updatedAt: 0 });
+    expect(decodeGatewayAssignmentData("walter", "uid-a", unclocked)).toMatchObject({ createdAt: NOW - 1_000, updatedAt: 0 });
   });
 
   it.each([
@@ -64,12 +64,12 @@ describe("decodeGatewayAssignmentData", () => {
     ["a fractional epoch", { epoch: 1.5 }, "stores epoch 1.5"],
     ["an epoch held as text", { epoch: "3" }, 'stores epoch "3"'],
     ["no uid", { uid: undefined }, "has no uid"],
-    ["another Builder's uid", { uid: "uid-b" }, 'stores uid "uid-b"'],
+    ["another user's uid", { uid: "uid-b" }, 'stores uid "uid-b"'],
     ["a fractional updatedAt", { updatedAt: NOW + 0.5 }, `stores updatedAt ${NOW + 0.5}`],
     ["an updatedAt held as text", { updatedAt: String(NOW) }, `stores updatedAt "${NOW}"`],
   ])("rejects a document with %s instead of supplying a fence value", (_case, overrides, detail) => {
     expect(decodeFailure(stored(overrides))).toEqual(
-      new MalformedRecordError({ aggregate: "gateway-assignment", key: "bender/uid-a" }, detail),
+      new MalformedRecordError({ aggregate: "gateway-assignment", key: "walter/uid-a" }, detail),
     );
   });
 

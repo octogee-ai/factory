@@ -55,7 +55,7 @@ function sources(docs: Docs) {
 }
 
 describe("createAnthropicProviderKeyResolver", () => {
-  it.each(["shared", "missing", "reassigned", "changed-during-secret", "parked-owner", "moved-during-secret", "revoked-during-secret"] as const)("keeps customer keys behind current Builder authority: %s", async state => {
+  it.each(["shared", "missing", "reassigned", "changed-during-secret", "parked-owner", "moved-during-secret", "revoked-during-secret"] as const)("keeps user keys behind current user authority: %s", async state => {
     const docs: Docs = {
       ...(state === "missing" ? {} : { "gateways/jack": { ...gatewayRoot(state === "shared" ? "shared" : "builder"), ...(state === "reassigned" ? { ownerUid: "different-owner" } : {}) } }),
       "users/uid-jack": { username: "smile-wring-011b", provisioning: { openclaw: { gatewayId: state === "parked-owner" ? "shared-1" : "jack" } } },
@@ -134,7 +134,7 @@ describe("createAnthropicProviderKeyResolver", () => {
             active: true,
             provider: "anthropic",
             mode: "api_key",
-            secretName: "byok-other-builder-anthropic",
+            secretName: "byok-other-user-anthropic",
           },
         },
       ),
@@ -235,7 +235,7 @@ describe("createAnthropicProviderKeyResolver", () => {
             active: true,
             provider: "anthropic",
             mode: "api_key",
-            secretName: "byok-other-builder-anthropic",
+            secretName: "byok-other-user-anthropic",
           },
         },
       }),
@@ -249,7 +249,7 @@ describe("createAnthropicProviderKeyResolver", () => {
 
   it.each([
     "byok-smile-wring-011b-anthropic",
-    "byok-other-builder-anthropic",
+    "byok-other-user-anthropic",
   ])("ignores legacy-only BYOT metadata referencing %s", async (secretName) => {
     const readSecret = vi.fn(async () => " sk-ant-owner ");
     const resolver = createAnthropicProviderKeyResolver({

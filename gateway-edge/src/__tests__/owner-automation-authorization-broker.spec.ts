@@ -69,7 +69,7 @@ describe("owner automation authorization broker client", () => {
   it.each([
     ["another gateway", { ...authorized, gatewayId: "shared-victim" }],
     ["another agent", { ...authorized, agentId: "octogee-victim-coach" }],
-    ["an agent that is not the slug's coach", { ...authorized, slug: "victim" }],
+    ["an agent that is not the slug's agent", { ...authorized, slug: "victim" }],
     ["a malformed channel", { ...authorized, coachChannelId: "general" }],
   ])("fails closed when the broker names %s", async (_label, response) => {
     h.internalFetch.mockResolvedValue(json(200, response));

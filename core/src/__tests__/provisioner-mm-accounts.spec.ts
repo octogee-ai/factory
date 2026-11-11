@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
-  wireCoachMattermostBindings,
+  wireDefaultAgentMattermostBindings,
 } from "../provisionSteps.js";
 
 vi.mock("../config.js", async () => {
@@ -23,10 +23,10 @@ function mkMmUpdate(extra: Record<string, any> = {}): Record<string, any> {
   };
 }
 
-describe("wireCoachMattermostBindings", () => {
-  it("writes bindings only for the Builder-facing Coach and General channels", () => {
+describe("wireDefaultAgentMattermostBindings", () => {
+  it("writes bindings only for the user-facing agent and General channels", () => {
     const config: any = { bindings: [] };
-    wireCoachMattermostBindings(config, AGENT_ID, SLUG, mkMmUpdate());
+    wireDefaultAgentMattermostBindings(config, AGENT_ID, SLUG, mkMmUpdate());
     expect(config.bindings).toHaveLength(2);
     for (const b of config.bindings) {
       expect(b.agentId).toBe(AGENT_ID);
@@ -50,7 +50,7 @@ describe("wireCoachMattermostBindings", () => {
         },
       ],
     };
-    wireCoachMattermostBindings(config, AGENT_ID, SLUG, mkMmUpdate());
+    wireDefaultAgentMattermostBindings(config, AGENT_ID, SLUG, mkMmUpdate());
     expect(config.bindings).toHaveLength(2);
     for (const b of config.bindings) {
       expect(b.match.accountId).toBe(ACCOUNT_ID);
@@ -59,14 +59,14 @@ describe("wireCoachMattermostBindings", () => {
 
   it("is idempotent on re-provision (same binding written twice yields one entry per channel)", () => {
     const config: any = { bindings: [] };
-    wireCoachMattermostBindings(config, AGENT_ID, SLUG, mkMmUpdate());
-    wireCoachMattermostBindings(config, AGENT_ID, SLUG, mkMmUpdate());
+    wireDefaultAgentMattermostBindings(config, AGENT_ID, SLUG, mkMmUpdate());
+    wireDefaultAgentMattermostBindings(config, AGENT_ID, SLUG, mkMmUpdate());
     expect(config.bindings).toHaveLength(2);
   });
 
   it("skips channels whose id is missing from mmUpdate", () => {
     const config: any = { bindings: [] };
-    wireCoachMattermostBindings(config, AGENT_ID, SLUG, {
+    wireDefaultAgentMattermostBindings(config, AGENT_ID, SLUG, {
       "mattermost.channelId": "ch-coach-dm",
     });
     expect(config.bindings).toHaveLength(1);

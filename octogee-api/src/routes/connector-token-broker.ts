@@ -16,8 +16,8 @@ import {
 } from "@octogee/core/gateway-live-release";
 import { gatewayVmPodName, resolveGatewayRuntime } from "@octogee/shared/types/glm";
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
-import { configuredBuilderPreparationAllowed } from "../lib/builder-preparation.js";
-import { readComputerRuntimeObservation } from "../lib/computer-runtime-observation.js";
+import { configuredUserPreparationAllowed } from "../lib/user-preparation.js";
+import { readVmRuntimeObservation } from "../lib/vm-runtime-observation.js";
 import { projectMemberExists } from "../lib/project-members.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
@@ -240,7 +240,7 @@ async function verifiedGatewayAuthorization(
   const authorization = await readServingGatewayAuthorization(store, bound.gatewayId);
   if (!authorization) return refused(bound, "gateway is not serving");
   if (authorization.config.ownerUid !== bound.ownerUid) return refused(bound, "bound owner differs from gateway owner");
-  const runtime = await readComputerRuntimeObservation(store, bound.gatewayId);
+  const runtime = await readVmRuntimeObservation(store, bound.gatewayId);
   const vmRuntime = resolveGatewayRuntime(runtime?.runtime) === "gce-vm";
   const ownerIdentity = vmRuntime
     ? vmOwnerIdentity(runtime && { ...runtime }, bound)
@@ -320,12 +320,12 @@ type ProjectCloneAuthorizationInput = {
 async function projectCloneGatewayMode(input: ProjectCloneAuthorizationInput): Promise<"preparing" | "serving" | null> {
   const { store, bound, uid, access } = input;
   if (!safeDocId(uid) || !bound.ownerUid || uid !== bound.ownerUid) return refused(bound, "clone request is not from the owner runtime");
-  if (await configuredBuilderPreparationAllowed(store, bound, access.builderSlug, uid)) return "preparing";
-  const [builder, assignment] = await Promise.all([
-    store.builders.records.get(uid),
+  if (await configuredUserPreparationAllowed(store, bound, access.builderSlug, uid)) return "preparing";
+  const [user, assignment] = await Promise.all([
+    store.users.records.get(uid),
     store.gateways.assignments.get(bound.gatewayId, uid),
   ]);
-  if (builder?.gateway?.gatewayId !== bound.gatewayId || assignment?.gatewayId !== bound.gatewayId ||
+  if (user?.gateway?.gatewayId !== bound.gatewayId || assignment?.gatewayId !== bound.gatewayId ||
     assignment.slug !== access.builderSlug || assignment.state !== "serving") return refused(bound, "clone gateway does not own the serving assignment");
   const authorization = await verifiedGatewayAuthorization(store, bound);
   if (!authorization) return null;

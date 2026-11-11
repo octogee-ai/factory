@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
-  workspaceCoachChannelName,
+  workspaceDefaultAgentChannelName,
   workspaceGeneralChannelName,
 } from "@octogee/shared/types/identity";
 
@@ -22,7 +22,7 @@ const h = vi.hoisted(() => {
       Object.assign(docs, d);
     },
     mmApiCall: vi.fn(),
-    mintAndPersistCoachToken: vi.fn(),
+    mintAndPersistDefaultAgentToken: vi.fn(),
     mmUploadAvatar: vi.fn(),
   };
 });
@@ -31,8 +31,8 @@ vi.mock("../firebase.js", async () => {
   const { createDocumentFixtureStore } = await import("../testing/journal-store.js");
   return { db: h.db, platformStateStore: createDocumentFixtureStore(h.docs) };
 });
-vi.mock("../mattermost/coach-pat.js", () => ({
-  mintAndPersistCoachToken: h.mintAndPersistCoachToken,
+vi.mock("../mattermost/default-agent-pat.js", () => ({
+  mintAndPersistDefaultAgentToken: h.mintAndPersistDefaultAgentToken,
 }));
 vi.mock("../mattermost/avatars.js", () => ({ mmUploadAvatar: h.mmUploadAvatar }));
 
@@ -88,34 +88,34 @@ beforeEach(() => {
     if (method === "POST" && endpoint === "/teams") return { id: "team-1" };
     if (method === "POST" && endpoint === "/channels") return { id: `ch:${body?.name}` };
     if (method === "POST" && endpoint === "/bots") return { user_id: "coach-1" };
-    if (method === "POST" && endpoint === "/users/builder-1/tokens") return { token: "builder-token" };
+    if (method === "POST" && endpoint === "/users/builder-1/tokens") return { token: "user-token" };
     if (method === "GET" && endpoint.includes("/channels/name/")) return null;
     return {};
   });
-  h.mintAndPersistCoachToken.mockResolvedValue({ token: "coach-pat" });
+  h.mintAndPersistDefaultAgentToken.mockResolvedValue({ token: "default-agent-pat" });
   h.mmUploadAvatar.mockResolvedValue(true);
 });
 
-describe("provisionMattermostUser — new builder (happy path)", () => {
-  it("creates builder, team, coach bot and returns the mattermost update map", async () => {
+describe("provisionMattermostUser — new user (happy path)", () => {
+  it("creates user, team, defaultAgent bot and returns the mattermost update map", async () => {
     const result = await call(HAPPY);
 
     expect(result["mattermost.userId"]).toBe("builder-1");
     expect(result["mattermost.username"]).toBe("acme");
     expect(result["mattermost.teamId"]).toBe("team-1");
     expect(result["mattermost.coachUserId"]).toBe("coach-1");
-    expect(result["_coachPersonalToken"]).toBe("coach-pat");
-    expect(result["mattermost.channelId"]).toBe(`ch:${workspaceCoachChannelName("acme")}`);
-    expect(result["mattermost.dmChannelId"]).toBe(`ch:${workspaceCoachChannelName("acme")}`);
+    expect(result["_coachPersonalToken"]).toBe("default-agent-pat");
+    expect(result["mattermost.channelId"]).toBe(`ch:${workspaceDefaultAgentChannelName("acme")}`);
+    expect(result["mattermost.dmChannelId"]).toBe(`ch:${workspaceDefaultAgentChannelName("acme")}`);
     expect(result["mattermost.generalChannelId"]).toBe(`ch:${workspaceGeneralChannelName("acme")}`);
     expect(result).not.toHaveProperty("mattermost.adminChannelId");
     expect(createdChannelNames()).toEqual([
-      workspaceCoachChannelName("acme"),
+      workspaceDefaultAgentChannelName("acme"),
       workspaceGeneralChannelName("acme"),
     ]);
   });
 
-  it("creates the builder MM user with the least-privilege system_user role", async () => {
+  it("creates the user MM user with the least-privilege system_user role", async () => {
     await call(HAPPY);
     const userCreate = h.mmApiCall.mock.calls.find(
       ([m, e]: [string, string]) => m === "POST" && e === "/users",
@@ -123,16 +123,16 @@ describe("provisionMattermostUser — new builder (happy path)", () => {
     expect(userCreate?.[2]).toMatchObject({ username: "acme", roles: "system_user" });
   });
 
-  it("creates the coach as a bot (POST /bots) and mints+persists its PAT", async () => {
+  it("creates the agent as a bot (POST /bots) and mints+persists its PAT", async () => {
     await call(HAPPY);
     expect(seq()).toContain("POST /bots");
     expect(seq()).toContain("POST /teams");
-    expect(h.mintAndPersistCoachToken).toHaveBeenCalledWith(expect.anything(), "u1", "coach-1");
+    expect(h.mintAndPersistDefaultAgentToken).toHaveBeenCalledWith(expect.anything(), "u1", "coach-1");
   });
 
-  it("persists the builder personal token to the user's mattermost secret", async () => {
+  it("persists the user personal token to the user's mattermost secret", async () => {
     await call(HAPPY);
-    expect(h.docs["users/u1/secrets/mattermost"]).toMatchObject({ personalToken: "builder-token" });
+    expect(h.docs["users/u1/secrets/mattermost"]).toMatchObject({ personalToken: "user-token" });
   });
 
   it("never reads MM_COMMUNITY_TEAM_ID — community membership is reconciled separately, not during MM account provisioning", async () => {
@@ -152,7 +152,7 @@ describe("provisionMattermostUser — already provisioned (idempotent backfill)"
     h.setDocs({
       "users/u1": {
         mattermost: {
-          userId: "existing-builder",
+          userId: "existing-user",
           username: "acme",
           teamId: "existing-team",
           coachUserId: "existing-coach",
@@ -172,7 +172,7 @@ describe("provisionMattermostUser — already provisioned (idempotent backfill)"
 
   it("returns the complete persisted topology without creating a new user or team", async () => {
     const result = await call(HAPPY);
-    expect(result["mattermost.userId"]).toBe("existing-builder");
+    expect(result["mattermost.userId"]).toBe("existing-user");
     expect(result["mattermost.teamId"]).toBe("existing-team");
     expect(result["mattermost.coachUserId"]).toBe("existing-coach");
     expect(result["mattermost.channelId"]).toBe("existing-coach-ch");
@@ -183,8 +183,8 @@ describe("provisionMattermostUser — already provisioned (idempotent backfill)"
     expect(seq()).not.toContain("POST /teams");
   });
 
-  it("keeps the stored Mattermost username and coach channel name", async () => {
-    h.docs["users/u1"] = { mattermost: { userId: "existing-builder", username: "legacy-name" } };
+  it("keeps the stored Mattermost username and agent channel name", async () => {
+    h.docs["users/u1"] = { mattermost: { userId: "existing-user", username: "legacy-name" } };
 
     const result = await call(HAPPY);
 
@@ -196,7 +196,7 @@ describe("provisionMattermostUser — already provisioned (idempotent backfill)"
     h.setDocs({
       "users/u1": {
         mattermost: {
-          userId: "existing-builder",
+          userId: "existing-user",
           username: "acme",
           teamId: "existing-team",
           coachUserId: "existing-coach",
@@ -223,7 +223,7 @@ describe("provisionMattermostUser — already provisioned (idempotent backfill)"
 
   it("re-enters provisioning when the persisted topology has no team", async () => {
     h.setDocs({
-      "users/u1": { mattermost: { userId: "existing-builder", username: "acme" } },
+      "users/u1": { mattermost: { userId: "existing-user", username: "acme" } },
       "workspaces/acme/channels/coach-dm": { mattermost: { channelId: "existing-coach-ch" } },
     });
 
@@ -236,7 +236,7 @@ describe("provisionMattermostUser — already provisioned (idempotent backfill)"
   it("re-enters provisioning when a persisted team is missing canonical channels", async () => {
     h.setDocs({
       "users/u1": {
-        mattermost: { userId: "existing-builder", username: "acme", teamId: "existing-team" },
+        mattermost: { userId: "existing-user", username: "acme", teamId: "existing-team" },
       },
       "workspaces/acme": { id: "acme", ownerUid: "u1", mattermost: { teamId: "existing-team" } },
       "agents/u1": { mattermost: { userId: "existing-coach" } },
@@ -256,23 +256,23 @@ describe("provisionMattermostUser — degraded paths", () => {
       if (method === "POST" && endpoint === "/users") return null; // create conflicts
       if (method === "POST" && endpoint === "/channels") return { id: `ch:${body?.name}` };
       if (method === "GET" && endpoint.startsWith("/users/username/")) return null; // username miss
-      if (method === "GET" && endpoint.startsWith("/users/email/")) return { id: "builder-existing", delete_at: 5 };
+      if (method === "GET" && endpoint.startsWith("/users/email/")) return { id: "user-existing", delete_at: 5 };
       if (method === "POST" && endpoint === "/teams") return { id: "team-1" };
       if (method === "POST" && endpoint === "/bots") return { user_id: "coach-1" };
-      if (method === "POST" && endpoint === "/users/builder-existing/tokens") return { token: "tok" };
+      if (method === "POST" && endpoint === "/users/user-existing/tokens") return { token: "tok" };
       if (method === "GET" && endpoint.includes("/channels/name/")) return null;
       return {};
     });
 
     const result = await call(HAPPY);
 
-    expect(result["mattermost.userId"]).toBe("builder-existing");
-    expect(seq()).toContain("PUT /users/builder-existing/active");
-    expect(seq()).toContain("PUT /users/builder-existing/patch");
+    expect(result["mattermost.userId"]).toBe("user-existing");
+    expect(seq()).toContain("PUT /users/user-existing/active");
+    expect(seq()).toContain("PUT /users/user-existing/patch");
   });
 
-  it("keeps coachUserId but omits the coach token when the PAT mint fails", async () => {
-    h.mintAndPersistCoachToken.mockResolvedValue(null);
+  it("keeps coachUserId but omits the agent token when the PAT mint fails", async () => {
+    h.mintAndPersistDefaultAgentToken.mockResolvedValue(null);
 
     const result = await call(HAPPY);
 

@@ -6,53 +6,53 @@ import { recordRevisionSystemConfigStatus } from "./revision-system-config-statu
 
 const runtime = {
   docKind: "runtime",
-  gatewayId: "bender",
+  gatewayId: "walter",
   release: 7,
   lifecycle: "serving",
-  heartbeat: { status: "ready", mountedCustomers: ["bender"], lastHeartbeatAt: 1_000 },
+  heartbeat: { status: "ready", mountedCustomers: ["walter"], lastHeartbeatAt: 1_000 },
 };
 
 describe("gateway system config status telemetry", () => {
   it("updates the matching stable runtime heartbeat", async () => {
-    const documents = new Map<string, Record<string, unknown>>([["glmGateways/bender", runtime]]);
+    const documents = new Map<string, Record<string, unknown>>([["glmGateways/walter", runtime]]);
 
     await expect(recordRevisionSystemConfigStatus(createDocumentFixtureStore(documents), {
-      gatewayId: "bender",
-      revisionId: "bender",
+      gatewayId: "walter",
+      revisionId: "walter",
       status: { state: "clean", acceptedCommit: "a".repeat(40) },
     })).resolves.toBe(true);
-    expect(documents.get("glmGateways/bender")?.heartbeat).toEqual({
+    expect(documents.get("glmGateways/walter")?.heartbeat).toEqual({
       status: "ready",
-      mountedCustomers: ["bender"],
+      mountedCustomers: ["walter"],
       lastHeartbeatAt: 1_000,
       configStatus: { state: "clean", acceptedCommit: "a".repeat(40), observedAt: { serverNow: true } },
     });
   });
 
   it("refuses a revision that is not the gateway or a document that is not its runtime record", async () => {
-    const legacy = { docKind: "revision", gateway: "other", revisionId: "bender-r7" };
-    const documents = new Map<string, Record<string, unknown>>([["glmGateways/bender", legacy]]);
+    const legacy = { docKind: "revision", gateway: "other", revisionId: "walter-r7" };
+    const documents = new Map<string, Record<string, unknown>>([["glmGateways/walter", legacy]]);
     const store = createDocumentFixtureStore(documents);
 
     await expect(recordRevisionSystemConfigStatus(store, {
-      gatewayId: "bender",
-      revisionId: "bender",
+      gatewayId: "walter",
+      revisionId: "walter",
       status: { state: "error" },
     })).resolves.toBe(false);
-    await expect(recordRevisionSystemConfigStatus(createDocumentFixtureStore({ "glmGateways/bender": runtime }), {
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+    await expect(recordRevisionSystemConfigStatus(createDocumentFixtureStore({ "glmGateways/walter": runtime }), {
+      gatewayId: "walter",
+      revisionId: "walter-r7",
       status: { state: "error" },
     })).resolves.toBe(false);
-    expect(documents.get("glmGateways/bender")).toEqual(legacy);
+    expect(documents.get("glmGateways/walter")).toEqual(legacy);
   });
 
   it("fails closed on a runtime record stored under another gateway", async () => {
-    const store = createDocumentFixtureStore({ "glmGateways/bender": { ...runtime, gatewayId: "other" } });
+    const store = createDocumentFixtureStore({ "glmGateways/walter": { ...runtime, gatewayId: "other" } });
 
     await expect(recordRevisionSystemConfigStatus(store, {
-      gatewayId: "bender",
-      revisionId: "bender",
+      gatewayId: "walter",
+      revisionId: "walter",
       status: { state: "error" },
     })).rejects.toBeInstanceOf(MalformedRecordError);
   });

@@ -137,7 +137,7 @@ async function rethrowMutationError(store: PlatformStateStore, gatewayId: string
   throw error;
 }
 
-export async function deployFleetBuilder(store: PlatformStateStore, gateway: Pick<FleetGateway, "gatewayId">, manifest: ReleaseDigestManifest, payload: ReleasePayload, environment: "test" | "prod"): Promise<{ release: number; operationId: string | null }> {
+export async function deployFleetUser(store: PlatformStateStore, gateway: Pick<FleetGateway, "gatewayId">, manifest: ReleaseDigestManifest, payload: ReleasePayload, environment: "test" | "prod"): Promise<{ release: number; operationId: string | null }> {
   const [stored, platform] = await Promise.all([
     store.gateways.roots.get(gateway.gatewayId),
     store.controllerState.platformRelease.get(),
@@ -145,11 +145,11 @@ export async function deployFleetBuilder(store: PlatformStateStore, gateway: Pic
   const current = stored === null ? null : asDurableGatewayRoot(withoutRevision(stored), gateway.gatewayId);
   if (current?.desiredStatus === "retired") throw new FleetDeploymentDeferredError(`${gateway.gatewayId} retired during deployment selection`);
   if (stored === null) await rethrowMutationError(store, gateway.gatewayId, new InvalidGatewayRootError(gateway.gatewayId));
-  if (!current || current.gatewayClass !== "builder") throw new Error(`${gateway.gatewayId} is no longer a non-retired Builder`);
-  if (!matchesFleetPlatformRelease(platformRecordOf(platform), payload, manifest.sourceSha)) throw new Error("platform release was superseded before Builder deployment");
+  if (!current || current.gatewayClass !== "builder") throw new Error(`${gateway.gatewayId} is no longer a non-retired isolated gateway`);
+  if (!matchesFleetPlatformRelease(platformRecordOf(platform), payload, manifest.sourceSha)) throw new Error("platform release was superseded before user deployment");
   const actor = process.env.RELEASE_ACTOR ?? `operator:${environment}-fleet`;
   try { return await runNormalFleetMutation(store, {
-    actor, forced: false, what: `deploy ${environment.toUpperCase()} build to Builder gateway`, why: process.env.RELEASE_REASON ?? `operator requested complete ${environment.toUpperCase()} fleet deployment`,
+    actor, forced: false, what: `deploy ${environment.toUpperCase()} build to isolated gateway`, why: process.env.RELEASE_REASON ?? `operator requested complete ${environment.toUpperCase()} fleet deployment`,
     target: { gatewayId: current.gatewayId, environment },
     preActionStatus: { desiredStatus: current.desiredStatus, desiredRelease: current.desiredRelease, latestRelease: current.latestRelease },
     mutation: { kind: "deploy-gateway-build", gatewayId: current.gatewayId, sourceSha: manifest.sourceSha, manifestDigest: manifest.manifestDigest },
@@ -176,7 +176,7 @@ export async function runFleetDeploy(argv: string[]): Promise<void> {
     const report = await deployFleet({ ...options, environment, payload }, {
       now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       readSnapshot: () => readFleetSnapshot(store, () => observeGatewayPods(environment)),
-      deploy: (gateway) => deployFleetBuilder(store, gateway, manifest, payload, environment),
+      deploy: (gateway) => deployFleetUser(store, gateway, manifest, payload, environment),
       log: (message) => process.stdout.write(`${message}\n`),
     });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

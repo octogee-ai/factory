@@ -3,17 +3,17 @@ import type { GatewayDoc } from "../../shared/types/gateway-releases.js";
 import {
   platformOpenAiEmbeddingMemorySearch,
   platformOpenAiEmbeddingSecretId,
-} from "../lib/openclaw-config-builders.js";
+} from "../lib/openclaw-config-users.js";
 import {
   planEmbeddingRefRepair,
   repairTargetRevisionAllowed,
   runEmbeddingRefRepair,
 } from "../lib/embedding-ref-repair.js";
 
-function coach(id: string, refOwnerId?: string): Record<string, unknown> {
+function defaultAgent(id: string, refOwnerId?: string): Record<string, unknown> {
   return {
     id,
-    name: `Coach (${id})`,
+    name: `Agent (${id})`,
     ...(refOwnerId !== undefined
       ? { memorySearch: platformOpenAiEmbeddingMemorySearch(refOwnerId) }
       : {}),
@@ -49,10 +49,10 @@ describe("planEmbeddingRefRepair", () => {
   it("reports every platform ref not derived from its own agent id, with current and expected ids", () => {
     const plan = planEmbeddingRefRepair(
       config([
-        coach("octogee-alice-coach", "octogee-alice-coach"),
-        coach("octogee-livefixture-coach", "octogee-tester5-coach"),
-        coach("octogee-bob-coach", "octogee-alice-coach"),
-        coach("octogee-no-search-coach"),
+        defaultAgent("octogee-alice-coach", "octogee-alice-coach"),
+        defaultAgent("octogee-livefixture-coach", "octogee-tester5-coach"),
+        defaultAgent("octogee-bob-coach", "octogee-alice-coach"),
+        defaultAgent("octogee-no-search-coach"),
       ]),
       { agentDirExists: () => true },
     );
@@ -101,7 +101,7 @@ describe("planEmbeddingRefRepair", () => {
 
   it("returns a null next list when every ref is already correctly bound", () => {
     const plan = planEmbeddingRefRepair(
-      config([coach("octogee-alice-coach", "octogee-alice-coach"), coach("octogee-b-coach")]),
+      config([defaultAgent("octogee-alice-coach", "octogee-alice-coach"), defaultAgent("octogee-b-coach")]),
       { agentDirExists: () => true },
     );
 
@@ -112,8 +112,8 @@ describe("planEmbeddingRefRepair", () => {
   it("flags platform-ref agents whose own agent dir is absent — a rebound ref would still refuse to resolve", () => {
     const plan = planEmbeddingRefRepair(
       config([
-        coach("octogee-alice-coach", "octogee-alice-coach"),
-        coach("octogee-ghost-coach", "octogee-tester5-coach"),
+        defaultAgent("octogee-alice-coach", "octogee-alice-coach"),
+        defaultAgent("octogee-ghost-coach", "octogee-tester5-coach"),
       ]),
       { agentDirExists: (agentId) => agentId !== "octogee-ghost-coach" },
     );
@@ -154,16 +154,16 @@ describe("repairTargetRevisionAllowed", () => {
 describe("runEmbeddingRefRepair", () => {
   function corrupted(): Record<string, unknown> {
     return config([
-      coach("octogee-alice-coach", "octogee-alice-coach"),
-      coach("octogee-livefixture-coach", "octogee-tester5-coach"),
+      defaultAgent("octogee-alice-coach", "octogee-alice-coach"),
+      defaultAgent("octogee-livefixture-coach", "octogee-tester5-coach"),
     ]);
   }
   function healedGet(): { config: Record<string, unknown>; hash: string } {
     return {
       hash: "h2",
       config: config([
-        coach("octogee-alice-coach", "octogee-alice-coach"),
-        coach("octogee-livefixture-coach", "octogee-livefixture-coach"),
+        defaultAgent("octogee-alice-coach", "octogee-alice-coach"),
+        defaultAgent("octogee-livefixture-coach", "octogee-livefixture-coach"),
       ]),
     };
   }

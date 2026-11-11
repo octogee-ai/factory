@@ -24,7 +24,7 @@ export const TALK_SPEED_MAX = 2;
 export const TALK_HANDS_FREE_MAX_MS = 60_000;
 export const TALK_VOICE_ID_MAX = 128;
 const TALK_VOICE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9 _.:/-]*$/;
-/** A voice id as stored on the coach: provider-shaped (slug, uuid, `kokoro/af_heart`), or empty for the engine default. */
+/** A voice id as stored on the agent: provider-shaped (slug, uuid, `kokoro/af_heart`), or empty for the engine default. */
 export function isTalkVoiceId(value) {
     return typeof value === "string" && value.length <= TALK_VOICE_ID_MAX && (value === "" || TALK_VOICE_ID_RE.test(value));
 }

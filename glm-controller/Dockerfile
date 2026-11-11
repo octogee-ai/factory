@@ -16,9 +16,9 @@ COPY --from=platform-npm /usr/local/lib/node_modules/npm /usr/local/lib/node_mod
 COPY infra/cloud-sql/octogee-pg-server-ca.pem /etc/ssl/certs/octogee-postgres-ca.pem
 
 # Helm is PINNED to one version across every path that runs `helm upgrade`
-# against the cluster — CI's toolchain (ci/install-tools.sh) and the Builder
-# toolchain (infra/gateway/builder-toolchain/groups.json) — so the
-# umbrella upgrade and Cowboy's per-gateway upgrades share identical
+# against the cluster — CI's toolchain (ci/install-tools.sh) and the isolated
+# toolchain (infra/gateway/isolated-toolchain/groups.json) — so the
+# umbrella upgrade and the fleet controller's per-gateway upgrades share identical
 # server-side-apply semantics. helm-runner.ts relies on v4's `--server-side=true
 # --force-conflicts` string-flag syntax + `--take-ownership` (adopts leftover
 # unowned resources rather than wedging a roll); the build verifies all three
@@ -90,10 +90,10 @@ RUN npx tsc \
 #                               ingresses, gateway-fleet spanning resources)
 #   - /charts/octogee-gateway — standalone single-instance gateway pod chart
 #                               (one helm release per gateway instance,
-#                               installed by Cowboy at runtime)
+#                               installed by the fleet controller at runtime)
 # Chart pins move with the controller's image SHA — no runtime git
 # clone, no drift between desired-state writes and the chart shape
-# Cowboy renders against.
+# the fleet controller renders against.
 COPY helm/octogee         /charts/octogee
 COPY helm/octogee-gateway /charts/octogee-gateway
 

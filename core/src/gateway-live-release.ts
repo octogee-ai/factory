@@ -55,23 +55,23 @@ export function podBelongsToGateway(
   return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(suffix);
 }
 
-export function configuredBuilderBootstrapAllowed(
+export function configuredUserBootstrapAllowed(
   value: unknown,
   input: { gatewayId: string; podName: string | undefined; slug: string },
 ): boolean {
-  return eligibleConfiguredBuilderGateway(value, input) !== null;
+  return eligibleConfiguredIsolatedGateway(value, input) !== null;
 }
 
-type ConfiguredBuilderGateway = GatewayDoc & GatewayMutableConfig & { retirementClaim?: unknown };
+type ConfiguredIsolatedGateway = GatewayDoc & GatewayMutableConfig & { retirementClaim?: unknown };
 
-function eligibleConfiguredBuilderGateway(
+function eligibleConfiguredIsolatedGateway(
   value: unknown,
   input: { gatewayId: string; podName: string | undefined; slug: string },
-): ConfiguredBuilderGateway | null {
+): ConfiguredIsolatedGateway | null {
   const gateway = projectGatewayDesiredRootForGateway(
     value,
     input.gatewayId,
-  ) as ConfiguredBuilderGateway | null;
+  ) as ConfiguredIsolatedGateway | null;
   if (gateway === null) return null;
   if (
     !podBelongsToGateway(input.gatewayId, input.podName) ||
@@ -86,7 +86,7 @@ function eligibleConfiguredBuilderGateway(
   return gateway;
 }
 
-export function configuredBuilderCredentialBootstrapAllowed(
+export function configuredUserCredentialBootstrapAllowed(
   value: unknown,
   input: {
     gatewayId: string;
@@ -95,7 +95,7 @@ export function configuredBuilderCredentialBootstrapAllowed(
     uid: string;
   },
 ): boolean {
-  const gateway = eligibleConfiguredBuilderGateway(value, input);
+  const gateway = eligibleConfiguredIsolatedGateway(value, input);
   return gateway !== null && gateway.ownerUid === input.uid;
 }
 

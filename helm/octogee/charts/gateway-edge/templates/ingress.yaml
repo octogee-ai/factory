@@ -61,7 +61,7 @@ spec:
               glm-controller admin routes below must stay before the /api/*
               octogee-api catch-all so the admin fleet surfaces remain live
               even when no gateway pods are booted. */}}
-          # Cowboy HTTP — fleet routes served from glm-controller so the
+          # The fleet controller HTTP — fleet routes served from glm-controller so the
           # admin Gateways tab keeps responding when no gateway pods are
           # booted. GCE URL maps prefer most-specific path; these rules
           # take precedence over the /api/* catch-all below. GCE

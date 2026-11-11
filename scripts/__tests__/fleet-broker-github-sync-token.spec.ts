@@ -25,15 +25,15 @@ describe("fleet broker GitHub sync token", () => {
   });
 
   it("uses the gateway credential to read the owner's GitHub sync token", async () => {
-    vi.mocked(internalFetch).mockResolvedValueOnce(jsonResponse({ accessToken: "ghu_customer" }));
+    vi.mocked(internalFetch).mockResolvedValueOnce(jsonResponse({ accessToken: "ghu_user" }));
     const gatewayCredentialHeaders = vi.fn(async () => ({
       "x-octogee-gateway-credential-token": "credential-token",
     }));
 
     await expect(
-      createFleetBrokerClient("bender", "bender-r9", { gatewayCredentialHeaders })
+      createFleetBrokerClient("walter", "walter-r9", { gatewayCredentialHeaders })
         .githubTokenForSync("uid-alice"),
-    ).resolves.toBe("ghu_customer");
+    ).resolves.toBe("ghu_user");
     expect(internalFetch).toHaveBeenCalledWith(
       "http://broker/internal/connectors/access-token",
       expect.objectContaining({
@@ -41,7 +41,7 @@ describe("fleet broker GitHub sync token", () => {
         headers: expect.objectContaining({
           "x-octogee-gateway-credential-token": "credential-token",
         }),
-        body: JSON.stringify({ gatewayId: "bender", uid: "uid-alice", connectorId: "github" }),
+        body: JSON.stringify({ gatewayId: "walter", uid: "uid-alice", connectorId: "github" }),
       }),
     );
   });
@@ -50,7 +50,7 @@ describe("fleet broker GitHub sync token", () => {
     vi.mocked(internalFetch).mockResolvedValueOnce(jsonResponse({ error: "boom" }, 500));
 
     await expect(
-      createFleetBrokerClient("bender", "bender-r9").githubTokenForSync("uid-alice"),
+      createFleetBrokerClient("walter", "walter-r9").githubTokenForSync("uid-alice"),
     ).rejects.toThrow();
   });
 });

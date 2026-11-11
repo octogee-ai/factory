@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { projectAgentId } from "../../shared/types/identity.js";
 import type { FleetBrokerChannelBinding, FleetBrokerProjectAgent, FleetBrokerProjectAgentReadiness } from "../../shared/types/fleet-broker.js";
-import { activeAgentProjectIds } from "./openclaw-config-builders.js";
+import { activeAgentProjectIds } from "./openclaw-config-users.js";
 import { agentIdsFromConfig } from "./byosub-restore.js";
 
 interface AccountStatus { accountId?: string; running?: boolean; connected?: boolean; lastStartAt?: number | null }

@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
-import { buildMattermostAccounts } from "../lib/openclaw-config-builders.js";
+import { buildMattermostAccounts } from "../lib/openclaw-config-users.js";
 import {
   applyAgentStoreDatabasePatch,
   applyAnthropicBaseUrlPatch,
@@ -20,7 +20,7 @@ import {
   hydrateGitIdentity,
   materializeBrokerProfilesBeforeBoot,
   pickSoleTenantSlug,
-  slugFromCoachAgentId,
+  slugFromManagedAgentId,
   writeConfigAtomically,
 } from "../entrypoints/pre-boot-config.js";
 
@@ -77,7 +77,7 @@ describe("shared Mattermost routing safety", () => {
     expect(config.agents.list[0]).not.toHaveProperty("default");
   });
 
-  it("leaves a Builder gateway pinned to its own coach", () => {
+  it("leaves an isolated gateway pinned to its own agent", () => {
     const config: any = { agents: { list: [{ id: "octogee-ceckert-coach", default: true }] } };
 
     expect(
@@ -354,7 +354,7 @@ describe("applyPreBootPatches — platform model catalog", () => {
     expect(config.models.providers).not.toHaveProperty("platform-vertex");
   });
 
-  it("allowlists every broker-backed platform model for a Builder gateway", () => {
+  it("allowlists every broker-backed platform model for an isolated gateway", () => {
     const config: any = { agents: { defaults: { models: {} } } };
 
     const changed = applyPreBootPatches(config, {
@@ -727,7 +727,7 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(applyMattermostPreBootPatches(config, { GATEWAY_CLASS: gatewayClass }, log)).toBe(false);
   });
 
-  it.each(["off", "partial", "progress", "block"])("preserves Builder streaming mode %s and disabled tool progress", (mode) => {
+  it.each(["off", "partial", "progress", "block"])("preserves user streaming mode %s and disabled tool progress", (mode) => {
     const config: any = { channels: { mattermost: { streaming: { mode, preview: { toolProgress: false } } } } };
     applyMattermostPreBootPatches(config, { GATEWAY_CLASS: "builder" }, vi.fn());
     expect(config.channels.mattermost.streaming).toEqual({ mode, preview: { toolProgress: false } });
@@ -844,8 +844,8 @@ describe("applyPreBootPatches — Anthropic broker base URL", () => {
   });
 });
 
-describe("applyPreBootPatches — Builder overlay", () => {
-  it("wires the platform broker into a Builder config while leaving Builder-owned tools, routes, and plugins intact", () => {
+describe("applyPreBootPatches — user overlay", () => {
+  it("wires the platform broker into a user config while leaving user-owned tools, routes, and plugins intact", () => {
     const config: any = {
       tools: {
         profile: "research",
@@ -854,7 +854,7 @@ describe("applyPreBootPatches — Builder overlay", () => {
       },
       agents: {
         defaults: {
-          models: { "builder/provider-model": { label: "Builder model" } },
+          models: { "builder/provider-model": { label: "User model" } },
         },
         list: [{
           id: "discord-helper",
@@ -867,14 +867,14 @@ describe("applyPreBootPatches — Builder overlay", () => {
       },
       bindings: [
         { agentId: "discord-helper", match: { channel: "mattermost", accountId: "*" } },
-        { agentId: "discord-helper", match: { channel: "discord", accountId: "builder-discord" } },
+        { agentId: "discord-helper", match: { channel: "discord", accountId: "user-discord" } },
       ],
       channels: {
         discord: {
           accounts: {
-            "builder-discord": {
-              tokenRef: { source: "exec", provider: "gcp-secret-manager", id: "byok-builder-openai" },
-              guildId: "builder-guild",
+            "user-discord": {
+              tokenRef: { source: "exec", provider: "gcp-secret-manager", id: "byok-user-openai" },
+              guildId: "user-guild",
             },
           },
         },
@@ -884,13 +884,13 @@ describe("applyPreBootPatches — Builder overlay", () => {
         entries: {
           "discord-bridge": {
             enabled: true,
-            config: { guildId: "builder-guild", relayMentions: true },
+            config: { guildId: "user-guild", relayMentions: true },
           },
         },
       },
       models: {
         providers: {
-          "builder-provider": { baseUrl: "https://builder.example/v1", keep: true },
+          "user-provider": { baseUrl: "https://user.example/v1", keep: true },
         },
       },
     };
@@ -908,10 +908,10 @@ describe("applyPreBootPatches — Builder overlay", () => {
     expect(config.bindings).toEqual(before.bindings);
     expect(config.channels).toEqual(before.channels);
     expect(config.plugins).toEqual(before.plugins);
-    expect(config.models.providers["builder-provider"]).toEqual(before.models.providers["builder-provider"]);
+    expect(config.models.providers["user-provider"]).toEqual(before.models.providers["user-provider"]);
     expect(config.models.providers.anthropic.baseUrl).toBe("http://llm-broker");
     expect(config.agents.defaults.models).toMatchObject({
-      "builder/provider-model": { label: "Builder model" },
+      "builder/provider-model": { label: "User model" },
       "anthropic/claude-sonnet-4-6": {},
     });
   });
@@ -1103,14 +1103,14 @@ describe("applyPreBootPatches — memory search embeddings", () => {
 
     applyPreBootPatches(config, {});
 
-    const coach = config.agents.list.find(
+    const defaultAgent = config.agents.list.find(
       (agent: any) => agent.id === "octogee-tester20-coach",
     );
-    expect(coach.memorySearch).toBeUndefined();
-    expect(coach.memory).toBeUndefined();
+    expect(defaultAgent.memorySearch).toBeUndefined();
+    expect(defaultAgent.memory).toBeUndefined();
   });
 
-  it("configures a keyed coach entry without reviving legacy memorySearch", () => {
+  it("configures a keyed agent entry without reviving legacy memorySearch", () => {
     const config: any = {
       tools: { profile: "coding" },
       agents: {
@@ -1131,7 +1131,7 @@ describe("applyPreBootPatches — memory search embeddings", () => {
     expect(config.agents.entries["octogee-keyed-coach"].memorySearch).toBeUndefined();
   });
 
-  it("configures coach agents with a platform OpenAI-compatible embedding SecretRef", () => {
+  it("configures agents with a platform OpenAI-compatible embedding SecretRef", () => {
     const config: any = {
       tools: { profile: "coding" },
       agents: {
@@ -1253,7 +1253,7 @@ describe("materializeBrokerProfilesBeforeBoot", () => {
     expect(sweep).toHaveBeenCalledExactlyOnceWith(["octogee-alice-coach", "octogee-alice-proj-orbit-coach"]);
   });
 
-  it("leaves a Builder gateway's broker profiles to the post-boot sweep", async () => {
+  it("leaves an isolated gateway's broker profiles to the post-boot sweep", async () => {
     const sweep = vi.fn(async () => sweepResult);
     const log = vi.fn();
 
@@ -1350,33 +1350,33 @@ describe("applyPreBootPatches — no-change reporting", () => {
   });
 });
 
-describe("slugFromCoachAgentId", () => {
-  it("extracts the workspace slug from a canonical coach agent id", () => {
-    expect(slugFromCoachAgentId("octogee-ceckert-coach")).toBe("ceckert");
+describe("slugFromManagedAgentId", () => {
+  it("extracts the workspace slug from a canonical agent id", () => {
+    expect(slugFromManagedAgentId("octogee-ceckert-coach")).toBe("ceckert");
   });
 
-  it("returns null for non-coach agent ids (ops/tools/etc.)", () => {
-    expect(slugFromCoachAgentId("octogee-ops-something")).toBeNull();
-    expect(slugFromCoachAgentId("random")).toBeNull();
-    expect(slugFromCoachAgentId("")).toBeNull();
+  it("returns null for non-default agent ids (ops/tools/etc.)", () => {
+    expect(slugFromManagedAgentId("octogee-ops-something")).toBeNull();
+    expect(slugFromManagedAgentId("random")).toBeNull();
+    expect(slugFromManagedAgentId("")).toBeNull();
   });
 
   it("preserves kebab-case slugs (the hyphen is part of the slug, not a delimiter)", () => {
-    expect(slugFromCoachAgentId("octogee-my-builder-coach")).toBe("my-builder");
+    expect(slugFromManagedAgentId("octogee-my-builder-coach")).toBe("my-builder");
   });
 });
 
 describe("pickSoleTenantSlug", () => {
-  it("returns the unique slug when one coach agent is present", () => {
+  it("returns the unique slug when one agent is present", () => {
     expect(pickSoleTenantSlug(["octogee-ceckert-coach"])).toBe("ceckert");
   });
 
   it("returns null when multiple distinct tenants are mounted (multi-tenant cattle)", () => {
-    expect(pickSoleTenantSlug(["octogee-ceckert-coach", "octogee-bender-coach"]))
+    expect(pickSoleTenantSlug(["octogee-ceckert-coach", "octogee-walter-coach"]))
       .toBeNull();
   });
 
-  it("returns null when no coach agents are present (fresh gateway, ops-only)", () => {
+  it("returns null when no agents are present (fresh gateway, ops-only)", () => {
     expect(pickSoleTenantSlug([])).toBeNull();
     expect(pickSoleTenantSlug(["octogee-ops-tools"])).toBeNull();
   });
@@ -1438,7 +1438,7 @@ describe("hydrateGitIdentity — always produces a working gitconfig, never bloc
   it("writes generic identity for multi-tenant cattle (git still works; per-agent isolation is Phase 2)", () => {
     const writeFile = vi.fn();
     const changed = hydrateGitIdentity(baseDeps({
-      agentIds: ["octogee-ceckert-coach", "octogee-bender-coach"],
+      agentIds: ["octogee-ceckert-coach", "octogee-walter-coach"],
       writeFile,
     }));
     expect(changed).toBe(true);

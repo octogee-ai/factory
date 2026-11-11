@@ -18,7 +18,7 @@ function harness() {
 }
 
 describe("browser egress mode sync", () => {
-  it("tells the computer each mode once, and only the latest of several requested while one is in flight", async () => {
+  it("tells the VM each mode once, and only the latest of several requested while one is in flight", async () => {
     const h = harness();
     h.sync.apply("desktop");
     expect(h.posts.map((post) => post.mode)).toEqual(["desktop"]);
@@ -34,7 +34,7 @@ describe("browser egress mode sync", () => {
     expect(h.posts).toHaveLength(2);
   });
 
-  it("retries a failed delivery with capped backoff until the computer acknowledges the latest mode", async () => {
+  it("retries a failed delivery with capped backoff until the VM acknowledges the latest mode", async () => {
     const h = harness();
     h.sync.apply("desktop");
     h.posts[0]!.reject(new Error("connect ECONNREFUSED 127.0.0.1:7777"));
@@ -105,7 +105,7 @@ describe("browser egress mode sync", () => {
     await expect(controlApiModePoster("http://127.0.0.1:7777", refusing as unknown as typeof fetch)("cloud")).rejects.toThrow("desktop control answered 500: {\"error\":\"the desktop supervisor is unknown\"}");
   });
 
-  it("stops retrying, with one error, when the computer's desktop image predates mode switching", async () => {
+  it("stops retrying, with one error, when the VM's desktop image predates mode switching", async () => {
     const log = vi.fn();
     const timers: Array<() => void> = [];
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: "not found" }), { status: 404 }));

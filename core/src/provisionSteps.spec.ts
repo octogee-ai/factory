@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { FieldValue } from "firebase-admin/firestore";
 import {
-  buildCoachAgentDoc,
+  buildDefaultAgentDoc,
   buildProvisioningContext,
-  buildRemoveCustomerConfig,
-  buildProvisionedBuilderPatch,
+  buildRemoveUserConfig,
+  buildProvisionedUserPatch,
   buildUserProductFields,
 } from "./provisionSteps.js";
 
-describe("provisioned Builder state", () => {
+describe("provisioned user state", () => {
   const ctx = buildProvisioningContext("uid-1", { username: "octogeedemo", tier: "trial" });
 
-  it("binds the provisioned Builder to the workspace used by agent tools", () => {
-    expect(buildProvisionedBuilderPatch(ctx, { "mattermost.userId": "mm-1", "mattermost.teamId": "team-1" })).toEqual({
+  it("binds the provisioned user to the workspace used by agent tools", () => {
+    expect(buildProvisionedUserPatch(ctx, { "mattermost.userId": "mm-1", "mattermost.teamId": "team-1" })).toEqual({
       workspaceId: "octogeedemo",
       slug: "octogeedemo",
       mattermostUserId: "mm-1",
@@ -21,11 +21,11 @@ describe("provisioned Builder state", () => {
   });
 
   it("leaves the Mattermost user id out when provisioning did not produce one", () => {
-    expect(buildProvisionedBuilderPatch(ctx, {})).not.toHaveProperty("mattermostUserId");
+    expect(buildProvisionedUserPatch(ctx, {})).not.toHaveProperty("mattermostUserId");
   });
 
   it("leaves the Mattermost user id out when provisioning produced an empty one", () => {
-    expect(buildProvisionedBuilderPatch(ctx, { "mattermost.userId": "" })).not.toHaveProperty("mattermostUserId");
+    expect(buildProvisionedUserPatch(ctx, { "mattermost.userId": "" })).not.toHaveProperty("mattermostUserId");
   });
 
   it("keeps the tier and the derived Mattermost fields on the product document, without the platform user id", () => {
@@ -36,7 +36,7 @@ describe("provisioned Builder state", () => {
   });
 });
 
-describe("buildRemoveCustomerConfig", () => {
+describe("buildRemoveUserConfig", () => {
   const current = {
     agents: {
       list: [
@@ -62,7 +62,7 @@ describe("buildRemoveCustomerConfig", () => {
     },
   };
 
-  it("removes the customer's complete footprint from an unredacted full config without shifting sibling secrets", () => {
+  it("removes the user's complete footprint from an unredacted full config without shifting sibling secrets", () => {
     const raw = {
       ...current,
       agents: {
@@ -81,7 +81,7 @@ describe("buildRemoveCustomerConfig", () => {
       untouched: { nested: ["keep", "all", "of", "this"] },
     };
 
-    const config = buildRemoveCustomerConfig(raw, "alice", "octogee-alice-coach");
+    const config = buildRemoveUserConfig(raw, "alice", "octogee-alice-coach");
 
     expect(config.agents?.list).toEqual([
       {
@@ -100,7 +100,7 @@ describe("buildRemoveCustomerConfig", () => {
   });
 
   it("does not remove a hyphenated sibling's project accounts", () => {
-    const config = buildRemoveCustomerConfig(
+    const config = buildRemoveUserConfig(
       {
         bindings: [],
         channels: {
@@ -118,9 +118,9 @@ describe("buildRemoveCustomerConfig", () => {
   });
 });
 
-describe("buildCoachAgentDoc", () => {
-  it("gives every new coach the Octo identity with the coral Octo look", () => {
-    const doc = buildCoachAgentDoc("uid-1");
+describe("buildDefaultAgentDoc", () => {
+  it("gives every new defaultAgent the Octo identity with the coral Octo look", () => {
+    const doc = buildDefaultAgentDoc("uid-1");
     expect(doc).toMatchObject({
       id: "uid-1",
       name: "Octo",

@@ -14,26 +14,26 @@ async function fixture() {
   const contents = Buffer.from([0, 1, 2, 3]);
   const sha256 = createHash("sha256").update(contents).digest("hex");
   const manifest = { "portrait.png": { type: "blob" as const, gcsPath: `customers/alice/.objects/${sha256}`, sha256, size: 4, mimeType: "image/png", uploadedAt: "2026-10-23T00:00:00Z" } };
-  return { root, contents, manifest, deps: { coachWorkspace: true, assertCurrent: vi.fn(async () => {}), readAssets: vi.fn(async () => ({ manifest, deleted: [] as string[] })), readBlob: vi.fn(async () => contents), scan: vi.fn(async () => []) } };
+  return { root, contents, manifest, deps: { defaultAgentWorkspace: true, assertCurrent: vi.fn(async () => {}), readAssets: vi.fn(async () => ({ manifest, deleted: [] as string[] })), readBlob: vi.fn(async () => contents), scan: vi.fn(async () => []) } };
 }
 describe.skipIf(process.platform !== "linux")("authored agent capture", () => {
-  it("captures unpublished instructions and manifest-only Barn binary bytes, without publishing metadata", async () => {
+  it("captures unpublished instructions and manifest-only shared gateway binary bytes, without publishing metadata", async () => {
     const f = await fixture(); await mkdir(join(f.root, ".files")); await writeFile(join(f.root, ".files/manifest.json"), JSON.stringify(f.manifest));
     const captured = await captureAgentExport(f.root, f.deps);
     expect(captured.files.map(file => file.path)).toEqual(["SOUL.md", "portrait.png"]);
     expect(Buffer.from(captured.files[1].content, "base64")).toEqual(f.contents);
     expect(f.deps.scan).toHaveBeenCalledOnce();
   });
-  it.each([true, false])("keeps authored projects paths and isolates only coach siblings (coach=%s)", async coachWorkspace => {
+  it.each([true, false])("keeps authored projects paths and isolates only defaultAgent siblings (defaultAgent=%s)", async defaultAgentWorkspace => {
     const f = await fixture();
     for (const name of ["src/projects/list.ts", "projects/local.ts"]) {
       await mkdir(join(f.root, name, ".."), { recursive: true });
       await writeFile(join(f.root, name), "authored code");
     }
-    const result = await captureAgentExport(f.root, { ...f.deps, coachWorkspace });
+    const result = await captureAgentExport(f.root, { ...f.deps, defaultAgentWorkspace });
     const names = result.files.map(file => file.path);
     expect(names).toContain("src/projects/list.ts");
-    expect(names.includes("projects/local.ts")).toBe(!coachWorkspace);
+    expect(names.includes("projects/local.ts")).toBe(!defaultAgentWorkspace);
   });
   it("preserves authored executable mode while GCS-only binaries remain ordinary files", async () => {
     const f = await fixture(); await writeFile(join(f.root, "run.sh"), "#!/bin/sh\necho authored\n"); await chmod(join(f.root, "run.sh"), 0o755);

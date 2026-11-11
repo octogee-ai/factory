@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { prepareOpenClawSqliteJournals } from "../lib/openclaw-sqlite-journal-preflight.js";
-import { buildSafeDefaultAgent, SAFE_DEFAULT_AGENT_ID } from "../lib/openclaw-config-builders.js";
+import { buildSafeDefaultAgent, SAFE_DEFAULT_AGENT_ID } from "../lib/openclaw-config-users.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });

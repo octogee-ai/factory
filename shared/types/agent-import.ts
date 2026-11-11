@@ -743,7 +743,7 @@ export function planAgentImportConfig(
     disposition: "apply",
     reason: options.workspacePolicy.preserveConvergedContextFiles
       ? "OpenClaw converges house-only context files"
-      : "Builder-owned context files must not be recreated after import",
+      : "User-owned context files must not be recreated after import",
   });
   const decisions: AgentImportConfigDecision[] = Object.keys(identity).map((path) => ({
     path: `identity.${path}`,

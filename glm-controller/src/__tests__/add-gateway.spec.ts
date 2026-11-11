@@ -243,7 +243,7 @@ describe("createAddGatewayHandler — happy path", () => {
     expect(deps.kubeOps.readAvailableReplicas).toHaveBeenCalled();
   });
 
-  it("publishes the platform-owned ready record instead of waiting for self-heartbeat on Builder gateways", async () => {
+  it("publishes the platform-owned ready record instead of waiting for self-heartbeat on isolated gateways", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
       availableReplicas: new Map([["octogee-gateway-canary", 1]]),
@@ -280,7 +280,7 @@ describe("createAddGatewayHandler — happy path", () => {
     ]);
   });
 
-  it("waits for self-heartbeat on shared Barn gateways", async () => {
+  it("waits for self-heartbeat on shared gateways", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
       availableReplicas: new Map([["octogee-gateway-canary", 1]]),

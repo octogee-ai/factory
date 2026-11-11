@@ -304,7 +304,7 @@ describe("webauthn CDP proxy", () => {
     expect(h.proxy.connected()).toBe(false);
     expect(h.connect).not.toHaveBeenCalled();
     expect(h.timers).toHaveLength(1);
-    expect(h.log).toHaveBeenCalledWith("webauthn proxy cannot reach the computer's Chromium", expect.objectContaining({ error: "ECONNREFUSED" }));
+    expect(h.log).toHaveBeenCalledWith("webauthn proxy cannot reach the VM's Chromium", expect.objectContaining({ error: "ECONNREFUSED" }));
     await h.fireTimers();
     expect(h.proxy.connected()).toBe(true);
     const first = h.sockets[0]!;

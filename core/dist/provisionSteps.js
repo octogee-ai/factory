@@ -5,7 +5,7 @@
 // here touches the filesystem, the path component is constrained to
 // /^[a-z0-9]+(-[a-z0-9]+)*$/ minus a reserved set. That validator is the
 // path-traversal defense.
-import { filterOutCustomerBindings } from "./apply-config-patch.js";
+import { filterOutUserBindings } from "./apply-config-patch.js";
 import { parseTimeZone } from "@octogee/shared/types/time-zone";
 import { UNKNOWN_TIME_ZONE } from "./context-file-convergence.js";
 import { FieldValue } from "firebase-admin/firestore";
@@ -58,18 +58,18 @@ export function buildProvisioningContext(uid, userData) {
         userData,
     };
 }
-export function createCustomerDirectories(ctx) {
+export function createUserDirectories(ctx) {
     fs.mkdirSync(path.join(ctx.customerDir, "projects"), { recursive: true });
     fs.mkdirSync(path.join(ctx.customerDir, "ideas"), { recursive: true });
     fs.mkdirSync(path.join(ctx.customerDir, ".system"), { recursive: true });
 }
-export async function writeCustomerTemplateFiles(ctx) {
+export async function writeUserTemplateFiles(ctx) {
     const written = writeTierTemplateFilesImpl(ctx.customerDir, ctx.tier, ctx.templateVars);
     log(written.length
         ? `Template files ensured from tiers/${ctx.tier}/ — wrote ${written.join(", ")}`
         : `Template files ensured from tiers/${ctx.tier}/ — all present, nothing to write`);
 }
-export function registerCoachAgent(ctx, config) {
+export function registerDefaultAgent(ctx, config) {
     config.agents ??= {};
     config.agents.list ??= [];
     config.bindings ??= [];
@@ -90,29 +90,29 @@ export function registerCoachAgent(ctx, config) {
         };
         config.agents.list.push(agentEntry);
         fs.mkdirSync(agentDir, { recursive: true });
-        log(`Agent: ${agentId} → Coach, tools: fs.workspaceOnly=true`);
+        log(`Agent: ${agentId} → Agent, tools: fs.workspaceOnly=true`);
     }
     return agentId;
 }
-export function buildCoachAgentEntry(ctx) {
+export function buildDefaultAgentEntry(ctx) {
     const clone = { agents: { list: [] }, bindings: [] };
-    const agentId = registerCoachAgent(ctx, clone);
+    const agentId = registerDefaultAgent(ctx, clone);
     const entry = clone.agents?.list?.find((a) => a.id === agentId);
     if (!entry) {
-        throw new Error(`buildCoachAgentEntry: registerCoachAgent did not produce an entry for ${agentId}`);
+        throw new Error(`buildDefaultAgentEntry: registerDefaultAgent did not produce an entry for ${agentId}`);
     }
     return entry;
 }
-export function buildCoachBindings(current, coachAgentId, slug, mmUpdate) {
+export function buildDefaultAgentBindings(current, userDefaultAgentId, slug, mmUpdate) {
     const existing = current?.bindings;
     const currentBindings = Array.isArray(existing)
         ? [...existing]
         : [];
     const clone = { bindings: currentBindings };
-    wireCoachMattermostBindings(clone, coachAgentId, slug, mmUpdate);
+    wireDefaultAgentMattermostBindings(clone, userDefaultAgentId, slug, mmUpdate);
     return clone.bindings ?? [];
 }
-export function buildRemoveCustomerConfig(current, slug, agentId) {
+export function buildRemoveUserConfig(current, slug, agentId) {
     const config = structuredClone(current);
     const projectAgentPrefix = `octogee-${slug}-proj-`;
     const agents = config.agents?.list ?? [];
@@ -120,7 +120,7 @@ export function buildRemoveCustomerConfig(current, slug, agentId) {
     if (config.agents) {
         config.agents.list = agents.filter((agent) => agent.id !== agentId && !agent.id.startsWith(projectAgentPrefix));
     }
-    config.bindings = filterOutCustomerBindings(bindings.filter((binding) => binding.agentId !== agentId), slug);
+    config.bindings = filterOutUserBindings(bindings.filter((binding) => binding.agentId !== agentId), slug);
     const accounts = config.channels?.mattermost?.accounts;
     if (accounts) {
         delete accounts[`${slug}-coach`];
@@ -156,7 +156,7 @@ export function upsertMattermostBindingByAgentAndPeer(bindings, binding) {
         bindings.push(binding);
     }
 }
-export function wireCoachMattermostBindings(config, coachAgentId, slug, mmUpdate) {
+export function wireDefaultAgentMattermostBindings(config, userDefaultAgentId, slug, mmUpdate) {
     config.bindings ??= [];
     const accountId = `${slug}-coach`;
     const bindChannels = [
@@ -168,7 +168,7 @@ export function wireCoachMattermostBindings(config, coachAgentId, slug, mmUpdate
             continue;
         const channelId = channelIdRaw;
         const binding = {
-            agentId: coachAgentId,
+            agentId: userDefaultAgentId,
             match: {
                 channel: "mattermost",
                 accountId,
@@ -176,13 +176,13 @@ export function wireCoachMattermostBindings(config, coachAgentId, slug, mmUpdate
             },
         };
         upsertMattermostBindingByAgentAndPeer(config.bindings, binding);
-        log(`[mattermost] binding: ${coachAgentId} ← ${label} group:${channelId} (account=${accountId})`);
+        log(`[mattermost] binding: ${userDefaultAgentId} ← ${label} group:${channelId} (account=${accountId})`);
     }
 }
 export async function markProvisioningComplete(ctx, mmUpdate, allAgentIds) {
     const provisioningObj = buildProvisioningSnapshot(ctx, allAgentIds);
     await writeSystemConfig(ctx);
-    await writeProvisionedBuilder(ctx, allAgentIds, mmUpdate);
+    await writeProvisionedUser(ctx, allAgentIds, mmUpdate);
     await db.collection("users").doc(ctx.uid).update(buildUserProductFields(ctx, mmUpdate));
     await writeWorkspaceRecord(ctx, mmUpdate);
     await seedWorkspaceChannels(ctx, mmUpdate);
@@ -204,11 +204,11 @@ function buildProvisioningSnapshot(ctx, allAgentIds) {
 }
 async function writeSystemConfig(ctx) {
     await platformStateStore.transaction({ label: "provisioning.default-role" }, async (transaction) => {
-        const builder = await transaction.builders.records.get(ctx.uid);
-        if (builder === null)
+        const user = await transaction.users.records.get(ctx.uid);
+        if (user === null)
             throw new MissingRecordError({ aggregate: "builder", key: ctx.uid });
-        if (builder.role === null)
-            await transaction.builders.records.patch(ctx.uid, { role: "user" });
+        if (user.role === null)
+            await transaction.users.records.patch(ctx.uid, { role: "user" });
     });
     const systemConfigData = {
         updatedAt: FieldValue.serverTimestamp(),
@@ -221,7 +221,7 @@ async function writeSystemConfig(ctx) {
     }
     await db.doc(`users/${ctx.uid}/system/config`).set(systemConfigData, { merge: true });
 }
-export function buildProvisionedBuilderPatch(ctx, mmUpdate) {
+export function buildProvisionedUserPatch(ctx, mmUpdate) {
     const mattermostUserId = mmUpdate["mattermost.userId"];
     return {
         workspaceId: ctx.slug,
@@ -230,12 +230,12 @@ export function buildProvisionedBuilderPatch(ctx, mmUpdate) {
         openclaw: { version: "v1", customerDir: ctx.customerDir, provisionedAt: SERVER_NOW },
     };
 }
-async function writeProvisionedBuilder(ctx, allAgentIds, mmUpdate) {
+async function writeProvisionedUser(ctx, allAgentIds, mmUpdate) {
     await platformStateStore.transaction({ label: "provisioning.complete" }, async (transaction) => {
-        await transaction.builders.records.patch(ctx.uid, buildProvisionedBuilderPatch(ctx, mmUpdate));
+        await transaction.users.records.patch(ctx.uid, buildProvisionedUserPatch(ctx, mmUpdate));
         if (allAgentIds.length > 0)
-            await transaction.builders.records.addAgents(ctx.uid, allAgentIds);
-        await transaction.builders.records.setActivatedAgents(ctx.uid, ["coach"]);
+            await transaction.users.records.addAgents(ctx.uid, allAgentIds);
+        await transaction.users.records.setActivatedAgents(ctx.uid, ["coach"]);
     });
 }
 export function buildUserProductFields(ctx, mmUpdate) {
@@ -314,17 +314,17 @@ async function seedWorkspaceOwner(ctx, mmUpdate) {
     });
 }
 async function writeAgentIdentity(ctx, mmUpdate) {
-    const coachMmUserId = mmUpdate["mattermost.coachUserId"];
-    if (!coachMmUserId)
+    const defaultAgentMmUserId = mmUpdate["mattermost.coachUserId"];
+    if (!defaultAgentMmUserId)
         return;
     await platformStateStore.workspaces.agentIdentities.put({
         uid: ctx.uid,
-        mattermostUserId: coachMmUserId,
+        mattermostUserId: defaultAgentMmUserId,
         at: SERVER_NOW,
     });
-    await db.doc(`agents/${ctx.uid}`).set(buildCoachAgentDoc(ctx.uid), { merge: true });
+    await db.doc(`agents/${ctx.uid}`).set(buildDefaultAgentDoc(ctx.uid), { merge: true });
 }
-export function buildCoachAgentDoc(uid) {
+export function buildDefaultAgentDoc(uid) {
     return {
         id: uid,
         name: "Octo",

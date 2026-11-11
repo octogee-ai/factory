@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
 import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
-import type { BuilderTierReader } from "@octogee/core/builder-activation-lease";
+import type { BuilderTierReader } from "@octogee/core/user-activation-lease";
 import type { PlatformStateRepositories, PlatformStateStore } from "@octogee/core/platform-state";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { resolveWorkspaceConversation, resolveWorkspaceToolChannel, resolveWorkspaceToolControl, type WorkspaceConversationDeps } from "../lib/workspace-conversation.js";
@@ -12,7 +12,7 @@ import {
   principalAccess,
   withGatewayOwnerTier,
   workspaceScopeFor,
-} from "../../../gateway-edge/src/routes/builder/gateways.js";
+} from "../../../gateway-edge/src/routes/user/gateways.js";
 
 const MOVING_ASSIGNMENT_STATES = new Set<unknown>(["quiescing", "migrating"]);
 
@@ -54,7 +54,7 @@ async function workspaceAccess(
     async (ownerTier): Promise<WorkspaceAccessResult> => {
       const scope = await workspaceScopeFor(auth, auth.config.builderSlug, deps.store, true);
       if (!scope) return { status: 404, body: { error: "not_found" } };
-      const owner = await deps.store.builders.records.get(scope.ownerUid);
+      const owner = await deps.store.users.records.get(scope.ownerUid);
       if (!ownerWorkspacePermissionsEnabled(auth.config, ownerTier, owner)) {
         return { status: 403, body: { error: "builder_workspace_required" } };
       }

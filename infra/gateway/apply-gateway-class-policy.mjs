@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { OCTOGEE_WORKFLOW_TOOLS } from "./workflow-tools.mjs";
 export { OCTOGEE_WORKFLOW_TOOLS } from "./workflow-tools.mjs";
 import {
-  canonicalCustomerModelDefinition,
+  canonicalUserModelDefinition,
   platformModelRefs,
 } from "../../shared/dist/types/agent-models.js";
 import { modelCatalogForProvider } from "../../shared/dist/types/model-catalog.js";
@@ -21,13 +21,13 @@ import {
   isPerUserControlIdentity,
   openClawIdentityScopes,
 } from "../../shared/dist/types/openclaw-proxy-identity.js";
-import { readBuilderClaim } from "../../shared/dist/server/builder-claim.js";
+import { readUserClaim } from "../../shared/dist/server/user-claim.js";
 const scriptsRequire = createRequire(new URL("../../scripts/package.json", import.meta.url));
-const { customerModelProviderDeclarationsMatch, platformBrokerProviderDeclarations } = await import(
+const { userModelProviderDeclarationsMatch, platformBrokerProviderDeclarations } = await import(
   pathToFileURL(scriptsRequire.resolve("@octogee/core/system-config-invariants")).href,
 );
 
-export const CUSTOMER_CODE_DENIED_TOOLS = [
+export const USER_CODE_DENIED_TOOLS = [
   "exec",
   "process",
   "subagents",
@@ -46,7 +46,7 @@ export const CUSTOMER_CODE_DENIED_TOOLS = [
   "browser",
   "computer",
 ];
-export const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
+export const USER_STRUCTURED_AVAILABLE_TOOLS = [
   "automations",
   "workspace_commit",
   "octogee_project_commit",
@@ -125,7 +125,7 @@ const PROJECT_AGENT_DENIED_TOOLS = [
   "browser",
   "computer",
 ];
-export const CUSTOMER_APPROVED_PLUGINS = [
+export const USER_APPROVED_PLUGINS = [
   "mattermost",
   "anthropic",
   "memory-core",
@@ -146,7 +146,7 @@ export const CUSTOMER_APPROVED_PLUGINS = [
 ];
 const FLEET_BROKER_URL_TEMPLATE = "${FLEET_BROKER_URL}";
 const API_SA_TOKEN_PATH_TEMPLATE = "${OCTOGEE_API_SA_TOKEN_PATH}";
-const CUSTOMER_PLUGIN_ENTRIES = {
+const USER_PLUGIN_ENTRIES = {
   mattermost: { enabled: true },
   anthropic: { enabled: true },
   "octogee-chat-tools": {
@@ -279,24 +279,24 @@ const SESSION_RUNTIME_STATE_FIELDS = [
   "elevatedLevel",
   "toolOverrides",
 ];
-const SAFE_CUSTOMER_MODEL = "platform-openrouter/deepseek/deepseek-v4-pro";
+const SAFE_USER_MODEL = "platform-openrouter/deepseek/deepseek-v4-pro";
 const SAFE_AGENT_ID = /^[a-z0-9-]{1,64}$/;
-const CUSTOMER_MODEL_REFS = new Set(platformModelRefs());
-const CUSTOMER_MODEL_PROVIDER_IDS = new Set([
+const USER_MODEL_REFS = new Set(platformModelRefs());
+const USER_MODEL_PROVIDER_IDS = new Set([
   "anthropic",
   "platform-openrouter",
   "platform-openai",
   "platform-vertex",
 ]);
-const CUSTOMER_DISK_MODEL_PROVIDERS = [
+const USER_DISK_MODEL_PROVIDERS = [
   { id: "platform-openrouter", env: "OPENROUTER_BASE_URL", catalog: "openrouter", api: "openai-completions" },
   { id: "platform-openai", env: "PLATFORM_OPENAI_BASE_URL", catalog: "openai", api: "openai-completions" },
   { id: "platform-vertex", env: "PLATFORM_VERTEX_BASE_URL", catalog: "vertex", api: "anthropic-messages" },
 ];
 
-function customerDiskModelProviders(env) {
+function userDiskModelProviders(env) {
   const providers = {};
-  for (const provider of CUSTOMER_DISK_MODEL_PROVIDERS) {
+  for (const provider of USER_DISK_MODEL_PROVIDERS) {
     const baseUrl = env[provider.env]?.trim();
     if (!baseUrl) continue;
     providers[provider.id] = {
@@ -317,7 +317,7 @@ function customerDiskModelProviders(env) {
   return providers;
 }
 
-const CUSTOMER_AGENT_ID = /^octogee-[a-z0-9]+(?:-[a-z0-9]+)*-coach$/;
+const USER_AGENT_ID = /^octogee-[a-z0-9]+(?:-[a-z0-9]+)*-coach$/;
 
 function addUnique(list, tool) {
   if (!Array.isArray(list)) return [tool];
@@ -359,7 +359,7 @@ export function removePolicyCodexAuthPlaceholder(config) {
   }
 }
 
-// Customers never approve connector writes per-call; the capability convergence
+// Users never approve connector writes per-call; the capability convergence
 // has already allowed and enabled the plugin by the time this runs.
 function clearConnectorWriteApproval(config) {
   delete config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].config.requireWriteApproval;
@@ -377,22 +377,22 @@ const PLATFORM_CAPABILITY_PLUGINS = [
   "octogee-broker-tools",
 ];
 
-// A builder gateway's config is persisted and restored across every VM
+// An isolated gateway's config is persisted and restored across every VM
 // replacement, so an absent `plugins.allow` means "no allowlist" and must stay
 // absent — materializing one here would silently narrow the gateway to exactly
-// the platform's own plugins. An explicitly disabled entry is a Builder
+// the platform's own plugins. An explicitly disabled entry is a user
 // decision and survives; only a missing entry is defaulted on.
-function enablePlatformPlugin(config, id, builder) {
+function enablePlatformPlugin(config, id, isolated) {
   config.plugins ??= {};
   config.plugins.entries ??= {};
   if (Array.isArray(config.plugins.allow)) {
     if (!config.plugins.allow.includes(id)) config.plugins.allow.push(id);
-  } else if (!builder) {
+  } else if (!isolated) {
     config.plugins.allow = [id];
   }
   config.plugins.entries[id] ??= {};
   config.plugins.entries[id].config ??= {};
-  if (builder) config.plugins.entries[id].enabled ??= true;
+  if (isolated) config.plugins.entries[id].enabled ??= true;
   else config.plugins.entries[id].enabled = true;
 }
 
@@ -400,10 +400,10 @@ function enablePlatformPlugin(config, id, builder) {
 // that register them. Every gateway class converges onto it, because no gateway
 // owner chose these and none can be expected to maintain them by hand. The
 // restriction half of the class policy (deny lists, terminal, session
-// visibility, config-mutation locks) stays customer-only, which is why a
-// builder gateway converges additively: new platform capabilities arrive and
-// the Builder's own profile, allow, deny and extra tools survive untouched.
-function addBuilderToolCapabilities(config, capabilities) {
+// visibility, config-mutation locks) stays user-only, which is why an
+// isolated gateway converges additively: new platform capabilities arrive and
+// the user's own profile, allow, deny and extra tools survive untouched.
+function addIsolatedToolCapabilities(config, capabilities) {
   config.tools ??= {};
   const alsoAllow = Array.isArray(config.tools.alsoAllow) ? config.tools.alsoAllow : [];
   if (Array.isArray(config.tools.allow) && config.tools.allow.length > 0) {
@@ -414,24 +414,24 @@ function addBuilderToolCapabilities(config, capabilities) {
   }
 }
 
-function convergePlatformCapabilities(config, builder) {
+function convergePlatformCapabilities(config, isolated) {
   config.meta ??= {};
   config.meta.migrations ??= {};
   config.meta.migrations.skillWorkshopPlugin = true;
   config.tools ??= {};
-  if (builder) {
-    addBuilderToolCapabilities(config, OCTOGEE_WORKFLOW_TOOLS);
+  if (isolated) {
+    addIsolatedToolCapabilities(config, OCTOGEE_WORKFLOW_TOOLS);
   } else {
     config.tools.profile = "coding";
     delete config.tools.allow;
     config.tools.alsoAllow = [...OCTOGEE_WORKFLOW_TOOLS];
   }
-  for (const id of PLATFORM_CAPABILITY_PLUGINS) enablePlatformPlugin(config, id, builder);
+  for (const id of PLATFORM_CAPABILITY_PLUGINS) enablePlatformPlugin(config, id, isolated);
 }
 
 function disableCodex(config) {
   config.plugins ??= {};
-  config.plugins.allow = [...CUSTOMER_APPROVED_PLUGINS];
+  config.plugins.allow = [...USER_APPROVED_PLUGINS];
   config.plugins.entries ??= {};
   config.plugins.entries.codex = {
     enabled: false,
@@ -450,7 +450,7 @@ function restrictSessionVisibility(config) {
   config.tools.sessions.visibility = "self";
 }
 
-function disableCustomerConfigMutation(config) {
+function disableUserConfigMutation(config) {
   config.commands ??= {};
   for (const command of ["bash", "config", "mcp", "plugins", "debug"]) {
     config.commands[command] = false;
@@ -461,19 +461,19 @@ function disableCustomerConfigMutation(config) {
   }
 }
 
-function customerAgentLane(agentId) {
-  if (typeof agentId !== "string" || !CUSTOMER_AGENT_ID.test(agentId)) return "unknown";
+function userAgentLane(agentId) {
+  if (typeof agentId !== "string" || !USER_AGENT_ID.test(agentId)) return "unknown";
   return agentId.includes("-proj-") ? "project" : "coach";
 }
 
-function customerAgentToolProjection(lane, currentDeny) {
+function userAgentToolProjection(lane, currentDeny) {
   if (lane === "coach") {
     return {
       profile: "coding",
       alsoAllow: [...OCTOGEE_WORKFLOW_TOOLS],
       deny: addTools(
-        removeTools(currentDeny, CUSTOMER_STRUCTURED_AVAILABLE_TOOLS),
-        CUSTOMER_CODE_DENIED_TOOLS,
+        removeTools(currentDeny, USER_STRUCTURED_AVAILABLE_TOOLS),
+        USER_CODE_DENIED_TOOLS,
       ),
     };
   }
@@ -487,47 +487,47 @@ function customerAgentToolProjection(lane, currentDeny) {
   return {
     profile: "minimal",
     alsoAllow: [],
-    deny: addTools(currentDeny, CUSTOMER_CODE_DENIED_TOOLS),
+    deny: addTools(currentDeny, USER_CODE_DENIED_TOOLS),
   };
 }
 
-function projectCustomerAgentTools(config, entry, agentId) {
+function projectUserAgentTools(config, entry, agentId) {
   entry.tools ??= {};
   entry.tools.fs ??= {};
   entry.tools.fs.workspaceOnly = true;
-  const projected = customerAgentToolProjection(customerAgentLane(agentId), entry.tools.deny);
+  const projected = userAgentToolProjection(userAgentLane(agentId), entry.tools.deny);
   entry.tools.profile = projected.profile;
   entry.tools.alsoAllow = projected.alsoAllow;
   entry.tools.deny = projected.deny;
-  entry.tools.toolsBySender = customerToolsBySender(config, agentId);
+  entry.tools.toolsBySender = userToolsBySender(config, agentId);
   delete entry.tools.allow;
 }
 
-function forceCustomerWorkspaceOnly(config) {
+function forceUserWorkspaceOnly(config) {
   config.tools ??= {};
   config.tools.fs ??= {};
   config.tools.fs.workspaceOnly = true;
   if (Array.isArray(config.agents?.list)) {
     for (const rawEntry of config.agents.list) {
       const entry = objectValue(rawEntry);
-      if (entry) projectCustomerAgentTools(config, entry, entry.id);
+      if (entry) projectUserAgentTools(config, entry, entry.id);
     }
   }
   const entries = objectValue(config.agents?.entries);
   if (!entries) return;
   for (const [agentId, rawEntry] of Object.entries(entries)) {
     const entry = objectValue(rawEntry);
-    if (entry) projectCustomerAgentTools(config, entry, agentId);
+    if (entry) projectUserAgentTools(config, entry, agentId);
   }
 }
 
-function customerToolsBySender(_config, agentId) {
+function userToolsBySender(_config, agentId) {
   return agentId.includes("-proj-")
     ? { "*": { deny: [...PRODUCTIVITY_TOOL_NAMES] } }
     : {};
 }
 
-function disableCustomerAutomationsAndSkillWrites(config) {
+function disableUserAutomationsAndSkillWrites(config) {
   config.cron ??= {};
   config.cron.triggers ??= {};
   config.cron.triggers.enabled = false;
@@ -538,7 +538,7 @@ function disableCustomerAutomationsAndSkillWrites(config) {
   delete config.skills.workshop;
 }
 
-function forceCustomerMattermostProjection(config) {
+function forceUserMattermostProjection(config) {
   config.channels ??= {};
   config.channels.mattermost ??= {};
   const mattermost = config.channels.mattermost;
@@ -623,11 +623,11 @@ function isDirectAgentRuntimeId(value) {
   return typeof value === "string" && value.trim().length > 0 && value !== "openclaw";
 }
 
-function projectCustomerPlugins(config) {
+function projectUserPlugins(config) {
   config.plugins ??= {};
   config.plugins.enabled = true;
-  config.plugins.allow = [...CUSTOMER_APPROVED_PLUGINS];
-  config.plugins.entries = structuredClone(CUSTOMER_PLUGIN_ENTRIES);
+  config.plugins.allow = [...USER_APPROVED_PLUGINS];
+  config.plugins.entries = structuredClone(USER_PLUGIN_ENTRIES);
   delete config.plugins.load;
   delete config.plugins.installs;
 }
@@ -658,7 +658,7 @@ function projectAgentStoreSecretRef(config) {
   }
 }
 
-function expectedCustomerSecretRef(config, segments) {
+function expectedUserSecretRef(config, segments) {
   if (
     segments.length === 5 &&
     segments[0] === "channels" &&
@@ -692,34 +692,34 @@ function neutralizeSecretRefsInArray(value, config, segments) {
     const child = value[index];
     const childSegments = [...segments, String(index)];
     if (!isSecretRef(child)) {
-      neutralizeUnapprovedCustomerSecretRefs(child, config, childSegments);
+      neutralizeUnapprovedUserSecretRefs(child, config, childSegments);
       continue;
     }
-    const expected = expectedCustomerSecretRef(config, childSegments);
+    const expected = expectedUserSecretRef(config, childSegments);
     if (expected) value[index] = expected;
     else value.splice(index, 1);
   }
 }
 
-function isCustomerSecretProviderPath(segments, key) {
+function isUserSecretProviderPath(segments, key) {
   return segments.length === 1 && segments[0] === "secrets" && key === "providers";
 }
 
 function neutralizeSecretRefsInRecord(record, config, segments) {
   for (const [key, child] of Object.entries(record)) {
-    if (isCustomerSecretProviderPath(segments, key)) continue;
+    if (isUserSecretProviderPath(segments, key)) continue;
     const childSegments = [...segments, key];
     if (!isSecretRef(child)) {
-      neutralizeUnapprovedCustomerSecretRefs(child, config, childSegments);
+      neutralizeUnapprovedUserSecretRefs(child, config, childSegments);
       continue;
     }
-    const expected = expectedCustomerSecretRef(config, childSegments);
+    const expected = expectedUserSecretRef(config, childSegments);
     if (expected) record[key] = expected;
     else delete record[key];
   }
 }
 
-function neutralizeUnapprovedCustomerSecretRefs(value, config, segments = []) {
+function neutralizeUnapprovedUserSecretRefs(value, config, segments = []) {
   if (Array.isArray(value)) {
     neutralizeSecretRefsInArray(value, config, segments);
     return;
@@ -728,8 +728,8 @@ function neutralizeUnapprovedCustomerSecretRefs(value, config, segments = []) {
   if (record) neutralizeSecretRefsInRecord(record, config, segments);
 }
 
-function projectCustomerSecretProviders(config, openclawDir) {
-  neutralizeUnapprovedCustomerSecretRefs(config, config);
+function projectUserSecretProviders(config, openclawDir) {
+  neutralizeUnapprovedUserSecretRefs(config, config);
   projectAgentStoreSecretRef(config);
   config.secrets ??= {};
   config.secrets.providers = {
@@ -755,7 +755,7 @@ function projectCustomerSecretProviders(config, openclawDir) {
   };
 }
 
-function scrubCustomerHookNamespaces(config) {
+function scrubUserHookNamespaces(config) {
   const hooks = objectValue(config.hooks);
   if (hooks) {
     delete hooks.transformsDir;
@@ -778,7 +778,7 @@ function scrubCustomerHookNamespaces(config) {
   if (Object.keys(load).length === 0) delete internalHooks.load;
 }
 
-function scrubCustomerProviderCommands(config) {
+function scrubUserProviderCommands(config) {
   const qmd = objectValue(config.memory?.qmd);
   if (qmd) delete qmd.command;
   const providers = objectValue(config.models?.providers);
@@ -795,7 +795,7 @@ function commandlessModel(value, rejectCli) {
     !Object.prototype.hasOwnProperty.call(entry, "command");
 }
 
-function scrubCustomerMediaCommands(config) {
+function scrubUserMediaCommands(config) {
   const media = objectValue(config.tools?.media);
   if (media && Array.isArray(media.models)) {
     media.models = media.models.filter((model) => commandlessModel(model, true));
@@ -806,7 +806,7 @@ function scrubCustomerMediaCommands(config) {
   }
 }
 
-function scrubCustomerInstallAndCronCommands(config) {
+function scrubUserInstallAndCronCommands(config) {
   const installPolicy = objectValue(config.security?.installPolicy);
   if (installPolicy) delete installPolicy.exec;
   const cron = objectValue(config.cron);
@@ -816,22 +816,22 @@ function scrubCustomerInstallAndCronCommands(config) {
   }
 }
 
-function projectCustomerSpawnNamespaces(config) {
-  scrubCustomerHookNamespaces(config);
-  scrubCustomerProviderCommands(config);
-  scrubCustomerMediaCommands(config);
-  scrubCustomerInstallAndCronCommands(config);
+function projectUserSpawnNamespaces(config) {
+  scrubUserHookNamespaces(config);
+  scrubUserProviderCommands(config);
+  scrubUserMediaCommands(config);
+  scrubUserInstallAndCronCommands(config);
 }
 
 function normalizedCatalogSelection(value) {
   if (typeof value === "string") {
-    return CUSTOMER_MODEL_REFS.has(value) ? { primary: value, fallbacks: [] } : null;
+    return USER_MODEL_REFS.has(value) ? { primary: value, fallbacks: [] } : null;
   }
   const selection = objectValue(value);
   if (!selection || typeof selection.primary !== "string" ||
-      !CUSTOMER_MODEL_REFS.has(selection.primary)) return null;
+      !USER_MODEL_REFS.has(selection.primary)) return null;
   const fallbacks = selection.fallbacks === undefined ? [] : selection.fallbacks;
-  if (!Array.isArray(fallbacks) || fallbacks.some((ref) => !CUSTOMER_MODEL_REFS.has(ref))) {
+  if (!Array.isArray(fallbacks) || fallbacks.some((ref) => !USER_MODEL_REFS.has(ref))) {
     return null;
   }
   return {
@@ -846,20 +846,20 @@ function projectCatalogModelMap(models, ensureModelRef) {
   let changed = false;
   const removedRefs = new Set();
   for (const modelRef of Object.keys(modelMap)) {
-    if (!CUSTOMER_MODEL_REFS.has(modelRef)) {
+    if (!USER_MODEL_REFS.has(modelRef)) {
       removedRefs.add(modelRef);
       delete modelMap[modelRef];
       changed = true;
       continue;
     }
-    const expected = canonicalCustomerModelDefinition(modelRef);
+    const expected = canonicalUserModelDefinition(modelRef);
     if (JSON.stringify(modelMap[modelRef]) !== JSON.stringify(expected)) {
       modelMap[modelRef] = expected;
       changed = true;
     }
   }
   if (ensureModelRef && !Object.prototype.hasOwnProperty.call(modelMap, ensureModelRef)) {
-    modelMap[ensureModelRef] = canonicalCustomerModelDefinition(ensureModelRef);
+    modelMap[ensureModelRef] = canonicalUserModelDefinition(ensureModelRef);
     changed = true;
   }
   return { changed, removedRefs };
@@ -879,7 +879,7 @@ function scrubOwnedAgentRuntime(entry, forceSafeModel = false) {
     affected = true;
   }
   if (forceSafeModel || unsafePin) {
-    agent.model = { primary: SAFE_CUSTOMER_MODEL, fallbacks: [] };
+    agent.model = { primary: SAFE_USER_MODEL, fallbacks: [] };
     affected = true;
   } else if (normalizedSelection && JSON.stringify(agent.model) !== JSON.stringify(normalizedSelection)) {
     agent.model = normalizedSelection;
@@ -887,7 +887,7 @@ function scrubOwnedAgentRuntime(entry, forceSafeModel = false) {
   return affected;
 }
 
-function configuredCustomerAgentIds(config) {
+function configuredUserAgentIds(config) {
   const ids = new Set();
   if (Array.isArray(config.agents?.list)) {
     for (const entry of config.agents.list) {
@@ -905,7 +905,7 @@ function configuredCustomerAgentIds(config) {
   return [...ids];
 }
 
-function customerModelProviders(env) {
+function userModelProviders(env) {
   const anthropicBaseUrl = env.ANTHROPIC_BASE_URL?.trim();
   return {
     ...(anthropicBaseUrl ? { anthropic: { baseUrl: anthropicBaseUrl } } : {}),
@@ -917,11 +917,11 @@ function resetConfiguredAgents(resetAgentIds, agentIds) {
   for (const agentId of agentIds) resetAgentIds.add(agentId);
 }
 
-function projectCustomerDefaultRuntime(config, unsafeProviders, allAgentIds, resetAgentIds) {
+function projectUserDefaultRuntime(config, unsafeProviders, allAgentIds, resetAgentIds) {
   config.agents.defaults.models ??= {};
   const defaultModels = projectCatalogModelMap(
     config.agents.defaults.models,
-    SAFE_CUSTOMER_MODEL,
+    SAFE_USER_MODEL,
   );
   if (defaultModels.changed || unsafeProviders) {
     resetConfiguredAgents(resetAgentIds, allAgentIds);
@@ -931,7 +931,7 @@ function projectCustomerDefaultRuntime(config, unsafeProviders, allAgentIds, res
     ? normalizedCatalogSelection(config.agents.defaults.model)
     : null;
   if (unsafeProviders || (hasDefaultModel && normalizedDefaultModel === null)) {
-    config.agents.defaults.model = { primary: SAFE_CUSTOMER_MODEL, fallbacks: [] };
+    config.agents.defaults.model = { primary: SAFE_USER_MODEL, fallbacks: [] };
     resetConfiguredAgents(resetAgentIds, allAgentIds);
   } else if (
     normalizedDefaultModel &&
@@ -950,32 +950,32 @@ function projectCustomerDefaultRuntime(config, unsafeProviders, allAgentIds, res
 function unapprovedAgentModelRefs(entry) {
   const models = objectValue(objectValue(entry)?.models);
   if (!models) return [];
-  return Object.keys(models).filter((modelRef) => !CUSTOMER_MODEL_REFS.has(modelRef));
+  return Object.keys(models).filter((modelRef) => !USER_MODEL_REFS.has(modelRef));
 }
 
-function projectCustomerAgentRuntime(entry, agentId, unsafeProviders, resetAgentIds, directRefs) {
+function projectUserAgentRuntime(entry, agentId, unsafeProviders, resetAgentIds, directRefs) {
   if (!SAFE_AGENT_ID.test(agentId)) return;
   for (const modelRef of unapprovedAgentModelRefs(entry)) directRefs.add(modelRef);
   if (scrubOwnedAgentRuntime(entry, unsafeProviders)) resetAgentIds.add(agentId);
   if (agentId === "octogee-unmatched-route" && objectValue(entry)) delete entry.model;
 }
 
-function projectConfiguredCustomerAgentRuntimes(config, unsafeProviders, resetAgentIds, directRefs) {
+function projectConfiguredUserAgentRuntimes(config, unsafeProviders, resetAgentIds, directRefs) {
   if (Array.isArray(config.agents.list)) {
     for (const entry of config.agents.list) {
       if (typeof entry?.id === "string") {
-        projectCustomerAgentRuntime(entry, entry.id, unsafeProviders, resetAgentIds, directRefs);
+        projectUserAgentRuntime(entry, entry.id, unsafeProviders, resetAgentIds, directRefs);
       }
     }
   }
   const entries = objectValue(config.agents.entries);
   if (!entries) return;
   for (const [agentId, entry] of Object.entries(entries)) {
-    projectCustomerAgentRuntime(entry, agentId, unsafeProviders, resetAgentIds, directRefs);
+    projectUserAgentRuntime(entry, agentId, unsafeProviders, resetAgentIds, directRefs);
   }
 }
 
-function removeUnapprovedCustomerAuthProfiles(config) {
+function removeUnapprovedUserAuthProfiles(config) {
   const profiles = objectValue(config.auth?.profiles);
   if (!profiles) return;
   for (const [profileId, profile] of Object.entries(profiles)) {
@@ -988,31 +988,31 @@ function removeUnapprovedCustomerAuthProfiles(config) {
   }
 }
 
-function scrubCustomerOauthConfig(config, env) {
+function scrubUserOauthConfig(config, env) {
   const resetAgentIds = new Set();
   config.agents ??= {};
   config.agents.defaults ??= {};
   config.agents.defaults.modelPolicy ??= {};
   config.agents.defaults.modelPolicy.allow = ["anthropic/*", "platform-openrouter/*", "platform-openai/*", "platform-vertex/*"];
-  const allAgentIds = configuredCustomerAgentIds(config);
+  const allAgentIds = configuredUserAgentIds(config);
   const providers = objectValue(config.models?.providers);
-  const expectedProviders = customerModelProviders(env);
-  const unsafeProviders = !customerModelProviderDeclarationsMatch(providers ?? {}, expectedProviders);
+  const expectedProviders = userModelProviders(env);
+  const unsafeProviders = !userModelProviderDeclarationsMatch(providers ?? {}, expectedProviders);
   config.models ??= {};
   config.models.providers = expectedProviders;
-  const directRuntimeModelRefs = projectCustomerDefaultRuntime(
+  const directRuntimeModelRefs = projectUserDefaultRuntime(
     config,
     unsafeProviders,
     allAgentIds,
     resetAgentIds,
   );
-  projectConfiguredCustomerAgentRuntimes(
+  projectConfiguredUserAgentRuntimes(
     config,
     unsafeProviders,
     resetAgentIds,
     directRuntimeModelRefs,
   );
-  removeUnapprovedCustomerAuthProfiles(config);
+  removeUnapprovedUserAuthProfiles(config);
   return { resetAgentIds, directRuntimeModelRefs };
 }
 
@@ -1185,15 +1185,15 @@ function resetAgentSessionStore(openclawDir, agentId) {
   return legacyChanged || sqliteChanged;
 }
 
-function unsupportedCustomerModel(provider, model) {
-  if (typeof model !== "string" || CUSTOMER_MODEL_REFS.has(model)) return false;
-  return typeof provider !== "string" || !CUSTOMER_MODEL_REFS.has(`${provider}/${model}`);
+function unsupportedUserModel(provider, model) {
+  if (typeof model !== "string" || USER_MODEL_REFS.has(model)) return false;
+  return typeof provider !== "string" || !USER_MODEL_REFS.has(`${provider}/${model}`);
 }
 
 function hasUnsafeSessionModelState(entry, directRuntimeModelRefs) {
   const providers = [entry.providerOverride, entry.modelProvider];
   const unsupportedProvider = providers.some(
-    (provider) => typeof provider === "string" && !CUSTOMER_MODEL_PROVIDER_IDS.has(provider),
+    (provider) => typeof provider === "string" && !USER_MODEL_PROVIDER_IDS.has(provider),
   );
   const bindings = [
     [entry.providerOverride, entry.modelOverride],
@@ -1201,7 +1201,7 @@ function hasUnsafeSessionModelState(entry, directRuntimeModelRefs) {
     [entry.providerOverride, entry.modelOverrideFallbackOriginModel],
   ];
   const unsupportedModel = bindings.some(([provider, model]) =>
-    unsupportedCustomerModel(provider, model));
+    unsupportedUserModel(provider, model));
   const directModel = bindings.some(([, model]) =>
     typeof model === "string" && directRuntimeModelRefs.has(model));
   return unsupportedProvider || unsupportedModel || directModel;
@@ -1209,11 +1209,11 @@ function hasUnsafeSessionModelState(entry, directRuntimeModelRefs) {
 
 function hasUnsafeFallbackState(modelFallback, directRuntimeModelRefs) {
   const unsafeProvider = typeof modelFallback.prevProvider === "string" &&
-    !CUSTOMER_MODEL_PROVIDER_IDS.has(modelFallback.prevProvider);
+    !USER_MODEL_PROVIDER_IDS.has(modelFallback.prevProvider);
   const unsafeAuth = typeof modelFallback.prevAuthProfileOverride === "string" &&
     !CANONICAL_AGENT_AUTH_PROFILE_IDS.has(modelFallback.prevAuthProfileOverride);
   const unsafeModel = typeof modelFallback.prevModel === "string" && (
-    unsupportedCustomerModel(modelFallback.prevProvider, modelFallback.prevModel) ||
+    unsupportedUserModel(modelFallback.prevProvider, modelFallback.prevModel) ||
     directRuntimeModelRefs.has(modelFallback.prevModel)
   );
   return unsafeProvider || unsafeAuth || unsafeModel;
@@ -1299,7 +1299,7 @@ function projectUnmatchedRouteModelMetadata(openclawDir, config, modelProviders)
   projectAgentModelsJson(path.join(openclawDir, "agents", unmatchedId, "agent"), metadata);
 }
 
-function scrubCustomerOauthDisk(
+function scrubUserOauthDisk(
   configPath,
   config,
   env,
@@ -1315,8 +1315,8 @@ function scrubCustomerOauthDisk(
   const nativeRemoved = preserveNativeCredentials
     ? false
     : [nativeCredential, `${nativeCredential}.tmp`].map(removeFile).some(Boolean);
-  const agentIds = configuredCustomerAgentIds(config);
-  const modelProviders = customerDiskModelProviders(env);
+  const agentIds = configuredUserAgentIds(config);
+  const modelProviders = userDiskModelProviders(env);
   if (nativeRemoved) agentIds.forEach((agentId) => resetAgentIds.add(agentId));
   for (const agentId of agentIds) {
     const agentDir = path.join(openclawDir, "agents", agentId, "agent");
@@ -1345,13 +1345,13 @@ function scrubCustomerOauthDisk(
   for (const agentId of resetAgentIds) resetAgentSessionStore(openclawDir, agentId);
 }
 
-function applyCustomerPolicy(config) {
+function applyUserPolicy(config) {
   config.tools ??= {};
   config.tools.elevated ??= {};
   config.tools.elevated.enabled = false;
   config.tools.deny = addTools(
-    removeTools(config.tools.deny, CUSTOMER_STRUCTURED_AVAILABLE_TOOLS),
-    CUSTOMER_CODE_DENIED_TOOLS,
+    removeTools(config.tools.deny, USER_STRUCTURED_AVAILABLE_TOOLS),
+    USER_CODE_DENIED_TOOLS,
   );
   config.tools.exec = { mode: "deny" };
   config.tools.subagents ??= {};
@@ -1363,23 +1363,23 @@ function applyCustomerPolicy(config) {
   removeSharedSubagentDefaults(config);
   setTerminal(config, false);
   restrictSessionVisibility(config);
-  disableCustomerConfigMutation(config);
-  disableCustomerAutomationsAndSkillWrites(config);
-  forceCustomerMattermostProjection(config);
-  forceCustomerWorkspaceOnly(config);
+  disableUserConfigMutation(config);
+  disableUserAutomationsAndSkillWrites(config);
+  forceUserMattermostProjection(config);
+  forceUserWorkspaceOnly(config);
   convergePlatformCapabilities(config, false);
   clearConnectorWriteApproval(config);
   removePolicyCodexAuthPlaceholder(config);
   disableCodex(config);
 }
 
-function preserveBuilderPluginConfiguration(config) {
+function preserveIsolatedPluginConfiguration(config) {
   if (!objectValue(config.plugins)) return;
   delete config.plugins.load;
   delete config.plugins.installs;
 }
 
-const BUILDER_SECRET_REF_PROVIDERS = new Set([
+const ISOLATED_SECRET_REF_PROVIDERS = new Set([
   "gcp-secret-manager",
   "octogee-mattermost",
 ]);
@@ -1394,26 +1394,26 @@ const INLINE_SECRET_KEYS = new Set([
   "tokenRef",
 ]);
 
-function isSafeBuilderSecretRef(value) {
+function isSafeIsolatedSecretRef(value) {
   const ref = objectValue(value);
   return (
     ref &&
     typeof ref.id === "string" &&
-    BUILDER_SECRET_REF_PROVIDERS.has(ref.provider) &&
+    ISOLATED_SECRET_REF_PROVIDERS.has(ref.provider) &&
     ((ref.source === "exec" && ref.provider === "gcp-secret-manager") ||
       (ref.source === "file" && ref.provider === "octogee-mattermost"))
   );
 }
 
-function sanitizeBuilderSecretReferences(value) {
+function sanitizeIsolatedSecretReferences(value) {
   if (Array.isArray(value)) {
     for (let index = value.length - 1; index >= 0; index--) {
       const child = value[index];
       if (isSecretRef(child)) {
-        if (!isSafeBuilderSecretRef(child)) value.splice(index, 1);
+        if (!isSafeIsolatedSecretRef(child)) value.splice(index, 1);
         continue;
       }
-      sanitizeBuilderSecretReferences(child);
+      sanitizeIsolatedSecretReferences(child);
     }
     return;
   }
@@ -1425,15 +1425,15 @@ function sanitizeBuilderSecretReferences(value) {
       continue;
     }
     if (isSecretRef(child)) {
-      if (!isSafeBuilderSecretRef(child)) delete record[key];
+      if (!isSafeIsolatedSecretRef(child)) delete record[key];
       continue;
     }
-    sanitizeBuilderSecretReferences(child);
+    sanitizeIsolatedSecretReferences(child);
   }
 }
 
-function projectBuilderSecretProviders(config, openclawDir) {
-  sanitizeBuilderSecretReferences(config);
+function projectIsolatedSecretProviders(config, openclawDir) {
+  sanitizeIsolatedSecretReferences(config);
   projectAgentStoreSecretRef(config);
   config.secrets ??= {};
   const providers = objectValue(config.secrets.providers) ?? {};
@@ -1463,22 +1463,22 @@ function projectBuilderSecretProviders(config, openclawDir) {
 
 // A Builder gateway is the Builder's own OpenClaw. No platform credential lives
 // in the pod, so host code, terminals, MCP servers, cron, skills, sub-agents,
-// and the codex BYOSUB plugin stay at the Builder's discretion; the platform
+// and the codex BYOSUB plugin stay at the user's discretion; the platform
 // keeps only its plugin configuration boundary and tenant-scoped secret providers.
-function applyBuilderPolicy(config, openclawDir, env) {
+function applyIsolatedPolicy(config, openclawDir, env) {
   projectMattermostAccounts(config, false);
   config.agents ??= {};
   config.agents.defaults ??= {};
   config.agents.defaults.modelPolicy ??= {};
   config.agents.defaults.modelPolicy.allow = [];
   convergePlatformCapabilities(config, true);
-  preserveBuilderPluginConfiguration(config);
-  projectBuilderSecretProviders(config, openclawDir);
-  applyControlIdentityPolicy(config, env, readBuilderClaim(openclawDir, env.GATEWAY_ID?.trim()));
+  preserveIsolatedPluginConfiguration(config);
+  projectIsolatedSecretProviders(config, openclawDir);
+  applyControlIdentityPolicy(config, env, readUserClaim(openclawDir, env.GATEWAY_ID?.trim()));
 }
 
-function applyBuilderTalkDefaults(config) {
-  addBuilderToolCapabilities(config, ["screen", "talk_voice"]);
+function applyIsolatedTalkDefaults(config) {
+  addIsolatedToolCapabilities(config, ["screen", "talk_voice"]);
   config.plugins.entries["octogee-voice-tools"] ??= {};
   config.plugins.entries["octogee-voice-tools"].enabled ??= true;
   config.plugins.entries["octogee-voice-tools"].config = {
@@ -1497,7 +1497,7 @@ function applyControlIdentityPolicy(config, env, claim) {
   config.plugins.entries ??= {};
   config.plugins.entries["octogee-identity-tools"] = { enabled: isPerUserControlIdentity(env) };
   if (isPerUserControlIdentity(env)) {
-    applyBuilderTalkDefaults(config);
+    applyIsolatedTalkDefaults(config);
     config.gateway ??= {};
     config.gateway.auth ??= {};
     const auth = config.gateway.auth;
@@ -1577,11 +1577,11 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
   const staleCodexInstallRecordRemoved = removeStaleCodexInstallRecord(openclawDir);
   const before = JSON.stringify(config);
   if (gatewayClass === "shared") {
-    projectCustomerPlugins(config);
-    projectCustomerSecretProviders(config, openclawDir);
-    projectCustomerSpawnNamespaces(config);
-    const scrub = scrubCustomerOauthConfig(config, env);
-    scrubCustomerOauthDisk(
+    projectUserPlugins(config);
+    projectUserSecretProviders(config, openclawDir);
+    projectUserSpawnNamespaces(config);
+    const scrub = scrubUserOauthConfig(config, env);
+    scrubUserOauthDisk(
       configPath,
       config,
       env,
@@ -1591,9 +1591,9 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
         preserveNativeCredentials: gatewayClass === "builder",
       },
     );
-    applyCustomerPolicy(config);
+    applyUserPolicy(config);
   } else if (gatewayClass === "builder") {
-    applyBuilderPolicy(config, openclawDir, env);
+    applyIsolatedPolicy(config, openclawDir, env);
   }
   if (JSON.stringify(config) === before) {
     const installRecordRemoved = retiredMattermostInstallRecordRemoved || staleCodexInstallRecordRemoved;

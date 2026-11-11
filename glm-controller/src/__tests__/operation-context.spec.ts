@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Operation, OperationStep } from "@octogee/shared/types/glm";
-import { operationElapsed, assertActiveOperationClaim, assertCustomerRestoreSettled, createOperationContext, PendingCustomerRestoreError } from "../operation-context";
+import { operationElapsed, assertActiveOperationClaim, assertUserRestoreSettled, createOperationContext, PendingUserRestoreError } from "../operation-context";
 
 function makeDeps() {
   const persistedSnapshots: OperationStep[][] = [];
@@ -53,10 +53,10 @@ describe("createOperationContext", () => {
   it.each(["RPC timed out", "restore response does not match"])("retains the durable fence when %s", async (message) => {
     const acknowledge = vi.fn(async () => undefined);
     const begin = vi.fn(async () => acknowledge);
-    const { ctx } = createOperationContext({ ...makeDeps(), customerRestore: {
+    const { ctx } = createOperationContext({ ...makeDeps(), userRestore: {
       begin, assertSettled: async () => undefined,
     } });
-    await expect(ctx.withCustomerRestoreFence!({
+    await expect(ctx.withUserRestoreFence!({
       uid: "u1", slug: "alice", gatewayId: "shared-1", fromGatewayId: "builder-1", assignmentEpoch: 4,
     }, async () => { throw new Error(message); })).rejects.toThrow(message);
     expect(begin).toHaveBeenCalledOnce();
@@ -66,10 +66,10 @@ describe("createOperationContext", () => {
   it("acknowledges only the same completed restore and surfaces a lost acknowledgement", async () => {
     const acknowledge = vi.fn(async () => { throw new Error("claim changed"); });
     const work = vi.fn(async () => undefined);
-    const { ctx } = createOperationContext({ ...makeDeps(), customerRestore: {
+    const { ctx } = createOperationContext({ ...makeDeps(), userRestore: {
       begin: async () => acknowledge, assertSettled: async () => undefined,
     } });
-    await expect(ctx.withCustomerRestoreFence!({
+    await expect(ctx.withUserRestoreFence!({
       uid: "u1", slug: "alice", gatewayId: "shared-1", fromGatewayId: "builder-1", assignmentEpoch: 4,
     }, work)).rejects.toThrow("claim changed");
     expect(work).toHaveBeenCalledOnce();
@@ -77,11 +77,11 @@ describe("createOperationContext", () => {
   });
 
   it("persists migration V2 state and exposes cancellation without swallowing errors", async () => {
-    const persistCustomerMigrationV2 = vi.fn(async () => undefined);
+    const persistUserMigrationV2 = vi.fn(async () => undefined);
     const cancellationRequested = vi.fn(async () => true);
     const { ctx } = createOperationContext({
       ...makeDeps(),
-      persistCustomerMigrationV2,
+      persistUserMigrationV2,
       cancellationRequested,
     });
     const migration = {
@@ -103,9 +103,9 @@ describe("createOperationContext", () => {
       targetImageTag: "target-image",
     };
 
-    await ctx.persistCustomerMigrationV2?.(migration);
+    await ctx.persistUserMigrationV2?.(migration);
 
-    expect(persistCustomerMigrationV2).toHaveBeenCalledWith(migration);
+    expect(persistUserMigrationV2).toHaveBeenCalledWith(migration);
     await expect(ctx.cancellationRequested?.()).resolves.toBe(true);
   });
   it("appends the first running event as a new step", async () => {
@@ -256,7 +256,7 @@ describe("active operation claim", () => {
 });
 
 
-describe("settled customer restore", () => {
+describe("settled user restore", () => {
   const operation = {
     id: "return-1", kind: "migrate-customer", startedAt: 900,
     input: { uid: "u1", fromGatewayId: "builder-1", toGatewayId: "shared-1", builderSlug: "alice" },
@@ -268,25 +268,25 @@ describe("settled customer restore", () => {
   };
 
   it("allows no restore and a matching acknowledgement from a previous claim", () => {
-    expect(() => assertCustomerRestoreSettled(operation, undefined)).not.toThrow();
-    expect(() => assertCustomerRestoreSettled(operation, acknowledged)).not.toThrow();
+    expect(() => assertUserRestoreSettled(operation, undefined)).not.toThrow();
+    expect(() => assertUserRestoreSettled(operation, acknowledged)).not.toThrow();
   });
 
   it("allows a valid nonblank slug when the operation did not persist builderSlug", () => {
-    expect(() => assertCustomerRestoreSettled({ ...operation, input: {
+    expect(() => assertUserRestoreSettled({ ...operation, input: {
       uid: "u1", fromGatewayId: "builder-1", toGatewayId: "shared-1",
     } }, acknowledged)).not.toThrow();
   });
 
   it("admits only a matching dispatched intent for native resumption", () => {
     const pending = { ...acknowledged, phase: "dispatched" };
-    expect(() => assertCustomerRestoreSettled(operation, pending)).toThrow(PendingCustomerRestoreError);
+    expect(() => assertUserRestoreSettled(operation, pending)).toThrow(PendingUserRestoreError);
     for (const changed of [{ uid: "foreign" }, { assignmentEpoch: -1 }, { attemptId: " " }, { dispatchedAt: 0 }]) {
       try {
-        assertCustomerRestoreSettled(operation, { ...pending, ...changed });
+        assertUserRestoreSettled(operation, { ...pending, ...changed });
         expect.fail("malformed intent was admitted");
       } catch (error) {
-        expect(error).not.toBeInstanceOf(PendingCustomerRestoreError);
+        expect(error).not.toBeInstanceOf(PendingUserRestoreError);
         expect(error).toBeInstanceOf(Error);
       }
     }
@@ -312,6 +312,6 @@ describe("settled customer restore", () => {
     { ...acknowledged, acknowledgedAt: 0 },
     { ...acknowledged, acknowledgedAt: 199 },
   ])("blocks unresolved or malformed restore receipt %j", (attempt) => {
-    expect(() => assertCustomerRestoreSettled(operation, attempt)).toThrow(/restore/);
+    expect(() => assertUserRestoreSettled(operation, attempt)).toThrow(/restore/);
   });
 });

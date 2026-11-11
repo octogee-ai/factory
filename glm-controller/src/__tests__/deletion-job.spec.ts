@@ -3,7 +3,7 @@ import {
   postHogMappingOnlyJobPatch,
   readPostHogErasureState,
   verifiedDeletionJobPatch,
-} from "../lib/customer-ops/deletion-job.js";
+} from "../lib/user-ops/deletion-job.js";
 
 function clearedFields(patch: object): string[] {
   return Object.entries(patch)
@@ -24,7 +24,7 @@ const CLEANUP_FIELDS = [
 ];
 
 describe("deletion job updates", () => {
-  it("trims an erased customer's job to the uid and PostHog persons while PostHog verification is pending", () => {
+  it("trims an erased user's job to the uid and PostHog persons while PostHog verification is pending", () => {
     const posthogErasure = { personUuids: ["person-1"], requestedPersonUuids: ["person-1"] };
     const patch = postHogMappingOnlyJobPatch(
       { productContext: { posthogErasure, stripeCustomerIds: ["cus_1"], stripeSubscriptionIds: ["sub_1"] } },

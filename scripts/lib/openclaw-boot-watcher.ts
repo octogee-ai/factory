@@ -34,7 +34,7 @@ export function createOpenClawBootWatcher(input: {
   releaseKey: string;
   log: (message: string) => void;
   repairSourceDoctor?: typeof repairSourceDoctorAgentStores;
-  inspectBuilderStores?: () => Promise<"exact">;
+  inspectUserStores?: () => Promise<"exact">;
   openclaw?: InstalledOpenClaw;
   now?: () => number;
   wait?: (ms: number) => Promise<void>;
@@ -81,7 +81,7 @@ export function createOpenClawBootWatcher(input: {
         throw new Error(`invalid OpenClaw boot claim action: ${String(claim.action)}`);
       }
       if (claim.action === "doctor" && !claim.sourceDoctor) throw new Error("OpenClaw boot claim requested Doctor without a source request");
-      await input.inspectBuilderStores?.();
+      await input.inspectUserStores?.();
       if (claim.action === "start" || !claim.sourceDoctor) return;
       input.log("[openclaw-boot] running explicitly requested source Doctor before gateway startup");
       await runSourceDoctor(input, claim.sourceDoctor);

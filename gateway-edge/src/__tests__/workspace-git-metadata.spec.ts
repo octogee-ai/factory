@@ -12,7 +12,7 @@ function git(cwd: string, args: string[]): string {
   }).trim();
 }
 
-describe("self-contained customer Git metadata", () => {
+describe("self-contained user Git metadata", () => {
   let root: string;
   let repo: string;
   let metadata: string;

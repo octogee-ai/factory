@@ -323,7 +323,7 @@ it("no doc written by reportUsage has any top-level field name containing `.`", 
 });
 
 describe("reportUsage — accumulation across multiple calls", () => {
-  it("two coach calls on the same workspace+date double session totals (FieldValue.increment works)", async () => {
+  it("two agent calls on the same workspace+date double session totals (FieldValue.increment works)", async () => {
     await seedUser("u-acc", { selectedTier: "pro", usage: {} });
     const agentDir = makeAgentDir("acme");
     for (let i = 0; i < 2; i++) {

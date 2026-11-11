@@ -50,7 +50,7 @@ async function callbackChain(options: {
     res.end(JSON.stringify({ update: { message: "local callback accepted" } }));
   }));
   const handler = createMattermostInteractionProxyHandler({
-    gatewayId: options.receiverGatewayId ?? "bender",
+    gatewayId: options.receiverGatewayId ?? "walter",
     routerPublicKey: options.publicKey ?? verificationKey,
     targetOrigin: upstream,
     now: () => now,
@@ -93,7 +93,7 @@ async function callbackChain(options: {
   return {
     deliveries,
     send: (body: string, account = "default") => fetch(
-      `${router}/internal/openclaw/mattermost/bender/mattermost/interactions/${account}`,
+      `${router}/internal/openclaw/mattermost/walter/mattermost/interactions/${account}`,
       { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(5_000) },
     ),
   };
@@ -113,7 +113,7 @@ describe("callback signatures across the router and runtime receiver", () => {
 
   it.each([
     { name: "another verification key", options: { publicKey: otherKey } },
-    { name: "another gateway identity", options: { receiverGatewayId: "other-builder" } },
+    { name: "another gateway identity", options: { receiverGatewayId: "other-user" } },
     {
       name: "body changed after signing",
       options: { alterWire: (request: WireRequest) => ({ ...request, body: Buffer.from('{"action":"deny"}') }) },
@@ -125,7 +125,7 @@ describe("callback signatures across the router and runtime receiver", () => {
         headers: {
           ...request.headers,
           "x-octogee-agent-control-signature": createHmac("sha256", legacySecret)
-            .update(`v1\nbender\n${now}\n${createHash("sha256").update(request.body).digest("hex")}`).digest("hex"),
+            .update(`v1\nwalter\n${now}\n${createHash("sha256").update(request.body).digest("hex")}`).digest("hex"),
         },
       }) },
     },

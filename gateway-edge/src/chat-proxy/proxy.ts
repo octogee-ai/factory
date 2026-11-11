@@ -38,10 +38,10 @@ import {
 } from "../roll-roster.js";
 import { logger } from "../middleware/logging.js";
 import {
-  coachWiredInParsedConfig,
-  listLocalCoachWiredSlugs,
+  defaultAgentWiredInParsedConfig,
+  listLocalDefaultAgentWiredSlugs,
   readOpenclawConfig,
-} from "@octogee/core/local-coach-wired";
+} from "@octogee/core/local-default-agent-wired";
 import { accountActiveInStore } from "../lib/user-platform-state.js";
 
 import { attachMmWsBridge, createMmWsRegistry } from "./mm-proxy/ws.js";
@@ -82,9 +82,9 @@ if (process.env.NODE_ENV !== "test") {
 const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL || "https://mm-test.invalid";
 const DEFAULT_OPENCLAW_GATEWAY_URL = "http://127.0.0.1:18789";
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
-const COACH_RECONCILE_CUSTOMERS_DIR = process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
-const COACH_RECONCILE_OPENCLAW_CONFIG = process.env.OPENCLAW_CONFIG || "/home/node/.openclaw/openclaw.json";
-const COACH_RECONCILE_INTERVAL_MS = 60_000;
+const DEFAULT_AGENT_RECONCILE_USERS_DIR = process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
+const DEFAULT_AGENT_RECONCILE_OPENCLAW_CONFIG = process.env.OPENCLAW_CONFIG || "/home/node/.openclaw/openclaw.json";
+const DEFAULT_AGENT_RECONCILE_INTERVAL_MS = 60_000;
 
 const bridgeLog = createBridgeLog();
 
@@ -715,8 +715,8 @@ function handleOpenClawWsUpgrade(
       const expectedAgentId = redeemed.expectedAgentId;
       const activityScope = redeemed.activityConversation;
 
-      // Post-auth roster verdict (the ticket just resolved the customer): a
-      // quiescing customer or one serving on another revision must never
+      // Post-auth roster verdict (the ticket just resolved the user): a
+      // quiescing user or one serving on another revision must never
       // attach here — refuse so the client reconnects via the serving
       // revision.
       if (upgradeGate) {
@@ -979,17 +979,17 @@ export function attachChatProxyWsUpgrade(
   (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter = wsRouter;
 }
 
-async function readMountedCoachCustomers(): Promise<readonly string[] | null> {
-  if (!fs.existsSync(COACH_RECONCILE_CUSTOMERS_DIR)) return null;
-  const config = readOpenclawConfig(COACH_RECONCILE_OPENCLAW_CONFIG);
+async function readMountedDefaultAgentUsers(): Promise<readonly string[] | null> {
+  if (!fs.existsSync(DEFAULT_AGENT_RECONCILE_USERS_DIR)) return null;
+  const config = readOpenclawConfig(DEFAULT_AGENT_RECONCILE_OPENCLAW_CONFIG);
   if (!config) return null;
-  return listLocalCoachWiredSlugs(
-    COACH_RECONCILE_CUSTOMERS_DIR,
-    (slug) => coachWiredInParsedConfig(config, slug),
+  return listLocalDefaultAgentWiredSlugs(
+    DEFAULT_AGENT_RECONCILE_USERS_DIR,
+    (slug) => defaultAgentWiredInParsedConfig(config, slug),
   );
 }
 
-function startCoachChatActivity(
+function startDefaultAgentChatActivity(
   runtimeBroker: OpenClawRuntimeBroker,
 ): void {
   const chatActivityDemand = makeChatActivityDemandHandler({
@@ -1003,42 +1003,42 @@ function startCoachChatActivity(
       void chatActivityDemand(activity);
     },
   });
-  const trackedCoachIds = new Set<string>();
+  const trackedDefaultAgentIds = new Set<string>();
   let reconciling = false;
   const reconcile = async (): Promise<void> => {
     if (reconciling) return;
     reconciling = true;
     try {
-      const slugs = await readMountedCoachCustomers();
+      const slugs = await readMountedDefaultAgentUsers();
       if (slugs === null) return;
-      const nextCoachIds = new Set<string>();
+      const nextDefaultAgentIds = new Set<string>();
       for (const slug of slugs) {
         try {
           const identity = await runtimeBroker.resolveAgentIdentity(`octogee-${slug}-coach`);
           if (!identity?.coachMmUserId || !identity.coachToken) continue;
-          nextCoachIds.add(identity.coachMmUserId);
-          manager.addCoach({
-            coachMmUserId: identity.coachMmUserId,
+          nextDefaultAgentIds.add(identity.coachMmUserId);
+          manager.addDefaultAgent({
+            defaultAgentMmUserId: identity.coachMmUserId,
             coachToken: identity.coachToken,
           });
         } catch (error) {
-          logger.warn("[coach-notifications] coach discovery failed", {
+          logger.warn("[default-agent-notifications] defaultAgent discovery failed", {
             slug,
             error: error instanceof Error ? error.message : String(error),
           });
         }
       }
-      for (const coachMmUserId of trackedCoachIds) {
-        if (!nextCoachIds.has(coachMmUserId)) manager.removeCoach(coachMmUserId);
+      for (const defaultAgentMmUserId of trackedDefaultAgentIds) {
+        if (!nextDefaultAgentIds.has(defaultAgentMmUserId)) manager.removeDefaultAgent(defaultAgentMmUserId);
       }
-      trackedCoachIds.clear();
-      for (const coachMmUserId of nextCoachIds) trackedCoachIds.add(coachMmUserId);
+      trackedDefaultAgentIds.clear();
+      for (const defaultAgentMmUserId of nextDefaultAgentIds) trackedDefaultAgentIds.add(defaultAgentMmUserId);
     } finally {
       reconciling = false;
     }
   };
   void reconcile();
-  const timer = setInterval(() => void reconcile(), COACH_RECONCILE_INTERVAL_MS);
+  const timer = setInterval(() => void reconcile(), DEFAULT_AGENT_RECONCILE_INTERVAL_MS);
   timer.unref();
   logger.info("[chat-proxy] Mattermost chat activity listeners started");
 }
@@ -1057,5 +1057,5 @@ export async function startChatProxyBackground(): Promise<void> {
     routerPublicKey: process.env.AGENT_CONTROL_ROUTER_PUBLIC_KEY ?? "",
     log: (message, meta) => logger.error(message, meta),
   });
-  startCoachChatActivity(runtimeBroker);
+  startDefaultAgentChatActivity(runtimeBroker);
 }

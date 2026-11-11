@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 
 import { requireAuthenticatedUid } from "../middleware/auth.js";
 import {
-  coachAgentId,
+  userDefaultAgentId,
   gatewayClaudeSsoClient,
   gatewayDeviceAuthClient,
   brokerByosubFlow,
@@ -82,11 +82,11 @@ export function createByosubAuthRouter(): Router {
         if (!hasPrivateSubscriptionRuntime()) {
           res.status(409).json({
             code: "subscription-runtime-required",
-            error: "A private Builder runtime is required before connecting a personal subscription",
+            error: "A private isolated runtime is required before connecting a personal subscription",
           });
           return;
         }
-        const agentId = coachAgentId(resolved.slug);
+        const agentId = userDefaultAgentId(resolved.slug);
         try {
           const out =
             entry.oauth.gatewayFlow === "claude-sso"

@@ -77,7 +77,7 @@ case "$desktop_wanted" in
   0) ;;
   1)
     if mountpoint -q "$USER_HOME"; then
-      echo "octo-home-disk: this X11 computer's $USER_HOME is bound to the home disk; its gateway must be the only user of $STATE_ROOT/desktop-home" >&2
+      echo "octo-home-disk: this X11 VM's $USER_HOME is bound to the home disk; its gateway must be the only user of $STATE_ROOT/desktop-home" >&2
       exit 1
     fi
     echo "octo-home-disk: $DEVICE mounted at $STATE_ROOT; the X11 gateway owns $STATE_ROOT/desktop-home and $USER_HOME stays the boot-disk login home"

@@ -60,7 +60,7 @@ async function restoreDirectoryMetadata(target: string, metadata: Stats | null, 
     await chmod(target, metadata.mode & 0o7777);
     await utimes(target, metadata.atime, metadata.mtime);
   } else if (!existing && preserved.entries.some((path) => !path.includes("/"))) {
-    if (!owner) throw new Error(`protected home directory has no customer ownership: ${target}`);
+    if (!owner) throw new Error(`protected home directory has no user ownership: ${target}`);
     await chown(target, owner.uid, owner.gid);
     await chmod(target, 0o700);
   }

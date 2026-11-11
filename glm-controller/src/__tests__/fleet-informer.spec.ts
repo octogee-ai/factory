@@ -7,7 +7,7 @@ import {
 } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import {
-  assignedSlugsFromBuilderMirror,
+  assignedSlugsFromUserMirror,
   createFleetInformer,
   FLEET_INFORMER_REATTACH_MS_DEFAULT,
   type FleetInformer,
@@ -45,7 +45,7 @@ function listenerFailure(): BackendFailureError {
   return new BackendFailureError("firestore", "watch fleetRegistry", { cause: new Error("listen stream broke") });
 }
 
-function builder(uid: string, fields: Record<string, unknown> = {}): Stored<WatchRecords["builders"]> {
+function user(uid: string, fields: Record<string, unknown> = {}): Stored<WatchRecords["builders"]> {
   return record<"builders">({
     uid,
     slug: uid,
@@ -60,7 +60,7 @@ function builder(uid: string, fields: Record<string, unknown> = {}): Stored<Watc
   });
 }
 
-describe("fleet informer — Builder records mirror", () => {
+describe("fleet informer — User records mirror", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -68,81 +68,81 @@ describe("fleet informer — Builder records mirror", () => {
     vi.useRealTimers();
   });
 
-  it("wakes placement only when the eligible unassigned Builders change", () => {
+  it("wakes placement only when the eligible unassigned users change", () => {
     const { informer, watches } = startInformer();
     const wake = vi.fn();
     const stop = informer.subscribeUnassignedUsers!(wake);
 
-    watches.latest("builders").snapshot([builder("alice")]);
+    watches.latest("builders").snapshot([user("alice")]);
     expect(wake).toHaveBeenCalledOnce();
 
     watches.latest("builders").changes([
-      { type: "modified", key: "alice", record: builder("alice", { persona: { vibe: "calm" } }) },
+      { type: "modified", key: "alice", record: user("alice", { persona: { vibe: "calm" } }) },
     ]);
     expect(wake).toHaveBeenCalledOnce();
 
     watches.latest("builders").changes([
-      { type: "modified", key: "alice", record: builder("alice", { gateway: { gatewayId: "shared-a" } }) },
+      { type: "modified", key: "alice", record: user("alice", { gateway: { gatewayId: "shared-a" } }) },
     ]);
     expect(wake).toHaveBeenCalledTimes(2);
     stop();
     informer.stop();
   });
 
-  it("does not wake placement for a Builder the operator manages", () => {
+  it("does not wake placement for a user the operator manages", () => {
     const { informer, watches } = startInformer();
     const wake = vi.fn();
     informer.subscribeUnassignedUsers!(wake);
 
-    watches.latest("builders").snapshot([builder("alice", { openclaw: { managedBy: "operator" } })]);
+    watches.latest("builders").snapshot([user("alice", { openclaw: { managedBy: "operator" } })]);
 
     expect(wake).not.toHaveBeenCalled();
     informer.stop();
   });
 
-  it("serves null before the first snapshot and Builders sorted by uid after it", () => {
+  it("serves null before the first snapshot and users sorted by uid after it", () => {
     const { informer, watches } = startInformer();
-    expect(informer.builders()).toBeNull();
+    expect(informer.users()).toBeNull();
 
-    watches.latest("builders").snapshot([builder("uid-b"), builder("uid-a")]);
+    watches.latest("builders").snapshot([user("uid-b"), user("uid-a")]);
 
-    expect(informer.builders()?.map((stored) => stored.uid)).toEqual(["uid-a", "uid-b"]);
+    expect(informer.users()?.map((stored) => stored.uid)).toEqual(["uid-a", "uid-b"]);
     informer.stop();
   });
 
-  it("drops a removed Builder from the mirror", () => {
+  it("drops a removed user from the mirror", () => {
     const { informer, watches } = startInformer();
-    watches.latest("builders").snapshot([builder("uid-a"), builder("uid-b")]);
+    watches.latest("builders").snapshot([user("uid-a"), user("uid-b")]);
 
     watches.latest("builders").changes([{ type: "removed", key: "uid-a", record: null }]);
 
-    expect(informer.builders()?.map((stored) => stored.uid)).toEqual(["uid-b"]);
+    expect(informer.users()?.map((stored) => stored.uid)).toEqual(["uid-b"]);
     informer.stop();
   });
 
-  it("keeps the healthy Builders readable when one record is malformed", () => {
+  it("keeps the healthy users readable when one record is malformed", () => {
     const { informer, watches } = startInformer();
-    watches.latest("builders").snapshot([builder("uid-a"), builder("uid-b")]);
+    watches.latest("builders").snapshot([user("uid-a"), user("uid-b")]);
 
     watches.latest("builders").error(
       new MalformedRecordError({ aggregate: "builder", key: "uid-b" }, "provisioning.status is not a string"),
     );
 
-    expect(informer.builders()).toBeNull();
-    expect(informer.buildersWithoutMalformed()?.records.map((stored) => stored.uid)).toEqual(["uid-a"]);
-    expect(informer.buildersWithoutMalformed()?.malformedKeys).toEqual(["uid-b"]);
+    expect(informer.users()).toBeNull();
+    expect(informer.usersWithoutMalformed()?.records.map((stored) => stored.uid)).toEqual(["uid-a"]);
+    expect(informer.usersWithoutMalformed()?.malformedKeys).toEqual(["uid-b"]);
     informer.stop();
   });
 
   it("discards the mirror when the watch dies and re-attaches after the delay", async () => {
     const log = vi.fn();
     const { informer, watches } = startInformer({ log, reattachMs: 5_000 });
-    watches.latest("builders").snapshot([builder("uid-a")]);
+    watches.latest("builders").snapshot([user("uid-a")]);
 
     watches.latest("builders").reject(new Error("listen stream broke"));
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(informer.builders()).toBeNull();
+    expect(informer.users()).toBeNull();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("listen stream broke"));
     vi.advanceTimersByTime(4_999);
     expect(watches.attachCount("builders")).toBe(1);
@@ -188,22 +188,22 @@ describe("fleet informer — store watch mirrors", () => {
   it("applies added, modified and removed changes as deltas", () => {
     const { informer, watches } = startInformer();
     const watch = watches.latest("fleetRegistry");
-    watch.snapshot([gatewayRecord("shared-blue"), gatewayRecord("bender")]);
+    watch.snapshot([gatewayRecord("shared-blue"), gatewayRecord("walter")]);
 
     watch.changes([
-      { type: "modified", key: "bender", record: gatewayRecord("bender", { lifecycle: "failed" }) },
+      { type: "modified", key: "walter", record: gatewayRecord("walter", { lifecycle: "failed" }) },
       { type: "removed", key: "shared-blue", record: null },
       { type: "added", key: "alice-b", record: gatewayRecord("alice-b") },
     ]);
 
     expect(informer.fleetRegistry()?.map((stored) => [stored.gatewayId, stored.lifecycle])).toEqual([
       ["alice-b", "serving"],
-      ["bender", "failed"],
+      ["walter", "failed"],
     ]);
     informer.stop();
   });
 
-  it("keys assignments by gateway and uid, so one Builder's assignments on two gateways both stay mirrored", () => {
+  it("keys assignments by gateway and uid, so one user's assignments on two gateways both stay mirrored", () => {
     const { informer, watches } = startInformer();
     const watch = watches.latest("assignments");
     watch.snapshot([
@@ -225,13 +225,13 @@ describe("fleet informer — store watch mirrors", () => {
 
     watch.error(listenerFailure());
     expect(informer.fleetRegistry()).toBeNull();
-    watch.changes([{ type: "added", key: "bender", record: gatewayRecord("bender") }]);
+    watch.changes([{ type: "added", key: "walter", record: gatewayRecord("walter") }]);
     expect(informer.fleetRegistry()).toBeNull();
     watch.resync();
     expect(informer.fleetRegistry()).toBeNull();
-    watch.snapshot([gatewayRecord("bender")]);
+    watch.snapshot([gatewayRecord("walter")]);
 
-    expect(informer.fleetRegistry()?.map((stored) => stored.gatewayId)).toEqual(["bender"]);
+    expect(informer.fleetRegistry()?.map((stored) => stored.gatewayId)).toEqual(["walter"]);
     vi.advanceTimersByTime(FLEET_INFORMER_REATTACH_MS_DEFAULT * 2);
     expect(watches.attachCount("fleetRegistry")).toBe(1);
     informer.stop();
@@ -262,10 +262,10 @@ describe("fleet informer — store watch mirrors", () => {
   it("goes stale when a record already mirrored turns malformed and re-attaches", () => {
     const { informer, watches } = startInformer();
     const watch = watches.latest("fleetRegistry");
-    watch.snapshot([gatewayRecord("shared-blue"), gatewayRecord("bender")]);
+    watch.snapshot([gatewayRecord("shared-blue"), gatewayRecord("walter")]);
 
-    watch.error(malformed("bender"));
-    watch.changes([{ type: "removed", key: "bender", record: null }]);
+    watch.error(malformed("walter"));
+    watch.changes([{ type: "removed", key: "walter", record: null }]);
 
     expect(informer.fleetRegistry()).toBeNull();
     vi.advanceTimersByTime(FLEET_INFORMER_REATTACH_MS_DEFAULT);
@@ -277,15 +277,15 @@ describe("fleet informer — store watch mirrors", () => {
     const { informer, watches } = startInformer();
     const watch = watches.latest("fleetRegistry");
     watch.error(malformed("broken"));
-    watch.snapshot([gatewayRecord("shared-blue"), gatewayRecord("bender")]);
+    watch.snapshot([gatewayRecord("shared-blue"), gatewayRecord("walter")]);
     watch.changes([{ type: "added", key: "alice-b", record: gatewayRecord("alice-b") }]);
-    watch.error(malformed("bender"));
-    watch.changes([{ type: "removed", key: "bender", record: null }]);
+    watch.error(malformed("walter"));
+    watch.changes([{ type: "removed", key: "walter", record: null }]);
 
     expect(informer.fleetRegistry()).toBeNull();
     expect(informer.fleetRegistryWithoutMalformed()).toEqual({
       records: [gatewayRecord("alice-b"), gatewayRecord("shared-blue")],
-      malformedKeys: ["bender", "broken"],
+      malformedKeys: ["broken", "walter"],
     });
     informer.stop();
   });
@@ -294,12 +294,12 @@ describe("fleet informer — store watch mirrors", () => {
     const { informer, watches } = startInformer();
     const watch = watches.latest("fleetRegistry");
     watch.snapshot([gatewayRecord("shared-blue")]);
-    watch.error(malformed("bender"));
+    watch.error(malformed("walter"));
     expect(informer.fleetRegistry()).toBeNull();
 
-    watch.changes([{ type: "added", key: "bender", record: gatewayRecord("bender") }]);
+    watch.changes([{ type: "added", key: "walter", record: gatewayRecord("walter") }]);
 
-    expect(informer.fleetRegistry()?.map((stored) => stored.gatewayId)).toEqual(["bender", "shared-blue"]);
+    expect(informer.fleetRegistry()?.map((stored) => stored.gatewayId)).toEqual(["shared-blue", "walter"]);
     expect(informer.fleetRegistryWithoutMalformed()?.malformedKeys).toEqual([]);
     informer.stop();
   });
@@ -316,8 +316,8 @@ describe("fleet informer — store watch mirrors", () => {
     expect(watches.attachCount("fleetRegistry")).toBe(2);
     expect(informer.fleetRegistryWithoutMalformed()).toEqual({ records: [gatewayRecord("shared-blue")], malformedKeys: ["broken"] });
 
-    second.snapshot([gatewayRecord("bender")]);
-    expect(informer.fleetRegistryWithoutMalformed()).toEqual({ records: [gatewayRecord("bender")], malformedKeys: ["broken"] });
+    second.snapshot([gatewayRecord("walter")]);
+    expect(informer.fleetRegistryWithoutMalformed()).toEqual({ records: [gatewayRecord("walter")], malformedKeys: ["broken"] });
     informer.stop();
   });
 
@@ -409,7 +409,7 @@ describe("fleet informer — store watch mirrors", () => {
   it("stop() closes every watch and cancels pending re-attaches", () => {
     const { informer, watches } = startInformer();
     watches.latest("fleetRegistry").error(malformed("broken"));
-    watches.latest("builders").error(new BackendFailureError("firestore", "watch builders", { cause: new Error("boom") }));
+    watches.latest("builders").error(new BackendFailureError("firestore", "watch users", { cause: new Error("boom") }));
 
     informer.stop();
 
@@ -421,18 +421,18 @@ describe("fleet informer — store watch mirrors", () => {
   });
 });
 
-describe("assignedSlugsFromBuilderMirror", () => {
-  const builders = [
+describe("assignedSlugsFromUserMirror", () => {
+  const users = [
     { uid: "uid-a", slug: "alice", gateway: { gatewayId: "shared-blue" } },
     { uid: "uid-b", slug: "bob", gateway: { gatewayId: "shared-blue" } },
-    { uid: "uid-c", slug: "carol", gateway: { gatewayId: "bender" } },
+    { uid: "uid-c", slug: "carol", gateway: { gatewayId: "walter" } },
     { uid: "uid-d", slug: "dave", gateway: null },
-    { uid: "uid-e", slug: null, gateway: { gatewayId: "bender" } },
+    { uid: "uid-e", slug: null, gateway: { gatewayId: "walter" } },
   ];
 
-  it("lists the slugs of the Builders mirrored on the gateway", () => {
-    expect(assignedSlugsFromBuilderMirror(builders, "shared-blue").sort()).toEqual(["alice", "bob"]);
-    expect(assignedSlugsFromBuilderMirror(builders, "bender")).toEqual(["carol"]);
-    expect(assignedSlugsFromBuilderMirror(builders, "ghost")).toEqual([]);
+  it("lists the slugs of the users mirrored on the gateway", () => {
+    expect(assignedSlugsFromUserMirror(users, "shared-blue").sort()).toEqual(["alice", "bob"]);
+    expect(assignedSlugsFromUserMirror(users, "walter")).toEqual(["carol"]);
+    expect(assignedSlugsFromUserMirror(users, "ghost")).toEqual([]);
   });
 });

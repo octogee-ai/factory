@@ -18,7 +18,7 @@
 #
 # Edit this file from the gateway only when necessary, then restart the
 # gateway process to pick it up. Credentials that must survive a roll belong
-# in the customer credential store and enter config through SecretRefs.
+# in the user credential store and enter config through SecretRefs.
 #
 # ── Examples ──────────────────────────────────────────────────────────
 #
@@ -27,7 +27,7 @@
 # DISCORD_BENDER_TOKEN=...
 #
 # Personal Anthropic / OpenAI / xAI API keys the operator uses for
-# their own coach work (above and beyond the BYO-subscription OAuth flow):
+# their own agent work (above and beyond the BYO-subscription OAuth flow):
 # PERSONAL_ANTHROPIC_API_KEY=...
 # PERSONAL_OPENAI_API_KEY=...
 #

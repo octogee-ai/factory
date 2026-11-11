@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { applyConfigPatch } from "@octogee/core/apply-config-patch";
 import {
   refreshModelCredentialRuntimeSessions,
-  syncModelCredentialsForCustomer,
+  syncModelCredentialsForUser,
 } from "@octogee/core/model-credential-sync-runtime";
 import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 import { requireByotSyncInternalAuth } from "../../middleware/byot-sync-auth.js";
@@ -45,7 +45,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function isValidPayload(value: unknown): value is Parameters<typeof syncModelCredentialsForCustomer>[0] {
+function isValidPayload(value: unknown): value is Parameters<typeof syncModelCredentialsForUser>[0] {
   if (!isRecord(value)) return false;
   if (typeof value.username !== "string" || value.username.trim().length === 0) return false;
   const provisioning = value.provisioning;
@@ -64,9 +64,9 @@ router.post(
         res.status(400).json({ error: "username and provisioning.openclaw.status required" });
         return;
       }
-      await syncModelCredentialsForCustomer(req.body, {
+      await syncModelCredentialsForUser(req.body, {
         applyConfigPatch: modelConfigWriter,
-        refreshCoachRuntimeSessions: refreshModelCredentialRuntimeSessions,
+        refreshDefaultAgentRuntimeSessions: refreshModelCredentialRuntimeSessions,
       });
       res.json({ ok: true });
     } catch (e) {

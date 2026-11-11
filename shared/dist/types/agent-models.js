@@ -85,7 +85,7 @@ export function agentIdBelongsToSlug(agentId, slug) {
     const projPrefix = `octogee-${slug}-proj-`;
     return (AGENT_ID_PATTERN.test(agentId) && agentId.startsWith(projPrefix) && agentId.endsWith("-coach"));
 }
-export function canonicalCustomerModelDefinition(modelRef) {
+export function canonicalUserModelDefinition(modelRef) {
     const popularAliases = {
         "platform-openai/gpt-6-astra": "astra",
         "platform-openrouter/openai/gpt-6-astra": "astra-openrouter",

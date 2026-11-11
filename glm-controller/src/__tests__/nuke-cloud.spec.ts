@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { createMattermostChannelHost } from "@octogee/core/channel-host";
-import { nukeUserCloudSide, type NukeCloudCtx, type NukeCloudDeps } from "../lib/customer-ops/nuke-cloud";
+import { nukeUserCloudSide, type NukeCloudCtx, type NukeCloudDeps } from "../lib/user-ops/nuke-cloud";
 
 function mkCtx(overrides: Partial<NukeCloudCtx> = {}): NukeCloudCtx {
   return {
@@ -30,12 +30,12 @@ function mkDeps(overrides: Partial<NukeCloudDeps> = {}): NukeCloudDeps {
     git: { eraseOwner: vi.fn(async () => undefined) },
     channels: { erase: vi.fn(async () => undefined) },
     nukeUserFirestore: vi.fn(async () => undefined),
-    deleteCustomerStorage: vi.fn(async () => undefined),
+    deleteUserStorage: vi.fn(async () => undefined),
     deleteHostingSites: vi.fn(async () => ({ deleted: 0 })),
     deleteCredentialSecrets: vi.fn(async () => undefined),
     deleteAuthUser: vi.fn(async () => undefined),
-    deleteComputer: vi.fn(async () => true),
-    deleteComputerHome: vi.fn(async () => ({ deleted: 2 })),
+    deleteVm: vi.fn(async () => true),
+    deleteVmHome: vi.fn(async () => ({ deleted: 2 })),
     log: vi.fn(),
     ...overrides,
   };
@@ -56,16 +56,16 @@ describe("nukeUserCloudSide — happy path", () => {
       "firestore:true",
       "auth:true",
     ]);
-    expect(deps.deleteComputer).toHaveBeenCalledWith("uid-alice");
+    expect(deps.deleteVm).toHaveBeenCalledWith("uid-alice");
     expect(results.find((r) => r.key === "hosting")).toMatchObject({ ok: true });
   });
 
-  it("sweeps the home checkpoints only after the computer is gone and journals the object count", async () => {
+  it("sweeps the home checkpoints only after the VM is gone and journals the object count", async () => {
     const deps = mkDeps();
     const results = await nukeUserCloudSide(mkCtx(), deps);
-    expect(deps.deleteComputerHome).toHaveBeenCalledWith("uid-alice", "alice");
-    expect(vi.mocked(deps.deleteComputer!).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(deps.deleteComputerHome).mock.invocationCallOrder[0],
+    expect(deps.deleteVmHome).toHaveBeenCalledWith("uid-alice", "alice");
+    expect(vi.mocked(deps.deleteVm!).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(deps.deleteVmHome).mock.invocationCallOrder[0],
     );
     expect(results.find((r) => r.key === "computer-home")).toEqual({
       key: "computer-home",
@@ -75,29 +75,29 @@ describe("nukeUserCloudSide — happy path", () => {
   });
 
   it("still sweeps the home checkpoints on a pod-only fleet, and skips only without a slug", async () => {
-    const podOnly = mkDeps({ deleteComputer: undefined });
+    const podOnly = mkDeps({ deleteVm: undefined });
     await nukeUserCloudSide(mkCtx(), podOnly);
-    expect(podOnly.deleteComputerHome).toHaveBeenCalledWith("uid-alice", "alice");
+    expect(podOnly.deleteVmHome).toHaveBeenCalledWith("uid-alice", "alice");
 
     const unprovisioned = mkDeps();
     const results = await nukeUserCloudSide(mkCtx({ slug: "" }), unprovisioned);
-    expect(unprovisioned.deleteComputerHome).not.toHaveBeenCalled();
+    expect(unprovisioned.deleteVmHome).not.toHaveBeenCalled();
     expect(results.find((r) => r.key === "computer-home")).toEqual({ key: "computer-home", ok: true, skipped: true });
   });
 
-  it("fails the computer-home step loudly and blocks auth deletion when the sweep fails", async () => {
-    const deps = mkDeps({ deleteComputerHome: vi.fn(async () => { throw new Error("storage 403"); }) });
+  it("fails the vm-home step loudly and blocks auth deletion when the sweep fails", async () => {
+    const deps = mkDeps({ deleteVmHome: vi.fn(async () => { throw new Error("storage 403"); }) });
     const results = await nukeUserCloudSide(mkCtx(), deps);
     expect(results.find((r) => r.key === "computer-home")).toEqual({ key: "computer-home", ok: false, error: "storage 403" });
     expect(results.find((r) => r.key === "auth")).toEqual({ key: "auth", ok: true, skipped: true });
     expect(deps.nukeUserFirestore).not.toHaveBeenCalled();
   });
 
-  it("skips the computer step on a pod-only fleet and blocks auth deletion when the computer survives", async () => {
-    const podOnly = await nukeUserCloudSide(mkCtx(), mkDeps({ deleteComputer: undefined }));
+  it("skips the VM step on a pod-only fleet and blocks auth deletion when the VM survives", async () => {
+    const podOnly = await nukeUserCloudSide(mkCtx(), mkDeps({ deleteVm: undefined }));
     expect(podOnly.find((r) => r.key === "computer")).toEqual({ key: "computer", ok: true, skipped: true });
 
-    const stuck = await nukeUserCloudSide(mkCtx(), mkDeps({ deleteComputer: vi.fn(async () => { throw new Error("compute 403"); }) }));
+    const stuck = await nukeUserCloudSide(mkCtx(), mkDeps({ deleteVm: vi.fn(async () => { throw new Error("compute 403"); }) }));
     expect(stuck.find((r) => r.key === "computer")).toMatchObject({ ok: false, error: "compute 403" });
     expect(stuck.find((r) => r.key === "auth")).toEqual({ key: "auth", ok: true, skipped: true });
   });
@@ -138,7 +138,7 @@ describe("nukeUserCloudSide — happy path", () => {
     expect(deps.deleteAuthUser).toHaveBeenCalled();
   });
 
-  it("MM step erases the owner's channels and user, plus admin channel + coach + project agents + team", async () => {
+  it("MM step erases the owner's channels and user, plus admin channel + defaultAgent + project agents + team", async () => {
     const deps = mkDeps();
     await nukeUserCloudSide(mkCtx(), deps);
     expect(deps.channels.erase).toHaveBeenCalledWith({
@@ -293,15 +293,15 @@ describe("nukeUserCloudSide — firestore step", () => {
     );
   });
 
-  it("deletes all customer storage prefixes and credential secrets before Firestore", async () => {
+  it("deletes all user storage prefixes and credential secrets before Firestore", async () => {
     const order: string[] = [];
     const deps = mkDeps({
-      deleteCustomerStorage: vi.fn(async () => { order.push("storage"); }),
+      deleteUserStorage: vi.fn(async () => { order.push("storage"); }),
       deleteCredentialSecrets: vi.fn(async () => { order.push("credentials"); }),
       nukeUserFirestore: vi.fn(async () => { order.push("firestore"); }),
     });
     await nukeUserCloudSide(mkCtx({ credentialSecretNames: ["byosub-1"] }), deps);
-    expect(deps.deleteCustomerStorage).toHaveBeenCalledWith(
+    expect(deps.deleteUserStorage).toHaveBeenCalledWith(
       "uid-alice",
       "alice",
       ["a".repeat(64)],

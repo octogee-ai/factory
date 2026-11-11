@@ -87,10 +87,10 @@ describe("gateway entrypoint ↔ Dockerfile coverage", () => {
     const scripts = entrypointInfraGatewayScripts();
     const copied = dockerInfraGatewayFiles();
     const missing = scripts.filter((p) => !existsSync(path.join(repoRoot, p)));
-    const builderBaseScripts = new Set([
+    const isolatedBaseScripts = new Set([
       "infra/gateway/stamp-claude-first-run.mjs",
     ]);
-    const uncopied = scripts.filter((p) => !builderBaseScripts.has(p) && !copied.has(p));
+    const uncopied = scripts.filter((p) => !isolatedBaseScripts.has(p) && !copied.has(p));
 
     expect(missing, `entrypoint.sh references nonexistent infra/gateway files: ${missing.join(", ")}`).toEqual([]);
     expect(

@@ -16,7 +16,7 @@ vi.mock("node:fs", async importOriginal => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return { ...actual, cpSync: vi.fn(actual.cpSync), statSync: vi.fn(actual.statSync) };
 });
-const { externalizeCustomerGitDir } = await import("../lib/git.js");
+const { externalizeUserGitDir } = await import("../lib/git.js");
 
 afterEach(() => {
   fs.rmSync(paths.home, { recursive: true, force: true });
@@ -35,7 +35,7 @@ it.skipIf(process.platform !== "linux")("quarantines project Git metadata across
   fs.symlinkSync(outside, path.join(repo, ".git/untrusted-link"));
   fs.writeFileSync(path.join(repo, "unpublished.txt"), "unpublished project work\n");
 
-  const metadata = externalizeCustomerGitDir(repo, { fetchCanonical: () => {} });
+  const metadata = externalizeUserGitDir(repo, { fetchCanonical: () => {} });
 
   expect(metadata).toBe(path.join(paths.home, "git-metadata/alice/projects/sample.git"));
   expect(fs.readFileSync(path.join(repo, "unpublished.txt"), "utf8")).toBe("unpublished project work\n");
@@ -72,7 +72,7 @@ it("removes a partial cross-mount quarantine while keeping original metadata aft
     throw Object.assign(new Error("quarantine volume is full"), { code: "ENOSPC" });
   });
 
-  expect(() => externalizeCustomerGitDir(repo, { fetchCanonical: () => {} })).toThrow("quarantine volume is full");
+  expect(() => externalizeUserGitDir(repo, { fetchCanonical: () => {} })).toThrow("quarantine volume is full");
 
   expect(fs.readFileSync(path.join(repo, ".git/HEAD"))).toEqual(originalHead);
   expect(fs.readFileSync(path.join(repo, "unpublished.txt"), "utf8")).toBe("keep this work\n");

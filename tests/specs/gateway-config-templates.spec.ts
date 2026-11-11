@@ -7,11 +7,11 @@ import { afterEach, describe, expect, it } from "vitest";
 const helper = resolve(import.meta.dirname, "../../infra/gateway/verify-config-templates.mjs");
 const roots: string[] = [];
 
-function fixture(builder: Record<string, unknown> = {}) {
+function fixture(user: Record<string, unknown> = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "gateway-template-test-"))); roots.push(root);
   for (const name of ["templates", "extensions", "npm", "bin"]) mkdirSync(join(root, name));
   writeFileSync(join(root, "templates/openclaw.template.json"), JSON.stringify({ kind: "shared" }));
-  writeFileSync(join(root, "templates/openclaw.builder.template.json"), JSON.stringify({ kind: "builder", ...builder }));
+  writeFileSync(join(root, "templates/openclaw.isolated.template.json"), JSON.stringify({ kind: "builder", ...user }));
   const cli = join(root, "bin/openclaw"), log = join(root, "calls.jsonl");
   writeFileSync(cli, `#!${process.execPath}
 const fs=require('fs');const path=require('path');const config=JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH,'utf8'));
@@ -55,10 +55,10 @@ describe("Native config template image gate", () => {
       expect(existsSync(call.configPath)).toBe(false);
     }
   });
-  it.each([{ reject: true }, { invalidReport: true }, { warnings: [{ path: "plugins", message: "skill-workshop plugin policy written while Skill Workshop was built in is ignored." }] }])("fails the image when the Builder template is rejected: %o", rejection => {
+  it.each([{ reject: true }, { invalidReport: true }, { warnings: [{ path: "plugins", message: "skill-workshop plugin policy written while Skill Workshop was built in is ignored." }] }])("fails the image when the user template is rejected: %o", rejection => {
     const f = fixture(rejection), result = f.run();
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("openclaw.builder.template.json");
+    expect(result.stderr).toContain("openclaw.isolated.template.json");
     expect(f.calls()).toHaveLength(2);
     for (const call of f.calls()) expect(existsSync(call.configPath)).toBe(false);
   });

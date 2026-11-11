@@ -9,12 +9,12 @@ export type MountLane = "create" | "move";
 
 export interface ReconcileLoopDeps {
   gatewayId: string;
-  /** Mount-observed: slugs whose mount is fully COMPLETE (coach wired AND the .mounted
+  /** Mount-observed: slugs whose mount is fully COMPLETE (agent wired AND the .mounted
    *  marker the last ensure-step writes). Drives toMount: a desired slug absent here is
-   *  (re-)ensured — including a coach-wired-but-incomplete one, closing the post-config
+   *  (re-)ensured — including a default-agent-wired-but-incomplete one, closing the post-config
    *  wedge. */
   getMountObserved: () => string[];
-  /** Evict-observed: the pod's honest on-disk presence (coach-wired dirs). Drives toEvict:
+  /** Evict-observed: the pod's honest on-disk presence (default-agent-wired dirs). Drives toEvict:
    *  present-but-undesired → unmount. Broader than mount-observed so a half-mounted,
    *  unassigned leftover is still drained. */
   getEvictObserved: () => string[];
@@ -41,10 +41,10 @@ export interface ReconcileLoopDeps {
   log: (msg: string) => void;
   /** Cap concurrent mounts/evicts so a cold pod doesn't thundering-herd. */
   maxConcurrent?: number;
-  /** Mount lane: "create" for a builder being provisioned for the first time, "move" for
+  /** Mount lane: "create" for a user being provisioned for the first time, "move" for
    *  one already live elsewhere (a roll's surge remount, a migration). Create-lane mounts
    *  are taken before any queued move — a mover keeps serving from its source pod until
-   *  it lands here; a new builder has nothing until it mounts. Absent → one lane. */
+   *  it lands here; a new user has nothing until it mounts. Absent → one lane. */
   mountLane?: (slug: string) => MountLane;
   /** Best-effort: an ensure threw. For surfacing a bounded gateways/{id}.lastError mirror.
    *  MUST NOT throw — the loop guards it, but it should not rely on that. */
@@ -106,17 +106,17 @@ export function _resetReconcileInFlightForTests(): void {
   lastMountCompletedAt.clear();
 }
 
-export function customerMountPending(slug: string): boolean {
+export function userMountPending(slug: string): boolean {
   return queuedMounts.has(slug) || activeMounts.has(slug);
 }
 
-export async function customerAttachPending(
+export async function userAttachPending(
   slug: string,
   isAssigned: () => Promise<boolean>,
 ): Promise<boolean> {
-  if (customerMountPending(slug)) return true;
+  if (userMountPending(slug)) return true;
   if (reconciledDesired.has(slug) || !(await isAssigned())) return false;
-  return customerMountPending(slug) || !reconciledDesired.has(slug);
+  return userMountPending(slug) || !reconciledDesired.has(slug);
 }
 
 function errMessage(err: unknown): string {

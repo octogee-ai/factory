@@ -28,7 +28,7 @@ describe("LOG_LEVEL verbosity lever", () => {
 
   it("dlog is SILENT at the default (info) — the PROD ratchet", () => {
     delete process.env.LOG_LEVEL;
-    dlog("[reconcile] scanned=2 assigned builders");
+    dlog("[reconcile] scanned=2 assigned users");
     expect(spy).not.toHaveBeenCalled();
   });
 

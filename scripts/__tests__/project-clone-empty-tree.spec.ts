@@ -34,7 +34,7 @@ vi.mock("../lib/gitea-admin-broker-client.js", () => ({
 const { OPENCLAW_DIR, CUSTOMERS_DIR } = await import("../lib/config.js");
 const { cloneProjectRepo, workspaceTreeState } = await import("../lib/git.js");
 
-const SLUG = "bender";
+const SLUG = "walter";
 const PROJECT = "tictactoe";
 const TRACKED = {
   "AGENTS.md": "# AGENTS.md\nProject agent instructions.\n",

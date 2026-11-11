@@ -67,7 +67,7 @@ describe("deriveSharedGatewayPoolConfig", () => {
       root("shared-1"),
       root("shared-0", { desiredStatus: "paused" }),
       root("shared-a", { desiredStatus: "draining" }),
-      root("bender", { gatewayClass: "builder" }),
+      root("walter", { gatewayClass: "builder" }),
       root("shared-3", { desiredStatus: "retired" }),
       root("NOT VALID"),
     ])).toEqual({
@@ -88,7 +88,7 @@ describe("deriveSharedGatewayPoolConfig", () => {
   });
 
   it("is null for an empty pool and carries the autoscaling knobs when given", () => {
-    expect(deriveSharedGatewayPoolConfig([root("bender", { gatewayClass: "builder" })])).toBeNull();
+    expect(deriveSharedGatewayPoolConfig([root("walter", { gatewayClass: "builder" })])).toBeNull();
     expect(deriveSharedGatewayPoolConfig(
       [root("shared-0")],
       { enabled: false, buildersPerGateway: 3 },
@@ -227,7 +227,7 @@ describe("shared gateway selection", () => {
     })).toEqual({ kind: "blocked", reason: "no-accepting-shared-gateway" });
   });
 
-  it("accepts a gateway still mounting an earlier Builder for a new signup, but not as a migration target", () => {
+  it("accepts a gateway still mounting an earlier user for a new signup, but not as a migration target", () => {
     const mounting = candidate("shared-0", { rosterComplete: false, assignmentCount: 1 });
     expect(isAcceptingSharedGateway(config, mounting)).toBe(true);
     expect(isSettledSharedGateway(config, mounting)).toBe(false);
@@ -247,7 +247,7 @@ describe("shared gateway selection", () => {
     })).toEqual({ kind: "blocked", reason: "no-accepting-shared-gateway" });
   });
 
-  it("keeps a Builder on its current gateway while that roster is still mounting, even beside a settled peer", () => {
+  it("keeps a user on its current gateway while that roster is still mounting, even beside a settled peer", () => {
     const mounting = candidate("shared-0", { rosterComplete: false, assignmentCount: 2 });
     const settledPeer = candidate("shared-1", { assignmentCount: 1 });
     expect(selectSharedGateway({

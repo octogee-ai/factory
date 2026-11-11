@@ -24,7 +24,7 @@ function fixture() {
     steps: [{ name: "helm-uninstall", status: "done" }, { name: "revoke-agent-store-credentials", status: "done" }] };
   const documents = { [`glmMigrationTransferTasks/${taskId}`]: old, [`glmOperations/${operationId}`]: op,
     [`glmOperations/${retirement.operationId}`]: retiredOp };
-  const deps = { store: createDocumentFixtureStore(documents), now: () => 1000, workerId: "cowboy", leaseMs: 60000,
+  const deps = { store: createDocumentFixtureStore(documents), now: () => 1000, workerId: "fleet-controller", leaseMs: 60000,
     namespace: "octogee-test", runCommand: vi.fn(), log: vi.fn(), beforeRecovery: vi.fn() };
   const input = { migrationId, slug: "alice", fromGatewayId: source, toGatewayId: target, mode: "keys" as const };
   const cleanup = (gatewayId: string) => readTransferAttemptForCleanup(deps, { migrationId, slug: "alice", gatewayId, mode: "keys" });

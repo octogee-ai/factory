@@ -21,7 +21,7 @@ export interface SurgeOpenClawProcessHandlerDeps {
   gatewayId: string;
   configuredBuilder: (slug: string) => boolean;
   processGate?: SurgeOpenClawProcessHandlerGate & Partial<Pick<SurgeOpenClawProcessSupervisorClient, "status" | "hydrate">>;
-  unreserveConfiguredBuilderTarget?: (request: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
+  unreserveConfiguredIsolatedTarget?: (request: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
   waitForActiveProvisioningDrain?: () => Promise<void>;
   log?: (message: string) => void;
 }
@@ -86,13 +86,13 @@ function parseAndVerify(
   return { migrationId: request.migrationId, slug: request.slug, targetPodUid: request.targetPodUid, ...(request.inspectTarget ? { inspectTarget: true } : {}), ...(request.reserveTarget ? { reserveTarget: true } : {}) };
 }
 
-function requireConfiguredBuilder(
+function requireConfiguredUser(
   request: SurgeOpenClawProcessRequest,
   res: Response,
   deps: SurgeOpenClawProcessHandlerDeps,
 ): (SurgeOpenClawProcessHandlerGate & Partial<Pick<SurgeOpenClawProcessSupervisorClient, "status" | "hydrate">>) | null {
   if (!deps.processGate || !deps.configuredBuilder(request.slug)) {
-    res.status(409).json({ error: "configured Builder OpenClaw process control is unavailable" });
+    res.status(409).json({ error: "configured user OpenClaw process control is unavailable" });
     return null;
   }
   return deps.processGate;
@@ -128,8 +128,8 @@ async function processRequest(
     if (reserveTarget) await deps.waitForActiveProvisioningDrain?.();
     return state;
   }
-  let state = operation === "unreserve" && deps.unreserveConfiguredBuilderTarget
-    ? await deps.unreserveConfiguredBuilderTarget(gateRequest)
+  let state = operation === "unreserve" && deps.unreserveConfiguredIsolatedTarget
+    ? await deps.unreserveConfiguredIsolatedTarget(gateRequest)
     : await gate[operation](gateRequest);
   if (operation === "hold") {
     await deps.waitForActiveProvisioningDrain?.();
@@ -145,7 +145,7 @@ function createHandler(
   return async (req, res) => {
     const request = parseAndVerify(req, res, deps);
     if (!request) return;
-    const gate = requireConfiguredBuilder(request, res, deps);
+    const gate = requireConfiguredUser(request, res, deps);
     if (!gate) return;
     try {
       const state = await processRequest(operation, request, gate, deps);

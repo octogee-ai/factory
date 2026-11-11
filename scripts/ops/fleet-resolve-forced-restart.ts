@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { updateRuntimeRestart, type RuntimeRestartFence } from "@octogee/core/gateway-runtime-restart";
-import { builderRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
+import { isolatedRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
 import { createRestartDriverDeps } from "@octogee/core/gateway-restart-probe";
 import { runNormalFleetMutation, type NormalFleetMutationInput } from "@octogee/core/normal-fleet-mutation";
 import type {
@@ -50,7 +50,7 @@ async function readAuthority(transaction: PlatformStateTransaction, gatewayId: s
   const liveRelease = root?.liveRelease;
   if (!root || !desired || desired.gatewayClass !== "builder" || desired.desiredStatus !== "running" || root.retirementClaim != null ||
     (rootRuntime(root) !== undefined && rootRuntime(root) !== "cluster") || typeof liveRelease !== "number" || !Number.isSafeInteger(liveRelease) || liveRelease < 1 || liveRelease !== root.desiredRelease) {
-    throw new Error("restart resolution requires a converged running Builder gateway");
+    throw new Error("restart resolution requires a converged running isolated gateway");
   }
   const fence = root.runtimeRestartFence as RuntimeRestartFence | undefined;
   if (!fence || fence.kind !== "process" || fence.phase !== "dispatched" || fence.gatewayId !== gatewayId ||
@@ -85,7 +85,7 @@ async function readAuthority(transaction: PlatformStateTransaction, gatewayId: s
 
 async function assertNoCustody(transaction: PlatformStateTransaction, gatewayId: string, ownerUid: string | null): Promise<void> {
   const [holders, operations, tasks] = await Promise.all([
-    transaction.builders.records.listGatewayFenceHolders(gatewayId),
+    transaction.users.records.listGatewayFenceHolders(gatewayId),
     transaction.journal.operations.listByStatus(["pending", "running"]),
     transaction.migrationTasks.listByStatus(["running"]),
   ]);
@@ -93,7 +93,7 @@ async function assertNoCustody(transaction: PlatformStateTransaction, gatewayId:
     const ids = (record ?? {}) as { gatewayId?: unknown; fromGatewayId?: unknown; toGatewayId?: unknown; sourceGatewayId?: unknown; targetGatewayId?: unknown };
     return [ids.gatewayId, ids.fromGatewayId, ids.toGatewayId, ids.sourceGatewayId, ids.targetGatewayId].includes(gatewayId);
   };
-  if (holders.sourceTransferSource.length > 0 || holders.sourceTransferTarget.length > 0 || holders.assigned.some(builderRuntimeMutationFenced) ||
+  if (holders.sourceTransferSource.length > 0 || holders.sourceTransferTarget.length > 0 || holders.assigned.some(isolatedRuntimeMutationFenced) ||
     operations.some(operation => touches(operation.input) || touches(operation.customerMigrationV2) || operation.input?.uid === ownerUid) || tasks.some(touches)) {
     throw new Error("restart resolution is blocked by active gateway custody");
   }

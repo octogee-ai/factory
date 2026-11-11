@@ -84,11 +84,11 @@ describe("Firestore model broker token store", () => {
     expect(deletedPointer.exists).toBe(false);
   });
 
-  it("scopes revocation by pointerKey so per-customer tokens on a shared gateway are independent", async () => {
+  it("scopes revocation by pointerKey so per-user tokens on a shared gateway are independent", async () => {
     const db = getAdminDb();
     const store = createModelBrokerTokenStore(createFirestorePlatformStateStore({ db }));
 
-    const perCustomer = (ownerUid: string, fill: number, now: number) =>
+    const perUser = (ownerUid: string, fill: number, now: number) =>
       store.issueToken({
         gatewayId: "shared-1",
         ownerUid,
@@ -100,8 +100,8 @@ describe("Firestore model broker token store", () => {
         randomBytes: randomBytes(fill),
       });
 
-    const alice = await perCustomer("uid-alice", 10, 1_000);
-    const bob = await perCustomer("uid-bob", 11, 1_000);
+    const alice = await perUser("uid-alice", 10, 1_000);
+    const bob = await perUser("uid-bob", 11, 1_000);
 
     // meter-only: no caps stamped
     await expect(store.lookupToken(alice.token, 1_001)).resolves.toMatchObject({
@@ -119,7 +119,7 @@ describe("Firestore model broker token store", () => {
     });
 
     // reissuing alice revokes only alice's previous token, never bob's
-    const alice2 = await perCustomer("uid-alice", 12, 2_000);
+    const alice2 = await perUser("uid-alice", 12, 2_000);
     await expect(store.lookupToken(alice.token, 2_001)).resolves.toMatchObject({ outcome: "revoked" });
     await expect(store.lookupToken(alice2.token, 2_001)).resolves.toMatchObject({ outcome: "valid" });
     await expect(store.lookupToken(bob.token, 2_001)).resolves.toMatchObject({ outcome: "valid" });

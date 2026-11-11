@@ -1,31 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { customerChannelMembers } from "./channel-members.js";
+import { userChannelMembers } from "./channel-members.js";
 
 const ids = {
-  customerMmUserId: "mm-customer",
-  coachMmUserId: "mm-coach",
+  customerMmUserId: "mm-user",
+  defaultAgentMmUserId: "mm-coach",
   adminMmUserId: "mm-admin",
 };
 
-describe("customerChannelMembers", () => {
-  it("includes customer, coach, and admin for customer-facing channels", () => {
-    expect(customerChannelMembers("coach", ids)).toEqual(["mm-customer", "mm-coach", "mm-admin"]);
-    expect(customerChannelMembers("general", ids)).toEqual(["mm-customer", "mm-coach", "mm-admin"]);
-    expect(customerChannelMembers("project", ids)).toEqual(["mm-customer", "mm-coach", "mm-admin"]);
+describe("userChannelMembers", () => {
+  it("includes user, defaultAgent, and admin for user-facing channels", () => {
+    expect(userChannelMembers("coach", ids)).toEqual(["mm-user", "mm-coach", "mm-admin"]);
+    expect(userChannelMembers("general", ids)).toEqual(["mm-user", "mm-coach", "mm-admin"]);
+    expect(userChannelMembers("project", ids)).toEqual(["mm-user", "mm-coach", "mm-admin"]);
   });
 
-  it("keeps the admin channel scoped to admin plus coach", () => {
-    expect(customerChannelMembers("admin", ids)).toEqual(["mm-admin", "mm-coach"]);
+  it("keeps the admin channel scoped to admin plus agent", () => {
+    expect(userChannelMembers("admin", ids)).toEqual(["mm-admin", "mm-coach"]);
   });
 
   it("filters empty ids and ignores unrelated fields", () => {
     expect(
-      customerChannelMembers("general", {
-        customerMmUserId: "mm-customer",
-        coachMmUserId: "",
+      userChannelMembers("general", {
+        customerMmUserId: "mm-user",
+        defaultAgentMmUserId: "",
         adminMmUserId: null,
         botMmUserId: "mm-bot",
       } as never),
-    ).toEqual(["mm-customer"]);
+    ).toEqual(["mm-user"]);
   });
 });

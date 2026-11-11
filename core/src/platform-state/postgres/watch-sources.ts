@@ -1,5 +1,5 @@
 import type { Stored, WatchAggregate, WatchFilters, WatchRecords, WatchRequest } from "../store.js";
-import { postgresBuildersWatchSource } from "./builder-records.js";
+import { postgresUsersWatchSource } from "./user-records.js";
 import { postgresConfigWatchSource } from "./config.js";
 import { postgresFleetRegistryWatchSource } from "./fleet-registry.js";
 import { postgresAssignmentsWatchSource, postgresGatewaysWatchSource } from "./gateways.js";
@@ -47,7 +47,7 @@ const operationsWatchSource: PostgresWatchSourceFactory<"operations"> = (filter)
 
 const WATCH_SOURCES: { readonly [A in WatchAggregate]: PostgresWatchSourceFactory<A> } = {
   operations: operationsWatchSource,
-  builders: postgresBuildersWatchSource,
+  builders: postgresUsersWatchSource,
   workspaces: postgresWorkspacesWatchSource,
   workspaceMembers: postgresWorkspaceMembersWatchSource,
   workspaceProjects: postgresWorkspaceProjectsWatchSource,

@@ -1,4 +1,4 @@
-import type { DisposableBuilderGatewayAllocation } from "./gateway-mutable-config.js";
+import type { IsolatedGatewayAllocation } from "./gateway-mutable-config.js";
 export interface OnboardingOrchestratorConfig {
     defaultGatewayId: string;
 }
@@ -9,9 +9,9 @@ export interface ContinuousPlacementOwnedGateway {
     desiredStatus: string;
     ready: boolean;
     disposable?: boolean;
-    allocation?: DisposableBuilderGatewayAllocation | null;
+    allocation?: IsolatedGatewayAllocation | null;
 }
-export interface ContinuousBuilderPlacementInput {
+export interface ContinuousUserPlacementInput {
     uid: string;
     userData: Record<string, unknown>;
     currentGatewayId: string | null;
@@ -19,12 +19,12 @@ export interface ContinuousBuilderPlacementInput {
     ownedGateway: ContinuousPlacementOwnedGateway | null;
     now?: Date;
 }
-export interface ContinuousBuilderPlacement {
+export interface ContinuousUserPlacement {
     targetGatewayId: string;
     ownedGatewayId: string | null;
 }
-export declare function resolveLiveActivationTargetGatewayId(input: Pick<ContinuousBuilderPlacementInput, "userData" | "now">): string | null;
-export declare function resolveContinuousBuilderPlacement(input: ContinuousBuilderPlacementInput): ContinuousBuilderPlacement;
+export declare function resolveLiveActivationTargetGatewayId(input: Pick<ContinuousUserPlacementInput, "userData" | "now">): string | null;
+export declare function resolveContinuousUserPlacement(input: ContinuousUserPlacementInput): ContinuousUserPlacement;
 export type OnboardingPlacementEligibility = {
     eligible: true;
     slug: string;

@@ -8,7 +8,7 @@ describe("disposable gateway runtime wiring", () => {
   it("does not start the retired claim or wake provisioners", () => {
     expect(source).not.toContain('from "./trial-gateway-provisioner.js"');
     expect(source).not.toContain("startTrialGatewayProvisioner(");
-    expect(source).not.toContain('from "./builder-activation-sweeper.js"');
-    expect(source).not.toContain("startBuilderActivationLeaseSweeper(");
+    expect(source).not.toContain('from "./user-activation-sweeper.js"');
+    expect(source).not.toContain("startUserActivationLeaseSweeper(");
   });
 });

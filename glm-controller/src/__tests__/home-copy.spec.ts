@@ -81,7 +81,7 @@ it("creates the source snapshot in its zone and restores its clone in the target
   await h.client.advance(input);
   expect(h.request).toHaveBeenCalledWith(expect.objectContaining({ method: "POST", url: `${h.zone}/disks/home-original/createSnapshot` }));
 });
-it("does not delete a helper that would auto-delete customer storage", async () => {
+it("does not delete a helper that would auto-delete user storage", async () => {
   const h = copyFixture();
   h.data[`${h.zone}/instances/home-copy-test`].disks.push({ boot: false, source: "unrelated-home", autoDelete: true });
   await expect(h.client.abort(h.input)).rejects.toThrow(/attachment/);

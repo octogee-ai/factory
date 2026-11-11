@@ -15,7 +15,7 @@ import {
   reassertConvergedContextFilesForSlug,
   reassertUserTimeZoneLine,
 } from "./context-file-convergence.js";
-import { mapUserDocToSnapshot } from "./customer-snapshot-mapping.js";
+import { mapUserDocToSnapshot } from "./user-snapshot-mapping.js";
 
 let tmpRoot: string;
 let prevTemplatesDir: string | undefined;
@@ -61,7 +61,7 @@ function liveSignupOffer(): Record<string, unknown> {
 }
 
 // A Signup Offer whose Personal plan is personal_free: the offer is live and
-// grants a Builder tier, but model access still resolves house_only. The
+// grants a user tier, but model access still resolves house_only. The
 // combination that makes template-tier order load-bearing.
 function houseOnlySignupOffer(): Record<string, unknown> {
   const claimedAt = Date.now() - 24 * 60 * 60 * 1000;
@@ -96,10 +96,10 @@ describe("reassertConvergedContextFiles", () => {
     expect(fs.readFileSync(path.join(dir, "TOOLS.md"), "utf-8")).toBe("# Free TOOLS\n");
   });
 
-  it("overwrites a house-only customer's manually edited AGENTS.md/TOOLS.md (accepted product behavior)", () => {
+  it("overwrites a house-only user's manually edited AGENTS.md/TOOLS.md (accepted product behavior)", () => {
     const dir = customerDir();
-    fs.writeFileSync(path.join(dir, "AGENTS.md"), "customer wrote their own rules\n", "utf-8");
-    fs.writeFileSync(path.join(dir, "TOOLS.md"), "customer's own tools notes\n", "utf-8");
+    fs.writeFileSync(path.join(dir, "AGENTS.md"), "user wrote their own rules\n", "utf-8");
+    fs.writeFileSync(path.join(dir, "TOOLS.md"), "user's own tools notes\n", "utf-8");
 
     const changed = reassertConvergedContextFiles("alice", dir, { tier: "personal_free" });
 
@@ -111,12 +111,12 @@ describe("reassertConvergedContextFiles", () => {
 
   it("never touches SOUL.md, USER.md, or MEMORY.md — only the two owned context files converge", () => {
     const dir = customerDir();
-    fs.writeFileSync(path.join(dir, "SOUL.md"), "customer's personalized soul\n", "utf-8");
+    fs.writeFileSync(path.join(dir, "SOUL.md"), "user's personalized soul\n", "utf-8");
 
     reassertConvergedContextFiles("alice", dir, { tier: "personal_free" });
 
     expect(fs.readFileSync(path.join(dir, "SOUL.md"), "utf-8")).toBe(
-      "customer's personalized soul\n",
+      "user's personalized soul\n",
     );
   });
 
@@ -132,9 +132,9 @@ describe("reassertConvergedContextFiles", () => {
     expect(fs.statSync(path.join(dir, "AGENTS.md")).mtimeMs).toBe(beforeMtime);
   });
 
-  it("converges a paid plan onto the paid template, overwriting the customer's own edits", () => {
+  it("converges a paid plan onto the paid template, overwriting the user's own edits", () => {
     const dir = customerDir();
-    fs.writeFileSync(path.join(dir, "AGENTS.md"), "paid customer's own AGENTS.md\n", "utf-8");
+    fs.writeFileSync(path.join(dir, "AGENTS.md"), "paid user's own AGENTS.md\n", "utf-8");
 
     const changed = reassertConvergedContextFiles("alice", dir, { tier: "pro" }, { slug: "alice" });
 
@@ -145,7 +145,7 @@ describe("reassertConvergedContextFiles", () => {
 
   it("converges a live Signup Offer onto the trial template, not the free one", () => {
     const dir = customerDir();
-    fs.writeFileSync(path.join(dir, "AGENTS.md"), "trial customer's own AGENTS.md\n", "utf-8");
+    fs.writeFileSync(path.join(dir, "AGENTS.md"), "trial user's own AGENTS.md\n", "utf-8");
 
     const changed = reassertConvergedContextFiles("alice", dir, {
       tier: "personal_free",
@@ -156,7 +156,7 @@ describe("reassertConvergedContextFiles", () => {
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Trial AGENTS for alice\n");
   });
 
-  it("follows a house-only customer onto the paid template when they upgrade", () => {
+  it("follows a house-only user onto the paid template when they upgrade", () => {
     const dir = customerDir();
     reassertConvergedContextFiles("alice", dir, { tier: "personal_free" }, { slug: "alice" });
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Free AGENTS for alice\n");
@@ -235,7 +235,7 @@ describe("reassertConvergedContextFiles", () => {
 
   it("converges a snapshot from the direct Firestore mapping carrying a live Signup Offer", () => {
     const dir = customerDir();
-    fs.writeFileSync(path.join(dir, "AGENTS.md"), "trial customer's own AGENTS.md\n", "utf-8");
+    fs.writeFileSync(path.join(dir, "AGENTS.md"), "trial user's own AGENTS.md\n", "utf-8");
     const snapshot = mapUserDocToSnapshot(
       "u1",
       { username: "alice", tier: "personal_free", trialGrant: liveSignupOffer() },
@@ -248,7 +248,7 @@ describe("reassertConvergedContextFiles", () => {
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Trial AGENTS for alice\n");
   });
 
-  it("converges a paying Builder's workspace onto the paid template — the drift that froze a Builder's tool manual", () => {
+  it("converges a paying user's workspace onto the paid template — the drift that froze a user's tool manual", () => {
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "AGENTS.md"), "builder's own AGENTS.md\n", "utf-8");
     fs.writeFileSync(path.join(dir, "TOOLS.md"), "# tool manual from signup day\n", "utf-8");
@@ -322,14 +322,14 @@ describe("reassertConvergedContextFiles under a product-supplied policy", () => 
     expect(fs.existsSync(path.join(dir, "BOOTSTRAP.md"))).toBe(true);
   });
 
-  it.each(["USER.md", "SOUL.md", "MEMORY.md"])("refuses a policy that would remove the customer-owned %s and leaves it intact", (file) => {
+  it.each(["USER.md", "SOUL.md", "MEMORY.md"])("refuses a policy that would remove the user-owned %s and leaves it intact", (file) => {
     seedCustomTemplate("studio-eu");
     installPolicy({ templateKey: "studio-eu", removedFiles: [file] });
     const dir = customerDir();
-    fs.writeFileSync(path.join(dir, file), "customer content\n", "utf-8");
+    fs.writeFileSync(path.join(dir, file), "user content\n", "utf-8");
 
-    expect(() => reassertConvergedContextFiles("alice", dir, {})).toThrow(/customer-owned/);
-    expect(fs.readFileSync(path.join(dir, file), "utf-8")).toBe("customer content\n");
+    expect(() => reassertConvergedContextFiles("alice", dir, {})).toThrow(/user-owned/);
+    expect(fs.readFileSync(path.join(dir, file), "utf-8")).toBe("user content\n");
   });
 
   it("preserves USER.md through convergence and removal", () => {
@@ -350,14 +350,14 @@ describe("reassertConvergedContextFiles under a product-supplied policy", () => 
     installUserEntitlements(staticUserEntitlements);
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "BOOTSTRAP.md"), "kept\n", "utf-8");
-    fs.writeFileSync(path.join(dir, "USER.md"), "customer content\n", "utf-8");
+    fs.writeFileSync(path.join(dir, "USER.md"), "user content\n", "utf-8");
 
     const changed = reassertConvergedContextFiles("alice", dir, { tier: "personal_free" }, { slug: "alice" });
 
     expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Default AGENTS for alice\n");
     expect(fs.existsSync(path.join(dir, "BOOTSTRAP.md"))).toBe(true);
-    expect(fs.readFileSync(path.join(dir, "USER.md"), "utf-8")).toBe("customer content\n");
+    expect(fs.readFileSync(path.join(dir, "USER.md"), "utf-8")).toBe("user content\n");
   });
 
   it("fails loud when the policy names a template that does not exist", () => {
@@ -380,7 +380,7 @@ describe("reassertConvergedContextFilesForSlug", () => {
     ).toThrow(/username/);
   });
 
-  it("converges via the customers-dir-derived path when username is present", () => {
+  it("converges via the users-dir-derived path when username is present", () => {
     const dir = customerDir();
 
     const changed = reassertConvergedContextFilesForSlug(
@@ -396,7 +396,7 @@ describe("reassertConvergedContextFilesForSlug", () => {
 describe("reassertUserTimeZoneLine", () => {
   const seeded = "# USER.md — About You\n\n## The Basics\n- **Name:** Alice\n- **Timezone:** unknown\n\n## Notes\nCoach notes stay.\n";
 
-  it("rewrites only the time zone line of the customer-owned USER.md", () => {
+  it("rewrites only the time zone line of the user-owned USER.md", () => {
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "USER.md"), seeded, "utf-8");
     expect(reassertUserTimeZoneLine(dir, "America/Chicago")).toBe(true);
@@ -404,7 +404,7 @@ describe("reassertUserTimeZoneLine", () => {
     expect(reassertUserTimeZoneLine(dir, "America/Chicago")).toBe(false);
   });
 
-  it("adds the line under the Name line when the Builder's file predates it, keeping the trial template's spelling", () => {
+  it("adds the line under the Name line when the user's file predates it, keeping the trial template's spelling", () => {
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "USER.md"), "- **Name:** Alice\n- **Pronouns:** she\n", "utf-8");
     expect(reassertUserTimeZoneLine(dir, "Europe/Berlin")).toBe(true);
@@ -414,7 +414,7 @@ describe("reassertUserTimeZoneLine", () => {
     expect(fs.readFileSync(path.join(dir, "USER.md"), "utf-8")).toBe("- **Time zone:** Europe/Berlin\n");
   });
 
-  it("leaves a file without an anchor, a missing file, and a Builder without a zone alone", () => {
+  it("leaves a file without an anchor, a missing file, and a user without a zone alone", () => {
     const dir = customerDir();
     expect(reassertUserTimeZoneLine(dir, "Europe/Berlin")).toBe(false);
     fs.writeFileSync(path.join(dir, "USER.md"), "Free-form notes only.\n", "utf-8");

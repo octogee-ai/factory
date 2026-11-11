@@ -32,7 +32,7 @@ const h = vi.hoisted(() => {
     agentIdentities: { put: write() },
   };
   const store = {
-    builders: { records },
+    users: { records },
     workspaces,
     transaction: (_options: unknown, body: (transaction: unknown) => Promise<unknown>) => body(store),
   };
@@ -46,7 +46,7 @@ import { buildProvisioningContext, markProvisioningComplete } from "./provisionS
 const SERVER_NOW = { serverNow: true };
 const ctx = buildProvisioningContext("u1", { username: "acme", tier: "pro" });
 const mmUpdate = {
-  "mattermost.userId": "mm-builder",
+  "mattermost.userId": "mm-user",
   "mattermost.username": "acme",
   "mattermost.teamId": "mm-team",
   "mattermost.channelId": "mm-coach-dm",
@@ -66,20 +66,20 @@ describe("markProvisioningComplete store routing", () => {
     vi.clearAllMocks();
   });
 
-  it("records the Builder's platform provisioning state through the store", async () => {
+  it("records the user's platform provisioning state through the store", async () => {
     await markProvisioningComplete(ctx, mmUpdate, ["octogee-acme-coach", "octogee-second"]);
 
     expect(h.records.patch).toHaveBeenCalledWith("u1", {
       slug: "acme",
       workspaceId: "acme",
-      mattermostUserId: "mm-builder",
+      mattermostUserId: "mm-user",
       openclaw: { version: "v1", customerDir: ctx.customerDir, provisionedAt: SERVER_NOW },
     });
     expect(h.records.addAgents).toHaveBeenCalledWith("u1", ["octogee-acme-coach", "octogee-second"]);
     expect(h.records.setActivatedAgents).toHaveBeenCalledWith("u1", ["coach"]);
   });
 
-  it("marks the Builder's workspace entry complete", async () => {
+  it("marks the user's workspace entry complete", async () => {
     const update = vi.fn(async (_data: Record<string, unknown>): Promise<void> => undefined);
     h.workspaceEntries.push({ ref: { update } });
 
@@ -123,7 +123,7 @@ describe("markProvisioningComplete store routing", () => {
       uid: "u1",
       role: "owner",
       joinedAt: SERVER_NOW,
-      mattermostUserId: "mm-builder",
+      mattermostUserId: "mm-user",
     });
     expect(firestoreWrite("workspaces/acme/members/u1")).toBeUndefined();
   });
@@ -196,7 +196,7 @@ describe("markProvisioningComplete store routing", () => {
     expect(h.workspaces.members.put).not.toHaveBeenCalled();
   });
 
-  it("records the coach's identity through the store, leaving Firestore its presentation", async () => {
+  it("records the agent's identity through the store, leaving Firestore its presentation", async () => {
     await markProvisioningComplete(ctx, mmUpdate, []);
 
     expect(h.workspaces.agentIdentities.put).toHaveBeenCalledWith({
@@ -214,7 +214,7 @@ describe("markProvisioningComplete store routing", () => {
     expect(presentation).not.toHaveProperty("mattermost");
   });
 
-  it("writes no coach identity when the update has no coach user", async () => {
+  it("writes no agent identity when the update has no agent user", async () => {
     await markProvisioningComplete(ctx, { "mattermost.generalChannelId": "mm-general" }, []);
 
     expect(h.workspaces.agentIdentities.put).not.toHaveBeenCalled();

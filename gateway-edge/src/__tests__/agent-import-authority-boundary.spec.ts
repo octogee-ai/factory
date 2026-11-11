@@ -21,7 +21,7 @@ describe("agent import sidecar authority boundary", () => {
     expect(index).not.toMatch(/agentImportsLocality\.use\(requireAuth\)/);
     expect(`${runtime}\n${store}`).not.toMatch(/from ["']\.\/db\.js["']/);
     expect(`${runtime}\n${store}`).not.toMatch(/from ["']\.\/firestoreReads\.js["']/);
-    expect(`${runtime}\n${store}`).not.toMatch(/from ["']\.\/coach-identity\.js["']/);
+    expect(`${runtime}\n${store}`).not.toMatch(/from ["']\.\/default-agent-identity\.js["']/);
     expect(`${runtime}\n${store}`).not.toMatch(/storage\.bucket\(|db\.doc\(/);
     expect(`${runtime}\n${store}`).toContain("internalFetch");
     expect(`${runtime}\n${git}\n${importSource}`).not.toContain("spawnSync");

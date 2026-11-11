@@ -106,7 +106,7 @@ export function workspaceGeneralChannelName(username: string): string {
   return `${username}-general`;
 }
 
-export function workspaceCoachChannelName(username: string): string {
+export function workspaceDefaultAgentChannelName(username: string): string {
   return `${username}-coach`;
 }
 
@@ -133,7 +133,7 @@ export function isMmSystemChannel(name: string): boolean {
 export const AGENT_ID_PREFIX = 'octogee-' as const;
 export const AGENT_ID_SUFFIX = '-coach' as const;
 
-export function workspaceCoachAgentId(username: string): string {
+export function workspaceDefaultAgentId(username: string): string {
   return `${AGENT_ID_PREFIX}${username}${AGENT_ID_SUFFIX}`;
 }
 
@@ -141,7 +141,7 @@ export function projectAgentId(username: string, project: string): string {
   return `${AGENT_ID_PREFIX}${username}-${PROJECT_DISCRIMINATOR}-${project}${AGENT_ID_SUFFIX}`;
 }
 
-export function workspaceCoachMmUsername(username: string): string {
+export function workspaceDefaultAgentMmUsername(username: string): string {
   return `${username}${AGENT_ID_SUFFIX}`;
 }
 

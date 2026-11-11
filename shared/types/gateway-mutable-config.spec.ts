@@ -37,7 +37,7 @@ describe("gateway mutable config", () => {
     }))).toBe(true);
   });
 
-  it("rejects the retired operator customer gateway class", () => {
+  it("rejects the retired operator user gateway class", () => {
     expect(isGatewayMutableConfig({
       ...validConfig(),
       gatewayClass: "operator",
@@ -124,7 +124,7 @@ describe("gateway mutable config", () => {
     })).toBe(false);
   });
 
-  it("rejects network authority embedded in mutable Builder access", () => {
+  it("rejects network authority embedded in mutable user access", () => {
     expect(isGatewayMutableConfig({
       ...validConfig(),
       builderAccess: {
@@ -170,7 +170,7 @@ describe("gateway mutable config", () => {
     expect(isGatewayMutableConfig(validConfig({ ownerUid: null, builderSlug: "owner" }))).toBe(false);
   });
 
-  it("rejects an unowned Builder", () => {
+  it("rejects an unowned user", () => {
     const unowned = { ownerUid: null, builderSlug: null, allocation: null };
     expect(isGatewayMutableConfig(validConfig(unowned))).toBe(false);
     expect(isGatewayMutableConfig(validConfig({ ...unowned, sizingTier: "s" }))).toBe(false);
@@ -210,14 +210,14 @@ describe("gateway mutable config", () => {
   it("allows only the addressed gateway's generated service account", () => {
     expect(
       isGatewayMutableConfigForGateway(
-        validConfig({ serviceAccountName: "octogee-gw-bender" }),
-        "bender",
+        validConfig({ serviceAccountName: "octogee-gw-walter" }),
+        "walter",
       ),
     ).toBe(true);
     expect(
       isGatewayMutableConfigForGateway(
         validConfig({ serviceAccountName: "octogee-gw-other" }),
-        "bender",
+        "walter",
       ),
     ).toBe(false);
   });
@@ -232,13 +232,13 @@ describe("gateway mutable config", () => {
       "llm-broker",
     ]) {
       expect(
-        isGatewayMutableConfigForGateway(validConfig({ serviceAccountName }), "bender"),
+        isGatewayMutableConfigForGateway(validConfig({ serviceAccountName }), "walter"),
       ).toBe(false);
     }
     expect(
       isGatewayMutableConfigForGateway(
         validConfig({ serviceAccountName: "custom-tenant-ksa" }),
-        "bender",
+        "walter",
       ),
     ).toBe(true);
   });

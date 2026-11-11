@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { customerSshKeyPath, gitExec as defaultGitExec } from "./git.js";
+import { userSshKeyPath, gitExec as defaultGitExec } from "./git.js";
 import {
   assertPlatformInvariants,
   reconcilePlatformInvariants,
@@ -287,7 +287,7 @@ export function convergeSystemConfigToRemoteCommit(
     return { outcome: "unavailable", errorCode: "invalid-expected-commit" };
   }
   const execGit = options.gitExec ?? defaultGitExec;
-  const keyPath = options.keyPath ?? customerSshKeyPath(options.slug);
+  const keyPath = options.keyPath ?? userSshKeyPath(options.slug);
   const fetched = fetchAdoptableRemoteCommit(options, execGit, keyPath);
   if (fetched.outcome === "unavailable") return fetched;
   const { adoptedCommit, replayedTargetCommit } = fetched;
@@ -348,7 +348,7 @@ export function recoverSystemConfigHead(
 ): SystemConfigRecoveryResult {
   const env = options.env ?? process.env;
   const execGit = options.gitExec ?? defaultGitExec;
-  const keyPath = options.keyPath ?? customerSshKeyPath(options.slug);
+  const keyPath = options.keyPath ?? userSshKeyPath(options.slug);
   const rejectedCommit = execGit(options.repoDir, ["rev-parse", "HEAD"], keyPath);
   if (!rejectedCommit) {
     return { outcome: "unavailable", rejectedCommit: "unknown", errorCode: "head-unavailable" };

@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { DocumentData } from 'firebase-admin/firestore';
 import type { Operation } from '@octogee/shared/types/glm';
-import type { BuilderRecord, GatewayRoot, GatewayRuntimeRestartFenceValue, OperationRecord, PlatformStateStore, PlatformStateTransaction, Stored } from '@octogee/core/platform-state';
+import type { PlatformUserRecord, GatewayRoot, GatewayRuntimeRestartFenceValue, OperationRecord, PlatformStateStore, PlatformStateTransaction, Stored } from '@octogee/core/platform-state';
 import type { OperationContext } from '../operation-router.js';
 import type { KubectlSubprocess } from '../fleet-ingress.js';
 import { queuedSharedMigrationOwnsSourceInStore } from './queued-shared-migration.js';
@@ -66,8 +66,8 @@ function receiptMatches(receipt: RecordValue, fence: RecordValue, input: Recover
     receipt.operationId === input.operationId && receipt.gatewayId === gatewayId && Number.isSafeInteger(receipt.assignmentEpoch) &&
     typeof receipt.attemptId === 'string' && Boolean(receipt.attemptId.trim());
 }
-function restoreOwnerReady(builder: Stored<BuilderRecord> | undefined): boolean {
-  return builder?.openclaw.status === 'complete' && builder.fences.sourceTransferFence === undefined;
+function restoreOwnerReady(user: Stored<PlatformUserRecord> | undefined): boolean {
+  return user?.openclaw.status === 'complete' && user.fences.sourceTransferFence === undefined;
 }
 async function assertRestoreAssignment(tx: PlatformStateTransaction, gatewayId: string, receipt: RecordValue): Promise<void> {
   const assignment = await tx.gateways.assignments.get(gatewayId, receipt.uid);
@@ -80,22 +80,22 @@ async function authority(tx: PlatformStateTransaction, op: Operation, input: Rec
   const gatewayId = op.input.gatewayId as string;
   const [root, operations, holders, active] = await Promise.all([
     tx.gateways.roots.get(gatewayId), tx.journal.operations.getMany([op.id, input.operationId]),
-    tx.builders.records.listGatewayFenceHolders(gatewayId), tx.journal.operations.listByStatus(['running', 'pending']),
+    tx.users.records.listGatewayFenceHolders(gatewayId), tx.journal.operations.listByStatus(['running', 'pending']),
   ]);
   const returned: RecordValue = { ...operations.get(input.operationId) };
   const receipt = object(returned.restoreAttempt);
-  const builder = holders.assigned.find(row => row.uid === receipt.uid);
+  const user = holders.assigned.find(row => row.uid === receipt.uid);
   const exact = [
     holders.sourceTransferSource.length === 0, holders.sourceTransferTarget.length === 0,
     claimMatches(operations.get(op.id), op), returnedAwaitsRestore(returned),
-    receiptMatches(receipt, object(builder?.fences.restoreFence), input, gatewayId),
-    restoreMatches(receipt, returned, gatewayId), restoreOwnerReady(builder),
+    receiptMatches(receipt, object(user?.fences.restoreFence), input, gatewayId),
+    restoreMatches(receipt, returned, gatewayId), restoreOwnerReady(user),
   ].every(Boolean);
   if (!liveShared(root) || !exact) throw new Error('paired post-cutover restore authority is unavailable');
   if (!reauthorizationMatches(input, receipt, returned.status)) throw new Error('restore reauthorization requires an unchanged intent and a pending native return');
   await assertRestoreAssignment(tx, gatewayId, receipt);
   for (const row of holders.assigned) {
-    if (row.uid !== receipt.uid && (row.fences.restoreFence !== undefined || row.fences.sourceTransferFence !== undefined)) throw new Error('another customer runtime outcome is unresolved');
+    if (row.uid !== receipt.uid && (row.fences.restoreFence !== undefined || row.fences.sourceTransferFence !== undefined)) throw new Error('another user runtime outcome is unresolved');
   }
   await assertNoCompetingMigrations(tx, active, { operationId: input.operationId, gatewayId });
   return root;
@@ -259,7 +259,7 @@ async function reauthorizeRestore(tx: PlatformStateTransaction, op: Operation, i
   if (!input.reauthorize) return;
   if (now < input.reauthorize.claimStartedAt) throw new Error('restore reauthorization clock precedes the retained intent');
   const intent: RecordValue = { ...input.reauthorize, claimStartedAt: now, dispatchClaimStartedAt: now, dispatchedAt: now, reauthorizedBy: op.id };
-  await tx.builders.records.setFence(intent.uid, 'restoreFence', intent);
+  await tx.users.records.setFence(intent.uid, 'restoreFence', intent);
   await tx.journal.operations.patch(input.operationId, { restoreAttempt: intent });
 }
 export async function recoverSharedRestoreRuntime(deps: Deps, op: Operation, ctx: OperationContext): Promise<void> {

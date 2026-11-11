@@ -17,7 +17,7 @@ function agentDirForSlug(slug, agentsDir = AGENTS_DIR) {
 // file, so it's the only entry in this list.
 const BYOT_FILES = ["models.json"];
 const BYOT_MARKER = ".byot-managed";
-export const FREE_TIER_COACH_TOOLS = {
+export const FREE_TIER_DEFAULT_AGENT_TOOLS = {
     profile: "minimal",
     alsoAllow: [
         "read",
@@ -89,14 +89,14 @@ export const STANDARD_CODEX_APP_SERVER = {
     sandbox: "workspace-write",
     approvalPolicy: "never",
 };
-export const BUILDER_CODEX_APP_SERVER = {
+export const ISOLATED_CODEX_APP_SERVER = {
     sandbox: "danger-full-access",
     approvalPolicy: "never",
 };
 // The always-available platform house model: the operator's free-tier dial
 // (snapshot freeTierModelRef), compiled default DEFAULT_FREE_TIER_MODEL_REF.
 // A failed/exhausted BYOK provider degrades here rather than leaving the
-// coach credential-less, and house-only plans pin the coach here so config,
+// agent credential-less, and house-only plans pin the agent here so config,
 // status, and broker routing agree. Refs are revalidated against the catalog
 // at this trust boundary.
 function houseModelRefFrom(ref) {
@@ -126,7 +126,7 @@ function runtimeModelsForProvider(provider) {
         return claudeCliRuntimeConfig().modelsDef;
     return null;
 }
-export function byosCoachConfigPatch(input) {
+export function byosDefaultAgentConfigPatch(input) {
     if (!input)
         return null;
     if ("source" in input) {
@@ -138,7 +138,7 @@ export function byosCoachConfigPatch(input) {
                     {
                         id: agentIdForSlug(input.slug),
                         model: { primary: input.model, fallbacks: [] },
-                        tools: FREE_TIER_COACH_TOOLS,
+                        tools: FREE_TIER_DEFAULT_AGENT_TOOLS,
                     },
                 ],
             },
@@ -171,23 +171,23 @@ function isAgentRecord(a) {
     return a !== null && typeof a === "object" && !Array.isArray(a);
 }
 // The strip may only remove what the platform itself wrote: an exact
-// fingerprint of FREE_TIER_COACH_TOOLS. A customer-authored or legacy
+// fingerprint of FREE_TIER_DEFAULT_AGENT_TOOLS. A user-authored or legacy
 // profile/alsoAllow never matches and survives the catalog convergence.
 function isPlatformFreeTierToolsBlock(existing) {
     const alsoAllow = existing.alsoAllow;
-    return (existing.profile === FREE_TIER_COACH_TOOLS.profile &&
+    return (existing.profile === FREE_TIER_DEFAULT_AGENT_TOOLS.profile &&
         Array.isArray(alsoAllow) &&
-        alsoAllow.length === FREE_TIER_COACH_TOOLS.alsoAllow.length &&
-        FREE_TIER_COACH_TOOLS.alsoAllow.every((tool, i) => alsoAllow[i] === tool));
+        alsoAllow.length === FREE_TIER_DEFAULT_AGENT_TOOLS.alsoAllow.length &&
+        FREE_TIER_DEFAULT_AGENT_TOOLS.alsoAllow.every((tool, i) => alsoAllow[i] === tool));
 }
-// Tools convergence for the coach entry, applied alongside the model update:
-// a FreeTierCoachToolsBlock merges over the entry's existing tools (fs guards
+// Tools convergence for the agent entry, applied alongside the model update:
+// a FreeTierDefaultAgentToolsBlock merges over the entry's existing tools (fs guards
 // and any other keys preserved — the free plan is platform-tuned, so the block
 // wins over prior profile/alsoAllow values); null strips ONLY the platform's
-// own free-tier block (fingerprint-gated) so an upgraded customer returns to
+// own free-tier block (fingerprint-gated) so an upgraded user returns to
 // the inherited gateway-wide surface without losing fs.workspaceOnly or any
-// customer-authored tools keys.
-export function convergedCoachToolsValue(existing, tools) {
+// user-authored tools keys.
+export function convergedDefaultAgentToolsValue(existing, tools) {
     const base = isAgentRecord(existing)
         ? { ...existing }
         : {};
@@ -202,7 +202,7 @@ export function convergedCoachToolsValue(existing, tools) {
     }
     return Object.keys(base).length > 0 ? base : undefined;
 }
-// The coach-model config.patch must ship the FULL agents.list — the coach's
+// The default-agent-model config.patch must ship the FULL agents.list — the agent's
 // model updated, every sibling agent preserved verbatim — not a single-entry
 // list. openclaw's id-keyed array merge (config/merge-patch.ts) upserts by id
 // ONLY when every base entry carries a string id; a single id-less agent flips
@@ -213,7 +213,7 @@ export function convergedCoachToolsValue(existing, tools) {
 //
 // model:null leaves the entry's model untouched (plan-only tools reassert);
 // tools:undefined leaves its tools untouched (pure model update).
-export function coachFullAgentList(current, agentId, model, tools) {
+export function defaultAgentFullAgentList(current, agentId, model, tools) {
     const list = current?.agents?.list;
     const agents = Array.isArray(list) ? list : [];
     return agents.map((a) => {
@@ -223,7 +223,7 @@ export function coachFullAgentList(current, agentId, model, tools) {
         if (model !== null)
             next.model = model;
         if (tools !== undefined) {
-            const converged = convergedCoachToolsValue(next.tools, tools);
+            const converged = convergedDefaultAgentToolsValue(next.tools, tools);
             if (converged === undefined) {
                 delete next.tools;
             }
@@ -238,27 +238,27 @@ function keyedAgentEntries(current) {
     const entries = current?.agents?.entries;
     return isAgentRecord(entries) ? entries : null;
 }
-export function coachAgentPatch(current, agentId, model, tools) {
+export function defaultAgentPatch(current, agentId, model, tools) {
     const entries = keyedAgentEntries(current);
     if (!entries)
-        return { list: coachFullAgentList(current, agentId, model, tools) };
+        return { list: defaultAgentFullAgentList(current, agentId, model, tools) };
     const currentEntry = entries[agentId];
     if (!isAgentRecord(currentEntry))
         return { entries: {} };
-    const [next] = coachFullAgentList({ agents: { list: [{ ...currentEntry, id: agentId }] } }, agentId, model, tools);
+    const [next] = defaultAgentFullAgentList({ agents: { list: [{ ...currentEntry, id: agentId }] } }, agentId, model, tools);
     if (!isAgentRecord(next))
         throw new Error(`coach patch: invalid agent entry for ${agentId}`);
     const { id: _id, ...entry } = next;
     return { entries: { [agentId]: entry } };
 }
-export function coachAgentExists(current, agentId) {
+export function defaultAgentExists(current, agentId) {
     const entries = keyedAgentEntries(current);
     if (entries)
         return isAgentRecord(entries[agentId]);
     const list = current?.agents?.list;
     return Array.isArray(list) && list.some((agent) => isAgentRecord(agent) && agent.id === agentId);
 }
-export function coachAgentPatchReplacePaths(current, agentId) {
+export function defaultAgentPatchReplacePaths(current, agentId) {
     return keyedAgentEntries(current)
         ? [
             `agents.entries.${agentId}.model.fallbacks`,
@@ -274,33 +274,33 @@ export function deriveDesiredByotState(userData) {
     const status = userData.provisioning?.openclaw?.status;
     const slug = userData.username;
     if (!slug || status !== "complete") {
-        return { enabled: false, input: null, coachModelInput: null };
+        return { enabled: false, input: null, defaultAgentModelInput: null };
     }
     if (!userData.byotActive) {
         return {
             enabled: false,
             input: null,
-            coachModelInput: freeTierCoachModelInput(slug, userData),
+            defaultAgentModelInput: freeTierDefaultAgentModelInput(slug, userData),
         };
     }
     const input = byotInputForSlug(slug, userData.systemConfig?.byot);
     return {
         enabled: true,
         input,
-        coachModelInput: { ...input, houseModelRef: houseModelRefFrom(userData.freeTierModelRef) },
+        defaultAgentModelInput: { ...input, houseModelRef: houseModelRefFrom(userData.freeTierModelRef) },
     };
 }
-// The model a non-byot customer would run: the house pin for house-only
+// The model a non-byot user would run: the house pin for house-only
 // plans, else null — the config default stands and the PWA picker's per-agent
 // overrides land afterwards. Used by deriveDesiredByotState and the
 // shared-gateway byosub gate.
-export function platformCoachModelInputForUser(slug, userData) {
-    return freeTierCoachModelInput(slug, userData);
+export function platformDefaultAgentModelInputForUser(slug, userData) {
+    return freeTierDefaultAgentModelInput(slug, userData);
 }
-// House-only (Personal Free with no live Signup Offer) pins the coach to the
+// House-only (Personal Free with no live Signup Offer) pins the agent to the
 // house model. The broker would degrade anyway; pinning keeps the config
 // honest so /status and the agent's self-report agree with the wire.
-function freeTierCoachModelInput(slug, userData) {
+function freeTierDefaultAgentModelInput(slug, userData) {
     const plan = userEntitlements().plan(userData);
     return plan.modelAccess === "house_only"
         ? { slug, model: houseModelRefFrom(userData.freeTierModelRef), source: "free-tier" }
@@ -331,7 +331,7 @@ async function removeManagedByotState(slug, dir, markerPath, filePath, preserveA
         changed = removeIfExists(filePath(f)) || changed;
     // On a shared (per-agent broker-token) pod the auth-profile store holds the
     // anthropic:default broker token (+ any byosub OAuth) that the materializer owns;
-    // tearing down a customer's local BYOT files must NOT delete it.
+    // tearing down a user's local BYOT files must NOT delete it.
     if (!preserveAuthProfileStore && await readAuthProfileStore(dir) !== null) {
         await deleteAuthProfileStore(dir);
         changed = true;

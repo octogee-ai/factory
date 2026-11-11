@@ -23,13 +23,13 @@ async function startUntilFirebase() {
   await expect(main()).rejects.toThrow("bootstrap boundary");
 }
 
-it("initializes bare platform entitlements before starting Cowboy", async () => {
+it("initializes bare platform entitlements before starting the fleet controller", async () => {
   Reflect.deleteProperty(globalThis, Symbol.for("octogee.userEntitlements"));
   await startUntilFirebase();
   expect(userEntitlements()).toBe(staticUserEntitlements);
 });
 
-it("keeps the product resolver when starting Cowboy", async () => {
+it("keeps the product resolver when starting the fleet controller", async () => {
   const product = { ...staticUserEntitlements, sizingKey: () => "product-size" };
   installUserEntitlements(product);
   await startUntilFirebase();

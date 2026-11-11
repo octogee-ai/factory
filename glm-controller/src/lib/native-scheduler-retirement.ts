@@ -1,5 +1,5 @@
 import type { DocumentData } from "firebase-admin/firestore";
-import type { BuilderRecord, FleetRegistryRecord, GatewayRoot, OperationRecord, PlatformStateStore } from "@octogee/core/platform-state";
+import type { PlatformUserRecord, FleetRegistryRecord, GatewayRoot, OperationRecord, PlatformStateStore } from "@octogee/core/platform-state";
 import { migrationCancellationDeferred } from "@octogee/core/fleet-state";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { GatewayVmClient } from "./compute-vm.js";
@@ -38,21 +38,21 @@ function handoffMatches(handoff: DocumentData, input: ReturnInput): boolean {
     handoff.fromGatewayId === input.fromGatewayId && handoff.toGatewayId === input.toGatewayId;
 }
 
-function retainedIdentity(builder: BuilderRecord | null, runtime: FleetRegistryRecord | null) {
-  const home = builder?.home.homeDisk, vm = runtime?.vm;
+function retainedIdentity(user: PlatformUserRecord | null, runtime: FleetRegistryRecord | null) {
+  const home = user?.home.homeDisk, vm = runtime?.vm;
   return { instanceName: vm?.instanceName, instanceId: vm?.instanceId, zone: vm?.zone, homeDiskId: home?.id, homeDiskSource: home?.source };
 }
 
 export function nativeSchedulerRetirementForReturn(
-  input: ReturnInput, builder: BuilderRecord | null, runtime: FleetRegistryRecord | null, operation: OperationRecord | null,
+  input: ReturnInput, user: PlatformUserRecord | null, runtime: FleetRegistryRecord | null, operation: OperationRecord | null,
 ): Retirement | null {
   const handoff = operation?.schedulerHandoff;
   if (!handoff) return null;
   if (!handoffMatches(handoff, input)) throw new Error("native scheduler retirement handoff authority changed");
   const record = readNativeSchedulerRetirement({ uid: input.uid, slug: input.slug, returnOperationId: input.operationId, migrationId: handoff.migrationId,
     sourceGatewayId: input.fromGatewayId, sharedGatewayId: input.toGatewayId,
-    ...retainedIdentity(builder, runtime) })!;
-  const existing = readNativeSchedulerRetirement(builder?.fences.pendingNativeSchedulerRetirement);
+    ...retainedIdentity(user, runtime) })!;
+  const existing = readNativeSchedulerRetirement(user?.fences.pendingNativeSchedulerRetirement);
   if (existing && !KEYS.every(key => existing[key] === record[key])) throw new Error("another native scheduler retirement remains pending");
   return existing ?? record;
 }
@@ -82,16 +82,16 @@ export function isCompletedNativeReturn(op: OperationRecord | undefined, pending
     });
 }
 
-function ownerMatches(builder: BuilderRecord, input: NativeSchedulerRetirementInput, pending: Retirement): boolean {
-  const home = builder.home.homeDisk;
-  return sameRetirement(readNativeSchedulerRetirement(builder.fences.pendingNativeSchedulerRetirement), pending) &&
-    pending.uid === input.uid && pending.slug === input.slug && builder.gateway?.gatewayId === input.gatewayId &&
+function ownerMatches(user: PlatformUserRecord, input: NativeSchedulerRetirementInput, pending: Retirement): boolean {
+  const home = user.home.homeDisk;
+  return sameRetirement(readNativeSchedulerRetirement(user.fences.pendingNativeSchedulerRetirement), pending) &&
+    pending.uid === input.uid && pending.slug === input.slug && user.gateway?.gatewayId === input.gatewayId &&
     home?.id === pending.homeDiskId && home.source === pending.homeDiskSource;
 }
 
-type ComputerAuthority = { instanceId: string; image?: { name: string; id: string; project: string; operationId: string } };
+type VmAuthority = { instanceId: string; image?: { name: string; id: string; project: string; operationId: string } };
 
-function admittedReplacementImage(image: DocumentData | undefined, pending: Retirement, targetGatewayId: string): ComputerAuthority["image"] | null {
+function admittedReplacementImage(image: DocumentData | undefined, pending: Retirement, targetGatewayId: string): VmAuthority["image"] | null {
   if (image?.homeAdmission !== true || image.homeId !== pending.homeDiskId) return null;
   if (["name", "id", "project", "operationId"].some(key => typeof image[key] !== "string" || !image[key])) return null;
   const source = image.sourceComputer;
@@ -100,42 +100,42 @@ function admittedReplacementImage(image: DocumentData | undefined, pending: Reti
   return { name: image.name, id: image.id, project: image.project, operationId: image.operationId };
 }
 
-function computerAuthority(runtime: FleetRegistryRecord | null, builder: BuilderRecord | null, pending: Retirement, targetGatewayId: string): ComputerAuthority | null {
+function vmAuthority(runtime: FleetRegistryRecord | null, user: PlatformUserRecord | null, pending: Retirement, targetGatewayId: string): VmAuthority | null {
   const vm = runtime?.vm;
   if (vm?.instanceName !== pending.instanceName || vm.zone !== pending.zone || typeof vm.instanceId !== "string") return null;
   if (vm.instanceId === pending.instanceId) return { instanceId: vm.instanceId };
-  const image = admittedReplacementImage(builder?.home.homeDisk?.bootImage as DocumentData | undefined, pending, targetGatewayId);
+  const image = admittedReplacementImage(user?.home.homeDisk?.bootImage as DocumentData | undefined, pending, targetGatewayId);
   return image ? { instanceId: vm.instanceId, image } : null;
 }
 
-function targetMatches(root: GatewayRoot | null, runtime: FleetRegistryRecord | null, input: NativeSchedulerRetirementInput, authority: ComputerAuthority | null): boolean {
+function targetMatches(root: GatewayRoot | null, runtime: FleetRegistryRecord | null, input: NativeSchedulerRetirementInput, authority: VmAuthority | null): boolean {
   return root?.gatewayClass === "builder" && root.ownerUid === input.uid && root.builderSlug === input.slug && root.desiredStatus === "running" &&
     runtime?.runtime === "gce-vm" && authority !== null;
 }
 
-async function authorize(deps: Deps, input: NativeSchedulerRetirementInput, pending: Retirement, acknowledge = false, expected?: ComputerAuthority): Promise<ComputerAuthority> {
+async function authorize(deps: Deps, input: NativeSchedulerRetirementInput, pending: Retirement, acknowledge = false, expected?: VmAuthority): Promise<VmAuthority> {
   return deps.store.transaction({ label: "native-scheduler-retirement.authorize" }, async tx => {
-    const [builder, root, runtime, operations] = await Promise.all([
-      tx.builders.records.get(input.uid), tx.gateways.roots.get(input.gatewayId), tx.fleetRegistry.get(input.gatewayId),
+    const [user, root, runtime, operations] = await Promise.all([
+      tx.users.records.get(input.uid), tx.gateways.roots.get(input.gatewayId), tx.fleetRegistry.get(input.gatewayId),
       tx.journal.operations.getMany([...new Set([input.operationId, pending.returnOperationId])]),
     ]);
-    const authority = computerAuthority(runtime, builder, pending, input.gatewayId);
-    const exact = builder !== null && ownerMatches(builder, input, pending) &&
+    const authority = vmAuthority(runtime, user, pending, input.gatewayId);
+    const exact = user !== null && ownerMatches(user, input, pending) &&
       targetMatches(root, runtime, input, authority) &&
       (!expected || JSON.stringify(authority) === JSON.stringify(expected)) &&
       activeAttempt(operations.get(input.operationId), input) && isCompletedNativeReturn(operations.get(pending.returnOperationId), pending);
     if (!exact || !authority) throw new Error("native scheduler retirement authority changed");
     if (acknowledge) {
-      await tx.builders.records.setFence(input.uid, "pendingNativeSchedulerRetirement", { clear: true }, builder.fences.pendingNativeSchedulerRetirement);
+      await tx.users.records.setFence(input.uid, "pendingNativeSchedulerRetirement", { clear: true }, user.fences.pendingNativeSchedulerRetirement);
     }
     return authority;
   });
 }
 
-async function verifyComputer(deps: Deps, input: NativeSchedulerRetirementInput, pending: Retirement, authority: ComputerAuthority): Promise<void> {
+async function verifyVm(deps: Deps, input: NativeSchedulerRetirementInput, pending: Retirement, authority: VmAuthority): Promise<void> {
   const vm = await deps.vm.describe(pending.instanceName, pending.zone);
   if (vm?.instanceId !== authority.instanceId || vm.gatewayId !== input.gatewayId || vm.status !== "RUNNING") {
-    throw new Error("native scheduler retirement computer identity changed");
+    throw new Error("native scheduler retirement VM identity changed");
   }
   if (authority.image) {
     const home = await deps.vm.retainHome(pending.instanceName, pending.zone, input.uid);
@@ -149,19 +149,19 @@ async function verifyComputer(deps: Deps, input: NativeSchedulerRetirementInput,
 export async function retireNativeSchedulerBeforeStage(
   deps: Deps, input: NativeSchedulerRetirementInput, scheduler: MigrationClient["scheduler"],
 ): Promise<void> {
-  const builder = await deps.store.builders.records.get(input.uid);
-  const pending = readNativeSchedulerRetirement(builder?.fences.pendingNativeSchedulerRetirement);
+  const user = await deps.store.users.records.get(input.uid);
+  const pending = readNativeSchedulerRetirement(user?.fences.pendingNativeSchedulerRetirement);
   if (!pending) return;
   const target = await deps.store.fleetRegistry.get(input.gatewayId);
   if (target?.runtime !== "gce-vm") return;
   const authority = await authorize(deps, input, pending);
-  await verifyComputer(deps, input, pending, authority);
+  await verifyVm(deps, input, pending, authority);
   await authorize(deps, input, pending, false, authority);
   const result = await scheduler({ migrationId: pending.migrationId, gatewayId: input.gatewayId, slug: input.slug, phase: "retire" });
   if (result.operationId !== pending.migrationId || result.phase !== "retire" || result.drained !== true) {
     throw new Error("native scheduler retirement acknowledgement changed");
   }
-  if (authority.image) await verifyComputer(deps, input, pending, authority);
+  if (authority.image) await verifyVm(deps, input, pending, authority);
   await authorize(deps, input, pending, true, authority);
-  deps.log(`[migrate-customer] ${input.slug}: retired exported native schedules ${pending.migrationId} on retained computer ${authority.instanceId}`);
+  deps.log(`[migrate-customer] ${input.slug}: retired exported native schedules ${pending.migrationId} on retained VM ${authority.instanceId}`);
 }

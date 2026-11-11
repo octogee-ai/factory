@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  parseReconcileCoachNamesArgs,
-} from "../ops/reconcile-coach-names.js";
+  parseReconcileDefaultAgentNamesArgs,
+} from "../ops/reconcile-default-agent-names.js";
 import {
   resolveRepairMissingProjectChannelsConfig,
 } from "../ops/repair-missing-project-channels.js";
@@ -35,7 +35,7 @@ describe("repair-missing-project-channels config", () => {
 
 describe("reconcile-coach-names args", () => {
   it("parses list/apply/clear modes and slug filters", () => {
-    expect(parseReconcileCoachNamesArgs([
+    expect(parseReconcileDefaultAgentNamesArgs([
       "--list",
       "--apply",
       "--clear-onboarding-name",

@@ -114,9 +114,9 @@ describe("serialFleetOperationsConflict", () => {
     )).toBe(true);
   });
 
-  it("allows independent cluster and Builder VM rollouts together", () => {
+  it("allows independent cluster and gateway VM rollouts together", () => {
     const cluster = { id: "shared-roll", kind: "rollout", rolloutLane: "cluster" as const, input: { gatewayId: "shared-0" } };
-    const vm = { id: "builder-roll", kind: "rollout", rolloutLane: "builder-vm" as const, input: { gatewayId: "sep092" } };
+    const vm = { id: "user-roll", kind: "rollout", rolloutLane: "builder-vm" as const, input: { gatewayId: "sep092" } };
     expect(serialFleetOperationsConflict(cluster, vm)).toBe(false);
     expect(serialFleetOperationsConflict(vm, cluster)).toBe(false);
   });

@@ -1,8 +1,8 @@
 import {
   GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME,
-  resolveBuilderGatewayAccess,
-  BUILDER_GATEWAY_LOCKED_SERVICE_ACCOUNT,
-  builderGatewayServiceAccountName,
+  resolveIsolatedGatewayAccess,
+  ISOLATED_GATEWAY_LOCKED_SERVICE_ACCOUNT,
+  isolatedGatewayServiceAccountName,
   resolveGatewayClass,
   resolveGatewayImageProfile,
   type GatewayDesiredState,
@@ -68,7 +68,7 @@ function resolveGatewayHelmKnobs(d: GatewayDesiredState): Pick<
   const gatewayClass = resolveGatewayClass(d);
   let serviceAccountName = d.serviceAccountName;
   let serviceAccount = withoutGatewayWorkloadIdentity(d.serviceAccount);
-  const generatedGatewayServiceAccountName = builderGatewayServiceAccountName(d.gatewayId);
+  const generatedGatewayServiceAccountName = isolatedGatewayServiceAccountName(d.gatewayId);
   if (
     (!serviceAccountName || serviceAccountName === GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME)
   ) {
@@ -79,7 +79,7 @@ function resolveGatewayHelmKnobs(d: GatewayDesiredState): Pick<
     serviceAccountName === generatedGatewayServiceAccountName &&
     !serviceAccount
   ) {
-    serviceAccount = BUILDER_GATEWAY_LOCKED_SERVICE_ACCOUNT;
+    serviceAccount = ISOLATED_GATEWAY_LOCKED_SERVICE_ACCOUNT;
   }
   if (
     gatewayClass !== "builder" &&
@@ -90,7 +90,7 @@ function resolveGatewayHelmKnobs(d: GatewayDesiredState): Pick<
   }
   const builderAccess =
     gatewayClass === "builder"
-      ? resolveBuilderGatewayAccess(d.ownerUid, d.builderAccess)
+      ? resolveIsolatedGatewayAccess(d.ownerUid, d.builderAccess)
       : d.builderAccess;
   return {
     serviceAccountName,
@@ -237,8 +237,8 @@ function instanceEqual(
 }
 
 // True when a change rolls the pod's image (tag or repository) — the only kind
-// of in-place reconcile that drops a live customer's session. The reconciler
-// refuses to apply one of these on a gateway with mounted customers; such a roll
+// of in-place reconcile that drops a live user's session. The reconciler
+// refuses to apply one of these on a gateway with mounted users; such a roll
 // must go through the blue/green orchestrator instead. Config-only and
 // replicas-only updates are NOT image rolls and still apply in place.
 export function isImageRoll(
@@ -278,7 +278,7 @@ function effectiveServiceAccountName(v: HelmInstanceValue): string | undefined {
   if (!v.gatewayId) return v.serviceAccountName;
   const requested = v.serviceAccountName ?? "";
   if (requested === "" || requested === GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME) {
-    return builderGatewayServiceAccountName(v.gatewayId);
+    return isolatedGatewayServiceAccountName(v.gatewayId);
   }
   return requested;
 }
@@ -288,7 +288,7 @@ function effectiveServiceAccount(v: HelmInstanceValue): HelmInstanceValue["servi
   if (
     resolveGatewayClass(v) === "shared" &&
     v.gatewayId &&
-    effectiveServiceAccountName(v) === builderGatewayServiceAccountName(v.gatewayId)
+    effectiveServiceAccountName(v) === isolatedGatewayServiceAccountName(v.gatewayId)
   ) {
     return { create: true };
   }

@@ -287,14 +287,14 @@ def d_overview():
         stat("Active restarts (24h)", [f'sum(increase(kube_pod_container_status_restarts_total{{namespace="{NS}"}}[24h]) and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1)) or vector(0)'],
              thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}, {"color": "red", "value": 10}],
              drilldown=panel_link("Open restart offenders", "/d/octogee-container-health/workload-health")),
-        row("Can customers use the platform?"),
+        row("Can users use the platform?"),
         stat("Core services down", [f'4 - (count(kube_deployment_status_replicas_available{{namespace="{NS}",deployment=~"octogee-api|octogee-gitea|mattermost|glm-controller"}} >= 1) or vector(0))'],
              thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}],
              drilldown=panel_link("Open workload health", "/d/octogee-container-health/workload-health")),
         stat("Ready gateways", [f'count(kube_deployment_status_replicas_available{{namespace="{NS}",deployment=~"octogee-gateway-.*"}} >= 1) or vector(0)'],
              thresholds=[{"color": "red", "value": None}, {"color": "yellow", "value": 2}, {"color": "green", "value": 3}],
              drilldown=panel_link("Open fleet health", "/d/octogee-fleet/fleet-health")),
-        stat("Cowboy reconcile age", [f'(time()-max(glm_reconcile_last_success_timestamp_seconds{{namespace="{NS}"}})) or vector(0)'],
+        stat("Fleet controller reconcile age", [f'(time()-max(glm_reconcile_last_success_timestamp_seconds{{namespace="{NS}"}})) or vector(0)'],
              unit="s", thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 300}, {"color": "red", "value": 900}],
              drilldown=panel_link("Open fleet health", "/d/octogee-fleet/fleet-health")),
         stat("Activity projection connected", [f'min(octogee_activity_projection_boot_status{{namespace="{NS}",status="connected"}}) or vector(0)'],
@@ -335,14 +335,14 @@ def d_services():
         row("Node.js runtime"),
         ts("Heap used", [(f'nodejs_heap_size_used_bytes{{namespace="{NS}",job=~"{j}"}}', "{{job}} {{pod}}")], unit="bytes"),
         ts("Event-loop lag p99", [(f'nodejs_eventloop_lag_p99_seconds{{namespace="{NS}",job=~"{j}"}}', "{{job}} {{pod}}")], unit="s"),
-        row("Cowboy (glm-controller) — fleet reconcile"),
+        row("Fleet controller (glm-controller) — fleet reconcile"),
         ts("Reconcile rate by result", [(f'sum(rate(glm_reconcile_total{{namespace="{NS}"}}[5m])) by (result)', "{{result}}")], unit="ops", legend=True),
         stat("Reconcile last-success age", [f'time()-max(glm_reconcile_last_success_timestamp_seconds{{namespace="{NS}"}})'],
              unit="s", w=6, h=4, thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 300}, {"color": "red", "value": 900}]),
         stat("Reconcile failures (1h)", [f'sum(increase(glm_reconcile_total{{namespace="{NS}",result="fail"}}[1h])) or vector(0)'],
              w=6, h=4, thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
     ]
-    return dashboard("octogee-services", "Platform — API / Edge / Cowboy", p,
+    return dashboard("octogee-services", "Platform — API / Edge / Fleet controller", p,
                      [tmpl_datasource(), tmpl_namespace()], tags=["octogee", "platform"])
 
 
@@ -458,7 +458,7 @@ def d_agent():
     g = '$gateway'
     p = [
         row("Agent activity"),
-        stat("Customers on fleet", [f'sum(octogee_customers_total{{namespace="{NS}",job=~"{g}"}}) or vector(0)']),
+        stat("Users on fleet", [f'sum(octogee_customers_total{{namespace="{NS}",job=~"{g}"}}) or vector(0)']),
         stat("Throttle level (max)", [f'max(octogee_throttle_level{{namespace="{NS}",job=~"{g}"}}) or vector(0)'],
              thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 1}, {"color": "red", "value": 2}]),
         stat("Agent turns/min", [f'sum(rate(octogee_agent_end_total{{namespace="{NS}",job=~"{g}"}}[5m]))*60 or vector(0)']),
@@ -467,7 +467,7 @@ def d_agent():
         ts("Agent turns/min by gateway", [(f'sum(rate(octogee_agent_end_total{{namespace="{NS}",job=~"{g}"}}[5m])) by (job) * 60 or vector(0)', "{{job}}")], legend=True),
         ts("Classify rate by gateway", [(f'sum(rate(octogee_classify_total{{namespace="{NS}",job=~"{g}"}}[5m])) by (job) * 60 or vector(0)', "{{job}}")], legend=True),
         ts("Classify duration p95", [(f'histogram_quantile(0.95, sum(rate(octogee_classify_duration_seconds_bucket{{namespace="{NS}",job=~"{g}"}}[5m])) by (le,job)) or vector(0)', "{{job}}")], unit="s", legend=True),
-        ts("Customers per gateway", [(f'octogee_customers_total{{namespace="{NS}",job=~"{g}"}} or vector(0)', "{{job}}")], legend=True),
+        ts("Users per gateway", [(f'octogee_customers_total{{namespace="{NS}",job=~"{g}"}} or vector(0)', "{{job}}")], legend=True),
     ]
     return dashboard("octogee-gateway", "Gateways — Agent Observability", p,
                      [tmpl_datasource(), tmpl_namespace(), tmpl_gateway()], tags=["octogee", "gateway"])
@@ -537,17 +537,17 @@ def d_fleet():
     p = [
         text("Current fleet only", "This board uses the current Kubernetes desired and Ready state. "
              "Deleted rollout pods do not appear. A temporary surge is visible as **Ready > Planned**, rather than as a second gateway.", h=3),
-        row("Fleet reconcile (Cowboy / glm-controller)"),
+        row("Fleet reconcile (fleet controller / glm-controller)"),
         stat("Reconcile last-success age", [f'time()-max(glm_reconcile_last_success_timestamp_seconds{{namespace="{NS}"}})'],
              unit="s", thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 300}, {"color": "red", "value": 900}]),
         stat("Reconciles (1h)", [f'sum(increase(glm_reconcile_total{{namespace="{NS}"}}[1h])) or vector(0)']),
         stat("Reconcile errors (1h)", [f'sum(increase(glm_reconcile_total{{namespace="{NS}",result="fail"}}[1h])) or vector(0)'],
              thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
         stat("Ready gateways", [f'count(kube_deployment_status_replicas_available{{namespace="{NS}",deployment=~"octogee-gateway-.*"}} >= 1) or vector(0)']),
-        row("Shared Barn capacity"),
-        stat("Barn assignments at last ceiling", [f'max(glm_shared_gateway_assignment_count{{namespace="{NS}"}}) or vector(0)']),
-        stat("Barn hot members at last ceiling", [f'max(glm_shared_gateway_hot_members{{namespace="{NS}"}}) or vector(0)']),
-        stat("Barn ceiling observations (1h)", [f'sum(increase(glm_shared_gateway_max_capacity_total{{namespace="{NS}"}}[1h])) or vector(0)'],
+        row("Shared gateway capacity"),
+        stat("Shared gateway assignments at last ceiling", [f'max(glm_shared_gateway_assignment_count{{namespace="{NS}"}}) or vector(0)']),
+        stat("Shared gateway hot members at last ceiling", [f'max(glm_shared_gateway_hot_members{{namespace="{NS}"}}) or vector(0)']),
+        stat("Shared gateway ceiling observations (1h)", [f'sum(increase(glm_shared_gateway_max_capacity_total{{namespace="{NS}"}}[1h])) or vector(0)'],
              thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
         row("Planned vs actual gateway deployments"),
         table("Gateway deployments — planned vs ready", [
@@ -567,7 +567,7 @@ def d_fleet():
         table("Current gateway scrape health", [(f'up{{namespace="{NS}",job=~"octogee-gateway.*"}} and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1)', "{{pod}}")]),
         ts("Current gateway-edge scrape health", [(f'up{{namespace="{NS}",job=~"gateway-edge.*"}} and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1)', "{{pod}}")], legend=True),
     ]
-    return dashboard("octogee-fleet", "Gateways — Fleet / Cowboy", p,
+    return dashboard("octogee-fleet", "Gateways — Fleet / Fleet controller", p,
                      [tmpl_datasource(), tmpl_namespace()], tags=["octogee", "gateway"])
 
 
@@ -748,7 +748,7 @@ def d_spot_disruptions():
         "https://console.cloud.google.com/logs/query?project=octogee&query="
         "log_id%28%22events%22%29%0AjsonPayload.reason%3D%22NodeShutdown%22"
     )
-    # Interleaves the audit preemption records with Cowboy's pod-loss records so
+    # Interleaves the audit preemption records with the fleet controller's pod-loss records so
     # the operator can match a preempted instance_id to the gateway that was on it.
     correlation_query = (
         "https://console.cloud.google.com/logs/query?project=octogee&query="
@@ -762,8 +762,8 @@ def d_spot_disruptions():
             "confirmed by the Cloud Audit Log metric below** (`compute.instances.preempted`). Kubernetes events "
             "are correlated observations; `FailedScheduling: preemption` is scheduler fit logic, not Spot proof.\n\n"
             "The controller emits `octogee.disruption.v1` JSON records with node UID, provider/instance ID, "
-            "capacity class, taints, gateway identity, assignment roster, and active Cowboy operations.\n\n"
-            "The audit metric knows **which instance** was preempted but not which gateway was on it. Cowboy "
+            "capacity class, taints, gateway identity, assignment roster, and active fleet controller operations.\n\n"
+            "The audit metric knows **which instance** was preempted but not which gateway was on it. The fleet controller "
             "records each gateway pod's instance id while the node still exists and emits "
             "`octogee.gateway-pod-replacement.v1` when that pod disappears with no desired-state change, so "
             "`instance_id` joins the two. Pod `RESTARTS` stays 0 through a preemption and Kubernetes events "
@@ -806,9 +806,9 @@ def d_spot_disruptions():
         ts("Controller observations by cause", [(f'sum(rate(glm_disruption_observations_total{{namespace="{NS}"}}[15m])) by (cause)', "{{cause}}")], unit="ops", legend=True),
         ts("Node conditions", [("sum(kube_node_status_condition{condition=\"Ready\",status=\"false\"})", "NotReady"), ("sum(kube_node_status_condition{condition=\"Ready\",status=\"true\"})", "Ready")], legend=True),
         table("Node taints observed by kube-state-metrics", [("kube_node_spec_taint", "{{node}} {{key}}={{value}}:{{effect}}")], w=24, h=7),
-        row("Replacement pressure and Cowboy context"),
+        row("Replacement pressure and fleet controller context"),
         ts("Pending gateway pods", [(f'sum(kube_pod_status_phase{{namespace="{NS}",pod=~"octogee-gateway-.*",phase="Pending"}}==1)', "Pending")], legend=True),
-        ts("Cowboy reconcile failures", [(f'sum(rate(glm_reconcile_total{{namespace="{NS}",result="fail"}}[15m]))', "fail/s")], legend=True),
+        ts("Fleet controller reconcile failures", [(f'sum(rate(glm_reconcile_total{{namespace="{NS}",result="fail"}}[15m]))', "fail/s")], legend=True),
         text("Action guide", (
             "- `compute.instances.preempted` + a node/pod event: **confirmed Spot preemption**.\n"
             "- Same `instance_id` in `octogee_gateway_pod_replacements` and `octogee_spot_preemptions`: "
@@ -819,7 +819,7 @@ def d_spot_disruptions():
             "- `NodeShutdown` without the audit event yet: **unconfirmed shutdown**, wait for the audit record.\n"
             "- `Killing` / `FailedPreStopHook`: termination behavior, not root cause.\n"
             "- `FailedScheduling` with `preemption: No preemption victims found`: scheduler capacity/fit, not Spot.\n"
-            "- Shared Barn members are intentionally on-demand; Spot evidence should name only disposable builder gateways."
+            "- Shared gateway members are intentionally on-demand; Spot evidence should name only disposable isolated gateways."
         ), h=7),
     ]
     return dashboard("octogee-spot-disruptions", "GKE — Spot & Node Disruptions", p,

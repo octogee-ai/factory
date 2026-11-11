@@ -1,5 +1,5 @@
 import { type SystemConfigSyncLease } from "./system-config-mutation-lease.js";
-export declare function projectMutationLeaseGitDir(workspaceDir: string, customersRoot: string): string | null;
+export declare function projectMutationLeaseGitDir(workspaceDir: string, usersRoot: string): string | null;
 export interface WorkspaceMutationLeaseOptions {
     workspaceDir: string;
     gitDir?: string;

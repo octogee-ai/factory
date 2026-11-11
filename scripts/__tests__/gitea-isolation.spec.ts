@@ -5,7 +5,7 @@ import * as os from "os";
 import { execSync, spawnSync } from "child_process";
 import { removePersistedRepoSshCommand } from "../lib/git.js";
 
-function customerSshKeyPath(keysDir: string, slug: string): string {
+function userSshKeyPath(keysDir: string, slug: string): string {
   return path.join(keysDir, slug, "id_ed25519");
 }
 
@@ -13,7 +13,7 @@ function giteaUsername(slug: string): string {
   return `ws-${slug}`;
 }
 
-function generateCustomerSshKey(keysDir: string, slug: string): string {
+function generateUserSshKey(keysDir: string, slug: string): string {
   const keyDir = path.join(keysDir, slug);
   const keyPath = path.join(keyDir, "id_ed25519");
   const pubPath = keyPath + ".pub";
@@ -36,18 +36,18 @@ function generateCustomerSshKey(keysDir: string, slug: string): string {
 describe("SSH key generation", () => {
   let openclawDir: string;
   let keysDir: string;
-  let customersDir: string;
+  let usersDir: string;
 
   beforeEach(() => {
     openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "gitea-test-"));
     keysDir = path.join(openclawDir, "customer-keys");
-    customersDir = path.join(openclawDir, "customers");
+    usersDir = path.join(openclawDir, "customers");
     fs.mkdirSync(keysDir, { recursive: true });
-    fs.mkdirSync(customersDir, { recursive: true });
+    fs.mkdirSync(usersDir, { recursive: true });
   });
 
   it("generates an ed25519 keypair in the customer-keys directory", () => {
-    const pubKey = generateCustomerSshKey(keysDir, "acme");
+    const pubKey = generateUserSshKey(keysDir, "acme");
 
     expect(pubKey).toMatch(/^ssh-ed25519 /);
     expect(pubKey).toContain("octogee-acme@gateway");
@@ -58,7 +58,7 @@ describe("SSH key generation", () => {
   });
 
   it("sets correct file permissions", () => {
-    generateCustomerSshKey(keysDir, "acme");
+    generateUserSshKey(keysDir, "acme");
 
     const keyDir = path.join(keysDir, "acme");
     const keyPath = path.join(keyDir, "id_ed25519");
@@ -74,35 +74,35 @@ describe("SSH key generation", () => {
   });
 
   it("is idempotent — returns existing key without regenerating", () => {
-    const key1 = generateCustomerSshKey(keysDir, "acme");
-    const key2 = generateCustomerSshKey(keysDir, "acme");
+    const key1 = generateUserSshKey(keysDir, "acme");
+    const key2 = generateUserSshKey(keysDir, "acme");
     expect(key1).toBe(key2);
   });
 
-  it("generates unique keys per customer", () => {
-    const keyA = generateCustomerSshKey(keysDir, "acme");
-    const keyB = generateCustomerSshKey(keysDir, "bob");
+  it("generates unique keys per user", () => {
+    const keyA = generateUserSshKey(keysDir, "acme");
+    const keyB = generateUserSshKey(keysDir, "bob");
     expect(keyA).not.toBe(keyB);
   });
 
   it("private key is not readable by other users (0600)", () => {
-    generateCustomerSshKey(keysDir, "acme");
+    generateUserSshKey(keysDir, "acme");
     const keyPath = path.join(keysDir, "acme", "id_ed25519");
     const stat = fs.statSync(keyPath);
 
     expect(stat.mode & 0o077).toBe(0);
   });
 
-  it("does NOT pre-create the customer workspace dir (regression: TEST 2026-04-29 buildera clone loop)", () => {
+  it("does NOT pre-create the user workspace dir (regression: TEST 2026-04-29 buildera clone loop)", () => {
 
-generateCustomerSshKey(keysDir, "acme");
-    expect(fs.existsSync(path.join(customersDir, "acme"))).toBe(false);
+generateUserSshKey(keysDir, "acme");
+    expect(fs.existsSync(path.join(usersDir, "acme"))).toBe(false);
   });
 });
 
-describe("customer SSH key path", () => {
+describe("user SSH key path", () => {
   it("derives correct path from slug (sibling of customers/, not nested inside)", () => {
-    const p = customerSshKeyPath("/home/node/.openclaw/customer-keys", "acme-co");
+    const p = userSshKeyPath("/home/node/.openclaw/customer-keys", "acme-co");
     expect(p).toBe("/home/node/.openclaw/customer-keys/acme-co/id_ed25519");
   });
 });
@@ -119,7 +119,7 @@ describe("Gitea username", () => {
 });
 
 describe("workspace .gitignore excludes .ssh/", () => {
-  it("initWorkspaceRepo gitignore template contains .ssh/ but keeps context files customer-owned", () => {
+  it("initWorkspaceRepo gitignore template contains .ssh/ but keeps context files user-owned", () => {
 
     const gitTs = fs.readFileSync(
       path.resolve(__dirname, "..", "lib", "git.ts"),
@@ -151,9 +151,9 @@ describe("setRepoSshCommand", () => {
     return `ssh -i ${keyPath} -F /home/node/.ssh/config -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR`;
   }
 
-  it("removes a persisted core.sshCommand when the customer key exists", async () => {
-    generateCustomerSshKey(keysDir, "acme");
-    const keyPath = customerSshKeyPath(keysDir, "acme");
+  it("removes a persisted core.sshCommand when the user key exists", async () => {
+    generateUserSshKey(keysDir, "acme");
+    const keyPath = userSshKeyPath(keysDir, "acme");
 
 if (fs.existsSync(keyPath)) {
       execSync(`git config core.sshCommand "${expectedSshCommand(keyPath)}"`, {
@@ -170,8 +170,8 @@ if (fs.existsSync(keyPath)) {
   });
 
   it("is idempotent and removes every persisted SSH command value", () => {
-    generateCustomerSshKey(keysDir, "acme");
-    const keyPath = customerSshKeyPath(keysDir, "acme");
+    generateUserSshKey(keysDir, "acme");
+    const keyPath = userSshKeyPath(keysDir, "acme");
     const cmd = `git config core.sshCommand "${expectedSshCommand(keyPath)}"`;
     execSync(cmd, { cwd: repoDir });
     execSync(`git config --add core.sshCommand "${expectedSshCommand(keyPath)}"`, { cwd: repoDir });
@@ -199,15 +199,15 @@ const callSiteCount = (gitTs.match(/setRepoSshCommand\(/g) ?? []).length - 1;
 
 describe("pushInitialSkeleton", () => {
   let workDir: string;
-  let coachDir: string;
+  let defaultAgentDir: string;
   let originDir: string;
   let originalGitSsh: string | undefined;
 
   beforeEach(() => {
     workDir = fs.mkdtempSync(path.join(os.tmpdir(), "init-skeleton-"));
-    coachDir = path.join(workDir, "coach");
+    defaultAgentDir = path.join(workDir, "coach");
     originDir = path.join(workDir, "origin.git");
-    fs.mkdirSync(coachDir);
+    fs.mkdirSync(defaultAgentDir);
     fs.mkdirSync(originDir);
     originalGitSsh = process.env.GIT_SSH;
     const testSsh = path.join(workDir, "test-ssh");
@@ -215,10 +215,10 @@ describe("pushInitialSkeleton", () => {
     fs.chmodSync(testSsh, 0o755);
     process.env.GIT_SSH = testSsh;
     execSync("git init -q --bare -b main", { cwd: originDir, stdio: "pipe" });
-    execSync("git init -q -b main", { cwd: coachDir, stdio: "pipe" });
-    execSync(`git config user.email "test@octogee.com"`, { cwd: coachDir });
-    execSync(`git config user.name "Test"`, { cwd: coachDir });
-    execSync(`git remote add origin "ssh://git@localhost${originDir}"`, { cwd: coachDir });
+    execSync("git init -q -b main", { cwd: defaultAgentDir, stdio: "pipe" });
+    execSync(`git config user.email "test@octogee.com"`, { cwd: defaultAgentDir });
+    execSync(`git config user.name "Test"`, { cwd: defaultAgentDir });
+    execSync(`git remote add origin "ssh://git@localhost${originDir}"`, { cwd: defaultAgentDir });
   });
   afterEach(() => {
     if (originalGitSsh === undefined) delete process.env.GIT_SSH;
@@ -239,19 +239,19 @@ describe("pushInitialSkeleton", () => {
   }
 
   it("commits and pushes when working tree is dirty", async () => {
-    fs.writeFileSync(path.join(coachDir, "SOUL.md"), "# Soul\n");
+    fs.writeFileSync(path.join(defaultAgentDir, "SOUL.md"), "# Soul\n");
     const { pushInitialSkeleton } = await import("../lib/git.js");
-    pushInitialSkeleton(coachDir, "test-slug");
+    pushInitialSkeleton(defaultAgentDir, "test-slug");
     expect(originHas("refs/heads/main")).toBe(true);
     expect(originLog()).toContain("initial workspace skeleton");
   });
 
   it("pushes existing local history when working tree is clean (recovery path)", async () => {
-    fs.writeFileSync(path.join(coachDir, "SOUL.md"), "# Soul\n");
-    execSync("git add -A && git commit -q -m 'pre-existing'", { cwd: coachDir });
+    fs.writeFileSync(path.join(defaultAgentDir, "SOUL.md"), "# Soul\n");
+    execSync("git add -A && git commit -q -m 'pre-existing'", { cwd: defaultAgentDir });
     expect(originHas("refs/heads/main")).toBe(false);
     const { pushInitialSkeleton } = await import("../lib/git.js");
-    pushInitialSkeleton(coachDir, "test-slug");
+    pushInitialSkeleton(defaultAgentDir, "test-slug");
     expect(originHas("refs/heads/main")).toBe(true);
     expect(originLog()).toContain("pre-existing");
     expect(originLog()).not.toContain("initial workspace skeleton");

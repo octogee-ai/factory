@@ -41,8 +41,8 @@ export function findUnsafeGitMetadataEntry(gitDir: string, metadataRoot = gitDir
   return findUnsafeEntry(gitDir, (entry) => GIT_INDIRECTIONS.has(entry));
 }
 
-export function findUnsafeCustomerGitMetadataEntry(customerMetadataDir: string): string | null {
-  return findUnsafeEntry(customerMetadataDir, (entry, directory) => {
+export function findUnsafeUserGitMetadataEntry(userMetadataDir: string): string | null {
+  return findUnsafeEntry(userMetadataDir, (entry, directory) => {
     const parts = entry.split("/");
     if (parts[0] === "workspace.git") {
       return parts.length === 1 ? !directory : GIT_INDIRECTIONS.has(parts.slice(1).join("/"));

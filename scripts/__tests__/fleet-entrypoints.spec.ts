@@ -3,16 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { FleetBrokerAssignmentRosterEntry, FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
-import type { DesiredCustomer } from "../lib/snapshot-fingerprint.js";
-import { customerEnsureRetryReady } from "../lib/fleet-provisioner.js";
+import type { DesiredUser } from "../lib/snapshot-fingerprint.js";
+import { userEnsureRetryReady } from "../lib/fleet-provisioner.js";
 import { reconcileFleet, _resetReconcileInFlightForTests } from "../lib/reconcile-loop.js";
 import { CONFIG_RELOAD_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
 import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
-import { builderAccountFromData } from "@octogee/core/builder-account";
+import { userAccountFromData } from "@octogee/core/user-account";
 import { createDocumentFixtureStore, createJournalFixtureStore, fixtureDocumentsAt } from "@octogee/core/testing/journal-store";
 import {
-  createAssignedCustomerReader,
-  readCustomerEnsureAdmission,
+  createAssignedUserReader,
+  readUserEnsureAdmission,
   createFleetFlushSystemConfigSync,
   createFleetControllerRequestedFlush,
   createFleetSystemConfigVerifyFlush,
@@ -24,11 +24,11 @@ import {
   SYSTEM_CONFIG_MUTATION_LEASE_RETRY_DELAYS_MS,
 } from "../entrypoints/fleet-controller.js";
 import {
-  ASSIGN_CUSTOMER_GATEWAY_USAGE,
+  ASSIGN_USER_GATEWAY_USAGE,
   isBulkAssignmentCandidate,
-  parseAssignCustomerGatewayArgs,
+  parseAssignUserGatewayArgs,
   readGatewayProfile,
-} from "../ops/assign-customer-gateway.js";
+} from "../ops/assign-user-gateway.js";
 import {
   buildFleetMigrateOperationInput,
   resolveFleetSourceTransferMode,
@@ -46,7 +46,7 @@ import {
   resolveExplicitFleetOperatorUid,
   resolveFleetOperatorUid,
 } from "../ops/fleet.js";
-import { withBuilderClaim } from "./helpers/builder-claim.js";
+import { withUserClaim } from "./helpers/user-claim.js";
 
 describe("fleet-controller entrypoint config", () => {
   it("reports the complete gateway image tag instead of its ambiguous build SHA", () => {
@@ -58,7 +58,7 @@ describe("fleet-controller entrypoint config", () => {
     });
   });
 
-  it("uses a snapshot fingerprint roster for Builder gateways so post-mount project creation reconverges", async () => {
+  it("uses a snapshot fingerprint roster for isolated gateways so post-mount project creation reconverges", async () => {
     const snapshot = {
       uid: "u1",
       slug: "alice",
@@ -68,33 +68,33 @@ describe("fleet-controller entrypoint config", () => {
       ],
       projectAgents: [],
       coachToken: "pat",
-      coachMmUserId: "coach",
-      customerMmUserId: "customer",
+      defaultAgentMmUserId: "coach",
+      customerMmUserId: "user",
       tier: "paid",
     } as never;
     const assignedUsers = vi.fn(async () => [snapshot]);
     const seed = vi.fn();
 
     const assignmentRoster = vi.fn(async () => [{ uid: "u1", state: "serving" as const, epoch: 1 }]);
-    const read = createAssignedCustomerReader({ assignedUsers, assignmentRoster }, seed);
-    const customers = await read();
+    const read = createAssignedUserReader({ assignedUsers, assignmentRoster }, seed);
+    const users = await read();
 
-    expect([...customers.keys()]).toEqual(["alice"]);
-    expect(customers.get("alice")?.fingerprint).toMatch(/^[0-9a-f]{16}$/);
-    expect(customers.get("alice")?.lane).toBe("create");
-    expect(customers.get("alice")?.ensureAllowed).toBe(true);
+    expect([...users.keys()]).toEqual(["alice"]);
+    expect(users.get("alice")?.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+    expect(users.get("alice")?.lane).toBe("create");
+    expect(users.get("alice")?.ensureAllowed).toBe(true);
     expect(seed).toHaveBeenCalledWith(snapshot);
     expect(assignedUsers).toHaveBeenCalledWith({ completeOnly: false });
   });
 
   it.each(["serving", "migrating", "quiescing"] as const)(
-    "keeps a %s customer desired and admits ensures only outside source quiescence",
+    "keeps a %s user desired and admits ensures only outside source quiescence",
     async (state) => {
       const snapshot = {
         uid: "u1", slug: "alice", status: "provisioning", channels: [],
         projectAgents: [], projects: [],
       } as never;
-      const read = createAssignedCustomerReader({
+      const read = createAssignedUserReader({
         assignedUsers: async () => [snapshot],
         assignmentRoster: async () => [{ uid: "u1", state, epoch: 7 }],
       }, vi.fn());
@@ -108,7 +108,7 @@ describe("fleet-controller entrypoint config", () => {
   it("does not admit incoming or restore-held roster entries without returned user snapshots", async () => {
     const snapshot = { uid: "u1", slug: "alice", channels: [] } as never;
     const seed = vi.fn();
-    const read = createAssignedCustomerReader({
+    const read = createAssignedUserReader({
       assignedUsers: async () => [snapshot],
       assignmentRoster: async () => [
         { uid: "u1", state: "serving", epoch: 7 },
@@ -123,7 +123,7 @@ describe("fleet-controller entrypoint config", () => {
 
   it("rejects a straddled assignment read before seeding any returned snapshot", async () => {
     const seed = vi.fn();
-    const read = createAssignedCustomerReader({
+    const read = createAssignedUserReader({
       assignedUsers: async () => [
         { uid: "u1", slug: "alice", channels: [] } as never,
         { uid: "u2", slug: "bob", channels: [] } as never,
@@ -144,11 +144,11 @@ describe("fleet-controller entrypoint config", () => {
       { uid: "restore-held", state: "serving", epoch: 3 },
     ];
     const seed = vi.fn();
-    const read = createAssignedCustomerReader({
+    const read = createAssignedUserReader({
       assignedUsers: async () => users,
       assignmentRoster: async () => assignments,
     }, seed);
-    let desired = new Map<string, DesiredCustomer>();
+    let desired = new Map<string, DesiredUser>();
     const ensured = vi.fn(async () => "mounted" as const);
     const evicted = vi.fn(async () => "drained" as const);
     const deps = {
@@ -160,7 +160,7 @@ describe("fleet-controller entrypoint config", () => {
         desired = await read();
         return [...desired.keys()];
       },
-      shouldEnsureSlug: (slug: string) => customerEnsureRetryReady({
+      shouldEnsureSlug: (slug: string) => userEnsureRetryReady({
         ensureAllowed: desired.get(slug)?.ensureAllowed === true,
         cloneRetry: undefined,
         desiredFingerprint: desired.get(slug)?.fingerprint,
@@ -210,13 +210,13 @@ describe("fleet-controller entrypoint config", () => {
     })) as unknown as FleetBrokerUserSnapshot[];
     const assignedUsers = vi.fn(async () => users);
     const assignmentRoster = vi.fn(async () => users.map(({ uid }) => ({ uid, state: "serving" as const, epoch: 1 })));
-    const read = createAssignedCustomerReader({ assignedUsers, assignmentRoster }, vi.fn());
-    let desired = new Map<string, DesiredCustomer>();
+    const read = createAssignedUserReader({ assignedUsers, assignmentRoster }, vi.fn());
+    let desired = new Map<string, DesiredUser>();
     const admittedUids: string[] = [];
     const canEnsureSlug = vi.fn(async (slug: string) => {
       const uid = desired.get(slug)!.uid;
       admittedUids.push(uid);
-      return readCustomerEnsureAdmission({ assignmentRoster }, uid);
+      return readUserEnsureAdmission({ assignmentRoster }, uid);
     });
     const ensured = vi.fn(async () => "mounted" as const);
     try {
@@ -244,27 +244,27 @@ describe("fleet-controller entrypoint config", () => {
   });
 
   it.each(["serving", "migrating", "quiescing"] as const)(
-    "reads current %s admission by validated customer UID without admitting unrelated roster rows",
+    "reads current %s admission by validated user UID without admitting unrelated roster rows",
     async (state) => {
       const assignmentRoster = vi.fn(async () => [
         { uid: "incoming", state: "migrating" as const, epoch: 8 },
         { uid: "owner-uid", state, epoch: 7 },
         { uid: "restore-held", state: "serving" as const, epoch: 3 },
       ]);
-      await expect(readCustomerEnsureAdmission({ assignmentRoster }, "owner-uid"))
+      await expect(readUserEnsureAdmission({ assignmentRoster }, "owner-uid"))
         .resolves.toBe(state !== "quiescing");
       expect(assignmentRoster).toHaveBeenCalledOnce();
     },
   );
 
-  it("rejects missing queued admission without using another customer's serving state", async () => {
-    await expect(readCustomerEnsureAdmission({
+  it("rejects missing queued admission without using another user's serving state", async () => {
+    await expect(readUserEnsureAdmission({
       assignmentRoster: async () => [{ uid: "another-owner", state: "serving", epoch: 7 }],
     }, "owner-uid")).rejects.toThrow("missing canonical assignment for owner-uid");
   });
 
-  it("normalizes local gateways and reads the dedicated builder slug from the claim", () => {
-    expect(resolveFleetControllerEntrypointConfig(withBuilderClaim({
+  it("normalizes local gateways and reads the dedicated user slug from the claim", () => {
+    expect(resolveFleetControllerEntrypointConfig(withUserClaim({
       BUILD_SHA: "abc123",
       FLEET_CONTROLLER_PORT: "3999",
       FLEET_CONTROLLER_PUBLIC_KEY: "pub",
@@ -326,7 +326,7 @@ describe("fleet-controller entrypoint config", () => {
     }));
   });
 
-  it("verifies the accepted remote system config commit for a dedicated builder pod", async () => {
+  it("verifies the accepted remote system config commit for a dedicated isolated pod", async () => {
     const acceptedCommit = "a".repeat(40);
     const readAcceptedCommit = vi.fn(() => acceptedCommit);
     const flush = createFleetSystemConfigVerifyFlush(
@@ -353,12 +353,12 @@ describe("fleet-controller entrypoint config", () => {
     );
   });
 
-  it("skips the migration durable-config step on a shared pod, whose builders have no system_config repo", () => {
+  it("skips the migration durable-config step on a shared pod, whose users have no system_config repo", () => {
     const readAcceptedCommit = vi.fn();
     const sync = createFleetFlushSystemConfigSync({
       slug: "aug04",
       builderSlug: "",
-      builder: false,
+      isolated: false,
       readAcceptedCommit,
     });
 
@@ -370,18 +370,18 @@ describe("fleet-controller entrypoint config", () => {
     expect(() => createFleetFlushSystemConfigSync({
       slug: "aug04",
       builderSlug: "",
-      builder: false,
+      isolated: false,
       expectedSystemConfigCommit: "a".repeat(40),
     })).toThrow("no durable system config");
   });
 
-  it("verifies the durable head for a dedicated builder pod flush", async () => {
+  it("verifies the durable head for a dedicated isolated pod flush", async () => {
     const acceptedCommit = "c".repeat(40);
     const readAcceptedCommit = vi.fn(() => acceptedCommit);
     const sync = createFleetFlushSystemConfigSync({
       slug: "alice",
       builderSlug: "alice",
-      builder: false,
+      isolated: false,
       readAcceptedCommit,
     });
 
@@ -397,15 +397,15 @@ describe("fleet-controller entrypoint config", () => {
       acceptedCommit,
     }));
     const sync = createFleetFlushSystemConfigSync({
-      slug: "bender",
-      builderSlug: "bender",
-      builder: true,
+      slug: "walter",
+      builderSlug: "walter",
+      isolated: true,
       log: () => {},
       sync: checkpointSync as never,
     });
 
     await expect(sync?.()).resolves.toEqual({ acceptedCommit });
-    expect(checkpointSync).toHaveBeenCalledWith("bender", expect.objectContaining({
+    expect(checkpointSync).toHaveBeenCalledWith("walter", expect.objectContaining({
       durablePolicy: true,
       source: "auto-watch",
     }));
@@ -424,7 +424,7 @@ describe("fleet-controller entrypoint config", () => {
       gatewayId: "builder-alice",
       gatewayClass: "builder",
       builderSlug: "alice",
-      builder: true,
+      isolated: true,
       flushFiles,
       syncBlobs,
       syncSystemConfig,
@@ -459,7 +459,7 @@ describe("fleet-controller entrypoint config", () => {
       gatewayId: "builder-alice",
       gatewayClass: "builder",
       builderSlug: "alice",
-      builder: true,
+      isolated: true,
       flushFiles,
       syncSystemConfig: vi.fn(() => ({
         committed: true,
@@ -481,12 +481,12 @@ describe("fleet-controller entrypoint config", () => {
     expect(flushFiles).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])("native return flushes files and blobs without exporting Builder config (file failure=%s)", async (fail) => {
+  it.each([false, true])("native return flushes files and blobs without exporting user config (file failure=%s)", async (fail) => {
     const flushFiles = vi.fn(async () => { if (fail) throw new Error("sync failed"); });
     const syncBlobs = vi.fn(async () => {});
     const syncSystemConfig = vi.fn(() => { throw new Error("platform-invariant-violation"); });
     const flush = createFleetControllerRequestedFlush({
-      gatewayId: "builder-alice", gatewayClass: "builder", builderSlug: "alice", builder: true,
+      gatewayId: "builder-alice", gatewayClass: "builder", builderSlug: "alice", isolated: true,
       flushFiles, syncBlobs, syncSystemConfig, log: () => {},
     });
     const result = await flush({ slug: "alice", reason: "native-return" });
@@ -497,13 +497,13 @@ describe("fleet-controller entrypoint config", () => {
     expect(result.steps).toContainEqual(expect.objectContaining({ name: "system-config", status: "skipped" }));
   });
 
-  it.each(["bob", ""])("rejects native-return flush outside its configured Builder (%s)", async (builderSlug) => {
+  it.each(["bob", ""])("rejects native-return flush outside its configured user (%s)", async (builderSlug) => {
     const flushFiles = vi.fn(async () => {});
     const flush = createFleetControllerRequestedFlush({
-      gatewayId: "builder-alice", gatewayClass: "builder", builderSlug, builder: true,
+      gatewayId: "builder-alice", gatewayClass: "builder", builderSlug, isolated: true,
       flushFiles, log: () => {},
     });
-    await expect(flush({ slug: "alice", reason: "native-return" })).rejects.toThrow(/configured Builder/);
+    await expect(flush({ slug: "alice", reason: "native-return" })).rejects.toThrow(/configured user/);
     expect(flushFiles).not.toHaveBeenCalled();
   });
 
@@ -518,7 +518,7 @@ describe("fleet-controller entrypoint config", () => {
       gatewayId: "builder-alice",
       gatewayClass: "builder",
       builderSlug: "alice",
-      builder: true,
+      isolated: true,
       flushFiles,
       syncSystemConfig,
       log: () => {},
@@ -718,14 +718,14 @@ describe("fleet-controller entrypoint config", () => {
   });
 });
 
-describe("assign-customer-gateway args", () => {
+describe("assign-user-gateway args", () => {
   async function bulkCandidate(data: Record<string, unknown>): Promise<boolean> {
     const store = createDocumentFixtureStore(new Map([["users/u1", data]]));
-    const builder = await store.builders.records.get("u1");
-    return isBulkAssignmentCandidate(builder!, builderAccountFromData("u1", data));
+    const userRecord = await store.users.records.get("u1");
+    return isBulkAssignmentCandidate(userRecord!, userAccountFromData("u1", data));
   }
 
-  it("bulk-selects only identity-complete builders whose provisioning has started", async () => {
+  it("bulk-selects only identity-complete users whose provisioning has started", async () => {
     await expect(bulkCandidate({
       username: "alice",
       onboardingStep: "complete",
@@ -739,14 +739,14 @@ describe("assign-customer-gateway args", () => {
     })).resolves.toBe(false);
   });
 
-  it("skips bulk placement for an already placed or operator-managed builder", async () => {
+  it("skips bulk placement for an already placed or operator-managed user", async () => {
     const complete = { username: "alice", onboardingStep: "complete" };
     await expect(bulkCandidate({ ...complete, provisioning: { status: "complete", openclaw: { gatewayId: "shared-0" } } })).resolves.toBe(false);
     await expect(bulkCandidate({ ...complete, provisioning: { status: "complete", openclaw: { managedBy: "operator" } } })).resolves.toBe(false);
   });
 
   it("accepts uid-targeted dry runs", () => {
-    expect(parseAssignCustomerGatewayArgs([
+    expect(parseAssignUserGatewayArgs([
       "--env=prod",
       "--uid=uid-1",
       "--dry-run",
@@ -763,16 +763,16 @@ describe("assign-customer-gateway args", () => {
   });
 
   it("rejects missing selector before Firebase init", () => {
-    expect(parseAssignCustomerGatewayArgs(["--env=test"])).toMatchObject({ kind: "error" });
-    expect(parseAssignCustomerGatewayArgs(["--help"])).toEqual({ kind: "help" });
-    expect(ASSIGN_CUSTOMER_GATEWAY_USAGE).toContain("--uid=UID");
+    expect(parseAssignUserGatewayArgs(["--env=test"])).toMatchObject({ kind: "error" });
+    expect(parseAssignUserGatewayArgs(["--help"])).toEqual({ kind: "help" });
+    expect(ASSIGN_USER_GATEWAY_USAGE).toContain("--uid=UID");
   });
 
 });
 
-describe("assign-customer-gateway root config", () => {
+describe("assign-user-gateway root config", () => {
   function gatewayRoot(profile: "standard" | "builder" = "standard") {
-    const builder = profile === "builder";
+    const isolated = profile === "builder";
     return {
       gatewayId: "default",
       createdAt: 1,
@@ -788,16 +788,16 @@ describe("assign-customer-gateway root config", () => {
       roll: null,
       configSchemaVersion: 1,
       profile,
-      gatewayClass: builder ? "builder" : "shared",
-      imageProfile: builder ? "builder" : "standard",
+      gatewayClass: isolated ? "builder" : "shared",
+      imageProfile: isolated ? "builder" : "standard",
       sizingTier: null,
       gcpProject: null,
       gatewayContainerSecurityContext: null,
       serviceAccountName: null,
       serviceAccount: null,
       builderAccess: null,
-      ownerUid: builder ? "uid-builder" : null,
-      builderSlug: builder ? "builder" : null,
+      ownerUid: isolated ? "uid-user" : null,
+      builderSlug: isolated ? "builder" : null,
       modelBrokerLimits: null,
       preemption: null,
     };
@@ -1217,9 +1217,9 @@ describe("fleet CLI args", () => {
   });
 
   it("binds migration operations to the source and target gateways before enqueue", () => {
-    expect(buildFleetMigrateOperationInput("uid-alice", "bender", "operator-green")).toEqual({
+    expect(buildFleetMigrateOperationInput("uid-alice", "walter", "operator-green")).toEqual({
       uid: "uid-alice",
-      fromGatewayId: "bender",
+      fromGatewayId: "walter",
       toGatewayId: "operator-green",
     });
   });
@@ -1374,7 +1374,7 @@ describe("fleet CLI args", () => {
     ])).toThrow("duplicate --env flag");
   });
 
-  it("renders the raw Cowboy lifecycle alongside release and heartbeat observations", () => {
+  it("renders the raw fleet controller lifecycle alongside release and heartbeat observations", () => {
     expect(releaseStatusRows({
       defaultGatewayId: "default",
       defaultSelection: "selected",

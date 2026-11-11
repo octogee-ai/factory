@@ -63,29 +63,29 @@ vi.mock("child_process", async () => {
 vi.mock("./internal-fetch", () => ({ internalFetch: vi.fn() }));
 
 import {
-  BUILDER_CODEX_APP_SERVER,
+  ISOLATED_CODEX_APP_SERVER,
   applyByotState,
   deriveDesiredByotState,
-  byosCoachConfigPatch,
-  coachFullAgentList,
-  FREE_TIER_COACH_TOOLS,
+  byosDefaultAgentConfigPatch,
+  defaultAgentFullAgentList,
+  FREE_TIER_DEFAULT_AGENT_TOOLS,
   STANDARD_CODEX_APP_SERVER,
 } from "./byot-sync.js";
 import {
   triggerSecretsReload,
   restoreOauthStoreForSlug,
   brokerFetchByosubCreds,
-  applyCoachModelPatch,
-  applyCoachToolsConvergence,
+  applyDefaultAgentModelPatch,
+  applyDefaultAgentToolsConvergence,
   applyOauthRuntimeModelAllowlist,
   requestGatewayRestartForRuntimeChange,
-  syncByotForCustomer,
+  syncByotForUser,
   applyAgentModelOverrides,
   agentIdsForSlug,
-  customerOauthRuntimeConfigPatch,
-  customerMountConfigPatch,
-  purgeCustomerOauthRuntime,
-  refreshCoachRuntimeSessions,
+  userOauthRuntimeConfigPatch,
+  userMountConfigPatch,
+  purgeUserOauthRuntime,
+  refreshDefaultAgentRuntimeSessions,
 } from "./byot-sync-runtime";
 import { internalFetch } from "./internal-fetch.js";
 import { codexAuthJsonPath, codexAgentDir, sharedAuthAgentDir } from "./byosub-restore.js";
@@ -124,26 +124,26 @@ const codexBlob = () =>
       account_id: "acct-1",
     },
   });
-const noCustomerOauthRuntimePurge = vi.fn(async () => ({ changed: false, resetCount: 0 }));
+const noUserOauthRuntimePurge = vi.fn(async () => ({ changed: false, resetCount: 0 }));
 
-describe("customer mount configuration projection", () => {
-  it("publishes and preserves only env-owned authless broker declarations during customer projection", () => {
+describe("user mount configuration projection", () => {
+  it("publishes and preserves only env-owned authless broker declarations during user projection", () => {
     vi.stubEnv("OPENROUTER_BASE_URL", "https://broker.example/openrouter");
     vi.stubEnv("PLATFORM_OPENAI_BASE_URL", undefined);
     vi.stubEnv("PLATFORM_VERTEX_BASE_URL", undefined);
     try {
       const expected = { baseUrl: "https://broker.example/openrouter", models: [] };
-      const fresh = customerMountConfigPatch({}, {}, "alice", "platform-openrouter/z-ai/glm-5.2");
+      const fresh = userMountConfigPatch({}, {}, "alice", "platform-openrouter/z-ai/glm-5.2");
       expect(fresh).toHaveProperty("models.providers.platform-openrouter", expected);
-      const retained = customerMountConfigPatch({ models: { providers: { "platform-openrouter": expected } } }, {}, "alice", "platform-openrouter/z-ai/glm-5.2");
+      const retained = userMountConfigPatch({ models: { providers: { "platform-openrouter": expected } } }, {}, "alice", "platform-openrouter/z-ai/glm-5.2");
       expect(retained).toHaveProperty("models.providers.platform-openrouter", expected);
-      const poisoned = customerMountConfigPatch({ models: { providers: { "platform-openrouter": { ...expected, apiKey: "foreign" } } } }, {}, "alice", "platform-openrouter/z-ai/glm-5.2");
+      const poisoned = userMountConfigPatch({ models: { providers: { "platform-openrouter": { ...expected, apiKey: "foreign" } } } }, {}, "alice", "platform-openrouter/z-ai/glm-5.2");
       expect(poisoned).toHaveProperty("models.providers.platform-openrouter.apiKey", null);
     } finally { vi.unstubAllEnvs(); }
   });
 
-  it("keeps the native voice event publisher enabled when a new customer is attached", () => {
-    const patch = customerMountConfigPatch({ plugins: {
+  it("keeps the native voice event publisher enabled when a new user is attached", () => {
+    const patch = userMountConfigPatch({ plugins: {
       allow: ["octogee-activity-tools"],
       entries: { "octogee-activity-tools": { enabled: true, config: { activityEnabled: false, heartbeatMs: 5000 } } },
     } }, {}, "sep30", "platform-openrouter/z-ai/glm-5.2") as any;
@@ -151,7 +151,7 @@ describe("customer mount configuration projection", () => {
     expect(patch.plugins.entries["octogee-broker-tools"]).toMatchObject({ enabled: true });
     expect(patch.plugins.allow).toContain("octogee-activity-tools");
     expect(patch.plugins.entries["octogee-activity-tools"]).not.toBeNull();
-    const fresh = customerMountConfigPatch({ plugins: { allow: [], entries: {} } }, {}, "sep30", "platform-openrouter/z-ai/glm-5.2") as any;
+    const fresh = userMountConfigPatch({ plugins: { allow: [], entries: {} } }, {}, "sep30", "platform-openrouter/z-ai/glm-5.2") as any;
     expect(fresh.plugins.entries["octogee-activity-tools"]).toEqual({ enabled: true, config: { heartbeatMs: 5000 } });
   });
 
@@ -161,30 +161,30 @@ describe("customer mount configuration projection", () => {
       const resolved = { config: { tokenPath: "/var/run/secrets/octogee-gateway-broker/token" } };
       const drifted = { config: { tokenPath: "/tmp/other-token" } };
       const current = { plugins: { entries: { "octogee-chat-tools": resolved, "octogee-board-tools": drifted } } };
-      const patch = customerMountConfigPatch(current, {}, "alice", "platform-openrouter/z-ai/glm-5.2", { gatewayEnv: process.env }) as any;
+      const patch = userMountConfigPatch(current, {}, "alice", "platform-openrouter/z-ai/glm-5.2", { gatewayEnv: process.env }) as any;
       expect(patch.plugins.entries["octogee-chat-tools"].config).not.toHaveProperty("tokenPath");
       expect(patch.plugins.entries["octogee-board-tools"].config.tokenPath).toBe("${OCTOGEE_API_SA_TOKEN_PATH}");
-      const withoutGatewayEnv = customerMountConfigPatch(current, {}, "alice", "platform-openrouter/z-ai/glm-5.2") as any;
+      const withoutGatewayEnv = userMountConfigPatch(current, {}, "alice", "platform-openrouter/z-ai/glm-5.2") as any;
       expect(withoutGatewayEnv.plugins.entries["octogee-chat-tools"].config.tokenPath).toBe("${OCTOGEE_API_SA_TOKEN_PATH}");
     } finally {
       vi.unstubAllEnvs();
     }
   });
 
-  it("keeps the shared agent-store connection reference when a new customer is attached", () => {
+  it("keeps the shared agent-store connection reference when a new user is attached", () => {
     const connection = { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" };
     const database = { families: { agent: { engine: "postgres" } }, postgres: { connection, schemaPrefix: "octogee" } };
-    const patch = customerMountConfigPatch({ database }, {}, "alice", "platform-openrouter/z-ai/glm-5.2") as any;
+    const patch = userMountConfigPatch({ database }, {}, "alice", "platform-openrouter/z-ai/glm-5.2") as any;
     expect(patch).not.toHaveProperty("database");
 
     const redacted = { ...database, postgres: { ...database.postgres, connection: { ...connection, id: "__OPENCLAW_REDACTED__" } } };
-    const fromRedactedRead = customerMountConfigPatch({ database: redacted }, {}, "alice", "platform-openrouter/z-ai/glm-5.2") as any;
+    const fromRedactedRead = userMountConfigPatch({ database: redacted }, {}, "alice", "platform-openrouter/z-ai/glm-5.2") as any;
     expect(fromRedactedRead.database?.postgres?.connection ?? connection).toEqual(connection);
   });
 
   it("does not restore an unsafe model or direct runtime from the mount candidate", () => {
     const id = "octogee-alice-coach";
-    const patch = customerMountConfigPatch({}, { agents: { entries: {
+    const patch = userMountConfigPatch({}, { agents: { entries: {
       [id]: { model: "openai-codex/unsafe-model", agentRuntime: { id: "codex" } },
     } } }, "alice", "platform-openrouter/z-ai/glm-5.2") as any;
     expect(patch.agents.entries[id].model).toEqual({ primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] });
@@ -194,17 +194,17 @@ describe("customer mount configuration projection", () => {
   it.each(["entries", "list"])("combines security cleanup and the final model without losing siblings (%s)", (shape) => {
     const id = "octogee-alice-coach";
     const model = { primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: ["platform-openrouter/openai/gpt-5.6-luna"] };
-    const coach = { id, model, tools: { fs: { workspaceOnly: true } } };
+    const defaultAgent = { id, model, tools: { fs: { workspaceOnly: true } } };
     const sibling = { id: "octogee-bob-coach", name: "Bob", model: "platform-openrouter/z-ai/glm-5.2" };
-    const agents = shape === "list" ? { list: [coach, sibling] } : { entries: {
-      [id]: { model, tools: coach.tools }, [sibling.id]: { name: sibling.name, model: sibling.model },
+    const agents = shape === "list" ? { list: [defaultAgent, sibling] } : { entries: {
+      [id]: { model, tools: defaultAgent.tools }, [sibling.id]: { name: sibling.name, model: sibling.model },
     } };
     const current = { agents, plugins: { allow: ["codex"], entries: { codex: { enabled: true } } }, models: { providers: { "openai-codex": { api: "openai-responses" } } } };
-    const patch = customerMountConfigPatch(current, { agents, bindings: [{ agentId: id }] }, "alice", model.primary) as any;
-    const projectedCoach = shape === "list" ? patch.agents.list.find((entry: any) => entry.id === id) : patch.agents.entries[id];
+    const patch = userMountConfigPatch(current, { agents, bindings: [{ agentId: id }] }, "alice", model.primary) as any;
+    const projectedDefaultAgent = shape === "list" ? patch.agents.list.find((entry: any) => entry.id === id) : patch.agents.entries[id];
     const projectedSibling = shape === "list" ? patch.agents.list.find((entry: any) => entry.id === sibling.id) : patch.agents.entries[sibling.id];
-    expect(projectedCoach.model).toEqual(model);
-    expect(projectedCoach.tools.fs.workspaceOnly).toBe(true);
+    expect(projectedDefaultAgent.model).toEqual(model);
+    expect(projectedDefaultAgent.tools.fs.workspaceOnly).toBe(true);
     expect(projectedSibling).toMatchObject({ name: "Bob", model: sibling.model });
     expect(patch.plugins.allow).not.toContain("codex");
     expect(patch.plugins.entries.codex).toBeNull();
@@ -231,7 +231,7 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     });
     expect(desired.enabled).toBe(false);
     expect(desired.input).toBeNull();
-    expect(desired.coachModelInput).toEqual({
+    expect(desired.defaultAgentModelInput).toEqual({
       slug: "tester-70",
       model: "platform-openai/gpt-6-luna",
       source: "free-tier",
@@ -245,7 +245,7 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
       selectedTier: "free",
       freeTierModelRef: "platform-openai/gpt-6-luna",
     });
-    expect(desired.coachModelInput).toEqual({
+    expect(desired.defaultAgentModelInput).toEqual({
       slug: "tester-70",
       model: "platform-openai/gpt-6-luna",
       source: "free-tier",
@@ -259,25 +259,25 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
       selectedTier: "free",
       freeTierModelRef: "platform-openrouter/evil/model",
     });
-    expect(desired.coachModelInput).toEqual({
+    expect(desired.defaultAgentModelInput).toEqual({
       slug: "tester-70",
       model: "platform-openai/gpt-6-luna",
       source: "free-tier",
     });
   });
 
-  it("BYOK coach input carries the dial ref so the fallback chain follows the operator", () => {
+  it("BYOK agent input carries the dial ref so the fallback chain follows the operator", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       freeTierModelRef: "platform-openai/gpt-6-luna",
     });
-    expect(desired.coachModelInput).toMatchObject({
+    expect(desired.defaultAgentModelInput).toMatchObject({
       slug: "tester-70",
       houseModelRef: "platform-openai/gpt-6-luna",
     });
   });
 
-  it("non-BYOK trial coach keeps the template Sonnet default (no patch)", () => {
+  it("non-BYOK trial agent keeps the template Sonnet default (no patch)", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
@@ -286,10 +286,10 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     });
     expect(desired.enabled).toBe(false);
     expect(desired.input).toBeNull();
-    expect(desired.coachModelInput).toBeNull();
+    expect(desired.defaultAgentModelInput).toBeNull();
   });
 
-  it("trial grant personal pro + builder pro keeps the inherited tool surface", () => {
+  it("trial grant personal pro + user pro keeps the inherited tool surface", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
@@ -307,10 +307,10 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     });
     expect(desired.enabled).toBe(false);
     expect(desired.input).toBeNull();
-    expect(desired.coachModelInput).toBeNull();
+    expect(desired.defaultAgentModelInput).toBeNull();
   });
 
-  it("paid non-BYOK customer leaves the config default model in place (no cohort pin)", () => {
+  it("paid non-BYOK user leaves the config default model in place (no cohort pin)", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
@@ -319,10 +319,10 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     });
     expect(desired.enabled).toBe(false);
     expect(desired.input).toBeNull();
-    expect(desired.coachModelInput).toBeNull();
+    expect(desired.defaultAgentModelInput).toBeNull();
   });
 
-  it("a builderSubscription owner (no paid Personal plan) gets no house pin — catalog coach", () => {
+  it("a builderSubscription owner (no paid Personal plan) gets no house pin — catalog agent", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
@@ -334,7 +334,7 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     expect(desired.input).toBeNull();
     // catalog access = no free-tier house-model pin (the split-brain bug: this
     // was pinned to the house model before resolveBillingProfile).
-    expect(desired.coachModelInput).toBeNull();
+    expect(desired.defaultAgentModelInput).toBeNull();
   });
 
   it("unknown/absent provider falls back to anthropic (api_key default)", () => {
@@ -477,7 +477,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
     for (const d of tmps.splice(0)) fs.rmSync(d, { recursive: true, force: true });
   });
 
-  it("restores the per-agent Codex profile for a mounted oauth customer without writing a codex-home auth.json", async () => {
+  it("restores the per-agent Codex profile for a mounted oauth user without writing a codex-home auth.json", async () => {
     const oc = mk();
     seedAgent(oc, "octogee-tester-70-coach");
     const r = await restoreOauthStoreForSlug("tester-70", {
@@ -521,18 +521,18 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
       JSON.stringify({ location: "state-db" }),
     );
     stateDb.close();
-    const coach = "octogee-tester-70-coach";
+    const defaultAgent = "octogee-tester-70-coach";
     const project = "octogee-tester-70-proj-golf-coach";
-    seedAgent(oc, coach);
+    seedAgent(oc, defaultAgent);
     seedAgent(oc, project);
-    writeAuthProfileStore(codexAgentDir(oc, coach), {
+    writeAuthProfileStore(codexAgentDir(oc, defaultAgent), {
       version: 1,
       profiles: {
         "openai:octogee-chatgpt": { type: "oauth", provider: "openai", access: "stale" },
         "platform-openrouter:default": { type: "api_key", provider: "platform-openrouter" },
       },
     });
-    for (const agentId of [coach, project]) {
+    for (const agentId of [defaultAgent, project]) {
       const stale = codexAuthJsonPath(oc, agentId);
       fs.mkdirSync(path.dirname(stale), { recursive: true });
       fs.writeFileSync(stale, JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "stale" } }));
@@ -543,17 +543,17 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
         { provider: "openai", secretName: "byosub-uid-openai", credential: codexBlob() },
       ],
       openclawDir: oc,
-      agentIds: [coach, project],
+      agentIds: [defaultAgent, project],
     });
 
     expect(r).toMatchObject({ restored: true, present: true });
     const shared = readAuthProfileStore(sharedAuthAgentDir(oc)) as { profiles: Record<string, unknown> };
     expect(shared.profiles["openai:octogee-chatgpt"]).toMatchObject({ access: "acc-1", refresh: "ref-1" });
-    const coachStore = readAuthProfileStore(codexAgentDir(oc, coach)) as { profiles: Record<string, unknown> };
-    expect(coachStore.profiles["openai:octogee-chatgpt"]).toBeUndefined();
-    expect(coachStore.profiles["platform-openrouter:default"]).toBeDefined();
+    const defaultAgentStore = readAuthProfileStore(codexAgentDir(oc, defaultAgent)) as { profiles: Record<string, unknown> };
+    expect(defaultAgentStore.profiles["openai:octogee-chatgpt"]).toBeUndefined();
+    expect(defaultAgentStore.profiles["platform-openrouter:default"]).toBeDefined();
     expect(readAuthProfileStore(codexAgentDir(oc, project))).toBeNull();
-    expect(fs.existsSync(codexAuthJsonPath(oc, coach))).toBe(false);
+    expect(fs.existsSync(codexAuthJsonPath(oc, defaultAgent))).toBe(false);
     expect(fs.existsSync(codexAuthJsonPath(oc, project))).toBe(false);
   });
 
@@ -646,7 +646,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
     expect(fs.existsSync(ap)).toBe(false); 
   });
 
-  it("not restored / not present when this customer has no byosub ref (nothing to restore)", async () => {
+  it("not restored / not present when this user has no byosub ref (nothing to restore)", async () => {
     const r = await restoreOauthStoreForSlug("tester-70", {
       fetchByosubCreds: async () => null,
       openclawDir: mk(),
@@ -738,7 +738,7 @@ describe("brokerFetchByosubCreds — gateway-side broker client (no silent failu
   });
 });
 
-// Every BYOK coach model is a primary+fallback chain to the platform house
+// Every BYOK agent model is a primary+fallback chain to the platform house
 // model baseline (B6) — the operator's free-tier dial, compiled default
 // Errands (GPT-6 Luna) on the OpenAI platform key.
 const HOUSE_REF = "platform-openai/gpt-6-luna";
@@ -752,16 +752,16 @@ const claudeCliDefaultModels = {
   ...Object.fromEntries(CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map((ref) => [ref, {}])),
 };
 
-describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () => {
+describe("byosDefaultAgentConfigPatch — durable default-agent-model patch (#1001 core)", () => {
   const id = "octogee-tester-70-coach";
   it("null input / no-override providers → null (keep gateway default, no per-agent model)", () => {
-    expect(byosCoachConfigPatch(null)).toBeNull();
-    expect(byosCoachConfigPatch({ slug: "tester-70", provider: "anthropic" })).toBeNull();
+    expect(byosDefaultAgentConfigPatch(null)).toBeNull();
+    expect(byosDefaultAgentConfigPatch({ slug: "tester-70", provider: "anthropic" })).toBeNull();
   });
 
   it("free-tier anthropic pin → bare primary, no fallback, no defaults entry", () => {
     expect(
-      byosCoachConfigPatch({
+      byosDefaultAgentConfigPatch({
         slug: "tester-70",
         model: "anthropic/claude-haiku-4-5",
         source: "free-tier",
@@ -772,7 +772,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
           {
             id,
             model: { primary: "anthropic/claude-haiku-4-5", fallbacks: [] },
-            tools: FREE_TIER_COACH_TOOLS,
+            tools: FREE_TIER_DEFAULT_AGENT_TOOLS,
           },
         ],
       },
@@ -781,7 +781,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
 
   it("free-tier openai pin → declares the platform-openai ref in agents.defaults.models", () => {
     expect(
-      byosCoachConfigPatch({
+      byosDefaultAgentConfigPatch({
         slug: "tester-70",
         model: "platform-openai/gpt-5.4-mini",
         source: "free-tier",
@@ -793,7 +793,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
           {
             id,
             model: { primary: "platform-openai/gpt-5.4-mini", fallbacks: [] },
-            tools: FREE_TIER_COACH_TOOLS,
+            tools: FREE_TIER_DEFAULT_AGENT_TOOLS,
           },
         ],
       },
@@ -802,7 +802,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
 
   it("free-tier vertex pin → declares the platform-vertex ref in agents.defaults.models", () => {
     expect(
-      byosCoachConfigPatch({
+      byosDefaultAgentConfigPatch({
         slug: "tester-70",
         model: "platform-vertex/claude-haiku-4-5",
         source: "free-tier",
@@ -814,7 +814,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
           {
             id,
             model: { primary: "platform-vertex/claude-haiku-4-5", fallbacks: [] },
-            tools: FREE_TIER_COACH_TOOLS,
+            tools: FREE_TIER_DEFAULT_AGENT_TOOLS,
           },
         ],
       },
@@ -823,7 +823,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
 
   it("BYOK fallback on an openai dial declares the platform-openai ref in defaults", () => {
     expect(
-      byosCoachConfigPatch({
+      byosDefaultAgentConfigPatch({
         slug: "tester-70",
         provider: "openai",
         houseModelRef: "platform-openai/gpt-5.4-mini",
@@ -843,7 +843,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
 
   it("free-tier openrouter pin → declares the ref in agents.defaults.models so a dial outside the boot template resolves", () => {
     expect(
-      byosCoachConfigPatch({
+      byosDefaultAgentConfigPatch({
         slug: "tester-70",
         model: "platform-openai/gpt-6-luna",
         source: "free-tier",
@@ -855,7 +855,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
           {
             id,
             model: { primary: "platform-openai/gpt-6-luna", fallbacks: [] },
-            tools: FREE_TIER_COACH_TOOLS,
+            tools: FREE_TIER_DEFAULT_AGENT_TOOLS,
           },
         ],
       },
@@ -864,7 +864,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
 
   it("BYOK fallback follows the input's dial ref and declares an openrouter ref in defaults", () => {
     expect(
-      byosCoachConfigPatch({
+      byosDefaultAgentConfigPatch({
         slug: "tester-70",
         provider: "openai",
         houseModelRef: "platform-openai/gpt-6-luna",
@@ -887,7 +887,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
 
   it("a non-catalog houseModelRef on a BYOK input falls back to the compiled default", () => {
     expect(
-      byosCoachConfigPatch({
+      byosDefaultAgentConfigPatch({
         slug: "tester-70",
         provider: "openai",
         houseModelRef: "platform-openrouter/evil/model",
@@ -900,8 +900,8 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
     });
   });
 
-  it("openai-codex → coach model + agentRuntime:codex; runtime allowlist owns codex plugin config", () => {
-    expect(byosCoachConfigPatch({ slug: "tester-70", provider: "openai-codex" })).toEqual({
+  it("openai-codex → agent model + agentRuntime:codex; runtime allowlist owns codex plugin config", () => {
+    expect(byosDefaultAgentConfigPatch({ slug: "tester-70", provider: "openai-codex" })).toEqual({
       agents: {
         list: [{ id, model: withFallback(CODEX_DEFAULT_MODEL) }],
         defaults: {
@@ -912,7 +912,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
   });
 
   it("claude-cli (Claude subscription) → default model plus the Claude CLI provider catalog", () => {
-    expect(byosCoachConfigPatch({ slug: "tester-70", provider: "claude-cli" })).toEqual({
+    expect(byosDefaultAgentConfigPatch({ slug: "tester-70", provider: "claude-cli" })).toEqual({
       agents: {
         list: [{ id, model: withFallback(CLAUDE_CLI_DEFAULT_MODEL) }],
         defaults: {
@@ -922,8 +922,8 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
     });
   });
 
-  it("openai (api_key) → coach model + the house fallback's defaults entry, NO agentRuntime pin", () => {
-    expect(byosCoachConfigPatch({ slug: "tester-70", provider: "openai" })).toEqual({
+  it("openai (api_key) → agent model + the house fallback's defaults entry, NO agentRuntime pin", () => {
+    expect(byosDefaultAgentConfigPatch({ slug: "tester-70", provider: "openai" })).toEqual({
       agents: {
         defaults: { models: HOUSE_DEFAULTS },
         list: [{ id, model: withFallback("openai/gpt-5") }],
@@ -933,7 +933,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
 
   it("openai-compatible → namespaced custom model, no agentRuntime pin", () => {
     expect(
-      byosCoachConfigPatch({
+      byosDefaultAgentConfigPatch({
         slug: "tester-70",
         provider: "openai-compatible",
         baseUrl: "https://llm.example.com",
@@ -948,8 +948,8 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
   });
 });
 
-describe("coachFullAgentList — full-list upsert (coach model updated, every sibling preserved)", () => {
-  it("updates only the coach's model, preserving its other fields + every sibling (incl. an id-less one)", () => {
+describe("defaultAgentFullAgentList — full-list upsert (defaultAgent model updated, every sibling preserved)", () => {
+  it("updates only the agent's model, preserving its other fields + every sibling (incl. an id-less one)", () => {
     const current = {
       agents: {
         list: [
@@ -959,7 +959,7 @@ describe("coachFullAgentList — full-list upsert (coach model updated, every si
         ],
       },
     };
-    expect(coachFullAgentList(current, "octogee-tester-70-coach", withFallback("openai/gpt-5"))).toEqual([
+    expect(defaultAgentFullAgentList(current, "octogee-tester-70-coach", withFallback("openai/gpt-5"))).toEqual([
       { name: "legacy", model: "x/y" },
       { id: "octogee-tester-70-coach", name: "coach", model: withFallback("openai/gpt-5"), mmAccount: "a" },
       { id: "octogee-zed-coach", model: "z/y" },
@@ -967,16 +967,16 @@ describe("coachFullAgentList — full-list upsert (coach model updated, every si
   });
 
   it("no agents.list (empty/missing) → [] (a no-op patch, never a destructive replace)", () => {
-    expect(coachFullAgentList(undefined, "octogee-tester-70-coach", withFallback("m"))).toEqual([]);
-    expect(coachFullAgentList({ agents: {} }, "octogee-tester-70-coach", withFallback("m"))).toEqual([]);
+    expect(defaultAgentFullAgentList(undefined, "octogee-tester-70-coach", withFallback("m"))).toEqual([]);
+    expect(defaultAgentFullAgentList({ agents: {} }, "octogee-tester-70-coach", withFallback("m"))).toEqual([]);
   });
 });
 
-describe("tier-derived coach tools — house_only trims the model-visible tool surface", () => {
+describe("tier-derived agent tools — house_only trims the model-visible tool surface", () => {
   const id = "octogee-tester-70-coach";
 
   it("pins the keep-list: minimal profile + the free-coach alsoAllow set", () => {
-    expect(FREE_TIER_COACH_TOOLS).toEqual({
+    expect(FREE_TIER_DEFAULT_AGENT_TOOLS).toEqual({
       profile: "minimal",
       alsoAllow: [
         "read",
@@ -1046,7 +1046,7 @@ describe("tier-derived coach tools — house_only trims the model-visible tool s
     });
   });
 
-  it("never lists a globally-denied customer host-code tool", () => {
+  it("never lists a globally-denied user host-code tool", () => {
     for (const denied of [
       "exec",
       "process",
@@ -1056,25 +1056,25 @@ describe("tier-derived coach tools — house_only trims the model-visible tool s
       "preview_start",
       "octogee_publish",
     ]) {
-      expect(FREE_TIER_COACH_TOOLS.alsoAllow).not.toContain(denied);
+      expect(FREE_TIER_DEFAULT_AGENT_TOOLS.alsoAllow).not.toContain(denied);
     }
   });
 
   it("house_only (free-tier source) entry carries the tools block", () => {
-    const patch = byosCoachConfigPatch({
+    const patch = byosDefaultAgentConfigPatch({
       slug: "tester-70",
       model: "anthropic/claude-haiku-4-5",
       source: "free-tier",
     });
-    expect(patch?.agents.list[0].tools).toEqual(FREE_TIER_COACH_TOOLS);
+    expect(patch?.agents.list[0].tools).toEqual(FREE_TIER_DEFAULT_AGENT_TOOLS);
   });
 
   it("catalog-access (BYOK) entry carries NO tools override — inherits the gateway default", () => {
-    const patch = byosCoachConfigPatch({ slug: "tester-70", provider: "openai" });
+    const patch = byosDefaultAgentConfigPatch({ slug: "tester-70", provider: "openai" });
     expect(patch?.agents.list[0]).not.toHaveProperty("tools");
   });
 
-  it("coachFullAgentList merges the block over existing entry tools (fs.workspaceOnly preserved), siblings untouched", () => {
+  it("defaultAgentFullAgentList merges the block over existing entry tools (fs.workspaceOnly preserved), siblings untouched", () => {
     const current = {
       agents: {
         list: [
@@ -1084,72 +1084,72 @@ describe("tier-derived coach tools — house_only trims the model-visible tool s
       },
     };
     expect(
-      coachFullAgentList(current, id, withFallback("m"), FREE_TIER_COACH_TOOLS),
+      defaultAgentFullAgentList(current, id, withFallback("m"), FREE_TIER_DEFAULT_AGENT_TOOLS),
     ).toEqual([
       {
         id,
         name: "coach",
         model: withFallback("m"),
-        tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+        tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
       },
       { id: "octogee-zed-coach", model: "z/y", tools: { fs: { workspaceOnly: true } } },
     ]);
   });
 
-  it("coachFullAgentList with tools:null strips profile/alsoAllow but keeps fs — upgrade restores the inherited surface", () => {
+  it("defaultAgentFullAgentList with tools:null strips profile/alsoAllow but keeps fs — upgrade restores the inherited surface", () => {
     const current = {
       agents: {
         list: [
           {
             id,
             model: "old",
-            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
           },
         ],
       },
     };
-    expect(coachFullAgentList(current, id, withFallback("m"), null)).toEqual([
+    expect(defaultAgentFullAgentList(current, id, withFallback("m"), null)).toEqual([
       { id, model: withFallback("m"), tools: { fs: { workspaceOnly: true } } },
     ]);
   });
 
-  it("coachFullAgentList with model:null converges tools without touching the model (plan-only reassert)", () => {
+  it("defaultAgentFullAgentList with model:null converges tools without touching the model (plan-only reassert)", () => {
     const current = {
       agents: { list: [{ id, model: "keep-me", tools: { fs: { workspaceOnly: true } } }] },
     };
-    expect(coachFullAgentList(current, id, null, FREE_TIER_COACH_TOOLS)).toEqual([
+    expect(defaultAgentFullAgentList(current, id, null, FREE_TIER_DEFAULT_AGENT_TOOLS)).toEqual([
       {
         id,
         model: "keep-me",
-        tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+        tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
       },
     ]);
   });
 
   it("stripping the only tools keys drops the tools field entirely rather than shipping tools:{}", () => {
     const current = {
-      agents: { list: [{ id, model: "old", tools: { ...FREE_TIER_COACH_TOOLS } }] },
+      agents: { list: [{ id, model: "old", tools: { ...FREE_TIER_DEFAULT_AGENT_TOOLS } }] },
     };
-    expect(coachFullAgentList(current, id, null, null)).toEqual([{ id, model: "old" }]);
+    expect(defaultAgentFullAgentList(current, id, null, null)).toEqual([{ id, model: "old" }]);
   });
 
   it("tools:undefined leaves the entry's tools untouched (pure model update, legacy call shape)", () => {
     const current = {
       agents: {
-        list: [{ id, model: "old", tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS } }],
+        list: [{ id, model: "old", tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS } }],
       },
     };
-    expect(coachFullAgentList(current, id, withFallback("m"))).toEqual([
-      { id, model: withFallback("m"), tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS } },
+    expect(defaultAgentFullAgentList(current, id, withFallback("m"))).toEqual([
+      { id, model: withFallback("m"), tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS } },
     ]);
   });
 
-  it("strip is fingerprint-gated: a customer-authored profile/alsoAllow that is NOT the platform block survives the catalog convergence", () => {
+  it("strip is fingerprint-gated: a user-authored profile/alsoAllow that is NOT the platform block survives the catalog convergence", () => {
     const authored = { profile: "full", alsoAllow: ["browser"] };
     const current = {
       agents: { list: [{ id, model: "old", tools: { fs: { workspaceOnly: true }, ...authored } }] },
     };
-    expect(coachFullAgentList(current, id, withFallback("m"), null)).toEqual([
+    expect(defaultAgentFullAgentList(current, id, withFallback("m"), null)).toEqual([
       { id, model: withFallback("m"), tools: { fs: { workspaceOnly: true }, ...authored } },
     ]);
   });
@@ -1157,27 +1157,27 @@ describe("tier-derived coach tools — house_only trims the model-visible tool s
   it("strip is fingerprint-gated: a partially-matching block (same profile, different alsoAllow) survives too", () => {
     const legacy = { profile: "minimal", alsoAllow: ["read", "write"] };
     const current = { agents: { list: [{ id, model: "old", tools: legacy }] } };
-    expect(coachFullAgentList(current, id, null, null)).toEqual([
+    expect(defaultAgentFullAgentList(current, id, null, null)).toEqual([
       { id, model: "old", tools: legacy },
     ]);
   });
 
-  it("the house_only merge still overwrites a customer-authored block — the free plan is platform-tuned (accepted tradeoff)", () => {
+  it("the house_only merge still overwrites a user-authored block — the free plan is platform-tuned (accepted tradeoff)", () => {
     const current = {
       agents: { list: [{ id, model: "old", tools: { profile: "full", alsoAllow: ["browser"] } }] },
     };
-    expect(coachFullAgentList(current, id, null, FREE_TIER_COACH_TOOLS)).toEqual([
-      { id, model: "old", tools: { ...FREE_TIER_COACH_TOOLS } },
+    expect(defaultAgentFullAgentList(current, id, null, FREE_TIER_DEFAULT_AGENT_TOOLS)).toEqual([
+      { id, model: "old", tools: { ...FREE_TIER_DEFAULT_AGENT_TOOLS } },
     ]);
   });
 });
 
-describe("applyCoachToolsConvergence — plan-gated tools reassert when no model patch ships", () => {
+describe("applyDefaultAgentToolsConvergence — plan-gated tools reassert when no model patch ships", () => {
   const id = "octogee-tester-70-coach";
   const CURRENT = {
     agents: {
       list: [
-        { id, model: "picked/model", tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS } },
+        { id, model: "picked/model", tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS } },
         { id: "octogee-zed-coach", model: "z/y" },
       ],
     },
@@ -1187,7 +1187,7 @@ describe("applyCoachToolsConvergence — plan-gated tools reassert when no model
     const calls: object[] = [];
     let replacePaths: string[] | undefined;
     let skipIfAlreadyApplied: boolean | undefined;
-    const r = await applyCoachToolsConvergence("tester-70", false, {
+    const r = await applyDefaultAgentToolsConvergence("tester-70", false, {
       applyConfigPatch: async (args) => {
         calls.push(args.buildPatch(CURRENT));
         replacePaths = args.buildReplacePaths?.(CURRENT);
@@ -1216,7 +1216,7 @@ describe("applyCoachToolsConvergence — plan-gated tools reassert when no model
 
   it("houseOnly:true re-asserts the trim (model untouched)", async () => {
     const calls: object[] = [];
-    const r = await applyCoachToolsConvergence("tester-70", true, {
+    const r = await applyDefaultAgentToolsConvergence("tester-70", true, {
       applyConfigPatch: async (args) => {
         calls.push(args.buildPatch({ agents: { list: [{ id, model: "house/pin" }] } }));
         return { mode: "rpc", attempts: 1 };
@@ -1224,11 +1224,11 @@ describe("applyCoachToolsConvergence — plan-gated tools reassert when no model
     });
     expect(r).toBe(true);
     expect(calls).toEqual([
-      { agents: { list: [{ id, model: "house/pin", tools: { ...FREE_TIER_COACH_TOOLS } }] } },
+      { agents: { list: [{ id, model: "house/pin", tools: { ...FREE_TIER_DEFAULT_AGENT_TOOLS } }] } },
     ]);
   });
 
-  it("updates a beta keyed coach entry without sending the retired agents.list field", async () => {
+  it("updates a beta keyed agent entry without sending the retired agents.list field", async () => {
     const calls: object[] = [];
     const paths: Array<string[] | undefined> = [];
     const current = {
@@ -1243,7 +1243,7 @@ describe("applyCoachToolsConvergence — plan-gated tools reassert when no model
       },
     };
 
-    await expect(applyCoachToolsConvergence("tester-70", true, {
+    await expect(applyDefaultAgentToolsConvergence("tester-70", true, {
       applyConfigPatch: async (args) => {
         calls.push(args.buildPatch(current));
         paths.push(args.buildReplacePaths?.(current));
@@ -1261,7 +1261,7 @@ describe("applyCoachToolsConvergence — plan-gated tools reassert when no model
           entries: {
             [id]: {
               model: "picked/model",
-              tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+              tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
             },
           },
         },
@@ -1270,9 +1270,9 @@ describe("applyCoachToolsConvergence — plan-gated tools reassert when no model
     expect(JSON.stringify(calls)).not.toContain('"list"');
   });
 
-  it("returns false and logs loudly when the coach entry is absent — never a silent success on the repair path", async () => {
+  it("returns false and logs loudly when the agent entry is absent — never a silent success on the repair path", async () => {
     const logs: string[] = [];
-    const r = await applyCoachToolsConvergence("tester-70", false, {
+    const r = await applyDefaultAgentToolsConvergence("tester-70", false, {
       applyConfigPatch: async (args) => {
         args.buildPatch({ agents: { list: [{ id: "octogee-zed-coach", model: "z/y" }] } });
         return { mode: "rpc", attempts: 1 };
@@ -1285,7 +1285,7 @@ describe("applyCoachToolsConvergence — plan-gated tools reassert when no model
   });
 
   it("never throws — a failed apply returns false (retried next sync)", async () => {
-    const r = await applyCoachToolsConvergence("tester-70", false, {
+    const r = await applyDefaultAgentToolsConvergence("tester-70", false, {
       applyConfigPatch: async () => {
         throw new Error("config.patch hash-mismatch exhausted");
       },
@@ -1295,7 +1295,7 @@ describe("applyCoachToolsConvergence — plan-gated tools reassert when no model
   });
 });
 
-describe("applyCoachModelPatch — applies the durable patch, best-effort", () => {
+describe("applyDefaultAgentModelPatch — applies the durable patch, best-effort", () => {
   const CURRENT = {
     agents: {
       list: [
@@ -1305,10 +1305,10 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     },
   };
 
-  it("openai api_key input → ships the FULL agents.list + the full-agent-list replacePaths set (incl. per-entry shrink confirmations), only the coach's model updated", async () => {
+  it("openai api_key input → ships the FULL agents.list + the full-agent-list replacePaths set (incl. per-entry shrink confirmations), only the agent's model updated", async () => {
     const calls: object[] = [];
     let replacePaths: string[] | undefined;
-    const r = await applyCoachModelPatch(
+    const r = await applyDefaultAgentModelPatch(
       { slug: "tester-70", provider: "openai" },
       {
         applyConfigPatch: async (args) => {
@@ -1320,11 +1320,11 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     );
     expect(r).toBe(true);
     // Load-bearing: an id-less base agent flips agents.list to wholesale, where
-    // the guard (arrayPreservesBaseEntries) flags the re-modeled coach entry as
+    // the guard (arrayPreservesBaseEntries) flags the re-modeled agent entry as
     // "removed" unless this exact path is confirmed. The per-entry wildcard paths
-    // cover the id-keyed case, where the guard descends INTO the coach entry and
+    // cover the id-keyed case, where the guard descends INTO the agent entry and
     // names its shrunk arrays individually. Without them applyConfigPatch rejects
-    // the patch permanently and the coach silently stays on the platform key.
+    // the patch permanently and the agent silently stays on the platform key.
     expect(replacePaths).toEqual([
       "agents.list",
       "agents.list[].model.fallbacks",
@@ -1343,7 +1343,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     ]);
   });
 
-  it("updates a beta keyed coach entry without writing the rejected agents.list field", async () => {
+  it("updates a beta keyed agent entry without writing the rejected agents.list field", async () => {
     const calls: object[] = [];
     const paths: Array<string[] | undefined> = [];
     const current = {
@@ -1355,7 +1355,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
       },
     };
 
-    await expect(applyCoachModelPatch(
+    await expect(applyDefaultAgentModelPatch(
       { slug: "tester-70", provider: "openai" },
       {
         applyConfigPatch: async (args) => {
@@ -1388,7 +1388,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
   });
 
   it("BYOK-override → house-pin transition (fallbacks [house] → []) confirms the per-entry shrink via agents.list[].model.fallbacks (incident 2026-07-09)", async () => {
-    const overriddenCoach = {
+    const overriddenDefaultAgent = {
       agents: {
         list: [
           {
@@ -1403,19 +1403,19 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     };
     const calls: Array<{ agents: { list: Array<{ id: string; model?: unknown }> } }> = [];
     let replacePaths: string[] | undefined;
-    const r = await applyCoachModelPatch(
+    const r = await applyDefaultAgentModelPatch(
       { slug: "tester-70", model: HOUSE_REF, source: "free-tier" },
       {
         applyConfigPatch: async (args) => {
-          calls.push(args.buildPatch(overriddenCoach) as (typeof calls)[number]);
-          replacePaths = args.buildReplacePaths?.(overriddenCoach);
+          calls.push(args.buildPatch(overriddenDefaultAgent) as (typeof calls)[number]);
+          replacePaths = args.buildReplacePaths?.(overriddenDefaultAgent);
           return { mode: "rpc", attempts: 1 };
         },
       },
     );
     expect(r).toBe(true);
-    const coach = calls[0].agents.list.find((a) => a.id === "octogee-tester-70-coach");
-    expect(coach?.model).toEqual({ primary: HOUSE_REF, fallbacks: [] });
+    const defaultAgent = calls[0].agents.list.find((a) => a.id === "octogee-tester-70-coach");
+    expect(defaultAgent?.model).toEqual({ primary: HOUSE_REF, fallbacks: [] });
     // The guard descends into id-keyed entries: the shrunk fallbacks array is
     // reported as agents.list[].model.fallbacks and "agents.list" alone does
     // NOT confirm it — the exact refusal observed live on every reconcile tick.
@@ -1424,7 +1424,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     expect(replacePaths).toContain("agents.list");
   });
 
-  it("free-tier input ships the tools trim merged into the coach's existing entry tools", async () => {
+  it("free-tier input ships the tools trim merged into the agent's existing entry tools", async () => {
     const withTools = {
       agents: {
         list: [
@@ -1434,7 +1434,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
       },
     };
     const calls: object[] = [];
-    const r = await applyCoachModelPatch(
+    const r = await applyDefaultAgentModelPatch(
       { slug: "tester-70", model: HOUSE_REF, source: "free-tier" },
       {
         applyConfigPatch: async (args) => {
@@ -1452,7 +1452,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
             {
               id: "octogee-tester-70-coach",
               model: { primary: HOUSE_REF, fallbacks: [] },
-              tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+              tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
             },
             { id: "octogee-zed-coach", model: "z/y" },
           ],
@@ -1468,13 +1468,13 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
           {
             id: "octogee-tester-70-coach",
             model: "old",
-            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
           },
         ],
       },
     };
     const calls: object[] = [];
-    const r = await applyCoachModelPatch(
+    const r = await applyDefaultAgentModelPatch(
       { slug: "tester-70", provider: "openai" },
       {
         applyConfigPatch: async (args) => {
@@ -1502,7 +1502,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
 
   it("shell-runtime BYOS providers (codex / claude-cli) patch the full list + model defaults", async () => {
     const codexCalls: object[] = [];
-    const rc = await applyCoachModelPatch(
+    const rc = await applyDefaultAgentModelPatch(
       { slug: "tester-70", provider: "openai-codex" },
       {
         applyConfigPatch: async (args) => {
@@ -1527,7 +1527,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
     ]);
 
     const claudeCalls: object[] = [];
-    const ra = await applyCoachModelPatch(
+    const ra = await applyDefaultAgentModelPatch(
       { slug: "tester-70", provider: "claude-cli" },
       {
         applyConfigPatch: async (args) => {
@@ -1554,12 +1554,12 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
   it("no-override / null → does NOT apply, returns false", async () => {
     let calls = 0;
     expect(
-      await applyCoachModelPatch(null, {
+      await applyDefaultAgentModelPatch(null, {
         applyConfigPatch: async () => { calls += 1; return { mode: "rpc", attempts: 1 }; },
       }),
     ).toBe(false);
     expect(
-      await applyCoachModelPatch(
+      await applyDefaultAgentModelPatch(
         { slug: "tester-70", provider: "anthropic" },
         { applyConfigPatch: async () => { calls += 1; return { mode: "rpc", attempts: 1 }; } },
       ),
@@ -1568,7 +1568,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
   });
 
   it("never throws — a failed apply returns false (sync continues → retried next sync)", async () => {
-    const r = await applyCoachModelPatch(
+    const r = await applyDefaultAgentModelPatch(
       { slug: "tester-70", provider: "openai" },
       {
         applyConfigPatch: async () => {
@@ -1582,7 +1582,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
 
   it("applies the runtime model patch independently of gateway class", async () => {
     let calls = 0;
-    const r = await applyCoachModelPatch(
+    const r = await applyDefaultAgentModelPatch(
       { slug: "tester-70", provider: "openai-codex" },
       {
         applyConfigPatch: async () => { calls += 1; return { mode: "rpc", attempts: 1 }; },
@@ -1594,10 +1594,10 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
 
   it("waits for the booting runtime: deadline-bounded retries, not a 3-shot budget (byot fires at pod boot before openclaw listens on :18789)", async () => {
     const opts: Array<Record<string, unknown>> = [];
-    const r = await applyCoachModelPatch(
+    const r = await applyDefaultAgentModelPatch(
       { slug: "tester-70", provider: "openai" },
       {
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyConfigPatch: async (_args, o) => {
           opts.push(o ?? {});
           return { mode: "rpc", attempts: 1 };
@@ -1612,7 +1612,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
 });
 
 describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", () => {
-  it("allowlists every restored BYOSUB runtime without changing the coach primary model", async () => {
+  it("allowlists every restored BYOSUB runtime without changing the agent primary model", async () => {
     const calls: object[] = [];
     const r = await applyOauthRuntimeModelAllowlist(["openai", "anthropic"], STANDARD_CODEX_APP_SERVER, {
       applyConfigPatch: async (args) => {
@@ -1646,7 +1646,7 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
 
   it("stamps the gateway class's Codex sandbox over an existing one while adding runtime defaults", async () => {
     const calls: object[] = [];
-    const r = await applyOauthRuntimeModelAllowlist(["openai"], BUILDER_CODEX_APP_SERVER, {
+    const r = await applyOauthRuntimeModelAllowlist(["openai"], ISOLATED_CODEX_APP_SERVER, {
       applyConfigPatch: async (args) => {
         calls.push(args.buildPatch({
           plugins: {
@@ -1711,9 +1711,9 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
   });
 });
 
-describe("customer OAuth runtime purge", () => {
+describe("user OAuth runtime purge", () => {
   it("keeps a secret-ref repair scoped away from safe runtime siblings", () => {
-    const patch = customerOauthRuntimeConfigPatch(
+    const patch = userOauthRuntimeConfigPatch(
       {
         channels: {
           mattermost: {
@@ -1768,7 +1768,7 @@ describe("customer OAuth runtime purge", () => {
       provider: "octogee-mattermost",
       id: `/${accountId}`,
     });
-    const patch = customerOauthRuntimeConfigPatch(
+    const patch = userOauthRuntimeConfigPatch(
       {
         agents: {
           list: [{ id: "octogee-tester-70-coach" }, { id: "octogee-tester-70-proj-golf-coach" }],
@@ -1809,7 +1809,7 @@ describe("customer OAuth runtime purge", () => {
     vi.stubEnv("GATEWAY_ID", "shared-b");
 
     try {
-      const patch = customerOauthRuntimeConfigPatch(
+      const patch = userOauthRuntimeConfigPatch(
         {},
         "tester-70",
         "platform-openrouter/deepseek/deepseek-v4-pro",
@@ -1826,7 +1826,7 @@ describe("customer OAuth runtime purge", () => {
           expect(entry.config.tokenPath).toBe("${OCTOGEE_API_SA_TOKEN_PATH}");
         }
       }
-      const repaired = customerOauthRuntimeConfigPatch(
+      const repaired = userOauthRuntimeConfigPatch(
         { plugins: { entries: { "octogee-chat-tools": { config: {
           tokenPath: "/var/run/secrets/octogee-api/token",
         } } } } },
@@ -1845,7 +1845,7 @@ describe("customer OAuth runtime purge", () => {
 
   it("builds a fail-closed patch for direct runtime definitions, defaults, and every owned agent shape", () => {
     const safeModel = "platform-openrouter/deepseek/deepseek-v4-pro";
-    const patch = customerOauthRuntimeConfigPatch(
+    const patch = userOauthRuntimeConfigPatch(
       {
         auth: {
           profiles: {
@@ -1967,8 +1967,8 @@ describe("customer OAuth runtime purge", () => {
   });
 
   it("clears the subscription credential from OpenClaw's shared store and keeps everything else there", async () => {
-    const oc = fs.mkdtempSync(path.join(os.tmpdir(), "customer-oauth-shared-"));
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "customer-oauth-home-"));
+    const oc = fs.mkdtempSync(path.join(os.tmpdir(), "user-oauth-shared-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "user-oauth-home-"));
     fs.mkdirSync(path.join(oc, "state"), { recursive: true });
     const stateDb = new DatabaseSync(path.join(oc, "state", "openclaw.sqlite"));
     stateDb.exec(
@@ -1993,7 +1993,7 @@ describe("customer OAuth runtime purge", () => {
       close: vi.fn(async () => {}),
     };
     try {
-      const result = await purgeCustomerOauthRuntime("tester-70", "platform-openrouter/z-ai/glm-5.2", {
+      const result = await purgeUserOauthRuntime("tester-70", "platform-openrouter/z-ai/glm-5.2", {
         config: { agents: { list: [] } },
         openclawDir: oc,
         homeDir: home,
@@ -2014,7 +2014,7 @@ describe("customer OAuth runtime purge", () => {
   it("leaves plugin token paths that already resolve to their placeholder out of the purge patch", async () => {
     vi.stubEnv("OCTOGEE_API_SA_TOKEN_PATH", "/var/run/secrets/octogee-gateway-broker/token");
     const oc = fs.mkdtempSync(path.join(os.tmpdir(), "customer-oauth-purge-"));
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "customer-oauth-home-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "user-oauth-home-"));
     seedAgent(oc, "octogee-tester-70-coach");
     const config = {
       agents: { list: [] },
@@ -2025,7 +2025,7 @@ describe("customer OAuth runtime purge", () => {
     };
     const patches: any[] = [];
     try {
-      await purgeCustomerOauthRuntime("tester-70", "platform-openrouter/z-ai/glm-5.2", {
+      await purgeUserOauthRuntime("tester-70", "platform-openrouter/z-ai/glm-5.2", {
         config,
         openclawDir: oc,
         homeDir: home,
@@ -2048,22 +2048,22 @@ describe("customer OAuth runtime purge", () => {
     }
   });
 
-  it("purges owned disk artifacts, patches config, and resets coach plus project sessions", async () => {
+  it("purges owned disk artifacts, patches config, and resets agent plus project sessions", async () => {
     const oc = fs.mkdtempSync(path.join(os.tmpdir(), "customer-oauth-purge-"));
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "customer-oauth-home-"));
-    const coachId = "octogee-tester-70-coach";
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "user-oauth-home-"));
+    const userDefaultAgentId = "octogee-tester-70-coach";
     const projectId = "octogee-tester-70-proj-web-coach";
     const native = path.join(home, ".claude", ".credentials.json");
     fs.mkdirSync(path.dirname(native), { recursive: true });
     fs.writeFileSync(native, "secret");
-    for (const agentId of [coachId, projectId]) {
+    for (const agentId of [userDefaultAgentId, projectId]) {
       seedAgent(oc, agentId);
       const auth = codexAuthJsonPath(oc, agentId);
       fs.mkdirSync(path.dirname(auth), { recursive: true });
       fs.writeFileSync(auth, "secret");
     }
     const config = {
-      agents: { list: [{ id: coachId }, { id: projectId }, { id: "octogee-other-coach" }] },
+      agents: { list: [{ id: userDefaultAgentId }, { id: projectId }, { id: "octogee-other-coach" }] },
     };
     const rpc = {
       sessionsList: vi.fn(async ({ agentId }: { agentId: string }) => ({
@@ -2079,7 +2079,7 @@ describe("customer OAuth runtime purge", () => {
     const replacePaths: string[][] = [];
     try {
       await expect(
-        purgeCustomerOauthRuntime("tester-70", "platform-openrouter/z-ai/glm-5.2", {
+        purgeUserOauthRuntime("tester-70", "platform-openrouter/z-ai/glm-5.2", {
           config,
           openclawDir: oc,
           homeDir: home,
@@ -2093,11 +2093,11 @@ describe("customer OAuth runtime purge", () => {
         }),
       ).resolves.toEqual({ changed: true, resetCount: 2 });
       expect(fs.existsSync(native)).toBe(false);
-      expect(fs.existsSync(codexAuthJsonPath(oc, coachId))).toBe(false);
+      expect(fs.existsSync(codexAuthJsonPath(oc, userDefaultAgentId))).toBe(false);
       expect(fs.existsSync(codexAuthJsonPath(oc, projectId))).toBe(false);
       expect(patches).toHaveLength(1);
       expect((patches[0] as any).agents.list).toEqual([
-        { id: coachId, model: { primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] } },
+        { id: userDefaultAgentId, model: { primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] } },
         { id: projectId, model: { primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] } },
       ]);
       expect(replacePaths[0]).toEqual(expect.arrayContaining([
@@ -2114,9 +2114,9 @@ describe("customer OAuth runtime purge", () => {
     }
   });
 
-  it("durably removes stale customer plugin, provider, secret, model, and spawn/load state", () => {
+  it("durably removes stale user plugin, provider, secret, model, and spawn/load state", () => {
     const safeModel = "platform-openrouter/deepseek/deepseek-v4-pro";
-    const patch = customerOauthRuntimeConfigPatch(
+    const patch = userOauthRuntimeConfigPatch(
       {
         plugins: {
           enabled: false,
@@ -2296,12 +2296,12 @@ describe("customer OAuth runtime purge", () => {
     });
   });
 
-  it("leaves a catalog-valid coach selection alone when a suppressed byosub forces safe, and pins only a non-catalog one", () => {
+  it("leaves a catalog-valid agent selection alone when a suppressed byosub forces safe, and pins only a non-catalog one", () => {
     const platformDefault = {
       primary: "platform-openrouter/openai/gpt-5.6-luna",
       fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
     };
-    const patch = customerOauthRuntimeConfigPatch(
+    const patch = userOauthRuntimeConfigPatch(
       {
         agents: {
           entries: {
@@ -2329,7 +2329,7 @@ describe("customer OAuth runtime purge", () => {
     const brokerUrl = "http://llm-broker.octogee-test.svc.cluster.local:3010";
     vi.stubEnv("ANTHROPIC_BASE_URL", brokerUrl);
     try {
-      const patch = customerOauthRuntimeConfigPatch(
+      const patch = userOauthRuntimeConfigPatch(
         {
           models: { providers: { anthropic: { baseUrl: brokerUrl } } },
           agents: {
@@ -2358,15 +2358,15 @@ describe("customer OAuth runtime purge", () => {
 });
 
 describe("coach runtime session policy refresh", () => {
-  it("resets only this coach's sessions once for each policy transition, including upgrade and downgrade", async () => {
+  it("resets only this agent's sessions once for each policy transition, including upgrade and downgrade", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-coach-runtime-policy-"));
     const agentDir = path.join(root, "agent");
     fs.mkdirSync(agentDir, { recursive: true });
-    const coachId = "octogee-tester-70-coach";
+    const userDefaultAgentId = "octogee-tester-70-coach";
     const rpc = {
       sessionsList: vi.fn(async () => ({
         sessions: [
-          { key: `agent:${coachId}:mattermost:group:one`, agentId: coachId },
+          { key: `agent:${userDefaultAgentId}:mattermost:group:one`, agentId: userDefaultAgentId },
           { key: "agent:octogee-someone-else-coach:mattermost:group:two", agentId: "octogee-someone-else-coach" },
         ],
       })),
@@ -2375,56 +2375,56 @@ describe("coach runtime session policy refresh", () => {
     };
     const free = {
       tools: { profile: "minimal", alsoAllow: ["octogee_ask_ops"] },
-      agents: { list: [{ id: coachId, model: "platform-openrouter/deepseek/deepseek-v4-pro" }] },
+      agents: { list: [{ id: userDefaultAgentId, model: "platform-openrouter/deepseek/deepseek-v4-pro" }] },
     };
     const trial = {
       tools: { profile: "coding", alsoAllow: ["octogee_ask_ops"] },
-      agents: { list: [{ id: coachId, model: "platform-openrouter/z-ai/glm-5.2" }] },
+      agents: { list: [{ id: userDefaultAgentId, model: "platform-openrouter/z-ai/glm-5.2" }] },
     };
 
     try {
-      await expect(refreshCoachRuntimeSessions("tester-70", { agentDir, config: free, rpc })).resolves.toEqual({
+      await expect(refreshDefaultAgentRuntimeSessions("tester-70", { agentDir, config: free, rpc })).resolves.toEqual({
         refreshed: true,
         resetCount: 1,
       });
-      await expect(refreshCoachRuntimeSessions("tester-70", { agentDir, config: free, rpc })).resolves.toEqual({
+      await expect(refreshDefaultAgentRuntimeSessions("tester-70", { agentDir, config: free, rpc })).resolves.toEqual({
         refreshed: false,
         resetCount: 0,
       });
-      await expect(refreshCoachRuntimeSessions("tester-70", { agentDir, config: trial, rpc })).resolves.toEqual({
+      await expect(refreshDefaultAgentRuntimeSessions("tester-70", { agentDir, config: trial, rpc })).resolves.toEqual({
         refreshed: true,
         resetCount: 1,
       });
-      await expect(refreshCoachRuntimeSessions("tester-70", { agentDir, config: free, rpc })).resolves.toEqual({
+      await expect(refreshDefaultAgentRuntimeSessions("tester-70", { agentDir, config: free, rpc })).resolves.toEqual({
         refreshed: true,
         resetCount: 1,
       });
 
       expect(rpc.sessionsReset).toHaveBeenCalledTimes(3);
       expect(rpc.sessionsReset).toHaveBeenCalledWith({
-        key: `agent:${coachId}:mattermost:group:one`, agentId: coachId, reason: "reset",
+        key: `agent:${userDefaultAgentId}:mattermost:group:one`, agentId: userDefaultAgentId, reason: "reset",
       });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("leaves its marker unchanged when an active coach session cannot safely reset", async () => {
+  it("leaves its marker unchanged when an active agent session cannot safely reset", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-coach-runtime-policy-"));
     const agentDir = path.join(root, "agent");
     fs.mkdirSync(agentDir, { recursive: true });
-    const coachId = "octogee-tester-70-coach";
+    const userDefaultAgentId = "octogee-tester-70-coach";
     const rpc = {
       sessionsList: vi.fn(async () => ({
-        sessions: [{ key: `agent:${coachId}:mattermost:group:one`, agentId: coachId, hasActiveRun: true }],
+        sessions: [{ key: `agent:${userDefaultAgentId}:mattermost:group:one`, agentId: userDefaultAgentId, hasActiveRun: true }],
       })),
       sessionsReset: vi.fn(async () => ({ ok: true as const })),
       close: vi.fn(async () => {}),
     };
-    const config = { agents: { list: [{ id: coachId }] } };
+    const config = { agents: { list: [{ id: userDefaultAgentId }] } };
 
     try {
-      await expect(refreshCoachRuntimeSessions("tester-70", { agentDir, config, rpc })).rejects.toThrow(
+      await expect(refreshDefaultAgentRuntimeSessions("tester-70", { agentDir, config, rpc })).rejects.toThrow(
         "active runtime session",
       );
       expect(rpc.sessionsReset).not.toHaveBeenCalled();
@@ -2436,10 +2436,10 @@ describe("coach runtime session policy refresh", () => {
 });
 
 describe("standard gateway — BYOS materialization", () => {
-  it("threads an injected config writer through the default coach model patch", async () => {
+  it("threads an injected config writer through the default agent model patch", async () => {
     const configWriter = vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 }));
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: false,
         username: "tester-70",
@@ -2448,7 +2448,7 @@ describe("standard gateway — BYOS materialization", () => {
       },
       {
         usesLlmBrokerToken: () => true,
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: () => false,
         applyConfigPatch: configWriter,
         triggerSecretsReload: vi.fn(async () => {}),
@@ -2458,13 +2458,13 @@ describe("standard gateway — BYOS materialization", () => {
     expect(configWriter).toHaveBeenCalledTimes(1);
   });
 
-  it("free post-trial non-BYOK customer removes local BYOT state, patches GLM, and reloads", async () => {
+  it("free post-trial non-BYOK user removes local BYOT state, patches GLM, and reloads", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
-    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: false,
         username: "tester-70",
@@ -2473,17 +2473,17 @@ describe("standard gateway — BYOS materialization", () => {
       },
       {
         usesLlmBrokerToken: () => true,
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
-        applyCoachModelPatch: applyCoachModelPatchFn,
+        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
         triggerSecretsReload: triggerSecretsReloadFn,
       },
     );
 
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null);
     expect(restoreOauthFn).not.toHaveBeenCalled();
-    expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
+    expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
       model: "platform-openai/gpt-6-luna",
       source: "free-tier",
@@ -2491,14 +2491,14 @@ describe("standard gateway — BYOS materialization", () => {
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
 
-  it("trial non-BYOK customer leaves the template model untouched — but tools convergence still runs (catalog strip)", async () => {
+  it("trial non-BYOK user leaves the template model untouched — but tools convergence still runs (catalog strip)", async () => {
     const applyByotStateFn = vi.fn(() => false);
-    const applyCoachModelPatchFn = vi.fn(async () => true);
-    const applyCoachToolsConvergenceFn = vi.fn(async () => true);
+    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
+    const applyDefaultAgentToolsConvergenceFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
-    const refreshCoachRuntimeSessionsFn = vi.fn(async () => ({ refreshed: true, resetCount: 1 }));
+    const refreshDefaultAgentRuntimeSessionsFn = vi.fn(async () => ({ refreshed: true, resetCount: 1 }));
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: false,
         username: "tester-70",
@@ -2507,33 +2507,33 @@ describe("standard gateway — BYOS materialization", () => {
         trialGrant: LIVE_SIGNUP_OFFER,
       },
       {
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: applyByotStateFn,
-        applyCoachModelPatch: applyCoachModelPatchFn,
-        applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
+        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
+        applyDefaultAgentToolsConvergence: applyDefaultAgentToolsConvergenceFn,
         triggerSecretsReload: triggerSecretsReloadFn,
-        refreshCoachRuntimeSessions: refreshCoachRuntimeSessionsFn,
+        refreshDefaultAgentRuntimeSessions: refreshDefaultAgentRuntimeSessionsFn,
       },
     );
 
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null);
-    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
-    expect(applyCoachToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
+    expect(applyDefaultAgentModelPatchFn).not.toHaveBeenCalled();
+    expect(applyDefaultAgentToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
     expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
-    expect(refreshCoachRuntimeSessionsFn).toHaveBeenCalledWith("tester-70");
+    expect(refreshDefaultAgentRuntimeSessionsFn).toHaveBeenCalledWith("tester-70");
   });
 
   it("broker-token gateway: anthropic BYOT is broker-resolved, not materialized locally", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
-    const applyCoachModelPatchFn = vi.fn(async () => true);
-    const applyCoachToolsConvergenceFn = vi.fn(async () => false);
+    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
+    const applyDefaultAgentToolsConvergenceFn = vi.fn(async () => false);
     const materializeFn = vi.fn(() => false);
-    const purgeCustomerOauthRuntimeFn = vi.fn(async () => ({ changed: true, resetCount: 1 }));
+    const purgeUserOauthRuntimeFn = vi.fn(async () => ({ changed: true, resetCount: 1 }));
     const requestGatewayRestartFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
@@ -2542,11 +2542,11 @@ describe("standard gateway — BYOS materialization", () => {
       },
       {
         usesLlmBrokerToken: () => true,
-        purgeCustomerOauthRuntime: purgeCustomerOauthRuntimeFn,
+        purgeUserOauthRuntime: purgeUserOauthRuntimeFn,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
-        applyCoachModelPatch: applyCoachModelPatchFn,
-        applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
+        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
+        applyDefaultAgentToolsConvergence: applyDefaultAgentToolsConvergenceFn,
         materializePlatformBrokerSurfaces: materializeFn,
         requestGatewayRestart: requestGatewayRestartFn,
         triggerSecretsReload: triggerSecretsReloadFn,
@@ -2556,23 +2556,23 @@ describe("standard gateway — BYOS materialization", () => {
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null);
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
     expect(restoreOauthFn).not.toHaveBeenCalled();
-    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    expect(applyDefaultAgentModelPatchFn).not.toHaveBeenCalled();
     expect(requestGatewayRestartFn).not.toHaveBeenCalled();
     // anthropic BYOK ships no model patch → the standalone convergence covers
     // the BYOK carve-out (inherited surface) on this path too.
-    expect(applyCoachToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
+    expect(applyDefaultAgentToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses claude-cli BYOS without restarting every customer on the gateway", async () => {
+  it("suppresses claude-cli BYOS without restarting every user on the gateway", async () => {
     const applyByotStateFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
-    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
-    const purgeCustomerOauthRuntimeFn = vi.fn(async () => ({ changed: true, resetCount: 2 }));
+    const purgeUserOauthRuntimeFn = vi.fn(async () => ({ changed: true, resetCount: 2 }));
     const requestGatewayRestartFn = vi.fn(async () => true);
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
@@ -2581,10 +2581,10 @@ describe("standard gateway — BYOS materialization", () => {
         systemConfig: { byot: { provider: "claude-cli" } },
       },
       {
-        purgeCustomerOauthRuntime: purgeCustomerOauthRuntimeFn,
+        purgeUserOauthRuntime: purgeUserOauthRuntimeFn,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
-        applyCoachModelPatch: applyCoachModelPatchFn,
+        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
         requestGatewayRestart: requestGatewayRestartFn,
         triggerSecretsReload: triggerSecretsReloadFn,
       },
@@ -2594,8 +2594,8 @@ describe("standard gateway — BYOS materialization", () => {
       preserveAuthProfileStore: false,
     });
     expect(restoreOauthFn).not.toHaveBeenCalled();
-    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
-    expect(purgeCustomerOauthRuntimeFn).toHaveBeenCalledWith(
+    expect(applyDefaultAgentModelPatchFn).not.toHaveBeenCalled();
+    expect(purgeUserOauthRuntimeFn).toHaveBeenCalledWith(
       "tester-70",
       "platform-openai/gpt-6-luna",
       { forceSafeAll: true },
@@ -2604,10 +2604,10 @@ describe("standard gateway — BYOS materialization", () => {
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
 
-  it("purges disconnected stale OAuth runtime state on every customer convergence", async () => {
-    const purgeCustomerOauthRuntimeFn = vi.fn(async () => ({ changed: true, resetCount: 1 }));
+  it("purges disconnected stale OAuth runtime state on every user convergence", async () => {
+    const purgeUserOauthRuntimeFn = vi.fn(async () => ({ changed: true, resetCount: 1 }));
     const requestGatewayRestartFn = vi.fn(async () => true);
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: false,
         username: "tester-70",
@@ -2615,16 +2615,16 @@ describe("standard gateway — BYOS materialization", () => {
         provisioning: { openclaw: { status: "complete" } },
       },
       {
-        purgeCustomerOauthRuntime: purgeCustomerOauthRuntimeFn,
+        purgeUserOauthRuntime: purgeUserOauthRuntimeFn,
         applyByotState: vi.fn(() => false),
-        applyCoachModelPatch: vi.fn(async () => false),
-        applyCoachToolsConvergence: vi.fn(async () => false),
+        applyDefaultAgentModelPatch: vi.fn(async () => false),
+        applyDefaultAgentToolsConvergence: vi.fn(async () => false),
         requestGatewayRestart: requestGatewayRestartFn,
         triggerSecretsReload: vi.fn(async () => {}),
       },
     );
 
-    expect(purgeCustomerOauthRuntimeFn).toHaveBeenCalledWith(
+    expect(purgeUserOauthRuntimeFn).toHaveBeenCalledWith(
       "tester-70",
       "platform-openai/gpt-6-luna",
       { forceSafeAll: false },
@@ -2632,14 +2632,14 @@ describe("standard gateway — BYOS materialization", () => {
     expect(requestGatewayRestartFn).not.toHaveBeenCalled();
   });
 
-  it("does not restore or allowlist OAuth agent runtimes on a customer gateway", async () => {
+  it("does not restore or allowlist OAuth agent runtimes on a user gateway", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const restoreOauthFn = vi.fn(async () => ({
       restored: true,
       present: true,
       providers: ["openai", "anthropic"] as const,
     }));
-    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
     const applyOauthRuntimeModelAllowlistFn = vi.fn(async () => ({
       patched: false,
       changed: false,
@@ -2648,7 +2648,7 @@ describe("standard gateway — BYOS materialization", () => {
     const requestGatewayRestartFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
@@ -2656,10 +2656,10 @@ describe("standard gateway — BYOS materialization", () => {
         systemConfig: { byot: { provider: "openai-codex" } },
       },
       {
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
-        applyCoachModelPatch: applyCoachModelPatchFn,
+        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
         applyOauthRuntimeModelAllowlist: applyOauthRuntimeModelAllowlistFn,
         requestGatewayRestart: requestGatewayRestartFn,
         triggerSecretsReload: triggerSecretsReloadFn,
@@ -2671,7 +2671,7 @@ describe("standard gateway — BYOS materialization", () => {
     });
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith([], STANDARD_CODEX_APP_SERVER);
-    expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
+    expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
       model: "platform-openai/gpt-6-luna",
       source: "free-tier",
@@ -2680,13 +2680,13 @@ describe("standard gateway — BYOS materialization", () => {
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
 
-  it("does not probe an OAuth credential while customer agent runtimes are disabled", async () => {
+  it("does not probe an OAuth credential while user agent runtimes are disabled", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const restoreOauthFn = vi.fn(async () => ({ restored: false, present: false }));
-    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
@@ -2694,10 +2694,10 @@ describe("standard gateway — BYOS materialization", () => {
         systemConfig: { byot: { provider: "openai-codex" } },
       },
       {
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
-        applyCoachModelPatch: applyCoachModelPatchFn,
+        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
         triggerSecretsReload: triggerSecretsReloadFn,
       },
     );
@@ -2706,7 +2706,7 @@ describe("standard gateway — BYOS materialization", () => {
       preserveAuthProfileStore: false,
     });
     expect(restoreOauthFn).not.toHaveBeenCalled();
-    expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
+    expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
       model: "platform-openai/gpt-6-luna",
       source: "free-tier",
@@ -2715,7 +2715,7 @@ describe("standard gateway — BYOS materialization", () => {
   });
 });
 
-describe("Builder gateway — native subscription runtime", () => {
+describe("Isolated gateway — native subscription runtime", () => {
   it("restores OAuth and preserves direct runtime model selections", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const restoreOauthFn = vi.fn(async () => ({
@@ -2728,9 +2728,9 @@ describe("Builder gateway — native subscription runtime", () => {
       changed: true,
       restartRequired: false,
     }));
-    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
     const applyAgentModelOverridesFn = vi.fn(async () => true);
-    const purgeCustomerOauthRuntimeFn = vi.fn(async () => ({ changed: true, resetCount: 1 }));
+    const purgeUserOauthRuntimeFn = vi.fn(async () => ({ changed: true, resetCount: 1 }));
     const requestGatewayRestartFn = vi.fn(async () => false);
     const triggerSecretsReloadFn = vi.fn(async () => {});
     const agentModels = {
@@ -2740,7 +2740,7 @@ describe("Builder gateway — native subscription runtime", () => {
       },
     };
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
@@ -2752,13 +2752,13 @@ describe("Builder gateway — native subscription runtime", () => {
         },
       },
       {
-        isBuilderGateway: () => true,
+        isIsolatedGateway: () => true,
         isSharedGateway: () => false,
-        purgeCustomerOauthRuntime: purgeCustomerOauthRuntimeFn,
+        purgeUserOauthRuntime: purgeUserOauthRuntimeFn,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
         applyOauthRuntimeModelAllowlist: applyOauthRuntimeModelAllowlistFn,
-        applyCoachModelPatch: applyCoachModelPatchFn,
+        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
         applyAgentModelOverrides: applyAgentModelOverridesFn,
         materializePlatformBrokerSurfaces: vi.fn(() => false),
         hasPendingPlatformCatalogRestart: () => false,
@@ -2767,11 +2767,11 @@ describe("Builder gateway — native subscription runtime", () => {
       },
     );
 
-    expect(purgeCustomerOauthRuntimeFn).not.toHaveBeenCalled();
+    expect(purgeUserOauthRuntimeFn).not.toHaveBeenCalled();
     expect(applyByotStateFn).not.toHaveBeenCalled();
     expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
-    expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith(["openai"], BUILDER_CODEX_APP_SERVER);
-    expect(applyCoachModelPatchFn).toHaveBeenCalledTimes(1);
+    expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith(["openai"], ISOLATED_CODEX_APP_SERVER);
+    expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledTimes(1);
     expect(applyAgentModelOverridesFn).toHaveBeenCalledWith("tester-70", agentModels, {
       houseOnly: false,
     });
@@ -2780,16 +2780,16 @@ describe("Builder gateway — native subscription runtime", () => {
   });
 });
 
-describe("shared gateway — per-customer broker-token materialization", () => {
+describe("shared gateway — per-user broker-token materialization", () => {
   const PRESERVE = { preserveAuthProfileStore: true };
   const baseDeps = (overrides: Record<string, unknown>) => {
     let restartPending = false;
     return {
       isSharedGateway: () => true,
-      purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
-      applyCoachModelPatch: vi.fn(async () => false),
-      applyCoachToolsConvergence: vi.fn(async () => false),
-      purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+      purgeUserOauthRuntime: noUserOauthRuntimePurge,
+      applyDefaultAgentModelPatch: vi.fn(async () => false),
+      applyDefaultAgentToolsConvergence: vi.fn(async () => false),
+      purgeUserOauthRuntime: noUserOauthRuntimePurge,
       requestGatewayRestart: vi.fn(async () => false),
       triggerSecretsReload: vi.fn(async () => {}),
       hasPendingPlatformCatalogRestart: () => restartPending,
@@ -2803,7 +2803,7 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     };
   };
 
-  it("platform customer hot-reloads a materialized model catalog on a shared gateway, never a gateway restart", async () => {
+  it("platform user hot-reloads a materialized model catalog on a shared gateway, never a gateway restart", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const materializeFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: false, present: true }));
@@ -2811,7 +2811,7 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     const requestGatewayRestartFn = vi.fn(async () => true);
     const markPendingFn = vi.fn();
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       { byotActive: false, username: "tester-70", provisioning: { openclaw: { status: "complete" } } },
       baseDeps({
         applyByotState: applyByotStateFn,
@@ -2835,7 +2835,7 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     const reloadFn = vi.fn(async () => {});
     const requestGatewayRestartFn = vi.fn(async () => true);
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       { byotActive: false, username: "tester-70", provisioning: { openclaw: { status: "complete" } } },
       baseDeps({
         applyByotState: vi.fn(() => false),
@@ -2855,7 +2855,7 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     const applyByotStateFn = vi.fn(() => false);
     const materializeFn = vi.fn(() => true);
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
@@ -2873,11 +2873,11 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     const applyByotStateFn = vi.fn(() => false);
     const materializeFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
-    const applyCoachModelPatchFn = vi.fn(async () => false);
+    const applyDefaultAgentModelPatchFn = vi.fn(async () => false);
     const reloadFn = vi.fn(async () => {});
     const logLines: string[] = [];
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
@@ -2889,7 +2889,7 @@ describe("shared gateway — per-customer broker-token materialization", () => {
         applyByotState: applyByotStateFn,
         materializePlatformBrokerSurfaces: materializeFn,
         restoreOauthStoreForSlug: restoreOauthFn,
-        applyCoachModelPatch: applyCoachModelPatchFn,
+        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
         triggerSecretsReload: reloadFn,
         logFn: (m: string) => logLines.push(m),
       }),
@@ -2898,20 +2898,20 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
-    // no cohort model configured → coach stays on the pod default; never the byos model
-    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    // no cohort model configured → agent stays on the pod default; never the byos model
+    expect(applyDefaultAgentModelPatchFn).not.toHaveBeenCalled();
     expect(reloadFn).toHaveBeenCalledTimes(1);
-    expect(logLines.join("\n")).toContain("byosub (claude-cli) suppressed on Barn");
+    expect(logLines.join("\n")).toContain("byosub (claude-cli) suppressed on a shared gateway");
   });
 
   it("codex BYOS on shared (paid plan): suppressed to the platform rail, config default model stands", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const materializeFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
-    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
     const reloadFn = vi.fn(async () => {});
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
@@ -2923,46 +2923,46 @@ describe("shared gateway — per-customer broker-token materialization", () => {
         applyByotState: applyByotStateFn,
         materializePlatformBrokerSurfaces: materializeFn,
         restoreOauthStoreForSlug: restoreOauthFn,
-        applyCoachModelPatch: applyCoachModelPatchFn,
+        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
         triggerSecretsReload: reloadFn,
       }),
     );
 
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
-    // same models + budgets as any paying platform customer on shared — the
-    // paid plan has no house pin, so no coach-model patch is forced.
-    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    // same models + budgets as any paying platform user on shared — the
+    // paid plan has no house pin, so no default-agent-model patch is forced.
+    expect(applyDefaultAgentModelPatchFn).not.toHaveBeenCalled();
     expect(reloadFn).toHaveBeenCalledTimes(1);
   });
-  it.each(["anthropic", "openai", "grok", "openrouter", "minimax", "openai-compatible", "claude-cli", "openai-codex"])("keeps %s credentials off Barn and uses platform selections for coach and projects", async provider => {
+  it.each(["anthropic", "openai", "grok", "openrouter", "minimax", "openai-compatible", "claude-cli", "openai-codex"])("keeps %s credentials off a shared gateway and uses platform selections for agent and projects", async provider => {
     const applyByotStateFn = vi.fn(() => true);
     const materializeFn = vi.fn(() => false);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
     const overrides = vi.fn(async () => true);
     const purge = vi.fn(async () => ({ changed: true, resetCount: 0 }));
-    const coach = "octogee-tester-70-coach";
+    const defaultAgent = "octogee-tester-70-coach";
     const project = "octogee-tester-70-proj-web-coach";
     const safe = { primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] };
-    await syncByotForCustomer({
+    await syncByotForUser({
       byotActive: true,
       username: "tester-70",
       selectedTier: "personal",
       provisioning: { openclaw: { status: "complete" } },
       builderAgentDefault: safe,
       systemConfig: {
-        byot: { provider, model: "customer-model", baseUrl: "https://synthetic-provider.example/v1" },
+        byot: { provider, model: "user-model", baseUrl: "https://synthetic-provider.example/v1" },
         agentModels: {
-          [coach]: { primary: "custom-tester-70/customer-model", fallbacks: [] },
+          [defaultAgent]: { primary: "custom-tester-70/user-model", fallbacks: [] },
           [project]: { primary: "openai/gpt-5", fallbacks: [safe.primary] },
         },
       },
     }, baseDeps({
-      isBuilderGateway: () => false,
+      isIsolatedGateway: () => false,
       applyByotState: applyByotStateFn,
       materializePlatformBrokerSurfaces: materializeFn,
       restoreOauthStoreForSlug: restoreOauthFn,
-      purgeCustomerOauthRuntime: purge,
+      purgeUserOauthRuntime: purge,
       applyAgentModelOverrides: overrides,
       logFn: () => {},
     }));
@@ -2970,16 +2970,16 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(purge).toHaveBeenCalledWith("tester-70", safe.primary, { forceSafeAll: true });
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
-    expect(overrides).toHaveBeenCalledWith("tester-70", { [coach]: safe, [project]: safe }, { houseOnly: false });
+    expect(overrides).toHaveBeenCalledWith("tester-70", { [defaultAgent]: safe, [project]: safe }, { houseOnly: false });
   });
 
   it.each([false, true])("converges owned credentials and routing without changing history (dedicated=%s)", async dedicated => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "barn-credentials-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "shared-gateway-credentials-"));
     const home = path.join(root, "home");
-    const coach = "octogee-tester-70-coach";
+    const defaultAgent = "octogee-tester-70-coach";
     const project = "octogee-tester-70-proj-web-coach";
     const foreign = "octogee-other-coach";
-    const ids = [coach, project, foreign];
+    const ids = [defaultAgent, project, foreign];
     const brokerProfiles = (id: string) => Object.fromEntries([
       ["anthropic", `agent-model-token-${id}`],
       ["platform-openrouter", `agent-model-token-openrouter-${id}`],
@@ -2987,33 +2987,33 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     ].map(([provider, secret]) => [`${provider}:default`, {
       type: "api_key", provider, keyRef: { source: "exec", provider: "gcp-secret-manager", id: secret },
     }]));
-    const customerProfiles = (id: string) => ({ profiles: {
+    const userProfiles = (id: string) => ({ profiles: {
       ...brokerProfiles(id),
-      "openai:default": { type: "api_key", provider: "openai", key: "synthetic-customer-key" },
+      "openai:default": { type: "api_key", provider: "openai", key: "synthetic-user-key" },
     } });
-    const customerModels = { providers: { "custom-tester-70": { apiKey: "synthetic-customer-key", models: [] } } };
-    const config = { agents: { entries: Object.fromEntries(ids.map(id => [id, { model: "custom-tester-70/customer-model" }])) } };
+    const userModels = { providers: { "custom-tester-70": { apiKey: "synthetic-user-key", models: [] } } };
+    const config = { agents: { entries: Object.fromEntries(ids.map(id => [id, { model: "custom-tester-70/user-model" }])) } };
     const patches: unknown[] = [];
     const rpc = { sessionsList: vi.fn(async () => ({ sessions: [] })), sessionsReset: vi.fn(async () => ({ ok: true as const })), close: vi.fn(async () => {}) };
     try {
       for (const id of ids) {
         seedAgent(root, id);
         const dir = codexAgentDir(root, id);
-        await writeAuthProfileStore(dir, customerProfiles(id));
-        fs.writeFileSync(path.join(dir, "models.json"), JSON.stringify(customerModels));
+        await writeAuthProfileStore(dir, userProfiles(id));
+        fs.writeFileSync(path.join(dir, "models.json"), JSON.stringify(userModels));
         fs.writeFileSync(path.join(dir, ".byot-managed"), "managed");
         fs.writeFileSync(path.join(dir, "history.jsonl"), "synthetic preserved conversation\n");
       }
-      await syncByotForCustomer({
+      await syncByotForUser({
         byotActive: true, username: "tester-70", selectedTier: "personal",
         provisioning: { openclaw: { status: "complete" } },
-        systemConfig: { byot: { provider: "grok", model: "customer-model" } },
+        systemConfig: { byot: { provider: "grok", model: "user-model" } },
       }, baseDeps({
-        isBuilderGateway: () => dedicated,
+        isIsolatedGateway: () => dedicated,
         isSharedGateway: () => !dedicated,
         usesLlmBrokerToken: () => dedicated,
         applyByotState: (slug: string, input: Parameters<typeof applyByotState>[1], _agents: unknown, options: Parameters<typeof applyByotState>[3]) => applyByotState(slug, input, path.join(root, "agents"), options),
-        purgeCustomerOauthRuntime: (slug: string, model: string, options: { forceSafeAll?: boolean }) => purgeCustomerOauthRuntime(slug, model, {
+        purgeUserOauthRuntime: (slug: string, model: string, options: { forceSafeAll?: boolean }) => purgeUserOauthRuntime(slug, model, {
           ...options, config, openclawDir: root, homeDir: home, rpc,
           applyConfigPatch: async args => { patches.push(args.buildPatch(config)); return { mode: "rpc", attempts: 1, noop: true }; },
         }),
@@ -3026,13 +3026,13 @@ describe("shared gateway — per-customer broker-token materialization", () => {
         expect(fs.readFileSync(path.join(dir, "history.jsonl"), "utf8")).toBe("synthetic preserved conversation\n");
         const profiles = await readAuthProfileStore(dir);
         if (dedicated || id === foreign) {
-          expect(profiles).toEqual(customerProfiles(id));
-          expect(JSON.parse(fs.readFileSync(path.join(dir, "models.json"), "utf8"))).toEqual(customerModels);
+          expect(profiles).toEqual(userProfiles(id));
+          expect(JSON.parse(fs.readFileSync(path.join(dir, "models.json"), "utf8"))).toEqual(userModels);
         } else {
           expect(profiles).toEqual({ profiles: brokerProfiles(id) });
           const modelsFile = path.join(dir, "models.json");
-          expect(fs.existsSync(modelsFile) ? fs.readFileSync(modelsFile, "utf8") : "").not.toMatch(/synthetic-customer-key|custom-tester-70|byok-/);
-          if (id === coach) expect(fs.existsSync(path.join(dir, ".byot-managed"))).toBe(false);
+          expect(fs.existsSync(modelsFile) ? fs.readFileSync(modelsFile, "utf8") : "").not.toMatch(/synthetic-user-key|custom-tester-70|byok-/);
+          if (id === defaultAgent) expect(fs.existsSync(path.join(dir, ".byot-managed"))).toBe(false);
         }
       }
       expect(patches).toHaveLength(dedicated ? 0 : 1);
@@ -3049,11 +3049,11 @@ describe("operator gateway — runtime sync stays narrow", () => {
       .mockResolvedValueOnce({ restored: true, present: true, providers: ["openai"] })
       .mockResolvedValue({ restored: false, present: true, providers: ["openai"] });
     const deps = {
-      isBuilderGateway: () => true,
+      isIsolatedGateway: () => true,
       restoreOauthStoreForSlug,
       materializePlatformBrokerSurfaces: vi.fn(async () => false),
       applyOauthRuntimeModelAllowlist: vi.fn(async () => ({ patched: false, changed: false, restartRequired: false })),
-      applyCoachModelPatch: vi.fn(async () => false),
+      applyDefaultAgentModelPatch: vi.fn(async () => false),
       applyAgentModelOverrides: vi.fn(async () => false),
       requestGatewayRestart,
       triggerSecretsReload: vi.fn(async () => {}),
@@ -3061,11 +3061,11 @@ describe("operator gateway — runtime sync stays narrow", () => {
     };
     const user = { ...ON, systemConfig: { byot: { provider: "openai-codex" } } };
 
-    await expect(syncByotForCustomer(user, deps)).rejects.toThrow("native auth refresh unavailable");
+    await expect(syncByotForUser(user, deps)).rejects.toThrow("native auth refresh unavailable");
     expect(modelsAuthRefreshSpy).toHaveBeenCalledWith({ agentId: "octogee-tester-70-coach" });
     expect(requestGatewayRestart).not.toHaveBeenCalled();
 
-    await syncByotForCustomer(user, deps);
+    await syncByotForUser(user, deps);
     expect(modelsAuthRefreshSpy).toHaveBeenCalledTimes(2);
     expect(requestGatewayRestart).not.toHaveBeenCalled();
   });
@@ -3097,14 +3097,14 @@ describe("operator gateway — runtime sync stays narrow", () => {
     });
   });
 
-  it("syncByotForCustomer: restores OAuth credentials and patches the operator runtime model after the credential is present", async () => {
+  it("syncByotForUser: restores OAuth credentials and patches the operator runtime model after the credential is present", async () => {
     const applyByotStateFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({
       restored: true,
       present: true,
       providers: ["openai", "anthropic"] as const,
     }));
-    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
     const applyOauthRuntimeModelAllowlistFn = vi.fn(async () => ({
       patched: true,
       changed: true,
@@ -3113,7 +3113,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
     const requestGatewayRestartFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
@@ -3121,12 +3121,12 @@ describe("operator gateway — runtime sync stays narrow", () => {
         systemConfig: { byot: { provider: "openai-codex" } },
       },
       {
-        isBuilderGateway: () => true,
+        isIsolatedGateway: () => true,
         materializePlatformBrokerSurfaces: vi.fn(async () => false),
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
-        applyCoachModelPatch: applyCoachModelPatchFn,
+        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
         applyOauthRuntimeModelAllowlist: applyOauthRuntimeModelAllowlistFn,
         requestGatewayRestart: requestGatewayRestartFn,
         triggerSecretsReload: triggerSecretsReloadFn,
@@ -3137,9 +3137,9 @@ describe("operator gateway — runtime sync stays narrow", () => {
     expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
     expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith(
       ["openai", "anthropic"],
-      BUILDER_CODEX_APP_SERVER,
+      ISOLATED_CODEX_APP_SERVER,
     );
-    expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
+    expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
       provider: "openai-codex",
       baseUrl: undefined,
@@ -3150,21 +3150,21 @@ describe("operator gateway — runtime sync stays narrow", () => {
     expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
   });
 
-  it("syncByotForCustomer: materializes the platform catalog for an operator customer without OAuth", async () => {
+  it("syncByotForUser: materializes the platform catalog for an operator user without OAuth", async () => {
     let restartPending = false;
     const materializeBrokerFn = vi.fn(() => true);
     const requestGatewayRestartFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         username: "tester-70",
         selectedTier: "personal",
         provisioning: { openclaw: { status: "complete" } },
       },
       {
-        isBuilderGateway: () => true,
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        isIsolatedGateway: () => true,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         materializePlatformBrokerSurfaces: materializeBrokerFn,
         requestGatewayRestart: requestGatewayRestartFn,
         triggerSecretsReload: triggerSecretsReloadFn,
@@ -3183,7 +3183,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
     expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
   });
 
-  it("syncByotForCustomer: retries a rejected platform-catalog restart after transitioning to the standard path", async () => {
+  it("syncByotForUser: retries a rejected platform-catalog restart after transitioning to the standard path", async () => {
     let restartPending = false;
     let operatorGateway = true;
     const materializeBrokerFn = vi.fn()
@@ -3194,11 +3194,11 @@ describe("operator gateway — runtime sync stays narrow", () => {
       .mockResolvedValueOnce(true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
     const deps = {
-      isBuilderGateway: () => operatorGateway,
-      purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+      isIsolatedGateway: () => operatorGateway,
+      purgeUserOauthRuntime: noUserOauthRuntimePurge,
       applyByotState: vi.fn(() => false),
-      applyCoachModelPatch: vi.fn(async () => false),
-      applyCoachToolsConvergence: vi.fn(async () => false),
+      applyDefaultAgentModelPatch: vi.fn(async () => false),
+      applyDefaultAgentToolsConvergence: vi.fn(async () => false),
       materializePlatformBrokerSurfaces: materializeBrokerFn,
       requestGatewayRestart: requestGatewayRestartFn,
       triggerSecretsReload: triggerSecretsReloadFn,
@@ -3216,18 +3216,18 @@ describe("operator gateway — runtime sync stays narrow", () => {
       provisioning: { openclaw: { status: "complete" as const } },
     };
 
-    await syncByotForCustomer(user, deps);
+    await syncByotForUser(user, deps);
     expect(restartPending).toBe(true);
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
 
     operatorGateway = false;
-    await syncByotForCustomer(user, deps);
+    await syncByotForUser(user, deps);
     expect(requestGatewayRestartFn).toHaveBeenCalledTimes(2);
     expect(restartPending).toBe(false);
     expect(materializeBrokerFn).toHaveBeenCalledTimes(1);
   });
 
-  it("agentIdsForSlug includes every mounted project coach and excludes foreign agents", () => {
+  it("agentIdsForSlug includes every mounted project agent and excludes foreign agents", () => {
     expect(agentIdsForSlug("tester-70", {
       agents: {
         list: [
@@ -3245,7 +3245,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
     ]);
   });
 
-  it("syncByotForCustomer: a Builder OAuth restore runs Codex without the bwrap sandbox", async () => {
+  it("syncByotForUser: a user OAuth restore runs Codex without the bwrap sandbox", async () => {
     const currentConfig = {
       agents: {
         list: [
@@ -3268,7 +3268,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
     };
     const patches: object[] = [];
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
@@ -3276,8 +3276,8 @@ describe("operator gateway — runtime sync stays narrow", () => {
         systemConfig: { byot: { provider: "openai-codex" } },
       },
       {
-        isBuilderGateway: () => true,
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        isIsolatedGateway: () => true,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: vi.fn(() => true),
         restoreOauthStoreForSlug: vi.fn(async () => ({
           restored: true,
@@ -3292,8 +3292,8 @@ describe("operator gateway — runtime sync stays narrow", () => {
               return { mode: "rpc", attempts: 1 };
             },
           }),
-        applyCoachModelPatch: (input) =>
-          applyCoachModelPatch(input, {
+        applyDefaultAgentModelPatch: (input) =>
+          applyDefaultAgentModelPatch(input, {
             applyConfigPatch: async (args) => {
               patches.push(args.buildPatch(currentConfig));
               return { mode: "rpc", attempts: 1 };
@@ -3349,12 +3349,12 @@ describe("operator gateway — runtime sync stays narrow", () => {
     let restartPending = false;
     const applyByotStateFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
-    const applyCoachModelPatchFn = vi.fn(async () => true);
+    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
     const materializeBrokerFn = vi.fn(() => true);
     const requestGatewayRestartFn = vi.fn(async () => true);
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
@@ -3362,13 +3362,13 @@ describe("operator gateway — runtime sync stays narrow", () => {
         systemConfig: { byot: { provider: "anthropic" } },
       },
       {
-        isBuilderGateway: () => true,
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        isIsolatedGateway: () => true,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         usesLlmBrokerToken: () => true,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
-        applyCoachModelPatch: applyCoachModelPatchFn,
-        applyCoachToolsConvergence: vi.fn(async () => false),
+        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
+        applyDefaultAgentToolsConvergence: vi.fn(async () => false),
         materializePlatformBrokerSurfaces: materializeBrokerFn,
         requestGatewayRestart: requestGatewayRestartFn,
         triggerSecretsReload: triggerSecretsReloadFn,
@@ -3384,7 +3384,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
 
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null);
     expect(restoreOauthFn).not.toHaveBeenCalled();
-    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
+    expect(applyDefaultAgentModelPatchFn).not.toHaveBeenCalled();
     expect(requestGatewayRestartFn).toHaveBeenCalledWith("platform-model-catalog");
     expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
   });
@@ -3468,19 +3468,19 @@ describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker
     });
   });
 
-  it("strips the platform trim ONLY on the coach — a project agent's tools keys are untouched by its own override", async () => {
+  it("strips the platform trim ONLY on the agent — a project agent's tools keys are untouched by its own override", async () => {
     const withBlocks = {
       agents: {
         list: [
           {
             id: "octogee-tester-70-coach",
             model: "old",
-            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
           },
           {
             id: "octogee-tester-70-proj-web-coach",
             model: "old",
-            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
           },
         ],
       },
@@ -3510,7 +3510,7 @@ describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker
           {
             id: "octogee-tester-70-proj-web-coach",
             model: "old",
-            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
           },
         ],
       },
@@ -3521,12 +3521,12 @@ describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker
           {
             id: "octogee-tester-70-coach",
             model: "old",
-            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
           },
           {
             id: "octogee-tester-70-proj-web-coach",
             model: pick,
-            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_COACH_TOOLS },
+            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
           },
         ],
       },
@@ -3664,8 +3664,8 @@ describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker
   });
 });
 
-describe("syncByotForCustomer — agent-model overrides ride every class path", () => {
-  it("standard gateway: overrides applied after the coach-model sync with the plan's houseOnly", async () => {
+describe("syncByotForUser — agent-model overrides ride every class path", () => {
+  it("standard gateway: overrides applied after the default-agent-model sync with the plan's houseOnly", async () => {
     const applyAgentModelOverridesFn = vi.fn(async () => true);
     const agentModels = {
       "octogee-tester-70-coach": {
@@ -3674,7 +3674,7 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
       },
     };
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: false,
         username: "tester-70",
@@ -3683,10 +3683,10 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         systemConfig: { agentModels },
       },
       {
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
-        applyCoachModelPatch: vi.fn(async () => false),
-        applyCoachToolsConvergence: vi.fn(async () => false),
+        applyDefaultAgentModelPatch: vi.fn(async () => false),
+        applyDefaultAgentToolsConvergence: vi.fn(async () => false),
         triggerSecretsReload: vi.fn(async () => {}),
         applyAgentModelOverrides: applyAgentModelOverridesFn,
       },
@@ -3697,12 +3697,12 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
     });
   });
 
-  it("customer OAuth suppression uses the effective platform state and replaces stale runtime refs", async () => {
+  it("user OAuth suppression uses the effective platform state and replaces stale runtime refs", async () => {
     const applyByotStateFn = vi.fn(() => false);
-    const applyCoachToolsConvergenceFn = vi.fn(async () => false);
+    const applyDefaultAgentToolsConvergenceFn = vi.fn(async () => false);
     const applyAgentModelOverridesFn = vi.fn(async () => true);
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
@@ -3723,11 +3723,11 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         },
       },
       {
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: vi.fn(async () => ({ restored: true, present: true })),
-        applyCoachModelPatch: vi.fn(async () => false),
-        applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
+        applyDefaultAgentModelPatch: vi.fn(async () => false),
+        applyDefaultAgentToolsConvergence: applyDefaultAgentToolsConvergenceFn,
         triggerSecretsReload: vi.fn(async () => {}),
         applyAgentModelOverrides: applyAgentModelOverridesFn,
         logFn: () => {},
@@ -3737,7 +3737,7 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, {
       preserveAuthProfileStore: false,
     });
-    expect(applyCoachToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
+    expect(applyDefaultAgentToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
     expect(applyAgentModelOverridesFn).toHaveBeenCalledWith(
       "tester-70",
       {
@@ -3754,10 +3754,10 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
     );
   });
 
-  it("customer OAuth suppression forces the compiled safe coach model when no safe pick remains", async () => {
+  it("user OAuth suppression forces the compiled safe agent model when no safe pick remains", async () => {
     const applyAgentModelOverridesFn = vi.fn(async () => true);
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
@@ -3778,10 +3778,10 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         },
       },
       {
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
-        applyCoachModelPatch: vi.fn(async () => false),
-        applyCoachToolsConvergence: vi.fn(async () => false),
+        applyDefaultAgentModelPatch: vi.fn(async () => false),
+        applyDefaultAgentToolsConvergence: vi.fn(async () => false),
         triggerSecretsReload: vi.fn(async () => {}),
         applyAgentModelOverrides: applyAgentModelOverridesFn,
         logFn: () => {},
@@ -3804,11 +3804,11 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
     );
   });
 
-  it("house-only OAuth suppression keeps the coach pin and actively resets project runtime refs", async () => {
-    const applyCoachModelPatchFn = vi.fn(async () => true);
+  it("house-only OAuth suppression keeps the agent pin and actively resets project runtime refs", async () => {
+    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
     const applyAgentModelOverridesFn = vi.fn(async () => true);
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
@@ -3829,16 +3829,16 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         },
       },
       {
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
-        applyCoachModelPatch: applyCoachModelPatchFn,
+        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
         triggerSecretsReload: vi.fn(async () => {}),
         applyAgentModelOverrides: applyAgentModelOverridesFn,
         logFn: () => {},
       },
     );
 
-    expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
+    expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
       model: "platform-openai/gpt-6-luna",
       source: "free-tier",
@@ -3855,10 +3855,10 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
     );
   });
 
-  it("customer sync resets malformed owned selections instead of leaving a prior runtime pin", async () => {
+  it("user sync resets malformed owned selections instead of leaving a prior runtime pin", async () => {
     const applyAgentModelOverridesFn = vi.fn(async () => true);
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: false,
         username: "tester-70",
@@ -3874,10 +3874,10 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         },
       },
       {
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
-        applyCoachModelPatch: vi.fn(async () => false),
-        applyCoachToolsConvergence: vi.fn(async () => false),
+        applyDefaultAgentModelPatch: vi.fn(async () => false),
+        applyDefaultAgentToolsConvergence: vi.fn(async () => false),
         triggerSecretsReload: vi.fn(async () => {}),
         applyAgentModelOverrides: applyAgentModelOverridesFn,
         logFn: () => {},
@@ -3897,41 +3897,41 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
   });
 
 
-  const builderDefaultDeps = (applyAgentModelOverridesFn: ReturnType<typeof vi.fn>) => ({
-    purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+  const userDefaultDeps = (applyAgentModelOverridesFn: ReturnType<typeof vi.fn>) => ({
+    purgeUserOauthRuntime: noUserOauthRuntimePurge,
     applyByotState: vi.fn(() => false),
-    applyCoachModelPatch: vi.fn(async () => false),
-    applyCoachToolsConvergence: vi.fn(async () => false),
+    applyDefaultAgentModelPatch: vi.fn(async () => false),
+    applyDefaultAgentToolsConvergence: vi.fn(async () => false),
     triggerSecretsReload: vi.fn(async () => {}),
     applyAgentModelOverrides: applyAgentModelOverridesFn,
   });
-  const builderAgentDefault = {
+  const userAgentDefault = {
     primary: "platform-openai/gpt-6-luna",
     fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
   };
 
-  it("catalog plan with no pick: the platform Builder Agent default fills in for the coach", async () => {
+  it("catalog plan with no pick: the platform user agent default fills in for the agent", async () => {
     const applyAgentModelOverridesFn = vi.fn(async () => true);
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
         selectedTier: "personal",
-        builderAgentDefault,
+        builderAgentDefault: userAgentDefault,
       },
-      builderDefaultDeps(applyAgentModelOverridesFn),
+      userDefaultDeps(applyAgentModelOverridesFn),
     );
 
     expect(applyAgentModelOverridesFn).toHaveBeenCalledWith(
       "tester-70",
-      { "octogee-tester-70-coach": builderAgentDefault },
+      { "octogee-tester-70-coach": userAgentDefault },
       { houseOnly: false },
     );
   });
 
-  it("an explicit coach pick beats the platform default", async () => {
+  it("an explicit agent pick beats the platform default", async () => {
     const applyAgentModelOverridesFn = vi.fn(async () => true);
     const agentModels = {
       "octogee-tester-70-coach": {
@@ -3940,16 +3940,16 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
       },
     };
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
         selectedTier: "personal",
-        builderAgentDefault,
+        builderAgentDefault: userAgentDefault,
         systemConfig: { agentModels },
       },
-      builderDefaultDeps(applyAgentModelOverridesFn),
+      userDefaultDeps(applyAgentModelOverridesFn),
     );
 
     expect(applyAgentModelOverridesFn).toHaveBeenCalledWith("tester-70", agentModels, {
@@ -3957,31 +3957,31 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
     });
   });
 
-  it("BYOT and house-only coaches never inherit the platform default", async () => {
+  it("BYOT and house-only agents never inherit the platform default", async () => {
     const byotOverrides = vi.fn(async () => true);
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
         selectedTier: "personal",
         systemConfig: { byot: { provider: "anthropic" } },
-        builderAgentDefault,
+        builderAgentDefault: userAgentDefault,
       },
-      builderDefaultDeps(byotOverrides),
+      userDefaultDeps(byotOverrides),
     );
     expect(byotOverrides).toHaveBeenCalledWith("tester-70", undefined, { houseOnly: false });
 
     const houseOnlyOverrides = vi.fn(async () => true);
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
         selectedTier: "free",
-        builderAgentDefault,
+        builderAgentDefault: userAgentDefault,
       },
-      builderDefaultDeps(houseOnlyOverrides),
+      userDefaultDeps(houseOnlyOverrides),
     );
     expect(houseOnlyOverrides).toHaveBeenCalledWith("tester-70", undefined, { houseOnly: true });
   });
@@ -3989,7 +3989,7 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
   it("a malformed platform-default stamp is discarded, not applied", async () => {
     const applyAgentModelOverridesFn = vi.fn(async () => true);
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: false,
         username: "tester-70",
@@ -3997,7 +3997,7 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         selectedTier: "personal",
         builderAgentDefault: { primary: "not-a-catalog-ref", fallbacks: [] },
       },
-      builderDefaultDeps(applyAgentModelOverridesFn),
+      userDefaultDeps(applyAgentModelOverridesFn),
     );
 
     expect(applyAgentModelOverridesFn).toHaveBeenCalledWith("tester-70", undefined, {
@@ -4008,7 +4008,7 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
   it("shared gateway: a free-plan owner's overrides arrive houseOnly:true (deferred)", async () => {
     const applyAgentModelOverridesFn = vi.fn(async () => false);
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: false,
         username: "tester-70",
@@ -4025,9 +4025,9 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
       },
       {
         isSharedGateway: () => true,
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
-        applyCoachModelPatch: vi.fn(async () => false),
+        applyDefaultAgentModelPatch: vi.fn(async () => false),
         materializePlatformBrokerSurfaces: vi.fn(() => false),
         triggerSecretsReload: vi.fn(async () => {}),
         applyAgentModelOverrides: applyAgentModelOverridesFn,
@@ -4050,7 +4050,7 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
       },
     };
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: false,
         username: "tester-70",
@@ -4060,10 +4060,10 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
         systemConfig: { agentModels },
       },
       {
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
-        applyCoachModelPatch: vi.fn(async () => false),
-        applyCoachToolsConvergence: vi.fn(async () => false),
+        applyDefaultAgentModelPatch: vi.fn(async () => false),
+        applyDefaultAgentToolsConvergence: vi.fn(async () => false),
         triggerSecretsReload: vi.fn(async () => {}),
         applyAgentModelOverrides: applyAgentModelOverridesFn,
       },
@@ -4075,12 +4075,12 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
   });
 });
 
-describe("syncByotForCustomer — tools convergence wiring", () => {
-  it("house-only free customer: the coach-model patch carries the trim; the standalone convergence does not double-fire", async () => {
-    const applyCoachModelPatchFn = vi.fn(async () => true);
-    const applyCoachToolsConvergenceFn = vi.fn(async () => true);
+describe("syncByotForUser — tools convergence wiring", () => {
+  it("house-only free user: the default-agent-model patch carries the trim; the standalone convergence does not double-fire", async () => {
+    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
+    const applyDefaultAgentToolsConvergenceFn = vi.fn(async () => true);
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: false,
         username: "tester-70",
@@ -4088,25 +4088,25 @@ describe("syncByotForCustomer — tools convergence wiring", () => {
         selectedTier: "free",
       },
       {
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
-        applyCoachModelPatch: applyCoachModelPatchFn,
-        applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
+        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
+        applyDefaultAgentToolsConvergence: applyDefaultAgentToolsConvergenceFn,
         triggerSecretsReload: vi.fn(async () => {}),
       },
     );
 
-    expect(applyCoachModelPatchFn).toHaveBeenCalledWith(
+    expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith(
       expect.objectContaining({ source: "free-tier" }),
     );
-    expect(applyCoachToolsConvergenceFn).not.toHaveBeenCalled();
+    expect(applyDefaultAgentToolsConvergenceFn).not.toHaveBeenCalled();
   });
 
-  it("paid catalog customer with no model pick: the standalone convergence strips a lingering trim (upgrade path)", async () => {
-    const applyCoachModelPatchFn = vi.fn(async () => true);
-    const applyCoachToolsConvergenceFn = vi.fn(async () => true);
+  it("paid catalog user with no model pick: the standalone convergence strips a lingering trim (upgrade path)", async () => {
+    const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
+    const applyDefaultAgentToolsConvergenceFn = vi.fn(async () => true);
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: false,
         username: "tester-70",
@@ -4115,23 +4115,23 @@ describe("syncByotForCustomer — tools convergence wiring", () => {
         subscription: { tier: "personal", status: "active" },
       },
       {
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
-        applyCoachModelPatch: applyCoachModelPatchFn,
-        applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
+        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
+        applyDefaultAgentToolsConvergence: applyDefaultAgentToolsConvergenceFn,
         triggerSecretsReload: vi.fn(async () => {}),
       },
     );
 
-    expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
-    expect(applyCoachToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
+    expect(applyDefaultAgentModelPatchFn).not.toHaveBeenCalled();
+    expect(applyDefaultAgentToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
   });
 
-  it("house_only + anthropic BYOK (no coach-model patch ships): tools convergence still runs and targets the inherited surface", async () => {
-    const applyCoachModelPatchFn = vi.fn(async () => false);
-    const applyCoachToolsConvergenceFn = vi.fn(async () => true);
+  it("house_only + anthropic BYOK (no default-agent-model patch ships): tools convergence still runs and targets the inherited surface", async () => {
+    const applyDefaultAgentModelPatchFn = vi.fn(async () => false);
+    const applyDefaultAgentToolsConvergenceFn = vi.fn(async () => true);
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: true,
         username: "tester-70",
@@ -4140,26 +4140,26 @@ describe("syncByotForCustomer — tools convergence wiring", () => {
         systemConfig: { byot: { provider: "anthropic" } },
       },
       {
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         usesLlmBrokerToken: () => false,
         applyByotState: vi.fn(() => false),
         restoreOauthStoreForSlug: vi.fn(async () => ({ restored: false, present: true })),
-        applyCoachModelPatch: applyCoachModelPatchFn,
-        applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
+        applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
+        applyDefaultAgentToolsConvergence: applyDefaultAgentToolsConvergenceFn,
         triggerSecretsReload: vi.fn(async () => {}),
       },
     );
 
-    // anthropic BYOK produces no per-agent model override (byosCoachConfigPatch
+    // anthropic BYOK produces no per-agent model override (byosDefaultAgentConfigPatch
     // → null), so without the standalone convergence the stale trim would
     // outlive the documented BYOK carve-out forever.
-    expect(applyCoachToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
+    expect(applyDefaultAgentToolsConvergenceFn).toHaveBeenCalledWith("tester-70", false);
   });
 
-  it("incomplete provisioning: no tools convergence — the coach entry may not exist yet", async () => {
-    const applyCoachToolsConvergenceFn = vi.fn(async () => true);
+  it("incomplete provisioning: no tools convergence — the agent entry may not exist yet", async () => {
+    const applyDefaultAgentToolsConvergenceFn = vi.fn(async () => true);
 
-    await syncByotForCustomer(
+    await syncByotForUser(
       {
         byotActive: false,
         username: "tester-70",
@@ -4167,20 +4167,20 @@ describe("syncByotForCustomer — tools convergence wiring", () => {
         selectedTier: "personal",
       },
       {
-        purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
+        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyByotState: vi.fn(() => false),
-        applyCoachModelPatch: vi.fn(async () => false),
-        applyCoachToolsConvergence: applyCoachToolsConvergenceFn,
+        applyDefaultAgentModelPatch: vi.fn(async () => false),
+        applyDefaultAgentToolsConvergence: applyDefaultAgentToolsConvergenceFn,
         triggerSecretsReload: vi.fn(async () => {}),
       },
     );
 
-    expect(applyCoachToolsConvergenceFn).not.toHaveBeenCalled();
+    expect(applyDefaultAgentToolsConvergenceFn).not.toHaveBeenCalled();
   });
 });
 
 
-it("rewrites platform catalogs without credential markers during customer OAuth cleanup", async () => {
+it("rewrites platform catalogs without credential markers during user OAuth cleanup", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "authless-purge-catalog-"));
   const id = "octogee-tester-70-coach";
   vi.stubEnv("OPENROUTER_BASE_URL", "http://broker.invalid/openrouter/v1");
@@ -4190,7 +4190,7 @@ it("rewrites platform catalogs without credential markers during customer OAuth 
     seedAgent(root, id);
     const file = path.join(codexAgentDir(root, id), "models.json");
     fs.writeFileSync(file, JSON.stringify({ providers: Object.fromEntries(["platform-openrouter", "platform-openai", "platform-vertex"].map(provider => [provider, { apiKey: provider + ":default", models: [] }])) }));
-    await purgeCustomerOauthRuntime("tester-70", "platform-openrouter/z-ai/glm-5.2", {
+    await purgeUserOauthRuntime("tester-70", "platform-openrouter/z-ai/glm-5.2", {
       config: { agents: { entries: { [id]: {} } } }, openclawDir: root, homeDir: path.join(root, "home"),
       rpc: { sessionsList: async () => ({ sessions: [] }), sessionsReset: async () => ({ ok: true }), close: async () => {} } as never,
       applyConfigPatch: async () => ({ mode: "rpc", attempts: 1, noop: true }),

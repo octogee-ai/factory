@@ -148,8 +148,8 @@ describe("owner-managed Google grants", () => {
   });
   it("denies a grant when the store shows the owner suspended, even though the product document reads active", async () => {
     const h = harness();
-    const owner = await platformStateStore.builders.records.get("owner");
-    const get = vi.spyOn(platformStateStore.builders.records, "get")
+    const owner = await platformStateStore.users.records.get("owner");
+    const get = vi.spyOn(platformStateStore.users.records, "get")
       .mockResolvedValue({ ...owner!, accountLifecycle: { status: "suspended" } as never });
 
     const response = await request(h.app).post("/member").send({ permissions: [h.permission] });

@@ -53,7 +53,7 @@ const BASE_RULES: IngressRule[] = [
   },
 ];
 
-const GATEWAYS: FleetGateway[] = [{ gatewayId: "default" }, { gatewayId: "bender" }];
+const GATEWAYS: FleetGateway[] = [{ gatewayId: "default" }, { gatewayId: "walter" }];
 
 function expectPathBefore(paths: string[], earlier: string, later: string): void {
   const earlierIdx = paths.indexOf(earlier);
@@ -126,7 +126,7 @@ describe("apiFleetPaths", () => {
   });
 
   it("does not mint new public paths for blue/green or canary instance ids", () => {
-    expect(apiFleetPaths([{ gatewayId: "bender-blue" }, { gatewayId: "bender-green" }, { gatewayId: "bender-canary-2026" }], GATEWAY_EDGE_PORT)).toEqual([]);
+    expect(apiFleetPaths([{ gatewayId: "walter-blue" }, { gatewayId: "walter-green" }, { gatewayId: "walter-canary-2026" }], GATEWAY_EDGE_PORT)).toEqual([]);
   });
 });
 
@@ -237,7 +237,7 @@ describe("parseBaseRoutes", () => {
 });
 
 describe("syncEdgeIngress", () => {
-  it("server-side-applies the static base router rules under the cowboy field manager", async () => {
+  it("server-side-applies the static base router rules under the fleet controller field manager", async () => {
     const k = fakeKubectl({ ingress: ok(ingressStdout([])) });
     const result = await syncEdgeIngress(baseSyncOpts(k));
 

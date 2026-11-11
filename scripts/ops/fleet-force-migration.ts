@@ -1,11 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import {
   assertGatewayRuntimeMutationUnfencedInStore,
-  builderRuntimeMutationFenced,
+  isolatedRuntimeMutationFenced,
 } from "@octogee/core/gateway-retirement-claim";
 import { findActiveGatewayMigration } from "@octogee/core/fleet-operation-lock";
 import type {
-  BuilderRecord,
+  PlatformUserRecord,
   GatewayAssignment,
   PlatformStateStore,
   PlatformStateTransaction,
@@ -39,13 +39,13 @@ function record(value: unknown): Record<string, unknown> {
 
 function assertForceMigrationSource(source: Record<string, unknown>, target: ForceMigrationTarget): void {
   if (source.gatewayClass !== "builder") {
-    throw new Error("forced migration recovery requires a dedicated Builder gateway; Shared sources cannot be restarted");
+    throw new Error("forced migration recovery requires a dedicated isolated gateway; Shared sources cannot be restarted");
   }
   if (source.ownerUid !== target.uid || source.builderSlug !== target.slug) {
-    throw new Error("forced migration Builder source ownership changed");
+    throw new Error("forced migration user source ownership changed");
   }
   if (source.runtime !== undefined && source.runtime !== "cluster") {
-    throw new Error("forced migration currently supports Kubernetes Builder gateways only; GCE VM transport is not available");
+    throw new Error("forced migration currently supports Kubernetes isolated gateways only; GCE VM transport is not available");
   }
 }
 
@@ -68,11 +68,11 @@ function drainBlocked(op: Record<string, unknown>): boolean {
     rows.some((step) => step.name === "rollback:unmount-target" && step.status === "done");
 }
 
-async function assertSourceCustomersUnfenced(tx: PlatformStateTransaction, gatewayId: string): Promise<void> {
-  const holders = await tx.builders.records.listGatewayFenceHolders(gatewayId);
+async function assertSourceUsersUnfenced(tx: PlatformStateTransaction, gatewayId: string): Promise<void> {
+  const holders = await tx.users.records.listGatewayFenceHolders(gatewayId);
   if (holders.sourceTransferSource.length > 0 || holders.sourceTransferTarget.length > 0 ||
-    holders.assigned.some(builderRuntimeMutationFenced)) {
-    throw new Error("force migration source customers retain custody fences");
+    holders.assigned.some(isolatedRuntimeMutationFenced)) {
+    throw new Error("force migration source users retain custody fences");
   }
 }
 
@@ -88,7 +88,7 @@ async function assertNoCompetingCustody(tx: PlatformStateTransaction, target: Fo
     operations.some((op) => op.kind === "migrate-customer" && record(op.input).uid === target.uid)) {
     throw new Error("force migration is blocked by another running migration");
   }
-  if (owned) await assertSourceCustomersUnfenced(tx, target.fromGatewayId);
+  if (owned) await assertSourceUsersUnfenced(tx, target.fromGatewayId);
   else await assertGatewayRuntimeMutationUnfencedInStore(tx, target.fromGatewayId);
   await assertGatewayRuntimeMutationUnfencedInStore(tx, target.toGatewayId);
 }
@@ -111,22 +111,22 @@ function assertNoAcceptedCustody(op: Record<string, unknown>): void {
   }
 }
 
-function assertSourceAssignment(customer: Stored<BuilderRecord> | null, assignment: Stored<GatewayAssignment> | null,
+function assertSourceAssignment(user: Stored<PlatformUserRecord> | null, assignment: Stored<GatewayAssignment> | null,
   targetAssignment: Stored<GatewayAssignment> | null, target: ForceMigrationTarget,
-): { customer: Stored<BuilderRecord>; assignment: Stored<GatewayAssignment> } {
-  const migration = customer?.fences.migration;
-  if (customer === null || customer.slug !== target.slug || customer.gateway?.gatewayId !== target.fromGatewayId ||
+): { user: Stored<PlatformUserRecord>; assignment: Stored<GatewayAssignment> } {
+  const migration = user?.fences.migration;
+  if (user === null || user.slug !== target.slug || user.gateway?.gatewayId !== target.fromGatewayId ||
     migration?.operationId !== target.operationId || migration.phase !== "waiting" ||
     assignment === null || assignment.uid !== target.uid || assignment.slug !== target.slug || assignment.gatewayId !== target.fromGatewayId ||
     assignment.state !== "serving" || assignment.updatedByOperationId !== target.operationId ||
     !Number.isSafeInteger(assignment.epoch) || assignment.epoch < 1 || targetAssignment !== null) {
     throw new Error("force migration source assignment or migration owner changed");
   }
-  return { customer, assignment };
+  return { user, assignment };
 }
 
-function assertConvergedRoots(customer: Stored<BuilderRecord>, source: Record<string, unknown>, destination: Record<string, unknown>, owned?: OwnedMigrationRestart): void {
-  if (builderRuntimeMutationFenced(customer) || (!owned && source.runtimeRestartFence !== undefined) ||
+function assertConvergedRoots(user: Stored<PlatformUserRecord>, source: Record<string, unknown>, destination: Record<string, unknown>, owned?: OwnedMigrationRestart): void {
+  if (isolatedRuntimeMutationFenced(user) || (!owned && source.runtimeRestartFence !== undefined) ||
     destination.runtimeRestartFence !== undefined || [source, destination].some((root) => root.retirementClaim != null)) {
     throw new Error("force migration is blocked by a live custody fence");
   }
@@ -154,8 +154,8 @@ export async function readForceMigrationPlanInTransaction(tx: PlatformStateTrans
     if (!value || value.includes("/")) throw new Error("force migration requires exact non-empty identifiers");
   }
   if (target.fromGatewayId === target.toGatewayId) throw new Error("force migration requires different gateways");
-  const [operation, storedCustomer, storedAssignment, targetAssignment, sourceRoot, targetRoot] = await Promise.all([
-    tx.journal.operations.get(target.operationId), tx.builders.records.get(target.uid),
+  const [operation, storedUser, storedAssignment, targetAssignment, sourceRoot, targetRoot] = await Promise.all([
+    tx.journal.operations.get(target.operationId), tx.users.records.get(target.uid),
     tx.gateways.assignments.get(target.fromGatewayId, target.uid),
     tx.gateways.assignments.get(target.toGatewayId, target.uid),
     tx.gateways.roots.get(target.fromGatewayId), tx.gateways.roots.get(target.toGatewayId),
@@ -167,8 +167,8 @@ export async function readForceMigrationPlanInTransaction(tx: PlatformStateTrans
   if (owned) assertOwnedRestart(owned, op, source, target, storedAssignment?.epoch);
   assertPendingDrain(op, target, owned);
   assertNoAcceptedCustody(op);
-  const { customer, assignment } = assertSourceAssignment(storedCustomer, storedAssignment, targetAssignment, target);
-  assertConvergedRoots(customer, source, destination, owned);
+  const { user, assignment } = assertSourceAssignment(storedUser, storedAssignment, targetAssignment, target);
+  assertConvergedRoots(user, source, destination, owned);
   if (!Number.isSafeInteger(op.attempts ?? 0) || Number(op.attempts ?? 0) < 0 || typeof op.lastProgressAt !== "number" || !Number.isFinite(op.lastProgressAt)) {
     throw new Error("force migration has invalid attempt identity");
   }

@@ -5,7 +5,7 @@ import { platformStateStore } from "../lib/platform-state.js";
 import { logger } from "../middleware/logging.js";
 import { triggerGatewayModelCredentialSync } from "../lib/byot-sync-trigger.js";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
-import { byotSnapshotProjectionFromSystemConfig } from "@octogee/core/customer-snapshot-mapping";
+import { byotSnapshotProjectionFromSystemConfig } from "@octogee/core/user-snapshot-mapping";
 import {
   agentIdBelongsToSlug,
   parseAgentModelSelection,
@@ -18,8 +18,8 @@ import { resolveUserByosubCredentialRefs } from "@octogee/shared/types/model-cre
 import { agentModelCatalog } from "../lib/agent-model-catalog.js";
 import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import {
-  builderAgentModelDefaultFromDoc,
-  type BuilderAgentModelDefault,
+  userAgentModelDefaultFromDoc,
+  type UserAgentModelDefault,
 } from "@octogee/shared/types/platform-config";
 
 const router = Router();
@@ -46,21 +46,21 @@ async function readSystemConfig(uid: string): Promise<Record<string, unknown>> {
   return snap.data() ?? {};
 }
 
-// The operator's Builder Agent default dial — what an agent with no explicit
+// The operator's user Agent default dial — what an agent with no explicit
 // pick runs, so the picker can show the effective selection instead of an
 // empty "Choose a model…". An unreadable doc serves the compiled default.
 async function platformAgentModelDefault(
   logWarn: (msg: string) => void,
-): Promise<BuilderAgentModelDefault> {
+): Promise<UserAgentModelDefault> {
   try {
-    return builderAgentModelDefaultFromDoc((await platformStateStore.config.platform.get("models"))?.value);
+    return userAgentModelDefaultFromDoc((await platformStateStore.config.platform.get("models"))?.value);
   } catch (err) {
     logWarn(
       `[agent-models] platform default dial read failed — serving the compiled default: ${
         err instanceof Error ? err.message : String(err)
       }`,
     );
-    return builderAgentModelDefaultFromDoc(undefined);
+    return userAgentModelDefaultFromDoc(undefined);
   }
 }
 
@@ -71,7 +71,7 @@ async function readSubscriptionProviders(uid: string) {
   return refs.map((ref) => ref.provider);
 }
 
-async function isBuilderRuntime(req: Request): Promise<boolean> {
+async function isIsolatedRuntime(req: Request): Promise<boolean> {
   const gatewayId = gatewayIdFromRequest(req);
   if (!gatewayId) return false;
   const authorization = await readGatewayAuthorizationInStore(platformStateStore, gatewayId);
@@ -109,7 +109,7 @@ function triggerAgentModelSync(args: {
   };
   // The gateway re-runs resolveBillingProfile on this payload before applying the picks.
   // Every plan input travels: signup-offer catalog access hangs on the immutable receipt and a
-  // builder's on builderSubscription — an omission silently degrades the sync to house_only
+  // user's on builderSubscription — an omission silently degrades the sync to house_only
   // ("agent-model overrides deferred") while this PUT reports success (pickPlanInputs is the
   // single forwarding point that keeps that from recurring per-field).
   triggerGatewayModelCredentialSync({
@@ -140,7 +140,7 @@ router.get("/", requireAuth, async (req: Request, res: Response, next: NextFunct
       modelAccess: plan.modelAccess,
       builderTools: plan.toolAccess,
       ...(slug ? { coachAgentId: `octogee-${slug}-coach` } : {}),
-      byosub: subscriptionProviders.length > 0 && await isBuilderRuntime(req),
+      byosub: subscriptionProviders.length > 0 && await isIsolatedRuntime(req),
       subscriptionProviders,
       catalog: agentModelCatalog(subscriptionProviders),
       selections: parseAgentModelSelections(sysData.agentModels),
@@ -178,7 +178,7 @@ async function gateSelectionRequest(
     return { ok: false, status: 400, error: "primary (and optional fallbacks) must be valid model refs" };
   }
   const [sysData, subscriptionProviders] = await Promise.all([readSystemConfig(uid), readSubscriptionProviders(uid)]);
-  if (!(subscriptionProviders.length > 0 && await isBuilderRuntime(req))) {
+  if (!(subscriptionProviders.length > 0 && await isIsolatedRuntime(req))) {
     const allowed = new Set(platformModelRefs());
     const strangers = [selection.primary, ...selection.fallbacks].filter((ref) => !allowed.has(ref));
     if (strangers.length > 0) {

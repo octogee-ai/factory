@@ -53,7 +53,7 @@ function fake(files: Record<string, string> = {}, routes: Record<string, Route> 
 const desk = (look: { style: string; color: string } = OCEAN, timeZone: string | null = null) => ({ builderName: "Bob Builder", agentName: "Scout", look, timeZone });
 
 describe("fetchDesk", () => {
-  it("asks the broker for the configured Builder bootstrap and returns its desk identity", async () => {
+  it("asks the broker for the configured user bootstrap and returns its desk identity", async () => {
     const h = fake({}, { "/internal/fleet/configured-builder-bootstrap": () => ({ status: 200, body: { bootstrap: { coachToken: "x", desk: desk() } } }) });
     await expect(fetchDesk(h.deps, "bob")).resolves.toEqual(desk());
     const [{ url, init }] = h.fetches;
@@ -62,7 +62,7 @@ describe("fetchDesk", () => {
     expect(init.headers).toMatchObject({ "x-k8s-sa-token": "id-octogee-api", "x-octogee-gateway-credential-token": "id-octogee-api-gateway-credentials" });
   });
 
-  it("returns null while the Builder is not configured yet, and refuses a payload without a valid desk", async () => {
+  it("returns null while the user is not configured yet, and refuses a payload without a valid desk", async () => {
     const absent = fake({}, { "/internal/fleet/configured-builder-bootstrap": () => ({ status: 404, body: { error: "configured_builder_bootstrap_unavailable" } }) });
     await expect(fetchDesk(absent.deps, "bob")).resolves.toBeNull();
     const malformed = fake({}, { "/internal/fleet/configured-builder-bootstrap": () => ({ status: 200, body: { bootstrap: { desk: { builderName: "Bob", agentName: "S", look: { style: "dragon", color: "red" } } } } }) });
@@ -75,7 +75,7 @@ describe("fetchDesk", () => {
 });
 
 describe("syncDesk", () => {
-  it("writes desk.json and the character drawing into the Builder's home on first sight", async () => {
+  it("writes desk.json and the character drawing into the user's home on first sight", async () => {
     const h = fake();
     await expect(syncDesk(h.deps, SCOPE, desk())).resolves.toEqual({ written: true });
     expect(JSON.parse(h.store.get(DESK_JSON)!)).toEqual({ builderName: "Bob Builder", agentName: "Scout", look: OCEAN, timeZone: null });
@@ -114,7 +114,7 @@ describe("syncDesk", () => {
 
     for (const [label, files] of [
       ["stock Omarchy recorded", { ...familiar, [STYLE_FILE]: "omarchy\n" }],
-      ["a theme the Builder picked", { ...familiar, [THEME_FILE]: "nord\n" }],
+      ["a theme the user picked", { ...familiar, [THEME_FILE]: "nord\n" }],
       ["no recorded style", { [THEME_FILE]: "octogee\n" }],
     ] as const) {
       const quiet = fake({ ...files, [DESK_JSON]: JSON.stringify(desk(CORAL)), [DESK_SVG]: "<svg/>" });
@@ -147,7 +147,7 @@ describe("syncDesk", () => {
     expect(h.log).toHaveBeenCalledWith(expect.stringContaining("accent refreshed to #0ea5e9"));
   });
 
-  it("sets the computer's system time zone from the Builder's zone, idempotently, and surfaces failures", async () => {
+  it("sets the VM's system time zone from the user's zone, idempotently, and surfaces failures", async () => {
     let installed = "Etc/UTC";
     const timezone: Route = (init) => {
       if (init.method === "POST") { installed = (JSON.parse(String(init.body)) as { timeZone: string }).timeZone; return { status: 200, body: { timeZone: installed } }; }
@@ -159,7 +159,7 @@ describe("syncDesk", () => {
     expect(h.fetches.map((f) => `${f.init.method} ${f.url}`)).toEqual(["GET http://127.0.0.1:7777/timezone", "POST http://127.0.0.1:7777/timezone"]);
     expect(h.fetches[1].init.headers).toEqual({ "content-type": "application/json" });
     expect(JSON.parse(String(h.fetches[1].init.body))).toEqual({ timeZone: "America/Chicago" });
-    expect(h.log).toHaveBeenCalledWith(expect.stringContaining("computer time zone set to America/Chicago (was Etc/UTC)"));
+    expect(h.log).toHaveBeenCalledWith(expect.stringContaining("VM time zone set to America/Chicago (was Etc/UTC)"));
 
     await syncDesk(h.deps, SCOPE, desk(OCEAN, "America/Chicago"));
     expect(h.fetches).toHaveLength(3);

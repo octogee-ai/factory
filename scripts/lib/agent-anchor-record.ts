@@ -1,5 +1,5 @@
 import { publishAnchor } from "./postgres-anchor-file.js";
-import { readLocalAuxiliaryAnchors } from "./builder-auxiliary-anchors.js";
+import { readLocalAuxiliaryAnchors } from "./user-auxiliary-anchors.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { queryAgentStore, readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
@@ -94,7 +94,7 @@ export async function landAgentAnchors(
   return { landed, preserved };
 }
 
-interface SharedCustomerAgentAnchorsInput {
+interface SharedUserAgentAnchorsInput {
   stateDir: string;
   uid?: string;
   migrationId?: string;
@@ -104,11 +104,11 @@ interface SharedCustomerAgentAnchorsInput {
   broker: Pick<FleetBrokerClient, "readAgentAnchors" | "reportAgentAnchors">;
 }
 
-function sharedAnchorReadRequest(input: SharedCustomerAgentAnchorsInput) {
+function sharedAnchorReadRequest(input: SharedUserAgentAnchorsInput) {
   return { ...(input.uid ? { uid: input.uid } : {}), slug: input.slug, ...(input.migrationId ? { migrationId: input.migrationId } : {}) };
 }
 
-async function readSharedAnchorAuthority(input: SharedCustomerAgentAnchorsInput) {
+async function readSharedAnchorAuthority(input: SharedUserAgentAnchorsInput) {
   const { slug, broker } = input;
   const recorded = await broker.readAgentAnchors(sharedAnchorReadRequest(input));
   const uid = input.uid ?? recorded.assignment?.uid;
@@ -122,7 +122,7 @@ async function readSharedAnchorAuthority(input: SharedCustomerAgentAnchorsInput)
   return { recorded, uid, assignment: { ...assignment, state: assignment.state } };
 }
 
-export async function prepareSharedCustomerAgentAnchors(input: SharedCustomerAgentAnchorsInput): Promise<() => Promise<void>> {
+export async function prepareSharedUserAgentAnchors(input: SharedUserAgentAnchorsInput): Promise<() => Promise<void>> {
   const { stateDir, slug, broker } = input;
   const agentIds = [...new Set(input.agentIds)].sort();
   const { recorded, uid, assignment } = await readSharedAnchorAuthority(input);

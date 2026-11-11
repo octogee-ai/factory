@@ -23,8 +23,8 @@ function fixture(): { root: string; configPath: string; agentsDir: string } {
   };
 }
 
-describe("configured Builder agent runtime directories", () => {
-  it("creates runtime directories for every safe configured agent, including custom Builder agents", () => {
+describe("configured user agent runtime directories", () => {
+  it("creates runtime directories for every safe configured agent, including custom user agents", () => {
     const { configPath, agentsDir } = fixture();
     fs.writeFileSync(configPath, JSON.stringify({
       agents: {

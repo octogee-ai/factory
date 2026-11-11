@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { COMPUTER_HOME_CHECKPOINT_MAX_BYTES } from "@octogee/shared/types/glm";
+import { VM_HOME_CHECKPOINT_MAX_BYTES } from "@octogee/shared/types/glm";
 import {
   DESKTOP_HOME_PATHS,
   HOME_DESKTOP_TOOL_PATHS,
@@ -94,7 +94,7 @@ function fakeHome(overrides: Partial<FakeHome["world"]> = {}, routes: FakeHome["
 const signedUpload = { url: "https://storage.example/customers/bob/computer-home/checkpoints/x", method: "PUT" as const, gcsPath: "p", expiresAt: "e", requiredHeaders: { "x-goog-if-generation-match": "0" } };
 
 describe("homeScope", () => {
-  it("derives the home volume and builder slug from the bundle and is absent when either is missing", () => {
+  it("derives the home volume and user slug from the bundle and is absent when either is missing", () => {
     const scope = homeScope("/srv/octogee", bundleFixture({ builderIdentity: { ownerUid: "uid-bob", builderSlug: "bob" } }));
     expect(scope).toEqual({ slug: "bob", dataDir: "/srv/octogee/volumes/data", marker: "/srv/octogee/home-checkpoint.marker", desktopDir: "/srv/octogee/desktop-home", restorePending: "/srv/octogee/home-restore.pending", hostToolInventory: true });
     expect(homeScope("/srv/octogee", bundleFixture())).toBeNull();
@@ -203,7 +203,7 @@ describe("checkpointHome", () => {
   });
 
   it("refuses an oversized or empty archive and surfaces tar, upload, and commit failures, always cleaning up", async () => {
-    const big = fakeHome({ archiveSize: COMPUTER_HOME_CHECKPOINT_MAX_BYTES + 1 });
+    const big = fakeHome({ archiveSize: VM_HOME_CHECKPOINT_MAX_BYTES + 1 });
     await expect(checkpointHome(big.deps, big.scope, { force: true })).rejects.toThrow(/over the .* byte cap/);
     expect(big.fetches).toEqual([]);
     expect(big.removed).toEqual(["/tmp/octogee-home-checkpoint-xyz"]);
@@ -261,7 +261,7 @@ describe("restoreHome", () => {
     expect(h.shell).toEqual([]);
   });
 
-  it("reports no checkpoint for a fresh customer", async () => {
+  it("reports no checkpoint for a fresh user", async () => {
     const h = fakeHome({ dataEntries: [] }, { "/internal/fleet/computer-home/download-url": () => ({ status: 404, body: { error: "no_checkpoint" } }) });
     expect(await restoreHome(h.deps, h.scope)).toEqual({ status: "none" });
     expect(h.shell).toEqual([]);
@@ -394,7 +394,7 @@ describe.runIf(process.platform === "linux").each([".octogee-source-doctor-diagn
     } finally { await fs.rm(f.root, { recursive: true, force: true }); }
   });
 
-  it("ignores diagnostic-only changes but detects similarly named customer files", async () => {
+  it("ignores diagnostic-only changes but detects similarly named user files", async () => {
     const f = await fixture();
     try {
       const old = new Date("2020-01-01T00:00:00Z"), marker = new Date("2021-01-01T00:00:00Z"), changed = new Date("2022-01-01T00:00:00Z");

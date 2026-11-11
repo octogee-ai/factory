@@ -680,7 +680,7 @@ export function createSurgeOpenClawProcessGate(openclawDir: string, log: (messag
 }
 
 export interface SurgeOpenClawProcessSupervisorClient {
-  migrateBuilderStores: (expectedPodUid: string) => Promise<SurgeOpenClawProcessGateState>;
+  migrateUserStores: (expectedPodUid: string) => Promise<SurgeOpenClawProcessGateState>;
   status: () => Promise<SurgeOpenClawProcessGateState>;
   hold: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
   rehold: (input: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
@@ -772,7 +772,7 @@ export function createSurgeOpenClawProcessSupervisorClient(
   };
   return {
     status: () => call({ action: "status" }, SURGE_OPENCLAW_PROCESS_READ_TIMEOUT_MS),
-    migrateBuilderStores: (expectedPodUid) => call({ action: "migrate-builder-stores", expectedPodUid }),
+    migrateUserStores: (expectedPodUid) => call({ action: "migrate-builder-stores", expectedPodUid }),
     hold: (input) => call({ action: "hold", ...input }),
     rehold: (input) => call({ action: "rehold", ...input }),
     reholdReleasedTarget: (input) => call({ action: "rehold-released-target", ...input }),

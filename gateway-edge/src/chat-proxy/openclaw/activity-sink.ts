@@ -52,7 +52,7 @@ const ANSWER_TERMINAL_OUTCOMES = new Set<AgentAnswerCommitRecord["terminalOutcom
 export interface ActivitySinkBinding {
   mainChannelId: string;
   channelCreateAt: number;
-  coachMmUserId: string;
+  defaultAgentMmUserId: string;
   attentionMention: string;
 }
 
@@ -407,7 +407,7 @@ function answerPartRecordMatches(input: {
   ].every(Boolean);
   return [
     post.id === part.postId,
-    post.userId === binding.coachMmUserId,
+    post.userId === binding.defaultAgentMmUserId,
     post.channelId === binding.mainChannelId,
     post.rootId === ref.mainRootPostId,
     validMattermostRevision(post),
@@ -478,7 +478,7 @@ function durableAnswerCommitMatches(input: {
     post.id === receiptPostId,
     post.channelId === binding.mainChannelId,
     post.rootId === envelope.ref.mainRootPostId,
-    post.userId === binding.coachMmUserId,
+    post.userId === binding.defaultAgentMmUserId,
     validMattermostRevision(post),
     post.editAt === 0,
     post.deleteAt === 0,
@@ -728,7 +728,7 @@ class ActivitySinkWriter implements ActivitySink {
       post.channelId !== binding.mainChannelId ||
       post.rootId !== "" ||
       !post.userId ||
-      post.userId === binding.coachMmUserId
+      post.userId === binding.defaultAgentMmUserId
     ) {
       throw new ActivitySinkIntegrityError("main thread root failed exact Mattermost verification");
     }
@@ -752,7 +752,7 @@ class ActivitySinkWriter implements ActivitySink {
       !input ||
       input.id !== inputPostId ||
       input.channelId !== binding.mainChannelId ||
-      input.userId === binding.coachMmUserId ||
+      input.userId === binding.defaultAgentMmUserId ||
       !input.userId ||
       (inputPostId === root.id
         ? input.rootId !== ""
@@ -801,7 +801,7 @@ class ActivitySinkWriter implements ActivitySink {
     if (
       post.channelId !== binding.mainChannelId ||
       post.rootId !== envelope.ref.mainRootPostId ||
-      (envelope.type === ANSWER_COMMITTED && post.userId !== binding.coachMmUserId) ||
+      (envelope.type === ANSWER_COMMITTED && post.userId !== binding.defaultAgentMmUserId) ||
       !activityPostHasExactProps(props, envelope, expectedEventKey) ||
       !activityRootPostIdMatches(post, props, envelope, expectedActivityRootPostId)
     ) {

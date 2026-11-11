@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyOpenClawComputerBrowserConfig } from "../lib/openclaw-computer-browser.js";
-import { buildSafeDefaultAgent, gatewayAgentRoster, SAFE_DEFAULT_AGENT_ID } from "../lib/openclaw-config-builders.js";
+import { buildSafeDefaultAgent, gatewayAgentRoster, SAFE_DEFAULT_AGENT_ID } from "../lib/openclaw-config-users.js";
 import { applyPreBootPatches } from "../entrypoints/pre-boot-config.js";
-import { withBuilderClaim } from "./helpers/builder-claim.js";
+import { withUserClaim } from "./helpers/user-claim.js";
 
-const vmEnv = withBuilderClaim({ GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "gce-vm" }, "owner");
+const vmEnv = withUserClaim({ GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "gce-vm" }, "owner");
 const template = (): Record<string, any> => JSON.parse(readFileSync(
-  new URL("../../infra/gateway/openclaw.builder.template.json", import.meta.url), "utf8",
+  new URL("../../infra/gateway/openclaw.isolated.template.json", import.meta.url), "utf8",
 ));
 
 describe("computer browser runtime", () => {
@@ -113,7 +113,7 @@ describe("computer browser runtime", () => {
     expect(config.tools.profile).toBe("full");
   });
 
-  it("opens the Builder node surface at pre-boot without granting exec or file approvals", () => {
+  it("opens the user node surface at pre-boot without granting exec or file approvals", () => {
     const config = template();
     config.gateway.nodes = { commands: { allow: ["desktop.stream"], deny: [
       "system.run", "system.run.prepare", "system.which", "system.execApprovals.get",
@@ -161,7 +161,7 @@ describe("computer browser runtime", () => {
     { GATEWAY_CLASS: "builder" },
     { GATEWAY_CLASS: "shared", GATEWAY_RUNTIME_KIND: "gce-vm" },
     { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "k8s" },
-  ])("leaves browser and tool permissions unchanged outside a Builder VM: %j", (env) => {
+  ])("leaves browser and tool permissions unchanged outside a gateway VM: %j", (env) => {
     const config = template();
     const before = structuredClone(config);
     expect(applyOpenClawComputerBrowserConfig(config, env)).toBe(false);
@@ -173,12 +173,12 @@ describe("computer browser runtime", () => {
     config.browser.profiles = { custom: { cdpUrl: "http://127.0.0.1:9444", attachOnly: true } };
     config.tools.deny = ["browser"];
     config.agents.list = [{ id: "octogee-owner-proj-site-coach", tools: { deny: ["computer", "browser"] } }];
-    config.skills = { load: { extraDirs: ["/home/node/builder-skills"] } };
+    config.skills = { load: { extraDirs: ["/home/node/user-skills"] } };
     const nativePolicy = { ask: "always", denyPaths: ["/private/**"] };
     config.plugins.entries["file-transfer"] = { config: { nodes: { "octogee-desktop": nativePolicy } } };
     config.plugins.entries.ollama = { config: { discovery: { enabled: true } } };
     applyOpenClawComputerBrowserConfig(config, vmEnv);
-    expect(config.skills.load.extraDirs).toEqual(["/home/node/builder-skills", "/opt/octogee/skills/computer"]);
+    expect(config.skills.load.extraDirs).toEqual(["/home/node/user-skills", "/opt/octogee/skills/computer"]);
     expect(config.browser.profiles.custom).toEqual({ cdpUrl: "http://127.0.0.1:9444", attachOnly: true });
     expect(config.tools.deny).toEqual(["browser"]);
     expect(config.plugins.entries["file-transfer"].config.nodes["octogee-desktop"]).toEqual(nativePolicy);

@@ -70,7 +70,7 @@ usermod --password '!' octo
 sshd -t
 systemctl reload sshd.service
 
-log "first-run tips that do not apply to a managed computer"
+log "first-run tips that do not apply to a managed VM"
 for tip in welcome wifi; do
   printf '#!/bin/bash\n' > "/usr/share/omarchy/install/user/first-run/${tip}.sh"
 done

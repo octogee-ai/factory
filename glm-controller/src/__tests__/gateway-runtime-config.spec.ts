@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { prepareGatewayRuntimeConfig } from "../gateway-runtime-config.js";
 
-function builderConfig(overrides: Partial<GatewayMutableConfig> = {}): GatewayMutableConfig {
+function userConfig(overrides: Partial<GatewayMutableConfig> = {}): GatewayMutableConfig {
   return {
     configSchemaVersion: 1,
     profile: null,
@@ -12,10 +12,10 @@ function builderConfig(overrides: Partial<GatewayMutableConfig> = {}): GatewayMu
     sizingTier: null,
     gcpProject: null,
     gatewayContainerSecurityContext: null,
-    serviceAccountName: "octogee-gw-bender",
+    serviceAccountName: "octogee-gw-walter",
     serviceAccount: { create: true },
     builderAccess: { controlUiEnabled: true },
-    ownerUid: "uid-builder",
+    ownerUid: "uid-user",
     builderSlug: "builder",
     modelBrokerLimits: null,
     preemption: null,
@@ -24,7 +24,7 @@ function builderConfig(overrides: Partial<GatewayMutableConfig> = {}): GatewayMu
 }
 
 describe("prepareGatewayRuntimeConfig", () => {
-  it("injects live API-server CIDRs into enabled Builder control configuration", async () => {
+  it("injects live API-server CIDRs into enabled user control configuration", async () => {
     const resolveApiServerEgressCidrs = vi.fn(async () => [
       "10.128.0.2/32",
       "34.118.224.1/32",
@@ -32,8 +32,8 @@ describe("prepareGatewayRuntimeConfig", () => {
 
     await expect(
       prepareGatewayRuntimeConfig(
-        builderConfig(),
-        "bender",
+        userConfig(),
+        "walter",
         resolveApiServerEgressCidrs,
       ),
     ).resolves.toMatchObject({
@@ -46,7 +46,7 @@ describe("prepareGatewayRuntimeConfig", () => {
   });
 
   it("preserves the last known CIDRs when live resolution returns empty", async () => {
-    const config = builderConfig({
+    const config = userConfig({
       builderAccess: {
         controlUiEnabled: true,
         kubeApiServerEgressCidrs: ["10.128.0.2/32"],
@@ -54,22 +54,22 @@ describe("prepareGatewayRuntimeConfig", () => {
     });
 
     await expect(
-      prepareGatewayRuntimeConfig(config, "bender", async () => []),
+      prepareGatewayRuntimeConfig(config, "walter", async () => []),
     ).resolves.toBe(config);
   });
 
   it("fails preparation when neither live nor last-known CIDRs are available", async () => {
     await expect(
-      prepareGatewayRuntimeConfig(builderConfig(), "bender", async () => []),
-    ).rejects.toThrow("builder gateway bender has no API-server egress CIDRs");
+      prepareGatewayRuntimeConfig(userConfig(), "walter", async () => []),
+    ).rejects.toThrow("isolated gateway walter has no API-server egress CIDRs");
   });
 
-  it("injects API-server CIDRs when Builder Control UI is disabled", async () => {
+  it("injects API-server CIDRs when user Control UI is disabled", async () => {
     const resolveApiServerEgressCidrs = vi.fn(async () => ["10.128.0.2/32"]);
-    const config = builderConfig({ builderAccess: { controlUiEnabled: false } });
+    const config = userConfig({ builderAccess: { controlUiEnabled: false } });
 
     await expect(
-      prepareGatewayRuntimeConfig(config, "bender", resolveApiServerEgressCidrs),
+      prepareGatewayRuntimeConfig(config, "walter", resolveApiServerEgressCidrs),
     ).resolves.toMatchObject({
       builderAccess: {
         controlUiEnabled: false,

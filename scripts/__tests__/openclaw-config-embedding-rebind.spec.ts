@@ -3,7 +3,7 @@ import {
   platformOpenAiEmbeddingMemorySearch,
   platformOpenAiEmbeddingSecretId,
   rebindPlatformEmbeddingRefs,
-} from "../lib/openclaw-config-builders.js";
+} from "../lib/openclaw-config-users.js";
 
 function platformRef(agentId: string): Record<string, unknown> {
   return {
@@ -20,10 +20,10 @@ function platformRef(agentId: string): Record<string, unknown> {
   };
 }
 
-function coach(id: string, memorySearch?: Record<string, unknown>): Record<string, unknown> {
+function defaultAgent(id: string, memorySearch?: Record<string, unknown>): Record<string, unknown> {
   return {
     id,
-    name: `Coach (${id})`,
+    name: `Agent (${id})`,
     workspace: `/customers/${id}`,
     ...(memorySearch !== undefined ? { memorySearch } : {}),
   };
@@ -37,18 +37,18 @@ describe("rebindPlatformEmbeddingRefs (redacted-array round-trip self-heal)", ()
   });
 
   it("rewrites a platform ref copied from ANOTHER agent back to the owning agent id (the r2 shifted-ref corruption)", () => {
-    const corrupted = coach("octogee-livefixture-coach", platformRef("octogee-tester5-coach"));
+    const corrupted = defaultAgent("octogee-livefixture-coach", platformRef("octogee-tester5-coach"));
 
     const out = rebindPlatformEmbeddingRefs([corrupted]);
 
     expect(out).toEqual([
-      coach("octogee-livefixture-coach", platformRef("octogee-livefixture-coach")),
+      defaultAgent("octogee-livefixture-coach", platformRef("octogee-livefixture-coach")),
     ]);
   });
 
   it("rebinds the beta memory.search representation without reviving memorySearch", () => {
     const corrupted = {
-      ...coach("octogee-livefixture-coach"),
+      ...defaultAgent("octogee-livefixture-coach"),
       memory: { search: platformRef("octogee-tester5-coach") },
     };
 
@@ -63,11 +63,11 @@ describe("rebindPlatformEmbeddingRefs (redacted-array round-trip self-heal)", ()
     expect(out[0]).not.toHaveProperty("memorySearch");
   });
 
-  it("keeps every coach bound to platformOpenAiEmbeddingSecretId(its own agent id) across a multi-coach list", () => {
+  it("keeps every agent bound to platformOpenAiEmbeddingSecretId(its own agent id) across a multi-coach list", () => {
     const list = [
-      coach("octogee-alice-coach", platformRef("octogee-tester5-coach")),
-      coach("octogee-bob-coach", platformRef("octogee-alice-coach")),
-      coach("octogee-carol-coach", platformRef("octogee-carol-coach")),
+      defaultAgent("octogee-alice-coach", platformRef("octogee-tester5-coach")),
+      defaultAgent("octogee-bob-coach", platformRef("octogee-alice-coach")),
+      defaultAgent("octogee-carol-coach", platformRef("octogee-carol-coach")),
     ];
 
     const out = rebindPlatformEmbeddingRefs(list) as Array<{
@@ -81,8 +81,8 @@ describe("rebindPlatformEmbeddingRefs (redacted-array round-trip self-heal)", ()
   });
 
   it("returns correctly bound entries unchanged (same reference) and never mutates its input", () => {
-    const bound = coach("octogee-alice-coach", platformOpenAiEmbeddingMemorySearch("octogee-alice-coach"));
-    const corrupted = coach("octogee-bob-coach", platformRef("octogee-alice-coach"));
+    const bound = defaultAgent("octogee-alice-coach", platformOpenAiEmbeddingMemorySearch("octogee-alice-coach"));
+    const corrupted = defaultAgent("octogee-bob-coach", platformRef("octogee-alice-coach"));
     const corruptedSnapshot = structuredClone(corrupted);
 
     const out = rebindPlatformEmbeddingRefs([bound, corrupted]);
@@ -92,12 +92,12 @@ describe("rebindPlatformEmbeddingRefs (redacted-array round-trip self-heal)", ()
   });
 
   it("leaves BYO api keys, absent/malformed memorySearch, and non-agent entries untouched", () => {
-    const byo = coach("octogee-alice-coach", {
+    const byo = defaultAgent("octogee-alice-coach", {
       provider: "openai-compatible",
       remote: { baseUrl: "https://api.example.com", apiKey: { source: "exec", provider: "gcp-secret-manager", id: "byo-openai-alice" } },
     });
-    const noMemorySearch = coach("octogee-bob-coach");
-    const malformedMemorySearch = coach("octogee-carol-coach", { remote: "nope" } as Record<string, unknown>);
+    const noMemorySearch = defaultAgent("octogee-bob-coach");
+    const malformedMemorySearch = defaultAgent("octogee-carol-coach", { remote: "nope" } as Record<string, unknown>);
     const list = [byo, noMemorySearch, malformedMemorySearch, "garbage", null, { name: "no-id" }];
 
     const out = rebindPlatformEmbeddingRefs(list);
@@ -107,7 +107,7 @@ describe("rebindPlatformEmbeddingRefs (redacted-array round-trip self-heal)", ()
   });
 
   it("rebinds a REDACTED platform-shaped ref to the agent's own id — config.get sentinels are what the server shifts by index (2026-07-12 r9 wedge)", () => {
-    const redacted = coach("octogee-livefixture-coach", {
+    const redacted = defaultAgent("octogee-livefixture-coach", {
       provider: "openai-compatible",
       remote: {
         baseUrl: "https://api.openai.com/v1",
@@ -125,7 +125,7 @@ describe("rebindPlatformEmbeddingRefs (redacted-array round-trip self-heal)", ()
   });
 
   it("leaves a redacted ref of a DIFFERENT provider/source shape untouched", () => {
-    const foreign = coach("octogee-alice-coach", {
+    const foreign = defaultAgent("octogee-alice-coach", {
       provider: "openai-compatible",
       remote: { baseUrl: "https://api.example.com", apiKey: { source: "env", id: "__OPENCLAW_REDACTED__" } },
     });
@@ -136,12 +136,12 @@ describe("rebindPlatformEmbeddingRefs (redacted-array round-trip self-heal)", ()
   });
 
   it("rebinds a project agent's platform ref to the project agent's own id", () => {
-    const projectAgent = coach("octogee-alice-proj-p1-coach", platformRef("octogee-alice-coach"));
+    const projectAgent = defaultAgent("octogee-alice-proj-p1-coach", platformRef("octogee-alice-coach"));
 
     const out = rebindPlatformEmbeddingRefs([projectAgent]);
 
     expect(out).toEqual([
-      coach("octogee-alice-proj-p1-coach", platformRef("octogee-alice-proj-p1-coach")),
+      defaultAgent("octogee-alice-proj-p1-coach", platformRef("octogee-alice-proj-p1-coach")),
     ]);
   });
 });

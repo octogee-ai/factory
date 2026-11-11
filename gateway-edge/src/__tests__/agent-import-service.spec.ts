@@ -585,7 +585,7 @@ describe("AgentImportService apply and rollback", () => {
     }));
   });
 
-  it("patches only the coach and verifies redacted siblings and unpatched coach fields", async () => {
+  it("patches only the agent and verifies redacted siblings and unpatched agent fields", async () => {
     const before = {
       agents: { list: [
         { id: "other", name: "Other", apiKey: "__OPENCLAW_REDACTED__", tools: { profile: "full" } },
@@ -622,7 +622,7 @@ describe("AgentImportService apply and rollback", () => {
 
   // openclaw 2026.7.2 migrates agents.list into keyed agents.entries at pre-boot.
   // A patch that still ships agents.list is at best canonicalized and at worst
-  // inert, so the import would report success over a coach it never touched.
+  // inert, so the import would report success over a agent it never touched.
   it("patches a migrated keyed roster through agents.entries, preserving the same field content", async () => {
     const before = {
       agents: {
@@ -694,7 +694,7 @@ describe("AgentImportService apply and rollback", () => {
     })).rejects.toMatchObject({ code: "workspace_runtime_policy_failed" });
     expect(invokeOpenClaw).toHaveBeenCalledTimes(1);
   });
-  it("requires the exact preview hash, imports history, updates identity, and patches only the Octogee coach", async () => {
+  it("requires the exact preview hash, imports history, updates identity, and patches only the Octogee agent", async () => {
     const h = harness();
     const preview = await h.service.previewGithub({
       uid: "uid-jack",
@@ -865,7 +865,7 @@ describe("AgentImportService apply and rollback", () => {
     expect(h.records.get(preview.id)?.status).toBe("failed");
   });
 
-  it("does not overwrite a concurrent coach edit after a rejected config patch", async () => {
+  it("does not overwrite a concurrent agent edit after a rejected config patch", async () => {
     const invokeOpenClaw = vi.fn()
       .mockResolvedValueOnce({
         hash: "before",

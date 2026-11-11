@@ -1,5 +1,5 @@
 import type { OpaqueMap, Revision, Stored, TimeInput } from "./store.js";
-export type BuilderSecretKind = "builder-mattermost" | "coach-mattermost" | "project-agent-mattermost" | "connector";
+export type UserSecretKind = "builder-mattermost" | "coach-mattermost" | "project-agent-mattermost" | "connector";
 export interface MattermostTokenSecret {
     readonly kind: "builder-mattermost" | "coach-mattermost" | "project-agent-mattermost";
     readonly secretId: string;
@@ -16,15 +16,15 @@ export interface ConnectorTokenSecret {
     readonly encryptedRefreshToken: string | null;
     readonly detail: OpaqueMap;
 }
-export type BuilderSecret = MattermostTokenSecret | ConnectorTokenSecret;
-export type BuilderSecretInput = (Omit<MattermostTokenSecret, "createdAt" | "rotatedAt"> & {
+export type UserSecret = MattermostTokenSecret | ConnectorTokenSecret;
+export type UserSecretInput = (Omit<MattermostTokenSecret, "createdAt" | "rotatedAt"> & {
     readonly createdAt: TimeInput | null;
     readonly rotatedAt: TimeInput | null;
 }) | ConnectorTokenSecret;
 export interface SecretsRepository {
-    get(uid: string, secretId: string): Promise<Stored<BuilderSecret> | null>;
-    list(uid: string, kind?: BuilderSecretKind): Promise<readonly Stored<BuilderSecret>[]>;
-    put(uid: string, secret: BuilderSecretInput): Promise<void>;
+    get(uid: string, secretId: string): Promise<Stored<UserSecret> | null>;
+    list(uid: string, kind?: UserSecretKind): Promise<readonly Stored<UserSecret>[]>;
+    put(uid: string, secret: UserSecretInput): Promise<void>;
     delete(uid: string, secretId: string): Promise<void>;
 }
 export interface GatewayTicket {

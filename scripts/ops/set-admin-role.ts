@@ -54,12 +54,12 @@ export async function main(argv: string[] = process.argv.slice(2)) {
     email = user.email ?? "(no email)";
   }
 
-  if (await store.builders.records.get(uid) === null) {
+  if (await store.users.records.get(uid) === null) {
     console.error(`❌ No user doc found at users/${uid}. Has this user signed up?`);
     process.exit(1);
   }
 
-  await store.builders.records.patch(uid, { role: revoke ? { clear: true } : "admin" });
+  await store.users.records.patch(uid, { role: revoke ? { clear: true } : "admin" });
 
   console.log(`\n✅ ${revoke ? "Revoked" : "Granted"} admin role`);
   console.log(`   project: ${project}`);

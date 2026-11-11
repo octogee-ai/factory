@@ -45,7 +45,7 @@ describe("projectCheckoutScopeForGatewayRoot", () => {
     )).toBe("workspace-and-projects");
   });
 
-  it("keeps non-disposable builder gateways workspace-only", () => {
+  it("keeps non-disposable isolated gateways workspace-only", () => {
     expect(projectCheckoutScopeForGatewayRoot(
       gatewayRoot("builder"),
       "default",
@@ -54,7 +54,7 @@ describe("projectCheckoutScopeForGatewayRoot", () => {
     )).toBe("workspace-only");
   });
 
-  it("allows project checkouts only for an exact disposable Builder allocation", () => {
+  it("allows project checkouts only for an exact disposable isolated allocation", () => {
     expect(projectCheckoutScopeForGatewayRoot(
       gatewayRoot("builder"),
       "default",

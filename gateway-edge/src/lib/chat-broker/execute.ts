@@ -4,10 +4,10 @@
  * Relocated from the octogee-chat-tools OpenClaw extension: the agent runtime is
  * injection-reachable, so no PAT broader than the agent's own posting identity may
  * live there (the bots' posting tokens necessarily remain in openclaw.json — that
- * surface is unchanged; the Builder's PAT is what must never reach the pod). The
+ * surface is unchanged; the user's PAT is what must never reach the pod). The
  * gateway skill is a thin client; PAT resolution and every MM read happen here,
  * behind the fleet broker's gateway-identity auth. The PAT is the capability boundary — the workspace agent
- * reads with the Builder's PAT (the human it acts for), a project agent reads with
+ * reads with the user's PAT (the human it acts for), a project agent reads with
  * its project bot's PAT (member of that project's channels only).
  */
 
@@ -36,9 +36,9 @@ export interface ChatBrokerIdentity {
   /** PAT the MM reads run under — the capability boundary. */
   pat: string;
   /** The agent's own MM user id; its posts are labeled `self: true` in results. */
-  coachMmUserId: string;
+  defaultAgentMmUserId: string;
   /** The agent bot's own credential, used ONLY for the `unread` direction (MM serves a
-   *  user's unread state only to that user; the builder PAT would 403 or clobber the
+   *  user's unread state only to that user; the user PAT would 403 or clobber the
    *  human's read marker). */
   unread: { pat: string; mmUserId: string };
   /** Workspace slug == MM team name. */
@@ -133,7 +133,7 @@ export async function executeChatSearch(
   const { channels, users } = await hydrate(mm, pat, bundle);
 
   const shaped = shapeBundle(bundle, {
-    coachMmUserId: identity.coachMmUserId,
+    defaultAgentMmUserId: identity.defaultAgentMmUserId,
     siteUrl: identity.siteUrl,
     teamName: slug,
     channels,
@@ -185,7 +185,7 @@ export async function executeChatHistory(
   const historyPat = direction === "unread" ? identity.unread.pat : pat;
   const result = await mmHistory(mm, historyPat, {
     channelId,
-    coachMmUserId: identity.unread.mmUserId,
+    defaultAgentMmUserId: identity.unread.mmUserId,
     direction,
     cursor: params.cursor,
     limit,
@@ -198,7 +198,7 @@ export async function executeChatHistory(
   const users = await hydrateUsersForBundle(mm, pat, result.bundle);
 
   const shaped = shapeBundle(result.bundle, {
-    coachMmUserId: identity.coachMmUserId,
+    defaultAgentMmUserId: identity.defaultAgentMmUserId,
     siteUrl: identity.siteUrl,
     teamName: slug,
     channels,

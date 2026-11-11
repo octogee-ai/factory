@@ -45,7 +45,7 @@ describe("findSerialConflict — rollout", () => {
   it("returns null when the candidate's kind isn't serially exclusive", () => {
     const conflict = findSerialConflict(
       { id: "op-2", kind: "retire-gateway" },
-      [{ id: "op-1", kind: "retire-gateway", input: { gatewayId: "bender-blue" } }],
+      [{ id: "op-1", kind: "retire-gateway", input: { gatewayId: "walter-blue" } }],
     );
     expect(conflict).toBeNull();
   });
@@ -58,18 +58,18 @@ describe("findSerialConflict — rollout", () => {
   it("flags a conflict against another running rollout and names the rolling gateway", () => {
     const conflict = findSerialConflict(
       { id: "op-2", kind: "rollout" },
-      [{ id: "op-1", kind: "rollout", input: { gatewayId: "bender-blue" } }],
+      [{ id: "op-1", kind: "rollout", input: { gatewayId: "walter-blue" } }],
     );
     expect(conflict).toEqual({
       conflictingOpId: "op-1",
-      waitingOn: "roll bender-blue",
+      waitingOn: "roll walter-blue",
     });
   });
 
   it("never conflicts with itself (a doc can't be its own running blocker)", () => {
     const conflict = findSerialConflict(
       { id: "op-1", kind: "rollout" },
-      [{ id: "op-1", kind: "rollout", input: { gatewayId: "bender-blue" } }],
+      [{ id: "op-1", kind: "rollout", input: { gatewayId: "walter-blue" } }],
     );
     expect(conflict).toBeNull();
   });
@@ -88,7 +88,7 @@ describe("findSerialConflict — rollout", () => {
   it("unclassified rollout ops for different gateways stay globally exclusive", () => {
     const conflict = findSerialConflict(
       { id: "op-2", kind: "rollout", input: { gatewayId: "default-green" } },
-      [{ id: "op-1", kind: "rollout", input: { gatewayId: "bender-blue" } }],
+      [{ id: "op-1", kind: "rollout", input: { gatewayId: "walter-blue" } }],
     );
     expect(conflict?.conflictingOpId).toBe("op-1");
   });
@@ -97,18 +97,18 @@ describe("findSerialConflict — rollout", () => {
 describe("findSerialConflict — migrate-customer (per-target scope)", () => {
   it("conflicts with another running migration to the SAME target", () => {
     const conflict = findSerialConflict(
-      { id: "op-2", kind: "migrate-customer", input: { toGatewayId: "bender-green" } },
+      { id: "op-2", kind: "migrate-customer", input: { toGatewayId: "walter-green" } },
       [
         {
           id: "op-1",
           kind: "migrate-customer",
-          input: { fromGatewayId: "bender-blue", toGatewayId: "bender-green" },
+          input: { fromGatewayId: "walter-blue", toGatewayId: "walter-green" },
         },
       ],
     );
     expect(conflict).toEqual({
       conflictingOpId: "op-1",
-      waitingOn: "migration bender-blue → bender-green",
+      waitingOn: "migration walter-blue → walter-green",
     });
   });
 
@@ -232,7 +232,7 @@ describe("findSerialConflict — shared migration/release-roll scope", () => {
 });
 
 describe("decideOperationClaim", () => {
-  it("finishes a Builder activation retry before rolling its held target", () => {
+  it("finishes a user activation retry before rolling its held target", () => {
     const activation = {
       id: "builder-activate-builder-a-g1", kind: "migrate-customer", status: "pending",
       createdAt: 1, queuedAt: 3, nextAttemptAt: 15_000,
@@ -295,7 +295,7 @@ describe("decideOperationClaim", () => {
   it.each([
     { input: { source: 'continuous-placement-policy' } },
     { input: { recoverSourceOnly: false } },
-    { input: { fromGatewayId: 'builder-source' } },
+    { input: { fromGatewayId: 'user-source' } },
     { customerMigrationV2: { sourceGatewayId: 'shared-a' } },
     { id: 'different-migration' },
   ])('keeps ordinary queue exclusion for an unqualified target-repair request: %j', patch => {
@@ -342,7 +342,7 @@ describe("decideOperationClaim", () => {
     })).toEqual({ outcome: "claim" });
   });
 
-  it.each([5_000, -1])("lets another Builder pass a rolled-back retry with delay %i", (delay) => {
+  it.each([5_000, -1])("lets another user pass a rolled-back retry with delay %i", (delay) => {
     expect(decideOperationClaim({
       op: { id: "healthy", kind: "migrate-customer", status: "pending", createdAt: 2,
         input: { uid: "bob", fromGatewayId: "shared-a", toGatewayId: "shared-b" } },
@@ -504,13 +504,13 @@ describe("decideOperationClaim", () => {
       op: { id: "op-2", kind: "rollout", status: "pending", createdAt: 2 },
       now,
       runningOpsSameKind: [
-        { id: "op-1", kind: "rollout", input: { gatewayId: "bender-blue" } },
+        { id: "op-1", kind: "rollout", input: { gatewayId: "walter-blue" } },
       ],
       pendingOpsSameKind: [],
     });
     expect(decision).toEqual({
       outcome: "queue",
-      waitingOn: "roll bender-blue",
+      waitingOn: "roll walter-blue",
     });
   });
 
@@ -518,7 +518,7 @@ describe("decideOperationClaim", () => {
     const decision = decideOperationClaim({
       op: { id: "op-2", kind: "retire-gateway", status: "pending", createdAt: 2 },
       now,
-      runningOpsSameKind: [{ id: "op-1", kind: "retire-gateway", input: { gatewayId: "bender-green" } }],
+      runningOpsSameKind: [{ id: "op-1", kind: "retire-gateway", input: { gatewayId: "walter-green" } }],
       pendingOpsSameKind: [],
     });
     expect(decision).toEqual({ outcome: "claim" });
@@ -570,12 +570,12 @@ describe("decideOperationClaim — FIFO per scope (an older pending op blocks a 
       now,
       runningOpsSameKind: [],
       pendingOpsSameKind: [
-        { id: "op-old", kind: "rollout", createdAt: 2, input: { gatewayId: "bender-blue" } },
+        { id: "op-old", kind: "rollout", createdAt: 2, input: { gatewayId: "walter-blue" } },
       ],
     });
     expect(decision).toEqual({
       outcome: "queue",
-      waitingOn: "roll bender-blue",
+      waitingOn: "roll walter-blue",
     });
   });
 
@@ -597,7 +597,7 @@ describe("decideOperationClaim — FIFO per scope (an older pending op blocks a 
       now,
       runningOpsSameKind: [],
       pendingOpsSameKind: [
-        { id: "op-a", kind: "rollout", createdAt: 2, input: { gatewayId: "bender-blue" } },
+        { id: "op-a", kind: "rollout", createdAt: 2, input: { gatewayId: "walter-blue" } },
       ],
     });
     expect(blocked.outcome).toBe("queue");
@@ -663,7 +663,7 @@ describe("decideOperationClaim — FIFO per scope (an older pending op blocks a 
       now,
       runningOpsSameKind: [],
       pendingOpsSameKind: [
-        { id: "op-1", kind: "rollout", createdAt: 2, input: { gatewayId: "bender-blue" } },
+        { id: "op-1", kind: "rollout", createdAt: 2, input: { gatewayId: "walter-blue" } },
       ],
     });
     expect(decision).toEqual({ outcome: "claim" });

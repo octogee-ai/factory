@@ -236,7 +236,7 @@ function assessDefaultRuntime(
     const orphan = difference(mounted, assigned);
     if (missing.length > 0 || orphan.length > 0) {
       failures.push(
-        `default assignment roster does not equal mounted customers (missing: ${displayValues(missing)}; orphan: ${displayValues(orphan)})`,
+        `default assignment roster does not equal mounted users (missing: ${displayValues(missing)}; orphan: ${displayValues(orphan)})`,
       );
     }
   }

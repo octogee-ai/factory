@@ -12,7 +12,7 @@ export type FlowEvent =
   | { type: "tick"; now: number }
   | { type: "captureResult"; ok: boolean; reason?: string };
 
-export function coachAgentId(slug: string): string {
+export function userDefaultAgentId(slug: string): string {
   return `octogee-${slug}-coach`;
 }
 

@@ -10,11 +10,11 @@ export declare const TIERS: readonly ["trial", "free", "hobby", "pro", "max"];
 export type Tier = typeof TIERS[number];
 export declare const TIER_CREW_ACCESS: Record<string, CrewRole[]>;
 export declare const TIER_COLLABORATOR_LIMITS: Record<string, number>;
-export interface CustomerProvisioning {
+export interface UserProvisioning {
     slug: string;
     status: string;
     customerDir: string;
     agentIds: string[];
     activatedAgents: string[];
 }
-export declare function getProvisioning(data: DocumentData): CustomerProvisioning | null;
+export declare function getProvisioning(data: DocumentData): UserProvisioning | null;

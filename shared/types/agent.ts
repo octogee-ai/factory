@@ -14,7 +14,7 @@ export interface Agent {
   // Canonical agent identity (= the agents/{uid} doc id). The stable id that
   // @mention / DM resolution targets; rendering is by `name` (display name).
   id: string;
-  // Free-form display name the Builder chooses ("Scout"); not unique. Mirrored to
+  // Free-form display name the user chooses ("Scout"); not unique. Mirrored to
   // the Mattermost bot's display_name. The MM bot username stays the deterministic
   // system id `{slug}-coach` and is never renamed.
   name: string;

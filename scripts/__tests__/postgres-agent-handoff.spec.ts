@@ -40,7 +40,7 @@ it("detaches before carrying a PostgreSQL anchor and adopts it without a SQLite 
   expect(await fs.readFile(file)).toEqual(await fs.readFile(prepared.stores[0]!.restoredPath));
 });
 
-it("exports a multi-agent customer without queueing detaches behind the serialized runtime deadline", async () => {
+it("exports a multi-agent user without queueing detaches behind the serialized runtime deadline", async () => {
   const agents = await Promise.all(Array.from({ length: 5 }, (_, index) => fixture(`octogee-alice-project-${index}`)));
   const stageDir = path.join(agents[0]!.root, "stage");
   const guard = new OpenClawRuntimeUpdateGuard();

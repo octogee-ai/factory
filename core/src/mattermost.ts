@@ -1,10 +1,10 @@
 export { getMmAdminToken, mmApiCall } from "./mattermost/client.js";
 
 export type {
-  CustomerChannelKind,
-  CustomerChannelMemberIds,
+  UserChannelKind,
+  UserChannelMemberIds,
 } from "./mattermost/channel-members.js";
-export { customerChannelMembers } from "./mattermost/channel-members.js";
+export { userChannelMembers } from "./mattermost/channel-members.js";
 
 export { createProjectChannel } from "./mattermost/channels.js";
 
@@ -14,17 +14,17 @@ export {
   joinCommunityMembership,
 } from "./mattermost/community.js";
 
-export type { CoachPatMintDeps } from "./mattermost/coach-pat.js";
+export type { DefaultAgentPatMintDeps } from "./mattermost/default-agent-pat.js";
 export {
-  COACH_PAT_DESCRIPTION,
-  mintAndPersistCoachToken,
-} from "./mattermost/coach-pat.js";
+  DEFAULT_AGENT_PAT_DESCRIPTION,
+  mintAndPersistDefaultAgentToken,
+} from "./mattermost/default-agent-pat.js";
 
-export type { BuilderPatRotateDeps, BuilderPatRotateResult } from "./mattermost/builder-pat.js";
+export type { UserPatRotateDeps, UserPatRotateResult } from "./mattermost/user-pat.js";
 export {
-  BUILDER_PAT_DESCRIPTION,
-  revokeAndMintBuilderPat,
-} from "./mattermost/builder-pat.js";
+  USER_PAT_DESCRIPTION,
+  revokeAndMintUserPat,
+} from "./mattermost/user-pat.js";
 
 export { mmUploadAvatar } from "./mattermost/avatars.js";
 
@@ -34,7 +34,7 @@ export { ensureAdminCredentials } from "./mattermost/admin-creds.js";
 
 export {
   syncProfileToMattermost,
-  syncCoachProfileToMattermost,
+  syncDefaultAgentProfileToMattermost,
 } from "./mattermost/profile-sync.js";
 
 export {

@@ -16,10 +16,10 @@ vi.mock("ws", async () => {
   }
   return { WebSocket };
 });
-import { connectLoadClient, coachMessages } from "../lib/gateway-load-client.js";
-const channelId = "a".repeat(26), userId = "u".repeat(26), coachId = "c".repeat(26), inputPostId = "i".repeat(26);
+import { connectLoadClient, defaultAgentMessages } from "../lib/gateway-load-client.js";
+const channelId = "a".repeat(26), userId = "u".repeat(26), userDefaultAgentId = "c".repeat(26), inputPostId = "i".repeat(26);
 const target = { name: "alice", workspaceSlug: "alice", tokenEnv: "OCTOGEE_LOAD_TOKEN_ALICE", channelId };
-const route = { gatewayId: "shared-0", mmUserId: userId, coachMmUserId: coachId };
+const route = { gatewayId: "shared-0", mmUserId: userId, defaultAgentMmUserId: userDefaultAgentId };
 const credentials = { mmUrl: "https://api-test.octogee.com", mmToken: "mm-secret", mmUserId: userId };
 const connect = () => connectLoadClient({ target, gatewayId: "shared-0", token: "test-token", signal: new AbortController().signal });
 afterEach(() => { vi.unstubAllGlobals(); sockets.instances.length = 0; sockets.rejectAuth = false; });
@@ -57,12 +57,12 @@ describe("TEST PWA load transport", () => {
     sockets.rejectAuth = true; vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json(route)).mockResolvedValueOnce(Response.json(credentials)));
     await expect(connect()).rejects.toThrow("authentication"); expect(sockets.instances[0].closed).toBe(true);
   });
-  it("accepts native coach replies while excluding user echoes, activity and deleted posts", () => {
-    const reply = { id: "r".repeat(26), channel_id: channelId, user_id: coachId, delete_at: 0, type: "", message: "nonce", props: {} };
+  it("accepts native agent replies while excluding user echoes, activity and deleted posts", () => {
+    const reply = { id: "r".repeat(26), channel_id: channelId, user_id: userDefaultAgentId, delete_at: 0, type: "", message: "nonce", props: {} };
     const echo = { ...reply, id: "e".repeat(26), user_id: userId };
     const activity = { ...reply, id: "x".repeat(26), props: { octogee: { kind: "agent.activity" } } };
     const history = { order: [reply.id, echo.id, activity.id], posts: { [reply.id]: reply, [echo.id]: echo, [activity.id]: activity } };
-    const project = () => coachMessages(history, channelId, coachId);
+    const project = () => defaultAgentMessages(history, channelId, userDefaultAgentId);
     expect(project()).toEqual({ messages: [{ role: "assistant", content: "nonce" }] });
     reply.delete_at = 1; expect(project().messages).toEqual([]);
     reply.delete_at = 0; reply.type = "system_join_channel"; expect(project().messages).toEqual([]);

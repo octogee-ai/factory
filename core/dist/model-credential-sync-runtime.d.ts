@@ -1,7 +1,7 @@
-import { PLATFORM_MODEL_POLICY_ALLOW_PATH, applyCoachModelPatch, customerMountConfigPatch, customerSecurityProjectionReplacePaths, platformModelAllowlistPatch, brokerFetchByosubCreds, restoreOauthStoreForSlug, refreshCoachRuntimeSessions, triggerSecretsReload, type SyncByotForCustomerDeps } from "./byot-sync-runtime.js";
+import { PLATFORM_MODEL_POLICY_ALLOW_PATH, applyDefaultAgentModelPatch, userMountConfigPatch, userSecurityProjectionReplacePaths, platformModelAllowlistPatch, brokerFetchByosubCreds, restoreOauthStoreForSlug, refreshDefaultAgentRuntimeSessions, triggerSecretsReload, type SyncByotForUserDeps } from "./byot-sync-runtime.js";
 import { applyModelCredentialState, type ModelCredentialSyncUserData } from "./model-credential-sync.js";
-export type SyncModelCredentialsForCustomerDeps = SyncByotForCustomerDeps & {
+export type SyncModelCredentialsForUserDeps = SyncByotForUserDeps & {
     applyModelCredentialState?: typeof applyModelCredentialState;
 };
-export declare function syncModelCredentialsForCustomer(userData: ModelCredentialSyncUserData, deps?: SyncModelCredentialsForCustomerDeps): Promise<void>;
-export { PLATFORM_MODEL_POLICY_ALLOW_PATH, customerMountConfigPatch, customerSecurityProjectionReplacePaths, platformModelAllowlistPatch, applyCoachModelPatch as applyModelCredentialCoachPatch, brokerFetchByosubCreds as brokerFetchModelCredentialOauthCreds, refreshCoachRuntimeSessions as refreshModelCredentialRuntimeSessions, restoreOauthStoreForSlug as restoreModelCredentialOauthStoreForSlug, triggerSecretsReload as triggerModelCredentialSecretsReload, };
+export declare function syncModelCredentialsForUser(userData: ModelCredentialSyncUserData, deps?: SyncModelCredentialsForUserDeps): Promise<void>;
+export { PLATFORM_MODEL_POLICY_ALLOW_PATH, userMountConfigPatch, userSecurityProjectionReplacePaths, platformModelAllowlistPatch, applyDefaultAgentModelPatch as applyModelCredentialDefaultAgentPatch, brokerFetchByosubCreds as brokerFetchModelCredentialOauthCreds, refreshDefaultAgentRuntimeSessions as refreshModelCredentialRuntimeSessions, restoreOauthStoreForSlug as restoreModelCredentialOauthStoreForSlug, triggerSecretsReload as triggerModelCredentialSecretsReload, };

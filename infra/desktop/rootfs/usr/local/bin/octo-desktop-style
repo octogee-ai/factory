@@ -39,7 +39,7 @@ link_plugins() {
   for id in "${plugin_ids[@]}"; do
     target="$plugins_dir/$id"
     if [[ -e "$target" && ! -L "$target" ]]; then
-      warn "$target is not a link; leaving the Builder's own copy of $id in place"
+      warn "$target is not a link; leaving the user's own copy of $id in place"
       continue
     fi
     ln -sfn "$share/plugins/$id" "$target"

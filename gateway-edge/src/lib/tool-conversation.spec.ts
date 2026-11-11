@@ -20,7 +20,7 @@ describe('tool conversation broker', () => {
     h.fetch.mockResolvedValue(new Response(JSON.stringify({ ...channel, ...patch })));
     await expect(resolveToolChannelForUid(args)).rejects.toThrow('invalid context');
   });
-  it('cannot turn an unbound Computer/theme control context into session custody', async () => {
+  it('cannot turn an unbound VM/theme control context into session custody', async () => {
     h.fetch.mockResolvedValue(new Response(JSON.stringify(answer)));
     await expect(resolveToolControlForUid(args)).rejects.toThrow('invalid context');
     const { agentId: _agent, sessionKey: _session, threadRootPostId: _root, ...control } = answer;

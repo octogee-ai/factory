@@ -62,7 +62,7 @@ describe("errorHandler", () => {
 
     errorHandler(
       err,
-      { path: `/api/g/bender/openclaw/launch/${ticket}`, method: "GET" } as never,
+      { path: `/api/g/walter/openclaw/launch/${ticket}`, method: "GET" } as never,
       res as never,
       vi.fn(),
     );
@@ -70,7 +70,7 @@ describe("errorHandler", () => {
     expect(h.logger.error).toHaveBeenLastCalledWith(
       "Unhandled error: OpenClaw Control ticket broker returned 409",
       {
-        path: "/api/g/bender/openclaw/launch/<redacted>",
+        path: "/api/g/walter/openclaw/launch/<redacted>",
         method: "GET",
         stack: expect.any(String),
       },

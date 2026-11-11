@@ -3,7 +3,7 @@ import { localStateStoreKind, localStateStorePath } from "./openclaw-state-store
 import { agentIdsFromConfig } from "@octogee/core/byosub-restore";
 import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
 import { redactSecrets } from "@octogee/shared/types/secret-redaction";
-import { clearMountedMarker } from "./local-coach-wired.js";
+import { clearMountedMarker } from "./local-default-agent-wired.js";
 import { disableSystemConfigWatch, isSystemConfigRuntimeProjection } from "./system-config-watch-state.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -12,9 +12,9 @@ import * as path from "path";
 
 import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
 
-import { isValidUsername, parseAgentId, workspaceCoachAgentId } from "../../shared/types/identity.js";
-import { DEFAULT_BUILDER_AGENT_MODEL_REF } from "../../shared/types/platform-config.js";
-import { SAFE_DEFAULT_AGENT_ID, buildSafeDefaultAgent } from "./openclaw-config-builders.js";
+import { isValidUsername, parseAgentId, workspaceDefaultAgentId } from "../../shared/types/identity.js";
+import { DEFAULT_USER_AGENT_MODEL_REF } from "../../shared/types/platform-config.js";
+import { SAFE_DEFAULT_AGENT_ID, buildSafeDefaultAgent } from "./openclaw-config-users.js";
 import {
   log as defaultLog,
   AGENTS_DIR,
@@ -24,9 +24,9 @@ import {
   GIT_SSH_HOST,
 } from "./config.js";
 import {
-  generateCustomerSshKey,
+  generateUserSshKey,
   gitExec,
-  customerSshKeyPath,
+  userSshKeyPath,
   setRepoSshCommand,
 } from "./git.js";
 import {
@@ -46,8 +46,8 @@ import {
   reconcilePlatformProjections,
 } from "./system-config-invariants.js";
 import {
-  CUSTOMER_CODE_DENIED_TOOLS,
-  reconcileBuilderAgentEntry,
+  USER_CODE_DENIED_TOOLS,
+  reconcileIsolatedGatewayAgentEntry,
 } from "@octogee/core/system-config-invariants";
 import {
   attributedCommitArgs,
@@ -70,12 +70,12 @@ import {
   SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP,
   SYSTEM_CONFIG_SCHEMA_VERSION_HOST_CODE_LOCKDOWN_LIFTED,
   SYSTEM_CONFIG_SCHEMA_VERSION_MAC_LANE_REMOVED,
-  SYSTEM_CONFIG_SCHEMA_VERSION_BUILDER_AGENT_SHARED_FENCE_LIFTED,
+  SYSTEM_CONFIG_SCHEMA_VERSION_USER_AGENT_SHARED_FENCE_LIFTED,
   type ReadSystemConfigCommitBlob,
   type SystemConfigDurableFilename,
   SYSTEM_CONFIG_DURABLE_FILENAMES,
 } from "./system-config-durable-files.js";
-import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
+import { userClaimSlug } from "@octogee/shared/server/user-claim";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -133,7 +133,7 @@ export interface SystemConfigSyncOptions {
   log?: (msg: string) => void;
   gitExec?: typeof gitExec;
   setRepoSshCommand?: typeof setRepoSshCommand;
-  customerSshKeyPath?: typeof customerSshKeyPath;
+  userSshKeyPath?: typeof userSshKeyPath;
   validateConfig?: (configPath: string) => void;
   durablePolicy?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -149,7 +149,7 @@ export interface SystemConfigSyncOptions {
 interface SystemConfigAuditOptions {
   openclawDir?: string;
   gitExec?: typeof gitExec;
-  customerSshKeyPath?: typeof customerSshKeyPath;
+  userSshKeyPath?: typeof userSshKeyPath;
 }
 
 export interface SystemConfigAuditResult {
@@ -225,7 +225,7 @@ function legacyMacAgentIds(env: NodeJS.ProcessEnv): Set<string> {
   for (const value of [
     env.OPERATOR_AGENT_ID,
     env.GATEWAY_ID,
-    builderClaimSlug(env) ?? undefined,
+    userClaimSlug(env) ?? undefined,
     env.OPERATOR_AGENT_SLUG,
   ]) {
     if (!value) continue;
@@ -359,15 +359,15 @@ function rosterAgentEntry(agents: UnknownRecord | null, agentId: string): Unknow
     : null;
 }
 
-function selectBuilderCoach(
+function selectUserDefaultAgent(
   agents: UnknownRecord | null,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  const builderSlug = builderClaimSlug(env);
-  if (!builderSlug || agents?.ownership === "explicit") return false;
-  const coach = rosterAgentEntry(agents, `octogee-${builderSlug}-coach`);
-  if (!coach || coach.default === true) return false;
-  coach.default = true;
+  const userSlug = userClaimSlug(env);
+  if (!userSlug || agents?.ownership === "explicit") return false;
+  const defaultAgent = rosterAgentEntry(agents, `octogee-${userSlug}-coach`);
+  if (!defaultAgent || defaultAgent.default === true) return false;
+  defaultAgent.default = true;
   return true;
 }
 
@@ -380,8 +380,8 @@ export function removeLegacyMacConfig(
   const bindingIds = new Set([...legacyMacAgentIds(env), ...removed.removedIds]);
   const bindingsChanged = removeLegacyMacBindings(config, bindingIds);
   const mattermostChanged = removeLegacyMattermostConfig(config);
-  const builderCoachChanged = selectBuilderCoach(agents, env);
-  return removed.changed || bindingsChanged || mattermostChanged || builderCoachChanged;
+  const userDefaultAgentChanged = selectUserDefaultAgent(agents, env);
+  return removed.changed || bindingsChanged || mattermostChanged || userDefaultAgentChanged;
 }
 
 export function removeLegacyMacState(
@@ -418,7 +418,7 @@ function withoutTools(value: unknown, removed: readonly string[]): { list: unkno
 function liftHostCodeToolFences(tools: UnknownRecord | null): boolean {
   if (!tools) return false;
   let changed = false;
-  const deny = withoutTools(tools.deny, CUSTOMER_CODE_DENIED_TOOLS);
+  const deny = withoutTools(tools.deny, USER_CODE_DENIED_TOOLS);
   if (deny?.changed) {
     changed = true;
     if (deny.list.length === 0) delete tools.deny;
@@ -442,18 +442,18 @@ function liftHostCodeToolFences(tools: UnknownRecord | null): boolean {
   return changed;
 }
 
-function liftBuilderCoachToolFences(config: UnknownRecord, env: NodeJS.ProcessEnv): boolean {
-  const slug = builderClaimSlug(env);
+function liftUserDefaultAgentToolFences(config: UnknownRecord, env: NodeJS.ProcessEnv): boolean {
+  const slug = userClaimSlug(env);
   if (!slug) return false;
-  const coach = rosterAgentEntry(asRecord(config.agents), `octogee-${slug}-coach`);
-  if (!coach) return false;
-  const changed = liftHostCodeToolFences(asRecord(coach.tools));
-  deleteWhenEmpty(coach, "tools");
+  const defaultAgent = rosterAgentEntry(asRecord(config.agents), `octogee-${slug}-coach`);
+  if (!defaultAgent) return false;
+  const changed = liftHostCodeToolFences(asRecord(defaultAgent.tools));
+  deleteWhenEmpty(defaultAgent, "tools");
   return changed;
 }
 
-function liftBuilderAgentToolFences(config: UnknownRecord, env: NodeJS.ProcessEnv): boolean {
-  const slug = builderClaimSlug(env);
+function liftUserAgentToolFences(config: UnknownRecord, env: NodeJS.ProcessEnv): boolean {
+  const slug = userClaimSlug(env);
   if (!slug) return false;
   const agents = asRecord(config.agents);
   if (!agents) return false;
@@ -464,7 +464,7 @@ function liftBuilderAgentToolFences(config: UnknownRecord, env: NodeJS.ProcessEn
       (parsed.kind !== "project" && parsed.kind !== "coach") ||
       parsed.username !== slug
     ) return agent;
-    const reconciled = reconcileBuilderAgentEntry(agentId, agent);
+    const reconciled = reconcileIsolatedGatewayAgentEntry(agentId, agent);
     if (!isDeepStrictEqual(reconciled, agent)) changed = true;
     return reconciled;
   };
@@ -532,11 +532,11 @@ function liftCodexGate(config: UnknownRecord): boolean {
   return changed;
 }
 
-// One-time roll-forward for durable Builder configs seeded before Builder
-// gateways ran at full power. The owner's coach and project agents drop any
+// One-time roll-forward for durable user configs seeded before user
+// gateways ran at full power. The owner's agent and project agents drop any
 // tools block carrying the shared host-code fence (deny exec+process with
-// workspaceOnly or exec.mode=deny), including a Builder-authored one of that
-// shape; that whole-block check runs before the field-level coach lift strips
+// workspaceOnly or exec.mode=deny), including a User-authored one of that
+// shape; that whole-block check runs before the field-level agent lift strips
 // its signature. Every other removal matches the exact shape the platform stamped.
 export function liftPlatformHostCodeLockdown(
   config: UnknownRecord,
@@ -544,8 +544,8 @@ export function liftPlatformHostCodeLockdown(
 ): boolean {
   const changes = [
     liftHostCodeToolFences(asRecord(config.tools)),
-    liftBuilderAgentToolFences(config, env),
-    liftBuilderCoachToolFences(config, env),
+    liftUserAgentToolFences(config, env),
+    liftUserDefaultAgentToolFences(config, env),
     liftGatewayCommandFences(config),
     liftAutomationFences(config),
     liftCodexGate(config),
@@ -553,7 +553,7 @@ export function liftPlatformHostCodeLockdown(
   return changes.includes(true);
 }
 
-const BUILDER_BROWSER_DEFAULTS: Readonly<UnknownRecord> = {
+const ISOLATED_BROWSER_DEFAULTS: Readonly<UnknownRecord> = {
   enabled: true,
   defaultProfile: "openclaw",
   headless: true,
@@ -578,7 +578,7 @@ function addStringListItem(record: UnknownRecord, key: string, item: string): bo
   return true;
 }
 
-function builderBrowserExplicitlyDisabled(config: UnknownRecord): boolean {
+function isolatedBrowserExplicitlyDisabled(config: UnknownRecord): boolean {
   const browser = asRecord(config.browser);
   const tools = asRecord(config.tools);
   const plugins = asRecord(config.plugins);
@@ -589,16 +589,16 @@ function builderBrowserExplicitlyDisabled(config: UnknownRecord): boolean {
     stringListIncludes(tools?.deny, "browser");
 }
 
-function enableBuilderBrowser(config: UnknownRecord): boolean {
-  if (builderBrowserExplicitlyDisabled(config)) return false;
+function enableIsolatedBrowser(config: UnknownRecord): boolean {
+  if (isolatedBrowserExplicitlyDisabled(config)) return false;
   let changed = false;
   let browser = asRecord(config.browser);
   if (!browser) {
-    browser = structuredClone(BUILDER_BROWSER_DEFAULTS);
+    browser = structuredClone(ISOLATED_BROWSER_DEFAULTS);
     config.browser = browser;
     changed = true;
   } else {
-    for (const [key, value] of Object.entries(BUILDER_BROWSER_DEFAULTS)) {
+    for (const [key, value] of Object.entries(ISOLATED_BROWSER_DEFAULTS)) {
       if (browser[key] !== undefined) continue;
       browser[key] = value;
       changed = true;
@@ -626,7 +626,7 @@ function enableBuilderBrowser(config: UnknownRecord): boolean {
 }
 
 async function ensureIdentityAndRepo(slug: string, log: (msg: string) => void): Promise<void> {
-  const pubKey = generateCustomerSshKey(slug);
+  const pubKey = generateUserSshKey(slug);
   await brokeredGitHost.registerKey(slug, pubKey);
   await brokeredGitHost.ensureOwner(slug);
   await brokeredGitHost.ensureRepo(slug, { kind: "system-config" });
@@ -695,7 +695,7 @@ function retryRetainedInitialSeedPush(
   env: NodeJS.ProcessEnv,
   log: (msg: string) => void,
 ): boolean {
-  const keyPath = customerSshKeyPath(slug);
+  const keyPath = userSshKeyPath(slug);
   if (!retainedSeedGitStateMatches(repoDir, keyPath)) return false;
   if (!retainedSeedFilesMatch(repoDir, templatePath, env)) return false;
   if (gitExec(repoDir, ["push", "-u", "origin", "main"], keyPath) === null) {
@@ -706,10 +706,10 @@ function retryRetainedInitialSeedPush(
   return true;
 }
 
-function restoreBuilderRuntimeProjection(
+function restoreIsolatedRuntimeProjection(
   slug: string, dir: string, env: NodeJS.ProcessEnv, sshKey: string, log: (msg: string) => void,
 ): boolean {
-  if (env.GATEWAY_CLASS !== "builder" || builderClaimSlug(env) !== slug ||
+  if (env.GATEWAY_CLASS !== "builder" || userClaimSlug(env) !== slug ||
       !isSystemConfigRuntimeProjection(path.dirname(dir), slug)) return true;
   if (gitExec(dir, ["merge-base", "--is-ancestor", "HEAD", "origin/main"], sshKey) === null ||
       gitExec(dir, ["restore", "--source=HEAD", "--staged", "--worktree", "--", OPENCLAW_CONFIG_FILENAME, SYSTEM_CONFIG_METADATA_FILENAME], sshKey) === null) {
@@ -723,7 +723,7 @@ function refreshSystemConfigRepo(
   slug: string, dir: string, templatePath: string, env: NodeJS.ProcessEnv, log: (msg: string) => void,
 ): boolean {
   setRepoSshCommand(dir, slug);
-  const sshKey = customerSshKeyPath(slug);
+  const sshKey = userSshKeyPath(slug);
   if (gitExec(dir, ["fetch", "origin", "main"], sshKey) === null) {
     if (retryRetainedInitialSeedPush(slug, dir, templatePath, env, log)) return true;
     if (
@@ -735,7 +735,7 @@ function refreshSystemConfigRepo(
     log(`[system_config] fetch failed for ${slug}/${systemConfigRepoName()}`);
     return false;
   }
-  if (!restoreBuilderRuntimeProjection(slug, dir, env, sshKey, log)) return false;
+  if (!restoreIsolatedRuntimeProjection(slug, dir, env, sshKey, log)) return false;
   if (gitExec(dir, ["merge", "--ff-only", "origin/main"], sshKey) === null) {
     log(`[system_config] reused checkout is not a fast-forward for ${slug}/${systemConfigRepoName()}`);
     return false;
@@ -758,7 +758,7 @@ function cloneOrReuseSystemConfigRepo(
     return false;
   }
   fs.mkdirSync(path.dirname(dir), { recursive: true });
-  const sshKey = customerSshKeyPath(slug);
+  const sshKey = userSshKeyPath(slug);
   const result = gitExec(path.dirname(dir), ["clone", remoteUrl(slug), path.basename(dir)], sshKey);
   if (result === null) {
     log(`[system_config] clone failed for ${slug}/${systemConfigRepoName()}`);
@@ -817,44 +817,44 @@ function repointAgentDefault(holder: UnknownRecord, key: string, from: string, t
 
 // OpenClaw materializes its implicit `main` agent the first time a roster-less
 // config gains an explicit roster, and the hello's default agent is the first
-// roster entry. A fresh Builder therefore boots with its coach already first and
+// roster entry. A fresh user therefore boots with its agent already first and
 // the model-less anchor last, so Model Setup never sees `main`. A rostered config
-// without its coach was detached by a return: OpenClaw fences that agent id until
+// without its agent was detached by a return: OpenClaw fences that agent id until
 // the import's agents.create claims it, so the restore never re-declares it.
-export function ensureBuilderRosterLeadsWithCoach(config: UnknownRecord, slug: string): boolean {
+export function ensureUserRosterLeadsWithDefaultAgent(config: UnknownRecord, slug: string): boolean {
   const agents = asRecord(config.agents) ?? {};
   config.agents = agents;
-  const coachId = workspaceCoachAgentId(slug);
+  const userDefaultAgentId = workspaceDefaultAgentId(slug);
   const { form, roster } = readRosterEntries(agents);
   const before = JSON.stringify({ ownership: agents.ownership, ids: roster.map((item) => item.id) });
 
   const kept = roster.filter((item) => item.id !== LEGACY_IMPLICIT_AGENT_ID);
-  const coach = kept.find((item) => item.id === coachId) ?? (kept.length === 0 ? seedBuilderCoach(slug, coachId) : undefined);
-  if (coach && coach.entry.model === undefined) coach.entry.model = DEFAULT_BUILDER_AGENT_MODEL_REF;
+  const defaultAgent = kept.find((item) => item.id === userDefaultAgentId) ?? (kept.length === 0 ? seedUserDefaultAgent(slug, userDefaultAgentId) : undefined);
+  if (defaultAgent && defaultAgent.entry.model === undefined) defaultAgent.entry.model = DEFAULT_USER_AGENT_MODEL_REF;
   const { id: _anchorId, ...anchorSeed } = buildSafeDefaultAgent();
   const anchor = kept.find((item) => item.id === SAFE_DEFAULT_AGENT_ID) ?? { id: SAFE_DEFAULT_AGENT_ID, entry: anchorSeed };
-  const others = kept.filter((item) => item.id !== coachId && item.id !== SAFE_DEFAULT_AGENT_ID);
-  const ordered = [...(coach ? [coach] : []), ...others, anchor];
+  const others = kept.filter((item) => item.id !== userDefaultAgentId && item.id !== SAFE_DEFAULT_AGENT_ID);
+  const ordered = [...(defaultAgent ? [defaultAgent] : []), ...others, anchor];
   writeRosterEntries(agents, form, ordered);
   agents.ownership = "explicit";
-  const defaultsChanged = reconcileBuilderRosterDefaults(config, agents, coach ? coachId : SAFE_DEFAULT_AGENT_ID);
+  const defaultsChanged = reconcileUserRosterDefaults(config, agents, defaultAgent ? userDefaultAgentId : SAFE_DEFAULT_AGENT_ID);
 
   const after = JSON.stringify({ ownership: agents.ownership, ids: ordered.map((item) => item.id) });
   return before !== after || defaultsChanged;
 }
 
-function seedBuilderCoach(slug: string, coachId: string): RosterEntry {
+function seedUserDefaultAgent(slug: string, userDefaultAgentId: string): RosterEntry {
   return {
-    id: coachId,
+    id: userDefaultAgentId,
     entry: {
       workspace: path.join(CUSTOMERS_DIR, slug),
-      agentDir: path.join(AGENTS_DIR, coachId, "agent"),
-      model: DEFAULT_BUILDER_AGENT_MODEL_REF,
+      agentDir: path.join(AGENTS_DIR, userDefaultAgentId, "agent"),
+      model: DEFAULT_USER_AGENT_MODEL_REF,
     },
   };
 }
 
-function reconcileBuilderRosterDefaults(config: UnknownRecord, agents: UnknownRecord, defaultAgentId: string): boolean {
+function reconcileUserRosterDefaults(config: UnknownRecord, agents: UnknownRecord, defaultAgentId: string): boolean {
   const defaults = asRecord(agents.defaults) ?? {};
   agents.defaults = defaults;
   let changed = false;
@@ -870,13 +870,13 @@ function reconcileBuilderRosterDefaults(config: UnknownRecord, agents: UnknownRe
   return repointAgentDefault(config, "talk", LEGACY_IMPLICIT_AGENT_ID, defaultAgentId) || changed;
 }
 
-function ensureBuilderRosterAtPath(configPath: string, slug: string, log: (msg: string) => void): void {
+function ensureUserRosterAtPath(configPath: string, slug: string, log: (msg: string) => void): void {
   const contents = fs.readFileSync(configPath, "utf8");
   const value = readTrackedConfigObject(contents);
   if (!value) return;
-  if (!ensureBuilderRosterLeadsWithCoach(value, slug)) return;
+  if (!ensureUserRosterLeadsWithDefaultAgent(value, slug)) return;
   atomicWrite(configPath, `${JSON.stringify(value, null, 2)}\n`);
-  log(`[system_config] Builder roster now leads with ${workspaceCoachAgentId(slug)} and keeps ${SAFE_DEFAULT_AGENT_ID} last`);
+  log(`[system_config] User roster now leads with ${workspaceDefaultAgentId(slug)} and keeps ${SAFE_DEFAULT_AGENT_ID} last`);
 }
 
 const PLATFORM_DRIVEN_CHECKPOINT_SOURCES: ReadonlySet<SystemConfigCommitSource> = new Set([
@@ -958,7 +958,7 @@ function seedSystemConfigIfMissing(
   if (committed === null) {
     throw new Error(`[system_config] initial commit failed for ${slug}`);
   }
-  const pushed = gitExec(repoDir, ["push", "-u", "origin", "main"], customerSshKeyPath(slug));
+  const pushed = gitExec(repoDir, ["push", "-u", "origin", "main"], userSshKeyPath(slug));
   if (pushed === null) {
     throw new Error(`[system_config] initial push failed for ${slug}`);
   }
@@ -970,7 +970,7 @@ function repositoryHasHead(slug: string, repoDir: string): boolean {
   return gitExec(
     repoDir,
     ["rev-parse", "--verify", "HEAD"],
-    customerSshKeyPath(slug),
+    userSshKeyPath(slug),
   ) !== null;
 }
 
@@ -1056,16 +1056,16 @@ async function reconcileTrackedOpenClawConfig(
     schemaVersion >= SYSTEM_CONFIG_SCHEMA_VERSION_MAC_LANE_REMOVED;
   const hostCodeLockdownLifted = schemaVersion !== undefined &&
     schemaVersion >= SYSTEM_CONFIG_SCHEMA_VERSION_HOST_CODE_LOCKDOWN_LIFTED;
-  const builderAgentSharedFenceLifted = schemaVersion !== undefined &&
-    schemaVersion >= SYSTEM_CONFIG_SCHEMA_VERSION_BUILDER_AGENT_SHARED_FENCE_LIFTED;
+  const userAgentSharedFenceLifted = schemaVersion !== undefined &&
+    schemaVersion >= SYSTEM_CONFIG_SCHEMA_VERSION_USER_AGENT_SHARED_FENCE_LIFTED;
   if (!macLaneRemoved) {
     removeLegacyMacConfig(tracked, env);
     const secrets = extractLegacyMattermostAccountSecrets(tracked);
     if (Object.keys(secrets).length > 0) await updateMattermostAccountSecrets(openclawDir, { set: secrets });
   }
   if (!hostCodeLockdownLifted) liftPlatformHostCodeLockdown(tracked, env);
-  if (!builderAgentSharedFenceLifted) liftBuilderAgentToolFences(tracked, env);
-  enableBuilderBrowser(tracked);
+  if (!userAgentSharedFenceLifted) liftUserAgentToolFences(tracked, env);
+  enableIsolatedBrowser(tracked);
   const after = `${JSON.stringify(tracked, null, 2)}\n`;
   if (after !== before) atomicWrite(repoConfigPath, after);
   const keepPendingCleanup = !macLaneRemoved || metadata?.pendingStateCleanup !== undefined;
@@ -1089,13 +1089,13 @@ export async function reconcileSystemConfigSchema(
   );
 }
 
-// Durable system_config exists only for Builder gateways, whose seed is the
-// full-power Builder template; the shared template remains the explicit
-// override for tooling that seeds a Barn-shaped config on purpose.
+// Durable system_config exists only for isolated gateways, whose seed is the
+// full-power user template; the shared template remains the explicit
+// override for tooling that seeds a shared-gateway-shaped config on purpose.
 export function defaultSystemConfigTemplatePath(env: NodeJS.ProcessEnv = process.env): string {
   const gatewayDir = path.join(TEMPLATES_DIR, "..", "infra", "gateway");
   return env.GATEWAY_CLASS === "builder"
-    ? path.join(gatewayDir, "openclaw.builder.template.json")
+    ? path.join(gatewayDir, "openclaw.isolated.template.json")
     : path.join(gatewayDir, "openclaw.template.json");
 }
 
@@ -1151,7 +1151,7 @@ async function restoreSystemConfigCheckout(
     }
     await reconcileTrackedOpenClawConfig(configPath, openclawDir, env);
   }
-  if (env.GATEWAY_CLASS === "builder") ensureBuilderRosterAtPath(configPath, slug, log);
+  if (env.GATEWAY_CLASS === "builder") ensureUserRosterAtPath(configPath, slug, log);
   reconcilePlatformInvariantsAtPath(configPath, env);
   return { seeded, restored: true, configPath };
 }
@@ -1172,15 +1172,15 @@ export function readDurableSystemConfigHeadForSlug(
   opts: {
     openclawDir?: string;
     gitExec?: typeof gitExec;
-    customerSshKeyPath?: typeof customerSshKeyPath;
+    userSshKeyPath?: typeof userSshKeyPath;
   } = {},
 ): string {
   if (!isValidUsername(slug)) {
-    throw new Error(`invalid builder slug: ${slug}`);
+    throw new Error(`invalid user slug: ${slug}`);
   }
   const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
   const execGit = opts.gitExec ?? gitExec;
-  const keyPath = (opts.customerSshKeyPath ?? customerSshKeyPath)(slug);
+  const keyPath = (opts.userSshKeyPath ?? userSshKeyPath)(slug);
   const head = remoteHeadFromLsRemote(
     execGit(
       openclawDir,
@@ -1803,7 +1803,7 @@ function syncSystemConfigUnlocked(
   const configureSsh = opts.setRepoSshCommand ?? setRepoSshCommand;
   configureSsh(repoDir, slug);
   const execGit = opts.gitExec ?? gitExec;
-  const keyPath = (opts.customerSshKeyPath ?? customerSshKeyPath)(slug);
+  const keyPath = (opts.userSshKeyPath ?? userSshKeyPath)(slug);
   const now = opts.now ?? (() => new Date());
   const env = opts.env ?? process.env;
   const convergenceFailure = convergeExpectedRemoteSystemConfig(slug, opts, {
@@ -1958,7 +1958,7 @@ export function auditSystemConfigForSlug(
     return { state: "error", needsSync: true, errorCode: "openclaw-json-missing" };
   }
   const execGit = opts.gitExec ?? gitExec;
-  const keyPath = (opts.customerSshKeyPath ?? customerSshKeyPath)(slug);
+  const keyPath = (opts.userSshKeyPath ?? userSshKeyPath)(slug);
   const gitState = readSystemConfigAuditGitState(repoDir, configPath, keyPath, execGit);
   if (!completeAuditGitState(gitState)) return unavailableAuditResult(gitState);
   const { head, remoteHead, headTree, indexTree, worktree, configHash } = gitState;
@@ -2036,20 +2036,20 @@ export function checkpointDurableSystemConfigForSlug(
 }
 
 
-export function readAcceptedBuilderConfig(openclawDir: string, env: NodeJS.ProcessEnv = process.env): UnknownRecord {
+export function readAcceptedUserConfig(openclawDir: string, env: NodeJS.ProcessEnv = process.env): UnknownRecord {
   const bytes = readSystemConfigCommitBlob(systemConfigDir(openclawDir), "HEAD", OPENCLAW_CONFIG_FILENAME);
   const config = bytes && readTrackedConfigObject(bytes.toString("utf8"));
-  if (!config) throw new Error("Builder prelaunch requires its accepted system config");
+  if (!config) throw new Error("Isolated prelaunch requires its accepted system config");
   reconcilePlatformInvariants(config, env);
   return config;
 }
 
-export async function prepareBuilderPrelaunchConfig(
+export async function prepareIsolatedPrelaunchConfig(
   openclawDir: string, slug: string, env: NodeJS.ProcessEnv = process.env, run: OpenClawCommand = runOpenClaw,
 ): Promise<void> {
   await disableSystemConfigWatch(openclawDir, slug, { runtimeProjection: true });
   clearMountedMarker(path.join(openclawDir, "customers"), slug);
-  const config = readAcceptedBuilderConfig(openclawDir, env);
+  const config = readAcceptedUserConfig(openclawDir, env);
   applyAgentStoreDatabasePatch(config, env, localStateStoreKind(localStateStorePath(openclawDir)));
   const acceptedAgentIds = agentIdsFromConfig(config);
   const { id: _id, ...agent } = buildSafeDefaultAgent({ ...env, OPENCLAW_DIR: openclawDir });
@@ -2072,16 +2072,16 @@ export async function prepareBuilderPrelaunchConfig(
   }
   config.cron = { ...asRecord(config.cron), enabled: false };
   if (asRecord(config.talk)) config.talk = { ...asRecord(config.talk), agentId: SAFE_DEFAULT_AGENT_ID };
-  await writeBuilderPrelaunchConfig(openclawDir, config, acceptedAgentIds, env, run);
+  await writeIsolatedPrelaunchConfig(openclawDir, config, acceptedAgentIds, env, run);
 }
 
-async function writeBuilderPrelaunchConfig(
+async function writeIsolatedPrelaunchConfig(
   openclawDir: string, config: UnknownRecord, acceptedAgentIds: string[], env: NodeJS.ProcessEnv, run: OpenClawCommand,
 ): Promise<void> {
   const agents = asRecord(config.agents)!;
   delete config.meta;
   const current = readTrackedConfigObject(fs.readFileSync(systemConfigPath(openclawDir), "utf8"));
-  if (!current) throw new Error("Builder prelaunch requires a readable current config");
+  if (!current) throw new Error("Isolated prelaunch requires a readable current config");
   const entries = asRecord(agents.entries)!;
   for (const id of new Set([...acceptedAgentIds, ...agentIdsFromConfig(current)])) if (id !== SAFE_DEFAULT_AGENT_ID) entries[id] = null;
   for (const key of Object.keys(current)) if (key !== "meta" && !(key in config)) config[key] = null;
@@ -2104,7 +2104,7 @@ async function writeBuilderPrelaunchConfig(
     if (result.code !== 0) {
       const diagnostic = redactSecrets(result.stderr?.trim() ?? "").slice(0, 2000);
       const detail = diagnostic ? ": " + diagnostic : "";
-      throw new Error(`Native Builder prelaunch config write failed (exit ${result.code})${detail}`);
+      throw new Error(`Native isolated prelaunch config write failed (exit ${result.code})${detail}`);
     }
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }

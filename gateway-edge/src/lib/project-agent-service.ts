@@ -151,7 +151,7 @@ export async function provisionProjectAgent(
   // provisioning lands in.
   const agentId = projectAgentId(workspaceId, project);
   try {
-    await platformStateStore.builders.records.addAgents(actor.uid, [agentId]);
+    await platformStateStore.users.records.addAgents(actor.uid, [agentId]);
   } catch (err) {
     logger.error(`[project-agent] roster update failed for ${workspaceId}/${project}:`, { err });
     return settleProjectAgentError(target, bad(502, PROVISION_FAILED));
@@ -212,5 +212,5 @@ export async function retireProjectAgentForDeletion(
     );
     await platformStateStore.secrets.delete(uid, secretId);
   }
-  await platformStateStore.builders.records.removeAgents(uid, [projectAgentId(workspaceId, project)]);
+  await platformStateStore.users.records.removeAgents(uid, [projectAgentId(workspaceId, project)]);
 }

@@ -41,14 +41,14 @@ describe("glm-controller metrics", () => {
 
   it("renders desired running gateway availability gauges for alerting", () => {
     recordGatewayHealth([
-      { gatewayId: "bender-blue", availableReplicas: 1 },
+      { gatewayId: "walter-blue", availableReplicas: 1 },
       { gatewayId: "default-green", availableReplicas: 0 },
     ]);
 
     const out = renderMetrics();
 
-    expect(out).toContain('glm_gateway_available_replicas{gateway_id="bender-blue"} 1');
-    expect(out).toContain('glm_gateway_desired_running_unavailable{gateway_id="bender-blue"} 0');
+    expect(out).toContain('glm_gateway_available_replicas{gateway_id="walter-blue"} 1');
+    expect(out).toContain('glm_gateway_desired_running_unavailable{gateway_id="walter-blue"} 0');
     expect(out).toContain('glm_gateway_available_replicas{gateway_id="default-green"} 0');
     expect(out).toContain('glm_gateway_desired_running_unavailable{gateway_id="default-green"} 1');
   });
@@ -63,7 +63,7 @@ describe("glm-controller metrics", () => {
     expect(out).toContain("new-green");
   });
 
-  it("renders Builder computer disk gauges per gateway and replaces them on each refresh", () => {
+  it("renders gateway VM disk gauges per gateway and replaces them on each refresh", () => {
     recordVmDiskUsage([{ gatewayId: "b-old", sizeBytes: 1, freeBytes: 1, observedAt: 1_000 }]);
     recordVmDiskUsage([{ gatewayId: "b-x", sizeBytes: 42_949_672_960, freeBytes: 3_221_225_472.9, observedAt: 1_700_000_000_000 }]);
 
@@ -76,16 +76,16 @@ describe("glm-controller metrics", () => {
     expect(out).not.toContain("b-old");
   });
 
-  it("counts config checkpoint, proof, and unfreeze outcomes without customer labels", () => {
-    recordConfigRoll({ stage: "checkpoint", result: "ok", gatewayId: "bender", revisionId: "bender-r1" });
-    recordConfigRoll({ stage: "proof", result: "fail", gatewayId: "bender", revisionId: "bender-r2" });
-    recordConfigRoll({ stage: "unfreeze", result: "ok", gatewayId: "bender", revisionId: "bender-r1" });
+  it("counts config checkpoint, proof, and unfreeze outcomes without user labels", () => {
+    recordConfigRoll({ stage: "checkpoint", result: "ok", gatewayId: "walter", revisionId: "walter-r1" });
+    recordConfigRoll({ stage: "proof", result: "fail", gatewayId: "walter", revisionId: "walter-r2" });
+    recordConfigRoll({ stage: "unfreeze", result: "ok", gatewayId: "walter", revisionId: "walter-r1" });
 
     const out = renderMetrics();
 
-    expect(out).toContain('glm_config_roll_total{gateway_id="bender",revision_id="bender-r1",stage="checkpoint",result="ok"} 1');
-    expect(out).toContain('glm_config_roll_total{gateway_id="bender",revision_id="bender-r2",stage="proof",result="fail"} 1');
-    expect(out).toContain('glm_config_roll_total{gateway_id="bender",revision_id="bender-r1",stage="unfreeze",result="ok"} 1');
+    expect(out).toContain('glm_config_roll_total{gateway_id="walter",revision_id="walter-r1",stage="checkpoint",result="ok"} 1');
+    expect(out).toContain('glm_config_roll_total{gateway_id="walter",revision_id="walter-r2",stage="proof",result="fail"} 1');
+    expect(out).toContain('glm_config_roll_total{gateway_id="walter",revision_id="walter-r1",stage="unfreeze",result="ok"} 1');
     expect(out).not.toContain("uid=");
     expect(out).not.toContain("slug=");
   });
@@ -116,7 +116,7 @@ describe("glm-controller metrics", () => {
     expect(out).toContain("glm_disruption_last_observed_timestamp_seconds 1700000000.000");
   });
 
-  it("counts Shared Barn maximum-capacity observations and exposes the last bounded snapshot", () => {
+  it("counts Shared gateway maximum-capacity observations and exposes the last bounded snapshot", () => {
     recordSharedGatewayMaxCapacity({ assignmentCount: 15, hotMemberCount: 4 });
     recordSharedGatewayMaxCapacity({ assignmentCount: 16.8, hotMemberCount: 4.9 });
 

@@ -9,7 +9,7 @@ import {
 } from "../automation-authorization-broker.js";
 
 const dirs: string[] = [];
-const COACH_CHANNEL_ID = "c".repeat(26);
+const DEFAULT_AGENT_CHANNEL_ID = "c".repeat(26);
 
 afterEach(() => {
   vi.useRealTimers();
@@ -32,7 +32,7 @@ describe("automation authorization broker client", () => {
         JSON.stringify({
           slug: "eggman",
           gatewayId: "eggman-devdays",
-          coachChannelId: COACH_CHANNEL_ID,
+          coachChannelId: DEFAULT_AGENT_CHANNEL_ID,
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
@@ -51,7 +51,7 @@ describe("automation authorization broker client", () => {
       kind: "authorized",
       slug: "eggman",
       gatewayId: "eggman-devdays",
-      coachChannelId: COACH_CHANNEL_ID,
+      coachChannelId: DEFAULT_AGENT_CHANNEL_ID,
     });
     expect(fetchImpl).toHaveBeenCalledWith(
       "http://octogee-api.octogee-test.svc.cluster.local:3001/internal/automations/authorize",
@@ -94,7 +94,7 @@ describe("automation authorization broker client", () => {
     })).rejects.toThrow("malformed authorization response");
   });
 
-  it("rejects authorization success without an authoritative coach channel", async () => {
+  it("rejects authorization success without an authoritative agent channel", async () => {
     await expect(authorizeAutomationOwner({
       gatewayId: "eggman-devdays",
       authorization: "Bearer firebase-id-token",
@@ -107,7 +107,7 @@ describe("automation authorization broker client", () => {
     })).rejects.toThrow("malformed authorization response");
   });
 
-  it("rejects a brokered coach channel outside the Mattermost ID contract", async () => {
+  it("rejects a brokered agent channel outside the Mattermost ID contract", async () => {
     await expect(authorizeAutomationOwner({
       gatewayId: "eggman-devdays",
       authorization: "Bearer firebase-id-token",

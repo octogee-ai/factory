@@ -16,7 +16,7 @@ export function deferredProjectPlaceholder(slug: string, projectSlug: string): s
     `# ${projectSlug}`,
     "",
     `This project's source lives on GitHub and is checked out on ${slug}'s own`,
-    "Builder runtime, not here. Files you expect may be absent until then.",
+    "isolated runtime, not here. Files you expect may be absent until then.",
     "",
     "Replace this file once the checkout lands.",
     "",

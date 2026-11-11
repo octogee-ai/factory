@@ -65,13 +65,13 @@ it('publishes an SSR image only after its SHA tag is confirmed absent', async ()
   await import('../ci/frontend.mjs');
   expect(command.mock.calls.some(([file, args]) => file === 'docker' && args.includes('--push'))).toBe(true);
   const authentication = command.mock.calls.findIndex(([file, args]) => file === 'gcloud' && args.join(' ') === 'auth configure-docker us-central1-docker.pkg.dev --quiet');
-  const builder = command.mock.calls.findIndex(([file, args]) => file === 'docker' && args[1] === 'create');
+  const user = command.mock.calls.findIndex(([file, args]) => file === 'docker' && args[1] === 'create');
   expect(authentication).toBeGreaterThanOrEqual(0);
-  expect(authentication).toBeLessThan(builder);
+  expect(authentication).toBeLessThan(user);
   expect(command.mock.calls.some(([file, args]) => file === 'docker' && args.some(value => value.startsWith('--cache-from=')))).toBe(false);
 });
 
-it('does not create a builder or publish when registry credential setup fails', async () => {
+it('does not create a user or publish when registry credential setup fails', async () => {
   tools(() => { throw Object.assign(new Error('absent'), { status: 3 }); });
   const backend = command.getMockImplementation()!;
   command.mockImplementation((file, args) => {
@@ -82,7 +82,7 @@ it('does not create a builder or publish when registry credential setup fails', 
   expect(command.mock.calls.filter(([file]) => file === 'docker')).toEqual([]);
 });
 
-it('imports an existing registry cache into each fresh SSR builder', async () => {
+it('imports an existing registry cache into each fresh SSR user', async () => {
   let lookups = 0;
   tools(() => {
     if (++lookups === 1) throw Object.assign(new Error('image absent'), { status: 3 });
@@ -102,7 +102,7 @@ it.each(['test', 'prod'])('writes SSR images and cache only to the %s release re
   expect(build.join(' ')).not.toContain('us-central1-docker.pkg.dev/octogee/octogee/');
 });
 
-it('stops publication when the registry cache lookup fails and cleans up its builder', async () => {
+it('stops publication when the registry cache lookup fails and cleans up its user', async () => {
   let lookups = 0;
   tools(() => { throw Object.assign(new Error(++lookups === 1 ? 'image absent' : 'cache denied'), { status: lookups === 1 ? 3 : 1 }); });
   await expect(import('../ci/frontend.mjs')).rejects.toThrow('cache denied');

@@ -6,9 +6,9 @@ import { isSafeGatewayId } from "./byosub.js";
 import { createModelCredentialSyncAuthHeaders } from "./byot-sync-internal-auth.js";
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
-  builderAgentModelDefaultFromDoc,
+  userAgentModelDefaultFromDoc,
   resolveFreeTierModel,
-  type BuilderAgentModelDefault,
+  type UserAgentModelDefault,
 } from "@octogee/shared/types/platform-config";
 
 export interface ModelCredentialSyncUserData {
@@ -21,13 +21,13 @@ export interface ModelCredentialSyncUserData {
   // fleet; the snapshot fingerprint wouldn't change, so reconcile can't repair
   // the drift until the next mount/roll.
   freeTierModelRef?: string;
-  // The operator's Builder Agent default dial, stamped alongside the free-tier
-  // dial: the {primary, fallbacks} a catalog coach runs with no explicit pick.
-  builderAgentDefault?: BuilderAgentModelDefault;
+  // The operator's default agent dial, stamped alongside the free-tier
+  // dial: the {primary, fallbacks} a catalog agent runs with no explicit pick.
+  builderAgentDefault?: UserAgentModelDefault;
   // Plan inputs travel as-is (pickPlanInputs); the resolver tolerates non-string
   // shapes, so they mirror subscription/builderSubscription as `unknown`.
   selectedTier?: unknown;
-  // resolveBillingProfile derives signup-offer + builder state from these on the
+  // resolveBillingProfile derives signup-offer + user state from these on the
   // gateway side; serialize the receipt (Timestamps → JSON) as-is — asDate
   // parses the serialized {_seconds}/{seconds}/ISO shapes.
   subscription?: unknown;
@@ -72,7 +72,7 @@ export function gatewayModelCredentialSyncUrl(
   if (!env.GATEWAY_EDGE_INTERNAL_URL_TEMPLATE && runtime?.runtime === "gce-vm") {
     const ip = runtime.vm?.internalIp;
     if (runtime.vm?.status !== "RUNNING" || typeof ip !== "string" || !isIPv4(ip)) {
-      throw new Error(`Builder VM is not reachable: ${gatewayId}`);
+      throw new Error(`Gateway VM is not reachable: ${gatewayId}`);
     }
     vmOrigin = `http://${ip}:3001`;
   }
@@ -84,7 +84,7 @@ export function gatewayModelCredentialSyncUrl(
 
 async function platformModelDialsForSync(logWarn: (msg: string) => void): Promise<{
   freeTierModelRef: string;
-  builderAgentDefault: BuilderAgentModelDefault;
+  builderAgentDefault: UserAgentModelDefault;
 }> {
   try {
     const models = (await platformStateStore.config.platform.get("models"))?.value;
@@ -93,7 +93,7 @@ async function platformModelDialsForSync(logWarn: (msg: string) => void): Promis
       freeTierModelRef: configured !== undefined && resolveFreeTierModel(configured)
         ? configured
         : DEFAULT_FREE_TIER_MODEL_REF,
-      builderAgentDefault: builderAgentModelDefaultFromDoc(models),
+      builderAgentDefault: userAgentModelDefaultFromDoc(models),
     };
   } catch (err) {
     logWarn(
@@ -103,7 +103,7 @@ async function platformModelDialsForSync(logWarn: (msg: string) => void): Promis
     );
     return {
       freeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
-      builderAgentDefault: builderAgentModelDefaultFromDoc(undefined),
+      builderAgentDefault: userAgentModelDefaultFromDoc(undefined),
     };
   }
 }

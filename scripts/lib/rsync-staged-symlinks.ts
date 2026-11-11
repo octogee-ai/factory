@@ -70,7 +70,7 @@ export async function assertSafeStagedSymlinks(stageDir: string, importDir: stri
       try {
         const parts = relative.split("/");
         if (parts[0] !== "customers" || parts[1] !== slug || parts.length < 3) {
-          throw new Error("link is outside customer workspace files");
+          throw new Error("link is outside user workspace files");
         }
         const boundary = parts[2] === "projects" ? parts.slice(0, 4).join("/") : parts.slice(0, 2).join("/");
         if (relative === boundary) throw new Error("workspace boundary is a symlink");

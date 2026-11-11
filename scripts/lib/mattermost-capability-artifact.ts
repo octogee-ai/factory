@@ -113,7 +113,7 @@ function verifyProvenanceStatement(statement: unknown, errors: string[]): void {
   );
   expectValue(
     errors,
-    "provenance builder platform",
+    "provenance user platform",
     at(statement, "predicate", "buildDefinition", "internalParameters", "builderPlatform"),
     "linux/amd64",
   );
@@ -161,7 +161,7 @@ function verifyArtifactEvidence(evidence: unknown, errors: string[]): void {
     at(evidence, "provenance", "statementDigest"),
     MATTERMOST_CAPABILITY_ARTIFACT.provenanceDigest,
   );
-  expectValue(errors, "evidence builder platform", at(evidence, "provenance", "builderPlatform"), "linux/amd64");
+  expectValue(errors, "evidence user platform", at(evidence, "provenance", "builderPlatform"), "linux/amd64");
   expectValue(errors, "signature disposition", at(evidence, "provenance", "signatureDisposition"), "not-supplied");
 }
 

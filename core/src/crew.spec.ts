@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_BUILDER_AGENT_MODEL_REF } from "@octogee/shared/types/platform-config";
+import { DEFAULT_USER_AGENT_MODEL_REF } from "@octogee/shared/types/platform-config";
 import {
   CREW_IDENTITY,
   CREW_ROLES,
@@ -10,10 +10,10 @@ import {
 } from "./crew.js";
 
 describe("crew constants", () => {
-  it("defines the coach identity and tier access matrix", () => {
+  it("defines the agent identity and tier access matrix", () => {
     expect(CREW_ROLES).toEqual(["coach"]);
     expect(CREW_IDENTITY.coach.name).toBe("Octo");
-    expect(CREW_IDENTITY.coach.model).toBe(DEFAULT_BUILDER_AGENT_MODEL_REF);
+    expect(CREW_IDENTITY.coach.model).toBe(DEFAULT_USER_AGENT_MODEL_REF);
     expect(CREW_IDENTITY.coach.model).toBe("platform-openai/gpt-6.1-terra");
     expect(TIERS).toEqual(["trial", "free", "hobby", "pro", "max"]);
     for (const tier of TIERS) {

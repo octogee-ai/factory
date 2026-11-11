@@ -24,7 +24,7 @@ describe("stable Mattermost interaction proxy", () => {
     const now = 1_800_000_000_000;
     const body = Buffer.from('{"context":{}}');
     const handler = createMattermostInteractionProxyHandler({
-      gatewayId: "bender",
+      gatewayId: "walter",
       routerPublicKey: verificationKey,
       now: () => now,
       targetOrigin: `http://127.0.0.1:${upstreamAddress.port}`,
@@ -35,12 +35,12 @@ describe("stable Mattermost interaction proxy", () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("missing address");
-    const signature = signAgentControlRouterRequest(body, "bender", String(now), ROUTER_KEY);
+    const signature = signAgentControlRouterRequest(body, "walter", String(now), ROUTER_KEY);
 
     const response = await fetch(`http://127.0.0.1:${address.port}/internal/openclaw/mattermost/interactions/default`, {
       method: "POST",
       headers: {
-        "x-octogee-agent-control-gateway": "bender",
+        "x-octogee-agent-control-gateway": "walter",
         "x-octogee-agent-control-timestamp": String(now),
         "x-octogee-agent-control-signature": signature,
       },
@@ -62,7 +62,7 @@ describe("stable Mattermost interaction proxy", () => {
     const now = 1_800_000_000_000;
     const body = Buffer.from("{}");
     const handler = createMattermostInteractionProxyHandler({
-      gatewayId: "bender",
+      gatewayId: "walter",
       routerPublicKey: verificationKey,
       now: () => now,
       targetOrigin: `http://127.0.0.1:${upstreamAddress.port}`,
@@ -74,13 +74,13 @@ describe("stable Mattermost interaction proxy", () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("missing address");
-    const signature = signAgentControlRouterRequest(body, "bender", String(now), ROUTER_KEY);
+    const signature = signAgentControlRouterRequest(body, "walter", String(now), ROUTER_KEY);
     const response = await fetch(
       `http://127.0.0.1:${address.port}/internal/openclaw/mattermost/interactions/default`,
       {
         method: "POST",
         headers: {
-          "x-octogee-agent-control-gateway": "bender",
+          "x-octogee-agent-control-gateway": "walter",
           "x-octogee-agent-control-timestamp": String(now),
           "x-octogee-agent-control-signature": signature,
         },

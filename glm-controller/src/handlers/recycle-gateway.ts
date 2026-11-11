@@ -18,7 +18,7 @@ import type { OperationContext, OperationHandler, OperationResult } from "../ope
 // reacts to every glmGateways write, so an out-of-band scale-to-0 would be
 // fought back up to 1 mid-drain (a race). Because the default pool is emptyDir,
 // the fresh pod starts with a cleared /home/node/.openclaw and the entrypoint's
-// boot-sync re-materializes BYOS + customer state from the durable stores. On
+// boot-sync re-materializes BYOS + user state from the durable stores. On
 // ANY failure after pausing, desiredStatus is restored to "running" so the
 // gateway is never left wedged offline.
 

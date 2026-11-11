@@ -1,11 +1,11 @@
 import type { Firestore } from "firebase-admin/firestore";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
 import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
-import type { BuilderTierReader } from "@octogee/core/builder-activation-lease";
-import type { BuilderRecord, PlatformStateRepositories, PlatformStateStore, Stored, WorkspaceProject } from "@octogee/core/platform-state";
+import type { BuilderTierReader } from "@octogee/core/user-activation-lease";
+import type { PlatformUserRecord, PlatformStateRepositories, PlatformStateStore, Stored, WorkspaceProject } from "@octogee/core/platform-state";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { isValidGatewayId, resolveGatewayClass } from "@octogee/shared/types/glm";
-import { builderAssignedTo, ownerWorkspacePermissionsEnabled, withGatewayOwnerTier } from "../../../gateway-edge/src/routes/builder/gateways.js";
+import { userAssignedTo, ownerWorkspacePermissionsEnabled, withGatewayOwnerTier } from "../../../gateway-edge/src/routes/user/gateways.js";
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 import { ChannelSessionMattermostError } from '../../../gateway-edge/src/lib/channel-session-model-control.js';
 import { isValidProjectId, projectAgentId } from '@octogee/shared/types/identity';
@@ -30,8 +30,8 @@ function validScopeClaim(claim: WorkspaceConversationScopeClaim): boolean {
     typeof claim.workspaceSlug === "string" && /^[a-z0-9-]{1,64}$/u.test(claim.workspaceSlug) &&
     (claim.projectId === undefined || isValidProjectId(claim.projectId));
 }
-function interactiveBuilder(builder: Stored<BuilderRecord> | undefined): builder is Stored<BuilderRecord> {
-  return builder !== undefined && accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined });
+function interactiveUser(user: Stored<PlatformUserRecord> | undefined): user is Stored<PlatformUserRecord> {
+  return user !== undefined && accountAllowsInteractiveAccess({ accountLifecycle: user.accountLifecycle ?? undefined });
 }
 function activeProjectPrincipal(project: WorkspaceProject | null, claim: WorkspaceConversationScopeClaim, projectMember: boolean): boolean {
   return project?.ownerUid === claim.ownerUid && project.status !== 'archived' && project.commercialLifecycleStatus !== 'archived' &&
@@ -39,14 +39,14 @@ function activeProjectPrincipal(project: WorkspaceProject | null, claim: Workspa
 }
 async function workspacePrincipal(state: PlatformStateRepositories, claim: WorkspaceConversationScopeClaim, projectMember: boolean) {
   const { uid, workspaceSlug, ownerUid, projectId } = claim;
-  const [workspace, builders, member, project] = await Promise.all([
+  const [workspace, users, member, project] = await Promise.all([
     state.workspaces.records.get(workspaceSlug),
-    state.builders.records.getMany([ownerUid, uid]),
+    state.users.records.getMany([ownerUid, uid]),
     projectId === undefined ? state.workspaces.members.get(workspaceSlug, uid) : null,
     projectId === undefined ? null : state.workspaces.projects.get(workspaceSlug, projectId),
   ]);
-  const owner = builders.get(ownerUid);
-  if (workspace?.ownerUid !== ownerUid || !interactiveBuilder(owner) || !interactiveBuilder(builders.get(uid))) return null;
+  const owner = users.get(ownerUid);
+  if (workspace?.ownerUid !== ownerUid || !interactiveUser(owner) || !interactiveUser(users.get(uid))) return null;
   const principalCurrent = projectId === undefined
     ? uid === ownerUid || isCanonicalWorkspaceMembership(member)
     : activeProjectPrincipal(project, claim, projectMember);
@@ -57,7 +57,7 @@ export async function resolveWorkspaceConversationScope(state: PlatformStateRepo
   const owner = await workspacePrincipal(state, claim, projectMember);
   const gatewayId = owner?.gateway?.gatewayId;
   if (!owner || !isValidGatewayId(gatewayId) || (claim.gatewayId !== undefined && gatewayId !== claim.gatewayId) ||
-    !builderAssignedTo(owner, gatewayId, claim.workspaceSlug)) return null;
+    !userAssignedTo(owner, gatewayId, claim.workspaceSlug)) return null;
   const auth = await readGatewayAuthorizationInStore(state, gatewayId);
   if (!auth || auth.gateway.desiredStatus !== "running") return null;
   const gatewayClass = resolveGatewayClass({ gatewayClass: auth.config.gatewayClass, profile: auth.config.profile ?? undefined, imageProfile: auth.config.imageProfile });

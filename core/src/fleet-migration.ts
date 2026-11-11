@@ -177,7 +177,7 @@ export function describeStep(step: MigrationStep): string {
       return `flush durable state for ${step.slug} on ${step.gateway} after quiescence`;
     case "sync-state":
       if (step.mode === "keys") {
-        return `seed per-customer SSH key for ${step.slug} directly from ${step.from} → ${step.to}`;
+        return `seed per-user SSH key for ${step.slug} directly from ${step.from} → ${step.to}`;
       }
       return `${step.mode === "pre" ? "pre-sync" : "final-sync"} local state for ${step.slug} directly from ${step.from} → ${step.to}`;
     case "verify-target":

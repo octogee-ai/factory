@@ -5,19 +5,19 @@ import {
   GATEWAYS_COLLECTION,
 } from "@octogee/shared/types/fleet-controller";
 import {
-  customerRuntimeMutationFenced,
+  userRuntimeMutationFenced,
   isGatewayRuntimeDoc,
   projectGatewayDesiredRootForGateway,
   type GatewayDoc,
   type GatewayRetirementClaim as RetirementClaim,
 } from "@octogee/shared/types/gateway-releases";
 import { findActiveGatewayMigration } from "./fleet-operation-lock.js";
-import type { BuilderRecord } from "./platform-state/builders.js";
+import type { PlatformUserRecord } from "./platform-state/users.js";
 import type { NewOperation, OperationRecord } from "./platform-state/operations.js";
 import type { PlatformStateStore, PlatformStateTransaction, Stored } from "./platform-state/store.js";
 
 // Retirement under the simple-roll model (GATEWAY-SIMPLE-ROLL-SPEC): claim the
-// gateway atomically (guarding mounted customers + in-flight migrations), flip
+// gateway atomically (guarding mounted users + in-flight migrations), flip
 // desiredStatus to retired, and let the reconciler tear the realization down.
 // Durable config lives in Gitea the whole time — nothing is captured at
 // retirement, so there is no wake phase and no config checkpoint ceremony.
@@ -114,7 +114,7 @@ function retirementHeartbeat(
     !isPlainRecord(value) ||
     !Array.isArray(value.mountedCustomers) ||
     !value.mountedCustomers.every(
-      (customer) => typeof customer === "string" && customer.length > 0,
+      (user) => typeof user === "string" && user.length > 0,
     )
   ) {
     return null;
@@ -142,7 +142,7 @@ function liveRuntimeIdentity(heartbeat: Record<string, unknown>): LiveRuntimeIde
 }
 
 // A RUNNING gateway may retire only on fresh telemetry proving zero mounted
-// customers. A PAUSED gateway (replicas 0) has no pod, no mounts, and nothing
+// users. A PAUSED gateway (replicas 0) has no pod, no mounts, and nothing
 // unflushed (the watcher + preStop flush committed durable config at pause) —
 // it retires directly, with no wake.
 function runningRetirementError(
@@ -175,7 +175,7 @@ function runningRetirementError(
   }
   if (telemetry.mountedCustomers.length > 0) {
     return {
-      error: `gateway ${gatewayId} still has mounted customers: ${telemetry.mountedCustomers.join(", ")}`,
+      error: `gateway ${gatewayId} still has mounted users: ${telemetry.mountedCustomers.join(", ")}`,
       liveRuntimeIdentity: null,
     };
   }
@@ -206,7 +206,7 @@ function unconvergedRetirementError(gatewayId: string, runtime: unknown): Gatewa
     : [];
   return mountedCustomers.length > 0
     ? new GatewayRetirementConflictError(
-      `gateway ${gatewayId} still has mounted customers: ${mountedCustomers.join(", ")}`,
+      `gateway ${gatewayId} still has mounted users: ${mountedCustomers.join(", ")}`,
     )
     : new GatewayRetirementReleaseUnconvergedError(
       `gateway ${gatewayId} desired release is not converged to live`,
@@ -266,13 +266,13 @@ export async function assertGatewayRuntimeMutationUnfenced(
   db: Firestore,
   transaction: Transaction,
   gatewayId: string,
-  allowedComputerRecoveryOperationId?: string,
+  allowedVmRecoveryOperationId?: string,
 ): Promise<void> {
   const root = await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(gatewayId));
   if (root.data()?.runtimeRestartFence !== undefined) {
     throw new GatewayRetirementConflictError(`gateway ${gatewayId} runtime restart outcome is unresolved`);
   }
-  const [retainedTransfers, transferTargets, mirroredUsers, computerRecoveries] = await Promise.all([
+  const [retainedTransfers, transferTargets, mirroredUsers, vmRecoveries] = await Promise.all([
     transaction.get(db.collection("users")
       .where("provisioning.openclaw.sourceTransferFence.sourceGatewayId", "==", gatewayId)),
     transaction.get(db.collection("users")
@@ -282,32 +282,32 @@ export async function assertGatewayRuntimeMutationUnfenced(
     transaction.get(db.collection("users")
       .where("provisioning.computerRecovery.gatewayId", "==", gatewayId)),
   ]);
-  if (computerRecoveries.docs.some(doc => !allowedComputerRecoveryOperationId || doc.data()?.provisioning?.computerRecovery?.operationId !== allowedComputerRecoveryOperationId)) {
-    throw new GatewayRetirementConflictError(`gateway ${gatewayId} computer recovery is in progress`);
+  if (vmRecoveries.docs.some(doc => !allowedVmRecoveryOperationId || doc.data()?.provisioning?.computerRecovery?.operationId !== allowedVmRecoveryOperationId)) {
+    throw new GatewayRetirementConflictError(`gateway ${gatewayId} VM recovery is in progress`);
   }
-  if (retainedTransfers.size > 0 || transferTargets.size > 0 || mirroredUsers.docs.some(doc => customerRuntimeMutationFenced(doc.data()))) {
+  if (retainedTransfers.size > 0 || transferTargets.size > 0 || mirroredUsers.docs.some(doc => userRuntimeMutationFenced(doc.data()))) {
     throw new GatewayRetirementConflictError(`gateway ${gatewayId} source transfer outcome is unresolved`);
   }
 }
 
-export function builderRuntimeMutationFenced(builder: Stored<BuilderRecord>): boolean {
-  return builder.fences.restoreFence !== undefined || builder.fences.sourceTransferFence !== undefined;
+export function isolatedRuntimeMutationFenced(user: Stored<PlatformUserRecord>): boolean {
+  return user.fences.restoreFence !== undefined || user.fences.sourceTransferFence !== undefined;
 }
 
 export async function assertGatewayRuntimeMutationUnfencedInStore(
   transaction: PlatformStateTransaction,
   gatewayId: string,
-  allowedComputerRecoveryOperationId?: string,
+  allowedVmRecoveryOperationId?: string,
 ): Promise<void> {
   const root = await transaction.gateways.roots.get(gatewayId);
   if (root?.runtimeRestartFence !== undefined) {
     throw new GatewayRetirementConflictError(`gateway ${gatewayId} runtime restart outcome is unresolved`);
   }
-  const holders = await transaction.builders.records.listGatewayFenceHolders(gatewayId);
-  if (holders.computerRecovery.some(builder => !allowedComputerRecoveryOperationId || builder.fences.computerRecovery?.operationId !== allowedComputerRecoveryOperationId)) {
-    throw new GatewayRetirementConflictError(`gateway ${gatewayId} computer recovery is in progress`);
+  const holders = await transaction.users.records.listGatewayFenceHolders(gatewayId);
+  if (holders.computerRecovery.some(user => !allowedVmRecoveryOperationId || user.fences.computerRecovery?.operationId !== allowedVmRecoveryOperationId)) {
+    throw new GatewayRetirementConflictError(`gateway ${gatewayId} VM recovery is in progress`);
   }
-  if (holders.sourceTransferSource.length > 0 || holders.sourceTransferTarget.length > 0 || holders.assigned.some(builderRuntimeMutationFenced)) {
+  if (holders.sourceTransferSource.length > 0 || holders.sourceTransferTarget.length > 0 || holders.assigned.some(isolatedRuntimeMutationFenced)) {
     throw new GatewayRetirementConflictError(`gateway ${gatewayId} source transfer outcome is unresolved`);
   }
 }
@@ -359,7 +359,7 @@ export async function claimGatewayRetirementInStore(
     const { rootData } = claimableGatewayRetirementRoot(input.gatewayId, stored ?? undefined);
     if (activeMigrationConflict(input.gatewayId, activeOperations)) {
       throw new GatewayRetirementConflictError(
-        `customer migration is in flight for gateway ${input.gatewayId}`,
+        `user migration is in flight for gateway ${input.gatewayId}`,
       );
     }
 

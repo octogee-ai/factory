@@ -111,7 +111,7 @@ describe("buildInstancesMap", () => {
     expect(map.canary).toMatchObject({ gatewayId: "canary", image: { tag: "def" } });
   });
 
-  it("never renders the Builder's owner identity into its instance values", () => {
+  it("never renders the user's owner identity into its instance values", () => {
     const map = buildInstancesMap([
       mkDesired({ gatewayId: "jack", gatewayClass: "builder", builderSlug: "jack", ownerUid: "uid-jack" }),
     ]);
@@ -123,16 +123,16 @@ describe("buildInstancesMap", () => {
   it("preserves personal gateway helm knobs from desired state", () => {
     const map = buildInstancesMap([
       mkDesired({
-        gatewayId: "bender",
-        serviceAccountName: "octogee-gateway-bender",
+        gatewayId: "walter",
+        serviceAccountName: "octogee-gateway-walter",
         gatewayContainerSecurityContext: {
           allowPrivilegeEscalation: true,
           capabilities: { drop: ["ALL"] },
         },
       }),
     ]);
-    expect(map.bender).toMatchObject({
-      serviceAccountName: "octogee-gateway-bender",
+    expect(map.walter).toMatchObject({
+      serviceAccountName: "octogee-gateway-walter",
       gatewayContainerSecurityContext: {
         allowPrivilegeEscalation: true,
       },
@@ -144,23 +144,23 @@ describe("buildInstancesMap", () => {
     expect(map).toEqual({});
   });
 
-  it("propagates the Builder profile onto the Helm instance value", () => {
+  it("propagates the user profile onto the Helm instance value", () => {
     const map = buildInstancesMap([
-      mkDesired({ gatewayId: "bender", gatewayClass: "builder", imageProfile: "builder" }),
+      mkDesired({ gatewayId: "walter", gatewayClass: "builder", imageProfile: "builder" }),
     ]);
-    expect(map.bender.profile).toBe("builder");
+    expect(map.walter.profile).toBe("builder");
   });
 
-  it("defaults Builder gateways to a locked dedicated ServiceAccount and Control UI", () => {
+  it("defaults isolated gateways to a locked dedicated ServiceAccount and Control UI", () => {
     const map = buildInstancesMap([
       mkDesired({
-        gatewayId: "bender",
+        gatewayId: "walter",
         gatewayClass: "builder",
         imageProfile: "builder",
       }),
     ]);
-    expect(map.bender).toMatchObject({
-      serviceAccountName: "octogee-gw-bender",
+    expect(map.walter).toMatchObject({
+      serviceAccountName: "octogee-gw-walter",
       serviceAccount: { create: true },
       builderAccess: {
         controlUiEnabled: false,
@@ -169,16 +169,16 @@ describe("buildInstancesMap", () => {
     });
   });
 
-  it("enables Control UI for a Builder gateway with a Builder owner", () => {
+  it("enables Control UI for an isolated gateway with a user owner", () => {
     const map = buildInstancesMap([
-      mkDesired({ gatewayId: "bender", gatewayClass: "builder", imageProfile: "builder", ownerUid: "uid-chris" }),
+      mkDesired({ gatewayId: "walter", gatewayClass: "builder", imageProfile: "builder", ownerUid: "uid-chris" }),
     ]);
-    expect(map.bender.builderAccess).toMatchObject({
+    expect(map.walter.builderAccess).toMatchObject({
       controlUiEnabled: true,
     });
   });
 
-  it("defaults Control UI on for an owned Builder gateway", () => {
+  it("defaults Control UI on for an owned isolated gateway", () => {
     const map = buildInstancesMap([
       mkDesired({
         gatewayId: "hobby",
@@ -193,7 +193,7 @@ describe("buildInstancesMap", () => {
     });
   });
 
-  it("enables runtime access for an owned builder gateway without Operator Workload Identity", () => {
+  it("enables runtime access for an owned isolated gateway without Operator Workload Identity", () => {
     const map = buildInstancesMap([
       mkDesired({ gatewayId: "jack", gatewayClass: "builder", ownerUid: "uid-jack" }),
     ]);
@@ -204,13 +204,13 @@ describe("buildInstancesMap", () => {
     expect(map.jack.serviceAccount).toEqual({ create: true });
   });
 
-  it("injects resolved API-server egress CIDRs into an owned Builder gateway with Control UI", () => {
+  it("injects resolved API-server egress CIDRs into an owned isolated gateway with Control UI", () => {
     const map = buildInstancesMap(
-      [mkDesired({ gatewayId: "bender", gatewayClass: "builder", imageProfile: "builder", ownerUid: "uid-chris" })],
+      [mkDesired({ gatewayId: "walter", gatewayClass: "builder", imageProfile: "builder", ownerUid: "uid-chris" })],
       undefined,
       ["10.128.0.2/32", "34.118.224.1/32"],
     );
-    expect(map.bender.builderAccess).toMatchObject({
+    expect(map.walter.builderAccess).toMatchObject({
       kubeApiServerEgressCidrs: ["10.128.0.2/32", "34.118.224.1/32"],
     });
   });
@@ -220,11 +220,11 @@ describe("buildInstancesMap", () => {
     expect(map.default.builderAccess).toBeUndefined();
   });
 
-  it("leaves a working Builder gateway's egress intact when no CIDRs resolved", () => {
+  it("leaves a working isolated gateway's egress intact when no CIDRs resolved", () => {
     const map = buildInstancesMap(
       [
         mkDesired({
-          gatewayId: "bender",
+          gatewayId: "walter",
           gatewayClass: "builder",
           imageProfile: "builder",
           ownerUid: "uid-chris",
@@ -234,59 +234,59 @@ describe("buildInstancesMap", () => {
       undefined,
       [],
     );
-    expect(map.bender.builderAccess?.kubeApiServerEgressCidrs).toEqual(["10.128.0.2/32"]);
+    expect(map.walter.builderAccess?.kubeApiServerEgressCidrs).toEqual(["10.128.0.2/32"]);
   });
 
-  it("does not let a Builder gateway inherit the platform default ServiceAccount", () => {
+  it("does not let a isolated gateway inherit the platform default ServiceAccount", () => {
     const map = buildInstancesMap([
       mkDesired({
-        gatewayId: "bender",
+        gatewayId: "walter",
         gatewayClass: "builder",
         imageProfile: "builder",
         serviceAccountName: "octogee-gateway",
       }),
     ]);
-    expect(map.bender.serviceAccountName).toBe("octogee-gw-bender");
-    expect(map.bender.serviceAccount).toEqual({ create: true });
+    expect(map.walter.serviceAccountName).toBe("octogee-gw-walter");
+    expect(map.walter.serviceAccount).toEqual({ create: true });
   });
 
-  it("leaves a generated Builder ServiceAccount GSA-less", () => {
+  it("leaves a generated user ServiceAccount GSA-less", () => {
     const map = buildInstancesMap([
       mkDesired({
-        gatewayId: "bender-canary-2026",
+        gatewayId: "walter-canary-2026",
         gatewayClass: "builder",
         imageProfile: "builder",
         ownerUid: "uid-chris",
-        serviceAccountName: "octogee-gw-bender-canary-2026",
+        serviceAccountName: "octogee-gw-walter-canary-2026",
         serviceAccount: { create: true },
       }),
     ]);
-    expect(map["bender-canary-2026"].serviceAccount).toEqual({ create: true });
-    expect(map["bender-canary-2026"].builderAccess).toMatchObject({
+    expect(map["walter-canary-2026"].serviceAccount).toEqual({ create: true });
+    expect(map["walter-canary-2026"].builderAccess).toMatchObject({
       controlUiEnabled: true,
     });
   });
 
-  it("does not require a platform gateway GSA for a generated Builder ServiceAccount", () => {
+  it("does not require a platform gateway GSA for a generated user ServiceAccount", () => {
     const map = buildInstancesMap([
         mkDesired({
-          gatewayId: "bender-canary-2026",
+          gatewayId: "walter-canary-2026",
           gatewayClass: "builder",
           imageProfile: "builder",
-          serviceAccountName: "octogee-gw-bender-canary-2026",
+          serviceAccountName: "octogee-gw-walter-canary-2026",
           serviceAccount: { create: true },
         }),
       ]);
-    expect(map["bender-canary-2026"].serviceAccount).toEqual({ create: true });
+    expect(map["walter-canary-2026"].serviceAccount).toEqual({ create: true });
   });
 
   it("strips Workload Identity from an explicit generated ServiceAccount", () => {
     const map = buildInstancesMap([
       mkDesired({
-        gatewayId: "bender",
+        gatewayId: "walter",
         gatewayClass: "builder",
         imageProfile: "builder",
-        serviceAccountName: "octogee-gw-bender",
+        serviceAccountName: "octogee-gw-walter",
         serviceAccount: {
           create: true,
           annotations: {
@@ -295,20 +295,20 @@ describe("buildInstancesMap", () => {
         },
       }),
     ]);
-    expect(map.bender.serviceAccount).toEqual({ create: true });
+    expect(map.walter.serviceAccount).toEqual({ create: true });
   });
 
-  it("preserves an explicit custom Builder ServiceAccount name", () => {
+  it("preserves an explicit custom user ServiceAccount name", () => {
     const map = buildInstancesMap([
       mkDesired({
-        gatewayId: "bender",
+        gatewayId: "walter",
         gatewayClass: "builder",
         imageProfile: "builder",
-        serviceAccountName: "custom-builder-ksa",
+        serviceAccountName: "custom-user-ksa",
       }),
     ]);
-    expect(map.bender.serviceAccountName).toBe("custom-builder-ksa");
-    expect(map.bender.serviceAccount).toBeUndefined();
+    expect(map.walter.serviceAccountName).toBe("custom-user-ksa");
+    expect(map.walter.serviceAccount).toBeUndefined();
   });
 
   it("defaults standard gateways to a generated ServiceAccount with no platform annotation values", () => {
@@ -336,9 +336,9 @@ describe("buildInstancesMap", () => {
 
   it("never carries a persistence knob in Helm values (emptyDir only)", () => {
     const map = buildInstancesMap([
-      mkDesired({ gatewayId: "bender", gatewayClass: "builder", imageProfile: "builder" }),
+      mkDesired({ gatewayId: "walter", gatewayClass: "builder", imageProfile: "builder" }),
     ]);
-    expect("persistence" in map.bender).toBe(false);
+    expect("persistence" in map.walter).toBe(false);
   });
 
   it("omits default shared/standard class/profile fields from helm values", () => {
@@ -425,31 +425,31 @@ describe("diffInstancesMap", () => {
 
   it("reports an update when personal gateway helm knobs change", () => {
     const actual: HelmInstancesMap = {
-      bender: {
+      walter: {
         enabled: true,
         image: { repository: REPO, tag: "abc" },
-        gatewayId: "bender",
+        gatewayId: "walter",
       },
     };
     const desired: HelmInstancesMap = {
-      bender: {
-        ...actual.bender,
-        serviceAccountName: "octogee-gateway-bender",
+      walter: {
+        ...actual.walter,
+        serviceAccountName: "octogee-gateway-walter",
         gatewayContainerSecurityContext: { allowPrivilegeEscalation: true },
       },
     };
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toEqual<ReconcileChange[]>([
-      { kind: "update", gatewayId: "bender", from: actual.bender, to: desired.bender },
+      { kind: "update", gatewayId: "walter", from: actual.walter, to: desired.walter },
     ]);
   });
 
   it("does NOT report an update when a helm-knob object differs only in key order (stable compare — no per-tick reconcile churn)", () => {
     const actual: HelmInstancesMap = {
-      bender: {
+      walter: {
         enabled: true,
         image: { repository: REPO, tag: "abc" },
-        gatewayId: "bender",
+        gatewayId: "walter",
         gatewayContainerSecurityContext: {
           allowPrivilegeEscalation: true,
           capabilities: { drop: ["ALL"] },
@@ -458,9 +458,9 @@ describe("diffInstancesMap", () => {
     };
 
 const desired: HelmInstancesMap = {
-      bender: {
+      walter: {
         enabled: true,
-        gatewayId: "bender",
+        gatewayId: "walter",
         image: { tag: "abc", repository: REPO },
         gatewayContainerSecurityContext: {
           capabilities: { drop: ["ALL"] },
@@ -539,7 +539,7 @@ describe("buildHelmTargetMap", () => {
     expect(target.canary.gatewayId).toBe("canary");
   });
 
-  it("removes a retired instance from target when no customers are mounted (helm uninstalls)", () => {
+  it("removes a retired instance from target when no users are mounted (helm uninstalls)", () => {
     const actual: HelmInstancesMap = {
       default: { enabled: true, image: { repository: REPO_PATH, tag: "abc" }, gatewayId: "gw-test" },
       canary: { enabled: true, image: { repository: REPO_PATH, tag: "def" }, gatewayId: "canary" },
@@ -558,7 +558,7 @@ describe("buildHelmTargetMap", () => {
     expect(Object.keys(target).sort()).toEqual(["default"]);
   });
 
-  it("preserves a retired instance from target while customers are still mounted (drain wait)", () => {
+  it("preserves a retired instance from target while users are still mounted (drain wait)", () => {
     const actual: HelmInstancesMap = {
       default: { enabled: true, image: { repository: REPO_PATH, tag: "abc" }, gatewayId: "gw-test" },
       canary: { enabled: true, image: { repository: REPO_PATH, tag: "def" }, gatewayId: "canary" },
@@ -664,7 +664,7 @@ describe("chart-drift comparison is caller-gated (issue #997 — PROD must not a
     gatewayId: "gw-prod",
   });
 
-  it("compareChartFingerprint:false — chart-only drift produces NO changes (a glm-controller image bump must not roll customer pods)", () => {
+  it("compareChartFingerprint:false — chart-only drift produces NO changes (a glm-controller image bump must not roll user pods)", () => {
     const actual: HelmInstancesMap = { default: { ...baseInstance("sha"), chartFingerprint: "fp-old" } };
     const desiredMap: HelmInstancesMap = { default: { ...baseInstance("sha"), chartFingerprint: "fp-new" } };
     expect(
@@ -672,7 +672,7 @@ describe("chart-drift comparison is caller-gated (issue #997 — PROD must not a
     ).toEqual([]);
   });
 
-  it("compareChartFingerprint:false — the undefined→fingerprint transition is also suppressed (fresh Cowboy image must not roll the existing release)", () => {
+  it("compareChartFingerprint:false — the undefined→fingerprint transition is also suppressed (fresh fleet controller image must not roll the existing release)", () => {
     const actual: HelmInstancesMap = { default: baseInstance("sha") };
     const desiredMap: HelmInstancesMap = { default: { ...baseInstance("sha"), chartFingerprint: "fp-new" } };
     expect(
@@ -750,7 +750,7 @@ describe("isReplicasOnlyUpdate", () => {
   it("returns false when a helm-knob object differs (object diff)", () => {
     const change: ReconcileChange = {
       kind: "update",
-      gatewayId: "bender",
+      gatewayId: "walter",
       from: { ...base(), gatewayContainerSecurityContext: { allowPrivilegeEscalation: false }, replicas: 1 },
       to: { ...base(), gatewayContainerSecurityContext: { allowPrivilegeEscalation: true }, replicas: 0 },
     };
@@ -799,7 +799,7 @@ describe("isReplicasOnlyUpdate", () => {
 
 describe("isImageRoll — the in-place-roll detector behind the mounted-gateway guard", () => {
   const REPO3 = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
-  const BUILDER_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder";
+  const USER_REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder";
   const base = () => ({
     enabled: true as const,
     image: { repository: REPO3, tag: "abc" },
@@ -821,9 +821,9 @@ describe("isImageRoll — the in-place-roll detector behind the mounted-gateway 
     expect(
       isImageRoll({
         kind: "update",
-        gatewayId: "bender",
+        gatewayId: "walter",
         from: { ...base(), image: { repository: REPO3, tag: "abc" } },
-        to: { ...base(), image: { repository: BUILDER_REPO, tag: "abc" } },
+        to: { ...base(), image: { repository: USER_REPO, tag: "abc" } },
       }),
     ).toBe(true);
   });
@@ -843,7 +843,7 @@ describe("isImageRoll — the in-place-roll detector behind the mounted-gateway 
     expect(
       isImageRoll({
         kind: "update",
-        gatewayId: "bender",
+        gatewayId: "walter",
         from: { ...base(), builderAccess: { controlUiEnabled: false } },
         to: { ...base(), builderAccess: { controlUiEnabled: true } },
       }),

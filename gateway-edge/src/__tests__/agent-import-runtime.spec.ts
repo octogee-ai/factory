@@ -89,13 +89,13 @@ describe("agent import runtime", () => {
 
   it("reports the exact clean main workspace head used by preview", async () => {
     const targetDir = repo();
-    await expect(readAgentImportWorkspaceState("alice", { customersRoot: path.dirname(targetDir), targetDir })).resolves.toMatchObject({
+    await expect(readAgentImportWorkspaceState("alice", { usersRoot: path.dirname(targetDir), targetDir })).resolves.toMatchObject({
       targetDir,
       clean: true,
       head: expect.stringMatching(/^[0-9a-f]{40}$/),
     });
     fs.writeFileSync(path.join(targetDir, "README.md"), "changed\n");
-    await expect(readAgentImportWorkspaceState("alice", { customersRoot: path.dirname(targetDir), targetDir }))
+    await expect(readAgentImportWorkspaceState("alice", { usersRoot: path.dirname(targetDir), targetDir }))
       .resolves.toMatchObject({ clean: false });
   });
 

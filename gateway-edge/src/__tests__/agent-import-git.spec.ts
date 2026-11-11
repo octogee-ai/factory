@@ -19,7 +19,7 @@ import {
 
 const roots: string[] = [];
 const HOUSE_ONLY_WORKSPACE_POLICY = { preserveConvergedContextFiles: true };
-const BUILDER_OWNED_CONTEXT_POLICY = { preserveConvergedContextFiles: false };
+const USER_OWNED_CONTEXT_POLICY = { preserveConvergedContextFiles: false };
 
 type ApplyOptions = Parameters<typeof applyAgentImportRepositoryWithPolicy>[0];
 
@@ -27,7 +27,7 @@ function applyAgentImportRepository(
   options: Omit<ApplyOptions, "workspacePolicy"> & Partial<Pick<ApplyOptions, "workspacePolicy">>,
 ) {
   return applyAgentImportRepositoryWithPolicy({
-    workspacePolicy: BUILDER_OWNED_CONTEXT_POLICY,
+    workspacePolicy: USER_OWNED_CONTEXT_POLICY,
     ...options,
   });
 }
@@ -35,7 +35,7 @@ function applyAgentImportRepository(
 function compareAgentImportWorkspaces(
   sourceDir: string,
   targetDir: string,
-  workspacePolicy = BUILDER_OWNED_CONTEXT_POLICY,
+  workspacePolicy = USER_OWNED_CONTEXT_POLICY,
 ) {
   return compareAgentImportWorkspacesWithPolicy(sourceDir, targetDir, workspacePolicy);
 }
@@ -271,10 +271,10 @@ describe("inspectAgentImportRepository", () => {
 describe("applyAgentImportRepository", () => {
   it("keeps a Trial import clean through OpenClaw reconciliation and exact rollback", async () => {
     const platformFiles = {
-      "AGENTS.md": "# Builder agent instructions\n",
-      "IDENTITY.md": "# Builder identity\n",
-      "TOOLS.md": "# Builder tools\n",
-      "USER.md": "# Builder profile\n",
+      "AGENTS.md": "# User agent instructions\n",
+      "IDENTITY.md": "# User identity\n",
+      "TOOLS.md": "# User tools\n",
+      "USER.md": "# User profile\n",
       "openclaw-workspace-state.json":
         "{\"version\":1,\"setupCompletedAt\":\"2026-07-20T00:00:00.000Z\"}\n",
     };
@@ -288,7 +288,7 @@ describe("applyAgentImportRepository", () => {
     const preview = await compareAgentImportWorkspaces(
       source,
       target,
-      BUILDER_OWNED_CONTEXT_POLICY,
+      USER_OWNED_CONTEXT_POLICY,
     );
     expect(preview.conflicts).toEqual([
       "delete:AGENTS.md",
@@ -312,7 +312,7 @@ describe("applyAgentImportRepository", () => {
       slug: "jack",
       storeBlob: vi.fn(),
       cleanupBlobs: vi.fn(),
-      workspacePolicy: BUILDER_OWNED_CONTEXT_POLICY,
+      workspacePolicy: USER_OWNED_CONTEXT_POLICY,
       push: false,
     });
 
@@ -332,7 +332,7 @@ describe("applyAgentImportRepository", () => {
     expect(reconcileOpenClawWorkspace(target, { skipBootstrap: true })).toEqual([]);
     expect(git(target, "status", "--porcelain", "--untracked-files=all")).toBe("");
 
-    fs.writeFileSync(path.join(target, "builder-note.md"), "do not discard\n");
+    fs.writeFileSync(path.join(target, "user-note.md"), "do not discard\n");
     await expect(rollbackAgentImportRepository({
       targetDir: target,
       importCommit: applied.importCommit,
@@ -340,7 +340,7 @@ describe("applyAgentImportRepository", () => {
       importId: "import-managed-files",
       push: false,
     })).rejects.toMatchObject({ code: "destination_dirty" });
-    fs.rmSync(path.join(target, "builder-note.md"));
+    fs.rmSync(path.join(target, "user-note.md"));
 
     const rolledBack = await rollbackAgentImportRepository({
       targetDir: target,
@@ -357,7 +357,7 @@ describe("applyAgentImportRepository", () => {
   it("preserves only exact context files for house-only plans", async () => {
     const source = repo("agent-import-path-shape-source", { "MEMORY.md": "source\n" });
     const target = repo("agent-import-path-shape-target", {
-      "AGENTS.md/custom-builder-file": "nested\n",
+      "AGENTS.md/custom-user-file": "nested\n",
       "TOOLS.md": "platform tools\n",
     });
 
@@ -367,7 +367,7 @@ describe("applyAgentImportRepository", () => {
       HOUSE_ONLY_WORKSPACE_POLICY,
     );
 
-    expect(comparison.conflicts).toEqual(["delete:AGENTS.md/custom-builder-file"]);
+    expect(comparison.conflicts).toEqual(["delete:AGENTS.md/custom-user-file"]);
     expect(comparison.preservedPaths).toEqual([
       ".files",
       "AGENTS.md",
@@ -438,7 +438,7 @@ describe("applyAgentImportRepository", () => {
     expect((await compareAgentImportWorkspaces(
       source,
       trialTarget,
-      BUILDER_OWNED_CONTEXT_POLICY,
+      USER_OWNED_CONTEXT_POLICY,
     )).conflicts).toEqual(["overwrite:AGENTS.md", "overwrite:TOOLS.md"]);
 
     await applyAgentImportRepository({
@@ -462,7 +462,7 @@ describe("applyAgentImportRepository", () => {
       slug: "jill",
       storeBlob: vi.fn(),
       cleanupBlobs: vi.fn(),
-      workspacePolicy: BUILDER_OWNED_CONTEXT_POLICY,
+      workspacePolicy: USER_OWNED_CONTEXT_POLICY,
       push: false,
     });
 
@@ -657,7 +657,7 @@ describe("applyAgentImportRepository", () => {
     const target = repo("agent-import-racing-target", { "README.md": "starter\n" });
     const destinationHead = git(target, "rev-parse", "HEAD");
     const storeBlob = vi.fn(async () => {
-      fs.writeFileSync(path.join(target, "README.md"), "builder edit\n");
+      fs.writeFileSync(path.join(target, "README.md"), "user edit\n");
       return {
         type: "blob" as const,
         gcsPath: "customers/jack/agent-imports/import-racing/photo.png",
@@ -679,7 +679,7 @@ describe("applyAgentImportRepository", () => {
       push: false,
     })).rejects.toMatchObject({ code: "destination_dirty" });
     expect(git(target, "rev-parse", "HEAD")).toBe(destinationHead);
-    expect(fs.readFileSync(path.join(target, "README.md"), "utf8")).toBe("builder edit\n");
+    expect(fs.readFileSync(path.join(target, "README.md"), "utf8")).toBe("user edit\n");
   });
 
   it("preserves a workspace write injected after the final cleanliness check", async () => {
@@ -698,12 +698,12 @@ describe("applyAgentImportRepository", () => {
       cleanupBlobs: vi.fn(),
       push: false,
       beforeTargetUpdate: () => {
-        fs.writeFileSync(path.join(target, "README.md"), "builder write after check\n");
+        fs.writeFileSync(path.join(target, "README.md"), "user write after check\n");
       },
     })).rejects.toBeInstanceOf(AgentImportGitError);
 
     expect(git(target, "rev-parse", "HEAD")).toBe(destinationHead);
-    expect(fs.readFileSync(path.join(target, "README.md"), "utf8")).toBe("builder write after check\n");
+    expect(fs.readFileSync(path.join(target, "README.md"), "utf8")).toBe("user write after check\n");
   });
 
   it("preserves a workspace commit injected after the final cleanliness check", async () => {
@@ -723,16 +723,16 @@ describe("applyAgentImportRepository", () => {
       cleanupBlobs: vi.fn(),
       push: false,
       beforeTargetUpdate: () => {
-        fs.writeFileSync(path.join(target, "builder.md"), "concurrent commit\n");
-        git(target, "add", "builder.md");
-        git(target, "commit", "-q", "-m", "concurrent builder commit");
+        fs.writeFileSync(path.join(target, "user.md"), "concurrent commit\n");
+        git(target, "add", "user.md");
+        git(target, "commit", "-q", "-m", "concurrent user commit");
         concurrentCommit = git(target, "rev-parse", "HEAD");
       },
     })).rejects.toBeInstanceOf(AgentImportGitError);
 
     expect(concurrentCommit).not.toBe(destinationHead);
     expect(git(target, "rev-parse", "HEAD")).toBe(concurrentCommit);
-    expect(fs.readFileSync(path.join(target, "builder.md"), "utf8")).toBe("concurrent commit\n");
+    expect(fs.readFileSync(path.join(target, "user.md"), "utf8")).toBe("concurrent commit\n");
   });
 
   it("returns a retryable error while another workspace writer holds the shared lease", async () => {

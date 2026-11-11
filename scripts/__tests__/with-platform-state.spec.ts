@@ -5,7 +5,7 @@ const POSTGRES = {
   backend: "postgres",
   host: "10.0.0.5",
   port: 5432,
-  image: "cowboy@sha256:abc",
+  image: "fleet-controller@sha256:abc",
   database: "platform",
   user: "runtime",
   password: "runtime-password",

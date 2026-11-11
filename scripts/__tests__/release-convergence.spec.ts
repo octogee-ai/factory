@@ -39,7 +39,7 @@ function snapshot(
         error: null,
       },
       {
-        id: "roll-builder",
+        id: "roll-user",
         gatewayId: "builder-chris",
         imageTag: "abc1234-oc2026.7.1",
         status: "succeeded",
@@ -186,7 +186,7 @@ describe("assessReleaseConvergence", () => {
       rolloutOperations: [
         snapshot().rolloutOperations[0]!,
         {
-          id: "roll-retired-builder",
+          id: "roll-retired-user",
           gatewayId: "builder-chris",
           imageTag: "abc1234-oc2026.7.1",
           status: "failed",
@@ -227,7 +227,7 @@ describe("assessReleaseConvergence", () => {
     });
 
     expect(result.failures).toEqual(expect.arrayContaining([
-      "default assignment roster does not equal mounted customers (missing: none; orphan: jack)",
+      "default assignment roster does not equal mounted users (missing: none; orphan: jack)",
     ]));
   });
 

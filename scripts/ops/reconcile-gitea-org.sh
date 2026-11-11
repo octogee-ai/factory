@@ -25,16 +25,16 @@ set -euo pipefail
 # Spec: docs/specs/GITEA-PER-WORKSPACE-ORGS-SPEC.md (AD6).
 #
 # Usage:
-#   # TEST dress rehearsal (Bender-cutover proof) — dry-run first, ALWAYS:
+#   # TEST dress rehearsal — dry-run first, ALWAYS:
 #   ./scripts/ops/reconcile-gitea-org.sh --env=test --slug=tester90
 #   ./scripts/ops/reconcile-gitea-org.sh --env=test --slug=tester90 --apply
 #
 #   # PROD cutover for the two F&F/legacy users (dry-run, review, then apply):
-#   ./scripts/ops/reconcile-gitea-org.sh --env=prod --slug=bender,<other>
-#   ./scripts/ops/reconcile-gitea-org.sh --env=prod --slug=bender,<other> --apply
+#   ./scripts/ops/reconcile-gitea-org.sh --env=prod --slug=walter,<other>
+#   ./scripts/ops/reconcile-gitea-org.sh --env=prod --slug=walter,<other> --apply
 #
 #   --slug accepts a comma-list or repeated --slug=… (each reconciled in turn;
-#   a failure stops the run — no half-migrating the next customer).
+#   a failure stops the run — no half-migrating the next user).
 #   --apply on PROD requires a typed confirmation unless --yes is given.
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -174,9 +174,9 @@ echo ""
 if [[ "$APPLY" == true ]]; then
   echo -e "${GREEN}${BOLD}✓ Reconcile applied + self-verified for: ${SLUGS[*]}${NC}"
   echo "  Next (you drive — don't let automation race kubectl):"
-  echo "   1) restart each customer's gateway so #970 self-heals ws-<slug>/team/membership:"
+  echo "   1) restart each user's gateway so #970 self-heals ws-<slug>/team/membership:"
   echo "        kubectl --context $K8S_CONTEXT -n $K8S_NAMESPACE rollout restart deploy/octogee-gateway-shared-a"
-  echo "      (dedicated-gateway customers: restart octogee-gateway-<instance> instead —"
+  echo "      (dedicated-gateway users: restart octogee-gateway-<instance> instead —"
   echo "       check provisioning.openclaw.gatewayId for the slug)"
   echo "   2) re-run this script in dry-run mode → expect 'already reconciled — no actions' (idempotent proof)"
   echo "   3) smoke each workspace (repo now at <slug>/workspace; project repos at <slug>/<projectSlug>)"

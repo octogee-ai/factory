@@ -17,7 +17,7 @@ const GITHUB_OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const GITHUB_REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
 
 export interface GithubProjectCloneInput {
-  customersRoot: string;
+  usersRoot: string;
   builderSlug: string;
   projectSlug: string;
   repository: { owner: string; repo: string };
@@ -48,7 +48,7 @@ export async function cloneGithubProjectCheckout(
     throw new Error("invalid GitHub project clone request");
   }
 
-  const root = path.resolve(input.customersRoot);
+  const root = path.resolve(input.usersRoot);
   const parent = path.join(root, input.builderSlug, "projects");
   const destination = path.join(parent, input.projectSlug);
   if (!isContained(root, destination)) throw new Error("invalid GitHub project clone target");
@@ -115,7 +115,7 @@ async function hasGitMetadata(destination: string): Promise<boolean> {
 async function installCheckout(
   staging: string,
   destination: string,
-  customersRoot: string,
+  usersRoot: string,
   builderSlug: string,
   projectSlug: string,
 ): Promise<void> {
@@ -139,7 +139,7 @@ async function installCheckout(
   });
   if (!lease) throw new Error("workspace mutation lease unavailable");
   const quarantine = path.join(
-    path.dirname(customersRoot),
+    path.dirname(usersRoot),
     "git-worktree-quarantine",
     builderSlug,
     `${projectSlug}-${randomUUID()}`,

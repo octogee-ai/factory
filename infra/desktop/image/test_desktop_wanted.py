@@ -40,13 +40,13 @@ class DesktopWantedTests(unittest.TestCase):
                 capture_output=True, text=True, timeout=15,
             )
 
-    def test_starts_the_host_desktop_when_the_computer_names_no_desktop(self):
+    def test_starts_the_host_desktop_when_the_vm_names_no_desktop(self):
         self.assertEqual(self.run_script('0:404:not found').returncode, 0)
 
-    def test_starts_the_host_desktop_for_an_omarchy_computer(self):
+    def test_starts_the_host_desktop_for_an_omarchy_vm(self):
         self.assertEqual(self.run_script('0:200:omarchy').returncode, 0)
 
-    def test_skips_the_host_desktop_for_an_x11_computer(self):
+    def test_skips_the_host_desktop_for_an_x11_vm(self):
         result = self.run_script('0:200:x11')
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn('host desktop stays off', result.stdout)

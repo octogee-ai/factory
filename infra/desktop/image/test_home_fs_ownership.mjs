@@ -19,15 +19,15 @@ for (const archiveHasSsh of [false, true]) {
       if (archiveHasSsh) {
         await mkdir(`${source}/.ssh`, { mode: 0o700 });
         await chown(`${source}/.ssh`, 1000, 1000);
-        await writeFile(`${source}/.ssh/config`, "customer config\n");
+        await writeFile(`${source}/.ssh/config`, "user config\n");
         await writeFile(`${source}/.ssh/authorized_keys`, "revoked archived key\n");
       }
       await createHomeFs(root).replaceDirectoryContents(source, target, [".ssh/authorized_keys", ".ssh/authorized_keys.metadata"]);
       const owner = await stat(`${target}/.ssh`);
       assert.deepEqual([owner.uid, owner.gid, owner.mode & 0o777], [1000, 1000, 0o700]);
       await assert.rejects(readFile(`${target}/.ssh/authorized_keys`), { code: "ENOENT" });
-      execFileSync(process.execPath, ["-e", "require('fs').writeFileSync(process.argv[1], 'new customer key')", `${target}/.ssh/new-key`], { uid: 1000, gid: 1000 });
-      assert.equal(await readFile(`${target}/.ssh/new-key`, "utf8"), "new customer key");
+      execFileSync(process.execPath, ["-e", "require('fs').writeFileSync(process.argv[1], 'new user key')", `${target}/.ssh/new-key`], { uid: 1000, gid: 1000 });
+      assert.equal(await readFile(`${target}/.ssh/new-key`, "utf8"), "new user key");
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 }

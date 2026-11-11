@@ -1,9 +1,9 @@
 /**
- * Shape Mattermost API responses into the per-post objects the Coach sees.
+ * Shape Mattermost API responses into the per-post objects the Agent sees.
  *
- * Boundary rule: coach-authored posts are included and labeled `self: true`.
+ * Boundary rule: default-agent-authored posts are included and labeled `self: true`.
  * The label — not omission — is what keeps "evidence from the team" honest:
- * the Coach can recover its own half of a conversation (full-fidelity
+ * the Agent can recover its own half of a conversation (full-fidelity
  * re-prime after a restart) while seeing plainly which words are its own and
  * therefore not team evidence. Supersedes the original §2.3.8 omission rule;
  * DECISIONS.md (2026-07-17) records the reversal.
@@ -43,11 +43,11 @@ export interface MmUserMeta {
 }
 
 export interface ShapeContext {
-  /** Coach's own MM user id. Posts authored by this id are labeled `self: true`. */
-  coachMmUserId: string;
+  /** Agent's own MM user id. Posts authored by this id are labeled `self: true`. */
+  defaultAgentMmUserId: string;
   /** Public site URL for permalink construction, e.g. https://mattermost.octogee.com */
   siteUrl: string;
-  /** MM team name (== customer slug). Used in permalink path. */
+  /** MM team name (== user slug). Used in permalink path. */
   teamName: string;
   /** Optional preloaded channel/user lookups (search returns these inline; history needs separate fetch). */
   channels?: Map<string, MmChannelMeta>;
@@ -56,11 +56,11 @@ export interface ShapeContext {
   query?: string;
 }
 
-export interface CoachPost {
+export interface DefaultAgentPost {
   post_id: string;
   channel: { name: string; display_name: string };
   author:  { username: string; display_name: string };
-  /** True when the Coach itself authored this post — its own words, not team evidence. */
+  /** True when the Agent itself authored this post — its own words, not team evidence. */
   self: boolean;
   created_at: string; // ISO 8601 UTC
   permalink: string;
@@ -123,13 +123,13 @@ function makeSnippet(message: string, query?: string): string {
 }
 
 export interface ShapedBundle {
-  posts: CoachPost[];
+  posts: DefaultAgentPost[];
   /** Total returned by MM after the drops below. */
   total: number;
 }
 
 /**
- * Order-preserving shape. Coach-authored posts are kept and labeled
+ * Order-preserving shape. Default-agent-authored posts are kept and labeled
  * `self: true`. Drops:
  *   - Soft-deleted posts (`delete_at > 0`).
  *   - System messages (`type` non-empty — joins, leaves, etc.).
@@ -139,7 +139,7 @@ export function shapeBundle(
   bundle: MmPostsBundle,
   ctx: ShapeContext,
 ): ShapedBundle {
-  const out: CoachPost[] = [];
+  const out: DefaultAgentPost[] = [];
   for (const id of bundle.order ?? []) {
     const post = bundle.posts?.[id];
     if (!shouldShapePost(post)) continue;
@@ -156,7 +156,7 @@ function shouldShapePost(post: MmPost | undefined): post is MmPost {
   return true;
 }
 
-function shapePost(post: MmPost, ctx: ShapeContext): CoachPost | null {
+function shapePost(post: MmPost, ctx: ShapeContext): DefaultAgentPost | null {
   const channel = ctx.channels?.get(post.channel_id);
   if (!channel) return null;
   const author = ctx.users?.get(post.user_id);
@@ -170,7 +170,7 @@ function shapePost(post: MmPost, ctx: ShapeContext): CoachPost | null {
       username: author?.username ?? "(unknown)",
       display_name: displayName(author),
     },
-    self: post.user_id === ctx.coachMmUserId,
+    self: post.user_id === ctx.defaultAgentMmUserId,
     created_at: isoFromMs(post.create_at),
     permalink: buildPermalink(ctx.siteUrl, ctx.teamName, post.id),
     snippet: makeSnippet(post.message, ctx.query),

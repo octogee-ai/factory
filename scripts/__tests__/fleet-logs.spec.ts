@@ -11,7 +11,7 @@ describe("fleet log records", () => {
   it("keeps structured identity and details instead of flattening them away", () => {
     const entry = normalizeFleetLog(pod());
     expect(entry).toMatchObject({ severity: "INFO", service: "provisioner", builderSlug: "alice", gatewayId: "shared-abc", instance: "octogee-gateway-shared-abc-123-xyz", message: "Target verified", details: { durationMs: 163 } });
-    expect(renderFleetLogLine(entry, { color: false })).toBe("15:19:59.365Z INFO provisioner shared-abc/xyz builder=alice 🟢 Target verified durationMs=163");
+    expect(renderFleetLogLine(entry, { color: false })).toBe("15:19:59.365Z INFO provisioner shared-abc/xyz user=alice 🟢 Target verified durationMs=163");
   });
 
   it("reads gcloud live tail's protobuf field names as well as history REST names", () => {
@@ -32,13 +32,13 @@ describe("fleet log records", () => {
       message: JSON.stringify({ severity: "ERROR", service: "gateway-edge", builderSlug: "alice", message: "Request failed", err: { message: "upstream unavailable" } }),
     } });
     expect(entry).toMatchObject({ severity: "ERROR", service: "gateway-edge", builderSlug: "alice", gatewayId: "alice-s-123", instance: "octogee-pool-abcd", message: "Request failed" });
-    expect(matchesFleetLog(entry, { level: "WARNING", services: ["gateway-edge"], builders: ["alice"] })).toBe(true);
+    expect(matchesFleetLog(entry, { level: "WARNING", services: ["gateway-edge"], users: ["alice"] })).toBe(true);
   });
 
-  it("never invents Builder identity from an instance or incidental message text", () => {
+  it("never invents user identity from an instance or incidental message text", () => {
     const entry = normalizeFleetLog(pod({ builderSlug: undefined, message: "Looking up alice; slug=alice" }));
     expect(entry.builderSlug).toBeUndefined();
-    expect(matchesFleetLog(entry, { builders: ["alice"] })).toBe(false);
+    expect(matchesFleetLog(entry, { users: ["alice"] })).toBe(false);
   });
 
   it("distinguishes application numeric levels from Cloud Logging numeric severity", () => {
@@ -55,9 +55,9 @@ describe("fleet log records", () => {
 
   it("combines filters with AND and list values with OR, matching slugs exactly", () => {
     const entry = normalizeFleetLog(pod());
-    expect(matchesFleetLog(entry, { services: ["api", "provisioner"], builders: ["alice"] })).toBe(true);
-    expect(matchesFleetLog(entry, { services: ["api"], builders: ["alice"] })).toBe(false);
-    expect(matchesFleetLog(entry, { builders: ["ali"] })).toBe(false);
+    expect(matchesFleetLog(entry, { services: ["api", "provisioner"], users: ["alice"] })).toBe(true);
+    expect(matchesFleetLog(entry, { services: ["api"], users: ["alice"] })).toBe(false);
+    expect(matchesFleetLog(entry, { users: ["ali"] })).toBe(false);
     expect(matchesFleetLog(entry, { levelExact: ["WARNING", "ERROR"] })).toBe(false);
   });
 
@@ -77,16 +77,16 @@ describe("fleet log records", () => {
 
 describe("fleet logs CLI", () => {
   it("accepts comma lists and validates standard options", () => {
-    expect(parseFleetLogsOptions(["--env=prod", "logs", "--level", "warn", "--service=api,cowboy", "--builder=alice,bob", "--no-follow", "--since=30m"])).toMatchObject({ environment: "prod", level: "WARNING", services: ["api", "cowboy"], builders: ["alice", "bob"], follow: false, since: "30m" });
+    expect(parseFleetLogsOptions(["--env=prod", "logs", "--level", "warn", "--service=api,cowboy", "--builder=alice,bob", "--no-follow", "--since=30m"])).toMatchObject({ environment: "prod", level: "WARNING", services: ["api", "cowboy"], users: ["alice", "bob"], follow: false, since: "30m" });
   });
   it.each([["--levle=warn"], ["--service"], ["--level=loud"], ["--builder=alice,"], ["--since=forever"], ["--format=xml"], ["--level=warn", "--level-exact=error"], ["--limit=0"], ["--service=api", "--service=gateway"]])("rejects invalid options %j", (...extra) => {
     expect(() => parseFleetLogsOptions(["--env=prod", "logs", ...extra])).toThrow();
   });
-  it("does not push severity or Builder filtering ahead of VM JSON normalization", () => {
+  it("does not push severity or user filtering ahead of VM JSON normalization", () => {
     expect(buildFleetLogsFilter({ namespace: "octogee" })).toContain('jsonPayload.container.metadata."ai.octogee.namespace"="octogee"');
     expect(fleetLogsTailArgs({ projectId: "octogee", filter: "filter" })).toContain("--format=json");
   });
-  it("narrows to one migration by its operation id across Cowboy, pods and VMs", () => {
+  it("narrows to one migration by its operation id across the fleet controller, pods and VMs", () => {
     expect(parseFleetLogsOptions(["--env=test", "logs", "--migration=placement-retire-uid-1:scheduler:2"])).toMatchObject({ migrationId: "placement-retire-uid-1:scheduler:2" });
     expect(() => parseFleetLogsOptions(["--env=test", "logs", '--migration=a"b'])).toThrow();
     const filter = buildFleetLogsFilter({ namespace: "octogee-test", migrationId: "abc123" });

@@ -43,17 +43,17 @@ export function isReleasePayload(value) {
 function isGatewayProfileImages(value, gatewayImageRepository, gatewayImageTag) {
     if (!isPlainRecord(value) || Object.keys(value).length !== 1)
         return false;
-    const builder = value.builder;
-    if (!isPlainRecord(builder) || Object.keys(builder).length !== 2)
+    const isolatedImage = value.builder;
+    if (!isPlainRecord(isolatedImage) || Object.keys(isolatedImage).length !== 2)
         return false;
     const gatewayPackageSuffix = "/octogee-gateway";
     const expectedRepository = gatewayImageRepository.endsWith(gatewayPackageSuffix)
         ? `${gatewayImageRepository.slice(0, -gatewayPackageSuffix.length)}/octogee-gateway-builder`
         : "";
-    return (builder.imageRepository === expectedRepository &&
-        typeof builder.imageTag === "string" &&
-        DIGEST_BOUND_IMAGE_TAG_PATTERN.test(builder.imageTag) &&
-        builder.imageTag.split("@", 1)[0] === gatewayImageTag.split("@", 1)[0]);
+    return (isolatedImage.imageRepository === expectedRepository &&
+        typeof isolatedImage.imageTag === "string" &&
+        DIGEST_BOUND_IMAGE_TAG_PATTERN.test(isolatedImage.imageTag) &&
+        isolatedImage.imageTag.split("@", 1)[0] === gatewayImageTag.split("@", 1)[0]);
 }
 export function isGatewayEdgeImage(value, gatewayImageRepository) {
     const gatewayPackageSuffix = "/octogee-gateway";
@@ -252,14 +252,14 @@ export function classifyGatewayField(field) {
         return "gateway-mutable";
     return "release";
 }
-export function customerRestoreFencePresent(user) {
+export function userRestoreFencePresent(user) {
     if (!isPlainRecord(user) || !isPlainRecord(user.provisioning))
         return false;
     const openclaw = user.provisioning.openclaw;
     return isPlainRecord(openclaw) && openclaw.restoreFence !== undefined;
 }
-export function customerRuntimeMutationFenced(user) {
-    if (customerRestoreFencePresent(user))
+export function userRuntimeMutationFenced(user) {
+    if (userRestoreFencePresent(user))
         return true;
     if (!isPlainRecord(user) || !isPlainRecord(user.provisioning))
         return false;

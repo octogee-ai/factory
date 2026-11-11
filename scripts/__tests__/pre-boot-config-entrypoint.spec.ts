@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
-import { assertBuilderPostgresSelection } from "../lib/builder-store-migration.js";
+import { assertUserPostgresSelection } from "../lib/user-store-migration.js";
 
 const temporaryDirectories: string[] = [];
 const scriptsDir = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -20,8 +20,8 @@ afterEach(() => {
 });
 
 describe("pre-boot config entrypoint", () => {
-  it.each([undefined, { engine: "postgres" }])("starts a fresh PostgreSQL Builder whose anchor precedes pre-boot config (database=%j)", async database => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "builder-pg-preboot-"));
+  it.each([undefined, { engine: "postgres" }])("starts a fresh PostgreSQL user whose anchor precedes pre-boot config (database=%j)", async database => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "user-pg-preboot-"));
     temporaryDirectories.push(root);
     const configPath = path.join(root, "openclaw.json");
     fs.writeFileSync(configPath, JSON.stringify({ database }));
@@ -39,13 +39,13 @@ describe("pre-boot config entrypoint", () => {
     };
     const result = spawnSync(tsx, [entrypoint, "--defer-builder-store-migration"], { encoding: "utf8", env });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).not.toContain("Builder stores require migration");
+    expect(result.stdout).not.toContain("User stores require migration");
     expect(JSON.parse(fs.readFileSync(configPath, "utf8")).database).toEqual({
       engine: "postgres", postgres: {
         connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" }, schemaPrefix: "octogee",
       },
     });
-    await expect(assertBuilderPostgresSelection(env)).resolves.toBeUndefined();
+    await expect(assertUserPostgresSelection(env)).resolves.toBeUndefined();
     expect(fs.readFileSync(anchorPath)).toEqual(before);
   });
 
@@ -103,7 +103,7 @@ describe("pre-boot config entrypoint", () => {
 
 
 it.each(["builder", "shared"])("defers only a Builder's full migration to the held supervisor: %s", gatewayClass => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "builder-selector-boot-")); temporaryDirectories.push(root);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "user-selector-boot-")); temporaryDirectories.push(root);
   const configPath = path.join(root, "openclaw.json");
   const raw = JSON.stringify({ database: { engine: "sqlite" } });
   fs.writeFileSync(configPath, raw);

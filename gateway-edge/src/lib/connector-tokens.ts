@@ -12,7 +12,7 @@ import {
   isConnectorTokenBrokerable,
 } from "./connectors/index.js";
 import type { ConnectorDef } from "./connectors/def.js";
-import { claimedBuilderIdentity } from "./builder-identity.js";
+import { claimedUserIdentity } from "./user-identity.js";
 
 const FRESHNESS_MARGIN_MS = 60_000;
 
@@ -183,8 +183,8 @@ export async function readOwnerRuntimeConnectorAccessToken(
 ): Promise<string | null> {
   const baseUrl = connectorTokenBrokerBaseUrlFromEnv();
   if (!baseUrl) throw new Error("CONNECTOR_TOKEN_BROKER_URL is required");
-  const builderSlug = claimedBuilderIdentity()?.builderSlug;
-  if (!builderSlug) throw new Error("this Builder gateway has no claimed owner yet");
+  const builderSlug = claimedUserIdentity()?.builderSlug;
+  if (!builderSlug) throw new Error("this isolated gateway has no claimed owner yet");
   return readConnectorAccessTokenViaBroker(baseUrl, null, connectorId, {
     kind: "owner-runtime",
     builderSlug,
@@ -204,9 +204,9 @@ function githubProjectCloneBrokerIdentity(): {
   const baseUrl = connectorTokenBrokerBaseUrlFromEnv();
   if (!baseUrl) throw new Error("CONNECTOR_TOKEN_BROKER_URL is required");
   const gatewayId = nonBlank(process.env.GATEWAY_ID);
-  const builderSlug = claimedBuilderIdentity()?.builderSlug;
+  const builderSlug = claimedUserIdentity()?.builderSlug;
   if (!gatewayId || !builderSlug) {
-    throw new Error("GATEWAY_ID and a claimed Builder owner are required for GitHub project clone");
+    throw new Error("GATEWAY_ID and a claimed user owner are required for GitHub project clone");
   }
   return { baseUrl, gatewayId, builderSlug };
 }

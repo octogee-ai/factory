@@ -20,16 +20,16 @@ export function isoMillis(value) {
 function displayNameFor(account) {
     return account.displayName || account.username || (account.email ?? "").split("@")[0] || "(unknown)";
 }
-function builderSummaryFields(builder) {
+function userSummaryFields(user) {
     return {
-        mattermostConnected: (builder.mattermostUserId ?? "").length > 0,
-        agentCount: builder.agents.agentIds.length,
-        createdAt: isoMillis(builder.createdAt),
-        provisioningStatus: builder.openclaw.status ?? builder.provisioning.status ?? null,
-        accountLifecycleStatus: builder.accountLifecycle?.status ?? "active",
+        mattermostConnected: (user.mattermostUserId ?? "").length > 0,
+        agentCount: user.agents.agentIds.length,
+        createdAt: isoMillis(user.createdAt),
+        provisioningStatus: user.openclaw.status ?? user.provisioning.status ?? null,
+        accountLifecycleStatus: user.accountLifecycle?.status ?? "active",
     };
 }
-export function buildCustomerSummary(builder, account, broker = {}) {
+export function buildUserSummary(user, account, broker = {}) {
     const now = broker.now ?? Date.now();
     const plan = userEntitlements().plan(account.planInputs, new Date(now));
     const usage = account.usage;
@@ -38,7 +38,7 @@ export function buildCustomerSummary(builder, account, broker = {}) {
     const costUsd = broker.totalCostUsd ?? 0;
     // Owner-credential (BYOSUB/BYOT) traffic never lands in a spend window, so a
     // percentage against a zero budget would misleadingly read 100% — mirror the
-    // customer surfaces and show 0. The broker never throttles them either.
+    // user surfaces and show 0. The broker never throttles them either.
     const onOwnerCredential = account.byotActive;
     const degraded = userEntitlements().spendThrottle(plan, {
         windowCostUsd,
@@ -46,11 +46,11 @@ export function buildCustomerSummary(builder, account, broker = {}) {
         onOwnerCredential,
     }).degraded;
     return {
-        ...userEntitlements().productProjection?.adminCustomerSummary(account.planInputs, {
+        ...userEntitlements().productProjection?.adminUserSummary(account.planInputs, {
             costUsd,
             now: new Date(now),
         }),
-        uid: builder.uid,
+        uid: user.uid,
         displayName: displayNameFor(account),
         email: account.email ?? "",
         username: account.username ?? "",
@@ -69,6 +69,6 @@ export function buildCustomerSummary(builder, account, broker = {}) {
         lastActive: toISODate(usage.lastUpdated),
         mattermostUsername: account.mattermostUsername,
         percentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(windowCostUsd, plan.spendWindowUsd),
-        ...builderSummaryFields(builder),
+        ...userSummaryFields(user),
     };
 }

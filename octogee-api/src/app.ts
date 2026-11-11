@@ -1,4 +1,4 @@
-import { firestoreBuilderAccountReader } from "@octogee/core/builder-account";
+import { firestoreUserAccountReader } from "@octogee/core/user-account";
 
 import http from "node:http";
 import express, { Request, Response, type RequestHandler } from "express";
@@ -32,7 +32,7 @@ import {
 import { createAgentBoardRoutes } from "./routes/agent-board.js";
 import { createAgentObsidianRoutes } from "./routes/agent-productivity-obsidian.js";
 import { createObsidianPairingRoutes } from "./routes/obsidian-pairing.js";
-import { createAgentComputerContextRoutes } from "./routes/agent-computer-context.js";
+import { createGatewayVmContextRoutes } from "./routes/gateway-vm-context.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
 import { createAutomationAuthorizationBrokerRoutes } from "./routes/automation-authorization-broker.js";
@@ -48,7 +48,7 @@ import { createDesktopAuthRoutes } from "./routes/desktop-auth.js";
 import { createFeatureRoutes } from "./routes/features.js";
 import type { ProductNotifications } from "./lib/user-notifications.js";
 import { DisabledFeatureFlagProvider, FeaturePolicy } from "./lib/feature-policy.js";
-import { createBuilderGatewayRoutes } from "../../gateway-edge/src/routes/builder/gateways.js";
+import { createIsolatedGatewayRoutes } from "../../gateway-edge/src/routes/user/gateways.js";
 import { createProjectCreateRoutes } from "../../gateway-edge/src/routes/projects/create.js";
 import { createProjectRepoSourceRoutes } from "../../gateway-edge/src/routes/projects/repo-source.js";
 import { startWorkspaceVoiceConversation } from "./lib/voice-posting-grant.js";
@@ -76,7 +76,7 @@ import {
 import { getConnector } from "../../gateway-edge/src/lib/connectors/index.js";
 import { githubListRepos, githubRepoApi } from "../../gateway-edge/src/lib/github.js";
 import { readAgent } from "../../gateway-edge/src/lib/firestoreReads.js";
-import { replaceCoachTextIdentity, syncCoachIdentity } from "../../gateway-edge/src/lib/coach-identity.js";
+import { replaceDefaultAgentTextIdentity, syncDefaultAgentIdentity } from "../../gateway-edge/src/lib/default-agent-identity.js";
 import { requireAuth, requireAuthenticatedUid } from "../../gateway-edge/src/middleware/auth.js";
 import {
   IN_CLUSTER_IDENTITY_CA_PATH,
@@ -286,7 +286,7 @@ function clusterRouteOverrides(
     mattermostMintRoutes: createMattermostMintRoutes(platformStateStore),
     productRoutes: product?.clusterRoutes({ featurePolicy }) ?? [],
     projectsDeleteRoutes: product?.projectsDeleteRoutes,
-    builderGatewaysRoutes: createBuilderGatewayRoutes({ featurePolicy }),
+    isolatedGatewaysRoutes: createIsolatedGatewayRoutes({ featurePolicy }),
     projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy, prewarmProjectRunCapacity: product?.prewarmProjectCapacity }),
     projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
     voiceRoutes: createVoiceRoutes({ featurePolicy, catalog: voiceCatalog, resolveChannel: async (uid, channelId) => {
@@ -585,7 +585,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     featurePolicy,
     actionBaseUrl: appOrigin,
   }));
-  app.use("/internal/computer", createAgentComputerContextRoutes({ store: platformStateStore }));
+  app.use("/internal/computer", createGatewayVmContextRoutes({ store: platformStateStore }));
   app.use("/internal/openclaw-control", createOpenClawControlBrokerRoutes({ db, store: platformStateStore }));
   app.use(
     "/internal/automations",
@@ -602,7 +602,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     requireAuthenticatedUid,
     createAgentImportBrokerRoutes({
       store: platformStateStore,
-      accounts: firestoreBuilderAccountReader(db),
+      accounts: firestoreUserAccountReader(db),
       bucket: importBucket,
       exportBlobs: app.locals.workspaceBlobStore,
       readGithubToken: readFreshGithubToken,
@@ -626,13 +626,13 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
         };
       },
       syncIdentity: async (uid, identity) => {
-        await syncCoachIdentity(uid, {
+        await syncDefaultAgentIdentity(uid, {
           ...(identity.name ? { name: identity.name } : {}),
           ...(identity.persona !== undefined ? { persona: identity.persona } : {}),
           ...(identity.emoji ? { emoji: identity.emoji } : {}),
         });
       },
-      replaceIdentity: replaceCoachTextIdentity,
+      replaceIdentity: replaceDefaultAgentTextIdentity,
       now: () => new Date(),
       featurePolicy,
     }),
@@ -646,7 +646,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
       rails: modelBrokerRails,
       tokens: opts.modelKeyTokenStore ?? createModelBrokerTokenStore(platformStateStore),
       state: platformStateStore,
-      accounts: firestoreBuilderAccountReader(db),
+      accounts: firestoreUserAccountReader(db),
       bearerToken:
         opts.modelKeyIssuerBearerToken ?? process.env.GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN,
       ttlSeconds: opts.modelKeyIssuerTtlSeconds,

@@ -234,7 +234,7 @@ async function hydrationPlan(input, prefix, manifest) {
     }
     return { materialized, pending, bytes, deferred, removed };
 }
-export function createBrokeredProjectBlobHydrator(client, customersRoot = CUSTOMERS_DIR) {
+export function createBrokeredProjectBlobHydrator(client, usersRoot = CUSTOMERS_DIR) {
     const hydrate = async (input) => {
         if (!/^[a-z0-9][a-z0-9-]*$/u.test(input.slug) || !/^[a-z0-9][a-z0-9-]*$/u.test(input.project) || !Number.isSafeInteger(input.maxBytes) || input.maxBytes < 0) {
             throw new Error("invalid project blob materialization scope or quota");
@@ -257,7 +257,7 @@ export function createBrokeredProjectBlobHydrator(client, customersRoot = CUSTOM
         return { bytes, files: pending.filter(item => !item.retained).length, generation, ...(input.allowDeferred ? { deferred } : {}) };
     };
     return async (input) => {
-        const lease = acquireWorkspaceMutationLeaseSync({ workspaceDir: input.destination, gitDir: projectMutationLeaseGitDir(input.destination, customersRoot) ?? undefined });
+        const lease = acquireWorkspaceMutationLeaseSync({ workspaceDir: input.destination, gitDir: projectMutationLeaseGitDir(input.destination, usersRoot) ?? undefined });
         if (!lease)
             throw new Error("project restore requires the workspace mutation lease");
         try {
@@ -277,7 +277,7 @@ function assertSelectedAssets(paths, manifest) {
     if (paths?.some(relative => !Object.hasOwn(manifest, relative)))
         throw new Error("requested asset is not in the project manifest");
 }
-export async function prepareBuilderProjectAssets(input) {
+export async function prepareUserProjectAssets(input) {
     if (!isValidUsername(input.slug) || !isValidProjectId(input.project))
         throw new Error("invalid project restore scope");
     const destination = path.join(input.projects, input.project);

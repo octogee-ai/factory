@@ -97,7 +97,7 @@ describe("terminal locality route — ticket boundary", () => {
     expect(resolveAccess).not.toHaveBeenCalled();
   });
 
-  it("answers 404 terminal_unavailable on a gateway without a per-user Builder identity", async () => {
+  it("answers 404 terminal_unavailable on a gateway without a per-user user identity", async () => {
     const res = await request(appFor({ available: false })).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner")).send(selected);
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "terminal_unavailable" });
@@ -181,7 +181,7 @@ describe("terminal locality route — ticket boundary", () => {
 });
 
 describe("terminalAvailable", () => {
-  it("is on only for a per-user Builder gateway", () => {
+  it("is on only for a per-user isolated gateway", () => {
     expect(terminalAvailable({ OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_CLASS: "builder" })).toBe(true);
     expect(terminalAvailable({ OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_CLASS: "shared" })).toBe(false);
     expect(terminalAvailable({ GATEWAY_CLASS: "builder" })).toBe(false);
@@ -198,7 +198,7 @@ describe("terminalTicketFromPath", () => {
   });
 });
 
-const COACH = "octogee-alice-coach";
+const DEFAULT_AGENT = "octogee-alice-coach";
 const decide = (raw: string, defaultAgentId: string | null = null) => decideTerminalRequest(raw, { defaultAgentId });
 
 describe("decideTerminalRequest — the browser may only speak OpenClaw's terminal family", () => {
@@ -243,12 +243,12 @@ describe("decideTerminalRequest — the browser may only speak OpenClaw's termin
     expect(decide(req(method, params))).toEqual({ allowed: false, id: "r1", reason: "params-invalid" });
   });
 
-  it("binds a shell to the Builder's coach when the browser names no agent, and keeps an explicit choice", () => {
-    const bound = decide(req("terminal.open", { cols: 80, rows: 24 }), COACH);
-    expect(JSON.parse((bound as { outbound: string }).outbound).params).toEqual({ cols: 80, rows: 24, agentId: COACH });
-    const explicit = decide(req("terminal.open", { cols: 80, rows: 24, agentId: "octogee-alice-p-rocket-coach" }), COACH);
+  it("binds a shell to the user's agent when the browser names no agent, and keeps an explicit choice", () => {
+    const bound = decide(req("terminal.open", { cols: 80, rows: 24 }), DEFAULT_AGENT);
+    expect(JSON.parse((bound as { outbound: string }).outbound).params).toEqual({ cols: 80, rows: 24, agentId: DEFAULT_AGENT });
+    const explicit = decide(req("terminal.open", { cols: 80, rows: 24, agentId: "octogee-alice-p-rocket-coach" }), DEFAULT_AGENT);
     expect(JSON.parse((explicit as { outbound: string }).outbound).params.agentId).toBe("octogee-alice-p-rocket-coach");
-    const attach = decide(req("terminal.attach", { sessionId: "s1" }), COACH);
+    const attach = decide(req("terminal.attach", { sessionId: "s1" }), DEFAULT_AGENT);
     expect(JSON.parse((attach as { outbound: string }).outbound).params).toEqual({ sessionId: "s1" });
   });
 
@@ -321,7 +321,7 @@ describe("terminal websocket relay", () => {
     attachTerminalWsRoute({
       router,
       tickets,
-      defaultAgentId: () => COACH,
+      defaultAgentId: () => DEFAULT_AGENT,
       openUpstream,
       isAllowedOrigin: (origin) => origin === "https://app.example",
       log: (message) => { logged.push(message); },
@@ -398,7 +398,7 @@ describe("terminal websocket relay", () => {
     ws.send(JSON.stringify({ type: "req", id: "open-1", method: "terminal.open", params: { cols: 100, rows: 30 } }));
     await vi.waitFor(() => expect(frames).toHaveLength(2));
     expect(openUpstream).toHaveBeenCalledWith(expect.objectContaining({ uid: OWNER, gatewayId: GATEWAY }));
-    expect(upstreamReceived).toEqual([{ type: "req", id: "open-1", method: "terminal.open", params: { cols: 100, rows: 30, agentId: COACH } }]);
+    expect(upstreamReceived).toEqual([{ type: "req", id: "open-1", method: "terminal.open", params: { cols: 100, rows: 30, agentId: DEFAULT_AGENT } }]);
     expect(frames).toEqual([
       { type: "res", id: "open-1", ok: true, payload: { echo: "terminal.open" } },
       { type: "event", event: "terminal.data", payload: { sessionId: "s1", seq: 5, data: "hello" } },

@@ -64,19 +64,19 @@ describe("octo-home-disk", () => {
     expect(selector).toBe("/usr/local/bin/octo-desktop-wanted");
     await expect(access(resolve(import.meta.dirname, "../../../infra/desktop/image/rootfs", `.${selector}`), constants.X_OK)).resolves.toBeUndefined();
   });
-  it("keeps an X11 computer's login home on the boot disk and leaves the desktop home to its gateway", async () => {
+  it("keeps an X11 VM's login home on the boot disk and leaves the desktop home to its gateway", async () => {
     const h = await fixture({ probe: 0, fstype: "btrfs", desktopWanted: 1 });
     const { stdout } = await run("bash", [script], { env: h.env });
     expect(await readFile(`${h.paths.stateRoot}/desktop-home/.bashrc`, "utf8")).toBe("image default\n");
     expect((await h.calls()).filter(([command, ...args]) => command === "mount" && args.includes("--bind"))).toEqual([]);
     expect(stdout).toContain(`${h.paths.userHome} stays the boot-disk login home`);
   });
-  it("refuses an X11 computer whose login home is already bound to the home disk", async () => {
+  it("refuses an X11 VM whose login home is already bound to the home disk", async () => {
     const h = await fixture({ probe: 0, fstype: "btrfs", desktopWanted: 1, mounted: ["stateRoot", "userHome"] });
     await mkdir(`${h.paths.stateRoot}/desktop-home`, { recursive: true });
-    await expect(run("bash", [script], { env: h.env })).rejects.toThrow(/X11 computer's .* is bound to the home disk/);
+    await expect(run("bash", [script], { env: h.env })).rejects.toThrow(/X11 VM's .* is bound to the home disk/);
   });
-  it("refuses to bind the home when it cannot tell which desktop the computer runs", async () => {
+  it("refuses to bind the home when it cannot tell which desktop the VM runs", async () => {
     const h = await fixture({ probe: 0, fstype: "btrfs", desktopWanted: 255 });
     await expect(run("bash", [script], { env: h.env })).rejects.toThrow(/cannot tell which desktop this computer runs/);
     expect((await h.calls()).filter(([command, ...args]) => command === "mount" && args.includes("--bind"))).toEqual([]);
@@ -113,15 +113,15 @@ describe("octo-home-disk", () => {
     expect(await readFile(`${h.paths.stateRoot}/desktop-home/.bashrc`, "utf8")).toBe("image default\n");
   });
 
-  it("reattaches an existing home without formatting it or reseeding over the Builder's files, and grows it to a resized disk", async () => {
+  it("reattaches an existing home without formatting it or reseeding over the user's files, and grows it to a resized disk", async () => {
     const h = await fixture({ probe: 0, fstype: "btrfs" });
     await mkdir(`${h.paths.stateRoot}/desktop-home`, { recursive: true });
-    await writeFile(`${h.paths.stateRoot}/desktop-home/.bashrc`, "builder edit\n");
+    await writeFile(`${h.paths.stateRoot}/desktop-home/.bashrc`, "user edit\n");
     await run("bash", [script], { env: h.env });
     const calls = await h.calls();
     expect(calls.map((call) => call[0])).not.toContain("mkfs.btrfs");
     expect(calls).toContainEqual(["btrfs", "filesystem", "resize", "max", h.paths.stateRoot]);
-    expect(await readFile(`${h.paths.stateRoot}/desktop-home/.bashrc`, "utf8")).toBe("builder edit\n");
+    expect(await readFile(`${h.paths.stateRoot}/desktop-home/.bashrc`, "utf8")).toBe("user edit\n");
   });
 
   it("leaves mounts that are already in place alone on a unit restart", async () => {

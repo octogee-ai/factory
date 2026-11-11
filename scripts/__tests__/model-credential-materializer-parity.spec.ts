@@ -109,7 +109,7 @@ describe("buildModelCredentialConfigForProvider — canonical OpenAI-compatible 
     ["openrouter", "https://openrouter.ai/api/v1"],
     ["minimax", "https://api.minimax.io/v1"],
   ] as const)(
-    "%s uses its canonical baseUrl + the builder's chosen model + a byok key ref (no baseUrl needed from the user)",
+    "%s uses its canonical baseUrl + the user's chosen model + a byok key ref (no baseUrl needed from the user)",
     (provider, baseUrl) => {
       const out = buildModelCredentialConfigForProvider({ slug: "tester-70", provider, model: "some-model" });
       expect(out.authProfiles).toBeNull();
@@ -141,7 +141,7 @@ describe("buildModelCredentialConfigForProvider — canonical OpenAI-compatible 
   );
 });
 
-describe("codexRuntimeConfig — BYOS coach model + agentRuntime:codex routing", () => {
+describe("codexRuntimeConfig — BYOS agent model + agentRuntime:codex routing", () => {
   it("pins subscription model overrides to the Codex runtime", () => {
     const { model, modelsDef } = codexRuntimeConfig();
     expect(Object.keys(modelsDef)).toContain(model);
@@ -310,7 +310,7 @@ describe("buildCodexAuthJsonFromStore — Chunk B inverse-mapper (sync-back)", (
   });
 });
 
-describe("claudeCliRuntimeConfig — Claude SUBSCRIPTION coach model (native claude-cli/ provider)", () => {
+describe("claudeCliRuntimeConfig — Claude SUBSCRIPTION agent model (native claude-cli/ provider)", () => {
   it("allowlists its own default on the native claude-cli provider", () => {
     const { model, modelsDef } = claudeCliRuntimeConfig();
     expect(Object.keys(modelsDef)).toContain(model);

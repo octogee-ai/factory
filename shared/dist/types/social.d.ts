@@ -1,4 +1,4 @@
-export interface StarTargetBuilder {
+export interface StarTargetUser {
     type: 'builder';
     ownerUid: string;
     username: string;
@@ -14,8 +14,8 @@ export interface StarTargetPost {
     postId: string;
     ownerUid: string;
 }
-export type StarTarget = StarTargetBuilder | StarTargetProject | StarTargetPost;
-export type FollowTarget = StarTargetBuilder | StarTargetProject;
+export type StarTarget = StarTargetUser | StarTargetProject | StarTargetPost;
+export type FollowTarget = StarTargetUser | StarTargetProject;
 export declare function starDocId(actorUid: string, target: StarTarget): string;
 export declare function followDocId(actorUid: string, target: FollowTarget): string;
 export declare function isStarTarget(v: unknown): v is StarTarget;

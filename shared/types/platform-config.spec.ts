@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF,
-  DEFAULT_BUILDER_AGENT_MODEL_REF,
+  DEFAULT_USER_AGENT_FALLBACK_MODEL_REF,
+  DEFAULT_USER_AGENT_MODEL_REF,
   DEFAULT_FREE_TIER_MODEL_REF,
   DEFAULT_OPS_AGENT_MODEL_REF,
   DEFAULT_PLATFORM_CONNECT_CONFIG,
@@ -10,11 +10,11 @@ import {
   GOOGLE_CONNECT_CAPABILITY_KEYS,
   PLATFORM_CONNECT_CONFIG_DOC,
   PLATFORM_FREE_CONFIG_DOC,
-  builderAgentModelDefaultFromDoc,
+  userAgentModelDefaultFromDoc,
   googleCapabilityConnectAllowed,
   googleConnectAllowed,
   googleConsentPermission,
-  parseBuilderAgentModelDefault,
+  parseUserAgentModelDefault,
   parsePlatformConnectConfig,
   parsePlatformFreeConfig,
   parsePlatformModelConfig,
@@ -61,9 +61,9 @@ describe("DEFAULT_FREE_TIER_MODEL_REF", () => {
   });
 });
 
-const DEFAULT_BUILDER_DIAL_FIELDS = {
-  builderAgentModelRef: DEFAULT_BUILDER_AGENT_MODEL_REF,
-  builderAgentFallbackModelRef: DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF,
+const DEFAULT_USER_DIAL_FIELDS = {
+  builderAgentModelRef: DEFAULT_USER_AGENT_MODEL_REF,
+  builderAgentFallbackModelRef: DEFAULT_USER_AGENT_FALLBACK_MODEL_REF,
 };
 
 describe("parsePlatformModelConfig", () => {
@@ -74,7 +74,7 @@ describe("parsePlatformModelConfig", () => {
     })).toEqual({
       freeTierModelRef: "anthropic/claude-haiku-4-5",
       opsAgentModelRef: "platform-openrouter/z-ai/glm-5.2",
-      ...DEFAULT_BUILDER_DIAL_FIELDS,
+      ...DEFAULT_USER_DIAL_FIELDS,
     });
     expect(
       parsePlatformModelConfig({
@@ -84,7 +84,7 @@ describe("parsePlatformModelConfig", () => {
     ).toEqual({
       freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
       opsAgentModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
-      ...DEFAULT_BUILDER_DIAL_FIELDS,
+      ...DEFAULT_USER_DIAL_FIELDS,
     });
   });
 
@@ -92,11 +92,11 @@ describe("parsePlatformModelConfig", () => {
     expect(parsePlatformModelConfig({ freeTierModelRef: "anthropic/claude-haiku-4-5" })).toEqual({
       freeTierModelRef: "anthropic/claude-haiku-4-5",
       opsAgentModelRef: DEFAULT_OPS_AGENT_MODEL_REF,
-      ...DEFAULT_BUILDER_DIAL_FIELDS,
+      ...DEFAULT_USER_DIAL_FIELDS,
     });
   });
 
-  it("accepts a Builder Agent dial from any catalog provider, fallback none included", () => {
+  it("accepts a user agent dial from any catalog provider, fallback none included", () => {
     expect(parsePlatformModelConfig({
       freeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
       builderAgentModelRef: "anthropic/claude-haiku-4-5",
@@ -109,7 +109,7 @@ describe("parsePlatformModelConfig", () => {
     });
   });
 
-  it("rejects Builder Agent refs outside the catalog", () => {
+  it("rejects user agent refs outside the catalog", () => {
     expect(parsePlatformModelConfig({
       freeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
       builderAgentModelRef: "platform-openrouter/gone/model",
@@ -142,58 +142,58 @@ describe("parsePlatformModelConfig", () => {
   });
 });
 
-describe("Builder Agent default dial", () => {
+describe("User agent default dial", () => {
   it("compiles to the Everyday tier (GPT-6.1 Terra) on OpenAI direct with a GLM 5.2 fallback", () => {
-    expect(DEFAULT_BUILDER_AGENT_MODEL_REF).toBe("platform-openai/gpt-6.1-terra");
-    expect(DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF).toBe("platform-openrouter/z-ai/glm-5.2");
-    expect(resolveFreeTierModel(DEFAULT_BUILDER_AGENT_MODEL_REF)).not.toBeNull();
-    expect(resolveFreeTierModel(DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF!)).not.toBeNull();
+    expect(DEFAULT_USER_AGENT_MODEL_REF).toBe("platform-openai/gpt-6.1-terra");
+    expect(DEFAULT_USER_AGENT_FALLBACK_MODEL_REF).toBe("platform-openrouter/z-ai/glm-5.2");
+    expect(resolveFreeTierModel(DEFAULT_USER_AGENT_MODEL_REF)).not.toBeNull();
+    expect(resolveFreeTierModel(DEFAULT_USER_AGENT_FALLBACK_MODEL_REF!)).not.toBeNull();
   });
 
   it("reads the stored dial field-tolerantly — invalid refs fall back per field", () => {
-    expect(builderAgentModelDefaultFromDoc(undefined)).toEqual({
-      primary: DEFAULT_BUILDER_AGENT_MODEL_REF,
-      fallbacks: [DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF],
+    expect(userAgentModelDefaultFromDoc(undefined)).toEqual({
+      primary: DEFAULT_USER_AGENT_MODEL_REF,
+      fallbacks: [DEFAULT_USER_AGENT_FALLBACK_MODEL_REF],
     });
-    expect(builderAgentModelDefaultFromDoc({
+    expect(userAgentModelDefaultFromDoc({
       builderAgentModelRef: "anthropic/claude-haiku-4-5",
       builderAgentFallbackModelRef: "platform-openrouter/gone/model",
     })).toEqual({
       primary: "anthropic/claude-haiku-4-5",
-      fallbacks: [DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF],
+      fallbacks: [DEFAULT_USER_AGENT_FALLBACK_MODEL_REF],
     });
-    expect(builderAgentModelDefaultFromDoc({
+    expect(userAgentModelDefaultFromDoc({
       builderAgentFallbackModelRef: null,
     })).toEqual({
-      primary: DEFAULT_BUILDER_AGENT_MODEL_REF,
+      primary: DEFAULT_USER_AGENT_MODEL_REF,
       fallbacks: [],
     });
   });
 
   it("drops a fallback that duplicates the primary", () => {
-    expect(builderAgentModelDefaultFromDoc({
+    expect(userAgentModelDefaultFromDoc({
       builderAgentModelRef: "platform-openrouter/z-ai/glm-5.2",
       builderAgentFallbackModelRef: "platform-openrouter/z-ai/glm-5.2",
     })).toEqual({ primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] });
   });
 
   it("validates the sync-wire stamp strictly — any bad ref voids the whole stamp", () => {
-    expect(parseBuilderAgentModelDefault({
-      primary: DEFAULT_BUILDER_AGENT_MODEL_REF,
+    expect(parseUserAgentModelDefault({
+      primary: DEFAULT_USER_AGENT_MODEL_REF,
       fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
     })).toEqual({
-      primary: DEFAULT_BUILDER_AGENT_MODEL_REF,
+      primary: DEFAULT_USER_AGENT_MODEL_REF,
       fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
     });
-    expect(parseBuilderAgentModelDefault({ primary: DEFAULT_BUILDER_AGENT_MODEL_REF, fallbacks: [] }))
-      .toEqual({ primary: DEFAULT_BUILDER_AGENT_MODEL_REF, fallbacks: [] });
-    expect(parseBuilderAgentModelDefault(undefined)).toBeNull();
-    expect(parseBuilderAgentModelDefault({ primary: "z-ai/glm-5.2", fallbacks: [] })).toBeNull();
-    expect(parseBuilderAgentModelDefault({
-      primary: DEFAULT_BUILDER_AGENT_MODEL_REF,
+    expect(parseUserAgentModelDefault({ primary: DEFAULT_USER_AGENT_MODEL_REF, fallbacks: [] }))
+      .toEqual({ primary: DEFAULT_USER_AGENT_MODEL_REF, fallbacks: [] });
+    expect(parseUserAgentModelDefault(undefined)).toBeNull();
+    expect(parseUserAgentModelDefault({ primary: "z-ai/glm-5.2", fallbacks: [] })).toBeNull();
+    expect(parseUserAgentModelDefault({
+      primary: DEFAULT_USER_AGENT_MODEL_REF,
       fallbacks: ["platform-openrouter/gone/model"],
     })).toBeNull();
-    expect(parseBuilderAgentModelDefault({ primary: DEFAULT_BUILDER_AGENT_MODEL_REF })).toBeNull();
+    expect(parseUserAgentModelDefault({ primary: DEFAULT_USER_AGENT_MODEL_REF })).toBeNull();
   });
 });
 

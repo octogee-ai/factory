@@ -17,8 +17,8 @@ import {
 } from "../errors.js";
 import type { OpaqueMap, Revision, Stored } from "../store.js";
 import type {
-  BuilderAgentIdentitiesRepository,
-  BuilderAgentIdentity,
+  UserAgentIdentitiesRepository,
+  UserAgentIdentity,
   WorkspaceChannel,
   WorkspaceChannelScope,
   WorkspaceChannelsRepository,
@@ -342,12 +342,12 @@ export function workspaceChannelFromData(scope: WorkspaceChannelScope, channelId
   };
 }
 
-export function decodeAgentIdentity(snapshot: DocumentSnapshot): Stored<BuilderAgentIdentity> | null {
+export function decodeAgentIdentity(snapshot: DocumentSnapshot): Stored<UserAgentIdentity> | null {
   if (!snapshot.exists) return null;
   return withStoredRevision(snapshot, agentIdentityFromData(snapshot.id, decodeDocumentData(snapshot)));
 }
 
-export function agentIdentityFromData(uid: string, data: PlainObject): BuilderAgentIdentity {
+export function agentIdentityFromData(uid: string, data: PlainObject): UserAgentIdentity {
   const fields = new FirestoreFields(agentIdentityKey(uid), data);
   return {
     uid,
@@ -721,7 +721,7 @@ function createWorkspaceChannelsRepository(session: FirestoreSession): Workspace
   };
 }
 
-function createAgentIdentitiesRepository(session: FirestoreSession): BuilderAgentIdentitiesRepository {
+function createAgentIdentitiesRepository(session: FirestoreSession): UserAgentIdentitiesRepository {
   const ref = (uid: string) => session.db.collection(AGENTS_COLLECTION).doc(uid);
 
   return {

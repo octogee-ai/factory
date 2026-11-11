@@ -11,7 +11,7 @@ import { isProjectRecipeId } from "@octogee/shared/types/project";
 
 import { db as defaultDb } from "../lib/db.js";
 import { platformStateStore, readBuilderTier } from "../lib/platform-state.js";
-import type { BuilderTierReader } from "@octogee/core/builder-activation-lease";
+import type { BuilderTierReader } from "@octogee/core/user-activation-lease";
 import type { PlatformStateStore } from "@octogee/core/platform-state";
 import { requireAuth } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";

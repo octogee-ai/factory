@@ -27,7 +27,7 @@ function setup() {
 }
 
 describe("assignment change stream", () => {
-  it("watches only the bound gateway's assignments, Builders and root and emits invalidations without customer data", () => {
+  it("watches only the bound gateway's assignments, users and root and emits invalidations without user data", () => {
     const h = setup();
     try {
       expect(h.subscriptions.map(({ request }) => request)).toEqual([

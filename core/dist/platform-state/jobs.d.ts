@@ -1,11 +1,11 @@
 import type { ClearField, OpaqueMap, Page, PageRequest, RecordPatch, Revision, Stored } from "./store.js";
-export type CustomerDeletionJobStatus = "suspension_pending" | "suspending" | "hibernating" | "product_verification_pending" | "verified_pending_completion" | "verified";
-export interface CustomerDeletionJob {
+export type UserDeletionJobStatus = "suspension_pending" | "suspending" | "hibernating" | "product_verification_pending" | "verified_pending_completion" | "verified";
+export interface UserDeletionJob {
     readonly deletionId: string;
     readonly version: 1;
     readonly uid?: string;
     readonly slug?: string | null;
-    readonly status: CustomerDeletionJobStatus;
+    readonly status: UserDeletionJobStatus;
     readonly requestedBy?: string;
     readonly requestedAt: number;
     readonly eraseAfter: number;
@@ -24,18 +24,18 @@ export interface CustomerDeletionJob {
     readonly completedAt?: number;
     readonly updatedAt?: number;
 }
-export type CustomerDeletionJobPatch = RecordPatch<Omit<CustomerDeletionJob, "retiredGatewayProofs">, "deletionId" | "version" | "requestedAt"> & {
+export type UserDeletionJobPatch = RecordPatch<Omit<UserDeletionJob, "retiredGatewayProofs">, "deletionId" | "version" | "requestedAt"> & {
     readonly retiredGatewayProofs?: ClearField;
 };
-export interface CustomerDeletionJobFence {
+export interface UserDeletionJobFence {
     readonly revision?: Revision;
-    readonly status?: readonly CustomerDeletionJobStatus[];
+    readonly status?: readonly UserDeletionJobStatus[];
 }
-export interface CustomerDeletionJobsRepository {
-    get(deletionId: string): Promise<Stored<CustomerDeletionJob> | null>;
-    listForUid(uid: string): Promise<readonly Stored<CustomerDeletionJob>[]>;
-    create(job: CustomerDeletionJob): Promise<void>;
-    patch(deletionId: string, patch: CustomerDeletionJobPatch, fence?: CustomerDeletionJobFence): Promise<void>;
+export interface UserDeletionJobsRepository {
+    get(deletionId: string): Promise<Stored<UserDeletionJob> | null>;
+    listForUid(uid: string): Promise<readonly Stored<UserDeletionJob>[]>;
+    create(job: UserDeletionJob): Promise<void>;
+    patch(deletionId: string, patch: UserDeletionJobPatch, fence?: UserDeletionJobFence): Promise<void>;
     recordRetiredGatewayProof(deletionId: string, gatewayId: string, proof: OpaqueMap): Promise<void>;
 }
 export interface AnonymousOperationalArchive {
@@ -78,7 +78,7 @@ export interface AgentImportsRepository {
     deletePointer(uid: string, pointer: AgentImportPointerName): Promise<void>;
 }
 export interface JobRepositories {
-    readonly deletions: CustomerDeletionJobsRepository;
+    readonly deletions: UserDeletionJobsRepository;
     readonly archives: AnonymousOperationalArchivesRepository;
     readonly agentImports: AgentImportsRepository;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BuilderIdentity } from "@octogee/shared/types/builder-identity";
+import type { UserIdentity } from "@octogee/shared/types/builder-identity";
 import { workspaceServingResolver } from "./workspace-serving.js";
 
 function store(loaded: boolean, state?: "serving" | "quiescing" | "migrating") {
@@ -9,36 +9,36 @@ function store(loaded: boolean, state?: "serving" | "quiescing" | "migrating") {
   };
 }
 
-const CLAIMED: BuilderIdentity = {
+const CLAIMED: UserIdentity = {
   gatewayId: "b-owner", state: "claimed", ownerUid: "owner", builderSlug: "owner", leaseId: null, generation: null,
 };
 
-function builder(identity: BuilderIdentity | null, roster: ReturnType<typeof store> | null) {
+function user(identity: UserIdentity | null, roster: ReturnType<typeof store> | null) {
   return workspaceServingResolver({ gatewayClass: "builder", identity: () => identity, store: roster });
 }
 
 describe("workspace serving resolver", () => {
   it("serves only once the roster stamps the claimed owner serving on this gateway", () => {
-    expect(builder(CLAIMED, store(true, "serving"))()).toBe("serving");
-    expect(builder(CLAIMED, store(true))()).toBe("not-serving");
-    expect(builder(CLAIMED, store(true, "quiescing"))()).toBe("not-serving");
-    expect(builder(CLAIMED, store(true, "migrating"))()).toBe("not-serving");
+    expect(user(CLAIMED, store(true, "serving"))()).toBe("serving");
+    expect(user(CLAIMED, store(true))()).toBe("not-serving");
+    expect(user(CLAIMED, store(true, "quiescing"))()).toBe("not-serving");
+    expect(user(CLAIMED, store(true, "migrating"))()).toBe("not-serving");
   });
 
   it("fails closed while the roster has not loaded or is unavailable", () => {
-    expect(builder(CLAIMED, store(false, "serving"))()).toBe("roster-loading");
-    expect(builder(CLAIMED, null)()).toBe("roster-loading");
+    expect(user(CLAIMED, store(false, "serving"))()).toBe("roster-loading");
+    expect(user(CLAIMED, null)()).toBe("roster-loading");
   });
 
-  it.each<[string, BuilderIdentity | null]>([
+  it.each<[string, UserIdentity | null]>([
     ["not yet read", null],
     ["retired", { gatewayId: "b-owner", state: "unavailable", reason: "retired" }],
-  ])("refuses a Builder whose identity is %s", (_label, identity) => {
-    expect(builder(identity, store(true, "serving"))()).toBe("not-serving");
+  ])("refuses a user whose identity is %s", (_label, identity) => {
+    expect(user(identity, store(true, "serving"))()).toBe("not-serving");
   });
 
-  it("follows the Builder identity as it becomes claimed", () => {
-    let identity: BuilderIdentity | null = null;
+  it("follows the user identity as it becomes claimed", () => {
+    let identity: UserIdentity | null = null;
     const resolve = workspaceServingResolver({ gatewayClass: "builder", identity: () => identity, store: store(true, "serving") });
     expect(resolve()).toBe("not-serving");
     identity = CLAIMED;

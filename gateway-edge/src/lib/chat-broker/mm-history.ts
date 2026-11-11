@@ -11,8 +11,8 @@ export type Direction = "latest" | "before" | "after" | "unread" | "around";
 export interface HistoryParams {
   /** Resolved channel id (caller does name → id resolution). */
   channelId: string;
-  /** Coach's MM user id — required by `unread` endpoint. */
-  coachMmUserId: string;
+  /** Agent's MM user id — required by `unread` endpoint. */
+  defaultAgentMmUserId: string;
   direction?: Direction;
   /** Required for `before`, `after`, `around`. Post id. */
   cursor?: string;
@@ -58,7 +58,7 @@ export async function mmHistory(
 ): Promise<HistoryResponse> {
   const direction: Direction = params.direction ?? "latest";
   const limit = clamp(params.limit ?? 25, 1, 50);
-  const path = endpointFor(direction, params.channelId, params.coachMmUserId, params.cursor, limit);
+  const path = endpointFor(direction, params.channelId, params.defaultAgentMmUserId, params.cursor, limit);
 
   const t0 = Date.now();
   const raw = await client.get(path, pat);
@@ -102,7 +102,7 @@ export async function mmHistory(
 function endpointFor(
   direction: Direction,
   channelId: string,
-  coachMmUserId: string,
+  defaultAgentMmUserId: string,
   cursor: string | undefined,
   limit: number,
 ): string {
@@ -120,7 +120,7 @@ function endpointFor(
       // ?limit_after={N} says "up to N posts newer than last_viewed_at".
       // Side effect: this endpoint advances last_viewed_at as a documented
       // MM behavior (spec §6 acceptance — matches human client semantics).
-      return `/api/v4/users/${coachMmUserId}/channels/${channelId}/posts/unread?limit_before=0&limit_after=${limit}`;
+      return `/api/v4/users/${defaultAgentMmUserId}/channels/${channelId}/posts/unread?limit_before=0&limit_after=${limit}`;
     case "around": {
       requireCursor(cursor, "around");
       // `around` returns N before + 1 anchor + M after. Spec §10 #6 says

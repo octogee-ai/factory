@@ -66,7 +66,7 @@ describe("migration activation Mattermost secrets", () => {
       ],
     }));
     await updateMattermostAccountSecrets(openclawDir, {
-      set: { "alice-coach": "coach-pat", "alice-proj-orbit": "orbit-pat" },
+      set: { "alice-coach": "default-agent-pat", "alice-proj-orbit": "orbit-pat" },
     });
     saveAppliedFingerprints(
       path.join(openclawDir, "applied-fingerprints.json"),
@@ -75,7 +75,7 @@ describe("migration activation Mattermost secrets", () => {
 
     const manifest = await exportActivationManifestWithSecret(configPath, openclawDir, "alice");
 
-    expect(manifest.mattermostAccount.botToken).toBe("coach-pat");
+    expect(manifest.mattermostAccount.botToken).toBe("default-agent-pat");
     expect(manifest.appliedFingerprint).toBe("fp-alice-v1");
     expect(manifest.projectAgents).toMatchObject([
       {
@@ -84,7 +84,7 @@ describe("migration activation Mattermost secrets", () => {
         mattermostAccount: { botToken: "orbit-pat" },
       },
     ]);
-    expect(await fs.readFile(configPath, "utf8")).not.toContain("coach-pat");
+    expect(await fs.readFile(configPath, "utf8")).not.toContain("default-agent-pat");
     expect(await fs.readFile(configPath, "utf8")).not.toContain("orbit-pat");
   });
 
@@ -100,7 +100,7 @@ describe("migration activation Mattermost secrets", () => {
       agentId: "octogee-alice-coach",
       accountId: "alice-coach",
       agent: { id: "octogee-alice-coach" },
-      mattermostAccount: { botToken: "coach-pat", groupPolicy: "open" },
+      mattermostAccount: { botToken: "default-agent-pat", groupPolicy: "open" },
       bindings: [{ agentId: "octogee-alice-coach" }],
       projectAgents: [
         {
@@ -127,7 +127,7 @@ describe("migration activation Mattermost secrets", () => {
       id: "/alice-proj-orbit",
     });
     expect(JSON.parse(await fs.readFile(path.join(openclawDir, "secrets", "mattermost-accounts.json"), "utf8"))).toEqual({
-      "alice-coach": "coach-pat",
+      "alice-coach": "default-agent-pat",
       "alice-proj-orbit": "orbit-pat",
       "bob-proj-orbit": "foreign-pat",
     });

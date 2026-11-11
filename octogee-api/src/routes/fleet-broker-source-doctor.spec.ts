@@ -111,7 +111,7 @@ describe("source Doctor boot authority", () => {
     await expect(f.store.assertDoctor({ ...input, requestId })).rejects.toThrow("source custody changed");
     expect(f.fence().doctor.completedAt).toBeUndefined();
   });
-  it("repairs and acknowledges a coach on its initial epoch-zero assignment", async () => {
+  it("repairs and acknowledges a agent on its initial epoch-zero assignment", async () => {
     const f = fixture();
     const initialAgent = { ...agent, assignmentEpoch: 0 };
     f.fence().target.agents = [initialAgent];

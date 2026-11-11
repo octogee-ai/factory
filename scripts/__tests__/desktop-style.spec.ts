@@ -101,7 +101,7 @@ describe('octo-desktop-style', () => {
     expect(state.shell().plugins.map((p) => p.id)).toEqual(['acme.weather']);
   });
 
-  it('leaves a theme the Builder picked themselves when switching to Omarchy', () => {
+  it('leaves a theme the user picked themselves when switching to Omarchy', () => {
     const state = fixture();
     state.run('familiar');
     writeFileSync(join(state.home, '.local/state/omarchy/current/theme.name'), 'nord\n');
@@ -110,7 +110,7 @@ describe('octo-desktop-style', () => {
     expect(state.calls()).toEqual(['omarchy-theme-set octogee headless=1']);
   });
 
-  it('keeps a plugin the Builder installed by hand: no link over it, and its shell.json entry survives a switch to Omarchy', () => {
+  it('keeps a plugin the user installed by hand: no link over it, and its shell.json entry survives a switch to Omarchy', () => {
     const state = fixture();
     mkdirSync(state.plugin('rdf.dock'), { recursive: true });
     writeFileSync(join(state.plugin('rdf.dock'), 'manifest.json'), '{}');

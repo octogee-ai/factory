@@ -91,7 +91,7 @@ describe("agentModels passthrough — per-agent picks survive normalization", ()
     });
   });
 
-  it("keeps agentModels for a plain platform customer (no credential at all)", () => {
+  it("keeps agentModels for a plain platform user (no credential at all)", () => {
     const normalized = legacyByotSyncUserDataFromModelCredentialState({
       ...completeAcme,
       systemConfig: { agentModels: AGENT_MODELS },

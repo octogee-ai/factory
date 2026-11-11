@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { buildImage, buildSummary, builderBaseRecipe, ensureImage, gatewayBaseRecipe, imagePlan } from "../ci/image-build.mjs";
+import { buildImage, buildSummary, isolatedBaseRecipe, ensureImage, gatewayBaseRecipe, imagePlan } from "../ci/image-build.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 
@@ -126,14 +126,14 @@ describe("base image recipes", () => {
     ]);
   });
 
-  it("keys the Builder base on every file Dockerfile.builder-base copies, not CI plumbing", () => {
-    expect(builderBaseRecipe(repoRoot).sort()).toEqual([
-      "infra/gateway/Dockerfile.builder-base",
-      "infra/gateway/builder-toolchain/base-inputs.mjs",
-      "infra/gateway/builder-toolchain/groups.json",
-      "infra/gateway/builder-toolchain/package-lock.json",
-      "infra/gateway/builder-toolchain/package.json",
-      "infra/gateway/builder-toolchain/preinstall.mjs",
+  it("keys the isolated base on every file Dockerfile.isolated-base copies, not CI plumbing", () => {
+    expect(isolatedBaseRecipe(repoRoot).sort()).toEqual([
+      "infra/gateway/Dockerfile.isolated-base",
+      "infra/gateway/isolated-toolchain/base-inputs.mjs",
+      "infra/gateway/isolated-toolchain/groups.json",
+      "infra/gateway/isolated-toolchain/package-lock.json",
+      "infra/gateway/isolated-toolchain/package.json",
+      "infra/gateway/isolated-toolchain/preinstall.mjs",
       "infra/gateway/stamp-claude-first-run.mjs",
     ]);
   });

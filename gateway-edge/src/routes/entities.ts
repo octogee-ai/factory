@@ -131,20 +131,20 @@ async function hydrateFromFirestore(
   mmUserIds: string[],
 ): Promise<Map<string, { uid: string; avatarUrl: string | null; displayName: string | null }>> {
   const byMmId = new Map<string, { uid: string; avatarUrl: string | null; displayName: string | null }>();
-  const builders = await Promise.all(
-    mmUserIds.map((mmUserId) => platformStateStore.builders.records.findByMattermostUserId(mmUserId)),
+  const userRecords = await Promise.all(
+    mmUserIds.map((mmUserId) => platformStateStore.users.records.findByMattermostUserId(mmUserId)),
   );
 
   await Promise.all(
-    builders.map(async (builder) => {
-      if (!builder?.mattermostUserId) return;
+    userRecords.map(async (userRecord) => {
+      if (!userRecord?.mattermostUserId) return;
       const [userDoc, publicDoc] = await Promise.all([
-        db.doc(`users/${builder.uid}`).get(),
-        db.doc(`users/${builder.uid}/profile/public`).get(),
+        db.doc(`users/${userRecord.uid}`).get(),
+        db.doc(`users/${userRecord.uid}/profile/public`).get(),
       ]);
       const user = userDoc.data();
-      byMmId.set(builder.mattermostUserId, {
-        uid: builder.uid,
+      byMmId.set(userRecord.mattermostUserId, {
+        uid: userRecord.uid,
         displayName: user?.firstName ?? user?.displayName ?? null,
         avatarUrl: publicDoc.data()?.avatarUrl ?? null,
       });
@@ -156,7 +156,7 @@ async function hydrateFromFirestore(
 
 async function ownerMmUserId(ownerUid: string | null): Promise<string | null> {
   if (!ownerUid) return null;
-  return (await platformStateStore.builders.records.get(ownerUid))?.mattermostUserId ?? null;
+  return (await platformStateStore.users.records.get(ownerUid))?.mattermostUserId ?? null;
 }
 
 async function fetchChannelMembers(
@@ -347,7 +347,7 @@ async function ownerRemovalError(ownerUid: string, mmUserId: string): Promise<Ro
 }
 
 async function uidForMattermostUser(mmUserId: string): Promise<string | null> {
-  return (await platformStateStore.builders.records.findByMattermostUserId(mmUserId))?.uid ?? null;
+  return (await platformStateStore.users.records.findByMattermostUserId(mmUserId))?.uid ?? null;
 }
 
 async function removeMemberDocument(

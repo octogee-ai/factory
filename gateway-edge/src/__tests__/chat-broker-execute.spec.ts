@@ -9,9 +9,9 @@ import { _resetTeamCachesForTests } from "../lib/chat-broker/team.js";
 import type { MmClient } from "../lib/chat-broker/mm-client.js";
 
 const IDENTITY: ChatBrokerIdentity = {
-  pat: "builder-pat",
-  coachMmUserId: "mm-coach-bot",
-  unread: { pat: "coach-pat", mmUserId: "mm-coach-bot" },
+  pat: "user-pat",
+  defaultAgentMmUserId: "mm-coach-bot",
+  unread: { pat: "default-agent-pat", mmUserId: "mm-coach-bot" },
   slug: "alice",
   siteUrl: "https://chat.example",
 };
@@ -38,23 +38,23 @@ function fakeMm(calls: Array<{ path: string; pat: string }>): MmClient {
 beforeEach(() => _resetTeamCachesForTests());
 
 describe("executeChatHistory — unread runs under the agent bot's own PAT", () => {
-  it("direction=unread fetches the BOT's cursor with the BOT's PAT, not the builder's", async () => {
+  it("direction=unread fetches the BOT's cursor with the BOT's PAT, not the user's", async () => {
     const calls: Array<{ path: string; pat: string }> = [];
     await executeChatHistory(IDENTITY, { channel: "alice-general", direction: "unread" }, fakeMm(calls));
 
     const unreadCall = calls.find((c) => c.path.includes("/posts/unread"));
     expect(unreadCall).toBeDefined();
     expect(unreadCall!.path).toContain("/users/mm-coach-bot/");
-    expect(unreadCall!.pat).toBe("coach-pat");
+    expect(unreadCall!.pat).toBe("default-agent-pat");
   });
 
-  it("every other direction reads under the lane PAT (the builder's, for the workspace agent)", async () => {
+  it("every other direction reads under the lane PAT (the user's, for the workspace agent)", async () => {
     const calls: Array<{ path: string; pat: string }> = [];
     await executeChatHistory(IDENTITY, { channel: "alice-general", direction: "latest" }, fakeMm(calls));
 
     const postsCall = calls.find((c) => /\/channels\/[a-z0-9]{26}\/posts\?/.test(c.path));
     expect(postsCall).toBeDefined();
-    expect(postsCall!.pat).toBe("builder-pat");
+    expect(postsCall!.pat).toBe("user-pat");
   });
 
   it("reads a natively archived channel only during the granted archive window", async () => {
@@ -84,7 +84,7 @@ describe("executeChatHistory — unread runs under the agent bot's own PAT", () 
 
     expect(calls).toContainEqual({
       path: "/api/v4/teams/team-1/channels/name/alice-proj-camp-general?include_deleted=true",
-      pat: "builder-pat",
+      pat: "user-pat",
     });
   });
 
@@ -199,7 +199,7 @@ describe("executeChatSearch — canonical channel boundary", () => {
     ]);
     expect(calls).not.toContainEqual({
       path: `/api/v4/channels/${deniedChannelId}`,
-      pat: "builder-pat",
+      pat: "user-pat",
     });
     expect(calls.find((call) => call.path === "/api/v4/users/ids")).toBeDefined();
   });

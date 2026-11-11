@@ -46,12 +46,12 @@ export function fleetStoreDependencies(environment) {
     async inspect() {
       const deployment = JSON.parse(await kubectl(['get', 'deployment', 'glm-controller', '-o', 'json']));
       const container = deployment.spec.template.spec.containers.find(item => item.name === 'glm-controller');
-      if (!container) throw new Error('Cowboy container is missing from the deployed workload');
+      if (!container) throw new Error('Fleet controller container is missing from the deployed workload');
       const backendEntry = container.env?.find(item => item.name === 'PLATFORM_STATE_BACKEND');
-      if (backendEntry && typeof backendEntry.value !== 'string') throw new Error('Cowboy platform state backend is not a literal value');
+      if (backendEntry && typeof backendEntry.value !== 'string') throw new Error('The fleet controller platform state backend is not a literal value');
       const backend = backendEntry?.value ?? 'firestore';
       if (backend !== 'postgres') return { backend };
-      if (typeof container.image !== 'string' || !container.image.includes('@sha256:')) throw new Error('Cowboy image is not digest-addressed');
+      if (typeof container.image !== 'string' || !container.image.includes('@sha256:')) throw new Error('Fleet controller image is not digest-addressed');
       const secret = JSON.parse(await kubectl(['get', 'secret', 'platform-state-postgres', '-o', 'json']));
       const value = (key, fallback) => {
         const encoded = secret.data?.[key];

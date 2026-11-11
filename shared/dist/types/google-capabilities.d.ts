@@ -191,7 +191,7 @@ export declare const GOOGLE_CAPABILITY_CATALOG: readonly [{
 }, {
     readonly id: "photos-picker";
     readonly title: "Google Photos Picker";
-    readonly tagline: "Import only media a Builder explicitly selects";
+    readonly tagline: "Import only media a user explicitly selects";
     readonly authMode: "user-oauth";
     readonly scopes: readonly ["https://www.googleapis.com/auth/photospicker.mediaitems.readonly"];
     readonly approvalClass: "read";

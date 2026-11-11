@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const paths = vi.hoisted(() => ({
   root: `/tmp/octogee-durable-sync-${process.pid}`,
-  customers: `/tmp/octogee-durable-sync-${process.pid}/customers`,
+  users: `/tmp/octogee-durable-sync-${process.pid}/customers`,
   keys: `/tmp/octogee-durable-sync-${process.pid}/keys`,
 }));
 
@@ -14,7 +14,7 @@ vi.mock("../lib/config.js", () => ({
   GIT_API_URL: "https://gitea.test/api/v1",
   GIT_SSH_HOST: "gitea.test",
   OPENCLAW_DIR: paths.root,
-  CUSTOMERS_DIR: paths.customers,
+  CUSTOMERS_DIR: paths.users,
   CUSTOMER_KEYS_DIR: paths.keys,
   AGENTS_DIR: "/tmp/octogee-test/agents",
   BLOB_SYNC_MAX_CONCURRENT: 2,
@@ -22,14 +22,14 @@ vi.mock("../lib/config.js", () => ({
 }));
 
 const {
-  externalizeCustomerGitDir,
+  externalizeUserGitDir,
 } = await import("../lib/git.js");
 const { blobSyncForSlug } = await import("../lib/blob-sync.js");
 const { workspaceGitignore } = await import("../lib/git.js");
 
 beforeEach(() => {
   fs.rmSync(paths.root, { recursive: true, force: true });
-  fs.mkdirSync(paths.customers, { recursive: true });
+  fs.mkdirSync(paths.users, { recursive: true });
   fs.mkdirSync(paths.keys, { recursive: true });
 });
 
@@ -39,7 +39,7 @@ afterEach(() => {
 
 describe("blob sync without a manifest", () => {
   it("uploads and records local blobs when no manifest exists yet", async () => {
-    const blobsDir = path.join(paths.customers, "aug29", ".blobs");
+    const blobsDir = path.join(paths.users, "aug29", ".blobs");
     fs.mkdirSync(blobsDir, { recursive: true });
     fs.writeFileSync(path.join(blobsDir, "avatar.png"), "png-bytes");
 
@@ -69,11 +69,11 @@ describe("blob sync without a manifest", () => {
   });
 });
 
-describe("canonical customer git config", () => {
+describe("canonical user git config", () => {
   it("configures main's upstream, without which a clean checkout never fast-forwards", () => {
-    const repo = path.join(paths.customers, "upstreamcheck");
+    const repo = path.join(paths.users, "upstreamcheck");
     fs.mkdirSync(repo, { recursive: true });
-    const gitDir = externalizeCustomerGitDir(repo, { fetchCanonical: () => {} });
+    const gitDir = externalizeUserGitDir(repo, { fetchCanonical: () => {} });
     expect(gitDir).not.toBeNull();
     const config = fs.readFileSync(path.join(gitDir!, "config"), "utf8");
     expect(config).toContain('[branch "main"]');

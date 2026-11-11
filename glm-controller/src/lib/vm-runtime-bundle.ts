@@ -12,7 +12,7 @@ import {
   type GatewayVmRuntimeContainer,
   type GatewayVmRuntimeMount,
   type GatewayVmRuntimeVolume,
-  type RuntimeBuilderIdentity,
+  type RuntimeUserIdentity,
 } from "@octogee/shared/types/glm";
 
 interface JsonScan {
@@ -113,20 +113,20 @@ interface K8sDeployment {
   };
 }
 
-export interface GatewayComputerIdentity {
+export interface GatewayVmIdentity {
   serviceAccountEmail: string;
   projectId: string;
 }
 
 export interface RenderVmRuntimeBundleInput {
   gatewayId: string;
-  builderIdentity?: RuntimeBuilderIdentity;
+  builderIdentity?: RuntimeUserIdentity;
   homeStorageId?: string;
   namespace: string;
   imageRepository: string;
   imageTag: string;
   desktop: GatewayVmDesktop;
-  computer: GatewayComputerIdentity;
+  computer: GatewayVmIdentity;
   manifests: unknown[];
   readSecret: (name: string, key: string) => Promise<string>;
   hostAliases: Record<string, string>;
@@ -287,7 +287,7 @@ export async function renderVmRuntimeBundle(input: RenderVmRuntimeBundleInput): 
     volumes.push({ name: GATEWAY_DESKTOP_NODE_STATE_VOLUME, kind: "emptyDir" }, { name: GATEWAY_DESKTOP_NODE_IDENTITY_VOLUME, kind: "emptyDir" });
   }
   configureHomeIdentity(input.homeStorageId, init, containers);
-  const builderIdentity = bindBuilderIdentity(input.builderIdentity, containers);
+  const builderIdentity = bindUserIdentity(input.builderIdentity, containers);
   const unversioned = {
     gatewayId: input.gatewayId,
     ...builderIdentity,
@@ -307,16 +307,16 @@ export async function renderVmRuntimeBundle(input: RenderVmRuntimeBundleInput): 
 const PROJECT_MATERIALIZATIONS_VOLUME = "project-materializations";
 const PROJECT_MATERIALIZATIONS_MOUNT = "/work/materialized";
 
-function bindBuilderIdentity(
-  identity: RuntimeBuilderIdentity | undefined,
+function bindUserIdentity(
+  identity: RuntimeUserIdentity | undefined,
   containers: GatewayVmRuntimeContainer[],
-): { builderIdentity?: RuntimeBuilderIdentity } {
+): { builderIdentity?: RuntimeUserIdentity } {
   if (!identity) return {};
-  mountBuilderProjects(identity, containers);
+  mountUserProjects(identity, containers);
   return { builderIdentity: { ...identity } };
 }
 
-function mountBuilderProjects(identity: RuntimeBuilderIdentity, containers: GatewayVmRuntimeContainer[]): void {
+function mountUserProjects(identity: RuntimeUserIdentity, containers: GatewayVmRuntimeContainer[]): void {
   for (const container of containers) {
     const materialized = container.mounts.find((mount) =>
       mount.volume === PROJECT_MATERIALIZATIONS_VOLUME && mount.mountPath === PROJECT_MATERIALIZATIONS_MOUNT && mount.subPath === "projects");

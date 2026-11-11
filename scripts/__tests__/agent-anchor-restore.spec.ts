@@ -4,14 +4,14 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
 import { runAgentAnchorRestore } from "../entrypoints/agent-anchor-restore.js";
-import { withBuilderClaim } from "./helpers/builder-claim.js";
+import { withUserClaim } from "./helpers/user-claim.js";
 
 const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
 
-const coach = { agentId: "octogee-alice-coach", storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_agent_92c817cc770f466d" };
+const defaultAgent = { agentId: "octogee-alice-coach", storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_agent_92c817cc770f466d" };
 
 describe("agent-anchor-restore entrypoint", () => {
   it.each(['cluster', 'gce-vm'])("initializes a claimed %s host before its first migration records any anchors", async runtime => {
@@ -19,9 +19,9 @@ describe("agent-anchor-restore entrypoint", () => {
     roots.push(dir);
     const initializeHost = vi.fn(async () => undefined);
     const result = await runAgentAnchorRestore({
-      env: withBuilderClaim({ GATEWAY_CLASS: 'builder', GATEWAY_RUNTIME_KIND: runtime, GATEWAY_ID: 'alice-s-first', OPENCLAW_STATE_DIR: dir }, 'alice'),
+      env: withUserClaim({ GATEWAY_CLASS: 'builder', GATEWAY_RUNTIME_KIND: runtime, GATEWAY_ID: 'alice-s-first', OPENCLAW_STATE_DIR: dir }, 'alice'),
       broker: { readAgentAnchors: async () => ({ anchors: [] }) },
-      readConfig: () => ({ agents: { entries: { [coach.agentId]: {} } } }),
+      readConfig: () => ({ agents: { entries: { [defaultAgent.agentId]: {} } } }),
       initializeHost,
       log: () => {},
     });
@@ -32,36 +32,36 @@ describe("agent-anchor-restore entrypoint", () => {
     const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agent-anchor-first-import-')));
     roots.push(dir);
     await expect(runAgentAnchorRestore({
-      env: withBuilderClaim({ GATEWAY_CLASS: 'builder', GATEWAY_ID: 'alice-s-first', OPENCLAW_STATE_DIR: dir }, 'alice'),
+      env: withUserClaim({ GATEWAY_CLASS: 'builder', GATEWAY_ID: 'alice-s-first', OPENCLAW_STATE_DIR: dir }, 'alice'),
       broker: { readAgentAnchors: async () => ({ anchors: [] }) }, readConfig: () => ({}),
       initializeHost: async () => { throw new Error('Native first-use failed'); }, log: () => {},
     })).rejects.toThrow('Native first-use failed');
   });
-  it("lands the Builder's recorded anchors for configured agents before OpenClaw opens them", async () => {
+  it("lands the user's recorded anchors for configured agents before OpenClaw opens them", async () => {
     const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-anchor-restore-")));
     roots.push(dir);
-    const readAgentAnchors = vi.fn(async () => ({ anchors: [coach, { agentId: "octogee-alice-proj-gone-coach", storeId: "3313965d-1e56-4006-9d9c-1b0289fafcfa", schema: "octogee_agent_3313965d1e564006" }] }));
+    const readAgentAnchors = vi.fn(async () => ({ anchors: [defaultAgent, { agentId: "octogee-alice-proj-gone-coach", storeId: "3313965d-1e56-4006-9d9c-1b0289fafcfa", schema: "octogee_agent_3313965d1e564006" }] }));
     const logs: string[] = [];
 
     const verify = vi.fn(async () => undefined);
     const initializeHost = vi.fn(async (stateDir: string) => {
-      await expect(fs.stat(path.join(stateDir, "agents", coach.agentId))).rejects.toThrow();
+      await expect(fs.stat(path.join(stateDir, "agents", defaultAgent.agentId))).rejects.toThrow();
     });
     const result = await runAgentAnchorRestore({
-      env: withBuilderClaim({ GATEWAY_CLASS: "builder", GATEWAY_ID: "alice-s-abc", OPENCLAW_STATE_DIR: dir }, "alice"),
+      env: withUserClaim({ GATEWAY_CLASS: "builder", GATEWAY_ID: "alice-s-abc", OPENCLAW_STATE_DIR: dir }, "alice"),
       broker: { readAgentAnchors },
-      readConfig: () => ({ agents: { entries: { [coach.agentId]: {}, "octogee-unmatched-route": {} } } }),
+      readConfig: () => ({ agents: { entries: { [defaultAgent.agentId]: {}, "octogee-unmatched-route": {} } } }),
       verify,
       initializeHost,
       log: (m) => logs.push(m),
     });
 
-    expect(result).toEqual({ landed: [coach.agentId], preserved: [], skipped: false });
-    expect(verify).toHaveBeenCalledExactlyOnceWith(coach);
+    expect(result).toEqual({ landed: [defaultAgent.agentId], preserved: [], skipped: false });
+    expect(verify).toHaveBeenCalledExactlyOnceWith(defaultAgent);
     expect(initializeHost).toHaveBeenCalledExactlyOnceWith(dir);
     expect(initializeHost.mock.invocationCallOrder[0]).toBeLessThan(verify.mock.invocationCallOrder[0]);
     expect(readAgentAnchors).toHaveBeenCalledExactlyOnceWith({ slug: "alice" });
-    expect(readPostgresAgentAnchor(path.join(dir, "agents", coach.agentId, "agent", "openclaw-agent.sqlite"))).toEqual({ storeId: coach.storeId, schema: coach.schema });
+    expect(readPostgresAgentAnchor(path.join(dir, "agents", defaultAgent.agentId, "agent", "openclaw-agent.sqlite"))).toEqual({ storeId: defaultAgent.storeId, schema: defaultAgent.schema });
     await expect(fs.stat(path.join(dir, "agents", "octogee-alice-proj-gone-coach"))).rejects.toThrow();
     expect(logs.some((m) => m.includes("landed 1 agent anchor"))).toBe(true);
   });
@@ -71,32 +71,32 @@ describe("agent-anchor-restore entrypoint", () => {
     roots.push(dir);
     const verify = vi.fn();
     await expect(runAgentAnchorRestore({
-      env: withBuilderClaim({ GATEWAY_CLASS: "builder", GATEWAY_ID: "alice-s-abc", OPENCLAW_STATE_DIR: dir }, "alice"),
-      broker: { readAgentAnchors: async () => ({ anchors: [coach] }) },
-      readConfig: () => ({ agents: { entries: { [coach.agentId]: {} } } }),
+      env: withUserClaim({ GATEWAY_CLASS: "builder", GATEWAY_ID: "alice-s-abc", OPENCLAW_STATE_DIR: dir }, "alice"),
+      broker: { readAgentAnchors: async () => ({ anchors: [defaultAgent] }) },
+      readConfig: () => ({ agents: { entries: { [defaultAgent.agentId]: {} } } }),
       initializeHost: async () => { throw new Error("native boot refused existing history"); },
       verify,
       log: () => {},
     })).rejects.toThrow("native boot refused existing history");
     expect(verify).not.toHaveBeenCalled();
-    await expect(fs.stat(path.join(dir, "agents", coach.agentId))).rejects.toThrow();
+    await expect(fs.stat(path.join(dir, "agents", defaultAgent.agentId))).rejects.toThrow();
   });
 
-  it("lands the recorded gateway state anchor on a cluster Builder only", async () => {
+  it("lands the recorded gateway state anchor on a cluster user only", async () => {
     const state = { storeId: "c8feb4c9-41a7-4be1-b863-fa07ef6d1bdd", schema: "octogee_state_c8feb4c941a74be1" };
-    const readAgentAnchors = vi.fn(async () => ({ anchors: [coach], state }));
+    const readAgentAnchors = vi.fn(async () => ({ anchors: [defaultAgent], state }));
     const restore = async (runtimeKind: string, verifyState = vi.fn(async () => undefined)) => {
       const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-anchor-restore-")));
       roots.push(dir);
       const initializeHost = vi.fn(async (root: string) => {
         expect(readPostgresAgentAnchor(path.join(root, "state", "openclaw.sqlite")))
           .toEqual(runtimeKind === "cluster" ? state : null);
-        await expect(fs.stat(path.join(root, "agents", coach.agentId))).rejects.toThrow();
+        await expect(fs.stat(path.join(root, "agents", defaultAgent.agentId))).rejects.toThrow();
       });
       const result = await runAgentAnchorRestore({
-        env: withBuilderClaim({ GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: runtimeKind, GATEWAY_ID: "alice-s-abc", OPENCLAW_STATE_DIR: dir }, "alice"),
+        env: withUserClaim({ GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: runtimeKind, GATEWAY_ID: "alice-s-abc", OPENCLAW_STATE_DIR: dir }, "alice"),
         broker: { readAgentAnchors },
-        readConfig: () => ({ agents: { entries: { [coach.agentId]: {} } } }),
+        readConfig: () => ({ agents: { entries: { [defaultAgent.agentId]: {} } } }),
         verify: async () => undefined,
         verifyState,
         initializeHost,
@@ -124,7 +124,7 @@ describe("agent-anchor-restore entrypoint", () => {
     await fs.writeFile(path.join(dir, "state", "openclaw.sqlite"), "local");
     const verifyState = vi.fn();
     const result = await runAgentAnchorRestore({
-      env: withBuilderClaim({ GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "cluster", GATEWAY_ID: "alice-s-abc", OPENCLAW_STATE_DIR: dir }, "alice"),
+      env: withUserClaim({ GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "cluster", GATEWAY_ID: "alice-s-abc", OPENCLAW_STATE_DIR: dir }, "alice"),
       broker: { readAgentAnchors: async () => ({ anchors: [], state: { storeId: "c8feb4c9-41a7-4be1-b863-fa07ef6d1bdd", schema: "octogee_state_c8feb4c941a74be1" } }) },
       readConfig: () => ({ agents: { entries: {} } }),
       verifyState,
@@ -136,7 +136,7 @@ describe("agent-anchor-restore entrypoint", () => {
 
   });
 
-  it("skips a Shared gateway and a Builder without a claim", async () => {
+  it("skips a Shared gateway and a user without a claim", async () => {
     const readAgentAnchors = vi.fn();
     expect(await runAgentAnchorRestore({ env: { GATEWAY_CLASS: "shared", GATEWAY_ID: "shared-a" }, broker: { readAgentAnchors }, readConfig: () => ({}), log: () => {} }))
       .toEqual({ landed: [], preserved: [], skipped: true });

@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { Timestamp, type DocumentData, type DocumentReference, type DocumentSnapshot, type Query } from "firebase-admin/firestore";
 import {
   ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION,
-  CUSTOMER_DELETION_JOBS_COLLECTION,
+  USER_DELETION_JOBS_COLLECTION,
 } from "@octogee/shared/types/account-lifecycle";
 import { MalformedRecordError, MissingRecordError, type RecordKey } from "../errors.js";
 import type {
@@ -12,10 +12,10 @@ import type {
   AgentImportsRepository,
   AnonymousOperationalArchive,
   AnonymousOperationalArchivesRepository,
-  CustomerDeletionJob,
-  CustomerDeletionJobPatch,
-  CustomerDeletionJobsRepository,
-  CustomerDeletionJobStatus,
+  UserDeletionJob,
+  UserDeletionJobPatch,
+  UserDeletionJobsRepository,
+  UserDeletionJobStatus,
   JobRepositories,
 } from "../jobs.js";
 import type { ClearField, OpaqueMap, Revision, Stored } from "../store.js";
@@ -34,7 +34,7 @@ import { FirestoreFields, withStoredRevision } from "./workspaces.js";
 
 const PRODUCT_CONTEXT_FIELDS = ["stripeCustomerIds", "stripeSubscriptionIds", "posthogErasure"] as const;
 const STORED_PRODUCT_VERIFICATION_STATUS = "posthog_verification_pending";
-const DELETION_STATUSES: readonly CustomerDeletionJobStatus[] = [
+const DELETION_STATUSES: readonly UserDeletionJobStatus[] = [
   "suspension_pending",
   "suspending",
   "hibernating",
@@ -69,18 +69,18 @@ const agentImportPointerKey = (uid: string, pointer: AgentImportPointerName): Re
   key: `${uid}/${pointer}`,
 });
 
-export function storedDeletionStatus(status: CustomerDeletionJobStatus): string {
+export function storedDeletionStatus(status: UserDeletionJobStatus): string {
   return status === "product_verification_pending" ? STORED_PRODUCT_VERIFICATION_STATUS : status;
 }
 
 const STORED_DELETION_STATUSES = DELETION_STATUSES.map(storedDeletionStatus);
 
-function domainDeletionStatus(fields: FirestoreFields): CustomerDeletionJobStatus {
+function domainDeletionStatus(fields: FirestoreFields): UserDeletionJobStatus {
   const stored = fields.oneOf("status", STORED_DELETION_STATUSES);
-  return stored === STORED_PRODUCT_VERIFICATION_STATUS ? "product_verification_pending" : (stored as CustomerDeletionJobStatus);
+  return stored === STORED_PRODUCT_VERIFICATION_STATUS ? "product_verification_pending" : (stored as UserDeletionJobStatus);
 }
 
-function decodeDeletionJob(snapshot: DocumentSnapshot): Stored<CustomerDeletionJob> | null {
+function decodeDeletionJob(snapshot: DocumentSnapshot): Stored<UserDeletionJob> | null {
   if (!snapshot.exists) return null;
   const key = deletionKey(snapshot.id);
   const data = decodeDocumentData(snapshot);
@@ -106,7 +106,7 @@ function decodeDeletionJob(snapshot: DocumentSnapshot): Stored<CustomerDeletionJ
   }
   const productContext = Object.fromEntries(PRODUCT_CONTEXT_FIELDS.filter((field) => field in data).map((field) => [field, data[field]]));
   if (Object.keys(productContext).length > 0) job.productContext = productContext;
-  return withStoredRevision(snapshot, job as unknown as CustomerDeletionJob);
+  return withStoredRevision(snapshot, job as unknown as UserDeletionJob);
 }
 
 function assertProductContextFields(operation: string, productContext: OpaqueMap): void {
@@ -116,7 +116,7 @@ function assertProductContextFields(operation: string, productContext: OpaqueMap
   }
 }
 
-function encodeDeletionJob(job: CustomerDeletionJob): DocumentData {
+function encodeDeletionJob(job: UserDeletionJob): DocumentData {
   const { deletionId: _deletionId, productContext, status, ...fields } = job;
   if (productContext !== undefined) assertProductContextFields("jobs.deletions.create", productContext);
   return encodeDocument({ ...fields, ...productContext, status: storedDeletionStatus(status) }, STORED_AS_NUMBERS, ["revision"]);
@@ -128,7 +128,7 @@ function productContextPatch(productContext: OpaqueMap | ClearField): PlainObjec
   return Object.fromEntries(PRODUCT_CONTEXT_FIELDS.map((field) => [field, field in productContext ? productContext[field] : CLEAR]));
 }
 
-function encodeDeletionPatch(patch: CustomerDeletionJobPatch): DocumentData {
+function encodeDeletionPatch(patch: UserDeletionJobPatch): DocumentData {
   const { productContext, status, ...rest } = patch;
   return encodePatch(
     {
@@ -140,8 +140,8 @@ function encodeDeletionPatch(patch: CustomerDeletionJobPatch): DocumentData {
   );
 }
 
-function createDeletionJobsRepository(session: FirestoreSession): CustomerDeletionJobsRepository {
-  const collection = () => session.db.collection(CUSTOMER_DELETION_JOBS_COLLECTION);
+function createDeletionJobsRepository(session: FirestoreSession): UserDeletionJobsRepository {
+  const collection = () => session.db.collection(USER_DELETION_JOBS_COLLECTION);
   const ref = (deletionId: string) => collection().doc(deletionId);
 
   return {

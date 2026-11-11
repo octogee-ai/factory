@@ -29,7 +29,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** The `{agentId, workspace}` pairs `agents.create` needs, read off the entries
- *  the config builders produce. */
+ *  the config users produce. */
 export function rosterAgentSpecsFromEntries(
   entries: readonly unknown[],
 ): RosterAgentSpec[] {

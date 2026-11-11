@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   gatewayDeploymentIntentFingerprint,
-  cowboyMayMarkGatewayLive,
+  fleetControllerMayMarkGatewayLive,
   deploymentIntentFingerprintForComparison,
   gatewayReleaseAuthorizesChartDrift,
   gatewayUpsertOptsFromRelease,
@@ -9,20 +9,20 @@ import {
   orderGatewaysForConvergence,
   planGatewayConvergence,
   provisioningRuntimeDoc,
-  requiresSurgeCustomerMigration,
+  requiresSurgeUserMigration,
   supersedingGatewayImageTag,
   type DurableGateway,
 } from "../converge-gateway.js";
 import type { ReleasePayload } from "@octogee/shared/types/gateway-releases";
 
 const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
-const BUILDER_REPO =
+const USER_REPO =
   "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder";
 const EDGE_REPO = "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge";
 
 function gateway(overrides: Partial<DurableGateway> = {}): DurableGateway {
   return {
-    gatewayId: "bender",
+    gatewayId: "walter",
     createdAt: 1,
     createdBy: "op",
     updatedAt: 1,
@@ -55,7 +55,7 @@ function artifact(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
     imageTag: "def5678",
     profileImages: {
       builder: {
-        imageRepository: BUILDER_REPO,
+        imageRepository: USER_REPO,
         imageTag: "def5678",
       },
     },
@@ -142,8 +142,8 @@ describe("planGatewayConvergence", () => {
   });
 
   it("uses the transaction-time release fence before marking a release live", () => {
-    expect(cowboyMayMarkGatewayLive(gateway(), 1)).toBe(false);
-    expect(cowboyMayMarkGatewayLive(gateway(), 2)).toBe(true);
+    expect(fleetControllerMayMarkGatewayLive(gateway(), 1)).toBe(false);
+    expect(fleetControllerMayMarkGatewayLive(gateway(), 2)).toBe(true);
     expect(markLiveRuntimePatch(gateway())).toEqual({ lifecycle: "serving", release: 2 });
   });
 
@@ -206,22 +206,22 @@ describe("planGatewayConvergence", () => {
       }),
     ).toMatchObject({
       kind: "hold-missing-release",
-      error: expect.stringContaining("gateways/bender/releases/2"),
+      error: expect.stringContaining("gateways/walter/releases/2"),
     });
   });
 });
 
-describe("surge customer migration boundary", () => {
+describe("surge user migration boundary", () => {
   it("requires transfer only when replacing a previously-live release", () => {
-    expect(requiresSurgeCustomerMigration(gateway({ liveRelease: 1, desiredRelease: 2 }))).toBe(true);
-    expect(requiresSurgeCustomerMigration(gateway({ liveRelease: null, desiredRelease: 1 }))).toBe(false);
-    expect(requiresSurgeCustomerMigration(gateway({ liveRelease: 2, desiredRelease: 2 }))).toBe(false);
-    expect(requiresSurgeCustomerMigration(gateway({
+    expect(requiresSurgeUserMigration(gateway({ liveRelease: 1, desiredRelease: 2 }))).toBe(true);
+    expect(requiresSurgeUserMigration(gateway({ liveRelease: null, desiredRelease: 1 }))).toBe(false);
+    expect(requiresSurgeUserMigration(gateway({ liveRelease: 2, desiredRelease: 2 }))).toBe(false);
+    expect(requiresSurgeUserMigration(gateway({
       liveRelease: 1,
       desiredRelease: 2,
       desiredStatus: "draining",
     }))).toBe(true);
-    expect(requiresSurgeCustomerMigration(gateway({
+    expect(requiresSurgeUserMigration(gateway({
       liveRelease: 1,
       desiredRelease: 2,
       desiredStatus: "paused",
@@ -231,7 +231,7 @@ describe("surge customer migration boundary", () => {
 });
 
 describe("orderGatewaysForConvergence", () => {
-  it("orders Barn and Builder gateways by stable id", () => {
+  it("orders shared and isolated gateways by stable id", () => {
     expect(orderGatewaysForConvergence([
       gateway({ gatewayId: "zeta", gatewayClass: "shared" }),
       gateway({ gatewayId: "beta", gatewayClass: "builder" }),
@@ -249,12 +249,12 @@ describe("gatewayUpsertOptsFromRelease", () => {
         imageProfile: "builder",
         ownerUid: "uid-owner",
         builderSlug: "owner",
-        serviceAccountName: "octogee-gw-bender",
+        serviceAccountName: "octogee-gw-walter",
         serviceAccount: {
           create: true,
           annotations: {
             "iam.gke.io/gcp-service-account":
-              "octogee-gw-bender@octogee.iam.gserviceaccount.com",
+              "octogee-gw-walter@octogee.iam.gserviceaccount.com",
             "octogee.ai/purpose": "personal-gateway",
           },
         },
@@ -270,9 +270,9 @@ describe("gatewayUpsertOptsFromRelease", () => {
     });
   });
 
-  it("never sends the standard gateway digest to the Builder repository", () => {
+  it("never sends the standard gateway digest to the user repository", () => {
     const standardDigest = `sha256:${"a".repeat(64)}`;
-    const builderDigest = `sha256:${"b".repeat(64)}`;
+    const userDigest = `sha256:${"b".repeat(64)}`;
     const opts = gatewayUpsertOptsFromRelease({
       namespace: "octogee-test",
       gateway: gateway({
@@ -283,8 +283,8 @@ describe("gatewayUpsertOptsFromRelease", () => {
         imageTag: `def5678@${standardDigest}`,
         profileImages: {
           builder: {
-            imageRepository: BUILDER_REPO,
-            imageTag: `def5678@${builderDigest}`,
+            imageRepository: USER_REPO,
+            imageTag: `def5678@${userDigest}`,
           },
         },
       }),
@@ -292,14 +292,14 @@ describe("gatewayUpsertOptsFromRelease", () => {
       chartPath: "/charts/octogee-gateway",
     });
 
-    expect(opts.imageRepository).toBe(BUILDER_REPO);
-    expect(opts.imageTag).toBe(`def5678@${builderDigest}`);
+    expect(opts.imageRepository).toBe(USER_REPO);
+    expect(opts.imageTag).toBe(`def5678@${userDigest}`);
     expect(opts.imageTag).not.toContain(standardDigest);
     expect(opts.gatewayEdgeImageRepository).toBe(EDGE_REPO);
     expect(opts.gatewayEdgeImageTag).toBe("def5678");
   });
 
-  it("fails before Helm convergence when a Builder release lacks its profile receipt", () => {
+  it("fails before Helm convergence when a user release lacks its profile receipt", () => {
     expect(() => gatewayUpsertOptsFromRelease({
       namespace: "octogee-test",
       gateway: gateway({
@@ -309,7 +309,7 @@ describe("gatewayUpsertOptsFromRelease", () => {
       artifact: artifact({ profileImages: undefined }),
       replicas: 1,
       chartPath: "/charts/octogee-gateway",
-    })).toThrow(/missing its immutable Builder gateway image reference/);
+    })).toThrow(/missing its immutable isolated gateway image reference/);
   });
 
   it("retains the source Hobby pod for the fenced transfer of unpublished workspace state", () => {
@@ -330,10 +330,10 @@ describe("gatewayUpsertOptsFromRelease", () => {
       gatewayServiceAccount: "octogee-gateway@octogee-test.iam.gserviceaccount.com",
     });
     expect(opts).toMatchObject({
-      gatewayId: "bender",
+      gatewayId: "walter",
       imageRepository: REPO,
       imageTag: "def5678",
-      serviceAccountName: "octogee-gw-bender",
+      serviceAccountName: "octogee-gw-walter",
       replicas: 1,
       rollStrategy: "surge",
       kmsKeyName: "projects/octogee-test/locations/us-central1/keyRings/octogee-creds/cryptoKeys/integrations-at-rest",
@@ -385,7 +385,7 @@ describe("gatewayUpsertOptsFromRelease", () => {
     })).not.toBe(base.deploymentIntentFingerprint);
   });
 
-  it("keeps a Builder steady when only the root owner pair changes", () => {
+  it("keeps a user steady when only the root owner pair changes", () => {
     const previous = gatewayUpsertOptsFromRelease({
       namespace: "octogee-test",
       gateway: gateway({
@@ -424,7 +424,7 @@ describe("gatewayUpsertOptsFromRelease", () => {
       }),
       artifact: artifact(),
       helm: {
-        imageRepository: BUILDER_REPO,
+        imageRepository: USER_REPO,
         imageTag: "def5678",
         replicas: 1,
         deploymentIntentFingerprint: previous.deploymentIntentFingerprint,
@@ -546,7 +546,7 @@ describe("gatewayUpsertOptsFromRelease", () => {
     })).toBe(desired.deploymentIntentFingerprint);
   });
 
-  it("resolves Builder access from the owner", () => {
+  it("resolves user access from the owner", () => {
     const opts = gatewayUpsertOptsFromRelease({
       namespace: "octogee-test",
       gateway: gateway({
@@ -607,13 +607,13 @@ describe("provisioningRuntimeDoc", () => {
     });
     expect(doc).toMatchObject({
       docKind: "runtime",
-      gatewayId: "bender",
+      gatewayId: "walter",
       release: 2,
       lifecycle: "provisioning",
       helm: {
-        releaseName: "octogee-gw-bender",
-        deploymentName: "octogee-gateway-bender",
-        gatewayEdgeServiceName: "gateway-edge-bender",
+        releaseName: "octogee-gw-walter",
+        deploymentName: "octogee-gateway-walter",
+        gatewayEdgeServiceName: "gateway-edge-walter",
         imageTag: "def5678",
         replicas: 1,
       },
@@ -669,7 +669,7 @@ describe("supersedingGatewayImageTag", () => {
     })).toBe("aaa1111");
   });
 
-  it("names the pending Builder image for a Builder gateway", () => {
+  it("names the pending isolated image for a isolated gateway", () => {
     expect(supersedingGatewayImageTag({
       gateway: gateway({
         desiredRelease: 2,
@@ -677,10 +677,10 @@ describe("supersedingGatewayImageTag", () => {
         gatewayClass: "builder",
         imageProfile: "builder",
       }),
-      desiredImage: { imageRepository: BUILDER_REPO, imageTag: "def5678" },
+      desiredImage: { imageRepository: USER_REPO, imageTag: "def5678" },
       pendingArtifact: artifact({
         imageTag: "aaa1111",
-        profileImages: { builder: { imageRepository: BUILDER_REPO, imageTag: "bbb2222" } },
+        profileImages: { builder: { imageRepository: USER_REPO, imageTag: "bbb2222" } },
       }),
     })).toBe("bbb2222");
   });
@@ -723,7 +723,7 @@ describe("supersedingGatewayImageTag", () => {
         gatewayClass: "builder",
         imageProfile: "builder",
       }),
-      desiredImage: { imageRepository: BUILDER_REPO, imageTag: "def5678" },
+      desiredImage: { imageRepository: USER_REPO, imageTag: "def5678" },
       pendingArtifact: artifact({ imageTag: "aaa1111", profileImages: undefined }),
     })).toBeUndefined();
     expect(supersedingGatewayImageTag({

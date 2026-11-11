@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 
-import { PROJECT_COACH_REPO } from "@octogee/shared/types/project";
+import { PROJECT_AGENT_REPO } from "@octogee/shared/types/project";
 
 import {
   GATEWAY_KEY_TITLE,
@@ -56,7 +56,7 @@ export const giteaNaming: GitHostNaming = {
       case "system-config":
         return systemConfigRepoName();
       case "project-coaches":
-        return PROJECT_COACH_REPO;
+        return PROJECT_AGENT_REPO;
       case "project":
         return projectRepoName(role.projectSlug);
     }
@@ -92,7 +92,7 @@ function repoCreation(workspaceSlug: string, role: GitRepoRole): RepoCreation {
           name: giteaNaming.repo(role),
           private: true,
           default_branch: "main",
-          description: `Octogee project coaches for ${workspaceSlug}`,
+          description: `Octogee project agents for ${workspaceSlug}`,
           auto_init: false,
         },
       };

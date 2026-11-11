@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GATEWAY_CREDENTIAL_TOKEN_HEADER } from "@octogee/core/internal-fetch";
 import { internalFetch } from "../lib/internal-fetch.js";
-import { RETIRED_COMPUTER_BINDING_DENIAL_REASON } from "../../shared/types/fleet-broker.js";
+import { RETIRED_VM_BINDING_DENIAL_REASON } from "../../shared/types/fleet-broker.js";
 import {
   createFleetBrokerClient,
-  isRetiredComputerBindingDenial,
+  isRetiredVmBindingDenial,
 } from "../lib/fleet-broker-client.js";
 
 vi.mock("../lib/internal-fetch.js", () => ({ internalFetch: vi.fn() }));
@@ -73,10 +73,10 @@ describe("fleet broker npm cache client", () => {
     );
   });
 
-  it("recognizes a retired-computer tenant denial without copying the body into the message", async () => {
+  it("recognizes a retired-vm tenant denial without copying the body into the message", async () => {
     vi.mocked(internalFetch).mockResolvedValueOnce(new Response(
       JSON.stringify({
-        error: `forbidden: ${RETIRED_COMPUTER_BINDING_DENIAL_REASON}`,
+        error: `forbidden: ${RETIRED_VM_BINDING_DENIAL_REASON}`,
         code: "tenant-enforcement",
       }),
       { status: 403 },
@@ -88,13 +88,13 @@ describe("fleet broker npm cache client", () => {
       }),
     }).npmRegistryCredentials("alice").catch((error: unknown) => error);
 
-    expect(isRetiredComputerBindingDenial(failure)).toBe(true);
+    expect(isRetiredVmBindingDenial(failure)).toBe(true);
     expect((failure as Error).message).toBe(
       "fleet-broker POST /internal/fleet/npm-registry-credentials → 403",
     );
   });
 
-  it("does not mistake an unassigned-Builder denial for retirement", async () => {
+  it("does not mistake an unassigned-User denial for retirement", async () => {
     vi.mocked(internalFetch).mockResolvedValueOnce(new Response(
       JSON.stringify({ error: "forbidden" }),
       { status: 403 },
@@ -106,6 +106,6 @@ describe("fleet broker npm cache client", () => {
       }),
     }).npmRegistryCredentials("alice").catch((error: unknown) => error);
 
-    expect(isRetiredComputerBindingDenial(failure)).toBe(false);
+    expect(isRetiredVmBindingDenial(failure)).toBe(false);
   });
 });

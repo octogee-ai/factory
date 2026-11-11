@@ -13,7 +13,7 @@ export function spreadZones(zones: readonly string[], occupied: readonly string[
   });
 }
 
-export async function occupiedComputerZones(vm: Pick<GatewayVmClient, "list">, environment: string): Promise<string[]> {
-  const computers = await vm.list({ labels: { "octogee-environment": environment, purpose: "octogee-computer" } });
-  return computers.map((computer) => computer.zone);
+export async function occupiedVmZones(vm: Pick<GatewayVmClient, "list">, environment: string): Promise<string[]> {
+  const vms = await vm.list({ labels: { "octogee-environment": environment, purpose: "octogee-computer" } });
+  return vms.map((instance) => instance.zone);
 }

@@ -1,9 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
-import { builderReturnOperationId } from "@octogee/core/builder-activation-lease";
-import { builderRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
+import { builderReturnOperationId } from "@octogee/core/user-activation-lease";
+import { isolatedRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
 import type {
-  BuilderActivationLease,
-  BuilderRecord,
+  UserActivationLease,
+  PlatformUserRecord,
   FleetRegistryRecord,
   GatewayAssignment,
   GatewayRoot,
@@ -16,7 +16,7 @@ import { readSchedulerMigrationIdentity, type Operation } from "@octogee/shared/
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { AgentStoreHandoffAuthority, PrepareMigrationAgentStores } from "./migration-agent-stores.js";
 import type { OperationContext, OperationResult } from "./operation-router.js";
-import type { NativeComputerReturnInput } from "./lib/native-computer-return.js";
+import type { NativeVmReturnInput } from "./lib/native-vm-return.js";
 
 export interface NativeReturnRecoveryIntent {
   leaseId: string;
@@ -35,7 +35,7 @@ interface RecoveryDeps {
   now(): number;
   log(message: string): void;
   verifyRetiredTarget(gatewayId: string, assertCurrent: () => Promise<void>): Promise<boolean>;
-  releaseSourceHold(input: NativeComputerReturnInput): Promise<void>;
+  releaseSourceHold(input: NativeVmReturnInput): Promise<void>;
   prepareSourceStores: PrepareMigrationAgentStores;
   sourceClient(gatewayId: string, authority: AgentStoreHandoffAuthority): Promise<MigrationClient>;
 }
@@ -45,14 +45,14 @@ function requireState(condition: unknown, message: string): asserts condition {
 }
 function identity(value: unknown): value is string { return typeof value === "string" && /^[A-Za-z0-9_-]{1,200}$/.test(value); }
 function safeInteger(value: unknown): value is number { return Number.isSafeInteger(value); }
-function returnLeaseMatches(builder: BuilderRecord, scope: RecoveryScope, operationId: string): builder is BuilderRecord & { activationLease: BuilderActivationLease } {
-  const lease = builder.activationLease;
+function returnLeaseMatches(user: PlatformUserRecord, scope: RecoveryScope, operationId: string): user is PlatformUserRecord & { activationLease: UserActivationLease } {
+  const lease = user.activationLease;
   if (lease === null || !Number.isSafeInteger(lease.generation) || lease.generation < 1) return false;
-  return [builder.gateway?.gatewayId === scope.sourceId, builder.slug === scope.slug,
+  return [user.gateway?.gatewayId === scope.sourceId, user.slug === scope.slug,
     lease.status === "returning", lease.targetGatewayId === scope.sourceId, lease.returnOperationId === operationId,
     identity(lease.leaseId), operationId === builderReturnOperationId(scope.sourceId, lease.generation)].every(Boolean);
 }
-function ownedSourceMatches(source: GatewayRoot | null, scope: RecoveryScope, lease: BuilderActivationLease): boolean {
+function ownedSourceMatches(source: GatewayRoot | null, scope: RecoveryScope, lease: UserActivationLease): boolean {
   if (source === null) return false;
   const allocation = source.allocation;
   return [source.gatewayId === scope.sourceId, source.gatewayClass === "builder",
@@ -62,12 +62,12 @@ function ownedSourceMatches(source: GatewayRoot | null, scope: RecoveryScope, le
     allocation?.kind === "disposable-builder", allocation?.claimedByUid === scope.uid,
     allocation?.leaseId === lease.leaseId, allocation?.generation === lease.generation].every(Boolean);
 }
-function sourceLeaseMatches(builder: Stored<BuilderRecord> | null, source: GatewayRoot | null, scope: RecoveryScope, operationId: string): boolean {
-  if (builder === null || !returnLeaseMatches(builder, scope, operationId)) return false;
-  const migration = builder.fences.migration;
-  return ownedSourceMatches(source, scope, builder.activationLease) &&
-    !builderRuntimeMutationFenced(builder) &&
-    (!builder.accountLifecycle?.status || builder.accountLifecycle.status === "active") &&
+function sourceLeaseMatches(user: Stored<PlatformUserRecord> | null, source: GatewayRoot | null, scope: RecoveryScope, operationId: string): boolean {
+  if (user === null || !returnLeaseMatches(user, scope, operationId)) return false;
+  const migration = user.fences.migration;
+  return ownedSourceMatches(source, scope, user.activationLease) &&
+    !isolatedRuntimeMutationFenced(user) &&
+    (!user.accountLifecycle?.status || user.accountLifecycle.status === "active") &&
     (migration === undefined || migration.operationId === operationId);
 }
 function retirementRootMatches(root: GatewayRoot | null, gatewayId: string, version: number): boolean {
@@ -178,18 +178,18 @@ async function readAuthority(tx: PlatformStateTransaction, uid: string, operatio
   const scope: RecoveryScope = { uid, sourceId: input.fromGatewayId, targetId: input.toGatewayId, slug: input.builderSlug };
   const { sourceId, targetId } = scope;
   const retirementId = `shared-pool-retire-${targetId}`;
-  const [builder, source, runtime, assignment, targetAssignment, targetRoot, retirement, active] = await Promise.all([
-    tx.builders.records.get(uid), tx.gateways.roots.get(sourceId), tx.fleetRegistry.get(sourceId), tx.gateways.assignments.get(sourceId, uid),
+  const [user, source, runtime, assignment, targetAssignment, targetRoot, retirement, active] = await Promise.all([
+    tx.users.records.get(uid), tx.gateways.roots.get(sourceId), tx.fleetRegistry.get(sourceId), tx.gateways.assignments.get(sourceId, uid),
     tx.gateways.assignments.get(targetId, uid), tx.gateways.roots.get(targetId),
     tx.journal.operations.get(retirementId), tx.journal.operations.listByStatus(["pending", "running"]),
   ]);
-  requireState(sourceLeaseMatches(builder, source, scope, operationId), "native return recovery source lease changed");
+  requireState(sourceLeaseMatches(user, source, scope, operationId), "native return recovery source lease changed");
   const sourceVm = sourceVmIdentity(runtime, sourceId, operationId);
   requireState(assignmentMatches(assignment, scope, operationId) && targetAssignment === null && sourceVm !== null && handoffMatches(operation, scope),
     "native return recovery assignment or scheduler custody changed");
   requireState(!active.some(candidate => candidate.id !== operationId && competingOperation(candidate, uid, sourceId, targetId)), "native return recovery has competing work");
   requireState(retirementMatches(targetRoot, retirement, targetId, failedAt), "native return target retirement is incomplete");
-  const lease = builder!.activationLease!, handoff = operation.schedulerHandoff!, retired = retirement!;
+  const lease = user!.activationLease!, handoff = operation.schedulerHandoff!, retired = retirement!;
   const intent: NativeReturnRecoveryIntent = { leaseId: lease.leaseId, generation: lease.generation, sourceEpoch: assignment.epoch, failedAt,
     schedulerMigrationId: handoff.migrationId,
     sourceVm,
@@ -245,8 +245,8 @@ export function createNativeReturnSourceRecoveryOwner(deps: RecoveryDeps) {
       };
       const nativeInput = { fromGatewayId: captured.sourceId, toGatewayId: captured.targetId, uid, slug: captured.slug, operationId: op.id, claimedStartedAt: claim };
       await step("recover-native-source-hold", () => deps.releaseSourceHold(nativeInput));
-      await step("recover-native-source-ownership", () => deps.prepareSourceStores(captured.sourceId, captured.slug, { expectedBuilderUid: uid, assertCurrent: assertSourceCurrent }));
-      const client = await deps.sourceClient(captured.sourceId, { expectedBuilderUid: uid, assertCurrent: assertSourceCurrent });
+      await step("recover-native-source-ownership", () => deps.prepareSourceStores(captured.sourceId, captured.slug, { expectedUserUid: uid, assertCurrent: assertSourceCurrent }));
+      const client = await deps.sourceClient(captured.sourceId, { expectedUserUid: uid, assertCurrent: assertSourceCurrent });
       await step("recover-native-source-scheduler", () => client.scheduler({ gatewayId: captured.sourceId, migrationId: captured.intent.schedulerMigrationId, slug: captured.slug, phase: "resume" }));
       await step("recover-native-source-ingress", () => client.resume({ gatewayId: captured.sourceId, migrationId: `mig-${op.id}`, slug: captured.slug }));
       await assertRetired();
@@ -258,7 +258,7 @@ export function createNativeReturnSourceRecoveryOwner(deps: RecoveryDeps) {
           sourceGatewayId: captured.sourceId, targetGatewayId: captured.targetId, claimStartedAt: claim };
         const priorReceipts = Array.isArray(current.operation.nativeReturnSourceRecoveryReceipts) ? current.operation.nativeReturnSourceRecoveryReceipts : [];
         await tx.gateways.assignments.patch(current.sourceId, uid, { state: "serving", updatedByOperationId: op.id, updatedAt: at }, { epoch: current.assignment.epoch });
-        await tx.builders.records.setFence(uid, "migration", { clear: true });
+        await tx.users.records.setFence(uid, "migration", { clear: true });
         await tx.journal.operations.patch(op.id, { schedulerHandoffReleased: true, schedulerHandoffReleasedAt: at,
           input: { ...current.operation.input, nativeReturnSourceRecovery: { ...current.prior, completedAt: at } },
           nativeReturnSourceRecoveryReceipts: [...priorReceipts, receipt].slice(-20) },

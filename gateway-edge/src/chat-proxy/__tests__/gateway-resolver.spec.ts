@@ -345,7 +345,7 @@ describe('resolveGatewayAssignment — tenant serving boundary', () => {
     await expect(resolveGatewayAssignment({ store, uid: 'u1' })).resolves.toEqual({ gatewayId: 'gw-a' });
   });
 
-  it('refuses a Builder whose gateway has no durable root', async () => {
+  it('refuses a user whose gateway has no durable root', async () => {
     const store = mkStore({ 'users/u1': user });
 
     await expect(resolveGatewayAssignment({ store, uid: 'u1' })).rejects.toMatchObject({

@@ -8,7 +8,7 @@ process.env.OPENCLAW_DIR = openclawDir;
 
 const gitMocks = vi.hoisted(() => ({
   cloneProjectRepo: vi.fn(async () => true),
-  customerRepositoryHasCanonicalRemote: vi.fn(() => false),
+  userRepositoryHasCanonicalRemote: vi.fn(() => false),
   projectCheckoutMatchesSource: vi.fn(() => false),
 }));
 
@@ -17,12 +17,12 @@ vi.mock("../lib/git.js", async (importOriginal) => {
   return {
     ...actual,
     cloneProjectRepo: gitMocks.cloneProjectRepo,
-    customerRepositoryHasCanonicalRemote: gitMocks.customerRepositoryHasCanonicalRemote,
+    userRepositoryHasCanonicalRemote: gitMocks.userRepositoryHasCanonicalRemote,
     projectCheckoutMatchesSource: gitMocks.projectCheckoutMatchesSource,
   };
 });
 
-const { buildBrokeredLifecycleAdapter } = await import("../lib/customer-lifecycle-broker-adapter.js");
+const { buildBrokeredLifecycleAdapter } = await import("../lib/user-lifecycle-broker-adapter.js");
 const { CUSTOMERS_DIR } = await import("../lib/config.js");
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import type { FleetBrokerProjectRestore, FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
@@ -50,7 +50,7 @@ function snapshot(projects: FleetBrokerProjectRestore[]): FleetBrokerUserSnapsho
     photoURL: "",
     onboardingVibe: null,
     coachToken: null,
-    coachMmUserId: null,
+    defaultAgentMmUserId: null,
   };
 }
 
@@ -67,7 +67,7 @@ function mkAdapter(projects: FleetBrokerProjectRestore[], log = vi.fn()) {
 
 beforeEach(() => {
   gitMocks.cloneProjectRepo.mockClear();
-  gitMocks.customerRepositoryHasCanonicalRemote.mockReset().mockReturnValue(false);
+  gitMocks.userRepositoryHasCanonicalRemote.mockReset().mockReturnValue(false);
   gitMocks.projectCheckoutMatchesSource.mockReset().mockReturnValue(false);
   fs.rmSync(path.join(CUSTOMERS_DIR), { recursive: true, force: true });
 });
@@ -177,7 +177,7 @@ describe("brokered adapter — GitHub-backed project checkout source", () => {
   it("skips a project whose checkout is already on disk", async () => {
     fs.mkdirSync(path.join(CUSTOMERS_DIR, "alice", "projects", "gh", ".git"), { recursive: true });
     gitMocks.projectCheckoutMatchesSource.mockReturnValue(true);
-    gitMocks.customerRepositoryHasCanonicalRemote.mockReturnValue(true);
+    gitMocks.userRepositoryHasCanonicalRemote.mockReturnValue(true);
     const { adapter } = mkAdapter([
       {
         projectSlug: "gh",

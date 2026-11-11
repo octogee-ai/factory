@@ -37,8 +37,8 @@ describe("uidFromAuthHeader — routing-only, unverified decode", () => {
   });
 });
 
-describe("resolveServiceRoute — per-customer admission (migration quiesce gate)", () => {
-  it("503s EVERYTHING customer-state until the roster is loaded — never serve-local on boot", () => {
+describe("resolveServiceRoute — per-user admission (migration quiesce gate)", () => {
+  it("503s EVERYTHING user-state until the roster is loaded — never serve-local on boot", () => {
     expect(resolveServiceRoute({ rosterLoaded: false, entry: null })).toEqual({
       action: "unavailable",
       reason: "roster-loading",
@@ -49,13 +49,13 @@ describe("resolveServiceRoute — per-customer admission (migration quiesce gate
     expect(resolveServiceRoute({ rosterLoaded: true, entry: null })).toEqual({ action: "serve" });
   });
 
-  it("serves a customer whose assignment is serving", () => {
+  it("serves a user whose assignment is serving", () => {
     const entry: RosterEntry = { uid: "uid-1", state: "serving", epoch: 4 };
     expect(resolveServiceRoute({ rosterLoaded: true, entry })).toEqual({ action: "serve" });
   });
 
   it.each(["quiescing", "migrating"] as const)(
-    "BLOCKS a %s customer until the atomic cutover stamps the target serving (no double-serve window)",
+    "BLOCKS a %s user until the atomic cutover stamps the target serving (no double-serve window)",
     (state) => {
       const entry: RosterEntry = { uid: "uid-1", state, epoch: 4 };
       expect(resolveServiceRoute({ rosterLoaded: true, entry })).toEqual({
@@ -219,14 +219,14 @@ describe("createRollRosterGate — end to end", () => {
     expect(result.body).toEqual({ error: "gateway_revision_unavailable", reason: "roster-loading" });
   });
 
-  it("serves a serving customer, a gap user, and a request without a resolvable uid", () => {
+  it("serves a serving user, a gap user, and a request without a resolvable uid", () => {
     const gate = harness({ "uid-1": { uid: "uid-1", state: "serving", epoch: 3 } });
     expect(gate.handle({ authorization: bearerFor("uid-1") }).nexted).toBe(true);
     expect(gate.handle({ authorization: bearerFor("uid-unknown") }).nexted).toBe(true);
     expect(gate.handle().nexted).toBe(true);
   });
 
-  it("503s a quiescing customer (blocked BEFORE the migration target serves) with the typed workspace-moving code", () => {
+  it("503s a quiescing user (blocked BEFORE the migration target serves) with the typed workspace-moving code", () => {
     const result = harness({ "uid-1": { uid: "uid-1", state: "quiescing", epoch: 3 } })
       .handle({ authorization: bearerFor("uid-1") });
     expect(result.status).toBe(503);
@@ -241,7 +241,7 @@ describe("createRollRosterGate — end to end", () => {
     });
   });
 
-  it("refuses only the migrating customer; a serving neighbour on the same gateway is served", () => {
+  it("refuses only the migrating user; a serving neighbour on the same gateway is served", () => {
     const gate = harness({
       "uid-1": { uid: "uid-1", state: "quiescing", epoch: 3 },
       "uid-2": { uid: "uid-2", state: "serving", epoch: 9 },
@@ -296,12 +296,12 @@ describe("createRollRosterUpgradeGate — verdicts", () => {
     });
   });
 
-  it("refuses a quiescing customer (blocked before the migration target serves)", () => {
+  it("refuses a quiescing user (blocked before the migration target serves)", () => {
     expect(gateFor({ "uid-1": { uid: "uid-1", state: "quiescing", epoch: 1 } }).checkUid("uid-1"))
       .toEqual({ allow: false, reason: "customer-quiescing" });
   });
 
-  it("allows a serving customer, a gap user, and everything on a legacy pod", () => {
+  it("allows a serving user, a gap user, and everything on a legacy pod", () => {
     expect(gateFor({ "uid-1": { uid: "uid-1", state: "serving", epoch: 1 } }).checkUid("uid-1"))
       .toEqual({ allow: true });
     expect(gateFor({}).checkUid(null)).toEqual({ allow: true });
@@ -377,7 +377,7 @@ describe("upgrade-gate helpers", () => {
     });
   });
 
-  it("wrapRedeemWithRosterGate throws on a refused customer and passes through with a null gate", async () => {
+  it("wrapRedeemWithRosterGate throws on a refused user and passes through with a null gate", async () => {
     const gate = createRollRosterUpgradeGate({
       store: {
         loaded: () => true,

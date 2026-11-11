@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import {
-  customerAttachPending,
-  customerMountPending,
+  userAttachPending,
+  userMountPending,
   reconcileFleet,
   startReconcileLoop,
   _resetReconcileInFlightForTests,
@@ -51,7 +51,7 @@ function mkDeps(over: Partial<ReconcileLoopDeps> = {}): Spy {
   };
 }
 
-/** Both observed views agree — the common case where coach-wired == fully-mounted. */
+/** Both observed views agree — the common case where default-agent-wired == fully-mounted. */
 function observed(slugs: string[]): Partial<ReconcileLoopDeps> {
   return { getMountObserved: () => slugs, getEvictObserved: () => slugs };
 }
@@ -93,7 +93,7 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
     expect(d.evicted).toEqual(["d"]);
   });
 
-  it("retries deferred project hydration after cutover without evicting the builder", async () => {
+  it("retries deferred project hydration after cutover without evicting the user", async () => {
     let hydrateAttempt = 0;
     const d = mkDeps({
       ...observed(["august"]),
@@ -250,7 +250,7 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
     expect(ensured).toEqual(["b"]);
   });
 
-  it("mounts other customers after a setup failure and retries the failed customer next tick", async () => {
+  it("mounts other users after a setup failure and retries the failed user next tick", async () => {
     let failed = false;
     const mounted = new Set<string>();
     const d = mkDeps({
@@ -593,11 +593,11 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
 
 describe("reconcileFleet — split observed (mount keys off completion, evict off presence)", () => {
   it("re-ensures a wired-but-unmarked desired slug instead of treating it as done", async () => {
-    // The post-config wedge: coach is wired on disk (evict-observed) but the mount never
+    // The post-config wedge: agent is wired on disk (evict-observed) but the mount never
     // completed (no .mounted marker → absent from mount-observed). Still desired, so it
     // belongs in toMount, NOT silently skipped — and must NOT be evicted.
     const d = mkDeps({
-      getEvictObserved: () => ["wedged"], // coach-wired on disk
+      getEvictObserved: () => ["wedged"], // default-agent-wired on disk
       getMountObserved: () => [], // but not fully mounted (no marker)
       readDesired: async () => ["wedged"],
     });
@@ -606,7 +606,7 @@ describe("reconcileFleet — split observed (mount keys off completion, evict of
     expect(d.evicted).toEqual([]);
   });
 
-  it("still evicts an unassigned on-disk customer", async () => {
+  it("still evicts an unassigned on-disk user", async () => {
     const d = mkDeps({
       ...observed(["ghost"]),
       readDesired: async () => [],
@@ -616,7 +616,7 @@ describe("reconcileFleet — split observed (mount keys off completion, evict of
     expect(d.ensured).toEqual([]);
   });
 
-  it("never evicts a converging customer (desired, not yet on disk at all)", async () => {
+  it("never evicts a converging user (desired, not yet on disk at all)", async () => {
     const d = mkDeps({
       getEvictObserved: () => [],
       getMountObserved: () => [],
@@ -666,7 +666,7 @@ describe("reconcileFleet — ensure outcome surfaced (best-effort lastError mirr
 
 describe("reconcileFleet — content convergence (mounted-but-stale re-ensured)", () => {
   it("re-ensures a mounted slug whose config content drifted, without a remount", async () => {
-    // The Vegas repro: a project-agent toggle changes the customer's snapshot while
+    // The multi-agent repro: a project-agent toggle changes the user's snapshot while
     // it's already fully mounted. Membership is unchanged (still desired, still
     // mount-observed), so the set-difference alone would skip it — content staleness
     // must pull it back into toMount so the new project agent binding lands.
@@ -826,7 +826,7 @@ describe("startReconcileLoop", () => {
   });
 });
 
-describe("customerMountPending", () => {
+describe("userMountPending", () => {
   it("holds for a slug queued behind the mount pool and while its ensure runs", async () => {
     const first = deferred<"mounted">();
     const d = mkDeps({
@@ -838,13 +838,13 @@ describe("customerMountPending", () => {
     const tick = reconcileFleet(d);
     await flushMicrotasks();
 
-    expect(customerMountPending("alice")).toBe(true);
-    expect(customerMountPending("bob")).toBe(true);
-    expect(customerMountPending("carol")).toBe(false);
+    expect(userMountPending("alice")).toBe(true);
+    expect(userMountPending("bob")).toBe(true);
+    expect(userMountPending("carol")).toBe(false);
     first.resolve("mounted");
     await tick;
-    expect(customerMountPending("alice")).toBe(false);
-    expect(customerMountPending("bob")).toBe(false);
+    expect(userMountPending("alice")).toBe(false);
+    expect(userMountPending("bob")).toBe(false);
   });
 
   it("clears when the ensure fails, so a failed attach is not reported in progress", async () => {
@@ -855,7 +855,7 @@ describe("customerMountPending", () => {
 
     await reconcileFleet(d);
 
-    expect(customerMountPending("alice")).toBe(false);
+    expect(userMountPending("alice")).toBe(false);
   });
 
   it("does not report an eviction as a pending mount", async () => {
@@ -869,23 +869,23 @@ describe("customerMountPending", () => {
     await reconcileFleet(d);
     await flushMicrotasks();
 
-    expect(customerMountPending("alice")).toBe(false);
+    expect(userMountPending("alice")).toBe(false);
     drain.resolve("drained");
   });
 });
 
-describe("customerAttachPending", () => {
+describe("userAttachPending", () => {
   const assigned = (value: boolean) => vi.fn(async () => value);
 
   it("covers an assignment no reconcile tick has picked up yet", async () => {
     const isAssigned = assigned(true);
 
-    expect(await customerAttachPending("alice", isAssigned)).toBe(true);
+    expect(await userAttachPending("alice", isAssigned)).toBe(true);
     expect(isAssigned).toHaveBeenCalledOnce();
   });
 
   it("does not report an unassigned slug awaiting its first ensure", async () => {
-    expect(await customerAttachPending("alice", assigned(false))).toBe(false);
+    expect(await userAttachPending("alice", assigned(false))).toBe(false);
   });
 
   it("stops once a tick attempted the assignment and the ensure failed", async () => {
@@ -894,7 +894,7 @@ describe("customerAttachPending", () => {
       ensureSlug: async () => { throw new Error("config.patch refused"); },
     }));
 
-    expect(await customerAttachPending("alice", assigned(true))).toBe(false);
+    expect(await userAttachPending("alice", assigned(true))).toBe(false);
   });
 
   it("holds while the picked-up ensure runs without reading the assignment", async () => {
@@ -906,7 +906,7 @@ describe("customerAttachPending", () => {
     await flushMicrotasks();
     const isAssigned = assigned(true);
 
-    expect(await customerAttachPending("alice", isAssigned)).toBe(true);
+    expect(await userAttachPending("alice", isAssigned)).toBe(true);
     expect(isAssigned).not.toHaveBeenCalled();
     ensure.resolve("mounted");
     await tick;
@@ -914,7 +914,7 @@ describe("customerAttachPending", () => {
 
   it("stops when a tick attempts the assignment while the assignment read is in flight", async () => {
     const read = deferred<boolean>();
-    const pending = customerAttachPending("alice", () => read.promise);
+    const pending = userAttachPending("alice", () => read.promise);
     await reconcileFleet(mkDeps({
       readDesired: async () => ["alice"],
       ensureSlug: async () => { throw new Error("config.patch refused"); },
@@ -954,7 +954,7 @@ describe("reconcileFleet — mount lanes (create precedes move)", () => {
     expect(d.logs.some((m) => m.includes("new-1:create") && m.includes("mover-a:move"))).toBe(true);
   });
 
-  it("a new builder assigned while movers are queued from an earlier tick mounts next", async () => {
+  it("a new user assigned while movers are queued from an earlier tick mounts next", async () => {
     const gates = new Map(["a", "b", "c", "oct08"].map((s) => [s, deferred()]));
     let desired = ["a", "b", "c"];
     const d = mkDeps({

@@ -16,16 +16,16 @@ describe("OpenClaw Dashboard session", () => {
     const issued = manager.issue({
       sessionId: "7f9b8a1e-429d-4c43-9e1a-9f3bd49d9a70",
       uid: "uid-owner",
-      gatewayId: "bender",
+      gatewayId: "walter",
       workspaceSlug: "alice",
-      revisionId: "bender-r7",
+      revisionId: "walter-r7",
 
 
 
       absoluteExpiresAt: 5_000,
     });
     expect(issued.cookie).toContain(`${OPENCLAW_CONTROL_SESSION_COOKIE}=`);
-    expect(issued.cookie).toContain("Path=/g/bender/openclaw;");
+    expect(issued.cookie).toContain("Path=/g/walter/openclaw;");
     expect(issued.cookie).toContain("HttpOnly");
     expect(issued.cookie).toContain("Secure");
     expect(issued.cookie).toContain("SameSite=None");
@@ -33,7 +33,7 @@ describe("OpenClaw Dashboard session", () => {
     expect(issued.cookie).not.toContain("SameSite=Lax");
 
     const cookieHeader = issued.cookie.split(";", 1)[0];
-    expect(manager.verify({ cookieHeader, gatewayId: "bender", revisionId: "bender-r7" }))
+    expect(manager.verify({ cookieHeader, gatewayId: "walter", revisionId: "walter-r7" }))
       .toMatchObject({
         uid: "uid-owner",
         workspaceSlug: "alice",
@@ -43,27 +43,27 @@ describe("OpenClaw Dashboard session", () => {
         idleExpiresAt: 2_000,
         absoluteExpiresAt: 5_000,
       });
-    expect(manager.verify({ cookieHeader, gatewayId: "other", revisionId: "bender-r7" })).toBeNull();
-    expect(manager.verify({ cookieHeader, gatewayId: "bender", revisionId: "bender-r8" })).toBeNull();
+    expect(manager.verify({ cookieHeader, gatewayId: "other", revisionId: "walter-r7" })).toBeNull();
+    expect(manager.verify({ cookieHeader, gatewayId: "walter", revisionId: "walter-r8" })).toBeNull();
 
     now = 1_500;
-    const touched = manager.touch({ cookieHeader, gatewayId: "bender", revisionId: "bender-r7" });
+    const touched = manager.touch({ cookieHeader, gatewayId: "walter", revisionId: "walter-r7" });
     expect(touched?.session).toMatchObject({ idleExpiresAt: 2_500, absoluteExpiresAt: 5_000 });
     now = 2_000;
-    expect(manager.verify({ cookieHeader, gatewayId: "bender", revisionId: "bender-r7" }))
+    expect(manager.verify({ cookieHeader, gatewayId: "walter", revisionId: "walter-r7" }))
       .not.toBeNull();
     expect(manager.verify({
       cookieHeader: touched?.cookie.split(";", 1)[0],
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
     })).not.toBeNull();
     now = 2_500;
-    expect(manager.verify({ cookieHeader, gatewayId: "bender", revisionId: "bender-r7" })).toBeNull();
+    expect(manager.verify({ cookieHeader, gatewayId: "walter", revisionId: "walter-r7" })).toBeNull();
     now = 5_000;
     expect(manager.verify({
       cookieHeader: touched?.cookie.split(";", 1)[0],
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
     })).toBeNull();
   });
 
@@ -75,9 +75,9 @@ describe("OpenClaw Dashboard session", () => {
     const issued = manager.issue({
       sessionId: "7f9b8a1e-429d-4c43-9e1a-9f3bd49d9a70",
       uid: "uid-owner",
-      gatewayId: "bender",
+      gatewayId: "walter",
       workspaceSlug: "alice",
-      revisionId: "bender-r7",
+      revisionId: "walter-r7",
 
 
 
@@ -86,14 +86,14 @@ describe("OpenClaw Dashboard session", () => {
     const cookieHeader = issued.cookie.split(";", 1)[0];
     expect(manager.verify({
       cookieHeader: `${cookieHeader}x`,
-      gatewayId: "bender",
-      revisionId: "bender-r7",
+      gatewayId: "walter",
+      revisionId: "walter-r7",
     })).toBeNull();
     const nextBoot = new OpenClawControlSessionManager({
       key: Buffer.alloc(32, 2),
       now: () => 1_000,
     });
-    expect(nextBoot.verify({ cookieHeader, gatewayId: "bender", revisionId: "bender-r7" }))
+    expect(nextBoot.verify({ cookieHeader, gatewayId: "walter", revisionId: "walter-r7" }))
       .toBeNull();
   });
 });

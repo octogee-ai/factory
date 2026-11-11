@@ -60,7 +60,7 @@ describe("OpenClaw runtime update coordination", () => {
     expect(imported).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("holds a customer's publication custody after work settles until its fingerprint tail ends (failed: %s)", async (failed) => {
+  it.each([false, true])("holds a user's publication custody after work settles until its fingerprint tail ends (failed: %s)", async (failed) => {
     const guard = new OpenClawRuntimeUpdateGuard();
     const tail = deferred();
     const work = guard.run(async () => {
@@ -82,7 +82,7 @@ describe("OpenClaw runtime update coordination", () => {
     await expect(releasing).resolves.toBe("released");
   });
 
-  it("runs other customers and publication-free updates while one customer's fingerprint tail settles", async () => {
+  it("runs other users and publication-free updates while one user's fingerprint tail settles", async () => {
     const guard = new OpenClawRuntimeUpdateGuard();
     const tail = deferred();
     await guard.run(async () => undefined, { slug: "alice", holdUntil: tail.promise });
@@ -113,7 +113,7 @@ describe("OpenClaw runtime update coordination", () => {
     expect(exported).toHaveBeenCalledOnce();
   });
 
-  it("waits for the publication of every customer an update evicts", async () => {
+  it("waits for the publication of every user an update evicts", async () => {
     const guard = new OpenClawRuntimeUpdateGuard();
     const bobTail = deferred();
     await guard.run(async () => undefined, { slug: "bob", holdUntil: bobTail.promise });

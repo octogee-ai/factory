@@ -38,7 +38,7 @@ describe("createGatewayModelKeySourceIssuer", () => {
     expect(deps.deleteSourceSecret).not.toHaveBeenCalled();
   });
 
-  it("fails closed when a builder is missing a source and no issuer backend is configured", async () => {
+  it("fails closed when a user is missing a source and no issuer backend is configured", async () => {
     const deps = makeDeps();
     const issuer = createGatewayModelKeySourceIssuer(deps);
 
@@ -134,11 +134,11 @@ describe("createGatewayModelKeySourceIssuer", () => {
     expect(deps.writeSourceSecret).not.toHaveBeenCalled();
   });
 
-  it("issues a broker token source for Builder gateways", async () => {
+  it("issues a broker token source for isolated gateways", async () => {
     const deps = makeDeps({
       backend: {
         issueGatewayModelKey: vi.fn(async () => ({
-          value: "ogk_bender_token",
+          value: "ogk_walter_token",
           provider: "anthropic",
           capped: true,
         })),
@@ -147,17 +147,17 @@ describe("createGatewayModelKeySourceIssuer", () => {
     const issuer = createGatewayModelKeySourceIssuer(deps);
 
     const result = await issuer.syncGatewayModelKeySource({
-      gatewayId: "bender",
+      gatewayId: "walter",
       gatewayClass: "builder",
       desiredStatus: "running",
-      ownerUid: "uid-bender",
+      ownerUid: "uid-walter",
     });
 
     expect(result).toMatchObject({ action: "issued", changed: true });
     expect(deps.writeSourceSecret).toHaveBeenCalledWith({
-      name: "gateway-model-key-bender",
-      value: "ogk_bender_token",
-      labels: gatewayModelKeySourceLabels("bender"),
+      name: "gateway-model-key-walter",
+      value: "ogk_walter_token",
+      labels: gatewayModelKeySourceLabels("walter"),
     });
     expect(deps.deleteSourceSecret).not.toHaveBeenCalled();
   });

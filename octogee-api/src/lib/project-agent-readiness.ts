@@ -58,8 +58,8 @@ export async function completeProjectAgentActivations(
   input: { uid: string; gatewayId: string; slug: string; projects: FleetBrokerProjectAgentReadiness[] },
 ): Promise<boolean> {
   return store.transaction({ label: "project-agent-readiness" }, async (tx) => {
-    const builder = await tx.builders.records.get(input.uid);
-    if (builder?.gateway?.gatewayId !== input.gatewayId) return false;
+    const user = await tx.users.records.get(input.uid);
+    if (user?.gateway?.gatewayId !== input.gatewayId) return false;
     const records = await Promise.all(input.projects.map(async (report): Promise<ActivationRecord> => {
       const [project, secret, channels] = await Promise.all([
         tx.workspaces.projects.get(input.slug, report.projectId),

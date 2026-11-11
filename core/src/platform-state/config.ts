@@ -15,7 +15,7 @@ import type { OpaqueMap, RecordPatch, Revision, Stored, TimeInput } from "./stor
 
 export type GatewayIsolation = "shared" | "isolated";
 
-export interface GatewayComputerProfile {
+export interface GatewayVmProfile {
   readonly runtime: Extract<GatewayRuntime, "gce-vm">;
   readonly desktop: GatewayVmDesktop;
   readonly machineType: string | null;
@@ -29,7 +29,7 @@ export type GatewaySizingProfile =
   | {
       readonly isolation: "isolated";
       readonly sizingTier: SizingTier;
-      readonly computer: GatewayComputerProfile;
+      readonly computer: GatewayVmProfile;
       readonly fallbackStorageGb: number | null;
     };
 

@@ -12,7 +12,7 @@
       "pattern": "^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$",
       "minLength": 1,
       "maxLength": 32,
-      "description": "Bare logical gateway identity (e.g. `shared-a`, `bender`). Tenant-scoped: names the K8s auth-token/model-key secrets, the gateway KSA, and the GATEWAY_ID pod env. Also the /g/<id>/* public path segment."
+      "description": "Bare logical gateway identity (e.g. `shared-a`, `walter`). Tenant-scoped: names the K8s auth-token/model-key secrets, the gateway KSA, and the GATEWAY_ID pod env. Also the /g/<id>/* public path segment."
     },
     "revisionId": {
       "type": "string",
@@ -32,7 +32,7 @@
     "gatewayClass": {
       "type": "string",
       "enum": ["", "shared", "builder"],
-      "description": "Product/security class. shared=multi-builder Barn; builder=owner-bound disposable Builder gateway."
+      "description": "Product/security class. shared=multi-user shared gateway; builder=owner-bound disposable isolated gateway."
     },
     "imageProfile": {
       "type": "string",
@@ -43,7 +43,7 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 1,
-      "description": "Replica count for one stable gateway member. 0 = paused; 1 = running or draining. Cowboy scales the Shared Barn by whole independently rollable members, never HPA replicas behind one Service."
+      "description": "Replica count for one stable gateway member. 0 = paused; 1 = running or draining. The fleet controller scales the Shared gateway by whole independently rollable members, never HPA replicas behind one Service."
     },
     "nodeSelector": {
       "type": "object",

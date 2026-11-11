@@ -579,7 +579,7 @@ function fullAgentListFromCurrent(current: unknown): unknown[] {
 
 function keyedEntryFromAgent(agent: unknown): [string, Record<string, unknown>] {
   if (!isPlainObject(agent) || typeof agent.id !== "string" || agent.id.length === 0) {
-    throw new Error("customer agent patch requires every agent to have a non-empty id");
+    throw new Error("user agent patch requires every agent to have a non-empty id");
   }
   const { id, memorySearch, ...entry } = agent;
   if (isPlainObject(memorySearch)) {
@@ -589,16 +589,16 @@ function keyedEntryFromAgent(agent: unknown): [string, Record<string, unknown>] 
   return [id, entry];
 }
 
-function isCustomerAgentId(value: unknown, slug: string): boolean {
+function isUserAgentId(value: unknown, slug: string): boolean {
   if (typeof value !== "string") return false;
   const parsed = parseAgentId(value);
   return parsed.kind !== "unknown" && parsed.username === slug;
 }
 
-// Vegas: a customer owns a SET of agents (coach + project agents). Rebuilding
-// the customer's slice of the agent list must drop stale project agents too —
+// Multi-agent: a user owns a SET of agents (agent + project agents). Rebuilding
+// the user's slice of the agent list must drop stale project agents too —
 // a per-id upsert would leave a retired project agent behind forever.
-export function replaceCustomerAgentsInFullAgentList(
+export function replaceUserAgentsInFullAgentList(
   current: unknown,
   slug: string,
   agentEntries: readonly unknown[],
@@ -607,8 +607,8 @@ export function replaceCustomerAgentsInFullAgentList(
   const next: unknown[] = [];
   let inserted = false;
   for (const agent of currentAgents) {
-    const customerOwned = isPlainObject(agent) && isCustomerAgentId(agent.id, slug);
-    if (customerOwned) {
+    const userOwned = isPlainObject(agent) && isUserAgentId(agent.id, slug);
+    if (userOwned) {
       if (!inserted) {
         next.push(...agentEntries);
         inserted = true;
@@ -623,25 +623,25 @@ export function replaceCustomerAgentsInFullAgentList(
 
 // Under explicit ownership OpenClaw's gateway default is the first roster entry;
 // its model decides the Control UI hello's `modelConfigured`.
-export function orderBuilderGatewayRoster<T>(
+export function orderIsolatedGatewayRoster<T>(
   agents: readonly T[],
-  coachAgentId: string,
+  userDefaultAgentId: string,
   anchorAgentId: string,
 ): T[] {
   const idOf = (agent: T): unknown => (isPlainObject(agent) ? agent.id : undefined);
-  const coach = agents.filter((agent) => idOf(agent) === coachAgentId);
+  const defaultAgent = agents.filter((agent) => idOf(agent) === userDefaultAgentId);
   const anchor = agents.filter((agent) => idOf(agent) === anchorAgentId);
   const rest = agents.filter((agent) => {
     const id = idOf(agent);
-    return id !== coachAgentId && id !== anchorAgentId;
+    return id !== userDefaultAgentId && id !== anchorAgentId;
   });
-  return [...coach, ...rest, ...anchor];
+  return [...defaultAgent, ...rest, ...anchor];
 }
 
 /**
  * After the first mount, model authority belongs to the byot-sync pipeline
  * (BYOK overrides, house pins, picker selections) — the attach path re-ships
- * each customer entry wholesale, so re-seeding a compiled default here would
+ * each user entry wholesale, so re-seeding a compiled default here would
  * revert that pipeline's write on every re-attach and the follow-up sync
  * would flip it back: two config writes and two agent restarts per converge
  * (observed live 2026-08-14 on shared-a). An agent whose current entry
@@ -670,13 +670,13 @@ export function preserveMountedAgentModels(
 }
 
 /**
- * The customer's slice of the agent roster, as a merge patch that only ever
+ * The user's slice of the agent roster, as a merge patch that only ever
  * ADDS or UPDATES. openclaw 2026.7.2 refuses any config write whose canonical
  * roster loses an entry unless the write carries `allowedAgentRosterRemovals`,
  * which only its own `agents.delete` supplies — so a retired project agent is
  * deleted by RPC before the patch, never nulled inside it.
  */
-export function customerAgentRosterPatch(
+export function userAgentRosterPatch(
   current: unknown,
   slug: string,
   agentEntries: readonly unknown[],
@@ -688,7 +688,7 @@ export function customerAgentRosterPatch(
   for (const agent of agentEntries) {
     const [id, entry] = keyedEntryFromAgent(agent);
     if (
-      isCustomerAgentId(id, slug) ||
+      isUserAgentId(id, slug) ||
       JSON.stringify(currentEntries[id]) !== JSON.stringify(entry)
     ) {
       entries[id] = entry;
@@ -697,7 +697,7 @@ export function customerAgentRosterPatch(
   return { entries };
 }
 
-function isCustomerMattermostAccountBinding(
+function isUserMattermostAccountBinding(
   binding: unknown,
   slug: string,
 ): boolean {
@@ -710,14 +710,14 @@ function isCustomerMattermostAccountBinding(
   );
 }
 
-export function filterOutCustomerBindings<T>(
+export function filterOutUserBindings<T>(
   bindings: readonly T[],
   slug: string,
 ): T[] {
   return bindings.filter((binding) => {
     const agentId = isPlainObject(binding) ? binding.agentId : undefined;
-    return !isCustomerAgentId(agentId, slug) &&
-      !isCustomerMattermostAccountBinding(binding, slug);
+    return !isUserAgentId(agentId, slug) &&
+      !isUserMattermostAccountBinding(binding, slug);
   });
 }
 
@@ -725,16 +725,16 @@ export function filterOutCustomerBindings<T>(
 // converge, which defeats config.patch's local no-op and buys a full reload
 // cycle for a content-identical write. Keep the current array — order and
 // identity — whenever the merged content is the same multiset.
-export function mergeCustomerBindings<T extends { agentId?: unknown }>(
+export function mergeUserBindings<T extends { agentId?: unknown }>(
   current: readonly T[],
   slugs: readonly string[],
-  nextCustomerBindings: readonly T[],
+  nextUserBindings: readonly T[],
 ): readonly T[] {
   let kept: readonly T[] = current;
   for (const slug of slugs) {
-    kept = filterOutCustomerBindings(kept, slug);
+    kept = filterOutUserBindings(kept, slug);
   }
-  const rebuilt = [...kept, ...nextCustomerBindings];
+  const rebuilt = [...kept, ...nextUserBindings];
   if (rebuilt.length !== current.length) return rebuilt;
   const counts = new Map<string, number>();
   for (const binding of current) {
@@ -751,7 +751,7 @@ export function mergeCustomerBindings<T extends { agentId?: unknown }>(
 }
 
 // config.patch merges: omitting a retired project-agent account keeps it
-// alive on a revoked token. Every account rebuild must null the customer's
+// alive on a revoked token. Every account rebuild must null the user's
 // `{slug}-proj-*` keys that are no longer active. The prefix is cross-tenant
 // safe because `proj` is a reserved username segment.
 export function staleProjectAgentAccountNulls(
@@ -788,7 +788,7 @@ function collectArrayPathsUnder(value: unknown, prefix: string): string[] {
   return paths;
 }
 
-function customerMattermostAccountArrayPaths(current: unknown, slug: string): string[] {
+function userMattermostAccountArrayPaths(current: unknown, slug: string): string[] {
   const accounts = (
     current as { channels?: { mattermost?: { accounts?: Record<string, unknown> } } } | undefined
   )?.channels?.mattermost?.accounts;
@@ -800,15 +800,15 @@ function customerMattermostAccountArrayPaths(current: unknown, slug: string): st
 }
 
 /**
- * The replacePaths set for customer config patches that rebuild non-id arrays:
+ * The replacePaths set for user config patches that rebuild non-id arrays:
  * `bindings` plus every array under the slug's MM accounts. Add/re-ensure patches
  * intentionally omit `agents.list` so a one-agent upsert stays an id-keyed merge
  * instead of becoming whole-list replacement.
  */
-export function customerConfigReplacePaths(current: unknown, slug: string): string[] {
+export function userConfigReplacePaths(current: unknown, slug: string): string[] {
   return [
     "bindings",
-    ...customerMattermostAccountArrayPaths(current, slug),
+    ...userMattermostAccountArrayPaths(current, slug),
   ];
 }
 
@@ -834,38 +834,38 @@ export function fullAgentListReplacePaths(): string[] {
 }
 
 /**
- * The replacePaths set for customer config patches that intentionally ship the full
+ * The replacePaths set for user config patches that intentionally ship the full
  * post-filter `agents.list` from the current config. Only use this when the patch's
  * `agents.list` is a complete replacement candidate, not a single-agent upsert.
  */
-export function customerConfigFullAgentListReplacePaths(current: unknown, slug: string): string[] {
+export function userConfigFullAgentListReplacePaths(current: unknown, slug: string): string[] {
   return [
     ...fullAgentListReplacePaths(),
-    ...customerConfigReplacePaths(current, slug),
+    ...userConfigReplacePaths(current, slug),
   ];
 }
 
 /**
- * Array paths under the customer's keyed agent entries.
+ * Array paths under the user's keyed agent entries.
  *
- * `customerAgentRosterPatch` rewrites each entry wholesale, so any array it
+ * `userAgentRosterPatch` rewrites each entry wholesale, so any array it
  * shrinks — `model.fallbacks` on the BYOK-override → house-pin transition,
  * `tools.alsoAllow` on a free-tier trim — trips the gateway's destructive-array
  * guard. The guard walks base-vs-merged and reports each shrunk array by exact
  * name (collectBaseArrayPaths), so each has to be confirmed or the whole patch
- * is refused. Same shape as customerMattermostAccountArrayPaths.
+ * is refused. Same shape as userMattermostAccountArrayPaths.
  */
-function customerKeyedAgentEntryArrayPaths(current: unknown, slug: string): string[] {
+function userKeyedAgentEntryArrayPaths(current: unknown, slug: string): string[] {
   const entries = keyedAgentEntries(current);
   if (!entries) return [];
   return Object.entries(entries).flatMap(([agentId, entry]) =>
-    isCustomerAgentId(agentId, slug)
+    isUserAgentId(agentId, slug)
       ? collectArrayPathsUnder(entry, `agents.entries.${agentId}`)
       : [],
   );
 }
 
-export function customerConfigAgentRosterReplacePaths(
+export function userConfigAgentRosterReplacePaths(
   current: unknown,
   slug: string,
   additionalAgentIds: readonly string[] = [],
@@ -881,9 +881,9 @@ export function customerConfigAgentRosterReplacePaths(
   });
   const paths = entries
     ? [
-        ...customerKeyedAgentEntryArrayPaths(current, slug),
-        ...customerConfigReplacePaths(current, slug),
+        ...userKeyedAgentEntryArrayPaths(current, slug),
+        ...userConfigReplacePaths(current, slug),
       ]
-    : customerConfigFullAgentListReplacePaths(current, slug);
+    : userConfigFullAgentListReplacePaths(current, slug);
   return [...new Set([...paths, ...additionalPaths])];
 }

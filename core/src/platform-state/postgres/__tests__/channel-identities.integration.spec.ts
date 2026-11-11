@@ -89,45 +89,45 @@ describe.skipIf(!dsn)("channel identities", { timeout: 30_000 }, () => {
   });
 
   describe("the managed installation behind the record fields", () => {
-    it("stores a builder's user ID as an identity and resolves it back", async () => {
-      const { builders, channelIdentities } = harness.store;
-      await builders.records.create({ uid: "alice", createdAt: NOW });
+    it("stores a user's user ID as an identity and resolves it back", async () => {
+      const { users, channelIdentities } = harness.store;
+      await users.records.create({ uid: "alice", createdAt: NOW });
 
-      await builders.records.patch("alice", { mattermostUserId: "mm-alice" });
+      await users.records.patch("alice", { mattermostUserId: "mm-alice" });
 
-      expect((await builders.records.get("alice"))?.mattermostUserId).toBe("mm-alice");
-      expect((await builders.records.findByMattermostUserId("mm-alice"))?.uid).toBe("alice");
+      expect((await users.records.get("alice"))?.mattermostUserId).toBe("mm-alice");
+      expect((await users.records.findByMattermostUserId("mm-alice"))?.uid).toBe("alice");
       expect(await channelIdentities.find(MANAGED_CHANNEL_INSTALLATION, "mm-alice")).toMatchObject({ ownerKind: "user", ownerId: "alice" });
     });
 
-    it("bumps the builder's revision when only the user ID changes", async () => {
-      const { builders } = harness.store;
-      await builders.records.create({ uid: "alice", createdAt: NOW });
-      const before = (await builders.records.get("alice"))?.revision;
+    it("bumps the user's revision when only the user ID changes", async () => {
+      const { users } = harness.store;
+      await users.records.create({ uid: "alice", createdAt: NOW });
+      const before = (await users.records.get("alice"))?.revision;
 
-      await builders.records.patch("alice", { mattermostUserId: "mm-alice" });
+      await users.records.patch("alice", { mattermostUserId: "mm-alice" });
 
-      expect((await builders.records.get("alice"))?.revision).not.toBe(before);
+      expect((await users.records.get("alice"))?.revision).not.toBe(before);
     });
 
-    it("changes the builder's revision and tells its watchers when the identity changes through the repository", async () => {
-      const { builders, channelIdentities } = harness.store;
-      await builders.records.create({ uid: "alice", createdAt: NOW });
-      const created = (await builders.records.get("alice"))?.revision;
+    it("changes the user's revision and tells its watchers when the identity changes through the repository", async () => {
+      const { users, channelIdentities } = harness.store;
+      await users.records.create({ uid: "alice", createdAt: NOW });
+      const created = (await users.records.get("alice"))?.revision;
       const listener = recordingListener<"builders">();
       harness.store.watch({ aggregate: "builders", filter: { uid: "alice" } }, listener);
       await vi.waitFor(() => expect(listener.events.some((event) => event.kind === "snapshot")).toBe(true), WAIT);
 
       await channelIdentities.link(identity("alice", "mm-alice", MANAGED_CHANNEL_INSTALLATION));
 
-      const linked = await builders.records.get("alice");
+      const linked = await users.records.get("alice");
       expect(linked).toMatchObject({ mattermostUserId: "mm-alice" });
       expect(linked?.revision).not.toBe(created);
       await vi.waitFor(() => expect(changedUserIds(listener)).toEqual(["mm-alice"]), WAIT);
 
       await channelIdentities.unlink(MANAGED_CHANNEL_INSTALLATION, "mm-alice");
 
-      const unlinked = await builders.records.get("alice");
+      const unlinked = await users.records.get("alice");
       expect(unlinked).toMatchObject({ mattermostUserId: null });
       expect(unlinked?.revision).not.toBe(linked?.revision);
       await vi.waitFor(() => expect(changedUserIds(listener)).toEqual(["mm-alice", null]), WAIT);
@@ -145,45 +145,45 @@ describe.skipIf(!dsn)("channel identities", { timeout: 30_000 }, () => {
       expect(after?.revision).not.toBe(before);
     });
 
-    it("leaves the builder alone when an identity on another installation changes", async () => {
-      const { builders, channelIdentities } = harness.store;
-      await builders.records.create({ uid: "alice", createdAt: NOW });
-      const before = (await builders.records.get("alice"))?.revision;
+    it("leaves the user alone when an identity on another installation changes", async () => {
+      const { users, channelIdentities } = harness.store;
+      await users.records.create({ uid: "alice", createdAt: NOW });
+      const before = (await users.records.get("alice"))?.revision;
 
       await channelIdentities.link(identity("alice", "U-alice", SLACK_ONE));
 
-      expect((await builders.records.get("alice"))?.revision).toBe(before);
+      expect((await users.records.get("alice"))?.revision).toBe(before);
     });
 
     it("rolls back the rest of a patch when the user ID is taken", async () => {
-      const { builders } = harness.store;
-      await builders.records.create({ uid: "alice", createdAt: NOW });
-      await builders.records.create({ uid: "eve", createdAt: NOW });
-      await builders.records.patch("alice", { mattermostUserId: "mm-alice" });
+      const { users } = harness.store;
+      await users.records.create({ uid: "alice", createdAt: NOW });
+      await users.records.create({ uid: "eve", createdAt: NOW });
+      await users.records.patch("alice", { mattermostUserId: "mm-alice" });
 
-      await expect(builders.records.patch("eve", { slug: "eve", mattermostUserId: "mm-alice" })).rejects.toBeInstanceOf(DuplicateRecordError);
+      await expect(users.records.patch("eve", { slug: "eve", mattermostUserId: "mm-alice" })).rejects.toBeInstanceOf(DuplicateRecordError);
 
-      expect((await builders.records.get("eve"))?.slug).toBeNull();
+      expect((await users.records.get("eve"))?.slug).toBeNull();
     });
 
-    it("never resolves an agent's account to a builder", async () => {
-      const { builders, workspaces } = harness.store;
-      await builders.records.create({ uid: "alice", createdAt: NOW });
+    it("never resolves an agent's account to a user", async () => {
+      const { users, workspaces } = harness.store;
+      await users.records.create({ uid: "alice", createdAt: NOW });
       await workspaces.agentIdentities.put({ uid: "alice", mattermostUserId: "mm-coach", at: NOW });
 
-      expect(await builders.records.findByMattermostUserId("mm-coach")).toBeNull();
-      expect((await builders.records.get("alice"))?.mattermostUserId).toBeNull();
+      expect(await users.records.findByMattermostUserId("mm-coach")).toBeNull();
+      expect((await users.records.get("alice"))?.mattermostUserId).toBeNull();
       expect((await workspaces.agentIdentities.get("alice"))?.mattermostUserId).toBe("mm-coach");
     });
 
-    it("forgets a builder's identities with the builder and keeps their agent's", async () => {
-      const { builders, workspaces, channelIdentities } = harness.store;
-      await builders.records.create({ uid: "alice", createdAt: NOW });
-      await builders.records.patch("alice", { mattermostUserId: "mm-alice" });
+    it("forgets a user's identities with the user and keeps their agent's", async () => {
+      const { users, workspaces, channelIdentities } = harness.store;
+      await users.records.create({ uid: "alice", createdAt: NOW });
+      await users.records.patch("alice", { mattermostUserId: "mm-alice" });
       await channelIdentities.link(identity("alice", "U-alice", SLACK_ONE));
       await workspaces.agentIdentities.put({ uid: "alice", mattermostUserId: "mm-coach", at: NOW });
 
-      await builders.records.delete("alice");
+      await users.records.delete("alice");
 
       expect((await channelIdentities.listForOwner("alice")).map((row) => row.externalUserId)).toEqual(["mm-coach"]);
     });

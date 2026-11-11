@@ -7,15 +7,15 @@ import { runNormalFleetMutation } from '@octogee/core/normal-fleet-mutation';
 import type { PlatformStateRepositories, PlatformStateStore } from '@octogee/core/platform-state';
 import { runGatewayRuntimeExclusive } from './gateway-runtime-mutation.js';
 
-export async function assertMigrationRestartUnfenced(state:Pick<PlatformStateRepositories,'gateways'|'builders'>,input:Record<string,unknown>):Promise<void> {
+export async function assertMigrationRestartUnfenced(state:Pick<PlatformStateRepositories,'gateways'|'users'>,input:Record<string,unknown>):Promise<void> {
   const ids=[...new Set([input.fromGatewayId,input.toGatewayId].filter((id):id is string=>typeof id==='string'))];
   const uid = typeof input.uid === 'string' && input.uid && !input.uid.includes('/') ? input.uid : null;
   const [roots, owner] = await Promise.all([
     state.gateways.roots.getMany(ids),
-    uid ? state.builders.records.get(uid) : null,
+    uid ? state.users.records.get(uid) : null,
   ]);
   if([...roots.values()].some(root=>root.runtimeRestartFence!==undefined))throw new Error('gateway runtime restart outcome is unresolved');
-  if (owner?.fences.computerRecovery !== undefined) throw new Error('Builder computer recovery is in progress');
+  if (owner?.fences.computerRecovery !== undefined) throw new Error('Gateway VM recovery is in progress');
 }
 export async function acquireRuntimeRestart(store:PlatformStateStore,fence:RuntimeRestartFence):Promise<void> {
   await store.transaction({label:'runtime-restart.acquire'},async transaction=>{

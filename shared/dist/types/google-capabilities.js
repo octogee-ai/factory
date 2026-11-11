@@ -222,7 +222,7 @@ export const GOOGLE_CAPABILITY_CATALOG = [
     {
         id: "photos-picker",
         title: "Google Photos Picker",
-        tagline: "Import only media a Builder explicitly selects",
+        tagline: "Import only media a user explicitly selects",
         authMode: userOAuth,
         scopes: ["https://www.googleapis.com/auth/photospicker.mediaitems.readonly"],
         approvalClass: "read",

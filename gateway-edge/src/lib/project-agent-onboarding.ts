@@ -110,15 +110,15 @@ function deliveryMessage(project: OnboardingProject, kind: DeliveryKind, workspa
   if (kind === "handoff") {
     if (!agent.identity || !project.handoffMessage) throw new Error("Project handoff identity is missing");
     const workspace = privateWorkspace
-      ? "in your private coach workspace. Keep those coach files there. Use the GitHub checkout, when available, for source and repository-owned instructions."
+      ? "in your private agent workspace. Keep those agent files there. Use the GitHub checkout, when available, for source and repository-owned instructions."
       : "in your project checkout. Preserve existing project instructions and decisions, read runbook/ and DECISIONS.md when present, and commit these files together with your work using octogee_project_commit.";
-    return `@${projectAgentMmUsername(workspaceId, projectSlug)} ${project.handoffMessage}\n\nYou are ${agent.identity.name} ${agent.identity.emoji}. ${agent.identity.persona}\nBefore starting, save this handoff in BRIEF.md, update IDENTITY.md and SOUL.md with your assigned identity, and record relevant Builder context in USER.md ${workspace} Create a fitting avatar and set your chat identity with octogee_chat_set_identity.`;
+    return `@${projectAgentMmUsername(workspaceId, projectSlug)} ${project.handoffMessage}\n\nYou are ${agent.identity.name} ${agent.identity.emoji}. ${agent.identity.persona}\nBefore starting, save this handoff in BRIEF.md, update IDENTITY.md and SOUL.md with your assigned identity, and record relevant user context in USER.md ${workspace} Create a fitting avatar and set your chat identity with octogee_chat_set_identity.`;
   }
   const identityHint = agent.requestedName ? `Your name is ${agent.requestedName}.` : "Choose your own fitting name.";
   const task = project.tagline?.trim()
-    ? `The Builder's starting idea: ${project.tagline}\nIntroduce yourself and start with this idea.`
-    : "Greet the Builder, ask what they would like to create, and wait for their direction.";
-  return `@${projectAgentMmUsername(workspaceId, projectSlug)} You are the new agent for “${project.name}”. ${identityHint} Choose a fitting personality, emoji, and avatar, and set your chat identity with octogee_chat_set_identity. Keep your chosen identity files in your ${privateWorkspace ? "private coach workspace" : "project repo"}.\n${task}`;
+    ? `The user's starting idea: ${project.tagline}\nIntroduce yourself and start with this idea.`
+    : "Greet the user, ask what they would like to create, and wait for their direction.";
+  return `@${projectAgentMmUsername(workspaceId, projectSlug)} You are the new agent for “${project.name}”. ${identityHint} Choose a fitting personality, emoji, and avatar, and set your chat identity with octogee_chat_set_identity. Keep your chosen identity files in your ${privateWorkspace ? "private agent workspace" : "project repo"}.\n${task}`;
 }
 
 async function prepareHandoff({ uid, projectSlug, project }: { uid: string; projectSlug: string; project: OnboardingProject }): Promise<void> {
@@ -128,13 +128,13 @@ async function prepareHandoff({ uid, projectSlug, project }: { uid: string; proj
   await mmApi(`/bots/${secret.mattermostUserId}`, "PUT", { display_name: project.agent.identity.name });
 }
 
-async function ensureCoachMembership(channelId: string, coachId: string): Promise<void> {
+async function ensureDefaultAgentMembership(channelId: string, userDefaultAgentId: string): Promise<void> {
   try {
-    await mmApi(`/channels/${channelId}/members/${coachId}`, "GET");
+    await mmApi(`/channels/${channelId}/members/${userDefaultAgentId}`, "GET");
     return;
   } catch (error) {
     if ((error as { status?: number }).status !== 404) throw error;
-    await mmApi(`/channels/${channelId}/members`, "POST", { user_id: coachId });
+    await mmApi(`/channels/${channelId}/members`, "POST", { user_id: userDefaultAgentId });
   }
 }
 
@@ -149,18 +149,18 @@ async function postOnboarding(uid: string, target: ProjectDeliveryTarget, claim:
   const { workspaceId, projectSlug } = target;
   const project = { ...claim.project, handoffMessage: kind === "handoff"
     ? await readHandoffMessage(target, claim.agent.handoff?.generation) : undefined };
-  const [coach, coachIdentity, channel] = await Promise.all([
+  const [defaultAgent, coachIdentity, channel] = await Promise.all([
     readMattermostSecret(platformStateStore, uid, "coachMattermost"),
     platformStateStore.workspaces.agentIdentities.get(uid),
     platformStateStore.workspaces.channels.get({ workspaceSlug: workspaceId, projectSlug }, "general"),
   ]);
-  const coachId = coachIdentity?.mattermostUserId;
+  const userDefaultAgentId = coachIdentity?.mattermostUserId;
   const channelId = channel?.mattermostChannelId;
-  const token = coach?.personalToken;
-  if (!channelId || !token || !coachId) throw new Error("Project handoff chat credentials are not ready");
+  const token = defaultAgent?.personalToken;
+  if (!channelId || !token || !userDefaultAgentId) throw new Error("Project handoff chat credentials are not ready");
   const receipt = `${workspaceId}/${projectSlug}/${kind}`;
   if (kind === "handoff") await prepareHandoff({ uid, projectSlug, project });
-  await ensureCoachMembership(channelId, coachId);
+  await ensureDefaultAgentMembership(channelId, userDefaultAgentId);
   let postId = await matchingDeliveryPost(target, claim, channelId, receipt, token);
   if (!postId) {
     await beginDeliveryPost(target, claim);

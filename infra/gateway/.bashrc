@@ -15,7 +15,7 @@ alias ll='ls -lh'
 alias grep='grep --color=auto'
 alias git-log='git log --oneline -n 20'
 alias cd-claw='cd /home/node/.openclaw'
-alias cd-customers='cd /home/node/.openclaw/customers'
+alias cd-users='cd /home/node/.openclaw/customers'
 alias logs-gateway='kubectl logs deployment/nucrew-gateway -n nucrew -f'
 
 # Git config
@@ -30,4 +30,4 @@ export PS1='\[\033[01;32m\]\u@gateway\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\
 
 # Show current directory and helpful info
 [ -f /home/node/.openclaw/openclaw.json ] && echo "✓ OpenClaw gateway configured"
-[ -d /home/node/.openclaw/customers ] && echo "✓ Customers directory ready"
+[ -d /home/node/.openclaw/customers ] && echo "✓ Users directory ready"

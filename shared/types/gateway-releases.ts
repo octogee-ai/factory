@@ -124,17 +124,17 @@ function isGatewayProfileImages(
   gatewayImageTag: string,
 ): value is GatewayProfileImages {
   if (!isPlainRecord(value) || Object.keys(value).length !== 1) return false;
-  const builder = value.builder;
-  if (!isPlainRecord(builder) || Object.keys(builder).length !== 2) return false;
+  const isolatedImage = value.builder;
+  if (!isPlainRecord(isolatedImage) || Object.keys(isolatedImage).length !== 2) return false;
   const gatewayPackageSuffix = "/octogee-gateway";
   const expectedRepository = gatewayImageRepository.endsWith(gatewayPackageSuffix)
     ? `${gatewayImageRepository.slice(0, -gatewayPackageSuffix.length)}/octogee-gateway-builder`
     : "";
   return (
-    builder.imageRepository === expectedRepository &&
-    typeof builder.imageTag === "string" &&
-    DIGEST_BOUND_IMAGE_TAG_PATTERN.test(builder.imageTag) &&
-    builder.imageTag.split("@", 1)[0] === gatewayImageTag.split("@", 1)[0]
+    isolatedImage.imageRepository === expectedRepository &&
+    typeof isolatedImage.imageTag === "string" &&
+    DIGEST_BOUND_IMAGE_TAG_PATTERN.test(isolatedImage.imageTag) &&
+    isolatedImage.imageTag.split("@", 1)[0] === gatewayImageTag.split("@", 1)[0]
   );
 }
 
@@ -242,9 +242,9 @@ export type AssignmentSource =
   | "migrate-customer"
   | "repair";
 
-// Migration-plane routing state for one customer's assignment. serving = the
+// Migration-plane routing state for one user's assignment. serving = the
 // assigned gateway answers service-addressed traffic; quiescing/migrating =
-// the customer is being moved between gateways (the edge answers 503 +
+// the user is being moved between gateways (the edge answers 503 +
 // Retry-After until the cutover lands). The cutover writes serving on the
 // target gateway's assignment and bumps `epoch`.
 export type AssignmentState = "serving" | "quiescing" | "migrating";
@@ -254,9 +254,9 @@ export function isAssignmentState(value: unknown): value is AssignmentState {
 }
 
 // Internal-only headers a forwarded intra-family hop carries between two
-// gateways/{gatewayId}/assignments/{uid} — which customers a gateway serves.
-// `epoch` is monotonic per customer, bumped at each migration cutover; `state`
-// gates serving while a customer moves between gateways.
+// gateways/{gatewayId}/assignments/{uid} — which users a gateway serves.
+// `epoch` is monotonic per user, bumped at each migration cutover; `state`
+// gates serving while a user moves between gateways.
 export interface AssignmentDoc {
   uid: string;
   slug: string;
@@ -264,7 +264,7 @@ export interface AssignmentDoc {
   source: AssignmentSource;
   state: AssignmentState;
   epoch: number;
-  // When this Builder started serving on this gateway; a cutover restarts it.
+  // When this user started serving on this gateway; a cutover restarts it.
   createdAt: number;
   updatedAt: number;
   updatedByOperationId: string | null;
@@ -307,10 +307,10 @@ export interface GatewayHeartbeatObservation {
   mountedCustomers: string[];
   migratingIn: string[];
   configStatus?: import("./fleet-controller.js").GatewayConfigStatus;
-  configuredBuilder?: import("./fleet-controller.js").ConfiguredBuilderReport | null;
+  configuredBuilder?: import("./fleet-controller.js").ConfiguredUserReport | null;
 }
 
-// glmGateways/{gatewayId} — the Cowboy-owned runtime observation record for the
+// glmGateways/{gatewayId} — the controller-owned runtime observation record for the
 // gateway's single stable-name realization: which release is applied, what the
 // pod last reported. Never desired configuration (that is gateways/{id}).
 export interface GatewayRuntimeDoc {
@@ -545,14 +545,14 @@ export type CommitPlacementResult =
   | { kind: "assigned"; release: number | null }
   | { kind: "rejected"; reason: PlacementRejectReason };
 
-export function customerRestoreFencePresent(user: unknown): boolean {
+export function userRestoreFencePresent(user: unknown): boolean {
   if (!isPlainRecord(user) || !isPlainRecord(user.provisioning)) return false;
   const openclaw = user.provisioning.openclaw;
   return isPlainRecord(openclaw) && openclaw.restoreFence !== undefined;
 }
 
-export function customerRuntimeMutationFenced(user: unknown): boolean {
-  if (customerRestoreFencePresent(user)) return true;
+export function userRuntimeMutationFenced(user: unknown): boolean {
+  if (userRestoreFencePresent(user)) return true;
   if (!isPlainRecord(user) || !isPlainRecord(user.provisioning)) return false;
   const openclaw = user.provisioning.openclaw;
   return isPlainRecord(openclaw) && openclaw.sourceTransferFence !== undefined;

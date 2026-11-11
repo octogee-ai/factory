@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createComputerHomeClient } from "../lib/compute-home.js";
+import { createVmHomeClient } from "../lib/compute-home.js";
 
 const home = { projectId: "test", zone: "us-central1-a", name: "home-a", id: "123", sizeGb: 10, diskType: "pd-balanced" as const, source: "projects/test/zones/us-central1-a/disks/home-a" };
 function fixture(overrides = {}) {
@@ -10,7 +10,7 @@ function fixture(overrides = {}) {
     return { status: 200, data: { name: "resize", status: "DONE" } };
   });
   const journalHomeResize = vi.fn(async (_input, action) => action());
-  const client = createComputerHomeClient({ projectId: "test", request, readInstance: async () => null, waitForOperation: async () => {}, journalHomeResize });
+  const client = createVmHomeClient({ projectId: "test", request, readInstance: async () => null, waitForOperation: async () => {}, journalHomeResize });
   return { client, request, journalHomeResize };
 }
 describe("retained home capacity", () => {

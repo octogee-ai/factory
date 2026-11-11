@@ -17,7 +17,7 @@ it.each(["builder", "shared"])("makes the %s OpenClaw state root private before 
   await mkdir(state);
   await chmod(state, 0o2775);
   const prefix = (await readFile(path.join(repo, "infra/gateway/entrypoint.sh"), "utf8"))
-    .split("# ── Builder identity")[0]
+    .split("# ── User identity")[0]
     .replace("export OPENCLAW_DIR=/home/node/.openclaw", `export OPENCLAW_DIR='${state}'`)
     .replaceAll("/octogee", repo);
   const result = spawnSync("sh", ["-s"], {

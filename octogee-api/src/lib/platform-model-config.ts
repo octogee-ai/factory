@@ -1,16 +1,16 @@
 import type { PlatformConfigRepository } from "@octogee/core/platform-state";
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
-  builderAgentModelDefaultFromDoc,
+  userAgentModelDefaultFromDoc,
   resolveFreeTierModel,
-  type BuilderAgentModelDefault,
+  type UserAgentModelDefault,
   type ResolvedFreeTierModel,
 } from "@octogee/shared/types/platform-config";
 
 const DEFAULT_TTL_MS = 60_000;
 
 export type FreeTierModelResolver = () => Promise<ResolvedFreeTierModel>;
-export type BuilderAgentDefaultResolver = () => Promise<BuilderAgentModelDefault>;
+export type UserAgentDefaultResolver = () => Promise<UserAgentModelDefault>;
 
 function mustResolve(ref: string): ResolvedFreeTierModel {
   const resolved = resolveFreeTierModel(ref);
@@ -65,22 +65,22 @@ export function createCachedFreeTierModelResolver(opts: {
 
 // Same contract as the free-tier resolver: the field-tolerant doc read means
 // an unreadable or invalid doc serves the last-known (else compiled) default.
-export function createCachedBuilderAgentDefaultResolver(opts: {
+export function createCachedUserAgentDefaultResolver(opts: {
   platformConfig: Pick<PlatformConfigRepository, "get">;
   ttlMs?: number;
   now?: () => number;
   onError?: (err: unknown) => void;
-}): BuilderAgentDefaultResolver {
+}): UserAgentDefaultResolver {
   const ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
   const now = opts.now ?? Date.now;
-  const fallback = builderAgentModelDefaultFromDoc(undefined);
-  let cached: { value: BuilderAgentModelDefault; resolvedAt: number } | null = null;
+  const fallback = userAgentModelDefaultFromDoc(undefined);
+  let cached: { value: UserAgentModelDefault; resolvedAt: number } | null = null;
 
   return async () => {
     const at = now();
     if (cached && at - cached.resolvedAt < ttlMs) return cached.value;
     try {
-      const value = builderAgentModelDefaultFromDoc((await opts.platformConfig.get("models"))?.value);
+      const value = userAgentModelDefaultFromDoc((await opts.platformConfig.get("models"))?.value);
       cached = { value, resolvedAt: at };
       return value;
     } catch (err) {

@@ -63,9 +63,9 @@ function gatewayImageArgs(): Record<string, Record<string, string>> {
     repository: "us-central1-docker.pkg.dev/octogee/octogee",
     sha: "a".repeat(40),
     base,
-    builderBase: `${base}-builder-${"c".repeat(12)}`,
+    isolatedBase: `${base}-builder-${"c".repeat(12)}`,
     toolchain: { lockSha256: "d".repeat(64), groupsSha256: "e".repeat(64) },
-    build: { base: false, builderBase: false, images: ["octogee-gateway", "octogee-gateway-builder"] },
+    build: { base: false, isolatedBase: false, images: ["octogee-gateway", "octogee-gateway-builder"] },
   });
   return {
     "octogee-gateway": target["octogee-gateway"].args,
@@ -84,47 +84,47 @@ function runInstructionContaining(dockerfile: string, needle: string): string {
 describe("gateway base image", () => {
   it("layers the controlled workstation over the full bootable gateway base", () => {
     const base = readRepoFile("infra/gateway/Dockerfile.base");
-    const builderBase = readRepoFile("infra/gateway/Dockerfile.builder-base");
-    const builderConfig = readRepoFile("infra/gateway/openclaw.builder.template.json");
+    const isolatedBase = readRepoFile("infra/gateway/Dockerfile.isolated-base");
+    const userConfig = readRepoFile("infra/gateway/openclaw.isolated.template.json");
 
     expect(base).toMatch(/^FROM node:\d+\.\d+\.\d+-bookworm-slim@sha256:[0-9a-f]{64} AS gateway-core-system$/mu);
     expect(base).not.toContain("gateway-core-runtime");
-    expect(builderBase).toContain("ARG GATEWAY_BASE_IMAGE");
-    expect(builderBase).toContain("FROM ${GATEWAY_BASE_IMAGE}");
-    expect(builderBase).toContain("infra/gateway/builder-toolchain/package.json /octogee/toolchain/package.json");
-    expect(builderBase).toContain("infra/gateway/builder-toolchain/package-lock.json /octogee/toolchain/package-lock.json");
-    expect(builderBase).toContain("infra/gateway/builder-toolchain/groups.json /octogee/toolchain/groups.json");
-    expect(builderBase).toContain("OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256");
-    expect(builderBase).toContain("OCTOGEE_BUILDER_TOOL_GROUPS_SHA256");
-    expect(builderBase).toContain("DEBIAN_PACKAGES=");
-    expect(builderBase).toContain("standaloneTools.gcloud.version");
-    expect(builderBase).toContain("pip3 install --break-system-packages --no-cache-dir");
-    expect(JSON.parse(builderConfig).plugins.entries.codex).toEqual({ enabled: true });
-    expect(builderConfig).not.toContain('"browser": {\n    "enabled": true');
+    expect(isolatedBase).toContain("ARG GATEWAY_BASE_IMAGE");
+    expect(isolatedBase).toContain("FROM ${GATEWAY_BASE_IMAGE}");
+    expect(isolatedBase).toContain("infra/gateway/isolated-toolchain/package.json /octogee/toolchain/package.json");
+    expect(isolatedBase).toContain("infra/gateway/isolated-toolchain/package-lock.json /octogee/toolchain/package-lock.json");
+    expect(isolatedBase).toContain("infra/gateway/isolated-toolchain/groups.json /octogee/toolchain/groups.json");
+    expect(isolatedBase).toContain("OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256");
+    expect(isolatedBase).toContain("OCTOGEE_BUILDER_TOOL_GROUPS_SHA256");
+    expect(isolatedBase).toContain("DEBIAN_PACKAGES=");
+    expect(isolatedBase).toContain("standaloneTools.gcloud.version");
+    expect(isolatedBase).toContain("pip3 install --break-system-packages --no-cache-dir");
+    expect(JSON.parse(userConfig).plugins.entries.codex).toEqual({ enabled: true });
+    expect(userConfig).not.toContain('"browser": {\n    "enabled": true');
   });
 
   it("keeps post-readiness hydration npm-only", () => {
-    const hydrator = readRepoFile("scripts/lib/builder-toolchain-hydrator.ts");
-    const builderBase = readRepoFile("infra/gateway/Dockerfile.builder-base");
+    const hydrator = readRepoFile("scripts/lib/isolated-toolchain-hydrator.ts");
+    const isolatedBase = readRepoFile("infra/gateway/Dockerfile.isolated-base");
 
     expect(hydrator).toContain('"ci",');
     expect(hydrator).toContain("--prefer-offline");
     expect(hydrator).not.toContain("apt-get");
     expect(hydrator).not.toContain("dpkg-deb");
     expect(hydrator).not.toContain("/usr/bin/curl");
-    expect(builderBase).toContain("apt-get install -y --no-install-recommends $DEBIAN_PACKAGES");
-    expect(builderBase).toContain("google-cloud-cli-${GCLOUD_VERSION}-linux-x86_64.tar.gz");
+    expect(isolatedBase).toContain("apt-get install -y --no-install-recommends $DEBIAN_PACKAGES");
+    expect(isolatedBase).toContain("google-cloud-cli-${GCLOUD_VERSION}-linux-x86_64.tar.gz");
   });
 
-  it("pins the post-readiness Builder tools and their npm integrity", () => {
+  it("pins the post-readiness user tools and their npm integrity", () => {
     const packageJson = JSON.parse(
-      readRepoFile("infra/gateway/builder-toolchain/package.json"),
+      readRepoFile("infra/gateway/isolated-toolchain/package.json"),
     ) as {
       dependencies: Record<string, string>;
       allowScripts: Record<string, boolean>;
     };
     const packageLock = JSON.parse(
-      readRepoFile("infra/gateway/builder-toolchain/package-lock.json"),
+      readRepoFile("infra/gateway/isolated-toolchain/package-lock.json"),
     ) as { packages: Record<string, { version?: string; integrity?: string }> };
 
     expect(packageJson.dependencies).toEqual({
@@ -165,15 +165,15 @@ describe("gateway base image", () => {
       });
     }
 
-    const builderBase = readRepoFile("infra/gateway/Dockerfile.builder-base");
-    expect(builderBase).toContain("npm ci --omit=dev --include=optional");
-    expect(builderBase).toContain("node_modules/.bin/claude --version");
-    expect(builderBase).toContain("node_modules/.bin/codex --version");
-    expect(builderBase).toContain("node_modules/@sparticuz/chromium/bin/chromium.br");
-    expect(builderBase).toContain("node_modules/.bin/firebase --version");
-    expect(builderBase).toContain("node_modules/.bin/pnpm --version");
-    expect(builderBase).toContain("unexpected Anthropic platform payload");
-    expect(builderBase).toContain("unexpected OpenAI platform payload");
+    const isolatedBase = readRepoFile("infra/gateway/Dockerfile.isolated-base");
+    expect(isolatedBase).toContain("npm ci --omit=dev --include=optional");
+    expect(isolatedBase).toContain("node_modules/.bin/claude --version");
+    expect(isolatedBase).toContain("node_modules/.bin/codex --version");
+    expect(isolatedBase).toContain("node_modules/@sparticuz/chromium/bin/chromium.br");
+    expect(isolatedBase).toContain("node_modules/.bin/firebase --version");
+    expect(isolatedBase).toContain("node_modules/.bin/pnpm --version");
+    expect(isolatedBase).toContain("unexpected Anthropic platform payload");
+    expect(isolatedBase).toContain("unexpected OpenAI platform payload");
   });
 
   it("keeps the OpenClaw launcher rooted beside its imported package files", () => {
@@ -221,7 +221,7 @@ describe("gateway base image", () => {
       'echo "${FD_SHA256}  /tmp/fd.deb" | sha256sum -c -',
     );
     expect(dockerfile).toContain("ENV OPENCLAW_OFFLINE=1");
-    expect(dockerfile).toContain("/usr/local/libexec/octogee-builder-toolchain");
+    expect(dockerfile).toContain("/usr/local/libexec/octogee-isolated-toolchain");
     expect(dockerfile).toContain("ENV CLAUDE_BIN=/usr/local/bin/claude");
     expect(dockerfile).not.toMatch(/npm install[^\n]*@anthropic-ai\/claude-code/);
   });
@@ -244,7 +244,7 @@ describe("gateway base image", () => {
     expect(disabledArm).not.toContain("ln -s");
   });
 
-  it("keeps boot-critical tools preinstalled in Builder final builds", () => {
+  it("keeps boot-critical tools preinstalled in user final builds", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile");
     const wrapperInstruction = runInstructionContaining(
       dockerfile,
@@ -256,13 +256,13 @@ describe("gateway base image", () => {
       "rm -f /usr/local/bin/claude /usr/local/bin/codex /usr/bin/chromium",
     );
     expect(enabledArm).toContain(
-      "ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/claude",
+      "ln -s /usr/local/libexec/octogee-isolated-toolchain /usr/local/bin/claude",
     );
     expect(enabledArm).toContain(
-      "ln -s /usr/local/libexec/octogee-builder-toolchain /usr/local/bin/codex",
+      "ln -s /usr/local/libexec/octogee-isolated-toolchain /usr/local/bin/codex",
     );
     expect(enabledArm).toContain(
-      "ln -s /usr/local/libexec/octogee-builder-toolchain /usr/bin/chromium",
+      "ln -s /usr/local/libexec/octogee-isolated-toolchain /usr/bin/chromium",
     );
   });
 
@@ -387,7 +387,7 @@ describe("gateway base image", () => {
     expect(dockerfile).not.toContain("OPENCLAW_COMPATIBILITY_HOST_VERSION");
   });
 
-  it("proves the final Builder image retains its boot-critical payloads", () => {
+  it("proves the final isolated image retains its boot-critical payloads", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile");
     const gate = readRepoFile("infra/gateway/verify-runtime-image.sh");
 

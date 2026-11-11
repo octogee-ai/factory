@@ -33,7 +33,7 @@ const ORCHESTRATOR_TABLE: TableSpec = {
   columns: [
     column("id", "text"),
     column("sharedAutoscalingEnabled", "boolean"),
-    column("sharedBuildersPerGateway", "integer", { column: "shared_users_per_gateway" }),
+    column("sharedUsersPerGateway", "integer", { column: "shared_users_per_gateway" }),
     column("defaultGatewayId", "text", { nullAs: "null" }),
     column("disposableGatewayIdleMs", "bigint", { nullAs: "null" }),
     column("placementUpdatedAt", "bigint", { nullAs: "null" }),
@@ -91,7 +91,7 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-function isComputerProfile(value: unknown): boolean {
+function isVmProfile(value: unknown): boolean {
   if (!isPlainMap(value)) return false;
   const { runtime, desktop, machineType, provisioningModel, bootDisk, homeSizeGiB } = value;
   return (
@@ -110,7 +110,7 @@ function isGatewaySizingProfile(value: unknown): value is GatewaySizingProfile {
   return (
     value.isolation === "isolated" &&
     isSizingTier(value.sizingTier) &&
-    isComputerProfile(value.computer) &&
+    isVmProfile(value.computer) &&
     (value.fallbackStorageGb === null || typeof value.fallbackStorageGb === "number")
   );
 }
@@ -139,12 +139,12 @@ function orchestratorColumns(patch: OrchestratorConfigPatch): Fields {
     throw new MalformedRecordError(ORCHESTRATOR_KEY, `disposableGatewayIdleMs ${idleMs} is not a nonnegative safe integer`);
   }
   if (autoscaling === undefined) return fields;
-  return { ...fields, sharedAutoscalingEnabled: autoscaling.enabled, sharedBuildersPerGateway: autoscaling.buildersPerGateway };
+  return { ...fields, sharedAutoscalingEnabled: autoscaling.enabled, sharedUsersPerGateway: autoscaling.buildersPerGateway };
 }
 
 function decodeOrchestratorConfig(row: Row): Stored<OrchestratorConfig> {
-  const { id: _id, sharedAutoscalingEnabled, sharedBuildersPerGateway, sizingProfiles, ...fields } = decodeStored<Fields>(ORCHESTRATOR_TABLE, row);
-  const stored = sharedAutoscalingEnabled === undefined ? undefined : { enabled: sharedAutoscalingEnabled, buildersPerGateway: sharedBuildersPerGateway };
+  const { id: _id, sharedAutoscalingEnabled, sharedUsersPerGateway, sizingProfiles, ...fields } = decodeStored<Fields>(ORCHESTRATOR_TABLE, row);
+  const stored = sharedAutoscalingEnabled === undefined ? undefined : { enabled: sharedAutoscalingEnabled, buildersPerGateway: sharedUsersPerGateway };
   const sharedGatewayAutoscaling = parseSharedGatewayAutoscalingConfig(stored);
   if (sharedGatewayAutoscaling === null) {
     throw new MalformedRecordError(ORCHESTRATOR_KEY, `sharedGatewayAutoscaling ${JSON.stringify(stored)} is invalid`);

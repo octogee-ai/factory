@@ -1,5 +1,5 @@
 [Unit]
-Description=seatd for the Octogee computer session (no VT)
+Description=seatd for the Octogee VM session (no VT)
 After=systemd-modules-load.service
 Before=octo-desktop.service
 

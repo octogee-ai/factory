@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
-import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
+import { userClaimSlug } from "@octogee/shared/server/user-claim";
 
 const DISABLED_MARKER = "system_config.watch.disabled";
 const STATE_LOCK = "system_config.watch.state.lock";
@@ -66,14 +66,14 @@ export function readSystemConfigWatchFenceGeneration(
   return fence?.slug === slug ? fence.generation : null;
 }
 
-export function isConfiguredGatewayBuilder(
+export function isConfiguredGatewayUser(
   slug: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return builderClaimSlug(env) === slug;
+  return userClaimSlug(env) === slug;
 }
 
-function rejectDifferentBuilderFence(openclawDir: string, slug: string): void {
+function rejectDifferentUserFence(openclawDir: string, slug: string): void {
   const current = readSystemConfigWatchFence(openclawDir);
   if (current !== null && current.slug !== slug) {
     throw new Error(`system config watcher fence belongs to ${current.slug}, not ${slug}`);
@@ -105,7 +105,7 @@ async function acquireStateLock(
   }
 }
 
-async function writeDisabledBuilderSlug(
+async function writeDisabledUserSlug(
   openclawDir: string,
   slug: string,
   options: SystemConfigWatchFenceOptions,
@@ -115,7 +115,7 @@ async function writeDisabledBuilderSlug(
   const generation = randomUUID();
   const temporary = `${target}.${process.pid}.${generation}.tmp`;
   try {
-    rejectDifferentBuilderFence(openclawDir, slug);
+    rejectDifferentUserFence(openclawDir, slug);
     const runtimeProjection = options.runtimeProjection || readSystemConfigWatchFence(openclawDir)?.runtimeProjection;
     await fsp.writeFile(
       temporary,
@@ -156,7 +156,7 @@ export async function disableSystemConfigWatch(
   slug: string,
   options: SystemConfigWatchFenceOptions = {},
 ): Promise<string> {
-  const generation = await writeDisabledBuilderSlug(openclawDir, slug, options);
+  const generation = await writeDisabledUserSlug(openclawDir, slug, options);
   await acknowledgeDrainedWriter(openclawDir, options);
   return generation;
 }
@@ -168,7 +168,7 @@ export async function enableSystemConfigWatch(
 ): Promise<boolean> {
   const releaseStateLock = await acquireStateLock(openclawDir, {});
   try {
-    rejectDifferentBuilderFence(openclawDir, slug);
+    rejectDifferentUserFence(openclawDir, slug);
     const current = readSystemConfigWatchFence(openclawDir);
     if (!current) return false;
     if (

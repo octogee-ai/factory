@@ -53,7 +53,7 @@ function cutover(documents: Record<string, Record<string, unknown>>, now: number
   const deps: CutoverDeps = {
     store: createDocumentFixtureStore(documents),
     readBuilderTier: async () => {
-      throw new Error("a cutover without a V2 fence never reads the Builder tier");
+      throw new Error("a cutover without a V2 fence never reads the user tier");
     },
     now: () => new Date(now),
     log: vi.fn(),
@@ -103,16 +103,16 @@ describe("installed @octogee/core runtime", () => {
 
   it("ships the atomic retirement fence against candidate config obligations", async () => {
     const documents: Record<string, Record<string, unknown>> = {
-      "gateways/bender": {
-        ...durableRoot("bender", 1),
-        liveRevisionId: "bender-r1",
-        trafficRevisionId: "bender-r1",
+      "gateways/walter": {
+        ...durableRoot("walter", 1),
+        liveRevisionId: "walter-r1",
+        trafficRevisionId: "walter-r1",
         roll: null,
       },
-      "glmGateways/bender-r1": {
+      "glmGateways/walter-r1": {
         docKind: "revision",
-        revisionId: "bender-r1",
-        gateway: "bender",
+        revisionId: "walter-r1",
+        gateway: "walter",
         release: 1,
         lifecycle: "serving",
         heartbeat: {
@@ -121,12 +121,12 @@ describe("installed @octogee/core runtime", () => {
         },
       },
     };
-    const before = structuredClone(documents["gateways/bender"]);
+    const before = structuredClone(documents["gateways/walter"]);
 
     await expect(
       claimGatewayRetirementInStore({
         store: createDocumentFixtureStore(documents),
-        gatewayId: "bender",
+        gatewayId: "walter",
         operationId: "retire-1",
         operation: {
           kind: "retire-gateway",
@@ -135,15 +135,15 @@ describe("installed @octogee/core runtime", () => {
           createdAt: 100,
           startedAt: null,
           completedAt: null,
-          input: { gatewayId: "bender" },
+          input: { gatewayId: "walter" },
           steps: [],
-          gatewayId: "bender",
+          gatewayId: "walter",
         },
         now: 100,
         updatedBy: "operator",
       }),
     ).rejects.toBeInstanceOf(GatewayRetirementConflictError);
-    expect(documents["gateways/bender"]).toEqual(before);
+    expect(documents["gateways/walter"]).toEqual(before);
     expect(documents["glmOperations/retire-1"]).toBeUndefined();
   });
 });

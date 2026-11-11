@@ -16,8 +16,8 @@ type JsonObject = Record<string, unknown>;
 
 const ABSENT = Symbol("absent");
 const REQUIRED_ARRAY = "required-array" as const;
-const CUSTOMER_AGENT_WORKSPACE = "customer-agent-workspace" as const;
-const CUSTOMER_AGENT_TOOL_POLICY = "customer-agent-tool-policy" as const;
+const USER_AGENT_WORKSPACE = "customer-agent-workspace" as const;
+const USER_AGENT_TOOL_POLICY = "customer-agent-tool-policy" as const;
 const PROJECT_AGENT_TOOL_POLICY = "project-agent-tool-policy" as const;
 const FORBIDDEN_ARRAY = "forbidden-array" as const;
 const PLUGIN_ALLOWLIST_PATH = "plugins.allow";
@@ -42,7 +42,7 @@ export function platformBrokerProviderDeclarations(env: BrokerProviderEnvironmen
 }
 
 /** Missing public declarations are a safe addition; existing routes and auth must match exactly. */
-export function customerModelProviderDeclarationsMatch(current: Record<string, unknown>, expected: Record<string, unknown>): boolean {
+export function userModelProviderDeclarationsMatch(current: Record<string, unknown>, expected: Record<string, unknown>): boolean {
   const required = { ...expected };
   for (const [id] of BROKER_PROVIDER_DECLARATIONS) {
     if (!Object.hasOwn(current, id)) delete required[id];
@@ -79,8 +79,8 @@ type ForbiddenArrayInvariant = {
   values: readonly string[];
 };
 
-type CustomerAgentWorkspaceInvariant = {
-  kind: typeof CUSTOMER_AGENT_WORKSPACE;
+type UserAgentWorkspaceInvariant = {
+  kind: typeof USER_AGENT_WORKSPACE;
   path:
     | "agents.list[].tools.fs.workspaceOnly"
     | "agents.entries.*.tools.fs.workspaceOnly";
@@ -92,8 +92,8 @@ type MattermostAccountProjectionInvariant = {
   platformOwned: boolean;
 };
 
-type CustomerAgentToolPolicyInvariant = {
-  kind: typeof CUSTOMER_AGENT_TOOL_POLICY;
+type UserAgentToolPolicyInvariant = {
+  kind: typeof USER_AGENT_TOOL_POLICY;
   path: "agents.list[].tools" | "agents.entries.*.tools";
 };
 
@@ -106,8 +106,8 @@ export type PlatformInvariant =
   | ExactInvariant
   | RequiredArrayInvariant
   | ForbiddenArrayInvariant
-  | CustomerAgentWorkspaceInvariant
-  | CustomerAgentToolPolicyInvariant
+  | UserAgentWorkspaceInvariant
+  | UserAgentToolPolicyInvariant
   | ProjectAgentToolPolicyInvariant
   | MattermostAccountProjectionInvariant;
 
@@ -198,7 +198,7 @@ const PLATFORM_PLUGIN_CONFIG_FIELDS: Readonly<Record<string, unknown>> = {
   "plugins.entries.octogee-chat-tools.hooks.timeouts.before_agent_run": 3000,
 };
 
-export const CUSTOMER_CODE_DENIED_TOOLS = [
+export const USER_CODE_DENIED_TOOLS = [
   "exec",
   "process",
   "subagents",
@@ -218,7 +218,7 @@ export const CUSTOMER_CODE_DENIED_TOOLS = [
   "computer",
 ] as const;
 
-const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
+const USER_STRUCTURED_AVAILABLE_TOOLS = [
   "automations",
   "workspace_commit",
   "octogee_project_commit",
@@ -237,7 +237,7 @@ const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
   "octogee_board_card_comment",
 ] as const;
 
-export const CUSTOMER_WORKFLOW_TOOLS = [
+export const USER_WORKFLOW_TOOLS = [
   "automations",
   "message",
   "octogee_project_create",
@@ -299,7 +299,7 @@ export const CUSTOMER_WORKFLOW_TOOLS = [
   "octogee_owner_automations",
 ] as const;
 
-export const PRODUCTIVITY_TOOL_NAMES = CUSTOMER_WORKFLOW_TOOLS.filter((tool) =>
+export const PRODUCTIVITY_TOOL_NAMES = USER_WORKFLOW_TOOLS.filter((tool) =>
   tool.startsWith("octogee_google_") || tool.startsWith("octogee_obsidian_"));
 
 export const PROJECT_AGENT_ALLOWED_TOOLS = [
@@ -361,22 +361,22 @@ export const PROJECT_AGENT_DENIED_TOOLS = [
   "browser",
 ] as const;
 
-function customerToolInvariants(): PlatformInvariant[] {
+function userToolInvariants(): PlatformInvariant[] {
   return [
     { kind: "exact", path: "tools.elevated.enabled", value: false },
     {
       kind: REQUIRED_ARRAY,
       path: "tools.deny",
-      values: CUSTOMER_CODE_DENIED_TOOLS,
+      values: USER_CODE_DENIED_TOOLS,
     },
     {
       kind: FORBIDDEN_ARRAY,
       path: "tools.deny",
-      values: CUSTOMER_STRUCTURED_AVAILABLE_TOOLS,
+      values: USER_STRUCTURED_AVAILABLE_TOOLS,
     },
     { kind: "exact", path: "tools.profile", value: "coding" },
     { kind: "exact", path: "tools.allow", value: ABSENT },
-    { kind: "exact", path: "tools.alsoAllow", value: CUSTOMER_WORKFLOW_TOOLS },
+    { kind: "exact", path: "tools.alsoAllow", value: USER_WORKFLOW_TOOLS },
     { kind: "exact", path: "tools.exec", value: { mode: "deny" } },
     { kind: "exact", path: "tools.fs.workspaceOnly", value: true },
     { kind: "exact", path: "tools.sessions.visibility", value: "self" },
@@ -421,15 +421,15 @@ function customerToolInvariants(): PlatformInvariant[] {
       },
     },
     {
-      kind: CUSTOMER_AGENT_WORKSPACE,
+      kind: USER_AGENT_WORKSPACE,
       path: "agents.list[].tools.fs.workspaceOnly",
     },
     {
-      kind: CUSTOMER_AGENT_WORKSPACE,
+      kind: USER_AGENT_WORKSPACE,
       path: "agents.entries.*.tools.fs.workspaceOnly",
     },
-    { kind: CUSTOMER_AGENT_TOOL_POLICY, path: "agents.list[].tools" },
-    { kind: CUSTOMER_AGENT_TOOL_POLICY, path: "agents.entries.*.tools" },
+    { kind: USER_AGENT_TOOL_POLICY, path: "agents.list[].tools" },
+    { kind: USER_AGENT_TOOL_POLICY, path: "agents.entries.*.tools" },
   ];
 }
 
@@ -562,13 +562,13 @@ export function platformInvariantTable(
     base.push({ kind: "exact", path: "commands.ownerAllowFrom", value: ABSENT });
   }
   const platformProjection = base;
-  // A Builder gateway is the Builder's own OpenClaw: no platform credential lives
+  // An isolated gateway is the user's own OpenClaw: no platform credential lives
   // in the pod, so host code, terminals, MCP servers, cron, skills, sub-agents,
-  // and the codex BYOSUB plugin stay at the Builder's discretion. The platform
+  // and the codex BYOSUB plugin stay at the user's discretion. The platform
   // keeps only wiring and tenant-scoped secret providers.
   return context.gatewayClass === "builder"
     ? platformProjection
-    : [...platformProjection, ...customerToolInvariants()];
+    : [...platformProjection, ...userToolInvariants()];
 }
 
 function asObject(value: unknown): JsonObject | null {
@@ -622,9 +622,9 @@ function equal(left: unknown, right: unknown): boolean {
   return Object.is(left, right);
 }
 
-function customerAgentRecords(
+function userAgentRecords(
   config: JsonObject,
-  path: CustomerAgentWorkspaceInvariant["path"],
+  path: UserAgentWorkspaceInvariant["path"],
 ): JsonObject[] {
   const agents = asObject(config.agents);
   if (!agents) return [];
@@ -657,9 +657,9 @@ function forceAgentWorkspaceOnly(agent: JsonObject): void {
   fs.workspaceOnly = true;
 }
 
-function customerAgentEntries(
+function userAgentEntries(
   config: JsonObject,
-  path: CustomerAgentToolPolicyInvariant["path"],
+  path: UserAgentToolPolicyInvariant["path"],
 ): Array<{ agent: JsonObject; agentId: string }> {
   const agents = asObject(config.agents);
   if (!agents) return [];
@@ -687,15 +687,15 @@ function agentToolPolicySatisfied(config: JsonObject, agent: JsonObject, agentId
   const tools = asObject(agent.tools);
   const deny = Array.isArray(tools?.deny) ? tools.deny : [];
   const expectedAlsoAllow = allowedToolsForAgent(parsed.kind);
-  const expectedSenderPolicy = customerToolsBySenderPolicy(config, agentId);
+  const expectedSenderPolicy = userToolsBySenderPolicy(config, agentId);
   return tools !== null
     && tools.profile === (parsed.kind === "coach" ? "coding" : "minimal")
     && equal(tools.alsoAllow, expectedAlsoAllow)
     && !Object.prototype.hasOwnProperty.call(tools, "allow")
     && (parsed.kind === "project"
       ? equal(deny, PROJECT_AGENT_DENIED_TOOLS)
-      : CUSTOMER_CODE_DENIED_TOOLS.every((tool) => deny.includes(tool))
-        && CUSTOMER_STRUCTURED_AVAILABLE_TOOLS.every((tool) => !deny.includes(tool)))
+      : USER_CODE_DENIED_TOOLS.every((tool) => deny.includes(tool))
+        && USER_STRUCTURED_AVAILABLE_TOOLS.every((tool) => !deny.includes(tool)))
     && equal(tools.toolsBySender, expectedSenderPolicy);
 }
 
@@ -711,16 +711,16 @@ function forceAgentToolPolicy(config: JsonObject, agent: JsonObject, agentId: st
   tools.deny = parsed.kind === "project"
     ? structuredClone(PROJECT_AGENT_DENIED_TOOLS)
     : [
-      ...deny.filter((tool) => !CUSTOMER_STRUCTURED_AVAILABLE_TOOLS.includes(
-        tool as typeof CUSTOMER_STRUCTURED_AVAILABLE_TOOLS[number],
+      ...deny.filter((tool) => !USER_STRUCTURED_AVAILABLE_TOOLS.includes(
+        tool as typeof USER_STRUCTURED_AVAILABLE_TOOLS[number],
       )),
-      ...CUSTOMER_CODE_DENIED_TOOLS.filter((tool) => !deny.includes(tool)),
+      ...USER_CODE_DENIED_TOOLS.filter((tool) => !deny.includes(tool)),
     ];
-  tools.toolsBySender = customerToolsBySenderPolicy(config, agentId);
+  tools.toolsBySender = userToolsBySenderPolicy(config, agentId);
   delete tools.allow;
 }
 
-export function reconcileCustomerAgentEntry(
+export function reconcileSharedGatewayAgentEntry(
   agentId: string,
   entry: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -730,7 +730,7 @@ export function reconcileCustomerAgentEntry(
   return agent;
 }
 
-export function reconcileBuilderAgentEntry(
+export function reconcileIsolatedGatewayAgentEntry(
   agentId: string,
   entry: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -754,12 +754,12 @@ function carriesSharedHostCodeFence(tools: JsonObject | null): boolean {
 
 
 function allowedToolsForAgent(kind: ParsedAgentId["kind"]): readonly string[] {
-  if (kind === "coach") return CUSTOMER_WORKFLOW_TOOLS;
+  if (kind === "coach") return USER_WORKFLOW_TOOLS;
   if (kind === "project") return PROJECT_AGENT_ALLOWED_TOOLS;
   return [];
 }
 
-function customerToolsBySenderPolicy(_config: JsonObject, agentId: string): JsonObject {
+function userToolsBySenderPolicy(_config: JsonObject, agentId: string): JsonObject {
   return parseAgentId(agentId).kind === "project"
     ? { "*": { deny: structuredClone(PRODUCTIVITY_TOOL_NAMES) } }
     : {};
@@ -790,15 +790,15 @@ function reconcileMattermostAccounts(config: JsonObject, platformOwned: boolean)
 }
 
 function invariantSatisfied(config: JsonObject, invariant: PlatformInvariant): boolean {
-  if (invariant.kind === CUSTOMER_AGENT_WORKSPACE) {
-    return customerAgentRecords(config, invariant.path).every(agentWorkspaceOnly);
+  if (invariant.kind === USER_AGENT_WORKSPACE) {
+    return userAgentRecords(config, invariant.path).every(agentWorkspaceOnly);
   }
-  if (invariant.kind === CUSTOMER_AGENT_TOOL_POLICY) {
-    return customerAgentEntries(config, invariant.path).every(({ agent, agentId }) =>
+  if (invariant.kind === USER_AGENT_TOOL_POLICY) {
+    return userAgentEntries(config, invariant.path).every(({ agent, agentId }) =>
       agentToolPolicySatisfied(config, agent, agentId));
   }
   if (invariant.kind === PROJECT_AGENT_TOOL_POLICY) {
-    return customerAgentEntries(config, invariant.path)
+    return userAgentEntries(config, invariant.path)
       .filter(({ agentId }) => parseAgentId(agentId).kind === "project")
       .every(({ agent, agentId }) => agentToolPolicySatisfied(config, agent, agentId));
   }
@@ -814,18 +814,18 @@ function invariantSatisfied(config: JsonObject, invariant: PlatformInvariant): b
 }
 
 function applyInvariant(config: JsonObject, invariant: PlatformInvariant): void {
-  if (invariant.kind === CUSTOMER_AGENT_WORKSPACE) {
-    customerAgentRecords(config, invariant.path).forEach(forceAgentWorkspaceOnly);
+  if (invariant.kind === USER_AGENT_WORKSPACE) {
+    userAgentRecords(config, invariant.path).forEach(forceAgentWorkspaceOnly);
     return;
   }
-  if (invariant.kind === CUSTOMER_AGENT_TOOL_POLICY) {
-    for (const { agent, agentId } of customerAgentEntries(config, invariant.path)) {
+  if (invariant.kind === USER_AGENT_TOOL_POLICY) {
+    for (const { agent, agentId } of userAgentEntries(config, invariant.path)) {
       forceAgentToolPolicy(config, agent, agentId);
     }
     return;
   }
   if (invariant.kind === PROJECT_AGENT_TOOL_POLICY) {
-    for (const { agent, agentId } of customerAgentEntries(config, invariant.path)) {
+    for (const { agent, agentId } of userAgentEntries(config, invariant.path)) {
       if (parseAgentId(agentId).kind === "project") forceAgentToolPolicy(config, agent, agentId);
     }
     return;
@@ -876,8 +876,8 @@ export function assertPlatformInvariants(
 
 const PLATFORM_PROJECTION_KINDS = new Set<PlatformInvariant["kind"]>([
   "mattermost-account-projection",
-  CUSTOMER_AGENT_WORKSPACE,
-  CUSTOMER_AGENT_TOOL_POLICY,
+  USER_AGENT_WORKSPACE,
+  USER_AGENT_TOOL_POLICY,
   PROJECT_AGENT_TOOL_POLICY,
 ]);
 

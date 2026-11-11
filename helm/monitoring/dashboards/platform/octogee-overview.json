@@ -383,7 +383,7 @@
     {
       "id": 7,
       "type": "row",
-      "title": "Can customers use the platform?",
+      "title": "Can users use the platform?",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -534,7 +534,7 @@
     {
       "id": 10,
       "type": "stat",
-      "title": "Cowboy reconcile age",
+      "title": "Fleet controller reconcile age",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"

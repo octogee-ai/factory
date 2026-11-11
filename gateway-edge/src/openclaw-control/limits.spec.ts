@@ -8,7 +8,7 @@ import {
 describe("OpenClaw Dashboard shared resource limits", () => {
   it("reserves desktop streams independently of the two RPC sockets and releases capacity", () => {
     const limiter = new OpenClawControlResourceLimiter();
-    const identity = { uid: "uid-owner", gatewayId: "bender", sessionId: "session-1" };
+    const identity = { uid: "uid-owner", gatewayId: "walter", sessionId: "session-1" };
     const rpc = [limiter.acquireSocket(identity), limiter.acquireSocket(identity)];
     expect(rpc.every(Boolean)).toBe(true);
     expect(limiter.acquireSocket(identity)).toBeNull();
@@ -25,7 +25,7 @@ describe("OpenClaw Dashboard shared resource limits", () => {
 
   it.each(["uid", "gatewayId", "sessionId"] as const)("isolates desktop capacity by %s", (field) => {
     const limiter = new OpenClawControlResourceLimiter({ maxDesktopStreams: 1 });
-    const identity = { uid: "uid-owner", gatewayId: "bender", sessionId: "session-1" };
+    const identity = { uid: "uid-owner", gatewayId: "walter", sessionId: "session-1" };
     expect(limiter.acquireDesktopStream(identity)).not.toBeNull();
     expect(limiter.acquireDesktopStream({ ...identity })).toBeNull();
     expect(limiter.acquireDesktopStream({ ...identity, [field]: "other" })).not.toBeNull();
@@ -34,7 +34,7 @@ describe("OpenClaw Dashboard shared resource limits", () => {
   it("admits the current Dashboard startup burst", () => {
     expect(OPENCLAW_CONTROL_MAX_IN_FLIGHT).toBe(64);
     const limiter = new OpenClawControlResourceLimiter();
-    const identity = { uid: "uid-owner", gatewayId: "bender", sessionId: "session-1" };
+    const identity = { uid: "uid-owner", gatewayId: "walter", sessionId: "session-1" };
     const leases = Array.from({ length: OPENCLAW_CONTROL_MAX_IN_FLIGHT }, () =>
       limiter.acquireRequest(identity));
 
@@ -52,7 +52,7 @@ describe("OpenClaw Dashboard shared resource limits", () => {
       mutationWindowMs: 1_000,
       now: () => now,
     });
-    const identity = { uid: "uid-owner", gatewayId: "bender", sessionId: "session-1" };
+    const identity = { uid: "uid-owner", gatewayId: "walter", sessionId: "session-1" };
     const socket = limiter.acquireSocket(identity);
     expect(socket).not.toBeNull();
     expect(limiter.acquireSocket(identity)).toBeNull();

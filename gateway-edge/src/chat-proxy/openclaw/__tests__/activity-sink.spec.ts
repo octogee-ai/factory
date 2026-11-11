@@ -198,7 +198,7 @@ function mmClient(
 const binding = {
   mainChannelId: "main-1",
   channelCreateAt: 100,
-  coachMmUserId: "agent-1",
+  defaultAgentMmUserId: "agent-1",
   attentionMention: "@builder",
 };
 
@@ -389,7 +389,7 @@ describe("attention-aware Activity sink", () => {
       id: "turn-1",
       channelId: "main-1",
       rootId: "",
-      userId: binding.coachMmUserId,
+      userId: binding.defaultAgentMmUserId,
       props: {},
       fileIds: [],
     });

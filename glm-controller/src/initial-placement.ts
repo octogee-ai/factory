@@ -1,8 +1,8 @@
 import {
-  builderRuntimeMutationFenced,
+  isolatedRuntimeMutationFenced,
 } from "@octogee/core/gateway-retirement-claim";
 import type {
-  BuilderRecord,
+  PlatformUserRecord,
   FleetRegistryRecord,
   GatewayAssignment,
   OperationRecord,
@@ -21,7 +21,7 @@ import {
 } from "@octogee/shared/types/gateway-releases";
 import { resolveUserGatewayControlState } from "@octogee/shared/types/glm";
 import type { ContinuousPlacementOwnedGateway } from "@octogee/shared/types/orchestrator-placement";
-import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
+import { MIGRATE_USER_KIND } from "./operation-kinds.js";
 
 export const openPlacementAdmission: PlacementAdmissionPolicy = {
   decide: async () => ({ kind: "admitted" }),
@@ -49,7 +49,7 @@ interface MigrationRoute {
 }
 
 function migrationRoute(operation: Stored<OperationRecord>): MigrationRoute | null {
-  if (operation.kind !== MIGRATE_CUSTOMER_KIND) return null;
+  if (operation.kind !== MIGRATE_USER_KIND) return null;
   const input = operation.input;
   if (input === null || typeof input !== "object" || Array.isArray(input)) return null;
   const { uid, fromGatewayId, toGatewayId } = input as Record<string, unknown>;
@@ -118,18 +118,18 @@ export function initialTargetFenceFailures(input: {
   return checks.filter(([, failed]) => failed).map(([name]) => name);
 }
 
-async function builderRejection(
+async function userRejection(
   transaction: PlatformStateTransaction,
-  builder: Stored<BuilderRecord> | null,
+  user: Stored<PlatformUserRecord> | null,
   request: AssignInitialPlacementInput,
 ): Promise<PlacementRejectReason | null> {
-  if (builder === null) return "builder-missing";
-  if (builder.openclaw.managedBy === "operator") return "builder-operator-managed";
-  if (builderRuntimeMutationFenced(builder)) {
-    return builder.fences.restoreFence !== undefined ? "restore-in-progress" : "source-transfer-in-progress";
+  if (user === null) return "builder-missing";
+  if (user.openclaw.managedBy === "operator") return "builder-operator-managed";
+  if (isolatedRuntimeMutationFenced(user)) {
+    return user.fences.restoreFence !== undefined ? "restore-in-progress" : "source-transfer-in-progress";
   }
-  if (!accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle })) return "account-not-interactive";
-  const currentGatewayId = builder.gateway?.gatewayId;
+  if (!accountAllowsInteractiveAccess({ accountLifecycle: user.accountLifecycle })) return "account-not-interactive";
+  const currentGatewayId = user.gateway?.gatewayId;
   if (
     currentGatewayId !== undefined && currentGatewayId !== request.gatewayId &&
     await transaction.gateways.assignments.get(currentGatewayId, request.uid) !== null
@@ -183,11 +183,11 @@ export async function commitInitialPlacement(
   return store.transaction<InitialPlacementResult>(
     { label: "placement-policy.initial-placement" },
     async (transaction) => {
-      const builder = await transaction.builders.records.get(request.uid);
-      const rejection = await builderRejection(transaction, builder, request);
+      const user = await transaction.users.records.get(request.uid);
+      const rejection = await userRejection(transaction, user, request);
       if (rejection !== null) return { kind: "rejected", reason: rejection };
       const existing = await transaction.gateways.assignments.get(request.gatewayId, request.uid);
-      if (existing !== null && builder?.gateway?.gatewayId === request.gatewayId) {
+      if (existing !== null && user?.gateway?.gatewayId === request.gatewayId) {
         return { kind: "already-placed" };
       }
       const stored = await transaction.gateways.roots.get(request.gatewayId);
@@ -209,7 +209,7 @@ export async function commitInitialPlacement(
         });
         if (targetRejection !== null) return { kind: "rejected", reason: targetRejection };
       }
-      await transaction.builders.records.setGatewayMirror(request.uid, {
+      await transaction.users.records.setGatewayMirror(request.uid, {
         gatewayId: request.gatewayId,
         gatewayProfile: controlState.gatewayProfile,
         controlUiEnabled: controlState.controlUiEnabled,

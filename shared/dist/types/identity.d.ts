@@ -19,7 +19,7 @@ export declare function usernameValidationError(name: unknown): string | null;
 export declare function isValidProjectId(id: unknown): id is string;
 export declare function isValidCustomChannelName(name: unknown): name is string;
 export declare function workspaceGeneralChannelName(username: string): string;
-export declare function workspaceCoachChannelName(username: string): string;
+export declare function workspaceDefaultAgentChannelName(username: string): string;
 export declare function workspaceAdminChannelName(username: string): string;
 export declare function workspaceCustomChannelName(username: string, custom: string): string;
 export declare function projectGeneralChannelName(username: string, project: string): string;
@@ -27,9 +27,9 @@ export declare function projectChannelName(username: string, project: string, ch
 export declare function isMmSystemChannel(name: string): boolean;
 export declare const AGENT_ID_PREFIX: 'octogee-';
 export declare const AGENT_ID_SUFFIX: '-coach';
-export declare function workspaceCoachAgentId(username: string): string;
+export declare function workspaceDefaultAgentId(username: string): string;
 export declare function projectAgentId(username: string, project: string): string;
-export declare function workspaceCoachMmUsername(username: string): string;
+export declare function workspaceDefaultAgentMmUsername(username: string): string;
 export declare function projectAgentMmUsername(username: string, project: string): string;
 export type ParsedAgentId = {
     kind: 'coach';

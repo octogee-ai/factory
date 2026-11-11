@@ -35,7 +35,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 import { main as fleet } from "../ops/fleet.js";
-import { main as rotateBuilderMmPat } from "../ops/rotate-builder-mm-pat.js";
+import { main as rotateUserMmPat } from "../ops/rotate-user-mm-pat.js";
 import { main as setAdminRole } from "../ops/set-admin-role.js";
 
 function otherTargetsDatabase(selected: { deploymentTargetId: string }): Promise<never> {
@@ -65,7 +65,7 @@ describe("operator commands bind the platform database to their deployment targe
   });
 
   it.each([
-    ["rotate-builder-mm-pat", rotateBuilderMmPat],
+    ["rotate-user-mm-pat", rotateUserMmPat],
     ["set-admin-role", setAdminRole],
   ])("%s takes its target from the Firebase project and stops before any account change", async (_name, command) => {
     await expect(command(["--project=octogee-test", "someone@example.com"])).rejects.toThrow(

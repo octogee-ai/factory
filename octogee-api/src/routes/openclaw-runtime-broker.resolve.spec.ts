@@ -61,7 +61,7 @@ describe("resolveRedeemGatewayUrl", () => {
       .resolves.toEqual({ error: "gateway-root-invalid" });
   });
 
-  it("requires a live release even when a customer assignment exists", async () => {
+  it("requires a live release even when a user assignment exists", async () => {
     await expect(resolveWith(desiredDoc({ liveRelease: null }), {
       "gateways/default/assignments/u1": assignmentDoc(),
       "glmGateways/default": runtimeDoc(),
@@ -75,7 +75,7 @@ describe("resolveRedeemGatewayUrl", () => {
     })).resolves.toEqual({ url: RUNTIME_URL });
   });
 
-  it("resolves the live runtime without a customer assignment", async () => {
+  it("resolves the live runtime without a user assignment", async () => {
     await expect(resolveWith(desiredDoc({ internalUrl: LEGACY_URL }), { "glmGateways/default": runtimeDoc() }))
       .resolves.toEqual({ url: RUNTIME_URL });
   });

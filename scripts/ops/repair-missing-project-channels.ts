@@ -88,12 +88,12 @@ async function findProjectsNeedingRepair(): Promise<ProjectToRepair[]> {
 
     let owner = ownerCache.get(ownerUid);
     if (owner === undefined) {
-      const [builder, agent] = await Promise.all([
-        store.builders.records.get(ownerUid),
+      const [user, agent] = await Promise.all([
+        store.users.records.get(ownerUid),
         store.workspaces.agentIdentities.get(ownerUid),
       ]);
       owner = {
-        ownerMmUserId: builder?.mattermostUserId ?? "",
+        ownerMmUserId: user?.mattermostUserId ?? "",
         agentMmUserId: agent?.mattermostUserId ?? "",
       };
       ownerCache.set(ownerUid, owner);

@@ -20,7 +20,7 @@ import { bundleFixture } from "./fixture";
 const ctx = { stateRoot: "/srv/octogee", instanceId: "4242", desktopAuth: true };
 
 describe("planBundle", () => {
-  it("uses a new project working set after a verified home migration on the same computer", () => {
+  it("uses a new project working set after a verified home migration on the same VM", () => {
     const bundle = bundleFixture();
     bundle.volumes.push({ name: "project-materializations", kind: "ephemeral" });
     bundle.containers[0].mounts.push({ volume: "project-materializations", mountPath: "/work/materialized", readOnly: false, subPath: null });
@@ -74,7 +74,7 @@ describe("planBundle", () => {
   });
 
 
-  it("keeps customer home durable while ephemeral cache/project materializations use platform boot storage", () => {
+  it("keeps user home durable while ephemeral cache/project materializations use platform boot storage", () => {
     const bundle = bundleFixture();
     bundle.volumes.push({ name: "builder-cache", kind: "ephemeral" }, { name: "project-materializations", kind: "ephemeral" });
     bundle.containers[0].mounts.push(
@@ -88,7 +88,7 @@ describe("planBundle", () => {
       expect.stringMatching(/^octogee-scratch-[a-f0-9]+-project-materializations:\/work\/materialized:ro$/),
     ]));
   });
-  it("keeps the same scratch backing across gateway rebindings on one computer, and isolates another computer", () => {
+  it("keeps the same scratch backing across gateway rebindings on one VM, and isolates another VM", () => {
     const bundle = bundleFixture();
     bundle.volumes.push({ name: "builder-cache", kind: "ephemeral" });
     bundle.containers[0].mounts.push({ volume: "builder-cache", mountPath: "/work/cache", readOnly: false, subPath: null });
@@ -108,7 +108,7 @@ describe("planBundle", () => {
     bundle.containers[0].mounts.at(-1)!.subPath = "../home";
     expect(() => planBundle(bundle, ctx)).toThrow(/subPath/);
   });
-  it("labels dedicated Builder container logs with the bundle's Builder slug", () => {
+  it("labels dedicated user container logs with the bundle's user slug", () => {
     const bundle = bundleFixture({ builderIdentity: { ownerUid: "uid-alice", builderSlug: "alice" } });
     const plan = planBundle(bundle, ctx);
     for (const spec of [plan.init, ...plan.services]) {
@@ -117,7 +117,7 @@ describe("planBundle", () => {
     }
   });
 
-  it("replaces sidecars when their logged Builder identity changes", () => {
+  it("replaces sidecars when their logged user identity changes", () => {
     const before = planBundle(bundleFixture({ builderIdentity: { ownerUid: "uid-alice", builderSlug: "alice" } }), ctx);
     const after = planBundle(bundleFixture({ builderIdentity: { ownerUid: "uid-bob", builderSlug: "bob" } }), ctx);
     expect(specVersion(before.services[1])).not.toBe(specVersion(after.services[1]));
@@ -206,7 +206,7 @@ describe("planBundle", () => {
     expect(desktopBinds(planContainer(bundle, bundle.containers[0], ctx, "init").config)).toEqual([]);
   });
 
-  it("gives an X11 computer's gateway its own desktop home rather than the host login home, a memory /dev/shm, and room for Chromium's sandbox", () => {
+  it("gives an X11 VM's gateway its own desktop home rather than the host login home, a memory /dev/shm, and room for Chromium's sandbox", () => {
     const withShm = (desktop: "omarchy" | "x11") => {
       const bundle = bundleFixture({ desktop });
       bundle.volumes.push({ name: "desktop-shm", kind: "emptyDir" });
@@ -286,7 +286,7 @@ describe("planBundle", () => {
     expect(planContainer(bundle, bundle.containers[0], ctx, "init").config.HostConfig).not.toHaveProperty("Mounts");
   });
 
-  it("plans the gateway without the desktop password mount on a computer whose desktop publishes none", () => {
+  it("plans the gateway without the desktop password mount on a VM whose desktop publishes none", () => {
     const plan = planBundle(bundleFixture(), { ...ctx, desktopAuth: false });
     expect(plan.services[0].name).toBe("octogee-gateway");
     expect(plan.services[0].config.HostConfig).not.toHaveProperty("Mounts");
@@ -333,7 +333,7 @@ describe("planBundle", () => {
 });
 
 describe("envFor", () => {
-  it("fills the edge's computer instance id placeholder with this VM's instance id", () => {
+  it("fills the edge's VM instance id placeholder with this VM's instance id", () => {
     const bundle = bundleFixture();
     const edge = {
       ...bundle.containers[1],

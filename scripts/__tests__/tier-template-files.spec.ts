@@ -99,7 +99,7 @@ describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => 
     expect(written).not.toContain("SOUL.md");
   });
 
-  it("removes legacy AGENTS.md and TOOLS.md ignores so context files are customer-owned", async () => {
+  it("removes legacy AGENTS.md and TOOLS.md ignores so context files are user-owned", async () => {
     seedTier("default", ["AGENTS.md", "TOOLS.md"]);
     const dir = customerDir("owned");
     fs.writeFileSync(
@@ -131,7 +131,7 @@ describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => 
     expect(written).toEqual(expect.arrayContaining(["AGENTS.md", "SOUL.md", "TOOLS.md"]));
   });
 
-  it("does not copy retired context directories into customer workspaces", async () => {
+  it("does not copy retired context directories into user workspaces", async () => {
     seedTier("default", ["AGENTS.md"]);
     const retiredContextDir = path.join(tmpRoot, ["br", "ain-context"].join(""));
     fs.mkdirSync(retiredContextDir, { recursive: true });

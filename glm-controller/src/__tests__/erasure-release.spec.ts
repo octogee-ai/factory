@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
-import { markSuspendedAndReleaseErasure } from "../lib/customer-ops/erasure-release.js";
+import { markSuspendedAndReleaseErasure } from "../lib/user-ops/erasure-release.js";
 
 const NOW = 1_000_000;
 

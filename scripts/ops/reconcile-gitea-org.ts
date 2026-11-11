@@ -152,7 +152,7 @@ async function gatherCtx(
     oldName: giteaRepoName ?? `${slug}-${projectSlug}`,
   }));
   const ownerUid = workspace?.ownerUid ?? "";
-  const owner = ownerUid ? await store.builders.records.get(ownerUid) : null;
+  const owner = ownerUid ? await store.users.records.get(ownerUid) : null;
   const repoUrl = owner?.provisioning.gitRepoUrl ?? "";
   return { store, slug, io, wsGitea, wsOldName, ownerUid, repoUrl, projects };
 }
@@ -229,7 +229,7 @@ async function repointPlatformState(ctx: Ctx): Promise<void> {
     "workspace",
   );
   if (ctx.ownerUid && newRepoUrl) {
-    await store.builders.records.patch(ctx.ownerUid, { provisioning: { gitRepoUrl: newRepoUrl } });
+    await store.users.records.patch(ctx.ownerUid, { provisioning: { gitRepoUrl: newRepoUrl } });
   }
   for (const p of ctx.projects) {
     await store.workspaces.projects.patch(slug, p.projectSlug, { giteaRepoName: p.projectSlug });

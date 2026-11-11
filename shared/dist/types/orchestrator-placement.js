@@ -22,7 +22,7 @@ export function resolveLiveActivationTargetGatewayId(input) {
         return null;
     return nonEmptyString(lease.targetGatewayId);
 }
-export function resolveContinuousBuilderPlacement(input) {
+export function resolveContinuousUserPlacement(input) {
     const ownedGatewayId = resolveLiveActivationTargetGatewayId(input);
     if (!ownedGatewayId) {
         return { targetGatewayId: input.defaultGatewayId, ownedGatewayId: null };

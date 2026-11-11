@@ -335,7 +335,7 @@ describe("runVmGatewayAgent", () => {
 });
 
 describe("convergeOnce", () => {
-  it("writes the Desk identity into a Builder's home from the configured bootstrap and keeps converging when it is unavailable", async () => {
+  it("writes the Desk identity into a user's home from the configured bootstrap and keeps converging when it is unavailable", async () => {
     const clock = { now: 1_000 };
     const desk = { builderName: "Bob Builder", agentName: "Scout", look: { style: "kit", color: "#0ea5e9" }, timeZone: null };
     const h = deps(fakeDocker(), () => runtimeReply(homeBundle()), clock, {
@@ -548,7 +548,7 @@ describe("convergeOnce", () => {
     expect((docker.containers.get("octogee-gateway")?.config.Labels as Record<string, string>)["ai.octogee.bundle-version"]).toBe("v2");
   });
 
-  it("binds the desktop password into the gateway on a computer whose image ships the OpenClaw VNC reflector", async () => {
+  it("binds the desktop password into the gateway on a VM whose image ships the OpenClaw VNC reflector", async () => {
     const docker = fakeDocker();
     const h = deps(docker, () => runtimeReply(bundleFixture()), { now: 1_000 });
 
@@ -560,7 +560,7 @@ describe("convergeOnce", () => {
     expect(docker.containers.has("octogee-host-probe")).toBe(false);
   });
 
-  it("starts the gateway without the desktop password on a computer image that predates the OpenClaw VNC reflector, says so, and settles", async () => {
+  it("starts the gateway without the desktop password on a VM image that predates the OpenClaw VNC reflector, says so, and settles", async () => {
     const docker = fakeDocker();
     docker.hostBin.clear();
     const h = deps(docker, () => runtimeReply(bundleFixture()), { now: 1_000 });
@@ -651,7 +651,7 @@ describe("convergeOnce", () => {
     expect(docker.log.slice(settled).filter((l) => l.startsWith("POST /containers/create"))).toHaveLength(0);
   });
 
-  it("writes the bundle's Builder claim into the home volume before init and the services start", async () => {
+  it("writes the bundle's user claim into the home volume before init and the services start", async () => {
     const docker = fakeDocker();
     const h = deps(docker, () => runtimeReply(homeBundle()), { now: 1_000 });
     let logAtClaim = -1;
@@ -675,7 +675,7 @@ describe("convergeOnce", () => {
     expect(logAtClaim).toBeLessThan(initStart);
   });
 
-  describe("an existing Builder claim in the home volume", () => {
+  describe("an existing user claim in the home volume", () => {
     const CLAIM_PATH = "/srv/octogee/volumes/data/.openclaw/builder-claim.json";
     const existing = (overrides: Record<string, unknown>) => JSON.stringify({
       schemaVersion: 1, gatewayId: "b-x", ownerUid: "uid-bob", builderSlug: "bob",
@@ -684,7 +684,7 @@ describe("convergeOnce", () => {
 
     it.each([
       ["the same gateway and owner", {}],
-      ["the owner's own computer rebound from an earlier gateway", { gatewayId: "b-old" }],
+      ["the owner's own VM rebound from an earlier gateway", { gatewayId: "b-old" }],
     ])("rewrites a claim for %s", async (_label, overrides) => {
       const docker = fakeDocker();
       const h = deps(docker, () => runtimeReply(homeBundle()), { now: 1_000 });
@@ -698,7 +698,7 @@ describe("convergeOnce", () => {
 
     it.each([
       ["another owner", { ownerUid: "uid-mallory" }, /uid-mallory/],
-      ["another Builder slug", { builderSlug: "mallory" }, /mallory/],
+      ["another user slug", { builderSlug: "mallory" }, /mallory/],
       ["unreadable content", { schemaVersion: 7 }, /malformed/],
     ])("refuses to start the gateway over a claim for %s", async (_label, overrides, named) => {
       const docker = fakeDocker();
@@ -729,7 +729,7 @@ describe("convergeOnce", () => {
     const ownerless = deps(fakeDocker(), () => runtimeReply(bundleFixture()), { now: 1_000 });
     await convergeOnce(ownerless.d, initialAgentState());
     expect([...ownerless.files.keys()].some((path) => path.endsWith("builder-claim.json"))).toBe(false);
-    expect(ownerless.d.log).toHaveBeenCalledWith(expect.stringContaining("carries no Builder identity"));
+    expect(ownerless.d.log).toHaveBeenCalledWith(expect.stringContaining("carries no user identity"));
   });
 
   it("re-runs init and recreates every service when only the init container changed, then settles", async () => {
@@ -835,7 +835,7 @@ describe("convergeOnce", () => {
     expect(docker.containers.size).toBe(0);
   });
 
-  it("checkpoints a dirty home once the containers are steady, waits out the interval, and checkpoints immediately when Cowboy asks", async () => {
+  it("checkpoints a dirty home once the containers are steady, waits out the interval, and checkpoints immediately when the fleet controller asks", async () => {
     const docker = fakeDocker();
     const clock = { now: 1_000 };
     let signal = { requestedAt: null as number | null, completedAt: null as number | null };
@@ -988,19 +988,19 @@ describe("convergeOnce", () => {
     expect(h.d.home.desktop.run).toHaveBeenLastCalledWith("thaw");
   });
 
-  it("reports a due checkpoint it cannot take because the bundle carries no Builder home", async () => {
+  it("reports a due checkpoint it cannot take because the bundle carries no user home", async () => {
     const docker = fakeDocker();
     const clock = { now: 1_000 };
     let signal = { requestedAt: null as number | null, completedAt: null as number | null };
     const h = deps(docker, () => runtimeReply(bundleFixture(), signal), clock);
     let state = await convergeOnce(h.d, initialAgentState());
     state = await convergeOnce(h.d, state);
-    expect(h.d.log).toHaveBeenCalledWith("[vm-agent] home checkpoint skipped: bundle v1 carries no Builder home (data emptyDir + Builder identity)");
+    expect(h.d.log).toHaveBeenCalledWith("[vm-agent] home checkpoint skipped: bundle v1 carries no user home (data emptyDir + user identity)");
     expect(state.homeCheckpointCheckedAt).toBe(1_000);
     signal = { requestedAt: 1_500, completedAt: null };
     clock.now = 2_000;
     await convergeOnce(h.d, state);
-    expect(h.d.log).toHaveBeenCalledWith("[vm-agent] home checkpoint skipped (requested at 1500): bundle v1 carries no Builder home (data emptyDir + Builder identity)");
+    expect(h.d.log).toHaveBeenCalledWith("[vm-agent] home checkpoint skipped (requested at 1500): bundle v1 carries no user home (data emptyDir + user identity)");
     expect(calls(h.fetchImpl, "/upload")).toHaveLength(0);
   });
 
@@ -1014,7 +1014,7 @@ describe("convergeOnce", () => {
     let state = await convergeOnce(h.d, initialAgentState());
     state = await convergeOnce(h.d, state);
     expect(state.homeCheckpointCheckedAt).toBe(1_000);
-    expect(h.d.log).toHaveBeenCalledWith(expect.stringContaining("home checkpoint failed: computer-home checkpoint-url: HTTP 502"));
+    expect(h.d.log).toHaveBeenCalledWith(expect.stringContaining("home checkpoint failed: vm-home checkpoint-url: HTTP 502"));
   });
 });
 
@@ -1035,7 +1035,7 @@ describe("watchPreemption", () => {
     return { ...h, asked, sleeps, sleep };
   }
 
-  it("reports the preemption to Cowboy through the runtime channel the moment GCE announces it, then stops watching", async () => {
+  it("reports the preemption to the fleet controller through the runtime channel the moment GCE announces it, then stops watching", async () => {
     const h = watching([false, true], []);
 
     await watchPreemption(h.d, { sleep: h.sleep });
@@ -1044,7 +1044,7 @@ describe("watchPreemption", () => {
     const reports = calls(h.fetchImpl, "/internal/fleet/vm-runtime");
     expect(reports).toHaveLength(1);
     expect(JSON.parse(String(reports[0][1].body))).toEqual({ gatewayId: "b-x", preempted: true });
-    expect(h.d.log).toHaveBeenCalledWith(expect.stringMatching(/GCE announced this Spot computer's preemption/));
+    expect(h.d.log).toHaveBeenCalledWith(expect.stringMatching(/GCE announced this Spot VM's preemption/));
     expect(h.sleeps).toEqual([]);
   });
 

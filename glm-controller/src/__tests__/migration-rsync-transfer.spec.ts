@@ -466,7 +466,7 @@ describe("createRsyncMigrationTransfer", () => {
     }
   }, 10_000);
 
-  it("keeps the cold Builder finish request and transfer claim alive beyond five minutes", async () => {
+  it("keeps the cold user finish request and transfer claim alive beyond five minutes", async () => {
     vi.useFakeTimers();
     const store: Store = {};
     const baseFetch = makeFetch([]);
@@ -575,13 +575,13 @@ describe("createRsyncMigrationTransfer", () => {
       fetch: makeFetch(calls), runCommand,
     });
     const completion = transfer({
-      migrationId: "cold-builder", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final",
+      migrationId: "cold-user", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final",
     });
     await waiting;
-    expect(store["cold-builder__final"].status).toBe("running");
+    expect(store["cold-user__final"].status).toBe("running");
     finishWait();
     await expect(completion).resolves.toMatchObject({ imported: true });
-    expect(store["cold-builder__final"].status).toBe("succeeded");
+    expect(store["cold-user__final"].status).toBe("succeeded");
   });
 
   it("fails final transfer when the activated target never becomes Ready", async () => {
@@ -597,9 +597,9 @@ describe("createRsyncMigrationTransfer", () => {
         : baseRunner(command, args, opts),
     });
     await expect(transfer({
-      migrationId: "unready-builder", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final",
+      migrationId: "unready-user", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final",
     })).rejects.toThrow("target gw-to-pod did not become Ready");
-    expect(store["unready-builder__final"].status).toBe("failed");
+    expect(store["unready-user__final"].status).toBe("failed");
     expect(calls.at(-1)).toContain("/abort-rsync-import/gw-to");
   });
 

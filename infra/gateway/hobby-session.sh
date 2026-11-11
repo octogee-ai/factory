@@ -121,7 +121,7 @@ while true; do
     fi
     launch_browser
   elif [[ "$exited" == "$gateway_pid" && "$status" == 72 ]]; then
-    echo "hobby-desktop: gateway belongs to a rebound computer; stopping for replacement" >&2
+    echo "hobby-desktop: gateway belongs to a rebound VM; stopping for replacement" >&2
     exit 0
   else
     echo "hobby-desktop: required process $exited exited (status=$status)" >&2

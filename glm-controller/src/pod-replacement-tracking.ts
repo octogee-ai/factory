@@ -67,7 +67,7 @@ export type VacatedPodVerdict = "unplanned" | "planned" | "deferred" | "unowned"
 
 // The ReplicaSet is Kubernetes' own record of intent for a pod's generation and
 // it outlives the pod, which makes it the discriminator that survives the timing
-// gap between Cowboy writing desired state and the pod actually going away:
+// gap between the fleet controller writing desired state and the pod actually going away:
 // - the ReplicaSet is gone or scaled to zero: a roll, a restart, a config upgrade,
 //   a pause or an uninstall replaced or removed this generation — planned;
 // - the ReplicaSet controller still counts more pods than this observation

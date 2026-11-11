@@ -31,7 +31,7 @@ export const SQLITE_SIDECAR_EXCLUDE_ARGS = SQLITE_SIDECAR_SUFFIXES.map(
 // generation swap, and temp copies it is still writing. They are recreated on
 // the destination and cannot be checkpointed while held.
 // Glob twins of the pattern above for tar/rsync, which see the whole copy set
-// including the customer's workspace checkout: the uuid stamp keeps a workspace
+// including the user's workspace checkout: the uuid stamp keeps a workspace
 // file that merely resembles a temp copy in the transfer.
 const UUID_GLOB = "????????-????-????-????-????????????";
 

@@ -112,10 +112,10 @@ describe('gateway-edge middleware stack', () => {
     try {
       const app = createSidecarApp();
       for (let index = 0; index < 180; index++) {
-        await request(app).get('/api/g/bender/openclaw/assets/app.js')
+        await request(app).get('/api/g/walter/openclaw/assets/app.js')
           .set('X-Forwarded-For', '198.51.100.26, 203.0.113.1').expect(404);
       }
-      await request(app).get('/api/g/bender/openclaw/assets/app.js')
+      await request(app).get('/api/g/walter/openclaw/assets/app.js')
         .set('X-Forwarded-For', '198.51.100.26, 203.0.113.1').expect(429);
 
       const metrics = await request(app).get('/metrics').expect(200);
@@ -147,7 +147,7 @@ describe('gateway-edge middleware stack', () => {
 
   it('keeps the mountApi locality routes on the same fleet seam — scoped git locality reaches requireAuth, never 404', async () => {
     const app = createSidecarApp();
-    const res = await request(app).get('/api/g/gw-bender/workspace/git/status');
+    const res = await request(app).get('/api/g/gw-walter/workspace/git/status');
     expect(res.status).not.toBe(404);
     expect(res.status).toBe(401);
   });
@@ -168,14 +168,14 @@ describe('gateway-edge middleware stack', () => {
 
   it('uses exact APP_URL CSP framing instead of Helmet SAMEORIGIN on the Dashboard surface', async () => {
     process.env.OPENCLAW_DASHBOARD_BRIDGE_ENABLED = 'true';
-    process.env.GATEWAY_ID = 'gw-bender';
-    process.env.GATEWAY_REVISION_ID = 'gw-bender-r1';
+    process.env.GATEWAY_ID = 'gw-walter';
+    process.env.GATEWAY_REVISION_ID = 'gw-walter-r1';
     process.env.GATEWAY_CLASS = 'builder';
     process.env.API_PUBLIC_URL = 'https://api-test.octogee.com';
     process.env.APP_URL = 'https://app-octogee-test.web.app';
     const app = createSidecarApp();
 
-    const res = await request(app).get('/api/g/gw-bender/openclaw/');
+    const res = await request(app).get('/api/g/gw-walter/openclaw/');
 
     expect(res.status).toBe(401);
     expect(res.headers['content-security-policy'])
@@ -235,5 +235,5 @@ describe('gateway-edge middleware stack', () => {
   // Stripe-webhook raw-body middleware contract: tested in
   // octogee-api/src/__tests__/billing-stripe.integration.spec.ts now
   // that /api/billing/webhook lives on octogee-api (gateway-edge no
-  // longer mounts the billing router after POST-BENDER-CLEANUP-SPEC §2.5).
+  // longer mounts the billing router).
 });

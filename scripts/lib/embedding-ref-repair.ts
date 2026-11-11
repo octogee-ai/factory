@@ -3,10 +3,10 @@ import {
   PLATFORM_EMBEDDING_SECRET_PREFIX,
   platformOpenAiEmbeddingSecretId,
   rebindPlatformEmbeddingRefs,
-} from "./openclaw-config-builders.js";
+} from "./openclaw-config-users.js";
 
 // Operator repair for the r2 wedge class: a source pod whose persisted config
-// carries platform embedding SecretRefs shifted onto the wrong coach (OpenClaw
+// carries platform embedding SecretRefs shifted onto the wrong agent (OpenClaw
 // redacted-array round-trip). Follows the prod adapter's incident-proven
 // recipe: hash from rpc.configGet, BASE from the pod's UNREDACTED disk config
 // (configGet output is redacted — full-applying it would clobber literal
@@ -129,7 +129,7 @@ export async function runEmbeddingRefRepair(
   if (plan.absentAgentDirs.length > 0) {
     throw new Error(
       `[embedding-repair] refusing to apply: absent agent dir(s) for ${plan.absentAgentDirs.join(", ")} — ` +
-        "a rebound ref would still refuse to resolve; remove or remount those coaches first",
+        "a rebound ref would still refuse to resolve; remove or remount those agents first",
     );
   }
   const next = structuredClone(base);

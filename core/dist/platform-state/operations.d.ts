@@ -44,7 +44,7 @@ export interface OperationsRepository {
     listForUid(uid: string, filter: OperationUidFilter): Promise<readonly Stored<OperationRecord>[]>;
     listByKind(kind: OperationKind, statuses?: readonly OperationStatus[]): Promise<readonly Stored<OperationRecord>[]>;
     listReferencingUid(uid: string): Promise<readonly Stored<OperationRecord>[]>;
-    listByInputBuilderSlugPrefix(prefix: string): Promise<readonly Stored<OperationRecord>[]>;
+    listByInputUserSlugPrefix(prefix: string): Promise<readonly Stored<OperationRecord>[]>;
     enqueue(operation: NewOperation): Promise<string>;
     create(operation: OperationRecord): Promise<void>;
     put(operation: OperationRecord): Promise<void>;

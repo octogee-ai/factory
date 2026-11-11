@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { octogeeUserEntitlements } from "./octogee-entitlements.js";
 import {
-  resolveContinuousBuilderPlacement,
+  resolveContinuousUserPlacement,
   resolveOnboardingPlacementEligibility,
 } from "./orchestrator-placement.js";
 import { installUserEntitlements } from "./user-entitlements.js";
@@ -38,7 +38,7 @@ describe("onboarding placement eligibility", () => {
     })).toEqual({ eligible: true, slug: "alice" });
   });
 
-  it("keeps an operator-parked Builder out of automatic placement until released", () => {
+  it("keeps an operator-parked user out of automatic placement until released", () => {
     const data = { username: "alice", onboardingStep: "complete", provisioning: { status: "complete", openclaw: { slug: "alice", managedBy: "operator" } } };
     expect(resolveOnboardingPlacementEligibility(data)).toEqual({ eligible: false, reason: "operator-managed" });
     expect(resolveOnboardingPlacementEligibility({ ...data, provisioning: { ...data.provisioning, openclaw: { ...data.provisioning.openclaw, managedBy: "cowboy" } } })).toEqual({ eligible: true, slug: "alice" });
@@ -74,9 +74,9 @@ const trialBuilder = {
   },
 };
 
-describe("resolveContinuousBuilderPlacement", () => {
-  it("keeps an entitled inactive Builder parked on shared", () => {
-    expect(resolveContinuousBuilderPlacement({
+describe("resolveContinuousUserPlacement", () => {
+  it("keeps an entitled inactive user parked on shared", () => {
+    expect(resolveContinuousUserPlacement({
       uid: "uid-alice",
       userData: trialBuilder,
       currentGatewayId: "shared-blue",
@@ -92,8 +92,8 @@ describe("resolveContinuousBuilderPlacement", () => {
     })).toEqual({ targetGatewayId: "shared-blue", ownedGatewayId: null });
   });
 
-  it("returns expired and unentitled Builders to the configured default", () => {
-    expect(resolveContinuousBuilderPlacement({
+  it("returns expired and unentitled users to the configured default", () => {
+    expect(resolveContinuousUserPlacement({
       uid: "uid-alice",
       userData: trialBuilder,
       currentGatewayId: "builder-alice",
@@ -104,7 +104,7 @@ describe("resolveContinuousBuilderPlacement", () => {
   });
 
   it("does not treat a paid entitlement as runtime demand", () => {
-    expect(resolveContinuousBuilderPlacement({
+    expect(resolveContinuousUserPlacement({
       uid: "uid-paid",
       userData: { builderSubscription: { tier: "pro", status: "active" } },
       currentGatewayId: "shared-blue",
@@ -115,7 +115,7 @@ describe("resolveContinuousBuilderPlacement", () => {
   });
 
   it("keeps an active lease target stable during a heartbeat outage", () => {
-    expect(resolveContinuousBuilderPlacement({
+    expect(resolveContinuousUserPlacement({
       uid: "uid-alice",
       userData: {
         ...trialBuilder,
@@ -143,7 +143,7 @@ describe("resolveContinuousBuilderPlacement", () => {
   });
 
   it("does not route an active lease to a non-disposable owner gateway", () => {
-    expect(resolveContinuousBuilderPlacement({
+    expect(resolveContinuousUserPlacement({
       uid: "uid-alice",
       userData: {
         ...trialBuilder,

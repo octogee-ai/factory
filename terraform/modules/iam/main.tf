@@ -111,7 +111,7 @@ resource "google_project_iam_member" "llm_broker_anthropic_secret_accessor" {
   }
 }
 
-# ── Service Account: glm-controller (Cowboy) ────────────────────────────────
+# ── Service Account: glm-controller (fleet controller) ──────────────────────
 # Dedicated control-plane identity, separate from the shared gateway SA, so the
 # privileged teardown grants below (Secret Manager admin, per-gateway service-
 # account delete) are NOT inherited by cattle gateway pods — which run as
@@ -123,8 +123,8 @@ resource "google_service_account" "glm_controller" {
   project      = var.project_id
 }
 
-# Firestore (glmGateways / gateways docs) + Firebase Hosting (customer site
-# teardown) — the access Cowboy exercised via the shared GSA.
+# Firestore (glmGateways / gateways docs) + Firebase Hosting (user site
+# teardown) — the access the fleet controller exercised via the shared GSA.
 resource "google_project_iam_member" "glm_controller_firebase" {
   for_each = toset(["roles/datastore.user", "roles/firebaseauth.admin", "roles/firebasehosting.admin", "roles/firebase.viewer"])
   project  = var.project_id
@@ -132,7 +132,7 @@ resource "google_project_iam_member" "glm_controller_firebase" {
   member   = "serviceAccount:${google_service_account.glm_controller.email}"
 }
 
-# Secret Manager admin: Cowboy creates + sets IAM on + (on decommission)
+# Secret Manager admin: the fleet controller creates + sets IAM on + (on decommission)
 # DELETES the per-gateway gateway-auth-token-<id> secrets. accessor is not
 # enough — provision needs create/setIamPolicy, teardown needs delete.
 resource "google_project_iam_member" "glm_controller_secretmanager_admin" {
@@ -148,7 +148,7 @@ resource "google_project_iam_member" "glm_controller_log_viewer" {
 }
 
 # Narrow project-level role for dynamic per-gateway GSA teardown. NOT
-# serviceAccountAdmin: Cowboy can delete service accounts such as
+# serviceAccountAdmin: the fleet controller can delete service accounts such as
 # octogee-gw-<gatewayId>, but cannot mutate IAM policy on arbitrary service
 # accounts at project scope.
 resource "google_project_iam_custom_role" "gateway_sa_teardown" {

@@ -6,16 +6,16 @@ import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  generateCustomerSshKey,
+  generateUserSshKey,
   gitExec,
   setRepoSshCommand,
 } from "../lib/git.js";
 import { brokeredGitHost } from "../lib/gitea-admin-broker-client.js";
 import {
   auditSystemConfigForSlug,
-  prepareBuilderPrelaunchConfig,
+  prepareIsolatedPrelaunchConfig,
   checkpointDurableSystemConfigForSlug,
-  readAcceptedBuilderConfig,
+  readAcceptedUserConfig,
   extractLegacyMattermostAccountSecrets,
   pushDirtySystemConfigForSlug,
   readDurableSystemConfigHeadForSlug,
@@ -30,18 +30,18 @@ import {
 } from "../lib/system-config.js";
 import { systemConfigFingerprint } from "../lib/system-config-watcher.js";
 import { disableSystemConfigWatch } from "../lib/system-config-watch-state.js";
-import { buildProjectAgents } from "../lib/openclaw-config-builders.js";
+import { buildProjectAgents } from "../lib/openclaw-config-users.js";
 import {
   assertPlatformInvariants,
   reconcilePlatformInvariants,
 } from "../lib/system-config-invariants.js";
 import { CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION, readSystemConfigCommitBlob } from "../lib/system-config-durable-files.js";
-import { withBuilderClaim } from "./helpers/builder-claim.js";
+import { withUserClaim } from "./helpers/user-claim.js";
 import { applyAgentStoreDatabasePatch } from "../entrypoints/pre-boot-config.js";
 
 vi.mock("../lib/git.js", () => ({
-  customerSshKeyPath: vi.fn((slug: string) => `/tmp/customer-keys/${slug}/id_ed25519`),
-  generateCustomerSshKey: vi.fn(() => "ssh-ed25519 AAA octogee-acme@gateway"),
+  userSshKeyPath: vi.fn((slug: string) => `/tmp/customer-keys/${slug}/id_ed25519`),
+  generateUserSshKey: vi.fn(() => "ssh-ed25519 AAA octogee-acme@gateway"),
   gitExec: vi.fn(() => "ok"),
   setRepoSshCommand: vi.fn(),
 }));
@@ -79,7 +79,7 @@ describe("system_config restore", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("skips invalid builder slugs before touching brokered Gitea", async () => {
+  it("skips invalid user slugs before touching brokered Gitea", async () => {
     const result = await restoreSystemConfigForSlug("../bad", {
       openclawDir,
       templatePath,
@@ -87,7 +87,7 @@ describe("system_config restore", () => {
     });
 
     expect(result).toEqual({ skipped: "invalid-builder-slug", seeded: false, restored: false });
-    expect(generateCustomerSshKey).not.toHaveBeenCalled();
+    expect(generateUserSshKey).not.toHaveBeenCalled();
     expect(brokeredGitHost.ensureRepo).not.toHaveBeenCalled();
   });
 
@@ -113,9 +113,9 @@ describe("system_config restore", () => {
   it("reruns schema migration after Doctor repairs invalid legacy JSON", async () => {
     const configPath = path.join(repoDir, "openclaw.json");
     fs.writeFileSync(configPath, "not-json\n");
-    const env = withBuilderClaim({
+    const env = withUserClaim({
       GATEWAY_CLASS: "builder",
-      GATEWAY_ID: "bender",
+      GATEWAY_ID: "walter",
     }, "ceckert");
 
     await expect(reconcileSystemConfigSchema(openclawDir, env)).resolves.toBe(false);
@@ -125,7 +125,7 @@ describe("system_config restore", () => {
       agents: {
         list: [
           {
-            id: "octogee-ops-bender",
+            id: "octogee-ops-walter",
             workspace: "/home/node/.openclaw/workspace/ops",
             identity: { name: "Mac" },
           },
@@ -135,7 +135,7 @@ describe("system_config restore", () => {
       channels: {
         mattermost: {
           accounts: {
-            "ceckert-coach": { botToken: "customer-pat" },
+            "ceckert-coach": { botToken: "user-pat" },
           },
         },
       },
@@ -154,7 +154,7 @@ describe("system_config restore", () => {
     expect(JSON.parse(fs.readFileSync(
       path.join(openclawDir, "secrets", "mattermost-accounts.json"),
       "utf8",
-    ))).toEqual({ "ceckert-coach": "customer-pat" });
+    ))).toEqual({ "ceckert-coach": "user-pat" });
   });
 
   it("seeds a missing repo config from the safe template without resolving secrets", async () => {
@@ -178,10 +178,10 @@ describe("system_config restore", () => {
     const result = await restoreSystemConfigForSlug("acme", {
       openclawDir,
       templatePath,
-      env: withBuilderClaim({
-        GATEWAY_ID: "bender-green",
+      env: withUserClaim({
+        GATEWAY_ID: "walter-green",
         MM_URL: "http://mm",
-      }, "bender"),
+      }, "walter"),
       log: () => {},
     });
 
@@ -214,7 +214,7 @@ describe("system_config restore", () => {
     expect(fs.readFileSync(path.join(repoDir, ".gitignore"), "utf-8")).toContain("*.tmp");
   });
 
-  it("does not force shared-class Google write approval into a new Builder system config", async () => {
+  it("does not force shared-class Google write approval into a new user system config", async () => {
     templatePath = path.resolve(__dirname, "../../infra/gateway/openclaw.template.json");
     vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
       argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok"
@@ -223,9 +223,9 @@ describe("system_config restore", () => {
     await restoreSystemConfigForSlug("acme", {
       openclawDir,
       templatePath,
-      env: withBuilderClaim({
+      env: withUserClaim({
         GATEWAY_CLASS: "builder",
-        GATEWAY_ID: "builder-green",
+        GATEWAY_ID: "user-green",
         API_PUBLIC_URL: "https://api.octogee.com",
       }, "acme"),
       log: () => {},
@@ -241,7 +241,7 @@ describe("system_config restore", () => {
     vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
       argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok"
     );
-    const env = withBuilderClaim({
+    const env = withUserClaim({
       GATEWAY_CLASS: "builder",
       GATEWAY_ID: "robert-xs-bd6a8f5a",
       API_PUBLIC_URL: "https://api.octogee.com",
@@ -264,22 +264,22 @@ describe("system_config restore", () => {
     expect(seeded.gateway.controlUi).not.toHaveProperty("dangerouslyDisableDeviceAuth");
   });
 
-  it("seeds a Builder gateway from the slim boot template by default", async () => {
+  it("seeds a isolated gateway from the slim boot template by default", async () => {
     vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
       argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok"
     );
-    const env = withBuilderClaim({
+    const env = withUserClaim({
       GATEWAY_CLASS: "builder",
       GATEWAY_ID: "robert-xs-bd6a8f5a",
       API_PUBLIC_URL: "https://api.octogee.com",
     }, "robert");
-    expect(defaultSystemConfigTemplatePath(env)).toMatch(/openclaw\.builder\.template\.json$/);
+    expect(defaultSystemConfigTemplatePath(env)).toMatch(/openclaw\.isolated\.template\.json$/);
     expect(defaultSystemConfigTemplatePath({ GATEWAY_CLASS: "shared" }))
       .toMatch(/openclaw\.template\.json$/);
 
     await restoreSystemConfigForSlug("robert", {
       openclawDir,
-      templatePath: path.resolve(__dirname, "../../infra/gateway/openclaw.builder.template.json"),
+      templatePath: path.resolve(__dirname, "../../infra/gateway/openclaw.isolated.template.json"),
       env,
       log: () => {},
     });
@@ -312,14 +312,14 @@ describe("system_config restore", () => {
     expect(seeded.gateway.controlUi.basePath).toBe("/g/robert-xs-bd6a8f5a/openclaw");
   });
 
-  it("persists PostgreSQL selectors before fresh Builder bootstrap creates its state anchor", async () => {
+  it("persists PostgreSQL selectors before fresh user bootstrap creates its state anchor", async () => {
     vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
       argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok"
     );
-    const env = withBuilderClaim({ GATEWAY_CLASS: "builder", GATEWAY_ID: "acme-builder", API_PUBLIC_URL: "https://api.octogee.com" }, "acme");
+    const env = withUserClaim({ GATEWAY_CLASS: "builder", GATEWAY_ID: "acme-user", API_PUBLIC_URL: "https://api.octogee.com" }, "acme");
     await restoreSystemConfigForSlug("acme", {
       openclawDir,
-      templatePath: path.resolve(__dirname, "../../infra/gateway/openclaw.builder.template.json"),
+      templatePath: path.resolve(__dirname, "../../infra/gateway/openclaw.isolated.template.json"),
       env,
       log: () => {},
     });
@@ -339,13 +339,13 @@ describe("system_config restore", () => {
     { database: undefined, stateStore: "sqlite" as const },
     { database: { engine: "sqlite", families: { state: { engine: "postgres" } } }, stateStore: "anchor" as const },
   ])(
-    "preserves retained SQLite selection when restoring with the PostgreSQL Builder template: %j",
+    "preserves retained SQLite selection when restoring with the PostgreSQL user template: %j",
     async ({ database, stateStore }) => {
       writeJson(path.join(repoDir, "openclaw.json"), database ? { database } : {});
-      const env = withBuilderClaim({ GATEWAY_CLASS: "builder", GATEWAY_ID: "acme-builder", API_PUBLIC_URL: "https://api.octogee.com" }, "acme");
+      const env = withUserClaim({ GATEWAY_CLASS: "builder", GATEWAY_ID: "acme-user", API_PUBLIC_URL: "https://api.octogee.com" }, "acme");
       await restoreSystemConfigForSlug("acme", {
         openclawDir,
-        templatePath: path.resolve(__dirname, "../../infra/gateway/openclaw.builder.template.json"),
+        templatePath: path.resolve(__dirname, "../../infra/gateway/openclaw.isolated.template.json"),
         env,
         log: () => {},
       });
@@ -356,14 +356,14 @@ describe("system_config restore", () => {
     },
   );
 
-  it("restores an empty legacy Builder roster using keyed entries for native prelaunch", async () => {
+  it("restores an empty legacy user roster using keyed entries for native prelaunch", async () => {
     writeJson(path.join(repoDir, "openclaw.json"), { agents: { list: [] } });
     writeJson(path.join(repoDir, ".octogee.json"), {
       schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
       lastMigration: "initial",
     });
-    const env = withBuilderClaim({
-      GATEWAY_CLASS: "builder", GATEWAY_ID: "pipio-builder", API_PUBLIC_URL: "https://api.octogee.com",
+    const env = withUserClaim({
+      GATEWAY_CLASS: "builder", GATEWAY_ID: "pipio-user", API_PUBLIC_URL: "https://api.octogee.com",
     }, "pipio");
 
     await restoreSystemConfigForSlug("pipio", { openclawDir, env, log: () => {} });
@@ -376,11 +376,11 @@ describe("system_config restore", () => {
     expect(restored.agents.defaults.systemAgent).toEqual({ agentId: "octogee-pipio-coach" });
   });
 
-  it("seeds a Builder roster that leads with the configured coach and keeps the anchor last", async () => {
+  it("seeds a user roster that leads with the configured agent and keeps the anchor last", async () => {
     vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
       argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok"
     );
-    const env = withBuilderClaim({
+    const env = withUserClaim({
       GATEWAY_CLASS: "builder",
       GATEWAY_ID: "robert-xs-bd6a8f5a",
       API_PUBLIC_URL: "https://api.octogee.com",
@@ -388,7 +388,7 @@ describe("system_config restore", () => {
 
     await restoreSystemConfigForSlug("robert", {
       openclawDir,
-      templatePath: path.resolve(__dirname, "../../infra/gateway/openclaw.builder.template.json"),
+      templatePath: path.resolve(__dirname, "../../infra/gateway/openclaw.isolated.template.json"),
       env,
       log: () => {},
     });
@@ -407,7 +407,7 @@ describe("system_config restore", () => {
     expect(() => assertPlatformInvariants(seeded, env)).not.toThrow();
   });
 
-  it("removes a materialized main agent and restores coach-first order on a Builder restore", async () => {
+  it("removes a materialized main agent and restores coach-first order on a user restore", async () => {
     const configPath = path.join(repoDir, "openclaw.json");
     fs.writeFileSync(configPath, JSON.stringify({
       agents: {
@@ -426,7 +426,7 @@ describe("system_config restore", () => {
       talk: { agentId: "main" },
     }));
     fs.writeFileSync(path.join(repoDir, ".octogee.json"), `${JSON.stringify({ schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION, lastMigration: "initial" })}\n`);
-    const env = withBuilderClaim({
+    const env = withUserClaim({
       GATEWAY_CLASS: "builder",
       GATEWAY_ID: "robert-xs-bd6a8f5a",
       API_PUBLIC_URL: "https://api.octogee.com",
@@ -448,7 +448,7 @@ describe("system_config restore", () => {
     expect(restored.talk).toEqual({ agentId: "octogee-robert-coach" });
   });
 
-  it("leaves a detached coach out of a retained Builder roster so the import's agents.create brings it back", async () => {
+  it("leaves a detached agent out of a retained user roster so the import's agents.create brings it back", async () => {
     const configPath = path.join(repoDir, "openclaw.json");
     fs.writeFileSync(configPath, JSON.stringify({
       agents: {
@@ -463,7 +463,7 @@ describe("system_config restore", () => {
       },
     }));
     fs.writeFileSync(path.join(repoDir, ".octogee.json"), `${JSON.stringify({ schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION, lastMigration: "initial" })}\n`);
-    const env = withBuilderClaim({
+    const env = withUserClaim({
       GATEWAY_CLASS: "builder",
       GATEWAY_ID: "robert-m-2271ce5a",
       API_PUBLIC_URL: "https://api.octogee.com",
@@ -496,7 +496,7 @@ describe("system_config restore", () => {
     vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
       argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok"
     );
-    const env = withBuilderClaim({ GATEWAY_ID: "shared-a", }, "acme");
+    const env = withUserClaim({ GATEWAY_ID: "shared-a", }, "acme");
 
     await restoreSystemConfigForSlug("acme", {
       openclawDir,
@@ -708,7 +708,7 @@ describe("system_config restore", () => {
       return "ok";
     });
     const result = await restoreSystemConfigForSlug("acme", { openclawDir, templatePath, log: () => {},
-      env: withBuilderClaim({ GATEWAY_CLASS: "builder", API_PUBLIC_URL: "https://api.octogee.com" }, "acme") });
+      env: withUserClaim({ GATEWAY_CLASS: "builder", API_PUBLIC_URL: "https://api.octogee.com" }, "acme") });
     expect(result.restored).toBe(restored);
     if (restored) {
       expect(gitExec).toHaveBeenCalledWith(repoDir, ["restore", "--source=HEAD", "--staged", "--worktree", "--", "openclaw.json", ".octogee.json"], "/tmp/customer-keys/acme/id_ed25519");
@@ -716,7 +716,7 @@ describe("system_config restore", () => {
     } else expect(cleared).toBe(false);
   });
 
-  it("one-time cleanup removes only the historical Mac lane and preserves customer identities", () => {
+  it("one-time cleanup removes only the historical Mac lane and preserves user identities", () => {
     const config = {
       agents: {
         list: [
@@ -751,7 +751,7 @@ describe("system_config restore", () => {
       },
     };
 
-    expect(removeLegacyMacConfig(config, withBuilderClaim({ GATEWAY_ID: "bender", }, "ceckert"))).toBe(true);
+    expect(removeLegacyMacConfig(config, withUserClaim({ GATEWAY_ID: "walter", }, "ceckert"))).toBe(true);
     expect(config.agents.list).toEqual([
       expect.objectContaining({ id: "octogee-ceckert-coach", default: true }),
     ]);
@@ -764,12 +764,12 @@ describe("system_config restore", () => {
     expect(config.channels.mattermost).not.toHaveProperty("defaultAccount");
   });
 
-  it("preserves customer-owned Mattermost defaults and root tokens while removing exact Mac state", () => {
+  it("preserves user-owned Mattermost defaults and root tokens while removing exact Mac state", () => {
     const config = {
       agents: {
         list: [
           {
-            id: "octogee-ops-bender",
+            id: "octogee-ops-walter",
             identity: { name: "Mac" },
             workspace: "/home/node/.openclaw/workspace/ops",
           },
@@ -777,17 +777,17 @@ describe("system_config restore", () => {
         ],
       },
       bindings: [
-        { agentId: "octogee-ops-bender", match: { channel: "mattermost" } },
+        { agentId: "octogee-ops-walter", match: { channel: "mattermost" } },
         { agentId: "octogee-ceckert-coach", match: { channel: "mattermost", accountId: "default" } },
       ],
       channels: {
         mattermost: {
           defaultAccount: "default",
-          botToken: "customer-root-bot-token",
-          token: "customer-root-token",
+          botToken: "user-root-bot-token",
+          token: "user-root-token",
           accounts: {
             default: {
-              botToken: "customer-default-token",
+              botToken: "user-default-token",
               groupPolicy: "open",
             },
           },
@@ -795,8 +795,8 @@ describe("system_config restore", () => {
       },
     };
 
-    expect(removeLegacyMacConfig(config, withBuilderClaim({
-      GATEWAY_ID: "bender",
+    expect(removeLegacyMacConfig(config, withUserClaim({
+      GATEWAY_ID: "walter",
     }, "ceckert"))).toBe(true);
     expect(config.agents.list).toEqual([
       expect.objectContaining({ id: "octogee-ceckert-coach", default: true }),
@@ -806,11 +806,11 @@ describe("system_config restore", () => {
     ]);
     expect(config.channels.mattermost).toMatchObject({
       defaultAccount: "default",
-      botToken: "customer-root-bot-token",
-      token: "customer-root-token",
+      botToken: "user-root-bot-token",
+      token: "user-root-token",
       accounts: {
         default: {
-          botToken: "customer-default-token",
+          botToken: "user-default-token",
           groupPolicy: "open",
         },
       },
@@ -843,8 +843,8 @@ describe("system_config restore", () => {
 
   // openclaw 2026.7.2 migrates agents.list into keyed agents.entries at pre-boot,
   // where the key is the id and the entry carries none. Reading only the list
-  // leaves the Builder's coach un-defaulted on every current pod.
-  it("selects the Builder coach out of a migrated keyed roster", () => {
+  // leaves the user's agent un-defaulted on every current pod.
+  it("selects the user agent out of a migrated keyed roster", () => {
     const config = {
       agents: {
         entries: {
@@ -854,17 +854,17 @@ describe("system_config restore", () => {
       },
     };
 
-    expect(removeLegacyMacConfig(config, withBuilderClaim({ }, "ceckert"))).toBe(true);
+    expect(removeLegacyMacConfig(config, withUserClaim({ }, "ceckert"))).toBe(true);
     expect(config.agents.entries["octogee-ceckert-coach"]).toMatchObject({ default: true });
     expect(config.agents.entries["octogee-bob-coach"]).not.toHaveProperty("default");
   });
 
-  it("is a no-op on a keyed roster whose Builder coach is already the default", () => {
+  it("is a no-op on a keyed roster whose user agent is already the default", () => {
     const config = {
       agents: { entries: { "octogee-ceckert-coach": { default: true } } },
     };
 
-    expect(removeLegacyMacConfig(config, withBuilderClaim({ }, "ceckert"))).toBe(false);
+    expect(removeLegacyMacConfig(config, withUserClaim({ }, "ceckert"))).toBe(false);
   });
 
   it("does not add a legacy default selector under explicit ownership", () => {
@@ -875,11 +875,11 @@ describe("system_config restore", () => {
       },
     };
 
-    expect(removeLegacyMacConfig(config, withBuilderClaim({ }, "ceckert"))).toBe(false);
+    expect(removeLegacyMacConfig(config, withUserClaim({ }, "ceckert"))).toBe(false);
     expect(config.agents.entries["octogee-ceckert-coach"]).not.toHaveProperty("default");
   });
 
-  it("does not default a coach when no Builder slug is configured", () => {
+  it("does not default a agent when no user slug is configured", () => {
     const config = { agents: { entries: { "octogee-ceckert-coach": {} } } };
 
     expect(removeLegacyMacConfig(config, {})).toBe(false);
@@ -929,7 +929,7 @@ describe("system_config restore", () => {
     const config: Record<string, unknown> = {
       agents: {
         entries: {
-          "octogee-ops-bender": {
+          "octogee-ops-walter": {
             identity: { name: "Mac" },
             workspace: "/home/node/.openclaw/workspace/ops",
           },
@@ -937,13 +937,13 @@ describe("system_config restore", () => {
         },
       },
       bindings: [
-        { agentId: "octogee-ops-bender", match: { channel: "mattermost" } },
+        { agentId: "octogee-ops-walter", match: { channel: "mattermost" } },
         { agentId: "octogee-ceckert-coach", match: { channel: "mattermost" } },
       ],
     };
 
-    expect(removeLegacyMacConfig(config, withBuilderClaim({
-      GATEWAY_ID: "bender",
+    expect(removeLegacyMacConfig(config, withUserClaim({
+      GATEWAY_ID: "walter",
     }, "ceckert"))).toBe(true);
     expect(Object.keys((config.agents as { entries: object }).entries)).toEqual([
       "octogee-ceckert-coach",
@@ -964,7 +964,7 @@ describe("system_config restore", () => {
       bindings: [],
     };
 
-    expect(removeLegacyMacConfig(config, { GATEWAY_ID: "bender" })).toBe(true);
+    expect(removeLegacyMacConfig(config, { GATEWAY_ID: "walter" })).toBe(true);
     expect(Object.keys((config.agents as { entries: object }).entries)).toEqual([
       "octogee-ceckert-coach",
     ]);
@@ -976,7 +976,7 @@ describe("system_config restore", () => {
       bindings: [{ agentId: "octogee-ceckert-coach" }],
     };
 
-    expect(removeLegacyMacConfig(config, { GATEWAY_ID: "bender" })).toBe(false);
+    expect(removeLegacyMacConfig(config, { GATEWAY_ID: "walter" })).toBe(false);
     expect(Object.keys((config.agents as { entries: object }).entries)).toEqual([
       "octogee-ceckert-coach",
     ]);
@@ -989,9 +989,9 @@ describe("system_config restore", () => {
     fs.mkdirSync(keptAgentDir, { recursive: true });
     fs.mkdirSync(path.join(openclawDir, "memory"), { recursive: true });
     fs.writeFileSync(path.join(openclawDir, "memory", "octogee-ops-ceckert.sqlite"), "legacy");
-    fs.writeFileSync(path.join(openclawDir, "memory", "octogee-ceckert-coach.sqlite"), "customer");
+    fs.writeFileSync(path.join(openclawDir, "memory", "octogee-ceckert-coach.sqlite"), "user");
 
-    removeLegacyMacState(openclawDir, withBuilderClaim({ GATEWAY_ID: "bender", }, "ceckert"));
+    removeLegacyMacState(openclawDir, withUserClaim({ GATEWAY_ID: "walter", }, "ceckert"));
 
     expect(fs.existsSync(removedAgentDir)).toBe(false);
     expect(fs.existsSync(path.join(openclawDir, "memory", "octogee-ops-ceckert.sqlite"))).toBe(false);
@@ -1036,7 +1036,7 @@ describe("system_config restore", () => {
     expect(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8")).toBe("{ invalid\n");
   });
 
-  it("adopts legacy customer Mattermost tokens into the untracked file provider", async () => {
+  it("adopts legacy user Mattermost tokens into the untracked file provider", async () => {
     writeJson(path.join(repoDir, "openclaw.json"), {
       agents: { list: [{ id: "octogee-acme-coach" }] },
       channels: {
@@ -1066,7 +1066,7 @@ describe("system_config restore", () => {
     });
   });
 
-  it("makes the isolated Builder coach default even when no Mac agent remains", async () => {
+  it("makes the isolated user agent default even when no Mac agent remains", async () => {
     writeJson(path.join(repoDir, "openclaw.json"), {
       agents: {
         list: [{ id: "octogee-acme-coach" }],
@@ -1082,7 +1082,7 @@ describe("system_config restore", () => {
     await restoreSystemConfigForSlug("acme", {
       openclawDir,
       templatePath,
-      env: withBuilderClaim({ }, "acme"),
+      env: withUserClaim({ }, "acme"),
       log: () => {},
     });
 
@@ -1126,7 +1126,7 @@ describe("system_config restore", () => {
     });
   });
 
-  it("lifts only the exact platform host-code lockdown from a v1 Builder config and keeps Builder edits", async () => {
+  it("lifts only the exact platform host-code lockdown from a v1 user config and keeps user edits", async () => {
     writeJson(path.join(repoDir, ".octogee.json"), {
       schemaVersion: 1,
       lastMigration: "remove-mac-and-externalize-mattermost-tokens",
@@ -1143,11 +1143,11 @@ describe("system_config restore", () => {
         profile: "coding",
         elevated: { enabled: false },
         fs: { workspaceOnly: true },
-        deny: ["exec", "process", "subagents", "sessions_spawn", "terminal", "browser", "builder-tool"],
+        deny: ["exec", "process", "subagents", "sessions_spawn", "terminal", "browser", "isolated-tool"],
         alsoAllow: ["octogee_project_create"],
         exec: { mode: "deny" },
         sessions: { visibility: "self" },
-        subagents: { tools: { deny: ["exec", "process", "builder-subagent-deny"] } },
+        subagents: { tools: { deny: ["exec", "process", "user-subagent-deny"] } },
       },
       plugins: {
         allow: ["mattermost"],
@@ -1179,7 +1179,7 @@ describe("system_config restore", () => {
       },
     });
 
-    await expect(reconcileSystemConfigSchema(openclawDir, withBuilderClaim({
+    await expect(reconcileSystemConfigSchema(openclawDir, withUserClaim({
       GATEWAY_CLASS: "builder",
     }, "acme"))).resolves.toBe(true);
 
@@ -1190,9 +1190,9 @@ describe("system_config restore", () => {
     expect(migrated).not.toHaveProperty("skills");
     expect(migrated.tools).toEqual({
       profile: "coding",
-      deny: ["builder-tool"],
+      deny: ["isolated-tool"],
       alsoAllow: ["octogee_project_create", "browser"],
-      subagents: { tools: { deny: ["builder-subagent-deny"] } },
+      subagents: { tools: { deny: ["user-subagent-deny"] } },
     });
     expect(migrated.plugins).toEqual({
       allow: ["mattermost", "codex", "browser"],
@@ -1211,12 +1211,12 @@ describe("system_config restore", () => {
       schemaVersion: 5,
       lastMigration: "lift-builder-agent-shared-host-code-fence",
     });
-    await expect(reconcileSystemConfigSchema(openclawDir, withBuilderClaim({
+    await expect(reconcileSystemConfigSchema(openclawDir, withUserClaim({
       GATEWAY_CLASS: "builder",
     }, "acme"))).resolves.toBe(false);
   });
 
-  it("drops the coach fence from a keyed agents.entries roster", async () => {
+  it("drops the agent fence from a keyed agents.entries roster", async () => {
     writeJson(path.join(repoDir, ".octogee.json"), { schemaVersion: 1 });
     writeJson(path.join(repoDir, "openclaw.json"), {
       skills: {
@@ -1232,7 +1232,7 @@ describe("system_config restore", () => {
       },
     });
 
-    await expect(reconcileSystemConfigSchema(openclawDir, withBuilderClaim({
+    await expect(reconcileSystemConfigSchema(openclawDir, withUserClaim({
       GATEWAY_CLASS: "builder",
     }, "acme"))).resolves.toBe(true);
 
@@ -1241,10 +1241,10 @@ describe("system_config restore", () => {
     expect(migrated.agents.entries["octogee-acme-coach"]).toEqual({ default: true });
   });
 
-  it("leaves a Builder-authored codex or exec policy alone when lifting the lockdown", async () => {
+  it("leaves a User-authored codex or exec policy alone when lifting the lockdown", async () => {
     writeJson(path.join(repoDir, ".octogee.json"), { schemaVersion: 1 });
     writeJson(path.join(repoDir, "openclaw.json"), {
-      tools: { exec: { mode: "deny", host: "sandbox" }, deny: ["builder-only"] },
+      tools: { exec: { mode: "deny", host: "sandbox" }, deny: ["user-only"] },
       plugins: {
         allow: ["mattermost", "codex"],
         entries: {
@@ -1257,14 +1257,14 @@ describe("system_config restore", () => {
       agents: { list: [{ id: "octogee-acme-coach" }] },
     });
 
-    await reconcileSystemConfigSchema(openclawDir, withBuilderClaim({
+    await reconcileSystemConfigSchema(openclawDir, withUserClaim({
       GATEWAY_CLASS: "builder",
     }, "acme"));
 
     const migrated = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
     expect(migrated.tools).toEqual({
       exec: { mode: "deny", host: "sandbox" },
-      deny: ["builder-only"],
+      deny: ["user-only"],
       alsoAllow: ["browser"],
     });
     expect(migrated.plugins.entries.codex).toEqual({
@@ -1275,25 +1275,25 @@ describe("system_config restore", () => {
     expect(migrated.plugins.allow).toEqual(["mattermost", "codex", "browser"]);
   });
 
-  it("adds managed browser defaults to a v2 Builder config without replacing Builder settings", async () => {
+  it("adds managed browser defaults to a v2 user config without replacing user settings", async () => {
     writeJson(path.join(repoDir, ".octogee.json"), {
       schemaVersion: 2,
       lastMigration: "lift-platform-host-code-lockdown",
     });
     writeJson(path.join(repoDir, "openclaw.json"), {
-      tools: { profile: "coding", alsoAllow: ["builder-tool"] },
+      tools: { profile: "coding", alsoAllow: ["isolated-tool"] },
       plugins: { allow: ["mattermost"], entries: {} },
       agents: { list: [{ id: "octogee-acme-coach", default: true }] },
     });
 
-    await expect(reconcileSystemConfigSchema(openclawDir, withBuilderClaim({
+    await expect(reconcileSystemConfigSchema(openclawDir, withUserClaim({
       GATEWAY_CLASS: "builder",
     }, "acme"))).resolves.toBe(true);
 
     const migrated = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
     expect(migrated.tools).toEqual({
       profile: "coding",
-      alsoAllow: ["builder-tool", "browser"],
+      alsoAllow: ["isolated-tool", "browser"],
     });
     expect(migrated.plugins).toEqual({
       allow: ["mattermost", "browser"],
@@ -1311,21 +1311,21 @@ describe("system_config restore", () => {
       schemaVersion: 5,
       lastMigration: "lift-builder-agent-shared-host-code-fence",
     });
-    await expect(reconcileSystemConfigSchema(openclawDir, withBuilderClaim({
+    await expect(reconcileSystemConfigSchema(openclawDir, withUserClaim({
       GATEWAY_CLASS: "builder",
     }, "acme"))).resolves.toBe(false);
   });
 
-  it("lifts the platform project-agent fence from a v3 Builder config", async () => {
+  it("lifts the platform project-agent fence from a v3 user config", async () => {
     writeJson(path.join(repoDir, ".octogee.json"), {
       schemaVersion: 3,
-      lastMigration: "enable-builder-browser",
+      lastMigration: "enable-isolated-browser",
     });
     const [platformProjectAgent] = buildProjectAgents({
       slug: "acme",
       customerDir: "/customers/acme",
       agentsDir: "/agents",
-      coach: { name: "Coach", emoji: "🤖", model: "house" },
+      defaultAgent: { name: "Coach", emoji: "🤖", model: "house" },
       projectAgents: [{ projectId: "garden", enabled: true, token: "pat", mmUserId: "bot" }],
     });
     const builderTools = { profile: "full", deny: ["browser"] };
@@ -1338,7 +1338,7 @@ describe("system_config restore", () => {
       },
     });
 
-    await expect(reconcileSystemConfigSchema(openclawDir, withBuilderClaim({
+    await expect(reconcileSystemConfigSchema(openclawDir, withUserClaim({
       GATEWAY_CLASS: "builder",
     }, "acme"))).resolves.toBe(true);
 
@@ -1351,10 +1351,10 @@ describe("system_config restore", () => {
     });
   });
 
-  it("lifts drifted shared host-code fences from the owner's coach and project agents in a v4 Builder config", async () => {
+  it("lifts drifted shared host-code fences from the owner's agent and project agents in a v4 user config", async () => {
     writeJson(path.join(repoDir, ".octogee.json"), {
       schemaVersion: 4,
-      lastMigration: "lift-builder-project-agent-host-code-lockdown",
+      lastMigration: "lift-user-project-agent-host-code-lockdown",
     });
     const builderTools = { profile: "full", deny: ["browser"] };
     const foreignFence = { deny: ["exec", "process"], fs: { workspaceOnly: true } };
@@ -1383,7 +1383,7 @@ describe("system_config restore", () => {
       },
     });
 
-    await expect(reconcileSystemConfigSchema(openclawDir, withBuilderClaim({
+    await expect(reconcileSystemConfigSchema(openclawDir, withUserClaim({
       GATEWAY_CLASS: "builder",
     }, "acme"))).resolves.toBe(true);
 
@@ -1398,7 +1398,7 @@ describe("system_config restore", () => {
     });
   });
 
-  it("drops a drifted shared coach fence whole when migrating a pre-v2 Builder config", async () => {
+  it("drops a drifted shared agent fence whole when migrating a pre-v2 user config", async () => {
     writeJson(path.join(repoDir, ".octogee.json"), {
       schemaVersion: 1,
       lastMigration: "remove-mac-and-externalize-mattermost-tokens",
@@ -1419,7 +1419,7 @@ describe("system_config restore", () => {
       },
     });
 
-    await expect(reconcileSystemConfigSchema(openclawDir, withBuilderClaim({
+    await expect(reconcileSystemConfigSchema(openclawDir, withUserClaim({
       GATEWAY_CLASS: "builder",
     }, "acme"))).resolves.toBe(true);
 
@@ -1427,14 +1427,14 @@ describe("system_config restore", () => {
     expect(migrated.agents.entries["octogee-acme-coach"]).not.toHaveProperty("tools");
   });
 
-  it("preserves an explicit Builder browser opt-out during the v3 migration", async () => {
+  it("preserves an explicit user browser opt-out during the v3 migration", async () => {
     writeJson(path.join(repoDir, ".octogee.json"), {
       schemaVersion: 2,
       lastMigration: "lift-platform-host-code-lockdown",
     });
     const disabled = {
       browser: { enabled: false, headless: false },
-      tools: { profile: "coding", deny: ["browser"], alsoAllow: ["builder-tool"] },
+      tools: { profile: "coding", deny: ["browser"], alsoAllow: ["isolated-tool"] },
       plugins: {
         allow: ["mattermost"],
         entries: { browser: { enabled: false } },
@@ -1442,7 +1442,7 @@ describe("system_config restore", () => {
     };
     writeJson(path.join(repoDir, "openclaw.json"), disabled);
 
-    await expect(reconcileSystemConfigSchema(openclawDir, withBuilderClaim({
+    await expect(reconcileSystemConfigSchema(openclawDir, withUserClaim({
       GATEWAY_CLASS: "builder",
     }, "acme"))).resolves.toBe(true);
 
@@ -1479,7 +1479,7 @@ describe("system_config restore", () => {
   it("rejects and restores malformed dirty metadata", () => {
     const durableEnv = {
       GATEWAY_CLASS: "builder",
-      GATEWAY_ID: "bender",
+      GATEWAY_ID: "walter",
       API_PUBLIC_URL: "https://api-test.octogee.com",
     };
     const config: Record<string, unknown> = {};
@@ -1508,7 +1508,7 @@ describe("system_config restore", () => {
         throw new Error("validation failed");
       },
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
       log: () => {},
     })).toMatchObject({ rejected: true, errorCode: "validation-failed" });
@@ -1555,7 +1555,7 @@ describe("system_config restore", () => {
     expect(fs.existsSync(path.join(openclawDir, "openclaw.json"))).toBe(false);
   });
 
-  it("restores Builder account endpoints and secret references without resolving owner placeholders", async () => {
+  it("restores user account endpoints and secret references without resolving owner placeholders", async () => {
     const accounts = {
       "acme-coach": {
         baseUrl: "${OWNER_MM_URL}",
@@ -1573,7 +1573,7 @@ describe("system_config restore", () => {
 
     await restoreSystemConfigForSlug("acme", {
       openclawDir, templatePath,
-      env: withBuilderClaim({
+      env: withUserClaim({
         GATEWAY_CLASS: "builder", GATEWAY_ID: "acme-xs-12345678", 
         API_PUBLIC_URL: "https://api-test.octogee.com",
         MM_URL: "http://runtime-mattermost", OWNER_MM_URL: "https://runtime-owner.example",
@@ -1601,7 +1601,7 @@ describe("system_config restore", () => {
       now: () => new Date("2026-06-20T14:00:00.000Z"),
       log: (msg) => logs.push(msg),
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: vi.fn((cwd: string, argsArgv: string[], sshKeyPath?: string) => {
         const args = argsArgv.join(" ");
         calls.push({ cwd, args, sshKeyPath });
@@ -1633,7 +1633,7 @@ describe("system_config restore", () => {
       openclawDir,
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
     });
 
@@ -1649,7 +1649,7 @@ describe("system_config restore", () => {
       openclawDir,
       log: (msg) => logs.push(msg),
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: vi.fn(() => null),
     });
 
@@ -1670,7 +1670,7 @@ describe("system_config restore", () => {
       openclawDir,
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
     });
 
@@ -1691,7 +1691,7 @@ describe("system_config restore", () => {
       openclawDir,
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
     });
 
@@ -1715,7 +1715,7 @@ describe("system_config restore", () => {
       openclawDir,
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
     });
 
@@ -1734,7 +1734,7 @@ describe("system_config restore", () => {
       openclawDir,
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
     });
 
@@ -1755,7 +1755,7 @@ describe("system_config restore", () => {
       openclawDir,
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
     });
 
@@ -1783,7 +1783,7 @@ describe("system_config restore", () => {
       lockHeld: true,
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
     });
 
@@ -1817,7 +1817,7 @@ describe("system_config restore", () => {
       convergeRemoteCommit,
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
     });
 
@@ -1856,7 +1856,7 @@ describe("system_config restore", () => {
       convergeRemoteCommit,
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
     })).toMatchObject({ pushed: true, acceptedCommit: targetCommit });
   });
 
@@ -1873,7 +1873,7 @@ describe("system_config restore", () => {
       }),
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
     })).toMatchObject({
       committed: false,
@@ -1911,7 +1911,7 @@ describe("system_config restore", () => {
       }),
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
     })).toMatchObject({ pushed: true, acceptedCommit: targetCommit });
     const commit = commands.find((command) => command.startsWith("commit "));
@@ -1936,7 +1936,7 @@ describe("system_config restore", () => {
       openclawDir,
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
     });
 
@@ -1957,7 +1957,7 @@ describe("system_config restore", () => {
       openclawDir,
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
     });
 
@@ -1982,7 +1982,7 @@ describe("system_config restore", () => {
       },
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
       readCommitBlob: () => Buffer.from("{\"accepted\":true}\n"),
     });
@@ -2047,7 +2047,7 @@ describe("system_config restore", () => {
       },
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
       readCommitBlob: readSystemConfigCommitBlob,
     });
@@ -2056,14 +2056,14 @@ describe("system_config restore", () => {
     expect(fs.readFileSync(configPath)).toEqual(acceptedBytes);
     expect(auditSystemConfigForSlug("acme", {
       openclawDir,
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
     })).toMatchObject({ state: "clean", needsSync: false, worktreeDirty: false });
     const followUp = syncSystemConfigForSlug("acme", {
       openclawDir,
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
     });
     expect(followUp).toMatchObject({ committed: false, pushed: true });
@@ -2094,7 +2094,7 @@ describe("system_config restore", () => {
       },
       log: () => {},
       setRepoSshCommand: vi.fn(),
-      customerSshKeyPath: () => "/tmp/key",
+      userSshKeyPath: () => "/tmp/key",
       gitExec: git,
     });
 
@@ -2118,12 +2118,12 @@ describe("system_config restore", () => {
 });
 
 
-describe("Builder prelaunch config", () => {
+describe("Isolated prelaunch config", () => {
   it.each([false, true])("boots only the gateway-local agent and preserves accepted config (already detached=%s)", async detached => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "builder-prelaunch-config-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "isolated-prelaunch-config-"));
     const repo = path.join(root, "system_config");
     fs.mkdirSync(repo);
-    const env = withBuilderClaim({ OPENCLAW_DIR: root, GATEWAY_CLASS: "builder", API_PUBLIC_URL: "https://api-test.octogee.com" }, "alice");
+    const env = withUserClaim({ OPENCLAW_DIR: root, GATEWAY_CLASS: "builder", API_PUBLIC_URL: "https://api-test.octogee.com" }, "alice");
     const config = { agents: { entries: { "octogee-alice-coach": { workspace: path.join(root, "customers/alice"), model: "custom/model" } } },
       channels: { mattermost: { enabled: true, baseUrl: "${MM_URL}", accounts: { "alice-coach": {} } } },
       bindings: [{ agentId: "octogee-alice-coach" }], cron: { enabled: true },
@@ -2150,11 +2150,11 @@ describe("Builder prelaunch config", () => {
     });
     try {
       const before = fs.readFileSync(path.join(repo, "openclaw.json"), "utf8");
-      await expect(prepareBuilderPrelaunchConfig(root, "alice", env, async () => ({ code: 1, stdout: "" }))).rejects.toThrow("Native Builder prelaunch config write failed");
-      await expect(prepareBuilderPrelaunchConfig(root, "alice", env, async () => ({ code: 1, stdout: "", stderr: "Gateway holder namespace is unknown; password=example-secret" })))
+      await expect(prepareIsolatedPrelaunchConfig(root, "alice", env, async () => ({ code: 1, stdout: "" }))).rejects.toThrow("Native isolated prelaunch config write failed");
+      await expect(prepareIsolatedPrelaunchConfig(root, "alice", env, async () => ({ code: 1, stdout: "", stderr: "Gateway holder namespace is unknown; password=example-secret" })))
         .rejects.toThrow("Gateway holder namespace is unknown; password=[redacted]");
       expect(fs.readFileSync(path.join(repo, "openclaw.json"), "utf8")).toBe(before);
-      await prepareBuilderPrelaunchConfig(root, "alice", env, nativeWrite);
+      await prepareIsolatedPrelaunchConfig(root, "alice", env, nativeWrite);
       const live = JSON.parse(fs.readFileSync(path.join(repo, "openclaw.json"), "utf8"));
       expect(Object.keys(live.agents.entries)).toEqual(["octogee-unmatched-route"]);
       expect(live.channels.mattermost.enabled).toBe(false);
@@ -2166,17 +2166,17 @@ describe("Builder prelaunch config", () => {
       await disableSystemConfigWatch(root, "alice");
       expect(checkpointDurableSystemConfigForSlug("alice", { openclawDir: root, gitExec: () => `${head}\trefs/heads/main` }, sync)).toMatchObject({ acceptedCommit: head, committed: false });
       expect(sync).not.toHaveBeenCalled();
-      const accepted = readAcceptedBuilderConfig(root, env);
+      const accepted = readAcceptedUserConfig(root, env);
       expect(accepted.agents).toMatchObject({ entries: config.agents.entries });
       expect(accepted.cron).toEqual({ enabled: true });
       expect(accepted.channels).toMatchObject({ mattermost: { enabled: true } });
-      await prepareBuilderPrelaunchConfig(root, "alice", env, nativeWrite);
-      expect(readAcceptedBuilderConfig(root, env).agents).toMatchObject({ entries: config.agents.entries });
+      await prepareIsolatedPrelaunchConfig(root, "alice", env, nativeWrite);
+      expect(readAcceptedUserConfig(root, env).agents).toMatchObject({ entries: config.agents.entries });
       expect(nativeWrite).toHaveBeenCalledTimes(2);
       writeJson(path.join(repo, "openclaw.json"), { ...config, database: { engine: "sqlite" } });
       execFileSync("git", ["add", "openclaw.json"], { cwd: repo });
       execFileSync("git", ["-c", "user.name=Synthetic Test", "-c", "user.email=test@example.invalid", "commit", "-m", "retained sqlite"], { cwd: repo });
-      await expect(prepareBuilderPrelaunchConfig(root, "alice", env, nativeWrite)).rejects.toThrow("Retained SQLite-configured Gateway stores cannot start");
+      await expect(prepareIsolatedPrelaunchConfig(root, "alice", env, nativeWrite)).rejects.toThrow("Retained SQLite-configured Gateway stores cannot start");
       expect(nativeWrite).toHaveBeenCalledTimes(2);
       expect(fs.readdirSync(root).filter(name => name.startsWith(".prelaunch-config-"))).toEqual([]);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }

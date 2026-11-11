@@ -1,4 +1,4 @@
-import { firestoreBuildersWatchSource } from "./builders.js";
+import { firestoreUsersWatchSource } from "./users.js";
 import { firestoreConfigWatchSource } from "./config.js";
 import { firestoreFleetRegistryWatchSource } from "./fleet-registry.js";
 import { firestoreAssignmentsWatchSource, firestoreGatewaysWatchSource } from "./gateways.js";
@@ -10,7 +10,7 @@ const FIRESTORE_WATCH_SOURCES = {
     gateways: firestoreGatewaysWatchSource,
     assignments: firestoreAssignmentsWatchSource,
     fleetRegistry: firestoreFleetRegistryWatchSource,
-    builders: firestoreBuildersWatchSource,
+    builders: firestoreUsersWatchSource,
     config: firestoreConfigWatchSource,
     migrationTasks: firestoreMigrationTasksWatchSource,
     workspaces: firestoreWorkspacesWatchSource,

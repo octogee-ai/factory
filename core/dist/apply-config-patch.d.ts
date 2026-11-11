@@ -44,12 +44,12 @@ export interface ApplyConfigPatchResult {
 }
 export declare function applyConfigPatch(args: ApplyConfigPatchArgs, opts?: ApplyConfigPatchOptions): Promise<ApplyConfigPatchResult>;
 export declare function upsertAgentInFullAgentList(current: unknown, agentId: string, agentEntry: unknown): unknown[];
-export declare function replaceCustomerAgentsInFullAgentList(current: unknown, slug: string, agentEntries: readonly unknown[]): unknown[];
-export declare function orderBuilderGatewayRoster<T>(agents: readonly T[], coachAgentId: string, anchorAgentId: string): T[];
+export declare function replaceUserAgentsInFullAgentList(current: unknown, slug: string, agentEntries: readonly unknown[]): unknown[];
+export declare function orderIsolatedGatewayRoster<T>(agents: readonly T[], userDefaultAgentId: string, anchorAgentId: string): T[];
 /**
  * After the first mount, model authority belongs to the byot-sync pipeline
  * (BYOK overrides, house pins, picker selections) — the attach path re-ships
- * each customer entry wholesale, so re-seeding a compiled default here would
+ * each user entry wholesale, so re-seeding a compiled default here would
  * revert that pipeline's write on every re-attach and the follow-up sync
  * would flip it back: two config writes and two agent restarts per converge
  * (observed live 2026-08-14 on shared-a). An agent whose current entry
@@ -59,29 +59,29 @@ export declare function orderBuilderGatewayRoster<T>(agents: readonly T[], coach
  */
 export declare function preserveMountedAgentModels(current: unknown, agentEntries: readonly unknown[]): unknown[];
 /**
- * The customer's slice of the agent roster, as a merge patch that only ever
+ * The user's slice of the agent roster, as a merge patch that only ever
  * ADDS or UPDATES. openclaw 2026.7.2 refuses any config write whose canonical
  * roster loses an entry unless the write carries `allowedAgentRosterRemovals`,
  * which only its own `agents.delete` supplies — so a retired project agent is
  * deleted by RPC before the patch, never nulled inside it.
  */
-export declare function customerAgentRosterPatch(current: unknown, slug: string, agentEntries: readonly unknown[]): {
+export declare function userAgentRosterPatch(current: unknown, slug: string, agentEntries: readonly unknown[]): {
     list: unknown[];
 } | {
     entries: Record<string, Record<string, unknown>>;
 };
-export declare function filterOutCustomerBindings<T>(bindings: readonly T[], slug: string): T[];
-export declare function mergeCustomerBindings<T extends {
+export declare function filterOutUserBindings<T>(bindings: readonly T[], slug: string): T[];
+export declare function mergeUserBindings<T extends {
     agentId?: unknown;
-}>(current: readonly T[], slugs: readonly string[], nextCustomerBindings: readonly T[]): readonly T[];
+}>(current: readonly T[], slugs: readonly string[], nextUserBindings: readonly T[]): readonly T[];
 export declare function staleProjectAgentAccountNulls(current: unknown, slug: string, keepAccountIds: readonly string[]): Record<string, null>;
 /**
- * The replacePaths set for customer config patches that rebuild non-id arrays:
+ * The replacePaths set for user config patches that rebuild non-id arrays:
  * `bindings` plus every array under the slug's MM accounts. Add/re-ensure patches
  * intentionally omit `agents.list` so a one-agent upsert stays an id-keyed merge
  * instead of becoming whole-list replacement.
  */
-export declare function customerConfigReplacePaths(current: unknown, slug: string): string[];
+export declare function userConfigReplacePaths(current: unknown, slug: string): string[];
 /**
  * The guard confirmation set for any patch that ships the full `agents.list`.
  * `agents.list` alone is NOT enough: the gateway's destructive-array guard
@@ -97,9 +97,9 @@ export declare function customerConfigReplacePaths(current: unknown, slug: strin
  */
 export declare function fullAgentListReplacePaths(): string[];
 /**
- * The replacePaths set for customer config patches that intentionally ship the full
+ * The replacePaths set for user config patches that intentionally ship the full
  * post-filter `agents.list` from the current config. Only use this when the patch's
  * `agents.list` is a complete replacement candidate, not a single-agent upsert.
  */
-export declare function customerConfigFullAgentListReplacePaths(current: unknown, slug: string): string[];
-export declare function customerConfigAgentRosterReplacePaths(current: unknown, slug: string, additionalAgentIds?: readonly string[]): string[];
+export declare function userConfigFullAgentListReplacePaths(current: unknown, slug: string): string[];
+export declare function userConfigAgentRosterReplacePaths(current: unknown, slug: string, additionalAgentIds?: readonly string[]): string[];

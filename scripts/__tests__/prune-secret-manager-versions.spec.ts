@@ -42,7 +42,7 @@ set -euo pipefail
 printf 'gcloud %s\\n' "$*" >> "$FAKE_CALL_LOG"
 case "$1 $2 $3" in
   "secrets list --project="*)
-    printf '%s\\n' '[{"name":"projects/octogee/secrets/alpha"},{"name":"projects/octogee/secrets/beta"},{"name":"projects/octogee/secrets/byok-builder-openai","labels":{"uid":"builder-uid"}},{"name":"projects/octogee/secrets/byosub-builder-openai"},{"name":"projects/octogee/secrets/gateway-model-key-builder","labels":{"octogee_kind":"gateway_model_key"}}]'
+    printf '%s\\n' '[{"name":"projects/octogee/secrets/alpha"},{"name":"projects/octogee/secrets/beta"},{"name":"projects/octogee/secrets/byok-user-openai","labels":{"uid":"builder-uid"}},{"name":"projects/octogee/secrets/byosub-user-openai"},{"name":"projects/octogee/secrets/gateway-model-key-user","labels":{"octogee_kind":"gateway_model_key"}}]'
     ;;
   "secrets versions list")
     secret="$4"
@@ -102,14 +102,14 @@ describe("Secret Manager version pruning", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.calls.some((call) => call.includes("versions destroy"))).toBe(false);
     expect(result.calls.some((call) => call.startsWith("gcloud storage cp"))).toBe(false);
-    expect(result.calls.some((call) => call.includes("byok-builder-openai"))).toBe(false);
-    expect(result.calls.some((call) => call.includes("byosub-builder-openai"))).toBe(false);
-    expect(result.calls.some((call) => call.includes("gateway-model-key-builder"))).toBe(false);
+    expect(result.calls.some((call) => call.includes("byok-user-openai"))).toBe(false);
+    expect(result.calls.some((call) => call.includes("byosub-user-openai"))).toBe(false);
+    expect(result.calls.some((call) => call.includes("gateway-model-key-user"))).toBe(false);
     expect(JSON.parse(result.stdout)).toMatchObject({
       phase: "secret-manager-version-prune",
       project: "octogee",
       mode: "dry-run",
-      excludedCustomerCredentials: 3,
+      excludedUserCredentials: 3,
       candidates: [
         { secret: "alpha", keptVersion: "3", versions: [{ version: "2" }, { version: "1" }] },
       ],

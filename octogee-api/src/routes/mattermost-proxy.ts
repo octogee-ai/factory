@@ -40,7 +40,7 @@ type GetMmCredsResult =
   | { ok: false; reason: "not-provisioned" }
   | { ok: false; reason: "lookup-error" };
 
-type MattermostCredentialStore = Pick<PlatformStateRepositories, "builders" | "secrets">;
+type MattermostCredentialStore = Pick<PlatformStateRepositories, "users" | "secrets">;
 
 async function getMmCreds(store: MattermostCredentialStore, uid: string): Promise<GetMmCredsResult> {
   const cached = mmCredsCache.get(uid);
@@ -52,12 +52,12 @@ async function getMmCreds(store: MattermostCredentialStore, uid: string): Promis
   }
 
   try {
-    const [builder, secret] = await Promise.all([
-      store.builders.records.get(uid),
+    const [user, secret] = await Promise.all([
+      store.users.records.get(uid),
       store.secrets.get(uid, "mattermost"),
     ]);
 
-    const mmUserId = builder?.mattermostUserId;
+    const mmUserId = user?.mattermostUserId;
     const mmToken = secret?.kind === "builder-mattermost" ? secret.personalToken : null;
 
     if (!mmUserId || !mmToken) return { ok: false, reason: "not-provisioned" };
@@ -109,7 +109,7 @@ export function isCreatePostRequest(method: string | undefined, url: string | un
 }
 
 export function createMmRestProxyHandler(
-  store: Pick<PlatformStateRepositories, "builders" | "workspaces">,
+  store: Pick<PlatformStateRepositories, "users" | "workspaces">,
   notifications?: Pick<ProductNotifications, "createPostObserver">,
 ): (req: Request, res: Response) => void {
   let postObserver: CreatedPostObserver | null = null;

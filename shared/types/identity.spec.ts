@@ -16,7 +16,7 @@ import {
   isValidProjectId,
   isValidCustomChannelName,
   workspaceGeneralChannelName,
-  workspaceCoachChannelName,
+  workspaceDefaultAgentChannelName,
   workspaceAdminChannelName,
   workspaceCustomChannelName,
   projectGeneralChannelName,
@@ -27,9 +27,9 @@ import {
   attributeChannelToUsername,
   deriveJoinedUsernames,
   deriveContactedUsernames,
-  workspaceCoachAgentId,
+  workspaceDefaultAgentId,
   projectAgentId,
-  workspaceCoachMmUsername,
+  workspaceDefaultAgentMmUsername,
   projectAgentMmUsername,
   parseAgentId,
 } from './identity.js';
@@ -65,7 +65,7 @@ describe('identity: constants', () => {
     expect(RESERVED_USERNAMES.has(COMMUNITY_PREFIX)).toBe(true);
   });
 
-  it('RESERVED_WORKSPACE_CHANNELS is general, coach, admin (in that order)', () => {
+  it('RESERVED_WORKSPACE_CHANNELS is general, defaultAgent, admin (in that order)', () => {
     expect([...RESERVED_WORKSPACE_CHANNELS]).toEqual(['general', 'coach', 'admin']);
   });
 
@@ -132,7 +132,7 @@ describe('identity: isValidUsername', () => {
 
   it('rejects Mattermost-reserved team prefixes', () => {
     for (const prefix of ['admin', 'api', 'channel', 'post', 'signup', 'plugins']) {
-      expect(isValidUsername(`${prefix}builder`)).toBe(false);
+      expect(isValidUsername(`${prefix}user`)).toBe(false);
     }
   });
 
@@ -236,8 +236,8 @@ describe('identity: generators', () => {
     expect(workspaceGeneralChannelName('christopher-eckert')).toBe('christopher-eckert-general');
   });
 
-  it('workspaceCoachChannelName', () => {
-    expect(workspaceCoachChannelName('kyle')).toBe('kyle-coach');
+  it('workspaceDefaultAgentChannelName', () => {
+    expect(workspaceDefaultAgentChannelName('kyle')).toBe('kyle-coach');
   });
 
   it('workspaceAdminChannelName', () => {
@@ -528,14 +528,14 @@ describe('identity: MM compatibility', () => {
 });
 
 describe('agent ids', () => {
-  it('builds coach and project agent ids and MM usernames', () => {
-    expect(workspaceCoachAgentId('alice')).toBe('octogee-alice-coach');
+  it('builds agent and project agent ids and MM usernames', () => {
+    expect(workspaceDefaultAgentId('alice')).toBe('octogee-alice-coach');
     expect(projectAgentId('alice', 'orbit')).toBe('octogee-alice-proj-orbit-coach');
-    expect(workspaceCoachMmUsername('alice')).toBe('alice-coach');
+    expect(workspaceDefaultAgentMmUsername('alice')).toBe('alice-coach');
     expect(projectAgentMmUsername('alice', 'orbit')).toBe('alice-proj-orbit-coach');
   });
 
-  it('parses coach agent ids', () => {
+  it('parses agent agent ids', () => {
     expect(parseAgentId('octogee-alice-coach')).toEqual({ kind: 'coach', username: 'alice' });
     expect(parseAgentId('octogee-christopher-eckert-coach')).toEqual({
       kind: 'coach',
@@ -572,7 +572,7 @@ describe('agent ids', () => {
   });
 
   it('round-trips: parse(build) is identity for valid inputs', () => {
-    expect(parseAgentId(workspaceCoachAgentId('ai-2026'))).toEqual({
+    expect(parseAgentId(workspaceDefaultAgentId('ai-2026'))).toEqual({
       kind: 'coach',
       username: 'ai-2026',
     });

@@ -72,7 +72,7 @@ async function includeSourceServiceStore(stores: SourceAgentStore[], input: Post
   const service = await captureSourceDoctorServiceAnchor(env);
   if (!service) return stores;
   const [store] = await postgresSourceStores([service.agentId], env);
-  if (stores.some(candidate => candidate.anchor.storeId === store!.anchor.storeId || candidate.anchor.schema === store!.anchor.schema)) throw new Error("source Doctor service anchor aliases a customer store");
+  if (stores.some(candidate => candidate.anchor.storeId === store!.anchor.storeId || candidate.anchor.schema === store!.anchor.schema)) throw new Error("source Doctor service anchor aliases a user store");
   return [...stores, store!];
 }
 

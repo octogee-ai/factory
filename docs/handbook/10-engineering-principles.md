@@ -50,7 +50,7 @@ Pre-broad-customer, breaking changes are cheap and correctness is the priority.
   free; silently orphaning a quiet user's data is a real regression.
 - **Teardown over surgery:** when state is tangled and no real data is at risk,
   nuke + rebuild beats an intricate manual recovery (the corollary of "PVC data
-  is critical" — which flips the moment there's real customer data).
+  is critical" — which flips the moment there's real user data).
 - **Upgrade, don't stop:** if a refactor hits a legacy-cruft blocker (one package
   is CommonJS, another ESM), upgrade the laggard — don't back out or build a
   dual-pipeline shim. The right architecture is cheap to install now.

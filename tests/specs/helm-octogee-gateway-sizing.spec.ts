@@ -116,7 +116,7 @@ describe("helm/octogee-gateway/ — sizing tier explicit override", () => {
 });
 
 describe("helm/octogee-gateway/ — sizing tier profile-default fallback", () => {
-  it("Builder profile without sizingTier renders small (class default)", () => {
+  it("User profile without sizingTier renders small (class default)", () => {
     const out = helmTemplate({ profile: "builder" });
     expectResourcesMatchTier(out, "s");
   });
@@ -197,7 +197,7 @@ describe("helm/octogee-gateway/ — invalid sizingTier rejected by schema", () =
 });
 
 
-describe("Builder ephemeral storage admission", () => {
+describe("User ephemeral storage admission", () => {
   it.each(["x11", "omarchy"])("keeps the %s working-set budget intact under Autopilot admission", (computerDesktop) => {
     const deployment = parseAllDocuments(helmTemplate({ profile: "builder", computerDesktop }))
       .map((document) => document.toJS())
@@ -216,7 +216,7 @@ describe("Builder ephemeral storage admission", () => {
   });
 });
 
-describe("Builder working-set partition", () => {
+describe("User working-set partition", () => {
   it.each(["x11", "omarchy"])("bounds every disk-backed %s emptyDir and spends exactly the gateway's ephemeral limit", (computerDesktop) => {
     const deployment = parseAllDocuments(helmTemplate({ profile: "builder", computerDesktop }))
       .map((document) => document.toJS())

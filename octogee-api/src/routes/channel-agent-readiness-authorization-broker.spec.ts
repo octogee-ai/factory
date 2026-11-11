@@ -18,7 +18,7 @@ function setup(options: { bound?: "matching" | "different" | "none"; uid?: strin
   const authorize = vi.fn(async () => ({ forbidden: false as const, target, client, callerMmUserId: "c".repeat(26) }));
   const docs: Record<string, Record<string, unknown>> = { "users/owner": { provisioning: { openclaw: { gatewayId } } } };
   const store = createDocumentFixtureStore(docs);
-  const get = vi.spyOn(store.builders.records, "get");
+  const get = vi.spyOn(store.users.records, "get");
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json());
@@ -63,7 +63,7 @@ describe("channel readiness authorization authority", () => {
     h.target.projectId = "orbit"; h.target.agentId = "octogee-alice-proj-orbit-coach";
     const r = await request(h.app).post(endpoint).send({ ...body, uid: "owner", workspaceId: "mallory", agentId: "wrong", peerKind: "direct" });
     expect(r.status).toBe(200);
-    expect(h.authorize).toHaveBeenCalledWith("member", channelId, undefined, { requireActiveLedger: true, includeCoachConversation: true, signal: expect.any(AbortSignal) });
+    expect(h.authorize).toHaveBeenCalledWith("member", channelId, undefined, { requireActiveLedger: true, includeDefaultAgentConversation: true, signal: expect.any(AbortSignal) });
     expect(h.get).toHaveBeenCalledWith("owner");
     expect(r.headers["cache-control"]).toBe("no-store");
     expect(r.body).toEqual({ gatewayId, channelId, workspaceId: "alice", project: "orbit", agentId: h.target.agentId,

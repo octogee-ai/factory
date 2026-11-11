@@ -1,8 +1,8 @@
-import { type CustomerMigrationV2GatewayRootFence } from "@octogee/shared/types/glm";
+import { type UserMigrationV2GatewayRootFence } from "@octogee/shared/types/glm";
 import { type AssignmentSource, type AssignmentState } from "@octogee/shared/types/gateway-releases";
-import type { FleetBrokerCustomerRestoreAuthority } from "@octogee/shared/types/fleet-broker";
+import type { FleetBrokerUserRestoreAuthority } from "@octogee/shared/types/fleet-broker";
 import { type WorkspaceMigrationPhase } from "@octogee/shared/types/workspace-migration";
-import { type BuilderTierReader } from "./builder-activation-lease.js";
+import { type BuilderTierReader } from "./user-activation-lease.js";
 import type { PlatformStateStore, PlatformStateTransaction } from "./platform-state/index.js";
 export interface FleetStateDeps {
     store: PlatformStateStore;
@@ -40,7 +40,7 @@ export interface WorkspaceMigrationSourcePreparationParams extends WorkspaceMigr
 }
 export declare function assertWorkspaceMigrationSourcePreparationAuthority(deps: FleetStateDeps, params: WorkspaceMigrationSourcePreparationParams): Promise<void>;
 export declare function assertWorkspaceMigrationRecoveryAuthority(deps: FleetStateDeps, params: WorkspaceMigrationRecoveryParams): Promise<void>;
-export declare function builderActivationRecoveryTargetMatches(params: {
+export declare function userActivationRecoveryTargetMatches(params: {
     operationId: string;
     input: Record<string, unknown>;
     openclaw: Record<string, unknown>;
@@ -50,13 +50,13 @@ export declare function builderActivationRecoveryTargetMatches(params: {
 export declare function completeWorkspaceMigrationRecovery(deps: FleetStateDeps, params: WorkspaceMigrationRecoveryParams): Promise<void>;
 export declare function sharedRecoveryTargetCleaned(input: Record<string, unknown>, schedulerHandoff: unknown): boolean;
 export declare function clearWorkspaceMigrationPreparation(deps: FleetStateDeps, params: WorkspaceMigrationPreparationParams): Promise<void>;
-export declare function clearRetiredBuilderActivationPreparation(deps: FleetStateDeps, params: {
+export declare function clearRetiredUserActivationPreparation(deps: FleetStateDeps, params: {
     uid: string;
     targetGatewayId: string;
     generation: number;
     retirementOperationId: string;
 }): Promise<boolean>;
-export interface CustomerRestoreInput {
+export interface UserRestoreInput {
     fromGatewayId: string;
     uid: string;
     slug: string;
@@ -66,15 +66,15 @@ export interface CustomerRestoreInput {
     claimStartedAt: number;
     attemptId: string;
 }
-export declare function readCustomerRestoreAuthoritySnapshot(deps: Pick<FleetStateDeps, "store">, scope: {
+export declare function readUserRestoreAuthoritySnapshot(deps: Pick<FleetStateDeps, "store">, scope: {
     uid: string;
     slug: string;
     gatewayId: string;
-}): Promise<FleetBrokerCustomerRestoreAuthority | undefined>;
-export declare function beginCustomerRestore(deps: FleetStateDeps, input: CustomerRestoreInput, options?: {
+}): Promise<FleetBrokerUserRestoreAuthority | undefined>;
+export declare function beginUserRestore(deps: FleetStateDeps, input: UserRestoreInput, options?: {
     resume?: boolean;
-}): Promise<CustomerRestoreInput>;
-export declare function acknowledgeCustomerRestore(deps: FleetStateDeps, input: CustomerRestoreInput): Promise<void>;
+}): Promise<UserRestoreInput>;
+export declare function acknowledgeUserRestore(deps: FleetStateDeps, input: UserRestoreInput): Promise<void>;
 export interface CutoverCommitParams {
     uid: string;
     slug: string;
@@ -85,7 +85,7 @@ export interface CutoverCommitParams {
         source: AssignmentSource;
         updatedByOperationId: string | null;
     } | null;
-    customerMigrationV2Fence?: {
+    userMigrationV2Fence?: {
         claimStartedAt?: number;
         operationId: string;
         migrationId: string;
@@ -95,10 +95,10 @@ export interface CutoverCommitParams {
         sourceEpoch: number;
         sourceRelease: number;
         sourceAssignmentMode: "assigned" | "unassigned-live";
-        sourceRootFence: CustomerMigrationV2GatewayRootFence;
+        sourceRootFence: UserMigrationV2GatewayRootFence;
         targetGatewayId: string;
         targetRelease: number;
-        targetRootFence: CustomerMigrationV2GatewayRootFence;
+        targetRootFence: UserMigrationV2GatewayRootFence;
     };
     automatic?: boolean;
 }

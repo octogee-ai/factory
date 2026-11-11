@@ -10,7 +10,7 @@ import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutat
 export interface AgentExportFile { path: string; content: string; sha256: string; size: number; mode: "100644" | "100755" }
 export interface AgentExportSnapshot { files: AgentExportFile[]; digest: string; assetIdentity: string }
 export interface AgentExportCaptureDeps {
-  coachWorkspace: boolean;
+  defaultAgentWorkspace: boolean;
   assertCurrent(): Promise<void>;
   readAssets(directory?: { root: string; parent: string; name: string }): Promise<{ manifest: Manifest; deleted: string[] }>;
   readBlob(entry: ManifestEntry): Promise<Buffer>;
@@ -21,8 +21,8 @@ const MAX_FILE_BYTES = 32 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 128 * 1024 * 1024;
 export const MAX_AGENT_EXPORT_FILES = 100;
 const EXCLUDED = new Set([".files", ".thumbs", ".objects", ".octogee-state", "node_modules", "runtime-state"]);
-export function authoredAgentPath(name: string, coachWorkspace: boolean): boolean {
-  return !(coachWorkspace && name.split("/")[0].toLowerCase() === "projects") &&
+export function authoredAgentPath(name: string, defaultAgentWorkspace: boolean): boolean {
+  return !(defaultAgentWorkspace && name.split("/")[0].toLowerCase() === "projects") &&
     classifyAgentImportArchivePath(`workspace/${name}`) === "workspace" &&
     !name.split("/").some(part => EXCLUDED.has(part.toLowerCase())) &&
     !/\.(?:sqlite(?:3)?|db)(?:-(?:wal|shm|journal))?$/iu.test(name);
@@ -92,13 +92,13 @@ async function stableFile(file: FileHandle): Promise<{ contents: Buffer; mode: A
   if (before.mode !== after.mode || before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs || BigInt(contents.length) !== before.size) throw new Error("authored file changed during capture");
   return { contents, mode: before.mode & 0o111n ? "100755" : "100644" };
 }
-async function localFiles(root: string, coachWorkspace: boolean): Promise<Map<string, AgentExportFile>> {
+async function localFiles(root: string, defaultAgentWorkspace: boolean): Promise<Map<string, AgentExportFile>> {
   const result = new Map<string, AgentExportFile>();
   let bytes = 0;
   const visit = async (directory: FileHandle, prefix: string): Promise<void> => {
     for (const entry of await readdir(descriptor(directory), { withFileTypes: true })) {
       const name = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (!authoredAgentPath(name, coachWorkspace)) continue;
+      if (!authoredAgentPath(name, defaultAgentWorkspace)) continue;
       if (entry.isSymbolicLink() || (!entry.isFile() && !entry.isDirectory())) throw new Error("authored export requires regular files, never symlinks");
       const file = await open(`${descriptor(directory)}/${entry.name}`, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK | (entry.isDirectory() ? constants.O_DIRECTORY : 0));
       try {
@@ -118,7 +118,7 @@ function sortedFiles(files: Map<string, AgentExportFile>): AgentExportFile[] { r
 async function captureAssets(files: Map<string, AgentExportFile>, assets: Awaited<ReturnType<AgentExportCaptureDeps["readAssets"]>>, deps: AgentExportCaptureDeps): Promise<void> {
     let total = [...files.values()].reduce((bytes, file) => bytes + file.size, 0);
     for (const name of Object.keys(assets.manifest).sort()) {
-      if (!authoredAgentPath(name, deps.coachWorkspace) || files.has(name) || assets.deleted.includes(name)) continue;
+      if (!authoredAgentPath(name, deps.defaultAgentWorkspace) || files.has(name) || assets.deleted.includes(name)) continue;
       const entry = assets.manifest[name];
       total += entry.size;
       if (entry.size > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES || files.size >= MAX_AGENT_EXPORT_FILES) throw new Error("authored asset exceeds export size limit");
@@ -140,7 +140,7 @@ export async function captureAgentExport(root: string, deps: AgentExportCaptureD
     if (!lease) throw new Error("workspace mutation is in progress");
     const assets = await deps.readAssets(pinned);
     const assetIdentity = exportDigest(assets);
-    const local = await localFiles(pinned.root, deps.coachWorkspace);
+    const local = await localFiles(pinned.root, deps.defaultAgentWorkspace);
     const localDigest = exportDigest(sortedFiles(local));
     const files = new Map(local);
     await captureAssets(files, assets, deps);
@@ -152,7 +152,7 @@ export async function captureAgentExport(root: string, deps: AgentExportCaptureD
       await writeFile(path.join(staging, file.path), Buffer.from(file.content, "base64"), { mode: 0o600, flag: "wx" });
     }
     if ((await deps.scan(staging)).length) throw new Error("authored export contains secret findings");
-    if (exportDigest(await deps.readAssets(pinned)) !== assetIdentity || exportDigest(sortedFiles(await localFiles(pinned.root, deps.coachWorkspace))) !== localDigest) throw new Error("authored workspace changed during capture");
+    if (exportDigest(await deps.readAssets(pinned)) !== assetIdentity || exportDigest(sortedFiles(await localFiles(pinned.root, deps.defaultAgentWorkspace))) !== localDigest) throw new Error("authored workspace changed during capture");
     await pinned.assertCurrent();
     await deps.assertCurrent();
     return { files: ordered, digest: exportDigest(ordered), assetIdentity };

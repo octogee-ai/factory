@@ -8,12 +8,12 @@ import type {
   StartedFleetController,
 } from "../lib/fleet-provisioner.js";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
-import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
+import type { UserLifecycleAdapter } from "../lib/user-lifecycle.js";
 import {
   FLEET_STATE_PATH,
   SIGNATURE_HEADER,
 } from "../../shared/types/fleet-controller.js";
-import { stubBuilderClaim } from "./helpers/builder-claim.js";
+import { stubUserClaim } from "./helpers/user-claim.js";
 
 const GATEWAY_ID = "builder-jack";
 
@@ -25,16 +25,16 @@ function ed25519Pair(): { privateKey: string; publicKey: string } {
   };
 }
 
-const COWBOY = ed25519Pair();
+const FLEET_CONTROLLER = ed25519Pair();
 
 function controllerOpts(): StartFleetOptions {
   return {
     rpc: {} as GatewayRpcClient,
-    adapter: {} as CustomerLifecycleAdapter,
+    adapter: {} as UserLifecycleAdapter,
     gatewayId: GATEWAY_ID,
     log: () => undefined,
     port: 0,
-    publicKey: COWBOY.publicKey,
+    publicKey: FLEET_CONTROLLER.publicKey,
     version: "sha-1",
     openclawVersion: "2026.8.1-beta.2",
     openclawDir: "/tmp/octogee-fleet-surface-noexist",
@@ -47,7 +47,7 @@ function signedFleetStateRequest(port: number, body: Record<string, unknown>): P
     method: "POST",
     headers: {
       "content-type": "application/json",
-      [SIGNATURE_HEADER]: signFleetRequest(COWBOY.privateKey, String(body.requestId), rawBody),
+      [SIGNATURE_HEADER]: signFleetRequest(FLEET_CONTROLLER.privateKey, String(body.requestId), rawBody),
     },
     body: rawBody,
   });
@@ -86,20 +86,20 @@ describe("fleet controller port surface", () => {
     ["running process", "normal", "permitted", "running", "pod-uid-1", true],
     ["another pod", "normal", "held", "held", "old-pod", true],
   ])("publishes the mount proof appropriate to %s", async (_name, role, mode, phase, podUid, expectedMounted) => {
-    stubBuilderClaim("jack");
+    stubUserClaim("jack");
     let mounted = true;
     const clearMountMarker = vi.fn(() => { mounted = false; });
     const opts = controllerOpts();
     opts.adapter = {
-      isBuilderGateway: () => true,
-      isConfiguredBuilderCustomer: (slug: string) => slug === "jack",
-      configuredBuilderOverlayPresent: () => true,
-      listLocalCustomerSlugs: () => ["jack"],
+      isIsolatedGateway: () => true,
+      isConfiguredUser: (slug: string) => slug === "jack",
+      configuredUserOverlayPresent: () => true,
+      listLocalUserSlugs: () => ["jack"],
       hasWorkspaceGitDir: () => true,
       hasGitRemote: () => true,
-      customerMountMarked: () => mounted,
+      userMountMarked: () => mounted,
       clearMountMarker,
-    } as unknown as CustomerLifecycleAdapter;
+    } as unknown as UserLifecycleAdapter;
     opts.surgeOpenClawProcessGate = {
       status: async () => ({ version: 1, podUid, role, mode, phase }),
     } as unknown as NonNullable<StartFleetOptions["surgeOpenClawProcessGate"]>;
@@ -110,20 +110,20 @@ describe("fleet controller port surface", () => {
     expect(clearMountMarker).toHaveBeenCalledTimes(expectedMounted ? 0 : 1);
   });
 
-  it("treats a Builder slug that is only in the environment as no configured Builder", async () => {
+  it("treats a user slug that is only in the environment as no configured user", async () => {
     vi.stubEnv("GATEWAY_BUILDER_SLUG", "jack");
     const clearMountMarker = vi.fn();
     const opts = controllerOpts();
     opts.adapter = {
-      isBuilderGateway: () => true,
-      isConfiguredBuilderCustomer: () => true,
-      configuredBuilderOverlayPresent: () => true,
-      listLocalCustomerSlugs: () => ["jack"],
+      isIsolatedGateway: () => true,
+      isConfiguredUser: () => true,
+      configuredUserOverlayPresent: () => true,
+      listLocalUserSlugs: () => ["jack"],
       hasWorkspaceGitDir: () => true,
       hasGitRemote: () => true,
-      customerMountMarked: () => true,
+      userMountMarked: () => true,
       clearMountMarker,
-    } as unknown as CustomerLifecycleAdapter;
+    } as unknown as UserLifecycleAdapter;
     opts.surgeOpenClawProcessGate = {
       status: async () => ({ version: 1, podUid: "pod-uid-1", role: "normal", mode: "held", phase: "held" }),
     } as unknown as NonNullable<StartFleetOptions["surgeOpenClawProcessGate"]>;
@@ -194,7 +194,7 @@ describe("fleet controller port surface", () => {
       headers: {
         "content-type": "application/json",
         [SIGNATURE_HEADER]: signFleetRequest(
-          COWBOY.privateKey,
+          FLEET_CONTROLLER.privateKey,
           gatewayScopedJobId("m1", "shared-a"),
           rawBody,
         ),
@@ -215,7 +215,7 @@ describe("fleet controller port surface", () => {
       headers: {
         "content-type": "application/json",
         [SIGNATURE_HEADER]: signFleetRequest(
-          COWBOY.privateKey,
+          FLEET_CONTROLLER.privateKey,
           gatewayScopedJobId("m1", GATEWAY_ID),
           rawBody,
         ),

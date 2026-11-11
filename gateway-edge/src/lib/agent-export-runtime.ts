@@ -6,7 +6,7 @@ import { readMaterializedProjectAssets, readProjectAssetManifest } from "@octoge
 import { manifestObjectPath, parseManifest } from "@octogee/core/workspace-manifest";
 import { createAgentImportStore, agentImportBrokerBaseUrlFromEnv } from "./agent-import-store.js";
 import { scanAgentImportSecrets } from "./agent-import-git.js";
-import { resolveCustomerDir, resolveProjectDir, workspaceMutationLeaseGitDir } from "./workspace-git.js";
+import { resolveUserDir, resolveProjectDir, workspaceMutationLeaseGitDir } from "./workspace-git.js";
 import { getManifestForQuota } from "./manifest.js";
 import { storage } from "./db.js";
 import { withinAgentExportDeadline, AgentExportService, type AgentExportSource, type AgentExportRecord } from "./agent-export-service.js";
@@ -28,7 +28,7 @@ export function createAgentExportRuntime(input: { authorization: string; gateway
       for (const directory of parts) if (!(await lstat(directory)).isDirectory()) throw new Error("authored workspace root is not confined");
     };
     await assertCurrent();
-    const directory = source.project ? await resolveProjectDir(root, source.slug, source.project) : await resolveCustomerDir(root, source.slug);
+    const directory = source.project ? await resolveProjectDir(root, source.slug, source.project) : await resolveUserDir(root, source.slug);
     if (!directory) throw new Error("agent workspace is not available on this gateway");
     const prefix = source.project ? `customers/${source.slug}/projects/${source.project}` : `customers/${source.slug}`;
     const gitDir = workspaceMutationLeaseGitDir(directory);
@@ -36,7 +36,7 @@ export function createAgentExportRuntime(input: { authorization: string; gateway
     const brokered = endpoint && createBrokeredExportAssets({ baseUrl, endpoint, source, prefix, signal: deadline });
     const readManifest = brokered ? brokered.readManifest : () => getManifestForQuota(prefix);
     return captureAgentExport(directory, {
-      coachWorkspace: source.project === null, assertCurrent, gitDir,
+      defaultAgentWorkspace: source.project === null, assertCurrent, gitDir,
       readAssets: async pinned => {
         if (!pinned) throw new Error("authored workspace capture is not pinned");
         const manifest = source.project ? await readProjectAssetManifest(pinned.root, prefix) ?? await readManifest() : await readManifest();

@@ -9,7 +9,7 @@ import {
 import { cloneGithubProjectCheckout } from "../../lib/github-project-clone.js";
 import { logger } from "../../middleware/logging.js";
 import { requireGatewayInternalAuth } from "../../middleware/gateway-internal-auth.js";
-import { claimedBuilderIdentity } from "../../lib/builder-identity.js";
+import { claimedUserIdentity } from "../../lib/user-identity.js";
 
 const router = Router();
 
@@ -99,11 +99,11 @@ router.post(
   async (req: Request, res: Response) => {
     const projectSlug = paramString(req.body?.projectSlug);
     const builderSlug = paramString(req.body?.builderSlug);
-    const expectedBuilderSlug = claimedBuilderIdentity()?.builderSlug;
+    const expectedUserSlug = claimedUserIdentity()?.builderSlug;
     if (
       !projectSlug ||
       !builderSlug ||
-      builderSlug !== expectedBuilderSlug ||
+      builderSlug !== expectedUserSlug ||
       !isOwnerRuntimeGateway()
     ) {
       res.status(403).json({ error: "forbidden" });
@@ -116,7 +116,7 @@ router.post(
         return;
       }
       const status = await cloneGithubProjectCheckout({
-        customersRoot: process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers",
+        usersRoot: process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers",
         builderSlug,
         projectSlug,
         repository: access.repository,

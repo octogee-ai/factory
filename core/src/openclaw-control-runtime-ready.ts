@@ -112,10 +112,10 @@ export async function isOpenClawControlServingRevision(
     input.revisionId !== input.gatewayId || !isGatewayRuntimeDoc(runtime) ||
     runtime.gatewayId !== input.gatewayId || runtime.lifecycle !== "serving") return false;
   if (gateway.desiredRelease === gateway.liveRelease) return runtime.release === gateway.liveRelease;
-  return isServingBuilderDuringRoll(root, gateway, runtime, input);
+  return isServingUserDuringRoll(root, gateway, runtime, input);
 }
 
-async function isServingBuilderDuringRoll(
+async function isServingUserDuringRoll(
   root: unknown,
   gateway: GatewayDoc & GatewayMutableConfig,
   runtime: GatewayRuntimeDoc,

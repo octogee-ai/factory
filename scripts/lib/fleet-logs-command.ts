@@ -11,7 +11,7 @@ function startLogTransport(options: FleetLogsOptions, diagnostics: Writable) {
     : ["logging", "read", filter, `--project=${target.clusterProjectId}`, `--freshness=${options.since ?? "10m"}`, `--limit=${options.limit}`, "--order=desc", "--format=json"];
   const mode = options.follow ? "live" : `recent ${options.since ?? "10m"}`;
   diagnostics.write(`fleet logs ${options.environment} · ${new Date().toISOString()} · ${mode} · level=${options.levelExact?.join(",") ?? options.level}\n`);
-  if (options.builders) diagnostics.write("Builder filter matches explicit builderSlug fields and dedicated VM labels; untagged events are excluded.\n");
+  if (options.users) diagnostics.write("User filter matches explicit builderSlug fields and dedicated VM labels; untagged events are excluded.\n");
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- gcloud is the authenticated operator CLI.
   return spawn("gcloud", gcloudArgs, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...FLEET_LOGS_TAIL_ENV } });
 }

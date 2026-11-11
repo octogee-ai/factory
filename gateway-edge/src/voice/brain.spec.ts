@@ -74,7 +74,7 @@ describe("createMattermostBrain", () => {
     brain.dispose();
   });
 
-  it("posts the transcript as the Builder and speaks only the run that starts after OpenClaw received that post", async () => {
+  it("posts the transcript as the user and speaks only the run that starts after OpenClaw received that post", async () => {
     const { events, posts, brain, handlers } = setup();
     const turn = await brain.ask({ channelId: "chan1", text: "What's on my calendar?", turnId: "t1" }, handlers);
     expect(posts.createPost).toHaveBeenCalledWith({ channelId: "chan1", text: "What's on my calendar?", turnId: "t1" });

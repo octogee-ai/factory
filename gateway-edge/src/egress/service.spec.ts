@@ -4,7 +4,7 @@ import { EventEmitter, once } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayEgressMode, GatewayVmEgressState } from "@octogee/shared/types/glm";
 import { EGRESS_CLOSE_NOT_SELECTED, SOCKS_REPLY } from "./protocol.js";
-import { createComputerEgressService, createDirectDialer, type ComputerEgressService, type EgressStore } from "./service.js";
+import { createVmEgressService, createDirectDialer, type VmEgressService, type EgressStore } from "./service.js";
 import { createSocks5Server } from "./socks5.js";
 import { createEgressTunnelHost } from "./tunnel-host.js";
 
@@ -18,7 +18,7 @@ function memoryStore(initial: GatewayVmEgressState | null = null): EgressStore &
   return store;
 }
 
-const services: ComputerEgressService[] = [];
+const services: VmEgressService[] = [];
 const sockets: Socket[] = [];
 const servers: net.Server[] = [];
 afterEach(async () => {
@@ -103,7 +103,7 @@ describe("cloud-mode direct dialer", () => {
   });
 });
 
-describe("computer egress boot", () => {
+describe("VM egress boot", () => {
   it("keeps the listener closed while the mode is unknown, retries the load with bounded backoff, and opens with the stored mode once a read succeeds", async () => {
     const store = memoryStore({ mode: "desktop", updatedAt: 1 });
     let failures = 2;
@@ -112,7 +112,7 @@ describe("computer egress boot", () => {
     const direct = vi.fn(async () => new PassThrough());
     const log = vi.fn();
     const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
-    const service = createComputerEgressService({ store, directDial: direct, tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 }, log });
+    const service = createVmEgressService({ store, directDial: direct, tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 }, log });
     services.push(service);
     const changed = vi.fn();
     service.onChange(changed);
@@ -139,7 +139,7 @@ describe("computer egress boot", () => {
     const store = memoryStore({ mode: "desktop", updatedAt: 1 });
     let resolveRead: ((state: GatewayVmEgressState | null) => void) | null = null;
     store.read = () => new Promise((resolve) => { resolveRead = resolve; });
-    const service = createComputerEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
+    const service = createVmEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
     services.push(service);
     const booting = service.boot({ schedule: () => {} });
     await vi.waitFor(() => expect(resolveRead).not.toBeNull());
@@ -158,7 +158,7 @@ describe("computer egress boot", () => {
     const store = memoryStore({ mode: "desktop", updatedAt: 1 });
     let resolveRead: ((state: GatewayVmEgressState | null) => void) | null = null;
     store.read = () => new Promise((resolve) => { resolveRead = resolve; });
-    const service = createComputerEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
+    const service = createVmEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
     services.push(service);
     const booting = service.boot({ schedule: () => {} });
     await vi.waitFor(() => expect(resolveRead).not.toBeNull());
@@ -182,7 +182,7 @@ describe("computer egress boot", () => {
     store.write = (mode) => store.writes.length === 0 && !releaseFirstWrite
       ? new Promise((resolve, reject) => { releaseFirstWrite = () => { write(mode).then(resolve, reject); }; })
       : write(mode);
-    const service = createComputerEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
+    const service = createVmEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
     services.push(service);
     const booting = service.boot({ schedule: () => {} });
     await vi.waitFor(() => expect(resolveRead).not.toBeNull());
@@ -203,7 +203,7 @@ describe("computer egress boot", () => {
     let rejectRead: ((error: Error) => void) | null = null;
     store.read = () => new Promise((_resolve, reject) => { rejectRead = reject; });
     const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
-    const service = createComputerEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
+    const service = createVmEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
     services.push(service);
     const booting = service.boot({ baseDelayMs: 60_000, schedule: (callback, delayMs) => scheduled.push({ callback, delayMs }) });
     await vi.waitFor(() => expect(rejectRead).not.toBeNull());
@@ -215,11 +215,11 @@ describe("computer egress boot", () => {
     expect(scheduled).toEqual([]);
   });
 
-  it("recovers from a stored mode the broker keeps refusing once the Builder picks a mode, without waiting out the retry delay", async () => {
+  it("recovers from a stored mode the broker keeps refusing once the user picks a mode, without waiting out the retry delay", async () => {
     const store = memoryStore();
     store.read = async () => { throw new Error("broker 409 egress_record_malformed"); };
     const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
-    const service = createComputerEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
+    const service = createVmEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
     services.push(service);
     const booting = service.boot({ baseDelayMs: 60_000, schedule: (callback, delayMs) => scheduled.push({ callback, delayMs }) });
     await vi.waitFor(() => expect(scheduled).toHaveLength(1));
@@ -233,7 +233,7 @@ describe("computer egress boot", () => {
     const store = memoryStore();
     const settled: Array<(state: GatewayVmEgressState) => void> = [];
     store.write = (mode) => new Promise((resolve) => { settled.push((state) => { store.writes.push(mode); store.state = state; resolve(state); }); });
-    const service = createComputerEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost() });
+    const service = createVmEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost() });
     const first = service.setMode("desktop");
     const second = service.setMode("cloud");
     await new Promise((resolve) => setImmediate(resolve));
@@ -255,7 +255,7 @@ describe("computer egress boot", () => {
       if (fail) { fail = false; return Promise.reject(new Error("broker 503")); }
       return new Promise((resolve) => { releaseNext = (state) => { store.writes.push(mode); resolve(state); }; });
     };
-    const service = createComputerEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost() });
+    const service = createVmEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost() });
     await service.load();
     const failed = service.setMode("cloud");
     const next = service.setMode("cloud");
@@ -271,7 +271,7 @@ describe("computer egress boot", () => {
     const store = memoryStore();
     store.read = async () => { throw new Error("broker 503"); };
     const scheduled: number[] = [];
-    const service = createComputerEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
+    const service = createVmEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
     services.push(service);
     let fire: (() => void) | null = null;
     void service.boot({ baseDelayMs: 2_000, maxDelayMs: 9_000, schedule: (callback, delayMs) => { scheduled.push(delayMs); fire = callback; } });
@@ -285,12 +285,12 @@ describe("computer egress boot", () => {
   });
 });
 
-describe("computer egress service", () => {
+describe("VM egress service", () => {
   it("starts in cloud mode and dials directly, applies the stored mode on load, and persists before switching", async () => {
     const store = memoryStore();
     const direct = vi.fn(async () => new PassThrough());
     const tunnel = createEgressTunnelHost();
-    const service = createComputerEgressService({ store, directDial: direct, tunnel });
+    const service = createVmEgressService({ store, directDial: direct, tunnel });
     expect(service.status()).toMatchObject({ mode: "cloud", shell: "disconnected", listener: "off", updatedAt: null });
     const signal = new AbortController().signal;
     await service.dial("ifconfig.me", 443, signal);
@@ -311,7 +311,7 @@ describe("computer egress service", () => {
   it("keeps the current mode when the platform refuses to record a change", async () => {
     const store = memoryStore();
     store.write = async () => { throw new Error("broker 503"); };
-    const service = createComputerEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost() });
+    const service = createVmEgressService({ store, directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost() });
     await expect(service.setMode("desktop")).rejects.toThrow("broker 503");
     expect(service.status().mode).toBe("cloud");
   });
@@ -320,7 +320,7 @@ describe("computer egress service", () => {
     const direct = vi.fn(async () => new PassThrough());
     const tunnel = createEgressTunnelHost();
     const tunnelDial = vi.spyOn(tunnel, "dial").mockResolvedValue(new PassThrough());
-    const service = createComputerEgressService({ store: memoryStore(), directDial: direct, tunnel });
+    const service = createVmEgressService({ store: memoryStore(), directDial: direct, tunnel });
     await service.setMode("desktop");
     await expect(service.dial("ifconfig.me", 443, new AbortController().signal)).rejects.toMatchObject({ reply: SOCKS_REPLY.generalFailure });
     expect(direct).not.toHaveBeenCalled();
@@ -339,7 +339,7 @@ describe("computer egress service", () => {
 
   it("admits a desktop only while desktop mode is selected and closes it when cloud is chosen, so a stale desktop cannot reattach", async () => {
     const tunnel = createEgressTunnelHost();
-    const service = createComputerEgressService({ store: memoryStore(), directDial: async () => new PassThrough(), tunnel });
+    const service = createVmEgressService({ store: memoryStore(), directDial: async () => new PassThrough(), tunnel });
     const fakeShell = () => {
       const closeListeners: Array<() => void> = [];
       const close = vi.fn(() => { for (const listener of closeListeners) listener(); });
@@ -349,7 +349,7 @@ describe("computer egress service", () => {
           if (event === "close") closeListeners.push(listener);
           return this;
         },
-      } as unknown as Parameters<ComputerEgressService["attachShell"]>[0];
+      } as unknown as Parameters<VmEgressService["attachShell"]>[0];
       return { socket, close };
     };
 
@@ -374,9 +374,9 @@ describe("computer egress service", () => {
     await expect(service.dial("ifconfig.me", 443, new AbortController().signal)).rejects.toMatchObject({ reply: SOCKS_REPLY.generalFailure });
   });
 
-  it("points the computer's browser at the loaded mode after boot and at every later change", async () => {
+  it("points the VM's browser at the loaded mode after boot and at every later change", async () => {
     const browser = { apply: vi.fn() };
-    const service = createComputerEgressService({ store: memoryStore({ mode: "desktop", updatedAt: 1 }), directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 }, browser });
+    const service = createVmEgressService({ store: memoryStore({ mode: "desktop", updatedAt: 1 }), directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 }, browser });
     services.push(service);
     await service.boot({ schedule: () => {} });
     expect(browser.apply.mock.calls).toEqual([["desktop"]]);
@@ -387,7 +387,7 @@ describe("computer egress service", () => {
 
   it("drops every open relay when the mode changes so Chromium re-dials through the selected route", async () => {
     const upstream = new PassThrough();
-    const service = createComputerEgressService({ store: memoryStore(), directDial: async () => upstream, tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
+    const service = createVmEgressService({ store: memoryStore(), directDial: async () => upstream, tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
     services.push(service);
     const bound = await service.start();
     const client = net.connect(bound.port, "127.0.0.1");
@@ -405,7 +405,7 @@ describe("computer egress service", () => {
   });
 
   it("serves SOCKS5 on the configured loopback address and answers fail-closed with a general failure", async () => {
-    const service = createComputerEgressService({ store: memoryStore({ mode: "desktop", updatedAt: 1 }), directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
+    const service = createVmEgressService({ store: memoryStore({ mode: "desktop", updatedAt: 1 }), directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });
     services.push(service);
     await service.load();
     const bound = await service.start();

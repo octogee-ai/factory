@@ -195,7 +195,7 @@ describe("target system-config convergence", () => {
       .filter((request) => request.gatewayId === gatewayId);
   }
 
-  it("converges a Builder target on its own accepted commit after a Barn source's final copy, before verify", async () => {
+  it("converges a isolated target on its own accepted commit after a shared gateway source's final copy, before verify", async () => {
     const { client, deps, input } = harness();
     deps.readTargetSystemConfigCommit = vi.fn(async () => TARGET_COMMIT);
 
@@ -214,7 +214,7 @@ describe("target system-config convergence", () => {
     expect(client.calls.indexOf("verify:alice")).toBeGreaterThan(converge);
   });
 
-  it("converges on the commit a Builder source accepted at its final flush", async () => {
+  it("converges on the commit a user source accepted at its final flush", async () => {
     const client = happyClient();
     (client.flushGateway as ReturnType<typeof vi.fn>).mockImplementation(async ({ slug, reason }) => {
       client.calls.push(`flush:${slug}:${reason}`);
@@ -235,7 +235,7 @@ describe("target system-config convergence", () => {
     })]);
   });
 
-  it("fails and rolls back before cutover when the target has no commit to fence a Barn-source converge", async () => {
+  it("fails and rolls back before cutover when the target has no commit to fence a shared-gateway-source converge", async () => {
     const { client, deps, input, events } = harness();
     deps.readTargetSystemConfigCommit = vi.fn(async () => null);
 
@@ -247,7 +247,7 @@ describe("target system-config convergence", () => {
     expect(events.some((event) => event.startsWith("cutover:"))).toBe(false);
   });
 
-  it("requires the Builder source's own commit instead of falling back to the target's", async () => {
+  it("requires the user source's own commit instead of falling back to the target's", async () => {
     const { client, deps, input, events } = harness();
     deps.readTargetSystemConfigCommit = vi.fn(async () => TARGET_COMMIT);
 
@@ -714,7 +714,7 @@ describe("schedule transfer", () => {
     expect(h.client.unmount).not.toHaveBeenCalled();
   });
 
-  it("moves no schedules when the customer stays on the same gateway", async () => {
+  it("moves no schedules when the user stays on the same gateway", async () => {
     const h = harness({ toGatewayId: "gw-blue" });
 
     expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
@@ -798,11 +798,11 @@ describe("rollback releases the source", () => {
   });
 });
 
- it.each([false, true])("defers active coach work without discarding preparation (fenced=%s)", async (fenced) => {
+ it.each([false, true])("defers active agent work without discarding preparation (fenced=%s)", async (fenced) => {
   const h = harness({ gateAssignment: true });
   if (fenced) vi.mocked(h.client.quiesce).mockResolvedValueOnce({ migrationId: "m1", slug: "alice", drained: true, runningCount: 0 });
   vi.mocked(h.client.quiesce).mockRejectedValue(new MigrationDrainPendingError("coach is active"));
-  expect(await runMigration(h.input, h.deps)).toMatchObject({ success: false, waitingForBuilderIdle: true, rolledBack: false });
+  expect(await runMigration(h.input, h.deps)).toMatchObject({ success: false, waitingForUserIdle: true, rolledBack: false });
   expect(h.client.unmount).not.toHaveBeenCalled();
   expect(h.client.flushGateway).not.toHaveBeenCalled();
   expect(h.client.resume).toHaveBeenCalled();
@@ -839,7 +839,7 @@ describe("pre-drain probe journaling", () => {
     const h = harness({ gateAssignment: true });
     vi.mocked(h.client.quiesce).mockRejectedValueOnce(new MigrationDrainPendingError("coach is active"));
 
-    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: false, waitingForBuilderIdle: true });
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: false, waitingForUserIdle: true });
 
     expect(h.events).toContain("report:wait-for-active-work:skipped");
     expect(h.events.some((event) => event.startsWith("report:quiesce-source"))).toBe(false);

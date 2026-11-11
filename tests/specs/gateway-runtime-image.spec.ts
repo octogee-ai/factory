@@ -208,7 +208,7 @@ describe("gateway runtime image gate", () => {
   });
 });
 
-describe("builder runtime image gate", () => {
+describe("isolated runtime image gate", () => {
   it("passes when the toolchain catalog matches its recorded digests", () => {
     const image = fakeImage();
 
@@ -231,7 +231,7 @@ describe("builder runtime image gate", () => {
     "OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_LOCK_PATH",
     "OCTOGEE_BUILDER_TOOL_GROUPS_SHA256",
     "OCTOGEE_BUILDER_TOOL_GROUPS_PATH",
-  ])("rejects a Builder image missing %s", (missing) => {
+  ])("rejects a isolated image missing %s", (missing) => {
     const image = fakeImage();
     const toolchainEnv = Object.fromEntries(
       Object.entries(image.toolchainEnv).filter(([name]) => name !== missing),
@@ -240,7 +240,7 @@ describe("builder runtime image gate", () => {
     const result = verify("builder", { ...image.env, ...toolchainEnv });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(`${missing} is unset in the Builder image`);
+    expect(result.stderr).toContain(`${missing} is unset in the isolated image`);
   });
 
   it("rejects a toolchain lock that drifted from its recorded digest", () => {
@@ -250,7 +250,7 @@ describe("builder runtime image gate", () => {
     const result = verify("builder", { ...image.env, ...image.toolchainEnv });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Builder toolchain lock does not match");
+    expect(result.stderr).toContain("Isolated toolchain lock does not match");
   });
 
   it("rejects a tool group catalog that drifted from its recorded digest", () => {
@@ -260,6 +260,6 @@ describe("builder runtime image gate", () => {
     const result = verify("builder", { ...image.env, ...image.toolchainEnv });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Builder tool groups do not match");
+    expect(result.stderr).toContain("Isolated tool groups do not match");
   });
 });

@@ -36,7 +36,7 @@ describe("resolveUserGateway", () => {
     });
   });
 
-  it("rosters the coach first plus this workspace's own safe agent ids", async () => {
+  it("rosters the agent first plus this workspace's own safe agent ids", async () => {
     h.users.set("users/u-2", {
       provisioning: {
         openclaw: {

@@ -84,7 +84,7 @@ describe("release fleet store", () => {
 
 describe("platform database tunnel", () => {
   it("waits for its pod to be readable before waiting for it to become ready", async () => {
-    const tunnel = await fleetStoreDependencies("prod").tunnel({ host: "10.89.0.12", port: 5432, image: "cowboy@sha256:abc" });
+    const tunnel = await fleetStoreDependencies("prod").tunnel({ host: "10.89.0.12", port: 5432, image: "fleet-controller@sha256:abc" });
 
     expect(tunnel.port).toBe(43210);
     const verbs = cluster.calls.map((command) => command.slice(0, 2).join(" "));

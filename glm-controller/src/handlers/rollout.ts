@@ -1,4 +1,4 @@
-import type { BuilderActivationTargetRollbackProof } from '../builder-activation-roll-recovery.js';
+import type { UserActivationTargetRollbackProof } from '../user-activation-roll-recovery.js';
 import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types/glm";
 import type { GatewayDoc, ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
@@ -6,7 +6,7 @@ import { classifyOperationFailure } from "../operation-retry.js";
 
 
 export interface RolloutDeps {
-  rollbackUnadmittedActivationTarget?: (op: Operation, ctx: OperationContext) => Promise<BuilderActivationTargetRollbackProof | null>;
+  rollbackUnadmittedActivationTarget?: (op: Operation, ctx: OperationContext) => Promise<UserActivationTargetRollbackProof | null>;
   readGatewayDoc: (gatewayId: string) => Promise<GatewayDoc | null>;
   readReleasePayload: (gatewayId: string, release: number) => Promise<ReleasePayload | null>;
   readDeploymentPrerequisiteError: (gatewayId: string) => Promise<string | null>;
@@ -144,7 +144,7 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
 }
 
 interface RollOutcome {
-  targetRollback?: BuilderActivationTargetRollbackProof;
+  targetRollback?: UserActivationTargetRollbackProof;
   success: boolean;
   error?: string;
 }

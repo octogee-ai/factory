@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { PROJECT_COACH_REPO } from "@octogee/shared/types/project";
+import { PROJECT_AGENT_REPO } from "@octogee/shared/types/project";
 import { GATEWAY_KEY_TITLE, gatewayKeyTitle as ownerGatewayKeyTitle, giteaUsername, isManagedGatewayKeyTitle, projectRepoName, systemConfigRepoName, workspaceGiteaOrg, workspaceRepoName, } from "../gitea-naming.js";
 import { GITEA_PAGE_SIZE, createGiteaKeyAdminClient, runGiteaKeySweep } from "./gitea-key-sweep.js";
 const BUILDERS_TEAM = "builders";
@@ -12,7 +12,7 @@ export const giteaNaming = {
             case "system-config":
                 return systemConfigRepoName();
             case "project-coaches":
-                return PROJECT_COACH_REPO;
+                return PROJECT_AGENT_REPO;
             case "project":
                 return projectRepoName(role.projectSlug);
         }
@@ -47,7 +47,7 @@ function repoCreation(workspaceSlug, role) {
                     name: giteaNaming.repo(role),
                     private: true,
                     default_branch: "main",
-                    description: `Octogee project coaches for ${workspaceSlug}`,
+                    description: `Octogee project agents for ${workspaceSlug}`,
                     auto_init: false,
                 },
             };

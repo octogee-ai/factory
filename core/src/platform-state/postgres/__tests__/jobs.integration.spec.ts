@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AlreadyExistsError, FenceMismatchError, MalformedRecordError, MissingRecordError } from "../../errors.js";
-import type { AgentImportRecord, CustomerDeletionJob } from "../../jobs.js";
+import type { AgentImportRecord, UserDeletionJob } from "../../jobs.js";
 import { createHarness, dsn, type PlatformStateHarness } from "./fixtures/harness.js";
 
 const NOW = 1_762_500_000_000;
 const DAY = 24 * 60 * 60_000;
 const iso = (millis: number) => new Date(millis).toISOString();
 
-function deletionJob(overrides: Partial<CustomerDeletionJob> = {}): CustomerDeletionJob {
+function deletionJob(overrides: Partial<UserDeletionJob> = {}): UserDeletionJob {
   return {
     deletionId: "del-1",
     version: 1,
@@ -36,7 +36,7 @@ describe.skipIf(!dsn)("PostgreSQL job repositories", { timeout: 30_000 }, () => 
     await harness.dispose();
   });
 
-  describe("customer deletion jobs", () => {
+  describe("user deletion jobs", () => {
     it("creates a job once and reads it back with its product context", async () => {
       await harness.store.jobs.deletions.create(deletionJob());
 
@@ -46,7 +46,7 @@ describe.skipIf(!dsn)("PostgreSQL job repositories", { timeout: 30_000 }, () => 
     });
 
     it("round-trips a minimal job, a null slug and every optional field", async () => {
-      const minimal: CustomerDeletionJob = {
+      const minimal: UserDeletionJob = {
         deletionId: "del-min",
         version: 1,
         slug: null,
@@ -185,7 +185,7 @@ describe.skipIf(!dsn)("PostgreSQL job repositories", { timeout: 30_000 }, () => 
 
     it("keeps Postgres agent store targets as a list of maps", async () => {
       const targets = [
-        { database: "builder_u1", schema: "agents" },
+        { database: "user_u1", schema: "agents" },
         { database: "shared", schema: "u1" },
       ];
 
@@ -374,7 +374,7 @@ describe.skipIf(!dsn)("PostgreSQL job repositories", { timeout: 30_000 }, () => 
       expect(await harness.store.jobs.agentImports.listForUid("u1")).toEqual([]);
     });
 
-    it("lists records whose cleanup time has passed across Builders", async () => {
+    it("lists records whose cleanup time has passed across users", async () => {
       await harness.store.jobs.agentImports.put(importRecord({ ...importPayload, id: "expired-a" }, { cleanupAt: NOW - 1 }));
       await harness.store.jobs.agentImports.put(importRecord({ ...importPayload, id: "expired-b", uid: "u2" }, { uid: "u2", cleanupAt: NOW - 2 }));
       await harness.store.jobs.agentImports.put(importRecord({ ...importPayload, id: "live" }, { cleanupAt: NOW + 1 }));
@@ -395,7 +395,7 @@ describe.skipIf(!dsn)("PostgreSQL job repositories", { timeout: 30_000 }, () => 
       expect(await harness.store.jobs.agentImports.get("u1", "import-1")).toBeNull();
     });
 
-    it("refuses a record for an unknown Builder and drops a Builder's records with the Builder", async () => {
+    it("refuses a record for an unknown user and drops a user's records with the user", async () => {
       await expect(
         harness.store.jobs.agentImports.put(importRecord({ ...importPayload, uid: "ghost" }, { uid: "ghost" })),
       ).rejects.toMatchObject({ constructor: MissingRecordError, record: { aggregate: "builder", key: "ghost" } });

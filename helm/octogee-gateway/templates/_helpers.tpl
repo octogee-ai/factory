@@ -9,7 +9,7 @@ resource names are unchanged. Tenant identity (KSA, secrets, GATEWAY_ID) stays
 gateway-scoped on `.Values.gatewayId` — see serviceAccountName / GATEWAY_ID.
 */}}
 {{- define "octogee-gateway.revisionId" -}}
-{{- $gateway := required "gatewayId is required (Cowboy must pass --set gatewayId=<id>)" .Values.gatewayId -}}
+{{- $gateway := required "gatewayId is required (the fleet controller must pass --set gatewayId=<id>)" .Values.gatewayId -}}
 {{- .Values.revisionId | default $gateway -}}
 {{- end }}
 
@@ -18,7 +18,7 @@ Common labels for the gateway pod's resources.
 
 `gateway-instance` is the per-revision instance identity that selects this
 revision's per-instance Services. The shared public gateway-router forwards
-`/g/<id>/*` traffic to the gateway-scoped Service, whose selector Cowboy points
+`/g/<id>/*` traffic to the gateway-scoped Service, whose selector the fleet controller points
 at the serving revision.
 */}}
 {{- define "octogee-gateway.labels" -}}
@@ -33,13 +33,13 @@ gateway-instance: {{ include "octogee-gateway.revisionId" . }}
 Resolve the Kubernetes ServiceAccount for this gateway pod.
 
 Gateways must never fall back to the shared platform KSA (`octogee-gateway`)
-just because a manual Helm render or legacy release value omitted Cowboy's
+just because a manual Helm render or legacy release value omitted the fleet controller's
 serviceAccountName override. The API broker binds tenant identity from this KSA
 name, so derive the locked per-gateway KSA whenever the requested name is empty
 or still the legacy shared value.
 */}}
 {{- define "octogee-gateway.generatedServiceAccountName" -}}
-octogee-gw-{{ required "gatewayId is required (Cowboy must pass --set gatewayId=<id>)" .Values.gatewayId }}
+octogee-gw-{{ required "gatewayId is required (the fleet controller must pass --set gatewayId=<id>)" .Values.gatewayId }}
 {{- end }}
 
 {{- define "octogee-gateway.serviceAccountName" -}}
@@ -55,7 +55,7 @@ octogee-gw-{{ required "gatewayId is required (Cowboy must pass --set gatewayId=
 Resolve the product/security class for this gateway.
 
 New desired state passes `.Values.gatewayClass`. Missing class defaults to the
-shared Barn; retired customer operator values are rejected by the schema.
+shared gateway; retired user operator values are rejected by the schema.
 */}}
 {{- define "octogee-gateway.gatewayClass" -}}
 {{- if .Values.gatewayClass -}}
@@ -82,7 +82,7 @@ standard
 {{- end }}
 
 {{/*
-Validate required values up front so a typo in Cowboy's --set call
+Validate required values up front so a typo in the fleet controller's --set call
 fails at helm render rather than producing a half-rendered Deployment.
 
 The `$_ :=` discards the return value so the helper emits no text.
@@ -94,14 +94,14 @@ the first line of the rendered Deployment and the famous helm
 end-to-end on first real exercise.
 */}}
 {{- define "octogee-gateway.requireIdentity" -}}
-{{- $_ := required "gatewayId is required (Cowboy must pass --set gatewayId=<id>)" .Values.gatewayId -}}
+{{- $_ := required "gatewayId is required (the fleet controller must pass --set gatewayId=<id>)" .Values.gatewayId -}}
 {{- end }}
 
 {{/*
 Resolve the effective sizing tier for this gateway instance.
 
 Precedence:
-  1. `.Values.sizingTier` if set (Cowboy passed it explicitly).
+  1. `.Values.sizingTier` if set (the fleet controller passed it explicitly).
   2. `.Values.classDefaults[<gatewayClass>]` if declared.
   3. `.Values.profileDefaults[<imageProfile>]` for legacy values.
   4. `.Values.profileDefaults.standard` as the last-resort default.

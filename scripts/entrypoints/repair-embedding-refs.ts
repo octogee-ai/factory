@@ -12,7 +12,7 @@
 //        --config-file /tmp/gw-config.json --agent-dirs-file /tmp/gw-agent-dirs.txt [--apply]
 //
 // The tool refuses any revision the durable root does not select as
-// live/traffic/roll-source, and refuses to apply while a platform-ref coach has
+// live/traffic/roll-source, and refuses to apply while a platform-ref agent has
 // no agent dir on the pod.
 
 import * as fs from "node:fs";

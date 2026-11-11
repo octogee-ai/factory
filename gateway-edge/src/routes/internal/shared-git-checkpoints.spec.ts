@@ -7,7 +7,7 @@ import request from "supertest";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createProjectPersistenceRouter } from "./project-persistence.js";
 import { _setGatewayTokenReviewerForTests, requireGatewayInternalAuth } from "../../middleware/gateway-internal-auth.js";
-import { claimedTestBuilder, installTestBuilderIdentity } from "../../__tests__/helpers/builder-identity.js";
+import { claimedTestUser, installTestUserIdentity } from "../../__tests__/helpers/user-identity.js";
 
 vi.mock("../../lib/connector-tokens.js", () => ({ readOwnerRuntimeConnectorAccessToken: vi.fn() }));
 vi.mock("../../lib/workspace-blob.js", () => ({ storeWorkspaceBlob: vi.fn(async () => { throw new Error("unexpected binary upload in text checkpoint fixture"); }) }));
@@ -20,18 +20,18 @@ vi.mock("node:child_process", async importOriginal => {
 });
 
 let root: string;
-let customer: string;
+let user: string;
 let remoteRoot: string;
 let snapshot: Record<string, unknown>;
 let broker: ReturnType<typeof vi.fn>;
 let assignment: { uid: string; state: string; epoch: number };
 let reviewed: { authenticated: true; namespace: string; saName: string; audiences: string[] };
-const personas = { workspace: "# Coach\nExact coach persona α\n", demo: "# Project\nExact project persona β\n" };
+const personas = { workspace: "# Agent\nExact agent persona α\n", demo: "# Project\nExact project persona β\n" };
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("/usr/bin/git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 function checkout(name: string): string {
-  const dir = name === "workspace" ? customer : path.join(customer, "projects", name);
+  const dir = name === "workspace" ? user : path.join(user, "projects", name);
   const remote = path.join(remoteRoot, `${name}.git`);
   git(root, "init", "--bare", "--initial-branch=main", remote);
   mkdirSync(dir, { recursive: true });
@@ -60,7 +60,7 @@ function restored(name: string): Buffer {
 }
 beforeEach(() => {
   root = mkdtempSync(path.join(tmpdir(), "shared-git-checkpoint-"));
-  customer = path.join(root, "customers/alice"); remoteRoot = path.join(root, "remotes"); mkdirSync(remoteRoot);
+  user = path.join(root, "customers/alice"); remoteRoot = path.join(root, "remotes"); mkdirSync(remoteRoot);
   vi.stubEnv("GATEWAY_CLASS", "shared"); vi.stubEnv("GATEWAY_ID", "shared-one");
   vi.stubEnv("CUSTOMERS_DIR", path.join(root, "customers")); vi.stubEnv("INTERNAL_SERVICE_KEY", "");
   vi.stubEnv("K8S_NAMESPACE", "octogee-test"); vi.stubEnv("K8S_SERVICE_ACCOUNT_NAME", "octogee-gw-shared-one");
@@ -85,19 +85,19 @@ beforeEach(() => {
   });
   vi.stubGlobal("fetch", broker);
   checkout("workspace"); checkout("demo");
-  writeFileSync(path.join(customer, "IDENTITY.md"), personas.workspace);
-  writeFileSync(path.join(customer, "projects/demo/IDENTITY.md"), personas.demo);
+  writeFileSync(path.join(user, "IDENTITY.md"), personas.workspace);
+  writeFileSync(path.join(user, "projects/demo/IDENTITY.md"), personas.demo);
 });
 afterEach(() => { _setGatewayTokenReviewerForTests(null); vi.unstubAllGlobals(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 
-it("checkpoints exact Shared coach and Gitea project persona bytes for a cold clone", async () => {
+it("checkpoints exact Shared agent and Gitea project persona bytes for a cold clone", async () => {
   expect((await flush()).status).toBe(200);
   expect(restored("workspace")).toEqual(Buffer.from(personas.workspace));
   expect(restored("demo")).toEqual(Buffer.from(personas.demo));
 });
 
 it("accepts a checkpoint already published in an archived remote and retains unpublished changes", async () => {
-  for (const [name, dir] of [["workspace", customer], ["demo", path.join(customer, "projects/demo")]]) {
+  for (const [name, dir] of [["workspace", user], ["demo", path.join(user, "projects/demo")]]) {
     git(dir, "add", "."); git(dir, "commit", "-m", "published snapshot");
     git(dir, "push", path.join(remoteRoot, `${name}.git`), "main");
   }
@@ -107,18 +107,18 @@ it("accepts a checkpoint already published in an archived remote and retains unp
   const script = readFileSync(ssh, "utf8");
   writeFileSync(ssh, script.replaceAll("exec /usr/bin/git-receive-pack", "exit 128; exec /usr/bin/git-receive-pack"), { mode: 0o700 });
   expect((await flush()).status).toBe(200);
-  writeFileSync(path.join(customer, "projects/demo/unpublished.md"), "retain local-only work\n");
-  const project = path.join(customer, "projects/demo");
+  writeFileSync(path.join(user, "projects/demo/unpublished.md"), "retain local-only work\n");
+  const project = path.join(user, "projects/demo");
   git(project, "add", "."); git(project, "commit", "-m", "unpublished local work");
   expect((await flush()).status).toBe(503);
   expect(git(remote, "rev-parse", "refs/heads/main")).toBe(published);
-  expect(readFileSync(path.join(customer, "projects/demo/unpublished.md"), "utf8")).toBe("retain local-only work\n");
+  expect(readFileSync(path.join(user, "projects/demo/unpublished.md"), "utf8")).toBe("retain local-only work\n");
 });
 
 it.each(["missing", "stale"])("keeps nested project histories out of a %s workspace ignore policy", async policy => {
   const other = checkout("other");
   snapshot.projects = [...snapshot.projects as object[], { projectSlug: "other", giteaRepoName: "other", provisioningState: "active" }];
-  const demo = path.join(customer, "projects/demo");
+  const demo = path.join(user, "projects/demo");
   for (const dir of [demo, other]) {
     writeFileSync(path.join(dir, "deleted.md"), "delete this published project file\n");
     git(dir, "add", "."); git(dir, "commit", "-m", "published project baseline");
@@ -127,17 +127,17 @@ it.each(["missing", "stale"])("keeps nested project histories out of a %s worksp
     writeFileSync(path.join(dir, "unpublished.md"), `local-only ${path.basename(dir)}\n`);
   }
   const prior = git(demo, "rev-parse", "HEAD");
-  git(customer, "update-index", "--add", "--cacheinfo", "160000", prior, "projects/retired");
-  git(customer, "update-index", "--add", "--cacheinfo", "160000", prior, "projects/demo");
-  git(customer, "commit", "-m", "legacy workspace project gitlinks");
-  git(customer, "push", path.join(remoteRoot, "workspace.git"), "main");
-  if (policy === "missing") rmSync(path.join(customer, ".gitignore"));
-  else writeFileSync(path.join(customer, ".gitignore"), "# legacy user policy\n*.tmp\n");
-  mkdirSync(path.join(customer, "projects/.octogee-state"));
-  writeFileSync(path.join(customer, "projects/.octogee-state/runtime.json"), "{\"runtime\":true}\n");
-  writeFileSync(path.join(customer, "deleted.md"), "workspace deletion\n");
-  git(customer, "add", "deleted.md"); git(customer, "commit", "-m", "workspace deletion baseline");
-  rmSync(path.join(customer, "deleted.md"));
+  git(user, "update-index", "--add", "--cacheinfo", "160000", prior, "projects/retired");
+  git(user, "update-index", "--add", "--cacheinfo", "160000", prior, "projects/demo");
+  git(user, "commit", "-m", "legacy workspace project gitlinks");
+  git(user, "push", path.join(remoteRoot, "workspace.git"), "main");
+  if (policy === "missing") rmSync(path.join(user, ".gitignore"));
+  else writeFileSync(path.join(user, ".gitignore"), "# legacy user policy\n*.tmp\n");
+  mkdirSync(path.join(user, "projects/.octogee-state"));
+  writeFileSync(path.join(user, "projects/.octogee-state/runtime.json"), "{\"runtime\":true}\n");
+  writeFileSync(path.join(user, "deleted.md"), "workspace deletion\n");
+  git(user, "add", "deleted.md"); git(user, "commit", "-m", "workspace deletion baseline");
+  rmSync(path.join(user, "deleted.md"));
 
   expect((await flush()).status).toBe(200);
   const heads = ["workspace", "demo", "other"].map(name => git(path.join(remoteRoot, `${name}.git`), "rev-parse", "main"));
@@ -150,15 +150,15 @@ it.each(["missing", "stale"])("keeps nested project histories out of a %s worksp
     restored(name);
     expect(readFileSync(path.join(root, `restored/${name}/unpublished.md`), "utf8")).toBe(`local-only ${name}\n`);
     expect(existsSync(path.join(root, `restored/${name}/deleted.md`))).toBe(false);
-    expect(readFileSync(path.join(customer, `projects/${name}/unpublished.md`), "utf8")).toBe(`local-only ${name}\n`);
+    expect(readFileSync(path.join(user, `projects/${name}/unpublished.md`), "utf8")).toBe(`local-only ${name}\n`);
   }
-  expect(readFileSync(path.join(customer, "projects/demo/IDENTITY.md"), "utf8")).toBe(personas.demo);
-  expect(existsSync(path.join(customer, "projects/.octogee-state/runtime.json"))).toBe(true);
+  expect(readFileSync(path.join(user, "projects/demo/IDENTITY.md"), "utf8")).toBe(personas.demo);
+  expect(existsSync(path.join(user, "projects/.octogee-state/runtime.json"))).toBe(true);
 });
 
 it("still refuses a workspace symlink outside the reserved projects namespace", async () => {
   const outside = path.join(root, "outside.txt"); writeFileSync(outside, "private\n");
-  symlinkSync(outside, path.join(customer, "escape.txt"));
+  symlinkSync(outside, path.join(user, "escape.txt"));
   const before = git(path.join(remoteRoot, "workspace.git"), "rev-parse", "main");
   expect((await flush()).status).toBe(503);
   expect(git(path.join(remoteRoot, "workspace.git"), "rev-parse", "main")).toBe(before);
@@ -166,20 +166,20 @@ it("still refuses a workspace symlink outside the reserved projects namespace", 
 });
 
 it.each(["directory-to-file", "file-to-directory"])("checkpoints a 40-file %s replacement with the projects boundary", async direction => {
-  const entry = path.join(customer, "replacement");
+  const entry = path.join(user, "replacement");
   const populate = () => {
     mkdirSync(entry);
     for (let index = 0; index < 40; index++) writeFileSync(path.join(entry, `${index}.md`), `file ${index}\n`);
   };
   if (direction === "directory-to-file") populate();
   else writeFileSync(entry, "old regular file\n");
-  git(customer, "add", "replacement"); git(customer, "commit", "-m", "replacement baseline");
-  git(customer, "push", path.join(remoteRoot, "workspace.git"), "main");
+  git(user, "add", "replacement"); git(user, "commit", "-m", "replacement baseline");
+  git(user, "push", path.join(remoteRoot, "workspace.git"), "main");
   rmSync(entry, { recursive: true });
   if (direction === "directory-to-file") writeFileSync(entry, "replacement text\n");
   else populate();
-  writeFileSync(path.join(customer, ":(glob)*.md"), "literal pathspec name\n");
-  writeFileSync(path.join(customer, "line\nbreak.md"), "NUL-delimited path\n");
+  writeFileSync(path.join(user, ":(glob)*.md"), "literal pathspec name\n");
+  writeFileSync(path.join(user, "line\nbreak.md"), "NUL-delimited path\n");
 
   expect((await flush()).status).toBe(200);
   expect(restored("workspace")).toEqual(Buffer.from(personas.workspace));
@@ -194,13 +194,13 @@ it.each(["directory-to-file", "file-to-directory"])("checkpoints a 40-file %s re
 it("retains local files on remote failure and pushes the existing commit on retry", async () => {
   const remote = path.join(remoteRoot, "demo.git"); const retained = `${remote}.retained`; renameSync(remote, retained);
   expect((await flush()).status).toBe(503);
-  expect(readFileSync(path.join(customer, "projects/demo/IDENTITY.md"), "utf8")).toBe(personas.demo);
+  expect(readFileSync(path.join(user, "projects/demo/IDENTITY.md"), "utf8")).toBe(personas.demo);
   renameSync(retained, remote);
   expect((await flush()).status).toBe(200);
   expect(restored("demo")).toEqual(Buffer.from(personas.demo));
 });
 
-it("refuses missing authentication, another customer and changed assignment before Git writes", async () => {
+it("refuses missing authentication, another user and changed assignment before Git writes", async () => {
   const before = git(path.join(remoteRoot, "workspace.git"), "rev-parse", "main");
   expect((await flush("alice", "wrong")).status).toBe(401);
   expect((await flush("bob")).status).toBe(503);
@@ -211,30 +211,30 @@ it("refuses missing authentication, another customer and changed assignment befo
 
 it("ignores deferred GitHub workspaces and disabled Gitea checkouts", async () => {
   snapshot.projects = [{ projectSlug: "demo", giteaRepoName: "demo", checkoutEnabled: false }, { projectSlug: "deferred", repoSource: { provider: "github", owner: "alice", repo: "deferred" } }];
-  const deferred = path.join(customer, "projects/deferred"); mkdirSync(deferred); writeFileSync(path.join(deferred, "AGENTS.md"), "deferred\n");
+  const deferred = path.join(user, "projects/deferred"); mkdirSync(deferred); writeFileSync(path.join(deferred, "AGENTS.md"), "deferred\n");
   const before = git(path.join(remoteRoot, "demo.git"), "rev-parse", "main");
   expect((await flush()).status).toBe(200);
   expect(git(path.join(remoteRoot, "demo.git"), "rev-parse", "main")).toBe(before);
   expect(readFileSync(path.join(deferred, "AGENTS.md"), "utf8")).toBe("deferred\n");
 });
 
-it.each(["serving", "quiescing"])("Builder %s flush never commits disabled Native bootstrap files", async state => {
+it.each(["serving", "quiescing"])("User %s flush never commits disabled Native bootstrap files", async state => {
   vi.stubEnv("GATEWAY_CLASS", "builder");
   vi.stubEnv("GATEWAY_PROFILE", "builder");
   vi.stubEnv("GATEWAY_ID", "builder-one");
   vi.stubEnv("K8S_SERVICE_ACCOUNT_NAME", "octogee-gw-builder-one");
   reviewed.saName = "octogee-gw-builder-one";
   snapshot.gatewayId = "builder-one";
-  installTestBuilderIdentity(claimedTestBuilder("alice", "builder-one"));
+  installTestUserIdentity(claimedTestUser("alice", "builder-one"));
   assignment.state = state;
   snapshot.projects = [{ projectSlug: "demo", giteaRepoName: "demo", checkoutEnabled: false }];
-  writeFileSync(path.join(customer, "projects/demo/AGENTS.md"), "Generated after checkout was turned off\n");
+  writeFileSync(path.join(user, "projects/demo/AGENTS.md"), "Generated after checkout was turned off\n");
   const before = git(path.join(remoteRoot, "demo.git"), "rev-parse", "main");
   const result = await flush();
   expect(result.status).toBe(200);
   expect(result.body).toEqual({ projects: 0 });
   expect(git(path.join(remoteRoot, "demo.git"), "rev-parse", "main")).toBe(before);
-  expect(readFileSync(path.join(customer, "projects/demo/AGENTS.md"), "utf8")).toBe("Generated after checkout was turned off\n");
+  expect(readFileSync(path.join(user, "projects/demo/AGENTS.md"), "utf8")).toBe("Generated after checkout was turned off\n");
 });
 
 it.each(["missing", "migrating", "epoch"])("refuses %s canonical assignment custody despite an unchanged user mirror", async mode => {
@@ -256,7 +256,7 @@ it("refuses a noncanonical project remote without committing its local persona",
   git(metadata, "config", "remote.origin.url", "git@foreign:alice/demo.git");
   expect((await flush()).status).toBe(503);
   expect(git(metadata, "rev-parse", "HEAD")).toBe(before);
-  expect(readFileSync(path.join(customer, "projects/demo/IDENTITY.md"), "utf8")).toBe(personas.demo);
+  expect(readFileSync(path.join(user, "projects/demo/IDENTITY.md"), "utf8")).toBe(personas.demo);
 });
 
 it.each(["foreign-gateway", "api", "namespace", "audience", "missing-own"])("refuses %s workload credentials without Git effects", async reason => {

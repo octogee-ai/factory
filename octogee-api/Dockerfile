@@ -106,7 +106,7 @@ COPY --from=builder /obsidian-connect-dist/octogee-obsidian-connect-0.1.0.tgz ./
 # Passed by Cloud Build via --build-arg BUILD_SHA=$_IMAGE_TAG. Without
 # this, process.env.BUILD_SHA stays undefined and the banner logs
 # "unknown" — making it hard to diagnose stale-image deploy issues
-# in PROD (Bender flagged on PR #1116).
+# in PROD.
 ARG BUILD_SHA=unknown
 ENV BUILD_SHA=${BUILD_SHA}
 

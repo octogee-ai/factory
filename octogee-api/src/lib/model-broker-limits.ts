@@ -1,4 +1,4 @@
-import type { BuilderAccountReader } from "@octogee/core/builder-account";
+import type { UserAccountReader } from "@octogee/core/user-account";
 import {
   readGatewayAuthorizationInStore,
   type GatewayAuthorization,
@@ -22,7 +22,7 @@ export interface OwnerModelBrokerGrant {
 
 export interface ModelBrokerGrantReaders {
   readonly state: GatewayRootReader;
-  readonly accounts: BuilderAccountReader;
+  readonly accounts: UserAccountReader;
 }
 
 function finiteNumber(value: unknown): number | null {
@@ -46,7 +46,7 @@ export function envDefaultModelBrokerLimits(
 }
 
 async function readOwnerProfile(
-  accounts: BuilderAccountReader,
+  accounts: UserAccountReader,
   ownerUid: string | undefined,
   now: number,
   rails: ModelBrokerRailRegistry,

@@ -1,5 +1,5 @@
 export const ACCOUNT_DELETION_RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
-export const CUSTOMER_DELETION_JOBS_COLLECTION = "customerDeletionJobs";
+export const USER_DELETION_JOBS_COLLECTION = "customerDeletionJobs";
 export const ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION = "anonymousOperationalArchives";
 const ANONYMOUS_OPERATIONAL_MODELS_BY_PROVIDER = {
     anthropic: [
@@ -76,7 +76,7 @@ export function accountAllowsInteractiveAccess(userData) {
     const status = lifecycle.status;
     return status === undefined || status === "active";
 }
-export function buildCustomerDeletionSchedule(input) {
+export function buildUserDeletionSchedule(input) {
     return {
         requestedAt: input.now,
         eraseAfter: input.eraseNow

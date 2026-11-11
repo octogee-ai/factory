@@ -5,7 +5,7 @@ import {
 
 export const SHARED_POOL_SLOT_ID_PATTERN = /^shared-[a-z0-9]+$/;
 export const DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED = true;
-export const DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY = 10;
+export const DEFAULT_SHARED_GATEWAY_USERS_PER_GATEWAY = 10;
 const SHARED_POOL_MEMBER_STATUSES: ReadonlySet<string> = new Set(["running", "draining", "paused"]);
 
 export interface SharedGatewayAutoscalingConfig {
@@ -65,7 +65,7 @@ export interface SharedPoolScalingInput {
   config: SharedGatewayAutoscalingConfig;
   bounds: SharedPoolReplicaBounds;
   members: readonly SharedPoolScalingMember[];
-  builderDemandCount: number;
+  userDemandCount: number;
   now: number;
   replacements?: readonly SharedPoolReplacement[];
 }
@@ -208,7 +208,7 @@ export function parseSharedGatewayPoolConfig(value: unknown): SharedGatewayPoolC
   };
 }
 
-function isValidBuildersPerGateway(value: unknown): value is number {
+function isValidUsersPerGateway(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 2;
 }
 
@@ -219,8 +219,8 @@ export function parseSharedGatewayAutoscalingConfig(
   const config = value ?? {};
   const enabled = config.enabled ?? DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED;
   const buildersPerGateway =
-    config.buildersPerGateway ?? DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY;
-  if (typeof enabled !== "boolean" || !isValidBuildersPerGateway(buildersPerGateway)) {
+    config.buildersPerGateway ?? DEFAULT_SHARED_GATEWAY_USERS_PER_GATEWAY;
+  if (typeof enabled !== "boolean" || !isValidUsersPerGateway(buildersPerGateway)) {
     return null;
   }
   return { enabled, buildersPerGateway };

@@ -1,4 +1,4 @@
-import { configuredBuilderPortableStatePlanFromConfig, type OpenclawConfig } from "@octogee/core/local-coach-wired";
+import { configuredUserPortableStatePlanFromConfig, type OpenclawConfig } from "@octogee/core/local-default-agent-wired";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -33,7 +33,7 @@ function configuredAgentDirectories(options: OpenClawSqliteJournalPreflightOptio
     return { id: record.id, ...(Object.hasOwn(record, "agentDir") ? { agentDir: record.agentDir } : {}) };
   };
   const agents = config.agents;
-  const plan = configuredBuilderPortableStatePlanFromConfig({
+  const plan = configuredUserPortableStatePlanFromConfig({
     agents: {
       list: Array.isArray(agents?.list) ? agents.list.map(agentDirOnly) : agents?.list,
       entries: agents?.entries && Object.fromEntries(Object.entries(agents.entries).map(([id, entry]) => [id, agentDirOnly(entry)])),

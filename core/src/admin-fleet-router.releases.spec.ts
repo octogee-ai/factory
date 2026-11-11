@@ -436,7 +436,7 @@ function seedServingGateway(
   return seed;
 }
 
-function builderUser(gatewayId: string | null): Record<string, unknown> {
+function userAuthRecord(gatewayId: string | null): Record<string, unknown> {
   return {
     username: "alice",
     provisioning: {
@@ -584,7 +584,7 @@ describe("POST /gateways/:id/deploy", () => {
   it("deploys an existing paired build to exactly the operator-selected gateway", async () => {
     const manifest = immutableBuild();
     const authority = buildAuthority(manifest);
-    const builder = (slug: string) => ({
+    const user = (slug: string) => ({
       gatewayClass: "builder",
       imageProfile: "builder",
       profile: "builder",
@@ -592,8 +592,8 @@ describe("POST /gateways/:id/deploy", () => {
       builderSlug: slug,
     });
     const seed = {
-      ...seedNewSchemaGateway("gw-alice", sharedPayload(), builder("alice")),
-      ...seedNewSchemaGateway("gw-bob", sharedPayload(), builder("bob")),
+      ...seedNewSchemaGateway("gw-alice", sharedPayload(), user("alice")),
+      ...seedNewSchemaGateway("gw-bob", sharedPayload(), user("bob")),
       [`${GLM_OPERATIONS_COLLECTION}/existing`]: {
         kind: "restart-gateway",
         status: "running",
@@ -645,7 +645,7 @@ describe("manual gateway migrations", () => {
     ["/gateway-migrations/bulk", { userIds: ["uid-alice"], toGatewayId: "legacy-owner" }],
   ])("rejects an owner runtime target for %s", async (path, body) => {
     const { app, store } = mkApp({
-      "users/uid-alice": builderUser("source"),
+      "users/uid-alice": userAuthRecord("source"),
       ...seedServingGateway("legacy-owner", sharedPayload(), readyHeartbeat(), {
         profile: "builder",
         gatewayClass: "builder",
@@ -793,7 +793,7 @@ describe("POST /gateways — creates only the durable root and immutable release
     },
   );
 
-  it("rejects a manual Builder gateway before provisioning any runtime state", async () => {
+  it("rejects a manual isolated gateway before provisioning any runtime state", async () => {
     const { app, store } = mkApp();
     const res = await request(app).post("/gateways").send({
       gatewayId: "operator",
@@ -827,7 +827,7 @@ describe("admin target resolution", () => {
     expect(res.status).toBe(404);
   });
 
-  it("rejects a manual Builder target so the disposable lifecycle owns placement", async () => {
+  it("rejects a manual isolated target so the disposable lifecycle owns placement", async () => {
     const { app, store } = mkApp({
       ...seedServingGateway(
         "operator",
@@ -878,7 +878,7 @@ describe("admin target resolution", () => {
 });
 
 describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from release n's payload", () => {
-  const builderGateway = { gatewayClass: "builder", imageProfile: "builder", profile: "builder", ownerUid: "uid-builder", builderSlug: "builder", sizingTier: "s" };
+  const isolatedGateway = { gatewayClass: "builder", imageProfile: "builder", profile: "builder", ownerUid: "uid-user", builderSlug: "builder", sizingTier: "s" };
 
   it.each([
     { fence: { sourceGatewayId: "gamma", executionId: "transfer-1" }, mirror: "other" },
@@ -887,7 +887,7 @@ describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from rel
     { fence: null, mirror: "gamma", malformed: true },
     { fence: false, mirror: "gamma", malformed: true },
   ])("rejects rollback append with retained source fence $fence after operation failure", async ({ fence, mirror, malformed }) => {
-    const seed = seedNewSchemaGateway("gamma", sharedPayload(), builderGateway);
+    const seed = seedNewSchemaGateway("gamma", sharedPayload(), isolatedGateway);
     seed["gateways/gamma"].latestRelease = 2;
     seed["gateways/gamma"].desiredRelease = 2;
     seed[`gateways/gamma/${GATEWAY_RELEASES_SUBCOLLECTION}/2`] = {
@@ -916,7 +916,7 @@ describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from rel
 
   it("cuts release 3 whose payload equals release 1, never mutating history", async () => {
     // Seed gateway at release 2 (tag deadbee), with release 1 = abc1234 retained.
-    const seed = seedNewSchemaGateway("gamma", sharedPayload({ imageTag: "deadbee" }), builderGateway);
+    const seed = seedNewSchemaGateway("gamma", sharedPayload({ imageTag: "deadbee" }), isolatedGateway);
     seed["gateways/gamma"].latestRelease = 2;
     seed["gateways/gamma"].desiredRelease = 2;
     seed[`gateways/gamma/${GATEWAY_RELEASES_SUBCOLLECTION}/2`] = {
@@ -981,14 +981,14 @@ describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from rel
   });
 
   it("rejects rolling back to the payload the gateway is already on (no-op)", async () => {
-    const { app } = mkApp(seedNewSchemaGateway("gamma", sharedPayload(), builderGateway));
+    const { app } = mkApp(seedNewSchemaGateway("gamma", sharedPayload(), isolatedGateway));
     const res = await request(app).post("/gateways/gamma/releases/1/rollback").send({});
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/no-op rollback/);
   });
 
   it("404s for an unknown release number", async () => {
-    const { app } = mkApp(seedNewSchemaGateway("gamma", sharedPayload(), builderGateway));
+    const { app } = mkApp(seedNewSchemaGateway("gamma", sharedPayload(), isolatedGateway));
     const res = await request(app).post("/gateways/gamma/releases/9/rollback").send({});
     expect(res.status).toBe(404);
   });
@@ -1086,8 +1086,8 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
     expect(store.get("gateways/bench")).toMatchObject({ gatewayClass: "shared" });
   });
 
-  it("rejects an XS Builder tier before saving or journaling a release", async () => {
-    const seed = seedNewSchemaGateway("builder", sharedPayload(), { gatewayClass: "builder", imageProfile: "builder", profile: "builder", ownerUid: "uid-builder", builderSlug: "builder", sizingTier: "s" });
+  it("rejects an XS user tier before saving or journaling a release", async () => {
+    const seed = seedNewSchemaGateway("builder", sharedPayload(), { gatewayClass: "builder", imageProfile: "builder", profile: "builder", ownerUid: "uid-user", builderSlug: "builder", sizingTier: "s" });
     const { app, store } = mkApp(seed);
     const before = { ...store.get("gateways/builder") };
     await request(app).patch("/gateways/builder").send({ sizingTier: "xs" }).expect(400);
@@ -1107,7 +1107,7 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
   });
 
   it.each(["pending", "running"])(
-    "refuses root config mutation while a %s customer migration owns the gateway",
+    "refuses root config mutation while a %s user migration owns the gateway",
     async (status) => {
       const seed = seedNewSchemaGateway("zeta", sharedPayload());
       seed[`${GLM_OPERATIONS_COLLECTION}/migration-live`] = {
@@ -1122,7 +1122,7 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
         .send({ sizingTier: "m" });
 
       expect(response.status).toBe(409);
-      expect(response.body.error).toMatch(/customer migration.*in flight/i);
+      expect(response.body.error).toMatch(/user migration.*in flight/i);
       expect(store.get("gateways/zeta")?.sizingTier).toBeNull();
     },
   );
@@ -1174,7 +1174,7 @@ describe("DELETE /gateways/:id — retirement claim", () => {
   });
 
   it.each(["pending", "running"])(
-    "refuses retirement while a %s customer migration owns the empty target",
+    "refuses retirement while a %s user migration owns the empty target",
     async (status) => {
       const seed = seedServingGateway("target", sharedPayload());
       seed[`${GLM_OPERATIONS_COLLECTION}/migration-live`] = {
@@ -1187,7 +1187,7 @@ describe("DELETE /gateways/:id — retirement claim", () => {
       const response = await request(app).delete("/gateways/target");
 
       expect(response.status).toBe(409);
-      expect(response.body.error).toMatch(/customer migration.*in flight/i);
+      expect(response.body.error).toMatch(/user migration.*in flight/i);
       expect(store.get("gateways/target")?.desiredStatus).toBe("running");
       expect(opsIn(store, "retire-gateway")).toHaveLength(0);
     },
@@ -1215,7 +1215,7 @@ describe("DELETE /gateways/:id — retirement claim", () => {
     expect(opsIn(store, "retire-gateway")).toHaveLength(1);
   });
 
-  it("refuses retirement when the root's exact live revision still mounts customers", async () => {
+  it("refuses retirement when the root's exact live revision still mounts users", async () => {
     const { app, store } = mkApp(
       seedServingGateway("mounted", sharedPayload(), {
         status: "ready",
@@ -1299,7 +1299,7 @@ describe("DELETE /gateways/:id — retirement claim", () => {
     expect(opsIn(store, "retire-gateway")).toHaveLength(0);
   });
 
-  it("leaves disposable termination exclusively to the Builder runtime lifecycle", async () => {
+  it("leaves disposable termination exclusively to the isolated runtime lifecycle", async () => {
     const seed = seedServingGateway("run-alice", sharedPayload(), readyHeartbeat(), {
       profile: "builder",
       gatewayClass: "builder",
@@ -1320,7 +1320,7 @@ describe("DELETE /gateways/:id — retirement claim", () => {
     const response = await request(app).delete("/gateways/run-alice").send({});
 
     expect(response.status).toBe(409);
-    expect(response.body.error).toMatch(/Builder runtime lifecycle/i);
+    expect(response.body.error).toMatch(/isolated runtime lifecycle/i);
     expect(store.get("gateways/run-alice")?.desiredStatus).toBe("running");
     expect(opsIn(store, "retire-gateway")).toHaveLength(0);
   });
@@ -1358,7 +1358,7 @@ describe("PATCH /gateways/:id — build artifacts remain deploy-only", () => {
 });
 
 describe("durable config PATCHes", () => {
-  it("updates builder access and security context on the root without changing a legacy desired doc", async () => {
+  it("updates isolated access and security context on the root without changing a legacy desired doc", async () => {
     const { app, store } = mkApp(
       seedNewSchemaGateway(
         "bench",

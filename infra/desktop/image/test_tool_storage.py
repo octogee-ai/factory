@@ -33,7 +33,7 @@ class ToolStorage(unittest.TestCase):
         self.install.chmod(0o755)
         custom = self.home / ".local/share/mise/installs/node/99.0.0/bin/node"
         custom.parent.mkdir(parents=True)
-        custom.write_text("customer-pinned version")
+        custom.write_text("user-pinned version")
         shims = self.home / ".local/share/mise/shims"
         shims.mkdir()
         (shims / "node").symlink_to("../installs/node/26/bin/node")
@@ -62,7 +62,7 @@ class ToolStorage(unittest.TestCase):
         self.assertEqual(self.install.read_text(), "installed image binary")
         self.assertEqual(self.install.stat().st_mode & 0o777, 0o755)
         self.assertEqual((self.home / ".local/share/mise/shims/node").read_text(), "installed image binary")
-        self.assertEqual((self.tools / "installs/node/99.0.0/bin/node").read_text(), "customer-pinned version")
+        self.assertEqual((self.tools / "installs/node/99.0.0/bin/node").read_text(), "user-pinned version")
         seed = self.root / "durable-seed"
         shutil.copytree(self.home, seed, symlinks=True)
         self.assertTrue((seed / ".local/share/mise").is_symlink())
@@ -95,7 +95,7 @@ class ToolStorage(unittest.TestCase):
         self.invoke()
         self.assertTrue((self.home / ".local/share/mise").is_symlink())
         self.assertEqual(self.install.read_text(), "installed image binary")
-        self.assertEqual((self.tools / "installs/node/99.0.0/bin/node").read_text(), "customer-pinned version")
+        self.assertEqual((self.tools / "installs/node/99.0.0/bin/node").read_text(), "user-pinned version")
         self.assertEqual((self.tools / "image-new-version").read_text(), "new image tool")
 
     @unittest.skipUnless(Path("/dev/shm").is_dir(), "Linux separate mount required")
@@ -211,11 +211,11 @@ class BootReconciliation(ToolStorage):
 
     def test_unknown_hidden_tool_context_is_retained_with_factory_manifest(self):
         manifest, command = self.factory_metadata()
-        context = manifest.parent / "codex/.customer-context"
+        context = manifest.parent / "codex/.user-context"
         context.write_text("owned agent context")
         self.invoke()
         self.assertFalse(SCRIPT["record_tools"](self.home, self.tools, command)["rebuildable"])
-        self.assertEqual((self.home / ".config/octogee/mise-retained/installs/codex/.customer-context").read_bytes(), context.read_bytes())
+        self.assertEqual((self.home / ".config/octogee/mise-retained/installs/codex/.user-context").read_bytes(), context.read_bytes())
 
     def test_broken_unlisted_backend_link_is_retained(self):
         manifest, command = self.factory_metadata()
@@ -236,12 +236,12 @@ class BootReconciliation(ToolStorage):
 
     def test_unknown_regular_installs_file_is_still_retained(self):
         manifest, command = self.factory_metadata()
-        unknown = manifest.with_name(".customer-tools.toml")
+        unknown = manifest.with_name(".user-tools.toml")
         unknown.write_text("owned custom bytes")
         self.invoke()
         self.assertFalse(SCRIPT["record_tools"](self.home, self.tools, command)["rebuildable"])
         self.assertEqual(unknown.read_text(), "owned custom bytes")
-        self.assertEqual((self.home / ".config/octogee/mise-retained/installs/.customer-tools.toml").read_text(), "owned custom bytes")
+        self.assertEqual((self.home / ".config/octogee/mise-retained/installs/.user-tools.toml").read_text(), "owned custom bytes")
 
     def test_manifest_symlink_does_not_make_foreign_metadata_rebuildable(self):
         manifest, command = self.factory_metadata()

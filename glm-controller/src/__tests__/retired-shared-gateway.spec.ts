@@ -1,7 +1,7 @@
 import { createNativeReturnTargetRetirementVerifier } from "../lib/native-return-target-retirement.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
-import { isRetiredSharedGateway, retiredSharedGatewayRuntimeAbsent } from "../lib/customer-ops/retired-shared-gateway.js";
+import { isRetiredSharedGateway, retiredSharedGatewayRuntimeAbsent } from "../lib/user-ops/retired-shared-gateway.js";
 
 const gatewayId = "shared-9b3b204b1371";
 const operationId = `shared-pool-retire-${gatewayId}`;
@@ -51,7 +51,7 @@ describe("retired Shared gateway unmount proof", () => {
     ["foreign owner", `gateways/${gatewayId}`, root({ gatewayClass: "builder", ownerUid: "other", desiredStatus: "retired" })],
     ["runtime record", `glmGateways/${gatewayId}`, { docKind: "runtime", gatewayId, release: 1, lifecycle: "serving" }],
     ["assignment", `gateways/${gatewayId}/assignments/user`, assignment("user")],
-    ["customer reference", "users/user", { provisioning: { openclaw: { gatewayId } } }],
+    ["user reference", "users/user", { provisioning: { openclaw: { gatewayId } } }],
     ["newer incarnation", "glmOperations/new-add", { gatewayId, kind: "add-gateway", status: "succeeded", createdAt: 150 }],
     ["unfinished add", "glmOperations/pending-add", { gatewayId, kind: "add-gateway", status: "pending", createdAt: 50 }],
     ["unversioned incarnation", "glmOperations/unknown-add", { gatewayId, kind: "add-gateway" }],

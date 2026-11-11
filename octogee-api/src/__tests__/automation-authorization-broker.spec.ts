@@ -35,7 +35,7 @@ const WELL_FORMED_SA_TOKEN = [
   "eyJhdWQiOlsib2N0b2dlZS1hcGkiXSwiZXhwIjoxNzUyODAwMDAwLCJpc3MiOiJrOHMifQ",
   "c2lnbmF0dXJlLXNlZ21lbnQtZm9yLXRlc3RpbmctcHVycG9zZXMtb25seQ",
 ].join(".");
-const COACH_CHANNEL_ID = "c".repeat(26);
+const DEFAULT_AGENT_CHANNEL_ID = "c".repeat(26);
 
 interface FakeDoc {
   exists: boolean;
@@ -98,7 +98,7 @@ function middlewareStackApp(saName: string) {
     },
     "workspaces/eggman": { id: "eggman", ownerUid: "hermetic-uid" },
     "workspaces/eggman/channels/coach-dm": {
-      mattermost: { channelId: COACH_CHANNEL_ID },
+      mattermost: { channelId: DEFAULT_AGENT_CHANNEL_ID },
     },
   };
   const db = fakeDb(docs);
@@ -136,7 +136,7 @@ function appForTest(input: {
 }) {
   const store = createDocumentFixtureStore(input.docs ?? {});
   const reads = {
-    builder: vi.spyOn(store.builders.records, "get"),
+    user: vi.spyOn(store.users.records, "get"),
     workspace: vi.spyOn(store.workspaces.records, "get"),
     channel: vi.spyOn(store.workspaces.channels, "get"),
   };
@@ -165,7 +165,7 @@ describe("POST /internal/automations/authorize", () => {
     expect(response.body).toEqual({
       slug: "eggman",
       gatewayId: "default",
-      coachChannelId: COACH_CHANNEL_ID,
+      coachChannelId: DEFAULT_AGENT_CHANNEL_ID,
     });
   });
 
@@ -209,7 +209,7 @@ describe("POST /internal/automations/authorize", () => {
         },
         "workspaces/eggman": { id: "eggman", ownerUid: "eggman-uid" },
         "workspaces/eggman/channels/coach-dm": {
-          mattermost: { channelId: COACH_CHANNEL_ID },
+          mattermost: { channelId: DEFAULT_AGENT_CHANNEL_ID },
         },
       },
     });
@@ -222,11 +222,11 @@ describe("POST /internal/automations/authorize", () => {
     expect(response.body).toEqual({
       slug: "eggman",
       gatewayId: "eggman-devdays",
-      coachChannelId: COACH_CHANNEL_ID,
+      coachChannelId: DEFAULT_AGENT_CHANNEL_ID,
     });
   });
 
-  it("reports a not-ready coach channel instead of granting incomplete automation context", async () => {
+  it("reports a not-ready agent channel instead of granting incomplete automation context", async () => {
     const { app } = appForTest({
       uid: "eggman-uid",
       boundGatewayId: "eggman-devdays",
@@ -247,7 +247,7 @@ describe("POST /internal/automations/authorize", () => {
     expect(response.body).toEqual({ error: "coach_channel_not_ready" });
   });
 
-  it("rejects a stored coach channel outside the Mattermost ID contract", async () => {
+  it("rejects a stored agent channel outside the Mattermost ID contract", async () => {
     const { app } = appForTest({
       uid: "eggman-uid",
       boundGatewayId: "eggman-devdays",
@@ -354,8 +354,8 @@ describe("POST /internal/automations/authorize", () => {
 
     expect(response.status).toBe(404);
     expect(response.body).toEqual({ error: "not_found" });
-    expect(reads.builder).toHaveBeenCalledTimes(1);
-    expect(reads.builder).toHaveBeenCalledWith("eggman-uid");
+    expect(reads.user).toHaveBeenCalledTimes(1);
+    expect(reads.user).toHaveBeenCalledWith("eggman-uid");
     expect(reads.workspace).not.toHaveBeenCalled();
     expect(reads.channel).not.toHaveBeenCalled();
   });
@@ -384,7 +384,7 @@ describe("POST /internal/automations/authorize", () => {
 
     expect(response.status).toBe(403);
     expect(response.body).toEqual({ error: "forbidden" });
-    expect(reads.builder).not.toHaveBeenCalled();
+    expect(reads.user).not.toHaveBeenCalled();
     expect(reads.workspace).not.toHaveBeenCalled();
     expect(reads.channel).not.toHaveBeenCalled();
   });
@@ -401,7 +401,7 @@ describe("POST /internal/automations/authorize", () => {
 
     expect(response.status).toBe(403);
     expect(response.body).toEqual({ error: "forbidden" });
-    expect(reads.builder).not.toHaveBeenCalled();
+    expect(reads.user).not.toHaveBeenCalled();
     expect(reads.workspace).not.toHaveBeenCalled();
     expect(reads.channel).not.toHaveBeenCalled();
   });

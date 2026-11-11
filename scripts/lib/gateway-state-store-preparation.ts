@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { queryAgentStore, readPostgresAgentAnchor, type PostgresAgentAnchor } from "@octogee/core/agent-postgres";
 import { podBelongsToGateway } from "@octogee/core/gateway-live-release";
-import { clientCredentialStorePath, clusterBuilderGateway, localStateStorePath, openclawStateRoot } from "./openclaw-state-store.js";
+import { clientCredentialStorePath, clusterIsolatedGateway, localStateStorePath, openclawStateRoot } from "./openclaw-state-store.js";
 
 export const GATEWAY_OWNER_RELEASE_WAIT_MS = 4 * 60_000;
 const GATEWAY_OWNER_POLL_MS = 5_000;
@@ -70,7 +70,7 @@ export async function prepareGatewayStateStore(input: {
   waitForOwner?: typeof waitForGatewayOwnerRelease;
 }): Promise<void> {
   const env = input.env ?? process.env;
-  if (!clusterBuilderGateway(env)) return;
+  if (!clusterIsolatedGateway(env)) return;
   const stateRoot = openclawStateRoot(env);
   const anchor = readPostgresAgentAnchor(localStateStorePath(stateRoot));
   if (!anchor) return;

@@ -174,7 +174,7 @@ describe("source-owned held target project reads", () => {
 });
 
 
-describe("cancelled forward Builder preparation", () => {
+describe("cancelled forward user preparation", () => {
   function forward(kind: "v2" | "legacy") {
     const h = preparingHarness();
     Object.assign(h.operation, { startedAt: 50, cancellationRequestedAt: 60 });

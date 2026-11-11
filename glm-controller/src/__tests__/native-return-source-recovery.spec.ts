@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createMigrateCustomerHandler, type MigrateCustomerDeps } from "../handlers/migrate-customer.js";
+import { createMigrateUserHandler, type MigrateUserDeps } from "../handlers/migrate-user.js";
 import { enqueuePlacementMigration } from "../placement-policy-reconciler.js";
 import { MalformedRecordError } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
@@ -31,8 +31,8 @@ function fixture() {
     store: createDocumentFixtureStore(records), now: () => 1000, log: vi.fn(),
     verifyRetiredTarget: vi.fn(async (gatewayId: string, assertCurrent: () => Promise<void>) => { expect(gatewayId).toBe(target); await assertCurrent(); return proof; }),
     releaseSourceHold: vi.fn(async () => { events.push("hold"); }),
-    prepareSourceStores: vi.fn(async (gatewayId: string, slug: string, authority?: { expectedBuilderUid: string; assertCurrent(): Promise<void> }) => {
-      expect(gatewayId).toBe(source); expect(slug).toBe("ceckert-test"); expect(authority?.expectedBuilderUid).toBe(uid); await authority?.assertCurrent(); events.push("ownership");
+    prepareSourceStores: vi.fn(async (gatewayId: string, slug: string, authority?: { expectedUserUid: string; assertCurrent(): Promise<void> }) => {
+      expect(gatewayId).toBe(source); expect(slug).toBe("ceckert-test"); expect(authority?.expectedUserUid).toBe(uid); await authority?.assertCurrent(); events.push("ownership");
     }),
     sourceClient: vi.fn(async () => ({ scheduler: vi.fn(async () => { events.push("scheduler"); }), resume: vi.fn(async () => { events.push("ingress"); }) }) as any),
   };
@@ -145,7 +145,7 @@ describe("retired target Native return source-only recovery", () => {
   it("publishes rollback only after exact source scheduler and ingress acknowledgements", async () => {
     const h = fixture(), user = structuredClone(h.records[`users/${uid}`]); expect(await h.request()).toBe(true);
     const buildClient = vi.fn(() => { throw new Error("forward client must never run"); });
-    const handler = createMigrateCustomerHandler({ recoverNativeReturnSource: h.owner.recover, buildClient } as unknown as MigrateCustomerDeps);
+    const handler = createMigrateUserHandler({ recoverNativeReturnSource: h.owner.recover, buildClient } as unknown as MigrateUserDeps);
     const result = await handler(h.claim(), h.ctx);
     expect(buildClient).not.toHaveBeenCalled();
     expect(h.events).toEqual(["hold", "ownership", "scheduler", "ingress"]);

@@ -62,7 +62,7 @@ EMPTY_FILE="${TEMP_DIR}/empty.json"
 RECEIPT_FILE="${TEMP_DIR}/receipt.json"
 printf '%s\n' '[]' >"${CANDIDATES_FILE}"
 printf '%s\n' '[]' >"${EMPTY_FILE}"
-EXCLUDED_CUSTOMER_CREDENTIALS=0
+EXCLUDED_USER_CREDENTIALS=0
 
 cleanup() {
   find "${TEMP_DIR}" -type f -delete
@@ -79,7 +79,7 @@ while IFS= read -r secret_json; do
   secret_name="$(jq -r '.name | split("/") | last' <<<"${secret_json}")"
   case "${secret_name}" in
     byok-*|byosub-*|gateway-model-key-*)
-      EXCLUDED_CUSTOMER_CREDENTIALS=$((EXCLUDED_CUSTOMER_CREDENTIALS + 1))
+      EXCLUDED_USER_CREDENTIALS=$((EXCLUDED_USER_CREDENTIALS + 1))
       continue
       ;;
   esac
@@ -89,7 +89,7 @@ while IFS= read -r secret_json; do
     .labels.byosub == "true" or
     .labels.octogee_kind == "gateway_model_key"
   ' <<<"${secret_json}" >/dev/null; then
-    EXCLUDED_CUSTOMER_CREDENTIALS=$((EXCLUDED_CUSTOMER_CREDENTIALS + 1))
+    EXCLUDED_USER_CREDENTIALS=$((EXCLUDED_USER_CREDENTIALS + 1))
     continue
   fi
   versions_file="${TEMP_DIR}/${secret_name}-versions.json"
@@ -183,7 +183,7 @@ jq -n \
   --arg gitCommit "${GIT_COMMIT}" \
   --arg project "${PROJECT_ID}" \
   --arg mode "${MODE}" \
-  --argjson excludedCustomerCredentials "${EXCLUDED_CUSTOMER_CREDENTIALS}" \
+  --argjson excludedUserCredentials "${EXCLUDED_USER_CREDENTIALS}" \
   --argjson destroyedVersions "${DESTROYED_VERSIONS}" \
   --slurpfile candidates "${CANDIDATES_FILE}" \
   --slurpfile emptySecrets "${EMPTY_FILE}" '
@@ -194,7 +194,7 @@ jq -n \
       gitCommit: $gitCommit,
       project: $project,
       mode: $mode,
-      excludedCustomerCredentials: $excludedCustomerCredentials,
+      excludedUserCredentials: $excludedUserCredentials,
       candidates: $candidates[0],
       emptySecrets: $emptySecrets[0],
       destroyedVersions: $destroyedVersions,

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import type { BuilderParkedComputer, Operation, GatewayVmState } from "@octogee/shared/types/glm";
+import type { UserParkedVm, Operation, GatewayVmState } from "@octogee/shared/types/glm";
 import { createGatewayVmHandler, type GatewayVmRecord, type GatewayVmDeps } from "../handlers/gateway-vm";
 import type { GatewayVmClient, GatewayVmDescription } from "../lib/compute-vm";
 
@@ -37,7 +37,7 @@ function op(input: Record<string, unknown>): Operation {
 function harness(
   record: GatewayVmRecord | null,
   vm: Partial<GatewayVmClient> = {},
-  home: { completedAt?: () => number | null; cancelled?: () => boolean; parked?: BuilderParkedComputer | null; replacement?: GatewayVmDeps["replaceStoppedComputer"] } = {},
+  home: { completedAt?: () => number | null; cancelled?: () => boolean; parked?: UserParkedVm | null; replacement?: GatewayVmDeps["replaceStoppedVm"] } = {},
 ) {
   const client: GatewayVmClient = {
     create: vi.fn(async () => ({ description, provisioningModel: "SPOT", fellBackToStandard: false, alreadyExisted: false })),
@@ -61,21 +61,21 @@ function harness(
   const requestHomeCheckpoint = vi.fn(async () => {});
   const clearHomeCheckpointRequest = vi.fn(async () => {});
   const clearVmForReplacement = vi.fn(async () => {});
-  const clearParkedComputer = vi.fn(async () => {});
+  const clearParkedVm = vi.fn(async () => {});
   const clock = { now: 1_000 };
   const waits: number[] = [];
   const steps: unknown[] = [];
   const handler = createGatewayVmHandler({
     vm: client,
-    replaceStoppedComputer: home.replacement,
+    replaceStoppedVm: home.replacement,
     readGateway: vi.fn(async () => record),
     writeVmState,
     requestHomeCheckpoint,
     readHomeCheckpointCompletedAt: vi.fn(async () => home.completedAt?.() ?? null),
     clearHomeCheckpointRequest,
     clearVmForReplacement,
-    readParkedComputer: vi.fn(async () => home.parked ?? null),
-    clearParkedComputer,
+    readParkedVm: vi.fn(async () => home.parked ?? null),
+    clearParkedVm,
     wait: vi.fn(async (ms: number) => { waits.push(ms); clock.now += ms; }),
     now: () => clock.now,
     log: vi.fn(),
@@ -86,10 +86,10 @@ function harness(
     reportStep: (s) => { steps.push(s); },
     cancellationRequested: async () => home.cancelled?.() ?? false,
   });
-  return { client, writeVmState, requestHomeCheckpoint, clearHomeCheckpointRequest, clearVmForReplacement, clearParkedComputer, waits, clock, steps, run };
+  return { client, writeVmState, requestHomeCheckpoint, clearHomeCheckpointRequest, clearVmForReplacement, clearParkedVm, waits, clock, steps, run };
 }
 
-const parkedFresh: BuilderParkedComputer = {
+const parkedFresh: UserParkedVm = {
   instanceName: description.name,
   zone: "us-west1-b",
   instanceId: "42",
@@ -115,7 +115,7 @@ describe("gateway-vm handler", () => {
     expect(bad.writeVmState).not.toHaveBeenCalled();
   });
 
-  it("has no create action: converge is the only computer creator, so an operator create never reaches Compute", async () => {
+  it("has no create action: converge is the only VM creator, so an operator create never reaches Compute", async () => {
     const h = harness(gceRecord);
 
     const result = await h.run({ gatewayId: "b-mama-3-abc-hobby", action: "create" });
@@ -126,7 +126,7 @@ describe("gateway-vm handler", () => {
     expect(h.steps).toEqual([]);
   });
 
-  it("stop records an operator stop so Cowboy leaves the computer down; start clears it", async () => {
+  it("stop records an operator stop so the fleet controller leaves the VM down; start clears it", async () => {
     const stopped = { ...description, status: "TERMINATED" };
     const h = harness({ ...gceRecord, vm: vmState }, { describe: vi.fn(async () => stopped) });
 
@@ -180,7 +180,7 @@ describe("gateway-vm handler", () => {
     expect(await h.run({ ownerUid: "UidA", uid: "UidA", action: "replace", force: true })).toMatchObject({ success: false, error: /journaled operator/ });
     expect(replacement).not.toHaveBeenCalled();
     const handler = createGatewayVmHandler({
-      ...({} as GatewayVmDeps), readParkedComputer: async () => parkedFresh, replaceStoppedComputer: replacement,
+      ...({} as GatewayVmDeps), readParkedVm: async () => parkedFresh, replaceStoppedVm: replacement,
       now: () => 1,
     });
     const input = { ownerUid: "UidA", uid: "UidA", action: "replace", force: true, expectedGatewayId: "b-old", expectedInstanceId: "42" };
@@ -189,7 +189,7 @@ describe("gateway-vm handler", () => {
     expect(replacement).toHaveBeenCalledWith("b-old", "op-1", expect.any(Function), { forceOwnerUid: "UidA", expectedInstanceId: "42" });
     replacement.mockClear();
     const changed = { ...operation, input: { ...input, expectedInstanceId: "old-id" } };
-    expect(await handler(changed, { reportStep: () => {} })).toMatchObject({ success: false, error: /parked computer changed/ });
+    expect(await handler(changed, { reportStep: () => {} })).toMatchObject({ success: false, error: /parked VM changed/ });
     expect(replacement).not.toHaveBeenCalled();
   });
   it("keeps source disks when the replacement operation is cancelled", async () => {
@@ -198,7 +198,7 @@ describe("gateway-vm handler", () => {
     expect(await h.run({ gatewayId: "b-x", action: "replace" })).toMatchObject({ success: false, error: /cancelled/ });
     expect(deletion).not.toHaveBeenCalled();
   });
-  it.each(["RUNNING", "TERMINATED", "STOPPING"])("blocks state-preserving replacement of a %s computer until coverage and fencing are implemented", async (status) => {
+  it.each(["RUNNING", "TERMINATED", "STOPPING"])("blocks state-preserving replacement of a %s VM until coverage and fencing are implemented", async (status) => {
     const h = harness({ ...gceRecord, vm: { ...vmState, status } }, {}, { completedAt: () => 5000 });
     expect(await h.run({ gatewayId: "b-x", action: "replace" })).toMatchObject({ success: false, error: /replacement is disabled.*coverage/ });
     expect(h.client.start).not.toHaveBeenCalled();
@@ -208,11 +208,11 @@ describe("gateway-vm handler", () => {
     expect(h.clearVmForReplacement).not.toHaveBeenCalled();
   });
 
-  it.each(["fresh", "stale"] as const)("keeps a parked computer with a %s checkpoint and its recovery record", async (outcome) => {
+  it.each(["fresh", "stale"] as const)("keeps a parked VM with a %s checkpoint and its recovery record", async (outcome) => {
     const h = harness(null, {}, { parked: { ...parkedFresh, checkpoint: { ...parkedFresh.checkpoint, outcome } } });
     expect(await h.run({ ownerUid: "UidA", action: "replace" })).toMatchObject({ success: false, error: /replacement is disabled.*coverage/ });
     expect(h.client.delete).not.toHaveBeenCalled();
-    expect(h.clearParkedComputer).not.toHaveBeenCalled();
+    expect(h.clearParkedVm).not.toHaveBeenCalled();
   });
 
   it("the ownerUid form supports only replace", async () => {

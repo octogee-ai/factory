@@ -41,7 +41,7 @@ describe("gateway-edge Kubernetes TokenReview", () => {
                 authenticated: true,
                 audiences: ["octogee-api"],
                 user: {
-                  username: "system:serviceaccount:octogee-test:octogee-gw-bender",
+                  username: "system:serviceaccount:octogee-test:octogee-gw-walter",
                 },
               },
             },
@@ -52,7 +52,7 @@ describe("gateway-edge Kubernetes TokenReview", () => {
       await expect(reviewer("caller-jwt")).resolves.toEqual({
         authenticated: true,
         namespace: "octogee-test",
-        saName: "octogee-gw-bender",
+        saName: "octogee-gw-walter",
         audiences: ["octogee-api"],
       });
       expect(calls).toHaveLength(1);
@@ -76,7 +76,7 @@ describe("gateway-edge Kubernetes TokenReview", () => {
         status: {
           authenticated: true,
           audiences: ["other"],
-          user: { username: "system:serviceaccount:octogee-test:octogee-gw-bender" },
+          user: { username: "system:serviceaccount:octogee-test:octogee-gw-walter" },
         },
       },
       {

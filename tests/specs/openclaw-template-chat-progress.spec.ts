@@ -14,7 +14,7 @@ function read(name: string): Template {
 }
 
 describe("gateway templates — chat progress surface", () => {
-  it.each(["openclaw.template.json", "openclaw.builder.template.json"])(
+  it.each(["openclaw.template.json", "openclaw.isolated.template.json"])(
     "%s keeps native verbose tool summaries out of chat",
     (name) => {
       expect(read(name).agents.defaults.verboseDefault).toBe("off");
