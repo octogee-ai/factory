@@ -54,7 +54,7 @@ export function registerAgentExportBrokerRoutes(router: Router, deps: AgentImpor
       const owner = context(res);
       const [user, workspace] = await Promise.all([deps.store.users.records.get(owner.uid), deps.store.workspaces.records.get(owner.slug)]);
       if (!interactiveUser(user) || workspace?.ownerUid !== owner.uid || workspace.ownerActive === false) { res.status(403).json({ error: "forbidden" }); return; }
-      const decision = await deps.featurePolicy?.evaluate("release-agent-export", { uid: owner.uid, isAdmin: owner.isAdmin, workspaceSlug: owner.slug, ...(owner.planTier ? { planTier: owner.planTier } : {}) }, "agent-export");
+      const decision = await deps.featurePolicy?.evaluate("release-agent-export", { uid: owner.uid, isAdmin: owner.isAdmin, workspaceSlug: owner.slug }, "agent-export");
       if (!decision || decision.state !== "enabled") { res.status(decision?.state === "unavailable" ? 503 : 404).json({ error: "feature_unavailable" }); return; }
       next();
     } catch (error) { next(error); }

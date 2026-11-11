@@ -55,12 +55,10 @@ const previewRateLimit = rateLimit({
 });
 
 function featureSubject(req: Request): FeatureSubject {
-  const user = req.user as Record<string, unknown> | undefined;
   return {
     uid: req.uid!,
     isAdmin: req.isAdmin === true,
     ...(typeof req.workspaceSlug === "string" ? { workspaceSlug: req.workspaceSlug } : {}),
-    ...(typeof user?.selectedTier === "string" ? { planTier: user.selectedTier } : {}),
   };
 }
 

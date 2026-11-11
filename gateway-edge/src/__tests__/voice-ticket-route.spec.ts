@@ -121,7 +121,7 @@ describe("POST /api/voice/ticket", () => {
     expect(h.resolveConversation).toHaveBeenCalledWith("uid-parent", "c".repeat(26), threadRootPostId);
     expect(h.evaluate).toHaveBeenCalledWith(
       "release-voice-talk",
-      expect.objectContaining({ uid: "uid-parent", isAdmin: false, workspaceSlug: "mom", planTier: "free" }),
+      expect.objectContaining({ uid: "uid-parent", isAdmin: false, workspaceSlug: "mom" }),
       "voice-ticket",
     );
   });

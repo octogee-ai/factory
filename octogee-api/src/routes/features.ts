@@ -7,12 +7,10 @@ import { requireAuth } from "../../../gateway-edge/src/middleware/auth.js";
 import { FeaturePolicy } from "../lib/feature-policy.js";
 
 function subject(req: Request): FeatureSubject {
-  const user = req.user as Record<string, unknown> | undefined;
   return {
     uid: req.uid!,
     isAdmin: req.isAdmin === true,
     ...(typeof req.workspaceSlug === "string" ? { workspaceSlug: req.workspaceSlug } : {}),
-    ...(typeof user?.selectedTier === "string" ? { planTier: user.selectedTier } : {}),
   };
 }
 

@@ -36,12 +36,10 @@ const INVALID_REPO_SOURCE =
 const UNREACHABLE_GITHUB_ERRORS = new Set(["GitHub API 404", "GitHub API 403"]);
 
 function featureSubject(req: Request): FeatureSubject {
-  const user = req.user as Record<string, unknown> | undefined;
   return {
     uid: req.uid!,
     isAdmin: req.isAdmin === true,
     ...(typeof req.workspaceSlug === "string" ? { workspaceSlug: req.workspaceSlug } : {}),
-    ...(typeof user?.selectedTier === "string" ? { planTier: user.selectedTier } : {}),
   };
 }
 

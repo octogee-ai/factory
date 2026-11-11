@@ -77,7 +77,6 @@ export interface OwnerContext {
   slug: string;
   gatewayId: string;
   isAdmin: boolean;
-  planTier?: string;
   workspacePolicy: { preserveConvergedContextFiles: boolean };
 }
 
@@ -138,7 +137,6 @@ async function ownerContext(
     slug,
     gatewayId: bound.gatewayId,
     isAdmin: user?.role === "admin",
-    ...(typeof planInputs.selectedTier === "string" ? { planTier: planInputs.selectedTier } : {}),
     workspacePolicy: {
       preserveConvergedContextFiles: userEntitlements().plan(planInputs, deps.now()).modelAccess === "house_only",
     },
@@ -293,7 +291,6 @@ function registerAccessRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps)
           uid: owner.uid,
           isAdmin: owner.isAdmin,
           workspaceSlug: owner.slug,
-          ...(owner.planTier ? { planTier: owner.planTier } : {}),
         }, "agent-import");
         if (decision.state === "disabled") {
           res.status(404).json({ error: "feature_unavailable" });

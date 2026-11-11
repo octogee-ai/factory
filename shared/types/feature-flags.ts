@@ -44,7 +44,6 @@ export interface FeatureSubject {
   uid: string;
   isAdmin: boolean;
   workspaceSlug?: string;
-  planTier?: string;
   gatewayClass?: string;
   gatewayProfile?: string;
 }
