@@ -7,9 +7,9 @@ import { MODEL_BROKER_GATEWAY_POINTERS_COLLECTION, MODEL_BROKER_TOKENS_COLLECTIO
 import { placementReceiptDocId } from "@octogee/shared/types/placement-receipts";
 import { requireSizingProfile, } from "../platform-state/config.js";
 import { AlreadyExistsError, DuplicateRecordError, FenceMismatchError, MalformedRecordError, MissingRecordError, UnsupportedOperationError, } from "../platform-state/errors.js";
-import { ACTIVATED_AGENTS_PATH, agentStoreFromData, agentStoreKeyOf, USER_ACTIVATION_LEASE_PATH, USER_FENCE_PATHS, USER_MIRROR_PATHS, userPatchPaths, userRecordFromData, userRoleFromData, } from "../platform-state/documents/users.js";
+import { ACTIVATED_AGENTS_PATH, ADMITTED_STEP, agentStoreFromData, agentStoreKeyOf, USER_ACTIVATION_LEASE_PATH, USER_FENCE_PATHS, SLUG_PATH, USER_MIRROR_PATHS, userPatchPaths, userRecordFromData, userRoleFromData, } from "../platform-state/documents/users.js";
 import { parseOrchestratorConfig, parsePlatformConfigValue, platformConfigEntryFromData, seedSizingProfiles } from "../platform-state/documents/config.js";
-import { parseSharedPoolScalerState } from "../platform-state/documents/controller-state.js";
+import { SCALER_KEY, parseSharedPoolScalerState } from "../platform-state/documents/controller-state.js";
 import { assertAbsentFence, assertFenceEquals, assertFenceOneOf } from "../platform-state/documents/fences.js";
 import { migrationTransferTaskFromData } from "../platform-state/documents/migration-tasks.js";
 import { decodeGatewayAssignmentData } from "../platform-state/documents/gateways.js";
@@ -177,8 +177,11 @@ function operationRepository(documents, write) {
             (filter.statuses === undefined || filter.statuses.includes(operation.status)) &&
             (filter.kind === undefined || operation.kind === filter.kind)),
         enqueue: async (operation) => {
-            minted += 1;
-            const id = `fixture-operation-${minted}`;
+            let id;
+            do {
+                minted += 1;
+                id = `fixture-operation-${minted}`;
+            } while (documents.get(`${OPERATIONS}/${id}`) !== undefined);
             create({ ...operation, id });
             return id;
         },
@@ -626,6 +629,9 @@ function userRecordRepository(documents, write, transactional) {
             return record === null ? [] : [[uid, record]];
         })),
         listAll: async () => all(),
+        listAdmitted: async () => all()
+            .filter((record) => record.admitted)
+            .sort((a, b) => a.uid.localeCompare(b.uid)),
         list: async (page) => fixturePage(all().sort((a, b) => Number(a.createdAt === null) - Number(b.createdAt === null) ||
             (b.createdAt ?? 0) - (a.createdAt ?? 0) ||
             b.uid.localeCompare(a.uid)), (record) => record.uid, page, (uid) => new MissingRecordError(key(uid))),
@@ -647,16 +653,22 @@ function userRecordRepository(documents, write, transactional) {
         admit: async (uid, input) => {
             const path = `users/${uid}`;
             const row = documents.get(path);
-            const provisioning = row?.provisioning;
-            if (provisioning?.status !== undefined) {
-                throw new FenceMismatchError({ aggregate: "builder", key: uid }, "absent", { provisioningStatus: null }, { provisioningStatus: provisioning.status });
-            }
-            write(() => documents.set(path, {
-                ...row,
+            const current = row === undefined ? null : fixtureUserRecord(documents, uid, row);
+            const fence = (field, expected, actual) => new FenceMismatchError({ aggregate: "builder", key: uid }, "absent", { [field]: expected }, { [field]: actual });
+            if (current?.provisioning.status !== undefined)
+                throw fence("provisioningStatus", null, current.provisioning.status);
+            if (current !== null && current.slug !== null && current.slug !== input.slug)
+                throw fence("slug", input.slug, current.slug);
+            const persona = input.persona;
+            write(() => documents.set(path, withDottedFields(row ?? {}, {
                 createdAt: row?.createdAt ?? resolveServerNow(input.createdAt),
-                onboardingStep: "complete",
-                provisioning: { ...provisioning, status: "in_progress", startedAt: input.provisioningStartedAt },
-            }));
+                onboardingStep: ADMITTED_STEP,
+                [SLUG_PATH]: current?.slug ?? input.slug,
+                ...(persona?.vibe === undefined ? {} : { "onboarding.vibe": persona.vibe }),
+                ...(persona?.timeZone === undefined ? {} : { "preferences.timeZone": persona.timeZone }),
+                "provisioning.status": "in_progress",
+                "provisioning.startedAt": resolveServerNow(input.provisioningStartedAt),
+            })));
         },
         delete: async (uid) => {
             assertOutsideTransaction(transactional, "builders.records.delete");
@@ -1332,8 +1344,19 @@ function fleetRegistryRepository(documents, write) {
         },
     });
 }
+const SCALER_STATE_PATH = "glmControllerState/sharedPoolScaler";
 function controllerStateRepositories(documents, write) {
     const platformReleaseKey = { aggregate: "platform-release", key: "platformRelease" };
+    const scalerState = () => {
+        const row = documents.get(SCALER_STATE_PATH);
+        return row === undefined ? null : { ...parseSharedPoolScalerState(structuredClone(row)), revision: FIXTURE_REVISION };
+    };
+    const assertScalerFence = (fence, current) => {
+        if (current === null)
+            throw new MissingRecordError(SCALER_KEY);
+        assertFenceEquals(SCALER_KEY, "revision", fence.revision, current.revision);
+        assertFenceEquals(SCALER_KEY, "actionSequence", fence.actionSequence, current.actionSequence);
+    };
     return partialRepository("controllerState", {
         platformRelease: partialRepository("controllerState.platformRelease", {
             get: async () => {
@@ -1352,14 +1375,28 @@ function controllerStateRepositories(documents, write) {
                 write(() => documents.set(PLATFORM_RELEASE_RECORD_DOC_PATH, structuredClone(parsed)));
             },
         }),
-        sharedPoolScaler: partialRepository("controllerState.sharedPoolScaler", {
-            get: async () => {
-                const row = documents.get("glmControllerState/sharedPoolScaler");
-                return row === undefined
-                    ? null
-                    : { ...parseSharedPoolScalerState(structuredClone(row)), revision: FIXTURE_REVISION };
+        sharedPoolScaler: {
+            get: async () => scalerState(),
+            put: async (state, fence) => {
+                const current = scalerState();
+                if (fence === "absent")
+                    assertAbsentFence(SCALER_KEY, current?.revision ?? null);
+                else
+                    assertScalerFence(fence, current);
+                const next = parseSharedPoolScalerState({ ...state });
+                write(() => documents.set(SCALER_STATE_PATH, structuredClone(next)));
             },
-        }),
+            patch: async (patch, fence) => {
+                const current = scalerState();
+                if (fence !== undefined)
+                    assertScalerFence(fence, current);
+                if (current === null)
+                    throw new MissingRecordError(SCALER_KEY);
+                const { revision: _revision, ...fields } = current;
+                const next = parseSharedPoolScalerState(applyPatch(fields, patch));
+                write(() => documents.set(SCALER_STATE_PATH, structuredClone(next)));
+            },
+        },
     });
 }
 export const FIXTURE_SIZING_PROFILES = seedSizingProfiles(BUILDER_TIERS);

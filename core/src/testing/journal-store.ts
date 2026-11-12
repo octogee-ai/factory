@@ -34,7 +34,7 @@ import {
   type PlatformConfigEntry,
   type PlatformConfigKey,
 } from "../platform-state/config.js";
-import type { ControllerStateRepositories } from "../platform-state/controller-state.js";
+import type { ControllerStateRepositories, SharedPoolScalerFence, SharedPoolScalerState } from "../platform-state/controller-state.js";
 import {
   AlreadyExistsError,
   DuplicateRecordError,
@@ -48,17 +48,19 @@ import {
 import type { FleetRegistryForeignEntry, FleetRegistryRecord, FleetRegistryRepository } from "../platform-state/fleet-registry.js";
 import {
   ACTIVATED_AGENTS_PATH,
+  ADMITTED_STEP,
   agentStoreFromData,
   agentStoreKeyOf,
   USER_ACTIVATION_LEASE_PATH,
   USER_FENCE_PATHS,
+  SLUG_PATH,
   USER_MIRROR_PATHS,
   userPatchPaths,
   userRecordFromData,
   userRoleFromData,
 } from "../platform-state/documents/users.js";
 import { parseOrchestratorConfig, parsePlatformConfigValue, platformConfigEntryFromData, seedSizingProfiles } from "../platform-state/documents/config.js";
-import { parseSharedPoolScalerState } from "../platform-state/documents/controller-state.js";
+import { SCALER_KEY, parseSharedPoolScalerState } from "../platform-state/documents/controller-state.js";
 import { assertAbsentFence, assertFenceEquals, assertFenceOneOf } from "../platform-state/documents/fences.js";
 import { migrationTransferTaskFromData } from "../platform-state/documents/migration-tasks.js";
 import { decodeGatewayAssignmentData } from "../platform-state/documents/gateways.js";
@@ -313,8 +315,11 @@ function operationRepository(documents: FixtureDocuments, write: Write): Journal
       (filter.statuses === undefined || filter.statuses.includes(operation.status)) &&
       (filter.kind === undefined || operation.kind === filter.kind)),
     enqueue: async (operation) => {
-      minted += 1;
-      const id = `fixture-operation-${minted}`;
+      let id: string;
+      do {
+        minted += 1;
+        id = `fixture-operation-${minted}`;
+      } while (documents.get(`${OPERATIONS}/${id}`) !== undefined);
       create({ ...operation, id });
       return id;
     },
@@ -751,6 +756,9 @@ function userRecordRepository(
       return record === null ? [] : [[uid, record] as const];
     })),
     listAll: async () => all(),
+    listAdmitted: async () => all()
+      .filter((record) => record.admitted)
+      .sort((a, b) => a.uid.localeCompare(b.uid)),
     list: async (page) => fixturePage(
       all().sort((a, b) =>
         Number(a.createdAt === null) - Number(b.createdAt === null) ||
@@ -778,21 +786,21 @@ function userRecordRepository(
     admit: async (uid, input) => {
       const path = `users/${uid}`;
       const row = documents.get(path);
-      const provisioning = row?.provisioning as Record<string, unknown> | undefined;
-      if (provisioning?.status !== undefined) {
-        throw new FenceMismatchError(
-          { aggregate: "builder", key: uid },
-          "absent",
-          { provisioningStatus: null },
-          { provisioningStatus: provisioning.status },
-        );
-      }
-      write(() => documents.set(path, {
-        ...row,
+      const current = row === undefined ? null : fixtureUserRecord(documents, uid, row);
+      const fence = (field: string, expected: unknown, actual: unknown) =>
+        new FenceMismatchError({ aggregate: "builder", key: uid }, "absent", { [field]: expected }, { [field]: actual });
+      if (current?.provisioning.status !== undefined) throw fence("provisioningStatus", null, current.provisioning.status);
+      if (current !== null && current.slug !== null && current.slug !== input.slug) throw fence("slug", input.slug, current.slug);
+      const persona = input.persona as { vibe?: unknown; timeZone?: unknown } | null;
+      write(() => documents.set(path, withDottedFields(row ?? {}, {
         createdAt: row?.createdAt ?? resolveServerNow(input.createdAt),
-        onboardingStep: "complete",
-        provisioning: { ...provisioning, status: "in_progress", startedAt: input.provisioningStartedAt },
-      }));
+        onboardingStep: ADMITTED_STEP,
+        [SLUG_PATH]: current?.slug ?? input.slug,
+        ...(persona?.vibe === undefined ? {} : { "onboarding.vibe": persona.vibe }),
+        ...(persona?.timeZone === undefined ? {} : { "preferences.timeZone": persona.timeZone }),
+        "provisioning.status": "in_progress",
+        "provisioning.startedAt": resolveServerNow(input.provisioningStartedAt),
+      })));
     },
     delete: async (uid) => {
       assertOutsideTransaction(transactional, "builders.records.delete");
@@ -1482,8 +1490,19 @@ function fleetRegistryRepository(documents: FixtureDocuments, write: Write): Fle
   });
 }
 
+const SCALER_STATE_PATH = "glmControllerState/sharedPoolScaler";
+
 function controllerStateRepositories(documents: FixtureDocuments, write: Write): ControllerStateRepositories {
   const platformReleaseKey: RecordKey = { aggregate: "platform-release", key: "platformRelease" };
+  const scalerState = (): Stored<SharedPoolScalerState> | null => {
+    const row = documents.get(SCALER_STATE_PATH);
+    return row === undefined ? null : { ...parseSharedPoolScalerState(structuredClone(row)), revision: FIXTURE_REVISION };
+  };
+  const assertScalerFence = (fence: SharedPoolScalerFence, current: Stored<SharedPoolScalerState> | null) => {
+    if (current === null) throw new MissingRecordError(SCALER_KEY);
+    assertFenceEquals(SCALER_KEY, "revision", fence.revision, current.revision);
+    assertFenceEquals(SCALER_KEY, "actionSequence", fence.actionSequence, current.actionSequence);
+  };
   return partialRepository<ControllerStateRepositories>("controllerState", {
     platformRelease: partialRepository<ControllerStateRepositories["platformRelease"]>("controllerState.platformRelease", {
       get: async () => {
@@ -1499,14 +1518,24 @@ function controllerStateRepositories(documents: FixtureDocuments, write: Write):
         write(() => documents.set(PLATFORM_RELEASE_RECORD_DOC_PATH, structuredClone(parsed) as unknown as Record<string, unknown>));
       },
     }),
-    sharedPoolScaler: partialRepository<ControllerStateRepositories["sharedPoolScaler"]>("controllerState.sharedPoolScaler", {
-      get: async () => {
-        const row = documents.get("glmControllerState/sharedPoolScaler");
-        return row === undefined
-          ? null
-          : { ...parseSharedPoolScalerState(structuredClone(row)), revision: FIXTURE_REVISION };
+    sharedPoolScaler: {
+      get: async () => scalerState(),
+      put: async (state, fence) => {
+        const current = scalerState();
+        if (fence === "absent") assertAbsentFence(SCALER_KEY, current?.revision ?? null);
+        else assertScalerFence(fence, current);
+        const next = parseSharedPoolScalerState({ ...state });
+        write(() => documents.set(SCALER_STATE_PATH, structuredClone(next) as unknown as Record<string, unknown>));
       },
-    }),
+      patch: async (patch, fence) => {
+        const current = scalerState();
+        if (fence !== undefined) assertScalerFence(fence, current);
+        if (current === null) throw new MissingRecordError(SCALER_KEY);
+        const { revision: _revision, ...fields } = current;
+        const next = parseSharedPoolScalerState(applyPatch(fields, patch));
+        write(() => documents.set(SCALER_STATE_PATH, structuredClone(next) as unknown as Record<string, unknown>));
+      },
+    },
   });
 }
 
