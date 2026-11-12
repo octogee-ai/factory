@@ -23,6 +23,7 @@ vi.mock("../lib/git-host.js", () => {
   const host = {
     releaseKey: vi.fn(async () => {}),
     registerKey: vi.fn(async () => {}),
+    registerKeyUnlessHeld: vi.fn(async () => {}),
     primaryKey: vi.fn(async () => "ssh-ed25519 OLD predecessor"),
     listKeys: vi.fn(async () => ["ssh-ed25519 OLD predecessor", "ssh-ed25519 KEY octogee"]),
     ensureOwner: vi.fn(async () => {}),
@@ -232,6 +233,41 @@ describe("internal gitea-admin route", () => {
     ).send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
 
     expect(res.status).toBe(204);
+    expect(gitHost().registerKey).toHaveBeenCalledWith(
+      "acme",
+      "ssh-ed25519 AAA",
+      WALTER_KEY_OWNER,
+    );
+  });
+
+  it("leaves the key of a user another gateway serves with that gateway when the configured gateway boots", async () => {
+    assignUser("acme", "shared-1");
+    mocks.docs.set("gateways/walter", isolatedGateway());
+
+    const res = await request(app())
+      .post("/internal/gitea/ensure-user")
+      .send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
+
+    expect(res.status).toBe(204);
+    expect(gitHost().registerKey).not.toHaveBeenCalled();
+    expect(gitHost().registerKeyUnlessHeld).toHaveBeenCalledWith(
+      "acme",
+      "ssh-ed25519 AAA",
+      WALTER_KEY_OWNER,
+    );
+  });
+
+  it("lets the configured gateway claim the key once an inbound migration targets it", async () => {
+    assignUser("acme", "shared-1");
+    mocks.docs.set("gateways/walter", isolatedGateway());
+    seedRunningMigration("uid-acme", "walter");
+
+    const res = await request(app())
+      .post("/internal/gitea/ensure-user")
+      .send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
+
+    expect(res.status).toBe(204);
+    expect(gitHost().registerKeyUnlessHeld).not.toHaveBeenCalled();
     expect(gitHost().registerKey).toHaveBeenCalledWith(
       "acme",
       "ssh-ed25519 AAA",

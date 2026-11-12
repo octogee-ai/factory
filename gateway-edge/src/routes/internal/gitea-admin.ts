@@ -15,6 +15,7 @@ import {
   systemConfigRepoName,
   workspaceRepoName,
 } from "@octogee/core/gitea-naming";
+import type { PlatformUserRecord } from "@octogee/core/platform-state";
 import { platformStateStore } from "../../lib/platform-state.js";
 import { gitHost } from "../../lib/git-host.js";
 import { requireInternalServiceAuth } from "../../middleware/auth.js";
@@ -173,9 +174,7 @@ async function assignedSlugsForGateway(gatewayId: string): Promise<string[]> {
   return users.flatMap((user) => (user.slug ? [user.slug] : []));
 }
 
-async function inboundMigrationRunning(gatewayId: string, slug: string): Promise<boolean> {
-  const user = await platformStateStore.users.records.findBySlug(slug);
-  if (!user) return false;
+async function inboundMigrationRunning(gatewayId: string, user: PlatformUserRecord): Promise<boolean> {
   const operations = await platformStateStore.journal.operations.listForUid(user.uid, {
     kind: "migrate-user",
     statuses: ["running"],
@@ -186,34 +185,35 @@ async function inboundMigrationRunning(gatewayId: string, slug: string): Promise
   });
 }
 
-async function requireAssignedHere(req: Request, res: Response, slug: string): Promise<boolean> {
+type UserAccess = "serving" | "standby";
+
+async function userAccessForGateway(caller: GatewayCaller, slug: string): Promise<UserAccess | null> {
+  const { gatewayId, podName } = caller;
+  const assigned = await assignedSlugsForGateway(gatewayId);
+  if (assigned.includes(slug)) return "serving";
+  const user = await platformStateStore.users.records.findBySlug(slug);
+  if (user && (await inboundMigrationRunning(gatewayId, user))) return "serving";
+  const gateway = await platformStateStore.gateways.roots.get(gatewayId);
+  if (!configuredUserBootstrapAllowed(gateway, { gatewayId, podName, slug })) return null;
+  return user?.gateway ? "standby" : "serving";
+}
+
+async function requireUserAccess(req: Request, res: Response, slug: string): Promise<UserAccess | null> {
   const caller = gatewayCallerForRequest(req);
   if (!caller) {
     logger.error("internal/gitea assignment guard failed: no gateway identity is configured");
     res.status(500).json({ error: "gateway assignment guard is not configured" });
-    return false;
+    return null;
   }
-  const { gatewayId, podName } = caller;
 
   try {
-    const assigned = await assignedSlugsForGateway(gatewayId);
-    if (assigned.includes(slug)) return true;
-    const gateway = await platformStateStore.gateways.roots.get(gatewayId);
-    const configuredIsolatedUser = configuredUserBootstrapAllowed(gateway, {
-      gatewayId,
-      podName,
-      slug,
-    });
-    if (configuredIsolatedUser) return true;
-    if (!(await inboundMigrationRunning(gatewayId, slug))) {
-      res.status(403).json({ error: "slug is not assigned to this gateway" });
-      return false;
-    }
-    return true;
+    const access = await userAccessForGateway(caller, slug);
+    if (!access) res.status(403).json({ error: "slug is not assigned to this gateway" });
+    return access;
   } catch (err) {
-    logger.error("internal/gitea assignment guard lookup failed", { err, gatewayId, slug });
+    logger.error("internal/gitea assignment guard lookup failed", { err, gatewayId: caller.gatewayId, slug });
     res.status(502).json({ error: "gateway assignment lookup failed" });
-    return false;
+    return null;
   }
 }
 
@@ -234,10 +234,14 @@ router.post("/ensure-user", async (req: Request, res: Response) => {
     res.status(400).json({ error: "pubKey must be a valid SSH public key" });
     return;
   }
-  if (!(await requireAssignedHere(req, res, slug))) return;
+  const access = await requireUserAccess(req, res, slug);
+  if (!access) return;
   const keyOwner = gatewayKeyOwnerForRequest(req, res);
   if (!keyOwner) return;
-  await broker(res, "ensure-user", () => gitHost().registerKey(slug, pubKey, keyOwner));
+  await broker(res, "ensure-user", () =>
+    access === "serving"
+      ? gitHost().registerKey(slug, pubKey, keyOwner)
+      : gitHost().registerKeyUnlessHeld(slug, pubKey, keyOwner));
 });
 
 router.post("/release-user-key", async (req: Request, res: Response) => {
@@ -255,7 +259,7 @@ router.post("/release-user-key", async (req: Request, res: Response) => {
 router.get("/user-pubkey", async (req: Request, res: Response) => {
   const { slug } = req.query;
   if (!validSlug(res, slug)) return;
-  if (!(await requireAssignedHere(req, res, slug))) return;
+  if (!(await requireUserAccess(req, res, slug))) return;
   try {
     const pubKey = await gitHost().primaryKey(slug);
     res.json({ pubKey });
@@ -268,7 +272,7 @@ router.get("/user-pubkey", async (req: Request, res: Response) => {
 router.get("/user-pubkeys", async (req: Request, res: Response) => {
   const { slug } = req.query;
   if (!validSlug(res, slug)) return;
-  if (!(await requireAssignedHere(req, res, slug))) return;
+  if (!(await requireUserAccess(req, res, slug))) return;
   try {
     const pubKeys = await gitHost().listKeys(slug);
     res.json({ pubKeys });
@@ -281,28 +285,28 @@ router.get("/user-pubkeys", async (req: Request, res: Response) => {
 router.post("/ensure-org", async (req: Request, res: Response) => {
   const { slug } = (req.body ?? {}) as { slug?: unknown };
   if (!validSlug(res, slug)) return;
-  if (!(await requireAssignedHere(req, res, slug))) return;
+  if (!(await requireUserAccess(req, res, slug))) return;
   await broker(res, "ensure-org", () => gitHost().ensureOwner(slug));
 });
 
 router.post("/ensure-workspace-repo", async (req: Request, res: Response) => {
   const { slug } = (req.body ?? {}) as { slug?: unknown };
   if (!validSlug(res, slug)) return;
-  if (!(await requireAssignedHere(req, res, slug))) return;
+  if (!(await requireUserAccess(req, res, slug))) return;
   await broker(res, "ensure-workspace-repo", () => gitHost().ensureRepo(slug, { kind: "workspace" }));
 });
 
 router.post("/ensure-system-config-repo", async (req: Request, res: Response) => {
   const { slug } = (req.body ?? {}) as { slug?: unknown };
   if (!validSlug(res, slug)) return;
-  if (!(await requireAssignedHere(req, res, slug))) return;
+  if (!(await requireUserAccess(req, res, slug))) return;
   await broker(res, "ensure-system-config-repo", () => gitHost().ensureRepo(slug, { kind: "system-config" }));
 });
 
 router.post("/ensure-project-coach-repo", async (req: Request, res: Response) => {
   const { slug } = (req.body ?? {}) as { slug?: unknown };
   if (!validSlug(res, slug)) return;
-  if (!(await requireAssignedHere(req, res, slug))) return;
+  if (!(await requireUserAccess(req, res, slug))) return;
   await broker(res, "ensure-project-coach-repo", () => gitHost().ensureRepo(slug, { kind: "project-coaches" }));
 });
 
@@ -313,14 +317,14 @@ router.post("/ensure-project-repo", async (req: Request, res: Response) => {
     res.status(400).json({ error: "projectName must be a valid project id" });
     return;
   }
-  if (!(await requireAssignedHere(req, res, slug))) return;
+  if (!(await requireUserAccess(req, res, slug))) return;
   await broker(res, "ensure-project-repo", () => gitHost().ensureRepo(slug, { kind: "project", projectSlug: projectName }));
 });
 
 router.post("/provision-project-repo", async (req: Request, res: Response) => {
   const input = req.body;
   if (!validProjectRepoProvisionRequest(res, input)) return;
-  if (!(await requireAssignedHere(req, res, input.workspaceId))) return;
+  if (!(await requireUserAccess(req, res, input.workspaceId))) return;
   try {
     const result = await ensureProjectGiteaRepo({
       workspaceId: input.workspaceId,
@@ -349,7 +353,7 @@ router.post("/delete-project-repo", async (req: Request, res: Response) => {
     res.status(400).json({ error: "slug must be a valid project id" });
     return;
   }
-  if (!(await requireAssignedHere(req, res, workspaceId))) return;
+  if (!(await requireUserAccess(req, res, workspaceId))) return;
   await broker(res, "delete-project-repo", () => deleteProjectGiteaRepo({ workspaceId, slug }));
 });
 
@@ -359,7 +363,7 @@ router.get("/repo-exists", async (req: Request, res: Response) => {
     res.status(400).json({ error: "org must be a valid workspace username and repo a valid repo name" });
     return;
   }
-  if (!(await requireAssignedHere(req, res, org))) return;
+  if (!(await requireUserAccess(req, res, org))) return;
   try {
     const exists = await gitHost().repoExists({ owner: org, repo });
     res.json({ exists });
@@ -375,7 +379,7 @@ router.post("/archive-repo", async (req: Request, res: Response) => {
     res.status(400).json({ error: "org must be a valid workspace username and repo a valid repo name" });
     return;
   }
-  if (!(await requireAssignedHere(req, res, org))) return;
+  if (!(await requireUserAccess(req, res, org))) return;
   await broker(res, "archive-repo", () => gitHost().archiveRepo({ owner: org, repo }));
 });
 

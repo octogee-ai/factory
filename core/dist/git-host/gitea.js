@@ -239,7 +239,7 @@ function keysReplacedByOwner(existing, requestedKeyMatches, requestedTitle) {
         !requestedKeyMatches.includes(item));
     return [...requestedKeyMatches, ...staleOwnedKeys];
 }
-async function registerGatewayKey(api, workspaceSlug, pubKey, keyOwnerId) {
+async function registerGatewayKey(api, workspaceSlug, pubKey, keyOwnerId, takesHeldKey) {
     const username = giteaUsername(workspaceSlug);
     const created = await api.request("POST", "/admin/users", {
         username,
@@ -253,7 +253,8 @@ async function registerGatewayKey(api, workspaceSlug, pubKey, keyOwnerId) {
     const existing = await readUserKeys(api, username);
     const requestedTitle = gatewayKeyTitle(pubKey, keyOwnerId);
     const requestedKeyMatches = existing.filter((key) => isManagedGatewayKey(key) && publicKeysMatch(key.key, pubKey));
-    if (requestedKeyMatches.some((key) => keyOwnerId === undefined || key.title === requestedTitle)) {
+    const claimsHeldKey = keyOwnerId !== undefined && takesHeldKey;
+    if (requestedKeyMatches.some((key) => !claimsHeldKey || key.title === requestedTitle)) {
         return;
     }
     const keysToReplace = keyOwnerId === undefined ? [] : keysReplacedByOwner(existing, requestedKeyMatches, requestedTitle);
@@ -265,11 +266,11 @@ async function registerGatewayKey(api, workspaceSlug, pubKey, keyOwnerId) {
         }
         await registerUserKey(api, username, pubKey, {
             title: requestedTitle,
-            requireTitle: keyOwnerId !== undefined,
+            requireTitle: claimsHeldKey,
         });
     }
     catch (error) {
-        if (await hasManagedKey(api, username, pubKey, keyOwnerId === undefined ? undefined : requestedTitle).catch(() => false))
+        if (await hasManagedKey(api, username, pubKey, claimsHeldKey ? requestedTitle : undefined).catch(() => false))
             return;
         if (removed.length === 0)
             throw error;
@@ -324,7 +325,8 @@ export function createGiteaGitHost(config) {
         kind: "managed",
         provider: "gitea",
         naming: giteaNaming,
-        registerKey: (workspaceSlug, pubKey, keyOwnerId) => registerGatewayKey(api, workspaceSlug, pubKey, keyOwnerId),
+        registerKey: (workspaceSlug, pubKey, keyOwnerId) => registerGatewayKey(api, workspaceSlug, pubKey, keyOwnerId, true),
+        registerKeyUnlessHeld: (workspaceSlug, pubKey, keyOwnerId) => registerGatewayKey(api, workspaceSlug, pubKey, keyOwnerId, false),
         async listKeys(workspaceSlug) {
             return (await readUserKeys(api, giteaUsername(workspaceSlug)))
                 .filter(isManagedGatewayKey)

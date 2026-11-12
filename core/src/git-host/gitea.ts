@@ -341,7 +341,8 @@ async function registerGatewayKey(
   api: GiteaAdmin,
   workspaceSlug: string,
   pubKey: string,
-  keyOwnerId?: string,
+  keyOwnerId: string | undefined,
+  takesHeldKey: boolean,
 ): Promise<void> {
   const username = giteaUsername(workspaceSlug);
   const created = await api.request("POST", "/admin/users", {
@@ -359,9 +360,10 @@ async function registerGatewayKey(
     (key): key is ManagedGatewayKey =>
       isManagedGatewayKey(key) && publicKeysMatch(key.key, pubKey),
   );
+  const claimsHeldKey = keyOwnerId !== undefined && takesHeldKey;
   if (
     requestedKeyMatches.some(
-      (key) => keyOwnerId === undefined || key.title === requestedTitle,
+      (key) => !claimsHeldKey || key.title === requestedTitle,
     )
   ) {
     return;
@@ -377,7 +379,7 @@ async function registerGatewayKey(
     }
     await registerUserKey(api, username, pubKey, {
       title: requestedTitle,
-      requireTitle: keyOwnerId !== undefined,
+      requireTitle: claimsHeldKey,
     });
   } catch (error) {
     if (
@@ -385,7 +387,7 @@ async function registerGatewayKey(
         api,
         username,
         pubKey,
-        keyOwnerId === undefined ? undefined : requestedTitle,
+        claimsHeldKey ? requestedTitle : undefined,
       ).catch(() => false)
     ) return;
     if (removed.length === 0) throw error;
@@ -466,7 +468,10 @@ export function createGiteaGitHost(config: GiteaGitHostConfig): GiteaGitHost {
     naming: giteaNaming,
 
     registerKey: (workspaceSlug, pubKey, keyOwnerId) =>
-      registerGatewayKey(api, workspaceSlug, pubKey, keyOwnerId),
+      registerGatewayKey(api, workspaceSlug, pubKey, keyOwnerId, true),
+
+    registerKeyUnlessHeld: (workspaceSlug, pubKey, keyOwnerId) =>
+      registerGatewayKey(api, workspaceSlug, pubKey, keyOwnerId, false),
 
     async listKeys(workspaceSlug) {
       return (await readUserKeys(api, giteaUsername(workspaceSlug)))

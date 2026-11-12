@@ -279,6 +279,68 @@ describe("createGiteaGitHost — managed Gitea admin operations", () => {
     });
   });
 
+  describe("registerKeyUnlessHeld", () => {
+    const servingOwner = "shared-1/octogee-gateway-shared-1-abc-xyz";
+    const standbyOwner = "walter/octogee-gateway-walter-vm-123";
+    let keys: Array<{ id: number; title: string; key: string }>;
+
+    beforeEach(() => {
+      keys = [];
+      let nextKeyId = 100;
+      fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        const path = new URL(url).pathname;
+        if (method === "POST" && path === "/api/v1/admin/users") return res(422, {});
+        if (method === "GET" && path === "/api/v1/users/ws-acme/keys") return res(200, keys);
+        if (method === "DELETE" && path.startsWith("/api/v1/admin/users/ws-acme/keys/")) {
+          const id = Number(path.split("/").at(-1));
+          keys = keys.filter((key) => key.id !== id);
+          return res(204);
+        }
+        if (method === "POST" && path === "/api/v1/admin/users/ws-acme/keys") {
+          const body = JSON.parse(String(init?.body)) as { title: string; key: string };
+          if (keys.some((key) => key.key.split(" ")[1] === body.key.split(" ")[1])) {
+            return res(422, { message: "Key content has been used as non-deploy key" });
+          }
+          keys.push({ id: nextKeyId++, ...body });
+          return res(201, {});
+        }
+        throw new Error(`unexpected request: ${method} ${path}`);
+      });
+    });
+
+    it("leaves a key another gateway holds with that gateway, so the standby's release cannot remove it", async () => {
+      const shared = "ssh-ed25519 SHARED carried-by-migration";
+      keys = [{ id: 9, title: keyTitle(servingOwner), key: shared }];
+
+      await host.registerKeyUnlessHeld("acme", shared, standbyOwner);
+      await host.releaseKey("acme", shared, standbyOwner);
+
+      expect(keys).toEqual([{ id: 9, title: keyTitle(servingOwner), key: shared }]);
+      expect(callsTo(fetchMock).filter((call) => call.method === "DELETE")).toEqual([]);
+    });
+
+    it("registers a key nobody holds under the standby gateway", async () => {
+      await host.registerKeyUnlessHeld("acme", "ssh-ed25519 OWN standby", standbyOwner);
+
+      expect(keys).toEqual([{ id: 100, title: keyTitle(standbyOwner), key: "ssh-ed25519 OWN standby" }]);
+    });
+
+    it("replaces the standby gateway's own earlier key and keeps the serving gateway's key", async () => {
+      keys = [
+        { id: 9, title: keyTitle(servingOwner), key: "ssh-ed25519 SERVING" },
+        { id: 10, title: keyTitle(standbyOwner), key: "ssh-ed25519 STALE" },
+      ];
+
+      await host.registerKeyUnlessHeld("acme", "ssh-ed25519 FRESH", standbyOwner);
+
+      expect(keys).toEqual([
+        { id: 9, title: keyTitle(servingOwner), key: "ssh-ed25519 SERVING" },
+        { id: 100, title: keyTitle(standbyOwner), key: "ssh-ed25519 FRESH" },
+      ]);
+    });
+  });
+
   describe("listKeys and primaryKey", () => {
     it("returns every managed gateway key so overlapping pods can verify membership", async () => {
       fetchMock.mockResolvedValueOnce(
