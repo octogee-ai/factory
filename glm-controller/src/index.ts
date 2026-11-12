@@ -7,7 +7,6 @@ import { createGatewayCredentialEnsurers } from "./gateway-credential-ensurers.j
 import { createAgentStoreCredentialProvisioner, createAgentStoreCredentialRevoker, createAgentStoreCredentialRetirementVerifier, createAgentStoreOwnershipTransferer, assertNoUserAgentStores, eraseUserAgentStores } from "@octogee/core/agent-store-credentials";
 import { createUserAgentStoreErasure, preserveUserGatewayRetirement, type SharedAgentErasureSource } from "./lib/user-ops/agent-store-erasure.js";
 import { eraseUserHomeMigrationStorage } from "./lib/user-home-erasure.js";
-import { createUserHomeMigrator } from "./user-home-migration.js";
 import { createUserHomeProvider } from "./lib/user-home-provider.js";
 import { createHomeCopyClient } from "./lib/compute-home-copy.js";
 import type { ComputeRequest } from "./lib/compute-vm.js";
@@ -29,7 +28,6 @@ import { createNativeReturnTargetRetirementVerifier } from "./lib/native-return-
 import { prepareNativeVmReturn, releaseNativeReturnSourceRecoveryHold } from "./lib/native-vm-return.js";
 import { retireNativeSchedulerBeforeStage } from "./lib/native-scheduler-retirement.js";
 import { createAbandonedNativeSchedulerRecovery } from "./lib/native-return-scheduler-recovery.js";
-import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS } from "@octogee/shared/types/platform-config";
 import { randomUUID } from "node:crypto";
 import { initializeApp, applicationDefault } from "firebase-admin/app";
 import {
@@ -362,6 +360,8 @@ import {
   createFirestorePlacementPolicyReconcilerDeps,
   reconcilePlacementPolicyOnce,
   startPlacementPolicyReconciler,
+  type IsolatedGatewayAutomation,
+  type IsolatedGatewayProductFactory,
 } from "./placement-policy-reconciler.js";
 import { placementPassOptions, type UserAdmissionSourceFactory } from "./user-admission.js";
 import { openPlacementAdmission } from "./initial-placement.js";
@@ -439,10 +439,6 @@ const requestReconcileTickRef: { fire?: (gatewayId?: string) => void } = {};
 const PLACEMENT_POLICY_RECONCILE_MS = parseNonNegativeInt(
   process.env.PLACEMENT_POLICY_RECONCILE_MS,
   PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
-);
-const DISPOSABLE_GATEWAY_IDLE_MS = parseNonNegativeInt(
-  process.env.DISPOSABLE_GATEWAY_IDLE_MS,
-  DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS,
 );
 const HELM_RECOVERY_SWEEP_MS = parseNonNegativeInt(
   process.env.HELM_RECOVERY_SWEEP_MS,
@@ -2172,12 +2168,47 @@ interface ControllerBackgroundTasksDeps {
   placementAdmission: PlacementAdmissionPolicy;
   policyInputs: UserPolicyInputsSource;
   userAdmission?: UserAdmissionSourceFactory | undefined;
+  isolatedGateways?: IsolatedGatewayProductFactory | undefined;
   db: Firestore;
   deps: ControllerDeps;
   helm: HelmRunner;
   fleetControllerPrivateKey: string;
   platformArtifact: GatewayArtifact;
   controllerStartedAt: number;
+}
+
+function createIsolatedGatewayAutomation(
+  factory: IsolatedGatewayProductFactory | undefined,
+  db: Firestore,
+  deps: ControllerDeps,
+): IsolatedGatewayAutomation | null {
+  if (!factory) {
+    log("[glm-controller] isolated gateways: platform only, no automatic activation, idle return or retirement");
+    return null;
+  }
+  if (!deps.kubeOps) throw new Error("isolated gateway automation requires Kubernetes operations");
+  log("[glm-controller] isolated gateways: product automation installed");
+  const homeServices = GATEWAY_VM_SPEC ? createUserHomeServices(deps.store, log) : undefined;
+  return factory({
+    store: deps.store,
+    readBuilderTier: firestoreBuilderTierReader(db),
+    namespace: NAMESPACE,
+    now: () => Date.now(),
+    log,
+    ensureAuthSecret: deps.ensureGatewayAuthSecret,
+    readGatewayPodDiagnostics: deps.kubeOps.readGatewayPodDiagnostics,
+    ...(homeServices
+      ? {
+          userHome: {
+            environment: VM_ENVIRONMENT,
+            subnetwork: GATEWAY_VM_SPEC!.subnetwork,
+            nativeZones: GATEWAY_VM_SPEC!.zones,
+            ...homeServices.provider,
+            copy: homeServices.copy,
+          },
+        }
+      : {}),
+  });
 }
 
 const GITEA_GATEWAY_KEY_GC_INTERVAL_MS = 60_000;
@@ -2193,6 +2224,7 @@ function startControllerBackgroundTasks({
   placementAdmission,
   policyInputs,
   userAdmission,
+  isolatedGateways,
   db,
   deps,
   helm,
@@ -2276,28 +2308,20 @@ function startControllerBackgroundTasks({
     intervalMs: HELM_RECOVERY_SWEEP_MS,
     log,
   });
-  const homeServices = GATEWAY_VM_SPEC ? createUserHomeServices(deps.store, log) : undefined;
-  const prepareUserHome = homeServices ? createUserHomeMigrator({
-    store: deps.store, readBuilderTier: firestoreBuilderTierReader(db), environment: VM_ENVIRONMENT, now: Date.now, subnetwork: GATEWAY_VM_SPEC!.subnetwork, nativeZones: GATEWAY_VM_SPEC!.zones, log,
-    ...homeServices.provider, copy: homeServices.copy,
-  }) : undefined;
+  const isolatedGatewayAutomation = createIsolatedGatewayAutomation(isolatedGateways, db, deps);
   const stopPlacementPolicyReconciler = startPlacementPolicyReconciler(
     createFirestorePlacementPolicyReconcilerDeps({
       store: deps.store,
-      prepareUserHome,
       informer,
       policyInputs,
       namespace: NAMESPACE,
-      idleMs: DISPOSABLE_GATEWAY_IDLE_MS,
       platformArtifact,
       now: () => Date.now(),
       log,
-      readBuilderTier: firestoreBuilderTierReader(db),
       placementAdmission,
       debug: (message) => logger.debug(message),
-      ensureAuthSecret: deps.ensureGatewayAuthSecret,
-      readGatewayPodDiagnostics: deps.kubeOps.readGatewayPodDiagnostics,
       readGatewayPodDiagnosticsBatch: deps.kubeOps.readGatewayPodDiagnosticsBatch,
+      ...(isolatedGatewayAutomation ? { isolatedGateways: isolatedGatewayAutomation } : {}),
     }),
     PLACEMENT_POLICY_RECONCILE_MS,
     placementPassOptions({
@@ -2737,6 +2761,7 @@ export interface ControllerProduct {
   placementAdmission?: PlacementAdmissionPolicy;
   userAdmission?: UserAdmissionSourceFactory;
   userPolicyInputs?: (db: Firestore, log: (message: string) => void) => UserPolicyInputsSource;
+  isolatedGateways?: IsolatedGatewayProductFactory;
   startProjection?: (deps: {
     db: Firestore;
     store: PlatformStateStore;
@@ -2838,6 +2863,7 @@ export async function main(product: ControllerProduct): Promise<void> {
     placementAdmission: product.placementAdmission ?? openPlacementAdmission,
     policyInputs,
     userAdmission: product.userAdmission,
+    isolatedGateways: product.isolatedGateways,
     db,
     deps,
     helm: deps.helm,
