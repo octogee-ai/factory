@@ -4,11 +4,15 @@ import type { GoogleAuth } from 'google-auth-library';
 const artifact = { project: TEST_TARGET.clusterProjectId, name: 'octogee-computer-fixture', id: '123', sourceSha: 'a'.repeat(40), inputFingerprint: 'b'.repeat(64), acceptance: 'resize-reboot-v1' };
 const source = { name: artifact.name, id: artifact.id, status: 'READY', labels: { source: artifact.sourceSha, 'home-admission': 'retained-v1', 'home-restore': 'gated-v1' } };
 function cloud(): DesktopPublicationDeps {
+  let clock = 0;
   return {
     getImage: vi.fn().mockResolvedValue(source), copyImage: vi.fn(), setFamily: vi.fn(),
     resolveFamily: vi.fn().mockResolvedValue('octogee-computer-previous'),
+    now: () => clock, sleep: vi.fn(async (ms: number) => { clock += ms; }),
   };
 }
+const verifiedCopy = { ...source, id: '456', sourceImageId: source.id };
+const pendingCopy = { ...verifiedCopy, status: 'PENDING' };
 it('publishes an accepted TEST image without rebuilding or copying it', async () => {
   const deps = cloud();
   expect(await publishDesktopArtifact(artifact, 'test', deps)).toEqual({ project: TEST_TARGET.clusterProjectId, image: artifact.name });
@@ -60,6 +64,47 @@ it('copies the same accepted image to PROD and verifies its origin before publis
   await publishDesktopArtifact(artifact, 'prod', deps);
   expect(deps.copyImage).toHaveBeenCalledWith(TEST_TARGET.clusterProjectId, artifact.name, 'octogee', artifact.sourceSha);
   expect(deps.setFamily).toHaveBeenCalledWith('octogee', artifact.name);
+});
+it('waits for a PROD copy still PENDING after its copy operation and publishes it once READY', async () => {
+  const deps = cloud();
+  vi.mocked(deps.getImage).mockResolvedValueOnce(source).mockResolvedValueOnce(null)
+    .mockResolvedValueOnce(pendingCopy).mockResolvedValueOnce(pendingCopy).mockResolvedValueOnce(verifiedCopy);
+  expect(await publishDesktopArtifact(artifact, 'prod', deps)).toEqual({ project: 'octogee', image: artifact.name });
+  expect(deps.copyImage).toHaveBeenCalledOnce();
+  expect(deps.sleep).toHaveBeenCalledTimes(2);
+  expect(deps.setFamily).toHaveBeenCalledWith('octogee', artifact.name);
+});
+it('waits for an existing PENDING PROD copy without copying again and publishes it once READY', async () => {
+  const deps = cloud();
+  vi.mocked(deps.getImage).mockResolvedValueOnce(source).mockResolvedValueOnce(pendingCopy).mockResolvedValueOnce(verifiedCopy);
+  expect(await publishDesktopArtifact(artifact, 'prod', deps)).toEqual({ project: 'octogee', image: artifact.name });
+  expect(deps.copyImage).not.toHaveBeenCalled();
+  expect(deps.sleep).toHaveBeenCalledOnce();
+  expect(deps.setFamily).toHaveBeenCalledWith('octogee', artifact.name);
+});
+it('refuses a PROD copy that is still PENDING at the deadline, naming the image, its status and the wait', async () => {
+  const deps = cloud();
+  vi.mocked(deps.getImage).mockResolvedValueOnce(source).mockResolvedValueOnce(null).mockResolvedValue(pendingCopy);
+  await expect(publishDesktopArtifact(artifact, 'prod', deps)).rejects.toThrow(`destination desktop image octogee/${artifact.name} is PENDING, not READY, after waiting 1200s`);
+  expect(deps.sleep).toHaveBeenCalledTimes(80);
+  expect(deps.setFamily).not.toHaveBeenCalled();
+});
+it('refuses a FAILED PROD copy without waiting', async () => {
+  const deps = cloud();
+  vi.mocked(deps.getImage).mockResolvedValueOnce(source).mockResolvedValueOnce(null).mockResolvedValueOnce({ ...verifiedCopy, status: 'FAILED' });
+  await expect(publishDesktopArtifact(artifact, 'prod', deps)).rejects.toThrow(`destination desktop image octogee/${artifact.name} is FAILED, not READY, after waiting 0s`);
+  expect(deps.sleep).not.toHaveBeenCalled();
+  expect(deps.setFamily).not.toHaveBeenCalled();
+});
+it.each([
+  ['another source image', { ...verifiedCopy, sourceImageId: '789' }],
+  ['another source commit', { ...verifiedCopy, labels: { ...source.labels, source: 'c'.repeat(40) } }],
+])('refuses a READY PROD copy of %s without waiting', async (_, copy) => {
+  const deps = cloud();
+  vi.mocked(deps.getImage).mockResolvedValueOnce(source).mockResolvedValueOnce(null).mockResolvedValueOnce(copy);
+  await expect(publishDesktopArtifact(artifact, 'prod', deps)).rejects.toThrow('destination is not a copy of the tested desktop image');
+  expect(deps.sleep).not.toHaveBeenCalled();
+  expect(deps.setFamily).not.toHaveBeenCalled();
 });
 it('rejects a destination image copied from another source', async () => {
   const deps = cloud(); vi.mocked(deps.getImage).mockResolvedValueOnce(source).mockResolvedValueOnce({ ...source, sourceImageId: '789' });

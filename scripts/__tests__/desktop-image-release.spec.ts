@@ -103,6 +103,7 @@ function publicationCloud(): DesktopPublicationDeps {
   return {
     getImage: vi.fn().mockResolvedValue({ name: publishedArtifact.name, id: publishedArtifact.id, status: 'READY', labels: { source: publishedArtifact.sourceSha } }),
     copyImage: vi.fn(), setFamily: vi.fn(), resolveFamily: vi.fn().mockResolvedValue('octogee-computer-previous'),
+    now: () => 0, sleep: vi.fn(),
   };
 }
 function archiveFixture() {

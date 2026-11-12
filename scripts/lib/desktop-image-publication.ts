@@ -15,7 +15,12 @@ export interface DesktopPublicationDeps {
   copyImage(sourceProject: string, name: string, targetProject: string, sourceSha: string): Promise<void>;
   setFamily(project: string, name: string): Promise<void>;
   resolveFamily(project: string): Promise<string | null>;
+  now(): number;
+  sleep(ms: number): Promise<void>;
 }
+
+const DESKTOP_COPY_READY_POLL_MS = 15_000;
+const DESKTOP_COPY_READY_TIMEOUT_MS = 20 * 60_000;
 
 export function desktopImageProject(environment: 'test' | 'prod'): string {
   return deploymentEnvironmentSettings(environment).clusterProjectId;
@@ -30,6 +35,18 @@ function assertDestinationCopy(copy: DesktopCloudImage | null, artifact: ReturnT
   for (const contract of ['home-admission', 'home-restore']) {
     if (copy.labels?.[contract] !== source.labels?.[contract]) throw new Error(`destination copy native home admission contract ${contract} differs from the tested image`);
   }
+}
+
+async function awaitPendingCopy(copy: DesktopCloudImage | null, project: string, name: string, deps: DesktopPublicationDeps): Promise<DesktopCloudImage | null> {
+  const started = deps.now();
+  while (copy?.status === 'PENDING' && deps.now() - started < DESKTOP_COPY_READY_TIMEOUT_MS) {
+    await deps.sleep(DESKTOP_COPY_READY_POLL_MS);
+    copy = await deps.getImage(project, name);
+  }
+  if (copy && copy.status !== 'READY') {
+    throw new Error(`destination desktop image ${project}/${name} is ${copy.status}, not READY, after waiting ${Math.round((deps.now() - started) / 1000)}s`);
+  }
+  return copy;
 }
 
 export async function planDesktopPublication(value: unknown, environment: 'test' | 'prod', deps: DesktopPublicationDeps): Promise<DesktopPublicationPlan> {
@@ -53,7 +70,7 @@ export async function publishDesktopArtifact(value: unknown, environment: 'test'
       await deps.copyImage(artifact.project, artifact.name, targetProject, artifact.sourceSha);
       copy = await deps.getImage(targetProject, artifact.name);
     }
-    assertDestinationCopy(copy, artifact, source!);
+    assertDestinationCopy(await awaitPendingCopy(copy, targetProject, artifact.name, deps), artifact, source!);
   }
   if (await deps.resolveFamily(targetProject) !== artifact.name) await deps.setFamily(targetProject, artifact.name);
   return { project: targetProject, image: artifact.name };
@@ -222,6 +239,8 @@ export function createDesktopPublicationCloud(auth: GoogleAuth): DesktopPublicat
         resolveFamily: () => request(`${images}/family/octogee-computer`),
       });
     },
+    now: () => Date.now(),
+    sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
   };
 }
 
