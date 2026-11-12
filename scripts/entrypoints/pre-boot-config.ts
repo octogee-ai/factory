@@ -9,6 +9,8 @@ import {
   applyOpenClawSecretsPlan,
   openAiCatalogInputForBaseUrl,
   vertexCatalogInputForBaseUrl,
+  metaCatalogInputForBaseUrl,
+  META_BROKER_PROVIDER_ID,
   openRouterCatalogInputForBaseUrl,
 } from "../lib/agent-model-token-materializer.js";
 import {
@@ -48,9 +50,11 @@ export function platformBrokerCatalogOpts(env: NodeJS.ProcessEnv): {
   openRouter?: ReturnType<typeof openRouterCatalogInputForBaseUrl>;
   openAi?: ReturnType<typeof openAiCatalogInputForBaseUrl>;
   vertex?: ReturnType<typeof vertexCatalogInputForBaseUrl>;
+  meta?: ReturnType<typeof metaCatalogInputForBaseUrl>;
 } {
   const openRouterBaseUrl = env.OPENROUTER_BASE_URL?.trim();
   const platformOpenAiBaseUrl = env.PLATFORM_OPENAI_BASE_URL?.trim();
+  const metaBaseUrl = env.PLATFORM_META_BASE_URL?.trim();
   const platformVertexBaseUrl = env.PLATFORM_VERTEX_BASE_URL?.trim();
   return {
     ...(openRouterBaseUrl
@@ -59,6 +63,7 @@ export function platformBrokerCatalogOpts(env: NodeJS.ProcessEnv): {
     ...(platformOpenAiBaseUrl
       ? { openAi: openAiCatalogInputForBaseUrl(platformOpenAiBaseUrl) }
       : {}),
+    ...(metaBaseUrl ? { meta: metaCatalogInputForBaseUrl(metaBaseUrl) } : {}),
     ...(platformVertexBaseUrl
       ? { vertex: vertexCatalogInputForBaseUrl(platformVertexBaseUrl) }
       : {}),
@@ -507,7 +512,7 @@ function applyPlatformBrokerProviderPatch(config: OpenClawConfig, env: NodeJS.Pr
   const providers = models ? ensureNullishObjectProperty(models, "providers") : null;
   if (!providers) return false;
   let changed = false;
-  for (const id of [OPENROUTER_PLATFORM_PROVIDER_ID, OPENAI_PLATFORM_PROVIDER_ID, VERTEX_PLATFORM_PROVIDER_ID]) {
+  for (const id of [OPENROUTER_PLATFORM_PROVIDER_ID, OPENAI_PLATFORM_PROVIDER_ID, VERTEX_PLATFORM_PROVIDER_ID, META_BROKER_PROVIDER_ID]) {
     if (expected[id]) {
       if (JSON.stringify(providers[id]) === JSON.stringify(expected[id])) continue;
       providers[id] = expected[id];
@@ -628,7 +633,8 @@ function applyPlatformModelAllowlist(config: OpenClawConfig, env: NodeJS.Process
   const refs = platformModelRefs().filter((ref) =>
     (!ref.startsWith(`${OPENROUTER_PLATFORM_PROVIDER_ID}/`) || Boolean(env.OPENROUTER_BASE_URL?.trim())) &&
     (!ref.startsWith(`${OPENAI_PLATFORM_PROVIDER_ID}/`) || Boolean(env.PLATFORM_OPENAI_BASE_URL?.trim())) &&
-    (!ref.startsWith(`${VERTEX_PLATFORM_PROVIDER_ID}/`) || Boolean(env.PLATFORM_VERTEX_BASE_URL?.trim())),
+    (!ref.startsWith(`${VERTEX_PLATFORM_PROVIDER_ID}/`) || Boolean(env.PLATFORM_VERTEX_BASE_URL?.trim())) &&
+    (!ref.startsWith(`${META_BROKER_PROVIDER_ID}/`) || Boolean(env.PLATFORM_META_BASE_URL?.trim())),
   );
   let changed = false;
   for (const ref of refs) {

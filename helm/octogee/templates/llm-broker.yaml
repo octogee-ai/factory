@@ -122,6 +122,12 @@ spec:
                   name: {{ .Values.llmBroker.openaiProviderSecret.name }}
                   key: {{ .Values.llmBroker.openaiProviderSecret.key }}
                   optional: {{ .Values.llmBroker.openaiProviderSecret.optional | default true }}
+            - name: META_MODEL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: octogee-meta
+                  key: api_key
+                  optional: true
           startupProbe:
             httpGet:
               path: /healthz

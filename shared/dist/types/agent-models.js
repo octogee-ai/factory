@@ -15,6 +15,8 @@ export function isValidModelRef(value) {
 export function modelRefForCatalogEntry(entry) {
     if (entry.provider === "openrouter")
         return `${OPENROUTER_PLATFORM_PROVIDER_ID}/${entry.id}`;
+    if (entry.provider === "meta")
+        return `platform-meta/${entry.id}`;
     if (entry.provider === "openai")
         return `${OPENAI_PLATFORM_PROVIDER_ID}/${entry.id}`;
     if (entry.provider === "vertex") {

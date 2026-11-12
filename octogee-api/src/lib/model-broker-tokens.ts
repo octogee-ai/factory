@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import type { ModelBrokerToken, PlatformStateStore } from "@octogee/core/platform-state";
 
-export type ModelBrokerProvider = "anthropic" | "vertex" | "openrouter" | "openai";
+export type ModelBrokerProvider = "anthropic" | "vertex" | "openrouter" | "openai" | "meta";
 export type ModelBrokerTokenPurpose = "model" | "embeddings";
 
 export interface ModelBrokerTokenLimits {

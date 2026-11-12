@@ -156,6 +156,7 @@ export function createModelBrokerProviderKeyResolver(
     if (input.provider === "openai") {
       return platformKeyResolution(deps.platformKeys?.openai);
     }
+    if (input.provider === "meta") return platformKeyResolution(deps.platformKeys?.meta);
     return null;
   };
 }

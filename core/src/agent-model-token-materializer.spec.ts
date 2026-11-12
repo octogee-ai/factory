@@ -22,6 +22,8 @@ import {
   upsertOpenRouterBrokerCatalog,
   upsertVertexBrokerCatalog,
   vertexCatalogInputForBaseUrl,
+  metaCatalogInputForBaseUrl,
+  upsertMetaBrokerCatalog,
   VERTEX_BROKER_PROFILE_ID,
   VERTEX_BROKER_PROVIDER_ID,
   openRouterBrokerModelConfig,
@@ -434,6 +436,25 @@ describe("model-readiness: vertex catalog upsert", () => {
     expect(provider).not.toHaveProperty("apiKey");
     expect(provider.models[0]).toMatchObject({ id: "claude-fable-5-1", contextWindow: 1_000_000, input: ["text", "image"] });
     expect(fs.existsSync(path.join(agentDir, ".platform-vertex-managed"))).toBe(true);
+  });
+
+  it("materializes Ember through the broker without a raw provider key", () => {
+    const baseUrl = "http://llm-broker.octogee-test.svc.cluster.local:3010/v1";
+    expect(upsertMetaBrokerCatalog(agentDir, metaCatalogInputForBaseUrl(baseUrl))).toBe(true);
+    const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
+    expect(models.providers["platform-meta"]).toMatchObject({
+      baseUrl, api: "openai-responses", models: [{ id: "muse-ember-1.0" }],
+    });
+    expect(models.providers["platform-meta"]).not.toHaveProperty("apiKey");
+    const surfaces = { openRouter: false, openAi: false };
+    const agentId = "octogee-alice-coach";
+    expect(platformBrokerProfileTargets(agentId, surfaces).map(target => target.authProfileProvider))
+      .not.toContain("platform-meta");
+    expect(platformBrokerProfileTargets(agentId, { ...surfaces, meta: true })).toContainEqual(
+      expect.objectContaining({
+        authProfileProvider: "platform-meta", ref: expect.objectContaining({ id: `agent-model-token-meta-${agentId}` }),
+      }),
+    );
   });
 
   it("pins the platform-vertex profile to the agent's own vertex broker token only when the pod carries the rail", () => {

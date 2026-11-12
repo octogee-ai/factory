@@ -11,7 +11,7 @@ import { codexAgentDir, purgeUserOauthRuntimeArtifacts, removeStaleCodexAuthJson
 import { SHARED_MAIN_AGENT_ID, sharedAuthStoreUsable } from "./auth-profile-store.js";
 import { applyConfigPatch, fullAgentListReplacePaths } from "./apply-config-patch.js";
 import { AGENTS_DIR, OPENCLAW_DIR, isIsolatedGateway, isSharedGateway, log, readOpenClawConfig, usesLlmBrokerToken, } from "./config.js";
-import { openAiCatalogInputForBaseUrl, vertexCatalogInputForBaseUrl, openRouterCatalogInputForBaseUrl, openRouterBrokerCatalogJson, openRouterBrokerModelConfig, materializeBrokerProfilesForAgents, } from "./agent-model-token-materializer.js";
+import { openAiCatalogInputForBaseUrl, vertexCatalogInputForBaseUrl, metaCatalogInputForBaseUrl, openRouterCatalogInputForBaseUrl, openRouterBrokerCatalogJson, openRouterBrokerModelConfig, materializeBrokerProfilesForAgents, } from "./agent-model-token-materializer.js";
 import { agentIdBelongsToSlug, catalogEntryForModelRef, canonicalUserModelDefinition, parseAgentModelSelections, platformModelRefs, } from "@octogee/shared/types/agent-models";
 import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { configuredPlatformVertexBaseUrl } from "./platform-vertex-env.js";
@@ -1232,7 +1232,7 @@ export async function purgeUserOauthRuntime(slug, safeModelRef, deps) {
         resetSessionStores: false,
         directRuntimeModelRefs: initialConfigPlan.directRuntimeModelRefs,
         allowedModelRefs: platformModelRefs(),
-        allowedProviderIds: ["anthropic", "platform-openrouter", "platform-openai", "platform-vertex"],
+        allowedProviderIds: ["anthropic", "platform-openrouter", "platform-openai", "platform-vertex", ...(process.env.PLATFORM_META_BASE_URL?.trim() ? ["platform-meta"] : [])],
         modelProviders: userBrokerModelProviders(),
     });
     const configResult = await applyUserOauthPurgeConfig(slug, safeModelRef, forceSafeAll, options.applyConfigPatch ?? applyConfigPatch);
@@ -1306,6 +1306,7 @@ async function materializePlatformBrokerSurfaces(slug) {
         agentsDir: AGENTS_DIR,
         openRouter: baseUrl ? openRouterCatalogInputForBaseUrl(baseUrl) : undefined,
         openAi: openAiBaseUrl ? openAiCatalogInputForBaseUrl(openAiBaseUrl) : undefined,
+        meta: process.env.PLATFORM_META_BASE_URL ? metaCatalogInputForBaseUrl(process.env.PLATFORM_META_BASE_URL) : undefined,
         vertex: vertexBaseUrl ? vertexCatalogInputForBaseUrl(vertexBaseUrl) : undefined,
         logFn: log,
     });
@@ -1326,7 +1327,7 @@ export function platformModelAllowlistPatch(current, user) {
     }
     return { agents: { defaults: {
                 models,
-                modelPolicy: { allow: user ? [] : ["anthropic/*", "platform-openrouter/*", "platform-openai/*", "platform-vertex/*"] },
+                modelPolicy: { allow: user ? [] : ["anthropic/*", "platform-openrouter/*", "platform-openai/*", "platform-vertex/*", ...(process.env.PLATFORM_META_BASE_URL?.trim() ? ["platform-meta/*"] : [])] },
             } } };
 }
 export async function applyPlatformModelAllowlist(applyConfigPatchFn = applyConfigPatch, user = isIsolatedGateway()) {
@@ -1369,6 +1370,15 @@ function userBrokerModelProviders() {
         const input = vertexCatalogInputForBaseUrl(vertexBaseUrl);
         providers["platform-vertex"] = {
             api: "anthropic-messages",
+            baseUrl: input.baseUrl,
+            models: input.models.map(openRouterBrokerModelConfig),
+        };
+    }
+    const metaBaseUrl = process.env.PLATFORM_META_BASE_URL?.trim();
+    if (metaBaseUrl) {
+        const input = metaCatalogInputForBaseUrl(metaBaseUrl);
+        providers["platform-meta"] = {
+            api: "openai-responses",
             baseUrl: input.baseUrl,
             models: input.models.map(openRouterBrokerModelConfig),
         };

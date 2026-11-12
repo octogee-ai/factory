@@ -85,7 +85,7 @@ export interface ControlSessionsRepository {
     put(session: ControlSession): Promise<void>;
     delete(sessionHash: string): Promise<void>;
 }
-export type ModelBrokerProvider = "anthropic" | "vertex" | "openrouter" | "openai";
+export type ModelBrokerProvider = "anthropic" | "vertex" | "openrouter" | "openai" | "meta";
 export type ModelBrokerTokenPurpose = "model" | "embeddings";
 export interface ModelBrokerTokenLimits {
     readonly spendWindowUsd: number | null;

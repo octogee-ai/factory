@@ -1,8 +1,8 @@
-export declare const MODEL_CATALOG_PROVIDERS: readonly ["anthropic", "openrouter", "openai", "vertex"];
+export declare const MODEL_CATALOG_PROVIDERS: readonly ["anthropic", "openrouter", "openai", "vertex", "meta"];
 export type ModelCatalogProvider = (typeof MODEL_CATALOG_PROVIDERS)[number];
 export declare const MODEL_REASONING_EFFORTS: readonly ["high", "xhigh"];
 export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number];
-export type ModelCatalogSource = "openclaw-release" | "openrouter" | "openai" | "vertex";
+export type ModelCatalogSource = "openclaw-release" | "openrouter" | "openai" | "vertex" | "meta";
 export declare const MODEL_INPUT_MODALITIES: readonly ["text", "image"];
 export type ModelInputModality = (typeof MODEL_INPUT_MODALITIES)[number];
 export interface ModelTokenPricing {

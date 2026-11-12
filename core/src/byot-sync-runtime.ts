@@ -54,6 +54,7 @@ import {
 import {
   openAiCatalogInputForBaseUrl,
   vertexCatalogInputForBaseUrl,
+  metaCatalogInputForBaseUrl,
   openRouterCatalogInputForBaseUrl,
   openRouterBrokerCatalogJson,
   openRouterBrokerModelConfig,
@@ -1687,7 +1688,7 @@ export async function purgeUserOauthRuntime(
     resetSessionStores: false,
     directRuntimeModelRefs: initialConfigPlan.directRuntimeModelRefs,
     allowedModelRefs: platformModelRefs(),
-    allowedProviderIds: ["anthropic", "platform-openrouter", "platform-openai", "platform-vertex"],
+    allowedProviderIds: ["anthropic", "platform-openrouter", "platform-openai", "platform-vertex", ...(process.env.PLATFORM_META_BASE_URL?.trim() ? ["platform-meta"] : [])],
     modelProviders: userBrokerModelProviders(),
   });
   const configResult = await applyUserOauthPurgeConfig(
@@ -1781,6 +1782,7 @@ async function materializePlatformBrokerSurfaces(slug: string): Promise<boolean>
     agentsDir: AGENTS_DIR,
     openRouter: baseUrl ? openRouterCatalogInputForBaseUrl(baseUrl) : undefined,
     openAi: openAiBaseUrl ? openAiCatalogInputForBaseUrl(openAiBaseUrl) : undefined,
+    meta: process.env.PLATFORM_META_BASE_URL ? metaCatalogInputForBaseUrl(process.env.PLATFORM_META_BASE_URL) : undefined,
     vertex: vertexBaseUrl ? vertexCatalogInputForBaseUrl(vertexBaseUrl) : undefined,
     logFn: log,
   });
@@ -1815,7 +1817,7 @@ export function platformModelAllowlistPatch(current: unknown, user: boolean): Pl
   }
   return { agents: { defaults: {
     models,
-    modelPolicy: { allow: user ? [] : ["anthropic/*", "platform-openrouter/*", "platform-openai/*", "platform-vertex/*"] },
+    modelPolicy: { allow: user ? [] : ["anthropic/*", "platform-openrouter/*", "platform-openai/*", "platform-vertex/*", ...(process.env.PLATFORM_META_BASE_URL?.trim() ? ["platform-meta/*"] : [])] },
   } } };
 }
 
@@ -1871,6 +1873,15 @@ function userBrokerModelProviders(): Record<string, unknown> {
     const input = vertexCatalogInputForBaseUrl(vertexBaseUrl);
     providers["platform-vertex"] = {
       api: "anthropic-messages",
+      baseUrl: input.baseUrl,
+      models: input.models.map(openRouterBrokerModelConfig),
+    };
+  }
+  const metaBaseUrl = process.env.PLATFORM_META_BASE_URL?.trim();
+  if (metaBaseUrl) {
+    const input = metaCatalogInputForBaseUrl(metaBaseUrl);
+    providers["platform-meta"] = {
+      api: "openai-responses",
       baseUrl: input.baseUrl,
       models: input.models.map(openRouterBrokerModelConfig),
     };

@@ -7,6 +7,8 @@ export declare const OPENAI_BROKER_PROVIDER_ID = "platform-openai";
 export declare const OPENAI_BROKER_PROFILE_ID = "platform-openai:default";
 export declare const VERTEX_BROKER_PROVIDER_ID = "platform-vertex";
 export declare const VERTEX_BROKER_PROFILE_ID = "platform-vertex:default";
+export declare const META_BROKER_PROVIDER_ID = "platform-meta";
+export declare const META_BROKER_PROFILE_ID = "platform-meta:default";
 export interface AnthropicBrokerProfileEntry {
     type: "api_key";
     provider: "anthropic";
@@ -25,7 +27,7 @@ export interface OpenRouterBrokerProfileEntry {
         id: string;
     };
 }
-export type AgentModelBrokerProvider = "anthropic" | "openrouter" | "openai" | "vertex";
+export type AgentModelBrokerProvider = "anthropic" | "openrouter" | "openai" | "vertex" | "meta";
 export interface OpenRouterBrokerModelInput {
     baseUrl: string;
     model: string;
@@ -75,6 +77,16 @@ export interface OpenAiBrokerProfileEntry {
     };
 }
 export declare function openAiBrokerProfileEntry(agentId: string): OpenAiBrokerProfileEntry;
+export interface MetaBrokerProfileEntry {
+    type: "api_key";
+    provider: typeof META_BROKER_PROVIDER_ID;
+    keyRef: {
+        source: "exec";
+        provider: string;
+        id: string;
+    };
+}
+export declare function metaBrokerProfileEntry(agentId: string): MetaBrokerProfileEntry;
 export interface VertexBrokerProfileEntry {
     type: "api_key";
     provider: typeof VERTEX_BROKER_PROVIDER_ID;
@@ -92,6 +104,7 @@ export interface OpenRouterBrokerCatalogInput {
 }
 export declare function openRouterCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput;
 export declare function openAiCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput;
+export declare function metaCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput;
 export declare function vertexCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput;
 export declare function openRouterBrokerCatalogJson(_agentId: string, input: OpenRouterBrokerCatalogInput): OpenRouterBrokerModelsJson;
 /** Which broker provider surfaces this pod carries. A profile whose provider is
@@ -101,12 +114,14 @@ export interface PlatformBrokerProfileSurfaces {
     openRouter: boolean;
     openAi: boolean;
     vertex?: boolean;
+    meta?: boolean;
 }
 export declare function platformBrokerProfileTargets(agentId: string, surfaces: PlatformBrokerProfileSurfaces): AuthProfileApiKeyTarget[];
 export declare function missingPlatformBrokerProfileTargets(agentDir: string, agentId: string, surfaces: PlatformBrokerProfileSurfaces): Promise<AuthProfileApiKeyTarget[]>;
 export declare function upsertOpenRouterBrokerModel(agentDir: string, input: OpenRouterBrokerModelInput): boolean;
 export declare function upsertOpenRouterBrokerCatalog(agentDir: string, input: OpenRouterBrokerCatalogInput): boolean;
 export declare function upsertOpenAiBrokerCatalog(agentDir: string, input: OpenRouterBrokerCatalogInput): boolean;
+export declare function upsertMetaBrokerCatalog(agentDir: string, input: OpenRouterBrokerCatalogInput): boolean;
 export declare function upsertVertexBrokerCatalog(agentDir: string, input: OpenRouterBrokerCatalogInput): boolean;
 export declare function removeOpenRouterBrokerModel(agentDir: string): boolean;
 /** Agents whose catalogs landed but whose profiles openclaw has not accepted
@@ -123,6 +138,7 @@ export interface BrokerProfileSweepOptions {
     openRouter?: OpenRouterBrokerCatalogInput;
     openAi?: OpenRouterBrokerCatalogInput;
     vertex?: OpenRouterBrokerCatalogInput;
+    meta?: OpenRouterBrokerCatalogInput;
     logFn?: (m: string) => void;
     secretsApply?: ApplyOpenClawSecretsPlanOptions;
 }

@@ -1039,6 +1039,18 @@ CREATE TABLE runtime_secret_versions (
 );
 `;
 
+const META_BROKER_PROVIDER = String.raw`
+ALTER TABLE model_broker_tokens
+  DROP CONSTRAINT model_broker_tokens_provider_check,
+  ADD CONSTRAINT model_broker_tokens_provider_check
+  CHECK (provider IN ('anthropic', 'vertex', 'openrouter', 'openai', 'meta'));
+
+ALTER TABLE model_broker_gateway_tokens
+  DROP CONSTRAINT model_broker_gateway_tokens_provider_check,
+  ADD CONSTRAINT model_broker_gateway_tokens_provider_check
+  CHECK (provider IN ('anthropic', 'vertex', 'openrouter', 'openai', 'meta'));
+`;
+
 export const PLATFORM_STATE_MIGRATIONS: readonly PlatformStateMigration[] = [
   { version: 1, name: "core-schema", sql: CORE_SCHEMA },
   { version: 2, name: "change-feed", sql: CHANGE_FEED },
@@ -1050,4 +1062,5 @@ export const PLATFORM_STATE_MIGRATIONS: readonly PlatformStateMigration[] = [
   { version: 8, name: "canonical-memberships", sql: CANONICAL_MEMBERSHIPS },
   { version: 9, name: "edge-project-and-ticket-state", sql: EDGE_PROJECT_AND_TICKET_STATE },
   { version: 10, name: "runtime-secret-store", sql: RUNTIME_SECRET_STORE },
+  { version: 11, name: "meta-broker-provider", sql: META_BROKER_PROVIDER },
 ];

@@ -1,12 +1,12 @@
 import { OPENROUTER_MODEL_CATALOG } from "./openrouter-model-catalog.generated.js";
 
-export const MODEL_CATALOG_PROVIDERS = ["anthropic", "openrouter", "openai", "vertex"] as const;
+export const MODEL_CATALOG_PROVIDERS = ["anthropic", "openrouter", "openai", "vertex", "meta"] as const;
 export type ModelCatalogProvider = (typeof MODEL_CATALOG_PROVIDERS)[number];
 
 export const MODEL_REASONING_EFFORTS = ["high", "xhigh"] as const;
 export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number];
 
-export type ModelCatalogSource = "openclaw-release" | "openrouter" | "openai" | "vertex";
+export type ModelCatalogSource = "openclaw-release" | "openrouter" | "openai" | "vertex" | "meta";
 export const MODEL_INPUT_MODALITIES = ["text", "image"] as const;
 export type ModelInputModality = (typeof MODEL_INPUT_MODALITIES)[number];
 
@@ -160,6 +160,13 @@ const DIRECT_MODEL_CATALOG: readonly ModelCatalogEntry[] = [
 
 export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
   ...DIRECT_MODEL_CATALOG,
+  {
+    provider: "meta", id: "muse-ember-1.0", label: "Muse Ember (max)", source: "meta",
+    contextTokens: 1_048_576, maxOutputTokens: 524_288, input: ["text", "image"],
+    reasoning: true, reasoningEfforts: [],
+    pricing: { inputPerMTok: 0.10, outputPerMTok: 0.50, cacheReadPerMTok: 0.004, cacheWritePerMTok: 0 },
+    pricingOverrides: [{ aboveInputTokens: 200_000, inputPerMTok: 0.30, outputPerMTok: 1.50, cacheReadPerMTok: 0.012 }],
+  },
   ...OPENROUTER_MODEL_CATALOG
     .filter((entry) => entry.id !== "google/gemini-3.1-flash-lite-preview")
     .map((entry): ModelCatalogEntry => entry.id === "z-ai/glm-5.2"

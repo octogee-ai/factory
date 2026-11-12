@@ -23,6 +23,7 @@ import {
   openAiBrokerProfileEntry,
   openRouterBrokerProfileEntry,
   vertexBrokerProfileEntry,
+  metaBrokerProfileEntry,
 } from "./agent-model-token-materializer.js";
 import { configuredPlatformVertexBaseUrl } from "./platform-vertex-env.js";
 
@@ -152,6 +153,7 @@ const CANONICAL_AGENT_AUTH_PROFILE_IDS = new Set([
   "platform-openrouter:default",
   "platform-openai:default",
   "platform-vertex:default",
+  "platform-meta:default",
 ]);
 
 const SESSION_RUNTIME_STATE_FIELDS = [
@@ -213,6 +215,9 @@ async function scrubOauthProfiles(agentDir: string, agentId: string): Promise<bo
     "anthropic:default": agentModelTokenProfileEntry(agentId),
     "platform-openrouter:default": openRouterBrokerProfileEntry(agentId),
     "platform-openai:default": openAiBrokerProfileEntry(agentId),
+    ...(process.env.PLATFORM_META_BASE_URL?.trim()
+      ? { "platform-meta:default": metaBrokerProfileEntry(agentId) }
+      : {}),
     ...(configuredPlatformVertexBaseUrl()
       ? { "platform-vertex:default": vertexBrokerProfileEntry(agentId) }
       : {}),

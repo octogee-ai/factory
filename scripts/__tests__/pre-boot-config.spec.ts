@@ -376,6 +376,12 @@ describe("applyPreBootPatches — platform model catalog", () => {
     expect(config.agents.defaults.models).not.toHaveProperty("platform-vertex/claude-sonnet-5");
   });
 
+  it.each([undefined, "http://llm-broker/v1"])("exposes Ember only on gateways with a Meta route (%s)", (baseUrl) => {
+    const config = { agents: { defaults: { models: {} } } };
+    applyPreBootPatches(config, { GATEWAY_CLASS: "shared", PLATFORM_META_BASE_URL: baseUrl });
+    expect(Object.hasOwn(config.agents.defaults.models, "platform-meta/muse-ember-1.0")).toBe(Boolean(baseUrl));
+  });
+
   it("declares the platform-vertex refs only when the pod carries the Vertex rail", () => {
     const config: any = { agents: { defaults: { models: {} } } };
 

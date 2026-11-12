@@ -305,6 +305,10 @@ spec:
             # the broker; BYOK OpenAI keeps its provider-standard endpoint.
             - name: PLATFORM_OPENAI_BASE_URL
               value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
+            {{- if eq (toString .Values.env.platformMetaEnabled) "true" }}
+            - name: PLATFORM_META_BASE_URL
+              value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
+            {{- end }}
             {{- if eq (toString .Values.env.platformVertexEnabled) "true" }}
             - name: PLATFORM_VERTEX_BASE_URL
               value: {{ trimSuffix "/" $llmBrokerUrl | quote }}
@@ -564,6 +568,10 @@ spec:
               value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
             - name: PLATFORM_OPENAI_BASE_URL
               value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
+            {{- if eq (toString .Values.env.platformMetaEnabled) "true" }}
+            - name: PLATFORM_META_BASE_URL
+              value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
+            {{- end }}
             {{- if eq (toString .Values.env.platformVertexEnabled) "true" }}
             - name: PLATFORM_VERTEX_BASE_URL
               value: {{ trimSuffix "/" $llmBrokerUrl | quote }}

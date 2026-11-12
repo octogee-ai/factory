@@ -242,6 +242,7 @@ const CANONICAL_AGENT_AUTH_PROFILE_IDS = new Set([
   "platform-openrouter:default",
   "platform-openai:default",
   "platform-vertex:default",
+  "platform-meta:default",
 ]);
 const SESSION_RUNTIME_STATE_FIELDS = [
   "providerOverride",
@@ -288,8 +289,10 @@ const USER_MODEL_PROVIDER_IDS = new Set([
   "platform-openrouter",
   "platform-openai",
   "platform-vertex",
+  "platform-meta",
 ]);
 const USER_DISK_MODEL_PROVIDERS = [
+  { id: "platform-meta", env: "PLATFORM_META_BASE_URL", catalog: "meta", api: "openai-responses" },
   { id: "platform-openrouter", env: "OPENROUTER_BASE_URL", catalog: "openrouter", api: "openai-completions" },
   { id: "platform-openai", env: "PLATFORM_OPENAI_BASE_URL", catalog: "openai", api: "openai-completions" },
   { id: "platform-vertex", env: "PLATFORM_VERTEX_BASE_URL", catalog: "vertex", api: "anthropic-messages" },
@@ -994,7 +997,10 @@ function scrubUserOauthConfig(config, env) {
   config.agents ??= {};
   config.agents.defaults ??= {};
   config.agents.defaults.modelPolicy ??= {};
-  config.agents.defaults.modelPolicy.allow = ["anthropic/*", "platform-openrouter/*", "platform-openai/*", "platform-vertex/*"];
+  config.agents.defaults.modelPolicy.allow = [
+    "anthropic/*", "platform-openrouter/*", "platform-openai/*", "platform-vertex/*",
+    ...(env.PLATFORM_META_BASE_URL?.trim() ? ["platform-meta/*"] : []),
+  ];
   const allAgentIds = configuredUserAgentIds(config);
   const providers = objectValue(config.models?.providers);
   const expectedProviders = userModelProviders(env);
@@ -1036,6 +1042,9 @@ function canonicalAgentAuthProfiles(agentId, env) {
       `agent-model-token-openrouter-${agentId}`,
     ),
     "platform-openai:default": ref("platform-openai", `agent-model-token-openai-${agentId}`),
+    ...(env.PLATFORM_META_BASE_URL?.trim()
+      ? { "platform-meta:default": ref("platform-meta", `agent-model-token-meta-${agentId}`) }
+      : {}),
     ...(env.PLATFORM_VERTEX_BASE_URL?.trim()
       ? { "platform-vertex:default": ref("platform-vertex", `agent-model-token-vertex-${agentId}`) }
       : {}),

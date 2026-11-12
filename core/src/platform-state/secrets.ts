@@ -93,7 +93,7 @@ export interface ControlSessionsRepository {
   delete(sessionHash: string): Promise<void>;
 }
 
-export type ModelBrokerProvider = "anthropic" | "vertex" | "openrouter" | "openai";
+export type ModelBrokerProvider = "anthropic" | "vertex" | "openrouter" | "openai" | "meta";
 
 export type ModelBrokerTokenPurpose = "model" | "embeddings";
 

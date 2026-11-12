@@ -565,6 +565,15 @@ else
   warn "OPENAI_API_KEY not found in .env or Secret Manager ($FIREBASE_PROJECT) — memory search embeddings stay disabled and the llm-broker serves no platform-openai traffic until the key is seeded"
 fi
 
+info "META_MODEL_API_KEY (llm-broker Meta Responses provider)"
+META_MODEL_API_KEY="$(resolve_environment_secret_value \
+  "${META_MODEL_API_KEY:-}" META_MODEL_API_KEY octogee-meta api_key configured_secret_value)" \
+  || fail "Could not resolve META_MODEL_API_KEY from its environment source of truth"
+if [[ -n "$META_MODEL_API_KEY" ]]; then
+  [[ "$META_MODEL_API_KEY" == LLM_* ]] || fail "META_MODEL_API_KEY is not a Meta Model API key"
+  ksecret octogee-meta --from-literal=api_key="$META_MODEL_API_KEY"
+fi
+
 # ── 7. Brave API key ──────────────────────────────────────────────────────
 info "octogee-brave"
 BRAVE_API_KEY="$(resolve_environment_secret_value \

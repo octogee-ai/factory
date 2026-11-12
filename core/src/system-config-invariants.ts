@@ -26,11 +26,12 @@ export type GatewayConfigClass = "shared" | "builder";
 
 export type GatewayControlIdentityMode = "shared-operator" | "per-user";
 
-type BrokerProviderEnvironment = Partial<Pick<NodeJS.ProcessEnv, "OPENROUTER_BASE_URL" | "PLATFORM_OPENAI_BASE_URL" | "PLATFORM_VERTEX_BASE_URL">>;
+type BrokerProviderEnvironment = Partial<Pick<NodeJS.ProcessEnv, "OPENROUTER_BASE_URL" | "PLATFORM_OPENAI_BASE_URL" | "PLATFORM_VERTEX_BASE_URL" | "PLATFORM_META_BASE_URL">>;
 const BROKER_PROVIDER_DECLARATIONS = [
   ["platform-openrouter", "OPENROUTER_BASE_URL"],
   ["platform-openai", "PLATFORM_OPENAI_BASE_URL"],
   ["platform-vertex", "PLATFORM_VERTEX_BASE_URL"],
+  ["platform-meta", "PLATFORM_META_BASE_URL"],
 ] as const;
 
 /** Declare provider ownership; API, model rows and credentials remain agent-local. */

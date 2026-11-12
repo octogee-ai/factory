@@ -34,6 +34,7 @@ export type ModelBrokerUsageProvider =
   | "vertex"
   | "openrouter"
   | "openai"
+  | "meta"
   | "brave"
   | "tavily";
 export type AnthropicCacheWriteTtl = "5m" | "1h";
@@ -344,6 +345,11 @@ export function estimateModelBrokerCost(
       source: "estimated",
     };
   }
+  if (provider === "meta") {
+    const cost = estimateCatalogCost(provider, model, usage, cacheWriteTtl);
+    if (!cost) throw new Error(`No Meta pricing for ${model}`);
+    return cost;
+  }
   const prices = provider === "openai" ? openAiModelPricing(model) : UNKNOWN_OPENROUTER_FALLBACK_PRICING;
   const catalogCost = estimateCatalogCost(provider, model, usage, cacheWriteTtl);
   if (catalogCost) return catalogCost;
@@ -362,13 +368,13 @@ export function estimateModelBrokerCost(
   };
 }
 
-function canonicalCatalogModel(provider: "openai" | "openrouter", model: string): string {
+function canonicalCatalogModel(provider: "openai" | "openrouter" | "meta", model: string): string {
   if (provider === "openai") return model.replace(OPENAI_SNAPSHOT_SUFFIX, "");
   return model.startsWith("z-ai/glm-5.2-") ? "z-ai/glm-5.2" : model;
 }
 
 function estimateCatalogCost(
-  provider: "openai" | "openrouter",
+  provider: "openai" | "openrouter" | "meta",
   model: string,
   usage: AnthropicTokenUsage,
   cacheWriteTtl: AnthropicCacheWriteTtl,

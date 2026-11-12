@@ -85,6 +85,15 @@ describe("Gateway-owned broker profile materialization", () => {
     expect(h.store.profiles["platform-vertex:default"]).toEqual({ type: "api_key", provider: "platform-vertex", keyRef: { source: "exec", provider: "gcp-secret-manager", id: `agent-model-token-vertex-${AGENT}` } });
   });
 
+  it("installs a scoped Meta profile for an agent rostered after boot", async () => {
+    const h = setup({ PLATFORM_META_BASE_URL: "http://broker/v1" });
+    expect(await h.request()).toEqual([true, { ok: true }]);
+    expect(h.store.profiles["platform-meta:default"]).toEqual({
+      type: "api_key", provider: "platform-meta",
+      keyRef: { source: "exec", provider: "gcp-secret-manager", id: `agent-model-token-meta-${AGENT}` },
+    });
+  });
+
   it("installs only configured broker provider surfaces", async () => {
     const h = setup({});
     await h.request();

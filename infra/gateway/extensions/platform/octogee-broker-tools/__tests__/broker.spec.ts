@@ -56,6 +56,22 @@ describe("credential-scoped catalog", () => {
     const result = await createBrokerCatalog(async () => Response.json(payload)).runtime(ctx) as any;
     expect(result.providers[id].api).toBe(api); expect(result.providers[id].models[0].api).toBe(api);
   });
+  it("discovers Ember through the scoped Meta Responses catalog", async () => {
+    const ctx = context();
+    const configured = ctx.config.models.providers["platform-openai"];
+    ctx.config.models.providers = { "platform-meta": { ...configured, api: "openai-responses" } };
+    ctx.env = { PLATFORM_META_BASE_URL: configured.baseUrl };
+    const payload = catalog();
+    payload.provider = "meta";
+    payload.routes = [{ method: "POST", path: "/v1/responses" }];
+    payload.models[0] = { ...payload.models[0], provider: "meta", id: "muse-ember-1.0", label: "Muse Ember (max)" };
+    const adapter = createBrokerCatalog(async () => Response.json(payload));
+    const result = await adapter.runtime(ctx) as any;
+    expect(result.providers["platform-meta"]).toMatchObject({
+      api: "openai-responses", models: [{ id: "muse-ember-1.0", api: "openai-responses" }],
+    });
+    expect((await adapter.picker(ctx))[0]).toMatchObject({ provider: "platform-meta", model: "muse-ember-1.0" });
+  });
   it("preserves the configured OpenAI chat completions transport", async () => {
     const result = await createBrokerCatalog(async () => Response.json(catalog())).runtime(context("a", "openai-completions")) as any;
     expect(result.providers["platform-openai"].api).toBe("openai-completions");

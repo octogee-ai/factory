@@ -38,6 +38,7 @@ export function isValidModelRef(value: unknown): value is string {
 
 export function modelRefForCatalogEntry(entry: ModelCatalogEntry): string {
   if (entry.provider === "openrouter") return `${OPENROUTER_PLATFORM_PROVIDER_ID}/${entry.id}`;
+  if (entry.provider === "meta") return `platform-meta/${entry.id}`;
   if (entry.provider === "openai") return `${OPENAI_PLATFORM_PROVIDER_ID}/${entry.id}`;
   if (entry.provider === "vertex") {
     return `${VERTEX_PLATFORM_PROVIDER_ID}/${entry.id.replace(/^vertex\//, "")}`;

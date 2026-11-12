@@ -120,7 +120,7 @@ function parseByokApiKeyId(id) {
 // exec protocol passes no requesting-agent context (see the header note), so the
 // id IS the per-agent scope — and the slug is allowlisted exactly like byok.
 const AGENT_MODEL_TOKEN_ID_RE =
-  /^agent-model-token-(?:(?<provider>openrouter|openai|vertex)-)?(?<agentId>octogee-[a-z0-9-]{1,64}-coach)$/;
+  /^agent-model-token-(?:(?<provider>openrouter|openai|vertex|meta)-)?(?<agentId>octogee-[a-z0-9-]{1,64}-coach)$/;
 const AGENT_EMBEDDING_TOKEN_ID_RE =
   /^agent-embedding-token-openai-(?<agentId>octogee-[a-z0-9-]{1,64}-coach)$/;
 const BROKER_TOKEN_EXPIRY_DIRECTORY = "agent-model-token-expiry";

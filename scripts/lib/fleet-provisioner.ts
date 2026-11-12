@@ -19,6 +19,7 @@ import {
   materializeBrokerProfilesForAgents,
   openAiCatalogInputForBaseUrl,
   vertexCatalogInputForBaseUrl,
+  metaCatalogInputForBaseUrl,
   openRouterCatalogInputForBaseUrl,
   type BrokerProfileSweepOptions,
 } from "./agent-model-token-materializer.js";
@@ -715,6 +716,7 @@ function brokerProfileSweepOptions(
 ): BrokerProfileSweepOptions {
   const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
   const openAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
+  const metaBaseUrl = process.env.PLATFORM_META_BASE_URL?.trim();
   const vertexBaseUrl = process.env.PLATFORM_VERTEX_BASE_URL?.trim();
   return {
     logFn: log,
@@ -724,6 +726,7 @@ function brokerProfileSweepOptions(
       ? { openRouter: openRouterCatalogInputForBaseUrl(openRouterBaseUrl) }
       : {}),
     ...(openAiBaseUrl ? { openAi: openAiCatalogInputForBaseUrl(openAiBaseUrl) } : {}),
+    ...(metaBaseUrl ? { meta: metaCatalogInputForBaseUrl(metaBaseUrl) } : {}),
     ...(vertexBaseUrl ? { vertex: vertexCatalogInputForBaseUrl(vertexBaseUrl) } : {}),
   };
 }

@@ -5,6 +5,7 @@ import { brokerOrigin, BrokerMetadataUnavailable, readBrokerJson, record } from 
 
 export const BROKER_PROVIDER_ID = "octogee-broker";
 const PROVIDERS = [
+  { id: "platform-meta", provider: "meta", api: "openai-responses", route: "/v1/responses", env: "PLATFORM_META_BASE_URL" },
   { id: "anthropic", provider: "anthropic", api: "anthropic-messages", route: "/v1/messages", env: "ANTHROPIC_BASE_URL" },
   { id: "platform-openai", provider: "openai", api: "openai-responses", route: "/v1/responses", env: "PLATFORM_OPENAI_BASE_URL" },
   { id: "platform-openrouter", provider: "openrouter", api: "openai-completions", route: "/v1/chat/completions", env: "OPENROUTER_BASE_URL" },

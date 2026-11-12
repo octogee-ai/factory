@@ -148,6 +148,32 @@ describe.skipIf(!dsn)("migratePlatformState", () => {
     expect(rows).toEqual(PLATFORM_STATE_MIGRATIONS.map(({ version, name }) => ({ version, name })));
   });
 
+  it("adds Meta token and pointer support without changing existing tokens", async () => {
+    const { pool, schema } = isolated();
+    const table = pg.escapeIdentifier(schema);
+    await migratePlatformState(pool, { schema, through: 10 });
+    const insertToken = (provider: string, hash: string) => pool.query(
+      `INSERT INTO ${table}.model_broker_tokens
+        (token_hash, gateway_id, provider, purpose, secret_name, created_at, rail_policy)
+        VALUES ($1, 'g1', $2, 'model', 'fixture', 1, '{}')`,
+      [hash, provider],
+    );
+    await insertToken("openai", "a".repeat(64));
+    await expect(insertToken("meta", "b".repeat(64))).rejects.toMatchObject({ code: "23514" });
+
+    await migratePlatformState(pool, { schema });
+    await insertToken("meta", "b".repeat(64));
+    await pool.query(
+      `INSERT INTO ${table}.model_broker_gateway_tokens
+        (pointer_key, gateway_id, provider, secret_name, token_hash, updated_at)
+        VALUES ('g1:meta', 'g1', 'meta', 'fixture', $1, 2)`,
+      ["b".repeat(64)],
+    );
+    const { rows } = await pool.query(`SELECT provider FROM ${table}.model_broker_tokens ORDER BY token_hash`);
+    expect(rows).toEqual([{ provider: "openai" }, { provider: "meta" }]);
+    await expect(insertToken("unknown", "c".repeat(64))).rejects.toMatchObject({ code: "23514" });
+  });
+
   it("creates every platform table, the change log outbox, and its retention watermark", async () => {
     const { pool, schema } = isolated();
 

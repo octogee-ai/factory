@@ -194,6 +194,7 @@ const ALLOWED_ENDPOINTS_BY_PROVIDER: Record<ModelBrokerProvider, ReadonlySet<str
   anthropic: ALLOWED_ANTHROPIC_ENDPOINTS,
   vertex: ALLOWED_VERTEX_ENDPOINTS,
   openai: ALLOWED_OPENAI_MODEL_ENDPOINTS,
+  meta: new Set(["POST /v1/responses"]),
   openrouter: ALLOWED_OPENROUTER_ENDPOINTS,
 };
 
@@ -299,7 +300,8 @@ function shouldMeter(
   return provider === "anthropic" || provider === "vertex"
     ? url.pathname === "/v1/messages"
     : url.pathname === "/v1/chat/completions" ||
-        (provider === "openai" && ["/v1/embeddings", "/v1/responses"].includes(url.pathname));
+        (provider === "openai" && ["/v1/embeddings", "/v1/responses"].includes(url.pathname)) ||
+        (provider === "meta" && url.pathname === "/v1/responses");
 }
 
 function readRequestMetadata(body: unknown): {
@@ -525,7 +527,7 @@ function extractOpenAiResponsesUsage(payload: unknown): AnthropicPayloadExtracti
 }
 
 function usageExtractor(provider: ModelBrokerProvider, pathname: string): PayloadUsageExtractor {
-  if (provider === "openai" && pathname === "/v1/responses") return extractOpenAiResponsesUsage;
+  if ((provider === "openai" || provider === "meta") && pathname === "/v1/responses") return extractOpenAiResponsesUsage;
   return provider === "anthropic" || provider === "vertex"
     ? extractAnthropicPayloadUsage
     : extractOpenRouterPayloadUsage;
@@ -535,6 +537,7 @@ const PROVIDER_LABELS: Record<ModelBrokerProvider, string> = {
   anthropic: "Anthropic",
   vertex: "Vertex AI",
   openai: "OpenAI",
+  meta: "Meta",
   openrouter: "OpenRouter",
 };
 
@@ -545,6 +548,7 @@ function providerLabel(provider: ModelBrokerProvider): string {
 function isUnknownPricingModel(provider: ModelBrokerProvider, pricingModel: string): boolean {
   if (provider === "anthropic" || provider === "vertex") return isUnknownAnthropicPricingModel(pricingModel);
   if (provider === "openai") return isUnknownOpenAiPricingModel(pricingModel);
+  if (provider === "meta") return pricingModel !== "meta:muse-ember-1.0";
   return isUnknownOpenRouterPricingModel(pricingModel);
 }
 
@@ -1165,6 +1169,16 @@ function vertexUpstreamCall(args: {
   };
 }
 
+function metaResponsesBody(body: unknown): Buffer {
+  const input = JSON.parse(String(body));
+  return Buffer.from(JSON.stringify({
+    ...input,
+    store: false,
+    reasoning: { effort: "max" },
+    include: ["reasoning.encrypted_content"],
+  }));
+}
+
 function upstreamCallFor(args: {
   req: Request;
   url: URL;
@@ -1186,7 +1200,7 @@ function upstreamCallFor(args: {
   return {
     url: `${args.upstreamBaseUrl}${args.url.pathname}${args.url.search}`,
     headers: upstreamHeaders(args.req, args.providerKey.apiKey, args.record.provider),
-    body: args.body,
+    body: args.record.provider === "meta" ? metaResponsesBody(args.body) : args.body,
     requestModel: readRequestMetadata(args.body).model,
   };
 }
@@ -1519,6 +1533,17 @@ async function resolveBrokerRequest(
     return null;
   }
   const requestModel = readRequestMetadata(req.body).model;
+  if (record.provider === "meta") {
+    if (requestModel !== "muse-ember-1.0") {
+      res.status(400).json({ error: "unsupported Meta model" });
+      return null;
+    }
+    const body = JSON.parse(String(req.body));
+    if (body.previous_response_id != null || body.conversation != null || body.background === true) {
+      res.status(400).json({ error: "Meta broker requires stateless Responses requests" });
+      return null;
+    }
+  }
   if (record.purpose === "embeddings" && requestModel !== PLATFORM_OPENAI_EMBEDDING_MODEL) {
     res.status(400).json({ error: "unsupported embedding model" });
     return null;
@@ -1665,6 +1690,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
       ),
     ),
     vertex: "",
+    meta: "https://api.meta.ai",
   };
   const houseModels: Record<ModelBrokerProvider, string> = {
     anthropic: configuredString(
@@ -1684,6 +1710,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
       deps.providerHouseModels?.vertex,
       DEFAULT_VERTEX_HOUSE_MODEL,
     ),
+    meta: "muse-ember-1.0",
   };
   const now = deps.now ?? Date.now;
   const upstreamHeaderTimeoutMs =
@@ -1700,6 +1727,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
         openrouter: providerConfigured(deps, "openrouter"),
         openai: providerConfigured(deps, "openai"),
         vertex: providerConfigured(deps, "vertex"),
+        meta: providerConfigured(deps, "meta"),
       },
     });
   });

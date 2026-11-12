@@ -15,7 +15,7 @@ export interface BrokerTokenExpiry {
 }
 
 const BROKER_TOKEN_REF_ID_RE =
-  /^(?:agent-model-token-(?:(?:openrouter|openai|vertex)-)?|agent-embedding-token-openai-)(?<agentId>octogee-[a-z0-9-]{1,64}-coach)$/;
+  /^(?:agent-model-token-(?:(?:openrouter|openai|vertex|meta)-)?|agent-embedding-token-openai-)(?<agentId>octogee-[a-z0-9-]{1,64}-coach)$/;
 
 function isBrokerTokenExpiry(value: unknown): value is BrokerTokenExpiry {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;

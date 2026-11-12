@@ -137,6 +137,7 @@ env:
   llmBrokerUrl: ""  # auto-computed from release namespace for isolated-class gateways
   openaiEmbeddingsEnabled: "true"
   platformVertexEnabled: "false"
+  platformMetaEnabled: "false"
   openaiEmbeddingsModel: "text-embedding-3-small"
   openclawLogLevel: "info"
   logLevel: "info"

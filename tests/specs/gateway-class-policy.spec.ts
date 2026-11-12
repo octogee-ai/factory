@@ -195,6 +195,38 @@ function runPolicy(gatewayClass: string, config: Record<string, unknown>) {
   return runPolicyWithDir(gatewayClass, config).config;
 }
 
+it("keeps the scoped Meta Responses route through shared gateway startup", () => {
+  const agentId = "octogee-ember-coach";
+  const model = "platform-meta/muse-ember-1.0";
+  const withRail = runPolicyWithDir("shared", {
+    agents: { entries: { [agentId]: { model } } },
+  }, dir => seedCanonicalAgentRuntimeDisk(dir, agentId), {
+    PLATFORM_META_BASE_URL: "http://broker/v1",
+  });
+  const agentDir = path.join(withRail.dir, "agents", agentId, "agent");
+  const disk = JSON.parse(readFileSync(path.join(agentDir, "models.json"), "utf8"));
+  expect(disk.providers["platform-meta"]).toMatchObject({
+    api: "openai-responses", baseUrl: "http://broker/v1", apiKey: "platform-meta:default",
+    models: [{ id: "muse-ember-1.0" }],
+  });
+  const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), { readOnly: true });
+  const row = db.prepare("SELECT store_json AS value FROM auth_profile_store WHERE store_key = ?").get("primary") as { value: string };
+  db.close();
+  expect(JSON.parse(row.value).profiles["platform-meta:default"]).toEqual({
+    type: "api_key", provider: "platform-meta",
+    keyRef: { source: "exec", provider: "gcp-secret-manager", id: `agent-model-token-meta-${agentId}` },
+  });
+  expect(withRail.config.agents.entries[agentId].model).toEqual({ primary: model, fallbacks: [] });
+  expect(withRail.config.agents.defaults.modelPolicy.allow).toContain("platform-meta/*");
+
+  const withoutRail = runPolicyWithDir("shared", {
+    agents: { entries: { [agentId]: {} } },
+  }, dir => seedCanonicalAgentRuntimeDisk(dir, agentId));
+  const bare = path.join(withoutRail.dir, "agents", agentId, "agent");
+  expect(JSON.parse(readFileSync(path.join(bare, "models.json"), "utf8")).providers).not.toHaveProperty("platform-meta");
+  expect(withoutRail.config.agents.defaults.modelPolicy.allow).not.toContain("platform-meta/*");
+});
+
 it("projects the Vertex rail onto disk only when the pod carries it", () => {
   const agentId = "octogee-vertex-coach";
   const withRail = runPolicyWithDir("shared", {

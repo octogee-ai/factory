@@ -145,7 +145,7 @@ function ownerSlug(userRecord: Pick<PlatformUserRecord, "slug">): string | null 
 
 function requestedModelProvider(value: unknown): ModelBrokerProvider | null {
   if (value === undefined || value === null || value === "") return "anthropic";
-  return value === "anthropic" || value === "vertex" || value === "openrouter" || value === "openai"
+  return value === "anthropic" || value === "vertex" || value === "openrouter" || value === "openai" || value === "meta"
     ? value
     : null;
 }

@@ -13,6 +13,7 @@ const BROKER_PROVIDER_DECLARATIONS = [
     ["platform-openrouter", "OPENROUTER_BASE_URL"],
     ["platform-openai", "PLATFORM_OPENAI_BASE_URL"],
     ["platform-vertex", "PLATFORM_VERTEX_BASE_URL"],
+    ["platform-meta", "PLATFORM_META_BASE_URL"],
 ];
 /** Declare provider ownership; API, model rows and credentials remain agent-local. */
 export function platformBrokerProviderDeclarations(env) {
