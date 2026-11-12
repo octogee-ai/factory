@@ -121,11 +121,12 @@ describe("move to the user's own isolated gateway", () => {
     expect(await f.readResume()).toMatchObject({ uid: "uid-bob", assignmentEpoch: 7, migration: f.expected });
   });
 
-  it.each(["owner", "claim", "kind"])("refuses both sides when the isolated gateway's %s is not the user's", async change => {
+  it.each(["owner", "claim", "allocation", "kind"])("refuses both sides when the isolated gateway's %s is not the user's", async change => {
     const f = isolatedTargetFixture();
     if (change === "owner") f.root.ownerUid = "uid-alice";
     if (change === "claim") f.allocation.claimedByUid = "uid-alice";
-    if (change === "kind") delete f.root.allocation;
+    if (change === "allocation") delete f.root.allocation;
+    if (change === "kind") f.allocation.kind = "dedicated-builder";
     expect(await f.readImport()).toBeNull();
     expect(await f.readResume()).toBeNull();
   });

@@ -136,7 +136,9 @@ export async function isolatedBootMode(input: {
   if (!user) throw new Error("Isolated prelaunch owner is unavailable");
   if (await hasServingUserAssignment(reader, gateway, user)) return { mode: "normal" };
   if (isOperatorIssuedAllocation(gateway.allocation)) {
-    return { mode: await isolatedPrelaunchReserved(input) ? "prelaunch" : "normal" };
+    if (await isolatedPrelaunchReserved(input)) return { mode: "prelaunch" };
+    if (!(await reader.gateways.assignments.isEmpty(gateway.gatewayId))) return { mode: "normal" };
+    throw new Error("Operator isolated gateway prelaunch authority is unavailable");
   }
   const lease = user.activationLease;
   if (!activationLeaseMatches(gateway, lease)) {

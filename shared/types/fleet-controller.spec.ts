@@ -56,6 +56,25 @@ describe("OpenClaw process report", () => {
     expect(parseOpenClawProcessReport({ state: "held", migrationId: "mig-1" })).toEqual({ state: "held", migrationId: "mig-1" });
   });
 
+  it("accepts the ids a move, an activation and a surge handoff hold the process under", () => {
+    for (const migrationId of [
+      "mig-0b8f6f0e-6f0a-4a57-9a43-1f6f3a1c2d10",
+      "mig-builder-activate-jefe-run-g67",
+      "mig-recover-disposable-reset-Xk3pQ9vR2mT7wL8nY4cB6dF1gH5j-jefe-run-12",
+      "surge-jefe-run-4520118391837465",
+      "surge-jefe-run-0b8f6f0e-6f0a-4a57-9a43-1f6f3a1c2d10",
+    ]) {
+      expect(parseOpenClawProcessReport({ state: "hydrated", migrationId })).toEqual({ state: "hydrated", migrationId });
+    }
+  });
+
+  it("rejects a migration id that is not one, since the gateway's own user can write it", () => {
+    for (const migrationId of ["mig-", "mig-1 <b>held</b>", "mig-1\nstatus: ok", "operator-says-hi", "mig-1/../2",
+      `mig-${"a".repeat(201)}`]) {
+      expect(parseOpenClawProcessReport({ state: "held", migrationId })).toBeNull();
+    }
+  });
+
   it("rejects anything else", () => {
     for (const value of [null, "held", { state: "held" }, { state: "none", migrationId: null },
       { state: "held", migrationId: "" }, { state: "held", migrationId: 3 },

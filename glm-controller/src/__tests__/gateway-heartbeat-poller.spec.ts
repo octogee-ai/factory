@@ -166,6 +166,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
     expect(deps.writeHeartbeat).toHaveBeenCalledWith("walter", {
       status: "ready",
       mountedCustomers: ["ceckert"],
+      openclawProcess: null,
     });
   });
 
@@ -177,6 +178,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
     expect(deps.writeHeartbeat).toHaveBeenCalledWith("walter", {
       status: "ready",
       mountedCustomers: [],
+      openclawProcess: null,
       configuredBuilder: { state: "claimed", generation: 2 },
     });
   });
@@ -193,6 +195,12 @@ describe("pollGatewayHeartbeatsOnce", () => {
     });
   });
 
+  it("clears the OpenClaw process report once the gateway stops sending one, as after a rollback to an image that never did", async () => {
+    const deps = makeDeps({ fetchFleetState: vi.fn(async () => ({ status: "booting", users: [] })) });
+    await pollGatewayHeartbeatsOnce(deps);
+    expect(deps.writeHeartbeat).toHaveBeenCalledWith("walter", expect.objectContaining({ openclawProcess: null }));
+  });
+
   it("persists startedAt from /health across a roll", async () => {
     const deps = makeDeps({
       fetchFleetState: vi.fn(async () => ({
@@ -205,6 +213,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
     expect(deps.writeHeartbeat).toHaveBeenCalledWith("walter", {
       status: "ready",
       mountedCustomers: ["ceckert"],
+      openclawProcess: null,
       startedAt: 1700000,
     });
   });
@@ -221,6 +230,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
     expect(deps.writeHeartbeat).toHaveBeenCalledWith("walter", {
       status: "ready",
       mountedCustomers: ["ceckert"],
+      openclawProcess: null,
       version: "93073bd",
     });
   });
@@ -237,6 +247,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
     expect(deps.writeHeartbeat).toHaveBeenCalledWith("walter", {
       status: "ready",
       mountedCustomers: ["ceckert"],
+      openclawProcess: null,
       openclawVersion: "2026.7.1",
     });
   });

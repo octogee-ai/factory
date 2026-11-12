@@ -52,10 +52,11 @@ function fixture() {
   };
   const pods = [target];
   const sourceHealth = { ...targetHealth, version: "ab10fce-oc2026.7.1" };
+  const targetProbe = { answers: true };
   const releaseTarget = vi.fn();
   const surgeDeps = {
     listPods: async () => ({ pods, observedPodUids: pods.map((pod) => pod.uid) }),
-    readPodHealth: async (pod: { uid: string }) => pod.uid === target.uid ? targetHealth : sourceHealth,
+    readPodHealth: async (pod: { uid: string }) => pod.uid === target.uid ? (targetProbe.answers ? targetHealth : null) : sourceHealth,
     readAssignments: async () => [],
     releaseTarget,
     log: vi.fn(),
@@ -69,7 +70,7 @@ function fixture() {
   const markLive = () => markGatewayLive({ store, log: vi.fn() }, gateway, artifact, true);
   const bootMode = () => store.transaction({ label: "test.boot-mode", readOnly: true }, (transaction) =>
     isolatedBootMode({ reader: transaction, gateway }));
-  return { gateway, lease, user, runtime, documents, pods, targetHealth, releaseTarget, reconcileSurgeHandoff, refine, markLive, bootMode, writes, store };
+  return { gateway, lease, user, runtime, documents, pods, targetHealth, targetProbe, releaseTarget, reconcileSurgeHandoff, refine, markLive, bootMode, writes, store };
 }
 
 describe("disposable isolated prelaunch release refresh", () => {
@@ -300,18 +301,41 @@ describe("an operator-given gateway has no lease", () => {
     ["its owner is on a gateway that is not shared", (h: ReturnType<typeof fixture>) => {
       h.documents.set("gateways/shared-blue", { ...h.gateway, gatewayId: "shared-blue", ownerUid: "uid-other" });
     }],
-    ["it already holds an assignment", (h: ReturnType<typeof fixture>) => {
-      h.documents.set("gateways/jefe-run/assignments/uid-jefe", { uid: "uid-jefe", slug: "jefe", gatewayId: "jefe-run", state: "quiescing", epoch: 1 });
-    }],
     ["its owner's account is suspended", (h: ReturnType<typeof fixture>) => {
       Object.assign(h.user, { accountLifecycle: { status: "suspended" } });
     }],
     ["it is claimed for someone else", (h: ReturnType<typeof fixture>) => { h.gateway.allocation!.claimedByUid = "uid-other"; }],
-    ["it names another workspace", (h: ReturnType<typeof fixture>) => { h.gateway.builderSlug = "other"; }],
-  ])("boots normally, with no prelaunch, when %s", async (_name, change) => {
+    ["it names another workspace", (h: ReturnType<typeof fixture>) => {
+      h.gateway.builderSlug = "other";
+      Object.assign(h.documents.get("gateways/shared-blue/assignments/uid-jefe")!, { slug: "other" });
+    }],
+    ["it is not meant to be running", (h: ReturnType<typeof fixture>) => { h.gateway.desiredStatus = "paused"; }],
+  ])("refuses to boot, rather than boot normally with nothing to serve, when %s", async (_name, change) => {
     const h = operatorGiven();
     change(h);
+    await expect(h.bootMode()).rejects.toThrow("Operator isolated gateway prelaunch authority is unavailable");
+  });
+
+  it("boots normally while it holds its owner's assignment, as during a move", async () => {
+    const h = operatorGiven();
+    Object.assign(h.documents.get("gateways/shared-blue/assignments/uid-jefe")!, { state: "quiescing" });
+    h.documents.set("gateways/jefe-run/assignments/uid-jefe", { uid: "uid-jefe", slug: "jefe", gatewayId: "jefe-run", state: "quiescing", epoch: 1 });
+
     await expect(h.bootMode()).resolves.toEqual({ mode: "normal" });
+  });
+
+  it("neither boots normally nor goes live while its owner's shared assignment is quiescing, then boots in prelaunch once it serves again", async () => {
+    const h = operatorGiven();
+    const shared = h.documents.get("gateways/shared-blue/assignments/uid-jefe")!;
+    Object.assign(shared, { state: "quiescing" });
+
+    await expect(h.bootMode()).rejects.toThrow("Operator isolated gateway prelaunch authority is unavailable");
+    h.targetProbe.answers = false;
+    await expect(h.refine()).resolves.toEqual({ kind: "steady" });
+    expect(h.writes).not.toHaveBeenCalled();
+
+    Object.assign(shared, { state: "serving" });
+    await expect(h.bootMode()).resolves.toEqual({ mode: "prelaunch" });
   });
 
   it("boots normally once its owner serves on it", async () => {

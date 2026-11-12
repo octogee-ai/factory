@@ -136,6 +136,8 @@ export const OPENCLAW_PROCESS_STATES = ["held", "hydrated", "starting", "serving
 
 export type OpenClawProcessState = typeof OPENCLAW_PROCESS_STATES[number];
 
+const OPENCLAW_PROCESS_MIGRATION_ID = /^(?:mig|surge)-[A-Za-z0-9_-]{1,200}$/;
+
 export interface OpenClawProcessReport {
   state: OpenClawProcessState;
   migrationId: string | null;
@@ -147,7 +149,7 @@ export function parseOpenClawProcessReport(value: unknown): OpenClawProcessRepor
   if (!hasOnlyFields(report, ["state", "migrationId"])) return null;
   if (!OPENCLAW_PROCESS_STATES.includes(report.state as OpenClawProcessState)) return null;
   const migrationId = report.migrationId;
-  if (migrationId !== null && (typeof migrationId !== "string" || migrationId.length === 0)) return null;
+  if (migrationId !== null && (typeof migrationId !== "string" || !OPENCLAW_PROCESS_MIGRATION_ID.test(migrationId))) return null;
   return { state: report.state as OpenClawProcessState, migrationId };
 }
 

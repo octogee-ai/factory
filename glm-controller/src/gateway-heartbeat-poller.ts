@@ -59,7 +59,7 @@ export interface GatewayHeartbeatRecord {
   status: string;
   mountedCustomers: string[];
   configuredBuilder?: ConfiguredUserReport | null;
-  openclawProcess?: OpenClawProcessReport | null;
+  openclawProcess: OpenClawProcessReport | null;
   version?: string;
   openclawVersion?: string;
   /** Live pod-boot time (epoch ms). */
@@ -232,12 +232,12 @@ function heartbeatRecordFrom(state: GatewayFleetState, assigned: string[]): Gate
   const record: GatewayHeartbeatRecord = {
     status: state.status,
     mountedCustomers: intersectMounted(state.users, assigned),
+    openclawProcess: state.openclawProcess ?? null,
   };
   if (typeof state.version === "string") record.version = state.version;
   if (typeof state.openclawVersion === "string") record.openclawVersion = state.openclawVersion;
   if (typeof state.startedAt === "number") record.startedAt = state.startedAt;
   if (state.configuredBuilder !== undefined) record.configuredBuilder = state.configuredBuilder;
-  if (state.openclawProcess !== undefined) record.openclawProcess = state.openclawProcess;
   return record;
 }
 
