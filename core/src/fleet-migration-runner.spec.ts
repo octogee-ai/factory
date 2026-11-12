@@ -724,21 +724,22 @@ describe("schedule transfer", () => {
   });
 });
 
-it("reports how long the final copy took", async () => {
+it("reports transfer and import together without counting target config convergence", async () => {
   const h = harness();
   let clock = 0;
   h.deps.now = () => clock;
+  h.deps.readTargetSystemConfigCommit = async () => { clock += 5_000; return "b".repeat(40); };
   vi.mocked(h.client.transferState).mockImplementation(async ({ mode, slug }) => {
     clock += mode === "final" ? 70_000 : 400;
     return { migrationId: "m1", slug, imported: true };
   });
 
-  expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+  expect(await runMigration({ ...h.input, convergeTargetSystemConfig: "target-commit" }, h.deps)).toMatchObject({ success: true });
 
   const finalSync = h.events.find((event) => event.startsWith("log:") && event.includes("final-sync-state ok"));
-  expect(finalSync).toContain("transferMs=70000");
+  expect(finalSync).toContain("transferAndImportMs=70000");
   const keysSync = h.events.find((event) => event.startsWith("log:") && event.includes("keys-sync-state ok"));
-  expect(keysSync).toContain("transferMs=400");
+  expect(keysSync).toContain("transferAndImportMs=400");
 });
 
 describe("rollback releases the source", () => {

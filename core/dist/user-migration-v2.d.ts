@@ -1,3 +1,4 @@
+import type { WorkspaceMigrationPhase } from "@octogee/shared/types/workspace-migration";
 import type { UserMigrationV2GatewayRootFence, UserMigrationV2Phase, UserMigrationV2State } from "@octogee/shared/types/glm";
 import { type MigrationClient } from "./fleet-migration-client.js";
 export interface UserMigrationV2CutoverFence {
@@ -22,7 +23,7 @@ export interface UserMigrationV2Deps {
     now: () => number;
     log: (message: string) => void;
     wait?: (delayMs: number) => Promise<void>;
-    setMigrationPhase?: (phase: "preparing" | "waiting" | "transferring" | "connecting") => Promise<void>;
+    setMigrationPhase?: (phase: WorkspaceMigrationPhase) => Promise<void>;
 }
 export declare function advanceUserMigrationV2(state: UserMigrationV2State, deps: UserMigrationV2Deps): Promise<UserMigrationV2State>;
 export declare function isUserMigrationV2ForwardOnly(state: UserMigrationV2State): boolean;

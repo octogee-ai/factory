@@ -33,6 +33,12 @@ function dockerfile(pathname: string): string {
   return fs.readFileSync(path.join(root, pathname), "utf8");
 }
 
+function dockerStage(contents: string, name: string): string {
+  const stage = contents.split(/^FROM /mu).find((part) => part.split("\n", 1)[0].endsWith(` AS ${name}`));
+  if (!stage) throw new Error(`Docker stage is missing: ${name}`);
+  return stage;
+}
+
 function expectBefore(contents: string, earlier: string, later: string): void {
   expect(contents.indexOf(earlier)).toBeGreaterThanOrEqual(0);
   expect(contents.indexOf(later)).toBeGreaterThanOrEqual(0);
@@ -139,13 +145,30 @@ describe("directory dependency repository contract", () => {
       expectBefore(glm, `COPY ${source}/dist`, "RUN npm ci");
     }
     expectBefore(glm, "COPY glm-controller/.npmrc", "RUN npm ci");
+  });
 
+  it("installs gateway dependencies from manifests and overlays freshly packed internal packages", () => {
     const gateway = dockerfile("infra/gateway/Dockerfile");
+    const dependencies = dockerStage(gateway, "gateway-dependencies");
+    const localPackages = dockerStage(gateway, "gateway-local-packages");
+    const build = dockerStage(gateway, "gateway-build");
+    const runtime = dockerStage(gateway, "gateway-runtime");
+    const install = "RUN npm install --no-audit --no-fund";
+    const overlay = "COPY --from=gateway-local-packages --chown=node:node /packages /octogee/scripts/node_modules";
+
     for (const source of ["core", "shared"]) {
-      expectBefore(gateway, `COPY --chown=node:node ${source}/package.json`, "RUN npm install --no-audit --no-fund");
-      expectBefore(gateway, `COPY --chown=node:node ${source}/dist`, "RUN npm install --no-audit --no-fund");
+      expectBefore(dependencies, `COPY --chown=node:node ${source}/package.json`, install);
+      expect(dependencies).not.toContain(`${source}/dist`);
+      const pack = `bash /tmp/pack-local-deps.sh /octogee/${source} /packages/@octogee/${source}`;
+      expectBefore(localPackages, `COPY ${source}/package.json`, pack);
+      expectBefore(localPackages, `COPY ${source}/dist`, pack);
     }
-    expectBefore(gateway, "COPY --chown=node:node scripts/.npmrc", "RUN npm install --no-audit --no-fund");
+    expectBefore(dependencies, "COPY --chown=node:node scripts/.npmrc", install);
+    expectBefore(dependencies, "shared/package-lock.json", "cd /octogee/shared && npm ci");
+    expectBefore(build, "COPY --from=gateway-dependencies /octogee /octogee", overlay);
+    expectBefore(build, overlay, "RUN /octogee/scripts/node_modules/.bin/esbuild");
+    expectBefore(runtime, "COPY --link --from=gateway-production-dependencies --chown=1000:1000 /octogee/scripts/node_modules", overlay);
+    expectBefore(runtime, overlay, "RUN node /octogee/scripts/ops/verify-native-modules.mjs");
   });
 
   it("re-includes every packed interface in the Docker build context", () => {

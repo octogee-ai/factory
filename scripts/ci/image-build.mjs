@@ -70,5 +70,7 @@ const copiedFiles = (dockerfile, cwd) => readFileSync(join(cwd, dockerfile), "ut
 const recipe = (dockerfile, cwd) => [...new Set([dockerfile, ...copiedFiles(dockerfile, cwd)])]
   .filter(file => !(file.startsWith("infra/gateway/openclaw-tarball/") && file.endsWith(".tgz")));
 
-export const gatewayBaseRecipe = (cwd = process.cwd()) => [".dockerignore", ...recipe("infra/gateway/Dockerfile.base", cwd)];
+export const gatewayBaseRecipe = (cwd = process.cwd()) => [
+  ".dockerignore", "infra/gateway/openclaw-tarball/extract-npm.sh", ...recipe("infra/gateway/Dockerfile.base", cwd),
+];
 export const isolatedBaseRecipe = (cwd = process.cwd()) => recipe("infra/gateway/Dockerfile.isolated-base", cwd);

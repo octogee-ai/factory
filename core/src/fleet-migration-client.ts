@@ -112,6 +112,7 @@ export interface MigrationClient {
     includeActivationManifest?: boolean;
     preserveSource?: true;
     projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
+    reportImport?: (status: "running" | "done" | "failed", at: number) => Promise<void>;
   }): Promise<ImportResponse>;
 
   verifyTarget(opts: {

@@ -65,8 +65,8 @@ echo "==> Firestore auth: Application Default Credentials (no key file)"
 # --- Ensure openclaw base image exists ---
 if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
   echo "==> Base image '$BASE_IMAGE' not found — building from source (Dockerfile.base)."
-  echo "    This clones the openclaw GitHub repo and will take a few minutes."
   OCTOGEE_PROJECT_ROOT="$(cd "$(dirname "$(dirname "$ROOT_DIR")")" && pwd)"
+  bash "$ROOT_DIR/openclaw-tarball/extract-npm.sh" "$ROOT_DIR/openclaw-tarball/openclaw-fork.tgz"
   docker build --no-cache \
     --build-arg OPENCLAW_REF="${OPENCLAW_REF:-main}" \
     -f "$ROOT_DIR/Dockerfile.base" \

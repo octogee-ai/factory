@@ -46,17 +46,6 @@ function installedAptPackages(filePath: string): Set<string> {
   return packages;
 }
 
-function advertisedGatewayBasePackages(): string[] {
-  const match = readRepoFile("infra/gateway/Dockerfile").match(/All apt packages \(([^)]+)\)/);
-  if (!match) {
-    throw new Error("infra/gateway/Dockerfile does not advertise base apt packages");
-  }
-  return match[1]
-    .split(",")
-    .map((packageName) => packageName.trim())
-    .filter((packageName) => packageName !== "etc.");
-}
-
 function gatewayImageArgs(): Record<string, Record<string, string>> {
   const base = `inputs-${"b".repeat(64)}`;
   const { target } = gatewayBakePlan({
@@ -82,7 +71,7 @@ function runInstructionContaining(dockerfile: string, needle: string): string {
 }
 
 describe("gateway base image", () => {
-  it("layers the controlled workstation over the full bootable gateway base", () => {
+  it("installs the controlled workstation over the gateway system before adding OpenClaw", () => {
     const base = readRepoFile("infra/gateway/Dockerfile.base");
     const isolatedBase = readRepoFile("infra/gateway/Dockerfile.isolated-base");
     const userConfig = readRepoFile("infra/gateway/openclaw.isolated.template.json");
@@ -90,7 +79,12 @@ describe("gateway base image", () => {
     expect(base).toMatch(/^FROM node:\d+\.\d+\.\d+-bookworm-slim@sha256:[0-9a-f]{64} AS gateway-core-system$/mu);
     expect(base).not.toContain("gateway-core-runtime");
     expect(isolatedBase).toContain("ARG GATEWAY_BASE_IMAGE");
-    expect(isolatedBase).toContain("FROM ${GATEWAY_BASE_IMAGE}");
+    expect(isolatedBase).toContain("FROM ${GATEWAY_BASE_IMAGE} AS openclaw-runtime");
+    expect(isolatedBase).toContain("FROM ${GATEWAY_SYSTEM_IMAGE} AS isolated-toolchain-validation");
+    expect(isolatedBase).toContain("FROM ${GATEWAY_SYSTEM_IMAGE} AS isolated-base-system");
+    expect(isolatedBase.indexOf("COPY --link --from=openclaw-runtime")).toBeGreaterThan(
+      isolatedBase.indexOf("/tmp/isolated-toolchain-validation/ /opt/octogee/toolchains/image/"),
+    );
     expect(isolatedBase).toContain("infra/gateway/isolated-toolchain/package.json /octogee/toolchain/package.json");
     expect(isolatedBase).toContain("infra/gateway/isolated-toolchain/package-lock.json /octogee/toolchain/package-lock.json");
     expect(isolatedBase).toContain("infra/gateway/isolated-toolchain/groups.json /octogee/toolchain/groups.json");
@@ -196,14 +190,14 @@ describe("gateway base image", () => {
     expect(dockerfile).toContain("COPY --from=gitleaks-builder /go/bin/gitleaks /usr/local/bin/gitleaks");
   });
 
-  it("ships Chromium and screenshot fonts in the shared gateway base image", () => {
+  it("ships the workstation packages in the shared gateway base image", () => {
     const installed = installedAptPackages("infra/gateway/Dockerfile.base");
-    const advertised = advertisedGatewayBasePackages();
 
-    expect(installed.has("chromium")).toBe(true);
-    expect(installed.has("fonts-liberation")).toBe(true);
-    expect(installed.has("fonts-noto-color-emoji")).toBe(true);
-    expect([...installed].sort()).toEqual(expect.arrayContaining(advertised));
+    expect([...installed]).toEqual(expect.arrayContaining([
+      "curl", "jq", "python3", "git", "sqlite3",
+      "chromium", "fonts-liberation", "fonts-noto-color-emoji",
+      "tigervnc-standalone-server", "openbox", "tint2", "sakura", "pcmanfm", "mousepad",
+    ]));
   });
 
   it("ships discovery binaries and disables runtime tool downloads", () => {
@@ -273,11 +267,9 @@ describe("gateway base image", () => {
 
     expect(npmUpgrade).toBeGreaterThan(dockerfile.indexOf("AS gateway-core-system"));
     expect(npmUpgrade).toBeLessThan(dockerfile.indexOf("AS gateway-system"));
-    expect(install).toContain("target=/tmp/openclaw-fork.tgz,readonly");
-    expect(install).toContain("tar -xOf /tmp/openclaw-fork.tgz package/vendor/npm.tgz > /tmp/npm.tgz");
+    expect(install).toContain("source=infra/gateway/openclaw-tarball/npm-fork.tgz,target=/tmp/npm.tgz,readonly");
     expect(install).toContain('test "$(npm --version)" = "$NPM_VERSION"');
     expect(install).toContain('test "$(npx --version)" = "$NPM_VERSION"');
-    expect(install).toContain("&& rm /tmp/npm.tgz");
     expect(install).toContain("npm cache clean --force");
   });
 
@@ -322,7 +314,7 @@ describe("gateway base image", () => {
     expect(runInstructionContaining(dockerfile, "pip3 install")).toContain("--no-cache-dir");
   });
 
-  it("copies pruned gateway runtime trees out of the build stage", () => {
+  it("copies the pruned dependencies and application payload into the gateway runtime", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile");
     const runtimeStageMarker = "FROM ${RUNTIME_BASE_IMAGE} AS gateway-runtime";
     const runtimeStage = dockerfile.slice(dockerfile.indexOf(runtimeStageMarker));
@@ -332,9 +324,11 @@ describe("gateway base image", () => {
       .join("\n");
 
     expect(dockerfile).toContain("FROM ${OPENCLAW_BASE_IMAGE} AS gateway-build");
-    expect(runtimeStage).toContain("COPY --from=gateway-build --chown=node:node /octogee/scripts");
-    expect(runtimeStage).toContain("COPY --from=gateway-build --chown=node:node /octogee/shared");
-    expect(runtimeStage).toContain("COPY --from=gateway-build --chown=node:node /octogee/extensions");
+    expect(runtimeStage).toContain("COPY --link --from=gateway-production-dependencies --chown=1000:1000 /octogee/scripts/node_modules");
+    expect(runtimeStage).toContain("COPY --link --from=gateway-production-dependencies --chown=1000:1000 /octogee/shared/node_modules");
+    expect(runtimeStage).toContain("COPY --from=gateway-payload --chown=node:node /octogee/scripts");
+    expect(runtimeStage).toContain("COPY --from=gateway-payload --chown=node:node /octogee/shared");
+    expect(runtimeStage).toContain("COPY --from=gateway-payload --chown=node:node /octogee/extensions");
     expect(runtimeInstructions).not.toMatch(/npm (?:ci|install|prune)/u);
     expect(runtimeStage).not.toContain("chown -R node:node /octogee/extensions");
   });

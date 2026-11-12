@@ -10,13 +10,12 @@ RUN test -n "$OS_PACKAGE_REFRESH" && apt-get update && apt-get upgrade -y && apt
     && rm -rf /var/lib/apt/lists/*
 
 COPY infra/gateway/openclaw-tarball/npm-distribution.test.mjs /tmp/npm-distribution.test.mjs
-RUN --mount=type=bind,source=infra/gateway/openclaw-tarball/openclaw-fork.tgz,target=/tmp/openclaw-fork.tgz,readonly \
-    tar -xOf /tmp/openclaw-fork.tgz package/vendor/npm.tgz > /tmp/npm.tgz \
-    && npm install --global /tmp/npm.tgz --ignore-scripts --no-audit --no-fund \
+RUN --mount=type=bind,source=infra/gateway/openclaw-tarball/npm-fork.tgz,target=/tmp/npm.tgz,readonly \
+    npm install --global /tmp/npm.tgz --ignore-scripts --no-audit --no-fund \
     && test "$(npm --version)" = "$NPM_VERSION" \
     && test "$(npx --version)" = "$NPM_VERSION" \
     && node /tmp/npm-distribution.test.mjs "$(npm root --global)"/npm \
-    && rm /tmp/npm.tgz /tmp/npm-distribution.test.mjs \
+    && rm /tmp/npm-distribution.test.mjs \
     && npm cache clean --force \
     && install -d -o node -g node /home/node/.npm
 
@@ -28,12 +27,16 @@ ARG FD_VERSION=10.5.2
 ARG CLAUDE_CODE_VERSION=2.1.322
 ARG CODEX_VERSION=0.167.1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN chmod 1777 /tmp && apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv sqlite3 xxd \
     bash-completion vim less ripgrep tree cloc \
     make build-essential wget unzip zip file bc \
     ffmpeg imagemagick chromium fonts-liberation fonts-noto-color-emoji \
     pandoc htop strace dnsutils net-tools fzf \
+    btrfs-progs gettext-base libx11-6 libxi6 libxkbcommon0 \
+    tigervnc-standalone-server tigervnc-tools openbox tint2 sakura pcmanfm mousepad \
+    adwaita-icon-theme fonts-noto-core dbus-x11 at-spi2-core wmctrl x11-utils \
+    x11-xserver-utils xdotool libglib2.0-bin libgtk-3-bin \
     && case "$(dpkg --print-architecture)" in \
       amd64) FD_SHA256=342a9d1618c4340668cb7ad96d353064bf226ac403add80e587103975d5fa49c ;; \
       arm64) FD_SHA256=5e42e06db345fe3b0b337c7efb2ec6b29eb2cf955e3826a152160940770c6db6 ;; \
@@ -44,6 +47,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && dpkg -i /tmp/fd.deb \
     && rm /tmp/fd.deb \
     && rm -rf /var/lib/apt/lists/*
+
+RUN sed -i 's|^Exec=/usr/bin/chromium %U$|Exec=/usr/local/bin/octo-desktop-browser --new-window %U|' /usr/share/applications/chromium.desktop \
+    && grep -qxF 'Exec=/usr/local/bin/octo-desktop-browser --new-window %U' /usr/share/applications/chromium.desktop
 
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null \

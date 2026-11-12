@@ -21,13 +21,24 @@ describe("gateway bake plan", () => {
     });
     expect(target["octogee-gateway-builder-base"]).toMatchObject({
       dockerfile: "infra/gateway/Dockerfile.isolated-base", tags: [isolatedBaseRef],
-      contexts: { "octogee-gateway-base": "target:octogee-gateway-base" },
+      contexts: {
+        "octogee-gateway-base": "target:octogee-gateway-base",
+        "octogee-gateway-system": "target:octogee-gateway-system",
+      },
       args: { BUILDER_TOOLCHAIN_LOCK_SHA256: toolchain.lockSha256, BUILDER_TOOL_GROUPS_SHA256: toolchain.groupsSha256 },
     });
-    expect(target["octogee-gateway"].contexts).toEqual({ "octogee-gateway-base": "target:octogee-gateway-base" });
+    expect(target["octogee-gateway-system"]).toMatchObject({
+      dockerfile: "infra/gateway/Dockerfile.base", target: "gateway-system", output: ["type=cacheonly"],
+    });
+    expect(target["octogee-gateway-system"]).not.toHaveProperty("tags");
+    expect(target["octogee-gateway"].contexts).toEqual({
+      "octogee-gateway-base": "target:octogee-gateway-base",
+      "octogee-gateway-system": "target:octogee-gateway-system",
+    });
     expect(target["octogee-gateway-builder"].contexts).toEqual({
       "octogee-gateway-base": "target:octogee-gateway-base",
       "octogee-gateway-builder-base": "target:octogee-gateway-builder-base",
+      "octogee-gateway-system": "target:octogee-gateway-system",
     });
   });
 
@@ -37,6 +48,7 @@ describe("gateway bake plan", () => {
     expect(target["octogee-gateway-builder"].contexts).toEqual({
       "octogee-gateway-base": `docker-image://${baseRef}`,
       "octogee-gateway-builder-base": `docker-image://${isolatedBaseRef}`,
+      "octogee-gateway-system": "target:octogee-gateway-system",
     });
   });
 
@@ -49,15 +61,20 @@ describe("gateway bake plan", () => {
   it("builds a new isolated base over a published gateway base", () => {
     const { group, target } = plan({ base: false, isolatedBase: true, images: [] });
     expect(group.default.targets).toEqual(["octogee-gateway-builder-base"]);
-    expect(target["octogee-gateway-builder-base"].contexts).toEqual({ "octogee-gateway-base": `docker-image://${baseRef}` });
+    expect(target["octogee-gateway-builder-base"].contexts).toEqual({
+      "octogee-gateway-base": `docker-image://${baseRef}`,
+      "octogee-gateway-system": "target:octogee-gateway-system",
+    });
   });
 
   it("builds both gateway variants on the plain base and runs only the isolated image on the isolated base", () => {
     const { target } = plan({ base: false, isolatedBase: false, images });
-    expect(target["octogee-gateway"].args).toEqual({ BUILD_SHA: "aaaaaaa", OPENCLAW_RUNTIME_PLUGINS: "mattermost,parallel-plugin,codex" });
+    expect(target["octogee-gateway"].args).toEqual({
+      BUILD_SHA: "aaaaaaa", OPENCLAW_RUNTIME_PLUGINS: "mattermost,parallel-plugin,codex", GATEWAY_SYSTEM_IMAGE: "octogee-gateway-system",
+    });
     expect(target["octogee-gateway-builder"].args).toEqual({
       BUILD_SHA: "aaaaaaa", OPENCLAW_RUNTIME_PLUGINS: "mattermost,parallel-plugin,codex",
-      RUNTIME_BASE_IMAGE: "octogee-gateway-builder-base", IMAGE_PROFILE: "builder",
+      GATEWAY_SYSTEM_IMAGE: "octogee-gateway-system", RUNTIME_BASE_IMAGE: "octogee-gateway-builder-base", IMAGE_PROFILE: "builder",
     });
   });
 
@@ -69,22 +86,18 @@ describe("gateway bake plan", () => {
     }
   });
 
-  it("exports registry cache for the bases only", () => {
+  it("imports and exports an independent registry cache for every built target", () => {
     const { target } = plan({ base: true, isolatedBase: true, images });
-    for (const name of ["octogee-gateway-base", "octogee-gateway-builder-base"]) {
+    for (const name of ["octogee-gateway-base", "octogee-gateway-builder-base", "octogee-gateway-system", ...images]) {
       expect(target[name]["cache-from"]).toEqual([`type=registry,ref=${repository}/cache/${name}:buildcache`]);
       expect(target[name]["cache-to"]).toEqual([`type=registry,ref=${repository}/cache/${name}:buildcache,mode=max`]);
-    }
-    for (const image of images) {
-      expect(target[image]).not.toHaveProperty("cache-from");
-      expect(target[image]).not.toHaveProperty("cache-to");
     }
   });
 
   it("pushes every target for linux/amd64 without attestations", () => {
     const { target } = plan({ base: true, isolatedBase: true, images });
-    for (const definition of Object.values(target)) {
-      expect(definition).toMatchObject({
+    for (const name of [...images, "octogee-gateway-base", "octogee-gateway-builder-base"]) {
+      expect(target[name]).toMatchObject({
         context: ".", platforms: ["linux/amd64"], output: ["type=registry"],
         attest: ["type=provenance,disabled=true", "type=sbom,disabled=true"],
       });
@@ -161,6 +174,13 @@ describe("gateway image family build", () => {
     expect(rows.map(row => row.result)).toEqual(["found", "found", ...images.map(() => "reused (full-SHA tag)")]);
   });
 
+  it("prepares the gateway inputs before rebuilding only the isolated base", async () => {
+    const { calls, bakes, run } = harness({ existing: [baseRef, ...images.map(image => `${repository}/${image}:${sha}`)] });
+    await run();
+    expect(bakes[0].group.default.targets).toEqual(["octogee-gateway-builder-base"]);
+    expect(calls.slice(0, 2)).toEqual([["prepare-base"], ["bake"]]);
+  });
+
   it("publishes reused images without baking them", async () => {
     const { calls, bakes, run } = harness({ existing: [baseRef, isolatedBaseRef, `${repository}/gateway-edge:${sha}`], reusable: ["octogee-gateway", "octogee-gateway-builder"] });
     const rows = await run();
@@ -187,9 +207,20 @@ describe("gateway image family build", () => {
     const { calls, bakes, run } = harness({ existing: [baseRef, isolatedBaseRef, `${repository}/octogee-gateway-builder:${sha}`], reusable: ["gateway-edge"] });
     await run();
     expect(bakes[0].group.default.targets).toEqual(["octogee-gateway"]);
-    expect(bakes[0].target["octogee-gateway"].contexts).toEqual({ "octogee-gateway-base": `docker-image://${baseRef}` });
-    expect(calls.some(call => call[0] === "prepare-base")).toBe(false);
+    expect(bakes[0].target["octogee-gateway"].contexts).toEqual({
+      "octogee-gateway-base": `docker-image://${baseRef}`,
+      "octogee-gateway-system": "target:octogee-gateway-system",
+    });
+    expect(calls.findIndex(call => call[0] === "prepare-base")).toBeLessThan(calls.findIndex(call => call[0] === "bake"));
     expect(scriptCalls(calls, "assert-artifact-image-size.sh")).toEqual([]);
+  });
+
+  it("builds a standalone gateway-edge image without preparing the OpenClaw inputs", async () => {
+    const { calls, bakes, run } = harness({ existing: [baseRef, isolatedBaseRef, ...images.slice(1).map(image => `${repository}/${image}:${sha}`)] });
+    await run();
+    expect(bakes[0].group.default.targets).toEqual(["gateway-edge"]);
+    expect(bakes[0].target).not.toHaveProperty("octogee-gateway-system");
+    expect(calls).not.toContainEqual(["prepare-base"]);
   });
 
   it("salts each gateway fingerprint with the base it runs on", async () => {

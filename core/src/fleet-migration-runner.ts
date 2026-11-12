@@ -12,6 +12,7 @@ import {
 import { MigrationDrainPendingError, type MigrationClient } from "./fleet-migration-client.js";
 import type { FleetBrokerProjectCheckoutScope } from "@octogee/shared/types/fleet-broker";
 import type { ScheduleRecord, ScheduleTransferDoc } from "@octogee/shared/types/fleet-controller";
+import type { WorkspaceMigrationPhase } from "@octogee/shared/types/workspace-migration";
 
 export interface ReportedStep {
   name: string;
@@ -60,7 +61,7 @@ export interface MigrationRunnerDeps {
 
   reportStep?: (step: ReportedStep) => Promise<void> | void;
 
-  setMigrationPhase?: (phase: "preparing" | "waiting" | "transferring" | "connecting") => Promise<void>;
+  setMigrationPhase?: (phase: WorkspaceMigrationPhase) => Promise<void>;
 
   readTargetSystemConfigCommit?: (gatewayId: string) => Promise<string | null>;
 
@@ -86,6 +87,7 @@ type StepTimings = Readonly<Record<string, number>>;
 
 export interface MigrationRunnerInput {
   resumeForwardRecovery?: { sourceSystemConfigCommit?: string };
+  operationId?: string;
   migrationId: string;
   uid: string;
   slug: string;
@@ -261,6 +263,7 @@ async function convergeTargetAfterFinalCopy(input: {
   systemConfig: SystemConfigConvergence;
 }): Promise<void> {
   if (input.step.mode !== "final" || !input.systemConfig.convergeTarget) return;
+  await input.deps.setMigrationPhase?.("activating");
   await convergeTargetSystemConfig({
     deps: input.deps,
     migrationId: input.migrationId,
@@ -287,7 +290,7 @@ interface MigrationStepExecution {
 async function transferMigrationState(params: MigrationStepExecution, step: Extract<MigrationStep, { action: "sync-state" }>): Promise<StepTimings> {
   const { deps, migrationId, projectCheckoutScope, includeActivationManifest } = params;
   const clock = deps.now ?? Date.now;
-  const transferStartedAt = clock();
+  const importStartedAt = clock();
   await deps.client.transferState({
     migrationId,
     fromGatewayId: step.from,
@@ -298,9 +301,9 @@ async function transferMigrationState(params: MigrationStepExecution, step: Extr
     projectCheckoutScope,
     ...(step.mode !== "keys" && params.preserveSource ? { preserveSource: true as const } : {}),
   });
-  const transferMs = clock() - transferStartedAt;
+  const transferAndImportMs = clock() - importStartedAt;
   if (!params.preserveSource) await convergeTargetAfterFinalCopy({ deps, migrationId, step, systemConfig: params.systemConfig });
-  return { transferMs };
+  return { transferAndImportMs };
 }
 
 async function executeStep(params: MigrationStepExecution): Promise<StepTimings | undefined> {
@@ -351,8 +354,11 @@ async function executeStep(params: MigrationStepExecution): Promise<StepTimings 
         flipMirror: crossGateway,
       });
       if (params.preserveSource) {
+        const clock = deps.now ?? Date.now;
+        const activationStartedAt = clock();
         await deps.client.resume({ migrationId, gatewayId: params.targetGatewayId, slug, role: "target" });
         await convergeTargetSystemConfig({ deps, migrationId, slug, targetGatewayId: params.targetGatewayId, systemConfig: params.systemConfig });
+        return { targetActivationMs: clock() - activationStartedAt };
       }
       return;
     case "unmount-gateway":
@@ -419,7 +425,11 @@ export async function runMigration(
   input: MigrationRunnerInput,
   deps: MigrationRunnerDeps,
 ): Promise<MigrationRunnerResult> {
-  return withLogContext({ builderSlug: input.slug, operationId: input.migrationId, category: "migration", sourceGateway: input.fromGatewayId, targetGateway: input.toGatewayId }, async () => {
+  return withLogContext({
+    builderSlug: input.slug, ...(input.operationId ? { operationId: input.operationId } : {}),
+    migrationId: input.migrationId, category: "migration", gatewayId: input.toGatewayId,
+    sourceGateway: input.fromGatewayId, targetGateway: input.toGatewayId,
+  }, async () => {
     const execution = createMigrationExecution(input, deps);
     while (true) {
       const result = await runNextMigrationStep(execution);
@@ -601,9 +611,9 @@ function advanceExecution(
   timings: StepTimings | undefined,
 ): void {
   const nextPhase = advancePhase(execution.state.phase);
-  execution.deps.log(
+  withLogContext({ phase: name, status: "done", ...timings }, () => execution.deps.log(
     `[migration-runner] ${name} ok migrationId=${execution.input.migrationId} slug=${execution.input.slug} (phase ${phaseAtStart} → ${nextPhase})${formatTimings(timings)}`,
-  );
+  ));
   execution.state = { ...execution.state, phase: nextPhase };
 }
 

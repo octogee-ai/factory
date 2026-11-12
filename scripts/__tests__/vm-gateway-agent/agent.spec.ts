@@ -936,6 +936,10 @@ describe("convergeOnce", () => {
     expect([...docker.containers.values()].every((c) => c.paused)).toBe(true);
     expect(JSON.parse(String(calls(h.fetchImpl, "/computer-home/commit")[0][1].body))).toMatchObject({ requestedAt: 1_000 });
     expect(h.d.log).toHaveBeenCalledWith(expect.stringMatching(/home snapshot pausing 2 writers .*requested/));
+    expect(h.d.log).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      gatewayId: bundle.gatewayId, builderSlug: bundle.builderIdentity?.builderSlug,
+      category: "home-checkpoint", phase: "request-observed", status: "done", requestedAt: 1_000,
+    }));
     signal = { requestedAt: 1_000, completedAt: 1_000 };
     await convergeOnce(h.d, initialAgentState());
     expect([...docker.containers.values()].every((c) => c.paused)).toBe(true);

@@ -2,6 +2,7 @@ import { findReusable, publishImage } from "./image-build.mjs";
 
 const BASE = "octogee-gateway-base";
 const ISOLATED_BASE = "octogee-gateway-builder-base";
+const SYSTEM = "octogee-gateway-system";
 const IMAGES = ["gateway-edge", "octogee-gateway", "octogee-gateway-builder"];
 const ISOLATED_MAX_COMPRESSED_BYTES = 3100000000;
 const common = {
@@ -26,36 +27,44 @@ export function gatewayBakePlan({ repository, sha, base, isolatedBase, toolchain
   const baseRef = { [BASE]: `${repository}/${BASE}:${base}`, [ISOLATED_BASE]: `${repository}/${ISOLATED_BASE}:${isolatedBase}` };
   const inRun = { [BASE]: build.base, [ISOLATED_BASE]: build.isolatedBase };
   const from = name => inRun[name] ? `target:${name}` : `docker-image://${baseRef[name]}`;
+  const systemContext = { [SYSTEM]: `target:${SYSTEM}` };
+  const systemArg = { GATEWAY_SYSTEM_IMAGE: SYSTEM };
   const cached = name => ({
     "cache-from": [`type=registry,ref=${repository}/cache/${name}:buildcache`],
     "cache-to": [`type=registry,ref=${repository}/cache/${name}:buildcache,mode=max`],
   });
   const image = (name, extra = {}) => ({
-    ...common, ...extra, tags: [`${repository}/${name}:${short}`],
+    ...common, ...cached(name), ...extra, tags: [`${repository}/${name}:${short}`],
     args: { BUILD_SHA: short, ...extra.args },
     labels: { "org.opencontainers.image.revision": sha },
   });
-  const plugins = { OPENCLAW_RUNTIME_PLUGINS: "mattermost,parallel-plugin,codex" };
+  const runtimeArgs = { OPENCLAW_RUNTIME_PLUGINS: "mattermost,parallel-plugin,codex", ...systemArg };
   const candidates = {
     [BASE]: build.base && {
       ...common, ...cached(BASE), dockerfile: "infra/gateway/Dockerfile.base", target: "gateway-runtime", tags: [baseRef[BASE]],
     },
     [ISOLATED_BASE]: build.isolatedBase && {
       ...common, ...cached(ISOLATED_BASE), dockerfile: "infra/gateway/Dockerfile.isolated-base", tags: [baseRef[ISOLATED_BASE]],
-      contexts: { [BASE]: from(BASE) },
-      args: { BUILDER_TOOLCHAIN_LOCK_SHA256: toolchain.lockSha256, BUILDER_TOOL_GROUPS_SHA256: toolchain.groupsSha256 },
+      contexts: { [BASE]: from(BASE), ...systemContext },
+      args: { ...systemArg, BUILDER_TOOLCHAIN_LOCK_SHA256: toolchain.lockSha256, BUILDER_TOOL_GROUPS_SHA256: toolchain.groupsSha256 },
     },
     "gateway-edge": build.images.includes("gateway-edge") && image("gateway-edge", { dockerfile: "gateway-edge/Dockerfile" }),
     "octogee-gateway": build.images.includes("octogee-gateway") && image("octogee-gateway", {
-      dockerfile: "infra/gateway/Dockerfile", contexts: { [BASE]: from(BASE) }, args: plugins,
+      dockerfile: "infra/gateway/Dockerfile", contexts: { [BASE]: from(BASE), ...systemContext }, args: runtimeArgs,
     }),
     "octogee-gateway-builder": build.images.includes("octogee-gateway-builder") && image("octogee-gateway-builder", {
-      dockerfile: "infra/gateway/Dockerfile", contexts: { [BASE]: from(BASE), [ISOLATED_BASE]: from(ISOLATED_BASE) },
-      args: { ...plugins, RUNTIME_BASE_IMAGE: ISOLATED_BASE, IMAGE_PROFILE: "builder" },
+      dockerfile: "infra/gateway/Dockerfile", contexts: { [BASE]: from(BASE), [ISOLATED_BASE]: from(ISOLATED_BASE), ...systemContext },
+      args: { ...runtimeArgs, RUNTIME_BASE_IMAGE: ISOLATED_BASE, IMAGE_PROFILE: "builder" },
     }),
   };
   const target = Object.fromEntries(Object.entries(candidates).filter(([, definition]) => definition));
-  return { group: { default: { targets: Object.keys(target) } }, target };
+  const targets = Object.keys(target);
+  if (Object.values(target).some(definition => definition.contexts?.[SYSTEM])) {
+    target[SYSTEM] = {
+      ...common, ...cached(SYSTEM), dockerfile: "infra/gateway/Dockerfile.base", target: "gateway-system", output: ["type=cacheonly"],
+    };
+  }
+  return { group: { default: { targets } }, target };
 }
 
 export async function buildGatewayImages({ repository, sha, base, isolatedBase, toolchain, force = false }, { exists, script, bake, prepareBase, now = Date.now }) {
@@ -74,7 +83,7 @@ export async function buildGatewayImages({ repository, sha, base, isolatedBase, 
   const plan = gatewayBakePlan({ repository, sha, base, isolatedBase, toolchain, build });
   const started = now();
   if (plan.group.default.targets.length) {
-    if (build.base) await prepareBase();
+    if (build.base || plan.target[SYSTEM]) await prepareBase();
     await bake(plan);
   }
   const seconds = Math.round((now() - started) / 1000);

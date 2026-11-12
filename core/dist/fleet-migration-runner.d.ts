@@ -2,6 +2,7 @@ import { type MigrationPhase } from "./fleet-migration.js";
 import { type MigrationClient } from "./fleet-migration-client.js";
 import type { FleetBrokerProjectCheckoutScope } from "@octogee/shared/types/fleet-broker";
 import type { ScheduleTransferDoc } from "@octogee/shared/types/fleet-controller";
+import type { WorkspaceMigrationPhase } from "@octogee/shared/types/workspace-migration";
 export interface ReportedStep {
     name: string;
     status: "running" | "done" | "failed" | "skipped";
@@ -31,7 +32,7 @@ export interface MigrationRunnerDeps {
     finishLegacySchedulerHandoff?: () => Promise<void>;
     log: (msg: string) => void;
     reportStep?: (step: ReportedStep) => Promise<void> | void;
-    setMigrationPhase?: (phase: "preparing" | "waiting" | "transferring" | "connecting") => Promise<void>;
+    setMigrationPhase?: (phase: WorkspaceMigrationPhase) => Promise<void>;
     readTargetSystemConfigCommit?: (gatewayId: string) => Promise<string | null>;
     persistForwardRecovery?: (state: {
         sourceSystemConfigCommit?: string;
@@ -44,6 +45,7 @@ export interface MigrationRunnerInput {
     resumeForwardRecovery?: {
         sourceSystemConfigCommit?: string;
     };
+    operationId?: string;
     migrationId: string;
     uid: string;
     slug: string;

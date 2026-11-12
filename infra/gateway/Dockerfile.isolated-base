@@ -1,12 +1,15 @@
 ARG GATEWAY_BASE_IMAGE=octogee-gateway-base
-FROM ${GATEWAY_BASE_IMAGE} AS isolated-base-inputs
+ARG GATEWAY_SYSTEM_IMAGE=${GATEWAY_BASE_IMAGE}
+FROM ${GATEWAY_BASE_IMAGE} AS openclaw-runtime
+
+FROM ${GATEWAY_SYSTEM_IMAGE} AS isolated-base-inputs
 
 USER node
 COPY --chown=node:node infra/gateway/isolated-toolchain/groups.json /tmp/isolated-tool-groups.json
 COPY --chown=node:node infra/gateway/isolated-toolchain/base-inputs.mjs /tmp/isolated-base-inputs.mjs
 RUN node /tmp/isolated-base-inputs.mjs < /tmp/isolated-tool-groups.json > /tmp/isolated-base-inputs.json
 
-FROM ${GATEWAY_BASE_IMAGE} AS isolated-toolchain-validation
+FROM ${GATEWAY_SYSTEM_IMAGE} AS isolated-toolchain-validation
 
 ARG BUILDER_TOOLCHAIN_LOCK_SHA256
 ARG BUILDER_TOOL_GROUPS_SHA256
@@ -54,7 +57,7 @@ COPY infra/gateway/isolated-toolchain/preinstall.mjs /tmp/isolated-toolchain-pre
 RUN node /tmp/isolated-toolchain-preinstall.mjs /tmp/isolated-toolchain-validation \
     && chmod -R a+rX /tmp/isolated-toolchain-validation
 
-FROM ${GATEWAY_BASE_IMAGE} AS isolated-base-system
+FROM ${GATEWAY_SYSTEM_IMAGE} AS isolated-base-system
 
 USER root
 COPY --from=isolated-base-inputs --chown=node:node /tmp/isolated-base-inputs.json /octogee/toolchain/base-inputs.json
@@ -156,5 +159,10 @@ ENV OCTOGEE_BUILDER_TOOL_GROUPS_PATH=/octogee/toolchain/groups.json
 ENV OCTOGEE_BUILDER_TOOL_GROUPS_SHA256=${BUILDER_TOOL_GROUPS_SHA256}
 ENV OCTOGEE_BUILDER_NPM_PROXY_REGISTRY=https://us-central1-npm.pkg.dev/octogee/octogee-npm-cache/
 ENV OCTOGEE_BUILDER_NPM_FALLBACK_REGISTRY=https://registry.npmjs.org/
+
+COPY --link --from=openclaw-runtime /usr/local/lib/node_modules/openclaw /usr/local/lib/node_modules/openclaw
+COPY --link --from=openclaw-runtime --chown=1000:1000 /opt/openclaw-runtime-deps /opt/openclaw-runtime-deps
+RUN ln -sfn ../lib/node_modules/openclaw/openclaw.mjs /usr/local/bin/openclaw \
+    && openclaw --version
 
 USER node

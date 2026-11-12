@@ -1,4 +1,5 @@
 import type { MigrationProgressRequestBody } from "@octogee/shared/types/fleet-controller";
+import { withLogContext } from "@octogee/shared/server/service-logger";
 
 type ProgressEvent = Pick<MigrationProgressRequestBody, "phase" | "status" | "elapsedMs">;
 export type ProgressJournalEvent = ProgressEvent & { at: number };
@@ -20,24 +21,24 @@ export function createMigrationProgress(deps: {
       deps.log(`🔴 [migration] progress journal write failed: ${String(error)}; ${JSON.stringify(event)}`);
     }
   };
-  const report = async (phase: string, status: ProgressEvent["status"]): Promise<void> => {
-    const at = now();
+  const report = async (phase: string, status: ProgressEvent["status"], at = now()): Promise<void> => {
     if (status === "running") started.set(phase, at);
     const start = started.get(phase);
+    if (status !== "running") started.delete(phase);
     const event = { phase, status, ...(start === undefined ? {} : { elapsedMs: Math.max(0, at - start) }) };
-    await journal(event, at);
-    if (forwarding) {
+    await withLogContext({
+      phase, status, ...(status === "running" || event.elapsedMs === undefined ? {} : { durationMs: event.elapsedMs }),
+    }, async () => {
+      deps.log(status === "failed" ? "🔴 [migration] Phase failed" : "[migration] Phase progress");
+      await journal(event, at);
+      if (!forwarding) return;
       try {
         await deps.send(event);
-        return;
       } catch (error) {
         forwarding = false;
         deps.log(`🔴 [migration] destination progress unavailable: ${String(error)}; continuing progress in the fleet controller logs`);
       }
-    }
-    const icons = { done: "🟢", failed: "🔴", pending: "🟡", running: "🟡", skipped: "🟡" };
-    const icon = icons[status];
-    deps.log(`${icon} [migration] ${JSON.stringify(event)}`);
+    });
   };
   return {
     report,

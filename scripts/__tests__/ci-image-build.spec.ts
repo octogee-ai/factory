@@ -1,3 +1,6 @@
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { buildImage, buildSummary, isolatedBaseRecipe, ensureImage, gatewayBaseRecipe, imagePlan } from "../ci/image-build.mjs";
@@ -119,6 +122,7 @@ describe("base image recipes", () => {
     expect(gatewayBaseRecipe(repoRoot).sort()).toEqual([
       ".dockerignore",
       "infra/gateway/Dockerfile.base",
+      "infra/gateway/openclaw-tarball/extract-npm.sh",
       "infra/gateway/openclaw-tarball/npm-distribution.test.mjs",
       "infra/gateway/verify-codex-native-hook-runtime.mjs",
       "infra/gateway/verify-codex-source-match.mjs",
@@ -137,4 +141,31 @@ describe("base image recipes", () => {
       "infra/gateway/stamp-claude-first-run.mjs",
     ]);
   });
+});
+
+it("stages the exact vendored npm bytes independently of the rest of the OpenClaw archive", () => {
+  const cwd = mkdtempSync(resolve(tmpdir(), "octogee-gateway-npm-"));
+  const extractor = resolve(repoRoot, "infra/gateway/openclaw-tarball/extract-npm.sh");
+  try {
+    mkdirSync(resolve(cwd, "package/vendor"), { recursive: true });
+    writeFileSync(resolve(cwd, "package/vendor/npm.tgz"), Buffer.from([0x1f, 0x8b, 0x08, 0xff]));
+    const stageNpm = (version: string) => {
+      writeFileSync(resolve(cwd, "package/version"), version);
+      execFileSync("tar", ["-czf", "openclaw-fork.tgz", "package"], { cwd });
+      execFileSync("bash", [extractor, "openclaw-fork.tgz"], { cwd });
+      return readFileSync(resolve(cwd, "npm-fork.tgz"));
+    };
+    const first = stageNpm("old OpenClaw version");
+    const second = stageNpm("new OpenClaw version");
+    expect(second).toEqual(first);
+    expect(second).toEqual(readFileSync(resolve(cwd, "package/vendor/npm.tgz")));
+
+    rmSync(resolve(cwd, "package/vendor/npm.tgz"));
+    execFileSync("tar", ["-czf", "openclaw-fork.tgz", "package"], { cwd });
+    const rejected = spawnSync("bash", [extractor, "openclaw-fork.tgz"], { cwd });
+    expect(rejected.status).toBeGreaterThan(0);
+    expect(existsSync(resolve(cwd, "npm-fork.tgz"))).toBe(false);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });

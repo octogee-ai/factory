@@ -6,6 +6,7 @@ import {
   assertWorkspaceMigrationSourcePreparationAuthority,
   clearWorkspaceMigrationPreparation,
   completeWorkspaceMigrationRecovery,
+  markAssignmentState,
   setWorkspaceMigrationPhase,
 } from "./fleet-state.js";
 import { createDocumentFixtureStore, FIXTURE_SIZING_PROFILES } from "./testing/journal-store.js";
@@ -100,6 +101,38 @@ describe("a move onto an isolated gateway, checked against the gateway's own rec
     const openclaw = (records.get(`users/${UID}`)!.provisioning as { openclaw: Row }).openclaw;
     expect(openclaw.migration).toBeUndefined();
     expect(openclaw.gatewayId).toBe(SHARED);
+  });
+});
+
+describe("workspace migration progress", () => {
+  const readMarker = (records: Map<string, Row>) => (records.get(`users/${UID}`)!.provisioning as { openclaw: Row }).openclaw.migration;
+
+  it("keeps the same move's transfer phase and start time when its source is quiesced", async () => {
+    const records = seed();
+    const deps = { store: createDocumentFixtureStore(records), now: () => new Date(2_000) };
+    await setWorkspaceMigrationPhase(deps, { uid: UID, sourceGatewayId: SHARED, operationId: OP, phase: "transferring" });
+    await markAssignmentState(deps, { gatewayId: SHARED, uid: UID, state: "quiescing", updatedByOperationId: OP });
+    expect(readMarker(records)).toEqual({ state: "moving", phase: "transferring", operationId: OP, startedAt: STARTED });
+  });
+
+  it("records the checkpoint as display activity while retaining the transfer fence and clears it when the source serves again", async () => {
+    const records = seed();
+    const deps = { store: createDocumentFixtureStore(records), now: () => new Date(2_000) };
+    await setWorkspaceMigrationPhase(deps, { uid: UID, sourceGatewayId: SHARED, operationId: OP, phase: "checkpointing" });
+    expect(readMarker(records)).toEqual({ state: "moving", phase: "transferring", activity: "checkpointing", operationId: OP, startedAt: STARTED });
+    await setWorkspaceMigrationPhase(deps, { uid: UID, sourceGatewayId: SHARED, operationId: OP, phase: "transferring" });
+    expect(readMarker(records)).toEqual({ state: "moving", phase: "transferring", operationId: OP, startedAt: STARTED });
+    await markAssignmentState(deps, { gatewayId: SHARED, uid: UID, state: "serving", updatedByOperationId: OP });
+    expect(readMarker(records)).toBeUndefined();
+  });
+
+  it("does not revive source display activity after the assignment moved to the target", async () => {
+    const records = seed({ openclaw: { gatewayId: TARGET, migration: undefined } });
+    const operation = records.get(`${GLM_OPERATIONS_COLLECTION}/${OP}`)!;
+    records.set(`${GLM_OPERATIONS_COLLECTION}/${OP}`, { ...operation, cutoverCommittedAt: 2_000 });
+    const deps = { store: createDocumentFixtureStore(records), now: () => new Date(2_100) };
+    await expect(setWorkspaceMigrationPhase(deps, { uid: UID, sourceGatewayId: SHARED, operationId: OP, phase: "checkpointing" })).rejects.toThrow("workspace migration phase authority changed");
+    expect(readMarker(records)).toBeUndefined();
   });
 });
 

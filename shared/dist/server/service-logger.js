@@ -56,6 +56,9 @@ export function createServiceLogger(service, options = {}) {
                 if (typeof value === "string" && /^[a-zA-Z0-9_.:-]+$/.test(value))
                     redacted[key] = value;
             }
+            const migrationId = safe.migrationId;
+            if (typeof migrationId === "string" && /^mig-[a-zA-Z0-9_.:-]+$/.test(migrationId))
+                redacted.migrationId = migrationId;
             output[level](redacted, redactSecrets(stripVTControlCharacters(message), redaction));
         };
         return {

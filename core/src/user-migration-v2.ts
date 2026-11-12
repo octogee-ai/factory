@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { WorkspaceMigrationPhase } from "@octogee/shared/types/workspace-migration";
 import type {
   UserMigrationV2GatewayRootFence,
   UserMigrationV2Phase,
@@ -138,7 +139,7 @@ export interface UserMigrationV2Deps {
   now: () => number;
   log: (message: string) => void;
   wait?: (delayMs: number) => Promise<void>;
-  setMigrationPhase?: (phase: "preparing" | "waiting" | "transferring" | "connecting") => Promise<void>;
+  setMigrationPhase?: (phase: WorkspaceMigrationPhase) => Promise<void>;
 }
 
 export async function advanceUserMigrationV2(
@@ -245,6 +246,7 @@ async function advanceForward(
         mode: "final",
         includeActivationManifest: true,
       });
+      await deps.setMigrationPhase?.("activating");
       await deps.client.flushGateway({
         migrationId: state.migrationId,
         gatewayId: state.targetGatewayId,

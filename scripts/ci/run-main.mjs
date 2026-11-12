@@ -75,7 +75,10 @@ async function gateway() {
   summary.push(...await buildGatewayImages({ repository, sha, base, isolatedBase: `${base}-builder-${recipeHash(isolatedBaseRecipe()).slice(0, 12)}`, toolchain, force }, {
     exists: async ref => Boolean(lookup(ref)),
     script: async (file, args) => run('bash', [file, ...args]),
-    prepareBase: openclawTarballs,
+    prepareBase: async () => {
+      const tarball = await openclawTarballs();
+      await execute('bash', ['infra/gateway/openclaw-tarball/extract-npm.sh', tarball]);
+    },
     bake: async plan => {
       const room = await awaitDiskRoom(process.env.CI_DISK_ROOM_MARKER);
       if (room !== null) console.log(`Disk ready for the gateway bake:\n${room}`);

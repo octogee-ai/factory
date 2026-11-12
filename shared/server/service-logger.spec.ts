@@ -50,8 +50,12 @@ describe("service logging contract", () => {
   it("preserves long operational identities while redacting credentials", () => {
     const lines = capture();
     const operationId = "mig-placement-9c0d0bb72a5b3330e28eb4c448c0e0d8";
-    createServiceLogger("provisioner").info("Migration started", { operationId, token: "secret" });
-    expect(JSON.parse(lines[0])).toMatchObject({ operationId, token: "[redacted]" });
+    const migrationId = "mig-builder-activate-b-profile-alice-20261112-g12";
+    const log = createServiceLogger("provisioner");
+    log.info("Migration started", { operationId, migrationId, token: "secret" });
+    log.info("Migration identifier rejected", { migrationId: "sk-ant-abcdefghijklmnop1234" });
+    expect(JSON.parse(lines[0])).toMatchObject({ operationId, migrationId, token: "[redacted]" });
+    expect(JSON.parse(lines[1])).toMatchObject({ migrationId: "[redacted]" });
   });
   describe("long identifiers", () => {
     const hexId = "c".repeat(20) + "0".repeat(20);

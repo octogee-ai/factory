@@ -53,6 +53,9 @@ function workspaceMigrationMarker(operationId, startedAt) {
 }
 export async function setWorkspaceMigrationPhase(deps, params) {
     const startedAt = nowMs(deps);
+    const { phase } = params;
+    const state = phase === "preparing" || phase === "waiting" ? "preparing" : "moving";
+    const progress = phase === "activating" || phase === "checkpointing" ? { phase: "transferring", activity: phase } : { phase };
     await deps.store.transaction({ label: "fleet-state.setWorkspaceMigrationPhase" }, async (tx) => {
         const [user, stored] = await Promise.all([
             tx.users.records.get(params.uid),
@@ -74,8 +77,7 @@ export async function setWorkspaceMigrationPhase(deps, params) {
         if (!exact)
             throw new Error("workspace migration phase authority changed");
         await tx.users.records.setFence(params.uid, "migration", {
-            state: params.phase === "preparing" || params.phase === "waiting" ? "preparing" : "moving",
-            phase: params.phase,
+            state, ...progress,
             operationId: params.operationId,
             startedAt: prior?.startedAt ?? startedAt,
         }, user?.fences.migration ?? "absent");
@@ -1434,7 +1436,12 @@ function nextAssignmentStateClock(now, previous = 0) {
 }
 async function writeWorkspaceMigrationMarkerForState(tx, user, params, updatedAt) {
     if (params.state === "quiescing") {
-        await tx.users.records.setFence(params.uid, "migration", workspaceMigrationMarker(params.updatedByOperationId, updatedAt), user?.fences.migration ?? "absent");
+        const prior = migrationMarker(user);
+        const sameOperation = prior?.operationId !== undefined && prior.operationId === params.updatedByOperationId;
+        const continuing = sameOperation ? prior : null;
+        const marker = continuing?.state === "moving" ? continuing :
+            workspaceMigrationMarker(params.updatedByOperationId, continuing?.startedAt ?? updatedAt);
+        await tx.users.records.setFence(params.uid, "migration", marker, user?.fences.migration ?? "absent");
         return;
     }
     if (params.state === "serving")

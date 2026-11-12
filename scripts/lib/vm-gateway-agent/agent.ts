@@ -33,6 +33,7 @@ import {
   checkpointHome,
   homeScope,
   restoreHome,
+  type HomeCheckpointDeps,
   type HomeFs,
   type HomeShell,
 } from "./home-checkpoint.js";
@@ -88,7 +89,7 @@ export interface VmAgentDeps {
   fs: AgentFs;
   home: { shell: HomeShell; fs: HomeFs; desktop: DesktopControl };
   now: () => number;
-  log: (msg: string) => void;
+  log: HomeCheckpointDeps["log"];
 }
 
 export interface VmAgentState {
@@ -282,7 +283,6 @@ export async function restoreHomeIfEmpty(deps: VmAgentDeps, bundle: GatewayVmRun
   const result = await restoreHome(homeDeps(deps, bundle), scope);
   await deps.home.desktop.run("start");
   if (result.status === "restored") deps.log(`[vm-agent] home restore restored ${result.name} (${result.size} bytes)`);
-  else if (result.status === "none") deps.log("[vm-agent] home restore none: no checkpoint for this user yet");
 }
 
 async function assertHomeClaimOwner(
@@ -397,8 +397,12 @@ export async function syncUserDesk(deps: VmAgentDeps, bundle: GatewayVmRuntimeBu
   }
 }
 
+function outstandingCheckpointRequestedAt(signal: HomeCheckpointSignal): number | null {
+  return signal.requestedAt !== null && signal.requestedAt > (signal.completedAt ?? 0) ? signal.requestedAt : null;
+}
+
 export function homeCheckpointDue(state: VmAgentState, signal: HomeCheckpointSignal, now: number): { due: boolean; force: boolean } {
-  const force = signal.requestedAt !== null && signal.requestedAt > (signal.completedAt ?? 0);
+  const force = outstandingCheckpointRequestedAt(signal) !== null;
   const periodic = state.homeCheckpointCheckedAt === null || now - state.homeCheckpointCheckedAt >= HOME_CHECKPOINT_INTERVAL_MS;
   return { due: force || periodic, force };
 }
@@ -475,7 +479,15 @@ export async function convergeOnce(deps: VmAgentDeps, state: VmAgentState): Prom
     deps.log("[vm-agent] runtime bundle not rendered yet; waiting");
     return state;
   }
-  const { bundle } = fetched;
+  const { bundle, homeCheckpoint: signal } = fetched;
+  const requestedAt = outstandingCheckpointRequestedAt(signal);
+  if (requestedAt !== null) {
+    deps.log("[vm-agent] home checkpoint request observed", {
+      gatewayId: deps.gatewayId, builderSlug: bundleUserIdentity(bundle)?.builderSlug,
+      category: "home-checkpoint", phase: "request-observed", status: "done", requestedAt,
+      requestAgeMs: deps.now() - requestedAt,
+    });
+  }
   if (!bundle.namespace) {
     deps.log(`[vm-agent] bundle ${bundle.version} carries no namespace; VM logs stay unlabelled until the platform is upgraded`);
   }
@@ -488,7 +500,6 @@ export async function convergeOnce(deps: VmAgentDeps, state: VmAgentState): Prom
   }
   await ensureVolumes(deps, bundle, identity.instanceId);
   const running = await Promise.all(bundle.containers.map((c) => inspectContainer(deps.engine, `octogee-${c.name}`)));
-  const signal = fetched.homeCheckpoint;
   if (await keepAcknowledgedCheckpointHeld(deps, bundle, running, signal)) return next;
   if (signal.requestedAt !== null && allHomeWritersHeld(running)) {
     return checkpointHomeIfDue(deps, bundle, signal, next);
@@ -502,7 +513,7 @@ export async function convergeOnce(deps: VmAgentDeps, state: VmAgentState): Prom
     if (next.appliedVersion !== bundle.version) next = { ...next, appliedVersion: bundle.version };
     await syncUserDesk(deps, bundle);
     await inspectUnusedScratch(deps, identity.instanceId);
-    return checkpointHomeIfDue(deps, bundle, fetched.homeCheckpoint, next);
+    return checkpointHomeIfDue(deps, bundle, signal, next);
   }
   await applyDecision(deps, bundle, plan, decision, { running, vmId: identity.instanceId });
   await syncUserDesk(deps, bundle);

@@ -3,6 +3,8 @@ import type { RetainedSourceContext } from '../lib/retained-source-transfer.js';
 import type { MigrationProgressRecord, SourceTransferExecution } from '@octogee/shared/types/glm';
 import type { PrepareMigrationAgentStores } from "../migration-agent-stores.js";
 import { createMigrationProgress } from "../migration-progress.js";
+import { withLogContext } from "@octogee/shared/server/service-logger";
+import type { WorkspaceMigrationPhase } from "@octogee/shared/types/workspace-migration";
 import { operationScopedLog, withOperationLogScope } from "../operation-log-scope.js";
 import {
   attemptMayHoldSourceIngress,
@@ -129,7 +131,7 @@ export interface MigrateUserDeps {
   completeMigrationRecovery?: (input: WorkspaceMigrationRecoveryParams) => Promise<void>;
   prepareMigrationAgentStores?: PrepareMigrationAgentStores;
   prepareIsolatedRecoveryTarget?: (input: { recovery: WorkspaceMigrationRecoveryParams; targetGatewayId: string; migrationId: string; slug: string }) => Promise<void>;
-  setMigrationPhase?: (input: { uid: string; sourceGatewayId: string; operationId: string; phase: "preparing" | "waiting" | "transferring" | "connecting" }) => Promise<void>;
+  setMigrationPhase?: (input: { uid: string; sourceGatewayId: string; operationId: string; phase: WorkspaceMigrationPhase }) => Promise<void>;
 
   setAssignmentState: (input: {
     gatewayId: string;
@@ -206,17 +208,7 @@ async function runOrdinaryMigrationV2(input: {
     input,
     state: initialized,
     scopeChanged: ordinaryV2ScopeChanged(input, initialized),
-    progress: createMigrationProgress({
-      now: input.deps.now,
-      log: (message) => input.deps.log(`${message} migrationId=${input.migrationId} user=${input.slug}`),
-      send: (event) => input.deps.reportMigrationProgress(input.targets.toGatewayId, {
-        ...event, migrationId: input.migrationId, slug: input.slug, source: input.targets.fromGatewayId,
-      }),
-      persist: (event) => input.deps.recordMigrationProgress({
-        operation: input.op,
-        event: { ...event, migrationId: input.migrationId, slug: input.slug, source: input.targets.fromGatewayId, attempt: (input.op.attempts ?? 0) + 1 },
-      }),
-    }),
+    progress: migrateUserProgress(input),
   };
   while (execution.state.phase !== "complete" && execution.state.phase !== "aborted") {
     const outcome = await runOrdinaryV2Iteration(execution);
@@ -427,7 +419,10 @@ async function runOrdinaryV2Iteration(
       execution.input.op,
       resolveOperationOrigin(execution.input.op.origin) === "automatic",
     );
-    const next = await advanceUserMigrationV2(execution.state, driverDeps);
+    const next = await advanceUserMigrationV2(execution.state, {
+      ...driverDeps,
+      client: withImportProgress(driverDeps.client, execution.progress),
+    });
     if (next === execution.state) {
       await execution.progress.report(phase, "pending");
       return "stop";
@@ -531,7 +526,7 @@ async function buildV2DriverDeps(
   { uid: state.uid, slug: state.slug, gatewayId: state.targetGatewayId, operationId: op.id, claimedStartedAt: op.startedAt });
   return {
     client,
-    setMigrationPhase: (phase: "preparing" | "waiting" | "transferring" | "connecting") => deps.setMigrationPhase?.({ uid: state.uid, sourceGatewayId: state.sourceGatewayId, operationId: state.operationId, phase }) ?? Promise.resolve(),
+    setMigrationPhase: (phase: WorkspaceMigrationPhase) => deps.setMigrationPhase?.({ uid: state.uid, sourceGatewayId: state.sourceGatewayId, operationId: state.operationId, phase }) ?? Promise.resolve(),
     setSourceAssignmentState: (assignmentState: "serving" | "quiescing") =>
       deps.setAssignmentState({
         gatewayId: state.sourceGatewayId,
@@ -759,12 +754,13 @@ async function runNativeReturn(input: NativeReturnProvision): Promise<OperationR
   input = { ...input, ctx: { ...input.ctx, ...(assertClaim ? {
     assertActiveClaim: (allowCancelled = false) => assertClaim(allowCancelled || handoff.forwardRecovery !== undefined),
   } : {}) } };
-  const ctx = destinationProgressContext(input);
+  const progress = migrateUserProgress(input);
+  const ctx = destinationProgressContext(input.ctx, progress);
   deps.log(
     `[migrate-customer] ${targets.fromGatewayId} → ${targets.toGatewayId} slug=${slug}: ` +
     "native-return",
   );
-  const client = await gatewayClient(deps, [targets.fromGatewayId, targets.toGatewayId]);
+  const client = withImportProgress(await gatewayClient(deps, [targets.fromGatewayId, targets.toGatewayId]), progress);
   const step = async (name: string, action: () => Promise<unknown>): Promise<void> => {
     await reportNativeReturnStep(deps, ctx, name, action);
   };
@@ -779,10 +775,11 @@ async function runNativeReturn(input: NativeReturnProvision): Promise<OperationR
   let sourceFenced = false;
   try {
     if (!handoff.forwardRecovery) {
-      await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId: input.operationId, phase: "waiting" });
+      await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId: input.operationId, phase: "preparing" });
       await step("keys-sync-state", () => client.transferState({
         migrationId, slug, fromGatewayId: targets.fromGatewayId, toGatewayId: targets.toGatewayId, mode: "keys",
       }));
+      await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId: input.operationId, phase: "waiting" });
       await step("wait-for-active-work", () => client.quiesce({ migrationId, gatewayId: targets.fromGatewayId, slug, timeoutMs: 30_000, stopMattermost: false }));
       await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId: input.operationId, phase: "transferring" });
       await deps.setAssignmentState({
@@ -895,6 +892,9 @@ async function closeSourceForNativeReturnProvision(
     }
   });
   if (handoff) await step("stage-scheduler", () => stagePortableSchedules(input.deps, client, handoff));
+  await input.deps.setMigrationPhase?.({
+    uid: input.uid, sourceGatewayId: targets.fromGatewayId, operationId: input.operationId, phase: "checkpointing",
+  });
   await step("request-native-checkpoint", input.nativeReturn.requestCheckpoint);
 }
 
@@ -1109,27 +1109,43 @@ interface MigrationExecutionInput {
   automatic: boolean;
 }
 
-function destinationProgressContext(
-  input: Pick<MigrationExecutionInput, "deps" | "ctx" | "op" | "targets" | "slug" | "migrationId">,
-): OperationContext {
-  const { deps, ctx, op, targets, slug, migrationId } = input;
-  const progress = createMigrationProgress({
+function migrateUserProgress(input: Pick<MigrationExecutionInput, "deps" | "op" | "slug" | "migrationId"> & {
+  targets: Pick<MigrationTargets, "fromGatewayId" | "toGatewayId">;
+}) {
+  const { deps, op, targets, slug, migrationId } = input;
+  const attempt = (op.attempts ?? 0) + 1;
+  const scope = { operationId: op.id, migrationId, attempt, builderSlug: slug, category: "migration",
+    gatewayId: targets.toGatewayId, sourceGateway: targets.fromGatewayId, targetGateway: targets.toGatewayId };
+  return createMigrationProgress({
     now: deps.now,
-    log: (message) => deps.log(`${message} migrationId=${migrationId} user=${slug}`),
+    log: (message) => withLogContext(scope, () => deps.log(message)),
     send: (event) => deps.reportMigrationProgress(targets.toGatewayId, {
       ...event, migrationId, slug, source: targets.fromGatewayId,
     }),
     persist: (event) => deps.recordMigrationProgress({
       operation: op,
-      event: { ...event, migrationId, slug, source: targets.fromGatewayId, attempt: (op.attempts ?? 0) + 1 },
+      event: { ...event, migrationId, slug, source: targets.fromGatewayId, attempt },
     }),
   });
+}
+
+function destinationProgressContext(ctx: OperationContext, progress: ReturnType<typeof createMigrationProgress>): OperationContext {
   return {
     ...ctx,
     reportStep: async (step) => {
       await ctx.reportStep(step);
-      await progress.report(step.name, step.status);
+      await progress.report(step.name, step.status, step.status === "running" ? step.startedAt : step.completedAt);
     },
+  };
+}
+
+function withImportProgress(client: MigrationClient, progress: ReturnType<typeof createMigrationProgress>): MigrationClient {
+  return {
+    ...client,
+    transferState: input => client.transferState(input.mode === "final" ? {
+      ...input,
+      reportImport: (status, at) => progress.report("target-import-and-activation", status, at),
+    } : input),
   };
 }
 
@@ -1471,8 +1487,11 @@ async function finishNativeReturnAfterCutover(
   )) {
     return failure("scheduler handoff scope changed after cutover", false);
   }
-  return completeNativeReturn(deps, ctx, native, {
-    uid: request.uid, fromGatewayId, toGatewayId: user.currentGatewayId, slug: user.slug, migrationId: deps.genMigrationId(op.id), handoff, operation: op,
+  const migrationId = deps.genMigrationId(op.id);
+  const targets = { fromGatewayId, toGatewayId: user.currentGatewayId };
+  const progressCtx = destinationProgressContext(ctx, migrateUserProgress({ deps, op, targets, slug: user.slug, migrationId }));
+  return completeNativeReturn(deps, progressCtx, native, {
+    uid: request.uid, ...targets, slug: user.slug, migrationId, handoff, operation: op,
   });
 }
 
@@ -2192,7 +2211,6 @@ async function executeMigrationAttempt(
 ): Promise<OperationResult> {
   const operationId = op.id;
   const automatic = resolveOperationOrigin(op.origin) === "automatic";
-  const attempt = (op.attempts ?? 0) + 1;
   const client = schedulerRetirementClient(deps.buildClient((transportId) => {
     const url = prepared.urls.get(transportId);
     if (!url) {
@@ -2200,20 +2218,7 @@ async function executeMigrationAttempt(
     }
     return url;
   }), deps, { uid: prepared.uid, slug: prepared.user.slug, gatewayId: prepared.toGatewayId, operationId: op.id, claimedStartedAt: op.startedAt });
-  const progress = createMigrationProgress({
-    now: deps.now,
-    log: (message) => deps.log(`${message} migrationId=${prepared.migrationId} user=${prepared.user.slug}`),
-    send: (event) => deps.reportMigrationProgress(prepared.toGatewayId, {
-      ...event,
-      migrationId: prepared.migrationId,
-      slug: prepared.user.slug,
-      source: prepared.user.currentGatewayId,
-    }),
-    persist: (event) => deps.recordMigrationProgress({
-      operation: op,
-      event: { ...event, migrationId: prepared.migrationId, slug: prepared.user.slug, source: prepared.user.currentGatewayId, attempt },
-    }),
-  });
+  const progress = migrateUserProgress({ deps, op, targets: prepared.targets, slug: prepared.user.slug, migrationId: prepared.migrationId });
   let targetUnmountConfirmed = false;
   let preparationFailed = false;
   let postQuiesceFailed = false;
@@ -2227,7 +2232,7 @@ async function executeMigrationAttempt(
       if (["keys-sync-state", "pre-sync-state", "wait-for-active-work"].includes(step.name) && step.status === "failed") preparationFailed = true;
       if (["final-sync-state", "verify-target"].includes(step.name) && step.status === "failed") postQuiesceFailed = true;
       if (step.name === "final-sync-state" && step.status === "failed") targetReleased = releasedTargetImportFailure(step.error, prepared.toGatewayId, prepared.migrationId);
-      await progress.report(step.name, step.status);
+      await progress.report(step.name, step.status, step.status === "running" ? step.startedAt : step.completedAt);
     },
   };
   const schedulerMigrationId = op.schedulerHandoff?.forwardRecovery !== undefined
@@ -2248,6 +2253,7 @@ async function executeMigrationAttempt(
   const result = await runMigration(
     {
       migrationId: prepared.migrationId,
+      operationId,
       ...(handoff.forwardRecovery ? { resumeForwardRecovery: handoff.forwardRecovery } : {}),
       uid: prepared.uid,
       slug: prepared.user.slug,
@@ -2261,7 +2267,7 @@ async function executeMigrationAttempt(
       ...(sourceOwnedUserActivation(prepared.targets) && !handoff.forwardRecovery ? { preserveSource: true as const } : {}),
     },
     {
-      ...buildRunnerDeps({ deps, client, ctx: destinationContext, automatic, operationId, uid: prepared.uid, sourceGatewayId: prepared.user.currentGatewayId }),
+      ...buildRunnerDeps({ deps, client: withImportProgress(client, progress), ctx: destinationContext, automatic, operationId, uid: prepared.uid, sourceGatewayId: prepared.user.currentGatewayId }),
       ...legacySchedulerHandoffDeps(deps, op, handoff),
       ...(!sourceOwnedUserActivation(prepared.targets) || handoff.forwardRecovery ? { persistForwardRecovery: async (state: { sourceSystemConfigCommit?: string }) => {
         if (!ctx.assertActiveClaim) throw new Error("forward recovery requires an active operation claim");
@@ -2397,8 +2403,12 @@ export function createMigrateUserHandler(deps: MigrateUserDeps): OperationHandle
       return deps.recoverNativeReturnSource(op, ctx);
     }
     const scoped: MigrateUserDeps = { ...deps, log: operationScopedLog(deps.log) };
-    return withOperationLogScope(op.id, async () =>
+    return withLogContext({
+      operationId: op.id, migrationId: deps.genMigrationId(op.id), attempt: (op.attempts ?? 0) + 1,
+      ...(typeof op.input.fromGatewayId === "string" ? { sourceGateway: op.input.fromGatewayId } : {}),
+      ...(typeof op.input.toGatewayId === "string" ? { targetGateway: op.input.toGatewayId, gatewayId: op.input.toGatewayId } : {}),
+    }, () => withOperationLogScope(op.id, async () =>
       attributePreemption(scoped, op, await runMigrateUser(scoped, op, ctx)),
-    );
+    ));
   };
 }

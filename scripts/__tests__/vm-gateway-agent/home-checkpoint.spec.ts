@@ -103,6 +103,41 @@ describe("homeScope", () => {
 });
 
 describe("checkpointHome", () => {
+  it("records separate inventory, snapshot, archive, hash, upload and commit timings for a requested checkpoint", async () => {
+    const requestedAt = 10_000;
+    let now = 12_000;
+    const h = fakeHome({}, {
+      "/internal/fleet/computer-home/checkpoint-url": () => ({ status: 200, body: { name: NAME, upload: signedUpload } }),
+      "/customers/bob/computer-home/checkpoints/x": () => { now += 13; return { status: 200, body: {} }; },
+      "/internal/fleet/computer-home/commit": () => { now += 17; return { status: 200, body: { name: NAME } }; },
+    });
+    h.deps.now = () => now;
+    h.deps.desktop.tools = async () => { now += 2; return { rebuildable: true }; };
+    h.deps.captureSnapshot = async () => { now += 3; };
+    h.deps.shell.run = async () => { now += 5; return { code: 0, stdout: "", stderr: "" }; };
+    h.deps.fs.sha256 = async () => { now += 7; return SHA; };
+
+    await checkpointHome(h.deps, h.scope, { force: true, requestedAt });
+
+    const events = vi.mocked(h.deps.log).mock.calls.map(([, fields]) => fields).filter((fields) => fields?.category === "home-checkpoint");
+    expect(events.map((event) => `${event?.phase}:${event?.status}`)).toEqual([
+      "inventory-before-snapshot:running", "inventory-before-snapshot:done",
+      "snapshot:running", "inventory-in-snapshot:running", "inventory-in-snapshot:done", "snapshot:done",
+      "archive:running", "archive:done", "hash:running", "hash:done",
+      "upload:running", "upload:done", "commit:running", "commit:done",
+    ]);
+    expect(events.filter((event) => event?.status === "running").every((event) => event?.durationMs === undefined)).toBe(true);
+    expect(events.filter((event) => event?.status === "done")).toEqual([
+      { phase: "inventory-before-snapshot", durationMs: 2 },
+      { phase: "inventory-in-snapshot", durationMs: 2 },
+      { phase: "snapshot", durationMs: 5 },
+      { phase: "archive", durationMs: 5 },
+      { phase: "hash", durationMs: 7 },
+      { phase: "upload", durationMs: 13, checkpointName: NAME, sizeBytes: 2048 },
+      { phase: "commit", durationMs: 17, checkpointName: NAME, sizeBytes: 2048 },
+    ].map((phase) => ({ gatewayId: "b-x", builderSlug: "bob", requestedAt, category: "home-checkpoint", status: "done", ...phase })));
+  });
+
   it("preserves the archive error when snapshot cleanup also fails", async () => {
     const h = fakeHome({ tarCode: 2 });
     let cleanups = 0;
@@ -259,12 +294,44 @@ describe("restoreHome", () => {
     expect(await restoreHome(h.deps, h.scope)).toEqual({ status: "preserved" });
     expect(h.fetches).toEqual([]);
     expect(h.shell).toEqual([]);
+    expect(h.deps.log).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      gatewayId: "b-x", builderSlug: "bob", category: "home-restore", phase: "select-checkpoint", status: "skipped", reason: "home-preserved",
+    }));
   });
 
   it("reports no checkpoint for a fresh user", async () => {
     const h = fakeHome({ dataEntries: [] }, { "/internal/fleet/computer-home/download-url": () => ({ status: 404, body: { error: "no_checkpoint" } }) });
     expect(await restoreHome(h.deps, h.scope)).toEqual({ status: "none" });
     expect(h.shell).toEqual([]);
+    expect(h.deps.log).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      category: "home-restore", phase: "select-checkpoint", status: "skipped", reason: "no-checkpoint",
+    }));
+  });
+
+  it("times download, checksum verification, extraction, and installation without logging the signed URL", async () => {
+    let now = 12_000;
+    const h = fakeHome({ dataEntries: [] }, { "/internal/fleet/computer-home/download-url": () => ({ status: 200, body: record }) });
+    h.deps.now = () => now;
+    h.deps.fs.saveResponse = async () => { now += 7; };
+    h.deps.fs.sha256 = async () => { now += 5; return SHA; };
+    h.deps.shell.run = async () => { now += 13; return { code: 0, stdout: "", stderr: "" }; };
+    h.deps.desktop.run = async () => { now += 3; };
+    h.deps.fs.replaceDirectory = async () => { now += 17; };
+
+    await expect(restoreHome(h.deps, h.scope)).resolves.toMatchObject({ status: "restored" });
+
+    const logs = vi.mocked(h.deps.log).mock.calls;
+    expect(logs.map(([, fields]) => fields)).toEqual(expect.arrayContaining([
+      { phase: "download", durationMs: 7 },
+      { phase: "hash", durationMs: 5 },
+      { phase: "extract", durationMs: 13 },
+      { phase: "install", durationMs: 26 },
+    ].map((phase) => ({ gatewayId: "b-x", builderSlug: "bob", category: "home-restore", status: "done", checkpointName: NAME, sizeBytes: 2048, ...phase }))));
+    expect(logs.map(([, fields]) => `${fields?.phase}:${fields?.status}`)).toEqual([
+      "download:running", "download:done", "hash:running", "hash:done",
+      "extract:running", "extract:done", "install:running", "install:done",
+    ]);
+    expect(JSON.stringify(logs)).not.toContain(record.download.url);
   });
 
   it("preserves current tool projections while restoring full desktop context behind the strict host fence", async () => {
@@ -310,6 +377,8 @@ describe("restoreHome", () => {
     expect(h.shell).toEqual([]);
     expect(digest.shell).toEqual([]);
     expect(h.removed).toEqual(["/tmp/octogee-home-restore-xyz"]);
+    expect(digest.deps.log).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ category: "home-restore", phase: "hash", status: "failed" }));
+    expect(digest.deps.log).not.toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ phase: "install" }));
   });
 });
 

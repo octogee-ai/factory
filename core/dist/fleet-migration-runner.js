@@ -116,6 +116,7 @@ async function convergeTargetSystemConfig(input) {
 async function convergeTargetAfterFinalCopy(input) {
     if (input.step.mode !== "final" || !input.systemConfig.convergeTarget)
         return;
+    await input.deps.setMigrationPhase?.("activating");
     await convergeTargetSystemConfig({
         deps: input.deps,
         migrationId: input.migrationId,
@@ -127,7 +128,7 @@ async function convergeTargetAfterFinalCopy(input) {
 async function transferMigrationState(params, step) {
     const { deps, migrationId, projectCheckoutScope, includeActivationManifest } = params;
     const clock = deps.now ?? Date.now;
-    const transferStartedAt = clock();
+    const importStartedAt = clock();
     await deps.client.transferState({
         migrationId,
         fromGatewayId: step.from,
@@ -138,10 +139,10 @@ async function transferMigrationState(params, step) {
         projectCheckoutScope,
         ...(step.mode !== "keys" && params.preserveSource ? { preserveSource: true } : {}),
     });
-    const transferMs = clock() - transferStartedAt;
+    const transferAndImportMs = clock() - importStartedAt;
     if (!params.preserveSource)
         await convergeTargetAfterFinalCopy({ deps, migrationId, step, systemConfig: params.systemConfig });
-    return { transferMs };
+    return { transferAndImportMs };
 }
 async function executeStep(params) {
     const { step, deps, migrationId, slug, crossGateway, } = params;
@@ -185,8 +186,11 @@ async function executeStep(params) {
                 flipMirror: crossGateway,
             });
             if (params.preserveSource) {
+                const clock = deps.now ?? Date.now;
+                const activationStartedAt = clock();
                 await deps.client.resume({ migrationId, gatewayId: params.targetGatewayId, slug, role: "target" });
                 await convergeTargetSystemConfig({ deps, migrationId, slug, targetGatewayId: params.targetGatewayId, systemConfig: params.systemConfig });
+                return { targetActivationMs: clock() - activationStartedAt };
             }
             return;
         case "unmount-gateway":
@@ -237,7 +241,11 @@ function isPostCutoverSourceCleanup(state, step) {
         step.role === "source");
 }
 export async function runMigration(input, deps) {
-    return withLogContext({ builderSlug: input.slug, operationId: input.migrationId, category: "migration", sourceGateway: input.fromGatewayId, targetGateway: input.toGatewayId }, async () => {
+    return withLogContext({
+        builderSlug: input.slug, ...(input.operationId ? { operationId: input.operationId } : {}),
+        migrationId: input.migrationId, category: "migration", gatewayId: input.toGatewayId,
+        sourceGateway: input.fromGatewayId, targetGateway: input.toGatewayId,
+    }, async () => {
         const execution = createMigrationExecution(input, deps);
         while (true) {
             const result = await runNextMigrationStep(execution);
@@ -390,7 +398,7 @@ function formatTimings(timings) {
 }
 function advanceExecution(execution, name, phaseAtStart, timings) {
     const nextPhase = advancePhase(execution.state.phase);
-    execution.deps.log(`[migration-runner] ${name} ok migrationId=${execution.input.migrationId} slug=${execution.input.slug} (phase ${phaseAtStart} → ${nextPhase})${formatTimings(timings)}`);
+    withLogContext({ phase: name, status: "done", ...timings }, () => execution.deps.log(`[migration-runner] ${name} ok migrationId=${execution.input.migrationId} slug=${execution.input.slug} (phase ${phaseAtStart} → ${nextPhase})${formatTimings(timings)}`));
     execution.state = { ...execution.state, phase: nextPhase };
 }
 async function readRecoveryOwner(execution, phase) {

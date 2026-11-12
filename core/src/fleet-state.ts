@@ -114,6 +114,10 @@ export async function setWorkspaceMigrationPhase(
   params: { uid: string; sourceGatewayId: string; operationId: string; phase: WorkspaceMigrationPhase },
 ): Promise<void> {
   const startedAt = nowMs(deps);
+  const { phase } = params;
+  const state = phase === "preparing" || phase === "waiting" ? "preparing" : "moving";
+  const progress: Pick<WorkspaceMigrationMarker, "phase" | "activity"> =
+    phase === "activating" || phase === "checkpointing" ? { phase: "transferring", activity: phase } : { phase };
   await deps.store.transaction({ label: "fleet-state.setWorkspaceMigrationPhase" }, async (tx) => {
     const [user, stored] = await Promise.all([
       tx.users.records.get(params.uid),
@@ -134,8 +138,7 @@ export async function setWorkspaceMigrationPhase(
     ].every(Boolean);
     if (!exact) throw new Error("workspace migration phase authority changed");
     await tx.users.records.setFence(params.uid, "migration", {
-      state: params.phase === "preparing" || params.phase === "waiting" ? "preparing" : "moving",
-      phase: params.phase,
+      state, ...progress,
       operationId: params.operationId,
       startedAt: prior?.startedAt ?? startedAt,
     }, user?.fences.migration ?? "absent");
@@ -1929,10 +1932,15 @@ async function writeWorkspaceMigrationMarkerForState(
   updatedAt: number,
 ): Promise<void> {
   if (params.state === "quiescing") {
+    const prior = migrationMarker(user);
+    const sameOperation = prior?.operationId !== undefined && prior.operationId === params.updatedByOperationId;
+    const continuing = sameOperation ? prior : null;
+    const marker = continuing?.state === "moving" ? continuing :
+      workspaceMigrationMarker(params.updatedByOperationId, continuing?.startedAt ?? updatedAt);
     await tx.users.records.setFence(
       params.uid,
       "migration",
-      workspaceMigrationMarker(params.updatedByOperationId, updatedAt),
+      marker,
       user?.fences.migration ?? "absent",
     );
     return;

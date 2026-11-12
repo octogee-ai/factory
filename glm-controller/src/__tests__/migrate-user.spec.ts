@@ -1336,8 +1336,23 @@ describe("native VM return", () => {
     const h = mkDeps();
     const native = nativeReturn(h);
     const order: string[] = [];
+    let clock = 1_000;
+    h.deps.now = () => clock;
+    const reportStep = h.ctx.reportStep;
+    h.ctx.reportStep = step => {
+      if (step.name === "checkpoint-native-computer" && step.status === "done") step.startedAt = 1_000;
+      return reportStep(step);
+    };
     native.requestCheckpoint.mockImplementation(async () => { order.push("request-checkpoint"); });
-    native.awaitCheckpoint.mockImplementation(async () => { order.push("checkpoint"); });
+    native.awaitCheckpoint.mockImplementation(async () => { order.push("checkpoint"); clock += 25; });
+    const transfer = h.client.transferState;
+    h.client.transferState = vi.fn(async input => {
+      if (input.mode === "final") {
+        await input.reportImport?.("running", clock);
+        await input.reportImport?.("done", clock);
+      }
+      return transfer(input);
+    });
     const verify = h.client.verifyTarget;
     h.client.verifyTarget = vi.fn(async (input) => {
       order.push("verify");
@@ -1349,9 +1364,25 @@ describe("native VM return", () => {
 
     expect(await createMigrateUserHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
     expect(order).toEqual(["request-checkpoint", "cutover", "checkpoint", "park", "verify"]);
+    expect(vi.mocked(h.deps.setMigrationPhase).mock.calls.map(([input]) => input.phase))
+      .toEqual(["preparing", "waiting", "transferring", "checkpointing"]);
+    expect(vi.mocked(h.deps.setMigrationPhase).mock.invocationCallOrder.at(-1))
+      .toBeLessThan(native.requestCheckpoint.mock.invocationCallOrder[0]!);
     expect(h.deps.recordMigrationProgress).toHaveBeenCalledWith({
       operation: expect.objectContaining({ id: "op-1" }),
       event: expect.objectContaining({ status: "running", slug: "alice", at: expect.any(Number) }),
+    });
+    const journal = vi.mocked(h.deps.recordMigrationProgress).mock.calls.map(([{ event }]) => [event.phase, event.status]);
+    expect(journal).toEqual(expect.arrayContaining([
+      ["target-import-and-activation", "running"],
+      ["target-import-and-activation", "done"],
+      ["checkpoint-native-computer", "done"],
+      ["park-native-computer", "done"],
+      ["verify-target", "done"],
+    ]));
+    expect(h.deps.recordMigrationProgress).toHaveBeenCalledWith({
+      operation: expect.objectContaining({ id: "op-1" }),
+      event: expect.objectContaining({ phase: "checkpoint-native-computer", status: "done", elapsedMs: 25 }),
     });
     const lines = vi.mocked(h.deps.log).mock.calls.map(([message]) => message);
     expect(lines.length).toBeGreaterThan(0);

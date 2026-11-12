@@ -379,6 +379,8 @@ describe("createRsyncMigrationTransfer", () => {
   it.each([false, true])("binds every target mutation to the stored attempt and pod (failed=%s)", async failed => {
     const store: Store = {};
     const bodies: Array<Record<string, unknown>> = [];
+    let clock = 100;
+    const reportImport = vi.fn(async () => undefined);
     const baseFetch = makeFetch([]);
     const fetch = (async (url, init) => {
       if (init?.method === "POST" && !String(url).includes("/push-rsync-state/")) {
@@ -386,7 +388,11 @@ describe("createRsyncMigrationTransfer", () => {
         expect(store.binding__final.leasePod).toEqual({ name: "current-controller", uid: "current-uid" });
         expect(body.transferAttemptId).toBe(store.binding__final.attemptId);
         bodies.push(body);
-        if (failed && String(url).includes("/finish-rsync-import/")) throw new Error("target failed");
+        if (String(url).includes("/finish-rsync-import/")) {
+          expect(reportImport).toHaveBeenCalledExactlyOnceWith("running", 100);
+          clock += 70;
+          if (failed) throw new Error("target failed");
+        }
       }
       return baseFetch(url, init);
     }) as typeof globalThis.fetch;
@@ -394,11 +400,12 @@ describe("createRsyncMigrationTransfer", () => {
       fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, fetch, runCommand: async (command, args, options) =>
         args.includes("current-controller") ? { stdout: JSON.stringify({ metadata: { name: "current-controller", uid: "current-uid" }, status: { containerStatuses: [{ name: "glm-controller", restartCount: 0 }] } }), stderr: "", code: 0 }
           : makeCommandRunner([])(command, args, options),
-      controllerPod: { name: "current-controller", uid: "current-uid" } });
-    const result = transfer({ migrationId: "binding", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" });
+      controllerPod: { name: "current-controller", uid: "current-uid" }, now: () => clock });
+    const result = transfer({ migrationId: "binding", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final", reportImport });
     if (failed) await expect(result).rejects.toThrow("target failed");
     else await result;
     expect(bodies.map(body => body.rpcPhase)).toEqual(failed ? ["prepare-rsync-import", "finish-rsync-import", "abort-rsync-import"] : ["prepare-rsync-import", "finish-rsync-import"]);
+    expect(reportImport.mock.calls).toEqual([["running", 100], [failed ? "failed" : "done", 170]]);
   });
 
   it.each(["keys", "pre", "final"] as const)("prepares ownership after detach and before adoption only for final import (%s)", async mode => {

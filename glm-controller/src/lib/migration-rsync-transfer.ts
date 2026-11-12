@@ -20,6 +20,7 @@ import { isUserActivateOperationIdFor } from "@octogee/core/user-activation-leas
 import type { MigrationSyncMode } from "@octogee/core/fleet-migration";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
+import { withLogContext } from "@octogee/shared/server/service-logger";
 
 const DEFAULT_LEASE_MS = MIGRATION_TRANSFER_LEASE_MS;
 const controlDispatcher = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
@@ -372,6 +373,34 @@ export async function abortRetainedSourceImport(
   await retained.acknowledgeCleanup(record);
 }
 
+type TransferInput = Parameters<MigrationClient["transferState"]>[0];
+
+function measureTransfer(input: TransferInput, now: () => number, log: (message: string) => void) {
+  return async function measure<T>(phase: string, gatewayId: string, work: () => Promise<T>): Promise<T> {
+    const report = phase === "target-import-and-activation" ? input.reportImport : undefined;
+    const startedAt = now();
+    const notify = async (status: "running" | "done" | "failed", at: number): Promise<void> => {
+      withLogContext({
+        category: "migration-transfer", migrationId: input.migrationId, builderSlug: input.slug,
+        gatewayId, sourceGateway: input.fromGatewayId, targetGateway: input.toGatewayId,
+        phase, mode: input.mode ?? "pre", status,
+        ...(status === "running" ? {} : { durationMs: Math.max(0, at - startedAt) }),
+      }, () => log(status === "failed" ? "🔴 [migration-rsync] Phase failed" : "[migration-rsync] Phase progress"));
+      await report?.(status, at);
+    };
+    await notify("running", startedAt);
+    let result: T;
+    try {
+      result = await work();
+    } catch (error) {
+      await notify("failed", now());
+      throw error;
+    }
+    await notify("done", now());
+    return result;
+  };
+}
+
 export function createRsyncMigrationTransfer(
   deps: RSyncMigrationTransferDeps,
 ): MigrationClient["transferState"] {
@@ -384,7 +413,7 @@ export function createRsyncMigrationTransfer(
   const log = deps.log ?? (() => undefined);
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
-  const control = <Resp>(opts: {
+  const control = <Resp>({ pathSuffix, ...options }: {
     transportId: string;
     gatewayId: string;
     pathSuffix: string;
@@ -393,45 +422,37 @@ export function createRsyncMigrationTransfer(
     baseUrl?: string;
   }) =>
     postSignedJson<Resp>(
-      {
-        fetchImpl,
-        privateKey: deps.privateKey,
-        resolveGatewayUrl: deps.resolveGatewayUrl,
-      },
-      {
-        transportId: opts.transportId,
-        baseUrl: opts.baseUrl,
-        path: `${opts.pathSuffix}/${opts.gatewayId}`,
-        gatewayId: opts.gatewayId,
-        migrationId: opts.migrationId,
-        body: opts.body,
-      },
+      { fetchImpl, privateKey: deps.privateKey, resolveGatewayUrl: deps.resolveGatewayUrl },
+      { ...options, path: `${pathSuffix}/${options.gatewayId}` },
     );
 
-  async function transferRetained(input: Parameters<MigrationClient["transferState"]>[0]): Promise<ImportResponse> {
+  async function transferRetained(input: TransferInput): Promise<ImportResponse> {
     const retainedSource = deps.retainedSource;
     if (!retainedSource) throw new Error("retained source transport unavailable");
     const mode = "final";
+    const measure = measureTransfer(input, now, log);
     const toTransportId = input.toTransportId ?? input.toGatewayId;
       const target = await resolveGatewayEndpoint({namespace:deps.namespace,transportId:toTransportId,runCommand,requireReady:false,resolveGatewayVm:deps.resolveGatewayVm});
-      const record = await retainedSource.execute({target,prepare: async sourcePodIp => {
+      const record = await measure("retained-source-export-and-transfer", input.fromGatewayId, () => retainedSource.execute({target,prepare: async sourcePodIp => {
         const transferKey = randomBytes(32).toString("hex");
         const prepared = await control<PrepareRsyncImportResponse>({transportId:toTransportId,gatewayId:input.toGatewayId,pathSuffix:"/prepare-rsync-import",migrationId:input.migrationId,body:{migrationId:input.migrationId,slug:input.slug,rpcPhase:"prepare-rsync-import",mode,transferUser:MIGRATION_TRANSFER_USER,transferKey,sourcePodIp},baseUrl:podBaseUrl(target.podIP,deps.fleetControllerPort)});
         return {migrationId:input.migrationId,slug:input.slug,rpcPhase:"push-rsync-state",mode:"final",targetHost:target.podIP,targetPort:prepared.port,targetCertificatePem:requireTargetCertificate(prepared,target.name),transferUser:MIGRATION_TRANSFER_USER,transferKey,includeActivationManifest:input.includeActivationManifest};
-      }});
+      }}));
       if (record.targetGatewayId !== input.toGatewayId || record.targetName !== target.name || record.targetIp !== target.podIP || record.targetVm !== target.vm) throw new Error("retained transfer target changed");
       const baseUrl = podBaseUrl(record.targetIp,deps.fleetControllerPort);
       await retainedSource.settledTarget(target);
       await retainedSource.assertActiveClaim();
-      await deps.prepareAgentStores?.(input.toGatewayId, input.slug);
-      const finished = await control<ImportResponse>({transportId:toTransportId,gatewayId:input.toGatewayId,pathSuffix:"/finish-rsync-import",migrationId:input.migrationId,body:{migrationId:input.migrationId,slug:input.slug,rpcPhase:"finish-rsync-import",mode},baseUrl});
-      if (target.vm) await waitForTargetVmReady(fetchImpl,wait,now,{name:target.name,baseUrl});
-      else await waitForTargetPodReady(runCommand,deps.namespace,target.name);
+      if (deps.prepareAgentStores) await measure("target-agent-store-handoff", input.toGatewayId, () => deps.prepareAgentStores!(input.toGatewayId, input.slug));
+      const finished = await measure("target-import-and-activation", input.toGatewayId, () => control<ImportResponse>({transportId:toTransportId,gatewayId:input.toGatewayId,pathSuffix:"/finish-rsync-import",migrationId:input.migrationId,body:{migrationId:input.migrationId,slug:input.slug,rpcPhase:"finish-rsync-import",mode},baseUrl}));
+      await measure("target-readiness", input.toGatewayId, () => target.vm
+        ? waitForTargetVmReady(fetchImpl,wait,now,{name:target.name,baseUrl})
+        : waitForTargetPodReady(runCommand,deps.namespace,target.name));
       return finished;
   }
 
   return async (input) => {
     const mode = input.mode ?? "pre";
+    const measure = measureTransfer(input, now, log);
     const fromTransportId = input.fromTransportId ?? input.fromGatewayId;
     const toTransportId = input.toTransportId ?? input.toGatewayId;
     if (deps.retainedSource && mode === "final") return transferRetained(input);
@@ -479,14 +500,14 @@ export function createRsyncMigrationTransfer(
         sourcePodIp: sourcePod.podIP,
       };
       targetPrepareAttempted = true;
-      const prepared = await control<PrepareRsyncImportResponse>({
+      const prepared = await measure("target-import-preparation", input.toGatewayId, () => control<PrepareRsyncImportResponse>({
         transportId: toTransportId,
         gatewayId: input.toGatewayId,
         pathSuffix: "/prepare-rsync-import",
         migrationId: input.migrationId,
         body: prepareBody as unknown as Record<string, unknown>,
         baseUrl: targetBaseUrl,
-      });
+      }));
       log(
         `[migration-rsync] task=${claimed.taskId} attempt=${claimed.attempt} mode=${mode} ${input.fromGatewayId}/${sourcePod.name} → ${input.toGatewayId}/${targetPod.name} target=${targetPod.podIP}:${prepared.port}`,
       );
@@ -503,16 +524,18 @@ export function createRsyncMigrationTransfer(
         transferKey,
         includeActivationManifest: input.includeActivationManifest,
       };
-      await control<ImportResponse>({
+      await measure("source-export-and-transfer", input.fromGatewayId, () => control<ImportResponse>({
         transportId: fromTransportId,
         gatewayId: input.fromGatewayId,
         pathSuffix: "/push-rsync-state",
         migrationId: input.migrationId,
         body: pushBody as unknown as Record<string, unknown>,
-      });
+      }));
       await assertTransferClaim(deps.store, claimed);
-      if (mode === "final") await deps.prepareAgentStores?.(input.toGatewayId, input.slug);
-      const finished = await control<ImportResponse>({
+      if (mode === "final" && deps.prepareAgentStores) {
+        await measure("target-agent-store-handoff", input.toGatewayId, () => deps.prepareAgentStores!(input.toGatewayId, input.slug));
+      }
+      const finished = await measure(mode === "final" ? "target-import-and-activation" : "target-import", input.toGatewayId, () => control<ImportResponse>({
         transportId: toTransportId,
         gatewayId: input.toGatewayId,
         pathSuffix: "/finish-rsync-import",
@@ -526,13 +549,11 @@ export function createRsyncMigrationTransfer(
           ...(input.preserveSource ? { preserveSource: true as const, loadStrategy: "expedited" as const } : {}),
         } satisfies FinishRsyncImportRequestBody,
         baseUrl: targetBaseUrl,
-      });
+      }));
       if (mode === "final") {
-        if (targetPod.vm) {
-          await waitForTargetVmReady(fetchImpl, wait, now, { name: targetPod.name, baseUrl: targetBaseUrl });
-        } else {
-          await waitForTargetPodReady(runCommand, deps.namespace, targetPod.name);
-        }
+        await measure("target-readiness", input.toGatewayId, () => resolvedTargetPod.vm
+          ? waitForTargetVmReady(fetchImpl, wait, now, { name: resolvedTargetPod.name, baseUrl: targetBaseUrl })
+          : waitForTargetPodReady(runCommand, deps.namespace, resolvedTargetPod.name));
       }
       await finishTransferTask(deps.store, claimed, now);
       // The target committed the import and told us which post-commit step it could

@@ -118,8 +118,14 @@ Before publication:
 - Install the exact root and Mattermost pair in an isolated npm prefix and
   verify installed build-info. Core, Codex, Parallel and Mattermost must come
   from the same checkout, not merely share a version.
-- Build the actual Linux `openclaw-full-plugin-installer` target in
-  `infra/gateway/Dockerfile.base`. Its native registry refresh, bundled-trust
+- Stage the vendored npm archive before building the actual Linux
+  `openclaw-full-plugin-installer` target in `infra/gateway/Dockerfile.base`.
+
+  ```bash
+  bash infra/gateway/openclaw-tarball/extract-npm.sh infra/gateway/openclaw-tarball/openclaw-fork.tgz
+  ```
+
+  Its native registry refresh, bundled-trust
   check, source-match verification and three native-hook imports must pass.
   Recipe fixtures alone are not installed-image proof.
 - Confirm the native prepack/postpack lifecycle leaves the source clean.

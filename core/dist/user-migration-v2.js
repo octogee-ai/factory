@@ -167,6 +167,7 @@ async function advanceForward(state, deps) {
                 mode: "final",
                 includeActivationManifest: true,
             });
+            await deps.setMigrationPhase?.("activating");
             await deps.client.flushGateway({
                 migrationId: state.migrationId,
                 gatewayId: state.targetGatewayId,
