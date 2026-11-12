@@ -364,12 +364,31 @@ function restoreSchedules(cron, agentIds, records) {
     }
     return result;
 }
+function checkSchedules(cron, records) {
+    const pending = records.flatMap(record => typeof record.job.name !== "string" || presentJob(cron, record) ? [] : [{ record, name: record.job.name }]);
+    const sameName = (agentId, name) => new Set(pending.filter(other => other.record.agentId === agentId && other.name === name).map(other => transferKey(other.record)));
+    const conflicts = [];
+    for (const { record, name } of pending) {
+        const live = cron.agentJobs(record.agentId).find(job => job.name === name);
+        if (live || sameName(record.agentId, name).size > 1) {
+            conflicts.push({ name, agentId: record.agentId, sourceJobId: record.sourceJobId, jobId: live?.id ?? null });
+        }
+    }
+    return { conflicts };
+}
+function transferKey(record) {
+    const carried = typeof record.job.declarationKey === "string" ? record.job.declarationKey : undefined;
+    return carried ?? `${TRANSFER_KEY_PREFIX}${record.agentId}:${record.sourceJobId}`;
+}
+function presentJob(cron, record) {
+    const declarationKey = transferKey(record);
+    return cron.agentJobs(record.agentId).find(job => job.declarationKey === declarationKey || job.id === record.sourceJobId);
+}
 function restoreRecord(cron, agentIds, record, name) {
     if (!agentIds.has(record.agentId))
         throw new Error(`agent ${record.agentId} is not this user's agent on this gateway`);
-    const carried = typeof record.job.declarationKey === "string" ? record.job.declarationKey : undefined;
-    const declarationKey = carried ?? `${TRANSFER_KEY_PREFIX}${record.agentId}:${record.sourceJobId}`;
-    const present = cron.agentJobs(record.agentId).find(job => job.declarationKey === declarationKey || job.id === record.sourceJobId);
+    const declarationKey = transferKey(record);
+    const present = presentJob(cron, record);
     if (present) {
         if (present.id === record.sourceJobId && !present.enabled && record.job.enabled !== false)
             cron.cronUpdate(present.id, { enabled: true });
@@ -439,6 +458,8 @@ export function createCronCustodyGateways(agentScopes) {
             return [200, { ...envelope, ...snapshotSchedules(cron, agentIds) }];
         if (body.op === "remove")
             return [200, { ...envelope, ...removeSchedules(cron, body.jobIds) }];
+        if (body.op === "check")
+            return [200, { ...envelope, ...checkSchedules(cron, body.records) }];
         return [200, { ...envelope, ...restoreSchedules(cron, agentIds, body.records) }];
     };
     const routes = { scheduler, quiesce, schedules };

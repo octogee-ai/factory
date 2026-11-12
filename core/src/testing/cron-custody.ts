@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { ScheduleRecord, ScheduleRestoreResult, ScheduleSkip } from "@octogee/shared/types/fleet-controller";
+import type { ScheduleNameConflict, ScheduleRecord, ScheduleRestoreResult, ScheduleSkip } from "@octogee/shared/types/fleet-controller";
 import { createMigrationClient, type MigrationClient } from "../fleet-migration-client.js";
 
 export interface CustodyJob {
@@ -398,11 +398,35 @@ function restoreSchedules(
   return result;
 }
 
+function checkSchedules(cron: CronCustodyStore, records: readonly ScheduleRecord[]): { conflicts: ScheduleNameConflict[] } {
+  const pending = records.flatMap(record =>
+    typeof record.job.name !== "string" || presentJob(cron, record) ? [] : [{ record, name: record.job.name }]);
+  const sameName = (agentId: string, name: string) =>
+    new Set(pending.filter(other => other.record.agentId === agentId && other.name === name).map(other => transferKey(other.record)));
+  const conflicts: ScheduleNameConflict[] = [];
+  for (const { record, name } of pending) {
+    const live = cron.agentJobs(record.agentId).find(job => job.name === name);
+    if (live || sameName(record.agentId, name).size > 1) {
+      conflicts.push({ name, agentId: record.agentId, sourceJobId: record.sourceJobId, jobId: live?.id ?? null });
+    }
+  }
+  return { conflicts };
+}
+
+function transferKey(record: ScheduleRecord): string {
+  const carried = typeof record.job.declarationKey === "string" ? record.job.declarationKey : undefined;
+  return carried ?? `${TRANSFER_KEY_PREFIX}${record.agentId}:${record.sourceJobId}`;
+}
+
+function presentJob(cron: CronCustodyStore, record: ScheduleRecord): CustodyJob | undefined {
+  const declarationKey = transferKey(record);
+  return cron.agentJobs(record.agentId).find(job => job.declarationKey === declarationKey || job.id === record.sourceJobId);
+}
+
 function restoreRecord(cron: CronCustodyStore, agentIds: ReadonlySet<string>, record: ScheduleRecord, name: string): boolean {
   if (!agentIds.has(record.agentId)) throw new Error(`agent ${record.agentId} is not this user's agent on this gateway`);
-  const carried = typeof record.job.declarationKey === "string" ? record.job.declarationKey : undefined;
-  const declarationKey = carried ?? `${TRANSFER_KEY_PREFIX}${record.agentId}:${record.sourceJobId}`;
-  const present = cron.agentJobs(record.agentId).find(job => job.declarationKey === declarationKey || job.id === record.sourceJobId);
+  const declarationKey = transferKey(record);
+  const present = presentJob(cron, record);
   if (present) {
     if (present.id === record.sourceJobId && !present.enabled && record.job.enabled !== false) cron.cronUpdate(present.id, { enabled: true });
     return false;
@@ -476,6 +500,7 @@ export function createCronCustodyGateways(agentScopes: Record<string, string[]>)
     calls.push(`schedules:${gatewayId}:${String(body.op)}`);
     if (body.op === "snapshot") return [200, { ...envelope, ...snapshotSchedules(cron, agentIds) }];
     if (body.op === "remove") return [200, { ...envelope, ...removeSchedules(cron, body.jobIds as string[]) }];
+    if (body.op === "check") return [200, { ...envelope, ...checkSchedules(cron, body.records as ScheduleRecord[]) }];
     return [200, { ...envelope, ...restoreSchedules(cron, agentIds, body.records as ScheduleRecord[]) }];
   };
 

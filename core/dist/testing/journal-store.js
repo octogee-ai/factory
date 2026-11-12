@@ -5,6 +5,7 @@ import { gatewayVmRuntimeDocPath, isGatewayVmRuntimeBundle, isOperationAuditReco
 import { USER_DELETION_JOBS_COLLECTION } from "@octogee/shared/types/account-lifecycle";
 import { MODEL_BROKER_GATEWAY_POINTERS_COLLECTION, MODEL_BROKER_TOKENS_COLLECTION } from "@octogee/shared/types/model-broker-usage";
 import { placementReceiptDocId } from "@octogee/shared/types/placement-receipts";
+import { SCHEDULE_TRANSFERS_SUBCOLLECTION } from "@octogee/shared/types/fleet-controller";
 import { requireSizingProfile, } from "../platform-state/config.js";
 import { AlreadyExistsError, DuplicateRecordError, FenceMismatchError, MalformedRecordError, MissingRecordError, UnsupportedOperationError, } from "../platform-state/errors.js";
 import { ACTIVATED_AGENTS_PATH, ADMITTED_STEP, agentStoreFromData, agentStoreKeyOf, USER_ACTIVATION_LEASE_PATH, USER_FENCE_PATHS, SLUG_PATH, USER_MIRROR_PATHS, userPatchPaths, userRecordFromData, userRoleFromData, } from "../platform-state/documents/users.js";
@@ -817,7 +818,26 @@ function userRepositories(documents, write, transactional) {
             write(() => documents.delete(`users/${uid}/agentStores/${storeKey}`));
         },
     });
-    return partialRepository("builders", { records, placementReceipts, agentStores });
+    const transferPath = (uid, migrationId) => `users/${uid}/${SCHEDULE_TRANSFERS_SUBCOLLECTION}/${migrationId}`;
+    const storedTransfer = (row) => ({ ...structuredClone(row), revision: FIXTURE_REVISION });
+    const scheduleTransfers = partialRepository("users.scheduleTransfers", {
+        get: async (uid, migrationId) => {
+            const row = documents.get(transferPath(uid, migrationId));
+            return row === undefined ? null : storedTransfer(row);
+        },
+        patch: async (uid, migrationId, patch) => {
+            const path = transferPath(uid, migrationId);
+            const row = documents.get(path);
+            if (row === undefined)
+                throw new MissingRecordError({ aggregate: "schedule-transfer", key: `${uid}/${migrationId}` });
+            write(() => documents.set(path, applyPatch(row, structuredClone(patch))));
+        },
+        listUnrestored: async () => documents.group(SCHEDULE_TRANSFERS_SUBCOLLECTION)
+            .flatMap(([path, row]) => (row.restoredTo === undefined ? [{ uid: path.split("/")[1], transfer: storedTransfer(row) }] : []))
+            .sort((a, b) => a.transfer.snapshotAt - b.transfer.snapshotAt || a.uid.localeCompare(b.uid) ||
+            a.transfer.migrationId.localeCompare(b.transfer.migrationId)),
+    });
+    return partialRepository("builders", { records, placementReceipts, scheduleTransfers, agentStores });
 }
 function workspaceChannelLocation(path) {
     const parts = path.split("/");

@@ -1,4 +1,4 @@
-import { type ScheduleRemoveRequestBody, type ScheduleRemoveResult, type ScheduleRestoreRequestBody, type ScheduleRestoreResult, type ScheduleSnapshotRequestBody, type ScheduleSnapshotResult, type ScheduleTransferRequestBody, type SchedulerMigrationRequestBody, type SchedulerMigrationResult, type FlushGatewayResponse, type ImportResponse, type MigrationProgressRequestBody, type QuiesceResponse, type RestoreMigrationResponse, type UnmountResponse, type VerifyMigrationResponse } from "@octogee/shared/types/fleet-controller";
+import { type ScheduleCheckRequestBody, type ScheduleCheckResult, type ScheduleRemoveRequestBody, type ScheduleRemoveResult, type ScheduleRestoreRequestBody, type ScheduleRestoreResult, type ScheduleSnapshotRequestBody, type ScheduleSnapshotResult, type ScheduleTransferRequestBody, type SchedulerMigrationRequestBody, type SchedulerMigrationResult, type FlushGatewayResponse, type ImportResponse, type MigrationProgressRequestBody, type QuiesceResponse, type RestoreMigrationResponse, type UnmountResponse, type VerifyMigrationResponse } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerProjectCheckoutScope, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { MigrationSyncMode } from "./fleet-migration.js";
 export interface MigrationClientTimeouts {
@@ -35,6 +35,7 @@ export interface MigrationClient {
     schedules(opts: ScheduleSnapshotRequestBody & GatewayAddress): Promise<ScheduleSnapshotResult>;
     schedules(opts: ScheduleRestoreRequestBody & GatewayAddress): Promise<ScheduleRestoreResult>;
     schedules(opts: ScheduleRemoveRequestBody & GatewayAddress): Promise<ScheduleRemoveResult>;
+    schedules(opts: ScheduleCheckRequestBody & GatewayAddress): Promise<ScheduleCheckResult>;
     schedules(opts: ScheduleTransferRequestBody & GatewayAddress): Promise<ScheduleTransferResult>;
     resume(opts: {
         migrationId: string;
@@ -121,6 +122,6 @@ export declare class MigrationTransportError extends Error {
 }
 export declare function isDefinitiveConfigRpcRejection(error: unknown): boolean;
 export declare function createMigrationClient(deps: MigrationClientDeps): MigrationClient;
-type ScheduleTransferResult = ScheduleSnapshotResult | ScheduleRestoreResult | ScheduleRemoveResult;
+type ScheduleTransferResult = ScheduleSnapshotResult | ScheduleRestoreResult | ScheduleRemoveResult | ScheduleCheckResult;
 export declare function reportMigrationProgress(deps: Pick<MigrationClientDeps, "privateKey" | "resolveGatewayUrl" | "fetch">, gatewayId: string, body: MigrationProgressRequestBody): Promise<void>;
 export {};

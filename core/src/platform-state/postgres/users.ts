@@ -151,6 +151,18 @@ function createScheduleTransfersRepository(session: PostgresSession): ScheduleTr
     async patch(uid, migrationId, patch) {
       await updateRecord(session, "builders.scheduleTransfers.patch", { table: SCHEDULE_TRANSFERS_TABLE, key: [uid, migrationId] }, patch, []);
     },
+
+    async listUnrestored() {
+      const rows = await selectRecords(
+        session,
+        "builders.scheduleTransfers.listUnrestored",
+        "SELECT * FROM $schema.schedule_transfers WHERE restored_to IS NULL ORDER BY snapshot_at, uid, migration_id",
+      );
+      return rows.map((row) => ({
+        uid: row.uid as string,
+        transfer: withoutKeys<Stored<ScheduleTransferDoc>>(decodeStored(SCHEDULE_TRANSFERS_TABLE, row), ["uid"]),
+      }));
+    },
   };
 }
 

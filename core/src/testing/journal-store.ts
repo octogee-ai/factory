@@ -19,6 +19,7 @@ import {
 import { USER_DELETION_JOBS_COLLECTION } from "@octogee/shared/types/account-lifecycle";
 import { MODEL_BROKER_GATEWAY_POINTERS_COLLECTION, MODEL_BROKER_TOKENS_COLLECTION } from "@octogee/shared/types/model-broker-usage";
 import { placementReceiptDocId, type PlacementReceipt } from "@octogee/shared/types/placement-receipts";
+import { SCHEDULE_TRANSFERS_SUBCOLLECTION, type ScheduleTransferDoc } from "@octogee/shared/types/fleet-controller";
 import type {
   ActivationLeaseFence,
   AgentStoreRecord,
@@ -953,7 +954,26 @@ function userRepositories(documents: FixtureDocuments, write: Write, transaction
       write(() => documents.delete(`users/${uid}/agentStores/${storeKey}`));
     },
   });
-  return partialRepository<UserRepositories>("builders", { records, placementReceipts, agentStores });
+  const transferPath = (uid: string, migrationId: string) => `users/${uid}/${SCHEDULE_TRANSFERS_SUBCOLLECTION}/${migrationId}`;
+  const storedTransfer = (row: Record<string, unknown>) =>
+    ({ ...structuredClone(row), revision: FIXTURE_REVISION }) as unknown as Stored<ScheduleTransferDoc>;
+  const scheduleTransfers = partialRepository<UserRepositories["scheduleTransfers"]>("users.scheduleTransfers", {
+    get: async (uid, migrationId) => {
+      const row = documents.get(transferPath(uid, migrationId));
+      return row === undefined ? null : storedTransfer(row);
+    },
+    patch: async (uid, migrationId, patch) => {
+      const path = transferPath(uid, migrationId);
+      const row = documents.get(path);
+      if (row === undefined) throw new MissingRecordError({ aggregate: "schedule-transfer", key: `${uid}/${migrationId}` });
+      write(() => documents.set(path, applyPatch(row, structuredClone(patch))));
+    },
+    listUnrestored: async () => documents.group(SCHEDULE_TRANSFERS_SUBCOLLECTION)
+      .flatMap(([path, row]) => (row.restoredTo === undefined ? [{ uid: path.split("/")[1], transfer: storedTransfer(row) }] : []))
+      .sort((a, b) => a.transfer.snapshotAt - b.transfer.snapshotAt || a.uid.localeCompare(b.uid) ||
+        a.transfer.migrationId.localeCompare(b.transfer.migrationId)),
+  });
+  return partialRepository<UserRepositories>("builders", { records, placementReceipts, scheduleTransfers, agentStores });
 }
 
 function workspaceChannelLocation(path: string): { scope: { workspaceSlug: string; projectSlug: string | null }; channelId: string } | null {

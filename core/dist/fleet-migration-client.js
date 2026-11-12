@@ -234,6 +234,8 @@ function scheduleTransferAcknowledged(request, result) {
         return Array.isArray(result.records) && Array.isArray(result.skipped);
     if (result.op === "remove")
         return typeof result.removed === "number" && Array.isArray(result.failed);
+    if (result.op === "check")
+        return Array.isArray(result.conflicts);
     return Array.isArray(result.failed);
 }
 async function migrationRpcError(path, response) {

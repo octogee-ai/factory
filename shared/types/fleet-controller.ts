@@ -492,7 +492,16 @@ export interface ScheduleRemoveRequestBody extends MigrationRequestBody {
   jobIds: string[];
 }
 
-export type ScheduleTransferRequestBody = ScheduleSnapshotRequestBody | ScheduleRestoreRequestBody | ScheduleRemoveRequestBody;
+export interface ScheduleCheckRequestBody extends MigrationRequestBody {
+  op: "check";
+  records: ScheduleRecord[];
+}
+
+export type ScheduleTransferRequestBody =
+  | ScheduleSnapshotRequestBody
+  | ScheduleRestoreRequestBody
+  | ScheduleRemoveRequestBody
+  | ScheduleCheckRequestBody;
 
 export interface ScheduleSnapshotResult {
   migrationId: string;
@@ -517,6 +526,21 @@ export interface ScheduleRestoreResult {
   created: number;
   existing: number;
   failed: Array<{ name: string; agentId: string; sourceJobId: string; error: string; retryable: boolean }>;
+}
+
+export interface ScheduleNameConflict {
+  name: string;
+  agentId: string;
+  sourceJobId: string;
+  /** The live job of the same name; null when the conflict is with another record of the same request. */
+  jobId: string | null;
+}
+
+export interface ScheduleCheckResult {
+  migrationId: string;
+  slug: string;
+  op: "check";
+  conflicts: ScheduleNameConflict[];
 }
 
 // users/{uid}/scheduleTransfers/{migrationId}

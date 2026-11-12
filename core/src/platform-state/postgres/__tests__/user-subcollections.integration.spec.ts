@@ -147,6 +147,24 @@ describe.skipIf(!dsn)("PostgreSQL user schedule transfers", () => {
     expect(replaced.revision).not.toBe(stored.revision);
   });
 
+  it("lists every user's snapshot that was never restored, oldest first", async () => {
+    const { records, users } = fixture();
+    await records.create({ uid: "alice", createdAt: NOW });
+    await records.create({ uid: "bob", createdAt: NOW });
+    const transfers = users.scheduleTransfers;
+    const held = [{ name: "daily", error: "CronAgentMigrationHeldError: Cron agent octogee-alice-coach is held for migration mig-x" }];
+    await transfers.put("alice", transfer({ migrationId: "mig-1", snapshotAt: NOW + 2, restoreAttemptedTo: "shared-a", restoreFailures: held }));
+    await transfers.put("alice", transfer({ migrationId: "mig-2", snapshotAt: NOW, restoredTo: "shared-a", restoredAt: NOW + 1, restoreFailures: [] }));
+    await transfers.put("bob", transfer({ migrationId: "mig-3", slug: "bob", snapshotAt: NOW + 1 }));
+
+    const listed = await transfers.listUnrestored();
+
+    expect(listed.map(({ uid, transfer: { revision: _revision, ...doc } }) => [uid, doc])).toEqual([
+      ["bob", transfer({ migrationId: "mig-3", slug: "bob", snapshotAt: NOW + 1 })],
+      ["alice", transfer({ migrationId: "mig-1", snapshotAt: NOW + 2, restoreAttemptedTo: "shared-a", restoreFailures: held })],
+    ]);
+  });
+
   it("refuses a snapshot for a missing user and a patch that renames the migration", async () => {
     const { records, users } = fixture();
     await expect(users.scheduleTransfers.put("alice", transfer())).rejects.toMatchObject(MISSING_ALICE);

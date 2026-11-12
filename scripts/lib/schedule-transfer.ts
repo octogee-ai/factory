@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type {
+  ScheduleCheckResult,
   ScheduleRecord,
   ScheduleRemoveResult,
   ScheduleRestoreResult,
@@ -38,8 +39,10 @@ const CRON_ADD_FIELDS = [
   "delivery", "failureAlert", "scheduledToolPolicy", "toolsAllowProvenance",
 ] as const;
 
+export type ScheduleTransferResult = ScheduleSnapshotResult | ScheduleRestoreResult | ScheduleRemoveResult | ScheduleCheckResult;
+
 export function createScheduleTransfer(deps: ScheduleTransferDeps) {
-  return async (body: ScheduleTransferRequestBody): Promise<ScheduleSnapshotResult | ScheduleRestoreResult | ScheduleRemoveResult> => {
+  return async (body: ScheduleTransferRequestBody): Promise<ScheduleTransferResult> => {
     const config = await deps.readConfig();
     const agentIds = new Set(schedulerHandoffAgentIds(config, body.slug, deps.localAgentIds(body.slug), false));
     const connection = await deps.connect();
@@ -50,6 +53,9 @@ export function createScheduleTransfer(deps: ScheduleTransferDeps) {
       }
       if (body.op === "remove") {
         return { ...envelope, op: "remove", ...await removeSchedules(connection.request, agentIds, body.jobIds, deps.log) };
+      }
+      if (body.op === "check") {
+        return { ...envelope, op: "check", ...await checkSchedules(connection.request, agentIds, body.records) };
       }
       return { ...envelope, op: "restore", ...await restoreSchedules(connection.request, agentIds, body.records, deps.log) };
     } finally {
@@ -118,23 +124,46 @@ export async function removeSchedules(
   return result;
 }
 
+export async function checkSchedules(
+  call: GatewayCall,
+  agentIds: ReadonlySet<string>,
+  records: readonly ScheduleRecord[],
+): Promise<Pick<ScheduleCheckResult, "conflicts">> {
+  const jobs = await listJobs(call);
+  const present = presentJobs(jobs);
+  const named = new Map<string, CronJob>();
+  for (const job of jobs) {
+    const agentId = runningAgentId(job);
+    if (agentId && agentIds.has(agentId) && typeof job.name === "string") named.set(identityKey(agentId, job.name), job);
+  }
+  const pending = records.flatMap((record) =>
+    presentJob(present, record) || typeof record.job.name !== "string" ? [] : [{ record, name: record.job.name }]);
+  const identities = new Map<string, Set<string>>();
+  for (const { record, name } of pending) {
+    const key = identityKey(record.agentId, name);
+    identities.set(key, (identities.get(key) ?? new Set()).add(transferKey(record)));
+  }
+  const conflicts: ScheduleCheckResult["conflicts"] = [];
+  for (const { record, name } of pending) {
+    const key = identityKey(record.agentId, name);
+    const live = named.get(key);
+    if (live || identities.get(key)!.size > 1) {
+      conflicts.push({ name, agentId: record.agentId, sourceJobId: record.sourceJobId, jobId: live ? String(live.id) : null });
+    }
+  }
+  return { conflicts };
+}
+
 export async function restoreSchedules(
   call: GatewayCall,
   agentIds: ReadonlySet<string>,
   records: readonly ScheduleRecord[],
   log: (msg: string) => void,
 ): Promise<Pick<ScheduleRestoreResult, "created" | "existing" | "failed">> {
-  const present = new Map<string, CronJob>();
-  for (const job of await listJobs(call)) {
-    const agentId = runningAgentId(job);
-    if (agentId) {
-      present.set(identityKey(agentId, String(job.id)), job);
-      if (typeof job.declarationKey === "string") present.set(identityKey(agentId, job.declarationKey), job);
-    }
-  }
+  const present = presentJobs(await listJobs(call));
   const result: Pick<ScheduleRestoreResult, "created" | "existing" | "failed"> = { created: 0, existing: 0, failed: [] };
   for (const record of records) {
-    const name = typeof record.job.name === "string" ? record.job.name : record.sourceJobId;
+    const name = scheduleName(record);
     try {
       if (await restoreRecord(call, agentIds, present, record)) result.created++;
       else result.existing++;
@@ -159,7 +188,7 @@ async function restoreRecord(
   }
   const declarationKey = transferKey(record);
   const key = identityKey(record.agentId, declarationKey);
-  const existing = present.get(key) ?? present.get(identityKey(record.agentId, record.sourceJobId));
+  const existing = presentJob(present, record);
   if (existing) {
     await reconcileExisting(call, existing, record);
     return false;
@@ -181,6 +210,22 @@ async function restoreRecord(
   }
   present.set(key, restored);
   return !isRecord(response) || response.created !== false;
+}
+
+function presentJobs(jobs: readonly CronJob[]): Map<string, CronJob> {
+  const present = new Map<string, CronJob>();
+  for (const job of jobs) {
+    const agentId = runningAgentId(job);
+    if (agentId) {
+      present.set(identityKey(agentId, String(job.id)), job);
+      if (typeof job.declarationKey === "string") present.set(identityKey(agentId, job.declarationKey), job);
+    }
+  }
+  return present;
+}
+
+function presentJob(present: ReadonlyMap<string, CronJob>, record: ScheduleRecord): CronJob | undefined {
+  return present.get(identityKey(record.agentId, transferKey(record))) ?? present.get(identityKey(record.agentId, record.sourceJobId));
 }
 
 async function reconcileExisting(call: GatewayCall, existing: CronJob, record: ScheduleRecord): Promise<void> {
@@ -281,7 +326,11 @@ function carriedDeclaration(key: unknown): key is string {
   return typeof key === "string" && CARRIED_DECLARATION_PREFIXES.some(prefix => key.startsWith(prefix));
 }
 
-function transferKey(record: ScheduleRecord): string {
+export function scheduleName(record: ScheduleRecord): string {
+  return typeof record.job.name === "string" ? record.job.name : record.sourceJobId;
+}
+
+export function transferKey(record: ScheduleRecord): string {
   const key = record.job.declarationKey;
   if (carriedDeclaration(key)) return key;
   return TRANSFER_KEY_PREFIX + createHash("sha256").update(identityKey(record.agentId, record.sourceJobId)).digest("hex");

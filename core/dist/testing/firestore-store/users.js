@@ -370,6 +370,17 @@ function createScheduleTransfersRepository(session) {
         async patch(uid, migrationId, patch) {
             await session.update("builders.scheduleTransfers.patch", transferKey(uid, migrationId), ref(uid, migrationId), encodePatch(patch, STORED_AS_NUMBERS));
         },
+        async listUnrestored() {
+            const snapshot = await session.query("builders.scheduleTransfers.listUnrestored", session.db.collectionGroup(SCHEDULE_TRANSFERS_SUBCOLLECTION));
+            return snapshot.docs
+                .map((doc) => ({
+                uid: doc.ref.parent.parent.id,
+                transfer: { ...decodeDocumentData(doc), revision: revisionOf(doc) },
+            }))
+                .filter(({ transfer }) => transfer.restoredTo === undefined)
+                .sort((a, b) => a.transfer.snapshotAt - b.transfer.snapshotAt || a.uid.localeCompare(b.uid) ||
+                a.transfer.migrationId.localeCompare(b.transfer.migrationId));
+        },
     };
 }
 function decodeAgentStore(uid, snapshot) {

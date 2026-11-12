@@ -736,6 +736,22 @@ describe("MigrationClient.schedules", () => {
     expect(JSON.parse(calls[0].body!)).toEqual({ migrationId: "m1", slug: "alice", op: "remove", jobIds: ["job-1"] });
   });
 
+  it("asks a gateway which records would collide by name with a live schedule", async () => {
+    const result = { migrationId: "m1", slug: "alice", op: "check", conflicts: [{ name: "standup", agentId: "octogee-alice-coach", sourceJobId: "job-1", jobId: "job-9" }] };
+    const { calls, client } = schedulesClient(result);
+
+    await expect(client.schedules({ migrationId: "m1", slug: "alice", gatewayId: "gw-target", op: "check", records: [record] })).resolves.toEqual(result);
+
+    expect(calls[0].url).toBe("https://fleet-test.example.com/schedules/gw-target");
+    expect(JSON.parse(calls[0].body!)).toEqual({ migrationId: "m1", slug: "alice", op: "check", records: [record] });
+  });
+
+  it("refuses a check acknowledgement without a conflict list", async () => {
+    const { client } = schedulesClient({ migrationId: "m1", slug: "alice", op: "check", failed: [] });
+
+    await expect(client.schedules({ migrationId: "m1", slug: "alice", gatewayId: "gw-target", op: "check", records: [record] })).rejects.toThrow("schedules check acknowledgement mismatch");
+  });
+
   it.each([
     { migrationId: "m1", slug: "alice", op: "remove", failed: [] },
     { migrationId: "m1", slug: "alice", op: "remove", removed: 1 },

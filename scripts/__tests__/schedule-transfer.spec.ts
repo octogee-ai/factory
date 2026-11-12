@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ScheduleRecord } from "../../shared/types/fleet-controller.js";
 import { OpenclawWireError } from "../lib/gateway-rpc.js";
-import { createScheduleTransfer, removeSchedules, restoreSchedules, snapshotSchedules } from "../lib/schedule-transfer.js";
+import { checkSchedules, createScheduleTransfer, removeSchedules, restoreSchedules, snapshotSchedules } from "../lib/schedule-transfer.js";
 
 type Job = Record<string, unknown>;
 
@@ -497,6 +497,51 @@ describe("schedule remove", () => {
   });
 });
 
+describe("schedule check", () => {
+  const record = (sourceJobId: string, name: string, overrides: Partial<ScheduleRecord> = {}): ScheduleRecord =>
+    ({ sourceJobId, agentId: ALICE, scratch: null, job: { name, schedule: { kind: "cron", expr: "0 9 * * *" } }, ...overrides });
+
+  it("reports each record whose agent already has a different live schedule of the same name, and changes nothing", async () => {
+    const monitorKey = `octogee:coach-monitor:${ALICE}`;
+    const gateway = fakeGateway([
+      listedJob("hand-made", { name: "Daily digest" }),
+      listedJob("kept", { name: "Morning brief" }),
+      listedJob("monitor-2", { name: "Coach monitor", declarationKey: monitorKey }),
+      listedJob("orbit", { name: "Standup", agentId: ALICE_PROJECT, effectiveAgentId: ALICE_PROJECT }),
+    ]);
+    const records = [
+      record("old-digest", "Daily digest"),
+      record("kept", "Morning brief"),
+      record("monitor-1", "Coach monitor", { job: { name: "Coach monitor", declarationKey: monitorKey } }),
+      record("standup", "Standup"),
+      record("fresh", "Weekly review"),
+    ];
+
+    await expect(checkSchedules(gateway.call, ALICE_AGENTS, records))
+      .resolves.toEqual({ conflicts: [{ name: "Daily digest", agentId: ALICE, sourceJobId: "old-digest", jobId: "hand-made" }] });
+
+    expect(gateway.call.mock.calls.map(([method]) => method)).toEqual(["cron.list"]);
+  });
+
+  it("reports records that would duplicate each other by name when none of them is live yet", async () => {
+    const gateway = fakeGateway([]);
+    const records = [
+      record("digest-1", "Daily digest"),
+      record("digest-2", "Daily digest"),
+      record("review", "Weekly review"),
+      record("review", "Weekly review"),
+      record("orbit-review", "Weekly review", { agentId: ALICE_PROJECT }),
+    ];
+
+    await expect(checkSchedules(gateway.call, ALICE_AGENTS, records)).resolves.toEqual({
+      conflicts: [
+        { name: "Daily digest", agentId: ALICE, sourceJobId: "digest-1", jobId: null },
+        { name: "Daily digest", agentId: ALICE, sourceJobId: "digest-2", jobId: null },
+      ],
+    });
+  });
+});
+
 describe("schedule transfer wiring", () => {
   function deps(jobs: Job[], config: unknown = { agents: { entries: { [ALICE]: {}, [ALICE_PROJECT]: {}, "octogee-bob-coach": {} } } }) {
     const gateway = fakeGateway(jobs);
@@ -530,6 +575,16 @@ describe("schedule transfer wiring", () => {
     await expect(createScheduleTransfer(transferDeps)({ migrationId: "m1", slug: "alice", op: "remove", jobIds: ["a1", "p1"] }))
       .resolves.toEqual({ migrationId: "m1", slug: "alice", op: "remove", removed: 2, failed: [] });
     expect(gateway.store.map((job) => job.id)).toEqual(["b1"]);
+  });
+
+  it("checks records against the live schedules into the envelope", async () => {
+    const { close, deps: transferDeps } = deps([listedJob("hand-made", { name: "Daily digest" })]);
+    const records: ScheduleRecord[] = [{ sourceJobId: "old-digest", agentId: ALICE, scratch: null, job: { name: "Daily digest" } }];
+
+    await expect(createScheduleTransfer(transferDeps)({ migrationId: "m1", slug: "alice", op: "check", records })).resolves.toEqual({
+      migrationId: "m1", slug: "alice", op: "check", conflicts: [{ name: "Daily digest", agentId: ALICE, sourceJobId: "old-digest", jobId: "hand-made" }],
+    });
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it("restores into the envelope and closes the gateway connection even when the gateway fails", async () => {

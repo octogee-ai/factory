@@ -178,10 +178,15 @@ export interface PlacementReceiptsRepository {
     list(uid: string, page: PageRequest): Promise<Page<PlacementReceipt>>;
     create(uid: string, receipt: PlacementReceipt): Promise<void>;
 }
+export interface UnrestoredScheduleTransfer {
+    readonly uid: string;
+    readonly transfer: Stored<ScheduleTransferDoc>;
+}
 export interface ScheduleTransfersRepository {
     get(uid: string, migrationId: string): Promise<Stored<ScheduleTransferDoc> | null>;
     put(uid: string, transfer: ScheduleTransferDoc): Promise<void>;
     patch(uid: string, migrationId: string, patch: RecordPatch<ScheduleTransferDoc, "migrationId">): Promise<void>;
+    listUnrestored(): Promise<readonly UnrestoredScheduleTransfer[]>;
 }
 export type AgentStoreAnchor = {
     readonly kind: "agent";

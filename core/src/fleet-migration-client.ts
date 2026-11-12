@@ -7,6 +7,8 @@ import {
   MIGRATION_TRANSFER_TIMEOUT_MS,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   MIGRATION_VERIFY_TIMEOUT_MS,
+  type ScheduleCheckRequestBody,
+  type ScheduleCheckResult,
   type ScheduleRemoveRequestBody,
   type ScheduleRemoveResult,
   type ScheduleRestoreRequestBody,
@@ -68,6 +70,7 @@ export interface MigrationClient {
   schedules(opts: ScheduleSnapshotRequestBody & GatewayAddress): Promise<ScheduleSnapshotResult>;
   schedules(opts: ScheduleRestoreRequestBody & GatewayAddress): Promise<ScheduleRestoreResult>;
   schedules(opts: ScheduleRemoveRequestBody & GatewayAddress): Promise<ScheduleRemoveResult>;
+  schedules(opts: ScheduleCheckRequestBody & GatewayAddress): Promise<ScheduleCheckResult>;
   schedules(opts: ScheduleTransferRequestBody & GatewayAddress): Promise<ScheduleTransferResult>;
   resume(opts: { migrationId: string; gatewayId: string; transportId?: string; slug: string; role?: "target" }): Promise<void>;
   quiesce(opts: {
@@ -429,12 +432,13 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
   };
 }
 
-type ScheduleTransferResult = ScheduleSnapshotResult | ScheduleRestoreResult | ScheduleRemoveResult;
+type ScheduleTransferResult = ScheduleSnapshotResult | ScheduleRestoreResult | ScheduleRemoveResult | ScheduleCheckResult;
 
 function scheduleTransferAcknowledged(request: ScheduleTransferRequestBody, result: ScheduleTransferResult): boolean {
   if (result.migrationId !== request.migrationId || result.slug !== request.slug || result.op !== request.op) return false;
   if (result.op === "snapshot") return Array.isArray(result.records) && Array.isArray(result.skipped);
   if (result.op === "remove") return typeof result.removed === "number" && Array.isArray(result.failed);
+  if (result.op === "check") return Array.isArray(result.conflicts);
   return Array.isArray(result.failed);
 }
 

@@ -27,6 +27,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   type SchedulerMigrationRequestBody,
+  type ScheduleCheckResult,
   type ScheduleRecord,
   type ScheduleRemoveResult,
   type ScheduleRestoreResult,
@@ -164,7 +165,9 @@ export interface MigrationHandlerDeps {
   publicKey: string;
   gatewayId: string;
   adapter: UserLifecycleAdapter;
-  scheduleTransfer?: (body: ScheduleTransferRequestBody) => Promise<ScheduleSnapshotResult | ScheduleRestoreResult | ScheduleRemoveResult>;
+  scheduleTransfer?: (
+    body: ScheduleTransferRequestBody,
+  ) => Promise<ScheduleSnapshotResult | ScheduleRestoreResult | ScheduleRemoveResult | ScheduleCheckResult>;
 
   log?: (msg: string, fields?: LogContext) => void;
 
@@ -611,7 +614,7 @@ function isScheduleRecord(value: unknown): value is ScheduleRecord {
 function isScheduleTransferRequest(body: ScheduleTransferRequestBody): boolean {
   if (body.op === "snapshot") return true;
   if (body.op === "remove") return Array.isArray(body.jobIds) && body.jobIds.every(id => typeof id === "string" && id.length > 0);
-  return body.op === "restore" && Array.isArray(body.records) && body.records.every(isScheduleRecord);
+  return (body.op === "restore" || body.op === "check") && Array.isArray(body.records) && body.records.every(isScheduleRecord);
 }
 
 export function createScheduleTransferHandler(deps: MigrationHandlerDeps): RequestHandler {

@@ -5747,6 +5747,7 @@ describe("schedule transfer signed endpoint", () => {
   const record = { sourceJobId: "job-1", agentId: "octogee-chris-coach", job: { name: "Morning brief", agentId: "octogee-chris-coach" } };
   const restore = { migrationId: "move-1", slug: "chris", op: "restore" as const, records: [record] };
   const remove = { migrationId: "move-1", slug: "chris", op: "remove" as const, jobIds: ["job-1"] };
+  const check = { migrationId: "move-1", slug: "chris", op: "check" as const, records: [record] };
   const signed = (body: { migrationId: string }) => mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) });
 
   it("rejects an unsigned schedule transfer", async () => {
@@ -5783,6 +5784,15 @@ describe("schedule transfer signed endpoint", () => {
     expect(response.getBody()).toEqual(result);
     expect(scheduleTransfer).toHaveBeenCalledWith(remove);
   });
+  it("checks records against the live schedules", async () => {
+    const result = { migrationId: "move-1", slug: "chris", op: "check", conflicts: [] };
+    const scheduleTransfer = vi.fn(async () => result);
+    const response = mkResponse();
+    await createScheduleTransferHandler(mkDeps({ scheduleTransfer }))(signed(check), response.res, vi.fn());
+    expect(response.getStatus()).toBe(200);
+    expect(response.getBody()).toEqual(result);
+    expect(scheduleTransfer).toHaveBeenCalledWith(check);
+  });
   it("rejects an unknown op or malformed records before touching the scheduler", async () => {
     for (const invalid of [
       { ...snapshot, op: "export" },
@@ -5793,6 +5803,8 @@ describe("schedule transfer signed endpoint", () => {
       { ...restore, records: [{ ...record, agentId: "" }] },
       { ...restore, records: [{ ...record, job: ["name"] }] },
       { ...restore, records: [{ ...record, sourceJobId: 7 }] },
+      { ...check, records: undefined },
+      { ...check, records: [{ ...record, agentId: "" }] },
     ]) {
       const scheduleTransfer = vi.fn();
       const response = mkResponse();
