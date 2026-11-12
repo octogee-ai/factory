@@ -42,17 +42,17 @@ type ByotFile = (typeof BYOT_FILES)[number];
 const BYOT_MARKER = ".byot-managed";
 
 export type ByotInput = ModelCredentialConfigInput;
-export interface FreeTierDefaultAgentModelInput {
+export interface HouseModelDefaultAgentModelInput {
   slug: string;
   model: string;
-  source: "free-tier";
+  source: "house-model";
 }
 
-// The BYOK agent input plus the operator's free-tier dial ref — the fallback
+// The BYOK agent input plus the operator's house model dial ref — the fallback
 // chain's platform baseline follows the dial, not a compiled constant.
 export type ByotDefaultAgentModelInput = ByotInput & { houseModelRef?: string };
 
-export type DefaultAgentModelInput = ByotDefaultAgentModelInput | FreeTierDefaultAgentModelInput;
+export type DefaultAgentModelInput = ByotDefaultAgentModelInput | HouseModelDefaultAgentModelInput;
 
 // A per-agent BYOS model override. codex (a plugin) pins agentRuntime:{id:codex}
 // to route a gpt-5.5 override through the codex harness; claude-cli (a core
@@ -67,18 +67,18 @@ export interface CodexAppServerPatch {
 // House-only agents carry a per-agent tools override (openclaw
 // agents.list[].tools, resolved by resolveEffectiveToolPolicy: an agent-level
 // profile/alsoAllow replaces the global one). "minimal" keeps only
-// session_status; alsoAllow re-adds exactly what a free agent conversation
-// needs — the fs group, web, memory recall, and the Octogee platform skills
-// free users are entitled to. Everything else in the fleet's coding profile
-// (cron, sessions_*, goals/plan/skill_workshop, media generation,
-// code_execution, x_search) is schema weight the $1/week plan can't afford on
-// first load. Catalog plans carry NO override and inherit the gateway default.
-export interface FreeTierDefaultAgentToolsBlock {
+// session_status; alsoAllow re-adds exactly what a house-only agent conversation
+// needs — the fs group, web, memory recall, and the platform skills. Everything
+// else in the fleet's coding profile (cron, sessions_*, goals/plan/skill_workshop,
+// media generation, code_execution, x_search) is schema weight a house-only
+// budget can't afford on first load. Catalog plans carry NO override and inherit
+// the gateway default.
+export interface HouseModelDefaultAgentToolsBlock {
   profile: "minimal";
   alsoAllow: string[];
 }
 
-export const FREE_TIER_DEFAULT_AGENT_TOOLS: FreeTierDefaultAgentToolsBlock = {
+export const HOUSE_MODEL_DEFAULT_AGENT_TOOLS: HouseModelDefaultAgentToolsBlock = {
   profile: "minimal",
   alsoAllow: [
     "read",
@@ -152,7 +152,7 @@ export interface DefaultAgentModelPatch {
     // Primary+fallback chain: the user's BYOK model, with the platform model
     // as the fallback so an unavailable/exhausted BYOK provider degrades to the
     // platform key instead of leaving a credential-less agent (B6).
-    list: Array<{ id: string; model: DefaultAgentModelRef; tools?: FreeTierDefaultAgentToolsBlock }>;
+    list: Array<{ id: string; model: DefaultAgentModelRef; tools?: HouseModelDefaultAgentToolsBlock }>;
     defaults?: { models: RuntimeModelsDef };
   };
 }
@@ -167,7 +167,7 @@ export const ISOLATED_CODEX_APP_SERVER: CodexAppServerPatch = {
   approvalPolicy: "never",
 };
 
-// The always-available platform house model: the operator's free-tier dial
+// The always-available platform house model: the operator's house model dial
 // (snapshot freeTierModelRef), compiled default DEFAULT_FREE_TIER_MODEL_REF.
 // A failed/exhausted BYOK provider degrades here rather than leaving the
 // agent credential-less, and house-only plans pin the agent here so config,
@@ -216,7 +216,7 @@ export function byosDefaultAgentConfigPatch(
           {
             id: agentIdForSlug(input.slug),
             model: { primary: input.model, fallbacks: [] },
-            tools: FREE_TIER_DEFAULT_AGENT_TOOLS,
+            tools: HOUSE_MODEL_DEFAULT_AGENT_TOOLS,
           },
         ],
       },
@@ -250,28 +250,28 @@ function isAgentRecord(a: unknown): a is { id?: unknown } {
 }
 
 // The strip may only remove what the platform itself wrote: an exact
-// fingerprint of FREE_TIER_DEFAULT_AGENT_TOOLS. A user-authored or legacy
+// fingerprint of HOUSE_MODEL_DEFAULT_AGENT_TOOLS. A user-authored or legacy
 // profile/alsoAllow never matches and survives the catalog convergence.
-function isPlatformFreeTierToolsBlock(existing: Record<string, unknown>): boolean {
+function isPlatformHouseModelToolsBlock(existing: Record<string, unknown>): boolean {
   const alsoAllow = existing.alsoAllow;
   return (
-    existing.profile === FREE_TIER_DEFAULT_AGENT_TOOLS.profile &&
+    existing.profile === HOUSE_MODEL_DEFAULT_AGENT_TOOLS.profile &&
     Array.isArray(alsoAllow) &&
-    alsoAllow.length === FREE_TIER_DEFAULT_AGENT_TOOLS.alsoAllow.length &&
-    FREE_TIER_DEFAULT_AGENT_TOOLS.alsoAllow.every((tool, i) => alsoAllow[i] === tool)
+    alsoAllow.length === HOUSE_MODEL_DEFAULT_AGENT_TOOLS.alsoAllow.length &&
+    HOUSE_MODEL_DEFAULT_AGENT_TOOLS.alsoAllow.every((tool, i) => alsoAllow[i] === tool)
   );
 }
 
 // Tools convergence for the agent entry, applied alongside the model update:
-// a FreeTierDefaultAgentToolsBlock merges over the entry's existing tools (fs guards
-// and any other keys preserved — the free plan is platform-tuned, so the block
-// wins over prior profile/alsoAllow values); null strips ONLY the platform's
-// own free-tier block (fingerprint-gated) so an upgraded user returns to
+// a HouseModelDefaultAgentToolsBlock merges over the entry's existing tools (fs guards
+// and any other keys preserved — the house-only surface is platform-tuned, so the
+// block wins over prior profile/alsoAllow values); null strips ONLY the platform's
+// own house model block (fingerprint-gated) so a catalog user returns to
 // the inherited gateway-wide surface without losing fs.workspaceOnly or any
 // user-authored tools keys.
 export function convergedDefaultAgentToolsValue(
   existing: unknown,
-  tools: FreeTierDefaultAgentToolsBlock | null,
+  tools: HouseModelDefaultAgentToolsBlock | null,
 ): Record<string, unknown> | undefined {
   const base: Record<string, unknown> = isAgentRecord(existing)
     ? { ...(existing as Record<string, unknown>) }
@@ -281,7 +281,7 @@ export function convergedDefaultAgentToolsValue(
     delete base.alsoAllow;
     return { ...base, profile: tools.profile, alsoAllow: [...tools.alsoAllow] };
   }
-  if (isPlatformFreeTierToolsBlock(base)) {
+  if (isPlatformHouseModelToolsBlock(base)) {
     delete base.profile;
     delete base.alsoAllow;
   }
@@ -303,7 +303,7 @@ export function defaultAgentFullAgentList(
   current: unknown,
   agentId: string,
   model: DefaultAgentModelPatch["agents"]["list"][number]["model"] | null,
-  tools?: FreeTierDefaultAgentToolsBlock | null,
+  tools?: HouseModelDefaultAgentToolsBlock | null,
 ): unknown[] {
   const list = (current as { agents?: { list?: unknown } } | undefined)?.agents?.list;
   const agents = Array.isArray(list) ? list : [];
@@ -336,7 +336,7 @@ export function defaultAgentPatch(
   current: unknown,
   agentId: string,
   model: DefaultAgentModelPatch["agents"]["list"][number]["model"] | null,
-  tools?: FreeTierDefaultAgentToolsBlock | null,
+  tools?: HouseModelDefaultAgentToolsBlock | null,
 ): DefaultAgentPatch {
   const entries = keyedAgentEntries(current);
   if (!entries) return { list: defaultAgentFullAgentList(current, agentId, model, tools) };
@@ -377,15 +377,8 @@ export function defaultAgentPatchReplacePaths(current: unknown, agentId: string)
 export function deriveDesiredByotState(userData: {
   byotActive?: boolean;
   username?: string;
-  tier?: string;
-  selectedTier?: string;
-  subscription?: unknown;
-  // User infra subscription (pricing v3): resolveBillingProfile reads it so a
-  // credits-rail user resolves catalog, not house_only.
-  builderSubscription?: unknown;
-  trialGrant?: unknown;
-  signupOfferConvertedAt?: unknown;
-  // The operator's free-tier model dial, stamped on the snapshot by the
+  planInputs: Record<string, unknown>;
+  // The operator's house model dial, stamped on the snapshot by the
   // trusted side; revalidated here against the catalog.
   freeTierModelRef?: unknown;
   // The operator's user agent default dial, stamped like freeTierModelRef;
@@ -406,7 +399,7 @@ export function deriveDesiredByotState(userData: {
     return {
       enabled: false,
       input: null,
-      defaultAgentModelInput: freeTierDefaultAgentModelInput(slug, userData),
+      defaultAgentModelInput: houseModelDefaultAgentModelInput(slug, userData),
     };
   }
   const input = byotInputForSlug(slug, userData.systemConfig?.byot);
@@ -425,20 +418,20 @@ export function platformDefaultAgentModelInputForUser(
   slug: string,
   userData: Parameters<typeof deriveDesiredByotState>[0],
 ): DefaultAgentModelInput | null {
-  return freeTierDefaultAgentModelInput(slug, userData);
+  return houseModelDefaultAgentModelInput(slug, userData);
 }
 
 
-// House-only (Personal Free with no live Signup Offer) pins the agent to the
-// house model. The broker would degrade anyway; pinning keeps the config
+// A house-only plan pins the agent to the house model. The broker would degrade
+// anyway; pinning keeps the config
 // honest so /status and the agent's self-report agree with the wire.
-function freeTierDefaultAgentModelInput(
+function houseModelDefaultAgentModelInput(
   slug: string,
   userData: Parameters<typeof deriveDesiredByotState>[0],
-): FreeTierDefaultAgentModelInput | null {
-  const plan = userEntitlements().plan(userData);
+): HouseModelDefaultAgentModelInput | null {
+  const plan = userEntitlements().plan(userData.planInputs);
   return plan.modelAccess === "house_only"
-    ? { slug, model: houseModelRefFrom(userData.freeTierModelRef), source: "free-tier" }
+    ? { slug, model: houseModelRefFrom(userData.freeTierModelRef), source: "house-model" }
     : null;
 }
 

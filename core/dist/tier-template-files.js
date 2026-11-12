@@ -1,6 +1,5 @@
 import * as fs from "fs";
 import * as path from "path";
-import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { TEMPLATES_DIR } from "./config.js";
 import { applyTemplatePlaceholders } from "./helpers.js";
 // The platform owns exactly AGENTS.md + TOOLS.md; SOUL.md/USER.md/MEMORY.md are
@@ -13,19 +12,19 @@ export const USER_OWNED_CONTEXT_FILES = new Set(["SOUL.md", "USER.md", "MEMORY.m
 function templatesRoot() {
     return process.env.OCTOGEE_TEMPLATES_DIR || TEMPLATES_DIR;
 }
-export function listTierTemplateFiles(tier) {
-    const tierDir = path.join(templatesRoot(), "tiers", tier);
-    if (!fs.existsSync(tierDir)) {
-        throw new Error(`Tier template directory not found: tiers/${tier} (looked in ${tierDir})`);
+export function listTierTemplateFiles(templateKey) {
+    const templateDir = path.join(templatesRoot(), "tiers", templateKey);
+    if (!fs.existsSync(templateDir)) {
+        throw new Error(`Context template directory not found: tiers/${templateKey} (looked in ${templateDir})`);
     }
     return fs
-        .readdirSync(tierDir, { withFileTypes: true })
+        .readdirSync(templateDir, { withFileTypes: true })
         .filter((d) => d.isFile() && d.name.endsWith(".md"))
         .map((d) => d.name)
         .sort();
 }
-export function readTierTemplateFile(tier, filename, vars) {
-    const filePath = path.join(templatesRoot(), "tiers", tier, filename);
+export function readTierTemplateFile(templateKey, filename, vars) {
+    const filePath = path.join(templatesRoot(), "tiers", templateKey, filename);
     if (!fs.existsSync(filePath)) {
         throw new Error(`Template missing: ${filePath}`);
     }
@@ -47,9 +46,8 @@ function removeLegacyContextIgnores(customerDir) {
 }
 // No memory/ seed here: openclaw does memory, not Octogee — its session-memory
 // hook mkdirs the directory on demand and every native reader tolerates absence.
-export function writeTierTemplateFiles(customerDir, tier, templateVars) {
+export function writeTierTemplateFiles(customerDir, templateKey, templateVars) {
     const written = [];
-    const templateKey = userEntitlements().seedContextTemplateKey(tier);
     for (const file of listTierTemplateFiles(templateKey)) {
         const dest = path.join(customerDir, file);
         if (fs.existsSync(dest))

@@ -4,12 +4,36 @@ import {
   snapshotConfigFingerprint,
 } from "../lib/snapshot-fingerprint.js";
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
+import {
+  installUserEntitlements,
+  staticUserEntitlements,
+  userEntitlements,
+} from "../../shared/types/user-entitlements.js";
+
+const PAID = { subscription: { tier: "personal_pro", status: "active" } };
+const OFFER_CLAIMED_AT_SECONDS = 1_783_500_000;
+const OFFER_ENDS_AT_SECONDS = 1_784_104_800;
+const DURING_OFFER = new Date((OFFER_CLAIMED_AT_SECONDS + 86_400) * 1000);
+const AFTER_OFFER = new Date((OFFER_ENDS_AT_SECONDS + 86_400) * 1000);
+const SIGNUP_OFFER = {
+  trialGrant: {
+    schemaVersion: 3,
+    offerId: "builder-signup",
+    offerVersion: 1,
+    personalTier: "personal",
+    builderTier: "hobby",
+    configHash: "config-a",
+    claimedAt: { _seconds: OFFER_CLAIMED_AT_SECONDS },
+    endsAt: { _seconds: OFFER_ENDS_AT_SECONDS },
+  },
+};
 
 function snap(over: Partial<FleetBrokerUserSnapshot> = {}): FleetBrokerUserSnapshot {
   return {
     uid: "u1",
     slug: "alice",
-    tier: "paid",
+    contextTemplateKey: "default",
+    planInputs: {},
     gatewayId: "default",
     status: "complete",
     agentIds: ["octogee-alice-coach"],
@@ -115,50 +139,75 @@ describe("snapshotConfigFingerprint", () => {
     expect(snapshotConfigFingerprint(snap({ timeZone: null }))).toBe(snapshotConfigFingerprint(snap()));
   });
 
-  it("changes when the plan resolution inputs change (upgrade must reconverge model picks)", () => {
+  it("changes when the plan the inputs resolve to changes (an upgrade must reconverge model picks)", () => {
     const base = snapshotConfigFingerprint(snap());
-    expect(snapshotConfigFingerprint(snap({ tier: "trial" }))).not.toBe(base);
+    expect(snapshotConfigFingerprint(snap({ planInputs: PAID }))).not.toBe(base);
     expect(
-      snapshotConfigFingerprint(snap({ subscription: { tier: "personal_pro", status: "active" } })),
+      snapshotConfigFingerprint(snap({ planInputs: { builderSubscription: { tier: "pro", status: "active" } } })),
     ).not.toBe(base);
-    expect(
-      snapshotConfigFingerprint(snap({ builderSubscription: { tier: "pro", status: "active" } })),
-    ).not.toBe(base);
-    expect(
-      snapshotConfigFingerprint(snap({
-        trialGrant: {
-          schemaVersion: 3,
-          offerId: "builder-signup",
-          offerVersion: 1,
-          personalTier: "personal",
-          builderTier: "hobby",
-          configHash: "config-a",
-          claimedAt: { _seconds: 1_783_500_000 },
-          endsAt: { _seconds: 1_784_104_800 },
-        },
-      })),
-    ).not.toBe(base);
+    expect(snapshotConfigFingerprint(snap({ planInputs: SIGNUP_OFFER }), DURING_OFFER))
+      .not.toBe(snapshotConfigFingerprint(snap(), DURING_OFFER));
   });
 
-  it("ignores routine Stripe churn — only the plan-resolution slice of subscription hashes", () => {
-    const base = snapshotConfigFingerprint(
-      snap({ subscription: { tier: "personal_pro", status: "active" } }),
-    );
-    // currentPeriodEnd moves on every renewal; it must not re-ensure the fleet.
+  it("changes when a plan ends — the status flip resolves to a different plan", () => {
+    expect(
+      snapshotConfigFingerprint(snap({ planInputs: { subscription: { tier: "personal_pro", status: "canceled" } } })),
+    ).not.toBe(snapshotConfigFingerprint(snap({ planInputs: PAID })));
+  });
+
+  it("ignores billing renewal noise — inputs that resolve to the same plan fingerprint the same", () => {
+    const base = snapshotConfigFingerprint(snap({ planInputs: PAID }));
     expect(
       snapshotConfigFingerprint(
-        snap({ subscription: { tier: "personal_pro", status: "active", currentPeriodEnd: 1234 } }),
+        snap({ planInputs: { subscription: { ...PAID.subscription, currentPeriodEnd: 1234 } } }),
       ),
     ).toBe(base);
-    // status flips DO matter (dead statuses change resolveTier's precedence).
     expect(
       snapshotConfigFingerprint(
-        snap({ subscription: { tier: "personal_pro", status: "canceled" } }),
+        snap({
+          planInputs: {
+            subscription: { ...PAID.subscription, currentPeriodEnd: 5678, latestInvoiceId: "in_2" },
+          },
+        }),
       ),
-    ).not.toBe(base);
+    ).toBe(base);
   });
 
-  it("changes when the operator flips the free-tier model dial (fleet-wide re-pin within a tick)", () => {
+  it("re-ensures a mounted user when a time-boxed plan lapses with its inputs unchanged", () => {
+    const offer = snap({ planInputs: SIGNUP_OFFER });
+    expect(snapshotConfigFingerprint(offer, AFTER_OFFER)).not.toBe(snapshotConfigFingerprint(offer, DURING_OFFER));
+  });
+
+  it("is stable over time while the plan the inputs resolve to stays the same", () => {
+    const offer = snap({ planInputs: SIGNUP_OFFER });
+    const laterDuringOffer = new Date(DURING_OFFER.getTime() + 2 * 86_400_000);
+    const laterAfterOffer = new Date(AFTER_OFFER.getTime() + 30 * 86_400_000);
+    expect(snapshotConfigFingerprint(offer, laterDuringOffer)).toBe(snapshotConfigFingerprint(offer, DURING_OFFER));
+    expect(snapshotConfigFingerprint(offer, laterAfterOffer)).toBe(snapshotConfigFingerprint(offer, AFTER_OFFER));
+    expect(snapshotConfigFingerprint(snap({ planInputs: PAID }), laterAfterOffer))
+      .toBe(snapshotConfigFingerprint(snap({ planInputs: PAID }), DURING_OFFER));
+  });
+
+  it("asks the entitlement resolver what the inputs mean and never reads inside the bag", () => {
+    const product = userEntitlements();
+    installUserEntitlements(staticUserEntitlements);
+    try {
+      expect(snapshotConfigFingerprint(snap({ planInputs: PAID }))).toBe(snapshotConfigFingerprint(snap()));
+    } finally {
+      installUserEntitlements(product);
+    }
+  });
+
+  it("ignores a plan field that sits beside the bag", () => {
+    const beside = { ...snap(), ...PAID, selectedTier: "personal_pro", tier: "personal_pro" };
+    expect(snapshotConfigFingerprint(beside as FleetBrokerUserSnapshot)).toBe(snapshotConfigFingerprint(snap()));
+  });
+
+  it("changes when the seed context template changes", () => {
+    expect(snapshotConfigFingerprint(snap({ contextTemplateKey: "free" }))).not.toBe(snapshotConfigFingerprint(snap()));
+  });
+
+  it("changes when the operator flips the house model dial (fleet-wide re-pin within a tick)", () => {
     const base = snapshotConfigFingerprint(snap());
     expect(
       snapshotConfigFingerprint(

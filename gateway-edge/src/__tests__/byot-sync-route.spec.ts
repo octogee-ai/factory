@@ -35,6 +35,7 @@ const {
 const userData = {
   byotActive: true,
   username: "smile-wring-011b",
+  planInputs: { subscription: { tier: "personal", status: "active" } },
   provisioning: { openclaw: { status: "complete" } },
   systemConfig: { byot: { provider: "openai" } },
 };
@@ -131,6 +132,37 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
     expect(syncModelCredentialsForUserSpy).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["a previous API's payload with plan fields at the top level and no bag", (() => {
+      const { planInputs, ...withoutBag } = userData;
+      return { ...withoutBag, ...planInputs, tier: "personal", selectedTier: "personal" };
+    })()],
+    ["plan inputs that are not an object", { ...userData, planInputs: "personal" }],
+    ["plan inputs that are an array", { ...userData, planInputs: [] }],
+    ["null plan inputs", { ...userData, planInputs: null }],
+  ])("refuses %s instead of syncing the user as having no plan", async (_label, body) => {
+    const res = await request(createApp({ surface: "sidecar" }))
+      .post(PRIMARY_SYNC_PATH)
+      .set(byotSyncHeaders(body))
+      .send(body);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "username, planInputs and provisioning.openclaw.status required" });
+    expect(syncModelCredentialsForUserSpy).not.toHaveBeenCalled();
+    expect(applyConfigPatchSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts an empty plan input bag from a sender that knows no plan", async () => {
+    const body = { ...userData, planInputs: {} };
+    const res = await request(createApp({ surface: "sidecar" }))
+      .post(PRIMARY_SYNC_PATH)
+      .set(byotSyncHeaders(body))
+      .send(body);
+
+    expect(res.status).toBe(200);
+    expect(syncModelCredentialsForUserSpy).toHaveBeenCalledWith(body, expect.anything());
+  });
+
   it("runs model config writes under the shared system-config lease", async () => {
     const res = await request(createApp({ surface: "sidecar" }))
       .post(PRIMARY_SYNC_PATH)
@@ -213,6 +245,7 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
   it("accepts canonical model credential sync payloads", async () => {
     const body = {
       username: userData.username,
+      planInputs: userData.planInputs,
       provisioning: userData.provisioning,
       systemConfig: {
         modelCredential: {

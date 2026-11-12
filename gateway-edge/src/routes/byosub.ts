@@ -350,29 +350,23 @@ function triggerUnifiedByosSync(args: {
     userData: {
       byotActive: true,
       username: args.slug,
+      planInputs: {},
       provisioning: { openclaw: { status: "complete" } },
       systemConfig: { byot: { provider: args.provider } },
     },
   });
 }
 
-function tierFieldsFromRequest(req: Request): Record<string, unknown> {
-  const user = req.user ?? {};
-  return {
-    ...(typeof user.tier === "string" ? { tier: user.tier } : {}),
-    ...userEntitlements().pickInputs(user as Record<string, unknown>),
-    ...(typeof user.trialExpired === "boolean" ? { trialExpired: user.trialExpired } : {}),
-  };
-}
-
 function triggerUnifiedByosOffSync(req: Request, resolved: { gatewayId: string; slug: string }): void {
+  const user = (req.user ?? {}) as Record<string, unknown>;
   triggerGatewayModelCredentialSync({
     gatewayId: resolved.gatewayId,
     userData: {
       byotActive: false,
       username: resolved.slug,
       provisioning: { openclaw: { status: "complete" } },
-      ...tierFieldsFromRequest(req),
+      ...userEntitlements().previousImageFields("model-credential-push", user),
+      planInputs: userEntitlements().pickInputs(user),
     },
   });
 }

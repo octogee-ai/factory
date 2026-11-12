@@ -9,7 +9,7 @@ import {
   defaultAgentPatch,
   defaultAgentPatchReplacePaths,
   deriveDesiredByotState,
-  FREE_TIER_DEFAULT_AGENT_TOOLS,
+  HOUSE_MODEL_DEFAULT_AGENT_TOOLS,
   isPlatformProviderRef,
   platformDefaultAgentModelInputForUser,
   ISOLATED_CODEX_APP_SERVER,
@@ -156,7 +156,7 @@ export async function applyDefaultAgentToolsConvergence(
 ): Promise<boolean> {
   const logFn = deps?.logFn ?? log;
   const agentId = `octogee-${slug}-coach`;
-  const tools = houseOnly ? FREE_TIER_DEFAULT_AGENT_TOOLS : null;
+  const tools = houseOnly ? HOUSE_MODEL_DEFAULT_AGENT_TOOLS : null;
   const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
   // A missing agent entry means there is nothing to converge — succeeding
   // silently here would mask an unmounted/half-mounted user on the very
@@ -2091,7 +2091,7 @@ export async function syncByotForUser(
   const logFn = deps?.logFn ?? log;
   const userGate = userByotGate(user, shared, desired, userData, logFn);
   const effectiveDesired = userGate.desired;
-  const houseOnly = userEntitlements().plan(userData).modelAccess === "house_only";
+  const houseOnly = userEntitlements().plan(userData.planInputs).modelAccess === "house_only";
   const oauthPurge = await purgeUserOauthIfRequired(
     user,
     slug,

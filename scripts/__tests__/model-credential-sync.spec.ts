@@ -9,6 +9,7 @@ import { syncModelCredentialsForUser } from "../lib/model-credential-sync-runtim
 
 const COMPLETE_USER = {
   username: "tester-70",
+  planInputs: {},
   provisioning: { openclaw: { status: "complete" } },
 };
 
@@ -147,7 +148,7 @@ describe("syncModelCredentialsForUser", () => {
     expect(restoreOauthStoreForSlug).not.toHaveBeenCalled();
     expect(applyDefaultAgentModelPatch).toHaveBeenCalledWith({
       slug: "tester-70",
-      source: "free-tier",
+      source: "house-model",
       model: "platform-openai/gpt-6-luna",
     });
     expect(requestGatewayRestart).not.toHaveBeenCalled();

@@ -13,6 +13,7 @@ import {
   type UserLifecycleAdapter,
   type ProjectCloneOptions,
   type ProjectCloneTarget,
+  type UserContext,
   type UserSnapshot,
   type MmUpdate,
 } from "./user-lifecycle.js";
@@ -52,6 +53,7 @@ giteaReleaseShouldFail?: boolean;
   blobSyncShouldFail: boolean;
   reassertByotShouldFail?: boolean;
   reassertByotUserData?: Record<string, unknown>;
+  templateContext?: UserContext;
   reassertContextFilesShouldFail?: boolean;
   reassertContextFilesUserData?: Record<string, unknown>;
   communityMembershipCtx?: { uid: string; slug: string };
@@ -106,8 +108,9 @@ function makeAdapter(state: MockState): UserLifecycleAdapter {
       record("ensureUserDirectories");
       state.disk.customerDir = true;
     },
-    writeUserTemplateFiles: async () => {
+    writeUserTemplateFiles: async (ctx) => {
       record("writeUserTemplateFiles");
+      state.templateContext = ctx;
       state.disk.templatesWritten = true;
     },
     removePartialWorkspace: async () => {
@@ -275,7 +278,8 @@ function snap(overrides: Partial<UserSnapshot> = {}): UserSnapshot {
   return {
     uid: "uid-test",
     slug: "test",
-    tier: "trial",
+    contextTemplateKey: "default",
+    planInputs: {},
     gatewayId: "gw-test",
     status: "",
     agentIds: [],
@@ -638,7 +642,6 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     // tell deriveDesiredByotState the runtime is complete.
     state.user = snap({
       status: "",
-      tier: "pro",
       byotActive: true,
       systemConfig: { byot: { provider: "openai", model: "gpt-4o" } },
     });
@@ -650,13 +653,12 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     expect(ud.username).toBe("test");
     expect(ud.byotActive).toBe(true);
     expect(ud.systemConfig).toEqual({ byot: { provider: "openai", model: "gpt-4o" } });
-    expect(ud.tier).toBe("pro");
     expect(ud.provisioning).toEqual({
       openclaw: { status: "complete" },
     });
   });
 
-  it("forwards the trial grant to the reassert so its configured plans survive the mount boundary", async () => {
+  it("hands the snapshot's plan inputs to the reassert untouched so its configured plans survive the mount boundary", async () => {
     const claimedSeconds = Math.floor(Date.now() / 1000) - 2 * 86_400;
     const trialGrant = {
       schemaVersion: 3,
@@ -668,9 +670,9 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
       claimedAt: { _seconds: claimedSeconds, _nanoseconds: 0 },
       endsAt: { _seconds: claimedSeconds + 7 * 86_400, _nanoseconds: 0 },
     };
+    const planInputs = { tier: "personal_free", trialGrant };
     state.user = snap({
-      tier: "personal_free",
-      trialGrant,
+      planInputs,
       systemConfig: {
         agentModels: { "octogee-test-coach": { primary: "platform-openrouter/minimax/minimax-m3", fallbacks: [] } },
       },
@@ -678,22 +680,25 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     await addUserToGateway(makeAdapter(state), "uid-test");
 
     const ud = state.reassertByotUserData ?? {};
-    expect(ud.tier).toBe("personal_free");
-    expect(ud.trialGrant).toBe(trialGrant);
+    expect(ud.planInputs).toBe(planInputs);
   });
 
-  it("forwards builderSubscription to the reassert — a credits user's picks must not defer to house_only at mount", async () => {
+  it("puts no plan input at the top level of the reassert data", async () => {
     state.user = snap({
-      tier: "personal_free",
-      builderSubscription: { tier: "hobby", status: "active" },
-      systemConfig: {
-        agentModels: { "octogee-test-coach": { primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] } },
-      },
+      planInputs: { tier: "personal_free", builderSubscription: { tier: "hobby", status: "active" } },
     });
     await addUserToGateway(makeAdapter(state), "uid-test");
 
-    const ud = state.reassertByotUserData ?? {};
-    expect(ud.builderSubscription).toEqual({ tier: "hobby", status: "active" });
+    expect(Object.keys(state.reassertByotUserData ?? {}).sort()).toEqual([
+      "builderAgentDefault",
+      "byotActive",
+      "freeTierModelRef",
+      "planInputs",
+      "provisioning",
+      "systemConfig",
+      "timeZone",
+      "username",
+    ]);
   });
 
   it("a byot re-assert failure is non-fatal — the mount still completes", async () => {
@@ -704,18 +709,16 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     expect(result.steps).toContain("verify-channel-ready");
   });
 
-  it("forwards the same plan-resolution fields to the context-file reassert as the byot reassert", async () => {
-    state.user = snap({
-      tier: "personal_free",
-      builderSubscription: { tier: "hobby", status: "active" },
-    });
+  it("hands the same plan inputs to the context-file reassert as the byot reassert", async () => {
+    const planInputs = { tier: "personal_free", builderSubscription: { tier: "hobby", status: "active" } };
+    state.user = snap({ planInputs });
     await addUserToGateway(makeAdapter(state), "uid-test");
 
     expect(state.calls).toContain("reassertConvergedContextFilesForUser");
     const ud = state.reassertContextFilesUserData ?? {};
     expect(ud.username).toBe("test");
-    expect(ud.tier).toBe("personal_free");
-    expect(ud.builderSubscription).toEqual({ tier: "hobby", status: "active" });
+    expect(ud.planInputs).toBe(planInputs);
+    expect(state.reassertByotUserData?.planInputs).toBe(planInputs);
   });
 
   it("a context-file re-assert failure is non-fatal — the mount still completes", async () => {
@@ -837,6 +840,22 @@ describe("addUserToGateway — restore from Gitea (post pod loss)", () => {
 
     expect(result.steps).toContain("write-templates");
     expect(state.calls).toContain("writeUserTemplateFiles");
+  });
+
+  it("seeds workspace templates from the snapshot's context template key and names no plan in the template variables", async () => {
+    state.user = snap({ ...state.user, contextTemplateKey: "seed-key-from-the-api" });
+
+    await addUserToGateway(makeAdapter(state), "uid-test");
+
+    expect(state.templateContext?.contextTemplateKey).toBe("seed-key-from-the-api");
+    expect(Object.keys(state.templateContext?.templateVars ?? {}).sort()).toEqual([
+      "createdAt",
+      "ownerName",
+      "slug",
+      "timeZone",
+      "uid",
+      "username",
+    ]);
   });
 
   it("does NOT re-provision Mattermost", async () => {

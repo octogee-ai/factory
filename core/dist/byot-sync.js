@@ -17,7 +17,7 @@ function agentDirForSlug(slug, agentsDir = AGENTS_DIR) {
 // file, so it's the only entry in this list.
 const BYOT_FILES = ["models.json"];
 const BYOT_MARKER = ".byot-managed";
-export const FREE_TIER_DEFAULT_AGENT_TOOLS = {
+export const HOUSE_MODEL_DEFAULT_AGENT_TOOLS = {
     profile: "minimal",
     alsoAllow: [
         "read",
@@ -93,7 +93,7 @@ export const ISOLATED_CODEX_APP_SERVER = {
     sandbox: "danger-full-access",
     approvalPolicy: "never",
 };
-// The always-available platform house model: the operator's free-tier dial
+// The always-available platform house model: the operator's house model dial
 // (snapshot freeTierModelRef), compiled default DEFAULT_FREE_TIER_MODEL_REF.
 // A failed/exhausted BYOK provider degrades here rather than leaving the
 // agent credential-less, and house-only plans pin the agent here so config,
@@ -138,7 +138,7 @@ export function byosDefaultAgentConfigPatch(input) {
                     {
                         id: agentIdForSlug(input.slug),
                         model: { primary: input.model, fallbacks: [] },
-                        tools: FREE_TIER_DEFAULT_AGENT_TOOLS,
+                        tools: HOUSE_MODEL_DEFAULT_AGENT_TOOLS,
                     },
                 ],
             },
@@ -171,20 +171,20 @@ function isAgentRecord(a) {
     return a !== null && typeof a === "object" && !Array.isArray(a);
 }
 // The strip may only remove what the platform itself wrote: an exact
-// fingerprint of FREE_TIER_DEFAULT_AGENT_TOOLS. A user-authored or legacy
+// fingerprint of HOUSE_MODEL_DEFAULT_AGENT_TOOLS. A user-authored or legacy
 // profile/alsoAllow never matches and survives the catalog convergence.
-function isPlatformFreeTierToolsBlock(existing) {
+function isPlatformHouseModelToolsBlock(existing) {
     const alsoAllow = existing.alsoAllow;
-    return (existing.profile === FREE_TIER_DEFAULT_AGENT_TOOLS.profile &&
+    return (existing.profile === HOUSE_MODEL_DEFAULT_AGENT_TOOLS.profile &&
         Array.isArray(alsoAllow) &&
-        alsoAllow.length === FREE_TIER_DEFAULT_AGENT_TOOLS.alsoAllow.length &&
-        FREE_TIER_DEFAULT_AGENT_TOOLS.alsoAllow.every((tool, i) => alsoAllow[i] === tool));
+        alsoAllow.length === HOUSE_MODEL_DEFAULT_AGENT_TOOLS.alsoAllow.length &&
+        HOUSE_MODEL_DEFAULT_AGENT_TOOLS.alsoAllow.every((tool, i) => alsoAllow[i] === tool));
 }
 // Tools convergence for the agent entry, applied alongside the model update:
-// a FreeTierDefaultAgentToolsBlock merges over the entry's existing tools (fs guards
-// and any other keys preserved — the free plan is platform-tuned, so the block
-// wins over prior profile/alsoAllow values); null strips ONLY the platform's
-// own free-tier block (fingerprint-gated) so an upgraded user returns to
+// a HouseModelDefaultAgentToolsBlock merges over the entry's existing tools (fs guards
+// and any other keys preserved — the house-only surface is platform-tuned, so the
+// block wins over prior profile/alsoAllow values); null strips ONLY the platform's
+// own house model block (fingerprint-gated) so a catalog user returns to
 // the inherited gateway-wide surface without losing fs.workspaceOnly or any
 // user-authored tools keys.
 export function convergedDefaultAgentToolsValue(existing, tools) {
@@ -196,7 +196,7 @@ export function convergedDefaultAgentToolsValue(existing, tools) {
         delete base.alsoAllow;
         return { ...base, profile: tools.profile, alsoAllow: [...tools.alsoAllow] };
     }
-    if (isPlatformFreeTierToolsBlock(base)) {
+    if (isPlatformHouseModelToolsBlock(base)) {
         delete base.profile;
         delete base.alsoAllow;
     }
@@ -280,7 +280,7 @@ export function deriveDesiredByotState(userData) {
         return {
             enabled: false,
             input: null,
-            defaultAgentModelInput: freeTierDefaultAgentModelInput(slug, userData),
+            defaultAgentModelInput: houseModelDefaultAgentModelInput(slug, userData),
         };
     }
     const input = byotInputForSlug(slug, userData.systemConfig?.byot);
@@ -295,15 +295,15 @@ export function deriveDesiredByotState(userData) {
 // overrides land afterwards. Used by deriveDesiredByotState and the
 // shared-gateway byosub gate.
 export function platformDefaultAgentModelInputForUser(slug, userData) {
-    return freeTierDefaultAgentModelInput(slug, userData);
+    return houseModelDefaultAgentModelInput(slug, userData);
 }
-// House-only (Personal Free with no live Signup Offer) pins the agent to the
-// house model. The broker would degrade anyway; pinning keeps the config
+// A house-only plan pins the agent to the house model. The broker would degrade
+// anyway; pinning keeps the config
 // honest so /status and the agent's self-report agree with the wire.
-function freeTierDefaultAgentModelInput(slug, userData) {
-    const plan = userEntitlements().plan(userData);
+function houseModelDefaultAgentModelInput(slug, userData) {
+    const plan = userEntitlements().plan(userData.planInputs);
     return plan.modelAccess === "house_only"
-        ? { slug, model: houseModelRefFrom(userData.freeTierModelRef), source: "free-tier" }
+        ? { slug, model: houseModelRefFrom(userData.freeTierModelRef), source: "house-model" }
         : null;
 }
 function byotInputForSlug(slug, cfg) {

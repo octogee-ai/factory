@@ -1,3 +1,4 @@
+import { type ProductFields } from "@octogee/shared/types/user-entitlements";
 import type { MmUpdate } from "./user-lifecycle.js";
 import type { UserPatch } from "./platform-state/users.js";
 import type { ManagedChannelHost } from "./channel-host/types.js";
@@ -54,7 +55,8 @@ export interface OpenclawConfigShape {
 export interface ProvisioningContext {
     uid: string;
     slug: string;
-    tier: string;
+    contextTemplateKey: string;
+    provisionedProductFields: ProductFields;
     ownerName: string;
     customerDir: string;
     today: string;

@@ -124,6 +124,7 @@ export interface FleetBrokerBlobMaterialization {
 export interface FleetBrokerClient {
   watchAssignments(wake: () => void, log: (message: string) => void): () => void;
   assignedUsers(opts?: { completeOnly?: boolean }): Promise<FleetBrokerUserSnapshot[]>;
+  provisionedUserSlugs(): Promise<string[]>;
   assignmentRoster(): Promise<FleetBrokerAssignmentRosterEntry[]>;
   builderIdentity(opts?: { nativeBoot?: true }): Promise<UserIdentity>;
   configuredUserBootstrap(slug: string): Promise<FleetBrokerConfiguredUserBootstrap>;
@@ -330,6 +331,50 @@ async function readUserIdentity(
   return identity;
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function userSnapshotFromResponse(value: unknown): FleetBrokerUserSnapshot {
+  if (!isPlainRecord(value) || !isPlainRecord(value.planInputs)) {
+    throw new Error("fleet-broker user snapshot carries no planInputs; the API predates this gateway image");
+  }
+  if (typeof value.contextTemplateKey !== "string" || value.contextTemplateKey.length === 0) {
+    throw new Error("fleet-broker user snapshot carries no contextTemplateKey; the API predates this gateway image");
+  }
+  return value as unknown as FleetBrokerUserSnapshot;
+}
+
+function assignedUserRoster(data: unknown): unknown[] {
+  const users = (data as { users?: unknown } | null)?.users;
+  if (!Array.isArray(users)) throw new Error("fleet-broker invalid assigned-user roster");
+  return users;
+}
+
+function userSlugFromResponse(user: unknown): string {
+  const slug = isPlainRecord(user) ? user.slug : undefined;
+  if (typeof slug !== "string" || slug.length === 0) {
+    throw new Error("fleet-broker assigned-user roster entry carries no slug");
+  }
+  return slug;
+}
+
+function assignedUserClient(
+  gatewayId: string,
+  revisionId: string,
+  gatewayCredentialHeaders: () => Promise<Record<string, string>>,
+): Pick<FleetBrokerClient, "assignedUsers" | "provisionedUserSlugs"> {
+  const roster = async (completeOnly: boolean) => assignedUserRoster(await postJson<unknown>(
+    "/internal/fleet/assigned-users",
+    { gatewayId, revisionId, completeOnly },
+    await gatewayCredentialHeaders(),
+  ));
+  return {
+    assignedUsers: async (opts = {}) => (await roster(opts.completeOnly === true)).map(userSnapshotFromResponse),
+    provisionedUserSlugs: async () => (await roster(true)).map(userSlugFromResponse),
+  };
+}
+
 function assignmentRosterFromResponse(data: unknown): FleetBrokerAssignmentRosterEntry[] {
   const assignments = (data as { assignments?: unknown } | null)?.assignments;
   if (!Array.isArray(assignments)) throw new Error("fleet-broker invalid assignment roster");
@@ -360,14 +405,7 @@ export function createFleetBrokerClient(
       url: `${baseUrl()}/internal/fleet/assignment-watch`,
       gatewayId, revisionId, headers: gatewayCredentialHeaders, wake, log,
     }),
-    async assignedUsers(opts = {}) {
-      const data = await postJson<{ users: FleetBrokerUserSnapshot[] }>(
-        "/internal/fleet/assigned-users",
-        { gatewayId, revisionId, completeOnly: opts.completeOnly === true },
-        await gatewayCredentialHeaders(),
-      );
-      return data.users;
-    },
+    ...assignedUserClient(gatewayId, revisionId, gatewayCredentialHeaders),
     async assignmentRoster() {
       return assignmentRosterFromResponse(await postJson<unknown>(
         "/internal/fleet/assignment-roster",
@@ -416,12 +454,12 @@ export function createFleetBrokerClient(
     },
     async userSnapshot(uid) {
       try {
-        const data = await postJson<{ user: FleetBrokerUserSnapshot }>(
+        const data = await postJson<{ user?: unknown }>(
           "/internal/fleet/user-snapshot",
           { gatewayId, uid },
           await gatewayCredentialHeaders(),
         );
-        return data.user;
+        return userSnapshotFromResponse(data.user);
       } catch (err) {
         if (
           err instanceof Error &&

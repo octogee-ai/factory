@@ -2,7 +2,7 @@ import * as fs from "fs";
 import { parseTimeZone } from "@octogee/shared/types/time-zone";
 import * as path from "path";
 
-import { userEntitlements, type UserEntitlementInputs } from "@octogee/shared/types/user-entitlements";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import {
   USER_OWNED_CONTEXT_FILES,
   PLATFORM_CONVERGED_CONTEXT_FILES,
@@ -51,13 +51,18 @@ export function reassertUserTimeZoneLine(customerDir: string, timeZone: string |
   return true;
 }
 
+export interface ConvergedContextFileInputs {
+  planInputs: Record<string, unknown>;
+  timeZone?: unknown;
+}
+
 export function reassertConvergedContextFiles(
   slug: string,
   customerDir: string,
-  userData: UserEntitlementInputs & { timeZone?: unknown },
+  userData: ConvergedContextFileInputs,
   vars: Record<string, string> = {},
 ): string[] {
-  const policy = userEntitlements().contextFilePolicy(userData);
+  const policy = userEntitlements().contextFilePolicy(userData.planInputs);
   const userOwned = policy.removedFiles.filter((file) => USER_OWNED_CONTEXT_FILES.has(file));
   if (userOwned.length > 0) {
     throw new Error(`[context-files] ${slug}: policy may not remove user-owned ${userOwned.join(", ")}`);
@@ -101,7 +106,7 @@ export function reassertConvergedContextFiles(
 // skip: throw so the lifecycle's per-domain catch logs it loudly (the mount
 // still completes) instead of the convergence silently not happening.
 export function reassertConvergedContextFilesForSlug(
-  userData: UserEntitlementInputs & { username?: unknown; timeZone?: unknown },
+  userData: ConvergedContextFileInputs & { username?: unknown },
   usersDir: string = CUSTOMERS_DIR,
 ): string[] {
   const slug = userData.username;

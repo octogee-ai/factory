@@ -1561,15 +1561,18 @@ export function snapshotBaseFields(
   "uid" | "slug" | "channels" | "projectCheckoutScope" | "projects" | "coachToken" | "coachMmUserId" | "coachIdentity"
 > {
   const mattermostUserId = userRecord.mattermostUserId || null;
+  const entitlements = userEntitlements();
+  const planInputs = entitlements.pickInputs(account);
   return {
-    tier: stringAt(account, "tier") || stringAt(account, "subscription.tier") || "trial",
+    ...entitlements.previousImageFields("user-snapshot", account),
+    contextTemplateKey: entitlements.seedContextTemplateKey(planInputs),
+    planInputs,
     gatewayId: userRecord.gateway?.gatewayId ?? "",
     status: snapshotProvisioningStatus(userRecord),
     agentIds: [...userRecord.agents.agentIds],
     repoUrl: userRecord.provisioning.gitRepoUrl ?? "",
     mattermostUserId,
     customerMmUserId: mattermostUserId,
-    ...userEntitlements().pickInputs(account),
     ownerName: stringAt(account, "displayName") || stringAt(account, "username") || slug,
     email: stringAt(account, "email"),
     displayName: stringAt(account, "displayName"),
@@ -1740,7 +1743,7 @@ type FleetBrokerRouteOptions = { db: Firestore; store: PlatformStateStore } & Fl
 type ResolvedFleetBrokerRouteDeps = {
   db: Firestore;
   store: PlatformStateStore;
-  resolveFreeTierModel: FreeTierModelResolver;
+  resolveHouseModel: FreeTierModelResolver;
   resolveUserAgentDefault: UserAgentDefaultResolver;
   provisionMattermost: NonNullable<FleetBrokerRouteDeps["provisionMattermost"]>;
   markProvisioningComplete: NonNullable<FleetBrokerRouteDeps["markProvisioningComplete"]>;
@@ -1828,9 +1831,9 @@ function resolveFleetBrokerRouteDeps(
   return {
     db: opts.db,
     store: opts.store,
-    resolveFreeTierModel: createCachedFreeTierModelResolver({
+    resolveHouseModel: createCachedFreeTierModelResolver({
       platformConfig: opts.store.config.platform,
-      onError: (err) => logger.error("fleet-broker free-tier dial resolution failed", { err }),
+      onError: (err) => logger.error("fleet-broker house model dial resolution failed", { err }),
     }),
     resolveUserAgentDefault: createCachedUserAgentDefaultResolver({
       platformConfig: opts.store.config.platform,
@@ -1984,7 +1987,7 @@ function installSnapshotRoutes(
       completeOnly ? { openclawStatus: "complete" } : {},
     );
     const modelDials = {
-      freeTierModelRef: (await deps.resolveFreeTierModel()).ref,
+      freeTierModelRef: (await deps.resolveHouseModel()).ref,
       userAgentDefault: await deps.resolveUserAgentDefault(),
     };
     const gatewayData = (await store.gateways.roots.get(bound.gatewayId)) ?? undefined;
@@ -2048,7 +2051,7 @@ function installSnapshotRoutes(
       {
         gatewayId: bound.gatewayId,
         modelDials: {
-          freeTierModelRef: (await deps.resolveFreeTierModel()).ref,
+          freeTierModelRef: (await deps.resolveHouseModel()).ref,
           userAgentDefault: await deps.resolveUserAgentDefault(),
         },
         gatewayData,

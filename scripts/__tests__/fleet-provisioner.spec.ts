@@ -629,7 +629,8 @@ function configuredUserLifecycleAdapter(input: {
     loadUserSnapshot: async () => ({
       uid: "uid-user",
       slug: "ceckert-test",
-      tier: "trial",
+      contextTemplateKey: "default",
+      planInputs: { tier: "trial" },
       gatewayId: "gw-user",
       status: "complete" as const,
       agentIds: [],
@@ -2368,7 +2369,8 @@ describe("evictLocalUser — complete local teardown", () => {
       loadUserSnapshot: vi.fn(async () => ({
         uid: "uid-alice",
         slug: "alice",
-        tier: "trial",
+        contextTemplateKey: "default",
+        planInputs: { tier: "trial" },
         gatewayId: "walter",
         status: "complete",
         agentIds: ["octogee-alice-coach"],

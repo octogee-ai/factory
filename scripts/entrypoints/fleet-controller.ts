@@ -228,6 +228,18 @@ export function createAssignedUserReader(
   };
 }
 
+export function createSharedAutosave(
+  brokerClient: Pick<FleetBrokerClient, "provisionedUserSlugs">,
+  persist: (slug: string) => Promise<void>,
+  logFn: (message: string) => void,
+): () => Promise<void> {
+  return () => persistAssignedSharedUsers({
+    readUsers: async () => (await brokerClient.provisionedUserSlugs()).map((slug) => ({ slug })),
+    persist,
+    log: logFn,
+  });
+}
+
 export async function readUserEnsureAdmission(
   brokerClient: Pick<FleetBrokerClient, "assignmentRoster">,
   uid: string,
@@ -387,11 +399,7 @@ async function main(): Promise<void> {
   // :18789; GATEWAY-SIMPLE-ROLL-SPEC).
   if (builderSlug) startUserServices(builderSlug);
   const stopSharedAutosave = GATEWAY_CLASS === "shared" ? startProjectAutosave({
-    save: () => persistAssignedSharedUsers({
-      readUsers: () => brokerClient.assignedUsers({ completeOnly: true }),
-      persist: persistSharedUserFiles,
-      log,
-    }), log,
+    save: createSharedAutosave(brokerClient, persistSharedUserFiles, log), log,
   }) : undefined;
 
   const blobSyncTimer = startBlobSyncLoop({

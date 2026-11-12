@@ -53,7 +53,8 @@ const ALICE_DEFAULT_AGENT_MM_USER_ID = "cccccccccccccccccccccccccc";
 const userSnapshot: UserSnapshot = {
   uid: "uid-alice",
   slug: "alice",
-  tier: "standard",
+  contextTemplateKey: "default",
+  planInputs: { tier: "standard" },
   gatewayId: "default-blue",
   status: "complete",
   agentIds: [],

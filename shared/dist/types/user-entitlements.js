@@ -33,6 +33,7 @@ export const staticUserEntitlements = {
     pickInputs: () => ({}),
     contextFilePolicy: () => ({ templateKey: STATIC_CONTEXT_TEMPLATE_KEY, removedFiles: [] }),
     seedContextTemplateKey: () => STATIC_CONTEXT_TEMPLATE_KEY,
+    previousImageFields: () => ({}),
 };
 const RESOLVER_SLOT = Symbol.for("octogee.userEntitlements");
 export function installUserEntitlements(resolver) {

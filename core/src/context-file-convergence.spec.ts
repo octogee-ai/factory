@@ -87,7 +87,7 @@ describe("reassertConvergedContextFiles", () => {
   it("writes AGENTS.md and TOOLS.md from the free template for a house-only plan with no prior files", () => {
     const dir = customerDir();
 
-    const changed = reassertConvergedContextFiles("alice", dir, { tier: "personal_free" });
+    const changed = reassertConvergedContextFiles("alice", dir, { planInputs: { tier: "personal_free" } });
 
     expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe(
@@ -101,7 +101,7 @@ describe("reassertConvergedContextFiles", () => {
     fs.writeFileSync(path.join(dir, "AGENTS.md"), "user wrote their own rules\n", "utf-8");
     fs.writeFileSync(path.join(dir, "TOOLS.md"), "user's own tools notes\n", "utf-8");
 
-    const changed = reassertConvergedContextFiles("alice", dir, { tier: "personal_free" });
+    const changed = reassertConvergedContextFiles("alice", dir, { planInputs: { tier: "personal_free" } });
 
     expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe(
@@ -113,7 +113,7 @@ describe("reassertConvergedContextFiles", () => {
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "SOUL.md"), "user's personalized soul\n", "utf-8");
 
-    reassertConvergedContextFiles("alice", dir, { tier: "personal_free" });
+    reassertConvergedContextFiles("alice", dir, { planInputs: { tier: "personal_free" } });
 
     expect(fs.readFileSync(path.join(dir, "SOUL.md"), "utf-8")).toBe(
       "user's personalized soul\n",
@@ -126,7 +126,7 @@ describe("reassertConvergedContextFiles", () => {
     fs.writeFileSync(path.join(dir, "TOOLS.md"), "# Free TOOLS\n", "utf-8");
     const beforeMtime = fs.statSync(path.join(dir, "AGENTS.md")).mtimeMs;
 
-    const changed = reassertConvergedContextFiles("alice", dir, { tier: "personal_free" });
+    const changed = reassertConvergedContextFiles("alice", dir, { planInputs: { tier: "personal_free" } });
 
     expect(changed).toEqual([]);
     expect(fs.statSync(path.join(dir, "AGENTS.md")).mtimeMs).toBe(beforeMtime);
@@ -136,7 +136,7 @@ describe("reassertConvergedContextFiles", () => {
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "AGENTS.md"), "paid user's own AGENTS.md\n", "utf-8");
 
-    const changed = reassertConvergedContextFiles("alice", dir, { tier: "pro" }, { slug: "alice" });
+    const changed = reassertConvergedContextFiles("alice", dir, { planInputs: { tier: "pro" } }, { slug: "alice" });
 
     expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Default AGENTS for alice\n");
@@ -148,8 +148,7 @@ describe("reassertConvergedContextFiles", () => {
     fs.writeFileSync(path.join(dir, "AGENTS.md"), "trial user's own AGENTS.md\n", "utf-8");
 
     const changed = reassertConvergedContextFiles("alice", dir, {
-      tier: "personal_free",
-      trialGrant: liveSignupOffer(),
+      planInputs: { tier: "personal_free", trialGrant: liveSignupOffer() },
     }, { slug: "alice" });
 
     expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
@@ -158,10 +157,10 @@ describe("reassertConvergedContextFiles", () => {
 
   it("follows a house-only user onto the paid template when they upgrade", () => {
     const dir = customerDir();
-    reassertConvergedContextFiles("alice", dir, { tier: "personal_free" }, { slug: "alice" });
+    reassertConvergedContextFiles("alice", dir, { planInputs: { tier: "personal_free" } }, { slug: "alice" });
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Free AGENTS for alice\n");
 
-    const changed = reassertConvergedContextFiles("alice", dir, { tier: "pro" }, { slug: "alice" });
+    const changed = reassertConvergedContextFiles("alice", dir, { planInputs: { tier: "pro" } }, { slug: "alice" });
 
     expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Default AGENTS for alice\n");
@@ -171,8 +170,7 @@ describe("reassertConvergedContextFiles", () => {
     const dir = customerDir();
 
     const changed = reassertConvergedContextFiles("alice", dir, {
-      tier: "personal_free",
-      trialGrant: houseOnlySignupOffer(),
+      planInputs: { tier: "personal_free", trialGrant: houseOnlySignupOffer() },
     }, { slug: "alice" });
 
     expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
@@ -184,8 +182,7 @@ describe("reassertConvergedContextFiles", () => {
     fs.writeFileSync(path.join(dir, "BOOTSTRAP.md"), "# first-run ritual\n", "utf-8");
 
     const changed = reassertConvergedContextFiles("alice", dir, {
-      tier: "personal_free",
-      trialGrant: houseOnlySignupOffer(),
+      planInputs: { tier: "personal_free", trialGrant: houseOnlySignupOffer() },
     }, { slug: "alice" });
 
     expect(changed).not.toContain("BOOTSTRAP.md");
@@ -195,7 +192,7 @@ describe("reassertConvergedContextFiles", () => {
   it("applies template placeholders using the vars passed in", () => {
     const dir = customerDir();
 
-    reassertConvergedContextFiles("alice", dir, { tier: "personal_free" }, { slug: "alice" });
+    reassertConvergedContextFiles("alice", dir, { planInputs: { tier: "personal_free" } }, { slug: "alice" });
 
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Free AGENTS for alice\n");
   });
@@ -204,7 +201,7 @@ describe("reassertConvergedContextFiles", () => {
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "BOOTSTRAP.md"), "# leftover first-run ritual\n", "utf-8");
 
-    const changed = reassertConvergedContextFiles("alice", dir, { tier: "personal_free" });
+    const changed = reassertConvergedContextFiles("alice", dir, { planInputs: { tier: "personal_free" } });
 
     expect(changed).toContain("BOOTSTRAP.md");
     expect(fs.existsSync(path.join(dir, "BOOTSTRAP.md"))).toBe(false);
@@ -215,7 +212,7 @@ describe("reassertConvergedContextFiles", () => {
     fs.writeFileSync(path.join(dir, "AGENTS.md"), "# Free AGENTS for {{slug}}\n", "utf-8");
     fs.writeFileSync(path.join(dir, "TOOLS.md"), "# Free TOOLS\n", "utf-8");
 
-    const changed = reassertConvergedContextFiles("alice", dir, { tier: "personal_free" });
+    const changed = reassertConvergedContextFiles("alice", dir, { planInputs: { tier: "personal_free" } });
 
     expect(changed).toEqual([]);
   });
@@ -224,7 +221,7 @@ describe("reassertConvergedContextFiles", () => {
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "BOOTSTRAP.md"), "# paid tier first-run ritual\n", "utf-8");
 
-    const changed = reassertConvergedContextFiles("alice", dir, { tier: "pro" }, { slug: "alice" });
+    const changed = reassertConvergedContextFiles("alice", dir, { planInputs: { tier: "pro" } }, { slug: "alice" });
 
     expect(changed).not.toContain("BOOTSTRAP.md");
     expect(fs.existsSync(path.join(dir, "BOOTSTRAP.md"))).toBe(true);
@@ -352,7 +349,7 @@ describe("reassertConvergedContextFiles under a product-supplied policy", () => 
     fs.writeFileSync(path.join(dir, "BOOTSTRAP.md"), "kept\n", "utf-8");
     fs.writeFileSync(path.join(dir, "USER.md"), "user content\n", "utf-8");
 
-    const changed = reassertConvergedContextFiles("alice", dir, { tier: "personal_free" }, { slug: "alice" });
+    const changed = reassertConvergedContextFiles("alice", dir, { planInputs: { tier: "personal_free" } }, { slug: "alice" });
 
     expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Default AGENTS for alice\n");
@@ -370,11 +367,11 @@ describe("reassertConvergedContextFiles under a product-supplied policy", () => 
 describe("reassertConvergedContextFilesForSlug", () => {
   it("throws an identifiable error when the userData bag has no username — never a silent skip", () => {
     expect(() =>
-      reassertConvergedContextFilesForSlug({ tier: "personal_free" }, path.join(tmpRoot, "customers")),
+      reassertConvergedContextFilesForSlug({ planInputs: { tier: "personal_free" } }, path.join(tmpRoot, "customers")),
     ).toThrow(/username/);
     expect(() =>
       reassertConvergedContextFilesForSlug(
-        { tier: "personal_free", username: 42 },
+        { planInputs: { tier: "personal_free" }, username: 42 },
         path.join(tmpRoot, "customers"),
       ),
     ).toThrow(/username/);
@@ -384,7 +381,7 @@ describe("reassertConvergedContextFilesForSlug", () => {
     const dir = customerDir();
 
     const changed = reassertConvergedContextFilesForSlug(
-      { tier: "personal_free", username: "alice" },
+      { planInputs: { tier: "personal_free" }, username: "alice" },
       path.join(tmpRoot, "customers"),
     );
 

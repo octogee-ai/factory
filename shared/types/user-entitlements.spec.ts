@@ -70,6 +70,13 @@ describe("staticUserEntitlements", () => {
     expect(staticUserEntitlements.sizingKey({})).toBe("default");
   });
 
+  it("sends a gateway on a previous image no field of its own on any wire", () => {
+    const account = { tier: "operator", selectedTier: "personal", subscription: { tier: "personal" }, trialExpired: true };
+    for (const wire of ["user-snapshot", "restore-snapshot", "model-pick-push", "model-credential-push"] as const) {
+      expect(staticUserEntitlements.previousImageFields(wire, account)).toEqual({});
+    }
+  });
+
   it("carries no plan inputs and no product projection", () => {
     expect(staticUserEntitlements.pickInputs({ subscription: { tier: "personal" } })).toEqual({});
     expect(staticUserEntitlements.productProjection).toBeUndefined();
@@ -77,7 +84,7 @@ describe("staticUserEntitlements", () => {
 
   it("seeds and converges every user onto one context template without removing files", () => {
     expect(staticUserEntitlements.contextFilePolicy({})).toEqual({ templateKey: "default", removedFiles: [] });
-    expect(staticUserEntitlements.seedContextTemplateKey("personal_free")).toBe("default");
+    expect(staticUserEntitlements.seedContextTemplateKey({ tier: "personal_free" })).toBe("default");
   });
 
   it("enforces a spent budget generically, degrading only when a house model exists", () => {

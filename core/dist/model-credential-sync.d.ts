@@ -1,4 +1,4 @@
-import { applyByotState, byosDefaultAgentConfigPatch, defaultAgentFullAgentList, deriveDesiredByotState, type ByotInput, type DefaultAgentModelInput, type DefaultAgentModelPatch, type FreeTierDefaultAgentModelInput } from "./byot-sync.js";
+import { applyByotState, byosDefaultAgentConfigPatch, defaultAgentFullAgentList, deriveDesiredByotState, type ByotInput, type DefaultAgentModelInput, type DefaultAgentModelPatch, type HouseModelDefaultAgentModelInput } from "./byot-sync.js";
 type LegacyByotSyncUserData = Parameters<typeof deriveDesiredByotState>[0];
 type LegacyByotSystemConfig = NonNullable<LegacyByotSyncUserData["systemConfig"]>;
 interface ModelCredentialStateProjection {
@@ -16,7 +16,7 @@ export type ModelCredentialSyncUserData = Omit<LegacyByotSyncUserData, "systemCo
 };
 export type ModelCredentialSyncInput = ByotInput;
 export type ModelCredentialDefaultAgentModelInput = DefaultAgentModelInput;
-export type ModelCredentialFreeTierDefaultAgentModelInput = FreeTierDefaultAgentModelInput;
+export type ModelCredentialHouseModelDefaultAgentModelInput = HouseModelDefaultAgentModelInput;
 export type ModelCredentialDefaultAgentModelPatch = DefaultAgentModelPatch;
 export declare function legacyByotSyncUserDataFromModelCredentialState(userData: ModelCredentialSyncUserData): LegacyByotSyncUserData;
 export declare function deriveDesiredModelCredentialState(userData: ModelCredentialSyncUserData): ReturnType<typeof deriveDesiredByotState>;

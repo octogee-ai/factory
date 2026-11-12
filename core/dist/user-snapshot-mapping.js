@@ -133,9 +133,6 @@ function snapshotProvisioning(data) {
 }
 function snapshotIdentity(data, slug) {
     return {
-        tier: data.tier ??
-            data.subscription?.tier ??
-            "trial",
         mattermostUserId: data.mattermost?.userId ?? null,
         ownerName: data.displayName ??
             data.username ??
@@ -192,6 +189,7 @@ export function byotSystemConfigFromDoc(sysData) {
 }
 export function mapUserDocToSnapshot(uid, data, channels) {
     const slug = deriveSlug(uid, data);
+    const planInputs = userEntitlements().pickInputs(data);
     return {
         uid,
         slug,
@@ -199,6 +197,7 @@ export function mapUserDocToSnapshot(uid, data, channels) {
         byotActive: Boolean(data.byotActive),
         ...snapshotIdentity(data, slug),
         ...snapshotProvisioning(data),
-        ...userEntitlements().pickInputs(data),
+        planInputs,
+        contextTemplateKey: userEntitlements().seedContextTemplateKey(planInputs),
     };
 }

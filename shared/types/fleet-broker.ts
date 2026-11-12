@@ -283,7 +283,8 @@ export interface FleetBrokerUserRestoreAuthority {
 export interface FleetBrokerUserSnapshot {
   uid: string;
   slug: string;
-  tier: string;
+  contextTemplateKey: string;
+  planInputs: Record<string, unknown>;
   gatewayId: string;
   status: FleetBrokerProvisioningStatus;
   agentIds: string[];
@@ -297,18 +298,7 @@ export interface FleetBrokerUserSnapshot {
   projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
   projects: FleetBrokerProjectRestore[];
   projectAgents?: FleetBrokerProjectAgent[];
-  // Plan-resolution inputs (TierResolvable). Receipt timestamps JSON-serialize as
-  // {_seconds,_nanoseconds}; asDate in shared/types/billing parses those shapes, so the
-  // pod-side resolveEffectivePlan grants the same catalog/trial access the trusted side
-  // resolved instead of silently degrading to house_only.
-  selectedTier?: unknown;
-  subscription?: unknown;
-  // User infra subscription (pricing v3) — travels so the pod resolves a
-  // credits-rail user as catalog, not house_only.
-  builderSubscription?: unknown;
-  trialGrant?: unknown;
-  signupOfferConvertedAt?: unknown;
-  // The operator's free-tier model dial (platformConfig/models), resolved
+  // The operator's house model dial (platformConfig/models), resolved
   // server-side: the house pin for house_only plans and the BYOK fallback.
   // Fingerprinted — a dial flip re-ensures mounted house-only users.
   freeTierModelRef?: string;

@@ -7,6 +7,7 @@
 // path-traversal defense.
 import { filterOutUserBindings } from "./apply-config-patch.js";
 import { parseTimeZone } from "@octogee/shared/types/time-zone";
+import { userEntitlements, type ProductFields } from "@octogee/shared/types/user-entitlements";
 import { UNKNOWN_TIME_ZONE } from "./context-file-convergence.js";
 import { FieldValue } from "firebase-admin/firestore";
 import { DEFAULT_AGENT_LOOK } from "@octogee/shared/types/agent-characters";
@@ -77,7 +78,8 @@ export interface OpenclawConfigShape {
 export interface ProvisioningContext {
   uid: string;
   slug: string;
-  tier: string;
+  contextTemplateKey: string;
+  provisionedProductFields: ProductFields;
   ownerName: string;
   customerDir: string;
   today: string;
@@ -87,8 +89,6 @@ export interface ProvisioningContext {
 }
 
 interface UserDataShape {
-  tier?: string;
-  subscription?: { tier?: string };
   username?: unknown;
   preferences?: { timeZone?: unknown };
   email?: string;
@@ -103,7 +103,8 @@ export function buildProvisioningContext(
   userData: Record<string, unknown>,
 ): ProvisioningContext {
   const data = userData as UserDataShape;
-  const tier = data.tier ?? data.subscription?.tier ?? "trial";
+  const entitlements = userEntitlements();
+  const planInputs = entitlements.pickInputs(userData);
 
   const username = data.username;
   if (typeof username !== "string" || !username) {
@@ -126,7 +127,6 @@ export function buildProvisioningContext(
     uid,
     ownerName,
     username,
-    tier,
     createdAt: today,
     slug,
     timeZone: parseTimeZone(data.preferences?.timeZone) ?? UNKNOWN_TIME_ZONE,
@@ -135,7 +135,8 @@ export function buildProvisioningContext(
   return {
     uid,
     slug,
-    tier,
+    contextTemplateKey: entitlements.seedContextTemplateKey(planInputs),
+    provisionedProductFields: entitlements.productProjection?.provisionedUser(planInputs) ?? {},
     ownerName,
     customerDir,
     today,
@@ -154,11 +155,11 @@ export function createUserDirectories(ctx: ProvisioningContext): void {
 export async function writeUserTemplateFiles(
   ctx: ProvisioningContext,
 ): Promise<void> {
-  const written = writeTierTemplateFilesImpl(ctx.customerDir, ctx.tier, ctx.templateVars);
+  const written = writeTierTemplateFilesImpl(ctx.customerDir, ctx.contextTemplateKey, ctx.templateVars);
   log(
     written.length
-      ? `Template files ensured from tiers/${ctx.tier}/ — wrote ${written.join(", ")}`
-      : `Template files ensured from tiers/${ctx.tier}/ — all present, nothing to write`,
+      ? `Template files ensured from tiers/${ctx.contextTemplateKey}/ — wrote ${written.join(", ")}`
+      : `Template files ensured from tiers/${ctx.contextTemplateKey}/ — all present, nothing to write`,
   );
 }
 
@@ -359,20 +360,7 @@ async function writeSystemConfig(ctx: ProvisioningContext): Promise<void> {
     if (user.role === null) await transaction.users.records.patch(ctx.uid, { role: "user" });
   });
 
-  const systemConfigData: Record<string, unknown> = {
-    updatedAt: FieldValue.serverTimestamp(),
-  };
-
-  if (ctx.tier === "trial") {
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
-    systemConfigData.trialExpiresAt = expiresAt;
-    log(
-      `Trial expires: ${expiresAt.toISOString().slice(0, 10)} for ${ctx.slug}`,
-    );
-  }
-
-  await db.doc(`users/${ctx.uid}/system/config`).set(systemConfigData, { merge: true });
+  await db.doc(`users/${ctx.uid}/system/config`).set({ updatedAt: FieldValue.serverTimestamp() }, { merge: true });
 }
 
 export function buildProvisionedUserPatch(ctx: ProvisioningContext, mmUpdate: MmUpdate): UserPatch {
@@ -399,7 +387,7 @@ async function writeProvisionedUser(
 
 export function buildUserProductFields(ctx: ProvisioningContext, mmUpdate: MmUpdate): Record<string, unknown> {
   return {
-    tier: ctx.tier,
+    ...ctx.provisionedProductFields,
     ...Object.fromEntries(
       Object.entries(mmUpdate).filter(([key]) => key.startsWith("mattermost.") && key !== "mattermost.userId"),
     ),
@@ -530,10 +518,11 @@ async function updateUserWorkspaceEntry(
 
 export async function notifyOpsOfSignup(ctx: ProvisioningContext): Promise<void> {
   const data = ctx.userData as UserDataShape;
+  const provisionedTier = ctx.provisionedProductFields.tier;
   await notifyNewSignup({
     name: ctx.ownerName,
     email: data.email || "",
-    tier: ctx.tier,
+    tier: typeof provisionedTier === "string" ? provisionedTier : "",
     slug: ctx.slug,
     uid: ctx.uid,
   });

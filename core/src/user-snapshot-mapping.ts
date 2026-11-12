@@ -172,12 +172,8 @@ function snapshotProvisioning(data: Record<string, unknown>): Pick<
 function snapshotIdentity(
   data: Record<string, unknown>,
   slug: string,
-): Pick<UserSnapshot, "tier" | "mattermostUserId" | "ownerName"> {
+): Pick<UserSnapshot, "mattermostUserId" | "ownerName"> {
   return {
-    tier:
-      (data.tier as string | undefined) ??
-      (data.subscription as { tier?: string } | undefined)?.tier ??
-      "trial",
     mattermostUserId:
       (data.mattermost as { userId?: string } | undefined)?.userId ?? null,
     ownerName:
@@ -262,6 +258,7 @@ export function mapUserDocToSnapshot(
   channels: UserSnapshot["channels"],
 ): UserSnapshot {
   const slug = deriveSlug(uid, data);
+  const planInputs = userEntitlements().pickInputs(data);
   return {
     uid,
     slug,
@@ -269,6 +266,7 @@ export function mapUserDocToSnapshot(
     byotActive: Boolean(data.byotActive),
     ...snapshotIdentity(data, slug),
     ...snapshotProvisioning(data),
-    ...userEntitlements().pickInputs(data),
+    planInputs,
+    contextTemplateKey: userEntitlements().seedContextTemplateKey(planInputs),
   };
 }

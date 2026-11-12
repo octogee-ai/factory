@@ -98,28 +98,15 @@ function triggerAgentModelSync(args: {
     ...args.sysData,
     agentModels: args.agentModels,
   });
-  const user = args.req.user as {
-    byotActive?: unknown;
-    tier?: unknown;
-    selectedTier?: unknown;
-    subscription?: unknown;
-    builderSubscription?: unknown;
-    trialGrant?: unknown;
-    signupOfferConvertedAt?: unknown;
-  };
-  // The gateway re-runs resolveBillingProfile on this payload before applying the picks.
-  // Every plan input travels: signup-offer catalog access hangs on the immutable receipt and a
-  // user's on builderSubscription — an omission silently degrades the sync to house_only
-  // ("agent-model overrides deferred") while this PUT reports success (pickPlanInputs is the
-  // single forwarding point that keeps that from recurring per-field).
+  const user = (args.req.user ?? {}) as Record<string, unknown>;
   triggerGatewayModelCredentialSync({
     gatewayId,
     userData: {
       byotActive: projection.byotActive ?? user.byotActive === true,
       username: args.slug,
       provisioning: { openclaw: { status: "complete" } },
-      ...(typeof user.tier === "string" ? { tier: user.tier } : {}),
-      ...userEntitlements().pickInputs(user as Record<string, unknown>),
+      ...userEntitlements().previousImageFields("model-pick-push", user),
+      planInputs: userEntitlements().pickInputs(user),
       systemConfig: projection.systemConfig,
     },
   });

@@ -96,7 +96,6 @@ import { upgradeImportedAgentStores } from "./openclaw-import-upgrade.js";
 import { reattachUserAgents } from "./reattach-user-agents.js";
 import { activeAgentProjectIds } from "./openclaw-config-users.js";
 import { PROC_ROOT } from "./held-files.js";
-import { pickPlanInputs } from "../../shared/types/billing.js";
 import { gatewayScopedJobId, verifyFleetRequest } from "./fleet-signature.js";
 import { rejectMisaddressedGateway } from "./fleet-gateway-path.js";
 import type { UserLifecycleAdapter, RemoveUserResult } from "./user-lifecycle.js";
@@ -801,14 +800,36 @@ function restoreProjectCheckoutScope(value: unknown): UserSnapshot["projectCheck
   return value === "workspace-and-projects" || value === "workspace-only" ? value : undefined;
 }
 
-function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapshot | null {
+const RESTORE_SNAPSHOT_MISMATCH = "snapshot mismatch";
+const RESTORE_SNAPSHOT_WITHOUT_PLAN_INPUTS =
+  "snapshot carries no plan inputs; the fleet controller predates this gateway image";
+
+type RestoreSnapshotRecord = Record<string, unknown> & {
+  planInputs: Record<string, unknown>;
+  contextTemplateKey: string;
+};
+
+function carriesPlanInputs(snapshot: Record<string, unknown>): snapshot is RestoreSnapshotRecord {
+  return isRecord(snapshot.planInputs) &&
+    typeof snapshot.contextTemplateKey === "string" &&
+    snapshot.contextTemplateKey.length > 0;
+}
+
+function restoreSnapshotRecord(body: RestoreMigrationRequestBody): RestoreSnapshotRecord | string {
   const snapshot: unknown = body.snapshot;
-  if (!isRecord(snapshot)) return null;
-  if (snapshot.uid !== body.uid || snapshot.slug !== body.slug) return null;
+  if (!isRecord(snapshot)) return RESTORE_SNAPSHOT_MISMATCH;
+  if (snapshot.uid !== body.uid || snapshot.slug !== body.slug) return RESTORE_SNAPSHOT_MISMATCH;
+  return carriesPlanInputs(snapshot) ? snapshot : RESTORE_SNAPSHOT_WITHOUT_PLAN_INPUTS;
+}
+
+function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapshot | string {
+  const snapshot = restoreSnapshotRecord(body);
+  if (typeof snapshot === "string") return snapshot;
   return {
     uid: snapshot.uid as string,
     slug: snapshot.slug as string,
-    tier: snapshot.tier as string,
+    contextTemplateKey: snapshot.contextTemplateKey,
+    planInputs: snapshot.planInputs,
     gatewayId: snapshot.gatewayId as string,
     status: snapshot.status as UserSnapshot["status"],
     ...(isRecord(snapshot.restoreAuthority) ? { restoreAuthority: snapshot.restoreAuthority as unknown as UserSnapshot["restoreAuthority"] } : {}),
@@ -823,7 +844,6 @@ function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapsho
     projects: Array.isArray(snapshot.projects) ? snapshot.projects as UserSnapshot["projects"] : [],
     projectAgents: Array.isArray(snapshot.projectAgents) ? snapshot.projectAgents as UserSnapshot["projectAgents"] : [],
     projectCheckoutScope: restoreProjectCheckoutScope(snapshot.projectCheckoutScope),
-    ...pickPlanInputs(snapshot),
     freeTierModelRef:
       typeof snapshot.freeTierModelRef === "string" ? snapshot.freeTierModelRef : undefined,
     builderAgentDefault: isRecord(snapshot.builderAgentDefault)
@@ -852,8 +872,9 @@ export function createRestoreHandler(deps: MigrationHandlerDeps): RequestHandler
       return;
     }
     const snapshot = snapshotFromRestoreBody(body);
-    if (!snapshot) {
-      res.status(400).json({ error: "snapshot mismatch" });
+    if (typeof snapshot === "string") {
+      log(`[migration-http] 🔴 restore migrationId=${body.migrationId} slug=${body.slug}: ${snapshot}`, { status: "failed" });
+      res.status(400).json({ error: snapshot });
       return;
     }
 

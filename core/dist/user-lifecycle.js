@@ -1,7 +1,6 @@
 import { withLogContext, setLogContext } from "@octogee/shared/server/service-logger";
 import { projectCheckoutEnabled } from "@octogee/shared/types/project";
 import { ADD_USER_DEADLINE_MS, VERIFY_ACCOUNT_TIMEOUT_MS, } from "@octogee/shared/types/fleet-controller";
-import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { UNKNOWN_TIME_ZONE } from "./context-file-convergence.js";
 const VERIFY_CHANNEL_READY = "verify-channel-ready";
 const CONFIG_PATCH = "config-patch";
@@ -558,20 +557,16 @@ async function restoreByos(adapter, slug) {
 // status would derive input=null and skip writing a first-time BYOK user's model files
 // (and clear them on a retry that already has managed files). So pin status to "complete":
 // it reflects the just-mounted runtime, not the stale doc. byotActive + systemConfig.byot
-// drive the provider; tier drives the free-tier agent model.
+// drive the provider; planInputs drive the house model pin.
 function byotUserDataFromSnapshot(snapshot) {
     return {
         username: snapshot.slug,
         timeZone: snapshot.timeZone ?? null,
         byotActive: snapshot.byotActive,
         systemConfig: snapshot.systemConfig,
-        tier: snapshot.tier,
+        planInputs: snapshot.planInputs,
         freeTierModelRef: snapshot.freeTierModelRef,
         builderAgentDefault: snapshot.builderAgentDefault,
-        // Full plan-input set: the reassert's resolveBillingProfile must see the same
-        // plan the trusted side resolved, or a trial/builder user's agent-model picks
-        // defer to house_only on every mount/roll.
-        ...userEntitlements().pickInputs(snapshot),
         provisioning: { openclaw: { status: "complete" } },
     };
 }
@@ -824,7 +819,7 @@ function buildUserContext(snapshot, usersDir) {
     return {
         uid: snapshot.uid,
         slug: snapshot.slug,
-        tier: snapshot.tier,
+        contextTemplateKey: snapshot.contextTemplateKey,
         ownerName: snapshot.ownerName,
         customerDir: `${usersDir}/${snapshot.slug}`,
         today,
@@ -833,7 +828,6 @@ function buildUserContext(snapshot, usersDir) {
             uid: snapshot.uid,
             ownerName: snapshot.ownerName,
             username,
-            tier: snapshot.tier,
             createdAt: today,
             slug: snapshot.slug,
             timeZone: snapshot.timeZone ?? UNKNOWN_TIME_ZONE,

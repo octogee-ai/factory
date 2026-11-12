@@ -71,7 +71,8 @@ describe("fleet-controller entrypoint config", () => {
       coachToken: "pat",
       defaultAgentMmUserId: "coach",
       customerMmUserId: "user",
-      tier: "paid",
+      contextTemplateKey: "default",
+      planInputs: { tier: "paid" },
     } as never;
     const assignedUsers = vi.fn(async () => [snapshot]);
     const seed = vi.fn();
@@ -92,7 +93,7 @@ describe("fleet-controller entrypoint config", () => {
     "keeps a %s user desired and admits ensures only outside source quiescence",
     async (state) => {
       const snapshot = {
-        uid: "u1", slug: "alice", status: "provisioning", channels: [],
+        uid: "u1", slug: "alice", contextTemplateKey: "default", planInputs: {}, status: "provisioning", channels: [],
         projectAgents: [], projects: [],
       } as never;
       const read = createAssignedUserReader({
@@ -107,7 +108,7 @@ describe("fleet-controller entrypoint config", () => {
   );
 
   it("does not admit incoming or restore-held roster entries without returned user snapshots", async () => {
-    const snapshot = { uid: "u1", slug: "alice", channels: [] } as never;
+    const snapshot = { uid: "u1", slug: "alice", contextTemplateKey: "default", planInputs: {}, channels: [] } as never;
     const seed = vi.fn();
     const read = createAssignedUserReader({
       assignedUsers: async () => [snapshot],
@@ -126,8 +127,8 @@ describe("fleet-controller entrypoint config", () => {
     const seed = vi.fn();
     const read = createAssignedUserReader({
       assignedUsers: async () => [
-        { uid: "u1", slug: "alice", channels: [] } as never,
-        { uid: "u2", slug: "bob", channels: [] } as never,
+        { uid: "u1", slug: "alice", contextTemplateKey: "default", planInputs: {}, channels: [] } as never,
+        { uid: "u2", slug: "bob", contextTemplateKey: "default", planInputs: {}, channels: [] } as never,
       ],
       assignmentRoster: async () => [{ uid: "u1", state: "serving", epoch: 7 }],
     }, seed);
@@ -138,7 +139,7 @@ describe("fleet-controller entrypoint config", () => {
 
   it("holds changed source content while quiescing, preserves a failed read, and removes only after cutover", async () => {
     _resetReconcileInFlightForTests();
-    let users = [{ uid: "u1", slug: "alice", status: "complete", channels: [] }] as unknown as FleetBrokerUserSnapshot[];
+    let users = [{ uid: "u1", slug: "alice", contextTemplateKey: "default", planInputs: {}, status: "complete", channels: [] }] as unknown as FleetBrokerUserSnapshot[];
     let assignments: FleetBrokerAssignmentRosterEntry[] = [
       { uid: "u1", state: "quiescing", epoch: 7 },
       { uid: "incoming", state: "migrating", epoch: 8 },
@@ -207,7 +208,7 @@ describe("fleet-controller entrypoint config", () => {
   it("does not rebuild full assigned-user snapshots for each selected cold mount", async () => {
     _resetReconcileInFlightForTests();
     const users = ["alice", "bob", "cara"].map((slug, index) => ({
-      uid: `u${index}`, slug, status: "complete", channels: [],
+      uid: `u${index}`, slug, contextTemplateKey: "default", planInputs: {}, status: "complete", channels: [],
     })) as unknown as FleetBrokerUserSnapshot[];
     const assignedUsers = vi.fn(async () => users);
     const assignmentRoster = vi.fn(async () => users.map(({ uid }) => ({ uid, state: "serving" as const, epoch: 1 })));

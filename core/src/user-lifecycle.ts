@@ -14,14 +14,14 @@ import {
   ADD_USER_DEADLINE_MS,
   VERIFY_ACCOUNT_TIMEOUT_MS,
 } from "@octogee/shared/types/fleet-controller";
-import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { UNKNOWN_TIME_ZONE } from "./context-file-convergence.js";
 import type { ManagedGitHost } from "./git-host/types.js";
 
 export interface UserSnapshot {
   uid: string;
   slug: string;
-  tier: string;
+  contextTemplateKey: string;
+  planInputs: Record<string, unknown>;
   gatewayId: string;
   status: "" | "provisioning" | "complete";
   agentIds: string[];
@@ -35,14 +35,7 @@ export interface UserSnapshot {
   projects?: FleetBrokerProjectRestore[];
   projectAgents?: FleetBrokerProjectAgent[];
   byotActive?: boolean;
-  // Plan-resolution inputs (TierResolvable): resolveEffectivePlan on the gateway needs
-  // these to grant signup-offer/paid access at mount-time reassert.
-  selectedTier?: unknown;
-  subscription?: unknown;
-  builderSubscription?: unknown;
-  trialGrant?: unknown;
-  signupOfferConvertedAt?: unknown;
-  // The operator's free-tier model dial, stamped by the fleet broker; drives
+  // The operator's house model dial, stamped by the fleet broker; drives
   // the house pin and the BYOK fallback baseline at mount-time reassert.
   freeTierModelRef?: string;
   // The operator's user agent default dial: the {primary, fallbacks} a
@@ -52,6 +45,17 @@ export interface UserSnapshot {
     byot?: { provider?: string; baseUrl?: string; model?: string };
     agentModels?: AgentModelSelections;
   };
+}
+
+export interface ReassertUserData {
+  username: string;
+  timeZone: string | null;
+  byotActive?: boolean;
+  systemConfig?: UserSnapshot["systemConfig"];
+  planInputs: Record<string, unknown>;
+  freeTierModelRef?: string;
+  builderAgentDefault?: UserSnapshot["builderAgentDefault"];
+  provisioning: { openclaw: { status: "complete" } };
 }
 
 export interface ProjectCloneTarget {
@@ -70,7 +74,7 @@ export interface ProjectCloneOptions {
 export interface UserContext {
   uid: string;
   slug: string;
-  tier: string;
+  contextTemplateKey: string;
   ownerName: string;
   customerDir: string;
   today: string;
@@ -189,14 +193,14 @@ restoreByosubForAgent: (slug: string) => Promise<{ restored: boolean; present: b
   // key refs) into the openclaw config. Idempotent; runs at provision AND on fresh-pod
   // re-mount, so a cattle/emptyDir pod self-heals its LLM auth after a roll/preemption.
   // userData must carry byotActive + systemConfig.byot (hydrated into the mount snapshot).
-  reassertByotForUser: (userData: Record<string, unknown>) => Promise<void>;
+  reassertByotForUser: (userData: ReassertUserData) => Promise<void>;
 
   // Re-assert the platform-managed context files (AGENTS.md/TOOLS.md) for house_only
   // plans — the same convergence semantics as reassertByotForUser: idempotent,
   // only-on-drift, runs at provision AND on fresh-pod re-mount. A no-op for any plan
-  // with catalog model access (paid, or a live Signup Offer), including a user who
-  // WAS house_only and has since upgraded — that's how ownership returns to them.
-  reassertConvergedContextFilesForUser: (userData: Record<string, unknown>) => Promise<void>;
+  // with catalog model access, including a user who WAS house_only and has since
+  // gained it — that's how ownership returns to them.
+  reassertConvergedContextFilesForUser: (userData: ReassertUserData) => Promise<void>;
 
   listProjectsNeedingClone: (slug: string) => Promise<ProjectCloneTarget[]>;
 
@@ -1164,20 +1168,16 @@ async function restoreByos(
 // status would derive input=null and skip writing a first-time BYOK user's model files
 // (and clear them on a retry that already has managed files). So pin status to "complete":
 // it reflects the just-mounted runtime, not the stale doc. byotActive + systemConfig.byot
-// drive the provider; tier drives the free-tier agent model.
-function byotUserDataFromSnapshot(snapshot: UserSnapshot): Record<string, unknown> {
+// drive the provider; planInputs drive the house model pin.
+function byotUserDataFromSnapshot(snapshot: UserSnapshot): ReassertUserData {
   return {
     username: snapshot.slug,
     timeZone: snapshot.timeZone ?? null,
     byotActive: snapshot.byotActive,
     systemConfig: snapshot.systemConfig,
-    tier: snapshot.tier,
+    planInputs: snapshot.planInputs,
     freeTierModelRef: snapshot.freeTierModelRef,
     builderAgentDefault: snapshot.builderAgentDefault,
-    // Full plan-input set: the reassert's resolveBillingProfile must see the same
-    // plan the trusted side resolved, or a trial/builder user's agent-model picks
-    // defer to house_only on every mount/roll.
-    ...userEntitlements().pickInputs(snapshot as unknown as Record<string, unknown>),
     provisioning: { openclaw: { status: "complete" } },
   };
 }
@@ -1545,7 +1545,7 @@ function buildUserContext(snapshot: UserSnapshot, usersDir: string): UserContext
   return {
     uid: snapshot.uid,
     slug: snapshot.slug,
-    tier: snapshot.tier,
+    contextTemplateKey: snapshot.contextTemplateKey,
     ownerName: snapshot.ownerName,
     customerDir: `${usersDir}/${snapshot.slug}`,
     today,
@@ -1554,7 +1554,6 @@ function buildUserContext(snapshot: UserSnapshot, usersDir: string): UserContext
       uid: snapshot.uid,
       ownerName: snapshot.ownerName,
       username,
-      tier: snapshot.tier,
       createdAt: today,
       slug: snapshot.slug,
       timeZone: snapshot.timeZone ?? UNKNOWN_TIME_ZONE,

@@ -7,7 +7,8 @@ import type { ManagedGitHost } from "./git-host/types.js";
 export interface UserSnapshot {
     uid: string;
     slug: string;
-    tier: string;
+    contextTemplateKey: string;
+    planInputs: Record<string, unknown>;
     gatewayId: string;
     status: "" | "provisioning" | "complete";
     agentIds: string[];
@@ -21,11 +22,6 @@ export interface UserSnapshot {
     projects?: FleetBrokerProjectRestore[];
     projectAgents?: FleetBrokerProjectAgent[];
     byotActive?: boolean;
-    selectedTier?: unknown;
-    subscription?: unknown;
-    builderSubscription?: unknown;
-    trialGrant?: unknown;
-    signupOfferConvertedAt?: unknown;
     freeTierModelRef?: string;
     builderAgentDefault?: {
         primary: string;
@@ -38,6 +34,20 @@ export interface UserSnapshot {
             model?: string;
         };
         agentModels?: AgentModelSelections;
+    };
+}
+export interface ReassertUserData {
+    username: string;
+    timeZone: string | null;
+    byotActive?: boolean;
+    systemConfig?: UserSnapshot["systemConfig"];
+    planInputs: Record<string, unknown>;
+    freeTierModelRef?: string;
+    builderAgentDefault?: UserSnapshot["builderAgentDefault"];
+    provisioning: {
+        openclaw: {
+            status: "complete";
+        };
     };
 }
 export interface ProjectCloneTarget {
@@ -54,7 +64,7 @@ export interface ProjectCloneOptions {
 export interface UserContext {
     uid: string;
     slug: string;
-    tier: string;
+    contextTemplateKey: string;
     ownerName: string;
     customerDir: string;
     today: string;
@@ -150,8 +160,8 @@ export interface UserLifecycleAdapter {
         restored: boolean;
         present: boolean;
     }>;
-    reassertByotForUser: (userData: Record<string, unknown>) => Promise<void>;
-    reassertConvergedContextFilesForUser: (userData: Record<string, unknown>) => Promise<void>;
+    reassertByotForUser: (userData: ReassertUserData) => Promise<void>;
+    reassertConvergedContextFilesForUser: (userData: ReassertUserData) => Promise<void>;
     listProjectsNeedingClone: (slug: string) => Promise<ProjectCloneTarget[]>;
     cloneProjectRepo: (userSlug: string, projectSlug: string, giteaRepoName: string | null, opts?: ProjectCloneOptions) => Promise<boolean>;
     seedDeferredProjectWorkspace?: (userSlug: string, projectSlug: string) => Promise<void>;

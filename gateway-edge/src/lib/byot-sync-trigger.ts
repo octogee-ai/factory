@@ -14,26 +14,16 @@ import {
 export interface ModelCredentialSyncUserData {
   byotActive?: boolean;
   username?: string;
-  tier?: string;
-  // The operator's free-tier model dial. Stamped onto every push payload by
+  planInputs: Record<string, unknown>;
+  // The operator's house model dial. Stamped onto every push payload by
   // postGatewayModelCredentialSync — a payload without it makes the pod-side
   // derive fall back to its compiled constant, silently reverting a dialed
   // fleet; the snapshot fingerprint wouldn't change, so reconcile can't repair
   // the drift until the next mount/roll.
   freeTierModelRef?: string;
-  // The operator's default agent dial, stamped alongside the free-tier
+  // The operator's default agent dial, stamped alongside the house model
   // dial: the {primary, fallbacks} a catalog agent runs with no explicit pick.
   builderAgentDefault?: UserAgentModelDefault;
-  // Plan inputs travel as-is (pickPlanInputs); the resolver tolerates non-string
-  // shapes, so they mirror subscription/builderSubscription as `unknown`.
-  selectedTier?: unknown;
-  // resolveBillingProfile derives signup-offer + user state from these on the
-  // gateway side; serialize the receipt (Timestamps → JSON) as-is — asDate
-  // parses the serialized {_seconds}/{seconds}/ISO shapes.
-  subscription?: unknown;
-  builderSubscription?: unknown;
-  trialGrant?: unknown;
-  signupOfferConvertedAt?: unknown;
   provisioning?: { openclaw?: { status?: string } };
   systemConfig?: {
     byot?: { provider?: string; baseUrl?: string; model?: string };

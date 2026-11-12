@@ -24,6 +24,7 @@ export interface UserProductProjection {
     }): ProductFields;
     adminUserDetail(user: UserEntitlementInputs): ProductFields;
     adminUserStats(summaries: readonly ProductFields[]): ProductFields;
+    provisionedUser(user: UserEntitlementInputs): ProductFields;
 }
 export interface UserSpendObservation {
     windowCostUsd: number;
@@ -31,6 +32,7 @@ export interface UserSpendObservation {
     onOwnerCredential: boolean;
     creditBalanceUsd?: number | null;
 }
+export type PreviousImageWire = "user-snapshot" | "restore-snapshot" | "model-pick-push" | "model-credential-push";
 export interface UserEntitlementResolver {
     plan(user: UserEntitlementInputs, now?: Date): UserPlan;
     sizingKey(user: UserEntitlementInputs, now?: Date): string | null;
@@ -39,7 +41,8 @@ export interface UserEntitlementResolver {
     spendThrottle(plan: UserPlan, observation: UserSpendObservation): SpendThrottleState;
     pickInputs(source: Record<string, unknown>): Record<string, unknown>;
     contextFilePolicy(user: UserEntitlementInputs, now?: Date): ContextFilePolicy;
-    seedContextTemplateKey(provisionedTier: string): string;
+    seedContextTemplateKey(user: UserEntitlementInputs): string;
+    previousImageFields(wire: PreviousImageWire, source: Record<string, unknown>): Record<string, unknown>;
     readonly productProjection?: UserProductProjection;
 }
 export declare const staticUserEntitlements: UserEntitlementResolver;

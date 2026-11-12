@@ -7,6 +7,7 @@
 // path-traversal defense.
 import { filterOutUserBindings } from "./apply-config-patch.js";
 import { parseTimeZone } from "@octogee/shared/types/time-zone";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { UNKNOWN_TIME_ZONE } from "./context-file-convergence.js";
 import { FieldValue } from "firebase-admin/firestore";
 import { DEFAULT_AGENT_LOOK } from "@octogee/shared/types/agent-characters";
@@ -24,7 +25,8 @@ import { writeTierTemplateFiles as writeTierTemplateFilesImpl } from "./tier-tem
 export { listTierTemplateFiles, writeTierTemplateFiles, } from "./tier-template-files.js";
 export function buildProvisioningContext(uid, userData) {
     const data = userData;
-    const tier = data.tier ?? data.subscription?.tier ?? "trial";
+    const entitlements = userEntitlements();
+    const planInputs = entitlements.pickInputs(userData);
     const username = data.username;
     if (typeof username !== "string" || !username) {
         throw new Error(`Cannot provision uid=${uid}: missing users/{uid}.username — onboarding must run first`);
@@ -41,7 +43,6 @@ export function buildProvisioningContext(uid, userData) {
         uid,
         ownerName,
         username,
-        tier,
         createdAt: today,
         slug,
         timeZone: parseTimeZone(data.preferences?.timeZone) ?? UNKNOWN_TIME_ZONE,
@@ -49,7 +50,8 @@ export function buildProvisioningContext(uid, userData) {
     return {
         uid,
         slug,
-        tier,
+        contextTemplateKey: entitlements.seedContextTemplateKey(planInputs),
+        provisionedProductFields: entitlements.productProjection?.provisionedUser(planInputs) ?? {},
         ownerName,
         customerDir,
         today,
@@ -64,10 +66,10 @@ export function createUserDirectories(ctx) {
     fs.mkdirSync(path.join(ctx.customerDir, ".system"), { recursive: true });
 }
 export async function writeUserTemplateFiles(ctx) {
-    const written = writeTierTemplateFilesImpl(ctx.customerDir, ctx.tier, ctx.templateVars);
+    const written = writeTierTemplateFilesImpl(ctx.customerDir, ctx.contextTemplateKey, ctx.templateVars);
     log(written.length
-        ? `Template files ensured from tiers/${ctx.tier}/ — wrote ${written.join(", ")}`
-        : `Template files ensured from tiers/${ctx.tier}/ — all present, nothing to write`);
+        ? `Template files ensured from tiers/${ctx.contextTemplateKey}/ — wrote ${written.join(", ")}`
+        : `Template files ensured from tiers/${ctx.contextTemplateKey}/ — all present, nothing to write`);
 }
 export function registerDefaultAgent(ctx, config) {
     config.agents ??= {};
@@ -210,16 +212,7 @@ async function writeSystemConfig(ctx) {
         if (user.role === null)
             await transaction.users.records.patch(ctx.uid, { role: "user" });
     });
-    const systemConfigData = {
-        updatedAt: FieldValue.serverTimestamp(),
-    };
-    if (ctx.tier === "trial") {
-        const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + 7);
-        systemConfigData.trialExpiresAt = expiresAt;
-        log(`Trial expires: ${expiresAt.toISOString().slice(0, 10)} for ${ctx.slug}`);
-    }
-    await db.doc(`users/${ctx.uid}/system/config`).set(systemConfigData, { merge: true });
+    await db.doc(`users/${ctx.uid}/system/config`).set({ updatedAt: FieldValue.serverTimestamp() }, { merge: true });
 }
 export function buildProvisionedUserPatch(ctx, mmUpdate) {
     const mattermostUserId = mmUpdate["mattermost.userId"];
@@ -240,7 +233,7 @@ async function writeProvisionedUser(ctx, allAgentIds, mmUpdate) {
 }
 export function buildUserProductFields(ctx, mmUpdate) {
     return {
-        tier: ctx.tier,
+        ...ctx.provisionedProductFields,
         ...Object.fromEntries(Object.entries(mmUpdate).filter(([key]) => key.startsWith("mattermost.") && key !== "mattermost.userId")),
     };
 }
@@ -352,10 +345,11 @@ async function updateUserWorkspaceEntry(ctx, provisioningObj) {
 }
 export async function notifyOpsOfSignup(ctx) {
     const data = ctx.userData;
+    const provisionedTier = ctx.provisionedProductFields.tier;
     await notifyNewSignup({
         name: ctx.ownerName,
         email: data.email || "",
-        tier: ctx.tier,
+        tier: typeof provisionedTier === "string" ? provisionedTier : "",
         slug: ctx.slug,
         uid: ctx.uid,
     });

@@ -65,7 +65,8 @@ afterAll(async () => {
 const baseCtx = (uid: string, slug: string, tier = "trial") => ({
   uid,
   slug,
-  tier,
+  contextTemplateKey: "default",
+  provisionedProductFields: { tier },
   ownerName: slug,
   customerDir: `/octogee/customers/${slug}`,
   today: "2026-05-19",
@@ -121,35 +122,19 @@ describe("markProvisioningComplete — system/config (privilege fields only)", (
     expect(cfg?.updatedAt).toBeDefined();
   });
 
-  it("sets trialExpiresAt 7 days out for tier=trial", async () => {
-    const { uid, slug } = freshIds();
-    await seedUser(uid, { username: slug });
-    const before = Date.now();
-
-    await markProvisioningComplete(baseCtx(uid, slug, "trial"), fullMmUpdate(slug), []);
-
-    const cfg = await readDoc(`users/${uid}/system/config`);
-    const expiresAt = cfg?.trialExpiresAt;
-    expect(expiresAt).toBeDefined();
-    const expiresMs = expiresAt.toDate ? expiresAt.toDate().getTime() : new Date(expiresAt).getTime();
-    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-    expect(expiresMs).toBeGreaterThanOrEqual(before + sevenDaysMs - 5_000);
-    expect(expiresMs).toBeLessThanOrEqual(before + sevenDaysMs + 5_000);
-  });
-
-  it("does NOT set trialExpiresAt for non-trial tiers", async () => {
+  it("writes no plan expiry of its own, whatever the provisioned product fields say", async () => {
     const { uid, slug } = freshIds();
     await seedUser(uid, { username: slug });
 
-    await markProvisioningComplete(baseCtx(uid, slug, "pro"), fullMmUpdate(slug), []);
+    await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), []);
 
     const cfg = await readDoc(`users/${uid}/system/config`);
-    expect(cfg?.trialExpiresAt).toBeUndefined();
+    expect(Object.keys(cfg ?? {}).sort()).toEqual(["role", "updatedAt"]);
   });
 });
 
 describe("markProvisioningComplete — top-level user doc (canonical operational fields)", () => {
-  it("writes tier but NOT selectedTier — provisioning must not default-mask a later paid subscription.tier", async () => {
+  it("writes the provisioned product fields but NOT selectedTier — provisioning must not default-mask a later paid subscription.tier", async () => {
     const { uid, slug } = freshIds();
     await seedUser(uid, { username: slug });
 

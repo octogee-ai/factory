@@ -68,7 +68,7 @@ import {
   deriveDesiredByotState,
   byosDefaultAgentConfigPatch,
   defaultAgentFullAgentList,
-  FREE_TIER_DEFAULT_AGENT_TOOLS,
+  HOUSE_MODEL_DEFAULT_AGENT_TOOLS,
   STANDARD_CODEX_APP_SERVER,
 } from "./byot-sync.js";
 import {
@@ -98,6 +98,7 @@ import * as path from "path";
 const ON = {
   byotActive: true,
   username: "tester-70",
+  planInputs: {},
   provisioning: { openclaw: { status: "complete" } },
 };
 
@@ -227,14 +228,14 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
-      selectedTier: "free",
+      planInputs: { selectedTier: "free" },
     });
     expect(desired.enabled).toBe(false);
     expect(desired.input).toBeNull();
     expect(desired.defaultAgentModelInput).toEqual({
       slug: "tester-70",
       model: "platform-openai/gpt-6-luna",
-      source: "free-tier",
+      source: "house-model",
     });
   });
 
@@ -242,13 +243,13 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
-      selectedTier: "free",
+      planInputs: { selectedTier: "free" },
       freeTierModelRef: "platform-openai/gpt-6-luna",
     });
     expect(desired.defaultAgentModelInput).toEqual({
       slug: "tester-70",
       model: "platform-openai/gpt-6-luna",
-      source: "free-tier",
+      source: "house-model",
     });
   });
 
@@ -256,13 +257,13 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
-      selectedTier: "free",
+      planInputs: { selectedTier: "free" },
       freeTierModelRef: "platform-openrouter/evil/model",
     });
     expect(desired.defaultAgentModelInput).toEqual({
       slug: "tester-70",
       model: "platform-openai/gpt-6-luna",
-      source: "free-tier",
+      source: "house-model",
     });
   });
 
@@ -281,8 +282,7 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
-      selectedTier: "personal_free",
-      trialGrant: LIVE_SIGNUP_OFFER,
+      planInputs: { selectedTier: "personal_free", trialGrant: LIVE_SIGNUP_OFFER },
     });
     expect(desired.enabled).toBe(false);
     expect(desired.input).toBeNull();
@@ -293,16 +293,18 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
-      tier: "trial",
-      trialGrant: {
-        schemaVersion: 3,
-        offerId: "builder-pro-preview",
-        offerVersion: 1,
-        personalTier: "personal_pro",
-        builderTier: "pro",
-        configHash: "trial-config",
-        claimedAt: new Date(),
-        endsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      planInputs: {
+        tier: "trial",
+        trialGrant: {
+          schemaVersion: 3,
+          offerId: "builder-pro-preview",
+          offerVersion: 1,
+          personalTier: "personal_pro",
+          builderTier: "pro",
+          configHash: "trial-config",
+          claimedAt: new Date(),
+          endsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        },
       },
     });
     expect(desired.enabled).toBe(false);
@@ -314,7 +316,7 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
-      selectedTier: "personal",
+      planInputs: { selectedTier: "personal" },
       provisioning: { openclaw: { status: "complete" } },
     });
     expect(desired.enabled).toBe(false);
@@ -326,8 +328,7 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
-      selectedTier: "personal_free",
-      builderSubscription: { tier: "hobby", status: "active" },
+      planInputs: { selectedTier: "personal_free", builderSubscription: { tier: "hobby", status: "active" } },
       provisioning: { openclaw: { status: "complete" } },
     });
     expect(desired.enabled).toBe(false);
@@ -335,6 +336,31 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     // catalog access = no free-tier house-model pin (the split-brain bug: this
     // was pinned to the house model before resolveBillingProfile).
     expect(desired.defaultAgentModelInput).toBeNull();
+  });
+
+  it("resolves the plan only from planInputs — a plan field beside the bag grants nothing", () => {
+    const paidBesideTheBag = {
+      ...ON,
+      byotActive: false,
+      planInputs: {},
+      selectedTier: "personal",
+      subscription: { tier: "personal", status: "active" },
+    };
+    expect(deriveDesiredByotState(paidBesideTheBag).defaultAgentModelInput).toEqual({
+      slug: "tester-70",
+      model: "platform-openai/gpt-6-luna",
+      source: "house-model",
+    });
+    expect(deriveDesiredByotState({
+      ...ON,
+      byotActive: false,
+      planInputs: { selectedTier: "personal", subscription: { tier: "personal", status: "active" } },
+    }).defaultAgentModelInput).toBeNull();
+  });
+
+  it("refuses to derive a house pin for a user whose plan inputs never arrived", () => {
+    const { planInputs: _planInputs, ...withoutPlanInputs } = { ...ON, byotActive: false };
+    expect(() => deriveDesiredByotState(withoutPlanInputs as Parameters<typeof deriveDesiredByotState>[0])).toThrow();
   });
 
   it("unknown/absent provider falls back to anthropic (api_key default)", () => {
@@ -764,7 +790,7 @@ describe("byosDefaultAgentConfigPatch — durable default-agent-model patch (#10
       byosDefaultAgentConfigPatch({
         slug: "tester-70",
         model: "anthropic/claude-haiku-4-5",
-        source: "free-tier",
+        source: "house-model",
       }),
     ).toEqual({
       agents: {
@@ -772,7 +798,7 @@ describe("byosDefaultAgentConfigPatch — durable default-agent-model patch (#10
           {
             id,
             model: { primary: "anthropic/claude-haiku-4-5", fallbacks: [] },
-            tools: FREE_TIER_DEFAULT_AGENT_TOOLS,
+            tools: HOUSE_MODEL_DEFAULT_AGENT_TOOLS,
           },
         ],
       },
@@ -784,7 +810,7 @@ describe("byosDefaultAgentConfigPatch — durable default-agent-model patch (#10
       byosDefaultAgentConfigPatch({
         slug: "tester-70",
         model: "platform-openai/gpt-5.4-mini",
-        source: "free-tier",
+        source: "house-model",
       }),
     ).toEqual({
       agents: {
@@ -793,7 +819,7 @@ describe("byosDefaultAgentConfigPatch — durable default-agent-model patch (#10
           {
             id,
             model: { primary: "platform-openai/gpt-5.4-mini", fallbacks: [] },
-            tools: FREE_TIER_DEFAULT_AGENT_TOOLS,
+            tools: HOUSE_MODEL_DEFAULT_AGENT_TOOLS,
           },
         ],
       },
@@ -805,7 +831,7 @@ describe("byosDefaultAgentConfigPatch — durable default-agent-model patch (#10
       byosDefaultAgentConfigPatch({
         slug: "tester-70",
         model: "platform-vertex/claude-haiku-4-5",
-        source: "free-tier",
+        source: "house-model",
       }),
     ).toEqual({
       agents: {
@@ -814,7 +840,7 @@ describe("byosDefaultAgentConfigPatch — durable default-agent-model patch (#10
           {
             id,
             model: { primary: "platform-vertex/claude-haiku-4-5", fallbacks: [] },
-            tools: FREE_TIER_DEFAULT_AGENT_TOOLS,
+            tools: HOUSE_MODEL_DEFAULT_AGENT_TOOLS,
           },
         ],
       },
@@ -846,7 +872,7 @@ describe("byosDefaultAgentConfigPatch — durable default-agent-model patch (#10
       byosDefaultAgentConfigPatch({
         slug: "tester-70",
         model: "platform-openai/gpt-6-luna",
-        source: "free-tier",
+        source: "house-model",
       }),
     ).toEqual({
       agents: {
@@ -855,7 +881,7 @@ describe("byosDefaultAgentConfigPatch — durable default-agent-model patch (#10
           {
             id,
             model: { primary: "platform-openai/gpt-6-luna", fallbacks: [] },
-            tools: FREE_TIER_DEFAULT_AGENT_TOOLS,
+            tools: HOUSE_MODEL_DEFAULT_AGENT_TOOLS,
           },
         ],
       },
@@ -976,7 +1002,7 @@ describe("tier-derived agent tools — house_only trims the model-visible tool s
   const id = "octogee-tester-70-coach";
 
   it("pins the keep-list: minimal profile + the free-coach alsoAllow set", () => {
-    expect(FREE_TIER_DEFAULT_AGENT_TOOLS).toEqual({
+    expect(HOUSE_MODEL_DEFAULT_AGENT_TOOLS).toEqual({
       profile: "minimal",
       alsoAllow: [
         "read",
@@ -1056,7 +1082,7 @@ describe("tier-derived agent tools — house_only trims the model-visible tool s
       "preview_start",
       "octogee_publish",
     ]) {
-      expect(FREE_TIER_DEFAULT_AGENT_TOOLS.alsoAllow).not.toContain(denied);
+      expect(HOUSE_MODEL_DEFAULT_AGENT_TOOLS.alsoAllow).not.toContain(denied);
     }
   });
 
@@ -1064,9 +1090,9 @@ describe("tier-derived agent tools — house_only trims the model-visible tool s
     const patch = byosDefaultAgentConfigPatch({
       slug: "tester-70",
       model: "anthropic/claude-haiku-4-5",
-      source: "free-tier",
+      source: "house-model",
     });
-    expect(patch?.agents.list[0].tools).toEqual(FREE_TIER_DEFAULT_AGENT_TOOLS);
+    expect(patch?.agents.list[0].tools).toEqual(HOUSE_MODEL_DEFAULT_AGENT_TOOLS);
   });
 
   it("catalog-access (BYOK) entry carries NO tools override — inherits the gateway default", () => {
@@ -1084,13 +1110,13 @@ describe("tier-derived agent tools — house_only trims the model-visible tool s
       },
     };
     expect(
-      defaultAgentFullAgentList(current, id, withFallback("m"), FREE_TIER_DEFAULT_AGENT_TOOLS),
+      defaultAgentFullAgentList(current, id, withFallback("m"), HOUSE_MODEL_DEFAULT_AGENT_TOOLS),
     ).toEqual([
       {
         id,
         name: "coach",
         model: withFallback("m"),
-        tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
+        tools: { fs: { workspaceOnly: true }, ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS },
       },
       { id: "octogee-zed-coach", model: "z/y", tools: { fs: { workspaceOnly: true } } },
     ]);
@@ -1103,7 +1129,7 @@ describe("tier-derived agent tools — house_only trims the model-visible tool s
           {
             id,
             model: "old",
-            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
+            tools: { fs: { workspaceOnly: true }, ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS },
           },
         ],
       },
@@ -1117,18 +1143,18 @@ describe("tier-derived agent tools — house_only trims the model-visible tool s
     const current = {
       agents: { list: [{ id, model: "keep-me", tools: { fs: { workspaceOnly: true } } }] },
     };
-    expect(defaultAgentFullAgentList(current, id, null, FREE_TIER_DEFAULT_AGENT_TOOLS)).toEqual([
+    expect(defaultAgentFullAgentList(current, id, null, HOUSE_MODEL_DEFAULT_AGENT_TOOLS)).toEqual([
       {
         id,
         model: "keep-me",
-        tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
+        tools: { fs: { workspaceOnly: true }, ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS },
       },
     ]);
   });
 
   it("stripping the only tools keys drops the tools field entirely rather than shipping tools:{}", () => {
     const current = {
-      agents: { list: [{ id, model: "old", tools: { ...FREE_TIER_DEFAULT_AGENT_TOOLS } }] },
+      agents: { list: [{ id, model: "old", tools: { ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS } }] },
     };
     expect(defaultAgentFullAgentList(current, id, null, null)).toEqual([{ id, model: "old" }]);
   });
@@ -1136,11 +1162,11 @@ describe("tier-derived agent tools — house_only trims the model-visible tool s
   it("tools:undefined leaves the entry's tools untouched (pure model update, legacy call shape)", () => {
     const current = {
       agents: {
-        list: [{ id, model: "old", tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS } }],
+        list: [{ id, model: "old", tools: { fs: { workspaceOnly: true }, ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS } }],
       },
     };
     expect(defaultAgentFullAgentList(current, id, withFallback("m"))).toEqual([
-      { id, model: withFallback("m"), tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS } },
+      { id, model: withFallback("m"), tools: { fs: { workspaceOnly: true }, ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS } },
     ]);
   });
 
@@ -1166,8 +1192,8 @@ describe("tier-derived agent tools — house_only trims the model-visible tool s
     const current = {
       agents: { list: [{ id, model: "old", tools: { profile: "full", alsoAllow: ["browser"] } }] },
     };
-    expect(defaultAgentFullAgentList(current, id, null, FREE_TIER_DEFAULT_AGENT_TOOLS)).toEqual([
-      { id, model: "old", tools: { ...FREE_TIER_DEFAULT_AGENT_TOOLS } },
+    expect(defaultAgentFullAgentList(current, id, null, HOUSE_MODEL_DEFAULT_AGENT_TOOLS)).toEqual([
+      { id, model: "old", tools: { ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS } },
     ]);
   });
 });
@@ -1177,7 +1203,7 @@ describe("applyDefaultAgentToolsConvergence — plan-gated tools reassert when n
   const CURRENT = {
     agents: {
       list: [
-        { id, model: "picked/model", tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS } },
+        { id, model: "picked/model", tools: { fs: { workspaceOnly: true }, ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS } },
         { id: "octogee-zed-coach", model: "z/y" },
       ],
     },
@@ -1224,7 +1250,7 @@ describe("applyDefaultAgentToolsConvergence — plan-gated tools reassert when n
     });
     expect(r).toBe(true);
     expect(calls).toEqual([
-      { agents: { list: [{ id, model: "house/pin", tools: { ...FREE_TIER_DEFAULT_AGENT_TOOLS } }] } },
+      { agents: { list: [{ id, model: "house/pin", tools: { ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS } }] } },
     ]);
   });
 
@@ -1261,7 +1287,7 @@ describe("applyDefaultAgentToolsConvergence — plan-gated tools reassert when n
           entries: {
             [id]: {
               model: "picked/model",
-              tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
+              tools: { fs: { workspaceOnly: true }, ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS },
             },
           },
         },
@@ -1404,7 +1430,7 @@ describe("applyDefaultAgentModelPatch — applies the durable patch, best-effort
     const calls: Array<{ agents: { list: Array<{ id: string; model?: unknown }> } }> = [];
     let replacePaths: string[] | undefined;
     const r = await applyDefaultAgentModelPatch(
-      { slug: "tester-70", model: HOUSE_REF, source: "free-tier" },
+      { slug: "tester-70", model: HOUSE_REF, source: "house-model" },
       {
         applyConfigPatch: async (args) => {
           calls.push(args.buildPatch(overriddenDefaultAgent) as (typeof calls)[number]);
@@ -1435,7 +1461,7 @@ describe("applyDefaultAgentModelPatch — applies the durable patch, best-effort
     };
     const calls: object[] = [];
     const r = await applyDefaultAgentModelPatch(
-      { slug: "tester-70", model: HOUSE_REF, source: "free-tier" },
+      { slug: "tester-70", model: HOUSE_REF, source: "house-model" },
       {
         applyConfigPatch: async (args) => {
           calls.push(args.buildPatch(withTools));
@@ -1452,7 +1478,7 @@ describe("applyDefaultAgentModelPatch — applies the durable patch, best-effort
             {
               id: "octogee-tester-70-coach",
               model: { primary: HOUSE_REF, fallbacks: [] },
-              tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
+              tools: { fs: { workspaceOnly: true }, ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS },
             },
             { id: "octogee-zed-coach", model: "z/y" },
           ],
@@ -1468,7 +1494,7 @@ describe("applyDefaultAgentModelPatch — applies the durable patch, best-effort
           {
             id: "octogee-tester-70-coach",
             model: "old",
-            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
+            tools: { fs: { workspaceOnly: true }, ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS },
           },
         ],
       },
@@ -2444,7 +2470,7 @@ describe("standard gateway — BYOS materialization", () => {
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        selectedTier: "free",
+        planInputs: { selectedTier: "free" },
       },
       {
         usesLlmBrokerToken: () => true,
@@ -2469,7 +2495,7 @@ describe("standard gateway — BYOS materialization", () => {
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        selectedTier: "free",
+        planInputs: { selectedTier: "free" },
       },
       {
         usesLlmBrokerToken: () => true,
@@ -2486,7 +2512,7 @@ describe("standard gateway — BYOS materialization", () => {
     expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
       model: "platform-openai/gpt-6-luna",
-      source: "free-tier",
+      source: "house-model",
     });
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
@@ -2503,8 +2529,7 @@ describe("standard gateway — BYOS materialization", () => {
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        selectedTier: "personal_free",
-        trialGrant: LIVE_SIGNUP_OFFER,
+        planInputs: { selectedTier: "personal_free", trialGrant: LIVE_SIGNUP_OFFER },
       },
       {
         purgeUserOauthRuntime: noUserOauthRuntimePurge,
@@ -2537,6 +2562,7 @@ describe("standard gateway — BYOS materialization", () => {
       {
         byotActive: true,
         username: "tester-70",
+        planInputs: {},
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "anthropic" } },
       },
@@ -2576,7 +2602,7 @@ describe("standard gateway — BYOS materialization", () => {
       {
         byotActive: true,
         username: "tester-70",
-        selectedTier: "personal",
+        planInputs: { selectedTier: "personal" },
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "claude-cli" } },
       },
@@ -2611,7 +2637,7 @@ describe("standard gateway — BYOS materialization", () => {
       {
         byotActive: false,
         username: "tester-70",
-        selectedTier: "personal",
+        planInputs: { selectedTier: "personal" },
         provisioning: { openclaw: { status: "complete" } },
       },
       {
@@ -2652,6 +2678,7 @@ describe("standard gateway — BYOS materialization", () => {
       {
         byotActive: true,
         username: "tester-70",
+        planInputs: {},
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "openai-codex" } },
       },
@@ -2674,7 +2701,7 @@ describe("standard gateway — BYOS materialization", () => {
     expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
       model: "platform-openai/gpt-6-luna",
-      source: "free-tier",
+      source: "house-model",
     });
     expect(requestGatewayRestartFn).not.toHaveBeenCalled();
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
@@ -2690,6 +2717,7 @@ describe("standard gateway — BYOS materialization", () => {
       {
         byotActive: true,
         username: "tester-70",
+        planInputs: {},
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "openai-codex" } },
       },
@@ -2709,7 +2737,7 @@ describe("standard gateway — BYOS materialization", () => {
     expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
       model: "platform-openai/gpt-6-luna",
-      source: "free-tier",
+      source: "house-model",
     });
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
   });
@@ -2744,7 +2772,7 @@ describe("Isolated gateway — native subscription runtime", () => {
       {
         byotActive: true,
         username: "tester-70",
-        selectedTier: "personal",
+        planInputs: { selectedTier: "personal" },
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: {
           byot: { provider: "openai-codex" },
@@ -2812,7 +2840,7 @@ describe("shared gateway — per-user broker-token materialization", () => {
     const markPendingFn = vi.fn();
 
     await syncByotForUser(
-      { byotActive: false, username: "tester-70", provisioning: { openclaw: { status: "complete" } } },
+      { byotActive: false, username: "tester-70", planInputs: {}, provisioning: { openclaw: { status: "complete" } } },
       baseDeps({
         applyByotState: applyByotStateFn,
         materializePlatformBrokerSurfaces: materializeFn,
@@ -2836,7 +2864,7 @@ describe("shared gateway — per-user broker-token materialization", () => {
     const requestGatewayRestartFn = vi.fn(async () => true);
 
     await syncByotForUser(
-      { byotActive: false, username: "tester-70", provisioning: { openclaw: { status: "complete" } } },
+      { byotActive: false, username: "tester-70", planInputs: {}, provisioning: { openclaw: { status: "complete" } } },
       baseDeps({
         applyByotState: vi.fn(() => false),
         materializePlatformBrokerSurfaces: vi.fn(() => false),
@@ -2859,6 +2887,7 @@ describe("shared gateway — per-user broker-token materialization", () => {
       {
         byotActive: true,
         username: "tester-70",
+        planInputs: {},
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "anthropic" } },
       },
@@ -2881,7 +2910,7 @@ describe("shared gateway — per-user broker-token materialization", () => {
       {
         byotActive: true,
         username: "tester-70",
-        selectedTier: "personal",
+        planInputs: { selectedTier: "personal" },
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "claude-cli" } },
       },
@@ -2915,7 +2944,7 @@ describe("shared gateway — per-user broker-token materialization", () => {
       {
         byotActive: true,
         username: "tester-70",
-        selectedTier: "personal",
+        planInputs: { selectedTier: "personal" },
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "openai-codex" } },
       },
@@ -2947,7 +2976,7 @@ describe("shared gateway — per-user broker-token materialization", () => {
     await syncByotForUser({
       byotActive: true,
       username: "tester-70",
-      selectedTier: "personal",
+      planInputs: { selectedTier: "personal" },
       provisioning: { openclaw: { status: "complete" } },
       builderAgentDefault: safe,
       systemConfig: {
@@ -3005,7 +3034,7 @@ describe("shared gateway — per-user broker-token materialization", () => {
         fs.writeFileSync(path.join(dir, "history.jsonl"), "synthetic preserved conversation\n");
       }
       await syncByotForUser({
-        byotActive: true, username: "tester-70", selectedTier: "personal",
+        byotActive: true, username: "tester-70", planInputs: { selectedTier: "personal" },
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "grok", model: "user-model" } },
       }, baseDeps({
@@ -3117,6 +3146,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
       {
         byotActive: true,
         username: "tester-70",
+        planInputs: {},
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "openai-codex" } },
       },
@@ -3159,7 +3189,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
     await syncByotForUser(
       {
         username: "tester-70",
-        selectedTier: "personal",
+        planInputs: { selectedTier: "personal" },
         provisioning: { openclaw: { status: "complete" } },
       },
       {
@@ -3212,7 +3242,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
     };
     const user = {
       username: "tester-70",
-      selectedTier: "personal" as const,
+      planInputs: { selectedTier: "personal" as const },
       provisioning: { openclaw: { status: "complete" as const } },
     };
 
@@ -3272,6 +3302,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
       {
         byotActive: true,
         username: "tester-70",
+        planInputs: {},
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "openai-codex" } },
       },
@@ -3358,6 +3389,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
       {
         byotActive: true,
         username: "tester-70",
+        planInputs: {},
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: { byot: { provider: "anthropic" } },
       },
@@ -3475,12 +3507,12 @@ describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker
           {
             id: "octogee-tester-70-coach",
             model: "old",
-            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
+            tools: { fs: { workspaceOnly: true }, ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS },
           },
           {
             id: "octogee-tester-70-proj-web-coach",
             model: "old",
-            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
+            tools: { fs: { workspaceOnly: true }, ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS },
           },
         ],
       },
@@ -3510,7 +3542,7 @@ describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker
           {
             id: "octogee-tester-70-proj-web-coach",
             model: "old",
-            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
+            tools: { fs: { workspaceOnly: true }, ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS },
           },
         ],
       },
@@ -3521,12 +3553,12 @@ describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker
           {
             id: "octogee-tester-70-coach",
             model: "old",
-            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
+            tools: { fs: { workspaceOnly: true }, ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS },
           },
           {
             id: "octogee-tester-70-proj-web-coach",
             model: pick,
-            tools: { fs: { workspaceOnly: true }, ...FREE_TIER_DEFAULT_AGENT_TOOLS },
+            tools: { fs: { workspaceOnly: true }, ...HOUSE_MODEL_DEFAULT_AGENT_TOOLS },
           },
         ],
       },
@@ -3679,7 +3711,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        selectedTier: "personal",
+        planInputs: { selectedTier: "personal" },
         systemConfig: { agentModels },
       },
       {
@@ -3706,7 +3738,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
       {
         byotActive: true,
         username: "tester-70",
-        selectedTier: "personal",
+        planInputs: { selectedTier: "personal" },
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: {
           byot: { provider: "claude-cli" },
@@ -3761,7 +3793,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
       {
         byotActive: true,
         username: "tester-70",
-        selectedTier: "personal",
+        planInputs: { selectedTier: "personal" },
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: {
           byot: { provider: "openai-codex" },
@@ -3812,7 +3844,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
       {
         byotActive: true,
         username: "tester-70",
-        selectedTier: "free",
+        planInputs: { selectedTier: "free" },
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: {
           byot: { provider: "claude-cli" },
@@ -3841,7 +3873,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
     expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
       model: "platform-openai/gpt-6-luna",
-      source: "free-tier",
+      source: "house-model",
     });
     expect(applyAgentModelOverridesFn).toHaveBeenCalledWith(
       "tester-70",
@@ -3862,7 +3894,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
       {
         byotActive: false,
         username: "tester-70",
-        selectedTier: "personal",
+        planInputs: { selectedTier: "personal" },
         provisioning: { openclaw: { status: "complete" } },
         systemConfig: {
           agentModels: {
@@ -3918,7 +3950,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        selectedTier: "personal",
+        planInputs: { selectedTier: "personal" },
         builderAgentDefault: userAgentDefault,
       },
       userDefaultDeps(applyAgentModelOverridesFn),
@@ -3945,7 +3977,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        selectedTier: "personal",
+        planInputs: { selectedTier: "personal" },
         builderAgentDefault: userAgentDefault,
         systemConfig: { agentModels },
       },
@@ -3964,7 +3996,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
         byotActive: true,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        selectedTier: "personal",
+        planInputs: { selectedTier: "personal" },
         systemConfig: { byot: { provider: "anthropic" } },
         builderAgentDefault: userAgentDefault,
       },
@@ -3978,7 +4010,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        selectedTier: "free",
+        planInputs: { selectedTier: "free" },
         builderAgentDefault: userAgentDefault,
       },
       userDefaultDeps(houseOnlyOverrides),
@@ -3994,7 +4026,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        selectedTier: "personal",
+        planInputs: { selectedTier: "personal" },
         builderAgentDefault: { primary: "not-a-catalog-ref", fallbacks: [] },
       },
       userDefaultDeps(applyAgentModelOverridesFn),
@@ -4013,7 +4045,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        selectedTier: "free",
+        planInputs: { selectedTier: "free" },
         systemConfig: {
           agentModels: {
             "octogee-tester-70-coach": {
@@ -4055,8 +4087,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        selectedTier: "personal_free",
-        builderSubscription: { tier: "hobby", status: "active" },
+        planInputs: { selectedTier: "personal_free", builderSubscription: { tier: "hobby", status: "active" } },
         systemConfig: { agentModels },
       },
       {
@@ -4085,7 +4116,7 @@ describe("syncByotForUser — tools convergence wiring", () => {
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        selectedTier: "free",
+        planInputs: { selectedTier: "free" },
       },
       {
         purgeUserOauthRuntime: noUserOauthRuntimePurge,
@@ -4097,7 +4128,7 @@ describe("syncByotForUser — tools convergence wiring", () => {
     );
 
     expect(applyDefaultAgentModelPatchFn).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "free-tier" }),
+      expect.objectContaining({ source: "house-model" }),
     );
     expect(applyDefaultAgentToolsConvergenceFn).not.toHaveBeenCalled();
   });
@@ -4111,8 +4142,7 @@ describe("syncByotForUser — tools convergence wiring", () => {
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        selectedTier: "personal",
-        subscription: { tier: "personal", status: "active" },
+        planInputs: { selectedTier: "personal", subscription: { tier: "personal", status: "active" } },
       },
       {
         purgeUserOauthRuntime: noUserOauthRuntimePurge,
@@ -4136,7 +4166,7 @@ describe("syncByotForUser — tools convergence wiring", () => {
         byotActive: true,
         username: "tester-70",
         provisioning: { openclaw: { status: "complete" } },
-        selectedTier: "free",
+        planInputs: { selectedTier: "free" },
         systemConfig: { byot: { provider: "anthropic" } },
       },
       {
@@ -4164,7 +4194,7 @@ describe("syncByotForUser — tools convergence wiring", () => {
         byotActive: false,
         username: "tester-70",
         provisioning: { openclaw: { status: "in_progress" } },
-        selectedTier: "personal",
+        planInputs: { selectedTier: "personal" },
       },
       {
         purgeUserOauthRuntime: noUserOauthRuntimePurge,

@@ -20,7 +20,8 @@ vi.setSystemTime(new Date("2026-03-14T08:30:00Z"));
     expect(ctx).toEqual({
       uid: "uid-1",
       slug: "acme",
-      tier: "trial",
+      contextTemplateKey: "trial",
+      provisionedProductFields: { tier: "trial" },
       ownerName: "acme",
       customerDir: path.join(CUSTOMERS_DIR, "acme"),
       today: "2026-03-14",
@@ -29,7 +30,6 @@ vi.setSystemTime(new Date("2026-03-14T08:30:00Z"));
         uid: "uid-1",
         ownerName: "acme",
         username: "acme",
-        tier: "trial",
         createdAt: "2026-03-14",
         slug: "acme",
         timeZone: "unknown",
@@ -38,30 +38,32 @@ vi.setSystemTime(new Date("2026-03-14T08:30:00Z"));
     });
   });
 
-  it("uses top-level userData.tier when present", () => {
+  it("takes the seed template and the provisioned product fields from the stamped tier when the account has one", () => {
     const ctx = buildProvisioningContext("uid-1", {
       username: "acme",
       tier: "pro",
-      subscription: { tier: "should-be-ignored" },
+      subscription: { tier: "free" },
     });
 
-    expect(ctx.tier).toBe("pro");
-    expect(ctx.templateVars.tier).toBe("pro");
+    expect(ctx.contextTemplateKey).toBe("default");
+    expect(ctx.provisionedProductFields).toEqual({ tier: "pro" });
   });
 
-  it("falls through to subscription.tier when top-level tier is missing", () => {
+  it("falls through to the subscription when the account has no stamped tier", () => {
     const ctx = buildProvisioningContext("uid-1", {
       username: "acme",
-      subscription: { tier: "pro" },
+      subscription: { tier: "free" },
     });
 
-    expect(ctx.tier).toBe("pro");
+    expect(ctx.contextTemplateKey).toBe("free");
+    expect(ctx.provisionedProductFields).toEqual({ tier: "free" });
   });
 
-  it("defaults tier to 'trial' when neither top-level nor subscription carry one", () => {
-    const ctx = buildProvisioningContext("uid-1", { username: "acme" });
+  it("carries no tier of its own on the context or in the template variables", () => {
+    const ctx = buildProvisioningContext("uid-1", { username: "acme", tier: "pro" });
 
-    expect(ctx.tier).toBe("trial");
+    expect("tier" in ctx).toBe(false);
+    expect("tier" in ctx.templateVars).toBe(false);
   });
 
   it("slug, ownerName, and username all derive from userData.username (DATA-MODEL-REVIEW v3 §2)", () => {
@@ -81,14 +83,13 @@ vi.setSystemTime(new Date("2026-03-14T08:30:00Z"));
     expect(ctx.customerDir).toBe(path.join(CUSTOMERS_DIR, "acme"));
   });
 
-  it("templateVars contains the seven substitution keys consumed by readTierTemplateFile", () => {
+  it("templateVars contains the six substitution keys consumed by readTierTemplateFile", () => {
     const ctx = buildProvisioningContext("uid-1", { username: "acme", tier: "pro" });
 
     expect(Object.keys(ctx.templateVars).sort()).toEqual([
       "createdAt",
       "ownerName",
       "slug",
-      "tier",
       "timeZone",
       "uid",
       "username",

@@ -9,6 +9,7 @@ import {
   mapProjectAgentState,
   collectStoredProjectAgentStates,
 } from "./user-snapshot-mapping.js";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { MalformedRecordError } from "./platform-state/errors.js";
 import { createDocumentFixtureStore } from "./testing/journal-store.js";
 
@@ -50,7 +51,8 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
     expect(snap).toEqual({
       uid: "u1",
       slug: "acme",
-      tier: "pro",
+      contextTemplateKey: "default",
+      planInputs: { tier: "pro" },
       gatewayId: "gw-3",
       status: "complete",
       agentIds: ["octogee-acme-coach"],
@@ -68,10 +70,11 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
     expect(mapUserDocToSnapshot("u", { username: "a" }, ch).byotActive).toBe(false);
   });
 
-  it("tier fallback chain: tier → subscription.tier → 'trial'", () => {
-    expect(mapUserDocToSnapshot("u", { username: "a", tier: "pro" }, ch).tier).toBe("pro");
-    expect(mapUserDocToSnapshot("u", { username: "a", subscription: { tier: "team" } }, ch).tier).toBe("team");
-    expect(mapUserDocToSnapshot("u", { username: "a" }, ch).tier).toBe("trial");
+  it("takes the context template key from the entitlement resolver, never from a default of its own", () => {
+    expect(mapUserDocToSnapshot("u", { username: "a", tier: "free" }, ch).contextTemplateKey).toBe("free");
+    expect(mapUserDocToSnapshot("u", { username: "a", subscription: { tier: "team" } }, ch).contextTemplateKey).toBe("default");
+    expect(mapUserDocToSnapshot("u", { username: "a" }, ch).contextTemplateKey)
+      .toBe(userEntitlements().seedContextTemplateKey({}));
   });
 
   it("ownerName fallback: displayName → username → slug", () => {
@@ -119,18 +122,26 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
       },
       ch,
     );
-    expect(snap.selectedTier).toBe("personal_pro");
-    expect(snap.subscription).toEqual({ tier: "personal_pro", status: "active" });
-    expect(snap.builderSubscription).toEqual({ tier: "hobby", status: "active" });
-    expect(snap.trialGrant).toBe(trialGrant);
+    expect(snap.planInputs).toEqual({
+      tier: "personal_free",
+      selectedTier: "personal_pro",
+      subscription: { tier: "personal_pro", status: "active" },
+      builderSubscription: { tier: "hobby", status: "active" },
+      trialGrant,
+    });
+    expect(snap.planInputs.trialGrant).toBe(trialGrant);
   });
 
-  it("keeps absent plan inputs absent (no undefined keys written into the snapshot)", () => {
-    const snap = mapUserDocToSnapshot("u", { username: "a" }, ch);
-    expect("selectedTier" in snap).toBe(false);
-    expect("subscription" in snap).toBe(false);
-    expect("builderSubscription" in snap).toBe(false);
-    expect("trialGrant" in snap).toBe(false);
+  it("carries plan inputs only inside the bag and leaves an account without any with an empty one", () => {
+    const snap = mapUserDocToSnapshot(
+      "u",
+      { username: "a", tier: "pro", selectedTier: "personal", subscription: { tier: "personal" } },
+      ch,
+    );
+    for (const key of ["tier", "selectedTier", "subscription", "builderSubscription", "trialGrant", "signupOfferConvertedAt"]) {
+      expect(key in snap).toBe(false);
+    }
+    expect(mapUserDocToSnapshot("u", { username: "a" }, ch).planInputs).toEqual({});
   });
 });
 

@@ -48,6 +48,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isValidPayload(value: unknown): value is Parameters<typeof syncModelCredentialsForUser>[0] {
   if (!isRecord(value)) return false;
   if (typeof value.username !== "string" || value.username.trim().length === 0) return false;
+  if (!isRecord(value.planInputs)) return false;
   const provisioning = value.provisioning;
   if (!isRecord(provisioning)) return false;
   const openclaw = provisioning.openclaw;
@@ -61,7 +62,7 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       if (!isValidPayload(req.body)) {
-        res.status(400).json({ error: "username and provisioning.openclaw.status required" });
+        res.status(400).json({ error: "username, planInputs and provisioning.openclaw.status required" });
         return;
       }
       await syncModelCredentialsForUser(req.body, {

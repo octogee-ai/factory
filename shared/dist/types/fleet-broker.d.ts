@@ -239,7 +239,8 @@ export interface FleetBrokerUserRestoreAuthority {
 export interface FleetBrokerUserSnapshot {
     uid: string;
     slug: string;
-    tier: string;
+    contextTemplateKey: string;
+    planInputs: Record<string, unknown>;
     gatewayId: string;
     status: FleetBrokerProvisioningStatus;
     agentIds: string[];
@@ -253,11 +254,6 @@ export interface FleetBrokerUserSnapshot {
     projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
     projects: FleetBrokerProjectRestore[];
     projectAgents?: FleetBrokerProjectAgent[];
-    selectedTier?: unknown;
-    subscription?: unknown;
-    builderSubscription?: unknown;
-    trialGrant?: unknown;
-    signupOfferConvertedAt?: unknown;
     freeTierModelRef?: string;
     builderAgentDefault?: {
         primary: string;

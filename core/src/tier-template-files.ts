@@ -1,8 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
 
-import { userEntitlements } from "@octogee/shared/types/user-entitlements";
-
 import { TEMPLATES_DIR } from "./config.js";
 import { applyTemplatePlaceholders } from "./helpers.js";
 
@@ -18,26 +16,26 @@ function templatesRoot(): string {
   return process.env.OCTOGEE_TEMPLATES_DIR || TEMPLATES_DIR;
 }
 
-export function listTierTemplateFiles(tier: string): string[] {
-  const tierDir = path.join(templatesRoot(), "tiers", tier);
-  if (!fs.existsSync(tierDir)) {
+export function listTierTemplateFiles(templateKey: string): string[] {
+  const templateDir = path.join(templatesRoot(), "tiers", templateKey);
+  if (!fs.existsSync(templateDir)) {
     throw new Error(
-      `Tier template directory not found: tiers/${tier} (looked in ${tierDir})`,
+      `Context template directory not found: tiers/${templateKey} (looked in ${templateDir})`,
     );
   }
   return fs
-    .readdirSync(tierDir, { withFileTypes: true })
+    .readdirSync(templateDir, { withFileTypes: true })
     .filter((d) => d.isFile() && d.name.endsWith(".md"))
     .map((d) => d.name)
     .sort();
 }
 
 export function readTierTemplateFile(
-  tier: string,
+  templateKey: string,
   filename: string,
   vars: Record<string, string>,
 ): string {
-  const filePath = path.join(templatesRoot(), "tiers", tier, filename);
+  const filePath = path.join(templatesRoot(), "tiers", templateKey, filename);
   if (!fs.existsSync(filePath)) {
     throw new Error(`Template missing: ${filePath}`);
   }
@@ -63,11 +61,10 @@ function removeLegacyContextIgnores(customerDir: string): boolean {
 // hook mkdirs the directory on demand and every native reader tolerates absence.
 export function writeTierTemplateFiles(
   customerDir: string,
-  tier: string,
+  templateKey: string,
   templateVars: Record<string, string>,
 ): string[] {
   const written: string[] = [];
-  const templateKey = userEntitlements().seedContextTemplateKey(tier);
 
   for (const file of listTierTemplateFiles(templateKey)) {
     const dest = path.join(customerDir, file);

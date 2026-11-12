@@ -21,7 +21,7 @@ export function userAccountFromData(uid, data) {
         email: nonEmptyString(data.email),
         displayName: nonEmptyString(data.displayName),
         lastActive: millis(data.lastActive),
-        planInputs: { ...userEntitlements().pickInputs(data), ...(data.tier === undefined ? {} : { tier: data.tier }) },
+        planInputs: userEntitlements().pickInputs(data),
         byotActive: data.byotActive === true,
         usage: map(data.usage),
         mattermostUsername: typeof mattermostUsername === "string" ? mattermostUsername : null,

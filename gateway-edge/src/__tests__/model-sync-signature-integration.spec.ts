@@ -23,6 +23,7 @@ const otherKey = generateKeyPairSync("ed25519", {
 const legacySecret = "local-test-legacy-model-sync-secret";
 const userData = {
   username: "alice",
+  planInputs: { subscription: { tier: "personal", status: "active", currentPeriodEnd: { _seconds: 1_800_000_000 } } },
   provisioning: { openclaw: { status: "complete" } },
   byotActive: true,
   systemConfig: { byot: { provider: "openai", model: "openai/gpt-5", baseUrl: undefined } },
@@ -93,6 +94,7 @@ describe("model sync signatures across the platform trigger and runtime route", 
     expect(wire.signature).toMatch(/^[a-f0-9]{128}$/);
     expect(wire.body).toMatchObject({
       username: "alice", byotActive: true,
+      planInputs: userData.planInputs,
       provisioning: userData.provisioning,
       systemConfig: { byot: { provider: "openai", model: "openai/gpt-5" } },
       freeTierModelRef: expect.any(String),

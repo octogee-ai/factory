@@ -46,7 +46,7 @@ export function reassertUserTimeZoneLine(customerDir, timeZone) {
     return true;
 }
 export function reassertConvergedContextFiles(slug, customerDir, userData, vars = {}) {
-    const policy = userEntitlements().contextFilePolicy(userData);
+    const policy = userEntitlements().contextFilePolicy(userData.planInputs);
     const userOwned = policy.removedFiles.filter((file) => USER_OWNED_CONTEXT_FILES.has(file));
     if (userOwned.length > 0) {
         throw new Error(`[context-files] ${slug}: policy may not remove user-owned ${userOwned.join(", ")}`);

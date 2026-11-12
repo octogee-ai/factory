@@ -73,37 +73,45 @@ describe("writeTierTemplateFiles", () => {
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "SOUL.md"), "User soul\n", "utf-8");
 
-    const written = writeTierTemplateFiles(dir, "hobby", { slug: "alice" });
+    const written = writeTierTemplateFiles(dir, "default", { slug: "alice" });
 
     expect(written).toEqual(["AGENTS.md"]);
     expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("Hello alice\n");
     expect(fs.readFileSync(path.join(dir, "SOUL.md"), "utf-8")).toBe("User soul\n");
   });
 
-  it("seeds from the template the installed resolver names for the provisioned tier", () => {
+  it("seeds from exactly the template key it is given and asks no resolver", () => {
     const productResolver = userEntitlements();
     seedTier("default", { "AGENTS.md": "Default\n" });
     seedTier("free", { "AGENTS.md": "Free\n" });
-    const product = customerDir("product");
+    const keyed = customerDir("keyed");
     const bare = customerDir("bare");
 
-    writeTierTemplateFiles(product, "personal_free", {});
+    writeTierTemplateFiles(keyed, "free", {});
     installUserEntitlements(staticUserEntitlements);
     try {
-      writeTierTemplateFiles(bare, "personal_free", {});
+      writeTierTemplateFiles(bare, "free", {});
     } finally {
       installUserEntitlements(productResolver);
     }
 
-    expect(fs.readFileSync(path.join(product, "AGENTS.md"), "utf-8")).toBe("Free\n");
-    expect(fs.readFileSync(path.join(bare, "AGENTS.md"), "utf-8")).toBe("Default\n");
+    expect(fs.readFileSync(path.join(keyed, "AGENTS.md"), "utf-8")).toBe("Free\n");
+    expect(fs.readFileSync(path.join(bare, "AGENTS.md"), "utf-8")).toBe("Free\n");
+  });
+
+  it("refuses a template key with no template directory instead of seeding another template", () => {
+    seedTier("default", { "AGENTS.md": "Default\n" });
+    const dir = customerDir("unknown-key");
+
+    expect(() => writeTierTemplateFiles(dir, "personal_free", {})).toThrow(/tiers\/personal_free/);
+    expect(fs.existsSync(path.join(dir, "AGENTS.md"))).toBe(false);
   });
 
   it("seeds NO memory note and NO memory directory — openclaw does memory, not Octogee", () => {
     seedTier("default", { "AGENTS.md": "# Agents\n" });
     const dir = customerDir("memoryless");
 
-    const written = writeTierTemplateFiles(dir, "hobby", {});
+    const written = writeTierTemplateFiles(dir, "default", {});
 
     expect(written).toEqual(["AGENTS.md"]);
     expect(fs.existsSync(path.join(dir, "memory"))).toBe(false);
@@ -121,7 +129,7 @@ describe("writeTierTemplateFiles", () => {
       "utf-8",
     );
 
-    const written = writeTierTemplateFiles(dir, "hobby", {});
+    const written = writeTierTemplateFiles(dir, "default", {});
 
     expect(written).toContain(".gitignore");
     expect(fs.readFileSync(path.join(dir, ".gitignore"), "utf-8")).toBe(
@@ -150,6 +158,6 @@ describe("writeTierTemplateFiles", () => {
     fs.writeFileSync(path.join(dir, "AGENTS.md"), "Existing\n", "utf-8");
     fs.writeFileSync(path.join(dir, ".gitignore"), "node_modules/\n", "utf-8");
 
-    expect(writeTierTemplateFiles(dir, "hobby", {})).toEqual([]);
+    expect(writeTierTemplateFiles(dir, "default", {})).toEqual([]);
   });
 });

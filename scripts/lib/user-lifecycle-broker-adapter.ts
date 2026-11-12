@@ -539,7 +539,8 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
   return {
     uid: snapshot.uid,
     slug: snapshot.slug,
-    tier: snapshot.tier,
+    contextTemplateKey: snapshot.contextTemplateKey,
+    planInputs: snapshot.planInputs,
     gatewayId: snapshot.gatewayId,
     status: snapshot.status,
     agentIds: snapshot.agentIds,
@@ -553,11 +554,6 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
     projects: snapshot.projects,
     projectAgents: snapshot.projectAgents,
     byotActive: snapshot.byotActive,
-    selectedTier: snapshot.selectedTier,
-    subscription: snapshot.subscription,
-    builderSubscription: snapshot.builderSubscription,
-    trialGrant: snapshot.trialGrant,
-    signupOfferConvertedAt: snapshot.signupOfferConvertedAt,
     freeTierModelRef: snapshot.freeTierModelRef,
     builderAgentDefault: snapshot.builderAgentDefault,
     systemConfig: snapshot.systemConfig,
@@ -575,7 +571,7 @@ async function writeUserTemplateFiles(ctx: UserContext): Promise<void> {
   fs.mkdirSync(path.join(ctx.customerDir, "projects"), { recursive: true });
   fs.mkdirSync(path.join(ctx.customerDir, "ideas"), { recursive: true });
   fs.mkdirSync(path.join(ctx.customerDir, ".system"), { recursive: true });
-  writeTierTemplateFiles(ctx.customerDir, ctx.tier, ctx.templateVars);
+  writeTierTemplateFiles(ctx.customerDir, ctx.contextTemplateKey, ctx.templateVars);
 }
 
 async function listProjectsNeedingClone(
@@ -785,10 +781,7 @@ function agentIdsFromEntries(entries: ReadonlyArray<Record<string, unknown>>): s
 }
 
 function initialHouseDefaultAgentPatch(snapshot: UserSnapshot) {
-  return byosDefaultAgentConfigPatch(platformDefaultAgentModelInputForUser(snapshot.slug, {
-    ...snapshot,
-    selectedTier: typeof snapshot.selectedTier === "string" ? snapshot.selectedTier : undefined,
-  }));
+  return byosDefaultAgentConfigPatch(platformDefaultAgentModelInputForUser(snapshot.slug, snapshot));
 }
 
 function sharedByosubSuppressed(snapshot: UserSnapshot): boolean {
@@ -2568,7 +2561,7 @@ export function buildBrokeredLifecycleAdapter(
         : { restored: false, present: false },
     reassertByotForUser: (userData) =>
       syncModelCredentialsForUser(
-        userData as Parameters<typeof syncModelCredentialsForUser>[0],
+        userData,
         {
           applyConfigPatch: (args, options) =>
             applyConfigPatch(args, { ...options, rpc: ctx.rpc, cache: ctx.configCache }),
@@ -2577,9 +2570,7 @@ export function buildBrokeredLifecycleAdapter(
         },
       ),
     reassertConvergedContextFilesForUser: async (userData) => {
-      reassertConvergedContextFilesForSlug(
-        userData as Parameters<typeof reassertConvergedContextFilesForSlug>[0],
-      );
+      reassertConvergedContextFilesForSlug(userData);
     },
     listProjectsNeedingClone: (slug) => listProjectsNeedingClone(ctx, slug),
     cloneProjectRepo: (slug, project, repo, options) => cloneProjectRepoForTarget(ctx, slug, project, repo, options),

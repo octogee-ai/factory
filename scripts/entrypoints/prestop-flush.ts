@@ -12,6 +12,7 @@ import {
 import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
 import {
   createFleetBrokerClient,
+  type FleetBrokerClient,
 } from "../lib/fleet-broker-client.js";
 import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
 import {
@@ -94,6 +95,21 @@ export function createPreStopSystemConfigFlush(
   };
 }
 
+export function createPreStopAllUsersFileFlush(
+  gatewayClass: string,
+  brokerClient: Pick<FleetBrokerClient, "provisionedUserSlugs">,
+  deps: {
+    flushAllUserFiles: typeof flushAllUserFiles;
+    persistSharedUserFiles: (slug: string) => Promise<void>;
+  } = { flushAllUserFiles, persistSharedUserFiles },
+): () => Promise<void> {
+  return async () => deps.flushAllUserFiles(
+    gatewayClass === "shared"
+      ? { slugs: await brokerClient.provisionedUserSlugs(), persistProjects: deps.persistSharedUserFiles }
+      : {},
+  );
+}
+
 export function createPreStopGiteaKeyRelease(
   builderSlug: string,
   deps: {
@@ -147,12 +163,7 @@ async function main(): Promise<void> {
     quiesceSessions: createPreStopSessionQuiesce(builderSlug),
     flushFiles: builderSlug
       ? () => flushUserFiles(builderSlug, { persistProjects: isIsolatedGatewayClassValue(gatewayClass) ? persistUserProjects : undefined })
-      : async () => flushAllUserFiles({
-        ...(gatewayClass === "shared" ? {
-          slugs: (await brokerClient.assignedUsers({ completeOnly: true })).map(user => user.slug),
-          persistProjects: persistSharedUserFiles,
-        } : {}),
-      }),
+      : createPreStopAllUsersFileFlush(gatewayClass, brokerClient),
     syncBlobs: builderSlug
       ? () => blobSyncForSlug(builderSlug, {
           strict: true,

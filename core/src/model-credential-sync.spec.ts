@@ -6,6 +6,7 @@ import {
 
 const completeUser = {
   username: "tester-70",
+  planInputs: {},
   provisioning: { openclaw: { status: "complete" } },
 };
 

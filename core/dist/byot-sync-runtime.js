@@ -2,7 +2,7 @@ import * as path from "path";
 import { mattermostAccountIdForAgentId } from "@octogee/shared/types/identity";
 import * as os from "os";
 import * as fs from "fs";
-import { applyByotState, byosDefaultAgentConfigPatch, defaultAgentExists, defaultAgentPatch, defaultAgentPatchReplacePaths, deriveDesiredByotState, FREE_TIER_DEFAULT_AGENT_TOOLS, isPlatformProviderRef, platformDefaultAgentModelInputForUser, ISOLATED_CODEX_APP_SERVER, STANDARD_CODEX_APP_SERVER, } from "./byot-sync.js";
+import { applyByotState, byosDefaultAgentConfigPatch, defaultAgentExists, defaultAgentPatch, defaultAgentPatchReplacePaths, deriveDesiredByotState, HOUSE_MODEL_DEFAULT_AGENT_TOOLS, isPlatformProviderRef, platformDefaultAgentModelInputForUser, ISOLATED_CODEX_APP_SERVER, STANDARD_CODEX_APP_SERVER, } from "./byot-sync.js";
 import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
 import { fingerprintDefaultAgentRuntimePolicy, reconcileDefaultAgentRuntimeSessionPolicy, } from "./default-agent-session-policy.js";
 import { internalFetch } from "./internal-fetch.js";
@@ -72,7 +72,7 @@ export async function applyDefaultAgentModelPatch(input, deps) {
 export async function applyDefaultAgentToolsConvergence(slug, houseOnly, deps) {
     const logFn = deps?.logFn ?? log;
     const agentId = `octogee-${slug}-coach`;
-    const tools = houseOnly ? FREE_TIER_DEFAULT_AGENT_TOOLS : null;
+    const tools = houseOnly ? HOUSE_MODEL_DEFAULT_AGENT_TOOLS : null;
     const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
     // A missing agent entry means there is nothing to converge — succeeding
     // silently here would mask an unmounted/half-mounted user on the very
@@ -1499,7 +1499,7 @@ export async function syncByotForUser(userData, deps) {
     const logFn = deps?.logFn ?? log;
     const userGate = userByotGate(user, shared, desired, userData, logFn);
     const effectiveDesired = userGate.desired;
-    const houseOnly = userEntitlements().plan(userData).modelAccess === "house_only";
+    const houseOnly = userEntitlements().plan(userData.planInputs).modelAccess === "house_only";
     const oauthPurge = await purgeUserOauthIfRequired(user, slug, safeUserModelRef(userData, houseOnly), userGate.suppressed, actions);
     await syncByotStateForClass({
         slug,

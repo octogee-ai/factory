@@ -1,4 +1,4 @@
-import { installDefaultUserEntitlements } from "@octogee/shared/types/user-entitlements";
+import { installDefaultUserEntitlements, userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { createUserActivationRollRecoveryOwner } from './user-activation-roll-recovery-owner.js';
 import { hasUserActivationTargetRollback, readUserActivationRollRecoveryCustody } from './user-activation-roll-recovery.js';
 import { createMigrationAgentStorePreparer, readUserAgentStoreInventory, type PrepareMigrationAgentStores } from "./migration-agent-stores.js";
@@ -3025,10 +3025,14 @@ export async function readMigrationUserSnapshot(
   const systemConfig = byotSystemConfigFromDoc(
     sysConfig.data() as Record<string, unknown> | undefined,
   );
+  const entitlements = userEntitlements();
+  const planInputs = entitlements.pickInputs(data);
   return {
+    ...entitlements.previousImageFields("restore-snapshot", data),
     uid,
     slug,
-    tier: stringAt(data, "tier") || stringAt(data, "subscription.tier") || "trial",
+    contextTemplateKey: entitlements.seedContextTemplateKey(planInputs),
+    planInputs,
     gatewayId: userRecord.gateway?.gatewayId ?? "",
     status: status === "provisioning" || status === "complete" ? status : "",
     agentIds: [...userRecord.agents.agentIds],

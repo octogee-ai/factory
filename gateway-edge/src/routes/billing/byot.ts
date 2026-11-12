@@ -54,15 +54,6 @@ function gatewayIdFromRequest(req: Request): string | null {
   return typeof gatewayId === "string" && gatewayId.length > 0 ? gatewayId : null;
 }
 
-function tierFieldsFromRequest(req: Request): Record<string, unknown> {
-  const user = req.user ?? {};
-  return {
-    ...(typeof user.tier === "string" ? { tier: user.tier } : {}),
-    ...userEntitlements().pickInputs(user as Record<string, unknown>),
-    ...(typeof user.trialExpired === "boolean" ? { trialExpired: user.trialExpired } : {}),
-  };
-}
-
 function triggerByotSync(args: {
   req: Request;
   slug: string;
@@ -74,13 +65,15 @@ function triggerByotSync(args: {
     logger.warn(`[billing] BYOT sync trigger skipped for ${args.slug}: missing gatewayId`);
     return;
   }
+  const user = (args.req.user ?? {}) as Record<string, unknown>;
   triggerGatewayModelCredentialSync({
     gatewayId,
     userData: {
       byotActive: args.byotActive,
       username: args.slug,
       provisioning: { openclaw: { status: "complete" } },
-      ...tierFieldsFromRequest(args.req),
+      ...userEntitlements().previousImageFields("model-credential-push", user),
+      planInputs: userEntitlements().pickInputs(user),
       ...(args.byot ? { systemConfig: { byot: args.byot } } : {}),
     },
   });

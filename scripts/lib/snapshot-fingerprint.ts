@@ -4,6 +4,7 @@ import type {
   FleetBrokerUserSnapshot,
 } from "../../shared/types/fleet-broker.js";
 import { projectCheckoutEnabled } from "../../shared/types/project.js";
+import { userEntitlements } from "../../shared/types/user-entitlements.js";
 import type { MountLane } from "./reconcile-loop.js";
 
 // A stable fingerprint of the fields of a user snapshot that shape what an ensure
@@ -94,15 +95,6 @@ export function desiredUsers(
   return map;
 }
 
-function planSubscriptionSlice(subscription: unknown): Record<string, unknown> | null {
-  if (!subscription || typeof subscription !== "object" || Array.isArray(subscription)) return null;
-  const sub = subscription as { tier?: unknown; status?: unknown };
-  return {
-    tier: sub.tier ?? null,
-    status: sub.status ?? null,
-  };
-}
-
 function projectCloneKey(project: FleetBrokerProjectRestore): string {
   const repoSource = project.repoSource;
   return repoSource?.provider === "github"
@@ -110,7 +102,8 @@ function projectCloneKey(project: FleetBrokerProjectRestore): string {
     : project.projectSlug;
 }
 
-export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): string {
+export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot, now: Date = new Date()): string {
+  const entitlements = userEntitlements();
   const configSlice = {
     projectCoachMembershipIsolationVersion: 1,
     // Order-independent: bindings/accounts are keyed, not positional.
@@ -135,17 +128,10 @@ export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): st
     customerMmUserId: snapshot.customerMmUserId,
     systemConfig: snapshot.systemConfig ?? null,
     byotActive: snapshot.byotActive ?? false,
-    // Plan fields shape the effective model config through the ensure's byot reassert —
-    // an upgrade (or signup-offer grant) must reconverge a mounted user's model picks.
-    // Only the fields plan resolution reads: hashing the whole subscription object would
-    // re-ensure every customer on routine billing churn (currentPeriodEnd on renewal).
-    tier: snapshot.tier,
-    selectedTier: snapshot.selectedTier ?? null,
-    subscription: planSubscriptionSlice(snapshot.subscription),
-    builderSubscription: planSubscriptionSlice(snapshot.builderSubscription),
-    trialGrant: snapshot.trialGrant ?? null,
-    signupOfferConvertedAt: snapshot.signupOfferConvertedAt ?? null,
-    // The operator's free-tier dial: a flip must re-ensure every mounted
+    plan: entitlements.plan(snapshot.planInputs, now),
+    contextFilePolicy: entitlements.contextFilePolicy(snapshot.planInputs, now),
+    contextTemplateKey: snapshot.contextTemplateKey,
+    // The operator's house model dial: a flip must re-ensure every mounted
     // house-only user, not wait for the next roll.
     freeTierModelRef: snapshot.freeTierModelRef ?? null,
     // The user agent default dial: a flip must re-ensure every mounted

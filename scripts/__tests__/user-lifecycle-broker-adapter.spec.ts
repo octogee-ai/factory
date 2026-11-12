@@ -508,7 +508,8 @@ function aliceSnapshot(
   return {
     uid: "uid-alice",
     slug: "alice",
-    tier: "standard",
+    contextTemplateKey: "default",
+    planInputs: { tier: "standard" },
     gatewayId: "default",
     status: "",
     runtimeMutationFenced: false,
@@ -2983,9 +2984,9 @@ describe("buildBrokeredLifecycleAdapter template files", () => {
   beforeEach(async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "broker-templates-"));
     process.env.OCTOGEE_TEMPLATES_DIR = tempRoot;
-    await fs.mkdir(path.join(tempRoot, "tiers", "trial"), { recursive: true });
-    await fs.writeFile(path.join(tempRoot, "tiers", "trial", "AGENTS.md"), "Agent {{slug}}\n");
-    await fs.writeFile(path.join(tempRoot, "tiers", "trial", "TOOLS.md"), "Tools\n");
+    await fs.mkdir(path.join(tempRoot, "tiers", "seeded"), { recursive: true });
+    await fs.writeFile(path.join(tempRoot, "tiers", "seeded", "AGENTS.md"), "Agent {{slug}}\n");
+    await fs.writeFile(path.join(tempRoot, "tiers", "seeded", "TOOLS.md"), "Tools\n");
   });
 
   afterEach(async () => {
@@ -3010,7 +3011,7 @@ describe("buildBrokeredLifecycleAdapter template files", () => {
     await adapter.writeUserTemplateFiles({
       uid: "uid-alice",
       slug: "alice",
-      tier: "trial",
+      contextTemplateKey: "seeded",
       ownerName: "Alice",
       customerDir,
       today: "2026-06-25",
@@ -4370,7 +4371,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-alice",
       slug: "alice",
-      tier: "standard",
+      contextTemplateKey: "default",
+      planInputs: { tier: "standard" },
       gatewayId: "default",
       status: "",
       agentIds: [],
@@ -4399,7 +4401,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const aliceSnapshot: FleetBrokerUserSnapshot = {
       uid: "uid-alice",
       slug: "alice",
-      tier: "standard",
+      contextTemplateKey: "default",
+      planInputs: { tier: "standard" },
       gatewayId: "default",
       status: "",
       agentIds: [],
@@ -4755,7 +4758,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-alice",
       slug: "alice",
-      tier: "standard",
+      contextTemplateKey: "default",
+      planInputs: { tier: "standard" },
       gatewayId: "default",
       status: "",
       agentIds: [],
@@ -4809,7 +4813,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-alice",
       slug: "alice",
-      tier: "standard",
+      contextTemplateKey: "default",
+      planInputs: { tier: "standard" },
       gatewayId: "default",
       status: "",
       agentIds: [],
@@ -4878,8 +4883,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-alice",
       slug: "alice",
-      tier: "trial",
-      selectedTier: "personal",
+      contextTemplateKey: "default",
+      planInputs: { tier: "trial", selectedTier: "personal" },
       gatewayId: "shared-0",
       status: "provisioning",
       agentIds: [],
@@ -4928,8 +4933,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-alice",
       slug: "alice",
-      tier: "trial",
-      selectedTier: "personal",
+      contextTemplateKey: "default",
+      planInputs: { tier: "trial", selectedTier: "personal" },
       gatewayId: "default",
       status: "provisioning",
       agentIds: [],
@@ -4985,8 +4990,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-alice",
       slug: "alice",
-      tier: "free",
-      selectedTier: "free",
+      contextTemplateKey: "free",
+      planInputs: { tier: "free", selectedTier: "free" },
       gatewayId: "default",
       status: "provisioning",
       agentIds: [],
@@ -5088,7 +5093,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-fresh",
       slug: "fresh",
-      tier: "standard",
+      contextTemplateKey: "default",
+      planInputs: { tier: "standard" },
       gatewayId: "default",
       status: "",
       agentIds: [],
@@ -5185,7 +5191,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const rpc = mkRemovalRpc(roster);
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
     const snapshot: FleetBrokerUserSnapshot = {
-      uid: "uid-fresh", slug: "fresh", tier: "standard", gatewayId: "default", status: "", agentIds: [], repoUrl: "",
+      uid: "uid-fresh", slug: "fresh", contextTemplateKey: "default", planInputs: { tier: "standard" }, gatewayId: "default", status: "", agentIds: [], repoUrl: "",
       mattermostUserId: FRESH_OWNER_MM_ID, customerMmUserId: FRESH_OWNER_MM_ID, channels: [], projects: [],
       ownerName: "Fresh", coachToken: "pat-fresh", defaultAgentMmUserId: "mm-fresh-coach",
     };
@@ -5219,7 +5225,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-fresh",
       slug: "fresh",
-      tier: "standard",
+      contextTemplateKey: "default",
+      planInputs: { tier: "standard" },
       gatewayId: "default",
       status: "",
       agentIds: [],
@@ -5562,7 +5569,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-first",
       slug: "first",
-      tier: "standard",
+      contextTemplateKey: "default",
+      planInputs: { tier: "standard" },
       gatewayId: "default",
       status: "provisioning",
       agentIds: [],
@@ -5619,18 +5627,21 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       return { mode: "rpc" as const, attempts: 1 };
     });
     const snapshot = aliceSnapshot({
-      tier: "trial",
+      contextTemplateKey: "default",
       channels: [{ scope: "workspace", kind: "coach-dm", channelId: "dm-alice" }],
       builderAgentDefault: selection,
-      trialGrant: {
-        schemaVersion: 3,
-        offerId: "builder-signup",
-        offerVersion: 1,
-        personalTier: "personal",
-        builderTier: "hobby",
-        configHash: "0123456789abcdef",
-        claimedAt: Date.now() - 60_000,
-        endsAt: Date.now() + 7 * 24 * 60 * 60_000,
+      planInputs: {
+        tier: "trial",
+        trialGrant: {
+          schemaVersion: 3,
+          offerId: "builder-signup",
+          offerVersion: 1,
+          personalTier: "personal",
+          builderTier: "hobby",
+          configHash: "0123456789abcdef",
+          claimedAt: Date.now() - 60_000,
+          endsAt: Date.now() + 7 * 24 * 60 * 60_000,
+        },
       },
     });
     const adapter = buildBrokeredLifecycleAdapter({
@@ -5698,20 +5709,23 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     });
     const snapshot = aliceSnapshot({
       status: "complete",
-      tier: "trial",
+      contextTemplateKey: "default",
       byotActive: true,
       systemConfig: { byot: { provider: "openai-codex" } },
       channels: [{ scope: "workspace", kind: "coach-dm", channelId: "dm-alice" }],
       builderAgentDefault: selection,
-      trialGrant: {
-        schemaVersion: 3,
-        offerId: "builder-signup",
-        offerVersion: 1,
-        personalTier: "personal",
-        builderTier: "hobby",
-        configHash: "0123456789abcdef",
-        claimedAt: Date.now() - 60_000,
-        endsAt: Date.now() + 7 * 24 * 60 * 60_000,
+      planInputs: {
+        tier: "trial",
+        trialGrant: {
+          schemaVersion: 3,
+          offerId: "builder-signup",
+          offerVersion: 1,
+          personalTier: "personal",
+          builderTier: "hobby",
+          configHash: "0123456789abcdef",
+          claimedAt: Date.now() - 60_000,
+          endsAt: Date.now() + 7 * 24 * 60 * 60_000,
+        },
       },
     });
     const adapter = buildBrokeredLifecycleAdapter({
@@ -5748,7 +5762,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-alice",
       slug: "alice",
-      tier: "pro",
+      contextTemplateKey: "default",
       gatewayId: "default",
       status: "provisioning",
       agentIds: [],
@@ -5760,7 +5774,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       ownerName: "Alice",
       coachToken: "pat-after-provision",
       defaultAgentMmUserId: "mm-alice-coach",
-      trialGrant: { gatewayId: "builder-alice" },
+      planInputs: { tier: "pro", trialGrant: { gatewayId: "builder-alice" } },
     };
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
@@ -5786,7 +5800,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-alice",
       slug: "alice",
-      tier: "standard",
+      contextTemplateKey: "default",
+      planInputs: { tier: "standard" },
       gatewayId: "default",
       status: "",
       agentIds: [],
@@ -5846,7 +5861,8 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     return {
       uid: "uid-tester10",
       slug: "tester10",
-      tier: "trial",
+      contextTemplateKey: "default",
+      planInputs: { tier: "trial" },
       gatewayId: "default",
       status: "complete",
       agentIds: [],
@@ -5898,14 +5914,10 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     expect(snap?.systemConfig).toEqual({ byot: { provider: "openai", model: "gpt-4o" } });
   });
 
-  it("loadUserSnapshot carries builderSubscription — a credits-rail user must not resolve house_only at mount", async () => {
+  it("loadUserSnapshot hands the broker snapshot's plan inputs to the lifecycle untouched", async () => {
+    const planInputs = { selectedTier: "personal_free", builderSubscription: { tier: "hobby", status: "active" } };
     const client = mkClient({
-      userSnapshot: vi.fn(async () =>
-        fullSnapshot({
-          selectedTier: "personal_free",
-          builderSubscription: { tier: "hobby", status: "active" },
-        }),
-      ),
+      userSnapshot: vi.fn(async () => fullSnapshot({ planInputs })),
     });
     const adapter = buildBrokeredLifecycleAdapter({
       client,
@@ -5915,7 +5927,10 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
 
     const snap = await adapter.loadUserSnapshot("uid-tester10");
 
-    expect(snap?.builderSubscription).toEqual({ tier: "hobby", status: "active" });
+    expect(snap?.planInputs).toBe(planInputs);
+    for (const key of ["tier", "selectedTier", "subscription", "builderSubscription", "trialGrant", "signupOfferConvertedAt"]) {
+      expect(key in (snap ?? {})).toBe(false);
+    }
   });
 
   it("loadUserSnapshot carries the trial grant into the pod-side lifecycle snapshot", async () => {
@@ -5930,7 +5945,7 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
       endsAt: { _seconds: 1_784_104_800 },
     };
     const client = mkClient({
-      userSnapshot: vi.fn(async () => fullSnapshot({ trialGrant })),
+      userSnapshot: vi.fn(async () => fullSnapshot({ planInputs: { trialGrant } })),
     });
     const adapter = buildBrokeredLifecycleAdapter({
       client,
@@ -5940,7 +5955,7 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
 
     const snap = await adapter.loadUserSnapshot("uid-tester10");
 
-    expect(snap?.trialGrant).toBe(trialGrant);
+    expect(snap?.planInputs.trialGrant).toBe(trialGrant);
   });
 
   it("loadUserSnapshot carries the free-tier dial ref (the house pin must follow the operator)", async () => {
@@ -6169,7 +6184,8 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     await adapter.reconcileCommunityMembership?.({
       uid: "uid-tester10",
       slug: "tester10",
-      tier: "trial",
+      contextTemplateKey: "default",
+      planInputs: { tier: "trial" },
       ownerName: "Tester",
       customerDir: "/home/node/.openclaw/customers/tester10",
       today: "2026-07-24",
@@ -6223,7 +6239,8 @@ describe("buildBrokeredLifecycleAdapter — multi-agent project agents", () => {
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-alice",
       slug: "alice",
-      tier: "standard",
+      contextTemplateKey: "default",
+      planInputs: { tier: "standard" },
       gatewayId: "default",
       status: "",
       agentIds: [],

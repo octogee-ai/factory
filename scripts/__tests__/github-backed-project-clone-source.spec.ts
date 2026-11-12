@@ -34,7 +34,8 @@ function snapshot(projects: FleetBrokerProjectRestore[]): FleetBrokerUserSnapsho
   return {
     uid: "uid-alice",
     slug: "alice",
-    tier: "trial",
+    contextTemplateKey: "default",
+    planInputs: { tier: "trial" },
     gatewayId: "builder-alice",
     status: "complete",
     agentIds: [],

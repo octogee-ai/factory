@@ -18,7 +18,8 @@ function mkCtx(): ProvisioningContext {
   return {
     uid: "uid-marie",
     slug: SLUG,
-    tier: "trial",
+    contextTemplateKey: "default",
+    provisionedProductFields: {},
     ownerName: SLUG,
     customerDir: "/var/empty/customers/marie",
     today: "2026-04-16",

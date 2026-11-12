@@ -6,7 +6,7 @@ import {
   type ByotInput,
   type DefaultAgentModelInput,
   type DefaultAgentModelPatch,
-  type FreeTierDefaultAgentModelInput,
+  type HouseModelDefaultAgentModelInput,
 } from "./byot-sync.js";
 
 type LegacyByotSyncUserData = Parameters<typeof deriveDesiredByotState>[0];
@@ -30,7 +30,7 @@ export type ModelCredentialSyncUserData = Omit<LegacyByotSyncUserData, "systemCo
 
 export type ModelCredentialSyncInput = ByotInput;
 export type ModelCredentialDefaultAgentModelInput = DefaultAgentModelInput;
-export type ModelCredentialFreeTierDefaultAgentModelInput = FreeTierDefaultAgentModelInput;
+export type ModelCredentialHouseModelDefaultAgentModelInput = HouseModelDefaultAgentModelInput;
 export type ModelCredentialDefaultAgentModelPatch = DefaultAgentModelPatch;
 
 function byotSystemConfigFromModelCredential(

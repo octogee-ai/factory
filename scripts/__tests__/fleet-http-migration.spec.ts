@@ -124,7 +124,8 @@ const PRELAUNCH_USER_GATE_STATE = { ...HELD_USER_GATE_STATE, mode: "permitted", 
 const RESTORE_SNAPSHOT = {
   uid: "uid-chris",
   slug: "chris",
-  tier: "trial",
+  contextTemplateKey: "default",
+  planInputs: { tier: "trial" },
   gatewayId: GATEWAY_ID,
   status: "complete",
   agentIds: ["octogee-chris-coach"],
@@ -293,7 +294,8 @@ function mkAdapter(overrides: Partial<UserLifecycleAdapter> = {}): UserLifecycle
     loadUserSnapshot: vi.fn(async () => ({
       uid: "uid-chris",
       slug: "chris",
-      tier: "trial",
+      contextTemplateKey: "default",
+      planInputs: { tier: "trial" },
       gatewayId: GATEWAY_ID,
       status: "complete",
       agentIds: ["octogee-chris-coach"],
@@ -1221,17 +1223,19 @@ describe("createRestoreHandler", () => {
         projectCheckoutScope: "workspace-and-projects",
         projects: [{ projectSlug: "demo", giteaRepoName: "chris-demo" }],
         projectAgents: [{ projectId: "demo", enabled: true, token: "pat-demo", mmUserId: "bot-demo", status: "ready", activationId: "activation-demo" }],
-        selectedTier: "personal_free",
-        builderSubscription: { tier: "pro", status: "trialing" },
-        trialGrant: {
-          schemaVersion: 3,
-          offerId: "builder-signup",
-          offerVersion: 1,
-          personalTier: "personal",
-          builderTier: "hobby",
-          configHash: "trial-config-a",
-          claimedAt: "2026-07-22T00:00:00.000Z",
-          endsAt: "2026-07-29T00:00:00.000Z",
+        planInputs: {
+          selectedTier: "personal_free",
+          builderSubscription: { tier: "pro", status: "trialing" },
+          trialGrant: {
+            schemaVersion: 3,
+            offerId: "builder-signup",
+            offerVersion: 1,
+            personalTier: "personal",
+            builderTier: "hobby",
+            configHash: "trial-config-a",
+            claimedAt: "2026-07-22T00:00:00.000Z",
+            endsAt: "2026-07-29T00:00:00.000Z",
+          },
         },
         freeTierModelRef: "platform-openrouter/moonshotai/kimi-k2",
         byotActive: true,
@@ -1266,17 +1270,19 @@ describe("createRestoreHandler", () => {
       expect(adapter.reassertByotForUser).toHaveBeenCalledWith(
         expect.objectContaining({
           byotActive: true,
-          selectedTier: "personal_free",
-          builderSubscription: { tier: "pro", status: "trialing" },
-          trialGrant: {
-            schemaVersion: 3,
-            offerId: "builder-signup",
-            offerVersion: 1,
-            personalTier: "personal",
-            builderTier: "hobby",
-            configHash: "trial-config-a",
-            claimedAt: "2026-07-22T00:00:00.000Z",
-            endsAt: "2026-07-29T00:00:00.000Z",
+          planInputs: {
+            selectedTier: "personal_free",
+            builderSubscription: { tier: "pro", status: "trialing" },
+            trialGrant: {
+              schemaVersion: 3,
+              offerId: "builder-signup",
+              offerVersion: 1,
+              personalTier: "personal",
+              builderTier: "hobby",
+              configHash: "trial-config-a",
+              claimedAt: "2026-07-22T00:00:00.000Z",
+              endsAt: "2026-07-29T00:00:00.000Z",
+            },
           },
           freeTierModelRef: "platform-openrouter/moonshotai/kimi-k2",
           systemConfig: { byot: { provider: "anthropic" } },
@@ -1354,6 +1360,36 @@ describe("createRestoreHandler", () => {
 
     expect(getStatus()).toBe(400);
     expect(getBody()).toEqual({ error: "snapshot mismatch" });
+  });
+
+  it.each([
+    ["a previous fleet controller's snapshot that names a tier and carries no plan inputs", (() => {
+      const { planInputs: _planInputs, contextTemplateKey: _contextTemplateKey, ...previous } = RESTORE_SNAPSHOT;
+      return { ...previous, tier: "personal", selectedTier: "personal" };
+    })()],
+    ["plan inputs that are not an object", { ...RESTORE_SNAPSHOT, planInputs: "personal" }],
+    ["an empty context template key", { ...RESTORE_SNAPSHOT, contextTemplateKey: "" }],
+  ])("refuses a restore whose snapshot has %s before it touches the user", async (_label, snapshot) => {
+    const adapter = {
+      markUserMigratingIn: vi.fn(),
+      seedUserSnapshotForMigration: vi.fn(),
+      cloneWorkspaceRepo: vi.fn(async () => true),
+      writeUserTemplateFiles: vi.fn(async () => undefined),
+      applyAddUserConfigPatch: vi.fn(async () => ({ elapsedMs: 1 })),
+      reassertByotForUser: vi.fn(async () => undefined),
+    };
+    const log = vi.fn();
+    const handler = createRestoreHandler(mkDeps({ adapter: mkAdapter(adapter), log }));
+    const body = { migrationId: "mig-1", slug: "chris", uid: "uid-chris", snapshot };
+    const sig = signForPod(body.migrationId, JSON.stringify(body));
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(mkRequest(body, { signature: sig }), res, vi.fn());
+
+    expect(getStatus()).toBe(400);
+    expect(getBody()).toEqual({ error: "snapshot carries no plan inputs; the fleet controller predates this gateway image" });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("snapshot carries no plan inputs"), { status: "failed" });
+    for (const touched of Object.values(adapter)) expect(touched).not.toHaveBeenCalled();
   });
 
   it("rejects a malformed snapshot body with 400 instead of throwing", async () => {

@@ -1,10 +1,10 @@
-import { type UserEntitlementInputs } from "@octogee/shared/types/user-entitlements";
 export declare const UNKNOWN_TIME_ZONE = "unknown";
 export declare function reassertUserTimeZoneLine(customerDir: string, timeZone: string | null): boolean;
-export declare function reassertConvergedContextFiles(slug: string, customerDir: string, userData: UserEntitlementInputs & {
+export interface ConvergedContextFileInputs {
+    planInputs: Record<string, unknown>;
     timeZone?: unknown;
-}, vars?: Record<string, string>): string[];
-export declare function reassertConvergedContextFilesForSlug(userData: UserEntitlementInputs & {
+}
+export declare function reassertConvergedContextFiles(slug: string, customerDir: string, userData: ConvergedContextFileInputs, vars?: Record<string, string>): string[];
+export declare function reassertConvergedContextFilesForSlug(userData: ConvergedContextFileInputs & {
     username?: unknown;
-    timeZone?: unknown;
 }, usersDir?: string): string[];
