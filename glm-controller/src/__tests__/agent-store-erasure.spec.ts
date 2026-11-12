@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { UserErasureBlockedError, createUserAgentStoreErasure, preserveUserGatewayRetirement } from "../lib/user-ops/agent-store-erasure.js";
-import type { AgentStoreErasureCustody } from "@octogee/core/agent-store-credentials";
+import { AgentStoreErasureRetainedLoginError, type AgentStoreErasureCustody } from "@octogee/core/agent-store-credentials";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
 function root(gatewayId: string, fields: Record<string, unknown>): Record<string, unknown> {
@@ -244,6 +244,15 @@ describe("due user PostgreSQL erasure authority", () => {
     await expect(h.run()).rejects.toThrow("retained a gateway VM or home");
     expect(h.deps.eraseVm).toHaveBeenCalledWith("uid-1");
     expect(h.records["customerDeletionJobs/delete-1"]!.postgresAgentStoreTargets).toBeUndefined();
+  });
+
+  it("ends as blocked when the database retains a user Gateway login without proved retirement", async () => {
+    const h = harness();
+    const retained = new AgentStoreErasureRetainedLoginError("Agent-store erasure retains a user Gateway login without proved runtime retirement: octogee_gateway_stale");
+    h.deps.eraseStores.mockRejectedValue(retained);
+    const failure = await h.run().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(UserErasureBlockedError);
+    expect(failure).toMatchObject({ message: retained.message, cause: retained });
   });
 
   it("requires preserved user retirement and actual runtime absence", async () => {

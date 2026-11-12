@@ -360,6 +360,9 @@ export async function assertNoUserAgentStores(adminDsn, user) {
         await client.end();
     }
 }
+export class AgentStoreErasureRetainedLoginError extends Error {
+    name = "AgentStoreErasureRetainedLoginError";
+}
 async function assertAgentErasureMetadataTypes(client, namespace) {
     const unsafeTypes = await client.query(`
     SELECT 1 FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
@@ -487,11 +490,13 @@ export async function eraseUserAgentStores(adminDsn, user, custody) {
                 return;
             const logins = await client.query(`WITH RECURSIVE members(oid) AS (
         SELECT oid FROM pg_catalog.pg_roles WHERE rolname = $1
-        UNION SELECT m.member FROM pg_catalog.pg_auth_members m JOIN members parent ON parent.oid = m.roleid)
-        SELECT r.rolname FROM members m JOIN pg_catalog.pg_roles r ON r.oid = m.oid WHERE r.rolcanlogin AND r.rolname <> current_user`, [owner]);
+        UNION SELECT m.member FROM pg_catalog.pg_auth_members m JOIN members parent ON parent.oid = m.roleid
+        WHERE m.member <> (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user))
+        SELECT r.rolname FROM members m JOIN pg_catalog.pg_roles r ON r.oid = m.oid WHERE r.rolcanlogin ORDER BY r.rolname`, [owner]);
             const stoppedLogins = new Set(gateways.map(id => roleFor("gateway", `${scope}:${id}`)));
-            if (logins.rows.some(row => !stoppedLogins.has(row.rolname)))
-                throw new Error("Agent-store erasure retains a user Gateway login without proved runtime retirement");
+            const retained = logins.rows.map(row => row.rolname).filter(name => !stoppedLogins.has(name));
+            if (retained.length)
+                throw new AgentStoreErasureRetainedLoginError(`Agent-store erasure retains a user Gateway login without proved runtime retirement: ${retained.join(", ")}`);
         };
         let stoppedGateways = discovered.length ? await custody.assertWritersStopped(discovered) : [];
         if (discovered.length)

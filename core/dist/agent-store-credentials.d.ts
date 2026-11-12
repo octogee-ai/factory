@@ -42,6 +42,9 @@ export type AgentStoreErasureTarget = AgentStoreErasureIdentity & {
     namespaceOid: string;
     owner: string;
 };
+export declare class AgentStoreErasureRetainedLoginError extends Error {
+    readonly name: string;
+}
 export interface AgentStoreErasureCustody {
     assertCurrent(): Promise<void>;
     assertWritersStopped(targets: readonly AgentStoreErasureTarget[]): Promise<readonly string[]>;

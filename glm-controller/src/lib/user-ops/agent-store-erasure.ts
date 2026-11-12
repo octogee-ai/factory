@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Operation } from "@octogee/shared/types/glm";
-import type { AgentStoreErasureCustody, AgentStoreErasureTarget } from "@octogee/core/agent-store-credentials";
+import { AgentStoreErasureRetainedLoginError, type AgentStoreErasureCustody, type AgentStoreErasureTarget } from "@octogee/core/agent-store-credentials";
 import type {
   AgentStoreRecord,
   PlatformUserRecord,
@@ -270,6 +270,15 @@ function suspensionCleanupMatches(suspension: OperationRecord | null, cleanup: U
     Array.isArray(suspension.steps) && suspension.steps.some(step => step.name === "unmount-gateway" && step.status === unmounted);
 }
 
+async function eraseStoresOrBlock(deps: UserAgentStoreErasureDeps, cleanup: UserCleanupContext, custody: AgentStoreErasureCustody): Promise<void> {
+  try {
+    await deps.eraseStores(cleanup, custody);
+  } catch (error) {
+    if (error instanceof AgentStoreErasureRetainedLoginError) throw new UserErasureBlockedError(error.message, { cause: error });
+    throw error;
+  }
+}
+
 export function createUserAgentStoreErasure(deps: UserAgentStoreErasureDeps) {
   return async (cleanup: UserCleanupContext, deletionId: string, operation: Operation, assertActiveClaim: (() => Promise<void>) | undefined): Promise<void> => {
     if (!assertActiveClaim) throw new Error("User PostgreSQL erasure requires its active operation claim");
@@ -285,7 +294,7 @@ export function createUserAgentStoreErasure(deps: UserAgentStoreErasureDeps) {
     };
     const assertCurrent = async () => { await assertActiveClaim(); await readAuthority(); };
     await assertCurrent();
-    await deps.eraseStores(cleanup, {
+    await eraseStoresOrBlock(deps, cleanup, {
       assertCurrent,
       assertWritersStopped: async targets => {
         const { job, sourceGatewayId } = await readSourcedAuthority();

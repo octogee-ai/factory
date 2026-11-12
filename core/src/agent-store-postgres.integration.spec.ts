@@ -1,12 +1,12 @@
 /* eslint-disable sonarjs/sql-queries -- Synthetic fixture identifiers are escaped; SQL values use query parameters. */
 import { afterEach, describe, expect, it } from "vitest";
 import pg from "pg";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createAgentStoreCredentialProvisioner, createAgentStoreOwnershipTransferer, assertNoUserAgentStores, eraseUserAgentStores, type AgentStoreErasureTarget } from "./agent-store-credentials.js";
+import { createAgentStoreCredentialProvisioner, createAgentStoreCredentialRevoker, createAgentStoreOwnershipTransferer, assertNoUserAgentStores, eraseUserAgentStores, type AgentStoreErasureTarget } from "./agent-store-credentials.js";
 import { readAuthProfileStore, readAuthProfileState, writeAuthProfileStore, deleteAuthProfileStore, sharedAuthStoreUsable } from "./auth-profile-store.js";
 import { purgeUserOauthRuntimeArtifacts } from "./byosub-restore.js";
 import { assertTrustedAgentStoreRoutines } from "./agent-store-routines.js";
@@ -40,6 +40,7 @@ async function createNativeTriggers(client: pg.Client, schema: string) {
 }
 
 const dsn = process.env.OCTOGEE_TEST_POSTGRES_DSN;
+const roleFor = (kind: string, id: string) => `octogee_${kind}_${createHash("sha256").update(id).digest("hex").slice(0, 24)}`;
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 
@@ -287,6 +288,64 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
     } finally {
       for (const namespace of Object.values(names)) await admin.query(`DROP SCHEMA IF EXISTS ${pg.escapeIdentifier(namespace)} CASCADE`);
       await claimed?.end(); await unowned.end(); await shared.end(); await admin.end();
+    }
+  });
+
+  it("erases a user whose retired Gateway left only a disabled login, under an administrator held by a setup login", async () => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const user = { uid: `retired-${suffix}`, slug: `retired-${suffix}` };
+    const gatewayId = `user-retired-${suffix}`;
+    const scope = decodeURIComponent(new URL(dsn!).pathname.slice(1));
+    const id = pg.escapeIdentifier;
+    const owner = roleFor("builder", `${scope}:${user.uid}`), login = roleFor("gateway", `${scope}:${gatewayId}`);
+    const controller = `controller_${suffix}`;
+    const controllerUrl = new URL(dsn!); controllerUrl.username = controller; controllerUrl.password = "";
+    const controllerDsn = controllerUrl.toString();
+    const schema = `retired_${suffix}`;
+    const setup = new pg.Client({ connectionString: dsn! }); await setup.connect();
+    const { rows: [{ current_user: setupLogin }] } = await setup.query("SELECT current_user");
+    await createAgentStoreCredentialProvisioner(dsn!, dsn!)({ gatewayClass: "shared", gatewayId: `shared-retired-${suffix}`, token: "synthetic-shared" }, async () => {});
+    await setup.query(`CREATE ROLE ${id(controller)} LOGIN CREATEROLE`);
+    await setup.query(`GRANT ${id(controller)} TO CURRENT_USER WITH INHERIT TRUE, SET TRUE`);
+    await setup.query(`GRANT ${id(roleFor("shared", scope))} TO ${id(controller)} WITH ADMIN OPTION`);
+    await setup.query(`GRANT CONNECT, CREATE ON DATABASE ${id(scope)} TO ${id(controller)} WITH GRANT OPTION`);
+    const administrator = new pg.Client({ connectionString: controllerDsn });
+    const stopped = [`shared-source-${suffix}`];
+    const guards = {
+      assertCurrent: async () => undefined,
+      assertWritersStopped: async () => stopped,
+      bindTargets: async (targets: readonly AgentStoreErasureTarget[]) => targets,
+    };
+    try {
+      const gatewayDsn = await createAgentStoreCredentialProvisioner(controllerDsn, controllerDsn)({ gatewayClass: "builder", gatewayId, token: "synthetic-user", user }, async () => {});
+      const gateway = new pg.Client({ connectionString: gatewayDsn }); await gateway.connect();
+      try {
+        await gateway.query(`CREATE SCHEMA ${id(schema)}`);
+        await gateway.query(`CREATE TABLE ${id(schema)}.openclaw_schema_meta (store TEXT PRIMARY KEY, version BIGINT, store_id TEXT)`);
+        await gateway.query(`INSERT INTO ${id(schema)}.openclaw_schema_meta VALUES ('agent', 1, $1)`, [randomUUID()]);
+        await gateway.query(`CREATE TABLE ${id(schema)}.schema_meta (meta_key TEXT PRIMARY KEY, role TEXT, agent_id TEXT)`);
+        await gateway.query(`INSERT INTO ${id(schema)}.schema_meta VALUES ('primary', 'agent', $1)`, [`octogee-${user.slug}-coach`]);
+      } finally { await gateway.end(); }
+      const retainedLogin = (role: string) => ({ name: "AgentStoreErasureRetainedLoginError",
+        message: `Agent-store erasure retains a user Gateway login without proved runtime retirement: ${role}` });
+      await expect(eraseUserAgentStores(controllerDsn, user, guards)).rejects.toMatchObject(retainedLogin(login));
+
+      await createAgentStoreCredentialRevoker(controllerDsn)(gatewayId, async () => {});
+      await administrator.connect();
+      await administrator.query(`GRANT ${id(owner)} TO ${id(setupLogin)}`);
+      await expect(eraseUserAgentStores(controllerDsn, user, guards)).rejects.toMatchObject(retainedLogin(setupLogin));
+      await administrator.query(`REVOKE ${id(owner)} FROM ${id(setupLogin)}`);
+
+      await eraseUserAgentStores(controllerDsn, user, guards);
+      await expect(assertNoUserAgentStores(controllerDsn, user)).resolves.toBeUndefined();
+      expect((await setup.query("SELECT 1 FROM pg_namespace WHERE nspname = $1", [schema])).rowCount).toBe(0);
+    } finally {
+      await administrator.end();
+      await setup.query(`DROP SCHEMA IF EXISTS ${id(schema)} CASCADE`);
+      await setup.query(`REVOKE CONNECT, CREATE ON DATABASE ${id(scope)} FROM ${id(controller)} CASCADE`);
+      await setup.query(`REVOKE ${id(roleFor("shared", scope))} FROM ${id(controller)} CASCADE`);
+      await setup.query(`REVOKE ${id(controller)} FROM CURRENT_USER`);
+      await setup.end();
     }
   });
 
