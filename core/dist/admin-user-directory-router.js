@@ -6,7 +6,7 @@ import { userAccountFromData, firestoreUserAccountReader, } from "./user-account
 import { MissingRecordError } from "./platform-state/errors.js";
 import { readOwnerBrokerUsageSeries } from "./broker-usage-series.js";
 import { MODEL_BROKER_USAGE_EVENTS_COLLECTION, MODEL_BROKER_USAGE_ROLLUPS_COLLECTION, MODEL_BROKER_USAGE_WINDOWS_COLLECTION, MODEL_BROKER_WEEK_WINDOWS_COLLECTION, modelBrokerWindowDocId, usageWindowStartMs, weekWindowStartMs, } from "@octogee/shared/types/model-broker-usage";
-import { anonymousOperationalEnvironment, anonymousOperationalGatewayClass, anonymousOperationalPlanTier, isAnonymousOperationalModelDimension, } from "@octogee/shared/types/account-lifecycle";
+import { anonymousOperationalEnvironment, anonymousOperationalGatewayClass, isAnonymousOperationalModelDimension, } from "@octogee/shared/types/account-lifecycle";
 function financeNumber(value) {
     return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -43,7 +43,7 @@ function projectAnonymousArchive(id, data) {
         accountCreatedMonth: archiveMonth(data.accountCreatedMonth),
         deletionRequestedMonth: archiveMonth(data.deletionRequestedMonth),
         environment: anonymousOperationalEnvironment(data.environment),
-        planTier: anonymousOperationalPlanTier(data.planTier),
+        ...userEntitlements().productProjection?.adminUserArchive(data),
         gatewayClass: anonymousOperationalGatewayClass(data.gatewayClass),
         totals: {
             costUsd: operationalNumber(rawTotals.costUsd),
@@ -307,17 +307,6 @@ export function projectUserPlacement(userRecord) {
         gatewayProfile: userRecord.gateway?.gatewayProfile ?? null,
     };
 }
-const OPS_FIELD_MAP = {
-    setTier: "selectedTier",
-};
-function dottedRead(path, src) {
-    return path.split(".").reduce((acc, key) => {
-        if (acc && typeof acc === "object" && key in acc) {
-            return acc[key];
-        }
-        return undefined;
-    }, src);
-}
 function finiteNumber(value) {
     return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -380,7 +369,7 @@ function sendUnknownCursor(res, error) {
 }
 // eslint-disable-next-line max-lines-per-function -- factory mounts the user routes; splitting it would scatter the contract
 export function addAdminUserDirectoryRoutes(router, deps) {
-    const { db, store, logger, FieldValue } = deps;
+    const { db, store, logger } = deps;
     const accounts = firestoreUserAccountReader(db);
     const directory = { db, store, accounts };
     router.get("/user-archives", async (_req, res, next) => {
@@ -733,43 +722,6 @@ export function addAdminUserDirectoryRoutes(router, deps) {
                 };
             });
             res.json({ items, generatedAt: new Date().toISOString() });
-        }
-        catch (e) {
-            next(e);
-        }
-    });
-    router.post("/users/:uid/ops", async (req, res, next) => {
-        try {
-            const uid = req.params.uid;
-            const { action, value } = (req.body ?? {});
-            if (!action || typeof action !== "string" || !(action in OPS_FIELD_MAP)) {
-                res.status(400).json({ error: `Unknown ops action: ${action}` });
-                return;
-            }
-            const field = OPS_FIELD_MAP[action];
-            const userRef = db.collection("users").doc(uid);
-            const userSnap = await userRef.get();
-            if (!userSnap.exists) {
-                res.status(404).json({ error: "User not found" });
-                return;
-            }
-            const userData = userSnap.data() ?? {};
-            const before = dottedRead(field, userData) ?? null;
-            const update = { [field]: value === undefined ? null : value };
-            if (action === "setTier")
-                update["tier"] = value;
-            await userRef.update(update);
-            const auditRef = userRef.collection("admin_actions").doc();
-            await auditRef.set({
-                at: FieldValue.serverTimestamp(),
-                adminUid: req.uid ?? null,
-                adminEmail: req.user?.email ?? null,
-                action,
-                field,
-                before,
-                after: value === undefined ? null : value,
-            });
-            res.json({ success: true, action, field, before, after: value });
         }
         catch (e) {
             next(e);

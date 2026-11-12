@@ -39,7 +39,6 @@ import {
 import {
   anonymousOperationalEnvironment,
   anonymousOperationalGatewayClass,
-  anonymousOperationalPlanTier,
   isAnonymousOperationalModelDimension,
 } from "@octogee/shared/types/account-lifecycle";
 
@@ -80,7 +79,7 @@ function projectAnonymousArchive(id: string, data: Record<string, unknown>) {
     accountCreatedMonth: archiveMonth(data.accountCreatedMonth),
     deletionRequestedMonth: archiveMonth(data.deletionRequestedMonth),
     environment: anonymousOperationalEnvironment(data.environment),
-    planTier: anonymousOperationalPlanTier(data.planTier),
+    ...userEntitlements().productProjection?.adminUserArchive(data),
     gatewayClass: anonymousOperationalGatewayClass(data.gatewayClass),
     totals: {
       costUsd: operationalNumber(rawTotals.costUsd),
@@ -307,15 +306,9 @@ export type AdminUserProductDetail = (uid: string) => Promise<Readonly<Record<st
 export interface AdminUserDirectoryRouterDeps {
   db: Firestore;
   store: PlatformStateStore;
-  FieldValue: { serverTimestamp: () => unknown };
   logger: UserDirectoryRouterLogger;
   productUserDetail?: AdminUserProductDetail | undefined;
 }
-
-type ActorRequest = Request & {
-  uid?: string;
-  user?: { email?: string | null };
-};
 
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 100;
@@ -491,19 +484,6 @@ export function projectUserPlacement(userRecord: PlatformUserRecord): AdminUserP
   };
 }
 
-const OPS_FIELD_MAP: Record<string, string> = {
-  setTier: "selectedTier",
-};
-
-function dottedRead(path: string, src: Record<string, unknown>): unknown {
-  return path.split(".").reduce<unknown>((acc, key) => {
-    if (acc && typeof acc === "object" && key in (acc as Record<string, unknown>)) {
-      return (acc as Record<string, unknown>)[key];
-    }
-    return undefined;
-  }, src);
-}
-
 function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -576,7 +556,7 @@ export function addAdminUserDirectoryRoutes(
   router: Router,
   deps: AdminUserDirectoryRouterDeps,
 ): Router {
-  const { db, store, logger, FieldValue } = deps;
+  const { db, store, logger } = deps;
   const accounts = firestoreUserAccountReader(db);
   const directory: UserDirectory = { db, store, accounts };
 
@@ -985,46 +965,6 @@ router.get(
         });
 
         res.json({ items, generatedAt: new Date().toISOString() });
-      } catch (e) { next(e); }
-    },
-  );
-
-  router.post(
-    "/users/:uid/ops",
-    async (req: ActorRequest, res: Response, next: NextFunction) => {
-      try {
-        const uid = req.params.uid as string;
-        const { action, value } = (req.body ?? {}) as { action?: string; value?: unknown };
-        if (!action || typeof action !== "string" || !(action in OPS_FIELD_MAP)) {
-          res.status(400).json({ error: `Unknown ops action: ${action}` });
-          return;
-        }
-        const field = OPS_FIELD_MAP[action]!;
-
-        const userRef = db.collection("users").doc(uid);
-        const userSnap = await userRef.get();
-        if (!userSnap.exists) { res.status(404).json({ error: "User not found" }); return; }
-        const userData = userSnap.data() ?? {};
-
-        const before = dottedRead(field, userData) ?? null;
-
-        const update: Record<string, unknown> = { [field]: value === undefined ? null : value };
-        if (action === "setTier") update["tier"] = value;
-
-        await userRef.update(update);
-
-        const auditRef = userRef.collection("admin_actions").doc();
-        await auditRef.set({
-          at: FieldValue.serverTimestamp(),
-          adminUid: req.uid ?? null,
-          adminEmail: req.user?.email ?? null,
-          action,
-          field,
-          before,
-          after: value === undefined ? null : value,
-        });
-
-        res.json({ success: true, action, field, before, after: value });
       } catch (e) { next(e); }
     },
   );

@@ -24,6 +24,7 @@ export interface UserProductProjection {
     }): ProductFields;
     adminUserDetail(user: UserEntitlementInputs): ProductFields;
     adminUserStats(summaries: readonly ProductFields[]): ProductFields;
+    adminUserArchive(record: Readonly<Record<string, unknown>>): ProductFields;
     provisionedUser(user: UserEntitlementInputs): ProductFields;
 }
 export interface UserSpendObservation {

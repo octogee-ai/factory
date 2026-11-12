@@ -53,6 +53,10 @@
       "types": "./dist/admin-customer-reset.d.ts",
       "default": "./dist/admin-customer-reset.js"
     },
+    "./admin-user-plan-routes": {
+      "types": "./dist/admin-user-plan-routes.d.ts",
+      "default": "./dist/admin-user-plan-routes.js"
+    },
     "./admin-user-directory-router": {
       "types": "./dist/admin-user-directory-router.d.ts",
       "default": "./dist/admin-user-directory-router.js"
@@ -523,6 +527,9 @@
     "*": {
       "admin-customer-reset": [
         "dist/admin-customer-reset.d.ts"
+      ],
+      "admin-user-plan-routes": [
+        "dist/admin-user-plan-routes.d.ts"
       ],
       "admin-user-directory-router": [
         "dist/admin-user-directory-router.d.ts"

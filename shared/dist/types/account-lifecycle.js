@@ -45,26 +45,15 @@ export function isAnonymousOperationalModelDimension(provider, model) {
     return models.includes(model);
 }
 const ANONYMOUS_OPERATIONAL_ENVIRONMENTS = ["test", "prod"];
-const ANONYMOUS_OPERATIONAL_PLAN_TIERS = [
-    "personal_free",
-    "personal",
-    "personal_pro",
-    "personal_pro_max",
-    "builder",
-    "operator",
-];
 const ANONYMOUS_OPERATIONAL_GATEWAY_CLASSES = [
     "shared",
     "builder",
 ];
-function closedOperationalValue(value, allowed) {
+export function closedOperationalValue(value, allowed) {
     return typeof value === "string" && allowed.includes(value) ? value : null;
 }
 export function anonymousOperationalEnvironment(value) {
     return closedOperationalValue(value, ANONYMOUS_OPERATIONAL_ENVIRONMENTS) ?? "unknown";
-}
-export function anonymousOperationalPlanTier(value) {
-    return closedOperationalValue(value, ANONYMOUS_OPERATIONAL_PLAN_TIERS);
 }
 export function anonymousOperationalGatewayClass(value) {
     return closedOperationalValue(dualReadGatewayClassValue(value), ANONYMOUS_OPERATIONAL_GATEWAY_CLASSES);

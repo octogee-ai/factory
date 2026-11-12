@@ -20,10 +20,26 @@ import {
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 type PlatformBinding = Extract<Express.Request["boundTenant"], { kind: "platform" }>;
+export type PlatformActor = PlatformBinding["actor"];
+
+export interface ProductTenantRoutes {
+  readonly platformActorRoutes: Readonly<Partial<Record<PlatformActor, readonly string[]>>>;
+  readonly userTargetedRoutes: readonly string[];
+  readonly platformOnlyRoutes: readonly string[];
+  readonly tenantBoundApiRoutes: readonly string[];
+}
+
+export const NO_PRODUCT_TENANT_ROUTES: ProductTenantRoutes = {
+  platformActorRoutes: {},
+  userTargetedRoutes: [],
+  platformOnlyRoutes: [],
+  tenantBoundApiRoutes: [],
+};
 
 interface EnforcementReaders {
   db: Pick<Firestore, "collection">;
   store: PlatformStateRepositories;
+  productRoutes: ProductTenantRoutes;
 }
 
 export interface TenantAccessRecord {
@@ -47,6 +63,7 @@ export interface TenantEnforcementOptions {
   notifyUsers?: UserNotifier;
   onAccess?: TenantAccessRecorder;
   enforceWhen?: (req: Request) => boolean;
+  productRoutes?: ProductTenantRoutes;
 }
 
 const UNRECORDED_POLL_ROUTES = new Set(["/internal/fleet/assignment-roster"]);
@@ -58,26 +75,15 @@ function logAccess(record: TenantAccessRecord): void {
   });
 }
 
-// The only internal routes a platform tenant (the octogee-cron KSA) may reach.
-// Must stay in lockstep with the routes guarded by requireInternalPlatformAuth.
-const PLATFORM_INTERNAL_ROUTES = new Set([
-  "/internal/billing/check-trial-expiry",
-  "/internal/billing/run-auto-top-ups",
-  "/internal/notifications/digest",
-  "/internal/notifications/social",
-]);
-
-function platformBindingAuthorized(bound: PlatformBinding, path: string): boolean {
+function platformBindingAuthorized(bound: PlatformBinding, path: string, productRoutes: ProductTenantRoutes): boolean {
+  if (productRoutes.platformActorRoutes[bound.actor]?.includes(path)) return true;
   if (bound.actor === "artifact-worker") {
     return path === "/internal/chat-artifacts" || path.startsWith("/internal/chat-artifacts/");
-  }
-  if (bound.actor === "llm-broker") {
-    return path === "/internal/product-analytics/events";
   }
   if (bound.actor === "npm-cache-proxy") {
     return path === "/internal/fleet/npm-cache-authorize";
   }
-  return PLATFORM_INTERNAL_ROUTES.has(path);
+  return false;
 }
 
 // Exported so agent-productivity-enforcement.spec.ts can pin this allowlist
@@ -311,13 +317,12 @@ function routeAllowsInboundMigrationSlug(req: Request): boolean {
   return req.path === "/internal/gitea" || req.path.startsWith("/internal/gitea/");
 }
 
-function routeRequiresTargetUserOwnership(req: Request): boolean {
-  const path = normalizeTenantPolicyPath(req.path);
-  return path === "/api/notifications/ingest" || path === "/internal/notifications/ingest";
+function routeRequiresTargetUser(req: Request, productRoutes: ProductTenantRoutes): boolean {
+  return productRoutes.userTargetedRoutes.includes(normalizeTenantPolicyPath(req.path));
 }
 
-function routeIsPlatformWideNotificationProducer(req: Request): boolean {
-  return normalizeTenantPolicyPath(req.path) === "/internal/notifications/social";
+function routeIsPlatformOnly(req: Request, productRoutes: ProductTenantRoutes): boolean {
+  return productRoutes.platformOnlyRoutes.includes(normalizeTenantPolicyPath(req.path));
 }
 
 async function slugAllowedForRequest(
@@ -361,12 +366,12 @@ async function allSlugsAllowedForRequest(
 }
 
 async function uidsAllowedForRequest(
-  store: PlatformStateRepositories,
+  { store, productRoutes }: EnforcementReaders,
   uids: string[],
   gatewayId: string,
   req: Request,
 ): Promise<boolean> {
-  if (routeRequiresTargetUserOwnership(req) && uids.length === 0) return false;
+  if (routeRequiresTargetUser(req, productRoutes) && uids.length === 0) return false;
   return uids.length === 0 || allUidsBelongToGateway(store, uids, gatewayId);
 }
 
@@ -380,7 +385,7 @@ async function gatewayDenialReason(
   if (gatewayIds.length > 0 && requestTargetsDifferentGateway) {
     return GATEWAY_BINDING_MISMATCH_REASON;
   }
-  if (routeIsPlatformWideNotificationProducer(req)) {
+  if (routeIsPlatformOnly(req, readers.productRoutes)) {
     return "route is platform-only";
   }
   if (bound.finalHomeCheckpoint) {
@@ -399,13 +404,14 @@ async function gatewayDenialReason(
 }
 
 async function targetedDenialReason(
-  { db, store }: EnforcementReaders,
+  readers: EnforcementReaders,
   bound: GatewayBinding,
   req: Request,
   namesBoundGateway: boolean,
 ): Promise<string | null> {
+  const { db, store } = readers;
   const uids = requestedUids(req);
-  if (!(await uidsAllowedForRequest(store, uids, bound.gatewayId, req))) {
+  if (!(await uidsAllowedForRequest(readers, uids, bound.gatewayId, req))) {
     return "request names a user not assigned to the bound gateway";
   }
 
@@ -493,7 +499,11 @@ function recordAccessOnResponse(
 export function createTenantEnforcementMiddleware(
   opts: TenantEnforcementOptions,
 ): (req: Request, res: Response, next: NextFunction) => void {
-  const readers: EnforcementReaders = { db: opts.db ?? defaultDb, store: opts.store };
+  const readers: EnforcementReaders = {
+    db: opts.db ?? defaultDb,
+    store: opts.store,
+    productRoutes: opts.productRoutes ?? NO_PRODUCT_TENANT_ROUTES,
+  };
   const onDenied = opts.onDenied ?? createTenantDenialReporter({ store: opts.store, notifyUsers: opts.notifyUsers });
   const onAccess = opts.onAccess ?? logAccess;
   const deny = (req: Request, res: Response, outcome: AccessOutcome, reason: string): void => {
@@ -525,7 +535,7 @@ export function createTenantEnforcementMiddleware(
     }
     const bound = req.boundTenant;
     if (bound?.kind === "platform") {
-      if (platformBindingAuthorized(bound, req.path)) {
+      if (platformBindingAuthorized(bound, req.path, readers.productRoutes)) {
         admit();
       } else {
         deny(req, res, outcome, `platform actor ${bound.actor} is not admitted on this route`);

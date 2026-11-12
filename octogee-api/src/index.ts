@@ -7,12 +7,7 @@ import { createOctogeeProduct, type OctogeeProductOptions } from "./product.js";
 
 export { createLazyProjectRunBucket } from "./product-project-runtime.js";
 
-export {
-  GATEWAY_CREDENTIAL_ROUTES,
-  SIDECAR_BROKER_ROUTES,
-  shouldAttemptTenantBinding,
-  shouldEnforceTenantBinding,
-} from "./app.js";
+export { GATEWAY_CREDENTIAL_ROUTES, SIDECAR_BROKER_ROUTES } from "./app.js";
 
 export type CreateAppOptions = Omit<PlatformAppOptions, "product"> & OctogeeProductOptions;
 

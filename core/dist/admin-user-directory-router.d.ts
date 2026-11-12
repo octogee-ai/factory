@@ -51,9 +51,6 @@ export type AdminUserProductDetail = (uid: string) => Promise<Readonly<Record<st
 export interface AdminUserDirectoryRouterDeps {
     db: Firestore;
     store: PlatformStateStore;
-    FieldValue: {
-        serverTimestamp: () => unknown;
-    };
     logger: UserDirectoryRouterLogger;
     productUserDetail?: AdminUserProductDetail | undefined;
 }

@@ -4,7 +4,12 @@ import type { Firestore } from "firebase-admin/firestore";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
-import { createTenantEnforcementMiddleware, type TenantAccessRecord } from "../tenant-enforcement.js";
+import {
+  createTenantEnforcementMiddleware,
+  NO_PRODUCT_TENANT_ROUTES,
+  type ProductTenantRoutes,
+  type TenantAccessRecord,
+} from "../tenant-enforcement.js";
 import type { TenantDenial, TenantDenialReporter } from "../tenant-denial.js";
 
 type UserDoc = Record<string, unknown>;
@@ -45,8 +50,19 @@ function fixtureStore(opts: {
   });
 }
 
+const FIXTURE_PRODUCT_ROUTES: ProductTenantRoutes = {
+  platformActorRoutes: {
+    cron: ["/internal/product-jobs/first", "/internal/product-jobs/second", "/internal/product-fanout"],
+    "llm-broker": ["/internal/product-events"],
+  },
+  userTargetedRoutes: ["/api/product-ingest"],
+  platformOnlyRoutes: ["/internal/product-fanout"],
+  tenantBoundApiRoutes: ["/api/product-ingest"],
+};
+
 function app(opts: {
   boundTenant?: Express.Request["boundTenant"];
+  productRoutes?: ProductTenantRoutes;
   users?: Record<string, UserDoc>;
   flows?: Record<string, FlowDoc>;
   operations?: Record<string, OperationDoc>;
@@ -82,6 +98,7 @@ function app(opts: {
     onAccess: opts.onAccess ?? (() => {}),
     db: flowDb(records.flows),
     store: fixtureStore(records),
+    productRoutes: opts.productRoutes ?? FIXTURE_PRODUCT_ROUTES,
   });
   const handler = (_req: express.Request, res: express.Response) =>
     res.status(opts.handlerStatus ?? 200).json({ ok: true });
@@ -148,15 +165,15 @@ function app(opts: {
   a.post("/internal/fleet/computer-egress", enforcement, handler);
   a.post("/internal/fleet/uid-for-slug", enforcement, handler);
   a.post("/internal/fleet/provisioned", enforcement, handler);
-  a.post("/internal/billing/check-trial-expiry", enforcement, handler);
-  a.post("/internal/billing/run-auto-top-ups", enforcement, handler);
+  a.post("/internal/product-jobs/first", enforcement, handler);
+  a.post("/internal/product-jobs/second", enforcement, handler);
   a.post("/internal/chat-artifacts/claim", enforcement, handler);
   a.post("/internal/chat-artifacts/:artifactId/lease", enforcement, handler);
-  a.post("/internal/product-analytics/events", enforcement, handler);
+  a.post("/internal/product-events", enforcement, handler);
   a.post("/internal/fleet/npm-cache-authorize", enforcement, handler);
   a.post("/internal/fleet/npm-registry-credentials", enforcement, handler);
-  a.post("/internal/notifications/social", enforcement, handler);
-  a.post("/api/notifications/ingest", enforcement, handler);
+  a.post("/internal/product-fanout", enforcement, handler);
+  a.post("/api/product-ingest", enforcement, handler);
   a.get("/internal/gitea/user-pubkey", enforcement, handler);
   return a;
 }
@@ -218,9 +235,23 @@ function configuredWalter(overrides: Record<string, unknown> = {}) {
 }
 
 describe("tenant enforcement middleware", () => {
+  it("admits no platform actor to a product path and applies no product gateway rule when no product supplies routes", async () => {
+    const bare = (boundTenant: Express.Request["boundTenant"]) => app({ boundTenant, productRoutes: NO_PRODUCT_TENANT_ROUTES });
+
+    for (const actor of ["cron", "glm-controller", "octogee-api", "llm-broker"] as const) {
+      for (const path of ["/internal/product-jobs/first", "/internal/product-events", "/internal/product-fanout"]) {
+        expect((await request(bare({ kind: "platform", actor })).post(path).send({})).status).toBe(403);
+      }
+    }
+    expect((await request(bare(WALTER)).post("/internal/product-fanout").send({ gatewayId: "walter" })).status).toBe(200);
+    expect((await request(bare(WALTER)).post("/api/product-ingest").send({ gatewayId: "walter" })).status).toBe(200);
+    expect((await request(bare({ kind: "platform", actor: "artifact-worker" })).post("/internal/chat-artifacts/claim").send({})).status).toBe(200);
+    expect((await request(bare({ kind: "platform", actor: "npm-cache-proxy" })).post("/internal/fleet/npm-cache-authorize").send({})).status).toBe(200);
+  });
+
   it.each([
-    "/internal/billing/check-trial-expiry",
-    "/internal/billing/run-auto-top-ups",
+    "/internal/product-jobs/first",
+    "/internal/product-jobs/second",
   ])("allows the cron caller on %s", async (path) => {
     const res = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
       .post(path)
@@ -334,7 +365,7 @@ const STILL_ON_SHARED = {
       .post(`/internal/chat-artifacts/${"a".repeat(64)}/lease`)
       .send({});
     const billing = await request(app({ boundTenant: worker }))
-      .post("/internal/billing/check-trial-expiry")
+      .post("/internal/product-jobs/first")
       .send({});
     const cronClaim = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
       .post("/internal/chat-artifacts/claim")
@@ -349,13 +380,13 @@ const STILL_ON_SHARED = {
   it("allows the LLM broker only on its product-event route", async () => {
     const broker = { kind: "platform", actor: "llm-broker" } as const;
     const productEvent = await request(app({ boundTenant: broker }))
-      .post("/internal/product-analytics/events")
+      .post("/internal/product-events")
       .send({ uid: "uid-alice" });
     const billing = await request(app({ boundTenant: broker }))
-      .post("/internal/billing/check-trial-expiry")
+      .post("/internal/product-jobs/first")
       .send({});
     const cronProductEvent = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
-      .post("/internal/product-analytics/events")
+      .post("/internal/product-events")
       .send({ uid: "uid-alice" });
 
     expect(productEvent.status).toBe(200);
@@ -369,7 +400,7 @@ const STILL_ON_SHARED = {
       .post("/internal/fleet/npm-cache-authorize")
       .send({ token: "opaque" });
     const productEvent = await request(app({ boundTenant: proxy }))
-      .post("/internal/product-analytics/events")
+      .post("/internal/product-events")
       .send({ uid: "uid-alice" });
     const cronAuthorize = await request(app({
       boundTenant: { kind: "platform", actor: "cron" },
@@ -384,7 +415,7 @@ const STILL_ON_SHARED = {
 
   it("does not honor a legacy X-Internal-Service-Key", async () => {
     const res = await request(app({}))
-      .post("/internal/billing/check-trial-expiry")
+      .post("/internal/product-jobs/first")
       .set("X-Internal-Service-Key", "platform-key")
       .send({});
 
@@ -598,7 +629,7 @@ const STILL_ON_SHARED = {
     it("records platform actors and unbound callers", async () => {
       const { records, onAccess } = accessCapture();
       await request(app({ boundTenant: { kind: "platform", actor: "llm-broker" }, onAccess }))
-        .post("/internal/product-analytics/events")
+        .post("/internal/product-events")
         .send({});
       await request(app({ onAccess })).post("/internal/probe").send({}).expect(403);
 
@@ -708,10 +739,10 @@ const STILL_ON_SHARED = {
 
   it("does not let a matching gatewayId bypass foreign notification recipients", async () => {
     const owned = await request(app({ boundTenant: WALTER }))
-      .post("/api/notifications/ingest")
+      .post("/api/product-ingest")
       .send({ gatewayId: "walter", targetUserIds: ["alice"] });
     const foreign = await request(app({ boundTenant: WALTER }))
-      .post("/api/notifications/ingest")
+      .post("/api/product-ingest")
       .send({ gatewayId: "walter", targetUserIds: ["victim"] });
 
     expect(owned.status).toBe(200);
@@ -720,7 +751,7 @@ const STILL_ON_SHARED = {
 
   it("never lends gateway authority to the platform-wide social fanout", async () => {
     const res = await request(app({ boundTenant: WALTER }))
-      .post("/internal/notifications/social")
+      .post("/internal/product-fanout")
       .send({
         gatewayId: "walter",
         actorUid: "alice",
@@ -733,7 +764,7 @@ const STILL_ON_SHARED = {
 
   it("keeps the platform producer authorized for the social fanout", async () => {
     const res = await request(app({ boundTenant: { kind: "platform", actor: "cron" } }))
-      .post("/internal/notifications/social")
+      .post("/internal/product-fanout")
       .send({
         actorUid: "admin",
         actorName: "Octogee",

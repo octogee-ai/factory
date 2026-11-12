@@ -324,7 +324,6 @@ export function createHttpServer(deps: HttpServerDeps): Express {
   addAdminUserDirectoryRoutes(adminRouter, {
     db: deps.db,
     store: deps.store,
-    FieldValue,
     logger: adaptLogger(deps.log),
     productUserDetail: deps.productAdminUserDetail,
   });

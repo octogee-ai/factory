@@ -2,10 +2,7 @@ import { Router, type Request } from "express";
 import { MalformedRecordError } from "@octogee/core/platform-state";
 import { requireAdmin } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
-import { db, FieldValue } from "../lib/db.js";
-import { liftSuppression } from "../lib/email-suppression.js";
-import { runEmailPreflight } from "../lib/email-preflight.js";
-import { getResend } from "../lib/resend.js";
+import { db } from "../lib/db.js";
 import { provisionGatewayAuthSecret } from "@octogee/core/secret-store";
 import {
   createCentralReleaseAuthority,
@@ -23,7 +20,6 @@ import {
   DEFAULT_FREE_TIER_MODEL_REF,
   DEFAULT_OPS_AGENT_MODEL_REF,
   parsePlatformConnectConfig,
-  parsePlatformFreeConfig,
   parsePlatformModelConfig,
   resolveFreeTierModel,
   resolveOpsAgentModel,
@@ -33,7 +29,6 @@ import {
   MalformedPlatformConnectConfigError,
   readPlatformConnectConfig,
 } from "../lib/platform-connect-config.js";
-import { readPlatformFreeConfig } from "../lib/platform-free-config.js";
 
 export function centralReleaseRouteDeps(
   targetId = process.env.DEPLOYMENT_TARGET_ID,
@@ -86,18 +81,6 @@ function resolvedFallbackDial(value: unknown): string | null {
   return validCatalogRef(value) ? value : DEFAULT_USER_AGENT_FALLBACK_MODEL_REF;
 }
 
-function postHogProjectUrl(value: string | undefined): string | null {
-  const normalized = value?.trim();
-  if (!normalized) return null;
-  try {
-    const url = new URL(normalized);
-    if (url.protocol !== "https:" || url.username || url.password) return null;
-    return url.toString();
-  } catch {
-    return null;
-  }
-}
-
 // Field-tolerant read of the stored dial doc: each invalid field defaults
 // independently so one bad ref never blanks the whole Admin panel.
 function resolvePlatformModelDials(data: PlatformModelConfig | undefined): {
@@ -138,6 +121,7 @@ export interface AdminProductHooks {
   discoverDeletionProductContext?: DeletionProductContextDiscovery;
   userDetail?: AdminUserProductDetail;
   addAdminRoutes?: ProductAdminRoutes;
+  platformConfigFields?: () => Record<string, unknown>;
 }
 
 export function createAdminRoutes(product: AdminProductHooks = {}): Router {
@@ -151,7 +135,6 @@ export function createAdminRoutes(product: AdminProductHooks = {}): Router {
   addAdminUserDirectoryRoutes(router, {
     db,
     store: platformStateStore,
-    FieldValue,
     logger,
     productUserDetail: product.userDetail,
   });
@@ -194,7 +177,7 @@ export function createAdminRoutes(product: AdminProductHooks = {}): Router {
         defaultBuilderAgentFallbackModelRef: DEFAULT_USER_AGENT_FALLBACK_MODEL_REF,
         catalog: platformCatalog,
         opsCatalog: platformCatalog.filter((entry) => entry.provider === "openrouter"),
-        posthogProjectUrl: postHogProjectUrl(process.env.POSTHOG_PROJECT_URL),
+        ...product.platformConfigFields?.(),
       });
     } catch (err) {
       if (err instanceof MalformedRecordError) {
@@ -232,34 +215,6 @@ export function createAdminRoutes(product: AdminProductHooks = {}): Router {
     } catch (err) {
       logger.error("[admin] platform-config write failed", { err });
       res.status(500).json({ error: "platform_config_write_failed" });
-    }
-  });
-
-  router.get("/platform-free-config", async (_req, res) => {
-    try {
-      res.json(await readPlatformFreeConfig());
-    } catch (err) {
-      logger.error("[admin] platform-free-config read failed", { err });
-      res.status(500).json({ error: "free_config_read_failed" });
-    }
-  });
-
-  router.put("/platform-free-config", async (req, res) => {
-    const config = parsePlatformFreeConfig(req.body);
-    if (!config) {
-      res.status(400).json({ error: "invalid_free_config" });
-      return;
-    }
-    try {
-      await platformStateStore.config.platform.put("free", config, adminUid(req), SERVER_NOW);
-      logger.info("[admin] Free defaults set", {
-        workspaceStorageGb: config.workspaceStorageGb,
-        updatedBy: req.uid,
-      });
-      res.json({ ok: true, ...config });
-    } catch (err) {
-      logger.error("[admin] platform-free-config write failed", { err });
-      res.status(500).json({ error: "free_config_write_failed" });
     }
   });
 
@@ -315,41 +270,6 @@ export function createAdminRoutes(product: AdminProductHooks = {}): Router {
     } catch (err) {
       logger.error("[admin] platform-connect-config write failed", { err });
       res.status(500).json({ error: "platform_config_write_failed" });
-    }
-  });
-
-  router.get("/email/preflight", async (_req, res) => {
-    try {
-      const result = await runEmailPreflight({
-        env: process.env,
-        sendTestEmail: async (message) => {
-          const { data, error } = await getResend().emails.send(message);
-          return { data: data ? { id: data.id } : null, error };
-        },
-      });
-      res.json(result);
-    } catch (err) {
-      logger.error("[admin] email preflight failed", { err });
-      res.status(500).json({ error: "preflight failed" });
-    }
-  });
-
-  // Operator override to lift a suppression — the support case where someone
-  // fixed their inbox after a hard bounce / mis-marked complaint. Address is
-  // :addr (Express decodes the %40); normalised lowercased by liftSuppression.
-  router.delete("/email-suppressions/:addr", async (req, res) => {
-    const addr = String(req.params.addr || "").trim();
-    if (!addr.includes("@")) {
-      res.status(400).json({ error: "address must contain @" });
-      return;
-    }
-    try {
-      await liftSuppression(addr);
-      logger.info("[admin] suppression lifted", { addr: addr.toLowerCase() });
-      res.json({ ok: true });
-    } catch (err) {
-      logger.error("[admin] suppression lift failed", { err, addr });
-      res.status(500).json({ error: "lift failed" });
     }
   });
 

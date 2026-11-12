@@ -135,19 +135,6 @@ describe("admin platform-config", () => {
     expect(res.body.opsAgentModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
   });
 
-  it("GET normalizes the configured PostHog project URL", async () => {
-    const previous = process.env.POSTHOG_PROJECT_URL;
-    process.env.POSTHOG_PROJECT_URL = "  https://us.posthog.com/project/539070  ";
-    try {
-      const res = await request(app).get("/api/admin/platform-config");
-      expect(res.status).toBe(200);
-      expect(res.body.posthogProjectUrl).toBe("https://us.posthog.com/project/539070");
-    } finally {
-      if (previous === undefined) delete process.env.POSTHOG_PROJECT_URL;
-      else process.env.POSTHOG_PROJECT_URL = previous;
-    }
-  });
-
   it("GET resolves each model dial independently when its sibling is invalid", async () => {
     platformDocs["platformConfig/models"] = {
       freeTierModelRef: "anthropic/claude-haiku-4-5",
@@ -536,42 +523,5 @@ describe("admin platform-trial-config", () => {
     expect(enterprise.body.error).toBe("invalid_trial_config");
 
     expect(setCalls).toHaveLength(0);
-  });
-});
-
-describe("admin platform-free-config", () => {
-  let app: express.Express;
-
-  beforeEach(() => {
-    app = buildApp();
-    for (const key of Object.keys(platformDocs)) delete platformDocs[key];
-    setCalls.length = 0;
-  });
-
-  it("GET returns the compiled allowance when the document is absent", async () => {
-    const res = await request(app).get("/api/admin/platform-free-config");
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ schemaVersion: 1, workspaceStorageGb: 10 });
-  });
-
-  it("PUT stores a validated workspace allowance with audit fields", async () => {
-    const res = await request(app)
-      .put("/api/admin/platform-free-config")
-      .send({ schemaVersion: 1, workspaceStorageGb: 2.5 });
-    expect(res.status).toBe(200);
-    expect(platformDocs["platformConfig/free"]).toEqual({
-      schemaVersion: 1,
-      workspaceStorageGb: 2.5,
-      updatedAt: expect.any(Number),
-      updatedBy: "admin-user",
-    });
-  });
-
-  it("PUT rejects an invalid allowance", async () => {
-    const res = await request(app)
-      .put("/api/admin/platform-free-config")
-      .send({ schemaVersion: 1, workspaceStorageGb: 0 });
-    expect(res.status).toBe(400);
-    expect(platformDocs["platformConfig/free"]).toBeUndefined();
   });
 });

@@ -4,7 +4,6 @@ import {
   accountAllowsInteractiveAccess,
   anonymousOperationalEnvironment,
   anonymousOperationalGatewayClass,
-  anonymousOperationalPlanTier,
   buildUserDeletionSchedule,
   isAnonymousOperationalModelDimension,
 } from "./account-lifecycle.js";
@@ -50,8 +49,6 @@ describe("account deletion lifecycle", () => {
   it("normalizes archive metadata through closed operational sets", () => {
     expect(anonymousOperationalEnvironment("test")).toBe("test");
     expect(anonymousOperationalEnvironment("alice@example.com")).toBe("unknown");
-    expect(anonymousOperationalPlanTier("builder")).toBe("builder");
-    expect(anonymousOperationalPlanTier("alice@example.com")).toBeNull();
     expect(anonymousOperationalGatewayClass("builder")).toBe("builder");
     expect(anonymousOperationalGatewayClass("isolated")).toBe(anonymousOperationalGatewayClass("builder"));
     expect(anonymousOperationalGatewayClass("operator")).toBeNull();

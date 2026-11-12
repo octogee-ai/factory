@@ -1,4 +1,6 @@
 import { addAdminActivationLeaseRoutes } from "@octogee/core/admin-activation-lease-routes";
+import { addAdminUserPlanRoutes } from "@octogee/core/admin-user-plan-routes";
+import { FieldValue } from "firebase-admin/firestore";
 import request from "supertest";
 import type { Express } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +33,7 @@ interface FakeStore {
   gateways: Record<string, Record<string, unknown>>;
   glmGateways: Record<string, Record<string, unknown>>;
   glmOperations: Array<{ id: string; data: Record<string, unknown> }>;
+  adminActions: Record<string, Array<Record<string, unknown>>>;
 }
 
 function emptyStore(): FakeStore {
@@ -40,6 +43,7 @@ function emptyStore(): FakeStore {
     gateways: {},
     glmGateways: {},
     glmOperations: [],
+    adminActions: {},
   };
 }
 
@@ -479,7 +483,11 @@ function buildDb(store: FakeStore) {
           },
           collection: (sub: string) => ({
             ...emptySubcollectionQuery,
-            doc: (subId: string) => ({
+            doc: (subId?: string) => ({
+              set: async (data: Record<string, unknown>) => {
+                if (name !== "users" || sub !== "admin_actions") throw new Error(`unexpected write to ${name}/${docId}/${sub}`);
+                (store.adminActions[docId] ??= []).push(data);
+              },
               get: async () => {
                 if (
                   name === "users" &&
@@ -1219,6 +1227,37 @@ describe("createHttpServer — admin gateway routes", () => {
     await request(app).get("/api/admin/logs").set("Authorization", "Bearer user-token").expect(403);
     const res = await request(app).get("/api/admin/logs").set("Authorization", "Bearer admin-token").expect(503);
     expect(res.body.error).toContain("not configured");
+  });
+
+  it("does not serve the plan change without the product", async () => {
+    const res = await request(createHttpServer(buildDeps(store)))
+      .post("/api/admin/users/u1/ops").set("Authorization", "Bearer admin-token").send({ action: "setTier", value: "pro" });
+    expect(res.status).toBe(404);
+  });
+
+  it("changes a plan through the product's plan route only for an admin, with an audit row", async () => {
+    store.users.u1 = { email: "u1@octogee.com", selectedTier: "free" };
+    const app = createHttpServer(buildDeps(store, {
+      addProductAdminRoutes: (router, deps) => addAdminUserPlanRoutes(router, deps),
+    }));
+
+    const refused = await request(app).post("/api/admin/users/u1/ops").set("Authorization", "Bearer user-token").send({ action: "setTier", value: "pro" });
+    expect(refused.status).toBe(403);
+    expect(store.users.u1).toEqual({ email: "u1@octogee.com", selectedTier: "free" });
+
+    const set = await request(app).post("/api/admin/users/u1/ops").set("Authorization", "Bearer admin-token").send({ action: "setTier", value: "pro" });
+    expect(set.status).toBe(200);
+    expect(set.body).toEqual({ success: true, action: "setTier", field: "selectedTier", before: "free", after: "pro" });
+    expect(store.users.u1).toMatchObject({ selectedTier: "pro", tier: "pro" });
+    expect(store.adminActions.u1).toEqual([{
+      at: FieldValue.serverTimestamp(),
+      adminUid: "admin-uid",
+      adminEmail: "admin@octogee.com",
+      action: "setTier",
+      field: "selectedTier",
+      before: "free",
+      after: "pro",
+    }]);
   });
 
   it("serves product admin routes only when the product supplies them", async () => {

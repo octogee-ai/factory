@@ -83,7 +83,6 @@ function makeApp(docs: Record<string, DocData>, productUserDetail?: AdminUserPro
   const deps: AdminUserDirectoryRouterDeps = {
     db: fakeDb(documents),
     store: createDocumentFixtureStore(documents),
-    FieldValue: { serverTimestamp: () => new Date("2026-06-01T00:00:00.000Z") },
     logger: { info: vi.fn(), warn: vi.fn() },
     productUserDetail,
   };
@@ -421,6 +420,26 @@ describe("admin user routes — commercial fields", () => {
     expect(res.body).toMatchObject({ totalCustomers: 1, mrrUsd: 20 });
   });
 
+  it("reports an archive's plan from the product, in the position it held", async () => {
+    const res = await request(makeApp({
+      "anonymousOperationalArchives/random-2": { schemaVersion: 1, archivedAt: 1_784_000_000_000, environment: "prod", planTier: "personal_pro", gatewayClass: "shared", totals: {}, models: [], cleanupOutcomeCodes: [] },
+    })).get("/api/admin/user-archives").expect(200);
+
+    expect(res.body.archives[0]).toMatchObject({ environment: "prod", planTier: "personal_pro", gatewayClass: "shared" });
+    expect(Object.keys(res.body.archives[0]).slice(5, 8)).toEqual(["environment", "planTier", "gatewayClass"]);
+  });
+
+  it("names no plan on an archive on a bare platform", async () => {
+    installUserEntitlements(staticUserEntitlements);
+
+    const res = await request(makeApp({
+      "anonymousOperationalArchives/random-2": { schemaVersion: 1, archivedAt: 1_784_000_000_000, environment: "prod", planTier: "personal_pro", gatewayClass: "shared", totals: {}, models: [], cleanupOutcomeCodes: [] },
+    })).get("/api/admin/user-archives").expect(200);
+
+    expect(res.body.archives[0]).toMatchObject({ environment: "prod", gatewayClass: "shared" });
+    expect(res.body.archives[0]).not.toHaveProperty("planTier");
+  });
+
   it("reports no recurring revenue in the stats on a bare platform", async () => {
     installUserEntitlements(staticUserEntitlements);
 
@@ -598,30 +617,12 @@ describe("GET /api/admin/users/:uid — broker-sourced usage", () => {
 });
 
 describe("POST /api/admin/users/:uid/ops", () => {
-  it("records an absent previous selected tier as null on the first tier change", async () => {
+  it("is not a directory route; a plan change belongs to the product", async () => {
     const app = makeApp({ "users/uid-ops": userDoc() });
 
-    const result = await request(app)
-      .post("/api/admin/users/uid-ops/ops")
-      .send({ action: "setTier", value: "pro" })
-      .expect(200);
+    const res = await request(app).post("/api/admin/users/uid-ops/ops").send({ action: "setTier", value: "pro" });
 
-    expect(result.body).toMatchObject({ success: true, before: null, after: "pro" });
-    const audit = await request(app).get("/api/admin/users/uid-ops/audit").expect(200);
-    expect(audit.body.items).toEqual([expect.objectContaining({ action: "setTier", before: null, after: "pro" })]);
-  });
-
-  it("rejects setThrottle — the in-pod throttle was retired (#1880)", async () => {
-    const app = makeApp({
-      "users/uid-ops": userDoc({}),
-    });
-
-    const res = await request(app)
-      .post("/api/admin/users/uid-ops/ops")
-      .send({ action: "setThrottle", value: false })
-      .expect(400);
-
-    expect(res.body.error).toMatch(/unknown ops action/i);
+    expect(res.status).toBe(404);
   });
 });
 

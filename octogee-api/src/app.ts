@@ -93,7 +93,11 @@ import {
   createTenantBindingMiddleware,
   createTenantBindingMetrics,
 } from "./middleware/tenant-binding.js";
-import { createTenantEnforcementMiddleware } from "./middleware/tenant-enforcement.js";
+import {
+  createTenantEnforcementMiddleware,
+  NO_PRODUCT_TENANT_ROUTES,
+  type ProductTenantRoutes,
+} from "./middleware/tenant-enforcement.js";
 import { createGatewayIdentityReviewer } from "./lib/gateway-identity-reviewer.js";
 import { createOpenAiVoiceCatalog } from "./voice/openai-catalog.js";
 import { createOpenAiLiveUpgradeHandler } from "./voice/openai-live.js";
@@ -116,12 +120,11 @@ import { normalizeTenantPolicyPath } from "./lib/tenant-route-policy.js";
 
 setLogService("api");
 
-const TENANT_BOUND_API_ROUTES = new Set([
+const TENANT_BOUND_API_ROUTES: readonly string[] = [
   "/api/model-credentials/subscription/auth-state",
   "/api/model-credentials/subscription/capture",
   "/api/model-credentials/subscription/sync-back",
-  "/api/notifications/ingest",
-]);
+];
 export const GATEWAY_CREDENTIAL_ROUTES = new Set([
   "/internal/fleet/blob/materialization/read-url",
   "/internal/fleet/blob/materialization/manifest/read-url",
@@ -161,8 +164,10 @@ export interface ProductRuntime {
   prewarmProjectCapacity?: () => Promise<void>;
   projectsDeleteRoutes?: express.Router;
   discoverDeletionProductContext?: DeletionProductContextDiscovery;
+  tenantRoutes?: ProductTenantRoutes;
   adminUserDetail?: AdminUserProductDetail;
   addAdminRoutes?: ProductAdminRoutes;
+  platformConfigFields?: () => Record<string, unknown>;
   clusterRoutes(deps: ProductRouteDeps): ClusterRouteTable;
   apiRoutes(deps: ProductRouteDeps): ClusterRouteTable;
   internalRoutes(deps: ProductRouteDeps): ClusterRouteTable;
@@ -258,15 +263,22 @@ function defaultChatArtifactRoutes() {
   };
 }
 
-export function shouldAttemptTenantBinding(path: string): boolean {
-  const normalized = normalizeTenantPolicyPath(path);
-  if (normalized === "/internal" || normalized.startsWith("/internal/")) return true;
-  return TENANT_BOUND_API_ROUTES.has(normalized);
+export interface TenantBindingScope {
+  shouldAttempt(path: string): boolean;
+  shouldEnforce(req: Request): boolean;
 }
 
-export function shouldEnforceTenantBinding(req: Request): boolean {
-  if (!shouldAttemptTenantBinding(req.path)) return false;
-  return Boolean(req.boundTenant || req.get("x-k8s-sa-token"));
+export function createTenantBindingScope(productRoutes: ProductTenantRoutes): TenantBindingScope {
+  const tenantBoundApiRoutes = new Set([...TENANT_BOUND_API_ROUTES, ...productRoutes.tenantBoundApiRoutes]);
+  const shouldAttempt = (path: string): boolean => {
+    const normalized = normalizeTenantPolicyPath(path);
+    if (normalized === "/internal" || normalized.startsWith("/internal/")) return true;
+    return tenantBoundApiRoutes.has(normalized);
+  };
+  return {
+    shouldAttempt,
+    shouldEnforce: (req) => shouldAttempt(req.path) && Boolean(req.boundTenant || req.get("x-k8s-sa-token")),
+  };
 }
 
 async function readFreshGithubToken(uid: string): Promise<string | null> {
@@ -297,6 +309,7 @@ function clusterRouteOverrides(
       discoverDeletionProductContext: product?.discoverDeletionProductContext,
       userDetail: product?.adminUserDetail,
       addAdminRoutes: product?.addAdminRoutes,
+      platformConfigFields: product?.platformConfigFields,
     }),
     isolatedGatewaysRoutes: createIsolatedGatewayRoutes({ featurePolicy }),
     projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy, prewarmProjectRunCapacity: product?.prewarmProjectCapacity }),
@@ -436,10 +449,13 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     store: platformStateStore,
     metrics: tenantBindingMetrics,
   });
+  const tenantRoutes = product?.tenantRoutes ?? NO_PRODUCT_TENANT_ROUTES;
+  const tenantBindingScope = createTenantBindingScope(tenantRoutes);
   const tenantEnforcementMiddleware = createTenantEnforcementMiddleware({
     db,
     store: platformStateStore,
-    enforceWhen: shouldEnforceTenantBinding,
+    enforceWhen: tenantBindingScope.shouldEnforce,
+    productRoutes: tenantRoutes,
     notifyUsers: opts.product?.notifications?.notifyUsers,
   });
   const gatewayCredentialReviewer = opts.gatewayCredentialReviewer ?? createGatewayIdentityReviewer({
@@ -486,14 +502,14 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     createObsidianPairingRoutes({ db, store: platformStateStore, featurePolicy }),
   );
   app.use((req, res, next) => {
-    if (!shouldAttemptTenantBinding(req.path)) {
+    if (!tenantBindingScope.shouldAttempt(req.path)) {
       next();
       return;
     }
     tenantBindingMiddleware(req, res, next);
   });
   app.use((req, res, next) => {
-    if (!shouldAttemptTenantBinding(req.path)) {
+    if (!tenantBindingScope.shouldAttempt(req.path)) {
       next();
       return;
     }

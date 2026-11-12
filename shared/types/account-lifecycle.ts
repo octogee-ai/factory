@@ -70,20 +70,12 @@ export function isAnonymousOperationalModelDimension(
 }
 
 const ANONYMOUS_OPERATIONAL_ENVIRONMENTS = ["test", "prod"] as const;
-const ANONYMOUS_OPERATIONAL_PLAN_TIERS = [
-  "personal_free",
-  "personal",
-  "personal_pro",
-  "personal_pro_max",
-  "builder",
-  "operator",
-] as const;
 const ANONYMOUS_OPERATIONAL_GATEWAY_CLASSES = [
   "shared",
   "builder",
 ] as const;
 
-function closedOperationalValue(
+export function closedOperationalValue(
   value: unknown,
   allowed: readonly string[],
 ): string | null {
@@ -92,10 +84,6 @@ function closedOperationalValue(
 
 export function anonymousOperationalEnvironment(value: unknown): string {
   return closedOperationalValue(value, ANONYMOUS_OPERATIONAL_ENVIRONMENTS) ?? "unknown";
-}
-
-export function anonymousOperationalPlanTier(value: unknown): string | null {
-  return closedOperationalValue(value, ANONYMOUS_OPERATIONAL_PLAN_TIERS);
 }
 
 export function anonymousOperationalGatewayClass(value: unknown): string | null {
