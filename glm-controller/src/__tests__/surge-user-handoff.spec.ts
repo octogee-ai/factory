@@ -2022,3 +2022,20 @@ describe("crash-looping surge target self-heal", () => {
     expect(readyButFlagged.deps.deleteCrashLoopingPod).not.toHaveBeenCalled();
   });
 });
+
+describe("surge user handoff on a lone shared pod", () => {
+  const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresUserMigration: true, isolatedGateway: false };
+
+  it("asks for a later recheck while the lone pod's health is unavailable", async () => {
+    const h = harness({ pods: [targetPod], unreachableUids: [targetPod.uid] });
+    await expect(reconcileSurgeUserHandoff(h.deps, input)).resolves.toEqual({ ready: false });
+    expect(h.deps.recheckGatewayLater).toHaveBeenCalledExactlyOnceWith("default");
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+  });
+
+  it("does not ask for a recheck once the lone ready pod serves its assigned users", async () => {
+    const h = harness({ pods: [oldPod] });
+    await reconcileSurgeUserHandoff(h.deps, input);
+    expect(h.deps.recheckGatewayLater).not.toHaveBeenCalled();
+  });
+});

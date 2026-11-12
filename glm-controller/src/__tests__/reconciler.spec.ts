@@ -6,6 +6,7 @@ import {
   runGatewayConvergencePass,
   reconcileRelevantDeliveryGatewayIds,
   reconcileRelevantRootDeliveryGatewayIds,
+  requestGatewayRecheck,
   serializeGatewayConvergence,
   startReconciler,
 } from "../index";
@@ -1763,6 +1764,34 @@ describe("startReconciler — targeted gateways ahead of a queued full reconcile
       "converge:default",
       "converge:fleet",
     ]);
+  });
+
+  it("converges a gateway once when its recheck delay passes", async () => {
+    const { callbacks, events, stop } = startRecordingReconciler();
+    await primeListeners(callbacks);
+    events.length = 0;
+
+    requestGatewayRecheck("default");
+    requestGatewayRecheck("default");
+    await vi.advanceTimersByTimeAsync(14_000);
+    const beforeDelay = events.filter((event) => event.startsWith("converge:"));
+    await vi.advanceTimersByTimeAsync(2_000);
+    stop();
+
+    expect(beforeDelay).toEqual([]);
+    expect(events.filter((event) => event.startsWith("converge:"))).toEqual(["converge:default"]);
+  });
+
+  it("drops a pending recheck when the reconciler stops", async () => {
+    const { callbacks, events, stop } = startRecordingReconciler();
+    await primeListeners(callbacks);
+    events.length = 0;
+
+    requestGatewayRecheck("default");
+    stop();
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(events).toEqual([]);
   });
 
   it("reconciles the whole fleet once from the listeners' first deliveries", async () => {

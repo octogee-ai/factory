@@ -188,6 +188,7 @@ export interface SurgeUserHandoffDeps {
   }) => Promise<void>;
   wait?: (ms: number) => Promise<void>;
   readOwnerOperation: (operationId: string) => Promise<{ status: OperationStatus; sourceRecoveryPending?: boolean } | null>;
+  recheckGatewayLater: (gatewayId: string) => void;
   log: (message: string) => void;
 }
 
@@ -1767,6 +1768,7 @@ async function observeSurgePass(
       if (pods.length !== 1 || !physicalPodsProjected({ pods, observedPodUids }) || !source?.ready || source.terminating ||
           health?.status !== "ready" || !targetMountedAssignedUsers(assignments, health.mountedCustomers)) {
         deps.log(`[surge-handoff] retaining Shared admission without a complete mounted source gateway=${input.gatewayId}`);
+        deps.recheckGatewayLater(input.gatewayId);
         return null;
       }
     }

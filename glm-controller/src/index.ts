@@ -377,6 +377,7 @@ const logger = createLogger({
 const log = operationScopedLog((msg: string) => logger.legacy(msg));
 const RECONCILE_DEBOUNCE_MS = 1_000;
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
+const GATEWAY_RECHECK_MS = 15_000;
 const DISRUPTION_OBSERVER_MS = parseNonNegativeInt(
   process.env.DISRUPTION_OBSERVER_MS,
   15_000,
@@ -429,7 +430,15 @@ const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8080", 10);
 // Lets out-of-loop callers (the roll arm's pacing, the rollout op handler)
 // nudge the reconciler without holding a reference to its closure; installed by
 // startReconciler.
-const requestReconcileTickRef: { fire?: (gatewayId?: string) => void } = {};
+const requestReconcileTickRef: {
+  fire?: (gatewayId?: string) => void;
+  recheck?: (gatewayId: string) => void;
+} = {};
+
+export function requestGatewayRecheck(gatewayId: string): void {
+  requestReconcileTickRef.recheck?.(gatewayId);
+}
+
 const PLACEMENT_POLICY_RECONCILE_MS = parseNonNegativeInt(
   process.env.PLACEMENT_POLICY_RECONCILE_MS,
   PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
@@ -1561,6 +1570,16 @@ export function startReconciler(deps: ControllerDeps & { informer: FleetInformer
   };
   requestReconcileTickRef.fire = scheduleDebouncedTick;
 
+  const recheckTimers = new Map<string, NodeJS.Timeout>();
+  const scheduleGatewayRecheck = (gatewayId: string) => {
+    if (stopped || recheckTimers.has(gatewayId)) return;
+    recheckTimers.set(gatewayId, setTimeout(() => {
+      recheckTimers.delete(gatewayId);
+      scheduleDebouncedTick(gatewayId);
+    }, GATEWAY_RECHECK_MS));
+  };
+  requestReconcileTickRef.recheck = scheduleGatewayRecheck;
+
   const scheduleChangedGateways = (gatewayIds: readonly string[], firstDelivery: boolean) => {
     if (gatewayIds.length === 0) return;
     if (firstDelivery) {
@@ -1643,6 +1662,11 @@ export function startReconciler(deps: ControllerDeps & { informer: FleetInformer
     if (requestReconcileTickRef.fire === scheduleDebouncedTick) {
       requestReconcileTickRef.fire = undefined;
     }
+    if (requestReconcileTickRef.recheck === scheduleGatewayRecheck) {
+      requestReconcileTickRef.recheck = undefined;
+    }
+    for (const timer of recheckTimers.values()) clearTimeout(timer);
+    recheckTimers.clear();
     if (debounceTimer) clearTimeout(debounceTimer);
     if (retryTimer) clearTimeout(retryTimer);
     if (refreshTimer) clearInterval(refreshTimer);
@@ -2495,6 +2519,7 @@ function buildSurgeHandoffDeps(input: {
     markSharedSurgeForwardRecovery: (assignment) => markSharedSurgeForwardRecovery({ store, log }, assignment),
     rebindSharedSurgeForwardRecovery: (assignment) => rebindSharedSurgeForwardRecovery({ store, log }, assignment),
     markAssignment: (assignment) => markAssignmentState({ store, log }, assignment),
+    recheckGatewayLater: requestGatewayRecheck,
     readOwnerOperation: async (operationId) => {
       const record = await store.journal.operations.get(operationId);
       if (record === null) return null;

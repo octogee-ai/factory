@@ -202,6 +202,7 @@ export function createSurgeHandoffHarness(spy: <T extends (...args: never[]) => 
       targetReleased = true;
     }),
     wait: input.wait,
+    recheckGatewayLater: spy(),
     readOwnerOperation: spy(async (id: string) => (
       input.ownerOperations && id in input.ownerOperations
         ? input.ownerOperations[id]
