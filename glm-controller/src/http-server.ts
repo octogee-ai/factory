@@ -23,7 +23,7 @@ import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
 } from "@octogee/shared/types/glm";
-import { addAdminUserDirectoryRoutes } from "@octogee/core/admin-user-directory-router";
+import { addAdminUserDirectoryRoutes, type AdminUserProductDetail } from "@octogee/core/admin-user-directory-router";
 import { addAdminLogsRoutes } from "@octogee/core/admin-logs-router";
 import type { LogEntriesSource } from "@octogee/core/fleet-logs";
 import {
@@ -74,6 +74,7 @@ export interface HttpServerDeps {
   addProductAdminRoutes?: ProductAdminRoutes;
   userAccounts?: UserAccounts | undefined;
   discoverDeletionProductContext?: ((uid: string) => Promise<Readonly<Record<string, unknown>>>) | undefined;
+  productAdminUserDetail?: AdminUserProductDetail | undefined;
   userSignIn?: UserSignInHosts | undefined;
   db: Firestore;
   store: PlatformStateStore;
@@ -325,6 +326,7 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     store: deps.store,
     FieldValue,
     logger: adaptLogger(deps.log),
+    productUserDetail: deps.productAdminUserDetail,
   });
   deps.addProductAdminRoutes?.(adminRouter, {
     db: deps.db,

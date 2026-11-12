@@ -30,7 +30,7 @@ function user(gatewayId: string, held: boolean) {
   return {
     uid: UID,
     data: {
-      onboardingStep: "complete",
+      admitted: true,
       username: "lin",
       provisioning: {
         status: "complete",

@@ -14,6 +14,7 @@ import { runtimeBlobStore } from "./lib/runtime-blob-store.js";
 import { mountClusterRoutes, type ClusterRouteTable } from "../../gateway-edge/src/routes/mount-cluster-routes.js";
 import { createAdminRoutes, type ProductAdminRoutes } from "../../gateway-edge/src/routes/admin.js";
 import type { DeletionProductContextDiscovery } from "@octogee/core/admin-fleet-router";
+import type { AdminUserProductDetail } from "@octogee/core/admin-user-directory-router";
 import {
   installUserEntitlements,
   staticUserEntitlements,
@@ -160,6 +161,7 @@ export interface ProductRuntime {
   prewarmProjectCapacity?: () => Promise<void>;
   projectsDeleteRoutes?: express.Router;
   discoverDeletionProductContext?: DeletionProductContextDiscovery;
+  adminUserDetail?: AdminUserProductDetail;
   addAdminRoutes?: ProductAdminRoutes;
   clusterRoutes(deps: ProductRouteDeps): ClusterRouteTable;
   apiRoutes(deps: ProductRouteDeps): ClusterRouteTable;
@@ -293,6 +295,7 @@ function clusterRouteOverrides(
     projectsDeleteRoutes: product?.projectsDeleteRoutes,
     adminRoutes: createAdminRoutes({
       discoverDeletionProductContext: product?.discoverDeletionProductContext,
+      userDetail: product?.adminUserDetail,
       addAdminRoutes: product?.addAdminRoutes,
     }),
     isolatedGatewaysRoutes: createIsolatedGatewayRoutes({ featurePolicy }),

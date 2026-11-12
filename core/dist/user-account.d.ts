@@ -9,8 +9,6 @@ export interface UserAccount {
     readonly byotActive: boolean;
     readonly usage: Readonly<Record<string, unknown>>;
     readonly mattermostUsername: string | null;
-    readonly onboardingStep: string | null;
-    readonly onboardingComplete: boolean;
 }
 export interface UserAccountReader {
     get(uid: string): Promise<UserAccount | null>;

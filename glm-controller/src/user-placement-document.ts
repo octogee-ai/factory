@@ -25,7 +25,7 @@ export function userPlacementDocument(
   return {
     ...policyInputs,
     ...defined({
-      onboardingStep: user.admitted ? "complete" : undefined,
+      admitted: user.admitted,
       accountLifecycle: user.accountLifecycle,
       username: user.slug,
       workspaceId: user.workspaceId,

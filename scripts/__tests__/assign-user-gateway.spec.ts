@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { userAccountFromData, type UserAccountReader } from "@octogee/core/user-account";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
+import { installUserEntitlements, userEntitlements, type UserEntitlementResolver } from "../../shared/types/user-entitlements.js";
 import { assignOne, commitOperatorPlacement } from "../ops/assign-user-gateway.js";
 
 function sharedRoot(gatewayId: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -42,15 +42,7 @@ function fixture(docs: Record<string, Record<string, unknown>>) {
     "glmGateways/shared-0": servingRuntime("shared-0"),
     ...docs,
   }));
-  const accounts: UserAccountReader = {
-    get: async (uid) => {
-      const data = records.get(`users/${uid}`);
-      return data === undefined ? null : userAccountFromData(uid, data);
-    },
-    getMany: async () => { throw new Error("unused"); },
-    list: async () => { throw new Error("unused"); },
-  };
-  return { deps: { store: createDocumentFixtureStore(records), accounts }, records };
+  return { deps: { store: createDocumentFixtureStore(records) }, records };
 }
 
 const placement = {
@@ -159,12 +151,27 @@ describe("assign-user-gateway placement", () => {
     await expect(commitOperatorPlacement(deps.store, placement)).resolves.toEqual({ kind: "rejected", reason: "gateway-not-serving" });
   });
 
-  it("reports a user that has not finished onboarding as not ready", async () => {
+  it("reports a user the platform has not admitted as not ready", async () => {
     const { deps } = fixture({ "users/u1": { ...user(), onboardingStep: "profile" } });
 
     await expect(assignOne(deps, "u1", { dryRun: false })).resolves.toEqual({
-      kind: "not-ready", uid: "u1", slug: "?", reason: "builder-not-eligible:onboarding-incomplete",
+      kind: "not-ready", uid: "u1", slug: "?", reason: "builder-not-eligible:not-admitted",
     });
+  });
+
+  it("decides from the platform record alone, without the account or the entitlement resolver", async () => {
+    const { deps } = fixture({ "users/u1": user() });
+    const product = userEntitlements();
+    installUserEntitlements(new Proxy({}, {
+      get: (_target, method) => {
+        throw new Error(`the operator placement read the entitlement resolver (${String(method)})`);
+      },
+    }) as UserEntitlementResolver);
+    try {
+      await expect(assignOne(deps, "u1", { dryRun: false })).resolves.toMatchObject({ kind: "assigned", gatewayId: "shared-0" });
+    } finally {
+      installUserEntitlements(product);
+    }
   });
 
   it("reports an operator-managed user as not ready", async () => {

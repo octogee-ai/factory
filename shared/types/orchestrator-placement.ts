@@ -2,10 +2,6 @@ import { userEntitlements } from "./user-entitlements.js";
 import { accountAllowsInteractiveAccess } from "./account-lifecycle.js";
 import type { IsolatedGatewayAllocation } from "./gateway-mutable-config.js";
 
-export interface OnboardingOrchestratorConfig {
-  defaultGatewayId: string;
-}
-
 export interface ContinuousPlacementOwnedGateway {
   gatewayId: string;
   gatewayClass: string;
@@ -72,25 +68,25 @@ export function resolveContinuousUserPlacement(
   };
 }
 
-export type OnboardingPlacementEligibility =
+export type DefaultPlacementEligibility =
   | { eligible: true; slug: string }
   | {
       eligible: false;
       reason:
-        | "onboarding-incomplete"
+        | "not-admitted"
         | "provisioning-not-started"
         | "builder-slug-missing"
         | "account-not-interactive"
         | "operator-managed";
     };
 
-export function resolveOnboardingPlacementEligibility(
+export function resolveDefaultPlacementEligibility(
   data: Record<string, unknown>,
-): OnboardingPlacementEligibility {
+): DefaultPlacementEligibility {
   const hold = (data.provisioning as { openclaw?: { managedBy?: unknown } } | undefined)?.openclaw;
   if (hold?.managedBy === "operator") return { eligible: false, reason: "operator-managed" };
-  if (data.onboardingStep !== "complete") {
-    return { eligible: false, reason: "onboarding-incomplete" };
+  if (data.admitted !== true) {
+    return { eligible: false, reason: "not-admitted" };
   }
   if (!accountAllowsInteractiveAccess(data)) {
     return { eligible: false, reason: "account-not-interactive" };

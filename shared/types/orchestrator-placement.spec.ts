@@ -3,59 +3,73 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { octogeeUserEntitlements } from "./octogee-entitlements.js";
 import {
   resolveContinuousUserPlacement,
-  resolveOnboardingPlacementEligibility,
+  resolveDefaultPlacementEligibility,
 } from "./orchestrator-placement.js";
 import { installUserEntitlements } from "./user-entitlements.js";
 
 beforeEach(() => installUserEntitlements(octogeeUserEntitlements));
 
-describe("onboarding placement eligibility", () => {
-  it("accepts only completed identity onboarding with a server-started provisioning state", () => {
-    expect(resolveOnboardingPlacementEligibility({
+describe("default placement eligibility", () => {
+  it("accepts only a user the platform admitted, with a server-started provisioning state", () => {
+    expect(resolveDefaultPlacementEligibility({
       username: "alice",
-      onboardingStep: "complete",
+      admitted: true,
       provisioning: { status: "in_progress", openclaw: {} },
     })).toEqual({ eligible: true, slug: "alice" });
-    expect(resolveOnboardingPlacementEligibility({
+    expect(resolveDefaultPlacementEligibility({
       username: "alice",
-      onboardingStep: "complete",
+      admitted: true,
       provisioning: { status: "complete", openclaw: { slug: "canonical" } },
     })).toEqual({ eligible: true, slug: "canonical" });
   });
 
   it("rejects a suspended account so no automatic placement can mount it", () => {
-    expect(resolveOnboardingPlacementEligibility({
+    expect(resolveDefaultPlacementEligibility({
       username: "alice",
-      onboardingStep: "complete",
+      admitted: true,
       provisioning: { status: "complete", openclaw: { slug: "alice" } },
       accountLifecycle: { status: "deletion_scheduled", deletionId: "del-1" },
     })).toEqual({ eligible: false, reason: "account-not-interactive" });
-    expect(resolveOnboardingPlacementEligibility({
+    expect(resolveDefaultPlacementEligibility({
       username: "alice",
-      onboardingStep: "complete",
+      admitted: true,
       provisioning: { status: "complete", openclaw: { slug: "alice" } },
       accountLifecycle: { status: "active" },
     })).toEqual({ eligible: true, slug: "alice" });
   });
 
   it("keeps an operator-parked user out of automatic placement until released", () => {
-    const data = { username: "alice", onboardingStep: "complete", provisioning: { status: "complete", openclaw: { slug: "alice", managedBy: "operator" } } };
-    expect(resolveOnboardingPlacementEligibility(data)).toEqual({ eligible: false, reason: "operator-managed" });
-    expect(resolveOnboardingPlacementEligibility({ ...data, provisioning: { ...data.provisioning, openclaw: { ...data.provisioning.openclaw, managedBy: "cowboy" } } })).toEqual({ eligible: true, slug: "alice" });
+    const data = { username: "alice", admitted: true, provisioning: { status: "complete", openclaw: { slug: "alice", managedBy: "operator" } } };
+    expect(resolveDefaultPlacementEligibility(data)).toEqual({ eligible: false, reason: "operator-managed" });
+    expect(resolveDefaultPlacementEligibility({ ...data, provisioning: { ...data.provisioning, openclaw: { ...data.provisioning.openclaw, managedBy: "cowboy" } } })).toEqual({ eligible: true, slug: "alice" });
   });
 
-  it("rejects incomplete identity, missing canonical identity, and arbitrary provisioning states", () => {
-    expect(resolveOnboardingPlacementEligibility({ username: "alice" })).toEqual({
-      eligible: false,
-      reason: "onboarding-incomplete",
-    });
-    expect(resolveOnboardingPlacementEligibility({
-      onboardingStep: "complete",
+  it.each([
+    ["no admitted flag", { username: "alice" }],
+    ["admitted false", { username: "alice", admitted: false }],
+    ["a truthy value that is not true", { username: "alice", admitted: "true" }],
+  ])("rejects a user with %s as not admitted", (_label, data) => {
+    expect(resolveDefaultPlacementEligibility({ ...data, provisioning: { status: "complete", openclaw: { slug: "alice" } } }))
+      .toEqual({ eligible: false, reason: "not-admitted" });
+  });
+
+  it("reads no onboarding step: a completed one admits nobody and a missing one holds nobody back", () => {
+    const provisioning = { status: "complete", openclaw: { slug: "alice" } };
+
+    expect(resolveDefaultPlacementEligibility({ username: "alice", onboardingStep: "complete", provisioning }))
+      .toEqual({ eligible: false, reason: "not-admitted" });
+    expect(resolveDefaultPlacementEligibility({ username: "alice", onboardingStep: "profile", admitted: true, provisioning }))
+      .toEqual({ eligible: true, slug: "alice" });
+  });
+
+  it("rejects a missing canonical identity and arbitrary provisioning states", () => {
+    expect(resolveDefaultPlacementEligibility({
+      admitted: true,
       provisioning: { status: "in_progress" },
     })).toEqual({ eligible: false, reason: "builder-slug-missing" });
-    expect(resolveOnboardingPlacementEligibility({
+    expect(resolveDefaultPlacementEligibility({
       username: "alice",
-      onboardingStep: "complete",
+      admitted: true,
       provisioning: { status: "queued" },
     })).toEqual({ eligible: false, reason: "provisioning-not-started" });
   });

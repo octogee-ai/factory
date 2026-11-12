@@ -1336,11 +1336,11 @@ describe("fleet gateway projection", () => {
     const fleet = await request(app).get("/gateways").expect(200);
     expect(fleet.body.gateways).toEqual([]);
 
-    const onboarding = await request(app).get("/placement").expect(200);
-    expect(onboarding.body.warnings).toEqual(
+    const placement = await request(app).get("/placement").expect(200);
+    expect(placement.body.warnings).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: "default-gateway-missing" })]),
     );
-    expect(onboarding.body.users).toEqual([
+    expect(placement.body.users).toEqual([
       expect.objectContaining({
         id: "uid-alice",
         mountedGatewayId: null,
@@ -1395,11 +1395,11 @@ describe("fleet gateway projection", () => {
       }),
     ]);
 
-    const onboarding = await request(app).get("/placement").expect(200);
-    expect(onboarding.body.warnings).not.toEqual(
+    const placement = await request(app).get("/placement").expect(200);
+    expect(placement.body.warnings).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ code: "default-gateway-missing" })]),
     );
-    expect(onboarding.body.users).toEqual([
+    expect(placement.body.users).toEqual([
       expect.objectContaining({
         id: "uid-alice",
         assignedGatewayId: "default",
@@ -1588,7 +1588,7 @@ describe("fleet gateway projection", () => {
   });
 });
 
-describe("onboarding placement (post-cohorts)", () => {
+describe("default placement", () => {
   it("labels in-flight operations with the user slug and uid", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "default" },
@@ -1677,7 +1677,7 @@ describe("onboarding placement (post-cohorts)", () => {
     );
   });
 
-  it("warns when no shared gateway anchors onboarding placement", async () => {
+  it("warns when no shared gateway anchors default placement", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: {},
       users: {},
@@ -1693,7 +1693,7 @@ describe("onboarding placement (post-cohorts)", () => {
     });
     expect(res.body.warnings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: "default-gateway-missing", severity: "error" }),
+        { code: "default-gateway-missing", severity: "error", message: "No default gateway is configured" },
       ]),
     );
     const userRecord = res.body.gateways.find(
@@ -1900,7 +1900,7 @@ describe("onboarding placement (post-cohorts)", () => {
     await request(app).delete("/placement/overrides/uid-alice").expect(404);
   });
 
-  it("does not report pointer drift for an active disposable isolated runtime outside onboarding placement", async () => {
+  it("does not report pointer drift for an active disposable isolated runtime outside default placement", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "default-blue" },
       users: {

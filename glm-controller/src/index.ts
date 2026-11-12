@@ -210,6 +210,7 @@ import {
 } from "./lib/user-ops/avatars.js";
 import { loadUserCleanupContext } from "./lib/user-ops/cleanup-context.js";
 import type { UserAccounts, UserSignInHosts } from "@octogee/core/admin-user-router";
+import type { AdminUserProductDetail } from "@octogee/core/admin-user-directory-router";
 import { createMattermostChannelHost } from "@octogee/core/channel-host";
 import { createGiteaGitHost } from "@octogee/core/git-host";
 import { firestoreUserAccountReader } from "@octogee/core/user-account";
@@ -2165,6 +2166,7 @@ interface ControllerBackgroundTasksDeps {
   addProductAdminRoutes?: ProductAdminRoutes;
   userAccounts?: UserAccounts | undefined;
   discoverDeletionProductContext?: ((uid: string) => Promise<ProductContext>) | undefined;
+  productAdminUserDetail?: AdminUserProductDetail | undefined;
   adminIdentity: IdentityProvider;
   placementAdmission: PlacementAdmissionPolicy;
   policyInputs: UserPolicyInputsSource;
@@ -2221,6 +2223,7 @@ function startControllerBackgroundTasks({
   addProductAdminRoutes,
   userAccounts,
   discoverDeletionProductContext,
+  productAdminUserDetail,
   adminIdentity,
   placementAdmission,
   policyInputs,
@@ -2338,6 +2341,7 @@ function startControllerBackgroundTasks({
     addProductAdminRoutes,
     userAccounts,
     discoverDeletionProductContext,
+    productAdminUserDetail,
     userSignIn: buildUserSignInHosts(log),
     db,
     store: deps.store,
@@ -2758,6 +2762,7 @@ export interface ControllerProduct {
   userLifecycle: ProductUserLifecycleFactory | null;
   addAdminRoutes?: ProductAdminRoutes;
   userAccounts?: (db: Firestore) => UserAccounts;
+  adminUserDetail?: (db: Firestore) => AdminUserProductDetail;
   adminIdentity?: IdentityProvider;
   placementAdmission?: PlacementAdmissionPolicy;
   userAdmission?: UserAdmissionSourceFactory;
@@ -2873,6 +2878,7 @@ export async function main(product: ControllerProduct): Promise<void> {
     controllerStartedAt,
     userAccounts: product.userAccounts?.(db),
     discoverDeletionProductContext: userLifecycle?.discover,
+    productAdminUserDetail: product.adminUserDetail?.(db),
   });
   stoppers.push(
     startSharedPoolScaler({

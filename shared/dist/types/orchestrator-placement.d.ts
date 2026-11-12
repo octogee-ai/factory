@@ -1,7 +1,4 @@
 import type { IsolatedGatewayAllocation } from "./gateway-mutable-config.js";
-export interface OnboardingOrchestratorConfig {
-    defaultGatewayId: string;
-}
 export interface ContinuousPlacementOwnedGateway {
     gatewayId: string;
     gatewayClass: string;
@@ -25,11 +22,11 @@ export interface ContinuousUserPlacement {
 }
 export declare function resolveLiveActivationTargetGatewayId(input: Pick<ContinuousUserPlacementInput, "userData" | "now">): string | null;
 export declare function resolveContinuousUserPlacement(input: ContinuousUserPlacementInput): ContinuousUserPlacement;
-export type OnboardingPlacementEligibility = {
+export type DefaultPlacementEligibility = {
     eligible: true;
     slug: string;
 } | {
     eligible: false;
-    reason: "onboarding-incomplete" | "provisioning-not-started" | "builder-slug-missing" | "account-not-interactive" | "operator-managed";
+    reason: "not-admitted" | "provisioning-not-started" | "builder-slug-missing" | "account-not-interactive" | "operator-managed";
 };
-export declare function resolveOnboardingPlacementEligibility(data: Record<string, unknown>): OnboardingPlacementEligibility;
+export declare function resolveDefaultPlacementEligibility(data: Record<string, unknown>): DefaultPlacementEligibility;

@@ -302,11 +302,14 @@ export interface UserDirectoryRouterLogger {
   warn: (msg: string, meta?: Record<string, unknown>) => void;
 }
 
+export type AdminUserProductDetail = (uid: string) => Promise<Readonly<Record<string, unknown>>>;
+
 export interface AdminUserDirectoryRouterDeps {
   db: Firestore;
   store: PlatformStateStore;
   FieldValue: { serverTimestamp: () => unknown };
   logger: UserDirectoryRouterLogger;
+  productUserDetail?: AdminUserProductDetail | undefined;
 }
 
 type ActorRequest = Request & {
@@ -737,7 +740,7 @@ router.get(
           .orderBy("date", "desc").get();
 
         const wsSnap = await userRef.collection("workspaces").get();
-        const onboardingSnap = await userRef.collection("onboarding").get();
+        const productDetail = await deps.productUserDetail?.(uid);
 
         const usage = account.usage;
 
@@ -793,6 +796,7 @@ router.get(
         }
 
         res.json({
+          ...productDetail,
           ...userEntitlements().productProjection?.adminUserDetail(account.planInputs),
           summary,
           accountLifecycle: userRecord.accountLifecycle ?? { status: "active" },
@@ -827,11 +831,6 @@ router.get(
             userId: userRecord.mattermostUserId || null,
             channelId: defaultAgentDm?.mattermostChannelId ?? null,
             username: account.mattermostUsername || null,
-          },
-          onboarding: {
-            step: account.onboardingStep ?? "unknown",
-            complete: account.onboardingComplete,
-            milestones: Object.fromEntries(onboardingSnap.docs.map((doc) => [doc.id, doc.data()])),
           },
           workspaces: wsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
           // Daily history: token/interaction telemetry from the legacy tailer

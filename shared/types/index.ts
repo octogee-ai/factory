@@ -186,9 +186,6 @@ export {
   GATEWAYS_COLLECTION,
 } from './fleet-controller.js';
 
-export type {
-  OnboardingOrchestratorConfig,
-} from './orchestrator-placement.js';
 export {
   resolveContinuousUserPlacement,
   resolveLiveActivationTargetGatewayId,

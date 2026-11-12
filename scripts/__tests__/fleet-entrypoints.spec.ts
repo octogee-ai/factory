@@ -8,7 +8,6 @@ import { userEnsureRetryReady } from "../lib/fleet-provisioner.js";
 import { reconcileFleet, _resetReconcileInFlightForTests } from "../lib/reconcile-loop.js";
 import { CONFIG_RELOAD_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
 import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
-import { userAccountFromData } from "@octogee/core/user-account";
 import { createDocumentFixtureStore, createJournalFixtureStore, fixtureDocumentsAt } from "@octogee/core/testing/journal-store";
 import {
   createAssignedUserReader,
@@ -724,10 +723,10 @@ describe("assign-user-gateway args", () => {
   async function bulkCandidate(data: Record<string, unknown>): Promise<boolean> {
     const store = createDocumentFixtureStore(new Map([["users/u1", data]]));
     const userRecord = await store.users.records.get("u1");
-    return isBulkAssignmentCandidate(userRecord!, userAccountFromData("u1", data));
+    return isBulkAssignmentCandidate(userRecord!);
   }
 
-  it("bulk-selects only identity-complete users whose provisioning has started", async () => {
+  it("bulk-selects only admitted users whose provisioning has started", async () => {
     await expect(bulkCandidate({
       username: "alice",
       onboardingStep: "complete",

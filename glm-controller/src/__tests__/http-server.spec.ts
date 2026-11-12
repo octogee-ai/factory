@@ -297,6 +297,12 @@ function makeQuery(
   };
 }
 
+const emptySubcollectionQuery = {
+  where: () => emptySubcollectionQuery,
+  orderBy: () => emptySubcollectionQuery,
+  get: async () => ({ docs: [], size: 0 }),
+};
+
 function buildDb(store: FakeStore) {
   let docSeq = 0;
   return {
@@ -472,6 +478,7 @@ function buildDb(store: FakeStore) {
             if (name === "users") delete store.users[docId];
           },
           collection: (sub: string) => ({
+            ...emptySubcollectionQuery,
             doc: (subId: string) => ({
               get: async () => {
                 if (
@@ -518,6 +525,7 @@ function buildDb(store: FakeStore) {
       },
     }),
     collectionGroup: (name: string) => makeQuery(name, store),
+    getAll: async (...refs: Array<{ get: () => Promise<unknown> }>) => Promise.all(refs.map((ref) => ref.get())),
   };
 }
 
@@ -1189,6 +1197,21 @@ describe("createHttpServer — admin gateway routes", () => {
       .set("Authorization", "Bearer admin-token");
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "User not found" });
+  });
+
+  it("adds the product's fields to the user detail only when the product supplies them", async () => {
+    store.users.u1 = { email: "u1@example.com" };
+    const productAdminUserDetail = vi.fn(async () => ({ onboarding: { step: "complete", complete: true, milestones: {} } }));
+    const detail = (deps: HttpServerDeps) =>
+      request(createHttpServer(deps)).get("/api/admin/users/u1").set("Authorization", "Bearer admin-token");
+
+    const bare = await detail(buildDeps(store));
+    const supplied = await detail(buildDeps(store, { productAdminUserDetail }));
+
+    expect(bare.status, JSON.stringify(bare.body)).toBe(200);
+    expect(bare.body).not.toHaveProperty("onboarding");
+    expect(supplied.body.onboarding).toEqual({ step: "complete", complete: true, milestones: {} });
+    expect(productAdminUserDetail).toHaveBeenCalledExactlyOnceWith("u1");
   });
 
   it("serves fleet logs only to admins", async () => {

@@ -25,8 +25,6 @@ export function userAccountFromData(uid, data) {
         byotActive: data.byotActive === true,
         usage: map(data.usage),
         mattermostUsername: typeof mattermostUsername === "string" ? mattermostUsername : null,
-        onboardingStep: nonEmptyString(data.onboardingStep),
-        onboardingComplete: data.onboardingComplete === true,
     };
 }
 function accountOf(snapshot) {

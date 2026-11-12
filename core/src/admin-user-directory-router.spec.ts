@@ -13,6 +13,7 @@ import {
   addAdminUserDirectoryRoutes,
   mergeDailyUsage,
   type AdminUserDirectoryRouterDeps,
+  type AdminUserProductDetail,
 } from "./admin-user-directory-router.js";
 import { createDocumentFixtureStore } from "./testing/journal-store.js";
 
@@ -74,7 +75,7 @@ function fakeDb(store: DocStore): Firestore {
   } as unknown as Firestore;
 }
 
-function makeApp(docs: Record<string, DocData>) {
+function makeApp(docs: Record<string, DocData>, productUserDetail?: AdminUserProductDetail) {
   const app = express();
   app.use(express.json());
 
@@ -84,6 +85,7 @@ function makeApp(docs: Record<string, DocData>) {
     store: createDocumentFixtureStore(documents),
     FieldValue: { serverTimestamp: () => new Date("2026-06-01T00:00:00.000Z") },
     logger: { info: vi.fn(), warn: vi.fn() },
+    productUserDetail,
   };
 
   const router = express.Router();
@@ -426,6 +428,52 @@ describe("admin user routes — commercial fields", () => {
 
     expect(res.body.totalCustomers).toBe(1);
     expect(res.body).not.toHaveProperty("mrrUsd");
+  });
+});
+
+describe("GET /api/admin/users/:uid — what the product adds", () => {
+  const onboarded = (): Record<string, DocData> => ({
+    "users/uid-1": userDoc({ onboardingStep: "complete", onboardingComplete: true }),
+    "users/uid-1/onboarding/first-message": { at: 1_800_000_000_000 },
+  });
+
+  it("adds the fields the product reports for that user", async () => {
+    const productUserDetail = vi.fn(async () => ({ onboarding: { step: "profile", complete: false, milestones: {} } }));
+
+    const res = await request(makeApp(onboarded(), productUserDetail)).get("/api/admin/users/uid-1").expect(200);
+
+    expect(productUserDetail).toHaveBeenCalledExactlyOnceWith("uid-1");
+    expect(res.body.onboarding).toEqual({ step: "profile", complete: false, milestones: {} });
+  });
+
+  it("reports no onboarding state on a bare platform, whatever the account document holds", async () => {
+    const res = await request(makeApp(onboarded())).get("/api/admin/users/uid-1").expect(200);
+
+    expect(res.body.summary).toMatchObject({ email: "user@example.com" });
+    expect(res.body).not.toHaveProperty("onboarding");
+  });
+
+  it("keeps the platform's own fields when the product reports one of the same name", async () => {
+    const productUserDetail = async () => ({ provisioning: "from the product", placement: "from the product" });
+
+    const res = await request(makeApp(onboarded(), productUserDetail)).get("/api/admin/users/uid-1").expect(200);
+
+    expect(res.body.provisioning).toMatchObject({ status: "complete", slug: "builder" });
+    expect(res.body.placement).not.toBe("from the product");
+  });
+
+  it("fails the request when the product cannot report", async () => {
+    const productUserDetail = async () => { throw new Error("product store unavailable"); };
+
+    await request(makeApp(onboarded(), productUserDetail)).get("/api/admin/users/uid-1").expect(500);
+  });
+
+  it("does not ask the product about a user the platform does not know", async () => {
+    const productUserDetail = vi.fn(async () => ({}));
+
+    await request(makeApp({}, productUserDetail)).get("/api/admin/users/uid-gone").expect(404);
+
+    expect(productUserDetail).not.toHaveBeenCalled();
   });
 });
 

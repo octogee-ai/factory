@@ -1,11 +1,5 @@
 import "../product/lib/octogee-entitlements.js";
-import { getFirestore } from "firebase-admin/firestore";
 import { pathToFileURL } from "node:url";
-import {
-  firestoreUserAccountReader,
-  type UserAccount,
-  type UserAccountReader,
-} from "@octogee/core/user-account";
 import { readGatewayAuthorizationInStore, readGatewayRuntimeDoc } from "@octogee/core/gateway-live-release";
 import { isolatedRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
 import {
@@ -23,8 +17,8 @@ import {
 import { accountAllowsInteractiveAccess } from "../../shared/types/account-lifecycle.js";
 import type { GatewayProfile } from "../../shared/types/glm.js";
 import {
-  resolveOnboardingPlacementEligibility,
-  type OnboardingPlacementEligibility,
+  resolveDefaultPlacementEligibility,
+  type DefaultPlacementEligibility,
 } from "../../shared/types/orchestrator-placement.js";
 import {
   hasFreshReadyKubernetesObservation,
@@ -44,7 +38,6 @@ import { initializeOperatorFirebaseAdmin } from "../lib/operator-firebase-admin.
 
 export interface AssignUserGatewayDeps {
   store: PlatformStateStore;
-  accounts: UserAccountReader;
 }
 
 type AssignResult =
@@ -174,12 +167,9 @@ export async function readGatewayProfile(
   return normalizeGatewayProfile(authorization.config.profile);
 }
 
-export function placementEligibility(
-  user: PlatformUserRecord,
-  account: UserAccount | null,
-): OnboardingPlacementEligibility {
-  return resolveOnboardingPlacementEligibility({
-    onboardingStep: account?.onboardingStep ?? undefined,
+export function placementEligibility(user: PlatformUserRecord): DefaultPlacementEligibility {
+  return resolveDefaultPlacementEligibility({
+    admitted: user.admitted,
     accountLifecycle: user.accountLifecycle ?? undefined,
     provisioning: {
       status: user.provisioning.status,
@@ -188,8 +178,8 @@ export function placementEligibility(
   });
 }
 
-export function isBulkAssignmentCandidate(user: PlatformUserRecord, account: UserAccount | null): boolean {
-  return placementEligibility(user, account).eligible && user.gateway === null;
+export function isBulkAssignmentCandidate(user: PlatformUserRecord): boolean {
+  return placementEligibility(user).eligible && user.gateway === null;
 }
 
 async function placementUserRejection(
@@ -289,14 +279,11 @@ export async function assignOne(
   uid: string,
   opts: { dryRun: boolean },
 ): Promise<AssignResult> {
-  const [user, account] = await Promise.all([
-    deps.store.users.records.get(uid),
-    deps.accounts.get(uid),
-  ]);
+  const user = await deps.store.users.records.get(uid);
   if (user === null) {
     return { kind: "not-ready", uid, slug: "?", reason: "user-not-found" };
   }
-  const eligibility = placementEligibility(user, account);
+  const eligibility = placementEligibility(user);
   if (!eligibility.eligible) {
     return { kind: "not-ready", uid, slug: "?", reason: `builder-not-eligible:${eligibility.reason}` };
   }
@@ -410,10 +397,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   }
   const opts = parsed.args;
   initializeOperatorFirebaseAdmin(opts.env === "prod" ? "octogee" : `octogee-${opts.env}`);
-  const db = getFirestore();
   const deps: AssignUserGatewayDeps = {
     store: await operatorPlatformStateStore(deploymentEnvironmentSettings(opts.env).targetId),
-    accounts: firestoreUserAccountReader(db),
   };
   const uids: string[] = [];
   if (opts.uid) {
@@ -426,14 +411,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     }
     uids.push(user.uid);
   } else if (opts.all) {
-    const [users, accounts] = await Promise.all([
-      deps.store.users.records.listAll(),
-      deps.accounts.list(),
-    ]);
-    for (const user of users) {
-      if (isBulkAssignmentCandidate(user, accounts.get(user.uid) ?? null)) {
-        uids.push(user.uid);
-      }
+    for (const user of await deps.store.users.records.listAll()) {
+      if (isBulkAssignmentCandidate(user)) uids.push(user.uid);
     }
 
     console.log(`Found ${uids.length} unassigned-complete user(s)`);

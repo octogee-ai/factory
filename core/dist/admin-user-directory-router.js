@@ -524,7 +524,7 @@ export function addAdminUserDirectoryRoutes(router, deps) {
                 .collection("usage_logs").where("date", ">=", thirtyDaysAgo.toISOString().slice(0, 10))
                 .orderBy("date", "desc").get();
             const wsSnap = await userRef.collection("workspaces").get();
-            const onboardingSnap = await userRef.collection("onboarding").get();
+            const productDetail = await deps.productUserDetail?.(uid);
             const usage = account.usage;
             const now = Date.now();
             const [brokerUsage, brokerDaily, brokerRollupSnap] = await Promise.all([
@@ -569,6 +569,7 @@ export function addAdminUserDirectoryRoutes(router, deps) {
                 modelCosts[model] = existing;
             }
             res.json({
+                ...productDetail,
                 ...userEntitlements().productProjection?.adminUserDetail(account.planInputs),
                 summary,
                 accountLifecycle: userRecord.accountLifecycle ?? { status: "active" },
@@ -603,11 +604,6 @@ export function addAdminUserDirectoryRoutes(router, deps) {
                     userId: userRecord.mattermostUserId || null,
                     channelId: defaultAgentDm?.mattermostChannelId ?? null,
                     username: account.mattermostUsername || null,
-                },
-                onboarding: {
-                    step: account.onboardingStep ?? "unknown",
-                    complete: account.onboardingComplete,
-                    milestones: Object.fromEntries(onboardingSnap.docs.map((doc) => [doc.id, doc.data()])),
                 },
                 workspaces: wsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
                 // Daily history: token/interaction telemetry from the legacy tailer

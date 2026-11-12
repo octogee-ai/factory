@@ -12,7 +12,7 @@ import {
   listGatewayBuilds,
 } from "@octogee/core/artifact-registry";
 import { addAdminFleetRoutes, type DeletionProductContextDiscovery } from "@octogee/core/admin-fleet-router";
-import { addAdminUserDirectoryRoutes } from "@octogee/core/admin-user-directory-router";
+import { addAdminUserDirectoryRoutes, type AdminUserProductDetail } from "@octogee/core/admin-user-directory-router";
 import { userDeletionDeps } from "../lib/user-deletion-deps.js";
 import { platformStateStore } from "../lib/platform-state.js";
 import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
@@ -136,6 +136,7 @@ export type ProductAdminRoutes = (router: Router, deps: { db: typeof db; store: 
 
 export interface AdminProductHooks {
   discoverDeletionProductContext?: DeletionProductContextDiscovery;
+  userDetail?: AdminUserProductDetail;
   addAdminRoutes?: ProductAdminRoutes;
 }
 
@@ -152,6 +153,7 @@ export function createAdminRoutes(product: AdminProductHooks = {}): Router {
     store: platformStateStore,
     FieldValue,
     logger,
+    productUserDetail: product.userDetail,
   });
 
   product.addAdminRoutes?.(router, { db, store: platformStateStore });

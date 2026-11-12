@@ -138,7 +138,7 @@ function sharedGatewayAutoscalingOf(config) {
         throw new InvalidSharedGatewayAutoscalingConfigError();
     return autoscaling;
 }
-async function readOnboardingRuntimeConfigInStore(transaction) {
+async function readDefaultPlacementConfigInStore(transaction) {
     const [pool, orchestrator] = await Promise.all([
         readSharedGatewayPoolConfigInStore(transaction),
         transaction.config.orchestrator.get(),
@@ -217,7 +217,7 @@ function readProvisioningStatus(data) {
     const provisioning = data.provisioning ?? {};
     return asStringOrNull(provisioning.status) ?? asStringOrNull(readUserOpenclaw(data).status);
 }
-function shapeOnboardingOperation(id, data) {
+function shapePlacementOperation(id, data) {
     return {
         id,
         kind: asStringOrNull(data.kind) ?? "unknown",
@@ -260,7 +260,7 @@ function mountedGatewayBySlug(gatewayById) {
     }
     return out;
 }
-function shouldIncludeOnboardingUser(input) {
+function shouldIncludePlacementUser(input) {
     return (accountAllowsInteractiveAccess(input.data) &&
         (asStringOrNull(input.data.username) !== null ||
             readUserGatewayId(input.data) !== null));
@@ -462,17 +462,17 @@ function indexAssignmentsByUid(assignments) {
     }
     return byUid;
 }
-function buildOnboardingPlacementResponse(opts) {
+function buildPlacementResponse(opts) {
     const glmByGatewayId = indexAdminGatewayRuntimeDocs({
         gatewayDocs: opts.gatewayDocs,
         glmDocs: opts.glmDocs,
     });
     const heartbeatByGatewayId = indexFirestoreDocs(opts.gatewayDocs);
     const assignmentsByUid = indexAssignmentsByUid(opts.assignments);
-    const operations = opts.operationDocs.map((doc) => shapeOnboardingOperation(doc.id, doc.data()));
+    const operations = opts.operationDocs.map((doc) => shapePlacementOperation(doc.id, doc.data()));
     const mountedBySlug = mountedGatewayBySlug(glmByGatewayId);
     const users = opts.userDocs
-        .filter((doc) => shouldIncludeOnboardingUser({
+        .filter((doc) => shouldIncludePlacementUser({
         data: doc.data(),
     }))
         .map((doc) => buildUserPlacementProjection({
@@ -590,7 +590,7 @@ function buildOnboardingPlacementResponse(opts) {
         warnings.push({
             code: "default-gateway-missing",
             severity: "error",
-            message: "No default onboarding gateway is configured",
+            message: "No default gateway is configured",
         });
     }
     warnings.push(...accountLifecycleWarnings(opts.userDocs, operations));
@@ -612,14 +612,14 @@ function buildOnboardingPlacementResponse(opts) {
         generatedAt: new Date().toISOString(),
     };
 }
-async function readAdminOnboardingPlacementResponse(store, accounts) {
+async function readAdminPlacementResponse(store, accounts) {
     const [config, snapshot, recent, accountsByUid] = await Promise.all([
-        store.transaction({ label: "admin.fleet.onboardingPlacementConfig", readOnly: true }, readOnboardingRuntimeConfigInStore),
+        store.transaction({ label: "admin.fleet.onboardingPlacementConfig", readOnly: true }, readDefaultPlacementConfigInStore),
         readFleetSnapshot(store),
         store.journal.listRecent({ limit: 200 }),
         accounts.list(),
     ]);
-    return buildOnboardingPlacementResponse({
+    return buildPlacementResponse({
         now: Date.now(),
         config,
         ...fleetGatewayDocs(snapshot),
@@ -3260,7 +3260,7 @@ export function addAdminFleetRoutes(router, deps) {
     });
     router.get("/placement", async (_req, res, next) => {
         try {
-            res.json(await readAdminOnboardingPlacementResponse(store, accounts));
+            res.json(await readAdminPlacementResponse(store, accounts));
         }
         catch (e) {
             next(e);
@@ -3304,7 +3304,7 @@ export function addAdminFleetRoutes(router, deps) {
                     });
                 },
             });
-            res.json(await readAdminOnboardingPlacementResponse(store, accounts));
+            res.json(await readAdminPlacementResponse(store, accounts));
         }
         catch (e) {
             next(e);

@@ -113,6 +113,10 @@
       "types": "./dist/product-deletion-context.d.ts",
       "default": "./dist/product-deletion-context.js"
     },
+    "./product-admin-user-detail": {
+      "types": "./dist/product-admin-user-detail.d.ts",
+      "default": "./dist/product-admin-user-detail.js"
+    },
     "./user-activation-lease": {
       "types": "./dist/user-activation-lease.d.ts",
       "default": "./dist/user-activation-lease.js"

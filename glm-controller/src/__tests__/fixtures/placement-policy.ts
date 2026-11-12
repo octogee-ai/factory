@@ -26,8 +26,11 @@ export function releaseArtifact(tag: string): ReleasePayload {
   };
 }
 
+const storedDocumentOfAnAdmittedUser = { onboardingStep: "complete" };
+
 export const activeTrial = {
-  onboardingStep: "complete",
+  admitted: true,
+  ...storedDocumentOfAnAdmittedUser,
   username: "alice",
   provisioning: {
     status: "complete",

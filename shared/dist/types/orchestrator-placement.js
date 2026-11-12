@@ -40,12 +40,12 @@ export function resolveContinuousUserPlacement(input) {
         ownedGatewayId,
     };
 }
-export function resolveOnboardingPlacementEligibility(data) {
+export function resolveDefaultPlacementEligibility(data) {
     const hold = data.provisioning?.openclaw;
     if (hold?.managedBy === "operator")
         return { eligible: false, reason: "operator-managed" };
-    if (data.onboardingStep !== "complete") {
-        return { eligible: false, reason: "onboarding-incomplete" };
+    if (data.admitted !== true) {
+        return { eligible: false, reason: "not-admitted" };
     }
     if (!accountAllowsInteractiveAccess(data)) {
         return { eligible: false, reason: "account-not-interactive" };

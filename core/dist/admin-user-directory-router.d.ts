@@ -47,6 +47,7 @@ export interface UserDirectoryRouterLogger {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
 }
+export type AdminUserProductDetail = (uid: string) => Promise<Readonly<Record<string, unknown>>>;
 export interface AdminUserDirectoryRouterDeps {
     db: Firestore;
     store: PlatformStateStore;
@@ -54,6 +55,7 @@ export interface AdminUserDirectoryRouterDeps {
         serverTimestamp: () => unknown;
     };
     logger: UserDirectoryRouterLogger;
+    productUserDetail?: AdminUserProductDetail | undefined;
 }
 export interface AdminUserPlacementProjection {
     managedBy: "cowboy" | "operator";

@@ -25,23 +25,24 @@ describe("userAccountFromData", () => {
       byotActive: true,
       usage: { totalTokensUsed: 5 },
       mattermost: { username: "user-mm" },
-      onboardingStep: "admitted",
-      onboardingComplete: true,
     })).toMatchObject({
       displayName: "User",
       byotActive: true,
       usage: { totalTokensUsed: 5 },
       mattermostUsername: "user-mm",
-      onboardingStep: "admitted",
-      onboardingComplete: true,
     });
     expect(userAccountFromData("u1", { mattermost: { username: 456 }, byotActive: "yes" })).toMatchObject({
       mattermostUsername: null,
       byotActive: false,
-      onboardingStep: null,
-      onboardingComplete: false,
       usage: {},
     });
+  });
+
+  it("carries no onboarding state from the account document", () => {
+    const account = userAccountFromData("u1", { onboardingStep: "complete", onboardingComplete: true });
+
+    expect(account).not.toHaveProperty("onboardingStep");
+    expect(account).not.toHaveProperty("onboardingComplete");
   });
 });
 

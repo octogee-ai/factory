@@ -294,7 +294,7 @@ vi.mock("../lib/db", () => {
             },
           };
         }
-        return {
+        const documents = {
           doc: (rid: string) => ({
             id: rid,
             get: async () => {
@@ -305,6 +305,10 @@ vi.mock("../lib/db", () => {
               gatewayReleasesDocs[key(rid)] = data;
             },
           }),
+        };
+        if (name === "users") return { ...whereChain(`users/${docId}/${subName}`), ...documents };
+        return {
+          ...documents,
           orderBy: (field: string, dir = "asc") => ({
             get: async () => {
               const docs = Object.entries(gatewayReleasesDocs)
@@ -488,7 +492,7 @@ vi.mock("../middleware/auth", () => ({
 }));
 
 import express from "express";
-import adminRouter from "../routes/admin.js";
+import adminRouter, { createAdminRoutes } from "../routes/admin.js";
 
 function buildApp() {
   const app = express();
@@ -606,7 +610,36 @@ beforeEach(() => {
   process.env.GATEWAY_SERVICE_ACCOUNT = "octogee-gateway@octogee-test.iam.gserviceaccount.com";
 });
 
-describe("Admin onboarding placement", () => {
+describe("GET /api/admin/users/:uid — what the product adds", () => {
+  const detailOf = (router: express.Router) => {
+    const app = express();
+    app.use("/api/admin", router);
+    return request(app).get("/api/admin/users/uid-alice");
+  };
+
+  beforeEach(() => {
+    usersDocs = { "uid-alice": { email: "alice@example.test" } };
+  });
+
+  it("adds the fields the product's hook reports for the user", async () => {
+    const userDetail = vi.fn(async () => ({ onboarding: { step: "complete", complete: true, milestones: {} } }));
+
+    const res = await detailOf(createAdminRoutes({ userDetail }));
+
+    expect(res.status).toBe(200);
+    expect(userDetail).toHaveBeenCalledExactlyOnceWith("uid-alice");
+    expect(res.body.onboarding).toEqual({ step: "complete", complete: true, milestones: {} });
+  });
+
+  it("reports no onboarding state without a product", async () => {
+    const res = await detailOf(createAdminRoutes());
+
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty("onboarding");
+  });
+});
+
+describe("Admin default placement", () => {
   it("projects policy target, assigned gateway, mounted gateway, and pointer drift separately", async () => {
     seedDurableGateway("gw-source", {
       imageTag: "oldsha1",

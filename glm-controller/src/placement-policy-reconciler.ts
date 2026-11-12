@@ -97,7 +97,7 @@ import {
   type GatewaySizingProfile,
 } from "@octogee/core/platform-state";
 import {
-  resolveOnboardingPlacementEligibility,
+  resolveDefaultPlacementEligibility,
   type ContinuousPlacementOwnedGateway,
   type ContinuousUserPlacement,
 } from "@octogee/shared/types/orchestrator-placement";
@@ -1200,7 +1200,7 @@ async function reconcilePlacementUser(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
 ): Promise<void> {
-  const eligibility = resolveOnboardingPlacementEligibility(user.data);
+  const eligibility = resolveDefaultPlacementEligibility(user.data);
   if (!eligibility.eligible) return;
   await reconcileEligibleUser(context, user, eligibility.slug);
 }
@@ -1223,7 +1223,7 @@ function sharedRebalanceUser(
   if (record(record(user.data.provisioning)?.openclaw)?.status !== "complete") return null;
   const lease = userActivationLease(user.data);
   if (lease && LIVE_LEASE_STATUSES.has(lease.status)) return null;
-  const eligibility = resolveOnboardingPlacementEligibility(user.data);
+  const eligibility = resolveDefaultPlacementEligibility(user.data);
   if (!eligibility.eligible || context.migrations.has(user.uid)) return null;
   const assignment = context.assignments.get(
     placementAssignmentKey(fromGatewayId, user.uid),

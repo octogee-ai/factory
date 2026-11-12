@@ -11,8 +11,6 @@ export interface UserAccount {
   readonly byotActive: boolean;
   readonly usage: Readonly<Record<string, unknown>>;
   readonly mattermostUsername: string | null;
-  readonly onboardingStep: string | null;
-  readonly onboardingComplete: boolean;
 }
 
 export interface UserAccountReader {
@@ -50,8 +48,6 @@ export function userAccountFromData(uid: string, data: Data): UserAccount {
     byotActive: data.byotActive === true,
     usage: map(data.usage),
     mattermostUsername: typeof mattermostUsername === "string" ? mattermostUsername : null,
-    onboardingStep: nonEmptyString(data.onboardingStep),
-    onboardingComplete: data.onboardingComplete === true,
   };
 }
 

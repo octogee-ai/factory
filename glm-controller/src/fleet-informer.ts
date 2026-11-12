@@ -1,4 +1,4 @@
-import { resolveOnboardingPlacementEligibility } from "@octogee/shared/types/orchestrator-placement";
+import { resolveDefaultPlacementEligibility } from "@octogee/shared/types/orchestrator-placement";
 import type {
   PlatformUserRecord,
   PlatformStateError,
@@ -152,7 +152,7 @@ export function assignedSlugsFromUserMirror(
 }
 
 function placementIsPending(user: Stored<PlatformUserRecord>): boolean {
-  return user.gateway === null && resolveOnboardingPlacementEligibility(userPlacementDocument(user, {})).eligible;
+  return user.gateway === null && resolveDefaultPlacementEligibility(userPlacementDocument(user, {})).eligible;
 }
 
 function errorMessage(error: unknown): string {

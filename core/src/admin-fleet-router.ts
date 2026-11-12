@@ -366,7 +366,7 @@ interface DurableGatewayRuntime {
   heartbeat: GlmDoc | null;
 }
 
-type AdminOnboardingDriftState =
+type AdminPlacementDriftState =
   | "healthy"
   | "pointer-drift"
   | "assigned-not-mounted"
@@ -374,7 +374,7 @@ type AdminOnboardingDriftState =
   | "missing-gateway"
   | "in-flight";
 
-type AdminOnboardingPlacementWarningCode =
+type AdminPlacementWarningCode =
   | "default-gateway-missing"
   | "default-gateway-retired"
   | "default-gateway-not-shared"
@@ -384,8 +384,8 @@ type AdminOnboardingPlacementWarningCode =
   | "migration-in-flight"
   | "account-deletion-pending";
 
-interface AdminOnboardingPlacementWarning {
-  code: AdminOnboardingPlacementWarningCode;
+interface AdminPlacementWarning {
+  code: AdminPlacementWarningCode;
   message: string;
   severity: "info" | "warning" | "error";
   gatewayId?: string;
@@ -395,7 +395,7 @@ interface AdminOnboardingPlacementWarning {
   expiresAt?: number;
 }
 
-interface AdminOnboardingLatestOperation {
+interface AdminPlacementLatestOperation {
   id: string;
   kind: string;
   status: string;
@@ -410,7 +410,7 @@ interface AdminOnboardingLatestOperation {
 
 type AdminGatewayDesiredStatus = "running" | "paused" | "draining" | "retired";
 
-interface AdminOnboardingGatewaySummary {
+interface AdminPlacementGatewaySummary {
   gatewayId: string;
   gatewayClass: AdminGatewayClass;
   desiredStatus: AdminGatewayDesiredStatus | null;
@@ -422,8 +422,8 @@ interface AdminOnboardingGatewaySummary {
   assignedCount: number;
   mountedCount: number;
   driftCount: number;
-  warnings: AdminOnboardingPlacementWarning[];
-  lastOperation: AdminOnboardingLatestOperation | null;
+  warnings: AdminPlacementWarning[];
+  lastOperation: AdminPlacementLatestOperation | null;
 }
 
 type AdminGatewayClass = "shared" | "isolated";
@@ -442,7 +442,7 @@ function withAdminGatewayClass<T extends { gatewayClass: GatewayClass }>(
   return { ...gateway, gatewayClass: adminGatewayClass(gateway.gatewayClass) };
 }
 
-interface AdminOnboardingUserProjection {
+interface AdminPlacementUserProjection {
   uid: string;
   username: string;
   email: string;
@@ -451,36 +451,36 @@ interface AdminOnboardingUserProjection {
   assignedGatewayId: string | null;
   mountedGatewayId: string | null;
   provisioningStatus: string | null;
-  driftState: AdminOnboardingDriftState;
+  driftState: AdminPlacementDriftState;
   // Durable roster truth from gateways/{gw}/assignments/{uid}. null when
   // the user has no assignment doc (legacy/un-backfilled gateway) — the
   // client falls back to derivation only in that case.
   rosterState: AssignmentState | null;
   rosterRevisionId: string | null;
   rosterEpoch: number | null;
-  warnings: AdminOnboardingPlacementWarning[];
-  latestOperation: AdminOnboardingLatestOperation | null;
+  warnings: AdminPlacementWarning[];
+  latestOperation: AdminPlacementLatestOperation | null;
 }
 
-type AdminPlacementUser = Omit<AdminOnboardingUserProjection, "uid" | "slug"> & {
+type AdminPlacementUser = Omit<AdminPlacementUserProjection, "uid" | "slug"> & {
   id: string;
   name: string | null;
 };
 
-interface AdminOnboardingPlacementResponse {
+interface AdminPlacementResponse {
   config: {
     defaultGatewayId: string | null;
     sharedGatewayIds: string[];
     sharedGatewayAutoscaling: { enabled: boolean; usersPerGateway: number };
   };
-  gateways: AdminOnboardingGatewaySummary[];
+  gateways: AdminPlacementGatewaySummary[];
   users: AdminPlacementUser[];
-  driftSummary: Record<AdminOnboardingDriftState, number>;
-  warnings: AdminOnboardingPlacementWarning[];
+  driftSummary: Record<AdminPlacementDriftState, number>;
+  warnings: AdminPlacementWarning[];
   generatedAt: string;
 }
 
-type OnboardingRuntimeConfig = SharedGatewayPoolConfig & {
+type DefaultPlacementConfig = SharedGatewayPoolConfig & {
   sharedGatewayAutoscaling: SharedGatewayAutoscalingConfig;
 };
 
@@ -492,9 +492,9 @@ function sharedGatewayAutoscalingOf(config: OrchestratorConfig | null): SharedGa
   return autoscaling;
 }
 
-async function readOnboardingRuntimeConfigInStore(
+async function readDefaultPlacementConfigInStore(
   transaction: PlatformStateTransaction,
-): Promise<OnboardingRuntimeConfig> {
+): Promise<DefaultPlacementConfig> {
   const [pool, orchestrator] = await Promise.all([
     readSharedGatewayPoolConfigInStore(transaction),
     transaction.config.orchestrator.get(),
@@ -600,10 +600,10 @@ function readProvisioningStatus(data: Record<string, unknown>): string | null {
   return asStringOrNull(provisioning.status) ?? asStringOrNull(readUserOpenclaw(data).status);
 }
 
-function shapeOnboardingOperation(
+function shapePlacementOperation(
   id: string,
   data: Record<string, unknown>,
-): AdminOnboardingLatestOperation {
+): AdminPlacementLatestOperation {
   return {
     id,
     kind: asStringOrNull(data.kind) ?? "unknown",
@@ -619,20 +619,20 @@ function shapeOnboardingOperation(
 }
 
 function latestOperation(
-  operations: ReadonlyArray<AdminOnboardingLatestOperation>,
-  predicate: (operation: AdminOnboardingLatestOperation) => boolean,
-): AdminOnboardingLatestOperation | null {
+  operations: ReadonlyArray<AdminPlacementLatestOperation>,
+  predicate: (operation: AdminPlacementLatestOperation) => boolean,
+): AdminPlacementLatestOperation | null {
   return operations
     .filter(predicate)
     .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0] ?? null;
 }
 
-function operationUid(operation: AdminOnboardingLatestOperation): string | null {
+function operationUid(operation: AdminPlacementLatestOperation): string | null {
   return asStringOrNull(operation.input.uid) ?? asStringOrNull(operation.inputUid);
 }
 
 function operationTouchesGateway(
-  operation: AdminOnboardingLatestOperation,
+  operation: AdminPlacementLatestOperation,
   gatewayId: string,
 ): boolean {
   return (
@@ -643,7 +643,7 @@ function operationTouchesGateway(
   );
 }
 
-function isInFlightOperation(operation: AdminOnboardingLatestOperation | null): boolean {
+function isInFlightOperation(operation: AdminPlacementLatestOperation | null): boolean {
   return operation?.status === "pending" || operation?.status === "running";
 }
 
@@ -661,7 +661,7 @@ function mountedGatewayBySlug(
   return out;
 }
 
-function shouldIncludeOnboardingUser(input: {
+function shouldIncludePlacementUser(input: {
   data: Record<string, unknown>;
 }): boolean {
   return (
@@ -680,10 +680,10 @@ function userPlacementWarnings(input: {
   assignedGatewayId: string | null;
   mountedGatewayId: string | null;
   policyTargetGatewayId: string | null;
-  driftState: AdminOnboardingDriftState;
-  latestOperation: AdminOnboardingLatestOperation | null;
-}): AdminOnboardingPlacementWarning[] {
-  const warnings: AdminOnboardingPlacementWarning[] = [];
+  driftState: AdminPlacementDriftState;
+  latestOperation: AdminPlacementLatestOperation | null;
+}): AdminPlacementWarning[] {
+  const warnings: AdminPlacementWarning[] = [];
   if (input.driftState === "pointer-drift") {
     warnings.push({
       code: "pointer-drift",
@@ -730,8 +730,8 @@ function userPlacementWarnings(input: {
 function accountLifecycleWarning(input: {
   uid: string;
   data: Record<string, unknown>;
-  operations: ReadonlyArray<AdminOnboardingLatestOperation>;
-}): AdminOnboardingPlacementWarning | null {
+  operations: ReadonlyArray<AdminPlacementLatestOperation>;
+}): AdminPlacementWarning | null {
   const lifecycle = isPlainRecord(input.data.accountLifecycle)
     ? input.data.accountLifecycle
     : null;
@@ -758,24 +758,24 @@ function accountLifecycleWarning(input: {
 
 function accountLifecycleWarnings(
   userDocs: ReadonlyArray<FirestoreDocLike>,
-  operations: ReadonlyArray<AdminOnboardingLatestOperation>,
-): AdminOnboardingPlacementWarning[] {
+  operations: ReadonlyArray<AdminPlacementLatestOperation>,
+): AdminPlacementWarning[] {
   return userDocs
     .map((userDoc) => accountLifecycleWarning({
       uid: userDoc.id,
       data: userDoc.data(),
       operations,
     }))
-    .filter((warning): warning is AdminOnboardingPlacementWarning => warning !== null);
+    .filter((warning): warning is AdminPlacementWarning => warning !== null);
 }
 
 function driftStateForUser(input: {
   assignedGatewayId: string | null;
   mountedGatewayId: string | null;
   policyTargetGatewayId: string | null;
-  latestOperation: AdminOnboardingLatestOperation | null;
+  latestOperation: AdminPlacementLatestOperation | null;
   glmByGatewayId: Map<string, GlmDoc>;
-}): AdminOnboardingDriftState {
+}): AdminPlacementDriftState {
   if (isInFlightOperation(input.latestOperation)) return "in-flight";
   const missing = (gatewayId: string | null): boolean =>
     Boolean(gatewayId) &&
@@ -853,10 +853,10 @@ function buildUserPlacementProjection(input: {
   data: Record<string, unknown>;
   config: SharedGatewayPoolConfig;
   mountedBySlug: Map<string, string>;
-  operations: ReadonlyArray<AdminOnboardingLatestOperation>;
+  operations: ReadonlyArray<AdminPlacementLatestOperation>;
   glmByGatewayId: Map<string, GlmDoc>;
   assignmentsByUid: Map<string, AssignmentDoc[]>;
-}): AdminOnboardingUserProjection {
+}): AdminPlacementUserProjection {
   const slug = resolveUserSlug(input.data);
   const mirroredGatewayId = readUserGatewayId(input.data);
   const assignment = projectionAssignment(
@@ -878,7 +878,7 @@ function buildUserPlacementProjection(input: {
   const mountedGatewayId = slug ? input.mountedBySlug.get(slug) ?? null : null;
   const latestOp = latestOperation(
     input.operations,
-    (operation: AdminOnboardingLatestOperation) => operationUid(operation) === input.uid,
+    (operation: AdminPlacementLatestOperation) => operationUid(operation) === input.uid,
   );
   const driftState = driftStateForUser({
     assignedGatewayId,
@@ -915,8 +915,8 @@ function buildUserPlacementProjection(input: {
 }
 
 function countBy<T extends string | null>(
-  items: ReadonlyArray<AdminOnboardingUserProjection>,
-  key: (item: AdminOnboardingUserProjection) => T,
+  items: ReadonlyArray<AdminPlacementUserProjection>,
+  key: (item: AdminPlacementUserProjection) => T,
 ): Record<Exclude<T, null>, number> {
   const out = {} as Record<Exclude<T, null>, number>;
   for (const item of items) {
@@ -939,15 +939,15 @@ function indexAssignmentsByUid(
   return byUid;
 }
 
-function buildOnboardingPlacementResponse(opts: {
+function buildPlacementResponse(opts: {
   now: number;
-  config: OnboardingRuntimeConfig;
+  config: DefaultPlacementConfig;
   glmDocs: ReadonlyArray<FirestoreDocLike>;
   gatewayDocs: ReadonlyArray<FirestoreDocLike>;
   userDocs: ReadonlyArray<FirestoreDocLike>;
   operationDocs: ReadonlyArray<FirestoreDocLike>;
   assignments: readonly AssignmentDoc[];
-}): AdminOnboardingPlacementResponse {
+}): AdminPlacementResponse {
   const glmByGatewayId = indexAdminGatewayRuntimeDocs({
     gatewayDocs: opts.gatewayDocs,
     glmDocs: opts.glmDocs,
@@ -955,12 +955,12 @@ function buildOnboardingPlacementResponse(opts: {
   const heartbeatByGatewayId = indexFirestoreDocs(opts.gatewayDocs);
   const assignmentsByUid = indexAssignmentsByUid(opts.assignments);
   const operations = opts.operationDocs.map((doc) =>
-    shapeOnboardingOperation(doc.id, doc.data()),
+    shapePlacementOperation(doc.id, doc.data()),
   );
   const mountedBySlug = mountedGatewayBySlug(glmByGatewayId);
   const users = opts.userDocs
     .filter((doc) =>
-      shouldIncludeOnboardingUser({
+      shouldIncludePlacementUser({
         data: doc.data(),
       }),
     )
@@ -999,7 +999,7 @@ function buildOnboardingPlacementResponse(opts: {
       driftCountsByGateway[gatewayId] = (driftCountsByGateway[gatewayId] ?? 0) + 1;
     }
   }
-  const driftSummary: Record<AdminOnboardingDriftState, number> = {
+  const driftSummary: Record<AdminPlacementDriftState, number> = {
     healthy: 0,
     "pointer-drift": 0,
     "assigned-not-mounted": 0,
@@ -1064,7 +1064,7 @@ function buildOnboardingPlacementResponse(opts: {
     };
   });
 
-  const warnings: AdminOnboardingPlacementWarning[] = [];
+  const warnings: AdminPlacementWarning[] = [];
   const defaultGatewayId = opts.config.defaultGatewayId || null;
   if (defaultGatewayId) {
     const glmDoc = glmByGatewayId.get(defaultGatewayId);
@@ -1094,7 +1094,7 @@ function buildOnboardingPlacementResponse(opts: {
     warnings.push({
       code: "default-gateway-missing",
       severity: "error",
-      message: "No default onboarding gateway is configured",
+      message: "No default gateway is configured",
     });
   }
   warnings.push(...accountLifecycleWarnings(opts.userDocs, operations));
@@ -1117,20 +1117,20 @@ function buildOnboardingPlacementResponse(opts: {
   };
 }
 
-async function readAdminOnboardingPlacementResponse(
+async function readAdminPlacementResponse(
   store: PlatformStateStore,
   accounts: UserAccountReader,
-): Promise<AdminOnboardingPlacementResponse> {
+): Promise<AdminPlacementResponse> {
   const [config, snapshot, recent, accountsByUid] = await Promise.all([
     store.transaction(
       { label: "admin.fleet.onboardingPlacementConfig", readOnly: true },
-      readOnboardingRuntimeConfigInStore,
+      readDefaultPlacementConfigInStore,
     ),
     readFleetSnapshot(store),
     store.journal.listRecent({ limit: 200 }),
     accounts.list(),
   ]);
-  return buildOnboardingPlacementResponse({
+  return buildPlacementResponse({
     now: Date.now(),
     config,
     ...fleetGatewayDocs(snapshot),
@@ -4738,7 +4738,7 @@ router.get(
     "/placement",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
-        res.json(await readAdminOnboardingPlacementResponse(store, accounts));
+        res.json(await readAdminPlacementResponse(store, accounts));
       } catch (e) {
         next(e);
       }
@@ -4788,7 +4788,7 @@ router.get(
             });
           },
         });
-        res.json(await readAdminOnboardingPlacementResponse(store, accounts));
+        res.json(await readAdminPlacementResponse(store, accounts));
       } catch (e) {
         next(e);
       }
