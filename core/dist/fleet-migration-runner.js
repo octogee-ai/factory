@@ -94,6 +94,17 @@ function logRestoreFailures(deps, input, failures) {
             `migrationId=${input.migrationId} slug=${input.slug}: ${failure.error}`);
     }
 }
+export function scheduleRestoreRecord(gatewayId, at, failures, custodyReleased) {
+    return {
+        restoreAttemptedTo: gatewayId,
+        restoreAttemptedAt: at,
+        restoreFailures: [...failures],
+        ...(failures.length === 0 && custodyReleased ? { restoredTo: gatewayId, restoredAt: at } : {}),
+    };
+}
+export function awaitsOnlyCustodyRelease(doc) {
+    return doc.restoredTo === undefined && doc.restoreAttemptedTo !== undefined && (doc.restoreFailures ?? []).length === 0;
+}
 export async function restoreScheduleTransfer(deps, input) {
     const { migrationId, slug, gatewayId } = input;
     const doc = input.doc ?? await deps.readScheduleTransfer(migrationId);
@@ -103,16 +114,30 @@ export async function restoreScheduleTransfer(deps, input) {
     }
     if (doc.restoredTo !== undefined)
         return [];
-    let restore;
+    const custodyReleased = input.custodyReleased !== false;
+    const now = deps.now ?? Date.now;
+    const record = async (restore) => {
+        try {
+            await deps.recordScheduleRestore(migrationId, restore);
+        }
+        catch (error) {
+            deps.log(`[migration-runner] ⚠ could not record the schedule restore on ${gatewayId} migrationId=${migrationId} slug=${slug}: ${errorText(error)}`);
+        }
+    };
+    const held = () => deps.log(`[migration-runner] schedule transfer migrationId=${migrationId} slug=${slug} stays unrestored until the scheduler custody on ${gatewayId} is released`);
+    if (awaitsOnlyCustodyRelease(doc)) {
+        if (custodyReleased)
+            await record(scheduleRestoreRecord(gatewayId, now(), [], true));
+        else
+            held();
+        return [];
+    }
     let failures;
     try {
         const result = await deps.client.schedules({ migrationId, slug, gatewayId, op: "restore", records: doc.records });
         deps.log(`[migration-runner] schedules restored on ${gatewayId} migrationId=${migrationId} slug=${slug}: ` +
             `${result.created} created, ${result.existing} existing, ${result.failed.length} failed`);
         failures = attributeRestoreFailures(doc.records, result.failed);
-        const at = (deps.now ?? Date.now)();
-        restore = { restoreAttemptedTo: gatewayId, restoreAttemptedAt: at, restoreFailures: failures.map(storedRestoreFailure),
-            ...(failures.length === 0 ? { restoredTo: gatewayId, restoredAt: at } : {}) };
     }
     catch (error) {
         deps.log(`[migration-runner] ⚠ schedule restore on ${gatewayId} failed migrationId=${migrationId} slug=${slug}: ${errorText(error)}`);
@@ -120,15 +145,11 @@ export async function restoreScheduleTransfer(deps, input) {
         failures = doc.records.length > 0
             ? doc.records.map((record) => ({ name: scheduleName(record), agentId: record.agentId, sourceJobId: record.sourceJobId, ...cause }))
             : [{ name: `schedule transfer ${migrationId}`, agentId: null, sourceJobId: null, ...cause }];
-        restore = { restoreAttemptedTo: gatewayId, restoreAttemptedAt: (deps.now ?? Date.now)(), restoreFailures: failures.map(storedRestoreFailure) };
     }
     logRestoreFailures(deps, input, failures);
-    try {
-        await deps.recordScheduleRestore(migrationId, restore);
-    }
-    catch (error) {
-        deps.log(`[migration-runner] ⚠ could not record the schedule restore on ${gatewayId} migrationId=${migrationId} slug=${slug}: ${errorText(error)}`);
-    }
+    if (failures.length === 0 && !custodyReleased)
+        held();
+    await record(scheduleRestoreRecord(gatewayId, now(), failures.map(storedRestoreFailure), custodyReleased));
     return failures;
 }
 async function convergeTargetSystemConfig(input) {

@@ -20,6 +20,7 @@ import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store"
 import type { NativeReturnPark, NativeSourcePark } from "../lib/native-vm-return";
 import { retireNativeSchedulerBeforeStage } from "../lib/native-scheduler-retirement";
 import { createCronCustodyGateways, type CronCustodyGateways, type CustodyJob } from "@octogee/core/testing/cron-custody";
+import { restoreScheduleTransfer, type ScheduleRestoreRecord } from "@octogee/core/fleet-migration-runner";
 
 const SOURCE_SYSTEM_CONFIG_COMMIT = "a".repeat(40);
 const STANDUP: ScheduleRecord = { sourceJobId: "job-standup", agentId: "octogee-alice-coach", job: { name: "standup", schedule: { kind: "cron", expr: "0 9 * * *" } } };
@@ -2504,6 +2505,51 @@ describe("a returned VM's scheduler custody at the next activation", () => {
     expect([...onVm.jobs.keys()].sort()).toEqual([check.id, watch.id].sort());
     expect(logs).toContainEqual(
       `[scheduler-custody] ⚠ alice: kept the scheduler fence of ${COACH} on ${VM} held by ${RETURN_SCHEDULER}: ${reason} op=${ACTIVATION_ID}`);
+  });
+
+  it("leaves the transfer unrestored when the activation keeps a fence but every schedule restores, and a rerun creates nothing", async () => {
+    const SITE = "octogee-alice-site", DIGEST = "Site digest";
+    const custody = createCronCustodyGateways({ alice: [COACH, SITE] });
+    const onVm = custody.store(VM);
+    const watch = onVm.add({ agentId: COACH, name: WATCH, enabled: true, schedule: { kind: "event" } });
+    onVm.migrate({ operationId: RETURN_SCHEDULER, phase: "hold", agentIds: [COACH], retainNonportable: true });
+    onVm.migrate({ operationId: RETURN_SCHEDULER, phase: "export", retainNonportable: true });
+    custody.store(SHARED).add({ agentId: SITE, name: DIGEST, enabled: true });
+    const vm = retainedVm();
+    const reason = `${RETURN_SCHEDULER} is not retired and ${RETURN_ID} has left the journal`;
+    const transfer = `mig-${ACTIVATION_ID}`;
+    const restores = () => custody.calls.filter(call => call === `schedules:${VM}:restore`).length;
+
+    const { result, logs, h } = await activateOntoVm(custody, vm);
+
+    expect(result).toMatchObject({
+      success: false, rolledBack: false, failedAfterCutover: true,
+      error: `schedules were not restored after the cutover onto ${VM}: 0 schedules not restored, 1 scheduler fence kept`,
+    });
+    expect(result.output).toEqual({ unreleasedSchedulerFences: [{ gatewayId: VM, agentId: COACH, holder: RETURN_SCHEDULER, reason }] });
+    expect(onVm.fences.get(COACH)).toBe(RETURN_SCHEDULER);
+    expect(onVm.runnable(watch.id)).toBe(false);
+    expect(onVm.agentJobs(SITE).map(job => job.name)).toEqual([DIGEST]);
+    expect(logs).toContainEqual(
+      `[scheduler-custody] ⚠ alice: kept the scheduler fence of ${COACH} on ${VM} held by ${RETURN_SCHEDULER}: ${reason} op=${ACTIVATION_ID}`);
+    expect(logs).toContainEqual(
+      `[migrate-customer] ❌ alice: schedules were not restored after the cutover onto ${VM}: 0 schedules not restored, 1 scheduler fence kept op=${ACTIVATION_ID}`);
+    expect(h.transfers.get(`uid-alice/${transfer}`)).toMatchObject({ restoreAttemptedTo: VM, restoreFailures: [] });
+    expect(h.transfers.get(`uid-alice/${transfer}`)).not.toHaveProperty("restoredTo");
+    expect(restores()).toBe(1);
+
+    const rerun = {
+      client: custody.client(h.client, gateway => `http://${gateway}.fixture:3003`),
+      log: vi.fn(),
+      now: () => ACTIVATED_AT + 1,
+      readScheduleTransfer: (migrationId: string) => h.deps.readScheduleTransfer("uid-alice", migrationId),
+      recordScheduleRestore: (migrationId: string, restore: ScheduleRestoreRecord) => h.deps.recordScheduleRestore("uid-alice", migrationId, restore),
+    };
+    expect(await restoreScheduleTransfer(rerun, { migrationId: transfer, slug: "alice", gatewayId: VM, custodyReleased: false })).toEqual([]);
+
+    expect(restores()).toBe(1);
+    expect(onVm.agentJobs(SITE)).toHaveLength(1);
+    expect(h.transfers.get(`uid-alice/${transfer}`)).not.toHaveProperty("restoredTo");
   });
 
   function liveHold(custody: CronCustodyGateways, vm: RetainedVm) {

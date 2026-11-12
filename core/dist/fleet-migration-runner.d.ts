@@ -1,7 +1,7 @@
 import { type MigrationPhase } from "./fleet-migration.js";
 import { type MigrationClient } from "./fleet-migration-client.js";
 import type { FleetBrokerProjectCheckoutScope } from "@octogee/shared/types/fleet-broker";
-import type { ScheduleTransferDoc } from "@octogee/shared/types/fleet-controller";
+import type { ScheduleRestoreFailureRecord, ScheduleTransferDoc } from "@octogee/shared/types/fleet-controller";
 import type { WorkspaceMigrationPhase } from "@octogee/shared/types/workspace-migration";
 export interface ReportedStep {
     name: string;
@@ -82,9 +82,12 @@ export interface ScheduleRestoreFailure {
     error: string;
     transient: boolean;
 }
+export declare function scheduleRestoreRecord(gatewayId: string, at: number, failures: readonly ScheduleRestoreFailureRecord[], custodyReleased: boolean): ScheduleRestoreRecord;
+export declare function awaitsOnlyCustodyRelease(doc: ScheduleTransferDoc): boolean;
 export declare function restoreScheduleTransfer(deps: ScheduleRestoreDeps, input: ScheduleTransferScope & {
     gatewayId: string;
     doc?: ScheduleTransferDoc;
+    custodyReleased?: boolean;
 }): Promise<ScheduleRestoreFailure[]>;
 type SchedulerRequest = Parameters<MigrationClient["scheduler"]>[0];
 export declare function callReleasedTargetScheduler(deps: Pick<MigrationRunnerDeps, "client" | "log" | "now" | "wait">, request: SchedulerRequest): Promise<void>;

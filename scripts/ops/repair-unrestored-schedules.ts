@@ -8,6 +8,7 @@ import type {
 } from "@octogee/shared/types/fleet-controller";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import { createMigrationClient, type MigrationClient } from "@octogee/core/fleet-migration-client";
+import { awaitsOnlyCustodyRelease, scheduleRestoreRecord } from "@octogee/core/fleet-migration-runner";
 import { runWithOperationAuditIntent } from "@octogee/core/operation-audit";
 import type { PlatformStateStore, PlatformUserRecord, UnrestoredScheduleTransfer } from "@octogee/core/platform-state";
 import { releaseSchedulerCustody, type SchedulerFenceOutcome } from "@octogee/core/scheduler-custody";
@@ -156,9 +157,8 @@ type Selection = { records: readonly ScheduleRecord[]; unattempted: boolean } | 
 
 function selectRecords(transfer: ScheduleTransferDoc, options: PlanOptions): Selection {
   const failures = transfer.restoreFailures ?? [];
-  if (transfer.records.length === 0) return { records: [], unattempted: false };
+  if (transfer.records.length === 0 || awaitsOnlyCustodyRelease(transfer)) return { records: [], unattempted: false };
   if (failures.length === 0) {
-    if (transfer.restoreAttemptedTo !== undefined) return { records: [], unattempted: false };
     if (options.restoreUnattempted === true) return { records: transfer.records, unattempted: true };
     return {
       reason: `${transfer.migrationId} was never attempted: ${snapshotAge(transfer.snapshotAt, options.now)}, ` +
@@ -416,14 +416,9 @@ async function recordRestores(
       const error = failed.get(restoreKey(record));
       return error === undefined ? [] : [{ name: scheduleName(record), agentId: record.agentId, sourceJobId: record.sourceJobId, error }];
     });
-    const restored = failures.length === 0 && custodyReleased;
-    await deps.store.users.scheduleTransfers.patch(plan.uid, transfer.migrationId, {
-      restoreAttemptedTo: plan.gatewayId,
-      restoreAttemptedAt: at,
-      restoreFailures: failures,
-      ...(restored ? { restoredTo: plan.gatewayId, restoredAt: at } : {}),
-    });
-    if (restored) deps.log(`${label(plan)}: recorded ${transfer.migrationId} as restored on ${plan.gatewayId}`);
+    const restore = scheduleRestoreRecord(plan.gatewayId, at, failures, custodyReleased);
+    await deps.store.users.scheduleTransfers.patch(plan.uid, transfer.migrationId, restore);
+    if (restore.restoredTo !== undefined) deps.log(`${label(plan)}: recorded ${transfer.migrationId} as restored on ${plan.gatewayId}`);
   }
 }
 

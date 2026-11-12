@@ -1608,7 +1608,7 @@ async function restoreSchedulesAfterCutover(
   await retireTargetNativeScheduler(deps, client, { uid, slug, gatewayId: toGatewayId, operationId: op.id, claimedStartedAt: op.startedAt });
   const unreleased = handoff.stageAfterCutover ? await releaseTargetSchedulerCustody(deps, op, ctx, client, handoff) : [];
   const unrestored = await restoreScheduleTransfer({ client, log: deps.log, now: deps.now, ...scheduleTransferDeps(deps, uid) },
-    { migrationId, slug, gatewayId: toGatewayId });
+    { migrationId, slug, gatewayId: toGatewayId, custodyReleased: unreleased.length === 0 });
   const retryable = unrestored.filter(failure => failure.transient);
   if (handoff.stageAfterCutover && retryable.length > 0) {
     throw new Error(`${retryable.length} of ${unrestored.length} unrestored schedules on ${toGatewayId} may yet be restored: ${retryable[0].error}`);

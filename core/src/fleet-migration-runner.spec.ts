@@ -867,6 +867,25 @@ describe("restoreScheduleTransfer", () => {
     expect(h.client.schedules).not.toHaveBeenCalled();
   });
 
+  it("leaves a transfer whose schedules restored unrestored while custody is held, restores nothing again, and records it once custody is released", async () => {
+    const h = harness();
+    h.transfers.set("m1", doc);
+    restoreFails(h, []);
+    const scope = { migrationId: "m1", slug: "alice", gatewayId: "gw-green" };
+
+    expect(await restoreScheduleTransfer(h.deps, { ...scope, custodyReleased: false })).toEqual([]);
+
+    expect(h.transfers.get("m1")).toMatchObject({ restoreAttemptedTo: "gw-green", restoreFailures: [] });
+    expect(h.transfers.get("m1")).not.toHaveProperty("restoredTo");
+
+    expect(await restoreScheduleTransfer(h.deps, { ...scope, custodyReleased: false })).toEqual([]);
+    expect(h.transfers.get("m1")).not.toHaveProperty("restoredTo");
+    expect(await restoreScheduleTransfer(h.deps, { ...scope, custodyReleased: true })).toEqual([]);
+
+    expect(h.client.schedules).toHaveBeenCalledTimes(1);
+    expect(h.transfers.get("m1")).toMatchObject({ restoredTo: "gw-green", restoreAttemptedTo: "gw-green", restoreFailures: [] });
+  });
+
   it("reports nothing when the snapshot was already restored", async () => {
     const h = harness();
     h.transfers.set("m1", { ...doc, restoredTo: "gw-green", restoredAt: 2, restoreFailures: [] });
