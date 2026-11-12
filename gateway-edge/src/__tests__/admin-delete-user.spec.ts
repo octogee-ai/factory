@@ -1,3 +1,4 @@
+import { AdminDryRunPlanned } from "@octogee/core/admin-dry-run";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -343,5 +344,28 @@ describe("POST /api/admin/users/:uid/delete — product deletion context", () =>
     const [job] = Object.values(deletionJobsDocs);
     expect(job).not.toHaveProperty("stripeCustomerIds");
     expect(job).not.toHaveProperty("stripeSubscriptionIds");
+  });
+});
+
+describe("product admin routes on the API's admin router", () => {
+  it("answers a product route's dry run with its plan instead of refusing it", async () => {
+    const addAdminRoutes = vi.fn((router: express.Router) => {
+      router.post("/product-setting", (_req, _res, next) => {
+        next(new AdminDryRunPlanned({
+          what: "change the product setting", why: "test", target: {}, preActionStatus: {}, mutation: { kind: "product-setting" },
+        }));
+      });
+    });
+
+    const res = await request(buildApp(createAdminRoutes({ addAdminRoutes }))).post("/api/admin/product-setting?dryRun=true");
+
+    expect(res.body).toMatchObject({ dryRun: true, plans: [{ what: "change the product setting", kind: "product-setting" }] });
+    expect(res.status).toBe(200);
+    expect(addAdminRoutes).toHaveBeenCalledWith(expect.anything(), { db: expect.anything(), store: expect.anything() });
+  });
+
+  it("has no idle setting and no lease routes when no product is installed", async () => {
+    expect((await request(buildApp()).get("/api/admin/platform-runtime-config")).status).toBe(404);
+    expect((await request(buildApp()).post("/api/admin/users/uid-alice/activation-lease")).status).toBe(404);
   });
 });

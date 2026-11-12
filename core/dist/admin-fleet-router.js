@@ -12,12 +12,12 @@ import { GATEWAY_CONFIG_SCHEMA_VERSION, InitialGatewayReleaseConflictError, gate
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import { resolveContinuousUserPlacement, resolveLiveActivationTargetGatewayId, } from "@octogee/shared/types/orchestrator-placement";
 import { SHARED_POOL_SLOT_ID_REQUIREMENT, isSharedPoolSlotId, parseSharedGatewayAutoscalingConfig, } from "@octogee/shared/types/shared-gateway-pool";
-import { InvalidSharedGatewayAutoscalingConfigError, ORCHESTRATOR_CONFIG_DOC_PATH, readSharedGatewayPoolConfigInStore, } from "./shared-gateway-pool-read.js";
+import { InvalidSharedGatewayAutoscalingConfigError, readSharedGatewayPoolConfigInStore, } from "./shared-gateway-pool-read.js";
 import { SIZING_TIERS, resolveSizingTier, } from "@octogee/shared/types/sizing";
 import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/shared/types/cost-estimator";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
-import { builderReturnOperationId, firestoreBuilderTierReader, placementRetireOperationId, requestUserActivationLease, } from "./user-activation-lease.js";
+import { builderReturnOperationId, placementRetireOperationId, } from "./user-activation-lease.js";
 import { withActorEmails } from "./admin-journal-actor.js";
 import { AdminDryRunPlanned, adminDryRunBody, admitAdminDryRunMarker, isAdminDryRun, refuseUnansweredAdminDryRun, respondToAdminDryRun, } from "./admin-dry-run.js";
 import { addAdminComputerRoutes } from "./admin-vm-router.js";
@@ -799,7 +799,7 @@ function shouldProjectDesiredOnlyGateway(glmDoc) {
     const desiredStatus = projectDesiredStatus(glmDoc);
     return desiredStatus !== null && desiredStatus !== "retired";
 }
-function isPlainRecord(v) {
+export function isPlainRecord(v) {
     return !!v && typeof v === "object" && !Array.isArray(v);
 }
 function exactRuntimeDoc(root, data) {
@@ -1255,10 +1255,10 @@ function rollupFleetStats(gateways) {
 }
 const ERR_GATEWAY_NOT_FOUND = "gateway not found";
 const ERR_GATEWAY_OPERATION_IN_FLIGHT = "another operation is already pending or running for this gateway";
-const ERR_USER_NOT_FOUND = "user not found";
+export const ERR_USER_NOT_FOUND = "user not found";
 const ERR_OPERATION_NOT_FOUND = "operation not found";
 const ERR_TARGET_GATEWAY_NOT_READY = "target gateway not ready";
-const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
+export const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
 const OP_KIND_RESTART_GATEWAY = "restart-gateway";
 function validRecoveryOperationId(value) {
     return typeof value === "string" && Boolean(value) && value.length <= 256 && !value.includes("/");
@@ -1377,13 +1377,13 @@ function releaseNumberOrNull(value) {
 function recordOrNull(value) {
     return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
-function asStringOrNull(v) {
+export function asStringOrNull(v) {
     return typeof v === "string" && v.length > 0 ? v : null;
 }
 function coerceNumberOrNull(v) {
     return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
-function toMillis(v) {
+export function toMillis(v) {
     if (v == null)
         return null;
     const t = v;
@@ -2585,7 +2585,7 @@ export async function scheduleUserSelfDeletion(opts) {
             : null,
     };
 }
-function classifyActivationLeaseTermination(result) {
+export function classifyActivationLeaseTermination(result) {
     if (result.kind === "not-found") {
         return { outcome: "failed", error: ERR_USER_NOT_FOUND };
     }
@@ -2600,7 +2600,7 @@ function classifyActivationLeaseTermination(result) {
     }
     return { outcome: "completed" };
 }
-function classifyActivationLeaseReturn(result) {
+export function classifyActivationLeaseReturn(result) {
     if (result.kind === "not-found") {
         return { outcome: "failed", error: ERR_USER_NOT_FOUND };
     }
@@ -2618,7 +2618,7 @@ function classifyActivationLeaseReturn(result) {
     }
     return { outcome: "completed" };
 }
-function classifyReasonedActivationLeaseMutation(result) {
+export function classifyReasonedActivationLeaseMutation(result) {
     if (result.kind === "not-found") {
         return { outcome: "failed", error: ERR_USER_NOT_FOUND };
     }
@@ -2637,10 +2637,10 @@ function migrationLockRef(operation) {
     };
 }
 const IN_FLIGHT_OPERATION_STATUSES = ["pending", "running"];
-function inFlightOperationsForUid(transaction, uid) {
+export function inFlightOperationsForUid(transaction, uid) {
     return transaction.journal.operations.listForUid(uid, { statuses: [...IN_FLIGHT_OPERATION_STATUSES] });
 }
-function isInFlightUserMigration(operation) {
+export function isInFlightUserMigration(operation) {
     return operation.kind === OP_KIND_MIGRATE_USER &&
         (operation.status === "pending" || operation.status === "running");
 }
@@ -2798,7 +2798,7 @@ function runtimeTerminationCanStart(lease, now) {
         now - statusAt > ISOLATED_RUNTIME_STALE_AFTER_MS;
     return lease.status === "failed" || stale;
 }
-async function requestActivationLeaseTermination(transaction, input) {
+export async function requestActivationLeaseTermination(transaction, input) {
     const userRecord = await transaction.users.records.get(input.uid);
     if (!userRecord)
         return { kind: "not-found" };
@@ -2953,7 +2953,7 @@ function matchesUserReturnRetryState(input) {
         }),
     ].every(Boolean);
 }
-async function retryActivationLeaseReturn(transaction, input) {
+export async function retryActivationLeaseReturn(transaction, input) {
     const userRecord = await transaction.users.records.get(input.uid);
     if (!userRecord)
         return { kind: "not-found" };
@@ -3040,7 +3040,7 @@ async function commitAdminPlacementInStore(store, input) {
 function userMountOf(userRecord) {
     return { currentGatewayId: userRecord?.gateway?.gatewayId ?? null, builderSlug: userRecord?.slug ?? null };
 }
-async function readPlatformRuntimeConfig(store) {
+export async function readPlatformRuntimeConfig(store) {
     const config = await store.config.orchestrator.get();
     return { disposableGatewayIdleMs: config?.disposableGatewayIdleMs ?? DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS };
 }
@@ -3067,17 +3067,8 @@ async function updateOperatorParkingGateway(transaction, input) {
         await transaction.gateways.assignments.delete(input.gatewayId, input.uid);
     return gateway;
 }
-function parkingHasUnsettledAllocation(lease, gatewayId) {
-    if (lease?.status === "requested")
-        return true;
-    return typeof lease?.targetGatewayId === "string" && lease.targetGatewayId !== gatewayId && lease.status !== "parked";
-}
-// eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
-export function addAdminFleetRoutes(router, deps) {
-    const { db, logger, store } = deps;
-    const readBuilderTier = firestoreBuilderTierReader(db);
-    const accounts = firestoreUserAccountReader(db);
-    async function runAdminFleetMutation(input) {
+export function createAdminFleetMutationRunner(store) {
+    return async function runAdminFleetMutation(input) {
         if (isAdminDryRun(input.req))
             throw new AdminDryRunPlanned(input);
         const actor = input.req;
@@ -3097,46 +3088,16 @@ export function addAdminFleetRoutes(router, deps) {
                 ? { idempotencyKey: `${headerKey}:${input.idempotencyScope ?? input.what}` }
                 : {}),
         });
-    }
+    };
+}
+// eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
+export function addAdminFleetRoutes(router, deps) {
+    const { db, logger, store } = deps;
+    const accounts = firestoreUserAccountReader(db);
+    const runAdminFleetMutation = createAdminFleetMutationRunner(store);
     router.use(admitAdminDryRunMarker);
     addAdminComputerRoutes(router, { store, replacementEnabled: deps.computerReplacementEnabled, journal: runAdminFleetMutation });
     addAdminUserRoutes(router, { store, accounts: deps.userAccounts, signIn: deps.userSignIn, journal: runAdminFleetMutation });
-    router.get("/platform-runtime-config", async (_req, res, next) => {
-        try {
-            res.json(await readPlatformRuntimeConfig(store));
-        }
-        catch (error) {
-            next(error);
-        }
-    });
-    router.patch("/platform-runtime-config", async (req, res, next) => {
-        try {
-            const body = req.body;
-            if (!isPlainRecord(body) || Object.keys(body).length !== 1 ||
-                typeof body.disposableGatewayIdleMs !== "number" ||
-                !Number.isSafeInteger(body.disposableGatewayIdleMs) || body.disposableGatewayIdleMs < 0) {
-                res.status(400).json({ error: "disposableGatewayIdleMs must be the only field and a nonnegative safe integer" });
-                return;
-            }
-            const config = { disposableGatewayIdleMs: body.disposableGatewayIdleMs };
-            const previous = await readPlatformRuntimeConfig(store);
-            await runAdminFleetMutation({
-                req,
-                what: "set platform gateway idle return duration",
-                why: ADMIN_FLEET_REQUEST_REASON,
-                target: { configPath: ORCHESTRATOR_CONFIG_DOC_PATH },
-                preActionStatus: { ...previous },
-                mutation: { ...config },
-                action: async () => {
-                    await store.config.orchestrator.patch(config);
-                },
-            });
-            res.json(config);
-        }
-        catch (error) {
-            next(error);
-        }
-    });
     async function handleActiveUserDeletion(input) {
         const lifecycle = input.lifecycle;
         if (!userDeletionIsActive(lifecycle))
@@ -3700,304 +3661,6 @@ export function addAdminFleetRoutes(router, deps) {
                 gatewayProfile,
                 ...(currentGid === targetGatewayId ? { repaired: true } : {}),
             });
-        }
-        catch (e) {
-            next(e);
-        }
-    });
-    router.post("/users/:uid/activation-lease/cancel", async (req, res, next) => {
-        try {
-            const body = isPlainRecord(req.body) ? req.body : {};
-            const allowed = new Set(["leaseId", "generation"]);
-            if (Object.keys(body).some((key) => !allowed.has(key)) ||
-                typeof body.leaseId !== "string" ||
-                !Number.isSafeInteger(body.generation) ||
-                body.generation <= 0) {
-                res.status(400).json({ error: "leaseId and generation are required" });
-                return;
-            }
-            const uid = req.params.uid;
-            const leaseId = body.leaseId;
-            const generation = body.generation;
-            const outcome = await runAdminFleetMutation({
-                req,
-                what: "cancel user activation lease",
-                why: ADMIN_FLEET_REQUEST_REASON,
-                target: { uid, leaseId, generation },
-                preActionStatus: {},
-                mutation: { kind: "cancel-activation-lease", uid, leaseId, generation },
-                classifyResult: classifyReasonedActivationLeaseMutation,
-                action: async () => store.transaction({ label: "admin.fleet.cancelActivationLease" }, async (transaction) => {
-                    const userRecord = await transaction.users.records.get(uid);
-                    if (!userRecord)
-                        return { kind: "not-found" };
-                    const lease = userRecord.activationLease;
-                    if (!lease ||
-                        lease.leaseId !== leaseId ||
-                        lease.generation !== generation) {
-                        return {
-                            kind: "conflict",
-                            reason: "lease generation changed",
-                        };
-                    }
-                    if (lease.status !== "requested" ||
-                        asStringOrNull(lease.targetGatewayId) !== null ||
-                        asStringOrNull(lease.activationOperationId) !== null) {
-                        return {
-                            kind: "conflict",
-                            reason: "activation request has already allocated a disposable runtime",
-                        };
-                    }
-                    await transaction.users.records.setActivationLease(uid, { clear: true }, { leaseId, generation });
-                    return { kind: "cancelled" };
-                }),
-            });
-            if (outcome.kind === "not-found") {
-                res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
-                return;
-            }
-            if (outcome.kind === "conflict") {
-                res.status(409).json({ error: outcome.reason });
-                return;
-            }
-            res.status(200).json({ status: "cancelled", leaseId, generation });
-        }
-        catch (e) {
-            next(e);
-        }
-    });
-    router.post("/users/:uid/activation-lease/terminate", async (req, res, next) => {
-        try {
-            const body = isPlainRecord(req.body) ? req.body : {};
-            const allowed = new Set(["leaseId", "generation"]);
-            if (Object.keys(body).some((key) => !allowed.has(key)) ||
-                typeof body.leaseId !== "string" ||
-                !Number.isSafeInteger(body.generation) ||
-                body.generation <= 0) {
-                res.status(400).json({ error: "leaseId and generation are required" });
-                return;
-            }
-            const uid = req.params.uid;
-            const actor = req;
-            const leaseId = body.leaseId;
-            const generation = body.generation;
-            const now = Date.now();
-            const sharedPoolConfig = await store.transaction({ label: "admin.fleet.terminateSharedPool", readOnly: true }, readSharedGatewayPoolConfigInStore);
-            if (sharedPoolConfig === null) {
-                res.status(409).json({ error: "shared pool has no members" });
-                return;
-            }
-            const outcome = await runAdminFleetMutation({
-                req,
-                what: "terminate user activation lease",
-                why: ADMIN_FLEET_REQUEST_REASON,
-                target: { uid, leaseId, generation },
-                preActionStatus: { defaultGatewayId: sharedPoolConfig.defaultGatewayId },
-                mutation: { kind: "terminate-activation-lease", uid, leaseId, generation },
-                classifyResult: classifyActivationLeaseTermination,
-                action: async () => store.transaction({ label: "admin.fleet.terminateActivationLease" }, (transaction) => requestActivationLeaseTermination(transaction, {
-                    uid,
-                    leaseId,
-                    generation,
-                    sharedGatewayIds: sharedPoolConfig.sharedGatewayIds,
-                    requestedAt: now,
-                    requestedBy: actor.uid ?? "unknown",
-                })),
-            });
-            if (outcome.kind === "not-found") {
-                res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
-                return;
-            }
-            if (outcome.kind === "conflict") {
-                res.status(409).json({ error: outcome.reason });
-                return;
-            }
-            res.status(outcome.kind === "adopted" ? 200 : 202).json({
-                status: "termination-requested",
-                leaseId,
-                generation,
-                ...(outcome.kind === "adopted" ? { adopted: true } : {}),
-            });
-        }
-        catch (e) {
-            next(e);
-        }
-    });
-    router.post("/users/:uid/activation-lease/return", async (req, res, next) => {
-        try {
-            const body = isPlainRecord(req.body) ? req.body : {};
-            const allowed = new Set(["leaseId", "generation"]);
-            if (Object.keys(body).some((key) => !allowed.has(key)) ||
-                typeof body.leaseId !== "string" ||
-                !Number.isSafeInteger(body.generation) ||
-                body.generation <= 0) {
-                res.status(400).json({ error: "leaseId and generation are required" });
-                return;
-            }
-            const uid = req.params.uid;
-            const actor = req;
-            const requestedAt = Date.now();
-            const outcome = await runAdminFleetMutation({
-                req,
-                what: "return user activation lease",
-                why: ADMIN_FLEET_REQUEST_REASON,
-                target: { uid, leaseId: body.leaseId, generation: body.generation },
-                preActionStatus: {},
-                mutation: {
-                    kind: "return-activation-lease",
-                    uid,
-                    leaseId: body.leaseId,
-                    generation: body.generation,
-                },
-                classifyResult: classifyActivationLeaseReturn,
-                action: async () => store.transaction({ label: "admin.fleet.returnActivationLease" }, async (transaction) => {
-                    const userRecord = await transaction.users.records.get(uid);
-                    if (!userRecord)
-                        return { kind: "not-found" };
-                    const lease = userRecord.activationLease;
-                    if (!lease ||
-                        lease.leaseId !== body.leaseId ||
-                        lease.generation !== body.generation ||
-                        lease.status !== "active") {
-                        return {
-                            kind: "conflict",
-                            status: asStringOrNull(lease?.status),
-                        };
-                    }
-                    if (toMillis(lease.returnRequestedAt) !== null) {
-                        return { kind: "adopted" };
-                    }
-                    await transaction.users.records.patchActivationLease(uid, {
-                        returnRequestedAt: requestedAt,
-                        returnRequestedBy: actor.uid ?? "unknown",
-                    }, { leaseId: lease.leaseId, generation: lease.generation });
-                    return { kind: "requested" };
-                }),
-            });
-            if (outcome.kind === "not-found") {
-                res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
-                return;
-            }
-            if (outcome.kind === "conflict") {
-                res.status(409).json({
-                    error: "activation lease is not the requested active generation",
-                    status: outcome.status,
-                });
-                return;
-            }
-            res.status(outcome.kind === "adopted" ? 200 : 202).json({
-                status: "return-requested",
-                leaseId: body.leaseId,
-                generation: body.generation,
-                ...(outcome.kind === "adopted" ? { adopted: true } : {}),
-            });
-        }
-        catch (e) {
-            next(e);
-        }
-    });
-    router.post("/users/:uid/activation-lease/return/retry", async (req, res, next) => {
-        try {
-            const body = isPlainRecord(req.body) ? req.body : {};
-            if (Object.keys(body).length !== 1 ||
-                typeof body.operationId !== "string" ||
-                body.operationId.length === 0) {
-                res.status(400).json({ error: "operationId is required" });
-                return;
-            }
-            const operationId = body.operationId;
-            const uid = req.params.uid;
-            const inFlight = await findInFlightMigrateOp(uid);
-            if (inFlight) {
-                res.status(409).json({
-                    error: "a migration for this user is already pending or running",
-                    operationId: inFlight.id,
-                    uid,
-                });
-                return;
-            }
-            const outcome = await runAdminFleetMutation({
-                req,
-                what: "retry user activation lease return",
-                why: ADMIN_FLEET_REQUEST_REASON,
-                target: { uid, operationId },
-                preActionStatus: {},
-                mutation: {
-                    kind: "retry-return-activation-lease",
-                    uid,
-                    operationId,
-                },
-                classifyResult: classifyReasonedActivationLeaseMutation,
-                action: async () => {
-                    const input = { uid, operationId, requestedAt: Date.now(), requestedBy: req.uid ?? "unknown" };
-                    const ordinary = await store.transaction({ label: "admin.fleet.retryActivationLeaseReturn" }, (transaction) => retryActivationLeaseReturn(transaction, input));
-                    if (ordinary.kind === "conflict" && await deps.requestNativeReturnSourceRecovery?.(input))
-                        return { kind: "retried" };
-                    return ordinary;
-                },
-            });
-            if (outcome.kind === "not-found") {
-                res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
-                return;
-            }
-            if (outcome.kind === "conflict") {
-                res.status(409).json({ error: outcome.reason });
-                return;
-            }
-            res.status(202).json({ status: "return-retried", operationId });
-        }
-        catch (e) {
-            next(e);
-        }
-    });
-    router.post("/users/:uid/activation-lease", async (req, res, next) => {
-        try {
-            const uid = req.params.uid;
-            const actor = req;
-            const createdBy = actor.uid ?? "unknown";
-            const now = Date.now();
-            const userRecord = await store.users.records.get(uid);
-            if (!userRecord) {
-                res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
-                return;
-            }
-            const reportingGatewayId = userRecord.gateway?.gatewayId ?? null;
-            const assignment = reportingGatewayId
-                ? await store.gateways.assignments.get(reportingGatewayId, uid)
-                : null;
-            const assignmentEpoch = assignment?.epoch;
-            const result = await runAdminFleetMutation({
-                req,
-                what: "request user activation lease",
-                why: ADMIN_FLEET_REQUEST_REASON,
-                target: { uid },
-                preActionStatus: {
-                    gatewayId: reportingGatewayId ?? null,
-                    assignmentEpoch: assignmentEpoch ?? null,
-                },
-                mutation: { kind: "request-activation-lease", uid },
-                classifyResult: (result) => result.statusCode >= 400
-                    ? {
-                        outcome: "failed",
-                        error: typeof result.body.error === "string"
-                            ? result.body.error
-                            : `activation lease request returned ${result.statusCode}`,
-                    }
-                    : { outcome: "completed" },
-                action: async () => requestUserActivationLease({
-                    store,
-                    readBuilderTier,
-                    uid,
-                    reportingGatewayId: reportingGatewayId ?? undefined,
-                    assignmentEpoch,
-                    eventKey: `manual:${createdBy}:${now}`,
-                    cause: "manual",
-                    observedAt: now,
-                    createdBy,
-                    now,
-                }),
-            });
-            res.status(result.statusCode).json(result.body);
         }
         catch (e) {
             next(e);
@@ -4651,9 +4314,6 @@ export function addAdminFleetRoutes(router, deps) {
                     if (inFlight)
                         return { status: 409, body: { error: "user migration is pending or running — cannot change placement", operationId: inFlight.id, uid } };
                     const gatewayId = userRecord.gateway?.gatewayId ?? null;
-                    if (park && parkingHasUnsettledAllocation(userRecord.activationLease, gatewayId)) {
-                        return { status: 409, body: { error: "allocated activation target must settle before parking", uid } };
-                    }
                     const gateway = await updateOperatorParkingGateway(transaction, { gatewayId, uid, actor: req.uid, park });
                     if (gateway.error)
                         return { status: 409, body: { error: gateway.error, uid } };

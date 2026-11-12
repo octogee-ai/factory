@@ -564,3 +564,16 @@ describe("releasing the operator hold", () => {
     expect(managedBy(h)).toBe("cowboy");
   });
 });
+
+describe("holding a user for the operator", () => {
+  it("does not read the user's lease: a user whose lease is requested is held all the same", async () => {
+    const h = harness(fleet(user(SHARED, { activationLease: { leaseId: "lease-1", generation: 2, status: "requested" } })));
+
+    const res = await request(h.app).patch(`/users/${UID}/placement`).send({ managedBy: "operator", gatewayId: null }).expect(200);
+
+    expect(res.body).toMatchObject({ uid: UID, parked: true, managedBy: "operator" });
+    const openclaw = (h.records.get(`users/${UID}`)!.provisioning as { openclaw: Row }).openclaw;
+    expect(openclaw).toMatchObject({ managedBy: "operator", activationLease: { leaseId: "lease-1", status: "requested" } });
+    expect(h.records.get(`gateways/${SHARED}/assignments/${UID}`)).toBeUndefined();
+  });
+});

@@ -1,186 +1,24 @@
-import express, { Router } from "express";
-import type { Firestore } from "firebase-admin/firestore";
 import request from "supertest";
+import type { Router } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
 import {
-  GATEWAY_RELEASES_SUBCOLLECTION,
-  releasePayloadHash,
-  type ReleasePayload,
-} from "@octogee/shared/types/gateway-releases";
-import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
-
-import { addAdminFleetRoutes } from "./admin-fleet-router.js";
-import type { CentralReleaseAuthority, ReleaseDigestManifest } from "./artifact-registry.js";
-import { createDocumentFixtureStore, FIXTURE_SIZING_PROFILES } from "./testing/journal-store.js";
-
-type Seed = Record<string, Record<string, unknown>>;
-
-const SOURCE_SHA = "a".repeat(40);
-const MANIFEST: ReleaseDigestManifest = {
-  sourceSha: SOURCE_SHA,
-  manifestDigest: `sha256:${"b".repeat(64)}`,
-  openclawVersion: "2026.8.1",
-  openclawSourceSha: "f".repeat(40),
-  repository: "registry.example/platform",
-  surfaces: {
-    gateway: {
-      "octogee-gateway": `sha256:${"c".repeat(64)}`,
-      "octogee-gateway-builder": `sha256:${"d".repeat(64)}`,
-      "gateway-edge": `sha256:${"e".repeat(64)}`,
-    },
-    platform: {},
-  },
-};
-const PAYLOAD: ReleasePayload = { imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway", imageTag: "abc1234" };
-
-function gatewayRoot(gatewayId: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    gatewayId,
-    createdAt: 1,
-    createdBy: "operator",
-    updatedAt: 1,
-    updatedBy: "operator",
-    latestRelease: 1,
-    desiredRelease: 1,
-    liveRelease: null,
-    desiredStatus: "running",
-    configSchemaVersion: 1,
-    profile: "standard",
-    gatewayClass: "shared",
-    imageProfile: "standard",
-    sizingTier: null,
-    gcpProject: null,
-    gatewayContainerSecurityContext: null,
-    serviceAccountName: null,
-    serviceAccount: null,
-    builderAccess: null,
-    ownerUid: null,
-    builderSlug: null,
-    modelBrokerLimits: null,
-    preemption: null,
-    coOwnerUids: [],
-    ...overrides,
-  };
-}
-
-function release(gatewayId: string, number: number, payload: ReleasePayload = PAYLOAD): Seed {
-  return {
-    [`gateways/${gatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/${number}`]: {
-      gatewayId,
-      release: number,
-      createdAt: 1,
-      createdBy: "operator",
-      sourceRelease: null,
-      note: null,
-      payloadHash: releasePayloadHash(payload),
-      payload,
-    },
-  };
-}
-
-function servingSharedGateway(gatewayId: string): Seed {
-  const observedAt = Date.now();
-  return {
-    [`gateways/${gatewayId}`]: gatewayRoot(gatewayId, { liveRelease: 1 }),
-    ...release(gatewayId, 1),
-    [`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`]: {
-      docKind: "runtime",
-      gatewayId,
-      release: 1,
-      lifecycle: "serving",
-      createdAt: 1,
-      createdByOperationId: null,
-      helm: {},
-      heartbeat: {
-        status: "ready",
-        lastHeartbeatAt: observedAt,
-        version: "abc1234",
-        startedAt: observedAt - 1_000,
-        mountedCustomers: [],
-      },
-      lastError: { message: null, at: null },
-    },
-  };
-}
-
-function isolatedGateway(gatewayId: string, ownerUid: string, slug: string): Seed {
-  return {
-    [`gateways/${gatewayId}`]: gatewayRoot(gatewayId, {
-      gatewayClass: "builder",
-      imageProfile: "builder",
-      profile: "builder",
-      sizingTier: "s",
-      ownerUid,
-      builderSlug: slug,
-      latestRelease: 2,
-      desiredRelease: 2,
-    }),
-    ...release(gatewayId, 1),
-    ...release(gatewayId, 2, { ...PAYLOAD, imageTag: "deadbee" }),
-  };
-}
-
-function placedUser(uid: string, slug: string, gatewayId: string): Seed {
-  return {
-    [`users/${uid}`]: {
-      username: slug,
-      provisioning: { status: "complete", openclaw: { slug, gatewayId, status: "complete" } },
-    },
-    [`gateways/${gatewayId}/assignments/${uid}`]: {
-      uid,
-      slug,
-      gatewayId,
-      source: "onboarding",
-      state: "serving",
-      epoch: 1,
-      createdAt: 1,
-      updatedAt: 1,
-      updatedByOperationId: null,
-    },
-  };
-}
-
-function operation(id: string, row: Record<string, unknown>): Seed {
-  return { [`${GLM_OPERATIONS_COLLECTION}/${id}`]: row };
-}
-
-const FLEET: Seed = {
-  "config/orchestrator": { defaultGatewayId: "shared-a", sharedGatewayIds: ["shared-a", "shared-b"] },
-  ...servingSharedGateway("shared-a"),
-  ...servingSharedGateway("shared-b"),
-  ...isolatedGateway("iso-ada", "uid-ada", "ada"),
-  "gateways/idle": gatewayRoot("idle"),
-  "gateways/gone": gatewayRoot("gone", { desiredStatus: "retired" }),
-  ...placedUser("uid-ada", "ada", "shared-a"),
-};
-
-const VM_RUNTIME: Seed = {
-  [`${GLM_GATEWAYS_COLLECTION}/iso-ada`]: {
-    docKind: "runtime", gatewayId: "iso-ada", release: 2, lifecycle: "serving", createdAt: 1, createdByOperationId: null,
-    helm: {}, runtime: "gce-vm", lastError: { message: null, at: null },
-  },
-};
-
-function sourceRecoveryFleet(): Seed {
-  const seed: Seed = {
-    "gateways/shared-0": gatewayRoot("shared-0", { desiredStatus: "draining", liveRelease: 1 }),
-    ...release("shared-0", 1),
-  };
-  for (const [index, slug] of ["jdog99", "oct01"].entries()) {
-    const uid = `source-user-${index}`;
-    const agentId = `octogee-${slug}-coach`;
-    seed[`users/${uid}`] = { username: slug, provisioning: { openclaw: { gatewayId: "shared-0", status: "complete" } } };
-    seed[`gateways/shared-0/assignments/${uid}`] = {
-      uid, slug, gatewayId: "shared-0", source: "onboarding", state: "serving", epoch: index + 1,
-      createdAt: 1, updatedAt: 1, updatedByOperationId: null,
-    };
-    seed[`users/${uid}/agentStores/${agentId}`] = {
-      agentId, gatewayId: "shared-0", assignmentEpoch: index + 1,
-      storeId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, schema: `source_${index}`, recordedAt: 1,
-    };
-  }
-  return seed;
-}
+  FLEET,
+  MANIFEST,
+  PAYLOAD,
+  SOURCE_SHA,
+  VM_RUNTIME,
+  harness,
+  operation,
+  placedUser,
+  restoreRecoveryFleet,
+  send,
+  servingSharedGateway,
+  sourceRecoveryFleet,
+  type ChangingRequest,
+  type Seed,
+} from "./__tests__/fixtures/admin-dry-run-app.js";
+import { FIXTURE_SIZING_PROFILES } from "./testing/journal-store.js";
 
 function unisolatedUserFleet(): Seed {
   return {
@@ -188,80 +26,6 @@ function unisolatedUserFleet(): Seed {
     ...servingSharedGateway("shared-a"),
     ...placedUser("uid-lin", "lin", "shared-a"),
   };
-}
-
-function restoreRecoveryFleet(): Seed {
-  const receipt = { uid: "u", attemptId: "retained-1", gatewayId: "shared-0", assignmentEpoch: 3, claimStartedAt: 200, dispatchedAt: 100 };
-  return {
-    "gateways/shared-0": gatewayRoot("shared-0"),
-    ...release("shared-0", 1),
-    ...operation("return-1", { restoreAttempt: receipt }),
-  };
-}
-
-function harness(seed: Seed = FLEET) {
-  const records = new Map<string, Record<string, unknown>>(Object.entries(structuredClone(seed)));
-  const effects = {
-    provisionGatewayAuthSecret: vi.fn(async () => ({})),
-    suspendAuthUser: vi.fn(async () => undefined),
-    revokeConnectorGrantsForUser: vi.fn(async () => undefined),
-    requestNativeReturnSourceRecovery: vi.fn(async () => false),
-    createAccount: vi.fn(async (account: { userId: string }) => ({ kind: "created" as const, userId: account.userId })),
-    setChatPassword: vi.fn(async () => undefined),
-    setGitPassword: vi.fn(async () => "ws-ada"),
-  };
-  const releaseAuthority: CentralReleaseAuthority = {
-    resolveManifest: vi.fn(async () => MANIFEST),
-    aliasesFor: vi.fn(() => []),
-    keepTagsFor: vi.fn(() => []),
-    ensureAliases: vi.fn(async () => []),
-  };
-  const router = Router();
-  addAdminFleetRoutes(router, {
-    db: {} as Firestore,
-    store: createDocumentFixtureStore(records),
-    logger: { info: vi.fn(), warn: vi.fn() },
-    computerReplacementEnabled: true,
-    listGatewayBuilds: vi.fn(async () => []),
-    releaseEnvironment: "test",
-    releaseAuthority,
-    provisionGatewayAuthSecret: effects.provisionGatewayAuthSecret,
-    suspendAuthUser: effects.suspendAuthUser,
-    revokeConnectorGrantsForUser: effects.revokeConnectorGrantsForUser,
-    requestNativeReturnSourceRecovery: effects.requestNativeReturnSourceRecovery,
-    userAccounts: { create: effects.createAccount },
-    userSignIn: {
-      channels: { setUserPassword: effects.setChatPassword },
-      git: { setUserPassword: effects.setGitPassword },
-    },
-  });
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    Object.assign(req, { uid: "operator", isAdmin: true });
-    next();
-  });
-  app.use(router);
-  app.use((error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    res.status(500).json({ error: error.message });
-  });
-  const snapshot = () => JSON.stringify([...records.entries()].sort(([a], [b]) => a.localeCompare(b)));
-  return { app, router, records, effects, snapshot };
-}
-
-type Method = "post" | "patch" | "delete";
-
-interface ChangingRequest {
-  method: Method;
-  path: string;
-  body?: Record<string, unknown>;
-}
-
-function send(app: express.Express, call: ChangingRequest, dryRun: boolean) {
-  const separator = call.path.includes("?") ? "&" : "?";
-  const target = dryRun ? `${call.path}${separator}dryRun=true` : call.path;
-  const pending = request(app)[call.method](target);
-  return call.body === undefined ? pending : pending.send(call.body);
 }
 
 afterEach(() => vi.unstubAllEnvs());
@@ -382,21 +146,6 @@ describe("a dry run of a changing request", () => {
     expect(res.body).toMatchObject({ dryRun: true, plans: [], rejected: [{ uid: "uid-ada", reason: "already-on-target" }] });
   });
 
-  it("plans an activation lease request from the user's current placement", async () => {
-    const h = harness();
-    const before = h.snapshot();
-
-    const res = await send(h.app, { method: "post", path: "/users/uid-ada/activation-lease" }, true).expect(200);
-
-    expect(res.body.plans).toEqual([expect.objectContaining({
-      what: "request user activation lease",
-      kind: "request-activation-lease",
-      target: { uid: "uid-ada" },
-      preActionStatus: { gatewayId: "shared-a", assignmentEpoch: 1 },
-    })]);
-    expect(h.snapshot()).toBe(before);
-  });
-
   it("says why a VM gateway cannot be restarted", async () => {
     const h = harness({ ...FLEET, ...VM_RUNTIME });
 
@@ -459,7 +208,6 @@ describe("a dry run of a changing request", () => {
     ["migration while another is in flight", 409, { method: "post", path: "/users/uid-ada/migrate", body: { to: "shared-b" } }, { ...FLEET, ...movingAda }],
     ["bulk move to an unregistered gateway", 404, { method: "post", path: "/gateway-migrations/bulk", body: { userIds: ["uid-ada"], toGatewayId: "nowhere" } }, FLEET],
     ["bulk move to a gateway that is not ready", 409, { method: "post", path: "/gateway-migrations/bulk", body: { userIds: ["uid-ada"], toGatewayId: "idle" } }, FLEET],
-    ["activation lease request for an unknown user", 404, { method: "post", path: "/users/uid-ghost/activation-lease" }, FLEET],
   ])("refuses a %s exactly as the real request does", async (_label, status, call, seed) => {
     const h = harness(seed);
     const before = h.snapshot();
@@ -507,7 +255,7 @@ describe("a dry run of a changing request", () => {
   it("advertises dry-run support on every response so a client can require it first", async () => {
     const h = harness();
 
-    const read = await request(h.app).get("/platform-runtime-config").expect(200);
+    const read = await request(h.app).get("/operations").expect(200);
     const refused = await request(h.app).post("/gateways/nowhere/restart").expect(404);
 
     expect(read.headers["admin-api-capabilities"]).toBe("dry-run");
@@ -517,7 +265,6 @@ describe("a dry run of a changing request", () => {
 
 describe("every changing route", () => {
   const routes: Record<string, ChangingRequest & { seed?: () => Seed }> = {
-    "PATCH /platform-runtime-config": { method: "patch", path: "/platform-runtime-config", body: { disposableGatewayIdleMs: 60_000 } },
     "PATCH /placement/autoscaling": { method: "patch", path: "/placement/autoscaling", body: { enabled: true, usersPerGateway: 40 } },
     "POST /gateway-migrations/bulk": { method: "post", path: "/gateway-migrations/bulk", body: { userIds: ["uid-ada"], toGatewayId: "shared-b" } },
     "POST /rollouts": { method: "post", path: "/rollouts", body: { gatewayId: "shared-b", targetRelease: 2, imageTag: "abc1234" } },
@@ -552,25 +299,13 @@ describe("every changing route", () => {
     "POST /users/:uid/unassign": { method: "post", path: "/users/uid-ada/unassign" },
     "PATCH /users/:uid/placement": { method: "patch", path: "/users/uid-ada/placement", body: { managedBy: "operator", gatewayId: null } },
     "POST /users/:uid/vm/replace": { method: "post", path: "/users/uid-ada/vm/replace", body: {} },
-    "POST /users/:uid/activation-lease": { method: "post", path: "/users/uid-ada/activation-lease" },
-    "POST /users/:uid/activation-lease/cancel": {
-      method: "post", path: "/users/uid-ada/activation-lease/cancel", body: { leaseId: "lease-1", generation: 1 },
-    },
-    "POST /users/:uid/activation-lease/terminate": {
-      method: "post", path: "/users/uid-ada/activation-lease/terminate", body: { leaseId: "lease-1", generation: 1 },
-    },
-    "POST /users/:uid/activation-lease/return": {
-      method: "post", path: "/users/uid-ada/activation-lease/return", body: { leaseId: "lease-1", generation: 1 },
-    },
-    "POST /users/:uid/activation-lease/return/retry": {
-      method: "post", path: "/users/uid-ada/activation-lease/return/retry", body: { operationId: "return-1" },
-    },
   };
 
   function changingRoutes(router: Router): string[] {
     return router.stack.flatMap((layer) => {
       const route = layer.route as { path: string; methods: Record<string, boolean> } | undefined;
-      if (!route) return [];
+      const mounted = (layer.handle as { stack?: Router["stack"] }).stack;
+      if (!route) return mounted ? changingRoutes({ stack: mounted } as Router) : [];
       return Object.keys(route.methods)
         .filter((method) => method !== "get")
         .map((method) => `${method.toUpperCase()} ${route.path}`);
@@ -579,6 +314,14 @@ describe("every changing route", () => {
 
   it("is listed here, so a new changing route cannot skip the dry run", () => {
     expect(changingRoutes(harness().router).sort()).toEqual(Object.keys(routes).sort());
+  });
+
+  it("has no lease routes and no idle setting: those are the product's to mount", async () => {
+    const h = harness();
+
+    expect((await request(h.app).get("/platform-runtime-config")).status).toBe(404);
+    expect((await request(h.app).post("/users/uid-ada/activation-lease")).status).toBe(404);
+    expect((await request(h.app).patch("/platform-runtime-config").send({ disposableGatewayIdleMs: 60_000 })).status).toBe(404);
   });
 
   it.each(Object.entries(routes))("%s answers a dry run with a plan and writes nothing", async (_route, call) => {

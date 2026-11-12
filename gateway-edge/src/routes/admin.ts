@@ -132,8 +132,11 @@ function resolvePlatformModelDials(data: PlatformModelConfig | undefined): {
   };
 }
 
+export type ProductAdminRoutes = (router: Router, deps: { db: typeof db; store: typeof platformStateStore }) => void;
+
 export interface AdminProductHooks {
   discoverDeletionProductContext?: DeletionProductContextDiscovery;
+  addAdminRoutes?: ProductAdminRoutes;
 }
 
 export function createAdminRoutes(product: AdminProductHooks = {}): Router {
@@ -150,6 +153,8 @@ export function createAdminRoutes(product: AdminProductHooks = {}): Router {
     FieldValue,
     logger,
   });
+
+  product.addAdminRoutes?.(router, { db, store: platformStateStore });
 
   addAdminFleetRoutes(router, {
     computerReplacementEnabled: true,

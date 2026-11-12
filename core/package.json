@@ -25,6 +25,14 @@
       "types": "./dist/project-agent-workspaces.d.ts",
       "default": "./dist/project-agent-workspaces.js"
     },
+    "./admin-dry-run": {
+      "types": "./dist/admin-dry-run.d.ts",
+      "default": "./dist/admin-dry-run.js"
+    },
+    "./admin-activation-lease-routes": {
+      "types": "./dist/admin-activation-lease-routes.d.ts",
+      "default": "./dist/admin-activation-lease-routes.js"
+    },
     "./isolated-prelaunch": {
       "types": "./dist/isolated-prelaunch.d.ts",
       "default": "./dist/isolated-prelaunch.js"

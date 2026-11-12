@@ -1,3 +1,4 @@
+import { addAdminActivationLeaseRoutes } from "@octogee/core/admin-activation-lease-routes";
 import request from "supertest";
 import type { Express } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1211,6 +1212,26 @@ describe("createHttpServer — admin gateway routes", () => {
     const supplied = await request(app).get(path).set("Authorization", "Bearer admin-token");
     expect(supplied.status).toBe(200);
     expect(supplied.body).toEqual({ ok: true });
+  });
+
+  it("serves the lease routes and the idle setting only when the product mounts them, dry runs included", async () => {
+    const admin = (app: ReturnType<typeof createHttpServer>) => ({
+      read: () => request(app).get("/api/admin/platform-runtime-config").set("Authorization", "Bearer admin-token"),
+      plan: () => request(app).patch("/api/admin/platform-runtime-config?dryRun=true")
+        .set("Authorization", "Bearer admin-token").send({ disposableGatewayIdleMs: 60_000 }),
+      request: () => request(app).post("/api/admin/users/u1/activation-lease").set("Authorization", "Bearer admin-token"),
+    });
+    const platformOnly = admin(createHttpServer(buildDeps(store)));
+    const withProduct = admin(createHttpServer(buildDeps(store, {
+      addProductAdminRoutes: (router, deps) => addAdminActivationLeaseRoutes(router, deps),
+    })));
+
+    expect((await platformOnly.read()).status).toBe(404);
+    expect((await platformOnly.request()).status).toBe(404);
+    expect((await withProduct.read()).body).toEqual({ disposableGatewayIdleMs: expect.any(Number) });
+    const planned = await withProduct.plan();
+    expect(planned.status).toBe(200);
+    expect(planned.body).toMatchObject({ dryRun: true, plans: [{ what: "set platform gateway idle return duration" }] });
   });
 
   it("answers a failed admin route with a JSON error and logs the stack instead of returning it", async () => {

@@ -1,6 +1,7 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import type { Firestore } from "firebase-admin/firestore";
-import { type GatewayClass, type GatewayImageProfile, type GatewayProfile, type GatewayRuntime, type GatewayVmState } from "@octogee/shared/types/glm";
+import { type GatewayClass, type GatewayImageProfile, type GatewayProfile, type GatewayRuntime, type GatewayVmState, type OperationAuditAliasPlan } from "@octogee/shared/types/glm";
+import { type PlatformRuntimeConfig } from "@octogee/shared/types/platform-config";
 import { type AssignmentDoc } from "@octogee/shared/types/gateway-releases";
 import { type GatewayPodReplacementSummary } from "@octogee/shared/types/gateway-pod-replacements";
 import type { MigrationProgressRecord } from "@octogee/shared/types/glm";
@@ -8,7 +9,10 @@ import { type SizingTier } from "@octogee/shared/types/sizing";
 import { type GatewayPricingMode } from "@octogee/shared/types/cost-estimator";
 import { type UserAccounts, type UserSignInHosts } from "./admin-user-router.js";
 import { type DurableGatewayRoot } from "./gateway-release-append.js";
-import type { OpaqueMap, PlatformStateStore } from "./platform-state/store.js";
+import { type NormalFleetMutationResult } from "./normal-fleet-mutation.js";
+import { type OperationAuditActionClaim } from "./operation-audit.js";
+import type { OperationRecord } from "./platform-state/operations.js";
+import type { OpaqueMap, PlatformStateStore, PlatformStateTransaction, Stored } from "./platform-state/store.js";
 import { type CentralReleaseAuthority } from "./artifact-registry.js";
 export interface FleetLogger {
     info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -72,6 +76,12 @@ export interface FleetRouterDeps {
     discoverDeletionProductContext?: DeletionProductContextDiscovery;
 }
 export type DeletionProductContextDiscovery = (uid: string) => Promise<OpaqueMap>;
+export type ActorRequest = Request & {
+    uid?: string;
+    user?: {
+        email?: string | null;
+    };
+};
 declare function resolveSizingForResponse(glmDoc: Record<string, unknown> | undefined, reservation: ReturnType<typeof projectGatewayReservation>): {
     tier: SizingTier;
     resolvedFrom: "explicit" | "class-default" | "profile-default";
@@ -111,6 +121,7 @@ declare function projectLastError(raw: unknown): {
     message?: string;
     at: string | null;
 } | null;
+export declare function isPlainRecord(v: unknown): v is Record<string, unknown>;
 type ProjectedGatewayStorage = {
     mode: "emptyDir" | "pvc";
     pvcName: string | null;
@@ -199,6 +210,8 @@ export declare function projectDisposableFleetCapacity(gateways: ReadonlyArray<R
     staleActivations: number;
     oldestActivationAgeMs: number | null;
 };
+export declare const ERR_USER_NOT_FOUND = "user not found";
+export declare const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
 export interface AdminGatewayControlProjection {
     desiredStatus: string;
     desiredRelease: number | null;
@@ -217,6 +230,8 @@ export interface AdminGatewayControlProjection {
     vm: GatewayVmState | null;
 }
 export declare function projectGatewayControl(root: DurableGatewayRoot, glmData: Record<string, unknown> | undefined): AdminGatewayControlProjection;
+export declare function asStringOrNull(v: unknown): string | null;
+export declare function toMillis(v: unknown): number | null;
 interface RolloutBodyError {
     status: number;
     body: Record<string, unknown>;
@@ -262,5 +277,67 @@ export declare function scheduleUserSelfDeletion(opts: {
     deps: Pick<FleetRouterDeps, "suspendAuthUser" | "revokeConnectorGrantsForUser">;
     uid: string;
 }): Promise<UserSelfDeletionOutcome>;
+type ActivationLeaseTerminationOutcome = {
+    kind: "not-found";
+} | {
+    kind: "conflict";
+    reason: string;
+} | {
+    kind: "adopted";
+} | {
+    kind: "requested";
+};
+type ActivationLeaseReturnOutcome = {
+    kind: "not-found";
+} | {
+    kind: "conflict";
+    status: string | null;
+} | {
+    kind: "adopted";
+} | {
+    kind: "requested";
+};
+type ReasonedActivationLeaseMutationOutcome = {
+    kind: "not-found";
+} | {
+    kind: "conflict";
+    reason: string;
+} | {
+    kind: "retried" | "cancelled";
+};
+export declare function classifyActivationLeaseTermination(result: ActivationLeaseTerminationOutcome): NormalFleetMutationResult;
+export declare function classifyActivationLeaseReturn(result: ActivationLeaseReturnOutcome): NormalFleetMutationResult;
+export declare function classifyReasonedActivationLeaseMutation(result: ReasonedActivationLeaseMutationOutcome): NormalFleetMutationResult;
+export declare function inFlightOperationsForUid(transaction: Pick<PlatformStateTransaction, "journal">, uid: string): Promise<readonly Stored<OperationRecord>[]>;
+export declare function isInFlightUserMigration(operation: OperationRecord): boolean;
+export declare function requestActivationLeaseTermination(transaction: PlatformStateTransaction, input: {
+    uid: string;
+    leaseId: string;
+    generation: number;
+    sharedGatewayIds: readonly string[];
+    requestedAt: number;
+    requestedBy: string;
+}): Promise<ActivationLeaseTerminationOutcome>;
+export declare function retryActivationLeaseReturn(transaction: PlatformStateTransaction, input: {
+    uid: string;
+    operationId: string;
+    requestedAt: number;
+    requestedBy: string;
+}): Promise<ReasonedActivationLeaseMutationOutcome>;
+export declare function readPlatformRuntimeConfig(store: PlatformStateStore): Promise<PlatformRuntimeConfig>;
+export declare function createAdminFleetMutationRunner(store: PlatformStateStore): <T>(input: {
+    req: Request;
+    what: string;
+    why: string;
+    target: Record<string, unknown>;
+    preActionStatus: Record<string, unknown>;
+    mutation: Record<string, unknown>;
+    forced?: boolean;
+    action: (claim: OperationAuditActionClaim) => Promise<T>;
+    classifyResult?: (result: T) => NormalFleetMutationResult;
+    idempotencyScope?: string;
+    aliasPlan?: OperationAuditAliasPlan[];
+}) => Promise<T>;
+export type AdminFleetMutationRunner = ReturnType<typeof createAdminFleetMutationRunner>;
 export declare function addAdminFleetRoutes(router: Router, deps: FleetRouterDeps): Router;
 export {};

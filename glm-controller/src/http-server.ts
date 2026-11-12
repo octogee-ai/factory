@@ -62,7 +62,12 @@ function corsMiddleware(req: Request, res: Response, next: NextFunction): void {
 
 export type ProductAdminRoutes = (
   router: Router,
-  deps: { db: Firestore; FieldValue: { serverTimestamp: () => unknown } },
+  deps: {
+    db: Firestore;
+    FieldValue: { serverTimestamp: () => unknown };
+    store: PlatformStateStore;
+    requestNativeReturnSourceRecovery?: HttpServerDeps["requestNativeReturnSourceRecovery"];
+  },
 ) => void;
 
 export interface HttpServerDeps {
@@ -321,7 +326,12 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     FieldValue,
     logger: adaptLogger(deps.log),
   });
-  deps.addProductAdminRoutes?.(adminRouter, { db: deps.db, FieldValue });
+  deps.addProductAdminRoutes?.(adminRouter, {
+    db: deps.db,
+    FieldValue,
+    store: deps.store,
+    requestNativeReturnSourceRecovery: deps.requestNativeReturnSourceRecovery,
+  });
   addAdminFleetRoutes(adminRouter, {
     computerReplacementEnabled: true,
     db: deps.db,
