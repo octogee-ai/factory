@@ -11,7 +11,7 @@ import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION } from "@octogee/sha
 
 import { addAdminFleetRoutes } from "./admin-fleet-router.js";
 import type { CentralReleaseAuthority, ReleaseDigestManifest } from "./artifact-registry.js";
-import { createDocumentFixtureStore } from "./testing/journal-store.js";
+import { createDocumentFixtureStore, FIXTURE_SIZING_PROFILES } from "./testing/journal-store.js";
 
 type Seed = Record<string, Record<string, unknown>>;
 
@@ -180,6 +180,14 @@ function sourceRecoveryFleet(): Seed {
     };
   }
   return seed;
+}
+
+function unisolatedUserFleet(): Seed {
+  return {
+    "config/orchestrator": { defaultGatewayId: "shared-a", sharedGatewayIds: ["shared-a"], sizingProfiles: FIXTURE_SIZING_PROFILES },
+    ...servingSharedGateway("shared-a"),
+    ...placedUser("uid-lin", "lin", "shared-a"),
+  };
 }
 
 function restoreRecoveryFleet(): Seed {
@@ -537,6 +545,9 @@ describe("every changing route", () => {
     "POST /users/:uid/one-time-passwords": { method: "post", path: "/users/uid-ada/one-time-passwords" },
     "POST /users/:uid/delete": { method: "post", path: "/users/uid-ada/delete", body: { eraseNow: false } },
     "POST /users/:uid/assign": { method: "post", path: "/users/uid-ada/assign", body: { gatewayId: "shared-b" } },
+    "POST /users/:uid/isolated-gateway": {
+      method: "post", path: "/users/uid-lin/isolated-gateway", body: { sizingProfile: "hobby" }, seed: unisolatedUserFleet,
+    },
     "POST /users/:uid/migrate": { method: "post", path: "/users/uid-ada/migrate", body: { to: "shared-b" } },
     "POST /users/:uid/unassign": { method: "post", path: "/users/uid-ada/unassign" },
     "PATCH /users/:uid/placement": { method: "patch", path: "/users/uid-ada/placement", body: { managedBy: "operator", gatewayId: null } },

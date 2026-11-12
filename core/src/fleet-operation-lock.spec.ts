@@ -178,6 +178,24 @@ describe("serialFleetOperationsConflict", () => {
     expect(serialFleetOperationsConflict(sourceRoll, { ...returning, status: "succeeded" })).toBe(false);
   });
 
+  it("holds the source rollout for a return an operator started, whatever its source tag or id", () => {
+    const returning = { id: "5d0a3c1e-9f6b-4a53-8a0e-2b7c1d4e6f90", kind: "migrate-customer", status: "running", cutoverCommittedAt: 100,
+      input: { uid: "uid-lin", fromGatewayId: "lin-s-0a1b2c3d", toGatewayId: "shared-0" } };
+    const sourceRoll = { id: "roll", kind: "rollout", rolloutLane: "builder-vm" as const, input: { gatewayId: "lin-s-0a1b2c3d" } };
+
+    expect(serialFleetOperationsConflict(sourceRoll, returning)).toBe(true);
+    expect(serialFleetOperationsConflict(returning, sourceRoll)).toBe(true);
+    expect(serialFleetOperationsConflict(sourceRoll, { ...returning, status: "failed" })).toBe(false);
+  });
+
+  it("frees a shared source for rollout at cutover, as before", () => {
+    const moved = { id: "move", kind: "migrate-customer", status: "running", cutoverCommittedAt: 100,
+      input: { uid: "uid-lin", fromGatewayId: "shared-1", toGatewayId: "shared-0" } };
+    const sourceRoll = { id: "roll", kind: "rollout", rolloutLane: "builder-vm" as const, input: { gatewayId: "shared-1" } };
+
+    expect(serialFleetOperationsConflict(sourceRoll, moved)).toBe(false);
+  });
+
   it("does not let an unclassified rollout bypass a classified rollout", () => {
     expect(serialFleetOperationsConflict(
       { id: "first", kind: "rollout", input: { gatewayId: "first" } },

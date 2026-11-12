@@ -5,6 +5,8 @@ import {
   MAX_PREEMPTED_OPERATION_ATTEMPTS,
   MAX_REQUESTED_RETRY_DELAY_MS,
   MAX_OPERATION_ATTEMPT_HISTORY,
+  MAX_OPERATOR_ISOLATED_GATEWAY_WAIT_ATTEMPTS,
+  OPERATOR_ISOLATED_GATEWAY_WAIT_MS,
   OPERATION_JOURNAL_RETENTION_MS,
   buildOperationCompletionUpdate,
   classifyOperationFailure,
@@ -1144,4 +1146,65 @@ it("resumes a durable handoff after a lost cutover acknowledgment without a reco
     result: { steps: [], success: false, error: "migration ownership lookup pending: status 503: unavailable" },
     steps: [], now: 1000,
   })).toMatchObject({ status: "pending", attempts: 21 });
+});
+
+describe("the move an operator's give starts", () => {
+  const GATEWAY = "lin-s-0a1b2c3d";
+  const notReady = `target gateway ${GATEWAY} is not migration-ready ` +
+    "(desiredStatus=running, desiredRelease=1, liveRelease=null); requires running with a converged release";
+  const noLiveRelease = `placement rejected for ${GATEWAY}: no-live-revision`;
+  const move = (state: { checks?: number; attempts?: number; source?: string | null } = {}) => ({
+    id: "op-give", kind: "migrate-customer", attempts: state.attempts ?? 0, startedAt: 1_000,
+    input: { uid: "uid-lin", fromGatewayId: "shared-a", toGatewayId: GATEWAY, ...(state.source === null ? {} : { source: state.source ?? "operator-isolated-gateway" }) },
+    ...(state.checks ? { output: { isolatedGatewayReadinessChecks: state.checks } } : {}),
+  });
+  const failed = (error: string) => ({ steps: [], success: false, error, rolledBack: false });
+  const complete = (op: ReturnType<typeof move>, error = notReady) =>
+    buildOperationCompletionUpdate({ op, result: failed(error), steps: [], now: 10_000 });
+
+  it.each([notReady, noLiveRelease, `placement rejected for ${GATEWAY}: revision-not-ready`])(
+    "checks once a minute while the gateway answers: %s", (error) => {
+      const update = complete(move({ checks: 6 }), error);
+
+      expect(update).toMatchObject({
+        status: "pending", nextAttemptAt: 10_000 + OPERATOR_ISOLATED_GATEWAY_WAIT_MS,
+        output: { isolatedGatewayReadinessChecks: 7 },
+        error: `waiting for isolated gateway ${GATEWAY} to become ready (check 7 of ${MAX_OPERATOR_ISOLATED_GATEWAY_WAIT_ATTEMPTS}): ${error}`,
+      });
+    },
+  );
+
+  it("counts the first check as one", () => {
+    expect(complete(move())).toMatchObject({ status: "pending", output: { isolatedGatewayReadinessChecks: 1 } });
+  });
+
+  it("does not spend the move's attempts on readiness checks", () => {
+    const waited = complete(move({ checks: 12 }));
+
+    expect(waited).not.toHaveProperty("attempts");
+    expect(waited).not.toHaveProperty("attemptHistory");
+  });
+
+  it("still retries a transient failure after a long wait for the gateway", () => {
+    const update = complete(move({ checks: 12 }), "connect ETIMEDOUT 10.0.0.9:8080");
+
+    expect(update).toMatchObject({ status: "pending", attempts: 1 });
+    expect(update.error).toContain("attempt 1 failed (transient)");
+  });
+
+  it("gives the move its usual three attempts, no more", () => {
+    expect(complete(move({ checks: 12, attempts: MAX_OPERATION_ATTEMPTS - 1 }), "connect ETIMEDOUT 10.0.0.9:8080")).toMatchObject({ status: "failed" });
+  });
+
+  it("says the gateway did not become ready when the checks run out, with the last cause attached", () => {
+    expect(complete(move({ checks: MAX_OPERATOR_ISOLATED_GATEWAY_WAIT_ATTEMPTS - 1 }), noLiveRelease)).toMatchObject({
+      status: "failed",
+      error: `isolated gateway ${GATEWAY} did not become ready within ${MAX_OPERATOR_ISOLATED_GATEWAY_WAIT_ATTEMPTS} checks; last cause: ${noLiveRelease}`,
+    });
+  });
+
+  it("does not wait for a move started any other way", () => {
+    expect(complete(move({ source: null, attempts: MAX_OPERATION_ATTEMPTS - 1 }))).toMatchObject({ status: "failed", error: notReady });
+    expect(complete(move({ source: null }), noLiveRelease)).toMatchObject({ status: "failed", error: noLiveRelease });
+  });
 });

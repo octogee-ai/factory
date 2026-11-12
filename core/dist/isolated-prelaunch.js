@@ -1,4 +1,5 @@
 import { builderActivateOperationId } from "./user-activation-lease.js";
+import { isOperatorIssuedAllocation } from "./operator-isolated-gateway.js";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 function prelaunchStatusMatches(gatewayId, generation, lease, activationBoot) {
     return lease.status === "provisioning" && lease.activationOperationId === undefined && lease.activatingAt === undefined ||
@@ -97,6 +98,8 @@ export async function isolatedBootMode(input) {
     if (!user)
         throw new Error("Isolated prelaunch owner is unavailable");
     if (await hasServingUserAssignment(reader, gateway, user))
+        return { mode: "normal" };
+    if (isOperatorIssuedAllocation(gateway.allocation))
         return { mode: "normal" };
     const lease = user.activationLease;
     if (!activationLeaseMatches(gateway, lease)) {

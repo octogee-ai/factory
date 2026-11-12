@@ -260,3 +260,52 @@ describe("broker boot mode uses the same prelaunch authority", () => {
     await expect(h.bootMode()).resolves.toEqual({ mode: "normal" });
   });
 });
+
+describe("an operator-given gateway has no lease", () => {
+  function operatorGiven() {
+    const h = fixture();
+    Object.assign(h.gateway, {
+      latestRelease: 1, desiredRelease: 1, liveRelease: null,
+      allocation: { ...h.gateway.allocation!, leaseId: "operator-issued", generation: 1 },
+    });
+    h.user.provisioning.openclaw = { gatewayId: "shared-blue", slug: "jefe", managedBy: "operator" } as never;
+    Object.assign(h.runtime, { release: 1, lifecycle: "provisioning" });
+    return h;
+  }
+
+  it("boots normally before its user arrives", async () => {
+    await expect(operatorGiven().bootMode()).resolves.toEqual({ mode: "normal" });
+  });
+
+  it("boots normally whether or not the operator still holds its owner: the tag alone says no lease governs it", async () => {
+    const h = operatorGiven();
+    h.user.provisioning.openclaw = { gatewayId: "shared-blue", slug: "jefe" } as never;
+
+    await expect(h.bootMode()).resolves.toEqual({ mode: "normal" });
+  });
+
+  it("is still refused a boot when the tag is a lease's and no lease matches it, held owner or not", async () => {
+    const h = operatorGiven();
+    Object.assign(h.gateway, { allocation: { ...h.gateway.allocation!, leaseId: "0b8f6f0e-6f0a-4a57-9a43-1f6f3a1c2d10" } });
+
+    await expect(h.bootMode()).rejects.toThrow("User activation authority is inconsistent");
+    h.user.provisioning.openclaw = { gatewayId: "shared-blue", slug: "jefe" } as never;
+    await expect(h.bootMode()).rejects.toThrow("User activation authority is inconsistent");
+  });
+
+  it("goes live once the VM reports ready, with no prelaunch hold to verify", async () => {
+    const h = operatorGiven();
+    Object.assign(h.targetHealth, { status: "ready", prelaunchState: "none" });
+    h.pods[0].ready = true;
+    Object.assign(h.runtime.heartbeat, { status: "ready" });
+
+    expect(await h.refine()).toEqual({ kind: "mark-live" });
+  });
+
+  it("waits while the VM is still booting", async () => {
+    const h = operatorGiven();
+    Object.assign(h.targetHealth, { status: "booting", prelaunchState: "none" });
+
+    expect(await h.refine()).toEqual({ kind: "steady" });
+  });
+});

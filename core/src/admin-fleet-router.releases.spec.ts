@@ -641,9 +641,14 @@ describe("POST /gateways/:id/deploy", () => {
 
 describe("manual gateway migrations", () => {
   it.each([
-    ["/users/uid-alice/migrate", { to: "legacy-owner" }],
-    ["/gateway-migrations/bulk", { userIds: ["uid-alice"], toGatewayId: "legacy-owner" }],
-  ])("rejects an owner runtime target for %s", async (path, body) => {
+    ["/users/uid-alice/migrate", { to: "legacy-owner" }, {
+      code: "migration-target-not-own-isolated-gateway",
+      error: "manual migration target must be a shared gateway or the user's own isolated gateway",
+    }],
+    ["/gateway-migrations/bulk", { userIds: ["uid-alice"], toGatewayId: "legacy-owner" }, {
+      error: "manual migration target must be a shared gateway",
+    }],
+  ])("rejects an owner gateway that is not the user's isolated runtime for %s", async (path, body, refusal) => {
     const { app, store } = mkApp({
       "users/uid-alice": userAuthRecord("source"),
       ...seedServingGateway("legacy-owner", sharedPayload(), readyHeartbeat(), {
@@ -659,10 +664,7 @@ describe("manual gateway migrations", () => {
       .post(path)
       .send(body)
       .expect(400)
-      .expect({
-        error: "manual migration target must be a shared gateway",
-        gatewayId: "legacy-owner",
-      });
+      .expect({ ...refusal, gatewayId: "legacy-owner" });
 
     expect(opsIn(store, "migrate-customer")).toHaveLength(0);
   });
@@ -1385,32 +1387,6 @@ describe("DELETE /gateways/:id — retirement claim", () => {
     expect(res.body.assignedCustomers).toEqual(["alice"]);
     // Nothing was marked retired and no op was queued.
     expect(store.get("gateways/assn")?.desiredStatus).toBe("running");
-    expect(opsIn(store, "retire-gateway")).toHaveLength(0);
-  });
-
-  it("leaves disposable termination exclusively to the isolated runtime lifecycle", async () => {
-    const seed = seedServingGateway("run-alice", sharedPayload(), readyHeartbeat(), {
-      profile: "builder",
-      gatewayClass: "builder",
-      imageProfile: "builder",
-      ownerUid: "uid-alice",
-      builderSlug: "alice",
-      builderAccess: { controlUiEnabled: true },
-      allocation: {
-        kind: "disposable-builder",
-        schemaVersion: 1,
-        leaseId: "lease-1",
-        generation: 3,
-        claimedByUid: "uid-alice",
-      },
-    });
-    const { app, store } = mkApp(seed);
-
-    const response = await request(app).delete("/gateways/run-alice").send({});
-
-    expect(response.status).toBe(409);
-    expect(response.body.error).toMatch(/isolated runtime lifecycle/i);
-    expect(store.get("gateways/run-alice")?.desiredStatus).toBe("running");
     expect(opsIn(store, "retire-gateway")).toHaveLength(0);
   });
 });

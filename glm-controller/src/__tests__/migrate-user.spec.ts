@@ -13,7 +13,7 @@ import {
   type ScheduleTransferDoc,
 } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
-import { buildOperationCompletionUpdate, classifyOperationFailure } from "../operation-retry";
+import { buildOperationCompletionUpdate, classifyOperationFailure, OPERATOR_ISOLATED_GATEWAY_WAIT_MS } from "../operation-retry";
 import { assertUserRestoreSettled, createOperationContext, PendingUserRestoreError } from "../operation-context";
 import { builderReturnOperationId } from "@octogee/core/user-activation-lease";
 import type { NativeReturnPark, NativeSourcePark } from "../lib/native-vm-return";
@@ -1133,6 +1133,21 @@ describe("native VM return", () => {
     const op = () => mkOp({ attempts: 1, schedulerHandoff: handoff, input: {
       uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease",
     } });
+
+    it("finishes an operator's return that restarted after cutover: final checkpoint, then the VM parks", async () => {
+      const h = mkDeps({ sourceGatewayId: "gw-green" });
+      const native = nativeReturn(h);
+      const operatorReturn = mkOp({ attempts: 1, schedulerHandoff: handoff, input: {
+        uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green",
+      } });
+
+      expect(await createMigrateUserHandler(h.deps)(operatorReturn, h.ctx)).toMatchObject({ success: true });
+
+      expect(native.park).toHaveBeenCalledOnce();
+      expect(h.steps.filter(step => step.status === "done").map(step => step.name)).toEqual(
+        expect.arrayContaining(["checkpoint-native-computer", "release-native-writers", "park-native-computer"]),
+      );
+    });
 
     it.each([
       new MigrationRpcError("VM containers paused", { status: 503 }),
@@ -3337,5 +3352,136 @@ describe("source-owned user activation", () => {
     expect(await createMigrateUserHandler(h.deps)(h.operation, h.ctx)).toMatchObject({ success: false, error: expect.stringContaining("same OpenClaw build") });
     expect(h.client.quiesce).not.toHaveBeenCalled();
     expect(h.deps.setAssignmentState).not.toHaveBeenCalled();
+  });
+});
+
+describe("the move an operator's give starts", () => {
+  const giveMove = (attempts: number) => mkOp({ id: "op-give", attempts, input: {
+    uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "operator-isolated-gateway",
+  } });
+
+  const refused = "workspace migration recovery target authority changed";
+  const sharedSource = () => {
+    const h = mkDeps({ sourceGatewayId: "shared-blue" });
+    vi.mocked(h.deps.resolveSourcePlacement).mockResolvedValue({ release: 1, epoch: 4, assignmentMode: "assigned", gatewayClass: "shared" });
+    vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: true, release: 2, gatewayClass: "builder" });
+    h.deps.prepareMigrationAgentStores = vi.fn(async () => undefined);
+    h.deps.clearMigrationPreparation = vi.fn(async () => undefined);
+    h.deps.assertMigrationSourcePreparationAuthority = vi.fn(async () => { throw new Error(refused); });
+    return h;
+  };
+  const fromShared = (op: Operation): Operation => ({ ...op, input: { ...op.input, fromGatewayId: "shared-blue" } });
+
+  it("clears its preparation fence when source preparation fails, so a second give is not blocked by the first", async () => {
+    const h = sharedSource();
+
+    const failed = await createMigrateUserHandler(h.deps)(fromShared(giveMove(0)), h.ctx);
+
+    expect(failed).toMatchObject({ success: false, error: refused });
+    expect(h.deps.setMigrationPhase).toHaveBeenCalledWith(expect.objectContaining({ operationId: "op-give", phase: "preparing" }));
+    expect(h.deps.clearMigrationPreparation).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      uid: "uid-alice", sourceGatewayId: "shared-blue", operationId: "op-give", sourceEpoch: 4,
+    }));
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+  });
+
+  it("clears the fence when the user's snapshot is missing after source preparation, and the second give then moves the user", async () => {
+    const h = sharedSource();
+    h.deps.assertMigrationSourcePreparationAuthority = vi.fn(async () => undefined);
+    vi.mocked(h.deps.readUserSnapshot).mockResolvedValueOnce(null);
+    const handler = createMigrateUserHandler(h.deps);
+
+    const first = await handler(fromShared(giveMove(0)), h.ctx);
+
+    expect(first).toMatchObject({ success: false, error: "durable snapshot not found for uid-alice" });
+    expect(h.deps.clearMigrationPreparation).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ operationId: "op-give", sourceGatewayId: "shared-blue" }));
+
+    const second = await handler({ ...fromShared(giveMove(0)), id: "op-give-2" }, h.ctx);
+
+    expect(second).toMatchObject({ success: true });
+    expect(h.deps.commitCutover).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["the gateway address cannot be resolved", (h: ReturnType<typeof sharedSource>) => { vi.mocked(h.deps.resolveGatewayUrl).mockRejectedValueOnce(new Error("no route to shared-blue")); }, "no route to shared-blue"],
+    ["the run throws before its first step", (h: ReturnType<typeof sharedSource>) => { h.ctx.persistSchedulerHandoff = vi.fn(async () => { throw new Error("journal unavailable"); }); }, "journal unavailable"],
+  ])("clears the fence when %s", async (_name, arrange, message) => {
+    const h = sharedSource();
+    h.deps.assertMigrationSourcePreparationAuthority = vi.fn(async () => undefined);
+    arrange(h);
+
+    const outcome = await createMigrateUserHandler(h.deps)(fromShared(giveMove(0)), h.ctx).catch((error: Error) => ({ success: false, error: error.message }));
+
+    expect(outcome).toMatchObject({ success: false, error: expect.stringContaining(message) });
+    expect(h.deps.clearMigrationPreparation).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ operationId: "op-give" }));
+  });
+
+  it("says so when the fence cannot be cleared", async () => {
+    const h = sharedSource();
+    h.deps.clearMigrationPreparation = vi.fn(async () => { throw new Error("workspace preparation cleanup authority changed"); });
+
+    const failed = await createMigrateUserHandler(h.deps)(fromShared(giveMove(0)), h.ctx);
+
+    expect(failed.error).toBe(`${refused}; the preparation fence could not be cleared: workspace preparation cleanup authority changed`);
+  });
+
+  it("leaves the fence of a move the product tagged with its lease source to the product's own cleanup", async () => {
+    const h = sharedSource();
+    const leaseMove = mkOp({ id: "builder-activate-gw-green-g1", attempts: 0, origin: "automatic", input: {
+      uid: "uid-alice", fromGatewayId: "shared-blue", toGatewayId: "gw-green", source: "builder-activation-lease",
+    } });
+
+    expect(await createMigrateUserHandler(h.deps)(leaseMove, h.ctx)).toMatchObject({ success: false });
+    expect(h.deps.setMigrationPhase).toHaveBeenCalledWith(expect.objectContaining({ phase: "preparing" }));
+    expect(h.deps.clearMigrationPreparation).not.toHaveBeenCalled();
+  });
+
+  it("waits through several readiness checks, retries one transient failure in source preparation, then moves the user", async () => {
+    const h = sharedSource();
+    const transient = "connect ETIMEDOUT 10.0.0.9:8080";
+    vi.mocked(h.deps.resolveTargetPlacement)
+      .mockResolvedValueOnce({ ok: false, reason: "no-live-revision" })
+      .mockResolvedValueOnce({ ok: false, reason: "no-live-revision" })
+      .mockResolvedValueOnce({ ok: false, reason: "no-live-revision" });
+    h.deps.assertMigrationSourcePreparationAuthority = vi.fn()
+      .mockRejectedValueOnce(new Error(transient))
+      .mockResolvedValue(undefined);
+    const handler = createMigrateUserHandler(h.deps);
+    let op = fromShared(giveMove(0));
+    const settle = async (now: number) => {
+      const result = await handler({ ...op, status: "running", startedAt: now }, h.ctx);
+      const patch = buildOperationCompletionUpdate({ op, result, steps: [...h.steps], now }) as Record<string, unknown>;
+      const kept = Object.fromEntries(Object.entries(patch).filter(([, value]) => !(value !== null && typeof value === "object" && "clear" in value)));
+      op = { ...op, ...kept } as Operation;
+      return patch;
+    };
+
+    for (const check of [1, 2, 3]) {
+      expect(await settle(5_000 + check)).toMatchObject({ status: "pending", output: { isolatedGatewayReadinessChecks: check } });
+    }
+    expect(op.attempts).toBe(0);
+
+    expect(await settle(6_000)).toMatchObject({ status: "pending", attempts: 1, error: expect.stringContaining(`attempt 1 failed (transient): ${transient}`) });
+    expect(await settle(7_000)).toMatchObject({ status: "succeeded" });
+    expect(h.deps.commitCutover).toHaveBeenCalledOnce();
+  });
+
+  it.each(["no-live-revision", "revision-not-ready"] as const)("is picked up while the new gateway is %s, waits, then moves the user once it is ready", async (reason) => {
+    const h = mkDeps();
+    vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValueOnce({ ok: false, reason });
+    const handler = createMigrateUserHandler(h.deps);
+
+    const early = await handler(giveMove(0), h.ctx);
+    const waiting = buildOperationCompletionUpdate({ op: giveMove(0), result: early, steps: [...h.steps], now: 5_000 });
+
+    expect(early).toMatchObject({ success: false, error: `placement rejected for gw-green: ${reason}` });
+    expect(waiting).toMatchObject({ status: "pending", nextAttemptAt: 5_000 + OPERATOR_ISOLATED_GATEWAY_WAIT_MS });
+    expect(waiting.error).toContain("waiting for isolated gateway gw-green to become ready (check 1 of 30)");
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+
+    const ready = await handler(giveMove(1), h.ctx);
+
+    expect(ready).toMatchObject({ success: true });
+    expect(h.deps.commitCutover).toHaveBeenCalledOnce();
   });
 });

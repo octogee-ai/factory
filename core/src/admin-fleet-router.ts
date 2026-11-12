@@ -151,6 +151,16 @@ import type {
   IsolatedGatewayMirrorInput,
   PlatformUserRecord,
 } from "./platform-state/users.js";
+import {
+  failedRetirementOf,
+  giveOperatorIsolatedGateway,
+  movesTouchingGateway,
+  rearmFailedRetirement,
+  isolatedGatewayRetireRefusal,
+  operatorAllocationId,
+  ownIsolatedGatewayTargetRefusal,
+  planOperatorIsolatedGateway,
+} from "./operator-isolated-gateway.js";
 import type { OrchestratorConfig } from "./platform-state/config.js";
 import type { FleetRegistryRecord } from "./platform-state/fleet-registry.js";
 import { readReleaseStatus, summarizeReleaseStatus } from "./release-status.js";
@@ -1389,6 +1399,43 @@ async function readDurableGatewayRuntime(
   if (!root) return null;
   const runtime = registry === null ? null : exactRuntimeDoc(root, runtimeRecordDoc(registry).data());
   return { root, runtime, heartbeat: runtimeHeartbeat(runtime) };
+}
+
+async function retirementRefusal(
+  store: PlatformStateStore,
+  gatewayId: string,
+  runtime: DurableGatewayRuntime,
+  asked: { blockingMove: string | null; force: boolean; deleteHome: boolean; retainData: boolean },
+): Promise<Record<string, unknown> | null> {
+  if (asked.blockingMove) return { error: `user migration is in flight for gateway ${gatewayId}`, gatewayId };
+  if (projectDisposableRuntime(runtime.root as unknown as GlmDoc)) {
+    const isolated = await isolatedGatewayRetireRefusal(store, gatewayId, asked);
+    if (isolated) return isolated;
+  }
+  const blocker = gatewayRetirementBlocker(gatewayId, runtime);
+  if (blocker) return blocker;
+  const assignments = await store.gateways.assignments.list(gatewayId);
+  if (assignments.length > 0) {
+    return {
+      error: "gateway still has assigned users; migrate them off before retiring",
+      gatewayId,
+      assignedCustomers: assignments.map((a) => a.slug),
+    };
+  }
+  const mounted = await mountedUsersBlockingRetirement(store, gatewayId, runtime);
+  return mounted.length > 0
+    ? { error: "gateway still has mounted users; migrate them off before retiring", gatewayId, mountedUsers: mounted }
+    : null;
+}
+
+async function mountedUsersBlockingRetirement(
+  store: PlatformStateStore,
+  gatewayId: string,
+  runtime: DurableGatewayRuntime,
+): Promise<string[]> {
+  const parkedVm = runtime.root.desiredStatus === "paused" &&
+    resolveGatewayRuntime((await store.fleetRegistry.get(gatewayId))?.runtime) === "gce-vm";
+  return parkedVm ? [] : [...readMountedSlugs(runtime.heartbeat ?? undefined)];
 }
 
 function gatewayRetirementBlocker(
@@ -5696,6 +5743,34 @@ router.post(
     },
   );
 
+  async function answerFailedRetirement(input: {
+    req: Request; res: Response; gatewayId: string; runtime: DurableGatewayRuntime; optionsSent: boolean;
+  }): Promise<boolean> {
+    const { req, res, gatewayId, runtime } = input;
+    const operationId = await failedRetirementOf(store, runtime.root);
+    if (!operationId) return false;
+    if (input.optionsSent) {
+      res.status(409).json({
+        code: "retire-retry-takes-no-options",
+        error: "a failed retire is driven again as it was first requested; send the request without options",
+        gatewayId,
+        operationId,
+      });
+      return true;
+    }
+    await runAdminFleetMutation({
+      req,
+      what: "retry gateway retirement",
+      why: ADMIN_FLEET_REQUEST_REASON,
+      target: { gatewayId },
+      preActionStatus: { desiredStatus: runtime.root.desiredStatus },
+      mutation: { kind: "retire-gateway", gatewayId, retryOperationId: operationId },
+      action: () => rearmFailedRetirement(store, operationId),
+    });
+    res.status(202).json({ gatewayId, operationId, retried: true });
+    return true;
+  }
+
   router.delete(
     "/gateways/:id",
     async (req: Request, res: Response, next: NextFunction) => {
@@ -5712,43 +5787,18 @@ router.post(
             .json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
           return;
         }
-        const disposable = projectDisposableRuntime(
-          runtime.root as unknown as GlmDoc,
-        );
-        if (disposable) {
-          res.status(409).json({
-            error:
-              "disposable gateway termination is owned by the isolated runtime lifecycle",
-            gatewayId: id,
-          });
-          return;
-        }
-        const retirementBlocker = gatewayRetirementBlocker(id, runtime);
-        if (retirementBlocker) {
-          res.status(409).json(retirementBlocker);
-          return;
-        }
-        // Refuse synchronously while any user is still assigned — the
-        // controller's retire arm enforces the same gate, but a 409 here spares
-        // the operator a marked-retired-then-blocked gateway.
-        const assignments = await store.gateways.assignments.list(id);
-        if (assignments.length > 0) {
-          res.status(409).json({
-            error:
-              "gateway still has assigned users; migrate them off before retiring",
-            gatewayId: id,
-            assignedCustomers: assignments.map((a) => a.slug),
-          });
-          return;
-        }
-        const mounted = [...readMountedSlugs(runtime.heartbeat ?? undefined)];
-        if (mounted.length > 0) {
-          res.status(409).json({
-            error:
-              "gateway still has mounted users; migrate them off before retiring",
-            gatewayId: id,
-            mountedUsers: mounted,
-          });
+        const optionsSent = retainData || retainServiceAccount ||
+          isTruthyQueryFlag(req.query.force) || isTruthyQueryFlag(req.query.deleteHome);
+        if (await answerFailedRetirement({ req, res, gatewayId: id, runtime, optionsSent })) return;
+        const moves = await movesTouchingGateway(store, id);
+        const refusal = await retirementRefusal(store, id, runtime, {
+          blockingMove: moves.blocking,
+          force: isTruthyQueryFlag(req.query.force),
+          deleteHome: isTruthyQueryFlag(req.query.deleteHome),
+          retainData,
+        });
+        if (refusal) {
+          res.status(409).json(refusal);
           return;
         }
 
@@ -5770,28 +5820,34 @@ router.post(
               ...(retainData ? { retainData: true } : {}),
               ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
             },
-            action: async () => claimGatewayRetirementInStore({
-              store,
-              gatewayId: id,
-              operationId,
-              operation: {
-                kind: "retire-gateway",
-                status: "pending",
-                createdBy,
-                createdAt,
-                startedAt: null,
-                completedAt: null,
-                input: {
-                  gatewayId: id,
-                  ...(retainData ? { retainData: true } : {}),
-                  ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
-                },
-                steps: [],
+            action: async () => {
+              return claimGatewayRetirementInStore({
+                store,
                 gatewayId: id,
-              },
-              now: createdAt,
-              updatedBy: createdBy,
-            }),
+                operationId,
+                operation: {
+                  kind: "retire-gateway",
+                  status: "pending",
+                  createdBy,
+                  createdAt,
+                  startedAt: null,
+                  completedAt: null,
+                  input: {
+                    gatewayId: id,
+                    ...(retainData ? { retainData: true } : {}),
+                    ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
+                  },
+                  steps: [],
+                  gatewayId: id,
+                },
+                now: createdAt,
+                updatedBy: createdBy,
+                supersededMoves: {
+                  operationIds: moves.waiting,
+                  cancelledBecause: `cancelled: gateway ${id} was retired by ${createdBy}`,
+                },
+              });
+            },
           });
         } catch (error) {
           if (error instanceof GatewayRetirementConflictError) {
@@ -5800,7 +5856,10 @@ router.post(
           }
           throw error;
         }
-        res.status(202).json({ gatewayId: id, operationId, retainData, retainServiceAccount });
+        res.status(202).json({
+          gatewayId: id, operationId, retainData, retainServiceAccount,
+          ...(moves.waiting.length > 0 ? { cancelledOperations: moves.waiting } : {}),
+        });
       } catch (e) {
         next(e);
       }
@@ -6190,6 +6249,43 @@ router.get(
     } catch (error) { next(error); }
   });
 
+  router.post("/users/:uid/isolated-gateway", async (req, res, next) => {
+    try {
+      const uid = req.params.uid as string;
+      const sizingProfile = ((req.body ?? {}) as { sizingProfile?: unknown }).sizingProfile;
+      const planned = await planOperatorIsolatedGateway(store, { uid, sizingProfile });
+      if ("refusal" in planned) {
+        res.status(planned.refusal.status).json(planned.refusal.body);
+        return;
+      }
+      const allocationId = operatorAllocationId();
+      const outcome = await runAdminFleetMutation({
+        req,
+        what: "give user an isolated gateway",
+        why: ADMIN_FLEET_REQUEST_REASON,
+        target: { uid },
+        preActionStatus: { gatewayId: planned.sourceGatewayId },
+        mutation: {
+          kind: "give-isolated-gateway",
+          uid,
+          sizingProfile: planned.sizingKey,
+          fromGatewayId: planned.sourceGatewayId,
+        },
+        classifyResult: (result) => result.status >= 400
+          ? { outcome: "failed", error: String(result.body.error) }
+          : { outcome: "completed" },
+        action: () => giveOperatorIsolatedGateway(store, {
+          uid,
+          sizingProfile,
+          actor: (req as ActorRequest).uid ?? "unknown",
+          allocationId,
+          now: Date.now(),
+        }),
+      });
+      res.status(outcome.status).json(outcome.body);
+    } catch (error) { next(error); }
+  });
+
   router.post(
     "/users/:uid/migrate",
     async (req: Request, res: Response, next: NextFunction) => {
@@ -6223,11 +6319,11 @@ router.get(
           return;
         }
         if (target.gatewayClass !== "shared") {
-          res.status(400).json({
-            error: "manual migration target must be a shared gateway",
-            gatewayId: body.to,
-          });
-          return;
+          const refusal = await ownIsolatedGatewayTargetRefusal(store, uid, body.to);
+          if (refusal) {
+            res.status(refusal.status).json(refusal.body);
+            return;
+          }
         }
         if (target.status !== "ready") {
           res.status(409).json({

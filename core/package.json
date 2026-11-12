@@ -29,6 +29,10 @@
       "types": "./dist/isolated-prelaunch.d.ts",
       "default": "./dist/isolated-prelaunch.js"
     },
+    "./operator-isolated-gateway": {
+      "types": "./dist/operator-isolated-gateway.d.ts",
+      "default": "./dist/operator-isolated-gateway.js"
+    },
     "./gateway-runtime-restart": {
       "types": "./dist/gateway-runtime-restart.d.ts",
       "default": "./dist/gateway-runtime-restart.js"

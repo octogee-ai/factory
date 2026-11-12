@@ -30,6 +30,7 @@ import { buildUserDeletionPlan } from "./user-deletion-plan.js";
 import { FleetMutationIdempotencyError, runNormalFleetMutation, } from "./normal-fleet-mutation.js";
 import { OperationAuditIdempotencyConflictError } from "./operation-audit.js";
 import { firestoreUserAccountReader, } from "./user-account.js";
+import { failedRetirementOf, giveOperatorIsolatedGateway, movesTouchingGateway, rearmFailedRetirement, isolatedGatewayRetireRefusal, operatorAllocationId, ownIsolatedGatewayTargetRefusal, planOperatorIsolatedGateway, } from "./operator-isolated-gateway.js";
 import { readReleaseStatus, summarizeReleaseStatus } from "./release-status.js";
 import { centralGatewayReleasePayload, } from "./artifact-registry.js";
 function rejectPersistenceInBody(body) {
@@ -823,6 +824,35 @@ async function readDurableGatewayRuntime(store, gatewayId) {
         return null;
     const runtime = registry === null ? null : exactRuntimeDoc(root, runtimeRecordDoc(registry).data());
     return { root, runtime, heartbeat: runtimeHeartbeat(runtime) };
+}
+async function retirementRefusal(store, gatewayId, runtime, asked) {
+    if (asked.blockingMove)
+        return { error: `user migration is in flight for gateway ${gatewayId}`, gatewayId };
+    if (projectDisposableRuntime(runtime.root)) {
+        const isolated = await isolatedGatewayRetireRefusal(store, gatewayId, asked);
+        if (isolated)
+            return isolated;
+    }
+    const blocker = gatewayRetirementBlocker(gatewayId, runtime);
+    if (blocker)
+        return blocker;
+    const assignments = await store.gateways.assignments.list(gatewayId);
+    if (assignments.length > 0) {
+        return {
+            error: "gateway still has assigned users; migrate them off before retiring",
+            gatewayId,
+            assignedCustomers: assignments.map((a) => a.slug),
+        };
+    }
+    const mounted = await mountedUsersBlockingRetirement(store, gatewayId, runtime);
+    return mounted.length > 0
+        ? { error: "gateway still has mounted users; migrate them off before retiring", gatewayId, mountedUsers: mounted }
+        : null;
+}
+async function mountedUsersBlockingRetirement(store, gatewayId, runtime) {
+    const parkedVm = runtime.root.desiredStatus === "paused" &&
+        resolveGatewayRuntime((await store.fleetRegistry.get(gatewayId))?.runtime) === "gce-vm";
+    return parkedVm ? [] : [...readMountedSlugs(runtime.heartbeat ?? undefined)];
 }
 function gatewayRetirementBlocker(gatewayId, runtime) {
     if (runtime.root.desiredStatus === "running" &&
@@ -4140,6 +4170,32 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
+    async function answerFailedRetirement(input) {
+        const { req, res, gatewayId, runtime } = input;
+        const operationId = await failedRetirementOf(store, runtime.root);
+        if (!operationId)
+            return false;
+        if (input.optionsSent) {
+            res.status(409).json({
+                code: "retire-retry-takes-no-options",
+                error: "a failed retire is driven again as it was first requested; send the request without options",
+                gatewayId,
+                operationId,
+            });
+            return true;
+        }
+        await runAdminFleetMutation({
+            req,
+            what: "retry gateway retirement",
+            why: ADMIN_FLEET_REQUEST_REASON,
+            target: { gatewayId },
+            preActionStatus: { desiredStatus: runtime.root.desiredStatus },
+            mutation: { kind: "retire-gateway", gatewayId, retryOperationId: operationId },
+            action: () => rearmFailedRetirement(store, operationId),
+        });
+        res.status(202).json({ gatewayId, operationId, retried: true });
+        return true;
+    }
     router.delete("/gateways/:id", async (req, res, next) => {
         try {
             const id = req.params.id;
@@ -4154,38 +4210,19 @@ export function addAdminFleetRoutes(router, deps) {
                     .json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
                 return;
             }
-            const disposable = projectDisposableRuntime(runtime.root);
-            if (disposable) {
-                res.status(409).json({
-                    error: "disposable gateway termination is owned by the isolated runtime lifecycle",
-                    gatewayId: id,
-                });
+            const optionsSent = retainData || retainServiceAccount ||
+                isTruthyQueryFlag(req.query.force) || isTruthyQueryFlag(req.query.deleteHome);
+            if (await answerFailedRetirement({ req, res, gatewayId: id, runtime, optionsSent }))
                 return;
-            }
-            const retirementBlocker = gatewayRetirementBlocker(id, runtime);
-            if (retirementBlocker) {
-                res.status(409).json(retirementBlocker);
-                return;
-            }
-            // Refuse synchronously while any user is still assigned — the
-            // controller's retire arm enforces the same gate, but a 409 here spares
-            // the operator a marked-retired-then-blocked gateway.
-            const assignments = await store.gateways.assignments.list(id);
-            if (assignments.length > 0) {
-                res.status(409).json({
-                    error: "gateway still has assigned users; migrate them off before retiring",
-                    gatewayId: id,
-                    assignedCustomers: assignments.map((a) => a.slug),
-                });
-                return;
-            }
-            const mounted = [...readMountedSlugs(runtime.heartbeat ?? undefined)];
-            if (mounted.length > 0) {
-                res.status(409).json({
-                    error: "gateway still has mounted users; migrate them off before retiring",
-                    gatewayId: id,
-                    mountedUsers: mounted,
-                });
+            const moves = await movesTouchingGateway(store, id);
+            const refusal = await retirementRefusal(store, id, runtime, {
+                blockingMove: moves.blocking,
+                force: isTruthyQueryFlag(req.query.force),
+                deleteHome: isTruthyQueryFlag(req.query.deleteHome),
+                retainData,
+            });
+            if (refusal) {
+                res.status(409).json(refusal);
                 return;
             }
             const operationId = randomUUID();
@@ -4206,28 +4243,34 @@ export function addAdminFleetRoutes(router, deps) {
                         ...(retainData ? { retainData: true } : {}),
                         ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
                     },
-                    action: async () => claimGatewayRetirementInStore({
-                        store,
-                        gatewayId: id,
-                        operationId,
-                        operation: {
-                            kind: "retire-gateway",
-                            status: "pending",
-                            createdBy,
-                            createdAt,
-                            startedAt: null,
-                            completedAt: null,
-                            input: {
-                                gatewayId: id,
-                                ...(retainData ? { retainData: true } : {}),
-                                ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
-                            },
-                            steps: [],
+                    action: async () => {
+                        return claimGatewayRetirementInStore({
+                            store,
                             gatewayId: id,
-                        },
-                        now: createdAt,
-                        updatedBy: createdBy,
-                    }),
+                            operationId,
+                            operation: {
+                                kind: "retire-gateway",
+                                status: "pending",
+                                createdBy,
+                                createdAt,
+                                startedAt: null,
+                                completedAt: null,
+                                input: {
+                                    gatewayId: id,
+                                    ...(retainData ? { retainData: true } : {}),
+                                    ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
+                                },
+                                steps: [],
+                                gatewayId: id,
+                            },
+                            now: createdAt,
+                            updatedBy: createdBy,
+                            supersededMoves: {
+                                operationIds: moves.waiting,
+                                cancelledBecause: `cancelled: gateway ${id} was retired by ${createdBy}`,
+                            },
+                        });
+                    },
                 });
             }
             catch (error) {
@@ -4237,7 +4280,10 @@ export function addAdminFleetRoutes(router, deps) {
                 }
                 throw error;
             }
-            res.status(202).json({ gatewayId: id, operationId, retainData, retainServiceAccount });
+            res.status(202).json({
+                gatewayId: id, operationId, retainData, retainServiceAccount,
+                ...(moves.waiting.length > 0 ? { cancelledOperations: moves.waiting } : {}),
+            });
         }
         catch (e) {
             next(e);
@@ -4633,6 +4679,45 @@ export function addAdminFleetRoutes(router, deps) {
             next(error);
         }
     });
+    router.post("/users/:uid/isolated-gateway", async (req, res, next) => {
+        try {
+            const uid = req.params.uid;
+            const sizingProfile = (req.body ?? {}).sizingProfile;
+            const planned = await planOperatorIsolatedGateway(store, { uid, sizingProfile });
+            if ("refusal" in planned) {
+                res.status(planned.refusal.status).json(planned.refusal.body);
+                return;
+            }
+            const allocationId = operatorAllocationId();
+            const outcome = await runAdminFleetMutation({
+                req,
+                what: "give user an isolated gateway",
+                why: ADMIN_FLEET_REQUEST_REASON,
+                target: { uid },
+                preActionStatus: { gatewayId: planned.sourceGatewayId },
+                mutation: {
+                    kind: "give-isolated-gateway",
+                    uid,
+                    sizingProfile: planned.sizingKey,
+                    fromGatewayId: planned.sourceGatewayId,
+                },
+                classifyResult: (result) => result.status >= 400
+                    ? { outcome: "failed", error: String(result.body.error) }
+                    : { outcome: "completed" },
+                action: () => giveOperatorIsolatedGateway(store, {
+                    uid,
+                    sizingProfile,
+                    actor: req.uid ?? "unknown",
+                    allocationId,
+                    now: Date.now(),
+                }),
+            });
+            res.status(outcome.status).json(outcome.body);
+        }
+        catch (error) {
+            next(error);
+        }
+    });
     router.post("/users/:uid/migrate", async (req, res, next) => {
         try {
             const uid = req.params.uid;
@@ -4663,11 +4748,11 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             if (target.gatewayClass !== "shared") {
-                res.status(400).json({
-                    error: "manual migration target must be a shared gateway",
-                    gatewayId: body.to,
-                });
-                return;
+                const refusal = await ownIsolatedGatewayTargetRefusal(store, uid, body.to);
+                if (refusal) {
+                    res.status(refusal.status).json(refusal.body);
+                    return;
+                }
             }
             if (target.status !== "ready") {
                 res.status(409).json({

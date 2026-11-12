@@ -64,20 +64,29 @@ export interface VmGatewayRuntimeDeps {
   log: (msg: string) => void;
 }
 
+async function findGatewayVmPolicy(
+  store: Pick<PlatformStateStore, "config">,
+  tier: SizingTier,
+): Promise<GatewayVmProfile | null> {
+  const config = await store.config.orchestrator.get();
+  const matches = Object.entries(config?.sizingProfiles ?? {}).flatMap(([key, entry]) =>
+    entry.isolation === "isolated" && entry.sizingTier === tier ? [{ key, policy: entry.computer }] : []);
+  const [first] = matches;
+  if (!first) return null;
+  if (matches.some(({ policy }) => !isDeepStrictEqual(policy, first.policy))) {
+    throw new Error(`Conflicting gateway VM policies for sizing tier ${tier}: ${matches.map(({ key }) => key).join(", ")}`);
+  }
+  return first.policy;
+}
+
 export async function resolveGatewayVmPolicy(
   store: Pick<PlatformStateStore, "config">,
   sizingTier: SizingTier | null | undefined,
 ): Promise<GatewayVmProfile> {
   const tier = sizingTier ?? "s";
-  const config = await store.config.orchestrator.get();
-  const matches = Object.entries(config?.sizingProfiles ?? {}).flatMap(([key, entry]) =>
-    entry.isolation === "isolated" && entry.sizingTier === tier ? [{ key, policy: entry.computer }] : []);
-  const [first] = matches;
-  if (!first) throw new Error(`No gateway VM policy for sizing tier ${tier}`);
-  if (matches.some(({ policy }) => !isDeepStrictEqual(policy, first.policy))) {
-    throw new Error(`Conflicting gateway VM policies for sizing tier ${tier}: ${matches.map(({ key }) => key).join(", ")}`);
-  }
-  return first.policy;
+  const policy = await findGatewayVmPolicy(store, tier);
+  if (!policy) throw new Error(`No gateway VM policy for sizing tier ${tier}`);
+  return policy;
 }
 
 export function resolveIsolatedParking(env: Record<string, string | undefined>): boolean {
@@ -170,7 +179,13 @@ interface GatewayRuntimeStampInput {
 
 async function reconcileStampedVmSpec(input: GatewayRuntimeStampInput, data: Partial<FleetRegistryRecord>): Promise<void> {
   if (data.runtime !== "gce-vm" || input.gatewayClass !== "builder" || !input.vmSpec) return;
-  const policy = await resolveGatewayVmPolicy(input.store, input.sizingTier);
+  const tier = input.sizingTier ?? "s";
+  const policy = await findGatewayVmPolicy(input.store, tier);
+  if (!policy) {
+    if (!data.vmSpec) throw new Error(`No gateway VM policy for sizing tier ${tier}`);
+    input.log(`[vm-gateway-runtime] ${input.gatewayId}: no sizing profile has tier ${tier}; keeping the stamped VM spec`);
+    return;
+  }
   if (policy.runtime !== "gce-vm") return;
   const shape = tierVmShape(policy);
   await input.store.transaction({ label: "gateway-runtime.reconcile-vm-spec" }, async (transaction) => {

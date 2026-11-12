@@ -1,4 +1,5 @@
 import { builderActivateOperationId } from "./user-activation-lease.js";
+import { isOperatorIssuedAllocation } from "./operator-isolated-gateway.js";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import type { GatewayDoc } from "@octogee/shared/types/gateway-releases";
 import type { GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
@@ -110,6 +111,7 @@ export async function isolatedBootMode(input: {
   const user = await reader.users.records.get(gateway.ownerUid);
   if (!user) throw new Error("Isolated prelaunch owner is unavailable");
   if (await hasServingUserAssignment(reader, gateway, user)) return { mode: "normal" };
+  if (isOperatorIssuedAllocation(gateway.allocation)) return { mode: "normal" };
   const lease = user.activationLease;
   if (!activationLeaseMatches(gateway, lease)) {
     throw new Error("User activation authority is inconsistent");

@@ -665,6 +665,37 @@ describe("gateway operation queue — automatic retry with backoff", () => {
     expect(store.get("op-migrate")?.startedAt).toBe(1_031_000);
   });
 
+  it("counts a give's readiness checks across worker passes without spending its attempts, then retries a transient failure", async () => {
+    vi.setSystemTime(1_000_000);
+    const notLive = "placement rejected for lin-s-0a1b2c3d: no-live-revision";
+    const answers = [notLive, notLive, notLive, "connect ECONNREFUSED 10.0.0.1:443"];
+    const handler: OperationHandler = vi.fn(async () => {
+      const error = answers.shift();
+      return error ? { steps: [], success: false, error } : { steps: [], success: true };
+    });
+    const { db, store } = createOperationsFixture({
+      "op-give": baseOp({ id: "op-give", kind: "migrate-customer", createdAt: 1, input: {
+        uid: "uid-lin", fromGatewayId: "shared-a", toGatewayId: "lin-s-0a1b2c3d", source: "operator-isolated-gateway",
+      } }),
+    });
+    const deps = buildDeps(db, { "migrate-customer": handler });
+
+    for (const check of [1, 2, 3]) {
+      await drainPendingOperationsOnce(deps);
+      expect(store.get("op-give")).toMatchObject({ status: "pending", output: { isolatedGatewayReadinessChecks: check } });
+      expect(store.get("op-give")?.attempts ?? 0).toBe(0);
+      vi.setSystemTime(Date.now() + 61_000);
+    }
+
+    await drainPendingOperationsOnce(deps);
+    expect(store.get("op-give")).toMatchObject({ status: "pending", attempts: 1 });
+
+    vi.setSystemTime(Date.now() + 31_000);
+    await drainPendingOperationsOnce(deps);
+    expect(store.get("op-give")).toMatchObject({ status: "succeeded" });
+    expect(handler).toHaveBeenCalledTimes(5);
+  });
+
   it("fails a terminal (validation) error immediately with no retry", async () => {
     vi.setSystemTime(1_000_000);
     const handler: OperationHandler = vi.fn(async () => ({

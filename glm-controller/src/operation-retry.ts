@@ -1,4 +1,5 @@
 import { isUserActivateOperationIdFor, isUserReturnOperationIdFor } from "@octogee/core/user-activation-lease";
+import { OPERATOR_ISOLATED_GATEWAY_SOURCE } from "@octogee/core/operator-isolated-gateway";
 import { sourceTransferBlocksRelease } from './lib/source-transfer-execution.js';
 import type { SourceTransferExecution } from '@octogee/shared/types/glm';
 import type { OperationPatch } from "@octogee/core/platform-state";
@@ -85,6 +86,8 @@ export function classifyOperationFailure(
 export const MAX_OPERATION_ATTEMPTS = 3;
 export const MAX_PREEMPTED_OPERATION_ATTEMPTS = 6;
 export const MAX_OPERATION_ATTEMPT_HISTORY = 20;
+export const MAX_OPERATOR_ISOLATED_GATEWAY_WAIT_ATTEMPTS = 30;
+export const OPERATOR_ISOLATED_GATEWAY_WAIT_MS = 60_000;
 
 // `completedAt` is a plain epoch number, which a native Firestore TTL policy
 // cannot read; `expireAt` is its Timestamp twin. Terminal rows only — a row that
@@ -183,6 +186,7 @@ export interface OperationCompletionInput {
     attempts?: number;
     attemptHistory?: OperationAttemptRecord[];
     startedAt?: number | null;
+    output?: Record<string, unknown>;
     customerMigrationV2?: UserMigrationV2State;
     schedulerHandoff?: SchedulerHandoffState;
     schedulerHandoffReleased?: boolean;
@@ -318,6 +322,48 @@ function failureCompletionContext(
   };
 }
 
+function isTargetNotServingYet(error: string): boolean {
+  return /^placement rejected for \S+: (?:no-live-revision|revision-not-ready)$/.test(error) ||
+    /^target gateway \S+ is not migration-ready/.test(error);
+}
+
+function failedOnGatewayNotServingYet(op: OperationCompletionInput["op"], error: string): boolean {
+  return op.kind === MIGRATE_USER_KIND &&
+    op.input?.source === OPERATOR_ISOLATED_GATEWAY_SOURCE &&
+    isTargetNotServingYet(error);
+}
+
+function operatorIsolatedGatewayWaitExpired(
+  input: OperationCompletionInput,
+  persistedSteps: OperationStep[],
+  attempts: number,
+  failure: FailureCompletionContext,
+): OperationPatch {
+  const error = `isolated gateway ${String(input.op.input?.toGatewayId)} did not become ready within ` +
+    `${MAX_OPERATOR_ISOLATED_GATEWAY_WAIT_ATTEMPTS} checks; last cause: ${failure.error}`;
+  return failedCompletion(input, persistedSteps, attempts, { ...failure, error });
+}
+
+function readinessChecks(op: OperationCompletionInput["op"]): number {
+  const counted = op.output?.isolatedGatewayReadinessChecks;
+  return typeof counted === "number" && Number.isSafeInteger(counted) && counted > 0 ? counted : 0;
+}
+
+function operatorIsolatedGatewayWait(input: OperationCompletionInput, checks: number, cause: string): OperationPatch {
+  return {
+    status: "pending",
+    startedAt: null,
+    steps: [],
+    expireAt: CLEAR,
+    nextAttemptAt: input.now + OPERATOR_ISOLATED_GATEWAY_WAIT_MS,
+    waitingOn: CLEAR,
+    rolledBack: false,
+    output: { isolatedGatewayReadinessChecks: checks },
+    error: `waiting for isolated gateway ${String(input.op.input?.toGatewayId)} to become ready ` +
+      `(check ${checks} of ${MAX_OPERATOR_ISOLATED_GATEWAY_WAIT_ATTEMPTS}): ${cause}`,
+  };
+}
+
 function restartAbortedMigration(op: OperationCompletionInput["op"]): OperationPatch {
   return op.customerMigrationV2?.phase === "aborted"
     ? { customerMigrationV2: CLEAR }
@@ -398,6 +444,12 @@ export function buildOperationCompletionUpdate(
   if (result.success) return successfulCompletion(input, persistedSteps, attempts);
 
   const failure = failureCompletionContext(input, persistedSteps, attempts);
+  if (failedOnGatewayNotServingYet(op, failure.error)) {
+    const checks = readinessChecks(op) + 1;
+    return checks < MAX_OPERATOR_ISOLATED_GATEWAY_WAIT_ATTEMPTS
+      ? operatorIsolatedGatewayWait(input, checks, failure.error)
+      : operatorIsolatedGatewayWaitExpired(input, persistedSteps, attempts, failure);
+  }
   const retryBeyondCap = retriesBeyondAttemptCap(op, failure, attempts);
   const retry = !needsSharedRollbackRecovery(input, persistedSteps) && shouldRetry(
     op,

@@ -734,6 +734,7 @@ interface PreparedMigration {
   targets: MigrationTargets;
   projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
   urls: Map<string, string>;
+  sourcePreparationFenced?: true;
 }
 
 interface NativeReturnProvision {
@@ -1771,13 +1772,10 @@ async function recoverCommittedMigration(
   request: { uid: string; toGatewayId: string },
 ): Promise<OperationResult | null> {
   if (user.currentGatewayId !== request.toGatewayId) return null;
-  const convergence = isControllerConvergenceSource(op.input.source);
-  if (convergence) {
-    const nativeReturn = await finishNativeReturnAfterCutover(deps, op, ctx, user, request);
-    if (nativeReturn) return nativeReturn;
-  }
+  const nativeReturn = await finishNativeReturnAfterCutover(deps, op, ctx, user, request);
+  if (nativeReturn) return nativeReturn;
   if (op.schedulerHandoff) return completeSchedulerHandoff(deps, op, ctx, user, request);
-  return convergence ? { steps: [], success: true, rolledBack: false } : null;
+  return isControllerConvergenceSource(op.input.source) ? { steps: [], success: true, rolledBack: false } : null;
 }
 
 function assertRetainedMigrationStrategy(op: Operation, durable: boolean, nativeReturn: NativeVmReturn | null): void {
@@ -1803,11 +1801,11 @@ function declaredMigrationSourceChanged(input: MigrateUserInput, resolvedSource:
 async function prepareSharedSourceAgentStores(input: {
   deps: MigrateUserDeps; op: Operation; ctx: OperationContext;
   targets: MigrationTargets; uid: string; slug: string;
-}): Promise<void> {
+}): Promise<boolean> {
   const { deps, op, ctx, targets, uid, slug } = input;
   if (targets.fromGatewayClass !== "shared" || targets.sourceAssignmentMode !== "assigned" ||
       op.input.fromGatewayId !== targets.fromGatewayId || op.steps.length !== 0 ||
-      op.schedulerHandoff && op.schedulerHandoffReleased !== true) return;
+      op.schedulerHandoff && op.schedulerHandoffReleased !== true) return false;
   if (!ctx.assertActiveClaim || !deps.setMigrationPhase || !deps.assertMigrationSourcePreparationAuthority || !deps.prepareMigrationAgentStores) {
     throw new Error("Shared source preparation requires ownership preparation and claimed placement authority");
   }
@@ -1821,9 +1819,40 @@ async function prepareSharedSourceAgentStores(input: {
   };
   await ctx.assertActiveClaim();
   await deps.setMigrationPhase({ uid, sourceGatewayId: targets.fromGatewayId, operationId: op.id, phase: "preparing" });
-  await assertCurrent();
-  await deps.prepareMigrationAgentStores(targets.fromGatewayId, slug, { expectedUserUid: uid, assertCurrent });
-  await assertCurrent();
+  try {
+    await assertCurrent();
+    await deps.prepareMigrationAgentStores(targets.fromGatewayId, slug, { expectedUserUid: uid, assertCurrent });
+    await assertCurrent();
+  } catch (error) {
+    await clearFailedSourcePreparation({ deps, op, ctx, targets, uid }, error);
+    throw error;
+  }
+  return true;
+}
+
+async function clearFailedSourcePreparation(input: {
+  deps: MigrateUserDeps; op: Operation; ctx: OperationContext; targets: MigrationTargets; uid: string;
+}, cause: unknown): Promise<void> {
+  const { deps, op, ctx, targets, uid } = input;
+  if (op.input.source === "builder-activation-lease" || !deps.clearMigrationPreparation) return;
+  try {
+    await ctx.assertActiveClaim!();
+  } catch {
+    return;
+  }
+  try {
+    await deps.clearMigrationPreparation({
+      uid,
+      sourceGatewayId: targets.fromGatewayId,
+      operationId: op.id,
+      sourceAssignmentMode: targets.sourceAssignmentMode,
+      sourceRelease: targets.fromRelease,
+      sourceEpoch: targets.fromEpoch,
+      ...(targets.sourceRootUpdatedAt !== undefined ? { sourceRootUpdatedAt: targets.sourceRootUpdatedAt } : {}),
+    });
+  } catch (cleanupError) {
+    throw new Error(`${errorMessage(cause)}; the preparation fence could not be cleared: ${errorMessage(cleanupError)}`);
+  }
 }
 
 function migrationPlacementFailure(op: Operation, failure: { error: string }): { error: string; rolledBack?: false } {
@@ -1996,22 +2025,24 @@ async function prepareLegacyMigration(input: {
       throw new Error("User activation waits for the source and target to run the same OpenClaw build");
     }
   }
-  await prepareSharedSourceAgentStores({ deps, op, ctx, targets, uid: request.uid, slug: user.slug });
+  const sourcePreparationFenced = await prepareSharedSourceAgentStores({ deps, op, ctx, targets, uid: request.uid, slug: user.slug });
+  const clearFence = async (cause: unknown): Promise<void> => {
+    if (sourcePreparationFenced) await clearFailedSourcePreparation({ deps, op, ctx, targets, uid: request.uid }, cause);
+  };
   const urls = new Map<string, string>();
-  urls.set(
-    targets.fromGatewayId,
-    await deps.resolveGatewayUrl(targets.fromGatewayId),
-  );
-  urls.set(
-    targets.toGatewayId,
-    await deps.resolveGatewayUrl(targets.toGatewayId),
-  );
-  const migrationSnapshot = await deps.readUserSnapshot(
-    request.uid,
-    targets.toGatewayId,
-  );
+  let migrationSnapshot: Awaited<ReturnType<MigrateUserDeps["readUserSnapshot"]>>;
+  try {
+    urls.set(targets.fromGatewayId, await deps.resolveGatewayUrl(targets.fromGatewayId));
+    urls.set(targets.toGatewayId, await deps.resolveGatewayUrl(targets.toGatewayId));
+    migrationSnapshot = await deps.readUserSnapshot(request.uid, targets.toGatewayId);
+  } catch (error) {
+    await clearFence(error);
+    throw error;
+  }
   if (!migrationSnapshot) {
-    return { error: `durable snapshot not found for ${request.uid}` };
+    const error = `durable snapshot not found for ${request.uid}`;
+    await clearFence(error);
+    return { error };
   }
   return {
     ...request,
@@ -2022,6 +2053,7 @@ async function prepareLegacyMigration(input: {
       ? { projectCheckoutScope: migrationSnapshot.projectCheckoutScope }
       : {}),
     urls,
+    ...(sourcePreparationFenced ? { sourcePreparationFenced: true as const } : {}),
   };
 }
 
@@ -2134,6 +2166,30 @@ async function executeMigration(
   prepared: PreparedMigration,
   op: Operation,
 ): Promise<OperationResult> {
+  const reported = { steps: 0 };
+  const clearUnstarted = async (cause: unknown): Promise<void> => {
+    if (prepared.sourcePreparationFenced && reported.steps === 0) {
+      await clearFailedSourcePreparation({ deps, op, ctx, targets: prepared.targets, uid: prepared.uid }, cause);
+    }
+  };
+  let result: OperationResult;
+  try {
+    result = await executeMigrationAttempt(deps, ctx, prepared, op, reported);
+  } catch (error) {
+    await clearUnstarted(error);
+    throw error;
+  }
+  if (!result.success && result.waitingForUserIdle !== true) await clearUnstarted(result.error);
+  return result;
+}
+
+async function executeMigrationAttempt(
+  deps: MigrateUserDeps,
+  ctx: OperationContext,
+  prepared: PreparedMigration,
+  op: Operation,
+  reported: { steps: number },
+): Promise<OperationResult> {
   const operationId = op.id;
   const automatic = resolveOperationOrigin(op.origin) === "automatic";
   const attempt = (op.attempts ?? 0) + 1;
@@ -2165,6 +2221,7 @@ async function executeMigration(
   const destinationContext: OperationContext = {
     ...ctx,
     reportStep: async (step) => {
+      reported.steps += 1;
       await ctx.reportStep(step);
       if (step.name === "rollback:unmount-target" && step.status === "done") targetUnmountConfirmed = true;
       if (["keys-sync-state", "pre-sync-state", "wait-for-active-work"].includes(step.name) && step.status === "failed") preparationFailed = true;

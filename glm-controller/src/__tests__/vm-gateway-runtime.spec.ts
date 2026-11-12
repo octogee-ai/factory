@@ -1798,6 +1798,30 @@ describe("runtime policy and stamping", () => {
     expect(docs["glmGateways/b-x"].vmSpec).toMatchObject({ machineType: "e2-standard-2", homeDiskSizeGb: 50 });
   });
 
+  it("keeps the stamped VM spec of a gateway whose sizing profile was removed", async () => {
+    const stamped = { ...spec, machineType: "e2-standard-4", homeDiskSizeGb: 100 };
+    const { team: _removed, ...remaining } = FIXTURE_SIZING_PROFILES;
+    const { store, docs, writes } = recordingStore({
+      "glmGateways/b-x": { runtime: "gce-vm", vmSpec: stamped },
+      "config/orchestrator": { sizingProfiles: remaining },
+    });
+    const log = vi.fn();
+
+    expect(await stampGatewayRuntime({ store, gatewayId: "b-x", initial: initialRuntime("b-x"), gatewayClass: "builder", sizingTier: "l", vmSpec: spec, log })).toBe("gce-vm");
+
+    expect(docs["glmGateways/b-x"].vmSpec).toEqual(stamped);
+    expect(writes).toEqual([]);
+    expect(log).toHaveBeenCalledWith("[vm-gateway-runtime] b-x: no sizing profile has tier l; keeping the stamped VM spec");
+  });
+
+  it("refuses to stamp a new gateway whose sizing profile is gone", async () => {
+    const { team: _removed, ...remaining } = FIXTURE_SIZING_PROFILES;
+    const { store } = recordingStore({ "config/orchestrator": { sizingProfiles: remaining } });
+
+    await expect(stampGatewayRuntime({ store, gatewayId: "b-new", initial: initialRuntime("b-new"), gatewayClass: "builder", sizingTier: "l", vmSpec: spec, log: vi.fn() }))
+      .rejects.toThrow("No gateway VM policy for sizing tier l");
+  });
+
   it("moves a persisted VM spec to its tier's desktop", async () => {
     const persisted = { ...spec, machineType: "e2-medium", diskSizeGb: 40, bootDiskType: "pd-balanced" as const, homeDiskSizeGb: 10, provisioningModel: "STANDARD" as const, desktop: "omarchy" as const };
     const { store, docs } = recordingStore({ "glmGateways/b-x": { runtime: "gce-vm", vmSpec: persisted } });

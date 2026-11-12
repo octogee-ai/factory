@@ -57,6 +57,7 @@ interface ClaimGatewayRetirementInStoreInput {
     transaction: PlatformStateTransaction;
     root: RetirableGateway;
   }) => Promise<void> | void;
+  supersededMoves?: { operationIds: readonly string[]; cancelledBecause: string };
 }
 
 interface VerifyGatewayRetirementClaimInput {
@@ -312,6 +313,13 @@ export async function assertGatewayRuntimeMutationUnfencedInStore(
   }
 }
 
+export function moveHasNotBegun(operation: OperationRecord, gatewayId: string): boolean {
+  return operation.kind === "migrate-customer" && operation.status === "pending" && operation.startedAt === null &&
+    operation.input?.toGatewayId === gatewayId && !operation.attempts && operation.steps.length === 0 &&
+    operation.customerMigrationV2 === undefined && operation.schedulerHandoff === undefined &&
+    operation.cutoverCommittedAt === undefined && operation.sourceTransferExecution === undefined;
+}
+
 function activeMigrationConflict(gatewayId: string, operations: readonly Stored<OperationRecord>[]): boolean {
   return findActiveGatewayMigration(
     gatewayId,
@@ -357,7 +365,11 @@ export async function claimGatewayRetirementInStore(
       transaction.journal.operations.listByStatus(["pending", "running"]),
     ]);
     const { rootData } = claimableGatewayRetirementRoot(input.gatewayId, stored ?? undefined);
-    if (activeMigrationConflict(input.gatewayId, activeOperations)) {
+    const superseded = new Set(input.supersededMoves?.operationIds ?? []);
+    const stillWaiting = activeOperations.filter((operation) =>
+      superseded.has(operation.id) && moveHasNotBegun(operation, input.gatewayId));
+    if (stillWaiting.length !== superseded.size ||
+        activeMigrationConflict(input.gatewayId, activeOperations.filter((operation) => !superseded.has(operation.id)))) {
       throw new GatewayRetirementConflictError(
         `user migration is in flight for gateway ${input.gatewayId}`,
       );
@@ -398,6 +410,14 @@ export async function claimGatewayRetirementInStore(
       },
       { retirementVersion: rootData.retirementVersion ?? null, updatedAt: rootData.updatedAt },
     );
+    for (const operation of stillWaiting) {
+      await transaction.journal.operations.patch(operation.id, {
+        status: "failed",
+        completedAt: input.now,
+        error: input.supersededMoves!.cancelledBecause,
+        nextAttemptAt: { clear: true },
+      }, { status: ["pending"], startedAt: null });
+    }
     await transaction.journal.operations.put({
       ...input.operation,
       id: input.operationId,

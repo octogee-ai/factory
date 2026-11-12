@@ -1,4 +1,3 @@
-import { isUserReturnOperationIdFor } from "./user-activation-lease.js";
 const SERIAL_KINDS = new Set([
     "rollout",
     "migrate-customer",
@@ -37,10 +36,9 @@ function nativeReturnBlocksSourceRollout(rollout, returning) {
         return false;
     const source = stringFields(returning.input, ["fromGatewayId"])[0];
     const rolloutGateway = stringFields(rollout.input, ["gatewayId"])[0];
-    const input = returning.input;
-    return source !== undefined && source === rolloutGateway && input?.source === "builder-activation-lease" &&
-        typeof input.toGatewayId === "string" && input.toGatewayId.startsWith("shared-") &&
-        isUserReturnOperationIdFor(returning.id, source);
+    const target = stringFields(returning.input, ["toGatewayId"])[0];
+    return source !== undefined && source === rolloutGateway && !source.startsWith("shared-") &&
+        target !== undefined && target.startsWith("shared-");
 }
 export function serialFleetOperationsConflict(candidate, other) {
     if (!SERIAL_KINDS.has(candidate.kind) || !SERIAL_KINDS.has(other.kind))

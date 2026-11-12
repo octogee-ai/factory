@@ -195,11 +195,17 @@ export function sharedRecoveryTargetCleaned(input, schedulerHandoff) {
         return step.name === "rollback:unmount-target" && step.status === "done";
     });
 }
+function isolatedTargetBelongsToUser(targetRoot, input) {
+    const root = projectGatewayDesiredRootForGateway(targetRoot, String(input.toGatewayId));
+    return root?.gatewayClass === "builder" && typeof input.uid === "string" && root.ownerUid === input.uid &&
+        root.allocation?.kind === "disposable-builder" && root.allocation.claimedByUid === input.uid;
+}
 function assertRecoveryTarget(params) {
     const matches = params.input.source === "builder-activation-lease"
         ? userActivationRecoveryTargetMatches(params)
         : sharedRecoveryTargetCleaned(params.input, params.schedulerHandoff) ||
-            projectGatewayDesiredRootForGateway(params.targetRoot, String(params.input.toGatewayId))?.gatewayClass === "shared";
+            projectGatewayDesiredRootForGateway(params.targetRoot, String(params.input.toGatewayId))?.gatewayClass === "shared" ||
+            isolatedTargetBelongsToUser(params.targetRoot, params.input);
     if (!matches)
         throw new Error("workspace migration recovery target authority changed");
 }
@@ -340,14 +346,16 @@ function preparationCleanupMatches(operation, phase) {
     }
     if (phase !== "preparing" && phase !== "waiting")
         return false;
-    const expected = phase === "preparing" ? [["keys-sync-state", "failed"]] : [
-        ["keys-sync-state", "done"], ["pre-sync-state", "done"],
-        ["wait-for-active-work", "failed"], ["rollback:unmount-target", "done"],
-    ];
-    return isDeepStrictEqual(operation.steps.map(value => {
+    const steps = operation.steps.map(value => {
         const step = recordOrEmpty(value);
         return [step.name, step.status];
-    }), expected);
+    });
+    if (phase === "preparing")
+        return steps.length === 0 || isDeepStrictEqual(steps, [["keys-sync-state", "failed"]]);
+    return isDeepStrictEqual(steps, [
+        ["keys-sync-state", "done"], ["pre-sync-state", "done"],
+        ["wait-for-active-work", "failed"], ["rollback:unmount-target", "done"],
+    ]);
 }
 export async function clearRetiredUserActivationPreparation(deps, params) {
     const operationId = builderActivateOperationId(params.targetGatewayId, params.generation);

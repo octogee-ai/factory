@@ -73,6 +73,26 @@ describe("native computer return checkpoint", () => {
     expect(h.update).not.toHaveBeenCalled();
   });
 
+  it("takes the same path for an operator's return: a held owner with no lease, an operator-issued tag, no source on the operation", async () => {
+    const h = harness();
+    h.root.allocation = { kind: "disposable-builder", schemaVersion: 1, leaseId: "operator-7d2f", generation: 1, claimedByUid: "alice-id" };
+    h.user.provisioning.openclaw = { gatewayId: "native", managedBy: "operator" };
+    h.source.vmHome.lastCheckpoint = { completedAt: 500 };
+    h.deps.wait.mockImplementation(async () => {
+      h.source.vmHome.lastCheckpoint = { completedAt: 1001 };
+      h.source.vmHome.checkpointAcknowledgedAt = 1000;
+    });
+
+    const native = (await prepareNativeVmReturn(h.deps, input))!;
+    await native.requestCheckpoint();
+    await native.awaitCheckpoint();
+
+    expect(h.docs["glmOperations/return-1"].input).not.toHaveProperty("source");
+    expect(h.user.provisioning.openclaw.activationLease).toBeUndefined();
+    expect(h.source.vmHome).toMatchObject({ checkpointRequestedAt: 1000, parkRequestedAt: 1000, returnOperationId: "return-1" });
+    expect(h.source.vmHome.lastCheckpoint.completedAt).toBeGreaterThan(1000);
+  });
+
   it("refuses native return recovery when its old target root disappeared", async () => {
     const h = harness();
     delete h.docs["gateways/shared"];

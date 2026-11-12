@@ -2024,6 +2024,7 @@ async function runClaimedOperation(
         attempts: freshOp.attempts,
         attemptHistory: freshOp.attemptHistory,
         startedAt: freshOp.startedAt,
+        output: freshOp.output,
         customerMigrationV2: freshOp.customerMigrationV2,
         schedulerHandoff: freshOp.schedulerHandoff,
         schedulerHandoffReleased: freshOp.schedulerHandoffReleased,
