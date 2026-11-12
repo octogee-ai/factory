@@ -47,22 +47,13 @@ import {
   authoritativeSharedGatewayLoad,
   compareSharedGatewayIds,
   deriveSharedGatewayPoolConfig,
-  isAcceptingSharedGateway,
-  isSettledSharedGateway,
-  parseSharedGatewayAutoscalingConfig,
   parseSharedGatewayPoolConfig,
-  platformPreferredSharedGatewayCandidates,
-  selectSharedGateway,
   sharedGatewayAddedBy,
   type SharedGatewayAddedBy,
-  type SharedGatewayPlacementPurpose,
   type SharedGatewayPoolCandidate,
-  type SharedGatewayRebalance,
-  type SharedGatewaySelection,
   type SharedPoolReplacement,
 } from "@octogee/shared/types/shared-gateway-pool";
 import {
-  InvalidSharedGatewayAutoscalingConfigError,
   readSharedGatewayPoolConfigInStore,
 } from "@octogee/core/shared-gateway-pool-read";
 import {
@@ -90,7 +81,6 @@ import {
   type GatewayRoot,
   type OperationPatch,
   type OperationRecord,
-  type OrchestratorConfig,
   type PlacementAdmissionDecision,
   type PlacementAdmissionPolicy,
   type PlatformStateStore,
@@ -101,7 +91,6 @@ import {
 import {
   resolveDefaultPlacementEligibility,
   type ContinuousPlacementOwnedGateway,
-  type ContinuousUserPlacement,
 } from "@octogee/shared/types/orchestrator-placement";
 import type { SizingTier } from "@octogee/shared/types/sizing";
 import { MIGRATE_USER_KIND } from "./operation-kinds.js";
@@ -123,7 +112,7 @@ export const ISOLATED_GATEWAY_ALLOCATION_KIND = "disposable-builder";
 export const ROLLED_BACK_STATUS = "rolled-back";
 export const NO_ACCEPTING_SHARED_GATEWAY = "no-accepting-shared-gateway";
 export const CONTINUOUS_PLACEMENT_POLICY_SOURCE = "continuous-placement-policy";
-const LIVE_LEASE_STATUSES = new Set([
+export const LIVE_LEASE_STATUSES = new Set([
   "requested",
   "provisioning",
   "activating",
@@ -148,7 +137,7 @@ export class HeldUserPlacementError extends GatewayRetirementConflictError {
   }
 }
 
-function isSkippablePlacementConflict(
+export function isSkippablePlacementConflict(
   error: unknown,
 ): error is TerminalPlacementMigrationConflictError | HeldUserPlacementError {
   return error instanceof TerminalPlacementMigrationConflictError || error instanceof HeldUserPlacementError;
@@ -251,7 +240,6 @@ export interface PlacementPolicySnapshot {
   sizingProfiles: Readonly<Record<string, GatewaySizingProfile>>;
   defaultGatewayId: string;
   sharedGatewayIds: readonly string[];
-  buildersPerGateway: number;
   platformCurrentGatewayIds: readonly string[];
   sharedPoolReplacements: readonly SharedPoolReplacement[];
   users: PlacementPolicyUser[];
@@ -308,6 +296,7 @@ export interface PlacementPolicyReconcilerDeps {
     input: DeleteRetiredDisposableGatewayInput,
   ): Promise<boolean>;
   isolatedGateways?: IsolatedGatewayAutomation;
+  sharedGatewayMoves?: SharedGatewayMoves;
 }
 
 export interface IsolatedUserReconcileInput {
@@ -324,6 +313,14 @@ export interface IsolatedGatewayPass {
 
 export interface IsolatedGatewayAutomation {
   readPass(state: PlacementPolicySnapshot): Promise<IsolatedGatewayPass>;
+}
+
+export interface SharedGatewayMoves {
+  startPass(context: PlacementPolicyReconcileContext): Promise<void>;
+  recoverUser(input: IsolatedUserReconcileInput): Promise<boolean>;
+  placeUser(input: IsolatedUserReconcileInput): Promise<void>;
+  reconcilePool(context: PlacementPolicyReconcileContext): Promise<void>;
+  assignmentLimitIn(transaction: PlatformStateTransaction): Promise<number>;
 }
 
 export interface IsolatedGatewayProductDeps {
@@ -384,7 +381,7 @@ function positiveInteger(value: unknown): number | null {
   return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : null;
 }
 
-function nonNegativeInteger(value: unknown): number | null {
+export function nonNegativeInteger(value: unknown): number | null {
   return Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : null;
 }
 
@@ -446,8 +443,9 @@ export interface PlacementPolicyReconcileContext {
   supersededSharedGatewayIds: Set<string>;
   result: PlacementPolicyReconcileResult;
   isolatedGatewayPass: IsolatedGatewayPass | null;
+  unavailableSharedHolds: Map<string, string[]>;
+  unplacedHolds: string[];
 }
-
 
 const blockedLogs = new WeakMap<PlacementPolicyReconcilerDeps, RepeatSquelch>();
 
@@ -461,6 +459,123 @@ function blockedLogFor(deps: PlacementPolicyReconcilerDeps): RepeatSquelch {
 }
 
 const isolatedHoldLogs = new WeakMap<PlacementPolicyReconcilerDeps, RepeatSquelch>();
+
+export function transientSharedRecoveryFence(
+  context: PlacementPolicyReconcileContext,
+  gateway: PlacementPolicyGateway,
+): string | null {
+  const sharedGateway = isSharedPoolGateway(context, gateway.gatewayId) && gateway.gatewayClass === "shared";
+  if (
+    sharedGateway &&
+    gatewayHeartbeatFresh(gateway) &&
+    (gateway.kubernetesStatus === "not-ready" || gateway.kubernetesStatus === "missing")
+  ) {
+    return `source ${gateway.gatewayId} still has a fresh runtime heartbeat while Kubernetes reports ${gateway.kubernetesStatus}`;
+  }
+  if (!sharedGateway) return null;
+  if (gateway.kubernetesStatus === "not-ready") {
+    return `shared source ${gateway.gatewayId} still has Kubernetes pods; retaining assignments until it is missing`;
+  }
+  if (gateway.rollActive) {
+    return `shared source ${gateway.gatewayId} is in an active roll`;
+  }
+  if (
+    typeof gateway.recoveryGraceUntil === "number"
+    && context.deps.now() < gateway.recoveryGraceUntil
+  ) {
+    return `shared source ${gateway.gatewayId} is inside its post-change recovery grace`;
+  }
+  return null;
+}
+
+async function reconcileUnavailableSharedGateway(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  current: string | null,
+): Promise<boolean> {
+  if (context.deps.sharedGatewayMoves) {
+    return context.deps.sharedGatewayMoves.recoverUser({ context, user, builderSlug, current });
+  }
+  const source = current ? context.gateways.get(current) : null;
+  if (!source || source.gatewayClass !== "shared" ||
+    !isSharedPoolGateway(context, source.gatewayId) || !knownKubernetesUnavailable(source)) return false;
+  if (transientSharedRecoveryFence(context, source)) return true;
+  const assignment = context.assignments.get(placementAssignmentKey(source.gatewayId, user.uid));
+  if (!assignment || assignment.state !== "serving" || assignment.epoch === null) {
+    blockPlacement(context, {
+      uid: user.uid,
+      code: "unavailable-source-assignment-fence",
+      reason: `source ${source.gatewayId} has no exact serving assignment epoch`,
+    });
+    return true;
+  }
+  context.result.blocked += 1;
+  const waiting = context.unavailableSharedHolds.get(source.gatewayId) ?? [];
+  waiting.push(user.uid);
+  context.unavailableSharedHolds.set(source.gatewayId, waiting);
+  return true;
+}
+
+async function reconcileSharedPool(context: PlacementPolicyReconcileContext): Promise<void> {
+  try {
+    if (context.deps.sharedGatewayMoves) await context.deps.sharedGatewayMoves.reconcilePool(context);
+    else holdDrainingSharedGateways(context);
+  } catch (error) {
+    context.result.blocked += 1;
+    context.deps.log(
+      `[placement-policy] shared placement: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+function logUnplacedHolds(context: PlacementPolicyReconcileContext): void {
+  logUnplacedUids(context.deps, context.unplacedHolds);
+}
+
+function logUnplacedUids(deps: PlacementPolicyReconcilerDeps, uids: readonly string[]): void {
+  if (uids.length === 0) return;
+  deps.log(
+    `[placement-policy] ⚠ platform only: ${uids.length} user(s) have no gateway: ` +
+      `${uids.join(", ")}; place them with user assign`,
+  );
+}
+
+function holdUnplacedUsersWithoutPool(
+  deps: PlacementPolicyReconcilerDeps,
+  state: PlacementPolicySnapshot,
+  result: PlacementPolicyReconcileResult,
+): void {
+  const unplaced = state.users
+    .filter((user) => resolveDefaultPlacementEligibility(user.data).eligible && currentGatewayId(user.data) === null)
+    .map((user) => user.uid)
+    .sort();
+  result.blocked += unplaced.length;
+  logUnplacedUids(deps, unplaced);
+}
+
+function logUnavailableSharedHolds(context: PlacementPolicyReconcileContext): void {
+  for (const [gatewayId, uids] of context.unavailableSharedHolds) {
+    const status = context.gateways.get(gatewayId)?.kubernetesStatus ?? "unknown";
+    context.deps.log(
+      `[placement-policy] ⚠ platform only: ${uids.length} user(s) wait on unavailable shared gateway ${gatewayId} ` +
+        `(known Kubernetes status ${status}): ${uids.join(", ")}; move them with user migrate`,
+    );
+  }
+}
+
+function holdDrainingSharedGateways(context: PlacementPolicyReconcileContext): void {
+  for (const gatewayId of context.state.sharedGatewayIds) {
+    if (context.gateways.get(gatewayId)?.desiredStatus !== "draining") continue;
+    const kept = context.state.assignments.filter((assignment) => assignment.gatewayId === gatewayId).length;
+    if (kept === 0) continue;
+    context.result.blocked += kept;
+    context.deps.log(
+      `[placement-policy] ⚠ platform only: draining shared gateway ${gatewayId} keeps ${kept} user(s); ` +
+        "move them one at a time with user migrate, then retire it",
+    );
+  }
+}
 
 function logPlatformOnlyIsolatedHold(
   context: PlacementPolicyReconcileContext,
@@ -496,12 +611,13 @@ export function blockPlacement(
     : "";
   const admitted = blockedLogFor(context.deps).admit(input.uid, `${input.code}:${input.reason}`);
   if (!admitted) return;
+  const warning = input.code === NO_ACCEPTING_SHARED_GATEWAY ? "⚠ " : "";
   context.deps.log(
-    `[placement-policy] blocked code=${input.code} uid=${input.uid}${leaseIdentity}: ${input.reason}${admitted.note}`,
+    `[placement-policy] ${warning}blocked code=${input.code} uid=${input.uid}${leaseIdentity}: ${input.reason}${admitted.note}`,
   );
 }
 
-function placementAssignmentKey(gatewayId: string, uid: string): string {
+export function placementAssignmentKey(gatewayId: string, uid: string): string {
   return `${gatewayId}\u0000${uid}`;
 }
 
@@ -528,7 +644,7 @@ export function continuousPlacementMigrationOperationId(input: {
   return `placement-${digest}`;
 }
 
-function sourceAssignmentEpoch(
+export function sourceAssignmentEpoch(
   context: PlacementPolicyReconcileContext,
   gatewayId: string,
   uid: string,
@@ -541,7 +657,7 @@ function sourceAssignmentEpoch(
   return parsed;
 }
 
-function kubernetesReady(gateway: PlacementPolicyGateway): boolean {
+export function kubernetesReady(gateway: PlacementPolicyGateway): boolean {
   return gateway.kubernetesStatus === undefined
     ? gateway.ready
     : gateway.kubernetesStatus === "ready";
@@ -551,39 +667,11 @@ export function knownKubernetesUnavailable(gateway: PlacementPolicyGateway | und
   return gateway?.kubernetesStatus === "missing" || gateway?.kubernetesStatus === "not-ready";
 }
 
-function transientSharedRecoveryFence(
-  context: PlacementPolicyReconcileContext,
-  gateway: PlacementPolicyGateway,
-): string | null {
-  const sharedGateway = isSharedPoolGateway(context, gateway.gatewayId) && gateway.gatewayClass === "shared";
-  if (
-    sharedGateway &&
-    gatewayHeartbeatFresh(gateway) &&
-    (gateway.kubernetesStatus === "not-ready" || gateway.kubernetesStatus === "missing")
-  ) {
-    return `source ${gateway.gatewayId} still has a fresh runtime heartbeat while Kubernetes reports ${gateway.kubernetesStatus}`;
-  }
-  if (!sharedGateway) return null;
-  if (gateway.kubernetesStatus === "not-ready") {
-    return `shared source ${gateway.gatewayId} still has Kubernetes pods; retaining assignments until it is missing`;
-  }
-  if (gateway.rollActive) {
-    return `shared source ${gateway.gatewayId} is in an active roll`;
-  }
-  if (
-    typeof gateway.recoveryGraceUntil === "number"
-    && context.deps.now() < gateway.recoveryGraceUntil
-  ) {
-    return `shared source ${gateway.gatewayId} is inside its post-change recovery grace`;
-  }
-  return null;
-}
-
 function gatewayRuntimeServing(gateway: PlacementPolicyGateway): boolean {
   return gateway.serving ?? gateway.ready;
 }
 
-function gatewayHeartbeatFresh(gateway: PlacementPolicyGateway): boolean {
+export function gatewayHeartbeatFresh(gateway: PlacementPolicyGateway): boolean {
   return gateway.heartbeatFresh ?? gateway.ready;
 }
 
@@ -591,7 +679,7 @@ function gatewayLiveReleaseReady(gateway: PlacementPolicyGateway): boolean {
   return gateway.liveReleaseReady ?? gateway.ready;
 }
 
-function isPositiveRelease(value: unknown): value is number {
+export function isPositiveRelease(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
 }
 
@@ -602,7 +690,7 @@ export function isSharedPoolGateway(
   return gatewayId !== null && context.state.sharedGatewayIds.includes(gatewayId);
 }
 
-function sharedGatewayCandidates(
+export function sharedGatewayCandidates(
   context: PlacementPolicyReconcileContext,
 ): SharedGatewayPoolCandidate[] {
   return context.state.gateways.map((gateway) => {
@@ -639,179 +727,11 @@ function sharedGatewayCandidates(
   });
 }
 
-function operatorAddedSharedGateway(context: PlacementPolicyReconcileContext, gatewayId: string): boolean {
-  return context.gateways.get(gatewayId)?.addedBy === "operator";
-}
-
-function sharedGatewayPoolStableForRebalance(
-  context: PlacementPolicyReconcileContext,
-): boolean {
-  const now = context.deps.now();
-  return context.state.sharedGatewayIds.every((gatewayId) => {
-    const gateway = context.gateways.get(gatewayId);
-    if (!gateway) return false;
-    if (gateway.addedBy === "operator" || gateway.desiredStatus !== "running") return true;
-    if (gateway.rollActive === true || gateway.liveReleaseReady === false) return false;
-    const startedAt = gateway.runtimeStartedAt;
-    return typeof startedAt === "number" &&
-      Number.isFinite(startedAt) &&
-      now - startedAt >= SHARED_GATEWAY_REBALANCE_STABILITY_MS;
-  });
-}
-
-function rollingSharedGatewayForUnavailableRecovery(
-  context: PlacementPolicyReconcileContext,
-  sourceGatewayId: string,
-): SupersedeRollingSharedGatewayInput | null {
-  const candidates = sharedGatewayCandidates(context);
-  const peers: SupersedeRollingSharedGatewayInput[] = [];
-  for (const gateway of context.state.gateways) {
-    const peer = rollingSharedGatewayPeer(
-      context,
-      sourceGatewayId,
-      candidates.find((candidate) => candidate.gatewayId === gateway.gatewayId),
-      gateway,
-    );
-    if (peer) peers.push(peer);
-  }
-  return peers.length === 1 ? peers[0]! : null;
-}
-
-function rollingSharedGatewayPeer(
-  context: PlacementPolicyReconcileContext,
-  sourceGatewayId: string,
-  candidate: SharedGatewayPoolCandidate | undefined,
-  gateway: PlacementPolicyGateway,
-): SupersedeRollingSharedGatewayInput | null {
-  if (gateway.gatewayId === sourceGatewayId || !candidate) return null;
-  const { liveRelease, desiredRelease } = gateway;
-  const candidateIsRollingPeer = [
-    context.state.sharedGatewayIds.includes(gateway.gatewayId),
-    candidate.gatewayClass === "shared",
-    candidate.desiredStatus === "running",
-    kubernetesReady(gateway),
-    candidate.serving,
-    candidate.heartbeatFresh,
-    candidate.rosterComplete,
-    candidate.incomingMigrationCount === 0,
-    gateway.latestRelease === desiredRelease,
-  ].every(Boolean);
-  if (
-    !candidateIsRollingPeer ||
-    !isPositiveRelease(liveRelease) ||
-    !isPositiveRelease(desiredRelease) ||
-    desiredRelease <= liveRelease
-  ) return null;
-  return {
-    sourceGatewayId,
-    targetGatewayId: gateway.gatewayId,
-    expectedLiveRelease: liveRelease,
-    expectedDesiredRelease: desiredRelease,
-    targetHeartbeatMaxAgeMs: GATEWAY_UNREACHABLE_AFTER_MS,
-  };
-}
-
-function sharedGatewayPlacementConfig(context: PlacementPolicyReconcileContext) {
+export function sharedGatewayPlacementConfig(context: PlacementPolicyReconcileContext) {
   return {
     defaultGatewayId: context.state.defaultGatewayId,
     sharedGatewayIds: context.state.sharedGatewayIds,
   };
-}
-
-function selectPlatformPreferredSharedGateway(
-  context: PlacementPolicyReconcileContext,
-  input: {
-    uid: string;
-    purpose: SharedGatewayPlacementPurpose;
-    candidates: readonly SharedGatewayPoolCandidate[];
-    currentGatewayId?: string | null;
-  },
-): SharedGatewaySelection {
-  const config = sharedGatewayPlacementConfig(context);
-  return selectSharedGateway({
-    uid: input.uid,
-    purpose: input.purpose,
-    buildersPerGateway: context.state.buildersPerGateway,
-    config,
-    candidates: platformPreferredSharedGatewayCandidates({
-      config,
-      candidates: input.candidates,
-      purpose: input.purpose,
-      preference: {
-        platformCurrentGatewayIds: context.state.platformCurrentGatewayIds,
-        buildersPerGateway: context.state.buildersPerGateway,
-      },
-      currentGatewayId: input.currentGatewayId,
-    }),
-    ...(input.currentGatewayId === undefined ? {} : { currentGatewayId: input.currentGatewayId }),
-  });
-}
-
-function initialPlacementSiblingGatewayIds(
-  context: PlacementPolicyReconcileContext,
-  uid: string,
-  placement: ContinuousUserPlacement,
-): string[] {
-  if (placement.ownedGatewayId !== null) return [];
-  const config = sharedGatewayPlacementConfig(context);
-  return platformPreferredSharedGatewayCandidates({
-    config,
-    candidates: sharedGatewayCandidates(context),
-    purpose: "initial-placement",
-    preference: {
-      platformCurrentGatewayIds: context.state.platformCurrentGatewayIds,
-      buildersPerGateway: context.state.buildersPerGateway,
-    },
-    currentGatewayId: null,
-  })
-    .filter((candidate) => candidate.gatewayId !== placement.targetGatewayId && isAcceptingSharedGateway(config, candidate))
-    .map((candidate) => candidate.gatewayId);
-}
-
-function selectAcceptingSharedGateway(
-  context: PlacementPolicyReconcileContext,
-  uid: string,
-  purpose: SharedGatewayPlacementPurpose,
-  currentGatewayId?: string | null,
-): string | null {
-  const selection = selectPlatformPreferredSharedGateway(context, {
-    uid,
-    purpose,
-    candidates: sharedGatewayCandidates(context),
-    ...(currentGatewayId === undefined ? {} : { currentGatewayId }),
-  });
-  return selection.kind === "selected" ? selection.gatewayId : null;
-}
-
-export function selectReturnSharedGateway(
-  context: PlacementPolicyReconcileContext,
-  uid: string,
-): { gatewayId: string } | { blockedReason: string } {
-  const replacedSlots = new Set(
-    context.state.sharedPoolReplacements.map((replacement) => replacement.sourceGatewayId),
-  );
-  const selection = selectPlatformPreferredSharedGateway(context, {
-    uid,
-    purpose: "migration",
-    candidates: sharedGatewayCandidates(context).filter((candidate) => !replacedSlots.has(candidate.gatewayId)),
-  });
-  if (selection.kind === "selected") return { gatewayId: selection.gatewayId };
-  const pendingReplacements = context.state.sharedPoolReplacements
-    .filter((replacement) => context.state.sharedGatewayIds.includes(replacement.sourceGatewayId))
-    .map((replacement) => `${replacement.sourceGatewayId} is being replaced by ${replacement.targetGatewayId}`);
-  return {
-    blockedReason: pendingReplacements.length === 0
-      ? "no configured shared gateway can receive the returning user"
-      : `no configured shared gateway can receive the returning user while ${pendingReplacements.join(", ")}`,
-  };
-}
-
-export function sharedAuthorityGatewayId(
-  context: PlacementPolicyReconcileContext,
-  currentGatewayId: string | null,
-): string | null {
-  if (isSharedPoolGateway(context, currentGatewayId)) return currentGatewayId;
-  return selectAcceptingSharedGateway(context, "placement-policy-authority", "migration");
 }
 
 export function projectSharedGatewayPlacement(
@@ -824,52 +744,6 @@ export function projectSharedGatewayPlacement(
       (context.projectedSharedGatewayPlacements.get(gatewayId) ?? 0) + 1,
     );
   }
-}
-
-async function assignMissingPlacement(
-  context: PlacementPolicyReconcileContext,
-  user: PlacementPolicyUser,
-  builderSlug: string,
-  placement: ContinuousUserPlacement,
-): Promise<void> {
-  const targetGateway = context.gateways.get(placement.targetGatewayId);
-  if (!targetGateway) throw new Error(`placement target ${placement.targetGatewayId} is missing`);
-  const admission = await context.deps.decidePlacementAdmission(user.uid);
-  if (admission.kind !== "admitted") {
-    blockPlacement(context, {
-      uid: user.uid,
-      code: admission.kind === "refused" ? admission.code : "placement-admission-pending",
-      reason: admission.reason,
-    });
-    return;
-  }
-  await context.deps.assignInitialPlacement({
-    uid: user.uid,
-    builderSlug,
-    gatewayId: placement.targetGatewayId,
-    gateway: targetGateway,
-    siblingGatewayIds: initialPlacementSiblingGatewayIds(context, user.uid, placement),
-  });
-  projectSharedGatewayPlacement(context, placement.targetGatewayId);
-  context.result.assigned += 1;
-}
-
-function adoptActiveMigration(
-  context: PlacementPolicyReconcileContext,
-  uid: string,
-  targetGatewayId: string,
-): boolean {
-  const active = context.migrations.get(uid);
-  if (!active) return false;
-  if (active.toGatewayId === targetGatewayId) context.result.adopted += 1;
-  else {
-    blockPlacement(context, {
-      uid,
-      code: "migration-target-conflict",
-      reason: `active migration ${active.id} targets ${active.toGatewayId}, expected ${targetGatewayId}`,
-    });
-  }
-  return true;
 }
 
 function recoveredRuntimeResetState(user: PlacementPolicyUser): Record<string, unknown> | null {
@@ -997,86 +871,6 @@ async function reconcileRecoveredDisposableRuntimeReset(
   return true;
 }
 
-async function reconcileUnavailableServingGateway(
-  context: PlacementPolicyReconcileContext,
-  user: PlacementPolicyUser,
-  builderSlug: string,
-  currentGatewayId: string | null,
-): Promise<boolean> {
-  const source = currentGatewayId ? context.gateways.get(currentGatewayId) : null;
-  if (!source || source.gatewayClass !== "shared" ||
-    !isSharedPoolGateway(context, source.gatewayId) || !knownKubernetesUnavailable(source)) return false;
-
-  const transientFence = transientSharedRecoveryFence(context, source);
-  if (transientFence) {
-    blockPlacement(context, {
-      uid: user.uid,
-      code: "transient-kubernetes-unavailability",
-      reason: transientFence,
-    });
-    return true;
-  }
-
-  const assignment = context.assignments.get(
-    placementAssignmentKey(source.gatewayId, user.uid),
-  );
-  if (!assignment || assignment.state !== "serving" || assignment.epoch === null) {
-    blockPlacement(context, {
-      uid: user.uid,
-      code: "unavailable-source-assignment-fence",
-      reason: `source ${source.gatewayId} has no exact serving assignment epoch`,
-    });
-    return true;
-  }
-
-  const targetGatewayId = selectAcceptingSharedGateway(context, user.uid, "migration", source.gatewayId);
-  if (!targetGatewayId) {
-    await scheduleRollingSharedPeerRecovery(context, source);
-    blockPlacement(context, {
-      uid: user.uid,
-      code: NO_ACCEPTING_SHARED_GATEWAY,
-      reason: `source ${source.gatewayId} has known Kubernetes status ${source.kubernetesStatus}`,
-    });
-    return true;
-  }
-  const operationId = `recover-shared-${user.uid}-${source.gatewayId}-${assignment.epoch}`;
-  await context.deps.recoverUnavailableGateway({
-    operationId,
-    kind: "recover-shared-customer",
-    uid: user.uid,
-    slug: builderSlug,
-    fromGatewayId: source.gatewayId,
-    toGatewayId: targetGatewayId,
-    expectedSourceEpoch: assignment.epoch,
-    sharedGatewayIds: context.state.sharedGatewayIds,
-    targetHeartbeatMaxAgeMs: GATEWAY_UNREACHABLE_AFTER_MS,
-  });
-  projectSharedGatewayPlacement(context, targetGatewayId);
-  return true;
-}
-
-async function scheduleRollingSharedPeerRecovery(
-  context: PlacementPolicyReconcileContext,
-  source: PlacementPolicyGateway,
-): Promise<void> {
-  if (source.kubernetesStatus !== "missing") return;
-  const peerRoll = rollingSharedGatewayForUnavailableRecovery(context, source.gatewayId);
-  if (!peerRoll || context.supersededSharedGatewayIds.has(peerRoll.targetGatewayId)) return;
-  try {
-    const outcome = await context.deps.supersedeRollingSharedGateway(peerRoll);
-    if (outcome.kind === "not-eligible") return;
-    context.deps.log(
-      `[placement-policy] shared-peer-roll-recovery outcome=${outcome.kind} ` +
-        `source=${peerRoll.sourceGatewayId} target=${peerRoll.targetGatewayId} ` +
-        `supersededRelease=${peerRoll.expectedDesiredRelease} ` +
-        `rollbackRelease=${outcome.release ?? "unknown"} ` +
-        `operationId=${outcome.operationId ?? "unknown"}`,
-    );
-  } finally {
-    context.supersededSharedGatewayIds.add(peerRoll.targetGatewayId);
-  }
-}
-
 export function currentOnIsolatedGateway(
   context: PlacementPolicyReconcileContext,
   current: string | null,
@@ -1084,10 +878,6 @@ export function currentOnIsolatedGateway(
   return current !== null &&
     !isSharedPoolGateway(context, current) &&
     context.gateways.get(current)?.gatewayClass !== "shared";
-}
-
-export function sharedPlacement(context: PlacementPolicyReconcileContext): ContinuousUserPlacement {
-  return { targetGatewayId: context.state.defaultGatewayId, ownedGatewayId: null };
 }
 
 async function reconcileEligibleUser(
@@ -1104,103 +894,20 @@ async function reconcileEligibleUser(
       current,
     )
   ) return;
-  if (await reconcileUnavailableServingGateway(context, user, builderSlug, current)) return;
+  if (await reconcileUnavailableSharedGateway(context, user, builderSlug, current)) return;
   if (await context.isolatedGatewayPass?.reconcileUser({ context, user, builderSlug, current })) return;
   if (currentOnIsolatedGateway(context, current)) {
     if (!context.isolatedGatewayPass) logPlatformOnlyIsolatedHold(context, user.uid, current!);
     return;
   }
-  await reconcileTargetedPlacement(context, user, builderSlug, current, sharedPlacement(context));
-}
-
-export async function reconcileTargetedPlacement(
-  context: PlacementPolicyReconcileContext,
-  user: PlacementPolicyUser,
-  builderSlug: string,
-  current: string | null,
-  resolvedPlacement: ContinuousUserPlacement,
-): Promise<void> {
-  const activeMigration = context.migrations.get(user.uid);
-  const targetGatewayId = eligiblePlacementTargetGatewayId(
-    context,
-    user.uid,
-    current,
-    resolvedPlacement,
-    activeMigration,
-  );
-  if (!targetGatewayId) {
-    blockPlacement(context, {
-      uid: user.uid,
-      code: NO_ACCEPTING_SHARED_GATEWAY,
-      reason: "no configured shared gateway is accepting placement",
-    });
+  if (context.deps.sharedGatewayMoves) {
+    await context.deps.sharedGatewayMoves.placeUser({ context, user, builderSlug, current });
     return;
   }
-  const placement = { ...resolvedPlacement, targetGatewayId };
-  await reconcileResolvedPlacement(context, user, builderSlug, current, placement);
-}
-
-export function eligiblePlacementTargetGatewayId(
-  context: PlacementPolicyReconcileContext,
-  uid: string,
-  currentGatewayId: string | null,
-  placement: ContinuousUserPlacement,
-  activeMigration: PlacementPolicyMigration | undefined,
-): string | null {
-  if (placement.ownedGatewayId !== null) return placement.targetGatewayId;
-  if (activeMigration && isSharedPoolGateway(context, activeMigration.toGatewayId)) {
-    return activeMigration.toGatewayId;
+  if (current === null) {
+    context.result.blocked += 1;
+    context.unplacedHolds.push(user.uid);
   }
-  return selectAcceptingSharedGateway(
-    context,
-    uid,
-    currentGatewayId === null ? "initial-placement" : "migration",
-    currentGatewayId,
-  );
-}
-
-async function reconcileResolvedPlacement(
-  context: PlacementPolicyReconcileContext,
-  user: PlacementPolicyUser,
-  builderSlug: string,
-  current: string | null,
-  placement: ContinuousUserPlacement,
-): Promise<void> {
-  if (!current) {
-    await assignMissingPlacement(context, user, builderSlug, placement);
-    return;
-  }
-  if (placement.targetGatewayId === current) return;
-  if (placement.ownedGatewayId === null && isSharedPoolGateway(context, current)) {
-    const source = context.gateways.get(current);
-    if (!source || !kubernetesReady(source)) {
-      blockPlacement(context, {
-        uid: user.uid,
-        code: "shared-source-not-ready",
-        reason: `source ${current} is not known Kubernetes Ready`,
-      });
-      return;
-    }
-    return;
-  }
-  if (adoptActiveMigration(context, user.uid, placement.targetGatewayId)) return;
-  const sourceEpoch = sourceAssignmentEpoch(context, current, user.uid);
-  await context.deps.enqueueMigration({
-    uid: user.uid,
-    builderSlug,
-    fromGatewayId: current,
-    toGatewayId: placement.targetGatewayId,
-    source: CONTINUOUS_PLACEMENT_POLICY_SOURCE,
-    operationId: continuousPlacementMigrationOperationId({
-      uid: user.uid,
-      builderSlug,
-      fromGatewayId: current,
-      toGatewayId: placement.targetGatewayId,
-      sourceAssignmentEpoch: sourceEpoch,
-    }),
-  });
-  projectSharedGatewayPlacement(context, placement.targetGatewayId);
-  context.result.enqueued += 1;
 }
 
 async function reconcilePlacementUser(
@@ -1212,238 +919,12 @@ async function reconcilePlacementUser(
   await reconcileEligibleUser(context, user, eligibility.slug);
 }
 
-function settledSharedAssignment(
-  assignment: PlacementPolicyAssignment,
-  now: number,
-): boolean {
-  return typeof assignment.createdAt === "number" &&
-    now - assignment.createdAt >= SHARED_GATEWAY_REBALANCE_STABILITY_MS;
-}
-
-function sharedRebalanceUser(
-  context: PlacementPolicyReconcileContext,
-  user: PlacementPolicyUser,
-  fromGatewayId: string,
-  scheduled: ReadonlySet<string>,
-): { uid: string; builderSlug: string; sourceAssignmentEpoch: number; settledAt: number } | null {
-  if (scheduled.has(user.uid) || currentGatewayId(user.data) !== fromGatewayId) return null;
-  if (record(record(user.data.provisioning)?.openclaw)?.status !== "complete") return null;
-  const lease = userActivationLease(user.data);
-  if (lease && LIVE_LEASE_STATUSES.has(lease.status)) return null;
-  const eligibility = resolveDefaultPlacementEligibility(user.data);
-  if (!eligibility.eligible || context.migrations.has(user.uid)) return null;
-  const assignment = context.assignments.get(
-    placementAssignmentKey(fromGatewayId, user.uid),
-  );
-  if (assignment?.state !== "serving") return null;
-  if (!settledSharedAssignment(assignment, context.deps.now())) return null;
-  const sourceAssignmentEpoch = nonNegativeInteger(assignment.epoch);
-  if (sourceAssignmentEpoch === null) return null;
-  return {
-    uid: user.uid,
-    builderSlug: eligibility.slug,
-    sourceAssignmentEpoch,
-    settledAt: assignment.createdAt!,
-  };
-}
-
-function longestSettledSharedRebalanceUser(
-  context: PlacementPolicyReconcileContext,
-  users: readonly PlacementPolicyUser[],
-  fromGatewayId: string,
-  scheduled: ReadonlySet<string>,
-): { uid: string; builderSlug: string; sourceAssignmentEpoch: number } | null {
-  let chosen: ReturnType<typeof sharedRebalanceUser> = null;
-  for (const user of users) {
-    const candidate = sharedRebalanceUser(context, user, fromGatewayId, scheduled);
-    if (!candidate) continue;
-    if (!chosen || candidate.settledAt < chosen.settledAt) chosen = candidate;
-  }
-  return chosen
-    ? { uid: chosen.uid, builderSlug: chosen.builderSlug, sourceAssignmentEpoch: chosen.sourceAssignmentEpoch }
-    : null;
-}
-
-function applyProjectedRebalance(
-  candidates: SharedGatewayPoolCandidate[],
-  fromGatewayId: string,
-  toGatewayId: string,
-): void {
-  const source = candidates.find((candidate) => candidate.gatewayId === fromGatewayId);
-  const target = candidates.find((candidate) => candidate.gatewayId === toGatewayId);
-  if (!source || !target) throw new Error("shared rebalance candidates changed during planning");
-  source.assignmentCount -= 1;
-  target.assignmentCount += 1;
-}
-
-function compareSharedGatewayLoad(
+export function compareSharedGatewayLoad(
   left: SharedGatewayPoolCandidate,
   right: SharedGatewayPoolCandidate,
 ): number {
   const loadDifference = authoritativeSharedGatewayLoad(left) - authoritativeSharedGatewayLoad(right);
   return loadDifference !== 0 ? loadDifference : compareSharedGatewayIds(left.gatewayId, right.gatewayId);
-}
-
-function planPlatformPreferredSharedGatewayRebalance(
-  context: PlacementPolicyReconcileContext,
-  candidates: readonly SharedGatewayPoolCandidate[],
-): SharedGatewayRebalance | null {
-  const config = sharedGatewayPlacementConfig(context);
-  const platformCurrent = new Set(context.state.platformCurrentGatewayIds);
-  const settled = candidates
-    .filter((candidate) => isSettledSharedGateway(config, candidate))
-    .sort(compareSharedGatewayLoad);
-  const currentWithHeadroom = settled.filter((candidate) =>
-    platformCurrent.has(candidate.gatewayId) &&
-    authoritativeSharedGatewayLoad(candidate) < context.state.buildersPerGateway);
-  const to = (currentWithHeadroom.length > 0 ? currentWithHeadroom : settled)[0];
-  if (!to) return null;
-  const toIsCurrent = platformCurrent.has(to.gatewayId);
-  const from = settled
-    .filter((candidate) =>
-      candidate.gatewayId !== to.gatewayId &&
-      (toIsCurrent || !platformCurrent.has(candidate.gatewayId)))
-    .at(-1);
-  if (!from) return null;
-  return authoritativeSharedGatewayLoad(from) - authoritativeSharedGatewayLoad(to) >= 2
-    ? { fromGatewayId: from.gatewayId, toGatewayId: to.gatewayId }
-    : null;
-}
-
-async function reconcileSharedGatewayRebalance(
-  context: PlacementPolicyReconcileContext,
-): Promise<void> {
-  const candidates = sharedGatewayCandidates(context)
-    .filter((candidate) => !operatorAddedSharedGateway(context, candidate.gatewayId))
-    .map((candidate) => ({ ...candidate }));
-  if (!planPlatformPreferredSharedGatewayRebalance(context, candidates)) return;
-  if (!sharedGatewayPoolStableForRebalance(context)) return;
-  const users = [...context.state.users].sort((left, right) => left.uid.localeCompare(right.uid));
-  const scheduled = new Set<string>();
-  while (true) {
-    const plan = planPlatformPreferredSharedGatewayRebalance(context, candidates);
-    if (!plan) return;
-    const userRecord = longestSettledSharedRebalanceUser(context, users, plan.fromGatewayId, scheduled);
-    if (!userRecord) return;
-    const operationId = continuousPlacementMigrationOperationId({
-      ...userRecord,
-      fromGatewayId: plan.fromGatewayId,
-      toGatewayId: plan.toGatewayId,
-    });
-    try {
-      await context.deps.enqueueMigration({
-        uid: userRecord.uid,
-        builderSlug: userRecord.builderSlug,
-        fromGatewayId: plan.fromGatewayId,
-        toGatewayId: plan.toGatewayId,
-        source: CONTINUOUS_PLACEMENT_POLICY_SOURCE,
-        operationId,
-      });
-    } catch (error) {
-      if (!isSkippablePlacementConflict(error)) throw error;
-      scheduled.add(userRecord.uid);
-      context.deps.log(
-        `[placement-policy] rebalance skipped uid=${userRecord.uid} operationId=${operationId}: ${error.message}`,
-      );
-      continue;
-    }
-    scheduled.add(userRecord.uid);
-    applyProjectedRebalance(candidates, plan.fromGatewayId, plan.toGatewayId);
-    context.result.enqueued += 1;
-  }
-}
-
-function drainingSharedGatewayUser(
-  context: PlacementPolicyReconcileContext,
-  user: PlacementPolicyUser,
-  fromGatewayId: string,
-): { uid: string; builderSlug: string; sourceAssignmentEpoch: number } | null {
-  if (context.migrations.has(user.uid)) return null;
-  const lease = userActivationLease(user.data);
-  if (lease && LIVE_LEASE_STATUSES.has(lease.status)) return null;
-  const assignment = context.assignments.get(
-    placementAssignmentKey(fromGatewayId, user.uid),
-  );
-  const builderSlug = assignment ? nonEmptyString(assignment.slug) : null;
-  if (assignment?.state !== "serving" || builderSlug === null) return null;
-  const sourceAssignmentEpoch = nonNegativeInteger(assignment.epoch);
-  if (sourceAssignmentEpoch === null) return null;
-  return { uid: user.uid, builderSlug, sourceAssignmentEpoch };
-}
-
-async function reconcileDrainingSharedGateway(
-  context: PlacementPolicyReconcileContext,
-): Promise<boolean> {
-  const drainingGatewayIds = context.state.sharedGatewayIds.filter(
-    (gatewayId) => context.gateways.get(gatewayId)?.desiredStatus === "draining",
-  );
-  if (drainingGatewayIds.length === 0) return false;
-  const projectedCandidates = sharedGatewayCandidates(context).map((candidate) => ({
-    ...candidate,
-  }));
-
-  for (const fromGatewayId of drainingGatewayIds) {
-    const pairedTargetGatewayId = pairedReplacementTarget(context.state.sharedPoolReplacements, fromGatewayId);
-    const candidates = pairedTargetGatewayId === null
-      ? projectedCandidates.filter((candidate) => !operatorAddedSharedGateway(context, candidate.gatewayId))
-      : projectedCandidates.filter((candidate) => candidate.gatewayId === pairedTargetGatewayId);
-    for (const user of [...context.state.users].sort((left, right) =>
-      left.uid.localeCompare(right.uid))) {
-      const userRecord = drainingSharedGatewayUser(context, user, fromGatewayId);
-      if (!userRecord) continue;
-      const selection = selectPlatformPreferredSharedGateway(context, {
-        uid: user.uid,
-        purpose: "migration",
-        candidates,
-      });
-      if (selection.kind !== "selected") continue;
-      const outcome = await enqueueDrainMove(context, {
-        userRecord, fromGatewayId, toGatewayId: selection.gatewayId, pairedTargetGatewayId,
-      });
-      if (outcome === "stopped") break;
-      if (outcome === "skipped") continue;
-      const target = projectedCandidates.find(
-        (candidate) => candidate.gatewayId === selection.gatewayId,
-      )!;
-      target.assignmentCount += 1;
-      context.result.enqueued += 1;
-    }
-  }
-  return true;
-}
-
-async function enqueueDrainMove(
-  context: PlacementPolicyReconcileContext,
-  move: {
-    userRecord: { uid: string; builderSlug: string; sourceAssignmentEpoch: number };
-    fromGatewayId: string;
-    toGatewayId: string;
-    pairedTargetGatewayId: string | null;
-  },
-): Promise<"enqueued" | "skipped" | "stopped"> {
-  const { userRecord, fromGatewayId, toGatewayId } = move;
-  try {
-    await context.deps.enqueueMigration({
-      uid: userRecord.uid,
-      builderSlug: userRecord.builderSlug,
-      fromGatewayId,
-      toGatewayId,
-      source: CONTINUOUS_PLACEMENT_POLICY_SOURCE,
-      operationId: continuousPlacementMigrationOperationId({ ...userRecord, fromGatewayId, toGatewayId }),
-      sharedDrain: { pairedTargetGatewayId: move.pairedTargetGatewayId },
-    });
-    return "enqueued";
-  } catch (error) {
-    if (isSkippablePlacementConflict(error)) {
-      context.deps.log(
-        `[placement-policy] drain of ${fromGatewayId} skipped uid=${userRecord.uid}: ${error.message}; an operator move is needed`,
-      );
-      return "skipped";
-    }
-    if (!(error instanceof SharedDrainSupersededError)) throw error;
-    context.deps.log(`[placement-policy] drain of ${fromGatewayId} stopped: ${error.message}`);
-    return "stopped";
-  }
 }
 
 export async function reconcilePlacementPolicyOnce(
@@ -1464,6 +945,7 @@ export async function reconcilePlacementPolicyOnce(
   });
   if (!pool) {
     deps.log("[placement-policy] idle: the shared pool has no controller-managed members yet");
+    if (!deps.sharedGatewayMoves) holdUnplacedUsersWithoutPool(deps, state, result);
     return result;
   }
   const gateways = new Map(state.gateways.map((item) => [item.gatewayId, item]));
@@ -1506,7 +988,10 @@ export async function reconcilePlacementPolicyOnce(
     supersededSharedGatewayIds: new Set<string>(),
     result,
     isolatedGatewayPass,
+    unavailableSharedHolds: new Map<string, string[]>(),
+    unplacedHolds: [],
   };
+  await deps.sharedGatewayMoves?.startPass(context);
   for (const user of [...state.users].sort((a, b) => a.uid.localeCompare(b.uid))) {
     try {
       await reconcilePlacementUser(context, user);
@@ -1517,15 +1002,9 @@ export async function reconcilePlacementPolicyOnce(
       );
     }
   }
-  try {
-    const draining = await reconcileDrainingSharedGateway(context);
-    if (!draining) await reconcileSharedGatewayRebalance(context);
-  } catch (error) {
-    result.blocked += 1;
-    deps.log(
-      `[placement-policy] shared placement: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
+  logUnavailableSharedHolds(context);
+  logUnplacedHolds(context);
+  await reconcileSharedPool(context);
   try {
     await reconcileDisposableTombstones(context);
   } catch (error) {
@@ -1639,6 +1118,7 @@ export interface FirestorePlacementPolicyInput {
   log(message: string): void;
   debug?(message: string): void;
   isolatedGateways?: IsolatedGatewayAutomation;
+  sharedGatewayMoves?: SharedGatewayMoves;
   readGatewayPodDiagnosticsBatch(input: {
     namespace: string;
     gatewayIds: readonly string[];
@@ -1916,7 +1396,6 @@ export async function persistKubernetesObservations(
   }));
 }
 
-
 function placementAssignmentFromRecord(assignment: GatewayAssignment): PlacementPolicyAssignment {
   return {
     uid: assignment.uid,
@@ -2041,13 +1520,6 @@ function placementGatewayFromRoot(input: {
   };
 }
 
-function placementUsersPerGateway(orchestrator: OrchestratorConfig | null): number {
-  const config = orchestrator === null
-    ? parseSharedGatewayAutoscalingConfig(undefined)
-    : orchestrator.sharedGatewayAutoscaling;
-  if (config === null) throw new InvalidSharedGatewayAutoscalingConfigError();
-  return config.buildersPerGateway;
-}
 
 async function readPlatformCurrentSharedGatewayIds(
   input: FirestorePlacementPolicyInput,
@@ -2111,7 +1583,6 @@ async function readPlacementPolicySnapshot(
   })));
   const defaultGatewayId = pool?.defaultGatewayId ?? "";
   const sharedGatewayIds = pool?.sharedGatewayIds ?? [];
-  const buildersPerGateway = placementUsersPerGateway(orchestrator);
   const runtimes = new Map(runtimeRecords.map((runtime) => [runtime.gatewayId, runtime]));
   const diagnosticsScope = placementPodDiagnosticsScope(roots.map((root) => root.gatewayId), runtimes);
   const kubernetesByGatewayId = {
@@ -2155,7 +1626,6 @@ async function readPlacementPolicySnapshot(
     sizingProfiles: orchestrator?.sizingProfiles ?? {},
     defaultGatewayId,
     sharedGatewayIds,
-    buildersPerGateway,
     platformCurrentGatewayIds,
     sharedPoolReplacements,
     users,
@@ -2185,7 +1655,11 @@ async function assignInitialPlacementInStore(
   input: FirestorePlacementPolicyInput,
   request: AssignInitialPlacementInput,
 ): Promise<void> {
-  const placement = await commitInitialPlacement(input.store, request, { nowMs: input.now(), log: input.log });
+  const placement = await commitInitialPlacement(input.store, request, {
+    nowMs: input.now(),
+    log: input.log,
+    assignmentLimitIn: input.sharedGatewayMoves?.assignmentLimitIn,
+  });
   if (placement.kind === "rejected") {
     throw new Error(`initial placement onto ${request.gatewayId} failed: ${placement.reason}`);
   }
@@ -2905,6 +2379,7 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     deleteRetiredDisposableGateway: (request) =>
       deleteRetiredDisposableGatewayFirestore(input, request),
     ...(input.isolatedGateways ? { isolatedGateways: input.isolatedGateways } : {}),
+    ...(input.sharedGatewayMoves ? { sharedGatewayMoves: input.sharedGatewayMoves } : {}),
   };
 }
 

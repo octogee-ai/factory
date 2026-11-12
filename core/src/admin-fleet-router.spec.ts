@@ -771,14 +771,8 @@ describe("the fleet command line contract", () => {
     expect(res.body).not.toHaveProperty("customers");
     expect(res.body.users[0]).toMatchObject({ id: "uid-ada", name: "ada", assignedGatewayId: "shared-a" });
     expect(res.body.users[0]).not.toHaveProperty("uid");
-    expect(res.body.config.sharedGatewayAutoscaling).toHaveProperty("usersPerGateway");
+    expect(res.body.config).not.toHaveProperty("sharedGatewayAutoscaling");
     expect(res.body.gateways[0]).toMatchObject({ gatewayId: "shared-a", gatewayClass: "shared" });
-  });
-
-  it("refuses autoscaling that does not name usersPerGateway validly", async () => {
-    const { app } = mkAdminFleetRouteApp({ config: { defaultGatewayId: "shared-a" }, users: {} });
-    expect((await request(app).patch("/placement/autoscaling").send([])).status).toBe(400);
-    expect((await request(app).patch("/placement/autoscaling").send({ enabled: true, usersPerGateway: "many" })).status).toBe(400);
   });
 
   it("refuses the internal gateway class name when adding a gateway", async () => {
@@ -790,18 +784,6 @@ describe("the fleet command line contract", () => {
     expect(res.body.error).toContain("shared, isolated");
   });
 
-  it("requires userIds on a bulk migration", async () => {
-    const { app } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "shared-a" },
-      users: {},
-      glmGateways: { "shared-a": { docKind: "runtime", gatewayId: "shared-a", heartbeat: { status: "ready" } } },
-    });
-    const res = await request(app)
-      .post("/gateway-migrations/bulk")
-      .send({ uids: ["uid-ada"], toGatewayId: "shared-a" })
-      .expect(400);
-    expect(res.body.error).toContain("userIds");
-  });
 });
 
 describe("fleet gateway projection", () => {
@@ -1703,7 +1685,6 @@ describe("default placement", () => {
     expect(res.body.config).toEqual({
       defaultGatewayId: null,
       sharedGatewayIds: [],
-      sharedGatewayAutoscaling: { enabled: true, usersPerGateway: 10 },
     });
     expect(res.body.warnings).toEqual(
       expect.arrayContaining([
@@ -1822,36 +1803,6 @@ describe("default placement", () => {
     });
   });
 
-  it("updates shared pool autoscaling through the platform config route", async () => {
-    const { app, state } = mkAdminFleetRouteApp({
-      config: {
-        defaultGatewayId: "shared-0",
-        sharedGatewayIds: ["shared-0", "shared-1"],
-        sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 4 },
-      },
-    });
-
-    const response = await request(app)
-      .patch("/placement/autoscaling")
-      .send({ enabled: false, usersPerGateway: 6 })
-      .expect(200);
-
-    expect(state.config.sharedGatewayAutoscaling).toEqual({ enabled: false, buildersPerGateway: 6 });
-    expect(response.body.config.sharedGatewayAutoscaling).toEqual({
-      enabled: false,
-      usersPerGateway: 6,
-    });
-
-    await request(app)
-      .patch("/placement/autoscaling")
-      .send({ enabled: true, usersPerGateway: 1 })
-      .expect(400);
-    await request(app)
-      .patch("/placement/autoscaling")
-      .send({ enabled: "yes", usersPerGateway: 4 })
-      .expect(400);
-  });
-
   it("derives the shared pool from shared-class roots, not config/orchestrator", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: {},
@@ -1876,7 +1827,6 @@ describe("default placement", () => {
     expect(res.body.config).toEqual({
       defaultGatewayId: "shared-1",
       sharedGatewayIds: ["shared-1", "shared-0", "shared-a"],
-      sharedGatewayAutoscaling: { enabled: true, usersPerGateway: 10 },
     });
   });
 
@@ -1901,7 +1851,6 @@ describe("default placement", () => {
     expect(res.body.config).toEqual({
       defaultGatewayId: "gw-canary",
       sharedGatewayIds: ["gw-canary", "gw-default"],
-      sharedGatewayAutoscaling: { enabled: true, usersPerGateway: 10 },
     });
     expect(res.body).not.toHaveProperty("overrides");
     expect(res.body.users[0]).not.toHaveProperty("overrideGatewayId");

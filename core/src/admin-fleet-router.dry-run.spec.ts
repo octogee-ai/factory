@@ -99,52 +99,6 @@ describe("a dry run of a changing request", () => {
     expect(h.snapshot()).toBe(before);
   });
 
-  it("plans one migration per movable user of a bulk move and reports the rest", async () => {
-    const h = harness({
-      ...FLEET,
-      ...placedUser("uid-bob", "bob", "shared-b"),
-      ...placedUser("uid-cy", "cy", "shared-a"),
-      ...operation("move-cy", { kind: "migrate-customer", status: "pending", inputUid: "uid-cy", input: { uid: "uid-cy", toGatewayId: "shared-b" } }),
-    });
-    const before = h.snapshot();
-
-    const res = await send(h.app, {
-      method: "post",
-      path: "/gateway-migrations/bulk",
-      body: { userIds: ["uid-ada", "uid-bob", "uid-cy", "uid-ghost"], toGatewayId: "shared-b" },
-    }, true).expect(200);
-
-    expect(res.body).toMatchObject({
-      dryRun: true,
-      targetGatewayId: "shared-b",
-      sourceGatewayId: null,
-      adopted: [{ uid: "uid-cy", operationId: "move-cy" }],
-      rejected: [
-        { uid: "uid-bob", reason: "already-on-target", currentGatewayId: "shared-b" },
-        { uid: "uid-ghost", reason: "user-not-found" },
-      ],
-    });
-    expect(res.body).not.toHaveProperty("enqueued");
-    expect(res.body.plans).toEqual([expect.objectContaining({
-      what: "migrate user",
-      target: { uid: "uid-ada", gatewayId: "shared-b" },
-      preActionStatus: { gatewayId: "shared-a" },
-    })]);
-    expect(h.snapshot()).toBe(before);
-  });
-
-  it("answers a bulk move that would enqueue nothing as a dry run with no plans", async () => {
-    const h = harness();
-
-    const res = await send(h.app, {
-      method: "post",
-      path: "/gateway-migrations/bulk",
-      body: { userIds: ["uid-ada"], toGatewayId: "shared-a" },
-    }, true).expect(200);
-
-    expect(res.body).toMatchObject({ dryRun: true, plans: [], rejected: [{ uid: "uid-ada", reason: "already-on-target" }] });
-  });
-
   it("says why a VM gateway cannot be restarted", async () => {
     const h = harness({ ...FLEET, ...VM_RUNTIME });
 
@@ -205,8 +159,6 @@ describe("a dry run of a changing request", () => {
     ["migration to an unregistered gateway", 404, { method: "post", path: "/users/uid-ada/migrate", body: { to: "nowhere" } }, FLEET],
     ["migration to the user's current gateway", 409, { method: "post", path: "/users/uid-ada/migrate", body: { to: "shared-a" } }, FLEET],
     ["migration while another is in flight", 409, { method: "post", path: "/users/uid-ada/migrate", body: { to: "shared-b" } }, { ...FLEET, ...movingAda }],
-    ["bulk move to an unregistered gateway", 404, { method: "post", path: "/gateway-migrations/bulk", body: { userIds: ["uid-ada"], toGatewayId: "nowhere" } }, FLEET],
-    ["bulk move to a gateway that is not ready", 409, { method: "post", path: "/gateway-migrations/bulk", body: { userIds: ["uid-ada"], toGatewayId: "idle" } }, FLEET],
   ])("refuses a %s exactly as the real request does", async (_label, status, call, seed) => {
     const h = harness(seed);
     const before = h.snapshot();
@@ -264,8 +216,6 @@ describe("a dry run of a changing request", () => {
 
 describe("every changing route", () => {
   const routes: Record<string, ChangingRequest & { seed?: () => Seed }> = {
-    "PATCH /placement/autoscaling": { method: "patch", path: "/placement/autoscaling", body: { enabled: true, usersPerGateway: 40 } },
-    "POST /gateway-migrations/bulk": { method: "post", path: "/gateway-migrations/bulk", body: { userIds: ["uid-ada"], toGatewayId: "shared-b" } },
     "POST /rollouts": { method: "post", path: "/rollouts", body: { gatewayId: "shared-b", targetRelease: 2, imageTag: "abc1234" } },
     "POST /gateways": {
       method: "post",
@@ -290,7 +240,10 @@ describe("every changing route", () => {
     "POST /users": { method: "post", path: "/users", body: { name: "lin", email: "lin@example.com" } },
     "POST /users/:uid/one-time-passwords": { method: "post", path: "/users/uid-ada/one-time-passwords" },
     "POST /users/:uid/delete": { method: "post", path: "/users/uid-ada/delete", body: { eraseNow: false } },
-    "POST /users/:uid/assign": { method: "post", path: "/users/uid-ada/assign", body: { gatewayId: "shared-b" } },
+    "POST /users/:uid/assign": {
+      method: "post", path: "/users/uid-bo/assign", body: { gatewayId: "shared-b" },
+      seed: () => ({ ...FLEET, "users/uid-bo": { username: "bo", onboardingStep: "complete", provisioning: { status: "complete", openclaw: { slug: "bo" } } } }),
+    },
     "POST /users/:uid/isolated-gateway": {
       method: "post", path: "/users/uid-lin/isolated-gateway", body: { sizingProfile: "hobby" }, seed: unisolatedUserFleet,
     },
@@ -321,6 +274,13 @@ describe("every changing route", () => {
     expect((await request(h.app).get("/platform-runtime-config")).status).toBe(404);
     expect((await request(h.app).post("/users/uid-ada/activation-lease")).status).toBe(404);
     expect((await request(h.app).patch("/platform-runtime-config").send({ disposableGatewayIdleMs: 60_000 })).status).toBe(404);
+  });
+
+  it("has no shared gateway autoscaling setting and no bulk move: those are the product's to mount", async () => {
+    const h = harness();
+
+    expect((await request(h.app).patch("/placement/autoscaling").send({ enabled: true, usersPerGateway: 40 })).status).toBe(404);
+    expect((await request(h.app).post("/gateway-migrations/bulk").send({ userIds: ["uid-ada"], toGatewayId: "shared-b" })).status).toBe(404);
   });
 
   it.each(Object.entries(routes))("%s answers a dry run with a plan and writes nothing", async (_route, call) => {

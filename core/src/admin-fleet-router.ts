@@ -17,7 +17,6 @@ import {
   GATEWAY_IMAGE_PROFILES,
   GATEWAY_PROFILES,
   NEW_GATEWAY_ID_REQUIREMENT,
-  resolveUserGatewayControlState,
   isValidNewGatewayId,
   isGatewayClass,
   isGatewayProfile,
@@ -49,8 +48,8 @@ import {
   isGatewayRuntimeDoc,
   type AssignmentDoc,
   type AssignmentState,
-  type CommitPlacementResult,
   type GatewayRuntimeDoc,
+  type PlatformReleaseRecord,
   type ReleaseDoc,
 } from "@octogee/shared/types/gateway-releases";
 import {
@@ -76,14 +75,11 @@ import {
 import {
   SHARED_POOL_SLOT_ID_REQUIREMENT,
   isSharedPoolSlotId,
-  parseSharedGatewayAutoscalingConfig,
   sharedGatewayAddedBy,
   type SharedGatewayAddedBy,
-  type SharedGatewayAutoscalingConfig,
   type SharedGatewayPoolConfig,
 } from "@octogee/shared/types/shared-gateway-pool";
 import {
-  InvalidSharedGatewayAutoscalingConfigError,
   readSharedGatewayPoolConfigInStore,
 } from "./shared-gateway-pool-read.js";
 import {
@@ -104,12 +100,10 @@ import {
 import { withActorEmails } from "./admin-journal-actor.js";
 import {
   AdminDryRunPlanned,
-  adminDryRunBody,
   admitAdminDryRunMarker,
   isAdminDryRun,
   refuseUnansweredAdminDryRun,
   respondToAdminDryRun,
-  type AdminMutationPlan,
 } from "./admin-dry-run.js";
 import { addAdminComputerRoutes } from "./admin-vm-router.js";
 import { addAdminUserRoutes, type UserAccounts, type UserSignInHosts } from "./admin-user-router.js";
@@ -119,6 +113,12 @@ import {
   isolatedRuntimeMutationFenced,
   claimGatewayRetirementInStore,
 } from "./gateway-retirement-claim.js";
+import {
+  commitOperatorPlacement,
+  planOperatorPlacement,
+  SHARED_GATEWAY_MIRROR,
+  type OperatorPlacementRefusal,
+} from "./operator-placement.js";
 import {
   appendGatewayRelease,
   asDurableGatewayRoot,
@@ -144,7 +144,6 @@ import {
   type UserAccountReader,
 } from "./user-account.js";
 import type {
-  IsolatedGatewayMirrorInput,
   PlatformUserRecord,
 } from "./platform-state/users.js";
 import {
@@ -157,7 +156,6 @@ import {
   ownIsolatedGatewayTargetRefusal,
   planOperatorIsolatedGateway,
 } from "./operator-isolated-gateway.js";
-import type { OrchestratorConfig } from "./platform-state/config.js";
 import type { FleetRegistryRecord } from "./platform-state/fleet-registry.js";
 import { readReleaseStatus, summarizeReleaseStatus } from "./release-status.js";
 import type { GatewayAssignment, GatewayRoot } from "./platform-state/gateways.js";
@@ -384,9 +382,10 @@ type AdminPlacementWarningCode =
   | "assigned-not-mounted"
   | "mounted-orphan"
   | "migration-in-flight"
-  | "account-deletion-pending";
+  | "account-deletion-pending"
+  | "shared-gateway-behind-platform-build";
 
-interface AdminPlacementWarning {
+export interface AdminPlacementWarning {
   code: AdminPlacementWarningCode;
   message: string;
   severity: "info" | "warning" | "error";
@@ -473,7 +472,6 @@ interface AdminPlacementResponse {
   config: {
     defaultGatewayId: string | null;
     sharedGatewayIds: string[];
-    sharedGatewayAutoscaling: { enabled: boolean; usersPerGateway: number };
   };
   gateways: AdminPlacementGatewaySummary[];
   users: AdminPlacementUser[];
@@ -482,29 +480,16 @@ interface AdminPlacementResponse {
   generatedAt: string;
 }
 
-type DefaultPlacementConfig = SharedGatewayPoolConfig & {
-  sharedGatewayAutoscaling: SharedGatewayAutoscalingConfig;
-};
+type DefaultPlacementConfig = SharedGatewayPoolConfig;
 
-function sharedGatewayAutoscalingOf(config: OrchestratorConfig | null): SharedGatewayAutoscalingConfig {
-  const autoscaling = config === null
-    ? parseSharedGatewayAutoscalingConfig(undefined)
-    : config.sharedGatewayAutoscaling;
-  if (autoscaling === null) throw new InvalidSharedGatewayAutoscalingConfigError();
-  return autoscaling;
-}
 
 async function readDefaultPlacementConfigInStore(
   transaction: PlatformStateTransaction,
 ): Promise<DefaultPlacementConfig> {
-  const [pool, orchestrator] = await Promise.all([
-    readSharedGatewayPoolConfigInStore(transaction),
-    transaction.config.orchestrator.get(),
-  ]);
+  const pool = await readSharedGatewayPoolConfigInStore(transaction);
   return {
     defaultGatewayId: pool?.defaultGatewayId ?? "",
     sharedGatewayIds: pool?.sharedGatewayIds ?? [],
-    sharedGatewayAutoscaling: sharedGatewayAutoscalingOf(orchestrator),
   };
 }
 
@@ -949,6 +934,7 @@ function buildPlacementResponse(opts: {
   userDocs: ReadonlyArray<FirestoreDocLike>;
   operationDocs: ReadonlyArray<FirestoreDocLike>;
   assignments: readonly AssignmentDoc[];
+  buildWarnings: readonly AdminPlacementWarning[];
 }): AdminPlacementResponse {
   const glmByGatewayId = indexAdminGatewayRuntimeDocs({
     gatewayDocs: opts.gatewayDocs,
@@ -1100,16 +1086,13 @@ function buildPlacementResponse(opts: {
     });
   }
   warnings.push(...accountLifecycleWarnings(opts.userDocs, operations));
+  warnings.push(...opts.buildWarnings);
   for (const user of users) warnings.push(...user.warnings);
 
   return {
     config: {
       defaultGatewayId,
       sharedGatewayIds: [...opts.config.sharedGatewayIds],
-      sharedGatewayAutoscaling: {
-        enabled: opts.config.sharedGatewayAutoscaling.enabled,
-        usersPerGateway: opts.config.sharedGatewayAutoscaling.buildersPerGateway,
-      },
     },
     gateways,
     users: users.map(({ uid, slug, ...user }) => ({ ...user, id: uid, name: slug })),
@@ -1119,11 +1102,11 @@ function buildPlacementResponse(opts: {
   };
 }
 
-async function readAdminPlacementResponse(
+export async function readAdminPlacementResponse(
   store: PlatformStateStore,
   accounts: UserAccountReader,
 ): Promise<AdminPlacementResponse> {
-  const [config, snapshot, recent, accountsByUid] = await Promise.all([
+  const [config, snapshot, recent, accountsByUid, platformRelease] = await Promise.all([
     store.transaction(
       { label: "admin.fleet.onboardingPlacementConfig", readOnly: true },
       readDefaultPlacementConfigInStore,
@@ -1131,6 +1114,7 @@ async function readAdminPlacementResponse(
     readFleetSnapshot(store),
     store.journal.listRecent({ limit: 200 }),
     accounts.list(),
+    store.controllerState.platformRelease.get(),
   ]);
   return buildPlacementResponse({
     now: Date.now(),
@@ -1139,6 +1123,35 @@ async function readAdminPlacementResponse(
     userDocs: userDocuments(snapshot.users, accountsByUid),
     operationDocs: operationDocs(recent.items),
     assignments: snapshot.assignments,
+    buildWarnings: await sharedGatewayBuildWarnings(store, config.sharedGatewayIds, snapshot.roots, platformRelease),
+  });
+}
+
+function buildName(imageTag: string): string {
+  return imageTag.split("@")[0]!;
+}
+
+async function sharedGatewayBuildWarnings(
+  store: PlatformStateStore,
+  sharedGatewayIds: readonly string[],
+  roots: FleetSnapshot["roots"],
+  platformRelease: PlatformReleaseRecord | null,
+): Promise<AdminPlacementWarning[]> {
+  if (platformRelease === null) return [];
+  const shared = roots.filter((root) => sharedGatewayIds.includes(root.gatewayId) && root.desiredStatus !== "retired");
+  const live = await Promise.all(shared.map((root) =>
+    root.liveRelease === null ? null : store.gateways.releases.get(root.gatewayId, root.liveRelease)));
+  const platformBuild = buildName(platformRelease.imageTag);
+  return shared.flatMap((root, index) => {
+    const release = live[index];
+    if (release?.payloadHash === platformRelease.payloadHash) return [];
+    const running = release ? `runs build ${buildName(release.payload.imageTag)}` : "runs no build yet";
+    return [{
+      code: "shared-gateway-behind-platform-build" as const,
+      severity: "warning" as const,
+      gatewayId: root.gatewayId,
+      message: `${root.gatewayId} ${running}; the platform runs ${platformBuild}`,
+    }];
   });
 }
 
@@ -1453,7 +1466,7 @@ function gatewayRetirementBlocker(
   return null;
 }
 
-async function readGatewayRegistrationReadiness(
+export async function readGatewayRegistrationReadiness(
   store: PlatformStateStore,
   gatewayId: string,
 ): Promise<{
@@ -2085,7 +2098,7 @@ const ERR_GATEWAY_OPERATION_IN_FLIGHT =
   "another operation is already pending or running for this gateway";
 export const ERR_USER_NOT_FOUND = "user not found";
 const ERR_OPERATION_NOT_FOUND = "operation not found";
-const ERR_TARGET_GATEWAY_NOT_READY = "target gateway not ready";
+export const ERR_TARGET_GATEWAY_NOT_READY = "target gateway not ready";
 export const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
 const OP_KIND_RESTART_GATEWAY = "restart-gateway";
 
@@ -2165,7 +2178,7 @@ function restoreRecoveryOperationInput(input: {
     images: { gateway: `${payload.imageRepository}:${payload.imageTag}`,
       "gateway-edge": `${payload.gatewayEdgeImage!.imageRepository}:${payload.gatewayEdgeImage!.imageTag}` } } };
 }
-const OP_KIND_MIGRATE_USER = "migrate-customer";
+export const OP_KIND_MIGRATE_USER = "migrate-customer";
 const BUILDS_SERVICE_ALLOWLIST = new Set([
   "octogee-gateway",
   "gateway-edge",
@@ -3056,7 +3069,7 @@ function operationGatewayId(input: Record<string, unknown>): string | null {
   return null;
 }
 
-async function createOperation(
+export async function createOperation(
   store: PlatformStateStore,
   opts: NewOperationInput,
 ): Promise<string> {
@@ -4416,74 +4429,16 @@ export async function retryActivationLeaseReturn(
   return { kind: "retried" };
 }
 
-async function placementUserRejection(
-  transaction: PlatformStateTransaction,
-  userRecord: Stored<PlatformUserRecord> | null,
-  uid: string,
-  gatewayId: string,
-): Promise<CommitPlacementResult | null> {
-  if (userRecord !== null && isolatedRuntimeMutationFenced(userRecord)) {
-    return {
-      kind: "rejected",
-      reason: userRecord.fences.restoreFence !== undefined ? "restore-in-progress" : "source-transfer-in-progress",
-    };
+function sendOperatorPlacementRefusal(res: Response, refusal: OperatorPlacementRefusal, uid: string, gatewayId: string): void {
+  if (refusal.reason === "user-not-found") {
+    res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
+    return;
   }
-  if (!accountAllowsInteractiveAccess({ accountLifecycle: userRecord?.accountLifecycle })) {
-    return { kind: "rejected", reason: "account-not-interactive" };
+  if (refusal.reason === "gateway-not-found") {
+    res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId });
+    return;
   }
-  const currentGatewayId = userRecord?.gateway?.gatewayId;
-  if (
-    currentGatewayId !== undefined && currentGatewayId !== gatewayId &&
-    await transaction.gateways.assignments.get(currentGatewayId, uid) !== null
-  ) {
-    return { kind: "rejected", reason: "assigned-elsewhere" };
-  }
-  return null;
-}
-
-async function commitAdminPlacementInStore(
-  store: PlatformStateStore,
-  input: {
-    uid: string;
-    slug: string;
-    now: number;
-    assignmentWrite: "upsert" | "create-if-missing";
-    mirror: IsolatedGatewayMirrorInput;
-  },
-): Promise<CommitPlacementResult> {
-  const gatewayId = input.mirror.gatewayId;
-  return store.transaction({ label: "admin.fleet.assignCustomer" }, async (transaction): Promise<CommitPlacementResult> => {
-    const userRecord = await transaction.users.records.get(input.uid);
-    const rejection = await placementUserRejection(transaction, userRecord, input.uid, gatewayId);
-    if (rejection) return rejection;
-    const stored = await transaction.gateways.roots.get(gatewayId);
-    if (stored === null) {
-      await transaction.users.records.setGatewayMirror(input.uid, input.mirror);
-      return { kind: "mirror-only" };
-    }
-    const root = durableRootOf(stored, gatewayId);
-    if (root === null) return { kind: "rejected", reason: "gateway-root-invalid" };
-    if (root.desiredStatus !== "running") return { kind: "rejected", reason: "gateway-not-running" };
-    const runtime = await transaction.fleetRegistry.get(gatewayId);
-    if (runtime?.lifecycle !== "serving") return { kind: "rejected", reason: "gateway-not-serving" };
-    const existing = input.assignmentWrite === "create-if-missing"
-      ? await transaction.gateways.assignments.get(gatewayId, input.uid)
-      : null;
-    await transaction.users.records.setGatewayMirror(input.uid, input.mirror);
-    if (existing !== null) return { kind: "assignment-preserved" };
-    await transaction.gateways.assignments.put({
-      uid: input.uid,
-      slug: input.slug,
-      gatewayId,
-      source: "repair",
-      state: "serving",
-      epoch: 0,
-      createdAt: input.now,
-      updatedAt: input.now,
-      updatedByOperationId: null,
-    });
-    return { kind: "assigned", release: root.liveRelease };
-  });
+  res.status(refusal.reason === "gateway-not-shared" ? 400 : 409).json({ error: refusal.message, reason: refusal.reason, uid, gatewayId });
 }
 
 function userMountOf(userRecord: PlatformUserRecord | null): { currentGatewayId: string | null; builderSlug: string | null } {
@@ -4551,6 +4506,26 @@ export function createAdminFleetMutationRunner(store: PlatformStateStore) {
 }
 
 export type AdminFleetMutationRunner = ReturnType<typeof createAdminFleetMutationRunner>;
+
+export function respondToAdminFleetMutationError(error: unknown, _req: Request, res: Response, next: NextFunction): void {
+  if (respondToAdminDryRun(error, res)) return;
+  if (error instanceof FleetMutationIdempotencyError) {
+    res.status(409).json({
+      error: error.message,
+      auditId: error.auditId,
+      status: error.status,
+    });
+    return;
+  }
+  if (error instanceof OperationAuditIdempotencyConflictError) {
+    res.status(409).json({
+      error: error.message,
+      auditId: error.auditId,
+    });
+    return;
+  }
+  next(error);
+}
 
 // eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
 export function addAdminFleetRoutes(
@@ -4778,193 +4753,6 @@ router.get(
     },
   );
 
-  router.patch(
-    "/placement/autoscaling",
-    async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const autoscaling = isPlainRecord(req.body)
-          ? parseSharedGatewayAutoscalingConfig({
-              enabled: req.body.enabled,
-              buildersPerGateway: req.body.usersPerGateway,
-            })
-          : null;
-        if (autoscaling === null) {
-          res.status(400).json({
-            error: "enabled and usersPerGateway must form a valid shared pool autoscaling config",
-          });
-          return;
-        }
-        const [pool, orchestrator] = await store.transaction(
-          { label: "admin.fleet.sharedPoolAutoscaling", readOnly: true },
-          (transaction) => Promise.all([
-            readSharedGatewayPoolConfigInStore(transaction),
-            transaction.config.orchestrator.get(),
-          ]),
-        );
-        const current = orchestrator === null
-          ? sharedGatewayAutoscalingOf(null)
-          : orchestrator.sharedGatewayAutoscaling;
-        const actor = req as ActorRequest;
-        const updatedBy = actor.uid ?? "unknown";
-        await runAdminFleetMutation({
-          req,
-          what: "set shared pool autoscaling",
-          why: ADMIN_FLEET_REQUEST_REASON,
-          target: { sharedGatewayIds: pool?.sharedGatewayIds ?? [] },
-          preActionStatus: { sharedGatewayAutoscaling: current },
-          mutation: { kind: "set-shared-gateway-autoscaling", autoscaling },
-          action: async () => {
-            await store.config.orchestrator.patch({
-              sharedGatewayAutoscaling: autoscaling,
-              placementUpdatedAt: Date.now(),
-              placementUpdatedBy: updatedBy,
-            });
-          },
-        });
-        res.json(await readAdminPlacementResponse(store, accounts));
-      } catch (e) {
-        next(e);
-      }
-    },
-  );
-
-  router.post(
-    "/gateway-migrations/bulk",
-    // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- Linear admin repair route validates input, adopts existing ops, or enqueues one result per uid.
-    async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const body = req.body as Partial<{
-          userIds: unknown;
-          toGatewayId: unknown;
-          targetGatewayId: unknown;
-          sourceGatewayId: unknown;
-        }>;
-        const uids = Array.isArray(body.userIds)
-          ? body.userIds.filter((uid): uid is string => typeof uid === "string" && uid.length > 0)
-          : [];
-        const toGatewayId = asStringOrNull(body.toGatewayId) ?? asStringOrNull(body.targetGatewayId);
-        const sourceGatewayId = asStringOrNull(body.sourceGatewayId);
-        if (!toGatewayId) {
-          res.status(400).json({ error: "toGatewayId is required" });
-          return;
-        }
-        if (uids.length === 0) {
-          res.status(400).json({ error: "userIds must contain at least one id" });
-          return;
-        }
-
-        // Registration is either doc; readiness comes from the relocated
-        // glmGateways/{id}.heartbeat (cutover step 2), not the flat status.
-        const target = await readGatewayRegistrationReadiness(store, toGatewayId);
-        if (!target.registered) {
-          res.status(404).json({ error: "target gateway not registered", gatewayId: toGatewayId });
-          return;
-        }
-        if (target.gatewayClass !== "shared") {
-          res.status(400).json({
-            error: "manual migration target must be a shared gateway",
-            gatewayId: toGatewayId,
-          });
-          return;
-        }
-        if (target.status !== "ready") {
-          res.status(409).json({
-            error: ERR_TARGET_GATEWAY_NOT_READY,
-            gatewayId: toGatewayId,
-            status: target.status ?? "unknown",
-          });
-          return;
-        }
-
-        const pendingOps = await store.journal.operations.listByStatus(["pending", "running"]);
-        const actor = req as ActorRequest;
-        const createdBy = actor.uid ?? "unknown";
-        const enqueued: Array<{ uid: string; operationId: string }> = [];
-        const plans: AdminMutationPlan[] = [];
-        const adopted: Array<{ uid: string; operationId: string }> = [];
-        const rejected: Array<{ uid: string; reason: string; currentGatewayId?: string | null }> = [];
-        for (const uid of [...new Set(uids)]) {
-          const userRecord = await store.users.records.get(uid);
-          if (!userRecord) {
-            rejected.push({ uid, reason: "user-not-found" });
-            continue;
-          }
-          const currentGatewayId = userRecord.gateway?.gatewayId ?? null;
-          const builderSlug = userRecord.slug;
-          if (currentGatewayId === toGatewayId) {
-            rejected.push({ uid, reason: "already-on-target", currentGatewayId });
-            continue;
-          }
-          if (sourceGatewayId && currentGatewayId !== sourceGatewayId) {
-            rejected.push({ uid, reason: "source-gateway-mismatch", currentGatewayId });
-            continue;
-          }
-          const existing = pendingOps.find((operation) =>
-            operation.kind === OP_KIND_MIGRATE_USER &&
-            (operation.inputUid === uid || operation.input.uid === uid) &&
-            operation.input.toGatewayId === toGatewayId);
-          if (existing) {
-            adopted.push({ uid, operationId: existing.id });
-            continue;
-          }
-          const operationInput = {
-            uid,
-            ...(builderSlug ? { builderSlug } : {}),
-            ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
-            toGatewayId,
-            source: "admin-bulk-repair",
-          };
-          try {
-            const operationId = await runAdminFleetMutation({
-              req,
-              what: "migrate user",
-              why: "Admin bulk migration request",
-              target: { uid, gatewayId: toGatewayId },
-              preActionStatus: { gatewayId: currentGatewayId ?? null },
-              mutation: {
-                kind: OP_KIND_MIGRATE_USER,
-                uid,
-                ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
-                toGatewayId,
-                source: "admin-bulk-repair",
-              },
-              idempotencyScope: `bulk-migration:${uid}`,
-              action: async () => createOperation(store, {
-                kind: OP_KIND_MIGRATE_USER,
-                createdBy,
-                input: operationInput,
-              }),
-            });
-            enqueued.push({ uid, operationId });
-          } catch (error) {
-            if (!(error instanceof AdminDryRunPlanned)) throw error;
-            plans.push(error.plan);
-          }
-        }
-
-        if (isAdminDryRun(req)) {
-          res.status(200).json(adminDryRunBody(plans, {
-            targetGatewayId: toGatewayId,
-            sourceGatewayId: sourceGatewayId ?? null,
-            adopted,
-            rejected,
-            generatedAt: new Date().toISOString(),
-          }));
-          return;
-        }
-        res.status(202).json({
-          targetGatewayId: toGatewayId,
-          sourceGatewayId: sourceGatewayId ?? null,
-          enqueued,
-          adopted,
-          rejected,
-          generatedAt: new Date().toISOString(),
-        });
-      } catch (e) {
-        next(e);
-      }
-    },
-  );
 
 function activeDistributionGateways(
   glmById: ReadonlyMap<string, GlmDoc>,
@@ -5115,7 +4903,6 @@ router.get(
 
 router.post(
     "/users/:uid/assign",
-    // eslint-disable-next-line complexity -- linear request validation and one repair fast-path; each branch returns its own operator-facing response.
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const uid = req.params.uid as string;
@@ -5125,103 +4912,38 @@ router.post(
           return;
         }
         const targetGatewayId = body.gatewayId;
-        const userRecord = await store.users.records.get(uid);
-        if (!userRecord) {
-          res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
+        const plan = await planOperatorPlacement(store, { uid, gatewayId: targetGatewayId });
+        if (plan.kind === "refused") {
+          sendOperatorPlacementRefusal(res, plan, uid, targetGatewayId);
           return;
         }
-        const target = await readDurableGatewayRuntime(store, targetGatewayId);
-        if (!target) {
-          res.status(404).json({
-            error: ERR_GATEWAY_NOT_FOUND,
-            gatewayId: targetGatewayId,
-          });
-          return;
-        }
-        if (target.root.gatewayClass !== "shared") {
-          res.status(400).json({
-            error: "Isolated gateway placement is managed by the disposable lifecycle",
-            gatewayId: targetGatewayId,
-          });
-          return;
-        }
-        if (target.root.desiredStatus !== "running") {
-          res.status(409).json({
-            error: ERR_TARGET_GATEWAY_NOT_READY,
-            gatewayId: targetGatewayId,
-            status: target.root.desiredStatus,
-          });
-          return;
-        }
-        const targetStatus = asStringOrNull(target.heartbeat?.status);
-        if (targetStatus !== "ready") {
-          res.status(409).json({
-            error: ERR_TARGET_GATEWAY_NOT_READY,
-            gatewayId: body.gatewayId,
-            status: targetStatus ?? "unknown",
-          });
-          return;
-        }
-        const currentGid = userRecord.gateway?.gatewayId;
-        const controlState = resolveUserGatewayControlState(
-          {
-            gatewayClass: target.root.gatewayClass,
-            profile: target.root.profile ?? undefined,
-            imageProfile: target.root.imageProfile,
-            ownerUid: target.root.ownerUid ?? undefined,
-            builderAccess: target.root.builderAccess ?? undefined,
-          },
-          uid,
-        );
-        const gatewayProfile = controlState.gatewayProfile;
-        const slug = userRecord.slug;
-        if (!slug) {
-          res.status(409).json({
-            error: "user has no canonical slug",
-            uid,
-          });
-          return;
-        }
+        const repair = plan.currentGatewayId === targetGatewayId;
         const placement = await runAdminFleetMutation({
           req,
           what: "assign user to gateway",
           why: ADMIN_FLEET_REQUEST_REASON,
           target: { uid, gatewayId: targetGatewayId },
-          preActionStatus: { gatewayId: currentGid ?? null },
+          preActionStatus: { gatewayId: plan.currentGatewayId },
           mutation: {
             kind: "assign-customer",
             uid,
             gatewayId: targetGatewayId,
-            assignmentWrite: currentGid === targetGatewayId ? "create-if-missing" : "upsert",
+            assignmentWrite: repair ? "create-if-missing" : "upsert",
           },
-          classifyResult: (result) => result.kind === "rejected"
-            ? { outcome: "failed", error: `target revision not placeable: ${result.reason}` }
+          classifyResult: (result) => result.kind === "refused"
+            ? { outcome: "failed", error: result.message }
             : { outcome: "completed" },
-          action: async () => commitAdminPlacementInStore(store, {
-            uid,
-            slug,
-            now: Date.now(),
-            assignmentWrite: currentGid === targetGatewayId ? "create-if-missing" : "upsert",
-            mirror: {
-              gatewayId: targetGatewayId,
-              gatewayProfile,
-              controlUiEnabled: controlState.controlUiEnabled,
-            },
-          }),
+          action: async () => commitOperatorPlacement(store, { uid, gatewayId: targetGatewayId, source: "repair", now: Date.now() }),
         });
-        if (placement.kind === "rejected") {
-          res.status(409).json({
-            error: `target revision not placeable: ${placement.reason}`,
-            gatewayId: targetGatewayId,
-            reason: placement.reason,
-          });
+        if (placement.kind === "refused") {
+          sendOperatorPlacementRefusal(res, placement, uid, targetGatewayId);
           return;
         }
-        res.status(currentGid === targetGatewayId ? 200 : 202).json({
+        res.status(repair ? 200 : 202).json({
           uid,
           gatewayId: targetGatewayId,
-          gatewayProfile,
-          ...(currentGid === targetGatewayId ? { repaired: true } : {}),
+          gatewayProfile: SHARED_GATEWAY_MIRROR.gatewayProfile,
+          ...(repair ? { repaired: true } : {}),
         });
       } catch (e) {
         next(e);
@@ -6294,25 +6016,7 @@ router.get(
 
   router.use(refuseUnansweredAdminDryRun);
 
-  router.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
-    if (respondToAdminDryRun(error, res)) return;
-    if (error instanceof FleetMutationIdempotencyError) {
-      res.status(409).json({
-        error: error.message,
-        auditId: error.auditId,
-        status: error.status,
-      });
-      return;
-    }
-    if (error instanceof OperationAuditIdempotencyConflictError) {
-      res.status(409).json({
-        error: error.message,
-        auditId: error.auditId,
-      });
-      return;
-    }
-    next(error);
-  });
+  router.use(respondToAdminFleetMutationError);
 
   return router;
 }

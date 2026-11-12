@@ -2,7 +2,7 @@ import { migrationCancellationDeferred } from "./fleet-state.js";
 import { readSharedSourceRecoveryAuthority, readSharedSourceRecoverySupersession, SharedSourceRecoveryConflict } from "./shared-source-recovery.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { isOperationAuditRecord, isOperationAuditRow, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayControlState, isValidNewGatewayId, isGatewayClass, isGatewayProfile, resolveGatewayClass, resolveGatewayImageProfile, resolveGatewayRuntime, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
+import { isOperationAuditRecord, isOperationAuditRow, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, isValidNewGatewayId, isGatewayClass, isGatewayProfile, resolveGatewayClass, resolveGatewayImageProfile, resolveGatewayRuntime, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS, } from "@octogee/shared/types/platform-config";
 import { accountAllowsInteractiveAccess, } from "@octogee/shared/types/account-lifecycle";
 import { isReleasePayload, isGatewayRuntimeDoc, } from "@octogee/shared/types/gateway-releases";
@@ -10,17 +10,18 @@ import { isGatewayPodReplacements, summarizeGatewayPodReplacements, } from "@oct
 import { GATEWAY_CONFIG_SCHEMA_VERSION, InitialGatewayReleaseConflictError, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, writeInitialGatewayReleaseInStore, } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import { resolveContinuousUserPlacement, resolveLiveActivationTargetGatewayId, } from "@octogee/shared/types/orchestrator-placement";
-import { SHARED_POOL_SLOT_ID_REQUIREMENT, isSharedPoolSlotId, parseSharedGatewayAutoscalingConfig, sharedGatewayAddedBy, } from "@octogee/shared/types/shared-gateway-pool";
-import { InvalidSharedGatewayAutoscalingConfigError, readSharedGatewayPoolConfigInStore, } from "./shared-gateway-pool-read.js";
+import { SHARED_POOL_SLOT_ID_REQUIREMENT, isSharedPoolSlotId, sharedGatewayAddedBy, } from "@octogee/shared/types/shared-gateway-pool";
+import { readSharedGatewayPoolConfigInStore, } from "./shared-gateway-pool-read.js";
 import { SIZING_TIERS, resolveSizingTier, } from "@octogee/shared/types/sizing";
 import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/shared/types/cost-estimator";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { builderReturnOperationId, placementRetireOperationId, } from "./user-activation-lease.js";
 import { withActorEmails } from "./admin-journal-actor.js";
-import { AdminDryRunPlanned, adminDryRunBody, admitAdminDryRunMarker, isAdminDryRun, refuseUnansweredAdminDryRun, respondToAdminDryRun, } from "./admin-dry-run.js";
+import { AdminDryRunPlanned, admitAdminDryRunMarker, isAdminDryRun, refuseUnansweredAdminDryRun, respondToAdminDryRun, } from "./admin-dry-run.js";
 import { addAdminComputerRoutes } from "./admin-vm-router.js";
 import { addAdminUserRoutes } from "./admin-user-router.js";
 import { GatewayRetirementConflictError, assertGatewayRuntimeMutationUnfencedInStore, isolatedRuntimeMutationFenced, claimGatewayRetirementInStore, } from "./gateway-retirement-claim.js";
+import { commitOperatorPlacement, planOperatorPlacement, SHARED_GATEWAY_MIRROR, } from "./operator-placement.js";
 import { appendGatewayRelease, asDurableGatewayRoot, InvalidGatewayRootError, StaleGatewayReleaseError, } from "./gateway-release-append.js";
 import { findActiveGatewayMigration, GatewayMigrationInFlightError, } from "./fleet-operation-lock.js";
 import { buildUserDeletionSchedule } from "@octogee/shared/types/account-lifecycle";
@@ -128,23 +129,11 @@ function isAdminGatewayClass(value) {
 function withAdminGatewayClass(gateway) {
     return { ...gateway, gatewayClass: adminGatewayClass(gateway.gatewayClass) };
 }
-function sharedGatewayAutoscalingOf(config) {
-    const autoscaling = config === null
-        ? parseSharedGatewayAutoscalingConfig(undefined)
-        : config.sharedGatewayAutoscaling;
-    if (autoscaling === null)
-        throw new InvalidSharedGatewayAutoscalingConfigError();
-    return autoscaling;
-}
 async function readDefaultPlacementConfigInStore(transaction) {
-    const [pool, orchestrator] = await Promise.all([
-        readSharedGatewayPoolConfigInStore(transaction),
-        transaction.config.orchestrator.get(),
-    ]);
+    const pool = await readSharedGatewayPoolConfigInStore(transaction);
     return {
         defaultGatewayId: pool?.defaultGatewayId ?? "",
         sharedGatewayIds: pool?.sharedGatewayIds ?? [],
-        sharedGatewayAutoscaling: sharedGatewayAutoscalingOf(orchestrator),
     };
 }
 function presentFields(fields) {
@@ -592,16 +581,13 @@ function buildPlacementResponse(opts) {
         });
     }
     warnings.push(...accountLifecycleWarnings(opts.userDocs, operations));
+    warnings.push(...opts.buildWarnings);
     for (const user of users)
         warnings.push(...user.warnings);
     return {
         config: {
             defaultGatewayId,
             sharedGatewayIds: [...opts.config.sharedGatewayIds],
-            sharedGatewayAutoscaling: {
-                enabled: opts.config.sharedGatewayAutoscaling.enabled,
-                usersPerGateway: opts.config.sharedGatewayAutoscaling.buildersPerGateway,
-            },
         },
         gateways,
         users: users.map(({ uid, slug, ...user }) => ({ ...user, id: uid, name: slug })),
@@ -610,12 +596,13 @@ function buildPlacementResponse(opts) {
         generatedAt: new Date().toISOString(),
     };
 }
-async function readAdminPlacementResponse(store, accounts) {
-    const [config, snapshot, recent, accountsByUid] = await Promise.all([
+export async function readAdminPlacementResponse(store, accounts) {
+    const [config, snapshot, recent, accountsByUid, platformRelease] = await Promise.all([
         store.transaction({ label: "admin.fleet.onboardingPlacementConfig", readOnly: true }, readDefaultPlacementConfigInStore),
         readFleetSnapshot(store),
         store.journal.listRecent({ limit: 200 }),
         accounts.list(),
+        store.controllerState.platformRelease.get(),
     ]);
     return buildPlacementResponse({
         now: Date.now(),
@@ -624,6 +611,29 @@ async function readAdminPlacementResponse(store, accounts) {
         userDocs: userDocuments(snapshot.users, accountsByUid),
         operationDocs: operationDocs(recent.items),
         assignments: snapshot.assignments,
+        buildWarnings: await sharedGatewayBuildWarnings(store, config.sharedGatewayIds, snapshot.roots, platformRelease),
+    });
+}
+function buildName(imageTag) {
+    return imageTag.split("@")[0];
+}
+async function sharedGatewayBuildWarnings(store, sharedGatewayIds, roots, platformRelease) {
+    if (platformRelease === null)
+        return [];
+    const shared = roots.filter((root) => sharedGatewayIds.includes(root.gatewayId) && root.desiredStatus !== "retired");
+    const live = await Promise.all(shared.map((root) => root.liveRelease === null ? null : store.gateways.releases.get(root.gatewayId, root.liveRelease)));
+    const platformBuild = buildName(platformRelease.imageTag);
+    return shared.flatMap((root, index) => {
+        const release = live[index];
+        if (release?.payloadHash === platformRelease.payloadHash)
+            return [];
+        const running = release ? `runs build ${buildName(release.payload.imageTag)}` : "runs no build yet";
+        return [{
+                code: "shared-gateway-behind-platform-build",
+                severity: "warning",
+                gatewayId: root.gatewayId,
+                message: `${root.gatewayId} ${running}; the platform runs ${platformBuild}`,
+            }];
     });
 }
 function indexGlmDocs(docs) {
@@ -863,7 +873,7 @@ function gatewayRetirementBlocker(gatewayId, runtime) {
     }
     return null;
 }
-async function readGatewayRegistrationReadiness(store, gatewayId) {
+export async function readGatewayRegistrationReadiness(store, gatewayId) {
     const runtime = await readDurableGatewayRuntime(store, gatewayId);
     return {
         registered: runtime !== null,
@@ -1258,7 +1268,7 @@ const ERR_GATEWAY_NOT_FOUND = "gateway not found";
 const ERR_GATEWAY_OPERATION_IN_FLIGHT = "another operation is already pending or running for this gateway";
 export const ERR_USER_NOT_FOUND = "user not found";
 const ERR_OPERATION_NOT_FOUND = "operation not found";
-const ERR_TARGET_GATEWAY_NOT_READY = "target gateway not ready";
+export const ERR_TARGET_GATEWAY_NOT_READY = "target gateway not ready";
 export const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
 const OP_KIND_RESTART_GATEWAY = "restart-gateway";
 function validRecoveryOperationId(value) {
@@ -1321,7 +1331,7 @@ function restoreRecoveryOperationInput(input) {
             images: { gateway: `${payload.imageRepository}:${payload.imageTag}`,
                 "gateway-edge": `${payload.gatewayEdgeImage.imageRepository}:${payload.gatewayEdgeImage.imageTag}` } } };
 }
-const OP_KIND_MIGRATE_USER = "migrate-customer";
+export const OP_KIND_MIGRATE_USER = "migrate-customer";
 const BUILDS_SERVICE_ALLOWLIST = new Set([
     "octogee-gateway",
     "gateway-edge",
@@ -1962,7 +1972,7 @@ function operationGatewayId(input) {
     }
     return null;
 }
-async function createOperation(store, opts) {
+export async function createOperation(store, opts) {
     return store.transaction({ label: "admin.fleet.createOperation" }, (transaction) => transaction.journal.operations.enqueue(operationDoc(opts, Date.now())));
 }
 function operationDoc(opts, createdAt) {
@@ -3014,62 +3024,16 @@ export async function retryActivationLeaseReturn(transaction, input) {
     });
     return { kind: "retried" };
 }
-async function placementUserRejection(transaction, userRecord, uid, gatewayId) {
-    if (userRecord !== null && isolatedRuntimeMutationFenced(userRecord)) {
-        return {
-            kind: "rejected",
-            reason: userRecord.fences.restoreFence !== undefined ? "restore-in-progress" : "source-transfer-in-progress",
-        };
+function sendOperatorPlacementRefusal(res, refusal, uid, gatewayId) {
+    if (refusal.reason === "user-not-found") {
+        res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
+        return;
     }
-    if (!accountAllowsInteractiveAccess({ accountLifecycle: userRecord?.accountLifecycle })) {
-        return { kind: "rejected", reason: "account-not-interactive" };
+    if (refusal.reason === "gateway-not-found") {
+        res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId });
+        return;
     }
-    const currentGatewayId = userRecord?.gateway?.gatewayId;
-    if (currentGatewayId !== undefined && currentGatewayId !== gatewayId &&
-        await transaction.gateways.assignments.get(currentGatewayId, uid) !== null) {
-        return { kind: "rejected", reason: "assigned-elsewhere" };
-    }
-    return null;
-}
-async function commitAdminPlacementInStore(store, input) {
-    const gatewayId = input.mirror.gatewayId;
-    return store.transaction({ label: "admin.fleet.assignCustomer" }, async (transaction) => {
-        const userRecord = await transaction.users.records.get(input.uid);
-        const rejection = await placementUserRejection(transaction, userRecord, input.uid, gatewayId);
-        if (rejection)
-            return rejection;
-        const stored = await transaction.gateways.roots.get(gatewayId);
-        if (stored === null) {
-            await transaction.users.records.setGatewayMirror(input.uid, input.mirror);
-            return { kind: "mirror-only" };
-        }
-        const root = durableRootOf(stored, gatewayId);
-        if (root === null)
-            return { kind: "rejected", reason: "gateway-root-invalid" };
-        if (root.desiredStatus !== "running")
-            return { kind: "rejected", reason: "gateway-not-running" };
-        const runtime = await transaction.fleetRegistry.get(gatewayId);
-        if (runtime?.lifecycle !== "serving")
-            return { kind: "rejected", reason: "gateway-not-serving" };
-        const existing = input.assignmentWrite === "create-if-missing"
-            ? await transaction.gateways.assignments.get(gatewayId, input.uid)
-            : null;
-        await transaction.users.records.setGatewayMirror(input.uid, input.mirror);
-        if (existing !== null)
-            return { kind: "assignment-preserved" };
-        await transaction.gateways.assignments.put({
-            uid: input.uid,
-            slug: input.slug,
-            gatewayId,
-            source: "repair",
-            state: "serving",
-            epoch: 0,
-            createdAt: input.now,
-            updatedAt: input.now,
-            updatedByOperationId: null,
-        });
-        return { kind: "assigned", release: root.liveRelease };
-    });
+    res.status(refusal.reason === "gateway-not-shared" ? 400 : 409).json({ error: refusal.message, reason: refusal.reason, uid, gatewayId });
 }
 function userMountOf(userRecord) {
     return { currentGatewayId: userRecord?.gateway?.gatewayId ?? null, builderSlug: userRecord?.slug ?? null };
@@ -3123,6 +3087,26 @@ export function createAdminFleetMutationRunner(store) {
                 : {}),
         });
     };
+}
+export function respondToAdminFleetMutationError(error, _req, res, next) {
+    if (respondToAdminDryRun(error, res))
+        return;
+    if (error instanceof FleetMutationIdempotencyError) {
+        res.status(409).json({
+            error: error.message,
+            auditId: error.auditId,
+            status: error.status,
+        });
+        return;
+    }
+    if (error instanceof OperationAuditIdempotencyConflictError) {
+        res.status(409).json({
+            error: error.message,
+            auditId: error.auditId,
+        });
+        return;
+    }
+    next(error);
 }
 // eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
 export function addAdminFleetRoutes(router, deps) {
@@ -3300,179 +3284,6 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    router.patch("/placement/autoscaling", async (req, res, next) => {
-        try {
-            const autoscaling = isPlainRecord(req.body)
-                ? parseSharedGatewayAutoscalingConfig({
-                    enabled: req.body.enabled,
-                    buildersPerGateway: req.body.usersPerGateway,
-                })
-                : null;
-            if (autoscaling === null) {
-                res.status(400).json({
-                    error: "enabled and usersPerGateway must form a valid shared pool autoscaling config",
-                });
-                return;
-            }
-            const [pool, orchestrator] = await store.transaction({ label: "admin.fleet.sharedPoolAutoscaling", readOnly: true }, (transaction) => Promise.all([
-                readSharedGatewayPoolConfigInStore(transaction),
-                transaction.config.orchestrator.get(),
-            ]));
-            const current = orchestrator === null
-                ? sharedGatewayAutoscalingOf(null)
-                : orchestrator.sharedGatewayAutoscaling;
-            const actor = req;
-            const updatedBy = actor.uid ?? "unknown";
-            await runAdminFleetMutation({
-                req,
-                what: "set shared pool autoscaling",
-                why: ADMIN_FLEET_REQUEST_REASON,
-                target: { sharedGatewayIds: pool?.sharedGatewayIds ?? [] },
-                preActionStatus: { sharedGatewayAutoscaling: current },
-                mutation: { kind: "set-shared-gateway-autoscaling", autoscaling },
-                action: async () => {
-                    await store.config.orchestrator.patch({
-                        sharedGatewayAutoscaling: autoscaling,
-                        placementUpdatedAt: Date.now(),
-                        placementUpdatedBy: updatedBy,
-                    });
-                },
-            });
-            res.json(await readAdminPlacementResponse(store, accounts));
-        }
-        catch (e) {
-            next(e);
-        }
-    });
-    router.post("/gateway-migrations/bulk", 
-    // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- Linear admin repair route validates input, adopts existing ops, or enqueues one result per uid.
-    async (req, res, next) => {
-        try {
-            const body = req.body;
-            const uids = Array.isArray(body.userIds)
-                ? body.userIds.filter((uid) => typeof uid === "string" && uid.length > 0)
-                : [];
-            const toGatewayId = asStringOrNull(body.toGatewayId) ?? asStringOrNull(body.targetGatewayId);
-            const sourceGatewayId = asStringOrNull(body.sourceGatewayId);
-            if (!toGatewayId) {
-                res.status(400).json({ error: "toGatewayId is required" });
-                return;
-            }
-            if (uids.length === 0) {
-                res.status(400).json({ error: "userIds must contain at least one id" });
-                return;
-            }
-            // Registration is either doc; readiness comes from the relocated
-            // glmGateways/{id}.heartbeat (cutover step 2), not the flat status.
-            const target = await readGatewayRegistrationReadiness(store, toGatewayId);
-            if (!target.registered) {
-                res.status(404).json({ error: "target gateway not registered", gatewayId: toGatewayId });
-                return;
-            }
-            if (target.gatewayClass !== "shared") {
-                res.status(400).json({
-                    error: "manual migration target must be a shared gateway",
-                    gatewayId: toGatewayId,
-                });
-                return;
-            }
-            if (target.status !== "ready") {
-                res.status(409).json({
-                    error: ERR_TARGET_GATEWAY_NOT_READY,
-                    gatewayId: toGatewayId,
-                    status: target.status ?? "unknown",
-                });
-                return;
-            }
-            const pendingOps = await store.journal.operations.listByStatus(["pending", "running"]);
-            const actor = req;
-            const createdBy = actor.uid ?? "unknown";
-            const enqueued = [];
-            const plans = [];
-            const adopted = [];
-            const rejected = [];
-            for (const uid of [...new Set(uids)]) {
-                const userRecord = await store.users.records.get(uid);
-                if (!userRecord) {
-                    rejected.push({ uid, reason: "user-not-found" });
-                    continue;
-                }
-                const currentGatewayId = userRecord.gateway?.gatewayId ?? null;
-                const builderSlug = userRecord.slug;
-                if (currentGatewayId === toGatewayId) {
-                    rejected.push({ uid, reason: "already-on-target", currentGatewayId });
-                    continue;
-                }
-                if (sourceGatewayId && currentGatewayId !== sourceGatewayId) {
-                    rejected.push({ uid, reason: "source-gateway-mismatch", currentGatewayId });
-                    continue;
-                }
-                const existing = pendingOps.find((operation) => operation.kind === OP_KIND_MIGRATE_USER &&
-                    (operation.inputUid === uid || operation.input.uid === uid) &&
-                    operation.input.toGatewayId === toGatewayId);
-                if (existing) {
-                    adopted.push({ uid, operationId: existing.id });
-                    continue;
-                }
-                const operationInput = {
-                    uid,
-                    ...(builderSlug ? { builderSlug } : {}),
-                    ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
-                    toGatewayId,
-                    source: "admin-bulk-repair",
-                };
-                try {
-                    const operationId = await runAdminFleetMutation({
-                        req,
-                        what: "migrate user",
-                        why: "Admin bulk migration request",
-                        target: { uid, gatewayId: toGatewayId },
-                        preActionStatus: { gatewayId: currentGatewayId ?? null },
-                        mutation: {
-                            kind: OP_KIND_MIGRATE_USER,
-                            uid,
-                            ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
-                            toGatewayId,
-                            source: "admin-bulk-repair",
-                        },
-                        idempotencyScope: `bulk-migration:${uid}`,
-                        action: async () => createOperation(store, {
-                            kind: OP_KIND_MIGRATE_USER,
-                            createdBy,
-                            input: operationInput,
-                        }),
-                    });
-                    enqueued.push({ uid, operationId });
-                }
-                catch (error) {
-                    if (!(error instanceof AdminDryRunPlanned))
-                        throw error;
-                    plans.push(error.plan);
-                }
-            }
-            if (isAdminDryRun(req)) {
-                res.status(200).json(adminDryRunBody(plans, {
-                    targetGatewayId: toGatewayId,
-                    sourceGatewayId: sourceGatewayId ?? null,
-                    adopted,
-                    rejected,
-                    generatedAt: new Date().toISOString(),
-                }));
-                return;
-            }
-            res.status(202).json({
-                targetGatewayId: toGatewayId,
-                sourceGatewayId: sourceGatewayId ?? null,
-                enqueued,
-                adopted,
-                rejected,
-                generatedAt: new Date().toISOString(),
-            });
-        }
-        catch (e) {
-            next(e);
-        }
-    });
     function activeDistributionGateways(glmById, rootsById) {
         const gateways = new Map();
         for (const gatewayId of new Set([...glmById.keys(), ...rootsById.keys()])) {
@@ -3589,9 +3400,7 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    router.post("/users/:uid/assign", 
-    // eslint-disable-next-line complexity -- linear request validation and one repair fast-path; each branch returns its own operator-facing response.
-    async (req, res, next) => {
+    router.post("/users/:uid/assign", async (req, res, next) => {
         try {
             const uid = req.params.uid;
             const body = req.body;
@@ -3600,100 +3409,38 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             const targetGatewayId = body.gatewayId;
-            const userRecord = await store.users.records.get(uid);
-            if (!userRecord) {
-                res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
+            const plan = await planOperatorPlacement(store, { uid, gatewayId: targetGatewayId });
+            if (plan.kind === "refused") {
+                sendOperatorPlacementRefusal(res, plan, uid, targetGatewayId);
                 return;
             }
-            const target = await readDurableGatewayRuntime(store, targetGatewayId);
-            if (!target) {
-                res.status(404).json({
-                    error: ERR_GATEWAY_NOT_FOUND,
-                    gatewayId: targetGatewayId,
-                });
-                return;
-            }
-            if (target.root.gatewayClass !== "shared") {
-                res.status(400).json({
-                    error: "Isolated gateway placement is managed by the disposable lifecycle",
-                    gatewayId: targetGatewayId,
-                });
-                return;
-            }
-            if (target.root.desiredStatus !== "running") {
-                res.status(409).json({
-                    error: ERR_TARGET_GATEWAY_NOT_READY,
-                    gatewayId: targetGatewayId,
-                    status: target.root.desiredStatus,
-                });
-                return;
-            }
-            const targetStatus = asStringOrNull(target.heartbeat?.status);
-            if (targetStatus !== "ready") {
-                res.status(409).json({
-                    error: ERR_TARGET_GATEWAY_NOT_READY,
-                    gatewayId: body.gatewayId,
-                    status: targetStatus ?? "unknown",
-                });
-                return;
-            }
-            const currentGid = userRecord.gateway?.gatewayId;
-            const controlState = resolveUserGatewayControlState({
-                gatewayClass: target.root.gatewayClass,
-                profile: target.root.profile ?? undefined,
-                imageProfile: target.root.imageProfile,
-                ownerUid: target.root.ownerUid ?? undefined,
-                builderAccess: target.root.builderAccess ?? undefined,
-            }, uid);
-            const gatewayProfile = controlState.gatewayProfile;
-            const slug = userRecord.slug;
-            if (!slug) {
-                res.status(409).json({
-                    error: "user has no canonical slug",
-                    uid,
-                });
-                return;
-            }
+            const repair = plan.currentGatewayId === targetGatewayId;
             const placement = await runAdminFleetMutation({
                 req,
                 what: "assign user to gateway",
                 why: ADMIN_FLEET_REQUEST_REASON,
                 target: { uid, gatewayId: targetGatewayId },
-                preActionStatus: { gatewayId: currentGid ?? null },
+                preActionStatus: { gatewayId: plan.currentGatewayId },
                 mutation: {
                     kind: "assign-customer",
                     uid,
                     gatewayId: targetGatewayId,
-                    assignmentWrite: currentGid === targetGatewayId ? "create-if-missing" : "upsert",
+                    assignmentWrite: repair ? "create-if-missing" : "upsert",
                 },
-                classifyResult: (result) => result.kind === "rejected"
-                    ? { outcome: "failed", error: `target revision not placeable: ${result.reason}` }
+                classifyResult: (result) => result.kind === "refused"
+                    ? { outcome: "failed", error: result.message }
                     : { outcome: "completed" },
-                action: async () => commitAdminPlacementInStore(store, {
-                    uid,
-                    slug,
-                    now: Date.now(),
-                    assignmentWrite: currentGid === targetGatewayId ? "create-if-missing" : "upsert",
-                    mirror: {
-                        gatewayId: targetGatewayId,
-                        gatewayProfile,
-                        controlUiEnabled: controlState.controlUiEnabled,
-                    },
-                }),
+                action: async () => commitOperatorPlacement(store, { uid, gatewayId: targetGatewayId, source: "repair", now: Date.now() }),
             });
-            if (placement.kind === "rejected") {
-                res.status(409).json({
-                    error: `target revision not placeable: ${placement.reason}`,
-                    gatewayId: targetGatewayId,
-                    reason: placement.reason,
-                });
+            if (placement.kind === "refused") {
+                sendOperatorPlacementRefusal(res, placement, uid, targetGatewayId);
                 return;
             }
-            res.status(currentGid === targetGatewayId ? 200 : 202).json({
+            res.status(repair ? 200 : 202).json({
                 uid,
                 gatewayId: targetGatewayId,
-                gatewayProfile,
-                ...(currentGid === targetGatewayId ? { repaired: true } : {}),
+                gatewayProfile: SHARED_GATEWAY_MIRROR.gatewayProfile,
+                ...(repair ? { repaired: true } : {}),
             });
         }
         catch (e) {
@@ -4720,25 +4467,6 @@ export function addAdminFleetRoutes(router, deps) {
         }
     });
     router.use(refuseUnansweredAdminDryRun);
-    router.use((error, _req, res, next) => {
-        if (respondToAdminDryRun(error, res))
-            return;
-        if (error instanceof FleetMutationIdempotencyError) {
-            res.status(409).json({
-                error: error.message,
-                auditId: error.auditId,
-                status: error.status,
-            });
-            return;
-        }
-        if (error instanceof OperationAuditIdempotencyConflictError) {
-            res.status(409).json({
-                error: error.message,
-                auditId: error.auditId,
-            });
-            return;
-        }
-        next(error);
-    });
+    router.use(respondToAdminFleetMutationError);
     return router;
 }

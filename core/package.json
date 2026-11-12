@@ -33,6 +33,10 @@
       "types": "./dist/admin-activation-lease-routes.d.ts",
       "default": "./dist/admin-activation-lease-routes.js"
     },
+    "./admin-shared-gateway-automation-routes": {
+      "types": "./dist/admin-shared-gateway-automation-routes.d.ts",
+      "default": "./dist/admin-shared-gateway-automation-routes.js"
+    },
     "./isolated-prelaunch": {
       "types": "./dist/isolated-prelaunch.d.ts",
       "default": "./dist/isolated-prelaunch.js"
@@ -244,6 +248,10 @@
     "./gateway-device-identity": {
       "types": "./dist/gateway-device-identity.d.ts",
       "default": "./dist/gateway-device-identity.js"
+    },
+    "./operator-placement": {
+      "types": "./dist/operator-placement.d.ts",
+      "default": "./dist/operator-placement.js"
     },
     "./gateway-retirement-claim": {
       "types": "./dist/gateway-retirement-claim.d.ts",
@@ -656,6 +664,9 @@
       ],
       "gateway-principal-access": [
         "dist/gateway-principal-access.d.ts"
+      ],
+      "operator-placement": [
+        "dist/operator-placement.d.ts"
       ],
       "gateway-retirement-claim": [
         "dist/gateway-retirement-claim.d.ts"

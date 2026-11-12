@@ -53,7 +53,8 @@ import {
 } from "../lib/admin-fleet-client.js";
 
 import { runDesktopImagePublication } from "../lib/desktop-image-publication.js";
-import { addUserAssignmentRefusal, commitAddUserPlacement } from "../lib/fleet-place-user.js";
+import { commitAddUserPlacement } from "../lib/fleet-place-user.js";
+import { planOperatorPlacement } from "@octogee/core/operator-placement";
 import { runFleetLogsCommand } from "../lib/fleet-logs-command.js";
 import { requireOperatorEmail } from "../lib/operator-email.js";
 import { resolveForcedGatewayRestart } from "./fleet-resolve-forced-restart.js";
@@ -290,7 +291,7 @@ const VERBS: readonly VerbHelp[] = [
     summary: "Override placement: assign user to a specific gateway.",
     args: "<slug> --to=<gw-id> [--apply]",
     description:
-      "Writes `users/{uid}.provisioning.openclaw.gatewayId` and the mirrored `gatewayProfile` to place an unassigned user (canary placement, repair). Refuses if the gateway doesn't exist or is `unreachable`, and refuses a user whose serving assignment lives on another gateway: move those with `migrate-customer`.\n\nDry-run by default. Pass `--apply` to commit.",
+      "Writes `users/{uid}.provisioning.openclaw.gatewayId` and the mirrored `gatewayProfile` to place an unassigned user (canary placement, repair). Refuses what `assign-user-gateway` refuses: a missing, retired, paused or isolated gateway; a user under a restore, source-transfer or migration fence, closed or not admitted; and a user with an assignment on any other gateway, which moves with `migrate-customer`. A user held by the operator is assigned and stays held. A gateway that is not ready yet takes the user, who is served once it comes up.\n\nDry-run by default. Pass `--apply` to commit.",
     examples: [
       "fleet --env=prod add-customer ceckert --to=canary",
       "fleet --env=prod add-customer ceckert --to=canary --apply",
@@ -1593,68 +1594,35 @@ async function addUser(slug: string, gatewayId: string, apply: boolean): Promise
     console.error(red(`${CROSS} No user found with slug '${slug}'.`));
     process.exit(1);
   }
-  const runtime = await readFleetGatewayRuntime(platformState, gatewayId);
-  if (!runtime) {
-    console.error(red(`${CROSS} Gateway '${gatewayId}' has no valid durable root configuration.`));
+  const plan = await planOperatorPlacement(platformState, { uid: user.uid, gatewayId });
+  if (plan.kind === "refused") {
+    console.error(red(`${CROSS} Refusing to assign '${slug}' (${plan.reason}): ${plan.message}.`));
     process.exit(1);
   }
-  const gw = runtime.heartbeat;
-  const gatewayProfile = runtime.profile;
-  if (runtime.desiredStatus !== "running") {
-    console.error(red(`${CROSS} Gateway '${gatewayId}' is ${runtime.desiredStatus}, not running.`));
-    console.error(dim(`  Refusing to assign — the user would not be mounted.`));
-    process.exit(1);
-  }
-  if (gw.status === "unreachable") {
-    console.error(red(`${CROSS} Gateway '${gatewayId}' is in 'unreachable' status.`));
-    console.error(dim(`  Refusing to assign — the user would never get mounted.`));
-    process.exit(1);
-  }
-  const assignments = await platformState.gateways.assignments.listForUid(user.uid);
-  const current = user.gateway?.gatewayId ?? null;
-  const refusal = addUserAssignmentRefusal({
-    targetGatewayId: gatewayId,
-    currentGatewayId: current,
-    assignmentGatewayIds: assignments.map((assignment) => assignment.gatewayId),
-  });
-  if (refusal) {
-    console.error(red(`${CROSS} ${refusal}`));
-    process.exit(1);
-  }
-  const currentProfile = normalizeGatewayProfile(user.gateway?.gatewayProfile);
-  const assigned = assignments.some((assignment) => assignment.gatewayId === gatewayId);
-  if (current === gatewayId && assigned && currentProfile === gatewayProfile) {
+  if (plan.assignmentPresent && plan.mirrorCurrent) {
     console.log(yellow(`'${slug}' is already assigned to '${gatewayId}'. Nothing to do.`));
     return;
   }
 
   console.log(bold(`ADD-CUSTOMER ${slug}`) + dim(`  ${ARROW} ${gatewayId}`));
   console.log(`  uid                 ${user.uid}`);
-  console.log(`  current gatewayId   ${current ?? dim("(none)")}`);
+  console.log(`  current gatewayId   ${plan.currentGatewayId ?? dim("(none)")}`);
   console.log(`  new gatewayId       ${cyan(gatewayId)}`);
-  console.log(`  current profile     ${currentProfile}`);
-  console.log(`  gateway profile     ${gatewayProfile}`);
-  console.log(`  assignment          ${assigned ? "present" : "created"}`);
-  console.log(`  gateway status      ${gw.status}`);
+  console.log(`  assignment          ${plan.assignmentPresent ? "present" : "created"}`);
 
   if (!apply) {
     console.log("\n" + dim(`--- DRY RUN (re-run with --apply to commit) ---`));
     return;
   }
 
-  const outcome = await commitAddUserPlacement(platformState, {
-    uid: user.uid,
-    gatewayId,
-    gatewayProfile,
-    now: Date.now(),
-  });
+  const outcome = await commitAddUserPlacement(platformState, { uid: user.uid, gatewayId, now: Date.now() });
   if (outcome === "unchanged") {
     console.log(yellow(`'${slug}' is already assigned to '${gatewayId}'. Nothing to do.`));
     return;
   }
-  console.log("\n" + green(`${CHECK} ${user.uid} placed on ${gatewayId} (gatewayProfile ${gatewayProfile}, controlUiEnabled false)`));
+  console.log("\n" + green(`${CHECK} ${user.uid} placed on ${gatewayId}`));
   if (outcome === "placed") console.log(green(`${CHECK} serving assignment on ${gatewayId} created in the same transaction`));
-  console.log(dim(`  The ${gatewayId} reconcile loop mounts ${slug} within ~15s (desired−observed → ensure); watch gateways/${gatewayId}.mountedCustomers.`));
+  console.log(dim(`  ${gatewayId} mounts ${slug} once it is serving; watch gateways/${gatewayId}.mountedCustomers.`));
 }
 
 async function migrateUserPlan(

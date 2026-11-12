@@ -184,11 +184,14 @@ export function mkAdminFleetRouteApp(opts: {
   requestNativeReturnSourceRecovery?: (input: { uid: string; operationId: string; requestedAt: number; requestedBy: string }) => Promise<boolean>;
   // gateways/{gatewayId}/assignments/{uid} durable roster docs (PR7).
   assignments?: Record<string, Record<string, Record<string, unknown>>>;
+  releases?: Record<string, Record<string, Record<string, unknown>>>;
+  platformRelease?: Record<string, unknown>;
   addProductRoutes?: (app: express.Express, deps: {
     db: Firestore;
     store: PlatformStateStore;
     requestNativeReturnSourceRecovery?: FleetRouterDeps["requestNativeReturnSourceRecovery"];
   }) => void;
+  productRoutesOnly?: boolean;
 }) {
   const sharedGatewayIds = typeof opts.config.defaultGatewayId === "string" &&
     opts.config.sharedGatewayIds === undefined
@@ -216,6 +219,8 @@ export function mkAdminFleetRouteApp(opts: {
       gateways: poolRoots,
       [GLM_GATEWAYS_COLLECTION]: opts.glmGateways ?? {},
       [GLM_OPERATIONS_COLLECTION]: state.operations,
+      glmControllerState: opts.platformRelease ? { platformRelease: opts.platformRelease } : {},
+      ...Object.fromEntries(Object.entries(opts.releases ?? {}).map(([gatewayId, byRelease]) => [`gateways/${gatewayId}/releases`, byRelease])),
     },
     assignments,
     singletons: {
@@ -241,7 +246,7 @@ export function mkAdminFleetRouteApp(opts: {
   app.use(express.json());
   const store = createJournalFixtureStore(journalRowsIn(state.operations), { documents });
   opts.addProductRoutes?.(app, { db, store, requestNativeReturnSourceRecovery: opts.requestNativeReturnSourceRecovery });
-  addAdminFleetRoutes(app, {
+  if (!opts.productRoutesOnly) addAdminFleetRoutes(app, {
     db,
     store,
     logger: { info: vi.fn(), warn: vi.fn() },

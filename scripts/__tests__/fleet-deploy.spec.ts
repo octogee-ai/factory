@@ -163,6 +163,18 @@ describe("complete TEST fleet deployment", () => {
     expect(formatFleetSummary(report)).toContain(`| shared-ops1 | operator-reported |`);
   });
 
+  it("does not converge while the only running shared gateway is one an operator added", async () => {
+    const h = harness([snapshot(
+      gateway("shared-0", { desiredStatus: "retired", runtime: null, live: null }),
+      gateway("shared-ops1", { addedBy: "operator", latestPayload: old, desiredPayload: old }),
+    )]);
+
+    const report = await h.run();
+
+    expect(report.outcome).toBe("timed-out");
+    expect(report.reasons).toContain("no running Shared gateway added by automation");
+  });
+
   it("requires fresh live observation and heartbeat, not desired config alone", async () => {
     const stale = gateway("b-stale");
     stale.live!.observedAt = 99;

@@ -9,7 +9,7 @@ function fence(overrides: {
   heartbeat?: Record<string, unknown>;
   load?: Partial<{ assignmentCount: number; incomingMigrations: number; outgoingMigrations: number }>;
   siblingLoads?: number[];
-  buildersPerGateway?: number | null;
+  assignmentLimit?: number | null;
 } = {}) {
   return initialTargetFenceFailures({
     target: "shared-0",
@@ -31,7 +31,7 @@ function fence(overrides: {
     } as never,
     load: { assignmentCount: 2, incomingMigrations: 0, outgoingMigrations: 0, ...overrides.load },
     siblingLoads: overrides.siblingLoads ?? [],
-    buildersPerGateway: overrides.buildersPerGateway === undefined ? 10 : overrides.buildersPerGateway,
+    assignmentLimit: overrides.assignmentLimit === undefined ? 10 : overrides.assignmentLimit,
     nowMs: NOW,
   });
 }
@@ -61,7 +61,7 @@ describe("initialTargetFenceFailures", () => {
   });
 
   it("lets a user already assigned to the target through a full gateway", () => {
-    expect(fence({ load: { assignmentCount: 10 }, buildersPerGateway: null })).toEqual([]);
+    expect(fence({ load: { assignmentCount: 10 }, assignmentLimit: null })).toEqual([]);
   });
 
   it("reserves capacity for incoming migrations without refusing the target outright", () => {

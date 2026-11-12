@@ -11,7 +11,6 @@ import type {
   PlatformStateTransaction,
   Stored,
 } from "@octogee/core/platform-state";
-import { readSharedGatewayAutoscalingConfigInStore } from "@octogee/core/shared-gateway-pool-read";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import {
@@ -26,6 +25,8 @@ import { MIGRATE_USER_KIND } from "./operation-kinds.js";
 export const openPlacementAdmission: PlacementAdmissionPolicy = {
   decide: async () => ({ kind: "admitted" }),
 };
+
+export type AssignmentLimitReader = (transaction: PlatformStateTransaction) => Promise<number>;
 
 export interface AssignInitialPlacementInput {
   uid: string;
@@ -93,10 +94,10 @@ export function initialTargetFenceFailures(input: {
   runtime: FleetRegistryRecord;
   load: GatewayLoad;
   siblingLoads: readonly number[];
-  buildersPerGateway: number | null;
+  assignmentLimit: number | null;
   nowMs: number;
 }): string[] {
-  const { target, gateway, runtime, load, siblingLoads, buildersPerGateway, nowMs } = input;
+  const { target, gateway, runtime, load, siblingLoads, assignmentLimit, nowMs } = input;
   const heartbeatAt = heartbeatMillis(runtime.heartbeat.lastHeartbeatAt);
   const checks: Array<[string, boolean]> = [
     ["gateway-id-mismatch", gateway.gatewayId !== target],
@@ -111,7 +112,7 @@ export function initialTargetFenceFailures(input: {
     ["kubernetes-observation-stale", !hasFreshReadyKubernetesObservation(runtime, nowMs, GATEWAY_UNREACHABLE_AFTER_MS)],
     ["heartbeat-missing", heartbeatAt === null],
     ["heartbeat-stale", heartbeatAt !== null && nowMs - heartbeatAt > GATEWAY_UNREACHABLE_AFTER_MS],
-    ["target-at-capacity", buildersPerGateway !== null && load.assignmentCount + load.incomingMigrations >= buildersPerGateway],
+    ["target-at-capacity", assignmentLimit !== null && load.assignmentCount + load.incomingMigrations >= assignmentLimit],
     ["target-not-least-loaded", siblingLoads.some((sibling) =>
       sibling < load.assignmentCount + load.incomingMigrations - load.outgoingMigrations)],
   ];
@@ -146,10 +147,11 @@ async function sharedTargetRejection(input: {
   runtime: FleetRegistryRecord;
   nowMs: number;
   log(message: string): void;
+  assignmentLimitIn: AssignmentLimitReader | undefined;
 }): Promise<PlacementRejectReason | null> {
-  const { transaction, request, root, runtime, nowMs, log } = input;
-  const [config, assignments, operations, siblings] = await Promise.all([
-    readSharedGatewayAutoscalingConfigInStore(transaction),
+  const { transaction, request, root, runtime, nowMs, log, assignmentLimitIn } = input;
+  const [limit, assignments, operations, siblings] = await Promise.all([
+    assignmentLimitIn ? assignmentLimitIn(transaction) : null,
     transaction.gateways.assignments.list(request.gatewayId),
     transaction.journal.operations.listByStatus(["pending", "running"]),
     Promise.all(request.siblingGatewayIds.map((gatewayId) => transaction.gateways.assignments.list(gatewayId))),
@@ -164,9 +166,7 @@ async function sharedTargetRejection(input: {
       const load = gatewayLoad(request.siblingGatewayIds[index]!, siblingAssignments, routes);
       return load.assignmentCount + load.incomingMigrations - load.outgoingMigrations;
     }),
-    buildersPerGateway: assignments.some((assignment) => assignment.uid === request.uid)
-      ? null
-      : config.buildersPerGateway,
+    assignmentLimit: assignments.some((assignment) => assignment.uid === request.uid) ? null : limit,
     nowMs,
   });
   if (failures.length === 0) return null;
@@ -177,7 +177,7 @@ async function sharedTargetRejection(input: {
 export async function commitInitialPlacement(
   store: PlatformStateStore,
   request: AssignInitialPlacementInput,
-  options: { nowMs: number; log(message: string): void },
+  options: { nowMs: number; log(message: string): void; assignmentLimitIn?: AssignmentLimitReader | undefined },
 ): Promise<InitialPlacementResult> {
   const controlState = resolveUserGatewayControlState(request.gateway, request.uid);
   return store.transaction<InitialPlacementResult>(
@@ -206,6 +206,7 @@ export async function commitInitialPlacement(
           runtime,
           nowMs: options.nowMs,
           log: options.log,
+          assignmentLimitIn: options.assignmentLimitIn,
         });
         if (targetRejection !== null) return { kind: "rejected", reason: targetRejection };
       }

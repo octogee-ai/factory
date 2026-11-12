@@ -15,6 +15,7 @@ let usersDocs: Record<string, Record<string, unknown>> = {};
 const usersSystemDocs: Record<string, Record<string, unknown>> = {};
 let workspacesDocs: Record<string, Record<string, unknown>> = {};
 let configDocs: Record<string, Record<string, unknown>> = {};
+let controllerStateDocs: Record<string, Record<string, unknown>> = {};
 let sideEffects: string[] = [];
 let failingStoreTransaction: string | null = null;
 
@@ -27,6 +28,7 @@ function fixtureCollection(collectionPath: string): { docs: FixtureCollection; p
     users: usersDocs,
     glmGateways: glmGatewaysDocs,
     config: configDocs,
+    glmControllerState: controllerStateDocs,
   };
   const gatewaySubcollections: Record<string, FixtureCollection | undefined> = {
     releases: gatewayReleasesDocs,
@@ -520,6 +522,10 @@ vi.mock("../middleware/auth", () => ({
 import express from "express";
 import adminRouter, { createAdminRoutes } from "../routes/admin.js";
 
+function eligibleUser(slug: string, openclaw: Record<string, unknown> = {}): Record<string, unknown> {
+  return { username: slug, onboardingStep: "complete", provisioning: { status: "complete", openclaw: { slug, ...openclaw } } };
+}
+
 function buildApp() {
   const app = express();
   app.use(express.json());
@@ -626,6 +632,7 @@ beforeEach(() => {
   usersDocs = {};
   workspacesDocs = {};
   configDocs = {};
+  controllerStateDocs = {};
   provisionerCalls.length = 0;
   provisionerNextError = null;
   userCalls.length = 0;
@@ -694,7 +701,6 @@ describe("Admin default placement", () => {
     expect(res.body.config).toEqual({
       defaultGatewayId: "gw-target",
       sharedGatewayIds: ["gw-target"],
-      sharedGatewayAutoscaling: { enabled: true, usersPerGateway: 10 },
     });
     expect(res.body.driftSummary["pointer-drift"]).toBe(1);
     expect(res.body.users).toEqual([
@@ -1839,7 +1845,7 @@ describe("POST /api/admin/users/:uid/assign — initial placement", () => {
       heartbeat: { status: "ready", mountedCustomers: [] },
     });
     usersDocs = {
-      "uid-dave": { username: "dave", email: "dave@example.com" },
+      "uid-dave": { ...eligibleUser("dave"), email: "dave@example.com" },
     };
     const app = buildApp();
     const res = await request(app)
@@ -1866,14 +1872,14 @@ describe("POST /api/admin/users/:uid/assign — initial placement", () => {
       },
     });
     usersDocs = {
-      "uid-dave": { username: "dave", email: "dave@example.com" },
+      "uid-dave": { ...eligibleUser("dave"), email: "dave@example.com" },
     };
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/users/uid-dave/assign")
       .send({ gatewayId: "gw-operator" });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Isolated gateway placement is managed by the disposable lifecycle/);
+    expect(res.body).toMatchObject({ reason: "gateway-not-shared", error: expect.stringMatching(/isolated; only shared gateways/) });
 
     expect(sideEffects).not.toContain("set glmGateways/gw-operator");
     expect(sideEffects).not.toContain("set users/uid-dave");
@@ -1898,7 +1904,7 @@ describe("POST /api/admin/users/:uid/assign — initial placement", () => {
   });
 
   it("returns 404 when the target gateway is not registered", async () => {
-    usersDocs = { "uid-dave": { username: "dave" } };
+    usersDocs = { "uid-dave": eligibleUser("dave") };
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/users/uid-dave/assign")
@@ -1907,17 +1913,17 @@ describe("POST /api/admin/users/:uid/assign — initial placement", () => {
     expect(res.body.error).toMatch(/gateway not found/);
   });
 
-  it("returns 409 when the target gateway is not ready (booting/unreachable/draining)", async () => {
+  it("assigns onto a running gateway that is still booting", async () => {
     seedDurableGateway("default", {
       heartbeat: { status: "booting", mountedCustomers: [] },
     });
-    usersDocs = { "uid-dave": { username: "dave" } };
+    usersDocs = { "uid-dave": eligibleUser("dave") };
     const app = buildApp();
     const res = await request(app)
       .post("/api/admin/users/uid-dave/assign")
       .send({ gatewayId: "default" });
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/not ready/);
+    expect(res.status, JSON.stringify(res.body)).toBe(202);
+    expect(usersDocs["uid-dave"]).toHaveProperty("provisioning.openclaw.gatewayId", "default");
   });
 
   it("repairs a missing durable assignment when the mirror already targets that gateway", async () => {
@@ -1925,10 +1931,7 @@ describe("POST /api/admin/users/:uid/assign — initial placement", () => {
       heartbeat: { status: "ready", mountedCustomers: [] },
     });
     usersDocs = {
-      "uid-alice": {
-        username: "alice",
-        provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
-      },
+      "uid-alice": eligibleUser("alice", { gatewayId: "default" }),
     };
     const app = buildApp();
     const res = await request(app)
@@ -1944,10 +1947,7 @@ describe("POST /api/admin/users/:uid/assign — initial placement", () => {
       heartbeat: { status: "ready", mountedCustomers: [] },
     });
     usersDocs = {
-      "uid-alice": {
-        username: "alice",
-        provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
-      },
+      "uid-alice": eligibleUser("alice", { gatewayId: "default" }),
     };
     const existing = {
       uid: "uid-alice",
@@ -1970,13 +1970,14 @@ describe("POST /api/admin/users/:uid/assign — initial placement", () => {
     expect(sideEffects).not.toContain("set gateways/default/assignments/uid-alice");
   });
 
-  it("rejects assignment when the user has no canonical slug", async () => {
+  it("rejects assignment when the user has no slug", async () => {
     seedDurableGateway("default", {
       heartbeat: { status: "ready", mountedCustomers: [] },
     });
     usersDocs = {
       "uid-orphan": {
-        provisioning: { openclaw: { gatewayId: "default" } },
+        onboardingStep: "complete",
+        provisioning: { status: "complete", openclaw: { gatewayId: "default" } },
       },
     };
 
@@ -1985,7 +1986,7 @@ describe("POST /api/admin/users/:uid/assign — initial placement", () => {
       .send({ gatewayId: "default" });
 
     expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/canonical slug/i);
+    expect(res.body).toMatchObject({ reason: "user-slug-missing", error: "user has no slug" });
     expect(gatewayAssignmentsDocs["default/uid-orphan"]).toBeUndefined();
   });
 });

@@ -250,7 +250,9 @@ function snapshotProblems(snapshot: FleetSnapshot): string[] {
   for (const replacement of snapshot.sharedReplacements) {
     reasons.push(`Shared replacement ${replacement.sourceGatewayId} → ${replacement.targetGatewayId} is unfinished`);
   }
-  if (!snapshot.gateways.some((gateway) => gateway.gatewayClass === "shared" && gateway.desiredStatus === "running")) reasons.push("no running Shared gateway");
+  if (!snapshot.gateways.some((gateway) => gateway.gatewayClass === "shared" && gateway.addedBy === "automation" && gateway.desiredStatus === "running")) {
+    reasons.push("no running Shared gateway added by automation");
+  }
   return reasons;
 }
 

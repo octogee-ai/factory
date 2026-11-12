@@ -2,7 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 
 import { ERR_SHARED_GATEWAY_NOT_ROLLED_IN_PLACE } from "./admin-fleet-router.js";
-import { auditsIn, mkApp, opsIn, PLATFORM_BUILD } from "./__tests__/fixtures/admin-fleet-releases-app.js";
+import {
+  REPO,
+  auditsIn,
+  mkApp,
+  opsIn,
+  PLATFORM_BUILD,
+  readyHeartbeat,
+  seedNewSchemaGateway,
+  seedServingGateway,
+  sharedPayload,
+  userAuthRecord,
+} from "./__tests__/fixtures/admin-fleet-releases-app.js";
 import type {
   CentralReleaseAuthority,
   ReleaseDigestManifest,
@@ -16,57 +27,6 @@ import {
   releasePayloadHash,
   type ReleasePayload,
 } from "@octogee/shared/types/gateway-releases";
-
-const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
-
-function seedNewSchemaGateway(
-  id: string,
-  payload: ReleasePayload,
-  gatewayOverrides: Record<string, unknown> = {},
-): Record<string, Record<string, unknown>> {
-  const config = {
-    configSchemaVersion: 1,
-    profile: "standard",
-    gatewayClass: "shared",
-    imageProfile: "standard",
-    sizingTier: null,
-    gcpProject: null,
-    gatewayContainerSecurityContext: null,
-    serviceAccountName: null,
-    serviceAccount: null,
-    builderAccess: null,
-    ownerUid: null,
-    builderSlug: null,
-    modelBrokerLimits: null,
-    preemption: null,
-    coOwnerUids: [],
-    ...gatewayOverrides,
-  };
-  return {
-    [`gateways/${id}`]: {
-      gatewayId: id,
-      createdAt: 1000,
-      createdBy: "op",
-      updatedAt: 1000,
-      updatedBy: "op",
-      latestRelease: 1,
-      desiredRelease: 1,
-      liveRelease: null,
-      desiredStatus: "running",
-      ...config,
-    },
-    [`gateways/${id}/${GATEWAY_RELEASES_SUBCOLLECTION}/1`]: {
-      gatewayId: id,
-      release: 1,
-      createdAt: 1000,
-      createdBy: "op",
-      sourceRelease: null,
-      note: null,
-      payloadHash: releasePayloadHash(payload),
-      payload,
-    },
-  };
-}
 
 describe("normal fleet mutation admission", () => {
   it("journals a gateway restart with its pre-action state", async () => {
@@ -86,83 +46,6 @@ describe("normal fleet mutation admission", () => {
     }));
   });
 });
-
-function sharedPayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
-  return {
-    imageRepository: REPO,
-    imageTag: "abc1234",
-    ...overrides,
-  };
-}
-
-function readyHeartbeat(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  const observedAt = Date.now();
-  return {
-    status: "ready",
-    lastHeartbeatAt: observedAt,
-    version: "abc1234",
-    openclawVersion: "2026.7.1",
-    startedAt: observedAt - 1_000,
-    mountedCustomers: [],
-    configStatus: {
-      controlProtocol: {
-        protocol: "durable-openclaw-config",
-        version: 2,
-      },
-      observedAt,
-      runtimeReady: true,
-      openclawVersion: "2026.7.1",
-      freezeState: "unfrozen",
-      bootRole: "normal",
-      controlOwner: null,
-      candidateCommit: null,
-      candidateHash: null,
-    },
-    ...overrides,
-  };
-}
-
-function seedServingGateway(
-  id: string,
-  payload: ReleasePayload,
-  heartbeat: Record<string, unknown> = readyHeartbeat(),
-  gatewayOverrides: Record<string, unknown> = {},
-): Record<string, Record<string, unknown>> {
-  const seed = seedNewSchemaGateway(id, payload, gatewayOverrides);
-  seed[`gateways/${id}`] = {
-    ...seed[`gateways/${id}`],
-    liveRelease: 1,
-  };
-  seed[`${GLM_GATEWAYS_COLLECTION}/${id}`] = {
-    docKind: "runtime",
-    gatewayId: id,
-    release: 1,
-    lifecycle: "serving",
-    createdAt: 1,
-    createdByOperationId: null,
-    helm: {},
-    heartbeat,
-    lastError: { message: null, at: null },
-  };
-  return seed;
-}
-
-function userAuthRecord(gatewayId: string | null): Record<string, unknown> {
-  return {
-    username: "alice",
-    provisioning: {
-      openclaw: {
-        slug: "alice",
-        ...(gatewayId ? {
-          gatewayId,
-          gatewayAssignedAt: 1,
-          gatewayProfile: "standard",
-          controlUiEnabled: true,
-        } : {}),
-      },
-    },
-  };
-}
 
 function immutableBuild(sourceSha = "a".repeat(40)): ReleaseDigestManifest {
   return {
@@ -358,9 +241,6 @@ describe("manual gateway migrations", () => {
     ["/users/uid-alice/migrate", { to: "legacy-owner" }, {
       code: "migration-target-not-own-isolated-gateway",
       error: "manual migration target must be a shared gateway or the user's own isolated gateway",
-    }],
-    ["/gateway-migrations/bulk", { userIds: ["uid-alice"], toGatewayId: "legacy-owner" }, {
-      error: "manual migration target must be a shared gateway",
     }],
   ])("rejects an owner gateway that is not the user's isolated runtime for %s", async (path, body, refusal) => {
     const { app, store } = mkApp({
@@ -623,7 +503,7 @@ describe("admin target resolution", () => {
     expect(res.status).toBe(404);
   });
 
-  it("rejects a manual isolated target so the disposable lifecycle owns placement", async () => {
+  it("refuses an isolated target, even the user's own", async () => {
     const { app, store } = mkApp({
       ...seedServingGateway(
         "operator",
@@ -646,29 +526,62 @@ describe("admin target resolution", () => {
       .send({ gatewayId: "operator" });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/disposable lifecycle/);
+    expect(res.body).toMatchObject({ reason: "gateway-not-shared", error: expect.stringMatching(/isolated/) });
     expect(store.get("gateways/operator/assignments/uid-alice")).toBeUndefined();
   });
 
-  it("does not use a legacy bare heartbeat doc when no runtime realization exists", async () => {
+  function assignSeed(openclaw: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+    const seed = seedNewSchemaGateway("target", sharedPayload());
+    seed["gateways/target"] = { ...seed["gateways/target"], liveRelease: 1 };
+    seed["users/uid-alice"] = {
+      username: "alice", onboardingStep: "complete",
+      provisioning: { status: "complete", openclaw: { slug: "alice", ...openclaw } },
+    };
+    return { ...seed, ...extra };
+  }
+
+  it("assigns a user held by the operator and leaves the hold in place", async () => {
+    const { app, store } = mkApp(assignSeed({ managedBy: "operator" }));
+
+    const res = await request(app).post("/users/uid-alice/assign").send({ gatewayId: "target" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(202);
+    expect(store.get("users/uid-alice")).toMatchObject({ provisioning: { openclaw: { managedBy: "operator", gatewayId: "target" } } });
+  });
+
+  it.each([
+    ["a held migration fence", { migration: { state: "moving", operationId: "migrate-7", startedAt: 1 } }, {}, "migration-in-progress", "migrate-7"],
+    ["an assignment on another gateway behind no mirror", {}, {
+      "gateways/other/assignments/uid-alice": { uid: "uid-alice", slug: "alice", gatewayId: "other", source: "onboarding", state: "serving", epoch: 1, createdAt: 1, updatedAt: 1, updatedByOperationId: null },
+    }, "assigned-elsewhere", "other"],
+  ])("refuses a user with %s", async (_case, openclaw, extra, reason, named) => {
+    const { app, store } = mkApp(assignSeed(openclaw, extra));
+
+    const res = await request(app).post("/users/uid-alice/assign").send({ gatewayId: "target" });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ reason, error: expect.stringContaining(named) });
+    expect(store.get("gateways/target/assignments/uid-alice")).toBeUndefined();
+  });
+
+  it("assigns onto a running gateway that is not ready yet and records the placement", async () => {
     const seed = seedNewSchemaGateway("target", sharedPayload());
     seed["gateways/target"] = {
       ...seed["gateways/target"],
       liveRelease: 1,
     };
-    seed[`${GLM_GATEWAYS_COLLECTION}/target`] = {
-      gatewayId: "target",
-      heartbeat: { status: "ready" },
+    seed["users/uid-alice"] = {
+      username: "alice", onboardingStep: "complete",
+      provisioning: { status: "complete", openclaw: { slug: "alice" } },
     };
-    seed["users/uid-alice"] = { username: "alice" };
-    const { app } = mkApp(seed);
+    const { app, store } = mkApp(seed);
 
     const res = await request(app)
       .post("/users/uid-alice/assign")
-      .send({ gatewayId: "target" })
-      .expect(409);
+      .send({ gatewayId: "target" });
 
-    expect(res.body).toMatchObject({ error: "target gateway not ready", status: "unknown" });
+    expect(res.status, JSON.stringify(res.body)).toBe(202);
+    expect(store.get("gateways/target/assignments/uid-alice")).toMatchObject({ uid: "uid-alice", gatewayId: "target", state: "serving" });
   });
 
 });

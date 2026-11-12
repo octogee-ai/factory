@@ -26,7 +26,6 @@ import {
   ASSIGN_USER_GATEWAY_USAGE,
   isBulkAssignmentCandidate,
   parseAssignUserGatewayArgs,
-  readGatewayProfile,
 } from "../ops/assign-user-gateway.js";
 import {
   buildFleetMigrateOperationInput,
@@ -750,6 +749,7 @@ describe("assign-user-gateway args", () => {
     expect(parseAssignUserGatewayArgs([
       "--env=prod",
       "--uid=uid-1",
+      "--to=shared-0",
       "--dry-run",
     ])).toEqual({
       kind: "ok",
@@ -759,69 +759,25 @@ describe("assign-user-gateway args", () => {
         slug: "",
         all: false,
         dryRun: true,
+        gatewayId: "shared-0",
       },
     });
   });
 
+  it("refuses an assignment with no gateway named, telling the operator to name one", () => {
+    for (const selector of ["--uid=uid-1", "--slug=alice", "--all"]) {
+      const parsed = parseAssignUserGatewayArgs(["--env=test", selector]);
+      expect(parsed).toMatchObject({ kind: "error" });
+      expect(parsed.kind === "error" && parsed.message).toContain("name the gateway with --to=GATEWAY_ID");
+    }
+  });
+
   it("rejects missing selector before Firebase init", () => {
-    expect(parseAssignUserGatewayArgs(["--env=test"])).toMatchObject({ kind: "error" });
+    expect(parseAssignUserGatewayArgs(["--env=test", "--to=shared-0"])).toMatchObject({ kind: "error" });
     expect(parseAssignUserGatewayArgs(["--help"])).toEqual({ kind: "help" });
     expect(ASSIGN_USER_GATEWAY_USAGE).toContain("--uid=UID");
   });
 
-});
-
-describe("assign-user-gateway root config", () => {
-  function gatewayRoot(profile: "standard" | "builder" = "standard") {
-    const isolated = profile === "builder";
-    return {
-      gatewayId: "default",
-      createdAt: 1,
-      createdBy: "test",
-      updatedAt: 1,
-      updatedBy: "test",
-      latestRelease: 1,
-      desiredRelease: 1,
-      liveRelease: 1,
-      liveRevisionId: "default-r1",
-      trafficRevisionId: "default-r1",
-      desiredStatus: "running",
-      roll: null,
-      configSchemaVersion: 1,
-      profile,
-      gatewayClass: isolated ? "builder" : "shared",
-      imageProfile: isolated ? "builder" : "standard",
-      sizingTier: null,
-      gcpProject: null,
-      gatewayContainerSecurityContext: null,
-      serviceAccountName: null,
-      serviceAccount: null,
-      builderAccess: null,
-      ownerUid: isolated ? "uid-user" : null,
-      builderSlug: isolated ? "builder" : null,
-      modelBrokerLimits: null,
-      preemption: null,
-    };
-  }
-
-  function store(docs: Record<string, Record<string, unknown>>) {
-    return createDocumentFixtureStore(new Map(Object.entries(docs)));
-  }
-
-  it("reads the profile from a validated durable root only", async () => {
-    await expect(
-      readGatewayProfile(store({ "gateways/default": gatewayRoot("builder") }), "default"),
-    ).resolves.toBe("builder");
-    await expect(
-      readGatewayProfile(store({ "glmGateways/default": { profile: "builder" } }), "default"),
-    ).resolves.toBeNull();
-  });
-
-  it("reads no profile for a retired root", async () => {
-    await expect(
-      readGatewayProfile(store({ "gateways/default": { ...gatewayRoot(), desiredStatus: "retired" } }), "default"),
-    ).resolves.toBeNull();
-  });
 });
 
 describe("fleet force gateway restart", () => {

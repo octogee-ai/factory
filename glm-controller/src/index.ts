@@ -322,8 +322,6 @@ import {
 import { MODEL_BROKER_USAGE_ROLLUPS_COLLECTION } from "@octogee/shared/types/model-broker-usage";
 import {
   recordReconcile,
-  recordSharedGatewayMaxCapacity,
-  recordSharedPoolReplicaBounds,
   recordVmDiskUsage,
 } from "./metrics.js";
 import { applyVmDiskDelivery, type VmDiskSample } from "./lib/vm-disk-usage.js";
@@ -345,13 +343,11 @@ import {
 } from "./gitea-gateway-key-gc.js";
 import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
 import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
-import { completeHealthySharedPoolAddGatewayOperations } from "./shared-pool-add-gateway-recovery.js";
 import { computeChartFingerprint } from "./chart-fingerprint.js";
-import { startSharedPoolScaler } from "./shared-pool-scaler.js";
+import { startSharedGatewayLoop, type SharedGatewayAutomation, type SharedGatewayAutomationLoop, type SharedGatewayProductFactory } from "./shared-gateway-automation.js";
 import {
   platformGatewayArtifactFromEnvironment,
   writePlatformReleaseRecord,
-  sharedPoolReplicaBoundsFromEnvironment,
 } from "./platform-release.js";
 import { VmCreationPendingError, FinalHomeCheckpointPendingError, clearReplacedVm } from "./vm-lifecycle.js";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
@@ -362,6 +358,7 @@ import {
   reconcilePlacementPolicyOnce,
   startPlacementPolicyReconciler,
   type IsolatedGatewayAutomation,
+  type SharedGatewayMoves,
   type IsolatedGatewayProductFactory,
 } from "./placement-policy-reconciler.js";
 import { placementPassOptions, type UserAdmissionSourceFactory } from "./user-admission.js";
@@ -380,10 +377,6 @@ const logger = createLogger({
 const log = operationScopedLog((msg: string) => logger.legacy(msg));
 const RECONCILE_DEBOUNCE_MS = 1_000;
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
-const SHARED_POOL_SCALER_MS = parseNonNegativeInt(
-  process.env.SHARED_POOL_SCALER_MS,
-  30_000,
-);
 const DISRUPTION_OBSERVER_MS = parseNonNegativeInt(
   process.env.DISRUPTION_OBSERVER_MS,
   15_000,
@@ -2172,12 +2165,38 @@ interface ControllerBackgroundTasksDeps {
   policyInputs: UserPolicyInputsSource;
   userAdmission?: UserAdmissionSourceFactory | undefined;
   isolatedGateways?: IsolatedGatewayProductFactory | undefined;
+  sharedGatewayMoves?: SharedGatewayMoves | undefined;
   db: Firestore;
   deps: ControllerDeps;
   helm: HelmRunner;
   fleetControllerPrivateKey: string;
   platformArtifact: GatewayArtifact;
   controllerStartedAt: number;
+}
+
+export function createSharedGatewayAutomation(
+  factory: SharedGatewayProductFactory | undefined,
+  store: PlatformStateStore,
+  platformArtifact: GatewayArtifact,
+): SharedGatewayAutomation | null {
+  if (!factory) {
+    log(
+      `[glm-controller] shared gateways: platform only, platformImage=${platformArtifact.imageTag}; no shared gateway is added, retired, replaced or drained automatically, and no user is placed or moved automatically; place each new user with user assign`,
+    );
+    return null;
+  }
+  log("[glm-controller] shared gateways: product automation installed");
+  return factory({ store, platformArtifact, log });
+}
+
+async function installSharedGatewayAutomation(
+  factory: SharedGatewayProductFactory | undefined,
+  store: PlatformStateStore,
+  platformArtifact: GatewayArtifact,
+): Promise<{ moves: SharedGatewayMoves | undefined; startLoop(): SharedGatewayAutomationLoop | null }> {
+  const automation = createSharedGatewayAutomation(factory, store, platformArtifact);
+  await automation?.recoverInterruptedAdds();
+  return { moves: automation?.moves, startLoop: () => automation?.start() ?? null };
 }
 
 function createIsolatedGatewayAutomation(
@@ -2229,6 +2248,7 @@ function startControllerBackgroundTasks({
   policyInputs,
   userAdmission,
   isolatedGateways,
+  sharedGatewayMoves,
   db,
   deps,
   helm,
@@ -2326,6 +2346,7 @@ function startControllerBackgroundTasks({
       debug: (message) => logger.debug(message),
       readGatewayPodDiagnosticsBatch: deps.kubeOps.readGatewayPodDiagnosticsBatch,
       ...(isolatedGatewayAutomation ? { isolatedGateways: isolatedGatewayAutomation } : {}),
+      ...(sharedGatewayMoves ? { sharedGatewayMoves } : {}),
     }),
     PLACEMENT_POLICY_RECONCILE_MS,
     placementPassOptions({
@@ -2769,6 +2790,7 @@ export interface ControllerProduct {
   userAdmission?: UserAdmissionSourceFactory;
   userPolicyInputs?: (db: Firestore, log: (message: string) => void) => UserPolicyInputsSource;
   isolatedGateways?: IsolatedGatewayProductFactory;
+  sharedGateways?: SharedGatewayProductFactory;
   startProjection?: (deps: {
     db: Firestore;
     store: PlatformStateStore;
@@ -2810,7 +2832,6 @@ export async function main(product: ControllerProduct): Promise<void> {
   );
 
   await bootstrapGlmGateways(deps);
-  const sharedPoolBounds = sharedPoolReplicaBoundsFromEnvironment();
   const platformArtifact = platformGatewayArtifactFromEnvironment();
   await writePlatformReleaseRecord({
     store: deps.store,
@@ -2818,21 +2839,7 @@ export async function main(product: ControllerProduct): Promise<void> {
     now: () => Date.now(),
     log,
   });
-  recordSharedPoolReplicaBounds(sharedPoolBounds);
-  log(
-    `[glm-controller] shared pool minReplicas=${sharedPoolBounds.minReplicas} maxReplicas=${sharedPoolBounds.maxReplicas} platformImage=${platformArtifact.imageTag}`,
-  );
-  try {
-    await completeHealthySharedPoolAddGatewayOperations({
-      store: deps.store,
-      log,
-      now: () => Date.now(),
-    });
-  } catch (err) {
-    log(
-      `[glm-controller] ⚠ shared pool add-gateway recovery failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
+  const sharedGateways = await installSharedGatewayAutomation(product.sharedGateways, deps.store, platformArtifact);
 
   // Resume any op the previous instance left `running` when it exited mid-op (a
   // deploy/restart redeploys this single-replica controller routinely). Re-driving
@@ -2871,6 +2878,7 @@ export async function main(product: ControllerProduct): Promise<void> {
     policyInputs,
     userAdmission: product.userAdmission,
     isolatedGateways: product.isolatedGateways,
+    sharedGatewayMoves: sharedGateways.moves,
     db,
     deps,
     helm: deps.helm,
@@ -2881,16 +2889,7 @@ export async function main(product: ControllerProduct): Promise<void> {
     discoverDeletionProductContext: userLifecycle?.discover,
     productAdminUserDetail: product.adminUserDetail?.(db),
   });
-  stoppers.push(
-    startSharedPoolScaler({
-      store: deps.store,
-      bounds: sharedPoolBounds,
-      platformArtifact,
-      log,
-      now: () => Date.now(),
-      recordMaxCapacity: recordSharedGatewayMaxCapacity,
-    }, SHARED_POOL_SCALER_MS),
-  );
+  stoppers.push(startSharedGatewayLoop({ store: deps.store, log, automation: sharedGateways.startLoop() }));
   if (product.startProjection) stoppers.push(product.startProjection({ db, store: deps.store, log }));
   const shutdown = createControllerShutdown(stoppers, log);
   process.on("SIGTERM", shutdown);

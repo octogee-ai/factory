@@ -6,6 +6,9 @@ import type {
   PlacementPolicyReconcilerDeps,
   PlacementPolicySnapshot,
 } from "../../placement-policy-reconciler.js";
+import { createSharedGatewayMoves } from "../../product-shared-gateway-moves.js";
+
+export const FIXTURE_USERS_PER_GATEWAY = 4;
 
 const GATEWAY_REPOSITORY = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
 
@@ -48,14 +51,14 @@ export const activeTrial = {
   },
 };
 
-export type PlacementFixtureSnapshot = PlacementPolicySnapshot & { idleMs: number };
+export type PlacementFixtureSnapshot = PlacementPolicySnapshot & { idleMs: number; buildersPerGateway: number };
 
 export function snapshot(overrides: Partial<PlacementFixtureSnapshot> = {}): PlacementFixtureSnapshot {
   return {
     defaultGatewayId: "shared-blue",
     sharedGatewayIds: ["shared-blue"],
     idleMs: 30 * 60 * 1000,
-    buildersPerGateway: 4,
+    buildersPerGateway: FIXTURE_USERS_PER_GATEWAY,
     sizingProfiles: FIXTURE_SIZING_PROFILES,
     platformCurrentGatewayIds: [],
     sharedPoolReplacements: [],
@@ -124,6 +127,15 @@ export function platformHarness(state: PlacementPolicySnapshot = snapshot()): Pl
     })),
     enqueueMigration: vi.fn(async (request) => request.operationId ?? "op-placement-1"),
     deleteRetiredDisposableGateway: vi.fn(async () => true),
+  };
+}
+
+export function productHarness(
+  state: PlacementPolicySnapshot & { buildersPerGateway?: number } = snapshot(),
+): PlacementPolicyReconcilerDeps {
+  return {
+    ...platformHarness(state),
+    sharedGatewayMoves: createSharedGatewayMoves(async () => state.buildersPerGateway ?? FIXTURE_USERS_PER_GATEWAY),
   };
 }
 

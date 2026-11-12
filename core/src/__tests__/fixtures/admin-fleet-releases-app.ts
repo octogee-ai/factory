@@ -2,8 +2,8 @@ import { vi } from "vitest";
 import express from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import { FieldValue } from "firebase-admin/firestore";
-import { GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
-import type { ReleasePayload } from "@octogee/shared/types/gateway-releases";
+import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
+import { GATEWAY_RELEASES_SUBCOLLECTION, releasePayloadHash, type ReleasePayload } from "@octogee/shared/types/gateway-releases";
 
 import { addAdminFleetRoutes } from "../../admin-fleet-router.js";
 import type { CentralReleaseAuthority } from "../../artifact-registry.js";
@@ -310,3 +310,131 @@ export function auditsIn(store: Map<string, Record<string, unknown>>) {
 }
 
 // Seeds a gateway already on the durable root + immutable release schema.
+
+export const REPO = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
+
+export function seedNewSchemaGateway(
+  id: string,
+  payload: ReleasePayload,
+  gatewayOverrides: Record<string, unknown> = {},
+): Record<string, Record<string, unknown>> {
+  const config = {
+    configSchemaVersion: 1,
+    profile: "standard",
+    gatewayClass: "shared",
+    imageProfile: "standard",
+    sizingTier: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    builderAccess: null,
+    ownerUid: null,
+    builderSlug: null,
+    modelBrokerLimits: null,
+    preemption: null,
+    coOwnerUids: [],
+    ...gatewayOverrides,
+  };
+  return {
+    [`gateways/${id}`]: {
+      gatewayId: id,
+      createdAt: 1000,
+      createdBy: "op",
+      updatedAt: 1000,
+      updatedBy: "op",
+      latestRelease: 1,
+      desiredRelease: 1,
+      liveRelease: null,
+      desiredStatus: "running",
+      ...config,
+    },
+    [`gateways/${id}/${GATEWAY_RELEASES_SUBCOLLECTION}/1`]: {
+      gatewayId: id,
+      release: 1,
+      createdAt: 1000,
+      createdBy: "op",
+      sourceRelease: null,
+      note: null,
+      payloadHash: releasePayloadHash(payload),
+      payload,
+    },
+  };
+}
+
+export function sharedPayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
+  return {
+    imageRepository: REPO,
+    imageTag: "abc1234",
+    ...overrides,
+  };
+}
+
+export function readyHeartbeat(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const observedAt = Date.now();
+  return {
+    status: "ready",
+    lastHeartbeatAt: observedAt,
+    version: "abc1234",
+    openclawVersion: "2026.7.1",
+    startedAt: observedAt - 1_000,
+    mountedCustomers: [],
+    configStatus: {
+      controlProtocol: {
+        protocol: "durable-openclaw-config",
+        version: 2,
+      },
+      observedAt,
+      runtimeReady: true,
+      openclawVersion: "2026.7.1",
+      freezeState: "unfrozen",
+      bootRole: "normal",
+      controlOwner: null,
+      candidateCommit: null,
+      candidateHash: null,
+    },
+    ...overrides,
+  };
+}
+
+export function seedServingGateway(
+  id: string,
+  payload: ReleasePayload,
+  heartbeat: Record<string, unknown> = readyHeartbeat(),
+  gatewayOverrides: Record<string, unknown> = {},
+): Record<string, Record<string, unknown>> {
+  const seed = seedNewSchemaGateway(id, payload, gatewayOverrides);
+  seed[`gateways/${id}`] = {
+    ...seed[`gateways/${id}`],
+    liveRelease: 1,
+  };
+  seed[`${GLM_GATEWAYS_COLLECTION}/${id}`] = {
+    docKind: "runtime",
+    gatewayId: id,
+    release: 1,
+    lifecycle: "serving",
+    createdAt: 1,
+    createdByOperationId: null,
+    helm: {},
+    heartbeat,
+    lastError: { message: null, at: null },
+  };
+  return seed;
+}
+
+export function userAuthRecord(gatewayId: string | null): Record<string, unknown> {
+  return {
+    username: "alice",
+    provisioning: {
+      openclaw: {
+        slug: "alice",
+        ...(gatewayId ? {
+          gatewayId,
+          gatewayAssignedAt: 1,
+          gatewayProfile: "standard",
+          controlUiEnabled: true,
+        } : {}),
+      },
+    },
+  };
+}
