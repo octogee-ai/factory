@@ -5,7 +5,7 @@ import * as os from "os";
 import { FieldValue } from "firebase-admin/firestore";
 import { requireAuth, requireInternalServiceAuth } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
-import { platformStateStore, readBuilderTier } from "../lib/platform-state.js";
+import { platformStateStore } from "../lib/platform-state.js";
 import type { UserActivationLease, PlatformUserRecord } from "@octogee/core/platform-state";
 import {
   deleteSecret,
@@ -55,13 +55,12 @@ import {
   type ModelCredentialOAuthProviderId,
 } from "@octogee/shared/types/model-credentials";
 import { userEntitlements } from "@octogee/shared/types/user-entitlements";
-import { requestUserActivationLease } from "@octogee/core/user-activation-lease";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
 
 const router = Router();
 const BYOSUB_PROVIDER_ORDER: ByosubProvider[] = ["openai", "anthropic"];
 
-type SubscriptionRuntimeState = "ready" | "activating" | "shared" | "unavailable";
+type SubscriptionRuntimeState = "ready" | "paused" | "activating" | "shared" | "unavailable";
 
 function activationIsPending(lease: UserActivationLease | null): boolean {
   const status = lease?.status;
@@ -77,7 +76,9 @@ async function subscriptionRuntimeFor(
     platformStateStore.users.records.get(uid),
   ]);
   if (authorization?.kind !== "durable" || !userRecord) return "unavailable";
-  if (authorization.config.gatewayClass !== "shared") return "ready";
+  if (authorization.config.gatewayClass !== "shared") {
+    return authorization.gateway.desiredStatus === "paused" ? "paused" : "ready";
+  }
   return activationIsPending(userRecord.activationLease) ? "activating" : "shared";
 }
 
@@ -229,54 +230,6 @@ router.get(
         ...userIntegrationConnectionView(snap.data()),
         gatewayId: resolved.gatewayId,
         runtime,
-      });
-    } catch (e) {
-      next(e);
-    }
-  },
-);
-
-router.post(
-  "/activate",
-  requireAuth,
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const uid = req.uid!;
-      const resolved = await resolveUserGateway(uid);
-      if (!resolved) {
-        res.status(400).json({ error: "No provisioned workspace/gateway for this user" });
-        return;
-      }
-      const authorization = await readGatewayAuthorizationInStore(platformStateStore, resolved.gatewayId);
-      if (authorization?.kind !== "durable") {
-        res.status(409).json({ error: "Assigned runtime is unavailable" });
-        return;
-      }
-      if (authorization.config.gatewayClass !== "shared") {
-        res.json({ status: "ready", gatewayId: resolved.gatewayId });
-        return;
-      }
-      const assignment = await platformStateStore.gateways.assignments.get(resolved.gatewayId, uid);
-      const observedAt = Date.now();
-      const result = await requestUserActivationLease({
-        store: platformStateStore,
-        readBuilderTier,
-        uid,
-        reportingGatewayId: resolved.gatewayId,
-        assignmentEpoch: assignment?.epoch,
-        eventKey: `subscription-connect:${randomUUID()}`,
-        cause: "manual",
-        observedAt,
-        createdBy: `subscription-connect:${uid}`,
-        now: observedAt,
-      });
-      if (result.statusCode >= 400) {
-        res.status(result.statusCode).json(result.body);
-        return;
-      }
-      res.status(result.statusCode).json({
-        status: "activating",
-        gatewayId: resolved.gatewayId,
       });
     } catch (e) {
       next(e);

@@ -36,14 +36,16 @@ export interface IsolatedRuntimeDemandRequest {
     createdBy: string;
     now?: number;
     leaseIdFactory?: () => string;
+    refuse?: (user: PlatformUserRecord) => UserActivationLeaseResult | null;
 }
-export declare function recordIsolatedRuntimeActivity(input: {
-    store: PlatformStateStore;
-    readBuilderTier: BuilderTierReader;
-    uid: string;
-    gatewayId: string;
-    now?: number;
-}): Promise<boolean>;
+export type ActivationDemandEligibility = {
+    result: UserActivationLeaseResult;
+} | {
+    entitlementTier: string;
+    sizingTier: string;
+    slug: string;
+};
+export declare function activationDemandEligibility(user: PlatformUserRecord, entitlementTier: string | null, profile: GatewaySizingProfile | null): ActivationDemandEligibility;
 export declare function requestUserActivationLease(input: IsolatedRuntimeDemandRequest): Promise<UserActivationLeaseResult>;
 export declare function builderActivateOperationId(gatewayId: string, generation: number): string;
 export declare function builderReturnOperationId(gatewayId: string, generation: number): string;

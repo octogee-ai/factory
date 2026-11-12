@@ -49,9 +49,14 @@ export type PreviousImageWire =
   | "model-pick-push"
   | "model-credential-push";
 
+export type IsolatedGatewayAdmission =
+  | { readonly admitted: true; readonly sizingKey: string }
+  | { readonly admitted: false; readonly code: string; readonly reason: string };
+
 export interface UserEntitlementResolver {
   plan(user: UserEntitlementInputs, now?: Date): UserPlan;
   sizingKey(user: UserEntitlementInputs, now?: Date): string | null;
+  isolatedGatewayAdmission(user: UserEntitlementInputs, now?: Date): IsolatedGatewayAdmission;
   projectMode(user: UserEntitlementInputs, now?: Date): ProjectAccessMode;
   maxProjects(user: UserEntitlementInputs, now?: Date): MaxProjects;
   spendThrottle(plan: UserPlan, observation: UserSpendObservation): SpendThrottleState;
@@ -75,6 +80,11 @@ export const staticUserEntitlements: UserEntitlementResolver = {
     houseFallback: false,
   }),
   sizingKey: () => STATIC_SIZING_KEY,
+  isolatedGatewayAdmission: () => ({
+    admitted: false,
+    code: "isolated-gateway-operator-grant-required",
+    reason: "No admission policy is installed; an operator grants isolated gateways through the Admin API",
+  }),
   projectMode: () => "active",
   maxProjects: () => "unlimited",
   spendThrottle: (plan, observation) => {

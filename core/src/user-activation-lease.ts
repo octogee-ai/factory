@@ -74,50 +74,7 @@ export interface IsolatedRuntimeDemandRequest {
   createdBy: string;
   now?: number;
   leaseIdFactory?: () => string;
-}
-
-function activeActivityLease(lease: UserActivationLease, gatewayId: string): boolean {
-  return lease.status === "active" && nonEmptyString(lease.leaseId) !== null &&
-    positiveInteger(lease.generation) !== null && lease.targetGatewayId === gatewayId &&
-    lease.returnRequestedAt === undefined;
-}
-
-function servingActivityAssignment(assigned: GatewayAssignment | null, uid: string, gatewayId: string): boolean {
-  return assigned?.uid === uid && assigned.gatewayId === gatewayId && assigned.state === "serving" &&
-    Number.isSafeInteger(assigned.epoch) && assigned.epoch >= 0;
-}
-
-export async function recordIsolatedRuntimeActivity(input: {
-  store: PlatformStateStore;
-  readBuilderTier: BuilderTierReader;
-  uid: string;
-  gatewayId: string;
-  now?: number;
-}): Promise<boolean> {
-  const now = input.now ?? Date.now();
-  if (!Number.isFinite(now) || now <= 0) throw new Error("invalid runtime activity time");
-  const tierRead = { store: input.store, readBuilderTier: input.readBuilderTier, uid: input.uid, now };
-  return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, profile, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.activity" }, async (transaction) => {
-    const [user, assignment] = await Promise.all([
-      transaction.users.records.get(input.uid),
-      transaction.gateways.assignments.get(input.gatewayId, input.uid),
-    ]);
-    assertCurrent(user);
-    const lease = user?.activationLease ?? null;
-    if (!user || !lease || !activeActivityLease(lease, input.gatewayId) ||
-      user.gateway?.gatewayId !== input.gatewayId ||
-      !servingActivityAssignment(assignment, input.uid, input.gatewayId) ||
-      "result" in activationDemandEligibility(user, entitlementTier, profile)) return false;
-    const previous = typeof lease.lastActiveAt === "number" ? lease.lastActiveAt : 0;
-    if (now - previous >= 60_000) {
-      await transaction.users.records.patchActivationLease(input.uid, { lastActiveAt: now }, {
-        leaseId: lease.leaseId,
-        generation: lease.generation,
-        status: ["active"],
-      });
-    }
-    return true;
-  }));
+  refuse?: (user: PlatformUserRecord) => UserActivationLeaseResult | null;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -222,7 +179,7 @@ function parkedDuplicateBody(
   };
 }
 
-type ActivationDemandEligibility =
+export type ActivationDemandEligibility =
   | { result: UserActivationLeaseResult }
   | {
       entitlementTier: string;
@@ -230,7 +187,7 @@ type ActivationDemandEligibility =
       slug: string;
     };
 
-function activationDemandEligibility(
+export function activationDemandEligibility(
   user: PlatformUserRecord,
   entitlementTier: string | null,
   profile: GatewaySizingProfile | null,
@@ -361,6 +318,21 @@ function adoptedActivationLease(
   };
 }
 
+type DemandUser =
+  | { user: Stored<PlatformUserRecord>; refusal: null }
+  | { user: null; refusal: UserActivationLeaseResult };
+
+function demandUser(input: IsolatedRuntimeDemandRequest, user: Stored<PlatformUserRecord> | null): DemandUser {
+  if (!user) {
+    return {
+      user: null,
+      refusal: { statusCode: 404, body: { code: "user-not-found", error: "user not found", uid: input.uid } },
+    };
+  }
+  const refusal = input.refuse?.(user) ?? null;
+  return refusal ? { user: null, refusal } : { user, refusal: null };
+}
+
 export async function requestUserActivationLease(
   input: IsolatedRuntimeDemandRequest,
 ): Promise<UserActivationLeaseResult> {
@@ -374,17 +346,13 @@ export async function requestUserActivationLease(
   const tierRead = { store: input.store, readBuilderTier: input.readBuilderTier, uid: input.uid, now: input.now ?? Date.now() };
 
   return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, profile, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.request" }, async (transaction) => {
-    const [user, assignment] = await Promise.all([
+    const [read, assignment] = await Promise.all([
       transaction.users.records.get(input.uid),
       transaction.gateways.assignments.get(reportingGatewayId, input.uid),
     ]);
-    assertCurrent(user);
-    if (!user) {
-      return {
-        statusCode: 404,
-        body: { code: "user-not-found", error: "user not found", uid: input.uid },
-      };
-    }
+    assertCurrent(read);
+    const { user, refusal } = demandUser(input, read);
+    if (refusal) return refusal;
     if (!sourceFenceMatches({
       uid: input.uid,
       reportingGatewayId,

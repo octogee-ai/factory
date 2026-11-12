@@ -1,6 +1,6 @@
 import type { BridgeLog } from "../bridge-log.js";
 import type { ChatActivityPayload } from "./mm-chat-activity-listener.js";
-import type { ChatActivityReport, OpenClawRuntimeBroker } from "./runtime-broker.js";
+import { CHAT_DEMAND_UNAVAILABLE, type ChatActivityReport, type OpenClawRuntimeBroker } from "./runtime-broker.js";
 
 const DEFAULT_WINDOW_MS = 5 * 60_000;
 
@@ -27,6 +27,7 @@ export function makeChatActivityDemandHandler(deps: {
   const windowMs = deps.windowMs ?? DEFAULT_WINDOW_MS;
   const now = deps.now ?? Date.now;
   const quietUntil = new Map<string, number>();
+  let unavailableLogged = false;
 
   const pruneExpired = (at: number): void => {
     for (const [channelId, until] of quietUntil) {
@@ -44,6 +45,10 @@ export function makeChatActivityDemandHandler(deps: {
     try {
       const result = await deps.broker.requestChatActivityDemand(report);
       if (result.reason === "actor-not-human") quietUntil.delete(channelId);
+      if (result.reason === CHAT_DEMAND_UNAVAILABLE && !unavailableLogged) {
+        unavailableLogged = true;
+        deps.log("[chat-activity-demand] the API's chat demand route is absent; chat does not wake isolated gateways", "info");
+      }
     } catch (error) {
       quietUntil.delete(channelId);
       deps.log(

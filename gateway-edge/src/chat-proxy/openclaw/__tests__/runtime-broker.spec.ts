@@ -304,7 +304,7 @@ describe("OpenClaw runtime broker env", () => {
       return new Response(
         JSON.stringify(status === 202
           ? { recorded: true, status: "requested" }
-          : { error: "builder-runtime-assignment-stale" }),
+          : status === 404 ? { error: "not_found" } : { error: "builder-runtime-assignment-stale" }),
         { headers: { "content-type": "application/json" }, status },
       );
     });
@@ -333,6 +333,26 @@ describe("OpenClaw runtime broker env", () => {
       url: "http://octogee-api:3001/internal/openclaw/activity/chat-demand",
       body: { gatewayId: "gw-walter", ...activity },
     });
+  });
+
+  it("answers chat demand unavailable when the API has no chat demand route", async () => {
+    const fetchImpl: typeof fetch = vi.fn(async () =>
+      new Response("Cannot POST /internal/openclaw/activity/chat-demand", {
+        headers: { "content-type": "text/html; charset=utf-8" },
+        status: 404,
+      }));
+    const broker = createOpenClawRuntimeBroker({
+      baseUrl: "http://octogee-api:3001/",
+      gatewayId: "gw-walter",
+      fetchImpl,
+    });
+
+    await expect(broker.requestChatActivityDemand({
+      kind: "post",
+      channelId: "mm-channel",
+      postId: "mm-post",
+      mmUserId: "mm-user",
+    })).resolves.toEqual({ recorded: false, reason: "chat-demand-unavailable" });
   });
 
   it("brokers preview membership without requiring Firestore access in the gateway pod", async () => {

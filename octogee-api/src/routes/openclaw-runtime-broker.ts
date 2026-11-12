@@ -32,7 +32,6 @@ import { projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gatew
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 import {
   firestoreBuilderTierReader,
-  requestUserActivationLease,
   type BuilderTierReader,
 } from "@octogee/core/user-activation-lease";
 import {
@@ -90,7 +89,7 @@ interface AuthorizedConversationTarget extends ChannelProjectionTarget {
 const REDEEMABLE_WS_TICKET_PURPOSES: ReadonlySet<string> = new Set(["openclaw-ws", "voice-ws"]);
 const FORBIDDEN = { error: "forbidden" } as const;
 const RECEIPT_MAX_LEASE_MS = 60_000;
-const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
+export const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
 
 export function boundGateway(req: Request, res: Response): GatewayBinding | null {
   const bound = req.boundTenant;
@@ -207,7 +206,7 @@ export function forbidden(res: Response): void {
   res.status(403).json(FORBIDDEN);
 }
 
-async function uniqueUser(lookup: Promise<Stored<PlatformUserRecord> | null>): Promise<Stored<PlatformUserRecord> | null | "duplicate"> {
+export async function uniqueUser(lookup: Promise<Stored<PlatformUserRecord> | null>): Promise<Stored<PlatformUserRecord> | null | "duplicate"> {
   try {
     return await lookup;
   } catch (error) {
@@ -700,7 +699,7 @@ async function bindingOwnerUid(store: PlatformStateStore, binding: BoundChannelP
   return owner?.ownerUid ? owner.ownerUid : null;
 }
 
-async function resolveChannelOwnerUid(
+export async function resolveChannelOwnerUid(
   store: PlatformStateStore,
   gatewayId: string,
   channelId: string,
@@ -733,82 +732,6 @@ async function resolveUidByMmUser(
   if (!user) return null;
   if (!user.slug || !(await assignedHere(store, gatewayId, user.slug))) return "forbidden";
   return user.uid;
-}
-
-interface ChatActivity {
-  channelId: string;
-  mmUserId: string;
-  eventKey: string;
-}
-
-const MATTERMOST_EMOJI_NAME_RE = /^[a-z0-9_+-]{1,64}$/u;
-
-function chatActivityBody(req: Request): ChatActivity | null {
-  const kind = stringBody(req, "kind");
-  const channelId = stringBody(req, "channelId");
-  const postId = stringBody(req, "postId");
-  const mmUserId = stringBody(req, "mmUserId");
-  if (![channelId, postId, mmUserId].every((id) => MATTERMOST_ID_RE.test(id))) return null;
-  if (kind === "post") {
-    return { channelId, mmUserId, eventKey: `mm-post:${postId}:${mmUserId}` };
-  }
-  if (kind !== "reaction") return null;
-  const emojiName = stringBody(req, "emojiName");
-  const createdAt = (req.body as Record<string, unknown> | undefined)?.createdAt;
-  if (!MATTERMOST_EMOJI_NAME_RE.test(emojiName) || !Number.isSafeInteger(createdAt) || (createdAt as number) <= 0) {
-    return null;
-  }
-  return {
-    channelId,
-    mmUserId,
-    eventKey: `mm-reaction:${postId}:${mmUserId}:${emojiName}:${createdAt}`,
-  };
-}
-
-async function isOctogeeUser(store: PlatformStateStore, mmUserId: string): Promise<boolean> {
-  const user = await uniqueUser(store.users.records.findByMattermostUserId(mmUserId));
-  return user !== null && user !== "duplicate";
-}
-
-async function hasIsolatedRuntime(deps: RuntimeBrokerDeps, owner: PlatformUserRecord, now: number): Promise<boolean> {
-  if (!interactiveUser(owner)) return false;
-  const tier = await deps.readBuilderTier(owner.uid, now);
-  if (tier === null) return false;
-  return (await deps.store.config.orchestrator.getSizingProfile(tier)).isolation === "isolated";
-}
-
-async function requestChatActivityDemand(
-  deps: RuntimeBrokerDeps,
-  gatewayId: string,
-  activity: ChatActivity,
-): Promise<{ statusCode: number; body: Record<string, unknown> }> {
-  const { store } = deps;
-  const ownerUid = await resolveChannelOwnerUid(store, gatewayId, activity.channelId);
-  if (ownerUid === "forbidden") return { statusCode: 403, body: FORBIDDEN };
-  if (!ownerUid) return { statusCode: 404, body: { error: "not_found" } };
-  if (!(await isOctogeeUser(store, activity.mmUserId))) {
-    return { statusCode: 200, body: { recorded: false, reason: "actor-not-human" } };
-  }
-  const owner = await store.users.records.get(ownerUid);
-  const observedAt = Date.now();
-  if (!owner || !(await hasIsolatedRuntime(deps, owner, observedAt))) {
-    return { statusCode: 200, body: { recorded: false, reason: "owner-not-disposable-builder" } };
-  }
-  const assignment = await store.gateways.assignments.get(gatewayId, ownerUid);
-  const result = await requestUserActivationLease({
-    store,
-    readBuilderTier: deps.readBuilderTier,
-    uid: ownerUid,
-    reportingGatewayId: gatewayId,
-    assignmentEpoch: assignment?.epoch,
-    eventKey: activity.eventKey,
-    cause: "chat",
-    observedAt,
-    createdBy: `mm-chat:${gatewayId}:${activity.mmUserId}`,
-    now: observedAt,
-  });
-  const recorded = result.statusCode === 200 || result.statusCode === 202;
-  return { statusCode: result.statusCode, body: { recorded, ...result.body } };
 }
 
 export async function resolveRedeemGatewayUrl(input: {
@@ -1189,18 +1112,6 @@ function mountActivityRoutes(
       return;
     }
     res.json({ ownerUid });
-  });
-
-  router.post("/activity/chat-demand", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const activity = chatActivityBody(req);
-    if (!activity) {
-      res.status(400).json({ error: "invalid_chat_activity" });
-      return;
-    }
-    const result = await requestChatActivityDemand(deps, bound.gatewayId, activity);
-    res.status(result.statusCode).json(result.body);
   });
 
   router.post("/activity/user-by-mm", async (req, res) => {

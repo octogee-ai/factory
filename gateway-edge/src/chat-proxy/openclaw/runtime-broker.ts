@@ -297,6 +297,8 @@ function createActivityWriteReceiptBrokerPort(post: BrokerPost): ActivityWriteRe
   };
 }
 
+export const CHAT_DEMAND_UNAVAILABLE = "chat-demand-unavailable";
+
 export function createOpenClawRuntimeBroker(opts: {
   baseUrl: string;
   gatewayId: string;
@@ -469,8 +471,12 @@ export function createOpenClawRuntimeBroker(opts: {
         { ...activity },
         new Set([200, 202, 404]),
       );
-      if (res.status === 404) return { recorded: false, reason: "channel-not-found" };
       const body = await readJsonOrNull(res);
+      if (res.status === 404) {
+        return stringField(body, "error") === "not_found"
+          ? { recorded: false, reason: "channel-not-found" }
+          : { recorded: false, reason: CHAT_DEMAND_UNAVAILABLE };
+      }
       if (!body) throw new OpenClawRuntimeBrokerError(502, "malformed chat demand response");
       return body;
     },

@@ -44,6 +44,29 @@ describe("chat activity demand handler", () => {
   });
 });
 
+describe("chat activity demand without the product route", () => {
+  it("logs once at info and never warns while the API has no chat demand route", async () => {
+    let now = 0;
+    const requestChatActivityDemand = vi.fn(async () => ({ recorded: false, reason: "chat-demand-unavailable" }));
+    const log = vi.fn();
+    const handle = makeChatActivityDemandHandler({
+      broker: { requestChatActivityDemand },
+      log,
+      windowMs: 1_000,
+      now: () => now,
+    });
+
+    await handle(activity);
+    now = 2_000;
+    await handle({ ...activity, channelId: "channel-2" });
+    await handle({ ...activity, channelId: "channel-3" });
+
+    expect(requestChatActivityDemand).toHaveBeenCalledTimes(3);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("chat demand route is absent"), "info");
+  });
+});
+
 describe("chat activity demand throttle", () => {
   function throttled(outcomes: Array<Record<string, unknown> | Error>) {
     let now = 0;

@@ -33,9 +33,18 @@ export interface UserSpendObservation {
     creditBalanceUsd?: number | null;
 }
 export type PreviousImageWire = "user-snapshot" | "restore-snapshot" | "model-pick-push" | "model-credential-push";
+export type IsolatedGatewayAdmission = {
+    readonly admitted: true;
+    readonly sizingKey: string;
+} | {
+    readonly admitted: false;
+    readonly code: string;
+    readonly reason: string;
+};
 export interface UserEntitlementResolver {
     plan(user: UserEntitlementInputs, now?: Date): UserPlan;
     sizingKey(user: UserEntitlementInputs, now?: Date): string | null;
+    isolatedGatewayAdmission(user: UserEntitlementInputs, now?: Date): IsolatedGatewayAdmission;
     projectMode(user: UserEntitlementInputs, now?: Date): ProjectAccessMode;
     maxProjects(user: UserEntitlementInputs, now?: Date): MaxProjects;
     spendThrottle(plan: UserPlan, observation: UserSpendObservation): SpendThrottleState;

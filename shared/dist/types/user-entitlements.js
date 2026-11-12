@@ -11,6 +11,11 @@ export const staticUserEntitlements = {
         houseFallback: false,
     }),
     sizingKey: () => STATIC_SIZING_KEY,
+    isolatedGatewayAdmission: () => ({
+        admitted: false,
+        code: "isolated-gateway-operator-grant-required",
+        reason: "No admission policy is installed; an operator grants isolated gateways through the Admin API",
+    }),
     projectMode: () => "active",
     maxProjects: () => "unlimited",
     spendThrottle: (plan, observation) => {

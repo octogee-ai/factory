@@ -7,7 +7,9 @@ import {
   isUserActivateOperationIdFor,
   isUserReturnOperationIdFor,
   placementRetireOperationId,
+  requestUserActivationLease,
 } from "./user-activation-lease.js";
+import { createDocumentFixtureStore, FIXTURE_SIZING_PROFILES } from "./testing/journal-store.js";
 
 describe("Isolated runtime operation ids", () => {
   it("qualify each runtime operation with the allocation generation", () => {
@@ -50,5 +52,50 @@ describe("Isolated runtime operation id recognition", () => {
 
   it("rejects a missing gateway id", () => {
     expect(isUserReturnOperationIdFor("builder-return--g1", undefined)).toBe(false);
+  });
+});
+
+describe("Isolated runtime demand refusal", () => {
+  const refusal = { statusCode: 409, body: { code: "refused-by-product", error: "refused" } };
+
+  function store() {
+    const docs = new Map<string, Record<string, unknown>>([
+      ["config/orchestrator", { sizingProfiles: FIXTURE_SIZING_PROFILES }],
+      ["users/uid-alice", {
+        accountLifecycle: { status: "active" },
+        provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
+      }],
+      ["gateways/default/assignments/uid-alice", {
+        uid: "uid-alice", slug: "alice", source: "onboarding", gatewayId: "default", state: "serving", epoch: 7,
+      }],
+    ]);
+    return { docs, store: createDocumentFixtureStore(docs) };
+  }
+
+  const request = (state: ReturnType<typeof store>, refuse: (user: { uid: string }) => typeof refusal | null) =>
+    requestUserActivationLease({
+      store: state.store,
+      readBuilderTier: async () => "pro",
+      uid: "uid-alice",
+      reportingGatewayId: "default",
+      assignmentEpoch: 7,
+      eventKey: "manual:1",
+      cause: "manual",
+      observedAt: 1_000,
+      createdBy: "spec",
+      refuse,
+    });
+
+  it("returns the product's refusal from inside the transaction without writing a lease", async () => {
+    const state = store();
+    const seen: string[] = [];
+    await expect(request(state, (user) => { seen.push(user.uid); return refusal; })).resolves.toBe(refusal);
+    expect(seen).toEqual(["uid-alice"]);
+    expect(state.docs.get("users/uid-alice")).not.toHaveProperty("provisioning.openclaw.activationLease");
+  });
+
+  it("requests the lease when the product does not refuse", async () => {
+    const state = store();
+    await expect(request(state, () => null)).resolves.toMatchObject({ statusCode: 202, body: { status: "requested" } });
   });
 });

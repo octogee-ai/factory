@@ -35,43 +35,6 @@ export async function withCurrentBuilderTier(input, run) {
         }
     }
 }
-function activeActivityLease(lease, gatewayId) {
-    return lease.status === "active" && nonEmptyString(lease.leaseId) !== null &&
-        positiveInteger(lease.generation) !== null && lease.targetGatewayId === gatewayId &&
-        lease.returnRequestedAt === undefined;
-}
-function servingActivityAssignment(assigned, uid, gatewayId) {
-    return assigned?.uid === uid && assigned.gatewayId === gatewayId && assigned.state === "serving" &&
-        Number.isSafeInteger(assigned.epoch) && assigned.epoch >= 0;
-}
-export async function recordIsolatedRuntimeActivity(input) {
-    const now = input.now ?? Date.now();
-    if (!Number.isFinite(now) || now <= 0)
-        throw new Error("invalid runtime activity time");
-    const tierRead = { store: input.store, readBuilderTier: input.readBuilderTier, uid: input.uid, now };
-    return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, profile, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.activity" }, async (transaction) => {
-        const [user, assignment] = await Promise.all([
-            transaction.users.records.get(input.uid),
-            transaction.gateways.assignments.get(input.gatewayId, input.uid),
-        ]);
-        assertCurrent(user);
-        const lease = user?.activationLease ?? null;
-        if (!user || !lease || !activeActivityLease(lease, input.gatewayId) ||
-            user.gateway?.gatewayId !== input.gatewayId ||
-            !servingActivityAssignment(assignment, input.uid, input.gatewayId) ||
-            "result" in activationDemandEligibility(user, entitlementTier, profile))
-            return false;
-        const previous = typeof lease.lastActiveAt === "number" ? lease.lastActiveAt : 0;
-        if (now - previous >= 60_000) {
-            await transaction.users.records.patchActivationLease(input.uid, { lastActiveAt: now }, {
-                leaseId: lease.leaseId,
-                generation: lease.generation,
-                status: ["active"],
-            });
-        }
-        return true;
-    }));
-}
 function record(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value)
         ? value
@@ -147,7 +110,7 @@ function parkedDuplicateBody(lease) {
         },
     };
 }
-function activationDemandEligibility(user, entitlementTier, profile) {
+export function activationDemandEligibility(user, entitlementTier, profile) {
     if (!accountAllowsInteractiveAccess({ accountLifecycle: user.accountLifecycle ?? undefined })) {
         return {
             result: {
@@ -247,6 +210,16 @@ function adoptedActivationLease(lease, input) {
             : {}),
     };
 }
+function demandUser(input, user) {
+    if (!user) {
+        return {
+            user: null,
+            refusal: { statusCode: 404, body: { code: "user-not-found", error: "user not found", uid: input.uid } },
+        };
+    }
+    const refusal = input.refuse?.(user) ?? null;
+    return refusal ? { user: null, refusal } : { user, refusal: null };
+}
 export async function requestUserActivationLease(input) {
     const invalid = invalidRequest(input);
     if (invalid)
@@ -258,17 +231,14 @@ export async function requestUserActivationLease(input) {
     const observedAt = input.observedAt;
     const tierRead = { store: input.store, readBuilderTier: input.readBuilderTier, uid: input.uid, now: input.now ?? Date.now() };
     return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, profile, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.request" }, async (transaction) => {
-        const [user, assignment] = await Promise.all([
+        const [read, assignment] = await Promise.all([
             transaction.users.records.get(input.uid),
             transaction.gateways.assignments.get(reportingGatewayId, input.uid),
         ]);
-        assertCurrent(user);
-        if (!user) {
-            return {
-                statusCode: 404,
-                body: { code: "user-not-found", error: "user not found", uid: input.uid },
-            };
-        }
+        assertCurrent(read);
+        const { user, refusal } = demandUser(input, read);
+        if (refusal)
+            return refusal;
         if (!sourceFenceMatches({
             uid: input.uid,
             reportingGatewayId,

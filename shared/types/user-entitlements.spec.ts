@@ -103,3 +103,13 @@ describe("staticUserEntitlements", () => {
     expect(staticUserEntitlements.spendThrottle(plan, { ...observation, onOwnerCredential: true }).blocked).toBe(false);
   });
 });
+
+describe("isolated gateway admission", () => {
+  it("refuses self-service requests when no product admission is installed", () => {
+    expect(staticUserEntitlements.isolatedGatewayAdmission({})).toEqual({
+      admitted: false,
+      code: "isolated-gateway-operator-grant-required",
+      reason: "No admission policy is installed; an operator grants isolated gateways through the Admin API",
+    });
+  });
+});
