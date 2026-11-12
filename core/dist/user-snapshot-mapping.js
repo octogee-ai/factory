@@ -199,5 +199,6 @@ export function mapUserDocToSnapshot(uid, data, channels) {
         ...snapshotProvisioning(data),
         planInputs,
         contextTemplateKey: userEntitlements().seedContextTemplateKey(planInputs),
+        persona: null,
     };
 }

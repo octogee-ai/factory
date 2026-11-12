@@ -49,7 +49,7 @@ function snapshot(projects: FleetBrokerProjectRestore[]): FleetBrokerUserSnapsho
     displayName: "",
     lastName: "",
     photoURL: "",
-    onboardingVibe: null,
+    persona: null,
     coachToken: null,
     defaultAgentMmUserId: null,
   };

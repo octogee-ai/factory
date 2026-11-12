@@ -84,4 +84,3 @@ export declare function markProvisioningComplete(ctx: ProvisioningContext, mmUpd
 export declare function buildProvisionedUserPatch(ctx: ProvisioningContext, mmUpdate: MmUpdate): UserPatch;
 export declare function buildUserProductFields(ctx: ProvisioningContext, mmUpdate: MmUpdate): Record<string, unknown>;
 export declare function buildDefaultAgentDoc(uid: string): Record<string, unknown>;
-export declare function notifyOpsOfSignup(ctx: ProvisioningContext): Promise<void>;

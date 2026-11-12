@@ -53,6 +53,7 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
       slug: "acme",
       contextTemplateKey: "default",
       planInputs: { tier: "pro" },
+      persona: null,
       gatewayId: "gw-3",
       status: "complete",
       agentIds: ["octogee-acme-coach"],

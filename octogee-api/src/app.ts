@@ -35,7 +35,7 @@ import { createAgentBoardRoutes } from "./routes/agent-board.js";
 import { createAgentObsidianRoutes } from "./routes/agent-productivity-obsidian.js";
 import { createObsidianPairingRoutes } from "./routes/obsidian-pairing.js";
 import { createGatewayVmContextRoutes } from "./routes/gateway-vm-context.js";
-import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
+import { createFleetBrokerRoutes, type ProvisionedUserReport } from "./routes/fleet-broker.js";
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
 import { createAutomationAuthorizationBrokerRoutes } from "./routes/automation-authorization-broker.js";
 import { createWorkspaceGitAuthorizationBrokerRoutes } from "./routes/workspace-git-authorization-broker.js";
@@ -165,6 +165,7 @@ export interface ProductRuntime {
   internalRoutes(deps: ProductRouteDeps): ClusterRouteTable;
   onBudgetInterruption(input: { uid: string; reason: FundedBudgetInterruption }): void;
   onProjectCreated(uid: string): void;
+  onUserProvisioned(report: ProvisionedUserReport): Promise<void>;
   shutdown(): Promise<void>;
 }
 
@@ -557,6 +558,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     store: platformStateStore,
     modelBrokerRails,
     onBudgetInterruption: product?.onBudgetInterruption,
+    onUserProvisioned: product?.onUserProvisioned,
   }));
   // octogee-api-only: broker sidecar GitHub file-browser token reads
   // so cattle pods do not need Firestore or KMS access to user secrets.

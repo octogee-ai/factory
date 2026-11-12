@@ -24,7 +24,6 @@ import * as mattermostChannelsCore from "@octogee/core/mattermost/channels";
 import * as mattermostClientCore from "@octogee/core/mattermost/client";
 import * as mattermostUserPatCore from "@octogee/core/mattermost/user-pat";
 import * as mattermostDefaultAgentPatCore from "@octogee/core/mattermost/default-agent-pat";
-import * as mattermostCommunityCore from "@octogee/core/mattermost/community";
 import * as mattermostNukeCore from "@octogee/core/mattermost/nuke";
 import * as mattermostProfileSyncCore from "@octogee/core/mattermost/profile-sync";
 import * as mattermostProvisionCore from "@octogee/core/mattermost/provision";
@@ -58,7 +57,6 @@ import * as mattermostChannelsShim from "../lib/mattermost/channels.js";
 import * as mattermostClientShim from "../lib/mattermost/client.js";
 import * as mattermostUserPatShim from "../lib/mattermost/user-pat.js";
 import * as mattermostDefaultAgentPatShim from "../lib/mattermost/default-agent-pat.js";
-import * as mattermostCommunityShim from "../lib/mattermost/community.js";
 import * as mattermostNukeShim from "../lib/mattermost/nuke.js";
 import * as mattermostProfileSyncShim from "../lib/mattermost/profile-sync.js";
 import * as mattermostProvisionShim from "../lib/mattermost/provision.js";
@@ -94,7 +92,6 @@ const shims = [
   ["mattermost/client", mattermostClientShim, mattermostClientCore],
   ["mattermost/user-pat", mattermostUserPatShim, mattermostUserPatCore],
   ["mattermost/default-agent-pat", mattermostDefaultAgentPatShim, mattermostDefaultAgentPatCore],
-  ["mattermost/community", mattermostCommunityShim, mattermostCommunityCore],
   ["mattermost/nuke", mattermostNukeShim, mattermostNukeCore],
   ["mattermost/profile-sync", mattermostProfileSyncShim, mattermostProfileSyncCore],
   ["mattermost/provision", mattermostProvisionShim, mattermostProvisionCore],

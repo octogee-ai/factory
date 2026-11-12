@@ -51,7 +51,7 @@ function snap(over: Partial<FleetBrokerUserSnapshot> = {}): FleetBrokerUserSnaps
     displayName: "Alice",
     lastName: "A",
     photoURL: "",
-    onboardingVibe: null,
+    persona: null,
     coachToken: "default-agent-pat",
     defaultAgentMmUserId: "mm-coach",
     coachIdentity: { name: "Octo", emoji: "🐙" },

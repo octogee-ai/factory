@@ -141,14 +141,13 @@ export interface FleetBrokerClient {
   setRepoUrl(uid: string, repoUrl: string): Promise<void>;
   provisionMattermost(uid: string): Promise<FleetBrokerMattermostUpdate>;
   setMattermostFields(uid: string, mmUpdate: FleetBrokerMattermostUpdate): Promise<void>;
-  ensureCommunityMembership(uid: string): Promise<void>;
   ensureAgentIds(uid: string, agentIds: string[]): Promise<void>;
   setMounted(uid: string, mounted: boolean): Promise<void>;
   reportProjectAgentReadiness(uid: string, projects: FleetBrokerProjectAgentReadiness[]): Promise<void>;
   acknowledgeRuntimeReset(uid: string, operationId: string, generation: number): Promise<void>;
   recordReconcileError(slug: string, message: string): Promise<void>;
   clearReconcileError(slug: string): Promise<void>;
-  notifySignup(uid: string): Promise<void>;
+  reportProvisioned(uid: string, report: { first: boolean }): Promise<void>;
   recordUsageEvent(input: {
     agentId: string;
     usage: FleetBrokerUsageData;
@@ -342,6 +341,9 @@ function userSnapshotFromResponse(value: unknown): FleetBrokerUserSnapshot {
   if (typeof value.contextTemplateKey !== "string" || value.contextTemplateKey.length === 0) {
     throw new Error("fleet-broker user snapshot carries no contextTemplateKey; the API predates this gateway image");
   }
+  if (value.persona !== null && !isPlainRecord(value.persona)) {
+    throw new Error("fleet-broker user snapshot carries no persona; the API predates this gateway image");
+  }
   return value as unknown as FleetBrokerUserSnapshot;
 }
 
@@ -508,9 +510,6 @@ export function createFleetBrokerClient(
         mmUpdate,
       });
     },
-    ensureCommunityMembership(uid) {
-      return postNoContent("/internal/fleet/ensure-community-membership", { gatewayId, uid });
-    },
     ensureAgentIds(uid, agentIds) {
       return postNoContent("/internal/fleet/set-agent-ids", { gatewayId, uid, agentIds });
     },
@@ -533,8 +532,8 @@ export function createFleetBrokerClient(
     clearReconcileError(slug) {
       return postNoContent("/internal/fleet/clear-reconcile-error", { gatewayId, slug });
     },
-    notifySignup(uid) {
-      return postNoContent("/internal/fleet/notify-signup", { gatewayId, uid });
+    reportProvisioned(uid, report) {
+      return postNoContent("/internal/fleet/provisioned", { gatewayId, uid, first: report.first });
     },
     recordUsageEvent(input) {
       return postNoContent("/internal/fleet/usage-event", { gatewayId, ...input });

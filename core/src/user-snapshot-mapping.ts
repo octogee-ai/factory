@@ -268,5 +268,6 @@ export function mapUserDocToSnapshot(
     ...snapshotProvisioning(data),
     planInputs,
     contextTemplateKey: userEntitlements().seedContextTemplateKey(planInputs),
+    persona: null,
   };
 }

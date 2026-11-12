@@ -803,23 +803,31 @@ function restoreProjectCheckoutScope(value: unknown): UserSnapshot["projectCheck
 const RESTORE_SNAPSHOT_MISMATCH = "snapshot mismatch";
 const RESTORE_SNAPSHOT_WITHOUT_PLAN_INPUTS =
   "snapshot carries no plan inputs; the fleet controller predates this gateway image";
+const RESTORE_SNAPSHOT_WITHOUT_PERSONA =
+  "snapshot carries no persona; the fleet controller predates this gateway image";
 
-type RestoreSnapshotRecord = Record<string, unknown> & {
+type PlanInputSnapshot = Record<string, unknown> & {
   planInputs: Record<string, unknown>;
   contextTemplateKey: string;
 };
+type RestoreSnapshotRecord = PlanInputSnapshot & { persona: Record<string, unknown> | null };
 
-function carriesPlanInputs(snapshot: Record<string, unknown>): snapshot is RestoreSnapshotRecord {
+function carriesPlanInputs(snapshot: Record<string, unknown>): snapshot is PlanInputSnapshot {
   return isRecord(snapshot.planInputs) &&
     typeof snapshot.contextTemplateKey === "string" &&
     snapshot.contextTemplateKey.length > 0;
+}
+
+function carriesPersona(snapshot: PlanInputSnapshot): snapshot is RestoreSnapshotRecord {
+  return snapshot.persona === null || isRecord(snapshot.persona);
 }
 
 function restoreSnapshotRecord(body: RestoreMigrationRequestBody): RestoreSnapshotRecord | string {
   const snapshot: unknown = body.snapshot;
   if (!isRecord(snapshot)) return RESTORE_SNAPSHOT_MISMATCH;
   if (snapshot.uid !== body.uid || snapshot.slug !== body.slug) return RESTORE_SNAPSHOT_MISMATCH;
-  return carriesPlanInputs(snapshot) ? snapshot : RESTORE_SNAPSHOT_WITHOUT_PLAN_INPUTS;
+  if (!carriesPlanInputs(snapshot)) return RESTORE_SNAPSHOT_WITHOUT_PLAN_INPUTS;
+  return carriesPersona(snapshot) ? snapshot : RESTORE_SNAPSHOT_WITHOUT_PERSONA;
 }
 
 function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapshot | string {
@@ -841,6 +849,7 @@ function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapsho
       typeof snapshot.mattermostUserId === "string" ? snapshot.mattermostUserId : null,
     channels: Array.isArray(snapshot.channels) ? snapshot.channels as UserSnapshot["channels"] : [],
     ownerName: typeof snapshot.ownerName === "string" ? snapshot.ownerName : body.slug,
+    persona: snapshot.persona,
     projects: Array.isArray(snapshot.projects) ? snapshot.projects as UserSnapshot["projects"] : [],
     projectAgents: Array.isArray(snapshot.projectAgents) ? snapshot.projectAgents as UserSnapshot["projectAgents"] : [],
     projectCheckoutScope: restoreProjectCheckoutScope(snapshot.projectCheckoutScope),

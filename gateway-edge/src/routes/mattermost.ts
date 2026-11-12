@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import * as crypto from "crypto";
 import { requireAuth } from "../middleware/auth.js";
 import { db, FieldValue, Timestamp } from "../lib/db.js";
+import { readAgent } from "../lib/firestoreReads.js";
 import { getWorkspaceMmContext } from "../lib/mattermost-context.js";
 import { readMattermostSecret } from "../lib/mattermost-secret.js";
 import { platformStateStore } from "../lib/platform-state.js";
@@ -114,7 +115,7 @@ router.get("/token", requireAuth, async (req: Request, res: Response, next: Next
 
     const proxyUrl = process.env.API_PUBLIC_URL || "";
     const defaultAgentMmUserId = ctx.coachUserId || null;
-    const coachName = userData.onboarding?.coachName || null;
+    const coachName = (await readAgent(uid))?.name || null;
     const gatewayId = extractValidGatewayId(userData);
 
     res.json({ mmUserId, dmChannelId, proxyUrl, gatewayId, coachMmUserId: defaultAgentMmUserId, coachName });

@@ -265,7 +265,7 @@ export interface FleetBrokerUserSnapshot {
     lastName: string;
     timeZone?: string | null;
     photoURL: string;
-    onboardingVibe: string | null;
+    persona: Record<string, unknown> | null;
     coachToken: string | null;
     coachMmUserId: string | null;
     coachIdentity?: FleetBrokerDefaultAgentIdentity;

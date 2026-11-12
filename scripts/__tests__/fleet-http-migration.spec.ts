@@ -139,7 +139,7 @@ const RESTORE_SNAPSHOT = {
   displayName: "Chris",
   lastName: "",
   photoURL: "",
-  onboardingVibe: null,
+  persona: { vibe: "garage" },
   coachToken: "coach-token",
   defaultAgentMmUserId: "mm-coach",
 } as const;
@@ -261,6 +261,7 @@ function mkAdapter(overrides: Partial<UserLifecycleAdapter> = {}): UserLifecycle
   return {
     ...everythingElseThrows,
     log: vi.fn(),
+    reportProvisioned: vi.fn(async () => undefined),
     uidForSlug: vi.fn(async () => "uid-chris"),
     targetMigrationIdentityCustody: vi.fn(async (slug, migrationId) => sharedTargetAuthority(slug, migrationId)),
     resumeUser: vi.fn(async () => undefined),
@@ -1362,14 +1363,22 @@ describe("createRestoreHandler", () => {
     expect(getBody()).toEqual({ error: "snapshot mismatch" });
   });
 
+  const WITHOUT_PLAN_INPUTS = "snapshot carries no plan inputs; the fleet controller predates this gateway image";
+  const WITHOUT_PERSONA = "snapshot carries no persona; the fleet controller predates this gateway image";
+
   it.each([
     ["a previous fleet controller's snapshot that names a tier and carries no plan inputs", (() => {
       const { planInputs: _planInputs, contextTemplateKey: _contextTemplateKey, ...previous } = RESTORE_SNAPSHOT;
       return { ...previous, tier: "personal", selectedTier: "personal" };
-    })()],
-    ["plan inputs that are not an object", { ...RESTORE_SNAPSHOT, planInputs: "personal" }],
-    ["an empty context template key", { ...RESTORE_SNAPSHOT, contextTemplateKey: "" }],
-  ])("refuses a restore whose snapshot has %s before it touches the user", async (_label, snapshot) => {
+    })(), WITHOUT_PLAN_INPUTS],
+    ["plan inputs that are not an object", { ...RESTORE_SNAPSHOT, planInputs: "personal" }, WITHOUT_PLAN_INPUTS],
+    ["an empty context template key", { ...RESTORE_SNAPSHOT, contextTemplateKey: "" }, WITHOUT_PLAN_INPUTS],
+    ["a previous fleet controller's snapshot that carries the vibe under its previous name and no persona", (() => {
+      const { persona: _persona, ...previous } = RESTORE_SNAPSHOT;
+      return { ...previous, onboardingVibe: "garage" };
+    })(), WITHOUT_PERSONA],
+    ["a persona that is not an object", { ...RESTORE_SNAPSHOT, persona: "garage" }, WITHOUT_PERSONA],
+  ])("refuses a restore whose snapshot has %s before it touches the user", async (_label, snapshot, refusal) => {
     const adapter = {
       markUserMigratingIn: vi.fn(),
       seedUserSnapshotForMigration: vi.fn(),
@@ -1387,8 +1396,8 @@ describe("createRestoreHandler", () => {
     await handler(mkRequest(body, { signature: sig }), res, vi.fn());
 
     expect(getStatus()).toBe(400);
-    expect(getBody()).toEqual({ error: "snapshot carries no plan inputs; the fleet controller predates this gateway image" });
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("snapshot carries no plan inputs"), { status: "failed" });
+    expect(getBody()).toEqual({ error: refusal });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining(refusal.split(";")[0]), { status: "failed" });
     for (const touched of Object.values(adapter)) expect(touched).not.toHaveBeenCalled();
   });
 

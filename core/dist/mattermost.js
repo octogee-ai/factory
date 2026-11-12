@@ -1,7 +1,6 @@
 export { getMmAdminToken, mmApiCall } from "./mattermost/client.js";
 export { userChannelMembers } from "./mattermost/channel-members.js";
 export { createProjectChannel } from "./mattermost/channels.js";
-export { COMMUNITY_CHANNELS, COMMUNITY_TEAM_NAME, joinCommunityMembership, } from "./mattermost/community.js";
 export { DEFAULT_AGENT_PAT_DESCRIPTION, mintAndPersistDefaultAgentToken, } from "./mattermost/default-agent-pat.js";
 export { USER_PAT_DESCRIPTION, revokeAndMintUserPat, } from "./mattermost/user-pat.js";
 export { mmUploadAvatar } from "./mattermost/avatars.js";

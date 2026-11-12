@@ -263,6 +263,13 @@ type ResolveChatIdentity = (
   includeArchivedProjectHistory?: true;
 }>;
 
+export interface ProvisionedUserReport {
+  uid: string;
+  slug: string | null;
+  mattermostUserId: string | null;
+  first: boolean;
+}
+
 interface FleetBrokerRouteDeps {
   workspaceBlobStore?: WorkspaceBlobStore;
   reconcileDefaultAgentProjectMembership?: (input: ProjectAgentMembershipInput) => Promise<ProjectAgentMembershipResult>;
@@ -275,11 +282,7 @@ interface FleetBrokerRouteDeps {
     userData: Record<string, unknown>;
     mmUpdate: FleetBrokerMattermostUpdate;
   }) => Promise<void>;
-  ensureCommunityMembership?: (input: { mmUserId: string }) => Promise<void>;
-  notifyOpsOfSignup?: (input: {
-    uid: string;
-    userData: Record<string, unknown>;
-  }) => Promise<void>;
+  onUserProvisioned?: (report: ProvisionedUserReport) => Promise<void>;
   recordUsageEvent?: RecordUsageEvent;
   renderAvatar?: RenderAvatar;
   applyDefaultAgentIdentity?: ApplyDefaultAgentIdentity;
@@ -327,11 +330,6 @@ async function defaultProvisionMattermost(input: {
   );
 }
 
-async function defaultEnsureCommunityMembership(input: { mmUserId: string }): Promise<void> {
-  const { joinCommunityMembership } = await import("@octogee/core/mattermost");
-  await joinCommunityMembership(input.mmUserId);
-}
-
 async function defaultMarkProvisioningComplete(input: {
   uid: string;
   userData: Record<string, unknown>;
@@ -342,16 +340,6 @@ async function defaultMarkProvisioningComplete(input: {
   );
   const ctx = buildProvisioningContext(input.uid, input.userData);
   await markProvisioningComplete(ctx, input.mmUpdate, [`octogee-${ctx.slug}-coach`]);
-}
-
-async function defaultNotifyOpsOfSignup(input: {
-  uid: string;
-  userData: Record<string, unknown>;
-}): Promise<void> {
-  const { buildProvisioningContext, notifyOpsOfSignup } = await import(
-    "@octogee/core/provisionSteps"
-  );
-  await notifyOpsOfSignup(buildProvisioningContext(input.uid, input.userData));
 }
 
 const defaultRenderAvatar: RenderAvatar = async (bytes) => {
@@ -1131,7 +1119,7 @@ async function readUserAccountDocuments(db: Firestore, uids: readonly string[]):
 }
 
 
-async function requireAssignedUser(
+export async function requireAssignedUser(
   store: PlatformStateStore,
   req: Request,
   res: Response,
@@ -1210,7 +1198,7 @@ async function requireAssignedAgentWorkspace(
   return { bound, agentId, uid, slug, userRecord };
 }
 
-async function runBrokered(
+export async function runBrokered(
   res: Response,
   fn: () => Promise<void>,
 ): Promise<void> {
@@ -1476,12 +1464,6 @@ function snapshotProvisioningStatus(userRecord: PlatformUserRecord): FleetBroker
   return status === "provisioning" || status === "complete" ? status : "";
 }
 
-function snapshotOnboardingVibe(userRecord: PlatformUserRecord): string | null {
-  const vibe = userRecord.persona?.vibe;
-  return typeof vibe === "string" ? vibe : null;
-}
-
-
 type StoredRuntimeReset = FleetBrokerUserRuntimeReset | (
   Omit<FleetBrokerUserRuntimeReset, "status"> & {
     status: "acknowledged";
@@ -1564,7 +1546,7 @@ export function snapshotBaseFields(
   const entitlements = userEntitlements();
   const planInputs = entitlements.pickInputs(account);
   return {
-    ...entitlements.previousImageFields("user-snapshot", account),
+    ...entitlements.previousImageFields("user-snapshot", { ...account, persona: userRecord.persona }),
     contextTemplateKey: entitlements.seedContextTemplateKey(planInputs),
     planInputs,
     gatewayId: userRecord.gateway?.gatewayId ?? "",
@@ -1579,7 +1561,7 @@ export function snapshotBaseFields(
     lastName: stringAt(account, "lastName"),
     timeZone: storedTimeZone(account),
     photoURL: stringAt(account, "photoURL"),
-    onboardingVibe: snapshotOnboardingVibe(userRecord),
+    persona: userRecord.persona,
     byotActive: account.byotActive === true,
   };
 }
@@ -1747,8 +1729,7 @@ type ResolvedFleetBrokerRouteDeps = {
   resolveUserAgentDefault: UserAgentDefaultResolver;
   provisionMattermost: NonNullable<FleetBrokerRouteDeps["provisionMattermost"]>;
   markProvisioningComplete: NonNullable<FleetBrokerRouteDeps["markProvisioningComplete"]>;
-  ensureCommunityMembership: NonNullable<FleetBrokerRouteDeps["ensureCommunityMembership"]>;
-  notifyOpsOfSignup: NonNullable<FleetBrokerRouteDeps["notifyOpsOfSignup"]>;
+  onUserProvisioned: NonNullable<FleetBrokerRouteDeps["onUserProvisioned"]>;
   recordUsageEvent: RecordUsageEvent;
   renderAvatar: RenderAvatar;
   applyDefaultAgentIdentity: ApplyDefaultAgentIdentity;
@@ -1809,9 +1790,7 @@ function resolveFleetBrokerRouteImplementations(
     provisionMattermost: opts.provisionMattermost ?? defaultProvisionMattermost,
     markProvisioningComplete:
       opts.markProvisioningComplete ?? defaultMarkProvisioningComplete,
-    ensureCommunityMembership:
-      opts.ensureCommunityMembership ?? defaultEnsureCommunityMembership,
-    notifyOpsOfSignup: opts.notifyOpsOfSignup ?? defaultNotifyOpsOfSignup,
+    onUserProvisioned: opts.onUserProvisioned ?? (async () => {}),
     recordUsageEvent: opts.recordUsageEvent ?? defaultRecordUsageEvent,
     renderAvatar: opts.renderAvatar ?? defaultRenderAvatar,
     applyDefaultAgentIdentity: opts.applyDefaultAgentIdentity ?? defaultApplyDefaultAgentIdentity,
@@ -3009,7 +2988,7 @@ function installProvisioningRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
-  const { db, store, provisionMattermost, markProvisioningComplete, notifyOpsOfSignup, ensureCommunityMembership, now } = deps;
+  const { db, store, provisionMattermost, markProvisioningComplete, onUserProvisioned, now } = deps;
   // A pod re-reports the same mount failure every reconcile cycle, and each write
   // to gateways/{id} costs the fleet a Firestore snapshot event. Repeats inside
   // the window are acknowledged without a write; anything new lands immediately.
@@ -3079,18 +3058,6 @@ function installProvisioningRoutes(
       });
       const { slug } = assigned.userRecord;
       if (slug) await applyDefaultAgentLook({ uid: assigned.uid, slug }, deps);
-      res.status(204).end();
-    });
-  });
-
-  router.post("/ensure-community-membership", async (req, res) => {
-    const assigned = await requireAssignedUser(store, req, res);
-    if (!assigned) return;
-    const mmUserId = assigned.userRecord.mattermostUserId;
-    await runBrokered(res, async () => {
-      if (mmUserId) {
-        await ensureCommunityMembership({ mmUserId });
-      }
       res.status(204).end();
     });
   });
@@ -3171,11 +3138,21 @@ function installProvisioningRoutes(
     });
   });
 
-  router.post("/notify-signup", async (req, res) => {
+  router.post("/provisioned", async (req, res) => {
     const assigned = await requireAssignedUser(store, req, res);
     if (!assigned) return;
+    const first = objectBody(req).first;
+    if (typeof first !== "boolean") {
+      res.status(400).json({ error: "invalid_first" });
+      return;
+    }
     await runBrokered(res, async () => {
-      await notifyOpsOfSignup({ uid: assigned.uid, userData: await readUserAccountDocument(db, assigned.uid) });
+      await onUserProvisioned({
+        uid: assigned.uid,
+        slug: assigned.userRecord.slug,
+        mattermostUserId: assigned.userRecord.mattermostUserId,
+        first,
+      });
       res.status(204).end();
     });
   });

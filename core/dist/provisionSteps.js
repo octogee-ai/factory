@@ -20,7 +20,6 @@ import { MissingRecordError } from "./platform-state/errors.js";
 import { CREW_IDENTITY } from "./crew.js";
 import { workspaceRepoName } from "./gitea-naming.js";
 import { provisionMattermostUser } from "./mattermost.js";
-import { notifyNewSignup } from "./notifications.js";
 import { writeTierTemplateFiles as writeTierTemplateFilesImpl } from "./tier-template-files.js";
 export { listTierTemplateFiles, writeTierTemplateFiles, } from "./tier-template-files.js";
 export function buildProvisioningContext(uid, userData) {
@@ -342,15 +341,4 @@ async function updateUserWorkspaceEntry(ctx, provisioningObj) {
             updatedAt: FieldValue.serverTimestamp(),
         });
     }
-}
-export async function notifyOpsOfSignup(ctx) {
-    const data = ctx.userData;
-    const provisionedTier = ctx.provisionedProductFields.tier;
-    await notifyNewSignup({
-        name: ctx.ownerName,
-        email: data.email || "",
-        tier: typeof provisionedTier === "string" ? provisionedTier : "",
-        slug: ctx.slug,
-        uid: ctx.uid,
-    });
 }

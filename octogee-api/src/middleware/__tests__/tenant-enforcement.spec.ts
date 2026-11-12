@@ -147,6 +147,7 @@ function app(opts: {
   a.post("/internal/fleet/vm-runtime", enforcement, handler);
   a.post("/internal/fleet/computer-egress", enforcement, handler);
   a.post("/internal/fleet/uid-for-slug", enforcement, handler);
+  a.post("/internal/fleet/provisioned", enforcement, handler);
   a.post("/internal/billing/check-trial-expiry", enforcement, handler);
   a.post("/internal/billing/run-auto-top-ups", enforcement, handler);
   a.post("/internal/chat-artifacts/claim", enforcement, handler);
@@ -686,6 +687,15 @@ const STILL_ON_SHARED = {
 
     expect(owned.status).toBe(200);
     expect(foreign.status).toBe(403);
+  });
+
+  it("lets a gateway report only its own assigned user as provisioned", async () => {
+    const report = (body: Record<string, unknown>) =>
+      request(app({ boundTenant: WALTER })).post("/internal/fleet/provisioned").send({ first: true, ...body });
+
+    expect((await report({ gatewayId: "walter", uid: "alice" })).status).toBe(200);
+    expect((await report({ gatewayId: "walter", uid: "victim" })).status).toBe(403);
+    expect((await report({ gatewayId: "other", uid: "alice" })).status).toBe(403);
   });
 
   it("admits only a bound gateway to the final reply route's own recipient authorization", async () => {

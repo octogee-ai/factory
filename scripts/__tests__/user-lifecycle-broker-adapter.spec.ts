@@ -394,13 +394,12 @@ function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient
     setRepoUrl: vi.fn(async () => undefined),
     provisionMattermost: vi.fn(async () => ({})),
     setMattermostFields: vi.fn(async () => undefined),
-    ensureCommunityMembership: vi.fn(async () => undefined),
     ensureAgentIds: vi.fn(async () => undefined),
     setMounted: vi.fn(async () => undefined),
     reportProjectAgentReadiness: vi.fn(async () => undefined),
     recordReconcileError: vi.fn(async () => undefined),
     clearReconcileError: vi.fn(async () => undefined),
-    notifySignup: vi.fn(async () => undefined),
+    reportProvisioned: vi.fn(async () => undefined),
     recordUsageEvent: vi.fn(async () => undefined),
     blobDownloadUrl: vi.fn(async () => ({
       url: "https://example.com/download",
@@ -510,6 +509,7 @@ function aliceSnapshot(
     slug: "alice",
     contextTemplateKey: "default",
     planInputs: { tier: "standard" },
+    persona: null,
     gatewayId: "default",
     status: "",
     runtimeMutationFenced: false,
@@ -4898,7 +4898,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       displayName: "Alice",
       lastName: "",
       photoURL: "",
-      onboardingVibe: null,
+      persona: null,
       coachToken: "pat-1",
       defaultAgentMmUserId: "mm-alice-coach",
       byotActive: false,
@@ -4948,7 +4948,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       displayName: "Alice",
       lastName: "",
       photoURL: "",
-      onboardingVibe: null,
+      persona: null,
       coachToken: "pat-1",
       defaultAgentMmUserId: "mm-alice-coach",
       byotActive: false,
@@ -5005,7 +5005,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       displayName: "Alice",
       lastName: "",
       photoURL: "",
-      onboardingVibe: null,
+      persona: null,
       coachToken: "pat-1",
       defaultAgentMmUserId: "mm-alice-coach",
       byotActive: false,
@@ -5876,7 +5876,7 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
       displayName: "",
       lastName: "",
       photoURL: "",
-      onboardingVibe: null,
+      persona: null,
       coachToken: null,
       defaultAgentMmUserId: null,
       ...overrides,
@@ -6173,15 +6173,15 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     });
   });
 
-  it("reconcileCommunityMembership delegates to the fleet broker's ensure-community-membership RPC (no admin creds in-pod)", async () => {
-    const ensureCommunityMembership = vi.fn(async () => undefined);
+  it.each([true, false])("reports a provisioned user to the fleet broker by uid, first provisioning: %s", async (first) => {
+    const reportProvisioned = vi.fn(async () => undefined);
     const adapter = buildBrokeredLifecycleAdapter({
-      client: mkClient({ ensureCommunityMembership }),
+      client: mkClient({ reportProvisioned }),
       rpc: {} as unknown as GatewayRpcClient,
       log: vi.fn(),
     });
 
-    await adapter.reconcileCommunityMembership?.({
+    await adapter.reportProvisioned({
       uid: "uid-tester10",
       slug: "tester10",
       contextTemplateKey: "default",
@@ -6192,9 +6192,24 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
       username: "tester10",
       templateVars: {},
       userData: {},
-    });
+    }, { first });
 
-    expect(ensureCommunityMembership).toHaveBeenCalledWith("uid-tester10");
+    expect(reportProvisioned).toHaveBeenCalledWith("uid-tester10", { first });
+  });
+
+  it("hands a failed log's status to the gateway's logger so it is written at error", () => {
+    const log = vi.fn();
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc: {} as unknown as GatewayRpcClient, log });
+
+    adapter.log("provisioned report failed", { status: "failed" });
+
+    expect(log).toHaveBeenCalledExactlyOnceWith("provisioned report failed", { status: "failed" });
+  });
+
+  it("gives the lifecycle no community or signup step of its own", () => {
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc: {} as unknown as GatewayRpcClient, log: vi.fn() });
+
+    expect(Object.keys(adapter).filter((name) => /community|signup/iu.test(name))).toEqual([]);
   });
 });
 

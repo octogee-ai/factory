@@ -2,7 +2,7 @@ import { log } from "./config.js";
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_OPS_WEBHOOK_URL || "";
 
-async function sendDiscordWebhook(content: string, username = "Octogee Ops"): Promise<void> {
+export async function sendOpsAlert(content: string, username = "Octogee Ops"): Promise<void> {
   if (!DISCORD_WEBHOOK_URL) {
     log("[notify] DISCORD_OPS_WEBHOOK_URL not set — skipping notification");
     return;
@@ -15,32 +15,11 @@ async function sendDiscordWebhook(content: string, username = "Octogee Ops"): Pr
       body: JSON.stringify({ content, username }),
     });
     if (!resp.ok) {
-      log(`[notify] Discord webhook failed: ${resp.status} ${resp.statusText}`);
+      log(`[notify] Discord webhook failed: ${resp.status} ${resp.statusText}`, { status: "failed" });
     }
   } catch (err: unknown) {
-    log(`[notify] Discord webhook error: ${err instanceof Error ? err.message : String(err)}`);
+    log(`[notify] Discord webhook error: ${err instanceof Error ? err.message : String(err)}`, { status: "failed" });
   }
-}
-
-export async function notifyNewSignup(data: {
-  name: string;
-  email: string;
-  tier: string;
-  slug: string;
-  uid: string;
-}): Promise<void> {
-  const ts = new Date().toISOString().replace("T", " ").replace(/\.\d+Z/, " UTC");
-  const content = [
-    `🐙 **New Signup!**`,
-    `**Name:** ${data.name || "(no name)"}`,
-    `**Email:** ${data.email || "(no email)"}`,
-    `**Tier:** ${data.tier}`,
-    `**Slug:** ${data.slug}`,
-    `**UID:** \`${data.uid}\``,
-    `**Time:** ${ts}`,
-  ].join("\n");
-
-  await sendDiscordWebhook(content);
 }
 
 export async function notifyProvisioningError(slug: string, error: string): Promise<void> {
@@ -50,5 +29,5 @@ export async function notifyProvisioningError(slug: string, error: string): Prom
     `**Error:** ${error}`,
   ].join("\n");
 
-  await sendDiscordWebhook(content);
+  await sendOpsAlert(content);
 }

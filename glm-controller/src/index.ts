@@ -3074,10 +3074,7 @@ export async function readMigrationUserSnapshot(
     displayName: stringAt(data, "displayName"),
     lastName: stringAt(data, "lastName"),
     photoURL: stringAt(data, "photoURL"),
-    onboardingVibe:
-      typeof readPath(data, "onboarding.vibe") === "string"
-        ? (readPath(data, "onboarding.vibe") as string)
-        : null,
+    persona: userRecord.persona,
     coachToken: defaultAgentCredential?.personalToken ?? null,
     coachMmUserId: defaultAgentCredential?.mattermostUserId ?? null,
     byotActive: data.byotActive === true,

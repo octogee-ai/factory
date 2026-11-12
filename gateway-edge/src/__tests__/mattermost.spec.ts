@@ -135,6 +135,7 @@ describe("GET /token", () => {
       coachUserId: "coach-1",
     } as never);
     dbState.docs.set("users/caller-uid/secrets/mattermost", { personalToken: "tok-xyz" });
+    dbState.docs.set("agents/caller-uid", { id: "caller-uid", name: "Scout" });
 
     const res = await request(app).get("/api/mattermost/token");
     expect(res.status).toBe(200);
@@ -143,8 +144,24 @@ describe("GET /token", () => {
       dmChannelId: "dm-1",
       gatewayId: "christopher",
       coachMmUserId: "coach-1",
-      coachName: "Octo",
+      coachName: "Scout",
     });
+  });
+
+  it.each([
+    ["has no name", { id: "caller-uid" }],
+    ["has an empty name", { id: "caller-uid", name: "" }],
+    ["does not exist", undefined],
+  ])("names no agent when the agent identity %s, whatever the account's onboarding fields say", async (_label, agent) => {
+    authState.user = { onboarding: { coachName: "Octo" } };
+    ctxMock.mockResolvedValue({ userId: "mm-1", coachDmChannelId: "dm-1" } as never);
+    dbState.docs.set("users/caller-uid/secrets/mattermost", { personalToken: "tok" });
+    if (agent) dbState.docs.set("agents/caller-uid", agent);
+
+    const res = await request(app).get("/api/mattermost/token");
+
+    expect(res.status).toBe(200);
+    expect(res.body.coachName).toBeNull();
   });
 
   it("blanks an invalid gatewayId rather than echoing it", async () => {

@@ -270,7 +270,7 @@ function brokerUserMattermostUserId(
 interface BuildBrokeredLifecycleAdapterOptions {
   client: FleetBrokerClient;
   rpc: GatewayRpcClient;
-  log: (msg: string) => void;
+  log: (msg: string, fields?: { status: "failed" }) => void;
   isIsolatedGateway?: () => boolean;
   projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
   procRoot?: string;
@@ -549,6 +549,7 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
     mattermostUserId: snapshot.mattermostUserId,
     channels: snapshot.channels,
     ownerName: snapshot.ownerName,
+    persona: snapshot.persona,
     timeZone: snapshot.timeZone ?? null,
     projectCheckoutScope: snapshot.projectCheckoutScope,
     projects: snapshot.projects,
@@ -2575,12 +2576,11 @@ export function buildBrokeredLifecycleAdapter(
     listProjectsNeedingClone: (slug) => listProjectsNeedingClone(ctx, slug),
     cloneProjectRepo: (slug, project, repo, options) => cloneProjectRepoForTarget(ctx, slug, project, repo, options),
     provisionMattermostUser: (userCtx) => opts.client.provisionMattermost(userCtx.uid),
-    reconcileCommunityMembership: (userCtx) => opts.client.ensureCommunityMembership(userCtx.uid),
     ...runtimeUpdateOperations(ctx),
     cancelPendingEviction: (slug) => ctx.configRemovedForEviction.delete(slug),
     waitForAccountHealthy: (p) => waitForAccountHealthy(ctx, p),
     projectAgentsHealthy: (snapshot) => projectAgentsRuntimeReady({ ...snapshot, rpc: ctx.rpc }),
-    notifyOpsOfSignup: (userCtx) => opts.client.notifySignup(userCtx.uid),
+    reportProvisioned: (userCtx, report) => opts.client.reportProvisioned(userCtx.uid, report),
     uidForSlug: (slug) => opts.client.uidForSlug(slug),
     quiesceUser: (slug, timeoutMs, opts) => quiesceUser(ctx, slug, timeoutMs, opts),
     schedulerMigration: (slug, request) => migrateUserScheduler(ctx.rpc, slug, agentIdsForMigration(slug), request),

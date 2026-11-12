@@ -56,7 +56,9 @@ giteaReleaseShouldFail?: boolean;
   templateContext?: UserContext;
   reassertContextFilesShouldFail?: boolean;
   reassertContextFilesUserData?: Record<string, unknown>;
-  communityMembershipCtx?: { uid: string; slug: string };
+  provisionedReports: Array<{ uid: string; slug: string; first: boolean }>;
+  reportFailure: Error | null;
+  errorLogs: string[];
   byosub?: { restored: boolean; present: boolean };
   lastConfigPatchByosActive?: boolean;
   lastConfigPatchOpts?: Parameters<UserLifecycleAdapter["applyAddUserConfigPatch"]>[2];
@@ -86,7 +88,10 @@ function makeAdapter(state: MockState): UserLifecycleAdapter {
     state.writes.push({ field, value });
   };
   return {
-    log: (msg) => state.logs.push(msg),
+    log: (msg, fields) => {
+      state.logs.push(msg);
+      if (fields?.status === "failed") state.errorLogs.push(msg);
+    },
 
     isConfiguredUser: () => true,
     configuredUserOverlayPresent: () => true,
@@ -259,8 +264,10 @@ return "ssh-pubkey";
     projectAgentsHealthy: async () => true,
     materializeBrokerProfiles: () => record("materializeBrokerProfiles"),
 
-    notifyOpsOfSignup: async () => {
-      record("notifyOpsOfSignup");
+    reportProvisioned: async (ctx, report) => {
+      record("reportProvisioned");
+      if (state.reportFailure) throw state.reportFailure;
+      state.provisionedReports.push({ uid: ctx.uid, slug: ctx.slug, first: report.first });
     },
 
     onMounted: () => record("onMounted"),
@@ -287,6 +294,7 @@ function snap(overrides: Partial<UserSnapshot> = {}): UserSnapshot {
     mattermostUserId: null,
     channels: [{ scope: "workspace", kind: "coach-dm", channelId: "c".repeat(26) }],
     ownerName: "Test User",
+    persona: null,
     projectCheckoutScope: "workspace-and-projects",
     ...overrides,
   };
@@ -321,6 +329,9 @@ function makeState(snapshot: UserSnapshot | null, disk: DiskState): MockState {
     cloneProjectCalls: [],
     configPatchWithoutProjectIds: [],
     logs: [],
+    provisionedReports: [],
+    reportFailure: null,
+    errorLogs: [],
   };
 }
 
@@ -451,7 +462,7 @@ expect(result.steps).toEqual([
       "context-files-reassert",
       "mark-complete",
       "blob-sync",
-      "notify-ops",
+      "report-provisioned",
     ]);
   });
 
@@ -466,14 +477,8 @@ expect(result.steps).toEqual([
     expect(reassertIndex).toBeGreaterThan(verifyIndex);
   });
 
-  it("marks the user complete before community membership, blob sync and the ops notice", async () => {
-    const adapter = {
-      ...makeAdapter(state),
-      reconcileCommunityMembership: async () => {
-        state.calls.push("reconcileCommunityMembership");
-      },
-    };
-    await addUserToGateway(adapter, "uid-test");
+  it("marks the user complete before blob sync and the provisioned report", async () => {
+    await addUserToGateway(makeAdapter(state), "uid-test");
 
     const verifyIdx = state.calls.indexOf("waitForAccountHealthy");
     const completeIdx = state.calls.indexOf("write:provisioning.openclaw.status");
@@ -482,9 +487,9 @@ expect(result.steps).toEqual([
       .toEqual(["provisioning", "complete"]);
     expect(completeIdx).toBeLessThan(verifyIdx);
     expect(completeAt).toBeGreaterThan(verifyIdx);
-    for (const later of ["reconcileCommunityMembership", "blobSyncForSlug", "notifyOpsOfSignup"]) {
-      expect(state.calls.indexOf(later), later).toBeGreaterThan(completeAt);
-    }
+    const blobSyncAt = state.calls.indexOf("blobSyncForSlug");
+    expect(blobSyncAt).toBeGreaterThan(completeAt);
+    expect(state.calls.indexOf("reportProvisioned")).toBeGreaterThan(blobSyncAt);
   });
 
   it("names the agent agent on the user when the slot is claimed, before broker profiles start", async () => {
@@ -743,38 +748,48 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     expect(result.steps).not.toContain("context-files-reassert");
   });
 
-  it("is a no-op when the adapter does not implement community membership reconciliation (optional method)", async () => {
+  it("reports a first provisioning to the API once, as first", async () => {
     const result = await addUserToGateway(makeAdapter(state), "uid-test");
-    expect(result.steps).not.toContain("community-membership");
+
+    expect(state.provisionedReports).toEqual([{ uid: "uid-test", slug: "test", first: true }]);
+    expect(result.steps).toContain("report-provisioned");
   });
 
-  it("reconciles community membership on first-time provisioning when the adapter supports it", async () => {
-    const adapter = {
-      ...makeAdapter(state),
-      reconcileCommunityMembership: async (ctx: { uid: string; slug: string }) => {
-        state.calls.push("reconcileCommunityMembership");
-        state.communityMembershipCtx = ctx;
-      },
-    };
-    const result = await addUserToGateway(adapter, "uid-test");
-    expect(state.calls).toContain("reconcileCommunityMembership");
-    expect(result.steps).toContain("community-membership");
-    expect(state.communityMembershipCtx?.uid).toBe("uid-test");
-    expect(state.communityMembershipCtx?.slug).toBe("test");
+  it("logs a failed first report at error with its route, status and cause, and still completes the mount", async () => {
+    state.reportFailure = new Error("fleet-broker /internal/fleet/provisioned → 404: not found");
+
+    const result = await addUserToGateway(makeAdapter(state), "uid-test");
+
+    expect(result.steps).not.toContain("report-provisioned");
+    expect(result.steps).toContain("mark-complete");
+    expect(state.errorLogs).toEqual([
+      expect.stringMatching(/provisioned report failed for a first provisioning.*\/internal\/fleet\/provisioned → 404: not found/u),
+    ]);
   });
 
-  it("a community membership reconcile failure is non-fatal — the mount still completes", async () => {
-    const adapter = {
-      ...makeAdapter(state),
-      reconcileCommunityMembership: async () => {
-        state.calls.push("reconcileCommunityMembership");
-        throw new Error("community reconcile failed");
-      },
+  it("does not send a first report again after it failed: the next mount reports a re-mount", async () => {
+    const adapter = makeAdapter(state);
+    state.reportFailure = new Error("fleet-broker /internal/fleet/provisioned → 404: not found");
+    await addUserToGateway(adapter, "uid-test");
+
+    state.reportFailure = null;
+    state.user = mountedSnapshot();
+    state.disk = mountedDisk();
+    await addUserToGateway(adapter, "uid-test");
+
+    expect(state.provisionedReports).toEqual([{ uid: "uid-test", slug: "test", first: false }]);
+  });
+
+  it("sends no report when the mount stops before the report step", async () => {
+    const adapter = makeAdapter(state);
+    const stop = new AbortController();
+    adapter.blobSyncForSlug = async () => {
+      stop.abort(new Error("gateway is shutting down"));
     };
-    const result = await addUserToGateway(adapter, "uid-test");
-    expect(state.calls).toContain("reconcileCommunityMembership");
-    expect(result.steps).not.toContain("community-membership");
-    expect(result.steps).toContain("verify-channel-ready");
+
+    await expect(addUserToGateway(adapter, "uid-test", { signal: stop.signal })).rejects.toThrow("gateway is shutting down");
+
+    expect(state.calls).not.toContain("reportProvisioned");
   });
 
   it("writes provisioning.git.repoUrl IMMEDIATELY after the repo init succeeds", async () => {
@@ -806,10 +821,6 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     expect(state.writes.find((w) => w.field === "provisioning.openclaw.status" && w.value === "complete")).toBeUndefined();
   });
 
-  it("notifies ops on first-time provision only", async () => {
-    await addUserToGateway(makeAdapter(state), "uid-test");
-    expect(state.calls).toContain("notifyOpsOfSignup");
-  });
 });
 
 describe("addUserToGateway — restore from Gitea (post pod loss)", () => {
@@ -862,7 +873,23 @@ describe("addUserToGateway — restore from Gitea (post pod loss)", () => {
     await addUserToGateway(makeAdapter(state), "uid-test");
 
     expect(state.calls).not.toContain("provisionMattermostUser");
-    expect(state.calls).not.toContain("notifyOpsOfSignup");
+  });
+
+  it("reports the re-mount of a provisioned user as not first", async () => {
+    const result = await addUserToGateway(makeAdapter(state), "uid-test");
+
+    expect(state.provisionedReports).toEqual([{ uid: "uid-test", slug: "test", first: false }]);
+    expect(result.steps).toContain("report-provisioned");
+  });
+
+  it("passes the snapshot's persona strings to the seed templates and no other persona value", async () => {
+    state.user = snap({ ...state.user, persona: { style: "garage", zone: "Europe/Paris", weight: 3, nested: { a: "b" }, empty: null } });
+
+    await addUserToGateway(makeAdapter(state), "uid-test");
+
+    expect(state.templateContext?.templateVars).toMatchObject({ "persona.style": "garage", "persona.zone": "Europe/Paris" });
+    expect(Object.keys(state.templateContext?.templateVars ?? {}).filter((key) => key.startsWith("persona.")).sort())
+      .toEqual(["persona.style", "persona.zone"]);
   });
 
   it("aborts loudly on a clone failure (workspace data is at risk)", async () => {
@@ -1061,6 +1088,7 @@ describe("addUserToGateway — configured user overlay", () => {
     expect(state.calls).toContain("reconcileConfiguredUserProjectAgents");
     expect(state.calls).not.toContain("applyAddUserConfigPatch");
     expect(state.calls).not.toContain("writeUserTemplates");
+    expect(state.provisionedReports).toEqual([]);
     expect(result.appliedFingerprint).toBe("project-activation");
     expect(result.steps).toContain("config-patch");
   });
@@ -1569,7 +1597,7 @@ describe("addUserToGateway — idempotent re-add", () => {
     expect(result.steps).not.toContain("init-workspace-repo");
     expect(result.steps).not.toContain("ssh-key");
     expect(result.steps).not.toContain("mattermost-provision");
-    expect(result.steps).not.toContain("notify-ops");
+    expect(state.provisionedReports).toEqual([{ uid: "uid-test", slug: "test", first: false }]);
     expect(result.steps).toContain("blob-sync");
     expect(result.steps).toContain("config-patch");
     expect(result.steps).toContain("verify-channel-ready");
@@ -2224,7 +2252,7 @@ describe("unmount + re-add round trip", () => {
     expect(reAdd.steps).toContain("clone-workspace-repo");
     expect(reAdd.steps).not.toContain("init-workspace-repo");
     expect(reAdd.steps).not.toContain("mattermost-provision");
-    expect(reAdd.steps).not.toContain("notify-ops");
+    expect(state.provisionedReports).toEqual([{ uid: "uid-test", slug: "test", first: false }]);
   });
 });
 
@@ -2730,21 +2758,34 @@ describe("restoreUserRuntimeFromSnapshot — blob backfill stays out of the migr
     expect(result.steps).toContain("clone-workspace-repo");
   });
 
-  it("reconciles community membership on restore — an existing user self-heals after a gateway restart", async () => {
+  it("reports a restored user as provisioned and not first, after the runtime is verified", async () => {
     const state = makeState(snap({ status: "complete" }), emptyDisk());
-    const adapter = {
-      ...makeAdapter(state),
-      reconcileCommunityMembership: async (ctx: { uid: string; slug: string }) => {
-        state.calls.push("reconcileCommunityMembership");
-        state.communityMembershipCtx = ctx;
-      },
-    };
 
-    const result = await restoreUserRuntimeFromSnapshot(adapter, state.user!);
+    const result = await restoreUserRuntimeFromSnapshot(makeAdapter(state), state.user!);
 
-    expect(state.calls).toContain("reconcileCommunityMembership");
-    expect(result.steps).toContain("community-membership");
-    expect(state.communityMembershipCtx?.uid).toBe(state.user!.uid);
+    expect(state.provisionedReports).toEqual([{ uid: state.user!.uid, slug: state.user!.slug, first: false }]);
+    expect(result.steps).toContain("report-provisioned");
+    expect(state.calls.indexOf("reportProvisioned")).toBeGreaterThan(state.calls.indexOf("waitForAccountHealthy"));
+  });
+
+  it("logs a failed restore report at error with its cause and still completes the restore", async () => {
+    const state = makeState(snap({ status: "complete" }), emptyDisk());
+    state.reportFailure = new Error("fleet-broker /internal/fleet/provisioned → 404");
+
+    const result = await restoreUserRuntimeFromSnapshot(makeAdapter(state), state.user!);
+
+    expect(result.restored).toBe(true);
+    expect(result.steps).not.toContain("report-provisioned");
+    expect(state.errorLogs).toEqual([expect.stringMatching(/provisioned report failed for a re-mount.*→ 404/u)]);
+  });
+
+  it("does not report a restore whose runtime never became ready", async () => {
+    const state = makeState(snap({ status: "complete" }), emptyDisk());
+    state.healthy = false;
+
+    await expect(restoreUserRuntimeFromSnapshot(makeAdapter(state), state.user!)).rejects.toThrow(/running\+connected/);
+
+    expect(state.provisionedReports).toEqual([]);
   });
 });
 
@@ -2862,7 +2903,7 @@ const ADAPTER_REPO_TOUCHING: Record<keyof UserLifecycleAdapter, boolean> = {
     applyRemoveUserConfigPatch: false,
     waitForAccountHealthy: false,
     projectAgentsHealthy: false,
-    notifyOpsOfSignup: false,
+    reportProvisioned: false,
     onMounted: false,
     onUnmounted: false,
     uidForSlug: false,

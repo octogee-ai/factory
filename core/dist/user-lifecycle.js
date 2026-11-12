@@ -153,9 +153,6 @@ async function restoreUserRuntimeFromSnapshotInner(adapter, snapshot, opts) {
     steps.push(...reassertSteps);
     const convergedState = CONVERGED_STATE_STEPS.every((step) => reassertSteps.includes(step));
     throwIfAborted(signal, uid);
-    markStep("community-membership");
-    steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
-    throwIfAborted(signal, uid);
     markStep(VERIFY_CHANNEL_READY);
     await verifyChannelReady(adapter, slug, verifyTimeoutMs);
     steps.push(VERIFY_CHANNEL_READY);
@@ -167,6 +164,9 @@ async function restoreUserRuntimeFromSnapshotInner(adapter, snapshot, opts) {
     if (!await adapter.projectAgentsHealthy(admittedSnapshot)) {
         throw new Error(`[restore:${slug}] project agents are not connected to their configured channels`);
     }
+    throwIfAborted(signal, uid);
+    markStep("report-provisioned");
+    steps.push(...(await reportProvisioned(adapter, ctx, false)));
     throwIfAborted(signal, uid);
     adapter.writeMountMarker?.(slug);
     adapter.log(`[restore:${slug}] durable restore complete in ${Date.now() - startedAt}ms`);
@@ -359,13 +359,11 @@ async function addUserToGatewayInner(adapter, uid, opts = {}) {
     markStep("finalize");
     adapter.log(`✅ [add:${slug}] agent attach complete in ${Date.now() - attachStartedAt}ms`);
     steps.push(...(await markCompleteIfNeeded(adapter, uid, snapshot, newUser, mm.mmUpdate)));
-    markStep("community-membership");
-    steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
-    throwIfAborted(signal, uid);
     markStep("blob-sync");
     steps.push(...(await runBlobSync(adapter, slug)));
     throwIfAborted(signal, uid);
-    steps.push(...(await notifyOpsIfNew(adapter, ctx, newUser)));
+    markStep("report-provisioned");
+    steps.push(...(await reportProvisioned(adapter, ctx, newUser)));
     return {
         newUser,
         steps,
@@ -611,18 +609,6 @@ async function reassertConvergedState(adapter, snapshot) {
     }
     return steps;
 }
-async function reconcileCommunityMembershipIfSupported(adapter, ctx) {
-    if (!adapter.reconcileCommunityMembership)
-        return [];
-    try {
-        await adapter.reconcileCommunityMembership(ctx);
-        return ["community-membership"];
-    }
-    catch (err) {
-        adapter.log(`[add:${ctx.slug}] ⚠ community membership reconcile failed (non-fatal; retry on next sync/re-mount): ${String(err)}`);
-        return [];
-    }
-}
 function githubCheckoutsHydrateHere(adapter, slug) {
     if (!adapter.isIsolatedGateway || !adapter.isConfiguredUser)
         return true;
@@ -730,15 +716,13 @@ async function markCompleteIfNeeded(adapter, uid, snapshot, newUser, mmUpdate) {
     await adapter.setProvisioningStatus(uid, "complete");
     return ["mark-complete"];
 }
-async function notifyOpsIfNew(adapter, ctx, newUser) {
-    if (!newUser)
-        return [];
+async function reportProvisioned(adapter, ctx, first) {
     try {
-        await adapter.notifyOpsOfSignup(ctx);
-        return ["notify-ops"];
+        await adapter.reportProvisioned(ctx, { first });
+        return ["report-provisioned"];
     }
     catch (err) {
-        adapter.log(`[add:${ctx.slug}] ⚠ ops notification failed (non-fatal): ${String(err)}`);
+        adapter.log(`[add:${ctx.slug}] ✖ provisioned report failed for a ${first ? "first provisioning, and a first report is not sent again" : "re-mount"}: ${String(err)}`, { status: "failed" });
         return [];
     }
 }
@@ -825,6 +809,7 @@ function buildUserContext(snapshot, usersDir) {
         today,
         username,
         templateVars: {
+            ...personaTemplateVars(snapshot.persona),
             uid: snapshot.uid,
             ownerName: snapshot.ownerName,
             username,
@@ -834,4 +819,7 @@ function buildUserContext(snapshot, usersDir) {
         },
         userData: {},
     };
+}
+function personaTemplateVars(persona) {
+    return Object.fromEntries(Object.entries(persona ?? {}).flatMap(([key, value]) => typeof value === "string" ? [[`persona.${key}`, value]] : []));
 }

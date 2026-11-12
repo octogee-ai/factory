@@ -86,7 +86,7 @@ function mkClient(snapshot: FleetBrokerUserSnapshot): FleetBrokerClient {
     setMounted: vi.fn(async () => undefined),
     recordReconcileError: vi.fn(async () => undefined),
     clearReconcileError: vi.fn(async () => undefined),
-    notifySignup: vi.fn(async () => undefined),
+    reportProvisioned: vi.fn(async () => undefined),
     recordUsageEvent: vi.fn(async () => undefined),
     blobDownloadUrl: vi.fn(async () => ({
       url: "https://example.com/download",

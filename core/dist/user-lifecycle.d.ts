@@ -17,6 +17,7 @@ export interface UserSnapshot {
     mattermostUserId: string | null;
     channels: CustomerSnapshot["channels"];
     ownerName: string;
+    persona: Record<string, unknown> | null;
     timeZone?: string | null;
     projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
     projects?: FleetBrokerProjectRestore[];
@@ -74,7 +75,9 @@ export interface UserContext {
 }
 export type MmUpdate = Record<string, unknown>;
 export interface UserLifecycleAdapter {
-    log: (msg: string) => void;
+    log: (msg: string, fields?: {
+        status: "failed";
+    }) => void;
     isIsolatedGateway?: () => boolean;
     /** True when this gateway is the configured disposable isolated for this exact slug. */
     isConfiguredUser?: (slug: string) => boolean;
@@ -166,14 +169,6 @@ export interface UserLifecycleAdapter {
     cloneProjectRepo: (userSlug: string, projectSlug: string, giteaRepoName: string | null, opts?: ProjectCloneOptions) => Promise<boolean>;
     seedDeferredProjectWorkspace?: (userSlug: string, projectSlug: string) => Promise<void>;
     provisionMattermostUser: (ctx: UserContext) => Promise<MmUpdate>;
-    /**
-     * Idempotently ensure this user is a member of the shared Octogee Community
-     * team + chat channels. Optional — adapters that don't own Mattermost community
-     * reconciliation (migration/local tooling) may omit it. Runs at provision AND on
-     * every re-mount (gateway restart), so an existing user self-heals without a
-     * fresh MM-provisioning event.
-     */
-    reconcileCommunityMembership?: (ctx: UserContext) => Promise<void>;
     applyAddUserConfigPatch: (snapshot: UserSnapshot, mmUpdate: MmUpdate | null, opts?: {
         signal?: AbortSignal;
         byosActive?: boolean;
@@ -208,7 +203,9 @@ export interface UserLifecycleAdapter {
         timeoutMs: number;
     }) => Promise<boolean>;
     projectAgentsHealthy: (snapshot: UserSnapshot) => Promise<boolean>;
-    notifyOpsOfSignup: (ctx: UserContext) => Promise<void>;
+    reportProvisioned: (ctx: UserContext, report: {
+        first: boolean;
+    }) => Promise<void>;
     onMounted?: (slug: string) => void;
     onUnmounted?: (slug: string) => void;
     uidForSlug: (slug: string) => Promise<string | null>;
@@ -263,7 +260,7 @@ export interface UserLifecycleAdapter {
     releaseAgent?: (agentId: string) => Promise<void>;
 }
 export type UserStateImportMode = "pre" | "final" | "default";
-export type AddUserStep = "claim-slot" | "ensure-dir" | "write-templates" | "clone-workspace-repo" | "init-workspace-repo" | "ssh-key" | "ssh-key-resync" | "blob-sync" | "byosub-restore" | "byot-reassert" | "context-files-reassert" | "project-clone" | "mattermost-provision" | "community-membership" | "config-patch" | "verify-channel-ready" | "mark-complete" | "notify-ops";
+export type AddUserStep = "claim-slot" | "ensure-dir" | "write-templates" | "clone-workspace-repo" | "init-workspace-repo" | "ssh-key" | "ssh-key-resync" | "blob-sync" | "byosub-restore" | "byot-reassert" | "context-files-reassert" | "project-clone" | "mattermost-provision" | "config-patch" | "verify-channel-ready" | "mark-complete" | "report-provisioned";
 export interface AddUserResult {
     newUser: boolean;
     steps: AddUserStep[];
@@ -290,7 +287,7 @@ export declare class ConcurrentMountError extends Error {
 }
 export declare function _resetInFlightUidsForTests(): void;
 export declare function _inFlightUidsHasForTests(uid: string): boolean;
-export type MountStep = "load-snapshot" | "ssh-key" | "claim-slot" | "workspace-repo" | "byos-restore" | "mattermost" | "config-patch" | "reassert-converged" | "community-membership" | "verify-channel-ready" | "blob-sync" | "project-clones" | "finalize";
+export type MountStep = "load-snapshot" | "ssh-key" | "claim-slot" | "workspace-repo" | "byos-restore" | "mattermost" | "config-patch" | "reassert-converged" | "verify-channel-ready" | "blob-sync" | "project-clones" | "finalize" | "report-provisioned";
 export type MarkStep = (step: MountStep) => void;
 export interface AddUserOptions {
     verifyTimeoutMs?: number;

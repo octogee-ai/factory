@@ -30,7 +30,6 @@ import { CREW_IDENTITY } from "./crew.js";
 import { workspaceRepoName } from "./gitea-naming.js";
 import { provisionMattermostUser } from "./mattermost.js";
 import type { ManagedChannelHost } from "./channel-host/types.js";
-import { notifyNewSignup } from "./notifications.js";
 import { writeTierTemplateFiles as writeTierTemplateFilesImpl } from "./tier-template-files.js";
 
 export {
@@ -514,16 +513,4 @@ async function updateUserWorkspaceEntry(
       updatedAt: FieldValue.serverTimestamp(),
     });
   }
-}
-
-export async function notifyOpsOfSignup(ctx: ProvisioningContext): Promise<void> {
-  const data = ctx.userData as UserDataShape;
-  const provisionedTier = ctx.provisionedProductFields.tier;
-  await notifyNewSignup({
-    name: ctx.ownerName,
-    email: data.email || "",
-    tier: typeof provisionedTier === "string" ? provisionedTier : "",
-    slug: ctx.slug,
-    uid: ctx.uid,
-  });
 }

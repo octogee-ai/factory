@@ -102,7 +102,7 @@ const SNAPSHOT: FleetBrokerUserSnapshot = {
   displayName: "Alice",
   lastName: "",
   photoURL: "",
-  onboardingVibe: null,
+  persona: null,
   coachToken: "coach-token",
   defaultAgentMmUserId: "mm-coach",
 };

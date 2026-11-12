@@ -30,6 +30,7 @@ export interface UserSnapshot {
   mattermostUserId: string | null;
   channels: CustomerSnapshot["channels"];
   ownerName: string;
+  persona: Record<string, unknown> | null;
   timeZone?: string | null;
   projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
   projects?: FleetBrokerProjectRestore[];
@@ -86,7 +87,7 @@ export interface UserContext {
 export type MmUpdate = Record<string, unknown>;
 
 export interface UserLifecycleAdapter {
-  log: (msg: string) => void;
+  log: (msg: string, fields?: { status: "failed" }) => void;
 
   isIsolatedGateway?: () => boolean;
 
@@ -214,15 +215,6 @@ restoreByosubForAgent: (slug: string) => Promise<{ restored: boolean; present: b
   seedDeferredProjectWorkspace?: (userSlug: string, projectSlug: string) => Promise<void>;
 
   provisionMattermostUser: (ctx: UserContext) => Promise<MmUpdate>;
-
-  /**
-   * Idempotently ensure this user is a member of the shared Octogee Community
-   * team + chat channels. Optional — adapters that don't own Mattermost community
-   * reconciliation (migration/local tooling) may omit it. Runs at provision AND on
-   * every re-mount (gateway restart), so an existing user self-heals without a
-   * fresh MM-provisioning event.
-   */
-  reconcileCommunityMembership?: (ctx: UserContext) => Promise<void>;
   applyAddUserConfigPatch: (
     snapshot: UserSnapshot,
     mmUpdate: MmUpdate | null,
@@ -259,7 +251,7 @@ opts?: {
   waitForAccountHealthy: (params: { slug: string; timeoutMs: number }) => Promise<boolean>;
   projectAgentsHealthy: (snapshot: UserSnapshot) => Promise<boolean>;
 
-  notifyOpsOfSignup: (ctx: UserContext) => Promise<void>;
+  reportProvisioned: (ctx: UserContext, report: { first: boolean }) => Promise<void>;
 
   onMounted?: (slug: string) => void;
   onUnmounted?: (slug: string) => void;
@@ -330,11 +322,10 @@ export type AddUserStep =
   | "context-files-reassert"
   | "project-clone"
   | "mattermost-provision"
-  | "community-membership"
   | "config-patch"
   | "verify-channel-ready"
   | "mark-complete"
-  | "notify-ops";
+  | "report-provisioned";
 
 const VERIFY_CHANNEL_READY = "verify-channel-ready";
 const CONFIG_PATCH = "config-patch";
@@ -398,11 +389,11 @@ export type MountStep =
   | "mattermost"
   | "config-patch"
   | "reassert-converged"
-  | "community-membership"
   | "verify-channel-ready"
   | "blob-sync"
   | "project-clones"
-  | "finalize";
+  | "finalize"
+  | "report-provisioned";
 
 export type MarkStep = (step: MountStep) => void;
 
@@ -606,10 +597,6 @@ async function restoreUserRuntimeFromSnapshotInner(
   const convergedState = CONVERGED_STATE_STEPS.every((step) => reassertSteps.includes(step));
   throwIfAborted(signal, uid);
 
-  markStep("community-membership");
-  steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
-  throwIfAborted(signal, uid);
-
   markStep(VERIFY_CHANNEL_READY);
   await verifyChannelReady(adapter, slug, verifyTimeoutMs);
   steps.push(VERIFY_CHANNEL_READY);
@@ -622,6 +609,10 @@ async function restoreUserRuntimeFromSnapshotInner(
   if (!await adapter.projectAgentsHealthy(admittedSnapshot)) {
     throw new Error(`[restore:${slug}] project agents are not connected to their configured channels`);
   }
+  throwIfAborted(signal, uid);
+
+  markStep("report-provisioned");
+  steps.push(...(await reportProvisioned(adapter, ctx, false)));
   throwIfAborted(signal, uid);
 
   adapter.writeMountMarker?.(slug);
@@ -889,15 +880,12 @@ async function addUserToGatewayInner(
   );
   steps.push(...(await markCompleteIfNeeded(adapter, uid, snapshot, newUser, mm.mmUpdate)));
 
-  markStep("community-membership");
-  steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
-  throwIfAborted(signal, uid);
-
   markStep("blob-sync");
   steps.push(...(await runBlobSync(adapter, slug)));
   throwIfAborted(signal, uid);
 
-  steps.push(...(await notifyOpsIfNew(adapter, ctx, newUser)));
+  markStep("report-provisioned");
+  steps.push(...(await reportProvisioned(adapter, ctx, newUser)));
 
   return {
     newUser,
@@ -1237,22 +1225,6 @@ async function reassertConvergedState(
   return steps;
 }
 
-async function reconcileCommunityMembershipIfSupported(
-  adapter: UserLifecycleAdapter,
-  ctx: UserContext,
-): Promise<AddUserStep[]> {
-  if (!adapter.reconcileCommunityMembership) return [];
-  try {
-    await adapter.reconcileCommunityMembership(ctx);
-    return ["community-membership"];
-  } catch (err) {
-    adapter.log(
-      `[add:${ctx.slug}] ⚠ community membership reconcile failed (non-fatal; retry on next sync/re-mount): ${String(err)}`,
-    );
-    return [];
-  }
-}
-
 type ProjectCheckoutAdapter = Pick<UserLifecycleAdapter,
   "listProjectsNeedingClone" | "cloneProjectRepo" | "seedDeferredProjectWorkspace" |
   "isIsolatedGateway" | "isConfiguredUser" | "log">;
@@ -1421,17 +1393,19 @@ async function markCompleteIfNeeded(
   return ["mark-complete"];
 }
 
-async function notifyOpsIfNew(
+async function reportProvisioned(
   adapter: UserLifecycleAdapter,
   ctx: UserContext,
-  newUser: boolean,
+  first: boolean,
 ): Promise<AddUserStep[]> {
-  if (!newUser) return [];
   try {
-    await adapter.notifyOpsOfSignup(ctx);
-    return ["notify-ops"];
+    await adapter.reportProvisioned(ctx, { first });
+    return ["report-provisioned"];
   } catch (err) {
-    adapter.log(`[add:${ctx.slug}] ⚠ ops notification failed (non-fatal): ${String(err)}`);
+    adapter.log(
+      `[add:${ctx.slug}] ✖ provisioned report failed for a ${first ? "first provisioning, and a first report is not sent again" : "re-mount"}: ${String(err)}`,
+      { status: "failed" },
+    );
     return [];
   }
 }
@@ -1551,6 +1525,7 @@ function buildUserContext(snapshot: UserSnapshot, usersDir: string): UserContext
     today,
     username,
     templateVars: {
+      ...personaTemplateVars(snapshot.persona),
       uid: snapshot.uid,
       ownerName: snapshot.ownerName,
       username,
@@ -1560,4 +1535,11 @@ function buildUserContext(snapshot: UserSnapshot, usersDir: string): UserContext
     },
     userData: {},
   };
+}
+
+function personaTemplateVars(persona: UserSnapshot["persona"]): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(persona ?? {}).flatMap(([key, value]) =>
+      typeof value === "string" ? [[`persona.${key}`, value]] : []),
+  );
 }
