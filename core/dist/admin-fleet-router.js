@@ -18,6 +18,7 @@ import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/sha
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { builderReturnOperationId, firestoreBuilderTierReader, placementRetireOperationId, requestUserActivationLease, } from "./user-activation-lease.js";
+import { withActorEmails } from "./admin-journal-actor.js";
 import { AdminDryRunPlanned, adminDryRunBody, admitAdminDryRunMarker, isAdminDryRun, refuseUnansweredAdminDryRun, respondToAdminDryRun, } from "./admin-dry-run.js";
 import { addAdminComputerRoutes } from "./admin-vm-router.js";
 import { addAdminUserRoutes } from "./admin-user-router.js";
@@ -522,7 +523,13 @@ function buildOnboardingPlacementResponse(opts) {
         const heartbeat = effectiveHeartbeatDoc(gatewayId, glmDoc)?.data();
         const desiredStatus = projectDesiredStatus(glmDoc);
         const gatewayClass = normalizeGatewayClass(glmDoc);
-        const status = asStringOrNull(heartbeat?.status);
+        const status = glmDoc || heartbeat
+            ? observedGatewayStatus({
+                desiredStatus,
+                heartbeatStatus: heartbeat?.status,
+                heartbeatAgeMs: ageMsOrNull(toMillis(heartbeat?.lastHeartbeatAt), opts.now),
+            })
+            : null;
         const warnings = users
             .filter((user) => [
             user.policyTargetGatewayId,
@@ -612,6 +619,7 @@ async function readAdminOnboardingPlacementResponse(store, accounts) {
         accounts.list(),
     ]);
     return buildOnboardingPlacementResponse({
+        now: Date.now(),
         config,
         ...fleetGatewayDocs(snapshot),
         userDocs: userDocuments(snapshot.users, accountsByUid),
@@ -734,6 +742,15 @@ function requestedGatewayStatus(desiredStatus) {
     if (desiredStatus === "draining")
         return "draining";
     return "unknown";
+}
+function observedGatewayStatus(input) {
+    if (input.desiredStatus === "retired" || input.desiredStatus === "paused")
+        return input.desiredStatus;
+    if (input.heartbeatAgeMs !== null && input.heartbeatAgeMs > GATEWAY_UNREACHABLE_AFTER_MS)
+        return "unreachable";
+    return typeof input.heartbeatStatus === "string"
+        ? input.heartbeatStatus
+        : requestedGatewayStatus(input.desiredStatus);
 }
 function openclawVersionFromImageTag(imageTag) {
     if (typeof imageTag !== "string")
@@ -880,17 +897,18 @@ export function projectGatewaySummary(doc, glmDoc, now) {
     const gatewayId = typeof data.gatewayId === "string" ? data.gatewayId : doc.id;
     const desiredStatus = projectDesiredStatus(glmDoc);
     const reservation = projectGatewayReservation(glmDoc);
+    const heartbeatAgeMs = ageMsOrNull(toMillis(data.lastHeartbeatAt), now);
     return {
         gatewayId,
         gateway: deriveGatewayIdentity(gatewayId, glmDoc?.gateway),
-        status: typeof data.status === "string" ? data.status : requestedGatewayStatus(desiredStatus),
+        status: observedGatewayStatus({ desiredStatus, heartbeatStatus: data.status, heartbeatAgeMs }),
         desiredStatus,
         imageTag: projectImageTag(data, glmDoc),
         openclawVersion: projectOpenclawVersion(data, glmDoc),
         mountedUsers: Array.isArray(data.mountedCustomers) ? data.mountedCustomers : [],
         ownerId: asStringOrNull(glmDoc?.ownerUid),
         lastHeartbeatAt: toIso(data.lastHeartbeatAt),
-        heartbeatAgeMs: ageMsOrNull(toMillis(data.lastHeartbeatAt), now),
+        heartbeatAgeMs,
         startedAt: toIso(data.startedAt),
         uptimeMs: ageMsOrNull(toMillis(data.startedAt), now),
         lastError: projectLastError(data.lastError),
@@ -1169,13 +1187,9 @@ function rollupFleetStats(gateways) {
     let ready = 0, paused = 0, unreachable = 0, customersMounted = 0, fleetMonthlyUsd = 0, fleetOnDemandUsd = 0;
     const byTier = {};
     for (const g of gateways) {
-        // Derived reachability (replaces the deleted Cloud-Function "unreachable" writer):
-        // a gateway whose heartbeat has aged out is unreachable, whatever its last
-        // self-reported status said. See FLEET-RECONCILE-SPEC.
-        const stale = g.heartbeatAgeMs != null && g.heartbeatAgeMs > GATEWAY_UNREACHABLE_AFTER_MS;
-        if (g.desiredStatus === "paused")
+        if (g.status === "paused")
             paused++;
-        else if (stale)
+        else if (g.status === "unreachable")
             unreachable++;
         else if (g.status === "ready")
             ready++;
@@ -4332,6 +4346,16 @@ export function addAdminFleetRoutes(router, deps) {
                 res.status(409).json({ error: "cannot restart a retired gateway", gatewayId: id });
                 return;
             }
+            const runtime = resolveGatewayRuntime((await store.fleetRegistry.get(id))?.runtime);
+            if (runtime === "gce-vm") {
+                res.status(409).json({
+                    code: "gateway-restart-unsupported-runtime",
+                    error: `gateway restart works on a pod gateway only; ${id} runs on a VM, which has no restart path`,
+                    gatewayId: id,
+                    runtime,
+                });
+                return;
+            }
             const conflicting = await findConflictingGatewayOp(store, id);
             if (conflicting) {
                 res.status(409).json({
@@ -4894,7 +4918,7 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             const docs = await listOperationDocsForStatus(store, status, limit);
-            const operations = docs.map((doc) => shapeOperationsHistoryRecord(doc.id, doc.data()));
+            const operations = await withActorEmails(accounts, docs.map((doc) => shapeOperationsHistoryRecord(doc.id, doc.data())));
             res.json({ operations, generatedAt: new Date().toISOString() });
         }
         catch (e) {
@@ -4910,7 +4934,8 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             const [doc] = operationDocs([record]);
-            res.json({ operation: shapeOperationsHistoryRecord(doc.id, doc.data()) });
+            const [operation] = await withActorEmails(accounts, [shapeOperationsHistoryRecord(doc.id, doc.data())]);
+            res.json({ operation });
         }
         catch (e) {
             next(e);

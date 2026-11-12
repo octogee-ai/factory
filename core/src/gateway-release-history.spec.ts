@@ -71,4 +71,45 @@ describe("projectReleaseHistory", () => {
     });
     expect(history[0].rolledBackFrom).toBeNull();
   });
+
+  describe("for a build that carries a shared image and an isolated image", () => {
+    const REPOSITORY = "registry.example/platform";
+    const build: ReleaseDoc = {
+      ...release(1, { sourceRelease: null }),
+      payload: {
+        imageRepository: `${REPOSITORY}/octogee-gateway`,
+        imageTag: `ec9d092-oc2026.11.3@sha256:${"6".repeat(64)}`,
+        profileImages: {
+          builder: {
+            imageRepository: `${REPOSITORY}/octogee-gateway-builder`,
+            imageTag: `ec9d092-oc2026.11.3@sha256:${"4".repeat(64)}`,
+          },
+        },
+      },
+    };
+
+    it("shows an isolated gateway the image it runs from that build", () => {
+      const [entry] = projectReleaseHistory({
+        gateway: { liveRelease: 1, desiredRelease: 1, gatewayClass: "builder", imageProfile: "builder" },
+        releases: [build],
+      });
+
+      expect(entry).toMatchObject({
+        imageRepository: `${REPOSITORY}/octogee-gateway-builder`,
+        imageTag: `ec9d092-oc2026.11.3@sha256:${"4".repeat(64)}`,
+      });
+    });
+
+    it("shows a shared gateway the shared image", () => {
+      const [entry] = projectReleaseHistory({
+        gateway: { liveRelease: 1, desiredRelease: 1, gatewayClass: "shared", imageProfile: "standard" },
+        releases: [build],
+      });
+
+      expect(entry).toMatchObject({
+        imageRepository: `${REPOSITORY}/octogee-gateway`,
+        imageTag: `ec9d092-oc2026.11.3@sha256:${"6".repeat(64)}`,
+      });
+    });
+  });
 });

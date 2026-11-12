@@ -1703,7 +1703,7 @@ describe("fleet gateway projection", () => {
             status: "ready",
             mountedCustomers: ["alice"],
             version: "1234567",
-            lastHeartbeatAt: 1_000,
+            lastHeartbeatAt: Date.now(),
             startedAt: 500,
           },
           lastError: { message: null, at: null },

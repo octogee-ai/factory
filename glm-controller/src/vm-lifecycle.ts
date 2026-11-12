@@ -927,6 +927,7 @@ async function upgradeStoppedBoot(deps: VmLifecycleDeps, gatewayId: string, desc
     const ownerUid = nonEmptyString(description.metadata["octogee-owner-uid"]);
     if (!ownerUid) throw new Error("VM boot upgrade requires the recorded owner");
     const operationId = `boot-${gatewayId}-${instanceId}-${latest.id}`;
+    await replacementSource(deps, gatewayId, true);
     await deps.journalBootUpgrade({ gatewayId, ownerUid, instanceId, imageId: latest.id }, async (assertAuthority) => {
       await replaceStoppedVm(deps, gatewayId, operationId, assertAuthority, { boot: true, expectedImageId: latest.id });
     });

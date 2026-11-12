@@ -104,6 +104,7 @@ import {
   placementRetireOperationId,
   requestUserActivationLease,
 } from "./user-activation-lease.js";
+import { withActorEmails } from "./admin-journal-actor.js";
 import {
   AdminDryRunPlanned,
   adminDryRunBody,
@@ -933,6 +934,7 @@ function indexAssignmentsByUid(
 }
 
 function buildOnboardingPlacementResponse(opts: {
+  now: number;
   config: OnboardingRuntimeConfig;
   glmDocs: ReadonlyArray<FirestoreDocLike>;
   gatewayDocs: ReadonlyArray<FirestoreDocLike>;
@@ -1017,7 +1019,13 @@ function buildOnboardingPlacementResponse(opts: {
     const heartbeat = effectiveHeartbeatDoc(gatewayId, glmDoc)?.data();
     const desiredStatus = projectDesiredStatus(glmDoc);
     const gatewayClass = normalizeGatewayClass(glmDoc);
-    const status = asStringOrNull(heartbeat?.status);
+    const status = glmDoc || heartbeat
+      ? observedGatewayStatus({
+          desiredStatus,
+          heartbeatStatus: heartbeat?.status,
+          heartbeatAgeMs: ageMsOrNull(toMillis(heartbeat?.lastHeartbeatAt), opts.now),
+        })
+      : null;
     const warnings = users
       .filter((user) =>
         [
@@ -1117,6 +1125,7 @@ async function readAdminOnboardingPlacementResponse(
     accounts.list(),
   ]);
   return buildOnboardingPlacementResponse({
+    now: Date.now(),
     config,
     ...fleetGatewayDocs(snapshot),
     userDocs: userDocuments(snapshot.users, accountsByUid),
@@ -1276,6 +1285,18 @@ function requestedGatewayStatus(
   if (desiredStatus === "paused") return "paused";
   if (desiredStatus === "draining") return "draining";
   return "unknown";
+}
+
+function observedGatewayStatus(input: {
+  desiredStatus: ReturnType<typeof projectDesiredStatus>;
+  heartbeatStatus: unknown;
+  heartbeatAgeMs: number | null;
+}): string {
+  if (input.desiredStatus === "retired" || input.desiredStatus === "paused") return input.desiredStatus;
+  if (input.heartbeatAgeMs !== null && input.heartbeatAgeMs > GATEWAY_UNREACHABLE_AFTER_MS) return "unreachable";
+  return typeof input.heartbeatStatus === "string"
+    ? input.heartbeatStatus
+    : requestedGatewayStatus(input.desiredStatus);
 }
 
 function openclawVersionFromImageTag(imageTag: unknown): string | null {
@@ -1513,17 +1534,18 @@ export function projectGatewaySummary(
   const gatewayId = typeof data.gatewayId === "string" ? data.gatewayId : doc.id;
   const desiredStatus = projectDesiredStatus(glmDoc);
   const reservation = projectGatewayReservation(glmDoc);
+  const heartbeatAgeMs = ageMsOrNull(toMillis(data.lastHeartbeatAt), now);
   return {
     gatewayId,
     gateway: deriveGatewayIdentity(gatewayId, glmDoc?.gateway),
-    status: typeof data.status === "string" ? data.status : requestedGatewayStatus(desiredStatus),
+    status: observedGatewayStatus({ desiredStatus, heartbeatStatus: data.status, heartbeatAgeMs }),
     desiredStatus,
     imageTag: projectImageTag(data, glmDoc),
     openclawVersion: projectOpenclawVersion(data, glmDoc),
     mountedUsers: Array.isArray(data.mountedCustomers) ? data.mountedCustomers : [],
     ownerId: asStringOrNull(glmDoc?.ownerUid),
     lastHeartbeatAt: toIso(data.lastHeartbeatAt),
-    heartbeatAgeMs: ageMsOrNull(toMillis(data.lastHeartbeatAt), now),
+    heartbeatAgeMs,
     startedAt: toIso(data.startedAt),
     uptimeMs: ageMsOrNull(toMillis(data.startedAt), now),
     lastError: projectLastError(data.lastError),
@@ -1977,12 +1999,8 @@ function rollupFleetStats(
     onDemandCount: number;
   }> = {};
   for (const g of gateways) {
-    // Derived reachability (replaces the deleted Cloud-Function "unreachable" writer):
-    // a gateway whose heartbeat has aged out is unreachable, whatever its last
-    // self-reported status said. See FLEET-RECONCILE-SPEC.
-    const stale = g.heartbeatAgeMs != null && g.heartbeatAgeMs > GATEWAY_UNREACHABLE_AFTER_MS;
-    if (g.desiredStatus === "paused") paused++;
-    else if (stale) unreachable++;
+    if (g.status === "paused") paused++;
+    else if (g.status === "unreachable") unreachable++;
     else if (g.status === "ready") ready++;
     customersMounted += g.mountedUsers.length;
     fleetMonthlyUsd += g.sizing.monthlyCostUsd.compute;
@@ -5878,6 +5896,16 @@ router.post(
           res.status(409).json({ error: "cannot restart a retired gateway", gatewayId: id });
           return;
         }
+        const runtime = resolveGatewayRuntime((await store.fleetRegistry.get(id))?.runtime);
+        if (runtime === "gce-vm") {
+          res.status(409).json({
+            code: "gateway-restart-unsupported-runtime",
+            error: `gateway restart works on a pod gateway only; ${id} runs on a VM, which has no restart path`,
+            gatewayId: id,
+            runtime,
+          });
+          return;
+        }
 
         const conflicting = await findConflictingGatewayOp(store, id);
         if (conflicting) {
@@ -6486,9 +6514,9 @@ router.get(
           return;
         }
         const docs = await listOperationDocsForStatus(store, status, limit);
-        const operations = docs.map((doc) =>
+        const operations = await withActorEmails(accounts, docs.map((doc) =>
           shapeOperationsHistoryRecord(doc.id, doc.data()),
-        );
+        ));
         res.json({ operations, generatedAt: new Date().toISOString() });
       } catch (e) {
         next(e);
@@ -6507,7 +6535,8 @@ router.get(
           return;
         }
         const [doc] = operationDocs([record]);
-        res.json({ operation: shapeOperationsHistoryRecord(doc.id, doc.data()) });
+        const [operation] = await withActorEmails(accounts, [shapeOperationsHistoryRecord(doc.id, doc.data())]);
+        res.json({ operation });
       } catch (e) {
         next(e);
       }

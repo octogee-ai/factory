@@ -132,6 +132,7 @@ function harness(
   };
   const log = vi.fn();
   const creationSettled = vi.fn();
+  const journalBootUpgrade = vi.fn<VmGatewayRuntimeDeps["journalBootUpgrade"]>(async (_input, work) => work(async () => {}));
   const helmCalls: string[][] = [];
   const kubectlCalls: Array<{ args: string[]; stdin?: string }> = [];
   const runtime = createVmGatewayRuntime({
@@ -152,7 +153,7 @@ function harness(
     routesConfigMap: "octogee-vm-routes",
     ensureAuthSecret: vi.fn(async () => {}),
     readDesiredStatus: async (gatewayId) => gatewayId in desiredStatus ? desiredStatus[gatewayId] : "running",
-    journalBootUpgrade: async (_input, work) => work(async () => {}),
+    journalBootUpgrade,
     wait: async (ms) => { waits.push(ms); clock.now += ms; await extra.onWait?.(ms, waits.length); },
     disposableParking: extra.disposableParking,
     homeCheckpointTimeoutMs: extra.homeCheckpointTimeoutMs ?? 60_000,
@@ -161,7 +162,7 @@ function harness(
     now: () => clock.now, log,
   });
   const routesPublished = () => kubectlCalls.filter((c) => c.args[0] === "apply").map((c) => JSON.parse(JSON.parse(c.stdin!).data["routes.json"]) as Record<string, string>);
-  return { runtime, store, docs, writes, deletes, vm, log, creationSettled, helmCalls, kubectlCalls, routesPublished, clock, waits };
+  return { runtime, store, docs, writes, deletes, vm, log, creationSettled, journalBootUpgrade, helmCalls, kubectlCalls, routesPublished, clock, waits };
 }
 
 const upsertOpts = {
@@ -2297,6 +2298,34 @@ describe("stopped retained-home boot replacement", () => {
     expect(h.vm.deleteRetainingHome).toHaveBeenCalledWith(VM, ownedStopped.zone, "UidA", expect.objectContaining(home), "4242");
     expect(h.vm.create).toHaveBeenCalledWith(expect.objectContaining({ retainedHome: expect.objectContaining(home), image: expect.objectContaining(accepted) }));
     expect(h.vm.start).not.toHaveBeenCalled();
+  });
+  it("journals the boot upgrade it starts", async () => {
+    let deleted = false;
+    const h = harness(vmDoc(), {
+      describe: vi.fn(async () => deleted ? null : ownedStopped),
+      deleteRetainingHome: vi.fn(async () => { deleted = true; return true; }),
+      readBootImage: vi.fn(async () => CURRENT_IMAGE), readFamilyImage: vi.fn(async () => accepted), readImage: vi.fn(async () => accepted),
+    });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.journalBootUpgrade).toHaveBeenCalledTimes(1);
+    expect(h.journalBootUpgrade).toHaveBeenCalledWith({ gatewayId: "b-x", ownerUid: "UidA", instanceId: "4242", imageId: accepted.id }, expect.any(Function));
+  });
+  it.each([
+    ["never became ready on this boot", { ...receipt, ready: false, bundleVersion: "unavailable" }, /recovery reports not ready for bundle unavailable/],
+    ["never reported", undefined, /has no native recovery report from this VM yet/],
+  ])("wakes a stopped VM on its old boot without journaling an upgrade when its gateway %s", async (_name, recovery, reason) => {
+    const docs = vmDoc();
+    docs["glmGateways/b-x"].vmBootRecovery = recovery;
+    const h = harness(docs, {
+      describe: vi.fn(async () => ownedStopped),
+      readBootImage: vi.fn(async () => CURRENT_IMAGE), readFamilyImage: vi.fn(async () => accepted), readImage: vi.fn(async () => accepted),
+    });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.journalBootUpgrade).not.toHaveBeenCalled();
+    expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
+    expect(h.vm.start).toHaveBeenCalledWith(VM, ownedStopped.zone);
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: boot image upgrade skipped; retaining /));
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(reason));
   });
   it("resumes a suspended VM on an outdated boot instead of stopping and replacing it", async () => {
     const h = harness(vmDoc(), {

@@ -1,7 +1,15 @@
 import {
+  dualReadIsolatedProfileImage,
   type GatewayDoc,
   type ReleaseDoc,
+  type ReleasePayload,
 } from "@octogee/shared/types/gateway-releases";
+import {
+  resolveGatewayImageProfile,
+  type GatewayClass,
+  type GatewayImageProfile,
+  type GatewayProfile,
+} from "@octogee/shared/types/glm";
 
 export interface ReleaseHistoryEntry {
   release: number;
@@ -29,8 +37,25 @@ function rollbackSource(release: number, sourceRelease: number | null): number |
   return sourceRelease === release - 1 ? null : sourceRelease;
 }
 
+type ReleaseHistoryGateway = Pick<GatewayDoc, "liveRelease" | "desiredRelease"> & {
+  gatewayClass?: GatewayClass | null;
+  imageProfile?: GatewayImageProfile | null;
+  profile?: GatewayProfile | null;
+};
+
+function imageRunBy(gateway: ReleaseHistoryGateway, payload: ReleasePayload): { imageRepository: string; imageTag: string } {
+  const isolated = resolveGatewayImageProfile({
+    gatewayClass: gateway.gatewayClass ?? undefined,
+    imageProfile: gateway.imageProfile ?? undefined,
+    profile: gateway.profile ?? undefined,
+  }) !== "standard";
+  return isolated && payload.profileImages !== undefined
+    ? dualReadIsolatedProfileImage(payload.profileImages)
+    : { imageRepository: payload.imageRepository, imageTag: payload.imageTag };
+}
+
 export function projectReleaseHistory(input: {
-  gateway: Pick<GatewayDoc, "liveRelease" | "desiredRelease">;
+  gateway: ReleaseHistoryGateway;
   releases: ReleaseDoc[];
 }): ReleaseHistoryEntry[] {
   const { liveRelease, desiredRelease } = input.gateway;
@@ -38,8 +63,7 @@ export function projectReleaseHistory(input: {
     .sort((a, b) => b.release - a.release)
     .map((r) => ({
       release: r.release,
-      imageRepository: r.payload.imageRepository,
-      imageTag: r.payload.imageTag,
+      ...imageRunBy(input.gateway, r.payload),
       createdAt: typeof r.createdAt === "number" ? new Date(r.createdAt).toISOString() : null,
       createdBy: r.createdBy,
       note: r.note,

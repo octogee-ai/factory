@@ -154,6 +154,13 @@ const FLEET: Seed = {
   ...placedUser("uid-ada", "ada", "shared-a"),
 };
 
+const VM_RUNTIME: Seed = {
+  [`${GLM_GATEWAYS_COLLECTION}/iso-ada`]: {
+    docKind: "runtime", gatewayId: "iso-ada", release: 2, lifecycle: "serving", createdAt: 1, createdByOperationId: null,
+    helm: {}, runtime: "gce-vm", lastError: { message: null, at: null },
+  },
+};
+
 function sourceRecoveryFleet(): Seed {
   const seed: Seed = {
     "gateways/shared-0": gatewayRoot("shared-0", { desiredStatus: "draining", liveRelease: 1 }),
@@ -382,6 +389,30 @@ describe("a dry run of a changing request", () => {
     expect(h.snapshot()).toBe(before);
   });
 
+  it("says why a VM gateway cannot be restarted", async () => {
+    const h = harness({ ...FLEET, ...VM_RUNTIME });
+
+    const res = await send(h.app, { method: "post", path: "/gateways/iso-ada/restart" }, true).expect(409);
+
+    expect(res.body).toEqual({
+      code: "gateway-restart-unsupported-runtime",
+      error: "gateway restart works on a pod gateway only; iso-ada runs on a VM, which has no restart path",
+      gatewayId: "iso-ada",
+      runtime: "gce-vm",
+    });
+  });
+
+  it("still restarts an isolated gateway that runs as a pod", async () => {
+    const h = harness();
+
+    const dry = await send(h.app, { method: "post", path: "/gateways/iso-ada/restart" }, true);
+    const real = await send(h.app, { method: "post", path: "/gateways/iso-ada/restart" }, false);
+
+    expect(dry.status).toBe(200);
+    expect(real.status).toBe(202);
+    expect(real.body).toMatchObject({ gatewayId: "iso-ada", operationId: expect.any(String) });
+  });
+
   it("marks a forced request as forced", async () => {
     const h = harness();
 
@@ -402,6 +433,7 @@ describe("a dry run of a changing request", () => {
   it.each<[string, number, ChangingRequest, Seed]>([
     ["restart of an unknown gateway", 404, { method: "post", path: "/gateways/nowhere/restart" }, FLEET],
     ["restart of a retired gateway", 409, { method: "post", path: "/gateways/gone/restart" }, FLEET],
+    ["restart of a gateway that runs on a VM", 409, { method: "post", path: "/gateways/iso-ada/restart" }, { ...FLEET, ...VM_RUNTIME }],
     ["restart while an operation is in flight", 409, { method: "post", path: "/gateways/shared-b/restart" }, { ...FLEET, ...busyGateway }],
     ["deploy to an unknown gateway", 404, { method: "post", path: "/gateways/nowhere/deploy", body: { sourceSha: SOURCE_SHA } }, FLEET],
     ["deploy to a retired gateway", 409, { method: "post", path: "/gateways/gone/deploy", body: { sourceSha: SOURCE_SHA } }, FLEET],
