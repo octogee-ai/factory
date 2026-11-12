@@ -17,11 +17,11 @@ import { modelRefForCatalogEntry } from "@octogee/shared/types/agent-models";
 import {
   DEFAULT_USER_AGENT_FALLBACK_MODEL_REF,
   DEFAULT_USER_AGENT_MODEL_REF,
-  DEFAULT_FREE_TIER_MODEL_REF,
+  DEFAULT_HOUSE_MODEL_REF,
   DEFAULT_OPS_AGENT_MODEL_REF,
   parsePlatformConnectConfig,
   parsePlatformModelConfig,
-  resolveFreeTierModel,
+  resolveHouseModel,
   resolveOpsAgentModel,
   type PlatformModelConfig,
 } from "@octogee/shared/types/platform-config";
@@ -73,7 +73,7 @@ const platformCatalog = MODEL_CATALOG.map((entry) => ({
 }));
 
 function validCatalogRef(value: unknown): value is string {
-  return typeof value === "string" && resolveFreeTierModel(value) !== null;
+  return typeof value === "string" && resolveHouseModel(value) !== null;
 }
 
 function resolvedFallbackDial(value: unknown): string | null {
@@ -92,7 +92,7 @@ function resolvePlatformModelDials(data: PlatformModelConfig | undefined): {
 } {
   const freeTierModelRef = validCatalogRef(data?.freeTierModelRef)
     ? data.freeTierModelRef
-    : DEFAULT_FREE_TIER_MODEL_REF;
+    : DEFAULT_HOUSE_MODEL_REF;
   const opsAgentModelRef = data !== undefined && resolveOpsAgentModel(data.opsAgentModelRef)
     ? data.opsAgentModelRef
     : DEFAULT_OPS_AGENT_MODEL_REF;
@@ -168,7 +168,7 @@ export function createAdminRoutes(product: AdminProductHooks = {}): Router {
       }
       res.json({
         freeTierModelRef: dials.freeTierModelRef,
-        defaultFreeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
+        defaultFreeTierModelRef: DEFAULT_HOUSE_MODEL_REF,
         opsAgentModelRef: dials.opsAgentModelRef,
         defaultOpsAgentModelRef: DEFAULT_OPS_AGENT_MODEL_REF,
         builderAgentModelRef: dials.builderAgentModelRef,

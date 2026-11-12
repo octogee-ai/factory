@@ -271,7 +271,7 @@ describe("resolveScope — cross-package hazard edges", () => {
       ["gateway-edge/src/routes/git.ts"],
       // + the gateway-edge/src/ edge also pulls tests
       // (byok-provider-registry-parity.spec.ts imports
-      // gateway-edge/src/billing/provider-key-format.js directly).
+      // gateway-edge/src/model-credentials/provider-key-format.js directly).
       [
         "gateway-edge",
         "gateway-edge-emulator",

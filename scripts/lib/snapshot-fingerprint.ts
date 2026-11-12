@@ -128,7 +128,7 @@ export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot, now
     customerMmUserId: snapshot.customerMmUserId,
     systemConfig: snapshot.systemConfig ?? null,
     byotActive: snapshot.byotActive ?? false,
-    plan: entitlements.plan(snapshot.planInputs, now),
+    plan: entitlements.policy(snapshot.planInputs, now),
     contextFilePolicy: entitlements.contextFilePolicy(snapshot.planInputs, now),
     contextTemplateKey: snapshot.contextTemplateKey,
     // The operator's house model dial: a flip must re-ensure every mounted

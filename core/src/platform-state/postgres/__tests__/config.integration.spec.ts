@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  DEFAULT_FREE_TIER_MODEL_REF,
+  DEFAULT_HOUSE_MODEL_REF,
   DEFAULT_PLATFORM_CONNECT_CONFIG,
   parsePlatformModelConfig,
 } from "@octogee/shared/types/platform-config";
@@ -11,7 +11,7 @@ import { createHarness, dsn, recordingListener, type PlatformStateHarness, type 
 
 const NOW = 1_762_500_000_000;
 const WAIT = { timeout: 20_000, interval: 20 };
-const MODELS = parsePlatformModelConfig({ freeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF })!;
+const MODELS = parsePlatformModelConfig({ freeTierModelRef: DEFAULT_HOUSE_MODEL_REF })!;
 const HOBBY: GatewaySizingProfile = {
   isolation: "isolated",
   sizingTier: "s",

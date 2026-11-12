@@ -52,7 +52,7 @@ function migrationCutoverSeed(): Record<string, Record<string, unknown>> {
 function cutover(documents: Record<string, Record<string, unknown>>, now: number) {
   const deps: CutoverDeps = {
     store: createDocumentFixtureStore(documents),
-    readBuilderTier: async () => {
+    readSizingKey: async () => {
       throw new Error("a cutover without a V2 fence never reads the user tier");
     },
     now: () => new Date(now),

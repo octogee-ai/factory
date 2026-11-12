@@ -30,7 +30,7 @@ import {
   type AnthropicTokenUsage,
   type ModelBrokerUsageStore,
 } from "./lib/model-broker-usage.js";
-import type { ResolvedFreeTierModel } from "@octogee/shared/types/platform-config";
+import type { ResolvedHouseModel } from "@octogee/shared/types/platform-config";
 import {
   spendWindowGate,
   type DegradeOutcome,
@@ -71,7 +71,7 @@ export interface LlmBrokerAppDeps {
   providerUpstreamBaseUrls?: Partial<Record<ModelBrokerProvider, string | undefined>>;
   houseModel?: string;
   providerHouseModels?: Partial<Record<ModelBrokerProvider, string | undefined>>;
-  resolveFreeTierModel?: () => Promise<ResolvedFreeTierModel | null>;
+  resolveHouseModel?: () => Promise<ResolvedHouseModel | null>;
   fetchImpl?: typeof fetch;
   upstreamHeaderTimeoutMs?: number;
   now?: () => number;
@@ -1011,15 +1011,15 @@ async function effectiveHouseModel(args: {
   gate: GateDecisionAllowed;
   provider: ModelBrokerProvider;
   houseModels: Record<ModelBrokerProvider, string>;
-  resolveFreeTierModel: LlmBrokerAppDeps["resolveFreeTierModel"];
+  resolveHouseModel: LlmBrokerAppDeps["resolveHouseModel"];
   onError: (err: unknown) => void;
 }): Promise<string> {
   const houseModel = args.houseModels[args.provider];
-  if (!args.gate.degrade || !args.gate.houseModelDial || !args.resolveFreeTierModel) {
+  if (!args.gate.degrade || !args.gate.houseModelDial || !args.resolveHouseModel) {
     return houseModel;
   }
   try {
-    const dial = await args.resolveFreeTierModel();
+    const dial = await args.resolveHouseModel();
     return dial && dial.provider === args.provider ? dial.upstreamModelId : houseModel;
   } catch (err) {
     args.onError(err);
@@ -1038,7 +1038,7 @@ async function logAndForwardAllowed(args: {
   upstreamBaseUrl: string;
   vertex?: VertexBrokerConfig;
   houseModels: Record<ModelBrokerProvider, string>;
-  resolveFreeTierModel: LlmBrokerAppDeps["resolveFreeTierModel"];
+  resolveHouseModel: LlmBrokerAppDeps["resolveHouseModel"];
   requestModel: string | null;
   logGate: GateLogger;
   rail: ModelBrokerRail;
@@ -1055,7 +1055,7 @@ async function logAndForwardAllowed(args: {
     gate,
     provider: record.provider,
     houseModels: args.houseModels,
-    resolveFreeTierModel: args.resolveFreeTierModel,
+    resolveHouseModel: args.resolveHouseModel,
     onError: args.onMeteringError,
   });
   if (args.req.method.toUpperCase() === "POST") {
@@ -1623,7 +1623,7 @@ function createBrokerRequestHandler(options: BrokerRequestHandlerOptions) {
         upstreamBaseUrl: upstreamBaseUrls[record.provider],
         vertex: deps.vertex,
         houseModels,
-        resolveFreeTierModel: deps.resolveFreeTierModel,
+        resolveHouseModel: deps.resolveHouseModel,
         requestModel,
         logGate,
         rail: context.rail,

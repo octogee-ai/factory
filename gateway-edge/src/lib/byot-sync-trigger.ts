@@ -5,9 +5,9 @@ import { platformStateStore } from "./platform-state.js";
 import { isSafeGatewayId } from "./byosub.js";
 import { createModelCredentialSyncAuthHeaders } from "./byot-sync-internal-auth.js";
 import {
-  DEFAULT_FREE_TIER_MODEL_REF,
+  DEFAULT_HOUSE_MODEL_REF,
   userAgentModelDefaultFromDoc,
-  resolveFreeTierModel,
+  resolveHouseModel,
   type UserAgentModelDefault,
 } from "@octogee/shared/types/platform-config";
 
@@ -80,9 +80,9 @@ async function platformModelDialsForSync(logWarn: (msg: string) => void): Promis
     const models = (await platformStateStore.config.platform.get("models"))?.value;
     const configured = models?.freeTierModelRef;
     return {
-      freeTierModelRef: configured !== undefined && resolveFreeTierModel(configured)
+      freeTierModelRef: configured !== undefined && resolveHouseModel(configured)
         ? configured
-        : DEFAULT_FREE_TIER_MODEL_REF,
+        : DEFAULT_HOUSE_MODEL_REF,
       builderAgentDefault: userAgentModelDefaultFromDoc(models),
     };
   } catch (err) {
@@ -92,7 +92,7 @@ async function platformModelDialsForSync(logWarn: (msg: string) => void): Promis
       }`,
     );
     return {
-      freeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
+      freeTierModelRef: DEFAULT_HOUSE_MODEL_REF,
       builderAgentDefault: userAgentModelDefaultFromDoc(undefined),
     };
   }

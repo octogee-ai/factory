@@ -10,8 +10,8 @@ import { connectorReviewerHasWorkspaceAccess } from "../lib/connector-reviewer-a
 import { isProjectRecipeId } from "@octogee/shared/types/project";
 
 import { db as defaultDb } from "../lib/db.js";
-import { platformStateStore, readBuilderTier } from "../lib/platform-state.js";
-import type { BuilderTierReader } from "@octogee/core/user-activation-lease";
+import { platformStateStore, readSizingKey } from "../lib/platform-state.js";
+import type { SizingKeyReader } from "@octogee/core/user-activation-lease";
 import type { PlatformStateStore } from "@octogee/core/platform-state";
 import { requireAuth } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
@@ -25,7 +25,7 @@ const APPROVAL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f
 interface Deps {
   db: Firestore;
   store: PlatformStateStore;
-  readBuilderTier: BuilderTierReader;
+  readSizingKey: SizingKeyReader;
   now: () => number;
   nativeRpc: ConnectorApprovalRpc;
 }
@@ -695,7 +695,7 @@ export function createProductivityApprovalRoutes(options: Partial<Deps> = {}): R
   const deps: Deps = {
     db: options.db ?? defaultDb,
     store,
-    readBuilderTier: options.readBuilderTier ?? readBuilderTier,
+    readSizingKey: options.readSizingKey ?? readSizingKey,
     now: options.now ?? Date.now,
     nativeRpc: options.nativeRpc ?? connectorApprovalRpc(store),
   };

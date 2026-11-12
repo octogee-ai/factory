@@ -34,7 +34,7 @@ import type {
 } from "../../shared/types/fleet-broker.js";
 import {
   DEFAULT_USER_AGENT_MODEL_REF,
-  DEFAULT_FREE_TIER_MODEL_REF,
+  DEFAULT_HOUSE_MODEL_REF,
   parseUserAgentModelDefault,
   type UserAgentModelDefault,
 } from "../../shared/types/platform-config.js";
@@ -1054,7 +1054,7 @@ function mountSafeModelRef(snapshot: UserSnapshot): string {
   const selected = initialDefaultAgentModelSelection(snapshot)?.primary;
   if (selected && catalogEntryForModelRef(selected)) return selected;
   return parseUserAgentModelDefault(snapshot.builderAgentDefault)?.primary
-    ?? DEFAULT_FREE_TIER_MODEL_REF;
+    ?? DEFAULT_HOUSE_MODEL_REF;
 }
 
 function buildUserProjectAgents(

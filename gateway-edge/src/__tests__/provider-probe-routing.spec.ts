@@ -13,7 +13,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-import { probeProviderKey } from "../billing/provider-probe.js";
+import { probeProviderKey } from "../model-credentials/provider-probe.js";
 
 function jsonResponse(status = 200, body: any = {}) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });

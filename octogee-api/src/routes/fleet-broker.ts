@@ -76,9 +76,9 @@ import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { projectAgentConfigured, projectRepoSourceFromDoc } from "@octogee/shared/types/project";
 import {
   createCachedUserAgentDefaultResolver,
-  createCachedFreeTierModelResolver,
+  createCachedHouseModelResolver,
   type UserAgentDefaultResolver,
-  type FreeTierModelResolver,
+  type HouseModelResolver,
 } from "../lib/platform-model-config.js";
 import type {
   FleetBrokerAgentAnchor,
@@ -1725,7 +1725,7 @@ type FleetBrokerRouteOptions = { db: Firestore; store: PlatformStateStore } & Fl
 type ResolvedFleetBrokerRouteDeps = {
   db: Firestore;
   store: PlatformStateStore;
-  resolveHouseModel: FreeTierModelResolver;
+  resolveHouseModel: HouseModelResolver;
   resolveUserAgentDefault: UserAgentDefaultResolver;
   provisionMattermost: NonNullable<FleetBrokerRouteDeps["provisionMattermost"]>;
   markProvisioningComplete: NonNullable<FleetBrokerRouteDeps["markProvisioningComplete"]>;
@@ -1810,7 +1810,7 @@ function resolveFleetBrokerRouteDeps(
   return {
     db: opts.db,
     store: opts.store,
-    resolveHouseModel: createCachedFreeTierModelResolver({
+    resolveHouseModel: createCachedHouseModelResolver({
       platformConfig: opts.store.config.platform,
       onError: (err) => logger.error("fleet-broker house model dial resolution failed", { err }),
     }),

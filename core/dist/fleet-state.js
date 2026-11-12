@@ -4,7 +4,7 @@ import { hasFreshReadyKubernetesObservation, isGatewayRuntimeDoc, projectGateway
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { readWorkspaceMigrationMarker } from "@octogee/shared/types/workspace-migration";
 import { userMigrationV2GatewayRootFenceEqual, userMigrationV2GatewayRootFenceMatches, } from "./user-migration-v2.js";
-import { builderActivateOperationId, withCurrentBuilderTier, } from "./user-activation-lease.js";
+import { builderActivateOperationId, withCurrentSizingKey, } from "./user-activation-lease.js";
 import { gatewayAuthorizationFromRootDocument } from "./gateway-live-release.js";
 import { MalformedRecordError } from "./platform-state/index.js";
 const MIGRATE_USER_OPERATION_KIND = "migrate-customer";
@@ -648,7 +648,7 @@ export async function commitCutoverAtomic(deps, params) {
     const now = nowMs(deps);
     if (!params.userMigrationV2Fence)
         return commitCutoverInStore(deps, params, now, null);
-    return withCurrentBuilderTier({ store: deps.store, readBuilderTier: deps.readBuilderTier, uid: params.uid, now }, (current) => commitCutoverInStore(deps, params, now, current));
+    return withCurrentSizingKey({ store: deps.store, readSizingKey: deps.readSizingKey, uid: params.uid, now }, (current) => commitCutoverInStore(deps, params, now, current));
 }
 async function commitCutoverInStore(deps, params, now, current) {
     await deps.store.transaction({ label: "fleet-state.commitCutoverAtomic" }, async (tx) => {
@@ -660,7 +660,7 @@ async function commitCutoverInStore(deps, params, now, current) {
         assertTargetAcceptsCutover(targetRoot, params.toGatewayId);
         if (params.userMigrationV2Fence) {
             const alreadyCommitted = await assertUserMigrationV2FenceCurrent({
-                tx, params, user, targetRoot, prior, tier: current?.tier ?? null,
+                tx, params, user, targetRoot, prior, sizingKey: current?.sizingKey ?? null,
             });
             if (alreadyCommitted)
                 return;
@@ -719,7 +719,7 @@ function assertTargetAcceptsCutover(targetRoot, gatewayId) {
     }
 }
 async function assertUserMigrationV2FenceCurrent(input) {
-    const { tx, params, user, targetRoot, prior, tier } = input;
+    const { tx, params, user, targetRoot, prior, sizingKey } = input;
     const fence = params.userMigrationV2Fence;
     assertUserMigrationV2ParametersExact(params, fence);
     const [stored, targetAssignment, sourceRoot] = await Promise.all([
@@ -736,7 +736,7 @@ async function assertUserMigrationV2FenceCurrent(input) {
     });
     if (userMigrationAlreadyCommitted(prior, targetAssignment, fence))
         return true;
-    assertUserActivationCutoverAuthorized({ operation, user, targetRoot, fence, tier });
+    assertUserActivationCutoverAuthorized({ operation, user, targetRoot, fence, sizingKey });
     assertUserMigrationSourceAssignmentExact(prior, fence);
     return false;
 }
@@ -749,7 +749,7 @@ function assertUserActivationCutoverAuthorized(input) {
     const lease = recordOrEmpty(input.user?.activationLease);
     const authorized = [
         interactiveAccess(input.user),
-        input.tier !== null,
+        input.sizingKey !== null,
         lease.status === "activating",
         lease.targetGatewayId === input.fence.targetGatewayId,
         typeof lease.leaseId === "string" && lease.leaseId.length > 0,

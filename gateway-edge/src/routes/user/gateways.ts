@@ -1,11 +1,11 @@
 import { Router, Request, Response, NextFunction } from "express";
 import rateLimit from "express-rate-limit";
 import { requireAuth } from "../../middleware/auth.js";
-import { platformStateStore, readBuilderTier } from "../../lib/platform-state.js";
+import { platformStateStore, readSizingKey } from "../../lib/platform-state.js";
 import {
-  withCurrentBuilderTier,
-  type BuilderTierReader,
-  type CurrentBuilderTier,
+  withCurrentSizingKey,
+  type SizingKeyReader,
+  type CurrentSizingKey,
 } from "@octogee/core/user-activation-lease";
 import type {
   PlatformUserRecord,
@@ -129,7 +129,7 @@ export interface GatewayWorkspaceScope {
 
 type DurableGatewayAuthorization = Extract<GatewayAuthorization, { kind: "durable" }>;
 
-export interface GatewayOwnerTier extends CurrentBuilderTier {
+export interface GatewayOwnerSizingKey extends CurrentSizingKey {
   readonly uid: string;
 }
 
@@ -141,26 +141,26 @@ export function perUserOwnerUid(authorization: DurableGatewayAuthorization | nul
   return authorization && perUserControlIdentity(authorization.config) ? authorization.config.ownerUid : null;
 }
 
-export async function withGatewayOwnerTier<T>(
-  input: { store: PlatformStateStore; readBuilderTier: BuilderTierReader; ownerUid: string | null; now: number },
-  run: (ownerTier: GatewayOwnerTier | null) => Promise<T>,
+export async function withGatewayOwnerSizingKey<T>(
+  input: { store: PlatformStateStore; readSizingKey: SizingKeyReader; ownerUid: string | null; now: number },
+  run: (ownerSizingKey: GatewayOwnerSizingKey | null) => Promise<T>,
 ): Promise<T> {
   const uid = input.ownerUid;
   if (!uid) return run(null);
-  return withCurrentBuilderTier(
-    { store: input.store, readBuilderTier: input.readBuilderTier, uid, now: input.now },
+  return withCurrentSizingKey(
+    { store: input.store, readSizingKey: input.readSizingKey, uid, now: input.now },
     (current) => run({ ...current, uid }),
   );
 }
 
 export function ownerWorkspacePermissionsEnabled(
   config: DurableGatewayAuthorization["config"],
-  ownerTier: GatewayOwnerTier | null,
+  ownerSizingKey: GatewayOwnerSizingKey | null,
   owner: Stored<PlatformUserRecord> | null,
 ): boolean {
-  if (!perUserControlIdentity(config) || ownerTier === null || ownerTier.uid !== owner?.uid) return false;
-  ownerTier.assertCurrent(owner);
-  return ownerTier.tier !== null;
+  if (!perUserControlIdentity(config) || ownerSizingKey === null || ownerSizingKey.uid !== owner?.uid) return false;
+  ownerSizingKey.assertCurrent(owner);
+  return ownerSizingKey.sizingKey !== null;
 }
 
 export function userAssignedTo(
@@ -239,7 +239,7 @@ export async function principalAccess(
   scope: GatewayWorkspaceScope,
   uid: string,
   state: PlatformStateRepositories,
-  ownerTier: GatewayOwnerTier | null,
+  ownerSizingKey: GatewayOwnerSizingKey | null,
 ): Promise<GatewayPrincipalAccess> {
   const { gatewayId, workspaceSlug, ownerUid } = scope;
   if (ownerUid === uid) return resolveGatewayPrincipalAccess({ gateway: scope, uid, membership: null });
@@ -253,7 +253,7 @@ export async function principalAccess(
   return resolveGatewayPrincipalAccess({
     gateway: { gatewayId, ownerUid, workspaceSlug,
       perUserIdentity: workspace?.ownerUid === ownerUid && authorization !== null &&
-        ownerWorkspacePermissionsEnabled(authorization.config, ownerTier, owner),
+        ownerWorkspacePermissionsEnabled(authorization.config, ownerSizingKey, owner),
     },
     uid,
     membership,
@@ -303,9 +303,9 @@ async function isolatedGatewayEntry(
   if (!authorization) return null;
   const scope = await workspaceScopeFor(authorization, candidate.workspaceSlug, platformStateStore);
   if (!scope) return null;
-  const access = await withGatewayOwnerTier(
-    { store: platformStateStore, readBuilderTier, ownerUid: perUserOwnerUid(authorization), now: Date.now() },
-    (ownerTier) => principalAccess(scope, uid, platformStateStore, ownerTier),
+  const access = await withGatewayOwnerSizingKey(
+    { store: platformStateStore, readSizingKey, ownerUid: perUserOwnerUid(authorization), now: Date.now() },
+    (ownerSizingKey) => principalAccess(scope, uid, platformStateStore, ownerSizingKey),
   );
   if (access.kind === "denied") return null;
   const [artifact, runtime, owner] = await Promise.all([
@@ -458,14 +458,14 @@ async function mintOpenClawTicket(
   gatewayId: string,
   workspaceSlug: string,
   uid: string,
-  ownerTier: GatewayOwnerTier | null,
+  ownerSizingKey: GatewayOwnerSizingKey | null,
 ): Promise<TicketResult> {
   return platformStateStore.transaction({ label: "builder-gateways.openclaw-ticket" }, async (tx) => {
     const serving = await readGatewayAuthorizationInStore(tx, gatewayId);
     if (!serving) return { kind: NOT_READY };
     const scope = await workspaceScopeFor(serving, workspaceSlug, tx, true);
     if (!scope) return { kind: NOT_FOUND };
-    const principal = await principalAccess(scope, uid, tx, ownerTier);
+    const principal = await principalAccess(scope, uid, tx, ownerSizingKey);
     if (principal.kind === "denied") {
       await recordAccessDenial(tx, scope, uid, principal);
       return { kind: NOT_FOUND };
@@ -535,14 +535,14 @@ async function scopedOpenClawTicket(
   req: Request,
   authorization: DurableGatewayAuthorization,
   workspaceSlug: string,
-  ownerTier: GatewayOwnerTier | null,
+  ownerSizingKey: GatewayOwnerSizingKey | null,
   featurePolicy: FeaturePolicy | undefined,
 ): Promise<TicketResponse> {
   const uid = req.uid!;
   const { gatewayId } = authorization.gateway;
   const scope = await workspaceScopeFor(authorization, workspaceSlug, platformStateStore, true);
   if (!scope) return TICKET_NOT_FOUND;
-  const principal = await principalAccess(scope, uid, platformStateStore, ownerTier);
+  const principal = await principalAccess(scope, uid, platformStateStore, ownerSizingKey);
   const access = controlUiAccess(authorization, principal);
   if (access === NOT_FOUND) {
     await recordAccessDenial(platformStateStore, scope, uid, principal);
@@ -551,7 +551,7 @@ async function scopedOpenClawTicket(
   if (access === CAPABILITY_DISABLED) return TICKET_CAPABILITY_DISABLED;
   const refusal = await openClawReleaseRefusal(req, authorization, scope, featurePolicy);
   if (refusal) return refusal;
-  const result = await mintOpenClawTicket(gatewayId, scope.workspaceSlug, uid, ownerTier);
+  const result = await mintOpenClawTicket(gatewayId, scope.workspaceSlug, uid, ownerSizingKey);
   if (result.kind === NOT_FOUND) return TICKET_NOT_FOUND;
   if (result.kind === CAPABILITY_DISABLED) return TICKET_CAPABILITY_DISABLED;
   if (result.kind === NOT_READY) return { status: 409, body: { error: "gateway-not-ready", retryable: true } };
@@ -574,9 +574,9 @@ async function openClawTicketResponse(
   if (!authorization) return TICKET_NOT_FOUND;
   const workspaceSlug = requestedWorkspaceSlug(req, authorization);
   if (!workspaceSlug) return TICKET_NOT_FOUND;
-  return withGatewayOwnerTier(
-    { store: platformStateStore, readBuilderTier, ownerUid: perUserOwnerUid(authorization), now: Date.now() },
-    (ownerTier) => scopedOpenClawTicket(req, authorization, workspaceSlug, ownerTier, featurePolicy),
+  return withGatewayOwnerSizingKey(
+    { store: platformStateStore, readSizingKey, ownerUid: perUserOwnerUid(authorization), now: Date.now() },
+    (ownerSizingKey) => scopedOpenClawTicket(req, authorization, workspaceSlug, ownerSizingKey, featurePolicy),
   );
 }
 

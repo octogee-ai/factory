@@ -1,17 +1,17 @@
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
-import type { BuilderTierReader } from "@octogee/core/user-activation-lease";
+import type { SizingKeyReader } from "@octogee/core/user-activation-lease";
 import type { PlatformUserRecord, PlatformStateStore } from "@octogee/core/platform-state";
 import {
   perUserOwnerUid,
   principalAccess,
-  withGatewayOwnerTier,
+  withGatewayOwnerSizingKey,
   workspaceScopeFor,
 } from "../routes/user/gateways.js";
 
 export interface ConnectorReviewerAccessDeps {
   store: PlatformStateStore;
-  readBuilderTier: BuilderTierReader;
+  readSizingKey: SizingKeyReader;
   now: () => number;
 }
 
@@ -31,12 +31,12 @@ export async function connectorReviewerHasWorkspaceAccess(
   if (uid === ownerUid) return true;
   const auth = await readGatewayAuthorizationInStore(deps.store, gatewayId);
   if (!auth) return false;
-  return withGatewayOwnerTier(
-    { store: deps.store, readBuilderTier: deps.readBuilderTier, ownerUid: perUserOwnerUid(auth), now: deps.now() },
-    async (ownerTier) => {
+  return withGatewayOwnerSizingKey(
+    { store: deps.store, readSizingKey: deps.readSizingKey, ownerUid: perUserOwnerUid(auth), now: deps.now() },
+    async (ownerSizingKey) => {
       const scope = await workspaceScopeFor(auth, auth.config.builderSlug, deps.store, true);
       if (!scope || scope.ownerUid !== ownerUid || data.agentId !== `octogee-${scope.workspaceSlug}-coach`) return false;
-      return (await principalAccess(scope, uid, deps.store, ownerTier)).kind === "member";
+      return (await principalAccess(scope, uid, deps.store, ownerSizingKey)).kind === "member";
     },
   );
 }

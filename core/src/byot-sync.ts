@@ -8,7 +8,7 @@ import {
   OPENROUTER_PLATFORM_PROVIDER_ID,
   type AgentModelSelections,
 } from "@octogee/shared/types/agent-models";
-import { DEFAULT_FREE_TIER_MODEL_REF } from "@octogee/shared/types/platform-config";
+import { DEFAULT_HOUSE_MODEL_REF } from "@octogee/shared/types/platform-config";
 import {
   buildModelCredentialConfigForProvider,
   claudeCliRuntimeConfig,
@@ -168,7 +168,7 @@ export const ISOLATED_CODEX_APP_SERVER: CodexAppServerPatch = {
 };
 
 // The always-available platform house model: the operator's house model dial
-// (snapshot freeTierModelRef), compiled default DEFAULT_FREE_TIER_MODEL_REF.
+// (snapshot freeTierModelRef), compiled default DEFAULT_HOUSE_MODEL_REF.
 // A failed/exhausted BYOK provider degrades here rather than leaving the
 // agent credential-less, and house-only plans pin the agent here so config,
 // status, and broker routing agree. Refs are revalidated against the catalog
@@ -176,7 +176,7 @@ export const ISOLATED_CODEX_APP_SERVER: CodexAppServerPatch = {
 function houseModelRefFrom(ref: unknown): string {
   return typeof ref === "string" && catalogEntryForModelRef(ref)
     ? ref
-    : DEFAULT_FREE_TIER_MODEL_REF;
+    : DEFAULT_HOUSE_MODEL_REF;
 }
 
 // A platform-provider ref (openrouter/openai) may sit outside the boot
@@ -429,8 +429,8 @@ function houseModelDefaultAgentModelInput(
   slug: string,
   userData: Parameters<typeof deriveDesiredByotState>[0],
 ): HouseModelDefaultAgentModelInput | null {
-  const plan = userEntitlements().plan(userData.planInputs);
-  return plan.modelAccess === "house_only"
+  const policy = userEntitlements().policy(userData.planInputs);
+  return policy.modelAccess === "house_only"
     ? { slug, model: houseModelRefFrom(userData.freeTierModelRef), source: "house-model" }
     : null;
 }

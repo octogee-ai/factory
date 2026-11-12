@@ -21,9 +21,9 @@ import {
 } from "./user-migration-v2.js";
 import {
   builderActivateOperationId,
-  withCurrentBuilderTier,
-  type BuilderTierReader,
-  type CurrentBuilderTier,
+  withCurrentSizingKey,
+  type SizingKeyReader,
+  type CurrentSizingKey,
 } from "./user-activation-lease.js";
 import { gatewayAuthorizationFromRootDocument } from "./gateway-live-release.js";
 import { MalformedRecordError } from "./platform-state/index.js";
@@ -54,7 +54,7 @@ export interface FleetStateDeps {
 }
 
 export interface CutoverDeps extends FleetStateDeps {
-  readBuilderTier: BuilderTierReader;
+  readSizingKey: SizingKeyReader;
 }
 
 function nowMs(deps: Pick<FleetStateDeps, "now">): number {
@@ -838,8 +838,8 @@ export async function commitCutoverAtomic(
 ): Promise<void> {
   const now = nowMs(deps);
   if (!params.userMigrationV2Fence) return commitCutoverInStore(deps, params, now, null);
-  return withCurrentBuilderTier(
-    { store: deps.store, readBuilderTier: deps.readBuilderTier, uid: params.uid, now },
+  return withCurrentSizingKey(
+    { store: deps.store, readSizingKey: deps.readSizingKey, uid: params.uid, now },
     (current) => commitCutoverInStore(deps, params, now, current),
   );
 }
@@ -848,7 +848,7 @@ async function commitCutoverInStore(
   deps: CutoverDeps,
   params: CutoverCommitParams,
   now: number,
-  current: CurrentBuilderTier | null,
+  current: CurrentSizingKey | null,
 ): Promise<void> {
   await deps.store.transaction({ label: "fleet-state.commitCutoverAtomic" }, async (tx) => {
     const user = await tx.users.records.get(params.uid);
@@ -859,7 +859,7 @@ async function commitCutoverInStore(
     assertTargetAcceptsCutover(targetRoot, params.toGatewayId);
     if (params.userMigrationV2Fence) {
       const alreadyCommitted = await assertUserMigrationV2FenceCurrent({
-        tx, params, user, targetRoot, prior, tier: current?.tier ?? null,
+        tx, params, user, targetRoot, prior, sizingKey: current?.sizingKey ?? null,
       });
       if (alreadyCommitted) return;
     }
@@ -950,13 +950,13 @@ interface UserMigrationV2FenceValidationInput {
   user: User | null;
   targetRoot: Stored<GatewayRoot> | null;
   prior: PriorAssignment;
-  tier: string | null;
+  sizingKey: string | null;
 }
 
 async function assertUserMigrationV2FenceCurrent(
   input: UserMigrationV2FenceValidationInput,
 ): Promise<boolean> {
-  const { tx, params, user, targetRoot, prior, tier } = input;
+  const { tx, params, user, targetRoot, prior, sizingKey } = input;
   const fence = params.userMigrationV2Fence!;
   assertUserMigrationV2ParametersExact(params, fence);
   const [stored, targetAssignment, sourceRoot] = await Promise.all([
@@ -972,7 +972,7 @@ async function assertUserMigrationV2FenceCurrent(
     sourceRoot: withoutRevision(sourceRoot),
   });
   if (userMigrationAlreadyCommitted(prior, targetAssignment, fence)) return true;
-  assertUserActivationCutoverAuthorized({ operation, user, targetRoot, fence, tier });
+  assertUserActivationCutoverAuthorized({ operation, user, targetRoot, fence, sizingKey });
   assertUserMigrationSourceAssignmentExact(prior, fence);
   return false;
 }
@@ -982,7 +982,7 @@ function assertUserActivationCutoverAuthorized(input: {
   user: User | null;
   targetRoot: Stored<GatewayRoot> | null;
   fence: UserMigrationV2Fence;
-  tier: string | null;
+  sizingKey: string | null;
 }): void {
   const operationInput = recordOrEmpty(input.operation?.input);
   const allocation = recordOrEmpty(input.targetRoot?.allocation);
@@ -991,7 +991,7 @@ function assertUserActivationCutoverAuthorized(input: {
   const lease = recordOrEmpty(input.user?.activationLease);
   const authorized = [
     interactiveAccess(input.user),
-    input.tier !== null,
+    input.sizingKey !== null,
     lease.status === "activating",
     lease.targetGatewayId === input.fence.targetGatewayId,
     typeof lease.leaseId === "string" && lease.leaseId.length > 0,

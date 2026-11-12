@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { validateAnthropicKey } from "../billing/anthropic-key-format.js";
+import { validateAnthropicKey } from "../model-credentials/anthropic-key-format.js";
 
 describe("validateAnthropicKey", () => {
   test("accepts a realistic Anthropic key shape", () => {

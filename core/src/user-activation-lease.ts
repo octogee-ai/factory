@@ -19,52 +19,52 @@ export type UserActivationLeaseResult = {
   body: Record<string, unknown>;
 };
 
-export type BuilderTierReader = (uid: string, now: number) => Promise<string | null>;
+export type SizingKeyReader = (uid: string, now: number) => Promise<string | null>;
 
-export function firestoreBuilderTierReader(db: Pick<Firestore, "doc">): BuilderTierReader {
+export function firestoreSizingKeyReader(db: Pick<Firestore, "doc">): SizingKeyReader {
   return async (uid, now) => {
     const snapshot = await db.doc(`users/${uid}`).get();
     return snapshot.exists ? userEntitlements().sizingKey(snapshot.data() ?? {}, new Date(now)) : null;
   };
 }
 
-const BUILDER_TIER_READ_ATTEMPTS = 3;
+const SIZING_KEY_READ_ATTEMPTS = 3;
 
-export class BuilderTierChangedError extends Error {
+export class SizingKeyChangedError extends Error {
   constructor(readonly uid: string) {
-    super(`User ${uid} changed while its tier was read`);
-    this.name = "BuilderTierChangedError";
+    super(`User ${uid} changed while its sizing key was read`);
+    this.name = "SizingKeyChangedError";
   }
 }
 
-export interface CurrentBuilderTier {
-  readonly tier: string | null;
+export interface CurrentSizingKey {
+  readonly sizingKey: string | null;
   readonly profile: GatewaySizingProfile | null;
   readonly assertCurrent: (user: Stored<PlatformUserRecord> | null) => void;
 }
 
-export async function withCurrentBuilderTier<T>(
-  input: { store: PlatformStateStore; readBuilderTier: BuilderTierReader; uid: string; now: number },
-  run: (current: CurrentBuilderTier) => Promise<T>,
+export async function withCurrentSizingKey<T>(
+  input: { store: PlatformStateStore; readSizingKey: SizingKeyReader; uid: string; now: number },
+  run: (current: CurrentSizingKey) => Promise<T>,
 ): Promise<T> {
   for (let attempt = 1; ; attempt += 1) {
     const revision = (await input.store.users.records.get(input.uid))?.revision ?? null;
-    const tier = await input.readBuilderTier(input.uid, input.now);
-    const profile = tier === null ? null : await input.store.config.orchestrator.getSizingProfile(tier);
+    const sizingKey = await input.readSizingKey(input.uid, input.now);
+    const profile = sizingKey === null ? null : await input.store.config.orchestrator.getSizingProfile(sizingKey);
     const assertCurrent = (user: Stored<PlatformUserRecord> | null): void => {
-      if ((user?.revision ?? null) !== revision) throw new BuilderTierChangedError(input.uid);
+      if ((user?.revision ?? null) !== revision) throw new SizingKeyChangedError(input.uid);
     };
     try {
-      return await run({ tier, profile, assertCurrent });
+      return await run({ sizingKey, profile, assertCurrent });
     } catch (error) {
-      if (!(error instanceof BuilderTierChangedError) || attempt === BUILDER_TIER_READ_ATTEMPTS) throw error;
+      if (!(error instanceof SizingKeyChangedError) || attempt === SIZING_KEY_READ_ATTEMPTS) throw error;
     }
   }
 }
 
 export interface IsolatedRuntimeDemandRequest {
   store: PlatformStateStore;
-  readBuilderTier: BuilderTierReader;
+  readSizingKey: SizingKeyReader;
   uid: string;
   reportingGatewayId?: string;
   assignmentEpoch?: number;
@@ -182,14 +182,14 @@ function parkedDuplicateBody(
 export type ActivationDemandEligibility =
   | { result: UserActivationLeaseResult }
   | {
-      entitlementTier: string;
+      sizingKey: string;
       sizingTier: string;
       slug: string;
     };
 
 export function activationDemandEligibility(
   user: PlatformUserRecord,
-  entitlementTier: string | null,
+  sizingKey: string | null,
   profile: GatewaySizingProfile | null,
 ): ActivationDemandEligibility {
   if (!accountAllowsInteractiveAccess({ accountLifecycle: user.accountLifecycle ?? undefined })) {
@@ -203,7 +203,7 @@ export function activationDemandEligibility(
       },
     };
   }
-  if (!entitlementTier) {
+  if (!sizingKey) {
     return {
       result: {
         statusCode: 403,
@@ -222,7 +222,7 @@ export function activationDemandEligibility(
         body: {
           code: "builder-runtime-manual-size-required",
           error: "User entitlement requires an explicit operator size",
-          entitlementTier,
+          entitlementTier: sizingKey,
         },
       },
     };
@@ -239,7 +239,7 @@ export function activationDemandEligibility(
       },
     };
   }
-  return { entitlementTier, sizingTier, slug };
+  return { sizingKey, sizingTier, slug };
 }
 
 function parkedDuplicateForEvent(
@@ -343,9 +343,9 @@ export async function requestUserActivationLease(
   const eventKey = input.eventKey!;
   const cause = input.cause!;
   const observedAt = input.observedAt!;
-  const tierRead = { store: input.store, readBuilderTier: input.readBuilderTier, uid: input.uid, now: input.now ?? Date.now() };
+  const sizingKeyRead = { store: input.store, readSizingKey: input.readSizingKey, uid: input.uid, now: input.now ?? Date.now() };
 
-  return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, profile, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.request" }, async (transaction) => {
+  return withCurrentSizingKey(sizingKeyRead, ({ sizingKey, profile, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.request" }, async (transaction) => {
     const [read, assignment] = await Promise.all([
       transaction.users.records.get(input.uid),
       transaction.gateways.assignments.get(reportingGatewayId, input.uid),
@@ -376,7 +376,7 @@ export async function requestUserActivationLease(
         body: { code: "builder-computer-recovery-in-progress", error: "VM recovery is in progress" },
       };
     }
-    const eligibility = activationDemandEligibility(user, entitlementTier, profile);
+    const eligibility = activationDemandEligibility(user, sizingKey, profile);
     if ("result" in eligibility) return eligibility.result;
     const { sizingTier, slug } = eligibility;
     const existing = user.activationLease;
@@ -430,7 +430,7 @@ export async function requestUserActivationLease(
       builderSlug: slug,
       sourceGatewayId: reportingGatewayId,
       sourceAssignmentEpoch: assignmentEpoch,
-      entitlementTier: eligibility.entitlementTier,
+      entitlementTier: eligibility.sizingKey,
       sizingTier,
     };
     await transaction.users.records.setActivationLease(input.uid, next, leaseFence);

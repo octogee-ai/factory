@@ -2,35 +2,35 @@ import { randomUUID } from "node:crypto";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { isolatedSizingTier } from "./platform-state/config.js";
-export function firestoreBuilderTierReader(db) {
+export function firestoreSizingKeyReader(db) {
     return async (uid, now) => {
         const snapshot = await db.doc(`users/${uid}`).get();
         return snapshot.exists ? userEntitlements().sizingKey(snapshot.data() ?? {}, new Date(now)) : null;
     };
 }
-const BUILDER_TIER_READ_ATTEMPTS = 3;
-export class BuilderTierChangedError extends Error {
+const SIZING_KEY_READ_ATTEMPTS = 3;
+export class SizingKeyChangedError extends Error {
     uid;
     constructor(uid) {
-        super(`User ${uid} changed while its tier was read`);
+        super(`User ${uid} changed while its sizing key was read`);
         this.uid = uid;
-        this.name = "BuilderTierChangedError";
+        this.name = "SizingKeyChangedError";
     }
 }
-export async function withCurrentBuilderTier(input, run) {
+export async function withCurrentSizingKey(input, run) {
     for (let attempt = 1;; attempt += 1) {
         const revision = (await input.store.users.records.get(input.uid))?.revision ?? null;
-        const tier = await input.readBuilderTier(input.uid, input.now);
-        const profile = tier === null ? null : await input.store.config.orchestrator.getSizingProfile(tier);
+        const sizingKey = await input.readSizingKey(input.uid, input.now);
+        const profile = sizingKey === null ? null : await input.store.config.orchestrator.getSizingProfile(sizingKey);
         const assertCurrent = (user) => {
             if ((user?.revision ?? null) !== revision)
-                throw new BuilderTierChangedError(input.uid);
+                throw new SizingKeyChangedError(input.uid);
         };
         try {
-            return await run({ tier, profile, assertCurrent });
+            return await run({ sizingKey, profile, assertCurrent });
         }
         catch (error) {
-            if (!(error instanceof BuilderTierChangedError) || attempt === BUILDER_TIER_READ_ATTEMPTS)
+            if (!(error instanceof SizingKeyChangedError) || attempt === SIZING_KEY_READ_ATTEMPTS)
                 throw error;
         }
     }
@@ -110,7 +110,7 @@ function parkedDuplicateBody(lease) {
         },
     };
 }
-export function activationDemandEligibility(user, entitlementTier, profile) {
+export function activationDemandEligibility(user, sizingKey, profile) {
     if (!accountAllowsInteractiveAccess({ accountLifecycle: user.accountLifecycle ?? undefined })) {
         return {
             result: {
@@ -122,7 +122,7 @@ export function activationDemandEligibility(user, entitlementTier, profile) {
             },
         };
     }
-    if (!entitlementTier) {
+    if (!sizingKey) {
         return {
             result: {
                 statusCode: 403,
@@ -141,7 +141,7 @@ export function activationDemandEligibility(user, entitlementTier, profile) {
                 body: {
                     code: "builder-runtime-manual-size-required",
                     error: "User entitlement requires an explicit operator size",
-                    entitlementTier,
+                    entitlementTier: sizingKey,
                 },
             },
         };
@@ -158,7 +158,7 @@ export function activationDemandEligibility(user, entitlementTier, profile) {
             },
         };
     }
-    return { entitlementTier, sizingTier, slug };
+    return { sizingKey, sizingTier, slug };
 }
 function parkedDuplicateForEvent(lease, eventKey) {
     if (!lease)
@@ -229,8 +229,8 @@ export async function requestUserActivationLease(input) {
     const eventKey = input.eventKey;
     const cause = input.cause;
     const observedAt = input.observedAt;
-    const tierRead = { store: input.store, readBuilderTier: input.readBuilderTier, uid: input.uid, now: input.now ?? Date.now() };
-    return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, profile, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.request" }, async (transaction) => {
+    const sizingKeyRead = { store: input.store, readSizingKey: input.readSizingKey, uid: input.uid, now: input.now ?? Date.now() };
+    return withCurrentSizingKey(sizingKeyRead, ({ sizingKey, profile, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.request" }, async (transaction) => {
         const [read, assignment] = await Promise.all([
             transaction.users.records.get(input.uid),
             transaction.gateways.assignments.get(reportingGatewayId, input.uid),
@@ -262,7 +262,7 @@ export async function requestUserActivationLease(input) {
                 body: { code: "builder-computer-recovery-in-progress", error: "VM recovery is in progress" },
             };
         }
-        const eligibility = activationDemandEligibility(user, entitlementTier, profile);
+        const eligibility = activationDemandEligibility(user, sizingKey, profile);
         if ("result" in eligibility)
             return eligibility.result;
         const { sizingTier, slug } = eligibility;
@@ -318,7 +318,7 @@ export async function requestUserActivationLease(input) {
             builderSlug: slug,
             sourceGatewayId: reportingGatewayId,
             sourceAssignmentEpoch: assignmentEpoch,
-            entitlementTier: eligibility.entitlementTier,
+            entitlementTier: eligibility.sizingKey,
             sizingTier,
         };
         await transaction.users.records.setActivationLease(input.uid, next, leaseFence);

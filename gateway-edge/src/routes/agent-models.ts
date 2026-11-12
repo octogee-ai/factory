@@ -120,12 +120,12 @@ router.get("/", requireAuth, async (req: Request, res: Response, next: NextFunct
       platformAgentModelDefault((m) => logger.warn(m)),
       readSubscriptionProviders(uid),
     ]);
-    const plan = userEntitlements().plan(req.user ?? {});
+    const policy = userEntitlements().policy(req.user ?? {});
     const slug = slugFromRequest(req);
     res.json({
       ...userEntitlements().productProjection?.agentModels(req.user ?? {}),
-      modelAccess: plan.modelAccess,
-      builderTools: plan.toolAccess,
+      modelAccess: policy.modelAccess,
+      builderTools: policy.toolAccess,
       ...(slug ? { coachAgentId: `octogee-${slug}-coach` } : {}),
       byosub: subscriptionProviders.length > 0 && await isIsolatedRuntime(req),
       subscriptionProviders,
@@ -151,8 +151,8 @@ async function gateSelectionRequest(
   if (!agentIdBelongsToSlug(agentId, slug)) {
     return { ok: false, status: 403, error: `Agent ${agentId} is not yours` };
   }
-  const plan = userEntitlements().plan(req.user ?? {});
-  if (plan.modelAccess === "house_only") {
+  const policy = userEntitlements().policy(req.user ?? {});
+  if (policy.modelAccess === "house_only") {
     return { ok: false, status: 402, error: "The model picker is available on paid plans" };
   }
 

@@ -70,7 +70,7 @@ import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { configuredPlatformVertexBaseUrl } from "./platform-vertex-env.js";
 import { userModelProviderDeclarationsMatch, platformBrokerProviderDeclarations } from "./system-config-invariants.js";
 import {
-  DEFAULT_FREE_TIER_MODEL_REF,
+  DEFAULT_HOUSE_MODEL_REF,
   parseUserAgentModelDefault,
 } from "@octogee/shared/types/platform-config";
 
@@ -2034,9 +2034,9 @@ function userByotGate(
 }
 
 function safeUserModelRef(userData: SyncByotUserData, houseOnly: boolean): string {
-  if (houseOnly) return DEFAULT_FREE_TIER_MODEL_REF;
+  if (houseOnly) return DEFAULT_HOUSE_MODEL_REF;
   return parseUserAgentModelDefault(userData.builderAgentDefault)?.primary ??
-    DEFAULT_FREE_TIER_MODEL_REF;
+    DEFAULT_HOUSE_MODEL_REF;
 }
 
 async function purgeUserOauthIfRequired(
@@ -2091,7 +2091,7 @@ export async function syncByotForUser(
   const logFn = deps?.logFn ?? log;
   const userGate = userByotGate(user, shared, desired, userData, logFn);
   const effectiveDesired = userGate.desired;
-  const houseOnly = userEntitlements().plan(userData.planInputs).modelAccess === "house_only";
+  const houseOnly = userEntitlements().policy(userData.planInputs).modelAccess === "house_only";
   const oauthPurge = await purgeUserOauthIfRequired(
     user,
     slug,
@@ -2157,9 +2157,9 @@ function platformDefaultSelection(
   userData: SyncByotUserData,
   houseOnly: boolean,
 ): AgentModelSelections[string] {
-  if (houseOnly) return { primary: DEFAULT_FREE_TIER_MODEL_REF, fallbacks: [] };
+  if (houseOnly) return { primary: DEFAULT_HOUSE_MODEL_REF, fallbacks: [] };
   return parseUserAgentModelDefault(userData.builderAgentDefault) ?? {
-    primary: DEFAULT_FREE_TIER_MODEL_REF,
+    primary: DEFAULT_HOUSE_MODEL_REF,
     fallbacks: [],
   };
 }

@@ -31,7 +31,7 @@ function userSummaryFields(user) {
 }
 export function buildUserSummary(user, account, broker = {}) {
     const now = broker.now ?? Date.now();
-    const plan = userEntitlements().plan(account.planInputs, new Date(now));
+    const policy = userEntitlements().policy(account.planInputs, new Date(now));
     const usage = account.usage;
     const windowCostUsd = broker.windowCostUsd ?? 0;
     const weekCostUsd = broker.weekCostUsd ?? 0;
@@ -40,7 +40,7 @@ export function buildUserSummary(user, account, broker = {}) {
     // percentage against a zero budget would misleadingly read 100% — mirror the
     // user surfaces and show 0. The broker never throttles them either.
     const onOwnerCredential = account.byotActive;
-    const degraded = userEntitlements().spendThrottle(plan, {
+    const degraded = userEntitlements().spendThrottle(policy, {
         windowCostUsd,
         weekCostUsd,
         onOwnerCredential,
@@ -56,10 +56,10 @@ export function buildUserSummary(user, account, broker = {}) {
         username: account.username ?? "",
         byotActive: account.byotActive,
         windowCostUsd,
-        windowBudgetUsd: plan.spendWindowUsd,
+        windowBudgetUsd: policy.spendWindowUsd,
         weekCostUsd,
-        weekBudgetUsd: plan.spendWeekUsd,
-        weekPercentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(weekCostUsd, plan.spendWeekUsd),
+        weekBudgetUsd: policy.spendWeekUsd,
+        weekPercentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(weekCostUsd, policy.spendWeekUsd),
         weekResetAt: new Date(weekWindowStartMs(now) + MODEL_BROKER_WEEK_WINDOW_MS).toISOString(),
         nextRefillAt: new Date(usageWindowStartMs(now) + MODEL_BROKER_USAGE_WINDOW_MS).toISOString(),
         totalTokensUsed: numberAt(usage, "totalTokensUsed", numberAt(usage, "tokensUsed")),
@@ -68,7 +68,7 @@ export function buildUserSummary(user, account, broker = {}) {
         degraded,
         lastActive: toISODate(usage.lastUpdated),
         mattermostUsername: account.mattermostUsername,
-        percentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(windowCostUsd, plan.spendWindowUsd),
+        percentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(windowCostUsd, policy.spendWindowUsd),
         ...userSummaryFields(user),
     };
 }

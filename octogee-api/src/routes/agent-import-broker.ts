@@ -138,7 +138,7 @@ async function ownerContext(
     gatewayId: bound.gatewayId,
     isAdmin: user?.role === "admin",
     workspacePolicy: {
-      preserveConvergedContextFiles: userEntitlements().plan(planInputs, deps.now()).modelAccess === "house_only",
+      preserveConvergedContextFiles: userEntitlements().policy(planInputs, deps.now()).modelAccess === "house_only",
     },
   };
 }

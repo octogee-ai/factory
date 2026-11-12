@@ -50,12 +50,12 @@ describe("userEntitlements", () => {
 
 describe("staticUserEntitlements", () => {
   it("grants every user the catalog without metering them", () => {
-    const plan = staticUserEntitlements.plan({});
-    expect(plan.modelAccess).toBe("catalog");
-    expect(plan.houseFallback).toBe(false);
-    expect(plan.spendWeekUsd).toBeGreaterThan(1_000_000);
-    expect(plan.spendWindowUsd).toBeGreaterThan(1_000_000);
-    expect(Object.keys(plan).sort()).toEqual([
+    const policy = staticUserEntitlements.policy({});
+    expect(policy.modelAccess).toBe("catalog");
+    expect(policy.houseFallback).toBe(false);
+    expect(policy.spendWeekUsd).toBeGreaterThan(1_000_000);
+    expect(policy.spendWindowUsd).toBeGreaterThan(1_000_000);
+    expect(Object.keys(policy).sort()).toEqual([
       "houseFallback",
       "modelAccess",
       "spendWeekUsd",
@@ -88,19 +88,19 @@ describe("staticUserEntitlements", () => {
   });
 
   it("enforces a spent budget generically, degrading only when a house model exists", () => {
-    const plan = { ...staticUserEntitlements.plan({}), spendWindowUsd: 4, spendWeekUsd: 20 };
+    const policy = { ...staticUserEntitlements.policy({}), spendWindowUsd: 4, spendWeekUsd: 20 };
     const observation = { windowCostUsd: 4, weekCostUsd: 1, onOwnerCredential: false };
-    expect(staticUserEntitlements.spendThrottle(plan, observation)).toEqual({
+    expect(staticUserEntitlements.spendThrottle(policy, observation)).toEqual({
       degraded: false,
       blocked: true,
       reason: "window_exhausted",
     });
-    expect(staticUserEntitlements.spendThrottle({ ...plan, houseFallback: true }, observation)).toEqual({
+    expect(staticUserEntitlements.spendThrottle({ ...policy, houseFallback: true }, observation)).toEqual({
       degraded: true,
       blocked: false,
       reason: "window_exhausted",
     });
-    expect(staticUserEntitlements.spendThrottle(plan, { ...observation, onOwnerCredential: true }).blocked).toBe(false);
+    expect(staticUserEntitlements.spendThrottle(policy, { ...observation, onOwnerCredential: true }).blocked).toBe(false);
   });
 });
 

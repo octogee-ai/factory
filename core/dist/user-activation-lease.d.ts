@@ -7,26 +7,26 @@ export type UserActivationLeaseResult = {
     statusCode: number;
     body: Record<string, unknown>;
 };
-export type BuilderTierReader = (uid: string, now: number) => Promise<string | null>;
-export declare function firestoreBuilderTierReader(db: Pick<Firestore, "doc">): BuilderTierReader;
-export declare class BuilderTierChangedError extends Error {
+export type SizingKeyReader = (uid: string, now: number) => Promise<string | null>;
+export declare function firestoreSizingKeyReader(db: Pick<Firestore, "doc">): SizingKeyReader;
+export declare class SizingKeyChangedError extends Error {
     readonly uid: string;
     constructor(uid: string);
 }
-export interface CurrentBuilderTier {
-    readonly tier: string | null;
+export interface CurrentSizingKey {
+    readonly sizingKey: string | null;
     readonly profile: GatewaySizingProfile | null;
     readonly assertCurrent: (user: Stored<PlatformUserRecord> | null) => void;
 }
-export declare function withCurrentBuilderTier<T>(input: {
+export declare function withCurrentSizingKey<T>(input: {
     store: PlatformStateStore;
-    readBuilderTier: BuilderTierReader;
+    readSizingKey: SizingKeyReader;
     uid: string;
     now: number;
-}, run: (current: CurrentBuilderTier) => Promise<T>): Promise<T>;
+}, run: (current: CurrentSizingKey) => Promise<T>): Promise<T>;
 export interface IsolatedRuntimeDemandRequest {
     store: PlatformStateStore;
-    readBuilderTier: BuilderTierReader;
+    readSizingKey: SizingKeyReader;
     uid: string;
     reportingGatewayId?: string;
     assignmentEpoch?: number;
@@ -41,11 +41,11 @@ export interface IsolatedRuntimeDemandRequest {
 export type ActivationDemandEligibility = {
     result: UserActivationLeaseResult;
 } | {
-    entitlementTier: string;
+    sizingKey: string;
     sizingTier: string;
     slug: string;
 };
-export declare function activationDemandEligibility(user: PlatformUserRecord, entitlementTier: string | null, profile: GatewaySizingProfile | null): ActivationDemandEligibility;
+export declare function activationDemandEligibility(user: PlatformUserRecord, sizingKey: string | null, profile: GatewaySizingProfile | null): ActivationDemandEligibility;
 export declare function requestUserActivationLease(input: IsolatedRuntimeDemandRequest): Promise<UserActivationLeaseResult>;
 export declare function builderActivateOperationId(gatewayId: string, generation: number): string;
 export declare function builderReturnOperationId(gatewayId: string, generation: number): string;

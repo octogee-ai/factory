@@ -1,11 +1,11 @@
 import type { Firestore } from "firebase-admin/firestore";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
 import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
-import type { BuilderTierReader } from "@octogee/core/user-activation-lease";
+import type { SizingKeyReader } from "@octogee/core/user-activation-lease";
 import type { PlatformUserRecord, PlatformStateRepositories, PlatformStateStore, Stored, WorkspaceProject } from "@octogee/core/platform-state";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { isValidGatewayId, resolveGatewayClass } from "@octogee/shared/types/glm";
-import { userAssignedTo, ownerWorkspacePermissionsEnabled, withGatewayOwnerTier } from "../../../gateway-edge/src/routes/user/gateways.js";
+import { userAssignedTo, ownerWorkspacePermissionsEnabled, withGatewayOwnerSizingKey } from "../../../gateway-edge/src/routes/user/gateways.js";
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 import { ChannelSessionMattermostError } from '../../../gateway-edge/src/lib/channel-session-model-control.js';
 import { isValidProjectId, projectAgentId } from '@octogee/shared/types/identity';
@@ -14,7 +14,7 @@ import { projectMemberExists } from './project-members.js';
 export interface WorkspaceConversationDeps {
   db: Firestore;
   store: PlatformStateStore;
-  readBuilderTier: BuilderTierReader;
+  readSizingKey: SizingKeyReader;
   authorize?: typeof import("../../../gateway-edge/src/lib/channel-session-authorization.js").authorizeChannelCredentials;
   readChannel?: (token: string, channelId: string) => Promise<unknown>;
   readPost?: (token: string, postId: string) => Promise<unknown>;
@@ -69,13 +69,13 @@ async function resolveNativeConversationScope(deps: WorkspaceConversationDeps, c
   if (!validScopeClaim(claim)) return null;
   const { projectId, uid, ownerUid, workspaceSlug } = claim;
   const projectMember = projectId !== undefined && uid !== ownerUid && await projectMemberExists(deps.store, workspaceSlug, projectId, uid);
-  return withGatewayOwnerTier(
-    { store: deps.store, readBuilderTier: deps.readBuilderTier, ownerUid: claim.ownerUid, now: Date.now() },
-    async (ownerTier) => {
+  return withGatewayOwnerSizingKey(
+    { store: deps.store, readSizingKey: deps.readSizingKey, ownerUid: claim.ownerUid, now: Date.now() },
+    async (ownerSizingKey) => {
       const resolved = await resolveWorkspaceConversationScope(deps.store, claim, projectMember);
       if (!resolved) return null;
       const { owner, ...scope } = resolved;
-      return { ...scope, nativeAccess: ownerWorkspacePermissionsEnabled(scope.auth.config, ownerTier, owner) };
+      return { ...scope, nativeAccess: ownerWorkspacePermissionsEnabled(scope.auth.config, ownerSizingKey, owner) };
     },
   );
 }

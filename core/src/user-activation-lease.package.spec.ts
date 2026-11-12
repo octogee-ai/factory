@@ -43,7 +43,7 @@ describe("@octogee/core/user-activation-lease runtime artifact", () => {
 
     await expect(requestUserActivationLease({
       store: parkedUserStore(),
-      readBuilderTier: async () => "hobby",
+      readSizingKey: async () => "hobby",
       uid: "uid-alice",
       reportingGatewayId: "shared-blue",
       assignmentEpoch: 4,

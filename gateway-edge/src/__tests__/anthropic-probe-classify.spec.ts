@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { classifyHttp } from "../billing/anthropic-probe.js";
+import { classifyHttp } from "../model-credentials/anthropic-probe.js";
 
 describe("classifyHttp", () => {
   test("401 Unauthorized = user (bad/revoked key)", () => {

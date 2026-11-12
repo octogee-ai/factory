@@ -31,8 +31,8 @@ import {
 import { projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 import {
-  firestoreBuilderTierReader,
-  type BuilderTierReader,
+  firestoreSizingKeyReader,
+  type SizingKeyReader,
 } from "@octogee/core/user-activation-lease";
 import {
   DuplicateRecordError,
@@ -61,7 +61,7 @@ type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" 
 interface RuntimeBrokerDeps {
   db: Firestore;
   store: PlatformStateStore;
-  readBuilderTier: BuilderTierReader;
+  readSizingKey: SizingKeyReader;
   notifyFinalReply?: FinalReplyNotifier;
 }
 
@@ -1328,7 +1328,7 @@ export function createOpenClawRuntimeBrokerRoutes(opts: {
   const deps: RuntimeBrokerDeps = {
     db: opts.db,
     store: opts.store,
-    readBuilderTier: firestoreBuilderTierReader(opts.db),
+    readSizingKey: firestoreSizingKeyReader(opts.db),
     notifyFinalReply: opts.notifyFinalReply,
   };
   mountUserAndWsRoutes(router, deps);

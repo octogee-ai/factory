@@ -62,7 +62,7 @@ import {
   builderReturnOperationId,
   isUserReturnOperationIdFor,
   placementRetireOperationId,
-  type BuilderTierReader,
+  type SizingKeyReader,
 } from "@octogee/core/user-activation-lease";
 import {
   clearRetiredUserActivationPreparation,
@@ -325,7 +325,7 @@ export interface SharedGatewayMoves {
 
 export interface IsolatedGatewayProductDeps {
   store: PlatformStateStore;
-  readBuilderTier: BuilderTierReader;
+  readSizingKey: SizingKeyReader;
   namespace: string;
   now(): number;
   log(message: string): void;
@@ -338,7 +338,7 @@ export interface IsolatedGatewayProductDeps {
     totalPods: number;
     error?: string;
   }>;
-  userHome?: Omit<UserHomeMigrationDeps, "store" | "readBuilderTier" | "now" | "log">;
+  userHome?: Omit<UserHomeMigrationDeps, "store" | "readSizingKey" | "now" | "log">;
 }
 
 export type IsolatedGatewayProductFactory = (deps: IsolatedGatewayProductDeps) => IsolatedGatewayAutomation;

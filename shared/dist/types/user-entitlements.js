@@ -3,7 +3,7 @@ const UNMETERED_BUDGET_USD = Number.MAX_SAFE_INTEGER;
 const STATIC_SIZING_KEY = "default";
 const STATIC_CONTEXT_TEMPLATE_KEY = "default";
 export const staticUserEntitlements = {
-    plan: () => ({
+    policy: () => ({
         modelAccess: "catalog",
         spendWeekUsd: UNMETERED_BUDGET_USD,
         spendWindowUsd: UNMETERED_BUDGET_USD,
@@ -18,20 +18,20 @@ export const staticUserEntitlements = {
     }),
     projectMode: () => "active",
     maxProjects: () => "unlimited",
-    spendThrottle: (plan, observation) => {
+    spendThrottle: (policy, observation) => {
         const exhausted = observation.onOwnerCredential
             ? null
             : exhaustedSpendBudget({
                 windowCostUsd: observation.windowCostUsd,
-                windowBudgetUsd: plan.spendWindowUsd,
+                windowBudgetUsd: policy.spendWindowUsd,
                 weekCostUsd: observation.weekCostUsd,
-                weekBudgetUsd: plan.spendWeekUsd,
+                weekBudgetUsd: policy.spendWeekUsd,
             });
         if (!exhausted)
             return { degraded: false, blocked: false, reason: null };
         return {
-            degraded: plan.houseFallback,
-            blocked: !plan.houseFallback,
+            degraded: policy.houseFallback,
+            blocked: !policy.houseFallback,
             reason: `${exhausted}_exhausted`,
         };
     },

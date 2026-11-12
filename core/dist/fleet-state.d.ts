@@ -2,7 +2,7 @@ import { type UserMigrationV2GatewayRootFence } from "@octogee/shared/types/glm"
 import { type AssignmentSource, type AssignmentState } from "@octogee/shared/types/gateway-releases";
 import type { FleetBrokerUserRestoreAuthority } from "@octogee/shared/types/fleet-broker";
 import { type WorkspaceMigrationPhase } from "@octogee/shared/types/workspace-migration";
-import { type BuilderTierReader } from "./user-activation-lease.js";
+import { type SizingKeyReader } from "./user-activation-lease.js";
 import type { PlatformStateStore, PlatformStateTransaction } from "./platform-state/index.js";
 export interface FleetStateDeps {
     store: PlatformStateStore;
@@ -10,7 +10,7 @@ export interface FleetStateDeps {
     log?: (msg: string) => void;
 }
 export interface CutoverDeps extends FleetStateDeps {
-    readBuilderTier: BuilderTierReader;
+    readSizingKey: SizingKeyReader;
 }
 export declare function setWorkspaceMigrationPhase(deps: FleetStateDeps, params: {
     uid: string;

@@ -10,7 +10,7 @@ import {
 import {
   SUPPORTED,
   CANONICAL_BASE_URL,
-} from "../../gateway-edge/src/billing/provider-key-format.js";
+} from "../../gateway-edge/src/model-credentials/provider-key-format.js";
 
 // The BYOK provider list lives in three places that MUST agree, or a new
 // provider "works" in one layer and fails at runtime in another (exactly the
@@ -66,7 +66,7 @@ function brokerRouteProviders(): string[] {
 describe("BYOK provider registry parity (scripts PROVIDERS ↔ route ↔ resolver)", () => {
   it("static provider projections are backed by the shared model credential catalog", async () => {
     expect(
-      readSrc("gateway-edge/src/billing/provider-key-format.ts"),
+      readSrc("gateway-edge/src/model-credentials/provider-key-format.ts"),
     ).toContain("MODEL_CREDENTIAL_STATIC_PROVIDER_IDS");
     expect(
       readSrc("scripts/lib/model-credential-materializer.ts"),

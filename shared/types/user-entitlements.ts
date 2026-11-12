@@ -8,7 +8,7 @@ export type UserEntitlementInputs = object;
 export type MaxProjects = number | "unlimited";
 export type ProjectAccessMode = "active" | "archive_read";
 
-export interface UserPlan {
+export interface UserPolicy {
   modelAccess: ModelAccess;
   spendWeekUsd: number;
   spendWindowUsd: number;
@@ -55,12 +55,12 @@ export type IsolatedGatewayAdmission =
   | { readonly admitted: false; readonly code: string; readonly reason: string };
 
 export interface UserEntitlementResolver {
-  plan(user: UserEntitlementInputs, now?: Date): UserPlan;
+  policy(user: UserEntitlementInputs, now?: Date): UserPolicy;
   sizingKey(user: UserEntitlementInputs, now?: Date): string | null;
   isolatedGatewayAdmission(user: UserEntitlementInputs, now?: Date): IsolatedGatewayAdmission;
   projectMode(user: UserEntitlementInputs, now?: Date): ProjectAccessMode;
   maxProjects(user: UserEntitlementInputs, now?: Date): MaxProjects;
-  spendThrottle(plan: UserPlan, observation: UserSpendObservation): SpendThrottleState;
+  spendThrottle(policy: UserPolicy, observation: UserSpendObservation): SpendThrottleState;
   pickInputs(source: Record<string, unknown>): Record<string, unknown>;
   contextFilePolicy(user: UserEntitlementInputs, now?: Date): ContextFilePolicy;
   seedContextTemplateKey(user: UserEntitlementInputs): string;
@@ -73,7 +73,7 @@ const STATIC_SIZING_KEY = "default";
 const STATIC_CONTEXT_TEMPLATE_KEY = "default";
 
 export const staticUserEntitlements: UserEntitlementResolver = {
-  plan: () => ({
+  policy: () => ({
     modelAccess: "catalog",
     spendWeekUsd: UNMETERED_BUDGET_USD,
     spendWindowUsd: UNMETERED_BUDGET_USD,
@@ -88,19 +88,19 @@ export const staticUserEntitlements: UserEntitlementResolver = {
   }),
   projectMode: () => "active",
   maxProjects: () => "unlimited",
-  spendThrottle: (plan, observation) => {
+  spendThrottle: (policy, observation) => {
     const exhausted = observation.onOwnerCredential
       ? null
       : exhaustedSpendBudget({
           windowCostUsd: observation.windowCostUsd,
-          windowBudgetUsd: plan.spendWindowUsd,
+          windowBudgetUsd: policy.spendWindowUsd,
           weekCostUsd: observation.weekCostUsd,
-          weekBudgetUsd: plan.spendWeekUsd,
+          weekBudgetUsd: policy.spendWeekUsd,
         });
     if (!exhausted) return { degraded: false, blocked: false, reason: null };
     return {
-      degraded: plan.houseFallback,
-      blocked: !plan.houseFallback,
+      degraded: policy.houseFallback,
+      blocked: !policy.houseFallback,
       reason: `${exhausted}_exhausted`,
     };
   },

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_USER_AGENT_FALLBACK_MODEL_REF,
   DEFAULT_USER_AGENT_MODEL_REF,
-  DEFAULT_FREE_TIER_MODEL_REF,
+  DEFAULT_HOUSE_MODEL_REF,
   DEFAULT_OPS_AGENT_MODEL_REF,
   DEFAULT_PLATFORM_CONNECT_CONFIG,
   DEFAULT_PLATFORM_FREE_CONFIG,
@@ -18,7 +18,7 @@ import {
   parsePlatformConnectConfig,
   parsePlatformFreeConfig,
   parsePlatformModelConfig,
-  resolveFreeTierModel,
+  resolveHouseModel,
   resolveOpsAgentModel,
 } from "./platform-config";
 
@@ -46,10 +46,10 @@ describe("parsePlatformFreeConfig", () => {
   });
 });
 
-describe("DEFAULT_FREE_TIER_MODEL_REF", () => {
+describe("DEFAULT_HOUSE_MODEL_REF", () => {
   it("is the Errands tier (GPT-6 Luna) on the OpenAI platform key", () => {
-    expect(DEFAULT_FREE_TIER_MODEL_REF).toBe("platform-openai/gpt-6-luna");
-    expect(resolveFreeTierModel(DEFAULT_FREE_TIER_MODEL_REF)).toEqual({
+    expect(DEFAULT_HOUSE_MODEL_REF).toBe("platform-openai/gpt-6-luna");
+    expect(resolveHouseModel(DEFAULT_HOUSE_MODEL_REF)).toEqual({
       ref: "platform-openai/gpt-6-luna",
       provider: "openai",
       upstreamModelId: "gpt-6-luna",
@@ -57,7 +57,7 @@ describe("DEFAULT_FREE_TIER_MODEL_REF", () => {
   });
 
   it("always resolves against the catalog — a compiled default outside it would strand the free tier", () => {
-    expect(resolveFreeTierModel(DEFAULT_FREE_TIER_MODEL_REF)).not.toBeNull();
+    expect(resolveHouseModel(DEFAULT_HOUSE_MODEL_REF)).not.toBeNull();
   });
 });
 
@@ -98,11 +98,11 @@ describe("parsePlatformModelConfig", () => {
 
   it("accepts a user agent dial from any catalog provider, fallback none included", () => {
     expect(parsePlatformModelConfig({
-      freeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
+      freeTierModelRef: DEFAULT_HOUSE_MODEL_REF,
       builderAgentModelRef: "anthropic/claude-haiku-4-5",
       builderAgentFallbackModelRef: null,
     })).toEqual({
-      freeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
+      freeTierModelRef: DEFAULT_HOUSE_MODEL_REF,
       opsAgentModelRef: DEFAULT_OPS_AGENT_MODEL_REF,
       builderAgentModelRef: "anthropic/claude-haiku-4-5",
       builderAgentFallbackModelRef: null,
@@ -111,22 +111,22 @@ describe("parsePlatformModelConfig", () => {
 
   it("rejects user agent refs outside the catalog", () => {
     expect(parsePlatformModelConfig({
-      freeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
+      freeTierModelRef: DEFAULT_HOUSE_MODEL_REF,
       builderAgentModelRef: "platform-openrouter/gone/model",
     })).toBeNull();
     expect(parsePlatformModelConfig({
-      freeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
+      freeTierModelRef: DEFAULT_HOUSE_MODEL_REF,
       builderAgentFallbackModelRef: "z-ai/glm-5.2",
     })).toBeNull();
   });
 
   it("accepts only OpenRouter catalog models for the Ops Agent", () => {
     expect(parsePlatformModelConfig({
-      freeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
+      freeTierModelRef: DEFAULT_HOUSE_MODEL_REF,
       opsAgentModelRef: "anthropic/claude-haiku-4-5",
     })).toBeNull();
     expect(parsePlatformModelConfig({
-      freeTierModelRef: DEFAULT_FREE_TIER_MODEL_REF,
+      freeTierModelRef: DEFAULT_HOUSE_MODEL_REF,
       opsAgentModelRef: "platform-openrouter/gone/model",
     })).toBeNull();
   });
@@ -146,8 +146,8 @@ describe("User agent default dial", () => {
   it("compiles to the Everyday tier (GPT-6.1 Terra) on OpenAI direct with a GLM 5.2 fallback", () => {
     expect(DEFAULT_USER_AGENT_MODEL_REF).toBe("platform-openai/gpt-6.1-terra");
     expect(DEFAULT_USER_AGENT_FALLBACK_MODEL_REF).toBe("platform-openrouter/z-ai/glm-5.2");
-    expect(resolveFreeTierModel(DEFAULT_USER_AGENT_MODEL_REF)).not.toBeNull();
-    expect(resolveFreeTierModel(DEFAULT_USER_AGENT_FALLBACK_MODEL_REF!)).not.toBeNull();
+    expect(resolveHouseModel(DEFAULT_USER_AGENT_MODEL_REF)).not.toBeNull();
+    expect(resolveHouseModel(DEFAULT_USER_AGENT_FALLBACK_MODEL_REF!)).not.toBeNull();
   });
 
   it("reads the stored dial field-tolerantly — invalid refs fall back per field", () => {
@@ -204,9 +204,9 @@ describe("resolveOpsAgentModel", () => {
   });
 });
 
-describe("resolveFreeTierModel", () => {
+describe("resolveHouseModel", () => {
   it("splits an anthropic ref into the broker provider + bare upstream model id", () => {
-    expect(resolveFreeTierModel("anthropic/claude-haiku-4-5")).toEqual({
+    expect(resolveHouseModel("anthropic/claude-haiku-4-5")).toEqual({
       ref: "anthropic/claude-haiku-4-5",
       provider: "anthropic",
       upstreamModelId: "claude-haiku-4-5",
@@ -214,7 +214,7 @@ describe("resolveFreeTierModel", () => {
   });
 
   it("splits a platform-openai ref into the broker provider + bare upstream model id", () => {
-    expect(resolveFreeTierModel("platform-openai/gpt-5.4-mini")).toEqual({
+    expect(resolveHouseModel("platform-openai/gpt-5.4-mini")).toEqual({
       ref: "platform-openai/gpt-5.4-mini",
       provider: "openai",
       upstreamModelId: "gpt-5.4-mini",
@@ -222,7 +222,7 @@ describe("resolveFreeTierModel", () => {
   });
 
   it("keeps the anthropic vendor prefix on an OpenRouter Claude model id", () => {
-    expect(resolveFreeTierModel("platform-openrouter/anthropic/claude-fable-5.1")).toEqual({
+    expect(resolveHouseModel("platform-openrouter/anthropic/claude-fable-5.1")).toEqual({
       ref: "platform-openrouter/anthropic/claude-fable-5.1",
       provider: "openrouter",
       upstreamModelId: "anthropic/claude-fable-5.1",
@@ -232,12 +232,12 @@ describe("resolveFreeTierModel", () => {
   });
 
   it("splits a platform-openrouter ref into the broker provider + openrouter model id", () => {
-    expect(resolveFreeTierModel("platform-openrouter/z-ai/glm-5.2")).toEqual({
+    expect(resolveHouseModel("platform-openrouter/z-ai/glm-5.2")).toEqual({
       ref: "platform-openrouter/z-ai/glm-5.2",
       provider: "openrouter",
       upstreamModelId: "z-ai/glm-5.2",
     });
-    expect(resolveFreeTierModel("platform-openrouter/deepseek/deepseek-v4-pro")).toEqual({
+    expect(resolveHouseModel("platform-openrouter/deepseek/deepseek-v4-pro")).toEqual({
       ref: "platform-openrouter/deepseek/deepseek-v4-pro",
       provider: "openrouter",
       upstreamModelId: "deepseek/deepseek-v4-pro",
@@ -245,8 +245,8 @@ describe("resolveFreeTierModel", () => {
   });
 
   it("returns null for a ref outside the catalog", () => {
-    expect(resolveFreeTierModel("claude-cli/claude-opus-4-8")).toBeNull();
-    expect(resolveFreeTierModel("z-ai/glm-5.2")).toBeNull();
+    expect(resolveHouseModel("claude-cli/claude-opus-4-8")).toBeNull();
+    expect(resolveHouseModel("z-ai/glm-5.2")).toBeNull();
   });
 });
 

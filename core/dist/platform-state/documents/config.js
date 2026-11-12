@@ -1,13 +1,13 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 import { GATEWAY_VM_PROVISIONING_MODELS, isGatewayVmBootDiskType, isGatewayVmDesktop } from "@octogee/shared/types/glm";
-import { DEFAULT_FREE_TIER_MODEL_REF, DEFAULT_OPS_AGENT_MODEL_REF, DEFAULT_USER_AGENT_FALLBACK_MODEL_REF, DEFAULT_USER_AGENT_MODEL_REF, parsePlatformConnectConfig, parsePlatformFreeConfig, parsePlatformModelConfig } from "@octogee/shared/types/platform-config";
+import { DEFAULT_HOUSE_MODEL_REF, DEFAULT_OPS_AGENT_MODEL_REF, DEFAULT_USER_AGENT_FALLBACK_MODEL_REF, DEFAULT_USER_AGENT_MODEL_REF, parsePlatformConnectConfig, parsePlatformFreeConfig, parsePlatformModelConfig } from "@octogee/shared/types/platform-config";
 import { parseSharedGatewayAutoscalingConfig } from "@octogee/shared/types/shared-gateway-pool";
 import { isSizingTier } from "@octogee/shared/types/sizing";
 import { MalformedRecordError } from "../errors.js";
 export function parseStoredPlatformModelConfig(value) {
     if (typeof value !== "object" || value === null || Array.isArray(value))
         return null;
-    const { freeTierModelRef = DEFAULT_FREE_TIER_MODEL_REF, opsAgentModelRef = DEFAULT_OPS_AGENT_MODEL_REF, builderAgentModelRef = DEFAULT_USER_AGENT_MODEL_REF, builderAgentFallbackModelRef = DEFAULT_USER_AGENT_FALLBACK_MODEL_REF, } = value;
+    const { freeTierModelRef = DEFAULT_HOUSE_MODEL_REF, opsAgentModelRef = DEFAULT_OPS_AGENT_MODEL_REF, builderAgentModelRef = DEFAULT_USER_AGENT_MODEL_REF, builderAgentFallbackModelRef = DEFAULT_USER_AGENT_FALLBACK_MODEL_REF, } = value;
     if (typeof freeTierModelRef !== "string" || typeof opsAgentModelRef !== "string" || typeof builderAgentModelRef !== "string") {
         return null;
     }

@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { catalogEntryForModelRef, OPENAI_PLATFORM_PROVIDER_ID, VERTEX_PLATFORM_PROVIDER_ID, OPENROUTER_PLATFORM_PROVIDER_ID, } from "@octogee/shared/types/agent-models";
-import { DEFAULT_FREE_TIER_MODEL_REF } from "@octogee/shared/types/platform-config";
+import { DEFAULT_HOUSE_MODEL_REF } from "@octogee/shared/types/platform-config";
 import { buildModelCredentialConfigForProvider, claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvider, MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS, } from "./model-credential-materializer.js";
 import { AGENTS_DIR, log } from "./config.js";
 import { deleteAuthProfileStore, readAuthProfileStore, writeAuthProfileStore, } from "./auth-profile-store.js";
@@ -94,7 +94,7 @@ export const ISOLATED_CODEX_APP_SERVER = {
     approvalPolicy: "never",
 };
 // The always-available platform house model: the operator's house model dial
-// (snapshot freeTierModelRef), compiled default DEFAULT_FREE_TIER_MODEL_REF.
+// (snapshot freeTierModelRef), compiled default DEFAULT_HOUSE_MODEL_REF.
 // A failed/exhausted BYOK provider degrades here rather than leaving the
 // agent credential-less, and house-only plans pin the agent here so config,
 // status, and broker routing agree. Refs are revalidated against the catalog
@@ -102,7 +102,7 @@ export const ISOLATED_CODEX_APP_SERVER = {
 function houseModelRefFrom(ref) {
     return typeof ref === "string" && catalogEntryForModelRef(ref)
         ? ref
-        : DEFAULT_FREE_TIER_MODEL_REF;
+        : DEFAULT_HOUSE_MODEL_REF;
 }
 // A platform-provider ref (openrouter/openai) may sit outside the boot
 // template's model set — declare it in agents.defaults.models (the picker
@@ -301,8 +301,8 @@ export function platformDefaultAgentModelInputForUser(slug, userData) {
 // anyway; pinning keeps the config
 // honest so /status and the agent's self-report agree with the wire.
 function houseModelDefaultAgentModelInput(slug, userData) {
-    const plan = userEntitlements().plan(userData.planInputs);
-    return plan.modelAccess === "house_only"
+    const policy = userEntitlements().policy(userData.planInputs);
+    return policy.modelAccess === "house_only"
         ? { slug, model: houseModelRefFrom(userData.freeTierModelRef), source: "house-model" }
         : null;
 }

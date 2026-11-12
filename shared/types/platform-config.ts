@@ -159,9 +159,9 @@ export function googleConsentPermission(
   return { permitted, excluded };
 }
 
-// The free-tier house model compiles to the Errands tier on the OpenAI platform
+// The house model compiles to the Errands tier on the OpenAI platform
 // key; the dial can point anywhere in the catalog.
-export const DEFAULT_FREE_TIER_MODEL_REF = SIMPLE_MODEL_TIERS.errands.ref;
+export const DEFAULT_HOUSE_MODEL_REF = SIMPLE_MODEL_TIERS.errands.ref;
 export const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/openai/gpt-6-luna";
 
 // The platform default every user's Agent starts on until they pick their
@@ -182,18 +182,18 @@ export interface PlatformModelConfig {
   builderAgentFallbackModelRef: string | null;
 }
 
-export interface ResolvedFreeTierModel {
+export interface ResolvedHouseModel {
   ref: string;
   provider: ModelCatalogProvider;
   upstreamModelId: string;
 }
 
-export interface ResolvedOpsAgentModel extends ResolvedFreeTierModel {
+export interface ResolvedOpsAgentModel extends ResolvedHouseModel {
   runtimeModelRef: string;
 }
 
 function catalogRefOrNull(value: unknown): string | null {
-  return typeof value === "string" && resolveFreeTierModel(value) !== null ? value : null;
+  return typeof value === "string" && resolveHouseModel(value) !== null ? value : null;
 }
 
 export function parsePlatformModelConfig(value: unknown): PlatformModelConfig | null {
@@ -252,11 +252,11 @@ export function userAgentModelDefaultFromDoc(data: unknown): UserAgentModelDefau
 export function parseUserAgentModelDefault(value: unknown): UserAgentModelDefault | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as { primary?: unknown; fallbacks?: unknown };
-  if (typeof raw.primary !== "string" || resolveFreeTierModel(raw.primary) === null) return null;
+  if (typeof raw.primary !== "string" || resolveHouseModel(raw.primary) === null) return null;
   if (!Array.isArray(raw.fallbacks)) return null;
   const fallbacks: string[] = [];
   for (const ref of raw.fallbacks) {
-    if (typeof ref !== "string" || resolveFreeTierModel(ref) === null) return null;
+    if (typeof ref !== "string" || resolveHouseModel(ref) === null) return null;
     fallbacks.push(ref);
   }
   return { primary: raw.primary, fallbacks };
@@ -265,7 +265,7 @@ export function parseUserAgentModelDefault(value: unknown): UserAgentModelDefaul
 // Split a catalog model ref into what each dial consumer needs: the broker
 // provider profile the traffic rides, and the model id the upstream API
 // accepts (anthropic entries are catalog-prefixed; the wire wants the bare id).
-export function resolveFreeTierModel(ref: string): ResolvedFreeTierModel | null {
+export function resolveHouseModel(ref: string): ResolvedHouseModel | null {
   const entry = catalogEntryForModelRef(ref);
   if (!entry) return null;
   return {
@@ -279,7 +279,7 @@ export function resolveFreeTierModel(ref: string): ResolvedFreeTierModel | null 
 }
 
 export function resolveOpsAgentModel(ref: string): ResolvedOpsAgentModel | null {
-  const resolved = resolveFreeTierModel(ref);
+  const resolved = resolveHouseModel(ref);
   if (!resolved || resolved.provider !== "openrouter") return null;
   return {
     ...resolved,

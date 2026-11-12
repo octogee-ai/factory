@@ -6,10 +6,10 @@ import {
   isSupportedProvider,
   SUPPORTED,
   type Provider,
-} from "../../billing/provider-key-format.js";
-import { probeProviderKey } from "../../billing/provider-probe.js";
+} from "../../model-credentials/provider-key-format.js";
+import { probeProviderKey } from "../../model-credentials/provider-probe.js";
 import { writeSecret, archiveSecret } from "@octogee/core/secret-store";
-import { byotSecretName, keyFingerprintFor, keyHashFor } from "../../billing/byot-key-identity.js";
+import { byotSecretName, keyFingerprintFor, keyHashFor } from "../../model-credentials/byot-key-identity.js";
 import { triggerGatewayModelCredentialSync } from "../../lib/byot-sync-trigger.js";
 import { modelCredentialApiKeyState } from "@octogee/shared/types/model-credentials";
 import { userEntitlements } from "@octogee/shared/types/user-entitlements";

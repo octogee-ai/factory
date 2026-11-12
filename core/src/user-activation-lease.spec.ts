@@ -75,7 +75,7 @@ describe("Isolated runtime demand refusal", () => {
   const request = (state: ReturnType<typeof store>, refuse: (user: { uid: string }) => typeof refusal | null) =>
     requestUserActivationLease({
       store: state.store,
-      readBuilderTier: async () => "pro",
+      readSizingKey: async () => "pro",
       uid: "uid-alice",
       reportingGatewayId: "default",
       assignmentEpoch: 7,

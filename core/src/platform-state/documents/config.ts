@@ -1,6 +1,6 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 import { GATEWAY_VM_PROVISIONING_MODELS, isGatewayVmBootDiskType, isGatewayVmDesktop } from "@octogee/shared/types/glm";
-import { DEFAULT_FREE_TIER_MODEL_REF, DEFAULT_OPS_AGENT_MODEL_REF, DEFAULT_USER_AGENT_FALLBACK_MODEL_REF, DEFAULT_USER_AGENT_MODEL_REF, type PlatformModelConfig, parsePlatformConnectConfig, parsePlatformFreeConfig, parsePlatformModelConfig } from "@octogee/shared/types/platform-config";
+import { DEFAULT_HOUSE_MODEL_REF, DEFAULT_OPS_AGENT_MODEL_REF, DEFAULT_USER_AGENT_FALLBACK_MODEL_REF, DEFAULT_USER_AGENT_MODEL_REF, type PlatformModelConfig, parsePlatformConnectConfig, parsePlatformFreeConfig, parsePlatformModelConfig } from "@octogee/shared/types/platform-config";
 import { parseSharedGatewayAutoscalingConfig } from "@octogee/shared/types/shared-gateway-pool";
 import { type SizingTier, isSizingTier } from "@octogee/shared/types/sizing";
 import type { GatewaySizingProfile, GatewayVmProfile, OrchestratorConfig, PlatformConfigEntry, PlatformConfigKey, PlatformConfigValues } from "../config.js";
@@ -9,7 +9,7 @@ import { MalformedRecordError, type RecordKey } from "../errors.js";
 export function parseStoredPlatformModelConfig(value: unknown): PlatformModelConfig | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const {
-    freeTierModelRef = DEFAULT_FREE_TIER_MODEL_REF,
+    freeTierModelRef = DEFAULT_HOUSE_MODEL_REF,
     opsAgentModelRef = DEFAULT_OPS_AGENT_MODEL_REF,
     builderAgentModelRef = DEFAULT_USER_AGENT_MODEL_REF,
     builderAgentFallbackModelRef = DEFAULT_USER_AGENT_FALLBACK_MODEL_REF,

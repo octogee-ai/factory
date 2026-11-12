@@ -1,39 +1,39 @@
 import type { PlatformConfigRepository } from "@octogee/core/platform-state";
 import {
-  DEFAULT_FREE_TIER_MODEL_REF,
+  DEFAULT_HOUSE_MODEL_REF,
   userAgentModelDefaultFromDoc,
-  resolveFreeTierModel,
+  resolveHouseModel,
   type UserAgentModelDefault,
-  type ResolvedFreeTierModel,
+  type ResolvedHouseModel,
 } from "@octogee/shared/types/platform-config";
 
 const DEFAULT_TTL_MS = 60_000;
 
-export type FreeTierModelResolver = () => Promise<ResolvedFreeTierModel>;
+export type HouseModelResolver = () => Promise<ResolvedHouseModel>;
 export type UserAgentDefaultResolver = () => Promise<UserAgentModelDefault>;
 
-function mustResolve(ref: string): ResolvedFreeTierModel {
-  const resolved = resolveFreeTierModel(ref);
+function mustResolve(ref: string): ResolvedHouseModel {
+  const resolved = resolveHouseModel(ref);
   if (!resolved) {
     throw new Error(`compiled default free-tier model ref is not in the catalog: ${ref}`);
   }
   return resolved;
 }
 
-// The broker resolves the free-tier dial live on every degraded call so an
+// The broker resolves the house model dial live on every degraded call so an
 // operator flip lands within one TTL; the cache bounds Firestore reads on the
 // hot path. An unreadable or invalid doc never blocks free traffic — it
 // reports and serves the last-known (else compiled) house model.
-export function createCachedFreeTierModelResolver(opts: {
+export function createCachedHouseModelResolver(opts: {
   platformConfig: Pick<PlatformConfigRepository, "get">;
   ttlMs?: number;
   now?: () => number;
   onError?: (err: unknown) => void;
-}): FreeTierModelResolver {
+}): HouseModelResolver {
   const ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
   const now = opts.now ?? Date.now;
-  const fallback = mustResolve(DEFAULT_FREE_TIER_MODEL_REF);
-  let cached: { value: ResolvedFreeTierModel; resolvedAt: number } | null = null;
+  const fallback = mustResolve(DEFAULT_HOUSE_MODEL_REF);
+  let cached: { value: ResolvedHouseModel; resolvedAt: number } | null = null;
 
   return async () => {
     const at = now();
@@ -42,14 +42,14 @@ export function createCachedFreeTierModelResolver(opts: {
       const models = (await opts.platformConfig.get("models"))?.value;
       let value = fallback;
       if (models !== undefined) {
-        if (resolveFreeTierModel(models.freeTierModelRef)) {
+        if (resolveHouseModel(models.freeTierModelRef)) {
           value = mustResolve(models.freeTierModelRef);
         } else {
           opts.onError?.(
             new Error(
               `platformConfig/models freeTierModelRef is not a catalog ref: ${JSON.stringify(
                 models.freeTierModelRef,
-              )} — serving ${DEFAULT_FREE_TIER_MODEL_REF}`,
+              )} — serving ${DEFAULT_HOUSE_MODEL_REF}`,
             ),
           );
         }

@@ -281,7 +281,7 @@ import {
   type CutoverDeps,
   type FleetStateDeps,
 } from "@octogee/core/fleet-state";
-import { firestoreBuilderTierReader } from "@octogee/core/user-activation-lease";
+import { firestoreSizingKeyReader } from "@octogee/core/user-activation-lease";
 import {
   provisionGatewayAuthSecret,
   deleteSecret,
@@ -539,13 +539,13 @@ function createGatewayComputeClient(store: PlatformStateStore, logFn: (msg: stri
   return createGatewayVmClient({
     projectId: gatewayComputeProjectId(),
     journalHomeResize: (input, action) => runNormalFleetMutation(store, {
-      actor: "cowboy", forced: false, what: "expand-builder-home", why: "Apply the user tier home allowance", target: { ownerUid: input.ownerUid, disk: input.home.name, zone: input.home.zone, projectId: input.home.projectId }, preActionStatus: { diskId: input.home.id, sizeGb: input.home.sizeGb }, mutation: { sizeGb: input.sizeGb }, action,
+      actor: "cowboy", forced: false, what: "expand-builder-home", why: "Apply the sizing profile home allowance", target: { ownerUid: input.ownerUid, disk: input.home.name, zone: input.home.zone, projectId: input.home.projectId }, preActionStatus: { diskId: input.home.id, sizeGb: input.home.sizeGb }, mutation: { sizeGb: input.sizeGb }, action,
     }),
     journalMachineType: (input, action) => runNormalFleetMutation(store, {
-      actor: "cowboy", forced: false, what: "resize-builder-computer", why: "Apply the user tier capacity before starting its parked VM", target: { instanceName: input.instanceName, zone: input.zone, projectId: gatewayComputeProjectId() }, preActionStatus: {}, mutation: { machineType: input.machineType }, action,
+      actor: "cowboy", forced: false, what: "resize-builder-computer", why: "Apply the sizing profile capacity before starting its parked VM", target: { instanceName: input.instanceName, zone: input.zone, projectId: gatewayComputeProjectId() }, preActionStatus: {}, mutation: { machineType: input.machineType }, action,
     }),
     journalProvisioningModel: (input, action) => runNormalFleetMutation(store, {
-      actor: "cowboy", forced: false, what: "reprovision-builder-computer", why: "Apply the user tier provisioning model before starting its parked VM", target: { instanceName: input.instanceName, zone: input.zone, projectId: gatewayComputeProjectId() }, preActionStatus: {}, mutation: { provisioningModel: input.provisioningModel }, action,
+      actor: "cowboy", forced: false, what: "reprovision-builder-computer", why: "Apply the sizing profile provisioning model before starting its parked VM", target: { instanceName: input.instanceName, zone: input.zone, projectId: gatewayComputeProjectId() }, preActionStatus: {}, mutation: { provisioningModel: input.provisioningModel }, action,
     }),
     log: logFn,
     wait: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -2237,7 +2237,7 @@ function createIsolatedGatewayAutomation(
   const homeServices = GATEWAY_VM_SPEC ? createUserHomeServices(deps.store, log) : undefined;
   return factory({
     store: deps.store,
-    readBuilderTier: firestoreBuilderTierReader(db),
+    readSizingKey: firestoreSizingKeyReader(db),
     namespace: NAMESPACE,
     now: () => Date.now(),
     log,
@@ -3144,7 +3144,7 @@ async function buildHandlers(
     );
   }
   const stateDeps: FleetStateDeps = { store, log: logFn };
-  const cutoverDeps: CutoverDeps = { ...stateDeps, readBuilderTier: firestoreBuilderTierReader(db) };
+  const cutoverDeps: CutoverDeps = { ...stateDeps, readSizingKey: firestoreSizingKeyReader(db) };
 
   const addGateway = createAddGatewayHandler({
     helm,

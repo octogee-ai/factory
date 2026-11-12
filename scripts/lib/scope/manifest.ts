@@ -315,7 +315,7 @@ export const EDGES: readonly ScopeEdge[] = [
     when: "gateway-edge/",
     jobs: [JOBS.octogeeApi, JOBS.octogeeApiEmulator, JOBS.tests],
     reason:
-      "octogee-api compiles gateway-edge route Routers (cross-package imports) and its emulator specs mount them via createApp(); tests/specs also imports gateway-edge/src/billing/provider-key-format.js directly (byok-provider-registry-parity.spec.ts) and sweeps gateway-edge/package.json's firebase-admin range (firebase-admin-major-alignment.spec.ts)",
+      "octogee-api compiles gateway-edge route Routers (cross-package imports) and its emulator specs mount them via createApp(); tests/specs also imports gateway-edge/src/model-credentials/provider-key-format.js directly (byok-provider-registry-parity.spec.ts) and sweeps gateway-edge/package.json's firebase-admin range (firebase-admin-major-alignment.spec.ts)",
   },
   {
     when: "site/firestore.rules",

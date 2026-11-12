@@ -1,4 +1,4 @@
-import { firestoreBuilderTierReader } from "@octogee/core/user-activation-lease";
+import { firestoreSizingKeyReader } from "@octogee/core/user-activation-lease";
 import { lazyPlatformStateStore, platformStateStoreFromEnvironment } from "@octogee/core/platform-state";
 import { logger } from "../middleware/logging.js";
 import { db } from "./db.js";
@@ -10,4 +10,4 @@ export const platformStateStore = lazyPlatformStateStore(() => platformStateStor
     error: (message, detail) => logger.error(message, detail),
   },
 }));
-export const readBuilderTier = firestoreBuilderTierReader(db);
+export const readSizingKey = firestoreSizingKeyReader(db);

@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
 import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
-import type { BuilderTierReader } from "@octogee/core/user-activation-lease";
+import type { SizingKeyReader } from "@octogee/core/user-activation-lease";
 import type { PlatformStateRepositories, PlatformStateStore } from "@octogee/core/platform-state";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { resolveWorkspaceConversation, resolveWorkspaceToolChannel, resolveWorkspaceToolControl, type WorkspaceConversationDeps } from "../lib/workspace-conversation.js";
@@ -10,7 +10,7 @@ import {
   ownerWorkspacePermissionsEnabled,
   perUserOwnerUid,
   principalAccess,
-  withGatewayOwnerTier,
+  withGatewayOwnerSizingKey,
   workspaceScopeFor,
 } from "../../../gateway-edge/src/routes/user/gateways.js";
 
@@ -33,7 +33,7 @@ async function targetMemberAllowed(targetUid: string | undefined, scope: { owner
 
 interface WorkspaceAccessDeps {
   store: PlatformStateStore;
-  readBuilderTier: BuilderTierReader;
+  readSizingKey: SizingKeyReader;
 }
 
 interface WorkspaceAccessResult {
@@ -49,16 +49,16 @@ async function workspaceAccess(
   const { gatewayId, targetUid } = claim;
   const auth = await readGatewayAuthorizationInStore(deps.store, gatewayId);
   if (!auth) return { status: 404, body: { error: "not_found" } };
-  return withGatewayOwnerTier(
-    { store: deps.store, readBuilderTier: deps.readBuilderTier, ownerUid: perUserOwnerUid(auth), now: Date.now() },
-    async (ownerTier): Promise<WorkspaceAccessResult> => {
+  return withGatewayOwnerSizingKey(
+    { store: deps.store, readSizingKey: deps.readSizingKey, ownerUid: perUserOwnerUid(auth), now: Date.now() },
+    async (ownerSizingKey): Promise<WorkspaceAccessResult> => {
       const scope = await workspaceScopeFor(auth, auth.config.builderSlug, deps.store, true);
       if (!scope) return { status: 404, body: { error: "not_found" } };
       const owner = await deps.store.users.records.get(scope.ownerUid);
-      if (!ownerWorkspacePermissionsEnabled(auth.config, ownerTier, owner)) {
+      if (!ownerWorkspacePermissionsEnabled(auth.config, ownerSizingKey, owner)) {
         return { status: 403, body: { error: "builder_workspace_required" } };
       }
-      const access = await principalAccess(scope, uid, deps.store, ownerTier);
+      const access = await principalAccess(scope, uid, deps.store, ownerSizingKey);
       if (access.kind === "denied") return { status: 403, body: { error: "forbidden" } };
       const assignmentState = (await deps.store.gateways.assignments.get(gatewayId, scope.ownerUid))?.state;
       if (MOVING_ASSIGNMENT_STATES.has(assignmentState)) return { status: 403, body: { error: "workspace_not_serving" } };

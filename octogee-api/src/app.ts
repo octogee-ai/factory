@@ -71,7 +71,7 @@ import {
 } from "./lib/chat-artifact-adapters.js";
 import { resolveActiveArtifactWorkspaceSlug } from "./lib/chat-artifact-workspace.js";
 import { auth, db, storage } from "../../gateway-edge/src/lib/db.js";
-import { platformStateStore, readBuilderTier } from "../../gateway-edge/src/lib/platform-state.js";
+import { platformStateStore, readSizingKey } from "../../gateway-edge/src/lib/platform-state.js";
 import {
   ConnectorTokenReadError,
   getFreshAccessTokenFromStore,
@@ -315,10 +315,10 @@ function clusterRouteOverrides(
     projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy, prewarmProjectRunCapacity: product?.prewarmProjectCapacity }),
     projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
     voiceRoutes: createVoiceRoutes({ featurePolicy, catalog: voiceCatalog, resolveChannel: async (uid, channelId) => {
-      const result = await resolveVoiceChannel({ db, store: platformStateStore, readBuilderTier }, { uid, channelId });
+      const result = await resolveVoiceChannel({ db, store: platformStateStore, readSizingKey }, { uid, channelId });
       return result ? { gatewayId: result.scope.gatewayId, channelId } : null;
     }, resolveConversation: async (uid, channelId, threadRootPostId) => {
-      const result = await startWorkspaceVoiceConversation({ db, store: platformStateStore, readBuilderTier }, { uid, channelId, threadRootPostId });
+      const result = await startWorkspaceVoiceConversation({ db, store: platformStateStore, readSizingKey }, { uid, channelId, threadRootPostId });
       return result ? { gatewayId: result.scope.gatewayId, workspaceSlug: result.scope.workspaceSlug, ownerUid: result.scope.ownerUid, channelId, threadRootPostId: result.context.threadRootPostId, sessionKey: result.context.sessionKey } : null;
     } }),
     productivityApprovalRoutes: express.Router()
@@ -621,9 +621,9 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     requireAuthenticatedUid,
     createAutomationAuthorizationBrokerRoutes({ store: platformStateStore }),
   );
-  app.use("/internal/voice", createVoiceConversationRoutes({ db, store: platformStateStore, readBuilderTier }));
-  app.use("/internal/openclaw-control", createToolConversationRoutes({ db, store: platformStateStore, readBuilderTier }));
-  app.use("/internal/openclaw-control", requireAuthenticatedUid, createWorkspaceNativeAccessRoutes({ store: platformStateStore, readBuilderTier }));
+  app.use("/internal/voice", createVoiceConversationRoutes({ db, store: platformStateStore, readSizingKey }));
+  app.use("/internal/openclaw-control", createToolConversationRoutes({ db, store: platformStateStore, readSizingKey }));
+  app.use("/internal/openclaw-control", requireAuthenticatedUid, createWorkspaceNativeAccessRoutes({ store: platformStateStore, readSizingKey }));
   app.use("/internal/workspace-git", requireAuth, createWorkspaceGitAuthorizationBrokerRoutes({ store: platformStateStore }));
   app.use("/internal/channel-agent-readiness", requireAuth, createChannelReadinessAuthorizationBrokerRoutes({ store: platformStateStore }));
   app.use(

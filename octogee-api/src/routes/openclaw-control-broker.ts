@@ -3,10 +3,10 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import type { Firestore } from "firebase-admin/firestore";
 
 import {
-  firestoreBuilderTierReader,
-  withCurrentBuilderTier,
-  type BuilderTierReader,
-  type CurrentBuilderTier,
+  firestoreSizingKeyReader,
+  withCurrentSizingKey,
+  type SizingKeyReader,
+  type CurrentSizingKey,
 } from "@octogee/core/user-activation-lease";
 import { gatewayAuthorizationFromRootDocument, readGatewayArtifactInStore } from "@octogee/core/gateway-live-release";
 import {
@@ -144,7 +144,7 @@ interface ScopedPrincipalAccess {
 
 type GatewayRootAuthorization = NonNullable<ReturnType<typeof gatewayAuthorizationFromRootDocument>>;
 
-interface OwnerTier extends CurrentBuilderTier {
+interface OwnerSizingKey extends CurrentSizingKey {
   readonly uid: string;
 }
 
@@ -153,7 +153,7 @@ interface PrincipalReadArgs {
   gatewayId: string;
   workspaceSlug: string;
   uid: string;
-  ownerTier: OwnerTier | null;
+  ownerSizingKey: OwnerSizingKey | null;
 }
 
 function perUserControlIdentity(config: GatewayRootAuthorization["config"]): boolean {
@@ -162,12 +162,12 @@ function perUserControlIdentity(config: GatewayRootAuthorization["config"]): boo
 
 function perUserIdentityEnabled(
   config: GatewayRootAuthorization["config"],
-  ownerTier: OwnerTier | null,
+  ownerSizingKey: OwnerSizingKey | null,
   owner: Stored<PlatformUserRecord> | null,
 ): boolean {
-  if (!perUserControlIdentity(config) || ownerTier === null || ownerTier.uid !== owner?.uid) return false;
-  ownerTier.assertCurrent(owner);
-  return ownerTier.tier !== null;
+  if (!perUserControlIdentity(config) || ownerSizingKey === null || ownerSizingKey.uid !== owner?.uid) return false;
+  ownerSizingKey.assertCurrent(owner);
+  return ownerSizingKey.sizingKey !== null;
 }
 
 function rootDocument(root: Stored<GatewayRoot> | null): Record<string, unknown> | undefined {
@@ -213,7 +213,7 @@ async function storedOwnerScope(
   ]);
   const scope = { gatewayId: args.gatewayId, workspaceSlug: args.workspaceSlug, ownerUid,
     perUserIdentity: workspace?.ownerUid === ownerUid &&
-      perUserIdentityEnabled(authorization.config, args.ownerTier, owner),
+      perUserIdentityEnabled(authorization.config, args.ownerSizingKey, owner),
   };
   return {
     scope,
@@ -330,7 +330,7 @@ interface ControlSessionAccessArgs {
   revisionId: string;
   sessionHash: string;
   sessionRevision: Revision;
-  ownerTier: OwnerTier | null;
+  ownerSizingKey: OwnerSizingKey | null;
   now: number;
 }
 
@@ -354,7 +354,7 @@ async function sessionAccessInTransaction(
     gatewayId: args.gatewayId,
     workspaceSlug: session.workspaceSlug,
     uid: session.uid,
-    ownerTier: args.ownerTier,
+    ownerSizingKey: args.ownerSizingKey,
   });
   if (stored?.assignmentMissing) return { kind: ASSIGNMENT_MISSING };
   const principal = stored?.principal;
@@ -390,22 +390,22 @@ function sendSessionAccessFailure(result: Exclude<SessionAccess, { kind: "allowe
 
 interface BrokerContext {
   store: PlatformStateStore;
-  readBuilderTier: BuilderTierReader;
+  readSizingKey: SizingKeyReader;
   sessionChecks: ControlSessionChecks;
   now: () => number;
 }
 
-async function withOwnerTier<T>(
+async function withOwnerSizingKey<T>(
   context: BrokerContext,
   gatewayId: string,
   now: number,
-  run: (ownerTier: OwnerTier | null) => Promise<T>,
+  run: (ownerSizingKey: OwnerSizingKey | null) => Promise<T>,
 ): Promise<T> {
   const authorization = gatewayAuthorizationFromRootDocument(rootDocument(await context.store.gateways.roots.get(gatewayId)), gatewayId);
   const uid = authorization && perUserControlIdentity(authorization.config) ? authorization.config.ownerUid : null;
   if (!uid) return run(null);
-  return withCurrentBuilderTier(
-    { store: context.store, readBuilderTier: context.readBuilderTier, uid, now },
+  return withCurrentSizingKey(
+    { store: context.store, readSizingKey: context.readSizingKey, uid, now },
     (current) => run({ ...current, uid }),
   );
 }
@@ -424,9 +424,9 @@ async function resolveSessionAccess(
     workspaceSlug: session.workspaceSlug,
     attachmentId: stored.attachmentId,
   }, now)) return { kind: SESSION_INVALID };
-  return withOwnerTier(context, input.gatewayId, now, (ownerTier) =>
+  return withOwnerSizingKey(context, input.gatewayId, now, (ownerSizingKey) =>
     context.store.transaction({ label: "openclaw-control-broker.session-access" }, (tx) =>
-      sessionAccessInTransaction(tx, { ...input, sessionRevision: stored.revision, ownerTier, now })));
+      sessionAccessInTransaction(tx, { ...input, sessionRevision: stored.revision, ownerSizingKey, now })));
 }
 
 type AuthenticatedGateway = NonNullable<ReturnType<typeof authenticatedGateway>>;
@@ -589,7 +589,7 @@ async function redeemPrincipalFailure(args: {
   attempt: RedeemAttempt;
   inspected: RedeemableTicket;
   root: Record<string, unknown> | undefined;
-  ownerTier: OwnerTier | null;
+  ownerSizingKey: OwnerSizingKey | null;
   tx: PlatformStateTransaction;
 }): Promise<RedeemResult | null> {
   const gatewayId = args.attempt.authenticated.bound.gatewayId;
@@ -599,7 +599,7 @@ async function redeemPrincipalFailure(args: {
     gatewayId,
     workspaceSlug: args.inspected.workspaceSlug,
     uid: args.inspected.uid,
-    ownerTier: args.ownerTier,
+    ownerSizingKey: args.ownerSizingKey,
   });
   if (stored?.assignmentMissing) {
     return { kind: ASSIGNMENT_MISSING };
@@ -645,7 +645,7 @@ async function persistRedeemedSession(args: {
 async function applyRedeemAttempt(
   tx: PlatformStateTransaction,
   attempt: RedeemAttempt,
-  ownerTier: OwnerTier | null,
+  ownerSizingKey: OwnerSizingKey | null,
 ): Promise<RedeemResult> {
   const documents = await loadRedeemDocuments(tx, attempt);
   const inspected = inspectRedeemDocuments({ attempt, documents });
@@ -654,7 +654,7 @@ async function applyRedeemAttempt(
     attempt,
     inspected,
     root: documents.root,
-    ownerTier,
+    ownerSizingKey,
     tx,
   });
   if (principalFailure) return principalFailure;
@@ -675,8 +675,8 @@ async function redeemAttemptInTransaction(
   context: BrokerContext,
   attempt: RedeemAttempt,
 ): Promise<RedeemResult> {
-  return withOwnerTier(context, attempt.authenticated.bound.gatewayId, attempt.attemptAt, (ownerTier) =>
-    context.store.transaction({ label: "openclaw-control-broker.redeem" }, (tx) => applyRedeemAttempt(tx, attempt, ownerTier)));
+  return withOwnerSizingKey(context, attempt.authenticated.bound.gatewayId, attempt.attemptAt, (ownerSizingKey) =>
+    context.store.transaction({ label: "openclaw-control-broker.redeem" }, (tx) => applyRedeemAttempt(tx, attempt, ownerSizingKey)));
 }
 
 function sendRedeemResult(result: RedeemResult, res: Response): void {
@@ -894,7 +894,7 @@ export function createOpenClawControlBrokerRoutes(args: {
   const router = Router();
   const context: BrokerContext = {
     store: args.store,
-    readBuilderTier: firestoreBuilderTierReader(args.db),
+    readSizingKey: firestoreSizingKeyReader(args.db),
     sessionChecks: nativeMobileControlSessionChecks({ db: args.db, store: args.store }),
     now: args.now ?? Date.now,
   };

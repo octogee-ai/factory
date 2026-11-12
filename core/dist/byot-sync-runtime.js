@@ -16,7 +16,7 @@ import { agentIdBelongsToSlug, catalogEntryForModelRef, canonicalUserModelDefini
 import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { configuredPlatformVertexBaseUrl } from "./platform-vertex-env.js";
 import { userModelProviderDeclarationsMatch, platformBrokerProviderDeclarations } from "./system-config-invariants.js";
-import { DEFAULT_FREE_TIER_MODEL_REF, parseUserAgentModelDefault, } from "@octogee/shared/types/platform-config";
+import { DEFAULT_HOUSE_MODEL_REF, parseUserAgentModelDefault, } from "@octogee/shared/types/platform-config";
 // byot-sync fires at pod boot, before openclaw is listening on :18789, so the
 // default-agent-model patch must wait for the runtime to finish booting (ECONNREFUSED)
 // rather than burn a fixed 3-shot budget. Deadline-bounded (matches the
@@ -1468,9 +1468,9 @@ function userByotGate(user, shared, desired, userData, logFn) {
 }
 function safeUserModelRef(userData, houseOnly) {
     if (houseOnly)
-        return DEFAULT_FREE_TIER_MODEL_REF;
+        return DEFAULT_HOUSE_MODEL_REF;
     return parseUserAgentModelDefault(userData.builderAgentDefault)?.primary ??
-        DEFAULT_FREE_TIER_MODEL_REF;
+        DEFAULT_HOUSE_MODEL_REF;
 }
 async function purgeUserOauthIfRequired(user, slug, safeModelRef, suppressed, actions) {
     if (user)
@@ -1499,7 +1499,7 @@ export async function syncByotForUser(userData, deps) {
     const logFn = deps?.logFn ?? log;
     const userGate = userByotGate(user, shared, desired, userData, logFn);
     const effectiveDesired = userGate.desired;
-    const houseOnly = userEntitlements().plan(userData.planInputs).modelAccess === "house_only";
+    const houseOnly = userEntitlements().policy(userData.planInputs).modelAccess === "house_only";
     const oauthPurge = await purgeUserOauthIfRequired(user, slug, safeUserModelRef(userData, houseOnly), userGate.suppressed, actions);
     await syncByotStateForClass({
         slug,
@@ -1535,9 +1535,9 @@ function agentModelsWithUserDefault(slug, userData, desired, opts) {
 }
 function platformDefaultSelection(userData, houseOnly) {
     if (houseOnly)
-        return { primary: DEFAULT_FREE_TIER_MODEL_REF, fallbacks: [] };
+        return { primary: DEFAULT_HOUSE_MODEL_REF, fallbacks: [] };
     return parseUserAgentModelDefault(userData.builderAgentDefault) ?? {
-        primary: DEFAULT_FREE_TIER_MODEL_REF,
+        primary: DEFAULT_HOUSE_MODEL_REF,
         fallbacks: [],
     };
 }

@@ -12,7 +12,7 @@ import {
   simpleModelTierForRef,
 } from "./agent-models";
 import { MODEL_CATALOG, VERTEX_MODEL_CATALOG, modelCatalogEntryFor } from "./model-catalog";
-import { resolveFreeTierModel } from "./platform-config";
+import { resolveHouseModel } from "./platform-config";
 
 describe("model refs", () => {
   it.each(["luna", "sol", "astra"].flatMap((model) => [model, `${model}-pro`]))(
@@ -49,7 +49,7 @@ describe("model refs", () => {
     expect(platformModelRefs()).toContain(ref);
     expect(platformModelRefs()).not.toContain("vertex/claude-sonnet-5");
     expect(MODEL_CATALOG).not.toContain(entry);
-    expect(resolveFreeTierModel(ref)).toEqual({ ref, provider: "vertex", upstreamModelId: "claude-sonnet-5" });
+    expect(resolveHouseModel(ref)).toEqual({ ref, provider: "vertex", upstreamModelId: "claude-sonnet-5" });
   });
 
   it("round-trips every catalog entry through platformModelRefs", () => {

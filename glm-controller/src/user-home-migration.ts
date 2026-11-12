@@ -1,4 +1,4 @@
-import type { BuilderTierReader } from "@octogee/core/user-activation-lease";
+import type { SizingKeyReader } from "@octogee/core/user-activation-lease";
 import type { PlatformUserRecord, PlatformStateStore } from "@octogee/core/platform-state";
 import type { CopyHomeDisk, HomeCopyInput, HomeCopyProgress } from "./lib/compute-home-copy.js";
 
@@ -37,7 +37,7 @@ export function userHomeOwner(user: PlatformUserRecord): UserHomeOwner {
 }
 export interface UserHomeMigrationDeps {
   store: PlatformStateStore;
-  readBuilderTier: BuilderTierReader;
+  readSizingKey: SizingKeyReader;
   environment: "test" | "prod";
   now: () => number;
   subnetwork: string;

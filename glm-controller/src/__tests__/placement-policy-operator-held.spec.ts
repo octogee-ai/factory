@@ -61,7 +61,7 @@ function harness(state: PlacementPolicySnapshot) {
     assignInitialPlacement: vi.fn(async () => undefined),
     allocateDisposableGateway: vi.fn(async () => "run-lin-12345678"),
     advanceActivationLease: vi.fn(async () => undefined),
-    requestTierTransition: vi.fn(async () => undefined),
+    requestSizingKeyTransition: vi.fn(async () => undefined),
     completeActivationLease: vi.fn(async () => undefined),
     failActivationLease: vi.fn(async () => undefined),
     recoverUnavailableGateway: vi.fn(async (request: { operationId: string }) => ({ operationId: request.operationId })),
