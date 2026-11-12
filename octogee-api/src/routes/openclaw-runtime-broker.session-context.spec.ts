@@ -3,10 +3,9 @@ import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceChannel } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
-import { InMemoryActivityWriteReceiptStore } from "../../../gateway-edge/src/chat-proxy/openclaw/activity-write-receipts.js";
+import { receiptDocumentId } from "../../../gateway-edge/src/chat-proxy/openclaw/activity-write-receipts.js";
 import {
   createOpenClawRuntimeBrokerRoutes,
-  type ActivityWriteReceiptStoreFactory,
   type SessionChannelPurposeReader,
 } from "./openclaw-runtime-broker.js";
 
@@ -18,16 +17,15 @@ const docs: Record<string, Record<string, unknown>> = {
   "workspaces/bob/channels/tripplan": { kind: "session", mattermost: { channelId: SESSION } },
 };
 
-function app(opts: { readSessionChannelPurpose?: SessionChannelPurposeReader; activityReceipts?: ActivityWriteReceiptStoreFactory } = {}) {
+function app(opts: { readSessionChannelPurpose?: SessionChannelPurposeReader; documents?: Record<string, Record<string, unknown>> } = {}) {
   const server = express();
   server.use(express.json(), (req, _res, next) => {
     req.boundTenant = { kind: "gateway", gatewayId: "builder-bob" } as Express.Request["boundTenant"];
     next();
   });
   server.use(createOpenClawRuntimeBrokerRoutes({
-    store: createDocumentFixtureStore(docs),
+    store: createDocumentFixtureStore(opts.documents ?? structuredClone(docs)),
     readSizingKey: async () => null,
-    activityReceipts: opts.activityReceipts ?? (() => { throw new Error("no receipts expected"); }),
     ...(opts.readSessionChannelPurpose ? { readSessionChannelPurpose: opts.readSessionChannelPurpose } : {}),
   }));
   return server;
@@ -54,20 +52,26 @@ describe("session channel context", () => {
 });
 
 describe("activity write receipts", () => {
-  it("claim and read through the receipt store supplied for the channel", async () => {
-    const receipts = new InMemoryActivityWriteReceiptStore();
-    const activityReceipts = vi.fn<ActivityWriteReceiptStoreFactory>(() => receipts);
-    const server = app({ activityReceipts });
-    const channelDocPath = "workspaces/bob/channels/tripplan";
-    const claim = await request(server).post("/activity/write-receipts/claim").send({
-      channelDocPath,
-      input: { eventKey: EVENT_KEY, payloadDigest: "b".repeat(64), historyAnchorPostId: "p".repeat(26), leaseOwner: "worker-1", now: 1_000, leaseMs: 5_000 },
-    });
+  const channelDocPath = "workspaces/bob/channels/tripplan";
+  const claimBody = {
+    channelDocPath,
+    input: { eventKey: EVENT_KEY, payloadDigest: "b".repeat(64), historyAnchorPostId: "p".repeat(26), leaseOwner: "worker-1", now: 1_000, leaseMs: 5_000 },
+  };
+
+  it("claims and reads the channel's receipt in platform state", async () => {
+    const documents = structuredClone(docs);
+    const server = app({ documents });
+    const claim = await request(server).post("/activity/write-receipts/claim").send(claimBody);
     expect(claim.status).toBe(200);
     expect(claim.body).toMatchObject({ outcome: "claimed" });
     const read = await request(server).post("/activity/write-receipts/read").send({ channelDocPath, eventKey: EVENT_KEY });
     expect(read.status).toBe(200);
     expect(read.body).toMatchObject({ receipt: { eventKey: EVENT_KEY, leaseOwner: "worker-1", state: "claimed" } });
-    expect(activityReceipts.mock.calls).toEqual([[channelDocPath], [channelDocPath]]);
+    expect(documents[`${channelDocPath}/activityWriteReceipts/${receiptDocumentId(EVENT_KEY)}`]).toMatchObject({ state: "claimed", leaseOwner: "worker-1" });
+  });
+
+  it("refuses a receipt for a channel platform state does not hold", async () => {
+    const response = await request(app()).post("/activity/write-receipts/claim").send({ ...claimBody, channelDocPath: "workspaces/bob/channels/gone" });
+    expect({ status: response.status, body: response.body }).toEqual({ status: 404, body: { error: "receipt_channel_not_found" } });
   });
 });

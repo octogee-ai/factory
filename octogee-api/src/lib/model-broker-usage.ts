@@ -1,21 +1,11 @@
 import * as crypto from "node:crypto";
-import type {
-  DocumentData,
-  DocumentReference,
-  Firestore,
-  Transaction,
-} from "firebase-admin/firestore";
 
-import { WINDOW_LENGTH_HOURS } from "@octogee/shared/types/model-broker-usage";
 import { modelCatalogEntryFor } from "@octogee/shared/types/model-catalog";
 import {
   MODEL_BROKER_USAGE_EVENTS_COLLECTION,
   MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
   MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
-  MODEL_BROKER_WEEK_WINDOWS_COLLECTION,
-  MODEL_BROKER_WEEK_WINDOW_MS,
   MODEL_BROKER_RATE_WINDOWS_COLLECTION,
-  MODEL_BROKER_RATE_WINDOW_MS,
   modelBrokerWindowDocId as windowDocId,
   rateWindowStartMs,
   usageWindowStartMs,
@@ -114,6 +104,21 @@ export interface ModelBrokerUsageStore {
   readBalance?(ref: BalanceLedgerRef): Promise<number>;
   readFundedBudgetLedger?(ref: FundedBudgetLedgerRef): Promise<FundedBudgetLedger | null>;
 }
+
+export type ModelBrokerUsageLedger = Required<ModelBrokerUsageStore>;
+
+const usageUnconfigured = async (): Promise<never> => {
+  throw new Error("model broker usage needs a product ledger");
+};
+
+export const UNCONFIGURED_MODEL_BROKER_USAGE: ModelBrokerUsageLedger = {
+  recordUsage: usageUnconfigured,
+  readWindowUsage: usageUnconfigured,
+  readWeekUsage: usageUnconfigured,
+  reserveRateWindow: usageUnconfigured,
+  readBalance: usageUnconfigured,
+  readFundedBudgetLedger: usageUnconfigured,
+};
 
 export interface ModelBrokerWeekSnapshot {
   ownerKey: string;
@@ -422,7 +427,7 @@ export function resolveRecordedCost(
   };
 }
 
-function resolvedChargeUsd(input: ModelBrokerUsageRecordInput, cost: ModelBrokerUsageCost): number {
+export function resolvedChargeUsd(input: ModelBrokerUsageRecordInput, cost: ModelBrokerUsageCost): number {
   const charge = input.chargeUsd;
   if (typeof charge === "number" && Number.isFinite(charge) && charge >= 0) return charge;
   return input.priceMultiplier === undefined
@@ -442,13 +447,13 @@ export function modelRollupKey(model: string): string {
   return model.replace(/[/.]/g, "_").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 100) || "unknown";
 }
 
-function rateWindowOwnerKey(input: ModelBrokerRateWindowReserveInput): string {
+export function rateWindowOwnerKey(input: ModelBrokerRateWindowReserveInput): string {
   const ownerKey = windowOwnerKey(input);
   return input.scope ? `${ownerKey}:${input.scope}` : ownerKey;
 }
 
 
-function expiresAt(now: number): Date {
+export function usageExpiresAt(now: number): Date {
   return new Date(now + USAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000);
 }
 
@@ -458,12 +463,12 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function numberField(data: Record<string, unknown>, key: string): number {
+export function numberField(data: Record<string, unknown>, key: string): number {
   const value = data[key];
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function chargeField(data: Record<string, unknown>): number {
+export function chargeField(data: Record<string, unknown>): number {
   return typeof data.chargeUsd === "number" && Number.isFinite(data.chargeUsd)
     ? data.chargeUsd
     : numberField(data, "costUsd");
@@ -494,7 +499,7 @@ function addUsageFields(
   };
 }
 
-function usageDocumentTotals(
+export function usageDocumentTotals(
   existing: Record<string, unknown>,
   usage: AnthropicTokenUsage,
   cost: ModelBrokerUsageCost,
@@ -519,7 +524,7 @@ function usageDocumentTotals(
   };
 }
 
-function modelTotals(input: {
+export function modelTotals(input: {
   existing: Record<string, unknown>;
   modelKey: string;
   model: string;
@@ -555,7 +560,7 @@ function traceFields(input: ModelBrokerUsageRecordInput): Record<string, unknown
   };
 }
 
-function latestTraceFields(input: ModelBrokerUsageRecordInput): Record<string, unknown> {
+export function latestTraceFields(input: ModelBrokerUsageRecordInput): Record<string, unknown> {
   return {
     lastBrokerTokenHash: input.brokerTokenHash ?? null,
     lastBrokerTokenSecretName: input.brokerTokenSecretName ?? null,
@@ -566,7 +571,7 @@ function latestTraceFields(input: ModelBrokerUsageRecordInput): Record<string, u
   };
 }
 
-function eventDocument(
+export function eventDocument(
   input: ModelBrokerUsageRecordInput & {
     eventId: string;
     now: number;
@@ -595,7 +600,7 @@ function eventDocument(
     path: input.path,
     upstreamStatus: input.upstreamStatus,
     createdAt: input.now,
-    expiresAt: expiresAt(input.now),
+    expiresAt: usageExpiresAt(input.now),
     windowStartMs: input.windowStartMs,
     usage: input.usage,
     totalTokens: totalTokens(input.usage),
@@ -617,13 +622,13 @@ function eventDocument(
 
 const FUNDED_BUDGET_LEDGER_MISMATCH = "funded budget ledger missing or does not match its binding";
 
-function requireFundedBudgetLedger(value: unknown, ref: FundedBudgetLedgerRef): FundedBudgetLedger {
+export function requireFundedBudgetLedger(value: unknown, ref: FundedBudgetLedgerRef): FundedBudgetLedger {
   const ledger = parseFundedBudgetLedger(value, ref);
   if (!ledger) throw new Error(FUNDED_BUDGET_LEDGER_MISMATCH);
   return ledger;
 }
 
-function fundedBudgetCharge(
+export function fundedBudgetCharge(
   ledger: FundedBudgetLedger,
   ref: FundedBudgetLedgerRef,
   usage: AnthropicTokenUsage,
@@ -805,268 +810,4 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
     this.rateWindows.set(key, next);
     return next;
   }
-}
-
-interface UsageWriteArgs {
-  input: ModelBrokerUsageRecordInput;
-  cost: ModelBrokerUsageCost;
-  chargeUsd: number;
-  now: number;
-  eventId: string;
-  cacheWriteTtl: AnthropicCacheWriteTtl;
-  ownerKey: string;
-  modelKey: string;
-  windowStartMs: number;
-  weekStartMs: number;
-  countsTowardWindow: boolean;
-  refs: {
-    eventRef: DocumentReference;
-    rollupRef: DocumentReference;
-    windowRef: DocumentReference;
-    weekRef: DocumentReference;
-    balanceRef: DocumentReference | null;
-    fundedBudgetRef: DocumentReference | null;
-  };
-  snaps: {
-    rollup: DocumentData;
-    window: DocumentData;
-    week: DocumentData;
-    balance: DocumentData;
-    fundedBudget: DocumentData;
-  };
-}
-
-// The mutation half of the metering transaction. Kept separate from the reads so
-// the reads-before-writes ordering the Firestore SDK requires is obvious, and so
-// neither half individually trips the size/complexity ratchet.
-function applyUsageWrites(t: Transaction, a: UsageWriteArgs): void {
-  const { input, cost, chargeUsd, now, ownerKey, refs, snaps } = a;
-  t.set(
-    refs.eventRef,
-    eventDocument({
-      ...input,
-      eventId: a.eventId,
-      now,
-      cacheWriteTtl: a.cacheWriteTtl,
-      cost,
-      chargeUsd,
-      windowStartMs: a.windowStartMs,
-    }),
-  );
-  t.set(
-    refs.rollupRef,
-    {
-      ownerKey,
-      gatewayId: input.gatewayId,
-      ownerUid: input.ownerUid,
-      provider: input.provider,
-      updatedAt: now,
-      ...latestTraceFields(input),
-      ...usageDocumentTotals(snaps.rollup, input.usage, cost, chargeUsd),
-      models: modelTotals({
-        existing: snaps.rollup,
-        modelKey: a.modelKey,
-        model: input.model,
-        provider: input.provider,
-        usage: input.usage,
-        cost,
-        chargeUsd,
-      }),
-    },
-    { merge: true },
-  );
-  if (a.countsTowardWindow) {
-    t.set(
-      refs.windowRef,
-      {
-        ownerKey,
-        gatewayId: input.gatewayId,
-        ownerUid: input.ownerUid,
-        provider: input.provider,
-        windowStartMs: a.windowStartMs,
-        windowLengthHours: WINDOW_LENGTH_HOURS,
-        updatedAt: now,
-        expiresAt: expiresAt(now),
-        ...latestTraceFields(input),
-        ...usageDocumentTotals(snaps.window, input.usage, cost, chargeUsd),
-      },
-      { merge: true },
-    );
-    t.set(
-      refs.weekRef,
-      {
-        ownerKey,
-        gatewayId: input.gatewayId,
-        ownerUid: input.ownerUid,
-        provider: input.provider,
-        weekStartMs: a.weekStartMs,
-        windowLengthMs: MODEL_BROKER_WEEK_WINDOW_MS,
-        updatedAt: now,
-        expiresAt: expiresAt(now),
-        ...latestTraceFields(input),
-        ...usageDocumentTotals(snaps.week, input.usage, cost, chargeUsd),
-      },
-      { merge: true },
-    );
-  }
-  if (refs.balanceRef && input.balanceDebit) {
-    t.set(
-      refs.balanceRef,
-      {
-        ownerUid: input.balanceDebit.ownerUid,
-        balanceUsd: numberField(snaps.balance, "balanceUsd") - chargeUsd,
-        updatedAt: now,
-      },
-      { merge: true },
-    );
-  }
-  if (refs.fundedBudgetRef && input.fundedBudget) {
-    const ledger = requireFundedBudgetLedger(snaps.fundedBudget, input.fundedBudget);
-    t.set(
-      refs.fundedBudgetRef,
-      fundedBudgetCharge(ledger, input.fundedBudget, input.usage, chargeUsd, now),
-      { merge: true },
-    );
-  }
-}
-
-export function createFirestoreModelBrokerUsageStore(
-  db: Pick<Firestore, "collection" | "runTransaction">,
-): ModelBrokerUsageStore {
-  return {
-    async recordUsage(input) {
-      const now = input.now ?? Date.now();
-      const eventId = input.eventId ?? crypto.randomUUID();
-      const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
-      const cost = resolveRecordedCost(input, cacheWriteTtl);
-      const chargeUsd = resolvedChargeUsd(input, cost);
-      const windowStartMs = usageWindowStartMs(now);
-      const weekStartMs = weekWindowStartMs(now);
-      const ownerKey = windowOwnerKey(input);
-      const eventRef = db.collection(MODEL_BROKER_USAGE_EVENTS_COLLECTION).doc(eventId);
-      const rollupRef = db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(ownerKey);
-      const windowRef = db
-        .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
-        .doc(windowDocId(ownerKey, windowStartMs));
-      const weekRef = db
-        .collection(MODEL_BROKER_WEEK_WINDOWS_COLLECTION)
-        .doc(windowDocId(ownerKey, weekStartMs));
-      const balanceRef = input.balanceDebit
-        ? db.collection(input.balanceDebit.collection).doc(input.balanceDebit.ownerUid)
-        : null;
-      const fundedBudgetRef = input.fundedBudget
-        ? db.collection(input.fundedBudget.ledgerCollection).doc(input.fundedBudget.ledgerKey)
-        : null;
-      const modelKey = modelRollupKey(input.model);
-
-      const countsTowardWindow = input.countsTowardSpendWindow !== false;
-      await db.runTransaction(async (t) => {
-        const existingEvent = await t.get(eventRef);
-        if (existingEvent.exists) return;
-        const [rollupSnap, windowSnap, weekSnap, balanceSnap, fundedBudgetSnap] = await Promise.all([
-          t.get(rollupRef),
-          t.get(windowRef),
-          countsTowardWindow ? t.get(weekRef) : Promise.resolve(null),
-          balanceRef ? t.get(balanceRef) : Promise.resolve(null),
-          fundedBudgetRef ? t.get(fundedBudgetRef) : Promise.resolve(null),
-        ]);
-        applyUsageWrites(t, {
-          input,
-          cost,
-          chargeUsd,
-          now,
-          eventId,
-          cacheWriteTtl,
-          ownerKey,
-          modelKey,
-          windowStartMs,
-          weekStartMs,
-          countsTowardWindow,
-          refs: { eventRef, rollupRef, windowRef, weekRef, balanceRef, fundedBudgetRef },
-          snaps: {
-            rollup: rollupSnap.data() ?? {},
-            window: windowSnap.data() ?? {},
-            week: weekSnap?.data() ?? {},
-            balance: balanceSnap?.data() ?? {},
-            fundedBudget: fundedBudgetSnap?.data() ?? {},
-          },
-        });
-      });
-    },
-
-    async readWindowUsage(input) {
-      const now = input.now ?? Date.now();
-      const windowStartMs = usageWindowStartMs(now);
-      const ownerKey = windowOwnerKey(input);
-      const snap = await db
-        .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
-        .doc(windowDocId(ownerKey, windowStartMs))
-        .get();
-      const data = snap.data() ?? {};
-      return {
-        ownerKey,
-        windowStartMs,
-        requestCount: numberField(data, "requestCount"),
-        totalTokens: numberField(data, "totalTokens"),
-        costUsd: numberField(data, "costUsd"),
-        chargeUsd: chargeField(data),
-      };
-    },
-
-    async readWeekUsage(input) {
-      const now = input.now ?? Date.now();
-      const weekStartMs = weekWindowStartMs(now);
-      const ownerKey = windowOwnerKey(input);
-      const snap = await db
-        .collection(MODEL_BROKER_WEEK_WINDOWS_COLLECTION)
-        .doc(windowDocId(ownerKey, weekStartMs))
-        .get();
-      const data = snap.data() ?? {};
-      return {
-        ownerKey,
-        weekStartMs,
-        requestCount: numberField(data, "requestCount"),
-        totalTokens: numberField(data, "totalTokens"),
-        costUsd: numberField(data, "costUsd"),
-        chargeUsd: chargeField(data),
-      };
-    },
-
-    async readBalance(ref) {
-      const snap = await db.collection(ref.collection).doc(ref.ownerUid).get();
-      return numberField((snap.data() ?? {}) as Record<string, unknown>, "balanceUsd");
-    },
-
-    async readFundedBudgetLedger(ref) {
-      const snap = await db.collection(ref.ledgerCollection).doc(ref.ledgerKey).get();
-      return parseFundedBudgetLedger(snap.data(), ref);
-    },
-
-    async reserveRateWindow(input) {
-      const now = input.now ?? Date.now();
-      const windowStartMs = rateWindowStartMs(now);
-      const ownerKey = rateWindowOwnerKey(input);
-      const rateRef = db
-        .collection(MODEL_BROKER_RATE_WINDOWS_COLLECTION)
-        .doc(windowDocId(ownerKey, windowStartMs));
-      return db.runTransaction(async (t) => {
-        const snap = await t.get(rateRef);
-        const data = snap.data() ?? {};
-        const requestCount = numberField(data, "requestCount") + 1;
-        t.set(
-          rateRef,
-          {
-            ownerKey,
-            windowStartMs,
-            windowLengthMs: MODEL_BROKER_RATE_WINDOW_MS,
-            requestCount,
-            updatedAt: now,
-            expiresAt: expiresAt(now),
-          },
-          { merge: true },
-        );
-        return { ownerKey, windowStartMs, requestCount };
-      });
-    },
-  };
 }

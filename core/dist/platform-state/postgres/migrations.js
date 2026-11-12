@@ -1082,6 +1082,21 @@ ALTER TABLE users DROP CONSTRAINT users_gateway_profile_check;
 ALTER TABLE users ADD CONSTRAINT users_gateway_profile_check CHECK (gateway_profile IN ('standard','isolated','builder'));
 UPDATE users SET gateway_profile = 'isolated' WHERE gateway_profile = 'builder';
 `;
+const ACTIVITY_RECEIPTS = String.raw `
+CREATE TABLE activity_receipts (
+  workspace_slug  text NOT NULL,
+  project_slug    text NOT NULL,
+  channel_id      text NOT NULL,
+  receipt_id      text NOT NULL CHECK (receipt_id ~ '^[a-f0-9]{64}$'),
+  receipt         jsonb NOT NULL,
+  revision        bigint NOT NULL DEFAULT nextval('record_revision_seq'),
+  PRIMARY KEY (workspace_slug, project_slug, channel_id, receipt_id),
+  FOREIGN KEY (workspace_slug, project_slug, channel_id)
+    REFERENCES workspace_channels (workspace_slug, project_slug, channel_id) ON DELETE CASCADE
+);
+CREATE TRIGGER activity_receipts_revision BEFORE UPDATE ON activity_receipts
+  FOR EACH ROW EXECUTE FUNCTION bump_revision();
+`;
 export const PLATFORM_STATE_MIGRATIONS = [
     { version: 1, name: "core-schema", sql: CORE_SCHEMA },
     { version: 2, name: "change-feed", sql: CHANGE_FEED },
@@ -1095,4 +1110,5 @@ export const PLATFORM_STATE_MIGRATIONS = [
     { version: 10, name: "runtime-secret-store", sql: RUNTIME_SECRET_STORE },
     { version: 11, name: "meta-broker-provider", sql: META_BROKER_PROVIDER },
     { version: 12, name: "neutral-stored-names", sql: NEUTRAL_STORED_NAMES },
+    { version: 13, name: "activity-receipts", sql: ACTIVITY_RECEIPTS },
 ];

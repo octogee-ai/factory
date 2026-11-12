@@ -3,6 +3,8 @@ import { linkChannelIdentity, managedExternalUserIdOf } from "./channel-identiti
 import { DuplicateRecordError, MissingRecordError, type RecordKey } from "../errors.js";
 import type { Stored, WatchFilters } from "../store.js";
 import type {
+  ActivityReceipt,
+  ActivityReceiptsRepository,
   UserAgentIdentitiesRepository,
   UserAgentIdentity,
   WorkspaceChannel,
@@ -18,7 +20,7 @@ import type {
   WorkspaceRecordsRepository,
   WorkspaceRepositories,
 } from "../workspaces.js";
-import { deleteRecord, revisionFence, selectByKey, selectRecords, serverNow, updateRecord } from "./records.js";
+import { deleteRecord, insertRecord, revisionFence, selectByKey, selectRecords, serverNow, updateRecord } from "./records.js";
 import type { PostgresSession } from "./session.js";
 import { SqlParameters, type Row } from "./sql.js";
 import {
@@ -148,6 +150,19 @@ const AGENT_IDENTITIES_TABLE: TableSpec = {
     column("uid", "text"),
     column("createdAt", "bigint", nullable),
     column("updatedAt", "bigint", nullable),
+  ],
+};
+
+const ACTIVITY_RECEIPTS_TABLE: TableSpec = {
+  table: "activity_receipts",
+  aggregate: "activity-receipt",
+  keyColumns: ["workspace_slug", "project_slug", "channel_id", "receipt_id"],
+  columns: [
+    column("workspaceSlug", "text"),
+    column("projectSlug", "text"),
+    column("channelId", "text"),
+    column("receiptId", "text"),
+    column("receipt", "jsonb"),
   ],
 };
 
@@ -613,6 +628,39 @@ function createAgentIdentitiesRepository(session: PostgresSession): UserAgentIde
   };
 }
 
+function decodeActivityReceipt(row: Row): Stored<ActivityReceipt> {
+  const { workspaceSlug, projectSlug, ...receipt } = decodeStored<
+    Omit<ActivityReceipt, "scope"> & { readonly workspaceSlug: string; readonly projectSlug: string }
+  >(ACTIVITY_RECEIPTS_TABLE, row);
+  return {
+    scope: { workspaceSlug, projectSlug: projectSlug === WORKSPACE_SCOPE_PROJECT_SLUG ? null : projectSlug },
+    ...receipt,
+  };
+}
+
+function createActivityReceiptsRepository(session: PostgresSession): ActivityReceiptsRepository {
+  return {
+    async get(key) {
+      const row = await selectByKey(session, "workspaces.activityReceipts.get", {
+        table: ACTIVITY_RECEIPTS_TABLE,
+        key: [key.scope.workspaceSlug, storedProjectSlug(key.scope), key.channelId, key.receiptId],
+      });
+      return row === null ? null : decodeActivityReceipt(row);
+    },
+
+    async put(receipt) {
+      const { scope, ...fields } = receipt;
+      await insertRecord(
+        session,
+        "workspaces.activityReceipts.put",
+        ACTIVITY_RECEIPTS_TABLE,
+        { ...fields, workspaceSlug: scope.workspaceSlug, projectSlug: storedProjectSlug(scope) },
+        "put",
+      );
+    },
+  };
+}
+
 export function createPostgresWorkspaceRepositories(session: PostgresSession): WorkspaceRepositories {
   return {
     records: createWorkspaceRecordsRepository(session),
@@ -621,6 +669,7 @@ export function createPostgresWorkspaceRepositories(session: PostgresSession): W
     projectMembers: createWorkspaceProjectMembersRepository(session),
     channels: createWorkspaceChannelsRepository(session),
     agentIdentities: createAgentIdentitiesRepository(session),
+    activityReceipts: createActivityReceiptsRepository(session),
   };
 }
 

@@ -5,7 +5,6 @@ import { isolatedBootMode } from "@octogee/core/isolated-prelaunch";
 import { sharedAgentAnchorMigrationScope, sharedAssignedSourceSurgeAnchorScope } from "../lib/shared-agent-anchor-migration.js";
 import { installWorkspaceBlobBrokerRoute, type WorkspaceBlobStore } from "./fleet-broker-workspace-blob.js";
 import { readUserRestoreAuthoritySnapshot } from "@octogee/core/fleet-state";
-import { firestoreUserAccountReader } from "@octogee/core/user-account";
 import {
   FenceMismatchError,
   MalformedRecordError,
@@ -59,7 +58,6 @@ import {
   type VmHomeStore,
 } from "../lib/vm-home-checkpoint.js";
 import { Router, type Request, type Response } from "express";
-import type { Firestore } from "firebase-admin/firestore";
 
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import { parseAgentLook, type AgentLook } from "@octogee/shared/types/agent-look";
@@ -137,7 +135,7 @@ import {
 import { createCachedOwnerModelBrokerGrantResolver } from "../lib/model-broker-limits.js";
 import { operatorRailRegistry, type ModelBrokerRailRegistry } from "../lib/model-broker-rails.js";
 import type { FundedBudgetInterruptionHandler } from "../lib/model-broker-budget.js";
-import { createFirestoreModelBrokerUsageStore } from "../lib/model-broker-usage.js";
+import { NO_BROKER_RECORDS, type BrokerRecords } from "../lib/broker-records.js";
 import { createWebResearchService, type WebResearchExtractInput, type WebResearchSearchInput } from "../lib/web-research-service.js";
 import { WebResearchError } from "../lib/web-research-error.js";
 import { createBraveSearchClient, createTavilyClient } from "../lib/web-provider-clients.js";
@@ -169,15 +167,6 @@ type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" 
 const FORBIDDEN = { error: "forbidden" } as const;
 const RECONCILE_ERROR_REPORT_WINDOW_MS = 60_000;
 
-type RecordUsageEvent = (input: {
-  db: Firestore;
-  uid: string;
-  agentId: string;
-  usage: FleetBrokerUsageData;
-  gatewayId: string;
-  workspaceSlug: string | null;
-}) => Promise<void>;
-
 type ReadBlobMetadata = (gcsPath: string) => Promise<{ generation?: unknown; size?: unknown; md5Hash?: unknown; storage?: "s3" }>;
 
 type CreateBlobSignedUrl = (input: {
@@ -203,16 +192,6 @@ type RenderAvatar = (bytes: Buffer) => Promise<Buffer>;
 function validIdentityEmoji(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= 32;
 }
-
-type ApplyDefaultAgentIdentity = (input: {
-  uid: string;
-  slug: string;
-  name?: string;
-  persona?: string;
-  emoji?: string;
-  avatarPng?: Buffer;
-  look?: AgentLook;
-}) => Promise<string[]>;
 
 // Chat broker: the gateway skill is a thin client; PAT resolution + MM reads run
 // HERE so no chat PAT ever reaches the injection-reachable agent runtime. The
@@ -252,7 +231,7 @@ type ExecuteChatHistory = (
 ) => Promise<Record<string, unknown>>;
 
 type ResolveChatIdentity = (
-  deps: { db: Firestore; store: PlatformStateStore },
+  deps: { records: BrokerRecords; store: PlatformStateStore },
   input: { uid: string; slug: string; agentId: string },
 ) => Promise<{
   lane: "workspace" | "project";
@@ -283,9 +262,7 @@ interface FleetBrokerRouteDeps {
     mmUpdate: FleetBrokerMattermostUpdate;
   }) => Promise<void>;
   onUserProvisioned?: (report: ProvisionedUserReport) => Promise<void>;
-  recordUsageEvent?: RecordUsageEvent;
   renderAvatar?: RenderAvatar;
-  applyDefaultAgentIdentity?: ApplyDefaultAgentIdentity;
   createBlobSignedUrl?: CreateBlobSignedUrl;
   createVmHomeSignedUrl?: CreateBlobSignedUrl;
   createIsolatedRuntimeStateSignedUrl?: CreateBlobSignedUrl;
@@ -347,24 +324,13 @@ const defaultRenderAvatar: RenderAvatar = async (bytes) => {
   return renderAvatarPng(bytes);
 };
 
-const defaultApplyDefaultAgentIdentity: ApplyDefaultAgentIdentity = async (input) => {
-  const { syncDefaultAgentIdentity } = await import(
-    "../../../gateway-edge/src/lib/default-agent-identity.js"
-  );
-  return syncDefaultAgentIdentity(
-    input.uid,
-    { name: input.name, persona: input.persona, emoji: input.emoji, avatarPng: input.avatarPng, look: input.look },
-    { slug: input.slug },
-  );
-};
-
 async function applyDefaultAgentLook(
   input: { uid: string; slug: string },
-  deps: { renderAvatar: RenderAvatar; applyDefaultAgentIdentity: ApplyDefaultAgentIdentity },
+  deps: { renderAvatar: RenderAvatar; records: BrokerRecords },
 ): Promise<void> {
   try {
     const avatarPng = await deps.renderAvatar(Buffer.from(characterSvg(DEFAULT_AGENT_LOOK), "utf8"));
-    await deps.applyDefaultAgentIdentity({ ...input, avatarPng, look: DEFAULT_AGENT_LOOK });
+    await deps.records.agentIdentity.sync(input.uid, { avatarPng, look: DEFAULT_AGENT_LOOK }, { slug: input.slug });
   } catch (error) {
     logger.error("[fleet-broker] default agent look was not applied", { uid: input.uid, error });
   }
@@ -388,7 +354,7 @@ const defaultResolveChatIdentity: ResolveChatIdentity = async (deps, input) => {
   const { resolveChatIdentity } = await import(
     "../../../gateway-edge/src/lib/chat-broker/resolve-pat.js"
   );
-  return resolveChatIdentity(deps, input);
+  return resolveChatIdentity({ readAccount: deps.records.userDocuments.account, store: deps.store }, input);
 };
 
 function positiveConfigNumber(raw: string | undefined, fallback: number, name: string): number {
@@ -401,7 +367,7 @@ function positiveConfigNumber(raw: string | undefined, fallback: number, name: s
 }
 
 function createDefaultWebResearch(
-  db: Firestore,
+  records: BrokerRecords,
   store: PlatformStateStore,
   rails: ModelBrokerRailRegistry,
   onBudgetInterruption?: FleetBrokerRouteDeps["onBudgetInterruption"],
@@ -411,11 +377,11 @@ function createDefaultWebResearch(
   const brave = braveKey ? createBraveSearchClient({ apiKey: braveKey }) : null;
   const tavily = tavilyKey ? createTavilyClient({ apiKey: tavilyKey }) : null;
   return createWebResearchService({
-    usageStore: createFirestoreModelBrokerUsageStore(db),
+    usageStore: records.usage,
     resolveGrant: createCachedOwnerModelBrokerGrantResolver({
       rails,
       state: store,
-      accounts: firestoreUserAccountReader(db),
+      accounts: records.accounts,
       log: (message, fields) => logger.info(message, fields),
     }),
     rails,
@@ -436,22 +402,6 @@ function createDefaultWebResearch(
     onBudgetInterruption,
   });
 }
-
-const defaultRecordUsageEvent: RecordUsageEvent = async (input) => {
-  const { extractRole, reportUsageForUid } = await import(
-    "@octogee/core/usage-tracking"
-  );
-  await reportUsageForUid({
-    db: input.db,
-    uid: input.uid,
-    agentId: input.agentId,
-    role: extractRole(input.agentId),
-    usage: input.usage,
-    gatewayId: input.gatewayId,
-    platformWorkspaceSlug: input.workspaceSlug,
-    log: (msg) => logger.info(`[usage-broker] ${msg}`),
-  });
-};
 
 const defaultReadBlobMetadata: ReadBlobMetadata = (key) => runtimeBlobStore().metadata(key);
 
@@ -1103,19 +1053,10 @@ function builderSlug(userRecord: PlatformUserRecord): string {
   return userRecord.slug;
 }
 
-async function readUserAccountDocument(db: Firestore, uid: string): Promise<Record<string, unknown>> {
-  const data = (await db.collection("users").doc(uid).get()).data();
+async function readUserAccountDocument(records: BrokerRecords, uid: string): Promise<Record<string, unknown>> {
+  const data = await records.userDocuments.account(uid);
   if (!data) throw new Error(`users/${uid} account document is missing for an assigned user`);
   return data;
-}
-
-async function readUserAccountDocuments(db: Firestore, uids: readonly string[]): Promise<ReadonlyMap<string, Record<string, unknown>>> {
-  if (uids.length === 0) return new Map();
-  const snapshots = await db.getAll(...uids.map((uid) => db.collection("users").doc(uid)));
-  return new Map(snapshots.flatMap((snapshot) => {
-    const data = snapshot.data();
-    return data ? [[snapshot.id, data] as const] : [];
-  }));
 }
 
 
@@ -1239,19 +1180,14 @@ export async function collectChannelBindings(
   return { bindings, projectMemberships };
 }
 
-async function readProjectRecipes(db: Firestore, slug: string): Promise<ReadonlyMap<string, string>> {
-  const snap = await db.collection("workspaces").doc(slug).collection("projects").get();
-  return new Map(snap.docs.flatMap((doc) => {
-    const recipe: unknown = doc.data().recipe;
-    return typeof recipe === "string" ? [[doc.id, recipe] as const] : [];
-  }));
-}
-
 async function collectProjects(
-  deps: Pick<ResolvedFleetBrokerRouteDeps, "db" | "store">,
+  deps: Pick<ResolvedFleetBrokerRouteDeps, "records" | "store">,
   slug: string,
 ): Promise<FleetBrokerProjectRestore[]> {
-  const [projects, recipes] = await Promise.all([deps.store.workspaces.projects.list(slug), readProjectRecipes(deps.db, slug)]);
+  const [projects, recipes] = await Promise.all([
+    deps.store.workspaces.projects.list(slug),
+    deps.records.userDocuments.projectRecipes(slug),
+  ]);
   return projects.map((project) => {
     const out: FleetBrokerProjectRestore = {
       projectSlug: project.projectSlug,
@@ -1600,32 +1536,29 @@ interface LoadSnapshotOptions {
 }
 
 async function loadSnapshot(
-  deps: Pick<ResolvedFleetBrokerRouteDeps, "db" | "store">,
+  deps: Pick<ResolvedFleetBrokerRouteDeps, "records" | "store">,
   userRecord: Stored<PlatformUserRecord>,
   account: Record<string, unknown>,
   options: LoadSnapshotOptions,
 ): Promise<(FleetBrokerUserSnapshot & { greetingPosted: boolean }) | null> {
-  const { db, store } = deps;
+  const { records, store } = deps;
   const { modelDials } = options;
   const { uid, slug } = userRecord;
   if (!slug || !isValidUsername(slug)) return null;
   const projectCheckoutScope = projectCheckoutScopeForGatewayRoot(options.gatewayData, options.gatewayId, uid, slug);
-  const [collectedChannels, projects, projectAgents, defaultAgent, agentSnap, sysConfig, runtimeReset, restoreAuthority] = await Promise.all([
+  const [collectedChannels, projects, projectAgents, defaultAgent, agentData, systemConfig, runtimeReset, restoreAuthority] = await Promise.all([
     collectChannelBindings(store, slug),
     projectCheckoutScope === "workspace-and-projects"
       ? collectProjects(deps, slug)
       : Promise.resolve([]),
     collectStoredProjectAgentStates(store, uid, slug),
     defaultAgentMattermostSecret(store, uid),
-    db.collection("agents").doc(uid).get(),
-    db.collection("users").doc(uid).collection("system").doc("config").get(),
+    records.userDocuments.agent(uid),
+    records.userDocuments.systemConfig(uid),
     admittedRuntimeReset(store, userRecord),
     readUserRestoreAuthoritySnapshot({ store }, { uid, slug, gatewayId: options.gatewayId }),
   ]);
-  const agentData = agentSnap.data() as Record<string, unknown> | undefined;
-  const credentialProjection = byotSnapshotProjectionFromSystemConfig(
-    sysConfig.data() as Record<string, unknown> | undefined,
-  );
+  const credentialProjection = byotSnapshotProjectionFromSystemConfig(systemConfig);
   const baseFields = snapshotBaseFields(userRecord, account, slug);
   const channels = collectedChannels.bindings;
   const migration = readWorkspaceMigrationMarker({ migration: userRecord.fences.migration });
@@ -1720,19 +1653,17 @@ async function userSnapshotAdmission(
   return { userRecord, gatewayData };
 }
 
-type FleetBrokerRouteOptions = { db: Firestore; store: PlatformStateStore } & FleetBrokerRouteDeps;
+type FleetBrokerRouteOptions = { store: PlatformStateStore; records?: BrokerRecords } & FleetBrokerRouteDeps;
 
 type ResolvedFleetBrokerRouteDeps = {
-  db: Firestore;
+  records: BrokerRecords;
   store: PlatformStateStore;
   resolveHouseModel: HouseModelResolver;
   resolveUserAgentDefault: UserAgentDefaultResolver;
   provisionMattermost: NonNullable<FleetBrokerRouteDeps["provisionMattermost"]>;
   markProvisioningComplete: NonNullable<FleetBrokerRouteDeps["markProvisioningComplete"]>;
   onUserProvisioned: NonNullable<FleetBrokerRouteDeps["onUserProvisioned"]>;
-  recordUsageEvent: RecordUsageEvent;
   renderAvatar: RenderAvatar;
-  applyDefaultAgentIdentity: ApplyDefaultAgentIdentity;
   createBlobSignedUrl: CreateBlobSignedUrl;
   createVmHomeSignedUrl: CreateBlobSignedUrl;
   createIsolatedRuntimeStateSignedUrl: CreateBlobSignedUrl;
@@ -1791,9 +1722,7 @@ function resolveFleetBrokerRouteImplementations(
     markProvisioningComplete:
       opts.markProvisioningComplete ?? defaultMarkProvisioningComplete,
     onUserProvisioned: opts.onUserProvisioned ?? (async () => {}),
-    recordUsageEvent: opts.recordUsageEvent ?? defaultRecordUsageEvent,
     renderAvatar: opts.renderAvatar ?? defaultRenderAvatar,
-    applyDefaultAgentIdentity: opts.applyDefaultAgentIdentity ?? defaultApplyDefaultAgentIdentity,
     createBlobSignedUrl: opts.createBlobSignedUrl ?? defaultCreateBlobSignedUrl,
     readBlobMetadata: opts.readBlobMetadata ?? defaultReadBlobMetadata,
     pruneIsolatedRuntimeState: opts.pruneIsolatedRuntimeState ?? defaultPruneIsolatedRuntimeState,
@@ -1807,8 +1736,9 @@ function resolveFleetBrokerRouteImplementations(
 function resolveFleetBrokerRouteDeps(
   opts: FleetBrokerRouteOptions,
 ): ResolvedFleetBrokerRouteDeps {
+  const records = opts.records ?? NO_BROKER_RECORDS;
   return {
-    db: opts.db,
+    records,
     store: opts.store,
     resolveHouseModel: createCachedHouseModelResolver({
       platformConfig: opts.store.config.platform,
@@ -1824,7 +1754,7 @@ function resolveFleetBrokerRouteDeps(
     createIsolatedRuntimeStateSignedUrl: opts.createIsolatedRuntimeStateSignedUrl ?? createGcsBackupSignedUrl,
     verifyOwnerWorkspaceTurn: ownerWorkspaceTurnVerifier(opts),
     webResearch: opts.webResearch ?? createDefaultWebResearch(
-      opts.db,
+      records,
       opts.store,
       opts.modelBrokerRails ?? operatorRailRegistry(),
       opts.onBudgetInterruption,
@@ -1909,7 +1839,7 @@ function installSnapshotRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
-  const { db, store } = deps;
+  const { records, store } = deps;
   installNpmCacheCapabilityRoutes(router, deps);
 
   router.post("/assignment-roster", async (req, res) => {
@@ -1970,7 +1900,7 @@ function installSnapshotRoutes(
       userAgentDefault: await deps.resolveUserAgentDefault(),
     };
     const gatewayData = (await store.gateways.roots.get(bound.gatewayId)) ?? undefined;
-    const accounts = await readUserAccountDocuments(db, userRecords.filter((userRecord) => userRecord.slug).map((userRecord) => userRecord.uid));
+    const accounts = await records.userDocuments.accounts(userRecords.filter((userRecord) => userRecord.slug).map((userRecord) => userRecord.uid));
     const users: FleetBrokerUserSnapshot[] = [];
     for (const userRecord of userRecords) {
       const account = accounts.get(userRecord.uid);
@@ -2026,7 +1956,7 @@ function installSnapshotRoutes(
     const snapshot = await loadSnapshot(
       deps,
       userRecord,
-      await readUserAccountDocument(db, uid),
+      await readUserAccountDocument(records, uid),
       {
         gatewayId: bound.gatewayId,
         modelDials: {
@@ -2827,7 +2757,7 @@ function configuredUserProjectCredentials(
 }
 
 async function handleConfiguredUserBootstrap(
-  { db, store }: Pick<ResolvedFleetBrokerRouteDeps, "db" | "store">,
+  { records, store }: Pick<ResolvedFleetBrokerRouteDeps, "records" | "store">,
   req: Request,
   res: Response,
 ): Promise<void> {
@@ -2854,11 +2784,11 @@ async function handleConfiguredUserBootstrap(
     return;
   }
 
-  const [userRecord, userSnap, defaultAgent, agentSnap, projectAgents] = await Promise.all([
+  const [userRecord, user, defaultAgent, agent, projectAgents] = await Promise.all([
     store.users.records.get(uid),
-    db.collection("users").doc(uid).get(),
+    records.userDocuments.account(uid),
     defaultAgentMattermostSecret(store, uid),
-    db.collection("agents").doc(uid).get(),
+    records.userDocuments.agent(uid),
     collectStoredProjectAgentStates(store, uid, request.slug),
   ]);
   let bootstrap: FleetBrokerConfiguredUserBootstrap | null;
@@ -2867,9 +2797,9 @@ async function handleConfiguredUserBootstrap(
       uid,
       slug: request.slug,
       userRecord,
-      user: userSnap.data() as Record<string, unknown> | undefined,
+      user,
       defaultAgent,
-      agent: agentSnap.data() as Record<string, unknown> | undefined,
+      agent,
       projectCredentials: configuredUserProjectCredentials(request.slug, projectAgents),
     });
   } catch (error) {
@@ -2988,7 +2918,7 @@ function installProvisioningRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
-  const { db, store, provisionMattermost, markProvisioningComplete, onUserProvisioned, now } = deps;
+  const { records, store, provisionMattermost, markProvisioningComplete, onUserProvisioned, now } = deps;
   // A pod re-reports the same mount failure every reconcile cycle, and each write
   // to gateways/{id} costs the fleet a Firestore snapshot event. Repeats inside
   // the window are acknowledged without a write; anything new lands immediately.
@@ -3035,7 +2965,7 @@ function installProvisioningRoutes(
     await runBrokered(res, async () => {
       const mmUpdate = await provisionMattermost({
         uid: assigned.uid,
-        userData: await readUserAccountDocument(db, assigned.uid),
+        userData: await readUserAccountDocument(records, assigned.uid),
       });
       res.json({ mmUpdate });
     });
@@ -3050,7 +2980,7 @@ function installProvisioningRoutes(
       return;
     }
     await runBrokered(res, async () => {
-      const userData = await readUserAccountDocument(db, assigned.uid);
+      const userData = await readUserAccountDocument(records, assigned.uid);
       await markProvisioningComplete({
         uid: assigned.uid,
         userData,
@@ -3268,9 +3198,8 @@ function installGatewayOpsRoutes(
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
   const {
-    db,
+    records,
     store,
-    recordUsageEvent,
     createBlobSignedUrl,
     pruneIsolatedRuntimeState,
     now,
@@ -3347,8 +3276,7 @@ function installGatewayOpsRoutes(
       return;
     }
     await runBrokered(res, async () => {
-      await recordUsageEvent({
-        db,
+      await records.recordUsageEvent({
         uid: assigned.uid,
         agentId,
         usage,
@@ -4101,7 +4029,7 @@ function installVmEgressRoutes(router: Router, deps: ResolvedFleetBrokerRouteDep
 }
 
 function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
-  const { renderAvatar, applyDefaultAgentIdentity } = deps;
+  const { renderAvatar, records } = deps;
 
   router.post("/agent/chat-search", async (req, res) => {
     const assigned = await requireAssignedChatIdentity(deps, req, res);
@@ -4244,14 +4172,12 @@ function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps):
     }
 
     await runBrokered(res, async () => {
-      const updated = await applyDefaultAgentIdentity({
-        uid: assigned.uid,
-        slug: assigned.slug,
+      const updated = await records.agentIdentity.sync(assigned.uid, {
         name: patch.name,
         persona: patch.persona,
         ...(patch.emoji !== undefined ? { emoji: patch.emoji } : {}),
         avatarPng: patch.avatarPng,
-      });
+      }, { slug: assigned.slug });
       res.json({ updated });
     });
   });

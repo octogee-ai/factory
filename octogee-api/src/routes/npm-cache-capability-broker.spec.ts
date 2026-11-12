@@ -83,7 +83,6 @@ function brokerOptions(
   extra: Record<string, unknown> = {},
 ) {
   return {
-    db: {} as never,
     store: platformStore(),
     npmCacheCapabilities: store,
     npmCacheRegistryUrl: "http://octogee-npm-cache-proxy.octogee-test.svc.cluster.local:3005/",

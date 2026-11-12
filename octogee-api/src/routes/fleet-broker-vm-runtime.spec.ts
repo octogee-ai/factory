@@ -38,7 +38,7 @@ function appWith(docs: Record<string, Record<string, unknown>>, bound: BoundTena
     if (bound) req.boundTenant = bound;
     next();
   });
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db: {} as never, store, now: () => 5_000 }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({ store, now: () => 5_000 }));
   return { app, documents };
 }
 

@@ -115,7 +115,7 @@ import type {
 } from "../platform-state/operations.js";
 import type { AccessRepositories, SecretsRepository } from "../platform-state/secrets.js";
 import type { Page, PageRequest, PlatformStateStore, PlatformStateTransaction, Revision, Stored } from "../platform-state/store.js";
-import type { WorkspaceRepositories } from "../platform-state/workspaces.js";
+import type { ActivityReceiptKey, WorkspaceChannelScope, WorkspaceRepositories } from "../platform-state/workspaces.js";
 
 export interface JournalRows {
   get(id: string): Record<string, unknown> | undefined;
@@ -1221,6 +1221,35 @@ function workspaceRepositories(documents: FixtureDocuments, write: Write, transa
           resolveServerNow({ ...fields, "mattermost.channelId": mattermostChannelId }) as Record<string, unknown>);
       },
     }),
+    activityReceipts: activityReceiptRepository(documents, write, channelsPath),
+  });
+}
+
+function activityReceiptRepository(
+  documents: FixtureDocuments,
+  write: Write,
+  channelsPath: (workspaceSlug: string, projectSlug: string | null) => string,
+): WorkspaceRepositories["activityReceipts"] {
+  const channelPath = (key: { scope: WorkspaceChannelScope; channelId: string }) =>
+    `${channelsPath(key.scope.workspaceSlug, key.scope.projectSlug)}/${key.channelId}`;
+  const receiptPath = (key: ActivityReceiptKey) => `${channelPath(key)}/activityWriteReceipts/${key.receiptId}`;
+  return partialRepository<WorkspaceRepositories["activityReceipts"]>("workspaces.activityReceipts", {
+    get: async (key) => {
+      const row = documents.get(receiptPath(key));
+      return row === undefined
+        ? null
+        : { scope: key.scope, channelId: key.channelId, receiptId: key.receiptId, receipt: structuredClone(row), revision: FIXTURE_REVISION };
+    },
+    put: async (receipt) => {
+      if (documents.get(channelPath(receipt)) === undefined) {
+        const { workspaceSlug, projectSlug } = receipt.scope;
+        throw new MissingRecordError({
+          aggregate: "workspace-channel",
+          key: projectSlug === null ? `${workspaceSlug}/${receipt.channelId}` : `${workspaceSlug}/${projectSlug}/${receipt.channelId}`,
+        });
+      }
+      write(() => documents.set(receiptPath(receipt), structuredClone(receipt.receipt) as Record<string, unknown>));
+    },
   });
 }
 

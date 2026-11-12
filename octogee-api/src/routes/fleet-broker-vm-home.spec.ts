@@ -90,7 +90,7 @@ function harness(input: {
     if (bound) req.boundTenant = bound;
     next();
   });
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db: {} as never, store: createDocumentFixtureStore(documents), vmHomeStore: store, createBlobSignedUrl, ...(!input.useDefaultSigner && { createVmHomeSignedUrl: createBlobSignedUrl }), now: () => NOW }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({ store: createDocumentFixtureStore(documents), vmHomeStore: store, createBlobSignedUrl, ...(!input.useDefaultSigner && { createVmHomeSignedUrl: createBlobSignedUrl }), now: () => NOW }));
   const post = (path: string, body: Record<string, unknown>) => request(app).post(`/internal/fleet/computer-home/${path}`).send({ gatewayId: "b-x", slug: "bob", requestedAt: null, ...body });
   return { post, store, createBlobSignedUrl, documents, writes: documents.writes, app };
 }

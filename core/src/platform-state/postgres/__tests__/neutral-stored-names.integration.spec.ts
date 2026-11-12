@@ -8,6 +8,7 @@ import { createPostgresPlatformStateStore } from "../store.js";
 import { audit, dsn, newPool, newSchemaName, operation } from "./fixtures/harness.js";
 
 const BEFORE_RENAME = 11;
+const RENAME = 12;
 const UID = "uid-ada";
 
 describe.skipIf(!dsn)("neutral stored names", () => {
@@ -102,7 +103,7 @@ describe.skipIf(!dsn)("neutral stored names", () => {
     const db = await database(BEFORE_RENAME);
     await storeLegacyNames(db);
 
-    await expect(migratePlatformState(db.pool, { schema: db.schema })).resolves.toMatchObject({ applied: [12] });
+    await expect(migratePlatformState(db.pool, { schema: db.schema, through: RENAME })).resolves.toMatchObject({ applied: [RENAME] });
 
     expect(await db.value(`SELECT id, kind FROM ${db.table("operations")} ORDER BY id`)).toEqual([
       { id: "op-deprovision-customer", kind: "deprovision-user" },

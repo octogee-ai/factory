@@ -31,7 +31,6 @@ function fixture(start = 1_000_000, seed: Record<string, Record<string, unknown>
     next();
   }) as RequestHandler);
   server.use("/internal/fleet", createFleetBrokerRoutes({
-    db: {} as never,
     store: createDocumentFixtureStore(documents),
     now: () => now,
   }));

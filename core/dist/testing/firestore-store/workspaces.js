@@ -382,6 +382,24 @@ function createAgentIdentitiesRepository(session) {
         },
     };
 }
+function createActivityReceiptsRepository(session) {
+    const ref = (key) => channelsCollection(session.db, key.scope).doc(key.channelId).collection("activityWriteReceipts").doc(key.receiptId);
+    const recordKey = (key) => ({
+        aggregate: "activity-receipt",
+        key: `${channelKey(key.scope, key.channelId).key}/${key.receiptId}`,
+    });
+    return {
+        async get(key) {
+            const snapshot = await session.read("workspaces.activityReceipts.get", ref(key));
+            if (!snapshot.exists)
+                return null;
+            return withStoredRevision(snapshot, { scope: key.scope, channelId: key.channelId, receiptId: key.receiptId, receipt: snapshot.data() ?? {} });
+        },
+        async put(receipt) {
+            await session.set("workspaces.activityReceipts.put", recordKey(receipt), ref(receipt), { ...receipt.receipt });
+        },
+    };
+}
 export function createFirestoreWorkspaceRepositories(session) {
     return {
         records: createWorkspaceRecordsRepository(session),
@@ -390,6 +408,7 @@ export function createFirestoreWorkspaceRepositories(session) {
         projectMembers: createWorkspaceProjectMembersRepository(session),
         channels: createWorkspaceChannelsRepository(session),
         agentIdentities: createAgentIdentitiesRepository(session),
+        activityReceipts: createActivityReceiptsRepository(session),
     };
 }
 function queryTarget(query, decode, key) {

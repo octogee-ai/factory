@@ -48,6 +48,7 @@ export const TABLE_AGGREGATES: Readonly<Record<string, PlatformAggregate>> = {
   workspace_members: "workspace-member",
   workspace_projects: "workspace-project",
   workspace_channels: "workspace-channel",
+  activity_receipts: "activity-receipt",
   user_agent_identities: "builder-agent-identity",
   user_secrets: "builder-secret",
   gateway_tickets: "gateway-ticket",

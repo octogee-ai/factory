@@ -34,17 +34,8 @@ export class ChatPatError extends Error {
   }
 }
 
-interface ProductDb {
-  doc(path: string): {
-    get(): Promise<{
-      exists?: boolean;
-      data(): Record<string, unknown> | undefined;
-    }>;
-  };
-}
-
 export interface ChatIdentityDeps {
-  db: ProductDb;
+  readAccount(uid: string): Promise<Record<string, unknown> | undefined>;
   store: Pick<PlatformStateRepositories, "secrets" | "workspaces">;
 }
 
@@ -128,11 +119,10 @@ async function canonicalChannelReadable(
 }
 
 async function projectArchiveAccess(
-  db: ProductDb,
+  deps: ChatIdentityDeps,
   uid: string,
 ): Promise<{ blocksProjectAgent: boolean; historyReadable: boolean }> {
-  const user = await db.doc(`users/${uid}`).get();
-  const retention = parseProjectRetention(user.data()?.projectRetention);
+  const retention = parseProjectRetention((await deps.readAccount(uid))?.projectRetention);
   if (!retention || retention.status === "active") {
     return { blocksProjectAgent: false, historyReadable: false };
   }
@@ -182,7 +172,7 @@ export async function resolveChatIdentity(
     );
   }
 
-  const archiveAccess = await projectArchiveAccess(deps.db, input.uid);
+  const archiveAccess = await projectArchiveAccess(deps, input.uid);
 
   if (parsed.kind === "project") {
     if (archiveAccess.blocksProjectAgent) {

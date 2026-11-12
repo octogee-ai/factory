@@ -25,7 +25,6 @@ function fixture(onUserProvisioned?: (report: ProvisionedUserReport) => Promise<
     next();
   }) as RequestHandler);
   server.use("/internal/fleet", createFleetBrokerRoutes({
-    db: {} as never,
     store: createDocumentFixtureStore(documents),
     ...(onUserProvisioned ? { onUserProvisioned } : {}),
   }));

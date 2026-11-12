@@ -24,7 +24,7 @@ function app() {
     req.boundTenant = { kind: "gateway", gatewayId: "builder-bob" } as Express.Request["boundTenant"];
     next();
   });
-  server.use(createOpenClawRuntimeBrokerRoutes({ store: createDocumentFixtureStore(docs), readSizingKey: firestoreSizingKeyReader({} as Firestore), activityReceipts: () => { throw new Error("no receipts expected"); } }));
+  server.use(createOpenClawRuntimeBrokerRoutes({ store: createDocumentFixtureStore(docs), readSizingKey: firestoreSizingKeyReader({} as Firestore) }));
   return server;
 }
 

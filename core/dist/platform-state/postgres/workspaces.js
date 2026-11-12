@@ -1,7 +1,7 @@
 import { MANAGED_CHANNEL_INSTALLATION } from "../channel-identities.js";
 import { linkChannelIdentity, managedExternalUserIdOf } from "./channel-identities.js";
 import { DuplicateRecordError, MissingRecordError } from "../errors.js";
-import { deleteRecord, revisionFence, selectByKey, selectRecords, serverNow, updateRecord } from "./records.js";
+import { deleteRecord, insertRecord, revisionFence, selectByKey, selectRecords, serverNow, updateRecord } from "./records.js";
 import { SqlParameters } from "./sql.js";
 import { column, decodeStored, encodeColumn, inputContainsServerNow, inputFields, isClearField, isServerNow, resolveJsonValue, } from "./values.js";
 function isPlainObject(value) {
@@ -109,6 +109,18 @@ const AGENT_IDENTITIES_TABLE = {
         column("uid", "text"),
         column("createdAt", "bigint", nullable),
         column("updatedAt", "bigint", nullable),
+    ],
+};
+const ACTIVITY_RECEIPTS_TABLE = {
+    table: "activity_receipts",
+    aggregate: "activity-receipt",
+    keyColumns: ["workspace_slug", "project_slug", "channel_id", "receipt_id"],
+    columns: [
+        column("workspaceSlug", "text"),
+        column("projectSlug", "text"),
+        column("channelId", "text"),
+        column("receiptId", "text"),
+        column("receipt", "jsonb"),
     ],
 };
 const AGENT_IDENTITY_COLUMNS = `*, ${managedExternalUserIdOf("agent", "user_agent_identities.uid")} AS channel_host_user_id`;
@@ -422,6 +434,28 @@ function createAgentIdentitiesRepository(session) {
         },
     };
 }
+function decodeActivityReceipt(row) {
+    const { workspaceSlug, projectSlug, ...receipt } = decodeStored(ACTIVITY_RECEIPTS_TABLE, row);
+    return {
+        scope: { workspaceSlug, projectSlug: projectSlug === WORKSPACE_SCOPE_PROJECT_SLUG ? null : projectSlug },
+        ...receipt,
+    };
+}
+function createActivityReceiptsRepository(session) {
+    return {
+        async get(key) {
+            const row = await selectByKey(session, "workspaces.activityReceipts.get", {
+                table: ACTIVITY_RECEIPTS_TABLE,
+                key: [key.scope.workspaceSlug, storedProjectSlug(key.scope), key.channelId, key.receiptId],
+            });
+            return row === null ? null : decodeActivityReceipt(row);
+        },
+        async put(receipt) {
+            const { scope, ...fields } = receipt;
+            await insertRecord(session, "workspaces.activityReceipts.put", ACTIVITY_RECEIPTS_TABLE, { ...fields, workspaceSlug: scope.workspaceSlug, projectSlug: storedProjectSlug(scope) }, "put");
+        },
+    };
+}
 export function createPostgresWorkspaceRepositories(session) {
     return {
         records: createWorkspaceRecordsRepository(session),
@@ -430,6 +464,7 @@ export function createPostgresWorkspaceRepositories(session) {
         projectMembers: createWorkspaceProjectMembersRepository(session),
         channels: createWorkspaceChannelsRepository(session),
         agentIdentities: createAgentIdentitiesRepository(session),
+        activityReceipts: createActivityReceiptsRepository(session),
     };
 }
 function filterAllows(filterKeys, column, expected) {

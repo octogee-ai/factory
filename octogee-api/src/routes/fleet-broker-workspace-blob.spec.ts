@@ -4,7 +4,6 @@ import { once } from "node:events";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { Firestore } from "firebase-admin/firestore";
 import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../../gateway-edge/src/lib/platform-state.js", async (importOriginal) => {
   const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
@@ -52,9 +51,6 @@ function harness() {
     "workspaces/alice": { id: "ws-alice", ownerUid: "uid-alice", ownerActive: true },
     "gateways/shared-alice/assignments/uid-alice": { uid: "uid-alice", slug: "alice", gatewayId: "shared-alice", source: "onboarding", state: "serving", epoch: 0 },
   };
-  const db = {
-    collection: (name: string) => ({ where: (_field: string, _op: string, gatewayId: string) => ({ get: async () => ({ docs: gatewayId === "shared-alice" && name === "users" ? [{ id: "uid-alice", data: () => docs["users/uid-alice"] }] : [] }) }) }),
-  } as unknown as Firestore;
   const store = vi.fn(async (_target: unknown, name: string, bytes: Buffer) => ({ gcsPath: `customers/alice/${name}`, size: bytes.length }));
   const app = express(); app.disable("x-powered-by"); app.use(express.json());
   app.use((req, _res, next) => { req.boundTenant = { kind: "gateway", gatewayId: "shared-alice", saName: "octogee-gw-shared-alice", podUid: "pod-alice", podName: "pod-alice" }; next(); });
@@ -63,7 +59,7 @@ function harness() {
     reviewer: async () => ({ authenticated: true, saName: "octogee-gw-shared-alice", namespace: "octogee-test", audiences: [SIDECAR_BROKER_TOKEN_AUDIENCE], podUid: "pod-alice", podName: "pod-alice" }),
     mapIdentity: async () => ({ kind: "gateway", gatewayId: "shared-alice" }) });
   app.use((req, res, next) => SIDECAR_BROKER_ROUTES.has(req.path) ? auth(req, res, next) : next());
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db, store: createDocumentFixtureStore(new ReadOnlyDocuments(docs)), workspaceBlobStore: store }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({ store: createDocumentFixtureStore(new ReadOnlyDocuments(docs)), workspaceBlobStore: store }));
   return { app, docs, store };
 }
 

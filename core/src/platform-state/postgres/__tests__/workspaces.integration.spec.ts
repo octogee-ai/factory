@@ -692,6 +692,68 @@ describe.skipIf(!dsn)("PostgreSQL workspace repositories", { timeout: 30_000 }, 
     });
   });
 
+  describe("activity receipts", () => {
+    const RECEIPT = "a".repeat(64);
+    const workspaceChannel = { scope: { workspaceSlug: "acme", projectSlug: null }, channelId: "general" };
+    const projectChannel = { scope: { workspaceSlug: "acme", projectSlug: "site" }, channelId: "general" };
+
+    beforeEach(async () => {
+      await harness.store.workspaces.records.put(workspace("acme", "u1"));
+      await harness.store.workspaces.channels.put(channel("acme", null, "general"));
+      await harness.store.workspaces.channels.put(channel("acme", "site", "general"));
+    });
+
+    it("keeps one receipt per channel, replaces it on put and reads a missing one as null", async () => {
+      const receipts = harness.store.workspaces.activityReceipts;
+      await receipts.put({ ...workspaceChannel, receiptId: RECEIPT, receipt: { state: "claimed", attachment: { state: "none" } } });
+      await receipts.put({ ...projectChannel, receiptId: RECEIPT, receipt: { state: "committed" } });
+      await receipts.put({ ...workspaceChannel, receiptId: RECEIPT, receipt: { state: "posted", postId: "p1" } });
+
+      expect(await receipts.get({ ...workspaceChannel, receiptId: RECEIPT })).toEqual({
+        ...workspaceChannel,
+        receiptId: RECEIPT,
+        receipt: { state: "posted", postId: "p1" },
+        revision: expect.any(String),
+      });
+      expect(await receipts.get({ ...projectChannel, receiptId: RECEIPT })).toMatchObject({ receipt: { state: "committed" } });
+      expect(await receipts.get({ ...workspaceChannel, receiptId: "b".repeat(64) })).toBeNull();
+    });
+
+    it("reads then writes a receipt inside a transaction", async () => {
+      const before = await harness.store.transaction({ label: "receipt-claim" }, async (tx) => {
+        const current = await tx.workspaces.activityReceipts.get({ ...workspaceChannel, receiptId: RECEIPT });
+        await tx.workspaces.activityReceipts.put({ ...workspaceChannel, receiptId: RECEIPT, receipt: { state: "claimed" } });
+        return current;
+      });
+
+      expect(before).toBeNull();
+      expect((await harness.store.workspaces.activityReceipts.get({ ...workspaceChannel, receiptId: RECEIPT }))?.receipt)
+        .toEqual({ state: "claimed" });
+    });
+
+    it("refuses a receipt for a missing channel or with an id that is not a digest", async () => {
+      const receipts = harness.store.workspaces.activityReceipts;
+
+      await expect(
+        receipts.put({ scope: { workspaceSlug: "acme", projectSlug: null }, channelId: "ghost", receiptId: RECEIPT, receipt: {} }),
+      ).rejects.toMatchObject({ constructor: MissingRecordError, record: { aggregate: "workspace-channel" } });
+      await expect(receipts.put({ ...workspaceChannel, receiptId: "not-a-digest", receipt: {} })).rejects.toThrow();
+    });
+
+    it("drops receipts with their channel and with their workspace", async () => {
+      const receipts = harness.store.workspaces.activityReceipts;
+      await receipts.put({ ...workspaceChannel, receiptId: RECEIPT, receipt: { state: "committed" } });
+      await receipts.put({ ...projectChannel, receiptId: RECEIPT, receipt: { state: "committed" } });
+
+      await harness.store.workspaces.channels.delete(workspaceChannel.scope, workspaceChannel.channelId);
+      expect(await receipts.get({ ...workspaceChannel, receiptId: RECEIPT })).toBeNull();
+      expect(await receipts.get({ ...projectChannel, receiptId: RECEIPT })).not.toBeNull();
+
+      await harness.store.workspaces.records.delete("acme");
+      expect(await receipts.get({ ...projectChannel, receiptId: RECEIPT })).toBeNull();
+    });
+  });
+
   describe("watches", () => {
     it("watches project memberships by workspace and by uid", async () => {
       const records = harness.store.workspaces;

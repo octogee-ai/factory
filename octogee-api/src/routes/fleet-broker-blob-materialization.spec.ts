@@ -1,5 +1,4 @@
 import express from "express";
-import type { Firestore } from "firebase-admin/firestore";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 vi.mock("../../../gateway-edge/src/lib/platform-state.js", async (importOriginal) => {
@@ -26,7 +25,7 @@ function harness(metadata: Record<string, unknown> = { generation: "17", size: "
   }));
   const app = express(); app.disable("x-powered-by"); app.use(express.json());
   app.use((req, _res, next) => { req.boundTenant = { kind: "gateway", gatewayId: "b-owner" }; next(); });
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db: {} as never, store, readBlobMetadata, createBlobSignedUrl }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({ store, readBlobMetadata, createBlobSignedUrl }));
   return { app, readBlobMetadata, createBlobSignedUrl };
 }
 
@@ -124,8 +123,6 @@ function preparingHarness(scenario = "valid") {
     ...Object.fromEntries(Array.from({ length: operationCount }, (_, index) => [`glmOperations/move-${index}`, operation])),
   };
   operation.inputUid = "uid-owner";
-  const query = { where: () => query, get: async () => ({ docs: [] }) };
-  const db = { collection: () => query } as unknown as Firestore;
   const readBlobMetadata = vi.fn(async () => ({ generation: "17", size: "3", md5Hash: "kAFQmDzST7DWlj99KOF/cg==" }));
   const createBlobSignedUrl = vi.fn(async (input: { gcsPath: string }) => ({ url: `https://signed.test/${input.gcsPath}`, method: "GET" as const, gcsPath: input.gcsPath, expiresAt: "2026-10-07T12:00:00Z" }));
   const app = express(); app.disable("x-powered-by"); app.use(express.json());
@@ -136,7 +133,7 @@ function preparingHarness(scenario = "valid") {
       podName: gatewayVmPodName("b-owner", "4242"), podUid: scenario === "wrong-credential" ? "9999" : "4242" }),
     mapIdentity: async () => ({ kind: "gateway", gatewayId: "b-owner" }), logger: { warn: vi.fn() } });
   app.use((req, res, next) => GATEWAY_CREDENTIAL_ROUTES.has(req.path) ? credentialAuth(req, res, next) : next());
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db, store: createDocumentFixtureStore(docs), readBlobMetadata, createBlobSignedUrl }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({ store: createDocumentFixtureStore(docs), readBlobMetadata, createBlobSignedUrl }));
   return { app, owner, operation, readBlobMetadata, createBlobSignedUrl };
 }
 

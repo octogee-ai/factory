@@ -1,5 +1,4 @@
 import express from "express";
-import type { Firestore } from "firebase-admin/firestore";
 import { Registry } from "prom-client";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
@@ -13,31 +12,6 @@ import { createFleetBrokerRoutes } from "../../routes/fleet-broker.js";
 import type { ReviewResult, Reviewer } from "../../lib/token-review.js";
 
 const TOKEN = `${"a".repeat(24)}.${"b".repeat(24)}.${"c".repeat(24)}`;
-
-function valueAt(data: Record<string, unknown>, path: string): unknown {
-  let cur: unknown = data;
-  for (const part of path.split(".")) {
-    if (!cur || typeof cur !== "object") return undefined;
-    cur = (cur as Record<string, unknown>)[part];
-  }
-  return cur;
-}
-
-function fakeDb(docs: Record<string, Record<string, unknown>>): Pick<Firestore, "collection" | "doc"> {
-  return {
-    doc: (path: string) => ({ get: async () => ({ exists: docs[path] !== undefined, data: () => docs[path] }) }),
-    collection: (name: string) => ({
-      doc: (id: string) => ({ get: async () => ({ exists: docs[`${name}/${id}`] !== undefined, data: () => docs[`${name}/${id}`] }) }),
-      where: (field: string, _op: string, value: unknown) => ({
-        get: async () => ({
-          docs: Object.entries(docs)
-            .filter(([path, data]) => path.startsWith(`${name}/`) && !path.slice(name.length + 1).includes("/") && valueAt(data, field) === value)
-            .map(([path, data]) => ({ id: path.slice(name.length + 1), data: () => data })),
-        }),
-      }),
-    }),
-  } as unknown as Pick<Firestore, "collection" | "doc">;
-}
 
 const docs = {
   "gateways/b-x": {
@@ -101,7 +75,6 @@ describe("tenant binding for a VM gateway", () => {
 
 describe("isolated runtime-state routes for a VM gateway", () => {
   it("authorize the VM's own snapshotter through binding, enforcement, and the route's pod-scoped check", async () => {
-    const db = fakeDb(docs);
     const store = createDocumentFixtureStore(docs);
     const app = express();
     app.use(express.json());
@@ -111,7 +84,6 @@ describe("isolated runtime-state routes for a VM gateway", () => {
     }));
     app.use(createTenantEnforcementMiddleware({ readFlowGateway: async () => null, store }));
     app.use("/internal/fleet", createFleetBrokerRoutes({
-      db: db as unknown as Firestore,
       store,
       createIsolatedRuntimeStateSignedUrl: async (input) => ({ url: `signed:${input.gcsPath}`, method: "GET", gcsPath: input.gcsPath, expiresAt: "later" }),
     }));

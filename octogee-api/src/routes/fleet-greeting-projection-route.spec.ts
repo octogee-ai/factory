@@ -1,38 +1,28 @@
 import express from 'express';
-import type { Firestore } from 'firebase-admin/firestore';
 import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
 import type { BoundTenant } from '../lib/sa-to-tenant.js';
 import { createDocumentFixtureStore } from '@octogee/core/testing/journal-store';
+import { NO_BROKER_RECORDS, type BrokerRecords } from '../lib/broker-records.js';
 import { createFleetBrokerRoutes } from './fleet-broker.js';
 
 function harness(bound: BoundTenant | null, greeting: unknown) {
   const user = { username: 'alice', provisioning: { openclaw: { gatewayId: 'shared-test', status: 'complete', greeting } } };
-  const writes = vi.fn(() => { throw new Error('Snapshot must not write'); });
+  const writes = vi.fn(async () => { throw new Error('Snapshot must not write'); });
   const docs: Record<string, Record<string, unknown>> = { 'users/uid-alice': user };
-  const ref = (path: string, collection = false): unknown => ({
-    path,
-    collection: (name: string) => ref(`${path}/${name}`, true),
-    doc: (name: string) => ref(`${path}/${name}`),
-    get: async () => collection ? { docs: [], empty: true } : { exists: Object.hasOwn(docs, path), data: () => docs[path] },
-    set: writes, update: writes, delete: writes,
-  });
-  const transaction = {
-    get: (target: { get: () => Promise<unknown> }) => target.get(),
-    create: writes, set: writes, update: writes, delete: writes,
+  const records: BrokerRecords = {
+    ...NO_BROKER_RECORDS,
+    userDocuments: { ...NO_BROKER_RECORDS.userDocuments, account: async (uid) => docs[`users/${uid}`] },
+    byosub: { ...NO_BROKER_RECORDS.byosub, startFlow: writes },
+    recordUsageEvent: writes,
   };
-  const db = {
-    doc: (path: string) => ref(path),
-    collection: (path: string) => ref(path, true),
-    runTransaction: (work: (txn: typeof transaction) => Promise<unknown>) => work(transaction),
-  } as unknown as Firestore;
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
     if (bound) req.boundTenant = bound;
     next();
   });
-  app.use('/internal/fleet', createFleetBrokerRoutes({ db, store: createDocumentFixtureStore(docs) }));
+  app.use('/internal/fleet', createFleetBrokerRoutes({ store: createDocumentFixtureStore(docs), records }));
   return { app, user, writes };
 }
 

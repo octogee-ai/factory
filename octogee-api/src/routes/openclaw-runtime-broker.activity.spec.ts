@@ -22,7 +22,7 @@ function harness(payloadPatch: Record<string, unknown> = {}, ownerGateway = gate
   });
   const app = express(); app.use(express.json());
   app.use((req, _res, next) => { req.boundTenant = { kind: 'gateway', gatewayId, ownerUid: 'owner' }; next(); });
-  app.use('/internal/openclaw', createOpenClawRuntimeBrokerRoutes({ store: createDocumentFixtureStore(docs), readSizingKey: firestoreSizingKeyReader({} as Firestore), activityReceipts: () => { throw new Error("no receipts expected"); } }));
+  app.use('/internal/openclaw', createOpenClawRuntimeBrokerRoutes({ store: createDocumentFixtureStore(docs), readSizingKey: firestoreSizingKeyReader({} as Firestore) }));
   const ticketWrites = () => docs.writes.filter((write) => write.path.startsWith('gatewayTickets/'));
   return { ticketWrites, post: () => request(app).post('/internal/openclaw/ws/redeem').send({ ticketId: 'ticket', purpose: 'openclaw-ws' }), access: () => request(app).post('/internal/openclaw/activity/conversation-access').send({ uid: 'member', channelId: scope.channelId, threadRootPostId }) };
 }

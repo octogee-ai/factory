@@ -10,14 +10,7 @@ type Docs = Record<string, Record<string, unknown>>;
 
 function dbOf(docs: Docs) {
   return {
-    db: {
-      doc: (path: string) => ({
-        get: async () => ({
-          exists: docs[path] !== undefined,
-          data: () => docs[path],
-        }),
-      }),
-    },
+    readAccount: async (uid: string) => docs[`users/${uid}`],
     store: createDocumentFixtureStore(docs),
   };
 }

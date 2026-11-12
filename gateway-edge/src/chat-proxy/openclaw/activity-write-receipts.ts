@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { PlatformStateStore, PlatformStateTransaction, WorkspaceChannelScope } from "@octogee/core/platform-state";
 
 export type ActivityAttachmentReceiptV1 =
   | { state: "none" }
@@ -230,25 +231,6 @@ export class InMemoryActivityWriteReceiptStore implements ActivityWriteReceiptSt
   }
 }
 
-interface FirestoreSnapshotLike {
-  exists: boolean;
-  data(): Record<string, unknown> | undefined;
-}
-
-interface FirestoreDocumentLike {
-  get(): Promise<FirestoreSnapshotLike>;
-}
-
-interface FirestoreTransactionLike {
-  get(ref: FirestoreDocumentLike): Promise<FirestoreSnapshotLike>;
-  set(ref: FirestoreDocumentLike, data: ActivityWriteReceiptV1): void;
-}
-
-export interface ActivityReceiptFirestoreLike {
-  doc(path: string): FirestoreDocumentLike;
-  runTransaction<T>(update: (transaction: FirestoreTransactionLike) => Promise<T>): Promise<T>;
-}
-
 function validReceiptStrings(data: Record<string, unknown>): boolean {
   return (
     nonBlankString(data.eventKey) &&
@@ -365,31 +347,29 @@ function receiptFromData(data: Record<string, unknown> | undefined): ActivityWri
   return structuredClone(data) as unknown as ActivityWriteReceiptV1;
 }
 
-export class FirestoreActivityWriteReceiptStore implements ActivityWriteReceiptStore {
+export interface ActivityReceiptChannel {
+  readonly scope: WorkspaceChannelScope;
+  readonly channelId: string;
+}
+
+type ActivityReceiptReader = Pick<PlatformStateTransaction, "workspaces">;
+
+export class PlatformStateActivityWriteReceiptStore implements ActivityWriteReceiptStore {
   constructor(
-    private readonly db: ActivityReceiptFirestoreLike,
-    private readonly channelDocPath: string,
+    private readonly store: PlatformStateStore,
+    private readonly channel: ActivityReceiptChannel,
   ) {}
 
   async claim(input: ActivityReceiptClaimInput): Promise<ActivityReceiptClaim> {
-    const ref = this.ref(input.eventKey);
-    return this.db.runTransaction(async (transaction) => {
-      const snapshot = await transaction.get(ref);
-      const current = snapshot.exists ? receiptFromData(snapshot.data()) : null;
-      const result = nextClaim(current, input);
-      if (result.outcome === "claimed") transaction.set(ref, result.receipt);
+    return this.store.transaction({ label: "activity-receipt-claim" }, async (transaction) => {
+      const result = nextClaim(await this.current(transaction, input.eventKey), input);
+      if (result.outcome === "claimed") await this.write(transaction, result.receipt);
       return result;
     });
   }
 
-  async read(eventKey: string): Promise<ActivityWriteReceiptV1 | null> {
-    const snapshot = await this.ref(eventKey).get();
-    if (!snapshot.exists) return null;
-    const receipt = receiptFromData(snapshot.data());
-    if (receipt.eventKey !== eventKey) {
-      throw new ActivityReceiptUnavailableError("Activity receipt event key does not match its document");
-    }
-    return receipt;
+  read(eventKey: string): Promise<ActivityWriteReceiptV1 | null> {
+    return this.current(this.store, eventKey);
   }
 
   async markPosted(
@@ -418,10 +398,22 @@ export class FirestoreActivityWriteReceiptStore implements ActivityWriteReceiptS
     await this.update(eventKey, leaseToken, now, (receipt) => ({ ...receipt, state: "committed" }));
   }
 
-  private ref(eventKey: string): FirestoreDocumentLike {
-    return this.db.doc(
-      `${this.channelDocPath}/activityWriteReceipts/${receiptDocumentId(eventKey)}`,
-    );
+  private async current(reader: ActivityReceiptReader, eventKey: string): Promise<ActivityWriteReceiptV1 | null> {
+    const stored = await reader.workspaces.activityReceipts.get({ ...this.channel, receiptId: receiptDocumentId(eventKey) });
+    if (stored === null) return null;
+    const receipt = receiptFromData(stored.receipt);
+    if (receipt.eventKey !== eventKey) {
+      throw new ActivityReceiptUnavailableError("Activity receipt event key does not match its record");
+    }
+    return receipt;
+  }
+
+  private write(transaction: PlatformStateTransaction, receipt: ActivityWriteReceiptV1): Promise<void> {
+    return transaction.workspaces.activityReceipts.put({
+      ...this.channel,
+      receiptId: receiptDocumentId(receipt.eventKey),
+      receipt: { ...receipt },
+    });
   }
 
   private async update(
@@ -430,14 +422,9 @@ export class FirestoreActivityWriteReceiptStore implements ActivityWriteReceiptS
     now: number,
     change: (receipt: ActivityWriteReceiptV1) => ActivityWriteReceiptV1,
   ): Promise<void> {
-    const ref = this.ref(eventKey);
-    await this.db.runTransaction(async (transaction) => {
-      const snapshot = await transaction.get(ref);
-      const current = snapshot.exists ? receiptFromData(snapshot.data()) : null;
-      transaction.set(
-        ref,
-        updateOwnedReceipt(current, eventKey, leaseToken, now, change),
-      );
+    await this.store.transaction({ label: "activity-receipt-update" }, async (transaction) => {
+      const current = await this.current(transaction, eventKey);
+      await this.write(transaction, updateOwnedReceipt(current, eventKey, leaseToken, now, change));
     });
   }
 }

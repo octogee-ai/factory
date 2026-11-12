@@ -1,5 +1,3 @@
-import { firestoreUserAccountReader } from "@octogee/core/user-account";
-
 import http from "node:http";
 import express, { Request, Response, type RequestHandler } from "express";
 import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
@@ -25,7 +23,6 @@ import internalGiteaAdminRoutes from "../../gateway-edge/src/routes/internal/git
 import { installBodyParsers } from "../../gateway-edge/src/middleware/body-parsers.js";
 import { createMattermostMintRoutes, createMmRestProxyHandler } from "./routes/mattermost-proxy.js";
 import { createOpenClawRuntimeBrokerRoutes, type SessionChannelPurposeReader } from "./routes/openclaw-runtime-broker.js";
-import { FirestoreActivityWriteReceiptStore, type ActivityReceiptFirestoreLike } from "../../gateway-edge/src/chat-proxy/openclaw/activity-write-receipts.js";
 import { createConnectorTokenBrokerRoutes, type PublicCanvasFileReader } from "./routes/connector-token-broker.js";
 import { createWorkspaceCommitProofBrokerRoutes } from "./routes/workspace-commit-proof-broker.js";
 import { createOwnerAutomationAuthorizationBrokerRoutes } from "./routes/owner-automation-authorization-broker.js";
@@ -42,6 +39,7 @@ import { createAgentImportBrokerRoutes } from "./routes/agent-import-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import type { FundedBudgetInterruption } from "./lib/model-broker-budget.js";
 import { operatorRailRegistry, type ModelBrokerRailRegistry } from "./lib/model-broker-rails.js";
+import { NO_BROKER_RECORDS, type BrokerRecords } from "./lib/broker-records.js";
 import { createFeatureRoutes } from "./routes/features.js";
 import type { ProductNotifications } from "./lib/user-notifications.js";
 import { DisabledFeatureFlagProvider, FeaturePolicy } from "./lib/feature-policy.js";
@@ -51,20 +49,19 @@ import { createProjectRepoSourceRoutes } from "../../gateway-edge/src/routes/pro
 import { startWorkspaceVoiceConversation } from "./lib/voice-posting-grant.js";
 import { resolveVoiceChannel } from './lib/workspace-conversation.js';
 import { createVoiceRoutes } from "../../gateway-edge/src/routes/voice.js";
-import { createProductivityApprovalRoutes } from "../../gateway-edge/src/routes/productivity-approvals.js";
 import {
   createChatArtifactRoutes,
   createChatArtifactWorkerRoutes,
   requireArtifactWorkerAuth,
 } from "./routes/chat-artifacts.js";
-import { ArtifactRegistry, createFirestoreArtifactJobStore } from "./lib/chat-artifact-registry.js";
+import { ArtifactRegistry, type ArtifactJobStore } from "./lib/chat-artifact-registry.js";
 import {
   createGcsArtifactBlobStore,
   createMattermostArtifactAccess,
   createMattermostArtifactSourceReader,
 } from "./lib/chat-artifact-adapters.js";
 import { resolveActiveArtifactWorkspaceSlug } from "./lib/chat-artifact-workspace.js";
-import { db, storage } from "../../gateway-edge/src/lib/db.js";
+import { storage } from "../../gateway-edge/src/lib/db.js";
 import { platformStateStore, readSizingKey } from "../../gateway-edge/src/lib/platform-state.js";
 import {
   ConnectorTokenReadError,
@@ -72,8 +69,6 @@ import {
 } from "../../gateway-edge/src/lib/connector-tokens.js";
 import { getConnector } from "../../gateway-edge/src/lib/connectors/index.js";
 import { githubListRepos, githubRepoApi } from "../../gateway-edge/src/lib/github.js";
-import { readAgent } from "../../gateway-edge/src/lib/firestoreReads.js";
-import { replaceDefaultAgentTextIdentity, syncDefaultAgentIdentity } from "../../gateway-edge/src/lib/default-agent-identity.js";
 import { requireAuth, requireAuthenticatedUid } from "../../gateway-edge/src/middleware/auth.js";
 import {
   IN_CLUSTER_IDENTITY_CA_PATH,
@@ -162,6 +157,8 @@ export interface ProductRuntime {
   controlSessionChecks?: ControlSessionChecks;
   publicCanvasFile?: PublicCanvasFileReader;
   sessionChannelPurpose?: SessionChannelPurposeReader;
+  brokerRecords?: BrokerRecords;
+  chatArtifactJobs?: ArtifactJobStore;
   adminUserDetail?: AdminUserProductDetail;
   adminUserDirectory?: AdminUserDirectorySource;
   addAdminRoutes?: ProductAdminRoutes;
@@ -205,8 +202,8 @@ export interface PlatformAppOptions {
   appOrigin?: string;
 }
 
-function defaultChatArtifactRoutes() {
-  const registry = new ArtifactRegistry(createFirestoreArtifactJobStore(db, platformStateStore));
+function chatArtifactRoutes(jobs: ArtifactJobStore) {
+  const registry = new ArtifactRegistry(jobs);
   let blobs: ReturnType<typeof createGcsArtifactBlobStore> | undefined;
   const blobStore = {
     put(input: Parameters<ReturnType<typeof createGcsArtifactBlobStore>["put"]>[0]) {
@@ -319,9 +316,6 @@ function clusterRouteOverrides(
       const result = await startWorkspaceVoiceConversation({ store: platformStateStore, readSizingKey }, { uid, channelId, threadRootPostId });
       return result ? { gatewayId: result.scope.gatewayId, workspaceSlug: result.scope.workspaceSlug, ownerUid: result.scope.ownerUid, channelId, threadRootPostId: result.context.threadRootPostId, sessionKey: result.context.sessionKey } : null;
     } }),
-    productivityApprovalRoutes: express.Router()
-      .use(requireAuth)
-      .use(createProductivityApprovalRoutes({ db })),
   };
 }
 
@@ -435,6 +429,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   const featurePolicy = opts.featurePolicy ?? product?.featurePolicy ?? new FeaturePolicy(new DisabledFeatureFlagProvider(), { logger });
   const productRouteDeps: ProductRouteDeps = { featurePolicy };
   const modelBrokerRails = opts.product?.modelBrokerRails ?? operatorRailRegistry();
+  const brokerRecords = product?.brokerRecords ?? NO_BROKER_RECORDS;
   app.locals.productShutdown = product?.shutdown;
   const tenantBindingMetrics = createTenantBindingMetrics(metricsRegistry);
   const tenantBindingReviewer = opts.tenantBindingReviewer ?? createGatewayIdentityReviewer({
@@ -450,7 +445,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   const tenantRoutes = product?.tenantRoutes ?? NO_PRODUCT_TENANT_ROUTES;
   const tenantBindingScope = createTenantBindingScope(tenantRoutes);
   const tenantEnforcementMiddleware = createTenantEnforcementMiddleware({
-    readFlowGateway: byosubFlowGatewayReader(db),
+    readFlowGateway: byosubFlowGatewayReader(brokerRecords.byosub),
     store: platformStateStore,
     enforceWhen: tenantBindingScope.shouldEnforce,
     productRoutes: tenantRoutes,
@@ -533,18 +528,17 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   ));
   mountRouteTable(app, product?.apiRoutes(productRouteDeps) ?? []);
   mountRouteTable(app, product?.internalRoutes(productRouteDeps) ?? []);
-  const chatArtifacts = defaultChatArtifactRoutes();
-  app.use("/api/chat/artifacts", chatArtifacts.public);
+  const chatArtifacts = product?.chatArtifactJobs ? chatArtifactRoutes(product.chatArtifactJobs) : null;
+  if (chatArtifacts) app.use("/api/chat/artifacts", chatArtifacts.public);
   // octogee-api-only: Gitea admin broker. Gateway provisioners call this with
   // their projected gateway KSA token; octogee-api holds the Gitea admin token.
   app.use("/internal/gitea", internalGiteaAdminRoutes);
-  app.use("/internal/chat-artifacts", chatArtifacts.worker);
+  if (chatArtifacts) app.use("/internal/chat-artifacts", chatArtifacts.worker);
   // octogee-api-only: broker the gateway-edge OpenClaw runtime Firestore
   // dependencies so cattle pods do not need ADC/datastore reach.
   app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({
     store: platformStateStore,
     readSizingKey,
-    activityReceipts: (channelDocPath) => new FirestoreActivityWriteReceiptStore(db as unknown as ActivityReceiptFirestoreLike, channelDocPath),
     readSessionChannelPurpose: product?.sessionChannelPurpose,
     notifyFinalReply: opts.product?.notifications?.notifyFinalReply,
   }));
@@ -572,8 +566,8 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   // operations. The OpenClaw gateway sees only assigned roster snapshots
   // and assigned-scoped mutation endpoints for its own KSA-bound identity.
   app.use("/internal/fleet", createFleetBrokerRoutes({
-    db,
     store: platformStateStore,
+    records: brokerRecords,
     modelBrokerRails,
     onBudgetInterruption: product?.onBudgetInterruption,
     onUserProvisioned: product?.onUserProvisioned,
@@ -586,7 +580,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   // octogee-api-only: materialize BYOK creds for cattle gateways that can't reach
   // Secret Manager — BYOSUB OAuth (scoped to the caller's user integration) and
   // byok-* API keys (roster-scoped to the gateway's assigned slugs).
-  app.use("/internal/byok", createByokBrokerRoutes({ db, store: platformStateStore, rails: modelBrokerRails }));
+  app.use("/internal/byok", createByokBrokerRoutes({ store: platformStateStore, records: brokerRecords, rails: modelBrokerRails }));
   app.use("/internal/computer", createGatewayVmContextRoutes({ store: platformStateStore }));
   app.use("/internal/openclaw-control", createOpenClawControlBrokerRoutes({
     store: platformStateStore,
@@ -608,7 +602,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     requireAuthenticatedUid,
     createAgentImportBrokerRoutes({
       store: platformStateStore,
-      accounts: firestoreUserAccountReader(db),
+      accounts: brokerRecords.accounts,
       bucket: importBucket,
       exportBlobs: app.locals.workspaceBlobStore,
       readGithubToken: readFreshGithubToken,
@@ -623,22 +617,15 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
         }
         return size;
       },
-      readIdentity: async (uid) => {
-        const agent = await readAgent(uid);
-        return {
-          name: agent?.name ?? null,
-          persona: typeof agent?.persona === "string" ? agent.persona : null,
-          emoji: typeof agent?.avatarEmoji === "string" ? agent.avatarEmoji : null,
-        };
-      },
+      readIdentity: (uid) => brokerRecords.agentIdentity.read(uid),
       syncIdentity: async (uid, identity) => {
-        await syncDefaultAgentIdentity(uid, {
+        await brokerRecords.agentIdentity.sync(uid, {
           ...(identity.name ? { name: identity.name } : {}),
           ...(identity.persona !== undefined ? { persona: identity.persona } : {}),
           ...(identity.emoji ? { emoji: identity.emoji } : {}),
         });
       },
-      replaceIdentity: replaceDefaultAgentTextIdentity,
+      replaceIdentity: (uid, identity) => brokerRecords.agentIdentity.replaceText(uid, identity),
       now: () => new Date(),
       featurePolicy,
     }),
@@ -652,7 +639,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
       rails: modelBrokerRails,
       tokens: opts.modelKeyTokenStore ?? createModelBrokerTokenStore(platformStateStore),
       state: platformStateStore,
-      accounts: firestoreUserAccountReader(db),
+      accounts: brokerRecords.accounts,
       bearerToken:
         opts.modelKeyIssuerBearerToken ?? process.env.GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN,
       ttlSeconds: opts.modelKeyIssuerTtlSeconds,

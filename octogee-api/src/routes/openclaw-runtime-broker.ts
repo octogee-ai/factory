@@ -48,19 +48,18 @@ import {
   ActivityReceiptLeaseError,
   ActivityReceiptUnavailableError,
   isValidActivityAttachmentReceipt,
+  PlatformStateActivityWriteReceiptStore,
   type ActivityReceiptClaimInput,
   type ActivityWriteReceiptStore,
 } from "../../../gateway-edge/src/chat-proxy/openclaw/activity-write-receipts.js";
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
 export type SessionChannelPurposeReader = (channel: WorkspaceChannel) => Promise<string>;
-export type ActivityWriteReceiptStoreFactory = (channelDocPath: string) => ActivityWriteReceiptStore;
 export const NO_SESSION_CHANNEL_PURPOSE: SessionChannelPurposeReader = async () => "";
 
 interface RuntimeBrokerDeps {
   store: PlatformStateStore;
   readSizingKey: SizingKeyReader;
-  activityReceipts: ActivityWriteReceiptStoreFactory;
   readSessionChannelPurpose: SessionChannelPurposeReader;
   notifyFinalReply?: FinalReplyNotifier;
 }
@@ -665,7 +664,7 @@ async function receiptStoreFor(
     res.status(404).json({ error: "receipt_channel_not_found" });
     return null;
   }
-  return deps.activityReceipts(channelDocPath!);
+  return new PlatformStateActivityWriteReceiptStore(deps.store, { scope: channel.scope, channelId: channel.channelId });
 }
 
 function respondReceiptStoreError(res: Response, error: unknown): void {
@@ -1314,7 +1313,6 @@ function mountFinalReplyRoutes(router: Router, deps: RuntimeBrokerDeps): void {
 export function createOpenClawRuntimeBrokerRoutes(opts: {
   store: PlatformStateStore;
   readSizingKey: SizingKeyReader;
-  activityReceipts: ActivityWriteReceiptStoreFactory;
   readSessionChannelPurpose?: SessionChannelPurposeReader;
   notifyFinalReply?: FinalReplyNotifier;
 }): Router {
@@ -1322,7 +1320,6 @@ export function createOpenClawRuntimeBrokerRoutes(opts: {
   const deps: RuntimeBrokerDeps = {
     store: opts.store,
     readSizingKey: opts.readSizingKey,
-    activityReceipts: opts.activityReceipts,
     readSessionChannelPurpose: opts.readSessionChannelPurpose ?? NO_SESSION_CHANNEL_PURPOSE,
     notifyFinalReply: opts.notifyFinalReply,
   };

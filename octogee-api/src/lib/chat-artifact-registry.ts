@@ -10,36 +10,6 @@ import {
   type ArtifactPageObject,
   type ArtifactRequest,
 } from "./chat-artifacts.js";
-import type { PlatformStateRepositories, PlatformStateStore } from "@octogee/core/platform-state";
-import { userAllowsInteractiveAccess } from "./assigned-user.js";
-
-interface FirestoreArtifactSnapshot {
-  exists: boolean;
-  data(): Record<string, unknown> | undefined;
-}
-
-interface FirestoreArtifactRef {
-  path: string;
-  get(): Promise<FirestoreArtifactSnapshot>;
-}
-
-interface FirestoreArtifactQuerySnapshot {
-  docs: Array<{ id?: string; data(): Record<string, unknown> }>;
-}
-
-interface FirestoreArtifactQuery {
-  where(field: string, op: "==" | "<=", value: unknown): FirestoreArtifactQuery;
-  limit(count: number): { get(): Promise<FirestoreArtifactQuerySnapshot> };
-}
-
-interface FirestoreArtifactDb {
-  doc(path: string): FirestoreArtifactRef;
-  collection(path: string): FirestoreArtifactQuery;
-  runTransaction<T>(run: (tx: {
-    get(ref: FirestoreArtifactRef): Promise<FirestoreArtifactSnapshot>;
-    set(ref: FirestoreArtifactRef, value: Record<string, unknown>): void;
-  }) => Promise<T>): Promise<T>;
-}
 
 export interface ArtifactJobStore {
   createIfAbsent(job: ArtifactJob): Promise<ArtifactJob>;
@@ -358,7 +328,6 @@ export class ArtifactRegistry {
   }
 }
 
-const ARTIFACT_COLLECTION = "chatArtifactJobs";
 const ARTIFACT_STATUSES = new Set(["queued", "processing", "ready", "unsupported", "failed"]);
 
 function validIso(value: unknown): value is string {
@@ -457,89 +426,11 @@ function validateFailure(job: ArtifactJob): void {
   }
 }
 
-function firestoreJob(snapshot: FirestoreArtifactSnapshot): ArtifactJob | null {
-  if (!snapshot.exists) return null;
-  const data = snapshot.data();
-  if (!data) throw new Error("invalid artifact job: Firestore document has no data");
+export function parseArtifactJobRecord(data: Record<string, unknown>): ArtifactJob {
   const job = parseJobEnvelope(data);
   validateProcessingJob(job);
   validateSource(job);
   validateResult(job);
   validateFailure(job);
   return job;
-}
-
-function withoutUndefined(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withoutUndefined);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
-      .map(([key, entry]) => [key, withoutUndefined(entry)]),
-  );
-}
-
-function firestoreWrite(job: ArtifactJob): Record<string, unknown> {
-  return withoutUndefined(structuredClone(job)) as Record<string, unknown>;
-}
-
-async function workspaceOwnerActive(state: Pick<PlatformStateRepositories, "users">, ownerUid: string): Promise<boolean> {
-  const owner = await state.users.records.get(ownerUid);
-  return owner !== null && userAllowsInteractiveAccess(owner);
-}
-
-export function createFirestoreArtifactJobStore(db: FirestoreArtifactDb, platformState: PlatformStateStore): ArtifactJobStore {
-  const ref = (artifactId: string): FirestoreArtifactRef => db.doc(`${ARTIFACT_COLLECTION}/${artifactId}`);
-  return {
-    createIfAbsent(job) {
-      return db.runTransaction(async (transaction) => {
-        const jobRef = ref(job.artifactId);
-        const [existing, ownerActive] = await Promise.all([
-          transaction.get(jobRef).then(firestoreJob),
-          workspaceOwnerActive(platformState, job.workspaceOwnerUid),
-        ]);
-        if (!ownerActive) {
-          throw new Error("artifact workspace owner is not active");
-        }
-        if (existing) return existing;
-        transaction.set(jobRef, firestoreWrite(job));
-        return job;
-      });
-    },
-    async get(artifactId) {
-      const job = firestoreJob(await ref(artifactId).get());
-      if (!job) return null;
-      return (await workspaceOwnerActive(platformState, job.workspaceOwnerUid)) ? job : null;
-    },
-    async findClaimable(now, limit) {
-      const collection = db.collection(ARTIFACT_COLLECTION);
-      const [queued, expired] = await Promise.all([
-        collection.where("status", "==", "queued").limit(limit).get(),
-        collection
-          .where("status", "==", "processing")
-          .where("lease.expiresAt", "<=", now)
-          .limit(limit)
-          .get(),
-      ]);
-      const ids = [...queued.docs, ...expired.docs].map((doc) => {
-        const job = firestoreJob({ exists: true, data: () => doc.data() });
-        if (!job) throw new Error("artifact query returned an empty document");
-        return job.artifactId;
-      });
-      return [...new Set(ids)].slice(0, limit);
-    },
-    transact(artifactId, update) {
-      return db.runTransaction(async (transaction) => {
-        const jobRef = ref(artifactId);
-        const current = firestoreJob(await transaction.get(jobRef));
-        if (!current) return update(null);
-        if (!(await workspaceOwnerActive(platformState, current.workspaceOwnerUid))) {
-          throw new Error("artifact workspace owner is not active");
-        }
-        const next = update(current);
-        transaction.set(jobRef, firestoreWrite(next));
-        return next;
-      });
-    },
-  };
 }

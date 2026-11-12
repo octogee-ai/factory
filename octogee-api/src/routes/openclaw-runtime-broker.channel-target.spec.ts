@@ -14,7 +14,7 @@ function app() {
     req.boundTenant = { kind: "gateway", gatewayId: "gw-alice", ownerUid: "uid-alice" };
     next();
   });
-  app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ store: createDocumentFixtureStore(documents), readSizingKey: async () => { throw new Error("no tier reads expected"); }, activityReceipts: () => { throw new Error("no receipts expected"); } }));
+  app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ store: createDocumentFixtureStore(documents), readSizingKey: async () => { throw new Error("no tier reads expected"); } }));
   return app;
 }
 

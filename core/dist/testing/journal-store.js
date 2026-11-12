@@ -1068,6 +1068,29 @@ function workspaceRepositories(documents, write, transactional) {
                 updatePresent(`${channelsPath(scope.workspaceSlug, scope.projectSlug)}/${channelId}`, key, resolveServerNow({ ...fields, "mattermost.channelId": mattermostChannelId }));
             },
         }),
+        activityReceipts: activityReceiptRepository(documents, write, channelsPath),
+    });
+}
+function activityReceiptRepository(documents, write, channelsPath) {
+    const channelPath = (key) => `${channelsPath(key.scope.workspaceSlug, key.scope.projectSlug)}/${key.channelId}`;
+    const receiptPath = (key) => `${channelPath(key)}/activityWriteReceipts/${key.receiptId}`;
+    return partialRepository("workspaces.activityReceipts", {
+        get: async (key) => {
+            const row = documents.get(receiptPath(key));
+            return row === undefined
+                ? null
+                : { scope: key.scope, channelId: key.channelId, receiptId: key.receiptId, receipt: structuredClone(row), revision: FIXTURE_REVISION };
+        },
+        put: async (receipt) => {
+            if (documents.get(channelPath(receipt)) === undefined) {
+                const { workspaceSlug, projectSlug } = receipt.scope;
+                throw new MissingRecordError({
+                    aggregate: "workspace-channel",
+                    key: projectSlug === null ? `${workspaceSlug}/${receipt.channelId}` : `${workspaceSlug}/${projectSlug}/${receipt.channelId}`,
+                });
+            }
+            write(() => documents.set(receiptPath(receipt), structuredClone(receipt.receipt)));
+        },
     });
 }
 function assertNoReservedGrantKeys(operation, grant, reserved) {

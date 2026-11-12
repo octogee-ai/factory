@@ -2,11 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { PlatformStateStore } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { parseArtifactRequest, type ArtifactJob } from "./chat-artifacts.js";
-import {
-  ArtifactRegistry,
-  createFirestoreArtifactJobStore,
-  type ArtifactJobStore,
-} from "./chat-artifact-registry.js";
+import { ArtifactRegistry, type ArtifactJobStore } from "./chat-artifact-registry.js";
+import { createFirestoreArtifactJobStore } from "./product-firestore-artifact-jobs.js";
 
 const REQUEST = parseArtifactRequest({
   mattermostFileId: "f".repeat(26),

@@ -185,6 +185,21 @@ export interface UserAgentIdentitiesRepository {
   delete(uid: string): Promise<void>;
 }
 
+export interface ActivityReceiptKey {
+  readonly scope: WorkspaceChannelScope;
+  readonly channelId: string;
+  readonly receiptId: string;
+}
+
+export interface ActivityReceipt extends ActivityReceiptKey {
+  readonly receipt: OpaqueMap;
+}
+
+export interface ActivityReceiptsRepository {
+  get(key: ActivityReceiptKey): Promise<Stored<ActivityReceipt> | null>;
+  put(receipt: ActivityReceipt): Promise<void>;
+}
+
 export interface WorkspaceRepositories {
   readonly records: WorkspaceRecordsRepository;
   readonly members: WorkspaceMembersRepository;
@@ -192,4 +207,5 @@ export interface WorkspaceRepositories {
   readonly projectMembers: WorkspaceProjectMembersRepository;
   readonly channels: WorkspaceChannelsRepository;
   readonly agentIdentities: UserAgentIdentitiesRepository;
+  readonly activityReceipts: ActivityReceiptsRepository;
 }

@@ -2,7 +2,7 @@ import { type ChannelInstallation, MANAGED_CHANNEL_INSTALLATION, MANAGED_GIT_HOS
 import { type CollectionReference, type DocumentData, type DocumentReference, type DocumentSnapshot, FieldPath, type Firestore, type Query } from "firebase-admin/firestore";
 import { DuplicateRecordError, MissingRecordError, type RecordKey, UnsupportedOperationError } from "../../platform-state/errors.js";
 import type { Revision, Stored } from "../../platform-state/store.js";
-import type { UserAgentIdentitiesRepository, UserAgentIdentity, WorkspaceChannel, WorkspaceChannelScope, WorkspaceChannelsRepository, WorkspaceMember, WorkspaceMembersRepository, WorkspaceProject, WorkspaceProjectMember, WorkspaceProjectMembersRepository, WorkspaceProjectsRepository, WorkspaceRecord, WorkspaceRecordsRepository, WorkspaceRepositories } from "../../platform-state/workspaces.js";
+import type { ActivityReceiptKey, ActivityReceiptsRepository, UserAgentIdentitiesRepository, UserAgentIdentity, WorkspaceChannel, WorkspaceChannelScope, WorkspaceChannelsRepository, WorkspaceMember, WorkspaceMembersRepository, WorkspaceProject, WorkspaceProjectMember, WorkspaceProjectMembersRepository, WorkspaceProjectsRepository, WorkspaceRecord, WorkspaceRecordsRepository, WorkspaceRepositories } from "../../platform-state/workspaces.js";
 import { assertRevisionFence } from "./fences.js";
 import type { FirestoreSession } from "./session.js";
 import { type FieldRepresentations, decodeDocumentData, encodeMergeDocument, encodePatch, revisionOf, storedAsTimestamps } from "./values.js";
@@ -526,6 +526,27 @@ function createAgentIdentitiesRepository(session: FirestoreSession): UserAgentId
   };
 }
 
+function createActivityReceiptsRepository(session: FirestoreSession): ActivityReceiptsRepository {
+  const ref = (key: ActivityReceiptKey) =>
+    channelsCollection(session.db, key.scope).doc(key.channelId).collection("activityWriteReceipts").doc(key.receiptId);
+  const recordKey = (key: ActivityReceiptKey): RecordKey => ({
+    aggregate: "activity-receipt",
+    key: `${channelKey(key.scope, key.channelId).key}/${key.receiptId}`,
+  });
+
+  return {
+    async get(key) {
+      const snapshot = await session.read("workspaces.activityReceipts.get", ref(key));
+      if (!snapshot.exists) return null;
+      return withStoredRevision(snapshot, { scope: key.scope, channelId: key.channelId, receiptId: key.receiptId, receipt: snapshot.data() ?? {} });
+    },
+
+    async put(receipt) {
+      await session.set("workspaces.activityReceipts.put", recordKey(receipt), ref(receipt), { ...receipt.receipt });
+    },
+  };
+}
+
 export function createFirestoreWorkspaceRepositories(session: FirestoreSession): WorkspaceRepositories {
   return {
     records: createWorkspaceRecordsRepository(session),
@@ -534,6 +555,7 @@ export function createFirestoreWorkspaceRepositories(session: FirestoreSession):
     projectMembers: createWorkspaceProjectMembersRepository(session),
     channels: createWorkspaceChannelsRepository(session),
     agentIdentities: createAgentIdentitiesRepository(session),
+    activityReceipts: createActivityReceiptsRepository(session),
   };
 }
 

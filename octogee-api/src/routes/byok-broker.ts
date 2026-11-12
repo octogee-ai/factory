@@ -1,5 +1,4 @@
 import { Router, type Request, type Response } from "express";
-import type { Firestore } from "firebase-admin/firestore";
 import {
   MODEL_CREDENTIAL_STATIC_PROVIDER_IDS,
   modelCredentialOAuthEntryBySubscriptionProvider,
@@ -10,16 +9,13 @@ import { parseAgentId } from "@octogee/shared/types/identity";
 import { readSecret, addSecretVersionKeepingLatest, type SubscriptionSecretVersionResult } from "@octogee/core/secret-store";
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
-import { firestoreUserAccountReader, type UserAccount, type UserAccountReader } from "@octogee/core/user-account";
+import type { UserAccount, UserAccountReader } from "@octogee/core/user-account";
 import type { PlatformUserRecord, PlatformStateRepositories, PlatformStateStore } from "@octogee/core/platform-state";
 import { userEntitlements, type UserPolicy } from "@octogee/shared/types/user-entitlements";
 import {
   spendWindowPercentUsed,
   MODEL_BROKER_USAGE_WINDOW_MS,
-  MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
   MODEL_BROKER_WEEK_WINDOW_MS,
-  MODEL_BROKER_WEEK_WINDOWS_COLLECTION,
-  modelBrokerWindowDocId,
   usageWindowStartMs,
   weekWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";
@@ -49,13 +45,14 @@ import {
   createAgentSupportTurnVerifier,
   type OwnerWorkspaceTurnVerifier,
 } from "../lib/openclaw-owner-turn.js";
-import { parseFundedBudgetLedger } from "../lib/model-broker-budget.js";
+import { NO_BROKER_RECORDS, type BrokerRecords, type ByosubRecords } from "../lib/broker-records.js";
+import type { ModelBrokerUsageLedger } from "../lib/model-broker-usage.js";
 import type { FlowGatewayReader } from "../middleware/tenant-enforcement.js";
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 
-export function byosubFlowGatewayReader(db: Pick<Firestore, "collection">): FlowGatewayReader {
+export function byosubFlowGatewayReader(byosub: Pick<ByosubRecords, "readFlow">): FlowGatewayReader {
   return async (flowId) => {
-    const gatewayId = (await db.collection("byosubFlows").doc(flowId).get()).data()?.gatewayId;
+    const gatewayId = (await byosub.readFlow(flowId))?.gatewayId;
     return typeof gatewayId === "string" ? gatewayId : null;
   };
 }
@@ -155,10 +152,6 @@ function requestedTokenPurpose(value: unknown): ModelBrokerTokenPurpose | null {
   return value === "model" || value === "embeddings" ? value : null;
 }
 
-function financeNumber(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -188,20 +181,13 @@ function deriveSpendStatus(input: {
   railId: string;
   rails: ModelBrokerRailRegistry;
   credentialPath: string;
-  windowData: Record<string, unknown> | undefined;
-  weekData: Record<string, unknown> | undefined;
-  balanceData: Record<string, unknown> | undefined;
+  windowCostUsd: number;
+  weekCostUsd: number;
+  balanceUsd: number;
 }) {
-  const { policy } = input;
-  const windowCostUsd = financeNumber(
-    input.windowData?.chargeUsd ?? input.windowData?.costUsd,
-  );
-  const weekCostUsd = financeNumber(
-    input.weekData?.chargeUsd ?? input.weekData?.costUsd,
-  );
+  const { policy, windowCostUsd, weekCostUsd, balanceUsd } = input;
   const onOwnerCredential =
     input.credentialPath === "byok_api_key" || input.credentialPath === "byosub";
-  const balanceUsd = financeNumber(input.balanceData?.balanceUsd);
   const throttle = input.rails.rail(input.railId).throttle({
     modelAccess: policy.modelAccess,
     windowCostUsd,
@@ -222,14 +208,15 @@ function deriveSpendStatus(input: {
 }
 
 interface UsageReaders {
-  db: Firestore;
+  records: BrokerRecords;
   store: PlatformStateRepositories;
   accounts: UserAccountReader;
+  usage: ModelBrokerUsageLedger;
   rails: ModelBrokerRailRegistry;
 }
 
 async function agentUsageStatusPayload(
-  { db, store, rails }: Pick<UsageReaders, "db" | "store" | "rails">,
+  { records, store, usage, rails }: Pick<UsageReaders, "records" | "store" | "usage" | "rails">,
   gatewayId: string,
   assigned: { uid: string; account: UserAccount },
   nowMs: number,
@@ -237,24 +224,14 @@ async function agentUsageStatusPayload(
   const windowStartMs = usageWindowStartMs(nowMs);
   const weekStartMs = weekWindowStartMs(nowMs);
   const balanceLedger = rails.balanceLedger(assigned.uid);
-  const [authorization, configSnap, windowSnap, weekSnap, balanceSnap] =
+  const owner = { gatewayId, ownerUid: assigned.uid, now: nowMs };
+  const [authorization, systemConfig, window, week, balanceUsd] =
     await Promise.all([
       readGatewayAuthorizationInStore(store, gatewayId),
-      db
-        .collection("users")
-        .doc(assigned.uid)
-        .collection("system")
-        .doc("config")
-        .get(),
-      db
-        .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
-        .doc(modelBrokerWindowDocId(assigned.uid, windowStartMs))
-        .get(),
-      db
-        .collection(MODEL_BROKER_WEEK_WINDOWS_COLLECTION)
-        .doc(modelBrokerWindowDocId(assigned.uid, weekStartMs))
-        .get(),
-      balanceLedger ? db.collection(balanceLedger.collection).doc(balanceLedger.ownerUid).get() : null,
+      records.userDocuments.systemConfig(assigned.uid),
+      usage.readWindowUsage(owner),
+      usage.readWeekUsage(owner),
+      balanceLedger ? usage.readBalance(balanceLedger) : 0,
     ]);
 
   const policy = userEntitlements().policy(assigned.account.planInputs, new Date(nowMs));
@@ -264,18 +241,15 @@ async function agentUsageStatusPayload(
       `durable root config unavailable for gateways/${gatewayId}`,
     );
   }
-  const credential = credentialPathFor(
-    (configSnap.data() ?? {}) as Record<string, unknown>,
-    authorization.config.gatewayClass,
-  );
+  const credential = credentialPathFor(systemConfig ?? {}, authorization.config.gatewayClass);
   const spend = deriveSpendStatus({
     policy,
     railId,
     rails,
     credentialPath: credential.path,
-    windowData: windowSnap.data(),
-    weekData: weekSnap.data(),
-    balanceData: balanceSnap?.data(),
+    windowCostUsd: window.chargeUsd,
+    weekCostUsd: week.chargeUsd,
+    balanceUsd,
   });
 
   return {
@@ -370,7 +344,7 @@ async function handleApiKeyCredential(
 }
 
 async function handleByosubCred(input: {
-  db: Firestore;
+  byosub: ByosubRecords;
   store: PlatformStateRepositories;
   readCredentialSecret: (name: string, version?: string) => Promise<string>;
   gatewayId: string;
@@ -378,7 +352,7 @@ async function handleByosubCred(input: {
   agentId: string;
   res: Response;
 }): Promise<void> {
-  const { db, store, readCredentialSecret, gatewayId, podName, agentId, res } = input;
+  const { byosub, store, readCredentialSecret, gatewayId, podName, agentId, res } = input;
   const authorization = await readGatewayAuthorizationInStore(store, gatewayId);
   if (authorization?.config.gatewayClass !== "builder") {
     res.status(403).json(FORBIDDEN);
@@ -394,9 +368,7 @@ async function handleByosubCred(input: {
     res.status(403).json(FORBIDDEN);
     return;
   }
-  const snap = await db.collection("users").doc(assigned.uid)
-    .collection("integrations").doc("byosub").get();
-  const parsed = resolveUserByosubCredentialRefs(assigned.uid, snap.data());
+  const parsed = resolveUserByosubCredentialRefs(assigned.uid, await byosub.readIntegration(assigned.uid));
   if (parsed.refs.length === 0) {
     warnSkippedUserByosubProviders({ gatewayId, agentId, uid: assigned.uid, skipped: parsed.skipped });
     res.status(parsed.skipped.length > 0 ? 500 : 404).json({
@@ -467,7 +439,7 @@ function isCodexAuthJson(credential: unknown): credential is string {
 // the owner is derived from the assignment, the provider must already be
 // connected, and only the codex shape rotates (claude-cli tokens are static).
 async function handleByosubCredSyncback(input: {
-  db: Firestore;
+  byosub: ByosubRecords;
   store: PlatformStateRepositories;
   readCredentialSecret: (name: string, version?: string) => Promise<string>;
   writeByosubCredential: (name: string, value: string) => Promise<SubscriptionSecretVersionResult>;
@@ -476,7 +448,7 @@ async function handleByosubCredSyncback(input: {
   body: { agentId?: unknown; provider?: unknown; credential?: unknown };
   res: Response;
 }): Promise<void> {
-  const { db, store, readCredentialSecret, writeByosubCredential, gatewayId, podName, body, res } = input;
+  const { byosub, store, readCredentialSecret, writeByosubCredential, gatewayId, podName, body, res } = input;
   if (typeof body.agentId !== "string" || !isSafeAgentId(body.agentId)) {
     res.status(400).json(VALID_AGENT_ID_REQUIRED);
     return;
@@ -504,9 +476,7 @@ async function handleByosubCredSyncback(input: {
     res.status(403).json(FORBIDDEN);
     return;
   }
-  const snap = await db.collection("users").doc(assigned.uid)
-    .collection("integrations").doc("byosub").get();
-  const ref = resolveUserByosubCredentialRefs(assigned.uid, snap.data()).refs
+  const ref = resolveUserByosubCredentialRefs(assigned.uid, await byosub.readIntegration(assigned.uid)).refs
     .find((candidate) => candidate.provider === "openai");
   if (!ref) {
     res.status(404).json({ error: "not_found" });
@@ -526,7 +496,7 @@ async function handleByosubCredSyncback(input: {
 
 function registerCredentialMaterializationRoutes(
   router: Router,
-  db: Firestore,
+  byosub: ByosubRecords,
   store: PlatformStateRepositories,
   readCredentialSecret: (name: string, version?: string) => Promise<string>,
   writeByosubCredential: (name: string, value: string) => Promise<SubscriptionSecretVersionResult>,
@@ -535,7 +505,7 @@ function registerCredentialMaterializationRoutes(
     const bound = boundGateway(req, res);
     if (!bound) return;
     await handleByosubCredSyncback({
-      db,
+      byosub,
       store,
       readCredentialSecret,
       writeByosubCredential,
@@ -554,7 +524,7 @@ function registerCredentialMaterializationRoutes(
       return;
     }
     await handleByosubCred({
-      db,
+      byosub,
       store,
       readCredentialSecret,
       gatewayId: bound.gatewayId,
@@ -633,20 +603,19 @@ function registerAgentUsageStatusRoute(
 }
 
 async function fundedBudgetInspectionFields(
-  readers: Pick<UsageReaders, "db" | "rails">,
+  readers: Pick<UsageReaders, "usage" | "rails">,
   assigned: { uid: string; account: UserAccount },
   nowMs: number,
 ): Promise<Record<string, unknown>> {
   const budget = readers.rails.resolveOwnerProfile({ ...assigned.account.planInputs }, assigned.uid, nowMs)?.fundedBudget ?? null;
   if (!budget) return readers.rails.budgetInspection(null, null);
-  const snapshot = await readers.db.collection(budget.ledgerCollection).doc(budget.ledgerKey).get();
-  const ledger = parseFundedBudgetLedger(snapshot.data(), budget);
+  const ledger = await readers.usage.readFundedBudgetLedger(budget);
   if (!ledger) throw new Error("funded budget accounting unavailable");
   return readers.rails.budgetInspection(budget, ledger);
 }
 
 async function privateBrokerInspectionPayload(
-  readers: Pick<UsageReaders, "db" | "store" | "rails">,
+  readers: Pick<UsageReaders, "records" | "store" | "usage" | "rails">,
   gatewayId: string,
   assigned: { uid: string; account: UserAccount },
   agentId: string,
@@ -706,7 +675,7 @@ function registerPrivateBrokerInspection(
   });
 }
 
-function registerByosubUserRoute(router: Router, db: Firestore, store: PlatformStateRepositories): void {
+function registerByosubUserRoute(router: Router, byosub: ByosubRecords, store: PlatformStateRepositories): void {
   router.post("/byosub-user", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -726,13 +695,7 @@ function registerByosubUserRoute(router: Router, db: Firestore, store: PlatformS
       res.status(404).json({ error: "not_found" });
       return;
     }
-    const integration = await db
-      .collection("users")
-      .doc(uid)
-      .collection("integrations")
-      .doc("byosub")
-      .get();
-    const refs = resolveUserByosubCredentialRefs(uid, integration.data()).refs;
+    const refs = resolveUserByosubCredentialRefs(uid, await byosub.readIntegration(uid)).refs;
     let refProvider: "openai" | "anthropic" | null = null;
     if (refs.some((ref) => ref.provider === "openai")) refProvider = "openai";
     else if (refs.some((ref) => ref.provider === "anthropic")) refProvider = "anthropic";
@@ -872,8 +835,8 @@ function registerAgentModelTokenRoute(
 }
 
 export function createByokBrokerRoutes(opts: {
-  db: Firestore;
   store: PlatformStateStore;
+  records?: BrokerRecords;
   now?: () => number;
   readSecret?: (name: string, version?: string) => Promise<string>;
   writeByosubCredential?: (name: string, value: string) => Promise<SubscriptionSecretVersionResult>;
@@ -881,14 +844,16 @@ export function createByokBrokerRoutes(opts: {
   rails?: ModelBrokerRailRegistry;
 }): Router {
   const router = Router();
-  const { db, store } = opts;
+  const { store } = opts;
+  const records = opts.records ?? NO_BROKER_RECORDS;
+  const { byosub } = records;
   const now = opts.now ?? Date.now;
   const readCredentialSecret = opts.readSecret ?? readSecret;
   const writeByosubCredential = opts.writeByosubCredential ?? addSecretVersionKeepingLatest;
   const rails = opts.rails ?? operatorRailRegistry();
-  const readers: UsageReaders = { db, store, accounts: firestoreUserAccountReader(db), rails };
+  const readers: UsageReaders = { records, store, accounts: records.accounts, usage: records.usage, rails };
 
-  registerCredentialMaterializationRoutes(router, db, store, readCredentialSecret, writeByosubCredential);
+  registerCredentialMaterializationRoutes(router, byosub, store, readCredentialSecret, writeByosubCredential);
   registerAgentModelTokenRoute(router, store, readers.accounts, now, rails);
   registerPrivateBrokerInspection(router, readers, now);
 
@@ -946,48 +911,19 @@ export function createByokBrokerRoutes(opts: {
     }
 
     const now = Date.now();
-    await Promise.all([
-      db
-        .collection("byosubFlows")
-        .doc(body.flowId)
-        .set({
-          uid: assigned.uid,
-          gatewayId: bound.gatewayId,
-          agentId: body.agentId,
-          provider: entry.oauth.subscriptionProvider,
-          modelCredentialProvider: entry.id,
-          createdAt: now,
-          expireAt: now + BYOSUB_FLOW_TTL_MS,
-        }),
-      db
-        .collection("users")
-        .doc(assigned.uid)
-        .collection("integrations")
-        .doc("byosub")
-        .set(
-          {
-            connected: false,
-            gatewayId: bound.gatewayId,
-            providers: {
-              [entry.oauth.subscriptionProvider]: {
-                provider: entry.oauth.subscriptionProvider,
-                modelCredentialProvider: entry.id,
-                status: "disconnected",
-                connected: false,
-                state: "pending",
-                flowId: body.flowId,
-                gatewayId: bound.gatewayId,
-              },
-            },
-            updatedAt: now,
-          },
-          { merge: true },
-        ),
-    ]);
+    await byosub.startFlow(body.flowId, {
+      uid: assigned.uid,
+      gatewayId: bound.gatewayId,
+      agentId: body.agentId,
+      provider: entry.oauth.subscriptionProvider,
+      modelCredentialProvider: entry.id,
+      createdAt: now,
+      expireAt: now + BYOSUB_FLOW_TTL_MS,
+    });
     res.json({ ok: true });
   });
 
-  registerByosubUserRoute(router, db, store);
+  registerByosubUserRoute(router, byosub, store);
 
   router.post("/byosub-flow-read", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -997,12 +933,7 @@ export function createByokBrokerRoutes(opts: {
       res.status(400).json({ error: "valid flowId required" });
       return;
     }
-    const flow = await db.collection("byosubFlows").doc(flowId).get();
-    if (!flow.exists) {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-    const data = flow.data();
+    const data = await byosub.readFlow(flowId);
     if (
       !data ||
       data.gatewayId !== bound.gatewayId ||

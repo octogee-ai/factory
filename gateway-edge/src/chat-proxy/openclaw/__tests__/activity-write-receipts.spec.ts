@@ -1,24 +1,29 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import {
   ActivityReceiptConflictError,
   ActivityReceiptLeaseError,
   ActivityReceiptUnavailableError,
-  FirestoreActivityWriteReceiptStore,
   InMemoryActivityWriteReceiptStore,
+  PlatformStateActivityWriteReceiptStore,
   receiptDocumentId,
   type ActivityAttachmentReceiptV1,
 } from "../activity-write-receipts.js";
 
 const eventKey = "a".repeat(64);
 const digest = "b".repeat(64);
+const channelPath = "workspaces/acme/channels/build";
+const receiptPath = `${channelPath}/activityWriteReceipts/${receiptDocumentId(eventKey)}`;
+const channel = { scope: { workspaceSlug: "acme", projectSlug: null }, channelId: "build" };
 
-function firestoreStoreReturning(data: Record<string, unknown>) {
-  return new FirestoreActivityWriteReceiptStore({
-    doc: () => ({
-      get: async () => ({ exists: true, data: () => data }),
-    }),
-    runTransaction: vi.fn(),
-  } as never, "workspaces/acme/channels/build");
+function channelDocuments(receipt?: Record<string, unknown>) {
+  const documents = new Map<string, Record<string, unknown>>([[channelPath, { id: "build", kind: "project" }]]);
+  if (receipt) documents.set(receiptPath, receipt);
+  return documents;
+}
+
+function platformStoreReturning(data: Record<string, unknown>) {
+  return new PlatformStateActivityWriteReceiptStore(createDocumentFixtureStore(channelDocuments(data)), channel);
 }
 
 describe("Activity write receipts", () => {
@@ -126,43 +131,12 @@ describe("Activity write receipts", () => {
     );
   });
 
-  it("uses a production transaction beneath the channel doc for claim, post, and commit fencing", async () => {
-    const documents = new Map<string, Record<string, unknown>>();
-    const writes: string[] = [];
-    const db = {
-      doc(path: string) {
-        return {
-          path,
-          async get() {
-            const value = documents.get(path);
-            return { exists: Boolean(value), data: () => value };
-          },
-        };
-      },
-      async runTransaction<T>(fn: (transaction: {
-        get(ref: { path: string }): Promise<{ exists: boolean; data(): Record<string, unknown> | undefined }>;
-        set(ref: { path: string }, data: Record<string, unknown>): void;
-      }) => Promise<T>): Promise<T> {
-        const staged = new Map<string, Record<string, unknown>>();
-        const result = await fn({
-          async get(ref) {
-            const value = documents.get(ref.path);
-            return { exists: Boolean(value), data: () => value };
-          },
-          set(ref, data) {
-            staged.set(ref.path, structuredClone(data));
-          },
-        });
-        for (const [path, data] of staged) {
-          writes.push(path);
-          documents.set(path, data);
-        }
-        return result;
-      },
-    };
-    const store = new FirestoreActivityWriteReceiptStore(
-      db as never,
-      "workspaces/acme/channels/build",
+  it("claims, posts and commits the channel's receipt through platform state transactions", async () => {
+    const documents = channelDocuments();
+    const labels: string[] = [];
+    const store = new PlatformStateActivityWriteReceiptStore(
+      createDocumentFixtureStore(documents, { beforeTransaction: (label) => labels.push(label) }),
+      channel,
     );
     const claim = await store.claim({
       eventKey,
@@ -176,8 +150,8 @@ describe("Activity write receipts", () => {
     await store.markPosted(eventKey, claim.receipt.leaseToken, "post-1", 2);
     await store.commit(eventKey, claim.receipt.leaseToken, 3);
 
-    const expectedPath = `workspaces/acme/channels/build/activityWriteReceipts/${receiptDocumentId(eventKey)}`;
-    expect(new Set(writes)).toEqual(new Set([expectedPath]));
+    expect(labels).toHaveLength(3);
+    expect(documents.get(receiptPath)).toMatchObject({ state: "committed", postId: "post-1", updatedAt: 3 });
     expect(await store.read(eventKey)).toMatchObject({
       state: "committed",
       postId: "post-1",
@@ -191,6 +165,13 @@ describe("Activity write receipts", () => {
       now: 4,
       leaseMs: 100,
     })).rejects.toBeInstanceOf(ActivityReceiptConflictError);
+  });
+
+  it("refuses to fence a receipt that was never claimed", async () => {
+    const store = new PlatformStateActivityWriteReceiptStore(createDocumentFixtureStore(channelDocuments()), channel);
+
+    await expect(store.commit(eventKey, "lease-1", 1)).rejects.toBeInstanceOf(ActivityReceiptUnavailableError);
+    expect(await store.read(eventKey)).toBeNull();
   });
 
   it("rejects every malformed persisted attachment union state", async () => {
@@ -233,13 +214,13 @@ describe("Activity write receipts", () => {
     ];
 
     for (const attachment of malformedAttachments) {
-      await expect(firestoreStoreReturning({ ...base, attachment }).read(eventKey))
+      await expect(platformStoreReturning({ ...base, attachment }).read(eventKey))
         .rejects.toBeInstanceOf(ActivityReceiptUnavailableError);
     }
   });
 
   it("rejects a receipt whose stored event key does not match the requested document", async () => {
-    const store = firestoreStoreReturning({
+    const store = platformStoreReturning({
       eventKey: "c".repeat(64),
       payloadDigest: digest,
       state: "committed",

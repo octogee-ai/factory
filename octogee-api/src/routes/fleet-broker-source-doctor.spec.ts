@@ -36,7 +36,7 @@ function fixture() {
   const fence = () => data[`gateways/${gatewayId}`].runtimeRestartFence;
   const server = express(); server.disable("x-powered-by"); server.use(express.json());
   server.use(((req, _res, next) => { req.boundTenant = { kind: "gateway", gatewayId, podName, podUid, tokenSource: "ksa" } as never; next(); }) as RequestHandler);
-  server.use("/internal/fleet", createFleetBrokerRoutes({ db: {} as never, store: stateStore, now: () => 300 }));
+  server.use("/internal/fleet", createFleetBrokerRoutes({ store: stateStore, now: () => 300 }));
   return { data, store, fence, server };
 }
 
