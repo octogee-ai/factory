@@ -80,7 +80,6 @@ docker run --rm --name octo-gateway-agent \
   --entrypoint /octogee/scripts/node_modules/.bin/tsx \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$STATE_ROOT:$STATE_ROOT" \
-  -v "/home/octo:$STATE_ROOT/desktop-home" \
   -v /run/octogee-desktop:/run/octogee-desktop \
   -e GATEWAY_ID="$GATEWAY_ID" \
   -e OCTOGEE_API_URL="$OCTOGEE_API_URL" \

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  COMPUTER_HOME_RESTORE_METADATA_KEY,
   ComputeOperationError,
   createGatewayVmClient,
   instanceInsertBody,
@@ -27,7 +28,7 @@ const input: CreateGatewayVmInput = {
 
 type Call = { url: string; method: string; body?: unknown };
 
-function fakeCompute(script: (call: Call, calls: Call[]) => { status: number; data?: unknown } | Error, image: typeof IMAGE | null = IMAGE) {
+function fakeCompute(script: (call: Call, calls: Call[]) => { status: number; data?: unknown } | Error, image: (typeof IMAGE & { labels?: Record<string, string> }) | null = IMAGE) {
   const calls: Call[] = [];
   const request: ComputeRequest = vi.fn(async (call: Call) => {
     calls.push(call);
@@ -176,6 +177,25 @@ describe("createGatewayVmClient.create", () => {
       serviceAccounts: [],
     });
     expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+  });
+
+  it("creates a checkpoint-restoring computer only from an image whose boot keeps writers off until the restore admits them", async () => {
+    const restoring = { ...input, metadata: { ...input.metadata, [COMPUTER_HOME_RESTORE_METADATA_KEY]: "checkpoint" } };
+    const script = (call: Call) => {
+      if (call.method === "POST") return { status: 200, data: { name: "op-1", status: "DONE" } };
+      if (call.method === "GET" && call.url.endsWith(`/instances/${input.instanceName}`)) return instance();
+      return new Error(`unexpected ${call.method} ${call.url}`);
+    };
+    for (const labels of [undefined, { "home-restore": "ungated" }]) {
+      const ungated = fakeCompute(script, { ...IMAGE, ...(labels ? { labels } : {}) });
+      await expect(clientWith(ungated.request).client.create(restoring)).rejects.toThrow(/does not gate .* writers .* checkpoint restore/);
+      expect(ungated.calls.filter((c) => c.method === "POST")).toEqual([]);
+    }
+
+    const gated = fakeCompute(script, { ...IMAGE, labels: { "home-restore": "gated-v1" } });
+    await expect(clientWith(gated.request).client.create(restoring)).resolves.toMatchObject({ alreadyExisted: false });
+    const plain = fakeCompute(script);
+    await expect(clientWith(plain.request).client.create(input)).resolves.toMatchObject({ alreadyExisted: false });
   });
 
   it("falls back to on-demand when the zone has no Spot capacity", async () => {

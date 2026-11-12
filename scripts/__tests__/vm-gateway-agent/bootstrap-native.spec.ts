@@ -61,7 +61,6 @@ describe("native VM bootstrap supervision", () => {
       const events = (await readFile(`${root}/events`, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as string[]);
       expect(events.slice(0, 3)).toEqual([3001, 3003, 30873].map((port) => ["ufw", "allow", "proto", "tcp", "from", "10.117.0.0/17", "to", "any", "port", String(port)]));
       expect(events.filter((args) => args[0] === "stop")).toEqual([["stop", "--time", "20", "octo-gateway-agent"]]);
-      expect(events.find((args) => args[0] === "run")).toContain(`/home/octo:${root}/state/desktop-home`);
       expect(events.filter((args) => args[0] === "rm")).toEqual([["rm", "-f", "octo-gateway-agent"]]);
       const dockerVerbs = events.filter((args) => args[0] !== "ufw").map((args) => args.slice(0, 2).join(" "));
       expect(dockerVerbs.slice(0, 2)).toEqual(["image inspect", "pull -q"]);
@@ -75,6 +74,36 @@ describe("native VM bootstrap supervision", () => {
       await done;
     }
   });
+});
+
+it.each(["omarchy", "x11"])("gives the %s agent the home disk's desktop-home, never the boot disk's login home", async (desktop) => {
+  const root = await mkdtemp(`${tmpdir()}/octogee-bootstrap-home-`);
+  roots.push(root);
+  await mkdir(`${root}/bin`);
+  for (const name of ["curl", "df", "docker", "iptables", "ufw"]) await writeFile(`${root}/bin/${name}`, mock, { mode: 0o755 });
+  const binaries = resolve(import.meta.dirname, "../../../infra/desktop/image/rootfs/usr/local/bin");
+  await writeFile(`${root}/bin/octo-gateway-firewall`, await readFile(`${binaries}/octo-gateway-firewall`), { mode: 0o755 });
+  const script = `${root}/bootstrap`;
+  await writeFile(script, (await readFile(`${binaries}/octo-gateway-agent`, "utf8")).replace("/usr/local/bin/octo-gateway-firewall", `${root}/bin/octo-gateway-firewall`));
+  const assignment = { "gateway-id": "b-fixture", "gateway-image": "registry.invalid/gateway@sha256:old", "octogee-api-url": "https://api.invalid", "octogee-computer-desktop": desktop };
+  for (const [key, value] of Object.entries(assignment)) await writeFile(`${root}/${key}`, value);
+  const child = spawn("bash", [script], {
+    env: { ...process.env, PATH: `${root}/bin:${process.env.PATH}`, BOOTSTRAP_FIXTURE: root, OCTO_VM_STATE_ROOT: `${root}/state`, OCTO_ASSIGNMENT_POLL_SECONDS: "0.05" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const done = new Promise<number | null>((accept, reject) => { child.once("close", accept); child.once("error", reject); });
+  const events = async () => (await readFile(`${root}/events`, "utf8").catch(() => "")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as string[]);
+  try {
+    await expect.poll(async () => (await events()).some((args) => args[0] === "run"), { timeout: 5_000 }).toBe(true);
+    const run = (await events()).find((args) => args[0] === "run")!;
+    const volumes = run.flatMap((arg, index) => run[index - 1] === "-v" ? [arg] : []);
+    expect(volumes).toContain(`${root}/state:${root}/state`);
+    expect(volumes.filter((volume) => volume.split(":")[1]?.startsWith(`${root}/state/`))).toEqual([]);
+    expect(volumes.some((volume) => volume.startsWith("/home/octo"))).toBe(false);
+  } finally {
+    child.kill("SIGTERM");
+    await done;
+  }
 });
 
 it("prefetches before assignment, refreshes a changed image, and reuses it without pruning", async () => {

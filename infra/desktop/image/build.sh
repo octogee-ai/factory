@@ -68,7 +68,7 @@ IMAGE_DISK="${BUILDER}-image"
 SOURCE_SHA="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || echo unknown)"
 IMAGE_NAME="${REQUESTED_IMAGE_NAME:-octogee-computer-${OMARCHY_VERSION//./-}-$(date -u +%Y%m%d-%H%M)}"
 [[ "$IMAGE_NAME" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || { echo "invalid image name" >&2; exit 2; }
-image_labels="omarchy-iso=${OMARCHY_VERSION//./-},source=${SOURCE_SHA},purpose=octogee-computer,home-admission=retained-v1"
+image_labels="omarchy-iso=${OMARCHY_VERSION//./-},source=${SOURCE_SHA},purpose=octogee-computer,home-admission=retained-v1,home-restore=gated-v1"
 if [[ -n "${OCTOGEE_IMAGE_FINGERPRINT:-}" ]]; then
   [[ "$OCTOGEE_IMAGE_FINGERPRINT" =~ ^[a-f0-9]{64}$ ]] || { echo "invalid image fingerprint" >&2; exit 2; }
   image_labels+=",input-a=${OCTOGEE_IMAGE_FINGERPRINT:0:32},input-b=${OCTOGEE_IMAGE_FINGERPRINT:32:32}"

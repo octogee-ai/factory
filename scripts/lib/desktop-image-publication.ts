@@ -27,7 +27,9 @@ export interface DesktopPublicationPlan {
 
 function assertDestinationCopy(copy: DesktopCloudImage | null, artifact: ReturnType<typeof validateDesktopImage>, source: DesktopCloudImage): void {
   if (copy?.status !== 'READY' || copy.sourceImageId !== artifact.id || copy.labels?.source !== artifact.sourceSha) throw new Error('destination is not a copy of the tested desktop image');
-  if (copy.labels?.['home-admission'] !== source.labels?.['home-admission']) throw new Error('destination copy native home admission differs from the tested image');
+  for (const contract of ['home-admission', 'home-restore']) {
+    if (copy.labels?.[contract] !== source.labels?.[contract]) throw new Error(`destination copy native home admission contract ${contract} differs from the tested image`);
+  }
 }
 
 export async function planDesktopPublication(value: unknown, environment: 'test' | 'prod', deps: DesktopPublicationDeps): Promise<DesktopPublicationPlan> {

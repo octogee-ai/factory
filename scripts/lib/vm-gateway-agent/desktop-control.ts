@@ -7,9 +7,15 @@ export interface DesktopControl {
   run(action: "freeze" | "thaw" | "stop" | "stop-home" | "reconcile-tools" | "start"): Promise<void>;
 }
 
+export function desktopActionTimeoutMs(action: string): number {
+  if (action === "start") return 23 * 60_000;
+  if (action === "reconcile-tools") return 21 * 60_000;
+  return 60_000;
+}
+
 function runDesktopAction(socketPath: string, action: string): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-      const req = http.request({ socketPath, method: "POST", path: `/${action}`, timeout: action === "reconcile-tools" ? 21 * 60_000 : 60_000 }, (res) => {
+      const req = http.request({ socketPath, method: "POST", path: `/${action}`, timeout: desktopActionTimeoutMs(action) }, (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
         res.on("error", reject);

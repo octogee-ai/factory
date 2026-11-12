@@ -50,7 +50,7 @@ async function fixture() {
   const deps: HomeCheckpointDeps = {
     gatewayId: "b-x", apiUrl: "https://api.invalid", stateRoot: root,
     metadata: { identityToken: async () => "local-test-token" },
-    fs: createHomeFs(root), shell, now: Date.now, log: vi.fn(),
+    fs: createHomeFs(root), shell, now: Date.now, log: vi.fn(), logError: vi.fn(),
     desktop: { run: async (action) => { events.push(action); } },
     discardSnapshot: async () => { await rm(`${root}/.home-checkpoint/snapshot`, { recursive: true, force: true }); },
     captureSnapshot: async () => {
@@ -322,7 +322,7 @@ describe.skipIf(process.platform === "darwin" && !nativeDocker)("native home arc
     expect(await h.deps.fs.exists(`${h.scope.dataDir}/tokens`)).toBe(false);
     const { readdir } = await import("node:fs/promises");
     expect(await readdir(`${h.scope.desktopDir}/.config/octogee-chromium`)).toEqual(["Default"]);
-    expect(h.events).toEqual(["freeze", "thaw", "stop-home", "reconcile-tools", "start"]);
+    expect(h.events).toEqual(["freeze", "thaw", "stop-home", "reconcile-tools"]);
   });
 
   it("retries extraction failures without treating partially extracted staging files as a live home", async () => {
@@ -336,6 +336,29 @@ describe.skipIf(process.platform === "darwin" && !nativeDocker)("native home arc
     expect(h.events).toEqual(["freeze", "thaw"]);
     h.deps.shell = shell;
     expect(await restoreHome(h.deps, h.scope)).toMatchObject({ status: "restored" });
+  });
+
+  it("sweeps an interrupted gated restore's staging off the home disk before downloading the checkpoint again", async () => {
+    const h = await fixture();
+    await checkpointHome(h.deps, h.scope, { force: true });
+    h.required();
+    await h.emptyGateway();
+    await writeFile(h.scope.restoreGate, "");
+    const leftovers = [`${h.root}/tmp/octogee-home-restore-interrupted`, `${h.scope.desktopDir}/.octogee-restore-interrupted`, `${h.scope.desktopDir}/.config/.octogee-restore-interrupted`];
+    for (const leftover of leftovers) {
+      await mkdir(`${leftover}/stage`, { recursive: true });
+      await writeFile(`${leftover}/stage/partial`, "partial copy");
+    }
+    const fetchImpl = h.deps.fetchImpl;
+    let presentAtDownload: boolean[] = [];
+    h.deps.fetchImpl = (async (input, init) => {
+      if (String(input).endsWith("/download")) presentAtDownload = await Promise.all(leftovers.map((path) => h.deps.fs.exists(path)));
+      return fetchImpl(input, init);
+    }) as typeof fetch;
+    expect(await restoreHome(h.deps, h.scope)).toMatchObject({ status: "restored" });
+    expect(presentAtDownload).toEqual([false, false, false]);
+    expect(await readFile(`${h.scope.dataDir}/gateway.txt`, "utf8")).toBe("gateway state");
+    expect(await h.deps.fs.exists(h.scope.restoreGate)).toBe(true);
   });
 
   it("keeps the desktop closed and resumes an interrupted installation even after the gateway directory becomes nonempty", async () => {
@@ -354,7 +377,7 @@ describe.skipIf(process.platform === "darwin" && !nativeDocker)("native home arc
     h.deps.fs.replaceDirectory = replace;
     expect(await restoreHome(h.deps, h.scope)).toMatchObject({ status: "restored" });
     expect(await h.deps.fs.exists(h.scope.restorePending)).toBe(false);
-    expect(h.events.at(-1)).toBe("start");
+    expect(h.events).not.toContain("start");
   });
 
   it("does not upload an incomplete archive, and releases the snapshot protection on failure", async () => {

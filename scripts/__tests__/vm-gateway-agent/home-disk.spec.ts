@@ -28,9 +28,21 @@ if command == 'findmnt':
     else: print(layout.get('stateMount', 'owned-home-uuid btrfs /'))
 if command == 'mountpoint':
     sys.exit(0 if args[-1] in layout.get('mounted', []) else 1)
+if command == 'curl':
+    restore = layout.get('restore', {'status': 404, 'body': 'not found'})
+    if isinstance(restore, list):
+        asked = sum(1 for line in (root / 'calls').read_text().splitlines() if json.loads(line)[0] == 'curl')
+        restore = restore[min(asked, len(restore)) - 1]
+    if restore.get('unreachable'): sys.exit(7)
+    print(restore['body'] + '\\n' + str(restore['status']), end='')
 `;
 
-async function fixture(layout: { probe: number; fstype?: string; attached?: boolean; mounted?: string[]; stateMount?: string; desktopMount?: string; desktopWanted?: number }) {
+type RestoreAnswer = { status: number; body: string } | { unreachable: true };
+type RestoreMetadata = RestoreAnswer | RestoreAnswer[];
+const RESTORE_ATTRIBUTE = "http://169.254.169.254/computeMetadata/v1/instance/attributes/octogee-home-restore";
+const exists = (path: string) => access(path).then(() => true, () => false);
+
+async function fixture(layout: { probe: number; fstype?: string; attached?: boolean; mounted?: string[]; stateMount?: string; desktopMount?: string; desktopWanted?: number; restore?: RestoreMetadata }) {
   const root = await mkdtemp(`${tmpdir()}/octogee-home-disk-`);
   roots.push(root);
   const paths = { device: `${root}/dev/scsi-0Google_PersistentDisk_octogee-home`, stateRoot: `${root}/srv/octogee`, userHome: `${root}/home/octo` };
@@ -41,7 +53,7 @@ async function fixture(layout: { probe: number; fstype?: string; attached?: bool
   if (layout.attached !== false) await writeFile(paths.device, "");
   const mounted = (layout.mounted ?? []).map((name) => paths[name as keyof typeof paths]);
   await writeFile(`${root}/layout.json`, JSON.stringify({ ...layout, mounted }));
-  for (const name of ["blkid", "mkfs.btrfs", "mountpoint", "mount", "btrfs", "findmnt"]) await writeFile(`${root}/bin/${name}`, mock, { mode: 0o755 });
+  for (const name of ["blkid", "mkfs.btrfs", "mountpoint", "mount", "btrfs", "findmnt", "curl"]) await writeFile(`${root}/bin/${name}`, mock, { mode: 0o755 });
   await writeFile(`${root}/desktop-wanted`, `#!/bin/sh\nexit ${layout.desktopWanted ?? 0}\n`, { mode: 0o755 });
   const env = {
     ...process.env,
@@ -52,9 +64,11 @@ async function fixture(layout: { probe: number; fstype?: string; attached?: bool
     OCTO_USER_HOME: paths.userHome,
     OCTO_HOME_DEVICE_WAIT_SECONDS: "1",
     OCTO_DESKTOP_WANTED: `${root}/desktop-wanted`,
+    OCTO_HOME_RESTORE_ATTEMPTS: "2",
+    OCTO_HOME_RESTORE_RETRY_SECONDS: "0",
   };
   const calls = async () => (await readFile(`${root}/calls`, "utf8").catch(() => "")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as string[]);
-  return { env, calls, paths };
+  return { env, calls, paths, gate: `${paths.stateRoot}/home-restore.gate` };
 }
 
 describe("octo-home-disk", () => {
@@ -106,10 +120,67 @@ describe("octo-home-disk", () => {
       ["findmnt", "-n", "-o", "UUID,FSTYPE,FSROOT", "--mountpoint", h.paths.stateRoot],
       ["mountpoint", "-q", h.paths.userHome],
       ["btrfs", "filesystem", "resize", "max", h.paths.stateRoot],
+      ["curl", "-sS", "--connect-timeout", "2", "--max-time", "5", "-H", "Metadata-Flavor: Google", "-w", "\\n%{http_code}", RESTORE_ATTRIBUTE],
       ["mountpoint", "-q", h.paths.userHome],
       ["mount", "--bind", `${h.paths.stateRoot}/desktop-home`, h.paths.userHome],
       ["findmnt", "-n", "-o", "UUID,FSTYPE,FSROOT", "--mountpoint", h.paths.userHome],
     ]);
+    expect(await readFile(`${h.paths.stateRoot}/desktop-home/.bashrc`, "utf8")).toBe("image default\n");
+    expect(await exists(h.gate)).toBe(false);
+  });
+
+  it("closes the writer gate on a fresh home the controller restores from a checkpoint, before seeding it", async () => {
+    const h = await fixture({ probe: 2, restore: { status: 200, body: "checkpoint" } });
+    const { stdout } = await run("bash", [script], { env: h.env });
+    expect(await exists(h.gate)).toBe(true);
+    expect(stdout).toContain(`restores a checkpoint before SSH, the desktop and the user manager start; the restore clears ${h.gate}`);
+    expect(await readFile(`${h.paths.stateRoot}/desktop-home/.bashrc`, "utf8")).toBe("image default\n");
+  });
+
+  it("gates an X11 VM's fresh checkpoint-backed home too", async () => {
+    const h = await fixture({ probe: 2, desktopWanted: 1, restore: { status: 200, body: "checkpoint" } });
+    await run("bash", [script], { env: h.env });
+    expect(await exists(h.gate)).toBe(true);
+  });
+
+  it("leaves a retained home ungated without asking the metadata server, even when a restore was once requested", async () => {
+    const h = await fixture({ probe: 0, fstype: "btrfs", restore: { status: 200, body: "checkpoint" } });
+    await mkdir(`${h.paths.stateRoot}/desktop-home`, { recursive: true });
+    await run("bash", [script], { env: h.env });
+    expect(await exists(h.gate)).toBe(false);
+    expect((await h.calls()).map(([command]) => command)).not.toContain("curl");
+  });
+
+  it("keeps the gate of a restore interrupted by a reboot", async () => {
+    const h = await fixture({ probe: 0, fstype: "btrfs" });
+    await mkdir(`${h.paths.stateRoot}/desktop-home`, { recursive: true });
+    await writeFile(h.gate, "");
+    await run("bash", [script], { env: h.env });
+    expect(await exists(h.gate)).toBe(true);
+  });
+
+  it.each([
+    [{ unreachable: true } as const, 2, "after 2 attempts: metadata server unreachable"],
+    [{ status: 200, body: "yes" }, 1, "unexpected octogee-home-restore (HTTP 200): yes"],
+    [{ status: 500, body: "boom" }, 2, "after 2 attempts: octogee-home-restore answered HTTP 500: boom"],
+    [{ status: 429, body: "slow down" }, 2, "after 2 attempts: octogee-home-restore answered HTTP 429: slow down"],
+  ])("fails closed and leaves a fresh home unseeded when it cannot tell whether the home restores: %j", async (restore, attempts, message) => {
+    const h = await fixture({ probe: 2, restore });
+    await expect(run("bash", [script], { env: h.env })).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining(message) });
+    expect((await h.calls()).filter(([command]) => command === "curl")).toHaveLength(attempts);
+    expect(await exists(`${h.paths.stateRoot}/desktop-home`)).toBe(false);
+    expect(await exists(h.gate)).toBe(false);
+    expect((await h.calls()).filter(([command, ...args]) => command === "mount" && args.includes("--bind"))).toEqual([]);
+  });
+
+  it.each([
+    [[{ status: 503, body: "unavailable" }, { status: 200, body: "checkpoint" }], true],
+    [[{ unreachable: true }, { status: 200, body: "checkpoint" }], true],
+    [[{ status: 429, body: "slow down" }, { status: 404, body: "not found" }], false],
+  ] as const)("retries a transient metadata answer within the attempt budget: %j", async (restore, gated) => {
+    const h = await fixture({ probe: 2, restore: [...restore] });
+    await run("bash", [script], { env: h.env });
+    expect(await exists(h.gate)).toBe(gated);
     expect(await readFile(`${h.paths.stateRoot}/desktop-home/.bashrc`, "utf8")).toBe("image default\n");
   });
 

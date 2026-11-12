@@ -41,6 +41,7 @@ await runVmGatewayAgent(
     home: { shell: homeShell, fs: createHomeFs(stateRoot), desktop: createDesktopControl() },
     now: () => Date.now(),
     log,
+    logError: runtimeLogger.error,
   },
   {
     intervalMs: Number(process.env.VM_AGENT_INTERVAL_MS ?? 30_000),

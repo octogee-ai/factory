@@ -1,12 +1,12 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream, openAsBlob, type Stats } from "node:fs";
-import { chmod, chown, lstat, mkdir, mkdtemp, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, chown, lstat, mkdir, mkdtemp, readdir, rename, rm, stat, statfs, utimes, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
-import type { HomeFs, HomeShell } from "./home-checkpoint.js";
+import { HOME_REPLACE_STAGING_PREFIX, type HomeFs, type HomeShell } from "./home-checkpoint.js";
 
 const exec = promisify(execFile);
 
@@ -129,6 +129,10 @@ export function createHomeFs(stateRoot: string): HomeFs {
   const filesystem: HomeFs = {
     retainToolStorage,
     listDir: async (path) => (await exists(path)) ? readdir(path) : [],
+    freeBytes: async (path) => {
+      const { bavail, bsize } = await statfs(path);
+      return bavail * bsize;
+    },
     exists,
     fileSize: async (path) => (await stat(path)).size,
     sha256: (path) => new Promise((resolve, reject) => {
@@ -153,7 +157,7 @@ export function createHomeFs(stateRoot: string): HomeFs {
     mkdir: (path, mode) => mkdir(path, { recursive: true, mode }).then(() => undefined),
     replaceDirectory: async (source, target) => {
       await mkdir(dirname(target), { recursive: true });
-      const temporary = await mkdtemp(`${dirname(target)}/.octogee-restore-`);
+      const temporary = await mkdtemp(`${dirname(target)}/${HOME_REPLACE_STAGING_PREFIX}`);
       const stage = `${temporary}/stage`;
       const backup = `${temporary}/backup`;
       let backedUp = false;

@@ -93,6 +93,8 @@ class CandidateBuildTests(unittest.TestCase):
             self.assertEqual(image[image.index('--source-disk-zone') + 1], 'us-central1-b')
             self.assertIn('omarchy=4-5-0-2', image[image.index('--labels') + 1])
             self.assertIn('omarchy-iso=4-5-0', image[image.index('--labels') + 1])
+            self.assertIn('home-admission=retained-v1', image[image.index('--labels') + 1].split(','))
+            self.assertIn('home-restore=gated-v1', image[image.index('--labels') + 1].split(','))
             self.assertNotIn('--source-uri', image)
             delete = calls.index(['compute', 'instances', 'delete', 'builder-x', '--zone', 'us-central1-b', '--project', 'fixture', '--quiet'])
             self.assertGreater(delete, registration)

@@ -176,16 +176,16 @@ and Chromium actually showing the Desk.
 
 | Unit | Role |
 | --- | --- |
-| `octo-home-disk.service` | oneshot before Docker, the agent, and the desktop: mounts the attached `octogee-home` pd-ssd (formatting it btrfs only when blank) at `/srv/octogee` and binds `/home/octo` from its `desktop-home`, so the user home (gateway data, desktop profile, Documents, checkpoint staging) lives on its own quota-sized disk and image churn on the boot disk cannot fill it; refuses to start the agent or desktop when the disk is missing or holds another filesystem; on an `x11` VM (`octo-desktop-wanted` exits 1) it skips the `/home/octo` bind, so the login home stays on the boot disk and only the X11 gateway container mounts `desktop-home` |
+| `octo-home-disk.service` | oneshot before Docker, the agent, and the desktop: mounts the attached `octogee-home` pd-ssd (formatting it btrfs only when blank) at `/srv/octogee` and binds `/home/octo` from its `desktop-home`, so the user home (gateway data, desktop profile, Documents, checkpoint staging) lives on its own quota-sized disk and image churn on the boot disk cannot fill it; refuses to start the agent or desktop when the disk is missing or holds another filesystem; before seeding a fresh home whose `octogee-home-restore` instance attribute is `checkpoint` it writes the restore gate `/srv/octogee/home-restore.gate`; it retries a metadata server that is unreachable or answers 5xx or 429, and fails closed when it still cannot tell or answers an unexpected value; on an `x11` VM (`octo-desktop-wanted` exits 1) it skips the `/home/octo` bind, so the login home stays on the boot disk and only the X11 gateway container mounts `desktop-home` |
 | `octo-grow-root.service` | oneshot before Docker and the agent: grows the root partition (`sfdisk` + `partx`) and the btrfs filesystem to fill the boot disk, so `gcloud compute disks resize` plus a reboot recovers a full VM; a no-op when the partition already fills the disk |
 | `systemd-zram-setup@zram0.service` | zstd-compressed swap in RAM sized to the machine's memory (`/etc/systemd/zram-generator.conf`), with Omarchy's zram reclaim tuning (`/etc/sysctl.d/99-omarchy-sysctl.conf`: `vm.swappiness=150`, `vm.page-cluster=0`), so a memory spike slows the desktop instead of OOM-killing it; acceptance requires it active with swappiness above 100 |
 | `octo-seatd.service` | seatd unbound from a VT, so the compositor gets a seat with no console |
 | `octo-desktop-wanted` | `ExecCondition` (run as root) of `octo-seatd` and `octo-desktop`: reads the `octogee-computer-desktop` instance attribute and skips both units when it is `x11`, because that VM runs the Hobby X11 desktop inside its gateway container; a missing attribute or `omarchy` starts them, and an unreachable metadata server or any other value fails the units |
 | `user-runtime-dir@1000.service` | creates the desktop user's runtime mount before compositor sockets; user linger keeps it alive without an SSH session |
 | `octo-desktop.service` | as `octo`, on the user manager's session bus `/run/user/1000/bus` with AT-SPI running: Hyprland on the `vkms` output at 1440x900, wayvnc, noVNC over websockify, the control API, Chromium with its accessibility tree exposed; everything bound to 127.0.0.1 |
-| `octo-desktop-lifecycle.service` | root-only Unix socket for checkpoint freeze/thaw and restore stop/start of the desktop plus applications in `user@1000.service` |
+| `octo-desktop-lifecycle.service` | root-only Unix socket for checkpoint freeze/thaw and restore stop/start of the desktop plus applications in `user@1000.service`; `stop-home` allows a full-home restore only behind a closed restore gate with the desktop, user manager and sshd inactive and no `octo` processes, and `start` refuses while the gate exists, then starts the user manager, `octo-home-migrate` and the desktop in that order, and sshd whether or not they started |
 | `octo-metadata-ssh-keys.service` | installs `octo:` keys from GCE metadata before sshd |
-| `octo-gateway-agent.service` | blocks the metadata server for uid 1000, polls instance metadata until `gateway-id`, `gateway-image`, and `octogee-api-url` are set, then pulls the gateway image with the VM's service account and runs the registration agent (`scripts/lib/vm-gateway-agent`) from that image against the host Docker socket. A new image pull requires at least 16 GiB free on the Docker boot filesystem; an already-cached image can start below that threshold |
+| `octo-gateway-agent.service` | blocks the metadata server for uid 1000, polls instance metadata until `gateway-id`, `gateway-image`, and `octogee-api-url` are set, then pulls the gateway image with the VM's service account and runs the registration agent (`scripts/lib/vm-gateway-agent`) from that image against the host Docker socket, with the home disk mounted at `/srv/octogee` and no view of the boot disk's `/home/octo`. It wants `octo-home-migrate` without requiring it, so it still restarts after a failed migration; Docker keeps requiring the migration. A new image pull requires at least 16 GiB free on the Docker boot filesystem; an already-cached image can start below that threshold |
 | `docker.service` | hosts the gateway and gateway-edge containers the agent manages |
 
 Power: `HandlePowerKey=poweroff`, so a GCE stop completes on the ACPI signal
@@ -201,9 +201,29 @@ sockets when the first SSH session opens.
 Checkpoint freeze covers desktop processes and Omarchy applications launched
 through the user's systemd manager. The gateway agent separately pauses its
 runtime containers. Arbitrary operator processes started in SSH sessions are
-outside these scopes. During restore, the user manager is stopped and masked
-in `/run` so an SSH reconnect cannot restart native applications against the
-home being replaced; the lifecycle start action removes that hold.
+outside these scopes. During a restore of an older, partial checkpoint, the
+user manager is stopped and masked in `/run` so an SSH reconnect cannot restart
+native applications against the home being replaced; the lifecycle start action
+removes that hold.
+
+A full-home restore never replaces a live home. It runs only on a new computer
+whose fresh home booted behind the restore gate: `user@1000.service`,
+`octo-home-migrate.service`, `octo-desktop.service` and `sshd.service` carry
+`ConditionPathExists=!/srv/octogee/home-restore.gate`, so they are skipped while
+it exists. The network, the metadata SSH key reconciler, Docker, the lifecycle
+socket and the agent still start, because a skipped unit does not fail the units
+that require it. The agent downloads and verifies the exact checkpoint, installs
+and flushes it, then removes the gate, flushes again and asks the lifecycle to
+start the writers, so migration runs against the restored files. If the
+migration or the desktop fails, sshd still starts. A failed restore keeps the
+gate across retries and reboots. While the gate is closed, each attempt first
+sweeps the staging an interrupted attempt left on the home disk, and refuses a
+checkpoint the disk cannot hold twice, at error with reason
+`insufficient-space`, before downloading it; the archive is deleted as soon as
+it is extracted, and the agent retries a failed restore after one minute,
+doubling to thirty. Cowboy creates a checkpoint-restoring computer only from an
+image labeled `home-restore=gated-v1`. A retained home never has the gate and
+boots as before.
 
 ## Pins
 

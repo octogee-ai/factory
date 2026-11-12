@@ -6,6 +6,32 @@ STATE_ROOT="${OCTO_VM_STATE_ROOT:-/srv/octogee}"
 USER_HOME="${OCTO_USER_HOME:-/home/octo}"
 WAIT_SECONDS="${OCTO_HOME_DEVICE_WAIT_SECONDS:-60}"
 DESKTOP_WANTED="${OCTO_DESKTOP_WANTED:-/usr/local/bin/octo-desktop-wanted}"
+RESTORE_ATTEMPTS="${OCTO_HOME_RESTORE_ATTEMPTS:-30}"
+RESTORE_RETRY_SECONDS="${OCTO_HOME_RESTORE_RETRY_SECONDS:-2}"
+RESTORE_ATTRIBUTE="http://169.254.169.254/computeMetadata/v1/instance/attributes/octogee-home-restore"
+RESTORE_GATE="$STATE_ROOT/home-restore.gate"
+
+home_restore_required() {
+  local attempt response status body failure="metadata server unreachable"
+  for attempt in $(seq 1 "$RESTORE_ATTEMPTS"); do
+    if response="$(curl -sS --connect-timeout 2 --max-time 5 -H 'Metadata-Flavor: Google' -w '\n%{http_code}' "$RESTORE_ATTRIBUTE")"; then
+      status="${response##*$'\n'}"
+      body="${response%$'\n'*}"
+      [[ "$status" == 404 ]] && return 1
+      if [[ "$status" == 200 ]]; then
+        [[ "$body" == checkpoint ]] && return 0
+        echo "octo-home-disk: unexpected octogee-home-restore (HTTP 200): $body" >&2
+        exit 1
+      fi
+      failure="octogee-home-restore answered HTTP $status: $body"
+    else
+      failure="metadata server unreachable"
+    fi
+    if (( attempt < RESTORE_ATTEMPTS )); then sleep "$RESTORE_RETRY_SECONDS"; fi
+  done
+  echo "octo-home-disk: cannot tell whether this fresh home restores a checkpoint after $RESTORE_ATTEMPTS attempts: $failure" >&2
+  exit 1
+}
 
 for _ in $(seq 1 "$WAIT_SECONDS"); do
   [ -e "$DEVICE" ] && break
@@ -56,6 +82,10 @@ if mountpoint -q "$USER_HOME"; then verify_mount "$USER_HOME" /desktop-home; fi
 btrfs filesystem resize max "$STATE_ROOT"
 
 if [ ! -d "$STATE_ROOT/desktop-home" ]; then
+  if home_restore_required; then
+    : > "$RESTORE_GATE"
+    echo "octo-home-disk: this fresh home restores a checkpoint before SSH, the desktop and the user manager start; the restore clears $RESTORE_GATE"
+  fi
   echo "octo-home-disk: seeding $STATE_ROOT/desktop-home from the image's $USER_HOME"
   rm -rf "$STATE_ROOT/desktop-home.seed"
   cp -a "$USER_HOME/." "$STATE_ROOT/desktop-home.seed"

@@ -2182,6 +2182,26 @@ describe("GCS-backed disposable isolated parking", () => {
     expect(readPath(h.docs["glmGateways/b-x"], "vmHome.restoreCheckpoint")).toEqual(saved);
     expect(readPath(h.docs["users/UidA"], "provisioning.homeCheckpoint")).toEqual(saved);
   });
+  it("tells only a new computer on a blank home that it must restore the required checkpoint before admitting writers", async () => {
+    const gateway = { "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } };
+    const restoring = harness({ ...gateway, "users/UidA": { provisioning: { homeCheckpoint: saved } } });
+    await createVm(restoring);
+    expect(restoring.vm.create.mock.calls[0][0].metadata).toMatchObject({ "octogee-home-restore": "checkpoint" });
+    expect(readPath(restoring.docs["glmGateways/b-x"], "vmHome.restoreCheckpoint")).toEqual(saved);
+
+    const fresh = harness({ ...gateway });
+    await createVm(fresh);
+    expect(fresh.vm.create.mock.calls[0][0].metadata).not.toHaveProperty("octogee-home-restore");
+
+    const home = { projectId: "octogee-test", zone: "us-west1-b", name: "computer-home", id: "777", sizeGb: 30, diskType: "pd-ssd" as const, source: "projects/octogee-test/zones/us-west1-b/disks/computer-home" };
+    const accepted = { name: "octogee-computer-accepted", id: "222", homeAdmission: true as const };
+    const retained = harness({ ...gateway, "users/UidA": { provisioning: { homeCheckpoint: saved, homeDisk: home } } }, {
+      describe: vi.fn(async () => null), readFamilyImage: vi.fn(async () => accepted), readImage: vi.fn(async () => accepted),
+    });
+    await retained.runtime.upsertInstance(upsertOpts);
+    expect(retained.vm.create).toHaveBeenCalledWith(expect.objectContaining({ retainedHome: expect.objectContaining(home) }));
+    expect(retained.vm.create.mock.calls[0][0].metadata).not.toHaveProperty("octogee-home-restore");
+  });
   it("does not release an active checkpoint when an existing restored VM is rerendered", async () => {
     const records: Docs = docs();
     records["users/UidA"].provisioning = { homeCheckpoint: saved };

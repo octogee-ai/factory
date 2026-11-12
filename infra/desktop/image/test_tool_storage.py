@@ -465,6 +465,20 @@ class BootReconciliation(ToolStorage):
         with patch.dict(SCRIPT["owner_processes"].__globals__, {"Path": lambda _path: types.SimpleNamespace(iterdir=lambda: entries)}):
             self.assertEqual(SCRIPT["owner_processes"](1000), [12])
 
+    def test_process_scans_skip_processes_that_exit_while_listed(self):
+        class Process:
+            def __init__(self, pid, failure=None): self.name, self.failure = str(pid), failure
+            def stat(self): return types.SimpleNamespace(st_uid=1000)
+            def __truediv__(self, _name):
+                def read_text():
+                    if self.failure: raise self.failure
+                    return self.name + " (writer) S 1 77 77 0"
+                return types.SimpleNamespace(read_text=read_text)
+        entries = [Process(20, ProcessLookupError(3, "No such process")), Process(21, FileNotFoundError(2, "gone")), Process(22)]
+        with patch.dict(SCRIPT["owner_processes"].__globals__, {"Path": lambda _path: types.SimpleNamespace(iterdir=lambda: entries)}):
+            self.assertEqual(SCRIPT["owner_processes"](1000), [22])
+            self.assertEqual(SCRIPT["process_group_writers"](77), [22])
+
     def test_remaining_owner_process_after_install_is_a_strict_boot_failure(self):
         observed = iter([[], [], [99]])
         with self.assertRaisesRegex(RuntimeError, "writers"):

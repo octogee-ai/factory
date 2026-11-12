@@ -88,4 +88,115 @@ describe.skipIf(!container)("native retained-home service admission", () => {
     }
   });
 
+  describe("checkpoint restore gate", () => {
+    const GATE = "/srv/octogee/home-restore.gate";
+    const units = resolve(import.meta.dirname, "../../../infra/desktop/image/rootfs/etc/systemd/system");
+    const unitSection = (text: string) => text.split("\n[Service]")[0];
+
+    async function bootFixture(gated: boolean) {
+      const id = `octogee-gate-${randomUUID()}`;
+      const directory = await mkdtemp(join(tmpdir(), `${id}-`));
+      const remote = `/opt/${id}`;
+      const names = {
+        home: `${id}-home.service`, user: `${id}-user.service`, migration: `${id}-migration.service`, runtime: `${id}-runtime.service`,
+        agent: `${id}-agent.service`, desktop: `${id}-desktop.service`, ssh: `${id}-ssh.service`,
+      };
+      const docker = async (...args: string[]) => exec("docker", ["exec", container!, ...args], { timeout: 10_000 });
+      const map = (text: string) => text.replaceAll(GATE, `${remote}/home-restore.gate`)
+        .replaceAll("octo-home-disk.service", names.home).replaceAll("user@1000.service", names.user).replaceAll("user-runtime-dir@1000.service", names.home)
+        .replaceAll("octo-home-migrate.service", names.migration).replaceAll("docker.service", names.runtime)
+        .replaceAll("octo-gateway-agent.service", names.agent).replaceAll("octo-desktop.service", names.desktop).replaceAll("octo-desktop-lifecycle.service", names.home);
+      const ready = (name: string) => `[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/touch ${remote}/${name}\n`;
+      const source = (path: string) => readFile(join(units, path), "utf8");
+      await writeFile(join(directory, names.home), ready("home-ready"));
+      await writeFile(join(directory, names.user), map(await source("user@1000.service.d/10-octogee-home.conf")) + ready("user-ready"));
+      await writeFile(join(directory, names.migration), map(await source("octo-home-migrate.service"))
+        .replace("ExecStart=/usr/local/bin/octo-home-migrate", `ExecStart=/bin/sh -c 'test -f ${remote}/restored && touch ${remote}/migrated'`));
+      await writeFile(join(directory, names.runtime), map(await source("docker.service.d/10-octogee-home.conf")) + ready("runtime-ready"));
+      await writeFile(join(directory, names.agent), `${map(unitSection(await source("octo-gateway-agent.service")))}\n${ready("agent-ready")}`);
+      await writeFile(join(directory, names.desktop), `${map(unitSection(await source("octo-desktop.service")))}\n${ready("desktop-ready")}`);
+      await writeFile(join(directory, names.ssh), map(await source("sshd.service.d/10-octogee-home-authorization.conf"))
+        .replace("ExecStartPre=/usr/local/bin/octo-metadata-ssh-keys", "ExecStartPre=/bin/true") + ready("ssh-ready").replace("[Service]\n", ""));
+      if (gated) await writeFile(join(directory, "home-restore.gate"), "");
+      await exec("docker", ["cp", directory, `${container}:${remote}`]);
+      await docker("sh", "-c", `cp '${remote}/'*.service /run/systemd/system/; systemctl daemon-reload`);
+      const boot = () => docker("systemctl", "start", ...Object.values(names));
+      const shutdown = () => docker("systemctl", "stop", ...Object.values(names));
+      const present = async (name: string) => {
+        try {
+          await docker("test", "-e", `${remote}/${name}`);
+          return true;
+        } catch (error) {
+          if ((error as { code?: number }).code !== 1) {
+            throw error;
+          }
+          return false;
+        }
+      };
+      const cleanup = async () => {
+        await shutdown().catch(() => undefined);
+        await docker("sh", "-c", `rm -f /run/systemd/system/${id}-*.service; rm -rf '${remote}'; systemctl daemon-reload`);
+        await rm(directory, { recursive: true, force: true });
+      };
+      return { docker, names, remote, boot, shutdown, present, cleanup };
+    }
+
+    it("boots the restore bootstrap with every writer off, keeps them off across a failed restore and a reboot, then migrates the restored home before admission", async () => {
+      const f = await bootFixture(true);
+      try {
+        await f.boot();
+        expect(await f.present("runtime-ready")).toBe(true);
+        expect(await f.present("agent-ready")).toBe(true);
+        for (const writer of ["user-ready", "migrated", "desktop-ready", "ssh-ready"]) expect(await f.present(writer), writer).toBe(false);
+        expect((await f.docker("systemctl", "show", "--property=ActiveState", "--value", f.names.desktop, f.names.user, f.names.ssh)).stdout.trim().split(/\s+/)).toEqual(["inactive", "inactive", "inactive"]);
+
+        await f.docker("systemctl", "start", f.names.desktop, f.names.ssh);
+        expect(await f.present("desktop-ready")).toBe(false);
+        expect(await f.present("ssh-ready")).toBe(false);
+
+        await f.shutdown();
+        await f.boot();
+        for (const writer of ["user-ready", "migrated", "desktop-ready", "ssh-ready"]) expect(await f.present(writer), writer).toBe(false);
+
+        await f.docker("sh", "-c", `touch '${f.remote}/restored'; rm '${f.remote}/home-restore.gate'`);
+        await f.docker("systemctl", "start", f.names.user);
+        await f.docker("systemctl", "start", f.names.migration);
+        await f.docker("systemctl", "start", f.names.desktop);
+        await f.docker("systemctl", "start", f.names.ssh);
+        for (const writer of ["user-ready", "migrated", "desktop-ready", "ssh-ready"]) expect(await f.present(writer), writer).toBe(true);
+      } finally {
+        await f.cleanup();
+      }
+    });
+
+    it("admits SSH and still restarts the agent when the restored home's migration fails after admission", async () => {
+      const f = await bootFixture(true);
+      try {
+        await f.boot();
+        await f.docker("rm", `${f.remote}/home-restore.gate`);
+        await f.docker("systemctl", "start", f.names.user);
+        await expect(f.docker("systemctl", "start", f.names.migration)).rejects.toMatchObject({ code: 1 });
+        await f.docker("systemctl", "start", f.names.ssh);
+        expect(await f.present("ssh-ready")).toBe(true);
+        expect(await f.present("desktop-ready")).toBe(false);
+
+        await f.docker("rm", `${f.remote}/agent-ready`);
+        await f.docker("systemctl", "restart", f.names.agent);
+        expect(await f.present("agent-ready")).toBe(true);
+      } finally {
+        await f.cleanup();
+      }
+    });
+
+    it("boots a retained home exactly as before: migration, desktop and SSH start with the bootstrap", async () => {
+      const f = await bootFixture(false);
+      try {
+        await f.docker("touch", `${f.remote}/restored`);
+        await f.boot();
+        for (const ready of ["runtime-ready", "agent-ready", "user-ready", "migrated", "desktop-ready", "ssh-ready"]) expect(await f.present(ready), ready).toBe(true);
+      } finally {
+        await f.cleanup();
+      }
+    });
+  });
 });

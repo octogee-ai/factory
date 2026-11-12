@@ -4,7 +4,7 @@ import { chmod, chown, mkdir, mkdtemp, lstat, readFile, readlink, rm, symlink, w
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { HOME_DESKTOP_TOOL_PATHS, restoreHome, tarCreateArgs, tarExtractArgs, type HomeCheckpointDeps, type HomeScope } from "../../lib/vm-gateway-agent/home-checkpoint.js";
+import { HOME_DESKTOP_TOOL_PATHS, admitHome, restoreHome, tarCreateArgs, tarExtractArgs, type HomeCheckpointDeps, type HomeScope } from "../../lib/vm-gateway-agent/home-checkpoint.js";
 
 import { createHomeFs } from "../../lib/vm-gateway-agent/home-fs.js";
 
@@ -12,7 +12,7 @@ let root: string;
 let scope: HomeScope;
 beforeEach(async () => {
   root = await mkdtemp(path.join(tmpdir(), "native-tool-archive-"));
-  scope = { slug: "alice", dataDir: `${root}/volumes/data`, desktopDir: `${root}/desktop-home`, marker: `${root}/marker`, restorePending: `${root}/pending`, desktopToolsRebuildable: true };
+  scope = { slug: "alice", dataDir: `${root}/volumes/data`, desktopDir: `${root}/desktop-home`, marker: `${root}/marker`, restorePending: `${root}/pending`, restoreGate: `${root}/gate`, desktopToolsRebuildable: true };
   await mkdir(scope.dataDir, { recursive: true });
   await writeFile(`${scope.dataDir}/agent-state`, "strict agent context");
   for (const name of [".local/share/mise/installs/node/bin/node", ".cache/mise/download.tar", ".npm/_cacache/cache", ".config/octogee-chromium/Default/Cookies", ".codex/auth.json", ".config/mise/config.toml", ".local/share/user-app/context"]) {
@@ -180,8 +180,11 @@ module['reconcile_boot'](home, tools, cache, run=command, processes=lambda uid: 
       }
     } },
     snapshot: async work => work(), captureSnapshot: async () => {}, discardSnapshot: async () => {},
-    now: () => Date.now(), log: () => {},
+    now: () => Date.now(), log: () => {}, logError: () => {},
   };
-  await expect(restoreHome(deps, { ...scope, dataDir: `${root}/restored-data`, desktopDir: live })).resolves.toMatchObject({ status: "restored" });
+  const restored = { ...scope, dataDir: `${root}/restored-data`, desktopDir: live };
+  await expect(restoreHome(deps, restored)).resolves.toMatchObject({ status: "restored" });
+  expect(held).toBe(true);
+  await admitHome(deps, restored);
   expect(held).toBe(false);
 });

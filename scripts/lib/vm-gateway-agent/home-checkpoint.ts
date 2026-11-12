@@ -14,6 +14,7 @@ import type {
   FleetBrokerVmHomePruneResult,
 } from "@octogee/shared/types/fleet-broker";
 import type { LogContext } from "@octogee/shared/server/service-logger";
+import { dirname } from "node:path";
 import { brokerFailure, brokerPost, type BrokerClientDeps } from "./broker.js";
 import { bundleUserIdentity, volumeHostPath } from "./plan.js";
 import type { DesktopControl } from "./desktop-control.js";
@@ -25,6 +26,9 @@ const SOURCE_DOCTOR_DIAGNOSTICS_HOME_PATH = ".octogee-source-doctor-diagnostics"
 const CARRIED_AGENT_DIAGNOSTICS_HOME_PATH = ".octogee-carried-agent-diagnostics";
 export const HOME_CHECKPOINT_MARKER = "home-checkpoint.marker";
 export const HOME_RESTORE_PENDING = "home-restore.pending";
+export const HOME_RESTORE_GATE = "home-restore.gate";
+export const HOME_RESTORE_TEMP_PREFIX = "octogee-home-restore-";
+export const HOME_REPLACE_STAGING_PREFIX = ".octogee-restore-";
 export const HOME_METADATA_AUTHORIZATION = [".ssh/authorized_keys", ".ssh/authorized_keys.metadata"] as const;
 export const DESKTOP_HOME_PATHS = [".config/octogee-chromium", ".config/hypr", ".config/omarchy", ".config/octogee", "Documents"] as const;
 export const HOME_DESKTOP_TOOL_PATHS = [".local/share/mise", ".cache/mise", ".npm"] as const;
@@ -44,6 +48,7 @@ export interface HomeShell {
 
 export interface HomeFs {
   listDir(path: string): Promise<string[]>;
+  freeBytes(path: string): Promise<number>;
   exists(path: string): Promise<boolean>;
   fileSize(path: string): Promise<number>;
   sha256(path: string): Promise<string>;
@@ -64,6 +69,7 @@ export interface HomeCheckpointDeps extends BrokerClientDeps {
   fs: HomeFs;
   now: () => number;
   log: (msg: string, fields?: LogContext) => void;
+  logError: (msg: string, fields?: LogContext) => void;
   desktop: DesktopControl;
   snapshot(work: () => Promise<void>): Promise<void>;
   captureSnapshot(): Promise<void>;
@@ -76,6 +82,7 @@ export interface HomeScope {
   marker: string;
   desktopDir: string;
   restorePending: string;
+  restoreGate: string;
   restoreCheckpoint?: GatewayVmHomeCheckpoint;
   hostToolInventory: boolean;
   desktopToolsRebuildable?: boolean;
@@ -101,7 +108,7 @@ function homePhaseTimer(deps: HomeCheckpointDeps, context: LogContext) {
       status = "done";
       return result;
     } finally {
-      deps.log(`[vm-agent] ${context.category} ${phase} ${status}`, {
+      (status === "failed" ? deps.logError : deps.log)(`[vm-agent] ${context.category} ${phase} ${status}`, {
         ...event, status, durationMs: Math.max(0, deps.now() - startedAt),
       });
     }
@@ -114,7 +121,7 @@ export function homeScope(stateRoot: string, bundle: GatewayVmRuntimeBundle): Ho
   if (!volume || !slug) return null;
   return {
     slug, dataDir: volumeHostPath(stateRoot, volume), marker: `${stateRoot}/${HOME_CHECKPOINT_MARKER}`,
-    desktopDir: `${stateRoot}/desktop-home`, restorePending: `${stateRoot}/${HOME_RESTORE_PENDING}`,
+    desktopDir: `${stateRoot}/desktop-home`, restorePending: `${stateRoot}/${HOME_RESTORE_PENDING}`, restoreGate: `${stateRoot}/${HOME_RESTORE_GATE}`,
     hostToolInventory: bundle.desktop !== "x11",
     ...(bundle.homeRestoreCheckpoint ? { restoreCheckpoint: bundle.homeRestoreCheckpoint } : {}),
   };
@@ -323,18 +330,64 @@ async function installHomeRestore(deps: HomeCheckpointDeps, scope: HomeScope, cu
   catch (error) {
     deps.log(`optional restored native tools could not be rebuilt (${error instanceof Error ? error.name : typeof error}); preserving declarations for retry`);
   }
+  await sh(deps, "sync", ["-f", deps.stateRoot], [0]);
   await deps.fs.touch(scope.marker, deps.now());
   if (receipt) await deps.fs.touch(receipt, deps.now());
   await deps.fs.rm(scope.restorePending);
-  await deps.desktop.run("start");
+}
+
+export async function admitHome(deps: HomeCheckpointDeps, scope: HomeScope): Promise<void> {
+  if (!(await deps.fs.exists(scope.restoreGate))) {
+    await deps.desktop.run("start");
+    return;
+  }
+  const time = homePhaseTimer(deps, { gatewayId: deps.gatewayId, builderSlug: scope.slug, category: "home-restore" });
+  await time("admit", async () => {
+    await deps.fs.rm(scope.restoreGate);
+    await sh(deps, "sync", ["-f", deps.stateRoot], [0]);
+    await deps.desktop.run("start");
+  });
+}
+
+function replaceStagingParents(scope: HomeScope): string[] {
+  const nested = [...HOME_METADATA_AUTHORIZATION, ...HOME_DESKTOP_TOOL_PATHS, ...DESKTOP_HOME_PATHS].flatMap((path) => {
+    const parts = path.split("/");
+    return parts.slice(1).map((_, index) => `${scope.desktopDir}/${parts.slice(0, index + 1).join("/")}`);
+  });
+  return [...new Set([dirname(scope.dataDir), scope.desktopDir, ...nested])];
+}
+
+async function sweepInterruptedRestore(deps: HomeCheckpointDeps, scope: HomeScope, context: LogContext): Promise<void> {
+  const tmp = `${deps.stateRoot}/tmp`;
+  const leftovers = (await deps.fs.listDir(tmp)).filter((entry) => entry.startsWith(HOME_RESTORE_TEMP_PREFIX)).map((entry) => `${tmp}/${entry}`);
+  for (const parent of replaceStagingParents(scope)) {
+    leftovers.push(...(await deps.fs.listDir(parent)).filter((entry) => entry.startsWith(HOME_REPLACE_STAGING_PREFIX)).map((entry) => `${parent}/${entry}`));
+  }
+  if (!leftovers.length) return;
+  for (const path of leftovers) await deps.fs.rm(path);
+  deps.log(`[vm-agent] home restore swept ${leftovers.length} staging path(s) an interrupted restore left on the home disk`, {
+    ...context, phase: "sweep", status: "done", sweptPaths: leftovers.length,
+  });
+}
+
+async function assertRestoreSpace(deps: HomeCheckpointDeps, current: FleetBrokerVmHomeDownload, context: LogContext): Promise<void> {
+  const requiredBytes = 2 * current.size;
+  const freeBytes = await deps.fs.freeBytes(deps.stateRoot);
+  if (freeBytes >= requiredBytes) return;
+  const message = `home checkpoint ${current.name} needs ${requiredBytes} bytes free on ${deps.stateRoot}, has ${freeBytes}`;
+  deps.logError(`[vm-agent] home restore check-space failed: ${message}`, {
+    ...context, phase: "check-space", status: "failed", reason: "insufficient-space", checkpointName: current.name, freeBytes, requiredBytes,
+  });
+  throw new Error(message);
 }
 
 export async function restoreHome(deps: HomeCheckpointDeps, scope: HomeScope): Promise<HomeRestoreResult> {
   const expected = scope.restoreCheckpoint;
   if (expected !== undefined && !isDisposableHomeCheckpoint(expected)) throw new Error("required home checkpoint is invalid");
   const receipt = expected ? `${deps.stateRoot}/home-restored-${expected.name}-${expected.generation}-${expected.sha256}.marker` : null;
-  const pending = await deps.fs.exists(scope.restorePending);
   const context = { gatewayId: deps.gatewayId, builderSlug: scope.slug, category: "home-restore" };
+  if (await deps.fs.exists(scope.restoreGate)) await sweepInterruptedRestore(deps, scope, context);
+  const pending = await deps.fs.exists(scope.restorePending);
   if (await homeRestoreInstalled(deps, scope, receipt, pending)) {
     deps.log("[vm-agent] home restore skipped: existing home preserved", {
       ...context, phase: "select-checkpoint", status: "skipped", reason: "home-preserved",
@@ -342,15 +395,24 @@ export async function restoreHome(deps: HomeCheckpointDeps, scope: HomeScope): P
     });
     return { status: "preserved" };
   }
-  const current = await fetchHomeRestoreDownload(deps, scope, pending);
+  let current: FleetBrokerVmHomeDownload | null;
+  try {
+    current = await fetchHomeRestoreDownload(deps, scope, pending);
+  } catch (error) {
+    deps.logError(`[vm-agent] home restore select-checkpoint failed: ${error instanceof Error ? error.message : String(error)}`, {
+      ...context, phase: "select-checkpoint", status: "failed", ...(expected ? { checkpointName: expected.name } : {}),
+    });
+    throw error;
+  }
   if (!current) {
     deps.log("[vm-agent] home restore none: no checkpoint for this user yet", {
       ...context, phase: "select-checkpoint", status: "skipped", reason: "no-checkpoint",
     });
     return { status: "none" };
   }
+  await assertRestoreSpace(deps, current, context);
   const time = homePhaseTimer(deps, { ...context, checkpointName: current.name, sizeBytes: current.size });
-  const tempDir = await deps.fs.mkdtemp("octogee-home-restore-");
+  const tempDir = await deps.fs.mkdtemp(HOME_RESTORE_TEMP_PREFIX);
   const archive = `${tempDir}/home.tar.gz`;
   const staged = `${tempDir}/staged`;
   try {
@@ -368,6 +430,7 @@ export async function restoreHome(deps: HomeCheckpointDeps, scope: HomeScope): P
     });
     await deps.fs.mkdir(staged);
     await time("extract", () => sh(deps, "tar", tarExtractArgs(archive, staged), [0]));
+    await deps.fs.rm(archive);
     await time("install", () => installHomeRestore(deps, scope, current, staged, receipt));
     return { status: "restored", name: current.name, size };
   } finally {

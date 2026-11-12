@@ -29,12 +29,16 @@ import {
 } from "./docker-engine.js";
 import {
   HOME_CHECKPOINT_INTERVAL_MS,
+  HOME_RESTORE_GATE,
   HOME_VOLUME_NAME,
+  admitHome,
   checkpointHome,
   homeScope,
   restoreHome,
   type HomeCheckpointDeps,
   type HomeFs,
+  type HomeRestoreResult,
+  type HomeScope,
   type HomeShell,
 } from "./home-checkpoint.js";
 import { fetchDesk, syncDesk } from "./desk.js";
@@ -62,6 +66,8 @@ import {
 
 export const TOKEN_REFRESH_MS = 20 * 60_000;
 export const PREEMPTION_WATCH_RETRY_MS = 5_000;
+export const HOME_RESTORE_RETRY_MS = 60_000;
+const HOME_RESTORE_RETRY_MAX_MS = 30 * 60_000;
 export const RUNTIME_UID = 1000;
 export const RUNTIME_GID = 1000;
 export const AGENT_CONTAINER = "octo-gateway-agent";
@@ -90,6 +96,7 @@ export interface VmAgentDeps {
   home: { shell: HomeShell; fs: HomeFs; desktop: DesktopControl };
   now: () => number;
   log: HomeCheckpointDeps["log"];
+  logError: HomeCheckpointDeps["logError"];
 }
 
 export interface VmAgentState {
@@ -277,11 +284,34 @@ function homeDeps(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, holdAfterSn
   };
 }
 
+const restoreBackoff = new WeakMap<VmAgentDeps, { failures: number; retryAt: number }>();
+
+async function restoreHomeWithBackoff(deps: VmAgentDeps, home: HomeCheckpointDeps, scope: HomeScope): Promise<HomeRestoreResult> {
+  const previous = restoreBackoff.get(deps);
+  if (previous && deps.now() < previous.retryAt) {
+    throw new Error(`[vm-agent] home restore failed ${previous.failures} time(s); retrying after ${new Date(previous.retryAt).toISOString()}`);
+  }
+  try {
+    const result = await restoreHome(home, scope);
+    restoreBackoff.delete(deps);
+    return result;
+  } catch (error) {
+    const failures = (previous?.failures ?? 0) + 1;
+    restoreBackoff.set(deps, { failures, retryAt: deps.now() + Math.min(HOME_RESTORE_RETRY_MS * 2 ** (failures - 1), HOME_RESTORE_RETRY_MAX_MS) });
+    throw error;
+  }
+}
+
 export async function restoreHomeIfEmpty(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle): Promise<void> {
   const scope = homeScope(deps.stateRoot, bundle);
-  if (!scope) return;
-  const result = await restoreHome(homeDeps(deps, bundle), scope);
-  await deps.home.desktop.run("start");
+  if (!scope) {
+    const gate = `${deps.stateRoot}/${HOME_RESTORE_GATE}`;
+    if (await deps.home.fs.exists(gate)) throw new Error(`[vm-agent] the checkpoint restore gate ${gate} is closed but bundle ${bundle.version} carries no user home to restore; writers stay off`);
+    return;
+  }
+  const home = homeDeps(deps, bundle);
+  const result = await restoreHomeWithBackoff(deps, home, scope);
+  await admitHome(home, scope);
   if (result.status === "restored") deps.log(`[vm-agent] home restore restored ${result.name} (${result.size} bytes)`);
 }
 

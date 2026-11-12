@@ -144,7 +144,7 @@ def owner_processes(uid):
             fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
             if entry.stat().st_uid == uid and fields[0] not in ("Z", "X"):
                 result.append(int(entry.name))
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             continue
     return result
 
@@ -161,7 +161,7 @@ def process_group_writers(group):
         if not process.name.isdigit(): continue
         try:
             fields = (process / "stat").read_text().rsplit(")", 1)[1].split()
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             continue
         if int(fields[2]) == group and fields[0] not in ("Z", "X"):
             writers.append(int(process.name))

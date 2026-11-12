@@ -29,7 +29,7 @@ import {
   type GatewayVmStopReason,
 } from "@octogee/shared/types/glm";
 import type { BindGatewayVmInput, CreateGatewayVmInput, GatewayVmClient, GatewayVmDescription } from "./lib/compute-vm.js";
-import { hasVmIdentity } from "./lib/compute-vm.js";
+import { COMPUTER_HOME_RESTORE_METADATA_KEY, hasVmIdentity } from "./lib/compute-vm.js";
 import {
   HOME_CHECKPOINT_POLL_MS,
   HOME_CHECKPOINT_TIMEOUT_MS,
@@ -1173,7 +1173,9 @@ export function createVmLifecycle(deps: VmLifecycleDeps): VmLifecycle {
       const selected = await selectRetainedBootImage({ store: deps.store, vm: deps.vm, ownerUid, home: retainedHome, spec });
       input = { ...input, zones: [retainedHome.zone], retainedHome, image: selected, imageProject: selected.project };
     }
-    description ??= await acquireVm(gatewayId, ownerUid, input);
+    description ??= await acquireVm(gatewayId, ownerUid, recovery && !input.retainedHome
+      ? { ...input, metadata: { ...input.metadata, [COMPUTER_HOME_RESTORE_METADATA_KEY]: "checkpoint" } }
+      : input);
     await confirmRetainedHome(deps, gatewayId, description, recovery);
     if (TRANSITIONAL_STATUSES.has(description.status)) {
       throw new Error(`VM ${description.name} is still ${description.status.toLowerCase()}; retrying on the next converge`);

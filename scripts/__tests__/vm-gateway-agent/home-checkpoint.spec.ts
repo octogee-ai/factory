@@ -9,6 +9,7 @@ import {
   DESKTOP_HOME_PATHS,
   HOME_DESKTOP_TOOL_PATHS,
   HOME_METADATA_AUTHORIZATION,
+  admitHome,
   checkpointHome,
   homeScope,
   restoreHome,
@@ -30,16 +31,18 @@ interface FakeHome {
   fetches: Array<{ url: string; init: RequestInit }>;
   touched: Array<{ path: string; at: number }>;
   removed: string[];
-  world: { dataEntries: string[]; markerExists: boolean; dirty: boolean; archiveSize: number; tarCode: number; savedSize: number };
+  files: Set<string>;
+  world: { dataEntries: string[]; markerExists: boolean; dirty: boolean; archiveSize: number; tarCode: number; savedSize: number; freeBytes: number; dirs: Record<string, string[]> };
   routes: Record<string, () => { status: number; body: unknown }>;
 }
 
 function fakeHome(overrides: Partial<FakeHome["world"]> = {}, routes: FakeHome["routes"] = {}): FakeHome {
-  const world = { dataEntries: ["README.md"], markerExists: true, dirty: true, archiveSize: 2048, tarCode: 0, savedSize: 2048, ...overrides };
+  const world = { dataEntries: ["README.md"], markerExists: true, dirty: true, archiveSize: 2048, tarCode: 0, savedSize: 2048, freeBytes: 1024 ** 4, dirs: {}, ...overrides };
   const shell: string[] = [];
   const fetches: FakeHome["fetches"] = [];
   const touched: FakeHome["touched"] = [];
   const removed: string[] = [];
+  const files = new Set<string>();
   const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     fetches.push({ url: String(url), init: init ?? {} });
     const key = String(url).replace(/^https?:\/\/[^/]+/, "");
@@ -67,8 +70,9 @@ function fakeHome(overrides: Partial<FakeHome["world"]> = {}, routes: FakeHome["
       },
     },
     fs: {
-      listDir: async () => world.dataEntries,
-      exists: async (path) => path.endsWith("/data") || path.endsWith("/desktop-home") || (path.endsWith("home-checkpoint.marker") && world.markerExists),
+      listDir: async (path) => world.dirs[path] ?? world.dataEntries,
+      freeBytes: async () => world.freeBytes,
+      exists: async (path) => files.has(path) || path.endsWith("/data") || path.endsWith("/desktop-home") || (path.endsWith("home-checkpoint.marker") && world.markerExists),
       mkdir: async () => {},
       replaceDirectory: async () => {},
       retainToolStorage: async () => {},
@@ -76,19 +80,20 @@ function fakeHome(overrides: Partial<FakeHome["world"]> = {}, routes: FakeHome["
       fileSize: async (path) => (path.includes("home-restore") ? world.savedSize : world.archiveSize),
       sha256: async () => SHA,
       mkdtemp: async (prefix) => `/tmp/${prefix}xyz`,
-      rm: async (path) => { removed.push(path); },
-      touch: async (path, at) => { touched.push({ path, at }); },
+      rm: async (path) => { removed.push(path); files.delete(path); },
+      touch: async (path, at) => { touched.push({ path, at }); files.add(path); },
       uploadBody: async (path) => `body:${path}`,
       saveResponse: async () => {},
     },
     now: () => 1_700_000_000_000,
     log: vi.fn(),
+    logError: vi.fn(),
   };
   const scope = homeScope("/srv/octogee", bundleFixture({
     builderIdentity: { ownerUid: "uid-bob", builderSlug: "bob" },
   }))!;
   scope.desktopToolsRebuildable = true;
-  return { deps, scope, shell, fetches, touched, removed, world, routes };
+  return { deps, scope, shell, fetches, touched, removed, files, world, routes };
 }
 
 const signedUpload = { url: "https://storage.example/customers/bob/computer-home/checkpoints/x", method: "PUT" as const, gcsPath: "p", expiresAt: "e", requiredHeaders: { "x-goog-if-generation-match": "0" } };
@@ -96,7 +101,7 @@ const signedUpload = { url: "https://storage.example/customers/bob/computer-home
 describe("homeScope", () => {
   it("derives the home volume and user slug from the bundle and is absent when either is missing", () => {
     const scope = homeScope("/srv/octogee", bundleFixture({ builderIdentity: { ownerUid: "uid-bob", builderSlug: "bob" } }));
-    expect(scope).toEqual({ slug: "bob", dataDir: "/srv/octogee/volumes/data", marker: "/srv/octogee/home-checkpoint.marker", desktopDir: "/srv/octogee/desktop-home", restorePending: "/srv/octogee/home-restore.pending", hostToolInventory: true });
+    expect(scope).toEqual({ slug: "bob", dataDir: "/srv/octogee/volumes/data", marker: "/srv/octogee/home-checkpoint.marker", desktopDir: "/srv/octogee/desktop-home", restorePending: "/srv/octogee/home-restore.pending", restoreGate: "/srv/octogee/home-restore.gate", hostToolInventory: true });
     expect(homeScope("/srv/octogee", bundleFixture())).toBeNull();
     expect(homeScope("/srv/octogee", bundleFixture({ volumes: [{ name: "data", kind: "identityToken", audience: "x" }] }))).toBeNull();
   });
@@ -325,7 +330,7 @@ describe("restoreHome", () => {
       { phase: "download", durationMs: 7 },
       { phase: "hash", durationMs: 5 },
       { phase: "extract", durationMs: 13 },
-      { phase: "install", durationMs: 26 },
+      { phase: "install", durationMs: 36 },
     ].map((phase) => ({ gatewayId: "b-x", builderSlug: "bob", category: "home-restore", status: "done", checkpointName: NAME, sizeBytes: 2048, ...phase }))));
     expect(logs.map(([, fields]) => `${fields?.phase}:${fields?.status}`)).toEqual([
       "download:running", "download:done", "hash:running", "hash:done",
@@ -346,7 +351,7 @@ describe("restoreHome", () => {
     );
   });
 
-  it("logs optional restored-tool rebuild failure and still admits the preserved home", async () => {
+  it("logs optional restored-tool rebuild failure and still completes the restore", async () => {
     const h = fakeHome({ dataEntries: [] }, { "/internal/fleet/computer-home/download-url": () => ({ status: 200, body: { ...record, coverage: "builder-home-v2", writerProtocol: 2 } }) });
     const actions: string[] = [];
     h.deps.desktop.run = async action => {
@@ -354,7 +359,7 @@ describe("restoreHome", () => {
       if (action === "reconcile-tools") throw new Error("optional tool install failed");
     };
     await expect(restoreHome(h.deps, h.scope)).resolves.toMatchObject({ status: "restored" });
-    expect(actions).toEqual(["stop-home", "reconcile-tools", "start"]);
+    expect(actions).toEqual(["stop-home", "reconcile-tools"]);
     expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("preserving declarations for retry"));
   });
 
@@ -364,9 +369,10 @@ describe("restoreHome", () => {
     expect(h.fetches[1]).toMatchObject({ url: "https://storage.example/download", init: { method: "GET" } });
     expect(h.shell).toEqual([
       "tar --extract --gzip --numeric-owner --same-owner --same-permissions --anchored --exclude=desktop-home/.cache/mise --exclude=desktop-home/.npm --exclude=data/.octogee-source-doctor-diagnostics --exclude=data/.octogee-carried-agent-diagnostics --file=/tmp/octogee-home-restore-xyz/home.tar.gz --directory=/tmp/octogee-home-restore-xyz/staged",
+      "sync -f /srv/octogee",
     ]);
     expect(h.touched).toEqual([{ path: "/srv/octogee/home-restore.pending", at: 1_700_000_000_000 }, { path: "/srv/octogee/home-checkpoint.marker", at: 1_700_000_000_000 }]);
-    expect(h.removed).toEqual(["/srv/octogee/home-restore.pending", "/tmp/octogee-home-restore-xyz"]);
+    expect(h.removed).toEqual(["/tmp/octogee-home-restore-xyz/home.tar.gz", "/srv/octogee/home-restore.pending", "/tmp/octogee-home-restore-xyz"]);
   });
 
   it("refuses a checkpoint whose bytes do not match the committed record and leaves the home untouched", async () => {
@@ -377,8 +383,149 @@ describe("restoreHome", () => {
     expect(h.shell).toEqual([]);
     expect(digest.shell).toEqual([]);
     expect(h.removed).toEqual(["/tmp/octogee-home-restore-xyz"]);
-    expect(digest.deps.log).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ category: "home-restore", phase: "hash", status: "failed" }));
+    expect(digest.deps.logError).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ category: "home-restore", phase: "hash", status: "failed" }));
     expect(digest.deps.log).not.toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ phase: "install" }));
+  });
+});
+
+describe("fresh checkpoint-backed home", () => {
+  const expected = { name: NAME, size: 2048, sha256: SHA, instanceId: "4242", completedAt: 1000, generation: "9007199254740993", coverage: "builder-home-v2" as const, writerProtocol: 2 as const };
+  const current = { ...expected, download: { url: "https://storage.example/download", method: "GET" } };
+  const receipt = `/srv/octogee/home-restored-${NAME}-${expected.generation}-${SHA}.marker`;
+
+  function freshHome(routes: FakeHome["routes"] = { "/internal/fleet/computer-home/download-url": () => ({ status: 200, body: current }) }) {
+    const h = fakeHome({ dataEntries: [] }, routes);
+    h.scope.restoreCheckpoint = expected;
+    h.files.add(h.scope.restoreGate);
+    const order: string[] = [];
+    const name = (path: string) => path.slice(path.lastIndexOf("/") + 1);
+    const { touch, rm } = h.deps.fs;
+    h.deps.fs.touch = async (path, at) => { order.push(`touch ${name(path)}`); await touch(path, at); };
+    h.deps.fs.rm = async (path) => { order.push(`rm ${name(path)}`); await rm(path); };
+    h.deps.fs.replaceDirectory = vi.fn(async () => { order.push("install data"); });
+    h.deps.fs.replaceDirectoryContents = vi.fn(async () => { order.push("install desktop-home"); });
+    h.deps.desktop.run = vi.fn(async (action) => { order.push(`desktop ${action}`); });
+    const shell = h.deps.shell.run;
+    h.deps.shell.run = async (command, args) => { order.push(command); return shell(command, args); };
+    return { ...h, order, downloads: () => h.fetches.filter(({ url }) => url === current.download.url).length };
+  }
+
+  it("installs the exact checkpoint while every writer is still off and opens the gate only after the install is durable", async () => {
+    const h = freshHome();
+    await expect(restoreHome(h.deps, h.scope)).resolves.toEqual({ status: "restored", name: NAME, size: 2048 });
+    expect(h.files.has(h.scope.restoreGate)).toBe(true);
+    expect(h.deps.desktop.run).not.toHaveBeenCalledWith("start");
+    await admitHome(h.deps, h.scope);
+    expect(h.order).toEqual([
+      "tar", "rm home.tar.gz", "desktop stop-home", "touch home-restore.pending", "install data", "install desktop-home", "desktop reconcile-tools",
+      "sync", "touch home-checkpoint.marker", `touch ${receipt.slice("/srv/octogee/".length)}`, "rm home-restore.pending",
+      "rm octogee-home-restore-xyz", "rm home-restore.gate", "sync", "desktop start",
+    ]);
+    expect(h.files.has(h.scope.restoreGate)).toBe(false);
+    expect(vi.mocked(h.deps.log).mock.calls.map(([, fields]) => `${fields?.phase}:${fields?.status}`).slice(-2)).toEqual(["admit:running", "admit:done"]);
+  });
+
+  it("keeps the gate closed and writers off when the install fails, reports the failed phase at error, and a retry reinstalls from scratch", async () => {
+    const h = freshHome();
+    let failing = true;
+    h.deps.fs.replaceDirectoryContents = vi.fn(async () => {
+      h.order.push("install desktop-home");
+      if (failing) throw new Error("no space left on device");
+    });
+    await expect(restoreHome(h.deps, h.scope)).rejects.toThrow("no space left on device");
+    expect(h.files.has(h.scope.restoreGate)).toBe(true);
+    expect(h.files.has(h.scope.restorePending)).toBe(true);
+    expect(h.files.has(receipt)).toBe(false);
+    expect(h.deps.desktop.run).not.toHaveBeenCalledWith("start");
+    expect(h.deps.logError).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      gatewayId: "b-x", builderSlug: "bob", category: "home-restore", phase: "install", status: "failed", checkpointName: NAME,
+    }));
+
+    failing = false;
+    h.world.dataEntries = ["partially-restored"];
+    await expect(restoreHome(h.deps, h.scope)).resolves.toMatchObject({ status: "restored" });
+    expect(h.downloads()).toBe(2);
+    expect(h.deps.fs.replaceDirectory).toHaveBeenCalledTimes(2);
+    expect(h.files.has(h.scope.restorePending)).toBe(false);
+    expect(h.files.has(receipt)).toBe(true);
+    expect(h.files.has(h.scope.restoreGate)).toBe(true);
+    await admitHome(h.deps, h.scope);
+    expect(h.files.has(h.scope.restoreGate)).toBe(false);
+    expect(h.deps.desktop.run).toHaveBeenLastCalledWith("start");
+  });
+
+  it("reinstalls the exact checkpoint after a restart in the middle of the install instead of trusting the partial home", async () => {
+    const h = freshHome();
+    h.files.add(h.scope.restorePending);
+    h.world.dataEntries = ["partially-restored"];
+    await expect(restoreHome(h.deps, h.scope)).resolves.toMatchObject({ status: "restored", name: NAME });
+    expect(h.downloads()).toBe(1);
+    expect(h.order.indexOf("desktop stop-home")).toBeLessThan(h.order.indexOf("install data"));
+    expect(h.files.has(h.scope.restoreGate)).toBe(true);
+    await admitHome(h.deps, h.scope);
+    expect(h.order.slice(-3)).toEqual(["rm home-restore.gate", "sync", "desktop start"]);
+  });
+
+  it("sweeps staging an interrupted restore left on the home disk before downloading again, and only while the gate is closed", async () => {
+    const leftovers = {
+      "/srv/octogee/tmp": ["octogee-home-restore-old", "unrelated"],
+      "/srv/octogee/volumes": ["data", ".octogee-restore-a1"],
+      "/srv/octogee/desktop-home": [".config", ".octogee-restore-b2"],
+      "/srv/octogee/desktop-home/.local/share": ["app", ".octogee-restore-c3"],
+      "/srv/octogee/desktop-home/.ssh": ["config", ".octogee-restore-d4"],
+    };
+    const swept = ["/srv/octogee/tmp/octogee-home-restore-old", "/srv/octogee/volumes/.octogee-restore-a1", "/srv/octogee/desktop-home/.octogee-restore-b2",
+      "/srv/octogee/desktop-home/.local/share/.octogee-restore-c3", "/srv/octogee/desktop-home/.ssh/.octogee-restore-d4"];
+    const h = freshHome();
+    h.files.add(h.scope.restorePending);
+    h.world.dirs = { ...leftovers };
+    await expect(restoreHome(h.deps, h.scope)).resolves.toMatchObject({ status: "restored" });
+    expect(h.removed.slice(0, swept.length).sort()).toEqual([...swept].sort());
+    expect(h.order.indexOf("tar")).toBeGreaterThan(h.order.lastIndexOf("rm .octogee-restore-d4"));
+
+    const live = fakeHome({ dataEntries: [] }, { "/internal/fleet/computer-home/download-url": () => ({ status: 200, body: current }) });
+    live.world.dirs = { ...leftovers };
+    await restoreHome(live.deps, live.scope).catch(() => undefined);
+    expect(live.removed.filter((path) => swept.includes(path))).toEqual([]);
+  });
+
+  it("refuses to download a checkpoint the home disk cannot hold twice, at error with its own reason, and keeps the gate", async () => {
+    const h = freshHome();
+    h.world.freeBytes = 2 * 2048 - 1;
+    await expect(restoreHome(h.deps, h.scope)).rejects.toThrow(`needs 4096 bytes free on ${h.deps.stateRoot}, has 4095`);
+    expect(h.downloads()).toBe(0);
+    expect(h.order).toEqual([]);
+    expect(h.files.has(h.scope.restoreGate)).toBe(true);
+    expect(h.deps.logError).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      category: "home-restore", phase: "check-space", status: "failed", reason: "insufficient-space", checkpointName: NAME, freeBytes: 4095, requiredBytes: 4096,
+    }));
+  });
+
+  it("reports a required checkpoint it cannot select at error and touches nothing", async () => {
+    const h = freshHome({ "/internal/fleet/computer-home/download-url": () => ({ status: 409, body: { error: "home_restore_checkpoint_unavailable" } }) });
+    await expect(restoreHome(h.deps, h.scope)).rejects.toThrow(/HTTP 409/);
+    expect(h.deps.logError).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      category: "home-restore", phase: "select-checkpoint", status: "failed", checkpointName: NAME,
+    }));
+    expect(h.order).toEqual([]);
+    expect(h.files.has(h.scope.restoreGate)).toBe(true);
+  });
+
+  it("reports a failed admission at error", async () => {
+    const h = freshHome();
+    h.deps.desktop.run = vi.fn(async (action) => { if (action === "start") throw new Error("octo-home-migrate failed"); });
+    await expect(admitHome(h.deps, h.scope)).rejects.toThrow("octo-home-migrate failed");
+    expect(h.deps.logError).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ category: "home-restore", phase: "admit", status: "failed" }));
+  });
+
+  it("starts a retained home's writers exactly as before: no gate to open and no admission phase", async () => {
+    const h = fakeHome();
+    expect(await restoreHome(h.deps, h.scope)).toEqual({ status: "preserved" });
+    await admitHome(h.deps, h.scope);
+    expect(h.deps.desktop.run).toHaveBeenCalledTimes(1);
+    expect(h.deps.desktop.run).toHaveBeenCalledWith("start");
+    expect(h.removed).toEqual([]);
+    expect(h.deps.log).not.toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ phase: "admit" }));
   });
 });
 

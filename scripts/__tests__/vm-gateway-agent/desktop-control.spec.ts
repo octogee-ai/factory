@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
-import { createDesktopControl } from "../../lib/vm-gateway-agent/desktop-control";
+import { createDesktopControl, desktopActionTimeoutMs } from "../../lib/vm-gateway-agent/desktop-control";
 
 it("sends only lifecycle actions through the private socket and surfaces systemd failures", async () => {
   const root = await mkdtemp(join(tmpdir(), "octogee-desktop-control-"));
@@ -27,6 +27,15 @@ it("sends only lifecycle actions through the private socket and surfaces systemd
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   }
+});
+
+it("waits for desktop start longer than the user manager and the home migration it starts may take", async () => {
+  const migration = await readFile(resolve(__dirname, "../../../infra/desktop/image/rootfs/etc/systemd/system/octo-home-migrate.service"), "utf8");
+  const migrationMs = Number(/^TimeoutStartSec=(\d+)min$/mu.exec(migration)![1]) * 60_000;
+  const userManagerDefaultStartMs = 90_000;
+  expect(desktopActionTimeoutMs("start")).toBeGreaterThan(migrationMs + userManagerDefaultStartMs);
+  expect(desktopActionTimeoutMs("reconcile-tools")).toBeGreaterThan(20 * 60_000);
+  expect(desktopActionTimeoutMs("freeze")).toBe(60_000);
 });
 
 it("reads validated native recovery admission through the root-owned socket", async () => {

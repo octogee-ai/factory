@@ -3,6 +3,7 @@ Description=Octogee VM desktop session (Hyprland, wayvnc, noVNC, control API, Ch
 After=octo-seatd.service network-online.target user-runtime-dir@1000.service user@1000.service octo-home-migrate.service
 Wants=octo-seatd.service network-online.target user@1000.service
 Requires=user-runtime-dir@1000.service octo-home-migrate.service
+ConditionPathExists=!/srv/octogee/home-restore.gate
 
 [Service]
 User=octo

@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { createDesktopPublicationCloud, planDesktopPublication, publishDesktopArtifact, type DesktopPublicationDeps } from '../lib/desktop-image-publication';
 import type { GoogleAuth } from 'google-auth-library';
 const artifact = { project: TEST_TARGET.clusterProjectId, name: 'octogee-computer-fixture', id: '123', sourceSha: 'a'.repeat(40), inputFingerprint: 'b'.repeat(64), acceptance: 'resize-reboot-v1' };
-const source = { name: artifact.name, id: artifact.id, status: 'READY', labels: { source: artifact.sourceSha, 'home-admission': 'retained-v1' } };
+const source = { name: artifact.name, id: artifact.id, status: 'READY', labels: { source: artifact.sourceSha, 'home-admission': 'retained-v1', 'home-restore': 'gated-v1' } };
 function cloud(): DesktopPublicationDeps {
   return {
     getImage: vi.fn().mockResolvedValue(source), copyImage: vi.fn(), setFamily: vi.fn(),
@@ -71,6 +71,13 @@ it.each(['missing', 'different'])('rejects a PROD copy with %s native home admis
   const copy = { ...source, id: '456', sourceImageId: source.id, labels: { source: artifact.sourceSha, ...(admission === 'different' ? { 'home-admission': 'unverified' } : {}) } };
   vi.mocked(deps.getImage).mockResolvedValueOnce(source).mockResolvedValueOnce(copy);
   await expect(publishDesktopArtifact(artifact, 'prod', deps)).rejects.toThrow('native home admission');
+  expect(deps.setFamily).not.toHaveBeenCalled();
+});
+it('rejects a PROD copy that lost the fresh-home restore gate contract before changing its family', async () => {
+  const deps = cloud();
+  const copy = { ...source, id: '456', sourceImageId: source.id, labels: { source: artifact.sourceSha, 'home-admission': 'retained-v1' } };
+  vi.mocked(deps.getImage).mockResolvedValueOnce(source).mockResolvedValueOnce(copy);
+  await expect(publishDesktopArtifact(artifact, 'prod', deps)).rejects.toThrow('home-restore');
   expect(deps.setFamily).not.toHaveBeenCalled();
 });
 it('does not report PROD unchanged when its copy lost native home admission', async () => {

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   TOKEN_REFRESH_MS,
   PREEMPTION_WATCH_RETRY_MS,
+  HOME_RESTORE_RETRY_MS,
   convergeOnce,
   fetchRuntimeBundle,
   initialAgentState,
@@ -107,12 +108,12 @@ function deps(
   docker: FakeDocker,
   bundleResponse: () => Reply,
   clock: { now: number },
-  opts: { routes?: Record<string, () => Reply>; home?: { entries?: string[]; dirty?: boolean }; diskUsage?: VmAgentDeps["fs"]["diskUsage"] } = {},
+  opts: { routes?: Record<string, () => Reply>; home?: { entries?: string[]; dirty?: boolean; gate?: boolean }; diskUsage?: VmAgentDeps["fs"]["diskUsage"] } = {},
 ) {
   const files = new Map<string, { content: string; mode: number }>();
   const dirs = new Set<string>();
   const chowns: string[] = [];
-  const home = { entries: opts.home?.entries ?? ["README.md"], dirty: opts.home?.dirty ?? false };
+  const home = { entries: opts.home?.entries ?? ["README.md"], dirty: opts.home?.dirty ?? false, gate: opts.home?.gate ?? false, marks: new Set<string>() };
   const routes: Record<string, () => Reply> = {
     "/internal/fleet/computer-home/download-url": () => ({ status: 404, body: { error: "no_checkpoint" } }),
     "/internal/fleet/computer-home/checkpoint-url": () => ({ status: 200, body: { name: CHECKPOINT.name, upload: { url: "https://storage.example/upload", method: "PUT", gcsPath: "p", expiresAt: "e" } } }),
@@ -153,7 +154,7 @@ function deps(
       diskUsage: opts.diskUsage ?? (async () => DISK),
     },
     home: {
-      desktop: { run: vi.fn(async () => {}) },
+      desktop: { run: vi.fn(async (action) => { docker.log.push(`desktop ${action}`); }) },
       shell: {
         run: async (command, args) => {
           docker.log.push(`${command} ${args[0]}`);
@@ -164,21 +165,31 @@ function deps(
       },
       fs: {
         listDir: async () => home.entries,
-        exists: async (path) => !path.endsWith("home-restore.pending") && !path.includes("home-restored-"),
+        freeBytes: async () => 1024 ** 4,
+        exists: async (path) => {
+          if (path.endsWith("home-restore.gate")) return home.gate;
+          if (path.endsWith("home-restore.pending") || path.includes("home-restored-")) return home.marks.has(path);
+          return true;
+        },
         mkdir: async () => {},
         replaceDirectory: async () => {},
+        retainToolStorage: async () => {},
         replaceDirectoryContents: async () => {},
         fileSize: async () => 2048,
         sha256: async () => SHA,
         mkdtemp: async (prefix) => `/tmp/${prefix}1`,
-        rm: async () => {},
-        touch: async () => { home.dirty = false; },
+        rm: async (path) => {
+          home.marks.delete(path);
+          if (path.endsWith("home-restore.gate")) { home.gate = false; docker.log.push("rm home-restore.gate"); }
+        },
+        touch: async (path) => { home.marks.add(path); home.dirty = false; },
         uploadBody: async () => "bytes",
         saveResponse: async () => {},
       },
     },
     now: () => clock.now,
     log: vi.fn(),
+    logError: vi.fn(),
   };
   return { d, files, dirs, chowns, fetchImpl, home };
 }
@@ -833,6 +844,91 @@ describe("convergeOnce", () => {
     bundle = { ...bundle, homeRestoreCheckpoint: { name: CHECKPOINT.name, size: 2048, sha256: SHA, instanceId: "previous", generation: "9007199254740995", completedAt: 1000 } };
     await expect(convergeOnce(h.d, state)).rejects.toThrow("checkpoint is unavailable");
     expect(docker.containers.size).toBe(0);
+  });
+
+  describe("fresh checkpoint-backed home", () => {
+    const required = { name: CHECKPOINT.name, size: 2048, sha256: SHA, instanceId: "previous", generation: "9007199254740995", completedAt: 1000, coverage: "builder-home-v2" as const, writerProtocol: 2 as const };
+    const freshBoot = (docker: FakeDocker, clock = { now: 1_000 }) => deps(docker, () => runtimeReply(homeBundle({ homeRestoreCheckpoint: required })), clock, {
+      home: { entries: [], gate: true },
+      routes: { "/internal/fleet/computer-home/download-url": () => ({ status: 200, body: { ...required, download: CHECKPOINT.download } }) },
+    });
+    const at = (docker: FakeDocker, line: string) => {
+      const index = docker.log.indexOf(line);
+      expect(index, line).toBeGreaterThan(-1);
+      return index;
+    };
+
+    it("installs the exact checkpoint before the gate opens, then admits writers before native init and the gateway", async () => {
+      const docker = fakeDocker();
+      const h = freshBoot(docker);
+      await convergeOnce(h.d, initialAgentState());
+      const order = ["tar --extract", "desktop stop-home", "rm home-restore.gate", "desktop start", "POST /containers/octogee-fix-perms/start", "POST /containers/octogee-gateway/start"].map((line) => at(docker, line));
+      expect(order).toEqual([...order].sort((a, b) => a - b));
+      expect(h.home.gate).toBe(false);
+      expect(h.d.logError).not.toHaveBeenCalled();
+    });
+
+    it("keeps the gate closed and every writer and the gateway off when the restore fails, then admits them on a clean retry", async () => {
+      const docker = fakeDocker();
+      const clock = { now: 1_000 };
+      const h = freshBoot(docker, clock);
+      h.d.home.fs.replaceDirectoryContents = vi.fn(async () => { throw new Error("no space left on device"); });
+      await expect(convergeOnce(h.d, initialAgentState())).rejects.toThrow("no space left on device");
+      expect(h.home.gate).toBe(true);
+      expect(docker.log).not.toContain("desktop start");
+      expect(docker.containers.has("octogee-gateway")).toBe(false);
+      expect(h.d.logError).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ category: "home-restore", phase: "install", status: "failed" }));
+
+      h.d.home.fs.replaceDirectoryContents = vi.fn(async () => {});
+      clock.now += HOME_RESTORE_RETRY_MS;
+      await convergeOnce(h.d, initialAgentState());
+      expect(calls(h.fetchImpl, "/download")).toHaveLength(2);
+      expect(h.home.gate).toBe(false);
+      expect(at(docker, "desktop start")).toBeLessThan(at(docker, "POST /containers/octogee-gateway/start"));
+    });
+
+    it("backs off after a failed restore instead of downloading the checkpoint again on every converge", async () => {
+      const docker = fakeDocker();
+      const clock = { now: 1_000 };
+      const h = freshBoot(docker, clock);
+      h.d.home.fs.sha256 = vi.fn(async () => "d".repeat(64));
+      await expect(convergeOnce(h.d, initialAgentState())).rejects.toThrow("sha256 mismatch");
+      clock.now += HOME_RESTORE_RETRY_MS - 1;
+      await expect(convergeOnce(h.d, initialAgentState())).rejects.toThrow(/home restore failed 1 time\(s\); retrying after/);
+      expect(calls(h.fetchImpl, "/download")).toHaveLength(1);
+
+      clock.now += 1;
+      await expect(convergeOnce(h.d, initialAgentState())).rejects.toThrow("sha256 mismatch");
+      expect(calls(h.fetchImpl, "/download")).toHaveLength(2);
+      clock.now += HOME_RESTORE_RETRY_MS;
+      await expect(convergeOnce(h.d, initialAgentState())).rejects.toThrow(/failed 2 time\(s\)/);
+      expect(calls(h.fetchImpl, "/download")).toHaveLength(2);
+
+      h.d.home.fs.sha256 = vi.fn(async () => SHA);
+      clock.now += HOME_RESTORE_RETRY_MS;
+      await convergeOnce(h.d, initialAgentState());
+      expect(calls(h.fetchImpl, "/download")).toHaveLength(3);
+      expect(h.home.gate).toBe(false);
+      expect(at(docker, "desktop start")).toBeLessThan(at(docker, "POST /containers/octogee-gateway/start"));
+    });
+
+    it("refuses to admit writers or start the gateway when the gate is closed but the bundle carries no user home", async () => {
+      const docker = fakeDocker();
+      const h = deps(docker, () => runtimeReply(bundleFixture()), { now: 1_000 }, { home: { entries: [], gate: true } });
+      await expect(convergeOnce(h.d, initialAgentState())).rejects.toThrow(/checkpoint restore gate/);
+      expect(h.home.gate).toBe(true);
+      expect(docker.log).not.toContain("desktop start");
+      expect(docker.containers.has("octogee-gateway")).toBe(false);
+    });
+
+    it("starts a retained home's writers exactly as before", async () => {
+      const docker = fakeDocker();
+      const h = deps(docker, () => runtimeReply(homeBundle()), { now: 1_000 });
+      await convergeOnce(h.d, initialAgentState());
+      expect(docker.log.filter((line) => line.startsWith("desktop ") || line.startsWith("rm "))).toEqual(["desktop thaw", "desktop start"]);
+      expect(at(docker, "desktop start")).toBeLessThan(at(docker, "POST /containers/octogee-fix-perms/start"));
+      expect(calls(h.fetchImpl, "/computer-home/download-url")).toHaveLength(0);
+    });
   });
 
   it("checkpoints a dirty home once the containers are steady, waits out the interval, and checkpoints immediately when the fleet controller asks", async () => {

@@ -69,7 +69,10 @@ export interface ComputeImageRef {
   name: string;
   id: string;
   homeAdmission?: true;
+  restoreGate?: true;
 }
+
+export const COMPUTER_HOME_RESTORE_METADATA_KEY = "octogee-home-restore";
 
 export interface CreateGatewayVmResult {
   description: GatewayVmDescription;
@@ -397,7 +400,11 @@ async function readImageRef(request: ComputeRequest, path: string, project: stri
   const name = nonEmpty(image.name);
   const id = nonEmpty(image.id);
   if (!name || !/^[a-z](?:[-a-z0-9]{0,61}[a-z0-9])?$/u.test(name) || !id || !/^[1-9]\d{0,19}$/u.test(id)) throw new Error(`image ${project}/${path}: compute returned no valid current image`);
-  return { name, id, ...(image.labels?.["home-admission"] === "retained-v1" ? { homeAdmission: true as const } : {}) };
+  return {
+    name, id,
+    ...(image.labels?.["home-admission"] === "retained-v1" ? { homeAdmission: true as const } : {}),
+    ...(image.labels?.["home-restore"] === "gated-v1" ? { restoreGate: true as const } : {}),
+  };
 }
 
 async function readFamilyImage(request: ComputeRequest, family: string, project: string): Promise<ComputeImageRef> {
@@ -535,6 +542,9 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
       : await readFamilyImage(deps.request, input.imageFamily, input.imageProject ?? deps.projectId);
     if (input.image && (image.name !== input.image.name || image.id !== input.image.id)) throw new Error("pinned VM image identity changed before creation");
     if (input.retainedHome && !image.homeAdmission) throw new Error("retained home requires the platform image's native migration and current-SSH admission contract");
+    if (input.metadata[COMPUTER_HOME_RESTORE_METADATA_KEY] === "checkpoint" && !image.restoreGate) {
+      throw new Error(`image ${image.name} does not gate the home's writers until a checkpoint restore admits them; refusing to create ${input.instanceName} for a checkpoint restore`);
+    }
     const placement = await placeAcrossZones(input, (zone, model) => insert(input, zone, model, image), deps.log);
     const { outcome, zone, provisioningModel, fellBackToStandard } = placement;
     const description = await describe(input.instanceName, zone);

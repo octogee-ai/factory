@@ -4,6 +4,7 @@ Requires=octo-home-disk.service
 Wants=user@1000.service
 After=octo-home-disk.service user@1000.service
 Before=docker.service octo-gateway-agent.service octo-desktop.service
+ConditionPathExists=!/srv/octogee/home-restore.gate
 
 [Service]
 Type=oneshot
