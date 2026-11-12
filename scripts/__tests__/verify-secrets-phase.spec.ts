@@ -112,6 +112,12 @@ describe("verify-secrets phases", () => {
     expect(output).toContain(`${MATTERMOST_GATEWAY_KEYS.length} issue(s) found`);
   });
 
+  it("names the secret extensions it loaded", () => {
+    const { output } = verifySecrets(bootstrapNamespace, "--phase=bootstrap");
+
+    expect(output).toContain("Secret extensions loaded: product");
+  });
+
   it("requires the Stripe secret registered by the product secret extension", () => {
     const { status, output } = verifySecrets({ missing: ["stripe-secrets"] });
 

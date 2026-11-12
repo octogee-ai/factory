@@ -13,7 +13,7 @@ function run(root: string, body: string): { status: number | null; stdout: strin
 }
 
 describe("secret extensions", () => {
-  it("runs with no extensions under nounset", () => {
+  it("says when no extensions are loaded and runs under nounset", () => {
     const root = mkdtempSync(path.join(tmpdir(), "octogee-secret-ext-empty-"));
     const result = run(root, [
       'run_secret_steps ${SECRET_SETUP_STEPS[@]+"${SECRET_SETUP_STEPS[@]}"}',
@@ -21,7 +21,7 @@ describe("secret extensions", () => {
     ].join("\n"));
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe("reason=[]");
+    expect(result.stdout).toBe("No secret extensions loaded\nreason=[]");
   });
 
   it("sources each extension's secrets.sh and runs its registered steps and validators", () => {
@@ -41,7 +41,7 @@ describe("secret extensions", () => {
     ].join("\n"));
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe("setup-extra;bad=[INVALID];good=[];other=[]");
+    expect(result.stdout).toBe("Secret extensions loaded: extra\nsetup-extra;bad=[INVALID];good=[];other=[]");
   });
 
   it("propagates a failing registered step", () => {
@@ -51,6 +51,6 @@ describe("secret extensions", () => {
     const result = run(root, 'run_secret_steps "${SECRET_SETUP_STEPS[@]}"\nprintf "after"');
 
     expect(result.status).toBe(3);
-    expect(result.stdout).toBe("");
+    expect(result.stdout).toBe("Secret extensions loaded: extra\n");
   });
 });

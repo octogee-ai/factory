@@ -84,7 +84,14 @@ done
 for monitor in gmp-kube-state-metrics octogee-api octogee-gateway gateway-edge gitea glm-controller; do
   assert_release_ownership clusterpodmonitoring "$monitor"
 done
-assert_release_ownership clusterrules octogee-alerts
+rules_count=0
+while IFS= read -r rules_file; do
+  rules_name="$(awk '/^metadata:/ { in_metadata = 1; next } in_metadata && /^  name:/ { print $2; exit }' "$rules_file")"
+  [[ -n "$rules_name" ]] || { echo "No ClusterRules name in $rules_file" >&2; exit 1; }
+  assert_release_ownership clusterrules "$rules_name"
+  rules_count=$((rules_count + 1))
+done < <(find "$REPO_DIR/helm/monitoring" -path "$REPO_DIR/helm/monitoring/templates" -prune -o -type f -name gmp-rules.yaml -print | sort)
+[[ "$rules_count" -gt 0 ]] || { echo "No alert rule sources found" >&2; exit 1; }
 prod_namespace="$(octogee_deployment_target_field --environment=prod namespace)"
 test_namespace="$(octogee_deployment_target_field --environment=test namespace)"
 for namespace in "$prod_namespace" "$test_namespace"; do
