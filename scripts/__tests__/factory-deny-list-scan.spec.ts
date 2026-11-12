@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { scanTree } from "../ci/factory-deny-list-scan.js";
-import { DENY_LIST, DENY_LIST_MODULE, VENDORED_FILES, denyListHits } from "../lib/factory-deny-list.js";
+import { DENY_LIST, DENY_LIST_MODULE, VENDORED_FILES, denyListHits, isTestFile } from "../lib/factory-deny-list.js";
 
 const scriptsDir = fileURLToPath(new URL("..", import.meta.url));
 const script = join(scriptsDir, "ci/factory-deny-list-scan.ts");
@@ -41,6 +41,15 @@ describe("factory deny-list scan", () => {
     ]);
     expect(() => run(root)).toThrow(/docs\/a\.md:2 TEST environment identity: "octogee-test"/);
   });
+
+  it("skips test files and still reports the same text in the code beside them", () => {
+    const denied = "project: octogee-test, a 14-day trial";
+    const root = tree({ "glm-controller/src/__tests__/reconcile.spec.ts": denied, "glm-controller/src/reconcile.ts": denied });
+    expect(scanTree(root).hits).toEqual([
+      { file: "glm-controller/src/reconcile.ts", line: 1, rule: "TEST environment identity", text: "octogee-test" },
+      { file: "glm-controller/src/reconcile.ts", line: 1, rule: "trial", text: "trial" },
+    ]);
+  });
 });
 
 const ruleHits = (file: string, content: string) => denyListHits(new Map([[file, content]])).map(hit => [hit.rule, hit.text]);
@@ -62,7 +71,7 @@ describe("factory deny-list price rule", () => {
     ["docs/free.md", "the first month would charge at $0."],
     ["src/per-month.ts", "console.log(`${label}: $${(amount / 100).toFixed(2)}/mo`);"],
     ["docs/unit.md", "the modal shows one $/mo figure"],
-    ["src/allowance.spec.ts", 'it("meters a free user against the $1 weekly house allowance", () => {'],
+    ["src/allowance.ts", 'const title = "meters a free user against the $1 weekly house allowance";'],
     ["src/quoted.ts", 'const label = "$5/month";'],
     ["src/quoted-per.ts", "const label = '$9 per seat';"],
     ["docs/capital.md", "Costs $5."],
@@ -80,7 +89,7 @@ describe("factory deny-list price rule", () => {
     ["scripts/bare-case.sh", "case $1 in"],
     ["src/query.ts", 'client.query("SELECT 1 FROM pg_roles WHERE rolname = $1 AND rolcanlogin", [name])'],
     ["src/lock.ts", "client.query(`SELECT last_version FROM ${table} WHERE name = $1 FOR UPDATE`, [name])"],
-    ["src/fake-cli.spec.ts", 'const fake = `#!/bin/sh\ncat <<EOF\nexec "$0" "$@"\nEOF`;'],
+    ["src/fake-cli.ts", 'const fake = `#!/bin/sh\ncat <<EOF\nexec "$0" "$@"\nEOF`;'],
     ["scripts/fields.sh", "awk '{print $2}' list.txt"],
     ["scripts/fields2.sh", "awk -F, '{ total += $3 } END { print total }'"],
     ["src/rewrite.ts", 'html.replace(/<head([^>]*)>/, "<head$1><base>")'],
@@ -353,5 +362,45 @@ describe("factory deny-list vendored files", () => {
   it("applies wording rules to an unlisted file beside a vendored one", () => {
     const sibling = vendored.replace(/[^/]+$/, "ours.ts");
     expect(ruleHits(sibling, "const markup = 1;").map(([rule]) => rule)).toEqual(["markup"]);
+  });
+});
+
+describe("factory deny-list test files", () => {
+  it.each([
+    "scripts/__tests__/factory-deny-list-scan.spec.ts",
+    "scripts/__tests__/source-transfer-launcher.test.py",
+    "glm-controller/src/__tests__/fixtures/placement-policy.ts",
+    "core/src/fleet-signature.spec.ts",
+    "octogee-api/src/__tests__/byok-broker.emulator.spec.ts",
+    "infra/gateway/openclaw-tarball/npm-distribution.test.mjs",
+    "gateway-edge/src/test-setup/public-app-origins.ts",
+    "core/src/fixtures/fleet-keys.ts",
+    "infra/desktop/fixtures/computer-tool-acceptance.html",
+    "infra/desktop/image/test_firewall.py",
+    "tests/vitest.config.ts",
+  ])("classifies %s as a test file", path => {
+    expect(isTestFile(path)).toBe(true);
+  });
+
+  it.each([
+    "terraform/environments/test/main.tf",
+    "terraform/product/posthog/test/main.tf",
+    "helm/octogee/values.test.yaml",
+    "helm/octogee/templates/tests/test-mm-admin-token.yaml",
+    "octogee-api/src/test-helpers/fixture-accounts.ts",
+    "core/src/testing/journal-store.ts",
+    "scripts/ops/rebuild-test-env.sh",
+    "scripts/ci/factory-deny-list-scan.ts",
+    "infra/desktop/acceptance/display-resize.py",
+    "infra/desktop/image/attest_boot.py",
+    "glm-controller/src/latest-release.ts",
+  ])("does not classify %s as a test file", path => {
+    expect(isTestFile(path)).toBe(false);
+  });
+
+  it("reports no rule on a test file and reports the same text in a non-test file", () => {
+    const denied = "deploy to octogee-test, then run the trial checkout";
+    expect(ruleHits("gateway-edge/src/__tests__/billing.spec.ts", denied)).toEqual([]);
+    expect(ruleHits("gateway-edge/src/billing.ts", denied)).toEqual([["TEST environment identity", "octogee-test"], ["trial", "trial"]]);
   });
 });

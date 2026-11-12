@@ -147,10 +147,21 @@ export const DENY_LIST: readonly DenyRule[] = [
   { name: "price", scope: "wording", pattern: /\b\d[\d,]* (?:dollars|euros|pounds|cents)\b/gi },
 ];
 
+const TEST_FILE_PATTERNS: readonly RegExp[] = [
+  /(?:^|\/)(?:__tests__|test-setup|fixtures)\//,
+  /^tests\//,
+  /\.(?:spec|test)\.[cm]?[jt]sx?$/,
+  /(?:^|\/)test_[^/]+\.py$/,
+];
+
+export function isTestFile(file: string): boolean {
+  return TEST_FILE_PATTERNS.some(pattern => pattern.test(file));
+}
+
 export function denyListHits(files: ReadonlyMap<string, string>): DenyHit[] {
   const hits: DenyHit[] = [];
   for (const [file, content] of files) {
-    if (file === DENY_LIST_MODULE) continue;
+    if (file === DENY_LIST_MODULE || isTestFile(file)) continue;
     const rules = VENDORED_FILES.includes(file) ? DENY_LIST.filter(rule => rule.scope === "identity") : DENY_LIST;
     content.split("\n").forEach((text, index) => {
       const reported = new Set<string>();
