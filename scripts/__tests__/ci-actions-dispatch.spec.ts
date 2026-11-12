@@ -1,9 +1,11 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { awaitRun, dispatchWorkflow, findRunningRun } from "../ci/actions-dispatch.mjs";
+import { awaitRun, dispatchWorkflow, findRunningRun, githubApi } from "../ci/actions-dispatch.mjs";
+
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 const url = (id: number) => `https://github.com/octogee-ai/octogee/actions/runs/${id}`;
 
@@ -110,4 +112,93 @@ it.each(["pending", "queued", "waiting", "requested"])("reuses a %s build instea
   await expect(findRunningRun("build-main.yml", sha, { request: github({ runs: [
     { id: 10, status, display_title: `Build main ${sha} [automatic]` },
   ] }) })).resolves.toBe(10);
+});
+
+const ghFailure = (stderr: string) => Object.assign(new Error("Command failed: gh api"), { status: 1, stderr });
+
+it.each([
+  "gh: Server Error (HTTP 502)", "gh: Service Unavailable (HTTP 503)", "gh: API rate limit exceeded (HTTP 429)",
+  'Get "https://api.github.com/repos/x": dial tcp 140.82.112.6:443: i/o timeout',
+  'Get "https://api.github.com/repos/x": read tcp 10.1.0.4:5000->140.82.112.6:443: read: connection reset by peer',
+  "net/http: TLS handshake timeout",
+])("retries a GitHub read that failed with %s", async stderr => {
+  vi.useFakeTimers();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const exec = vi.fn().mockImplementationOnce(() => { throw ghFailure(stderr); }).mockReturnValueOnce('{"id":1}');
+  const result = githubApi("GET", "repos/octogee-ai/octogee/actions/runs/1", undefined, { exec });
+  await vi.runAllTimersAsync();
+  await expect(result).resolves.toEqual({ id: 1 });
+  expect(exec).toHaveBeenCalledTimes(2);
+  expect(String(warn.mock.calls[0][0])).toMatch(/gh api GET repos\/octogee-ai\/octogee\/actions\/runs\/1: attempt 1 of 6 failed/);
+});
+
+it("throws the original GitHub failure after the bound", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const original = ghFailure("gh: Bad Gateway (HTTP 502)");
+  const exec = vi.fn(() => { throw original; });
+  const result = githubApi("GET", "repos/octogee-ai/octogee/actions/runs/1", undefined, { exec }).catch(error => error);
+  await vi.runAllTimersAsync();
+  const error = await result;
+  expect(error.message).toMatch(/failed after 6 attempts: HTTP 502/);
+  expect(error.cause).toBe(original);
+  expect(exec).toHaveBeenCalledTimes(6);
+});
+
+it.each(["gh: Not Found (HTTP 404)", "gh: Resource not accessible by integration (HTTP 403)"])("does not retry a GitHub read that failed with %s", async stderr => {
+  const original = ghFailure(stderr);
+  const exec = vi.fn(() => { throw original; });
+  await expect(githubApi("GET", "repos/octogee-ai/octogee/actions/runs/1", undefined, { exec })).rejects.toBe(original);
+  expect(exec).toHaveBeenCalledOnce();
+});
+
+it("never repeats a workflow dispatch", async () => {
+  const original = ghFailure("gh: Server Error (HTTP 502)");
+  const exec = vi.fn(() => { throw original; });
+  await expect(githubApi("POST", "repos/octogee-ai/octogee/actions/workflows/build-main.yml/dispatches", { ref: "main" }, { exec })).rejects.toBe(original);
+  expect(exec).toHaveBeenCalledOnce();
+});
+
+it("prints the run, its status, the running job and the elapsed wait once a minute", async () => {
+  vi.useFakeTimers();
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  let finish = () => {};
+  const watch = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+  const request = vi.fn(async (_method: string, endpoint: string) => endpoint.endsWith("/jobs?per_page=100")
+    ? { jobs: [{ name: "Images", status: "completed", conclusion: "success" }, { name: "Desktop", status: "in_progress", conclusion: null }] }
+    : { id: 11, name: "Build main", html_url: url(11), status: "in_progress", conclusion: null });
+  const waiting = awaitRun(11, { request, watch });
+  await vi.advanceTimersByTimeAsync(59_999);
+  expect(log).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(log).toHaveBeenLastCalledWith(`Waiting on Build main run 11 ${url(11)}: in_progress, running Desktop, waited 1m`);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(log).toHaveBeenLastCalledWith(`Waiting on Build main run 11 ${url(11)}: in_progress, running Desktop, waited 2m`);
+  expect(log).toHaveBeenCalledTimes(2);
+  request.mockResolvedValue({ jobs: [{ name: "Images", status: "completed", conclusion: "success" }] } as never);
+  request.mockResolvedValueOnce({ id: 11, name: "Build main", html_url: url(11), status: "completed", conclusion: "success" } as never);
+  finish();
+  await expect(waiting).resolves.toMatchObject({ conclusion: "success" });
+  await vi.advanceTimersByTimeAsync(180_000);
+  expect(log).toHaveBeenCalledTimes(2);
+});
+
+it("keeps waiting and says so when a heartbeat cannot read the run", async () => {
+  vi.useFakeTimers();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  let finish = () => {};
+  const request = vi.fn(async () => { throw new Error("gh exited 1"); });
+  const waiting = awaitRun(12, { request, watch: () => new Promise<void>(resolve => { finish = resolve; }) });
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(warn).toHaveBeenCalledWith("Waiting on run 12: status unavailable (gh exited 1), waited 1m");
+  request.mockImplementation(github() as never);
+  finish();
+  await expect(waiting).resolves.toMatchObject({ id: 12 });
+});
+
+it("names the run it dispatched", async () => {
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  const request = github({ runs: [{ id: 13, html_url: url(13), display_title: "Build main [request-123]" }] });
+  await dispatchWorkflow("build-main.yml", {}, { request, watch: async () => {}, id: () => "request-123" });
+  expect(log).toHaveBeenCalledWith(`Dispatched Build main run 13 ${url(13)} (request request-123)`);
 });

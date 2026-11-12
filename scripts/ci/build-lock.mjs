@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { fetchWithRetry } from './transient-retry.mjs';
 
 async function releaseGeneration(request, url, label) {
   let result;
@@ -13,7 +14,7 @@ export function githubRunOwner(env = process.env) {
     : null;
 }
 
-export async function githubRunCompleted(run, { fetchRun = fetch, token = process.env.GH_TOKEN } = {}) {
+export async function githubRunCompleted(run, { fetchRun = (url, init) => fetchWithRetry(`GitHub run lookup ${url}`, url, init), token = process.env.GH_TOKEN } = {}) {
   if (!token) throw new Error('GH_TOKEN is not set, so the holder run cannot be checked');
   const response = await fetchRun(`https://api.github.com/repos/${run.repository}/actions/runs/${run.id}/attempts/${run.attempt}`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },

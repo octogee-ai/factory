@@ -125,6 +125,23 @@ describe("Ship TEST main build selection", () => {
     await expect(ensureMainBuild(sha, deps)).rejects.toThrow(`Build main run ${run.url} for ${sha} concluded failure`);
     expect(deps.build).not.toHaveBeenCalled();
   });
+  it("says it is attaching to the Build main run already in flight", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const deps = ship();
+    deps.active.mockResolvedValue(9);
+    deps.manifest.mockResolvedValue({ sourceSha: sha });
+    await ensureMainBuild(sha, deps);
+    expect(log).toHaveBeenCalledWith(`Attaching to Build main run 9 already running for ${sha}`);
+    log.mockRestore();
+  });
+  it("says it is dispatching Build main when nothing is published", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const deps = ship();
+    deps.manifest.mockResolvedValueOnce(null).mockResolvedValueOnce({ sourceSha: sha });
+    await ensureMainBuild(sha, deps);
+    expect(log).toHaveBeenCalledWith(`No complete image family for ${sha}; dispatching Build main`);
+    log.mockRestore();
+  });
   it("fails when a finished build published no manifest", async () => {
     const deps = ship();
     await expect(ensureMainBuild(sha, deps)).rejects.toThrow(`Build main for ${sha} published no complete image family`);

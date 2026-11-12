@@ -17,6 +17,7 @@ export async function mainBuild(options, deps) {
 export async function ensureMainBuild(sha, deps) {
   const active = await deps.active(sha);
   if (active) {
+    console.log(`Attaching to Build main run ${active} already running for ${sha}`);
     const run = await deps.watch(active);
     if (run.conclusion === 'success') return requireManifest(sha, deps);
     if (run.conclusion !== 'cancelled') throw new Error(`Build main run ${run.url} for ${sha} concluded ${run.conclusion}`);
@@ -24,6 +25,7 @@ export async function ensureMainBuild(sha, deps) {
     console.log(`Build main run ${run.url} was cancelled before publishing ${sha}; starting a build`);
   }
   if (await deps.manifest(sha)) return;
+  console.log(`No complete image family for ${sha}; dispatching Build main`);
   await deps.build();
   return requireManifest(sha, deps);
 }

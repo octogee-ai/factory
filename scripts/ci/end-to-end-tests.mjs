@@ -1,12 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import { request } from './gcs.mjs';
+import { readFirebaseInit } from './firebase-init.mjs';
 import { deploymentEnvironmentSettings } from '../../core/dist/deployment-environment.js';
 
 const run = (file, args, options = {}) => execFileSync(file, args, { encoding: 'utf8', ...options });
 const target = deploymentEnvironmentSettings('test');
-const firebaseResponse = await fetch(`${target.siteOrigin}/__/firebase/init.json`);
-if (!firebaseResponse.ok) throw new Error(`Live Firebase configuration: ${firebaseResponse.status}`);
-const firebase = await firebaseResponse.json();
+const firebase = await readFirebaseInit(target.siteOrigin);
 if (firebase.projectId !== target.firebaseProjectId || !firebase.apiKey) throw new Error('Invalid TEST Firebase configuration');
 const env = { ...process.env, OCTOGEE_LIVE_TESTS: '1', LIVE_TEST_PROJECT_ID: target.firebaseProjectId, LIVE_TEST_API_BASE: target.apiOrigin, LIVE_TEST_FIREBASE_API_KEY: firebase.apiKey, LIVE_TEST_GITHUB_REPO: 'octogee-ai/durability-canary', LIVE_TEST_DURABILITY_RESTART: process.env.CI_LIVE_RESTART === 'true' ? '1' : '' };
 for (const name of ['RESEND_API_KEY', 'RESEND_FROM_EMAIL', 'LIVE_TEST_FIXTURE_PASSWORD']) env[name] = run('gcloud', ['secrets', 'versions', 'access', 'latest', `--secret=${name}`, `--project=${target.firebaseProjectId}`]).trim();

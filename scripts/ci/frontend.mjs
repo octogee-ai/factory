@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { delimiter } from 'node:path';
 import { siteSsrRepository } from './frontend-registry.mjs';
+import { readFirebaseInit } from './firebase-init.mjs';
 
 const environment = process.env.RELEASE_ENVIRONMENT ?? 'test';
 const repository = siteSsrRepository(environment);
@@ -13,9 +14,7 @@ const target = Object.fromEntries(run('node', ['core/dist/resolve-deployment-tar
   const equals = line.indexOf('=');
   return [line.slice(0, equals), line.slice(equals + 1)];
 }));
-const response = await fetch(`https://${target.hosting_project_id}.web.app/__/firebase/init.json`);
-if (!response.ok) throw new Error(`Public Firebase configuration: HTTP ${response.status}`);
-const firebase = await response.json();
+const firebase = await readFirebaseInit(`https://${target.hosting_project_id}.web.app`);
 for (const key of ['apiKey', 'appId', 'messagingSenderId', 'projectId']) if (!firebase[key]) throw new Error(`Missing Firebase ${key}`);
 if (firebase.projectId !== target.firebase_project_id) throw new Error('Firebase configuration belongs to a different project');
 const publicConfig = {
