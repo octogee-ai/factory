@@ -53,6 +53,8 @@ import {
   parseSharedGatewayPoolConfig,
   platformPreferredSharedGatewayCandidates,
   selectSharedGateway,
+  sharedGatewayAddedBy,
+  type SharedGatewayAddedBy,
   type SharedGatewayPlacementPurpose,
   type SharedGatewayPoolCandidate,
   type SharedGatewayRebalance,
@@ -222,6 +224,7 @@ export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway 
   liveReleaseReady?: boolean;
   rosterComplete?: boolean;
   assignmentCount?: number;
+  addedBy?: SharedGatewayAddedBy | null;
   latestRelease?: number;
   desiredRelease?: number;
   liveRelease?: number | null;
@@ -636,6 +639,10 @@ function sharedGatewayCandidates(
   });
 }
 
+function operatorAddedSharedGateway(context: PlacementPolicyReconcileContext, gatewayId: string): boolean {
+  return context.gateways.get(gatewayId)?.addedBy === "operator";
+}
+
 function sharedGatewayPoolStableForRebalance(
   context: PlacementPolicyReconcileContext,
 ): boolean {
@@ -643,7 +650,7 @@ function sharedGatewayPoolStableForRebalance(
   return context.state.sharedGatewayIds.every((gatewayId) => {
     const gateway = context.gateways.get(gatewayId);
     if (!gateway) return false;
-    if (gateway.desiredStatus !== "running") return true;
+    if (gateway.addedBy === "operator" || gateway.desiredStatus !== "running") return true;
     if (gateway.rollActive === true || gateway.liveReleaseReady === false) return false;
     const startedAt = gateway.runtimeStartedAt;
     return typeof startedAt === "number" &&
@@ -1306,7 +1313,9 @@ function planPlatformPreferredSharedGatewayRebalance(
 async function reconcileSharedGatewayRebalance(
   context: PlacementPolicyReconcileContext,
 ): Promise<void> {
-  const candidates = sharedGatewayCandidates(context).map((candidate) => ({ ...candidate }));
+  const candidates = sharedGatewayCandidates(context)
+    .filter((candidate) => !operatorAddedSharedGateway(context, candidate.gatewayId))
+    .map((candidate) => ({ ...candidate }));
   if (!planPlatformPreferredSharedGatewayRebalance(context, candidates)) return;
   if (!sharedGatewayPoolStableForRebalance(context)) return;
   const users = [...context.state.users].sort((left, right) => left.uid.localeCompare(right.uid));
@@ -1376,7 +1385,7 @@ async function reconcileDrainingSharedGateway(
   for (const fromGatewayId of drainingGatewayIds) {
     const pairedTargetGatewayId = pairedReplacementTarget(context.state.sharedPoolReplacements, fromGatewayId);
     const candidates = pairedTargetGatewayId === null
-      ? projectedCandidates
+      ? projectedCandidates.filter((candidate) => !operatorAddedSharedGateway(context, candidate.gatewayId))
       : projectedCandidates.filter((candidate) => candidate.gatewayId === pairedTargetGatewayId);
     for (const user of [...context.state.users].sort((left, right) =>
       left.uid.localeCompare(right.uid))) {
@@ -2022,6 +2031,7 @@ function placementGatewayFromRoot(input: {
     ].every(Boolean),
     rosterComplete: assigned.every((assignment) => mounted.has(assignment.slug)),
     assignmentCount: assigned.length,
+    addedBy: root.gatewayClass === "shared" ? sharedGatewayAddedBy(root) : null,
     latestRelease: root.latestRelease,
     desiredRelease: root.desiredRelease,
     liveRelease: root.liveRelease,

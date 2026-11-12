@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FLEET,
   MANIFEST,
-  PAYLOAD,
   SOURCE_SHA,
   VM_RUNTIME,
   harness,
@@ -198,7 +197,7 @@ describe("a dry run of a changing request", () => {
     [
       "shared gateway id the store would reject",
       400,
-      { method: "post", path: "/gateways", body: { gatewayId: "fleet-live-teau", gatewayClass: "shared", imageRepository: PAYLOAD.imageRepository, imageTag: "abc1234" } },
+      { method: "post", path: "/gateways", body: { gatewayId: "fleet-live-teau", gatewayClass: "shared", sourceSha: SOURCE_SHA } },
       FLEET,
     ],
     ["retirement of an unknown gateway", 404, { method: "delete", path: "/gateways/nowhere" }, FLEET],
@@ -271,7 +270,7 @@ describe("every changing route", () => {
     "POST /gateways": {
       method: "post",
       path: "/gateways",
-      body: { gatewayId: "shared-c", imageRepository: PAYLOAD.imageRepository, imageTag: "abc1234", gatewayClass: "shared" },
+      body: { gatewayId: "shared-c", sourceSha: SOURCE_SHA, gatewayClass: "shared" },
     },
     "PATCH /gateways/:id": { method: "patch", path: "/gateways/shared-b", body: { desiredStatus: "paused" } },
     "DELETE /gateways/:id": { method: "delete", path: "/gateways/idle" },

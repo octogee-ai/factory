@@ -3,7 +3,6 @@ import { readSharedSourceRecoveryAuthority, readSharedSourceRecoverySupersession
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isOperationAuditRecord, isOperationAuditRow, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayControlState, isValidNewGatewayId, isGatewayClass, isGatewayProfile, resolveGatewayClass, resolveGatewayImageProfile, resolveGatewayRuntime, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
-import { deploymentTargetsForEnvironment } from "./deployment-environment.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS, } from "@octogee/shared/types/platform-config";
 import { accountAllowsInteractiveAccess, } from "@octogee/shared/types/account-lifecycle";
 import { isReleasePayload, isGatewayRuntimeDoc, } from "@octogee/shared/types/gateway-releases";
@@ -11,12 +10,11 @@ import { isGatewayPodReplacements, summarizeGatewayPodReplacements, } from "@oct
 import { GATEWAY_CONFIG_SCHEMA_VERSION, InitialGatewayReleaseConflictError, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, writeInitialGatewayReleaseInStore, } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import { resolveContinuousUserPlacement, resolveLiveActivationTargetGatewayId, } from "@octogee/shared/types/orchestrator-placement";
-import { SHARED_POOL_SLOT_ID_REQUIREMENT, isSharedPoolSlotId, parseSharedGatewayAutoscalingConfig, } from "@octogee/shared/types/shared-gateway-pool";
+import { SHARED_POOL_SLOT_ID_REQUIREMENT, isSharedPoolSlotId, parseSharedGatewayAutoscalingConfig, sharedGatewayAddedBy, } from "@octogee/shared/types/shared-gateway-pool";
 import { InvalidSharedGatewayAutoscalingConfigError, readSharedGatewayPoolConfigInStore, } from "./shared-gateway-pool-read.js";
 import { SIZING_TIERS, resolveSizingTier, } from "@octogee/shared/types/sizing";
 import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/shared/types/cost-estimator";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
-import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { builderReturnOperationId, placementRetireOperationId, } from "./user-activation-lease.js";
 import { withActorEmails } from "./admin-journal-actor.js";
 import { AdminDryRunPlanned, adminDryRunBody, admitAdminDryRunMarker, isAdminDryRun, refuseUnansweredAdminDryRun, respondToAdminDryRun, } from "./admin-dry-run.js";
@@ -32,7 +30,7 @@ import { OperationAuditIdempotencyConflictError } from "./operation-audit.js";
 import { firestoreUserAccountReader, } from "./user-account.js";
 import { failedRetirementOf, giveOperatorIsolatedGateway, movesTouchingGateway, rearmFailedRetirement, isolatedGatewayRetireRefusal, operatorAllocationId, ownIsolatedGatewayTargetRefusal, planOperatorIsolatedGateway, } from "./operator-isolated-gateway.js";
 import { readReleaseStatus, summarizeReleaseStatus } from "./release-status.js";
-import { centralGatewayReleasePayload, } from "./artifact-registry.js";
+import { centralGatewayReleasePayload, ReleaseDigestManifestNotFoundError, } from "./artifact-registry.js";
 function rejectPersistenceInBody(body) {
     if (body.persistence === undefined)
         return null;
@@ -120,7 +118,7 @@ export function resolveFleetNamespace(env = process.env) {
     const ns = env.K8S_NAMESPACE;
     return typeof ns === "string" && ns.length > 0 ? ns : "octogee";
 }
-export const ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE = "shared pool rides the platform release; deploy the platform instead";
+export const ERR_SHARED_GATEWAY_NOT_ROLLED_IN_PLACE = "a shared gateway is not rolled in place; add a shared gateway on the new build, move its users to it, then retire this one";
 function adminGatewayClass(gatewayClass) {
     return gatewayClass === "builder" ? "isolated" : "shared";
 }
@@ -947,6 +945,9 @@ export function projectGatewaySummary(doc, glmDoc, now) {
         reservation,
         profile: normalizeGatewayProfile(glmDoc?.profile),
         gatewayClass: normalizeGatewayClass(glmDoc),
+        addedBy: normalizeGatewayClass(glmDoc) === "shared" && typeof glmDoc?.createdBy === "string"
+            ? sharedGatewayAddedBy({ createdBy: glmDoc.createdBy })
+            : null,
         imageProfile: normalizeGatewayImageProfile(glmDoc),
         disposableRuntime: projectDisposableRuntime(glmDoc),
         podReplacements: projectGatewayPodReplacements(glmDoc, now),
@@ -1321,7 +1322,6 @@ function restoreRecoveryOperationInput(input) {
                 "gateway-edge": `${payload.gatewayEdgeImage.imageRepository}:${payload.gatewayEdgeImage.imageTag}` } } };
 }
 const OP_KIND_MIGRATE_USER = "migrate-customer";
-const GATEWAY_IMAGE_REPO_PREFIXES = [...new Set(["prod", "test"].flatMap((environment) => deploymentTargetsForEnvironment(environment).map((target) => `${target.artifactRegistryRepository}/`)))];
 const BUILDS_SERVICE_ALLOWLIST = new Set([
     "octogee-gateway",
     "gateway-edge",
@@ -1402,9 +1402,6 @@ function toIso(v) {
 function ageMsOrNull(ms, now) {
     return ms == null ? null : now - ms;
 }
-function isValidGatewayImageRepository(repo) {
-    return GATEWAY_IMAGE_REPO_PREFIXES.some((prefix) => repo.startsWith(prefix));
-}
 function isNonEmptyString(v) {
     return typeof v === "string" && v.length > 0;
 }
@@ -1452,17 +1449,33 @@ export function validateDeployBody(body) {
     }
     return { ok: { sourceSha: body.sourceSha } };
 }
+const ADD_GATEWAY_IMAGE_FIELDS = ["imageRepository", "imageTag"];
 function validateAddGatewayRequiredFields(body) {
-    if (!isNonEmptyString(body.gatewayId) ||
-        !isNonEmptyString(body.imageRepository) ||
-        !isNonEmptyString(body.imageTag)) {
+    const imageFields = ADD_GATEWAY_IMAGE_FIELDS.filter((field) => Object.prototype.hasOwnProperty.call(body, field));
+    if (imageFields.length > 0) {
         return {
             error: {
                 status: 400,
                 body: {
-                    error: "missing required fields",
-                    required: ["gatewayId", "imageRepository", "imageTag"],
+                    error: "gateway add takes a build: name its sourceSha; the images come from that build's manifest",
+                    fields: imageFields,
                 },
+            },
+        };
+    }
+    if (!isNonEmptyString(body.gatewayId)) {
+        return {
+            error: {
+                status: 400,
+                body: { error: "missing required fields", required: ["gatewayId"] },
+            },
+        };
+    }
+    if (body.sourceSha !== undefined && !releaseSourceShaFromBody(body.sourceSha)) {
+        return {
+            error: {
+                status: 400,
+                body: { error: "sourceSha must be one exact full lowercase commit SHA", got: body.sourceSha },
             },
         };
     }
@@ -1480,8 +1493,7 @@ function validateAddGatewayRequiredFields(body) {
     return {
         ok: {
             gatewayId: body.gatewayId,
-            imageRepository: body.imageRepository,
-            imageTag: body.imageTag,
+            sourceSha: body.sourceSha ?? null,
         },
     };
 }
@@ -1581,9 +1593,6 @@ function validateAddGatewayBody(body) {
     const ownershipError = validateSharedGatewayCreate(body, gatewayClass);
     if (ownershipError)
         return { error: ownershipError };
-    const artifactError = validateArtifact(required.ok);
-    if (artifactError)
-        return { error: artifactError };
     return {
         ok: {
             ...required.ok,
@@ -2067,28 +2076,6 @@ function mutableConfigPatchFromBody(body) {
     }
     return patch;
 }
-function validateArtifact(artifact) {
-    if (!isValidGatewayImageRepository(artifact.imageRepository)) {
-        return {
-            status: 400,
-            body: {
-                error: "imageRepository must be the canonical Octogee Artifact Registry repo",
-                expectedPrefixes: GATEWAY_IMAGE_REPO_PREFIXES,
-                got: artifact.imageRepository,
-            },
-        };
-    }
-    if (!IMAGE_TAG_PATTERN.test(artifact.imageTag)) {
-        return {
-            status: 400,
-            body: {
-                error: "imageTag must be a lowercase hex SHA (7–40 chars) or pinned bundle (e.g. abc1234-oc2026.5.2)",
-                got: artifact.imageTag,
-            },
-        };
-    }
-    return null;
-}
 function buildCreateGatewayConfig(args) {
     return {
         configSchemaVersion: GATEWAY_CONFIG_SCHEMA_VERSION,
@@ -2106,10 +2093,56 @@ function buildCreateGatewayConfig(args) {
         modelBrokerLimits: null,
     };
 }
-function buildCreateArtifact(body) {
+async function readAddGatewayRequest(store, deps, rawBody) {
+    const bodyError = gatewayCreationBodyError((rawBody ?? {}));
+    if (bodyError)
+        return { error: bodyError };
+    const parsed = validateAddGatewayBody(rawBody);
+    if ("error" in parsed)
+        return parsed;
+    const uniqueness = await ensureGatewayCreateIsUnique(store, parsed.ok);
+    if ("error" in uniqueness)
+        return uniqueness;
+    const build = await resolveAddGatewayBuild(deps, parsed.ok.sourceSha);
+    if ("error" in build)
+        return build;
+    return { ok: { body: parsed.ok, build: build.ok } };
+}
+async function resolveAddGatewayBuild(deps, sourceSha) {
+    if (sourceSha === null) {
+        if (deps.platformArtifact === undefined) {
+            return {
+                error: {
+                    status: 400,
+                    body: { error: "a build is required: name its sourceSha; the build the platform is running is not known here" },
+                },
+            };
+        }
+        return { ok: { kind: "platform", artifact: deps.platformArtifact } };
+    }
+    if (!deps.releaseEnvironment || !deps.releaseAuthority) {
+        return { error: { status: 503, body: { error: "immutable build manifests are unavailable" } } };
+    }
+    let manifest;
+    try {
+        manifest = await centralManifestForSourceSha(deps.releaseAuthority, sourceSha);
+    }
+    catch (error) {
+        if (error instanceof ReleaseDigestManifestNotFoundError) {
+            return { error: { status: 404, body: { error: "no build manifest for sourceSha", sourceSha } } };
+        }
+        if (error instanceof CentralReleaseRequestError) {
+            return { error: { status: error.status, body: error.body } };
+        }
+        throw error;
+    }
     return {
-        imageRepository: body.imageRepository,
-        imageTag: body.imageTag,
+        ok: {
+            kind: "named",
+            sourceSha,
+            manifestDigest: manifest.manifestDigest,
+            artifact: gatewayArtifactFromReleasePayload(centralGatewayReleasePayload(manifest)),
+        },
     };
 }
 function buildDurableGatewayPatch(args) {
@@ -2222,7 +2255,7 @@ async function resolveRollbackRelease(args) {
         return {
             error: {
                 status: 409,
-                body: { error: ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE, gatewayId: args.gatewayId },
+                body: { error: ERR_SHARED_GATEWAY_NOT_ROLLED_IN_PLACE, gatewayId: args.gatewayId },
             },
         };
     }
@@ -2745,7 +2778,8 @@ async function performAddGatewayMutation(opts) {
             createdBy: opts.createdBy,
             input: {
                 gatewayId: opts.body.gatewayId,
-                imageTag: opts.body.imageTag,
+                imageTag: opts.artifact.imageTag,
+                ...(opts.body.sourceSha ? { sourceSha: opts.body.sourceSha } : {}),
                 ...(opts.body.profile ? { profile: opts.body.profile } : {}),
                 gatewayClass: opts.gatewayClass,
                 ...(opts.imageProfile !== "standard" ? { imageProfile: opts.imageProfile } : {}),
@@ -3671,22 +3705,12 @@ export function addAdminFleetRoutes(router, deps) {
             const actor = req;
             const createdBy = actor.uid ?? "unknown";
             const now = Date.now();
-            const bodyError = gatewayCreationBodyError((req.body ?? {}));
-            if (bodyError) {
-                res.status(bodyError.status).json(bodyError.body);
+            const request = await readAddGatewayRequest(store, deps, req.body);
+            if ("error" in request) {
+                res.status(request.error.status).json(request.error.body);
                 return;
             }
-            const parsed = validateAddGatewayBody(req.body);
-            if ("error" in parsed) {
-                res.status(parsed.error.status).json(parsed.error.body);
-                return;
-            }
-            const body = parsed.ok;
-            const uniqueness = await ensureGatewayCreateIsUnique(store, body);
-            if ("error" in uniqueness) {
-                res.status(uniqueness.error.status).json(uniqueness.error.body);
-                return;
-            }
+            const { body, build } = request.ok;
             const gatewayServiceAccount = process.env.GATEWAY_SERVICE_ACCOUNT;
             if (!gatewayServiceAccount) {
                 res.status(500).json({
@@ -3701,7 +3725,7 @@ export function addAdminFleetRoutes(router, deps) {
                 gatewayClass,
                 imageProfile,
             });
-            const artifact = buildCreateArtifact(body);
+            const artifact = build.artifact;
             let operationId;
             try {
                 const result = await runAdminFleetMutation({
@@ -3713,7 +3737,11 @@ export function addAdminFleetRoutes(router, deps) {
                     mutation: {
                         kind: "add-gateway",
                         gatewayId: body.gatewayId,
-                        imageTag: body.imageTag,
+                        build: build.kind === "named"
+                            ? { sourceSha: build.sourceSha, manifestDigest: build.manifestDigest }
+                            : "platform",
+                        imageTag: artifact.imageTag,
+                        gatewayEdgeImageTag: artifact.gatewayEdgeImage?.imageTag ?? null,
                         gatewayClass,
                         imageProfile,
                         desiredStatus: "running",
@@ -3741,9 +3769,14 @@ export function addAdminFleetRoutes(router, deps) {
                     return;
                 throw e;
             }
-            res
-                .status(202)
-                .json({ gatewayId: body.gatewayId, operationId });
+            res.status(202).json({
+                gatewayId: body.gatewayId,
+                sourceSha: body.sourceSha,
+                release: 1,
+                imageTag: artifact.imageTag,
+                gatewayEdgeImageTag: artifact.gatewayEdgeImage?.imageTag ?? null,
+                operationId,
+            });
         }
         catch (e) {
             next(e);
@@ -4115,7 +4148,7 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             if (gateway.gatewayClass === "shared") {
-                res.status(409).json({ error: ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE, gatewayId: id });
+                res.status(409).json({ error: ERR_SHARED_GATEWAY_NOT_ROLLED_IN_PLACE, gatewayId: id });
                 return;
             }
             if (!deps.releaseEnvironment || !deps.releaseAuthority) {

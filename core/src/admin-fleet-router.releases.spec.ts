@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 
-import { ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE } from "./admin-fleet-router.js";
-import { auditsIn, mkApp, opsIn } from "./__tests__/fixtures/admin-fleet-releases-app.js";
+import { ERR_SHARED_GATEWAY_NOT_ROLLED_IN_PLACE } from "./admin-fleet-router.js";
+import { auditsIn, mkApp, opsIn, PLATFORM_BUILD } from "./__tests__/fixtures/admin-fleet-releases-app.js";
 import type {
   CentralReleaseAuthority,
   ReleaseDigestManifest,
@@ -274,7 +274,7 @@ describe('POST /gateways/:id/recover-restore', () => {
 });
 
 describe("POST /gateways/:id/deploy", () => {
-  it("rejects deploying to a shared pool member because the pool rides the platform release", async () => {
+  it("refuses to deploy a build to a shared gateway and says how to move to a new build", async () => {
     const manifest = immutableBuild();
     const authority = buildAuthority(manifest);
     const { app, store } = mkApp(seedNewSchemaGateway("shared-0", sharedPayload()), {
@@ -286,7 +286,10 @@ describe("POST /gateways/:id/deploy", () => {
       .send({ sourceSha: manifest.sourceSha })
       .expect(409);
 
-    expect(res.body.error).toContain("rides the platform release");
+    expect(res.body).toEqual({
+      error: "a shared gateway is not rolled in place; add a shared gateway on the new build, move its users to it, then retire this one",
+      gatewayId: "shared-0",
+    });
     expect(store.get("gateways/shared-0")).toMatchObject({ latestRelease: 1 });
     expect(opsIn(store, "rollout")).toHaveLength(0);
     expect(authority.resolveManifest).not.toHaveBeenCalled();
@@ -385,7 +388,7 @@ beforeEach(() => vi.stubEnv("GATEWAY_SERVICE_ACCOUNT", "gw@octogee.iam.gservicea
 afterEach(() => vi.unstubAllEnvs());
 
 describe("POST /gateways — creates only the durable root and immutable release", () => {
-  it("rejects an invalid artifact tag before creating a durable release", async () => {
+  it("refuses image references in place of a build before creating a durable release", async () => {
     const { app, store } = mkApp();
 
     await request(app)
@@ -402,7 +405,7 @@ describe("POST /gateways — creates only the durable root and immutable release
 
     const res = await request(app)
       .post("/gateways")
-      .send({ gatewayId: "shared-alpha", imageRepository: REPO, imageTag: "abc1234" })
+      .send({ gatewayId: "shared-alpha" })
       .expect(202);
     expect(res.body).toMatchObject({ gatewayId: "shared-alpha" });
 
@@ -423,10 +426,7 @@ describe("POST /gateways — creates only the durable root and immutable release
     // Immutable release 1.
     const rel = store.get(`gateways/shared-alpha/${GATEWAY_RELEASES_SUBCOLLECTION}/1`);
     expect(rel).toMatchObject({ release: 1, sourceRelease: null });
-    expect(rel?.payload).toEqual({
-      imageRepository: REPO,
-      imageTag: "abc1234",
-    });
+    expect(rel?.payload).toEqual(PLATFORM_BUILD);
     expect(rel?.payloadHash).toBe(releasePayloadHash(rel?.payload as ReleasePayload));
 
     expect(opsIn(store, "add-gateway")).toHaveLength(1);
@@ -446,7 +446,7 @@ describe("POST /gateways — creates only the durable root and immutable release
 
     await request(app)
       .post("/gateways")
-      .send({ gatewayId: "shared-alpha", imageRepository: REPO, imageTag: "abc1234" })
+      .send({ gatewayId: "shared-alpha" })
       .expect(502);
 
     expect(auditsIn(store)).toContainEqual(expect.objectContaining({
@@ -462,7 +462,7 @@ describe("POST /gateways — creates only the durable root and immutable release
 
     await request(app)
       .post("/gateways")
-      .send({ gatewayId: "shared-alpha", imageRepository: REPO, imageTag: "abc1234" })
+      .send({ gatewayId: "shared-alpha" })
       .expect(500);
 
     expect(store.get(`${GLM_GATEWAYS_COLLECTION}/shared-alpha`)).toBeUndefined();
@@ -476,7 +476,7 @@ describe("POST /gateways — creates only the durable root and immutable release
 
     const res = await request(app)
       .post("/gateways")
-      .send({ gatewayId: "fleet-live-teau", gatewayClass: "shared", imageRepository: REPO, imageTag: "abc1234" })
+      .send({ gatewayId: "fleet-live-teau", gatewayClass: "shared" })
       .expect(400);
 
     expect(res.body).toEqual({
@@ -499,7 +499,7 @@ describe("POST /gateways — creates only the durable root and immutable release
 
     await request(app)
       .post("/gateways")
-      .send({ gatewayId: "shared-alpha", imageRepository: REPO, imageTag: "abc1234" })
+      .send({ gatewayId: "shared-alpha" })
       .expect(500);
 
     expect(provisionGatewayAuthSecret).not.toHaveBeenCalled();
@@ -523,7 +523,7 @@ describe("POST /gateways — creates only the durable root and immutable release
 
     await request(app)
       .post("/gateways")
-      .send({ gatewayId: "shared-alpha", imageRepository: REPO, imageTag: "abc1234" })
+      .send({ gatewayId: "shared-alpha" })
       .expect(409);
 
     expect(provisionGatewayAuthSecret).not.toHaveBeenCalled();
@@ -545,7 +545,7 @@ describe("POST /gateways — creates only the durable root and immutable release
 
     await request(app)
       .post("/gateways")
-      .send({ gatewayId: "shared-alpha", imageRepository: REPO, imageTag: "abc1234" })
+      .send({ gatewayId: "shared-alpha" })
       .expect(500);
 
     expect(auditsIn(store)).toContainEqual(expect.objectContaining({
@@ -563,7 +563,7 @@ describe("POST /gateways — creates only the durable root and immutable release
     const { app } = mkApp();
     const res = await request(app)
       .post("/gateways")
-      .send({ gatewayId: "alpha-blue", imageRepository: REPO, imageTag: "abc1234" });
+      .send({ gatewayId: "alpha-blue" });
     expect(res.status).toBe(400);
   });
 
@@ -571,8 +571,6 @@ describe("POST /gateways — creates only the durable root and immutable release
     const { app } = mkApp();
     const res = await request(app).post("/gateways").send({
       gatewayId: "shared-alpha",
-      imageRepository: REPO,
-      imageTag: "abc1234",
       byosub: { openai: { secretName: "forbidden" } },
     });
     expect(res.status).toBe(400);
@@ -585,8 +583,6 @@ describe("POST /gateways — creates only the durable root and immutable release
       const { app } = mkApp();
       const res = await request(app).post("/gateways").send({
         gatewayId: "shared-alpha",
-        imageRepository: REPO,
-        imageTag: "abc1234",
         [field]: "operator",
       });
 
@@ -599,8 +595,6 @@ describe("POST /gateways — creates only the durable root and immutable release
     const { app, store } = mkApp();
     const res = await request(app).post("/gateways").send({
       gatewayId: "operator",
-      imageRepository: REPO,
-      imageTag: "abc1234",
       gatewayClass: "isolated",
       imageProfile: "builder",
       ownerUid: "uid-owner",
@@ -756,7 +750,7 @@ describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from rel
     expect(opsIn(store, "rollout")).toMatchObject([{ origin: "operator", input: { gatewayId: "gamma" } }]);
   });
 
-  it("rejects rolling back a shared-pool slot because shared slots ride the platform release", async () => {
+  it("refuses to roll back a shared gateway in place", async () => {
     const seed = seedNewSchemaGateway("shared-0", sharedPayload({ imageTag: "deadbee" }), {
       gatewayClass: "shared",
     });
@@ -776,7 +770,7 @@ describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from rel
 
     const res = await request(app).post("/gateways/shared-0/releases/1/rollback").send({}).expect(409);
 
-    expect(res.body).toEqual({ error: ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE, gatewayId: "shared-0" });
+    expect(res.body).toEqual({ error: ERR_SHARED_GATEWAY_NOT_ROLLED_IN_PLACE, gatewayId: "shared-0" });
     expect(store.get("gateways/shared-0")).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
     expect(store.has(`gateways/shared-0/${GATEWAY_RELEASES_SUBCOLLECTION}/3`)).toBe(false);
     expect(opsIn(store, "rollout")).toHaveLength(0);
@@ -1194,8 +1188,6 @@ describe("P1-5 endpoint gaps", () => {
     const { app } = mkApp();
     const res = await request(app).post("/gateways").send({
       gatewayId: "pvc",
-      imageRepository: REPO,
-      imageTag: "abc1234",
       persistence: { enabled: true },
     });
     expect(res.status).toBe(400);

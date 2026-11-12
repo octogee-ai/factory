@@ -18,6 +18,7 @@ import {
   type Stored,
 } from "@octogee/core/platform-state";
 import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
+import { sharedGatewayAddedBy } from "@octogee/shared/types/shared-gateway-pool";
 import { timestampMillis } from "@octogee/core/timestamps";
 import {
   isGatewayRuntimeDoc, isReleasePayload, projectGatewayDesiredRootForGateway, releasePayloadHash,
@@ -82,7 +83,7 @@ async function readGateway(input: {
   ]);
   const runtime = object(runtimeDoc);
   return {
-    gatewayId: root.gatewayId, gatewayClass: root.gatewayClass, imageProfile: root.imageProfile,
+    gatewayId: root.gatewayId, gatewayClass: root.gatewayClass, imageProfile: root.imageProfile, addedBy: root.gatewayClass === "shared" ? sharedGatewayAddedBy(root) : null,
     desiredStatus: root.desiredStatus, latestRelease: root.latestRelease, desiredRelease: root.desiredRelease, liveRelease: root.liveRelease,
     desiredPayload: payloadOf(desired, root.gatewayId, root.desiredRelease), latestPayload: payloadOf(latest, root.gatewayId, root.latestRelease),
     runtime: runtimeOf(runtime, root.gatewayId),

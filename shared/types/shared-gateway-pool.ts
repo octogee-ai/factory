@@ -158,6 +158,14 @@ export function isSharedPoolMemberRoot(root: SharedPoolMemberRoot): boolean {
     SHARED_POOL_MEMBER_STATUSES.has(String(root.desiredStatus));
 }
 
+export const SHARED_POOL_SCALER_CREATOR = "glm-controller-shared-pool-scaler";
+
+export type SharedGatewayAddedBy = "automation" | "operator";
+
+export function sharedGatewayAddedBy(root: { readonly createdBy: string }): SharedGatewayAddedBy {
+  return root.createdBy === SHARED_POOL_SCALER_CREATOR ? "automation" : "operator";
+}
+
 export function sharedPoolMemberIds(roots: readonly SharedPoolMemberRoot[]): string[] {
   return [...new Set(roots.filter(isSharedPoolMemberRoot).map((root) => root.gatewayId))]
     .sort(compareSharedGatewayIds);

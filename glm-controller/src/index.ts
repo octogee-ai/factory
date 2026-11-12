@@ -2352,6 +2352,7 @@ function startControllerBackgroundTasks({
     provisionGatewayAuthSecret,
     listGatewayBuilds,
     ...CENTRAL_RELEASE_ROUTE_DEPS,
+    platformArtifact,
     ...(httpKubeOps
       ? {
           readGatewayPodDiagnostics: (gatewayId: string) =>

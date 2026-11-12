@@ -105,6 +105,11 @@ export interface SharedPoolMemberRoot {
 export declare function isSharedPoolSlotId(id: unknown): id is string;
 export declare function compareSharedGatewayIds(left: string, right: string): number;
 export declare function isSharedPoolMemberRoot(root: SharedPoolMemberRoot): boolean;
+export declare const SHARED_POOL_SCALER_CREATOR = "glm-controller-shared-pool-scaler";
+export type SharedGatewayAddedBy = "automation" | "operator";
+export declare function sharedGatewayAddedBy(root: {
+    readonly createdBy: string;
+}): SharedGatewayAddedBy;
 export declare function sharedPoolMemberIds(roots: readonly SharedPoolMemberRoot[]): string[];
 export declare function deriveSharedGatewayPoolConfig(roots: readonly SharedPoolMemberRoot[], sharedGatewayAutoscaling?: SharedGatewayAutoscalingConfig): SharedGatewayPoolConfig | null;
 export declare function parseSharedGatewayPoolConfig(value: unknown): SharedGatewayPoolConfig | null;

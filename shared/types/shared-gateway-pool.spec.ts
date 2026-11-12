@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   authoritativeSharedGatewayLoad,
   compareSharedGatewayIds,
+  sharedGatewayAddedBy,
   deriveSharedGatewayPoolConfig,
   isAcceptingSharedGateway,
   isSettledSharedGateway,
@@ -332,5 +333,12 @@ describe("initial placement capacity", () => {
       uid: "existing", config, purpose: "initial-placement",
       currentGatewayId: "shared-0", candidates: [candidate("shared-0", { assignmentCount: 20 })],
     })).toMatchObject({ kind: "selected", gatewayId: "shared-0", retainedCurrent: true });
+  });
+});
+
+describe("sharedGatewayAddedBy", () => {
+  it("names the scaler's gateways automation and every other creator operator", () => {
+    expect(sharedGatewayAddedBy({ createdBy: "glm-controller-shared-pool-scaler" })).toBe("automation");
+    expect(sharedGatewayAddedBy({ createdBy: "operator-uid" })).toBe("operator");
   });
 });

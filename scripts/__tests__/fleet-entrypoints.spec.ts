@@ -1413,8 +1413,8 @@ describe("fleet CLI args", () => {
       "--env=test",
       "gw",
       "add",
-      "--gateway-id=canary",
-      "--image-tag=abc1234",
+      "--gateway-id=shared-canary",
+      `--sha=${"a".repeat(40)}`,
       "--gateway-class=shared",
       "--idempotency-key=add-canary",
     ]);
@@ -1424,13 +1424,29 @@ describe("fleet CLI args", () => {
       method: "POST",
       path: "/api/admin/gateways",
       body: {
-        gatewayId: "canary",
-        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-        imageTag: "abc1234",
+        gatewayId: "shared-canary",
+        sourceSha: "a".repeat(40),
         gatewayClass: "shared",
       },
       idempotencyKey: "add-canary",
     });
+  });
+
+  it("adds a gateway on the build the platform is running when no build is named", () => {
+    const args = parseFleetArgs(["--env=test", "gw", "add", "--gateway-id=shared-canary"]);
+
+    expect(resolveFleetGatewayMutation(args)).toEqual({
+      method: "POST",
+      path: "/api/admin/gateways",
+      body: { gatewayId: "shared-canary" },
+    });
+  });
+
+  it("refuses an abbreviated build and image references on gw add", () => {
+    expect(() => resolveFleetGatewayMutation(parseFleetArgs(["--env=test", "gw", "add", "--gateway-id=shared-canary", "--sha=abc1234"])))
+      .toThrow("gw add takes --sha=<full-lowercase-main-sha>");
+    expect(() => resolveFleetGatewayMutation(parseFleetArgs(["--env=test", "gw", "add", "--gateway-id=shared-canary", "--image-tag=abc1234"])))
+      .toThrow("gw add takes a build: name it with --sha; the images come from that build's manifest");
   });
 
   it("treats gw list and inspect as aliases for the existing read commands", () => {
@@ -1582,16 +1598,7 @@ describe("fleet CLI args", () => {
     ]))).toThrow("gw deploy requires --sha=<full-lowercase-main-sha>");
   });
 
-  it("rejects cross-environment image repositories and unsafe gateway paths", () => {
-    expect(() => resolveFleetGatewayMutation(parseFleetArgs([
-      "--env=test",
-      "gw",
-      "add",
-      "--gateway-id=canary",
-      "--image-tag=abc1234",
-      "--image-repository=us-west1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-    ]))).toThrow("gw add requires the selected environment repository");
-
+  it("rejects unsafe gateway paths", () => {
     expect(() => resolveFleetGatewayMutation(parseFleetArgs([
       "--env=test", "gw", "park", "a/../b",
     ]))).toThrow("gw park received an invalid gateway id");

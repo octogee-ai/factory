@@ -465,7 +465,33 @@ const userCalls: Array<{ service: string; limit?: number }> = [];
 let nextBuildsResult: BuildResult[] = [];
 let nextBuildsError: Error | null = null;
 
-vi.mock("@octogee/core/artifact-registry", () => ({
+const BUILD_SHA = "a".repeat(40);
+
+vi.hoisted(() => {
+  process.env.DEPLOYMENT_TARGET_ID = "test-central";
+});
+
+vi.mock("@octogee/core/artifact-registry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@octogee/core/artifact-registry")>()),
+  createCentralReleaseAuthority: () => ({
+    resolveManifest: async (sourceSha: string) => ({
+      sourceSha,
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      openclawVersion: "2026.11.3",
+      repository: "us-central1-docker.pkg.dev/octogee/octogee",
+      surfaces: {
+        gateway: {
+          "octogee-gateway": `sha256:${"c".repeat(64)}`,
+          "octogee-gateway-builder": `sha256:${"d".repeat(64)}`,
+          "gateway-edge": `sha256:${"e".repeat(64)}`,
+        },
+        platform: {},
+      },
+    }),
+    aliasesFor: () => [],
+    keepTagsFor: () => [],
+    ensureAliases: async () => [],
+  }),
   listGatewayBuilds: async (opts: { service: string; limit?: number }) => {
     userCalls.push({ service: opts.service, limit: opts.limit });
     if (nextBuildsError) {
@@ -734,8 +760,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "shared-canary",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
+      sourceSha: BUILD_SHA,
     });
     expect(res.status).toBe(202);
     expect(res.body).toMatchObject({ gatewayId: "shared-canary" });
@@ -761,14 +786,17 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       gatewayId: "shared-canary",
       release: 1,
       sourceRelease: null,
-      payload: { imageTag: "abc1234" },
+      payload: {
+        imageTag: `aaaaaaa-oc2026.11.3@sha256:${"c".repeat(64)}`,
+        gatewayEdgeImage: { imageTag: `aaaaaaa-oc2026.11.3@sha256:${"e".repeat(64)}` },
+      },
     });
     expect(glmOperationsDocs.map((doc) => doc.data)).toEqual(expect.arrayContaining([
       expect.objectContaining({
         recordType: "audit",
         releaseRollout: {
           releaseId: "shared-canary/1",
-          releaseTag: "abc1234",
+          releaseTag: `aaaaaaa-oc2026.11.3@sha256:${"c".repeat(64)}`,
           rolloutOperationId: res.body.operationId,
         },
       }),
@@ -780,8 +808,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
 
     await request(buildApp()).post("/api/admin/gateways").send({
       gatewayId: "shared-partial",
-      imageRepository: GATEWAY_REPOSITORY,
-      imageTag: "abc1234",
+      sourceSha: BUILD_SHA,
     }).expect(500);
 
     expect(gatewaysDocs["shared-partial"]).toMatchObject({
@@ -795,7 +822,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
         lifecycleStage: "action-partial",
         releaseRollout: {
           releaseId: "shared-partial/1",
-          releaseTag: "abc1234",
+          releaseTag: `aaaaaaa-oc2026.11.3@sha256:${"c".repeat(64)}`,
         },
       }),
     ]));
@@ -812,8 +839,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     for (const gatewayId of ["team-blue", "team-green"]) {
       const res = await request(app).post("/api/admin/gateways").send({
         gatewayId,
-        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-        imageTag: "abc1234",
+        sourceSha: BUILD_SHA,
       });
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/reserved for roll roles/);
@@ -825,8 +851,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "shared-sized",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
+      sourceSha: BUILD_SHA,
       sizingTier: "l",
     });
     expect(res.status).toBe(202);
@@ -845,8 +870,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "jack",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
+      sourceSha: BUILD_SHA,
       profile: "operator",
       ownerUid: "uid-jack",
     });
@@ -860,8 +884,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "jack",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
+      sourceSha: BUILD_SHA,
       gatewayClass: "isolated",
       ownerUid: "uid-jack",
     });
@@ -875,8 +898,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "jack",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
+      sourceSha: BUILD_SHA,
       gatewayClass: "isolated",
     });
     expect(res.status).toBe(400);
@@ -889,8 +911,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "shared-with-owner",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
+      sourceSha: BUILD_SHA,
       ownerUid: "uid-jack",
     });
     expect(res.status).toBe(400);
@@ -903,8 +924,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "ghost",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
+      sourceSha: BUILD_SHA,
       gatewayClass: "isolated",
       ownerUid: "uid-ghost",
     });
@@ -918,8 +938,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "invalid-tier",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
+      sourceSha: BUILD_SHA,
       sizingTier: "bogus-tier",
     });
     expect(res.status).toBe(400);
@@ -931,8 +950,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "shared-ready",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
+      sourceSha: BUILD_SHA,
     });
     expect(res.status).toBe(202);
     expect(provisionerCalls).toEqual([
@@ -953,8 +971,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "shared-nosecret",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
+      sourceSha: BUILD_SHA,
     });
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/auth-token/);
@@ -967,22 +984,10 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "shared-noaccount",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
+      sourceSha: BUILD_SHA,
     });
     expect(res.status).toBe(500);
     expect(provisionerCalls).toEqual([]);
-  });
-
-  it("rejects 400 when imageRepository is not the canonical Artifact Registry repo", async () => {
-    const app = buildApp();
-    const res = await request(app).post("/api/admin/gateways").send({
-      gatewayId: "shared-typo",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogeee/octogee-gateway",
-      imageTag: "abc1234",
-    });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/imageRepository/i);
   });
 
   it("returns 409 when the gatewayId already exists", async () => {
@@ -990,8 +995,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: "shared-existing",
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
+      sourceSha: BUILD_SHA,
     });
     expect(res.status).toBe(409);
   });
@@ -1272,9 +1276,7 @@ describe("POST /api/admin/gateways — body type guards", () => {
     const app = buildApp();
     const res = await request(app).post("/api/admin/gateways").send({
       gatewayId: 12345,
-      imageRepository:
-        "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-      imageTag: "abc1234",
+      sourceSha: BUILD_SHA,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/required/i);
@@ -1291,9 +1293,7 @@ describe("POST /api/admin/gateways — body type guards", () => {
     ]) {
       const res = await request(app).post("/api/admin/gateways").send({
         gatewayId,
-        imageRepository:
-          "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-        imageTag: "abc1234",
+        sourceSha: BUILD_SHA,
       });
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/gatewayId/i);

@@ -55,6 +55,10 @@ export declare class ReleaseDigestAliasError extends Error {
     readonly aliasOutcomes: ReleaseDigestAliasOutcome[];
     constructor(aliasOutcomes: ReleaseDigestAliasOutcome[], cause: unknown);
 }
+export declare class ReleaseDigestManifestNotFoundError extends Error {
+    readonly sourceSha: string;
+    constructor(sourceSha: string);
+}
 export interface CentralReleaseAuthority {
     resolveManifest: (sourceSha: string) => Promise<ReleaseDigestManifest>;
     aliasesFor: (manifest: ReleaseDigestManifest) => ReleaseDigestAlias[];

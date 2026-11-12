@@ -214,6 +214,14 @@ export class ReleaseDigestAliasError extends Error {
         this.name = "ReleaseDigestAliasError";
     }
 }
+export class ReleaseDigestManifestNotFoundError extends Error {
+    sourceSha;
+    constructor(sourceSha) {
+        super(`release digest manifest ${sourceSha} does not exist`);
+        this.sourceSha = sourceSha;
+        this.name = "ReleaseDigestManifestNotFoundError";
+    }
+}
 function assertSourceSha(value) {
     if (!SOURCE_SHA_PATTERN.test(value)) {
         throw new Error("release source SHA must be a full lowercase commit SHA");
@@ -421,7 +429,7 @@ export function createCentralReleaseAuthority(coordinates, deps = {}) {
         const token = await accessToken();
         const manifestDigest = await resolveTagDigest("release-digest-manifest", tag, token);
         if (!manifestDigest)
-            throw new Error(`release digest manifest ${tag} does not exist`);
+            throw new ReleaseDigestManifestNotFoundError(tag);
         return resolveManifestFromDigest(manifestDigest, token);
     }
     return {

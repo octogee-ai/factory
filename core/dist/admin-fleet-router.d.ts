@@ -5,6 +5,8 @@ import { type PlatformRuntimeConfig } from "@octogee/shared/types/platform-confi
 import { type AssignmentDoc } from "@octogee/shared/types/gateway-releases";
 import { type GatewayPodReplacementSummary } from "@octogee/shared/types/gateway-pod-replacements";
 import type { MigrationProgressRecord } from "@octogee/shared/types/glm";
+import { type GatewayArtifact } from "./gateway-live-release.js";
+import { type SharedGatewayAddedBy } from "@octogee/shared/types/shared-gateway-pool";
 import { type SizingTier } from "@octogee/shared/types/sizing";
 import { type GatewayPricingMode } from "@octogee/shared/types/cost-estimator";
 import { type UserAccounts, type UserSignInHosts } from "./admin-user-router.js";
@@ -61,6 +63,7 @@ export interface FleetRouterDeps {
     }) => Promise<unknown[]>;
     releaseEnvironment?: "test" | "prod" | null;
     releaseAuthority?: CentralReleaseAuthority;
+    platformArtifact?: GatewayArtifact;
     readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
     readGatewayPodDiagnosticsBatch?: (gatewayIds: readonly string[]) => Promise<Record<string, GatewayPodDiagnostics>>;
     requestNativeReturnSourceRecovery?: (input: {
@@ -114,7 +117,7 @@ interface FirestoreDocLike {
     id: string;
     data(): GlmDoc;
 }
-export declare const ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE = "shared pool rides the platform release; deploy the platform instead";
+export declare const ERR_SHARED_GATEWAY_NOT_ROLLED_IN_PLACE = "a shared gateway is not rolled in place; add a shared gateway on the new build, move its users to it, then retire this one";
 type AdminGatewayDesiredStatus = "running" | "paused" | "draining" | "retired";
 declare function projectLastError(raw: unknown): {
     slug?: string;
@@ -160,6 +163,7 @@ export declare function projectGatewaySummary(doc: FirestoreDocLike, glmDoc: Glm
     reservation: ReturnType<typeof projectGatewayReservation>;
     profile: GatewayProfile;
     gatewayClass: GatewayClass;
+    addedBy: SharedGatewayAddedBy | null;
     imageProfile: GatewayImageProfile;
     disposableRuntime: ReturnType<typeof projectDisposableRuntime>;
     podReplacements: GatewayPodReplacementSummary | null;

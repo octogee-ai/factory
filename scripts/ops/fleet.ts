@@ -194,12 +194,12 @@ const VERBS: readonly VerbHelp[] = [
   {
     verb: "gw add",
     summary: "Add a gateway through the Admin API.",
-    args: "--gateway-id=<id> --image-tag=<tag> [--image-repository=<repo>] [--gateway-class=<class>] [--apply]",
+    args: "--gateway-id=<id> [--sha=<full-main-sha>] [--gateway-class=<class>] [--apply]",
     description:
-      "Uses POST /api/admin/gateways so the operations journal matches the Admin UI. imageRepository defaults to the selected environment's canonical /octogee-gateway image. Dry-run by default; pass --apply to send the request.",
+      "Uses POST /api/admin/gateways so the operations journal matches the Admin UI. The gateway and gateway-edge images come from the named build's manifest; without --sha the gateway runs the build the platform is running. Dry-run by default; pass --apply to send the request.",
     examples: [
-      "fleet --env=test gw add --gateway-id=canary --image-tag=abc1234",
-      "fleet --env=test gw add --gateway-id=canary --image-tag=abc1234 --apply",
+      "fleet --env=test gw add --gateway-id=shared-canary",
+      "fleet --env=test gw add --gateway-id=shared-canary --sha=<full-main-sha> --apply",
     ],
     writes: true,
   },
@@ -442,8 +442,6 @@ const VALUE_FLAGS = new Set([
   "to",
   "gateway",
   "gateway-id",
-  "image-repository",
-  "image-tag",
   "profile",
   "gateway-class",
   "image-profile",
@@ -598,17 +596,6 @@ export function resolveFleetGatewayRestart(args: ParsedFleetArgs): FleetGatewayR
   };
 }
 
-function canonicalGatewayRepository(args: ParsedFleetArgs, command: string): string {
-  if (!args.env) throw new Error(`${command} requires --env=test|prod`);
-  const canonical =
-    `${deploymentEnvironmentSettings(args.env).artifactRegistryRepository}/octogee-gateway`;
-  const requested = stringFlag(args, "image-repository");
-  if (requested && requested !== canonical) {
-    throw new Error(`${command} requires the selected environment repository: ${canonical}`);
-  }
-  return canonical;
-}
-
 export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRequest {
   const action = args.positional[1];
   const idempotencyKey = stringFlag(args, "idempotency-key");
@@ -619,11 +606,15 @@ export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRe
   switch (action) {
     case "add": {
       const command = "gw add";
-      const body: Record<string, unknown> = {
-        gatewayId: requiredFlag(args, "gateway-id", command, "id"),
-        imageRepository: canonicalGatewayRepository(args, command),
-        imageTag: requiredFlag(args, "image-tag", command, "tag"),
-      };
+      if (args.flags["image-tag"] !== undefined || args.flags["image-repository"] !== undefined) {
+        throw new Error("gw add takes a build: name it with --sha; the images come from that build's manifest");
+      }
+      const body: Record<string, unknown> = { gatewayId: requiredFlag(args, "gateway-id", command, "id") };
+      const sourceSha = stringFlag(args, "sha");
+      if (sourceSha !== undefined) {
+        if (!/^[a-f0-9]{40}$/.test(sourceSha)) throw new Error("gw add takes --sha=<full-lowercase-main-sha>");
+        body.sourceSha = sourceSha;
+      }
       const optionalFields: ReadonlyArray<readonly [string, string]> = [
         ["profile", "profile"],
         ["gateway-class", "gatewayClass"],

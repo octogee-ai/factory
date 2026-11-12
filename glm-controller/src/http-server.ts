@@ -1,4 +1,5 @@
 
+import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 
 import express, { Router, type Express, type Request, type Response, type NextFunction } from "express";
 import type { Server } from "node:http";
@@ -91,6 +92,7 @@ export interface HttpServerDeps {
   }) => Promise<unknown[]>;
   releaseEnvironment?: "test" | "prod" | null;
   releaseAuthority?: CentralReleaseAuthority;
+  platformArtifact?: GatewayArtifact;
   readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
   readGatewayPodDiagnosticsBatch?: (
     gatewayIds: readonly string[],
@@ -342,6 +344,7 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     listGatewayBuilds: deps.listGatewayBuilds,
     releaseEnvironment: deps.releaseEnvironment,
     releaseAuthority: deps.releaseAuthority,
+    platformArtifact: deps.platformArtifact,
     readGatewayPodDiagnostics: deps.readGatewayPodDiagnostics,
     readGatewayPodDiagnosticsBatch: deps.readGatewayPodDiagnosticsBatch,
     requestNativeReturnSourceRecovery: deps.requestNativeReturnSourceRecovery,

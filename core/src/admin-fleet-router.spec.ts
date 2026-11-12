@@ -740,6 +740,22 @@ describe("the fleet command line contract", () => {
     expect(ids(await request(app).get("/gateways?all=true").expect(200)).sort()).toEqual(["gone", "shared-a", "still-reporting"]);
   });
 
+  it("says who added each shared gateway on the gateway listing", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { sharedGatewayIds: ["shared-a", "shared-ops"] },
+      users: {},
+      gateways: {
+        "shared-a": durableGatewayRoot("shared-a", { liveRelease: 1, createdBy: "glm-controller-shared-pool-scaler" }),
+        "shared-ops": durableGatewayRoot("shared-ops", { liveRelease: 1, createdBy: "operator-uid" }),
+      },
+    });
+
+    const res = await request(app).get("/gateways").expect(200);
+
+    expect(Object.fromEntries(res.body.gateways.map((gateway: { gatewayId: string; addedBy: unknown }) => [gateway.gatewayId, gateway.addedBy])))
+      .toEqual({ "shared-a": "automation", "shared-ops": "operator" });
+  });
+
   it("names users by id and name on the placement directory", async () => {
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "shared-a" },
@@ -769,8 +785,6 @@ describe("the fleet command line contract", () => {
     const { app } = mkAdminFleetRouteApp({ config: { defaultGatewayId: "shared-a" }, users: {} });
     const res = await request(app).post("/gateways").send({
       gatewayId: "new-gateway",
-      imageRepository: "registry.example/gateway",
-      imageTag: "abc1234",
       gatewayClass: "builder",
     }).expect(400);
     expect(res.body.error).toContain("shared, isolated");

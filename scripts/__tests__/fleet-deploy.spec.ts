@@ -22,7 +22,7 @@ function gateway(id: string, patch: Partial<FleetGateway> = {}): FleetGateway {
   const shared = id.startsWith("shared-");
   const image = shared ? payload : payload.profileImages!.builder;
   return {
-    gatewayId: id, gatewayClass: shared ? "shared" : "builder", imageProfile: shared ? "standard" : "builder",
+    gatewayId: id, gatewayClass: shared ? "shared" : "builder", imageProfile: shared ? "standard" : "builder", addedBy: shared ? "automation" : null,
     desiredStatus: "running", latestRelease: 2, desiredRelease: 2, liveRelease: 2,
     latestPayload: payload, desiredPayload: payload, assignments: [], operations: [],
     runtime: { release: 2, lifecycle: "serving", status: "ready", heartbeatAt: 100, mountedCustomers: [], migratingIn: [] },
@@ -143,6 +143,24 @@ describe("complete TEST fleet deployment", () => {
     expect(h.readSnapshot).toHaveBeenCalledTimes(4);
     expect(h.deploy).not.toHaveBeenCalled();
     expect(report.targets.find((target) => target.gatewayId === "shared-old")?.status).toBe("shared-retired");
+  });
+
+  it("reports shared gateways an operator added with their build and does not wait on them", async () => {
+    const h = harness([snapshot(
+      gateway("shared-0"),
+      gateway("shared-ops1", { addedBy: "operator", latestPayload: old, desiredPayload: old }),
+      gateway("shared-ops2", { addedBy: "operator", desiredStatus: "paused", latestPayload: old, desiredPayload: old, runtime: null, live: null }),
+    )]);
+
+    const report = await h.run();
+
+    expect(report.outcome).toBe("converged");
+    expect(h.deploy).not.toHaveBeenCalled();
+    expect(report.targets.filter((target) => target.addedBy === "operator")).toEqual([
+      expect.objectContaining({ gatewayId: "shared-ops1", status: "operator-reported", build: old.imageTag, reasons: [] }),
+      expect.objectContaining({ gatewayId: "shared-ops2", status: "operator-reported", build: old.imageTag, reasons: [] }),
+    ]);
+    expect(formatFleetSummary(report)).toContain(`| shared-ops1 | operator-reported |`);
   });
 
   it("requires fresh live observation and heartbeat, not desired config alone", async () => {

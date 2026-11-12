@@ -3,6 +3,7 @@ import express from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import { FieldValue } from "firebase-admin/firestore";
 import { GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
+import type { ReleasePayload } from "@octogee/shared/types/gateway-releases";
 
 import { addAdminFleetRoutes } from "../../admin-fleet-router.js";
 import type { CentralReleaseAuthority } from "../../artifact-registry.js";
@@ -37,6 +38,19 @@ function applyDottedPatch(target: Record<string, unknown>, patch: Record<string,
     else cursor[key] = value;
   }
 }
+
+const PLATFORM_GATEWAY_REPOSITORY = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
+export const PLATFORM_BUILD: ReleasePayload = {
+  imageRepository: PLATFORM_GATEWAY_REPOSITORY,
+  imageTag: `abc1234-oc2026.8.1@sha256:${"1".repeat(64)}`,
+  profileImages: {
+    builder: { imageRepository: `${PLATFORM_GATEWAY_REPOSITORY}-builder`, imageTag: `abc1234-oc2026.8.1@sha256:${"2".repeat(64)}` },
+  },
+  gatewayEdgeImage: {
+    imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
+    imageTag: `abc1234-oc2026.8.1@sha256:${"3".repeat(64)}`,
+  },
+};
 
 export interface TestRouterOptions {
   addProductRoutes?: (app: express.Express, deps: { db: Firestore; store: PlatformStateStore }) => void;
@@ -274,6 +288,7 @@ export function mkApp(
     listGatewayBuilds: vi.fn(async () => []),
     releaseEnvironment: opts?.releaseEnvironment ?? "test",
     releaseAuthority: opts?.releaseAuthority,
+    platformArtifact: PLATFORM_BUILD,
     suspendAuthUser: vi.fn(async () => undefined),
     revokeConnectorGrantsForUser: vi.fn(async () => undefined),
   });

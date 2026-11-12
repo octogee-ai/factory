@@ -194,6 +194,20 @@ describe("TEST fleet snapshot", () => {
     })]);
   });
 
+  it("says who added each shared gateway and leaves isolated gateways unlabelled", async () => {
+    const shared = { configSchemaVersion: 1, gatewayClass: "shared", imageProfile: "standard", ownerUid: null, builderSlug: null, desiredStatus: "running" };
+    const { store } = fixture({
+      "gateways/shared-1": gatewayRoot("shared-1", { ...shared, createdBy: "glm-controller-shared-pool-scaler" }),
+      "gateways/shared-ops": gatewayRoot("shared-ops", { ...shared, createdBy: "operator-uid" }),
+    });
+
+    const snapshot = await readFleetSnapshot(store, async () => ({ items: [] }));
+
+    expect(Object.fromEntries(snapshot.gateways.map((gateway) => [gateway.gatewayId, gateway.addedBy]))).toEqual({
+      "b-paused": null, "shared-1": "automation", "shared-ops": "operator",
+    });
+  });
+
   it("reports a missing release payload, runtime record and pod as absent", async () => {
     const { store } = fixture();
     const snapshot = await readFleetSnapshot(store, async () => ({ items: [] }));

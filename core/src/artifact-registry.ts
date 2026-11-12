@@ -333,6 +333,13 @@ export class ReleaseDigestAliasError extends Error {
   }
 }
 
+export class ReleaseDigestManifestNotFoundError extends Error {
+  constructor(readonly sourceSha: string) {
+    super(`release digest manifest ${sourceSha} does not exist`);
+    this.name = "ReleaseDigestManifestNotFoundError";
+  }
+}
+
 export interface CentralReleaseAuthority {
   resolveManifest: (sourceSha: string) => Promise<ReleaseDigestManifest>;
   aliasesFor: (manifest: ReleaseDigestManifest) => ReleaseDigestAlias[];
@@ -626,7 +633,7 @@ export function createCentralReleaseAuthority(
   async function resolveManifestFromTag(tag: string): Promise<ReleaseDigestManifest> {
     const token = await accessToken();
     const manifestDigest = await resolveTagDigest("release-digest-manifest", tag, token);
-    if (!manifestDigest) throw new Error(`release digest manifest ${tag} does not exist`);
+    if (!manifestDigest) throw new ReleaseDigestManifestNotFoundError(tag);
     return resolveManifestFromDigest(manifestDigest, token);
   }
 

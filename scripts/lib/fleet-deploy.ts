@@ -1,5 +1,5 @@
 import { dualReadIsolatedProfileImage, isReleasePayload, releasePayloadHash, type PlatformReleaseRecord, type ReleasePayload } from "@octogee/shared/types/gateway-releases";
-import type { SharedPoolReplacement } from "@octogee/shared/types/shared-gateway-pool";
+import type { SharedGatewayAddedBy, SharedPoolReplacement } from "@octogee/shared/types/shared-gateway-pool";
 
 export interface FleetContainer {
   name: string;
@@ -17,6 +17,7 @@ export interface FleetGateway {
   gatewayId: string;
   gatewayClass: "shared" | "builder";
   imageProfile: "standard" | "builder";
+  addedBy: SharedGatewayAddedBy | null;
   desiredStatus: "running" | "paused" | "draining" | "retired";
   latestRelease: number;
   desiredRelease: number;
@@ -47,10 +48,12 @@ export interface FleetSnapshot {
 export interface FleetTargetResult {
   gatewayId: string;
   gatewayClass: "shared" | "builder";
+  addedBy: SharedGatewayAddedBy | null;
   desiredStatus: FleetGateway["desiredStatus"];
   desiredRelease: number;
   liveRelease: number | null;
-  status: "live" | "paused-desired-only" | "retired-skipped" | "shared-retired" | "waiting" | "failed";
+  status: "live" | "paused-desired-only" | "retired-skipped" | "shared-retired" | "operator-reported" | "waiting" | "failed";
+  build?: string | null;
   reasons: string[];
   expectedImages: Record<string, string>;
   observed: FleetLiveObservation | null;
@@ -181,17 +184,27 @@ function retiredSharedProblems(gateway: FleetGateway, timing: ObservationTiming)
   return reasons;
 }
 
+function isRunningOperatorSharedGateway(gateway: FleetGateway): boolean {
+  return gateway.gatewayClass === "shared" && gateway.addedBy === "operator" && gateway.desiredStatus !== "retired";
+}
+
+function retiredAssessment(result: FleetTargetResult, gateway: FleetGateway, timing: ObservationTiming): FleetTargetResult {
+  const shared = gateway.gatewayClass === "shared";
+  const reasons = shared ? retiredSharedProblems(gateway, timing) : [];
+  if (reasons.length > 0) return { ...result, reasons };
+  return { ...result, status: shared ? "shared-retired" : "retired-skipped" };
+}
+
 function targetAssessment(gateway: FleetGateway, options: FleetDeployOptions, timing: ObservationTiming): FleetTargetResult {
   const result: FleetTargetResult = {
-    gatewayId: gateway.gatewayId, gatewayClass: gateway.gatewayClass, desiredStatus: gateway.desiredStatus,
+    gatewayId: gateway.gatewayId, gatewayClass: gateway.gatewayClass, addedBy: gateway.addedBy, desiredStatus: gateway.desiredStatus,
     desiredRelease: gateway.desiredRelease, liveRelease: gateway.liveRelease, status: "waiting", reasons: [],
     expectedImages: expectedFleetImages(gateway, options.payload), observed: gateway.live,
   };
-  if (gateway.desiredStatus === "retired") {
-    result.reasons = gateway.gatewayClass === "shared" ? retiredSharedProblems(gateway, timing) : [];
-    if (result.reasons.length === 0) result.status = gateway.gatewayClass === "shared" ? "shared-retired" : "retired-skipped";
-    return result;
+  if (isRunningOperatorSharedGateway(gateway)) {
+    return { ...result, status: "operator-reported", build: gateway.desiredPayload?.imageTag ?? null };
   }
+  if (gateway.desiredStatus === "retired") return retiredAssessment(result, gateway, timing);
   const failed = gateway.operations.find((op) => op.release === gateway.latestRelease && op.status === "failed" && matchesGatewayPayload(gateway, gateway.latestPayload, options));
   if (failed) return { ...result, status: "failed", reasons: [`rollout ${failed.id} failed: ${failed.error ?? "unknown error"}`] };
   if (!matchesGatewayPayload(gateway, gateway.desiredPayload, options)) result.reasons.push("desired image family differs from requested build");
@@ -316,6 +329,7 @@ export function formatFleetSummary(report: FleetDeployReport): string {
     "| Gateway | Status | Desired release | Live release | Operation |", "| --- | --- | --- | --- | --- |",
     ...rows.map((row) => `| ${row} |`), "",
     `Showing ${targets.length} of ${report.targets.length} targets. Full digest observations and failure reasons are in the job log.`,
-    "Paused users report desired release only; their VMs were not started.", "",
+    "Paused users report desired release only; their VMs were not started.",
+    "Shared gateways an operator added report their build and are not waited on; an operator rolls them.", "",
   ].join("\n");
 }
