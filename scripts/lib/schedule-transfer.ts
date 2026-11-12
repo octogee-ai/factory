@@ -9,6 +9,7 @@ import type {
 } from "../../shared/types/fleet-controller.js";
 import type { ScheduleTransferCronMethod } from "./gateway-rpc.js";
 import { schedulerHandoffAgentIds } from "./agent-roster-deletion.js";
+import { isRetryableSchedulerFailure, SchedulerRefusal } from "./scheduler-failure.js";
 
 export type GatewayCall = (method: ScheduleTransferCronMethod, params: Record<string, unknown>) => Promise<unknown>;
 
@@ -139,7 +140,9 @@ export async function restoreSchedules(
       else result.existing++;
     } catch (error) {
       log(`🔴 [schedule-transfer] cron.add "${name}" failed: ${errorMessage(error)}`);
-      result.failed.push({ name, error: errorMessage(error) });
+      result.failed.push({
+        name, agentId: record.agentId, sourceJobId: record.sourceJobId, error: errorMessage(error), retryable: isRetryableSchedulerFailure(error),
+      });
     }
   }
   return result;
@@ -152,7 +155,7 @@ async function restoreRecord(
   record: ScheduleRecord,
 ): Promise<boolean> {
   if (!agentIds.has(record.agentId)) {
-    throw new Error(`agent ${record.agentId} is not this user's agent on this gateway`);
+    throw new SchedulerRefusal(`agent ${record.agentId} is not this user's agent on this gateway`);
   }
   const declarationKey = transferKey(record);
   const key = identityKey(record.agentId, declarationKey);
@@ -162,7 +165,7 @@ async function restoreRecord(
     return false;
   }
   const reason = unmovableReason({ ...record.job, declarationKey });
-  if (reason) throw new Error(reason);
+  if (reason) throw new SchedulerRefusal(reason);
   const job: CronJob = { ...cronAddJob(record.job, record.agentId), declarationKey };
   const hasScratch = typeof record.scratch === "string";
   const response = await call("cron.add", hasScratch ? { ...job, enabled: false } : job);
@@ -170,7 +173,7 @@ async function restoreRecord(
   if (!isRecord(restored) || typeof restored.id !== "string") throw new Error("cron.add returned no job id");
   if (hasScratch) {
     const written = await call("cron.scratch.set", { id: restored.id, content: record.scratch, expectedRevision: 0 });
-    if (!isRecord(written) || written.ok !== true) throw new Error("cron.scratch.set did not restore scratch");
+    if (!isRecord(written) || written.ok !== true) throw new SchedulerRefusal("cron.scratch.set did not restore scratch");
     if (job.enabled !== false) {
       await call("cron.update", { id: restored.id, patch: { enabled: true } });
       restored.enabled = true;
@@ -189,7 +192,7 @@ async function assertExistingScratchComplete(call: GatewayCall, existing: CronJo
   if (typeof record.scratch !== "string" || existing.enabled !== false) return;
   const state = await call("cron.scratch.get", { id: existing.id });
   if (record.job.enabled !== false || !isRecord(state) || !isRecord(state.scratch)) {
-    throw new Error("existing job is disabled with an incomplete scratch restore; inspect it before enabling");
+    throw new SchedulerRefusal("existing job is disabled with an incomplete scratch restore; inspect it before enabling");
   }
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ScheduleRecord } from "../../shared/types/fleet-controller.js";
+import { OpenclawWireError } from "../lib/gateway-rpc.js";
 import { createScheduleTransfer, removeSchedules, restoreSchedules, snapshotSchedules } from "../lib/schedule-transfer.js";
 
 type Job = Record<string, unknown>;
@@ -70,7 +71,7 @@ function fakeGateway(initial: Job[], options: {
     }
     if (method === "cron.remove") {
       const id = params.id as string;
-      if (options.failRemove?.(id)) throw new Error(`remove ${id} refused`);
+      if (options.failRemove?.(id)) throw new OpenclawWireError("rpc-error", `remove ${id} refused`);
       const index = store.findIndex((job) => job.id === id);
       if (index === -1) return { ok: true, removed: false };
       scratch.delete(id);
@@ -78,7 +79,7 @@ function fakeGateway(initial: Job[], options: {
       return { ok: true, removed: true };
     }
     if (method === "cron.add") {
-      if (options.failAdd?.(params)) throw new Error(`add ${String(params.name)} refused`);
+      if (options.failAdd?.(params)) throw new OpenclawWireError("rpc-error", `add ${String(params.name)} refused`);
       const existing = store.find(job => job.agentId === params.agentId && job.declarationKey === params.declarationKey);
       if (existing) return { created: false, job: structuredClone(existing) };
       const job = { ...params, id: `new-${nextId++}`, effectiveAgentId: params.agentId, state: {} };
@@ -330,15 +331,27 @@ describe("schedule restore", () => {
     expect(added).toEqual({ ...record.job, declarationKey: expect.stringMatching(/^octogee:transfer:/) });
   });
 
-  it("reports scratch failure and leaves that job disabled while restoring the rest", async () => {
+  it("reports scratch failure for good and leaves that job disabled while restoring the rest", async () => {
     const records = await snapshotOf([listedJob("a1"), listedJob("a2")]);
     records[0].scratch = "checkpoint";
     const target = fakeGateway([], { failScratch: "set" });
-    expect(await restoreSchedules(target.call, ALICE_AGENTS, records, vi.fn())).toMatchObject({ created: 1, failed: [{ name: "Brief a1" }] });
+    expect(await restoreSchedules(target.call, ALICE_AGENTS, records, vi.fn())).toMatchObject({
+      created: 1, failed: [{ name: "Brief a1", error: "cron.scratch.set did not restore scratch", retryable: false }],
+    });
     expect(target.store.map(job => job.enabled)).toEqual([false, true]);
     expect(await restoreSchedules(target.call, ALICE_AGENTS, records, vi.fn())).toMatchObject({
-      created: 0, existing: 1, failed: [{ name: "Brief a1" }],
+      created: 0, existing: 1, failed: [{ name: "Brief a1", error: expect.stringContaining("incomplete scratch restore"), retryable: false }],
     });
+  });
+
+  it("refuses for good a record whose job cannot move here", async () => {
+    const [record] = await snapshotOf([listedJob("a1")]);
+    const target = fakeGateway([]);
+
+    const result = await restoreSchedules(target.call, ALICE_AGENTS, [{ ...record, job: { ...record.job, payload: { kind: "script" } } }], vi.fn());
+
+    expect(result.failed).toEqual([expect.objectContaining({ name: "Brief a1", error: "host exec payload", retryable: false })]);
+    expect(target.store).toEqual([]);
   });
 
   it("keeps disabled jobs disabled after restoring scratch", async () => {
@@ -382,19 +395,57 @@ describe("schedule restore", () => {
     await expect(restoreSchedules(target.call, ALICE_AGENTS, records, log)).resolves.toEqual({
       created: 2,
       existing: 0,
-      failed: [{ name: "Brief a2", error: "add Brief a2 refused" }],
+      failed: [{ name: "Brief a2", agentId: records[1].agentId, sourceJobId: "a2", error: "add Brief a2 refused", retryable: false }],
     });
     expect(log).toHaveBeenCalledWith(expect.stringContaining("add Brief a2 refused"));
   });
 
-  it("refuses a record for an agent the user does not own here", async () => {
+  it("names the agent and source job of a failed record whose name another agent's schedule shares", async () => {
+    const records = await snapshotOf([
+      listedJob("a1", { name: "Daily brief" }),
+      listedJob("p1", { name: "Daily brief", agentId: ALICE_PROJECT, effectiveAgentId: ALICE_PROJECT }),
+    ]);
+    const target = fakeGateway([], { failAdd: (job) => job.agentId === ALICE_PROJECT });
+
+    await expect(restoreSchedules(target.call, ALICE_AGENTS, records, vi.fn())).resolves.toEqual({
+      created: 1,
+      existing: 0,
+      failed: [{ name: "Daily brief", agentId: ALICE_PROJECT, sourceJobId: "p1", error: "add Daily brief refused", retryable: false }],
+    });
+  });
+
+  it("marks a record retryable unless the gateway refused it outright", async () => {
+    const records = await snapshotOf(["a1", "a2", "a3", "a4", "a5", "a6"].map(id => listedJob(id)));
+    const target = fakeGateway([]);
+    const failures: Record<string, Error> = {
+      "Brief a1": new OpenclawWireError("timeout", "cron.add response timed out after 30000ms"),
+      "Brief a2": new OpenclawWireError("connect-failed", "socket closed before cron.add response"),
+      "Brief a3": new OpenclawWireError("rpc-error",
+        'invalid cron.add params: Auth profile "platform-openai:default" is temporarily unavailable for platform-openai/gpt-6.1-terra.'),
+      "Brief a4": new Error("OpenClaw workspace identities are not initialized for this boot"),
+      "Brief a5": new OpenclawWireError("rpc-error", "invalid cron.add params: schedule.expr is invalid"),
+      "Brief a6": new TypeError("Cannot read properties of undefined (reading 'id')"),
+    };
+    const call = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      const failure = method === "cron.add" ? failures[String(params.name)] : undefined;
+      if (failure) throw failure;
+      return target.call(method, params);
+    });
+
+    const result = await restoreSchedules(call, ALICE_AGENTS, records, vi.fn());
+
+    expect(result.failed.map(({ sourceJobId, retryable }) => [sourceJobId, retryable]))
+      .toEqual([["a1", true], ["a2", true], ["a3", true], ["a4", true], ["a5", false], ["a6", true]]);
+  });
+
+  it("refuses a record for an agent the user does not own here, for good", async () => {
     const [record] = await snapshotOf([listedJob("a1")]);
     const forged = { ...record, agentId: "octogee-bob-coach", job: { ...record.job, agentId: "octogee-bob-coach" } };
     const target = fakeGateway([]);
 
     const result = await restoreSchedules(target.call, ALICE_AGENTS, [forged], vi.fn());
 
-    expect(result).toMatchObject({ created: 0, existing: 0, failed: [{ name: "Brief a1" }] });
+    expect(result).toMatchObject({ created: 0, existing: 0, failed: [{ name: "Brief a1", retryable: false }] });
     expect(target.store).toEqual([]);
   });
 

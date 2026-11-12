@@ -134,12 +134,14 @@ export interface MigrationRpcErrorOptions {
   details?: unknown;
   status?: number;
   code?: string;
+  retryable?: boolean;
 }
 
 export class MigrationRpcError extends Error {
   readonly details?: unknown;
   readonly status?: number;
   readonly code?: string;
+  readonly retryable: boolean | undefined;
 
   constructor(message: string, options: MigrationRpcErrorOptions = {}) {
     super(message);
@@ -147,6 +149,7 @@ export class MigrationRpcError extends Error {
     this.details = options.details;
     this.status = options.status;
     this.code = options.code;
+    this.retryable = options.retryable;
   }
 }
 
@@ -447,6 +450,7 @@ async function migrationRpcError(path: string, response: Response): Promise<Migr
     details = {};
   }
   const options: MigrationRpcErrorOptions = { status: response.status, details };
+  if (typeof details.retryable === "boolean") options.retryable = details.retryable;
   if (typeof details.code === "string") options.code = details.code;
   return new MigrationRpcError(`${path}: ${response.status} ${text}`, options);
 }

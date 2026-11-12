@@ -1,6 +1,6 @@
 import { withLogContext } from "@octogee/shared/server/service-logger";
 import { advancePhase, nextMigrationStep, rollbackPlan, } from "./fleet-migration.js";
-import { MigrationDrainPendingError } from "./fleet-migration-client.js";
+import { MigrationDrainPendingError, MigrationRpcError } from "./fleet-migration-client.js";
 const QUIESCE_SOURCE = "quiesce-source";
 const WAIT_FOR_ACTIVE_WORK = "wait-for-active-work";
 const RELEASE_ATTEMPTS = 3;
@@ -10,6 +10,15 @@ const TARGET_SCHEDULER_READY_POLL_MS = 5_000;
 const TARGET_SCHEDULER_NOT_READY = /workspace identities are not initialized for this boot/;
 export function isTargetSchedulerNotReady(error) {
     return TARGET_SCHEDULER_NOT_READY.test(error instanceof Error ? error.message : String(error));
+}
+const RETRYABLE_CLIENT_STATUSES = new Set([408, 409, 425, 429]);
+export function isPermanentSchedulerRefusal(error) {
+    if (!(error instanceof MigrationRpcError))
+        return false;
+    if (error.retryable !== undefined)
+        return !error.retryable;
+    const status = error.status ?? 0;
+    return status >= 400 && status < 500 && !RETRYABLE_CLIENT_STATUSES.has(status);
 }
 function errorText(error) {
     return error instanceof Error ? error.message : String(error);
@@ -67,31 +76,60 @@ async function removeSnapshottedSchedules(deps, scope, records) {
         deps.log(`[migration-runner] ⚠ could not remove ${records.length} snapshotted schedule(s) from ${sourceGatewayId} migrationId=${migrationId} slug=${slug}: ${errorText(error)}; they stay disabled there`);
     }
 }
+function scheduleName(record) {
+    return typeof record.job.name === "string" ? record.job.name : record.sourceJobId;
+}
+function attributeRestoreFailures(records, failed) {
+    return failed.map(({ name, agentId, sourceJobId, error, retryable }) => {
+        const record = records.find((candidate) => candidate.agentId === agentId && candidate.sourceJobId === sourceJobId);
+        return { name, agentId: record?.agentId ?? null, sourceJobId: record?.sourceJobId ?? null, error, transient: retryable };
+    });
+}
+function storedRestoreFailure({ name, agentId, sourceJobId, error }) {
+    return { name, ...(agentId === null ? {} : { agentId }), ...(sourceJobId === null ? {} : { sourceJobId }), error };
+}
+function logRestoreFailures(deps, input, failures) {
+    for (const failure of failures) {
+        deps.log(`[migration-runner] ⚠ schedule "${failure.name}" of ${failure.agentId ?? "an unknown agent"} was not restored on ${input.gatewayId} ` +
+            `migrationId=${input.migrationId} slug=${input.slug}: ${failure.error}`);
+    }
+}
 export async function restoreScheduleTransfer(deps, input) {
     const { migrationId, slug, gatewayId } = input;
+    const doc = input.doc ?? await deps.readScheduleTransfer(migrationId);
+    if (!doc) {
+        deps.log(`[migration-runner] ⚠ no schedule transfer record migrationId=${migrationId} slug=${slug} to restore on ${gatewayId}`);
+        return [];
+    }
+    if (doc.restoredTo !== undefined)
+        return [];
     let restore;
+    let failures;
     try {
-        const doc = input.doc ?? await deps.readScheduleTransfer(migrationId);
-        if (!doc || doc.restoredTo !== undefined)
-            return;
         const result = await deps.client.schedules({ migrationId, slug, gatewayId, op: "restore", records: doc.records });
-        const failed = result.failed.map((failure) => ` ${failure.name} (${failure.error})`).join(",");
         deps.log(`[migration-runner] schedules restored on ${gatewayId} migrationId=${migrationId} slug=${slug}: ` +
-            `${result.created} created, ${result.existing} existing, ${result.failed.length} failed${failed}`);
+            `${result.created} created, ${result.existing} existing, ${result.failed.length} failed`);
+        failures = attributeRestoreFailures(doc.records, result.failed);
         const at = (deps.now ?? Date.now)();
-        restore = { restoreAttemptedTo: gatewayId, restoreAttemptedAt: at, restoreFailures: result.failed,
-            ...(result.failed.length === 0 ? { restoredTo: gatewayId, restoredAt: at } : {}) };
+        restore = { restoreAttemptedTo: gatewayId, restoreAttemptedAt: at, restoreFailures: failures.map(storedRestoreFailure),
+            ...(failures.length === 0 ? { restoredTo: gatewayId, restoredAt: at } : {}) };
     }
     catch (error) {
         deps.log(`[migration-runner] ⚠ schedule restore on ${gatewayId} failed migrationId=${migrationId} slug=${slug}: ${errorText(error)}`);
-        return;
+        const cause = { error: errorText(error), transient: !isPermanentSchedulerRefusal(error) };
+        failures = doc.records.length > 0
+            ? doc.records.map((record) => ({ name: scheduleName(record), agentId: record.agentId, sourceJobId: record.sourceJobId, ...cause }))
+            : [{ name: `schedule transfer ${migrationId}`, agentId: null, sourceJobId: null, ...cause }];
+        restore = { restoreAttemptedTo: gatewayId, restoreAttemptedAt: (deps.now ?? Date.now)(), restoreFailures: failures.map(storedRestoreFailure) };
     }
+    logRestoreFailures(deps, input, failures);
     try {
         await deps.recordScheduleRestore(migrationId, restore);
     }
     catch (error) {
         deps.log(`[migration-runner] ⚠ could not record the schedule restore on ${gatewayId} migrationId=${migrationId} slug=${slug}: ${errorText(error)}`);
     }
+    return failures;
 }
 async function convergeTargetSystemConfig(input) {
     const { deps } = input;

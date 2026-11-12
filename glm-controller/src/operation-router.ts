@@ -11,6 +11,7 @@ export interface OperationResult {
   success: boolean;
   error?: string;
   rolledBack?: boolean;
+  failedAfterCutover?: boolean;
   output?: Record<string, unknown>;
   scrubInputOnSuccess?: boolean;
   retryAfterMs?: number;

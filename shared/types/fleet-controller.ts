@@ -494,7 +494,7 @@ export interface ScheduleRestoreResult {
   op: "restore";
   created: number;
   existing: number;
-  failed: Array<{ name: string; error: string }>;
+  failed: Array<{ name: string; agentId: string; sourceJobId: string; error: string; retryable: boolean }>;
 }
 
 // users/{uid}/scheduleTransfers/{migrationId}
@@ -512,5 +512,12 @@ export interface ScheduleTransferDoc {
   restoreAttemptedAt?: number;
   restoredTo?: string;
   restoredAt?: number;
-  restoreFailures?: Array<{ name: string; error: string }>;
+  restoreFailures?: ScheduleRestoreFailureRecord[];
+}
+
+export interface ScheduleRestoreFailureRecord {
+  name: string;
+  agentId?: string;
+  sourceJobId?: string;
+  error: string;
 }

@@ -4,12 +4,14 @@ export class MigrationRpcError extends Error {
     details;
     status;
     code;
+    retryable;
     constructor(message, options = {}) {
         super(message);
         this.name = "MigrationRpcError";
         this.details = options.details;
         this.status = options.status;
         this.code = options.code;
+        this.retryable = options.retryable;
     }
 }
 export class MigrationDrainPendingError extends Error {
@@ -247,6 +249,8 @@ async function migrationRpcError(path, response) {
         details = {};
     }
     const options = { status: response.status, details };
+    if (typeof details.retryable === "boolean")
+        options.retryable = details.retryable;
     if (typeof details.code === "string")
         options.code = details.code;
     return new MigrationRpcError(`${path}: ${response.status} ${text}`, options);

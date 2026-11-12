@@ -396,6 +396,21 @@ describe("MigrationClient verification errors", () => {
     await expect(client.verifyTarget({ migrationId: "m1", gatewayId: "gw-green", slug: "alice" }))
       .rejects.toMatchObject({ status: 409, details });
   });
+
+  it.each([
+    [{ error: "scheduler migration failed", message: "socket closed before cron.migration response", retryable: true }, true],
+    [{ error: "scheduler migration failed", message: "Cron migration requires an explicit owner", retryable: false }, false],
+    [{ error: "scheduler migration failed", message: "socket closed before cron.migration response" }, undefined],
+    [{ error: "scheduler migration failed", message: "socket closed before cron.migration response", retryable: "yes" }, undefined],
+  ])("carries the gateway's verdict on whether a refused request may yet succeed, when it gives one: %o", async (reply, retryable) => {
+    const { fakeFetch } = captureFetch(() => new Response(JSON.stringify(reply), { status: 500 }));
+    const client = createMigrationClient({
+      transferState: transferNotUnderTest, privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://fleet.example.com", fetch: fakeFetch,
+    });
+    await expect(client.scheduler({ migrationId: "m1", gatewayId: "gw-green", slug: "alice", phase: "activate" }))
+      .rejects.toMatchObject({ name: "MigrationRpcError", status: 500, retryable });
+  });
 });
 
 describe("MigrationClient.restoreTarget", () => {

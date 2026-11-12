@@ -1,6 +1,7 @@
 import type { SchedulerMigrationRequest, SchedulerMigrationResult } from "@octogee/shared/types/fleet-controller";
 import { schedulerHandoffAgentIds } from "./agent-roster-deletion.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
+import { SchedulerRefusal } from "./scheduler-failure.js";
 
 export async function setUserChannelsRunning(
   rpc: Pick<GatewayRpcClient, "configGet" | "channelsStop" | "channelsStart">,
@@ -27,6 +28,6 @@ export async function migrateUserScheduler(
   if (request.phase !== "hold" && resolveAgentScope !== true) return rpc.schedulerMigration(native);
   const { config } = await rpc.configGet();
   const agentIds = schedulerHandoffAgentIds(config, slug, localAgentIds, resolveAgentScope === true || request.retainNonportable === true);
-  if (agentIds.length === 0) throw new Error(`Cannot ${request.phase} scheduler for ${slug}: no user agents`);
+  if (agentIds.length === 0) throw new SchedulerRefusal(`Cannot ${request.phase} scheduler for ${slug}: no user agents`);
   return rpc.schedulerMigration({ ...native, agentIds });
 }

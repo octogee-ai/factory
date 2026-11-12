@@ -143,6 +143,7 @@ import {
   SAFE_DEFAULT_AGENT_PORTABLE_STATE_PATHS,
 } from "./openclaw-config-users.js";
 import { OpenclawWireError } from "./gateway-rpc.js";
+import { isRetryableSchedulerFailure, SchedulerRefusal } from "./scheduler-failure.js";
 import type { SurgeOpenClawProcessGateState } from "./surge-openclaw-process-gate.js";
 import { pendingCloneAppliedFingerprint } from "./pending-clone-fingerprint.js";
 import { userClaimSlug } from "@octogee/shared/server/user-claim";
@@ -597,7 +598,7 @@ export function createSchedulerMigrationHandler(deps: MigrationHandlerDeps): Req
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`[migration-http] scheduler ${body.phase} failed slug=${body.slug}: ${message}`);
-      res.status(500).json({ error: "scheduler migration failed", message });
+      res.status(500).json({ error: "scheduler migration failed", message, retryable: isRetryableSchedulerFailure(error) });
     }
   });
 }
@@ -623,12 +624,12 @@ export function createScheduleTransferHandler(deps: MigrationHandlerDeps): Reque
       return;
     }
     try {
-      if (!deps.scheduleTransfer) throw new Error("schedule transfer is not configured");
+      if (!deps.scheduleTransfer) throw new SchedulerRefusal("schedule transfer is not configured");
       res.status(200).json(await deps.scheduleTransfer(body));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`[migration-http] schedule ${body.op} failed slug=${body.slug}: ${message}`, { status: "failed" });
-      res.status(500).json({ error: "schedule transfer failed", message });
+      res.status(500).json({ error: "schedule transfer failed", message, retryable: isRetryableSchedulerFailure(error) });
     }
   });
 }

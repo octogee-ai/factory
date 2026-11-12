@@ -62,6 +62,7 @@ import {
 } from "../lib/local-default-agent-wired.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import { OpenclawWireError } from "../lib/gateway-rpc.js";
+import { SchedulerRefusal } from "../lib/scheduler-failure.js";
 import { OpenClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
 import { stubUserClaim } from "./helpers/user-claim.js";
 import { exportCodexStoreSnapshots } from "../lib/codex-store-snapshot.js";
@@ -5661,6 +5662,22 @@ describe("scheduler migration signed endpoint", () => {
     expect(response.getBody()).toEqual(result);
     expect(schedulerMigration).toHaveBeenCalledWith("chris", { operationId: "handoff-1", phase: "hold" });
   });
+  it.each([
+    [new OpenclawWireError("connect-failed", "socket closed before cron.migration response"), true],
+    [new OpenclawWireError("timeout", "cron.migration response timed out after 30000ms"), true],
+    [new OpenclawWireError("rpc-error", "Cron migration snapshot contains unsettled runs"), true],
+    [new OpenclawWireError("rpc-error", "Cron migration requires an explicit owner for legacy default-agent jobs"), false],
+    [new SchedulerRefusal("Cannot hold scheduler for chris: no user agents"), false],
+    [new Error("ENOENT: no such file or directory, open '/home/node/.openclaw/openclaw.json'"), true],
+  ] as const)("says whether a failed scheduler command may yet succeed: %s", async (error, retryable) => {
+    const schedulerMigration = vi.fn(async () => { throw error; });
+    const response = mkResponse();
+    await createSchedulerMigrationHandler(mkDeps({ adapter: mkAdapter({ schedulerMigration }), log: vi.fn() }))(
+      mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
+    );
+    expect(response.getStatus()).toBe(500);
+    expect(response.getBody()).toEqual({ error: "scheduler migration failed", message: error.message, retryable });
+  });
   it("does not report a draining scheduler as ready", async () => {
     const schedulerMigration = vi.fn(async () => ({ operationId: body.migrationId, phase: body.phase, agentIds: ["octogee-chris-coach"], drained: false }));
     const response = mkResponse();
@@ -5791,14 +5808,26 @@ describe("schedule transfer signed endpoint", () => {
     const response = mkResponse();
     await createScheduleTransferHandler(mkDeps({ scheduleTransfer, log }))(signed(snapshot), response.res, vi.fn());
     expect(response.getStatus()).toBe(500);
-    expect(response.getBody()).toEqual({ error: "schedule transfer failed", message: "gateway down" });
+    expect(response.getBody()).toEqual({ error: "schedule transfer failed", message: "gateway down", retryable: true });
     expect(log).toHaveBeenCalledWith(expect.stringContaining("gateway down"), expect.anything());
+  });
+  it.each([
+    [new OpenclawWireError("timeout", "cron.list response timed out after 30000ms"), true],
+    [new OpenclawWireError("connect-failed", "socket closed before cron.list response"), true],
+    [new OpenclawWireError("rpc-error", "cron.list refused"), false],
+    [new Error("ENOENT: no such file or directory, open '/home/node/.openclaw/openclaw.json'"), true],
+  ] as const)("says whether a failed transfer may yet succeed: %s", async (error, retryable) => {
+    const scheduleTransfer = vi.fn(async () => { throw error; });
+    const response = mkResponse();
+    await createScheduleTransferHandler(mkDeps({ scheduleTransfer, log: vi.fn() }))(signed(restore), response.res, vi.fn());
+    expect(response.getStatus()).toBe(500);
+    expect(response.getBody()).toEqual({ error: "schedule transfer failed", message: error.message, retryable });
   });
   it("fails loudly on a gateway without schedule transfer wiring", async () => {
     const response = mkResponse();
     await createScheduleTransferHandler(mkDeps())(signed(snapshot), response.res, vi.fn());
     expect(response.getStatus()).toBe(500);
-    expect(response.getBody()).toEqual({ error: "schedule transfer failed", message: "schedule transfer is not configured" });
+    expect(response.getBody()).toEqual({ error: "schedule transfer failed", message: "schedule transfer is not configured", retryable: false });
   });
 });
 

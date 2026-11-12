@@ -361,7 +361,10 @@ export interface ScheduleRestoreResult {
     existing: number;
     failed: Array<{
         name: string;
+        agentId: string;
+        sourceJobId: string;
         error: string;
+        retryable: boolean;
     }>;
 }
 export declare const SCHEDULE_TRANSFERS_SUBCOLLECTION = "scheduleTransfers";
@@ -377,8 +380,11 @@ export interface ScheduleTransferDoc {
     restoreAttemptedAt?: number;
     restoredTo?: string;
     restoredAt?: number;
-    restoreFailures?: Array<{
-        name: string;
-        error: string;
-    }>;
+    restoreFailures?: ScheduleRestoreFailureRecord[];
+}
+export interface ScheduleRestoreFailureRecord {
+    name: string;
+    agentId?: string;
+    sourceJobId?: string;
+    error: string;
 }

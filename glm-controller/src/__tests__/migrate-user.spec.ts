@@ -16,7 +16,10 @@ import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker
 import { buildOperationCompletionUpdate, classifyOperationFailure, OPERATOR_ISOLATED_GATEWAY_WAIT_MS } from "../operation-retry";
 import { assertUserRestoreSettled, createOperationContext, PendingUserRestoreError } from "../operation-context";
 import { builderReturnOperationId } from "@octogee/core/user-activation-lease";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import type { NativeReturnPark, NativeSourcePark } from "../lib/native-vm-return";
+import { retireNativeSchedulerBeforeStage } from "../lib/native-scheduler-retirement";
+import { createCronCustodyGateways, type CronCustodyGateways, type CustodyJob } from "@octogee/core/testing/cron-custody";
 
 const SOURCE_SYSTEM_CONFIG_COMMIT = "a".repeat(40);
 const STANDUP: ScheduleRecord = { sourceJobId: "job-standup", agentId: "octogee-alice-coach", job: { name: "standup", schedule: { kind: "cron", expr: "0 9 * * *" } } };
@@ -156,6 +159,8 @@ function mkDeps(options: HarnessOptions = {}) {
     readUserSnapshot: vi.fn(async () => SNAPSHOT),
     prepareNativeVmReturn: vi.fn(async () => null),
     retireNativeSchedulerBeforeStage: vi.fn(async () => undefined),
+    readOperation: vi.fn(async () => null),
+    readUserAgentIds: vi.fn(async () => []),
     readGatewaySystemConfigCommit: vi.fn(async () => TARGET_SYSTEM_CONFIG_COMMIT),
     readOpenClawBuild: vi.fn(async () => "d".repeat(40)),
     commitCutover: vi.fn(async (commit) => {
@@ -2168,17 +2173,85 @@ describe("migrate-customer — User activation onto a held VM", () => {
     expect(h.order).toEqual(["unmount:gw-blue"]);
   });
 
-  it("completes a committed cutover, leaving the snapshot pending, when the VM cannot restore schedules", async () => {
+  it("keeps a committed cutover in forward recovery, the snapshot pending, while the VM cannot yet restore schedules", async () => {
     const h = heldActivation({ sourceGatewayId: "gw-green" });
     h.transfers.set("uid-alice/mig-op-1", PENDING_SCHEDULES);
-    vi.mocked(h.client.schedules).mockRejectedValue(new Error("/schedules/gw-green: 503 OpenClaw is starting"));
+    vi.mocked(h.client.schedules).mockRejectedValue(new MigrationRpcError("/schedules/gw-green: 503 OpenClaw is starting", { status: 503 }));
 
-    const result = await createMigrateUserHandler(h.deps)(mkOp({ schedulerHandoff: deferred, attempts: 1 }), h.ctx);
+    const result = await createMigrateUserHandler(h.deps)(mkOp({ schedulerHandoff: deferred, attempts: 5, cutoverCommittedAt: 4_000 }), h.ctx);
 
-    expect(result).toMatchObject({ success: true, rolledBack: false });
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.failedAfterCutover).toBeUndefined();
+    expect(result.error).toMatch(/^migration cutover committed; destination recovery pending: status 503: .*503 OpenClaw is starting/u);
+    expect(classifyOperationFailure(result.error)).toBe("transient");
+    expect(h.order).toEqual([]);
+    expect(h.transfers.get("uid-alice/mig-op-1")).toMatchObject({ restoreAttemptedTo: "gw-green" });
+    expect(h.transfers.get("uid-alice/mig-op-1")?.restoredTo).toBeUndefined();
+  });
+
+  it("keeps a committed cutover in forward recovery while its transfer record cannot be read, and restores the schedules on the retry", async () => {
+    const h = heldActivation({ sourceGatewayId: "gw-green" });
+    h.transfers.set("uid-alice/mig-op-1", PENDING_SCHEDULES);
+    vi.mocked(h.deps.readScheduleTransfer).mockRejectedValueOnce(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }));
+    const op = { schedulerHandoff: deferred, attempts: 1, cutoverCommittedAt: 4_000 };
+
+    const first = await createMigrateUserHandler(h.deps)(mkOp(op), h.ctx);
+
+    expect(first).toMatchObject({ success: false, rolledBack: false });
+    expect(first.failedAfterCutover).toBeUndefined();
+    expect(first.error).toMatch(/^migration cutover committed; destination recovery pending: status 503: .*read ECONNRESET/u);
+    expect(buildOperationCompletionUpdate({ op: { kind: "migrate-customer", ...op }, result: first, steps: [], now: 5_000 }))
+      .toMatchObject({ status: "pending", attempts: 2 });
+    expect(h.order).toEqual([]);
+    expect(h.transfers.get("uid-alice/mig-op-1")).toEqual(PENDING_SCHEDULES);
+
+    expect(await createMigrateUserHandler(h.deps)(mkOp({ ...op, attempts: 2 }), h.ctx)).toMatchObject({ success: true });
+    expect(h.order).toEqual(["gw-green:restore", "unmount:gw-blue"]);
+    expect(h.transfers.get("uid-alice/mig-op-1")).toMatchObject({ restoredTo: "gw-green", restoreFailures: [] });
+  });
+
+  it("fails a committed cutover, without rolling it back, when the VM refuses to restore schedules", async () => {
+    const h = heldActivation({ sourceGatewayId: "gw-green" });
+    h.transfers.set("uid-alice/mig-op-1", PENDING_SCHEDULES);
+    const refusal = '/schedules/gw-green: 500 {"error":"schedule transfer failed","message":"restore failed","retryable":false}';
+    vi.mocked(h.client.schedules).mockRejectedValue(new MigrationRpcError(refusal, { status: 500, retryable: false }));
+
+    const result = await createMigrateUserHandler(h.deps)(mkOp({ schedulerHandoff: deferred, attempts: 1, cutoverCommittedAt: 4_000 }), h.ctx);
+
+    const error = "schedules were not restored after the cutover onto gw-green: 1 schedule not restored, 0 scheduler fences kept";
+    expect(result).toEqual({
+      steps: [], success: false, rolledBack: false, failedAfterCutover: true, error,
+      output: { scheduleRestoreFailures: [{ gatewayId: "gw-green", agentId: STANDUP.agentId, sourceJobId: STANDUP.sourceJobId, job: "standup", error: refusal }] },
+    });
     expect(h.order).toEqual(["unmount:gw-blue"]);
     expect(h.transfers.get("uid-alice/mig-op-1")?.restoredTo).toBeUndefined();
-    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("schedule restore on gw-green failed"));
+    expect(h.deps.log).toHaveBeenCalledWith(`[migrate-customer] ❌ alice: ${error} op=op-1`);
+  });
+
+  it("keeps a committed cutover in forward recovery while the VM lost its scheduler connection or a model's auth profile cooled down", async () => {
+    const h = heldActivation({ sourceGatewayId: "gw-green" });
+    const brief: ScheduleRecord = { sourceJobId: "job-brief", agentId: "octogee-alice-coach", job: { name: "brief", schedule: { kind: "cron", expr: "0 8 * * *" } } };
+    h.transfers.set("uid-alice/mig-op-1", { ...PENDING_SCHEDULES, records: [STANDUP, brief] });
+    const timeout = "cron.add response timed out after 30000ms";
+    const cooldown = 'invalid cron.add params: Auth profile "platform-openai:default" is temporarily unavailable for platform-openai/gpt-6.1-terra.';
+    vi.mocked(h.client.schedules).mockResolvedValue({
+      migrationId: "mig-op-1", slug: "alice", op: "restore", created: 0, existing: 0, failed: [
+        { name: "standup", agentId: STANDUP.agentId, sourceJobId: STANDUP.sourceJobId, error: timeout, retryable: true },
+        { name: "brief", agentId: brief.agentId, sourceJobId: brief.sourceJobId, error: cooldown, retryable: true },
+      ],
+    } as never);
+    const op = { schedulerHandoff: deferred, attempts: 1, cutoverCommittedAt: 4_000 };
+
+    const result = await createMigrateUserHandler(h.deps)(mkOp(op), h.ctx);
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.failedAfterCutover).toBeUndefined();
+    expect(result.error).toMatch(/^migration cutover committed; destination recovery pending: status 503: /u);
+    expect(result.error).toContain(`2 of 2 unrestored schedules on gw-green may yet be restored: ${timeout}`);
+    expect(buildOperationCompletionUpdate({ op: { kind: "migrate-customer", ...op }, result, steps: [], now: 5_000 }))
+      .toMatchObject({ status: "pending", attempts: 2 });
+    expect(h.order).toEqual([]);
+    expect(h.transfers.get("uid-alice/mig-op-1")?.restoredTo).toBeUndefined();
   });
 
   it("keeps native activation pending when the target cannot be reached for scheduler retirement", async () => {
@@ -2224,6 +2297,491 @@ describe("migrate-customer — User activation onto a held VM", () => {
     expect(result.success).toBe(false);
     expect(classifyOperationFailure(result.error)).toBe("transient");
     expect(h.client.quiesce).not.toHaveBeenCalled();
+  });
+});
+
+describe("a returned VM's scheduler custody at the next activation", () => {
+  const VM = "gw-blue", SHARED = "gw-green", COACH = "octogee-alice-coach", CHECK = "Proactive check", WATCH = "Inbox watch";
+  const RETURN_ID = builderReturnOperationId(VM, 1);
+  const RETURN_SCHEDULER = `mig-${RETURN_ID}:scheduler:1:claim:4000`;
+  const ACTIVATION_ID = "op-activate", ACTIVATED_AT = 9_000;
+  const RELEASE = `mig-${ACTIVATION_ID}:release:${COACH}`;
+  const computer = { instanceName: "vm-alice", instanceId: "1234", zone: "us-central1-a" };
+  const homeDisk = { id: "4321", source: "home-alice" };
+
+  function retainedVm() {
+    const records: Record<string, Record<string, unknown>> = {
+      "users/uid-alice": { username: "alice", provisioning: { openclaw: { slug: "alice", gatewayId: VM }, homeDisk } },
+      [`gateways/${VM}`]: {
+        gatewayId: VM, gatewayClass: "builder", ownerUid: "uid-alice", builderSlug: "alice", desiredStatus: "running",
+        desiredRelease: 1, liveRelease: 1, latestRelease: 1,
+      },
+      [`glmGateways/${VM}`]: { docKind: "runtime", gatewayId: VM, release: 1, lifecycle: "serving", runtime: "gce-vm",
+        vm: { ...computer, internalIp: "10.0.0.4", status: "RUNNING" } },
+    };
+    const store = createDocumentFixtureStore(records);
+    const log = vi.fn();
+    const vm = { describe: vi.fn(async () => ({ instanceId: computer.instanceId, gatewayId: VM, status: "RUNNING" })) };
+    const retire: MigrateUserDeps["retireNativeSchedulerBeforeStage"] = (input, scheduler) =>
+      retireNativeSchedulerBeforeStage({ store, vm: vm as never, log }, input, scheduler);
+    const provisioning = () => records["users/uid-alice"].provisioning as Record<string, unknown>;
+    return {
+      store, records, log, retire,
+      pending: () => provisioning().pendingNativeSchedulerRetirement,
+      forgetPending: () => { delete provisioning().pendingNativeSchedulerRetirement; },
+      park: (migrationId: string) => {
+        provisioning().pendingNativeSchedulerRetirement = {
+          uid: "uid-alice", slug: "alice", returnOperationId: RETURN_ID, migrationId, sourceGatewayId: VM, sharedGatewayId: SHARED,
+          ...computer, homeDiskId: homeDisk.id, homeDiskSource: homeDisk.source,
+        };
+      },
+      completeReturn: (cutoverCommittedAt: number) => {
+        Object.assign(provisioning().pendingNativeSchedulerRetirement as object, { completedAt: cutoverCommittedAt + 100, cutoverCommittedAt });
+      },
+      journal: (id: string, row: Record<string, unknown>) => { records[`glmOperations/${id}`] = row; },
+    };
+  }
+  type RetainedVm = ReturnType<typeof retainedVm>;
+
+  function custodyGateways() {
+    const custody = createCronCustodyGateways({ alice: [COACH] });
+    custody.store(VM).add({ agentId: COACH, name: CHECK, enabled: true });
+    const watch = custody.store(VM).add({ agentId: COACH, name: WATCH, enabled: true, schedule: { kind: "event" } });
+    return { custody, watch };
+  }
+
+  function onCustody(h: ReturnType<typeof mkDeps>, custody: CronCustodyGateways, wrap = (client: MigrationClient) => client): void {
+    vi.mocked(h.client.transferState).mockImplementation(async ({ migrationId, slug }) => ({ migrationId, slug, imported: true }));
+    h.deps.buildClient = resolveGatewayUrl => wrap(custody.client(h.client, resolveGatewayUrl));
+  }
+
+  async function returnToShared(custody: CronCustodyGateways, vm: RetainedVm, source: "running" | "stopped" | "unmount-fails" = "running") {
+    const h = mkDeps();
+    onCustody(h, custody);
+    const native = mockNativeReturn();
+    h.deps.prepareNativeVmReturn = vi.fn(async () => native);
+    if (source === "stopped") native.sourceVmStatus.mockResolvedValue("TERMINATED");
+    if (source === "unmount-fails") vi.mocked(h.client.unmount).mockRejectedValue(new Error("unmount timed out"));
+    let handoff: Operation["schedulerHandoff"];
+    let cutoverCommittedAt = 0;
+    vi.mocked(h.ctx.persistSchedulerHandoff!).mockImplementation(async state => { handoff = { ...state }; });
+    vi.mocked(h.ctx.persistCutoverCommitted!).mockImplementation(async at => { cutoverCommittedAt = at; });
+    const park = native.park.getMockImplementation()!;
+    native.park.mockImplementation(async request => {
+      vm.park(handoff!.migrationId);
+      return park(request);
+    });
+    native.acknowledgeCompletedSchedulerHandoff.mockImplementation(async () => vm.completeReturn(cutoverCommittedAt));
+    const op = mkOp({ id: RETURN_ID, input: { uid: "uid-alice", fromGatewayId: VM, toGatewayId: SHARED } });
+    const result = await createMigrateUserHandler(h.deps)(op, h.ctx);
+    expect(result).toMatchObject({ success: true });
+    expect(handoff?.migrationId).toBe(RETURN_SCHEDULER);
+    const { id: _id, ...row } = op;
+    vm.journal(RETURN_ID, {
+      ...row, origin: "automatic", inputUid: "uid-alice", gatewayId: SHARED, status: "succeeded", completedAt: cutoverCommittedAt + 100,
+      cutoverCommittedAt, schedulerHandoff: handoff, schedulerHandoffReleased: true,
+    });
+    return result;
+  }
+
+  async function activateOntoVm(
+    custody: CronCustodyGateways, vm: RetainedVm,
+    options: { attempts?: number; wrap?: (client: MigrationClient) => MigrationClient; id?: string; at?: number } = {},
+  ) {
+    const { attempts, wrap, id = ACTIVATION_ID, at = ACTIVATED_AT } = options;
+    const h = mkDeps({ sourceGatewayId: SHARED });
+    onCustody(h, custody, wrap);
+    vi.mocked(h.deps.now).mockReturnValue(at);
+    vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: true, release: 2, gatewayClass: "builder" });
+    vi.mocked(h.deps.commitCutover).mockImplementation(async () => {
+      vi.mocked(h.deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: VM });
+    });
+    h.deps.retireNativeSchedulerBeforeStage = vm.retire;
+    h.deps.readOperation = vi.fn(async (operationId: string) => vm.store.journal.operations.get(operationId));
+    h.deps.readUserAgentIds = vi.fn(async () => [COACH]);
+    const op = mkOp({ id, input: { uid: "uid-alice", toGatewayId: VM }, ...(attempts === undefined ? {} : { attempts }) });
+    const { id: _id, ...row } = op;
+    vm.journal(id, { ...row, origin: "automatic", inputUid: "uid-alice", gatewayId: VM });
+    vi.mocked(h.ctx.persistCutoverCommitted!).mockImplementation(async committedAt => {
+      vm.records[`glmOperations/${id}`].cutoverCommittedAt = committedAt;
+    });
+    const result = await createMigrateUserHandler(h.deps)(op, h.ctx);
+    const logs = [...vi.mocked(h.deps.log).mock.calls.flat(), ...vm.log.mock.calls.flat()].map(String);
+    return { h, result, logs };
+  }
+
+  function restoredOnVm(custody: CronCustodyGateways, watch: CustodyJob): void {
+    const onVm = custody.store(VM);
+    expect(onVm.fences.has(COACH)).toBe(false);
+    expect(onVm.agentJobs(COACH).map(job => job.name).sort()).toEqual([WATCH, CHECK].sort());
+    expect(onVm.agentJobs(COACH).every(job => onVm.runnable(job.id))).toBe(true);
+    expect(onVm.runnable(watch.id)).toBe(true);
+    expect(custody.store(SHARED).agentJobs(COACH)).toEqual([]);
+  }
+
+  it.each(["running", "stopped", "unmount-fails"] as const)(
+    "restores the agent's schedules on the VM and frees its host-bound job when it activates after a return from a %s source", async source => {
+      const { custody, watch } = custodyGateways();
+      const vm = retainedVm();
+      await returnToShared(custody, vm, source);
+      expect(custody.store(SHARED).agentJobs(COACH)).toEqual([expect.objectContaining({ name: CHECK, enabled: true })]);
+      expect(custody.store(VM).fences.get(COACH)).toBe(RETURN_SCHEDULER);
+      expect(custody.store(VM).status(RETURN_SCHEDULER)).toBe(source === "stopped" ? "exported" : "retired");
+      expect(custody.store(VM).runnable(watch.id)).toBe(false);
+
+      const { result, logs } = await activateOntoVm(custody, vm);
+
+      expect(result).toMatchObject({ success: true, rolledBack: false });
+      expect(result.output).toBeUndefined();
+      restoredOnVm(custody, watch);
+      expect(vm.pending()).toBeUndefined();
+      expect(custody.store(VM).status(RELEASE)).toBe("activated");
+      expect(logs).toContainEqual(`[migrate-customer] alice: retired exported native schedules ${RETURN_SCHEDULER} on retained VM 1234`);
+      expect(logs).toContainEqual(`[scheduler-custody] alice: released the scheduler custody of ${COACH} on ${VM} with ${RELEASE} op=${ACTIVATION_ID}`);
+      expect(logs.filter(line => /⚠|❌/.test(line))).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["retired", "journaled"],
+    ["retired", "pruned from the journal"],
+    ["exported", "journaled"],
+  ] as const)("releases a leftover %s fence whose return is %s, without a pending retirement", async (row, journal) => {
+    const { custody, watch } = custodyGateways();
+    const vm = retainedVm();
+    await returnToShared(custody, vm, row === "retired" ? "running" : "stopped");
+    vm.forgetPending();
+    if (journal === "pruned from the journal") delete vm.records[`glmOperations/${RETURN_ID}`];
+
+    const { result, logs } = await activateOntoVm(custody, vm);
+
+    expect(result).toMatchObject({ success: true, rolledBack: false });
+    expect(result.output).toBeUndefined();
+    restoredOnVm(custody, watch);
+    expect(custody.store(VM).status(RETURN_SCHEDULER)).toBe("retired");
+    expect(logs).toContainEqual(expect.stringContaining(`released the scheduler custody of ${COACH} on ${VM}`));
+    expect(logs.filter(line => /⚠|❌/.test(line))).toEqual([]);
+  });
+
+  it("releases a leftover retired fence when there is nothing to restore, and the host-bound job runs", async () => {
+    const custody = createCronCustodyGateways({ alice: [COACH] });
+    const onVm = custody.store(VM);
+    const watch = onVm.add({ agentId: COACH, name: WATCH, enabled: true, schedule: { kind: "event" } });
+    onVm.migrate({ operationId: RETURN_SCHEDULER, phase: "hold", agentIds: [COACH], retainNonportable: true });
+    onVm.migrate({ operationId: RETURN_SCHEDULER, phase: "export", retainNonportable: true });
+    onVm.migrate({ operationId: RETURN_SCHEDULER, phase: "retire" });
+    const vm = retainedVm();
+
+    const { result, logs } = await activateOntoVm(custody, vm);
+
+    expect(result).toMatchObject({ success: true, rolledBack: false });
+    expect(result.output).toBeUndefined();
+    expect(logs).toContainEqual(expect.stringContaining(`released the scheduler custody of ${COACH} on ${VM}`));
+    expect(onVm.fences.has(COACH)).toBe(false);
+    expect(onVm.runnable(watch.id)).toBe(true);
+  });
+
+  it("keeps the jobs of a rolled-back return's exported fence once that return has left the journal", async () => {
+    const custody = createCronCustodyGateways({ alice: [COACH] });
+    const onVm = custody.store(VM);
+    const check = onVm.add({ agentId: COACH, name: CHECK, enabled: true });
+    const watch = onVm.add({ agentId: COACH, name: WATCH, enabled: true, schedule: { kind: "event" } });
+    onVm.migrate({ operationId: RETURN_SCHEDULER, phase: "hold", agentIds: [COACH], retainNonportable: true });
+    onVm.migrate({ operationId: RETURN_SCHEDULER, phase: "export", retainNonportable: true });
+    const vm = retainedVm();
+    const reason = `${RETURN_SCHEDULER} is not retired and ${RETURN_ID} has left the journal`;
+
+    const { result, logs } = await activateOntoVm(custody, vm);
+
+    expect(result).toMatchObject({
+      success: false, rolledBack: false, failedAfterCutover: true,
+      error: `schedules were not restored after the cutover onto ${VM}: 0 schedules not restored, 1 scheduler fence kept`,
+    });
+    expect(result.output).toEqual({ unreleasedSchedulerFences: [{ gatewayId: VM, agentId: COACH, holder: RETURN_SCHEDULER, reason }] });
+    expect(custody.calls.filter(call => call.includes(":retire:"))).toEqual([]);
+    expect(onVm.status(RETURN_SCHEDULER)).toBe("exported");
+    expect(onVm.fences.get(COACH)).toBe(RETURN_SCHEDULER);
+    expect([...onVm.jobs.keys()].sort()).toEqual([check.id, watch.id].sort());
+    expect(logs).toContainEqual(
+      `[scheduler-custody] ⚠ alice: kept the scheduler fence of ${COACH} on ${VM} held by ${RETURN_SCHEDULER}: ${reason} op=${ACTIVATION_ID}`);
+  });
+
+  function liveHold(custody: CronCustodyGateways, vm: RetainedVm) {
+    const liveScheduler = "mig-op-live:scheduler:1:claim:3000";
+    custody.store(VM).jobs.clear();
+    custody.store(SHARED).add({ agentId: COACH, name: CHECK, enabled: true });
+    custody.store(VM).migrate({ operationId: liveScheduler, phase: "hold", agentIds: [COACH] });
+    vm.journal("op-live", { kind: "migrate-customer", status: "running", createdBy: "admin@octogee.com", createdAt: 2_000, startedAt: 3_000,
+      input: { uid: "uid-alice", fromGatewayId: VM, toGatewayId: SHARED }, steps: [] });
+    return liveScheduler;
+  }
+
+  it("keeps a fence whose owning operation is still running, and records the schedule it blocked", async () => {
+    const { custody } = custodyGateways();
+    const vm = retainedVm();
+    const liveScheduler = liveHold(custody, vm);
+
+    const { result, logs, h } = await activateOntoVm(custody, vm);
+
+    expect(result).toMatchObject({ success: false, rolledBack: false, failedAfterCutover: true });
+    expect(custody.store(VM).fences.get(COACH)).toBe(liveScheduler);
+    expect(custody.store(VM).status(liveScheduler)).toBe("held");
+    expect(custody.store(VM).agentJobs(COACH)).toEqual([]);
+    expect(custody.calls.filter(call => call.includes(liveScheduler))).toEqual([]);
+    expect(result.output).toEqual({
+      scheduleRestoreFailures: [{
+        gatewayId: VM, agentId: COACH, sourceJobId: expect.any(String), job: CHECK,
+        error: `CronAgentMigrationHeldError: Cron agent ${COACH} is held for migration ${liveScheduler} (fence kept: op-live is still running)`,
+      }],
+      unreleasedSchedulerFences: [{ gatewayId: VM, agentId: COACH, holder: liveScheduler, reason: "op-live is still running" }],
+    });
+    expect(logs).toContainEqual(
+      `[scheduler-custody] ⚠ alice: kept the scheduler fence of ${COACH} on ${VM} held by ${liveScheduler}: op-live is still running op=${ACTIVATION_ID}`);
+    expect(logs).toContainEqual(
+      `[migrate-customer] ❌ alice: schedules were not restored after the cutover onto ${VM}: 1 schedule not restored, 1 scheduler fence kept op=${ACTIVATION_ID}`);
+    expect(logs).toContainEqual(expect.stringMatching(
+      new RegExp(`^\\[migration-runner\\] ⚠ schedule "${CHECK}" of ${COACH} was not restored on ${VM} migrationId=mig-${ACTIVATION_ID} slug=alice: CronAgentMigrationHeldError`),
+    ));
+    expect(h.transfers.get(`uid-alice/mig-${ACTIVATION_ID}`)).toMatchObject({
+      restoreAttemptedTo: VM, restoreFailures: [{ name: CHECK, error: expect.stringContaining(liveScheduler) }],
+    });
+    expect(h.transfers.get(`uid-alice/mig-${ACTIVATION_ID}`)?.restoredTo).toBeUndefined();
+  });
+
+  function settledReturn(custody: CronCustodyGateways) {
+    const onVm = custody.store(VM);
+    onVm.jobs.clear();
+    custody.store(SHARED).add({ agentId: COACH, name: CHECK, enabled: true });
+    onVm.migrate({ operationId: RETURN_SCHEDULER, phase: "hold", agentIds: [COACH], retainNonportable: true });
+    onVm.migrate({ operationId: RETURN_SCHEDULER, phase: "export", retainNonportable: true });
+    onVm.migrate({ operationId: RETURN_SCHEDULER, phase: "retire" });
+    return onVm;
+  }
+
+  it("fails the move after its cutover, recording the fence, when the VM refuses the release outright", async () => {
+    const custody = createCronCustodyGateways({ alice: [COACH] });
+    settledReturn(custody);
+    const vm = retainedVm();
+    const refusal = '/scheduler/gw-blue: 500 {"error":"scheduler migration failed","message":"Cron migration requires an explicit owner for legacy default-agent jobs","retryable":false}';
+    const refusing = (base: MigrationClient): MigrationClient => ({
+      ...base,
+      scheduler: async request => {
+        if (request.phase === "stage" && request.migrationId === RELEASE) throw new MigrationRpcError(refusal, { status: 500, retryable: false });
+        return base.scheduler(request);
+      },
+    });
+
+    const { result, logs, h } = await activateOntoVm(custody, vm, { wrap: refusing });
+
+    expect(result).toMatchObject({ success: false, rolledBack: false, failedAfterCutover: true });
+    expect(result.output?.unreleasedSchedulerFences).toEqual([{ gatewayId: VM, agentId: COACH, holder: null, reason: refusal }]);
+    expect(result.output?.scheduleRestoreFailures).toEqual([expect.objectContaining({ agentId: COACH, job: CHECK })]);
+    expect(logs).toContainEqual(
+      `[migrate-customer] ❌ alice: could not release the scheduler fence of ${COACH} on ${VM}: ${refusal} op=${ACTIVATION_ID}`);
+    expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: SHARED }));
+    const completion = buildOperationCompletionUpdate({
+      op: { id: ACTIVATION_ID, kind: "migrate-customer", attempts: 0, cutoverCommittedAt: ACTIVATED_AT, schedulerHandoff: vi.mocked(h.ctx.persistSchedulerHandoff!).mock.calls.at(-1)?.[0] },
+      result, steps: [], now: ACTIVATED_AT + 1,
+    });
+    expect(completion).toMatchObject({ status: "failed", rolledBack: false, schedulerHandoffReleased: true, output: result.output });
+  });
+
+  it.each([0, 2, 9])("keeps the move in forward recovery while the VM may yet accept the release (prior attempts %i)", async (attempts) => {
+    const custody = createCronCustodyGateways({ alice: [COACH] });
+    const onVm = settledReturn(custody);
+    onVm.runningAgents.add(COACH);
+    const vm = retainedVm();
+
+    const { result, logs, h } = await activateOntoVm(custody, vm, { attempts });
+
+    expect(onVm.fences.get(COACH)).toBe(RETURN_SCHEDULER);
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.failedAfterCutover).toBeUndefined();
+    expect(result.error).toContain("migration cutover committed; destination recovery pending: status 503");
+    expect(result.error).toContain("unsettled runs");
+    expect(buildOperationCompletionUpdate({
+      op: { kind: "migrate-customer", attempts, cutoverCommittedAt: ACTIVATED_AT, schedulerHandoff: vi.mocked(h.ctx.persistSchedulerHandoff!).mock.calls.at(-1)?.[0] },
+      result, steps: [], now: ACTIVATED_AT + 1,
+    })).toMatchObject({ status: "pending", attempts: attempts + 1 });
+    expect(h.transfers.get(`uid-alice/mig-${ACTIVATION_ID}`)?.restoreAttemptedTo).toBeUndefined();
+    expect(logs.filter(line => line.includes("❌"))).toEqual([]);
+  });
+
+  it("keeps the move in forward recovery when the VM's scheduler connection closes during the release", async () => {
+    const custody = createCronCustodyGateways({ alice: [COACH] });
+    const onVm = settledReturn(custody);
+    const vm = retainedVm();
+    const closed = `/scheduler/${VM}: 500 {"error":"scheduler migration failed","message":"socket closed before cron.migration response","retryable":true}`;
+    const closing = (base: MigrationClient): MigrationClient => ({
+      ...base,
+      scheduler: async request => {
+        if (request.phase === "stage" && request.migrationId === RELEASE) throw new MigrationRpcError(closed, { status: 500, retryable: true });
+        return base.scheduler(request);
+      },
+    });
+
+    const { result, logs, h } = await activateOntoVm(custody, vm, { wrap: closing });
+
+    expect(onVm.fences.get(COACH)).toBe(RETURN_SCHEDULER);
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.failedAfterCutover).toBeUndefined();
+    expect(result.error).toContain("migration cutover committed; destination recovery pending: status 503");
+    expect(result.error).toContain("socket closed before cron.migration response");
+    expect(buildOperationCompletionUpdate({
+      op: { kind: "migrate-customer", attempts: 0, cutoverCommittedAt: ACTIVATED_AT, schedulerHandoff: vi.mocked(h.ctx.persistSchedulerHandoff!).mock.calls.at(-1)?.[0] },
+      result, steps: [], now: ACTIVATED_AT + 1,
+    })).toMatchObject({ status: "pending", attempts: 1 });
+    expect(logs.filter(line => line.includes("❌"))).toEqual([]);
+  });
+
+  describe("over a round trip from shared to the VM, back to shared, and onto the same retained VM", () => {
+    const FIRST = "op-activate-1", SECOND = "op-activate-2";
+
+    function failOnce(fails: (request: Record<string, unknown>) => boolean, error: () => Error) {
+      let failed = false;
+      return (request: Record<string, unknown>) => {
+        if (failed || !fails(request)) return;
+        failed = true;
+        throw error();
+      };
+    }
+
+    function ownership(custody: CronCustodyGateways) {
+      const side = (gatewayId: string) => {
+        const cron = custody.store(gatewayId);
+        return {
+          fence: cron.fences.get(COACH) ?? null,
+          jobs: cron.agentJobs(COACH).map(job => `${job.name}${cron.runnable(job.id) ? "" : " (dormant)"}`).sort(),
+        };
+      };
+      return { vm: side(VM), shared: side(SHARED) };
+    }
+
+    async function retryActivation(h: ReturnType<typeof mkDeps>, vm: RetainedVm, id: string, attempts: number) {
+      const cutoverCommittedAt = vm.records[`glmOperations/${id}`].cutoverCommittedAt as number;
+      const schedulerHandoff = vi.mocked(h.ctx.persistSchedulerHandoff!).mock.calls.at(-1)?.[0];
+      const op = mkOp({ id, input: { uid: "uid-alice", toGatewayId: VM }, schedulerHandoff, cutoverCommittedAt, attempts });
+      const result = await createMigrateUserHandler(h.deps)(op, h.ctx);
+      if (result.success) Object.assign(vm.records[`glmOperations/${id}`], { status: "succeeded", completedAt: cutoverCommittedAt + 50 });
+      return result;
+    }
+
+    async function returnWithRetry(custody: CronCustodyGateways, vm: RetainedVm) {
+      const h = mkDeps();
+      const activateFails = failOnce(
+        request => request.gatewayId === SHARED && request.phase === "activate",
+        () => new MigrationRpcError(`/scheduler/${SHARED}: 503 restarting`, { status: 503 }),
+      );
+      onCustody(h, custody, base => ({ ...base, scheduler: async request => {
+        activateFails(request as unknown as Record<string, unknown>);
+        return base.scheduler(request);
+      } }));
+      const native = mockNativeReturn();
+      h.deps.prepareNativeVmReturn = vi.fn(async () => native);
+      let handoff: Operation["schedulerHandoff"];
+      let cutoverCommittedAt = 0;
+      vi.mocked(h.ctx.persistSchedulerHandoff!).mockImplementation(async state => { handoff = { ...state }; });
+      vi.mocked(h.ctx.persistCutoverCommitted!).mockImplementation(async at => { cutoverCommittedAt = at; });
+      vi.mocked(h.deps.commitCutover).mockImplementation(async () => {
+        vi.mocked(h.deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: SHARED });
+      });
+      const park = native.park.getMockImplementation()!;
+      native.park.mockImplementation(async request => {
+        vm.park(handoff!.migrationId);
+        return park(request);
+      });
+      native.acknowledgeCompletedSchedulerHandoff.mockImplementation(async () => vm.completeReturn(cutoverCommittedAt));
+      const input = { uid: "uid-alice", fromGatewayId: VM, toGatewayId: SHARED };
+      const first = await createMigrateUserHandler(h.deps)(mkOp({ id: RETURN_ID, input }), h.ctx);
+      const afterFirst = ownership(custody);
+      const retried = await createMigrateUserHandler(h.deps)(
+        mkOp({ id: RETURN_ID, input, schedulerHandoff: handoff, attempts: 1, cutoverCommittedAt }), h.ctx);
+      const { id: _id, ...row } = mkOp({ id: RETURN_ID, input });
+      vm.journal(RETURN_ID, {
+        ...row, origin: "automatic", inputUid: "uid-alice", gatewayId: SHARED, status: "succeeded", completedAt: cutoverCommittedAt + 100,
+        cutoverCommittedAt, schedulerHandoff: handoff, schedulerHandoffReleased: true,
+      });
+      return { first, afterFirst, retried };
+    }
+
+    it("keeps every schedule on exactly one side, and never fails after a cutover, when each step fails once and retries", async () => {
+      const custody = createCronCustodyGateways({ alice: [COACH] });
+      custody.store(SHARED).add({ agentId: COACH, name: CHECK, enabled: true });
+      const vm = retainedVm();
+      const forwardRecovery = /^migration cutover committed; destination recovery pending: status 503: /u;
+
+      const restoreFails = failOnce(
+        request => request.gatewayId === VM && request.op === "restore",
+        () => new MigrationRpcError(`/schedules/${VM}: 503 OpenClaw is starting`, { status: 503 }),
+      );
+      const moveIn = await activateOntoVm(custody, vm, { id: FIRST, at: 3_000, wrap: base => ({ ...base, schedules: (async request => {
+        restoreFails(request as unknown as Record<string, unknown>);
+        return base.schedules(request);
+      }) as MigrationClient["schedules"] }) });
+      expect(moveIn.result).toMatchObject({ success: false, rolledBack: false, error: expect.stringMatching(forwardRecovery) });
+      expect(ownership(custody)).toEqual({ vm: { fence: null, jobs: [] }, shared: { fence: null, jobs: [] } });
+      expect(moveIn.h.transfers.get(`uid-alice/mig-${FIRST}`)).toMatchObject({ restoreAttemptedTo: VM, records: [expect.objectContaining({ agentId: COACH })] });
+
+      expect(await retryActivation(moveIn.h, vm, FIRST, 1)).toEqual({ steps: [], success: true, rolledBack: false });
+      expect(ownership(custody)).toEqual({ vm: { fence: null, jobs: [CHECK] }, shared: { fence: null, jobs: [] } });
+      expect(moveIn.h.transfers.get(`uid-alice/mig-${FIRST}`)).toMatchObject({ restoredTo: VM, restoreFailures: [] });
+      custody.store(VM).add({ agentId: COACH, name: WATCH, enabled: true, schedule: { kind: "event" } });
+
+      const back = await returnWithRetry(custody, vm);
+      expect(back.first).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("503 restarting") });
+      expect(classifyOperationFailure(back.first.error)).toBe("transient");
+      expect(back.afterFirst).toEqual({
+        vm: { fence: RETURN_SCHEDULER, jobs: [`${WATCH} (dormant)`] }, shared: { fence: RETURN_SCHEDULER, jobs: [`${CHECK} (dormant)`] },
+      });
+      expect(back.retried).toMatchObject({ success: true, rolledBack: false });
+      expect(ownership(custody)).toEqual({ vm: { fence: RETURN_SCHEDULER, jobs: [`${WATCH} (dormant)`] }, shared: { fence: null, jobs: [CHECK] } });
+
+      const releaseFails = failOnce(
+        request => request.gatewayId === VM && request.phase === "stage",
+        () => new MigrationRpcError(`/scheduler/${VM}: 503 restarting`, { status: 503 }),
+      );
+      const moveBack = await activateOntoVm(custody, vm, { id: SECOND, wrap: base => ({ ...base, scheduler: async request => {
+        releaseFails(request as unknown as Record<string, unknown>);
+        return base.scheduler(request);
+      } }) });
+      expect(moveBack.result).toMatchObject({ success: false, rolledBack: false, error: expect.stringMatching(forwardRecovery) });
+      expect(vm.pending()).toBeUndefined();
+      expect(ownership(custody)).toEqual({ vm: { fence: RETURN_SCHEDULER, jobs: [`${WATCH} (dormant)`] }, shared: { fence: null, jobs: [] } });
+      expect(moveBack.h.transfers.get(`uid-alice/mig-${SECOND}`)?.restoreAttemptedTo).toBeUndefined();
+
+      expect(await retryActivation(moveBack.h, vm, SECOND, 1)).toEqual({ steps: [], success: true, rolledBack: false });
+      expect(ownership(custody)).toEqual({ vm: { fence: null, jobs: [WATCH, CHECK].sort() }, shared: { fence: null, jobs: [] } });
+      expect(custody.store(VM).status(`mig-${SECOND}:release:${COACH}`)).toBe("activated");
+      expect(moveBack.h.transfers.get(`uid-alice/mig-${SECOND}`)).toMatchObject({ restoredTo: VM, restoreFailures: [] });
+    });
+  });
+
+  it("releases nothing once the user is no longer assigned to the VM", async () => {
+    const custody = createCronCustodyGateways({ alice: [COACH] });
+    const onVm = settledReturn(custody);
+    const vm = retainedVm();
+    const h = mkDeps({ sourceGatewayId: VM });
+    onCustody(h, custody);
+    h.deps.readOperation = vi.fn(async (operationId: string) => vm.store.journal.operations.get(operationId));
+    h.deps.readUserAgentIds = vi.fn(async () => [COACH]);
+    h.deps.retireNativeSchedulerBeforeStage = vi.fn(async () => {
+      vi.mocked(h.deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: SHARED });
+    });
+    h.transfers.set(`uid-alice/mig-${ACTIVATION_ID}`, { ...PENDING_SCHEDULES, migrationId: `mig-${ACTIVATION_ID}`, sourceGatewayId: SHARED, targetGatewayId: VM });
+    const handoff = {
+      migrationId: `mig-${ACTIVATION_ID}:scheduler:1:claim:4000`, fromGatewayId: SHARED, toGatewayId: VM, uid: "uid-alice", slug: "alice",
+      stageAfterCutover: true as const, scheduleTransfer: true as const,
+    };
+    const op = mkOp({ id: ACTIVATION_ID, input: { uid: "uid-alice", toGatewayId: VM }, schedulerHandoff: handoff, attempts: 1, cutoverCommittedAt: 4_500 });
+
+    const result = await createMigrateUserHandler(h.deps)(op, h.ctx);
+
+    expect(custody.calls.filter(call => call.startsWith(`scheduler:${VM}:`))).toEqual([]);
+    expect(onVm.fences.get(COACH)).toBe(RETURN_SCHEDULER);
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.failedAfterCutover).toBeUndefined();
+    expect(result.error).toBe(`migration cutover committed; destination recovery pending: status 503: alice is no longer assigned to ${VM}`);
+    expect(h.transfers.get(`uid-alice/mig-${ACTIVATION_ID}`)?.restoreAttemptedTo).toBeUndefined();
   });
 });
 

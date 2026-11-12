@@ -297,6 +297,11 @@ interface FailureCompletionContext {
   levelTriggeredFence: boolean;
 }
 
+function failureClassification(input: OperationCompletionInput, error: string, levelTriggeredFence: boolean): OperationFailureClassification {
+  if (input.result.failedAfterCutover === true) return "terminal";
+  return levelTriggeredFence ? "transient" : classifyOperationFailure(error);
+}
+
 function failureCompletionContext(
   input: OperationCompletionInput,
   persistedSteps: OperationStep[],
@@ -304,7 +309,7 @@ function failureCompletionContext(
 ): FailureCompletionContext {
   const error = input.result.error ?? "unknown error";
   const levelTriggeredFence = hasLevelTriggeredFence(input);
-  const classification = levelTriggeredFence ? "transient" : classifyOperationFailure(error);
+  const classification = failureClassification(input, error, levelTriggeredFence);
   const attemptRecord: OperationAttemptRecord = {
     attempt: attempts,
     startedAt: input.op.startedAt ?? input.now,
@@ -416,6 +421,23 @@ function failedCompletion(
   };
 }
 
+function failedAfterCutoverCompletion(
+  input: OperationCompletionInput,
+  persistedSteps: OperationStep[],
+  attempts: number,
+  failure: FailureCompletionContext,
+): OperationPatch {
+  if (input.op.kind !== MIGRATE_USER_KIND || input.op.schedulerHandoff === undefined) {
+    throw new Error("only a user migration with a scheduler handoff can fail after its cutover");
+  }
+  return {
+    ...failedCompletion(input, persistedSteps, attempts, failure),
+    rolledBack: false,
+    schedulerHandoffReleased: true,
+    schedulerHandoffReleasedAt: input.now,
+  };
+}
+
 // Decides, and builds the Firestore update for, what happens after a claimed
 // op's handler returns. Success always completes. A failure retries (requeues
 // to `pending` with backoff) when its cause classifies as transient AND the
@@ -444,6 +466,7 @@ export function buildOperationCompletionUpdate(
   if (result.success) return successfulCompletion(input, persistedSteps, attempts);
 
   const failure = failureCompletionContext(input, persistedSteps, attempts);
+  if (result.failedAfterCutover === true) return failedAfterCutoverCompletion(input, persistedSteps, attempts, failure);
   if (failedOnGatewayNotServingYet(op, failure.error)) {
     const checks = readinessChecks(op) + 1;
     return checks < MAX_OPERATOR_ISOLATED_GATEWAY_WAIT_ATTEMPTS

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { isRetryableSchedulerFailure } from "../lib/scheduler-failure.js";
 import { migrateUserScheduler, setUserChannelsRunning } from "../lib/user-channel-quiesce.js";
 
 function runtime() {
@@ -51,9 +52,11 @@ describe("scheduled migration handoff scope", () => {
     expect(rpc.configGet).not.toHaveBeenCalled();
     expect(rpc.schedulerMigration).toHaveBeenCalledWith({ operationId: "handoff-1", phase: "retire" });
   });
-  it("refuses an empty hold scope", async () => {
+  it("refuses an empty hold scope, for good", async () => {
     const rpc = { configGet: vi.fn(async () => ({ config: {} })), schedulerMigration: vi.fn() };
-    await expect(migrateUserScheduler(rpc as never, "alice", [], { operationId: "handoff-1", phase: "hold" })).rejects.toThrow("no user agents");
+    const refused = migrateUserScheduler(rpc as never, "alice", [], { operationId: "handoff-1", phase: "hold" });
+    await expect(refused).rejects.toThrow("no user agents");
+    expect(isRetryableSchedulerFailure(await refused.catch((error: unknown) => error))).toBe(false);
     expect(rpc.schedulerMigration).not.toHaveBeenCalled();
   });
 });

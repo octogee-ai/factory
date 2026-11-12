@@ -101,11 +101,13 @@ export interface MigrationRpcErrorOptions {
     details?: unknown;
     status?: number;
     code?: string;
+    retryable?: boolean;
 }
 export declare class MigrationRpcError extends Error {
     readonly details?: unknown;
     readonly status?: number;
     readonly code?: string;
+    readonly retryable: boolean | undefined;
     constructor(message: string, options?: MigrationRpcErrorOptions);
 }
 export declare class MigrationDrainPendingError extends Error {

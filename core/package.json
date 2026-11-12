@@ -17,6 +17,10 @@
       "types": "./dist/testing/journal-store.d.ts",
       "default": "./dist/testing/journal-store.js"
     },
+    "./testing/cron-custody": {
+      "types": "./dist/testing/cron-custody.d.ts",
+      "default": "./dist/testing/cron-custody.js"
+    },
     "./testing/firestore-store": {
       "types": "./dist/testing/firestore-store/store.d.ts",
       "default": "./dist/testing/firestore-store/store.js"
@@ -228,6 +232,10 @@
     "./fleet-migration-runner": {
       "types": "./dist/fleet-migration-runner.d.ts",
       "default": "./dist/fleet-migration-runner.js"
+    },
+    "./scheduler-custody": {
+      "types": "./dist/scheduler-custody.d.ts",
+      "default": "./dist/scheduler-custody.js"
     },
     "./fleet-operation-lock": {
       "types": "./dist/fleet-operation-lock.d.ts",
@@ -643,6 +651,9 @@
       ],
       "fleet-migration-runner": [
         "dist/fleet-migration-runner.d.ts"
+      ],
+      "scheduler-custody": [
+        "dist/scheduler-custody.d.ts"
       ],
       "fleet-operation-lock": [
         "dist/fleet-operation-lock.d.ts"

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import type { ScheduleRecord, ScheduleTransferDoc } from "@octogee/shared/types/fleet-controller";
-import { runMigration, type MigrationRunnerDeps } from "./fleet-migration-runner";
-import { MigrationDrainPendingError, type MigrationClient } from "./fleet-migration-client";
+import type { ScheduleRecord, ScheduleRestoreResult, ScheduleTransferDoc } from "@octogee/shared/types/fleet-controller";
+import { restoreScheduleTransfer, runMigration, type MigrationRunnerDeps } from "./fleet-migration-runner";
+import { MigrationDrainPendingError, MigrationRpcError, MigrationTransportError, type MigrationClient } from "./fleet-migration-client";
 
 const STANDUP: ScheduleRecord = { sourceJobId: "job-standup", agentId: "octogee-alice-coach", job: { name: "standup", schedule: { kind: "cron", expr: "0 9 * * *" } } };
 
@@ -579,13 +579,15 @@ describe("schedule transfer", () => {
     const h = harness();
     const snapshotAndRestore = vi.mocked(h.client.schedules).getMockImplementation()!;
     vi.mocked(h.client.schedules).mockImplementation(async (request) => request.op === "restore"
-      ? { migrationId: "m1", slug: "alice", op: "restore", created: 0, existing: 0, failed: [{ name: "standup", error: "invalid cron" }] }
+      ? { migrationId: "m1", slug: "alice", op: "restore", created: 0, existing: 0,
+        failed: [{ name: "standup", agentId: STANDUP.agentId, sourceJobId: STANDUP.sourceJobId, error: "invalid cron" }] }
       : snapshotAndRestore(request));
 
     expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
 
     expect(h.deps.recordScheduleRestore).toHaveBeenCalledWith("m1", {
-      restoreAttemptedTo: "gw-green", restoreAttemptedAt: expect.any(Number), restoreFailures: [{ name: "standup", error: "invalid cron" }],
+      restoreAttemptedTo: "gw-green", restoreAttemptedAt: expect.any(Number),
+      restoreFailures: [{ name: "standup", agentId: STANDUP.agentId, sourceJobId: STANDUP.sourceJobId, error: "invalid cron" }],
     });
   });
 
@@ -647,7 +649,10 @@ describe("schedule transfer", () => {
     expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true, finalPhase: "done", rolledBack: false });
 
     expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-blue" }));
-    expect(h.deps.recordScheduleRestore).not.toHaveBeenCalled();
+    expect(h.transfers.get("m1")).toMatchObject({
+      restoreAttemptedTo: "gw-green",
+      restoreFailures: [expect.objectContaining({ error: "/schedules/gw-green: 503 gateway restarting" })],
+    });
     expect(h.transfers.get("m1")?.restoredTo).toBeUndefined();
     expect(h.events).toContain("report:unmount-source:done");
     expect(h.events.some((event) => event.startsWith("log:") && event.includes("schedule restore on gw-green failed") && event.includes("503 gateway restarting"))).toBe(true);
@@ -721,6 +726,153 @@ describe("schedule transfer", () => {
 
     expect(h.client.schedules).not.toHaveBeenCalled();
     expect(h.deps.readScheduleTransfer).not.toHaveBeenCalled();
+  });
+});
+
+describe("restoreScheduleTransfer", () => {
+  const CHECK: ScheduleRecord = { sourceJobId: "job-check", agentId: "octogee-alice-proj-orbit", job: { name: "Proactive check", schedule: { kind: "every", everyMs: 60_000 } } };
+  const doc: ScheduleTransferDoc = {
+    migrationId: "m1", slug: "alice", sourceGatewayId: "gw-blue", targetGatewayId: "gw-green", records: [STANDUP, CHECK], skipped: [], snapshotAt: 1,
+  };
+  const held = "CronAgentMigrationHeldError: Cron agent octogee-alice-proj-orbit is held for migration mig-old:scheduler:1:claim:1";
+
+  function restoreFails(h: ReturnType<typeof harness>, failed: ScheduleRestoreResult["failed"]): void {
+    vi.mocked(h.client.schedules).mockResolvedValue({
+      migrationId: "m1", slug: "alice", op: "restore", created: doc.records.length - failed.length, existing: 0, failed,
+    } as never);
+  }
+
+  it("warns about each schedule it could not restore, naming the agent, the job and the cause, and returns them", async () => {
+    const h = harness();
+    h.transfers.set("m1", doc);
+    restoreFails(h, [{ name: "Proactive check", agentId: CHECK.agentId, sourceJobId: CHECK.sourceJobId, error: held, retryable: false }]);
+
+    const failures = await restoreScheduleTransfer(h.deps, { migrationId: "m1", slug: "alice", gatewayId: "gw-green" });
+
+    expect(failures).toEqual([{ name: "Proactive check", agentId: CHECK.agentId, sourceJobId: CHECK.sourceJobId, error: held, transient: false }]);
+    expect(h.events.filter((event) => event.startsWith("log:[migration-runner] ⚠"))).toEqual([
+      `log:[migration-runner] ⚠ schedule "Proactive check" of octogee-alice-proj-orbit was not restored on gw-green migrationId=m1 slug=alice: ${held}`,
+    ]);
+    expect(h.transfers.get("m1")).toMatchObject({
+      restoreAttemptedTo: "gw-green",
+      restoreFailures: [{ name: "Proactive check", agentId: CHECK.agentId, sourceJobId: CHECK.sourceJobId, error: held }],
+    });
+    expect(h.transfers.get("m1")?.restoredTo).toBeUndefined();
+  });
+
+  it("attributes a failure to the agent and source job the gateway names when another agent has a schedule of the same name", async () => {
+    const h = harness();
+    const coachCheck: ScheduleRecord = { ...CHECK, sourceJobId: "job-coach-check", agentId: "octogee-alice-coach" };
+    h.transfers.set("m1", { ...doc, records: [coachCheck, CHECK] });
+    restoreFails(h, [{ name: "Proactive check", agentId: CHECK.agentId, sourceJobId: CHECK.sourceJobId, error: "invalid cron", retryable: false }]);
+
+    const failures = await restoreScheduleTransfer(h.deps, { migrationId: "m1", slug: "alice", gatewayId: "gw-green" });
+
+    expect(failures).toEqual([{ name: "Proactive check", agentId: CHECK.agentId, sourceJobId: CHECK.sourceJobId, error: "invalid cron", transient: false }]);
+    expect(h.events.filter((event) => event.startsWith("log:[migration-runner] ⚠"))).toEqual([
+      "log:[migration-runner] ⚠ schedule \"Proactive check\" of octogee-alice-proj-orbit was not restored on gw-green migrationId=m1 slug=alice: invalid cron",
+    ]);
+    expect(h.transfers.get("m1")?.restoreFailures).toEqual([
+      { name: "Proactive check", agentId: CHECK.agentId, sourceJobId: CHECK.sourceJobId, error: "invalid cron" },
+    ]);
+  });
+
+  it("leaves a failure unattributed when the gateway names no schedule of this transfer", async () => {
+    const h = harness();
+    h.transfers.set("m1", doc);
+    restoreFails(h, [{ name: "Proactive check", agentId: CHECK.agentId, sourceJobId: "job-elsewhere", error: "invalid cron", retryable: false }]);
+
+    const failures = await restoreScheduleTransfer(h.deps, { migrationId: "m1", slug: "alice", gatewayId: "gw-green" });
+
+    expect(failures).toEqual([{ name: "Proactive check", agentId: null, sourceJobId: null, error: "invalid cron", transient: false }]);
+    expect(h.transfers.get("m1")?.restoreFailures).toEqual([{ name: "Proactive check", error: "invalid cron" }]);
+  });
+
+  it.each([
+    "OpenClaw workspace identities are not initialized for this boot",
+    'invalid cron.add params: Auth profile "platform-openai:default" is temporarily unavailable for platform-openai/gpt-6.1-terra.',
+    "cron.add response timed out after 30000ms",
+  ])("takes the gateway's word over the message on whether a schedule may yet be restored: %s", async (refusal) => {
+    const h = harness();
+    h.transfers.set("m1", doc);
+    restoreFails(h, [{ name: "Proactive check", agentId: CHECK.agentId, sourceJobId: CHECK.sourceJobId, error: refusal, retryable: false }]);
+
+    const failures = await restoreScheduleTransfer(h.deps, { migrationId: "m1", slug: "alice", gatewayId: "gw-green" });
+
+    expect(failures).toEqual([expect.objectContaining({ sourceJobId: CHECK.sourceJobId, transient: false })]);
+  });
+
+  it("marks a schedule the gateway could not reach its scheduler for as one to retry, and stores only its cause", async () => {
+    const h = harness();
+    h.transfers.set("m1", doc);
+    const timeout = "cron.add response timed out after 30000ms";
+    restoreFails(h, [{ name: "Proactive check", agentId: CHECK.agentId, sourceJobId: CHECK.sourceJobId, error: timeout, retryable: true }]);
+
+    const failures = await restoreScheduleTransfer(h.deps, { migrationId: "m1", slug: "alice", gatewayId: "gw-green" });
+
+    expect(failures).toEqual([{ name: "Proactive check", agentId: CHECK.agentId, sourceJobId: CHECK.sourceJobId, error: timeout, transient: true }]);
+    expect(h.transfers.get("m1")?.restoreFailures).toEqual([
+      { name: "Proactive check", agentId: CHECK.agentId, sourceJobId: CHECK.sourceJobId, error: timeout },
+    ]);
+  });
+
+  it.each([
+    ["the gateway is unavailable", new MigrationRpcError("/schedules/gw-green: 503 gateway restarting", { status: 503 }), true],
+    ["the gateway cannot be reached", new MigrationTransportError("schedules transport failed: socket hang up"), true],
+    ["the gateway lost its scheduler", new MigrationRpcError("/schedules/gw-green: 500 socket closed before cron.list response", { status: 500, retryable: true }), true],
+    ["the gateway fails without saying whether it may yet succeed", new MigrationRpcError("/schedules/gw-green: 500 Internal Server Error", { status: 500 }), true],
+    ["its answer does not match the request", new Error("schedules restore acknowledgement mismatch"), true],
+    ["the gateway refuses it", new MigrationRpcError("/schedules/gw-green: 500 restore failed", { status: 500, retryable: false }), false],
+    ["the gateway rejects the request", new MigrationRpcError("/schedules/gw-green: 400 invalid schedule transfer request", { status: 400 }), false],
+  ] as const)("reports every pending schedule as unrestored when the restore call fails because %s", async (_cause, error, transient) => {
+    const h = harness();
+    h.transfers.set("m1", doc);
+    vi.mocked(h.client.schedules).mockRejectedValue(error);
+
+    const failures = await restoreScheduleTransfer(h.deps, { migrationId: "m1", slug: "alice", gatewayId: "gw-green" });
+
+    expect(failures).toEqual([
+      { name: "standup", agentId: STANDUP.agentId, sourceJobId: STANDUP.sourceJobId, error: error.message, transient },
+      { name: "Proactive check", agentId: CHECK.agentId, sourceJobId: CHECK.sourceJobId, error: error.message, transient },
+    ]);
+    expect(h.transfers.get("m1")).toMatchObject({
+      restoreAttemptedTo: "gw-green",
+      restoreFailures: [
+        { name: "standup", agentId: STANDUP.agentId, sourceJobId: STANDUP.sourceJobId, error: error.message },
+        { name: "Proactive check", agentId: CHECK.agentId, sourceJobId: CHECK.sourceJobId, error: error.message },
+      ],
+    });
+    expect(h.transfers.get("m1")?.restoredTo).toBeUndefined();
+  });
+
+  it("leaves a failed read of the transfer record to its caller, restoring and recording nothing", async () => {
+    const h = harness();
+    h.transfers.set("m1", doc);
+    const reset = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+    vi.mocked(h.deps.readScheduleTransfer).mockRejectedValueOnce(reset);
+
+    await expect(restoreScheduleTransfer(h.deps, { migrationId: "m1", slug: "alice", gatewayId: "gw-green" })).rejects.toBe(reset);
+
+    expect(h.client.schedules).not.toHaveBeenCalled();
+    expect(h.deps.recordScheduleRestore).not.toHaveBeenCalled();
+    expect(h.transfers.get("m1")).toEqual(doc);
+  });
+
+  it("warns when there is no transfer record to restore", async () => {
+    const h = harness();
+
+    expect(await restoreScheduleTransfer(h.deps, { migrationId: "m1", slug: "alice", gatewayId: "gw-green" })).toEqual([]);
+
+    expect(h.events).toContain("log:[migration-runner] ⚠ no schedule transfer record migrationId=m1 slug=alice to restore on gw-green");
+    expect(h.client.schedules).not.toHaveBeenCalled();
+  });
+
+  it("reports nothing when the snapshot was already restored", async () => {
+    const h = harness();
+    h.transfers.set("m1", { ...doc, restoredTo: "gw-green", restoredAt: 2, restoreFailures: [] });
+
+    expect(await restoreScheduleTransfer(h.deps, { migrationId: "m1", slug: "alice", gatewayId: "gw-green" })).toEqual([]);
+    expect(h.client.schedules).not.toHaveBeenCalled();
   });
 });
 

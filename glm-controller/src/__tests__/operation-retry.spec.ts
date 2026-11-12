@@ -1137,6 +1137,46 @@ it.each([false, true])("keeps recovery on an assigned target pending beyond the 
   expect(update).toMatchObject({ status: "pending", attempts: 21 });
 });
 
+describe("a migration that failed after its cutover", () => {
+  const handoff = { migrationId: "mig-op-activate:scheduler:1:claim:4000", uid: "alice", slug: "alice", fromGatewayId: "shared-blue",
+    toGatewayId: "alice-vm", stageAfterCutover: true as const, scheduleTransfer: true as const };
+  const output = { scheduleRestoreFailures: [{ gatewayId: "alice-vm", agentId: "octogee-alice-coach", sourceJobId: "job-1", job: "Proactive check", error: "invalid cron" }] };
+  const error = "schedules were not restored after the cutover onto alice-vm: 1 schedule not restored, 0 scheduler fences kept";
+
+  it("fails terminally on its first attempt, keeps the cutover, records its output and releases its scheduler handoff", () => {
+    const update = buildOperationCompletionUpdate({
+      op: { id: "op-activate", kind: "migrate-customer", attempts: 0, startedAt: 4_000, cutoverCommittedAt: 4_500, schedulerHandoff: handoff, schedulerHandoffReleased: false },
+      result: { steps: [], success: false, rolledBack: false, failedAfterCutover: true, error, output },
+      steps: [], now: 5_000,
+    });
+
+    expect(update).toMatchObject({
+      status: "failed", completedAt: 5_000, attempts: 1, error, rolledBack: false, output,
+      schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 5_000,
+    });
+    expect(update.attemptHistory).toEqual([expect.objectContaining({ attempt: 1, error, classification: "terminal" })]);
+  });
+
+  it("fails terminally even when the cause reads as one to retry", () => {
+    const held = "1 schedule not restored: Cron agent octogee-alice-coach is held for migration mig-x:scheduler:1:claim:1";
+    expect(classifyOperationFailure(held)).toBe("transient");
+
+    expect(buildOperationCompletionUpdate({
+      op: { kind: "migrate-customer", attempts: 0, cutoverCommittedAt: 4_500, schedulerHandoff: handoff },
+      result: { steps: [], success: false, rolledBack: false, failedAfterCutover: true, error: held },
+      steps: [], now: 5_000,
+    })).toMatchObject({ status: "failed", rolledBack: false, schedulerHandoffReleased: true });
+  });
+
+  it("is refused for an operation that holds no scheduler handoff", () => {
+    expect(() => buildOperationCompletionUpdate({
+      op: { kind: "migrate-customer", attempts: 0, cutoverCommittedAt: 4_500 },
+      result: { steps: [], success: false, rolledBack: false, failedAfterCutover: true, error },
+      steps: [], now: 5_000,
+    })).toThrow("only a user migration with a scheduler handoff can fail after its cutover");
+  });
+});
+
 it("resumes a durable handoff after a lost cutover acknowledgment without a recorded commit", () => {
   const op = { kind: "migrate-customer", attempts: 20,
     schedulerHandoff: { migrationId: "stable", uid: "alice", slug: "alice", fromGatewayId: "shared-blue",

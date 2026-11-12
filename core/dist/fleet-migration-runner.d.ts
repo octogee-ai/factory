@@ -41,6 +41,7 @@ export interface MigrationRunnerDeps {
     wait?: (delayMs: number) => Promise<void>;
 }
 export declare function isTargetSchedulerNotReady(error: unknown): boolean;
+export declare function isPermanentSchedulerRefusal(error: unknown): boolean;
 export interface MigrationRunnerInput {
     resumeForwardRecovery?: {
         sourceSystemConfigCommit?: string;
@@ -74,10 +75,17 @@ interface ScheduleTransferScope {
     slug: string;
 }
 type ScheduleRestoreDeps = Pick<MigrationRunnerDeps, "client" | "log" | "now" | "readScheduleTransfer" | "recordScheduleRestore">;
+export interface ScheduleRestoreFailure {
+    name: string;
+    agentId: string | null;
+    sourceJobId: string | null;
+    error: string;
+    transient: boolean;
+}
 export declare function restoreScheduleTransfer(deps: ScheduleRestoreDeps, input: ScheduleTransferScope & {
     gatewayId: string;
     doc?: ScheduleTransferDoc;
-}): Promise<void>;
+}): Promise<ScheduleRestoreFailure[]>;
 type SchedulerRequest = Parameters<MigrationClient["scheduler"]>[0];
 export declare function callReleasedTargetScheduler(deps: Pick<MigrationRunnerDeps, "client" | "log" | "now" | "wait">, request: SchedulerRequest): Promise<void>;
 export declare function runMigration(input: MigrationRunnerInput, deps: MigrationRunnerDeps): Promise<MigrationRunnerResult>;

@@ -24,6 +24,12 @@ import {
 import type { NativeVmReturn, NativeVmReturnInput, NativeReturnPark, NativeSourcePark } from "../lib/native-vm-return.js";
 import type { NativeSchedulerRetirementInput } from "../lib/native-scheduler-retirement.js";
 import { reportedAbandonedNativeScheduler, type RecoverAbandonedNativeScheduler } from "../lib/native-return-scheduler-recovery.js";
+import {
+  heldSchedulerMigration,
+  releaseSchedulerCustody,
+  type SchedulerCustodyOwner,
+  type SchedulerFenceOutcome,
+} from "@octogee/core/scheduler-custody";
 import type {
   UserMigrationV2GatewayRootFence,
   UserMigrationV2State,
@@ -58,6 +64,7 @@ import {
   type MigrationRunnerDeps,
   type MigrationRunnerResult,
   type ReportedStep,
+  type ScheduleRestoreFailure,
   type ScheduleRestoreRecord,
   type TargetSystemConfigConvergence,
 } from "@octogee/core/fleet-migration-runner";
@@ -97,6 +104,8 @@ export interface MigrateUserDeps {
   recoverAbandonedNativeScheduler?: RecoverAbandonedNativeScheduler;
   prepareNativeVmReturn: (input: NativeVmReturnInput) => Promise<NativeVmReturn | null>;
   retireNativeSchedulerBeforeStage: (input: NativeSchedulerRetirementInput, scheduler: MigrationClient["scheduler"]) => Promise<void>;
+  readOperation: (operationId: string) => Promise<SchedulerCustodyOwner | null>;
+  readUserAgentIds: (uid: string) => Promise<readonly string[]>;
 
   readUser: (uid: string) => Promise<UserGatewayInfo | null>;
 
@@ -1518,20 +1527,56 @@ async function completeSchedulerHandoff(
       return failure(`migration cutover committed; destination recovery pending: status 503: ${errorMessage(error)}`, false);
     }
   }
+  const restored: ScheduleRestoreOutcome[] = [];
   try {
-    if (handoff.scheduleTransfer) await restoreSchedulesAfterCutover(deps, op, handoff, migrationId);
+    if (handoff.scheduleTransfer) restored.push(await restoreSchedulesAfterCutover(deps, op, ctx, handoff, migrationId));
     else await finishLegacySchedulerHandoff(deps, op, handoff);
   } catch (error) {
     return failure(`migration cutover committed; destination recovery pending: status 503: ${errorMessage(error)}`, false);
   }
   await unmountSourceAfterCutover(deps, { migrationId, slug: handoff.slug, gatewayId: handoff.fromGatewayId });
-  return { steps: [], success: true, rolledBack: false };
+  return scheduleRestoreResult(deps, op, handoff, restored);
 }
 
-function legacySchedulerHandoffDeps(deps: MigrateUserDeps, op: Operation, handoff: SchedulerHandoffState): Pick<MigrationRunnerDeps, "finishLegacySchedulerHandoff"> {
-  return { finishLegacySchedulerHandoff: () => handoff.scheduleTransfer
-    ? restoreSchedulesAfterCutover(deps, op, handoff, deps.genMigrationId(op.id))
-    : finishLegacySchedulerHandoff(deps, op, handoff) };
+type UnreleasedSchedulerFence = Extract<SchedulerFenceOutcome, { outcome: "kept" | "failed" }>;
+
+interface ScheduleRestoreOutcome {
+  unrestored: ScheduleRestoreFailure[];
+  unreleased: UnreleasedSchedulerFence[];
+}
+
+function scheduleRestoreResult(
+  deps: MigrateUserDeps, op: Operation, handoff: SchedulerHandoffState, restored: readonly ScheduleRestoreOutcome[],
+): OperationResult {
+  const gatewayId = handoff.toGatewayId;
+  const unrestored = restored.flatMap(outcome => outcome.unrestored);
+  const unreleased = restored.flatMap(outcome => outcome.unreleased);
+  if (unrestored.length === 0 && unreleased.length === 0) return { steps: [], success: true, rolledBack: false };
+  const output = {
+    ...(unrestored.length > 0 ? { scheduleRestoreFailures: unrestored.map(({ name, agentId, sourceJobId, error }) =>
+      ({ gatewayId, agentId, sourceJobId, job: name, error })) } : {}),
+    ...(unreleased.length > 0
+      ? { unreleasedSchedulerFences: unreleased.map(fence => ({ gatewayId, agentId: fence.agentId, holder: fence.holder, reason: fenceReason(fence) })) } : {}),
+  };
+  if (handoff.stageAfterCutover !== true) return { steps: [], success: true, rolledBack: false, output };
+  const error = `schedules were not restored after the cutover onto ${gatewayId}: ` +
+    `${unrestored.length} ${unrestored.length === 1 ? "schedule" : "schedules"} not restored, ` +
+    `${unreleased.length} scheduler ${unreleased.length === 1 ? "fence" : "fences"} kept`;
+  deps.log(`[migrate-customer] ❌ ${handoff.slug}: ${error} op=${op.id}`);
+  return { steps: [], success: false, rolledBack: false, failedAfterCutover: true, error, output };
+}
+
+function fenceReason(fence: UnreleasedSchedulerFence): string {
+  return fence.outcome === "kept" ? fence.reason : fence.error;
+}
+
+function legacySchedulerHandoffDeps(
+  deps: MigrateUserDeps, op: Operation, ctx: OperationContext, handoff: SchedulerHandoffState, restored: ScheduleRestoreOutcome[],
+): Pick<MigrationRunnerDeps, "finishLegacySchedulerHandoff"> {
+  return { finishLegacySchedulerHandoff: async () => {
+    if (handoff.scheduleTransfer) restored.push(await restoreSchedulesAfterCutover(deps, op, ctx, handoff, deps.genMigrationId(op.id)));
+    else await finishLegacySchedulerHandoff(deps, op, handoff);
+  } };
 }
 
 async function finishLegacySchedulerHandoff(deps: MigrateUserDeps, op: Operation, handoff: SchedulerHandoffState): Promise<void> {
@@ -1554,14 +1599,55 @@ async function finishLegacySchedulerHandoff(deps: MigrateUserDeps, op: Operation
 async function restoreSchedulesAfterCutover(
   deps: MigrateUserDeps,
   op: Operation,
+  ctx: OperationContext,
   handoff: SchedulerHandoffState,
   migrationId: string,
-): Promise<void> {
+): Promise<ScheduleRestoreOutcome> {
   const { uid, slug, toGatewayId } = handoff;
   const client = await gatewayClient(deps, [toGatewayId]);
   await retireTargetNativeScheduler(deps, client, { uid, slug, gatewayId: toGatewayId, operationId: op.id, claimedStartedAt: op.startedAt });
-  await restoreScheduleTransfer({ client, log: deps.log, now: deps.now, ...scheduleTransferDeps(deps, uid) },
+  const unreleased = handoff.stageAfterCutover ? await releaseTargetSchedulerCustody(deps, op, ctx, client, handoff) : [];
+  const unrestored = await restoreScheduleTransfer({ client, log: deps.log, now: deps.now, ...scheduleTransferDeps(deps, uid) },
     { migrationId, slug, gatewayId: toGatewayId });
+  const retryable = unrestored.filter(failure => failure.transient);
+  if (handoff.stageAfterCutover && retryable.length > 0) {
+    throw new Error(`${retryable.length} of ${unrestored.length} unrestored schedules on ${toGatewayId} may yet be restored: ${retryable[0].error}`);
+  }
+  return { unrestored: unrestored.map(failure => ({ ...failure, error: withUnreleasedFence(failure.error, unreleased) })), unreleased };
+}
+
+async function releaseTargetSchedulerCustody(
+  deps: MigrateUserDeps, op: Operation, ctx: OperationContext, client: MigrationClient, handoff: SchedulerHandoffState,
+): Promise<UnreleasedSchedulerFence[]> {
+  const { uid, slug, toGatewayId } = handoff;
+  const outcomes = await releaseSchedulerCustody({
+    scheduler: params => client.scheduler(params),
+    readOperation: deps.readOperation,
+    assertOwner: async () => {
+      await ctx.assertActiveClaim?.(true);
+      const owner = await deps.readUser(uid);
+      if (owner?.currentGatewayId !== toGatewayId) throw new Error(`${slug} is no longer assigned to ${toGatewayId}`);
+    },
+    log: deps.log,
+  }, { uid, slug, gatewayId: toGatewayId, operationId: op.id, ownedSince: op.cutoverCommittedAt ?? deps.now() }, await deps.readUserAgentIds(uid));
+  const unreleased = outcomes.filter((outcome): outcome is UnreleasedSchedulerFence => outcome.outcome === "kept" || outcome.outcome === "failed");
+  const failed = unreleased.filter(fence => fence.outcome === "failed");
+  const retryable = failed.filter(fence => fence.transient);
+  if (retryable.length > 0) {
+    throw new Error(retryable.map(fence => `scheduler fence of ${fence.agentId} on ${toGatewayId} was not released: ${fence.error}`).join("; "));
+  }
+  for (const fence of failed) {
+    const heldBy = fence.holder ? ` held by ${fence.holder}` : "";
+    deps.log(`[migrate-customer] ❌ ${slug}: could not release the scheduler fence of ${fence.agentId} on ${toGatewayId}${heldBy}: ${fence.error} op=${op.id}`);
+  }
+  return unreleased;
+}
+
+function withUnreleasedFence(error: string, unreleased: readonly UnreleasedSchedulerFence[]): string {
+  const held = heldSchedulerMigration(error);
+  const fence = held === null ? undefined : unreleased.find(candidate => candidate.agentId === held.agentId);
+  if (fence === undefined) return error;
+  return fence.outcome === "kept" ? `${error} (fence kept: ${fence.reason})` : `${error} (fence release failed: ${fence.error})`;
 }
 
 async function unmountSourceAfterCutover(
@@ -2250,6 +2336,7 @@ async function executeMigrationAttempt(
     scheduleTransfer: true,
   };
   await persistSchedulerHandoff(handoff);
+  const restored: ScheduleRestoreOutcome[] = [];
   const result = await runMigration(
     {
       migrationId: prepared.migrationId,
@@ -2268,7 +2355,7 @@ async function executeMigrationAttempt(
     },
     {
       ...buildRunnerDeps({ deps, client: withImportProgress(client, progress), ctx: destinationContext, automatic, operationId, uid: prepared.uid, sourceGatewayId: prepared.user.currentGatewayId }),
-      ...legacySchedulerHandoffDeps(deps, op, handoff),
+      ...legacySchedulerHandoffDeps(deps, op, ctx, handoff, restored),
       ...(!sourceOwnedUserActivation(prepared.targets) || handoff.forwardRecovery ? { persistForwardRecovery: async (state: { sourceSystemConfigCommit?: string }) => {
         if (!ctx.assertActiveClaim) throw new Error("forward recovery requires an active operation claim");
         await ctx.assertActiveClaim(handoff.forwardRecovery !== undefined);
@@ -2288,7 +2375,7 @@ async function executeMigrationAttempt(
     },
   );
   return finishMigrationAttempt({
-    deps, ctx, op, handoff, prepared, result, targetReleased, preparationFailed, postQuiesceFailed, targetUnmountConfirmed,
+    deps, ctx, op, handoff, prepared, result, targetReleased, preparationFailed, postQuiesceFailed, targetUnmountConfirmed, restored,
   });
 }
 
@@ -2296,6 +2383,7 @@ async function finishMigrationAttempt(input: {
   deps: MigrateUserDeps; ctx: OperationContext; op: Operation; handoff: SchedulerHandoffState;
   prepared: PreparedMigration; result: MigrationRunnerResult; targetReleased: boolean;
   preparationFailed: boolean; postQuiesceFailed: boolean; targetUnmountConfirmed: boolean;
+  restored: readonly ScheduleRestoreOutcome[];
 }): Promise<OperationResult> {
   const { deps, ctx, op, handoff, prepared, result, targetReleased, preparationFailed, postQuiesceFailed, targetUnmountConfirmed } = input;
   if (!result.success && targetReleased && await recordReleasedIsolatedTarget({ deps, ctx, op, handoff })) {
@@ -2319,9 +2407,10 @@ async function finishMigrationAttempt(input: {
         ? { sourceRootUpdatedAt: prepared.targets.sourceRootUpdatedAt } : {}),
     });
   }
+  if (result.success) return scheduleRestoreResult(deps, op, handoff, input.restored);
   return {
     steps: [],
-    success: result.success,
+    success: false,
     error: result.errorAt?.error,
     ...(result.waitingForUserIdle ? { waitingForUserIdle: true } : {}),
     rolledBack: result.rolledBack,

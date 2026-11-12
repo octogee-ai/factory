@@ -3200,6 +3200,12 @@ async function buildHandlers(
     retireNativeSchedulerBeforeStage: (input, scheduler) => retireNativeSchedulerBeforeStage({
       store, vm: createGatewayComputeClient(store, logFn), log: logFn,
     }, input, scheduler),
+    readOperation: (operationId) => store.journal.operations.get(operationId),
+    readUserAgentIds: async (uid) => {
+      const userRecord = await store.users.records.get(uid);
+      if (!userRecord) return [];
+      return [...new Set([...(userRecord.openclaw.agentId ? [userRecord.openclaw.agentId] : []), ...userRecord.agents.agentIds])];
+    },
     readUser: async (uid) => {
       const userRecord = await store.users.records.get(uid);
       const slug = userRecord?.slug;
