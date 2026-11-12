@@ -1,12 +1,11 @@
 import { isDeepStrictEqual } from 'node:util';
-import type { DocumentData } from 'firebase-admin/firestore';
 import type { Operation } from '@octogee/shared/types/glm';
-import type { PlatformUserRecord, GatewayRoot, GatewayRuntimeRestartFenceValue, OperationRecord, PlatformStateStore, PlatformStateTransaction, Stored } from '@octogee/core/platform-state';
+import type { PlatformUserRecord, GatewayRoot, GatewayRuntimeRestartFenceValue, OperationRecord, PlatformStateStore, PlatformStateTransaction, Stored, UntypedRecord } from '@octogee/core/platform-state';
 import type { OperationContext } from '../operation-router.js';
 import type { KubectlSubprocess } from '../fleet-ingress.js';
 import { queuedSharedMigrationOwnsSourceInStore } from './queued-shared-migration.js';
 
-type RecordValue = DocumentData;
+type RecordValue = UntypedRecord;
 interface Recovery { operationId: string; sourceSha: string; images: Record<string, string>; reauthorize?: RecordValue; supersede?: RecordValue }
 export interface SharedPodRecoveryDeps { store: PlatformStateStore; namespace: string; sourceSha: string; runKubectl: KubectlSubprocess; now?: () => number; wait?: (ms: number) => Promise<void> }
 type Deps = SharedPodRecoveryDeps;

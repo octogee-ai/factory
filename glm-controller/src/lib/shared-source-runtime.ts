@@ -1,17 +1,16 @@
 import { assertSourceRecoveryDiscovery } from './shared-source-discovery.js';
 import { managementHealthDriverSource } from './runtime-restart-driver.js';
 import { isDeepStrictEqual } from 'node:util';
-import type { DocumentData } from 'firebase-admin/firestore';
 import type { Operation } from '@octogee/shared/types/glm';
 import { assertSharedSourceRecoveryUnchanged, assertSharedSourceRecoveryPredecessor, readSharedSourceRecoveryAuthority, type SharedSourceRecoveryAuthority, type SharedSourceRecoverySupersession } from '@octogee/core/shared-source-recovery';
-import type { GatewayRoot, GatewayRuntimeRestartFenceValue, PlatformStateTransaction, Stored } from '@octogee/core/platform-state';
+import type { GatewayRoot, GatewayRuntimeRestartFenceValue, PlatformStateTransaction, Stored, UntypedRecord } from '@octogee/core/platform-state';
 import type { OperationContext } from '../operation-router.js';
 import { assertRecoveryImages, existingOwnedPod, imagePatch, json, recoveredPodReady, type SharedPodRecoveryDeps } from './shared-restore-runtime.js';
 import { captureSourceRecoveryWorkload, pinSourceRecoveryImages, resumeSourceRecoveryWorkload, type SourceRecoveryWorkload } from './shared-source-images.js';
 import { recordRecoveredGatewayReleaseInStore } from '@octogee/core/gateway-release-append';
 import { isReleasePayload, type ReleasePayload } from '@octogee/shared/types/gateway-releases';
 
-type Row = DocumentData;
+type Row = UntypedRecord;
 type Deps = SharedPodRecoveryDeps;
 interface SourceRecovery extends SharedSourceRecoveryAuthority { sourceSha: string; images: Record<string, string>; payload?: ReleasePayload; supersede?: SharedSourceRecoverySupersession }
 const object = (value: unknown): Row => value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};

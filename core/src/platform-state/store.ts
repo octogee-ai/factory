@@ -50,6 +50,9 @@ export type Stored<T> = T & { readonly revision: Revision };
 
 export type OpaqueMap = Readonly<Record<string, unknown>>;
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- callers validate each field at runtime
+export type UntypedRecord = Record<string, any>;
+
 export interface PageRequest {
   readonly limit: number;
   readonly after?: string;

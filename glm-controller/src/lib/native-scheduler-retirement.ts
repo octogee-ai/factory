@@ -1,5 +1,4 @@
-import type { DocumentData } from "firebase-admin/firestore";
-import type { PlatformUserRecord, FleetRegistryRecord, GatewayRoot, OperationRecord, PlatformStateStore } from "@octogee/core/platform-state";
+import type { PlatformUserRecord, FleetRegistryRecord, GatewayRoot, OperationRecord, PlatformStateStore, UntypedRecord } from "@octogee/core/platform-state";
 import { migrationCancellationDeferred } from "@octogee/core/fleet-state";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { GatewayVmClient } from "./compute-vm.js";
@@ -18,7 +17,7 @@ type Retirement = Record<"uid" | "slug" | "returnOperationId" | "migrationId" | 
 const KEYS: Array<keyof Omit<Retirement, "completedAt" | "cutoverCommittedAt">> = ["uid", "slug", "returnOperationId", "migrationId", "sourceGatewayId", "sharedGatewayId",
   "instanceName", "instanceId", "zone", "homeDiskId", "homeDiskSource"];
 
-export function readNativeSchedulerRetirement(data: DocumentData | undefined): Retirement | null {
+export function readNativeSchedulerRetirement(data: UntypedRecord | undefined): Retirement | null {
   if (data === undefined) return null;
   if (!data || KEYS.some(key => typeof data[key] !== "string" || !data[key])) throw new Error("native scheduler retirement authority is malformed");
   if ((data.completedAt !== undefined || data.cutoverCommittedAt !== undefined) &&
@@ -33,7 +32,7 @@ function sameRetirement(a: Retirement | null, b: Retirement): boolean {
   return a !== null && KEYS.every(key => a[key] === b[key]) && a.completedAt === b.completedAt && a.cutoverCommittedAt === b.cutoverCommittedAt;
 }
 
-function handoffMatches(handoff: DocumentData, input: ReturnInput): boolean {
+function handoffMatches(handoff: UntypedRecord, input: ReturnInput): boolean {
   return handoff.uid === input.uid && handoff.slug === input.slug &&
     handoff.fromGatewayId === input.fromGatewayId && handoff.toGatewayId === input.toGatewayId;
 }
@@ -91,7 +90,7 @@ function ownerMatches(user: PlatformUserRecord, input: NativeSchedulerRetirement
 
 type VmAuthority = { instanceId: string; image?: { name: string; id: string; project: string; operationId: string } };
 
-function admittedReplacementImage(image: DocumentData | undefined, pending: Retirement, targetGatewayId: string): VmAuthority["image"] | null {
+function admittedReplacementImage(image: UntypedRecord | undefined, pending: Retirement, targetGatewayId: string): VmAuthority["image"] | null {
   if (image?.homeAdmission !== true || image.homeId !== pending.homeDiskId) return null;
   if (["name", "id", "project", "operationId"].some(key => typeof image[key] !== "string" || !image[key])) return null;
   const source = image.sourceComputer;
@@ -104,7 +103,7 @@ function vmAuthority(runtime: FleetRegistryRecord | null, user: PlatformUserReco
   const vm = runtime?.vm;
   if (vm?.instanceName !== pending.instanceName || vm.zone !== pending.zone || typeof vm.instanceId !== "string") return null;
   if (vm.instanceId === pending.instanceId) return { instanceId: vm.instanceId };
-  const image = admittedReplacementImage(user?.home.homeDisk?.bootImage as DocumentData | undefined, pending, targetGatewayId);
+  const image = admittedReplacementImage(user?.home.homeDisk?.bootImage as UntypedRecord | undefined, pending, targetGatewayId);
   return image ? { instanceId: vm.instanceId, image } : null;
 }
 

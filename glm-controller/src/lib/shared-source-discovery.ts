@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import type { DocumentData } from 'firebase-admin/firestore';
+import type { UntypedRecord } from '@octogee/core/platform-state';
 import type { SourceRecoveryAgentStore } from '@octogee/core/shared-source-recovery';
 import type { SharedPodRecoveryDeps } from './shared-restore-runtime.js';
 
@@ -78,7 +78,7 @@ catch (error) { process.stderr.write(String(error.message)); process.exitCode = 
 `;
 }
 
-export async function assertSourceRecoveryDiscovery(deps: Pick<SharedPodRecoveryDeps, 'namespace' | 'runKubectl'>, pod: DocumentData,
+export async function assertSourceRecoveryDiscovery(deps: Pick<SharedPodRecoveryDeps, 'namespace' | 'runKubectl'>, pod: UntypedRecord,
   stores: readonly SourceRecoveryAgentStore[]): Promise<void> {
   const result = await deps.runKubectl(['-n', deps.namespace, 'exec', pod.metadata.name, '-c', 'gateway', '-i', '--', 'node', '--input-type=commonjs'],
     { stdin: sourceRecoveryDiscoveryDriver(pod.metadata.uid, stores), timeoutMs: 30_000 });

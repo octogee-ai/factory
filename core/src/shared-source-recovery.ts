@@ -2,24 +2,23 @@ import { projectAgentId } from "@octogee/shared/types/identity";
 import { projectAgentConfigured } from "@octogee/shared/types/project";
 import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import { isDeepStrictEqual } from "node:util";
-import type { DocumentData } from "firebase-admin/firestore";
 import { operationAuditMutationFingerprint } from "./operation-audit.js";
 import type { AgentStoreRecord, PlatformUserRecord } from "./platform-state/users.js";
 import type { GatewayAssignment, GatewayRoot } from "./platform-state/gateways.js";
 import type { OperationRecord } from "./platform-state/operations.js";
-import type { PlatformStateTransaction, Stored } from "./platform-state/store.js";
+import type { PlatformStateTransaction, Stored, UntypedRecord } from "./platform-state/store.js";
 import type { WorkspaceProject } from "./platform-state/workspaces.js";
 
 export interface SourceRecoveryAssignment { uid: string; slug: string; agentId: string; assignmentEpoch: number; assignment: GatewayAssignment }
 export interface SourceRecoveryAgentStore { uid: string; slug: string; assignmentEpoch: number; agentId: string; storeId: string; schema: string }
-export interface SharedSourceRecoveryAuthority { schedulerStateRecovery: true; postgresAgentStores: SourceRecoveryAgentStore[]; root: DocumentData; assignments: SourceRecoveryAssignment[] }
+export interface SharedSourceRecoveryAuthority { schedulerStateRecovery: true; postgresAgentStores: SourceRecoveryAgentStore[]; root: UntypedRecord; assignments: SourceRecoveryAssignment[] }
 export class SharedSourceRecoveryConflict extends Error {}
 const UNMATCHED_ROUTE_AGENT_ID = "octogee-unmatched-route";
 const STORE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SCHEMA_PATTERN = /^[a-z_][a-z0-9_]{0,62}$/;
 const conflict = (message: string): never => { throw new SharedSourceRecoveryConflict(message); };
 
-function rootIdentity(root: GatewayRoot): DocumentData {
+function rootIdentity(root: GatewayRoot): UntypedRecord {
   return Object.fromEntries((["gatewayId", "gatewayClass", "ownerUid", "builderSlug", "desiredStatus", "desiredRelease", "liveRelease", "latestRelease"] as const)
     .map(key => [key, root[key]]));
 }
@@ -72,16 +71,16 @@ export async function readPostgresSourceAgentStores(transaction: PlatformStateTr
   return stores.sort((a, b) => a.agentId.localeCompare(b.agentId));
 }
 
-function operationTouchesSource(row: DocumentData, gatewayId: string): boolean {
+function operationTouchesSource(row: UntypedRecord, gatewayId: string): boolean {
   return [row.input?.gatewayId, row.input?.fromGatewayId, row.input?.toGatewayId].includes(gatewayId);
 }
-function ownedSourceFence(root: DocumentData, ownerId: string | undefined, assignments: SourceRecoveryAssignment[]): boolean {
+function ownedSourceFence(root: UntypedRecord, ownerId: string | undefined, assignments: SourceRecoveryAssignment[]): boolean {
   const fence = root.runtimeRestartFence, target = fence?.target;
   return Boolean(ownerId && fence?.kind === "source-recovery" && fence.attemptId === ownerId && fence.auditId === ownerId &&
     fence.gatewayId === root.gatewayId && ["reserved", "dispatched"].includes(fence.phase) && fence.doctor?.requestId === ownerId &&
     isDeepStrictEqual(target?.agents, assignments.map(({ uid, slug, agentId, assignmentEpoch }) => ({ uid, slug, agentId, assignmentEpoch }))));
 }
-function pristineOutbound(row: DocumentData, gatewayId: string, sourceUids: Set<string>): boolean {
+function pristineOutbound(row: UntypedRecord, gatewayId: string, sourceUids: Set<string>): boolean {
   return [row.kind === "migrate-customer", row.status === "pending", row.origin === "automatic",
     row.createdBy === "glm-controller-placement-policy", row.startedAt === null, row.completedAt === null,
     row.attempts === undefined || row.attempts === 0, Array.isArray(row.steps) && row.steps.length === 0,
@@ -95,7 +94,7 @@ function pristineOutbound(row: DocumentData, gatewayId: string, sourceUids: Set<
 function competingSourceOperation(operation: Stored<OperationRecord>, request: {
   gatewayId: string; ownOperationId?: string; sourceUids: Set<string>; fenced: boolean;
 }): boolean {
-  const row: DocumentData = operation;
+  const row: UntypedRecord = operation;
   return operation.id !== request.ownOperationId &&
     (operationTouchesSource(row, request.gatewayId) || request.sourceUids.has(row.input?.uid)) &&
     !(request.fenced && pristineOutbound(row, request.gatewayId, request.sourceUids));
@@ -130,9 +129,9 @@ export function assertSharedSourceRecoveryUnchanged(current: SharedSourceRecover
 }
 
 export interface SharedSourceRecoverySupersession {
-  operationId: string; input: DocumentData; inputFingerprint: string; startedAt: number; completedAt: number; error: string; fence: DocumentData;
+  operationId: string; input: UntypedRecord; inputFingerprint: string; startedAt: number; completedAt: number; error: string; fence: UntypedRecord;
 }
-function failedPredecessorMatches(row: DocumentData, gatewayId: string): boolean {
+function failedPredecessorMatches(row: UntypedRecord, gatewayId: string): boolean {
   const input = row.input ?? {};
   return [row.kind === "restart-gateway", row.status === "failed", input.gatewayId === gatewayId,
     Number.isSafeInteger(row.startedAt), row.startedAt > 0,
@@ -140,7 +139,7 @@ function failedPredecessorMatches(row: DocumentData, gatewayId: string): boolean
     row.cancellationRequestedAt === undefined, row.sourceRuntimeRecovery === undefined, row.sourceRecoverySupersededBy === undefined,
     input.sourceRecovery !== undefined, input.restoreRecovery === undefined].every(Boolean);
 }
-function startedDoctorMatches(row: DocumentData, fence: DocumentData): boolean {
+function startedDoctorMatches(row: UntypedRecord, fence: UntypedRecord): boolean {
   const doctor = fence.doctor ?? {}, proof = fence.installedImage ?? {}, target = fence.target ?? {}, gatewayImage = target.images?.gateway;
   return [doctor.error === undefined,
     Number.isSafeInteger(doctor.startedAt), doctor.startedAt > 0, typeof doctor.releaseKey === "string", Boolean(doctor.releaseKey),
@@ -150,25 +149,25 @@ function startedDoctorMatches(row: DocumentData, fence: DocumentData): boolean {
     typeof gatewayImage === "string" && /@sha256:[a-f0-9]{64}$/.test(gatewayImage),
     typeof proof.gatewayImageId === "string" && proof.gatewayImageId.endsWith(`@${String(gatewayImage).split("@")[1]}`)].every(Boolean);
 }
-function spentDoctorMatches(row: DocumentData, fence: DocumentData): boolean {
+function spentDoctorMatches(row: UntypedRecord, fence: UntypedRecord): boolean {
   const doctor = fence.doctor ?? {};
   return Object.keys(doctor).length === 3 && doctor.completedAt === undefined && doctor.verifiedAgentIds === undefined && startedDoctorMatches(row, fence);
 }
-function completedPostgresDoctorMatches(row: DocumentData, fence: DocumentData, source: SharedSourceRecoveryAuthority): boolean {
+function completedPostgresDoctorMatches(row: UntypedRecord, fence: UntypedRecord, source: SharedSourceRecoveryAuthority): boolean {
   const doctor = fence.doctor ?? {}, agentIds = source.postgresAgentStores?.map(store => store.agentId);
   return [Array.isArray(agentIds) && agentIds.length > 0, Object.keys(doctor).length === 5,
     Number.isSafeInteger(doctor.completedAt), doctor.completedAt >= doctor.startedAt, doctor.completedAt <= row.completedAt,
     typeof doctor.releaseKey === "string" && doctor.releaseKey.trim() === doctor.releaseKey && doctor.releaseKey.length <= 512,
     isDeepStrictEqual(doctor.verifiedAgentIds, agentIds), startedDoctorMatches(row, fence)].every(Boolean);
 }
-function predecessorDoctorMatches(row: DocumentData, fence: DocumentData, source: SharedSourceRecoveryAuthority): boolean {
+function predecessorDoctorMatches(row: UntypedRecord, fence: UntypedRecord, source: SharedSourceRecoveryAuthority): boolean {
   if (row.error === "another source operation is active") {
     return Object.keys(fence.doctor ?? {}).length === 1 && row.input?.sourceRecovery?.supersede === undefined;
   }
   return row.error === "source repair is not ready; outcome remains fenced" &&
     (spentDoctorMatches(row, fence) || completedPostgresDoctorMatches(row, fence, source));
 }
-function predecessorFenceMatches(request: { fence: DocumentData; operationId: string; source: SharedSourceRecoveryAuthority; input: DocumentData; row: DocumentData }): boolean {
+function predecessorFenceMatches(request: { fence: UntypedRecord; operationId: string; source: SharedSourceRecoveryAuthority; input: UntypedRecord; row: UntypedRecord }): boolean {
   const { operationId, source } = request, fence = request.fence ?? {}, input = request.input ?? {}, doctor = fence.doctor ?? {}, target = fence.target ?? {};
   return [ownedSourceFence({ ...source.root, runtimeRestartFence: fence }, operationId, source.assignments), fence.phase === "dispatched",
     typeof target.podUid === "string", Boolean(target.podUid), typeof target.podName === "string", Boolean(target.podName),
@@ -177,7 +176,7 @@ function predecessorFenceMatches(request: { fence: DocumentData; operationId: st
     isDeepStrictEqual(target.postgresAgentStores, source.postgresAgentStores)].every(Boolean);
 }
 export function assertSharedSourceRecoveryPredecessor(request: {
-  gatewayId: string; operationId: string; row: DocumentData; fence: DocumentData; source: SharedSourceRecoveryAuthority;
+  gatewayId: string; operationId: string; row: UntypedRecord; fence: UntypedRecord; source: SharedSourceRecoveryAuthority;
 }): SharedSourceRecoverySupersession {
   const { gatewayId, operationId, row, fence, source } = request, input = row.input?.sourceRecovery;
   if (!failedPredecessorMatches(row, gatewayId) || !predecessorFenceMatches({ fence, operationId, source, input, row })) {

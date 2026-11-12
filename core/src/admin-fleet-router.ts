@@ -10,7 +10,6 @@ import {
   type Response,
   type NextFunction,
 } from "express";
-import type { DocumentData, Firestore } from "firebase-admin/firestore";
 import {
   isOperationAuditRecord,
   isOperationAuditRow,
@@ -139,7 +138,6 @@ import {
 } from "./normal-fleet-mutation.js";
 import { OperationAuditIdempotencyConflictError, type OperationAuditActionClaim } from "./operation-audit.js";
 import {
-  firestoreUserAccountReader,
   type UserAccount,
   type UserAccountReader,
 } from "./user-account.js";
@@ -160,7 +158,7 @@ import type { FleetRegistryRecord } from "./platform-state/fleet-registry.js";
 import { readReleaseStatus, summarizeReleaseStatus } from "./release-status.js";
 import type { GatewayAssignment, GatewayRoot } from "./platform-state/gateways.js";
 import type { NewOperation, OperationRecord } from "./platform-state/operations.js";
-import type { OpaqueMap, PlatformStateStore, PlatformStateTransaction, Stored } from "./platform-state/store.js";
+import type { OpaqueMap, PlatformStateStore, PlatformStateTransaction, Stored, UntypedRecord } from "./platform-state/store.js";
 import {
   type CentralReleaseAuthority,
   type ReleaseDigestManifest,
@@ -220,7 +218,7 @@ export interface GatewayPodDiagnostics {
 
 export interface FleetRouterDeps {
   computerReplacementEnabled?: boolean;
-  db: Firestore;
+  accounts: UserAccountReader;
   store: PlatformStateStore;
   logger: FleetLogger;
   provisionGatewayAuthSecret: (opts: {
@@ -2151,17 +2149,17 @@ function validRestoreRecoveryBody(body: RestoreRecoveryBody): boolean {
     validRecoverySupersession(body) &&
     Object.keys(body).every(key => ["sourceSha", "operationId", "reauthorizeAttemptId", "supersedeRecoveryId"].includes(key));
 }
-async function capturedRestoreAttempt(store: PlatformStateStore, operationId: string, attemptId: unknown): Promise<DocumentData | undefined> {
+async function capturedRestoreAttempt(store: PlatformStateStore, operationId: string, attemptId: unknown): Promise<UntypedRecord | undefined> {
   if (attemptId === undefined) return undefined;
   return (await store.journal.operations.get(operationId))?.restoreAttempt;
 }
-function failedRecoveryOperationMatches(previous: DocumentData | undefined, gatewayId: string): previous is DocumentData {
+function failedRecoveryOperationMatches(previous: UntypedRecord | undefined, gatewayId: string): previous is UntypedRecord {
   return previous?.kind === OP_KIND_RESTART_GATEWAY && previous.status === "failed" &&
     previous.cancellationRequestedAt === undefined && previous.completedAt > 0 &&
     previous.restoreRuntimeRecovery === undefined && previous.input?.gatewayId === gatewayId;
 }
 function recoveryPredecessorFenceMatches(input: {
-  fence: DocumentData | undefined;
+  fence: UntypedRecord | undefined;
   predecessorId: string;
   gatewayId: string;
   operationId: string;
@@ -2176,8 +2174,8 @@ async function capturedRecoveryPredecessor(store: PlatformStateStore, gatewayId:
   const [root, predecessor] = await Promise.all([
     store.gateways.roots.get(gatewayId), store.journal.operations.get(predecessorId),
   ]);
-  const previous: DocumentData | undefined = predecessor === null ? undefined : recordDoc(predecessorId, predecessor).data();
-  const fence: DocumentData | undefined = root?.runtimeRestartFence;
+  const previous: UntypedRecord | undefined = predecessor === null ? undefined : recordDoc(predecessorId, predecessor).data();
+  const fence: UntypedRecord | undefined = root?.runtimeRestartFence;
   const recovery = previous?.input?.restoreRecovery;
   if (recovery?.operationId !== operationId ||
       !recoveryPredecessorFenceMatches({ fence, predecessorId, gatewayId, operationId, images: recovery.images })) return null;
@@ -2189,7 +2187,7 @@ function restoreRecoveryOperationInput(input: {
   sourceSha: string;
   operationId: string;
   payload: ReturnType<typeof centralGatewayReleasePayload>;
-  reauthorize: DocumentData | undefined;
+  reauthorize: UntypedRecord | undefined;
   supersede: Awaited<ReturnType<typeof capturedRecoveryPredecessor>> | undefined;
 }) {
   const { gatewayId, sourceSha, operationId, payload, reauthorize, supersede } = input;
@@ -4552,8 +4550,7 @@ export function addAdminFleetRoutes(
   router: Router,
   deps: FleetRouterDeps,
 ): Router {
-  const { db, logger, store } = deps;
-  const accounts = firestoreUserAccountReader(db);
+  const { accounts, logger, store } = deps;
 
   const runAdminFleetMutation = createAdminFleetMutationRunner(store);
 

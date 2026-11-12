@@ -8,8 +8,6 @@ import {
   type ProjectRecipeId,
 } from "@octogee/shared/types/project";
 import {
-} from "@octogee/core/assigned-roster";
-import {
   configuredUserBootstrapAllowed,
 } from "@octogee/core/gateway-live-release";
 import {

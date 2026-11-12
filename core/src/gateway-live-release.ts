@@ -1,5 +1,3 @@
-import type { Firestore, Transaction } from "firebase-admin/firestore";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
   GATEWAY_CONFIG_SCHEMA_VERSION,
   effectiveGatewayServiceAccountNameForGateway,
@@ -10,7 +8,6 @@ import {
   type GatewayMutableConfig,
 } from "@octogee/shared/types/gateway-mutable-config";
 import {
-  GATEWAY_RELEASES_SUBCOLLECTION,
   isGatewayRuntimeDoc,
   isReleasePayload,
   projectGatewayDesiredRootForGateway,
@@ -34,8 +31,6 @@ export {
   projectGatewayMutableConfigForGateway,
 };
 export type { GatewayMutableConfig };
-
-type FirestoreReader = Pick<Firestore, "doc">;
 
 export type GatewayRootReader = Pick<PlatformStateRepositories, "gateways">;
 export type GatewayRuntimeReader = Pick<PlatformStateRepositories, "fleetRegistry">;
@@ -219,18 +214,6 @@ function isReleaseNumber(release: number | null): release is number {
   return typeof release === "number" && Number.isInteger(release) && release >= 1;
 }
 
-export async function readGatewayArtifact(
-  db: FirestoreReader,
-  gatewayId: string,
-  release: number | null,
-  transaction?: Pick<Transaction, "get">,
-): Promise<GatewayArtifact | null> {
-  if (!isBareGatewayId(gatewayId) || !isReleaseNumber(release)) return null;
-  const releaseRef = db.doc(`${GATEWAYS_COLLECTION}/${gatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/${release}`);
-  const releaseSnap = await (transaction ? transaction.get(releaseRef) : releaseRef.get());
-  return artifactFromStoredRelease(releaseSnap.exists ? releaseSnap.data() : undefined, gatewayId, release);
-}
-
 export async function readGatewayArtifactInStore(
   state: GatewayRootReader,
   gatewayId: string,
@@ -322,15 +305,6 @@ export function gatewayAuthorizationFromRootDocument(
   const gateway = projectGatewayDesiredRootForGateway(data, gatewayId);
   if (gateway === null) return null;
   return { kind: "durable", gateway, config: gateway };
-}
-
-export async function readGatewayAuthorization(
-  db: FirestoreReader,
-  gatewayId: string,
-): Promise<GatewayAuthorization | null> {
-  if (!isBareGatewayId(gatewayId)) return null;
-  const gatewaySnap = await db.doc(`${GATEWAYS_COLLECTION}/${gatewayId}`).get();
-  return gatewaySnap.exists ? gatewayAuthorizationFromRootDocument(gatewaySnap.data(), gatewayId) : null;
 }
 
 export async function readGatewayAuthorizationInStore(

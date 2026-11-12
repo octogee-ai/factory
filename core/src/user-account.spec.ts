@@ -1,6 +1,6 @@
 import { Timestamp, type Firestore } from "firebase-admin/firestore";
 import { describe, expect, it, vi } from "vitest";
-import { userAccountFromData, firestoreUserAccountReader } from "./user-account.js";
+import { firestoreUserAccountReader, noUserAccounts, userAccountFromData } from "./user-account.js";
 
 describe("userAccountFromData", () => {
   it.each([
@@ -73,5 +73,13 @@ describe("firestoreUserAccountReader.getMany", () => {
 
     await expect(accounts.getMany([])).resolves.toEqual(new Map());
     expect(getAll).not.toHaveBeenCalled();
+  });
+});
+
+describe("noUserAccounts", () => {
+  it("knows no account", async () => {
+    await expect(noUserAccounts.get("u1")).resolves.toBeNull();
+    await expect(noUserAccounts.getMany(["u1"])).resolves.toEqual(new Map());
+    await expect(noUserAccounts.list()).resolves.toEqual(new Map());
   });
 });

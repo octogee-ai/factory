@@ -1,7 +1,30 @@
 import { Router } from "express";
-import { type Firestore } from "firebase-admin/firestore";
+import { type UserAccountReader } from "./user-account.js";
 import type { PlatformUserRecord } from "./platform-state/users.js";
-import type { PlatformStateStore } from "./platform-state/store.js";
+import type { PlatformStateStore, UntypedRecord } from "./platform-state/store.js";
+export interface BrokerLedgerRecords {
+    window: UntypedRecord | undefined;
+    week: UntypedRecord | undefined;
+    rollup: UntypedRecord | undefined;
+}
+export interface AdminUserDirectoryRecord {
+    id: string;
+    record: UntypedRecord;
+}
+export interface AdminUserDirectorySource {
+    brokerLedgers(uids: readonly string[], windowStartMs: number, weekStartMs: number): Promise<ReadonlyMap<string, BrokerLedgerRecords>>;
+    brokerWindows(uid: string, windowStartsMs: readonly number[]): Promise<UntypedRecord[]>;
+    brokerEvents(uid: string, sinceMs: number, limit: number): Promise<UntypedRecord[]>;
+    brokerEventCosts(uid: string, sinceMs: number, limit: number): Promise<UntypedRecord[]>;
+    brokerRollup(uid: string): Promise<UntypedRecord | undefined>;
+    totalUsers(): Promise<number | null>;
+    systemConfig(uid: string): Promise<UntypedRecord | undefined>;
+    usageLogs(uid: string, sinceDate: string): Promise<UntypedRecord[]>;
+    workspaces(uid: string): Promise<AdminUserDirectoryRecord[]>;
+    workspaceModelUsage(slug: string): Promise<AdminUserDirectoryRecord[]>;
+    adminActions(uid: string, limit: number): Promise<AdminUserDirectoryRecord[]>;
+}
+export declare const noAdminUserDirectorySource: AdminUserDirectorySource;
 export interface BrokerDailyUsage {
     date: string;
     costUsd: number;
@@ -49,8 +72,9 @@ export interface UserDirectoryRouterLogger {
 }
 export type AdminUserProductDetail = (uid: string) => Promise<Readonly<Record<string, unknown>>>;
 export interface AdminUserDirectoryRouterDeps {
-    db: Firestore;
     store: PlatformStateStore;
+    accounts: UserAccountReader;
+    source: AdminUserDirectorySource;
     logger: UserDirectoryRouterLogger;
     productUserDetail?: AdminUserProductDetail | undefined;
 }

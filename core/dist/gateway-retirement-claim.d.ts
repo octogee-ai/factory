@@ -1,4 +1,3 @@
-import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { type GatewayDoc } from "@octogee/shared/types/gateway-releases";
 import type { PlatformUserRecord } from "./platform-state/users.js";
 import type { NewOperation, OperationRecord } from "./platform-state/operations.js";
@@ -46,7 +45,6 @@ export type GatewayRetirementVerification = {
     ok: false;
     error: string;
 };
-export declare function assertGatewayRuntimeMutationUnfenced(db: Firestore, transaction: Transaction, gatewayId: string, allowedVmRecoveryOperationId?: string): Promise<void>;
 export declare function isolatedRuntimeMutationFenced(user: Stored<PlatformUserRecord>): boolean;
 export declare function assertGatewayRuntimeMutationUnfencedInStore(transaction: PlatformStateTransaction, gatewayId: string, allowedVmRecoveryOperationId?: string): Promise<void>;
 export declare function moveHasNotBegun(operation: OperationRecord, gatewayId: string): boolean;

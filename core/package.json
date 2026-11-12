@@ -105,10 +105,6 @@
       "types": "./dist/artifact-registry.d.ts",
       "default": "./dist/artifact-registry.js"
     },
-    "./assigned-roster": {
-      "types": "./dist/assigned-roster.d.ts",
-      "default": "./dist/assigned-roster.js"
-    },
     "./assignment-doc": {
       "types": "./dist/assignment-doc.d.ts",
       "default": "./dist/assignment-doc.js"
@@ -128,6 +124,10 @@
     "./product-admin-user-detail": {
       "types": "./dist/product-admin-user-detail.d.ts",
       "default": "./dist/product-admin-user-detail.js"
+    },
+    "./product-admin-user-directory-source": {
+      "types": "./dist/product-admin-user-directory-source.d.ts",
+      "default": "./dist/product-admin-user-directory-source.js"
     },
     "./user-activation-lease": {
       "types": "./dist/user-activation-lease.d.ts",
@@ -433,10 +433,6 @@
       "types": "./dist/mattermost/project-agent.d.ts",
       "default": "./dist/mattermost/project-agent.js"
     },
-    "./mattermost/profile-sync": {
-      "types": "./dist/mattermost/profile-sync.d.ts",
-      "default": "./dist/mattermost/profile-sync.js"
-    },
     "./mattermost/provision": {
       "types": "./dist/mattermost/provision.d.ts",
       "default": "./dist/mattermost/provision.js"
@@ -576,9 +572,6 @@
       ],
       "artifact-registry": [
         "dist/artifact-registry.d.ts"
-      ],
-      "assigned-roster": [
-        "dist/assigned-roster.d.ts"
       ],
       "assignment-doc": [
         "dist/assignment-doc.d.ts"
@@ -801,9 +794,6 @@
       ],
       "mattermost/nuke": [
         "dist/mattermost/nuke.d.ts"
-      ],
-      "mattermost/profile-sync": [
-        "dist/mattermost/profile-sync.d.ts"
       ],
       "mattermost/provision": [
         "dist/mattermost/provision.d.ts"

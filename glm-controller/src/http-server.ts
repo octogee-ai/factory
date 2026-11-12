@@ -5,7 +5,6 @@ import express, { Router, type Express, type Request, type Response, type NextFu
 import type { Server } from "node:http";
 import { publicAppOriginsFromEnv } from "@octogee/core/public-app-origins";
 import { renderMetrics } from "./metrics.js";
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import type { UserAccounts, UserSignInHosts } from "@octogee/core/admin-user-router";
 import type { UserAccountReader } from "@octogee/core/user-account";
 import {
@@ -24,7 +23,11 @@ import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
 } from "@octogee/shared/types/glm";
-import { addAdminUserDirectoryRoutes, type AdminUserProductDetail } from "@octogee/core/admin-user-directory-router";
+import {
+  addAdminUserDirectoryRoutes,
+  type AdminUserDirectorySource,
+  type AdminUserProductDetail,
+} from "@octogee/core/admin-user-directory-router";
 import { addAdminLogsRoutes } from "@octogee/core/admin-logs-router";
 import type { LogEntriesSource } from "@octogee/core/fleet-logs";
 import {
@@ -64,8 +67,6 @@ function corsMiddleware(req: Request, res: Response, next: NextFunction): void {
 export type ProductAdminRoutes = (
   router: Router,
   deps: {
-    db: Firestore;
-    FieldValue: { serverTimestamp: () => unknown };
     store: PlatformStateStore;
     requestNativeReturnSourceRecovery?: HttpServerDeps["requestNativeReturnSourceRecovery"];
   },
@@ -77,9 +78,9 @@ export interface HttpServerDeps {
   discoverDeletionProductContext?: ((uid: string) => Promise<Readonly<Record<string, unknown>>>) | undefined;
   productAdminUserDetail?: AdminUserProductDetail | undefined;
   userSignIn?: UserSignInHosts | undefined;
-  db: Firestore;
   store: PlatformStateStore;
   accounts: UserAccountReader;
+  userDirectory: AdminUserDirectorySource;
   identity: RequireAdminDeps["identity"];
   log: (msg: string) => void;
   provisionGatewayAuthSecret: (opts: {
@@ -324,20 +325,19 @@ export function createHttpServer(deps: HttpServerDeps): Express {
   );
 
   addAdminUserDirectoryRoutes(adminRouter, {
-    db: deps.db,
     store: deps.store,
+    accounts: deps.accounts,
+    source: deps.userDirectory,
     logger: adaptLogger(deps.log),
     productUserDetail: deps.productAdminUserDetail,
   });
   deps.addProductAdminRoutes?.(adminRouter, {
-    db: deps.db,
-    FieldValue,
     store: deps.store,
     requestNativeReturnSourceRecovery: deps.requestNativeReturnSourceRecovery,
   });
   addAdminFleetRoutes(adminRouter, {
     computerReplacementEnabled: true,
-    db: deps.db,
+    accounts: deps.accounts,
     store: deps.store,
     logger: adaptLogger(deps.log),
     provisionGatewayAuthSecret: deps.provisionGatewayAuthSecret,

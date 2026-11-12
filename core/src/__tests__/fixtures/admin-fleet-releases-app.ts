@@ -9,6 +9,7 @@ import { addAdminFleetRoutes } from "../../admin-fleet-router.js";
 import type { CentralReleaseAuthority } from "../../artifact-registry.js";
 import type { PlatformStateStore } from "../../platform-state/store.js";
 import { createJournalFixtureStore, fixtureDocumentsAt, journalRowsAtPaths } from "../../testing/journal-store.js";
+import { firestoreUserAccountReader } from "../../user-account.js";
 
 // ── Path-based in-memory Firestore ─────────────────────────────────────────
 // Supports the exact surface the release endpoints touch: doc get/set(merge)/
@@ -279,7 +280,7 @@ export function mkApp(
   });
   opts?.addProductRoutes?.(app, { db, store: platformStore });
   addAdminFleetRoutes(app, {
-    db,
+    accounts: firestoreUserAccountReader(db),
     store: platformStore,
     logger: { info: vi.fn(), warn: vi.fn() },
     provisionGatewayAuthSecret: opts?.provisionGatewayAuthSecret

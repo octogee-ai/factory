@@ -1,4 +1,4 @@
-import type { Firestore } from "firebase-admin/firestore";
+export declare const BROKER_USAGE_SERIES_READ_LIMIT = 20000;
 export interface BrokerModelUsage {
     model: string;
     tokens: number;
@@ -20,6 +20,4 @@ export interface BrokerUsageSeries {
     totalCalls: number;
     truncated: boolean;
 }
-export declare function readOwnerBrokerUsageSeries(db: Pick<Firestore, "collection">, ownerUid: string, cutoffMs: number, logger?: {
-    warn: (msg: string, meta?: Record<string, unknown>) => void;
-}): Promise<BrokerUsageSeries>;
+export declare function brokerUsageSeries(events: readonly Readonly<Record<string, unknown>>[]): BrokerUsageSeries;

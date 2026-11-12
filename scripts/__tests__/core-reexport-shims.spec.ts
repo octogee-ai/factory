@@ -25,7 +25,6 @@ import * as mattermostClientCore from "@octogee/core/mattermost/client";
 import * as mattermostUserPatCore from "@octogee/core/mattermost/user-pat";
 import * as mattermostDefaultAgentPatCore from "@octogee/core/mattermost/default-agent-pat";
 import * as mattermostNukeCore from "@octogee/core/mattermost/nuke";
-import * as mattermostProfileSyncCore from "@octogee/core/mattermost/profile-sync";
 import * as mattermostProvisionCore from "@octogee/core/mattermost/provision";
 import * as notificationsCore from "@octogee/core/notifications";
 import * as secretManagerCore from "@octogee/core/secret-manager";
@@ -58,7 +57,6 @@ import * as mattermostClientShim from "../lib/mattermost/client.js";
 import * as mattermostUserPatShim from "../lib/mattermost/user-pat.js";
 import * as mattermostDefaultAgentPatShim from "../lib/mattermost/default-agent-pat.js";
 import * as mattermostNukeShim from "../lib/mattermost/nuke.js";
-import * as mattermostProfileSyncShim from "../lib/mattermost/profile-sync.js";
 import * as mattermostProvisionShim from "../lib/mattermost/provision.js";
 import * as notificationsShim from "../lib/notifications.js";
 import * as secretManagerShim from "../lib/secret-manager.js";
@@ -93,7 +91,6 @@ const shims = [
   ["mattermost/user-pat", mattermostUserPatShim, mattermostUserPatCore],
   ["mattermost/default-agent-pat", mattermostDefaultAgentPatShim, mattermostDefaultAgentPatCore],
   ["mattermost/nuke", mattermostNukeShim, mattermostNukeCore],
-  ["mattermost/profile-sync", mattermostProfileSyncShim, mattermostProfileSyncCore],
   ["mattermost/provision", mattermostProvisionShim, mattermostProvisionCore],
   ["notifications", notificationsShim, notificationsCore],
   ["secret-manager", secretManagerShim, secretManagerCore],

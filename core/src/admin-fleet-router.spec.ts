@@ -27,6 +27,7 @@ import {
 import type { PlatformStateTransaction } from "./platform-state/store.js";
 import { SPOT_PRICE_MULTIPLIER } from "@octogee/shared/types/cost-estimator";
 import { ACCOUNT_DELETION_RETENTION_MS } from "@octogee/shared/types/account-lifecycle";
+import { firestoreUserAccountReader } from "./user-account.js";
 
 describe("projectGatewayControl", () => {
   const root = {
@@ -2130,7 +2131,7 @@ describe("account deletion revokes connector grants at the provider first", () =
       }),
     };
     addAdminFleetRoutes(app, {
-      db,
+      accounts: firestoreUserAccountReader(db),
       store,
       logger: { info: vi.fn(), warn: vi.fn() },
       provisionGatewayAuthSecret: vi.fn(async () => ({})),

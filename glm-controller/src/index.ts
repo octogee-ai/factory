@@ -210,10 +210,14 @@ import {
 } from "./lib/user-ops/avatars.js";
 import { loadUserCleanupContext } from "./lib/user-ops/cleanup-context.js";
 import type { UserAccounts, UserSignInHosts } from "@octogee/core/admin-user-router";
-import type { AdminUserProductDetail } from "@octogee/core/admin-user-directory-router";
+import {
+  noAdminUserDirectorySource,
+  type AdminUserDirectorySource,
+  type AdminUserProductDetail,
+} from "@octogee/core/admin-user-directory-router";
 import { createMattermostChannelHost } from "@octogee/core/channel-host";
 import { createGiteaGitHost } from "@octogee/core/git-host";
-import { firestoreUserAccountReader } from "@octogee/core/user-account";
+import { noUserAccounts, type UserAccountReader } from "@octogee/core/user-account";
 import { createUnmountFromGateway } from "./lib/user-ops/unmount-gateway.js";
 import { isRetiredSharedGateway, retiredSharedGatewayRuntimeAbsent } from "./lib/user-ops/retired-shared-gateway.js";
 import { nukeUserCloudSide, type NukeCloudDeps } from "./lib/user-ops/nuke-cloud.js";
@@ -237,8 +241,6 @@ import { resolveDefaultStorageBucket } from "./gcp-project.js";
 import { createS3UserBlobErasure } from "./lib/user-ops/s3-blob-erasure.js";
 import { deleteVmHomeObjects } from "./lib/user-ops/vm-home.js";
 import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
-import {
-} from "@octogee/core/assigned-roster";
 import {
   byotSystemConfigFromDoc,
   collectStoredProjectAgentStates,
@@ -2184,6 +2186,8 @@ interface ControllerBackgroundTasksDeps {
   userAccounts?: UserAccounts | undefined;
   discoverDeletionProductContext?: ((uid: string) => Promise<ProductContext>) | undefined;
   productAdminUserDetail?: AdminUserProductDetail | undefined;
+  accounts: UserAccountReader;
+  userDirectory: AdminUserDirectorySource;
   adminIdentity: IdentityProvider;
   placementAdmission: PlacementAdmissionPolicy;
   policyInputs: UserPolicyInputsSource;
@@ -2267,6 +2271,8 @@ function startControllerBackgroundTasks({
   userAccounts,
   discoverDeletionProductContext,
   productAdminUserDetail,
+  accounts,
+  userDirectory,
   adminIdentity,
   placementAdmission,
   policyInputs,
@@ -2388,9 +2394,9 @@ function startControllerBackgroundTasks({
     discoverDeletionProductContext,
     productAdminUserDetail,
     userSignIn: buildUserSignInHosts(log),
-    db,
     store: deps.store,
-    accounts: firestoreUserAccountReader(db),
+    accounts,
+    userDirectory,
     log,
     port: HTTP_PORT,
     identity: adminIdentity,
@@ -2606,6 +2612,7 @@ async function createControllerRuntime(
   store: PlatformStateStore,
   createHostingCleanup: ControllerProduct["createHostingCleanup"],
   userLifecycle: ProductUserLifecycle | null,
+  accounts: UserAccountReader,
 ): Promise<ControllerRuntime> {
   const runKubectl: KubectlSubprocess = (args, opts) => spawnKubectl(args, opts);
   const authSecretEnsurer = createAuthSecretEnsurer({
@@ -2771,6 +2778,7 @@ async function createControllerRuntime(
     prepareMigrationAgentStores, nativeReturnRecovery, store,
     deleteHostingSites: createHostingCleanup?.(log),
     userLifecycle,
+    accounts,
   });
 
   const deps: ControllerDeps = {
@@ -2809,6 +2817,8 @@ export interface ControllerProduct {
   userLifecycle: ProductUserLifecycleFactory | null;
   addAdminRoutes?: ProductAdminRoutes;
   userAccounts?: (db: Firestore) => UserAccounts;
+  accountReader?: (db: Firestore) => UserAccountReader;
+  userDirectory?: (db: Firestore) => AdminUserDirectorySource;
   adminUserDetail?: (db: Firestore) => AdminUserProductDetail;
   adminIdentity?: IdentityProvider;
   placementAdmission?: PlacementAdmissionPolicy;
@@ -2821,6 +2831,13 @@ export interface ControllerProduct {
     store: PlatformStateStore;
     log: (message: string) => void;
   }) => ControllerStopper;
+}
+
+function productUserReads(product: ControllerProduct, db: Firestore) {
+  return {
+    accounts: product.accountReader?.(db) ?? noUserAccounts,
+    userDirectory: product.userDirectory?.(db) ?? noAdminUserDirectorySource,
+  };
 }
 
 function createUserLifecycle(
@@ -2849,8 +2866,9 @@ export async function main(product: ControllerProduct): Promise<void> {
     logger,
   });
   const userLifecycle = createUserLifecycle(product, db, store);
+  const { accounts, userDirectory } = productUserReads(product, db);
   const { deps, fleetControllerPrivateKey, chartFingerprint } =
-    await createControllerRuntime(db, store, product.createHostingCleanup, userLifecycle);
+    await createControllerRuntime(db, store, product.createHostingCleanup, userLifecycle, accounts);
 
   log(
     `[glm-controller] boot sha=${process.env.BUILD_SHA ?? "unknown"} oc=${process.env.OPENCLAW_VERSION ?? "n/a"} fork=${process.env.OPENCLAW_FORK_SHA ?? "n/a"} node=${process.version} — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} chartFingerprint=${chartFingerprint.slice(0, 12)} chartDriftPolicy=release-gated valuesFile=${GATEWAY_VALUES_FILE}`,
@@ -2913,6 +2931,8 @@ export async function main(product: ControllerProduct): Promise<void> {
     userAccounts: product.userAccounts?.(db),
     discoverDeletionProductContext: userLifecycle?.discover,
     productAdminUserDetail: product.adminUserDetail?.(db),
+    accounts,
+    userDirectory,
   });
   stoppers.push(startSharedGatewayLoop({ store: deps.store, log, automation: sharedGateways.startLoop() }));
   if (product.startProjection) stoppers.push(product.startProjection({ db, store: deps.store, log }));
@@ -3135,9 +3155,10 @@ async function buildHandlers(
     store: PlatformStateStore;
     deleteHostingSites?: HostingCleanup;
     userLifecycle: ProductUserLifecycle | null;
+    accounts: UserAccountReader;
   },
 ): Promise<OperationHandlers> {
-  const { privateKey, modelKeySourceIssuer, store, deleteHostingSites, userLifecycle } = fleetOps;
+  const { privateKey, modelKeySourceIssuer, store, deleteHostingSites, userLifecycle, accounts } = fleetOps;
   if (!privateKey) {
     throw new Error(
       "FLEET_CONTROLLER_PRIVATE_KEY is not set — required for migrate-customer. Refusing to start with stub handlers.",
@@ -3521,7 +3542,7 @@ async function buildHandlers(
   });
 
   const { deprovisionUser, suspendUser, eraseUser } = buildUserRemovalHandlers({
-    db, store, logFn, kubeOps, privateKey, deleteHostingSites, userLifecycle,
+    db, store, logFn, kubeOps, privateKey, deleteHostingSites, userLifecycle, accounts,
   });
 
   const restartGateway = createRestartGatewayHandler({
@@ -3728,6 +3749,7 @@ export interface UserRemovalOptions {
   privateKey: string;
   deleteHostingSites?: HostingCleanup;
   userLifecycle: ProductUserLifecycle | null;
+  accounts: UserAccountReader;
 }
 
 function buildEraseUserHandler({ db, store, logFn, kubeOps, privateKey, deleteHostingSites, userLifecycle }: UserRemovalOptions) {
@@ -3858,7 +3880,7 @@ function buildEraseUserHandler({ db, store, logFn, kubeOps, privateKey, deleteHo
   });
 }
 
-function buildSuspendUserHandler({ db, store, privateKey, logFn, kubeOps, userLifecycle }: UserRemovalOptions) {
+function buildSuspendUserHandler({ db, store, privateKey, logFn, kubeOps, userLifecycle, accounts }: UserRemovalOptions) {
   const decryptConnectorSecret = createConnectorSecretDecryptor();
   return createSuspendUserHandler({
     assertRestoreNotInProgress: (uid) => assertUserRestoreNotInProgress(store, uid),
@@ -3873,7 +3895,7 @@ function buildSuspendUserHandler({ db, store, privateKey, logFn, kubeOps, userLi
         cleanupContext: (job.cleanupContext as UserCleanupContext | undefined) ?? null,
       };
     },
-    loadCleanupContext: (uid) => loadUserCleanupContext({ store, accounts: firestoreUserAccountReader(db), db }, uid),
+    loadCleanupContext: (uid) => loadUserCleanupContext({ store, accounts, db }, uid),
     persistCleanupContext: (deletionId, cleanupContext) =>
       store.jobs.deletions.patch(deletionId, { cleanupContext: cleanupContext as unknown as OpaqueMap, status: "suspending", updatedAt: Date.now() }),
     suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
@@ -3967,9 +3989,9 @@ function requireEnv(name: string, why: string): string {
   return value;
 }
 
-function buildDeprovisionUserHandler({ db, store, logFn, kubeOps, privateKey, deleteHostingSites, userLifecycle }: UserRemovalOptions) {
+function buildDeprovisionUserHandler({ db, store, logFn, kubeOps, privateKey, deleteHostingSites, userLifecycle, accounts }: UserRemovalOptions) {
   return createDeprovisionUserHandler({
-    loadCleanupContext: (uid) => loadUserCleanupContext({ store, accounts: firestoreUserAccountReader(db), db }, uid),
+    loadCleanupContext: (uid) => loadUserCleanupContext({ store, accounts, db }, uid),
     unmountFromGateway: createUserDeletionUnmount(db, store, privateKey, logFn, kubeOps),
     cloudCleanup: buildUserCloudCleanupDeps(db, store, logFn, deleteHostingSites, userLifecycle),
     now: () => Date.now(),

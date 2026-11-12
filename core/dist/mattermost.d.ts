@@ -9,5 +9,4 @@ export { USER_PAT_DESCRIPTION, revokeAndMintUserPat, } from "./mattermost/user-p
 export { mmUploadAvatar } from "./mattermost/avatars.js";
 export { provisionMattermostUser } from "./mattermost/provision.js";
 export { ensureAdminCredentials } from "./mattermost/admin-creds.js";
-export { syncProfileToMattermost, syncDefaultAgentProfileToMattermost, } from "./mattermost/profile-sync.js";
 export { destroyMmUser, destroyMmChannel, getMmUserChannels, } from "./mattermost/nuke.js";

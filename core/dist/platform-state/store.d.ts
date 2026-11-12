@@ -29,6 +29,7 @@ export type Stored<T> = T & {
     readonly revision: Revision;
 };
 export type OpaqueMap = Readonly<Record<string, unknown>>;
+export type UntypedRecord = Record<string, any>;
 export interface PageRequest {
     readonly limit: number;
     readonly after?: string;

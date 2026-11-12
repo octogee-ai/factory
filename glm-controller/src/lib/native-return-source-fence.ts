@@ -1,7 +1,7 @@
-import type { DocumentData } from "firebase-admin/firestore";
+import type { UntypedRecord } from "@octogee/core/platform-state";
 import type { GatewayVmClient } from "./compute-vm.js";
 
-export function nativeReturnSourceIdentity(runtime: DocumentData | undefined, root: DocumentData | undefined) {
+export function nativeReturnSourceIdentity(runtime: UntypedRecord | undefined, root: UntypedRecord | undefined) {
   const vm = runtime?.vm;
   if (runtime?.runtime !== "gce-vm" || root?.gatewayClass !== "builder" ||
       !["paused", "retired"].includes(root.desiredStatus) ||

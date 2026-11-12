@@ -1,9 +1,9 @@
 import express from "express";
-import type { Firestore } from "firebase-admin/firestore";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { addAdminFleetRoutes } from "./admin-fleet-router.js";
 import { createJournalFixtureStore, fixtureDocumentsAt, journalRowsAtPaths } from "./testing/journal-store.js";
+import { noUserAccounts } from "./user-account.js";
 
 const GATEWAY = "b-fixture";
 const OWNER = "fixture-owner";
@@ -37,7 +37,7 @@ function harness(overrides: Record<string, Record<string, unknown> | null> = {},
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => { Object.assign(req, { uid: role === "anonymous" ? undefined : "operator", isAdmin: role === "admin" }); next(); });
-  addAdminFleetRoutes(app, { db: {} as Firestore, store, computerReplacementEnabled, logger: { info: vi.fn(), warn: vi.fn() }, provisionGatewayAuthSecret: vi.fn(), listGatewayBuilds: vi.fn(), suspendAuthUser: vi.fn(), revokeConnectorGrantsForUser: vi.fn() });
+  addAdminFleetRoutes(app, { accounts: noUserAccounts, store, computerReplacementEnabled, logger: { info: vi.fn(), warn: vi.fn() }, provisionGatewayAuthSecret: vi.fn(), listGatewayBuilds: vi.fn(), suspendAuthUser: vi.fn(), revokeConnectorGrantsForUser: vi.fn() });
   app.use((error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => res.status(500).json({ error: error.message }));
   return { app, records, operations: () => [...records.values()].filter((value) => value.kind === "gateway-vm"), audits: () => [...records.values()].filter((value) => value.recordType === "audit") };
 }

@@ -50,3 +50,8 @@ export function firestoreUserAccountReader(db) {
         },
     };
 }
+export const noUserAccounts = {
+    get: async () => null,
+    getMany: async () => new Map(),
+    list: async () => new Map(),
+};

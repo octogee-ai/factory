@@ -13,6 +13,7 @@ import { addAdminFleetRoutes, type FleetRouterDeps } from "../../admin-fleet-rou
 import type { CentralReleaseAuthority, ReleaseDigestManifest } from "../../artifact-registry.js";
 import type { PlatformStateStore } from "../../platform-state/store.js";
 import { createDocumentFixtureStore } from "../../testing/journal-store.js";
+import { noUserAccounts } from "../../user-account.js";
 
 export type Seed = Record<string, Record<string, unknown>>;
 
@@ -223,7 +224,7 @@ export function harness(seed: Seed = FLEET, install: DryRunInstall = {}) {
     db: {} as Firestore, store, requestNativeReturnSourceRecovery: effects.requestNativeReturnSourceRecovery,
   });
   addAdminFleetRoutes(router, {
-    db: {} as Firestore,
+    accounts: noUserAccounts,
     store,
     logger: { info: vi.fn(), warn: vi.fn() },
     computerReplacementEnabled: true,

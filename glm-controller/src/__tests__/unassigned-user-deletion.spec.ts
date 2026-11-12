@@ -6,6 +6,7 @@ import { addAdminFleetRoutes } from "@octogee/core/admin-fleet-router";
 import type { AgentStoreErasureCustody } from "@octogee/core/agent-store-credentials";
 import type { OpaqueMap } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
+import { firestoreUserAccountReader } from "@octogee/core/user-account";
 import type { Operation, OperationStep } from "@octogee/shared/types/glm";
 import type { UserCleanupContext } from "../handlers/deprovision-user.js";
 import { createEraseUserHandler, type EraseUserDeps } from "../handlers/erase-user.js";
@@ -54,7 +55,7 @@ function adminApi(records: Records) {
   const db = { collection: () => ({ doc: () => account }), doc: () => account } as unknown as Firestore;
   const router = Router();
   addAdminFleetRoutes(router, {
-    db,
+    accounts: firestoreUserAccountReader(db),
     store: createDocumentFixtureStore(records),
     logger: { info: vi.fn(), warn: vi.fn() },
     provisionGatewayAuthSecret: vi.fn(async () => ({})),

@@ -9,7 +9,13 @@ import {
   listGatewayBuilds,
 } from "@octogee/core/artifact-registry";
 import { addAdminFleetRoutes, type DeletionProductContextDiscovery } from "@octogee/core/admin-fleet-router";
-import { addAdminUserDirectoryRoutes, type AdminUserProductDetail } from "@octogee/core/admin-user-directory-router";
+import {
+  addAdminUserDirectoryRoutes,
+  noAdminUserDirectorySource,
+  type AdminUserDirectorySource,
+  type AdminUserProductDetail,
+} from "@octogee/core/admin-user-directory-router";
+import { firestoreUserAccountReader } from "@octogee/core/user-account";
 import { userDeletionDeps } from "../lib/user-deletion-deps.js";
 import { platformStateStore } from "../lib/platform-state.js";
 import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
@@ -120,6 +126,7 @@ export type ProductAdminRoutes = (router: Router, deps: { db: typeof db; store: 
 export interface AdminProductHooks {
   discoverDeletionProductContext?: DeletionProductContextDiscovery;
   userDetail?: AdminUserProductDetail;
+  userDirectory?: AdminUserDirectorySource;
   addAdminRoutes?: ProductAdminRoutes;
   platformConfigFields?: () => Record<string, unknown>;
 }
@@ -132,9 +139,11 @@ export function createAdminRoutes(product: AdminProductHooks = {}): Router {
   });
   router.use(requireAdmin);
 
+  const accounts = firestoreUserAccountReader(db);
   addAdminUserDirectoryRoutes(router, {
-    db,
     store: platformStateStore,
+    accounts,
+    source: product.userDirectory ?? noAdminUserDirectorySource,
     logger,
     productUserDetail: product.userDetail,
   });
@@ -143,7 +152,7 @@ export function createAdminRoutes(product: AdminProductHooks = {}): Router {
 
   addAdminFleetRoutes(router, {
     computerReplacementEnabled: true,
-    db,
+    accounts,
     store: platformStateStore,
     logger,
     provisionGatewayAuthSecret,

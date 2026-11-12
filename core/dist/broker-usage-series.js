@@ -1,15 +1,14 @@
-import { MODEL_BROKER_USAGE_EVENTS_COLLECTION } from "@octogee/shared/types/model-broker-usage";
 // The admin usage panel's cost source. The gateway self-report ledger
 // (workspaces/{slug}/usage_models) records openclaw's own cost, which is $0 for
 // OpenRouter/GLM calls — the agent runtime never sees OpenRouter's price. The
 // LLM broker DOES (it injects usage:{include:true} and meters the reported
-// cost, #2114), so the per-owner event stream is the billing truth. This reads
-// it, date-ranged, and aggregates per model + per date for the Ops panel.
+// cost, #2114), so the per-owner event stream is the billing truth. This
+// aggregates it per model + per date for the Ops panel.
 //
 // Owner-credential traffic (BYOSUB/BYOK) bypasses the broker and carries $0
 // platform cost by definition, so it is absent here — correct for a platform
 // cost panel.
-const READ_LIMIT = 20_000;
+export const BROKER_USAGE_SERIES_READ_LIMIT = 20_000;
 function num(data, key) {
     const v = data[key];
     return typeof v === "number" && Number.isFinite(v) ? v : 0;
@@ -17,24 +16,12 @@ function num(data, key) {
 function dayOf(createdAtMs) {
     return new Date(createdAtMs).toISOString().slice(0, 10);
 }
-export async function readOwnerBrokerUsageSeries(db, ownerUid, cutoffMs, logger) {
-    const snap = await db
-        .collection(MODEL_BROKER_USAGE_EVENTS_COLLECTION)
-        .where("ownerUid", "==", ownerUid)
-        .where("createdAt", ">=", cutoffMs)
-        .orderBy("createdAt", "desc")
-        .select("createdAt", "model", "totalTokens", "costUsd")
-        .limit(READ_LIMIT)
-        .get();
-    const truncated = snap.docs.length >= READ_LIMIT;
-    if (truncated)
-        logger?.warn("broker usage series truncated at read limit", { ownerUid, limit: READ_LIMIT });
+export function brokerUsageSeries(events) {
     const byModel = new Map();
     const byDate = new Map();
     let totalTokens = 0;
     let totalCostUsd = 0;
-    for (const doc of snap.docs) {
-        const data = doc.data();
+    for (const data of events) {
         const createdAt = num(data, "createdAt");
         // Skip events with a missing/invalid createdAt (0) so they never group under
         // 1970-01-01 or poison lastUsedAt — matches readBrokerDailyUsage.
@@ -63,7 +50,7 @@ export async function readOwnerBrokerUsageSeries(db, ownerUid, cutoffMs, logger)
         sessions: [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date)),
         totalTokens,
         totalCostUsd,
-        totalCalls: snap.docs.length,
-        truncated,
+        totalCalls: events.length,
+        truncated: events.length >= BROKER_USAGE_SERIES_READ_LIMIT,
     };
 }

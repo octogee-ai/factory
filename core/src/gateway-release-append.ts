@@ -1,4 +1,3 @@
-import type { DocumentData } from "firebase-admin/firestore";
 import { isDeepStrictEqual } from "node:util";
 import {
   isGatewayDesiredDoc,
@@ -13,7 +12,7 @@ import {
 } from "@octogee/shared/types/gateway-mutable-config";
 import { gatewayArtifactFromReleasePayload, type GatewayArtifact } from "./gateway-live-release.js";
 import { assertGatewayRuntimeMutationUnfencedInStore, GatewayRetirementConflictError } from "./gateway-retirement-claim.js";
-import type { PlatformStateStore, PlatformStateTransaction } from "./platform-state/store.js";
+import type { PlatformStateStore, PlatformStateTransaction, UntypedRecord } from "./platform-state/store.js";
 
 export type DurableGatewayRoot = GatewayDoc & GatewayMutableConfig;
 
@@ -183,21 +182,21 @@ function recoveredSharedRoot(current: DurableGatewayRoot | null): current is Dur
   return current !== null && current.gatewayClass === "shared" && current.ownerUid === null && current.builderSlug === null &&
     ["running", "draining"].includes(current.desiredStatus) && current.retirementClaim == null;
 }
-function recoveredReleaseOperation(op: DocumentData | undefined, input: RecoveredGatewayReleaseInput): boolean {
+function recoveredReleaseOperation(op: UntypedRecord | undefined, input: RecoveredGatewayReleaseInput): boolean {
   return op?.kind === "restart-gateway" && op.status === "running" && op.startedAt === input.claimedStartedAt &&
     typeof input.claimedStartedAt === "number" && op.cancellationRequestedAt === undefined && op.input?.gatewayId === input.gatewayId &&
     Array.isArray(op.input?.sourceRecovery?.postgresAgentStores) && op.input.sourceRecovery.postgresAgentStores.length > 0;
 }
-function recoveredReleasePayload(recovery: DocumentData | undefined, payload: ReleasePayload, images: Record<string, string>): boolean {
+function recoveredReleasePayload(recovery: UntypedRecord | undefined, payload: ReleasePayload, images: Record<string, string>): boolean {
   return isReleasePayload(payload) && payload.gatewayEdgeImage !== undefined && isDeepStrictEqual(recovery?.payload, payload) &&
     isDeepStrictEqual(recovery?.images, images);
 }
-function recoveredReleaseDoctor(fence: DocumentData | undefined, operationId: string, images: Record<string, string>): boolean {
+function recoveredReleaseDoctor(fence: UntypedRecord | undefined, operationId: string, images: Record<string, string>): boolean {
   const doctor = fence?.doctor;
   return fence?.kind === "source-recovery" && fence.attemptId === operationId && fence.phase === "dispatched" &&
     doctor?.requestId === operationId && doctor?.error === undefined && recoveredDoctorTiming(doctor) && isDeepStrictEqual(fence.target?.images, images);
 }
-function recoveredDoctorTiming(doctor: DocumentData | undefined): boolean {
+function recoveredDoctorTiming(doctor: UntypedRecord | undefined): boolean {
   return doctor !== undefined && Number.isSafeInteger(doctor.startedAt) && Number.isSafeInteger(doctor.completedAt) && doctor.completedAt >= doctor.startedAt;
 }
 function recoveredReleaseImages(payload: ReleasePayload): Record<string, string> {
@@ -205,7 +204,7 @@ function recoveredReleaseImages(payload: ReleasePayload): Record<string, string>
     "gateway-edge": `${payload.gatewayEdgeImage?.imageRepository}:${payload.gatewayEdgeImage?.imageTag}` };
 }
 function recoveredReleaseRoot(
-  root: DocumentData | undefined, op: DocumentData | undefined, input: RecoveredGatewayReleaseInput,
+  root: UntypedRecord | undefined, op: UntypedRecord | undefined, input: RecoveredGatewayReleaseInput,
 ): DurableGatewayRoot {
   const current = asDurableGatewayRoot(root, input.gatewayId), images = recoveredReleaseImages(input.payload);
   if (!recoveredSharedRoot(current) || !recoveredReleaseOperation(op, input) ||

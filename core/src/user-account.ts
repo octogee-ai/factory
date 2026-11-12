@@ -74,3 +74,9 @@ export function firestoreUserAccountReader(db: Pick<Firestore, "collection" | "g
     },
   };
 }
+
+export const noUserAccounts: UserAccountReader = {
+  get: async () => null,
+  getMany: async () => new Map(),
+  list: async () => new Map(),
+};

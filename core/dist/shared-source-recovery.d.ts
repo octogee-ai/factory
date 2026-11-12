@@ -1,6 +1,5 @@
-import type { DocumentData } from "firebase-admin/firestore";
 import type { GatewayAssignment } from "./platform-state/gateways.js";
-import type { PlatformStateTransaction } from "./platform-state/store.js";
+import type { PlatformStateTransaction, UntypedRecord } from "./platform-state/store.js";
 export interface SourceRecoveryAssignment {
     uid: string;
     slug: string;
@@ -19,7 +18,7 @@ export interface SourceRecoveryAgentStore {
 export interface SharedSourceRecoveryAuthority {
     schedulerStateRecovery: true;
     postgresAgentStores: SourceRecoveryAgentStore[];
-    root: DocumentData;
+    root: UntypedRecord;
     assignments: SourceRecoveryAssignment[];
 }
 export declare class SharedSourceRecoveryConflict extends Error {
@@ -29,18 +28,18 @@ export declare function readSharedSourceRecoveryAuthority(transaction: PlatformS
 export declare function assertSharedSourceRecoveryUnchanged(current: SharedSourceRecoveryAuthority, captured: SharedSourceRecoveryAuthority): void;
 export interface SharedSourceRecoverySupersession {
     operationId: string;
-    input: DocumentData;
+    input: UntypedRecord;
     inputFingerprint: string;
     startedAt: number;
     completedAt: number;
     error: string;
-    fence: DocumentData;
+    fence: UntypedRecord;
 }
 export declare function assertSharedSourceRecoveryPredecessor(request: {
     gatewayId: string;
     operationId: string;
-    row: DocumentData;
-    fence: DocumentData;
+    row: UntypedRecord;
+    fence: UntypedRecord;
     source: SharedSourceRecoveryAuthority;
 }): SharedSourceRecoverySupersession;
 export declare function readSharedSourceRecoverySupersession(transaction: PlatformStateTransaction, gatewayId: string, operationId: string): Promise<{

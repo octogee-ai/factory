@@ -12,9 +12,12 @@ import {
   aggregateBrokerDiagnostics,
   addAdminUserDirectoryRoutes,
   mergeDailyUsage,
+  noAdminUserDirectorySource,
   type AdminUserDirectoryRouterDeps,
   type AdminUserProductDetail,
 } from "./admin-user-directory-router.js";
+import { firestoreAdminUserDirectorySource } from "./product-admin-user-directory-source.js";
+import { firestoreUserAccountReader, noUserAccounts } from "./user-account.js";
 import { createDocumentFixtureStore } from "./testing/journal-store.js";
 
 type DocData = Record<string, unknown>;
@@ -76,15 +79,30 @@ function fakeDb(store: DocStore): Firestore {
 }
 
 function makeApp(docs: Record<string, DocData>, productUserDetail?: AdminUserProductDetail) {
+  const documents: DocStore = new Map(Object.entries(docs));
+  const db = fakeDb(documents);
+  return appWith(documents, {
+    accounts: firestoreUserAccountReader(db),
+    source: firestoreAdminUserDirectorySource(db),
+    productUserDetail,
+  });
+}
+
+function makeBarePlatformApp(docs: Record<string, DocData>) {
+  return appWith(new Map(Object.entries(docs)), { accounts: noUserAccounts, source: noAdminUserDirectorySource });
+}
+
+function appWith(
+  documents: DocStore,
+  product: Pick<AdminUserDirectoryRouterDeps, "accounts" | "source" | "productUserDetail">,
+) {
   const app = express();
   app.use(express.json());
 
-  const documents: DocStore = new Map(Object.entries(docs));
   const deps: AdminUserDirectoryRouterDeps = {
-    db: fakeDb(documents),
     store: createDocumentFixtureStore(documents),
     logger: { info: vi.fn(), warn: vi.fn() },
-    productUserDetail,
+    ...product,
   };
 
   const router = express.Router();
@@ -613,6 +631,37 @@ describe("GET /api/admin/users/:uid — broker-sourced usage", () => {
       tokens: 738_246,
       costUsd: 1.0462,
     });
+  });
+});
+
+describe("admin user routes — bare platform", () => {
+  const recorded = (): Record<string, DocData> => ({
+    "users/uid-1": userDoc({ usage: { totalTokensUsed: 900 } }),
+    "users/uid-1/workspaces/builder": { name: "Builder" },
+    "users/uid-1/admin_actions/a1": { action: "setTier", at: 1_800_000_000_000 },
+    "modelBrokerUsageRollups/uid-1": { costUsd: 1.73, totalTokens: 1_000 },
+    "system/stats": { totalCustomers: 7 },
+  });
+
+  it("lists the platform's users without product accounts, usage or a total", async () => {
+    const res = await request(makeBarePlatformApp(recorded())).get("/api/admin/users").expect(200);
+
+    expect(res.body.items).toEqual([expect.objectContaining({ uid: "uid-1", email: "", costUsd: 0 })]);
+    expect(res.body.total).toBeNull();
+  });
+
+  it("details a platform user with no product usage, workspaces or broker cost", async () => {
+    const res = await request(makeBarePlatformApp(recorded())).get("/api/admin/users/uid-1").expect(200);
+
+    expect(res.body.provisioning).toMatchObject({ status: "complete", slug: "builder" });
+    expect(res.body.usage).toMatchObject({ totalTokensUsed: 0, costUsd: 0 });
+    expect(res.body).toMatchObject({ workspaces: [], usageLogs: [], modelCosts: {}, modelCredential: null });
+  });
+
+  it("reports an empty audit trail", async () => {
+    const res = await request(makeBarePlatformApp(recorded())).get("/api/admin/users/uid-1/audit").expect(200);
+
+    expect(res.body.items).toEqual([]);
   });
 });
 

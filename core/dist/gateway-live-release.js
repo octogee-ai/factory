@@ -1,6 +1,5 @@
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, } from "@octogee/shared/types/gateway-mutable-config";
-import { GATEWAY_RELEASES_SUBCOLLECTION, isGatewayRuntimeDoc, isReleasePayload, projectGatewayDesiredRootForGateway, releasePayloadHash, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
+import { isGatewayRuntimeDoc, isReleasePayload, projectGatewayDesiredRootForGateway, releasePayloadHash, upgradeReleasePayloadSchema, } from "@octogee/shared/types/gateway-releases";
 export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, };
 // A gateway's pods are named octogee-gateway-<id>-<replicaset>-<pod> by the
 // stable-name Deployment. Pod identity binds to the gateway alone — never to a
@@ -110,13 +109,6 @@ function isGatewayArtifact(value) {
 function isReleaseNumber(release) {
     return typeof release === "number" && Number.isInteger(release) && release >= 1;
 }
-export async function readGatewayArtifact(db, gatewayId, release, transaction) {
-    if (!isBareGatewayId(gatewayId) || !isReleaseNumber(release))
-        return null;
-    const releaseRef = db.doc(`${GATEWAYS_COLLECTION}/${gatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/${release}`);
-    const releaseSnap = await (transaction ? transaction.get(releaseRef) : releaseRef.get());
-    return artifactFromStoredRelease(releaseSnap.exists ? releaseSnap.data() : undefined, gatewayId, release);
-}
 export async function readGatewayArtifactInStore(state, gatewayId, release) {
     if (!isBareGatewayId(gatewayId) || !isReleaseNumber(release))
         return null;
@@ -181,12 +173,6 @@ export function gatewayAuthorizationFromRootDocument(data, gatewayId) {
     if (gateway === null)
         return null;
     return { kind: "durable", gateway, config: gateway };
-}
-export async function readGatewayAuthorization(db, gatewayId) {
-    if (!isBareGatewayId(gatewayId))
-        return null;
-    const gatewaySnap = await db.doc(`${GATEWAYS_COLLECTION}/${gatewayId}`).get();
-    return gatewaySnap.exists ? gatewayAuthorizationFromRootDocument(gatewaySnap.data(), gatewayId) : null;
 }
 export async function readGatewayAuthorizationInStore(state, gatewayId) {
     if (!isBareGatewayId(gatewayId))

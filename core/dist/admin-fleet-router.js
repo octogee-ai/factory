@@ -28,7 +28,6 @@ import { buildUserDeletionSchedule } from "@octogee/shared/types/account-lifecyc
 import { buildUserDeletionPlan } from "./user-deletion-plan.js";
 import { FleetMutationIdempotencyError, runNormalFleetMutation, } from "./normal-fleet-mutation.js";
 import { OperationAuditIdempotencyConflictError } from "./operation-audit.js";
-import { firestoreUserAccountReader, } from "./user-account.js";
 import { failedRetirementOf, giveOperatorIsolatedGateway, movesTouchingGateway, rearmFailedRetirement, isolatedGatewayRetireRefusal, operatorAllocationId, ownIsolatedGatewayTargetRefusal, planOperatorIsolatedGateway, } from "./operator-isolated-gateway.js";
 import { readReleaseStatus, summarizeReleaseStatus } from "./release-status.js";
 import { centralGatewayReleasePayload, ReleaseDigestManifestNotFoundError, } from "./artifact-registry.js";
@@ -3130,8 +3129,7 @@ export function respondToAdminFleetMutationError(error, _req, res, next) {
 }
 // eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
 export function addAdminFleetRoutes(router, deps) {
-    const { db, logger, store } = deps;
-    const accounts = firestoreUserAccountReader(db);
+    const { accounts, logger, store } = deps;
     const runAdminFleetMutation = createAdminFleetMutationRunner(store);
     router.use(admitAdminDryRunMarker);
     addAdminComputerRoutes(router, { store, replacementEnabled: deps.computerReplacementEnabled, journal: runAdminFleetMutation });

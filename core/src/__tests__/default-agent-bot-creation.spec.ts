@@ -8,7 +8,6 @@ const __dirname = path.dirname(__filename);
 
 const PROVISION_SRC = path.resolve(__dirname, "../mattermost/provision.ts");
 const CHANNEL_HOST_SRC = path.resolve(__dirname, "../channel-host/mattermost.ts");
-const PROFILE_SYNC_SRC = path.resolve(__dirname, "../mattermost/profile-sync.ts");
 const GATEWAY_EDGE_AGENTS_SRC = path.resolve(
   __dirname,
   "../../../gateway-edge/src/routes/agents.ts",
@@ -65,13 +64,6 @@ describe("coach is a MM bot — rename contract", () => {
     const src = fs.readFileSync(DEFAULT_AGENT_IDENTITY_SRC, "utf-8");
     expect(src).toMatch(/`\/bots\/\$\{defaultAgentMmUserId\}`,\s*"PUT"/);
     expect(src).toMatch(/display_name:\s*patch\.name/);
-    expect(src).not.toMatch(/\/users\/\$\{defaultAgentMmUserId\}\/patch/);
-  });
-
-  it("profile-sync.ts uses PUT /bots/{id} with display_name", () => {
-    const src = fs.readFileSync(PROFILE_SYNC_SRC, "utf-8");
-    expect(src).toMatch(/`\/bots\/\$\{defaultAgentMmUserId\}`/);
-    expect(src).toMatch(/display_name:\s*defaultAgentName/);
     expect(src).not.toMatch(/\/users\/\$\{defaultAgentMmUserId\}\/patch/);
   });
 });

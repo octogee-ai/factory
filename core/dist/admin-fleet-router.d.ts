@@ -1,5 +1,4 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
-import type { Firestore } from "firebase-admin/firestore";
 import { type GatewayClass, type GatewayImageProfile, type GatewayProfile, type GatewayRuntime, type GatewayVmState, type OperationAuditAliasPlan } from "@octogee/shared/types/glm";
 import { type PlatformRuntimeConfig } from "@octogee/shared/types/platform-config";
 import { type AssignmentDoc, type AssignmentState } from "@octogee/shared/types/gateway-releases";
@@ -51,7 +50,7 @@ export interface GatewayPodDiagnostics {
 }
 export interface FleetRouterDeps {
     computerReplacementEnabled?: boolean;
-    db: Firestore;
+    accounts: UserAccountReader;
     store: PlatformStateStore;
     logger: FleetLogger;
     provisionGatewayAuthSecret: (opts: {

@@ -18,8 +18,6 @@ describe("mattermost public barrel", () => {
       mmUploadAvatar: expect.any(Function),
       provisionMattermostUser: expect.any(Function),
       revokeAndMintUserPat: expect.any(Function),
-      syncDefaultAgentProfileToMattermost: expect.any(Function),
-      syncProfileToMattermost: expect.any(Function),
     }));
   });
 });

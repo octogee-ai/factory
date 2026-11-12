@@ -1,5 +1,4 @@
-import type { DocumentData } from "firebase-admin/firestore";
-import type { PlatformUserRecord, OperationRecord, PlatformStateStore, Stored } from "@octogee/core/platform-state";
+import type { PlatformUserRecord, OperationRecord, PlatformStateStore, Stored, UntypedRecord } from "@octogee/core/platform-state";
 import type { Operation, SchedulerHandoffState } from "@octogee/shared/types/glm";
 import type { SchedulerMigrationRequestBody } from "@octogee/shared/types/fleet-controller";
 import { userActivationSourceRecoveryPending } from "./legacy-migration-recovery.js";
@@ -25,7 +24,7 @@ function isHandoff(value: unknown): value is SchedulerHandoffState {
 
 const UNSETTLED_OPERATION_STATUSES: ReadonlySet<unknown> = new Set(["pending", "running", "failed"]);
 
-export function schedulerHandoffAwaitingRelease(operation: DocumentData | undefined): boolean {
+export function schedulerHandoffAwaitingRelease(operation: UntypedRecord | undefined): boolean {
   if (operation && userActivationSourceRecoveryPending(operation as Operation)) return true;
   return operation?.schedulerHandoffReleased === false &&
     UNSETTLED_OPERATION_STATUSES.has(operation.status) &&
@@ -34,7 +33,7 @@ export function schedulerHandoffAwaitingRelease(operation: DocumentData | undefi
 
 type HandoffProgress = "never-held" | "held" | "staged" | "cut-over";
 
-function handoffProgress(operation: DocumentData): HandoffProgress {
+function handoffProgress(operation: UntypedRecord): HandoffProgress {
   if (typeof operation.cutoverCommittedAt === "number") return "cut-over";
   const steps = Array.isArray(operation.steps) ? operation.steps as Array<{ name?: unknown; status?: unknown }> : [];
   if (!steps.some((step) => step.name === "quiesce-source")) return "never-held";
@@ -91,7 +90,7 @@ async function acknowledgeCurrentHandoff(
   });
 }
 
-function sourceRecoveryOwns(operation: DocumentData, id: string): boolean {
+function sourceRecoveryOwns(operation: UntypedRecord, id: string): boolean {
   return userActivationSourceRecoveryPending({ ...operation, id } as Operation) ||
     operation.input?.recoverSourceOnly === true && typeof operation.cutoverCommittedAt !== "number";
 }

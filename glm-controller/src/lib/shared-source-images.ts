@@ -1,4 +1,4 @@
-import type { DocumentData } from "firebase-admin/firestore";
+import type { UntypedRecord } from "@octogee/core/platform-state";
 import { json, type SharedPodRecoveryDeps } from "./shared-restore-runtime.js";
 
 type Deps = Pick<SharedPodRecoveryDeps, "namespace" | "runKubectl">;
@@ -7,7 +7,7 @@ export interface SourceRecoveryWorkload {
   deploymentName: string; deploymentUid: string; replicaSetName: string; replicaSetUid: string;
 }
 
-function assertResource(value: DocumentData, name: string, uid: string, namespace: string): void {
+function assertResource(value: UntypedRecord, name: string, uid: string, namespace: string): void {
   if (value.metadata?.name !== name || value.metadata?.uid !== uid || value.metadata.namespace !== namespace ||
       value.metadata.deletionTimestamp || typeof value.metadata.resourceVersion !== "string" || value.spec?.replicas !== 1) {
     throw new Error("source recovery workload custody changed");
@@ -25,14 +25,14 @@ async function workloadResources(deps: Deps, workload: SourceRecoveryWorkload) {
   if (strategy?.type !== "RollingUpdate" || strategy.rollingUpdate?.maxSurge !== 1 || strategy.rollingUpdate.maxUnavailable !== 0) {
     throw new Error("source recovery requires its canonical surge strategy");
   }
-  if (!replicaSet.metadata.ownerReferences?.some((owner: DocumentData) => owner.controller && owner.kind === "Deployment" && owner.uid === workload.deploymentUid)) {
+  if (!replicaSet.metadata.ownerReferences?.some((owner: UntypedRecord) => owner.controller && owner.kind === "Deployment" && owner.uid === workload.deploymentUid)) {
     throw new Error("source recovery ReplicaSet ownership changed");
   }
   return { deployment, replicaSet };
 }
 
-export async function captureSourceRecoveryWorkload(deps: Deps, gatewayId: string, pod: DocumentData, allowPaused = false): Promise<SourceRecoveryWorkload> {
-  const owner = pod.metadata.ownerReferences?.find((row: DocumentData) => row.controller && row.kind === "ReplicaSet");
+export async function captureSourceRecoveryWorkload(deps: Deps, gatewayId: string, pod: UntypedRecord, allowPaused = false): Promise<SourceRecoveryWorkload> {
+  const owner = pod.metadata.ownerReferences?.find((row: UntypedRecord) => row.controller && row.kind === "ReplicaSet");
   if (!owner || typeof owner.name !== "string" || typeof owner.uid !== "string") throw new Error("source recovery Pod owner is unavailable");
   const deploymentName = `octogee-gateway-${gatewayId}`;
   const deployment = await json(deps, ["get", "deployment", deploymentName]);
@@ -43,12 +43,12 @@ export async function captureSourceRecoveryWorkload(deps: Deps, gatewayId: strin
   return workload;
 }
 
-function templatePatch(value: DocumentData, images: Images, original: Images) {
+function templatePatch(value: UntypedRecord, images: Images, original: Images) {
   const patch = resourceTests(value);
   const containers = value.spec.template?.spec?.containers;
   if (!Array.isArray(containers) || containers.length !== Object.keys(images).length ||
       new Set(containers.map(c => c.name)).size !== containers.length) throw new Error("source recovery container roster changed");
-  containers.forEach((container: DocumentData, index: number) => {
+  containers.forEach((container: UntypedRecord, index: number) => {
     if (!images[container.name] || ![original[container.name], images[container.name]].includes(container.image)) {
       throw new Error("source recovery workload image changed outside its claim");
     }
@@ -58,12 +58,12 @@ function templatePatch(value: DocumentData, images: Images, original: Images) {
   return patch;
 }
 
-function resourceTests(value: DocumentData): Array<{ op: string; path: string; value: unknown }> {
+function resourceTests(value: UntypedRecord): Array<{ op: string; path: string; value: unknown }> {
   return [{ op: "test", path: "/metadata/uid", value: value.metadata.uid },
     { op: "test", path: "/metadata/resourceVersion", value: value.metadata.resourceVersion }];
 }
 
-async function patchResource(deps: Deps, kind: string, value: DocumentData, patch: ReturnType<typeof resourceTests>, assertCurrent: () => Promise<void>) {
+async function patchResource(deps: Deps, kind: string, value: UntypedRecord, patch: ReturnType<typeof resourceTests>, assertCurrent: () => Promise<void>) {
   await assertCurrent();
   await json(deps, ["patch", kind, value.metadata.name, "--type=json", "-p", JSON.stringify(patch)]);
   await assertCurrent();

@@ -1,5 +1,4 @@
 import express from "express";
-import type { Firestore } from "firebase-admin/firestore";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { GATEWAY_RELEASES_SUBCOLLECTION, releasePayloadHash, type ReleasePayload } from "@octogee/shared/types/gateway-releases";
@@ -8,6 +7,7 @@ import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION } from "@octogee/sha
 import { addAdminFleetRoutes } from "./admin-fleet-router.js";
 import { isOperatorIssuedAllocation, OPERATOR_ISOLATED_GATEWAY_SOURCE } from "./operator-isolated-gateway.js";
 import { createDocumentFixtureStore, FIXTURE_SIZING_PROFILES } from "./testing/journal-store.js";
+import { noUserAccounts } from "./user-account.js";
 
 type Row = Record<string, unknown>;
 type Seed = Record<string, Row>;
@@ -109,7 +109,7 @@ function harness(seed: Seed, beforeRetirementClaim?: (records: Map<string, Row>)
     next();
   });
   addAdminFleetRoutes(app, {
-    db: {} as Firestore,
+    accounts: noUserAccounts,
     store,
     logger: { info: vi.fn(), warn: vi.fn() },
     provisionGatewayAuthSecret: vi.fn(async () => ({})),

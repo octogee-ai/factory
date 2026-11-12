@@ -1,9 +1,8 @@
 import { readSchedulerMigrationIdentity } from "@octogee/shared/types/glm";
-import type { DocumentData } from 'firebase-admin/firestore';
 import type { AssignmentDoc } from '@octogee/shared/types/gateway-releases';
 import { readWorkspaceMigrationMarker } from '@octogee/shared/types/workspace-migration';
 import { isolatedRuntimeMutationFenced } from '@octogee/core/gateway-retirement-claim';
-import type { PlatformUserRecord, PlatformStateRepositories, Stored } from '@octogee/core/platform-state';
+import type { PlatformUserRecord, PlatformStateRepositories, Stored, UntypedRecord } from '@octogee/core/platform-state';
 import { MAX_OPERATION_ATTEMPT_HISTORY } from '../operation-retry.js';
 
 function positiveInteger(value: unknown): boolean {
@@ -17,7 +16,7 @@ function sourcePodSelectionFailure(error: unknown, gatewayId: string): boolean {
   return /^(0|[1-9]\d*)$/.test(cardinality) && Number.isSafeInteger(count) && count !== 1;
 }
 
-function untouchedTransportHistory(row: DocumentData): boolean {
+function untouchedTransportHistory(row: UntypedRecord): boolean {
   const history = row.attemptHistory;
   if (!positiveInteger(row.attempts) || !Array.isArray(history) || history.length !== Math.min(row.attempts, MAX_OPERATION_ATTEMPT_HISTORY)) return false;
   const firstRetainedAttempt = row.attempts - history.length + 1;
@@ -30,7 +29,7 @@ function untouchedTransportHistory(row: DocumentData): boolean {
     attempt.steps[0]?.name === 'keys-sync-state' && attempt.steps[0].status === 'failed' && attempt.steps[0].error === attempt.error);
 }
 
-function handoffMatches(row: DocumentData, id: string): boolean {
+function handoffMatches(row: UntypedRecord, id: string): boolean {
   const input = row.input, handoff = row.schedulerHandoff;
   const identity = readSchedulerMigrationIdentity(id, handoff?.migrationId);
   return handoff && identity !== null && handoff.uid === input.uid && handoff.slug === input.builderSlug &&
@@ -40,7 +39,7 @@ function handoffMatches(row: DocumentData, id: string): boolean {
     ['stageAfterCutover', 'stagedAt', 'sourceRecovery'].every(key => handoff[key] === undefined);
 }
 
-function queuedSharedScope(row: DocumentData): boolean {
+function queuedSharedScope(row: UntypedRecord): boolean {
   const input = row.input;
   return row.kind === 'migrate-customer' && input &&
     ['uid', 'builderSlug', 'fromGatewayId', 'toGatewayId'].every(key => typeof input[key] === 'string' && input[key].length > 0 && !input[key].includes('/')) &&
@@ -48,7 +47,7 @@ function queuedSharedScope(row: DocumentData): boolean {
     input.sourceTransferMode === undefined && input.recoverSourceOnly === undefined;
 }
 
-function unclaimedRetry(row: DocumentData): boolean {
+function unclaimedRetry(row: UntypedRecord): boolean {
   const untouched = ['customerMigrationV2', 'sourceTransferExecution', 'schedulerHandoffLost', 'cutoverCommittedAt',
     'restoreAttempt', 'cancellationRequestedAt', 'rolledBack', 'lastResumedAt'];
   return row.status === 'pending' && row.startedAt === null && row.completedAt === null &&
@@ -56,18 +55,18 @@ function unclaimedRetry(row: DocumentData): boolean {
     Array.isArray(row.steps) && row.steps.length === 0 && row.output === undefined;
 }
 
-function queuedSharedMigrationBeforeTransport(row: DocumentData, id: string): boolean {
+function queuedSharedMigrationBeforeTransport(row: UntypedRecord, id: string): boolean {
   return queuedSharedScope(row) && unclaimedRetry(row) && handoffMatches(row, id) && untouchedTransportHistory(row);
 }
 
-function userOwnerMatches(row: DocumentData, id: string, owner: Stored<PlatformUserRecord> | null): boolean {
+function userOwnerMatches(row: UntypedRecord, id: string, owner: Stored<PlatformUserRecord> | null): boolean {
   if (!owner) return false;
   const marker = readWorkspaceMigrationMarker({ migration: owner.fences.migration });
   return !isolatedRuntimeMutationFenced(owner) && owner.gateway?.gatewayId === row.input.fromGatewayId &&
     ['complete', 'provisioning'].includes(owner.openclaw.status ?? '') && marker?.operationId === id && marker.state === 'preparing' && marker.phase === 'preparing';
 }
 
-function sourceAssignmentMatches(row: DocumentData, id: string, assignment: DocumentData | AssignmentDoc | null | undefined): boolean {
+function sourceAssignmentMatches(row: UntypedRecord, id: string, assignment: UntypedRecord | AssignmentDoc | null | undefined): boolean {
   if (!assignment) return false;
   return assignment.uid === row.input.uid && assignment.slug === row.input.builderSlug && assignment.gatewayId === row.input.fromGatewayId &&
     assignment.state === 'serving' && Number.isSafeInteger(assignment.epoch) && assignment.epoch >= 0 &&
@@ -76,7 +75,7 @@ function sourceAssignmentMatches(row: DocumentData, id: string, assignment: Docu
 }
 
 export async function queuedSharedMigrationOwnsSourceInStore(
-  state: Pick<PlatformStateRepositories, 'users' | 'gateways'>, row: DocumentData, id: string,
+  state: Pick<PlatformStateRepositories, 'users' | 'gateways'>, row: UntypedRecord, id: string,
 ): Promise<boolean> {
   if (!queuedSharedMigrationBeforeTransport(row, id)) return false;
   const { uid, fromGatewayId, toGatewayId } = row.input;

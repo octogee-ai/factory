@@ -2,10 +2,10 @@ import { buildUserSummary, isoMillis, toISODate, } from "./admin-shape.js";
 import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { isUserParkedVm } from "@octogee/shared/types/glm";
 import { placementReceiptDocId } from "@octogee/shared/types/placement-receipts";
-import { userAccountFromData, firestoreUserAccountReader, } from "./user-account.js";
+import { userAccountFromData, } from "./user-account.js";
 import { MissingRecordError } from "./platform-state/errors.js";
-import { readOwnerBrokerUsageSeries } from "./broker-usage-series.js";
-import { MODEL_BROKER_USAGE_EVENTS_COLLECTION, MODEL_BROKER_USAGE_ROLLUPS_COLLECTION, MODEL_BROKER_USAGE_WINDOWS_COLLECTION, MODEL_BROKER_WEEK_WINDOWS_COLLECTION, modelBrokerWindowDocId, usageWindowStartMs, weekWindowStartMs, } from "@octogee/shared/types/model-broker-usage";
+import { BROKER_USAGE_SERIES_READ_LIMIT, brokerUsageSeries } from "./broker-usage-series.js";
+import { usageWindowStartMs, weekWindowStartMs } from "@octogee/shared/types/model-broker-usage";
 import { anonymousOperationalEnvironment, anonymousOperationalGatewayClass, isAnonymousOperationalModelDimension, } from "@octogee/shared/types/account-lifecycle";
 function financeNumber(value) {
     return typeof value === "number" && Number.isFinite(value) ? value : 0;
@@ -56,28 +56,31 @@ function projectAnonymousArchive(id, data) {
             : [],
     };
 }
-// Admin USD figures come exclusively from the broker ledger; one getAll pulls
-// the current 4h window + week ledger + the all-time rollup per user.
-async function readBrokerUserUsage(db, uids, now) {
+export const noAdminUserDirectorySource = {
+    brokerLedgers: async () => new Map(),
+    brokerWindows: async () => [],
+    brokerEvents: async () => [],
+    brokerEventCosts: async () => [],
+    brokerRollup: async () => undefined,
+    totalUsers: async () => null,
+    systemConfig: async () => undefined,
+    usageLogs: async () => [],
+    workspaces: async () => [],
+    workspaceModelUsage: async () => [],
+    adminActions: async () => [],
+};
+// Admin USD figures come exclusively from the broker ledger: the current 4h
+// window + week ledger + the all-time rollup per user.
+async function readBrokerUserUsage(source, uids, now) {
     const usage = new Map();
     if (uids.length === 0)
         return usage;
-    const windowStartMs = usageWindowStartMs(now);
-    const weekStartMs = weekWindowStartMs(now);
-    const refs = uids.flatMap((uid) => [
-        db
-            .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
-            .doc(modelBrokerWindowDocId(uid, windowStartMs)),
-        db
-            .collection(MODEL_BROKER_WEEK_WINDOWS_COLLECTION)
-            .doc(modelBrokerWindowDocId(uid, weekStartMs)),
-        db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(uid),
-    ]);
-    const snaps = await db.getAll(...refs);
-    uids.forEach((uid, i) => {
-        const windowData = snaps[i * 3]?.data() ?? {};
-        const weekData = snaps[i * 3 + 1]?.data() ?? {};
-        const rollupData = snaps[i * 3 + 2]?.data() ?? {};
+    const ledgers = await source.brokerLedgers(uids, usageWindowStartMs(now), weekWindowStartMs(now));
+    uids.forEach((uid) => {
+        const ledger = ledgers.get(uid);
+        const windowData = ledger?.window ?? {};
+        const weekData = ledger?.week ?? {};
+        const rollupData = ledger?.rollup ?? {};
         usage.set(uid, {
             windowCostUsd: financeNumber(windowData.chargeUsd ?? windowData.costUsd),
             weekCostUsd: financeNumber(weekData.chargeUsd ?? weekData.costUsd),
@@ -95,22 +98,16 @@ async function readBrokerUserUsage(db, uids, now) {
 const BROKER_DAILY_USAGE_EVENT_LIMIT = 20_000;
 // Per-UTC-day broker cost series for the admin usage history — replaces the
 // legacy usage_logs costUsd (openclaw-reported $0).
-async function readBrokerDailyUsage(db, uid, sinceMs, logger) {
-    const snap = await db
-        .collection(MODEL_BROKER_USAGE_EVENTS_COLLECTION)
-        .where("ownerUid", "==", uid)
-        .where("createdAt", ">=", sinceMs)
-        .limit(BROKER_DAILY_USAGE_EVENT_LIMIT)
-        .get();
-    if (snap.docs.length >= BROKER_DAILY_USAGE_EVENT_LIMIT) {
+async function readBrokerDailyUsage(source, uid, sinceMs, logger) {
+    const events = await source.brokerEvents(uid, sinceMs, BROKER_DAILY_USAGE_EVENT_LIMIT);
+    if (events.length >= BROKER_DAILY_USAGE_EVENT_LIMIT) {
         logger?.warn("admin daily usage truncated at the broker event limit", {
             uid,
             limit: BROKER_DAILY_USAGE_EVENT_LIMIT,
         });
     }
     const days = new Map();
-    for (const doc of snap.docs) {
-        const data = doc.data();
+    for (const data of events) {
         const createdAt = financeNumber(data.createdAt);
         if (!createdAt)
             continue;
@@ -263,7 +260,7 @@ async function summarizeUsers(directory, users) {
     const uids = users.map((userRecord) => userRecord.uid);
     const [accounts, brokerUsage] = await Promise.all([
         directory.accounts.getMany(uids),
-        readBrokerUserUsage(directory.db, uids, Date.now()),
+        readBrokerUserUsage(directory.source, uids, Date.now()),
     ]);
     return users.map((userRecord) => buildUserSummary(userRecord, accountFor(accounts, userRecord.uid), brokerUsage.get(userRecord.uid) ?? {}));
 }
@@ -369,9 +366,8 @@ function sendUnknownCursor(res, error) {
 }
 // eslint-disable-next-line max-lines-per-function -- factory mounts the user routes; splitting it would scatter the contract
 export function addAdminUserDirectoryRoutes(router, deps) {
-    const { db, store, logger } = deps;
-    const accounts = firestoreUserAccountReader(db);
-    const directory = { db, store, accounts };
+    const { accounts, source, store, logger } = deps;
+    const directory = { source, store, accounts };
     router.get("/user-archives", async (_req, res, next) => {
         try {
             const archives = (await readAllArchives(store)).map((archive) => projectAnonymousArchive(archive.id, { ...archive.record, archivedAt: archive.archivedAt }));
@@ -393,36 +389,24 @@ export function addAdminUserDirectoryRoutes(router, deps) {
             const days = Math.min(30, Math.max(1, parseInt(req.query.days ?? "14", 10)));
             const now = Date.now();
             const sinceMs = now - days * 24 * 60 * 60 * 1000;
-            // Window history by derived doc id — no composite index needed.
             const windowMs = 4 * 60 * 60 * 1000;
             const currentWindow = usageWindowStartMs(now);
-            const windowRefs = Array.from({ length: 12 }, (_, i) => db
-                .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
-                .doc(`${uid}_${currentWindow - i * windowMs}`));
-            const [windowSnaps, eventsSnap] = await Promise.all([
-                db.getAll(...windowRefs),
-                db
-                    .collection(MODEL_BROKER_USAGE_EVENTS_COLLECTION)
-                    .where("ownerUid", "==", uid)
-                    .where("createdAt", ">=", sinceMs)
-                    .limit(BROKER_DAILY_USAGE_EVENT_LIMIT)
-                    .get(),
+            const windowStartsMs = Array.from({ length: 12 }, (_, i) => currentWindow - i * windowMs);
+            const [windowRecords, events] = await Promise.all([
+                source.brokerWindows(uid, windowStartsMs),
+                source.brokerEvents(uid, sinceMs, BROKER_DAILY_USAGE_EVENT_LIMIT),
             ]);
-            const windows = windowSnaps
-                .filter((snap) => snap.exists)
-                .map((snap) => {
-                const data = snap.data();
-                return {
-                    windowStartMs: financeNumber(data.windowStartMs),
-                    totalTokens: financeNumber(data.totalTokens),
-                    requestCount: financeNumber(data.requestCount),
-                    costUsd: financeNumber(data.costUsd),
-                };
-            })
+            const windows = windowRecords
+                .map((data) => ({
+                windowStartMs: financeNumber(data.windowStartMs),
+                totalTokens: financeNumber(data.totalTokens),
+                requestCount: financeNumber(data.requestCount),
+                costUsd: financeNumber(data.costUsd),
+            }))
                 .sort((a, b) => b.windowStartMs - a.windowStartMs);
             res.json({
                 windows,
-                ...aggregateBrokerDiagnostics(eventsSnap.docs.map((doc) => doc.data())),
+                ...aggregateBrokerDiagnostics(events),
             });
         }
         catch (e) {
@@ -445,8 +429,7 @@ export function addAdminUserDirectoryRoutes(router, deps) {
                 : await unfilteredUserPage(directory, cursor, pageSize);
             const { items, hasMore } = page;
             const nextCursor = hasMore ? items[items.length - 1].uid : null;
-            const statsSnap = await db.doc("system/stats").get();
-            const total = statsSnap.data()?.totalCustomers ?? null;
+            const total = await source.totalUsers();
             res.json({
                 items,
                 nextCursor,
@@ -505,21 +488,17 @@ export function addAdminUserDirectoryRoutes(router, deps) {
             const account = (await accounts.get(uid)) ?? userAccountFromData(uid, {});
             const thirtyDaysAgo = new Date();
             thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-            const userRef = db.collection("users").doc(uid);
-            const systemConfigSnap = await userRef.collection("system").doc("config").get();
-            const modelCredential = adminModelCredentialFromSystemConfig(systemConfigSnap.data());
+            const modelCredential = adminModelCredentialFromSystemConfig(await source.systemConfig(uid));
             const userCredentialActive = modelCredential?.active === true || account.byotActive;
-            const logsSnap = await userRef
-                .collection("usage_logs").where("date", ">=", thirtyDaysAgo.toISOString().slice(0, 10))
-                .orderBy("date", "desc").get();
-            const wsSnap = await userRef.collection("workspaces").get();
+            const usageLogs = await source.usageLogs(uid, thirtyDaysAgo.toISOString().slice(0, 10));
+            const workspaceRecords = await source.workspaces(uid);
             const productDetail = await deps.productUserDetail?.(uid);
             const usage = account.usage;
             const now = Date.now();
-            const [brokerUsage, brokerDaily, brokerRollupSnap] = await Promise.all([
-                readBrokerUserUsage(db, [uid], now),
-                readBrokerDailyUsage(db, uid, thirtyDaysAgo.getTime(), logger),
-                db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(uid).get(),
+            const [brokerUsage, brokerDaily, brokerRollup] = await Promise.all([
+                readBrokerUserUsage(source, [uid], now),
+                readBrokerDailyUsage(source, uid, thirtyDaysAgo.getTime(), logger),
+                source.brokerRollup(uid),
             ]);
             const summary = buildUserSummary(userRecord, account, brokerUsage.get(uid) ?? { now });
             const defaultAgentDm = userRecord.slug === null
@@ -532,10 +511,8 @@ export function addAdminUserDirectoryRoutes(router, deps) {
             // (byosub) keep their token counts at $0 platform cost.
             const modelCosts = {};
             for (const slug of slugs) {
-                const modelsSnap = await db.collection(`workspaces/${slug}/usage_models`).get();
-                for (const modelDoc of modelsSnap.docs) {
-                    const md = modelDoc.data();
-                    const model = md.model || modelDoc.id.split("_")[0];
+                for (const { id, record: md } of await source.workspaceModelUsage(slug)) {
+                    const model = md.model || id.split("_")[0];
                     if (!modelCosts[model])
                         modelCosts[model] = { tokens: 0, costUsd: 0, lastUsedAt: null };
                     modelCosts[model].tokens += md.tokens || 0;
@@ -547,7 +524,7 @@ export function addAdminUserDirectoryRoutes(router, deps) {
                     }
                 }
             }
-            const rollupModels = (brokerRollupSnap.data()?.models ?? {});
+            const rollupModels = (brokerRollup?.models ?? {});
             for (const value of Object.values(rollupModels)) {
                 const model = typeof value.model === "string" ? value.model.replace(/-\d{8}$/, "") : null;
                 if (!model)
@@ -594,10 +571,10 @@ export function addAdminUserDirectoryRoutes(router, deps) {
                     channelId: defaultAgentDm?.mattermostChannelId ?? null,
                     username: account.mattermostUsername || null,
                 },
-                workspaces: wsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
+                workspaces: workspaceRecords.map(({ id, record }) => ({ id, ...record })),
                 // Daily history: token/interaction telemetry from the legacy tailer
                 // (covers byosub traffic), USD strictly from the broker ledger.
-                usageLogs: mergeDailyUsage(logsSnap.docs.map((doc) => doc.data()), brokerDaily),
+                usageLogs: mergeDailyUsage(usageLogs, brokerDaily),
                 modelCosts,
                 createdAt: summary.createdAt,
             });
@@ -626,7 +603,10 @@ export function addAdminUserDirectoryRoutes(router, deps) {
             // additional cards empty so a multi-workspace owner is never
             // double-counted. Owner-credential (BYOSUB) traffic never reaches the
             // broker and carries $0 platform cost — correct for a cost panel.
-            const series = await readOwnerBrokerUsageSeries(db, uid, cutoff.getTime(), logger);
+            const series = brokerUsageSeries(await source.brokerEventCosts(uid, cutoff.getTime(), BROKER_USAGE_SERIES_READ_LIMIT));
+            if (series.truncated) {
+                logger.warn("broker usage series truncated at read limit", { ownerUid: uid, limit: BROKER_USAGE_SERIES_READ_LIMIT });
+            }
             const displayName = account?.displayName || account?.username || "";
             const workspaces = slugs.map((slug, i) => {
                 const s = i === 0 ? series : null;
@@ -705,22 +685,15 @@ export function addAdminUserDirectoryRoutes(router, deps) {
         try {
             const uid = req.params.uid;
             const limit = Math.max(1, Math.min(200, parseInt(req.query.limit ?? "50", 10)));
-            const snap = await db.collection(`users/${uid}/admin_actions`)
-                .orderBy("at", "desc")
-                .limit(limit)
-                .get();
-            const items = snap.docs.map((doc) => {
-                const d = doc.data();
-                return {
-                    id: doc.id,
-                    at: toISODate(d.at),
-                    adminUid: d.adminUid ?? null,
-                    adminEmail: d.adminEmail ?? null,
-                    action: d.action ?? "(unknown)",
-                    before: d.before ?? null,
-                    after: d.after ?? null,
-                };
-            });
+            const items = (await source.adminActions(uid, limit)).map(({ id, record: d }) => ({
+                id,
+                at: toISODate(d.at),
+                adminUid: d.adminUid ?? null,
+                adminEmail: d.adminEmail ?? null,
+                action: d.action ?? "(unknown)",
+                before: d.before ?? null,
+                after: d.after ?? null,
+            }));
             res.json({ items, generatedAt: new Date().toISOString() });
         }
         catch (e) {

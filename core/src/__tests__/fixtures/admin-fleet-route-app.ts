@@ -10,6 +10,7 @@ import {
   journalRowsIn,
   type FixtureDocuments,
 } from "../../testing/journal-store.js";
+import { firestoreUserAccountReader } from "../../user-account.js";
 
 export function valueAtPath(data: Record<string, unknown>, path: string): unknown {
   let cursor: unknown = data;
@@ -247,7 +248,7 @@ export function mkAdminFleetRouteApp(opts: {
   const store = createJournalFixtureStore(journalRowsIn(state.operations), { documents });
   opts.addProductRoutes?.(app, { db, store, requestNativeReturnSourceRecovery: opts.requestNativeReturnSourceRecovery });
   if (!opts.productRoutesOnly) addAdminFleetRoutes(app, {
-    db,
+    accounts: firestoreUserAccountReader(db),
     store,
     logger: { info: vi.fn(), warn: vi.fn() },
     provisionGatewayAuthSecret: vi.fn(async () => ({})),

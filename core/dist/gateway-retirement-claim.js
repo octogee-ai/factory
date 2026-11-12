@@ -1,5 +1,5 @@
-import { GATEWAY_HEARTBEAT_INTERVAL_MS, GATEWAY_UNREACHABLE_AFTER_MS, GATEWAYS_COLLECTION, } from "@octogee/shared/types/fleet-controller";
-import { userRuntimeMutationFenced, isGatewayRuntimeDoc, projectGatewayDesiredRootForGateway, } from "@octogee/shared/types/gateway-releases";
+import { GATEWAY_HEARTBEAT_INTERVAL_MS, GATEWAY_UNREACHABLE_AFTER_MS, } from "@octogee/shared/types/fleet-controller";
+import { isGatewayRuntimeDoc, projectGatewayDesiredRootForGateway, } from "@octogee/shared/types/gateway-releases";
 import { findActiveGatewayMigration } from "./fleet-operation-lock.js";
 // Retirement under the simple-roll model (GATEWAY-SIMPLE-ROLL-SPEC): claim the
 // gateway atomically (guarding mounted users + in-flight migrations), flip
@@ -176,28 +176,6 @@ function claimableGatewayRetirementRoot(gatewayId, value) {
         rootData: projected,
         root,
     };
-}
-export async function assertGatewayRuntimeMutationUnfenced(db, transaction, gatewayId, allowedVmRecoveryOperationId) {
-    const root = await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(gatewayId));
-    if (root.data()?.runtimeRestartFence !== undefined) {
-        throw new GatewayRetirementConflictError(`gateway ${gatewayId} runtime restart outcome is unresolved`);
-    }
-    const [retainedTransfers, transferTargets, mirroredUsers, vmRecoveries] = await Promise.all([
-        transaction.get(db.collection("users")
-            .where("provisioning.openclaw.sourceTransferFence.sourceGatewayId", "==", gatewayId)),
-        transaction.get(db.collection("users")
-            .where("provisioning.openclaw.sourceTransferFence.targetGatewayId", "==", gatewayId)),
-        transaction.get(db.collection("users")
-            .where("provisioning.openclaw.gatewayId", "==", gatewayId)),
-        transaction.get(db.collection("users")
-            .where("provisioning.computerRecovery.gatewayId", "==", gatewayId)),
-    ]);
-    if (vmRecoveries.docs.some(doc => !allowedVmRecoveryOperationId || doc.data()?.provisioning?.computerRecovery?.operationId !== allowedVmRecoveryOperationId)) {
-        throw new GatewayRetirementConflictError(`gateway ${gatewayId} VM recovery is in progress`);
-    }
-    if (retainedTransfers.size > 0 || transferTargets.size > 0 || mirroredUsers.docs.some(doc => userRuntimeMutationFenced(doc.data()))) {
-        throw new GatewayRetirementConflictError(`gateway ${gatewayId} source transfer outcome is unresolved`);
-    }
 }
 export function isolatedRuntimeMutationFenced(user) {
     return user.fences.restoreFence !== undefined || user.fences.sourceTransferFence !== undefined;

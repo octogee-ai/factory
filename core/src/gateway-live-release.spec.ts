@@ -9,7 +9,6 @@ import {
   gatewayAuthorizationFromRootDocument,
   initialGatewayReleaseDocuments,
   podBelongsToGateway,
-  readGatewayArtifact,
   readGatewayArtifactInStore,
   readGatewayAuthorizationInStore,
   readGatewayRuntimeHeartbeat,
@@ -157,20 +156,6 @@ describe("configuredUserCredentialBootstrapAllowed", () => {
 });
 
 type Docs = Record<string, Record<string, unknown>>;
-
-function database(docs: Docs) {
-  return {
-    doc(path: string) {
-      const data = docs[path];
-      return {
-        get: async () => ({
-          exists: data !== undefined,
-          data: () => data,
-        }),
-      };
-    },
-  };
-}
 
 function mutableConfig(
   overrides: Partial<GatewayMutableConfig> = {},
@@ -500,7 +485,7 @@ describe("gateway durable configuration authorization", () => {
   });
 
   it("reads an artifact-only selected release", async () => {
-    const docs: Docs = {
+    const store = createDocumentFixtureStore({
       "gateways/walter/releases/2": {
         gatewayId: "walter",
         release: 2,
@@ -509,9 +494,9 @@ describe("gateway durable configuration authorization", () => {
           imageTag: "deadbee",
         },
       },
-    };
+    });
 
-    await expect(readGatewayArtifact(database(docs) as never, "walter", 2)).resolves.toEqual({
+    await expect(readGatewayArtifactInStore(store, "walter", 2)).resolves.toEqual({
       imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
       imageTag: "deadbee",
     });
@@ -526,7 +511,7 @@ describe("gateway durable configuration authorization", () => {
         imageTag: `deadbee@sha256:${"b".repeat(64)}`,
       },
     };
-    const docs: Docs = {
+    const store = createDocumentFixtureStore({
       "gateways/walter/releases/2": {
         gatewayId: "walter",
         release: 2,
@@ -538,9 +523,9 @@ describe("gateway durable configuration authorization", () => {
           profileImages,
         },
       },
-    };
+    });
 
-    const artifact = await readGatewayArtifact(database(docs) as never, "walter", 2);
+    const artifact = await readGatewayArtifactInStore(store, "walter", 2);
     expect(artifact).toEqual({
       imageRepository:
         "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
@@ -558,29 +543,8 @@ describe("gateway durable configuration authorization", () => {
     }).releaseDoc.payload).toEqual(artifact);
   });
 
-  it("reads a hash-verified artifact through the retired Mac schema upgrade", async () => {
-    const payload = {
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
-      imageTag: "deadbee",
-      macOpsTokenProtocol: { version: 1 },
-    };
-    const docs: Docs = {
-      "gateways/walter/releases/2": {
-        gatewayId: "walter",
-        release: 2,
-        payloadHash: releasePayloadHash(payload as never),
-        payload,
-      },
-    };
-
-    await expect(readGatewayArtifact(database(docs) as never, "walter", 2)).resolves.toEqual({
-      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
-      imageTag: "deadbee",
-    });
-  });
-
-  it("refuses a release payload that still carries mutable policy or credential state", async () => {
-    const docs: Docs = {
+  it("refuses a stored release payload that still carries mutable policy", async () => {
+    const store = createDocumentFixtureStore({
       "gateways/walter/releases/2": {
         gatewayId: "walter",
         release: 2,
@@ -588,12 +552,11 @@ describe("gateway durable configuration authorization", () => {
           imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
           imageTag: "deadbee",
           gatewayClass: "shared",
-          byosub: { legacy: true },
         },
       },
-    };
+    });
 
-    await expect(readGatewayArtifact(database(docs) as never, "walter", 2)).resolves.toBeNull();
+    await expect(readGatewayArtifactInStore(store, "walter", 2)).rejects.toBeInstanceOf(MalformedRecordError);
   });
   it("reads heartbeat telemetry from the gateway's serving runtime doc", async () => {
     const docs: Docs = {
@@ -662,21 +625,5 @@ describe("gateway durable configuration authorization", () => {
     });
 
     await expect(readGatewayArtifactInStore(store, "walter", 2)).rejects.toBeInstanceOf(MalformedRecordError);
-  });
-
-  it("refuses a release payload that still carries credential state", async () => {
-    const docs: Docs = {
-      "gateways/walter/releases/2": {
-        gatewayId: "walter",
-        release: 2,
-        payload: {
-          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
-          imageTag: "deadbee",
-          byosub: { legacy: true },
-        },
-      },
-    };
-
-    await expect(readGatewayArtifact(database(docs) as never, "walter", 2)).resolves.toBeNull();
   });
 });

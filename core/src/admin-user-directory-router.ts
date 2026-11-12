@@ -5,7 +5,6 @@ import {
   type Response,
   type NextFunction,
 } from "express";
-import { type Firestore } from "firebase-admin/firestore";
 import {
   buildUserSummary,
   isoMillis,
@@ -18,24 +17,15 @@ import { isUserParkedVm } from "@octogee/shared/types/glm";
 import { placementReceiptDocId, type PlacementReceipt } from "@octogee/shared/types/placement-receipts";
 import {
   userAccountFromData,
-  firestoreUserAccountReader,
   type UserAccount,
   type UserAccountReader,
 } from "./user-account.js";
 import type { UserActivationLease, PlatformUserRecord } from "./platform-state/users.js";
 import { MissingRecordError } from "./platform-state/errors.js";
 import type { AnonymousOperationalArchive } from "./platform-state/jobs.js";
-import type { PlatformStateStore } from "./platform-state/store.js";
-import { readOwnerBrokerUsageSeries } from "./broker-usage-series.js";
-import {
-  MODEL_BROKER_USAGE_EVENTS_COLLECTION,
-  MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
-  MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
-  MODEL_BROKER_WEEK_WINDOWS_COLLECTION,
-  modelBrokerWindowDocId,
-  usageWindowStartMs,
-  weekWindowStartMs,
-} from "@octogee/shared/types/model-broker-usage";
+import type { PlatformStateStore, UntypedRecord } from "./platform-state/store.js";
+import { BROKER_USAGE_SERIES_READ_LIMIT, brokerUsageSeries } from "./broker-usage-series.js";
+import { usageWindowStartMs, weekWindowStartMs } from "@octogee/shared/types/model-broker-usage";
 import {
   anonymousOperationalEnvironment,
   anonymousOperationalGatewayClass,
@@ -93,31 +83,60 @@ function projectAnonymousArchive(id: string, data: Record<string, unknown>) {
   };
 }
 
-// Admin USD figures come exclusively from the broker ledger; one getAll pulls
-// the current 4h window + week ledger + the all-time rollup per user.
+export interface BrokerLedgerRecords {
+  window: UntypedRecord | undefined;
+  week: UntypedRecord | undefined;
+  rollup: UntypedRecord | undefined;
+}
+
+export interface AdminUserDirectoryRecord {
+  id: string;
+  record: UntypedRecord;
+}
+
+export interface AdminUserDirectorySource {
+  brokerLedgers(uids: readonly string[], windowStartMs: number, weekStartMs: number): Promise<ReadonlyMap<string, BrokerLedgerRecords>>;
+  brokerWindows(uid: string, windowStartsMs: readonly number[]): Promise<UntypedRecord[]>;
+  brokerEvents(uid: string, sinceMs: number, limit: number): Promise<UntypedRecord[]>;
+  brokerEventCosts(uid: string, sinceMs: number, limit: number): Promise<UntypedRecord[]>;
+  brokerRollup(uid: string): Promise<UntypedRecord | undefined>;
+  totalUsers(): Promise<number | null>;
+  systemConfig(uid: string): Promise<UntypedRecord | undefined>;
+  usageLogs(uid: string, sinceDate: string): Promise<UntypedRecord[]>;
+  workspaces(uid: string): Promise<AdminUserDirectoryRecord[]>;
+  workspaceModelUsage(slug: string): Promise<AdminUserDirectoryRecord[]>;
+  adminActions(uid: string, limit: number): Promise<AdminUserDirectoryRecord[]>;
+}
+
+export const noAdminUserDirectorySource: AdminUserDirectorySource = {
+  brokerLedgers: async () => new Map(),
+  brokerWindows: async () => [],
+  brokerEvents: async () => [],
+  brokerEventCosts: async () => [],
+  brokerRollup: async () => undefined,
+  totalUsers: async () => null,
+  systemConfig: async () => undefined,
+  usageLogs: async () => [],
+  workspaces: async () => [],
+  workspaceModelUsage: async () => [],
+  adminActions: async () => [],
+};
+
+// Admin USD figures come exclusively from the broker ledger: the current 4h
+// window + week ledger + the all-time rollup per user.
 async function readBrokerUserUsage(
-  db: Firestore,
+  source: AdminUserDirectorySource,
   uids: string[],
   now: number,
 ): Promise<Map<string, BrokerUserUsage>> {
   const usage = new Map<string, BrokerUserUsage>();
   if (uids.length === 0) return usage;
-  const windowStartMs = usageWindowStartMs(now);
-  const weekStartMs = weekWindowStartMs(now);
-  const refs = uids.flatMap((uid) => [
-    db
-      .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
-      .doc(modelBrokerWindowDocId(uid, windowStartMs)),
-    db
-      .collection(MODEL_BROKER_WEEK_WINDOWS_COLLECTION)
-      .doc(modelBrokerWindowDocId(uid, weekStartMs)),
-    db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(uid),
-  ]);
-  const snaps = await db.getAll(...refs);
-  uids.forEach((uid, i) => {
-    const windowData = snaps[i * 3]?.data() ?? {};
-    const weekData = snaps[i * 3 + 1]?.data() ?? {};
-    const rollupData = snaps[i * 3 + 2]?.data() ?? {};
+  const ledgers = await source.brokerLedgers(uids, usageWindowStartMs(now), weekWindowStartMs(now));
+  uids.forEach((uid) => {
+    const ledger = ledgers.get(uid);
+    const windowData = ledger?.window ?? {};
+    const weekData = ledger?.week ?? {};
+    const rollupData = ledger?.rollup ?? {};
     usage.set(uid, {
       windowCostUsd: financeNumber(windowData.chargeUsd ?? windowData.costUsd),
       weekCostUsd: financeNumber(weekData.chargeUsd ?? weekData.costUsd),
@@ -145,26 +164,20 @@ const BROKER_DAILY_USAGE_EVENT_LIMIT = 20_000;
 // Per-UTC-day broker cost series for the admin usage history — replaces the
 // legacy usage_logs costUsd (openclaw-reported $0).
 async function readBrokerDailyUsage(
-  db: Firestore,
+  source: AdminUserDirectorySource,
   uid: string,
   sinceMs: number,
   logger?: UserDirectoryRouterLogger,
 ): Promise<Map<string, BrokerDailyUsage>> {
-  const snap = await db
-    .collection(MODEL_BROKER_USAGE_EVENTS_COLLECTION)
-    .where("ownerUid", "==", uid)
-    .where("createdAt", ">=", sinceMs)
-    .limit(BROKER_DAILY_USAGE_EVENT_LIMIT)
-    .get();
-  if (snap.docs.length >= BROKER_DAILY_USAGE_EVENT_LIMIT) {
+  const events = await source.brokerEvents(uid, sinceMs, BROKER_DAILY_USAGE_EVENT_LIMIT);
+  if (events.length >= BROKER_DAILY_USAGE_EVENT_LIMIT) {
     logger?.warn("admin daily usage truncated at the broker event limit", {
       uid,
       limit: BROKER_DAILY_USAGE_EVENT_LIMIT,
     });
   }
   const days = new Map<string, BrokerDailyUsage>();
-  for (const doc of snap.docs) {
-    const data = doc.data() as Record<string, unknown>;
+  for (const data of events) {
     const createdAt = financeNumber(data.createdAt);
     if (!createdAt) continue;
     const date = new Date(createdAt).toISOString().slice(0, 10);
@@ -304,8 +317,9 @@ export interface UserDirectoryRouterLogger {
 export type AdminUserProductDetail = (uid: string) => Promise<Readonly<Record<string, unknown>>>;
 
 export interface AdminUserDirectoryRouterDeps {
-  db: Firestore;
   store: PlatformStateStore;
+  accounts: UserAccountReader;
+  source: AdminUserDirectorySource;
   logger: UserDirectoryRouterLogger;
   productUserDetail?: AdminUserProductDetail | undefined;
 }
@@ -404,7 +418,7 @@ type UserSort = "createdAt" | "lastActive";
 class UnknownUserCursorError extends Error {}
 
 interface UserDirectory {
-  db: Firestore;
+  source: AdminUserDirectorySource;
   store: PlatformStateStore;
   accounts: UserAccountReader;
 }
@@ -420,7 +434,7 @@ async function summarizeUsers(
   const uids = users.map((userRecord) => userRecord.uid);
   const [accounts, brokerUsage] = await Promise.all([
     directory.accounts.getMany(uids),
-    readBrokerUserUsage(directory.db, uids, Date.now()),
+    readBrokerUserUsage(directory.source, uids, Date.now()),
   ]);
   return users.map((userRecord) =>
     buildUserSummary(userRecord, accountFor(accounts, userRecord.uid), brokerUsage.get(userRecord.uid) ?? {}));
@@ -556,9 +570,8 @@ export function addAdminUserDirectoryRoutes(
   router: Router,
   deps: AdminUserDirectoryRouterDeps,
 ): Router {
-  const { db, store, logger } = deps;
-  const accounts = firestoreUserAccountReader(db);
-  const directory: UserDirectory = { db, store, accounts };
+  const { accounts, source, store, logger } = deps;
+  const directory: UserDirectory = { source, store, accounts };
 
   router.get(
     "/user-archives",
@@ -589,39 +602,25 @@ router.get(
         const now = Date.now();
         const sinceMs = now - days * 24 * 60 * 60 * 1000;
 
-        // Window history by derived doc id — no composite index needed.
         const windowMs = 4 * 60 * 60 * 1000;
         const currentWindow = usageWindowStartMs(now);
-        const windowRefs = Array.from({ length: 12 }, (_, i) =>
-          db
-            .collection(MODEL_BROKER_USAGE_WINDOWS_COLLECTION)
-            .doc(`${uid}_${currentWindow - i * windowMs}`),
-        );
-        const [windowSnaps, eventsSnap] = await Promise.all([
-          db.getAll(...windowRefs),
-          db
-            .collection(MODEL_BROKER_USAGE_EVENTS_COLLECTION)
-            .where("ownerUid", "==", uid)
-            .where("createdAt", ">=", sinceMs)
-            .limit(BROKER_DAILY_USAGE_EVENT_LIMIT)
-            .get(),
+        const windowStartsMs = Array.from({ length: 12 }, (_, i) => currentWindow - i * windowMs);
+        const [windowRecords, events] = await Promise.all([
+          source.brokerWindows(uid, windowStartsMs),
+          source.brokerEvents(uid, sinceMs, BROKER_DAILY_USAGE_EVENT_LIMIT),
         ]);
-        const windows = windowSnaps
-          .filter((snap) => snap.exists)
-          .map((snap) => {
-            const data = snap.data() as Record<string, unknown>;
-            return {
-              windowStartMs: financeNumber(data.windowStartMs),
-              totalTokens: financeNumber(data.totalTokens),
-              requestCount: financeNumber(data.requestCount),
-              costUsd: financeNumber(data.costUsd),
-            };
-          })
+        const windows = windowRecords
+          .map((data) => ({
+            windowStartMs: financeNumber(data.windowStartMs),
+            totalTokens: financeNumber(data.totalTokens),
+            requestCount: financeNumber(data.requestCount),
+            costUsd: financeNumber(data.costUsd),
+          }))
           .sort((a, b) => b.windowStartMs - a.windowStartMs);
 
         res.json({
           windows,
-          ...aggregateBrokerDiagnostics(eventsSnap.docs.map((doc) => doc.data())),
+          ...aggregateBrokerDiagnostics(events),
         });
       } catch (e) { next(e); }
     },
@@ -651,8 +650,7 @@ router.get(
         const { items, hasMore } = page;
         const nextCursor = hasMore ? items[items.length - 1]!.uid : null;
 
-const statsSnap = await db.doc("system/stats").get();
-        const total: number | null = (statsSnap.data()?.totalCustomers as number) ?? null;
+        const total = await source.totalUsers();
 
         res.json({
           items,
@@ -710,25 +708,21 @@ router.get(
 
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        const userRef = db.collection("users").doc(uid);
-        const systemConfigSnap = await userRef.collection("system").doc("config").get();
-        const modelCredential = adminModelCredentialFromSystemConfig(systemConfigSnap.data());
+        const modelCredential = adminModelCredentialFromSystemConfig(await source.systemConfig(uid));
         const userCredentialActive = modelCredential?.active === true || account.byotActive;
 
-        const logsSnap = await userRef
-          .collection("usage_logs").where("date", ">=", thirtyDaysAgo.toISOString().slice(0, 10))
-          .orderBy("date", "desc").get();
+        const usageLogs = await source.usageLogs(uid, thirtyDaysAgo.toISOString().slice(0, 10));
 
-        const wsSnap = await userRef.collection("workspaces").get();
+        const workspaceRecords = await source.workspaces(uid);
         const productDetail = await deps.productUserDetail?.(uid);
 
         const usage = account.usage;
 
         const now = Date.now();
-        const [brokerUsage, brokerDaily, brokerRollupSnap] = await Promise.all([
-          readBrokerUserUsage(db, [uid], now),
-          readBrokerDailyUsage(db, uid, thirtyDaysAgo.getTime(), logger),
-          db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(uid).get(),
+        const [brokerUsage, brokerDaily, brokerRollup] = await Promise.all([
+          readBrokerUserUsage(source, [uid], now),
+          readBrokerDailyUsage(source, uid, thirtyDaysAgo.getTime(), logger),
+          source.brokerRollup(uid),
         ]);
         const summary = buildUserSummary(userRecord, account, brokerUsage.get(uid) ?? { now });
 
@@ -746,10 +740,8 @@ router.get(
           { tokens: number; costUsd: number; lastUsedAt: string | null }
         > = {};
         for (const slug of slugs) {
-          const modelsSnap = await db.collection(`workspaces/${slug}/usage_models`).get();
-          for (const modelDoc of modelsSnap.docs) {
-            const md = modelDoc.data();
-            const model = md.model || modelDoc.id.split("_")[0];
+          for (const { id, record: md } of await source.workspaceModelUsage(slug)) {
+            const model = md.model || id.split("_")[0];
             if (!modelCosts[model]) modelCosts[model] = { tokens: 0, costUsd: 0, lastUsedAt: null };
             modelCosts[model]!.tokens += md.tokens || 0;
             modelCosts[model]!.costUsd = 0;
@@ -762,7 +754,7 @@ router.get(
             }
           }
         }
-        const rollupModels = (brokerRollupSnap.data()?.models ?? {}) as Record<
+        const rollupModels = (brokerRollup?.models ?? {}) as Record<
           string,
           Record<string, unknown>
         >;
@@ -812,13 +804,10 @@ router.get(
             channelId: defaultAgentDm?.mattermostChannelId ?? null,
             username: account.mattermostUsername || null,
           },
-          workspaces: wsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
+          workspaces: workspaceRecords.map(({ id, record }) => ({ id, ...record })),
           // Daily history: token/interaction telemetry from the legacy tailer
           // (covers byosub traffic), USD strictly from the broker ledger.
-          usageLogs: mergeDailyUsage(
-            logsSnap.docs.map((doc) => doc.data() as Record<string, unknown>),
-            brokerDaily,
-          ),
+          usageLogs: mergeDailyUsage(usageLogs, brokerDaily),
           modelCosts,
           createdAt: summary.createdAt,
         });
@@ -851,7 +840,12 @@ router.get(
         // additional cards empty so a multi-workspace owner is never
         // double-counted. Owner-credential (BYOSUB) traffic never reaches the
         // broker and carries $0 platform cost — correct for a cost panel.
-        const series = await readOwnerBrokerUsageSeries(db, uid, cutoff.getTime(), logger);
+        const series = brokerUsageSeries(
+          await source.brokerEventCosts(uid, cutoff.getTime(), BROKER_USAGE_SERIES_READ_LIMIT),
+        );
+        if (series.truncated) {
+          logger.warn("broker usage series truncated at read limit", { ownerUid: uid, limit: BROKER_USAGE_SERIES_READ_LIMIT });
+        }
         const displayName = account?.displayName || account?.username || "";
 
         const workspaces = slugs.map((slug, i) => {
@@ -946,23 +940,15 @@ router.get(
           parseInt((req.query.limit as string) ?? "50", 10),
         ));
 
-        const snap = await db.collection(`users/${uid}/admin_actions`)
-          .orderBy("at", "desc")
-          .limit(limit)
-          .get();
-
-        const items = snap.docs.map((doc) => {
-          const d = doc.data();
-          return {
-            id: doc.id,
-            at: toISODate(d.at),
-            adminUid: d.adminUid ?? null,
-            adminEmail: d.adminEmail ?? null,
-            action: d.action ?? "(unknown)",
-            before: d.before ?? null,
-            after: d.after ?? null,
-          };
-        });
+        const items = (await source.adminActions(uid, limit)).map(({ id, record: d }) => ({
+          id,
+          at: toISODate(d.at),
+          adminUid: d.adminUid ?? null,
+          adminEmail: d.adminEmail ?? null,
+          action: d.action ?? "(unknown)",
+          before: d.before ?? null,
+          after: d.after ?? null,
+        }));
 
         res.json({ items, generatedAt: new Date().toISOString() });
       } catch (e) { next(e); }

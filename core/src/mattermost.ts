@@ -27,11 +27,6 @@ export { provisionMattermostUser } from "./mattermost/provision.js";
 export { ensureAdminCredentials } from "./mattermost/admin-creds.js";
 
 export {
-  syncProfileToMattermost,
-  syncDefaultAgentProfileToMattermost,
-} from "./mattermost/profile-sync.js";
-
-export {
   destroyMmUser,
   destroyMmChannel,
   getMmUserChannels,

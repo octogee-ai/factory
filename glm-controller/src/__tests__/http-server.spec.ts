@@ -1,9 +1,10 @@
 import { addAdminActivationLeaseRoutes } from "@octogee/core/admin-activation-lease-routes";
 import { addAdminUserPlanRoutes } from "@octogee/core/admin-user-plan-routes";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import request from "supertest";
 import type { Express } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { noAdminUserDirectorySource } from "@octogee/core/admin-user-directory-router";
 import { userAccountFromData, type UserAccountReader } from "@octogee/core/user-account";
 import { createLogger } from "../lib/logger.js";
 import {
@@ -601,6 +602,13 @@ function fakeStoreDocuments(store: FakeStore): FixtureDocuments {
   };
 }
 
+function productAdminDeps(
+  store: FakeStore,
+  deps: Parameters<NonNullable<HttpServerDeps["addProductAdminRoutes"]>>[1],
+) {
+  return { ...deps, db: buildDb(store) as unknown as Firestore, FieldValue };
+}
+
 function buildDeps(
   store: FakeStore,
   overrides: Partial<HttpServerDeps> = {},
@@ -608,7 +616,7 @@ function buildDeps(
 ): HttpServerDeps {
   const documents = fakeStoreDocuments(store);
   return {
-    db: buildDb(store) as any,
+    userDirectory: noAdminUserDirectorySource,
     store: storeWithWatch(createJournalFixtureStore({
       get: (id) => documents.get(`glmOperations/${id}`),
       set: (id, data) => documents.set(`glmOperations/${id}`, data),
@@ -1238,7 +1246,7 @@ describe("createHttpServer — admin gateway routes", () => {
   it("changes a plan through the product's plan route only for an admin, with an audit row", async () => {
     store.users.u1 = { email: "u1@octogee.com", selectedTier: "free" };
     const app = createHttpServer(buildDeps(store, {
-      addProductAdminRoutes: (router, deps) => addAdminUserPlanRoutes(router, deps),
+      addProductAdminRoutes: (router, deps) => addAdminUserPlanRoutes(router, productAdminDeps(store, deps)),
     }));
 
     const refused = await request(app).post("/api/admin/users/u1/ops").set("Authorization", "Bearer user-token").send({ action: "setTier", value: "pro" });
@@ -1285,7 +1293,7 @@ describe("createHttpServer — admin gateway routes", () => {
     });
     const platformOnly = admin(createHttpServer(buildDeps(store)));
     const withProduct = admin(createHttpServer(buildDeps(store, {
-      addProductAdminRoutes: (router, deps) => addAdminActivationLeaseRoutes(router, deps),
+      addProductAdminRoutes: (router, deps) => addAdminActivationLeaseRoutes(router, productAdminDeps(store, deps)),
     })));
 
     expect((await platformOnly.read()).status).toBe(404);

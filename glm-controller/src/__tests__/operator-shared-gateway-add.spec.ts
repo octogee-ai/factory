@@ -1,5 +1,4 @@
 import express, { Router } from "express";
-import type { Firestore } from "firebase-admin/firestore";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addAdminFleetRoutes, type FleetRouterDeps } from "@octogee/core/admin-fleet-router";
@@ -10,6 +9,7 @@ import {
 } from "@octogee/core/artifact-registry";
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
+import { noUserAccounts } from "@octogee/core/user-account";
 import { isReleasePayload, type ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import { gatewayUpsertOptsFromRelease, type DurableGateway } from "../converge-gateway.js";
 
@@ -69,7 +69,7 @@ function adminApi(records: Records, overrides: Partial<FleetRouterDeps> = {}) {
   const router = Router();
   const provisionGatewayAuthSecret = vi.fn(async () => ({}));
   addAdminFleetRoutes(router, {
-    db: {} as Firestore,
+    accounts: noUserAccounts,
     store: createDocumentFixtureStore(records),
     logger: { info: vi.fn(), warn: vi.fn() },
     provisionGatewayAuthSecret,
