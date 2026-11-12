@@ -12,7 +12,6 @@ import { projectMemberExists } from "../lib/project-members.js";
 import { isMattermostPostId, parseChannelScopedMattermostSessionRoute } from '@octogee/shared/types/mattermost-session-route';
 import { resolveActivityConversation, type ActivityConversation } from '../../../gateway-edge/src/lib/activity-conversation.js';
 import { Router, type Request, type Response } from "express";
-import type { Firestore } from "firebase-admin/firestore";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 
 import {
@@ -30,10 +29,7 @@ import {
 } from "@octogee/shared/types/identity";
 import { projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
-import {
-  firestoreSizingKeyReader,
-  type SizingKeyReader,
-} from "@octogee/core/user-activation-lease";
+import type { SizingKeyReader } from "@octogee/core/user-activation-lease";
 import {
   DuplicateRecordError,
   type PlatformUserRecord,
@@ -51,17 +47,21 @@ import {
   ActivityReceiptConflictError,
   ActivityReceiptLeaseError,
   ActivityReceiptUnavailableError,
-  FirestoreActivityWriteReceiptStore,
   isValidActivityAttachmentReceipt,
   type ActivityReceiptClaimInput,
-  type ActivityReceiptFirestoreLike,
+  type ActivityWriteReceiptStore,
 } from "../../../gateway-edge/src/chat-proxy/openclaw/activity-write-receipts.js";
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
+export type SessionChannelPurposeReader = (channel: WorkspaceChannel) => Promise<string>;
+export type ActivityWriteReceiptStoreFactory = (channelDocPath: string) => ActivityWriteReceiptStore;
+export const NO_SESSION_CHANNEL_PURPOSE: SessionChannelPurposeReader = async () => "";
+
 interface RuntimeBrokerDeps {
-  db: Firestore;
   store: PlatformStateStore;
   readSizingKey: SizingKeyReader;
+  activityReceipts: ActivityWriteReceiptStoreFactory;
+  readSessionChannelPurpose: SessionChannelPurposeReader;
   notifyFinalReply?: FinalReplyNotifier;
 }
 
@@ -119,7 +119,7 @@ export function interactiveUser(user: PlatformUserRecord | null | undefined): us
     accountAllowsInteractiveAccess({ accountLifecycle: user.accountLifecycle ?? undefined });
 }
 
-function workspaceChannelPath(channel: WorkspaceChannel): string {
+export function workspaceChannelPath(channel: WorkspaceChannel): string {
   const { workspaceSlug, projectSlug } = channel.scope;
   return projectSlug === null
     ? `workspaces/${workspaceSlug}/channels/${channel.channelId}`
@@ -379,19 +379,14 @@ function channelAuthorized(channel: WorkspaceChannel, binding: BoundChannelPath)
   return channel.kind === (ordinaryKind ?? "session");
 }
 
-async function sessionChannelPurpose(db: Firestore, channel: WorkspaceChannel): Promise<string> {
-  const purpose = (await db.doc(workspaceChannelPath(channel)).get()).data()?.purpose;
-  return typeof purpose === "string" ? purpose : "";
-}
-
 async function authorizedChannelContext(
-  db: Firestore,
+  readSessionChannelPurpose: SessionChannelPurposeReader,
   channel: WorkspaceChannel,
   binding: BoundChannelPath,
 ): Promise<Exclude<SessionContextLookup, "forbidden">> {
   if (!channelAuthorized(channel, binding)) return null;
   if (ordinaryChannelKind(binding) !== null) return { authorized: true };
-  const purpose = await sessionChannelPurpose(db, channel);
+  const purpose = await readSessionChannelPurpose(channel);
   return purpose.length > 0 ? { authorized: true, purpose } : { authorized: true };
 }
 
@@ -461,7 +456,7 @@ async function resolveSessionContext(
   if (!channel) return null;
   if (!agentCanRunInConversation(agentId, identity.workspaceSlug, channel.binding)) return "forbidden";
   if (!(await sessionOwnerIsActive(deps.store, channel.binding))) return null;
-  return authorizedChannelContext(deps.db, channel.channel, channel.binding);
+  return authorizedChannelContext(deps.readSessionChannelPurpose, channel.channel, channel.binding);
 }
 
 type DispatchSessionRoute = {
@@ -651,7 +646,7 @@ async function receiptStoreFor(
   res: Response,
   deps: RuntimeBrokerDeps,
   bound: GatewayBinding,
-): Promise<FirestoreActivityWriteReceiptStore | null> {
+): Promise<ActivityWriteReceiptStore | null> {
   const channelDocPath = receiptString(receiptBody(req), "channelDocPath");
   const binding = boundChannelPath(channelDocPath);
   if (!binding) {
@@ -670,10 +665,7 @@ async function receiptStoreFor(
     res.status(404).json({ error: "receipt_channel_not_found" });
     return null;
   }
-  return new FirestoreActivityWriteReceiptStore(
-    deps.db as unknown as ActivityReceiptFirestoreLike,
-    channelDocPath!,
-  );
+  return deps.activityReceipts(channelDocPath!);
 }
 
 function respondReceiptStoreError(res: Response, error: unknown): void {
@@ -879,7 +871,7 @@ function redeemableTicket(ticket: Stored<GatewayTicket> | null, purpose: string,
 }
 
 function voicePostingTicket(grant: ReturnType<typeof createVoicePostingGrant>): GatewayTicket {
-  const { uid, gatewayId, expiresAt, expireAt: _expireAt, ...rest } = grant.document;
+  const { uid, gatewayId, expiresAt, ...rest } = grant.document;
   return { ticketId: grant.path.slice("gatewayTickets/".length), uid, gatewayId, expiresAt, grant: rest };
 }
 
@@ -1320,15 +1312,18 @@ function mountFinalReplyRoutes(router: Router, deps: RuntimeBrokerDeps): void {
 }
 
 export function createOpenClawRuntimeBrokerRoutes(opts: {
-  db: Firestore;
   store: PlatformStateStore;
+  readSizingKey: SizingKeyReader;
+  activityReceipts: ActivityWriteReceiptStoreFactory;
+  readSessionChannelPurpose?: SessionChannelPurposeReader;
   notifyFinalReply?: FinalReplyNotifier;
 }): Router {
   const router = Router();
   const deps: RuntimeBrokerDeps = {
-    db: opts.db,
     store: opts.store,
-    readSizingKey: firestoreSizingKeyReader(opts.db),
+    readSizingKey: opts.readSizingKey,
+    activityReceipts: opts.activityReceipts,
+    readSessionChannelPurpose: opts.readSessionChannelPurpose ?? NO_SESSION_CHANNEL_PURPOSE,
     notifyFinalReply: opts.notifyFinalReply,
   };
   mountUserAndWsRoutes(router, deps);

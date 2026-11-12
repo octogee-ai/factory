@@ -2,7 +2,6 @@ import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
-import type { Firestore } from "firebase-admin/firestore";
 import { Registry } from "prom-client";
 
 import { createAutomationAuthorizationBrokerRoutes } from "../routes/automation-authorization-broker.js";
@@ -36,27 +35,6 @@ const WELL_FORMED_SA_TOKEN = [
   "c2lnbmF0dXJlLXNlZ21lbnQtZm9yLXRlc3RpbmctcHVycG9zZXMtb25seQ",
 ].join(".");
 const DEFAULT_AGENT_CHANNEL_ID = "c".repeat(26);
-
-interface FakeDoc {
-  exists: boolean;
-  data(): Record<string, unknown> | undefined;
-}
-
-function fakeDb(docs: Record<string, Record<string, unknown>>): Firestore {
-  const snapshot = (docPath: string): FakeDoc => ({
-    exists: Object.hasOwn(docs, docPath),
-    data: () => docs[docPath],
-  });
-  return {
-    doc: vi.fn((docPath: string) => ({
-      get: vi.fn(async (): Promise<FakeDoc> => snapshot(docPath)),
-    })),
-    collection: vi.fn((collectionPath: string) => ({
-      doc: (id: string) => ({ get: async () => snapshot(`${collectionPath}/${id}`) }),
-      where: () => ({ get: async () => ({ docs: [] }) }),
-    })),
-  } as unknown as Firestore;
-}
 
 function sharedGatewayRoot(): Record<string, unknown> {
   return {
@@ -101,7 +79,6 @@ function middlewareStackApp(saName: string) {
       mattermost: { channelId: DEFAULT_AGENT_CHANNEL_ID },
     },
   };
-  const db = fakeDb(docs);
   const store = createDocumentFixtureStore(docs);
   const reviewer: Reviewer = async () => ({
     authenticated: true,
@@ -120,7 +97,7 @@ function middlewareStackApp(saName: string) {
     metrics: createTenantBindingMetrics(new Registry()),
     logger: { warn: () => undefined },
   }));
-  app.use("/internal", createTenantEnforcementMiddleware({ db, store }));
+  app.use("/internal", createTenantEnforcementMiddleware({ readFlowGateway: async () => null, store }));
   app.use(
     "/internal/automations",
     requireAuthenticatedUid,

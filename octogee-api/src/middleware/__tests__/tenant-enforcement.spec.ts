@@ -1,12 +1,12 @@
 import express from "express";
 import { EventEmitter } from "node:events";
-import type { Firestore } from "firebase-admin/firestore";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import {
   createTenantEnforcementMiddleware,
   NO_PRODUCT_TENANT_ROUTES,
+  type FlowGatewayReader,
   type ProductTenantRoutes,
   type TenantAccessRecord,
 } from "../tenant-enforcement.js";
@@ -16,20 +16,11 @@ type UserDoc = Record<string, unknown>;
 type FlowDoc = Record<string, unknown>;
 type OperationDoc = Record<string, unknown>;
 
-function flowDb(flows: Record<string, FlowDoc> = {}): Pick<Firestore, "collection"> {
-  return {
-    collection: (name: string) => {
-      if (name !== "byosubFlows") throw new Error(`tenant enforcement read ${name} outside the platform state store`);
-      return {
-        doc: (id: string) => ({
-          get: async () => ({
-            exists: Object.prototype.hasOwnProperty.call(flows, id),
-            data: () => flows[id],
-          }),
-        }),
-      };
-    },
-  } as unknown as Pick<Firestore, "collection">;
+function flowGateways(flows: Record<string, FlowDoc> = {}): FlowGatewayReader {
+  return async (flowId) => {
+    const gatewayId = Object.prototype.hasOwnProperty.call(flows, flowId) ? flows[flowId].gatewayId : undefined;
+    return typeof gatewayId === "string" ? gatewayId : null;
+  };
 }
 
 function documentsAt(collection: string, records: Record<string, Record<string, unknown>> = {}) {
@@ -58,6 +49,7 @@ const FIXTURE_PRODUCT_ROUTES: ProductTenantRoutes = {
   userTargetedRoutes: ["/api/product-ingest"],
   platformOnlyRoutes: ["/internal/product-fanout"],
   tenantBoundApiRoutes: ["/api/product-ingest"],
+  selfScopedBrokerRoutes: ["/internal/product-broker/list"],
 };
 
 function app(opts: {
@@ -96,7 +88,7 @@ function app(opts: {
   const enforcement = createTenantEnforcementMiddleware({
     onDenied: opts.onDenied ?? (async () => {}),
     onAccess: opts.onAccess ?? (() => {}),
-    db: flowDb(records.flows),
+    readFlowGateway: flowGateways(records.flows),
     store: fixtureStore(records),
     productRoutes: opts.productRoutes ?? FIXTURE_PRODUCT_ROUTES,
   });
@@ -111,7 +103,6 @@ function app(opts: {
   a.post("/internal/byok/broker-inspect", enforcement, handler);
   a.post("/internal/byok/byosub-flow", enforcement, handler);
   a.post("/internal/byok/byosub-cred-syncback", enforcement, handler);
-  for (const op of ['inspect', 'authorize', 'issued', 'reserve', 'commit', 'active', 'http', 'tokens', 'revoke', 'session']) a.post(`/internal/mobile-devices/${op}`, enforcement, handler);
   a.post("/internal/openclaw-control/redeem", enforcement, handler);
   a.post("/internal/openclaw-control/authorize", enforcement, handler);
   a.post("/internal/openclaw-control/profile", enforcement, handler);
@@ -124,22 +115,9 @@ function app(opts: {
   a.post("/internal/openclaw/notifications/final-reply", enforcement, handler);
   a.post("/internal/openclaw/activity/session-context", enforcement, handler);
   a.post("/internal/openclaw/activity/dispatch-context", enforcement, handler);
-  a.post("/internal/agent-support/ask", enforcement, handler);
-  a.post("/internal/openclaw/previews/authorize", enforcement, handler);
   a.post("/internal/workspace-git/authorize", enforcement, handler);
   a.post("/internal/channel-agent-readiness/authorize", enforcement, handler);
-  a.post("/internal/agent-projects/create", enforcement, handler);
-  a.post("/internal/agent-projects/list", enforcement, handler);
-  a.post("/internal/agent-projects/set-recipe", enforcement, handler);
-  a.post("/internal/agent-projects/delegate", enforcement, handler);
-  a.post("/internal/agent-projects/identity", enforcement, handler);
-  a.post("/internal/agent-board/list", enforcement, handler);
-  a.post("/internal/agent-board/card-read", enforcement, handler);
-  a.post("/internal/agent-board/card-create", enforcement, handler);
-  a.post("/internal/agent-board/card-update", enforcement, handler);
-  a.post("/internal/agent-board/card-move", enforcement, handler);
-  a.post("/internal/agent-board/card-comment", enforcement, handler);
-  a.post("/internal/agent-productivity/google/calendar/events", enforcement, handler);
+  a.post("/internal/product-broker/list", enforcement, handler);
   a.post("/internal/computer/agent-context", enforcement, handler);
   a.get("/internal/agent-imports/github/sources", enforcement, handler);
   a.get("/internal/agent-imports/records/:importId", enforcement, handler);
@@ -245,6 +223,8 @@ describe("tenant enforcement middleware", () => {
     }
     expect((await request(bare(WALTER)).post("/internal/product-fanout").send({ gatewayId: "walter" })).status).toBe(200);
     expect((await request(bare(WALTER)).post("/api/product-ingest").send({ gatewayId: "walter" })).status).toBe(200);
+    expect((await request(bare(WALTER)).post("/internal/product-broker/list").send({ agentId: "octogee-alice-coach", uid: "victim" })).status).toBe(403);
+    expect((await request(app({ boundTenant: WALTER })).post("/internal/product-broker/list").send({ agentId: "octogee-alice-coach", uid: "victim" })).status).toBe(200);
     expect((await request(bare({ kind: "platform", actor: "artifact-worker" })).post("/internal/chat-artifacts/claim").send({})).status).toBe(200);
     expect((await request(bare({ kind: "platform", actor: "npm-cache-proxy" })).post("/internal/fleet/npm-cache-authorize").send({})).status).toBe(200);
   });
@@ -465,7 +445,7 @@ const STILL_ON_SHARED = {
     it("marks assignment-skew denials as placement so they stay out of the user's inbox", async () => {
       const { denials, onDenied } = denialCapture();
       await request(app({ boundTenant: WALTER, onDenied }))
-        .post("/internal/agent-projects/list")
+        .post("/internal/product-broker/list")
         .send({ gatewayId: "other", agentId: "octogee-alice-coach" })
         .expect(403);
       await request(app({ boundTenant: WALTER, onDenied }))
@@ -486,7 +466,7 @@ const STILL_ON_SHARED = {
     it("reports a foreign-gateway deny and a platform-actor deny with their own reasons", async () => {
       const { denials, onDenied } = denialCapture();
       await request(app({ boundTenant: WALTER, onDenied }))
-        .post("/internal/agent-projects/list")
+        .post("/internal/product-broker/list")
         .send({ gatewayId: "other", agentId: "octogee-alice-coach" })
         .expect(403);
       await request(app({ boundTenant: { kind: "platform", actor: "cron" }, onDenied }))
@@ -520,7 +500,7 @@ const STILL_ON_SHARED = {
     it("does not report an admitted call", async () => {
       const { denials, onDenied } = denialCapture();
       await request(app({ boundTenant: WALTER, onDenied }))
-        .post("/internal/agent-projects/list")
+        .post("/internal/product-broker/list")
         .send({ agentId: "octogee-alice-coach" })
         .expect(200);
       expect(denials).toEqual([]);
@@ -544,13 +524,13 @@ const STILL_ON_SHARED = {
     it("records an admitted call with the bound tenant, calling agent, and final status", async () => {
       const { records, onAccess } = accessCapture();
       await request(app({ boundTenant: WALTER_R2, onAccess, handlerStatus: 404 }))
-        .post("/internal/agent-projects/list")
+        .post("/internal/product-broker/list")
         .send({ agentId: "octogee-alice-coach" })
         .expect(404);
 
       expect(records).toEqual([{
         method: "POST",
-        path: "/internal/agent-projects/list",
+        path: "/internal/product-broker/list",
         decision: "admitted",
         status: 404,
         responseCompleted: true,
@@ -567,7 +547,7 @@ const STILL_ON_SHARED = {
         req.boundTenant = { kind: "platform", actor: "artifact-worker" };
         next();
       });
-      server.use(createTenantEnforcementMiddleware({ onAccess, store: fixtureStore({ users: {} }) }));
+      server.use(createTenantEnforcementMiddleware({ onAccess, readFlowGateway: flowGateways(), store: fixtureStore({ users: {} }) }));
       const router = express.Router();
       router.get("/:artifactId/source", (_req, res) => res.send("data"));
       server.use("/internal/chat-artifacts", router);
@@ -585,7 +565,7 @@ const STILL_ON_SHARED = {
         boundTenant: { kind: "platform", actor: "artifact-worker" },
       } as express.Request;
       const res = Object.assign(new EventEmitter(), { statusCode: 200, writableFinished: finished });
-      createTenantEnforcementMiddleware({ onAccess, store: fixtureStore({ users: {} }) })(req, res as unknown as express.Response, () => {});
+      createTenantEnforcementMiddleware({ onAccess, readFlowGateway: flowGateways(), store: fixtureStore({ users: {} }) })(req, res as unknown as express.Response, () => {});
 
       if (finished) res.emit("finish");
       res.emit("close");
@@ -598,9 +578,9 @@ const STILL_ON_SHARED = {
 
     it("does not mark a disconnect during authorization as admitted", () => {
       const { records, onAccess } = accessCapture();
-      const req = { method: "POST", path: "/internal/agent-projects/list", boundTenant: WALTER } as express.Request;
+      const req = { method: "POST", path: "/internal/product-broker/list", boundTenant: WALTER } as express.Request;
       const res = Object.assign(new EventEmitter(), { statusCode: 200, writableFinished: false });
-      createTenantEnforcementMiddleware({ onAccess, db: flowDb(), store: fixtureStore({ users: {} }), onDenied: async () => {} })(
+      createTenantEnforcementMiddleware({ onAccess, readFlowGateway: flowGateways(), store: fixtureStore({ users: {} }), productRoutes: FIXTURE_PRODUCT_ROUTES, onDenied: async () => {} })(
         req, res as unknown as express.Response, () => {},
       );
       res.emit("close");
@@ -610,13 +590,13 @@ const STILL_ON_SHARED = {
     it("records a denied call with its reason", async () => {
       const { records, onAccess } = accessCapture();
       await request(app({ boundTenant: WALTER, onAccess }))
-        .post("/internal/agent-projects/list")
+        .post("/internal/product-broker/list")
         .send({ gatewayId: "other", agentId: "octogee-alice-coach" })
         .expect(403);
 
       expect(records).toEqual([{
         method: "POST",
-        path: "/internal/agent-projects/list",
+        path: "/internal/product-broker/list",
         decision: "denied",
         status: 403,
         responseCompleted: true,
@@ -651,7 +631,7 @@ const STILL_ON_SHARED = {
     it("still answers when the access recorder throws", async () => {
       const onAccess = vi.fn(() => { throw new Error("log sink down"); });
       await request(app({ boundTenant: WALTER, onAccess }))
-        .post("/internal/agent-projects/list")
+        .post("/internal/product-broker/list")
         .send({ agentId: "octogee-alice-coach" })
         .expect(200);
       expect(onAccess).toHaveBeenCalledOnce();
@@ -887,18 +867,6 @@ const STILL_ON_SHARED = {
     expect(foreignGateway.status).toBe(403);
   });
 
-  it("passes agent support to route-level roster authorization without trusting body context", async () => {
-    const ownedGateway = await request(app({ boundTenant: WALTER }))
-      .post("/internal/agent-support/ask")
-      .send({ agentId: "octogee-alice-coach", question: "Help", uid: "victim" });
-    const foreignGateway = await request(app({ boundTenant: WALTER }))
-      .post("/internal/agent-support/ask")
-      .send({ gatewayId: "other", agentId: "octogee-alice-coach", question: "Help" });
-
-    expect(ownedGateway.status).toBe(200);
-    expect(foreignGateway.status).toBe(403);
-  });
-
   it("passes session context to route-level agent and channel authorization", async () => {
     const ownedGateway = await request(app({ boundTenant: WALTER }))
       .post("/internal/openclaw/activity/session-context")
@@ -925,13 +893,6 @@ const STILL_ON_SHARED = {
     expect(ownedGateway.status).toBe(200);
     expect(foreignGateway.status).toBe(403);
     expect(platform.status).toBe(403);
-  });
-
-  it.each(['inspect', 'authorize', 'issued', 'reserve', 'commit', 'active', 'http', 'tokens', 'revoke', 'session'])('binds mobile %s to the authenticated gateway workload', async operation => {
-    const path = `/internal/mobile-devices/${operation}`;
-    expect((await request(app({ boundTenant: WALTER })).post(path).send({ gatewayId: 'walter' })).status).toBe(200);
-    expect((await request(app({ boundTenant: WALTER })).post(path).send({ gatewayId: 'other' })).status).toBe(403);
-    expect((await request(app({ boundTenant: { kind: 'platform', actor: 'cron' } })).post(path).send({ gatewayId: 'walter' })).status).toBe(403);
   });
 
   it("passes dispatch context only to the bound gateway tenant", async () => {
@@ -984,68 +945,6 @@ const STILL_ON_SHARED = {
     expect((await request(app({})).post("/internal/voice/archive").send(body)).status).toBe(403);
     expect((await request(app({ boundTenant: { kind: "platform", actor: "cron" } })).post("/internal/voice/archive").send(body)).status).toBe(403);
     expect((await request(app({ boundTenant: WALTER })).post("/internal/voice/archive").send({ ...body, gatewayId: "other" })).status).toBe(403);
-  });
-
-  it("lets preview authorization evaluate a member whose own agent is on another gateway", async () => {
-    const delegated = await request(app({ boundTenant: WALTER }))
-      .post("/internal/openclaw/previews/authorize")
-      .send({
-        gatewayId: "walter",
-        uid: "victim",
-        workspaceSlug: "alice",
-        projectSlug: "launch-room",
-      });
-    const foreignGateway = await request(app({ boundTenant: WALTER }))
-      .post("/internal/openclaw/previews/authorize")
-      .send({
-        gatewayId: "other",
-        uid: "victim",
-        workspaceSlug: "alice",
-        projectSlug: "launch-room",
-      });
-
-    expect(delegated.status).toBe(200);
-    expect(foreignGateway.status).toBe(403);
-  });
-
-  it("delegates agent project routes only for the bound gateway tenant", async () => {
-    for (const route of ["create", "list", "set-recipe", "delegate", "identity"]) {
-      const ownedGateway = await request(app({ boundTenant: WALTER }))
-        .post(`/internal/agent-projects/${route}`)
-        .send({ agentId: "octogee-alice-coach" });
-      const foreignGateway = await request(app({ boundTenant: WALTER }))
-        .post(`/internal/agent-projects/${route}`)
-        .send({ gatewayId: "other", agentId: "octogee-alice-coach" });
-
-      expect(ownedGateway.status, route).toBe(200);
-      expect(foreignGateway.status, route).toBe(403);
-    }
-  });
-
-  it("delegates agent board routes only for the bound gateway tenant", async () => {
-    for (const route of ["list", "card-read", "card-create", "card-update", "card-move", "card-comment"]) {
-      const ownedGateway = await request(app({ boundTenant: WALTER }))
-        .post(`/internal/agent-board/${route}`)
-        .send({ agentId: "octogee-alice-coach" });
-      const foreignGateway = await request(app({ boundTenant: WALTER }))
-        .post(`/internal/agent-board/${route}`)
-        .send({ gatewayId: "other", agentId: "octogee-alice-coach" });
-
-      expect(ownedGateway.status, route).toBe(200);
-      expect(foreignGateway.status, route).toBe(403);
-    }
-  });
-
-  it("delegates bearer-blind productivity routes only for the bound gateway tenant", async () => {
-    const ownedGateway = await request(app({ boundTenant: WALTER }))
-      .post("/internal/agent-productivity/google/calendar/events")
-      .send({ agentId: "octogee-alice-coach", params: {} });
-    const foreignGateway = await request(app({ boundTenant: WALTER }))
-      .post("/internal/agent-productivity/google/calendar/events")
-      .send({ gatewayId: "other", agentId: "octogee-alice-coach", params: {} });
-
-    expect(ownedGateway.status).toBe(200);
-    expect(foreignGateway.status).toBe(403);
   });
 
   it("allows a gateway-bound caller to target only slugs assigned to that gateway", async () => {
@@ -1311,7 +1210,7 @@ const STILL_ON_SHARED = {
       "/internal/channel-agent-readiness/authorize",
       "/internal/byok/agent-usage-status",
       "/internal/byok/broker-inspect",
-      "/internal/agent-projects/list",
+      "/internal/product-broker/list",
       "/internal/computer/agent-context",
     ]) {
       expect((await send(path)).status, path).toBe(403);

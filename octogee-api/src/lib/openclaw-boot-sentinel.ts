@@ -1,9 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
-import type { DocumentData } from "firebase-admin/firestore";
 import type { GatewayRuntimeRestartFenceValue, PlatformStateStore, PlatformStateTransaction } from "@octogee/core/platform-state";
 import { assertSharedSourceRecoveryUnchanged, readSharedSourceRecoveryAuthority } from "@octogee/core/shared-source-recovery";
 import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import type { FleetBrokerOpenClawBootClaim } from "@octogee/shared/types/fleet-broker";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- fence, operation and recovery fields are checked one by one before use
+type StoredFields = { [field: string]: any };
 
 interface OpenClawBootInput {
   gatewayId: string;
@@ -22,11 +24,11 @@ export interface OpenClawBootSentinelStore {
 
 export const OPENCLAW_BUILD_PATTERN = /^[0-9a-f]{40}$/;
 
-function record(value: unknown): DocumentData {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as DocumentData : {};
+function record(value: unknown): StoredFields {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as StoredFields : {};
 }
 
-function assertSourceRoot(root: DocumentData, captured: unknown): void {
+function assertSourceRoot(root: StoredFields, captured: unknown): void {
   if (root.gatewayClass !== "shared" || !["running", "draining"].includes(root.desiredStatus) ||
       root.retirementClaim != null || !Number.isSafeInteger(root.liveRelease) || root.liveRelease < 1 || root.desiredRelease !== root.liveRelease) {
     throw new Error("source Doctor lifecycle custody mismatch");
@@ -35,7 +37,7 @@ function assertSourceRoot(root: DocumentData, captured: unknown): void {
   if (!isDeepStrictEqual(captured, identity)) throw new Error("source Doctor release custody changed");
 }
 
-function assertSourceFence(fence: DocumentData, input: OpenClawBootInput): void {
+function assertSourceFence(fence: StoredFields, input: OpenClawBootInput): void {
   const target = record(fence.target), doctor = record(fence.doctor);
   if (fence.gatewayId !== input.gatewayId || fence.phase !== "dispatched" || fence.attemptId !== doctor.requestId || fence.auditId !== doctor.requestId ||
       typeof doctor.requestId !== "string" || !doctor.requestId || doctor.requestId.includes("/") || doctor.error !== undefined ||
@@ -44,7 +46,7 @@ function assertSourceFence(fence: DocumentData, input: OpenClawBootInput): void 
   }
 }
 
-function assertSourceOperation(op: DocumentData, recovery: DocumentData, target: DocumentData, gatewayId: string): void {
+function assertSourceOperation(op: StoredFields, recovery: StoredFields, target: StoredFields, gatewayId: string): void {
   if (op.kind !== "restart-gateway" || !["pending", "running"].includes(op.status) || op.completedAt !== null ||
       op.cancellationRequestedAt !== undefined || op.input?.gatewayId !== gatewayId ||
       typeof recovery.sourceSha !== "string" || !/^[a-f0-9]{40}$/.test(recovery.sourceSha) || target.sourceSha !== recovery.sourceSha ||
@@ -65,7 +67,7 @@ function sourceAgentIds(assignments: unknown, captured: unknown): string[] {
   return agentIds;
 }
 
-function sourceImageVerified(fence: DocumentData, podUid: string): boolean {
+function sourceImageVerified(fence: StoredFields, podUid: string): boolean {
   if (fence.installedImage === undefined) return false;
   const image = record(fence.installedImage), target = record(fence.target);
   const wanted = typeof target.images?.gateway === "string" ? /@(sha256:[a-f0-9]{64})$/.exec(target.images.gateway)?.[1] : undefined;
@@ -91,13 +93,13 @@ async function sourceDoctorContext(transaction: PlatformStateTransaction, input:
     schedulerStateRecovery: true as const, imageVerified: sourceImageVerified(fence, input.podUid) };
 }
 
-function sourcePostgresStores(recovery: DocumentData, target: DocumentData, defaultAgents: string[]) {
+function sourcePostgresStores(recovery: StoredFields, target: StoredFields, defaultAgents: string[]) {
   const stores = recovery.postgresAgentStores;
   if (!Array.isArray(stores) || !stores.length || !isDeepStrictEqual(stores, target.postgresAgentStores) ||
       defaultAgents.some(id => !stores.some(s => s.agentId === id)) ||
       new Set(stores.map(s => s.agentId)).size !== stores.length || new Set(stores.map(s => s.storeId)).size !== stores.length ||
       new Set(stores.map(s => s.schema)).size !== stores.length || stores.some(s => {
-        const owner = recovery.assignments.find((a: DocumentData) => a.uid === s.uid);
+        const owner = recovery.assignments.find((a: StoredFields) => a.uid === s.uid);
         return !owner || owner.slug !== s.slug || owner.assignmentEpoch !== s.assignmentEpoch || !agentIdBelongsToSlug(s.agentId, s.slug) ||
           typeof s.storeId !== "string" || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(s.storeId) ||
           typeof s.schema !== "string" || !/^[a-z_][a-z0-9_]{0,62}$/.test(s.schema);
@@ -115,7 +117,7 @@ function sourceDoctorRequest(context: NonNullable<Awaited<ReturnType<typeof sour
     schedulerStateRecovery: context.schedulerStateRecovery, postgresAgentStores: context.postgresAgentStores };
 }
 
-function withDoctor(fence: GatewayRuntimeRestartFenceValue, doctor: DocumentData): GatewayRuntimeRestartFenceValue {
+function withDoctor(fence: GatewayRuntimeRestartFenceValue, doctor: StoredFields): GatewayRuntimeRestartFenceValue {
   return { ...fence, doctor: { ...record(fence.doctor), ...doctor } };
 }
 

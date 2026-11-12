@@ -50,7 +50,15 @@ import {
   type OwnerWorkspaceTurnVerifier,
 } from "../lib/openclaw-owner-turn.js";
 import { parseFundedBudgetLedger } from "../lib/model-broker-budget.js";
+import type { FlowGatewayReader } from "../middleware/tenant-enforcement.js";
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
+
+export function byosubFlowGatewayReader(db: Pick<Firestore, "collection">): FlowGatewayReader {
+  return async (flowId) => {
+    const gatewayId = (await db.collection("byosubFlows").doc(flowId).get()).data()?.gatewayId;
+    return typeof gatewayId === "string" ? gatewayId : null;
+  };
+}
 
 type GatewayBinding = Extract<
   Express.Request["boundTenant"],

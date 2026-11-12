@@ -15,6 +15,7 @@ import { mountClusterRoutes, type ClusterRouteTable } from "../../gateway-edge/s
 import { createAdminRoutes, type ProductAdminRoutes } from "../../gateway-edge/src/routes/admin.js";
 import type { DeletionProductContextDiscovery } from "@octogee/core/admin-fleet-router";
 import type { AdminUserDirectorySource, AdminUserProductDetail } from "@octogee/core/admin-user-directory-router";
+import type { ControlSessionChecks } from "@octogee/core/platform-state";
 import {
   installUserEntitlements,
   staticUserEntitlements,
@@ -23,18 +24,12 @@ import {
 import internalGiteaAdminRoutes from "../../gateway-edge/src/routes/internal/gitea-admin.js";
 import { installBodyParsers } from "../../gateway-edge/src/middleware/body-parsers.js";
 import { createMattermostMintRoutes, createMmRestProxyHandler } from "./routes/mattermost-proxy.js";
-import { createOpenClawRuntimeBrokerRoutes } from "./routes/openclaw-runtime-broker.js";
-import { createConnectorTokenBrokerRoutes } from "./routes/connector-token-broker.js";
+import { createOpenClawRuntimeBrokerRoutes, type SessionChannelPurposeReader } from "./routes/openclaw-runtime-broker.js";
+import { FirestoreActivityWriteReceiptStore, type ActivityReceiptFirestoreLike } from "../../gateway-edge/src/chat-proxy/openclaw/activity-write-receipts.js";
+import { createConnectorTokenBrokerRoutes, type PublicCanvasFileReader } from "./routes/connector-token-broker.js";
 import { createWorkspaceCommitProofBrokerRoutes } from "./routes/workspace-commit-proof-broker.js";
 import { createOwnerAutomationAuthorizationBrokerRoutes } from "./routes/owner-automation-authorization-broker.js";
-import { createByokBrokerRoutes } from "./routes/byok-broker.js";
-import { createAgentProjectRoutes } from "./routes/agent-projects.js";
-import {
-  createAgentProductivityRoutes,
-} from "./routes/agent-productivity.js";
-import { createAgentBoardRoutes } from "./routes/agent-board.js";
-import { createAgentObsidianRoutes } from "./routes/agent-productivity-obsidian.js";
-import { createObsidianPairingRoutes } from "./routes/obsidian-pairing.js";
+import { byosubFlowGatewayReader, createByokBrokerRoutes } from "./routes/byok-broker.js";
 import { createGatewayVmContextRoutes } from "./routes/gateway-vm-context.js";
 import { createFleetBrokerRoutes, type ProvisionedUserReport } from "./routes/fleet-broker.js";
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
@@ -47,7 +42,6 @@ import { createAgentImportBrokerRoutes } from "./routes/agent-import-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import type { FundedBudgetInterruption } from "./lib/model-broker-budget.js";
 import { operatorRailRegistry, type ModelBrokerRailRegistry } from "./lib/model-broker-rails.js";
-import { createDesktopAuthRoutes } from "./routes/desktop-auth.js";
 import { createFeatureRoutes } from "./routes/features.js";
 import type { ProductNotifications } from "./lib/user-notifications.js";
 import { DisabledFeatureFlagProvider, FeaturePolicy } from "./lib/feature-policy.js";
@@ -70,7 +64,7 @@ import {
   createMattermostArtifactSourceReader,
 } from "./lib/chat-artifact-adapters.js";
 import { resolveActiveArtifactWorkspaceSlug } from "./lib/chat-artifact-workspace.js";
-import { auth, db, storage } from "../../gateway-edge/src/lib/db.js";
+import { db, storage } from "../../gateway-edge/src/lib/db.js";
 import { platformStateStore, readSizingKey } from "../../gateway-edge/src/lib/platform-state.js";
 import {
   ConnectorTokenReadError,
@@ -160,11 +154,14 @@ export interface ProductRouteDeps {
 export interface ProductRuntime {
   featurePolicy: FeaturePolicy;
   routesBeforeMiddleware?: ClusterRouteTable;
-  routesBeforeTenantBinding?: ClusterRouteTable;
+  routesBeforeTenantBinding?(deps: ProductRouteDeps): ClusterRouteTable;
   prewarmProjectCapacity?: () => Promise<void>;
   projectsDeleteRoutes?: express.Router;
   discoverDeletionProductContext?: DeletionProductContextDiscovery;
   tenantRoutes?: ProductTenantRoutes;
+  controlSessionChecks?: ControlSessionChecks;
+  publicCanvasFile?: PublicCanvasFileReader;
+  sessionChannelPurpose?: SessionChannelPurposeReader;
   adminUserDetail?: AdminUserProductDetail;
   adminUserDirectory?: AdminUserDirectorySource;
   addAdminRoutes?: ProductAdminRoutes;
@@ -173,7 +170,6 @@ export interface ProductRuntime {
   apiRoutes(deps: ProductRouteDeps): ClusterRouteTable;
   internalRoutes(deps: ProductRouteDeps): ClusterRouteTable;
   onBudgetInterruption(input: { uid: string; reason: FundedBudgetInterruption }): void;
-  onProjectCreated(uid: string): void;
   onUserProvisioned(report: ProvisionedUserReport): Promise<void>;
   shutdown(): Promise<void>;
 }
@@ -317,10 +313,10 @@ function clusterRouteOverrides(
     projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy, prewarmProjectRunCapacity: product?.prewarmProjectCapacity }),
     projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
     voiceRoutes: createVoiceRoutes({ featurePolicy, catalog: voiceCatalog, resolveChannel: async (uid, channelId) => {
-      const result = await resolveVoiceChannel({ db, store: platformStateStore, readSizingKey }, { uid, channelId });
+      const result = await resolveVoiceChannel({ store: platformStateStore, readSizingKey }, { uid, channelId });
       return result ? { gatewayId: result.scope.gatewayId, channelId } : null;
     }, resolveConversation: async (uid, channelId, threadRootPostId) => {
-      const result = await startWorkspaceVoiceConversation({ db, store: platformStateStore, readSizingKey }, { uid, channelId, threadRootPostId });
+      const result = await startWorkspaceVoiceConversation({ store: platformStateStore, readSizingKey }, { uid, channelId, threadRootPostId });
       return result ? { gatewayId: result.scope.gatewayId, workspaceSlug: result.scope.workspaceSlug, ownerUid: result.scope.ownerUid, channelId, threadRootPostId: result.context.threadRootPostId, sessionKey: result.context.sessionKey } : null;
     } }),
     productivityApprovalRoutes: express.Router()
@@ -454,7 +450,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   const tenantRoutes = product?.tenantRoutes ?? NO_PRODUCT_TENANT_ROUTES;
   const tenantBindingScope = createTenantBindingScope(tenantRoutes);
   const tenantEnforcementMiddleware = createTenantEnforcementMiddleware({
-    db,
+    readFlowGateway: byosubFlowGatewayReader(db),
     store: platformStateStore,
     enforceWhen: tenantBindingScope.shouldEnforce,
     productRoutes: tenantRoutes,
@@ -496,13 +492,8 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
 
   installBodyParsers(app);
   mountDiagnosticRoutes(app, metricsRegistry, tenantBindingHealth);
-  app.use("/api/auth/desktop", createDesktopAuthRoutes({ db, auth, store: platformStateStore }));
   app.use("/api/features", createFeatureRoutes({ featurePolicy }));
-  mountRouteTable(app, product?.routesBeforeTenantBinding ?? []);
-  app.use(
-    "/api/connect/obsidian/pair",
-    createObsidianPairingRoutes({ db, store: platformStateStore, featurePolicy }),
-  );
+  mountRouteTable(app, product?.routesBeforeTenantBinding?.(productRouteDeps) ?? []);
   app.use((req, res, next) => {
     if (!tenantBindingScope.shouldAttempt(req.path)) {
       next();
@@ -551,8 +542,10 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   // octogee-api-only: broker the gateway-edge OpenClaw runtime Firestore
   // dependencies so cattle pods do not need ADC/datastore reach.
   app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({
-    db,
     store: platformStateStore,
+    readSizingKey,
+    activityReceipts: (channelDocPath) => new FirestoreActivityWriteReceiptStore(db as unknown as ActivityReceiptFirestoreLike, channelDocPath),
+    readSessionChannelPurpose: product?.sessionChannelPurpose,
     notifyFinalReply: opts.product?.notifications?.notifyFinalReply,
   }));
   // octogee-api-only: voice relay. gateway-edge Talk engines stream microphone
@@ -587,44 +580,26 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   }));
   // octogee-api-only: broker sidecar GitHub file-browser token reads
   // so cattle pods do not need Firestore or KMS access to user secrets.
-  app.use("/internal/connectors", createConnectorTokenBrokerRoutes({ db, store: platformStateStore }));
+  app.use("/internal/connectors", createConnectorTokenBrokerRoutes({ store: platformStateStore, readPublicCanvasFile: product?.publicCanvasFile }));
   app.use("/internal/workspace-commit", createWorkspaceCommitProofBrokerRoutes({ store: platformStateStore }));
   app.use("/internal/owner-automations", createOwnerAutomationAuthorizationBrokerRoutes({ store: platformStateStore }));
   // octogee-api-only: materialize BYOK creds for cattle gateways that can't reach
   // Secret Manager — BYOSUB OAuth (scoped to the caller's user integration) and
   // byok-* API keys (roster-scoped to the gateway's assigned slugs).
   app.use("/internal/byok", createByokBrokerRoutes({ db, store: platformStateStore, rails: modelBrokerRails }));
-  // octogee-api-only: agent project CRUD — roster-scoped like /internal/byok;
-  // the owner + workspace derive from the pod's assignment, and plan
-  // entitlements are enforced by the same service the UI create uses.
-  app.use("/internal/agent-projects", createAgentProjectRoutes({
-    db,
-    store: platformStateStore,
-    prewarmProjectRunCapacity: product?.prewarmProjectCapacity,
-    actionBaseUrl: appOrigin,
-    onProjectCreated: product?.onProjectCreated,
-  }));
-  app.use("/internal/agent-board", createAgentBoardRoutes({ store: platformStateStore }));
-  app.use("/internal/agent-productivity", createAgentProductivityRoutes({
-    db,
-    store: platformStateStore,
-    actionBaseUrl: appOrigin,
-  }));
-  app.use("/internal/agent-productivity", createAgentObsidianRoutes({
-    db,
-    store: platformStateStore,
-    featurePolicy,
-    actionBaseUrl: appOrigin,
-  }));
   app.use("/internal/computer", createGatewayVmContextRoutes({ store: platformStateStore }));
-  app.use("/internal/openclaw-control", createOpenClawControlBrokerRoutes({ db, store: platformStateStore }));
+  app.use("/internal/openclaw-control", createOpenClawControlBrokerRoutes({
+    store: platformStateStore,
+    readSizingKey,
+    sessionChecks: product?.controlSessionChecks,
+  }));
   app.use(
     "/internal/automations",
     requireAuthenticatedUid,
     createAutomationAuthorizationBrokerRoutes({ store: platformStateStore }),
   );
-  app.use("/internal/voice", createVoiceConversationRoutes({ db, store: platformStateStore, readSizingKey }));
-  app.use("/internal/openclaw-control", createToolConversationRoutes({ db, store: platformStateStore, readSizingKey }));
+  app.use("/internal/voice", createVoiceConversationRoutes({ store: platformStateStore, readSizingKey }));
+  app.use("/internal/openclaw-control", createToolConversationRoutes({ store: platformStateStore, readSizingKey }));
   app.use("/internal/openclaw-control", requireAuthenticatedUid, createWorkspaceNativeAccessRoutes({ store: platformStateStore, readSizingKey }));
   app.use("/internal/workspace-git", requireAuth, createWorkspaceGitAuthorizationBrokerRoutes({ store: platformStateStore }));
   app.use("/internal/channel-agent-readiness", requireAuth, createChannelReadinessAuthorizationBrokerRoutes({ store: platformStateStore }));

@@ -3,6 +3,7 @@ import request from 'supertest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Firestore } from 'firebase-admin/firestore';
 import { createOpenClawRuntimeBrokerRoutes } from './openclaw-runtime-broker.js';
+import { firestoreSizingKeyReader } from '@octogee/core/user-activation-lease';
 import { createDocumentFixtureStore } from '@octogee/core/testing/journal-store';
 import { RecordingDocuments } from '../test-helpers/recording-documents.js';
 const authorize = vi.hoisted(() => vi.fn());
@@ -21,7 +22,7 @@ function harness(payloadPatch: Record<string, unknown> = {}, ownerGateway = gate
   });
   const app = express(); app.use(express.json());
   app.use((req, _res, next) => { req.boundTenant = { kind: 'gateway', gatewayId, ownerUid: 'owner' }; next(); });
-  app.use('/internal/openclaw', createOpenClawRuntimeBrokerRoutes({ db: {} as Firestore, store: createDocumentFixtureStore(docs) }));
+  app.use('/internal/openclaw', createOpenClawRuntimeBrokerRoutes({ store: createDocumentFixtureStore(docs), readSizingKey: firestoreSizingKeyReader({} as Firestore), activityReceipts: () => { throw new Error("no receipts expected"); } }));
   const ticketWrites = () => docs.writes.filter((write) => write.path.startsWith('gatewayTickets/'));
   return { ticketWrites, post: () => request(app).post('/internal/openclaw/ws/redeem').send({ ticketId: 'ticket', purpose: 'openclaw-ws' }), access: () => request(app).post('/internal/openclaw/activity/conversation-access').send({ uid: 'member', channelId: scope.channelId, threadRootPostId }) };
 }

@@ -1,4 +1,3 @@
-import type { Firestore } from "firebase-admin/firestore";
 import type { PlatformUserRecord, PlatformStateRepositories } from "@octogee/core/platform-state";
 import { readGatewayAuthorizationInStore, type GatewayAuthorization } from "@octogee/core/gateway-live-release";
 
@@ -28,15 +27,17 @@ export type ModelBrokerProviderKeyResolver = (
 
 type ProviderKeyState = Pick<PlatformStateRepositories, "users" | "gateways">;
 
+export type OwnerModelCredentialConfigReader = (ownerUid: string) => Promise<Record<string, unknown> | undefined>;
+
 export interface AnthropicProviderKeyResolverDeps {
-  db: Pick<Firestore, "collection">;
+  readOwnerModelCredentialConfig: OwnerModelCredentialConfigReader;
   store: ProviderKeyState;
   platformKey?: string;
   readSecret?: (name: string) => Promise<string>;
 }
 
 export interface ModelBrokerProviderKeyResolverDeps {
-  db: Pick<Firestore, "collection">;
+  readOwnerModelCredentialConfig: OwnerModelCredentialConfigReader;
   store: ProviderKeyState;
   platformKeys?: Partial<Record<ModelBrokerProvider, string | undefined>>;
   readSecret?: (name: string) => Promise<string>;
@@ -86,14 +87,14 @@ interface OwnerKeyAuthority {
 }
 
 async function readOwnerKeyAuthority(
-  deps: Pick<AnthropicProviderKeyResolverDeps, "db" | "store">,
+  deps: Pick<AnthropicProviderKeyResolverDeps, "readOwnerModelCredentialConfig" | "store">,
   ownerUid: string,
 ): Promise<OwnerKeyAuthority> {
   const [user, config] = await Promise.all([
     deps.store.users.records.get(ownerUid),
-    deps.db.collection("users").doc(ownerUid).collection("system").doc("config").get(),
+    deps.readOwnerModelCredentialConfig(ownerUid),
   ]);
-  return { user, config: config.data() as Record<string, unknown> | undefined };
+  return { user, config };
 }
 
 function assignedUserOwnsKey(
@@ -142,7 +143,7 @@ export function createModelBrokerProviderKeyResolver(
   deps: ModelBrokerProviderKeyResolverDeps,
 ): ModelBrokerProviderKeyResolver {
   const anthropic = createAnthropicProviderKeyResolver({
-    db: deps.db,
+    readOwnerModelCredentialConfig: deps.readOwnerModelCredentialConfig,
     store: deps.store,
     platformKey: deps.platformKeys?.anthropic,
     readSecret: deps.readSecret,

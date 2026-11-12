@@ -36,22 +36,11 @@ function gatewayRoot(gatewayClass: "shared" | "builder" = "builder"): Record<str
 
 type Docs = Record<string, Record<string, unknown>>;
 
-function systemConfigDb(docs: Docs) {
-  return {
-    collection: (name: string) => ({
-      doc: (uid: string) => ({
-        collection: (sub: string) => ({
-          doc: (id: string) => ({
-            get: async () => ({ data: () => docs[`${name}/${uid}/${sub}/${id}`] }),
-          }),
-        }),
-      }),
-    }),
-  };
-}
-
 function sources(docs: Docs) {
-  return { db: systemConfigDb(docs) as never, store: createDocumentFixtureStore(docs) };
+  return {
+    readOwnerModelCredentialConfig: async (ownerUid: string) => docs[`users/${ownerUid}/system/config`],
+    store: createDocumentFixtureStore(docs),
+  };
 }
 
 describe("createAnthropicProviderKeyResolver", () => {
@@ -76,13 +65,13 @@ describe("createAnthropicProviderKeyResolver", () => {
 
   it("does not select a platform key when durable host authority cannot be read", async () => {
     const readSecret = vi.fn(async () => "synthetic-owner-key");
-    const { db, store } = sources({
+    const { readOwnerModelCredentialConfig, store } = sources({
       "users/uid-jack": { username: "smile-wring-011b" },
       "users/uid-jack/system/config": { modelCredential: { active: true, provider: "anthropic", mode: "api_key", secretName: "byok-smile-wring-011b-anthropic" } },
     });
     vi.spyOn(store.gateways.roots, "get").mockRejectedValue(new Error("authority unavailable"));
     const resolver = createAnthropicProviderKeyResolver({
-      db, store, platformKey: "synthetic-platform-key", readSecret,
+      readOwnerModelCredentialConfig, store, platformKey: "synthetic-platform-key", readSecret,
     });
     await expect(resolver({ provider: "anthropic", record })).rejects.toThrow("authority unavailable");
     expect(readSecret).not.toHaveBeenCalled();

@@ -3,6 +3,7 @@ import request from "supertest";
 import type { Firestore } from "firebase-admin/firestore";
 import { expect, it } from "vitest";
 import { createOpenClawRuntimeBrokerRoutes } from "../routes/openclaw-runtime-broker.js";
+import { firestoreSizingKeyReader } from "@octogee/core/user-activation-lease";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
 const OWNER = "a".repeat(26);
@@ -23,7 +24,7 @@ function app() {
     req.boundTenant = { kind: "gateway", gatewayId: "builder-bob" } as Express.Request["boundTenant"];
     next();
   });
-  server.use(createOpenClawRuntimeBrokerRoutes({ db: {} as Firestore, store: createDocumentFixtureStore(docs) }));
+  server.use(createOpenClawRuntimeBrokerRoutes({ store: createDocumentFixtureStore(docs), readSizingKey: firestoreSizingKeyReader({} as Firestore), activityReceipts: () => { throw new Error("no receipts expected"); } }));
   return server;
 }
 

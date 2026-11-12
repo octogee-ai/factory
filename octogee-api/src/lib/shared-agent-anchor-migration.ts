@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import type { DocumentData } from "firebase-admin/firestore";
 import { DuplicateRecordError, type PlatformUserRecord, type GatewayAssignment, type GatewayRoot, type PlatformStateRepositories, type Stored } from "@octogee/core/platform-state";
 import { userActivationRecoveryTargetMatches, sharedRecoveryTargetCleaned, migrationCancellationDeferred, isolatedTargetBelongsToUser } from "@octogee/core/fleet-state";
 import { isolatedRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
@@ -7,6 +6,9 @@ import { readSchedulerMigrationIdentity, type UserMigrationV2State } from "@octo
 import { projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
 import type { FleetBrokerAgentAnchorMigration } from "@octogee/shared/types/fleet-broker";
 import { readWorkspaceMigrationMarker } from "@octogee/shared/types/workspace-migration";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- operation and input fields are checked one by one before use
+type StoredFields = { [field: string]: any };
 
 interface AgentAnchorMigrationRequest {
   gatewayId: string;
@@ -28,7 +30,7 @@ async function sharedCrossGatewayAgentAnchorScope(tx: PlatformStateRepositories,
   const { gatewayId, slug, migrationId, expected } = request;
   if (!validMigrationId(migrationId)) return null;
   const operationId = migrationId.slice(4);
-  const operation: DocumentData = (await tx.journal.operations.get(operationId)) ?? {};
+  const operation: StoredFields = (await tx.journal.operations.get(operationId)) ?? {};
   const input = operation.input ?? {};
   if (!migrationOperationCurrent(operation, input, gatewayId, operationId)) return null;
   const sourceGatewayId: string = input.fromGatewayId, targetGatewayId: string = input.toGatewayId, uid: string = input.uid;
@@ -53,7 +55,7 @@ async function sharedCrossGatewayAgentAnchorScope(tx: PlatformStateRepositories,
 }
 
 function migrationTargetAuthority({ operationId, operation, input, user, sourceEpoch, targetRoot, target }: {
-  operationId: string; operation: DocumentData; input: DocumentData; user: Stored<PlatformUserRecord> | null; sourceEpoch: number;
+  operationId: string; operation: StoredFields; input: StoredFields; user: Stored<PlatformUserRecord> | null; sourceEpoch: number;
   targetRoot: unknown; target: ReturnType<typeof projectGatewayDesiredRootForGateway>;
 }): { sourceTargetCurrent: boolean; isolatedTargetAdmitted: boolean } {
   const activation = userActivationTarget({ operationId, input, user, sourceEpoch, targetRoot });
@@ -66,7 +68,7 @@ function migrationTargetAuthority({ operationId, operation, input, user, sourceE
 }
 
 function userActivationTarget({ operationId, input, user, sourceEpoch, targetRoot }: {
-  operationId: string; input: DocumentData; user: Stored<PlatformUserRecord> | null; sourceEpoch: number; targetRoot: unknown;
+  operationId: string; input: StoredFields; user: Stored<PlatformUserRecord> | null; sourceEpoch: number; targetRoot: unknown;
 }): { matches: boolean; activating: boolean } | null {
   if (input.source !== "builder-activation-lease") return null;
   const activationLease = user?.activationLease ?? undefined;
@@ -154,7 +156,7 @@ function sharedSurgeUserCurrent(user: Stored<PlatformUserRecord> | null, { gatew
     Number.isSafeInteger(marker?.startedAt), (marker?.startedAt ?? 0) > 0].every(Boolean);
 }
 
-function migrationOperationCurrent(operation: DocumentData, input: DocumentData, gatewayId: string, operationId: string): boolean {
+function migrationOperationCurrent(operation: StoredFields, input: StoredFields, gatewayId: string, operationId: string): boolean {
   return [
     operation.kind === "migrate-customer", operation.status === "running",
     operation.cancellationRequestedAt === undefined || migrationCancellationDeferred(operation, operationId),
@@ -170,8 +172,8 @@ function migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationI
   sourceRoot: NonNullable<ReturnType<typeof projectGatewayDesiredRootForGateway>>;
   target: ReturnType<typeof projectGatewayDesiredRootForGateway>;
   operationId: string;
-  operation: DocumentData;
-  input: DocumentData;
+  operation: StoredFields;
+  input: StoredFields;
   slug: string;
   assigned: GatewayAssignment;
   sourceTargetCurrent: boolean;
@@ -202,7 +204,7 @@ function userMigrationCustodyCurrent(
   return user.slug === slug && user.gateway?.gatewayId === sourceGatewayId && user.fences.migration?.operationId === operationId;
 }
 
-function cancelledImportCustodyCurrent(operation: DocumentData, slug: string, sourceEpoch: unknown): boolean {
+function cancelledImportCustodyCurrent(operation: StoredFields, slug: string, sourceEpoch: unknown): boolean {
   if (operation.cancellationRequestedAt === undefined || operation.customerMigrationV2 !== undefined) return true;
   const handoff = operation.schedulerHandoff;
   return handoff?.slug === slug && handoff.forwardRecovery?.sourceEpoch === sourceEpoch;

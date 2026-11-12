@@ -1,4 +1,3 @@
-import type { Firestore } from "firebase-admin/firestore";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
 import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
 import type { SizingKeyReader } from "@octogee/core/user-activation-lease";
@@ -12,7 +11,6 @@ import { isValidProjectId, projectAgentId } from '@octogee/shared/types/identity
 import { projectMemberExists } from './project-members.js';
 
 export interface WorkspaceConversationDeps {
-  db: Firestore;
   store: PlatformStateStore;
   readSizingKey: SizingKeyReader;
   authorize?: typeof import("../../../gateway-edge/src/lib/channel-session-authorization.js").authorizeChannelCredentials;

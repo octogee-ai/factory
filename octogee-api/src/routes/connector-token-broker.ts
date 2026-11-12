@@ -1,5 +1,4 @@
 import { Router, type Request, type Response } from "express";
-import type { Firestore } from "firebase-admin/firestore";
 
 import {
   getConnector,
@@ -7,7 +6,7 @@ import {
   isConnectorTokenBrokerable,
 } from "../../../gateway-edge/src/lib/connectors/index.js";
 import { getFreshAccessTokenFromStore } from "../../../gateway-edge/src/lib/connector-tokens.js";
-import { isSafeCanvasPath, resolveCanvasFile } from "../../../gateway-edge/src/lib/canvas-file.js";
+import { isSafeCanvasPath } from "../../../gateway-edge/src/lib/canvas-file.js";
 import { decryptSecret } from "../../../gateway-edge/src/lib/kms.js";
 import type { OpaqueMap, PlatformStateRepositories, PlatformStateStore } from "@octogee/core/platform-state";
 import {
@@ -21,6 +20,10 @@ import { readVmRuntimeObservation } from "../lib/vm-runtime-observation.js";
 import { projectMemberExists } from "../lib/project-members.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
+
+export type PublicCanvasFileReader = (workspaceSlug: string, projectSlug: string) => Promise<string | null>;
+
+export const NO_PUBLIC_CANVAS: PublicCanvasFileReader = async () => null;
 
 const FORBIDDEN = { error: "forbidden" } as const;
 const WORKSPACE_SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -169,7 +172,7 @@ async function projectAccessAuthorized(
 
 async function publicCanvasAccessAuthorized(
   input: {
-    db: Firestore;
+    readPublicCanvasFile: PublicCanvasFileReader;
     store: PlatformStateRepositories;
     uid: string;
     runtimeOwnerUid: string;
@@ -177,15 +180,14 @@ async function publicCanvasAccessAuthorized(
     access: PublicCanvasAccessContext;
   },
 ): Promise<boolean> {
-  const { db, store, uid, runtimeOwnerUid, connectorId, access } = input;
+  const { readPublicCanvasFile, store, uid, runtimeOwnerUid, connectorId, access } = input;
   if (uid !== runtimeOwnerUid) return false;
   const project = await store.workspaces.projects.get(access.workspaceSlug, access.projectSlug);
   if (!project) return false;
   if (project.ownerUid !== uid) return false;
   if (projectRepoSourceProvider(project.repoSource) !== connectorId) return false;
   if (project.visibility !== "public" && project.visibility !== "unlisted") return false;
-  const presentation = await db.doc(`workspaces/${access.workspaceSlug}/projects/${access.projectSlug}`).get();
-  return access.canvasPath === resolveCanvasFile(presentation.data()?.canvasFile);
+  return access.canvasPath === await readPublicCanvasFile(access.workspaceSlug, access.projectSlug);
 }
 
 function refused(bound: GatewayBinding, reason: string): null {
@@ -260,7 +262,7 @@ async function verifiedGatewayAuthorization(
 
 async function accessAuthorized(
   input: {
-    db: Firestore;
+    readPublicCanvasFile: PublicCanvasFileReader;
     store: PlatformStateRepositories;
     bound: GatewayBinding;
     uid: string;
@@ -268,7 +270,7 @@ async function accessAuthorized(
     access: ConnectorAccessContext | null;
   },
 ): Promise<boolean> {
-  const { db, store, bound, uid, connectorId, access } = input;
+  const { readPublicCanvasFile, store, bound, uid, connectorId, access } = input;
   if (!safeDocId(uid) || !bound.ownerUid || !bound.podName || !bound.podUid) return false;
   const authorization = await verifiedGatewayAuthorization(store, bound);
   if (!authorization) return false;
@@ -281,7 +283,7 @@ async function accessAuthorized(
     gatewayClass: authorization.gatewayClass,
   });
   if (access?.kind === PUBLIC_CANVAS_ACCESS_KIND) {
-    return publicCanvasAccessAuthorized({ db, store, uid, runtimeOwnerUid: bound.ownerUid, connectorId, access });
+    return publicCanvasAccessAuthorized({ readPublicCanvasFile, store, uid, runtimeOwnerUid: bound.ownerUid, connectorId, access });
   }
   if (access?.kind === "project") {
     if (uid !== bound.ownerUid || access.requestingUid !== bound.ownerUid) return false;
@@ -416,7 +418,7 @@ async function respondProjectCloneAccess(input: {
 }
 
 async function respondAuthorizedAccess(input: {
-  db: Firestore;
+  readPublicCanvasFile: PublicCanvasFileReader;
   store: PlatformStateStore;
   bound: GatewayBinding;
   uid: string;
@@ -424,9 +426,9 @@ async function respondAuthorizedAccess(input: {
   access: Exclude<ConnectorAccessContext, ProjectCloneAccessContext> | null;
   res: Response;
 }): Promise<void> {
-  const { db, store, bound, uid, connectorId, access, res } = input;
+  const { readPublicCanvasFile, store, bound, uid, connectorId, access, res } = input;
   if (!(await accessAuthorized({
-    db,
+    readPublicCanvasFile,
     store,
     bound,
     uid,
@@ -454,11 +456,12 @@ async function respondAuthorizedAccess(input: {
 }
 
 export function createConnectorTokenBrokerRoutes(opts: {
-  db: Firestore;
   store: PlatformStateStore;
+  readPublicCanvasFile?: PublicCanvasFileReader;
 }): Router {
   const router = Router();
-  const { db, store } = opts;
+  const { store } = opts;
+  const readPublicCanvasFile = opts.readPublicCanvasFile ?? NO_PUBLIC_CANVAS;
 
   router.post(["/access-token", "/github-project-clone-access"], async (req, res) => {
     const bound = boundGateway(req, res);
@@ -505,13 +508,13 @@ export function createConnectorTokenBrokerRoutes(opts: {
     }
 
     await respondAuthorizedAccess({
-      db,
+      readPublicCanvasFile,
       store,
       bound,
       uid,
       connectorId,
       access,
-        res,
+      res,
     });
   });
 

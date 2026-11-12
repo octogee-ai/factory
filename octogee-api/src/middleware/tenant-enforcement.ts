@@ -1,11 +1,9 @@
 import type { NextFunction, Request, Response } from "express";
-import type { Firestore } from "firebase-admin/firestore";
 import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import {
   configuredUserBootstrapAllowed,
 } from "@octogee/core/gateway-live-release";
 import { GATEWAY_BINDING_MISMATCH_REASON, RETIRED_VM_BINDING_DENIAL_REASON } from "@octogee/shared/types/fleet-broker";
-import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 import { hasRunningUserMigration } from "../lib/running-user-migration.js";
 import { normalizeTenantPolicyPath } from "../lib/tenant-route-policy.js";
 import type { UserNotifier } from "../lib/user-notifications.js";
@@ -27,6 +25,7 @@ export interface ProductTenantRoutes {
   readonly userTargetedRoutes: readonly string[];
   readonly platformOnlyRoutes: readonly string[];
   readonly tenantBoundApiRoutes: readonly string[];
+  readonly selfScopedBrokerRoutes: readonly string[];
 }
 
 export const NO_PRODUCT_TENANT_ROUTES: ProductTenantRoutes = {
@@ -34,10 +33,13 @@ export const NO_PRODUCT_TENANT_ROUTES: ProductTenantRoutes = {
   userTargetedRoutes: [],
   platformOnlyRoutes: [],
   tenantBoundApiRoutes: [],
+  selfScopedBrokerRoutes: [],
 };
 
+export type FlowGatewayReader = (flowId: string) => Promise<string | null>;
+
 interface EnforcementReaders {
-  db: Pick<Firestore, "collection">;
+  readFlowGateway: FlowGatewayReader;
   store: PlatformStateRepositories;
   productRoutes: ProductTenantRoutes;
 }
@@ -57,7 +59,7 @@ export interface TenantAccessRecord {
 export type TenantAccessRecorder = (record: TenantAccessRecord) => void;
 
 export interface TenantEnforcementOptions {
-  db?: Pick<Firestore, "collection">;
+  readFlowGateway: FlowGatewayReader;
   store: PlatformStateRepositories;
   onDenied?: TenantDenialReporter;
   notifyUsers?: UserNotifier;
@@ -86,9 +88,6 @@ function platformBindingAuthorized(bound: PlatformBinding, path: string, product
   return false;
 }
 
-// Exported so agent-productivity-enforcement.spec.ts can pin this allowlist
-// in lockstep with the route manifest createAgentProductivityRoutes exports —
-// exact strings on both sides; this list is never merged or prefix-matched.
 export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/fleet/blob/workspace/upload",
   "/internal/fleet/blob/materialization/read-url",
@@ -123,16 +122,6 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/fleet/uid-for-slug",
   "/internal/fleet/vm-runtime",
   "/internal/fleet/computer-egress",
-  "/internal/mobile-devices/session",
-  "/internal/mobile-devices/inspect",
-  "/internal/mobile-devices/authorize",
-  "/internal/mobile-devices/issued",
-  "/internal/mobile-devices/reserve",
-  "/internal/mobile-devices/commit",
-  "/internal/mobile-devices/active",
-  "/internal/mobile-devices/http",
-  "/internal/mobile-devices/tokens",
-  "/internal/mobile-devices/revoke",
   "/internal/openclaw-control/redeem",
   "/internal/openclaw-control/authorize",
   "/internal/openclaw-control/profile",
@@ -149,48 +138,6 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/openclaw/notifications/final-reply",
   "/internal/openclaw/activity/session-context",
   "/internal/openclaw/activity/dispatch-context",
-  "/internal/agent-support/ask",
-  "/internal/openclaw/previews/authorize",
-  "/internal/agent-projects/create",
-  "/internal/agent-projects/list",
-  "/internal/agent-projects/set-recipe",
-  "/internal/agent-projects/delegate",
-  "/internal/agent-projects/identity",
-  "/internal/project-runs/capability",
-  "/internal/project-runs/start",
-  "/internal/project-runs/status",
-  "/internal/openclaw/project-publish",
-  "/internal/agent-board/list",
-  "/internal/agent-board/card-read",
-  "/internal/agent-board/card-create",
-  "/internal/agent-board/card-update",
-  "/internal/agent-board/card-move",
-  "/internal/agent-board/card-comment",
-  "/internal/agent-productivity/google/calendar/events",
-  "/internal/agent-productivity/google/gmail/search",
-  "/internal/agent-productivity/google/gmail/read",
-  "/internal/agent-productivity/google/gmail/triage",
-  "/internal/agent-productivity/google/gmail/drafts/create",
-  "/internal/agent-productivity/google/gmail/send",
-  "/internal/agent-productivity/google/drive/search",
-  "/internal/agent-productivity/google/drive/read",
-  "/internal/agent-productivity/google/docs/create",
-  "/internal/agent-productivity/google/docs/read",
-  "/internal/agent-productivity/google/docs/append",
-  "/internal/agent-productivity/google/contacts/search",
-  "/internal/agent-productivity/google/calendar/events/create",
-  "/internal/agent-productivity/google/calendar/events/update",
-  "/internal/agent-productivity/google/calendar/events/delete",
-  "/internal/agent-productivity/google/tasks/list",
-  "/internal/agent-productivity/google/tasks/create",
-  "/internal/agent-productivity/google/tasks/update",
-  "/internal/agent-productivity/google/sheets/create",
-  "/internal/agent-productivity/google/sheets/read",
-  "/internal/agent-productivity/google/sheets/append",
-  "/internal/agent-productivity/obsidian/notes/list",
-  "/internal/agent-productivity/obsidian/notes/search",
-  "/internal/agent-productivity/obsidian/notes/read",
-  "/internal/agent-productivity/obsidian/notes/write",
 ]);
 
 export const FINAL_HOME_CHECKPOINT_ROUTES = new Set([
@@ -200,8 +147,9 @@ export const FINAL_HOME_CHECKPOINT_ROUTES = new Set([
   "/internal/fleet/computer-home/prune",
 ]);
 
-function isSelfScopedInternalBrokerRoute(path: string): boolean {
+function isSelfScopedInternalBrokerRoute(path: string, productRoutes: ProductTenantRoutes): boolean {
   return SELF_SCOPED_INTERNAL_BROKER_ROUTES.has(path) ||
+    productRoutes.selfScopedBrokerRoutes.includes(path) ||
     path === "/internal/agent-imports" || path.startsWith("/internal/agent-imports/");
 }
 
@@ -282,17 +230,6 @@ async function uidHoldsDisposableClaim(
     allocation.claimedByUid === uid &&
     gateway.ownerUid === uid
   );
-}
-
-async function flowBelongsToGateway(
-  db: Pick<Firestore, "collection">,
-  flowId: string,
-  gatewayId: string,
-): Promise<boolean> {
-  const snap = await db.collection("byosubFlows").doc(flowId).get();
-  if (!snap.exists) return false;
-  const data = snap.data() as Record<string, unknown> | undefined;
-  return data?.gatewayId === gatewayId;
 }
 
 async function slugBelongsToGateway(
@@ -397,7 +334,7 @@ async function gatewayDenialReason(
   // These brokers perform route-specific authorization from their own body
   // shape. Keeping this as an explicit route allowlist avoids turning
   // gatewayId into a generic skeleton key for future internal routes.
-  if (isSelfScopedInternalBrokerRoute(req.path)) {
+  if (isSelfScopedInternalBrokerRoute(req.path, readers.productRoutes)) {
     return null;
   }
   return targetedDenialReason(readers, bound, req, gatewayIds.length > 0);
@@ -409,7 +346,7 @@ async function targetedDenialReason(
   req: Request,
   namesBoundGateway: boolean,
 ): Promise<string | null> {
-  const { db, store } = readers;
+  const { readFlowGateway, store } = readers;
   const uids = requestedUids(req);
   if (!(await uidsAllowedForRequest(readers, uids, bound.gatewayId, req))) {
     return "request names a user not assigned to the bound gateway";
@@ -421,7 +358,7 @@ async function targetedDenialReason(
   }
 
   const flowId = requestedFlowId(req);
-  if (flowId && !(await flowBelongsToGateway(db, flowId, bound.gatewayId))) {
+  if (flowId && (await readFlowGateway(flowId)) !== bound.gatewayId) {
     return "request names a flow owned by another gateway";
   }
 
@@ -500,7 +437,7 @@ export function createTenantEnforcementMiddleware(
   opts: TenantEnforcementOptions,
 ): (req: Request, res: Response, next: NextFunction) => void {
   const readers: EnforcementReaders = {
-    db: opts.db ?? defaultDb,
+    readFlowGateway: opts.readFlowGateway,
     store: opts.store,
     productRoutes: opts.productRoutes ?? NO_PRODUCT_TENANT_ROUTES,
   };

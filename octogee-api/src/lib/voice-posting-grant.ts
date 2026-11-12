@@ -1,5 +1,4 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { Timestamp } from 'firebase-admin/firestore';
 import type { GatewayTicket, Stored } from '@octogee/core/platform-state';
 import { VOICE_ARCHIVE_POST_KIND, VOICE_TURN_POST_KIND, voiceTurnMessage, type VoiceArchiveRequest, type VoiceConversation, type VoiceGrantBinding, type VoiceGrantEndRequest, type VoiceGrantRequest, type VoiceTurnPost, type VoiceTurnRequest } from '@octogee/core/voice-conversation';
 import { resolveVoiceConversationContext, resolveVoiceChannel, type WorkspaceConversationDeps } from './workspace-conversation.js';
@@ -16,7 +15,6 @@ interface GrantDocument extends GrantIdentity {
   purpose: typeof PURPOSE;
   createdAt: number;
   expiresAt: number;
-  expireAt: Timestamp;
   revokedAt: number | null;
   sessionId: string | null;
   callerMmUserId: string | null;
@@ -54,7 +52,7 @@ export function createVoicePostingGrant(identity: GrantIdentity, now = Date.now(
   if (!validIdentity(identity)) throw new Error('Voice grant identity is invalid');
   const voiceGrant = randomBytes(32).toString('base64url');
   const expiresAt = now + GRANT_TTL_MS;
-  const document: GrantDocument = { ...identity, purpose: PURPOSE, createdAt: now, expiresAt, expireAt: Timestamp.fromMillis(expiresAt), revokedAt: null, sessionId: null, callerMmUserId: null, turns: {} };
+  const document: GrantDocument = { ...identity, purpose: PURPOSE, createdAt: now, expiresAt, revokedAt: null, sessionId: null, callerMmUserId: null, turns: {} };
   return { voiceGrant, voiceGrantExpiresAt: expiresAt, path: `gatewayTickets/${grantHash(voiceGrant)}`, document };
 }
 function validLifetime(body: Partial<GrantDocument>): boolean {

@@ -130,7 +130,7 @@ function preparingHarness(scenario = "valid") {
   const createBlobSignedUrl = vi.fn(async (input: { gcsPath: string }) => ({ url: `https://signed.test/${input.gcsPath}`, method: "GET" as const, gcsPath: input.gcsPath, expiresAt: "2026-10-07T12:00:00Z" }));
   const app = express(); app.disable("x-powered-by"); app.use(express.json());
   app.use((req, _res, next) => { req.boundTenant = { kind: "gateway", gatewayId: "b-owner", ownerUid: "uid-owner", podUid: "4242", podName: gatewayVmPodName("b-owner", "4242"), saName: "octogee-gw-b-owner" }; next(); });
-  app.use(createTenantEnforcementMiddleware({ db, store: createDocumentFixtureStore(docs), onDenied: async () => {} }));
+  app.use(createTenantEnforcementMiddleware({ readFlowGateway: async () => null, store: createDocumentFixtureStore(docs), onDenied: async () => {} }));
   const credentialAuth = createGatewayCredentialAuth({ namespace: "octogee-test",
     reviewer: async () => ({ authenticated: true, saName: "octogee-gw-b-owner", namespace: "octogee-test", audiences: [GATEWAY_CREDENTIAL_TOKEN_AUDIENCE],
       podName: gatewayVmPodName("b-owner", "4242"), podUid: scenario === "wrong-credential" ? "9999" : "4242" }),

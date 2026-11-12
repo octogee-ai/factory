@@ -58,7 +58,7 @@ function harness() {
   const store = vi.fn(async (_target: unknown, name: string, bytes: Buffer) => ({ gcsPath: `customers/alice/${name}`, size: bytes.length }));
   const app = express(); app.disable("x-powered-by"); app.use(express.json());
   app.use((req, _res, next) => { req.boundTenant = { kind: "gateway", gatewayId: "shared-alice", saName: "octogee-gw-shared-alice", podUid: "pod-alice", podName: "pod-alice" }; next(); });
-  app.use(createTenantEnforcementMiddleware({ db, store: createDocumentFixtureStore(new ReadOnlyDocuments(docs)), onDenied: async () => {} }));
+  app.use(createTenantEnforcementMiddleware({ readFlowGateway: async () => null, store: createDocumentFixtureStore(new ReadOnlyDocuments(docs)), onDenied: async () => {} }));
   const auth = createGatewayCredentialAuth({ tokenHeader: SIDECAR_BROKER_TOKEN_HEADER, audience: SIDECAR_BROKER_TOKEN_AUDIENCE, namespace: "octogee-test",
     reviewer: async () => ({ authenticated: true, saName: "octogee-gw-shared-alice", namespace: "octogee-test", audiences: [SIDECAR_BROKER_TOKEN_AUDIENCE], podUid: "pod-alice", podName: "pod-alice" }),
     mapIdentity: async () => ({ kind: "gateway", gatewayId: "shared-alice" }) });

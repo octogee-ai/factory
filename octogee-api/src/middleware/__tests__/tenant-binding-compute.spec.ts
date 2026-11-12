@@ -109,7 +109,7 @@ describe("isolated runtime-state routes for a VM gateway", () => {
       reviewer: async () => computeReview("octogee-api"), store, namespace: "octogee-test",
       metrics: createTenantBindingMetrics(new Registry()), logger: { warn: vi.fn() },
     }));
-    app.use(createTenantEnforcementMiddleware({ db, store }));
+    app.use(createTenantEnforcementMiddleware({ readFlowGateway: async () => null, store }));
     app.use("/internal/fleet", createFleetBrokerRoutes({
       db: db as unknown as Firestore,
       store,

@@ -129,7 +129,7 @@ describe("POST /internal/voice/tts", () => {
       next();
     });
     enforced.use(createTenantEnforcementMiddleware({
-      db: { collection: () => { throw new Error("no lookups expected"); } } as never,
+      readFlowGateway: async () => { throw new Error("no lookups expected"); },
       store: createDocumentFixtureStore({}),
     }));
     enforced.use("/internal/voice", createVoiceRelayRoutes({ config, fetchImpl: vi.fn(async () => wavResponse(new Int16Array(0))) }));

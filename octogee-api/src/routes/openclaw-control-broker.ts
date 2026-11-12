@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
-import type { Firestore } from "firebase-admin/firestore";
 
 import {
-  firestoreSizingKeyReader,
   withCurrentSizingKey,
   type SizingKeyReader,
   type CurrentSizingKey,
@@ -35,7 +33,6 @@ import type {
 import type { AssignmentState } from "@octogee/shared/types/gateway-releases";
 import { isGatewayClassControlUiAccessEnabled, resolveGatewayClass } from "@octogee/shared/types/glm";
 import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
-import { nativeMobileControlSessionChecks } from "../lib/native-mobile-control-session-checks.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -883,9 +880,14 @@ function cacheProfileAvatars(
     } } };
   };
 }
+export const NO_CONTROL_SESSION_ATTACHMENTS: ControlSessionChecks = {
+  current: async () => false,
+};
+
 export function createOpenClawControlBrokerRoutes(args: {
-  db: Firestore;
   store: PlatformStateStore;
+  readSizingKey: SizingKeyReader;
+  sessionChecks?: ControlSessionChecks;
   now?: () => number;
   mattermost?: MattermostBrokerDependencies;
   profile?: import("../lib/openclaw-profile-appearance.js").OpenClawProfileAppearanceLoader;
@@ -894,8 +896,8 @@ export function createOpenClawControlBrokerRoutes(args: {
   const router = Router();
   const context: BrokerContext = {
     store: args.store,
-    readSizingKey: firestoreSizingKeyReader(args.db),
-    sessionChecks: nativeMobileControlSessionChecks({ db: args.db, store: args.store }),
+    readSizingKey: args.readSizingKey,
+    sessionChecks: args.sessionChecks ?? NO_CONTROL_SESSION_ATTACHMENTS,
     now: args.now ?? Date.now,
   };
   router.post("/redeem", (req, res, next) => redeemControlTicket(context, req, res, next));

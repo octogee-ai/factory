@@ -120,7 +120,7 @@ function app(
     next();
   });
   const store = createDocumentFixtureStore(harness.docs);
-  target.use(createTenantEnforcementMiddleware({ db: harness.db, store, onDenied: async () => {} }));
+  target.use(createTenantEnforcementMiddleware({ readFlowGateway: async () => null, store, onDenied: async () => {} }));
   target.use("/internal/computer", createGatewayVmContextRoutes({ store }));
   return target;
 }
