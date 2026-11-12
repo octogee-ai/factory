@@ -136,7 +136,7 @@ function proxyApp(options: ReturnType<typeof brokerOptions>) {
 
 describe("npm cache capability broker", () => {
   const preparation = () => ({
-    operation: { kind: "migrate-customer", status: "running", input: {
+    operation: { kind: "migrate-user", status: "running", input: {
       uid: "uid-alice", slug: "alice", fromGatewayId: "shared-source", toGatewayId: GATEWAY_ID,
     } },
     runtime: { gatewayId: GATEWAY_ID, runtime: "gce-vm", vm: { instanceId: POD_UID }, vmInstance: { ownerUid: "uid-alice", builderSlug: "alice" } },

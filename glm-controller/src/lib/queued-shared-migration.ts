@@ -41,7 +41,7 @@ function handoffMatches(row: UntypedRecord, id: string): boolean {
 
 function queuedSharedScope(row: UntypedRecord): boolean {
   const input = row.input;
-  return row.kind === 'migrate-customer' && input &&
+  return row.kind === 'migrate-user' && input &&
     ['uid', 'builderSlug', 'fromGatewayId', 'toGatewayId'].every(key => typeof input[key] === 'string' && input[key].length > 0 && !input[key].includes('/')) &&
     input.fromGatewayId.startsWith('shared-') && input.toGatewayId.startsWith('shared-') && input.fromGatewayId !== input.toGatewayId &&
     input.sourceTransferMode === undefined && input.recoverSourceOnly === undefined;

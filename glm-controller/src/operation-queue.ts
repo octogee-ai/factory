@@ -4,7 +4,7 @@ import type { Operation } from "@octogee/shared/types/glm";
 import { serialFleetOperationsConflict, type RolloutLane } from "@octogee/core/fleet-operation-lock";
 import { MIGRATE_USER_KIND } from "./operation-kinds.js";
 
-const ACCOUNT_SUSPENSION_KIND = "suspend-customer";
+const ACCOUNT_SUSPENSION_KIND = "suspend-user";
 
 export const SERIALLY_EXCLUSIVE_OPERATION_KINDS: ReadonlySet<string> = new Set([
   "rollout",

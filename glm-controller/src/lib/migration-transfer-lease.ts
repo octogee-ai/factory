@@ -115,7 +115,7 @@ async function retiredReturnTransfer(tx: PlatformStateTransaction, input: Transf
   const { completedAt } = task;
   const op = await tx.journal.operations.get(operationId);
   if (!op || !op.inputUid) return false;
-  if (![op.kind === "migrate-customer", op.status === "running", op.origin === "automatic",
+  if (![op.kind === "migrate-user", op.status === "running", op.origin === "automatic",
     op.createdBy === "glm-controller-placement-policy", op.input.source === "builder-activation-lease",
     op.input.uid === op.inputUid, op.input.builderSlug === input.slug, op.input.fromGatewayId === source,
     op.input.toGatewayId === input.gatewayId, op.gatewayId === input.gatewayId].every(Boolean)) return false;

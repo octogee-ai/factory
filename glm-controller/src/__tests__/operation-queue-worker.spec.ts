@@ -95,7 +95,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     const wake = direction === "wake";
     const fromGatewayId = wake ? "shared-a" : "builder-a", toGatewayId = wake ? "builder-a" : "shared-a";
     const migrationId = wake ? "builder-activate-builder-a-g2" : "builder-return-builder-a-g2";
-    const waiting = baseOp({ id: migrationId, kind: "migrate-customer", origin: "automatic", createdAt: 1,
+    const waiting = baseOp({ id: migrationId, kind: "migrate-user", origin: "automatic", createdAt: 1,
       input: { uid: "alice", source: "builder-activation-lease", fromGatewayId, toGatewayId },
       output: { gatewayCompatibilityPending: true } });
     const rollout = baseOp({ id: "target-roll", origin: "operator", createdAt: 2, input: { gatewayId: toGatewayId } });
@@ -106,7 +106,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     });
     const deps = buildDeps(db, {
       rollout: async () => { events.push("rollout"); return { success: true, steps: [] }; },
-      "migrate-customer": async () => { events.push("migration"); return { success: true, steps: [] }; },
+      "migrate-user": async () => { events.push("migration"); return { success: true, steps: [] }; },
     });
     await processOperation(waiting as unknown as Operation, deps);
     expect(events).toEqual([]);
@@ -118,10 +118,10 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
 
   it("rolls a user ahead of its untouched idle return blocked by another Shared migration", async () => {
     const returnId = "builder-return-builder-a-g2";
-    const blockedReturn = baseOp({ id: returnId, kind: "migrate-customer", origin: "automatic",
+    const blockedReturn = baseOp({ id: returnId, kind: "migrate-user", origin: "automatic",
       createdBy: "glm-controller-placement-policy", createdAt: 2,
       input: { uid: "alice", builderSlug: "alice", source: "builder-activation-lease", fromGatewayId: "builder-a", toGatewayId: "shared-target" } });
-    const olderMigration = baseOp({ id: "older-shared-move", kind: "migrate-customer", createdAt: 1,
+    const olderMigration = baseOp({ id: "older-shared-move", kind: "migrate-user", createdAt: 1,
       nextAttemptAt: Date.now() + 60_000, input: { fromGatewayId: "shared-source", toGatewayId: "shared-target" } });
     const rollout = baseOp({ id: "operator-roll", origin: "operator", createdAt: 3, input: { gatewayId: "builder-a" } });
     const handler: OperationHandler = vi.fn(async () => ({ success: true, steps: [] }));
@@ -140,7 +140,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
 
   it("runs the older return when an intervening Shared rollout blocks the operator user roll", async () => {
     const returnId = "builder-return-builder-a-g2";
-    const returning = baseOp({ id: returnId, kind: "migrate-customer", origin: "automatic", createdAt: 1,
+    const returning = baseOp({ id: returnId, kind: "migrate-user", origin: "automatic", createdAt: 1,
       input: { source: "builder-activation-lease", fromGatewayId: "builder-a", toGatewayId: "shared-target" } });
     const sharedRoll = baseOp({ id: "shared-roll", createdAt: 2, input: { gatewayId: "shared-target" } });
     const userRoll = baseOp({ id: "user-roll", origin: "operator", createdAt: 3, input: { gatewayId: "builder-a" } });
@@ -150,7 +150,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
       runtimes: { "builder-a": { runtime: "cluster" }, "shared-target": { runtime: "cluster" } },
     });
 
-    await processOperation(returning as unknown as Operation, buildDeps(db, { "migrate-customer": handler }));
+    await processOperation(returning as unknown as Operation, buildDeps(db, { "migrate-user": handler }));
 
     expect(handler).toHaveBeenCalledOnce();
     expect(store.get(returnId)?.status).toBe("succeeded");
@@ -173,7 +173,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     { name: "Shared target rollout", rollout: { input: { gatewayId: "shared-target" } } },
   ])("keeps queue exclusion for $name", async ({ returning, rollout }) => {
     const returnId = "builder-return-builder-a-g2";
-    const blockedReturn = { ...baseOp({ id: returnId, kind: "migrate-customer", origin: "automatic", createdAt: 1,
+    const blockedReturn = { ...baseOp({ id: returnId, kind: "migrate-user", origin: "automatic", createdAt: 1,
       input: { source: "builder-activation-lease", fromGatewayId: "builder-a", toGatewayId: "shared-target" } }), ...returning };
     const queuedRoll = { ...baseOp({ id: "operator-roll", origin: "operator", createdAt: 2, input: { gatewayId: "builder-a" } }), ...rollout };
     const handler: OperationHandler = vi.fn(async () => ({ success: true, steps: [] }));
@@ -227,12 +227,12 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     const { db, store } = createOperationsFixture({
       "op-cleanup": baseOp({
         id: "op-cleanup",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         createdAt: 1,
         output: { configCleanup: { migrationId: "migration-1" } },
       }),
     });
-    const deps = buildDeps(db, { "migrate-customer": migrationHandler });
+    const deps = buildDeps(db, { "migrate-user": migrationHandler });
     (deps as unknown as { releaseAdmissionGate: unknown }).releaseAdmissionGate = {
       stateInTransaction: async () => ({ draining: true, releaseId: "candidate", reason: "deploy" }),
     };
@@ -370,7 +370,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     const { db, store } = createOperationsFixture({
       "vm-roll": baseOp({ id: "vm-roll", status: "running", input: { gatewayId: "builder" } }),
       "return": baseOp({
-        id: "return", kind: "migrate-customer", createdAt: 1, nextAttemptAt: Date.now() + 60_000,
+        id: "return", kind: "migrate-user", createdAt: 1, nextAttemptAt: Date.now() + 60_000,
         input: { fromGatewayId: "builder", toGatewayId: "shared-0" },
       }),
       "shared-roll": baseOp({ id: "shared-roll", createdAt: 2, input: { gatewayId: "shared-0" } }),
@@ -411,7 +411,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
       "op-running": {
         ...baseOp({
           id: "op-running",
-          kind: "migrate-customer",
+          kind: "migrate-user",
           createdAt: 1,
           input: { fromGatewayId: "gw-blue", toGatewayId: "gw-green" },
         }),
@@ -419,18 +419,18 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
       },
       "op-same-target": baseOp({
         id: "op-same-target",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         createdAt: 2,
         input: { toGatewayId: "gw-green" },
       }),
       "op-other-target": baseOp({
         id: "op-other-target",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         createdAt: 3,
         input: { toGatewayId: "gw-purple" },
       }),
     });
-    const deps = buildDeps(db, { "migrate-customer": migrateHandler });
+    const deps = buildDeps(db, { "migrate-user": migrateHandler });
 
     await drainPendingOperationsOnce(deps);
 
@@ -444,14 +444,14 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     [
       "rollout begins on migration source",
       {
-        running: { kind: "migrate-customer", input: { fromGatewayId: "source", toGatewayId: "target" } },
+        running: { kind: "migrate-user", input: { fromGatewayId: "source", toGatewayId: "target" } },
         pending: { kind: "rollout", input: { gatewayId: "source" } },
       },
     ],
     [
       "rollout begins on migration target",
       {
-        running: { kind: "migrate-customer", input: { fromGatewayId: "source", toGatewayId: "target" } },
+        running: { kind: "migrate-user", input: { fromGatewayId: "source", toGatewayId: "target" } },
         pending: { kind: "rollout", input: { gatewayId: "target" } },
       },
     ],
@@ -459,14 +459,14 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
       "migration begins during source rollout",
       {
         running: { kind: "rollout", input: { gatewayId: "source" } },
-        pending: { kind: "migrate-customer", input: { fromGatewayId: "source", toGatewayId: "target" } },
+        pending: { kind: "migrate-user", input: { fromGatewayId: "source", toGatewayId: "target" } },
       },
     ],
     [
       "migration begins during target rollout",
       {
         running: { kind: "rollout", input: { gatewayId: "target" } },
-        pending: { kind: "migrate-customer", input: { fromGatewayId: "source", toGatewayId: "target" } },
+        pending: { kind: "migrate-user", input: { fromGatewayId: "source", toGatewayId: "target" } },
       },
     ],
   ] as const)("serializes cross-protocol conflict: %s", async (_name, fixture) => {
@@ -491,7 +491,7 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     });
     const deps = buildDeps(db, {
       rollout: rolloutHandler,
-      "migrate-customer": migrateHandler,
+      "migrate-user": migrateHandler,
     });
 
     await drainPendingOperationsOnce(deps);
@@ -593,12 +593,12 @@ describe("gateway operation queue — automatic retry with backoff", () => {
       return { steps: [], success: true };
     });
     const { db, store } = createOperationsFixture({
-      retry: baseOp({ id: "retry", kind: "migrate-customer", createdAt: 1,
+      retry: baseOp({ id: "retry", kind: "migrate-user", createdAt: 1,
         input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" } }),
-      healthy: baseOp({ id: "healthy", kind: "migrate-customer", createdAt: 2,
+      healthy: baseOp({ id: "healthy", kind: "migrate-user", createdAt: 2,
         input: { uid: "bob", fromGatewayId: "shared-a", toGatewayId: "shared-b" } }),
     });
-    const deps = buildDeps(db, { "migrate-customer": handler });
+    const deps = buildDeps(db, { "migrate-user": handler });
     await processOperation({ ...store.get("retry"), id: "retry" } as unknown as Operation, deps);
     expect(store.get("retry")).toMatchObject({ status: "pending", createdAt: 1, queuedAt: 1_000_000 });
     vi.setSystemTime(retryAt);
@@ -616,12 +616,12 @@ describe("gateway operation queue — automatic retry with backoff", () => {
     vi.setSystemTime(1_010_000);
     const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
     const { db, store } = createOperationsFixture({
-      retry: baseOp({ id: "retry", kind: "migrate-customer", createdAt: 1, queuedAt: 1_000_000,
+      retry: baseOp({ id: "retry", kind: "migrate-user", createdAt: 1, queuedAt: 1_000_000,
         nextAttemptAt: 1_030_000, input: { uid: "alice", toGatewayId: "shared-b" } }),
-      newcomer: baseOp({ id: "newcomer", kind: "migrate-customer", createdAt: 1_005_000,
+      newcomer: baseOp({ id: "newcomer", kind: "migrate-user", createdAt: 1_005_000,
         input: { uid: "bob", toGatewayId: "shared-b" } }),
     });
-    await processOperation({ ...store.get("newcomer"), id: "newcomer" } as unknown as Operation, buildDeps(db, { "migrate-customer": handler }));
+    await processOperation({ ...store.get("newcomer"), id: "newcomer" } as unknown as Operation, buildDeps(db, { "migrate-user": handler }));
     expect(handler).toHaveBeenCalledOnce();
     expect(store.get("newcomer")?.status).toBe("succeeded");
     expect(store.get("retry")?.status).toBe("pending");
@@ -638,9 +638,9 @@ describe("gateway operation queue — automatic retry with backoff", () => {
       return { steps: [], success: true };
     });
     const { db, store } = createOperationsFixture({
-      "op-migrate": baseOp({ id: "op-migrate", kind: "migrate-customer", createdAt: 1 }),
+      "op-migrate": baseOp({ id: "op-migrate", kind: "migrate-user", createdAt: 1 }),
     });
-    const deps = buildDeps(db, { "migrate-customer": handler });
+    const deps = buildDeps(db, { "migrate-user": handler });
 
     await drainPendingOperationsOnce(deps);
     expect(handler).toHaveBeenCalledTimes(1);
@@ -674,11 +674,11 @@ describe("gateway operation queue — automatic retry with backoff", () => {
       return error ? { steps: [], success: false, error } : { steps: [], success: true };
     });
     const { db, store } = createOperationsFixture({
-      "op-give": baseOp({ id: "op-give", kind: "migrate-customer", createdAt: 1, input: {
+      "op-give": baseOp({ id: "op-give", kind: "migrate-user", createdAt: 1, input: {
         uid: "uid-lin", fromGatewayId: "shared-a", toGatewayId: "lin-s-0a1b2c3d", source: "operator-isolated-gateway",
       } }),
     });
-    const deps = buildDeps(db, { "migrate-customer": handler });
+    const deps = buildDeps(db, { "migrate-user": handler });
 
     for (const check of [1, 2, 3]) {
       await drainPendingOperationsOnce(deps);
@@ -774,7 +774,7 @@ describe("gateway operation queue — automatic retry with backoff", () => {
     const { db, store } = createOperationsFixture({
       "builder-return-run-alice-g1": baseOp({
         id: "builder-return-run-alice-g1",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         origin: "automatic",
         createdAt: 1,
         input: {
@@ -786,7 +786,7 @@ describe("gateway operation queue — automatic retry with backoff", () => {
         attemptHistory: priorAttempts,
       }),
     });
-    const deps = buildDeps(db, { "migrate-customer": handler });
+    const deps = buildDeps(db, { "migrate-user": handler });
 
     await drainPendingOperationsOnce(deps);
 
@@ -841,7 +841,7 @@ describe("completion bookkeeping reads the fresh doc, not the caller's snapshot"
   it("re-adopts a committed migration and completes its persisted handoff through the boot sweep", async () => {
     const schedulerHandoff = { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "alice-user",
       migrationId: "migration:scheduler:1:claim:100", stageAfterCutover: true as const };
-    const original = baseOp({ id: "committed-migration", kind: "migrate-customer", status: "running", startedAt: 100,
+    const original = baseOp({ id: "committed-migration", kind: "migrate-user", status: "running", startedAt: 100,
       input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "alice-user" }, schedulerHandoff,
       cutoverCommittedAt: 200 });
     const { db, store } = createOperationsFixture({ "committed-migration": original });
@@ -852,9 +852,9 @@ describe("completion bookkeeping reads the fresh doc, not the caller's snapshot"
       expect(op.startedAt).toBeGreaterThan(100);
       return { steps: [], success: true };
     });
-    const deps = buildDeps(db, { "migrate-customer": handler });
+    const deps = buildDeps(db, { "migrate-user": handler });
     expect(await resumeOrphanedRunningOps({ store: createDocumentFixtureStore({ "glmOperations/committed-migration": original }), log: vi.fn(),
-      resumableKinds: new Set(["migrate-customer"]), resumableOperation: operationNeedsDurableRestartResume,
+      resumableKinds: new Set(["migrate-user"]), resumableOperation: operationNeedsDurableRestartResume,
       redrive: (op) => reAdoptAndRunOperation(op, deps),
     })).toEqual({ scanned: 1, resumed: 1 });
     expect(handler).toHaveBeenCalledOnce();
@@ -1009,7 +1009,7 @@ describe("pending operation watch", () => {
 });
 
 describe("verified user erasure completion", () => {
-  const erasure = () => baseOp({ id: "erase-1", kind: "erase-customer", createdBy: "alice", input: { uid: "alice", deletionId: "del-1" } });
+  const erasure = () => baseOp({ id: "erase-1", kind: "erase-user", createdBy: "alice", input: { uid: "alice", deletionId: "del-1" } });
   const verified = vi.fn(async () => ({
     steps: [], success: true, scrubInputOnSuccess: true,
     output: { verifiedDeletion: { deletionId: "del-1", archiveId: "archive-1" } },
@@ -1024,7 +1024,7 @@ describe("verified user erasure completion", () => {
       },
     } });
 
-    await drainPendingOperationsOnce(buildDeps(db, { "erase-customer": verified }));
+    await drainPendingOperationsOnce(buildDeps(db, { "erase-user": verified }));
 
     expect(documents.get("customerDeletionJobs/del-1")).toEqual({
       version: 1, status: "verified", requestedAt: 1, eraseAfter: 2, archiveId: "archive-1", completedAt: expect.any(Number),
@@ -1039,7 +1039,7 @@ describe("verified user erasure completion", () => {
   it("leaves the operation running when its deletion job has vanished instead of inventing a verified job", async () => {
     const { db, store, documents } = createOperationsFixture({ "erase-1": erasure() });
 
-    await expect(drainPendingOperationsOnce(buildDeps(db, { "erase-customer": verified }))).rejects.toBeInstanceOf(MissingRecordError);
+    await expect(drainPendingOperationsOnce(buildDeps(db, { "erase-user": verified }))).rejects.toBeInstanceOf(MissingRecordError);
 
     expect(store.get("erase-1")?.status).toBe("running");
     expect(documents.get("customerDeletionJobs/del-1")).toBeUndefined();
@@ -1055,10 +1055,10 @@ describe("claim admission fences", () => {
     const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
     const log = vi.fn();
     const { db, store } = createOperationsFixture({
-      "op-move": baseOp({ id: "op-move", kind: "migrate-customer", input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" } }),
+      "op-move": baseOp({ id: "op-move", kind: "migrate-user", input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" } }),
     }, seeds);
 
-    await drainPendingOperationsOnce({ ...buildDeps(db, { "migrate-customer": handler }), log });
+    await drainPendingOperationsOnce({ ...buildDeps(db, { "migrate-user": handler }), log });
 
     expect(handler).not.toHaveBeenCalled();
     expect(store.get("op-move")?.status).toBe("pending");

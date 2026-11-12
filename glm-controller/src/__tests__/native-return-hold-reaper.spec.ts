@@ -67,14 +67,14 @@ describe("native return hold reaper", () => {
     async (status) => {
       const h = harness({
         gateways: { native: heldGateway("builder-return-native") },
-        operations: { "builder-return-native": { kind: "migrate-customer", status } },
+        operations: { "builder-return-native": { kind: "migrate-user", status } },
       });
       const result = await runNativeReturnHoldReaperTick(h.deps);
       expect(result).toEqual({ scanned: 1, released: 1 });
       expect(h.docs["glmGateways/native"].vmHome).toEqual({ lastCheckpoint: { completedAt: 400 } });
       const journal = h.docs["glmOperations/native-return-hold-release-native-builder-return-native"];
       expect(journal).toMatchObject({
-        kind: "migrate-customer",
+        kind: "migrate-user",
         status: "succeeded",
         origin: "automatic",
         createdBy: "glm-controller-native-return-hold-reaper",
@@ -99,7 +99,7 @@ describe("native return hold reaper", () => {
 
   it.each(["failed", "succeeded", "missing"])("retains a %s operation's hold while Compute still runs", async status => {
     const h = harness({ gateways: { native: heldGateway("return-op") },
-      operations: status === "missing" ? {} : { "return-op": { kind: "migrate-customer", status, cutoverCommittedAt: 600 } } });
+      operations: status === "missing" ? {} : { "return-op": { kind: "migrate-user", status, cutoverCommittedAt: 600 } } });
     h.vm.describe.mockResolvedValue({ status: "RUNNING", instanceId: "vm-1" });
     expect(await runNativeReturnHoldReaperTick(h.deps)).toEqual({ scanned: 1, released: 0 });
     expectHoldUntouched(h, "native", "return-op");
@@ -108,20 +108,20 @@ describe("native return hold reaper", () => {
   it.each(["pending", "running"])("keeps the hold while the return operation is %s", async (status) => {
     const h = harness({
       gateways: { native: heldGateway("builder-return-native") },
-      operations: { "builder-return-native": { kind: "migrate-customer", status } },
+      operations: { "builder-return-native": { kind: "migrate-user", status } },
     });
     expect(await runNativeReturnHoldReaperTick(h.deps)).toEqual({ scanned: 1, released: 0 });
     expectHoldUntouched(h, "native", "builder-return-native");
   });
 
-  it.each([{ kind: "migrate-customer" }, { kind: "migrate-customer", status: 7 }])(
+  it.each([{ kind: "migrate-user" }, { kind: "migrate-user", status: 7 }])(
     "keeps the hold and logs when the return operation record is malformed (%o), still sweeping other gateways",
     async (operation) => {
       const h = harness({
         gateways: { broken: heldGateway("builder-return-broken"), native: heldGateway("builder-return-native") },
         operations: {
           "builder-return-broken": operation,
-          "builder-return-native": { kind: "migrate-customer", status: "failed" },
+          "builder-return-native": { kind: "migrate-user", status: "failed" },
         },
       });
       expect(await runNativeReturnHoldReaperTick(h.deps)).toEqual({ scanned: 2, released: 1 });
@@ -135,8 +135,8 @@ describe("native return hold reaper", () => {
     const h = harness({
       gateways: { broken: heldGateway("builder-return-broken"), native: heldGateway("builder-return-native") },
       operations: {
-        "builder-return-broken": { kind: "migrate-customer", status: "failed" },
-        "builder-return-native": { kind: "migrate-customer", status: "failed" },
+        "builder-return-broken": { kind: "migrate-user", status: "failed" },
+        "builder-return-native": { kind: "migrate-user", status: "failed" },
       },
     });
     delete h.docs["glmGateways/broken"].lifecycle;
@@ -161,7 +161,7 @@ describe("native return hold reaper", () => {
   it("re-checks the hold inside the transaction and leaves a hold that moved to another operation", async () => {
     const h = harness({
       gateways: { native: heldGateway("builder-return-native") },
-      operations: { "builder-return-native": { kind: "migrate-customer", status: "failed" } },
+      operations: { "builder-return-native": { kind: "migrate-user", status: "failed" } },
     });
     const original = h.store.transaction.bind(h.store);
     vi.spyOn(h.store, "transaction").mockImplementation(((options: never, body: never) => {
@@ -177,7 +177,7 @@ describe("native return hold reaper", () => {
     const h = harness({
       gateways: { native: heldGateway("builder-return-native") },
       operations: {
-        "builder-return-native": { kind: "migrate-customer", status: "failed" },
+        "builder-return-native": { kind: "migrate-user", status: "failed" },
         "native-return-hold-release-native-builder-return-native": { status: "succeeded", createdAt: 1 },
       },
     });
@@ -189,7 +189,7 @@ describe("native return hold reaper", () => {
   it("falls back to the registry when the fleetRegistry mirror is stale", async () => {
     const h = harness({
       gateways: { native: heldGateway("builder-return-native") },
-      operations: { "builder-return-native": { kind: "migrate-customer", status: "failed" } },
+      operations: { "builder-return-native": { kind: "migrate-user", status: "failed" } },
       mirrorStale: true,
     });
     expect(await runNativeReturnHoldReaperTick(h.deps)).toEqual({ scanned: 1, released: 1 });
@@ -199,7 +199,7 @@ describe("native return hold reaper", () => {
   it("fails the whole tick on one malformed runtime record while the fleetRegistry mirror is stale", async () => {
     const h = harness({
       gateways: { native: heldGateway("builder-return-native") },
-      operations: { "builder-return-native": { kind: "migrate-customer", status: "failed" } },
+      operations: { "builder-return-native": { kind: "migrate-user", status: "failed" } },
       mirrorStale: true,
     });
     h.docs["glmGateways/broken"] = { docKind: "runtime", gatewayId: "other" };
@@ -231,7 +231,7 @@ describe("native return hold reaper", () => {
   });
 
   it("releases a proven uncommitted rollback while the source remains its owner's assigned runtime", async () => {
-    const h = harness({ gateways: { native: heldGateway("return-op") }, operations: { "return-op": { kind: "migrate-customer", status: "rolled-back", input: { uid: "alice", fromGatewayId: "native" } } } });
+    const h = harness({ gateways: { native: heldGateway("return-op") }, operations: { "return-op": { kind: "migrate-user", status: "rolled-back", input: { uid: "alice", fromGatewayId: "native" } } } });
     h.docs["gateways/native"].desiredStatus = "running";
     h.docs["users/alice"] = { provisioning: { openclaw: { gatewayId: "native" } } };
     h.vm.describe.mockResolvedValue({ status: "RUNNING", instanceId: "vm-1" });

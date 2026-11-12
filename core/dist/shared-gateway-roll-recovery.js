@@ -53,7 +53,7 @@ function targetRosterIsServing(assignments, runtime) {
 }
 function activeMigrationTargetsGateway(operations, gatewayId) {
     return operations.some((operation) => {
-        if (operation.kind !== "migrate-customer")
+        if (operation.kind !== "migrate-user")
             return false;
         const input = operation.input;
         const migration = operation.customerMigrationV2;

@@ -284,7 +284,7 @@ describe("assignment roster state + epoch (migration plane)", () => {
       uid: "u1",
       slug: "s1",
       gatewayId: "default",
-      source: "migrate-customer",
+      source: "migrate-user",
       state: "serving",
       epoch: 3,
       updatedAt: 1,

@@ -24,7 +24,7 @@ import type { PlatformUserRecord } from "./platform-state/users.js";
 export const OPERATOR_ISOLATED_GATEWAY_SOURCE = "operator-isolated-gateway";
 
 const OPERATOR_ALLOCATION_ID_PREFIX = "operator-";
-const MIGRATE_USER_KIND = "migrate-customer";
+const MIGRATE_USER_KIND = "migrate-user";
 const RETIRE_GATEWAY_KIND = "retire-gateway";
 const CLEAR = { clear: true } as const;
 const ISOLATED_ALLOCATION_KIND = "disposable-builder";
@@ -289,13 +289,13 @@ export async function isolatedGatewayRetireRefusal(
         code: "isolated-gateway-forced-return-undecided",
         error: "a forced return is not offered yet; park the gateway, replace its VM, resume it, then return the user",
         gatewayId,
-        assignedCustomers: assignments.map((assignment) => assignment.slug),
+        assignedUsers: assignments.map((assignment) => assignment.slug),
       }
     : {
         code: "isolated-gateway-has-user",
         error: "return the user to a shared gateway first",
         gatewayId,
-        assignedCustomers: assignments.map((assignment) => assignment.slug),
+        assignedUsers: assignments.map((assignment) => assignment.slug),
       };
 }
 

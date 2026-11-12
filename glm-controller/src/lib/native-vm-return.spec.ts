@@ -13,7 +13,7 @@ function harness() {
     "gateways/native": { gatewayId: "native", gatewayClass: "builder", ownerUid: "alice-id", builderSlug: "alice", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 },
     "gateways/shared": { gatewayId: "shared", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 },
     "users/alice-id": { provisioning: { openclaw: { gatewayId: "native" } } },
-    "glmOperations/return-1": { kind: "migrate-customer", status: "running", startedAt: 900, input: { uid: "alice-id", fromGatewayId: "native", toGatewayId: "shared" } },
+    "glmOperations/return-1": { kind: "migrate-user", status: "running", startedAt: 900, input: { uid: "alice-id", fromGatewayId: "native", toGatewayId: "shared" } },
   };
   const documents = fixtureDocumentsAt(docs);
   const update = vi.fn();
@@ -183,9 +183,9 @@ describe("native computer return checkpoint", () => {
     h.source.vmHome = { returnOperationId: "return-1", checkpointRequestedAt: 1000,
       parkRequestedAt: 1000, checkpointAcknowledgedAt: 1000,
       lastCheckpoint: { completedAt: 1001, instanceId: "vm-id" } };
-    h.docs["glmOperations/return-1"] = { kind: "migrate-customer", status: "running", startedAt: 900, cutoverCommittedAt: 1002,
+    h.docs["glmOperations/return-1"] = { kind: "migrate-user", status: "running", startedAt: 900, cutoverCommittedAt: 1002,
       input: { uid: "alice-id", fromGatewayId: "native", toGatewayId: "shared" } };
-    h.docs["gateways/shared/assignments/alice-id"] = { uid: "alice-id", gatewayId: "shared", slug: "alice", source: "migrate-customer", epoch: 1, state: "serving" };
+    h.docs["gateways/shared/assignments/alice-id"] = { uid: "alice-id", gatewayId: "shared", slug: "alice", source: "migrate-user", epoch: 1, state: "serving" };
   }
 
   it("releases the writer hold on the committed source while it still runs, so the user can unmount the user", async () => {

@@ -6,14 +6,14 @@ function fixture() {
   const migrationId = 'mig-builder-activate-builder-a-g1:scheduler:1:claim:1000';
   const gateway = { gatewayId: 'builder-a', gatewayClass: 'builder', ownerUid: 'alice', builderSlug: 'alice', desiredStatus: 'running', liveRelease: 1, desiredRelease: 2, latestRelease: 2,
     allocation: { kind: 'disposable-builder', leaseId: 'lease-a', generation: 1, claimedByUid: 'alice' } };
-  const operation = { id: 'builder-activate-builder-a-g1', kind: 'migrate-customer', status: 'pending', startedAt: null,
+  const operation = { id: 'builder-activate-builder-a-g1', kind: 'migrate-user', status: 'pending', startedAt: null,
     input: { uid: 'alice', builderSlug: 'alice', source: 'builder-activation-lease', fromGatewayId: 'shared-a', toGatewayId: 'builder-a', recoverSourceOnly: true },
     schedulerHandoff: { uid: 'alice', slug: 'alice', migrationId, fromGatewayId: 'shared-a', toGatewayId: 'builder-a', stageAfterCutover: true,
       sourceRecovery: { migrationId, sourceEpoch: 7, steps: [{ name: 'quiesce-source', status: 'done' }] } } };
   const lease = { leaseId: 'lease-a', generation: 1, status: 'activating', sourceGatewayId: 'shared-a', sourceAssignmentEpoch: 7, targetGatewayId: 'builder-a' };
   const user = { username: 'alice', provisioning: { openclaw: { gatewayId: 'shared-a', slug: 'alice', activationLease: lease, migration: { state: 'moving', operationId: operation.id, startedAt: 1000 } } } };
   const sourceRoot = { gatewayId: 'shared-a', gatewayClass: 'shared', desiredStatus: 'running', desiredRelease: 3, latestRelease: 3 };
-  const sourceAssignment = { uid: 'alice', slug: 'alice', gatewayId: 'shared-a', source: 'migrate-customer', state: 'quiescing', epoch: 7, updatedByOperationId: operation.id };
+  const sourceAssignment = { uid: 'alice', slug: 'alice', gatewayId: 'shared-a', source: 'migrate-user', state: 'quiescing', epoch: 7, updatedByOperationId: operation.id };
   const snapshot = { gateway, operation, user, sourceRoot, sourceAssignment, targetOccupied: false };
   return { snapshot, gateway, operation, user, lease, sourceRoot, sourceAssignment };
 }

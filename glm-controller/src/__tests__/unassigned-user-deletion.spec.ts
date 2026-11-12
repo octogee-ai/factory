@@ -217,7 +217,7 @@ describe("deleting a user who was unassigned first", () => {
     expect(result).toMatchObject({ success: false, output: { deletionBlocked: { deletionId, step: "erase-agent-stores" } } });
     expect(result.error).toContain("unassigned before deletion");
     const completion = buildOperationCompletionUpdate({
-      op: { kind: "erase-customer", attempts: 0, attemptHistory: [] }, result, steps: [], now: Date.now(),
+      op: { kind: "erase-user", attempts: 0, attemptHistory: [] }, result, steps: [], now: Date.now(),
     });
     expect(completion.status).toBe("failed");
     expect(completion.attemptHistory).toEqual([expect.objectContaining({ classification: "terminal" })]);

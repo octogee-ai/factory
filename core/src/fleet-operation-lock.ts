@@ -13,7 +13,7 @@ export interface FleetOperationLockRef {
 
 const SERIAL_KINDS: ReadonlySet<string> = new Set([
   "rollout",
-  "migrate-customer",
+  "migrate-user",
 ]);
 const ACTIVE_STATUSES: ReadonlySet<string> = new Set(["pending", "running"]);
 const RESOURCE_FIELDS = [
@@ -47,11 +47,11 @@ export function fleetOperationLockResources(
 }
 
 export function serialLockReleasedAfterCutover(operation: FleetOperationLockRef): boolean {
-  return operation.kind === "migrate-customer" && typeof operation.cutoverCommittedAt === "number";
+  return operation.kind === "migrate-user" && typeof operation.cutoverCommittedAt === "number";
 }
 
 function nativeReturnBlocksSourceRollout(rollout: FleetOperationLockRef, returning: FleetOperationLockRef): boolean {
-  if (rollout.kind !== "rollout" || rollout.rolloutLane === "cluster" || returning.kind !== "migrate-customer" ||
+  if (rollout.kind !== "rollout" || rollout.rolloutLane === "cluster" || returning.kind !== "migrate-user" ||
       (returning.status !== undefined && !ACTIVE_STATUSES.has(returning.status))) return false;
   const source = stringFields(returning.input, ["fromGatewayId"])[0];
   const rolloutGateway = stringFields(rollout.input, ["gatewayId"])[0];
@@ -82,7 +82,7 @@ export function findActiveGatewayMigration<T extends FleetOperationLockRef>(
   operations: readonly T[],
 ): T | null {
   return operations.find((operation) =>
-    operation.kind === "migrate-customer" &&
+    operation.kind === "migrate-user" &&
     ACTIVE_STATUSES.has(operation.status ?? "") &&
     fleetOperationLockResources(operation).has(gatewayId)
   ) ?? null;

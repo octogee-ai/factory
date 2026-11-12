@@ -45,7 +45,7 @@ describe("stored isolated class values read the same as builder", () => {
     const roots = createPostgresGatewayRepositories(session).roots;
     await roots.list({ gatewayClass: "builder" });
     await roots.list({ gatewayClass: "shared" });
-    expect(queries.map((query) => query.values[0])).toEqual([["builder", "isolated"], ["shared"]]);
+    expect(queries.map((query) => query.values[0])).toEqual([["isolated", "builder"], ["shared"]]);
     expect(queries[0].sql).toContain("gateway_class = ANY(");
   });
 });

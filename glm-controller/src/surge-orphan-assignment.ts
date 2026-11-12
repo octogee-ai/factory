@@ -54,7 +54,7 @@ async function pruneOne(input: {
     await tx.gateways.assignments.delete(gatewayId, assignment.uid, { epoch: stored.epoch, updatedAt: stored.updatedAt });
     await tx.journal.operations.create({
       id,
-      kind: "deprovision-customer",
+      kind: "deprovision-user",
       status: "succeeded",
       origin: "automatic",
       createdBy: "surge-handoff-orphan-repair",

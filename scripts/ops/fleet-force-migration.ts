@@ -85,7 +85,7 @@ async function assertNoCompetingCustody(tx: PlatformStateTransaction, target: Fo
     customerMigrationV2: operation.customerMigrationV2,
   }));
   if ([target.fromGatewayId, target.toGatewayId].some((id) => findActiveGatewayMigration(id, operations)) ||
-    operations.some((op) => op.kind === "migrate-customer" && record(op.input).uid === target.uid)) {
+    operations.some((op) => op.kind === "migrate-user" && record(op.input).uid === target.uid)) {
     throw new Error("force migration is blocked by another running migration");
   }
   if (owned) await assertSourceUsersUnfenced(tx, target.fromGatewayId);
@@ -95,7 +95,7 @@ async function assertNoCompetingCustody(tx: PlatformStateTransaction, target: Fo
 
 function assertPendingDrain(op: Record<string, unknown>, target: ForceMigrationTarget, owned?: OwnedMigrationRestart): void {
   const input = record(op.input);
-  if (op.kind !== "migrate-customer" || op.status !== "pending" || op.startedAt !== null || op.completedAt !== null ||
+  if (op.kind !== "migrate-user" || op.status !== "pending" || op.startedAt !== null || op.completedAt !== null ||
     input.uid !== target.uid || input.fromGatewayId !== target.fromGatewayId || input.toGatewayId !== target.toGatewayId) {
     throw new Error("force migration requires the exact pending unclaimed operation");
   }

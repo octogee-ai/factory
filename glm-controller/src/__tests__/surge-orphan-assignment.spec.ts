@@ -31,7 +31,7 @@ function runtime(now: number, mountedCustomers: string[]): Data {
 }
 
 function storedAssignment(value: SurgeAssignment): Data {
-  return { ...value, gatewayId: "shared-a", source: "migrate-customer", createdAt: 1, updatedAt: 1 };
+  return { ...value, gatewayId: "shared-a", source: "migrate-user", createdAt: 1, updatedAt: 1 };
 }
 
 function seeded(seed: Record<string, Data>) {
@@ -98,7 +98,7 @@ describe("surge orphan assignment repair", () => {
     expect(documents.has(orphanPath)).toBe(false);
     expect(documents.get(validPath)).toMatchObject({ slug: "alice" });
     expect(documents.get(journalPath)).toMatchObject({
-      kind: "deprovision-customer",
+      kind: "deprovision-user",
       status: "succeeded",
       origin: "automatic",
       input: {

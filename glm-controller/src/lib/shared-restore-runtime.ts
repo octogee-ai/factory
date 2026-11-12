@@ -57,7 +57,7 @@ function claimMatches(current: OperationRecord | undefined, op: Operation): bool
     isDeepStrictEqual(current.input, op.input);
 }
 function returnedAwaitsRestore(returned: RecordValue): boolean {
-  return returned.kind === 'migrate-customer' && ['pending', 'failed'].includes(returned.status) && returned.cancellationRequestedAt === undefined &&
+  return returned.kind === 'migrate-user' && ['pending', 'failed'].includes(returned.status) && returned.cancellationRequestedAt === undefined &&
     returned.cutoverCommittedAt > 0 && Number.isFinite(returned.cutoverCommittedAt);
 }
 function receiptMatches(receipt: RecordValue, fence: RecordValue, input: Recovery, gatewayId: string): boolean {
@@ -128,7 +128,7 @@ function pristineQueuedMigration(row: RecordValue): boolean {
 }
 function competingMigration(id: string, row: RecordValue, operationId: string, gatewayId: string): boolean {
   const input = object(row.input);
-  return id !== operationId && row.kind === 'migrate-customer' && [input.fromGatewayId, input.toGatewayId].includes(gatewayId) &&
+  return id !== operationId && row.kind === 'migrate-user' && [input.fromGatewayId, input.toGatewayId].includes(gatewayId) &&
     !pristineQueuedMigration(row);
 }
 

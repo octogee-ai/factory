@@ -17,7 +17,7 @@ interface UserDeletionPlanInput {
 }
 
 function operationRecord(input: {
-  kind: "suspend-customer" | "erase-customer";
+  kind: "suspend-user" | "erase-user";
   operationId: string;
   deletionId: string;
   uid: string;
@@ -71,7 +71,7 @@ export function buildUserDeletionPlan(input: UserDeletionPlanInput): {
       productContext: input.productContext,
     },
     suspensionOperation: operationRecord({
-      kind: "suspend-customer",
+      kind: "suspend-user",
       operationId: input.suspensionOperationId,
       deletionId: input.deletionId,
       uid: input.uid,
@@ -79,7 +79,7 @@ export function buildUserDeletionPlan(input: UserDeletionPlanInput): {
       createdAt: input.requestedAt,
     }),
     erasureOperation: operationRecord({
-      kind: "erase-customer",
+      kind: "erase-user",
       operationId: input.erasureOperationId,
       deletionId: input.deletionId,
       uid: input.uid,

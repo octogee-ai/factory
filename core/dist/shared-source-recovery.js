@@ -74,7 +74,7 @@ function ownedSourceFence(root, ownerId, assignments) {
         isDeepStrictEqual(target?.agents, assignments.map(({ uid, slug, agentId, assignmentEpoch }) => ({ uid, slug, agentId, assignmentEpoch }))));
 }
 function pristineOutbound(row, gatewayId, sourceUids) {
-    return [row.kind === "migrate-customer", row.status === "pending", row.origin === "automatic",
+    return [row.kind === "migrate-user", row.status === "pending", row.origin === "automatic",
         row.createdBy === "glm-controller-placement-policy", row.startedAt === null, row.completedAt === null,
         row.attempts === undefined || row.attempts === 0, Array.isArray(row.steps) && row.steps.length === 0,
         row.attemptHistory === undefined || (Array.isArray(row.attemptHistory) && row.attemptHistory.length === 0),

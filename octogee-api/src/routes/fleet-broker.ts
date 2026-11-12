@@ -2230,7 +2230,7 @@ async function migrationSourceGatewayId(store: PlatformStateRepositories, req: R
   const migrationId: unknown = req.body?.migration?.migrationId ?? req.body?.migrationId;
   if (typeof migrationId !== "string" || !/^mig-[a-zA-Z0-9_-]+$/.test(migrationId)) return undefined;
   const operation = await store.journal.operations.get(migrationId.slice(4));
-  return operation?.kind === "migrate-customer" ? operation.input.fromGatewayId : undefined;
+  return operation?.kind === "migrate-user" ? operation.input.fromGatewayId : undefined;
 }
 
 async function requireMigratingAgentAnchorScope(

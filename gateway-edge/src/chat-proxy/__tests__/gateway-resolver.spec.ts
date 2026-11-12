@@ -98,7 +98,7 @@ function servingAssignment(
     uid,
     slug: 'alice',
     gatewayId,
-    source: 'migrate-customer',
+    source: 'migrate-user',
     state: 'serving',
     epoch: 1,
     updatedAt: 1,

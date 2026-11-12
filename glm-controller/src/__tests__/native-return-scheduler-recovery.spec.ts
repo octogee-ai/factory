@@ -8,7 +8,7 @@ const target = "shared-new", oldTarget = "shared-old", operationId = `builder-re
 const oldOperation = `builder-return-${oldSource}-g3`, heldBy = `mig-${oldOperation}:scheduler:1:claim:100`;
 
 function fixture() {
-  const op = { kind: "migrate-customer", origin: "automatic", createdBy: "glm-controller-placement-policy", inputUid: uid,
+  const op = { kind: "migrate-user", origin: "automatic", createdBy: "glm-controller-placement-policy", inputUid: uid,
     gatewayId: target, status: "running", startedAt: 500,
     input: { uid, builderSlug: slug, fromGatewayId: source, toGatewayId: target, source: "builder-activation-lease" },
     schedulerHandoff: { uid, slug, fromGatewayId: source, toGatewayId: target, migrationId: `mig-${operationId}:scheduler:1:claim:500` },
@@ -25,7 +25,7 @@ function fixture() {
     desiredRelease: 1, liveRelease: 1, latestRelease: 1,
     allocation: { kind: "disposable-builder", claimedByUid: uid, leaseId: "lease4", generation: 4 } };
   const assignment = { uid, slug, gatewayId: source, epoch: 7, state: "quiescing", updatedByOperationId: operationId,
-    source: "migrate-customer", createdAt: 10, updatedAt: 500 };
+    source: "migrate-user", createdAt: 10, updatedAt: 500 };
   const vm = { instanceName: "vm-alice", instanceId: "1234", zone: "us-central1-a", internalIp: "10.0.0.4", status: "RUNNING" };
   const records: Record<string, Record<string, unknown>> = {
     [`users/${uid}`]: { username: slug, provisioning: { openclaw, homeDisk: { id: "4321", source: "home-alice" } } },

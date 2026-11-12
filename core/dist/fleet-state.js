@@ -7,7 +7,7 @@ import { userMigrationV2GatewayRootFenceEqual, userMigrationV2GatewayRootFenceMa
 import { builderActivateOperationId, withCurrentSizingKey, } from "./user-activation-lease.js";
 import { gatewayAuthorizationFromRootDocument } from "./gateway-live-release.js";
 import { MalformedRecordError } from "./platform-state/index.js";
-const MIGRATE_USER_OPERATION_KIND = "migrate-customer";
+const MIGRATE_USER_OPERATION_KIND = "migrate-user";
 const CLEAR = { clear: true };
 function nowMs(deps) {
     return deps.now ? deps.now().getTime() : Date.now();
@@ -69,7 +69,7 @@ export async function setWorkspaceMigrationPhase(deps, params) {
             ? input.toGatewayId : params.sourceGatewayId;
         const exact = [
             user !== null, stored !== null,
-            operation.kind === "migrate-customer", operation.status === "running",
+            operation.kind === "migrate-user", operation.status === "running",
             operation.cancellationRequestedAt === undefined || migrationCancellationDeferred(operation, params.operationId), input.uid === params.uid,
             input.fromGatewayId === params.sourceGatewayId, user?.gateway?.gatewayId === expectedGateway,
             !prior?.operationId || prior.operationId === params.operationId,
@@ -466,7 +466,7 @@ function userRestoreOperationCurrent(operation, input) {
     const operationInput = recordOrEmpty(operation.input);
     const handoff = recordOrEmpty(operation.schedulerHandoff);
     return [
-        operation.kind === "migrate-customer", operation.status === "running",
+        operation.kind === "migrate-user", operation.status === "running",
         operation.startedAt === input.claimStartedAt,
         operation.cancellationRequestedAt === undefined || migrationCancellationDeferred(operation, input.operationId),
         operationInput.uid === input.uid, operationInput.toGatewayId === input.gatewayId,

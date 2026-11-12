@@ -53,7 +53,7 @@ describe("resumeOrphanedRunningOps", () => {
   it("skips non-resumable running kinds (migrate-customer sub-ops, add-gateway) — the rollout re-drive re-issues those", async () => {
     const redrive = vi.fn(async () => undefined);
     const ops: FakeOpDoc[] = [
-      { id: "op-mig", data: { status: "running", kind: "migrate-customer" } },
+      { id: "op-mig", data: { status: "running", kind: "migrate-user" } },
       { id: "op-add", data: { status: "running", kind: "add-gateway" } },
     ];
     const result = await resumeOrphanedRunningOps({
@@ -71,18 +71,18 @@ describe("resumeOrphanedRunningOps", () => {
       id: "op-v2",
       data: {
         status: "running",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         customerMigrationV2: { phase: "checkpointed" },
       },
     };
-    const legacy = { id: "op-v1", data: { status: "running", kind: "migrate-customer" } };
+    const legacy = { id: "op-v1", data: { status: "running", kind: "migrate-user" } };
     const redrive = vi.fn(async () => undefined);
 
     await resumeOrphanedRunningOps({
       store: makeStore([active, legacy] as FakeOpDoc[]),
       log: vi.fn(),
-      resumableKinds: new Set(["rollout", "migrate-customer"]),
-      resumableOperation: (op) => op.kind !== "migrate-customer" || !!op.customerMigrationV2,
+      resumableKinds: new Set(["rollout", "migrate-user"]),
+      resumableOperation: (op) => op.kind !== "migrate-user" || !!op.customerMigrationV2,
       redrive,
     });
 
@@ -97,7 +97,7 @@ describe("resumeOrphanedRunningOps", () => {
         id: `op-${phase}`,
         data: {
           status: "running",
-          kind: "migrate-customer",
+          kind: "migrate-user",
           customerMigrationV2: { phase },
         },
       };
@@ -106,7 +106,7 @@ describe("resumeOrphanedRunningOps", () => {
       await resumeOrphanedRunningOps({
         store: makeStore([terminal] as FakeOpDoc[]),
         log: vi.fn(),
-        resumableKinds: new Set(["rollout", "migrate-customer"]),
+        resumableKinds: new Set(["rollout", "migrate-user"]),
         resumableOperation: operationNeedsDurableUserMigrationV2Resume,
         redrive,
       });

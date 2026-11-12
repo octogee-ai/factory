@@ -11,7 +11,7 @@ export function forceMigrationAssignment(gatewayId: string, uid: string, slug: s
 export function forceMigrationHarness() {
   const docs = new Map<string, Record<string, any>>([
     ["glmOperations/move-1", {
-      kind: "migrate-customer", status: "pending", createdAt: 0, startedAt: null, completedAt: null,
+      kind: "migrate-user", status: "pending", createdAt: 0, startedAt: null, completedAt: null,
       input: { uid: "u1", fromGatewayId: "builder-a", toGatewayId: "shared-b", source: "placement" },
       attempts: 3, firstStartedAt: 100, nextAttemptAt: 9000, lastProgressAt: 450, steps: [],
       attemptHistory: [{ attempt: 3, startedAt: 400, completedAt: 450, error: "sessions.list UNAVAILABLE", steps: [

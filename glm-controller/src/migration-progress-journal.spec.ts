@@ -9,7 +9,7 @@ const event: MigrationProgressRecord = {
 
 function claimed(startedAt: number | null = 4_000): Operation {
   return {
-    id: "op-1", kind: "migrate-customer", status: "running", createdBy: "admin", createdAt: 1_000, startedAt, completedAt: null,
+    id: "op-1", kind: "migrate-user", status: "running", createdBy: "admin", createdAt: 1_000, startedAt, completedAt: null,
     input: { uid: "u1", toGatewayId: "shared-1" }, steps: [],
   };
 }

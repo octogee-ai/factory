@@ -31,8 +31,8 @@ describe('sizing-tier SSOT', () => {
       expect(preset.resources.limits.memory).toMatch(/^\d+Gi$/);
       expect(preset.nodejs.uvThreadpoolSize).toMatch(/^\d+$/);
       expect(preset.nodejs.maxOldSpaceSizeMb).toMatch(/^\d+$/);
-      expect(preset.capacity.targetActiveBuilders).toBeGreaterThan(0);
-      expect(preset.capacity.typicalBuilders).toBeGreaterThanOrEqual(preset.capacity.targetActiveBuilders);
+      expect(preset.capacity.targetActiveUsers).toBeGreaterThan(0);
+      expect(preset.capacity.typicalUsers).toBeGreaterThanOrEqual(preset.capacity.targetActiveUsers);
     }
   });
 
@@ -79,7 +79,7 @@ describe('sizing-tier SSOT', () => {
     expect(TIER_PRESETS.s.resources.requests.cpu).toBe('2000m');
     expect(TIER_PRESETS.s.resources.requests.memory).toBe('8Gi');
     expect(TIER_PRESETS.s.nodejs.maxOldSpaceSizeMb).toBe('3072');
-    expect(TIER_PRESETS.s.capacity.targetActiveBuilders).toBe(1);
+    expect(TIER_PRESETS.s.capacity.targetActiveUsers).toBe(1);
   });
 });
 

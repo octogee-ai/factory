@@ -40,7 +40,7 @@ import type {
   Stored,
 } from "./platform-state/index.js";
 
-const MIGRATE_USER_OPERATION_KIND = "migrate-customer" as const;
+const MIGRATE_USER_OPERATION_KIND = "migrate-user" as const;
 const CLEAR = { clear: true } as const;
 
 type Data = Record<string, unknown>;
@@ -131,7 +131,7 @@ export async function setWorkspaceMigrationPhase(
       ? input.toGatewayId : params.sourceGatewayId;
     const exact = [
       user !== null, stored !== null,
-      operation.kind === "migrate-customer", operation.status === "running",
+      operation.kind === "migrate-user", operation.status === "running",
       operation.cancellationRequestedAt === undefined || migrationCancellationDeferred(operation, params.operationId), input.uid === params.uid,
       input.fromGatewayId === params.sourceGatewayId, user?.gateway?.gatewayId === expectedGateway,
       !prior?.operationId || prior.operationId === params.operationId,
@@ -604,7 +604,7 @@ function userRestoreOperationCurrent(operation: Data, input: UserRestoreInput): 
   const operationInput = recordOrEmpty(operation.input);
   const handoff = recordOrEmpty(operation.schedulerHandoff);
   return [
-    operation.kind === "migrate-customer", operation.status === "running",
+    operation.kind === "migrate-user", operation.status === "running",
     operation.startedAt === input.claimStartedAt,
     operation.cancellationRequestedAt === undefined || migrationCancellationDeferred(operation, input.operationId),
     operationInput.uid === input.uid, operationInput.toGatewayId === input.gatewayId,

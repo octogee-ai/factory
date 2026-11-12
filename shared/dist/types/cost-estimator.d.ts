@@ -9,8 +9,8 @@ export interface GatewayMonthlyCost {
     onDemandComputeUsd: number;
     savingsUsd: number;
     pricingMode: GatewayPricingMode;
-    perBuilderAtTarget: number;
-    perBuilderAtTypical: number;
+    perUserAtTarget: number;
+    perUserAtTypical: number;
 }
 export interface FleetMonthlyCost {
     totalUsd: number;

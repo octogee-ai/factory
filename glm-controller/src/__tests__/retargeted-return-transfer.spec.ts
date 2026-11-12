@@ -13,7 +13,7 @@ function fixture() {
     targetGatewayId: retired, status: "succeeded", attempt: 1, attemptId: "old-attempt",
     createdAt: 90, updatedAt: 100, startedAt: 90, completedAt: 100 };
   const op = {
-    kind: "migrate-customer", status: "running", origin: "automatic", createdBy: "glm-controller-placement-policy",
+    kind: "migrate-user", status: "running", origin: "automatic", createdBy: "glm-controller-placement-policy",
     createdAt: 80, startedAt: 500, inputUid: "uid-alice", gatewayId: target,
     input: { uid: "uid-alice", builderSlug: "alice", fromGatewayId: source, toGatewayId: target, source: "builder-activation-lease" },
     nativeReturnSourceRecoveryReceipts: [{ uid: "uid-alice", slug: "alice", operationId, sourceGatewayId: source,

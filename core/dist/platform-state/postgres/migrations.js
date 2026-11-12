@@ -1034,6 +1034,54 @@ ALTER TABLE model_broker_gateway_tokens
   ADD CONSTRAINT model_broker_gateway_tokens_provider_check
   CHECK (provider IN ('anthropic', 'vertex', 'openrouter', 'openai', 'meta'));
 `;
+const NEUTRAL_STORED_NAMES = String.raw `
+ALTER TABLE operations DROP CONSTRAINT operations_kind_check;
+ALTER TABLE operations ADD CONSTRAINT operations_kind_check CHECK (kind IN (
+  'add-gateway','gateway-vm','migrate-user','retire-gateway','restart-gateway','recycle-gateway','scale-shared-member',
+  'rollout','deprovision-user','suspend-user','erase-user',
+  'migrate-customer','deprovision-customer','suspend-customer','erase-customer'));
+UPDATE operations SET kind = CASE kind
+    WHEN 'migrate-customer' THEN 'migrate-user'
+    WHEN 'deprovision-customer' THEN 'deprovision-user'
+    WHEN 'suspend-customer' THEN 'suspend-user'
+    WHEN 'erase-customer' THEN 'erase-user'
+  END
+  WHERE kind IN ('migrate-customer','deprovision-customer','suspend-customer','erase-customer');
+
+ALTER TABLE gateway_assignments DROP CONSTRAINT gateway_assignments_source_check;
+ALTER TABLE gateway_assignments ADD CONSTRAINT gateway_assignments_source_check
+  CHECK (source IN ('onboarding','migrate-user','repair','migrate-customer'));
+UPDATE gateway_assignments SET source = 'migrate-user' WHERE source = 'migrate-customer';
+
+UPDATE operation_audits SET mutation = jsonb_set(mutation, '{kind}', to_jsonb(CASE mutation ->> 'kind'
+    WHEN 'assign-customer' THEN 'assign-user'
+    WHEN 'unassign-customer' THEN 'unassign-user'
+    WHEN 'give-isolated-gateway' THEN 'move-to-isolated-gateway'
+    WHEN 'schedule-customer-deletion' THEN 'schedule-user-deletion'
+    WHEN 'accelerate-customer-erasure' THEN 'accelerate-user-erasure'
+    WHEN 'park-builder' THEN 'park-user'
+    WHEN 'place-builder' THEN 'place-user'
+  END))
+  WHERE mutation ->> 'kind' IN ('assign-customer','unassign-customer','give-isolated-gateway','schedule-customer-deletion',
+    'accelerate-customer-erasure','park-builder','place-builder');
+UPDATE operation_audits SET what = 'move user to an isolated gateway' WHERE what = 'give user an isolated gateway';
+
+ALTER TABLE gateways DROP CONSTRAINT gateways_profile_check;
+ALTER TABLE gateways DROP CONSTRAINT gateways_gateway_class_check;
+ALTER TABLE gateways DROP CONSTRAINT gateways_image_profile_check;
+ALTER TABLE gateways ADD CONSTRAINT gateways_profile_check CHECK (profile IN ('standard','isolated','builder'));
+ALTER TABLE gateways ADD CONSTRAINT gateways_gateway_class_check CHECK (gateway_class IN ('shared','isolated','builder'));
+ALTER TABLE gateways ADD CONSTRAINT gateways_image_profile_check CHECK (image_profile IN ('standard','isolated','builder'));
+UPDATE gateways SET
+    profile = CASE WHEN profile = 'builder' THEN 'isolated' ELSE profile END,
+    gateway_class = CASE WHEN gateway_class = 'builder' THEN 'isolated' ELSE gateway_class END,
+    image_profile = CASE WHEN image_profile = 'builder' THEN 'isolated' ELSE image_profile END
+  WHERE 'builder' IN (profile, gateway_class, image_profile);
+
+ALTER TABLE users DROP CONSTRAINT users_gateway_profile_check;
+ALTER TABLE users ADD CONSTRAINT users_gateway_profile_check CHECK (gateway_profile IN ('standard','isolated','builder'));
+UPDATE users SET gateway_profile = 'isolated' WHERE gateway_profile = 'builder';
+`;
 export const PLATFORM_STATE_MIGRATIONS = [
     { version: 1, name: "core-schema", sql: CORE_SCHEMA },
     { version: 2, name: "change-feed", sql: CHANGE_FEED },
@@ -1046,4 +1094,5 @@ export const PLATFORM_STATE_MIGRATIONS = [
     { version: 9, name: "edge-project-and-ticket-state", sql: EDGE_PROJECT_AND_TICKET_STATE },
     { version: 10, name: "runtime-secret-store", sql: RUNTIME_SECRET_STORE },
     { version: 11, name: "meta-broker-provider", sql: META_BROKER_PROVIDER },
+    { version: 12, name: "neutral-stored-names", sql: NEUTRAL_STORED_NAMES },
 ];

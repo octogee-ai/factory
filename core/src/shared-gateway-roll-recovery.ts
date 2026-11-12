@@ -114,7 +114,7 @@ function activeMigrationTargetsGateway(
   gatewayId: string,
 ): boolean {
   return operations.some((operation) => {
-    if (operation.kind !== "migrate-customer") return false;
+    if (operation.kind !== "migrate-user") return false;
     const input: unknown = operation.input;
     const migration: unknown = operation.customerMigrationV2;
     const fields = [

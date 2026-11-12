@@ -1082,7 +1082,7 @@ describe("suspend parking", () => {
     const h = harness({
       "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded }, vmStopOnPark: claimed },
       "gateways/b-x": { gatewayClass: "builder", desiredStatus: "running" },
-      "glmOperations/builder-return-b-x-g1": { kind: "migrate-customer", status: "failed" },
+      "glmOperations/builder-return-b-x-g1": { kind: "migrate-user", status: "failed" },
     });
     await h.runtime.upsertInstance(upsertOpts);
     expect(h.docs["glmGateways/b-x"].vmStopOnPark).toEqual(claimed);
@@ -1107,7 +1107,7 @@ describe("suspend parking", () => {
     const h = harness({
       "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded }, vmStopOnPark: stopOnPark },
       "gateways/b-x": { gatewayClass: "builder", desiredStatus: "paused" },
-      "glmOperations/builder-return-b-x-g2": { kind: "migrate-customer", status: "running" },
+      "glmOperations/builder-return-b-x-g2": { kind: "migrate-user", status: "running" },
     }, {
       describe: vi.fn(async () => current),
       stop: vi.fn(async () => { current = stopped; }),
@@ -1124,7 +1124,7 @@ describe("suspend parking", () => {
     const h = harness({
       "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded }, vmStopOnPark: stopOnPark },
       "gateways/b-x": { gatewayClass: "builder", desiredStatus: "running" },
-      "glmOperations/builder-return-b-x-g2": { kind: "migrate-customer", status: "running" },
+      "glmOperations/builder-return-b-x-g2": { kind: "migrate-user", status: "running" },
     });
     await h.runtime.upsertInstance(upsertOpts);
     expect(h.docs["glmGateways/b-x"].vmStopOnPark).toEqual(stopOnPark);
@@ -1135,7 +1135,7 @@ describe("suspend parking", () => {
       "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "operator" },
         vmStopOnPark: { operationId: "builder-return-b-x-g1", reason: "live source cleanup failed: abandoned" } },
       "gateways/b-x": { gatewayClass: "builder", desiredStatus: "running" },
-      "glmOperations/builder-return-b-x-g1": { kind: "migrate-customer", status: "failed" },
+      "glmOperations/builder-return-b-x-g1": { kind: "migrate-user", status: "failed" },
     }, {
       describe: vi.fn(async () => running).mockResolvedValueOnce(suspended),
       resume: vi.fn(async () => ({ fellBackToStandard: false })),

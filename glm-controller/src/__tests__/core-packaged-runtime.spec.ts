@@ -65,7 +65,7 @@ function cutover(documents: Record<string, Record<string, unknown>>, now: number
     fromGatewayId: "source",
     flipMirror: true,
     assignment: {
-      source: "migrate-customer",
+      source: "migrate-user",
       updatedByOperationId: "op-1",
     },
   });

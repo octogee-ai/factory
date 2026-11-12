@@ -928,7 +928,7 @@ describe("createHttpServer — admin gateway routes", () => {
       paused: 0,
       unreachable: 1,
     });
-    expect(res.body.stats.customersMounted).toBe(2);
+    expect(res.body.stats.usersMounted).toBe(2);
   });
 
   it("reads only operations referenced by the Fleet projection", async () => {
@@ -981,7 +981,7 @@ describe("createHttpServer — admin gateway routes", () => {
     expect(readIds).toContain("activate-alice");
     expect(readIds.filter((id) => id.startsWith("irrelevant-"))).toEqual([]);
     for (const scan of operationScans) expect(scan).not.toHaveBeenCalled();
-    expect(res.body.builderRuntimes).toEqual([
+    expect(res.body.isolatedRuntimes).toEqual([
       expect.objectContaining({
         uid: "uid-alice",
         operationId: "activate-alice",

@@ -58,7 +58,7 @@ describe("synchronous Fleet force migration recovery", () => {
     expect(h.transport.observe).toHaveBeenCalledTimes(1);
     expect(h.docs.get("gateways/builder-a")).not.toHaveProperty("runtimeRestartFence");
     expect(h.op()).toMatchObject({ ...original, nextAttemptAt: 1000, forceDrainRequest: { auditId: result.auditId, completedAt: 1000 } });
-    expect([...h.docs.values()].filter(doc => doc.kind === "migrate-customer")).toHaveLength(1);
+    expect([...h.docs.values()].filter(doc => doc.kind === "migrate-user")).toHaveLength(1);
     await h.run();
     expect(h.transport.dispatch).toHaveBeenCalledTimes(1);
     expect(h.transport.observe).toHaveBeenCalledTimes(1);

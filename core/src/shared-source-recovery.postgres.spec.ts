@@ -12,7 +12,7 @@ const identity: SourceRecoveryAssignment = { uid: "owner", slug: "livefixture", 
 function fixture(migration: "identity" | "database" = "identity") {
   const error = "/finish-rsync-import/shared-new: 500 " + JSON.stringify({ error: "import failed", message:
     `[import:livefixture] agents.create failed for octogee-livefixture-coach (AgentDatabaseMaintenanceRequiredError: Agent ${migration} migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.)` });
-  const row = { kind: "migrate-customer", status: "failed", origin: "automatic", createdBy: "glm-controller-placement-policy", attempts: 1,
+  const row = { kind: "migrate-user", status: "failed", origin: "automatic", createdBy: "glm-controller-placement-policy", attempts: 1,
     startedAt: 100, completedAt: 200, rolledBack: true, error,
     input: { uid: "owner", builderSlug: "livefixture", fromGatewayId: "shared-old", toGatewayId: "shared-new", source: "continuous-placement-policy" },
     schedulerHandoff: { migrationId: "mig-placement:scheduler:1:claim:100", uid: "owner", slug: "livefixture", fromGatewayId: "shared-old", toGatewayId: "shared-new" },

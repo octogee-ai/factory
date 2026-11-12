@@ -41,7 +41,7 @@ function failedActivationHeldSource(operation: Partial<Operation>): boolean {
 
 export function userActivationSourceRecoveryPending(operation: Partial<Operation>): boolean {
   const input = operation.input;
-  return operation.kind === "migrate-customer" && input?.source === "builder-activation-lease" &&
+  return operation.kind === "migrate-user" && input?.source === "builder-activation-lease" &&
     isUserActivateOperationIdFor(operation.id, input.toGatewayId) &&
     typeof input.fromGatewayId === "string" && input.fromGatewayId.startsWith("shared-") &&
     operation.schedulerHandoff?.stageAfterCutover === true && operation.customerMigrationV2 === undefined &&
@@ -110,7 +110,7 @@ function recoverableLegacyScope(operation: Operation & { cancellationRequestedAt
   if (!handoff || typeof input.fromGatewayId !== "string" || typeof input.toGatewayId !== "string") return false;
   const identity = readSchedulerMigrationIdentity(operation.id, handoff.migrationId);
   return [
-    operation.kind === "migrate-customer", operation.customerMigrationV2 === undefined, handoff.forwardRecovery === undefined || releasedUserActivationSourceRecovery(operation),
+    operation.kind === "migrate-user", operation.customerMigrationV2 === undefined, handoff.forwardRecovery === undefined || releasedUserActivationSourceRecovery(operation),
     operation.cutoverCommittedAt === undefined, operation.cancellationRequestedAt === undefined,
     operation.sourceTransferExecution === undefined, input.sourceTransferMode === undefined,
     Array.isArray(operation.steps),
@@ -189,7 +189,7 @@ export async function rearmOwnedLegacyMigration(input: {
 }): Promise<boolean> {
   return input.store.transaction({ label: "legacy-migration-recovery.rearm" }, async (tx) => {
     const operation = await tx.journal.operations.get(input.operationId);
-    if (!operation || operation.kind !== "migrate-customer" || !operation.input ||
+    if (!operation || operation.kind !== "migrate-user" || !operation.input ||
         !input.admitted(operation) || !recoverableLegacyScope(operation)) return false;
     if (operation.input.recoverSourceOnly === true && operation.schedulerHandoffReleased === true) return false;
     const { uid, fromGatewayId, toGatewayId } = operation.input as { uid: string; fromGatewayId: string; toGatewayId: string };

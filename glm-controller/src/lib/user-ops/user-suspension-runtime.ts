@@ -40,7 +40,7 @@ function migrationNeedsCancellationRequest(operation: OperationRecord): boolean 
 
 function ownedLiveMigration(operation: Stored<OperationRecord> | null, uid: string): operation is Stored<OperationRecord> {
   return operation !== null &&
-    operation.kind === "migrate-customer" &&
+    operation.kind === "migrate-user" &&
     migrationOwnerUid(operation) === uid &&
     (operation.status === "pending" || operation.status === "running");
 }

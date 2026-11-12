@@ -17,6 +17,7 @@ import type {
 } from "../operations.js";
 import type { Page, PageRequest, Stored } from "../store.js";
 import { GATEWAY_RECOVERY_RECEIPTS_TABLE, OPERATION_AUDITS_TABLE, OPERATIONS_TABLE } from "./journal-tables.js";
+import { currentAuditMutation, currentOperationKind, operationKindsStoredAs } from "./legacy-stored-names.js";
 import {
   deleteRecord,
   equalsFence,
@@ -50,11 +51,13 @@ const ACTION_CLAIM_ID = columnFor(OPERATION_AUDITS_TABLE, operationKey(""), "act
 const ACTION_STARTED_AT = columnFor(OPERATION_AUDITS_TABLE, operationKey(""), "actionStartedAt");
 
 export function decodeOperation(row: Row): Stored<OperationRecord> {
-  return decodeStored<OperationRecord>(OPERATIONS_TABLE, row);
+  const operation = decodeStored<OperationRecord>(OPERATIONS_TABLE, row);
+  return { ...operation, kind: currentOperationKind(operation.kind) } as Stored<OperationRecord>;
 }
 
 export function decodeOperationAudit(row: Row): Stored<OperationAuditRow> {
-  const audit = decodeStored<OperationAuditRow>(OPERATION_AUDITS_TABLE, row);
+  const stored = decodeStored<OperationAuditRow>(OPERATION_AUDITS_TABLE, row);
+  const audit = { ...stored, mutation: currentAuditMutation(stored.mutation) };
   if (!isOperationAuditRecord(audit)) {
     throw new MalformedRecordError({ aggregate: "operation-audit", key: String(row.id) }, "fails the operation audit schema");
   }
@@ -121,13 +124,14 @@ function createOperationsRepository(session: PostgresSession): OperationsReposit
       const parameters = new SqlParameters();
       const conditions = [`input_uid = ${parameters.add(uid, "text")}`];
       if (filter.statuses !== undefined) conditions.push(`status = ANY(${parameters.add([...filter.statuses], "text[]")})`);
-      if (filter.kind !== undefined) conditions.push(`kind = ${parameters.add(filter.kind, "text")}`);
+      if (filter.kind !== undefined) conditions.push(`kind = ANY(${parameters.add(operationKindsStoredAs(filter.kind), "text[]")})`);
       return list("journal.operations.listForUid", conditions.join(" AND "), parameters.values);
     },
 
     listByKind(kind: OperationKind, statuses?: readonly OperationStatus[]) {
-      if (statuses === undefined) return list("journal.operations.listByKind", "kind = $1::text", [kind]);
-      return list("journal.operations.listByKind", "kind = $1::text AND status = ANY($2::text[])", [kind, [...statuses]]);
+      const kinds = operationKindsStoredAs(kind);
+      if (statuses === undefined) return list("journal.operations.listByKind", "kind = ANY($1::text[])", [kinds]);
+      return list("journal.operations.listByKind", "kind = ANY($1::text[]) AND status = ANY($2::text[])", [kinds, [...statuses]]);
     },
 
     listReferencingUid(uid) {

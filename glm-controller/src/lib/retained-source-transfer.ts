@@ -25,7 +25,7 @@ const PROBE = `const fs=require('fs');const m=fs.readFileSync('/proc/meminfo','u
 
 function retainedSourceCancellationDeferred(context: RetainedSourceContext, fresh: OperationRecord | null): boolean {
   const {op,state}=context;
-  return [fresh?.kind==='migrate-customer',state.operationId===op.id,
+  return [fresh?.kind==='migrate-user',state.operationId===op.id,
     fresh?.input?.sourceTransferMode==='retained-pod',fresh?.input?.uid===state.uid,
     fresh?.input?.fromGatewayId===state.sourceGatewayId,fresh?.input?.toGatewayId===state.targetGatewayId,
     isUserMigrationV2ForwardOnly(state),isDeepStrictEqual(fresh?.customerMigrationV2,state)].every(Boolean);
@@ -38,7 +38,7 @@ export function assertRetainedSourceAuthority(input: RetainedSourceContext, fres
   const durable = fresh.customerMigrationV2;
   if (!durable) throw new Error('retained source transfer has no durable migration');
   const exact = user !== null && assignment !== null && root !== null && target !== null && [
-    fresh.kind === 'migrate-customer', fresh.status === 'running', fresh.startedAt === op.startedAt,
+    fresh.kind === 'migrate-user', fresh.status === 'running', fresh.startedAt === op.startedAt,
     fresh.input.sourceTransferMode === 'retained-pod', fresh.input.uid === state.uid,
     fresh.input.fromGatewayId === state.sourceGatewayId, fresh.input.toGatewayId === state.targetGatewayId,
     fresh.cancellationRequestedAt === undefined || retainedSourceCancellationDeferred(input,fresh), !isolatedRuntimeMutationFenced(user),

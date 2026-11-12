@@ -158,7 +158,7 @@ function sharedSurgeUserCurrent(user: Stored<PlatformUserRecord> | null, { gatew
 
 function migrationOperationCurrent(operation: StoredFields, input: StoredFields, gatewayId: string, operationId: string): boolean {
   return [
-    operation.kind === "migrate-customer", operation.status === "running",
+    operation.kind === "migrate-user", operation.status === "running",
     operation.cancellationRequestedAt === undefined || migrationCancellationDeferred(operation, operationId),
     operation.cutoverCommittedAt === undefined, Number.isSafeInteger(operation.startedAt), operation.startedAt > 0,
     validDocumentId(input.uid), validDocumentId(input.fromGatewayId), validDocumentId(input.toGatewayId),

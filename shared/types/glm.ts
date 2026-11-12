@@ -674,15 +674,15 @@ export function resolveUserGatewayControlState(
 export type OperationKind =
   | "add-gateway"
   | "gateway-vm"
-  | "migrate-customer"
+  | "migrate-user"
   | "retire-gateway"
   | "restart-gateway"
   | "recycle-gateway"
   | "scale-shared-member"
   | "rollout"
-  | "deprovision-customer"
-  | "suspend-customer"
-  | "erase-customer";
+  | "deprovision-user"
+  | "suspend-user"
+  | "erase-user";
 
 export type OperationStatus =
   | "pending"

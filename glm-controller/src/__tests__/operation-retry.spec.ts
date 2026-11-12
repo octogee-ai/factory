@@ -70,7 +70,7 @@ describe("Gateway credential retirement drain", () => {
 describe("migration retry queue position", () => {
   it("keeps an untouched compatibility wait pending past the normal retry cap", () => {
     const update = buildOperationCompletionUpdate({
-      op: { kind: "migrate-customer", attempts: MAX_OPERATION_ATTEMPTS },
+      op: { kind: "migrate-user", attempts: MAX_OPERATION_ATTEMPTS },
       result: { success: false, steps: [], error: "gateway compatibility pending: status 503: old target", output: { gatewayCompatibilityPending: true } },
       steps: [], now: 10_000,
     });
@@ -82,7 +82,7 @@ describe("migration retry queue position", () => {
 
   it("requeues a fully rolled-back migration at the time of each failed attempt", () => {
     const update = buildOperationCompletionUpdate({
-      op: { kind: "migrate-customer", attempts: 1 },
+      op: { kind: "migrate-user", attempts: 1 },
       result: { success: false, rolledBack: true, error: "runtime-update timed out", steps: [] },
       steps: [], now: 10_000,
     });
@@ -95,7 +95,7 @@ describe("migration retry queue position", () => {
     { rolledBack: true, output: { configCleanup: { migrationId: "held" } } },
   ])("does not release a migration with unconfirmed cleanup: %j", (result) => {
     const update = buildOperationCompletionUpdate({
-      op: { kind: "migrate-customer" },
+      op: { kind: "migrate-user" },
       result: { success: false, error: "runtime-update timed out", steps: [], ...result },
       steps: [], now: 10_000,
     });
@@ -104,7 +104,7 @@ describe("migration retry queue position", () => {
 
   it.each(["initialized", "promotionIntent", "aborting"])("keeps durable migration authority during %s", (phase) => {
     const update = buildOperationCompletionUpdate({
-      op: { kind: "migrate-customer", customerMigrationV2: { phase } as never },
+      op: { kind: "migrate-user", customerMigrationV2: { phase } as never },
       result: { success: false, rolledBack: true, error: "runtime-update timed out", steps: [] },
       steps: [], now: 10_000,
     });
@@ -113,7 +113,7 @@ describe("migration retry queue position", () => {
 
   it("moves an aborted durable migration to the queue tail after cleanup", () => {
     const update = buildOperationCompletionUpdate({
-      op: { kind: "migrate-customer", customerMigrationV2: { phase: "aborted" } as never },
+      op: { kind: "migrate-user", customerMigrationV2: { phase: "aborted" } as never },
       result: { success: false, rolledBack: true, error: "runtime-update timed out", steps: [] },
       steps: [], now: 10_000,
     });
@@ -128,7 +128,7 @@ describe("verifiedDeletionCompletion", () => {
     const error = "rsync import port 30873 is already serving migrationId=mig-other slug=bob";
     expect(classifyOperationFailure(error)).toBe("transient");
     expect(buildOperationCompletionUpdate({
-      op: { id: `placement-${"a".repeat(32)}`, kind: "migrate-customer", origin: "automatic",
+      op: { id: `placement-${"a".repeat(32)}`, kind: "migrate-user", origin: "automatic",
         input: { source: "continuous-placement-policy" }, startedAt: 1_000, attempts: 3 },
       result: { success: false, steps: [], error }, steps: [], now: 2_000,
     })).toMatchObject({ status: "pending", attempts: 4 });
@@ -191,13 +191,13 @@ describe("operationNeedsDurableRestartResume", () => {
     expect(operationNeedsDurableRestartResume({ kind: 'restart-gateway', input: { gatewayId: 'shared-1' } })).toBe(false);
   });
   it("resumes an interrupted automatic user return rather than reaping its coordinated handoff", () => {
-    const op = { id: "builder-return-native-g1", kind: "migrate-customer", origin: "automatic", input: {
+    const op = { id: "builder-return-native-g1", kind: "migrate-user", origin: "automatic", input: {
       source: "builder-activation-lease", fromGatewayId: "native", toGatewayId: "shared-0",
     } };
     expect(operationNeedsDurableRestartResume(op)).toBe(true);
     expect(operationNeedsDurableRestartResume({ ...op, id: "manual-move" })).toBe(false);
   });
-  it.each(["suspend-customer", "erase-customer"])(
+  it.each(["suspend-user", "erase-user"])(
     "keeps an interrupted %s operation available for restart re-drive",
     (kind) => {
       expect(operationNeedsDurableRestartResume({ kind })).toBe(true);
@@ -368,7 +368,7 @@ describe("drain migration whose source has no converged configuration for the us
     const update = buildOperationCompletionUpdate({
       op: {
         id: `placement-${"c".repeat(32)}`,
-        kind: "migrate-customer",
+        kind: "migrate-user",
         origin: "automatic",
         input: { fromGatewayId: "shared-45b73f50e990", toGatewayId: "shared-dd0b28702186", source: "continuous-placement-policy" },
         attempts: 0,
@@ -409,7 +409,7 @@ describe("buildOperationCompletionUpdate", () => {
       { name: `rollback:${rollback}`, status: "failed" as const, error: "request timed out" },
     ];
     const update = buildOperationCompletionUpdate({
-      op: { kind: "migrate-customer", origin: "automatic", input: { fromGatewayId: "shared-a", source: "continuous-placement-policy" }, attempts: 0 },
+      op: { kind: "migrate-user", origin: "automatic", input: { fromGatewayId: "shared-a", source: "continuous-placement-policy" }, attempts: 0 },
       result: { steps, success: false, rolledBack: false, error: `${forwardError}; rollback: request timed out` }, steps, now,
     });
     expect(update).toMatchObject({ status: "failed", rolledBack: false, steps });
@@ -418,7 +418,7 @@ describe("buildOperationCompletionUpdate", () => {
 
   it("leaves a transient source-only recovery failure to the fenced recovery scanner", () => {
     const update = buildOperationCompletionUpdate({
-      op: { kind: "migrate-customer", input: { fromGatewayId: "shared-a", recoverSourceOnly: true }, attempts: 1 },
+      op: { kind: "migrate-user", input: { fromGatewayId: "shared-a", recoverSourceOnly: true }, attempts: 1 },
       result: { success: false, error: "request timed out", steps: [] }, steps: [], now,
     });
     expect(update).toMatchObject({ status: "failed", attempts: 2, rolledBack: false });
@@ -430,7 +430,7 @@ describe("buildOperationCompletionUpdate", () => {
   ])("preserves ordinary retry outside incomplete Shared rollback: %j", ({ fromGatewayId, rolledBack }) => {
     const steps = [{ name: "rollback:unmount-target", status: "failed" as const, error: "request timed out" }];
     expect(buildOperationCompletionUpdate({
-      op: { kind: "migrate-customer", input: { fromGatewayId }, attempts: 0 },
+      op: { kind: "migrate-user", input: { fromGatewayId }, attempts: 0 },
       result: { success: false, error: "request timed out", rolledBack, steps }, steps, now,
     })).toMatchObject({ status: "pending", nextAttemptAt: now + 30_000 });
   });
@@ -642,7 +642,7 @@ describe("buildOperationCompletionUpdate", () => {
   it("fails a blocked user deletion terminally instead of level-triggered retry", () => {
     const deletionBlocked = { deletionId: "delete-1", step: "delete-posthog-person-data" };
     const update = buildOperationCompletionUpdate({
-      op: { kind: "erase-customer", attempts: 0, attemptHistory: [] },
+      op: { kind: "erase-user", attempts: 0, attemptHistory: [] },
       result: {
         steps: [],
         success: false,
@@ -743,7 +743,7 @@ describe("buildOperationCompletionUpdate", () => {
     { retryAfterMs: Number.NaN, delay: 30_000 },
   ])("waits for a handler-requested retry delay of $retryAfterMs ms without shortening backoff", ({ retryAfterMs, delay }) => {
     const update = buildOperationCompletionUpdate({
-      op: { kind: "erase-customer", attempts: 0, attemptHistory: [] },
+      op: { kind: "erase-user", attempts: 0, attemptHistory: [] },
       result: {
         steps: [],
         success: false,
@@ -828,7 +828,7 @@ describe("buildOperationCompletionUpdate", () => {
     const update = buildOperationCompletionUpdate({
       op: {
         id: "builder-return-run-alice-g1",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         origin: "automatic",
         input: {
           source: "builder-activation-lease",
@@ -855,7 +855,7 @@ describe("buildOperationCompletionUpdate", () => {
     const update = buildOperationCompletionUpdate({
       op: {
         id: "builder-return-run-alice-g1",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         origin: "automatic",
         input: {
           source: "builder-activation-lease",
@@ -884,7 +884,7 @@ describe("buildOperationCompletionUpdate", () => {
     const update = buildOperationCompletionUpdate({
       op: {
         id: `placement-${"a".repeat(32)}`,
-        kind: "migrate-customer",
+        kind: "migrate-user",
         origin: "automatic",
         input: { source: "continuous-placement-policy" },
         attempts: MAX_OPERATION_ATTEMPTS,
@@ -911,7 +911,7 @@ describe("buildOperationCompletionUpdate", () => {
     const update = buildOperationCompletionUpdate({
       op: {
         id: `placement-${"b".repeat(32)}`,
-        kind: "migrate-customer",
+        kind: "migrate-user",
         origin: "automatic",
         input: { source: "continuous-placement-policy" },
         attempts: 0,
@@ -944,7 +944,7 @@ describe("buildOperationCompletionUpdate", () => {
     const update = buildOperationCompletionUpdate({
       op: {
         id: "builder-return-run-alice-g1",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         origin: "automatic",
         input: { source: "builder-activation-lease", fromGatewayId: "run-alice" },
         attempts: MAX_OPERATION_ATTEMPT_HISTORY,
@@ -963,7 +963,7 @@ describe("buildOperationCompletionUpdate", () => {
     const update = buildOperationCompletionUpdate({
       op: {
         id: "builder-return-run-alice-g1",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         origin: "automatic",
         input: {
           source: "builder-activation-lease",
@@ -998,7 +998,7 @@ describe("buildOperationCompletionUpdate", () => {
     const preempted = `target computer octogee-pool-44847785 was preempted: ${rsyncReset}`;
     const activation = (attempts: number, customerMigrationV2?: unknown) => ({
       id: "builder-activate-b-ceckert-s-b1ffafcf-g1",
-      kind: "migrate-customer",
+      kind: "migrate-user",
       origin: "automatic",
       input: { source: "builder-activation-lease", fromGatewayId: "shared-0", toGatewayId: "b-ceckert-s-b1ffafcf" },
       attempts,
@@ -1085,7 +1085,7 @@ describe("retained source execution completion", () => {
 
 it("waits for active user work without consuming attempts or recording a failure", () => {
   const update = buildOperationCompletionUpdate({
-    op: { kind: "migrate-customer", attempts: 17, startedAt: 500 },
+    op: { kind: "migrate-user", attempts: 17, startedAt: 500 },
     result: { success: false, steps: [], waitingForUserIdle: true }, steps: [], now: 1_000,
   });
   expect(update).toMatchObject({ status: "pending", startedAt: null, nextAttemptAt: 16_000, waitingOn: "builder-idle", rolledBack: false });
@@ -1118,7 +1118,7 @@ describe('fenced source management health availability', () => {
 
  it("keeps a fenced final transfer pending past retry exhaustion", () => {
    const update = buildOperationCompletionUpdate({
-     op: { kind: "migrate-customer", attempts: MAX_OPERATION_ATTEMPTS,
+     op: { kind: "migrate-user", attempts: MAX_OPERATION_ATTEMPTS,
        schedulerHandoff: { migrationId: "stable", uid: "alice", slug: "alice", fromGatewayId: "old", toGatewayId: "new",
          forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 4 } } },
      result: { steps: [], success: false, rolledBack: false, error: "migration forward recovery pending: status 503: response lost" },
@@ -1130,7 +1130,7 @@ describe('fenced source management health availability', () => {
 
 it.each([false, true])("keeps recovery on an assigned target pending beyond the activation attempt limit (recorded=%s)", recorded => {
   const update = buildOperationCompletionUpdate({
-    op: { kind: "migrate-customer", attempts: 20, ...(recorded ? { cutoverCommittedAt: 1 } : {}) },
+    op: { kind: "migrate-user", attempts: 20, ...(recorded ? { cutoverCommittedAt: 1 } : {}) },
     result: { steps: [], success: false, rolledBack: false, error: recorded ? "status 503: owner lookup unavailable" : "migration cutover committed; destination recovery pending: status 503: runtime not ready" },
     steps: [], now: 1000,
   });
@@ -1145,7 +1145,7 @@ describe("a migration that failed after its cutover", () => {
 
   it("fails terminally on its first attempt, keeps the cutover, records its output and releases its scheduler handoff", () => {
     const update = buildOperationCompletionUpdate({
-      op: { id: "op-activate", kind: "migrate-customer", attempts: 0, startedAt: 4_000, cutoverCommittedAt: 4_500, schedulerHandoff: handoff, schedulerHandoffReleased: false },
+      op: { id: "op-activate", kind: "migrate-user", attempts: 0, startedAt: 4_000, cutoverCommittedAt: 4_500, schedulerHandoff: handoff, schedulerHandoffReleased: false },
       result: { steps: [], success: false, rolledBack: false, failedAfterCutover: true, error, output },
       steps: [], now: 5_000,
     });
@@ -1162,7 +1162,7 @@ describe("a migration that failed after its cutover", () => {
     expect(classifyOperationFailure(held)).toBe("transient");
 
     expect(buildOperationCompletionUpdate({
-      op: { kind: "migrate-customer", attempts: 0, cutoverCommittedAt: 4_500, schedulerHandoff: handoff },
+      op: { kind: "migrate-user", attempts: 0, cutoverCommittedAt: 4_500, schedulerHandoff: handoff },
       result: { steps: [], success: false, rolledBack: false, failedAfterCutover: true, error: held },
       steps: [], now: 5_000,
     })).toMatchObject({ status: "failed", rolledBack: false, schedulerHandoffReleased: true });
@@ -1170,7 +1170,7 @@ describe("a migration that failed after its cutover", () => {
 
   it("is refused for an operation that holds no scheduler handoff", () => {
     expect(() => buildOperationCompletionUpdate({
-      op: { kind: "migrate-customer", attempts: 0, cutoverCommittedAt: 4_500 },
+      op: { kind: "migrate-user", attempts: 0, cutoverCommittedAt: 4_500 },
       result: { steps: [], success: false, rolledBack: false, failedAfterCutover: true, error },
       steps: [], now: 5_000,
     })).toThrow("only a user migration with a scheduler handoff can fail after its cutover");
@@ -1178,7 +1178,7 @@ describe("a migration that failed after its cutover", () => {
 });
 
 it("resumes a durable handoff after a lost cutover acknowledgment without a recorded commit", () => {
-  const op = { kind: "migrate-customer", attempts: 20,
+  const op = { kind: "migrate-user", attempts: 20,
     schedulerHandoff: { migrationId: "stable", uid: "alice", slug: "alice", fromGatewayId: "shared-blue",
       toGatewayId: "alice-user", stageAfterCutover: true as const } };
   expect(operationNeedsDurableRestartResume(op)).toBe(true);
@@ -1194,7 +1194,7 @@ describe("the move an operator's give starts", () => {
     "(desiredStatus=running, desiredRelease=1, liveRelease=null); requires running with a converged release";
   const noLiveRelease = `placement rejected for ${GATEWAY}: no-live-revision`;
   const move = (state: { checks?: number; attempts?: number; source?: string | null } = {}) => ({
-    id: "op-give", kind: "migrate-customer", attempts: state.attempts ?? 0, startedAt: 1_000,
+    id: "op-give", kind: "migrate-user", attempts: state.attempts ?? 0, startedAt: 1_000,
     input: { uid: "uid-lin", fromGatewayId: "shared-a", toGatewayId: GATEWAY, ...(state.source === null ? {} : { source: state.source ?? "operator-isolated-gateway" }) },
     ...(state.checks ? { output: { isolatedGatewayReadinessChecks: state.checks } } : {}),
   });

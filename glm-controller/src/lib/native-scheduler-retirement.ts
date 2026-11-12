@@ -63,7 +63,7 @@ type Deps = {
 };
 
 function activeAttempt(op: OperationRecord | undefined, input: NativeSchedulerRetirementInput): boolean {
-  return op?.kind === "migrate-customer" && op.status === "running" && typeof input.claimedStartedAt === "number" &&
+  return op?.kind === "migrate-user" && op.status === "running" && typeof input.claimedStartedAt === "number" &&
     op.startedAt === input.claimedStartedAt &&
     (op.cancellationRequestedAt === undefined || migrationCancellationDeferred({ ...op }, input.operationId)) &&
     op.input?.uid === input.uid && op.input.toGatewayId === input.gatewayId && typeof op.cutoverCommittedAt === "number";
@@ -73,7 +73,7 @@ export function isCompletedNativeReturn(op: OperationRecord | undefined, pending
   if (pending.completedAt === undefined || pending.cutoverCommittedAt === undefined) return false;
   if (op === undefined) return true;
   const h = op.schedulerHandoff;
-  return op.kind === "migrate-customer" && op.status === "succeeded" && op.cutoverCommittedAt === pending.cutoverCommittedAt &&
+  return op.kind === "migrate-user" && op.status === "succeeded" && op.cutoverCommittedAt === pending.cutoverCommittedAt &&
     op.input?.uid === pending.uid && op.input.fromGatewayId === pending.sourceGatewayId && op.input.toGatewayId === pending.sharedGatewayId &&
     h?.migrationId === pending.migrationId && handoffMatches(h, {
       uid: pending.uid, slug: pending.slug, fromGatewayId: pending.sourceGatewayId,

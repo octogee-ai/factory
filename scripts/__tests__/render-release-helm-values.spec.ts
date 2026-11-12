@@ -42,7 +42,7 @@ describe("operator Helm release selection", () => {
       imageRepository: platform.gatewayImageRepository,
       imageTag: platform.gatewayImageTag,
       openclawSourceSha: platform.openclawSourceSha,
-      profileImages: { builder: {
+      profileImages: { isolated: {
         imageRepository: `${selected.repository}/octogee-gateway-builder`,
         imageTag: platform.builderImageTag,
       } },

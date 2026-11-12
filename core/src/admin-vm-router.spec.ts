@@ -104,7 +104,7 @@ describe("admin VM replacement", () => {
     const responses = await Promise.all([request(h.app).post(livePath).send({}), request(h.app).post(livePath).send({})]);
     expect(responses.map((res) => res.status).sort()).toEqual([202, 409]);
     expect(h.operations()).toHaveLength(1);
-    const busy = harness({ "glmOperations/migration": { status: "running", kind: "migrate-customer", inputUid: OWNER, input: { uid: OWNER } } });
+    const busy = harness({ "glmOperations/migration": { status: "running", kind: "migrate-user", inputUid: OWNER, input: { uid: OWNER } } });
     await request(busy.app).post(livePath).send({}).expect(409);
     expect(busy.operations()).toHaveLength(0);
     expect(busy.audits()).toEqual([expect.objectContaining({ status: "failed", error: expect.stringContaining("VM operation already in flight") })]);
@@ -150,7 +150,7 @@ describe("admin VM replacement", () => {
     const first = await request(h.app).post(parkedPath).send({ force: true, acceptBootDataLoss: true }).expect(202);
     const operation = h.records.get(`glmOperations/${first.body.operationId}`)!;
     operation.status = "failed";
-    h.records.set("glmOperations/pending-migration", { status: "pending", kind: "migrate-customer", inputUid: OWNER, input: { uid: OWNER } });
+    h.records.set("glmOperations/pending-migration", { status: "pending", kind: "migrate-user", inputUid: OWNER, input: { uid: OWNER } });
     const owner = h.records.get(`users/${OWNER}`)!;
     delete (owner.provisioning as Record<string, unknown>).computer;
     const retried = await request(h.app).post(parkedPath).send({ force: true, acceptBootDataLoss: true }).expect(202);

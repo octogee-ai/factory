@@ -27,7 +27,7 @@ describe("platformGatewayArtifactFromEnvironment", () => {
       imageRepository: `${REPOSITORY}/octogee-gateway`,
       imageTag: env.PLATFORM_GATEWAY_IMAGE_TAG,
       profileImages: {
-        builder: {
+        isolated: {
           imageRepository: `${REPOSITORY}/octogee-gateway-builder`,
           imageTag: env.PLATFORM_GATEWAY_BUILDER_IMAGE_TAG,
         },

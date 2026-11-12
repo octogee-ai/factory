@@ -295,7 +295,7 @@ export function centralGatewayReleasePayload(manifest: ReleaseDigestManifest): R
       ? { openclawSourceSha: manifest.openclawSourceSha }
       : {}),
     profileImages: {
-      builder: {
+      isolated: {
         imageRepository: `${manifest.repository}/octogee-gateway-builder`,
         imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway-builder"]}`,
       },

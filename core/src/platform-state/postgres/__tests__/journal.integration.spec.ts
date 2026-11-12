@@ -32,7 +32,7 @@ describe.skipIf(!dsn)("PostgreSQL journal repositories", () => {
     it("round-trips every operation field exactly, with a revision", async () => {
       const full: OperationRecord = {
         id: "op-full",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         status: "running",
         createdBy: "operator:chris",
         origin: "automatic",
@@ -135,7 +135,7 @@ describe.skipIf(!dsn)("PostgreSQL journal repositories", () => {
 
     it("lists a uid's operations filtered by status and kind", async () => {
       await harness.store.journal.operations.create(operation({ id: "a", inputUid: "uid-1", kind: "rollout" }));
-      await harness.store.journal.operations.create(operation({ id: "b", inputUid: "uid-1", kind: "erase-customer", status: "running" }));
+      await harness.store.journal.operations.create(operation({ id: "b", inputUid: "uid-1", kind: "erase-user", status: "running" }));
       await harness.store.journal.operations.create(operation({ id: "c", inputUid: "uid-2", kind: "rollout" }));
 
       expect(ids(await harness.store.journal.operations.listForUid("uid-1", {}))).toEqual(["a", "b"]);

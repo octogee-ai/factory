@@ -8,7 +8,7 @@ function fixture() {
     assignment: { uid: request.uid, slug: request.builderSlug, gatewayId: request.fromGatewayId, state: "serving", epoch: 7 } };
   const error = "/finish-rsync-import/shared-new: 500 " + JSON.stringify({ error: "import failed", message:
     "[import:livefixture] agents.create failed for octogee-livefixture-coach (AgentDatabaseMaintenanceRequiredError: Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.)" });
-  const original: any = { kind: "migrate-customer", status: "failed", origin: "automatic", createdBy: "glm-controller-placement-policy", attempts: 1,
+  const original: any = { kind: "migrate-user", status: "failed", origin: "automatic", createdBy: "glm-controller-placement-policy", attempts: 1,
     startedAt: 100, completedAt: 200, rolledBack: true, error,
     input: { uid: request.uid, builderSlug: request.builderSlug, fromGatewayId: request.fromGatewayId, toGatewayId: request.toGatewayId, source: request.source },
     schedulerHandoff: { migrationId: "mig-placement:scheduler:1:claim:100", uid: request.uid, slug: request.builderSlug, fromGatewayId: request.fromGatewayId, toGatewayId: request.toGatewayId },

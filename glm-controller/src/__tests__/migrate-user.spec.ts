@@ -71,7 +71,7 @@ function gatewayRootFence(
 function mkOp(overrides: Partial<Operation>): Operation {
   return {
     id: "op-1",
-    kind: "migrate-customer",
+    kind: "migrate-user",
     status: "running",
     createdBy: "admin@octogee.com",
     createdAt: 1_000,
@@ -2201,7 +2201,7 @@ describe("migrate-customer — User activation onto a held VM", () => {
     expect(first).toMatchObject({ success: false, rolledBack: false });
     expect(first.failedAfterCutover).toBeUndefined();
     expect(first.error).toMatch(/^migration cutover committed; destination recovery pending: status 503: .*read ECONNRESET/u);
-    expect(buildOperationCompletionUpdate({ op: { kind: "migrate-customer", ...op }, result: first, steps: [], now: 5_000 }))
+    expect(buildOperationCompletionUpdate({ op: { kind: "migrate-user", ...op }, result: first, steps: [], now: 5_000 }))
       .toMatchObject({ status: "pending", attempts: 2 });
     expect(h.order).toEqual([]);
     expect(h.transfers.get("uid-alice/mig-op-1")).toEqual(PENDING_SCHEDULES);
@@ -2249,7 +2249,7 @@ describe("migrate-customer — User activation onto a held VM", () => {
     expect(result.failedAfterCutover).toBeUndefined();
     expect(result.error).toMatch(/^migration cutover committed; destination recovery pending: status 503: /u);
     expect(result.error).toContain(`2 of 2 unrestored schedules on gw-green may yet be restored: ${timeout}`);
-    expect(buildOperationCompletionUpdate({ op: { kind: "migrate-customer", ...op }, result, steps: [], now: 5_000 }))
+    expect(buildOperationCompletionUpdate({ op: { kind: "migrate-user", ...op }, result, steps: [], now: 5_000 }))
       .toMatchObject({ status: "pending", attempts: 2 });
     expect(h.order).toEqual([]);
     expect(h.transfers.get("uid-alice/mig-op-1")?.restoredTo).toBeUndefined();
@@ -2557,7 +2557,7 @@ describe("a returned VM's scheduler custody at the next activation", () => {
     custody.store(VM).jobs.clear();
     custody.store(SHARED).add({ agentId: COACH, name: CHECK, enabled: true });
     custody.store(VM).migrate({ operationId: liveScheduler, phase: "hold", agentIds: [COACH] });
-    vm.journal("op-live", { kind: "migrate-customer", status: "running", createdBy: "admin@octogee.com", createdAt: 2_000, startedAt: 3_000,
+    vm.journal("op-live", { kind: "migrate-user", status: "running", createdBy: "admin@octogee.com", createdAt: 2_000, startedAt: 3_000,
       input: { uid: "uid-alice", fromGatewayId: VM, toGatewayId: SHARED }, steps: [] });
     return liveScheduler;
   }
@@ -2626,7 +2626,7 @@ describe("a returned VM's scheduler custody at the next activation", () => {
       `[migrate-customer] ❌ alice: could not release the scheduler fence of ${COACH} on ${VM}: ${refusal} op=${ACTIVATION_ID}`);
     expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: SHARED }));
     const completion = buildOperationCompletionUpdate({
-      op: { id: ACTIVATION_ID, kind: "migrate-customer", attempts: 0, cutoverCommittedAt: ACTIVATED_AT, schedulerHandoff: vi.mocked(h.ctx.persistSchedulerHandoff!).mock.calls.at(-1)?.[0] },
+      op: { id: ACTIVATION_ID, kind: "migrate-user", attempts: 0, cutoverCommittedAt: ACTIVATED_AT, schedulerHandoff: vi.mocked(h.ctx.persistSchedulerHandoff!).mock.calls.at(-1)?.[0] },
       result, steps: [], now: ACTIVATED_AT + 1,
     });
     expect(completion).toMatchObject({ status: "failed", rolledBack: false, schedulerHandoffReleased: true, output: result.output });
@@ -2646,7 +2646,7 @@ describe("a returned VM's scheduler custody at the next activation", () => {
     expect(result.error).toContain("migration cutover committed; destination recovery pending: status 503");
     expect(result.error).toContain("unsettled runs");
     expect(buildOperationCompletionUpdate({
-      op: { kind: "migrate-customer", attempts, cutoverCommittedAt: ACTIVATED_AT, schedulerHandoff: vi.mocked(h.ctx.persistSchedulerHandoff!).mock.calls.at(-1)?.[0] },
+      op: { kind: "migrate-user", attempts, cutoverCommittedAt: ACTIVATED_AT, schedulerHandoff: vi.mocked(h.ctx.persistSchedulerHandoff!).mock.calls.at(-1)?.[0] },
       result, steps: [], now: ACTIVATED_AT + 1,
     })).toMatchObject({ status: "pending", attempts: attempts + 1 });
     expect(h.transfers.get(`uid-alice/mig-${ACTIVATION_ID}`)?.restoreAttemptedTo).toBeUndefined();
@@ -2674,7 +2674,7 @@ describe("a returned VM's scheduler custody at the next activation", () => {
     expect(result.error).toContain("migration cutover committed; destination recovery pending: status 503");
     expect(result.error).toContain("socket closed before cron.migration response");
     expect(buildOperationCompletionUpdate({
-      op: { kind: "migrate-customer", attempts: 0, cutoverCommittedAt: ACTIVATED_AT, schedulerHandoff: vi.mocked(h.ctx.persistSchedulerHandoff!).mock.calls.at(-1)?.[0] },
+      op: { kind: "migrate-user", attempts: 0, cutoverCommittedAt: ACTIVATED_AT, schedulerHandoff: vi.mocked(h.ctx.persistSchedulerHandoff!).mock.calls.at(-1)?.[0] },
       result, steps: [], now: ACTIVATED_AT + 1,
     })).toMatchObject({ status: "pending", attempts: 1 });
     expect(logs.filter(line => line.includes("❌"))).toEqual([]);

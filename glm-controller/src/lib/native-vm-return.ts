@@ -161,7 +161,7 @@ function forwardRecoveryMatches(op: OperationRecord | null, input: NativeVmRetur
 }
 
 function currentOperationMatches(op: OperationRecord | null, input: NativeVmReturnInput): boolean {
-  return op?.kind === "migrate-customer" && op.status === "running" &&
+  return op?.kind === "migrate-user" && op.status === "running" &&
     typeof input.claimedStartedAt === "number" && op.startedAt === input.claimedStartedAt &&
     op.input?.uid === input.uid && op.input.fromGatewayId === input.fromGatewayId && op.input.toGatewayId === input.toGatewayId;
 }

@@ -39,7 +39,7 @@ export function buildUserDeletionPlan(input) {
             productContext: input.productContext,
         },
         suspensionOperation: operationRecord({
-            kind: "suspend-customer",
+            kind: "suspend-user",
             operationId: input.suspensionOperationId,
             deletionId: input.deletionId,
             uid: input.uid,
@@ -47,7 +47,7 @@ export function buildUserDeletionPlan(input) {
             createdAt: input.requestedAt,
         }),
         erasureOperation: operationRecord({
-            kind: "erase-customer",
+            kind: "erase-user",
             operationId: input.erasureOperationId,
             deletionId: input.deletionId,
             uid: input.uid,

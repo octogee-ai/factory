@@ -52,7 +52,7 @@ function seed(input: { source?: string; target?: Row; sourceState?: string; open
       } },
     },
     [`${GLM_OPERATIONS_COLLECTION}/${OP}`]: {
-      kind: "migrate-customer", status: "running", createdBy: "operator", createdAt: 1, startedAt: STARTED, completedAt: null,
+      kind: "migrate-user", status: "running", createdBy: "operator", createdAt: 1, startedAt: STARTED, completedAt: null,
       input: { uid: UID, builderSlug: SLUG, fromGatewayId: SHARED, toGatewayId: TARGET, ...(source ? { source } : {}) },
       steps: [], gatewayId: TARGET, inputUid: UID,
     },
@@ -141,7 +141,7 @@ describe("the preparation fence of a give that failed", () => {
   const secondGive = (records: Map<string, Row>) => {
     records.set(`${GLM_OPERATIONS_COLLECTION}/${OP}`, { ...records.get(`${GLM_OPERATIONS_COLLECTION}/${OP}`)!, status: "failed", completedAt: 1_500 });
     records.set(`${GLM_OPERATIONS_COLLECTION}/${SECOND}`, {
-      kind: "migrate-customer", status: "running", createdBy: "operator", createdAt: 1_600, startedAt: 1_700, completedAt: null,
+      kind: "migrate-user", status: "running", createdBy: "operator", createdAt: 1_600, startedAt: 1_700, completedAt: null,
       input: { uid: UID, builderSlug: SLUG, fromGatewayId: SHARED, toGatewayId: TARGET, source: "operator-isolated-gateway" },
       steps: [], gatewayId: TARGET, inputUid: UID,
     });

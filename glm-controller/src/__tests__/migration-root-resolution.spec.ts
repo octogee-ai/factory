@@ -64,7 +64,7 @@ describe("durable migration root resolution", () => {
       "gateways/source": source,
       "glmGateways/source": servingRuntime("source"),
       "gateways/source/assignments/uid-alice": {
-        uid: "uid-alice", slug: "alice", gatewayId: "source", source: "migrate-customer", state: "serving", epoch: 7,
+        uid: "uid-alice", slug: "alice", gatewayId: "source", source: "migrate-user", state: "serving", epoch: 7,
       },
     });
     await expect(resolveSourceRevision(db, "uid-alice", "source")).resolves.toBeNull();
@@ -120,7 +120,7 @@ describe("durable migration root resolution", () => {
         uid: "uid-alice",
         slug: "alice",
         gatewayId: "source",
-        source: "migrate-customer",
+        source: "migrate-user",
         state: "serving",
         epoch: 7,
       },
@@ -224,7 +224,7 @@ describe("durable migration root resolution", () => {
       "gateways/source/assignments/uid-alice": {
         slug: "alice",
         gatewayId: "source",
-        source: "migrate-customer",
+        source: "migrate-user",
       },
       "glmGateways/source": servingRuntime("other", { gatewayId: "other" }),
     });

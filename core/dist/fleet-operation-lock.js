@@ -1,6 +1,6 @@
 const SERIAL_KINDS = new Set([
     "rollout",
-    "migrate-customer",
+    "migrate-user",
 ]);
 const ACTIVE_STATUSES = new Set(["pending", "running"]);
 const RESOURCE_FIELDS = [
@@ -28,10 +28,10 @@ export function fleetOperationLockResources(operation) {
     ]);
 }
 export function serialLockReleasedAfterCutover(operation) {
-    return operation.kind === "migrate-customer" && typeof operation.cutoverCommittedAt === "number";
+    return operation.kind === "migrate-user" && typeof operation.cutoverCommittedAt === "number";
 }
 function nativeReturnBlocksSourceRollout(rollout, returning) {
-    if (rollout.kind !== "rollout" || rollout.rolloutLane === "cluster" || returning.kind !== "migrate-customer" ||
+    if (rollout.kind !== "rollout" || rollout.rolloutLane === "cluster" || returning.kind !== "migrate-user" ||
         (returning.status !== undefined && !ACTIVE_STATUSES.has(returning.status)))
         return false;
     const source = stringFields(returning.input, ["fromGatewayId"])[0];
@@ -56,7 +56,7 @@ export function serialFleetOperationsConflict(candidate, other) {
         candidate.rolloutLane === other.rolloutLane);
 }
 export function findActiveGatewayMigration(gatewayId, operations) {
-    return operations.find((operation) => operation.kind === "migrate-customer" &&
+    return operations.find((operation) => operation.kind === "migrate-user" &&
         ACTIVE_STATUSES.has(operation.status ?? "") &&
         fleetOperationLockResources(operation).has(gatewayId)) ?? null;
 }

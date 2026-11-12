@@ -538,7 +538,7 @@ describe("owned user gateway retirement", () => {
     const operations = {
       [operationId]: retirementOperation("succeeded"),
       "builder-activate-builder-alice-g1": {
-        kind: "migrate-customer", status: "failed", rolledBack: false, schedulerHandoffReleased: false, cancelledByDeletionId,
+        kind: "migrate-user", status: "failed", rolledBack: false, schedulerHandoffReleased: false, cancelledByDeletionId,
         error: "user migration cancelled because the account was suspended",
         input: {
           uid: "uid-1", builderSlug: "alice", fromGatewayId: "shared-a", toGatewayId: "builder-alice",

@@ -1750,7 +1750,7 @@ async function executeMigration(
       },
     }),
   })).operationId : await enqueueOperation(platformState, {
-    kind: "migrate-customer",
+    kind: "migrate-user",
     input: buildFleetMigrateOperationInput(uid, fromGatewayId, toGatewayId, sourceTransferMode),
     createdBy: actor,
   });

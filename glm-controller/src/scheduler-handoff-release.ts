@@ -44,7 +44,7 @@ function handoffProgress(operation: UntypedRecord): HandoffProgress {
 type ListedOperation = Stored<OperationRecord>;
 
 function committedOwnerMatches(op: OperationRecord, owner: Stored<PlatformUserRecord> | null, handoff: SchedulerHandoffState): boolean {
-  return op.kind === "migrate-customer" && op.input?.uid === handoff.uid &&
+  return op.kind === "migrate-user" && op.input?.uid === handoff.uid &&
     op.input.fromGatewayId === handoff.fromGatewayId && op.input.toGatewayId === handoff.toGatewayId &&
     owner?.gateway?.gatewayId === handoff.toGatewayId;
 }

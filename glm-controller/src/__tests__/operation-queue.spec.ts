@@ -9,7 +9,7 @@ import {
 describe("findRunningRolloutParentOperationId", () => {
   it("finds the rollout document that owns a gateway's release roll", () => {
     expect(findRunningRolloutParentOperationId("default", [
-      { id: "other", kind: "migrate-customer", input: { toGatewayId: "default" } },
+      { id: "other", kind: "migrate-user", input: { toGatewayId: "default" } },
       { id: "rollout-document", kind: "rollout", input: { gatewayId: "default" } },
     ])).toBe("rollout-document");
   });
@@ -28,8 +28,8 @@ describe("isSeriallyExclusiveKind", () => {
   });
 
   it("treats migrate-customer as serial per migration target", () => {
-    expect(isSeriallyExclusiveKind("migrate-customer")).toBe(true);
-    expect(isSeriallyExclusiveKind("suspend-customer")).toBe(true);
+    expect(isSeriallyExclusiveKind("migrate-user")).toBe(true);
+    expect(isSeriallyExclusiveKind("suspend-user")).toBe(true);
   });
 
   it("does not restrict kinds with no known hard-fail-on-busy path", () => {
@@ -37,7 +37,7 @@ describe("isSeriallyExclusiveKind", () => {
     expect(isSeriallyExclusiveKind("recycle-gateway")).toBe(false);
     expect(isSeriallyExclusiveKind("add-gateway")).toBe(false);
     expect(isSeriallyExclusiveKind("restart-gateway")).toBe(false);
-    expect(isSeriallyExclusiveKind("deprovision-customer")).toBe(false);
+    expect(isSeriallyExclusiveKind("deprovision-user")).toBe(false);
   });
 });
 
@@ -97,11 +97,11 @@ describe("findSerialConflict — rollout", () => {
 describe("findSerialConflict — migrate-customer (per-target scope)", () => {
   it("conflicts with another running migration to the SAME target", () => {
     const conflict = findSerialConflict(
-      { id: "op-2", kind: "migrate-customer", input: { toGatewayId: "walter-green" } },
+      { id: "op-2", kind: "migrate-user", input: { toGatewayId: "walter-green" } },
       [
         {
           id: "op-1",
-          kind: "migrate-customer",
+          kind: "migrate-user",
           input: { fromGatewayId: "walter-blue", toGatewayId: "walter-green" },
         },
       ],
@@ -114,8 +114,8 @@ describe("findSerialConflict — migrate-customer (per-target scope)", () => {
 
   it("does NOT conflict with a running migration to a DIFFERENT target", () => {
     const conflict = findSerialConflict(
-      { id: "op-2", kind: "migrate-customer", input: { toGatewayId: "gw-purple" } },
-      [{ id: "op-1", kind: "migrate-customer", input: { toGatewayId: "gw-green" } }],
+      { id: "op-2", kind: "migrate-user", input: { toGatewayId: "gw-purple" } },
+      [{ id: "op-1", kind: "migrate-user", input: { toGatewayId: "gw-green" } }],
     );
     expect(conflict).toBeNull();
   });
@@ -124,12 +124,12 @@ describe("findSerialConflict — migrate-customer (per-target scope)", () => {
     const conflict = findSerialConflict(
       {
         id: "op-2",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         input: { fromGatewayId: "source", toGatewayId: "target-b" },
       },
       [{
         id: "op-1",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         input: { fromGatewayId: "source", toGatewayId: "target-a" },
       }],
     );
@@ -138,16 +138,16 @@ describe("findSerialConflict — migrate-customer (per-target scope)", () => {
 
   it("never conflicts when the candidate has no toGatewayId — its own validation failure stops it, not the queue", () => {
     const conflict = findSerialConflict(
-      { id: "op-2", kind: "migrate-customer", input: {} },
-      [{ id: "op-1", kind: "migrate-customer", input: { toGatewayId: "gw-green" } }],
+      { id: "op-2", kind: "migrate-user", input: {} },
+      [{ id: "op-1", kind: "migrate-user", input: { toGatewayId: "gw-green" } }],
     );
     expect(conflict).toBeNull();
   });
 
   it("describes a target-only migration without a fromGatewayId", () => {
     const conflict = findSerialConflict(
-      { id: "op-2", kind: "migrate-customer", input: { toGatewayId: "gw-green" } },
-      [{ id: "op-1", kind: "migrate-customer", input: { toGatewayId: "gw-green" } }],
+      { id: "op-2", kind: "migrate-user", input: { toGatewayId: "gw-green" } },
+      [{ id: "op-1", kind: "migrate-user", input: { toGatewayId: "gw-green" } }],
     );
     expect(conflict).toEqual({
       conflictingOpId: "op-1",
@@ -161,7 +161,7 @@ describe("findSerialConflict — shared migration/release-roll scope", () => {
     const decision = decideOperationClaim({
       op: {
         id: "migration",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         status: "pending",
         createdAt: 2,
         input: {
@@ -189,7 +189,7 @@ describe("findSerialConflict — shared migration/release-roll scope", () => {
         { id: "roll", kind: "rollout", input: { gatewayId } },
         [{
           id: "migration",
-          kind: "migrate-customer",
+          kind: "migrate-user",
           input: { fromGatewayId: "source", toGatewayId: "target" },
         }],
       );
@@ -203,7 +203,7 @@ describe("findSerialConflict — shared migration/release-roll scope", () => {
       const conflict = findSerialConflict(
         {
           id: "migration",
-          kind: "migrate-customer",
+          kind: "migrate-user",
           input: { fromGatewayId: "source", toGatewayId: "target" },
         },
         [{ id: "roll", kind: "rollout", input: { gatewayId } }],
@@ -217,7 +217,7 @@ describe("findSerialConflict — shared migration/release-roll scope", () => {
       { id: "roll", kind: "rollout", input: { gatewayId: "source" } },
       [{
         id: "migration",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         input: { toGatewayId: "target" },
         customerMigrationV2: {
           sourceGatewayId: "source",
@@ -234,7 +234,7 @@ describe("findSerialConflict — shared migration/release-roll scope", () => {
 describe("decideOperationClaim", () => {
   it("finishes a user activation retry before rolling its held target", () => {
     const activation = {
-      id: "builder-activate-builder-a-g1", kind: "migrate-customer", status: "pending",
+      id: "builder-activate-builder-a-g1", kind: "migrate-user", status: "pending",
       createdAt: 1, queuedAt: 3, nextAttemptAt: 15_000,
       input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "builder-a", source: "builder-activation-lease" },
     };
@@ -255,7 +255,7 @@ describe("decideOperationClaim", () => {
 
   it.each([0, 2])('repairs an abandoned activation target before source-only recovery regardless of queue order: %s', createdAt => {
     const recovery = {
-      id: 'builder-activate-builder-a-g1', kind: 'migrate-customer', status: 'pending', createdAt: 1,
+      id: 'builder-activate-builder-a-g1', kind: 'migrate-user', status: 'pending', createdAt: 1,
       input: { uid: 'alice', source: 'builder-activation-lease', fromGatewayId: 'shared-a', toGatewayId: 'builder-a', recoverSourceOnly: true },
     };
     const rollout = { id: 'repair', kind: 'rollout', rolloutLane: 'cluster' as const, status: 'pending', createdAt, input: { gatewayId: 'builder-a' } };
@@ -267,7 +267,7 @@ describe("decideOperationClaim", () => {
 
   it.each([0, 2])('runs source recovery before a held VM target roll regardless of queue order: %s', createdAt => {
     const recovery = {
-      id: 'builder-activate-builder-a-g1', kind: 'migrate-customer', status: 'pending', createdAt: 1,
+      id: 'builder-activate-builder-a-g1', kind: 'migrate-user', status: 'pending', createdAt: 1,
       input: { uid: 'alice', source: 'builder-activation-lease', fromGatewayId: 'shared-a', toGatewayId: 'builder-a', recoverSourceOnly: true },
     };
     const rollout = { id: 'vm-roll', kind: 'rollout', rolloutLane: 'builder-vm' as const, status: 'pending', createdAt, input: { gatewayId: 'builder-a' } };
@@ -282,7 +282,7 @@ describe("decideOperationClaim", () => {
   it('finishes exact source recovery after its rollout retained a proven cleaned predecessor', () => {
     const migrationId = 'mig-builder-activate-builder-a-g1:scheduler:1:claim:1000';
     const recovery = {
-      id: 'builder-activate-builder-a-g1', kind: 'migrate-customer', status: 'pending', createdAt: 1,
+      id: 'builder-activate-builder-a-g1', kind: 'migrate-user', status: 'pending', createdAt: 1,
       input: { uid: 'alice', builderSlug: 'alice', source: 'builder-activation-lease', fromGatewayId: 'shared-a', toGatewayId: 'builder-a', recoverSourceOnly: true },
       schedulerHandoff: { migrationId, fromGatewayId: 'shared-a', toGatewayId: 'builder-a', uid: 'alice', slug: 'alice', sourceRecovery: { migrationId, sourceEpoch: 7, steps: [],
         targetRollback: { operationId: 'builder-activate-builder-a-g1', migrationId, uid: 'alice', slug: 'alice', sourceGatewayId: 'shared-a', sourceEpoch: 7, targetGatewayId: 'builder-a', leaseId: 'lease-a', generation: 1, retainedPodUid: 'retained-r1', completedAt: 2000 } } },
@@ -300,7 +300,7 @@ describe("decideOperationClaim", () => {
     { id: 'different-migration' },
   ])('keeps ordinary queue exclusion for an unqualified target-repair request: %j', patch => {
     const recovery = {
-      id: 'builder-activate-builder-a-g1', kind: 'migrate-customer', createdAt: 1,
+      id: 'builder-activate-builder-a-g1', kind: 'migrate-user', createdAt: 1,
       ...patch,
       input: { source: 'builder-activation-lease', fromGatewayId: 'shared-a', toGatewayId: 'builder-a', recoverSourceOnly: true, ...patch.input },
     };
@@ -315,7 +315,7 @@ describe("decideOperationClaim", () => {
       op: { id: "roll", kind: "rollout", status: "pending", createdAt: 2, input: { gatewayId } },
       now: 10_000, runningOpsSameKind: [],
       pendingOpsSameKind: [{
-        id: "builder-activate-builder-a-g1", kind: "migrate-customer", createdAt: 1,
+        id: "builder-activate-builder-a-g1", kind: "migrate-user", createdAt: 1,
         queuedAt: 3, nextAttemptAt: 15_000,
         input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "builder-a", source: "builder-activation-lease" },
       }],
@@ -324,7 +324,7 @@ describe("decideOperationClaim", () => {
 
   it("does not let activation bypass an already running rollout", () => {
     expect(decideOperationClaim({
-      op: { id: "builder-activate-builder-a-g1", kind: "migrate-customer", status: "pending", createdAt: 1,
+      op: { id: "builder-activate-builder-a-g1", kind: "migrate-user", status: "pending", createdAt: 1,
         queuedAt: 3, input: { toGatewayId: "builder-a", source: "builder-activation-lease" } },
       now: 10_000, runningOpsSameKind: [{ id: "roll", kind: "rollout", input: { gatewayId: "builder-a" } }],
       pendingOpsSameKind: [],
@@ -336,7 +336,7 @@ describe("decideOperationClaim", () => {
       op: { id: "roll", kind: "rollout", status: "pending", createdAt: 2, input: { gatewayId: "builder-a" } },
       now: 10_000, runningOpsSameKind: [],
       pendingOpsSameKind: [{
-        id: "builder-activate-builder-a-g1", kind: "migrate-customer", createdAt: 1, cutoverCommittedAt: 9_000,
+        id: "builder-activate-builder-a-g1", kind: "migrate-user", createdAt: 1, cutoverCommittedAt: 9_000,
         input: { fromGatewayId: "shared-a", toGatewayId: "builder-a", source: "builder-activation-lease" },
       }],
     })).toEqual({ outcome: "claim" });
@@ -344,11 +344,11 @@ describe("decideOperationClaim", () => {
 
   it.each([5_000, -1])("lets another user pass a rolled-back retry with delay %i", (delay) => {
     expect(decideOperationClaim({
-      op: { id: "healthy", kind: "migrate-customer", status: "pending", createdAt: 2,
+      op: { id: "healthy", kind: "migrate-user", status: "pending", createdAt: 2,
         input: { uid: "bob", fromGatewayId: "shared-a", toGatewayId: "shared-b" } },
       now: 10_000,
       runningOpsSameKind: [],
-      pendingOpsSameKind: [{ id: "retry", kind: "migrate-customer", createdAt: 1,
+      pendingOpsSameKind: [{ id: "retry", kind: "migrate-user", createdAt: 1,
         queuedAt: 3, nextAttemptAt: 10_000 + delay,
         input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" } }],
     })).toEqual({ outcome: "claim" });
@@ -356,30 +356,30 @@ describe("decideOperationClaim", () => {
 
   it("admits newly queued work during a rolled-back migration's backoff", () => {
     expect(decideOperationClaim({
-      op: { id: "healthy", kind: "migrate-customer", status: "pending", createdAt: 4,
+      op: { id: "healthy", kind: "migrate-user", status: "pending", createdAt: 4,
         input: { uid: "bob", toGatewayId: "shared-b" } },
       now: 10_000, runningOpsSameKind: [],
-      pendingOpsSameKind: [{ id: "retry", kind: "migrate-customer", createdAt: 1,
+      pendingOpsSameKind: [{ id: "retry", kind: "migrate-user", createdAt: 1,
         queuedAt: 3, nextAttemptAt: 15_000, input: { uid: "alice", toGatewayId: "shared-b" } }],
     })).toEqual({ outcome: "claim" });
   });
 
   it("queues an eligible retry behind work already waiting when it failed", () => {
     expect(decideOperationClaim({
-      op: { id: "retry", kind: "migrate-customer", status: "pending", createdAt: 1,
+      op: { id: "retry", kind: "migrate-user", status: "pending", createdAt: 1,
         queuedAt: 3, nextAttemptAt: 9_000, input: { toGatewayId: "shared-b" } },
       now: 10_000, runningOpsSameKind: [],
-      pendingOpsSameKind: [{ id: "healthy", kind: "migrate-customer", createdAt: 2,
+      pendingOpsSameKind: [{ id: "healthy", kind: "migrate-user", createdAt: 2,
         input: { toGatewayId: "shared-b" } }],
     })).toEqual({ outcome: "queue", waitingOn: "migration → shared-b" });
   });
 
   it("keeps FIFO for work arriving after an eligible retry was requeued", () => {
     expect(decideOperationClaim({
-      op: { id: "healthy", kind: "migrate-customer", status: "pending", createdAt: 4,
+      op: { id: "healthy", kind: "migrate-user", status: "pending", createdAt: 4,
         input: { toGatewayId: "shared-b" } },
       now: 10_000, runningOpsSameKind: [],
-      pendingOpsSameKind: [{ id: "retry", kind: "migrate-customer", createdAt: 1,
+      pendingOpsSameKind: [{ id: "retry", kind: "migrate-user", createdAt: 1,
         queuedAt: 3, nextAttemptAt: 9_000, input: { toGatewayId: "shared-b" } }],
     })).toEqual({ outcome: "queue", waitingOn: "migration → shared-b" });
   });
@@ -430,7 +430,7 @@ describe("decideOperationClaim", () => {
     const decision = decideOperationClaim({
       op: {
         id: "next-migration",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         status: "pending",
         createdAt: 2,
         input: { fromGatewayId: "shared-0", toGatewayId: "shared-1" },
@@ -438,13 +438,13 @@ describe("decideOperationClaim", () => {
       now,
       runningOpsSameKind: [{
         id: "cleaning-up",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         cutoverCommittedAt: now - 1_000,
         input: { fromGatewayId: "shared-0", toGatewayId: "shared-1" },
       }],
       pendingOpsSameKind: [{
         id: "retrying-cleanup",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         createdAt: 1,
         nextAttemptAt: now + 30_000,
         cutoverCommittedAt: now - 5_000,
@@ -457,7 +457,7 @@ describe("decideOperationClaim", () => {
 
   it("queues a Native source rollout while post-cutover return cleanup is running", () => {
     const rollout = { id: "roll", kind: "rollout", status: "pending", createdAt: 2, rolloutLane: "builder-vm" as const, input: { gatewayId: "builder-0" } };
-    const returning = { id: "builder-return-builder-0-g1", kind: "migrate-customer", cutoverCommittedAt: now - 1,
+    const returning = { id: "builder-return-builder-0-g1", kind: "migrate-user", cutoverCommittedAt: now - 1,
       input: { source: "builder-activation-lease", fromGatewayId: "builder-0", toGatewayId: "shared-0" } };
     expect(decideOperationClaim({ op: rollout, now, runningOpsSameKind: [returning], pendingOpsSameKind: [] })).toMatchObject({ outcome: "queue" });
     expect(decideOperationClaim({ op: rollout, now, runningOpsSameKind: [], pendingOpsSameKind: [{ ...returning, createdAt: 1, nextAttemptAt: now + 30_000 }] })).toMatchObject({ outcome: "queue" });
@@ -467,7 +467,7 @@ describe("decideOperationClaim", () => {
 
   it.each([undefined, now + 1_000])("keeps a pending post-cutover Native return ahead of an older source rollout (queuedAt=%s)", (queuedAt) => {
     const rollout = { id: "roll", kind: "rollout", origin: "operator", status: "pending", createdAt: 1, rolloutLane: "builder-vm" as const, input: { gatewayId: "builder-0" } };
-    const returning = { id: "builder-return-builder-0-g1", kind: "migrate-customer", createdAt: 2, queuedAt, nextAttemptAt: now + 30_000, cutoverCommittedAt: now - 1,
+    const returning = { id: "builder-return-builder-0-g1", kind: "migrate-user", createdAt: 2, queuedAt, nextAttemptAt: now + 30_000, cutoverCommittedAt: now - 1,
       input: { source: "builder-activation-lease", fromGatewayId: "builder-0", toGatewayId: "shared-0" } };
     expect(decideOperationClaim({ op: rollout, now, runningOpsSameKind: [], pendingOpsSameKind: [returning] })).toMatchObject({ outcome: "queue" });
     expect(decideOperationClaim({ op: { ...returning, status: "pending", nextAttemptAt: now }, now, runningOpsSameKind: [], pendingOpsSameKind: [rollout] })).toEqual({ outcome: "claim" });
@@ -477,7 +477,7 @@ describe("decideOperationClaim", () => {
     const decision = decideOperationClaim({
       op: {
         id: "next-migration",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         status: "pending",
         createdAt: 2,
         input: { fromGatewayId: "other", toGatewayId: "default-b" },
@@ -486,7 +486,7 @@ describe("decideOperationClaim", () => {
       runningOpsSameKind: [],
       pendingOpsSameKind: [{
         id: "durable-migration",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         createdAt: 1,
         nextAttemptAt: now + 30_000,
         input: { fromGatewayId: "default", toGatewayId: "default-b" },
@@ -528,14 +528,14 @@ describe("decideOperationClaim", () => {
     const decision = decideOperationClaim({
       op: {
         id: "op-2",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         status: "pending",
         createdAt: 2,
         input: { toGatewayId: "gw-green" },
       },
       now,
       runningOpsSameKind: [
-        { id: "op-1", kind: "migrate-customer", input: { toGatewayId: "gw-green" } },
+        { id: "op-1", kind: "migrate-user", input: { toGatewayId: "gw-green" } },
       ],
       pendingOpsSameKind: [],
     });
@@ -546,14 +546,14 @@ describe("decideOperationClaim", () => {
     const decision = decideOperationClaim({
       op: {
         id: "op-2",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         status: "pending",
         createdAt: 2,
         input: { toGatewayId: "gw-purple" },
       },
       now,
       runningOpsSameKind: [
-        { id: "op-1", kind: "migrate-customer", input: { toGatewayId: "gw-green" } },
+        { id: "op-1", kind: "migrate-user", input: { toGatewayId: "gw-green" } },
       ],
       pendingOpsSameKind: [],
     });
@@ -617,7 +617,7 @@ describe("decideOperationClaim — FIFO per scope (an older pending op blocks a 
     const decision = decideOperationClaim({
       op: {
         id: "op-new",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         status: "pending",
         createdAt: 3,
         input: { toGatewayId: "gw-purple" },
@@ -625,7 +625,7 @@ describe("decideOperationClaim — FIFO per scope (an older pending op blocks a 
       now,
       runningOpsSameKind: [],
       pendingOpsSameKind: [
-        { id: "op-old", kind: "migrate-customer", createdAt: 2, input: { toGatewayId: "gw-green" } },
+        { id: "op-old", kind: "migrate-user", createdAt: 2, input: { toGatewayId: "gw-green" } },
       ],
     });
     expect(decision).toEqual({ outcome: "claim" });
@@ -635,7 +635,7 @@ describe("decideOperationClaim — FIFO per scope (an older pending op blocks a 
     const decision = decideOperationClaim({
       op: {
         id: "op-new",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         status: "pending",
         createdAt: 3,
         input: { toGatewayId: "gw-green" },
@@ -645,7 +645,7 @@ describe("decideOperationClaim — FIFO per scope (an older pending op blocks a 
       pendingOpsSameKind: [
         {
           id: "op-old",
-          kind: "migrate-customer",
+          kind: "migrate-user",
           createdAt: 2,
           input: { fromGatewayId: "gw-blue", toGatewayId: "gw-green" },
         },
@@ -674,7 +674,7 @@ describe("decideOperationClaim — account suspensions run one at a time", () =>
   const now = 1_000_000;
   const suspension = (id: string, createdAt: number, nextAttemptAt?: number) => ({
     id,
-    kind: "suspend-customer",
+    kind: "suspend-user",
     status: "pending",
     createdAt,
     nextAttemptAt,
@@ -685,7 +685,7 @@ describe("decideOperationClaim — account suspensions run one at a time", () =>
     const decision = decideOperationClaim({
       op: suspension("op-2", 2),
       now,
-      runningOpsSameKind: [{ id: "op-1", kind: "suspend-customer", input: { uid: "uid-op-1" } }],
+      runningOpsSameKind: [{ id: "op-1", kind: "suspend-user", input: { uid: "uid-op-1" } }],
       pendingOpsSameKind: [],
     });
     expect(decision).toEqual({ outcome: "queue", waitingOn: "another account suspension" });
@@ -717,7 +717,7 @@ describe("decideOperationClaim — account suspensions run one at a time", () =>
       now,
       runningOpsSameKind: [
         { id: "roll", kind: "rollout", input: { gatewayId: "shared-a" } },
-        { id: "move", kind: "migrate-customer", input: { fromGatewayId: "shared-a", toGatewayId: "shared-b" } },
+        { id: "move", kind: "migrate-user", input: { fromGatewayId: "shared-a", toGatewayId: "shared-b" } },
       ],
       pendingOpsSameKind: [],
     });

@@ -33,8 +33,8 @@ describe("routeOperation", () => {
         calls.push("add-gateway");
         return { steps: [], success: true };
       },
-      "migrate-customer": async () => {
-        calls.push("migrate-customer");
+      "migrate-user": async () => {
+        calls.push("migrate-user");
         return { steps: [], success: true };
       },
       "retire-gateway": async () => {
@@ -46,8 +46,8 @@ describe("routeOperation", () => {
         return { steps: [], success: true };
       },
     };
-    await routeOperation(mkOp({ kind: "migrate-customer" }), handlers, ctx);
-    expect(calls).toEqual(["migrate-customer"]);
+    await routeOperation(mkOp({ kind: "migrate-user" }), handlers, ctx);
+    expect(calls).toEqual(["migrate-user"]);
   });
 
   it("returns the handler's success + steps verbatim", async () => {
@@ -57,7 +57,7 @@ describe("routeOperation", () => {
     ];
     const handlers: Record<OperationKind, OperationHandler> = {
       "add-gateway": async () => ({ steps, success: true }),
-      "migrate-customer": async () => ({ steps: [], success: true }),
+      "migrate-user": async () => ({ steps: [], success: true }),
       "retire-gateway": async () => ({ steps: [], success: true }),
       rollout: async () => ({ steps: [], success: true }),
     };
@@ -71,7 +71,7 @@ describe("routeOperation", () => {
       "add-gateway": async () => {
         throw new Error("helm install timed out");
       },
-      "migrate-customer": async () => ({ steps: [], success: true }),
+      "migrate-user": async () => ({ steps: [], success: true }),
       "retire-gateway": async () => ({ steps: [], success: true }),
       rollout: async () => ({ steps: [], success: true }),
     };
@@ -83,7 +83,7 @@ describe("routeOperation", () => {
   it("rejects unknown kinds with an explicit error (defensive — strict typing should prevent at the boundary)", async () => {
     const handlers: Record<OperationKind, OperationHandler> = {
       "add-gateway": async () => ({ steps: [], success: true }),
-      "migrate-customer": async () => ({ steps: [], success: true }),
+      "migrate-user": async () => ({ steps: [], success: true }),
       "retire-gateway": async () => ({ steps: [], success: true }),
       rollout: async () => ({ steps: [], success: true }),
     };
@@ -98,14 +98,14 @@ describe("routeOperation", () => {
     const liveCtx: OperationContext = { reportStep };
     const handlers: Record<OperationKind, OperationHandler> = {
       "add-gateway": async () => ({ steps: [], success: true }),
-      "migrate-customer": async (_op, c) => {
+      "migrate-user": async (_op, c) => {
         await c.reportStep({ name: "in-progress", status: "running" });
         return { steps: [], success: true };
       },
       "retire-gateway": async () => ({ steps: [], success: true }),
       rollout: async () => ({ steps: [], success: true }),
     };
-    await routeOperation(mkOp({ kind: "migrate-customer" }), handlers, liveCtx);
+    await routeOperation(mkOp({ kind: "migrate-user" }), handlers, liveCtx);
     expect(reportStep).toHaveBeenCalledWith({ name: "in-progress", status: "running" });
   });
 });

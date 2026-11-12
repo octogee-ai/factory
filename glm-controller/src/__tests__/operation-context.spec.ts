@@ -220,7 +220,7 @@ await ctx.reportStep({ name: "quiesce-source", status: "done", completedAt: 200 
 
 describe("active operation claim", () => {
   const claimed = {
-    id: "op-1", kind: "migrate-customer", status: "running", startedAt: 100,
+    id: "op-1", kind: "migrate-user", status: "running", startedAt: 100,
     input: { uid: "uid-alice", fromGatewayId: "source", toGatewayId: "target" },
   } as Operation;
 
@@ -258,7 +258,7 @@ describe("active operation claim", () => {
 
 describe("settled user restore", () => {
   const operation = {
-    id: "return-1", kind: "migrate-customer", startedAt: 900,
+    id: "return-1", kind: "migrate-user", startedAt: 900,
     input: { uid: "u1", fromGatewayId: "builder-1", toGatewayId: "shared-1", builderSlug: "alice" },
   } as Operation;
   const acknowledged = {

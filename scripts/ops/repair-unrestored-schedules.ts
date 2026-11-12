@@ -19,7 +19,7 @@ export const REPAIR_UNRESTORED_SCHEDULES_USAGE =
   "Usage: npm run --prefix scripts with-platform-state -- --env=<test|prod> -- npx tsx ops/repair-unrestored-schedules.ts " +
   "--env=<test|prod> [--uid=<uid>] [--restore-unattempted] [--apply --gateway-url=<url of the user's gateway fleet port>]";
 
-const IN_FLIGHT_KINDS: ReadonlySet<string> = new Set(["migrate-customer", "suspend-customer", "erase-customer", "deprovision-customer"]);
+const IN_FLIGHT_KINDS: ReadonlySet<string> = new Set(["migrate-user", "suspend-user", "erase-user", "deprovision-user"]);
 const IN_FLIGHT_STATUSES = ["pending", "running"] as const;
 const ISOLATED_GATEWAY_CLASS = "builder";
 const FLAGS = ["--apply", "--restore-unattempted"];
@@ -211,7 +211,7 @@ function userAgentIds(user: PlatformUserRecord): string[] {
 }
 
 async function ownedSince(store: RepairStore, uid: string, gatewayId: string): Promise<number> {
-  const moves = await store.journal.operations.listForUid(uid, { kind: "migrate-customer" });
+  const moves = await store.journal.operations.listForUid(uid, { kind: "migrate-user" });
   const onto = moves.flatMap((move) =>
     move.input?.toGatewayId === gatewayId && typeof move.cutoverCommittedAt === "number" ? [move.cutoverCommittedAt] : []);
   return onto.length === 0 ? 0 : Math.max(...onto);

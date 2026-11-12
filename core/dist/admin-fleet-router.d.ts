@@ -99,16 +99,16 @@ declare function resolveSizingForResponse(glmDoc: Record<string, unknown> | unde
         };
     };
     capacity: {
-        targetActiveBuilders: number;
-        typicalBuilders: number;
+        targetActiveUsers: number;
+        typicalUsers: number;
     };
     monthlyCostUsd: {
         compute: number;
         onDemandCompute: number;
         savings: number;
         pricingMode: GatewayPricingMode;
-        perBuilderAtTarget: number;
-        perBuilderAtTypical: number;
+        perUserAtTarget: number;
+        perUserAtTypical: number;
     };
 };
 export declare function resolveFleetNamespace(env?: NodeJS.ProcessEnv): string;
@@ -249,7 +249,7 @@ export declare function projectGatewaySummary(doc: FirestoreDocLike, glmDoc: Glm
 export type AdminIsolatedRuntimeLifecycle = "requested" | "provisioning" | "activating" | "active" | "returning" | "retiring" | "failed";
 export declare function projectIsolatedRuntime(userDoc: FirestoreDocLike, gatewaysById: ReadonlyMap<string, GlmDoc>, operationsById: ReadonlyMap<string, GlmDoc>, now: number): {
     uid: string;
-    builderSlug: string;
+    userSlug: string;
     lifecycle: AdminIsolatedRuntimeLifecycle;
     phase: "activation" | "runtime" | "return" | "retirement";
     leaseId: string;
@@ -282,20 +282,20 @@ export declare function projectIsolatedRuntime(userDoc: FirestoreDocLike, gatewa
     targetPodStatus: GatewayPodDiagnosticsStatus | null;
     targetPodCount: number | null;
 } | null;
-export declare function projectDisposableFleetCapacity(gateways: ReadonlyArray<ReturnType<typeof projectGatewaySummary>>, isolatedRuntimes?: ReadonlyArray<NonNullable<ReturnType<typeof projectIsolatedRuntime>>>, parkedBuilders?: number): {
+export declare function projectDisposableFleetCapacity(gateways: ReadonlyArray<ReturnType<typeof projectGatewaySummary>>, isolatedRuntimes?: ReadonlyArray<NonNullable<ReturnType<typeof projectIsolatedRuntime>>>, parkedUsers?: number): {
     disposableInstances: number;
     stagedInstances: 0;
     byTier: Record<string, number>;
-    parkedBuilders: number;
+    parkedUsers: number;
     byLifecycle: Record<AdminIsolatedRuntimeLifecycle | "parked", number>;
-    failedBuilders: number;
+    failedUsers: number;
     staleActivations: number;
     oldestActivationAgeMs: number | null;
 };
 export declare const ERR_USER_NOT_FOUND = "user not found";
 export declare const ERR_TARGET_GATEWAY_NOT_READY = "target gateway not ready";
 export declare const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
-export declare const OP_KIND_MIGRATE_USER = "migrate-customer";
+export declare const OP_KIND_MIGRATE_USER = "migrate-user";
 export interface AdminGatewayControlProjection {
     desiredStatus: string;
     desiredRelease: number | null;
@@ -306,16 +306,16 @@ export interface AdminGatewayControlProjection {
     profile: GatewayProfile | null;
     sizingTier: string | null;
     ownerUid: string | null;
-    builderSlug: string | null;
+    userSlug: string | null;
     gcpProject: string | null;
     serviceAccountName: string | null;
-    builderAccess: Record<string, unknown> | null;
+    userAccess: Record<string, unknown> | null;
     modelBrokerLimits: Record<string, unknown> | null;
     vm: GatewayVmState | null;
 }
 export declare function projectGatewayControl(root: DurableGatewayRoot, glmData: Record<string, unknown> | undefined): AdminGatewayControlProjection;
 interface NewOperationInput {
-    kind: "add-gateway" | typeof OP_KIND_MIGRATE_USER | "retire-gateway" | "restart-gateway" | "rollout" | "deprovision-customer" | "suspend-customer" | "erase-customer";
+    kind: "add-gateway" | typeof OP_KIND_MIGRATE_USER | "retire-gateway" | "restart-gateway" | "rollout" | "deprovision-user" | "suspend-user" | "erase-user";
     createdBy: string;
     origin?: "automatic" | "operator";
     input: Record<string, unknown>;

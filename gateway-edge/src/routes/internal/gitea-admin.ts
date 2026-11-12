@@ -177,7 +177,7 @@ async function inboundMigrationRunning(gatewayId: string, slug: string): Promise
   const user = await platformStateStore.users.records.findBySlug(slug);
   if (!user) return false;
   const operations = await platformStateStore.journal.operations.listForUid(user.uid, {
-    kind: "migrate-customer",
+    kind: "migrate-user",
     statuses: ["running"],
   });
   return operations.some((operation) => {

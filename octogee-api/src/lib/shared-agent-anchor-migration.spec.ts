@@ -12,9 +12,9 @@ function fixture(kind: "v2" | "legacy" = "v2") {
   const v2 = { phase: "sourceQuiesced", operationId, migrationId, uid: "uid-bob", slug: "bob", sourceGatewayId: source, targetGatewayId: target, sourceEpoch: 7, sourceAssignmentMode: "assigned" };
   const handoff = { migrationId: `${migrationId}:scheduler:1:claim:50`, uid: "uid-bob", slug: "bob", fromGatewayId: source, toGatewayId: target,
     forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 7 } };
-  const operation: Record<string, any> = { kind: "migrate-customer", status: "running", startedAt: 50, cancellationRequestedAt: 60,
+  const operation: Record<string, any> = { kind: "migrate-user", status: "running", startedAt: 50, cancellationRequestedAt: 60,
     input: { uid: "uid-bob", fromGatewayId: source, toGatewayId: target }, ...(kind === "v2" ? { customerMigrationV2: v2 } : { schedulerHandoff: handoff }) };
-  const assigned = { uid: "uid-bob", slug: "bob", gatewayId: source, source: "migrate-customer", epoch: 7, state: "quiescing", updatedByOperationId: operationId };
+  const assigned = { uid: "uid-bob", slug: "bob", gatewayId: source, source: "migrate-user", epoch: 7, state: "quiescing", updatedByOperationId: operationId };
   const records: Record<string, Record<string, unknown>> = {
     [`glmOperations/${operationId}`]: operation, [`gateways/${source}`]: root(source), [`gateways/${target}`]: root(target),
     [`gateways/${source}/assignments/uid-bob`]: assigned,

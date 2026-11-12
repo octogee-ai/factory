@@ -105,7 +105,7 @@ function assignUser(slug: string, gatewayId: string) {
 
 function seedRunningMigration(uid: string, toGatewayId: string) {
   mocks.docs.set("glmOperations/op-1", {
-    kind: "migrate-customer",
+    kind: "migrate-user",
     status: "running",
     gatewayId: toGatewayId,
     inputUid: uid,
@@ -217,7 +217,7 @@ describe("internal gitea-admin route", () => {
 
     expect(res.status).toBe(200);
     expect(platformStateStore.journal.operations.listForUid).toHaveBeenCalledWith("uid-acme", {
-      kind: "migrate-customer",
+      kind: "migrate-user",
       statuses: ["running"],
     });
     expect(gitHost().primaryKey).toHaveBeenCalledWith("acme");
@@ -313,7 +313,7 @@ describe("internal gitea-admin route", () => {
 
     expect(res.status).toBe(403);
     expect(platformStateStore.journal.operations.listForUid).toHaveBeenCalledWith("uid-acme", {
-      kind: "migrate-customer",
+      kind: "migrate-user",
       statuses: ["running"],
     });
     expect(gitHost().primaryKey).not.toHaveBeenCalled();

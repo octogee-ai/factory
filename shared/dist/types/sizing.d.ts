@@ -19,8 +19,8 @@ export interface TierNodeRuntime {
     maxOldSpaceSizeMb: string;
 }
 export interface TierCapacity {
-    targetActiveBuilders: number;
-    typicalBuilders: number;
+    targetActiveUsers: number;
+    typicalUsers: number;
 }
 export interface SizingTierPreset {
     description: string;

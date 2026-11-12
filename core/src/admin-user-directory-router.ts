@@ -508,7 +508,7 @@ function projectPlacementReceipt(receipt: PlacementReceipt) {
     id: placementReceiptDocId(receipt.leaseId, receipt.generation, receipt.kind),
     kind: stringValue(data.kind) ?? "unknown",
     at: finiteNumber(data.at),
-    builderSlug: stringValue(data.builderSlug),
+    userSlug: stringValue(data.builderSlug),
     leaseId: stringValue(data.leaseId),
     generation: finiteNumber(data.generation),
     cause: stringValue(data.cause),
@@ -684,7 +684,7 @@ router.get(
 
         res.json({
           ...userEntitlements().productProjection?.adminUserStats(summaries),
-          totalCustomers: totalUsers,
+          totalUsers,
           incompleteProvisioning,
           totalCostUsd: Math.round(totalCostUsd * 100) / 100,
           needsAttention,

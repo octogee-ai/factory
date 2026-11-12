@@ -167,7 +167,7 @@ function assertInitialFailureScheduler(operation: OperationRecord, operationId: 
 async function readAuthority(tx: PlatformStateTransaction, uid: string, operationId: string, claimedStartedAt?: number) {
   const operation = await tx.journal.operations.get(operationId);
   const input = operation?.input ?? {};
-  requireState(operation !== null && operation.kind === "migrate-customer" && identity(input.fromGatewayId) && identity(input.toGatewayId) && identity(input.builderSlug), "native return recovery operation scope is unavailable");
+  requireState(operation !== null && operation.kind === "migrate-user" && identity(input.fromGatewayId) && identity(input.toGatewayId) && identity(input.builderSlug), "native return recovery operation scope is unavailable");
   requireState([operation.origin === "automatic", operation.createdBy === "glm-controller-placement-policy", operation.inputUid === uid,
     input.uid === uid, input.source === "builder-activation-lease", operation.gatewayId === input.toGatewayId,
     operation.cutoverCommittedAt === undefined, operation.cancellationRequestedAt === undefined, operation.customerMigrationV2 === undefined,

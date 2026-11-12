@@ -156,9 +156,9 @@ export function operationNeedsDurableRestartResume(op: {
 }): boolean {
   return migrationCutoverNeedsRecovery(op) ||
     op.schedulerHandoff?.forwardRecovery !== undefined ||
-    sourceTransferBlocksRelease(op.sourceTransferExecution) || op.kind === "suspend-customer" ||
+    sourceTransferBlocksRelease(op.sourceTransferExecution) || op.kind === "suspend-user" ||
     (op.kind === "restart-gateway" && (op.input?.restoreRecovery !== undefined || op.input?.sourceRecovery !== undefined)) ||
-    op.kind === "erase-customer" ||
+    op.kind === "erase-user" ||
     isLevelTriggeredUserReturn(op) ||
     operationNeedsDurableUserMigrationV2Resume(op);
 }
@@ -249,8 +249,8 @@ function hasLevelTriggeredFence(input: OperationCompletionInput): boolean {
     recordOutput(result.output?.deletionFencePending) ||
     recordOutput(result.output?.deletionCleanupRetry) ||
     op.kind === MIGRATE_USER_KIND && result.output?.gatewayCompatibilityPending === true ||
-    op.kind === "suspend-customer" ||
-    op.kind === "erase-customer";
+    op.kind === "suspend-user" ||
+    op.kind === "erase-user";
 }
 
 function isLevelTriggeredUserReturn(op: OperationCompletionInput["op"]): boolean {

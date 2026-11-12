@@ -35,14 +35,14 @@ describe("estimateGatewayMonthlyCost", () => {
     expect(result.computeUsd).toBe(expected);
   });
 
-  it("derives perBuilderAtTarget and perBuilderAtTypical from raw compute and tier capacity", () => {
+  it("derives perUserAtTarget and perUserAtTypical from raw compute and tier capacity", () => {
     const preset = TIER_PRESETS["l"];
     const rawCompute =
       4 * AUTOPILOT_GENERAL_PURPOSE_VCPU_USD_PER_HR * HOURS_PER_MONTH +
       16 * AUTOPILOT_GENERAL_PURPOSE_GIB_USD_PER_HR * HOURS_PER_MONTH;
     const result = estimateGatewayMonthlyCost("l");
-    expect(result.perBuilderAtTarget).toBe(Math.round(rawCompute / preset.capacity.targetActiveBuilders));
-    expect(result.perBuilderAtTypical).toBe(Math.round(rawCompute / preset.capacity.typicalBuilders));
+    expect(result.perUserAtTarget).toBe(Math.round(rawCompute / preset.capacity.targetActiveUsers));
+    expect(result.perUserAtTypical).toBe(Math.round(rawCompute / preset.capacity.typicalUsers));
   });
 
   it("applies the conservative Spot multiplier when pricingMode=spot", () => {
@@ -58,8 +58,8 @@ describe("estimateGatewayMonthlyCost", () => {
     for (const tier of SIZING_TIERS) {
       const result = estimateGatewayMonthlyCost(tier);
       expect(Number.isInteger(result.computeUsd)).toBe(true);
-      expect(Number.isInteger(result.perBuilderAtTarget)).toBe(true);
-      expect(Number.isInteger(result.perBuilderAtTypical)).toBe(true);
+      expect(Number.isInteger(result.perUserAtTarget)).toBe(true);
+      expect(Number.isInteger(result.perUserAtTypical)).toBe(true);
     }
   });
 

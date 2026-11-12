@@ -9,7 +9,7 @@ function assignmentsCollection(db, gatewayId) {
 }
 const ASSIGNMENT_SOURCES = new Set([
     "onboarding",
-    "migrate-customer",
+    "migrate-user",
     "repair",
 ]);
 // A parsed AssignmentDoc or null when the stored shape is not a complete

@@ -61,7 +61,7 @@ function qualifyUserActivationRollRecoveryState(input: UserActivationRollRecover
   const operationId = typeof gateway.gatewayId === 'string' && Number.isSafeInteger(lease.generation) && Number(lease.generation) > 0
     ? builderActivateOperationId(gateway.gatewayId, Number(lease.generation)) : null;
   const checks = [
-    operationId !== null, operation.id === operationId, operation.kind === 'migrate-customer',
+    operationId !== null, operation.id === operationId, operation.kind === 'migrate-user',
     operationHoldsRecoveryCustody(operation, custodyOnly),
     operation.cancellationRequestedAt === undefined, operation.cutoverCommittedAt === undefined,
     operation.customerMigrationV2 === undefined, operation.sourceTransferExecution === undefined,

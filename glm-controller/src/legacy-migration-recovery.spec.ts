@@ -5,7 +5,7 @@ import { attemptNeverHeldSource, rearmOwnedLegacyMigration } from "./legacy-migr
 
 function fixture(migrationId: string, operationId = "op-1") {
   const steps = [{ name: "keys-sync-state", status: "failed" as const, error: "request timed out" }];
-  const operation = { id: operationId, kind: "migrate-customer", status: "failed", attempts: 1, startedAt: 1_000,
+  const operation = { id: operationId, kind: "migrate-user", status: "failed", attempts: 1, startedAt: 1_000,
     completedAt: 2_000, error: "reaped: controller restarted mid-op", input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
     steps, schedulerHandoff: { migrationId, uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
   } as Operation;
@@ -13,7 +13,7 @@ function fixture(migrationId: string, operationId = "op-1") {
   const records: Record<string, Record<string, unknown>> = {
     [path]: operation as unknown as Record<string, unknown>,
     "users/alice": { provisioning: { openclaw: { gatewayId: "shared-a", migration: { state: "preparing", phase: "preparing", startedAt: 1_000, operationId } } } },
-    "gateways/shared-a/assignments/alice": { uid: "alice", slug: "alice", gatewayId: "shared-a", source: "migrate-customer", state: "serving", epoch: 4,
+    "gateways/shared-a/assignments/alice": { uid: "alice", slug: "alice", gatewayId: "shared-a", source: "migrate-user", state: "serving", epoch: 4,
       createdAt: 500, updatedAt: 500, updatedByOperationId: null },
   };
   const store = createDocumentFixtureStore(records);

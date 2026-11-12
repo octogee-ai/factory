@@ -318,7 +318,7 @@ export declare function resolveUserGatewayControlState(data: {
     gatewayProfile: GatewayProfile;
     controlUiEnabled: boolean;
 };
-export type OperationKind = "add-gateway" | "gateway-vm" | "migrate-customer" | "retire-gateway" | "restart-gateway" | "recycle-gateway" | "scale-shared-member" | "rollout" | "deprovision-customer" | "suspend-customer" | "erase-customer";
+export type OperationKind = "add-gateway" | "gateway-vm" | "migrate-user" | "retire-gateway" | "restart-gateway" | "recycle-gateway" | "scale-shared-member" | "rollout" | "deprovision-user" | "suspend-user" | "erase-user";
 export type OperationStatus = "pending" | "running" | "succeeded" | "failed" | "rolled-back";
 export declare const OPERATION_ORIGINS: readonly ["automatic", "operator"];
 export type OperationOrigin = (typeof OPERATION_ORIGINS)[number];

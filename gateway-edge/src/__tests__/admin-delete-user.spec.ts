@@ -193,7 +193,7 @@ describe("POST /api/admin/users/:uid/delete — 404 + 409 paths", () => {
       {
         id: "op-existing",
         data: {
-          kind: "suspend-customer",
+          kind: "suspend-user",
           status: "pending",
           inputUid: "uid-alice",
           input: { uid: "uid-alice" },
@@ -209,7 +209,7 @@ describe("POST /api/admin/users/:uid/delete — 404 + 409 paths", () => {
   it("409 when an erasure op is already running", async () => {
     usersDocs["uid-alice"] = { username: "alice" };
     glmOperationsDocs = [
-      { id: "op-running", data: { kind: "erase-customer", status: "running", inputUid: "uid-alice", input: { uid: "uid-alice" } } },
+      { id: "op-running", data: { kind: "erase-user", status: "running", inputUid: "uid-alice", input: { uid: "uid-alice" } } },
     ];
     const res = await request(buildApp()).post("/api/admin/users/uid-alice/delete");
     expect(res.status).toBe(409);
@@ -232,8 +232,8 @@ describe("POST /api/admin/users/:uid/delete — has-slug branch", () => {
       erasureOperationId: expect.any(String),
     });
     expect(operationWrites()).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: "suspend-customer", inputUid: "uid-alice" }),
-      expect.objectContaining({ kind: "erase-customer", inputUid: "uid-alice" }),
+      expect.objectContaining({ kind: "suspend-user", inputUid: "uid-alice" }),
+      expect.objectContaining({ kind: "erase-user", inputUid: "uid-alice" }),
     ]));
   });
 

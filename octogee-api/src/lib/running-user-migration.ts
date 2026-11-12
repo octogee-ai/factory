@@ -8,7 +8,7 @@ export async function hasRunningUserMigration(
   gatewayId: string,
   direction: UserMigrationDirection,
 ): Promise<boolean> {
-  const operations = await store.journal.operations.listForUid(uid, { kind: "migrate-customer", statuses: ["running"] });
+  const operations = await store.journal.operations.listForUid(uid, { kind: "migrate-user", statuses: ["running"] });
   return operations.some(({ input }) =>
     input.uid === uid && (direction === "inbound" ? input.toGatewayId : input.fromGatewayId) === gatewayId);
 }

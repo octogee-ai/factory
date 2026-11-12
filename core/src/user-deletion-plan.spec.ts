@@ -38,14 +38,14 @@ describe("buildUserDeletionPlan", () => {
     });
     expect(plan.suspensionOperation).toMatchObject({
       id: "suspend-random",
-      kind: "suspend-customer",
+      kind: "suspend-user",
       status: "pending",
       inputUid: "uid-alice",
       input: { uid: "uid-alice", deletionId: "delete-random" },
     });
     expect(plan.erasureOperation).toMatchObject({
       id: "erase-random",
-      kind: "erase-customer",
+      kind: "erase-user",
       status: "pending",
       nextAttemptAt: 20_000,
       inputUid: "uid-alice",

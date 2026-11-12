@@ -7,7 +7,7 @@ const VM = "alice-vm", COACH = "octogee-alice-coach";
 const RETURN = "builder-return-alice-vm-g1", RETURN_HOLD = `mig-${RETURN}:scheduler:1:claim:100`;
 const ACTIVATION = "builder-activate-alice-vm-g2", CUTOVER = 5_000;
 const returned: SchedulerCustodyOwner = {
-  kind: "migrate-customer", status: "succeeded", input: { uid: "uid-alice", fromGatewayId: VM, toGatewayId: "shared-1" },
+  kind: "migrate-user", status: "succeeded", input: { uid: "uid-alice", fromGatewayId: VM, toGatewayId: "shared-1" },
   cutoverCommittedAt: 1_000, completedAt: 1_200,
 };
 
@@ -114,7 +114,7 @@ describe("releaseSchedulerCustody", () => {
     const earlier = `mig-builder-activate-alice-vm-g1:release:${COACH}`;
     vm.migrate({ operationId: earlier, phase: "stage", agentIds: [COACH], retainNonportable: true,
       snapshot: { version: 1, operationId: earlier, agentIds: [COACH], jobs: [], scratch: [] } });
-    const h = releaser(custody, { "builder-activate-alice-vm-g1": { kind: "migrate-customer", status: "failed", input: {}, completedAt: 1_500 } });
+    const h = releaser(custody, { "builder-activate-alice-vm-g1": { kind: "migrate-user", status: "failed", input: {}, completedAt: 1_500 } });
 
     expect(await h.run()).toEqual([{ agentId: COACH, outcome: "released", holder: earlier }]);
     expect(vm.status(earlier)).toBe("activated");

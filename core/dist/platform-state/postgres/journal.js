@@ -2,6 +2,7 @@ import { randomInt } from "node:crypto";
 import { isOperationAuditRecord, } from "@octogee/shared/types/glm";
 import { MalformedRecordError, MissingRecordError } from "../errors.js";
 import { GATEWAY_RECOVERY_RECEIPTS_TABLE, OPERATION_AUDITS_TABLE, OPERATIONS_TABLE } from "./journal-tables.js";
+import { currentAuditMutation, currentOperationKind, operationKindsStoredAs } from "./legacy-stored-names.js";
 import { deleteRecord, equalsFence, insertRecord, oneOfFence, revisionFence, selectByKey, selectRecords, updateRecord, } from "./records.js";
 import { SqlParameters } from "./sql.js";
 import { columnFor, decodeStored, isClearField } from "./values.js";
@@ -21,10 +22,12 @@ const AUDIT_STATUS = columnFor(OPERATION_AUDITS_TABLE, operationKey(""), "status
 const ACTION_CLAIM_ID = columnFor(OPERATION_AUDITS_TABLE, operationKey(""), "actionClaimId");
 const ACTION_STARTED_AT = columnFor(OPERATION_AUDITS_TABLE, operationKey(""), "actionStartedAt");
 export function decodeOperation(row) {
-    return decodeStored(OPERATIONS_TABLE, row);
+    const operation = decodeStored(OPERATIONS_TABLE, row);
+    return { ...operation, kind: currentOperationKind(operation.kind) };
 }
 export function decodeOperationAudit(row) {
-    const audit = decodeStored(OPERATION_AUDITS_TABLE, row);
+    const stored = decodeStored(OPERATION_AUDITS_TABLE, row);
+    const audit = { ...stored, mutation: currentAuditMutation(stored.mutation) };
     if (!isOperationAuditRecord(audit)) {
         throw new MalformedRecordError({ aggregate: "operation-audit", key: String(row.id) }, "fails the operation audit schema");
     }
@@ -71,13 +74,14 @@ function createOperationsRepository(session) {
             if (filter.statuses !== undefined)
                 conditions.push(`status = ANY(${parameters.add([...filter.statuses], "text[]")})`);
             if (filter.kind !== undefined)
-                conditions.push(`kind = ${parameters.add(filter.kind, "text")}`);
+                conditions.push(`kind = ANY(${parameters.add(operationKindsStoredAs(filter.kind), "text[]")})`);
             return list("journal.operations.listForUid", conditions.join(" AND "), parameters.values);
         },
         listByKind(kind, statuses) {
+            const kinds = operationKindsStoredAs(kind);
             if (statuses === undefined)
-                return list("journal.operations.listByKind", "kind = $1::text", [kind]);
-            return list("journal.operations.listByKind", "kind = $1::text AND status = ANY($2::text[])", [kind, [...statuses]]);
+                return list("journal.operations.listByKind", "kind = ANY($1::text[])", [kinds]);
+            return list("journal.operations.listByKind", "kind = ANY($1::text[]) AND status = ANY($2::text[])", [kinds, [...statuses]]);
         },
         listReferencingUid(uid) {
             return list("journal.operations.listReferencingUid", "input_uid = $1::text OR input_uid_raw = $1::text OR created_by = $1::text", [uid]);

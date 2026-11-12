@@ -71,7 +71,7 @@ function releasedHome(home: FleetRegistryVmHome | undefined): FleetRegistryVmHom
 
 function rollbackStillOwnsSource(authority: HoldAuthority, desired: Stored<GatewayRoot>, gatewayId: string): boolean {
   const { runtime, operation: op, owner } = authority;
-  return [runtime?.runtime === "gce-vm", ["failed", "rolled-back"].includes(op?.status ?? ""), op?.kind === "migrate-customer",
+  return [runtime?.runtime === "gce-vm", ["failed", "rolled-back"].includes(op?.status ?? ""), op?.kind === "migrate-user",
     op?.cutoverCommittedAt === undefined, op?.input?.uid === desired.ownerUid, op?.input?.fromGatewayId === gatewayId,
     owner?.gateway?.gatewayId === gatewayId, desired.desiredStatus === "running"].every(Boolean);
 }
@@ -113,7 +113,7 @@ async function releaseTerminalHold(
     if (journal === null) {
       await tx.journal.operations.create({
         id: journalId,
-        kind: "migrate-customer",
+        kind: "migrate-user",
         status: "succeeded",
         origin: "automatic",
         createdBy: NATIVE_RETURN_HOLD_REAPER_CREATOR,

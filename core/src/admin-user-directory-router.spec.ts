@@ -323,7 +323,7 @@ describe("GET /api/admin/users — search and filters cover every user", () => {
   it("counts users that have no creation time in the stats", async () => {
     const res = await request(makeApp(withUndated(2))).get("/api/admin/users/stats").expect(200);
 
-    expect(res.body).toMatchObject({ totalCustomers: 4, incompleteProvisioning: 0 });
+    expect(res.body).toMatchObject({ totalUsers: 4, incompleteProvisioning: 0 });
   });
 
   it.each([
@@ -435,7 +435,7 @@ describe("admin user routes — commercial fields", () => {
   it("reports recurring revenue in the stats from the product", async () => {
     const res = await request(makeApp(paying())).get("/api/admin/users/stats").expect(200);
 
-    expect(res.body).toMatchObject({ totalCustomers: 1, mrrUsd: 20 });
+    expect(res.body).toMatchObject({ totalUsers: 1, mrrUsd: 20 });
   });
 
   it("reports an archive's plan from the product, in the position it held", async () => {
@@ -463,7 +463,7 @@ describe("admin user routes — commercial fields", () => {
 
     const res = await request(makeApp(paying())).get("/api/admin/users/stats").expect(200);
 
-    expect(res.body.totalCustomers).toBe(1);
+    expect(res.body.totalUsers).toBe(1);
     expect(res.body).not.toHaveProperty("mrrUsd");
   });
 });

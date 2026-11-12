@@ -39,7 +39,7 @@ function transfer(overrides: Partial<ScheduleTransferDoc> = {}): ScheduleTransfe
 function operation(id: string, fields: Record<string, unknown>) {
   return {
     [`glmOperations/${id}`]: {
-      kind: "migrate-customer", status: "succeeded", createdBy: "cowboy", createdAt: 100, startedAt: 100, steps: [], inputUid: "uid-alice", ...fields,
+      kind: "migrate-user", status: "succeeded", createdBy: "cowboy", createdAt: 100, startedAt: 100, steps: [], inputUid: "uid-alice", ...fields,
     },
   };
 }
@@ -127,10 +127,10 @@ describe("repair-unrestored-schedules", () => {
   });
 
   it.each([
-    ["migrate-customer", "running"],
-    ["suspend-customer", "pending"],
-    ["erase-customer", "running"],
-    ["deprovision-customer", "pending"],
+    ["migrate-user", "running"],
+    ["suspend-user", "pending"],
+    ["erase-user", "running"],
+    ["deprovision-user", "pending"],
   ])("skips a user with a %s that is %s, says why, and exits non-zero", async (kind, status) => {
     const w = world();
     Object.assign(w.records, operation("op-live", { kind, status, input: { uid: "uid-alice", fromGatewayId: VM, toGatewayId: SHARED } }));
@@ -435,7 +435,7 @@ describe("repair-unrestored-schedules", () => {
 
       expect(w.custody.calls).toEqual([]);
       expect(w.row()).toEqual(before);
-      const error = change === "moved" ? `alice is no longer on ${SHARED}` : "migrate-customer op-live is pending";
+      const error = change === "moved" ? `alice is no longer on ${SHARED}` : "migrate-user op-live is pending";
       expect(w.audits()).toEqual([expect.objectContaining({ status: "failed", error })]);
       expect(w.error.mock.calls.flat()).toEqual([`❌ alice (uid-alice): ${error}`]);
     }

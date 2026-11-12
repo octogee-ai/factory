@@ -137,7 +137,7 @@ describe("a dry run of a changing request", () => {
 
   const busyGateway = operation("busy", { kind: "restart-gateway", status: "running", input: { gatewayId: "shared-b" } });
   const movingAda = operation("move-ada", {
-    kind: "migrate-customer", status: "pending", inputUid: "uid-ada", input: { uid: "uid-ada", toGatewayId: "shared-b" },
+    kind: "migrate-user", status: "pending", inputUid: "uid-ada", input: { uid: "uid-ada", toGatewayId: "shared-b" },
   });
 
   it.each<[string, number, ChangingRequest, Seed]>([

@@ -211,7 +211,7 @@ describe("POST /gateways/:id/deploy", () => {
         imageTag: `aaaaaaa-oc2026.8.1@sha256:${"c".repeat(64)}`,
         openclawSourceSha: "f".repeat(40),
         profileImages: {
-          builder: { imageTag: `aaaaaaa-oc2026.8.1@sha256:${"d".repeat(64)}` },
+          isolated: { imageTag: `aaaaaaa-oc2026.8.1@sha256:${"d".repeat(64)}` },
         },
         gatewayEdgeImage: { imageTag: `aaaaaaa-oc2026.8.1@sha256:${"e".repeat(64)}` },
       },
@@ -260,7 +260,7 @@ describe("manual gateway migrations", () => {
       .expect(400)
       .expect({ ...refusal, gatewayId: "legacy-owner" });
 
-    expect(opsIn(store, "migrate-customer")).toHaveLength(0);
+    expect(opsIn(store, "migrate-user")).toHaveLength(0);
   });
 });
 
@@ -606,7 +606,7 @@ describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from rel
     };
     seed["users/u1"] = { provisioning: { openclaw: { gatewayId: mirror, sourceTransferFence: fence } } };
     seed[`${GLM_OPERATIONS_COLLECTION}/transfer-1`] = {
-      kind: "migrate-customer", status: "failed",
+      kind: "migrate-user", status: "failed",
       input: { uid: "u1", fromGatewayId: "gamma", toGatewayId: "other" },
     };
     const { app, store } = mkApp(seed);
@@ -761,7 +761,7 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
     const seed = seedNewSchemaGateway("zeta", sharedPayload());
     seed["users/u1"] = { provisioning: { openclaw: { gatewayId: mirror, sourceTransferFence: fence } } };
     seed[`${GLM_OPERATIONS_COLLECTION}/transfer-1`] = {
-      kind: "migrate-customer", status: "failed",
+      kind: "migrate-user", status: "failed",
       input: { uid: "u1", fromGatewayId: "zeta", toGatewayId: "other" },
     };
     const original = structuredClone(seed["gateways/zeta"]);
@@ -787,11 +787,11 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
 
     const res = await request(app)
       .patch("/gateways/bench")
-      .send({ gatewayClass: "isolated", ownerUid: "uid-new", builderSlug: "new" });
+      .send({ gatewayClass: "isolated", ownerUid: "uid-new", userSlug: "new" });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/disposable lifecycle/);
-    expect(res.body.fields).toEqual(["gatewayClass", "ownerUid", "builderSlug"]);
+    expect(res.body.fields).toEqual(["gatewayClass", "ownerUid", "userSlug"]);
     expect(store.get("gateways/bench")).toMatchObject({ gatewayClass: "shared" });
   });
 
@@ -820,7 +820,7 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
     async (status) => {
       const seed = seedNewSchemaGateway("zeta", sharedPayload());
       seed[`${GLM_OPERATIONS_COLLECTION}/migration-live`] = {
-        kind: "migrate-customer",
+        kind: "migrate-user",
         status,
         input: { fromGatewayId: "source", toGatewayId: "zeta" },
       };
@@ -887,7 +887,7 @@ describe("DELETE /gateways/:id — retirement claim", () => {
     async (status) => {
       const seed = seedServingGateway("target", sharedPayload());
       seed[`${GLM_OPERATIONS_COLLECTION}/migration-live`] = {
-        kind: "migrate-customer",
+        kind: "migrate-user",
         status,
         input: { fromGatewayId: "source", toGatewayId: "target" },
       };
@@ -1002,7 +1002,7 @@ describe("DELETE /gateways/:id — retirement claim", () => {
     });
     const res = await request(app).delete("/gateways/assn");
     expect(res.status).toBe(409);
-    expect(res.body.assignedCustomers).toEqual(["alice"]);
+    expect(res.body.assignedUsers).toEqual(["alice"]);
     // Nothing was marked retired and no op was queued.
     expect(store.get("gateways/assn")?.desiredStatus).toBe("running");
     expect(opsIn(store, "retire-gateway")).toHaveLength(0);
@@ -1058,7 +1058,7 @@ describe("durable config PATCHes", () => {
     const res = await request(app)
       .patch("/gateways/bench")
       .send({
-        builderAccess: { controlUiEnabled: true, reason: "debug" },
+        userAccess: { controlUiEnabled: true, reason: "debug" },
         gatewayContainerSecurityContext: { runAsNonRoot: true },
       });
     expect(res.status).toBe(202);
@@ -1139,7 +1139,7 @@ describe('POST /gateways/:id/recover-source', () => {
     if (change === 'assignment') seed['gateways/shared-0/assignments/source-user-0'].epoch++;
     if (change === 'user') seed['users/source-user-0'].username = 'other';
     if (change === 'anchor') delete seed['users/source-user-0/agentStores/octogee-jdog99-coach'];
-    if (change === 'active-operation') seed['glmOperations/active'] = { kind: 'migrate-customer', status: 'running', input: { fromGatewayId: 'shared-0' } };
+    if (change === 'active-operation') seed['glmOperations/active'] = { kind: 'migrate-user', status: 'running', input: { fromGatewayId: 'shared-0' } };
     if (change === 'active-transfer') seed['glmMigrationTransferTasks/active'] = { status: 'running', sourceGatewayId: 'shared-0' };
     const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
     await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(409);

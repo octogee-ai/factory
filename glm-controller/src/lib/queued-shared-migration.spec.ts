@@ -5,7 +5,7 @@ import { queuedSharedMigrationOwnsSourceInStore } from "./queued-shared-migratio
 function fixture(migrationId: string) {
   const error = "expected exactly one ready pod for transport=shared-a; found 0";
   const row = {
-    kind: "migrate-customer", status: "pending", startedAt: null, completedAt: null, attempts: 1, steps: [],
+    kind: "migrate-user", status: "pending", startedAt: null, completedAt: null, attempts: 1, steps: [],
     input: { uid: "alice", builderSlug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
     schedulerHandoff: { migrationId, uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
     attemptHistory: [{ attempt: 1, startedAt: 1_000, completedAt: 2_000, classification: "transient", error,
@@ -14,7 +14,7 @@ function fixture(migrationId: string) {
   const store = createDocumentFixtureStore({
     "users/alice": { provisioning: { openclaw: { gatewayId: "shared-a", status: "complete",
       migration: { state: "preparing", phase: "preparing", startedAt: 1_000, operationId: "op-1" } } } },
-    "gateways/shared-a/assignments/alice": { uid: "alice", slug: "alice", gatewayId: "shared-a", source: "migrate-customer", state: "serving", epoch: 4,
+    "gateways/shared-a/assignments/alice": { uid: "alice", slug: "alice", gatewayId: "shared-a", source: "migrate-user", state: "serving", epoch: 4,
       createdAt: 500, updatedAt: 500, updatedByOperationId: null },
   });
   return { row, store };

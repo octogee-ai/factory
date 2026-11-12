@@ -1718,8 +1718,8 @@ const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set([
   "rollout",
   "restart-gateway",
   MIGRATE_USER_KIND,
-  "suspend-customer",
-  "erase-customer",
+  "suspend-user",
+  "erase-user",
 ]);
 
 function operationIsRestartResumable(op: Operation): boolean {
@@ -1737,7 +1737,7 @@ async function attemptClaimOrQueueOperation(
       if (stored === null) return { outcome: "skipped" as const };
       const freshOperation = operationFromRecord(stored);
       await assertOwnerOperationUnfenced(tx, op.id, freshOperation.input);
-      if (freshOperation.kind === 'migrate-customer') await assertMigrationRestartUnfenced(tx, freshOperation.input);
+      if (freshOperation.kind === 'migrate-user') await assertMigrationRestartUnfenced(tx, freshOperation.input);
       let runningOpsSameKind: OperationRef[] = [];
       let pendingOpsSameKind: PendingOperationRef[] = [];
       if (isSeriallyExclusiveKind(op.kind)) {
@@ -2148,7 +2148,7 @@ export function buildGatewayHeartbeatPollerDeps(
   );
   return {
     ...buildHeartbeatPollerCoreDeps({ store, informer }, log, privateKey),
-    listActiveMigrations: () => store.journal.operations.listByKind("migrate-customer", [...PLACEMENT_ACTIVE_OPERATION_STATUSES]),
+    listActiveMigrations: () => store.journal.operations.listByKind("migrate-user", [...PLACEMENT_ACTIVE_OPERATION_STATUSES]),
     ownsEviction: async (gatewayId: string) => {
       const stored = informer.gateways()?.find((root) => root.gatewayId === gatewayId) ??
         await store.gateways.roots.get(gatewayId);
@@ -3627,9 +3627,9 @@ async function buildHandlers(
       error: "terminal Shared gateway autoscaler journals cannot be executed",
     }),
     rollout,
-    "deprovision-customer": deprovisionUser,
-    "suspend-customer": suspendUser,
-    "erase-customer": eraseUser,
+    "deprovision-user": deprovisionUser,
+    "suspend-user": suspendUser,
+    "erase-user": eraseUser,
   };
 }
 

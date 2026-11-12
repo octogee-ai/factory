@@ -21,7 +21,7 @@ function transferTask(fields: Record<string, unknown>): Record<string, unknown> 
 
 function harness() {
   const cleanup = { uid: "uid-1", slug: "alice", currentGatewayId: "shared-old" as string | null, projectSlugs: [] };
-  const operation = { id: "erase-1", kind: "erase-customer", status: "running", startedAt: 10, input: { uid: "uid-1", deletionId: "delete-1" } };
+  const operation = { id: "erase-1", kind: "erase-user", status: "running", startedAt: 10, input: { uid: "uid-1", deletionId: "delete-1" } };
   const records: Record<string, Record<string, any>> = {
     "customerDeletionJobs/delete-1": { version: 1, uid: cleanup.uid, slug: cleanup.slug, currentGatewayId: cleanup.currentGatewayId,
       erasureOperationId: operation.id, status: "hibernating", requestedBy: "operator", requestedAt: 1, eraseAfter: 5, cleanupContext: cleanup },
@@ -53,7 +53,7 @@ function harness() {
 function liveSharedGateway() {
   const h = harness(); h.deps.sharedGatewayRetired.mockResolvedValue(false);
   h.records["customerDeletionJobs/delete-1"]!.suspensionOperationId = "suspend-1";
-  h.records["glmOperations/suspend-1"] = { id: "suspend-1", kind: "suspend-customer", status: "succeeded",
+  h.records["glmOperations/suspend-1"] = { id: "suspend-1", kind: "suspend-user", status: "succeeded",
     input: { uid: "uid-1", deletionId: "delete-1" }, steps: [{ name: "unmount-gateway", status: "done" }] };
   return h;
 }

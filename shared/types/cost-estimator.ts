@@ -21,8 +21,8 @@ export interface GatewayMonthlyCost {
   onDemandComputeUsd: number;
   savingsUsd: number;
   pricingMode: GatewayPricingMode;
-  perBuilderAtTarget: number;
-  perBuilderAtTypical: number;
+  perUserAtTarget: number;
+  perUserAtTypical: number;
 }
 
 export interface FleetMonthlyCost {
@@ -51,8 +51,8 @@ export function estimateGatewayMonthlyCost(
     onDemandComputeUsd: Math.round(onDemandCompute),
     savingsUsd: Math.max(0, Math.round(onDemandCompute) - Math.round(compute)),
     pricingMode,
-    perBuilderAtTarget: Math.round(compute / preset.capacity.targetActiveBuilders),
-    perBuilderAtTypical: Math.round(compute / preset.capacity.typicalBuilders),
+    perUserAtTarget: Math.round(compute / preset.capacity.targetActiveUsers),
+    perUserAtTypical: Math.round(compute / preset.capacity.typicalUsers),
   };
 }
 

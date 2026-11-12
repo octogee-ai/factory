@@ -73,7 +73,7 @@ describe("assign-user-gateway placement", () => {
   });
 
   it("preserves an existing assignment while refreshing the mirror", async () => {
-    const existing = assignment("shared-0", "u1", "alice", { source: "migrate-customer", state: "quiescing", epoch: 8, updatedAt: 90, updatedByOperationId: "roll-1" });
+    const existing = assignment("shared-0", "u1", "alice", { source: "migrate-user", state: "quiescing", epoch: 8, updatedAt: 90, updatedByOperationId: "roll-1" });
     const { deps, records } = fixture({
       "users/u1": user({ gatewayId: "shared-0" }),
       "gateways/shared-0/assignments/u1": existing,
@@ -120,7 +120,7 @@ describe("assign-user-gateway placement", () => {
     const { deps } = fixture({
       "users/u1": user(),
       "glmOperations/migrate-1": {
-        kind: "migrate-customer", status: "running", createdBy: "operator:test", createdAt: 1, startedAt: 2, completedAt: null,
+        kind: "migrate-user", status: "running", createdBy: "operator:test", createdAt: 1, startedAt: 2, completedAt: null,
         input: { uid: "u9", toGatewayId: "shared-0" }, steps: [],
       },
     });

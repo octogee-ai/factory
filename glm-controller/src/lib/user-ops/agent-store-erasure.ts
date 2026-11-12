@@ -129,7 +129,7 @@ async function assertDeletionAuthority(
     transaction.migrationTasks.listByStatus(["running"]),
   ]);
   assertActiveOperationClaim(operation, currentOperation);
-  if (operation.kind !== "erase-customer" || operation.input.uid !== cleanup.uid || operation.input.deletionId !== deletionId ||
+  if (operation.kind !== "erase-user" || operation.input.uid !== cleanup.uid || operation.input.deletionId !== deletionId ||
       job === null || !deletionIdentityMatches(job, cleanup, operation) || !deletionConsentIsDue(job, deps.now()) ||
       currentOperation?.input.deletionId !== deletionId ||
       !userAuthorityMatches(user, cleanup, deletionId, job.eraseAfter) || assignments.length > 0) {
@@ -265,7 +265,7 @@ async function assertSharedUserStopped(
 
 function suspensionCleanupMatches(suspension: OperationRecord | null, cleanup: UserCleanupContext, deletionId: string): boolean {
   const unmounted = cleanup.currentGatewayId === null ? "skipped" : "done";
-  return suspension?.kind === "suspend-customer" && suspension.status === "succeeded" &&
+  return suspension?.kind === "suspend-user" && suspension.status === "succeeded" &&
     suspension.input?.uid === cleanup.uid && suspension.input?.deletionId === deletionId &&
     Array.isArray(suspension.steps) && suspension.steps.some(step => step.name === "unmount-gateway" && step.status === unmounted);
 }

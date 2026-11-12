@@ -110,7 +110,7 @@ function preparingHarness(scenario = "valid") {
     gatewayContainerSecurityContext: null, serviceAccountName: null, serviceAccount: null, builderAccess: null,
     ownerUid: "uid-owner", builderSlug: "owner", modelBrokerLimits: null, preemption: null };
   const runtime = { docKind: "runtime", release: 1, lifecycle: "running", gatewayId: "b-owner", runtime: "gce-vm", vm: { instanceId: "4242" }, vmInstance: { ownerUid: "uid-owner", builderSlug: "owner" } };
-  const operation: Record<string, any> = { kind: "migrate-customer", status: "running", input: { uid: "uid-owner", fromGatewayId: "shared-source", toGatewayId: "b-owner" } };
+  const operation: Record<string, any> = { kind: "migrate-user", status: "running", input: { uid: "uid-owner", fromGatewayId: "shared-source", toGatewayId: "b-owner" } };
   if (scenario === "unrelated-target") operation.input.toGatewayId = "other";
   if (scenario === "ended-operation") operation.status = "failed";
   if (scenario === "cancelled") operation.cancellationRequestedAt = 1;

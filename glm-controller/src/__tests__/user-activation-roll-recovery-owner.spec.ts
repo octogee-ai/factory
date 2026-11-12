@@ -20,12 +20,12 @@ function fixture(scenario = 'success') {
   const migrationId = `mig-${operationId}:scheduler:1:claim:1000`;
   const gateway = { gatewayId, gatewayClass: 'builder', ownerUid: 'alice', builderSlug: 'alice', desiredStatus: 'running', liveRelease: 1, desiredRelease: 2, latestRelease: 2,
     allocation: { kind: 'disposable-builder', leaseId: 'lease-a', generation: 1, claimedByUid: 'alice' } };
-  const recovery = { id: operationId, kind: 'migrate-customer', status: 'pending', startedAt: null, input: { uid: 'alice', builderSlug: 'alice', source: 'builder-activation-lease', recoverSourceOnly: true, fromGatewayId: 'shared-a', toGatewayId: gatewayId },
+  const recovery = { id: operationId, kind: 'migrate-user', status: 'pending', startedAt: null, input: { uid: 'alice', builderSlug: 'alice', source: 'builder-activation-lease', recoverSourceOnly: true, fromGatewayId: 'shared-a', toGatewayId: gatewayId },
     schedulerHandoff: { migrationId, uid: 'alice', slug: 'alice', fromGatewayId: 'shared-a', toGatewayId: gatewayId, stageAfterCutover: true, sourceRecovery: { migrationId, sourceEpoch: 7, steps: [{ name: 'quiesce-source', status: 'done' }] } } };
   const lease = { leaseId: 'lease-a', generation: 1, status: 'activating', sourceGatewayId: 'shared-a', sourceAssignmentEpoch: 7, targetGatewayId: gatewayId };
   const user = { username: 'alice', provisioning: { openclaw: { gatewayId: 'shared-a', slug: 'alice', activationLease: lease, migration: { state: 'moving', operationId, startedAt: 1000 } } } };
   const source = { gatewayId: 'shared-a', gatewayClass: 'shared', desiredStatus: 'running', desiredRelease: 3, latestRelease: 3 };
-  const assignment = { uid: 'alice', slug: 'alice', gatewayId: 'shared-a', source: 'migrate-customer', epoch: 7, state: 'quiescing', createdAt: 500, updatedAt: 500, updatedByOperationId: operationId };
+  const assignment = { uid: 'alice', slug: 'alice', gatewayId: 'shared-a', source: 'migrate-user', epoch: 7, state: 'quiescing', createdAt: 500, updatedAt: 500, updatedByOperationId: operationId };
   const roll = { id: 'roll-2', kind: 'rollout', status: 'running', startedAt: 2000, input: { gatewayId, targetRelease: 2 } } as unknown as Operation;
   const documents = new Map<string, Record<string, unknown>>([
     [`gateways/${gatewayId}`, gateway], [`glmOperations/${operationId}`, recovery], [`glmOperations/${roll.id}`, roll as unknown as Record<string, unknown>], ['users/alice', user],

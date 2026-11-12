@@ -283,7 +283,7 @@ export async function assertGatewayRuntimeMutationUnfencedInStore(
 }
 
 export function moveHasNotBegun(operation: OperationRecord, gatewayId: string): boolean {
-  return operation.kind === "migrate-customer" && operation.status === "pending" && operation.startedAt === null &&
+  return operation.kind === "migrate-user" && operation.status === "pending" && operation.startedAt === null &&
     operation.input?.toGatewayId === gatewayId && !operation.attempts && operation.steps.length === 0 &&
     operation.customerMigrationV2 === undefined && operation.schedulerHandoff === undefined &&
     operation.cutoverCommittedAt === undefined && operation.sourceTransferExecution === undefined;

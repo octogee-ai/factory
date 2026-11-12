@@ -14,6 +14,7 @@ import {
 } from "@octogee/shared/types/glm";
 import { MalformedRecordError } from "./platform-state/errors.js";
 import type { JournalRepositories, OperationAuditPatch } from "./platform-state/operations.js";
+import { auditMutationsStoredAs } from "./platform-state/postgres/legacy-stored-names.js";
 import type { PlatformStateStore, PlatformStateTransaction, Stored } from "./platform-state/store.js";
 
 export interface OperationAuditIntentInput {
@@ -191,7 +192,7 @@ function assertMatchingAuditIntent(
   if (!isOperationAuditRecord(data)) throw new OperationAuditSchemaError(auditId);
   if (
     data.idempotencyKey !== intent.document.idempotencyKey ||
-    data.mutationFingerprint !== intent.document.mutationFingerprint
+    !auditMutationsStoredAs(intent.document.mutation).map(operationAuditMutationFingerprint).includes(data.mutationFingerprint)
   ) {
     throw new OperationAuditIdempotencyConflictError(auditId);
   }

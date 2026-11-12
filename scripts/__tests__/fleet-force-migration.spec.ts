@@ -36,13 +36,13 @@ describe("Fleet force migration request", () => {
     const result = await readForceMigrationPlan(h.store, target);
     expect(result).toMatchObject({ operationId: "move-1", sourceEpoch: 75 });
     expect(h.op()).toEqual(before);
-    expect([...h.docs.values()].filter((doc) => doc.kind === "migrate-customer")).toHaveLength(1);
+    expect([...h.docs.values()].filter((doc) => doc.kind === "migrate-user")).toHaveLength(1);
     expect(h.writes).toEqual([]);
   });
 
   it("plans without writes and permits unrelated pending migrations", async () => {
     const h = harness();
-    h.docs.set("glmOperations/queued", { kind: "migrate-customer", status: "pending", input: { uid: "u2", fromGatewayId: "builder-a", toGatewayId: "shared-b" } });
+    h.docs.set("glmOperations/queued", { kind: "migrate-user", status: "pending", input: { uid: "u2", fromGatewayId: "builder-a", toGatewayId: "shared-b" } });
     expect(await readForceMigrationPlan(h.store, target)).toMatchObject({ sourceEpoch: 75, attempts: 3 });
     expect(h.writes).toEqual([]);
   });
@@ -105,7 +105,7 @@ describe("Fleet force migration request", () => {
     ["target restart fence", (h: ReturnType<typeof harness>) => { h.docs.get("gateways/shared-b")!.runtimeRestartFence = {}; }],
     ["retirement", (h: ReturnType<typeof harness>) => { h.docs.get("gateways/builder-a")!.retirementClaim = {}; }],
     ["release drift", (h: ReturnType<typeof harness>) => { h.docs.get("gateways/builder-a")!.desiredRelease = 2; }],
-    ["other running migration", (h: ReturnType<typeof harness>) => { h.docs.set("glmOperations/other", { kind: "migrate-customer", status: "running", input: { uid: "u2", fromGatewayId: "builder-a", toGatewayId: "shared-b" } }); }],
+    ["other running migration", (h: ReturnType<typeof harness>) => { h.docs.set("glmOperations/other", { kind: "migrate-user", status: "running", input: { uid: "u2", fromGatewayId: "builder-a", toGatewayId: "shared-b" } }); }],
     ["other tenant restore custody", (h: ReturnType<typeof harness>) => { h.docs.set("users/u2", { provisioning: { openclaw: { gatewayId: "builder-a", restoreFence: {} } } }); }],
     ["retained transfer into source", (h: ReturnType<typeof harness>) => { h.docs.set("users/u2", { provisioning: { openclaw: { gatewayId: "shared-c", sourceTransferFence: { targetGatewayId: "builder-a" } } } }); }],
     ["previous force request", (h: ReturnType<typeof harness>) => { h.op().forceDrainRequest = { auditId: "accepted" }; }],

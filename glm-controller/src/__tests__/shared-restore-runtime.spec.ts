@@ -29,7 +29,7 @@ function harness() {
       imageProfile: 'standard', sizingTier: null, gcpProject: null, gatewayContainerSecurityContext: null, serviceAccountName: null,
       serviceAccount: null, builderAccess: null, ownerUid: null, builderSlug: null, modelBrokerLimits: null, preemption: null },
     'glmOperations/recover': structuredClone(op),
-    'glmOperations/return': { kind: 'migrate-customer', status: 'pending', input: { uid: 'u', fromGatewayId: 'builder-alice', toGatewayId: 'shared-1' },
+    'glmOperations/return': { kind: 'migrate-user', status: 'pending', input: { uid: 'u', fromGatewayId: 'builder-alice', toGatewayId: 'shared-1' },
       cutoverCommittedAt: 50, schedulerHandoff: { uid: 'u', slug: 'alice', fromGatewayId: 'builder-alice', toGatewayId: 'shared-1' }, restoreAttempt: intent },
     'users/u': { username: 'alice', provisioning: { status: 'complete', openclaw: { gatewayId: 'shared-1', status: 'complete', restoreFence: structuredClone(intent) } } },
     'gateways/shared-1/assignments/u': { uid: 'u', slug: 'alice', gatewayId: 'shared-1', source: 'onboarding', epoch: 3, state: 'serving' },
@@ -129,13 +129,13 @@ describe('journaled Shared restore runtime recovery', () => {
     expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
   });
   function queuedMigration(h: ReturnType<typeof harness>) {
-    h.store['glmOperations/queued'] = { kind: 'migrate-customer', status: 'pending', createdAt: 1_000,
+    h.store['glmOperations/queued'] = { kind: 'migrate-user', status: 'pending', createdAt: 1_000,
       createdBy: 'glm-controller-placement-policy', origin: 'automatic', startedAt: null, completedAt: null,
       input: { uid: 'other', fromGatewayId: 'shared-1', toGatewayId: 'builder-other' }, steps: [] };
     const handler = vi.fn(async () => ({ success: true, steps: [] }));
     const log = vi.fn();
     const run = () => processOperation({ ...h.store['glmOperations/queued'], id: 'queued' },
-      { store: h.deps.store, handlers: { 'migrate-customer': handler }, log } as never);
+      { store: h.deps.store, handlers: { 'migrate-user': handler }, log } as never);
     return { run, handler, log };
   }
 
@@ -153,7 +153,7 @@ describe('journaled Shared restore runtime recovery', () => {
       })).slice(-MAX_OPERATION_ATTEMPT_HISTORY) });
     h.store['users/other'] = { provisioning: { openclaw: { status: 'complete', gatewayId: 'shared-1',
       migration: { operationId: 'queued', phase: 'preparing', state: 'preparing', startedAt: 1_100 } } } };
-    h.store['gateways/shared-1/assignments/other'] = { uid: 'other', slug: 'bob', gatewayId: 'shared-1', source: 'migrate-customer', state: 'serving', epoch: 0, updatedByOperationId: null };
+    h.store['gateways/shared-1/assignments/other'] = { uid: 'other', slug: 'bob', gatewayId: 'shared-1', source: 'migrate-user', state: 'serving', epoch: 0, updatedByOperationId: null };
     const scheduler = vi.fn(async () => { throw new Error('no scheduler RPC is safe while the source is unavailable'); });
     const release = () => releaseAbandonedSchedulerHandoffs({ store: h.deps.store, scheduler,
       gatewayExists: vi.fn(async () => false), log: vi.fn(), now: () => Math.max(3_000, 1_300 + attempts * 100) });
@@ -711,7 +711,7 @@ describe('journaled Shared restore runtime recovery', () => {
     if (change === 'builder') h.store['gateways/shared-1'].gatewayClass = 'builder';
     if (change === 'roll') h.store['gateways/shared-1'].desiredRelease++;
     if (change === 'foreign-restart') h.store['gateways/shared-1'].runtimeRestartFence = {};
-    if (change === 'migration') h.store['glmOperations/other'] = { kind: 'migrate-customer', status: 'pending', input: { fromGatewayId: 'shared-1' } };
+    if (change === 'migration') h.store['glmOperations/other'] = { kind: 'migrate-user', status: 'pending', input: { fromGatewayId: 'shared-1' } };
     if (change === 'retained-transfer') h.store['users/other'] = { provisioning: { openclaw: { sourceTransferFence: { sourceGatewayId: 'shared-1' } } } };
     if (change === 'stale-claim') h.store['glmOperations/recover'].startedAt++;
     if (change === 'cancelled') h.store['glmOperations/recover'].cancellationRequestedAt = 1;
@@ -746,7 +746,7 @@ describe('journaled Shared source schema repair', () => {
       h.store[`gateways/shared-1/assignments/${uid}`] = { uid, slug, gatewayId: 'shared-1', source: 'onboarding', state: 'serving', epoch: index + 1,
         createdAt: 1, updatedAt: 1, updatedByOperationId: null };
       h.store[`users/${uid}/agentStores/${id}`] = { agentId: id, gatewayId: 'shared-1', assignmentEpoch: index + 1, storeId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, schema: `source_${index}`, recordedAt: 1 };
-      h.store[`glmOperations/export-${index}`] = { kind: 'migrate-customer', status: 'failed', startedAt: 100, completedAt: 200,
+      h.store[`glmOperations/export-${index}`] = { kind: 'migrate-user', status: 'failed', startedAt: 100, completedAt: 200,
         input: { uid, fromGatewayId: 'shared-1', toGatewayId: 'shared-2' }, error,
         steps: [{ name: 'pre-sync-state', status: 'failed', error }, { name: 'rollback:unmount-target', status: 'done' }] };
     }
@@ -829,7 +829,7 @@ describe('journaled Shared source schema repair', () => {
     for (const [index, slug] of ['jdog99', 'oct01'].entries()) {
       const uid = `source-${index}`;
       delete h.store[`users/${uid}`].provisioning.openclaw.migration;
-      const row = Object.values(h.store).find((value: any) => value.input?.uid === uid && value.kind === 'migrate-customer')!;
+      const row = Object.values(h.store).find((value: any) => value.input?.uid === uid && value.kind === 'migrate-user')!;
       row.error = '/finish-rsync-import/shared-2: 500 ' + JSON.stringify({ error: 'import failed', message:
         `[import:${slug}] agents.create failed for octogee-${slug}-coach (AgentDatabaseMaintenanceRequiredError: Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.)` });
       row.steps = ['keys-sync-state', 'pre-sync-state', 'wait-for-active-work', 'quiesce-source', 'flush-source',
@@ -913,7 +913,7 @@ describe('journaled Shared source schema repair', () => {
   async function schedulerSourceHarness() {
     const h = await postgresSourceHarness();
     for (const row of Object.values(h.store)) {
-      if (row.kind !== 'migrate-customer' || row.status !== 'failed') continue;
+      if (row.kind !== 'migrate-user' || row.status !== 'failed') continue;
       row.error = '/scheduler/shared-2: 500 ' + JSON.stringify({ error: 'scheduler migration failed',
         message: 'Invalid cron migration snapshot: job 00000000-0000-4000-8000-000000000099 is not persistable (invalid-payload)' });
       row.steps.find((step: any) => step.name === 'final-sync-state').error = row.error;

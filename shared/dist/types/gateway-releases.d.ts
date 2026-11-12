@@ -79,7 +79,7 @@ export interface ReleaseDoc {
     payloadHash: string;
     payload: ReleasePayload;
 }
-export type AssignmentSource = "onboarding" | "migrate-customer" | "repair";
+export type AssignmentSource = "onboarding" | "migrate-user" | "repair";
 export type AssignmentState = "serving" | "quiescing" | "migrating";
 export declare function isAssignmentState(value: unknown): value is AssignmentState;
 export interface AssignmentDoc {

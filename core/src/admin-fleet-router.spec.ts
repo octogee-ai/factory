@@ -62,9 +62,9 @@ describe("projectGatewayControl", () => {
       imageProfile: "builder",
       sizingTier: "m",
       ownerUid: "uid-1",
-      builderSlug: "alice",
+      userSlug: "alice",
       modelBrokerLimits: { rpm: 10 },
-      builderAccess: null,
+      userAccess: null,
       gcpProject: null,
       serviceAccountName: null,
       vm: { instanceName: "octogee-computer-prod-uid", status: "TERMINATED" },
@@ -399,7 +399,7 @@ describe("projectIsolatedRuntime — disposable lifecycle visibility", () => {
       now,
     )).toMatchObject({
       uid: "uid-alice",
-      builderSlug: "alice",
+      userSlug: "alice",
       lifecycle: "requested",
       wakeDurationMs: 90_000,
       currentGatewayId: "shared-blue",
@@ -698,7 +698,7 @@ describe("projectDisposableFleetCapacity", () => {
       disposableInstances: 1,
       stagedInstances: 0,
       byTier: { xs: 1 },
-      parkedBuilders: 0,
+      parkedUsers: 0,
       byLifecycle: {
         requested: 0,
         provisioning: 0,
@@ -709,7 +709,7 @@ describe("projectDisposableFleetCapacity", () => {
         failed: 0,
         parked: 0,
       },
-      failedBuilders: 0,
+      failedUsers: 0,
       staleActivations: 0,
       oldestActivationAgeMs: null,
     });
@@ -829,8 +829,8 @@ describe("fleet gateway projection", () => {
       "uid-held": { username: "held", provisioning: { openclaw: { managedBy: "operator", gatewayId: "builder-held", activationLease: { leaseId: "held", generation: 1, status: "returning", targetGatewayId: "builder-held" } } } },
     } });
     const fleet = await request(app).get("/gateways").expect(200);
-    expect(fleet.body.builderRuntimes).toEqual([]);
-    expect(fleet.body.disposableCapacity.operatorParkedBuilders).toBe(1);
+    expect(fleet.body.isolatedRuntimes).toEqual([]);
+    expect(fleet.body.disposableCapacity.operatorParkedUsers).toBe(1);
   });
 
   it("keeps disposable retirement intent and user lifecycle in the Fleet response", async () => {
@@ -890,10 +890,10 @@ describe("fleet gateway projection", () => {
 
     const fleet = await request(app).get("/gateways").expect(200);
 
-    expect(fleet.body.builderRuntimes).toEqual([
+    expect(fleet.body.isolatedRuntimes).toEqual([
       expect.objectContaining({
         uid: "uid-alice",
-        builderSlug: "alice",
+        userSlug: "alice",
         lifecycle: "retiring",
         phase: "retirement",
         targetGatewayId,
@@ -915,11 +915,11 @@ describe("fleet gateway projection", () => {
       ]),
     );
     expect(fleet.body.disposableCapacity).toEqual({
-      operatorParkedBuilders: 0,
+      operatorParkedUsers: 0,
       disposableInstances: 1,
       stagedInstances: 0,
       byTier: { xs: 1 },
-      parkedBuilders: 1,
+      parkedUsers: 1,
       byLifecycle: {
         requested: 0,
         provisioning: 0,
@@ -930,7 +930,7 @@ describe("fleet gateway projection", () => {
         failed: 0,
         parked: 1,
       },
-      failedBuilders: 0,
+      failedUsers: 0,
       staleActivations: 0,
       oldestActivationAgeMs: null,
     });
@@ -987,7 +987,7 @@ describe("fleet gateway projection", () => {
       },
       operations: {
         [activationOperationId]: {
-          kind: "migrate-customer",
+          kind: "migrate-user",
           status: "failed",
           error: "restore failed",
         },
@@ -1001,7 +1001,7 @@ describe("fleet gateway projection", () => {
 
     const fleet = await request(app).get("/gateways").expect(200);
 
-    expect(fleet.body.builderRuntimes).toEqual([
+    expect(fleet.body.isolatedRuntimes).toEqual([
       expect.objectContaining({
         lifecycle: "failed",
         phase: "activation",
@@ -1075,7 +1075,7 @@ describe("fleet gateway projection", () => {
       },
       operations: {
         [activationOperationId]: {
-          kind: "migrate-customer",
+          kind: "migrate-user",
           status: "failed",
         },
         [cleanupOperationId]: {
@@ -1104,7 +1104,7 @@ describe("fleet gateway projection", () => {
 
     const fleet = await request(app).get("/gateways").expect(200);
 
-    expect(fleet.body.builderRuntimes).toEqual([]);
+    expect(fleet.body.isolatedRuntimes).toEqual([]);
     expect(fleet.body.gateways).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ gatewayId: targetGatewayId }),
@@ -1177,13 +1177,13 @@ describe("fleet gateway projection", () => {
 
     const fleet = await request(app).get("/gateways").expect(200);
 
-    expect(fleet.body.builderRuntimes).toEqual([
+    expect(fleet.body.isolatedRuntimes).toEqual([
       expect.objectContaining({
         lifecycle: "failed",
         cleanupOperationStatus: "running",
       }),
     ]);
-    expect(fleet.body.builderRuntimes[0]).not.toHaveProperty("retryAvailable");
+    expect(fleet.body.isolatedRuntimes[0]).not.toHaveProperty("retryAvailable");
   });
 
   it("keeps an old disposable visible after a new lease replaces the user target", async () => {
@@ -1322,13 +1322,13 @@ describe("fleet gateway projection", () => {
     const fleet = await request(app).get("/gateways").expect(200);
 
     expect(fleet.body.disposableCapacity).toMatchObject({
-      parkedBuilders: 1,
+      parkedUsers: 1,
       byLifecycle: {
         requested: 1,
         failed: 1,
         parked: 1,
       },
-      failedBuilders: 1,
+      failedUsers: 1,
       staleActivations: 1,
     });
     expect(fleet.body.disposableCapacity.oldestActivationAgeMs).toBeGreaterThanOrEqual(
@@ -1635,7 +1635,7 @@ describe("default placement", () => {
       glmGateways: { default: { gatewayClass: "shared", desiredStatus: "running" } },
       operations: {
         "operation-opaque-id": {
-          kind: "migrate-customer",
+          kind: "migrate-user",
           status: "pending",
           inputUid: "uid-alice",
           createdAt: 1_000,
@@ -1650,7 +1650,7 @@ describe("default placement", () => {
         expect.objectContaining({
           code: "migration-in-flight",
           operationId: "operation-opaque-id",
-          message: "migrate-customer alice (uid-alice) is pending",
+          message: "migrate-user alice (uid-alice) is pending",
         }),
       ]),
     );
@@ -1683,7 +1683,7 @@ describe("default placement", () => {
       glmGateways: { default: { gatewayClass: "shared", desiredStatus: "running" } },
       operations: {
         "erase-operation": {
-          kind: "erase-customer",
+          kind: "erase-user",
           status: "pending",
           inputUid: "uid-scheduled",
           createdAt: 1_000,
@@ -1751,7 +1751,7 @@ describe("default placement", () => {
             uid: "uid-a",
             slug: "alice",
             gatewayId: "default",
-            source: "migrate-customer",
+            source: "migrate-user",
             state: "quiescing",
             epoch: 5,
           },
@@ -1795,7 +1795,7 @@ describe("default placement", () => {
             uid: "uid-alice",
             slug: "alice",
             gatewayId: "shared-c",
-            source: "migrate-customer",
+            source: "migrate-user",
             state: "serving",
             epoch: 7,
           },
@@ -2160,8 +2160,8 @@ describe("account deletion revokes connector grants at the provider first", () =
     });
     expect(added).toEqual(expect.arrayContaining([
       expect.objectContaining({ requestedBy: "u2", status: "suspension_pending", stripeCustomerIds: ["cus_1"] }),
-      expect.objectContaining({ kind: "suspend-customer", inputUid: "u2", createdBy: "u2" }),
-      expect.objectContaining({ kind: "erase-customer", inputUid: "u2", nextAttemptAt: outcome.eraseAfter }),
+      expect.objectContaining({ kind: "suspend-user", inputUid: "u2", createdBy: "u2" }),
+      expect.objectContaining({ kind: "erase-user", inputUid: "u2", nextAttemptAt: outcome.eraseAfter }),
     ]));
     expect(Object.values(otherDocs)).toEqual(expect.arrayContaining([
       expect.objectContaining({ recordType: "audit", actor: "u2", why: "User account deletion request", status: "completed" }),
@@ -2205,26 +2205,26 @@ describe("account deletion revokes connector grants at the provider first", () =
     const input = { uid: "u1", fromGatewayId: "shared-1", toGatewayId: "shared-2" };
     const user = { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1" } } };
     const assignmentPath = "gateways/shared-1/assignments/u1";
-    const assignment = { uid: "u1", slug: "alice", gatewayId: "shared-1", source: "migrate-customer", state: "quiescing", epoch: 3 };
+    const assignment = { uid: "u1", slug: "alice", gatewayId: "shared-1", source: "migrate-user", state: "quiescing", epoch: 3 };
     const recovery = scenario.startsWith("legacy") ? { schedulerHandoff: {
       ...input, slug: "alice", migrationId: "mig-move-1:scheduler:1:claim:100",
       forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 3 },
     } } : { customerMigrationV2: { operationId, uid: "u1", sourceGatewayId: "shared-1", targetGatewayId: "shared-2", phase: "sourceQuiesced" } };
     const { store, discoverProductContext, deletionDeps, calls, remaining, otherDocs, added } = makeDeleteApp({ u1: user }, {
       [assignmentPath]: assignment,
-      [`glmOperations/${operationId}`]: { kind: "migrate-customer", status: scenario.endsWith("pending") ? "pending" : "running", inputUid: "u1", input, ...recovery },
+      [`glmOperations/${operationId}`]: { kind: "migrate-user", status: scenario.endsWith("pending") ? "pending" : "running", inputUid: "u1", input, ...recovery },
     });
     await expect(scheduleUserSelfDeletion({ store, discoverProductContext, deps: deletionDeps, uid: "u1" })).resolves.toEqual({ kind: "workspace-busy" });
     expect(remaining.u1).toEqual(user);
     expect(otherDocs[assignmentPath]).toEqual(assignment);
-    expect(added.some(row => row.kind === "suspend-customer" || row.kind === "erase-customer" || row.status === "suspension_pending")).toBe(false);
+    expect(added.some(row => row.kind === "suspend-user" || row.kind === "erase-user" || row.status === "suspension_pending")).toBe(false);
     expect(calls).not.toContain("suspend-auth:u1");
   });
 
   it("reports a deletion in progress when the user's suspension is already queued", async () => {
     const { store, discoverProductContext, deletionDeps, calls } = makeDeleteApp(
       { u2: { username: "acme" } },
-      { "glmOperations/suspend-1": { kind: "suspend-customer", status: "pending", inputUid: "u2" } },
+      { "glmOperations/suspend-1": { kind: "suspend-user", status: "pending", inputUid: "u2" } },
     );
 
     await expect(scheduleUserSelfDeletion({ store, discoverProductContext, deps: deletionDeps, uid: "u2" }))
@@ -2246,7 +2246,7 @@ describe("account deletion revokes connector grants at the provider first", () =
     const history = Object.fromEntries(
       Array.from({ length: 40 }, (_, index) => [
         `glmOperations/failed-${index}`,
-        { kind: "migrate-customer", status: "failed", inputUid: "u2" },
+        { kind: "migrate-user", status: "failed", inputUid: "u2" },
       ]),
     );
     const { app, operationQueries } = makeDeleteApp(
@@ -2262,10 +2262,10 @@ describe("account deletion revokes connector grants at the provider first", () =
   it.each(["failed", "succeeded"])("refuses unassignment after a restore operation is %s while its fence remains", async (status) => {
     const user = { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1", restoreFence: { operationId: "restore-1", phase: "dispatched" } } } };
     const assignmentPath = "gateways/shared-1/assignments/u1";
-    const assignment = { uid: "u1", slug: "alice", gatewayId: "shared-1", source: "migrate-customer", state: "serving", epoch: 3, createdAt: 1, updatedAt: 2, updatedByOperationId: null };
+    const assignment = { uid: "u1", slug: "alice", gatewayId: "shared-1", source: "migrate-user", state: "serving", epoch: 3, createdAt: 1, updatedAt: 2, updatedByOperationId: null };
     const { app, calls, remaining, otherDocs } = makeDeleteApp({ u1: user }, {
       [assignmentPath]: assignment,
-      "glmOperations/restore-1": { kind: "migrate-customer", status, inputUid: "u1", input: { uid: "u1" } },
+      "glmOperations/restore-1": { kind: "migrate-user", status, inputUid: "u1", input: { uid: "u1" } },
     });
 
     const response = await request(app).post("/users/u1/unassign");
@@ -2360,7 +2360,7 @@ describe("account deletion revokes connector grants at the provider first", () =
 
   it.each(["pending", "running"])("refuses Park while a migration is %s", async status => {
     const user = { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1" } } };
-    const { app, remaining } = makeDeleteApp({ u1: user }, { "glmOperations/move": { kind: "migrate-customer", status, inputUid: "u1" } });
+    const { app, remaining } = makeDeleteApp({ u1: user }, { "glmOperations/move": { kind: "migrate-user", status, inputUid: "u1" } });
     await request(app).patch("/users/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(409);
     expect(remaining.u1).toEqual(user);
   });
@@ -2392,10 +2392,10 @@ describe("account deletion revokes connector grants at the provider first", () =
   it.each(["failed", "succeeded"])("refuses unassignment after a source transfer operation is %s while its fence remains", async (status) => {
     const user = { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1", sourceTransferFence: { operationId: "restore-1", phase: "dispatched" } } } };
     const assignmentPath = "gateways/shared-1/assignments/u1";
-    const assignment = { uid: "u1", slug: "alice", gatewayId: "shared-1", source: "migrate-customer", state: "serving", epoch: 3, createdAt: 1, updatedAt: 2, updatedByOperationId: null };
+    const assignment = { uid: "u1", slug: "alice", gatewayId: "shared-1", source: "migrate-user", state: "serving", epoch: 3, createdAt: 1, updatedAt: 2, updatedByOperationId: null };
     const { app, calls, remaining, otherDocs } = makeDeleteApp({ u1: user }, {
       [assignmentPath]: assignment,
-      "glmOperations/restore-1": { kind: "migrate-customer", status, inputUid: "u1", input: { uid: "u1" } },
+      "glmOperations/restore-1": { kind: "migrate-user", status, inputUid: "u1", input: { uid: "u1" } },
     });
 
     const response = await request(app).post("/users/u1/unassign");
@@ -2437,8 +2437,8 @@ describe("account deletion revokes connector grants at the provider first", () =
 
     expect(res.body).toMatchObject({ status: "deletion_scheduled", slug: "acme" });
     expect(added).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: "suspend-customer", inputUid: "u2" }),
-      expect.objectContaining({ kind: "erase-customer", inputUid: "u2" }),
+      expect.objectContaining({ kind: "suspend-user", inputUid: "u2" }),
+      expect.objectContaining({ kind: "erase-user", inputUid: "u2" }),
     ]));
     expect(calls).toContain("suspend-auth:u2");
     expect(calls).toContain("revoke:u2");
@@ -2469,8 +2469,8 @@ describe("account deletion revokes connector grants at the provider first", () =
     ]);
 
     expect(responses.map((response) => response.status).sort()).toEqual([202, 409]);
-    expect(added.filter((data) => data.kind === "suspend-customer")).toHaveLength(1);
-    expect(added.filter((data) => data.kind === "erase-customer")).toHaveLength(1);
+    expect(added.filter((data) => data.kind === "suspend-user")).toHaveLength(1);
+    expect(added.filter((data) => data.kind === "erase-user")).toHaveLength(1);
   });
 
   it("admits deletion without reading or writing an unbounded public-document fan-out", async () => {
@@ -2509,7 +2509,7 @@ describe("account deletion revokes connector grants at the provider first", () =
       { u2: { username: "acme", email: "c@d.co" } },
       {
         "glmOperations/existing": {
-          kind: "suspend-customer",
+          kind: "suspend-user",
           status: "pending",
           inputUid: "u2",
         },
@@ -2549,7 +2549,7 @@ describe("account deletion revokes connector grants at the provider first", () =
           erasureOperationId: "erase-3",
         },
         "glmOperations/erase-3": {
-          kind: "erase-customer",
+          kind: "erase-user",
           status: "pending",
         },
       },
@@ -2607,11 +2607,11 @@ describe("operations history route", () => {
       users: {},
       gateways: { "shared-blue": durableGatewayRoot("shared-blue") },
       operations: {
-        "old-running": { kind: "migrate-customer", status: "running", createdAt: 1_000, input: { uid: "u1" }, steps: [] },
+        "old-running": { kind: "migrate-user", status: "running", createdAt: 1_000, input: { uid: "u1" }, steps: [] },
         "newer-pending": { kind: "rollout", status: "pending", createdAt: 3_000, input: { gatewayId: "shared-blue" }, steps: [] },
-        "done": { kind: "migrate-customer", status: "succeeded", createdAt: 2_000, input: { uid: "u2" }, steps: [] },
-        "failed": { kind: "migrate-customer", status: "failed", createdAt: 4_000, input: { uid: "u3" }, steps: [] },
-        "rolled-back": { kind: "migrate-customer", status: "rolled-back", createdAt: 5_000, input: { uid: "u4" }, steps: [] },
+        "done": { kind: "migrate-user", status: "succeeded", createdAt: 2_000, input: { uid: "u2" }, steps: [] },
+        "failed": { kind: "migrate-user", status: "failed", createdAt: 4_000, input: { uid: "u3" }, steps: [] },
+        "rolled-back": { kind: "migrate-user", status: "rolled-back", createdAt: 5_000, input: { uid: "u4" }, steps: [] },
         "restart-failed": { kind: "restart-gateway", status: "failed", createdAt: 6_000, input: { gatewayId: "shared-blue" }, steps: [] },
       },
       assignments,
@@ -2646,7 +2646,7 @@ describe("operations history route", () => {
       users: {},
       gateways: { "shared-blue": durableGatewayRoot("shared-blue") },
       operations: {
-        "old-failed": { kind: "migrate-customer", status: "failed", createdAt: 10, input: { uid: "u1" }, steps: [] },
+        "old-failed": { kind: "migrate-user", status: "failed", createdAt: 10, input: { uid: "u1" }, steps: [] },
         ...Object.fromEntries(Array.from({ length: 101 }, (_, index) => [
           `pending-${index}`,
           { kind: "rollout", status: "pending", createdAt: 1_000 + index, input: { gatewayId: "shared-blue" }, steps: [] },
@@ -2676,7 +2676,7 @@ describe("operations history route", () => {
       users: {},
       operations: {
         "op-move": {
-          kind: "migrate-customer",
+          kind: "migrate-user",
           status: "failed",
           createdAt: 4_000,
           input: { uid: "u3" },
@@ -2688,7 +2688,7 @@ describe("operations history route", () => {
     const res = await request(app).get("/operations/op-move").expect(200);
     expect(res.body.operation).toMatchObject({
       id: "op-move",
-      kind: "migrate-customer",
+      kind: "migrate-user",
       status: "failed",
       error: "source drain timed out",
       steps: [{ name: "quiesce-source", status: "failed", error: "source drain timed out" }],
@@ -2737,7 +2737,7 @@ describe("operations history route", () => {
       users: {},
       gateways: { "shared-blue": durableGatewayRoot("shared-blue") },
       operations: {
-        "failed": { kind: "migrate-customer", status: "failed", createdAt: 4_000, input: { uid: "u3" }, steps: [] },
+        "failed": { kind: "migrate-user", status: "failed", createdAt: 4_000, input: { uid: "u3" }, steps: [] },
         "audit-failed": audit("failed", 7_000),
         "audit-completed": audit("completed", 8_000),
       },
@@ -2754,7 +2754,7 @@ describe("operations history route", () => {
       users: {},
       gateways: { "shared-blue": durableGatewayRoot("shared-blue") },
       operations: {
-        "old-failed": { kind: "migrate-customer", status: "failed", createdAt: 10, input: { uid: "u1" }, steps: [] },
+        "old-failed": { kind: "migrate-user", status: "failed", createdAt: 10, input: { uid: "u1" }, steps: [] },
         ...Object.fromEntries(Array.from({ length: 150 }, (_, index) => [
           `done-${index}`,
           { kind: "rollout", status: "succeeded", createdAt: 1_000 + index, input: { gatewayId: "shared-blue" }, steps: [] },

@@ -47,7 +47,7 @@ export function platformGatewayArtifactFromEnvironment(
     imageRepository,
     imageTag,
     profileImages: {
-      builder: {
+      isolated: {
         imageRepository: `${imageRepository.replace(/\/octogee-gateway$/, "")}/octogee-gateway-builder`,
         imageTag: builderImageTag,
       },

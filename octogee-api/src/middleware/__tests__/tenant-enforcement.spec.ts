@@ -979,7 +979,7 @@ const STILL_ON_SHARED = {
         boundTenant: WALTER,
         operations: {
           inbound: {
-            kind: "migrate-customer",
+            kind: "migrate-user",
             status: "running",
             inputUid: "victim",
             input: { uid: "victim", toGatewayId: "walter" },
@@ -995,7 +995,7 @@ const STILL_ON_SHARED = {
         boundTenant: WALTER,
         operations: {
           inbound: {
-            kind: "migrate-customer",
+            kind: "migrate-user",
             status: "running",
             inputUid: "victim",
             input: { uid: "victim", toGatewayId: "walter" },
@@ -1021,7 +1021,7 @@ const STILL_ON_SHARED = {
         },
         operations: {
           inbound: {
-            kind: "migrate-customer",
+            kind: "migrate-user",
             status: "running",
             inputUid: "victim",
             input: { uid: "victim", toGatewayId: "walter" },
@@ -1045,7 +1045,7 @@ const STILL_ON_SHARED = {
         boundTenant: WALTER,
         operations: {
           inbound: {
-            kind: "migrate-customer",
+            kind: "migrate-user",
             status: "running",
             inputUid: "victim",
             input: { uid: "victim", toGatewayId: "other" },

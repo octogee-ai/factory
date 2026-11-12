@@ -10,7 +10,7 @@ import type { OperationContext } from "../operation-router";
 function mkOp(overrides: Partial<Operation> = {}): Operation {
   return {
     id: "op-deprov-1",
-    kind: "deprovision-customer",
+    kind: "deprovision-user",
     status: "pending",
     createdBy: "admin@octogee.com",
     createdAt: 1_000,

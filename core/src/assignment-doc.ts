@@ -43,7 +43,7 @@ function assignmentsCollection(
 
 const ASSIGNMENT_SOURCES: ReadonlySet<AssignmentSource> = new Set<AssignmentSource>([
   "onboarding",
-  "migrate-customer",
+  "migrate-user",
   "repair",
 ]);
 

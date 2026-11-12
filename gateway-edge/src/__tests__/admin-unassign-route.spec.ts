@@ -214,7 +214,7 @@ describe("POST /api/admin/users/:uid/unassign", () => {
     seedAssignment("gw-blue", "u-moving");
     state.store["glmOperations/op-1"] = {
       inputUid: "u-moving",
-      kind: "migrate-customer",
+      kind: "migrate-user",
       status: "running",
     };
 

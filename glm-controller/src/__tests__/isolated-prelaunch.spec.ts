@@ -341,7 +341,7 @@ describe("an operator-given gateway has no lease", () => {
   it("boots normally once its owner serves on it", async () => {
     const h = operatorGiven();
     h.user.provisioning.openclaw = { gatewayId: h.gateway.gatewayId, slug: "jefe", managedBy: "operator" } as never;
-    h.documents.set("gateways/jefe-run/assignments/uid-jefe", { uid: "uid-jefe", slug: "jefe", gatewayId: "jefe-run", source: "migrate-customer", state: "serving", epoch: 1 });
+    h.documents.set("gateways/jefe-run/assignments/uid-jefe", { uid: "uid-jefe", slug: "jefe", gatewayId: "jefe-run", source: "migrate-user", state: "serving", epoch: 1 });
 
     await expect(h.bootMode()).resolves.toEqual({ mode: "normal" });
   });

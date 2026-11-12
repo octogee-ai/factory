@@ -263,14 +263,14 @@ function resolveSizingForResponse(
   tier: SizingTier;
   resolvedFrom: "explicit" | "class-default" | "profile-default";
   resources: { requests: { cpu: string; memory: string }; limits: { cpu: string; memory: string } };
-  capacity: { targetActiveBuilders: number; typicalBuilders: number };
+  capacity: { targetActiveUsers: number; typicalUsers: number };
   monthlyCostUsd: {
     compute: number;
     onDemandCompute: number;
     savings: number;
     pricingMode: GatewayPricingMode;
-    perBuilderAtTarget: number;
-    perBuilderAtTypical: number;
+    perUserAtTarget: number;
+    perUserAtTypical: number;
   };
 } {
   const sizingTier =
@@ -294,8 +294,8 @@ function resolveSizingForResponse(
         onDemandComputeUsd: 0,
         savingsUsd: 0,
         pricingMode: reservation.type,
-        perBuilderAtTarget: 0,
-        perBuilderAtTypical: 0,
+        perUserAtTarget: 0,
+        perUserAtTypical: 0,
       }
     : estimateGatewayMonthlyCost(resolved.tier, { pricingMode: reservation.type });
   return {
@@ -317,8 +317,8 @@ function resolveSizingForResponse(
       onDemandCompute: cost.onDemandComputeUsd,
       savings: cost.savingsUsd,
       pricingMode: cost.pricingMode,
-      perBuilderAtTarget: cost.perBuilderAtTarget,
-      perBuilderAtTypical: cost.perBuilderAtTypical,
+      perUserAtTarget: cost.perUserAtTarget,
+      perUserAtTypical: cost.perUserAtTypical,
     },
   };
 }
@@ -726,7 +726,7 @@ function accountLifecycleWarning(input: {
   const operation = latestOperation(
     input.operations,
     (candidate) =>
-      candidate.kind === "erase-customer" && operationUid(candidate) === input.uid,
+      candidate.kind === "erase-user" && operationUid(candidate) === input.uid,
   );
   const slug = resolveUserSlug(input.data) ?? asStringOrNull(operation?.input.builderSlug);
   const expiresAt = toMillis(lifecycle.eraseAfter);
@@ -1445,7 +1445,7 @@ async function retirementRefusal(
     return {
       error: "gateway still has assigned users; migrate them off before retiring",
       gatewayId,
-      assignedCustomers: assignments.map((a) => a.slug),
+      assignedUsers: assignments.map((a) => a.slug),
     };
   }
   const mounted = await mountedUsersBlockingRetirement(store, gatewayId, runtime);
@@ -1888,7 +1888,7 @@ export function projectIsolatedRuntime(
   now: number,
 ): {
   uid: string;
-  builderSlug: string;
+  userSlug: string;
   lifecycle: AdminIsolatedRuntimeLifecycle;
   phase: "activation" | "runtime" | "return" | "retirement";
   leaseId: string;
@@ -1961,7 +1961,7 @@ export function projectIsolatedRuntime(
   const stale = builderRuntimeIsStale(leaseStatus, wakeDurationMs);
   return {
     uid: userDoc.id,
-    builderSlug: builderRuntimeSlug(userDoc.id, data, openclaw, lease),
+    userSlug: builderRuntimeSlug(userDoc.id, data, openclaw, lease),
     lifecycle,
     phase,
     leaseId,
@@ -2001,14 +2001,14 @@ export function projectIsolatedRuntime(
 export function projectDisposableFleetCapacity(
   gateways: ReadonlyArray<ReturnType<typeof projectGatewaySummary>>,
   isolatedRuntimes: ReadonlyArray<NonNullable<ReturnType<typeof projectIsolatedRuntime>>> = [],
-  parkedBuilders = 0,
+  parkedUsers = 0,
 ): {
   disposableInstances: number;
   stagedInstances: 0;
   byTier: Record<string, number>;
-  parkedBuilders: number;
+  parkedUsers: number;
   byLifecycle: Record<AdminIsolatedRuntimeLifecycle | "parked", number>;
-  failedBuilders: number;
+  failedUsers: number;
   staleActivations: number;
   oldestActivationAgeMs: number | null;
 } {
@@ -2022,7 +2022,7 @@ export function projectDisposableFleetCapacity(
     returning: 0,
     retiring: 0,
     failed: 0,
-    parked: parkedBuilders,
+    parked: parkedUsers,
   };
   for (const gateway of disposables) {
     byTier[gateway.sizing.tier] = (byTier[gateway.sizing.tier] ?? 0) + 1;
@@ -2043,9 +2043,9 @@ export function projectDisposableFleetCapacity(
     disposableInstances: disposables.length,
     stagedInstances: 0,
     byTier,
-    parkedBuilders,
+    parkedUsers,
     byLifecycle,
-    failedBuilders: byLifecycle.failed,
+    failedUsers: byLifecycle.failed,
     staleActivations: isolatedRuntimes.filter((runtime) => runtime.stale).length,
     oldestActivationAgeMs:
       activationAges.length === 0 ? null : Math.max(...activationAges),
@@ -2056,7 +2056,7 @@ function rollupFleetStats(
   gateways: ReadonlyArray<ReturnType<typeof projectGatewaySummary>>,
 ): {
   gateways: { total: number; ready: number; paused: number; unreachable: number };
-  customersMounted: number;
+  usersMounted: number;
   fleetCost: {
     monthlyUsd: number;
     onDemandMonthlyUsd: number;
@@ -2070,7 +2070,7 @@ function rollupFleetStats(
     }>;
   };
 } {
-  let ready = 0, paused = 0, unreachable = 0, customersMounted = 0, fleetMonthlyUsd = 0, fleetOnDemandUsd = 0;
+  let ready = 0, paused = 0, unreachable = 0, usersMounted = 0, fleetMonthlyUsd = 0, fleetOnDemandUsd = 0;
   const byTier: Record<string, {
     count: number;
     subtotalUsd: number;
@@ -2082,7 +2082,7 @@ function rollupFleetStats(
     if (g.status === "paused") paused++;
     else if (g.status === "unreachable") unreachable++;
     else if (g.status === "ready") ready++;
-    customersMounted += g.mountedUsers.length;
+    usersMounted += g.mountedUsers.length;
     fleetMonthlyUsd += g.sizing.monthlyCostUsd.compute;
     fleetOnDemandUsd += g.sizing.monthlyCostUsd.onDemandCompute;
     const entry = byTier[g.sizing.tier] ?? {
@@ -2101,7 +2101,7 @@ function rollupFleetStats(
   }
   return {
     gateways: { total: gateways.length, ready, paused, unreachable },
-    customersMounted,
+    usersMounted,
     fleetCost: {
       monthlyUsd: fleetMonthlyUsd,
       onDemandMonthlyUsd: fleetOnDemandUsd,
@@ -2196,7 +2196,7 @@ function restoreRecoveryOperationInput(input: {
     images: { gateway: `${payload.imageRepository}:${payload.imageTag}`,
       "gateway-edge": `${payload.gatewayEdgeImage!.imageRepository}:${payload.gatewayEdgeImage!.imageTag}` } } };
 }
-export const OP_KIND_MIGRATE_USER = "migrate-customer";
+export const OP_KIND_MIGRATE_USER = "migrate-user";
 const BUILDS_SERVICE_ALLOWLIST = new Set([
   "octogee-gateway",
   "gateway-edge",
@@ -2209,9 +2209,9 @@ const OP_KINDS = new Set([
   "retire-gateway",
   OP_KIND_RESTART_GATEWAY,
   "rollout",
-  "deprovision-customer",
-  "suspend-customer",
-  "erase-customer",
+  "deprovision-user",
+  "suspend-user",
+  "erase-user",
 ]);
 const OP_STATUSES = new Set([
   "pending",
@@ -2231,10 +2231,10 @@ export interface AdminGatewayControlProjection {
   profile: GatewayProfile | null;
   sizingTier: string | null;
   ownerUid: string | null;
-  builderSlug: string | null;
+  userSlug: string | null;
   gcpProject: string | null;
   serviceAccountName: string | null;
-  builderAccess: Record<string, unknown> | null;
+  userAccess: Record<string, unknown> | null;
   modelBrokerLimits: Record<string, unknown> | null;
   vm: GatewayVmState | null;
 }
@@ -2258,10 +2258,10 @@ export function projectGatewayControl(
     profile: orNull(root.profile),
     sizingTier: orNull(root.sizingTier),
     ownerUid: orNull(root.ownerUid),
-    builderSlug: orNull(root.builderSlug),
+    userSlug: orNull(root.builderSlug),
     gcpProject: orNull(root.gcpProject),
     serviceAccountName: orNull(root.serviceAccountName),
-    builderAccess: orNull(root.builderAccess as Record<string, unknown> | null | undefined),
+    userAccess: orNull(root.builderAccess as Record<string, unknown> | null | undefined),
     modelBrokerLimits: orNull(root.modelBrokerLimits as Record<string, unknown> | null | undefined),
     vm: recordOrNull(glmData?.vm) as GatewayVmState | null,
   };
@@ -2308,9 +2308,9 @@ interface NewOperationInput {
     | "retire-gateway"
     | "restart-gateway"
     | "rollout"
-    | "deprovision-customer"
-    | "suspend-customer"
-    | "erase-customer";
+    | "deprovision-user"
+    | "suspend-user"
+    | "erase-user";
   createdBy: string;
   origin?: "automatic" | "operator";
   input: Record<string, unknown>;
@@ -2324,7 +2324,7 @@ interface AddGatewayBody {
   imageProfile: string;
   sizingTier: string;
   ownerUid: string;
-  builderSlug: string;
+  userSlug: string;
 }
 
 interface AddGatewayCreate {
@@ -2570,7 +2570,7 @@ function validateSharedGatewayCreate(
       },
     };
   }
-  if (body.ownerUid !== undefined || body.builderSlug !== undefined) {
+  if (body.ownerUid !== undefined || body.userSlug !== undefined) {
     return {
       status: 400,
       body: { error: "shared gateway creation does not accept owner fields" },
@@ -3027,8 +3027,8 @@ function repriceGatewaySummaryFromKubernetes<T extends ReturnType<typeof project
         onDemandComputeUsd: 0,
         savingsUsd: 0,
         pricingMode: reservation.type,
-        perBuilderAtTarget: 0,
-        perBuilderAtTypical: 0,
+        perUserAtTarget: 0,
+        perUserAtTypical: 0,
       }
     : estimateGatewayMonthlyCost(summary.sizing.tier, {
         pricingMode: reservation.type,
@@ -3043,8 +3043,8 @@ function repriceGatewaySummaryFromKubernetes<T extends ReturnType<typeof project
         onDemandCompute: cost.onDemandComputeUsd,
         savings: cost.savingsUsd,
         pricingMode: cost.pricingMode,
-        perBuilderAtTarget: cost.perBuilderAtTarget,
-        perBuilderAtTypical: cost.perBuilderAtTypical,
+        perUserAtTarget: cost.perUserAtTarget,
+        perUserAtTypical: cost.perUserAtTypical,
       },
     },
   };
@@ -3219,10 +3219,16 @@ const GATEWAY_MUTABLE_CONFIG_FIELDS = [
   "modelBrokerLimits",
 ] as const satisfies ReadonlyArray<keyof Omit<GatewayMutableConfig, "configSchemaVersion">>;
 
+const ADMIN_GATEWAY_CONFIG_FIELD_NAMES: Partial<Record<(typeof GATEWAY_MUTABLE_CONFIG_FIELDS)[number], string>> = {
+  builderAccess: "userAccess",
+  builderSlug: "userSlug",
+};
+
 function mutableConfigPatchFromBody(body: Record<string, unknown>): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   for (const field of GATEWAY_MUTABLE_CONFIG_FIELDS) {
-    if (Object.prototype.hasOwnProperty.call(body, field)) patch[field] = body[field];
+    const name = ADMIN_GATEWAY_CONFIG_FIELD_NAMES[field] ?? field;
+    if (Object.prototype.hasOwnProperty.call(body, name)) patch[field] = body[name];
   }
   return patch;
 }
@@ -3338,7 +3344,7 @@ function buildDurableGatewayPatch(args: {
       },
     };
   }
-  const lifecycleOwnedFields = ["gatewayClass", "ownerUid", "builderSlug"].filter((field) =>
+  const lifecycleOwnedFields = ["gatewayClass", "ownerUid", "userSlug"].filter((field) =>
     Object.prototype.hasOwnProperty.call(args.body, field),
   );
   if (lifecycleOwnedFields.length > 0) {
@@ -3582,7 +3588,7 @@ async function accelerateScheduledUserErasure(opts: {
       };
     }
     const erasure = await transaction.journal.operations.get(erasureOperationId);
-    const runnable = erasure?.kind === "erase-customer" &&
+    const runnable = erasure?.kind === "erase-user" &&
       (erasure.status === "pending" || erasure.status === "running");
     if (!runnable) {
       return {
@@ -3632,7 +3638,7 @@ type UserDeletionActionOutcome =
     };
 
 function isUserDeletionConflict(operation: OperationRecord): boolean {
-  return (operation.kind === "suspend-customer" || operation.kind === "erase-customer") &&
+  return (operation.kind === "suspend-user" || operation.kind === "erase-user") &&
     (operation.status === "pending" || operation.status === "running");
 }
 
@@ -3875,7 +3881,7 @@ export async function scheduleUserSelfDeletion(opts: {
     why: USER_SELF_DELETION_REASON,
     target: { uid: opts.uid },
     preActionStatus: { lifecycleStatus },
-    mutation: { kind: "schedule-customer-deletion", uid: opts.uid, eraseNow: false },
+    mutation: { kind: "schedule-user-deletion", uid: opts.uid, eraseNow: false },
     classifyResult: (result) => classifyUserDeletion(result, opts.uid),
     action: async () => claimAndCleanupUserDeletion({
       store: opts.store,
@@ -4582,7 +4588,7 @@ export function addAdminFleetRoutes(
       why: ADMIN_FLEET_REQUEST_REASON,
       target: { uid: input.uid, deletionId: lifecycle.deletionId ?? null },
       preActionStatus: { lifecycleStatus },
-      mutation: { kind: "accelerate-customer-erasure", uid: input.uid },
+      mutation: { kind: "accelerate-user-erasure", uid: input.uid },
       classifyResult: classifyErasureAcceleration,
       action: async () => accelerateScheduledUserErasure({ store, uid: input.uid }),
     });
@@ -4622,7 +4628,7 @@ router.post(
           why: ADMIN_FLEET_REQUEST_REASON,
           target: { uid },
           preActionStatus: { lifecycleStatus: existingStatus ?? null },
-          mutation: { kind: "schedule-customer-deletion", uid, eraseNow: body.eraseNow === true },
+          mutation: { kind: "schedule-user-deletion", uid, eraseNow: body.eraseNow === true },
           classifyResult: (result) => classifyUserDeletion(result, uid),
           action: async () => claimAndCleanupUserDeletion({
             store,
@@ -4733,7 +4739,7 @@ router.get(
           };
         });
         const sharedGatewayIds = new Set(sharedPoolConfig?.sharedGatewayIds ?? []);
-        const parkedBuilders = userDocs.filter((doc) => {
+        const parkedUsers = userDocs.filter((doc) => {
           const resolved = activationLeaseFromUser(doc.data());
           return (
             resolved?.lease.status === "parked" &&
@@ -4742,10 +4748,10 @@ router.get(
         }).length;
         res.json({
           gateways: gateways.map(withAdminGatewayClass),
-          builderRuntimes: builderRuntimeViews,
+          isolatedRuntimes: builderRuntimeViews,
           disposableCapacity: {
-            ...projectDisposableFleetCapacity(gateways, builderRuntimeViews, parkedBuilders),
-            operatorParkedBuilders: snapshot.users.filter((userRecord) => userRecord.openclaw.managedBy === "operator").length,
+            ...projectDisposableFleetCapacity(gateways, builderRuntimeViews, parkedUsers),
+            operatorParkedUsers: snapshot.users.filter((userRecord) => userRecord.openclaw.managedBy === "operator").length,
           },
           stats: rollupFleetStats(
             gateways.filter((gateway) => gateway.desiredStatus !== "retired"),
@@ -4810,7 +4816,7 @@ router.get(
         const assignedByGateway = new Map<string, number>();
         const mountedByGateway = new Map<string, number>();
         const pendingPlacements: PendingPlacement[] = [];
-        let totalBuilders = 0;
+        let totalUsers = 0;
         let assigned = 0;
         let unassigned = 0;
         let mounted = 0;
@@ -4818,7 +4824,7 @@ router.get(
         for (const doc of userDocuments(userRecords, accountsByUid)) {
           const data = doc.data();
           if (!userSlug(data)) continue;
-          totalBuilders++;
+          totalUsers++;
           const placement = classifyUserPlacement(
             doc.id,
             data,
@@ -4854,7 +4860,7 @@ router.get(
 
         res.json({
           stats: {
-            totalBuilders,
+            totalUsers,
             assigned,
             unassigned,
             mounted,
@@ -4942,7 +4948,7 @@ router.post(
           target: { uid, gatewayId: targetGatewayId },
           preActionStatus: { gatewayId: plan.currentGatewayId },
           mutation: {
-            kind: "assign-customer",
+            kind: "assign-user",
             uid,
             gatewayId: targetGatewayId,
             assignmentWrite: repair ? "create-if-missing" : "upsert",
@@ -5605,7 +5611,7 @@ router.get(
         why: ADMIN_FLEET_REQUEST_REASON,
         target: { uid },
         preActionStatus: { gatewayId: before?.gateway?.gatewayId ?? null },
-        mutation: { kind: park ? "park-builder" : "place-builder", uid },
+        mutation: { kind: park ? "park-user" : "place-user", uid },
         classifyResult: result => result.status >= 400
           ? { outcome: "failed", error: String(result.body.error) }
           : { outcome: "completed" },
@@ -5653,12 +5659,13 @@ router.get(
       const allocationId = operatorAllocationId();
       const outcome = await runAdminFleetMutation({
         req,
-        what: "give user an isolated gateway",
+        what: "move user to an isolated gateway",
+        idempotencyScope: "give user an isolated gateway",
         why: ADMIN_FLEET_REQUEST_REASON,
         target: { uid },
         preActionStatus: { gatewayId: planned.sourceGatewayId },
         mutation: {
-          kind: "give-isolated-gateway",
+          kind: "move-to-isolated-gateway",
           uid,
           sizingProfile: planned.sizingKey,
           fromGatewayId: planned.sourceGatewayId,
@@ -5789,7 +5796,7 @@ router.get(
           target: { uid },
           preActionStatus: { gatewayId: preActionGatewayId },
           mutation: {
-            kind: "unassign-customer",
+            kind: "unassign-user",
             uid,
             ...(preActionGatewayId ? { gatewayId: preActionGatewayId } : {}),
           },

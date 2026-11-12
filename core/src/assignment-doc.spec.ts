@@ -45,7 +45,7 @@ const ASSIGNMENT = {
   uid: "uid-alice",
   slug: "alice",
   gatewayId: "default",
-  source: "migrate-customer",
+  source: "migrate-user",
   state: "quiescing",
   epoch: 4,
   createdAt: 90,

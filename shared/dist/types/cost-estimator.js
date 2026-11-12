@@ -18,8 +18,8 @@ export function estimateGatewayMonthlyCost(tier, opts = {}) {
         onDemandComputeUsd: Math.round(onDemandCompute),
         savingsUsd: Math.max(0, Math.round(onDemandCompute) - Math.round(compute)),
         pricingMode,
-        perBuilderAtTarget: Math.round(compute / preset.capacity.targetActiveBuilders),
-        perBuilderAtTypical: Math.round(compute / preset.capacity.typicalBuilders),
+        perUserAtTarget: Math.round(compute / preset.capacity.targetActiveUsers),
+        perUserAtTypical: Math.round(compute / preset.capacity.typicalUsers),
     };
 }
 export function estimateFleetMonthlyCost(inputs) {

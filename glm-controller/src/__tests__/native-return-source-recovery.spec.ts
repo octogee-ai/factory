@@ -15,11 +15,11 @@ function fixture() {
     [`gateways/${source}`]: { gatewayId: source, latestRelease: 7, gatewayClass: "builder", ownerUid: uid, builderSlug: "ceckert-test", desiredStatus: "running", desiredRelease: 7, liveRelease: 7,
       allocation: { kind: "disposable-builder", claimedByUid: uid, leaseId: "lease114", generation: 114 } },
     [`glmGateways/${source}`]: { docKind: "runtime", gatewayId: source, release: 7, lifecycle: "active", runtime: "gce-vm", vm: { instanceName: "native-source", instanceId: "vm114", zone: "us-central1-a" }, vmHome: { returnOperationId: operationId, checkpointRequestedAt: 50 } },
-    [`gateways/${source}/assignments/${uid}`]: { uid, slug: "ceckert-test", gatewayId: source, source: "migrate-customer", epoch: 25, state: "serving", createdAt: 10, updatedAt: 10, updatedByOperationId: null },
+    [`gateways/${source}/assignments/${uid}`]: { uid, slug: "ceckert-test", gatewayId: source, source: "migrate-user", epoch: 25, state: "serving", createdAt: 10, updatedAt: 10, updatedByOperationId: null },
     [`gateways/${target}`]: { gatewayId: target, desiredRelease: 3, latestRelease: 3, gatewayClass: "shared", desiredStatus: "retired", retirementVersion: 1, retirementClaim: { operationId: retirementId, version: 1, phase: "claimed" } },
     [`glmOperations/${retirementId}`]: { kind: "retire-gateway", status: "succeeded", gatewayId: target, createdAt: 200, completedAt: 300,
       input: { gatewayId: target, source: "shared-pool-scaler", retirementClaimVersion: 1 }, steps: [{ name: "helm-uninstall", status: "done" }, { name: "revoke-agent-store-credentials", status: "done" }] },
-    [`glmOperations/${operationId}`]: { kind: "migrate-customer", status: "failed", origin: "automatic", createdBy: "glm-controller-placement-policy", inputUid: uid, gatewayId: target,
+    [`glmOperations/${operationId}`]: { kind: "migrate-user", status: "failed", origin: "automatic", createdBy: "glm-controller-placement-policy", inputUid: uid, gatewayId: target,
       startedAt: 90, completedAt: 100, attempts: 22, rolledBack: false, steps: [{ name: "quiesce-source", status: "failed" }],
       attemptHistory: [{ attempt: 22, error: "old Native cleanup permission denied", steps: [{ name: "quiesce-source", status: "failed" }] }],
       input: { uid, builderSlug: "ceckert-test", fromGatewayId: source, toGatewayId: target, source: "builder-activation-lease" },
@@ -103,14 +103,14 @@ describe("retired target Native return source-only recovery", () => {
     if (change === "owner") h.records[`gateways/${source}`].ownerUid = "foreign";
     if (change === "vm") h.records[`glmGateways/${source}`].runtime = "cluster";
     if (change === "cutover") op.cutoverCommittedAt = 99;
-    if (change === "target-assignment") h.records[`gateways/${target}/assignments/${uid}`] = { uid, slug: "ceckert-test", gatewayId: target, source: "migrate-customer", epoch: 1, state: "serving" };
+    if (change === "target-assignment") h.records[`gateways/${target}/assignments/${uid}`] = { uid, slug: "ceckert-test", gatewayId: target, source: "migrate-user", epoch: 1, state: "serving" };
     if (change === "retirement-pending") h.records[`glmOperations/${retirementId}`].status = "pending";
     if (change === "retirement-version") h.records[`gateways/${target}`].retirementVersion = 2;
     if (change === "retained-data") h.records[`glmOperations/${retirementId}`].input.retainData = true;
     if (change === "credential-step") h.records[`glmOperations/${retirementId}`].steps.pop();
     if (change === "restore-fence") h.records[`users/${uid}`].provisioning.openclaw.restoreFence = {};
     if (change === "transfer-fence") h.records[`users/${uid}`].provisioning.openclaw.sourceTransferFence = {};
-    if (change === "competing") h.records["glmOperations/foreign"] = { kind: "migrate-customer", status: "running", input: { uid } };
+    if (change === "competing") h.records["glmOperations/foreign"] = { kind: "migrate-user", status: "running", input: { uid } };
     if (change === "foreign-handoff") op.schedulerHandoff.toGatewayId = "shared-foreign";
     if (change === "scheduler-claim") op.schedulerHandoff.migrationId = `mig-${operationId}:scheduler:22:claim:91`;
     if (change === "scheduler-attempt") op.schedulerHandoff.migrationId = `mig-${operationId}:scheduler:21:claim:90`;

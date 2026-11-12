@@ -979,7 +979,7 @@ describe("gateway convergence pass outcomes", () => {
     const users: Record<string, any> = { u: { username: "alice", provisioning: {
       status: "complete", openclaw: { gatewayId, status: "complete" },
     } } };
-    const operations = { return: { kind: "migrate-customer", status: "running", startedAt: 100,
+    const operations = { return: { kind: "migrate-user", status: "running", startedAt: 100,
       input: { uid: "u", fromGatewayId: "builder-alice", toGatewayId: gatewayId }, cutoverCommittedAt: 50,
       schedulerHandoff: { uid: "u", slug: "alice", fromGatewayId: "builder-alice", toGatewayId: gatewayId } } };
     const assignments = { [`${gatewayId}/u`]: { uid: "u", slug: "alice", gatewayId, source: "onboarding", epoch: 3, state: "serving" } };
@@ -1162,7 +1162,7 @@ describe("gateway convergence pass outcomes", () => {
       return { success: true, steps: [] };
     });
     const operation = processOperation(h.operations.return as never,
-      { ...h.deps, handlers: { "migrate-customer": handler } } as never);
+      { ...h.deps, handlers: { "migrate-user": handler } } as never);
     await handling;
     await new Promise<void>(resolve => setImmediate(resolve));
     releaseHelm();

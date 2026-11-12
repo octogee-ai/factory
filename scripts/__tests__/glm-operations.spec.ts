@@ -29,7 +29,7 @@ describe("enqueueOperation", () => {
   it("writes a pending op with kind/input/createdBy and returns the new id", async () => {
     const { store, docs } = makeFixtureStore();
     const id = await enqueueOperation(store, {
-      kind: "migrate-customer",
+      kind: "migrate-user",
       input: { uid: "u1", toGatewayId: "canary" },
       createdBy: "fleet-cli",
       now: () => 1234,
@@ -37,7 +37,7 @@ describe("enqueueOperation", () => {
     expect([...docs.keys()]).toEqual([`glmOperations/${id}`]);
     const doc = docs.get(`glmOperations/${id}`)!;
     expect(doc).toEqual({
-      kind: "migrate-customer",
+      kind: "migrate-user",
       status: "pending",
       createdBy: "fleet-cli",
       createdAt: 1234,
@@ -122,7 +122,7 @@ describe("readOperation", () => {
 
   it("returns the op with its id merged in", async () => {
     const { store } = makeFixtureStore({
-      "op-1": { kind: "migrate-customer", status: "running", steps: [] },
+      "op-1": { kind: "migrate-user", status: "running", steps: [] },
     });
     const op = await readOperation(store, "op-1");
     expect(op).toMatchObject({ id: "op-1", status: "running" });
@@ -131,7 +131,7 @@ describe("readOperation", () => {
 
 describe("awaitOperation", () => {
   it("polls until the op reaches a terminal status and returns it", async () => {
-    const base = { kind: "migrate-customer", createdBy: "fleet-cli", input: {} };
+    const base = { kind: "migrate-user", createdBy: "fleet-cli", input: {} };
     const { store, docs } = makeFixtureStore({
       "op-1": { ...base, status: "pending", steps: [] },
     });
@@ -159,7 +159,7 @@ describe("awaitOperation", () => {
 
   it("throws when the op never finishes before the timeout", async () => {
     const { store } = makeFixtureStore({
-      "op-1": { kind: "migrate-customer", status: "pending", steps: [], createdBy: "x", input: {} },
+      "op-1": { kind: "migrate-user", status: "pending", steps: [], createdBy: "x", input: {} },
     });
     let calls = 0;
     const now = () => (calls++ === 0 ? 0 : 10_000);

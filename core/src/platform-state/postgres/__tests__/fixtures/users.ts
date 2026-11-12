@@ -33,7 +33,7 @@ function fixtureFor(harness: PlatformStateHarness): UserFixture {
         `INSERT INTO $schema.gateways (gateway_id, created_at, created_by, updated_at, updated_by, latest_release, desired_release,
            desired_status, config_schema_version, gateway_class, image_profile)
          VALUES ($1::text, 1, 'test', 1, 'test', 0, 0, 'running', 1, $2::text, 'standard') ON CONFLICT DO NOTHING`,
-        [gatewayId, gatewayId.startsWith("shared-") ? "shared" : "builder"],
+        [gatewayId, gatewayId.startsWith("shared-") ? "shared" : "isolated"],
       );
     },
     async assign(gatewayId, uid, slug = uid) {

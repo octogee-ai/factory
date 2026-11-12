@@ -164,7 +164,7 @@ function pointers(prefix: string, count: number): Documents {
 function migration(id: string, fields: Record<string, unknown>): Documents {
   return {
     [`glmOperations/${id}`]: {
-      kind: "migrate-customer", status: "pending", createdBy: "glm-controller", createdAt: 10, startedAt: null, completedAt: null,
+      kind: "migrate-user", status: "pending", createdBy: "glm-controller", createdAt: 10, startedAt: null, completedAt: null,
       steps: [], inputUid: "uid-1", input: { uid: "uid-1", fromGatewayId: "default", toGatewayId: "builder-1" },
       waitingOn: "source", nextAttemptAt: 70, ...fields,
     },

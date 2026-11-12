@@ -9,7 +9,7 @@ describe("abandoned forward migration fences", () => {
       ...(kind === "legacy" ? { forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 4 } } : {}),
     };
     const operation = {
-      kind: "migrate-customer", status: "failed", schedulerHandoff, schedulerHandoffReleased: false,
+      kind: "migrate-user", status: "failed", schedulerHandoff, schedulerHandoffReleased: false,
       input: { uid: "alice", fromGatewayId: "old-native", toGatewayId: "new-shared" },
       ...(kind === "v2" ? { customerMigrationV2: { phase: "sourceQuiesced" } } : {}),
       steps: [{ name: "quiesce-source", status: "done" }, { name: "final-sync-state", status: "failed" }],
@@ -29,11 +29,11 @@ describe("abandoned forward migration fences", () => {
   it("keeps releasing other handoffs when one operation's records are malformed", async () => {
     const handoff = (uid: string) => ({ migrationId: `mig-${uid}`, fromGatewayId: "shared-a", toGatewayId: "shared-b", uid, slug: uid });
     const records: Record<string, Record<string, unknown>> = {
-      "glmOperations/committed": { kind: "migrate-customer", status: "failed", schedulerHandoffReleased: false, cutoverCommittedAt: 900,
+      "glmOperations/committed": { kind: "migrate-user", status: "failed", schedulerHandoffReleased: false, cutoverCommittedAt: 900,
         schedulerHandoff: handoff("alice"), input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
         steps: [{ name: "quiesce-source", status: "done" }] },
       "users/alice": { provisioning: { openclaw: { gatewayId: 7 } } },
-      "glmOperations/never-held": { kind: "migrate-customer", status: "failed", schedulerHandoffReleased: false,
+      "glmOperations/never-held": { kind: "migrate-user", status: "failed", schedulerHandoffReleased: false,
         schedulerHandoff: handoff("bob"), input: { uid: "bob", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
         steps: [{ name: "keys-sync-state", status: "failed" }] },
     };

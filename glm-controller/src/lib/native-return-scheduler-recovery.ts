@@ -52,7 +52,7 @@ function nativeReturnScope(op: OperationRecord | null, uid: string, slug: string
 } {
   if (!op) return false;
   return [
-    op.kind === "migrate-customer", op.origin === "automatic", op.createdBy === "glm-controller-placement-policy",
+    op.kind === "migrate-user", op.origin === "automatic", op.createdBy === "glm-controller-placement-policy",
     op.inputUid === uid, op.input.uid === uid, op.input.builderSlug === slug, op.input.source === "builder-activation-lease",
     typeof op.input.fromGatewayId === "string", typeof op.input.toGatewayId === "string",
     op.gatewayId === op.input.toGatewayId,

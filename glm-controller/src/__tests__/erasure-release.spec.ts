@@ -16,7 +16,7 @@ function deletion(eraseAfter: number, erasure: Record<string, unknown>): Documen
       eraseAfter,
       erasureOperationId: "erase-1",
     },
-    "glmOperations/erase-1": { kind: "erase-customer", input: { uid: "uid-1", deletionId: "delete-1" }, ...erasure },
+    "glmOperations/erase-1": { kind: "erase-user", input: { uid: "uid-1", deletionId: "delete-1" }, ...erasure },
   };
 }
 
@@ -51,7 +51,7 @@ describe("markSuspendedAndReleaseErasure", () => {
 
     expect(docs["customerDeletionJobs/delete-1"].status).toBe("hibernating");
     expect(docs["glmOperations/erase-1"]).toEqual({
-      kind: "erase-customer",
+      kind: "erase-user",
       input: { uid: "uid-1", deletionId: "delete-1" },
       status: "running",
       nextAttemptAt: NOW - 1,

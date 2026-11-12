@@ -246,7 +246,7 @@ export interface ReleaseDoc {
 
 export type AssignmentSource =
   | "onboarding"
-  | "migrate-customer"
+  | "migrate-user"
   | "repair";
 
 // Migration-plane routing state for one user's assignment. serving = the

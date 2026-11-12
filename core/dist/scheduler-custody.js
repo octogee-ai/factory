@@ -107,7 +107,7 @@ async function classifyRelease(deps, scope, releasing) {
 function classifyHoldOwner(scope, operationId, owner) {
     if (!TERMINAL.includes(owner.status))
         return { act: "keep", reason: `${operationId} is still ${owner.status}` };
-    const movedOff = owner.kind === "migrate-customer" && owner.input?.uid === scope.uid &&
+    const movedOff = owner.kind === "migrate-user" && owner.input?.uid === scope.uid &&
         owner.input.fromGatewayId === scope.gatewayId && typeof owner.cutoverCommittedAt === "number";
     if (!movedOff)
         return { act: "keep", reason: `${operationId} ${owner.status} without moving the user off ${scope.gatewayId}` };

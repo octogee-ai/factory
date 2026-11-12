@@ -1103,7 +1103,7 @@ describe("GET /api/admin/gateways — sizing enrichment", () => {
     const running = res.body.gateways.find((g: any) => g.gatewayId === "running");
     expect(paused.sizing.tier).toBe("l");
     expect(paused.sizing.monthlyCostUsd.compute).toBe(0);
-    expect(paused.sizing.monthlyCostUsd.perBuilderAtTarget).toBe(0);
+    expect(paused.sizing.monthlyCostUsd.perUserAtTarget).toBe(0);
     expect(running.sizing.monthlyCostUsd.compute).toBeGreaterThan(0);
     expect(res.body.stats.fleetCost.monthlyUsd).toBe(running.sizing.monthlyCostUsd.compute);
   });
@@ -1510,7 +1510,7 @@ describe("POST /api/admin/users/:uid/migrate — start migration", () => {
       .send({ to: "canary" });
     expect(res.status).toBe(202);
     expect(commandOperation()).toMatchObject({
-      kind: "migrate-customer",
+      kind: "migrate-user",
       status: "pending",
       input: {
         uid: "uid-alice",
@@ -1572,7 +1572,7 @@ describe("POST /api/admin/users/:uid/migrate — start migration", () => {
     glmOperationsDocs.unshift({
       id: "op-mig-live",
       data: {
-        kind: "migrate-customer",
+        kind: "migrate-user",
         status: "pending",
         inputUid: "uid-alice",
         input: { uid: "uid-alice", toGatewayId: "canary" },
@@ -1630,7 +1630,7 @@ describe("POST /api/admin/users/:uid/unassign — clear assignment, let reconcil
     glmOperationsDocs.unshift({
       id: "op-mig-1",
       data: {
-        kind: "migrate-customer",
+        kind: "migrate-user",
         status: "running",
         inputUid: "uid-alice",
         input: { uid: "uid-alice", toGatewayId: "default-blue" },
@@ -1776,7 +1776,7 @@ describe("GET /api/admin/user-distribution — fleet-wide ops view", () => {
     const res = await request(app).get("/api/admin/user-distribution");
     expect(res.status).toBe(200);
     expect(res.body.stats).toMatchObject({
-      totalBuilders: 5,
+      totalUsers: 5,
       assigned: 4,
       unassigned: 1,
       mounted: 2,
@@ -1830,7 +1830,7 @@ describe("GET /api/admin/user-distribution — fleet-wide ops view", () => {
     const res = await request(app).get("/api/admin/user-distribution");
     expect(res.status).toBe(200);
     expect(res.body.stats).toMatchObject({
-      totalBuilders: 0,
+      totalUsers: 0,
       assigned: 0,
       unassigned: 0,
       mounted: 0,
@@ -1953,7 +1953,7 @@ describe("POST /api/admin/users/:uid/assign — initial placement", () => {
       uid: "uid-alice",
       slug: "alice",
       gatewayId: "default",
-      source: "migrate-customer",
+      source: "migrate-user",
       state: "quiescing",
       epoch: 7,
       updatedAt: 90,
@@ -2105,7 +2105,7 @@ describe("GET /api/admin/gateways/:id/details — drawer payload", () => {
       {
         id: "op-b",
         data: {
-          kind: "migrate-customer",
+          kind: "migrate-user",
           status: "succeeded",
           createdAt: 4_000,
           input: { uid: "uid-alice" },
@@ -2198,7 +2198,7 @@ describe("GET /api/admin/operations — history", () => {
       {
         id: "op-newer",
         data: {
-          kind: "migrate-customer",
+          kind: "migrate-user",
           status: "succeeded",
           createdAt: 2_000,
           steps: [],

@@ -43,7 +43,7 @@ interface FakeDbState {
 
 function completeAssignment(gatewayId: string, uid: string, assignment: Record<string, unknown>): Record<string, unknown> {
   return Object.assign(assignment, {
-    uid, slug: uid, gatewayId, source: "migrate-customer", state: "serving", epoch: 1,
+    uid, slug: uid, gatewayId, source: "migrate-user", state: "serving", epoch: 1,
     createdAt: 1, updatedAt: 1, updatedByOperationId: null, ...assignment,
   });
 }
@@ -101,7 +101,7 @@ describe("runStuckOpReaperTick", () => {
     "recovers held target cleanup only for the exact pre-quiesce Shared attempt: %s", async (scenario) => {
       const held = "agent database files are still held open: /state/agents/octogee-alice-coach/agent/openclaw-agent.sqlite";
       const op: FakeOpDoc = { id: "placement-owned", data: {
-        kind: "migrate-customer", status: "failed", startedAt: 100, attempts: 1, rolledBack: true,
+        kind: "migrate-user", status: "failed", startedAt: 100, attempts: 1, rolledBack: true,
         steps: [{ name: "keys-sync-state", status: "done" }, { name: "pre-sync-state", status: "failed" }, { name: "rollback:unmount-target", status: "failed" }],
         error: held,
         input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
@@ -141,7 +141,7 @@ describe("runStuckOpReaperTick", () => {
     const held = "agent database files are still held open: /state/agent.sqlite";
     const steps = [{ name: "keys-sync-state", status: "done" }, { name: "pre-sync-state", status: "failed", error: held }, { name: "rollback:unmount-target", status: "failed", error: held }];
     const op: FakeOpDoc = { id: "placement-owned", data: {
-      kind: "migrate-customer", status: "failed", startedAt: 100, attempts: 1, error: held, steps,
+      kind: "migrate-user", status: "failed", startedAt: 100, attempts: 1, error: held, steps,
       input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
       schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: "mig-placement-owned:scheduler:1:claim:100" },
     } };
@@ -183,7 +183,7 @@ describe("runStuckOpReaperTick", () => {
     ["complete", "native cleanup incomplete: purgeFailed=false failed=[]", false],
   ])("recovers a terminal forward failure only for recoverable target cleanup: %s", async (_label, cleanupError, admitted) => {
     const op: FakeOpDoc = { id: "placement-owned", data: {
-      kind: "migrate-customer", status: "failed", startedAt: 100, attempts: 1, rolledBack: false, error: "target verification refused",
+      kind: "migrate-user", status: "failed", startedAt: 100, attempts: 1, rolledBack: false, error: "target verification refused",
       steps: [{ name: "keys-sync-state", status: "done" }, { name: "pre-sync-state", status: "done" }, { name: "quiesce-source", status: "done" },
         { name: "verify-target", status: "failed", error: "target verification refused" }, { name: "rollback:unmount-target", status: "failed", error: String(cleanupError) }],
       input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
@@ -202,7 +202,7 @@ describe("runStuckOpReaperTick", () => {
   it.each(["quiescing", "acknowledged"])("requeues an interrupted disposable activation before releasing or retiring its source: %s", async (phase) => {
     const target = "alice-s-12345678";
     const op: FakeOpDoc = { id: `builder-activate-${target}-g2`, data: {
-      kind: "migrate-customer", status: "running", startedAt: NOW - 1_000, attempts: 0,
+      kind: "migrate-user", status: "running", startedAt: NOW - 1_000, attempts: 0,
       steps: [{ name: "quiesce-source", status: "done" }],
       input: { uid: "alice", builderSlug: "alice", fromGatewayId: "shared-a", toGatewayId: target, source: "builder-activation-lease" },
       schedulerHandoffReleased: true,
@@ -231,7 +231,7 @@ describe("runStuckOpReaperTick", () => {
     const target = "alice-s-12345678";
     const id = `builder-activate-${target}-g2`;
     const op: FakeOpDoc = { id, data: {
-      kind: "migrate-customer", status: "failed", startedAt: NOW - 5_000, completedAt: NOW - 1_000, attempts: 1,
+      kind: "migrate-user", status: "failed", startedAt: NOW - 5_000, completedAt: NOW - 1_000, attempts: 1,
       error: "target import refused", steps,
       attemptHistory: [{ attempt: 1, startedAt: NOW - 5_000, completedAt: NOW - 1_000, error: "target import refused", classification: "terminal", steps }],
       input: { uid: "alice", builderSlug: "alice", fromGatewayId: "shared-a", toGatewayId: target, source: "builder-activation-lease" },
@@ -268,7 +268,7 @@ describe("runStuckOpReaperTick", () => {
   });
   it("recovers a failed owned rsync conflict on a later tick without restarting the fleet controller", async () => {
     const op: FakeOpDoc = { id: "placement-owned", data: {
-      kind: "migrate-customer", status: "failed", attempts: 1, startedAt: 100, steps: [{ name: "keys-sync-state", status: "failed" }],
+      kind: "migrate-user", status: "failed", attempts: 1, startedAt: 100, steps: [{ name: "keys-sync-state", status: "failed" }],
       error: "rsync import port 30873 is already serving migrationId=other slug=bob",
       input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
       schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: "mig-placement-owned:scheduler:1:claim:100" },
@@ -285,7 +285,7 @@ describe("runStuckOpReaperTick", () => {
   });
   it.each(["boot", "budget", "scheduler-only-released"])("requeues an abandoned owned Shared migration without pretending the source is serving: %s", async (scenario) => {
     const op: FakeOpDoc = { id: "placement-owned", data: {
-      kind: "migrate-customer", status: "failed", attempts: 1, startedAt: 100, completedAt: NOW - 1_000, steps: [],
+      kind: "migrate-user", status: "failed", attempts: 1, startedAt: 100, completedAt: NOW - 1_000, steps: [],
       error: "reaped: controller restarted mid-op", input: {
         uid: "alice", builderSlug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b",
       },
@@ -310,7 +310,7 @@ describe("runStuckOpReaperTick", () => {
   it.each(["previous-controller", "current-controller"])("does not strand a boot-missed orphan or race a live claim: %s", async (scenario) => {
     const claimedAt = NOW - 30 * 60_000;
     const op: FakeOpDoc = { id: "placement-owned", data: {
-      kind: "migrate-customer", status: "running", attempts: 0, startedAt: claimedAt, steps: [],
+      kind: "migrate-user", status: "running", attempts: 0, startedAt: claimedAt, steps: [],
       input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
       schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: `mig-placement-owned:scheduler:1:claim:${claimedAt}` },
     } };
@@ -325,7 +325,7 @@ describe("runStuckOpReaperTick", () => {
 
   it.each(["foreign-marker", "moved", "foreign-gate", "target-assigned", "cutover", "v2", "cancelled", "restore", "source-transfer", "terminal", "missing-handoff"])("preserves abandoned state when recovery has %s", async (scenario) => {
     const op: FakeOpDoc = { id: "placement-owned", data: {
-      kind: "migrate-customer", status: "failed", attempts: 1, startedAt: 100, steps: [], error: "reaped: controller restarted mid-op",
+      kind: "migrate-user", status: "failed", attempts: 1, startedAt: 100, steps: [], error: "reaped: controller restarted mid-op",
       input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
       schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: "mig-placement-owned:scheduler:1:claim:100" },
     } };
@@ -352,7 +352,7 @@ describe("runStuckOpReaperTick", () => {
 
   it("requeues a live orphan's journal and uses a fresh scheduler attempt after the old controller exits", async () => {
     const op: FakeOpDoc = { id: "placement-owned", data: {
-      kind: "migrate-customer", status: "running", startedAt: NOW - 1_000, attempts: 0,
+      kind: "migrate-user", status: "running", startedAt: NOW - 1_000, attempts: 0,
       steps: [{ name: "quiesce-source", status: "done" }],
       input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
       schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: `mig-placement-owned:scheduler:1:claim:${NOW - 1_000}` },
@@ -368,7 +368,7 @@ describe("runStuckOpReaperTick", () => {
     const ops: FakeOpDoc[] = [{
       id: "builder-return-builder-alice-g1",
       data: {
-        kind: "migrate-customer", origin: "automatic", status: "running",
+        kind: "migrate-user", origin: "automatic", status: "running",
         startedAt: NOW - 60 * 60_000,
         input: { uid: "alice", source: "builder-activation-lease", fromGatewayId: "builder-alice" },
       },
@@ -405,7 +405,7 @@ describe("runStuckOpReaperTick", () => {
 
 
   it.each([{ age: MIGRATION_TRANSFER_LEASE_MS + 59_000, reaped: 0 }, { age: MIGRATION_TRANSFER_LEASE_MS + 61_000, reaped: 1 }])("respects the bounded final-import deadline at age $age", async ({ age, reaped }) => {
-    const ops: FakeOpDoc[] = [{ id: "slow-final", data: { status: "running", kind: "migrate-customer",
+    const ops: FakeOpDoc[] = [{ id: "slow-final", data: { status: "running", kind: "migrate-user",
       startedAt: NOW - age, lastProgressAt: NOW - age, steps: [{ name: "final-sync-state", status: "running" }] } }];
     await expect(runStuckOpReaperTick({ store: makeStore(ops), log: vi.fn(), now: () => NOW,
       stalenessMs: 15 * 60_000 })).resolves.toEqual({ scanned: 1, reaped });
@@ -413,7 +413,7 @@ describe("runStuckOpReaperTick", () => {
 
 
   it("rechecks a newly running final-import budget inside the reap transaction", async () => {
-    const ops: FakeOpDoc[] = [{ id: "changed-stage", data: { status: "running", kind: "migrate-customer",
+    const ops: FakeOpDoc[] = [{ id: "changed-stage", data: { status: "running", kind: "migrate-user",
       startedAt: NOW - 1_100_000, input: { uid: "uid-mike", fromGatewayId: "shared-a", toGatewayId: "isolated-target" },
       steps: [{ name: "pre-sync-state", status: "running" }] } }];
     const db = makeStore(ops, { beforeTransaction: () => { ops[0].data.steps = [{ name: "final-sync-state", status: "running" }]; } });
@@ -428,7 +428,7 @@ describe("runStuckOpReaperTick", () => {
         id: "op-stuck",
         data: {
           status: "running",
-          kind: "migrate-customer",
+          kind: "migrate-user",
           startedAt: NOW - 20 * 60_000,
         },
       },
@@ -454,7 +454,7 @@ describe("runStuckOpReaperTick", () => {
       id: "op-stuck-migration",
       data: {
         status: "running",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         startedAt: NOW - 20 * 60_000,
       },
     }];
@@ -471,10 +471,10 @@ describe("runStuckOpReaperTick", () => {
 
   it.each(["restoreFence", "sourceTransferFence"])("leaves the legacy operation and assignment unchanged while %s is unresolved", async (fence) => {
     const ops: FakeOpDoc[] = [{ id: "placement-owned", data: {
-      status: "running", kind: "migrate-customer", startedAt: NOW - 20 * 60_000,
+      status: "running", kind: "migrate-user", startedAt: NOW - 20 * 60_000,
       input: { uid: "uid-mike", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
     } }];
-    const assignment = { uid: "uid-mike", gatewayId: "shared-a", state: "quiescing", source: "migrate-customer", updatedByOperationId: "placement-owned" };
+    const assignment = { uid: "uid-mike", gatewayId: "shared-a", state: "quiescing", source: "migrate-user", updatedByOperationId: "placement-owned" };
     const db = makeStore(ops, {
       users: { "uid-mike": { provisioning: { openclaw: { gatewayId: "shared-a", [fence]: { operationId: "restore-1", sourceGatewayId: "shared-a", targetGatewayId: "shared-b" } } } } },
       assignments: { "shared-a/uid-mike": assignment },
@@ -491,7 +491,7 @@ describe("runStuckOpReaperTick", () => {
       id: "placement-owned",
       data: {
         status: "running",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         startedAt: NOW - 20 * 60_000,
         input: {
           uid: "uid-mike",
@@ -504,7 +504,7 @@ describe("runStuckOpReaperTick", () => {
       uid: "uid-mike",
       gatewayId: "shared-a",
       state: "quiescing",
-      source: "migrate-customer",
+      source: "migrate-user",
       updatedByOperationId: "placement-owned",
     };
     const transactionState = { active: false };
@@ -541,7 +541,7 @@ describe("runStuckOpReaperTick", () => {
       id: "placement-owned",
       data: {
         status: "running",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         startedAt: NOW - 20 * 60_000,
         input: {
           uid: "uid-mike",
@@ -554,7 +554,7 @@ describe("runStuckOpReaperTick", () => {
       uid: "uid-mike",
       gatewayId: "shared-a",
       state: "quiescing",
-      source: "migrate-customer",
+      source: "migrate-user",
       updatedByOperationId: owner,
     };
     const db = makeStore(ops, {
@@ -583,7 +583,7 @@ describe("runStuckOpReaperTick", () => {
       id: "placement-raced",
       data: {
         status: "running",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         startedAt: NOW - 20 * 60_000,
         input: {
           uid: "uid-mike",
@@ -596,7 +596,7 @@ describe("runStuckOpReaperTick", () => {
       uid: "uid-mike",
       gatewayId: "shared-a",
       state: "quiescing",
-      source: "migrate-customer",
+      source: "migrate-user",
       updatedByOperationId: "placement-raced",
     };
     const db = makeStore([op], {
@@ -656,7 +656,7 @@ describe("runStuckOpReaperTick", () => {
     expect(ops[0].updated).toBeUndefined();
   });
 
-  it.each(["suspend-customer", "erase-customer"])(
+  it.each(["suspend-user", "erase-user"])(
     "does not terminalize a stale restart-resumable %s operation",
     async (kind) => {
       const ops: FakeOpDoc[] = [{
@@ -681,7 +681,7 @@ describe("runStuckOpReaperTick", () => {
         id: `op-v2-${phase}`,
         data: {
           status: "running",
-          kind: "migrate-customer",
+          kind: "migrate-user",
           startedAt: NOW - 60 * 60_000,
           customerMigrationV2: { phase },
         },
@@ -705,7 +705,7 @@ describe("runStuckOpReaperTick", () => {
         id: "op-no-started",
         data: {
           status: "running",
-          kind: "migrate-customer",
+          kind: "migrate-user",
           createdAt: NOW - 30 * 60_000,
         },
       },
@@ -780,7 +780,7 @@ it("skips ops with no anchor timestamp (defensively — log noise only)", async 
 
   it("reaps multiple stuck ops in a single tick", async () => {
     const ops: FakeOpDoc[] = [
-      { id: "op-a", data: { status: "running", kind: "migrate-customer", startedAt: NOW - 30 * 60_000 } },
+      { id: "op-a", data: { status: "running", kind: "migrate-user", startedAt: NOW - 30 * 60_000 } },
       { id: "op-b", data: { status: "running", kind: "rollout", startedAt: NOW - 20 * 60_000 } },
       { id: "op-c", data: { status: "running", kind: "add-gateway", startedAt: NOW - 60_000 } },
     ];
@@ -805,7 +805,7 @@ describe("recoverControllerOrphanedOperations", () => {
       id: "placement-orphan",
       data: {
         status: "running",
-        kind: "migrate-customer",
+        kind: "migrate-user",
         origin: "automatic",
         startedAt: BOOTED_AT - 2 * 60_000,
         lastProgressAt: BOOTED_AT - 60_000,
@@ -839,7 +839,7 @@ describe("recoverControllerOrphanedOperations", () => {
     });
     const queued = {
       id: "placement-queued",
-      kind: "migrate-customer",
+      kind: "migrate-user",
       status: "pending",
       input: { uid: "uid-nina", fromGatewayId: "shared-a", toGatewayId: "shared-c" },
     };
@@ -931,7 +931,7 @@ describe("recoverControllerOrphanedOperations", () => {
     ["an add-gateway op", { kind: "add-gateway", input: { gatewayId: "shared-a" } }],
     ["a rollout the resume sweep re-drives", { kind: "rollout", input: { gatewayId: "shared-a" } }],
     ["a durable V2 migration", { customerMigrationV2: { phase: "checkpointed" } }],
-    ["a suspend-customer op", { kind: "suspend-customer" }],
+    ["a suspend-customer op", { kind: "suspend-user" }],
   ])("leaves %s to its own restart recovery", async (_label, overrides) => {
     const op = orphanedPlacement(overrides);
     const db = makeStore([op]);
@@ -1001,7 +1001,7 @@ describe("recoverControllerOrphanedOperations", () => {
     const op: FakeOpDoc = {
       id: "builder-return-builder-alice-g1",
       data: {
-        kind: "migrate-customer", origin: "automatic", status: "running",
+        kind: "migrate-user", origin: "automatic", status: "running",
         startedAt: BOOTED_AT - 60_000,
         input: { uid: "alice", source: "builder-activation-lease", fromGatewayId: "builder-alice" },
       },

@@ -26,7 +26,7 @@ export async function configuredUserPreparationAllowed(
   const [user, runtime, operations] = await Promise.all([
     store.users.records.get(ownerUid),
     store.fleetRegistry.get(bound.gatewayId),
-    store.journal.operations.listForUid(ownerUid, { kind: "migrate-customer", statuses: ["running"] }),
+    store.journal.operations.listForUid(ownerUid, { kind: "migrate-user", statuses: ["running"] }),
   ]);
   const sourceGatewayId = user?.gateway?.gatewayId;
   if (!sourceGatewayId || sourceGatewayId === bound.gatewayId || user.slug !== slug) return false;
@@ -61,7 +61,7 @@ function preparationOperationMatches(
 ): boolean {
   const { ownerUid, sourceGatewayId, targetGatewayId, slug } = scope;
   const input = operation.input as Record<string, unknown> | undefined;
-  return operation.kind === "migrate-customer" && operation.status === "running" &&
+  return operation.kind === "migrate-user" && operation.status === "running" &&
     preparationCancellationDeferred(operation, operationId, slug) && !operation.cutoverCommittedAt && input?.uid === ownerUid &&
     input.fromGatewayId === sourceGatewayId && input.toGatewayId === targetGatewayId;
 }

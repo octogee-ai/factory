@@ -15,7 +15,7 @@ export const TIER_PRESETS = {
             limits: { cpu: '1000m', memory: '2Gi', 'ephemeral-storage': '4Gi' },
         },
         nodejs: { uvThreadpoolSize: '4', maxOldSpaceSizeMb: '1536' },
-        capacity: { targetActiveBuilders: 1, typicalBuilders: 1 },
+        capacity: { targetActiveUsers: 1, typicalUsers: 1 },
     },
     s: {
         description: 'One active user with browser and desktop headroom',
@@ -24,7 +24,7 @@ export const TIER_PRESETS = {
             limits: { cpu: '2000m', memory: '8Gi', 'ephemeral-storage': '4Gi' },
         },
         nodejs: { uvThreadpoolSize: '4', maxOldSpaceSizeMb: '3072' },
-        capacity: { targetActiveBuilders: 1, typicalBuilders: 2 },
+        capacity: { targetActiveUsers: 1, typicalUsers: 2 },
     },
     m: {
         description: 'Shared default — light shared use',
@@ -33,7 +33,7 @@ export const TIER_PRESETS = {
             limits: { cpu: '2000m', memory: '8Gi', 'ephemeral-storage': '5Gi' },
         },
         nodejs: { uvThreadpoolSize: '4', maxOldSpaceSizeMb: '5632' },
-        capacity: { targetActiveBuilders: 2, typicalBuilders: 3 },
+        capacity: { targetActiveUsers: 2, typicalUsers: 3 },
     },
     l: {
         description: 'Ceiling — small teams and heavier shared use',
@@ -42,7 +42,7 @@ export const TIER_PRESETS = {
             limits: { cpu: '4000m', memory: '16Gi', 'ephemeral-storage': '5Gi' },
         },
         nodejs: { uvThreadpoolSize: '6', maxOldSpaceSizeMb: '10240' },
-        capacity: { targetActiveBuilders: 4, typicalBuilders: 6 },
+        capacity: { targetActiveUsers: 4, typicalUsers: 6 },
     },
 };
 export const PROFILE_DEFAULT_TIER = {

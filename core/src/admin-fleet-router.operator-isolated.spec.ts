@@ -5,6 +5,7 @@ import { GATEWAY_RELEASES_SUBCOLLECTION, releasePayloadHash, type ReleasePayload
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
 
 import { addAdminFleetRoutes } from "./admin-fleet-router.js";
+import { recordOperationAuditIntent } from "./operation-audit.js";
 import { isOperatorIssuedAllocation, OPERATOR_ISOLATED_GATEWAY_SOURCE } from "./operator-isolated-gateway.js";
 import { createDocumentFixtureStore, FIXTURE_SIZING_PROFILES } from "./testing/journal-store.js";
 import { noUserAccounts } from "./user-account.js";
@@ -124,7 +125,7 @@ function harness(seed: Seed, beforeRetirementClaim?: (records: Map<string, Row>)
     [...records.entries()].filter(([path]) => !path.startsWith("operationAudits/")).sort(([a], [b]) => a.localeCompare(b)),
   );
   const operations = () => [...records.entries()].filter(([path]) => path.startsWith(`${GLM_OPERATIONS_COLLECTION}/`)).map(([, row]) => row);
-  return { app, records, fleetState, operations };
+  return { app, store, records, fleetState, operations };
 }
 
 const give = (h: ReturnType<typeof harness>, body: Row, dryRun = false) =>
@@ -150,7 +151,7 @@ describe("giving a user an isolated gateway", () => {
     expect(openclaw).toMatchObject({ managedBy: "operator", gatewayId: SHARED });
     expect(openclaw.activationLease).toBeUndefined();
     expect(h.records.get(`${GLM_OPERATIONS_COLLECTION}/${operationId}`)).toMatchObject({
-      kind: "migrate-customer", status: "pending", createdBy: "operator", gatewayId,
+      kind: "migrate-user", status: "pending", createdBy: "operator", gatewayId,
       input: { uid: UID, builderSlug: SLUG, fromGatewayId: SHARED, toGatewayId: gatewayId, source: OPERATOR_ISOLATED_GATEWAY_SOURCE },
     });
   });
@@ -171,9 +172,37 @@ describe("giving a user an isolated gateway", () => {
 
     expect(res.body).toMatchObject({
       dryRun: true,
-      plans: [{ what: "give user an isolated gateway", mutation: { kind: "give-isolated-gateway", uid: UID, sizingProfile: "hobby", fromGatewayId: SHARED } }],
+      plans: [{ what: "move user to an isolated gateway", mutation: { kind: "move-to-isolated-gateway", uid: UID, sizingProfile: "hobby", fromGatewayId: SHARED } }],
     });
     expect(h.fleetState()).toBe(before);
+  });
+
+  it("answers a retry of a request the previous release recorded under the same Idempotency-Key as a duplicate, and writes nothing", async () => {
+    const h = harness(fleet());
+    const recorded = await recordOperationAuditIntent(h.store, {
+      actor: "operator", forced: false, what: "give user an isolated gateway", why: "operator request",
+      target: { uid: UID }, preActionStatus: { gatewayId: SHARED },
+      mutation: { kind: "give-isolated-gateway", uid: UID, sizingProfile: "hobby", fromGatewayId: SHARED },
+      idempotencyKey: "retry-1:give user an isolated gateway",
+    });
+    const before = h.fleetState();
+
+    const res = await give(h, { sizingProfile: "hobby" }).set("Idempotency-Key", "retry-1").expect(409);
+
+    expect(res.body).toMatchObject({ auditId: recorded.auditId, status: "recorded" });
+    expect(h.fleetState()).toBe(before);
+  });
+
+  it("records a new request as moving the user to an isolated gateway", async () => {
+    const h = harness(fleet());
+
+    await give(h, { sizingProfile: "hobby" }).set("Idempotency-Key", "move-1").expect(202);
+
+    expect(h.operations()).toContainEqual(expect.objectContaining({
+      what: "move user to an isolated gateway",
+      idempotencyKey: "move-1:give user an isolated gateway",
+      mutation: { kind: "move-to-isolated-gateway", uid: UID, sizingProfile: "hobby", fromGatewayId: SHARED },
+    }));
   });
 
   it("gives a second gateway a new id once the first is retired and gone", async () => {
@@ -204,7 +233,7 @@ describe("giving a user an isolated gateway", () => {
     [
       "a user with a migration in flight",
       () => fleet({ [`${GLM_OPERATIONS_COLLECTION}/move-1`]: {
-        kind: "migrate-customer", status: "running", createdBy: "operator", createdAt: 1, startedAt: 2, completedAt: null,
+        kind: "migrate-user", status: "running", createdBy: "operator", createdAt: 1, startedAt: 2, completedAt: null,
         input: { uid: UID, toGatewayId: "shared-b" }, inputUid: UID, steps: [],
       } }),
       { sizingProfile: "hobby" }, 409, "user-migration-in-flight", { operationId: "move-1" },
@@ -324,7 +353,7 @@ describe("retiring an isolated gateway", () => {
 
   const giveMove = (row: Row = {}): Seed => ({
     [`${GLM_OPERATIONS_COLLECTION}/give-move`]: {
-      kind: "migrate-customer", status: "pending", createdBy: "operator", createdAt: 1, startedAt: null, completedAt: null,
+      kind: "migrate-user", status: "pending", createdBy: "operator", createdAt: 1, startedAt: null, completedAt: null,
       output: { isolatedGatewayReadinessChecks: 3 },
       error: `waiting for isolated gateway ${OWNED} to become ready (check 3 of 30): placement rejected for ${OWNED}: no-live-revision`,
       input: { uid: UID, builderSlug: SLUG, fromGatewayId: SHARED, toGatewayId: OWNED, source: OPERATOR_ISOLATED_GATEWAY_SOURCE },
@@ -436,8 +465,8 @@ describe("retiring an isolated gateway", () => {
     ...user(SHARED, { activationLease: { leaseId: "lease-1", generation: 2, status: "provisioning", targetGatewayId: OWNED } }),
   });
   const refusals: Array<[name: string, seed: () => Seed, query: string, code: string, extra: Row]> = [
-    ["while its user is still on it", occupied, "", "isolated-gateway-has-user", { error: "return the user to a shared gateway first", assignedCustomers: [SLUG] }],
-    ["by force while its user is still on it", occupied, "?force=true", "isolated-gateway-forced-return-undecided", { assignedCustomers: [SLUG] }],
+    ["while its user is still on it", occupied, "", "isolated-gateway-has-user", { error: "return the user to a shared gateway first", assignedUsers: [SLUG] }],
+    ["by force while its user is still on it", occupied, "?force=true", "isolated-gateway-forced-return-undecided", { assignedUsers: [SLUG] }],
     ["with its home deleted", () => fleet(ownedGateway()), "?deleteHome=true", "isolated-gateway-home-delete-undecided", {}],
     ["keeping its data, a pod gateway option", () => fleet(ownedGateway()), "?retainData=true", "isolated-gateway-retain-data-unsupported", {}],
   ];
@@ -474,7 +503,7 @@ describe("moving a user by hand", () => {
     const res = await migrate(h, OWNED).expect(202);
 
     expect(h.records.get(`${GLM_OPERATIONS_COLLECTION}/${res.body.operationId}`)).toMatchObject({
-      kind: "migrate-customer", input: { uid: UID, fromGatewayId: SHARED, toGatewayId: OWNED },
+      kind: "migrate-user", input: { uid: UID, fromGatewayId: SHARED, toGatewayId: OWNED },
     });
   });
 
@@ -484,7 +513,7 @@ describe("moving a user by hand", () => {
     const res = await migrate(h, SHARED).expect(202);
 
     expect(h.records.get(`${GLM_OPERATIONS_COLLECTION}/${res.body.operationId}`)).toMatchObject({
-      kind: "migrate-customer", input: { uid: UID, fromGatewayId: OWNED, toGatewayId: SHARED },
+      kind: "migrate-user", input: { uid: UID, fromGatewayId: OWNED, toGatewayId: SHARED },
     });
   });
 
@@ -506,7 +535,7 @@ describe("moving a user by hand", () => {
     const res = await migrate(h, OWNED).expect(202);
 
     expect(h.records.get(`${GLM_OPERATIONS_COLLECTION}/${res.body.operationId}`)).toMatchObject({
-      kind: "migrate-customer", input: { uid: UID, toGatewayId: OWNED },
+      kind: "migrate-user", input: { uid: UID, toGatewayId: OWNED },
     });
   });
 
