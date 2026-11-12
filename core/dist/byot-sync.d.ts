@@ -1,4 +1,5 @@
 import { type AgentModelSelections } from "@octogee/shared/types/agent-models";
+import { type UserAgentModelDefault } from "@octogee/shared/types/platform-config";
 import { type ModelCredentialConfigInput } from "./model-credential-materializer.js";
 export type ByotInput = ModelCredentialConfigInput;
 export interface HouseModelDefaultAgentModelInput {
@@ -79,6 +80,7 @@ export declare function deriveDesiredByotState(userData: {
     defaultAgentModelInput: DefaultAgentModelInput | null;
 };
 export declare function platformDefaultAgentModelInputForUser(slug: string, userData: Parameters<typeof deriveDesiredByotState>[0]): DefaultAgentModelInput | null;
+export declare function platformProjectAgentModelForUser(slug: string, userData: Parameters<typeof deriveDesiredByotState>[0]): UserAgentModelDefault | null;
 export declare function applyByotState(slug: string, input: ByotInput | null, agentsDir?: string, opts?: {
     preserveAuthProfileStore?: boolean;
 }): Promise<boolean>;

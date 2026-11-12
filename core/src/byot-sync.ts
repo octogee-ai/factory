@@ -8,7 +8,11 @@ import {
   OPENROUTER_PLATFORM_PROVIDER_ID,
   type AgentModelSelections,
 } from "@octogee/shared/types/agent-models";
-import { DEFAULT_HOUSE_MODEL_REF } from "@octogee/shared/types/platform-config";
+import {
+  DEFAULT_HOUSE_MODEL_REF,
+  parseUserAgentModelDefault,
+  type UserAgentModelDefault,
+} from "@octogee/shared/types/platform-config";
 import {
   buildModelCredentialConfigForProvider,
   claudeCliRuntimeConfig,
@@ -419,6 +423,14 @@ export function platformDefaultAgentModelInputForUser(
   userData: Parameters<typeof deriveDesiredByotState>[0],
 ): DefaultAgentModelInput | null {
   return houseModelDefaultAgentModelInput(slug, userData);
+}
+
+export function platformProjectAgentModelForUser(
+  slug: string,
+  userData: Parameters<typeof deriveDesiredByotState>[0],
+): UserAgentModelDefault | null {
+  if (houseModelDefaultAgentModelInput(slug, userData)) return null;
+  return parseUserAgentModelDefault(userData.builderAgentDefault);
 }
 
 

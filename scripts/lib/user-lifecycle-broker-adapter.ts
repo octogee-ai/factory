@@ -161,6 +161,7 @@ import {
   convergedDefaultAgentToolsValue,
   isPlatformProviderRef,
   platformDefaultAgentModelInputForUser,
+  platformProjectAgentModelForUser,
 } from "./byot-sync.js";
 import {
   materializeBrokerProfilesForAgents,
@@ -1077,7 +1078,11 @@ function buildUserProjectAgents(
     slug: snapshot.slug,
     customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
     agentsDir: AGENTS_DIR,
-    defaultAgent: { name: identity.name, emoji: identity.emoji, model: DEFAULT_AGENT.model },
+    defaultAgent: {
+      name: identity.name,
+      emoji: identity.emoji,
+      model: platformProjectAgentModelForUser(snapshot.slug, snapshot) ?? DEFAULT_AGENT.model,
+    },
     projectAgents,
     githubWorkspaces,
     ownerMmUserId,

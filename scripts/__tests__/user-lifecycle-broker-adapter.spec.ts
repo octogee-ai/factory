@@ -33,6 +33,7 @@ import {
 } from "@octogee/core/apply-config-patch";
 import { applyAgentModelOverrides, userOauthRuntimeConfigPatch, platformModelAllowlistPatch } from "@octogee/core/byot-sync-runtime";
 import { canonicalUserModelDefinition } from "../../shared/types/agent-models.js";
+import { DEFAULT_USER_AGENT_MODEL_REF } from "../../shared/types/platform-config.js";
 import { _resetBrokerProfileLogStateForTests, createReconcileConvergenceHooks, finalizeConvergedMount, materializeDeferredBrokerProfiles } from "../lib/fleet-provisioner.js";
 import { saveAppliedFingerprints } from "../lib/applied-fingerprint-store.js";
 import { openClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
@@ -3625,6 +3626,63 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(accounts["alice-coach"].baseUrl).toBe(gatewayClass === "builder" ? "https://owner-coach.example" : "${MM_URL}");
     expect(accounts["alice-proj-orbit"].baseUrl).toBe(gatewayClass === "builder" ? "https://owner-orbit.example" : "${MM_URL}");
     expect(accounts["alice-proj-scout"].baseUrl).toBe("${MM_URL}");
+  });
+
+  it.each(["builder", "shared"])("seeds a new %s project agent with the platform default and its fallbacks", async (gatewayClass) => {
+    vi.stubEnv("GATEWAY_CLASS", gatewayClass);
+    stubUserClaim(gatewayClass === "builder" ? "alice" : "");
+    const platformDefault = {
+      primary: "platform-openai/gpt-6.1-terra",
+      fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
+    };
+    const snapshot = aliceSnapshot({
+      planInputs: { tier: "trial", selectedTier: "personal" },
+      builderAgentDefault: platformDefault,
+      projectAgents: [{ projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "orbit-pat", status: "ready" }],
+    });
+    const config = { agents: { entries: keyedRoster(["octogee-alice-coach"]) } };
+    let patch: Record<string, any> | undefined;
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      patch = args.buildPatch(config) as Record<string, any>;
+      return { mode: "rpc", attempts: 1 };
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }),
+      rpc: mkGatewayRpc(rosterRpc(config)), log: vi.fn(),
+      isIsolatedGateway: () => gatewayClass === "builder",
+    });
+
+    await adapter.applyAddUserConfigPatch(snapshot, { _coachPersonalToken: "default-agent-pat" });
+
+    expect(patch!.agents.entries["octogee-alice-proj-orbit-coach"].model).toEqual(platformDefault);
+  });
+
+  it("seeds a new house-only project agent with the compiled agent model, never the platform default", async () => {
+    vi.stubEnv("GATEWAY_CLASS", "builder");
+    stubUserClaim("alice");
+    const snapshot = aliceSnapshot({
+      planInputs: { tier: "free", selectedTier: "free" },
+      builderAgentDefault: {
+        primary: "platform-openai/gpt-6.1-terra",
+        fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
+      },
+      projectAgents: [{ projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "orbit-pat", status: "ready" }],
+    });
+    const config = { agents: { entries: keyedRoster(["octogee-alice-coach"]) } };
+    let patch: Record<string, any> | undefined;
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      patch = args.buildPatch(config) as Record<string, any>;
+      return { mode: "rpc", attempts: 1 };
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }),
+      rpc: mkGatewayRpc(rosterRpc(config)), log: vi.fn(),
+      isIsolatedGateway: () => true,
+    });
+
+    await adapter.applyAddUserConfigPatch(snapshot, { _coachPersonalToken: "default-agent-pat" });
+
+    expect(patch!.agents.entries["octogee-alice-proj-orbit-coach"].model).toBe(DEFAULT_USER_AGENT_MODEL_REF);
   });
 
   it("retains a ready project agent when restoring a seeded migration snapshot", async () => {

@@ -2999,7 +2999,7 @@ describe("shared gateway — per-user broker-token materialization", () => {
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(purge).toHaveBeenCalledWith("tester-70", safe.primary, { forceSafeAll: true });
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
-    expect(overrides).toHaveBeenCalledWith("tester-70", { [defaultAgent]: safe, [project]: safe }, { houseOnly: false });
+    expect(overrides).toHaveBeenCalledWith("tester-70", { [defaultAgent]: safe, [project]: safe }, { houseOnly: false, projectAgentDefault: safe });
   });
 
   it.each([false, true])("converges owned credentials and routing without changing history (dedicated=%s)", async dedicated => {
@@ -3674,6 +3674,156 @@ describe("applyAgentModelOverrides — per-agent model picks (PWA catalog picker
     expect(applyConfigPatchFn).not.toHaveBeenCalled();
   });
 
+  const PLATFORM_DEFAULT = {
+    primary: "platform-openai/gpt-6.1-terra",
+    fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
+  };
+
+  it("gives every owned project agent without a pick the platform default and its fallbacks", async () => {
+    const current = {
+      agents: {
+        list: [
+          { id: "octogee-tester-70-coach", model: "platform-openai/gpt-6-luna" },
+          {
+            id: "octogee-tester-70-proj-web-coach",
+            model: { primary: "platform-openai/gpt-6.1-terra", fallbacks: [] },
+          },
+          { id: "octogee-tester-70-proj-api-coach", model: "anthropic/claude-sonnet-4-6" },
+          { id: "octogee-zed-proj-web-coach", model: "z/y" },
+        ],
+      },
+    };
+    const calls: object[] = [];
+    const paths: Array<string[] | undefined> = [];
+    const skipIfAlreadyApplied: Array<boolean | undefined> = [];
+    const r = await applyAgentModelOverrides(
+      "tester-70",
+      {
+        "octogee-tester-70-proj-api-coach": {
+          primary: "anthropic/claude-sonnet-4-6",
+          fallbacks: [],
+        },
+      },
+      { houseOnly: false, projectAgentDefault: PLATFORM_DEFAULT },
+      {
+        applyConfigPatch: async (args) => {
+          calls.push(args.buildPatch(current));
+          paths.push(args.buildReplacePaths?.(current));
+          skipIfAlreadyApplied.push(args.skipIfAlreadyApplied);
+          return { mode: "rpc", attempts: 1 };
+        },
+        logFn: () => {},
+      },
+    );
+
+    expect(r).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(skipIfAlreadyApplied[1]).toBe(true);
+    expect(paths[1]).toEqual([
+      "agents.list",
+      "agents.list[].model.fallbacks",
+      "agents.list[].tools.alsoAllow",
+    ]);
+    expect(calls[1]).toEqual({
+      agents: {
+        defaults: {
+          models: {
+            "platform-openai/gpt-6.1-terra": {},
+            "platform-openrouter/z-ai/glm-5.2": {},
+          },
+        },
+        list: [
+          { id: "octogee-tester-70-coach", model: "platform-openai/gpt-6-luna" },
+          { id: "octogee-tester-70-proj-web-coach", model: PLATFORM_DEFAULT },
+          { id: "octogee-tester-70-proj-api-coach", model: "anthropic/claude-sonnet-4-6" },
+          { id: "octogee-zed-proj-web-coach", model: "z/y" },
+        ],
+      },
+    });
+  });
+
+  it("gives keyed project agents the platform default and confirms their fallbacks may shrink", async () => {
+    const current = {
+      agents: {
+        entries: {
+          "octogee-tester-70-coach": { model: "platform-openai/gpt-6-luna" },
+          "octogee-tester-70-proj-web-coach": {
+            name: "web",
+            model: {
+              primary: "platform-openai/gpt-6.1-terra",
+              fallbacks: ["anthropic/claude-sonnet-4-6", "anthropic/claude-haiku-4-5"],
+            },
+          },
+          "octogee-zed-proj-web-coach": { model: "z/y" },
+        },
+      },
+    };
+    const calls: object[] = [];
+    const paths: Array<string[] | undefined> = [];
+    await applyAgentModelOverrides(
+      "tester-70",
+      undefined,
+      { houseOnly: false, projectAgentDefault: PLATFORM_DEFAULT },
+      {
+        applyConfigPatch: async (args) => {
+          calls.push(args.buildPatch(current));
+          paths.push(args.buildReplacePaths?.(current));
+          return { mode: "rpc", attempts: 1 };
+        },
+        logFn: () => {},
+      },
+    );
+
+    expect(paths).toEqual([["agents.entries.octogee-tester-70-proj-web-coach.model.fallbacks"]]);
+    expect(calls).toEqual([
+      {
+        agents: {
+          defaults: {
+            models: {
+              "platform-openai/gpt-6.1-terra": {},
+              "platform-openrouter/z-ai/glm-5.2": {},
+            },
+          },
+          entries: {
+            "octogee-tester-70-proj-web-coach": { name: "web", model: PLATFORM_DEFAULT },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("leaves the config untouched when every project agent has a pick", async () => {
+    const calls: object[] = [];
+    const r = await applyAgentModelOverrides(
+      "tester-70",
+      { "octogee-tester-70-proj-web-coach": { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] } },
+      { houseOnly: false, projectAgentDefault: PLATFORM_DEFAULT },
+      {
+        applyConfigPatch: async (args) => {
+          calls.push(args.buildPatch(CURRENT));
+          return { mode: "rpc", attempts: 1 };
+        },
+        logFn: () => {},
+      },
+    );
+
+    expect(r).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual({});
+  });
+
+  it("never gives a house-only plan's project agents the platform default", async () => {
+    const applyConfigPatchFn = vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 }));
+    const r = await applyAgentModelOverrides(
+      "tester-70",
+      undefined,
+      { houseOnly: true, projectAgentDefault: PLATFORM_DEFAULT },
+      { applyConfigPatch: applyConfigPatchFn, logFn: () => {} },
+    );
+    expect(r).toBe(false);
+    expect(applyConfigPatchFn).not.toHaveBeenCalled();
+  });
+
   it("a failed patch on one agent does not abort the rest", async () => {
     const applyConfigPatchFn = vi
       .fn()
@@ -3942,7 +4092,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
     fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
   };
 
-  it("catalog plan with no pick: the platform user agent default fills in for the agent", async () => {
+  it("catalog plan with no pick: the platform user agent default fills in for the agent and its project agents", async () => {
     const applyAgentModelOverridesFn = vi.fn(async () => true);
 
     await syncByotForUser(
@@ -3959,7 +4109,39 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
     expect(applyAgentModelOverridesFn).toHaveBeenCalledWith(
       "tester-70",
       { "octogee-tester-70-coach": userAgentDefault },
-      { houseOnly: false },
+      { houseOnly: false, projectAgentDefault: userAgentDefault },
+    );
+  });
+
+  it.each([
+    { gateway: "isolated", isIsolatedGateway: true, isSharedGateway: false },
+    { gateway: "shared", isIsolatedGateway: false, isSharedGateway: true },
+  ])("$gateway gateway: project agents get the platform default's fallbacks", async ({ isIsolatedGateway, isSharedGateway }) => {
+    const applyAgentModelOverridesFn = vi.fn(async () => true);
+
+    await syncByotForUser(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "complete" } },
+        planInputs: { selectedTier: "personal" },
+        builderAgentDefault: userAgentDefault,
+      },
+      {
+        ...userDefaultDeps(applyAgentModelOverridesFn),
+        isIsolatedGateway: () => isIsolatedGateway,
+        isSharedGateway: () => isSharedGateway,
+        usesLlmBrokerToken: () => isIsolatedGateway,
+        restoreOauthStoreForSlug: vi.fn(async () => ({ restored: false, present: false })),
+        materializePlatformBrokerSurfaces: vi.fn(() => false),
+        logFn: () => {},
+      },
+    );
+
+    expect(applyAgentModelOverridesFn).toHaveBeenCalledWith(
+      "tester-70",
+      expect.anything(),
+      expect.objectContaining({ projectAgentDefault: userAgentDefault }),
     );
   });
 
@@ -3986,10 +4168,11 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
 
     expect(applyAgentModelOverridesFn).toHaveBeenCalledWith("tester-70", agentModels, {
       houseOnly: false,
+      projectAgentDefault: userAgentDefault,
     });
   });
 
-  it("BYOT and house-only agents never inherit the platform default", async () => {
+  it("a BYOT agent keeps its own model while its project agents get the platform default; house-only gets neither", async () => {
     const byotOverrides = vi.fn(async () => true);
     await syncByotForUser(
       {
@@ -4002,7 +4185,10 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
       },
       userDefaultDeps(byotOverrides),
     );
-    expect(byotOverrides).toHaveBeenCalledWith("tester-70", undefined, { houseOnly: false });
+    expect(byotOverrides).toHaveBeenCalledWith("tester-70", undefined, {
+      houseOnly: false,
+      projectAgentDefault: userAgentDefault,
+    });
 
     const houseOnlyOverrides = vi.fn(async () => true);
     await syncByotForUser(
@@ -4028,6 +4214,25 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
         provisioning: { openclaw: { status: "complete" } },
         planInputs: { selectedTier: "personal" },
         builderAgentDefault: { primary: "not-a-catalog-ref", fallbacks: [] },
+      },
+      userDefaultDeps(applyAgentModelOverridesFn),
+    );
+
+    expect(applyAgentModelOverridesFn).toHaveBeenCalledWith("tester-70", undefined, {
+      houseOnly: false,
+    });
+  });
+
+  it("a user still provisioning gets no project agent default", async () => {
+    const applyAgentModelOverridesFn = vi.fn(async () => true);
+
+    await syncByotForUser(
+      {
+        byotActive: false,
+        username: "tester-70",
+        provisioning: { openclaw: { status: "provisioning" } },
+        planInputs: { selectedTier: "personal" },
+        builderAgentDefault: userAgentDefault,
       },
       userDefaultDeps(applyAgentModelOverridesFn),
     );

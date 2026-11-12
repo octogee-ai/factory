@@ -409,7 +409,7 @@ export interface ProjectAgentsBuildInput {
   slug: string;
   customerDir: string;
   agentsDir: string;
-  defaultAgent: { name: string; emoji: string; model: string };
+  defaultAgent: { name: string; emoji: string; model: string | { primary: string; fallbacks: string[] } };
   projectAgents: ReadonlyArray<ProjectAgentState>;
   ownerMmUserId?: string | null;
   hostCode?: AgentHostCodePolicy;

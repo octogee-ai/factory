@@ -2,7 +2,7 @@ import { applyByotState, deriveDesiredByotState, type DefaultAgentModelInput, ty
 import { type GatewayRpcClient } from "./gateway-rpc.js";
 import { type ByosubProvider } from "./byosub-restore.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
-import { type AgentModelSelections } from "@octogee/shared/types/agent-models";
+import { type AgentModelSelection, type AgentModelSelections } from "@octogee/shared/types/agent-models";
 export declare function applyDefaultAgentModelPatch(input: DefaultAgentModelInput | null, deps?: {
     applyConfigPatch?: typeof applyConfigPatch;
     logFn?: (m: string) => void;
@@ -13,6 +13,7 @@ export declare function applyDefaultAgentToolsConvergence(slug: string, houseOnl
 }): Promise<boolean>;
 export declare function applyAgentModelOverrides(slug: string, agentModels: AgentModelSelections | undefined, opts: {
     houseOnly: boolean;
+    projectAgentDefault?: AgentModelSelection;
 }, deps?: {
     applyConfigPatch?: typeof applyConfigPatch;
     logFn?: (m: string) => void;

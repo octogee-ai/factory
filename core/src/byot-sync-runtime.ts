@@ -12,6 +12,7 @@ import {
   HOUSE_MODEL_DEFAULT_AGENT_TOOLS,
   isPlatformProviderRef,
   platformDefaultAgentModelInputForUser,
+  platformProjectAgentModelForUser,
   ISOLATED_CODEX_APP_SERVER,
   STANDARD_CODEX_APP_SERVER,
   type DefaultAgentModelInput,
@@ -40,7 +41,7 @@ import {
   type ByosubRestorePlanItem,
 } from "./byosub-restore.js";
 import { SHARED_MAIN_AGENT_ID, sharedAuthStoreUsable } from "./auth-profile-store.js";
-import { applyConfigPatch } from "./apply-config-patch.js";
+import { applyConfigPatch, fullAgentListReplacePaths } from "./apply-config-patch.js";
 import {
   AGENTS_DIR,
   OPENCLAW_DIR,
@@ -64,6 +65,7 @@ import {
   canonicalUserModelDefinition,
   parseAgentModelSelections,
   platformModelRefs,
+  type AgentModelSelection,
   type AgentModelSelections,
 } from "@octogee/shared/types/agent-models";
 import { userEntitlements } from "@octogee/shared/types/user-entitlements";
@@ -197,7 +199,7 @@ export async function applyDefaultAgentToolsConvergence(
 export async function applyAgentModelOverrides(
   slug: string,
   agentModels: AgentModelSelections | undefined,
-  opts: { houseOnly: boolean },
+  opts: { houseOnly: boolean; projectAgentDefault?: AgentModelSelection },
   deps?: {
     applyConfigPatch?: typeof applyConfigPatch;
     logFn?: (m: string) => void;
@@ -209,11 +211,12 @@ export async function applyAgentModelOverrides(
     logFn(`⚠ [byot-sync] ${slug}: agent-model override for foreign agent ${agentId} ignored`);
     return false;
   });
-  if (owned.length === 0) return false;
   if (opts.houseOnly) {
-    logFn(
-      `[byot-sync] ${slug}: agent-model overrides deferred — house-only plan pins the house model`,
-    );
+    if (owned.length > 0) {
+      logFn(
+        `[byot-sync] ${slug}: agent-model overrides deferred — house-only plan pins the house model`,
+      );
+    }
     return false;
   }
 
@@ -263,7 +266,108 @@ export async function applyAgentModelOverrides(
       );
     }
   }
+  if (opts.projectAgentDefault) {
+    const pickedAgentIds = new Set(owned.map(([agentId]) => agentId));
+    const defaulted = await applyProjectAgentModelDefault(
+      slug,
+      opts.projectAgentDefault,
+      pickedAgentIds,
+      { applyConfigPatch: applyConfigPatchFn, logFn },
+    );
+    patched = defaulted || patched;
+  }
   return patched;
+}
+
+function unpickedProjectAgentIds(
+  current: unknown,
+  slug: string,
+  pickedAgentIds: ReadonlySet<string>,
+): string[] {
+  const userDefaultAgentId = `octogee-${slug}-coach`;
+  return agentIdsForSlug(slug, current).filter(
+    (agentId) => agentId !== userDefaultAgentId && !pickedAgentIds.has(agentId),
+  );
+}
+
+function agentsModelPatch(
+  current: unknown,
+  agentIds: readonly string[],
+  model: AgentModelSelection,
+): Record<string, unknown> {
+  const agents = recordChild(current, "agents");
+  if (isRecord(agents.entries)) {
+    const entries = agents.entries;
+    return {
+      entries: Object.fromEntries(
+        agentIds.flatMap((agentId) =>
+          isRecord(entries[agentId]) ? [[agentId, { ...entries[agentId], model }]] : []
+        ),
+      ),
+    };
+  }
+  const targets = new Set(agentIds);
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  return {
+    list: list.map((entry) =>
+      isRecord(entry) && typeof entry.id === "string" && targets.has(entry.id)
+        ? { ...entry, model }
+        : entry
+    ),
+  };
+}
+
+function agentsModelReplacePaths(current: unknown, agentIds: readonly string[]): string[] {
+  if (agentIds.length === 0) return [];
+  if (isRecord(recordChild(current, "agents").entries)) {
+    return agentIds.map((agentId) => `agents.entries.${agentId}.model.fallbacks`);
+  }
+  return fullAgentListReplacePaths();
+}
+
+async function applyProjectAgentModelDefault(
+  slug: string,
+  model: AgentModelSelection,
+  pickedAgentIds: ReadonlySet<string>,
+  deps: { applyConfigPatch: typeof applyConfigPatch; logFn: (m: string) => void },
+): Promise<boolean> {
+  const platformRefs = [model.primary, ...model.fallbacks].filter(isPlatformProviderRef);
+  let defaultedAgentIds: string[] = [];
+  try {
+    await deps.applyConfigPatch(
+      {
+        buildPatch: (current) => {
+          defaultedAgentIds = unpickedProjectAgentIds(current, slug, pickedAgentIds);
+          if (defaultedAgentIds.length === 0) return {};
+          return {
+            agents: {
+              ...(platformRefs.length > 0
+                ? { defaults: { models: Object.fromEntries(platformRefs.map((ref) => [ref, {}])) } }
+                : {}),
+              ...agentsModelPatch(current, defaultedAgentIds, model),
+            },
+          };
+        },
+        buildReplacePaths: (current) =>
+          agentsModelReplacePaths(current, unpickedProjectAgentIds(current, slug, pickedAgentIds)),
+        logPrefix: `[agent-models:${slug}]`,
+        skipIfAlreadyApplied: true,
+      },
+      { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS },
+    );
+  } catch (e) {
+    deps.logFn(
+      `⚠ [byot-sync] ${slug}: project agent model default failed: ${(e as Error).message}`,
+    );
+    return false;
+  }
+  if (defaultedAgentIds.length === 0) return false;
+  deps.logFn(
+    `[byot-sync] ${slug}: ${defaultedAgentIds.join(", ")} model → ${model.primary}${
+      model.fallbacks.length ? ` (fallback ${model.fallbacks.join(", ")})` : ""
+    }`,
+  );
+  return true;
 }
 
 export async function applyOauthRuntimeModelAllowlist(
@@ -2062,6 +2166,9 @@ async function applyUserAgentModelOverrides(
     logFn: (message: string) => void;
   },
 ): Promise<void> {
+  const projectAgentDefault = userData.provisioning?.openclaw?.status === "complete"
+    ? platformProjectAgentModelForUser(slug, userData)
+    : null;
   await actions.applyAgentModelOverrides(
     slug,
     agentModelsWithUserDefault(slug, userData, desired, {
@@ -2070,7 +2177,10 @@ async function applyUserAgentModelOverrides(
       houseOnly: opts.houseOnly,
       logFn: opts.logFn,
     }),
-    { houseOnly: opts.houseOnly && !opts.suppressed },
+    {
+      houseOnly: opts.houseOnly && !opts.suppressed,
+      ...(projectAgentDefault ? { projectAgentDefault } : {}),
+    },
   );
 }
 

@@ -2,14 +2,14 @@ import * as path from "path";
 import { mattermostAccountIdForAgentId } from "@octogee/shared/types/identity";
 import * as os from "os";
 import * as fs from "fs";
-import { applyByotState, byosDefaultAgentConfigPatch, defaultAgentExists, defaultAgentPatch, defaultAgentPatchReplacePaths, deriveDesiredByotState, HOUSE_MODEL_DEFAULT_AGENT_TOOLS, isPlatformProviderRef, platformDefaultAgentModelInputForUser, ISOLATED_CODEX_APP_SERVER, STANDARD_CODEX_APP_SERVER, } from "./byot-sync.js";
+import { applyByotState, byosDefaultAgentConfigPatch, defaultAgentExists, defaultAgentPatch, defaultAgentPatchReplacePaths, deriveDesiredByotState, HOUSE_MODEL_DEFAULT_AGENT_TOOLS, isPlatformProviderRef, platformDefaultAgentModelInputForUser, platformProjectAgentModelForUser, ISOLATED_CODEX_APP_SERVER, STANDARD_CODEX_APP_SERVER, } from "./byot-sync.js";
 import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
 import { fingerprintDefaultAgentRuntimePolicy, reconcileDefaultAgentRuntimeSessionPolicy, } from "./default-agent-session-policy.js";
 import { internalFetch } from "./internal-fetch.js";
 import { claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvider, OPENAI_CODEX_DEFAULT_PROFILE_ID, } from "./model-credential-materializer.js";
 import { codexAgentDir, purgeUserOauthRuntimeArtifacts, removeStaleCodexAuthJson, removeSubscriptionProfiles, restoreByosubCredentials, sharedAuthAgentDir, } from "./byosub-restore.js";
 import { SHARED_MAIN_AGENT_ID, sharedAuthStoreUsable } from "./auth-profile-store.js";
-import { applyConfigPatch } from "./apply-config-patch.js";
+import { applyConfigPatch, fullAgentListReplacePaths } from "./apply-config-patch.js";
 import { AGENTS_DIR, OPENCLAW_DIR, isIsolatedGateway, isSharedGateway, log, readOpenClawConfig, usesLlmBrokerToken, } from "./config.js";
 import { openAiCatalogInputForBaseUrl, vertexCatalogInputForBaseUrl, openRouterCatalogInputForBaseUrl, openRouterBrokerCatalogJson, openRouterBrokerModelConfig, materializeBrokerProfilesForAgents, } from "./agent-model-token-materializer.js";
 import { agentIdBelongsToSlug, catalogEntryForModelRef, canonicalUserModelDefinition, parseAgentModelSelections, platformModelRefs, } from "@octogee/shared/types/agent-models";
@@ -111,10 +111,10 @@ export async function applyAgentModelOverrides(slug, agentModels, opts, deps) {
         logFn(`⚠ [byot-sync] ${slug}: agent-model override for foreign agent ${agentId} ignored`);
         return false;
     });
-    if (owned.length === 0)
-        return false;
     if (opts.houseOnly) {
-        logFn(`[byot-sync] ${slug}: agent-model overrides deferred — house-only plan pins the house model`);
+        if (owned.length > 0) {
+            logFn(`[byot-sync] ${slug}: agent-model overrides deferred — house-only plan pins the house model`);
+        }
         return false;
     }
     const applyConfigPatchFn = deps?.applyConfigPatch ?? applyConfigPatch;
@@ -153,7 +153,72 @@ export async function applyAgentModelOverrides(slug, agentModels, opts, deps) {
             logFn(`⚠ [byot-sync] agent-model override failed for ${agentId}: ${e.message}`);
         }
     }
+    if (opts.projectAgentDefault) {
+        const pickedAgentIds = new Set(owned.map(([agentId]) => agentId));
+        const defaulted = await applyProjectAgentModelDefault(slug, opts.projectAgentDefault, pickedAgentIds, { applyConfigPatch: applyConfigPatchFn, logFn });
+        patched = defaulted || patched;
+    }
     return patched;
+}
+function unpickedProjectAgentIds(current, slug, pickedAgentIds) {
+    const userDefaultAgentId = `octogee-${slug}-coach`;
+    return agentIdsForSlug(slug, current).filter((agentId) => agentId !== userDefaultAgentId && !pickedAgentIds.has(agentId));
+}
+function agentsModelPatch(current, agentIds, model) {
+    const agents = recordChild(current, "agents");
+    if (isRecord(agents.entries)) {
+        const entries = agents.entries;
+        return {
+            entries: Object.fromEntries(agentIds.flatMap((agentId) => isRecord(entries[agentId]) ? [[agentId, { ...entries[agentId], model }]] : [])),
+        };
+    }
+    const targets = new Set(agentIds);
+    const list = Array.isArray(agents.list) ? agents.list : [];
+    return {
+        list: list.map((entry) => isRecord(entry) && typeof entry.id === "string" && targets.has(entry.id)
+            ? { ...entry, model }
+            : entry),
+    };
+}
+function agentsModelReplacePaths(current, agentIds) {
+    if (agentIds.length === 0)
+        return [];
+    if (isRecord(recordChild(current, "agents").entries)) {
+        return agentIds.map((agentId) => `agents.entries.${agentId}.model.fallbacks`);
+    }
+    return fullAgentListReplacePaths();
+}
+async function applyProjectAgentModelDefault(slug, model, pickedAgentIds, deps) {
+    const platformRefs = [model.primary, ...model.fallbacks].filter(isPlatformProviderRef);
+    let defaultedAgentIds = [];
+    try {
+        await deps.applyConfigPatch({
+            buildPatch: (current) => {
+                defaultedAgentIds = unpickedProjectAgentIds(current, slug, pickedAgentIds);
+                if (defaultedAgentIds.length === 0)
+                    return {};
+                return {
+                    agents: {
+                        ...(platformRefs.length > 0
+                            ? { defaults: { models: Object.fromEntries(platformRefs.map((ref) => [ref, {}])) } }
+                            : {}),
+                        ...agentsModelPatch(current, defaultedAgentIds, model),
+                    },
+                };
+            },
+            buildReplacePaths: (current) => agentsModelReplacePaths(current, unpickedProjectAgentIds(current, slug, pickedAgentIds)),
+            logPrefix: `[agent-models:${slug}]`,
+            skipIfAlreadyApplied: true,
+        }, { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS });
+    }
+    catch (e) {
+        deps.logFn(`⚠ [byot-sync] ${slug}: project agent model default failed: ${e.message}`);
+        return false;
+    }
+    if (defaultedAgentIds.length === 0)
+        return false;
+    deps.logFn(`[byot-sync] ${slug}: ${defaultedAgentIds.join(", ")} model → ${model.primary}${model.fallbacks.length ? ` (fallback ${model.fallbacks.join(", ")})` : ""}`);
+    return true;
 }
 export async function applyOauthRuntimeModelAllowlist(providers, codexAppServer, deps) {
     const uniqueProviders = Array.from(new Set(providers));
@@ -1478,12 +1543,18 @@ async function purgeUserOauthIfRequired(user, slug, safeModelRef, suppressed, ac
     return actions.purgeUserOauthRuntime(slug, safeModelRef, { forceSafeAll: suppressed });
 }
 async function applyUserAgentModelOverrides(slug, userData, desired, actions, opts) {
+    const projectAgentDefault = userData.provisioning?.openclaw?.status === "complete"
+        ? platformProjectAgentModelForUser(slug, userData)
+        : null;
     await actions.applyAgentModelOverrides(slug, agentModelsWithUserDefault(slug, userData, desired, {
         user: opts.user,
         forceSafeDefaultAgentModel: opts.suppressed,
         houseOnly: opts.houseOnly,
         logFn: opts.logFn,
-    }), { houseOnly: opts.houseOnly && !opts.suppressed });
+    }), {
+        houseOnly: opts.houseOnly && !opts.suppressed,
+        ...(projectAgentDefault ? { projectAgentDefault } : {}),
+    });
 }
 export async function syncByotForUser(userData, deps) {
     const isUser = deps?.isIsolatedGateway ?? isIsolatedGateway;

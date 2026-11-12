@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { catalogEntryForModelRef, OPENAI_PLATFORM_PROVIDER_ID, VERTEX_PLATFORM_PROVIDER_ID, OPENROUTER_PLATFORM_PROVIDER_ID, } from "@octogee/shared/types/agent-models";
-import { DEFAULT_HOUSE_MODEL_REF } from "@octogee/shared/types/platform-config";
+import { DEFAULT_HOUSE_MODEL_REF, parseUserAgentModelDefault, } from "@octogee/shared/types/platform-config";
 import { buildModelCredentialConfigForProvider, claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvider, MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS, } from "./model-credential-materializer.js";
 import { AGENTS_DIR, log } from "./config.js";
 import { deleteAuthProfileStore, readAuthProfileStore, writeAuthProfileStore, } from "./auth-profile-store.js";
@@ -296,6 +296,11 @@ export function deriveDesiredByotState(userData) {
 // shared-gateway byosub gate.
 export function platformDefaultAgentModelInputForUser(slug, userData) {
     return houseModelDefaultAgentModelInput(slug, userData);
+}
+export function platformProjectAgentModelForUser(slug, userData) {
+    if (houseModelDefaultAgentModelInput(slug, userData))
+        return null;
+    return parseUserAgentModelDefault(userData.builderAgentDefault);
 }
 // A house-only plan pins the agent to the house model. The broker would degrade
 // anyway; pinning keeps the config
