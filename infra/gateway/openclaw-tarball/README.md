@@ -161,6 +161,32 @@ islands do not match `sourceSha`, and the build prints the upstream changes to
 the islands' input files since the previous pin (see
 [app/openclaw-islands/README.md](../../../app/openclaw-islands/README.md)).
 
+Once `current.json` names the new build, run the state pin-roll ceremony.
+
+- **Who runs it.** It is a manual step: whoever prepares the roll PR runs it before
+  opening that PR. PR CI cannot run it, because it needs the fork objects from the
+  bucket, and PR jobs have no cloud credentials.
+- **Install.** Install two root objects, each in its own npm prefix:
+  - the root object of the oldest pin that created any state store still retained
+    in the fleet (for the roll to `92373b3c`, that is `e9c9cd30`)
+  - the new root object
+- **Run.** Run `tests/specs/openclaw-state-pin-roll.spec.ts` with:
+  - `OCTOGEE_TEST_OPENCLAW_PREVIOUS_BIN` and `OCTOGEE_TEST_OPENCLAW_PREVIOUS_SHA`:
+    the older pin's binary and its full source SHA
+  - `OCTOGEE_TEST_OPENCLAW_BIN`: the new build
+  - `OCTOGEE_TEST_POSTGRES_DSN`: a disposable database, reached the way gateways
+    connect. That is a non-superuser role holding only `CONNECT, CREATE` on the
+    database, like the roles `core/src/agent-store-credentials.ts` provisions.
+
+The spec creates state with the older pin, then writes an isolated agent entry with
+the new build twice. It checks that:
+
+- the setup rows survive
+- `workspace_setup_state.bootstrap_deferred` is a nullable `bigint` with no default
+- the seal changes only when that column was missing, and not on the second write
+
+Its `pin_roll_*` schemas are dropped afterwards.
+
 Update the Current overlay assessment below in the same Octogee PR. This README
 is deliberately a gateway build input, including for artifact-only recuts.
 Run focused artifact/base-image tests, evaluate feedback and wait for final-head
@@ -170,8 +196,8 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 ## Current overlay for the November 11 final Gateway recut
 
 OpenClaw main `eae3667ebf9f66217c44f6318a73188defd003b8` was frozen at fetch time for independent
-qualification. The clean overlay is `65c8c8aa14d045be317918a3635c0b529207af04` on
-`ceckert/openclaw:codex/gateway-refresh-20261111-final`.
+qualification. The clean overlay is `92373b3ca5fdcd653840df733dbf3d7759ee504c` on
+`ceckert/openclaw:codex/gateway-refresh-20261111-final`, two commits after `65c8c8aa`.
 
 The frozen tip’s [push CI](https://github.com/openclaw/openclaw/actions/runs/43049595781) was cancelled before GitHub
 recorded any jobs. The latest successful [scheduled full CI](https://github.com/openclaw/openclaw/actions/runs/42494775876)
@@ -291,6 +317,51 @@ exact transcript messages survive. This is local process/socket-loss proof;
 actual GCE suspend/resume acceptance remains a separate TEST check. The candidate
 also logs an ancillary cron-maintenance closing-resource warning during agent
 creation, without failing creation or history checks.
+
+### PostgreSQL state created before bootstrap deferral
+
+Native [#196392](https://github.com/openclaw/openclaw/pull/196392) added
+`workspace_setup_state.bootstrap_deferred` to shared-state schema 39 as a SQLite
+first-use column. The generated PostgreSQL DDL gained it as `bigint`, but no
+PostgreSQL step was added, so the schema version did not change.
+PostgreSQL state stores created by the `e9c9cd30` pin lack the column. Pins
+`74906570` and `65c8c8aa` refuse them as schema drift, so isolated prelaunch
+`config patch` exits 1 and retained state cannot be admitted. Upstream tracks
+this as [#196966](https://github.com/openclaw/openclaw/issues/196966). The
+refused opens roll back, leaving those stores unchanged.
+
+The overlay keeps shared state at schema 39. A writable admission verifies the
+store against the exact predecessor DDL, adds the generated nullable `bigint`
+column and reseals the store, all in one transaction. Inspection and update
+preflight accept either exact shape without writing. These are still refused:
+
+- a column added outside OpenClaw
+- an `integer` column
+- any other difference
+
+Stores created by `74906570` or later already have the column and are unchanged.
+
+**One-way door.** After its first writable open on this pin, a store can no longer
+be opened by `e9c9cd30` or any other build before #196392. Those builds already
+refuse stores created fresh by `65c8c8aa`, in the same way:
+
+- **Shared-state commands** refuse it as schema drift.
+- **Gateway and `setup`** stop earlier, because the config was last written by
+  2026.11.3.
+
+The refusal is clean: it writes nothing, and this pin opens the store again
+afterwards. After the ship, an image rollback is safe only to a build pinned at
+`65c8c8aa` or later. A store returns to an earlier build only from a PostgreSQL
+backup taken before the upgrade.
+
+Native
+[#197010](https://github.com/openclaw/openclaw/pull/197010) proposes a schema-40
+step that accepts both schema-39 shapes, so completed stores stay on its upgrade
+path. The overlay patch is proposed upstream as
+[#197425](https://github.com/openclaw/openclaw/pull/197425). The OpenClaw regression is
+`src/state/openclaw-state-db-bootstrap-deferral.postgres.test.ts`. Against
+the installed pinned roots, `tests/specs/openclaw-state-pin-roll.spec.ts`
+reproduces the prelaunch refusal from an `e9c9cd30` store.
 
 ### Native adoption and retained product boundaries
 
@@ -449,6 +520,7 @@ behavior is present in the selected base and the affected consumer controls pass
 | Outbound delivery custody | Retirement refuses unfinished authoritative delivery state and fences racing enqueue across all affected agent identities; empty caches are insufficient. | Native detach/deletion fences the same queue and retains idempotent receipts. |
 | Cron migration custody | Held/exported/staged/activated ownership, retired fences, hash-bound chunks and drain are beyond ordinary native CRUD. Projection identity includes effective agent plus declaration. | Native migration provides equivalent activation, rollback, drain and two-engine round trip. |
 | Retained legacy cron/state inputs | Fingerprints/order/schema checks admit only recognized retained formats and refuse unknown partial schemas; native canonical schemas remain authoritative. | The supported retained restore/move inputs are retired, or native adopts their exact migration. Historical fixtures alone do not prove a deployed inventory; no deployed old-format inventory was inspected in this recut. |
+| PostgreSQL state created before bootstrap deferral | Native schema 39 gained a PostgreSQL column with no migration owner, so stores from the previous pin are refused as drift. The overlay completes only the exact predecessor at writable admission. Inspection stays read-only, and all other drift stays refused. | The selected base contains #197425, #197010 or an equivalent native owner, and `tests/specs/openclaw-state-pin-roll.spec.ts` passes against it without this patch. |
 | PostgreSQL web-secret index reads | Cold GLOBAL state makes native's synchronous installed-index read fail during Builder `secrets.reload`; the existing async reader owns worker access and validation. | Native awaits the worker-backed reader here and the same cold-GLOBAL/provider conformance control passes without this overlay. |
 | Memory shadow database retirement | Physical admission must retire before unlinking shadow files, preventing writes through live descriptors. | Native owns equivalent descriptor/late-owner retirement. |
 | Voice relay and computer authority | Approved public broker transport retains native session/media ownership; desktop control release, observation/token lifetime and node execution remain bounded. | Native public contracts preserve transport validation, cancellation, fresh observation and late-dispatch refusal. |
@@ -556,7 +628,7 @@ Published with generation-zero preconditions and verified by exact-generation SH
 
 | Object | Generation | SHA-256 |
 | --- | --- | --- |
-| `openclaw-fork-9d0f86ed.tgz` | `1794412511332941` | `9d0f86ed1bf12a70a2f44d0cd17ae3ac3ccf8a7bc4e7f0a66c4a00053364d6e5` |
+| `openclaw-fork-86b84f63.tgz` | `1794449351942265` | `86b84f63f46bc112537ef1be82e4838a08f9d644bf08acdd1bc20d1fdc92e08c` |
 | `openclaw-mattermost-d1e21c56.tgz` | `1794412529249670` | `d1e21c5636f6a4d4147a72d782a92f37576924326f6b97ccdc12231adab731e8` |
 
 ### Upstream contributions
@@ -568,7 +640,8 @@ useful on main. #193596 is ready for review and #193875 includes a CI lint fix.
 evidence. #193636 remains a draft pending the public CLI option decision.
 #167431 needs maintainer security approval and a reload-contract decision.
 #178755 was refreshed and still needs PostgreSQL reattachment and maintainer
-review. Earlier closed or superseded contributions remain recorded in Git history.
+review. The bootstrap-deferral fix is proposed as #197425, which keeps schema
+39; #197010 is the open schema-40 alternative. Earlier closed or superseded contributions remain recorded in Git history.
 
 ## Native CUA desktop discovery
 
