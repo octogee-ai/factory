@@ -641,6 +641,7 @@ async function assertHomeAssignment(store: PlatformStateStore, ownerUid: string,
 }
 
 const REPLACEMENT_RECOVERY_MIN_FREE_BYTES = 2 * 1024 ** 3;
+export const RECOVERY_REPORT_MAX_AGE_AT_PARK_MS = 10 * 60_000;
 
 function assertReplacementRecoveryCapacity(data: VmRuntimeFields | undefined, vm: GatewayVmState, description: GatewayVmDescription): void {
   const refuse = (reason: string): never => { throw new Error(`boot replacement ${reason}; source boot/home kept`); };
@@ -651,7 +652,7 @@ function assertReplacementRecoveryCapacity(data: VmRuntimeFields | undefined, vm
   if (recovery.freeBytes < REPLACEMENT_RECOVERY_MIN_FREE_BYTES) return refuse(`recovery point needs ${REPLACEMENT_RECOVERY_MIN_FREE_BYTES} bytes free, found ${recovery.freeBytes} bytes`);
   const identity = recovery as typeof recovery & { instanceId?: string; observedAt?: number };
   if (identity.instanceId !== description.instanceId) return refuse(`recovery receipt from instance ${identity.instanceId ?? "unknown"} but this VM is ${description.instanceId}`);
-  if (typeof identity.observedAt !== "number" || identity.observedAt < vm.updatedAt - 90_000) return refuse(`recovery receipt observed at ${identity.observedAt ?? "unknown"} is older than VM state at ${vm.updatedAt}`);
+  if (typeof identity.observedAt !== "number" || identity.observedAt < vm.updatedAt - RECOVERY_REPORT_MAX_AGE_AT_PARK_MS) return refuse(`recovery receipt observed at ${identity.observedAt ?? "unknown"} is older than VM state at ${vm.updatedAt}`);
   if (description.lastStartedAt !== null && identity.observedAt < description.lastStartedAt) return refuse(`recovery receipt observed at ${identity.observedAt} predates the VM's last start at ${description.lastStartedAt}`);
   if ((recovery.retainedPoints === 0) !== (recovery.currentPointId === null)) return refuse(`recovery point count ${recovery.retainedPoints} disagrees with current point ${recovery.currentPointId ?? "none"}`);
 }
@@ -927,7 +928,6 @@ async function upgradeStoppedBoot(deps: VmLifecycleDeps, gatewayId: string, desc
     const ownerUid = nonEmptyString(description.metadata["octogee-owner-uid"]);
     if (!ownerUid) throw new Error("VM boot upgrade requires the recorded owner");
     const operationId = `boot-${gatewayId}-${instanceId}-${latest.id}`;
-    await replacementSource(deps, gatewayId, true);
     await deps.journalBootUpgrade({ gatewayId, ownerUid, instanceId, imageId: latest.id }, async (assertAuthority) => {
       await replaceStoppedVm(deps, gatewayId, operationId, assertAuthority, { boot: true, expectedImageId: latest.id });
     });
@@ -935,7 +935,7 @@ async function upgradeStoppedBoot(deps: VmLifecycleDeps, gatewayId: string, desc
   } catch (error) {
     const observed = await deps.vm.describe(description.name, description.zone);
     if (!observed || observed.instanceId !== description.instanceId || !PARKED_STATUSES.has(observed.status)) throw error;
-    deps.log(`[vm-gateway-runtime] ${gatewayId}: boot image upgrade skipped; retaining ${description.name}: ${errorMessage(error)}`);
+    deps.log(`[vm-gateway-runtime] ⚠ ${gatewayId}: boot image upgrade skipped; retaining ${description.name}: ${errorMessage(error)}`);
     return observed;
   }
 }

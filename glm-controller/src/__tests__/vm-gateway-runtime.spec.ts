@@ -16,7 +16,7 @@ import {
   stampGatewayRuntime,
   vmRoutesFromRecords,
 } from "../vm-gateway-runtime";
-import { VmCreationPendingError, gatewayVmInstanceInput } from "../vm-lifecycle";
+import { RECOVERY_REPORT_MAX_AGE_AT_PARK_MS, VmCreationPendingError, gatewayVmInstanceInput } from "../vm-lifecycle";
 
 const renderedJson = readFileSync(new URL("./fixtures/vm-runtime-render.json", import.meta.url), "utf8");
 const concatenated = (JSON.parse(renderedJson) as unknown[]).map((item) => JSON.stringify(item)).join("\n");
@@ -2334,10 +2334,24 @@ describe("stopped retained-home boot replacement", () => {
     expect(h.journalBootUpgrade).toHaveBeenCalledTimes(1);
     expect(h.journalBootUpgrade).toHaveBeenCalledWith({ gatewayId: "b-x", ownerUid: "UidA", instanceId: "4242", imageId: accepted.id }, expect.any(Function));
   });
+  it("replaces the boot of a VM whose last ready recovery report is two minutes older than its recorded park", async () => {
+    let deleted = false;
+    const docs = vmDoc();
+    docs["glmGateways/b-x"].vm = { ...recorded, status: "TERMINATED", internalIp: null, stopReason: "idle", updatedAt: receipt.observedAt + 120_000 };
+    const h = harness(docs, {
+      describe: vi.fn(async () => deleted ? null : ownedStopped),
+      deleteRetainingHome: vi.fn(async () => { deleted = true; return true; }),
+      readBootImage: vi.fn(async () => CURRENT_IMAGE), readFamilyImage: vi.fn(async () => accepted), readImage: vi.fn(async () => accepted),
+    }, undefined, {}, { clock: { now: receipt.observedAt + 300_000 } });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.vm.deleteRetainingHome).toHaveBeenCalledWith(VM, ownedStopped.zone, "UidA", expect.objectContaining(home), "4242");
+    expect(h.vm.create).toHaveBeenCalledWith(expect.objectContaining({ retainedHome: expect.objectContaining(home), image: expect.objectContaining(accepted) }));
+    expect(h.vm.start).not.toHaveBeenCalled();
+  });
   it.each([
     ["never became ready on this boot", { ...receipt, ready: false, bundleVersion: "unavailable" }, /recovery reports not ready for bundle unavailable/],
     ["never reported", undefined, /has no native recovery report from this VM yet/],
-  ])("wakes a stopped VM on its old boot without journaling an upgrade when its gateway %s", async (_name, recovery, reason) => {
+  ])("journals a refused boot upgrade and wakes a stopped VM on its old boot when its gateway %s", async (_name, recovery, reason) => {
     const docs = vmDoc();
     docs["glmGateways/b-x"].vmBootRecovery = recovery;
     const h = harness(docs, {
@@ -2345,10 +2359,11 @@ describe("stopped retained-home boot replacement", () => {
       readBootImage: vi.fn(async () => CURRENT_IMAGE), readFamilyImage: vi.fn(async () => accepted), readImage: vi.fn(async () => accepted),
     });
     await h.runtime.upsertInstance(upsertOpts);
-    expect(h.journalBootUpgrade).not.toHaveBeenCalled();
+    expect(h.journalBootUpgrade).toHaveBeenCalledTimes(1);
+    await expect(h.journalBootUpgrade.mock.results[0].value).rejects.toThrow(reason);
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
     expect(h.vm.start).toHaveBeenCalledWith(VM, ownedStopped.zone);
-    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: boot image upgrade skipped; retaining /));
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/⚠ b-x: boot image upgrade skipped; retaining /));
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(reason));
   });
   it("resumes a suspended VM on an outdated boot instead of stopping and replacing it", async () => {
@@ -2664,19 +2679,25 @@ describe("stopped retained-home boot replacement", () => {
     ["not-ready", /recovery reports not ready/],
     ["two-points", /2 retained recovery points/],
     ["wrong-instance", /recovery receipt from instance 999.*VM is 4242/],
-    ["stale", /recovery receipt observed at -100000/],
+    ["stale", new RegExp(`recovery receipt observed at ${recorded.updatedAt - RECOVERY_REPORT_MAX_AGE_AT_PARK_MS - 1} is older than VM state`)],
     ["no-headroom", /recovery point needs .* free, found 100 bytes/],
   ])("keeps the old boot before predictable recovery admission failure and says why: %s", async (fault, reason) => {
     const docs = vmDoc();
     docs["glmGateways/b-x"].vmBootRecovery = fault === "missing" ? undefined : { ...receipt,
       ready: fault !== "not-ready", retainedPoints: fault === "two-points" ? 2 : 1,
-      instanceId: fault === "wrong-instance" ? "999" : "4242", observedAt: fault === "stale" ? -100000 : 1000,
+      instanceId: fault === "wrong-instance" ? "999" : "4242", observedAt: fault === "stale" ? recorded.updatedAt - RECOVERY_REPORT_MAX_AGE_AT_PARK_MS - 1 : 1000,
       freeBytes: fault === "no-headroom" ? 100 : receipt.freeBytes };
     const h = harness(docs, { describe: vi.fn(async () => ownedStopped) }, undefined, { "b-x": "paused" });
     await expect(h.runtime.replaceStoppedVm("b-x", "op-one", async () => {})).rejects.toThrow(reason);
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
     expect(h.vm.retainHome).not.toHaveBeenCalled();
     expect(h.vm.readFamilyImage).not.toHaveBeenCalled();
+  });
+  it("admits a recovery report exactly as old as the park window allows", async () => {
+    const docs = vmDoc();
+    docs["glmGateways/b-x"].vm = { ...recorded, updatedAt: receipt.observedAt + RECOVERY_REPORT_MAX_AGE_AT_PARK_MS };
+    const h = harness(docs, { describe: vi.fn(async () => ownedStopped), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
+    await expect(h.runtime.replaceStoppedVm("b-x", "op-one", async () => {})).resolves.toMatchObject({ bootDeleted: true });
   });
   it("never reuses an old operation pin to delete a different source VM", async () => {
     const h = harness({ ...vmDoc(), "users/UidA": { provisioning: { openclaw: { gatewayId: "b-x" }, homeDisk: { ...home, bootImage: { ...accepted, project: home.projectId, homeId: home.id, operationId: "op-one", previous: CURRENT_IMAGE, sourceComputer: { name: VM, zone: home.zone, instanceId: "1111", gatewayId: "b-x" } } } } } }, { describe: vi.fn(async () => ownedStopped), readImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
