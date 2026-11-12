@@ -291,6 +291,42 @@ describe("projectGatewaySummary — gateway identity projection", () => {
   });
 });
 
+describe("projectGatewaySummary — why OpenClaw is not serving", () => {
+  function reasonFor(heartbeat: Record<string, unknown>, now = Date.now()) {
+    return projectGatewaySummary(
+      { id: "christopher-s-1", data: () => ({ gatewayId: "christopher-s-1", lastHeartbeatAt: now, ...heartbeat }) },
+      { gatewayId: "christopher-s-1", gatewayClass: "builder", desiredStatus: "running" },
+      now,
+    ).statusReason;
+  }
+
+  it.each([
+    [{ state: "held", migrationId: null }, "OpenClaw is held with no move in progress"],
+    [{ state: "held", migrationId: "mig-1" }, "OpenClaw is held for move mig-1"],
+    [{ state: "hydrated", migrationId: "mig-1" }, "OpenClaw is held for move mig-1"],
+    [{ state: "unavailable", migrationId: null }, "The OpenClaw supervisor is not answering; it is still preparing or has failed"],
+    [{ state: "starting", migrationId: null }, "OpenClaw is starting"],
+    [{ state: "serving", migrationId: null }, "OpenClaw is running; startup checks are not finished"],
+  ])("explains a booting gateway whose OpenClaw reports %j", (openclawProcess, expected) => {
+    expect(reasonFor({ status: "booting", openclawProcess })).toBe(expected);
+  });
+
+  it("explains nothing for a serving gateway", () => {
+    expect(reasonFor({ status: "ready", openclawProcess: { state: "held", migrationId: "mig-1" } })).toBeNull();
+  });
+
+  it("explains nothing when the gateway reported no OpenClaw process or a malformed one", () => {
+    expect(reasonFor({ status: "booting" })).toBeNull();
+    expect(reasonFor({ status: "booting", openclawProcess: { state: "stuck" } })).toBeNull();
+  });
+
+  it("explains nothing from a heartbeat too old to trust", () => {
+    const now = Date.now();
+    expect(reasonFor({ status: "booting", lastHeartbeatAt: now - 60 * 60_000, openclawProcess: { state: "held", migrationId: null } }, now))
+      .toBeNull();
+  });
+});
+
 describe("projectGatewaySummary — openclaw version projection", () => {
   function summaryFor(heartbeat: Record<string, unknown>, glmDoc: Record<string, unknown> = {}) {
     return projectGatewaySummary(

@@ -273,15 +273,62 @@ describe("an operator-given gateway has no lease", () => {
     return h;
   }
 
-  it("boots normally before its user arrives", async () => {
-    await expect(operatorGiven().bootMode()).resolves.toEqual({ mode: "normal" });
+  it("boots in prelaunch while its owner still serves on the shared gateway, so its OpenClaw is live before the move", async () => {
+    await expect(operatorGiven().bootMode()).resolves.toEqual({ mode: "prelaunch" });
   });
 
-  it("boots normally whether or not the operator still holds its owner: the tag alone says no lease governs it", async () => {
+  it("boots in prelaunch whether or not the operator still holds its owner", async () => {
     const h = operatorGiven();
     h.user.provisioning.openclaw = { gatewayId: "shared-blue", slug: "jefe" } as never;
 
+    await expect(h.bootMode()).resolves.toEqual({ mode: "prelaunch" });
+  });
+
+  it("boots in prelaunch beside a lease the owner kept from an earlier activation", async () => {
+    const h = operatorGiven();
+    h.user.provisioning.openclaw = { gatewayId: "shared-blue", slug: "jefe", managedBy: "operator",
+      activationLease: { ...h.lease, status: "failed", targetGatewayId: "jefe-old" } } as never;
+
+    await expect(h.bootMode()).resolves.toEqual({ mode: "prelaunch" });
+  });
+
+  it.each([
+    ["its owner's shared assignment is quiescing", (h: ReturnType<typeof fixture>) => {
+      Object.assign(h.documents.get("gateways/shared-blue/assignments/uid-jefe")!, { state: "quiescing" });
+    }],
+    ["its owner has no shared assignment", (h: ReturnType<typeof fixture>) => { h.documents.delete("gateways/shared-blue/assignments/uid-jefe"); }],
+    ["its owner is on a gateway that is not shared", (h: ReturnType<typeof fixture>) => {
+      h.documents.set("gateways/shared-blue", { ...h.gateway, gatewayId: "shared-blue", ownerUid: "uid-other" });
+    }],
+    ["it already holds an assignment", (h: ReturnType<typeof fixture>) => {
+      h.documents.set("gateways/jefe-run/assignments/uid-jefe", { uid: "uid-jefe", slug: "jefe", gatewayId: "jefe-run", state: "quiescing", epoch: 1 });
+    }],
+    ["its owner's account is suspended", (h: ReturnType<typeof fixture>) => {
+      Object.assign(h.user, { accountLifecycle: { status: "suspended" } });
+    }],
+    ["it is claimed for someone else", (h: ReturnType<typeof fixture>) => { h.gateway.allocation!.claimedByUid = "uid-other"; }],
+    ["it names another workspace", (h: ReturnType<typeof fixture>) => { h.gateway.builderSlug = "other"; }],
+  ])("boots normally, with no prelaunch, when %s", async (_name, change) => {
+    const h = operatorGiven();
+    change(h);
     await expect(h.bootMode()).resolves.toEqual({ mode: "normal" });
+  });
+
+  it("boots normally once its owner serves on it", async () => {
+    const h = operatorGiven();
+    h.user.provisioning.openclaw = { gatewayId: h.gateway.gatewayId, slug: "jefe", managedBy: "operator" } as never;
+    h.documents.set("gateways/jefe-run/assignments/uid-jefe", { uid: "uid-jefe", slug: "jefe", gatewayId: "jefe-run", source: "migrate-customer", state: "serving", epoch: 1 });
+
+    await expect(h.bootMode()).resolves.toEqual({ mode: "normal" });
+  });
+
+  it("refreshes a release while it waits in prelaunch, as a lease's gateway does", async () => {
+    const h = operatorGiven();
+    Object.assign(h.gateway, { latestRelease: 2, desiredRelease: 2, liveRelease: 1 });
+    Object.assign(h.runtime, { release: 2, lifecycle: "serving" });
+
+    await expect(shouldReconcileDisposablePrelaunch(h.store, h.gateway)).resolves.toBe(true);
+    await expect(h.refine()).resolves.toEqual({ kind: "mark-live", prelaunchRefresh: true });
   });
 
   it("is still refused a boot when the tag is a lease's and no lease matches it, held owner or not", async () => {

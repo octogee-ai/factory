@@ -129,6 +129,26 @@ export interface FleetStateResponse {
   customers: string[];
   migratingIn: string[];
   configuredBuilder: ConfiguredUserReport | null;
+  openclawProcess?: OpenClawProcessReport | null;
+}
+
+export const OPENCLAW_PROCESS_STATES = ["held", "hydrated", "starting", "serving", "unavailable"] as const;
+
+export type OpenClawProcessState = typeof OPENCLAW_PROCESS_STATES[number];
+
+export interface OpenClawProcessReport {
+  state: OpenClawProcessState;
+  migrationId: string | null;
+}
+
+export function parseOpenClawProcessReport(value: unknown): OpenClawProcessReport | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const report = value as { state?: unknown; migrationId?: unknown };
+  if (!hasOnlyFields(report, ["state", "migrationId"])) return null;
+  if (!OPENCLAW_PROCESS_STATES.includes(report.state as OpenClawProcessState)) return null;
+  const migrationId = report.migrationId;
+  if (migrationId !== null && (typeof migrationId !== "string" || migrationId.length === 0)) return null;
+  return { state: report.state as OpenClawProcessState, migrationId };
 }
 
 export interface ConfiguredUserReport {

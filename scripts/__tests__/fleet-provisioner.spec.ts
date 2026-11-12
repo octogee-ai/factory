@@ -1,11 +1,13 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
   CLONE_RETRY_DELAYS_MS,
   buildFleetHealthResponse,
   buildFleetStateResponse,
+  openclawProcessReport,
   cloneRetryDelayMs,
   cloneRetryReady,
   userEnsureRetryReady,
@@ -44,7 +46,7 @@ import {
   addUserToGateway,
   type UserLifecycleAdapter,
 } from "../lib/user-lifecycle.js";
-import { createSurgeOpenClawProcessGate } from "../lib/surge-openclaw-process-gate.js";
+import { createSurgeOpenClawProcessGate, createSurgeOpenClawProcessSupervisorClient } from "../lib/surge-openclaw-process-gate.js";
 import type {
   SurgeOpenClawProcessGateState,
   SurgeOpenClawProcessRequest,
@@ -2712,6 +2714,23 @@ describe("in-pod gateway heartbeat", () => {
       .not.toHaveProperty("configuredBuilder");
   });
 
+  it("reports why the configured user's OpenClaw is not serving through the signed fleet state", () => {
+    const state = buildFleetStateResponse({
+      status: "booting",
+      gatewayId: "b-chris",
+      podUid: "pod-uid-1",
+      version: "sha-1",
+      openclawVersion: "2026.7.1",
+      startedAt: 42,
+      users: [],
+      migratingIn: [],
+      configuredBuilder: { state: "claimed", generation: null },
+      openclawProcess: { state: "held", migrationId: null },
+    });
+
+    expect(state.openclawProcess).toEqual({ state: "held", migrationId: null });
+  });
+
   it("keeps the unauthenticated probe body free of tenant identity", () => {
     const probe = buildFleetHealthResponse({
       status: "ready",
@@ -2761,4 +2780,75 @@ describe("createVerifyAttachPending", () => {
       opts: { gatewayId: "shared-1", readDesiredSlugs: async () => ["alice"] },
     })).toBeUndefined();
   });
+});
+
+describe("OpenClaw process report", () => {
+  const configuredAdapter = {
+    isIsolatedGateway: () => true,
+    isConfiguredUser: (slug: string) => slug === "ceckert-test",
+    configuredUserOverlayPresent: () => true,
+    userMountMarked: () => false,
+  } as unknown as UserLifecycleAdapter;
+
+  function gateAt(state: Partial<SurgeOpenClawProcessGateState>): Pick<SurgeOpenClawProcessSupervisorClient, "status"> {
+    return { status: async () => ({ version: 1, podUid: "pod-1", role: "normal", mode: "held", phase: "held", ...state }) };
+  }
+
+  it("says nothing for a gateway without a configured user", async () => {
+    const status = vi.fn();
+    await expect(openclawProcessReport({ adapter: {} as UserLifecycleAdapter, processGate: { status }, log: () => undefined }))
+      .resolves.toBeNull();
+    expect(status).not.toHaveBeenCalled();
+  });
+
+  it("reports a hold that no move owns", async () => {
+    stubUserClaim("ceckert-test");
+    await expect(openclawProcessReport({ adapter: configuredAdapter, processGate: gateAt({}), log: () => undefined }))
+      .resolves.toEqual({ state: "held", migrationId: null });
+  });
+
+  it("names the move that holds it", async () => {
+    stubUserClaim("ceckert-test");
+    const processGate = gateAt({ role: "target", migrationId: "mig-1", slug: "ceckert-test", targetPodUid: "pod-1" });
+    await expect(openclawProcessReport({ adapter: configuredAdapter, processGate, log: () => undefined }))
+      .resolves.toEqual({ state: "held", migrationId: "mig-1" });
+  });
+
+  it.each([
+    ["starting", "starting"],
+    ["running", "serving"],
+  ] as const)("reports a permitted OpenClaw in phase %s as %s", async (phase, expected) => {
+    stubUserClaim("ceckert-test");
+    await expect(openclawProcessReport({ adapter: configuredAdapter, processGate: gateAt({ mode: "permitted", phase }), log: () => undefined }))
+      .resolves.toEqual({ state: expected, migrationId: null });
+  });
+
+  it("reports and logs a supervisor that does not answer", async () => {
+    stubUserClaim("ceckert-test");
+    const log = vi.fn();
+    const processGate = { status: async () => { throw new Error("connect ENOENT supervisor.sock"); } };
+    await expect(openclawProcessReport({ adapter: configuredAdapter, processGate, log }))
+      .resolves.toEqual({ state: "unavailable", migrationId: null });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("connect ENOENT supervisor.sock"));
+  });
+
+  it("answers unavailable well inside the heartbeat deadline when the supervisor accepts and never answers", async () => {
+    stubUserClaim("ceckert-test");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-gate-"));
+    const socketPath = path.join(dir, "gate.sock");
+    const accepted = new Set<net.Socket>();
+    const server = net.createServer(socket => { accepted.add(socket); });
+    await new Promise<void>(resolve => server.listen(socketPath, resolve));
+    try {
+      const processGate = createSurgeOpenClawProcessSupervisorClient(dir, { socketPath });
+      const started = Date.now();
+      await expect(openclawProcessReport({ adapter: configuredAdapter, processGate, log: () => undefined }))
+        .resolves.toEqual({ state: "unavailable", migrationId: null });
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      for (const socket of accepted) socket.destroy();
+      await new Promise(resolve => server.close(resolve));
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 10_000);
 });

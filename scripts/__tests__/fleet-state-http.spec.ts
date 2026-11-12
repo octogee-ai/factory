@@ -1,7 +1,7 @@
 import express from "express";
 import { generateKeyPairSync } from "node:crypto";
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { signFleetRequest } from "../lib/fleet-signature.js";
 import { fleetStatePrivateProjectAgentWorkspace } from "../lib/fleet-provisioner.js";
@@ -156,4 +156,39 @@ describe("signed fleet state endpoint", () => {
     expect(res.status).toBe(400);
     expect(res.body).not.toHaveProperty("customers");
   });
+
+  it("answers with a state that is read asynchronously", async () => {
+    const res = await signedPost(appReading(async () => STATE), "shared-a", { requestId: "req-1", gatewayId: "shared-a" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(STATE);
+  });
+
+  it("logs a failed state read and answers without tenant identity", async () => {
+    const log = vi.fn();
+    const res = await signedPost(appReading(async () => { throw new Error("roster unreadable"); }, log), "shared-a", {
+      requestId: "req-1",
+      gatewayId: "shared-a",
+    });
+
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain("shared-a");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("roster unreadable"));
+  });
 });
+
+function appReading(readState: () => Promise<FleetStateResponse>, log: (message: string) => void = () => undefined): express.Express {
+  const app = express();
+  app.use(express.json({
+    verify: (req: express.Request & { rawBody?: string }, _res, buf) => {
+      req.rawBody = buf.toString("utf8");
+    },
+  }));
+  app.post(`${FLEET_STATE_PATH}/:gatewayId`, createFleetStateHandler({
+    publicKey: FLEET_CONTROLLER.publicKey,
+    gatewayId: "shared-a",
+    readState,
+    log,
+  }));
+  return app;
+}

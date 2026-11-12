@@ -20,7 +20,12 @@
  * liveness signal (it only writes when /fleet-state responds).
 */
 
-import { parseConfiguredUserReport, type ConfiguredUserReport } from "@octogee/shared/types/fleet-controller";
+import {
+  parseConfiguredUserReport,
+  parseOpenClawProcessReport,
+  type ConfiguredUserReport,
+  type OpenClawProcessReport,
+} from "@octogee/shared/types/fleet-controller";
 
 export const EVICT_AFTER_STREAK = 2;
 
@@ -47,12 +52,14 @@ export interface GatewayFleetState {
    *  yet). Skipped as eviction candidates so a slow import→cutover isn't drained. */
   migratingIn?: string[];
   configuredBuilder?: ConfiguredUserReport | null;
+  openclawProcess?: OpenClawProcessReport | null;
 }
 
 export interface GatewayHeartbeatRecord {
   status: string;
   mountedCustomers: string[];
   configuredBuilder?: ConfiguredUserReport | null;
+  openclawProcess?: OpenClawProcessReport | null;
   version?: string;
   openclawVersion?: string;
   /** Live pod-boot time (epoch ms). */
@@ -125,6 +132,7 @@ export function parseFleetStateResponse(json: unknown): GatewayFleetState | null
     openclawVersion?: unknown;
     migratingIn?: unknown;
     configuredBuilder?: unknown;
+    openclawProcess?: unknown;
   };
   if (typeof body.status !== "string" || body.status.length === 0) return null;
   if (!Array.isArray(body.customers)) return null;
@@ -142,6 +150,9 @@ export function parseFleetStateResponse(json: unknown): GatewayFleetState | null
       : {}),
     ...("configuredBuilder" in body
       ? { configuredBuilder: parseConfiguredUserReport(body.configuredBuilder) }
+      : {}),
+    ...("openclawProcess" in body
+      ? { openclawProcess: parseOpenClawProcessReport(body.openclawProcess) }
       : {}),
   };
 }
@@ -217,6 +228,19 @@ async function evictDepartedForGateway(
   }
 }
 
+function heartbeatRecordFrom(state: GatewayFleetState, assigned: string[]): GatewayHeartbeatRecord {
+  const record: GatewayHeartbeatRecord = {
+    status: state.status,
+    mountedCustomers: intersectMounted(state.users, assigned),
+  };
+  if (typeof state.version === "string") record.version = state.version;
+  if (typeof state.openclawVersion === "string") record.openclawVersion = state.openclawVersion;
+  if (typeof state.startedAt === "number") record.startedAt = state.startedAt;
+  if (state.configuredBuilder !== undefined) record.configuredBuilder = state.configuredBuilder;
+  if (state.openclawProcess !== undefined) record.openclawProcess = state.openclawProcess;
+  return record;
+}
+
 export async function pollGatewayHeartbeatsOnce(
   deps: GatewayHeartbeatPollerDeps,
   streaks: EvictionStreaks = new Map(),
@@ -238,17 +262,7 @@ export async function pollGatewayHeartbeatsOnce(
         continue;
       }
       const assigned = await deps.readAssignedSlugs(gatewayId);
-      const record: GatewayHeartbeatRecord = {
-        status: state.status,
-        mountedCustomers: intersectMounted(state.users, assigned),
-      };
-      if (typeof state.version === "string") record.version = state.version;
-      if (typeof state.openclawVersion === "string") {
-        record.openclawVersion = state.openclawVersion;
-      }
-      if (typeof state.startedAt === "number") record.startedAt = state.startedAt;
-      if (state.configuredBuilder !== undefined) record.configuredBuilder = state.configuredBuilder;
-      await deps.writeHeartbeat(gatewayId, record);
+      await deps.writeHeartbeat(gatewayId, heartbeatRecordFrom(state, assigned));
       if (deps.ownsEviction && !(await deps.ownsEviction(gatewayId))) {
         streaks.delete(gatewayId);
         continue;

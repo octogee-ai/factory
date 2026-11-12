@@ -225,6 +225,7 @@ export declare function projectGatewaySummary(doc: FirestoreDocLike, glmDoc: Glm
     gatewayId: string;
     gateway: string;
     status: string;
+    statusReason: string | null;
     desiredStatus: AdminGatewayDesiredStatus | null;
     imageTag: string | null;
     openclawVersion: string | null;

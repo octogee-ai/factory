@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseConfiguredUserReport,
+  parseOpenClawProcessReport,
   ADD_USER_DEADLINE_MS,
   MIGRATION_IMPORT_FINISH_TIMEOUT_MS,
   MIGRATION_IMPORT_DOCTOR_PHASE_TIMEOUT_MS,
@@ -43,6 +44,23 @@ describe("configured user report", () => {
       { state: "failed", generation: 4, error: "clone failed" }, { state: "claimed", generation: 0 },
       { state: "claimed" }, { state: "claimed", generation: 3, slug: "alice" }]) {
       expect(parseConfiguredUserReport(value)).toBeNull();
+    }
+  });
+});
+
+describe("OpenClaw process report", () => {
+  it("parses each process state with the move that holds it, if any", () => {
+    for (const state of ["held", "hydrated", "starting", "serving", "unavailable"] as const) {
+      expect(parseOpenClawProcessReport({ state, migrationId: null })).toEqual({ state, migrationId: null });
+    }
+    expect(parseOpenClawProcessReport({ state: "held", migrationId: "mig-1" })).toEqual({ state: "held", migrationId: "mig-1" });
+  });
+
+  it("rejects anything else", () => {
+    for (const value of [null, "held", { state: "held" }, { state: "none", migrationId: null },
+      { state: "held", migrationId: "" }, { state: "held", migrationId: 3 },
+      { state: "held", migrationId: null, slug: "alice" }]) {
+      expect(parseOpenClawProcessReport(value)).toBeNull();
     }
   });
 });

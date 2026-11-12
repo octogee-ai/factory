@@ -296,7 +296,7 @@ export function sharedRecoveryTargetCleaned(input: Record<string, unknown>, sche
   });
 }
 
-function isolatedTargetBelongsToUser(targetRoot: unknown, input: Record<string, unknown>): boolean {
+export function isolatedTargetBelongsToUser(targetRoot: unknown, input: Record<string, unknown>): boolean {
   const root = projectGatewayDesiredRootForGateway(targetRoot, String(input.toGatewayId));
   return root?.gatewayClass === "builder" && typeof input.uid === "string" && root.ownerUid === input.uid &&
     root.allocation?.kind === "disposable-builder" && root.allocation.claimedByUid === input.uid;

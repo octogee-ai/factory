@@ -10,7 +10,7 @@ import {
 export interface FleetStateHandlerDeps {
   publicKey: string;
   gatewayId: string;
-  readState: (request: FleetStateRequestBody) => FleetStateResponse;
+  readState: (request: FleetStateRequestBody) => FleetStateResponse | Promise<FleetStateResponse>;
   log: (message: string) => void;
 }
 
@@ -46,7 +46,7 @@ function verifiedBody(
 }
 
 export function createFleetStateHandler(deps: FleetStateHandlerDeps): RequestHandler {
-  return (req, res) => {
+  return async (req, res) => {
     const body = verifiedBody(req, res, deps);
     if (!body) return;
     // The signature covers the body, not the path, so the signed gatewayId is what
@@ -59,6 +59,11 @@ export function createFleetStateHandler(deps: FleetStateHandlerDeps): RequestHan
       res.status(400).json({ error: "gatewayId does not address this gateway" });
       return;
     }
-    res.status(200).json(deps.readState(body));
+    try {
+      res.status(200).json(await deps.readState(body));
+    } catch (error) {
+      deps.log(`[fleet-state] ⚠ state read failed requestId=${body.requestId}: ${error instanceof Error ? error.message : String(error)}`);
+      res.status(500).json({ error: "fleet state is unavailable" });
+    }
   };
 }

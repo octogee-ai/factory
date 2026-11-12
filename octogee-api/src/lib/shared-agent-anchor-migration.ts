@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { DocumentData } from "firebase-admin/firestore";
 import { DuplicateRecordError, type PlatformUserRecord, type GatewayAssignment, type GatewayRoot, type PlatformStateRepositories, type Stored } from "@octogee/core/platform-state";
-import { userActivationRecoveryTargetMatches, sharedRecoveryTargetCleaned, migrationCancellationDeferred } from "@octogee/core/fleet-state";
+import { userActivationRecoveryTargetMatches, sharedRecoveryTargetCleaned, migrationCancellationDeferred, isolatedTargetBelongsToUser } from "@octogee/core/fleet-state";
 import { isolatedRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
 import { readSchedulerMigrationIdentity, type UserMigrationV2State } from "@octogee/shared/types/glm";
 import { projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
@@ -43,15 +43,26 @@ async function sharedCrossGatewayAgentAnchorScope(tx: PlatformStateRepositories,
   const target = projectGatewayDesiredRootForGateway(gateway, targetGatewayId);
   const sourceRoot = projectGatewayDesiredRootForGateway(source, sourceGatewayId);
   if (!sourceRoot || !assignment) return null;
-  const activation = userActivationTarget({ operationId, input, user, sourceEpoch: assignment.epoch, targetRoot: gateway });
-  const sourceTargetCurrent = activation
-    ? activation.matches
-    : target?.gatewayClass === "shared" || sharedRecoveryTargetCleaned(input, operation.schedulerHandoff);
+  const { sourceTargetCurrent, isolatedTargetAdmitted } = migrationTargetAuthority({
+    operationId, operation, input, user, sourceEpoch: assignment.epoch, targetRoot: gateway, target });
   if (!migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationId, operation, input, slug, assigned: assignment, sourceTargetCurrent,
-    isolatedTargetActivating: activation?.activating === true, targetAssigned: targetAssignment !== null, user, migrationId, sourceGatewayId, targetGatewayId })) return null;
+    isolatedTargetAdmitted, targetAssigned: targetAssignment !== null, user, migrationId, sourceGatewayId, targetGatewayId })) return null;
   const migration: FleetBrokerAgentAnchorMigration = { migrationId, claimStartedAt: operation.startedAt, sourceGatewayId, sourceEpoch: assignment.epoch };
   if (!migrationAuthorityMatches(migration, expected)) return null;
   return { gatewayId, uid, slug, assignmentEpoch: assignment.epoch, assignmentState: "quiescing" as const, migration };
+}
+
+function migrationTargetAuthority({ operationId, operation, input, user, sourceEpoch, targetRoot, target }: {
+  operationId: string; operation: DocumentData; input: DocumentData; user: Stored<PlatformUserRecord> | null; sourceEpoch: number;
+  targetRoot: unknown; target: ReturnType<typeof projectGatewayDesiredRootForGateway>;
+}): { sourceTargetCurrent: boolean; isolatedTargetAdmitted: boolean } {
+  const activation = userActivationTarget({ operationId, input, user, sourceEpoch, targetRoot });
+  if (activation) return { sourceTargetCurrent: activation.matches, isolatedTargetAdmitted: activation.activating };
+  const ownIsolatedTarget = isolatedTargetBelongsToUser(targetRoot, input);
+  return {
+    sourceTargetCurrent: target?.gatewayClass === "shared" || ownIsolatedTarget || sharedRecoveryTargetCleaned(input, operation.schedulerHandoff),
+    isolatedTargetAdmitted: ownIsolatedTarget,
+  };
 }
 
 function userActivationTarget({ operationId, input, user, sourceEpoch, targetRoot }: {
@@ -154,7 +165,7 @@ function migrationOperationCurrent(operation: DocumentData, input: DocumentData,
 }
 
 function migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationId, operation, input, slug,
-  assigned, sourceTargetCurrent, isolatedTargetActivating, targetAssigned, user, migrationId, sourceGatewayId, targetGatewayId }: {
+  assigned, sourceTargetCurrent, isolatedTargetAdmitted, targetAssigned, user, migrationId, sourceGatewayId, targetGatewayId }: {
   sourceRequest: boolean;
   sourceRoot: NonNullable<ReturnType<typeof projectGatewayDesiredRootForGateway>>;
   target: ReturnType<typeof projectGatewayDesiredRootForGateway>;
@@ -164,7 +175,7 @@ function migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationI
   slug: string;
   assigned: GatewayAssignment;
   sourceTargetCurrent: boolean;
-  isolatedTargetActivating: boolean;
+  isolatedTargetAdmitted: boolean;
   targetAssigned: boolean;
   user: Stored<PlatformUserRecord> | null;
   migrationId: string;
@@ -175,7 +186,7 @@ function migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationI
     sourceRequest
       ? sourceRoot.gatewayClass === "shared" && ["running", "draining"].includes(sourceRoot.desiredStatus) &&
         assigned.updatedByOperationId === operationId && sourceRecoveryIntentCurrent(operationId, operation, input, slug, assigned.epoch) && sourceTargetCurrent
-      : (target?.gatewayClass === "shared" || isolatedTargetActivating) && target?.desiredStatus === "running" && target.retirementClaim == null,
+      : (target?.gatewayClass === "shared" || isolatedTargetAdmitted) && target?.desiredStatus === "running" && target.retirementClaim == null,
     sourceRoot.retirementClaim == null, !targetAssigned, userMigrationCustodyCurrent(user, { slug, sourceGatewayId, operationId }),
     assigned.uid === input.uid, assigned.slug === slug, assigned.gatewayId === sourceGatewayId, assigned.state === "quiescing",
     Number.isSafeInteger(assigned.epoch), assigned.epoch >= 0,

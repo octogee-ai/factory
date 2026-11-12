@@ -72,7 +72,15 @@ export interface FleetStateResponse {
     customers: string[];
     migratingIn: string[];
     configuredBuilder: ConfiguredUserReport | null;
+    openclawProcess?: OpenClawProcessReport | null;
 }
+export declare const OPENCLAW_PROCESS_STATES: readonly ["held", "hydrated", "starting", "serving", "unavailable"];
+export type OpenClawProcessState = typeof OPENCLAW_PROCESS_STATES[number];
+export interface OpenClawProcessReport {
+    state: OpenClawProcessState;
+    migrationId: string | null;
+}
+export declare function parseOpenClawProcessReport(value: unknown): OpenClawProcessReport | null;
 export interface ConfiguredUserReport {
     state: "claimed";
     generation: number | null;

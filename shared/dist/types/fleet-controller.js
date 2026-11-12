@@ -29,6 +29,20 @@ export const MIGRATING_IN_PIN_TTL_MS = MIGRATION_IMPORT_FINISH_TIMEOUT_MS +
     MIGRATION_VERIFY_TIMEOUT_MS +
     60_000;
 export const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
+export const OPENCLAW_PROCESS_STATES = ["held", "hydrated", "starting", "serving", "unavailable"];
+export function parseOpenClawProcessReport(value) {
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+        return null;
+    const report = value;
+    if (!hasOnlyFields(report, ["state", "migrationId"]))
+        return null;
+    if (!OPENCLAW_PROCESS_STATES.includes(report.state))
+        return null;
+    const migrationId = report.migrationId;
+    if (migrationId !== null && (typeof migrationId !== "string" || migrationId.length === 0))
+        return null;
+    return { state: report.state, migrationId };
+}
 function isGeneration(value) {
     return Number.isSafeInteger(value) && value > 0;
 }

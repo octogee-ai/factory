@@ -102,6 +102,14 @@ describe("parseFleetStateResponse", () => {
     expect(parseFleetStateResponse({ status: "ready", customers: [] })).toEqual({ status: "ready", users: [] });
   });
 
+  it("carries the OpenClaw process report, nulling a malformed one and omitting an absent one", () => {
+    expect(parseFleetStateResponse({ status: "booting", customers: [], openclawProcess: { state: "held", migrationId: null } }))
+      .toEqual({ status: "booting", users: [], openclawProcess: { state: "held", migrationId: null } });
+    expect(parseFleetStateResponse({ status: "booting", customers: [], openclawProcess: { state: "stuck" } }))
+      .toEqual({ status: "booting", users: [], openclawProcess: null });
+    expect(parseFleetStateResponse({ status: "booting", customers: [] })).toEqual({ status: "booting", users: [] });
+  });
+
   it("carries migratingIn (string entries only); omits it when absent or non-array", () => {
     expect(
       parseFleetStateResponse({ status: "ready", customers: ["a"], migratingIn: ["a", 1, "b"] }),
@@ -170,6 +178,18 @@ describe("pollGatewayHeartbeatsOnce", () => {
       status: "ready",
       mountedCustomers: [],
       configuredBuilder: { state: "claimed", generation: 2 },
+    });
+  });
+
+  it("persists why OpenClaw is not serving", async () => {
+    const deps = makeDeps({
+      fetchFleetState: vi.fn(async () => ({ status: "booting", users: [], openclawProcess: { state: "held" as const, migrationId: null } })),
+    });
+    await pollGatewayHeartbeatsOnce(deps);
+    expect(deps.writeHeartbeat).toHaveBeenCalledWith("walter", {
+      status: "booting",
+      mountedCustomers: [],
+      openclawProcess: { state: "held", migrationId: null },
     });
   });
 

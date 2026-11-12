@@ -29,6 +29,21 @@ function prelaunchLease(gateway, user, activationBoot = false) {
         Number.isSafeInteger(lease.sourceAssignmentEpoch),
     ].every(Boolean) ? lease : null;
 }
+function leasePrelaunchSource(gateway, user, activationBoot) {
+    const lease = prelaunchLease(gateway, user, activationBoot);
+    return lease ? { sourceGatewayId: lease.sourceGatewayId, sourceAssignmentEpoch: lease.sourceAssignmentEpoch } : null;
+}
+function operatorPrelaunchSource(gateway, user) {
+    const sourceGatewayId = user?.gateway?.gatewayId;
+    if (!user || !accountAllowsInteractiveAccess({ accountLifecycle: user.accountLifecycle }) || !sourceGatewayId)
+        return null;
+    return [
+        gateway.desiredStatus === "running",
+        gateway.ownerUid === gateway.allocation?.claimedByUid,
+        sourceGatewayId !== gateway.gatewayId,
+        user.slug === gateway.builderSlug,
+    ].every(Boolean) ? { sourceGatewayId, sourceAssignmentEpoch: null } : null;
+}
 function samePrelaunchAllocation(gateway, expected) {
     return [
         gateway.ownerUid === expected.ownerUid,
@@ -45,10 +60,13 @@ export async function isolatedPrelaunchReserved(input) {
     if (gateway.gatewayClass !== "builder" || gateway.allocation?.kind !== "disposable-builder" || !gateway.ownerUid) {
         return false;
     }
-    const lease = prelaunchLease(gateway, await reader.users.records.get(gateway.ownerUid), input.activationBoot);
-    if (!lease)
+    const user = await reader.users.records.get(gateway.ownerUid);
+    const source = isOperatorIssuedAllocation(gateway.allocation)
+        ? operatorPrelaunchSource(gateway, user)
+        : leasePrelaunchSource(gateway, user, input.activationBoot === true);
+    if (!source)
         return false;
-    const sourceGatewayId = lease.sourceGatewayId;
+    const { sourceGatewayId, sourceAssignmentEpoch } = source;
     const [sourceRoot, assigned, targetEmpty] = await Promise.all([
         reader.gateways.roots.get(sourceGatewayId),
         reader.gateways.assignments.get(sourceGatewayId, gateway.ownerUid),
@@ -61,7 +79,7 @@ export async function isolatedPrelaunchReserved(input) {
         assigned.slug === gateway.builderSlug,
         assigned.gatewayId === sourceGatewayId,
         assigned.state === "serving",
-        assigned.epoch === lease.sourceAssignmentEpoch,
+        sourceAssignmentEpoch === null || assigned.epoch === sourceAssignmentEpoch,
         targetEmpty,
     ].every(Boolean);
 }
@@ -99,8 +117,9 @@ export async function isolatedBootMode(input) {
         throw new Error("Isolated prelaunch owner is unavailable");
     if (await hasServingUserAssignment(reader, gateway, user))
         return { mode: "normal" };
-    if (isOperatorIssuedAllocation(gateway.allocation))
-        return { mode: "normal" };
+    if (isOperatorIssuedAllocation(gateway.allocation)) {
+        return { mode: await isolatedPrelaunchReserved(input) ? "prelaunch" : "normal" };
+    }
     const lease = user.activationLease;
     if (!activationLeaseMatches(gateway, lease)) {
         throw new Error("User activation authority is inconsistent");

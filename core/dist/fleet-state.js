@@ -197,7 +197,7 @@ export function sharedRecoveryTargetCleaned(input, schedulerHandoff) {
         return step.name === "rollback:unmount-target" && step.status === "done";
     });
 }
-function isolatedTargetBelongsToUser(targetRoot, input) {
+export function isolatedTargetBelongsToUser(targetRoot, input) {
     const root = projectGatewayDesiredRootForGateway(targetRoot, String(input.toGatewayId));
     return root?.gatewayClass === "builder" && typeof input.uid === "string" && root.ownerUid === input.uid &&
         root.allocation?.kind === "disposable-builder" && root.allocation.claimedByUid === input.uid;

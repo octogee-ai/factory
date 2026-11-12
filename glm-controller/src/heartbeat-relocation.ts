@@ -1,4 +1,4 @@
-import { GATEWAY_HEARTBEAT_INTERVAL_MS, type ConfiguredUserReport } from "@octogee/shared/types/fleet-controller";
+import { GATEWAY_HEARTBEAT_INTERVAL_MS, type ConfiguredUserReport, type OpenClawProcessReport } from "@octogee/shared/types/fleet-controller";
 import type { FleetHeartbeatReport } from "@octogee/core/platform-state";
 
 export const HEARTBEAT_FIELD = "heartbeat";
@@ -10,6 +10,7 @@ export interface PollerHeartbeatRecord {
   version?: string;
   openclawVersion?: string;
   configuredBuilder?: ConfiguredUserReport | null;
+  openclawProcess?: OpenClawProcessReport | null;
 }
 
 export function pollerHeartbeatReport(record: PollerHeartbeatRecord, internalUrl: string): FleetHeartbeatReport {
@@ -20,6 +21,7 @@ export function pollerHeartbeatReport(record: PollerHeartbeatRecord, internalUrl
     ...(typeof record.version === "string" ? { version: record.version } : {}),
     ...(typeof record.openclawVersion === "string" ? { openclawVersion: record.openclawVersion } : {}),
     ...(record.configuredBuilder !== undefined ? { configuredBuilder: record.configuredBuilder } : {}),
+    ...(record.openclawProcess !== undefined ? { openclawProcess: record.openclawProcess } : {}),
     internalUrl,
   };
 }

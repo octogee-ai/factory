@@ -96,3 +96,44 @@ describe("Shared surge rebound receiving pod", () => {
     await expect(f.readTarget()).rejects.toMatchObject({ name: "MalformedRecordError" });
   });
 });
+
+function isolatedTargetFixture() {
+  const f = fixture("legacy");
+  delete f.operation.cancellationRequestedAt;
+  const target = "bob-isolated";
+  const { forwardRecovery: _forwardRecovery, ...handoff } = f.handoff;
+  f.operation.schedulerHandoff = { ...handoff, toGatewayId: target };
+  f.operation.input.toGatewayId = target;
+  const allocation = { kind: "disposable-builder", schemaVersion: 1, leaseId: "operator-11111111-1111-4111-8111-111111111111", generation: 1, claimedByUid: "uid-bob" };
+  const root: Record<string, any> = { ...f.records[`gateways/${f.target}`], gatewayId: target, gatewayClass: "builder", imageProfile: "builder",
+    ownerUid: "uid-bob", builderSlug: "bob", allocation };
+  f.records[`gateways/${target}`] = root;
+  return { ...f, isolated: target, root, allocation,
+    readImport: () => sharedAgentAnchorMigrationScope(f.store, { gatewayId: target, slug: "bob", migrationId: "mig-move-bob" }),
+    readResume: () => sharedAgentAnchorMigrationScope(f.store, { gatewayId: f.source, slug: "bob", migrationId: "mig-move-bob" }),
+  };
+}
+
+describe("move to the user's own isolated gateway", () => {
+  it("lets the isolated target import and the shared source resume", async () => {
+    const f = isolatedTargetFixture();
+    expect(await f.readImport()).toMatchObject({ uid: "uid-bob", assignmentEpoch: 7, migration: f.expected });
+    expect(await f.readResume()).toMatchObject({ uid: "uid-bob", assignmentEpoch: 7, migration: f.expected });
+  });
+
+  it.each(["owner", "claim", "kind"])("refuses both sides when the isolated gateway's %s is not the user's", async change => {
+    const f = isolatedTargetFixture();
+    if (change === "owner") f.root.ownerUid = "uid-alice";
+    if (change === "claim") f.allocation.claimedByUid = "uid-alice";
+    if (change === "kind") delete f.root.allocation;
+    expect(await f.readImport()).toBeNull();
+    expect(await f.readResume()).toBeNull();
+  });
+
+  it("keeps a lease-tagged move under its lease", async () => {
+    const f = isolatedTargetFixture();
+    f.operation.input.source = "builder-activation-lease";
+    expect(await f.readImport()).toBeNull();
+    expect(await f.readResume()).toBeNull();
+  });
+});

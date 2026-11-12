@@ -31,6 +31,7 @@ import {
   type FleetHealthResponse,
   type FleetStateResponse,
   type FlushGatewayResponse,
+  type OpenClawProcessReport,
 } from "../../shared/types/fleet-controller.js";
 import { createFleetStateHandler } from "./fleet-state-http.js";
 import {
@@ -554,6 +555,7 @@ export function buildFleetStateResponse(input: {
   users: string[];
   migratingIn: string[];
   configuredBuilder: FleetStateResponse["configuredBuilder"];
+  openclawProcess?: OpenClawProcessReport | null;
 }): FleetStateResponse {
   return {
     status: input.status,
@@ -565,6 +567,7 @@ export function buildFleetStateResponse(input: {
     customers: input.users,
     migratingIn: input.migratingIn,
     configuredBuilder: input.configuredBuilder,
+    ...(input.openclawProcess === undefined ? {} : { openclawProcess: input.openclawProcess }),
   };
 }
 
@@ -1867,6 +1870,30 @@ async function isolatedPrelaunchState(
   return state.phase === "running" ? "serving" : "starting";
 }
 
+const processReportFailures = createRepeatSquelch({ windowMs: 10 * 60_000 });
+
+export const OPENCLAW_PROCESS_REPORT_TIMEOUT_MS = 1_000;
+
+export async function openclawProcessReport(input: {
+  adapter: UserLifecycleAdapter;
+  processGate: Pick<SurgeOpenClawProcessSupervisorClient, "status"> | null;
+  log: (message: string) => void;
+}): Promise<OpenClawProcessReport | null> {
+  if (!input.processGate || configuredUserSlug(input.adapter) === null) return null;
+  let state: SurgeOpenClawProcessGateState;
+  try {
+    state = await input.processGate.status({ timeoutMs: OPENCLAW_PROCESS_REPORT_TIMEOUT_MS });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const admitted = processReportFailures.admit("openclaw-process", message);
+    if (admitted) input.log(`[fleet] OpenClaw supervisor did not answer: ${message}${admitted.note}`);
+    return { state: "unavailable", migrationId: null };
+  }
+  const reported = await isolatedPrelaunchState(input.adapter, input.processGate, state);
+  if (reported === "none") return null;
+  return { state: reported, migrationId: state.migrationId ?? null };
+}
+
 // Pending project checkouts never block the mount (see finalizeConvergedMount):
 // OpenClaw starts with the workspace and the reconcile loop converges the rest.
 async function attachConfiguredUserBeforeOpenClaw(input: {
@@ -2666,7 +2693,7 @@ export async function startFleetController(
     publicKey: opts.publicKey,
     gatewayId: opts.gatewayId,
     log: opts.log,
-    readState: ({ privateProjectCoachSlug }) => ({
+    readState: async ({ privateProjectCoachSlug }) => ({
       ...buildFleetStateResponse({
         status: runtime.status,
         gatewayId: opts.gatewayId,
@@ -2677,6 +2704,7 @@ export async function startFleetController(
         users: getMountObservedSlugs(adapter),
         migratingIn: adapter.listMigratingInSlugs?.() ?? [],
         configuredBuilder: (opts.configuredUserReport ?? configuredUserReport)(),
+        openclawProcess: await openclawProcessReport({ adapter: wrappedAdapter, processGate: userProcessGate, log: opts.log }),
       }),
       ...(isValidUsername(privateProjectCoachSlug) ? {
         privateProjectCoachWorkspace: fleetStatePrivateProjectAgentWorkspace(readOpenClawConfig(), openclawDir, privateProjectCoachSlug),

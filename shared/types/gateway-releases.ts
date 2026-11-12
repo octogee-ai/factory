@@ -315,6 +315,7 @@ export interface GatewayHeartbeatObservation {
   migratingIn: string[];
   configStatus?: import("./fleet-controller.js").GatewayConfigStatus;
   configuredBuilder?: import("./fleet-controller.js").ConfiguredUserReport | null;
+  openclawProcess?: import("./fleet-controller.js").OpenClawProcessReport | null;
 }
 
 // glmGateways/{gatewayId} — the controller-owned runtime observation record for the

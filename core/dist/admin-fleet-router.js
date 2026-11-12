@@ -14,7 +14,7 @@ import { SHARED_POOL_SLOT_ID_REQUIREMENT, isSharedPoolSlotId, sharedGatewayAdded
 import { readSharedGatewayPoolConfigInStore, } from "./shared-gateway-pool-read.js";
 import { SIZING_TIERS, resolveSizingTier, } from "@octogee/shared/types/sizing";
 import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/shared/types/cost-estimator";
-import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
+import { GATEWAY_UNREACHABLE_AFTER_MS, parseOpenClawProcessReport } from "@octogee/shared/types/fleet-controller";
 import { builderReturnOperationId, placementRetireOperationId, } from "./user-activation-lease.js";
 import { withActorEmails } from "./admin-journal-actor.js";
 import { AdminDryRunPlanned, admitAdminDryRunMarker, isAdminDryRun, refuseUnansweredAdminDryRun, respondToAdminDryRun, } from "./admin-dry-run.js";
@@ -761,6 +761,24 @@ function observedGatewayStatus(input) {
         ? input.heartbeatStatus
         : requestedGatewayStatus(input.desiredStatus);
 }
+function notServingReason(status, openclawProcess) {
+    if (status !== "booting")
+        return null;
+    const report = parseOpenClawProcessReport(openclawProcess);
+    if (!report)
+        return null;
+    switch (report.state) {
+        case "held":
+        case "hydrated":
+            return report.migrationId ? `OpenClaw is held for move ${report.migrationId}` : "OpenClaw is held with no move in progress";
+        case "unavailable":
+            return "The OpenClaw supervisor is not answering; it is still preparing or has failed";
+        case "starting":
+            return "OpenClaw is starting";
+        case "serving":
+            return "OpenClaw is running; startup checks are not finished";
+    }
+}
 function openclawVersionFromImageTag(imageTag) {
     if (typeof imageTag !== "string")
         return null;
@@ -936,10 +954,12 @@ export function projectGatewaySummary(doc, glmDoc, now) {
     const desiredStatus = projectDesiredStatus(glmDoc);
     const reservation = projectGatewayReservation(glmDoc);
     const heartbeatAgeMs = ageMsOrNull(toMillis(data.lastHeartbeatAt), now);
+    const status = observedGatewayStatus({ desiredStatus, heartbeatStatus: data.status, heartbeatAgeMs });
     return {
         gatewayId,
         gateway: deriveGatewayIdentity(gatewayId, glmDoc?.gateway),
-        status: observedGatewayStatus({ desiredStatus, heartbeatStatus: data.status, heartbeatAgeMs }),
+        status,
+        statusReason: notServingReason(status, data.openclawProcess),
         desiredStatus,
         imageTag: projectImageTag(data, glmDoc),
         openclawVersion: projectOpenclawVersion(data, glmDoc),

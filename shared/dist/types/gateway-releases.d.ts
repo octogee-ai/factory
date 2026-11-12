@@ -124,6 +124,7 @@ export interface GatewayHeartbeatObservation {
     migratingIn: string[];
     configStatus?: import("./fleet-controller.js").GatewayConfigStatus;
     configuredBuilder?: import("./fleet-controller.js").ConfiguredUserReport | null;
+    openclawProcess?: import("./fleet-controller.js").OpenClawProcessReport | null;
 }
 export interface GatewayRuntimeDoc {
     docKind: "runtime";

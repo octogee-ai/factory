@@ -38,6 +38,17 @@ describe("pollerHeartbeatReport — the poller's live telemetry report", () => {
       .not.toHaveProperty("configuredBuilder");
   });
 
+  it("writes the OpenClaw process report, including an explicit null, only when the poll carried one", () => {
+    expect(pollerHeartbeatReport(
+      { status: "booting", mountedCustomers: [], openclawProcess: { state: "held", migrationId: "mig-1" } }, INTERNAL_URL,
+    ).openclawProcess).toEqual({ state: "held", migrationId: "mig-1" });
+    expect(pollerHeartbeatReport(
+      { status: "ready", mountedCustomers: [], openclawProcess: null }, INTERNAL_URL,
+    )).toHaveProperty("openclawProcess", null);
+    expect(pollerHeartbeatReport({ status: "ready", mountedCustomers: [] }, INTERNAL_URL))
+      .not.toHaveProperty("openclawProcess");
+  });
+
   it("leaves the separately published config marker and the store's heartbeat stamp out of the report", () => {
     const report = pollerHeartbeatReport({ status: "ready", mountedCustomers: [] }, INTERNAL_URL);
     expect(report).not.toHaveProperty("configStatus");
