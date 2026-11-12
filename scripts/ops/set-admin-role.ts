@@ -3,7 +3,6 @@ import "../product/lib/octogee-entitlements.js";
 
 import { initializeApp, applicationDefault, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
-import { getFirestore } from "firebase-admin/firestore";
 import { pathToFileURL } from "node:url";
 import { deploymentEnvironmentSettings, deploymentTargetForFirebaseProject } from "@octogee/core/deployment-environment";
 import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
@@ -40,7 +39,7 @@ export async function main(argv: string[] = process.argv.slice(2)) {
     initializeApp({ credential: applicationDefault(), projectId: project });
   }
   const auth = getAuth();
-  const store = await operatorPlatformStateStore(getFirestore(), deploymentTargetForFirebaseProject(project).targetId);
+  const store = await operatorPlatformStateStore(deploymentTargetForFirebaseProject(project).targetId);
   let uid: string;
   let email: string;
 

@@ -13,7 +13,7 @@ import { createHomeCopyClient } from "./lib/compute-home-copy.js";
 import type { ComputeRequest } from "./lib/compute-vm.js";
 import { assertIsolatedRuntimeStorage } from "./isolated-runtime-storage.js";
 import { runNormalFleetMutation } from "@octogee/core/normal-fleet-mutation";
-import { createFirestorePlatformStateStore, platformStateStoreFromEnvironment, MissingRecordError, type WorkspaceProject, type FleetRegistryRecord, type GatewayRoot, type OpaqueMap, type GatewayRootFields, type GatewayRootPatch, type OperationRecord, type PlatformStateStore, type Stored, type WatchChange, type WatchEvent, type FleetRegistryInventory, type PlacementAdmissionPolicy } from "@octogee/core/platform-state";
+import { platformStateStoreFromEnvironment, MissingRecordError, type WorkspaceProject, type FleetRegistryRecord, type GatewayRoot, type OpaqueMap, type GatewayRootFields, type GatewayRootPatch, type OperationRecord, type PlatformStateStore, type Stored, type WatchChange, type WatchEvent, type FleetRegistryInventory, type PlacementAdmissionPolicy } from "@octogee/core/platform-state";
 import { restartGatewayProcess, restartGatewayDeployment } from './lib/runtime-restart-transport.js';
 import { assertMigrationRestartUnfenced } from './lib/runtime-restart-coordinator.js';
 import { assertOwnerOperationUnfenced } from './lib/vm-recovery-fence.js';
@@ -775,10 +775,7 @@ function collectDurableRuntimeRoots(stored: Iterable<Stored<GatewayRoot>>): {
   return { gateways, invalidRootIds };
 }
 
-const REVISION_GLM_DOC_ID = /-r\d+$/u;
-
 function strayGlmDocRemedy(gatewayId: string, fields: readonly string[]): string {
-  if (REVISION_GLM_DOC_ID.test(gatewayId)) return "revision doc; run scripts/ops/cutover-simple-roll.ts";
   return `not a runtime doc of a durable gateway, fields: ${fields.join(", ") || "none"}; delete ${GLM_GATEWAYS_COLLECTION}/${gatewayId}`;
 }
 
@@ -2770,7 +2767,6 @@ export async function main(product: ControllerProduct): Promise<void> {
   const db = getFirestore();
   const store = platformStateStoreFromEnvironment({
     applicationName: "glm-controller",
-    createFirestoreStore: () => createFirestorePlatformStateStore({ db }),
     logger,
   });
   const userLifecycle = createUserLifecycle(product, db, store);

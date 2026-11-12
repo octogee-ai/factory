@@ -1,5 +1,4 @@
 import { applicationDefault, initializeApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
 import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
 import { GoogleAuth } from "google-auth-library";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
@@ -23,6 +22,6 @@ await runDesktopImagePublication({
   skipMissing: true,
   actor: requiredEnv("RELEASE_ACTOR"),
   why: requiredEnv("RELEASE_REASON"),
-  store: await operatorPlatformStateStore(getFirestore(), deploymentEnvironmentSettings(environment).targetId),
+  store: await operatorPlatformStateStore(deploymentEnvironmentSettings(environment).targetId),
   auth: new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] }),
 });

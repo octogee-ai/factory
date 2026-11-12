@@ -1,7 +1,6 @@
 
 
 import { initializeApp, applicationDefault } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
 import type { PlatformStateStore } from "@octogee/core/platform-state";
 import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
 import {
@@ -294,7 +293,7 @@ async function main(): Promise<void> {
     credential: applicationDefault(),
     projectId: resolveReconcileFirebaseProject(args.env),
   });
-  const store = await operatorPlatformStateStore(getFirestore(), deploymentEnvironmentSettings(args.env).targetId);
+  const store = await operatorPlatformStateStore(deploymentEnvironmentSettings(args.env).targetId);
 
   const ctx = await gatherCtx(store, args.slug, io);
   const plan = planGiteaReconcile(await loadState(ctx));

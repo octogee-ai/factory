@@ -13,7 +13,7 @@ export default defineConfig({
   },
   test: {
     include: ["src/**/__tests__/**/*.emulator.spec.ts"],
-    setupFiles: ["./src/test-setup/octogee-entitlements.ts", "./src/test-setup/loopback-listen.ts", "./src/test-setup/public-app-origins.ts"],
+    setupFiles: ["./src/test-setup/octogee-entitlements.ts", "./src/test-setup/loopback-listen.ts", "./src/test-setup/public-app-origins.ts", "./src/test-setup/firestore-platform-state.ts"],
     // Each emulator spec calls resetEmulator() in beforeEach, so running
     // them in parallel within one file is fine — but across files we
     // share one emulator, so sequential file execution avoids interference.

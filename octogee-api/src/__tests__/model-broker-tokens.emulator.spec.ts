@@ -1,19 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { createFirestorePlatformStateStore, MalformedRecordError } from "@octogee/core/platform-state";
-import {
-  MODEL_BROKER_GATEWAY_POINTERS_COLLECTION,
-  MODEL_BROKER_TOKENS_COLLECTION,
-} from "@octogee/shared/types/model-broker-usage";
+import { MalformedRecordError } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
+import { MODEL_BROKER_TOKENS_COLLECTION } from "@octogee/shared/types/model-broker-usage";
 
 import {
   createModelBrokerTokenStore,
   hashModelBrokerToken,
 } from "../lib/model-broker-tokens.js";
-import {
-  getAdminDb,
-  setupEmulatorTest,
-} from "@octogee/test-helpers/firestore-emulator";
+import { setupEmulatorTest } from "@octogee/test-helpers/firestore-emulator";
 
 setupEmulatorTest();
 
@@ -28,10 +23,10 @@ function randomBytes(fill: number): (size: number) => Buffer {
   return (size) => Buffer.alloc(size, fill);
 }
 
-describe("Firestore model broker token store", () => {
+describe("model broker token store", () => {
   it("issues, looks up, revokes the previous token on reissue, and revokes active tokens", async () => {
-    const db = getAdminDb();
-    const store = createModelBrokerTokenStore(createFirestorePlatformStateStore({ db }));
+    const platform = createDocumentFixtureStore(new Map());
+    const store = createModelBrokerTokenStore(platform);
 
     const first = await store.issueToken({
       ...gatewayTokenInput,
@@ -63,11 +58,8 @@ describe("Firestore model broker token store", () => {
       record: { gatewayId: "jack", revoked: false },
     });
 
-    const pointer = await db
-      .collection(MODEL_BROKER_GATEWAY_POINTERS_COLLECTION)
-      .doc("jack")
-      .get();
-    expect(pointer.data()).toMatchObject({
+    const pointer = await platform.access.modelBrokerGatewayTokens.get("jack");
+    expect(pointer).toMatchObject({
       tokenHash: hashModelBrokerToken(second.token),
       gatewayId: "jack",
       secretName: "gateway-model-key-jack",
@@ -77,16 +69,13 @@ describe("Firestore model broker token store", () => {
       store.revokeGatewayToken({ ...gatewayTokenInput, now: 3_000 }),
     ).resolves.toEqual({ revoked: true });
     await expect(store.lookupToken(second.token, 3_001)).resolves.toMatchObject({ outcome: "revoked" });
-    const deletedPointer = await db
-      .collection(MODEL_BROKER_GATEWAY_POINTERS_COLLECTION)
-      .doc("jack")
-      .get();
-    expect(deletedPointer.exists).toBe(false);
+    const deletedPointer = await platform.access.modelBrokerGatewayTokens.get("jack");
+    expect(deletedPointer).toBeNull();
   });
 
   it("scopes revocation by pointerKey so per-user tokens on a shared gateway are independent", async () => {
-    const db = getAdminDb();
-    const store = createModelBrokerTokenStore(createFirestorePlatformStateStore({ db }));
+    const platform = createDocumentFixtureStore(new Map());
+    const store = createModelBrokerTokenStore(platform);
 
     const perUser = (ownerUid: string, fill: number, now: number) =>
       store.issueToken({
@@ -126,8 +115,8 @@ describe("Firestore model broker token store", () => {
   });
 
   it("skipPointer mints a standalone TTL-bounded token — a re-mint never revokes the in-flight one", async () => {
-    const db = getAdminDb();
-    const store = createModelBrokerTokenStore(createFirestorePlatformStateStore({ db }));
+    const platform = createDocumentFixtureStore(new Map());
+    const store = createModelBrokerTokenStore(platform);
 
     const mint = (fill: number, now: number) =>
       store.issueToken({
@@ -164,22 +153,19 @@ describe("Firestore model broker token store", () => {
     await expect(store.lookupToken(second.token, 2_001)).resolves.toMatchObject({ outcome: "valid" });
     expect(first.record.expiresAt).toBe(1_000 + 3_600 * 1000);
     // no pointer doc is written for standalone tokens
-    const pointer = await db
-      .collection(MODEL_BROKER_GATEWAY_POINTERS_COLLECTION)
-      .doc("shared-1")
-      .get();
-    expect(pointer.exists).toBe(false);
+    const pointer = await platform.access.modelBrokerGatewayTokens.get("shared-1");
+    expect(pointer).toBeNull();
     // and the stale token expires by TTL rather than being yanked
     await expect(store.lookupToken(first.token, 1_000 + 3_600 * 1000 + 1)).resolves.toMatchObject({ outcome: "expired" });
   });
 
   it("refuses a malformed token record instead of answering for it", async () => {
-    const db = getAdminDb();
-    const store = createModelBrokerTokenStore(createFirestorePlatformStateStore({ db }));
+    const records = new Map<string, Record<string, unknown>>();
+    const store = createModelBrokerTokenStore(createDocumentFixtureStore(records));
     const token = "ogk_jack_malformed";
     const tokenHash = hashModelBrokerToken(token);
 
-    await db.collection(MODEL_BROKER_TOKENS_COLLECTION).doc(tokenHash).set({
+    records.set(`${MODEL_BROKER_TOKENS_COLLECTION}/${tokenHash}`, {
       tokenHash,
       gatewayId: "jack",
       provider: "anthropic",
@@ -193,10 +179,11 @@ describe("Firestore model broker token store", () => {
   });
 
   it("does not create revoked-only tombstone docs for stale reissue pointers", async () => {
-    const db = getAdminDb();
-    const store = createModelBrokerTokenStore(createFirestorePlatformStateStore({ db }));
+    const platform = createDocumentFixtureStore(new Map());
+    const store = createModelBrokerTokenStore(platform);
 
-    await db.collection(MODEL_BROKER_GATEWAY_POINTERS_COLLECTION).doc("jack").set({
+    await platform.access.modelBrokerGatewayTokens.put({
+      pointerKey: "jack",
       gatewayId: "jack",
       ownerUid: "uid-jack",
       provider: "anthropic",
@@ -211,12 +198,9 @@ describe("Firestore model broker token store", () => {
       randomBytes: randomBytes(4),
     });
 
-    const staleToken = await db
-      .collection(MODEL_BROKER_TOKENS_COLLECTION)
-      .doc("missing-token-hash")
-      .get();
-    expect(staleToken.exists).toBe(false);
-    const pointer = await db.collection(MODEL_BROKER_GATEWAY_POINTERS_COLLECTION).doc("jack").get();
-    expect(pointer.data()).toMatchObject({ tokenHash: issued.record.tokenHash, updatedAt: 4_000 });
+    const staleToken = await platform.access.modelBrokerTokens.get("missing-token-hash");
+    expect(staleToken).toBeNull();
+    const pointer = await platform.access.modelBrokerGatewayTokens.get("jack");
+    expect(pointer).toMatchObject({ tokenHash: issued.record.tokenHash, updatedAt: 4_000 });
   });
 });

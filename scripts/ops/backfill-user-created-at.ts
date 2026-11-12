@@ -96,7 +96,7 @@ async function main(argv: readonly string[] = process.argv.slice(2)): Promise<vo
   const settings = deploymentEnvironmentSettings(args.environment);
   initializeOperatorFirebaseAdmin(settings.firebaseProjectId);
   const db = getFirestore();
-  const store = await operatorPlatformStateStore(db, settings.targetId);
+  const store = await operatorPlatformStateStore(settings.targetId);
   try {
     const users = await store.users.records.listAll();
     const undated = users.filter((user) => user.createdAt === null).map((user) => user.uid);

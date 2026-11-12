@@ -25,18 +25,9 @@
 {{- end -}}
 
 {{- define "octogee.platformStateEnv" -}}
-{{- $backend := ((.Values.global).platformState).backend | default "firestore" -}}
-{{- if ne $backend "firestore" -}}
 - name: PLATFORM_STATE_BACKEND
-  value: {{ $backend | quote }}
+  value: "postgres"
 {{ include "octogee.platformDatabaseRuntimeEnv" . }}
-{{- end -}}
-{{- end -}}
-
-{{- define "octogee.platformDatabaseRequired" -}}
-{{- $stateBackend := ((.Values.global).platformState).backend | default "firestore" -}}
-{{- $secretBackend := (.Values.global).secretStoreBackend | default "postgres" -}}
-{{- if or (ne $stateBackend "firestore") (eq $secretBackend "postgres") -}}true{{- end -}}
 {{- end -}}
 
 {{- define "octogee.runtimeSecretStoreEnv" -}}
@@ -44,9 +35,6 @@
 - name: SECRET_STORE_BACKEND
   value: {{ $backend | quote }}
 {{- if eq $backend "postgres" }}
-{{- if eq (((.Values.global).platformState).backend | default "firestore") "firestore" }}
-{{ include "octogee.platformDatabaseRuntimeEnv" . }}
-{{- end }}
 {{- $rootKeySecret := (.Values.global).secretStoreRootKeySecretName | default (.Values.global).encryptionRootKeySecretName }}
 {{- with $rootKeySecret }}
 - name: SECRET_STORE_ROOT_KEY

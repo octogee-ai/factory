@@ -5,6 +5,13 @@ const h = vi.hoisted(() => ({ authorize: vi.fn(), mint: vi.fn() }));
 vi.mock('../middleware/auth.js', () => ({ requireAuth: (req: { uid: string }, _res: unknown, next: () => void) => { req.uid = 'member'; next(); } }));
 vi.mock('../lib/activity-conversation.js', () => ({ resolveActivityConversation: h.authorize }));
 vi.mock('../lib/gateway-ticket.js', () => ({ mintTicket: h.mint }));
+vi.mock("@octogee/core/platform-state", async (importOriginal) => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return {
+    ...(await importOriginal<typeof import("@octogee/core/platform-state")>()),
+    platformStateStoreFromEnvironment: () => createDocumentFixtureStore(new Map()),
+  };
+});
 const { default: router } = await import('../routes/openclaw.js');
 const threadRootPostId = 'r'.repeat(26);
 const scope = { gatewayId: 'shared-123456789abc', ownerUid: 'owner', channelId: 'c'.repeat(26), threadRootPostId, expectedAgentId: 'octogee-alice-proj-web', sessionKey: `agent:octogee-alice-proj-web:mattermost:group:${'c'.repeat(26)}` };

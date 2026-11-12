@@ -39,11 +39,12 @@ describe("octogee-api vitest configs", () => {
     expect(cfg.test?.testTimeout).toBe(15_000);
   });
 
-  it("loads the loopback listen shim and the runtime env in both run modes", () => {
+  it("loads the loopback listen shim, the runtime env and the platform-store reset for emulator specs", () => {
     expect((emulatorConfig as VitestConfig).test?.setupFiles).toEqual([
       "./src/test-setup/octogee-entitlements.ts",
       "./src/test-setup/loopback-listen.ts",
       "./src/test-setup/runtime-env.ts",
+      "./src/test-setup/platform-state-reset.ts",
     ]);
   });
 });

@@ -17,7 +17,6 @@
 
 import * as fs from "node:fs";
 import { initializeApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
 import { isGatewayDesiredDoc, type GatewayDoc } from "../../shared/types/gateway-releases.js";
 import { createGatewayRpc } from "../lib/gateway-rpc.js";
 import {
@@ -56,7 +55,7 @@ async function main(): Promise<void> {
   }
 
   initializeApp({ projectId: project });
-  const store = await operatorPlatformStateStoreForFirebaseProject(getFirestore(), project);
+  const store = await operatorPlatformStateStoreForFirebaseProject(project);
   const rootData: unknown = await store.gateways.roots.get(gatewayId);
   if (!isGatewayDesiredDoc(rootData) || rootData.gatewayId !== gatewayId) {
     console.error(`gateways/${gatewayId} in ${project} is missing or not a durable root — refusing`);

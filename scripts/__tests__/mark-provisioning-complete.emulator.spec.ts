@@ -1,6 +1,12 @@
 
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const platformRecords = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+vi.mock("@octogee/core/firebase", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@octogee/core/firebase")>()),
+  platformStateStore: (await import("@octogee/core/testing/journal-store")).createDocumentFixtureStore(platformRecords),
+}));
 import { EMULATOR_PROJECT } from "./fixtures/emulator.js";
 
 process.env.FIRESTORE_EMULATOR_HOST ??= "127.0.0.1:8088";
@@ -28,12 +34,29 @@ const freshIds = () => {
 
 async function seedUser(uid: string, data: Record<string, unknown>) {
   await db.collection("users").doc(uid).set(data);
+  platformRecords.set(`users/${uid}`, { uid, createdAt: Date.now(), ...data });
+}
+
+function isPlainMap(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+function mergeDeep(base: Record<string, unknown>, overlay: Record<string, unknown>): Record<string, unknown> {
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(overlay)) {
+    merged[key] = isPlainMap(value) && isPlainMap(merged[key]) ? mergeDeep(merged[key], value) : value;
+  }
+  return merged;
 }
 
 async function readDoc(path: string) {
   const snap = await db.doc(path).get();
-  return snap.exists ? snap.data() : null;
+  const platform = platformRecords.get(path);
+  if (!snap.exists && platform === undefined) return null;
+  return mergeDeep(snap.data() ?? {}, platform ?? {});
 }
+
+beforeEach(() => platformRecords.clear());
 
 afterAll(async () => {
   await Promise.all(getApps().map(deleteApp));
@@ -85,6 +108,7 @@ describe("markProvisioningComplete — system/config (privilege fields only)", (
     const { uid, slug } = freshIds();
     await seedUser(uid, { username: slug });
     await db.doc(`users/${uid}/system/config`).set({ role: "admin" });
+    platformRecords.set(`users/${uid}/system/config`, { role: "admin" });
 
     await markProvisioningComplete(
       baseCtx(uid, slug, "pro"),
@@ -364,6 +388,8 @@ describe("coach completion preserves project authorization", () => {
     }
     expect((await readDoc(workspace.path))?.provisioning.openclaw.gatewayId).toBe("retained-gateway");
     for (const path of [`users/${uid}`, workspace.path]) await db.doc(path).update({ "provisioning.openclaw.agentIds": FieldValue.arrayRemove(project) });
+    const { platformStateStore } = await import("@octogee/core/firebase");
+    await platformStateStore.users.records.removeAgents(uid, [project]);
     await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), [defaultAgent]);
     for (const path of [`users/${uid}`, workspace.path]) expect((await readDoc(path))?.provisioning.openclaw.agentIds).toEqual([defaultAgent]);
   });

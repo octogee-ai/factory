@@ -8,7 +8,6 @@ import { dsn, newPool, newSchemaName } from "./fixtures/harness.js";
 function databaseEnvironment(connectionString: string): Record<string, string> {
   const url = new URL(connectionString);
   return {
-    PLATFORM_STATE_BACKEND: "postgres",
     PLATFORM_DB_HOST: url.hostname,
     PLATFORM_DB_PORT: url.port,
     PLATFORM_DB_NAME: url.pathname.slice(1),
@@ -85,15 +84,12 @@ describe.skipIf(!dsn)("platform database deployment target", () => {
   it("gives a TEST command no store when its settings reach another target's database", async () => {
     const { pool, schema } = isolated(DEFAULT_PLATFORM_STATE_SCHEMA);
     await migratePlatformState(pool, { schema, deploymentTargetId: "prod-central" });
-    const createFirestoreStore = vi.fn();
     await expect(platformStateStoreForDeploymentTarget({
       applicationName: "deployment-target-test",
-      createFirestoreStore,
       logger: { warn: vi.fn(), error: vi.fn() },
       environment: databaseEnvironment(dsn as string),
       deploymentTargetId: "test-central",
     })).rejects.toThrow('platform database belongs to deployment target "prod-central", not "test-central"');
-    expect(createFirestoreStore).not.toHaveBeenCalled();
   });
 
   it("opens the store when the settings reach the selected target's database", async () => {
@@ -101,7 +97,6 @@ describe.skipIf(!dsn)("platform database deployment target", () => {
     await migratePlatformState(pool, { schema, deploymentTargetId: "test-central" });
     const store = await platformStateStoreForDeploymentTarget({
       applicationName: "deployment-target-test",
-      createFirestoreStore: vi.fn(),
       logger: { warn: vi.fn(), error: vi.fn() },
       environment: databaseEnvironment(dsn as string),
       deploymentTargetId: "test-central",

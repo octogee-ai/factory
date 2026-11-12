@@ -6,23 +6,14 @@ import { DEFAULT_PLATFORM_STATE_SCHEMA } from "./migrate.js";
 import type { PlatformStateLogger } from "./session.js";
 import { createPostgresPlatformStateStore } from "./store.js";
 
-const BACKENDS = ["firestore", "postgres"] as const;
-
 export interface PlatformStateStoreSelection {
   readonly applicationName: string;
-  readonly createFirestoreStore: () => PlatformStateStore;
   readonly logger: PlatformStateLogger;
   readonly environment?: Readonly<Record<string, string | undefined>>;
 }
 
 export interface PlatformStateStoreTargetSelection extends PlatformStateStoreSelection {
   readonly deploymentTargetId: string;
-}
-
-function usesPostgres(chosen: string | undefined): boolean {
-  if (chosen === undefined || chosen === "" || chosen === "firestore") return false;
-  if (chosen === "postgres") return true;
-  throw new Error(`PLATFORM_STATE_BACKEND must be one of ${BACKENDS.join(", ")}; got "${chosen}"`);
 }
 
 function poolFromEnvironment(
@@ -51,7 +42,6 @@ function storeOwningPool(pool: pg.Pool, logger: PlatformStateLogger): PlatformSt
 
 export function platformStateStoreFromEnvironment(selection: PlatformStateStoreSelection): PlatformStateStore {
   const environment = selection.environment ?? process.env;
-  if (!usesPostgres(environment.PLATFORM_STATE_BACKEND)) return selection.createFirestoreStore();
   return storeOwningPool(poolFromEnvironment(selection, environment), selection.logger);
 }
 
@@ -59,7 +49,6 @@ export async function platformStateStoreForDeploymentTarget(
   selection: PlatformStateStoreTargetSelection,
 ): Promise<PlatformStateStore> {
   const environment = selection.environment ?? process.env;
-  if (!usesPostgres(environment.PLATFORM_STATE_BACKEND)) return selection.createFirestoreStore();
   const pool = poolFromEnvironment(selection, environment);
   try {
     await assertPlatformDatabaseTarget(pool, selection.deploymentTargetId, DEFAULT_PLATFORM_STATE_SCHEMA);

@@ -1,7 +1,7 @@
 {
   "name": "@octogee/core",
   "version": "1.0.0",
-  "description": "Octogee shared runtime \u2014 consumers depend on its built interface, never its source.",
+  "description": "Octogee shared runtime — consumers depend on its built interface, never its source.",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -16,6 +16,10 @@
     "./testing/journal-store": {
       "types": "./dist/testing/journal-store.d.ts",
       "default": "./dist/testing/journal-store.js"
+    },
+    "./testing/firestore-store": {
+      "types": "./dist/testing/firestore-store/store.d.ts",
+      "default": "./dist/testing/firestore-store/store.js"
     },
     "./project-agent-workspaces": {
       "types": "./dist/project-agent-workspaces.d.ts",
@@ -836,9 +840,7 @@
     "pretypecheck": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
-    "test": "vitest run",
-    "pretest:emulator": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
-    "test:emulator": "cd ../scripts && node ops/run-emulator-vitest.mjs --only firestore,auth --project octogee-test --firebase-config ../firebase.json --config ../core/vitest.emulator.config.ts --env GCLOUD_PROJECT=octogee-test"
+    "test": "vitest run"
   },
   "dependencies": {
     "@google-cloud/secret-manager": "^7.2.0",
@@ -859,7 +861,6 @@
   },
   "devDependencies": {
     "@octogee/shared": "file:../shared",
-    "@octogee/test-helpers": "file:../test-helpers",
     "@types/express": "^5.0.6",
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",

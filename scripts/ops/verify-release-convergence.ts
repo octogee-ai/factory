@@ -5,8 +5,6 @@ import { execFile as execFileCallback } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { applicationDefault, initializeApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
 import { hostedDeploymentTargetSettings } from "@octogee/core/deployment-environment";
 import { isBareGatewayId, readGatewayRuntimeDoc } from "@octogee/core/gateway-live-release";
 import { type PlatformStateStore } from "@octogee/core/platform-state";
@@ -328,11 +326,7 @@ async function run(): Promise<void> {
   const settings = hostedDeploymentTargetSettings(options.deploymentTarget);
   const baselineValue = JSON.parse(await readFile(options.baseline, "utf8")) as unknown;
   if (!isBaseline(baselineValue)) throw new Error("release convergence baseline is invalid");
-  const app = initializeApp({
-    credential: applicationDefault(),
-    projectId: settings.firebaseProjectId,
-  }, `release-convergence-${settings.targetId}`);
-  const store = await operatorPlatformStateStore(getFirestore(app), settings.targetId);
+  const store = await operatorPlatformStateStore(settings.targetId);
   const deadline = Date.now() + options.timeoutMs;
   let failures = ["release convergence has not been observed"];
 

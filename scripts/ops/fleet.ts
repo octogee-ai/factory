@@ -1094,7 +1094,7 @@ async function initializeFleetCli(argv: string[]): Promise<void> {
       : `  fleet uses keyless ADC/WIF for ${projectId}; Firebase tokens are signed by ${signerServiceAccountId}.`,
   ));
   db = getFirestore();
-  platformState = await operatorPlatformStateStore(db, target.targetId);
+  platformState = await operatorPlatformStateStore(target.targetId);
   KUBE_CONTEXT = target.kubeContext;
   KUBE_NS = target.namespace;
 }

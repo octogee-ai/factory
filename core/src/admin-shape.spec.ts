@@ -6,7 +6,7 @@ import {
 } from "@octogee/shared/types/user-entitlements";
 import { buildUserSummary, type BrokerUserUsage } from "./admin-shape.js";
 import { userAccountFromData } from "./user-account.js";
-import { userRecordFromData } from "./platform-state/firestore/users.js";
+import { userRecordFromData } from "./platform-state/documents/users.js";
 
 const NOW = Date.UTC(2026, 6, 2, 13, 30);
 const LIVE_SIGNUP_OFFER = {

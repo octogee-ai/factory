@@ -7,15 +7,15 @@ import { MODEL_BROKER_GATEWAY_POINTERS_COLLECTION, MODEL_BROKER_TOKENS_COLLECTIO
 import { placementReceiptDocId } from "@octogee/shared/types/placement-receipts";
 import { requireSizingProfile, } from "../platform-state/config.js";
 import { AlreadyExistsError, DuplicateRecordError, FenceMismatchError, MalformedRecordError, MissingRecordError, UnsupportedOperationError, } from "../platform-state/errors.js";
-import { agentStoreFromData, agentStoreKeyOf, USER_ACTIVATION_LEASE_PATH, USER_FENCE_PATHS, USER_MIRROR_PATHS, userPatchPaths, userRecordFromData, userRoleFromData, } from "../platform-state/firestore/users.js";
-import { parseOrchestratorConfig, parsePlatformConfigValue, platformConfigEntryFromData, seedSizingProfiles } from "../platform-state/firestore/config.js";
-import { parseSharedPoolScalerState } from "../platform-state/firestore/controller-state.js";
-import { assertAbsentFence, assertFenceEquals, assertFenceOneOf } from "../platform-state/firestore/fences.js";
-import { migrationTransferTaskFromData } from "../platform-state/firestore/migration-tasks.js";
-import { decodeGatewayAssignmentData } from "../platform-state/firestore/gateways.js";
-import { agentImportDocument, agentImportPointerDocument, agentImportPointerFromData, agentImportRecordFromData, anonymousArchiveFromData, storedDeletionStatus, } from "../platform-state/firestore/jobs.js";
-import { userSecretFromData, userSecretToData, CONTROL_SESSION_FIELDS, controlSessionFromData, controlTicketFromData, GATEWAY_TICKET_FIELDS, gatewayAccessDenialAuditId, gatewayTicketFromData, modelBrokerGatewayTokenFromData, modelBrokerTokenDocument, modelBrokerTokenFromData, secretKindOf, } from "../platform-state/firestore/secrets.js";
-import { agentIdentityFromData, workspaceChannelFromData, workspaceMemberFromData, workspaceProjectFromData, workspaceProjectMemberFromData, isWorkspaceReservation, workspaceRecordFromData, } from "../platform-state/firestore/workspaces.js";
+import { ACTIVATED_AGENTS_PATH, agentStoreFromData, agentStoreKeyOf, USER_ACTIVATION_LEASE_PATH, USER_FENCE_PATHS, USER_MIRROR_PATHS, userPatchPaths, userRecordFromData, userRoleFromData, } from "../platform-state/documents/users.js";
+import { parseOrchestratorConfig, parsePlatformConfigValue, platformConfigEntryFromData, seedSizingProfiles } from "../platform-state/documents/config.js";
+import { parseSharedPoolScalerState } from "../platform-state/documents/controller-state.js";
+import { assertAbsentFence, assertFenceEquals, assertFenceOneOf } from "../platform-state/documents/fences.js";
+import { migrationTransferTaskFromData } from "../platform-state/documents/migration-tasks.js";
+import { decodeGatewayAssignmentData } from "../platform-state/documents/gateways.js";
+import { agentImportDocument, agentImportPointerDocument, agentImportPointerFromData, agentImportRecordFromData, anonymousArchiveFromData, storedDeletionStatus, } from "../platform-state/documents/jobs.js";
+import { userSecretFromData, userSecretToData, CONTROL_SESSION_FIELDS, controlSessionFromData, controlTicketFromData, GATEWAY_TICKET_FIELDS, gatewayAccessDenialAuditId, gatewayTicketFromData, modelBrokerGatewayTokenFromData, modelBrokerTokenDocument, modelBrokerTokenFromData, secretKindOf, } from "../platform-state/documents/secrets.js";
+import { agentIdentityFromData, workspaceChannelFromData, workspaceMemberFromData, workspaceProjectFromData, workspaceProjectMemberFromData, isWorkspaceReservation, workspaceRecordFromData, } from "../platform-state/documents/workspaces.js";
 export function journalRowsIn(records) {
     return {
         get: (id) => records[id],
@@ -638,6 +638,12 @@ function userRecordRepository(documents, write, transactional) {
             const byRoster = all().filter((record) => record.agents.agentIds.includes(agentId)).slice(0, limit);
             return [...new Map([...byAgentId, ...byRoster].map((record) => [record.uid, record])).values()];
         },
+        create: async (record) => {
+            write(() => documents.set(path(record.uid), {
+                ...documents.get(path(record.uid)),
+                createdAt: resolveServerNow(record.createdAt),
+            }));
+        },
         admit: async (uid, input) => {
             const path = `users/${uid}`;
             const row = documents.get(path);
@@ -679,6 +685,9 @@ function userRecordRepository(documents, write, transactional) {
             const current = present(uid).agents.agentIds;
             update(uid, { "provisioning.openclaw.agentIds": current.filter((agentId) => !agentIds.includes(agentId)) });
         },
+        setActivatedAgents: async (uid, activatedAgents) => {
+            update(uid, { [ACTIVATED_AGENTS_PATH]: [...activatedAgents] });
+        },
         findByVmInstanceId: async (instanceId) => {
             const found = documents.children("users")
                 .filter(([, row]) => valueAt(row, ["provisioning", "computer", "instanceId"]) === instanceId)
@@ -691,6 +700,12 @@ function userRecordRepository(documents, write, transactional) {
         patch: async (uid, patch, fence) => {
             assertUserFence(uid, present(uid), fence);
             update(uid, userPatchPaths(patch));
+            if (patch.role !== undefined) {
+                const configPath = `users/${uid}/system/config`;
+                write(() => documents.set(configPath, isClear(patch.role)
+                    ? Object.fromEntries(Object.entries(documents.get(configPath) ?? {}).filter(([field]) => field !== "role"))
+                    : { ...documents.get(configPath), role: patch.role }));
+            }
         },
         setActivationLease: async (uid, lease, fence) => {
             assertLeaseFence(uid, present(uid), fence);

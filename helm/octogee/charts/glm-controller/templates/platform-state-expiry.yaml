@@ -1,5 +1,5 @@
 {{- $platformState := (.Values.global).platformState | default dict -}}
-{{- if and (eq ($platformState.backend | default "firestore") "postgres") $platformState.expirySweepEnabled -}}
+{{- if $platformState.expirySweepEnabled -}}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -50,7 +50,6 @@ spec:
                     deploymentTargetId: process.env.DEPLOYMENT_TARGET_ID,
                     applicationName: 'platform-state-expiry',
                     logger: console,
-                    createFirestoreStore: () => { throw new Error('Expiry sweep requires PostgreSQL'); },
                   });
                   try {
                     const expired = await store.sweepExpired(Date.now(), 500);

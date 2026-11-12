@@ -1,38 +1,21 @@
-import type { Firestore } from "firebase-admin/firestore";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertFirestorePlatformBackend, operatorPlatformStateStore } from "../lib/platform-state-store.js";
+import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
 
 describe("operatorPlatformStateStore", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it.each([undefined, ""])("refuses to pick a store when no backend is named (%s)", async (backend) => {
-    vi.stubEnv("PLATFORM_STATE_BACKEND", backend);
-    await expect(operatorPlatformStateStore({} as Firestore, "test-central")).rejects.toThrow(
-      /PLATFORM_STATE_BACKEND must name test-central's platform state store.*with-platform-state/s,
+  it("refuses to run without a database and names the wrapper that opens one", async () => {
+    vi.stubEnv("PLATFORM_DB_HOST", "");
+    await expect(operatorPlatformStateStore("test-central")).rejects.toThrow(
+      /test-central.*npm run --prefix scripts with-platform-state -- --env=<test\|prod> -- <command>/s,
     );
   });
 
-  it("opens the Firestore store only when Firestore is named", async () => {
-    vi.stubEnv("PLATFORM_STATE_BACKEND", "firestore");
-    await expect(operatorPlatformStateStore({} as Firestore, "test-central")).resolves.toHaveProperty("users");
-  });
-
-  it("requires database settings once PostgreSQL is chosen", async () => {
-    vi.stubEnv("PLATFORM_STATE_BACKEND", "postgres");
+  it("requires every database setting once a database host is given", async () => {
+    vi.stubEnv("PLATFORM_DB_HOST", "127.0.0.1");
     vi.stubEnv("PLATFORM_DB_SSLMODE", "");
-    await expect(operatorPlatformStateStore({} as Firestore, "test-central")).rejects.toThrow(/PLATFORM_DB_\w+ is required/);
-  });
-});
-
-describe("assertFirestorePlatformBackend", () => {
-  it("refuses a Firestore-only command when PostgreSQL is selected", () => {
-    expect(() => assertFirestorePlatformBackend("cutover-simple-roll", { PLATFORM_STATE_BACKEND: "postgres" }))
-      .toThrow(/cutover-simple-roll only handles Firestore platform state/);
-  });
-
-  it.each([undefined, "firestore"])("allows the command when the backend is %s", (backend) => {
-    expect(() => assertFirestorePlatformBackend("cutover-simple-roll", { PLATFORM_STATE_BACKEND: backend })).not.toThrow();
+    await expect(operatorPlatformStateStore("test-central")).rejects.toThrow(/PLATFORM_DB_\w+ is required/);
   });
 });

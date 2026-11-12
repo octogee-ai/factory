@@ -1332,11 +1332,11 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
 
     expect(syncFleetIngress).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("stray glmGateway document(s): default-r2 (revision doc; run scripts/ops/cutover-simple-roll.ts)"),
+      expect.stringMatching(/stray glmGateway document\(s\): default-r2 \(not a runtime doc of a durable gateway, fields: .*; delete glmGateways\/default-r2\)/),
     );
   });
 
-  it("names deletion, not the cutover script, for a vm-only stray that no durable root owns", async () => {
+  it("names deletion for a vm-only stray that no durable root owns", async () => {
     const callbacks: MirrorFeeds = {};
     const log = vi.fn();
     const syncFleetIngress = vi.fn(async () => {});
@@ -1360,7 +1360,6 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("stray glmGateway document(s): jefe-s-3e8d49e8 (not a runtime doc of a durable gateway, fields: vm; delete glmGateways/jefe-s-3e8d49e8)"),
     );
-    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("cutover-simple-roll"));
   });
 
   it("refuses fleet mutation for an invalid durable root", async () => {

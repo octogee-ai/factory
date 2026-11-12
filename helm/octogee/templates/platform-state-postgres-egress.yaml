@@ -1,4 +1,4 @@
-{{- if and .Values.networkPolicy.enforceDefaultDeny (include "octogee.platformDatabaseRequired" .) }}
+{{- if .Values.networkPolicy.enforceDefaultDeny }}
 {{- $cidr := required "networkPolicy.privateServicesCidr is required" (.Values.networkPolicy.platformStatePostgresCidr | default .Values.networkPolicy.privateServicesCidr) }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -13,7 +13,7 @@ spec:
           - octogee-api
           - llm-broker
           - glm-controller
-          {{- if and (eq (((.Values.global).platformState).backend | default "firestore") "postgres") (((.Values.global).platformState).expirySweepEnabled) }}
+          {{- if ((.Values.global).platformState).expirySweepEnabled }}
           - platform-state-expiry
           {{- end }}
   policyTypes: [Egress]

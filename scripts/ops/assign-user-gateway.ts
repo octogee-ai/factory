@@ -412,7 +412,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   initializeOperatorFirebaseAdmin(opts.env === "prod" ? "octogee" : `octogee-${opts.env}`);
   const db = getFirestore();
   const deps: AssignUserGatewayDeps = {
-    store: await operatorPlatformStateStore(db, deploymentEnvironmentSettings(opts.env).targetId),
+    store: await operatorPlatformStateStore(deploymentEnvironmentSettings(opts.env).targetId),
     accounts: firestoreUserAccountReader(db),
   };
   const uids: string[] = [];

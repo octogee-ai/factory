@@ -1,34 +1,21 @@
-import type { Firestore } from "firebase-admin/firestore";
 import { deploymentTargetForFirebaseProject } from "@octogee/core/deployment-environment";
-import {
-  createFirestorePlatformStateStore,
-  platformStateStoreForDeploymentTarget,
-  type PlatformStateStore,
-} from "@octogee/core/platform-state";
+import { platformStateStoreForDeploymentTarget, type PlatformStateStore } from "@octogee/core/platform-state";
 
-export async function operatorPlatformStateStore(db: Firestore, deploymentTargetId: string): Promise<PlatformStateStore> {
-  const backend = process.env.PLATFORM_STATE_BACKEND;
-  if (backend !== "firestore" && backend !== "postgres") {
+export async function operatorPlatformStateStore(deploymentTargetId: string): Promise<PlatformStateStore> {
+  if (!process.env.PLATFORM_DB_HOST) {
     throw new Error(
-      `PLATFORM_STATE_BACKEND must name ${deploymentTargetId}'s platform state store (firestore or postgres). ` +
+      `No platform database is open for ${deploymentTargetId}. ` +
       "Run this command through `npm run --prefix scripts with-platform-state -- --env=<test|prod> -- <command>`, " +
-      "which reads the deployed backend and opens the database tunnel.",
+      "which opens the database tunnel and sets the PLATFORM_DB_* settings.",
     );
   }
   return platformStateStoreForDeploymentTarget({
     deploymentTargetId,
     applicationName: "octogee-operator",
-    createFirestoreStore: () => createFirestorePlatformStateStore({ db }),
     logger: console,
   });
 }
 
-export function operatorPlatformStateStoreForFirebaseProject(db: Firestore, projectId: string): Promise<PlatformStateStore> {
-  return operatorPlatformStateStore(db, deploymentTargetForFirebaseProject(projectId).targetId);
-}
-
-export function assertFirestorePlatformBackend(command: string, environment: NodeJS.ProcessEnv = process.env): void {
-  if (environment.PLATFORM_STATE_BACKEND === "postgres") {
-    throw new Error(`${command} only handles Firestore platform state and refuses to run with PLATFORM_STATE_BACKEND=postgres`);
-  }
+export function operatorPlatformStateStoreForFirebaseProject(projectId: string): Promise<PlatformStateStore> {
+  return operatorPlatformStateStore(deploymentTargetForFirebaseProject(projectId).targetId);
 }

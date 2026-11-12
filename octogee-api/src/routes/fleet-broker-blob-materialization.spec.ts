@@ -2,6 +2,13 @@ import express from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
+vi.mock("../../../gateway-edge/src/lib/platform-state.js", async (importOriginal) => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return {
+    ...(await importOriginal<typeof import("../../../gateway-edge/src/lib/platform-state.js")>()),
+    platformStateStore: createDocumentFixtureStore(new Map()),
+  };
+});
 import { GATEWAY_CREDENTIAL_TOKEN_AUDIENCE, GATEWAY_CREDENTIAL_TOKEN_HEADER } from "@octogee/core/internal-fetch";
 import { GATEWAY_CREDENTIAL_ROUTES } from "../index.js";
 import { createGatewayCredentialAuth } from "../middleware/gateway-credential-auth.js";

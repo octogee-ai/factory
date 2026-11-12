@@ -4,7 +4,7 @@ import { forceMigrationHarness } from "./fleet-force-migration.test-support.js";
 const mocks = vi.hoisted(() => ({ db: undefined as unknown, transport: undefined as unknown }));
 vi.mock("@octogee/core/platform-state", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@octogee/core/platform-state")>()),
-  createFirestorePlatformStateStore: (await import("./journal-fixture-store.test-support.js")).journalFixtureStoreFor,
+  platformStateStoreForDeploymentTarget: async () => (await import("./journal-fixture-store.test-support.js")).journalFixtureStoreFor({ db: mocks.db as object }),
 }));
 vi.mock("firebase-admin/app", async importOriginal => ({
   ...await importOriginal<typeof import("firebase-admin/app")>(),
@@ -40,7 +40,7 @@ describe("Fleet forced migration user lookup", () => {
     };
     mocks.transport = transport;
     vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
-    vi.stubEnv("PLATFORM_STATE_BACKEND", "firestore");
+    vi.stubEnv("PLATFORM_DB_HOST", "127.0.0.1");
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
     await main(["--env=test", "migrate-customer", "alice", "--to=shared-b", "--force", "--operation=move-1", ...(apply ? ["--apply"] : [])]);

@@ -5,7 +5,6 @@ import { appendFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { applicationDefault, deleteApp, initializeApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
 import { centralGatewayReleasePayload, createCentralReleaseAuthority, type ReleaseDigestManifest } from "@octogee/core/artifact-registry";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import { appendGatewayRelease, asDurableGatewayRoot, InvalidGatewayRootError, StaleGatewayReleaseError } from "@octogee/core/gateway-release-append";
@@ -172,7 +171,7 @@ export async function runFleetDeploy(argv: string[]): Promise<void> {
   const payload = centralGatewayReleasePayload(manifest);
   const app = initializeApp({ credential: applicationDefault(), projectId: settings.firebaseProjectId }, "deploy-fleet");
   try {
-    const store = await operatorPlatformStateStore(getFirestore(app), settings.targetId);
+    const store = await operatorPlatformStateStore(settings.targetId);
     const report = await deployFleet({ ...options, environment, payload }, {
       now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       readSnapshot: () => readFleetSnapshot(store, () => observeGatewayPods(environment)),

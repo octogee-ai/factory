@@ -2,7 +2,6 @@ import "../product/lib/octogee-entitlements.js";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { applicationDefault, getApps, initializeApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
 import { type PlatformStateStore } from "@octogee/core/platform-state";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import { operatorPlatformStateStore } from "../lib/platform-state-store.js";
@@ -106,7 +105,7 @@ export async function readVmReferences(store: PlatformStateStore, vms: readonly 
 async function main(): Promise<void> {
   const args = parseSweepOrphanedVmsArgs(process.argv.slice(2));
   if (getApps().length === 0) initializeApp({ credential: applicationDefault(), projectId: args.firestoreProjectId });
-  const store = await operatorPlatformStateStore(getFirestore(), deploymentEnvironmentSettings(args.environment).targetId);
+  const store = await operatorPlatformStateStore(deploymentEnvironmentSettings(args.environment).targetId);
   const vms = listTerminatedVms(args);
   console.log(`${vms.length} TERMINATED ${GATEWAY_VM_INSTANCE_PREFIX}${args.environment}-* instance(s) in ${args.computeProjectId}`);
   const refs = await readVmReferences(store, vms);

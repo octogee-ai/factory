@@ -115,7 +115,7 @@ vi.mock("@octogee/core/platform-state", async (importOriginal) => {
   const { createJournalFixtureStore } = await import("@octogee/core/testing/journal-store");
   return {
     ...(await importOriginal<typeof import("@octogee/core/platform-state")>()),
-    createFirestorePlatformStateStore: () => createJournalFixtureStore(
+    platformStateStoreFromEnvironment: () => createJournalFixtureStore(
       {
         get: (id) => readFixtureDocument(`glmOperations/${id}`),
         set: (id, row) => writeFixtureDocument(`glmOperations/${id}`, row),

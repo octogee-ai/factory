@@ -10,8 +10,8 @@ export default defineConfig({
   test: {
     include: ["__tests__/**/*.emulator.spec.ts"],
     setupFiles: ["./test-setup/octogee-entitlements.ts", "./test-setup/loopback-listen.ts"],
-
-fileParallelism: false,
+    fileParallelism: false,
     testTimeout: 15_000,
+    server: { deps: { inline: [/@octogee\/core/] } },
   },
 });

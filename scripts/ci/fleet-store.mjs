@@ -7,15 +7,12 @@ const exec = promisify(execFile);
 
 export async function withFleetStore(deps, run) {
   const settings = await deps.inspect();
-  if (settings.backend === 'firestore') return run({ PLATFORM_STATE_BACKEND: 'firestore' });
-  if (settings.backend !== 'postgres') throw new Error(`Unsupported platform state backend: ${settings.backend}`);
   if (!['require', 'verify-full'].includes(settings.sslmode)) throw new Error(`Fleet database tunnel does not support SSL mode ${settings.sslmode}`);
   const tunnel = await deps.tunnel(settings);
   let value;
   let failure;
   try {
     value = await run({
-      PLATFORM_STATE_BACKEND: 'postgres',
       PLATFORM_DB_HOST: '127.0.0.1',
       PLATFORM_DB_PORT: String(tunnel.port),
       PLATFORM_DB_NAME: settings.database,
@@ -47,10 +44,6 @@ export function fleetStoreDependencies(environment) {
       const deployment = JSON.parse(await kubectl(['get', 'deployment', 'glm-controller', '-o', 'json']));
       const container = deployment.spec.template.spec.containers.find(item => item.name === 'glm-controller');
       if (!container) throw new Error('Fleet controller container is missing from the deployed workload');
-      const backendEntry = container.env?.find(item => item.name === 'PLATFORM_STATE_BACKEND');
-      if (backendEntry && typeof backendEntry.value !== 'string') throw new Error('The fleet controller platform state backend is not a literal value');
-      const backend = backendEntry?.value ?? 'firestore';
-      if (backend !== 'postgres') return { backend };
       if (typeof container.image !== 'string' || !container.image.includes('@sha256:')) throw new Error('Fleet controller image is not digest-addressed');
       const secret = JSON.parse(await kubectl(['get', 'secret', 'platform-state-postgres', '-o', 'json']));
       const value = (key, fallback) => {
@@ -65,7 +58,7 @@ export function fleetStoreDependencies(environment) {
       const port = Number(value('port', '5432'));
       if (!/^[a-zA-Z0-9.:-]+$/.test(host) || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid platform database address');
       return {
-        backend, host, port, image: container.image,
+        host, port, image: container.image,
         database: value('database'),
         user: value('runtime-user'),
         password: value('runtime-password'),

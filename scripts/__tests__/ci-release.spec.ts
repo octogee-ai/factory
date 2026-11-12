@@ -107,7 +107,7 @@ it.each([
   ['fleet', ['ops/deploy-fleet.ts', `--sha=${options.sha}`, '--timeout-ms=3600000']],
 ] as const)('runs the %s stage against the deployed PostgreSQL store through a tunnel it closes afterwards', async (label, script) => {
   const close = vi.fn(async () => {});
-  const inspect = vi.fn(async () => ({ backend: 'postgres', host: '10.89.0.11', port: 5432, database: 'platform', user: 'runtime', password: 'runtime-password', sslmode: 'require', image: 'fleet-controller@sha256:abc' }));
+  const inspect = vi.fn(async () => ({ host: '10.89.0.11', port: 5432, database: 'platform', user: 'runtime', password: 'runtime-password', sslmode: 'require', image: 'fleet-controller@sha256:abc' }));
   const tunnel = vi.fn(async () => ({ port: 15432, close }));
   const storeDependencies = vi.fn(() => ({ inspect, tunnel }));
   const stage = vi.fn(async () => undefined);
@@ -117,7 +117,7 @@ it.each([
   expect(storeDependencies).toHaveBeenCalledWith('test');
   expect(stage).toHaveBeenCalledWith(label, 'node', ['--import', './node_modules/tsx/dist/loader.mjs', ...script], {
     cwd: 'scripts',
-    env: expect.objectContaining({ PLATFORM_STATE_BACKEND: 'postgres', PLATFORM_DB_HOST: '127.0.0.1', PLATFORM_DB_PORT: '15432', PLATFORM_DB_NAME: 'platform', PLATFORM_DB_USER: 'runtime', PLATFORM_DB_PASSWORD: 'runtime-password', PLATFORM_DB_SSLMODE: 'require' }),
+    env: expect.objectContaining({ PLATFORM_DB_HOST: '127.0.0.1', PLATFORM_DB_PORT: '15432', PLATFORM_DB_NAME: 'platform', PLATFORM_DB_USER: 'runtime', PLATFORM_DB_PASSWORD: 'runtime-password', PLATFORM_DB_SSLMODE: 'require' }),
   });
   expect(close.mock.invocationCallOrder[0]).toBeGreaterThan(stage.mock.invocationCallOrder[0]);
 });
@@ -129,7 +129,7 @@ it('closes the store tunnel when a store-backed stage fails', async () => {
     sha: options.sha,
     stage: vi.fn(async () => { throw failure; }),
     withStore: withFleetStore,
-    storeDependencies: () => ({ inspect: async () => ({ backend: 'postgres', host: '10.89.0.11', port: 5432, database: 'platform', user: 'runtime', password: 'runtime-password', sslmode: 'require', image: 'fleet-controller@sha256:abc' }), tunnel: async () => ({ port: 15432, close }) }),
+    storeDependencies: () => ({ inspect: async () => ({ host: '10.89.0.11', port: 5432, database: 'platform', user: 'runtime', password: 'runtime-password', sslmode: 'require', image: 'fleet-controller@sha256:abc' }), tunnel: async () => ({ port: 15432, close }) }),
   });
 
   await expect(stages.desktop()).rejects.toBe(failure);

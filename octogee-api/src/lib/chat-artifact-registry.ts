@@ -10,12 +10,7 @@ import {
   type ArtifactPageObject,
   type ArtifactRequest,
 } from "./chat-artifacts.js";
-import type { Transaction } from "firebase-admin/firestore";
-import {
-  platformStateReadsInFirestoreTransaction,
-  type PlatformStateRepositories,
-  type PlatformStateStore,
-} from "@octogee/core/platform-state";
+import type { PlatformStateRepositories, PlatformStateStore } from "@octogee/core/platform-state";
 import { userAllowsInteractiveAccess } from "./assigned-user.js";
 
 interface FirestoreArtifactSnapshot {
@@ -495,15 +490,13 @@ async function workspaceOwnerActive(state: Pick<PlatformStateRepositories, "user
 
 export function createFirestoreArtifactJobStore(db: FirestoreArtifactDb, platformState: PlatformStateStore): ArtifactJobStore {
   const ref = (artifactId: string): FirestoreArtifactRef => db.doc(`${ARTIFACT_COLLECTION}/${artifactId}`);
-  const ownerStateIn = (transaction: unknown) =>
-    platformStateReadsInFirestoreTransaction(platformState, transaction as Transaction, "chat-artifact.owner");
   return {
     createIfAbsent(job) {
       return db.runTransaction(async (transaction) => {
         const jobRef = ref(job.artifactId);
         const [existing, ownerActive] = await Promise.all([
           transaction.get(jobRef).then(firestoreJob),
-          workspaceOwnerActive(ownerStateIn(transaction), job.workspaceOwnerUid),
+          workspaceOwnerActive(platformState, job.workspaceOwnerUid),
         ]);
         if (!ownerActive) {
           throw new Error("artifact workspace owner is not active");
@@ -540,7 +533,7 @@ export function createFirestoreArtifactJobStore(db: FirestoreArtifactDb, platfor
         const jobRef = ref(artifactId);
         const current = firestoreJob(await transaction.get(jobRef));
         if (!current) return update(null);
-        if (!(await workspaceOwnerActive(ownerStateIn(transaction), current.workspaceOwnerUid))) {
+        if (!(await workspaceOwnerActive(platformState, current.workspaceOwnerUid))) {
           throw new Error("artifact workspace owner is not active");
         }
         const next = update(current);

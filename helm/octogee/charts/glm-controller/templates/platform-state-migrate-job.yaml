@@ -1,4 +1,3 @@
-{{- if include "octogee.platformDatabaseRequired" . -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -46,8 +45,6 @@ spec:
             - name: PLATFORM_DB_REQUIRE_CUTOVER_IMPORT
               value: "true"
             {{- end }}
-            - name: PLATFORM_STATE_BACKEND
-              value: {{ (((.Values.global).platformState).backend | default "firestore") | quote }}
             {{- include "octogee.platformDatabaseConnectionEnv" . | nindent 12 }}
             {{- include "octogee.platformStateSecretEnv" (dict "name" "PLATFORM_DB_USER" "key" "migration-user") | nindent 12 }}
             {{- include "octogee.platformStateSecretEnv" (dict "name" "PLATFORM_DB_PASSWORD" "key" "migration-password") | nindent 12 }}
@@ -58,4 +55,3 @@ spec:
               memory: 128Mi
             limits:
               memory: 256Mi
-{{- end }}

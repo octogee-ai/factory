@@ -34,12 +34,6 @@ describe("portable Linux PR checks", () => {
     expect(commands.indexOf("node ../scripts/ci/core-postgres.mjs")).toBeLessThan(commands.indexOf("npm test"));
   });
 
-  it("runs the core Firestore emulator suite through the shared runner, which lives in scripts", () => {
-    const job = checkPlan(["core/src/platform-state/store.ts"], "tests").find(job => job.name === "core-emulator");
-    expect(job).toMatchObject({ directory: "core", installs: ["scripts", "core"], commands: ["npm run test:emulator"] });
-    expect(selectCheckLane([job!], "emulators")).toEqual([job]);
-  });
-
   it("runs every check on Node 24 except Cloud Functions, which stays on its Node 22 runtime", () => {
     const plan = checkPlan(["package-lock.json", "artifact-worker/renderer/Cargo.lock"], "all", true);
     const node22 = plan.filter(job => job.nodeVersion === 22).map(job => job.name).sort();

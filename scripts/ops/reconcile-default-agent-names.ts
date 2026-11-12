@@ -173,7 +173,7 @@ async function main() {
     process.exit(1);
   }
   db = getFirestore();
-  store = await operatorPlatformStateStoreForFirebaseProject(db, projectId);
+  store = await operatorPlatformStateStoreForFirebaseProject(projectId);
   console.log(`Project: ${projectId}${APPLY ? "" : LIST ? " [LIST]" : " [DRY RUN — pass --apply to write]"}`);
   if (FILTERS.length > 0) console.log(`Filter: ${FILTERS.join(", ")}`);
 

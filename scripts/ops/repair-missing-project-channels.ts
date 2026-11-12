@@ -202,7 +202,7 @@ async function main() {
 
   initializeOperatorFirebaseAdmin(config.project);
   db = getFirestore();
-  store = await operatorPlatformStateStoreForFirebaseProject(db, config.project);
+  store = await operatorPlatformStateStoreForFirebaseProject(config.project);
   console.log(`Project: ${config.project}${APPLY ? "" : " [DRY RUN — pass --apply to write]"}`);
 
   const needs = await findProjectsNeedingRepair();

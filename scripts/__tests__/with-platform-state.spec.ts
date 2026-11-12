@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { parseWithPlatformStateArgs, withPlatformState } from "../ops/with-platform-state.mjs";
 
 const POSTGRES = {
-  backend: "postgres",
   host: "10.0.0.5",
   port: 5432,
   image: "fleet-controller@sha256:abc",
@@ -45,28 +44,17 @@ describe("withPlatformState", () => {
       command: ["tsx", "ops/set-admin-role.ts"],
       deps,
       run,
-      baseEnv: { PATH: "/usr/bin", PLATFORM_STATE_BACKEND: "firestore" },
+      baseEnv: { PATH: "/usr/bin" },
     });
 
     expect(code).toBe(0);
     expect(run).toHaveBeenCalledWith(["tsx", "ops/set-admin-role.ts"], expect.objectContaining({
       PATH: "/usr/bin",
-      PLATFORM_STATE_BACKEND: "postgres",
       PLATFORM_DB_HOST: "127.0.0.1",
       PLATFORM_DB_PORT: "61234",
       PLATFORM_DB_USER: "runtime",
     }));
     expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it("names Firestore explicitly and opens no tunnel when the deployment still uses it", async () => {
-    const deps = { inspect: vi.fn(async () => ({ backend: "firestore" })), tunnel: vi.fn() };
-    const run = vi.fn(async () => 0);
-
-    await withPlatformState({ environment: "test", command: ["tsx", "x.ts"], deps, run, baseEnv: {} });
-
-    expect(run).toHaveBeenCalledWith(["tsx", "x.ts"], { PLATFORM_STATE_BACKEND: "firestore" });
-    expect(deps.tunnel).not.toHaveBeenCalled();
   });
 
   it("passes the command's failing exit code through and still closes the tunnel", async () => {

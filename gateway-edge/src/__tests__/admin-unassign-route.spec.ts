@@ -22,7 +22,7 @@ vi.mock("@octogee/core/platform-state", async (importOriginal) => {
   const documents = () => fixtureDocumentsAt(state.store);
   return {
     ...(await importOriginal<typeof import("@octogee/core/platform-state")>()),
-    createFirestorePlatformStateStore: () => createJournalFixtureStore(
+    platformStateStoreFromEnvironment: () => createJournalFixtureStore(
       {
         get: (id) => state.store[`glmOperations/${id}`],
         set: (id, row) => {

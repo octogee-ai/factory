@@ -6,6 +6,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Firestore } from "firebase-admin/firestore";
 import { afterEach, describe, expect, it, vi } from "vitest";
+vi.mock("../../../gateway-edge/src/lib/platform-state.js", async (importOriginal) => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return {
+    ...(await importOriginal<typeof import("../../../gateway-edge/src/lib/platform-state.js")>()),
+    platformStateStore: createDocumentFixtureStore(new Map()),
+  };
+});
 import { SIDECAR_BROKER_ROUTES } from "../index.js";
 import { createGatewayCredentialAuth } from "../middleware/gateway-credential-auth.js";
 import { createTenantEnforcementMiddleware } from "../middleware/tenant-enforcement.js";
