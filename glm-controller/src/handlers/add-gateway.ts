@@ -1,7 +1,4 @@
 import {
-  isGatewayClass,
-  isGatewayProfile,
-  resolveGatewayClass,
   type GatewayClass,
   type Operation,
   type OperationStep,
@@ -58,9 +55,6 @@ export interface AddGatewayDeps {
 interface AddGatewayInput {
   gatewayId?: unknown;
   imageTag?: unknown;
-  profile?: unknown;
-  gatewayClass?: unknown;
-  imageProfile?: unknown;
 }
 
 type StepResult = { ok: true } | { ok: false; error: string };
@@ -68,12 +62,12 @@ type StepResult = { ok: true } | { ok: false; error: string };
 interface AddGatewayPlan {
   gatewayId: string;
   imageTag?: string;
-  gatewayClass: GatewayClass;
 }
 
 interface RevisionAddGatewayPlan extends AddGatewayPlan {
   revisionId: string;
   imageTag: string;
+  gatewayClass: GatewayClass;
 }
 
 const NAMESPACE = process.env.K8S_NAMESPACE ?? "octogee";
@@ -155,15 +149,7 @@ function parseAddGatewayPlan(input: AddGatewayInput): AddGatewayPlan | null {
 
   if (!gatewayId) return null;
 
-  return {
-    gatewayId,
-    imageTag,
-    gatewayClass: resolveGatewayClass({
-      gatewayClass: isGatewayClass(input.gatewayClass) ? input.gatewayClass : undefined,
-      profile: isGatewayProfile(input.profile) ? input.profile : undefined,
-      imageProfile: isGatewayProfile(input.imageProfile) ? input.imageProfile : undefined,
-    }),
-  };
+  return { gatewayId, imageTag };
 }
 
 async function waitForHelmRender(

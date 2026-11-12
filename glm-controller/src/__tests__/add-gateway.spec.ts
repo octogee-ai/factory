@@ -280,6 +280,32 @@ describe("createAddGatewayHandler — happy path", () => {
     ]);
   });
 
+  it("takes the isolated path from the durable revision whatever class the operation input names", async () => {
+    const state: FakeState = {
+      helmInstances: new Set(["canary"]),
+      availableReplicas: new Map([["octogee-gateway-canary", 1]]),
+      heartbeats: new Map(),
+      platformReady: new Set(),
+    };
+    const deps = makeDeps(state, {
+      resolveGatewayRevision: vi.fn(async () => ({
+        gatewayId: "canary",
+        revisionId: "canary",
+        imageTag: "abc1234",
+        gatewayClass: "builder" as const,
+      })),
+    });
+
+    const result = await createAddGatewayHandler(deps)(
+      mkOp({ input: { gatewayId: "canary", imageTag: "abc1234", gatewayClass: "isolated" } }),
+      makeCtx(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(state.platformReady.has("canary")).toBe(true);
+    expect(deps.readGatewayHeartbeat).not.toHaveBeenCalled();
+  });
+
   it("waits for self-heartbeat on shared gateways", async () => {
     const state: FakeState = {
       helmInstances: new Set(["canary"]),
