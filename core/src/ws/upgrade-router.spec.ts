@@ -4,7 +4,7 @@ import WebSocket from "ws";
 import type { AddressInfo } from "node:net";
 import { PassThrough } from "node:stream";
 
-import { WsUpgradeAuthorizationError, WsUpgradeRouter } from "./upgrade-router";
+import { WsUpgradeAuthorizationError, WsUpgradeRouter } from "./upgrade-router.js";
 
 const servers: Server[] = [];
 

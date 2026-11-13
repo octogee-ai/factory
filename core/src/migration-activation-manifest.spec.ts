@@ -4,10 +4,10 @@ import * as os from "node:os";
 import { execFileSync, spawn } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IMPORT_ACTIVATION_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
-import { applyConfigPatch } from "./apply-config-patch";
+import { applyConfigPatch } from "./apply-config-patch.js";
 
 vi.mock("./apply-config-patch", async (importActual) => {
-  const actual = await importActual<typeof import("./apply-config-patch")>();
+  const actual = await importActual<typeof import("./apply-config-patch.js")>();
   return { ...actual, applyConfigPatch: vi.fn(actual.applyConfigPatch) };
 });
 import {
@@ -23,9 +23,9 @@ import {
   restoreTargetWorkspaceIdentities,
   restoreSourceWorkspaceIdentities,
   type MigrationActivationManifest,
-} from "./migration-activation-manifest";
+} from "./migration-activation-manifest.js";
 import { initializeRelocatedProjectAgent, projectAgentWorkspace } from "./project-agent-workspaces.js";
-import { platformOpenAiEmbeddingSecretId } from "./platform-embedding-refs";
+import { platformOpenAiEmbeddingSecretId } from "./platform-embedding-refs.js";
 import {
   USER_CODE_DENIED_TOOLS,
   USER_WORKFLOW_TOOLS,
@@ -34,7 +34,7 @@ import {
   PROJECT_AGENT_DENIED_TOOLS,
   platformInvariantViolations,
   reconcilePlatformInvariants,
-} from "./system-config-invariants";
+} from "./system-config-invariants.js";
 
 const tmpDirs: string[] = [];
 const APPLIED_FINGERPRINT = "fp-alice-v1";
@@ -88,7 +88,7 @@ describe("activationManifestAgentIds", () => {
 
 describe("migration activation manifest", () => {
   it("never nulls a roster entry the target still carries — removals go through agents.delete", async () => {
-    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+    const configPatch = vi.fn(async (patch: unknown, _hash: string, _options?: { replacePaths?: readonly string[] }) => ({
       hash: "h2",
       config: patch,
     }));
@@ -356,7 +356,7 @@ describe("migration activation manifest", () => {
   });
 
   it("patches agent, account, and bindings without keeping stale entries for the same agent", async () => {
-    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+    const configPatch = vi.fn(async (patch: unknown, _hash: string, _options?: { replacePaths?: readonly string[] }) => ({
       hash: "h2",
       config: patch,
     }));
@@ -953,7 +953,7 @@ describe("migration activation manifest", () => {
   });
 
   it("rebinds redacted platform embedding refs before replacing the stable agent list", async () => {
-    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+    const configPatch = vi.fn(async (patch: unknown, _hash: string, _options?: { replacePaths?: readonly string[] }) => ({
       hash: "h2",
       config: patch,
     }));
@@ -996,7 +996,7 @@ describe("migration activation manifest", () => {
   });
 
   it("replays all project agents while leaving foreign accounts and bindings out of the patch", async () => {
-    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+    const configPatch = vi.fn(async (patch: unknown, _hash: string, _options?: { replacePaths?: readonly string[] }) => ({
       hash: "h2",
       config: patch,
     }));
@@ -1080,7 +1080,7 @@ describe("migration activation manifest", () => {
   });
 
   it("replays the finish-rsync activation manifest into beta keyed entries without sending agents.list", async () => {
-    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+    const configPatch = vi.fn(async (patch: unknown, _hash: string, _options?: { replacePaths?: readonly string[] }) => ({
       hash: "h2",
       config: patch,
     }));
@@ -1151,7 +1151,7 @@ describe("migration activation manifest", () => {
       channels: { mattermost: { accounts: { "alice-coach": { botToken: "default-agent-pat" } } } },
       bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } }],
     }));
-    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+    const configPatch = vi.fn(async (patch: unknown, _hash: string, _options?: { replacePaths?: readonly string[] }) => ({
       hash: "h2",
       config: patch,
     }));
@@ -1191,7 +1191,7 @@ describe("migration activation manifest", () => {
   });
 
   it("refuses beta-only memory fields that stable agents cannot represent", async () => {
-    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+    const configPatch = vi.fn(async (patch: unknown, _hash: string, _options?: { replacePaths?: readonly string[] }) => ({
       hash: "h2",
       config: patch,
     }));
@@ -1224,7 +1224,7 @@ describe("migration activation manifest", () => {
   });
 
   it("preserves the target gateway's current agent model when activation replays stale agent metadata", async () => {
-    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+    const configPatch = vi.fn(async (patch: unknown, _hash: string, _options?: { replacePaths?: readonly string[] }) => ({
       hash: "h2",
       config: patch,
     }));
@@ -1272,7 +1272,7 @@ describe("migration activation manifest", () => {
   });
 
   it("confirms the residual account's arrays when importing over residue (re-import case)", async () => {
-    const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
+    const configPatch = vi.fn(async (patch: unknown, _hash: string, _options?: { replacePaths?: readonly string[] }) => ({
       hash: "h2",
       config: patch,
     }));
@@ -1522,7 +1522,7 @@ describe.skipIf(process.platform !== "linux")("source rollback workspace identit
     captured.targetWorkspaceIdentities = await captureTargetWorkspaceIdentities("alice", [captured.agentId, ...captured.projectAgents.map(agent => agent.agentId)], f.root, { migrationId: "mig-target", uid: custody.uid, gatewayId: "shared-target", podUid: "target-pod" });
     const patches: object[] = [];
     await applyOpenClawActivationManifest(captured, {
-      rpc: { configGet: async () => ({ config: {}, hash: "before" }), configPatch: async patch => { patches.push(patch); return { hash: "after" }; } } as never,
+      rpc: { configGet: async () => ({ config: {}, hash: "before" }), configPatch: async (patch: object) => { patches.push(patch); return { hash: "after" }; } } as never,
       log: vi.fn(),
     });
     expect(patches.length).toBeGreaterThan(0);

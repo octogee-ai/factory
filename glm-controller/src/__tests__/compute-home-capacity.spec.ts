@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { createVmHomeClient } from "../lib/compute-home.js";
+import type { ComputeRequest } from "../lib/compute-vm.js";
 
 const home = { projectId: "test", zone: "us-central1-a", name: "home-a", id: "123", sizeGb: 10, diskType: "pd-balanced" as const, source: "projects/test/zones/us-central1-a/disks/home-a" };
 function fixture(overrides = {}) {
   let disk = { id: home.id, name: home.name, sizeGb: "10", type: "pd-balanced", labels: { "octogee-owner-uid": "owner", "octogee-storage": "customer-home" }, ...overrides };
-  const request = vi.fn(async (call) => {
+  const request = vi.fn<ComputeRequest>(async (call) => {
     if (call.method === "GET") return { status: 200, data: disk };
-    disk = { ...disk, sizeGb: call.body.sizeGb };
+    disk = { ...disk, sizeGb: (call.body as { sizeGb: string }).sizeGb };
     return { status: 200, data: { name: "resize", status: "DONE" } };
   });
   const journalHomeResize = vi.fn(async (_input, action) => action());

@@ -86,8 +86,10 @@ import {
   userMountConfigPatch,
   purgeUserOauthRuntime,
   refreshDefaultAgentRuntimeSessions,
-} from "./byot-sync-runtime";
+} from "./byot-sync-runtime.js";
 import { internalFetch } from "./internal-fetch.js";
+import type { ApplyConfigPatchOptions } from "./apply-config-patch.js";
+import type { SyncByotForUserDeps } from "./byot-sync-runtime.js";
 import { codexAuthJsonPath, codexAgentDir, sharedAuthAgentDir } from "./byosub-restore.js";
 import { readAuthProfileStore, writeAuthProfileStore } from "./auth-profile-sqlite.js";
 import { DatabaseSync } from "node:sqlite";
@@ -1551,11 +1553,10 @@ describe("applyDefaultAgentModelPatch — applies the durable patch, best-effort
   });
 
   it("waits for the booting runtime: deadline-bounded retries, not a 3-shot budget (byot fires at pod boot before openclaw listens on :18789)", async () => {
-    const opts: Array<Record<string, unknown>> = [];
+    const opts: ApplyConfigPatchOptions[] = [];
     const r = await applyDefaultAgentModelPatch(
       { slug: "tester-70", provider: "openai" },
       {
-        purgeUserOauthRuntime: noUserOauthRuntimePurge,
         applyConfigPatch: async (_args, o) => {
           opts.push(o ?? {});
           return { mode: "rpc", attempts: 1 };
@@ -2407,7 +2408,7 @@ describe("standard gateway — BYOS materialization", () => {
       {
         usesLlmBrokerToken: () => true,
         purgeUserOauthRuntime: noUserOauthRuntimePurge,
-        applyByotState: () => false,
+        applyByotState: async () => false,
         applyConfigPatch: configWriter,
         triggerSecretsReload: vi.fn(async () => {}),
       },
@@ -2417,7 +2418,7 @@ describe("standard gateway — BYOS materialization", () => {
   });
 
   it("trial non-BYOK user leaves the template model untouched — but tools convergence still runs (catalog strip)", async () => {
-    const applyByotStateFn = vi.fn(() => false);
+    const applyByotStateFn = vi.fn(async () => false);
     const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
     const applyDefaultAgentToolsConvergenceFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
@@ -2448,8 +2449,8 @@ describe("standard gateway — BYOS materialization", () => {
   });
 
   it("broker-token gateway: anthropic BYOT is broker-resolved, not materialized locally", async () => {
-    const applyByotStateFn = vi.fn(() => false);
-    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
+    const applyByotStateFn = vi.fn(async () => false);
+    const restoreOauthFn = vi.fn<typeof restoreOauthStoreForSlug>(async () => ({ restored: true, present: true }));
     const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
     const applyDefaultAgentToolsConvergenceFn = vi.fn(async () => false);
     const materializeFn = vi.fn(() => false);
@@ -2490,8 +2491,8 @@ describe("standard gateway — BYOS materialization", () => {
   });
 
   it("suppresses claude-cli BYOS without restarting every user on the gateway", async () => {
-    const applyByotStateFn = vi.fn(() => true);
-    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
+    const applyByotStateFn = vi.fn(async () => true);
+    const restoreOauthFn = vi.fn<typeof restoreOauthStoreForSlug>(async () => ({ restored: true, present: true }));
     const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
     const purgeUserOauthRuntimeFn = vi.fn(async () => ({ changed: true, resetCount: 2 }));
@@ -2541,7 +2542,7 @@ describe("standard gateway — BYOS materialization", () => {
       },
       {
         purgeUserOauthRuntime: purgeUserOauthRuntimeFn,
-        applyByotState: vi.fn(() => false),
+        applyByotState: vi.fn(async () => false),
         applyDefaultAgentModelPatch: vi.fn(async () => false),
         applyDefaultAgentToolsConvergence: vi.fn(async () => false),
         requestGatewayRestart: requestGatewayRestartFn,
@@ -2561,11 +2562,11 @@ describe("standard gateway — BYOS materialization", () => {
 
 describe("Isolated gateway — native subscription runtime", () => {
   it("restores OAuth and preserves direct runtime model selections", async () => {
-    const applyByotStateFn = vi.fn(() => false);
-    const restoreOauthFn = vi.fn(async () => ({
+    const applyByotStateFn = vi.fn(async () => false);
+    const restoreOauthFn = vi.fn<typeof restoreOauthStoreForSlug>(async () => ({
       restored: true,
       present: true,
-      providers: ["openai"] as const,
+      providers: ["openai"],
     }));
     const applyOauthRuntimeModelAllowlistFn = vi.fn(async () => ({
       patched: true,
@@ -2633,7 +2634,6 @@ describe("shared gateway — per-user broker-token materialization", () => {
       purgeUserOauthRuntime: noUserOauthRuntimePurge,
       applyDefaultAgentModelPatch: vi.fn(async () => false),
       applyDefaultAgentToolsConvergence: vi.fn(async () => false),
-      purgeUserOauthRuntime: noUserOauthRuntimePurge,
       requestGatewayRestart: vi.fn(async () => false),
       triggerSecretsReload: vi.fn(async () => {}),
       hasPendingPlatformCatalogRestart: () => restartPending,
@@ -2648,9 +2648,9 @@ describe("shared gateway — per-user broker-token materialization", () => {
   };
 
   it("platform user hot-reloads a materialized model catalog on a shared gateway, never a gateway restart", async () => {
-    const applyByotStateFn = vi.fn(() => false);
+    const applyByotStateFn = vi.fn(async () => false);
     const materializeFn = vi.fn(() => true);
-    const restoreOauthFn = vi.fn(async () => ({ restored: false, present: true }));
+    const restoreOauthFn = vi.fn<typeof restoreOauthStoreForSlug>(async () => ({ restored: false, present: true }));
     const reloadFn = vi.fn(async () => {});
     const requestGatewayRestartFn = vi.fn(async () => true);
     const markPendingFn = vi.fn();
@@ -2682,7 +2682,7 @@ describe("shared gateway — per-user broker-token materialization", () => {
     await syncByotForUser(
       { byotActive: false, username: "tester-70", planInputs: {}, provisioning: { openclaw: { status: "complete" } } },
       baseDeps({
-        applyByotState: vi.fn(() => false),
+        applyByotState: vi.fn(async () => false),
         materializePlatformBrokerSurfaces: vi.fn(() => false),
         restoreOauthStoreForSlug: vi.fn(async () => ({ restored: false, present: true })),
         triggerSecretsReload: reloadFn,
@@ -2696,7 +2696,7 @@ describe("shared gateway — per-user broker-token materialization", () => {
   });
 
   it("anthropic BYOK: no local key (broker resolves per-owner), but the broker profile is still materialized", async () => {
-    const applyByotStateFn = vi.fn(() => false);
+    const applyByotStateFn = vi.fn(async () => false);
     const materializeFn = vi.fn(() => true);
 
     await syncByotForUser(
@@ -2715,9 +2715,9 @@ describe("shared gateway — per-user broker-token materialization", () => {
   });
 
   it("claude-cli BYOS on shared: suppressed — no OAuth restore, purged broker profiles preserved", async () => {
-    const applyByotStateFn = vi.fn(() => false);
+    const applyByotStateFn = vi.fn(async () => false);
     const materializeFn = vi.fn(() => true);
-    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
+    const restoreOauthFn = vi.fn<typeof restoreOauthStoreForSlug>(async () => ({ restored: true, present: true }));
     const applyDefaultAgentModelPatchFn = vi.fn(async () => false);
     const reloadFn = vi.fn(async () => {});
     const logLines: string[] = [];
@@ -2750,9 +2750,9 @@ describe("shared gateway — per-user broker-token materialization", () => {
   });
 
   it("codex BYOS on shared (paid plan): suppressed to the platform rail, config default model stands", async () => {
-    const applyByotStateFn = vi.fn(() => false);
+    const applyByotStateFn = vi.fn(async () => false);
     const materializeFn = vi.fn(() => true);
-    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
+    const restoreOauthFn = vi.fn<typeof restoreOauthStoreForSlug>(async () => ({ restored: true, present: true }));
     const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
     const reloadFn = vi.fn(async () => {});
 
@@ -2781,9 +2781,9 @@ describe("shared gateway — per-user broker-token materialization", () => {
     expect(reloadFn).toHaveBeenCalledTimes(1);
   });
   it.each(["anthropic", "openai", "grok", "openrouter", "minimax", "openai-compatible", "claude-cli", "openai-codex"])("keeps %s credentials off a shared gateway and uses platform selections for agent and projects", async provider => {
-    const applyByotStateFn = vi.fn(() => true);
+    const applyByotStateFn = vi.fn(async () => true);
     const materializeFn = vi.fn(() => false);
-    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
+    const restoreOauthFn = vi.fn<typeof restoreOauthStoreForSlug>(async () => ({ restored: true, present: true }));
     const overrides = vi.fn(async () => true);
     const purge = vi.fn(async () => ({ changed: true, resetCount: 0 }));
     const defaultAgent = "octogee-tester-70-coach";
@@ -2943,11 +2943,11 @@ describe("operator gateway — runtime sync stays narrow", () => {
   });
 
   it("syncByotForUser: restores OAuth credentials and patches the operator runtime model after the credential is present", async () => {
-    const applyByotStateFn = vi.fn(() => true);
-    const restoreOauthFn = vi.fn(async () => ({
+    const applyByotStateFn = vi.fn(async () => true);
+    const restoreOauthFn = vi.fn<typeof restoreOauthStoreForSlug>(async () => ({
       restored: true,
       present: true,
-      providers: ["openai", "anthropic"] as const,
+      providers: ["openai", "anthropic"],
     }));
     const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
     const applyOauthRuntimeModelAllowlistFn = vi.fn(async () => ({
@@ -3042,7 +3042,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
     const deps = {
       isIsolatedGateway: () => operatorGateway,
       purgeUserOauthRuntime: noUserOauthRuntimePurge,
-      applyByotState: vi.fn(() => false),
+      applyByotState: vi.fn(async () => false),
       applyDefaultAgentModelPatch: vi.fn(async () => false),
       applyDefaultAgentToolsConvergence: vi.fn(async () => false),
       materializePlatformBrokerSurfaces: materializeBrokerFn,
@@ -3125,11 +3125,11 @@ describe("operator gateway — runtime sync stays narrow", () => {
       {
         isIsolatedGateway: () => true,
         purgeUserOauthRuntime: noUserOauthRuntimePurge,
-        applyByotState: vi.fn(() => true),
-        restoreOauthStoreForSlug: vi.fn(async () => ({
+        applyByotState: vi.fn(async () => true),
+        restoreOauthStoreForSlug: vi.fn<typeof restoreOauthStoreForSlug>(async () => ({
           restored: true,
           present: true,
-          providers: ["openai"] as const,
+          providers: ["openai"],
         })),
         materializePlatformBrokerSurfaces: vi.fn(async () => false),
         applyOauthRuntimeModelAllowlist: (providers, codexAppServer) =>
@@ -3194,8 +3194,8 @@ describe("operator gateway — runtime sync stays narrow", () => {
 
   it("anthropic BYOT cleanup still runs on operator broker-token gateways", async () => {
     let restartPending = false;
-    const applyByotStateFn = vi.fn(() => true);
-    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
+    const applyByotStateFn = vi.fn(async () => true);
+    const restoreOauthFn = vi.fn<typeof restoreOauthStoreForSlug>(async () => ({ restored: true, present: true }));
     const applyDefaultAgentModelPatchFn = vi.fn(async () => true);
     const triggerSecretsReloadFn = vi.fn(async () => {});
     const materializeBrokerFn = vi.fn(() => true);
@@ -3682,7 +3682,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
       },
       {
         purgeUserOauthRuntime: noUserOauthRuntimePurge,
-        applyByotState: vi.fn(() => false),
+        applyByotState: vi.fn(async () => false),
         applyDefaultAgentModelPatch: vi.fn(async () => false),
         applyDefaultAgentToolsConvergence: vi.fn(async () => false),
         triggerSecretsReload: vi.fn(async () => {}),
@@ -3696,7 +3696,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
   });
 
   it("user OAuth suppression uses the effective platform state and replaces stale runtime refs", async () => {
-    const applyByotStateFn = vi.fn(() => false);
+    const applyByotStateFn = vi.fn(async () => false);
     const applyDefaultAgentToolsConvergenceFn = vi.fn(async () => false);
     const applyAgentModelOverridesFn = vi.fn(async () => true);
 
@@ -3777,7 +3777,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
       },
       {
         purgeUserOauthRuntime: noUserOauthRuntimePurge,
-        applyByotState: vi.fn(() => false),
+        applyByotState: vi.fn(async () => false),
         applyDefaultAgentModelPatch: vi.fn(async () => false),
         applyDefaultAgentToolsConvergence: vi.fn(async () => false),
         triggerSecretsReload: vi.fn(async () => {}),
@@ -3822,7 +3822,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
       },
       {
         purgeUserOauthRuntime: noUserOauthRuntimePurge,
-        applyByotState: vi.fn(() => false),
+        applyByotState: vi.fn(async () => false),
         applyDefaultAgentModelPatch: vi.fn(async () => false),
         applyDefaultAgentToolsConvergence: vi.fn(async () => false),
         triggerSecretsReload: vi.fn(async () => {}),
@@ -3844,9 +3844,9 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
   });
 
 
-  const userDefaultDeps = (applyAgentModelOverridesFn: ReturnType<typeof vi.fn>) => ({
+  const userDefaultDeps = (applyAgentModelOverridesFn: NonNullable<SyncByotForUserDeps["applyAgentModelOverrides"]>) => ({
     purgeUserOauthRuntime: noUserOauthRuntimePurge,
-    applyByotState: vi.fn(() => false),
+    applyByotState: vi.fn(async () => false),
     applyDefaultAgentModelPatch: vi.fn(async () => false),
     applyDefaultAgentToolsConvergence: vi.fn(async () => false),
     triggerSecretsReload: vi.fn(async () => {}),
@@ -3994,7 +3994,7 @@ describe("syncByotForUser — agent-model overrides ride every class path", () =
       },
       {
         purgeUserOauthRuntime: noUserOauthRuntimePurge,
-        applyByotState: vi.fn(() => false),
+        applyByotState: vi.fn(async () => false),
         applyDefaultAgentModelPatch: vi.fn(async () => false),
         applyDefaultAgentToolsConvergence: vi.fn(async () => false),
         triggerSecretsReload: vi.fn(async () => {}),
@@ -4023,7 +4023,7 @@ describe("syncByotForUser — tools convergence wiring", () => {
       },
       {
         purgeUserOauthRuntime: noUserOauthRuntimePurge,
-        applyByotState: vi.fn(() => false),
+        applyByotState: vi.fn(async () => false),
         applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
         applyDefaultAgentToolsConvergence: applyDefaultAgentToolsConvergenceFn,
         triggerSecretsReload: vi.fn(async () => {}),
@@ -4049,7 +4049,7 @@ describe("syncByotForUser — tools convergence wiring", () => {
       {
         purgeUserOauthRuntime: noUserOauthRuntimePurge,
         usesLlmBrokerToken: () => false,
-        applyByotState: vi.fn(() => false),
+        applyByotState: vi.fn(async () => false),
         restoreOauthStoreForSlug: vi.fn(async () => ({ restored: false, present: true })),
         applyDefaultAgentModelPatch: applyDefaultAgentModelPatchFn,
         applyDefaultAgentToolsConvergence: applyDefaultAgentToolsConvergenceFn,
@@ -4075,7 +4075,7 @@ describe("syncByotForUser — tools convergence wiring", () => {
       },
       {
         purgeUserOauthRuntime: noUserOauthRuntimePurge,
-        applyByotState: vi.fn(() => false),
+        applyByotState: vi.fn(async () => false),
         applyDefaultAgentModelPatch: vi.fn(async () => false),
         applyDefaultAgentToolsConvergence: applyDefaultAgentToolsConvergenceFn,
         triggerSecretsReload: vi.fn(async () => {}),

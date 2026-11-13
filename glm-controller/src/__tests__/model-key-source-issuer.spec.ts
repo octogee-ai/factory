@@ -3,6 +3,7 @@ import {
   createConfiguredGatewayModelKeyIssuerBackend,
   createGatewayModelKeySourceIssuer,
   createHttpGatewayModelKeyIssuerBackend,
+  type GatewayModelKeyIssuerBackend,
 } from "../model-key-source-issuer.js";
 import { gatewayModelKeySourceLabels } from "../model-key-secret-ensurer.js";
 
@@ -59,7 +60,7 @@ describe("createGatewayModelKeySourceIssuer", () => {
   it("writes a labeled Secret Manager source only after the backend returns a capped Anthropic key", async () => {
     const deps = makeDeps({
       backend: {
-        issueGatewayModelKey: vi.fn(async () => ({
+        issueGatewayModelKey: vi.fn<GatewayModelKeyIssuerBackend["issueGatewayModelKey"]>(async () => ({
           value: " sk-ant-capped ",
           provider: "anthropic",
           capped: true,
@@ -86,7 +87,7 @@ describe("createGatewayModelKeySourceIssuer", () => {
   it("rejects issuer output that is not explicitly capped", async () => {
     const deps = makeDeps({
       backend: {
-        issueGatewayModelKey: vi.fn(async () => ({
+        issueGatewayModelKey: vi.fn<GatewayModelKeyIssuerBackend["issueGatewayModelKey"]>(async () => ({
           value: "sk-ant-uncapped",
           provider: "anthropic",
           capped: false,
@@ -112,7 +113,7 @@ describe("createGatewayModelKeySourceIssuer", () => {
         labels: { provider: "anthropic" },
       })),
       backend: {
-        issueGatewayModelKey: vi.fn(async () => ({
+        issueGatewayModelKey: vi.fn<GatewayModelKeyIssuerBackend["issueGatewayModelKey"]>(async () => ({
           value: "sk-ant-new",
           provider: "anthropic",
           capped: true,
@@ -137,7 +138,7 @@ describe("createGatewayModelKeySourceIssuer", () => {
   it("issues a broker token source for isolated gateways", async () => {
     const deps = makeDeps({
       backend: {
-        issueGatewayModelKey: vi.fn(async () => ({
+        issueGatewayModelKey: vi.fn<GatewayModelKeyIssuerBackend["issueGatewayModelKey"]>(async () => ({
           value: "ogk_walter_token",
           provider: "anthropic",
           capped: true,

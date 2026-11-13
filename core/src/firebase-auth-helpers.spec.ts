@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   deleteAuthUserTolerantOfMissing,
   disableAuthUserAndRevokeSessions,
-} from "./firebase-auth-helpers";
+} from "./firebase-auth-helpers.js";
 
 describe("deleteAuthUserTolerantOfMissing", () => {
   it("delegates to deleteUser and resolves on success", async () => {

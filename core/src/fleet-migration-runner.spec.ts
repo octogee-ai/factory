@@ -1,13 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
 import type { ScheduleRecord, ScheduleRestoreResult, ScheduleTransferDoc } from "@octogee/shared/types/fleet-controller";
-import { restoreScheduleTransfer, runMigration, type MigrationRunnerDeps } from "./fleet-migration-runner";
-import { MigrationDrainPendingError, MigrationRpcError, MigrationTransportError, type MigrationClient } from "./fleet-migration-client";
+import { restoreScheduleTransfer, runMigration, type MigrationRunnerDeps, type MigrationRunnerInput } from "./fleet-migration-runner.js";
+import { MigrationDrainPendingError, MigrationRpcError, MigrationTransportError, type MigrationClient } from "./fleet-migration-client.js";
 
 const STANDUP: ScheduleRecord = { sourceJobId: "job-standup", agentId: "octogee-alice-coach", job: { name: "standup", schedule: { kind: "cron", expr: "0 9 * * *" } } };
 
 function happyClient(): MigrationClient & { calls: string[] } {
   const calls: string[] = [];
   return {
+    abortImport: vi.fn(async () => { throw new Error("happyClient does not abort imports"); }),
     scheduler: vi.fn(),
     schedules: vi.fn(async (request: Parameters<MigrationClient["schedules"]>[0]) => {
       calls.push(`schedules:${request.gatewayId}:${request.op}`);
@@ -84,7 +85,7 @@ function harness(options: HarnessOptions = {}) {
       events.push(`report:${step.name}:${step.status}`);
     }),
   };
-  const input = {
+  const input: MigrationRunnerInput = {
     migrationId: "m1",
     uid: "uid-alice",
     slug: "alice",
@@ -580,7 +581,7 @@ describe("schedule transfer", () => {
     const snapshotAndRestore = vi.mocked(h.client.schedules).getMockImplementation()!;
     vi.mocked(h.client.schedules).mockImplementation(async (request) => request.op === "restore"
       ? { migrationId: "m1", slug: "alice", op: "restore", created: 0, existing: 0,
-        failed: [{ name: "standup", agentId: STANDUP.agentId, sourceJobId: STANDUP.sourceJobId, error: "invalid cron" }] }
+        failed: [{ name: "standup", agentId: STANDUP.agentId, sourceJobId: STANDUP.sourceJobId, error: "invalid cron", retryable: false }] }
       : snapshotAndRestore(request));
 
     expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });

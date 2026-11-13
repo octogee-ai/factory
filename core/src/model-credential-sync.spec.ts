@@ -75,6 +75,7 @@ describe("agentModels passthrough — per-agent picks survive normalization", ()
   };
   const completeAcme = {
     username: "acme",
+    planInputs: {},
     provisioning: { openclaw: { status: "complete" } },
   };
 

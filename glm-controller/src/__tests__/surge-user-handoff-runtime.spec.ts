@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { MigrationDrainPendingError } from "@octogee/core/fleet-migration-client";
 import { gatewayScopedJobId, verifyFleetRequest } from "@octogee/core/fleet-signature";
 import { SIGNATURE_HEADER } from "@octogee/shared/types/fleet-controller";
@@ -12,6 +12,8 @@ import {
   deleteCancelledSurgePod,
   parseSurgePodSnapshot,
   readPodSystemConfigCommit,
+  type SurgeControlClientRequest,
+  type SurgeControlRequest,
 } from "../surge-user-handoff-runtime.js";
 import {
   SurgeGatewayScopedSignatureCapabilityMissingError,
@@ -121,8 +123,8 @@ describe("surge handoff Kubernetes projection", () => {
 type SurgeTransportCall = { url: string; body?: Record<string, unknown> };
 type FetchInput = string | URL | Request;
 type NativeRequest = EventEmitter & {
-  setTimeout: ReturnType<typeof vi.fn>;
-  destroy: ReturnType<typeof vi.fn>;
+  setTimeout: Mock<SurgeControlClientRequest["setTimeout"]>;
+  destroy: Mock<SurgeControlClientRequest["destroy"]>;
   end: (body: string) => void;
 };
 type NativeResponse = EventEmitter & {
@@ -130,8 +132,8 @@ type NativeResponse = EventEmitter & {
   setEncoding: (encoding: BufferEncoding) => void;
 };
 
-function requestThroughFetch(fetch: typeof globalThis.fetch): typeof import("node:http").request {
-  const request = (options: Record<string, unknown>, onResponse: (response: EventEmitter) => void): NativeRequest => {
+function requestThroughFetch(fetch: typeof globalThis.fetch): SurgeControlRequest {
+  return (options, onResponse) => {
     const req = new EventEmitter() as NativeRequest;
     req.setTimeout = vi.fn();
     req.destroy = vi.fn();
@@ -158,7 +160,6 @@ function requestThroughFetch(fetch: typeof globalThis.fetch): typeof import("nod
     };
     return req;
   };
-  return request as unknown as typeof import("node:http").request;
 }
 
 describe("surge handoff direct pod transport", () => {
@@ -249,10 +250,10 @@ describe("surge handoff direct pod transport", () => {
   it("uses native full-operation deadlines for user holds, source resume, and target completion", async () => {
     const fetch = vi.fn() as unknown as typeof globalThis.fetch;
     const bodies: Record<string, unknown>[] = [];
-    const request = vi.fn((options: Record<string, unknown>, onResponse: (response: EventEmitter) => void) => {
+    const request = vi.fn<SurgeControlRequest>((options, onResponse) => {
       const req = new EventEmitter() as EventEmitter & {
-        setTimeout: ReturnType<typeof vi.fn>;
-        destroy: ReturnType<typeof vi.fn>;
+        setTimeout: Mock<SurgeControlClientRequest["setTimeout"]>;
+        destroy: Mock<SurgeControlClientRequest["destroy"]>;
         end: (body: string) => void;
       };
       req.setTimeout = vi.fn();
@@ -274,7 +275,7 @@ describe("surge handoff direct pod transport", () => {
         });
       };
       return req;
-    }) as unknown as typeof import("node:http").request;
+    });
     const transport = createSurgePodTransport({
       privateKey: FLEET_KEY_PAIR.privateKey,
       fetch,
@@ -361,10 +362,10 @@ describe("surge handoff direct pod transport", () => {
         targetPodUid: target.uid,
       },
     ]);
-    const sourceHoldRequest = request.mock.results[0]?.value as { setTimeout: ReturnType<typeof vi.fn> };
-    const targetHoldRequest = request.mock.results[1]?.value as { setTimeout: ReturnType<typeof vi.fn> };
-    const resumeRequest = request.mock.results[2]?.value as { setTimeout: ReturnType<typeof vi.fn> };
-    const completeRequest = request.mock.results[3]?.value as { setTimeout: ReturnType<typeof vi.fn> };
+    const sourceHoldRequest = request.mock.results[0]?.value as NativeRequest;
+    const targetHoldRequest = request.mock.results[1]?.value as NativeRequest;
+    const resumeRequest = request.mock.results[2]?.value as NativeRequest;
+    const completeRequest = request.mock.results[3]?.value as NativeRequest;
     expect(sourceHoldRequest.setTimeout).toHaveBeenCalledWith(
       SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS,
       expect.any(Function),
@@ -387,7 +388,7 @@ describe("surge handoff direct pod transport", () => {
     const fetch = vi.fn() as unknown as typeof globalThis.fetch;
     const bodies: Record<string, unknown>[] = [];
     const requests: NativeRequest[] = [];
-    const request = vi.fn((options: Record<string, unknown>, onResponse: (response: EventEmitter) => void) => {
+    const request = vi.fn<SurgeControlRequest>((options, onResponse) => {
       const req = new EventEmitter() as NativeRequest;
       req.setTimeout = vi.fn();
       req.destroy = vi.fn();
@@ -407,7 +408,7 @@ describe("surge handoff direct pod transport", () => {
       };
       requests.push(req);
       return req;
-    }) as unknown as typeof import("node:http").request;
+    });
     const transport = createSurgePodTransport({
       privateKey: FLEET_KEY_PAIR.privateKey,
       fetch,
@@ -436,7 +437,7 @@ describe("surge handoff direct pod transport", () => {
     })).resolves.toEqual({});
 
     expect(fetch).not.toHaveBeenCalled();
-    expect(request.mock.calls.map(([options]) => (options as { path: string }).path)).toEqual([
+    expect(request.mock.calls.map(([options]) => options.path)).toEqual([
       "/prepare-rsync-import/default",
       "/push-rsync-state/default",
       "/finish-rsync-import/default",
@@ -934,7 +935,7 @@ describe("surge handoff direct pod transport", () => {
   it("uses the native full-operation deadline for target unreserve", async () => {
     const fetch = vi.fn() as unknown as typeof globalThis.fetch;
     let body: Record<string, unknown> | undefined;
-    const request = vi.fn((options: Record<string, unknown>, onResponse: (response: EventEmitter) => void) => {
+    const request = vi.fn<SurgeControlRequest>((options, onResponse) => {
       const req = new EventEmitter() as NativeRequest;
       req.setTimeout = vi.fn();
       req.destroy = vi.fn();
@@ -953,7 +954,7 @@ describe("surge handoff direct pod transport", () => {
         });
       };
       return req;
-    }) as unknown as typeof import("node:http").request;
+    });
     const transport = createSurgePodTransport({
       privateKey: FLEET_KEY_PAIR.privateKey,
       fetch,
@@ -990,10 +991,10 @@ describe("surge handoff direct pod transport", () => {
   });
 
   it("names the missing process-control capability when a pod predates the endpoint", async () => {
-    const request = vi.fn((_options: Record<string, unknown>, onResponse: (response: EventEmitter) => void) => {
+    const request = vi.fn<SurgeControlRequest>((_options, onResponse) => {
       const req = new EventEmitter() as EventEmitter & {
-        setTimeout: ReturnType<typeof vi.fn>;
-        destroy: ReturnType<typeof vi.fn>;
+        setTimeout: Mock<SurgeControlClientRequest["setTimeout"]>;
+        destroy: Mock<SurgeControlClientRequest["destroy"]>;
         end: () => void;
       };
       req.setTimeout = vi.fn();
@@ -1012,7 +1013,7 @@ describe("surge handoff direct pod transport", () => {
         });
       };
       return req;
-    }) as unknown as typeof import("node:http").request;
+    });
     const transport = createSurgePodTransport({
       privateKey: FLEET_KEY_PAIR.privateKey,
       request,

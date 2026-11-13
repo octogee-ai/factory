@@ -41,10 +41,10 @@ describe("sizingTier transition safety (stale Firestore values)", () => {
     expect(map.default.sizingTier).toBe("l");
   });
 
+  const withResidualComputeClass = { ...mkDesired({}), computeClass: "octogee-gateway-spot" };
+
   it("never forwards a residual computeClass to the chart", () => {
-    const map = buildInstancesMap([
-      mkDesired({ computeClass: "octogee-gateway-spot" }),
-    ]);
+    const map = buildInstancesMap([withResidualComputeClass]);
     expect(map.default).not.toHaveProperty("computeClassOverride");
   });
 
@@ -56,9 +56,7 @@ describe("sizingTier transition safety (stale Firestore values)", () => {
 
   it("a residual computeClass on the durable doc is not drift", () => {
     const actual = buildInstancesMap([mkDesired({})]);
-    const desired = buildHelmTargetMap([
-      mkDesired({ computeClass: "octogee-gateway-spot" }),
-    ], actual);
+    const desired = buildHelmTargetMap([withResidualComputeClass], actual);
     expect(diffInstancesMap(actual, desired)).toEqual([]);
   });
 });
@@ -501,7 +499,6 @@ describe("buildHelmTargetMap", () => {
   const REPO_PATH = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
   const desired = (overrides: Partial<GatewayDesiredState>): GatewayDesiredState => ({
     gatewayId: "default",
-    gatewayId: "default",
     imageRepository: REPO_PATH,
     imageTag: "abc1234",
     desiredStatus: "running",
@@ -609,7 +606,6 @@ describe("chart-template drift detection", () => {
   });
 
   const desired = (overrides: Partial<GatewayDesiredState>): GatewayDesiredState => ({
-    gatewayId: "gw-test",
     gatewayId: "default",
     imageRepository: REPO,
     imageTag: "abc",

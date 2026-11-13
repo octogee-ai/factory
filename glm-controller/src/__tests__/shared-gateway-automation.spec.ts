@@ -1,7 +1,7 @@
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { describe, expect, it, vi } from "vitest";
 import { createSharedGatewayAutomation } from "../index.js";
-import { startSharedGatewayLoop } from "../shared-gateway-automation.js";
+import { startSharedGatewayLoop, type SharedGatewayAutomation } from "../shared-gateway-automation.js";
 import { JOURNEY_FIRST_BUILD } from "./fixtures/shared-pool-scaler-journey.js";
 
 describe("shared gateway automation hook", () => {
@@ -21,7 +21,12 @@ describe("shared gateway automation hook", () => {
 
   it("builds the product's automation from the platform store and the platform build", () => {
     const store = createDocumentFixtureStore(new Map());
-    const automation = { recoverInterruptedAdds: vi.fn(), start: vi.fn() };
+    const unused = () => { throw new Error("shared gateway moves are not used by this hook"); };
+    const automation: SharedGatewayAutomation = {
+      recoverInterruptedAdds: vi.fn(async () => undefined),
+      start: vi.fn(() => ({ intervalMs: 1, tick: async () => undefined })),
+      moves: { startPass: unused, recoverUser: unused, placeUser: unused, reconcilePool: unused, assignmentLimitIn: unused },
+    };
     const factory = vi.fn(() => automation);
 
     expect(createSharedGatewayAutomation(factory, store, JOURNEY_FIRST_BUILD)).toBe(automation);

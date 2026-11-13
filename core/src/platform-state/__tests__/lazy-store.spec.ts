@@ -4,7 +4,7 @@ import { lazyPlatformStateStore } from "../lazy-store.js";
 
 function fakeStore(): PlatformStateStore {
   const store = {
-    users: { records: { get: vi.fn(async () => null) } },
+    users: { records: { get: vi.fn(async (_uid: string) => null) } },
     async close() {
       await store.users.records.get("closed");
     },

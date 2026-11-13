@@ -1,0 +1,9 @@
+{
+  "name": "octogee-cloud-clawhub-cli",
+  "private": true,
+  "description": "Pins the ClawHub CLI the Publish plugin workflow uses.",
+  "license": "MIT",
+  "dependencies": {
+    "clawhub": "0.25.1"
+  }
+}

@@ -13,7 +13,7 @@ describe("users per shared gateway is the product's", () => {
 
     expect(placement.body.config).toEqual({ defaultGatewayId: "shared-a", sharedGatewayIds: ["shared-a"] });
     expect((await request(app).patch("/placement/capacity").send({ usersPerGateway: 6 })).status).toBe(404);
-    expect(state.config.sharedGatewayAutoscaling).toEqual({ enabled: true, buildersPerGateway: 4 });
+    expect(state.config).toHaveProperty("sharedGatewayAutoscaling", { enabled: true, buildersPerGateway: 4 });
     expect(Object.values(state.operations)).toEqual([]);
   });
 });

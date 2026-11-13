@@ -1,0 +1,28 @@
+{
+  "id": "octogee-web-tools",
+  "name": "Octogee Web Tools",
+  "version": "0.1.0",
+  "description": "Brokered Brave and Tavily research tools for shared gateways.",
+  "contracts": {
+    "tools": ["brave_search", "tavily_search", "tavily_extract"]
+  },
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "brokerUrl": {
+        "type": "string",
+        "description": "Base URL of the Octogee fleet broker."
+      },
+      "gatewayId": {
+        "type": "string",
+        "description": "Logical gateway identity claimed on each broker request."
+      },
+      "tokenPath": {
+        "type": "string",
+        "description": "Path to the projected gateway service-account token."
+      }
+    }
+  }
+}

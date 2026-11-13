@@ -21,7 +21,7 @@ import {
   readOpenclawConfig,
   writeMigratingInPin,
   writeMountedMarker,
-} from "./local-default-agent-wired";
+} from "./local-default-agent-wired.js";
 
 const tmp: string[] = [];
 function writeConfig(obj: unknown): string {

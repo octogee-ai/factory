@@ -5,6 +5,7 @@ import { admitAdminDryRunMarker, isAdminDryRun } from "@octogee/core/admin-dry-r
 import { noAdminUserDirectorySource } from "@octogee/core/admin-user-directory-router";
 import { userAccountFromData, type UserAccountReader } from "@octogee/core/user-account";
 import { createLogger } from "../lib/logger.js";
+import type { GatewayPodDiagnostics } from "../lib/kube-ops.js";
 import {
   MalformedRecordError,
   type PlatformStateError,
@@ -689,8 +690,8 @@ describe("createHttpServer — admin gateway routes", () => {
         lastHeartbeatAt: Date.now(),
       },
     });
-    const readGatewayPodDiagnostics = vi.fn(async (_gatewayId: string) => ({
-      status: "ready" as const,
+    const readGatewayPodDiagnostics = vi.fn(async (_gatewayId: string): Promise<GatewayPodDiagnostics> => ({
+      status: "ready",
       totalPods: 1,
       readyPods: 1,
       totalRestarts: 2,
@@ -700,13 +701,20 @@ describe("createHttpServer — admin gateway routes", () => {
       pods: [
         {
           name: "octogee-gateway-walter-abc",
+          gatewayId: "walter",
+          deleting: false,
+          gatewayContainerStartedAt: null,
+          uid: null,
+          replicaSetUid: null,
           phase: "Running",
           readyContainers: 2,
           totalContainers: 2,
           restarts: 2,
           reason: null,
           nodeName: "gke-node-1",
-          capacityType: "spot" as const,
+          instanceId: null,
+          nodePool: null,
+          capacityType: "spot",
           ageMs: 125_000,
         },
       ],
@@ -796,20 +804,31 @@ describe("createHttpServer — admin gateway routes", () => {
       ...servingRuntime("canary", { imageTag: "8507a63-oc2026.6.10" }),
       heartbeat: {},
     };
-    const readGatewayPodDiagnostics = vi.fn(async (_gatewayId: string) => ({
-      status: "not-ready" as const,
+    const readGatewayPodDiagnostics = vi.fn(async (_gatewayId: string): Promise<GatewayPodDiagnostics> => ({
+      status: "not-ready",
       totalPods: 1,
       readyPods: 0,
       totalRestarts: 1,
+      spotPods: 0,
+      onDemandPods: 0,
+      unknownCapacityPods: 1,
       pods: [
         {
           name: "octogee-gateway-canary-abc",
+          gatewayId: "canary",
+          deleting: false,
+          gatewayContainerStartedAt: null,
+          uid: null,
+          replicaSetUid: null,
           phase: "Pending",
           readyContainers: 0,
           totalContainers: 2,
           restarts: 1,
           reason: "ContainerCreating",
           nodeName: "gke-node-1",
+          instanceId: null,
+          nodePool: null,
+          capacityType: null,
           ageMs: 30_000,
         },
       ],

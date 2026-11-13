@@ -177,8 +177,8 @@ describe("fleet informer — store watch mirrors", () => {
     expect(read(informer)).toBeNull();
 
     watches.latest(aggregate).snapshot([
-      record({ gatewayId: "shared-b", uid: "uid-a" }),
-      record({ gatewayId: "shared-a", uid: "uid-a" }),
+      record<typeof aggregate>({ gatewayId: "shared-b", uid: "uid-a" }),
+      record<typeof aggregate>({ gatewayId: "shared-a", uid: "uid-a" }),
     ]);
 
     expect(read(informer)?.map((stored) => stored.gatewayId)).toEqual(["shared-a", "shared-b"]);
