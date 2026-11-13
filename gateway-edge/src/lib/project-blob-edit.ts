@@ -2,14 +2,14 @@ import { withMaterializedProjectAssets, readProjectRestoreReady } from "@octogee
 import { constants } from "node:fs";
 import { lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { manifestObjectPath, parseManifest, serializeManifest, type Manifest, type ManifestEntry } from "@octogee/core/workspace-manifest";
+import { isManifestPath, manifestObjectPath, parseManifest, serializeManifest, type Manifest, type ManifestEntry } from "@octogee/core/workspace-manifest";
 import type { FileTarget } from "./fileTarget.js";
 import { giteaApiAsUserAllowNotFound } from "./gitea.js";
 import { getMimeType, getExtension, targetGiteaApi } from "../routes/workspace/helpers.js";
 import { getManifestForQuota, manifestStoreForBlobs } from "./manifest.js";
 import { storeWorkspaceBlob, removeWorkspaceBlob, type WorkspaceBlobOptions, type StoredWorkspaceBlob } from "./workspace-blob.js";
 import { commitAndPushWorkspace, resolveProjectDir } from "./workspace-git.js";
-import { divertWorktreeBinaries, isDivertablePath } from "./binary-diversion.js";
+import { divertWorktreeBinaries } from "./binary-diversion.js";
 import { projectAssetEntry, withProjectAssetManifest } from "./project-asset-manifest.js";
 import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
@@ -41,7 +41,15 @@ function readLegacyManifest(target: FileTarget, deps: RemoteAssetDeps): Promise<
 }
 
 function assertProjectAssetEdit(target: FileTarget, name: string): void {
-  if (target.provider !== "gitea" || !target.projectSlug || !isDivertablePath(name)) throw new Error("invalid project asset edit");
+  if (target.provider !== "gitea" || !target.projectSlug || !isManifestPath(name)) throw new Error("invalid project asset edit");
+}
+
+function updateAssetEntry(manifest: Manifest, name: string, entry: ManifestEntry | null): void {
+  if (entry === null) {
+    if (!Reflect.deleteProperty(manifest, name)) throw new Error("project asset manifest entry could not be deleted");
+  } else {
+    Object.defineProperty(manifest, name, { value: entry, enumerable: true, writable: true, configurable: true });
+  }
 }
 
 export async function editRemoteProjectAsset(target: FileTarget, name: string, entry: ManifestEntry | null, deps: RemoteAssetDeps = remoteDefaults): Promise<void> {
@@ -50,7 +58,7 @@ export async function editRemoteProjectAsset(target: FileTarget, name: string, e
   for (let attempt = 0; attempt < 3; attempt++) {
     const { current, manifest } = await remoteManifest(target, deps);
     const before = serializeManifest(manifest);
-    if (entry) manifest[name] = entry; else delete manifest[name];
+    updateAssetEntry(manifest, name, entry);
     const contents = serializeManifest(manifest);
     parseManifest(objectPath, contents);
     if (current && before === contents) return;
@@ -65,7 +73,6 @@ export async function editRemoteProjectAsset(target: FileTarget, name: string, e
 }
 
 async function editLocalAsset(root: string, name: string, contents: Buffer | null): Promise<void> {
-  if (!isDivertablePath(name)) throw new Error("invalid project asset path");
   const handles = [await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)];
   const fdRoot = process.platform === "linux" ? "/proc/self/fd" : "/dev/fd";
   let temporary: string | undefined;
@@ -114,6 +121,7 @@ interface LocalProjectAssetInput {
 }
 export async function commitLocalProjectAsset(input: LocalProjectAssetInput): Promise<StoredWorkspaceBlob | undefined> {
   const { target, dir, name, contents, upload, mimeType, divert = divertWorktreeBinaries } = input;
+  assertProjectAssetEdit(target, name);
   let stored: StoredWorkspaceBlob | undefined;
   const result = await commitAndPushWorkspace(dir, {
     message: `assets: ${contents ? "save" : "delete"} ${name}`,
@@ -124,8 +132,9 @@ export async function commitLocalProjectAsset(input: LocalProjectAssetInput): Pr
       if (contents) stored = await upload();
       await editLocalAsset(dir, name, contents);
       const excludePaths = await withProjectAssetManifest(dir, target.gcsPrefix, async manifest => {
-        if (stored) manifest[name] = projectAssetEntry(stored, mimeType || getMimeType(getExtension(name))); else delete manifest[name];
-        await withMaterializedProjectAssets(dir, target.gcsPrefix, async files => { if (stored) files[name] = manifest[name]; else delete files[name]; });
+        const entry = stored ? projectAssetEntry(stored, mimeType || getMimeType(getExtension(name))) : null;
+        updateAssetEntry(manifest, name, entry);
+        await withMaterializedProjectAssets(dir, target.gcsPrefix, async files => { updateAssetEntry(files, name, entry); });
         return [...new Set([...Object.keys(manifest), name, ...other.diverted.map(blob => blob.path)])];
       });
       return { ok: true, excludePaths };
@@ -138,7 +147,7 @@ export async function commitLocalProjectAsset(input: LocalProjectAssetInput): Pr
 
 export async function storeUploadedWorkspaceBlob(target: FileTarget, name: string, contents: Buffer, mimeType?: string, options: WorkspaceBlobOptions = {}): Promise<StoredWorkspaceBlob> {
   if (!target.projectSlug) return storeWorkspaceBlob(target, name, contents, mimeType, options);
-  if (target.provider !== "gitea") throw new Error("project uploads require a writable Gitea target");
+  assertProjectAssetEdit(target, name);
   const upload = () => storeWorkspaceBlob(target, name, contents, mimeType, { ...options, immutable: true });
   const local = await localProject(target);
   if (local) return (await commitLocalProjectAsset({ target, dir: local, name, contents, upload, mimeType }))!;
@@ -149,6 +158,7 @@ export async function storeUploadedWorkspaceBlob(target: FileTarget, name: strin
 
 export async function removeUploadedWorkspaceBlob(target: FileTarget, name: string): Promise<void> {
   if (!target.projectSlug) return removeWorkspaceBlob(target, name);
+  assertProjectAssetEdit(target, name);
   const local = await localProject(target);
   if (local) await commitLocalProjectAsset({ target, dir: local, name, contents: null, upload: async () => { throw new Error("deletion cannot upload an asset"); } });
   else await editRemoteProjectAsset(target, name, null);

@@ -623,7 +623,7 @@ describe("connect — multi-field credential capture (azure)", () => {
     const res = await request(createApp())
       .post("/api/connect/azure/fields")
       .set("Authorization", auth.bearer())
-      .send({ fields: AZURE_FIELDS });
+      .send({ fields: { ...AZURE_FIELDS, unexpected: "ignored" } });
     expect(res.status, res.text).toBe(200);
     expect(res.body.accountLabel).toContain("abcd1234");
 
@@ -634,6 +634,7 @@ describe("connect — multi-field credential capture (azure)", () => {
     const fields = (secret as Record<string, Record<string, string>>).fields;
     expect(fields.clientSecret).toBe(encOf(AZURE_FIELDS.clientSecret));
     expect(fields.tenantId).toBe(encOf(AZURE_FIELDS.tenantId));
+    expect(Object.keys(fields).sort()).toEqual(Object.keys(AZURE_FIELDS).sort());
     expect((await readStatus(UID, "azure"))?.captureMethod).toBe("fields");
 
     const verified = await request(createApp())
