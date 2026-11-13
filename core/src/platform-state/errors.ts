@@ -38,7 +38,8 @@ export type PlatformAggregate =
   | "customer-deletion-job"
   | "anonymous-operational-archive"
   | "agent-import"
-  | "agent-import-pointer";
+  | "agent-import-pointer"
+  | "model-broker-usage";
 
 export type PlatformStateBackend = "firestore" | "postgresql";
 

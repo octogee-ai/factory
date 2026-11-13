@@ -313,6 +313,10 @@
       "types": "./dist/platform-embedding-refs.d.ts",
       "default": "./dist/platform-embedding-refs.js"
     },
+    "./model-broker-usage-ledger": {
+      "types": "./dist/model-broker-usage-ledger.d.ts",
+      "default": "./dist/model-broker-usage-ledger.js"
+    },
     "./secret-store": {
       "types": "./dist/secret-store.d.ts",
       "default": "./dist/secret-store.js"
@@ -697,6 +701,9 @@
       ],
       "platform-embedding-refs": [
         "dist/platform-embedding-refs.d.ts"
+      ],
+      "model-broker-usage-ledger": [
+        "dist/model-broker-usage-ledger.d.ts"
       ],
       "secret-store": [
         "dist/secret-store.d.ts"

@@ -14,6 +14,9 @@ interface ExpiringTable {
 
 const OPERATIONS: ExpiringTable = { table: "operations", aggregate: "operation", key: "id", expiry: "expire_at" };
 const OPERATION_AUDITS: ExpiringTable = { table: "operation_audits", aggregate: "operation-audit", key: "id", expiry: "expire_at" };
+const MODEL_BROKER_USAGE_EVENTS: ExpiringTable = {
+  table: "model_broker_usage_events", aggregate: "model-broker-usage", key: "event_id", expiry: "expires_at",
+};
 const ACCESS_GRANTS: readonly ExpiringTable[] = [
   { table: "gateway_tickets", aggregate: "gateway-ticket", key: "ticket_id", expiry: "expires_at" },
   { table: "gateway_ticket_mint_log", aggregate: "gateway-ticket", key: "id", expiry: "expires_at" },
@@ -63,6 +66,7 @@ export async function sweepExpiredPostgresState(context: PostgresContext, now: n
   const operationAudits = await deleteExpired(context, OPERATION_AUDITS, now, limit);
   let accessGrants = 0;
   for (const target of ACCESS_GRANTS) accessGrants += await deleteExpired(context, target, now, limit - accessGrants);
+  const modelBrokerUsageEvents = await deleteExpired(context, MODEL_BROKER_USAGE_EVENTS, now, limit);
   await purgeChangeLog(context, now);
-  return { operations, operationAudits, accessGrants };
+  return { operations, operationAudits, accessGrants, modelBrokerUsageEvents };
 }

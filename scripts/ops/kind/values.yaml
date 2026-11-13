@@ -166,7 +166,13 @@ gatewayFleet:
     enabled: false
 
 llmBroker:
-  enabled: false
+  replicas: 1
+  providerSecret:
+    optional: true
+  resources:
+    requests:
+      cpu: 25m
+      memory: 128Mi
 
 npmCacheProxy:
   enabled: false
