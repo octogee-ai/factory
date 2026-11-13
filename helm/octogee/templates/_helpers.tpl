@@ -37,6 +37,8 @@ gateway-router Service to the selected gateway's internal services.
   "/api/admin/fleet-settings"
   "/api/admin/placement/*"
   "/api/admin/placement"
+  "/api/admin/sizing-profiles/*"
+  "/api/admin/sizing-profiles"
   "/api/admin/platform-state-projection"
   "/api/admin/gateway-migrations/*"
   "/api/admin/user-archives"

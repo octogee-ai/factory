@@ -178,6 +178,20 @@ spec:
                 name: {{ $glm }}
                 port:
                   name: http
+          - path: {{ ternary "/api/admin/sizing-profiles/*" "/api/admin/sizing-profiles" $gke }}
+            pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
+          - path: /api/admin/sizing-profiles
+            pathType: {{ ternary "ImplementationSpecific" "Exact" $gke }}
+            backend:
+              service:
+                name: {{ $glm }}
+                port:
+                  name: http
           - path: {{ ternary "/api/admin/gateway-migrations/*" "/api/admin/gateway-migrations" $gke }}
             pathType: {{ ternary "ImplementationSpecific" "Prefix" $gke }}
             backend:

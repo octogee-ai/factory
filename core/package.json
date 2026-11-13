@@ -522,6 +522,10 @@
       "types": "./dist/admin-logs-router.d.ts",
       "default": "./dist/admin-logs-router.js"
     },
+    "./admin-sizing-profile-router": {
+      "types": "./dist/admin-sizing-profile-router.d.ts",
+      "default": "./dist/admin-sizing-profile-router.js"
+    },
     "./identity-provider": {
       "types": "./dist/identity-provider.d.ts",
       "default": "./dist/identity-provider.js"
@@ -851,6 +855,9 @@
       ],
       "admin-logs-router": [
         "dist/admin-logs-router.d.ts"
+      ],
+      "admin-sizing-profile-router": [
+        "dist/admin-sizing-profile-router.d.ts"
       ],
       "identity-provider": [
         "dist/identity-provider.d.ts"
