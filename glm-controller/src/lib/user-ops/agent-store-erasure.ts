@@ -38,7 +38,7 @@ export interface UserAgentStoreErasureDeps {
   eraseStores(cleanup: UserCleanupContext, custody: AgentStoreErasureCustody): Promise<void>;
   sharedGatewayRetired(gatewayId: string): Promise<boolean>;
   runtimeAbsent(gatewayId: string, runtime: "cluster" | "gce-vm"): Promise<boolean>;
-  ownerHomeAbsent(uid: string): Promise<boolean>;
+  ownerHomeAbsent?: (uid: string) => Promise<boolean>;
   eraseVm?: (uid: string) => Promise<unknown>;
   readSharedSource(gatewayId: string): Promise<SharedAgentErasureSource | null>;
   unmountSharedUser(gatewayId: string, cleanup: UserCleanupContext, coverage: AgentStoreUnmountCoverage, operation: Operation): Promise<void>;
@@ -302,12 +302,13 @@ export function createUserAgentStoreErasure(deps: UserAgentStoreErasureDeps) {
         if (sourceGatewayId.startsWith("shared-")) {
           await assertSharedUserStopped(deps, cleanup, { gatewayId: sourceGatewayId, deletionId, operation, targets, assertCurrent });
         }
-        if (!await deps.ownerHomeAbsent(cleanup.uid)) {
+        const ownerHomeAbsent = deps.ownerHomeAbsent;
+        if (ownerHomeAbsent && !await ownerHomeAbsent(cleanup.uid)) {
           await assertCurrent();
           if (!deps.eraseVm) throw new Error("User PostgreSQL erasure retained a gateway VM or home");
           await deps.eraseVm(cleanup.uid);
           await assertCurrent();
-          if (!await deps.ownerHomeAbsent(cleanup.uid)) throw new Error("User PostgreSQL erasure retained a gateway VM or home");
+          if (!await ownerHomeAbsent(cleanup.uid)) throw new Error("User PostgreSQL erasure retained a gateway VM or home");
         }
         await assertCurrent();
         return [sourceGatewayId, ...retirementProofs(job).map(proof => proof.gatewayId)];
