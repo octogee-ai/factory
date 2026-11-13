@@ -1,9 +1,8 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
-import { GATEWAY_VM_PROVISIONING_MODELS, isGatewayVmBootDiskType, isGatewayVmDesktop } from "@octogee/shared/types/glm";
 import { DEFAULT_HOUSE_MODEL_REF, DEFAULT_OPS_AGENT_MODEL_REF, DEFAULT_USER_AGENT_FALLBACK_MODEL_REF, DEFAULT_USER_AGENT_MODEL_REF, type PlatformModelConfig, parsePlatformConnectConfig, parsePlatformFreeConfig, parsePlatformModelConfig } from "@octogee/shared/types/platform-config";
 import { parseSharedGatewayAutoscalingConfig } from "@octogee/shared/types/shared-gateway-pool";
-import { type SizingTier, isSizingTier } from "@octogee/shared/types/sizing";
-import type { GatewaySizingProfile, GatewayVmProfile, OrchestratorConfig, PlatformConfigEntry, PlatformConfigKey, PlatformConfigValues } from "../config.js";
+import type { SizingTier } from "@octogee/shared/types/sizing";
+import { isGatewaySizingProfile, type GatewayComputerProfile, type GatewaySizingProfile, type OrchestratorConfig, type PlatformConfigEntry, type PlatformConfigKey, type PlatformConfigValues } from "../config.js";
 import { MalformedRecordError, type RecordKey } from "../errors.js";
 
 export function parseStoredPlatformModelConfig(value: unknown): PlatformModelConfig | null {
@@ -47,35 +46,10 @@ export function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-export function isVmProfile(value: unknown): value is GatewayVmProfile {
-  if (!isPlainMap(value)) return false;
-  const { runtime, desktop, machineType, provisioningModel, bootDisk, homeSizeGiB } = value;
-  return (
-    runtime === "gce-vm" &&
-    isGatewayVmDesktop(desktop) &&
-    (machineType === null || typeof machineType === "string") &&
-    (provisioningModel === null || (GATEWAY_VM_PROVISIONING_MODELS as readonly unknown[]).includes(provisioningModel)) &&
-    (bootDisk === null ||
-      (isPlainMap(bootDisk) && typeof bootDisk.sizeGb === "number" && isGatewayVmBootDiskType(bootDisk.type))) &&
-    typeof homeSizeGiB === "number"
-  );
-}
-
-export function isGatewaySizingProfile(value: unknown): value is GatewaySizingProfile {
-  if (!isPlainMap(value)) return false;
-  if (value.isolation === "shared") return true;
-  return (
-    value.isolation === "isolated" &&
-    isSizingTier(value.sizingTier) &&
-    isVmProfile(value.computer) &&
-    (value.fallbackStorageGb === null || typeof value.fallbackStorageGb === "number")
-  );
-}
-
 export interface SizingTierSource {
   readonly instance: SizingTier | null;
   readonly fallbackStorageGb: number | null;
-  readonly computer: GatewayVmProfile | null;
+  readonly computer: GatewayComputerProfile | null;
 }
 
 export function seedSizingProfiles(

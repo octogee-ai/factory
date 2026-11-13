@@ -25,7 +25,13 @@ const HOBBY: GatewaySizingProfile = {
     homeSizeGiB: 10,
   },
 };
-const SIZING_PROFILES: Record<string, GatewaySizingProfile> = { hobby: HOBBY, enterprise: { isolation: "shared" } };
+const POD: GatewaySizingProfile = {
+  isolation: "isolated",
+  sizingTier: "xs",
+  fallbackStorageGb: null,
+  computer: { runtime: "cluster", homeSizeGiB: 10 },
+};
+const SIZING_PROFILES: Record<string, GatewaySizingProfile> = { hobby: HOBBY, pod: POD, enterprise: { isolation: "shared" } };
 
 async function failure(promise: Promise<unknown>): Promise<unknown> {
   return promise.then(
@@ -155,6 +161,7 @@ describe.skipIf(!dsn)("PostgreSQL config", { timeout: 30_000 }, () => {
 
       await orchestrator().patch({ sizingProfiles: SIZING_PROFILES });
       expect(await orchestrator().getSizingProfile("hobby")).toEqual(HOBBY);
+      expect(await orchestrator().getSizingProfile("pod")).toEqual(POD);
       expect(await orchestrator().getSizingProfile("enterprise")).toEqual({ isolation: "shared" });
       expect(await failure(orchestrator().getSizingProfile("platinum"))).toMatchObject({
         constructor: MissingRecordError,

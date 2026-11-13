@@ -22,6 +22,13 @@ const STANDARD = {
   fallbackStorageGb: null,
 };
 
+const POD = {
+  isolation: "isolated",
+  sizingTier: "xs",
+  computer: { runtime: "cluster", homeSizeGiB: 10 },
+  fallbackStorageGb: null,
+};
+
 function harness(seed: Record<string, Row> = {}, beforeTransaction?: (records: Map<string, Row>, label: string) => void) {
   const records = new Map<string, Row>(Object.entries(structuredClone(seed)));
   const store = createDocumentFixtureStore(records, { beforeTransaction: (label) => beforeTransaction?.(records, label) });
@@ -123,6 +130,15 @@ describe("setting a sizing profile", () => {
     expect((await store.config.orchestrator.get())?.sizingProfiles).toEqual({ default: { isolation: "shared" } });
   });
 
+  it("stores a Kubernetes pod profile, which names only the size of the gateway's home", async () => {
+    const { app, store } = harness();
+
+    const res = await put(app, "pod", POD).expect(200);
+
+    expect(res.body).toMatchObject({ name: "pod", profile: POD });
+    expect((await store.config.orchestrator.get())?.sizingProfiles).toEqual({ pod: POD });
+  });
+
   it("allows a second profile at a tier when its VM settings are the same", async () => {
     const { app, store } = harness(withFixtureProfiles());
     const hobbyPlus = { ...FIXTURE_SIZING_PROFILES.hobby, fallbackStorageGb: 300 };
@@ -178,6 +194,10 @@ describe("refusing a sizing profile", () => {
     ["a negative fallback storage size", "standard", { ...STANDARD, fallbackStorageGb: -1 }, 400, "sizing-profile-invalid"],
     ["an isolated profile without a machine type", "standard", { ...STANDARD, computer: { ...STANDARD.computer, machineType: null } }, 400, "sizing-profile-no-vm"],
     ["an isolated profile without a boot disk", "standard", { ...STANDARD, computer: { ...STANDARD.computer, bootDisk: null } }, 400, "sizing-profile-no-vm"],
+    ["pod settings with a VM field", "pod", { ...POD, computer: { ...POD.computer, machineType: "e2-small" } }, 400, "sizing-profile-invalid"],
+    ["pod settings without a home size", "pod", { ...POD, computer: { runtime: "cluster" } }, 400, "sizing-profile-invalid"],
+    ["a pod home that is not a positive whole number of GiB", "pod", { ...POD, computer: { runtime: "cluster", homeSizeGiB: 0 } }, 400, "sizing-profile-invalid"],
+    ["a pod profile at a tier where another profile runs a VM", "pod", { ...POD, sizingTier: "m" }, 409, "sizing-tier-conflict"],
     ["VM settings that differ from another profile at the same tier", "studio", { ...FIXTURE_SIZING_PROFILES.pro, computer: { ...STANDARD.computer, desktop: "omarchy" }, sizingTier: "m" }, 409, "sizing-tier-conflict"],
   ];
 

@@ -3,7 +3,7 @@ import { Router } from "express";
 import { admitAdminDryRunMarker } from "./admin-dry-run.js";
 import { ADMIN_FLEET_REQUEST_REASON, createAdminFleetMutationRunner, respondToAdminFleetMutationError, } from "./admin-fleet-router.js";
 import { hasVmShape } from "./operator-isolated-gateway.js";
-import { isGatewaySizingProfile } from "./platform-state/documents/config.js";
+import { isGatewaySizingProfile } from "./platform-state/config.js";
 const SIZING_PROFILE_NAME = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const SET_SIZING_PROFILE_TRANSACTION = "admin.sizing-profiles.set";
 function refusal(status, code, error, extra = {}) {
@@ -18,25 +18,31 @@ async function storedProfiles(store) {
 function isPositiveWhole(value) {
     return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
+function computerReadFields(computer) {
+    if (computer.runtime === "cluster")
+        return { runtime: computer.runtime, homeSizeGiB: computer.homeSizeGiB };
+    const { runtime, desktop, machineType, provisioningModel, bootDisk, homeSizeGiB } = computer;
+    return {
+        runtime, desktop, machineType, provisioningModel, homeSizeGiB,
+        bootDisk: bootDisk === null ? null : { sizeGb: bootDisk.sizeGb, type: bootDisk.type },
+    };
+}
 function onlyReadFields(profile) {
     if (profile.isolation === "shared")
         return { isolation: "shared" };
-    const { runtime, desktop, machineType, provisioningModel, bootDisk, homeSizeGiB } = profile.computer;
     return {
         isolation: "isolated",
         sizingTier: profile.sizingTier,
-        computer: {
-            runtime, desktop, machineType, provisioningModel, homeSizeGiB,
-            bootDisk: bootDisk === null ? null : { sizeGb: bootDisk.sizeGb, type: bootDisk.type },
-        },
+        computer: computerReadFields(profile.computer),
         fallbackStorageGb: profile.fallbackStorageGb,
     };
 }
 function hasWholeSizes(profile) {
     if (profile.isolation === "shared")
         return true;
-    const { bootDisk, homeSizeGiB } = profile.computer;
-    return (bootDisk === null || isPositiveWhole(bootDisk.sizeGb)) && isPositiveWhole(homeSizeGiB) &&
+    const { computer } = profile;
+    const bootDiskWhole = computer.runtime === "cluster" || computer.bootDisk === null || isPositiveWhole(computer.bootDisk.sizeGb);
+    return bootDiskWhole && isPositiveWhole(computer.homeSizeGiB) &&
         (profile.fallbackStorageGb === null || isPositiveWhole(profile.fallbackStorageGb));
 }
 function parseProfile(body) {
@@ -44,7 +50,7 @@ function parseProfile(body) {
         return refusal(400, "sizing-profile-invalid", "the body must be {\"isolation\":\"shared\"} or an isolated profile with sizingTier, computer and fallbackStorageGb, " +
             "with sizes in positive whole numbers and no other fields");
     }
-    if (body.isolation === "isolated" && !hasVmShape(body)) {
+    if (body.isolation === "isolated" && body.computer.runtime === "gce-vm" && !hasVmShape(body)) {
         return refusal(400, "sizing-profile-no-vm", "an isolated sizing profile needs a VM machine type, provisioning model and boot disk");
     }
     return { profile: body };
@@ -60,7 +66,7 @@ function tierConflict(profiles, name, profile) {
         .sort();
     if (rivals.length === 0)
         return null;
-    return refusal(409, "sizing-tier-conflict", `isolated sizing profiles at tier ${sizingTier} must have the same VM settings, and ${rivals.join(", ")} has different ones`, { sizingTier, sizingProfiles: rivals });
+    return refusal(409, "sizing-tier-conflict", `isolated sizing profiles at tier ${sizingTier} must have the same computer settings, and ${rivals.join(", ")} has different ones`, { sizingTier, sizingProfiles: rivals });
 }
 function unknownProfile(name) {
     return refusal(404, "sizing-profile-unknown", `unknown sizing profile ${name}`);

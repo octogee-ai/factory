@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   type PlatformUserRecord,
   type FleetRegistryRecord,
+  type GatewayComputerProfile,
   type GatewayVmProfile,
   type PlatformStateStore,
 } from "@octogee/core/platform-state";
@@ -67,7 +68,7 @@ export interface VmGatewayRuntimeDeps {
 async function findGatewayVmPolicy(
   store: Pick<PlatformStateStore, "config">,
   tier: SizingTier,
-): Promise<GatewayVmProfile | null> {
+): Promise<GatewayComputerProfile | null> {
   const config = await store.config.orchestrator.get();
   const matches = Object.entries(config?.sizingProfiles ?? {}).flatMap(([key, entry]) =>
     entry.isolation === "isolated" && entry.sizingTier === tier ? [{ key, policy: entry.computer }] : []);
@@ -82,7 +83,7 @@ async function findGatewayVmPolicy(
 export async function resolveGatewayVmPolicy(
   store: Pick<PlatformStateStore, "config">,
   sizingTier: SizingTier | null | undefined,
-): Promise<GatewayVmProfile> {
+): Promise<GatewayComputerProfile> {
   const tier = sizingTier ?? "s";
   const policy = await findGatewayVmPolicy(store, tier);
   if (!policy) throw new Error(`No gateway VM policy for sizing tier ${tier}`);
@@ -214,7 +215,7 @@ export async function stampGatewayRuntime(input: GatewayRuntimeStampInput): Prom
   if (runtime === "gce-vm" && !input.vmSpec) throw new Error(`gateway ${input.gatewayId}: gce-vm runtime needs a vmSpec`);
   await input.assertStorage?.(runtime);
   await input.store.fleetRegistry.upsert(input.gatewayId, input.initial, {
-    runtime, ...(runtime === "gce-vm" ? { vmSpec: { ...input.vmSpec!, ...tierVmShape(policy!) } } : {}),
+    runtime, ...(policy?.runtime === "gce-vm" ? { vmSpec: { ...input.vmSpec!, ...tierVmShape(policy) } } : {}),
   });
   input.log(`[vm-gateway-runtime] ${input.gatewayId}: runtime stamped ${runtime}`);
   return runtime;
