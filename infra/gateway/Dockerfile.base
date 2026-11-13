@@ -1,12 +1,21 @@
-FROM node:26.13.0-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS gateway-core-system
+FROM node:26.13.0-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS gateway-debian
+
+FROM gateway-debian AS gateway-debian-backports
+
+COPY infra/gateway/debian-backports/CVE-2026-6653.patch infra/gateway/debian-backports/CVE-2026-60002.patch /patches/
+COPY infra/gateway/debian-backports/build.sh /tmp/build-debian-backports.sh
+RUN bash /tmp/build-debian-backports.sh
+
+FROM gateway-debian AS gateway-core-system
 
 ARG NPM_VERSION=12.2.1
 ARG OS_PACKAGE_REFRESH=2026-11-11
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-RUN test -n "$OS_PACKAGE_REFRESH" && apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
-    ca-certificates curl git jq openssh-client rsync tar \
+RUN --mount=type=bind,from=gateway-debian-backports,source=/out,target=/backports,readonly \
+    test -n "$OS_PACKAGE_REFRESH" && apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+    ca-certificates curl git jq rsync tar /backports/libxml2.deb /backports/openssh-client.deb \
     && rm -rf /var/lib/apt/lists/*
 
 COPY infra/gateway/openclaw-tarball/npm-distribution.test.mjs /tmp/npm-distribution.test.mjs
