@@ -46,13 +46,19 @@ by use.
 
 ### To run the full platform on kind
 
-| Sign up for | Tier to choose | What it costs |
-| --- | --- | --- |
-| [OpenRouter](https://openrouter.ai/keys), for an API key | Pay as you go | What the agents' model calls cost |
+The kind install script needs one model provider key and stops without one.
+OpenRouter is the suggestion: one key reaches Muse Ember, the default agent
+model, and other providers' models such as Grok. An OpenAI or Anthropic key
+works too.
 
-The kind install script points agents at models of a provider whose key it
-stores. An Anthropic or OpenAI key works too; [Agent models](kind.md#agent-models)
-lists the models it picks for each.
+| Sign up for | Tier to choose | What it costs | Export it as |
+| --- | --- | --- | --- |
+| [OpenRouter](https://openrouter.ai/keys), for an API key (suggested) | Pay as you go | What the agents' model calls cost | `OPENROUTER_API_KEY` |
+| [OpenAI](https://platform.openai.com/api-keys), for an API key | Pay as you go | What the agents' model calls cost | `OPENAI_API_KEY` |
+| [Anthropic](https://platform.claude.com/settings/keys), for an API key | Pay as you go | What the agents' model calls cost | `ANTHROPIC_API_KEY` |
+
+[Model provider keys](kind.md#model-provider-keys) lists the models the script
+sets for each key, and how to run Muse or Grok.
 
 ### To run it on Google Cloud
 

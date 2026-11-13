@@ -275,12 +275,34 @@ write_secrets() {
   apply_provider_keys
 }
 
+PROVIDER_KEYS=(openrouter:OPENROUTER_API_KEY openai:OPENAI_API_KEY anthropic:ANTHROPIC_API_KEY)
 STORED_PROVIDERS=()
+
+require_provider_key() {
+  local pair variable
+  for pair in "${PROVIDER_KEYS[@]}"; do
+    variable="${pair#*:}"
+    [[ -z "${!variable:-}" ]] || return 0
+  done
+  if kind get clusters 2>/dev/null | grep -qx "$NAME"; then
+    for pair in "${PROVIDER_KEYS[@]}"; do
+      k get secret "octogee-${pair%%:*}" >/dev/null 2>&1 && return 0
+    done
+  fi
+  printf '%s\n' \
+    "kind-install: agents need a model provider key, and none is exported or stored in cluster $NAME." \
+    "Export one of these and run up again. OpenRouter is recommended:" \
+    "  OPENROUTER_API_KEY  https://openrouter.ai/keys" \
+    "  OPENAI_API_KEY      https://platform.openai.com/api-keys" \
+    "  ANTHROPIC_API_KEY   https://platform.claude.com/settings/keys" \
+    "docs/kind.md lists the models each key gives agents." >&2
+  exit 1
+}
 
 apply_provider_keys() {
   local pair provider variable
   STORED_PROVIDERS=()
-  for pair in anthropic:ANTHROPIC_API_KEY openrouter:OPENROUTER_API_KEY openai:OPENAI_API_KEY; do
+  for pair in "${PROVIDER_KEYS[@]}"; do
     provider="${pair%%:*}"
     variable="${pair#*:}"
     if [[ -n "${!variable:-}" ]]; then
@@ -291,8 +313,6 @@ apply_provider_keys() {
       STORED_PROVIDERS+=("$provider")
     fi
   done
-  [[ -n "${STORED_PROVIDERS[*]-}" ]] || printf '%s\n' "kind-install: no model provider key, so agents cannot reply." \
-    "Set OPENROUTER_API_KEY, ANTHROPIC_API_KEY or OPENAI_API_KEY and run up again." >&2
 }
 
 platform_sql() {
@@ -307,7 +327,7 @@ apply_agent_models() {
       break
     fi
   done
-  [[ -n "$provider" ]] || return 0
+  [[ -n "$provider" ]] || die "No model provider key is stored"
   case "$provider" in
     openrouter) primary=platform-openrouter/meta/muse-ember fallback=platform-openrouter/openai/gpt-6-luna house=platform-openrouter/openai/gpt-6-luna ;;
     anthropic) primary=anthropic/claude-sonnet-5 fallback=anthropic/claude-haiku-4-5 house=anthropic/claude-haiku-4-5 ;;
@@ -417,6 +437,7 @@ restart_platform() {
 
 up() {
   require_tools
+  require_provider_key
   log "Cluster $KUBE_CONTEXT (kubeconfig $KUBECONFIG_FILE)"
   ensure_registry
   ensure_cluster
