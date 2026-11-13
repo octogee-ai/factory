@@ -106,6 +106,14 @@ describe("portable Linux PR checks", () => {
     expect(plan[2].commands).toEqual(["bash platform/scripts/ci/quality.sh osv-scanner -- 'app/package-lock.json'"]);
   });
 
+  it("installs the platform's lint package wherever ESLint runs", () => {
+    const repoWide = checkPlan(["docs/INDEX.md"], "quality", false, true);
+    const scoped = checkPlan(["app/src/App.tsx"], "quality");
+    expect(repoWide.find(job => job.name === "eslint")?.installs).toEqual([".", "platform"]);
+    expect(scoped.find(job => job.name === "eslint")?.installs).toEqual([".", "platform"]);
+    expect(repoWide.find(job => job.name === "knip")?.installs).toEqual(["."]);
+  });
+
   it("runs the design-token scan for style-only changes without passing them to ESLint", () => {
     expect(checkPlan(["site/src/styles/global.css"], "quality")[0].commands).toEqual(["bash platform/scripts/ci/quality.sh eslint --"]);
   });
