@@ -2,6 +2,7 @@ import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../middleware/auth.js", () => ({ requireAuthenticatedUid: (req: { uid?: string }, _res: unknown, next: () => void) => { req.uid = "caller"; next(); } }));
+import { WorkspaceNativeAccessError } from "../lib/workspace-native-access.js";
 import { createWorkspaceRolesRouter } from "../routes/workspace-roles.js";
 
 interface StoredProfile { id: string; aliases: string[]; role: string | null }
@@ -44,6 +45,44 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 describe('native workspace role settings', () => {
+  it('lists the role choices without reading every profile', async () => {
+    const res = await request(app()).get('/api/g/walter/workspace-roles');
+    expect(res.body).toEqual({ canManageRoles: true, roles: ['member', 'admin', 'custom'], defaultRole: 'member' });
+    expect(call.mock.calls.map(([method]) => method)).toEqual(['config.get']);
+  });
+  it("reads a member's assigned role from the profile the member signs in to", async () => {
+    profiles.push({ id: 'native-member', aliases: ['member'], role: 'admin' });
+    const res = await request(app()).get('/api/g/walter/workspace-roles/member');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ role: 'admin' });
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(resolveIdentity).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: 'walter', targetUid: 'member' }));
+    expect(call).toHaveBeenCalledWith('users.self', {}, 'member');
+    expect(call.mock.calls.some(([method]) => method === 'users.list')).toBe(false);
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+  it('reads no role for a member without an assigned role', async () => {
+    expect((await request(app()).get('/api/g/walter/workspace-roles/Newcomer')).body).toEqual({ role: null });
+  });
+  it('fails when OpenClaw returns no signed-in profile for the member', async () => {
+    call.mockImplementation(async (method: string, params: Record<string, unknown>, uid: string) =>
+      method === 'users.self' ? { ok: false, reason: 'profile unavailable' } : nativeGateway(uid, method, params));
+    const res = await request(app()).get('/api/g/walter/workspace-roles/member');
+    expect(res.status).toBe(500);
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+  it("rejects member role reads without native admin scope before signing in as the member", async () => {
+    openClient.mockResolvedValueOnce({ scopes: new Set(['operator.read']), call, close });
+    await request(app()).get('/api/g/walter/workspace-roles/member').expect(403);
+    expect(openClient).toHaveBeenCalledOnce();
+    expect(call).not.toHaveBeenCalled();
+  });
+  it('passes on the broker refusal of a member outside the workspace without opening a native connection', async () => {
+    resolveIdentity.mockRejectedValueOnce(new WorkspaceNativeAccessError(404, 'Workspace access unavailable'));
+    const res = await request(app()).get('/api/g/walter/workspace-roles/stranger');
+    expect(res.status).toBe(404);
+    expect(openClient).not.toHaveBeenCalled();
+  });
   it('assigns a member role by the profile the member signs in to, from the caller connection', async () => {
     profiles.push({ id: 'native-member', aliases: ['member'], role: 'member' });
     expect((await request(app()).get('/api/g/walter/workspace-roles')).body).toMatchObject({ roles: ['member','admin','custom'] });
