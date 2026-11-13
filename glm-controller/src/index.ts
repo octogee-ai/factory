@@ -219,10 +219,7 @@ import {
   verifiedDeletionJobPatch,
 } from "./lib/user-ops/deletion-job.js";
 import { buildAnonymousOperationalArchive } from "./lib/user-ops/deletion-archive.js";
-import {
-  erasePlatformUserState,
-  remainingPlatformUserState,
-} from "./lib/user-ops/user-platform-state-erasure.js";
+import { eraseUserRecords, remainingUserRecords } from "./lib/user-ops/user-platform-state-erasure.js";
 import type {
   ProductContext,
   ProductUserLifecycle,
@@ -3823,7 +3820,7 @@ function buildEraseUserHandler({ documents, store, logFn, kubeOps, privateKey, d
       return nukeUserCloudSide({ ...cleanup, currentOperationId }, cloudCleanup);
     },
     verifyErasure: async (cleanup, currentOperationId) => {
-      const remaining = await remainingPlatformUserState(store, cleanup.uid, cleanup.slug, currentOperationId);
+      const remaining = await remainingUserRecords(store, userLifecycle?.erasure.data, userDataScope(cleanup, currentOperationId));
       remaining.push(...await cloudCleanup.remainingUserStorage(cleanup.uid, cleanup.slug));
       for (const userId of [
         cleanup.mmUserId,
@@ -3833,9 +3830,6 @@ function buildEraseUserHandler({ documents, store, logFn, kubeOps, privateKey, d
         if (userId && await cloudCleanup.channels.userExists(userId)) {
           remaining.push(`mattermost/users/${userId}`);
         }
-      }
-      if (userLifecycle !== null) {
-        remaining.push(...await userLifecycle.erasure.data.remaining(userDataScope(cleanup, currentOperationId)));
       }
       return remaining;
     },
@@ -4033,10 +4027,7 @@ export function buildUserCloudCleanupDeps(
       await productData?.eraseStorage(scope);
     },
     remainingUserStorage: async (uid, slug) => s3 === undefined ? [] : s3.remaining(uid, slug),
-    eraseUserRecords: async (scope) => {
-      await productData?.eraseRecords(scope);
-      await erasePlatformUserState(store, scope.uid, scope.slug, scope.currentOperationId);
-    },
+    eraseUserRecords: (scope) => eraseUserRecords(store, productData, scope),
     deleteCredentialSecrets: async (secretNames: string[]) => {
       for (const secretName of secretNames) await deleteSecret(secretName);
     },

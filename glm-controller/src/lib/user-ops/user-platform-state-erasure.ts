@@ -1,4 +1,5 @@
 import type { PlatformStateStore, PlatformStateTransaction } from "@octogee/core/platform-state";
+import type { ProductUserData, UserDataScope } from "./user-lifecycle-product.js";
 
 const PLATFORM_WRITE_BATCH_SIZE = 400;
 
@@ -61,13 +62,14 @@ function platformStateReferenceDeletes(references: PlatformStateReferences): Pla
   ];
 }
 
-export async function erasePlatformUserState(
+export async function eraseUserRecords(
   store: PlatformStateStore,
-  uid: string,
-  slug: string,
-  currentOperationId: string,
+  product: Pick<ProductUserData, "eraseRecords"> | undefined,
+  scope: UserDataScope,
 ): Promise<void> {
+  const { uid, slug, currentOperationId } = scope;
   const writes = platformStateReferenceDeletes(await platformStateReferences(store, uid, currentOperationId));
+  await product?.eraseRecords(scope);
   for (let offset = 0; offset < writes.length; offset += PLATFORM_WRITE_BATCH_SIZE) {
     const chunk = writes.slice(offset, offset + PLATFORM_WRITE_BATCH_SIZE);
     await store.transaction({ label: "customer-erasure.platform-references" }, async (transaction) => {
@@ -78,6 +80,18 @@ export async function erasePlatformUserState(
   await store.workspaces.agentIdentities.delete(uid);
   if (slug) await store.workspaces.records.delete(slug);
   await store.users.records.delete(uid);
+}
+
+export async function remainingUserRecords(
+  store: PlatformStateStore,
+  product: Pick<ProductUserData, "remaining"> | undefined,
+  scope: UserDataScope,
+): Promise<string[]> {
+  const [platform, productRecords] = await Promise.all([
+    remainingPlatformUserState(store, scope.uid, scope.slug, scope.currentOperationId),
+    product?.remaining(scope) ?? [],
+  ]);
+  return Array.from(new Set([...platform, ...productRecords])).sort();
 }
 
 export async function remainingPlatformUserState(

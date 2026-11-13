@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MalformedRecordError } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { buildUserCloudCleanupDeps } from "../index.js";
 import type { ProductUserLifecycle, UserDataScope } from "../lib/user-ops/user-lifecycle-product.js";
@@ -87,6 +88,22 @@ describe("user erasure cleanup with a product", () => {
 
     expect(data.eraseRecords).toHaveBeenCalledWith(SCOPE);
     await expect(remainingPlatformUserState(store, "uid-ada", "ada", "erase-1")).resolves.toEqual([]);
+  });
+
+  it("erases no product records while a platform reference record is malformed", async () => {
+    stubCleanupEnvironment("gcs");
+    const records = adaRecords();
+    records.set("modelBrokerTokens/legacy", {
+      capped: false, gatewayId: "shared-a", ownerUid: "uid-ada", provider: "anthropic", secretName: "broker-secret",
+      createdAt: 1, expiresAt: null, limits: { spendWindowUsd: null, spendWeekUsd: null, requestsPerMinute: null },
+    });
+    const data = productData();
+
+    await expect(buildUserCloudCleanupDeps(createDocumentFixtureStore(records), vi.fn(), undefined, withProductData(data)).eraseUserRecords(SCOPE))
+      .rejects.toBeInstanceOf(MalformedRecordError);
+
+    expect(data.eraseRecords).not.toHaveBeenCalled();
+    expect(records.has("users/uid-ada")).toBe(true);
   });
 
   it("hands storage, computer home and sign-in erasure to the product", async () => {
