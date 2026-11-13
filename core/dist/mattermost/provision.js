@@ -3,6 +3,7 @@ import { log } from "../config.js";
 import { platformStateStore } from "../firebase.js";
 import { workspaceGeneralChannelName, workspaceDefaultAgentChannelName, } from "@octogee/shared/types/identity";
 import { computeWorkspaceDisplayName, WORKSPACE_CHANNEL_DISPLAY_NAMES, } from "@octogee/shared/types/display-names";
+import { agentChannelPurpose } from "./agent-channel-purpose.js";
 import { userChannelMembers } from "./channel-members.js";
 import { mintAndPersistDefaultAgentToken } from "./default-agent-pat.js";
 import { USER_PAT_DESCRIPTION } from "./user-pat.js";
@@ -234,7 +235,7 @@ async function createWorkspaceChannels(host, input) {
         teamId,
         name: defaultAgentChannelName,
         displayName: WORKSPACE_CHANNEL_DISPLAY_NAMES.coach,
-        purpose: `${ownerLabel}'s private channel with their agent`,
+        purpose: agentChannelPurpose(ownerLabel),
     }, userChannelMembers("coach", { customerMmUserId: userMmUserId, defaultAgentMmUserId: null, adminMmUserId }));
     if (!coachChannelId) {
         log(`[mattermost] ⚠ failed to create channel for ${slug}`);

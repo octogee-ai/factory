@@ -385,6 +385,10 @@
       "types": "./dist/mattermost.d.ts",
       "default": "./dist/mattermost.js"
     },
+    "./mattermost/agent-channel-purpose": {
+      "types": "./dist/mattermost/agent-channel-purpose.d.ts",
+      "default": "./dist/mattermost/agent-channel-purpose.js"
+    },
     "./mattermost/admin-creds": {
       "types": "./dist/mattermost/admin-creds.d.ts",
       "default": "./dist/mattermost/admin-creds.js"
