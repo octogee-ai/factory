@@ -283,3 +283,23 @@ Run the same check against the images on your machine:
 node scripts/ci/cloud-build.mjs tripwire --registry=localhost:5001/octogee \
   --digests="$STATE/digests.json" --root=.
 ```
+
+### Verify published images
+
+The Build main workflow records provenance for each multi-platform image and
+each platform digest. To verify an image, use its `image` reference from the
+workflow's `image-manifest-<sha>` artifact:
+
+```bash
+image=$(jq -er '.images["octogee-gateway"].image' image-manifest.json)
+gh attestation verify "oci://$image" --repo octogee-ai/octogee-cloud \
+  --signer-workflow octogee-ai/octogee-cloud/.github/workflows/build-main.yml \
+  --source-ref refs/heads/main
+```
+
+The `image-security-*` artifacts include the source manifest, one Trivy JSON
+report, and one CycloneDX SBOM per image for the named architecture. Findings
+are reported in the run summary and do not fail publication. Scanner errors,
+missing digests, or missing reports fail the scan job. The weekly scan reuses
+the latest successful Build main manifest from a push to `main` and uses current
+vulnerability data.
