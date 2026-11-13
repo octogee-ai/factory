@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import rateLimit from "express-rate-limit";
 import { requireAuth } from "../../middleware/auth.js";
+import { authenticationFailureLimit, authenticatedRequestLimit } from "../../middleware/authenticated-request-limit.js";
 import { platformStateStore, readSizingKey } from "../../lib/platform-state.js";
 import {
   withCurrentSizingKey,
@@ -631,7 +632,8 @@ function registerOpenClawTicketRoute(router: Router, featurePolicy: FeaturePolic
 
 export function createIsolatedGatewayRoutes({ featurePolicy }: { featurePolicy?: FeaturePolicy } = {}): Router {
   const router = Router();
-  router.use(requireAuth);
+  router.use(authenticationFailureLimit, requireAuth);
+  router.use(["/gateways/me", "/workspaces/gateway-status"], authenticatedRequestLimit(120));
   registerGatewayListRoute(router);
   registerWorkspaceGatewayStatusRoute(router);
   registerOpenClawTicketRoute(router, featurePolicy);
