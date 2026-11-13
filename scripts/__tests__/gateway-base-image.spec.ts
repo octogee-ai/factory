@@ -266,7 +266,7 @@ describe("gateway base image", () => {
     const npmUpgrade = dockerfile.indexOf(install);
 
     expect(npmUpgrade).toBeGreaterThan(dockerfile.indexOf("AS gateway-core-system"));
-    expect(npmUpgrade).toBeLessThan(dockerfile.indexOf("AS gateway-system"));
+    expect(npmUpgrade).toBeLessThan(dockerfile.indexOf("AS gateway-runtime-system"));
     expect(install).toContain("source=infra/gateway/openclaw-tarball/npm-fork.tgz,target=/tmp/npm.tgz,readonly");
     expect(install).toContain('test "$(npm --version)" = "$NPM_VERSION"');
     expect(install).toContain('test "$(npx --version)" = "$NPM_VERSION"');
@@ -275,7 +275,7 @@ describe("gateway base image", () => {
 
   it("copies only staged OpenClaw runtime outputs into the shipped stage and verifies them at build time", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
-    const runtimeStage = dockerfile.slice(dockerfile.indexOf("FROM gateway-system AS gateway-runtime"));
+    const runtimeStage = dockerfile.slice(dockerfile.indexOf("FROM gateway-runtime-system AS gateway-runtime"));
 
     expect(dockerfile).toContain("FROM gateway-core-system AS openclaw-installer");
     expect(runtimeStage).toContain(
