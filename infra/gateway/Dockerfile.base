@@ -1,4 +1,4 @@
-FROM node:26.13.0-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68 AS gateway-core-system
+FROM node:26.13.0-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS gateway-core-system
 
 ARG NPM_VERSION=12.2.1
 ARG OS_PACKAGE_REFRESH=2026-11-11
