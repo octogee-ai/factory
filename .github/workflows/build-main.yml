@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-main-${{ github.ref }}
+  group: build-main-${{ github.ref }}-${{ inputs.rescan-latest && 'rescan' || 'build' }}
   cancel-in-progress: true
 
 env:
