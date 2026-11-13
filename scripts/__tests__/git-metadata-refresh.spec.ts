@@ -413,10 +413,12 @@ describe("user Git metadata refresh", () => {
     })).toBe(metadataDir);
     expect(treeSnapshot(metadataDir)).toEqual(metadataBefore);
 
-    fs.chmodSync(receipt, 0o600);
-    fs.writeFileSync(receipt, "attacker receipt\n");
+    const corrupt = path.join(repoDir, "corrupt-receipt");
+    fs.writeFileSync(corrupt, "attacker receipt\n", { flag: "wx" });
+    fs.renameSync(corrupt, receipt);
     expect(userRepositoryHasCanonicalRemote(repoDir)).toBe(false);
-    fs.writeFileSync(receipt, Buffer.alloc(1025));
+    fs.writeFileSync(corrupt, Buffer.alloc(1025), { flag: "wx" });
+    fs.renameSync(corrupt, receipt);
     expect(userRepositoryHasCanonicalRemote(repoDir)).toBe(false);
     expect(externalizeUserGitDir(repoDir, {
       fetchCanonical: fetchCanonicalFrom(canonical.bare, () => fetches++),
