@@ -72,7 +72,9 @@ import {
 } from "../../gateway-edge/src/lib/connector-tokens.js";
 import { getConnector } from "../../gateway-edge/src/lib/connectors/index.js";
 import { githubListRepos, githubRepoApi } from "../../gateway-edge/src/lib/github.js";
-import { requireAuth, requireAuthenticatedUid } from "../../gateway-edge/src/middleware/auth.js";
+import { authenticationFailureLimit } from "./middleware/authenticated-request-limit.js";
+import { brokerRequestLimit } from "./middleware/broker-request-limit.js";
+import { requireActiveAccount, requireAuth, requireAuthenticatedUid } from "../../gateway-edge/src/middleware/auth.js";
 import {
   IN_CLUSTER_IDENTITY_CA_PATH,
   IN_CLUSTER_IDENTITY_TOKEN_PATH,
@@ -599,17 +601,18 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   }));
   app.use(
     "/internal/automations",
-    requireAuthenticatedUid,
+    authenticationFailureLimit, requireAuthenticatedUid, brokerRequestLimit(240, "user"),
     createAutomationAuthorizationBrokerRoutes({ store: platformStateStore }),
   );
   app.use("/internal/voice", createVoiceConversationRoutes({ store: platformStateStore, readSizingKey }));
   app.use("/internal/openclaw-control", createToolConversationRoutes({ store: platformStateStore, readSizingKey }));
-  app.use("/internal/openclaw-control", requireAuthenticatedUid, createWorkspaceNativeAccessRoutes({ store: platformStateStore, readSizingKey }));
-  app.use("/internal/workspace-git", requireAuth, createWorkspaceGitAuthorizationBrokerRoutes({ store: platformStateStore }));
-  app.use("/internal/channel-agent-readiness", requireAuth, createChannelReadinessAuthorizationBrokerRoutes({ store: platformStateStore }));
+  app.use("/internal/openclaw-control/workspace-access", authenticationFailureLimit, requireAuthenticatedUid, brokerRequestLimit(360, "user"));
+  app.use("/internal/openclaw-control", createWorkspaceNativeAccessRoutes({ store: platformStateStore, readSizingKey }));
+  app.use("/internal/workspace-git", authenticationFailureLimit, requireAuthenticatedUid, brokerRequestLimit(360, "user"), requireActiveAccount, createWorkspaceGitAuthorizationBrokerRoutes({ store: platformStateStore }));
+  app.use("/internal/channel-agent-readiness", authenticationFailureLimit, requireAuthenticatedUid, brokerRequestLimit(360, "user"), requireActiveAccount, createChannelReadinessAuthorizationBrokerRoutes({ store: platformStateStore }));
   app.use(
     "/internal/agent-imports",
-    requireAuthenticatedUid,
+    authenticationFailureLimit, requireAuthenticatedUid, brokerRequestLimit(360, "user"),
     createAgentImportBrokerRoutes({
       store: platformStateStore,
       accounts: brokerRecords.accounts,
