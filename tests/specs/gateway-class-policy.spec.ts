@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -208,6 +208,21 @@ it("rejects a linked session store and leaves its target untouched during shared
     symlinkSync(target, path.join(sessionDir, "sessions.json"));
   })).toThrow(/ELOOP/u);
   expect(readFileSync(target, "utf8")).toBe(sessions);
+});
+
+it("rejects linked model metadata and leaves its target untouched during shared startup", () => {
+  const agentId = "octogee-acme-coach";
+  const contents = JSON.stringify({ providers: { unrelated: {} } });
+  let target = "";
+  expect(() => runPolicyWithDir("shared", { agents: { entries: { [agentId]: {} } } }, dir => {
+    seedCanonicalAgentRuntimeDisk(dir, agentId);
+    target = path.join(dir, "other-models.json");
+    writeFileSync(target, contents);
+    const modelsFile = path.join(dir, "agents", agentId, "agent", "models.json");
+    unlinkSync(modelsFile);
+    symlinkSync(target, modelsFile);
+  })).toThrow(/ELOOP/u);
+  expect(readFileSync(target, "utf8")).toBe(contents);
 });
 
 it("keeps the scoped Meta Responses route through shared gateway startup", () => {
