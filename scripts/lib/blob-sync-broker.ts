@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { mkdtemp, open, rename, rm } from "node:fs/promises";
+import { mkdtemp, open, rename, rm, type FileHandle } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   ManifestGenerationConflict,
@@ -48,22 +48,25 @@ function brokeredManifestStore(client: FleetBrokerClient, slug: string): Manifes
   };
 }
 
+async function writeDownloadedBlob(body: Response["body"], output: FileHandle, size: number): Promise<void> {
+  let received = 0;
+  if (body) {
+    for await (const chunk of body) {
+      received += chunk.byteLength;
+      if (received > size) throw new Error("blob download exceeds manifest size");
+      await output.writeFile(chunk);
+    }
+  }
+  if (received !== size) throw new Error("blob download does not match manifest size");
+}
+
 async function publishDownloadedBlob(response: Response, destination: string, size: number): Promise<void> {
   const staging = await mkdtemp(join(dirname(destination), ".blob-sync-"));
   const file = join(staging, "contents");
   try {
     const output = await open(file, "wx", 0o600);
-    let received = 0;
-    try {
-      if (response.body) {
-        for await (const chunk of response.body) {
-          received += chunk.byteLength;
-          if (received > size) throw new Error("blob download exceeds manifest size");
-          await output.writeFile(chunk);
-        }
-      }
-      if (received !== size) throw new Error("blob download does not match manifest size");
-    } finally { await output.close(); }
+    try { await writeDownloadedBlob(response.body, output, size); }
+    finally { await output.close(); }
     await rename(file, destination);
   } finally { await rm(staging, { recursive: true, force: true }); }
 }
