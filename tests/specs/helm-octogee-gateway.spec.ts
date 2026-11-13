@@ -1468,8 +1468,9 @@ describe("helm/octogee-gateway/ — per-instance Service annotations", () => {
     const gatewaySvc = findDoc(out, "Service", "octogee-gateway-default") ?? "";
     const edgeSvc = findDoc(out, "Service", "gateway-edge-default") ?? "";
     for (const svc of [gatewaySvc, edgeSvc]) {
-      expect(svc).not.toMatch(/cloud\.google\.com\/neg/);
-      expect(svc).not.toMatch(/cloud\.google\.com\/backend-config/);
+      const annotations = parseDocument(svc).toJSON().metadata.annotations ?? {};
+      expect(annotations).not.toHaveProperty(["cloud.google.com/neg"]);
+      expect(annotations).not.toHaveProperty(["cloud.google.com/backend-config"]);
       expect(svc).not.toMatch(/octogee-gateway-fleet-control/);
       expect(svc).not.toMatch(/"3003":/);
     }
@@ -1516,7 +1517,7 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(/emptyDir:\s*\{\}/);
-    expect(dep).not.toMatch(/cluster-autoscaler\.kubernetes\.io\/safe-to-evict/);
+    expect(parseDocument(dep).toJSON().spec.template.metadata.annotations ?? {}).not.toHaveProperty(["cluster-autoscaler.kubernetes.io/safe-to-evict"]);
     expect(dep).toMatch(/allowPrivilegeEscalation:\s*false/);
     expect(dep).toMatch(/drop:\s*\n\s*-\s*ALL/);
     expect(
@@ -1541,7 +1542,7 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
       profile: "builder",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-walter") ?? "";
-    expect(dep).not.toMatch(/cluster-autoscaler\.kubernetes\.io\/safe-to-evict/);
+    expect(parseDocument(dep).toJSON().spec.template.metadata.annotations ?? {}).not.toHaveProperty(["cluster-autoscaler.kubernetes.io/safe-to-evict"]);
   });
 
   it("shared gateway leaves voluntary disruption protection to its identity PDB", () => {
@@ -1550,7 +1551,7 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
       gatewayClass: "shared",
     });
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
-    expect(dep).not.toMatch(/cluster-autoscaler\.kubernetes\.io\/safe-to-evict/);
+    expect(parseDocument(dep).toJSON().spec.template.metadata.annotations ?? {}).not.toHaveProperty(["cluster-autoscaler.kubernetes.io/safe-to-evict"]);
   });
 
   it("gatewayContainerSecurityContext override elevates one instance without touching the default", () => {
