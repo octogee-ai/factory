@@ -1,5 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
+import { rateLimit } from "express-rate-limit";
 import { requireAuthenticatedUid } from "../middleware/auth.js";
+import { DEFAULT_RATE_LIMIT_OPTIONS } from "../middleware/security.js";
 import { resolveWorkspaceNativeIdentity, WorkspaceNativeAccessError } from "../lib/workspace-native-access.js";
 import { openNativeUserClient } from "../openclaw-control/native-user-client.js";
 import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
@@ -41,6 +43,13 @@ function validateRole(req: Request, res: Response<unknown, { role: string | null
 
 export function createWorkspaceRolesRouter(deps = { resolveIdentity: resolveWorkspaceNativeIdentity, openClient: openNativeUserClient }) {
   const router = Router({ mergeParams: true });
+  const roleRateLimit = (limit: number) => rateLimit({
+    ...DEFAULT_RATE_LIMIT_OPTIONS,
+    windowMs: 60_000,
+    limit,
+    keyGenerator: req => req.uid!,
+    message: { error: "Too many workspace role requests, please try again later." },
+  });
   router.use(requireAuthenticatedUid);
   router.use(async (req, res, next) => {
     if (!isIsolatedGatewayClassValue(process.env.GATEWAY_CLASS) || process.env.OPENCLAW_CONTROL_IDENTITY !== "per-user") {
@@ -48,7 +57,7 @@ export function createWorkspaceRolesRouter(deps = { resolveIdentity: resolveWork
     }
     next();
   });
-  router.get("/", async (req, res, next) => {
+  router.get("/", roleRateLimit(120), async (req, res, next) => {
     let client: NativeClient | undefined;
     try {
       const identity = await deps.resolveIdentity({ gatewayId: String((req.params as Record<string, string>).gatewayId), authorization: req.headers.authorization });
@@ -69,7 +78,7 @@ export function createWorkspaceRolesRouter(deps = { resolveIdentity: resolveWork
       next(error);
     } finally { client?.close(); }
   });
-  router.patch("/:uid", validateRole, async (req: Request, res: Response<unknown, { role: string | null }>, next: NextFunction) => {
+  router.patch("/:uid", roleRateLimit(30), validateRole, async (req: Request, res: Response<unknown, { role: string | null }>, next: NextFunction) => {
     let client: NativeClient | undefined;
     try {
       const identity = await deps.resolveIdentity({ gatewayId: String((req.params as Record<string, string>).gatewayId), authorization: req.headers.authorization, targetUid: String(req.params.uid) });
