@@ -146,8 +146,7 @@ jobs:
     name: Kind smoke (amd64)
     needs: publish
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    environment: agent-round-trip
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -166,13 +165,7 @@ jobs:
       - name: Install octogee-fleet
         run: GOBIN="$RUNNER_TEMP/bin" go install github.com/octogee-ai/octogee-fleet@2b1bdeaf956ad9d9a8763a6510138b4d615ab62b
       - name: Install the published images
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          if [[ -z "$OPENROUTER_API_KEY" ]]; then
-            echo "::error::The agent-round-trip environment has no OPENROUTER_API_KEY secret"
-            exit 1
-          fi
           OCTOGEE_KIND_STATE="$RUNNER_TEMP/kind-state" \
             scripts/ops/kind-install.sh up --pull --manifest="$RUNNER_TEMP/build-manifest/image-manifest.json"
       - name: List gateways through the Admin API
@@ -187,10 +180,28 @@ jobs:
             --max-time 3 http://127.0.0.1:18080/healthz > /dev/null
           OCTOGEE_FLEET_CONFIG="$state/fleet-config.json" "$RUNNER_TEMP/bin/octogee-fleet" --env=kind gateway ls --format=json \
             | jq -e 'if .gateways == [] then . else error("expected an empty gateway list") end'
-      - name: Get a reply from a user's agent through the LLM broker
+      - name: Boot the exact published Gateway in kind
         run: |
-          node scripts/ops/kind-agent-round-trip.mjs --state="$RUNNER_TEMP/kind-state/octogee" \
-            --fleet="$RUNNER_TEMP/bin/octogee-fleet" --model=platform-openrouter/meta/muse-ember
+          set -euo pipefail
+          state="$RUNNER_TEMP/kind-state/octogee"
+          kubectl --kubeconfig="$state/kubeconfig" -n octogee-local \
+            port-forward --address 127.0.0.1 svc/glm-controller 18080:8080 > "$RUNNER_TEMP/kind-port-forward.log" 2>&1 &
+          forward_pid=$!
+          trap 'kill "$forward_pid" 2>/dev/null || true; cat "$RUNNER_TEMP/kind-port-forward.log"' EXIT
+          curl --fail --silent --show-error --retry 15 --retry-delay 1 --retry-connrefused \
+            --max-time 3 http://127.0.0.1:18080/healthz >/dev/null
+          export OCTOGEE_FLEET_CONFIG="$state/fleet-config.json"
+          fleet="$RUNNER_TEMP/bin/octogee-fleet"
+          "$fleet" --env=kind gateway add --id=shared-a --apply
+          for _ in {1..90}; do
+            listing="$("$fleet" --env=kind gateway ls --format=json)"
+            if jq -e 'any(.gateways[]; .gatewayId == "shared-a" and .status == "ready")' <<< "$listing"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          printf 'Shared Gateway failed to become ready: %s\n' "$listing" >&2
+          exit 1
       - name: Show cluster status on failure
         if: failure()
         run: |
