@@ -61,7 +61,9 @@ jobs:
             postgres: true
             run: |
               cd core
-              npm run typecheck && npm run build && node ../scripts/ops/verify-committed-dist.mjs
+              npm run typecheck
+              npm run build
+              node ../scripts/ops/verify-committed-dist.mjs
               npm test
               node ../scripts/ci/core-postgres.mjs
           - name: gateway-edge
