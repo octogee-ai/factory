@@ -1,4 +1,4 @@
-import { authenticatedRequestLimit } from "../../middleware/authenticated-request-limit.js";
+import { authenticationFailureLimit, authenticatedRequestLimit } from "../../middleware/authenticated-request-limit.js";
 import { Router } from "express";
 import { requireAdmin } from "../../middleware/auth.js";
 import { githubListRepos } from "../../lib/github.js";
@@ -6,7 +6,7 @@ import { readConnectorAccessToken } from "../../lib/connector-tokens.js";
 
 const router = Router();
 
-router.get("/github/repos", requireAdmin, authenticatedRequestLimit(60), async (req, res, next) => {
+router.get("/github/repos", authenticationFailureLimit, requireAdmin, authenticatedRequestLimit(60), async (req, res, next) => {
   try {
     const token = await readConnectorAccessToken(req.uid!, "github");
     if (!token) {

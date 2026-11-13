@@ -1,4 +1,4 @@
-import { clientRequestLimit, authenticatedRequestLimit } from "../../middleware/authenticated-request-limit.js";
+import { clientRequestLimit, authenticationFailureLimit, authenticatedRequestLimit } from "../../middleware/authenticated-request-limit.js";
 import { Router, Request, Response } from "express";
 import type { Project } from "@octogee/shared/types/index";
 import { FieldValue } from "../../lib/db.js";
@@ -94,7 +94,7 @@ router.get("/:wid/:pid/readme", clientRequestLimit(1200), async (req: Request, r
   }
 });
 
-router.put("/:wid/:pid/canvas-file", requireAuth, authenticatedRequestLimit(60), async (req: Request, res: Response) => {
+router.put("/:wid/:pid/canvas-file", authenticationFailureLimit, requireAuth, authenticatedRequestLimit(60), async (req: Request, res: Response) => {
   const { wid, pid } = req.params as { wid: string; pid: string };
   const canvasFile = (req.body as { canvasFile?: unknown } | undefined)?.canvasFile;
 

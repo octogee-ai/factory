@@ -1,4 +1,4 @@
-import { authenticatedRequestLimit } from "../middleware/authenticated-request-limit.js";
+import { authenticationFailureLimit, authenticatedRequestLimit } from "../middleware/authenticated-request-limit.js";
 import { Router, type Request } from "express";
 import { MalformedRecordError } from "@octogee/core/platform-state";
 import { requireAdmin } from "../middleware/auth.js";
@@ -138,7 +138,7 @@ export function createAdminRoutes(product: AdminProductHooks = {}): Router {
     res.set("Cache-Control", "no-store");
     next();
   });
-  router.use(requireAdmin, authenticatedRequestLimit(300));
+  router.use(authenticationFailureLimit, requireAdmin, authenticatedRequestLimit(300));
 
   const accounts = firestoreUserAccountReader(db);
   addAdminUserDirectoryRoutes(router, {
