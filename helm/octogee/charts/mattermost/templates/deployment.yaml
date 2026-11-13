@@ -97,7 +97,8 @@ spec:
               value: "false"
             - name: MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS
               value: {{ printf "mattermost-callback-router.%s.svc.cluster.local" .Release.Namespace | quote }}
-            # Browser-direct access: an app origin talks to Mattermost directly. MM's
+            # Browser-direct access (Option C migration): the app at
+            # app.octogee.com talks to mattermost.octogee.com directly. MM's
             # REST responses + WebSocket handshake reject cross-origin
             # requests unless the origin is listed here. Space-separated
             # list, exact matches; configured via .Values.allowedCorsOrigins.
