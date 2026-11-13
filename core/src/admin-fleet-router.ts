@@ -1322,7 +1322,7 @@ function observedGatewayStatus(input: {
     : requestedGatewayStatus(input.desiredStatus);
 }
 
-function notServingReason(status: string, openclawProcess: unknown): string | null {
+function notServingReason(status: string, openclawProcess: unknown, notReadyReason: unknown): string | null {
   if (status !== "booting") return null;
   const report = parseOpenClawProcessReport(openclawProcess);
   if (!report) return null;
@@ -1335,7 +1335,9 @@ function notServingReason(status: string, openclawProcess: unknown): string | nu
     case "starting":
       return "OpenClaw is starting";
     case "serving":
-      return "OpenClaw is running; startup checks are not finished";
+      return typeof notReadyReason === "string"
+        ? `OpenClaw is running; ${notReadyReason}`
+        : "OpenClaw is running; startup checks are not finished";
   }
 }
 
@@ -1624,7 +1626,7 @@ export function projectGatewaySummary(
     gatewayId,
     gateway: deriveGatewayIdentity(gatewayId, glmDoc?.gateway),
     status,
-    statusReason: notServingReason(status, data.openclawProcess),
+    statusReason: notServingReason(status, data.openclawProcess, data.notReadyReason),
     desiredStatus,
     imageTag: projectImageTag(data, glmDoc),
     openclawVersion: projectOpenclawVersion(data, glmDoc),

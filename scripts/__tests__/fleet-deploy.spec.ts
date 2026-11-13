@@ -25,7 +25,7 @@ function gateway(id: string, patch: Partial<FleetGateway> = {}): FleetGateway {
     gatewayId: id, gatewayClass: shared ? "shared" : "builder", imageProfile: shared ? "standard" : "builder", addedBy: shared ? "automation" : null,
     desiredStatus: "running", latestRelease: 2, desiredRelease: 2, liveRelease: 2,
     latestPayload: payload, desiredPayload: payload, assignments: [], operations: [],
-    runtime: { release: 2, lifecycle: "serving", status: "ready", heartbeatAt: 100, mountedCustomers: [], migratingIn: [] },
+    runtime: { release: 2, lifecycle: "serving", status: "ready", heartbeatAt: 100, mountedCustomers: [], migratingIn: [], notReadyReason: null },
     live: { observedAt: 100, instances: [{ id: "instance-1", ready: true, containers: [
       { name: "gateway", image: `${image.imageRepository}:${image.imageTag}`, digests: [image.imageTag.split("@")[1]], running: true },
       { name: "gateway-edge", image: `${payload.gatewayEdgeImage!.imageRepository}:${payload.gatewayEdgeImage!.imageTag}`, digests: [digest("c")], running: true },

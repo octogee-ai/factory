@@ -40,8 +40,10 @@ release, and waits for shared and isolated gateway live-image convergence.
 Paused isolated gateways receive the desired release without waking; retired gateways are
 skipped. It then resumes the isolated gateway named by the TEST deployment target's
 `shipTestIsolatedGatewayId`, requires it to serve the shipped build within 20 minutes,
-and parks it again, whether or not the check passes. The shipment fails when the target
-names no such gateway or the gateway does not exist. The end-to-end tests then
+and parks it again, whether or not the check passes. A timeout failure names the
+gateway's last reported readiness reason. When the target names no such gateway, the
+shipment prints that it skipped the check; it fails when the named gateway does not
+exist. The end-to-end tests then
 run against the deployed environment. A failure there marks the shipment failed
 after the deployment itself has completed.
 

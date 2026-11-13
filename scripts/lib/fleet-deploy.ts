@@ -33,6 +33,7 @@ export interface FleetGateway {
     heartbeatAt: number | null;
     mountedCustomers: string[];
     migratingIn: string[];
+    notReadyReason: string | null;
   } | null;
   live: FleetLiveObservation | null;
   observationError?: string;
@@ -160,7 +161,9 @@ function runtimeProblems(gateway: FleetGateway, timing: ObservationTiming): stri
   const reasons: string[] = [];
   const runtime = gateway.runtime;
   if (gateway.liveRelease !== gateway.desiredRelease || runtime?.release !== gateway.desiredRelease) reasons.push("live release differs from desired release");
-  if (runtime?.lifecycle !== "serving" || runtime.status !== "ready") reasons.push("runtime is not serving and ready");
+  if (runtime?.lifecycle !== "serving" || runtime.status !== "ready") {
+    reasons.push(runtime?.notReadyReason ? `runtime is not serving and ready (${runtime.notReadyReason})` : "runtime is not serving and ready");
+  }
   if (!fresh(runtime?.heartbeatAt ?? null, timing)) reasons.push("heartbeat predates ship or is stale");
   if (gateway.assignments.some((assignment) => assignment.state !== "serving" || !runtime?.mountedCustomers.includes(assignment.slug))) reasons.push("assignments are not all mounted and serving");
   if (runtime?.migratingIn.length) reasons.push("incoming migrations are unfinished");

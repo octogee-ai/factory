@@ -130,6 +130,7 @@ export interface FleetStateResponse {
   migratingIn: string[];
   configuredBuilder: ConfiguredUserReport | null;
   openclawProcess?: OpenClawProcessReport | null;
+  notReadyReason?: string | null;
 }
 
 export const OPENCLAW_PROCESS_STATES = ["held", "hydrated", "starting", "serving", "unavailable"] as const;

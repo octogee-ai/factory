@@ -9,7 +9,7 @@ import { isolatedToolchainRoot } from "./user-storage.js";
 import { waitForPreparedIsolatedToolchain } from "./isolated-toolchain-preparation.js";
 import express from "express";
 import { rateLimit } from "express-rate-limit";
-import { workspaceIdentityReady } from "@octogee/core/openclaw-workspace-bootstrap";
+import { workspaceIdentityFailure, workspaceIdentityReady } from "@octogee/core/openclaw-workspace-bootstrap";
 import { OpenclawWireError } from "@octogee/shared/types/openclaw-wire-core";
 import * as path from "node:path";
 import { agentIdsFromConfig } from "./byosub-restore.js";
@@ -558,6 +558,7 @@ export function buildFleetStateResponse(input: {
   migratingIn: string[];
   configuredBuilder: FleetStateResponse["configuredBuilder"];
   openclawProcess?: OpenClawProcessReport | null;
+  notReadyReason?: string | null;
 }): FleetStateResponse {
   return {
     status: input.status,
@@ -570,7 +571,26 @@ export function buildFleetStateResponse(input: {
     migratingIn: input.migratingIn,
     configuredBuilder: input.configuredBuilder,
     ...(input.openclawProcess === undefined ? {} : { openclawProcess: input.openclawProcess }),
+    ...(input.notReadyReason === undefined ? {} : { notReadyReason: input.notReadyReason }),
   };
+}
+
+export function fleetNotReadyReason(input: {
+  status: FleetRuntime["status"];
+  identitiesReady: boolean;
+  identityFailure: string | null;
+  brokerProfilesSettled: boolean;
+  dashboardBridgeReady: boolean;
+}): string | null {
+  if (input.status === "ready") return null;
+  if (!input.identitiesReady) {
+    return input.identityFailure
+      ? `workspace identity initialization failed: ${input.identityFailure}`
+      : "workspace identities are not initialized yet";
+  }
+  if (!input.brokerProfilesSettled) return "model broker profiles are not settled";
+  if (!input.dashboardBridgeReady) return "the Dashboard bridge is not ready";
+  return "OpenClaw health checks are not finished";
 }
 
 interface ProvisioningCounter {
@@ -2711,6 +2731,13 @@ export async function startFleetController(
         migratingIn: adapter.listMigratingInSlugs?.() ?? [],
         configuredBuilder: (opts.configuredUserReport ?? configuredUserReport)(),
         openclawProcess: await openclawProcessReport({ adapter: wrappedAdapter, processGate: userProcessGate, log: opts.log }),
+        notReadyReason: fleetNotReadyReason({
+          status: runtime.status,
+          identitiesReady: workspaceIdentityReady(),
+          identityFailure: workspaceIdentityFailure(),
+          brokerProfilesSettled,
+          dashboardBridgeReady: probeDashboardBridge().ready,
+        }),
       }),
       ...(isValidUsername(privateProjectCoachSlug) ? {
         privateProjectCoachWorkspace: fleetStatePrivateProjectAgentWorkspace(readOpenClawConfig(), openclawDir, privateProjectCoachSlug),

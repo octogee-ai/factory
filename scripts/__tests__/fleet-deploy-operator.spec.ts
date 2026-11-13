@@ -187,11 +187,24 @@ describe("TEST fleet snapshot", () => {
     expect(snapshot.gateways).toEqual([expect.objectContaining({
       gatewayId: "b-paused", gatewayClass: "builder", imageProfile: "builder", desiredStatus: "paused",
       latestRelease: 1, desiredRelease: 1, liveRelease: 1, desiredPayload: payload, latestPayload: payload,
-      runtime: { release: 1, lifecycle: "serving", status: "ready", heartbeatAt: 900, mountedCustomers: ["alice"], migratingIn: [] },
+      runtime: { release: 1, lifecycle: "serving", status: "ready", heartbeatAt: 900, mountedCustomers: ["alice"], migratingIn: [], notReadyReason: null },
       live: { observedAt: expect.any(Number), instances: [expect.objectContaining({ id: "pod-1", ready: true })] },
       assignments: [{ slug: "alice", state: "serving" }],
       operations: [{ id: "roll-1", release: 1, status: "failed", error: "image pull failed" }],
     })]);
+  });
+
+  it("carries why a gateway's runtime is not ready", async () => {
+    const reason = "workspace identity initialization failed: OpenClaw did not create the profile for svc:gateway-edge";
+    const { store } = fixture({
+      "glmGateways/b-paused": runtimeDoc("b-paused", {
+        heartbeat: { status: "booting", lastHeartbeatAt: 900, mountedCustomers: [], migratingIn: [], notReadyReason: reason },
+      }),
+    });
+
+    const snapshot = await readFleetSnapshot(store, async () => ({ items: [] }));
+
+    expect(snapshot.gateways[0]?.runtime).toMatchObject({ status: "booting", notReadyReason: reason });
   });
 
   it("says who added each shared gateway and leaves isolated gateways unlabelled", async () => {

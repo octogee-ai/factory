@@ -25,6 +25,7 @@ function files(env: NodeJS.ProcessEnv) {
     ready: path.join(env.OPENCLAW_DIR, "workspace-identity-ready"),
     journal: path.join(env.OPENCLAW_DIR, "workspace-identity-bootstrap.json"),
     owner: path.join(env.OPENCLAW_DIR, "workspace-identity-owner"),
+    failure: path.join(env.OPENCLAW_DIR, "workspace-identity-failure"),
   };
 }
 
@@ -46,6 +47,14 @@ export function workspaceIdentityReady(env: NodeJS.ProcessEnv = process.env): bo
   const state = files(env);
   return fs.existsSync(state.boot) && fs.existsSync(state.ready)
     && fs.readFileSync(state.boot, "utf8") === fs.readFileSync(state.ready, "utf8");
+}
+
+export function workspaceIdentityFailure(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (!enabled(env)) return null;
+  const state = files(env);
+  if (!fs.existsSync(state.failure) || !fs.existsSync(state.boot)) return null;
+  const failure = JSON.parse(fs.readFileSync(state.failure, "utf8")) as { boot?: unknown; message?: unknown };
+  return failure.boot === fs.readFileSync(state.boot, "utf8") && typeof failure.message === "string" ? failure.message : null;
 }
 
 export function workspaceOwnerIdentityReady(env: NodeJS.ProcessEnv, ownerUid: string): boolean {
@@ -96,13 +105,26 @@ function recordOwnerJournal(journalPath: string, ownerUid: string): void {
   if (journal.ownerUid !== ownerUid) throw new Error("Workspace identity initialization journal does not match this owner");
 }
 
-export async function bootstrapWorkspaceIdentities(args: {
+type BootstrapArgs = {
   request: NativeRequest; env?: NodeJS.ProcessEnv;
   signIn?: (uid: string, env: NodeJS.ProcessEnv) => Promise<NativeProfile>;
-}): Promise<void> {
+};
+
+export async function bootstrapWorkspaceIdentities(args: BootstrapArgs): Promise<void> {
   const env = args.env ?? process.env;
   if (!enabled(env)) return;
   const state = files(env);
+  try {
+    await initializeWorkspaceIdentities(args, env, state);
+  } catch (error) {
+    const boot = fs.existsSync(state.boot) ? fs.readFileSync(state.boot, "utf8") : null;
+    atomicWrite(state.failure, JSON.stringify({ boot, message: error instanceof Error ? error.message : String(error) }));
+    throw error;
+  }
+  fs.rmSync(state.failure, { force: true });
+}
+
+async function initializeWorkspaceIdentities(args: BootstrapArgs, env: NodeJS.ProcessEnv, state: ReturnType<typeof files>): Promise<void> {
   const ownerUid = userClaimOwnerUid(env);
   if (!ownerUid) throw new Error("Workspace identity initialization requires this user's claimed owner");
   const boot = fs.readFileSync(state.boot, "utf8");

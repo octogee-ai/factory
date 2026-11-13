@@ -11,6 +11,7 @@ export interface PollerHeartbeatRecord {
   openclawVersion?: string;
   configuredBuilder?: ConfiguredUserReport | null;
   openclawProcess?: OpenClawProcessReport | null;
+  notReadyReason?: string | null;
 }
 
 export function pollerHeartbeatReport(record: PollerHeartbeatRecord, internalUrl: string): FleetHeartbeatReport {
@@ -22,6 +23,7 @@ export function pollerHeartbeatReport(record: PollerHeartbeatRecord, internalUrl
     ...(typeof record.openclawVersion === "string" ? { openclawVersion: record.openclawVersion } : {}),
     ...(record.configuredBuilder !== undefined ? { configuredBuilder: record.configuredBuilder } : {}),
     ...(record.openclawProcess !== undefined ? { openclawProcess: record.openclawProcess } : {}),
+    ...(record.notReadyReason !== undefined ? { notReadyReason: record.notReadyReason } : {}),
     internalUrl,
   };
 }

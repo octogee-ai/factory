@@ -403,6 +403,15 @@ function validateActiveEnvironmentIsolation(
   }
 }
 
+const GATEWAY_ID = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
+
+function validateShipTestIsolatedGatewayId(value: unknown, environment: string, label: string): void {
+  if (typeof value !== "string" || !GATEWAY_ID.test(value)) {
+    throw new Error(`${label}.shipTestIsolatedGatewayId must be a gateway id: lowercase letters, digits and hyphens, 1-32 characters, starting and ending with a letter or digit`);
+  }
+  if (environment !== "test") throw new Error(`${label}.shipTestIsolatedGatewayId is only valid on a test target, not ${environment}`);
+}
+
 export function validateDeploymentTargetsDocument(document: unknown): asserts document is DeploymentTargetsDocument {
   const manifest = record(document, "deployment targets manifest");
   if (manifest.schemaVersion !== 1) {
@@ -424,7 +433,7 @@ export function validateDeploymentTargetsDocument(document: unknown): asserts do
     stringFields(target, TARGET_STRING_FIELDS, label);
     if (target.kubeContext !== undefined) stringField(target, "kubeContext", label);
     if (target.pinEnvironment !== undefined) stringField(target, "pinEnvironment", label);
-    if (target.shipTestIsolatedGatewayId !== undefined) stringField(target, "shipTestIsolatedGatewayId", label);
+    if (target.shipTestIsolatedGatewayId !== undefined) validateShipTestIsolatedGatewayId(target.shipTestIsolatedGatewayId, environment, label);
     if (HOSTED_TARGET_FIELDS.some((field) => Object.hasOwn(target, field))) {
       validateHostedTarget(target, targetId);
       validatePromotionSourceField(target, targetId, environment);

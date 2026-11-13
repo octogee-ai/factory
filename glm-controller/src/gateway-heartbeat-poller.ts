@@ -53,6 +53,7 @@ export interface GatewayFleetState {
   migratingIn?: string[];
   configuredBuilder?: ConfiguredUserReport | null;
   openclawProcess?: OpenClawProcessReport | null;
+  notReadyReason?: string | null;
 }
 
 export interface GatewayHeartbeatRecord {
@@ -60,6 +61,7 @@ export interface GatewayHeartbeatRecord {
   mountedCustomers: string[];
   configuredBuilder?: ConfiguredUserReport | null;
   openclawProcess: OpenClawProcessReport | null;
+  notReadyReason: string | null;
   version?: string;
   openclawVersion?: string;
   /** Live pod-boot time (epoch ms). */
@@ -133,6 +135,7 @@ export function parseFleetStateResponse(json: unknown): GatewayFleetState | null
     migratingIn?: unknown;
     configuredBuilder?: unknown;
     openclawProcess?: unknown;
+    notReadyReason?: unknown;
   };
   if (typeof body.status !== "string" || body.status.length === 0) return null;
   if (!Array.isArray(body.customers)) return null;
@@ -153,6 +156,9 @@ export function parseFleetStateResponse(json: unknown): GatewayFleetState | null
       : {}),
     ...("openclawProcess" in body
       ? { openclawProcess: parseOpenClawProcessReport(body.openclawProcess) }
+      : {}),
+    ...("notReadyReason" in body
+      ? { notReadyReason: typeof body.notReadyReason === "string" ? body.notReadyReason : null }
       : {}),
   };
 }
@@ -233,6 +239,7 @@ function heartbeatRecordFrom(state: GatewayFleetState, assigned: string[]): Gate
     status: state.status,
     mountedCustomers: intersectMounted(state.users, assigned),
     openclawProcess: state.openclawProcess ?? null,
+    notReadyReason: state.notReadyReason ?? null,
   };
   if (typeof state.version === "string") record.version = state.version;
   if (typeof state.openclawVersion === "string") record.openclawVersion = state.openclawVersion;

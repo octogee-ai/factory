@@ -20,7 +20,7 @@ function serving(patch: Partial<FleetGateway> = {}): FleetGateway {
     gatewayId: "check-s-1", gatewayClass: "builder", imageProfile: "builder", addedBy: null,
     desiredStatus: "running", latestRelease: 3, desiredRelease: 3, liveRelease: 3,
     latestPayload: payload, desiredPayload: payload, assignments: [{ slug: "check", state: "serving" }], operations: [],
-    runtime: { release: 3, lifecycle: "serving", status: "ready", heartbeatAt: START + 200, mountedCustomers: ["check"], migratingIn: [] },
+    runtime: { release: 3, lifecycle: "serving", status: "ready", heartbeatAt: START + 200, mountedCustomers: ["check"], migratingIn: [], notReadyReason: null },
     live: { observedAt: START + 200, instances: [{ id: "vm-1", ready: true, containers: [
       { name: "gateway", image: `${image.imageRepository}:${image.imageTag}`, digests: [digest("b")], running: true },
       { name: "gateway-edge", image: `${payload.gatewayEdgeImage!.imageRepository}:${payload.gatewayEdgeImage!.imageTag}`, digests: [digest("c")], running: true },
@@ -31,7 +31,7 @@ function serving(patch: Partial<FleetGateway> = {}): FleetGateway {
 
 const parked = (patch: Partial<FleetGateway> = {}) => serving({
   desiredStatus: "paused", liveRelease: 2,
-  runtime: { release: 2, lifecycle: "serving", status: "ready", heartbeatAt: START - 500, mountedCustomers: [], migratingIn: [] },
+  runtime: { release: 2, lifecycle: "serving", status: "ready", heartbeatAt: START - 500, mountedCustomers: [], migratingIn: [], notReadyReason: null },
   live: { observedAt: START - 500, instances: [] },
   ...patch,
 });
@@ -53,7 +53,7 @@ function harness(observations: Array<FleetGateway | null>) {
 
 describe("Ship TEST isolated gateway check", () => {
   it("resumes the parked gateway, waits until it serves the shipped build from a fresh boot, then parks it again", async () => {
-    const booting = serving({ liveRelease: 2, runtime: { release: 2, lifecycle: "starting", status: "booting", heartbeatAt: START + 100, mountedCustomers: [], migratingIn: [] } });
+    const booting = serving({ liveRelease: 2, runtime: { release: 2, lifecycle: "starting", status: "booting", heartbeatAt: START + 100, mountedCustomers: [], migratingIn: [], notReadyReason: null } });
     const staleReady = serving({ runtime: { ...serving().runtime!, heartbeatAt: START - 1 } });
     const h = harness([parked(), booting, staleReady, serving()]);
 
@@ -65,10 +65,11 @@ describe("Ship TEST isolated gateway check", () => {
     expect(h.deps.setDesiredStatus).toHaveBeenCalledWith("check-s-1", "running");
   });
 
-  it("fails and parks the gateway again when it does not report in service within the limit", async () => {
-    const h = harness([parked(), serving({ runtime: { ...serving().runtime!, status: "booting" } })]);
+  it("fails with the gateway's last readiness reason and parks it again when it does not report in service within the limit", async () => {
+    const notReadyReason = "workspace identity initialization failed: OpenClaw did not create the profile for svc:gateway-edge";
+    const h = harness([parked(), serving({ runtime: { ...serving().runtime!, status: "booting", notReadyReason } })]);
 
-    await expect(h.run()).rejects.toThrow(/check-s-1 did not serve a{40} within 1000ms: runtime is not serving and ready/);
+    await expect(h.run()).rejects.toThrow(`check-s-1 did not serve ${"a".repeat(40)} within 1000ms: runtime is not serving and ready (${notReadyReason})`);
     expect(h.statuses).toEqual(["running", "paused"]);
   });
 

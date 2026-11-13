@@ -7,6 +7,7 @@ import {
   CLONE_RETRY_DELAYS_MS,
   buildFleetHealthResponse,
   buildFleetStateResponse,
+  fleetNotReadyReason,
   openclawProcessReport,
   cloneRetryDelayMs,
   cloneRetryReady,
@@ -2729,6 +2730,23 @@ describe("in-pod gateway heartbeat", () => {
     });
 
     expect(state.openclawProcess).toEqual({ state: "held", migrationId: null });
+  });
+
+  it("reports the readiness gate a booting gateway is waiting on through the signed fleet state", () => {
+    const blocked = { status: "booting" as const, identitiesReady: true, identityFailure: null, brokerProfilesSettled: true, dashboardBridgeReady: true };
+    expect(fleetNotReadyReason({ ...blocked, identitiesReady: false, identityFailure: "OpenClaw did not create the profile for svc:gateway-edge" }))
+      .toBe("workspace identity initialization failed: OpenClaw did not create the profile for svc:gateway-edge");
+    expect(fleetNotReadyReason({ ...blocked, identitiesReady: false, brokerProfilesSettled: false }))
+      .toBe("workspace identities are not initialized yet");
+    expect(fleetNotReadyReason({ ...blocked, brokerProfilesSettled: false, dashboardBridgeReady: false })).toBe("model broker profiles are not settled");
+    expect(fleetNotReadyReason({ ...blocked, dashboardBridgeReady: false })).toBe("the Dashboard bridge is not ready");
+    expect(fleetNotReadyReason(blocked)).toBe("OpenClaw health checks are not finished");
+    expect(fleetNotReadyReason({ ...blocked, status: "ready", identitiesReady: false })).toBeNull();
+    const state = buildFleetStateResponse({
+      status: "booting", gatewayId: "b-chris", podUid: "pod-uid-1", version: "sha-1", openclawVersion: "2026.7.1",
+      startedAt: 42, users: [], migratingIn: [], configuredBuilder: null, notReadyReason: "the Dashboard bridge is not ready",
+    });
+    expect(state.notReadyReason).toBe("the Dashboard bridge is not ready");
   });
 
   it("keeps the unauthenticated probe body free of tenant identity", () => {

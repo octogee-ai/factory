@@ -62,6 +62,7 @@ function runtimeOf(value: Record<string, unknown>, gatewayId: string): FleetGate
   return {
     release: value.release, lifecycle: String(value.lifecycle ?? "unknown"), status: String(heartbeat.status ?? "unknown"),
     heartbeatAt: timestampMillis(heartbeat.lastHeartbeatAt) ?? null, mountedCustomers: strings(heartbeat.mountedCustomers), migratingIn: strings(heartbeat.migratingIn),
+    notReadyReason: typeof heartbeat.notReadyReason === "string" ? heartbeat.notReadyReason : null,
   };
 }
 

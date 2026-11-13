@@ -49,6 +49,17 @@ describe("pollerHeartbeatReport — the poller's live telemetry report", () => {
       .not.toHaveProperty("openclawProcess");
   });
 
+  it("writes why the gateway is not ready, including an explicit null, only when the poll carried one", () => {
+    expect(pollerHeartbeatReport(
+      { status: "booting", mountedCustomers: [], notReadyReason: "the Dashboard bridge is not ready" }, INTERNAL_URL,
+    ).notReadyReason).toBe("the Dashboard bridge is not ready");
+    expect(pollerHeartbeatReport(
+      { status: "ready", mountedCustomers: [], notReadyReason: null }, INTERNAL_URL,
+    )).toHaveProperty("notReadyReason", null);
+    expect(pollerHeartbeatReport({ status: "ready", mountedCustomers: [] }, INTERNAL_URL))
+      .not.toHaveProperty("notReadyReason");
+  });
+
   it("leaves the separately published config marker and the store's heartbeat stamp out of the report", () => {
     const report = pollerHeartbeatReport({ status: "ready", mountedCustomers: [] }, INTERNAL_URL);
     expect(report).not.toHaveProperty("configStatus");

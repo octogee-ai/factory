@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
-import { setIsolatedGatewayDesiredStatus, shipTestIsolatedGatewayId } from "../ops/check-isolated-gateway.js";
+import { isolatedGatewayToCheck, setIsolatedGatewayDesiredStatus } from "../ops/check-isolated-gateway.js";
 
 const sourceSha = "a".repeat(40);
 
@@ -24,10 +24,18 @@ const audits = (records: Map<string, Record<string, unknown>>) =>
   [...records.entries()].filter(([path]) => path.startsWith("glmOperations/audit-")).map(([, audit]) => audit);
 
 describe("Ship TEST isolated gateway check wiring", () => {
-  it("fails loudly when the TEST target names no isolated gateway to check", () => {
-    expect(() => shipTestIsolatedGatewayId({ targetId: "test-central" }))
-      .toThrow("deployment target test-central names no shipTestIsolatedGatewayId; Ship TEST requires the isolated gateway it checks");
-    expect(shipTestIsolatedGatewayId({ targetId: "test-central", shipTestIsolatedGatewayId: "check-s-1" })).toBe("check-s-1");
+  it("says in one line that it skips the check when the TEST target names no isolated gateway", () => {
+    const log = vi.fn();
+
+    expect(isolatedGatewayToCheck({ targetId: "test-central" }, log)).toBeNull();
+    expect(log.mock.calls).toEqual([["skipped the isolated gateway check: deployment target test-central names no shipTestIsolatedGatewayId"]]);
+  });
+
+  it("names the configured isolated gateway without logging a skip", () => {
+    const log = vi.fn();
+
+    expect(isolatedGatewayToCheck({ targetId: "test-central", shipTestIsolatedGatewayId: "check-s-1" }, log)).toBe("check-s-1");
+    expect(log).not.toHaveBeenCalled();
   });
 
   it("resumes and parks the gateway through journaled desired-status patches", async () => {

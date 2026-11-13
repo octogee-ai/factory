@@ -262,11 +262,22 @@ describe("deployment targets manifest location", () => {
     resetDeploymentTargetsForTests();
     expect(deploymentEnvironmentSettings("test").shipTestIsolatedGatewayId).toBe("check-s-1");
     expect(deploymentEnvironmentSettings("prod")).not.toHaveProperty("shipTestIsolatedGatewayId");
-    const empty = manifestWith((document) => {
-      Object.assign(document.targets["test-central"], { shipTestIsolatedGatewayId: "" });
+  });
+
+  it.each(["", "Check-S-1", "-check", "check-", "c".repeat(33), 7])("rejects %j as the isolated gateway Ship TEST checks", (gatewayId) => {
+    const invalid = manifestWith((document) => {
+      Object.assign(document.targets["test-central"], { shipTestIsolatedGatewayId: gatewayId });
     });
-    expect(() => loadDeploymentTargetsDocument(empty))
-      .toThrow("deployment target test-central.shipTestIsolatedGatewayId must be a non-empty string");
+    expect(() => loadDeploymentTargetsDocument(invalid))
+      .toThrow("deployment target test-central.shipTestIsolatedGatewayId must be a gateway id: lowercase letters, digits and hyphens, 1-32 characters, starting and ending with a letter or digit");
+  });
+
+  it("accepts the isolated gateway Ship TEST checks only on a test target", () => {
+    const prod = manifestWith((document) => {
+      Object.assign(document.targets["prod-central"], { shipTestIsolatedGatewayId: "check-s-1" });
+    });
+    expect(() => loadDeploymentTargetsDocument(prod))
+      .toThrow("deployment target prod-central.shipTestIsolatedGatewayId is only valid on a test target, not prod");
   });
 
   it("resolves an active custom environment without GCP configuration", () => {

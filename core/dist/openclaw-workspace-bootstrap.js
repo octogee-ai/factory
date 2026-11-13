@@ -19,6 +19,7 @@ function files(env) {
         ready: path.join(env.OPENCLAW_DIR, "workspace-identity-ready"),
         journal: path.join(env.OPENCLAW_DIR, "workspace-identity-bootstrap.json"),
         owner: path.join(env.OPENCLAW_DIR, "workspace-identity-owner"),
+        failure: path.join(env.OPENCLAW_DIR, "workspace-identity-failure"),
     };
 }
 function atomicWrite(file, value) {
@@ -39,6 +40,15 @@ export function workspaceIdentityReady(env = process.env) {
     const state = files(env);
     return fs.existsSync(state.boot) && fs.existsSync(state.ready)
         && fs.readFileSync(state.boot, "utf8") === fs.readFileSync(state.ready, "utf8");
+}
+export function workspaceIdentityFailure(env = process.env) {
+    if (!enabled(env))
+        return null;
+    const state = files(env);
+    if (!fs.existsSync(state.failure) || !fs.existsSync(state.boot))
+        return null;
+    const failure = JSON.parse(fs.readFileSync(state.failure, "utf8"));
+    return failure.boot === fs.readFileSync(state.boot, "utf8") && typeof failure.message === "string" ? failure.message : null;
 }
 export function workspaceOwnerIdentityReady(env, ownerUid) {
     if (!enabled(env))
@@ -96,6 +106,17 @@ export async function bootstrapWorkspaceIdentities(args) {
     if (!enabled(env))
         return;
     const state = files(env);
+    try {
+        await initializeWorkspaceIdentities(args, env, state);
+    }
+    catch (error) {
+        const boot = fs.existsSync(state.boot) ? fs.readFileSync(state.boot, "utf8") : null;
+        atomicWrite(state.failure, JSON.stringify({ boot, message: error instanceof Error ? error.message : String(error) }));
+        throw error;
+    }
+    fs.rmSync(state.failure, { force: true });
+}
+async function initializeWorkspaceIdentities(args, env, state) {
     const ownerUid = userClaimOwnerUid(env);
     if (!ownerUid)
         throw new Error("Workspace identity initialization requires this user's claimed owner");

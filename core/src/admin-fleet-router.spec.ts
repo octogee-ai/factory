@@ -312,6 +312,12 @@ describe("projectGatewaySummary — why OpenClaw is not serving", () => {
     expect(reasonFor({ status: "booting", openclawProcess })).toBe(expected);
   });
 
+  it("names the readiness check a running OpenClaw is still waiting on", () => {
+    const notReadyReason = "workspace identity initialization failed: OpenClaw did not create the profile for svc:gateway-edge";
+    expect(reasonFor({ status: "booting", openclawProcess: { state: "serving", migrationId: null }, notReadyReason }))
+      .toBe(`OpenClaw is running; ${notReadyReason}`);
+  });
+
   it("explains nothing for a serving gateway", () => {
     expect(reasonFor({ status: "ready", openclawProcess: { state: "held", migrationId: "mig-1" } })).toBeNull();
   });

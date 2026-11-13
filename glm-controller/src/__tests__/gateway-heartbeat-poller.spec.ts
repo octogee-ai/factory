@@ -110,6 +110,15 @@ describe("parseFleetStateResponse", () => {
     expect(parseFleetStateResponse({ status: "booting", customers: [] })).toEqual({ status: "booting", users: [] });
   });
 
+  it("carries why the gateway is not ready, nulling a malformed reason and omitting an absent one", () => {
+    expect(parseFleetStateResponse({ status: "booting", customers: [], notReadyReason: "the Dashboard bridge is not ready" }))
+      .toEqual({ status: "booting", users: [], notReadyReason: "the Dashboard bridge is not ready" });
+    expect(parseFleetStateResponse({ status: "ready", customers: [], notReadyReason: null }))
+      .toEqual({ status: "ready", users: [], notReadyReason: null });
+    expect(parseFleetStateResponse({ status: "booting", customers: [], notReadyReason: 7 }))
+      .toEqual({ status: "booting", users: [], notReadyReason: null });
+  });
+
   it("carries migratingIn (string entries only); omits it when absent or non-array", () => {
     expect(
       parseFleetStateResponse({ status: "ready", customers: ["a"], migratingIn: ["a", 1, "b"] }),
@@ -167,6 +176,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
       status: "ready",
       mountedCustomers: ["ceckert"],
       openclawProcess: null,
+      notReadyReason: null,
     });
   });
 
@@ -179,6 +189,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
       status: "ready",
       mountedCustomers: [],
       openclawProcess: null,
+      notReadyReason: null,
       configuredBuilder: { state: "claimed", generation: 2 },
     });
   });
@@ -192,7 +203,19 @@ describe("pollGatewayHeartbeatsOnce", () => {
       status: "booting",
       mountedCustomers: [],
       openclawProcess: { state: "held", migrationId: null },
+      notReadyReason: null,
     });
+  });
+
+  it("persists why the gateway is not ready and clears it once the gateway stops sending one", async () => {
+    const reason = "workspace identity initialization failed: OpenClaw did not create the profile for svc:gateway-edge";
+    const reporting = makeDeps({ fetchFleetState: vi.fn(async () => ({ status: "booting", users: [], notReadyReason: reason })) });
+    await pollGatewayHeartbeatsOnce(reporting);
+    expect(reporting.writeHeartbeat).toHaveBeenCalledWith("walter", expect.objectContaining({ notReadyReason: reason }));
+
+    const silent = makeDeps({ fetchFleetState: vi.fn(async () => ({ status: "booting", users: [] })) });
+    await pollGatewayHeartbeatsOnce(silent);
+    expect(silent.writeHeartbeat).toHaveBeenCalledWith("walter", expect.objectContaining({ notReadyReason: null }));
   });
 
   it("clears the OpenClaw process report once the gateway stops sending one, as after a rollback to an image that never did", async () => {
@@ -214,6 +237,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
       status: "ready",
       mountedCustomers: ["ceckert"],
       openclawProcess: null,
+      notReadyReason: null,
       startedAt: 1700000,
     });
   });
@@ -231,6 +255,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
       status: "ready",
       mountedCustomers: ["ceckert"],
       openclawProcess: null,
+      notReadyReason: null,
       version: "93073bd",
     });
   });
@@ -248,6 +273,7 @@ describe("pollGatewayHeartbeatsOnce", () => {
       status: "ready",
       mountedCustomers: ["ceckert"],
       openclawProcess: null,
+      notReadyReason: null,
       openclawVersion: "2026.7.1",
     });
   });

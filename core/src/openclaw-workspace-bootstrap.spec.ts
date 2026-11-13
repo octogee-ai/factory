@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { assertWorkspaceIdentityReady, beginWorkspaceIdentityBoot, bootstrapWorkspaceIdentities, workspaceIdentityReady, workspaceOwnerIdentityReady } from "./openclaw-workspace-bootstrap.js";
+import { assertWorkspaceIdentityReady, beginWorkspaceIdentityBoot, bootstrapWorkspaceIdentities, workspaceIdentityFailure, workspaceIdentityReady, workspaceOwnerIdentityReady } from "./openclaw-workspace-bootstrap.js";
 
 interface StoredProfile { id: string; aliases: string[]; role: string | null }
 
@@ -85,6 +85,23 @@ async function nativeGateway(signInAs: (uid: string) => StoredProfile) {
 }
 
 describe("native workspace identity initialization", () => {
+  it("reports why this boot's identities are not ready until an attempt succeeds", async () => {
+    const { args, env, signIn } = fixture();
+    expect(workspaceIdentityFailure(env)).toBeNull();
+    signIn.mockRejectedValueOnce(new Error("OpenClaw returned no profile for svc:gateway-edge"));
+    await expect(bootstrapWorkspaceIdentities(args)).rejects.toThrow("OpenClaw returned no profile for svc:gateway-edge");
+    expect(workspaceIdentityFailure(env)).toBe("OpenClaw returned no profile for svc:gateway-edge");
+    await bootstrapWorkspaceIdentities(args);
+    expect(workspaceIdentityReady(env)).toBe(true);
+    expect(workspaceIdentityFailure(env)).toBeNull();
+  });
+  it("does not report a failure recorded on an earlier boot", async () => {
+    const { args, env, signIn } = fixture();
+    signIn.mockRejectedValueOnce(new Error("OpenClaw returned no profile for svc:gateway-edge"));
+    await expect(bootstrapWorkspaceIdentities(args)).rejects.toThrow();
+    beginWorkspaceIdentityBoot(env);
+    expect(workspaceIdentityFailure(env)).toBeNull();
+  });
   it("initializes an empty native profile store before admitting users or services", async () => {
     const { env, profiles, args } = fixture();
     expect(() => assertWorkspaceIdentityReady(env)).toThrow("not initialized");
