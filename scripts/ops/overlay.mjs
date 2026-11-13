@@ -23,6 +23,17 @@ function sourceEntries(root) {
   return entries;
 }
 
+function readRegularFile(file) {
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK, 0o600);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw new Error(`Overlay file is not regular: ${file}`);
+    return { bytes: fs.readFileSync(fd), mode: stat.mode };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function writeEntry(target, entry) {
   const current = fs.lstatSync(target, { throwIfNoEntry: false });
   if (entry.link !== undefined) {
@@ -32,11 +43,25 @@ function writeEntry(target, entry) {
     fs.symlinkSync(entry.link, target);
     return;
   }
-  const bytes = fs.readFileSync(entry.from);
-  if (current?.isFile() && fs.readFileSync(target).equals(bytes)) return;
-  if (current) fs.rmSync(target, { recursive: true, force: true });
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, bytes, { mode: fs.statSync(entry.from).mode });
+  const { bytes, mode } = readRegularFile(entry.from);
+  if (current?.isFile()) {
+    try {
+      if (readRegularFile(target).bytes.equals(bytes)) return;
+    } catch (error) {
+      if (error.code !== "ENOENT" && error.code !== "ELOOP") throw error;
+    }
+  }
+  const parent = path.dirname(target);
+  fs.mkdirSync(parent, { recursive: true });
+  const staging = fs.mkdtempSync(path.join(parent, ".overlay-copy-"));
+  try {
+    const pending = path.join(staging, "file");
+    fs.writeFileSync(pending, bytes, { mode, flag: "wx" });
+    if (current?.isDirectory()) fs.rmSync(target, { recursive: true, force: true });
+    fs.renameSync(pending, target);
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
 }
 
 function removeStale(root, desired, relative = "") {
