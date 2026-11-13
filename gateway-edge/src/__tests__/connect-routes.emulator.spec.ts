@@ -15,6 +15,7 @@ import { generateConnectState } from "../lib/connect-state.js";
 
 const UID = "uid-connect-test";
 const OTHER_UID = "uid-connect-other";
+const RATE_LIMIT_UID = "uid-connect-quota";
 const PLAINTEXT_GH_TOKEN = "gho_PLAINTEXT-github-oauth-token";
 const PLAINTEXT_GH_PAT = "ghp_PLAINTEXT-github-pat-token";
 const PLAINTEXT_GOOGLE_ACCESS = "ya29.PLAINTEXT-google-access";
@@ -81,6 +82,7 @@ setupEmulatorTest({
 });
 const auth = useAuthToken(UID);
 const otherAuth = useAuthToken(OTHER_UID);
+const rateLimitAuth = useAuthToken(RATE_LIMIT_UID);
 
 const realFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
@@ -205,6 +207,19 @@ describe("connect route module", () => {
 });
 
 describe("connect — auth-url", () => {
+  it("limits OAuth starts per authenticated user without blocking their availability reads", async () => {
+    await db.doc(`users/${RATE_LIMIT_UID}`).set({ accountLifecycle: { status: "active" } });
+    const client = request(createApp());
+    const path = "/api/connect/github/auth-url?returnUrl=/w/me/files";
+    for (let attempt = 0; attempt < 60; attempt++) {
+      await client.get(path).set("Authorization", rateLimitAuth.bearer()).expect(200);
+    }
+    const rejected = await client.get(path).set("Authorization", rateLimitAuth.bearer()).expect(429);
+    expect(rejected.body).toEqual({ error: "Too many connector requests, please try again later." });
+    await client.get(path).set("Authorization", auth.bearer()).expect(200);
+    await client.get("/api/connect/availability").set("Authorization", rateLimitAuth.bearer()).expect(200);
+  });
+
   it("requires auth (uid comes from the verified token, never a query param)", async () => {
     const res = await request(createApp()).get("/api/connect/github/auth-url");
     expect(res.status).toBe(401);
