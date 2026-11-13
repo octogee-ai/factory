@@ -1,3 +1,4 @@
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 import { createHash } from "node:crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
 
@@ -901,7 +902,7 @@ export function createOpenClawControlBrokerRoutes(args: {
     now: args.now ?? Date.now,
   };
   router.post("/redeem", (req, res, next) => redeemControlTicket(context, req, res, next));
-  router.post("/authorize", (req, res, next) => authorizeControlSession(context, req, res, next));
+  router.post("/authorize", brokerRequestLimit(1800), (req, res, next) => authorizeControlSession(context, req, res, next));
   const profile = cacheProfileAvatars(args.profile ?? (async (uid) =>
     (await import("../lib/openclaw-profile-appearance.js")).loadOpenClawProfileAppearance(args.store, uid)));
   const chatAuthor = args.chatAuthor ?? (async (...params) =>

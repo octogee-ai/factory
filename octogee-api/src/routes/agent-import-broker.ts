@@ -1,3 +1,4 @@
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 import type { BlobStore } from "../../../gateway-edge/src/lib/blob-store.js";
 import { registerAgentExportBrokerRoutes } from "./agent-export-broker.js";
 import { Router, type NextFunction, type Request, type Response } from "express";
@@ -272,7 +273,7 @@ function releaseGateIntent(intent: AgentImportAuthorizationIntent): boolean {
 }
 
 function registerAccessRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): void {
-  router.post("/authorize", async (req, res, next) => {
+  router.post("/authorize", brokerRequestLimit(360, "user"), async (req, res, next) => {
     const owner = context(res);
     const body = object(req.body);
     if (

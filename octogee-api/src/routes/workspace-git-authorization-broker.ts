@@ -1,3 +1,4 @@
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 import { Router, type Request, type Response } from "express";
 
 import type { PlatformStateRepositories } from "@octogee/core/platform-state";
@@ -117,7 +118,7 @@ async function authorize(req: Request, res: Response, deps: WorkspaceGitAuthoriz
 export function createWorkspaceGitAuthorizationBrokerRoutes(deps: WorkspaceGitAuthorizationBrokerDeps): Router {
   const router = Router();
 
-  router.post("/authorize", async (req, res, next) => {
+  router.post("/authorize", brokerRequestLimit(360, "user"), async (req, res, next) => {
     try {
       await authorize(req, res, deps);
     } catch (error) {
