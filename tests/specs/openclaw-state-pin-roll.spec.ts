@@ -47,7 +47,8 @@ describe.skipIf(!previous || !previousSha || !binary || !dsn)("OpenClaw pin roll
       const column = await client.query(
         "SELECT data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'workspace_setup_state' AND column_name = 'bootstrap_deferred'",
         [namespaces.rows[0].nspname]);
-      const seal = await client.query(`SELECT version, ddl_hash FROM ${schema}.openclaw_schema_meta`);
+      const seal = await client.query<{ version: number; ddl_hash: string }>(
+        `SELECT version::integer AS version, ddl_hash FROM ${schema}.openclaw_schema_meta`);
       const setup = await client.query(`SELECT workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at FROM ${schema}.workspace_setup_state ORDER BY workspace_key`);
       expect(seal.rows).toHaveLength(1);
       return { column: column.rows, seal: seal.rows[0], setup: setup.rows };
@@ -66,7 +67,9 @@ describe.skipIf(!previous || !previousSha || !binary || !dsn)("OpenClaw pin roll
       writeAgent(binary!, "second-start");
       expect(completed.column).toEqual([{ data_type: "bigint", is_nullable: "YES", column_default: null }]);
       expect(completed.setup).toEqual(retained.setup);
-      expect(completed.seal.ddl_hash !== retained.seal.ddl_hash).toBe(retained.column.length === 0);
+      expect(completed.seal.version).toBeGreaterThanOrEqual(retained.seal.version);
+      const changedSchema = completed.seal.version !== retained.seal.version || retained.column.length === 0;
+      expect(completed.seal.ddl_hash !== retained.seal.ddl_hash).toBe(changedSchema);
       expect(await stateStore()).toEqual(completed);
     } finally {
       const created = await client.query<{ nspname: string }>("SELECT nspname FROM pg_namespace WHERE nspname LIKE $1", [`${likePrefix}\\_%`]);

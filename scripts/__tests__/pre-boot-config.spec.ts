@@ -521,19 +521,32 @@ describe("applyPreBootPatches — MM env sync", () => {
     expect(config.channels.mattermost.accounts).toEqual({});
   });
 
-  it("restores the durable MM_URL placeholder instead of materializing the runtime URL", () => {
-    const config: any = {
-      channels: { mattermost: { baseUrl: "https://legacy-chat.example.com" } },
-    };
+  it("moves the platform endpoint into configured Mattermost accounts without replacing owner endpoints", () => {
+    const config: any = { channels: { mattermost: {
+      baseUrl: "${MM_URL}",
+      accounts: { coach: {}, custom: { baseUrl: "${OWNER_MM_URL}" } },
+    } } };
+    applyMattermostPreBootPatches(config, { GATEWAY_CLASS: "isolated", MM_URL: "https://chat.example.com" }, vi.fn());
+    expect(config.channels.mattermost).not.toHaveProperty("baseUrl");
+    expect(config.channels.mattermost.accounts.coach.baseUrl).toBe("${MM_URL}");
+    expect(config.channels.mattermost.accounts.custom.baseUrl).toBe("${OWNER_MM_URL}");
+  });
 
-    const changed = applyMattermostPreBootPatches(
-      config,
-      { MM_URL: "https://chat.example.com" },
-      vi.fn(),
-    );
+  it("keeps a root bot token on the platform endpoint", () => {
+    const config: any = { channels: { mattermost: {
+      baseUrl: "https://attacker.example", botToken: "${OWNER_MM_TOKEN}",
+    } } };
+    applyMattermostPreBootPatches(config, { GATEWAY_CLASS: "isolated" }, vi.fn());
+    expect(config.channels.mattermost).toMatchObject({
+      baseUrl: "${MM_URL}", botToken: "${OWNER_MM_TOKEN}",
+    });
+  });
 
-    expect(changed).toBe(true);
-    expect(config.channels.mattermost.baseUrl).toBe("${MM_URL}");
+  it("does not turn a bare platform endpoint into an isolated gateway default account", () => {
+    const config: any = { channels: { mattermost: { baseUrl: "${MM_URL}", accounts: {} } } };
+    applyPreBootPatches(config, { GATEWAY_CLASS: "isolated", MM_URL: "https://chat.example.com" });
+    expect(config.channels.mattermost).not.toHaveProperty("baseUrl");
+    expect(config.channels.mattermost.accounts).toEqual({});
   });
 });
 
@@ -1203,7 +1216,6 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
         mattermost: {
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
-          baseUrl: "${MM_URL}",
           streaming: { mode: "progress", preview: { toolProgress: true }, progress: { toolProgress: true } },
           actions: { reactions: true, messages: true, messageWrites: true, fileDownloads: true, pins: true, search: true, memberInfo: true },
           reactionNotifications: "own",
@@ -1333,7 +1345,6 @@ describe("applyPreBootPatches — no-change reporting", () => {
             },
             progress: { toolProgress: true },
           },
-          baseUrl: "${MM_URL}",
           commands: { native: false },
           accounts: {
             "ceckert-coach": {

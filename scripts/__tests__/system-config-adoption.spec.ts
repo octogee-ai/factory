@@ -171,8 +171,8 @@ describe("system config adoption", () => {
     }));
     const validateConfig = vi.fn((candidatePath: string) => {
       const candidate = JSON.parse(fs.readFileSync(candidatePath, "utf8"));
+      expect(candidate.channels.mattermost).not.toHaveProperty("baseUrl");
       expect(candidate.channels.mattermost).toMatchObject({
-        baseUrl: "${MM_URL}",
         network: { dangerouslyAllowPrivateNetwork: true },
         interactions: {
           callbackBaseUrl: "${MM_INTERACTIONS_CALLBACK_BASE_URL}",
@@ -186,9 +186,11 @@ describe("system config adoption", () => {
           "ceckert-proj-garden": {
             botToken: { source: "file", provider: "octogee-mattermost", id: "/ceckert-coach" },
             interactions: { callbackBaseUrl: "https://hooks.user.example" },
+            baseUrl: "${MM_URL}",
           },
           "support-bot": {
             botToken: { source: "file", provider: "octogee-mattermost", id: "/support-bot" },
+            baseUrl: "${MM_URL}",
           },
         },
       });
