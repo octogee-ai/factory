@@ -143,10 +143,18 @@ jobs:
       build-sha: ${{ needs.publish.outputs.sha }}
 
   kind-smoke:
-    name: Kind smoke (amd64)
+    name: Kind smoke (${{ matrix.arch }})
     needs: publish
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -202,6 +210,15 @@ jobs:
           done
           printf 'Shared Gateway failed to become ready: %s\n' "$listing" >&2
           exit 1
+      - name: Check the Gateway browser, media, and Python tools
+        run: |
+          kubeconfig="$RUNNER_TEMP/kind-state/octogee/kubeconfig"
+          kubectl --kubeconfig="$kubeconfig" -n octogee-local exec deployment/octogee-gateway-shared-a -c gateway -- bash -euo pipefail -c '
+            chromium --version
+            ffmpeg -v error -f lavfi -i sine=duration=0.1 -f wav pipe:1 | ffprobe -v error -show_entries stream=codec_name -of csv=p=0 pipe:0 | grep -qx pcm_s16le
+            convert -size 2x2 xc:white png:- | identify -format "%m" - | grep -qx PNG
+            python3 -c "import bs4, matplotlib, pandas, yaml"
+          '
       - name: Show cluster status on failure
         if: failure()
         run: |
