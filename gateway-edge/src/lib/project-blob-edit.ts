@@ -45,10 +45,13 @@ function assertProjectAssetEdit(target: FileTarget, name: string): void {
 }
 
 function updateAssetEntry(manifest: Manifest, name: string, entry: ManifestEntry | null): void {
-  if (entry === null) {
-    if (!Reflect.deleteProperty(manifest, name)) throw new Error("project asset manifest entry could not be deleted");
-  } else {
-    Object.defineProperty(manifest, name, { value: entry, enumerable: true, writable: true, configurable: true });
+  if (entry !== null) {
+    const descriptor = { value: entry, enumerable: true, writable: true, configurable: true };
+    Object.defineProperties(manifest, Object.fromEntries([[name, descriptor]]));
+    return;
+  }
+  if (!Reflect.deleteProperty(manifest, name)) {
+    throw new Error("project asset manifest entry could not be deleted");
   }
 }
 
