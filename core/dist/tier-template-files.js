@@ -32,17 +32,41 @@ export function readTierTemplateFile(templateKey, filename, vars) {
 }
 function removeLegacyContextIgnores(customerDir) {
     const gitignorePath = path.join(customerDir, ".gitignore");
-    if (!fs.existsSync(gitignorePath))
-        return false;
-    const original = fs.readFileSync(gitignorePath, "utf-8");
-    const filtered = original
-        .split(/\r?\n/)
-        .filter((line) => !PLATFORM_CONVERGED_CONTEXT_FILES.has(line.trim()))
-        .join("\n");
-    if (filtered === original)
-        return false;
-    fs.writeFileSync(gitignorePath, filtered, "utf-8");
-    return true;
+    let fd;
+    try {
+        fd = fs.openSync(gitignorePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    }
+    catch (error) {
+        const code = error.code;
+        if (code === "ENOENT" || code === "ELOOP")
+            return false;
+        throw error;
+    }
+    try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile())
+            return false;
+        const original = fs.readFileSync(fd, "utf-8");
+        const filtered = original.split(/\r?\n/).filter((line) => !PLATFORM_CONVERGED_CONTEXT_FILES.has(line.trim())).join("\n");
+        if (filtered === original)
+            return false;
+        const staging = fs.mkdtempSync(path.join(customerDir, ".octogee-ignore-"));
+        try {
+            const pending = path.join(staging, "pending");
+            fs.writeFileSync(pending, filtered, { encoding: "utf-8", flag: "wx", mode: stat.mode & 0o777 });
+            const current = fs.lstatSync(gitignorePath, { throwIfNoEntry: false });
+            if (current?.ino !== stat.ino || current.dev !== stat.dev || current.mtimeMs !== stat.mtimeMs || current.size !== stat.size)
+                return false;
+            fs.renameSync(pending, gitignorePath);
+            return true;
+        }
+        finally {
+            fs.rmSync(staging, { recursive: true, force: true });
+        }
+    }
+    finally {
+        fs.closeSync(fd);
+    }
 }
 // No memory/ seed here: openclaw does memory, not Octogee — its session-memory
 // hook mkdirs the directory on demand and every native reader tolerates absence.
@@ -50,10 +74,14 @@ export function writeTierTemplateFiles(customerDir, templateKey, templateVars) {
     const written = [];
     for (const file of listTierTemplateFiles(templateKey)) {
         const dest = path.join(customerDir, file);
-        if (fs.existsSync(dest))
-            continue;
-        fs.writeFileSync(dest, readTierTemplateFile(templateKey, file, templateVars), "utf-8");
-        written.push(file);
+        try {
+            fs.writeFileSync(dest, readTierTemplateFile(templateKey, file, templateVars), { encoding: "utf-8", flag: "wx" });
+            written.push(file);
+        }
+        catch (error) {
+            if (error.code !== "EEXIST")
+                throw error;
+        }
     }
     if (removeLegacyContextIgnores(customerDir)) {
         written.push(".gitignore");

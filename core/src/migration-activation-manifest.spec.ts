@@ -287,6 +287,16 @@ describe("migration activation manifest", () => {
     });
   });
 
+  it("rejects a manifest symlink even when its target contains a valid manifest", async () => {
+    const dir = await mkTmp();
+    const { path: relative } = await writeActivationManifest(dir, manifest());
+    const filename = path.join(dir, relative);
+    await fs.rename(filename, `${filename}.original`);
+    await fs.symlink(`${filename}.original`, filename);
+
+    await expect(readActivationManifest(dir, "alice")).rejects.toMatchObject({ code: "ELOOP" });
+  });
+
   it.each([true, false])("rejects a version-one manifest with fingerprint present=%s", async (hasFingerprint) => {
     const dir = await mkTmp();
     const previous = { ...manifest(), version: 1 } as Record<string, unknown>;

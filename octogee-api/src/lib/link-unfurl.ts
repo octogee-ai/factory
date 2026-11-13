@@ -271,14 +271,18 @@ function pinnedDispatcher(address: string): Agent {
 
 // --- metadata parsing (best-effort, never throws) ---
 
+const METADATA_ENTITIES = new Map([
+  ['&amp;', '&'],
+  ['&lt;', '<'],
+  ['&gt;', '>'],
+  ['&quot;', '"'],
+  ['&#39;', "'"],
+  ['&apos;', "'"],
+  ['&nbsp;', ' '],
+]);
+
 function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&nbsp;/g, ' ');
+  return s.replace(/&(?:amp|lt|gt|quot|#39|apos|nbsp);/g, (entity) => METADATA_ENTITIES.get(entity)!);
 }
 
 // Index every <meta> tag's property/name → content once (literal regexes only,

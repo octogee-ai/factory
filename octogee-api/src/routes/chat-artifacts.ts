@@ -1,3 +1,4 @@
+import { authenticatedRequestLimit, authenticationFailureLimit } from "../middleware/authenticated-request-limit.js";
 import { createHash } from "node:crypto";
 import type { Readable } from "node:stream";
 import express, {
@@ -187,9 +188,9 @@ function asyncRoute(
 
 export function createChatArtifactRoutes(deps: PublicRoutesDeps): Router {
   const router = Router();
-  router.use(deps.auth);
+  router.use(authenticationFailureLimit, deps.auth);
 
-  router.post("/", asyncRoute(async (req, res) => {
+  router.post("/", authenticatedRequestLimit(30), asyncRoute(async (req, res) => {
     let parsed: ReturnType<typeof parseArtifactRequest>;
     try {
       parsed = parseArtifactRequest(req.body);
@@ -206,7 +207,7 @@ export function createChatArtifactRoutes(deps: PublicRoutesDeps): Router {
     res.status(job.status === "queued" || job.status === "processing" ? 202 : 200).json(publicJob(job));
   }));
 
-  router.get("/:artifactId", asyncRoute(async (req, res) => {
+  router.get("/:artifactId", authenticatedRequestLimit(120), asyncRoute(async (req, res) => {
     const job = await authorizedJob(req, deps.registry, deps.access);
     if (!job) {
       res.status(404).json({ error: "Artifact not found" });
@@ -215,7 +216,7 @@ export function createChatArtifactRoutes(deps: PublicRoutesDeps): Router {
     res.json(publicJob(job));
   }));
 
-  router.get("/:artifactId/markdown", asyncRoute(async (req, res) => {
+  router.get("/:artifactId/markdown", authenticatedRequestLimit(120), asyncRoute(async (req, res) => {
     const job = await authorizedJob(req, deps.registry, deps.access);
     if (!job?.result) {
       res.status(job ? 409 : 404).json({ error: job ? "Artifact is not ready" : "Artifact not found" });
@@ -224,7 +225,7 @@ export function createChatArtifactRoutes(deps: PublicRoutesDeps): Router {
     streamBlob(res, await deps.blobs.open(job.result.markdown));
   }));
 
-  router.get("/:artifactId/pages/:pageNumber", asyncRoute(async (req, res) => {
+  router.get("/:artifactId/pages/:pageNumber", authenticatedRequestLimit(360), asyncRoute(async (req, res) => {
     const job = await authorizedJob(req, deps.registry, deps.access);
     if (!job?.result) {
       res.status(job ? 409 : 404).json({ error: job ? "Artifact is not ready" : "Artifact not found" });

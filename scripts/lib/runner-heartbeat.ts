@@ -1,6 +1,7 @@
 /* eslint-disable sonarjs/publicly-writable-directories -- /tmp is an in-pod heartbeat cache with fixed filenames, not user-controlled temp input. */
-import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { replaceFileAtomically } from "./atomic-file.js";
 
 // One heartbeat per supervised in-pod runner. The supervisor writes it on
 // every state change AND on a periodic tick while the child runs, so `ts`
@@ -30,10 +31,7 @@ export const DEFAULT_STALE_MS = 45_000;
 export function writeHeartbeat(dir: string, hb: RunnerHeartbeat): void {
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${hb.name}.json`);
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(hb));
-  // Atomic replace so the exporter never reads a half-written file.
-  renameSync(tmp, path);
+  replaceFileAtomically(path, JSON.stringify(hb), 0o644);
 }
 
 export function readHeartbeats(dir: string): RunnerHeartbeat[] {

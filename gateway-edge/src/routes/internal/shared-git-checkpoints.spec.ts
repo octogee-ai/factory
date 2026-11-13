@@ -9,6 +9,8 @@ import { createProjectPersistenceRouter } from "./project-persistence.js";
 import { _setGatewayTokenReviewerForTests, requireGatewayInternalAuth } from "../../middleware/gateway-internal-auth.js";
 import { claimedTestUser, installTestUserIdentity } from "../../__tests__/helpers/user-identity.js";
 
+const linuxTest = it.skipIf(process.platform !== "linux");
+
 vi.mock("../../lib/connector-tokens.js", () => ({ readOwnerRuntimeConnectorAccessToken: vi.fn() }));
 vi.mock("../../lib/workspace-blob.js", () => ({ storeWorkspaceBlob: vi.fn(async () => { throw new Error("unexpected binary upload in text checkpoint fixture"); }) }));
 
@@ -90,13 +92,13 @@ beforeEach(() => {
 });
 afterEach(() => { _setGatewayTokenReviewerForTests(null); vi.unstubAllGlobals(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 
-it("checkpoints exact Shared agent and Gitea project persona bytes for a cold clone", async () => {
+linuxTest("checkpoints exact Shared agent and Gitea project persona bytes for a cold clone", async () => {
   expect((await flush()).status).toBe(200);
   expect(restored("workspace")).toEqual(Buffer.from(personas.workspace));
   expect(restored("demo")).toEqual(Buffer.from(personas.demo));
 });
 
-it("accepts a checkpoint already published in an archived remote and retains unpublished changes", async () => {
+linuxTest("accepts a checkpoint already published in an archived remote and retains unpublished changes", async () => {
   for (const [name, dir] of [["workspace", user], ["demo", path.join(user, "projects/demo")]]) {
     git(dir, "add", "."); git(dir, "commit", "-m", "published snapshot");
     git(dir, "push", path.join(remoteRoot, `${name}.git`), "main");
@@ -115,7 +117,7 @@ it("accepts a checkpoint already published in an archived remote and retains unp
   expect(readFileSync(path.join(user, "projects/demo/unpublished.md"), "utf8")).toBe("retain local-only work\n");
 });
 
-it.each(["missing", "stale"])("keeps nested project histories out of a %s workspace ignore policy", async policy => {
+linuxTest.each(["missing", "stale"])("keeps nested project histories out of a %s workspace ignore policy", async policy => {
   const other = checkout("other");
   snapshot.projects = [...snapshot.projects as object[], { projectSlug: "other", giteaRepoName: "other", provisioningState: "active" }];
   const demo = path.join(user, "projects/demo");
@@ -156,7 +158,7 @@ it.each(["missing", "stale"])("keeps nested project histories out of a %s worksp
   expect(existsSync(path.join(user, "projects/.octogee-state/runtime.json"))).toBe(true);
 });
 
-it("still refuses a workspace symlink outside the reserved projects namespace", async () => {
+linuxTest("still refuses a workspace symlink outside the reserved projects namespace", async () => {
   const outside = path.join(root, "outside.txt"); writeFileSync(outside, "private\n");
   symlinkSync(outside, path.join(user, "escape.txt"));
   const before = git(path.join(remoteRoot, "workspace.git"), "rev-parse", "main");
@@ -165,7 +167,7 @@ it("still refuses a workspace symlink outside the reserved projects namespace", 
   expect(readFileSync(outside, "utf8")).toBe("private\n");
 });
 
-it.each(["directory-to-file", "file-to-directory"])("checkpoints a 40-file %s replacement with the projects boundary", async direction => {
+linuxTest.each(["directory-to-file", "file-to-directory"])("checkpoints a 40-file %s replacement with the projects boundary", async direction => {
   const entry = path.join(user, "replacement");
   const populate = () => {
     mkdirSync(entry);
@@ -191,7 +193,7 @@ it.each(["directory-to-file", "file-to-directory"])("checkpoints a 40-file %s re
   expect(git(clone, "ls-files").split("\n").some(name => name.startsWith("projects/"))).toBe(false);
 });
 
-it("retains local files on remote failure and pushes the existing commit on retry", async () => {
+linuxTest("retains local files on remote failure and pushes the existing commit on retry", async () => {
   const remote = path.join(remoteRoot, "demo.git"); const retained = `${remote}.retained`; renameSync(remote, retained);
   expect((await flush()).status).toBe(503);
   expect(readFileSync(path.join(user, "projects/demo/IDENTITY.md"), "utf8")).toBe(personas.demo);
@@ -209,7 +211,7 @@ it("refuses missing authentication, another user and changed assignment before G
   expect(git(path.join(remoteRoot, "workspace.git"), "rev-parse", "main")).toBe(before);
 });
 
-it("ignores deferred GitHub workspaces and disabled Gitea checkouts", async () => {
+linuxTest("ignores deferred GitHub workspaces and disabled Gitea checkouts", async () => {
   snapshot.projects = [{ projectSlug: "demo", giteaRepoName: "demo", checkoutEnabled: false }, { projectSlug: "deferred", repoSource: { provider: "github", owner: "alice", repo: "deferred" } }];
   const deferred = path.join(user, "projects/deferred"); mkdirSync(deferred); writeFileSync(path.join(deferred, "AGENTS.md"), "deferred\n");
   const before = git(path.join(remoteRoot, "demo.git"), "rev-parse", "main");
@@ -250,7 +252,7 @@ it.each(["missing", "migrating", "epoch"])("refuses %s canonical assignment cust
   expect(git(path.join(remoteRoot, "workspace.git"), "rev-parse", "main")).toBe(before);
 });
 
-it("refuses a noncanonical project remote without committing its local persona", async () => {
+linuxTest("refuses a noncanonical project remote without committing its local persona", async () => {
   const metadata = path.join(root, "git-metadata/alice/projects/demo.git");
   const before = git(metadata, "rev-parse", "HEAD");
   git(metadata, "config", "remote.origin.url", "git@foreign:alice/demo.git");

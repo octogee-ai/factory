@@ -92,8 +92,10 @@ spec:
               value: {{ .Values.llmBroker.upstream.anthropicBaseUrl | quote }}
             - name: OPENROUTER_UPSTREAM_BASE_URL
               value: {{ .Values.llmBroker.upstream.openrouterBaseUrl | quote }}
+            {{- with .Values.llmBroker.prepaidCreditMarkupMultiplier }}
             - name: PLATFORM_CREDIT_MARKUP_MULTIPLIER
-              value: {{ required "llmBroker.prepaidCreditMarkupMultiplier is required" .Values.llmBroker.prepaidCreditMarkupMultiplier | quote }}
+              value: {{ . | quote }}
+            {{- end }}
             - name: PLATFORM_VERTEX_ENABLED
               value: {{ .Values.llmBroker.vertex.enabled | quote }}
             - name: PLATFORM_VERTEX_PROJECT_ID
@@ -109,7 +111,7 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.llmBroker.providerSecret.name }}
                   key: {{ .Values.llmBroker.providerSecret.key }}
-                  optional: false
+                  optional: {{ .Values.llmBroker.providerSecret.optional | default false }}
             - name: OPENROUTER_API_KEY
               valueFrom:
                 secretKeyRef:

@@ -1,4 +1,5 @@
-import { Router, type NextFunction, type Request, type RequestHandler, type Response } from "express";
+import { Router, type NextFunction, type Request, type Response } from "express";
+import { rateLimit } from "express-rate-limit";
 import * as path from "node:path";
 import {
   authorizeWorkspaceGit,
@@ -22,6 +23,7 @@ import {
   type WorkspaceGitError,
 } from "../../lib/workspace-git.js";
 import { logger } from "../../middleware/logging.js";
+import { DEFAULT_RATE_LIMIT_OPTIONS } from "../../middleware/security.js";
 
 export interface WorkspaceGitRouterDeps {
   authorize(request: WorkspaceGitAuthorizationRequest): Promise<WorkspaceGitAuthorizationOutcome>;
@@ -38,6 +40,8 @@ type AuthorizedHandler = (
   next: NextFunction,
   target: WorkspaceGitAuthorization,
 ) => Promise<void>;
+
+type GitLocals = { gitAuthorization: WorkspaceGitAuthorization };
 
 function usersRoot(): string {
   return process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
@@ -80,20 +84,19 @@ function respondDenied(res: Response, outcome: Exclude<WorkspaceGitAuthorization
   });
 }
 
-function withGitAuthorization(
+function requireGitAuthorization(
   deps: WorkspaceGitRouterDeps,
-  handler: AuthorizedHandler,
   lane: WorkspaceGitLane,
-): RequestHandler {
-  return async (req, res, next) => {
+) {
+  return async (req: Request, res: Response<unknown, GitLocals>, next: NextFunction) => {
     try {
       const authorization = req.headers.authorization;
       if (!authorization?.startsWith("Bearer ")) {
         res.status(401).json({ error: "Unauthenticated" });
         return;
       }
-      const gatewayId = requestedGatewayId(req);
-      if (!gatewayId || deps.localGatewayId() !== gatewayId) {
+      const gatewayId = deps.localGatewayId();
+      if (!gatewayId || requestedGatewayId(req) !== gatewayId) {
         res.status(404).json({ error: "not_found" });
         return;
       }
@@ -119,7 +122,8 @@ function withGitAuthorization(
         respondDenied(res, outcome);
         return;
       }
-      await handler(req, res, next, outcome.authorization);
+      res.locals.gitAuthorization = outcome.authorization;
+      next();
     } catch (error) {
       next(error);
     }
@@ -427,17 +431,29 @@ const gitBranchCheckoutHandler: AuthorizedHandler = async (req, res, _next, targ
 
 export function createWorkspaceGitRouter(deps: WorkspaceGitRouterDeps): Router {
   const router = Router({ mergeParams: true });
-  const authorized = (handler: AuthorizedHandler, lane: WorkspaceGitLane) =>
-    withGitAuthorization(deps, handler, lane);
+  const workspaceGitRateLimit = (limit: number) => rateLimit({
+    ...DEFAULT_RATE_LIMIT_OPTIONS,
+    windowMs: 60_000,
+    limit,
+    keyGenerator: (_req, res) => (res.locals as GitLocals).gitAuthorization.uid,
+    message: { error: "Too many workspace Git requests, please try again later." },
+  });
+  const readLimit = workspaceGitRateLimit(300);
+  const writeLimit = workspaceGitRateLimit(30);
+  const authorized = (handler: AuthorizedHandler, lane: WorkspaceGitLane) => [
+    requireGitAuthorization(deps, lane),
+    lane.access === "read" ? readLimit : writeLimit,
+    (req: Request, res: Response<unknown, GitLocals>, next: NextFunction) => handler(req, res, next, res.locals.gitAuthorization),
+  ] as const;
 
-  router.get("/git/status", authorized(gitStatusHandler, GIT_LANE_READ));
-  router.get("/git/diff", authorized(gitDiffHandler, GIT_LANE_READ));
-  router.get("/git/commit-diff", authorized(gitCommitDiffHandler, GIT_LANE_READ));
-  router.get("/git/log", authorized(gitLogHandler, GIT_LANE_READ));
-  router.get("/git/branches", authorized(gitBranchesHandler, GIT_LANE_READ));
-  router.post("/git/commit", authorized(gitCommitHandler, GIT_LANE_WRITE));
-  router.post("/git/push", authorized(gitPushHandler, GIT_LANE_REMOTE_WRITE));
-  router.post("/git/branch/checkout", authorized(gitBranchCheckoutHandler, GIT_LANE_WRITE));
+  router.get("/git/status", ...authorized(gitStatusHandler, GIT_LANE_READ));
+  router.get("/git/diff", ...authorized(gitDiffHandler, GIT_LANE_READ));
+  router.get("/git/commit-diff", ...authorized(gitCommitDiffHandler, GIT_LANE_READ));
+  router.get("/git/log", ...authorized(gitLogHandler, GIT_LANE_READ));
+  router.get("/git/branches", ...authorized(gitBranchesHandler, GIT_LANE_READ));
+  router.post("/git/commit", ...authorized(gitCommitHandler, GIT_LANE_WRITE));
+  router.post("/git/push", ...authorized(gitPushHandler, GIT_LANE_REMOTE_WRITE));
+  router.post("/git/branch/checkout", ...authorized(gitBranchCheckoutHandler, GIT_LANE_WRITE));
 
   return router;
 }

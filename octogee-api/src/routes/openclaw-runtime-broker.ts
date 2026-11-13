@@ -1,3 +1,4 @@
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
 import { notifyNativeFinalReply, parseFinalReply, ReplyBindingDeniedError, type FinalReplyIdentity, type FinalReplyTarget } from "@octogee/core/native-final-reply";
 import { readFinalReplyPost, verifyFinalReplyChannel } from "../lib/native-final-reply-mattermost.js";
@@ -1061,7 +1062,7 @@ function mountActivityRoutes(
 
   router.post("/activity/channel-target", resolveChannelTarget);
 
-  router.post("/activity/conversation-target", async (req, res) => {
+  router.post("/activity/conversation-target", brokerRequestLimit(1800), async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
     const target = await resolveAuthorizedConversationTarget(

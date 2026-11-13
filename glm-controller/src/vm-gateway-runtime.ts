@@ -258,8 +258,9 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
   }
 
   async function readSecret(name: string, key: string): Promise<string> {
-    const raw = (await kubectl(["get", "secret", name, "-n", deps.namespace, "-o", `jsonpath={.data.${key.replace(/\./g, "\\.")}}`])).trim();
-    if (!raw) throw new Error(`secret ${name}/${key} in ${deps.namespace} is empty or missing`);
+    const { data } = JSON.parse(await kubectl(["get", "secret", name, "-n", deps.namespace, "-o", "json"])) as { data?: Record<string, unknown> };
+    const raw = data && Object.hasOwn(data, key) ? data[key] : undefined;
+    if (typeof raw !== "string" || raw.length === 0) throw new Error(`secret ${name}/${key} in ${deps.namespace} is empty or missing`);
     return Buffer.from(raw, "base64").toString("utf8");
   }
 

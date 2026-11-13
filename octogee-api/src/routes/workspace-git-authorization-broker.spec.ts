@@ -21,7 +21,7 @@ interface Caller {
   workspaceSlug?: string | null;
 }
 
-function app(options: { bound?: boolean; caller?: Caller; store?: PlatformStateStore } = {}) {
+function app(options: { bound?: boolean; caller?: Caller | ((req: express.Request) => Caller); store?: PlatformStateStore } = {}) {
   const instance = express();
   instance.use(express.json());
   instance.use((req, _res, next) => {
@@ -35,7 +35,7 @@ function app(options: { bound?: boolean; caller?: Caller; store?: PlatformStateS
         serviceAccountName: "octogee-gw-walter",
       } as Express.Request["boundTenant"];
     }
-    const caller = options.caller ?? { uid: "uid-member", user: { displayName: "Mem Ber", email: "member@example.com" }, workspaceSlug: "member" };
+    const caller = typeof options.caller === "function" ? options.caller(req) : options.caller ?? { uid: "uid-member", user: { displayName: "Mem Ber", email: "member@example.com" }, workspaceSlug: "member" };
     req.uid = caller.uid;
     req.user = caller.user;
     req.workspaceSlug = caller.workspaceSlug;
@@ -73,6 +73,14 @@ beforeEach(() => {
 });
 
 describe("POST /internal/workspace-git/authorize", () => {
+  it("keeps authorization budgets separate for callers sharing a gateway", async () => {
+    const client = request(app({ caller: req => ({ uid: req.get("x-fixture-uid") ?? "uid-a" }) }));
+    for (let count = 0; count < 360; count++) await client.post("/internal/workspace-git/authorize").send(body).expect(200);
+    await client.post("/internal/workspace-git/authorize").send(body).expect(429);
+    expect(resolveTarget).toHaveBeenCalledTimes(360);
+    await client.post("/internal/workspace-git/authorize").set("x-fixture-uid", "uid-b").send(body).expect(200);
+  });
+
   it("refuses a request that is not bound to the gateway it names", async () => {
     expect((await request(app({ bound: false })).post("/internal/workspace-git/authorize").send(body)).status).toBe(403);
     expect((await request(app()).post("/internal/workspace-git/authorize").send({ ...body, gatewayId: "other" })).status).toBe(403);

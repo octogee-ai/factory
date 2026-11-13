@@ -1,6 +1,6 @@
 export async function createRestartDriverDeps(packagePath = '/octogee/scripts/package.json') {
     const { createRequire } = await import('node:module');
-    const { readFileSync, statSync } = await import('node:fs');
+    const { closeSync, constants, fstatSync, openSync, readSync } = await import('node:fs');
     const { homedir, networkInterfaces } = await import('node:os');
     const { join } = await import('node:path');
     const { randomUUID } = await import('node:crypto');
@@ -12,9 +12,29 @@ export async function createRestartDriverDeps(packagePath = '/octogee/scripts/pa
     const { signConnectDevice } = await import(localRequire.resolve('@octogee/shared/types/device-identity'));
     const { OPENCLAW_PROTOCOL_VERSION } = await import(localRequire.resolve('@octogee/shared/types/openclaw-wire'));
     const readJson = (file) => {
-        if (statSync(file).size > 1048576)
-            throw new Error('restart configuration too large');
-        return JSON.parse(readFileSync(file, 'utf8'));
+        const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        try {
+            const maxBytes = 1048576;
+            const stat = fstatSync(fd);
+            if (!stat.isFile())
+                throw new Error('restart configuration must be a regular file');
+            if (stat.size > maxBytes)
+                throw new Error('restart configuration too large');
+            const contents = Buffer.alloc(maxBytes + 1);
+            let size = 0;
+            while (size < contents.length) {
+                const read = readSync(fd, contents, size, contents.length - size, null);
+                if (read === 0)
+                    break;
+                size += read;
+            }
+            if (size > maxBytes)
+                throw new Error('restart configuration too large');
+            return JSON.parse(contents.toString('utf8', 0, size));
+        }
+        finally {
+            closeSync(fd);
+        }
     };
     const configPath = process.env.OPENCLAW_CONFIG_PATH?.trim() || join(homedir(), '.openclaw', 'openclaw.json');
     const config = readJson(configPath);

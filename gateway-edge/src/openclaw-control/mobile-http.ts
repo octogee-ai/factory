@@ -82,14 +82,15 @@ export function createMobileHttpRouter(
       if (!grant) return;
       const { binding, token, readCookies } = grant;
       const headers = httpHeaders(req, binding, token, readCookies, authority);
+      const upstreamOrigin = openClawControlUpstreamBase(authority.env);
       const lease = limiter.acquireRequest({ uid: binding.uid, gatewayId, sessionId: binding.id });
       if (!lease) {
         res.status(429).end();
         return;
       }
       const upstream = http.request(
-        mobileUpstreamUrl(upstreamPath, authority.env),
-        { method: req.method, headers },
+        upstreamOrigin,
+        { path: upstreamPath, method: req.method, headers },
         (response) => {
           relayResponse(response, res, { parsed, navigation, binding, method: req.method }, authority);
         },
@@ -140,14 +141,6 @@ export function createMobileHttpRouter(
   });
 
   return router;
-}
-
-function mobileUpstreamUrl(path: string, env: NodeJS.ProcessEnv): URL {
-  const upstream = openClawControlUpstreamBase(env);
-  const target = new URL(path, upstream);
-  if (target.origin !== upstream.origin || target.username || target.password)
-    throw new Error('Mobile HTTP destination is outside its configured origin');
-  return target;
 }
 
 function httpResource(path: string, authority: MobileGatewayAuthority) {

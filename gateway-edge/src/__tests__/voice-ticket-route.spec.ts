@@ -12,7 +12,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("../middleware/auth.js", () => ({
-  requireAuth: (_req: unknown, _res: unknown, next: () => void) => next(),
+  requireActiveAccount: (_req: unknown, _res: unknown, next: () => void) => next(),
+  requireAuthenticatedUid: (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock("../middleware/logging.js", () => ({ logger: h.logger }));
 vi.mock("../lib/gateway-ticket.js", async () => {

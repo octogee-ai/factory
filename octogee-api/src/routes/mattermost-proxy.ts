@@ -1,7 +1,8 @@
+import { authenticatedRequestLimit, authenticationFailureLimit } from "../middleware/authenticated-request-limit.js";
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import { Router, type Request, type Response } from "express";
 import type { PlatformStateRepositories } from "@octogee/core/platform-state";
-import { requireAuth } from "../../../gateway-edge/src/middleware/auth.js";
+import { requireActiveAccount, requireAuthenticatedUid } from "../../../gateway-edge/src/middleware/auth.js";
 import { forwardMmRest } from "../../../gateway-edge/src/chat-proxy/mm-proxy/rest.js";
 import type { CreatedPostObserver, ProductNotifications } from "../lib/user-notifications.js";
 
@@ -79,7 +80,7 @@ async function getMmCreds(store: MattermostCredentialStore, uid: string): Promis
 
 export function createMattermostMintRoutes(store: MattermostCredentialStore): Router {
   const router = Router();
-  router.post("/", requireAuth, async (req: Request, res: Response) => {
+  router.post("/", authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(60), requireActiveAccount, async (req: Request, res: Response) => {
     if (!API_PUBLIC_URL) {
       logger.error("[mm-proxy] API_PUBLIC_URL unset — refusing to mint with empty mmUrl");
       res.status(503).json({ error: "Chat service misconfigured" });
