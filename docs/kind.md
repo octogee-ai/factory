@@ -301,5 +301,5 @@ The `image-security-*` artifacts include the source manifest, one Trivy JSON
 report, and one CycloneDX SBOM per image for the named architecture. Findings
 are reported in the run summary and do not fail publication. Scanner errors,
 missing digests, or missing reports fail the scan job. The weekly scan reuses
-the latest successful Build main manifest from a push to `main` and uses current
+the latest published Build main manifest from a push to `main` and uses current
 vulnerability data.

@@ -55,7 +55,7 @@ Use the [security policy](SECURITY.md) to report vulnerabilities privately.
 Open [Build main](https://github.com/octogee-ai/octogee-cloud/actions/workflows/build-main.yml)
 for the image manifest, Trivy reports, and CycloneDX SBOMs for both Linux
 architectures. The [Image security workflow](https://github.com/octogee-ai/octogee-cloud/actions/workflows/image-security.yml)
-rescans the latest successful main build weekly. See [Verify published images](docs/kind.md#verify-published-images)
+rescans the latest published main build weekly. See [Verify published images](docs/kind.md#verify-published-images)
 for provenance and [Source security](https://github.com/octogee-ai/octogee-cloud/actions/workflows/source-security.yml)
 for lockfile, infrastructure, and workflow scans.
 

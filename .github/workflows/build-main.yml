@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       rescan-latest:
-        description: Scan the latest successful main build without building images
+        description: Scan the latest published main build without building images
         type: boolean
         default: false
 
@@ -78,7 +78,7 @@ jobs:
     name: Publish
     needs: images
     outputs:
-      sha: ${{ steps.manifest.outputs.sha }}
+      sha: ${{ steps.published.outputs.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -105,10 +105,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Tag multi-platform images and write the image manifest
-        id: manifest
         run: |
           node scripts/ci/cloud-build.mjs publish --registry="$REGISTRY" --sha="$GITHUB_SHA" --digests="$RUNNER_TEMP/digests" > "$RUNNER_TEMP/image-manifest.json"
-          printf 'sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           jq -r '.registry as $registry | .images | to_entries[] |
             .key as $name | [.value.digest, .value.platforms[]][] |
             "\(sub("^sha256:"; ""))  \($registry)/\($name)"' "$RUNNER_TEMP/image-manifest.json" > "$RUNNER_TEMP/image-subjects.txt"
@@ -126,6 +124,9 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+      - name: Record the published source SHA
+        id: published
+        run: printf 'sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
       - name: Attest published image digests
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
         with:
@@ -133,7 +134,7 @@ jobs:
 
   image-security:
     needs: publish
-    if: ${{ !cancelled() && (needs.publish.result == 'success' || inputs.rescan-latest) }}
+    if: ${{ !cancelled() && (needs.publish.outputs.sha != '' || inputs.rescan-latest) }}
     permissions:
       actions: read
       contents: read

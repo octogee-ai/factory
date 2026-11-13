@@ -33,13 +33,22 @@ jobs:
             sha="$BUILD_SHA"
             run_id="$GITHUB_RUN_ID"
           else
-            build="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build-main.yml \
-              --branch main --event push --status success --limit 1 --json databaseId,headSha \
-              --jq '.[0] | [.databaseId, .headSha] | @tsv')"
-            read -r run_id sha <<< "$build"
+            builds="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build-main.yml \
+              --branch main --event push --limit 100 --json databaseId,headSha \
+              --jq '.[] | [.databaseId, .headSha] | @tsv')"
+            run_id='' sha=''
+            while IFS=$'\t' read -r candidate candidate_sha; do
+              [[ -n "$candidate" ]] || continue
+              available="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate/artifacts?name=image-manifest-$candidate_sha" \
+                --jq 'any(.artifacts[]; .expired == false)')"
+              if [[ "$available" == true ]]; then
+                run_id="$candidate" sha="$candidate_sha"
+                break
+              fi
+            done <<< "$builds"
           fi
           if [[ ! "$run_id" =~ ^[0-9]+$ || ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Could not identify a successful Build main image manifest"
+            echo "::error::Could not find a published Build main image manifest in the last 100 pushes"
             exit 1
           fi
           printf 'sha=%s\nrun-id=%s\n' "$sha" "$run_id" >> "$GITHUB_OUTPUT"
