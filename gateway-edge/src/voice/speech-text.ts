@@ -95,7 +95,7 @@ export function prepareSpeechText(markdown: string): string {
     .filter(Boolean)
     .join(" ")
     .replace(MULTI_SPACE_RE, " ")
-    .replace(/ +([.!?:;,])/g, "$1")
+    .replace(/ ([.!?:;,])/g, "$1")
     .trim();
 }
 
