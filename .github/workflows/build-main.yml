@@ -67,7 +67,7 @@ jobs:
           echo "Isolated Builder image: $image" >> "$GITHUB_STEP_SUMMARY"
       - name: Check patched packages in the exact isolated Builder digest
         run: |
-          docker run --rm --network none --entrypoint /bin/bash "$BUILDER_IMAGE" -seuo pipefail <<'SH'
+          docker run --rm -i --network none --entrypoint /bin/bash "$BUILDER_IMAGE" -seuo pipefail <<'SH'
           verify-runtime-image builder
           for package in libxml2 openssh-client; do
             version=$(dpkg-query -W -f='${Version}' "$package")
