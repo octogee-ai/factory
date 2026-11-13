@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type NextFunction, type Request, type Response } from "express";
 import { requireAuthenticatedUid } from "../middleware/auth.js";
 import { resolveWorkspaceNativeIdentity, WorkspaceNativeAccessError } from "../lib/workspace-native-access.js";
 import { openNativeUserClient } from "../openclaw-control/native-user-client.js";
@@ -31,6 +31,14 @@ async function verifyRoleAfterReconnect(
 function isNativeRole(value: unknown): value is string | null {
   return value === null || typeof value === "string" && value.length > 0 && value.length <= 128;
 }
+
+function validateRole(req: Request, res: Response<unknown, { role: string | null }>, next: NextFunction): void {
+  const role: unknown = req.body?.role;
+  if (!isNativeRole(role)) { res.status(400).json({ error: "A native OpenClaw role is required" }); return; }
+  res.locals.role = role;
+  next();
+}
+
 export function createWorkspaceRolesRouter(deps = { resolveIdentity: resolveWorkspaceNativeIdentity, openClient: openNativeUserClient }) {
   const router = Router({ mergeParams: true });
   router.use(requireAuthenticatedUid);
@@ -61,13 +69,15 @@ export function createWorkspaceRolesRouter(deps = { resolveIdentity: resolveWork
       next(error);
     } finally { client?.close(); }
   });
-  router.patch("/:uid", async (req, res, next) => {
+  router.patch("/:uid", validateRole, async (req: Request, res: Response<unknown, { role: string | null }>, next: NextFunction) => {
     let client: NativeClient | undefined;
     try {
-      const role = req.body?.role;
-      if (!isNativeRole(role)) { res.status(400).json({ error: "A native OpenClaw role is required" }); return; }
       const identity = await deps.resolveIdentity({ gatewayId: String((req.params as Record<string, string>).gatewayId), authorization: req.headers.authorization, targetUid: String(req.params.uid) });
       client = await deps.openClient(identity.uid, identity.gatewayId);
+      if (!client.scopes.has("operator.admin")) {
+        res.status(403).json({ error: "Missing scope: operator.admin" }); return;
+      }
+      const { role } = res.locals;
       const listed = await client.call<{ profiles: NativeProfile[] }>("users.list", {});
       if (!listed.ok) { res.status(403).json({ error: listed.reason }); return; }
       let profile = listed.result.profiles.find(item => item.emails.includes(identity.targetUid!.toLowerCase()));

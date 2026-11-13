@@ -44,6 +44,16 @@ describe('native workspace role settings', () => {
     expect((await request(app()).get('/api/g/walter/workspace-roles')).body.canManageRoles).toBe(false);
     expect(call).not.toHaveBeenCalled();
   });
+  it('rejects role updates without native admin scope before calling any native methods', async () => {
+    openClient.mockResolvedValueOnce({ scopes: new Set(['operator.read']), call, close });
+    await request(app()).patch('/api/g/walter/workspace-roles/member').send({ role: 'admin' }).expect(403);
+    expect(call).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+  });
+  it('rejects malformed role updates before opening a native connection', async () => {
+    await request(app()).patch('/api/g/walter/workspace-roles/member').send({ role: false }).expect(400);
+    expect(openClient).not.toHaveBeenCalled();
+  });
   it('never reaches the broker or runtime on a shared gateway', async () => {
     vi.stubEnv('GATEWAY_CLASS', 'shared');
     expect((await request(app()).get('/api/g/walter/workspace-roles')).status).toBe(404);
