@@ -86,7 +86,7 @@ export function prepareSpeechText(markdown: string): string {
         .replace(IMAGE_RE, ""),
     ).replace(BARE_URL_RE, "a link"),
   )
-    .replace(HTML_TAG_RE, "")
+    .replace(HTML_TAG_RE, " ")
     .replace(EMPHASIS_RE, "$2")
     .replace(EMOJI_RE, "");
   return inline
@@ -95,6 +95,7 @@ export function prepareSpeechText(markdown: string): string {
     .filter(Boolean)
     .join(" ")
     .replace(MULTI_SPACE_RE, " ")
+    .replace(/ +([.!?:;,])/g, "$1")
     .trim();
 }
 
