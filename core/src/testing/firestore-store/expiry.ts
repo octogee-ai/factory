@@ -36,5 +36,6 @@ export async function sweepExpiredFirestoreState(db: Firestore, now: number, lim
     operations: 0,
     operationAudits: 0,
     accessGrants: await sweepExpiredAccessGrants(db, now, limit),
+    modelBrokerUsageEvents: 0,
   };
 }

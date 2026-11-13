@@ -2159,8 +2159,12 @@ describe("Isolated prelaunch config", () => {
       expect(options.env.OPENCLAW_CONFIG_PATH).toBe(path.join(repo, "openclaw.json"));
       expect(options.env.OPENCLAW_STATE_DIR).toBe(root);
       const patchFile = args[args.indexOf("--file") + 1];
-      expect(fs.statSync(patchFile).mode & 0o777).toBe(0o600);
-      const patch = JSON.parse(fs.readFileSync(patchFile, "utf8"));
+      const fd = fs.openSync(patchFile, "r");
+      let patch;
+      try {
+        expect(fs.fstatSync(fd).mode & 0o777).toBe(0o600);
+        patch = JSON.parse(fs.readFileSync(fd, "utf8"));
+      } finally { fs.closeSync(fd); }
       expect(patch).not.toHaveProperty("meta");
       expect(args).not.toContain("meta");
       if (nativeWrite.mock.calls.length === 1) expect(patch.agents.entries["octogee-alice-coach"]).toBeNull();

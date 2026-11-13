@@ -7,7 +7,8 @@ vi.hoisted(() => {
   process.env.API_PUBLIC_URL = "https://api.octogee.test";
 });
 vi.mock("../../../gateway-edge/src/middleware/auth.js", () => ({
-  requireAuth: (req: Request, _res: Response, next: NextFunction) => {
+  requireActiveAccount: (_req: Request, _res: Response, next: NextFunction) => next(),
+  requireAuthenticatedUid: (req: Request, _res: Response, next: NextFunction) => {
     req.uid = req.get("x-test-uid");
     next();
   },
