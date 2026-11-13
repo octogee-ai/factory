@@ -303,6 +303,56 @@ machine cannot resolve those names. Pages you open through a port-forward use
 `localhost`, but if a link takes you to an in-cluster address, open the same
 path on `localhost` with that service's port.
 
+## Call the platform API as a user
+
+The platform API knows a user by their Mattermost sign-in. A request carries
+`Authorization: Bearer <token>`, where the token is one of the user's Mattermost
+tokens. The API asks Mattermost whose token it is and finds the platform user
+created for that Mattermost account. It trusts only the account's Mattermost id:
+the username, email and Mattermost roles play no part. A Mattermost system admin
+is not a platform admin; only the platform's own role decides that. Tokens of bot
+accounts and deactivated accounts are refused.
+
+There are two kinds of token:
+
+- **A session token.** Sign in through the Mattermost API with the user's chat
+  password, and take the `Token` header of the answer. The session lasts as long
+  as Mattermost's session settings allow, and signing out ends it.
+
+  ```bash
+  read -rs MM_PASSWORD
+  MM_TOKEN=$(printf '{"login_id":"lin","password":"%s"}' "$MM_PASSWORD" \
+    | curl -sS -D - -o /dev/null http://localhost:8065/api/v4/users/login \
+        -H 'content-type: application/json' --data @- \
+    | sed -n 's/^[Tt]oken: //p' | tr -d '\r')
+  ```
+
+- **A personal access token.** The chart turns on Mattermost's
+  `EnableUserAccessTokens` setting. Mattermost still lets a user create a token
+  only after a system admin allows it, under **System Console > User Management >
+  Users > Manage Roles > Allow this account to generate personal access tokens**.
+  The user then creates one under **Profile > Security > Personal Access
+  Tokens**, and it lasts until they revoke it.
+
+Forward the API in a terminal of its own, then call it:
+
+```bash
+kubectl --kubeconfig="$STATE/kubeconfig" --context=kind-octogee -n octogee-local \
+  port-forward svc/octogee-api 3001:3001
+```
+
+```bash
+curl -sS -H "authorization: Bearer $MM_TOKEN" http://localhost:3001/api/features
+```
+
+A token Mattermost does not accept gets `401`. If Mattermost does not answer
+within 5 seconds, the API answers `503` and logs it.
+
+The API remembers a token it has checked for up to 60 seconds. A sign-out, a
+revoked token or a deactivated Mattermost account can therefore keep working for
+up to 60 seconds. A suspended platform user is refused at once, because the API
+reads the user's platform state on every request.
+
 ## Talk to the agent
 
 Open the Coach channel in Mattermost and send a message. The agent answers in

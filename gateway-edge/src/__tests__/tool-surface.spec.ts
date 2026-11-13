@@ -9,12 +9,14 @@ import request from 'supertest';
 import { WebSocket, WebSocketServer } from 'ws';
 import { WsUpgradeRouter } from '@octogee/core/ws/upgrade-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ verify: vi.fn(async (token: string) => ({ uid: token === 'other' ? 'other' : 'owner' })) }));
-vi.mock('../lib/db.js', () => ({ auth: { verifyIdToken: h.verify }, db: {} }));
+const h = vi.hoisted(() => ({ uidFor: vi.fn(async (token: string) => (token === 'other' ? 'other' : 'owner')) }));
+vi.mock('../lib/db.js', () => ({ db: {} }));
 vi.mock('../middleware/logging.js', () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 import { createToolSurface } from '../routes/tool-surface.js';
 import { applyGatewayPrefixStripInPlace } from '../chat-proxy/gateway-prefix.js';
 import type { NativeAdminAccessOutcome } from '../lib/native-admin-access.js';
+import { installBearerUids } from './helpers/user-bearer.js';
+installBearerUids(h.uidFor);
 const channelId = 'a'.repeat(26);
 const threadRootPostId = 'r'.repeat(26);
 const desktopPublicKey = Buffer.alloc(32, 1).toString('base64url');
@@ -92,7 +94,7 @@ describe('hosted native Browser surface', () => {
     await vi.waitFor(() => expect(connection.frames.some(frame => frame.id === id)).toBe(true));
     return connection.frames.find(frame => frame.id === id)!;
   }
-  it('requires Firebase identity, native role, and server conversation resolution', async () => {
+  it('requires a verified user, native role, and server conversation resolution', async () => {
     expect((await request(app).post('/api/g/b-alice/tools/ticket').send({ channelId })).status).toBe(401);
     expect((await ticket({ channelId, surface: 'browser', sessionKey: 'foreign' })).status).toBe(400);
     resolveAccess.mockResolvedValue({ kind: 'forbidden' }); expect((await ticket()).status).toBe(403); expect(resolveChannel).not.toHaveBeenCalled();
