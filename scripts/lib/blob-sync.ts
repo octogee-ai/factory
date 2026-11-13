@@ -225,7 +225,7 @@ function recordUpload(
 }
 
 async function firebaseAdminBlobStore(): Promise<BlobStore> {
-  const { getStorage } = await import("firebase-admin/storage");
+  const { getStorage } = await import("./firebase.js");
   const { createGcsManifestStore } = await import("@octogee/core/workspace-manifest");
   const bucket = getStorage().bucket();
   return {

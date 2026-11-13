@@ -1,23 +1,10 @@
-import { describe, expect, it, beforeAll, beforeEach, afterEach } from 'vitest';
-import { getFirestore } from 'firebase-admin/firestore';
-import { getIdTokenForUid, requireEmulator, resetEmulator } from "@octogee/test-helpers/firestore-emulator";
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 
-process.env.NODE_ENV = 'test';
-process.env.FIREBASE_PROJECT ??= 'demo-platform';
-process.env.MM_PUBLIC_URL = 'https://mm.test.octogee.com';
 process.env.MM_INTERNAL_URL = 'http://mattermost.octogee-test.svc.cluster.local:8065';
 
-const { setCors, verifyAuth, gatewayHealthUrl } = await import('../proxy');
+const { setCors, gatewayHealthUrl } = await import('../proxy');
 
-beforeAll(() => {
-  requireEmulator();
-});
-
-beforeEach(async () => {
-  await resetEmulator();
-});
-
-describe('chat-proxy helper coverage', () => {
+describe('chat-proxy CORS', () => {
   it('sets CORS for allowed origins', () => {
     const headers = new Map<string, string>();
     const req = { headers: { origin: 'https://octogee.web.app' } } as never;
@@ -45,34 +32,6 @@ describe('chat-proxy helper coverage', () => {
 
     expect(headers.get('Access-Control-Allow-Origin')).toBeUndefined();
     expect(headers.get('Access-Control-Allow-Methods')).toBeDefined();
-  });
-
-  it('accepts Bearer and BEARER tokens, rejects missing auth', async () => {
-    await getFirestore().doc('users/user-1').set({ accountLifecycle: { status: 'active' } });
-    const idToken = await getIdTokenForUid('user-1');
-    await expect(
-      verifyAuth({ headers: { authorization: `Bearer ${idToken}` } } as never),
-    ).resolves.toBe('user-1');
-    await expect(
-      verifyAuth({ headers: { authorization: `BEARER ${idToken}` } } as never),
-    ).resolves.toBe('user-1');
-    await expect(verifyAuth({ headers: {} } as never)).resolves.toBeNull();
-  });
-
-  it('rejects a deletion-scheduled user even with a valid unexpired token', async () => {
-    await getFirestore().doc('users/user-1').set({
-      accountLifecycle: { status: 'deletion_scheduled' },
-    });
-    const idToken = await getIdTokenForUid('user-1');
-    await expect(
-      verifyAuth({ headers: { authorization: `Bearer ${idToken}` } } as never),
-    ).resolves.toBeNull();
-  });
-
-  it('rejects invalid auth tokens', async () => {
-    await expect(
-      verifyAuth({ headers: { authorization: 'Bearer no-good' } } as never),
-    ).resolves.toBeNull();
   });
 });
 

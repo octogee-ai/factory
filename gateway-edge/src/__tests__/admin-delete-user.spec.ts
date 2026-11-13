@@ -119,24 +119,22 @@ vi.mock("../lib/db", () => {
         return collection(name).doc(id);
       },
     },
+    auth: {
+      updateUser: async (uid: string) => {
+        if (authNextError) {
+          const e = authNextError;
+          authNextError = null;
+          throw e;
+        }
+        authDisabledUids.push(uid);
+      },
+      revokeRefreshTokens: async (uid: string) => { authRevokedUids.push(uid); },
+    },
     FieldValue: { serverTimestamp: () => "now", delete: () => "delete" },
     Timestamp: { now: () => ({ toDate: () => new Date() }) },
   };
 });
 
-vi.mock("firebase-admin/auth", () => ({
-  getAuth: () => ({
-    updateUser: async (uid: string) => {
-      if (authNextError) {
-        const e = authNextError;
-        authNextError = null;
-        throw e;
-      }
-      authDisabledUids.push(uid);
-    },
-    revokeRefreshTokens: async (uid: string) => { authRevokedUids.push(uid); },
-  }),
-}));
 
 vi.mock("../middleware/auth", () => ({
   requireAdmin: (req: any, _res: any, next: any) => {

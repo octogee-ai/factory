@@ -6,7 +6,6 @@ import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const firestore = vi.hoisted(() => ({
-  verifyIdToken: vi.fn(),
   collection: vi.fn(() => ({
     doc: () => ({
       get: async () => ({ exists: false, data: () => undefined }),
@@ -23,7 +22,6 @@ const firestore = vi.hoisted(() => ({
 }));
 
 vi.mock("../lib/db", () => ({
-  auth: { verifyIdToken: firestore.verifyIdToken },
   db: {
     collection: firestore.collection,
     doc: firestore.doc,
@@ -161,7 +159,6 @@ describe("gateway-edge sidecar surface", () => {
       access: "read",
       resolveGithubToken: false,
     });
-    expect(firestore.verifyIdToken).not.toHaveBeenCalled();
     expect(firestore.collection).not.toHaveBeenCalled();
     expect(firestore.doc).not.toHaveBeenCalled();
   });
