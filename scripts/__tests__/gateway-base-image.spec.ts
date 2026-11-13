@@ -125,16 +125,16 @@ describe("gateway base image", () => {
       "@anthropic-ai/claude-code": "2.1.322",
       "@openai/codex": "0.167.1",
       "@sparticuz/chromium": "153.0.0",
-      "firebase-tools": "15.34.2",
+      "firebase-tools": "15.35.0",
       "npm-check-updates": "23.1.1",
-      "pnpm": "12.17.0",
+      "pnpm": "12.18.0",
       "tsx": "4.23.15",
       "typescript": "7.0.2",
     });
     expect(packageJson.allowScripts).toEqual({
       "@anthropic-ai/claude-code@2.1.322": true,
       "esbuild@0.28.2": true,
-      "pnpm@12.17.0": true,
+      "pnpm@12.18.0": true,
       "protobufjs@7.6.6": true,
       "re2@1.27.0": true,
     });

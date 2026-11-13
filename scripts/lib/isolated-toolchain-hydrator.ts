@@ -135,7 +135,7 @@ const DEPENDENCY_PACKAGES: Record<IsolatedToolchainCommand, string> = {
 const ALLOWED_INSTALL_SCRIPTS = {
   "@anthropic-ai/claude-code@2.1.322": true,
   "esbuild@0.28.2": true,
-  "pnpm@12.17.0": true,
+  "pnpm@12.18.0": true,
   "protobufjs@7.6.6": true,
   "re2@1.27.0": true,
 };
