@@ -51,9 +51,17 @@ function writeEntry(target, entry) {
       if (error.code !== "ENOENT" && error.code !== "ELOOP") throw error;
     }
   }
-  if (current) fs.rmSync(target, { recursive: true, force: true });
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, bytes, { mode, flag: "wx" });
+  const parent = path.dirname(target);
+  fs.mkdirSync(parent, { recursive: true });
+  const staging = fs.mkdtempSync(path.join(parent, ".overlay-copy-"));
+  try {
+    const pending = path.join(staging, "file");
+    fs.writeFileSync(pending, bytes, { mode, flag: "wx" });
+    if (current?.isDirectory()) fs.rmSync(target, { recursive: true, force: true });
+    fs.renameSync(pending, target);
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
 }
 
 function removeStale(root, desired, relative = "") {
