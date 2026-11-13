@@ -51,7 +51,14 @@ export function assertWorkspaceIdentityReady(env = process.env) {
         throw new Error("OpenClaw workspace identities are not initialized for this boot");
     }
 }
-async function createProfile(uid, env) {
+async function readSignedInProfile(ws, uid) {
+    const self = await sendWsRequest({ ws, id: randomUUID(), method: "users.self", timeoutMs: 5000, params: {} });
+    const profile = self?.profile;
+    if (typeof profile?.id !== "string" || !profile.id)
+        throw new Error(`OpenClaw returned no profile for ${uid}`);
+    return { id: profile.id, role: profile.role ?? null };
+}
+async function signIn(uid, env) {
     const address = Object.values(os.networkInterfaces()).flatMap(entries => entries ?? []).find(entry => !entry.internal && entry.family === "IPv4")?.address;
     if (!address)
         throw new Error("Workspace identity initialization requires the pod address");
@@ -69,6 +76,7 @@ async function createProfile(uid, env) {
                 minProtocol: OPENCLAW_PROTOCOL_VERSION, maxProtocol: OPENCLAW_PROTOCOL_VERSION,
                 client: { id: "openclaw-control-ui", mode: "backend", version: "1.0.0", platform: process.platform }, role: "operator",
             } });
+        return await readSignedInProfile(ws, uid);
     }
     finally {
         ws.terminate();
@@ -97,17 +105,9 @@ export async function bootstrapWorkspaceIdentities(args) {
         { uid: OPENCLAW_PROVISIONER_SERVICE_IDENTITY, role: "service" },
         { uid: ownerUid, role: "admin" },
     ];
-    const list = async () => (await args.request("users.list", {}, { scopes: ["operator.admin"] })).profiles;
-    const find = (profiles, uid) => profiles.find(profile => profile.emails.includes(uid.toLowerCase()));
     recordOwnerJournal(state.journal, ownerUid);
     for (const identity of identities) {
-        let profile = find(await list(), identity.uid);
-        if (!profile) {
-            await (args.createProfile ?? createProfile)(identity.uid, env);
-            profile = find(await list(), identity.uid);
-        }
-        if (!profile)
-            throw new Error(`OpenClaw did not create the profile for ${identity.uid}`);
+        const profile = await (args.signIn ?? signIn)(identity.uid, env);
         if ((profile.role ?? null) !== identity.role) {
             await args.request("users.setRole", { profileId: profile.id, role: identity.role }, { scopes: ["operator.admin"] });
         }
