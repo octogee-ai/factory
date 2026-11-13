@@ -29,11 +29,11 @@ function mkDeps(overrides: Partial<NukeCloudDeps> = {}): NukeCloudDeps {
   return {
     git: { eraseOwner: vi.fn(async () => undefined) },
     channels: { erase: vi.fn(async () => undefined) },
-    nukeUserFirestore: vi.fn(async () => undefined),
+    eraseUserRecords: vi.fn(async () => undefined),
     deleteUserStorage: vi.fn(async () => undefined),
     deleteHostingSites: vi.fn(async () => ({ deleted: 0 })),
     deleteCredentialSecrets: vi.fn(async () => undefined),
-    deleteAuthUser: vi.fn(async () => undefined),
+    deleteSignIn: vi.fn(async () => undefined),
     deleteVm: vi.fn(async () => true),
     deleteVmHome: vi.fn(async () => ({ deleted: 2 })),
     log: vi.fn(),
@@ -53,8 +53,8 @@ describe("nukeUserCloudSide — happy path", () => {
       "credentials:true",
       "computer:true",
       "computer-home:true",
-      "firestore:true",
-      "auth:true",
+      "records:true",
+      "sign-in:true",
     ]);
     expect(deps.deleteVm).toHaveBeenCalledWith("uid-alice");
     expect(results.find((r) => r.key === "hosting")).toMatchObject({ ok: true });
@@ -63,9 +63,9 @@ describe("nukeUserCloudSide — happy path", () => {
   it("sweeps the home checkpoints only after the VM is gone and journals the object count", async () => {
     const deps = mkDeps();
     const results = await nukeUserCloudSide(mkCtx(), deps);
-    expect(deps.deleteVmHome).toHaveBeenCalledWith("uid-alice", "alice");
+    expect(deps.deleteVmHome).toHaveBeenCalledWith("alice");
     expect(vi.mocked(deps.deleteVm!).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(deps.deleteVmHome).mock.invocationCallOrder[0],
+      vi.mocked(deps.deleteVmHome!).mock.invocationCallOrder[0],
     );
     expect(results.find((r) => r.key === "computer-home")).toEqual({
       key: "computer-home",
@@ -77,7 +77,7 @@ describe("nukeUserCloudSide — happy path", () => {
   it("still sweeps the home checkpoints on a pod-only fleet, and skips only without a slug", async () => {
     const podOnly = mkDeps({ deleteVm: undefined });
     await nukeUserCloudSide(mkCtx(), podOnly);
-    expect(podOnly.deleteVmHome).toHaveBeenCalledWith("uid-alice", "alice");
+    expect(podOnly.deleteVmHome).toHaveBeenCalledWith("alice");
 
     const unprovisioned = mkDeps();
     const results = await nukeUserCloudSide(mkCtx({ slug: "" }), unprovisioned);
@@ -85,21 +85,38 @@ describe("nukeUserCloudSide — happy path", () => {
     expect(results.find((r) => r.key === "computer-home")).toEqual({ key: "computer-home", ok: true, skipped: true });
   });
 
-  it("fails the vm-home step loudly and blocks auth deletion when the sweep fails", async () => {
+  it("erases records and skips the home sweep and sign-in deletion when no product supplies them", async () => {
+    const deps = mkDeps({ deleteVmHome: undefined, deleteSignIn: undefined, deleteVm: undefined });
+    const results = await nukeUserCloudSide(mkCtx(), deps);
+    expect(results.map((r) => `${r.key}:${r.ok}:${r.skipped === true}`)).toEqual([
+      "gitea:true:false",
+      "mattermost:true:false",
+      "storage:true:false",
+      "hosting:true:false",
+      "credentials:true:false",
+      "computer:true:true",
+      "computer-home:true:true",
+      "records:true:false",
+      "sign-in:true:true",
+    ]);
+    expect(deps.eraseUserRecords).toHaveBeenCalled();
+  });
+
+  it("fails the vm-home step loudly and blocks sign-in deletion when the sweep fails", async () => {
     const deps = mkDeps({ deleteVmHome: vi.fn(async () => { throw new Error("storage 403"); }) });
     const results = await nukeUserCloudSide(mkCtx(), deps);
     expect(results.find((r) => r.key === "computer-home")).toEqual({ key: "computer-home", ok: false, error: "storage 403" });
-    expect(results.find((r) => r.key === "auth")).toEqual({ key: "auth", ok: true, skipped: true });
-    expect(deps.nukeUserFirestore).not.toHaveBeenCalled();
+    expect(results.find((r) => r.key === "sign-in")).toEqual({ key: "sign-in", ok: true, skipped: true });
+    expect(deps.eraseUserRecords).not.toHaveBeenCalled();
   });
 
-  it("skips the VM step on a pod-only fleet and blocks auth deletion when the VM survives", async () => {
+  it("skips the VM step on a pod-only fleet and blocks sign-in deletion when the VM survives", async () => {
     const podOnly = await nukeUserCloudSide(mkCtx(), mkDeps({ deleteVm: undefined }));
     expect(podOnly.find((r) => r.key === "computer")).toEqual({ key: "computer", ok: true, skipped: true });
 
     const stuck = await nukeUserCloudSide(mkCtx(), mkDeps({ deleteVm: vi.fn(async () => { throw new Error("compute 403"); }) }));
     expect(stuck.find((r) => r.key === "computer")).toMatchObject({ ok: false, error: "compute 403" });
-    expect(stuck.find((r) => r.key === "auth")).toEqual({ key: "auth", ok: true, skipped: true });
+    expect(stuck.find((r) => r.key === "sign-in")).toEqual({ key: "sign-in", ok: true, skipped: true });
   });
 
   it("Gitea step erases every repo, the owner, and the user", async () => {
@@ -134,8 +151,8 @@ describe("nukeUserCloudSide — happy path", () => {
       "/api/v4/users/mm-project-1?permanent=true", "/api/v4/users/mm-project-2?permanent=true",
       "/api/v4/teams/team-1?permanent=true",
     ]);
-    expect(deps.nukeUserFirestore).toHaveBeenCalled();
-    expect(deps.deleteAuthUser).toHaveBeenCalled();
+    expect(deps.eraseUserRecords).toHaveBeenCalled();
+    expect(deps.deleteSignIn).toHaveBeenCalled();
   });
 
   it("MM step erases the owner's channels and user, plus admin channel + defaultAgent + project agents + team", async () => {
@@ -194,35 +211,33 @@ describe("nukeUserCloudSide — partial failure", () => {
     const gitea = results.find((r) => r.key === "gitea");
     expect(gitea?.ok).toBe(false);
     expect(gitea?.error).toMatch(/gitea down/);
-    
-    expect(deps.nukeUserFirestore).toHaveBeenCalled();
-    expect(deps.deleteAuthUser).not.toHaveBeenCalled();
-    expect(results.find((r) => r.key === "auth")).toMatchObject({
+    expect(deps.eraseUserRecords).toHaveBeenCalled();
+    expect(deps.deleteSignIn).not.toHaveBeenCalled();
+    expect(results.find((r) => r.key === "sign-in")).toMatchObject({
       ok: true,
       skipped: true,
     });
   });
 
-  it("auth step error doesn't block the orchestrator from completing", async () => {
+  it("a sign-in deletion error doesn't block the orchestrator from completing", async () => {
     const deps = mkDeps({
-      deleteAuthUser: vi.fn(async () => {
+      deleteSignIn: vi.fn(async () => {
         throw new Error("auth/unknown-error");
       }),
     });
     const results = await nukeUserCloudSide(mkCtx(), deps);
-    expect(results.find((r) => r.key === "auth")?.ok).toBe(false);
+    expect(results.find((r) => r.key === "sign-in")?.ok).toBe(false);
     expect(results).toHaveLength(9);
   });
 });
 
 describe("nukeUserCloudSide — skip flags", () => {
-  it("skipAuth marks the step skipped without calling deleteAuthUser", async () => {
+  it("skipAuth marks the sign-in step skipped without deleting the sign-in", async () => {
     const deps = mkDeps();
     const results = await nukeUserCloudSide(mkCtx({ skipAuth: true }), deps);
-    expect(results.find((r) => r.key === "auth")).toMatchObject({ ok: true, skipped: true });
-    expect(deps.deleteAuthUser).not.toHaveBeenCalled();
+    expect(results.find((r) => r.key === "sign-in")).toMatchObject({ ok: true, skipped: true });
+    expect(deps.deleteSignIn).not.toHaveBeenCalled();
   });
-
 });
 
 describe("nukeUserCloudSide — hosting step (PR #3)", () => {
@@ -257,11 +272,11 @@ describe("nukeUserCloudSide — hosting step (PR #3)", () => {
       ok: false,
       error: expect.stringContaining("hosting boom"),
     });
-    expect(results.find((r) => r.key === "firestore")).toMatchObject({
+    expect(results.find((r) => r.key === "records")).toMatchObject({
       ok: true,
       skipped: true,
     });
-    expect(deps.nukeUserFirestore).not.toHaveBeenCalled();
+    expect(deps.eraseUserRecords).not.toHaveBeenCalled();
   });
 
   it("does NOT extract projectSlugs from repoNames anymore (regression: the old slice produced 'proj-<slug>' instead of '<slug>')", async () => {
@@ -281,33 +296,33 @@ await nukeUserCloudSide(
   });
 });
 
-describe("nukeUserCloudSide — firestore step", () => {
-  it("passes uid AND slug so the workspace + agent docs get deleted, not just the user subtree", async () => {
+describe("nukeUserCloudSide — records step", () => {
+  it("passes the whole user scope so the workspace and agent records get erased, not just the user subtree", async () => {
     const deps = mkDeps();
     await nukeUserCloudSide(mkCtx(), deps);
-    expect(deps.nukeUserFirestore).toHaveBeenCalledWith(
-      "uid-alice",
-      "alice",
-      "alice@example.com",
-      "erase-1",
-    );
+    expect(deps.eraseUserRecords).toHaveBeenCalledWith(expect.objectContaining({
+      uid: "uid-alice",
+      slug: "alice",
+      email: "alice@example.com",
+      currentOperationId: "erase-1",
+    }));
   });
 
-  it("deletes all user storage prefixes and credential secrets before Firestore", async () => {
+  it("deletes all user storage and credential secrets before the records", async () => {
     const order: string[] = [];
     const deps = mkDeps({
       deleteUserStorage: vi.fn(async () => { order.push("storage"); }),
       deleteCredentialSecrets: vi.fn(async () => { order.push("credentials"); }),
-      nukeUserFirestore: vi.fn(async () => { order.push("firestore"); }),
+      eraseUserRecords: vi.fn(async () => { order.push("records"); }),
     });
     await nukeUserCloudSide(mkCtx({ credentialSecretNames: ["byosub-1"] }), deps);
-    expect(deps.deleteUserStorage).toHaveBeenCalledWith(
-      "uid-alice",
-      "alice",
-      ["a".repeat(64)],
-      ["import-1"],
-    );
+    expect(deps.deleteUserStorage).toHaveBeenCalledWith(expect.objectContaining({
+      uid: "uid-alice",
+      slug: "alice",
+      chatArtifactIds: ["a".repeat(64)],
+      agentImportIds: ["import-1"],
+    }));
     expect(deps.deleteCredentialSecrets).toHaveBeenCalledWith(["byosub-1"]);
-    expect(order).toEqual(["storage", "credentials", "firestore"]);
+    expect(order).toEqual(["storage", "credentials", "records"]);
   });
 });

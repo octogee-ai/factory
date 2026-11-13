@@ -37,6 +37,7 @@ describe("controller user seams", () => {
     const supplied = {
       userAccounts: { create: vi.fn() },
       accountReader: { get: vi.fn(), getMany: vi.fn(), list: vi.fn() },
+      userDocuments: { account: vi.fn(), agent: vi.fn(), systemConfig: vi.fn() },
       userDirectory: { ...noAdminUserDirectorySource },
       adminUserDetail: vi.fn(),
       userPolicyInputs: { current: vi.fn(), list: vi.fn(), subscribe: vi.fn() },
@@ -45,6 +46,7 @@ describe("controller user seams", () => {
       userLifecycle: null,
       userAccounts: vi.fn(() => supplied.userAccounts),
       accountReader: vi.fn(() => supplied.accountReader),
+      userDocuments: vi.fn(() => supplied.userDocuments),
       userDirectory: vi.fn(() => supplied.userDirectory),
       adminUserDetail: vi.fn(() => supplied.adminUserDetail),
       userPolicyInputs: vi.fn(() => supplied.userPolicyInputs),
@@ -55,11 +57,12 @@ describe("controller user seams", () => {
     expect(seams).toEqual({
       userAccounts: supplied.userAccounts,
       accounts: supplied.accountReader,
+      documents: supplied.userDocuments,
       userDirectory: supplied.userDirectory,
       adminUserDetail: supplied.adminUserDetail,
       policyInputs: supplied.userPolicyInputs,
     });
-    for (const factory of [product.userAccounts, product.accountReader, product.userDirectory, product.adminUserDetail]) {
+    for (const factory of [product.userAccounts, product.accountReader, product.userDocuments, product.userDirectory, product.adminUserDetail]) {
       expect(factory).toHaveBeenCalledWith(store);
     }
     expect(product.userPolicyInputs).toHaveBeenCalledWith(store, log);
