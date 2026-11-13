@@ -578,7 +578,7 @@ export async function writeActivationManifest(rootDir, manifest) {
             await file.close();
         }
         await fs.rename(temporary, fullPath);
-        const directory = await fs.open(path.dirname(fullPath), "r");
+        const directory = await fs.open(path.dirname(fullPath), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW, 0o700);
         try {
             await directory.sync();
         }
