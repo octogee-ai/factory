@@ -1,0 +1,27 @@
+{
+  "id": "octogee-voice-tools",
+  "name": "Octogee Voice",
+  "version": "0.1.0",
+  "description": "Tenant-authorized speech for native OpenClaw Talk and Mattermost conversations.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "brokerUrl": {
+        "type": "string"
+      },
+      "tokenPath": {
+        "type": "string"
+      }
+    }
+  },
+  "contracts": {
+    "realtimeVoiceProviders": [
+      "octogee",
+      "octogee-openai"
+    ]
+  }
+}
