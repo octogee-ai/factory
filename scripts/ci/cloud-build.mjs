@@ -17,6 +17,7 @@ const GATEWAY_SYSTEM = "octogee-gateway-system";
 const ISOLATED_BASE = "octogee-gateway-builder-base";
 const ISOLATED_GATEWAY = "octogee-gateway-builder";
 const unpublished = [GATEWAY_BASE, GATEWAY_SYSTEM, ISOLATED_BASE];
+const uncached = [ISOLATED_BASE, ISOLATED_GATEWAY];
 const stageContexts = new Set(unpublished);
 const stagesOf = { "octogee-gateway": [GATEWAY_BASE, GATEWAY_SYSTEM], [ISOLATED_GATEWAY]: [GATEWAY_BASE, GATEWAY_SYSTEM, ISOLATED_BASE] };
 const placeholderBase = `inputs-${"0".repeat(64)}`;
@@ -73,7 +74,7 @@ function checkContexts(name, contexts = {}) {
 }
 
 function cacheFor(cache, name, platform) {
-  if (cache !== "gha") return {};
+  if (cache !== "gha" || uncached.includes(name)) return {};
   const scope = `${CACHE_PREFIX}-${name}-${platform.replace("/", "-")}`;
   return { "cache-from": [`type=gha,scope=${scope}`], "cache-to": [`type=gha,scope=${scope},mode=max`] };
 }

@@ -407,8 +407,9 @@ provider key. The job runs in the `agent-round-trip` environment, which only
 secret in the cluster. Pull requests never run this workflow.
 
 The workflow keeps its build cache in GitHub Actions cache scopes named
-`octogee-cloud-<image>-<platform>`. It never reads or writes a registry cache,
-and no other build may share its cache. Before an image is tagged, the workflow
+`octogee-cloud-<image>-<platform>`. The isolated gateway image and its base
+are left out, so they are rebuilt on every run. It never reads or writes a
+registry cache, and no other build may share its cache. Before an image is tagged, the workflow
 checks that every compiled module in it has a source file in this repository,
 and that no file in it sits under a `product` path.
 
