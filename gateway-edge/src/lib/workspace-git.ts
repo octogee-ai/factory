@@ -66,10 +66,13 @@ export async function resolveProjectDir(
 
 async function verifyGitDir(usersRoot: string, parts: readonly string[]): Promise<string | null> {
   try {
-    let dir = usersRoot;
-    if (!(await fs.lstat(dir)).isDirectory()) return null;
+    const root = path.resolve(usersRoot);
+    const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+    let dir = root;
+    if (!(await fs.lstat(root)).isDirectory()) return null;
     for (const part of parts) {
-      dir = path.join(dir, part);
+      dir = path.resolve(dir, part);
+      if (!dir.startsWith(prefix)) return null;
       if (!(await fs.lstat(dir)).isDirectory()) return null;
     }
     const metadata = await fs.lstat(path.join(dir, ".git"));

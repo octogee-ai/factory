@@ -50,8 +50,9 @@ export async function cloneGithubProjectCheckout(
 
   const root = path.resolve(input.usersRoot);
   const parent = path.join(root, input.builderSlug, "projects");
-  const destination = path.join(parent, input.projectSlug);
-  if (!isContained(root, destination)) throw new Error("invalid GitHub project clone target");
+  const destination = path.resolve(parent, input.projectSlug);
+  const parentPrefix = parent.endsWith(path.sep) ? parent : `${parent}${path.sep}`;
+  if (!destination.startsWith(parentPrefix) || !isContained(root, parent)) throw new Error("invalid GitHub project clone target");
   await ensureDirectoryPath(root, parent);
   if (await inspectCheckout(destination) === "ready") return "exists";
 
@@ -120,7 +121,9 @@ async function installCheckout(
       await fs.rename(staging, destination);
       return "cloned";
     }
-    const quarantine = path.join(path.dirname(usersRoot), "git-worktree-quarantine", builderSlug, `${projectSlug}-${randomUUID()}`);
+    const quarantineRoot = path.join(path.dirname(usersRoot), "git-worktree-quarantine");
+    const quarantine = path.resolve(quarantineRoot, builderSlug, `${projectSlug}-${randomUUID()}`);
+    if (!quarantine.startsWith(`${quarantineRoot}${path.sep}`)) throw new Error("invalid GitHub project quarantine target");
     await fs.mkdir(path.dirname(quarantine), { recursive: true, mode: 0o700 });
     await quarantineCheckout(destination, quarantine);
     await fs.rename(staging, destination);
