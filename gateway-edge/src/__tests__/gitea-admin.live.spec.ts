@@ -33,7 +33,7 @@ function freshPubKey(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gitea-admin-live-"));
   const keyPath = path.join(dir, "id_ed25519");
   try {
-    execFileSync("ssh-keygen", ["-t", "ed25519", "-N", "", "-f", keyPath, "-C", `${USER}@live`, "-q"], { stdio: "pipe" });
+    execFileSync("/usr/bin/ssh-keygen", ["-t", "ed25519", "-N", "", "-f", keyPath, "-C", `${USER}@live`, "-q"], { stdio: "pipe" });
     return fs.readFileSync(`${keyPath}.pub`, "utf-8").trim();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

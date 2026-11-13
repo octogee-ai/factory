@@ -571,7 +571,7 @@ export function generateUserSshKey(slug: string): string {
   }
 
   fs.mkdirSync(keyDir, { recursive: true });
-  execFileSync("ssh-keygen", ["-t", "ed25519", "-N", "", "-f", keyPath, "-C", `octogee-${slug}@gateway`, "-q"], {
+  execFileSync("/usr/bin/ssh-keygen", ["-t", "ed25519", "-N", "", "-f", keyPath, "-C", `octogee-${slug}@gateway`, "-q"], {
     stdio: "pipe",
   });
   /* eslint-disable sonarjs/file-permissions -- restrictive (private key dir), correct */
