@@ -159,7 +159,9 @@ describe("Mattermost /ui command", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.response_type).toBe("ephemeral");
-    expect(response.body.text).toMatch(new RegExp(`\\(${API_ORIGIN}/g/walter/openclaw/launch/[A-Za-z0-9_-]{43}\\)`));
+    const link = new URL(/^\[Open your Control UI\]\(([^)\s]+)\)\n/.exec(response.body.text)![1]!);
+    expect(link.origin).toBe(API_ORIGIN);
+    expect(link.pathname).toMatch(/^\/g\/walter\/openclaw\/launch\/[A-Za-z0-9_-]{43}$/);
     expect(response.body.text).toContain("works once");
     expect(Object.keys(response.body)).toEqual(["response_type", "text"]);
     expect(commandTokenMatches).toHaveBeenCalledWith({ teamId: TEAM, trigger: "ui", token: COMMAND_TOKEN });
@@ -229,6 +231,18 @@ describe("Mattermost /ui command", () => {
     expect(tampered.status).toBe(401);
     expect(commandTokenMatches).not.toHaveBeenCalled();
     expect(ticketPaths(docs)).toEqual([]);
+  });
+
+  it("rate-limits a client before checking its signature", async () => {
+    const { store } = fixture(Date.now());
+    const { app } = commandApp(store);
+    const unsigned = () => invoke(app, slashCommand(OWNER_MM), false);
+
+    const statuses: number[] = [];
+    for (let attempt = 0; attempt < 301; attempt += 1) statuses.push((await unsigned()).status);
+
+    expect(statuses.slice(0, 300).every((status) => status === 401)).toBe(true);
+    expect(statuses[300]).toBe(429);
   });
 
   it("refuses a signed request whose token is not the team's /ui command, such as an outgoing webhook", async () => {

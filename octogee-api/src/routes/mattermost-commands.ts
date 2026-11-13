@@ -1,5 +1,5 @@
 import express, { Router, type NextFunction, type Request, type Response } from "express";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import type { PlatformStateStore } from "@octogee/core/platform-state";
 import { CONTROL_UI_COMMAND_TRIGGER } from "@octogee/core/mattermost/control-ui-command";
 import { OPENCLAW_CONTROL_TICKET_TTL_MS } from "@octogee/core/openclaw-control-tickets";
@@ -15,6 +15,8 @@ import {
 const MAX_COMMAND_BYTES = 16 * 1024;
 const MATTERMOST_ID = /^[a-z0-9]{26}$/;
 const MAX_TOKEN_LENGTH = 128;
+const MAX_REQUESTS_PER_CLIENT_PER_MINUTE = 300;
+const MAX_COMMANDS_PER_USER_PER_MINUTE = 6;
 
 export interface MattermostCommandRoutesDeps {
   store: PlatformStateStore;
@@ -97,9 +99,19 @@ export function createMattermostCommandRoutes(deps: MattermostCommandRoutesDeps)
     res.locals.slashCommand = command;
     next();
   };
-  const limited = rateLimit({
+  const perClient = rateLimit({
     windowMs: 60_000,
-    limit: 6,
+    limit: MAX_REQUESTS_PER_CLIENT_PER_MINUTE,
+    standardHeaders: false,
+    legacyHeaders: false,
+    keyGenerator: (req) => ipKeyGenerator(req.ip ?? "unknown"),
+    handler: (_req, res) => {
+      res.status(429).json({ error: "rate-limited" });
+    },
+  });
+  const perUser = rateLimit({
+    windowMs: 60_000,
+    limit: MAX_COMMANDS_PER_USER_PER_MINUTE,
     standardHeaders: false,
     legacyHeaders: false,
     keyGenerator: (_req, res) => (res.locals.slashCommand as SlashCommand).userId,
@@ -108,9 +120,10 @@ export function createMattermostCommandRoutes(deps: MattermostCommandRoutesDeps)
   const router = Router();
   router.post(
     "/control-ui",
+    perClient,
     express.raw({ type: () => true, limit: MAX_COMMAND_BYTES }),
     verified,
-    limited,
+    perUser,
     async (_req: Request, res: Response, next: NextFunction) => {
       const command = res.locals.slashCommand as SlashCommand;
       try {
