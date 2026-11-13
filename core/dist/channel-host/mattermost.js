@@ -198,6 +198,75 @@ async function revokeMmTokens(api, userId, description) {
     }
     return revoked;
 }
+const TEAM_PAGE_SIZE = 200;
+async function strictJson(api, method, path, body) {
+    const resp = await api.fetch(path, {
+        method,
+        ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    });
+    if (!resp.ok)
+        throw new Error(`mm ${method} ${path.split("?")[0]} failed: ${resp.status} ${await responseText(resp)}`);
+    return resp.json();
+}
+function mmCommands(value) {
+    if (!Array.isArray(value))
+        throw new Error("mm list commands returned an invalid command list");
+    return value.map((entry) => {
+        const command = entry;
+        if (!command || ["id", "team_id", "trigger", "url", "method", "token"].some((key) => typeof command[key] !== "string")) {
+            throw new Error("mm list commands returned an invalid command");
+        }
+        return command;
+    });
+}
+function teamCommands(api, teamId) {
+    return strictJson(api, "GET", `/commands?team_id=${encodeURIComponent(teamId)}&custom_only=true`).then(mmCommands);
+}
+async function listMmTeamIds(api) {
+    const ids = [];
+    for (let page = 0;; page += 1) {
+        const teams = await strictJson(api, "GET", `/teams?page=${page}&per_page=${TEAM_PAGE_SIZE}`);
+        if (!Array.isArray(teams))
+            throw new Error("mm list teams returned an invalid team list");
+        for (const team of teams) {
+            if (typeof team?.id !== "string")
+                throw new Error("mm list teams returned an invalid team");
+            ids.push(team.id);
+        }
+        if (teams.length < TEAM_PAGE_SIZE)
+            return ids;
+    }
+}
+async function ensureMmCommand(api, spec) {
+    const desired = {
+        team_id: spec.teamId,
+        trigger: spec.trigger,
+        method: "P",
+        url: spec.url,
+        display_name: spec.displayName,
+        description: spec.description,
+        auto_complete: true,
+        auto_complete_desc: spec.autocompleteDescription,
+        auto_complete_hint: "",
+    };
+    const existing = (await teamCommands(api, spec.teamId)).find((command) => command.trigger === spec.trigger);
+    if (!existing) {
+        await strictJson(api, "POST", "/commands", desired);
+        return "created";
+    }
+    if (existing.url === spec.url && existing.method === "P")
+        return "present";
+    await strictJson(api, "PUT", `/commands/${existing.id}`, { ...existing, ...desired });
+    return "updated";
+}
+function sameToken(stored, presented) {
+    const expected = Buffer.from(stored);
+    return expected.length === presented.length && crypto.timingSafeEqual(expected, presented);
+}
+async function mmCommandTokenMatches(api, { teamId, trigger, token }) {
+    const presented = Buffer.from(token);
+    return (await teamCommands(api, teamId)).some((command) => command.trigger === trigger && command.team_id === teamId && sameToken(command.token, presented));
+}
 export function createMattermostChannelHost(config) {
     const api = createMmAdmin(config);
     const { call, log } = api;
@@ -281,6 +350,9 @@ export function createMattermostChannelHost(config) {
             return true;
         },
         erase: (scope) => eraseScope(api, scope),
+        listTeamIds: () => listMmTeamIds(api),
+        ensureCommand: (spec) => ensureMmCommand(api, spec),
+        commandTokenMatches: (input) => mmCommandTokenMatches(api, input),
     };
 }
 export function mattermostChannelHostFromEnv() {

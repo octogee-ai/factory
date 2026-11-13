@@ -77,6 +77,7 @@ import {
   userSecretFromData,
   userSecretToData,
   CONTROL_SESSION_FIELDS,
+  CONTROL_TICKET_FIELDS,
   controlSessionFromData,
   controlTicketFromData,
   GATEWAY_TICKET_FIELDS,
@@ -1338,6 +1339,20 @@ function accessRepositories(documents: FixtureDocuments, write: Write): AccessRe
     }),
     controlTickets: partialRepository<AccessRepositories["controlTickets"]>("access.controlTickets", {
       get: async (ticketHash) => getControlTicket(ticketHash),
+      create: async (ticket) => {
+        assertNoReservedGrantKeys("access.controlTickets.create", ticket.grant, CONTROL_TICKET_FIELDS);
+        const key: RecordKey = { aggregate: "control-ticket", key: ticket.ticketHash };
+        if (documents.get(controlTicketPath(ticket.ticketHash)) !== undefined) throw new AlreadyExistsError(key);
+        write(() => documents.set(controlTicketPath(ticket.ticketHash), {
+          ...structuredClone(ticket.grant),
+          uid: ticket.uid,
+          gatewayId: ticket.gatewayId,
+          createdAt: resolveServerNow(ticket.createdAt),
+          expiresAt: ticket.expiresAt,
+          expireAt: ticket.expiresAt,
+          ...(ticket.redeemedAt === null ? {} : { redeemedAt: ticket.redeemedAt }),
+        }));
+      },
       markRedeemed: async (ticketHash, redeemedAt, fence) => {
         const key: RecordKey = { aggregate: "control-ticket", key: ticketHash };
         const current = getControlTicket(ticketHash);

@@ -2,6 +2,7 @@ import { createHash, createPrivateKey, createPublicKey, sign, verify } from "nod
 import http, { type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from "node:http";
 import { URL } from "node:url";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
+import { CONTROL_UI_COMMAND_PATH } from "@octogee/core/mattermost/control-ui-command";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const BODY_TIMEOUT_MS = 10_000;
@@ -41,6 +42,10 @@ function proofPayload(body: Buffer, gatewayId: string, timestamp: string): strin
   return `v1\n${gatewayId}\n${timestamp}\n${bodySha256(body)}`;
 }
 
+function commandProofPayload(body: Buffer, command: string, timestamp: string): string {
+  return `v1-mattermost-command\n${command}\n${timestamp}\n${bodySha256(body)}`;
+}
+
 export function signAgentControlRouterRequest(
   body: Buffer,
   gatewayId: string,
@@ -48,6 +53,41 @@ export function signAgentControlRouterRequest(
   key: string,
 ): string {
   return sign(null, Buffer.from(proofPayload(body, gatewayId, timestamp)), routerSigningKey(key)).toString("hex");
+}
+
+export const CONTROL_UI_COMMAND = "control-ui";
+
+export interface MattermostCommandProof {
+  command: string;
+  timestamp: string;
+  signature: string;
+}
+
+export function signMattermostCommandRequest(
+  body: Buffer,
+  command: string,
+  timestamp: string,
+  key: string,
+): string {
+  return sign(null, Buffer.from(commandProofPayload(body, command, timestamp)), routerSigningKey(key)).toString("hex");
+}
+
+function freshTimestamp(timestamp: string, now: number): boolean {
+  if (!/^\d+$/.test(timestamp)) return false;
+  const value = Number(timestamp);
+  return Number.isSafeInteger(value) && Math.abs(now - value) <= PROOF_WINDOW_MS;
+}
+
+export function verifyMattermostCommandRequest(
+  body: Buffer,
+  proof: MattermostCommandProof,
+  key: string,
+  now: number,
+): boolean {
+  if (!validAgentControlRouterPublicKey(key)) return false;
+  if (proof.command !== CONTROL_UI_COMMAND || !freshTimestamp(proof.timestamp, now)) return false;
+  if (!/^[a-f0-9]{128}$/i.test(proof.signature)) return false;
+  return verify(null, Buffer.from(commandProofPayload(body, proof.command, proof.timestamp)), key, Buffer.from(proof.signature, "hex"));
 }
 
 export function verifyAgentControlRouterRequest(
@@ -64,12 +104,15 @@ export function verifyAgentControlRouterRequest(
   return verify(null, Buffer.from(proofPayload(body, proof.gatewayId, proof.timestamp)), key, Buffer.from(proof.signature, "hex"));
 }
 
-type CallbackRoute = { gatewayId: string; accountId: string };
+type CallbackRoute =
+  | { kind: "interaction"; gatewayId: string; accountId: string }
+  | { kind: "command"; command: typeof CONTROL_UI_COMMAND };
 
 function parseRoute(url: string): CallbackRoute | null {
   if (!url.startsWith("/")) return null;
   const queryStart = url.indexOf("?");
   const path = queryStart === -1 ? url : url.slice(0, queryStart);
+  if (path === CONTROL_UI_COMMAND_PATH) return { kind: "command", command: CONTROL_UI_COMMAND };
   const interaction = /^\/internal\/openclaw\/mattermost\/([^/]+)\/mattermost\/interactions\/([^/]+)$/.exec(path);
   if (
     interaction &&
@@ -77,6 +120,7 @@ function parseRoute(url: string): CallbackRoute | null {
     /^[A-Za-z0-9_-]{1,128}$/.test(interaction[2])
   ) {
     return {
+      kind: "interaction",
       gatewayId: interaction[1],
       accountId: interaction[2],
     };
@@ -127,7 +171,7 @@ const HOP_HEADERS = new Set([
 function forwardedHeaders(
   incoming: IncomingHttpHeaders,
   body: Buffer,
-  proof: AgentControlRouterProof,
+  proofHeaders: Record<string, string>,
 ): http.OutgoingHttpHeaders {
   const headers: http.OutgoingHttpHeaders = {};
   const connectionHeaders = new Set(
@@ -148,10 +192,7 @@ function forwardedHeaders(
     headers[name] = value;
   }
   headers["content-length"] = String(body.length);
-  headers["x-octogee-agent-control-gateway"] = proof.gatewayId;
-  headers["x-octogee-agent-control-timestamp"] = proof.timestamp;
-  headers["x-octogee-agent-control-signature"] = proof.signature;
-  return headers;
+  return { ...headers, ...proofHeaders };
 }
 
 function responseHeaders(
@@ -199,8 +240,47 @@ function readUpstreamBody(
   });
 }
 
-function downstreamPath(route: CallbackRoute): string {
-  return `/api/g/${route.gatewayId}/internal/openclaw/mattermost/interactions/${route.accountId}`;
+interface Delivery {
+  origin: URL;
+  path: string;
+  proofHeaders: Record<string, string>;
+  logMeta: Record<string, unknown>;
+}
+
+function interactionDelivery(
+  route: Extract<CallbackRoute, { kind: "interaction" }>,
+  body: Buffer,
+  timestamp: string,
+  input: { signingKey: string; origin: string },
+): Delivery {
+  return {
+    origin: new URL(input.origin),
+    path: `/api/g/${route.gatewayId}/internal/openclaw/mattermost/interactions/${route.accountId}`,
+    proofHeaders: {
+      "x-octogee-agent-control-gateway": route.gatewayId,
+      "x-octogee-agent-control-timestamp": timestamp,
+      "x-octogee-agent-control-signature": signAgentControlRouterRequest(body, route.gatewayId, timestamp, input.signingKey),
+    },
+    logMeta: { gatewayId: route.gatewayId },
+  };
+}
+
+function commandDelivery(
+  route: Extract<CallbackRoute, { kind: "command" }>,
+  body: Buffer,
+  timestamp: string,
+  input: { signingKey: string; origin: string },
+): Delivery {
+  return {
+    origin: new URL(input.origin),
+    path: CONTROL_UI_COMMAND_PATH,
+    proofHeaders: {
+      "x-octogee-mattermost-command": route.command,
+      "x-octogee-mattermost-command-timestamp": timestamp,
+      "x-octogee-mattermost-command-signature": signMattermostCommandRequest(body, route.command, timestamp, input.signingKey),
+    },
+    logMeta: { command: route.command },
+  };
 }
 
 function writeJson(res: ServerResponse, status: number, body: Record<string, unknown>): void {
@@ -214,6 +294,7 @@ export function createAgentControlCallbackRouter(input: {
   now?: () => number;
   resolveVmOrigin?: (gatewayId: string) => string | undefined;
   targetOrigin?: (gatewayId: string) => string;
+  apiOrigin?: string;
   upstreamTimeoutMs?: number;
   maxResponseBytes?: number;
   log: (message: string, meta?: Record<string, unknown>) => void;
@@ -222,6 +303,7 @@ export function createAgentControlCallbackRouter(input: {
   const now = input.now ?? Date.now;
   const targetOrigin = input.targetOrigin ?? ((gatewayId: string) =>
     `http://gateway-edge-${gatewayId}.${input.namespace}.svc.cluster.local:3001`);
+  const apiOrigin = input.apiOrigin ?? `http://octogee-api.${input.namespace}.svc.cluster.local:3001`;
   const upstreamTimeoutMs = input.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS;
   const maxResponseBytes = input.maxResponseBytes ?? MAX_RESPONSE_BYTES;
   if (!Number.isSafeInteger(upstreamTimeoutMs) || upstreamTimeoutMs < 1) {
@@ -256,16 +338,16 @@ export function createAgentControlCallbackRouter(input: {
       return;
     }
     const timestamp = String(now());
-    const proof = {
-      gatewayId: route.gatewayId,
-      timestamp,
-      signature: signAgentControlRouterRequest(body, route.gatewayId, timestamp, input.signingKey),
-    };
-    const origin = new URL(input.resolveVmOrigin?.(route.gatewayId) ?? targetOrigin(route.gatewayId));
+    const delivery = route.kind === "command"
+      ? commandDelivery(route, body, timestamp, { signingKey: input.signingKey, origin: apiOrigin })
+      : interactionDelivery(route, body, timestamp, {
+        signingKey: input.signingKey,
+        origin: input.resolveVmOrigin?.(route.gatewayId) ?? targetOrigin(route.gatewayId),
+      });
     let responded = false;
     const fail = (error: Error): void => {
       input.log("[agent-control-router] upstream request failed", {
-        gatewayId: route.gatewayId,
+        ...delivery.logMeta,
         error: error.message,
       });
       if (responded) return;
@@ -273,12 +355,12 @@ export function createAgentControlCallbackRouter(input: {
       writeJson(res, 502, { error: "gateway_unavailable" });
     };
     const proxy = http.request({
-      protocol: origin.protocol,
-      hostname: origin.hostname,
-      port: origin.port,
+      protocol: delivery.origin.protocol,
+      hostname: delivery.origin.hostname,
+      port: delivery.origin.port,
       method: "POST",
-      path: downstreamPath(route),
-      headers: forwardedHeaders(req.headers, body, proof),
+      path: delivery.path,
+      headers: forwardedHeaders(req.headers, body, delivery.proofHeaders),
     }, async (upstream) => {
       try {
         const upstreamBody = await readUpstreamBody(upstream, maxResponseBytes);

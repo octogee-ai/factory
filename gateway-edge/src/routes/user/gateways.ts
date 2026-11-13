@@ -455,12 +455,13 @@ async function openClawControlReachable(input: {
 }
 
 async function mintOpenClawTicket(
+  store: PlatformStateStore,
   gatewayId: string,
   workspaceSlug: string,
   uid: string,
   ownerSizingKey: GatewayOwnerSizingKey | null,
 ): Promise<TicketResult> {
-  return platformStateStore.transaction({ label: "builder-gateways.openclaw-ticket" }, async (tx) => {
+  return store.transaction({ label: "builder-gateways.openclaw-ticket" }, async (tx) => {
     const serving = await readGatewayAuthorizationInStore(tx, gatewayId);
     if (!serving) return { kind: NOT_READY };
     const scope = await workspaceScopeFor(serving, workspaceSlug, tx, true);
@@ -551,16 +552,49 @@ async function scopedOpenClawTicket(
   if (access === CAPABILITY_DISABLED) return TICKET_CAPABILITY_DISABLED;
   const refusal = await openClawReleaseRefusal(req, authorization, scope, featurePolicy);
   if (refusal) return refusal;
-  const result = await mintOpenClawTicket(gatewayId, scope.workspaceSlug, uid, ownerSizingKey);
+  const result = await mintOpenClawTicket(platformStateStore, gatewayId, scope.workspaceSlug, uid, ownerSizingKey);
   if (result.kind === NOT_FOUND) return TICKET_NOT_FOUND;
   if (result.kind === CAPABILITY_DISABLED) return TICKET_CAPABILITY_DISABLED;
   if (result.kind === NOT_READY) return { status: 409, body: { error: "gateway-not-ready", retryable: true } };
   return {
     status: 201,
     body: {
-      launchUrl: `${apiOrigin()}/g/${gatewayId}/openclaw/launch/${result.minted.ticket}`,
+      launchUrl: openClawLaunchUrl(gatewayId, result.minted.ticket),
       expiresAt: result.minted.document.expiresAt,
     },
+  };
+}
+
+function openClawLaunchUrl(gatewayId: string, ticket: string): string {
+  return `${apiOrigin()}/g/${gatewayId}/openclaw/launch/${ticket}`;
+}
+
+export type OwnerControlUiLaunch =
+  | { kind: "launch"; launchUrl: string; expiresAt: number }
+  | { kind: "no-gateway" }
+  | { kind: "shared-gateway" }
+  | { kind: "not-owner" }
+  | { kind: typeof CAPABILITY_DISABLED }
+  | { kind: typeof NOT_READY };
+
+export async function mintOwnerControlUiLaunch(
+  store: PlatformStateStore,
+  uid: string,
+): Promise<OwnerControlUiLaunch> {
+  const user = await store.users.records.get(uid);
+  const gatewayId = user?.gateway?.gatewayId;
+  if (!user?.slug || !gatewayId) return { kind: "no-gateway" };
+  const authorization = await readGatewayAuthorizationInStore(store, gatewayId);
+  if (!authorization) return { kind: NOT_READY };
+  if (isSharedGateway(authorization)) return { kind: "shared-gateway" };
+  if (authorization.config.ownerUid !== uid) return { kind: "not-owner" };
+  const result = await mintOpenClawTicket(store, gatewayId, user.slug, uid, null);
+  if (result.kind === NOT_FOUND) return { kind: "not-owner" };
+  if (result.kind !== "minted") return { kind: result.kind };
+  return {
+    kind: "launch",
+    launchUrl: openClawLaunchUrl(gatewayId, result.minted.ticket),
+    expiresAt: result.minted.document.expiresAt,
   };
 }
 

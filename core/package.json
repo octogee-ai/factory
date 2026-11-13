@@ -385,6 +385,10 @@
       "types": "./dist/mattermost/admin-creds.d.ts",
       "default": "./dist/mattermost/admin-creds.js"
     },
+    "./mattermost/control-ui-command": {
+      "types": "./dist/mattermost/control-ui-command.d.ts",
+      "default": "./dist/mattermost/control-ui-command.js"
+    },
     "./mattermost/avatars": {
       "types": "./dist/mattermost/avatars.d.ts",
       "default": "./dist/mattermost/avatars.js"

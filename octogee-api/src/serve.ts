@@ -3,6 +3,25 @@ import type { Express } from "express";
 import { platformStateStore } from "../../gateway-edge/src/lib/platform-state.js";
 import { logger } from "../../gateway-edge/src/middleware/logging.js";
 import { createGracefulShutdown } from "./lib/graceful-shutdown.js";
+import { mattermostChannelHostFromEnv } from "@octogee/core/channel-host";
+import { controlUiCommandUrl, convergeControlUiCommands } from "@octogee/core/mattermost/control-ui-command";
+
+async function convergeControlUiCommandsAtBoot(): Promise<void> {
+  try {
+    const summary = await convergeControlUiCommands({
+      host: mattermostChannelHostFromEnv(),
+      url: controlUiCommandUrl(process.env.K8S_NAMESPACE),
+      isWorkspaceTeam: async (teamId) =>
+        (await platformStateStore.workspaces.records.findByMattermostTeamId(teamId)) !== null,
+      log: (message, meta) => logger.error(message, meta ?? {}),
+    });
+    logger.info("[mattermost] /ui command convergence finished", { ...summary });
+  } catch (error) {
+    logger.warn("[mattermost] /ui command convergence did not run", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
 
 export function serveApi(app: Express): void {
   const port = parseInt(process.env.PORT || "3001", 10);
@@ -14,6 +33,7 @@ export function serveApi(app: Express): void {
       sha: process.env.BUILD_SHA || "unknown",
       node: process.version,
     });
+    void convergeControlUiCommandsAtBoot();
   });
   const shutdown = createGracefulShutdown({
     server,

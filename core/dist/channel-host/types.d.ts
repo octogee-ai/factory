@@ -44,6 +44,15 @@ export interface ChannelEraseSpec {
     channelIds: readonly string[];
     userIds: readonly string[];
 }
+export interface ChannelCommandSpec {
+    teamId: string;
+    trigger: string;
+    url: string;
+    displayName: string;
+    description: string;
+    autocompleteDescription: string;
+}
+export type ChannelCommandEnsureResult = "created" | "updated" | "present";
 export interface ManagedChannelHost {
     readonly kind: "managed";
     readonly provider: string;
@@ -60,6 +69,13 @@ export interface ManagedChannelHost {
     revokeTokens(userId: string, description: string): Promise<string[]>;
     userExists(userId: string): Promise<boolean>;
     erase(spec: ChannelEraseSpec): Promise<void>;
+    listTeamIds(): Promise<string[]>;
+    ensureCommand(spec: ChannelCommandSpec): Promise<ChannelCommandEnsureResult>;
+    commandTokenMatches(input: {
+        teamId: string;
+        trigger: string;
+        token: string;
+    }): Promise<boolean>;
 }
 export interface ChannelBootstrapInput {
     gatewayId: string;
