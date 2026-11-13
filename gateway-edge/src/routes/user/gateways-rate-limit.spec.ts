@@ -18,6 +18,9 @@ it("limits workspace Gateway status requests independently for each verified use
   for (let index = 0; index < 120; index++) {
     await request(app).get(path).set("authorization", "alice").expect(200, { workspaces: [] });
   }
-  await request(app).get(path).set("authorization", "alice").expect(429);
-  await request(app).get(path).set("authorization", "bob").expect(200, { workspaces: [] });
+  const limited = await request(app).get(path).set("authorization", "alice");
+  expect(limited.status).toBe(429);
+  const other = await request(app).get(path).set("authorization", "bob");
+  expect(other.status).toBe(200);
+  expect(other.body).toEqual({ workspaces: [] });
 });
