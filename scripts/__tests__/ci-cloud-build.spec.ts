@@ -9,7 +9,7 @@ import { IMAGE_BUILDS } from "../ci/image-build.mjs";
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const registry = "ghcr.io/octogee-ai/octogee-cloud";
 const sha = "a".repeat(40);
-const images = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "mattermost"];
+const images = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway"];
 const plan = (overrides: Record<string, unknown> = {}) =>
   cloudBakePlan({ registry, sha, platform: "linux/arm64", root, images, ...overrides });
 const digest = (n: number) => `sha256:${String(n).repeat(64).slice(0, 64)}`;
@@ -82,6 +82,7 @@ describe("public platform image plan", () => {
     [{ push: true, load: true, tagPrefix: "x/" }, "either load or push"],
     [{ platform: "linux/s390x" }, "Unsupported platform"],
     [{ images: ["artifact-worker"] }, "Unknown platform image"],
+    [{ images: ["mattermost"] }, "Unknown platform image"],
     [{ sha: "abc" }, "full source SHA"],
   ])("refuses %j", (overrides, message) => {
     expect(() => plan(overrides)).toThrow(message);
@@ -89,7 +90,7 @@ describe("public platform image plan", () => {
 });
 
 describe("public platform image manifest", () => {
-  const all = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "mattermost"];
+  const all = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway"];
   const perPlatform = (offset: number) => Object.fromEntries(all.map((name, index) => [name, digest(index + offset)]));
   const digests = { "linux/amd64": perPlatform(0), "linux/arm64": perPlatform(5) };
 
@@ -110,9 +111,10 @@ describe("public platform image manifest", () => {
   it("records the index and platform digests of every image", () => {
     const indexes = Object.fromEntries(all.map(name => [name, digest(9)]));
     const manifest = imageManifest({ registry, sha, digests, indexes });
-    expect(manifest.images["mattermost"]).toEqual({
-      image: `${registry}/mattermost@${digest(9)}`, tag: `${registry}/mattermost:${sha}`, digest: digest(9),
-      platforms: { "linux/amd64": digest(4), "linux/arm64": digest(9) },
+    expect(Object.keys(manifest.images)).toEqual(all);
+    expect(manifest.images["octogee-gateway"]).toEqual({
+      image: `${registry}/octogee-gateway@${digest(9)}`, tag: `${registry}/octogee-gateway:${sha}`, digest: digest(9),
+      platforms: { "linux/amd64": digest(3), "linux/arm64": digest(8) },
     });
     expect(() => imageManifest({ registry, sha, digests, indexes: {} })).toThrow("No index digest");
   });

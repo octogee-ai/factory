@@ -8,7 +8,7 @@ import { createStubHost, REPO_ROOT, type StubHost } from "./deploy/stub-host";
 
 const SCRIPT = join(REPO_ROOT, "scripts/ops/kind-install.sh");
 const REGISTRY = "ghcr.io/octogee-ai/octogee-cloud";
-const IMAGES = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "mattermost"];
+const IMAGES = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway"];
 const PUBLISHED = "b".repeat(40);
 const CHECKOUT = "c".repeat(40);
 const AMD64 = `sha256:${"1".repeat(64)}`;
@@ -99,6 +99,7 @@ describe("kind-install.sh", () => {
     expect(values["glm-controller"].image).toEqual({ repository: "localhost:5001/octogee/glm-controller", tag: "bbbbbbb", digest: ARM64 });
     expect(values["glm-controller"].platformRelease).toMatchObject({ sourceSha: PUBLISHED, gatewayImageTag: `bbbbbbb@${ARM64}` });
     expect(values["octogee-api"].replicas).toBeUndefined();
+    expect(values).not.toHaveProperty("mattermost");
   });
 
   const manifest = (sha = CHECKOUT, images = IMAGES) => {
@@ -134,7 +135,7 @@ describe("kind-install.sh", () => {
   it("refuses a manifest missing a selected digest before copying any image", () => {
     const result = run(["up", "--pull", `--manifest=${manifest(CHECKOUT, IMAGES.slice(0, -1))}`]);
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("mattermost has no valid linux/arm64 digest");
+    expect(result.stderr).toContain("octogee-gateway has no valid linux/arm64 digest");
     expect(inspected()).toEqual([]);
     expect(copies()).toEqual([]);
   });

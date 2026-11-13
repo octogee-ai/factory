@@ -10,7 +10,7 @@ export const INSTALLATION_VALUES = path.join(REPO_ROOT, "scripts/ops/kind/values
 const DIGEST = `sha256:${"0".repeat(64)}`;
 export const INSTALLATION_SETS: Record<string, string> = {
   ...Object.fromEntries(
-    ["octogee-api", "gateway-edge", "glm-controller", "mattermost"].flatMap((chart) => [
+    ["octogee-api", "gateway-edge", "glm-controller"].flatMap((chart) => [
       [`${chart}.image.repository`, `registry.example/${chart}`],
       [`${chart}.image.tag`, "aaaaaaa"],
       [`${chart}.image.digest`, DIGEST],

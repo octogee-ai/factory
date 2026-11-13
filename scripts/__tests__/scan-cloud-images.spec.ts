@@ -9,7 +9,7 @@ const registry = "ghcr.io/octogee-ai/octogee-cloud";
 const sha = "a".repeat(40);
 const arm = `sha256:${"1".repeat(64)}`;
 const amd = `sha256:${"2".repeat(64)}`;
-const images = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "mattermost"];
+const images = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway"];
 let directory: string;
 
 beforeEach(() => {
@@ -47,12 +47,12 @@ it("reports findings and produces an SBOM for every exact architecture digest", 
     expect(calls).not.toContain(`${registry}/${name}@${amd}`);
     expect(readFileSync(join(directory, "summary"), "utf8")).toContain(`${name}@${arm}\` | 1 | 0 | 0 | 0 | 0 |`);
   }
-  expect(readdirSync(join(directory, "reports"))).toHaveLength(11);
+  expect(readdirSync(join(directory, "reports"))).toHaveLength(9);
 });
 
 it.each([
   [{ manifestSha: "b".repeat(40) }, "Image manifest does not match"],
-  [{ include: images.slice(0, -1) }, "mattermost has no valid linux/arm64 digest"],
+  [{ include: images.slice(0, -1) }, "octogee-gateway has no valid linux/arm64 digest"],
 ])("rejects an invalid manifest before invoking Trivy", (options, error) => {
   const result = run(options);
   expect(result.status).not.toBe(0);
@@ -65,6 +65,6 @@ it("continues scanning other images and fails the job after a Trivy error", () =
   expect(result.status).toBe(1);
   expect(result.stdout).toContain("Trivy could not finish reports");
   const reports = readdirSync(join(directory, "reports"));
-  expect(reports).toContain("mattermost.cdx.json");
+  expect(reports).toContain("octogee-gateway.cdx.json");
   expect(reports).not.toContain("octogee-api.cdx.json");
 });

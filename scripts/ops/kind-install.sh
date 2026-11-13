@@ -176,12 +176,11 @@ const [file, prefix, openclaw] = process.argv.slice(2);
 const { sha, images } = JSON.parse(readFileSync(file, "utf8"));
 if (!/^[a-f0-9]{40}$/.test(sha ?? "")) throw new Error(`${file} names no source SHA; run up again without --skip-build`);
 const tag = sha.slice(0, 7);
-const required = ["glm-controller", "gateway-edge", "octogee-gateway", "mattermost"];
+const required = ["glm-controller", "gateway-edge", "octogee-gateway"];
 const missing = required.filter(name => !images[name]);
 if (missing.length) throw new Error(`No image was built or copied for ${missing.join(", ")}`);
 const image = name => ({ repository: `${prefix}${name}`, tag, digest: images[name] ?? `sha256:${"0".repeat(64)}` });
 console.log(JSON.stringify({
-  mattermost: { image: image("mattermost") },
   "octogee-api": { image: image("octogee-api"), ...(images["octogee-api"] ? {} : { replicas: 0 }) },
   llmBroker: images["octogee-api"] ? { image: image("octogee-api") } : { enabled: false },
   "gateway-edge": { image: image("gateway-edge") },
