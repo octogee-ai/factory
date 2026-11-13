@@ -16,6 +16,7 @@ import {
   syncCleanWorkspaceToRemote,
   parseLog,
   parsePorcelain,
+  resolveProjectDir,
   resolveUserDir,
   workspaceGitCommandArgs,
   workspaceGitEnvironment,
@@ -142,6 +143,23 @@ describe("resolveUserDir", () => {
 
   it("returns null for a missing slug dir", async () => {
     expect(await resolveUserDir(root, "nope")).toBeNull();
+  });
+
+  it("rejects a symlink in a customer or project checkout path", async () => {
+    await fs.symlink(repo, path.join(root, "linked"), "dir");
+    expect(await resolveUserDir(root, "linked")).toBeNull();
+
+    const project = path.join(root, "project");
+    await fs.mkdir(path.join(project, "demo", ".git"), { recursive: true });
+    await fs.symlink(project, path.join(repo, "projects"), "dir");
+    expect(await resolveProjectDir(root, "alice", "demo")).toBeNull();
+  });
+
+  it("rejects a checkout with symlinked Git metadata", async () => {
+    const checkout = path.join(root, "metadata-link");
+    await fs.mkdir(checkout);
+    await fs.symlink(path.join(repo, ".git"), path.join(checkout, ".git"), "dir");
+    expect(await resolveUserDir(root, "metadata-link")).toBeNull();
   });
 
   it("returns null when the dir lacks .git (not a working tree)", async () => {
