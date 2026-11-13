@@ -236,20 +236,32 @@ async function scrubOauthProfiles(agentDir: string, agentId: string): Promise<bo
 
 function projectAgentModelsJson(agentDir: string, providers: Record<string, unknown>): boolean {
   const modelsPath = path.join(agentDir, "models.json");
-  let current: unknown = {};
-  if (fs.existsSync(modelsPath)) {
-    current = JSON.parse(fs.readFileSync(modelsPath, "utf8"));
-  }
   const desired = { providers };
-  if (JSON.stringify(current) === JSON.stringify(desired)) {
-    fs.chmodSync(agentDir, 0o700);
-    fs.chmodSync(modelsPath, 0o600);
-    return false;
-  }
   fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(modelsPath, `${JSON.stringify(desired, null, 2)}\n`, { mode: 0o600 });
   fs.chmodSync(agentDir, 0o700);
-  fs.chmodSync(modelsPath, 0o600);
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(modelsPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ELOOP") throw error;
+  }
+  if (fd !== undefined) {
+    try {
+      if (!fs.fstatSync(fd).isFile()) throw new Error("model projection is not a regular file");
+      const current: unknown = JSON.parse(fs.readFileSync(fd, "utf8"));
+      if (JSON.stringify(current) === JSON.stringify(desired)) {
+        fs.fchmodSync(fd, 0o600);
+        return false;
+      }
+    } finally { fs.closeSync(fd); }
+  }
+  const staging = fs.mkdtempSync(path.join(agentDir, ".octogee-models-"));
+  try {
+    const pending = path.join(staging, "models.json");
+    fs.writeFileSync(pending, `${JSON.stringify(desired, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    fs.renameSync(pending, modelsPath);
+  } finally { fs.rmSync(staging, { recursive: true, force: true }); }
   return true;
 }
 

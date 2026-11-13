@@ -183,6 +183,7 @@ const image = name => ({ repository: `${prefix}${name}`, tag, digest: images[nam
 console.log(JSON.stringify({
   mattermost: { image: image("mattermost") },
   "octogee-api": { image: image("octogee-api"), ...(images["octogee-api"] ? {} : { replicas: 0 }) },
+  llmBroker: images["octogee-api"] ? { image: image("octogee-api") } : { enabled: false },
   "gateway-edge": { image: image("gateway-edge") },
   "glm-controller": {
     image: image("glm-controller"),
@@ -271,6 +272,24 @@ write_secrets() {
   for name in mattermost-gateway gitea-token; do
     k get secret "$name" >/dev/null 2>&1 || apply_secret "$name"
   done
+  apply_provider_keys
+}
+
+apply_provider_keys() {
+  local pair provider variable stored=false
+  for pair in anthropic:ANTHROPIC_API_KEY openrouter:OPENROUTER_API_KEY openai:OPENAI_API_KEY; do
+    provider="${pair%%:*}"
+    variable="${pair#*:}"
+    if [[ -n "${!variable:-}" ]]; then
+      apply_secret "octogee-$provider" --from-file=api_key=<(printf '%s' "${!variable}")
+      printf 'Stored %s in Secret octogee-%s\n' "$variable" "$provider"
+      stored=true
+    elif k get secret "octogee-$provider" >/dev/null 2>&1; then
+      stored=true
+    fi
+  done
+  $stored || printf '%s\n' "kind-install: no model provider key, so agents cannot reply." \
+    "Set OPENROUTER_API_KEY, ANTHROPIC_API_KEY or OPENAI_API_KEY and run up again." >&2
 }
 
 install_infrastructure() {
@@ -356,6 +375,10 @@ restart_platform() {
   k rollout restart deployment/glm-controller deployment/octogee-api deployment/gateway-router >/dev/null
   k rollout status deployment/glm-controller --timeout=10m
   k rollout status deployment/octogee-api --timeout=10m
+  if k get deployment llm-broker >/dev/null 2>&1; then
+    k rollout restart deployment/llm-broker >/dev/null
+    k rollout status deployment/llm-broker --timeout=5m
+  fi
 }
 
 up() {
@@ -412,10 +435,22 @@ Then: octogee-fleet --env=kind gateway ls
 EOF
 }
 
+registry_in_use() {
+  local node
+  for node in $(kind get nodes --all-clusters 2>/dev/null); do
+    if docker exec "$node" grep -qsF "http://$REGISTRY:5000" "/etc/containerd/certs.d/localhost:$REGISTRY_PORT/hosts.toml"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 down() {
-  log "Deleting cluster $NAME, registry $REGISTRY and $STATE"
+  log "Deleting cluster $NAME and $STATE"
   kind delete cluster --name "$NAME" --kubeconfig "$KUBECONFIG_FILE"
-  if docker inspect "$REGISTRY" >/dev/null 2>&1; then
+  if registry_in_use; then
+    printf 'Keeping registry %s: another kind cluster still pulls from it\n' "$REGISTRY"
+  elif docker inspect "$REGISTRY" >/dev/null 2>&1; then
     docker rm -f "$REGISTRY" >/dev/null
   fi
   rm -rf "$STATE"

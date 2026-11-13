@@ -3,6 +3,8 @@ import * as crypto from "node:crypto";
 import { log as coreLog } from "../config.js";
 import { assertMattermostConfigured, isIdempotentMmError } from "../mattermost/client.js";
 import type {
+  ChannelCommandEnsureResult,
+  ChannelCommandSpec,
   ChannelEraseSpec,
   ChannelHostEntity,
   ChannelMembershipTarget,
@@ -127,6 +129,26 @@ async function tolerantDelete(api: MmAdmin, path: string, label: string): Promis
   throw new Error(`mm ${label} failed: ${resp.status} ${await responseText(resp)}`);
 }
 
+async function blockMmSignIn(api: MmAdmin, userId: string): Promise<void> {
+  const deactivated = await api.fetch(`/users/${userId}/active`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ active: false }),
+  });
+  if (deactivated.status === 404) {
+    api.log(`[mm] user ${userId} is gone, so it cannot sign in`);
+    return;
+  }
+  if (!deactivated.ok) {
+    throw new Error(`mm deactivate user ${userId} failed: ${deactivated.status} ${await responseText(deactivated)}`);
+  }
+  const revoked = await api.fetch(`/users/${userId}/sessions/revoke/all`, { method: "POST" });
+  if (!revoked.ok) {
+    throw new Error(`mm revoke sessions for user ${userId} failed: ${revoked.status} ${await responseText(revoked)}`);
+  }
+  api.log(`[mm] user ${userId} deactivated and its sessions revoked`);
+}
+
 async function destroyChannel(api: MmAdmin, channelId: string): Promise<void> {
   const resp = await api.fetch(`/channels/${channelId}`, { method: "DELETE" });
   if (resp.ok || resp.status === 404) {
@@ -242,6 +264,91 @@ async function revokeMmTokens(api: MmAdmin, userId: string, description: string)
   return revoked;
 }
 
+const TEAM_PAGE_SIZE = 200;
+
+interface MmCommand {
+  id: string;
+  team_id: string;
+  trigger: string;
+  url: string;
+  method: string;
+  token: string;
+  [key: string]: unknown;
+}
+
+async function strictJson(api: MmAdmin, method: string, path: string, body?: unknown): Promise<unknown> {
+  const resp = await api.fetch(path, {
+    method,
+    ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+  });
+  if (!resp.ok) throw new Error(`mm ${method} ${path.split("?")[0]} failed: ${resp.status} ${await responseText(resp)}`);
+  return resp.json();
+}
+
+function mmCommands(value: unknown): MmCommand[] {
+  if (!Array.isArray(value)) throw new Error("mm list commands returned an invalid command list");
+  return value.map((entry: unknown) => {
+    const command = entry as Partial<MmCommand> | null;
+    if (!command || ["id", "team_id", "trigger", "url", "method", "token"].some((key) => typeof command[key] !== "string")) {
+      throw new Error("mm list commands returned an invalid command");
+    }
+    return command as MmCommand;
+  });
+}
+
+function teamCommands(api: MmAdmin, teamId: string): Promise<MmCommand[]> {
+  return strictJson(api, "GET", `/commands?team_id=${encodeURIComponent(teamId)}&custom_only=true`).then(mmCommands);
+}
+
+async function listMmTeamIds(api: MmAdmin): Promise<string[]> {
+  const ids: string[] = [];
+  for (let page = 0; ; page += 1) {
+    const teams = await strictJson(api, "GET", `/teams?page=${page}&per_page=${TEAM_PAGE_SIZE}`);
+    if (!Array.isArray(teams)) throw new Error("mm list teams returned an invalid team list");
+    for (const team of teams as Array<{ id?: unknown }>) {
+      if (typeof team?.id !== "string") throw new Error("mm list teams returned an invalid team");
+      ids.push(team.id);
+    }
+    if (teams.length < TEAM_PAGE_SIZE) return ids;
+  }
+}
+
+async function ensureMmCommand(api: MmAdmin, spec: ChannelCommandSpec): Promise<ChannelCommandEnsureResult> {
+  const desired = {
+    team_id: spec.teamId,
+    trigger: spec.trigger,
+    method: "P",
+    url: spec.url,
+    display_name: spec.displayName,
+    description: spec.description,
+    auto_complete: true,
+    auto_complete_desc: spec.autocompleteDescription,
+    auto_complete_hint: "",
+  };
+  const existing = (await teamCommands(api, spec.teamId)).find((command) => command.trigger === spec.trigger);
+  if (!existing) {
+    await strictJson(api, "POST", "/commands", desired);
+    return "created";
+  }
+  if (existing.url === spec.url && existing.method === "P") return "present";
+  await strictJson(api, "PUT", `/commands/${existing.id}`, { ...existing, ...desired });
+  return "updated";
+}
+
+function sameToken(stored: string, presented: Buffer): boolean {
+  const expected = Buffer.from(stored);
+  return expected.length === presented.length && crypto.timingSafeEqual(expected, presented);
+}
+
+async function mmCommandTokenMatches(
+  api: MmAdmin,
+  { teamId, trigger, token }: { teamId: string; trigger: string; token: string },
+): Promise<boolean> {
+  const presented = Buffer.from(token);
+  return (await teamCommands(api, teamId)).some((command) =>
+    command.trigger === trigger && command.team_id === teamId && sameToken(command.token, presented));
+}
+
 export function createMattermostChannelHost(config: MattermostChannelHostConfig): MattermostChannelHost {
   const api = createMmAdmin(config);
   const { call, log } = api;
@@ -294,6 +401,8 @@ export function createMattermostChannelHost(config: MattermostChannelHostConfig)
       }
     },
 
+    blockSignIn: (userId) => blockMmSignIn(api, userId),
+
     async addMember(target, userId, roles) {
       await call(
         "POST",
@@ -337,6 +446,12 @@ export function createMattermostChannelHost(config: MattermostChannelHostConfig)
     },
 
     erase: (scope) => eraseScope(api, scope),
+
+    listTeamIds: () => listMmTeamIds(api),
+
+    ensureCommand: (spec) => ensureMmCommand(api, spec),
+
+    commandTokenMatches: (input) => mmCommandTokenMatches(api, input),
   };
 }
 

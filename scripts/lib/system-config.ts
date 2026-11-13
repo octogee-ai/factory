@@ -178,18 +178,14 @@ function remoteUrl(slug: string): string {
 }
 
 function atomicWrite(filePath: string, contents: string | Buffer, mode = 0o600): void {
-  const tmp = `${filePath}.tmp`;
-  const fd = fs.openSync(
-    tmp,
-    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC,
-    mode,
-  );
+  const staging = fs.mkdtempSync(path.join(path.dirname(filePath), ".octogee-config-"));
   try {
-    fs.writeFileSync(fd, contents);
+    const pending = path.join(staging, "pending");
+    fs.writeFileSync(pending, contents, { flag: "wx", mode });
+    fs.renameSync(pending, filePath);
   } finally {
-    fs.closeSync(fd);
+    fs.rmSync(staging, { recursive: true, force: true });
   }
-  fs.renameSync(tmp, filePath);
 }
 
 function asRecord(value: unknown): UnknownRecord | null {
@@ -941,16 +937,15 @@ function seedSystemConfigIfMissing(
   log: (msg: string) => void,
 ): boolean {
   const configPath = path.join(repoDir, OPENCLAW_CONFIG_FILENAME);
-  if (fs.existsSync(configPath)) return false;
   if (gitExec(repoDir, ["symbolic-ref", "HEAD", MAIN_REF]) === null) {
     throw new Error(`[system_config] initial branch selection failed for ${slug}`);
   }
-  fs.writeFileSync(configPath, seedConfigContents(templatePath, env), "utf-8");
+  fs.writeFileSync(configPath, seedConfigContents(templatePath, env), { encoding: "utf-8", flag: "wx", mode: 0o600 });
   atomicWrite(path.join(repoDir, SYSTEM_CONFIG_METADATA_FILENAME), `${JSON.stringify({
     schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
     lastMigration: "initial",
   }, null, 2)}\n`);
-  fs.writeFileSync(path.join(repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME), SYSTEM_CONFIG_GITIGNORE, "utf-8");
+  ensureSystemConfigGitignore(repoDir);
   const staged = gitExec(repoDir, ["add", ...SYSTEM_CONFIG_PATHSPEC_ARGS]);
   if (staged === null) {
     throw new Error(`[system_config] initial stage failed for ${slug}`);
@@ -1022,7 +1017,8 @@ function trackedSchemaVersion(metadata: UnknownRecord | undefined): number | und
 
 function ensureSystemConfigGitignore(repoDir: string): void {
   const gitignorePath = path.join(repoDir, SYSTEM_CONFIG_GITIGNORE_FILENAME);
-  if (!fs.existsSync(gitignorePath)) fs.writeFileSync(gitignorePath, SYSTEM_CONFIG_GITIGNORE, "utf-8");
+  try { fs.writeFileSync(gitignorePath, SYSTEM_CONFIG_GITIGNORE, { encoding: "utf-8", flag: "wx" }); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
 }
 
 function readTrackedConfigObject(contents: string): UnknownRecord | null {

@@ -14,7 +14,7 @@ import { assertAbsentFence, assertFenceEquals, assertFenceOneOf } from "../platf
 import { migrationTransferTaskFromData } from "../platform-state/documents/migration-tasks.js";
 import { decodeGatewayAssignmentData } from "../platform-state/documents/gateways.js";
 import { agentImportDocument, agentImportPointerDocument, agentImportPointerFromData, agentImportRecordFromData, anonymousArchiveFromData, storedDeletionStatus, } from "../platform-state/documents/jobs.js";
-import { userSecretFromData, userSecretToData, CONTROL_SESSION_FIELDS, controlSessionFromData, controlTicketFromData, GATEWAY_TICKET_FIELDS, gatewayAccessDenialAuditId, gatewayTicketFromData, modelBrokerGatewayTokenFromData, modelBrokerTokenDocument, modelBrokerTokenFromData, secretKindOf, } from "../platform-state/documents/secrets.js";
+import { userSecretFromData, userSecretToData, CONTROL_SESSION_FIELDS, CONTROL_TICKET_FIELDS, controlSessionFromData, controlTicketFromData, GATEWAY_TICKET_FIELDS, gatewayAccessDenialAuditId, gatewayTicketFromData, modelBrokerGatewayTokenFromData, modelBrokerTokenDocument, modelBrokerTokenFromData, secretKindOf, } from "../platform-state/documents/secrets.js";
 import { agentIdentityFromData, workspaceChannelFromData, workspaceMemberFromData, workspaceProjectFromData, workspaceProjectMemberFromData, isWorkspaceReservation, workspaceRecordFromData, } from "../platform-state/documents/workspaces.js";
 export function journalRowsIn(records) {
     return {
@@ -1182,6 +1182,21 @@ function accessRepositories(documents, write) {
         }),
         controlTickets: partialRepository("access.controlTickets", {
             get: async (ticketHash) => getControlTicket(ticketHash),
+            create: async (ticket) => {
+                assertNoReservedGrantKeys("access.controlTickets.create", ticket.grant, CONTROL_TICKET_FIELDS);
+                const key = { aggregate: "control-ticket", key: ticket.ticketHash };
+                if (documents.get(controlTicketPath(ticket.ticketHash)) !== undefined)
+                    throw new AlreadyExistsError(key);
+                write(() => documents.set(controlTicketPath(ticket.ticketHash), {
+                    ...structuredClone(ticket.grant),
+                    uid: ticket.uid,
+                    gatewayId: ticket.gatewayId,
+                    createdAt: resolveServerNow(ticket.createdAt),
+                    expiresAt: ticket.expiresAt,
+                    expireAt: ticket.expiresAt,
+                    ...(ticket.redeemedAt === null ? {} : { redeemedAt: ticket.redeemedAt }),
+                }));
+            },
             markRedeemed: async (ticketHash, redeemedAt, fence) => {
                 const key = { aggregate: "control-ticket", key: ticketHash };
                 const current = getControlTicket(ticketHash);

@@ -1,5 +1,7 @@
+import { authenticatedRequestLimit, authenticationFailureLimit } from "../middleware/authenticated-request-limit.js";
 import { Router, Request, Response, NextFunction } from "express";
-import { requireAuth } from "../middleware/auth.js";
+import { FieldPath } from "firebase-admin/firestore";
+import { requireActiveAccount, requireAuthenticatedUid } from "../middleware/auth.js";
 import { db, FieldValue } from "../lib/db.js";
 import { platformStateStore } from "../lib/platform-state.js";
 import { logger } from "../middleware/logging.js";
@@ -112,7 +114,7 @@ function triggerAgentModelSync(args: {
   });
 }
 
-router.get("/", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+router.get("/", authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(120), requireActiveAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
     const [sysData, platformDefault, subscriptionProviders] = await Promise.all([
@@ -179,23 +181,21 @@ async function gateSelectionRequest(
   return { ok: true, slug, selection, sysData };
 }
 
-router.put("/:agentId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+router.put("/:agentId", authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(30), requireActiveAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
     const agentId = agentIdParam(req);
     const gate = await gateSelectionRequest(req, { requireSelection: true });
     if (!gate.ok) { res.status(gate.status).json({ error: gate.error }); return; }
     const selection = gate.selection!;
+    const selections = new Map(Object.entries(parseAgentModelSelections(gate.sysData.agentModels)));
+    selections.set(agentId, selection);
 
     await db
       .doc(`users/${uid}/system/config`)
-      .set({ agentModels: { [agentId]: selection } }, { merge: true });
+      .set({ agentModels: Object.fromEntries([[agentId, selection]]) }, { merge: true });
 
-    const merged = {
-      ...parseAgentModelSelections(gate.sysData.agentModels),
-      [agentId]: selection,
-    };
-    triggerAgentModelSync({ req, uid, slug: gate.slug, sysData: gate.sysData, agentModels: merged });
+    triggerAgentModelSync({ req, uid, slug: gate.slug, sysData: gate.sysData, agentModels: Object.fromEntries(selections) });
     logger.info(
       `[agent-models] ${gate.slug}: ${agentId} → ${selection.primary}` +
         (selection.fallbacks.length ? ` (fallback ${selection.fallbacks.join(", ")})` : ""),
@@ -205,7 +205,7 @@ router.put("/:agentId", requireAuth, async (req: Request, res: Response, next: N
   } catch (e) { next(e); }
 });
 
-router.delete("/:agentId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+router.delete("/:agentId", authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(30), requireActiveAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
     const agentId = agentIdParam(req);
@@ -214,11 +214,11 @@ router.delete("/:agentId", requireAuth, async (req: Request, res: Response, next
 
     await db
       .doc(`users/${uid}/system/config`)
-      .update({ [`agentModels.${agentId}`]: FieldValue.delete() });
+      .update(new FieldPath("agentModels", agentId), FieldValue.delete());
 
-    const remaining = parseAgentModelSelections(gate.sysData.agentModels);
-    delete remaining[agentId];
-    triggerAgentModelSync({ req, uid, slug: gate.slug, sysData: gate.sysData, agentModels: remaining });
+    const selections = new Map(Object.entries(parseAgentModelSelections(gate.sysData.agentModels)));
+    selections.delete(agentId);
+    triggerAgentModelSync({ req, uid, slug: gate.slug, sysData: gate.sysData, agentModels: Object.fromEntries(selections) });
     logger.info(
       `[agent-models] ${gate.slug}: ${agentId} pick removed — class default re-asserts on next sync`,
     );

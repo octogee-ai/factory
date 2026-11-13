@@ -1,3 +1,4 @@
+import { brokerRequestLimit } from "../middleware/broker-request-limit.js";
 import { Router, type Request, type Response } from "express";
 import {
   MODEL_CREDENTIAL_STATIC_PROVIDER_IDS,
@@ -544,7 +545,7 @@ function registerAgentUsageStatusRoute(
   now: () => number,
   verifyOwnerWorkspaceTurn: OwnerWorkspaceTurnVerifier,
 ) {
-  router.post("/agent-usage-status", async (req, res) => {
+  router.post("/agent-usage-status", brokerRequestLimit(3600), async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
     const agentId = (req.body as { agentId?: unknown } | undefined)?.agentId;
@@ -639,7 +640,7 @@ function registerPrivateBrokerInspection(
 ): void {
   const { store, accounts } = readers;
   const verifyCanonicalOwner = createAgentSupportTurnVerifier(store);
-  router.post("/broker-inspect", async (req, res) => {
+  router.post("/broker-inspect", brokerRequestLimit(3600), async (req, res) => {
     res.setHeader("cache-control", "no-store");
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -872,7 +873,7 @@ export function createByokBrokerRoutes(opts: {
   // credential. Roster-scoped via findAssignedUserByAgentId — a gateway can only
   // record flows for a user assigned to it, and the owner uid is DERIVED from
   // the assignment, never trusted from the caller.
-  router.post("/byosub-flow", async (req, res) => {
+  router.post("/byosub-flow", brokerRequestLimit(600), async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
 

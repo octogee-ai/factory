@@ -1,6 +1,7 @@
 import { isCodexDatabase } from "@octogee/core/agent-store-inventory";
 export { isCodexDatabase } from "@octogee/core/agent-store-inventory";
 import { execFile } from "node:child_process";
+import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
@@ -223,15 +224,34 @@ async function assertNoRetainedJournal(destination: string): Promise<void> {
   }
 }
 
+async function readSnapshotManifest(filename: string): Promise<Artifact> {
+  const limit = 1024;
+  const file = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile()) throw new Error("optional database manifest is not a regular file");
+    if (stat.size > limit) throw new Error("optional database manifest too large");
+    const bytes = Buffer.alloc(limit + 1);
+    let size = 0;
+    while (size < bytes.length) {
+      const { bytesRead } = await file.read(bytes, size, bytes.length - size, size);
+      if (bytesRead === 0) break;
+      size += bytesRead;
+    }
+    if (size > limit) throw new Error("optional database manifest too large");
+    return JSON.parse(bytes.toString("utf8", 0, size)) as Artifact;
+  } finally {
+    await file.close();
+  }
+}
+
 async function installCodexSnapshot(context: ImportContext, directory: string, home: string, entry: string): Promise<void> {
   const basename = entry.slice(0, -7), relative = `${home}/${basename}`;
   if (++context.count > MAX_STORES) throw new Error("optional database count budget exhausted");
   if (!isCodexDatabase(relative)) throw new Error("invalid Codex snapshot database path");
   if (Date.now() >= context.deadline) throw new Error("optional database time budget exhausted");
   const file = path.join(directory, entry), manifest = `${file}.json`;
-  await canonical(manifest);
-  if ((await fs.stat(manifest)).size > 1024) throw new Error("optional database manifest too large");
-  const expected = JSON.parse(await fs.readFile(manifest, "utf8")) as Artifact;
+  const expected = await readSnapshotManifest(manifest);
   await canonical(file);
   if ((await fs.stat(file)).size > Math.min(MAX_BYTES, MAX_TOTAL_BYTES - context.bytes)) throw new Error("optional database exceeds byte budget");
   const destination = path.join(await fs.realpath(context.importDir), relative);

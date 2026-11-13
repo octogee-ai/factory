@@ -30,10 +30,10 @@ export interface UserSuspensionDeps {
     cleanup: UserCleanupContext,
   ) => Promise<void>;
   assertRestoreNotInProgress: (uid: string) => Promise<void>;
-  suspendAuthUser: (uid: string) => Promise<void>;
+  blockChatSignIn: (mmUserId: string) => Promise<void>;
+  blockGitSignIn: (workspaceSlug: string) => Promise<void>;
   cancelUserMigrations: (uid: string, deletionId: string) => Promise<boolean>;
   deactivateUserVisibility: (uid: string) => Promise<void>;
-  invalidatePendingCredentialFlows: (uid: string) => Promise<void>;
   unmountFromGateway: (
     gatewayId: string,
     slug: string,
@@ -89,6 +89,20 @@ async function checkRestoreFence(
   }
 }
 
+function suspendSignIn(steps: SuspensionStepRunner, product: ProductUserSuspension | undefined, uid: string): Promise<void> {
+  return product ? steps.run("suspend-auth", () => product.suspendSignIn(uid)) : steps.skip("suspend-auth");
+}
+
+async function suspendPlatformSignIn(
+  steps: SuspensionStepRunner,
+  deps: Pick<UserSuspensionDeps, "blockChatSignIn" | "blockGitSignIn">,
+  cleanup: UserCleanupContext,
+): Promise<void> {
+  const { mmUserId, slug } = cleanup;
+  await (mmUserId ? steps.run("suspend-chat-sign-in", () => deps.blockChatSignIn(mmUserId)) : steps.skip("suspend-chat-sign-in"));
+  await (slug ? steps.run("suspend-git-sign-in", () => deps.blockGitSignIn(slug)) : steps.skip("suspend-git-sign-in"));
+}
+
 function pendingMigrationRetry(deletionId: string, pending: boolean, failures: string[], previousFailures: number): OperationResult | null {
   if (pending) return { steps: [], success: false, error: "user migration is still settling", output: { deletionCleanupRetry: { deletionId } } };
   if (failures.length > previousFailures) return { steps: [], success: false, error: failures.join("; "), output: { deletionCleanupRetry: { deletionId } } };
@@ -141,7 +155,9 @@ export function createSuspendUserHandler(
     const steps: SuspensionStepRunner = { run, skip };
     const productJob = { uid, deletionId, productContext: job.productContext };
 
-    await run("suspend-auth", () => deps.suspendAuthUser(uid));
+    const product = deps.product;
+    await suspendSignIn(steps, product, uid);
+    await suspendPlatformSignIn(steps, deps, cleanup);
     let migrationPending = false;
     const failuresBeforeCancellation = failures.length;
     await run("cancel-customer-migrations", async () => {
@@ -151,8 +167,7 @@ export function createSuspendUserHandler(
     if (migrationRetry) return migrationRetry;
     await run("deactivate-customer-visibility", () =>
       deps.deactivateUserVisibility(uid));
-    await run("invalidate-pending-credential-flows", () =>
-      deps.invalidatePendingCredentialFlows(uid));
+    await product?.afterVisibilityDeactivation(productJob, steps);
     if (cleanup.currentGatewayId && cleanup.slug) {
       await run("unmount-gateway", () =>
         deps.unmountFromGateway(cleanup.currentGatewayId!, cleanup.slug));
@@ -167,10 +182,10 @@ export function createSuspendUserHandler(
         throw new Error("owned gateway retirement is pending");
       }
     });
-    await deps.product?.afterGatewayRetirement(productJob, steps);
+    await product?.afterGatewayRetirement(productJob, steps);
     await run("revoke-connector-grants", () => deps.revokeConnectorGrants(uid));
     await run("revoke-model-broker", () => deps.revokeModelBrokerAccess(uid));
-    await deps.product?.afterModelBrokerRevocation(productJob, steps);
+    await product?.afterModelBrokerRevocation(productJob, steps);
     await run("delete-credential-secrets", () =>
       deps.deleteCredentialSecrets(cleanup.credentialSecretNames));
     await run("retire-project-agent-users", () =>

@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
+import express from "express";
+import request from "supertest";
 import { MalformedRecordError } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
-import { authorizeAgentExport } from "./agent-export-broker.js";
+import { authorizeAgentExport, registerAgentExportBrokerRoutes } from "./agent-export-broker.js";
 import type { OwnerContext } from "./agent-import-broker.js";
+import { FeaturePolicy } from "../lib/feature-policy.js";
+import { agentExportApproval, type AgentExportRecord } from "../../../gateway-edge/src/lib/agent-export-service.js";
 function fixture() {
   const owner: OwnerContext = { uid: "u1", slug: "alice", gatewayId: "shared-a", isAdmin: false, workspacePolicy: { preserveConvergedContextFiles: true } };
   const docs = new Map<string, any>([
@@ -16,6 +20,41 @@ function fixture() {
   return { owner, docs, store: createDocumentFixtureStore(docs) };
 }
 describe("authored export custody", () => {
+  it("keeps the journal completion tied to the saved publishing record and its destination", async () => {
+    const { owner, store } = fixture();
+    const source = await authorizeAgentExport(store, owner, "octogee-alice-coach");
+    const record: AgentExportRecord = {
+      kind: "authored-agent-export", id: "export-demo", uid: owner.uid, slug: owner.slug, gatewayId: owner.gatewayId,
+      source, destination: { owner: "alice", repo: "demo", branch: "main", head: "a".repeat(40), tree: "b".repeat(40) },
+      status: "previewed", changes: [], sourceDigest: "source", assetIdentity: "assets", approvalHash: "",
+      createdAt: "2026-11-13T00:00:00.000Z", updatedAt: "2026-11-13T00:00:00.000Z",
+    };
+    record.approvalHash = agentExportApproval(record);
+    const app = express();
+    app.use(express.json());
+    const router = express.Router();
+    registerAgentExportBrokerRoutes(router, {
+      store, featurePolicy: new FeaturePolicy({ evaluate: async () => ({ isEnabled: () => true }) }),
+      readIdentity: async () => ({ name: null, persona: null, emoji: null }),
+      bucket: { file: () => { throw new Error("unexpected blob access"); }, deleteFiles: async () => { throw new Error("unexpected blob deletion"); } },
+    }, () => owner);
+    app.use(router);
+    app.use((error: { status?: number }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      res.sendStatus(error.status ?? 500);
+    });
+    const client = request(app);
+    const path = `/exports/records/${record.id}`;
+    const expectedCommit = "c".repeat(40);
+    const completion = { ...record, status: "complete", expectedCommit, commitUrl: "https://example.invalid/other" };
+    await client.put(path).send(record).expect(204);
+    await client.put(path).send(completion).expect(409);
+    await client.put(path).send({ ...record, status: "publishing", expectedCommit }).expect(204);
+    await client.put(path).send(completion).expect(204);
+    await client.get(path).expect(200, {
+      ...completion, commitUrl: `https://github.com/alice/demo/commit/${expectedCommit}`,
+    });
+  });
+
   it("admits an owned serving shared gateway agent and project without requiring dedicated Native surfaces", async () => {
     const f = fixture();
     expect(await authorizeAgentExport(f.store, f.owner, "octogee-alice-coach")).toMatchObject({ project: null, epoch: 4 });

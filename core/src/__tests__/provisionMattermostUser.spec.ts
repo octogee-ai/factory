@@ -118,6 +118,7 @@ beforeEach(() => {
     if (method === "POST" && endpoint === "/bots") return { user_id: "coach-1" };
     if (method === "POST" && endpoint === "/users/builder-1/tokens") return { token: "user-token" };
     if (method === "GET" && endpoint.includes("/channels/name/")) return null;
+    if (method === "GET" && endpoint.startsWith("/commands?")) return [];
     return {};
   });
   h.mintAndPersistDefaultAgentToken.mockResolvedValue({ token: "default-agent-pat" });
@@ -141,6 +142,37 @@ describe("provisionMattermostUser — new user (happy path)", () => {
       workspaceDefaultAgentChannelName("acme"),
       workspaceGeneralChannelName("acme"),
     ]);
+  });
+
+  it("registers the /ui command in the new workspace team, pointed at the callback router", async () => {
+    vi.stubEnv("K8S_NAMESPACE", "octogee-test");
+    try {
+      await call(HAPPY);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    const create = h.mmApiCall.mock.calls.find(([m, e]: [string, string]) => m === "POST" && e === "/commands");
+    expect(create?.[2]).toMatchObject({
+      team_id: "team-1",
+      trigger: "ui",
+      method: "P",
+      url: "http://mattermost-callback-router.octogee-test.svc.cluster.local:3001/internal/mattermost/commands/control-ui",
+    });
+  });
+
+  it("finishes provisioning when the /ui command cannot be registered", async () => {
+    vi.stubEnv("K8S_NAMESPACE", "octogee-test");
+    const fallback = h.mmApiCall.getMockImplementation()!;
+    h.mmApiCall.mockImplementation(async (method: string, endpoint: string, body?: { name?: string }) =>
+      endpoint === "/commands" ? null : fallback(method, endpoint, body));
+    try {
+      const result = await call(HAPPY);
+      expect(result["mattermost.userId"]).toBe("builder-1");
+      expect(result["mattermost.coachUserId"]).toBe("coach-1");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("creates the user MM user with the least-privilege system_user role", async () => {

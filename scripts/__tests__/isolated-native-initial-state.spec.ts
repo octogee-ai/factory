@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { recordIsolatedNativeInitialState, isolatedNativeInitialStateMatches } from '../lib/isolated-native-initial-state.js';
 
 let root: string;
@@ -16,6 +16,18 @@ it('binds unchanged initialized host state to its exact pod', () => {
   expect(isolatedNativeInitialStateMatches(root, 'pod-one')).toBe(true);
   expect(isolatedNativeInitialStateMatches(root, 'pod-two')).toBe(false);
   expect(isolatedNativeInitialStateMatches(root, undefined)).toBe(false);
+});
+it('refuses a baseline that grows beyond its byte cap after it is opened', () => {
+  recordIsolatedNativeInitialState(root, 'pod-one');
+  const file = path.join(root, '.builder-native-initial-state.json');
+  const read = fs.fstatSync;
+  const stat = vi.spyOn(fs, 'fstatSync').mockImplementationOnce(((fd: number) => {
+    const initial = read(fd);
+    fs.appendFileSync(file, ' '.repeat(1024));
+    return initial;
+  }) as typeof fs.fstatSync);
+  try { expect(isolatedNativeInitialStateMatches(root, 'pod-one')).toBe(false); }
+  finally { stat.mockRestore(); }
 });
 it('refuses the baseline after any database mutation', () => {
   recordIsolatedNativeInitialState(root, 'pod-one');

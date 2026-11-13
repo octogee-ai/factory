@@ -1,15 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const paths = vi.hoisted(() => ({ root: `/tmp/octogee-git-pointer-${process.pid}` }));
-
-vi.mock("node:crypto", async (importOriginal) => {
-  const crypto = await importOriginal<typeof import("node:crypto")>();
-  return { ...crypto, randomUUID: vi.fn(crypto.randomUUID) };
-});
 
 vi.mock("../lib/config.js", () => ({
   log: vi.fn(),
@@ -53,7 +47,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.mocked(randomUUID).mockReset();
   fs.rmSync(paths.root, { recursive: true, force: true });
 });
 
@@ -132,7 +125,7 @@ describe("user Git pointer replacement", () => {
     expect(fs.readdirSync(repo).filter(name => name.startsWith(".git.octogee"))).toEqual([]);
   });
 
-  it("refuses an occupied randomized pathname without writing through or removing its symlink", () => {
+  it("refreshes without writing through a symlink at the former randomized pathname", () => {
     const id = "00000000-0000-4000-8000-000000000000";
     const collision = `${pointer}.octogee-${id}.tmp`;
     const outside = path.join(paths.root, "outside.txt");
@@ -140,9 +133,7 @@ describe("user Git pointer replacement", () => {
     fs.symlinkSync(outside, collision);
     fs.chmodSync(pointer, 0o644);
     const previousPointer = fs.readFileSync(pointer, "utf8");
-    vi.mocked(randomUUID).mockReturnValueOnce(id);
-
-    expect(refresh).toThrow(/EEXIST/);
+    expect(refresh()).toBe(path.join(paths.root, "git-metadata", "alice", "workspace.git"));
 
     expect(fs.readFileSync(outside, "utf8")).toBe("outside contents\n");
     expect(fs.readlinkSync(collision)).toBe(outside);

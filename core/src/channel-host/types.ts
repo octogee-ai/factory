@@ -44,6 +44,17 @@ export interface ChannelEraseSpec {
   userIds: readonly string[];
 }
 
+export interface ChannelCommandSpec {
+  teamId: string;
+  trigger: string;
+  url: string;
+  displayName: string;
+  description: string;
+  autocompleteDescription: string;
+}
+
+export type ChannelCommandEnsureResult = "created" | "updated" | "present";
+
 export interface ManagedChannelHost {
   readonly kind: "managed";
   readonly provider: string;
@@ -53,6 +64,7 @@ export interface ManagedChannelHost {
   ensureChannel(spec: ChannelSpec): Promise<ChannelHostEntity | null>;
   findUser(username: string): Promise<ChannelHostEntity | null>;
   setUserPassword(username: string, password: string): Promise<void>;
+  blockSignIn(userId: string): Promise<void>;
   addMember(target: ChannelMembershipTarget, userId: string, roles?: string): Promise<void>;
   removeMember(target: ChannelMembershipTarget, userId: string): Promise<void>;
   archiveChannel(ref: ChannelRef): Promise<string | null>;
@@ -60,6 +72,9 @@ export interface ManagedChannelHost {
   revokeTokens(userId: string, description: string): Promise<string[]>;
   userExists(userId: string): Promise<boolean>;
   erase(spec: ChannelEraseSpec): Promise<void>;
+  listTeamIds(): Promise<string[]>;
+  ensureCommand(spec: ChannelCommandSpec): Promise<ChannelCommandEnsureResult>;
+  commandTokenMatches(input: { teamId: string; trigger: string; token: string }): Promise<boolean>;
 }
 
 export interface ChannelBootstrapInput {

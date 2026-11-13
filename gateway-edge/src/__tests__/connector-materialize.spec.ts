@@ -52,7 +52,7 @@ vi.mock("../middleware/logging.js", () => ({
   logger: { error: mocks.error, warn: mocks.warn, info: mocks.info },
 }));
 
-import connectorRoutes from "../routes/internal/connectors.js";
+import { createInternalConnectorRoutes } from "../routes/internal/connectors.js";
 import {
   readOwnerGithubProjectCloneAccess,
   readOwnerRuntimeConnectorAccessToken,
@@ -63,7 +63,7 @@ import { claimedTestUser, installTestUserIdentity } from "./helpers/user-identit
 function app() {
   const a = express();
   a.use(express.json());
-  a.use("/internal/connectors", connectorRoutes);
+  a.use("/internal/connectors", createInternalConnectorRoutes());
   return a;
 }
 
@@ -95,6 +95,21 @@ describe("internal connector materialize route", () => {
       connectorId: "cloudflare",
       accessToken: "cf_secret",
     });
+    expect(readOwnerRuntimeConnectorAccessToken).toHaveBeenCalledWith("cloudflare");
+  });
+
+  it("bounds clone broker calls without using the materialization allowance", async () => {
+    installTestUserIdentity(claimedTestUser("alice"));
+    vi.mocked(readOwnerGithubProjectCloneAccess).mockResolvedValue(null);
+    vi.mocked(readOwnerRuntimeConnectorAccessToken).mockResolvedValue(null);
+    const client = request(app());
+    const clone = () => client.post("/internal/connectors/github/clone")
+      .send({ builderSlug: "alice", projectSlug: "octo" });
+    for (let attempt = 0; attempt < 120; attempt++) await clone().expect(422);
+    const limited = await clone().expect(429);
+    expect(limited.body).toEqual({ error: "Too many internal connector requests." });
+    expect(readOwnerGithubProjectCloneAccess).toHaveBeenCalledTimes(120);
+    await client.get("/internal/connectors/cloudflare/materialize").expect(404);
     expect(readOwnerRuntimeConnectorAccessToken).toHaveBeenCalledWith("cloudflare");
   });
 

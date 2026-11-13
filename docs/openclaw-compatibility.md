@@ -2,19 +2,20 @@
 
 ## Where things stand
 
-The installer in this repository starts one gateway from the stock OpenClaw
-release image and the stock Mattermost Team Edition image. That is enough for
-what is published here today: one gateway, with chat and git.
+`install.sh` starts one gateway, with chat and git, from the stock OpenClaw
+release image and the stock Mattermost Team Edition image. Stock images are
+enough for that.
 
-The fleet features that land here next are a different matter: many users on
-shared gateways, isolated gateways, and moving a user between the two. They are
-developed and run on a patched build, upstream OpenClaw `main` at commit
-[`eae3667e`](https://github.com/openclaw/openclaw/commit/eae3667ebf9f66217c44f6318a73188defd003b8)
-plus a public overlay of three commits, published as
-[`65c8c8aa`](https://github.com/octogee-ai/openclaw/commit/65c8c8aa14d045be317918a3635c0b529207af04)
-on the branch `octogee/overlay` of the fork `octogee-ai/openclaw`. We have not
-run those features end to end on a stock release. The goal is to carry no
-patches.
+The fleet features are a different matter: many users on shared gateways,
+isolated gateways, and moving a user between the two. The gateway image this
+repository builds for them runs a patched build: upstream OpenClaw `main` at
+commit [`f52d9254`](https://github.com/openclaw/openclaw/commit/f52d9254a99cd061f19f24459fa48fd5704e8cc5)
+plus a public overlay of seven commits, ending at
+[`d7d29b20`](https://github.com/ceckert/openclaw/commit/d7d29b20f700ba1aea25faa34d427d9e5203533c)
+in the fork `ceckert/openclaw`. Its packages are the release
+[`gateway-d7d29b20`](https://github.com/ceckert/openclaw/releases/tag/gateway-d7d29b20),
+which `infra/gateway/openclaw-tarball/current.json` pins. We have not run the
+fleet features end to end on a stock release. The goal is to carry no patches.
 
 Every recut starts from the question "does upstream already do this?". A patch
 stays only for a reproduced bug or a behavior the platform depends on, and each
@@ -30,7 +31,8 @@ image, most visibly when users move between gateways.
 ## What octogee-cloud needs from OpenClaw
 
 These families support features the platform itself depends on. States are as
-of 2026-11-11. "No pull request" means the fix exists only in the overlay.
+of 2026-11-11, before the overlay was recut on 2026-11-13. "No pull request"
+means the fix exists only in the overlay.
 
 | Capability | octogee-cloud feature | On stock OpenClaw | Upstream | The patch can go when |
 | --- | --- | --- | --- | --- |
@@ -92,13 +94,14 @@ lives with two limits.
 
 ## How to check this yourself
 
-The overlay source is the branch `octogee/overlay` on
-[`octogee-ai/openclaw`](https://github.com/octogee-ai/openclaw/tree/octogee/overlay).
-Each cut is also tagged; this one is `octogee-overlay-2026-11-11`. Diff the
-branch against the upstream base commit above to see every changed line. The
-tables are drawn from the build notes we keep for each cut, which are not in
-this repository: a table of retained families with removal conditions, notes on
-individual fixes, and a list of open contributions. Pull request states come from the GitHub API on the date
+The overlay source is the branch
+[`codex/gateway-refresh-20261113`](https://github.com/ceckert/openclaw/tree/codex/gateway-refresh-20261113)
+on `ceckert/openclaw`, and the release tag `gateway-d7d29b20` marks the same
+commit. Diff it against the upstream base commit above to see every changed
+line. The tables are drawn from the build notes kept for each cut: a table of
+retained families with removal conditions, notes on individual fixes, and a
+list of open contributions. The current cut's notes are in
+`infra/gateway/openclaw-tarball/README.md`. Pull request states come from the GitHub API on the date
 above. We decided "platform needs it" by matching each family to the
 platform's architecture and security documents.
 

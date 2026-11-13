@@ -506,7 +506,7 @@ function createModelBrokerGatewayTokensRepository(session: PostgresSession): Mod
   };
 }
 
-const UID_REFERENCING_ACCESS_TABLES = [
+const UID_REFERENCING_TABLES = [
   { table: "gateway_tickets", path: "gatewayTickets", id: "ticket_id", where: "uid = $1::text" },
   { table: "gateway_ticket_mint_log", path: "gatewayTicketMintLog", id: "id", where: "uid = $1::text" },
   { table: "control_tickets", path: "openclawControlTickets", id: "ticket_hash", where: "uid = $1::text" },
@@ -516,6 +516,19 @@ const UID_REFERENCING_ACCESS_TABLES = [
     path: "gatewayAccessAudit",
     id: "id",
     where: "(uid = $1::text OR detail ->> 'ownerUid' = $1::text OR detail ->> 'actorUid' = $1::text)",
+  },
+  {
+    table: "model_broker_usage_events",
+    path: "modelBrokerUsageEvents",
+    id: "event_id",
+    where: "(owner_key = $1::text OR event ->> 'ownerUid' = $1::text)",
+  },
+  { table: "model_broker_spend_periods", path: "modelBrokerSpendPeriods", id: "owner_key || '/' || period", where: "owner_key = $1::text" },
+  {
+    table: "model_broker_rate_windows",
+    path: "modelBrokerRateWindows",
+    id: "owner_key",
+    where: "(owner_key = $1::text OR starts_with(owner_key, $1::text || ':'))",
   },
 ] as const;
 
@@ -529,14 +542,14 @@ export function createPostgresAccessRepositories(session: PostgresSession): Acce
     modelBrokerGatewayTokens: createModelBrokerGatewayTokensRepository(session),
 
     async listRecordsForUid(uid) {
-      const selects = UID_REFERENCING_ACCESS_TABLES.map(({ table, path, id, where }) =>
+      const selects = UID_REFERENCING_TABLES.map(({ table, path, id, where }) =>
         `SELECT '${path}/' || ${id} AS record FROM $schema.${table} WHERE ${where}`);
       const rows = await session.execute(selects.join(" UNION ALL "), [uid]);
       return rows.map((row) => row.record as string);
     },
 
     async eraseForUid(uid) {
-      for (const { table, where } of UID_REFERENCING_ACCESS_TABLES) {
+      for (const { table, where } of UID_REFERENCING_TABLES) {
         await session.execute(`DELETE FROM $schema.${table} WHERE ${where}`, [uid]);
       }
     },

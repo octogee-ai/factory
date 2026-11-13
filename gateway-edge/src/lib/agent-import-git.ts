@@ -931,6 +931,26 @@ function readManifest(targetDir: string): Record<string, AgentImportManifestEntr
   }
 }
 
+function readBoundedImportFile(file: string, maxBytes: number, tooLarge: () => AgentImportGitError): Buffer {
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw new Error("import file is not a regular file");
+    if (stat.size > maxBytes) throw tooLarge();
+    const chunks: Buffer[] = [];
+    let size = 0;
+    while (size <= maxBytes) {
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes + 1 - size));
+      const read = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (!read) break;
+      size += read;
+      if (size > maxBytes) throw tooLarge();
+      chunks.push(chunk.subarray(0, read));
+    }
+    return Buffer.concat(chunks, size);
+  } finally { fs.closeSync(fd); }
+}
+
 async function normalizeBinaryTip(options: {
   stageDir: string;
   targetDir: string;
@@ -940,11 +960,8 @@ async function normalizeBinaryTip(options: {
   for (const relative of walkFiles(options.stageDir)) {
     if (relative === ".files/manifest.json" || relative.startsWith(".files/") || relative.startsWith("projects/")) continue;
     const absolute = path.join(options.stageDir, relative);
-    const size = fs.statSync(absolute).size;
-    if (size > MAX_BINARY_BYTES) {
-      throw new AgentImportGitError("binary_too_large", `${relative} exceeds the import blob limit`);
-    }
-    const contents = fs.readFileSync(absolute);
+    const contents = readBoundedImportFile(absolute, MAX_BINARY_BYTES,
+      () => new AgentImportGitError("binary_too_large", `${relative} exceeds the import blob limit`));
     delete manifest[relative];
     if (probablyText(relative, contents)) continue;
     const mimeType = getMimeType(getExtension(relative));
@@ -1363,14 +1380,8 @@ export async function rollbackAgentImportRepository(options: {
 function readAgentImportSecretReport(reportPath: string): unknown {
   let report: string;
   try {
-    const stat = fs.lstatSync(reportPath);
-    if (!stat.isFile()) {
-      throw new AgentImportGitError("secret_scan_failed", "secret scanner returned no valid report");
-    }
-    if (stat.size > MAX_SECRET_REPORT_BYTES) {
-      throw new AgentImportGitError("secret_findings", "source repository contains too many credential-like findings");
-    }
-    report = fs.readFileSync(reportPath, "utf8");
+    report = readBoundedImportFile(reportPath, MAX_SECRET_REPORT_BYTES,
+      () => new AgentImportGitError("secret_findings", "source repository contains too many credential-like findings")).toString("utf8");
   } catch (error) {
     if (error instanceof AgentImportGitError) throw error;
     throw new AgentImportGitError("secret_scan_failed", "secret scanner returned no valid report");

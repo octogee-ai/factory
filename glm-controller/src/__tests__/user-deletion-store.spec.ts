@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { Firestore } from "firebase-admin/firestore";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import {
   deleteProjectAgentCredentialSecrets,
@@ -19,37 +18,53 @@ function deletionJob(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function productDb(rows: Record<string, Record<string, unknown>>): Firestore {
-  return {
-    collection: (name: string) => ({
-      doc: (id: string) => ({ get: async () => ({ data: () => rows[`${name}/${id}`] }) }),
-    }),
-  } as unknown as Firestore;
+const ALICE_ACCOUNT = { username: "alice", email: "alice@users.invalid", createdAt: Date.UTC(2026, 3, 9) };
+
+function accountDocuments(account: Record<string, unknown> | undefined) {
+  return { account: async () => account };
 }
 
 describe("ensureAnonymousDeletionArchive", () => {
-  it("archives the erased user once and links the archive to its deletion job", async () => {
+  it("archives a platform user once from platform state and links the archive to its deletion job", async () => {
     const documents = new Map<string, Record<string, unknown>>([
       ["customerDeletionJobs/del-1", deletionJob()],
       ["gateways/alice-gw", userRoot],
     ]);
     const store = createDocumentFixtureStore(documents);
-    const db = productDb({ "users/uid-alice": { selectedTier: "personal_pro" } });
 
-    const productFields = (user: Record<string, unknown> | undefined) => ({ planTier: user?.selectedTier });
-
-    const archiveId = await ensureAnonymousDeletionArchive(db, store, "del-1", productFields);
+    const archiveId = await ensureAnonymousDeletionArchive(accountDocuments(ALICE_ACCOUNT), store, "del-1", null);
 
     expect(documents.get("customerDeletionJobs/del-1")).toMatchObject({ archiveId, updatedAt: expect.any(Number) });
     expect(documents.get(`anonymousOperationalArchives/${archiveId}`)).toMatchObject({
-      schemaVersion: 1, planTier: "personal_pro", gatewayClass: "builder", archivedAt: expect.any(Number),
+      schemaVersion: 1, accountCreatedMonth: "2026-04", gatewayClass: "builder", archivedAt: expect.any(Number),
+      totals: { costUsd: 0, totalTokens: 0, requestCount: 0 },
     });
-    await expect(ensureAnonymousDeletionArchive(db, store, "del-1", productFields)).resolves.toBe(archiveId);
+    await expect(ensureAnonymousDeletionArchive(accountDocuments(ALICE_ACCOUNT), store, "del-1", null)).resolves.toBe(archiveId);
     expect([...documents.keys()].filter((path) => path.startsWith("anonymousOperationalArchives/"))).toHaveLength(1);
   });
 
+  it("adds the product's archive fields and usage rollup", async () => {
+    const documents = new Map<string, Record<string, unknown>>([
+      ["customerDeletionJobs/del-1", deletionJob()],
+      ["gateways/alice-gw", userRoot],
+    ]);
+    const product = {
+      archive: async (uid: string, account: Record<string, unknown> | undefined) => ({
+        fields: { planTier: `${uid}:${String(account?.username)}` },
+        usageRollup: { costUsd: 2.5, totalTokens: 900, requestCount: 3 },
+      }),
+    };
+
+    const archiveId = await ensureAnonymousDeletionArchive(accountDocuments(ALICE_ACCOUNT), createDocumentFixtureStore(documents), "del-1", product);
+
+    expect(documents.get(`anonymousOperationalArchives/${archiveId}`)).toMatchObject({
+      planTier: "uid-alice:alice",
+      totals: { costUsd: 2.5, totalTokens: 900, requestCount: 3 },
+    });
+  });
+
   it("refuses a vanished deletion job instead of archiving an unknown user", async () => {
-    await expect(ensureAnonymousDeletionArchive(productDb({}), createDocumentFixtureStore({}), "del-1", () => ({})))
+    await expect(ensureAnonymousDeletionArchive(accountDocuments(undefined), createDocumentFixtureStore({}), "del-1", null))
       .rejects.toThrow("deletion job missing: del-1");
   });
 });

@@ -10,6 +10,7 @@ import { errorHandler } from "./middleware/errors.js";
 import { logger } from "./middleware/logging.js";
 import { helmetMiddleware, dashboardAssetRateLimit } from "./middleware/security.js";
 import { requireAuthenticatedUid } from "./middleware/auth.js";
+import { authenticationFailureLimit } from "./middleware/authenticated-request-limit.js";
 import { installBodyParsers } from "./middleware/body-parsers.js";
 
 import { mountApi } from "./routes/mount-api.js";
@@ -25,7 +26,7 @@ import internalOwnerAutomationRoutes from "./routes/internal/owner-automations.j
 import { createProjectPersistenceRouter } from "./routes/internal/project-persistence.js";
 import internalGiteaAdminRoutes from "./routes/internal/gitea-admin.js";
 import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
-import internalConnectorRoutes from "./routes/internal/connectors.js";
+import { createInternalConnectorRoutes } from "./routes/internal/connectors.js";
 import { createInternalVmRouter, resolveVmControlUrl } from "./routes/internal/vm.js";
 import { createAgentImportsRouter } from "./routes/agent-imports.js";
 import { createAgentExportsRouter } from "./routes/agent-exports.js";
@@ -247,7 +248,7 @@ if (surface === "sidecar") {
   app.use("/internal/workspace", internalWorkspaceCommitRoutes);
   app.use("/internal/owner-automations", internalOwnerAutomationRoutes);
   app.use("/internal/projects", createProjectPersistenceRouter());
-  app.use("/internal/connectors", internalConnectorRoutes);
+  app.use("/internal/connectors", createInternalConnectorRoutes());
   app.use("/internal/computer", createInternalVmRouter({ controlUrl: vmControlUrl }));
 }
 
@@ -310,22 +311,22 @@ function mountSidecarLocalitySurface(app: Express, options: {
   // /api/g/<gatewayId>/byosub/* locality seam), so it can read the pod's
   // auth-profile store — the proof /api/model-credentials/subscription/connection's ref-read can't give.
   const byosubLocality = Router();
-  byosubLocality.use("/health", requireAuthenticatedUid);
+  byosubLocality.use("/health", authenticationFailureLimit, requireAuthenticatedUid);
   byosubLocality.use(byosubHealthRoutes);
   mountApi(app, "/byosub", byosubLocality);
   const automationsLocality = Router({ mergeParams: true });
-  automationsLocality.use(requireAuthenticatedUid);
+  automationsLocality.use(authenticationFailureLimit, requireAuthenticatedUid);
   automationsLocality.use(automationsRoutes);
   mountApi(app, "/automations", automationsLocality);
   const agentImportsLocality = Router({ mergeParams: true });
-  agentImportsLocality.use(requireAuthenticatedUid);
+  agentImportsLocality.use(authenticationFailureLimit, requireAuthenticatedUid);
   agentImportsLocality.use(createAgentImportsRouter({
     createRuntime: createAgentImportRuntime,
     localGatewayId: () => process.env.GATEWAY_ID ?? null,
   }));
   mountApi(app, "/agent-imports", agentImportsLocality);
   const agentExportsLocality = Router({ mergeParams: true });
-  agentExportsLocality.use(requireAuthenticatedUid);
+  agentExportsLocality.use(authenticationFailureLimit, requireAuthenticatedUid);
   agentExportsLocality.use(createAgentExportsRouter());
   mountApi(app, "/agent-exports", agentExportsLocality);
   mountApi(app, "/workspace-roles", createWorkspaceRolesRouter());
@@ -341,7 +342,7 @@ function mountSidecarLocalitySurface(app: Express, options: {
   mountApi(app, "/computer", vmPasskeyRoutes.router);
   const vmCdpUrl = process.env.GATEWAY_COMPUTER_CDP_URL?.trim() || "http://127.0.0.1:9222";
   const vmSessionsLocality = Router({ mergeParams: true });
-  vmSessionsLocality.use(requireAuthenticatedUid);
+  vmSessionsLocality.use("/sessions/import", authenticationFailureLimit, requireAuthenticatedUid);
   vmSessionsLocality.use(createVmSessionsRouter({
     localGatewayId: () => process.env.GATEWAY_ID ?? null,
     available: isGatewayVm(),

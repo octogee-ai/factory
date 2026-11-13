@@ -2,6 +2,8 @@ export type {
   ChannelBootstrapInput,
   ChannelBootstrapResult,
   ChannelBotSpec,
+  ChannelCommandEnsureResult,
+  ChannelCommandSpec,
   ChannelCompleteInput,
   ChannelDirectoryEntry,
   ChannelDirectoryQuery,

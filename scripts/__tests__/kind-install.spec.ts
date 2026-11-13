@@ -155,6 +155,52 @@ describe("kind-install.sh", () => {
     expect(json("digests.json").platform).toBe("linux/amd64");
   });
 
+  it("runs the LLM broker from the octogee-api image", () => {
+    expect(run(["up", "--pull", `--sha=${PUBLISHED}`]).status).toBe(0);
+    expect(json("images.yaml").llmBroker).toEqual({
+      image: { repository: "localhost:5001/octogee/octogee-api", tag: "bbbbbbb", digest: ARM64 },
+    });
+  });
+
+  it("stores the operator's provider keys in Secrets without putting them on a command line", () => {
+    const stored = mkdtempSync(join(tmpdir(), "kind-install-keys-"));
+    host.stub("kubectl", `if [[ " $* " == *" create secret generic octogee-"* ]]; then
+  for arg in "$@"; do
+    case "$arg" in --from-file=api_key=*) cat "\${arg#--from-file=api_key=}" > "$STORED/$name" ;; esac
+    [[ "$previous" == generic ]] && name="$arg"
+    previous="$arg"
+  done
+  echo "kind: stub"
+  exit 0
+fi
+${KUBECTL}`);
+    const result = host.run(SCRIPT, ["up", "--pull", `--sha=${PUBLISHED}`], {
+      env: { OCTOGEE_KIND_STATE: state, INDEX, STORED: stored, OPENROUTER_API_KEY: "sk-or-kind-test", ANTHROPIC_API_KEY: "sk-ant-kind-test" },
+    });
+
+    expect(result.status).toBe(0);
+    expect(host.calls().join("\n")).not.toMatch(/sk-(or|ant)-kind-test/);
+    expect(result.stdout + result.stderr).not.toMatch(/sk-(or|ant)-kind-test/);
+    expect(result.stdout).toContain("Stored ANTHROPIC_API_KEY in Secret octogee-anthropic");
+    expect(result.stdout).toContain("Stored OPENROUTER_API_KEY in Secret octogee-openrouter");
+    expect(result.stdout).not.toContain("OPENAI_API_KEY");
+    expect(readFileSync(join(stored, "octogee-openrouter"), "utf8")).toBe("sk-or-kind-test");
+    expect(readFileSync(join(stored, "octogee-anthropic"), "utf8")).toBe("sk-ant-kind-test");
+    expect(existsSync(join(stored, "octogee-openai"))).toBe(false);
+    expect(host.calls().some(call => call.endsWith("rollout restart deployment/llm-broker"))).toBe(true);
+    rmSync(stored, { recursive: true, force: true });
+  });
+
+  it("warns that agents cannot reply when no provider key is supplied or stored", () => {
+    host.stub("kubectl", `if [[ " $* " == *" get secret octogee-"* ]]; then exit 1; fi
+${KUBECTL}`);
+    const result = run(["up", "--pull", `--sha=${PUBLISHED}`]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("no model provider key");
+    expect(result.stderr).toContain("OPENROUTER_API_KEY");
+  });
+
   it.each([
     [["--pull", "--skip-build"], "Choose either --pull or --skip-build"],
     [["--manifest=manifest.json"], "--manifest needs --pull"],
@@ -165,5 +211,26 @@ describe("kind-install.sh", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(message);
     expect(host.calls()).toEqual([]);
+  });
+
+  const downBeside = (node: string, pullsFromRegistry: boolean) => {
+    host.stub("kind", `[[ "$1 $2 $3" == "get nodes --all-clusters" ]] && echo ${node}; exit 0`);
+    host.stub("docker", `[[ "$1 $2" == "exec ${node}" ]] && exit ${pullsFromRegistry ? 0 : 1}; exit 0`);
+    return run(["down"]);
+  };
+  const registryRemoved = () => host.calls().includes("docker KUBECONFIG=unset rm -f octogee-kind-registry");
+
+  it("keeps the shared registry while another cluster from this script still pulls from it", () => {
+    const result = downBeside("llmbroker-control-plane", true);
+    expect(result.status, result.stderr).toBe(0);
+    expect(registryRemoved()).toBe(false);
+    expect(host.calls()).toContain(`kind KUBECONFIG=unset delete cluster --name octogee --kubeconfig ${state}/octogee/kubeconfig`);
+    expect(result.stdout).toContain("Keeping registry octogee-kind-registry");
+  });
+
+  it("deletes the shared registry once no remaining kind cluster pulls from it", () => {
+    const result = downBeside("unrelated-control-plane", false);
+    expect(result.status, result.stderr).toBe(0);
+    expect(registryRemoved()).toBe(true);
   });
 });

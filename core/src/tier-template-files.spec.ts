@@ -80,6 +80,25 @@ describe("writeTierTemplateFiles", () => {
     expect(fs.readFileSync(path.join(dir, "SOUL.md"), "utf-8")).toBe("User soul\n");
   });
 
+  it("does not write a seed through an existing dangling symlink", () => {
+    seedTier("default", { "SOUL.md": "Template soul\n" });
+    const dir = customerDir();
+    const outside = path.join(tmpRoot, "outside.md");
+    fs.symlinkSync(outside, path.join(dir, "SOUL.md"));
+    expect(writeTierTemplateFiles(dir, "default", {})).toEqual([]);
+    expect(fs.existsSync(outside)).toBe(false);
+  });
+
+  it("rejects a symlink in place of the workspace ignore file", () => {
+    seedTier("default", {});
+    const dir = customerDir();
+    const outside = path.join(tmpRoot, "outside-ignore");
+    fs.writeFileSync(outside, "AGENTS.md\nnode_modules/\n");
+    fs.symlinkSync(outside, path.join(dir, ".gitignore"));
+    expect(writeTierTemplateFiles(dir, "default", {})).toEqual([]);
+    expect(fs.readFileSync(outside, "utf8")).toBe("AGENTS.md\nnode_modules/\n");
+  });
+
   it("seeds from exactly the template key it is given and asks no resolver", () => {
     const productResolver = userEntitlements();
     seedTier("default", { "AGENTS.md": "Default\n" });

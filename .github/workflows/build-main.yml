@@ -4,12 +4,17 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      rescan-latest:
+        description: Scan the latest published main build without building images
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-main-${{ github.ref }}
+  group: build-main-${{ github.ref }}-${{ inputs.rescan-latest && 'rescan' || 'build' }}
   cancel-in-progress: true
 
 env:
@@ -18,7 +23,7 @@ env:
 jobs:
   images:
     name: Images (${{ matrix.platform }})
-    if: github.repository == 'octogee-ai/octogee-cloud'
+    if: github.repository == 'octogee-ai/octogee-cloud' && !inputs.rescan-latest
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -72,11 +77,15 @@ jobs:
   publish:
     name: Publish
     needs: images
+    outputs:
+      sha: ${{ steps.published.outputs.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
       packages: write
+      attestations: write
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -98,6 +107,9 @@ jobs:
       - name: Tag multi-platform images and write the image manifest
         run: |
           node scripts/ci/cloud-build.mjs publish --registry="$REGISTRY" --sha="$GITHUB_SHA" --digests="$RUNNER_TEMP/digests" > "$RUNNER_TEMP/image-manifest.json"
+          jq -r '.registry as $registry | .images | to_entries[] |
+            .key as $name | [.value.digest, .value.platforms[]][] |
+            "\(sub("^sha256:"; ""))  \($registry)/\($name)"' "$RUNNER_TEMP/image-manifest.json" > "$RUNNER_TEMP/image-subjects.txt"
           {
             echo "### Platform images at ${GITHUB_SHA:0:7}"
             echo
@@ -112,9 +124,28 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+      - name: Record the published source SHA
+        id: published
+        run: printf 'sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+      - name: Attest published image digests
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-checksums: ${{ runner.temp }}/image-subjects.txt
+
+  image-security:
+    needs: publish
+    if: ${{ !cancelled() && (needs.publish.outputs.sha != '' || inputs.rescan-latest) }}
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/image-security.yml
+    with:
+      build-sha: ${{ needs.publish.outputs.sha }}
+
   kind-smoke:
     name: Kind smoke (amd64)
     needs: publish
+    if: ${{ !cancelled() && needs.publish.outputs.sha != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:

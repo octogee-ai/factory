@@ -9,7 +9,7 @@ import {
 } from "../../model-credentials/provider-key-format.js";
 import { probeProviderKey } from "../../model-credentials/provider-probe.js";
 import { writeSecret, archiveSecret } from "@octogee/core/secret-store";
-import { byotSecretName, keyFingerprintFor, keyHashFor } from "../../model-credentials/byot-key-identity.js";
+import { byotSecretName, credentialVersionFingerprint, keyFingerprintFor } from "../../model-credentials/byot-key-identity.js";
 import { triggerGatewayModelCredentialSync } from "../../lib/byot-sync-trigger.js";
 import { modelCredentialApiKeyState } from "@octogee/shared/types/model-credentials";
 import { userEntitlements } from "@octogee/shared/types/user-entitlements";
@@ -273,7 +273,6 @@ export async function saveModelCredentialKey(
 
     const secretName = byotSecretName(slug, provider);
     const fingerprint = keyFingerprintFor(key);
-    const keyHash = keyHashFor(key);
 
     const cfgSnap = await db.collection("users").doc(uid).collection("system").doc("config").get();
     await archivePreviousProviderIfNeeded(slug, provider, cfgSnap.data());
@@ -289,7 +288,7 @@ export async function saveModelCredentialKey(
       provider,
       secretName,
       fingerprint,
-      keyHash,
+      keyHash: credentialVersionFingerprint(versionName),
       addedAt,
       ...(baseUrl ? { baseUrl } : {}),
       ...(model ? { model } : {}),

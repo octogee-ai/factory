@@ -51,9 +51,10 @@ describe("collectDistFiles", () => {
 
   it("skips symlinks — never follows a link pointing outside dist/ (e.g. the mounted KSA token)", () => {
     const dir = makeDist({ "index.html": "<h1>hi</h1>" });
-    const secret = path.join(os.tmpdir(), `secret-${process.pid}-${dir.length}`);
-    fs.writeFileSync(secret, "KSA-TOKEN-SHOULD-NOT-PUBLISH");
-    tmpDirs.push(secret);
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "hosting-outside-"));
+    tmpDirs.push(outside);
+    const secret = path.join(outside, "token");
+    fs.writeFileSync(secret, "KSA-TOKEN-SHOULD-NOT-PUBLISH", { flag: "wx", mode: 0o600 });
     fs.symlinkSync(secret, path.join(dir, "leak.txt"));
 
     const collected = collectDistFiles(dir);

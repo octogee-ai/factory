@@ -8,7 +8,7 @@ import { afterAll, describe, expect, it } from "vitest";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-deferred-project-"));
 process.env.OPENCLAW_DIR = root;
 
-const { seedDeferredProjectWorkspace } = await import("../lib/deferred-project-workspace.js");
+const { deferredProjectPlaceholderPaths, seedDeferredProjectWorkspace } = await import("../lib/deferred-project-workspace.js");
 
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
@@ -43,5 +43,16 @@ describe("seedDeferredProjectWorkspace", () => {
 
     expect(fs.existsSync(path.join(dir, "AGENTS.md"))).toBe(false);
     expect(fs.readFileSync(path.join(dir, "SOUL.md"), "utf-8")).toBe("the agent's own identity\n");
+  });
+
+  it("leaves a dangling workspace marker in place without creating its target", () => {
+    const dir = projectDir("delta", "octogee");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.symlinkSync("missing.md", path.join(dir, "AGENTS.md"));
+
+    expect(seedDeferredProjectWorkspace("delta", "octogee")).toBe(false);
+    expect(fs.readlinkSync(path.join(dir, "AGENTS.md"))).toBe("missing.md");
+    expect(fs.existsSync(path.join(dir, "missing.md"))).toBe(false);
+    expect(deferredProjectPlaceholderPaths(root, "delta")).toEqual([]);
   });
 });

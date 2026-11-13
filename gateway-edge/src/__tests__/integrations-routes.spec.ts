@@ -29,7 +29,8 @@ function docRef(path: string) {
 }
 
 vi.mock("../middleware/auth.js", () => ({
-  requireAuth: (req: { uid?: string }, _res: unknown, next: () => void) => {
+  requireActiveAccount: (_req: unknown, _res: unknown, next: () => void) => next(),
+  requireAuthenticatedUid: (req: { uid?: string }, _res: unknown, next: () => void) => {
     req.uid = h.uid;
     next();
   },

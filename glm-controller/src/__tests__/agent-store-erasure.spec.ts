@@ -246,6 +246,16 @@ describe("due user PostgreSQL erasure authority", () => {
     expect(h.records["customerDeletionJobs/delete-1"]!.postgresAgentStoreTargets).toBeUndefined();
   });
 
+  it("erases without a VM or home check on a platform that runs no VM gateways", async () => {
+    const h = harness();
+    const { ownerHomeAbsent: _ownerHomeAbsent, eraseVm: _eraseVm, ...deps } = h.deps;
+
+    await createUserAgentStoreErasure(deps)(h.cleanup as never, "delete-1", h.operation as never, h.claim);
+
+    expect(h.deps.eraseStores).toHaveBeenCalledOnce();
+    expect(h.records["customerDeletionJobs/delete-1"]!.postgresAgentStoreTargets).toEqual([h.target]);
+  });
+
   it("ends as blocked when the database retains a user Gateway login without proved retirement", async () => {
     const h = harness();
     const retained = new AgentStoreErasureRetainedLoginError("Agent-store erasure retains a user Gateway login without proved runtime retirement: octogee_gateway_stale");

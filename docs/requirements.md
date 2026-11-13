@@ -23,7 +23,7 @@ The installer checks all of this and prints the install command for your system.
 | Git, curl, OpenSSL | Any recent version | Every install |
 | gcloud and `gke-gcloud-auth-plugin` | 592 | Google Cloud |
 | AWS CLI and eksctl | Not yet run | AWS |
-| Node.js | 24.22 | Only for working on the code |
+| Node.js | 24.22 | The kind install, and working on the code |
 
 The local install was tested with 10 CPUs and 16 GB of memory available to
 Docker. The installer warns below 8 GB. On Docker Desktop, set these under
@@ -40,7 +40,7 @@ the command if yours are low.
 | PostgreSQL 16 with `vector`, `unaccent` and `pg_trgm` | `pgvector` container | Your cloud's managed PostgreSQL | CloudNativePG |
 | S3-compatible storage | SeaweedFS | Your cloud's object storage | Ceph, Garage |
 | Git host | Gitea | Gitea | Others through a `GitHost` adapter |
-| Chat | Mattermost Team Edition | Mattermost Team Edition | Slack, Discord and others through a `ChannelHost` adapter |
+| Chat | Mattermost Team Edition | Mattermost Team Edition | No other host yet |
 | Ingress | Traefik | Traefik | Envoy Gateway |
 | TLS and DNS | None; uses `*.localhost` | cert-manager with records you create | ExternalDNS, your provider's own |
 | Agent runtime | OpenClaw gateway | OpenClaw gateway | |
@@ -52,16 +52,16 @@ covers the managed path.
 
 ## Plug-in points
 
-These are the parts you can replace. The fleet controller, API and edge have
-not landed in this repository yet, so the seams in the table are planned.
-OpenClaw's own options work today.
+These are the parts you can replace. The platform reaches each one through an
+interface. The last column names what can take the default's place, through an
+adapter you write or through an OpenClaw option; OpenClaw's options work today.
 
 | Part | Default | Replace it with |
 | --- | --- | --- |
-| Chat | Mattermost | A `ChannelHost` adapter: Slack, Discord and others |
+| Chat | Mattermost | A `ChannelHost` adapter for Slack, Discord or another host; Mattermost is the only host today |
 | Git host | Gitea | A `GitHost` adapter |
 | Operator identity | Google sign-in | Other OIDC issuers later: Keycloak, Dex, Authentik, Zitadel, Okta, Entra |
-| Control UI sign-in | OpenClaw's gateway token | OpenClaw's `trusted-proxy` mode behind Pomerium or oauth2-proxy |
+| Control UI sign-in | A one-time link from the `/ui` command in Mattermost | OpenClaw's `trusted-proxy` mode behind Pomerium or oauth2-proxy |
 | Startup secrets and the root key | Environment variables | OpenClaw `file` or `exec` secret references: Vault, OpenBao, 1Password |
 | Secrets the platform creates | Encrypted rows in PostgreSQL | A Vault or OpenBao adapter |
 | Encryption at rest | AES-256-GCM under the root key | Vault or OpenBao Transit |
@@ -76,11 +76,16 @@ because environment variables would put every user's key in one process.
 
 ## Sign-in for chat and git
 
+On the full platform, users on a shared gateway reach their agent only through
+chat and git. The OpenClaw Control UI, with the sign-in in the table above, is
+for users on an isolated gateway.
+
 Each host uses its own login. On the default hosts, Gitea supports OIDC at no
 cost. Mattermost Team Edition has no single sign-on that we could confirm, and
 it stops creating accounts at 250 activated users across the server. Bots do
-not count. That limit is fine for a personal or small-team install, and a
-larger one can use a different chat host through a `ChannelHost` adapter.
+not count. That limit is fine for a personal or small-team install. A larger
+one needs a Mattermost license, because Mattermost is the only chat host the
+platform supports today.
 
 ## Free to use, but not open source
 

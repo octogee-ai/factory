@@ -566,7 +566,8 @@ export async function writeActivationManifest(rootDir, manifest) {
     const relPath = activationManifestTarPath(manifest.slug);
     const fullPath = path.join(rootDir, relPath);
     await fs.mkdir(path.dirname(fullPath), { recursive: true, mode: 0o700 });
-    const temporary = `${fullPath}.${randomUUID()}.tmp`;
+    const staging = await fs.mkdtemp(path.join(path.dirname(fullPath), ".activation-"));
+    const temporary = path.join(staging, "manifest");
     try {
         const file = await fs.open(temporary, "wx", 0o600);
         try {
@@ -577,7 +578,7 @@ export async function writeActivationManifest(rootDir, manifest) {
             await file.close();
         }
         await fs.rename(temporary, fullPath);
-        const directory = await fs.open(path.dirname(fullPath), "r");
+        const directory = await fs.open(path.dirname(fullPath), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW, 0o700);
         try {
             await directory.sync();
         }
@@ -586,16 +587,36 @@ export async function writeActivationManifest(rootDir, manifest) {
         }
     }
     finally {
-        await fs.rm(temporary, { force: true });
+        await fs.rm(staging, { recursive: true, force: true });
     }
     return { cwd: rootDir, path: relPath };
 }
 export async function readActivationManifest(openclawDir, slug) {
     const manifestPath = activationManifestDiskPath(openclawDir, slug);
-    if ((await fs.stat(manifestPath)).size > MIGRATION_ACTIVATION_MAX_BYTES)
-        throw new Error("Source activation manifest exceeds transfer limit");
-    const raw = await fs.readFile(manifestPath, "utf-8");
-    return validateManifestShape(JSON.parse(raw), slug);
+    const file = await fs.open(manifestPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
+    try {
+        const before = await file.stat();
+        if (!before.isFile())
+            throw new Error("Source activation manifest must be a regular file");
+        if (before.size > MIGRATION_ACTIVATION_MAX_BYTES)
+            throw new Error("Source activation manifest exceeds transfer limit");
+        const bytes = Buffer.alloc(before.size + 1);
+        let size = 0;
+        while (size < bytes.length) {
+            const { bytesRead } = await file.read(bytes, size, bytes.length - size, size);
+            if (bytesRead === 0)
+                break;
+            size += bytesRead;
+        }
+        const after = await file.stat();
+        if (size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
+            throw new Error("Source activation manifest changed during read");
+        }
+        return validateManifestShape(JSON.parse(bytes.toString("utf-8", 0, size)), slug);
+    }
+    finally {
+        await file.close();
+    }
 }
 export async function removeActivationManifest(openclawDir, slug) {
     const manifestDir = path.join(openclawDir, MIGRATION_ACTIVATION_DIR, slug);

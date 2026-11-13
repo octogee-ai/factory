@@ -89,21 +89,11 @@ function localGitExec(cwd: string, args: string[]): string | null {
 }
 
 function localConfig(repo: string, key: string): string {
-  const localGit = path.join(repo, ".git");
-  const stat = fs.lstatSync(localGit);
-  const config = stat.isDirectory()
-    ? path.join(localGit, "config")
-    : path.join(fs.readFileSync(localGit, "utf8").trim().slice("gitdir: ".length), "config");
-  return git(repo, ["config", "--file", config, "--get", key]);
+  return git(repo, ["config", "--local", "--get", key]);
 }
 
 function localConfigContents(repo: string): string {
-  const localGit = path.join(repo, ".git");
-  const stat = fs.lstatSync(localGit);
-  const config = stat.isDirectory()
-    ? path.join(localGit, "config")
-    : path.join(fs.readFileSync(localGit, "utf8").trim().slice("gitdir: ".length), "config");
-  return fs.readFileSync(config, "utf8");
+  return fs.readFileSync(git(repo, ["rev-parse", "--path-format=absolute", "--git-path", "config"]), "utf8");
 }
 
 const prepareRepository = () => {};

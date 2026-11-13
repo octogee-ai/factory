@@ -274,6 +274,42 @@ describe("createMattermostChannelHost — userExists", () => {
   });
 });
 
+describe("createMattermostChannelHost — blockSignIn", () => {
+  it("deactivates the account, then revokes every session it holds", async () => {
+    const { host, calls } = setup([{ body: { status: "OK" } }]);
+
+    await host.blockSignIn("u1");
+
+    expect(calls.map(({ method, url, body }) => [method, url, body])).toEqual([
+      ["PUT", "https://mm.test/api/v4/users/u1/active", { active: false }],
+      ["POST", "https://mm.test/api/v4/users/u1/sessions/revoke/all", undefined],
+    ]);
+    expect(calls[0]!.headers.Authorization).toBe("Bearer tok-admin");
+  });
+
+  it("treats an account Mattermost no longer has as already unable to sign in", async () => {
+    const { host, calls, log } = setup([{ status: 404, body: { message: "not found" } }]);
+
+    await expect(host.blockSignIn("u1")).resolves.toBeUndefined();
+
+    expect(calls).toHaveLength(1);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("u1"));
+  });
+
+  it("fails with the status when Mattermost refuses the deactivation", async () => {
+    const { host, calls } = setup([{ status: 500, body: "down" }]);
+
+    await expect(host.blockSignIn("u1")).rejects.toThrow(/deactivate user u1 failed: 500 down/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("fails with the status when Mattermost refuses the session revocation", async () => {
+    const { host } = setup([{ body: { status: "OK" } }, { status: 403, body: "forbidden" }]);
+
+    await expect(host.blockSignIn("u1")).rejects.toThrow(/revoke sessions for user u1 failed: 403 forbidden/);
+  });
+});
+
 describe("createMattermostChannelHost — setUserPassword", () => {
   it("finds the account by username and sets its password as admin", async () => {
     const { host, calls } = setup([{ body: { id: "u1" } }, { body: { status: "OK" } }]);
@@ -296,5 +332,86 @@ describe("createMattermostChannelHost — setUserPassword", () => {
     const failure = await host.setUserPassword("lin", "s3cret-value").catch((error: Error) => error);
     expect(String(failure)).toContain("400");
     expect(String(failure)).not.toContain("s3cret-value");
+  });
+});
+
+const UI_COMMAND = {
+  teamId: "team-1",
+  trigger: "ui",
+  url: "http://mattermost-callback-router.octogee-test.svc.cluster.local:3001/internal/mattermost/commands/control-ui",
+  displayName: "Control UI",
+  description: "Open the Control UI",
+  autocompleteDescription: "Get a one-time link",
+} as const;
+
+function storedCommand(patch: Record<string, unknown> = {}) {
+  return { id: "cmd-1", team_id: "team-1", trigger: "ui", url: UI_COMMAND.url, method: "P", token: "command-token", ...patch };
+}
+
+describe("createMattermostChannelHost — team commands", () => {
+  it("creates a missing team command as a POST callback with autocomplete", async () => {
+    const { host, calls } = setup([{ body: [] }, { body: { id: "cmd-1" } }]);
+
+    expect(await host.ensureCommand(UI_COMMAND)).toBe("created");
+
+    expect(calls.map(({ method, url }) => [method, url])).toEqual([
+      ["GET", "https://mm.test/api/v4/commands?team_id=team-1&custom_only=true"],
+      ["POST", "https://mm.test/api/v4/commands"],
+    ]);
+    expect(calls[1]!.body).toEqual({
+      team_id: "team-1",
+      trigger: "ui",
+      method: "P",
+      url: UI_COMMAND.url,
+      display_name: "Control UI",
+      description: "Open the Control UI",
+      auto_complete: true,
+      auto_complete_desc: "Get a one-time link",
+      auto_complete_hint: "",
+    });
+  });
+
+  it("leaves a command that already posts to the callback alone", async () => {
+    const { host, calls } = setup([{ body: [storedCommand()] }]);
+    expect(await host.ensureCommand(UI_COMMAND)).toBe("present");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("repoints a command whose callback moved, keeping its id and token", async () => {
+    const { host, calls } = setup([{ body: [storedCommand({ url: "http://old/callback" })] }, { body: {} }]);
+
+    expect(await host.ensureCommand(UI_COMMAND)).toBe("updated");
+
+    expect(calls[1]).toMatchObject({ method: "PUT", url: "https://mm.test/api/v4/commands/cmd-1" });
+    expect(calls[1]!.body).toMatchObject({ id: "cmd-1", token: "command-token", url: UI_COMMAND.url, method: "P" });
+  });
+
+  it("fails loudly when Mattermost refuses to create the command", async () => {
+    const { host } = setup([{ body: [] }, { status: 403, body: "forbidden" }]);
+    await expect(host.ensureCommand(UI_COMMAND)).rejects.toThrow(/POST \/commands failed: 403/);
+  });
+
+  it("accepts a token only when it belongs to that trigger in that team", async () => {
+    const commands = [storedCommand({ id: "other", trigger: "deploy", token: "deploy-token" }), storedCommand()];
+    const { host } = setup([{ body: commands }]);
+
+    expect(await host.commandTokenMatches({ teamId: "team-1", trigger: "ui", token: "command-token" })).toBe(true);
+    expect(await host.commandTokenMatches({ teamId: "team-1", trigger: "ui", token: "deploy-token" })).toBe(false);
+    expect(await host.commandTokenMatches({ teamId: "team-1", trigger: "ui", token: "command-tokem" })).toBe(false);
+    expect(await host.commandTokenMatches({ teamId: "team-1", trigger: "ui", token: "" })).toBe(false);
+  });
+
+  it("lists every team across pages", async () => {
+    const firstPage = Array.from({ length: 200 }, (_, i) => ({ id: `team-${i}` }));
+    const { host, calls } = setup([{ body: firstPage }, { body: [{ id: "team-200" }] }]);
+
+    const ids = await host.listTeamIds();
+
+    expect(ids).toHaveLength(201);
+    expect(ids.at(-1)).toBe("team-200");
+    expect(calls.map(({ url }) => url)).toEqual([
+      "https://mm.test/api/v4/teams?page=0&per_page=200",
+      "https://mm.test/api/v4/teams?page=1&per_page=200",
+    ]);
   });
 });

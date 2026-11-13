@@ -43,6 +43,33 @@ describe("gateway-edge gitea client — per-workspace org", () => {
     expect((init.headers as Record<string, string>).Authorization).toBe("token cust-tok");
   });
 
+  it("sends a repository endpoint and its query to the configured Gitea API", async () => {
+    fetchMock.mockResolvedValueOnce(res(200));
+    const { giteaApi } = await import("../lib/gitea.js");
+    await giteaApi("alice", "my-game/contents/a file.md?ref=feature%2Fdocs");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://gitea.test:3000/api/v1/repos/alice/my-game/contents/a%20file.md?ref=feature%2Fdocs",
+      expect.objectContaining({ redirect: "error" }),
+    );
+  });
+
+  it("rejects paths outside the selected repository before sending credentials", async () => {
+    const { giteaApi } = await import("../lib/gitea.js");
+    await expect(giteaApi("alice", "my-game/contents/%2e%2e/readme.md")).rejects.toThrow(/Invalid Gitea API path/);
+    await expect(giteaApi("alice/other", "my-game")).rejects.toThrow(/Invalid Gitea name/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("encodes file names separately from API query parameters and blocks admin redirects", async () => {
+    fetchMock.mockResolvedValueOnce(res(200));
+    const { giteaWriteFile } = await import("../lib/gitea.js");
+    await giteaWriteFile("alice", "my-game", "docs/What?#.md", "draft", "seed");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://gitea.test:3000/api/v1/repos/alice/my-game/contents/docs/What%3F%23.md",
+      expect.objectContaining({ redirect: "error" }),
+    );
+  });
+
   it("createProjectGiteaRepo posts to /orgs/{org}/repos", async () => {
     fetchMock.mockResolvedValueOnce(res(201, {}));
     const { createProjectGiteaRepo } = await import("../lib/gitea.js");

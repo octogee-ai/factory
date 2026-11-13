@@ -15,6 +15,7 @@ import { generateConnectState } from "../lib/connect-state.js";
 
 const UID = "uid-connect-test";
 const OTHER_UID = "uid-connect-other";
+const RATE_LIMIT_UID = "uid-connect-quota";
 const PLAINTEXT_GH_TOKEN = "gho_PLAINTEXT-github-oauth-token";
 const PLAINTEXT_GH_PAT = "ghp_PLAINTEXT-github-pat-token";
 const PLAINTEXT_GOOGLE_ACCESS = "ya29.PLAINTEXT-google-access";
@@ -81,6 +82,7 @@ setupEmulatorTest({
 });
 const auth = useAuthToken(UID);
 const otherAuth = useAuthToken(OTHER_UID);
+const rateLimitAuth = useAuthToken(RATE_LIMIT_UID);
 
 const realFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
@@ -112,14 +114,14 @@ function stubProviderFetch(stubs: ProviderStub[]): { calls: { url: string; init?
 
 const githubHappyStubs: ProviderStub[] = [
   {
-    url: /github\.com\/login\/oauth\/access_token/,
+    url: /^https:\/\/github\.com\/login\/oauth\/access_token(?:\?|$)/,
     respond: (init) => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
       expect(headers.Accept).toBe("application/json");
       return { access_token: PLAINTEXT_GH_TOKEN, token_type: "bearer", scope: "repo" };
     },
   },
-  { url: /api\.github\.com\/user$/, respond: () => ({ login: "chris-e" }) },
+  { url: /^https:\/\/api\.github\.com\/user$/, respond: () => ({ login: "chris-e" }) },
 ];
 
 beforeEach(async () => {
@@ -205,6 +207,19 @@ describe("connect route module", () => {
 });
 
 describe("connect — auth-url", () => {
+  it("limits OAuth starts per authenticated user without blocking their availability reads", async () => {
+    await db.doc(`users/${RATE_LIMIT_UID}`).set({ accountLifecycle: { status: "active" } });
+    const client = request(createApp());
+    const path = "/api/connect/github/auth-url?returnUrl=/w/me/files";
+    for (let attempt = 0; attempt < 60; attempt++) {
+      await client.get(path).set("Authorization", rateLimitAuth.bearer()).expect(200);
+    }
+    const rejected = await client.get(path).set("Authorization", rateLimitAuth.bearer()).expect(429);
+    expect(rejected.body).toEqual({ error: "Too many connector requests, please try again later." });
+    await client.get(path).set("Authorization", auth.bearer()).expect(200);
+    await client.get("/api/connect/availability").set("Authorization", rateLimitAuth.bearer()).expect(200);
+  });
+
   it("requires auth (uid comes from the verified token, never a query param)", async () => {
     const res = await request(createApp()).get("/api/connect/github/auth-url");
     expect(res.status).toBe(401);
@@ -363,11 +378,11 @@ describe("connect — callback state verification (the security regression)", ()
   it("does not persist exchanged credentials when deletion starts during the provider callback", async () => {
     stubProviderFetch([
       {
-        url: /github\.com\/login\/oauth\/access_token/,
+        url: /^https:\/\/github\.com\/login\/oauth\/access_token(?:\?|$)/,
         respond: () => ({ access_token: PLAINTEXT_GH_TOKEN, token_type: "bearer", scope: "repo" }),
       },
       {
-        url: /api\.github\.com\/user$/,
+        url: /^https:\/\/api\.github\.com\/user$/,
         respond: async () => {
           await db.doc(`users/${UID}`).set(
             { accountLifecycle: { status: "deletion_scheduled" } },
@@ -401,7 +416,7 @@ describe("connect — callback state verification (the security regression)", ()
   it("marks the integration errored when the token exchange fails", async () => {
     stubProviderFetch([
       {
-        url: /github\.com\/login\/oauth\/access_token/,
+        url: /^https:\/\/github\.com\/login\/oauth\/access_token(?:\?|$)/,
         respond: () => ({ error: "bad_verification_code" }),
       },
     ]);
@@ -447,7 +462,7 @@ describe("connect — PAT capture", () => {
   });
 
   it("validates against the connector identity and stores the encrypted PAT", async () => {
-    stubProviderFetch([{ url: /api\.github\.com\/user$/, respond: () => ({ login: "pat-user" }) }]);
+    stubProviderFetch([{ url: /^https:\/\/api\.github\.com\/user$/, respond: () => ({ login: "pat-user" }) }]);
 
     const res = await request(createApp())
       .post("/api/connect/github/pat")
@@ -472,7 +487,7 @@ describe("connect — device flow", () => {
 
     stubProviderFetch([
       {
-        url: /github\.com\/login\/device\/code/,
+        url: /^https:\/\/github\.com\/login\/device\/code(?:\?|$)/,
         respond: () => ({
           device_code: "dc-secret-1",
           user_code: "ABCD-1234",
@@ -501,7 +516,7 @@ describe("connect — device flow", () => {
   async function startDeviceFlow(): Promise<string> {
     stubProviderFetch([
       {
-        url: /github\.com\/login\/device\/code/,
+        url: /^https:\/\/github\.com\/login\/device\/code(?:\?|$)/,
         respond: () => ({
           device_code: "dc-secret-2",
           user_code: "EFGH-5678",
@@ -528,8 +543,8 @@ describe("connect — device flow", () => {
       { access_token: PLAINTEXT_GH_TOKEN, token_type: "bearer", scope: "repo" },
     ];
     stubProviderFetch([
-      { url: /github\.com\/login\/oauth\/access_token/, respond: () => tokenResponses.shift() },
-      { url: /api\.github\.com\/user$/, respond: () => ({ login: "device-user" }) },
+      { url: /^https:\/\/github\.com\/login\/oauth\/access_token(?:\?|$)/, respond: () => tokenResponses.shift() },
+      { url: /^https:\/\/api\.github\.com\/user$/, respond: () => ({ login: "device-user" }) },
     ]);
 
     const pending = await request(createApp())
@@ -568,7 +583,7 @@ describe("connect — device flow", () => {
   it("poll: access_denied fails and consumes the flow", async () => {
     const flowId = await startDeviceFlow();
     stubProviderFetch([
-      { url: /github\.com\/login\/oauth\/access_token/, respond: () => ({ error: "access_denied" }) },
+      { url: /^https:\/\/github\.com\/login\/oauth\/access_token(?:\?|$)/, respond: () => ({ error: "access_denied" }) },
     ]);
 
     const res = await request(createApp())
@@ -616,14 +631,14 @@ describe("connect — multi-field credential capture (azure)", () => {
   it("validates against the provider, stores every field KMS-encrypted, verify round-trips and heals", async () => {
     stubProviderFetch([
       {
-        url: /login\.microsoftonline\.com/,
+        url: /^https:\/\/login\.microsoftonline\.com\/[^/]+\/oauth2\/v2\.0\/token$/,
         respond: () => ({ access_token: "az-mgmt-token" }),
       },
     ]);
     const res = await request(createApp())
       .post("/api/connect/azure/fields")
       .set("Authorization", auth.bearer())
-      .send({ fields: AZURE_FIELDS });
+      .send({ fields: { ...AZURE_FIELDS, unexpected: "ignored" } });
     expect(res.status, res.text).toBe(200);
     expect(res.body.accountLabel).toContain("abcd1234");
 
@@ -634,6 +649,7 @@ describe("connect — multi-field credential capture (azure)", () => {
     const fields = (secret as Record<string, Record<string, string>>).fields;
     expect(fields.clientSecret).toBe(encOf(AZURE_FIELDS.clientSecret));
     expect(fields.tenantId).toBe(encOf(AZURE_FIELDS.tenantId));
+    expect(Object.keys(fields).sort()).toEqual(Object.keys(AZURE_FIELDS).sort());
     expect((await readStatus(UID, "azure"))?.captureMethod).toBe("fields");
 
     const verified = await request(createApp())
@@ -646,7 +662,7 @@ describe("connect — multi-field credential capture (azure)", () => {
 
   it("verify flags provider rejection and a later success heals the error state", async () => {
     stubProviderFetch([
-      { url: /login\.microsoftonline\.com/, respond: () => ({ access_token: "az-tok" }) },
+      { url: /^https:\/\/login\.microsoftonline\.com\/[^/]+\/oauth2\/v2\.0\/token$/, respond: () => ({ access_token: "az-tok" }) },
     ]);
     await request(createApp())
       .post("/api/connect/azure/fields")
@@ -671,7 +687,7 @@ describe("connect — multi-field credential capture (azure)", () => {
     vi.restoreAllMocks();
     _setKmsClientForTesting(deterministicMockKms());
     stubProviderFetch([
-      { url: /login\.microsoftonline\.com/, respond: () => ({ access_token: "az-tok-2" }) },
+      { url: /^https:\/\/login\.microsoftonline\.com\/[^/]+\/oauth2\/v2\.0\/token$/, respond: () => ({ access_token: "az-tok-2" }) },
     ]);
     const healed = await request(createApp())
       .post("/api/connect/azure/verify")
@@ -694,7 +710,7 @@ describe("connect — disconnect", () => {
   });
 
   it("deletes the secret and flips status to disconnected", async () => {
-    stubProviderFetch([{ url: /api\.github\.com\/user$/, respond: () => ({ login: "pat-user" }) }]);
+    stubProviderFetch([{ url: /^https:\/\/api\.github\.com\/user$/, respond: () => ({ login: "pat-user" }) }]);
     await request(createApp())
       .post("/api/connect/github/pat")
       .set("Authorization", auth.bearer())
@@ -711,7 +727,7 @@ describe("connect — disconnect", () => {
   });
 
   it("the local disconnect is all-or-nothing — a failed write leaves status and secret intact together", async () => {
-    stubProviderFetch([{ url: /api\.github\.com\/user$/, respond: () => ({ login: "pat-user" }) }]);
+    stubProviderFetch([{ url: /^https:\/\/api\.github\.com\/user$/, respond: () => ({ login: "pat-user" }) }]);
     await request(createApp())
       .post("/api/connect/github/pat")
       .set("Authorization", auth.bearer())
@@ -776,7 +792,7 @@ describe("connect — google platform capability flow", () => {
 
   function googleTokenStub(grantedScope: string): ProviderStub {
     return {
-      url: /oauth2\.googleapis\.com\/token/,
+      url: /^https:\/\/oauth2\.googleapis\.com\/token(?:\?|$)/,
       respond: () => ({
         access_token: PLAINTEXT_GOOGLE_ACCESS,
         refresh_token: PLAINTEXT_GOOGLE_REFRESH,
@@ -787,7 +803,7 @@ describe("connect — google platform capability flow", () => {
     };
   }
   const googleUserinfoStub: ProviderStub = {
-    url: /googleapis\.com\/oauth2\/v2\/userinfo/,
+    url: /^https:\/\/www\.googleapis\.com\/oauth2\/v2\/userinfo(?:\?|$)/,
     respond: () => ({ email: "g@x.com" }),
   };
 
@@ -998,7 +1014,7 @@ describe("connect — google platform capability flow", () => {
           return { email: "g@x.com" };
         },
       },
-      { url: /oauth2\.googleapis\.com\/revoke/, respond: () => ({}) },
+      { url: /^https:\/\/oauth2\.googleapis\.com\/revoke(?:\?|$)/, respond: () => ({}) },
     ]);
     const { state } = await mintAuthUrlState("google", "&capability=calendar");
 
@@ -1028,7 +1044,7 @@ describe("connect — google platform capability flow", () => {
 
     stubProviderFetch([
       {
-        url: /oauth2\.googleapis\.com\/token/,
+        url: /^https:\/\/oauth2\.googleapis\.com\/token(?:\?|$)/,
         respond: () => ({
           access_token: "new-google-access",
           expires_in: 3600,
@@ -1068,7 +1084,7 @@ describe("connect — google platform capability flow", () => {
 
     stubProviderFetch([
       {
-        url: /oauth2\.googleapis\.com\/token/,
+        url: /^https:\/\/oauth2\.googleapis\.com\/token(?:\?|$)/,
         respond: () => ({
           access_token: "other-account-access",
           refresh_token: "other-account-refresh",
@@ -1078,7 +1094,7 @@ describe("connect — google platform capability flow", () => {
         }),
       },
       {
-        url: /googleapis\.com\/oauth2\/v2\/userinfo/,
+        url: /^https:\/\/www\.googleapis\.com\/oauth2\/v2\/userinfo(?:\?|$)/,
         respond: () => ({ email: "other@x.com" }),
       },
     ]);
@@ -1127,7 +1143,7 @@ describe("connect — google platform capability flow", () => {
     await connectGoogle("calendar", `${CAL} ${EMAIL}`);
 
     const { calls } = stubProviderFetch([
-      { url: /oauth2\.googleapis\.com\/revoke/, respond: () => ({}) },
+      { url: /^https:\/\/oauth2\.googleapis\.com\/revoke(?:\?|$)/, respond: () => ({}) },
     ]);
     const res = await request(createApp())
       .post("/api/connect/disconnect")
@@ -1154,7 +1170,7 @@ describe("connect — google platform capability flow", () => {
         { merge: true },
       );
 
-    stubProviderFetch([{ url: /oauth2\.googleapis\.com\/revoke/, respond: () => ({}) }]);
+    stubProviderFetch([{ url: /^https:\/\/oauth2\.googleapis\.com\/revoke(?:\?|$)/, respond: () => ({}) }]);
     await request(createApp())
       .post("/api/connect/disconnect")
       .set("Authorization", auth.bearer())
@@ -1169,7 +1185,7 @@ describe("connect — google platform capability flow", () => {
   it("after a disconnect, a different Google account can connect — the continuity guard resets", async () => {
     await setGoogleStage("on");
     await connectGoogle("calendar", `${CAL} ${EMAIL}`);
-    stubProviderFetch([{ url: /oauth2\.googleapis\.com\/revoke/, respond: () => ({}) }]);
+    stubProviderFetch([{ url: /^https:\/\/oauth2\.googleapis\.com\/revoke(?:\?|$)/, respond: () => ({}) }]);
     await request(createApp())
       .post("/api/connect/disconnect")
       .set("Authorization", auth.bearer())
@@ -1181,7 +1197,7 @@ describe("connect — google platform capability flow", () => {
     stubProviderFetch([
       googleTokenStub(`${GMAIL} ${EMAIL}`),
       {
-        url: /googleapis\.com\/oauth2\/v2\/userinfo/,
+        url: /^https:\/\/www\.googleapis\.com\/oauth2\/v2\/userinfo(?:\?|$)/,
         respond: () => ({ email: "other@x.com" }),
       },
     ]);
@@ -1212,7 +1228,7 @@ describe("connect — google platform capability flow", () => {
       preview: { content: "private Obsidian content" },
     });
 
-    stubProviderFetch([{ url: /oauth2\.googleapis\.com\/revoke/, respond: () => ({}) }]);
+    stubProviderFetch([{ url: /^https:\/\/oauth2\.googleapis\.com\/revoke(?:\?|$)/, respond: () => ({}) }]);
     await request(createApp())
       .post("/api/connect/disconnect")
       .set("Authorization", auth.bearer())
@@ -1227,7 +1243,7 @@ describe("connect — google platform capability flow", () => {
     await setGoogleStage("on");
     stubProviderFetch([
       {
-        url: /oauth2\.googleapis\.com\/token/,
+        url: /^https:\/\/oauth2\.googleapis\.com\/token(?:\?|$)/,
         respond: () => ({
           access_token: PLAINTEXT_GOOGLE_ACCESS,
           refresh_token: PLAINTEXT_GOOGLE_REFRESH,
@@ -1250,7 +1266,7 @@ describe("connect — google platform capability flow", () => {
     let exchangeBody = "";
     stubProviderFetch([
       {
-        url: /oauth2\.googleapis\.com\/token/,
+        url: /^https:\/\/oauth2\.googleapis\.com\/token(?:\?|$)/,
         respond: (init) => {
           exchangeBody = String(init?.body);
           return {
@@ -1380,7 +1396,7 @@ describe("connect — microsoft + verify", () => {
   it("microsoft callback stores encrypted tokens via the signed-state framework", async () => {
     stubProviderFetch([
       {
-        url: /login\.microsoftonline\.com.*\/token/,
+        url: /^https:\/\/login\.microsoftonline\.com\/[^/]+\/oauth2\/v2\.0\/token$/,
         respond: () => ({
           access_token: PLAINTEXT_MS_ACCESS,
           refresh_token: "M.R3_PLAINTEXT-ms-refresh",
@@ -1388,7 +1404,7 @@ describe("connect — microsoft + verify", () => {
           token_type: "Bearer",
         }),
       },
-      { url: /graph\.microsoft\.com\/v1\.0\/me/, respond: () => ({ mail: "ms@x.com" }) },
+      { url: /^https:\/\/graph\.microsoft\.com\/v1\.0\/me(?:\?|$)/, respond: () => ({ mail: "ms@x.com" }) },
     ]);
     const { state } = await mintAuthUrlState("microsoft");
 
@@ -1411,7 +1427,7 @@ describe("connect — microsoft + verify", () => {
     expect(notConnected.status).toBe(422);
     expect(notConnected.body.reason).toBe("not_connected");
 
-    stubProviderFetch([{ url: /api\.github\.com\/user$/, respond: () => ({ login: "pat-user" }) }]);
+    stubProviderFetch([{ url: /^https:\/\/api\.github\.com\/user$/, respond: () => ({ login: "pat-user" }) }]);
     await request(createApp())
       .post("/api/connect/github/pat")
       .set("Authorization", auth.bearer())
@@ -1435,7 +1451,7 @@ describe("connect — microsoft + verify", () => {
     const FRESH_ACCESS = "ya29.FRESH-after-refresh";
     stubProviderFetch([
       {
-        url: /oauth2\.googleapis\.com\/token/,
+        url: /^https:\/\/oauth2\.googleapis\.com\/token(?:\?|$)/,
         respond: (init) => {
           const body = String(init?.body);
           if (body.includes("grant_type=refresh_token")) {
@@ -1451,17 +1467,17 @@ describe("connect — microsoft + verify", () => {
           };
         },
       },
-      { url: /googleapis\.com\/oauth2\/v2\/userinfo/, respond: () => ({ email: "g@x.com" }) },
+      { url: /^https:\/\/www\.googleapis\.com\/oauth2\/v2\/userinfo(?:\?|$)/, respond: () => ({ email: "g@x.com" }) },
       {
-        url: /www\.googleapis\.com\/calendar\/v3\/calendars\/primary\/events/,
+        url: /^https:\/\/www\.googleapis\.com\/calendar\/v3\/calendars\/primary\/events(?:\?|$)/,
         respond: () => ({ items: [] }),
       },
       {
-        url: /gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile/,
+        url: /^https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile(?:\?|$)/,
         respond: () => ({ emailAddress: "g@x.com" }),
       },
       {
-        url: /www\.googleapis\.com\/drive\/v3\/about/,
+        url: /^https:\/\/www\.googleapis\.com\/drive\/v3\/about(?:\?|$)/,
         respond: () => ({ user: { emailAddress: "g@x.com" } }),
       },
     ]);
@@ -1495,7 +1511,7 @@ describe("connect — microsoft + verify", () => {
     await setGoogleStage("on");
     stubProviderFetch([
       {
-        url: /oauth2\.googleapis\.com\/token/,
+        url: /^https:\/\/oauth2\.googleapis\.com\/token(?:\?|$)/,
         respond: (init) =>
           String(init?.body).includes("grant_type=refresh_token")
             ? { error: "invalid_grant" }
@@ -1507,7 +1523,7 @@ describe("connect — microsoft + verify", () => {
                 scope: "https://www.googleapis.com/auth/userinfo.email",
               },
       },
-      { url: /googleapis\.com\/oauth2\/v2\/userinfo/, respond: () => ({ email: "g@x.com" }) },
+      { url: /^https:\/\/www\.googleapis\.com\/oauth2\/v2\/userinfo(?:\?|$)/, respond: () => ({ email: "g@x.com" }) },
     ]);
     const { state } = await mintAuthUrlState("google", "&capability=calendar");
     await request(createApp()).get(
@@ -1552,7 +1568,7 @@ describe("connect — google drive picker + full-read escalation", () => {
   async function grantGoogle(capability: string, grantedScope: string): Promise<void> {
     stubProviderFetch([
       {
-        url: /oauth2\.googleapis\.com\/token/,
+        url: /^https:\/\/oauth2\.googleapis\.com\/token(?:\?|$)/,
         respond: () => ({
           access_token: PLAINTEXT_GOOGLE_ACCESS,
           refresh_token: PLAINTEXT_GOOGLE_REFRESH,
@@ -1561,7 +1577,7 @@ describe("connect — google drive picker + full-read escalation", () => {
           scope: grantedScope,
         }),
       },
-      { url: /googleapis\.com\/oauth2\/v2\/userinfo/, respond: () => ({ email: "g@x.com" }) },
+      { url: /^https:\/\/www\.googleapis\.com\/oauth2\/v2\/userinfo(?:\?|$)/, respond: () => ({ email: "g@x.com" }) },
     ]);
     const { state } = await mintAuthUrlState("google", `&capability=${capability}`);
     const res = await request(createApp()).get(

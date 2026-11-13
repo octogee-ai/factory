@@ -5,6 +5,7 @@ import { WebSocket } from 'ws';
 import { WsUpgradeAuthorizationError, type WsUpgradeRouter } from '@octogee/core/ws/upgrade-router';
 import { openClawProxyIdentityHeaders, openClawProxyOrigin } from '@octogee/shared/types/openclaw-proxy-identity';
 import { requireAuthenticatedUid } from '../middleware/auth.js';
+import { authenticatedRequestLimit, authenticationFailureLimit } from '../middleware/authenticated-request-limit.js';
 import { logger } from '../middleware/logging.js';
 import { resolveNativeAdminAccess } from '../lib/native-admin-access.js';
 import { resolveToolChannelForUid, resolveToolControlForUid, type ToolChannel, type ToolControl } from '../lib/tool-conversation.js';
@@ -251,7 +252,6 @@ export function createToolSurface(options: ToolSurfaceOptions = {}) {
   const streamTickets = new Map<string, StreamGrant>();
   const mediaOwners = new Map<string, LiveToolSession>();
   const router = Router({ mergeParams: true });
-  router.use(requireAuthenticatedUid);
   const headers = (uid: string) => ({ ...openClawProxyIdentityHeaders({ user: uid, clientAddress: podClientAddress() }), origin: openClawProxyOrigin(env) });
 
   function retireGrant(grant: StreamGrant): void {
@@ -267,7 +267,7 @@ export function createToolSurface(options: ToolSurfaceOptions = {}) {
     if (grant.audio) retireGrant(grant.audio);
   }
 
-  router.post('/ticket', async (req, res) => {
+  router.post('/ticket', authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(60), async (req, res) => {
     try {
       const gatewayId = (req.params as { gatewayId?: string }).gatewayId;
       if (!terminalAvailable(env) || typeof gatewayId !== 'string' || gatewayId !== env.GATEWAY_ID) { res.status(404).json({ error: 'tool_unavailable' }); return; }
@@ -298,7 +298,7 @@ export function createToolSurface(options: ToolSurfaceOptions = {}) {
     }
   });
 
-  router.get('/__openclaw__/assistant-media', async (req, res) => {
+  router.get('/__openclaw__/assistant-media', authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(360), async (req, res) => {
     const owned = requestedMedia(req, mediaOwners);
     if (!owned) { res.status(404).json({ error: 'media_unavailable' }); return; }
     const { live, media } = owned;

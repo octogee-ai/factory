@@ -16,15 +16,18 @@ The cluster runs:
 - the fleet controller, with its Admin API;
 - the gateway edge;
 - the platform API;
+- the LLM broker, which holds the model provider keys;
 - a shared gateway, once you add one.
 
 ## What you need
 
 - Docker, with at least 8 CPUs and 12 GB of memory for its VM
 - kind, kubectl and Helm (tested with kind 0.33, kubectl 1.36 and Helm 4.3)
-- Node.js 22 or later
+- Node.js 24
 - openssl, ssh-keygen and git
 - Go, to install the `octogee-fleet` command line
+- a model provider key, so agents can reply: an [OpenRouter](https://openrouter.ai/keys)
+  key for the default agent model, or an Anthropic or OpenAI key
 
 ## Install
 
@@ -36,6 +39,16 @@ git clone https://github.com/octogee-ai/octogee-cloud.git
 
 ```bash
 cd octogee-cloud
+```
+
+Export your model provider key in the same terminal. The script reads
+`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`; set any of them.
+It stores any of these your shell already exports, and names each one it stores,
+so unset a key you do not want in the cluster. `read -s` keeps the key out of
+your shell history:
+
+```bash
+read -rs OPENROUTER_API_KEY && export OPENROUTER_API_KEY
 ```
 
 ```bash
@@ -74,19 +87,26 @@ The script:
    and pushes them to the local registry;
 5. generates every secret: database passwords, the secret store root key, the
    S3 keys, the fleet signing keys, the operator key, and the Mattermost and
-   Gitea admin credentials;
+   Gitea admin credentials, and stores each provider key you exported in a
+   Secret of its own;
 6. installs PostgreSQL and SeaweedFS, then the Helm chart in `helm/octogee`;
 7. creates the Mattermost admin, its access token and the `octogee` team, and
    the Gitea admin, its token and the `octogee` organization;
-8. restarts the platform so it reads those tokens, and waits for the fleet
-   controller.
+8. restarts the platform so it reads those tokens and keys, and waits for the
+   fleet controller.
 
 Run it again at any time. Each step checks what exists, and secrets are kept
 between runs.
 
-The script keeps its state in `~/.local/state/octogee-kind/octogee`. Set
-`OCTOGEE_KIND_STATE` to keep it somewhere else. The state holds the kubeconfig,
-the generated secrets and the image digests.
+The script keeps its state in `~/.local/state/octogee-kind/<name>`, or under
+`$XDG_STATE_HOME` if you set it. `<name>` is the cluster name: `octogee` unless
+you pass `--name`. To keep the state elsewhere, set `OCTOGEE_KIND_STATE` to a
+parent folder; the state then goes in `$OCTOGEE_KIND_STATE/<name>`. It holds
+the kubeconfig, the generated secrets and the image digests.
+
+Keep to one install per host. Every cluster name shares the local registry on
+port 5001, and every install's fleet configuration expects the Admin API on
+port 18080.
 
 | Flag | Effect |
 | --- | --- |
@@ -99,7 +119,10 @@ the generated secrets and the image digests.
 | `--context-dir=<dir>` | Build from another platform tree. |
 | `--openclaw-dir=<dir>` | Take the OpenClaw build from local files instead of downloading it. The files keep their release names. |
 
-To use kubectl against the cluster, always name its kubeconfig and context:
+To use kubectl against the cluster, always name its kubeconfig and context.
+`STATE` is the state directory. `up` ends by printing the line that sets it,
+and `scripts/ops/kind-install.sh status` prints it again. With the default name
+and location:
 
 ```bash
 STATE=~/.local/state/octogee-kind/octogee
@@ -126,7 +149,8 @@ that lasts ten minutes. The script writes a configuration for the command line
 to `$STATE/fleet-config.json`.
 
 A new terminal has neither `STATE` nor `OCTOGEE_FLEET_CONFIG`, so set both in
-every terminal you open for the cluster:
+every terminal you open for the cluster. `status` prints both lines with your
+path; with the defaults they are:
 
 ```bash
 export STATE=~/.local/state/octogee-kind/octogee
@@ -179,6 +203,11 @@ When `user inspect` shows provisioning `complete` and the user mounted on
 - a Gitea account `ws-lin` and an organization `lin`, with a `workspace`
   repository and an empty `system_config` repository.
 
+A user on a shared gateway works with their agent through Mattermost and Gitea.
+The OpenClaw Control UI is for users on an isolated gateway, and kind runs only
+shared gateways, so `/ui` in Mattermost answers that the Control UI is for
+isolated gateways only.
+
 ## Sign in to Mattermost and Gitea
 
 Issue the user's passwords. The command prints a chat password and a git
@@ -218,14 +247,22 @@ machine cannot resolve those names. Pages you open through a port-forward use
 `localhost`, but if a link takes you to an in-cluster address, open the same
 path on `localhost` with that service's port.
 
-## Agent replies need a model provider
+## Talk to the agent
+
+Open `lin-coach` in Mattermost and send a message. The agent answers there.
 
 On a shared gateway, an agent reaches its model provider through the LLM broker.
 The broker holds the provider keys and gives each agent a token of its own, so
-no provider key sits in a gateway pod. This repository does not build the
-broker's entry point, and the kind values turn the broker off. On kind, an agent
-therefore has no model provider and cannot reply yet. Chat, git, the fleet
-controller and the gateway work without it.
+no provider key sits in a gateway pod. It records every model call, with its
+tokens and cost, in the platform database.
+
+The script keeps each key you export in its own Secret: `octogee-openrouter`,
+`octogee-anthropic` or `octogee-openai`. It passes the key to kubectl through a
+file descriptor, so the key never appears in a command line, the Helm values or
+the state directory. A provider whose key you never exported has no Secret, and
+the broker refuses calls to it. To add or replace a key, export it and run `up`
+again; the script restarts the broker so it reads the new key. If you exported
+no key and none is stored, the script warns that agents cannot reply.
 
 ## Differences from a cloud cluster
 
@@ -244,7 +281,8 @@ controller and the gateway work without it.
 scripts/ops/kind-install.sh down
 ```
 
-This deletes the cluster, the local registry and the state directory. A build
+This deletes the cluster and the state directory. It also deletes the local
+registry, unless another kind cluster still pulls from it. A build
 without `--pull` creates the dedicated builder `octogee-cloud-kind`. It stays,
 with its cache; remove it with `docker buildx rm octogee-cloud-kind`.
 
@@ -271,3 +309,23 @@ Run the same check against the images on your machine:
 node scripts/ci/cloud-build.mjs tripwire --registry=localhost:5001/octogee \
   --digests="$STATE/digests.json" --root=.
 ```
+
+### Verify published images
+
+The Build main workflow records provenance for each multi-platform image and
+each platform digest. To verify an image, use its `image` reference from the
+workflow's `image-manifest-<sha>` artifact:
+
+```bash
+image=$(jq -er '.images["octogee-gateway"].image' image-manifest.json)
+gh attestation verify "oci://$image" --repo octogee-ai/octogee-cloud \
+  --signer-workflow octogee-ai/octogee-cloud/.github/workflows/build-main.yml \
+  --source-ref refs/heads/main
+```
+
+The `image-security-*` artifacts include the source manifest, one Trivy JSON
+report, and one CycloneDX SBOM per image for the named architecture. Findings
+are reported in the run summary and do not fail publication. Scanner errors,
+missing digests, or missing reports fail the scan job. The weekly scan reuses
+the latest published Build main manifest from a push to `main` and uses current
+vulnerability data.

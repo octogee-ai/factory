@@ -29,11 +29,6 @@ import { prepareNativeVmReturn, releaseNativeReturnSourceRecoveryHold } from "./
 import { retireNativeSchedulerBeforeStage } from "./lib/native-scheduler-retirement.js";
 import { createAbandonedNativeSchedulerRecovery } from "./lib/native-return-scheduler-recovery.js";
 import { randomUUID } from "node:crypto";
-import { initializeApp, applicationDefault } from "firebase-admin/app";
-import {
-  getFirestore,
-  type Firestore,
-} from "firebase-admin/firestore";
 import {
   GLM_GATEWAYS_COLLECTION,
   resolveGatewayRuntime,
@@ -204,18 +199,14 @@ import {
 } from "./handlers/deprovision-user.js";
 import { createSuspendUserHandler } from "./handlers/suspend-user.js";
 import { createEraseUserHandler } from "./handlers/erase-user.js";
-import {
-  deleteUserStorageObjects,
-  verifyUserStorageErasure,
-} from "./lib/user-ops/avatars.js";
 import { loadUserCleanupContext } from "./lib/user-ops/cleanup-context.js";
-import type { UserAccounts, UserSignInHosts } from "@octogee/core/admin-user-router";
+import type { UserAccounts } from "@octogee/core/admin-user-router";
 import {
   noAdminUserDirectorySource,
   type AdminUserDirectorySource,
   type AdminUserProductDetail,
 } from "@octogee/core/admin-user-directory-router";
-import { createMattermostChannelHost } from "@octogee/core/channel-host";
+import { createMattermostChannelHost, type ManagedChannelHost } from "@octogee/core/channel-host";
 import { createGiteaGitHost } from "@octogee/core/git-host";
 import type { UserAccountReader } from "@octogee/core/user-account";
 import { platformStateUserAccountReader, platformStateUserAccounts } from "@octogee/core/platform-state-user-accounts";
@@ -228,19 +219,15 @@ import {
   verifiedDeletionJobPatch,
 } from "./lib/user-ops/deletion-job.js";
 import { buildAnonymousOperationalArchive } from "./lib/user-ops/deletion-archive.js";
-import {
-  eraseUserFirestore,
-  userErasureCollections,
-  verifyUserFirestoreErasure,
-} from "./lib/user-ops/user-firestore-erasure.js";
+import { eraseUserRecords, remainingUserRecords } from "./lib/user-ops/user-platform-state-erasure.js";
 import type {
   ProductContext,
   ProductUserLifecycle,
   ProductUserLifecycleFactory,
+  UserDataScope,
 } from "./lib/user-ops/user-lifecycle-product.js";
-import { resolveDefaultStorageBucket } from "./gcp-project.js";
 import { createS3UserBlobErasure } from "./lib/user-ops/s3-blob-erasure.js";
-import { deleteVmHomeObjects } from "./lib/user-ops/vm-home.js";
+import { platformStateUserDocuments, userDocumentsSizingKeyReader, type UserDocuments } from "./user-documents.js";
 import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
 import {
   byotSystemConfigFromDoc,
@@ -259,8 +246,6 @@ import {
   type GatewayRuntimeReader,
   type GatewayStateReader,
 } from "@octogee/core/gateway-live-release";
-import { getStorage } from "firebase-admin/storage";
-import { getAuth } from "firebase-admin/auth";
 import {
   combineIdentityProviders,
   googleIdentityFromEnvironment,
@@ -289,7 +274,7 @@ import {
   type CutoverDeps,
   type FleetStateDeps,
 } from "@octogee/core/fleet-state";
-import { firestoreSizingKeyReader } from "@octogee/core/user-activation-lease";
+import type { SizingKeyReader } from "@octogee/core/user-activation-lease";
 import {
   provisionGatewayAuthSecret,
   deleteSecret,
@@ -305,10 +290,6 @@ import {
   deploymentSettingsForRuntime,
   requireHostedDeploymentSettings,
 } from "@octogee/core/deployment-environment";
-import {
-  deleteAuthUserTolerantOfMissing,
-  disableAuthUserAndRevokeSessions,
-} from "@octogee/core/firebase-auth-helpers";
 import { revokeAllConnectorGrantsForUser } from "@octogee/core/connector-revocation";
 import { CONNECTOR_OAUTH_REVOCATION_TARGETS } from "@octogee/shared/types/connectors";
 import { projectRepoSourceFromDoc } from "@octogee/shared/types/project";
@@ -320,14 +301,12 @@ import {
   assertUserRestoreNotInProgress,
   cancelUserMigrationsForSuspension,
   deactivateUserVisibility,
-  invalidatePendingCredentialFlows,
   releaseUserPlacement,
   revokeOwnerModelBrokerTokens,
 } from "./lib/user-ops/user-suspension-runtime.js";
 import {
   ensureOwnedGatewaysRetired,
 } from "./lib/user-ops/user-gateway-retirement.js";
-import { MODEL_BROKER_USAGE_ROLLUPS_COLLECTION } from "@octogee/shared/types/model-broker-usage";
 import {
   recordReconcile,
   recordVmDiskUsage,
@@ -2142,7 +2121,6 @@ function buildHeartbeatPollerCoreDeps(
 }
 
 export function buildGatewayHeartbeatPollerDeps(
-  db: Firestore,
   store: PlatformStateStore,
   log: (msg: string) => void,
   privateKey: string,
@@ -2200,7 +2178,8 @@ interface ControllerBackgroundTasksDeps {
   userAdmission?: UserAdmissionSourceFactory | undefined;
   isolatedGateways?: IsolatedGatewayProductFactory | undefined;
   sharedGatewayMoves?: SharedGatewayMoves | undefined;
-  db: Firestore;
+  readSizingKey: SizingKeyReader;
+  suspendSignIn: (uid: string) => Promise<void>;
   deps: ControllerDeps;
   helm: HelmRunner;
   fleetControllerPrivateKey: string;
@@ -2235,7 +2214,7 @@ async function installSharedGatewayAutomation(
 
 function createIsolatedGatewayAutomation(
   factory: IsolatedGatewayProductFactory | undefined,
-  db: Firestore,
+  readSizingKey: SizingKeyReader,
   deps: ControllerDeps,
 ): IsolatedGatewayAutomation | null {
   if (!factory) {
@@ -2247,7 +2226,7 @@ function createIsolatedGatewayAutomation(
   const homeServices = GATEWAY_VM_SPEC ? createUserHomeServices(deps.store, log) : undefined;
   return factory({
     store: deps.store,
-    readSizingKey: firestoreSizingKeyReader(db),
+    readSizingKey,
     namespace: NAMESPACE,
     now: () => Date.now(),
     log,
@@ -2285,7 +2264,8 @@ function startControllerBackgroundTasks({
   userAdmission,
   isolatedGateways,
   sharedGatewayMoves,
-  db,
+  readSizingKey,
+  suspendSignIn,
   deps,
   helm,
   fleetControllerPrivateKey,
@@ -2300,7 +2280,7 @@ function startControllerBackgroundTasks({
   const stopWorker = startOperationWorker(deps);
   const stopOperationQueueDrain = startOperationQueueDrain(deps);
   const stopPoller = startGatewayHeartbeatPoller(
-    buildGatewayHeartbeatPollerDeps(db, deps.store, log, fleetControllerPrivateKey, informer),
+    buildGatewayHeartbeatPollerDeps(deps.store, log, fleetControllerPrivateKey, informer),
     GATEWAY_HEARTBEAT_POLL_MS,
   );
   const stopStuckOpReaper = startStuckOpReaper({
@@ -2368,7 +2348,7 @@ function startControllerBackgroundTasks({
     intervalMs: HELM_RECOVERY_SWEEP_MS,
     log,
   });
-  const isolatedGatewayAutomation = createIsolatedGatewayAutomation(isolatedGateways, db, deps);
+  const isolatedGatewayAutomation = createIsolatedGatewayAutomation(isolatedGateways, readSizingKey, deps);
   const stopPlacementPolicyReconciler = startPlacementPolicyReconciler(
     createFirestorePlacementPolicyReconcilerDeps({
       store: deps.store,
@@ -2425,7 +2405,7 @@ function startControllerBackgroundTasks({
         : null,
       namespace: NAMESPACE,
     },
-    suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
+    suspendAuthUser: suspendSignIn,
     revokeConnectorGrantsForUser: (uid) =>
       revokeAllConnectorGrantsForUser(uid, CONNECTOR_OAUTH_REVOCATION_TARGETS, {
         secrets: deps.store.secrets,
@@ -2614,11 +2594,11 @@ function agentStoreDsns(): { adminDsn: string; clientDsn: string } {
 }
 
 async function createControllerRuntime(
-  db: Firestore,
   store: PlatformStateStore,
   createHostingCleanup: ControllerProduct["createHostingCleanup"],
   userLifecycle: ProductUserLifecycle | null,
   accounts: UserAccountReader,
+  documents: UserDocuments,
 ): Promise<ControllerRuntime> {
   const runKubectl: KubectlSubprocess = (args, opts) => spawnKubectl(args, opts);
   const authSecretEnsurer = createAuthSecretEnsurer({
@@ -2777,7 +2757,7 @@ async function createControllerRuntime(
   const convergeGateways = serializeGatewayConvergence(runGatewayConvergence);
   const convergeSettledVm = convergeAfterVmCreation(convergeGateways, log);
   const nativeReturnRecovery = buildNativeReturnSourceRecoveryOwner(store, kubeOps, fleetControllerPrivateKey, prepareMigrationAgentStores);
-  const handlers = await buildHandlers(db, log, helm, kubeOps, {
+  const handlers = await buildHandlers(documents, log, helm, kubeOps, {
     syncFleetIngress: handlerSyncFleetIngress, privateKey: fleetControllerPrivateKey,
     modelKeySourceIssuer, prepareGatewayConfig, chartFingerprint,
     runRuntimeRecovery: convergeGateways.runExclusive,
@@ -2824,6 +2804,7 @@ export interface ControllerProduct {
   addAdminRoutes?: ProductAdminRoutes;
   userAccounts?: (store: PlatformStateStore) => UserAccounts;
   accountReader?: (store: PlatformStateStore) => UserAccountReader;
+  userDocuments?: (store: PlatformStateStore) => UserDocuments;
   userDirectory?: (store: PlatformStateStore) => AdminUserDirectorySource;
   adminUserDetail?: (store: PlatformStateStore) => AdminUserProductDetail;
   adminIdentity?: IdentityProvider;
@@ -2833,7 +2814,6 @@ export interface ControllerProduct {
   isolatedGateways?: IsolatedGatewayProductFactory;
   sharedGateways?: SharedGatewayProductFactory;
   startProjection?: (deps: {
-    db: Firestore;
     store: PlatformStateStore;
     log: (message: string) => void;
   }) => ControllerStopper;
@@ -2847,6 +2827,7 @@ export function controllerUserSeams(
   return {
     userAccounts: product.userAccounts?.(store) ?? platformStateUserAccounts(store),
     accounts: product.accountReader?.(store) ?? platformStateUserAccountReader(store),
+    documents: product.userDocuments?.(store) ?? platformStateUserDocuments(store),
     userDirectory: product.userDirectory?.(store) ?? noAdminUserDirectorySource,
     adminUserDetail: product.adminUserDetail?.(store),
     policyInputs: product.userPolicyInputs?.(store, log) ?? noUserPolicyInputs,
@@ -2855,7 +2836,6 @@ export function controllerUserSeams(
 
 function createUserLifecycle(
   product: ControllerProduct,
-  db: Firestore,
   store: PlatformStateStore,
 ): ProductUserLifecycle | null {
   if (product.userLifecycle === null) {
@@ -2863,25 +2843,20 @@ function createUserLifecycle(
     return null;
   }
   log("[glm-controller] user lifecycle: product steps installed");
-  return product.userLifecycle({ db, store, log });
+  return product.userLifecycle({ store, log });
 }
 
 export async function main(product: ControllerProduct): Promise<void> {
   installDefaultUserEntitlements();
   const controllerStartedAt = Date.now();
-  initializeApp({
-    credential: applicationDefault(),
-    storageBucket: resolveDefaultStorageBucket(process.env.GOOGLE_CLOUD_PROJECT),
-  });
-  const db = getFirestore();
   const store = platformStateStoreFromEnvironment({
     applicationName: "glm-controller",
     logger,
   });
-  const userLifecycle = createUserLifecycle(product, db, store);
-  const { userAccounts, accounts, userDirectory, adminUserDetail, policyInputs } = controllerUserSeams(product, store, log);
+  const userLifecycle = createUserLifecycle(product, store);
+  const { userAccounts, accounts, documents, userDirectory, adminUserDetail, policyInputs } = controllerUserSeams(product, store, log);
   const { deps, fleetControllerPrivateKey, chartFingerprint } =
-    await createControllerRuntime(db, store, product.createHostingCleanup, userLifecycle, accounts);
+    await createControllerRuntime(store, product.createHostingCleanup, userLifecycle, accounts, documents);
 
   log(
     `[glm-controller] boot sha=${process.env.BUILD_SHA ?? "unknown"} oc=${process.env.OPENCLAW_VERSION ?? "n/a"} fork=${process.env.OPENCLAW_FORK_SHA ?? "n/a"} node=${process.version} — namespace=${NAMESPACE} gatewayChart=${GATEWAY_CHART} chartFingerprint=${chartFingerprint.slice(0, 12)} chartDriftPolicy=release-gated valuesFile=${GATEWAY_VALUES_FILE}`,
@@ -2935,7 +2910,8 @@ export async function main(product: ControllerProduct): Promise<void> {
     userAdmission: product.userAdmission,
     isolatedGateways: product.isolatedGateways,
     sharedGatewayMoves: sharedGateways.moves,
-    db,
+    readSizingKey: userDocumentsSizingKeyReader(documents),
+    suspendSignIn: (uid) => userLifecycle?.suspension.suspendSignIn(uid) ?? Promise.resolve(),
     deps,
     helm: deps.helm,
     fleetControllerPrivateKey,
@@ -2948,7 +2924,7 @@ export async function main(product: ControllerProduct): Promise<void> {
     userDirectory,
   });
   stoppers.push(startSharedGatewayLoop({ store: deps.store, log, automation: sharedGateways.startLoop() }));
-  if (product.startProjection) stoppers.push(product.startProjection({ db, store: deps.store, log }));
+  if (product.startProjection) stoppers.push(product.startProjection({ store: deps.store, log }));
   const shutdown = createControllerShutdown(stoppers, log);
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
@@ -3077,21 +3053,20 @@ function migrationProjectCheckoutScope(
 
 // eslint-disable-next-line complexity -- Mirrors the octogee-api fleet broker snapshot shape.
 export async function readMigrationUserSnapshot(
-  db: Firestore,
+  documents: UserDocuments,
   store: Pick<PlatformStateStore, "secrets" | "gateways" | "users" | "workspaces">,
   uid: string,
   toGatewayId?: string,
 ): Promise<FleetBrokerUserSnapshot | null> {
-  const [userRecord, userSnap] = await Promise.all([store.users.records.get(uid), db.collection("users").doc(uid).get()]);
-  const data = userSnap.data() as Record<string, unknown> | undefined;
-  if (userRecord === null || !userSnap.exists || !data) return null;
+  const [userRecord, data] = await Promise.all([store.users.records.get(uid), documents.account(uid)]);
+  if (userRecord === null || data === undefined) return null;
   const slug = userRecord.slug;
   if (!slug) return null;
-  const [workspaceProjects, defaultAgentSecret, agentSnap, sysConfig, targetGateway, projectAgents] = await Promise.all([
+  const [workspaceProjects, defaultAgentSecret, agentData, sysConfig, targetGateway, projectAgents] = await Promise.all([
     store.workspaces.projects.list(slug),
     store.secrets.get(uid, "coachMattermost"),
-    db.collection("agents").doc(uid).get(),
-    db.collection("users").doc(uid).collection("system").doc("config").get(),
+    documents.agent(uid),
+    documents.systemConfig(uid),
     toGatewayId ? store.gateways.roots.get(toGatewayId) : Promise.resolve(null),
     collectStoredProjectAgentStates(store, uid, slug),
   ]);
@@ -3106,16 +3081,13 @@ export async function readMigrationUserSnapshot(
     ? collectMigrationProjects(workspaceProjects)
     : [];
   const defaultAgentCredential = defaultAgentSecret !== null && defaultAgentSecret.kind === "coach-mattermost" ? defaultAgentSecret : null;
-  const agentData = agentSnap.data() as Record<string, unknown> | undefined;
   const name = typeof agentData?.name === "string" ? agentData.name : "";
   const emoji = typeof agentData?.avatarEmoji === "string" ? agentData.avatarEmoji : "";
   const status = userRecord.openclaw.status;
   // byotActive + the system/config byot subdoc must ride along so the migration target's
   // mount re-assert (reassertByot) sees the user's real BYOT state — without it a
   // non-anthropic BYOK user's models.json is not re-written on the new pod.
-  const systemConfig = byotSystemConfigFromDoc(
-    sysConfig.data() as Record<string, unknown> | undefined,
-  );
+  const systemConfig = byotSystemConfigFromDoc(sysConfig);
   const entitlements = userEntitlements();
   const planInputs = entitlements.pickInputs(data);
   return {
@@ -3150,7 +3122,7 @@ export async function readMigrationUserSnapshot(
 
 // eslint-disable-next-line max-lines-per-function -- Controller dependency assembly is intentionally centralized.
 async function buildHandlers(
-  db: Firestore,
+  documents: UserDocuments,
   logFn: (msg: string) => void,
   helm: HelmRunner,
   kubeOps: KubeOps,
@@ -3178,7 +3150,7 @@ async function buildHandlers(
     );
   }
   const stateDeps: FleetStateDeps = { store, log: logFn };
-  const cutoverDeps: CutoverDeps = { ...stateDeps, readSizingKey: firestoreSizingKeyReader(db) };
+  const cutoverDeps: CutoverDeps = { ...stateDeps, readSizingKey: userDocumentsSizingKeyReader(documents) };
 
   const addGateway = createAddGatewayHandler({
     helm,
@@ -3272,7 +3244,7 @@ async function buildHandlers(
       if (!slug || !currentGatewayId) return null;
       return { slug, currentGatewayId };
     },
-    readUserSnapshot: (uid, toGatewayId) => readMigrationUserSnapshot(db, store, uid, toGatewayId),
+    readUserSnapshot: (uid, toGatewayId) => readMigrationUserSnapshot(documents, store, uid, toGatewayId),
     readPrivateProjectAgentWorkspace: async (gatewayId, slug) => readPrivateProjectAgentWorkspace({
       baseUrl: await resolveGatewayFleetUrl(store, gatewayId, { allowUnready: true }),
       gatewayId, privateKey, privateProjectCoachSlug: slug, timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS,
@@ -3555,7 +3527,7 @@ async function buildHandlers(
   });
 
   const { deprovisionUser, suspendUser, eraseUser } = buildUserRemovalHandlers({
-    db, store, logFn, kubeOps, privateKey, deleteHostingSites, userLifecycle, accounts,
+    documents, store, logFn, kubeOps, privateKey, deleteHostingSites, userLifecycle, accounts,
   });
 
   const restartGateway = createRestartGatewayHandler({
@@ -3683,29 +3655,29 @@ async function deletionGateway(
 }
 
 export async function ensureAnonymousDeletionArchive(
-  db: Firestore,
+  documents: Pick<UserDocuments, "account">,
   store: PlatformStateStore,
   deletionId: string,
-  productFields: (user: Record<string, unknown> | undefined) => Record<string, unknown>,
+  product: Pick<ProductUserLifecycle, "archive"> | null,
 ): Promise<string> {
   const job = await store.jobs.deletions.get(deletionId);
   if (job === null) throw new Error(`deletion job missing: ${deletionId}`);
   if (job.archiveId) return job.archiveId;
   if (job.uid === undefined) throw new Error(`deletion job ${deletionId} has no uid`);
-  const [userSnap, rollupSnap, gateway] = await Promise.all([
-    db.collection("users").doc(job.uid).get(),
-    db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(job.uid).get(),
+  const uid = job.uid;
+  const [account, gateway] = await Promise.all([
+    documents.account(uid),
     deletionGateway(store, job.currentGatewayId),
   ]);
-  const user = userSnap.data() as Record<string, unknown> | undefined;
+  const productArchive = product === null ? { fields: {}, usageRollup: {} } : await product.archive(uid, account);
   const { archivedAt, ...record } = buildAnonymousOperationalArchive({
     archivedAt: Date.now(),
-    createdAt: timestampMillis(user?.createdAt),
+    createdAt: timestampMillis(account?.createdAt),
     deletionRequestedAt: job.requestedAt,
     environment: deletionEnvironment(),
-    productFields: productFields(user),
+    productFields: productArchive.fields,
     gatewayClass: deletionGatewayClass(gateway),
-    rollup: (rollupSnap.data() ?? {}) as Record<string, unknown>,
+    rollup: productArchive.usageRollup,
   });
   return store.transaction({ label: "erase-customer.archive" }, async (tx) => {
     const current = await tx.jobs.deletions.get(deletionId);
@@ -3755,7 +3727,7 @@ export function buildUserRemovalHandlers(removal: UserRemovalOptions) {
 }
 
 export interface UserRemovalOptions {
-  db: Firestore;
+  documents: UserDocuments;
   store: PlatformStateStore;
   logFn: (message: string) => void;
   kubeOps: Pick<KubeOps, "readAvailableReplicas" | "readGatewayPodDiagnostics">;
@@ -3765,8 +3737,19 @@ export interface UserRemovalOptions {
   accounts: UserAccountReader;
 }
 
-function buildEraseUserHandler({ db, store, logFn, kubeOps, privateKey, deleteHostingSites, userLifecycle }: UserRemovalOptions) {
-  const cloudCleanup = buildUserCloudCleanupDeps(db, store, logFn, deleteHostingSites, userLifecycle);
+function userDataScope(cleanup: UserCleanupContext, currentOperationId: string): UserDataScope {
+  return {
+    uid: cleanup.uid,
+    slug: cleanup.slug,
+    email: cleanup.email,
+    chatArtifactIds: cleanup.chatArtifactIds,
+    agentImportIds: cleanup.agentImportIds,
+    currentOperationId,
+  };
+}
+
+function buildEraseUserHandler({ documents, store, logFn, kubeOps, privateKey, deleteHostingSites, userLifecycle }: UserRemovalOptions) {
+  const cloudCleanup = buildUserCloudCleanupDeps(store, logFn, deleteHostingSites, userLifecycle);
   const clusterAbsent = async (gatewayId: string) => {
     if (!await retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(gatewayId))) return false;
     const pvc = await spawnKubectl(["-n", NAMESPACE, "get", `pvc/octogee-gateway-${gatewayId}-data`, "--ignore-not-found=true", "-o", "name"]);
@@ -3779,11 +3762,15 @@ function buildEraseUserHandler({ db, store, logFn, kubeOps, privateKey, deleteHo
     sharedGatewayRetired: gatewayId => isRetiredSharedGateway(store, gatewayId, clusterAbsent),
     runtimeAbsent: async (gatewayId, runtime) => runtime === "cluster" ? clusterAbsent(gatewayId) :
       !await createGatewayComputeClient(store, logFn).findByLabels({ "octogee-gateway-id": gatewayId.toLowerCase(), "octogee-environment": VM_ENVIRONMENT }),
-    ownerHomeAbsent: async uid => {
-      const instances = await createGatewayComputeClient(store, logFn).list({ labels: { "octogee-owner-uid": uid.toLowerCase(), "octogee-environment": VM_ENVIRONMENT } });
-      const homes = await createUserHomeServices(store, logFn).provider.remainingOwnerHomes(uid);
-      return instances.length === 0 && homes.length === 0;
-    },
+    ...(GATEWAY_VM_SPEC
+      ? {
+          ownerHomeAbsent: async (uid: string) => {
+            const instances = await createGatewayComputeClient(store, logFn).list({ labels: { "octogee-owner-uid": uid.toLowerCase(), "octogee-environment": VM_ENVIRONMENT } });
+            const homes = await createUserHomeServices(store, logFn).provider.remainingOwnerHomes(uid);
+            return instances.length === 0 && homes.length === 0;
+          },
+        }
+      : {}),
     eraseVm: cloudCleanup.deleteVm,
     readSharedSource: async gatewayId => {
       const gateway = await readDesiredRoot(store, gatewayId) as DurableGateway | null;
@@ -3818,7 +3805,7 @@ function buildEraseUserHandler({ db, store, logFn, kubeOps, privateKey, deleteHo
       };
     },
     ensureAnonymousArchive: (deletionId) =>
-      ensureAnonymousDeletionArchive(db, store, deletionId, userLifecycle?.archiveFields ?? (() => ({}))),
+      ensureAnonymousDeletionArchive(documents, store, deletionId, userLifecycle),
     retainProductVerificationContext: (deletionId, archiveId) =>
       retainProductVerificationContext(store, deletionId, archiveId, userLifecycle?.verificationContext ?? (() => null)),
     ensureOwnedGatewayRetired: (cleanup, deletionId) =>
@@ -3829,41 +3816,16 @@ function buildEraseUserHandler({ db, store, logFn, kubeOps, privateKey, deleteHo
         now: Date.now(),
         preserveRetirementProof: proof => preserveUserGatewayRetirement(store, cleanup.uid, deletionId, proof),
       }),
-    findUndrainedArtifactIds: async (artifactIds) => {
-      const snapshots = await Promise.all(
-        artifactIds.map((artifactId) => db.collection("chatArtifactJobs").doc(artifactId).get()),
-      );
-      const now = Date.now();
-      return snapshots.flatMap((snapshot, index) => {
-        if (!snapshot.exists) return [];
-        const data = snapshot.data() as Record<string, unknown>;
-        if (!data.lease || typeof data.lease !== "object") return [];
-        const expiresAt = (data.lease as Record<string, unknown>).expiresAt;
-        if (typeof expiresAt !== "string" || !Number.isFinite(Date.parse(expiresAt))) {
-          throw new Error(`chat artifact lease is malformed: ${snapshot.ref.path}`);
-        }
-        return Date.parse(expiresAt) + 60_000 > now ? [artifactIds[index]] : [];
-      });
-    },
+    findUndrainedArtifactIds: async (artifactIds) =>
+      userLifecycle === null ? [] : userLifecycle.data.undrainedArtifactIds(artifactIds),
     eraseAgentStores,
     cloudErase: async (cleanup, currentOperationId) => {
       await assertNoUserAgentStores(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "account-deletion verification requires the PostgreSQL agent-store administration URL"), cleanup);
       return nukeUserCloudSide({ ...cleanup, currentOperationId }, cloudCleanup);
     },
     verifyErasure: async (cleanup, currentOperationId) => {
-      const remaining = await verifyUserFirestoreErasure(
-        { store, db, collections: userErasureCollections(userLifecycle) },
-        cleanup.uid,
-        cleanup.slug,
-        cleanup.email,
-        currentOperationId,
-      );
-      remaining.push(...await cloudCleanup.verifyStorageErasure(
-        cleanup.uid,
-        cleanup.slug,
-        cleanup.chatArtifactIds,
-        cleanup.agentImportIds,
-      ));
+      const remaining = await remainingUserRecords(store, userLifecycle?.data, userDataScope(cleanup, currentOperationId));
+      remaining.push(...await cloudCleanup.remainingUserStorage(cleanup.uid, cleanup.slug));
       for (const userId of [
         cleanup.mmUserId,
         cleanup.mmCoachUserId,
@@ -3872,13 +3834,6 @@ function buildEraseUserHandler({ db, store, logFn, kubeOps, privateKey, deleteHo
         if (userId && await cloudCleanup.channels.userExists(userId)) {
           remaining.push(`mattermost/users/${userId}`);
         }
-      }
-      try {
-        await getAuth().getUser(cleanup.uid);
-        remaining.push(`firebaseAuth/${cleanup.uid}`);
-      } catch (err) {
-        const code = (err as { code?: string } | null | undefined)?.code;
-        if (code !== "auth/user-not-found") throw err;
       }
       return remaining;
     },
@@ -3893,10 +3848,13 @@ function buildEraseUserHandler({ db, store, logFn, kubeOps, privateKey, deleteHo
   });
 }
 
-function buildSuspendUserHandler({ db, store, privateKey, logFn, kubeOps, userLifecycle, accounts }: UserRemovalOptions) {
+function buildSuspendUserHandler({ store, privateKey, logFn, kubeOps, userLifecycle, accounts }: UserRemovalOptions) {
   const decryptConnectorSecret = createConnectorSecretDecryptor();
+  const signIn = buildUserSignInHosts(logFn);
   return createSuspendUserHandler({
     assertRestoreNotInProgress: (uid) => assertUserRestoreNotInProgress(store, uid),
+    blockChatSignIn: (mmUserId) => signIn.channels.blockSignIn(mmUserId),
+    blockGitSignIn: (workspaceSlug) => signIn.git.blockSignIn(workspaceSlug),
     loadDeletionJob: async (deletionId) => {
       const job = await store.jobs.deletions.get(deletionId);
       if (job === null) return null;
@@ -3908,15 +3866,13 @@ function buildSuspendUserHandler({ db, store, privateKey, logFn, kubeOps, userLi
         cleanupContext: (job.cleanupContext as UserCleanupContext | undefined) ?? null,
       };
     },
-    loadCleanupContext: (uid) => loadUserCleanupContext({ store, accounts, db }, uid),
+    loadCleanupContext: (uid) => loadUserCleanupContext({ store, accounts, product: userLifecycle }, uid),
     persistCleanupContext: (deletionId, cleanupContext) =>
       store.jobs.deletions.patch(deletionId, { cleanupContext: cleanupContext as unknown as OpaqueMap, status: "suspending", updatedAt: Date.now() }),
-    suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
     cancelUserMigrations: (uid, deletionId) =>
       cancelUserMigrationsForSuspension(store, uid, deletionId, Date.now()),
-    deactivateUserVisibility: (uid) => deactivateUserVisibility(store, db, uid),
-    invalidatePendingCredentialFlows: (uid) => invalidatePendingCredentialFlows(db, uid),
-    unmountFromGateway: createUserDeletionUnmount(db, store, privateKey, logFn, kubeOps),
+    deactivateUserVisibility: (uid) => deactivateUserVisibility(store, uid),
+    unmountFromGateway: createUserDeletionUnmount(store, privateKey, logFn, kubeOps),
     releasePlacement: (uid, gatewayId) => releaseUserPlacement(store, uid, gatewayId),
     revokeConnectorGrants: (uid) =>
       revokeAllConnectorGrantsForUser(uid, CONNECTOR_OAUTH_REVOCATION_TARGETS, {
@@ -3953,7 +3909,6 @@ function buildSuspendUserHandler({ db, store, privateKey, logFn, kubeOps, userLi
 }
 
 function createUserDeletionUnmount(
-  db: Firestore,
   store: PlatformStateStore,
   privateKey: string,
   logFn: (msg: string) => void,
@@ -4002,11 +3957,11 @@ function requireEnv(name: string, why: string): string {
   return value;
 }
 
-function buildDeprovisionUserHandler({ db, store, logFn, kubeOps, privateKey, deleteHostingSites, userLifecycle, accounts }: UserRemovalOptions) {
+function buildDeprovisionUserHandler({ store, logFn, kubeOps, privateKey, deleteHostingSites, userLifecycle, accounts }: UserRemovalOptions) {
   return createDeprovisionUserHandler({
-    loadCleanupContext: (uid) => loadUserCleanupContext({ store, accounts, db }, uid),
-    unmountFromGateway: createUserDeletionUnmount(db, store, privateKey, logFn, kubeOps),
-    cloudCleanup: buildUserCloudCleanupDeps(db, store, logFn, deleteHostingSites, userLifecycle),
+    loadCleanupContext: (uid) => loadUserCleanupContext({ store, accounts, product: userLifecycle }, uid),
+    unmountFromGateway: createUserDeletionUnmount(store, privateKey, logFn, kubeOps),
+    cloudCleanup: buildUserCloudCleanupDeps(store, logFn, deleteHostingSites, userLifecycle),
     now: () => Date.now(),
     log: logFn,
   });
@@ -4030,8 +3985,8 @@ function createUserHomeServices(store: PlatformStateStore, log: (message: string
   };
 }
 
-function buildUserSignInHosts(log: (message: string) => void): UserSignInHosts {
-  const signInEnv = (name: string) => requireEnv(name, "issuing one-time passwords requires it");
+function buildUserSignInHosts(log: (message: string) => void) {
+  const signInEnv = (name: string) => requireEnv(name, "managing user sign-in to chat and git requires it");
   const gitApiToken = signInEnv("GIT_API_TOKEN");
   return {
     channels: createMattermostChannelHost({
@@ -4043,13 +3998,15 @@ function buildUserSignInHosts(log: (message: string) => void): UserSignInHosts {
   };
 }
 
-function buildUserCloudCleanupDeps(
-  db: Firestore,
+export function buildUserCloudCleanupDeps(
   store: PlatformStateStore,
   logFn: (msg: string) => void,
   deleteHostingSites: HostingCleanup | undefined,
   userLifecycle: ProductUserLifecycle | null,
-) {
+): NukeCloudDeps & {
+  channels: Pick<ManagedChannelHost, "erase" | "userExists">;
+  remainingUserStorage: (uid: string, slug: string) => Promise<string[]>;
+} {
   const cleanupEnv = (name: string) =>
     requireEnv(name, "user erasure cloud cleanup requires it");
   const gitApiUrl = cleanupEnv("GIT_API_URL");
@@ -4065,35 +4022,28 @@ function buildUserCloudCleanupDeps(
     log: logFn,
   });
   const s3 = createS3UserBlobErasure();
+  const productData = userLifecycle?.data;
   return {
     git,
     channels,
-    nukeUserFirestore: (
-      uid: string,
-      slug: string,
-      email: string | null,
-      currentOperationId: string,
-    ) => eraseUserFirestore(
-      { store, db, collections: userErasureCollections(userLifecycle) },
-      uid,
-      slug,
-      email,
-      currentOperationId,
-    ),
-    deleteUserStorage: async (uid: string, slug: string, chatArtifactIds: string[], agentImportIds: string[]) => {
-      await deleteUserStorageObjects(getStorage().bucket(), uid, slug, chatArtifactIds, agentImportIds);
-      await s3?.erase(uid, slug);
+    deleteUserStorage: async (scope) => {
+      if (s3 === undefined && productData === undefined) {
+        throw new Error(`user blob erasure is not available for BLOB_STORE_BACKEND=${process.env.BLOB_STORE_BACKEND ?? "(unset)"}`);
+      }
+      await s3?.erase(scope.uid, scope.slug);
+      await productData?.eraseStorage(scope);
     },
-    verifyStorageErasure: async (uid: string, slug: string, chatArtifactIds: string[], agentImportIds: string[]) => {
-      const remaining = await verifyUserStorageErasure(getStorage().bucket(), uid, slug, chatArtifactIds, agentImportIds);
-      if (s3) remaining.push(...await s3.remaining(uid, slug));
-      return remaining;
-    },
+    remainingUserStorage: async (uid, slug) => s3 === undefined ? [] : s3.remaining(uid, slug),
+    eraseUserRecords: (scope) => eraseUserRecords(store, productData, scope),
     deleteCredentialSecrets: async (secretNames: string[]) => {
       for (const secretName of secretNames) await deleteSecret(secretName);
     },
-    deleteAuthUser: (uid: string) => deleteAuthUserTolerantOfMissing(uid, getAuth()),
-    deleteVmHome: (_uid: string, slug: string) => deleteVmHomeObjects(getStorage().bucket(), slug),
+    ...(productData
+      ? {
+          deleteSignIn: (uid: string) => productData.deleteSignIn(uid),
+          deleteVmHome: (slug: string) => productData.eraseVmHome(slug),
+        }
+      : {}),
     ...(GATEWAY_VM_SPEC
       ? {
           deleteVm: async (uid: string) => {

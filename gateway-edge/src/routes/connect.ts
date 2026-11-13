@@ -1,5 +1,6 @@
 import * as crypto from "crypto";
 import { Router, Request, Response, NextFunction } from "express";
+import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import {
   GOOGLE_CAPABILITY_SCOPES,
   googleCapabilitiesFromScopes,
@@ -18,7 +19,8 @@ import {
 } from "@octogee/shared/types/platform-config";
 import { accountActiveInStore } from "../lib/user-platform-state.js";
 import { revokeProviderGrant } from "@octogee/core/connector-revocation";
-import { requireAuth } from "../middleware/auth.js";
+import { requireActiveAccount, requireAuthenticatedUid } from "../middleware/auth.js";
+import { DEFAULT_RATE_LIMIT_OPTIONS } from "../middleware/security.js";
 import { logger } from "../middleware/logging.js";
 import { db, FieldValue, Timestamp } from "../lib/db.js";
 import { platformStateStore } from "../lib/platform-state.js";
@@ -49,7 +51,32 @@ import {
 import { createGoogleGrantRoutes } from "./google-grants.js";
 
 const router = Router();
-router.use("/google/grants", requireAuth, createGoogleGrantRoutes(db));
+const connectorAuthenticationLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 1200,
+  legacyHeaders: false,
+  keyGenerator: req => ipKeyGenerator(req.ip ?? req.socket.remoteAddress ?? "unknown"),
+  skipSuccessfulRequests: true,
+  requestWasSuccessful: req => Boolean(req.uid),
+  message: { error: "Too many connector authentication attempts, please try again later." },
+});
+const callbackVerificationLimit = rateLimit({
+  ...DEFAULT_RATE_LIMIT_OPTIONS,
+  windowMs: 60_000,
+  limit: 1200,
+  keyGenerator: req => ipKeyGenerator(req.ip ?? req.socket.remoteAddress ?? "unknown"),
+  message: { error: "Too many connector callbacks, please try again later." },
+});
+function connectorRateLimit(limit: number) {
+  return rateLimit({
+    ...DEFAULT_RATE_LIMIT_OPTIONS,
+    windowMs: 60_000,
+    limit,
+    keyGenerator: req => req.uid!,
+    message: { error: "Too many connector requests, please try again later." },
+  });
+}
+router.use("/google/grants", connectorAuthenticationLimit, requireAuthenticatedUid, connectorRateLimit(120), requireActiveAccount, createGoogleGrantRoutes(db));
 const APP_URL = process.env.APP_URL || "https://octogee.com";
 const PRODUCTIVITY_APPROVALS_COLLECTION = "productivityApprovals";
 
@@ -396,7 +423,7 @@ async function cleanupInactiveConnectorCallback(
 
 router.post(
   "/disconnect",
-  requireAuth,
+  connectorAuthenticationLimit, requireAuthenticatedUid, connectorRateLimit(30), requireActiveAccount,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const connector = String((req.body ?? {}).connector ?? "");
@@ -439,7 +466,7 @@ router.post(
 
 router.get(
   "/availability",
-  requireAuth,
+  connectorAuthenticationLimit, requireAuthenticatedUid, connectorRateLimit(120), requireActiveAccount,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const config = await readPlatformConnectConfig();
@@ -560,7 +587,7 @@ async function verifyTokenConnector(
 
 router.post(
   "/:connector/verify",
-  requireAuth,
+  connectorAuthenticationLimit, requireAuthenticatedUid, connectorRateLimit(30), requireActiveAccount,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const def = getConnector(req.params.connector as string);
@@ -593,7 +620,7 @@ function googlePickerEnv(): { clientId: string; apiKey: string; appId: string } 
 
 router.get(
   "/google/picker-token",
-  requireAuth,
+  connectorAuthenticationLimit, requireAuthenticatedUid, connectorRateLimit(60), requireActiveAccount,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const picker = googlePickerEnv();
@@ -642,7 +669,7 @@ const GOOGLE_PICKED_FILES_MAX = 500;
 
 router.post(
   "/google/picked-files",
-  requireAuth,
+  connectorAuthenticationLimit, requireAuthenticatedUid, connectorRateLimit(60), requireActiveAccount,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { add, remove } = (req.body ?? {}) as { add?: unknown; remove?: unknown };
@@ -691,7 +718,7 @@ router.post(
 
 router.get(
   "/:connector/auth-url",
-  requireAuth,
+  connectorAuthenticationLimit, requireAuthenticatedUid, connectorRateLimit(60), requireActiveAccount,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const def = getConnector(req.params.connector as string);
@@ -848,21 +875,34 @@ async function redirectOAuthCallbackFailure(
   );
 }
 
-router.get("/:connector/callback", async (req: Request, res: Response) => {
+type OAuthCallback = { def: ConnectorDef; payload: ConnectStatePayload };
+
+function validateOAuthCallback(req: Request, res: Response<unknown, OAuthCallback>, next: NextFunction): void {
   const def = getConnector(req.params.connector as string);
   if (!def?.oauth) {
     res.status(404).json({ error: "Unknown connector" });
     return;
   }
-  const { code, state, error: authError } = req.query as Record<string, string | undefined>;
-
-  let payload: ConnectStatePayload;
-  let flow: { requestedScopes: string[] | null; codeVerifier: string | null };
   try {
-    payload = verifyConnectState(String(state ?? ""));
+    const payload = verifyConnectState(String(req.query.state ?? ""));
     if (payload.connector !== def.meta.id) {
       throw new Error(`state minted for ${payload.connector}, presented to ${def.meta.id}`);
     }
+    req.uid = payload.uid;
+    Object.assign(res.locals, { def, payload });
+  } catch (err) {
+    logger.warn(`[connect] ${def.meta.id} callback rejected: ${(err as Error).message}`);
+    res.redirect(`${APP_URL}/dashboard?connect_error=invalid_state`);
+    return;
+  }
+  next();
+}
+
+router.get("/:connector/callback", callbackVerificationLimit, validateOAuthCallback, connectorRateLimit(60), async (req: Request, res: Response<unknown, OAuthCallback>) => {
+  const { def, payload } = res.locals;
+  const { code, error: authError } = req.query as Record<string, string | undefined>;
+  let flow: Awaited<ReturnType<typeof consumeFlowNonce>>;
+  try {
     flow = await consumeFlowNonce(payload, def.meta.id);
   } catch (err) {
     logger.warn(`[connect] ${def.meta.id} callback rejected: ${(err as Error).message}`);
@@ -912,7 +952,7 @@ router.get("/:connector/callback", async (req: Request, res: Response) => {
 
 router.post(
   "/:connector/pat",
-  requireAuth,
+  connectorAuthenticationLimit, requireAuthenticatedUid, connectorRateLimit(30), requireActiveAccount,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const def = getConnector(req.params.connector as string);
@@ -951,7 +991,7 @@ router.post(
 
 router.post(
   "/:connector/fields",
-  requireAuth,
+  connectorAuthenticationLimit, requireAuthenticatedUid, connectorRateLimit(30), requireActiveAccount,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const def = fieldsConnectorDef(req.params.connector as string);
@@ -1000,16 +1040,16 @@ function connectorFieldsFromBody(
   def: FieldsConnectorDef,
   body: unknown,
 ): Record<string, string> | RouteError {
-  const fields: Record<string, string> = {};
+  const fields = new Map<string, string>();
   const input = fieldsBody(body);
   for (const field of def.meta.captureFields ?? []) {
-    const value = input[field.key];
+    const value = Object.hasOwn(input, field.key) ? input[field.key] : undefined;
     if (typeof value !== "string" || value.trim().length === 0) {
       return routeError(400, { error: `${field.label} is required` });
     }
-    fields[field.key] = value.trim();
+    fields.set(field.key, value.trim());
   }
-  return fields;
+  return Object.fromEntries(fields);
 }
 
 async function validateConnectorFields(
@@ -1026,11 +1066,11 @@ async function validateConnectorFields(
 }
 
 async function encryptConnectorFields(fields: Record<string, string>): Promise<Record<string, string>> {
-  const encryptedFields: Record<string, string> = {};
+  const encryptedFields = new Map<string, string>();
   for (const [key, value] of Object.entries(fields)) {
-    encryptedFields[key] = await encryptSecret(value);
+    encryptedFields.set(key, await encryptSecret(value));
   }
-  return encryptedFields;
+  return Object.fromEntries(encryptedFields);
 }
 
 async function storeFieldsConnector(
@@ -1057,7 +1097,7 @@ async function storeFieldsConnector(
 
 router.post(
   "/:connector/device/start",
-  requireAuth,
+  connectorAuthenticationLimit, requireAuthenticatedUid, connectorRateLimit(30), requireActiveAccount,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const def = getConnector(req.params.connector as string);
@@ -1116,7 +1156,7 @@ router.post(
 
 router.post(
   "/:connector/device/poll",
-  requireAuth,
+  connectorAuthenticationLimit, requireAuthenticatedUid, connectorRateLimit(120), requireActiveAccount,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const def = deviceConnectorDef(req.params.connector as string);

@@ -1,3 +1,4 @@
+import { authenticatedRequestLimit } from "../middleware/authenticated-request-limit.js";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { logger } from "../middleware/logging.js";
 import type { NativeAdminAccess, NativeAdminAccessOutcome } from "../lib/native-admin-access.js";
@@ -179,9 +180,7 @@ function isRejected(value: CdpCookie | RejectedCookie): value is RejectedCookie 
 export function createVmSessionsRouter(deps: VmSessionsDeps): Router {
   const log = deps.log ?? ((message, meta) => logger.info(message, meta));
   const router = Router({ mergeParams: true });
-  router.use(requireVmAccess(deps));
-
-  router.post("/sessions/import", async (req: VmRequest, res) => {
+  router.post("/sessions/import", authenticatedRequestLimit(60), requireVmAccess(deps), async (req: VmRequest, res) => {
     const body = record(req.body);
     if (!body || Object.keys(body).some((key) => key !== "domains" && key !== "cookies")) {
       res.status(400).json({ error: "invalid_payload" });

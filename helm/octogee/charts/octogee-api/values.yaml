@@ -86,6 +86,10 @@ secrets:
     secretName: mattermost-gateway
     secretKey: admin_user_id
     optional: false
+  - envName: AGENT_CONTROL_ROUTER_PUBLIC_KEY
+    secretName: agent-control-router
+    secretKey: public-key
+    optional: false
   - envName: GOOGLE_CLIENT_ID
     secretName: google-oauth
     secretKey: client_id

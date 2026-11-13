@@ -764,8 +764,8 @@ router.post(
   requireInternalServiceAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const b = (req.body || {}) as { flowId?: string; credential?: string };
-      if (!b.flowId || typeof b.credential !== "string") {
+      const b = (req.body ?? {}) as { flowId?: unknown; credential?: unknown };
+      if (typeof b.flowId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(b.flowId) || typeof b.credential !== "string") {
         res.status(400).json({ error: "flowId and credential required" });
         return;
       }

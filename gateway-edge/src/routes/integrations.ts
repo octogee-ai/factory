@@ -1,11 +1,12 @@
+import { authenticatedRequestLimit, authenticationFailureLimit } from "../middleware/authenticated-request-limit.js";
 import { Router, Request, Response, NextFunction } from "express";
-import { requireAuth } from "../middleware/auth.js";
+import { requireActiveAccount, requireAuthenticatedUid } from "../middleware/auth.js";
 import { db, FieldValue } from "../lib/db.js";
 import { encryptSecret } from "../lib/kms.js";
 
 const router = Router();
 
-router.post("/imap", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+router.post("/imap", authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(30), requireActiveAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
     const { email, imapHost, imapPort, smtpHost, smtpPort, username, password } = req.body;
@@ -30,7 +31,7 @@ router.post("/imap", requireAuth, async (req: Request, res: Response, next: Next
   } catch (e) { next(e); }
 });
 
-router.post("/twilio", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+router.post("/twilio", authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(30), requireActiveAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
     const { accountSid, authToken, fromNumber } = req.body;
@@ -53,7 +54,7 @@ router.post("/twilio", requireAuth, async (req: Request, res: Response, next: Ne
   } catch (e) { next(e); }
 });
 
-router.post("/disconnect", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+router.post("/disconnect", authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(30), requireActiveAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
     const { service } = req.body;

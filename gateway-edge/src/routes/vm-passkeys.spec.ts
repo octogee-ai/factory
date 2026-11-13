@@ -45,6 +45,16 @@ describe("owner-only VM passkey link", () => {
     expect((await request(harness({ available: false }).app).post("/api/g/b-user/computer/passkeys/ticket").send({})).status).toBe(404);
   });
 
+  it("bounds passkey ticket broker calls per authenticated account", async () => {
+    const { app } = harness();
+    const client = request(app);
+    const path = "/api/g/b-user/computer/passkeys/ticket";
+    for (let attempt = 0; attempt < 60; attempt++) await client.post(path).expect(200);
+    const limited = await client.post(path).expect(429);
+    expect(limited.body).toEqual({ error: "Too many requests, please try again later." });
+    expect(resolveAccess).toHaveBeenCalledTimes(60);
+  });
+
   it("links the desktop over a ticketed, origin-checked upgrade, relays passkey requests, and drops it when authorization ends", async () => {
     const { app, passkeys, host } = harness();
     const upgrades = new WsUpgradeRouter();

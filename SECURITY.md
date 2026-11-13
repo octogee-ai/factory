@@ -42,7 +42,12 @@ and maintainer review before merge. Dismiss alerts only with a recorded reason.
 Monitor failed scheduled scans as well as alert notifications.
 
 CodeQL scans supported code and GitHub Actions; secret scanning and push
-protection detect credential exposure. Dependabot checks dependencies and pinned
-Actions weekly, while pull request dependency review rejects newly introduced
-moderate, high, or critical known vulnerabilities. These checks complement review;
+protection detect credential exposure. Dependabot checks maintained npm packages and pinned
+Actions weekly. Pull request dependency review rejects newly introduced
+moderate, high, or critical known vulnerabilities. OSV audits the maintained
+npm lockfiles weekly and reports dependency findings on relevant pull requests.
+Trivy reports vulnerabilities by published GHCR digest on both architectures
+and rescans the latest published main build weekly. It also checks Dockerfiles,
+Terraform, and rendered Helm manifests. zizmor checks GitHub Actions
+configuration, and OpenSSF Scorecard runs weekly on the default branch. These checks complement review;
 a passing scan is not a guarantee that the code is secure.

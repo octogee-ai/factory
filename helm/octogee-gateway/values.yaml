@@ -72,6 +72,11 @@ replicas: 1
 # surge for managed releases so unpublished files transfer before source removal.
 rollStrategy: recreate
 
+# One gateway pod per node: "required" refuses to schedule a second gateway on a
+# node; "preferred" spreads gateways when nodes allow and otherwise shares one,
+# for a single-node local cluster.
+podAntiAffinity: required
+
 nodeSelector: {}
 computeClass: ""
 # Sandbox runtime for the gateway pod. Empty runs it on the node's default runtime,

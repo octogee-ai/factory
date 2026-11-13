@@ -787,12 +787,9 @@ function catalogModelMapPlan(value: unknown, ensureModelRef?: string): {
   changed: boolean;
 } {
   const current = isRecord(value) ? value : {};
-  const expected = Object.fromEntries(
-    Object.keys(current)
-      .filter((modelRef) => catalogEntryForModelRef(modelRef) !== null)
-      .map((modelRef) => [modelRef, canonicalUserModelDefinition(modelRef)]),
-  );
-  if (ensureModelRef) expected[ensureModelRef] = canonicalUserModelDefinition(ensureModelRef);
+  const modelRefs = new Set(Object.keys(current).filter((modelRef) => catalogEntryForModelRef(modelRef) !== null));
+  if (ensureModelRef) modelRefs.add(ensureModelRef);
+  const expected = Object.fromEntries([...modelRefs].map((modelRef) => [modelRef, canonicalUserModelDefinition(modelRef)]));
   const removedRefs = Object.keys(current).filter(
     (modelRef) => catalogEntryForModelRef(modelRef) === null,
   );

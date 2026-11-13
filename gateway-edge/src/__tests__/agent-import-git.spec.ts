@@ -76,16 +76,18 @@ function reconcileOpenClawWorkspace(
   const required = ["AGENTS.md", "TOOLS.md"];
   const optional = state.setupCompletedAt ? [] : ["IDENTITY.md", "USER.md"];
   const changed: string[] = [];
+  const seed = (filename: string, content: string) => {
+    try {
+      fs.writeFileSync(path.join(dir, filename), content, { flag: "wx" });
+      changed.push(filename);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  };
   for (const file of [...required, ...optional]) {
-    const filePath = path.join(dir, file);
-    if (fs.existsSync(filePath)) continue;
-    fs.writeFileSync(filePath, `# OpenClaw ${file}\n`);
-    changed.push(file);
+    seed(file, `# OpenClaw ${file}\n`);
   }
-  if (!fs.existsSync(statePath)) {
-    fs.writeFileSync(statePath, `${JSON.stringify({ version: 1, setupCompletedAt: "2026-07-20T00:00:00.000Z" })}\n`);
-    changed.push("openclaw-workspace-state.json");
-  }
+  seed("openclaw-workspace-state.json", `${JSON.stringify({ version: 1, setupCompletedAt: "2026-07-20T00:00:00.000Z" })}\n`);
   return changed;
 }
 
@@ -945,6 +947,26 @@ describe("scanAgentImportSecrets", () => {
         return { status: 1, stdout: "", stderr: "" };
       }),
     })).rejects.toMatchObject({ code: "secret_findings", findings: undefined });
+  });
+
+  it("rejects a scanner report that grows after its initial size check", async () => {
+    const source = repo("agent-import-scan-growing", { "MEMORY.md": "memory\n" });
+    const realFstat = fs.fstatSync;
+    const stat = vi.spyOn(fs, "fstatSync");
+    try {
+      await expect(scanAgentImportSecrets(source, {
+        run: vi.fn((_command, args) => {
+          const reportPath = args[args.indexOf("--report-path") + 1];
+          fs.writeFileSync(reportPath, "[]");
+          stat.mockImplementationOnce(((fd: number) => {
+            const initial = realFstat(fd);
+            fs.truncateSync(reportPath, (4 * 1024 * 1024) + 1);
+            return initial;
+          }) as typeof fs.fstatSync);
+          return { status: 1, stdout: "", stderr: "" };
+        }),
+      })).rejects.toMatchObject({ code: "secret_findings" });
+    } finally { stat.mockRestore(); }
   });
 
   it("fails closed when status one has no reported findings", async () => {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 const [vendoredDir, hostDir, inspectFile] = process.argv.slice(2);
@@ -34,8 +34,13 @@ function runtimeDigests(packageDir) {
   const digests = new Map();
   const add = (relative) => {
     const absolute = path.join(packageDir, relative);
-    if (!lstatSync(absolute).isFile()) throw new Error(`Codex runtime file is not regular: ${relative}`);
-    digests.set(relative, createHash("sha256").update(readFileSync(absolute)).digest("hex"));
+    const fd = openSync(absolute, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
+    try {
+      if (!fstatSync(fd).isFile()) throw new Error(`Codex runtime file is not regular: ${relative}`);
+      digests.set(relative, createHash("sha256").update(readFileSync(fd)).digest("hex"));
+    } finally {
+      closeSync(fd);
+    }
   };
   const walk = (relative) => {
     for (const entry of readdirSync(path.join(packageDir, relative), { withFileTypes: true })) {

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Router, type NextFunction, type Request, type Response } from "express";
+import { rateLimit } from "express-rate-limit";
 
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import type {
@@ -11,6 +12,7 @@ import type {
   AgentImportWorkspacePolicy,
 } from "@octogee/shared/types/agent-import";
 import type { AgentImportService } from "../lib/agent-import-service.js";
+import { DEFAULT_RATE_LIMIT_OPTIONS } from "../middleware/security.js";
 
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const IMPORT_ID_RE = /^[A-Za-z0-9_-]{1,160}$/;
@@ -242,8 +244,20 @@ function localArchive(req: Request): Promise<StagedLocalArchive> {
 export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
   const router = Router({ mergeParams: true });
   let localImportActive = false;
+  const importRateLimit = (limit: number) => rateLimit({
+    ...DEFAULT_RATE_LIMIT_OPTIONS,
+    windowMs: 60_000,
+    limit,
+    keyGenerator: req => req.uid!,
+    handler: (req, res) => {
+      req.resume();
+      res.status(429).json({ error: "Too many agent import requests, please try again later." });
+    },
+  });
+  const previewLimit = importRateLimit(12);
+  const statusLimit = importRateLimit(120);
 
-  router.get("/sources/github", async (req, res, next) => {
+  router.get("/sources/github", importRateLimit(60), async (req, res, next) => {
     try {
       const authorized = await authorize(req, res, deps, "source_listing");
       if (!authorized) return;
@@ -253,7 +267,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
     }
   });
 
-  router.post("/preview/github", async (req, res, next) => {
+  router.post("/preview/github", previewLimit, async (req, res, next) => {
     try {
       const resolved = await authorize(req, res, deps, "preview");
       if (!resolved) return;
@@ -281,7 +295,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
     }
   });
 
-  router.post("/preview/local", async (req, res, next) => {
+  router.post("/preview/local", previewLimit, async (req, res, next) => {
     let archive: StagedLocalArchive | null = null;
     let acquired = false;
     try {
@@ -311,7 +325,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
     }
   });
 
-  router.post("/:importId/apply", async (req, res, next) => {
+  router.post("/:importId/apply", importRateLimit(12), async (req, res, next) => {
     try {
       const authorized = await authorize(req, res, deps, "apply");
       if (!authorized) return;
@@ -333,7 +347,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
     }
   });
 
-  router.get("/latest", async (req, res, next) => {
+  router.get("/latest", statusLimit, async (req, res, next) => {
     try {
       const authorized = await authorize(req, res, deps, "status");
       if (!authorized) return;
@@ -343,7 +357,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
     }
   });
 
-  router.get("/:importId", async (req, res, next) => {
+  router.get("/:importId", statusLimit, async (req, res, next) => {
     try {
       const authorized = await authorize(req, res, deps, "status");
       if (!authorized) return;
@@ -355,7 +369,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
     }
   });
 
-  router.post("/:importId/rollback", async (req, res, next) => {
+  router.post("/:importId/rollback", importRateLimit(12), async (req, res, next) => {
     try {
       const authorized = await authorize(req, res, deps, "rollback");
       if (!authorized) return;
@@ -367,7 +381,7 @@ export function createAgentImportsRouter(deps: AgentImportsRouterDeps): Router {
     }
   });
 
-  router.post("/:importId/abandon", async (req, res, next) => {
+  router.post("/:importId/abandon", importRateLimit(12), async (req, res, next) => {
     try {
       const authorized = await authorize(req, res, deps, "abandon");
       if (!authorized) return;

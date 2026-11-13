@@ -86,15 +86,30 @@ spec:
               app: octogee-gateway
               gateway-class: shared
       {{- end }}
+      {{- $podAntiAffinity := .Values.podAntiAffinity | default "required" }}
+      {{- if not (has $podAntiAffinity (list "required" "preferred")) }}
+      {{- fail (printf "unsupported podAntiAffinity %q (expected required or preferred)" $podAntiAffinity) }}
+      {{- end }}
       affinity:
         podAntiAffinity:
+          {{- if eq $podAntiAffinity "required" }}
           requiredDuringSchedulingIgnoredDuringExecution:
             - labelSelector:
                 matchLabels:
                   app: octogee-gateway
               namespaceSelector: {}
               topologyKey: kubernetes.io/hostname
+          {{- end }}
           preferredDuringSchedulingIgnoredDuringExecution:
+            {{- if eq $podAntiAffinity "preferred" }}
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: octogee-gateway
+                namespaceSelector: {}
+                topologyKey: kubernetes.io/hostname
+            {{- end }}
             - weight: 100
               podAffinityTerm:
                 labelSelector:

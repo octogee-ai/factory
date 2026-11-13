@@ -9,7 +9,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("../middleware/auth.js", () => ({
-  requireAuth: (req: express.Request, res: express.Response, next: express.NextFunction) =>
+  requireActiveAccount: (_req: unknown, _res: unknown, next: () => void) => next(),
+  requireAuthenticatedUid: (req: express.Request, res: express.Response, next: express.NextFunction) =>
     h.requireAuth(req, res, next),
 }));
 
@@ -35,7 +36,7 @@ function app() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.requireAuth.mockImplementation((_req, _res, next) => next());
+  h.requireAuth.mockImplementation((req, _res, next) => { req.uid = "credential-owner"; next(); });
   h.saveModelCredentialKey.mockImplementation((_req, res) => res.status(201).json({ route: "save" }));
   h.deleteModelCredentialKey.mockImplementation((_req, res) => res.json({ route: "delete" }));
 });
@@ -54,5 +55,20 @@ describe("model credential route index", () => {
     await request(app()).get("/api/model-credentials/subscription/probe").expect(200, { route: "subscription" });
 
     expect(h.requireAuth).not.toHaveBeenCalled();
+  });
+
+  it("limits credential writes per account without blocking key deletion", async () => {
+    h.requireAuth.mockImplementation((req, _res, next) => {
+      req.uid = req.get("authorization") === "Bearer owner-a" ? "owner-a" : "owner-b";
+      next();
+    });
+    const client = request(app());
+    const save = (uid: string) => client.post("/api/model-credentials")
+      .set("authorization", `Bearer ${uid}`).send({ provider: "anthropic" });
+    for (let attempt = 0; attempt < 30; attempt++) await save("owner-a").expect(201);
+    const rejected = await save("owner-a").expect(429);
+    expect(rejected.body).toEqual({ error: "Too many requests, please try again later." });
+    await save("owner-b").expect(201);
+    await client.delete("/api/model-credentials").set("authorization", "Bearer owner-a").send({ provider: "anthropic" }).expect(200);
   });
 });

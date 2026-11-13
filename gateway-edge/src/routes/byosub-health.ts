@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
+import { authenticatedRequestLimit } from "../middleware/authenticated-request-limit.js";
 import * as fs from "fs";
 import * as path from "path";
 import {
@@ -55,6 +56,7 @@ export function createByosubHealthRouter(deps: ByosubHealthDeps): Router {
   const router = Router({ mergeParams: true });
   router.get(
     "/health",
+    authenticatedRequestLimit(120),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const pathGatewayId = requestedGatewayId(req);
@@ -72,7 +74,7 @@ export function createByosubHealthRouter(deps: ByosubHealthDeps): Router {
           res.status(422).json({ connected: false, status: "not_provisioned" });
           return;
         }
-        if (resolved.gatewayId !== pathGatewayId) {
+        if (resolved.gatewayId !== localGatewayId) {
           notOnThisPod(res);
           return;
         }

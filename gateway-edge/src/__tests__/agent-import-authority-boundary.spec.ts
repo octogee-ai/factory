@@ -17,7 +17,7 @@ describe("agent import sidecar authority boundary", () => {
     const importSource = source("src/lib/agent-import-source.ts");
     const dockerfile = source("Dockerfile");
 
-    expect(index).toMatch(/agentImportsLocality\.use\(requireAuthenticatedUid\)/);
+    expect(index).toMatch(/agentImportsLocality\.use\(authenticationFailureLimit, requireAuthenticatedUid\)/);
     expect(index).not.toMatch(/agentImportsLocality\.use\(requireAuth\)/);
     expect(`${runtime}\n${store}`).not.toMatch(/from ["']\.\/db\.js["']/);
     expect(`${runtime}\n${store}`).not.toMatch(/from ["']\.\/firestoreReads\.js["']/);

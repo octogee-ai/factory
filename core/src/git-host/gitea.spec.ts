@@ -588,6 +588,44 @@ describe("createGiteaGitHost — managed Gitea admin operations", () => {
     });
   });
 
+  describe("blockSignIn", () => {
+    it("prohibits the ws-<slug> user from signing in with the admin token", async () => {
+      fetchMock.mockResolvedValue(res(200, {}));
+
+      await host.blockSignIn("alice");
+
+      expect(callsTo(fetchMock)).toEqual([
+        {
+          method: "PATCH",
+          url: `${BASE}/admin/users/ws-alice`,
+          body: { login_name: "ws-alice", source_id: 0, prohibit_login: true },
+        },
+      ]);
+      expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("token admin-tok");
+    });
+
+    it("treats a user Gitea no longer has as already unable to sign in", async () => {
+      const log = vi.fn();
+      const logged = createGiteaGitHost({
+        apiBaseUrl: BASE,
+        token: () => "admin-tok",
+        fetch: fetchMock as unknown as typeof fetch,
+        log,
+      });
+      fetchMock.mockResolvedValue(res(404, { message: "user does not exist" }));
+
+      await expect(logged.blockSignIn("ghost")).resolves.toBeUndefined();
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("ws-ghost"));
+    });
+
+    it("fails with the status when Gitea refuses", async () => {
+      fetchMock.mockResolvedValue(res(500, { message: "database is locked" }));
+
+      await expect(host.blockSignIn("alice")).rejects.toThrow("block-sign-in failed: 500 database is locked");
+    });
+  });
+
   describe("eraseOwner", () => {
     it("deletes every repo, then the owner org, then the ws-<slug> user with the admin token", async () => {
       fetchMock.mockResolvedValue(res(204));

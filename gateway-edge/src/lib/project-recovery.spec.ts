@@ -11,6 +11,7 @@ import { commitAndPushWorkspace, gitStatus, resolveProjectDir } from "./workspac
 import { divertWorktreeBinaries } from "./binary-diversion.js";
 import { createBrokeredProjectBlobHydrator, prepareUserProjectAssets } from "@octogee/core/project-blob-materialization";
 import { readProjectRestoreReady, writeProjectRestoreReady, withMaterializedProjectAssets } from "@octogee/core/project-asset-state";
+const linuxTest = it.skipIf(process.platform !== "linux");
 let root: string;
 afterEach(async()=>{vi.unstubAllGlobals();vi.unstubAllEnvs();if(root)await rm(root,{recursive:true,force:true});});
 function git(cwd: string,...args: string[]){return execFileSync("git",args,{cwd,encoding:"utf8",stdio:["ignore","pipe","pipe"]}).trim();}
@@ -18,7 +19,7 @@ async function readUser(slug: string) {
   return { uid: `uid-${slug}`, slug, gatewayId: "builder-one", status: "complete" as const, checkpointEpoch: 1,
     projects: [{ projectSlug: "demo", giteaRepoName: "demo" }] };
 }
-it("restores text and the matching immutable asset after losing the working set, including an older commit",async()=>{
+linuxTest("restores text and the matching immutable asset after losing the working set, including an older commit",async()=>{
   root=await mkdtemp(path.join(tmpdir(),"project-recovery-"));
   const users=path.join(root,"customers"),projects=path.join(users,"alice/projects"),dir=path.join(projects,"demo"),remote=path.join(root,"remote.git");
   await mkdir(dir,{recursive:true});
@@ -91,7 +92,7 @@ it("restores text and the matching immutable asset after losing the working set,
   expect(manifestRead).not.toHaveBeenCalled();
 });
 
-it("retains restoration and materialized receipts after a local asset upload and deletion",async()=>{
+linuxTest("retains restoration and materialized receipts after a local asset upload and deletion",async()=>{
   root=await mkdtemp(path.join(tmpdir(),"project-edit-ready-"));
   const dir=path.join(root,"demo"),remote=path.join(root,"remote.git");
   await mkdir(dir);
@@ -117,7 +118,7 @@ it("retains restoration and materialized receipts after a local asset upload and
   expect(await readProjectRestoreReady(dir,"alice","demo")).toBe(true);
 });
 
-it.each(["available", "unavailable", "replacement", "conflict", "deletion"])("keeps a normal remote project asset upload eligible for source flush when storage is %s",async storage=>{
+linuxTest.each(["available", "unavailable", "replacement", "conflict", "deletion"])("keeps a normal remote project asset upload eligible for source flush when storage is %s",async storage=>{
   root=await mkdtemp(path.join(tmpdir(),"project-remote-upload-flush-"));
   const users=path.join(root,"customers"),dir=path.join(users,"alice/projects/demo"),remote=path.join(root,"remote.git"),seed=path.join(root,"seed");
   await mkdir(seed);

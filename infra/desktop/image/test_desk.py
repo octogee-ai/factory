@@ -183,9 +183,9 @@ class DesktopEntryTest(unittest.TestCase):
             with patch.object(control.subprocess, 'Popen') as popen:
                 self.assertEqual(control.launch('chromium'), {'launched': 'chromium'})
                 popen.assert_called_once()
-                self.assertEqual(popen.call_args.args[0], ['uwsm-app', '--', 'gtk-launch', 'chromium.desktop'])
+                self.assertEqual(popen.call_args.args[0], ['uwsm-app', '--', 'gtk-launch', '--', 'chromium.desktop'])
                 self.assertTrue(popen.call_args.kwargs['start_new_session'])
-            for bad in ('missing', '../chromium', 'chromium;rm', '', 42, None):
+            for bad in ('missing', '../chromium', 'chromium;rm', 'chromium\n', '', 42, None):
                 with self.subTest(bad=bad), patch.object(control.subprocess, 'Popen') as popen:
                     with self.assertRaises(ValueError):
                         control.launch(bad)
@@ -291,20 +291,15 @@ class StyleTest(unittest.TestCase):
 
 class TimeZoneTest(unittest.TestCase):
     def test_sets_a_known_zone_through_timedatectl_and_reports_the_current_one(self):
-        with _stack() as stack:
-            fx = Fixture(stack)
-            zoneinfo = fx.root / 'zoneinfo'
-            (zoneinfo / 'America').mkdir(parents=True)
-            (zoneinfo / 'America/Chicago').write_bytes(b'TZif')
-            stack.enter_context(patch.dict(os.environ, {'OCTO_ZONEINFO_DIR': str(zoneinfo)}))
+        with patch.object(control, 'available_timezones', return_value={'America/Chicago'}):
             with patch.object(control, 'run') as run:
                 run.return_value.returncode = 0
                 self.assertEqual(control.set_time_zone('America/Chicago'), {'timeZone': 'America/Chicago'})
-                self.assertEqual(run.call_args.args[0], ['sudo', '-n', 'timedatectl', 'set-timezone', 'America/Chicago'])
+                self.assertEqual(run.call_args.args[0], ['sudo', '-n', '--', 'timedatectl', '--', 'set-timezone', 'America/Chicago'])
                 run.return_value.stdout = b'America/Chicago\n'
                 self.assertEqual(control.current_time_zone(), {'timeZone': 'America/Chicago'})
                 self.assertEqual(run.call_args.args[0], ['timedatectl', 'show', '-p', 'Timezone', '--value'])
-            for bad in ('Mars/Olympus', '../etc/passwd', 'America/Chicago; reboot', '', 7, None, 'x' * 65, 'America'):
+            for bad in ('Mars/Olympus', '../etc/passwd', 'America/Chicago; reboot', 'America/Chicago\n', '', 7, None, 'x' * 65, 'America'):
                 with self.subTest(bad=bad), patch.object(control, 'run') as run:
                     with self.assertRaises(ValueError):
                         control.set_time_zone(bad)
@@ -433,7 +428,7 @@ def handler(path, body=None, headers=None):
 class RoutingTest(unittest.TestCase):
     def test_desk_page_assets_and_state_are_served_without_the_compositor(self):
         with _stack() as stack:
-            Fixture(stack)
+            fx = Fixture(stack)
             with patch.object(control, 'windows', side_effect=AssertionError('compositor must not be consulted')):
                 for path, content_type, needle in [
                     ('/desk', 'text/html; charset=utf-8', b'<!doctype html>'),
@@ -456,6 +451,12 @@ class RoutingTest(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(state['note'], DEFAULT_NOTE)
                 self.assertIn('<svg', state['characterSvg'])
+                (fx.root / 'private.js').write_text('private')
+                with patch.dict(os.environ, {'OCTO_DESK_DIR': str(fx.root)}):
+                    h = handler('/desk/private.js')
+                    with patch.object(h, '_send') as send:
+                        h.do_GET()
+                        self.assertEqual(send.call_args.args[0], 404)
                 for missing in ('/desk/../../../etc/passwd', '/desk/nope.js', '/desk/%2e%2e/index.html', '/apps/icon/../../etc/passwd'):
                     with self.subTest(missing=missing):
                         h = handler(missing)

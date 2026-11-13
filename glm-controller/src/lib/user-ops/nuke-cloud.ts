@@ -3,32 +3,19 @@
 import type { ManagedChannelHost } from "@octogee/core/channel-host";
 import type { ManagedGitHost } from "@octogee/core/git-host";
 import { PROJECT_AGENT_REPO } from "@octogee/shared/types/project";
+import type { UserDataScope } from "./user-lifecycle-product.js";
 
-export interface NukeCloudCtx {
-  uid: string;
-  currentOperationId: string;
-  slug: string;
-  email: string | null;
-
+export interface NukeCloudCtx extends UserDataScope {
   repoNames: string[];
-
-projectSlugs: string[];
-
+  projectSlugs: string[];
   workspaceTeamId: string | null;
-
   mmUserId: string | null;
-
   mmCoachUserId: string | null;
-
   adminChannelId: string | null;
   credentialSecretNames: string[];
   projectAgentMmUserIds: string[];
   projectAgentCredentialDocPaths: string[];
-  chatArtifactIds: string[];
-  agentImportIds: string[];
-
   skipHosting?: boolean;
-
   skipAuth?: boolean;
 }
 
@@ -40,8 +27,8 @@ export type NukeCloudStepKey =
   | "credentials"
   | "computer"
   | "computer-home"
-  | "firestore"
-  | "auth";
+  | "records"
+  | "sign-in";
 
 export interface NukeCloudStepResult {
   key: NukeCloudStepKey;
@@ -55,28 +42,13 @@ export interface NukeCloudDeps {
   git: Pick<ManagedGitHost, "eraseOwner">;
   channels: Pick<ManagedChannelHost, "erase">;
 
-  nukeUserFirestore: (
-    uid: string,
-    slug: string,
-    email: string | null,
-    currentOperationId: string,
-  ) => Promise<void>;
-
-  deleteUserStorage: (
-    uid: string,
-    slug: string,
-    chatArtifactIds: string[],
-    agentImportIds: string[],
-  ) => Promise<void>;
-
+  eraseUserRecords: (scope: UserDataScope) => Promise<void>;
+  deleteUserStorage: (scope: UserDataScope) => Promise<void>;
   deleteCredentialSecrets: (secretNames: string[]) => Promise<void>;
-
-deleteAuthUser: (uid: string) => Promise<void>;
-
-deleteHostingSites?: (slug: string, projectSlugs: string[]) => Promise<{ deleted: number }>;
-
+  deleteSignIn?: (uid: string) => Promise<void>;
+  deleteHostingSites?: (slug: string, projectSlugs: string[]) => Promise<{ deleted: number }>;
   deleteVm?: (uid: string) => Promise<boolean>;
-  deleteVmHome: (uid: string, slug: string) => Promise<{ deleted: number }>;
+  deleteVmHome?: (slug: string) => Promise<{ deleted: number }>;
   log?: (msg: string) => void;
 }
 
@@ -113,12 +85,7 @@ results.push(
 
 results.push(
     await runStep("storage", log, async () => {
-      await deps.deleteUserStorage(
-        ctx.uid,
-        ctx.slug,
-        ctx.chatArtifactIds,
-        ctx.agentImportIds,
-      );
+      await deps.deleteUserStorage(ctx);
     }),
   );
 
@@ -149,12 +116,13 @@ if (ctx.skipHosting || !deps.deleteHostingSites || !ctx.slug) {
     results.push({ key: "computer", ok: true, skipped: true });
   }
 
-  if (!ctx.slug) {
+  const deleteVmHome = deps.deleteVmHome;
+  if (!ctx.slug || !deleteVmHome) {
     results.push({ key: "computer-home", ok: true, skipped: true });
   } else {
     results.push(
       await runStep("computer-home", log, async () => {
-        const { deleted } = await deps.deleteVmHome(ctx.uid, ctx.slug);
+        const { deleted } = await deleteVmHome(ctx.slug);
         return `${deleted} ${deleted === 1 ? "object" : "objects"}`;
       }),
     );
@@ -162,22 +130,23 @@ if (ctx.skipHosting || !deps.deleteHostingSites || !ctx.slug) {
 
   const anchoredCleanupFailed = results.some((result) => ["hosting", "computer", "computer-home"].includes(result.key) && !result.ok);
   if (anchoredCleanupFailed) {
-    results.push({ key: "firestore", ok: true, skipped: true });
+    results.push({ key: "records", ok: true, skipped: true });
   } else {
     results.push(
-      await runStep("firestore", log, async () => {
-        await deps.nukeUserFirestore(ctx.uid, ctx.slug, ctx.email, ctx.currentOperationId);
+      await runStep("records", log, async () => {
+        await deps.eraseUserRecords(ctx);
       }),
     );
   }
 
-const earlierFailure = results.some((result) => !result.ok && !result.skipped);
-if (ctx.skipAuth || earlierFailure) {
-    results.push({ key: "auth", ok: true, skipped: true });
+  const earlierFailure = results.some((result) => !result.ok && !result.skipped);
+  const deleteSignIn = deps.deleteSignIn;
+  if (ctx.skipAuth || earlierFailure || !deleteSignIn) {
+    results.push({ key: "sign-in", ok: true, skipped: true });
   } else {
     results.push(
-      await runStep("auth", log, async () => {
-        await deps.deleteAuthUser(ctx.uid);
+      await runStep("sign-in", log, async () => {
+        await deleteSignIn(ctx.uid);
       }),
     );
   }

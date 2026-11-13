@@ -4,6 +4,7 @@ import type { WebSocket } from "ws";
 import { WsUpgradeAuthorizationError, type WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
 import { isGatewayEgressMode } from "@octogee/shared/types/glm";
 import { requireAuthenticatedUid } from "../middleware/auth.js";
+import { authenticatedRequestLimit, authenticationFailureLimit } from "../middleware/authenticated-request-limit.js";
 import { logger } from "../middleware/logging.js";
 import { resolveNativeAdminAccess, type NativeAdminAccessOutcome } from "../lib/native-admin-access.js";
 import { createWsTicketStore, wsTicketFromPath, type WsTicketStore } from "../lib/ws-ticket-store.js";
@@ -44,7 +45,6 @@ export function createVmEgressRouter(options: VmEgressRouterOptions) {
   const log = options.log ?? ((message, meta) => logger.warn(message, meta));
   const { service } = options;
   const router = Router({ mergeParams: true });
-  router.use(requireAuthenticatedUid);
 
   async function authorize(req: Request, res: Response): Promise<{ gatewayId: string; authorization: string | undefined } | null> {
     const gatewayId = (req.params as { gatewayId?: string }).gatewayId;
@@ -63,7 +63,7 @@ export function createVmEgressRouter(options: VmEgressRouterOptions) {
 
   const respond = (res: Response, status: EgressStatus) => { res.set("cache-control", "no-store").json(status); };
 
-  router.get("/egress", async (req, res) => {
+  router.get("/egress", authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(180), async (req, res) => {
     try {
       if (!(await authorize(req, res))) return;
       respond(res, service.status());
@@ -73,7 +73,7 @@ export function createVmEgressRouter(options: VmEgressRouterOptions) {
     }
   });
 
-  router.post("/egress/mode", async (req, res) => {
+  router.post("/egress/mode", authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(60), async (req, res) => {
     try {
       if (!(await authorize(req, res))) return;
       const body = req.body as Record<string, unknown> | undefined;
@@ -85,7 +85,7 @@ export function createVmEgressRouter(options: VmEgressRouterOptions) {
     }
   });
 
-  router.post("/egress/ticket", async (req, res) => {
+  router.post("/egress/ticket", authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(60), async (req, res) => {
     try {
       const granted = await authorize(req, res);
       if (!granted) return;

@@ -1,3 +1,4 @@
+import { authenticatedRequestLimit } from "../middleware/authenticated-request-limit.js";
 import { Router, type Response } from "express";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { createAgentExportRuntime } from "../lib/agent-export-runtime.js";
@@ -41,17 +42,17 @@ export function createAgentExportsRouter(deps = { createRuntime: createAgentExpo
     if (!isValidGatewayId(gatewayId) || gatewayId !== deps.localGatewayId() || !authorization?.startsWith("Bearer ")) { res.status(403).json({ error: "forbidden" }); return; }
     res.locals.agentExport = deps.createRuntime({ gatewayId, authorization }); next();
   });
-  router.get("/agents", async (_req, res) => { try { res.json(await res.locals.agentExport.agents()); } catch (error) { handleExportError(error, res); } });
-  router.get("/repos", async (_req, res) => { try { res.json(await res.locals.agentExport.repos()); } catch (error) { handleExportError(error, res); } });
-  router.get("/latest", async (_req, res) => { try { res.json(await res.locals.agentExport.latest()); } catch (error) { handleExportError(error, res); } });
-  router.post("/preview", async (req, res) => {
+  router.get("/agents", authenticatedRequestLimit(120), async (_req, res) => { try { res.json(await res.locals.agentExport.agents()); } catch (error) { handleExportError(error, res); } });
+  router.get("/repos", authenticatedRequestLimit(120), async (_req, res) => { try { res.json(await res.locals.agentExport.repos()); } catch (error) { handleExportError(error, res); } });
+  router.get("/latest", authenticatedRequestLimit(120), async (_req, res) => { try { res.json(await res.locals.agentExport.latest()); } catch (error) { handleExportError(error, res); } });
+  router.post("/preview", authenticatedRequestLimit(30), async (req, res) => {
     try {
       const { agentId, owner, repo } = req.body ?? {};
       if (![agentId, owner, repo].every(value => typeof value === "string" && value.length > 0 && value.length <= 200)) { res.status(400).json({ error: "invalid_export" }); return; }
       res.json(await res.locals.agentExport.service.preview(agentId, { owner, repo }));
     } catch (error) { handleExportError(error, res); }
   });
-  router.post("/:id/apply", async (req, res) => {
+  router.post("/:id/apply", authenticatedRequestLimit(30), async (req, res) => {
     try {
       if (typeof req.body?.approvalHash !== "string" || !/^[a-f0-9]{64}$/u.test(req.body.approvalHash) || !/^export-[a-z0-9-]{1,80}$/u.test(String(req.params.id))) { res.status(400).json({ error: "invalid_export_approval" }); return; }
       res.json(await res.locals.agentExport.service.apply(req.params.id, req.body.approvalHash));
