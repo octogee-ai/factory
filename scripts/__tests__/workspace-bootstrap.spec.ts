@@ -2,10 +2,11 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const TEST_ROOT = "/tmp/octogee-workspace-bootstrap";
+const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-workspace-bootstrap-"));
 const CUSTOMERS_DIR = path.join(TEST_ROOT, "customers");
+afterAll(() => fs.rmSync(TEST_ROOT, { recursive: true, force: true }));
 
 vi.mock("../lib/config.js", () => ({
   log: () => {},
@@ -54,13 +55,12 @@ describe("fresh workspace bootstrap", () => {
   }
 
   beforeEach(() => {
-    fs.rmSync(TEST_ROOT, { recursive: true, force: true });
     fs.mkdirSync(CUSTOMERS_DIR, { recursive: true });
     remoteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-workspace-remote-"));
   });
 
   afterEach(() => {
-    fs.rmSync(TEST_ROOT, { recursive: true, force: true });
+    for (const entry of fs.readdirSync(TEST_ROOT)) fs.rmSync(path.join(TEST_ROOT, entry), { recursive: true, force: true });
     fs.rmSync(remoteRoot, { recursive: true, force: true });
   });
 
