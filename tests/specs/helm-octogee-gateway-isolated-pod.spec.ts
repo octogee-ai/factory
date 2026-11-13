@@ -124,6 +124,19 @@ describe("helm/octogee-gateway/ — isolated gateway as a Kubernetes pod", () =>
     expect(volumes).not.toContain("desktop-node-identity");
   });
 
+  it("gives each user their own control identity, as a VM gateway does, so the workspace identities bootstrap", () => {
+    const pod = renderDeployment().deployment;
+    const vm = renderDeployment({ runtimeKind: "gce-vm", rollStrategy: "surge" }).deployment;
+    for (const name of ["gateway", "gateway-edge"]) {
+      const identity = (deployment: Deployment) => {
+        const env = envOf(container(deployment, name));
+        return { GATEWAY_CLASS: env.GATEWAY_CLASS, OPENCLAW_CONTROL_IDENTITY: env.OPENCLAW_CONTROL_IDENTITY };
+      };
+      expect(identity(pod), name).toEqual({ GATEWAY_CLASS: "builder", OPENCLAW_CONTROL_IDENTITY: "per-user" });
+      expect(identity(pod), name).toEqual(identity(vm));
+    }
+  });
+
   it("replaces the pod rather than surging, because the home claim has one writer", () => {
     expect(renderDeployment().deployment.spec.strategy).toEqual({ type: "Recreate" });
     expect(renderFailure({ rollStrategy: "surge" })).toMatch(/isolated pod gateway .* rollStrategy must be recreate/);
