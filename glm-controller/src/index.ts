@@ -3762,11 +3762,15 @@ function buildEraseUserHandler({ documents, store, logFn, kubeOps, privateKey, d
     sharedGatewayRetired: gatewayId => isRetiredSharedGateway(store, gatewayId, clusterAbsent),
     runtimeAbsent: async (gatewayId, runtime) => runtime === "cluster" ? clusterAbsent(gatewayId) :
       !await createGatewayComputeClient(store, logFn).findByLabels({ "octogee-gateway-id": gatewayId.toLowerCase(), "octogee-environment": VM_ENVIRONMENT }),
-    ownerHomeAbsent: async uid => {
-      const instances = await createGatewayComputeClient(store, logFn).list({ labels: { "octogee-owner-uid": uid.toLowerCase(), "octogee-environment": VM_ENVIRONMENT } });
-      const homes = await createUserHomeServices(store, logFn).provider.remainingOwnerHomes(uid);
-      return instances.length === 0 && homes.length === 0;
-    },
+    ...(GATEWAY_VM_SPEC
+      ? {
+          ownerHomeAbsent: async (uid: string) => {
+            const instances = await createGatewayComputeClient(store, logFn).list({ labels: { "octogee-owner-uid": uid.toLowerCase(), "octogee-environment": VM_ENVIRONMENT } });
+            const homes = await createUserHomeServices(store, logFn).provider.remainingOwnerHomes(uid);
+            return instances.length === 0 && homes.length === 0;
+          },
+        }
+      : {}),
     eraseVm: cloudCleanup.deleteVm,
     readSharedSource: async gatewayId => {
       const gateway = await readDesiredRoot(store, gatewayId) as DurableGateway | null;
