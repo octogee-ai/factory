@@ -4,7 +4,20 @@ from pathlib import Path
 import secrets
 import string
 import socket
+import subprocess
+import sys
+from tempfile import TemporaryDirectory
 import time
+
+def require_memory_filesystem(path):
+    if sys.platform != 'linux':
+        return
+    filesystem = subprocess.check_output(['findmnt', '-n', '-o', 'FSTYPE', '--target', str(path)], text=True).strip()
+    if filesystem != 'tmpfs':
+        raise PermissionError('OpenClaw VNC runtime must be backed by tmpfs')
+
+runtime = Path(os.environ['XDG_RUNTIME_DIR'])
+require_memory_filesystem(runtime)
 
 port = int(os.environ.get('OCTO_VNC_PORT', '5900'))
 deadline = time.monotonic() + 10
@@ -21,10 +34,16 @@ while True:
         time.sleep(0.1)
 
 os.umask(0o077)
-state = Path(os.environ["XDG_RUNTIME_DIR"]) / "octogee-openclaw-vnc"
+state = runtime / 'octogee-openclaw-vnc'
 state.mkdir(mode=0o700, exist_ok=True)
+if state.is_symlink() or state.stat().st_mode & 0o077:
+    raise PermissionError('OpenClaw VNC state must be a private directory')
+require_memory_filesystem(state)
 password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
-(state / 'password').write_text(password + '\n')
+with TemporaryDirectory(prefix='credential-', dir=state) as staging:
+    pending = Path(staging) / 'password'
+    pending.write_text(password + '\n')
+    pending.replace(state / 'password')
 os.execvp('x11vnc', [
     'x11vnc', '-norc', '-reflect', f'127.0.0.1:{port}',
     '-listen', '127.0.0.1', '-rfbport', '5901', '-no6', '-forever', '-shared',
