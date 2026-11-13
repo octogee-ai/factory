@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { Script } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 import { proveRuntimeRestart, runtimeRestartDriverSource, proveManagementHealth, managementHealthDriverSource } from './runtime-restart-driver.js';
@@ -18,7 +19,7 @@ describe('runtime restart completion proof',()=>{
  it('refuses a connection lost during readiness',async()=>{const h=harness();h.connections[1]!.alive=()=>false;await expect(proveRuntimeRestart('attempt-1',h.deps,2000)).rejects.toThrow('deadline');});
  it.each([null,{}, {ok:true,status:'done',restart:{ok:true}}])('refuses malformed acknowledgement %j',async ack=>{const h=harness();h.connections[0]!.request.mockResolvedValue(ack as never);await expect(proveRuntimeRestart('attempt-1',h.deps,2000)).rejects.toThrow('acknowledgement');});
  it('refuses absent boot before dispatch',async()=>{const h=harness(['']);await expect(proveRuntimeRestart('attempt-1',h.deps,2000)).rejects.toThrow('boot');expect(h.connections[0]!.request).not.toHaveBeenCalled();});
- it('serializes bounded generic failure output',()=>{const s=runtimeRestartDriverSource('attempt-1');expect(s).toContain('180000');expect(s).toContain('runtime restart unconfirmed');expect(()=>runtimeRestartDriverSource('../invalid')).toThrow();});
+ it('serializes bounded generic failure output',()=>{const s=runtimeRestartDriverSource();expect(s).toContain('180000');expect(s).toContain('runtime restart unconfirmed');});
 });
 
 describe('read-only management health proof', () => {
@@ -34,9 +35,18 @@ describe('read-only management health proof', () => {
   await expect(proveManagementHealth('attempt-1', h.deps)).rejects.toThrow(); expect(h.connections[0]!.close).toHaveBeenCalledOnce();
  });
  it('serializes a bounded readonly probe without restart RPC', () => {
-  expect(() => new Script(managementHealthDriverSource('attempt-1'))).not.toThrow();
-  expect(managementHealthDriverSource('attempt-1')).toContain('process.stdout.write(JSON.stringify(r))');
-  expect(managementHealthDriverSource('attempt-1')).not.toContain('gateway.restart.request');
-  expect(managementHealthDriverSource('attempt-1')).toContain('45000'); expect(() => managementHealthDriverSource('../invalid')).toThrow();
+  expect(() => new Script(managementHealthDriverSource())).not.toThrow();
+  expect(managementHealthDriverSource()).toContain('process.stdout.write(JSON.stringify(r))');
+  expect(managementHealthDriverSource()).not.toContain('gateway.restart.request');
+  expect(managementHealthDriverSource()).toContain('45000');
  });
+});
+
+it.each([runtimeRestartDriverSource, managementHealthDriverSource])('rejects an invalid attempt before starting the probe', source => {
+ const child = spawnSync(process.execPath, ['--input-type=commonjs', '-', '../invalid'], {
+  input: source(), encoding: 'utf8', timeout: 2000,
+ });
+ expect(child.status).toBe(1);
+ expect(child.stdout).toBe('');
+ expect(child.stderr).toContain('invalid restart attempt');
 });

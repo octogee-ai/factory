@@ -111,8 +111,8 @@ export async function nativeHealth(deps: Awaited<ReturnType<typeof createRestart
 }
 function validBoot(value: unknown): value is string { return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value); }
 
-export function nativeProbeSource(packagePath = "/octogee/scripts/package.json"): string {
-  return `const __name=(target)=>target;const validBoot=${validBoot.toString()};const timer=setTimeout(()=>{process.stderr.write('replacement native health deadline\\n');process.exit(1)},45000);(${createRestartDriverDeps.toString()})(${JSON.stringify(packagePath)}).then(deps=>(${nativeHealth.toString()})(deps)).then(value=>{clearTimeout(timer);process.stdout.write(JSON.stringify(value))}).catch(error=>{clearTimeout(timer);process.stderr.write(String(error.message)+'\\n');process.exit(1)});`;
+export function nativeProbeSource(): string {
+  return `const __name=(target)=>target;const validBoot=${validBoot.toString()};const timer=setTimeout(()=>{process.stderr.write('replacement native health deadline\\n');process.exit(1)},45000);(${createRestartDriverDeps.toString()})(process.argv[2]).then(deps=>(${nativeHealth.toString()})(deps)).then(value=>{clearTimeout(timer);process.stdout.write(JSON.stringify(value))}).catch(error=>{clearTimeout(timer);process.stderr.write(String(error.message)+'\\n');process.exit(1)});`;
 }
 
 interface Input {
@@ -172,7 +172,7 @@ export async function resolveForcedGatewayRestart(input: Input) {
   const authority = await store.transaction({ label: "fleet-resolve-forced-restart.read", readOnly: true }, transaction =>
     readAuthority(transaction, input.gatewayId, input.forceAuditId));
   const replacement = observeReplacement(input, authority);
-  const proof = JSON.parse(transport(input)(["exec", replacement.podName, "-c", "gateway", "-i", "--", "node", "--input-type=commonjs"], nativeProbeSource()));
+  const proof = JSON.parse(transport(input)(["exec", replacement.podName, "-c", "gateway", "-i", "--", "node", "--input-type=commonjs", "-"], nativeProbeSource()));
   if (!validBoot(proof.bootId) || proof.health !== true) throw new Error("replacement native health is unverified");
   if (!input.apply) return { applied: false, forceAuditId: input.forceAuditId, heldFence: authority.fence, replacement, native: proof };
   const runMutation = input.runMutation ?? (<T>(mutation: NormalFleetMutationInput<T>) => runNormalFleetMutation(store, mutation));
