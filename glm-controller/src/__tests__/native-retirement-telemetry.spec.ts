@@ -19,7 +19,8 @@ function fixture() {
   let current: GatewayVmDescription | null = {
     name: "computer", instanceId: "instance-1", zone: "zone", gatewayId: input.gatewayId,
     status: "TERMINATED", labels: { "octogee-owner-uid": "uid" }, metadata: { "octogee-owner-uid": "uid" },
-  } as GatewayVmDescription;
+    machineType: null, internalIp: null, provisioningModel: null, lastStartedAt: null, serviceAccounts: [],
+  };
   const records: Record<string, Record<string, unknown> | undefined> = {
     [`gateways/${input.gatewayId}`]: root,
     get [`glmGateways/${input.gatewayId}`]() { return runtime; },

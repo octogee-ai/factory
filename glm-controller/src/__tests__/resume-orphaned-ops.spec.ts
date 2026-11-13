@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
-import { resumeOrphanedRunningOps } from "../resume-orphaned-ops.js";
+import { resumeOrphanedRunningOps, type ResumeOrphanedOpsDeps } from "../resume-orphaned-ops.js";
 import type { Operation } from "@octogee/shared/types/glm";
 import { operationNeedsDurableUserMigrationV2Resume } from "../operation-retry.js";
 
@@ -17,7 +17,7 @@ const RESUMABLE = new Set(["rollout"]);
 
 describe("resumeOrphanedRunningOps", () => {
   it("does not re-drive a running audit record", async () => {
-    const redrive = vi.fn(async () => undefined);
+    const redrive = vi.fn<ResumeOrphanedOpsDeps["redrive"]>(async () => undefined);
     const result = await resumeOrphanedRunningOps({
       store: makeStore([
         {
@@ -35,7 +35,7 @@ describe("resumeOrphanedRunningOps", () => {
   });
 
   it("re-drives a running rollout op (orphaned by a restart)", async () => {
-    const redrive = vi.fn(async () => undefined);
+    const redrive = vi.fn<ResumeOrphanedOpsDeps["redrive"]>(async () => undefined);
     const ops: FakeOpDoc[] = [
       { id: "op-roll", data: { status: "running", kind: "rollout" } },
     ];
@@ -51,7 +51,7 @@ describe("resumeOrphanedRunningOps", () => {
   });
 
   it("skips non-resumable running kinds (migrate-customer sub-ops, add-gateway) — the rollout re-drive re-issues those", async () => {
-    const redrive = vi.fn(async () => undefined);
+    const redrive = vi.fn<ResumeOrphanedOpsDeps["redrive"]>(async () => undefined);
     const ops: FakeOpDoc[] = [
       { id: "op-mig", data: { status: "running", kind: "migrate-user" } },
       { id: "op-add", data: { status: "running", kind: "add-gateway" } },
@@ -76,7 +76,7 @@ describe("resumeOrphanedRunningOps", () => {
       },
     };
     const legacy = { id: "op-v1", data: { status: "running", kind: "migrate-user" } };
-    const redrive = vi.fn(async () => undefined);
+    const redrive = vi.fn<ResumeOrphanedOpsDeps["redrive"]>(async () => undefined);
 
     await resumeOrphanedRunningOps({
       store: makeStore([active, legacy] as FakeOpDoc[]),
@@ -101,7 +101,7 @@ describe("resumeOrphanedRunningOps", () => {
           customerMigrationV2: { phase },
         },
       };
-      const redrive = vi.fn(async () => undefined);
+      const redrive = vi.fn<ResumeOrphanedOpsDeps["redrive"]>(async () => undefined);
 
       await resumeOrphanedRunningOps({
         store: makeStore([terminal] as FakeOpDoc[]),
@@ -116,7 +116,7 @@ describe("resumeOrphanedRunningOps", () => {
   );
 
   it("only scans `running` ops (pending/succeeded are left to the normal worker)", async () => {
-    const redrive = vi.fn(async () => undefined);
+    const redrive = vi.fn<ResumeOrphanedOpsDeps["redrive"]>(async () => undefined);
     const ops: FakeOpDoc[] = [
       { id: "op-pending", data: { status: "pending", kind: "rollout" } },
       { id: "op-done", data: { status: "succeeded", kind: "rollout" } },

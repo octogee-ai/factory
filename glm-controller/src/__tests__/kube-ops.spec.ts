@@ -4,8 +4,10 @@ import {
   type KubectlSubprocess,
 } from "../lib/kube-ops";
 
+type SubprocessResponse = { stdout?: string; stderr?: string; code?: number };
+
 function mockSubprocess(
-  responses: Array<{ stdout?: string; stderr?: string; code?: number }>,
+  responses: SubprocessResponse[],
 ): { runKubectl: KubectlSubprocess; calls: string[][] } {
   const calls: string[][] = [];
   let i = 0;
@@ -542,7 +544,7 @@ describe("gateway container startup observation", () => {
 describe("createKubeSubprocessRunner — pod identity and ReplicaSet intent", () => {
   const NODE = "gk3-octogee-gateway-nap-1dx2tv8d-3ce41e28-vbsk";
 
-  function batchResponses(replicaSets: unknown) {
+  function batchResponses(replicaSets: unknown): SubprocessResponse[] {
     return [
       {
         stdout: JSON.stringify({

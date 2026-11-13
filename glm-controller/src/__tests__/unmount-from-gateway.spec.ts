@@ -42,7 +42,7 @@ describe("createUnmountFromGateway — durable runtime resolution", () => {
 
   it("never uses retirement proof for a mismatched serving revision", async () => {
     const deps = mkDeps({
-      resolveGatewayUnmountTarget: vi.fn(async () => ({ gatewayId: "foreign", revisionId: "foreign", profile: "standard", runtime: "cluster" })),
+      resolveGatewayUnmountTarget: vi.fn<UnmountFromGatewayDeps["resolveGatewayUnmountTarget"]>(async () => ({ gatewayId: "foreign", revisionId: "foreign", profile: "standard", runtime: "cluster" })),
       isRetiredSharedGateway: vi.fn(async () => true),
     });
     await expect(createUnmountFromGateway(deps)("shared-old", "alice")).rejects.toThrow(/no validated serving revision/);
@@ -114,7 +114,7 @@ describe("createUnmountFromGateway — runtime presence", () => {
 describe("createUnmountFromGateway — live pod unmount", () => {
   it("contacts a VM even when Kubernetes has no objects", async () => {
     const deps = mkDeps({
-      resolveGatewayUnmountTarget: vi.fn(async () => ({ gatewayId: "alice-vm", revisionId: "alice-vm", profile: "builder", runtime: "gce-vm" })),
+      resolveGatewayUnmountTarget: vi.fn<UnmountFromGatewayDeps["resolveGatewayUnmountTarget"]>(async () => ({ gatewayId: "alice-vm", revisionId: "alice-vm", profile: "builder", runtime: "gce-vm" })),
       isRuntimeAbsent: vi.fn(async () => true),
     });
     await expect(createUnmountFromGateway(deps)("alice-vm", "alice")).resolves.toBe("unmounted");
@@ -124,7 +124,7 @@ describe("createUnmountFromGateway — live pod unmount", () => {
 
   it("keeps an unreachable VM failure visible instead of claiming Kubernetes absence", async () => {
     const deps = mkDeps({
-      resolveGatewayUnmountTarget: vi.fn(async () => ({ gatewayId: "alice-vm", revisionId: "alice-vm", profile: "builder", runtime: "gce-vm" })),
+      resolveGatewayUnmountTarget: vi.fn<UnmountFromGatewayDeps["resolveGatewayUnmountTarget"]>(async () => ({ gatewayId: "alice-vm", revisionId: "alice-vm", profile: "builder", runtime: "gce-vm" })),
       isRuntimeAbsent: vi.fn(async () => true),
       unmountRpc: vi.fn(async () => { throw connectionError(); }),
       retryDeadlineMs: 0,

@@ -206,6 +206,26 @@ const NATIVE_SURGE_CONTROL_TIMEOUTS: Readonly<Record<string, number>> = {
   "finish-rsync-import": SURGE_RSYNC_FINISH_TIMEOUT_MS,
 };
 
+export interface SurgeControlResponse {
+  readonly statusCode?: number;
+  setEncoding(encoding: BufferEncoding): unknown;
+  on(event: "data", listener: (chunk: string) => void): unknown;
+  once(event: "error", listener: (error: Error) => void): unknown;
+  once(event: "aborted" | "end", listener: () => void): unknown;
+}
+
+export interface SurgeControlClientRequest {
+  setTimeout(timeoutMs: number, onTimeout: () => void): unknown;
+  destroy(error: Error): unknown;
+  once(event: "error", listener: (error: Error) => void): unknown;
+  end(body: string): unknown;
+}
+
+export type SurgeControlRequest = (
+  options: http.RequestOptions,
+  onResponse: (response: SurgeControlResponse) => void,
+) => SurgeControlClientRequest;
+
 interface SignedPodRequestOptions {
   privateKey: string;
   pod: SurgePod;
@@ -214,7 +234,7 @@ interface SignedPodRequestOptions {
   operationId: string;
   body: Record<string, unknown>;
   timeoutMs: number;
-  request: typeof http.request;
+  request: SurgeControlRequest;
 }
 
 function postSignedViaHttp(opts: SignedPodRequestOptions): Promise<Record<string, unknown>> {
@@ -286,7 +306,7 @@ async function postSigned(
     operationId: string;
     body: Record<string, unknown>;
     timeoutMs?: number;
-    request?: typeof http.request;
+    request?: SurgeControlRequest;
   },
 ): Promise<Record<string, unknown>> {
   const nativeTimeoutMs = nativeSurgeControlTimeout(opts.path, opts.timeoutMs);
@@ -354,7 +374,7 @@ async function readPodFleetState(
 export interface SurgePodTransportOptions {
   privateKey: string;
   fetch?: typeof globalThis.fetch;
-  request?: typeof http.request;
+  request?: SurgeControlRequest;
   randomKey?: () => string;
   log: (message: string) => void;
 }

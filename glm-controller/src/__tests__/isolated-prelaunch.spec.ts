@@ -66,7 +66,7 @@ function fixture() {
   const reconcileSurgeHandoff = vi.fn((input) => reconcileSurgeUserHandoff(surgeDeps, input));
   const refine = () => refineGatewayConvergenceAction({
     passDeps: { store, reconcileSurgeHandoff }, gateway, artifact, runtime,
-    helmObserved: { ...desiredImage, replicas: 1, ownerUid: gateway.ownerUid, builderSlug: gateway.builderSlug },
+    helmObserved: { ...desiredImage, replicas: 1 },
     action: { kind: "steady" },
   });
   const markLive = () => markGatewayLive({ store, log: vi.fn() }, gateway, artifact, true);
