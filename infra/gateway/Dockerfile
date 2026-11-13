@@ -48,6 +48,9 @@ FROM ${OPENCLAW_BASE_IMAGE} AS gateway-build
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 USER root
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /octogee/scripts
 
 COPY --from=gateway-dependencies /octogee /octogee
