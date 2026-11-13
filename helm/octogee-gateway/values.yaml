@@ -139,6 +139,8 @@ env:
   mmSiteUrl: ""
   mmInteractionsCallbackBaseUrl: ""  # auto-computed per-instance if empty
   mmInteractionsAllowedSourceIps: "127.0.0.1"
+  mmReplyToMode: "off"
+  mmStreamingMode: "partial"
   apiPublicUrl: "https://api.example.com"
   # Comma-separated list of allowed Origin headers on the chat-proxy
   # browser→OpenClaw WebSocket upgrade. Empty = chat-proxy falls back to

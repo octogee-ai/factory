@@ -265,7 +265,11 @@ path on `localhost` with that service's port.
 ## Talk to the agent
 
 Open the Coach channel in Mattermost and send a message. The agent answers in
-a thread under it, so the channel shows `1 reply` below your message.
+the channel, in one post that it edits as the reply grows. To have it answer in
+a thread instead, set the gateway values `env.mmReplyToMode` (`off`, `first`,
+`all` or `batched`) and `env.mmStreamingMode` (`off`, `partial`, `block` or
+`progress`), which fill OpenClaw's `channels.mattermost.replyToMode` and
+`streaming.mode` when a gateway's config does not set them.
 
 `kubectl port-forward` stops when a forwarded connection resets, which
 Mattermost's websocket can do, and prints `lost connection to pod`. Start the

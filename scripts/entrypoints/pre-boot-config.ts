@@ -145,16 +145,31 @@ function applyMattermostQueuePolicy(
   return true;
 }
 
+const MATTERMOST_REPLY_TO_MODES = ["off", "first", "all", "batched"] as const;
+const MATTERMOST_STREAMING_MODES = ["off", "partial", "block", "progress"] as const;
+
+function configuredMattermostMode(
+  env: NodeJS.ProcessEnv,
+  name: "MM_REPLY_TO_MODE" | "MM_STREAMING_MODE",
+  modes: readonly string[],
+): string | undefined {
+  const value = env[name]?.trim();
+  if (!value) return undefined;
+  if (!modes.includes(value)) throw new Error(`${name}=${value} is not one of ${modes.join(", ")}`);
+  return value;
+}
+
 function applyMattermostStreamingDefaults(
   mattermost: Record<string, unknown>,
+  streamingMode: string | undefined,
   logFn: (msg: string) => void,
 ): boolean {
   let changed = false;
   const streaming = ensureNullishObjectProperty(mattermost, "streaming");
-  if (streaming && streaming.mode === undefined) {
-    streaming.mode = "progress";
+  if (streaming && streamingMode !== undefined && streaming.mode === undefined) {
+    streaming.mode = streamingMode;
     changed = true;
-    logFn("set channels.mattermost.streaming.mode=progress");
+    logFn(`set channels.mattermost.streaming.mode=${streamingMode}`);
   }
   const preview = streaming ? ensureNullishObjectProperty(streaming, "preview") : null;
   if (preview && preview.toolProgress === undefined) {
@@ -275,17 +290,19 @@ export function applyMattermostPreBootPatches(
   env: NodeJS.ProcessEnv,
   logFn: (msg: string) => void,
 ): boolean {
+  const replyToMode = configuredMattermostMode(env, "MM_REPLY_TO_MODE", MATTERMOST_REPLY_TO_MODES);
+  const streamingMode = configuredMattermostMode(env, "MM_STREAMING_MODE", MATTERMOST_STREAMING_MODES);
   const mattermost = objectProperty(objectProperty(config, "channels"), "mattermost");
   if (!mattermost) return false;
   let changed = applyMattermostAccountSessionPolicy(mattermost, "channels.mattermost", logFn);
   changed = applyMattermostQueuePolicy(config, logFn) || changed;
-  if (mattermost.replyToMode === undefined) {
-    mattermost.replyToMode = "all";
+  if (replyToMode !== undefined && mattermost.replyToMode === undefined) {
+    mattermost.replyToMode = replyToMode;
     changed = true;
-    logFn("set channels.mattermost.replyToMode=all");
+    logFn(`set channels.mattermost.replyToMode=${replyToMode}`);
   }
 
-  changed = applyMattermostStreamingDefaults(mattermost, logFn) || changed;
+  changed = applyMattermostStreamingDefaults(mattermost, streamingMode, logFn) || changed;
   changed = applyMattermostActionDefaults(mattermost, logFn) || changed;
   changed = applyMattermostAckReactionDefaults(config, logFn) || changed;
 

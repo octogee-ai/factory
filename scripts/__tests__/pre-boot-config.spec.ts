@@ -689,24 +689,42 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
       agents: { defaults: { verboseDefault: "off" } },
       channels: { mattermost: { replyToMode: "off", streaming: { mode: "partial" } } },
     };
-    applyPreBootPatches(config, {});
+    applyPreBootPatches(config, { MM_REPLY_TO_MODE: "all", MM_STREAMING_MODE: "progress" });
     expect(config.channels.mattermost).toMatchObject({ replyToMode: "off", streaming: { mode: "partial" } });
     expect(config.channels.mattermost.threadSessionScope).toBe("channel");
     expect(config.channels.mattermost).not.toHaveProperty("replyToModeByChatType");
     expect(config.agents.defaults.verboseDefault).toBe("off");
   });
 
-  it("defaults room replies to threads and compact progress previews without direct-message overrides", () => {
+  it("fills the configured reply and streaming modes without direct-message overrides", () => {
     const config: any = { channels: { mattermost: {} } };
-    applyPreBootPatches(config, {});
-    expect(config.channels.mattermost.replyToMode).toBe("all");
+    applyPreBootPatches(config, { MM_REPLY_TO_MODE: "off", MM_STREAMING_MODE: "partial" });
+    expect(config.channels.mattermost.replyToMode).toBe("off");
     expect(config.channels.mattermost).not.toHaveProperty("replyToModeByChatType");
     expect(config.channels.mattermost.streaming).toEqual({
-      mode: "progress",
+      mode: "partial",
       preview: { toolProgress: true },
       progress: { toolProgress: true },
     });
     expect(config.channels.mattermost.threadSessionScope).toBe("channel");
+  });
+
+  it("leaves the reply and streaming modes to OpenClaw when none is configured", () => {
+    const config: any = { channels: { mattermost: {} } };
+    applyPreBootPatches(config, {});
+    expect(config.channels.mattermost).not.toHaveProperty("replyToMode");
+    expect(config.channels.mattermost.streaming).toEqual({
+      preview: { toolProgress: true },
+      progress: { toolProgress: true },
+    });
+  });
+
+  it.each([
+    [{ MM_REPLY_TO_MODE: "thread" }, "MM_REPLY_TO_MODE"],
+    [{ MM_STREAMING_MODE: "live" }, "MM_STREAMING_MODE"],
+  ])("refuses a mode the Mattermost channel does not support (%o)", (env, name) => {
+    const config: any = { channels: { mattermost: { replyToMode: "off", streaming: { mode: "partial" } } } };
+    expect(() => applyMattermostPreBootPatches(config, env, vi.fn())).toThrow(name);
   });
 
   it("defaults inherited replies while preserving account and chat-type choices, idempotently", () => {
@@ -715,14 +733,15 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
       accounts: { inherited: {}, optedOut: { replyToMode: "off" }, first: { replyToMode: "first" } },
     } } };
     const log = vi.fn();
-    expect(applyMattermostPreBootPatches(config, {}, log)).toBe(true);
-    expect(config.channels.mattermost.replyToMode).toBe("all");
+    const env = { MM_REPLY_TO_MODE: "first" };
+    expect(applyMattermostPreBootPatches(config, env, log)).toBe(true);
+    expect(config.channels.mattermost.replyToMode).toBe("first");
     expect(config.channels.mattermost.replyToModeByChatType).toEqual({ direct: "first", group: "off" });
     expect(config.channels.mattermost.accounts.inherited).not.toHaveProperty("replyToMode");
     expect(config.channels.mattermost.accounts.optedOut.replyToMode).toBe("off");
     expect(config.channels.mattermost.accounts.first.replyToMode).toBe("first");
-    expect(log).toHaveBeenCalledWith("set channels.mattermost.replyToMode=all");
-    expect(applyMattermostPreBootPatches(config, {}, log)).toBe(false);
+    expect(log).toHaveBeenCalledWith("set channels.mattermost.replyToMode=first");
+    expect(applyMattermostPreBootPatches(config, env, log)).toBe(false);
   });
 
   it.each(["shared", "builder"])("fills missing streaming preferences on %s gateways without pinning account overrides", (gatewayClass) => {
@@ -731,19 +750,20 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
       accounts: { inherited: {}, custom: { streaming: { mode: "off", preview: { toolProgress: false } } } },
     } } };
     const log = vi.fn();
-    expect(applyMattermostPreBootPatches(config, { GATEWAY_CLASS: gatewayClass }, log)).toBe(true);
+    const env = { GATEWAY_CLASS: gatewayClass, MM_STREAMING_MODE: "partial" };
+    expect(applyMattermostPreBootPatches(config, env, log)).toBe(true);
     expect(config.channels.mattermost.streaming).toEqual({
-      mode: "progress",
+      mode: "partial",
       chunkMode: "newline",
       preview: { toolProgress: true, commandText: "status" },
       progress: { toolProgress: true },
     });
     expect(config.channels.mattermost.accounts.inherited).not.toHaveProperty("streaming");
     expect(config.channels.mattermost.accounts.custom.streaming).toEqual({ mode: "off", preview: { toolProgress: false } });
-    expect(log).toHaveBeenCalledWith("set channels.mattermost.streaming.mode=progress");
+    expect(log).toHaveBeenCalledWith("set channels.mattermost.streaming.mode=partial");
     expect(log).toHaveBeenCalledWith("set channels.mattermost.streaming.progress.toolProgress=true");
     expect(log).toHaveBeenCalledWith("set channels.mattermost.streaming.preview.toolProgress=true");
-    expect(applyMattermostPreBootPatches(config, { GATEWAY_CLASS: gatewayClass }, log)).toBe(false);
+    expect(applyMattermostPreBootPatches(config, env, log)).toBe(false);
   });
 
   it.each(["off", "partial", "progress", "block"])("preserves user streaming mode %s and disabled tool progress", (mode) => {
