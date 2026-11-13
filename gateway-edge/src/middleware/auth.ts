@@ -125,6 +125,11 @@ function attachAuthContext(req: Request, res: Response, next: NextFunction): voi
   });
 }
 
+export function requireActiveAccount(req: Request, res: Response, next: NextFunction): void {
+  if (!req.uid) { res.status(401).json({ error: "Unauthenticated" }); return; }
+  attachActiveUser(req, res, () => attachAuthContext(req, res, next), false);
+}
+
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   requireAuthenticatedUid(req, res, () => {
     attachActiveUser(req, res, () => attachAuthContext(req, res, next), false);

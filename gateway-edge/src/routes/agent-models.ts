@@ -1,6 +1,7 @@
+import { authenticatedRequestLimit, authenticationFailureLimit } from "../middleware/authenticated-request-limit.js";
 import { Router, Request, Response, NextFunction } from "express";
 import { FieldPath } from "firebase-admin/firestore";
-import { requireAuth } from "../middleware/auth.js";
+import { requireActiveAccount, requireAuthenticatedUid } from "../middleware/auth.js";
 import { db, FieldValue } from "../lib/db.js";
 import { platformStateStore } from "../lib/platform-state.js";
 import { logger } from "../middleware/logging.js";
@@ -113,7 +114,7 @@ function triggerAgentModelSync(args: {
   });
 }
 
-router.get("/", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+router.get("/", authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(120), requireActiveAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
     const [sysData, platformDefault, subscriptionProviders] = await Promise.all([
@@ -180,7 +181,7 @@ async function gateSelectionRequest(
   return { ok: true, slug, selection, sysData };
 }
 
-router.put("/:agentId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+router.put("/:agentId", authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(30), requireActiveAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
     const agentId = agentIdParam(req);
@@ -204,7 +205,7 @@ router.put("/:agentId", requireAuth, async (req: Request, res: Response, next: N
   } catch (e) { next(e); }
 });
 
-router.delete("/:agentId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+router.delete("/:agentId", authenticationFailureLimit, requireAuthenticatedUid, authenticatedRequestLimit(30), requireActiveAccount, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
     const agentId = agentIdParam(req);
