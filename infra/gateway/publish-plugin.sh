@@ -46,17 +46,13 @@ console.log(`${pkg.name} ${pkg.version}`);
 '
 
 check_tarball='
-import { readFileSync } from "node:fs";
-
-const [packed] = JSON.parse(readFileSync(process.argv[1], "utf8"));
-const files = packed.files.map((file) => file.path);
+const files = process.argv[1].split("\n").filter(Boolean).map((file) => file.replace(/^package\//u, ""));
 const missing = ["index.js", "openclaw.plugin.json", "package.json", "README.md", "LICENSE"].filter((file) => !files.includes(file));
 const source = files.filter((file) => /\.(?:cts|mts|ts|tsx)$/u.test(file));
 if (missing.length > 0 || source.length > 0) {
   console.error(`publish-plugin: packed ${files.join(", ")}; missing ${missing.join(", ") || "nothing"}; TypeScript ${source.join(", ") || "none"}`);
   process.exit(1);
 }
-console.log(packed.filename);
 '
 
 plugin="${1:-}"
@@ -91,15 +87,18 @@ node "$repo_root/infra/gateway/build-extensions.mjs" "$(dirname "$package_dir")"
 cp "$repo_root/LICENSE" "$package_dir/LICENSE"
 
 mkdir "$stage/pack"
-(cd "$package_dir" && npm pack --ignore-scripts --json --pack-destination "$stage/pack") > "$stage/pack.json"
-tarball="$(node --input-type=module -e "$check_tarball" "$stage/pack.json")"
+(cd "$package_dir" && npm pack --ignore-scripts --pack-destination "$stage/pack" >/dev/null)
+tarballs=("$stage/pack"/*.tgz)
+[[ ${#tarballs[@]} -eq 1 && -f "${tarballs[0]}" ]] || die "npm pack did not produce exactly one tarball"
+tarball="${tarballs[0]}"
+node --input-type=module -e "$check_tarball" "$(tar -tzf "$tarball")"
 
 owner="${name%%/*}"
 owner="${owner#@}"
 source_repo="${SOURCE_REPO:-${GITHUB_REPOSITORY:-octogee-ai/octogee-cloud}}"
 source_ref="${SOURCE_REF:-${GITHUB_REF:-$(git -C "$repo_root" symbolic-ref -q HEAD || true)}}"
 
-args=(package publish "$stage/pack/$tarball" --family code-plugin --owner "$owner"
+args=(package publish "$tarball" --family code-plugin --owner "$owner"
   --source-repo "$source_repo" --source-commit "$commit" --source-path "$source_path" --json)
 if [[ -n "$source_ref" ]]; then
   args+=(--source-ref "$source_ref")
