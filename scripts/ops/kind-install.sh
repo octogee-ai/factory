@@ -9,6 +9,7 @@ NAMESPACE="octogee-local"
 BUILD=true
 PULL=false
 SHA=""
+MANIFEST=""
 CONTEXT_DIR="$ROOT"
 OPENCLAW_DIR=""
 IMAGES=""
@@ -24,6 +25,10 @@ for arg in "$@"; do
     --skip-build) BUILD=false ;;
     --pull) PULL=true ;;
     --sha=*) SHA="${arg#*=}" ;;
+    --manifest=*)
+      MANIFEST="${arg#*=}"
+      [[ -n "$MANIFEST" ]] || die "--manifest needs a path"
+      ;;
     --context-dir=*) CONTEXT_DIR="$(cd "${arg#*=}" && pwd)" ;;
     --openclaw-dir=*) OPENCLAW_DIR="$(cd "${arg#*=}" && pwd)" ;;
     --images=*) IMAGES="${arg#*=}" ;;
@@ -31,6 +36,7 @@ for arg in "$@"; do
   esac
 done
 if $PULL && ! $BUILD; then die "Choose either --pull or --skip-build"; fi
+if [[ -n "$MANIFEST" ]] && ! $PULL; then die "--manifest needs --pull"; fi
 if [[ -n "$SHA" ]]; then
   $PULL || die "--sha needs --pull"
   [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || die "--sha needs a full commit SHA"
@@ -143,10 +149,11 @@ build_images() {
 }
 
 pull_images() {
-  local selection=()
-  [[ -n "$IMAGES" ]] && selection=(--images="$IMAGES")
+  local options=()
+  [[ -n "$IMAGES" ]] && options+=(--images="$IMAGES")
+  [[ -n "$MANIFEST" ]] && options+=(--manifest="$MANIFEST")
   node "$ROOT/scripts/ci/cloud-build.mjs" copy --registry="$PUBLISHED" --sha="$SHA" --platform="$PLATFORM" \
-    --tag-prefix="$IMAGE_PREFIX" ${selection[@]+"${selection[@]}"} > "$STATE/digests.pulled.json"
+    --tag-prefix="$IMAGE_PREFIX" ${options[@]+"${options[@]}"} > "$STATE/digests.pulled.json"
   record_digests "$STATE/digests.pulled.json"
 }
 
@@ -453,5 +460,5 @@ case "$COMMAND" in
   up) up ;;
   down) down ;;
   status) status ;;
-  *) echo "Usage: $0 {up|down|status} [--name=NAME] [--skip-build | --pull [--sha=SHA]] [--images=A,B] [--context-dir=DIR] [--openclaw-dir=DIR]" >&2; exit 2 ;;
+  *) echo "Usage: $0 {up|down|status} [--name=NAME] [--skip-build | --pull [--sha=SHA] [--manifest=FILE]] [--images=A,B] [--context-dir=DIR] [--openclaw-dir=DIR]" >&2; exit 2 ;;
 esac

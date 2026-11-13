@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -99,6 +99,44 @@ describe("kind-install.sh", () => {
     expect(values["octogee-api"].replicas).toBeUndefined();
   });
 
+  const manifest = (sha = CHECKOUT, images = IMAGES) => {
+    const file = join(state, "image-manifest.json");
+    writeFileSync(file, JSON.stringify({
+      registry: REGISTRY,
+      sha,
+      images: Object.fromEntries(images.map((name, index) => [name, {
+        platforms: { "linux/amd64": `sha256:${String(index + 3).repeat(64)}`, "linux/arm64": ARM64 },
+      }])),
+    }));
+    return file;
+  };
+
+  it("installs the exact host digests from Build main without resolving image tags", () => {
+    const result = run(["up", "--pull", `--manifest=${manifest()}`], "x86_64");
+    expect(result.status, result.stderr).toBe(0);
+    expect(inspected()).toEqual([]);
+    expect(copies()).toEqual(IMAGES.map((name, index) =>
+      `docker KUBECONFIG=unset buildx imagetools create --prefer-index=false --tag=localhost:5001/octogee/${name}:ccccccc ${REGISTRY}/${name}@sha256:${String(index + 3).repeat(64)}`));
+    expect(json("digests.json").images["glm-controller"]).toBe(`sha256:${"3".repeat(64)}`);
+    expect(json("images.yaml")["glm-controller"].image.digest).toBe(`sha256:${"3".repeat(64)}`);
+  });
+
+  it("refuses a manifest from another build instead of pulling from tags", () => {
+    const result = run(["up", "--pull", `--manifest=${manifest(PUBLISHED)}`]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`does not match ${REGISTRY} at ${CHECKOUT}`);
+    expect(inspected()).toEqual([]);
+    expect(copies()).toEqual([]);
+  });
+
+  it("refuses a manifest missing a selected digest before copying any image", () => {
+    const result = run(["up", "--pull", `--manifest=${manifest(CHECKOUT, IMAGES.slice(0, -1))}`]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("mattermost has no valid linux/arm64 digest");
+    expect(inspected()).toEqual([]);
+    expect(copies()).toEqual([]);
+  });
+
   it("reinstalls the copied images under their own commit when rerun with --skip-build", () => {
     expect(run(["up", "--pull", `--sha=${PUBLISHED}`]).status).toBe(0);
     const copied = copies().length;
@@ -165,6 +203,7 @@ ${KUBECTL}`);
 
   it.each([
     [["--pull", "--skip-build"], "Choose either --pull or --skip-build"],
+    [["--manifest=manifest.json"], "--manifest needs --pull"],
     [[`--sha=${PUBLISHED}`], "--sha needs --pull"],
     [["--pull", "--sha=bbbbbbb"], "--sha needs a full commit SHA"],
   ])("refuses up %j before touching anything", (args, message) => {
