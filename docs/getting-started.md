@@ -1,7 +1,8 @@
 # Getting started
 
-Try Octogee Cloud on your own machine in Docker, or install it for production
-on managed cloud services. One installer, `install.sh`, handles both.
+Try the Octogee Cloud foundation on your own machine in Docker, or install it
+on managed cloud services. One installer, `install.sh`, handles both. The full
+platform runs on a local kind cluster.
 
 ## Two installers
 
@@ -17,7 +18,8 @@ two installers.
   cluster, with the fleet controller, users, shared gateways and the LLM broker
   that gives agents their model provider. It copies the platform images this
   repository publishes, or builds them from your checkout.
-  See [The full platform on kind](kind.md).
+  See [The full platform on kind](kind.md). The full platform has not yet run
+  on a cloud account.
 
 On the full platform, users on a shared gateway reach their agent through
 Mattermost and Gitea. The OpenClaw Control UI is for users on an isolated
@@ -46,12 +48,19 @@ by use.
 
 ### To run the full platform on kind
 
-| Sign up for | Tier to choose | What it costs |
-| --- | --- | --- |
-| [OpenRouter](https://openrouter.ai/keys), for an API key | Pay as you go | What the agents' model calls cost |
+The kind install script needs one model provider key and stops without one.
+OpenRouter is the suggestion: one key reaches Muse Ember, the default agent
+model, and other providers' models such as Grok. An OpenAI or Anthropic key
+works too.
 
-Agents on a shared gateway use an OpenRouter model by default. An Anthropic or
-OpenAI key also works for the models of that provider.
+| Sign up for | Tier to choose | What it costs | Export it as |
+| --- | --- | --- | --- |
+| [OpenRouter](https://openrouter.ai/keys), for an API key (suggested) | Pay as you go | What the agents' model calls cost | `OPENROUTER_API_KEY` |
+| [OpenAI](https://platform.openai.com/api-keys), for an API key | Pay as you go | What the agents' model calls cost | `OPENAI_API_KEY` |
+| [Anthropic](https://platform.claude.com/settings/keys), for an API key | Pay as you go | What the agents' model calls cost | `ANTHROPIC_API_KEY` |
+
+[Model provider keys](kind.md#model-provider-keys) lists the models the script
+sets for each key, and how to run Muse or Grok.
 
 ### To run it on Google Cloud
 
@@ -188,10 +197,11 @@ Check the install at any time:
 ./deploy/local/check.sh
 ```
 
-## Run in production
+## Run the foundation in the cloud
 
-[Running in production](running-in-the-cloud.md) covers GKE and EKS with
-managed PostgreSQL and object storage.
+[Running the foundation in the cloud](running-in-the-cloud.md) covers GKE and
+EKS with managed PostgreSQL and object storage. It installs the same foundation
+as the local install, not the full platform.
 
 ## Work on the code
 

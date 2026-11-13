@@ -1,3 +1,4 @@
+import { pipeline } from "node:stream/promises";
 import type { getStorage } from "firebase-admin/storage";
 import { blobStatus, type BlobMetadata, type BlobStore } from "./blob-store.js";
 
@@ -24,6 +25,12 @@ export function createGcsBlobStore(bucket: () => Bucket | Promise<Bucket>): Blob
         metadata: { contentType },
         ...(ifGenerationMatch === undefined ? {} : { preconditionOpts: { ifGenerationMatch } }),
       });
+    },
+    async saveStream(key, source, { contentType }) {
+      await pipeline(source, (await bucket()).file(key).createWriteStream({ metadata: { contentType } }));
+    },
+    async move(from, to) {
+      await (await bucket()).file(from).move(to);
     },
     async download(key) {
       const current = await bucket();

@@ -64,7 +64,7 @@ export async function authorizeAgentExport(state: PlatformStateRepositories, own
   if (parsed.kind === "project" && !projectReady(await state.workspaces.projects.get(owner.slug, parsed.project), owner)) fail("project is not an active owned agent workspace");
   return { uid: owner.uid, slug: owner.slug, gatewayId: owner.gatewayId, epoch: placed!.epoch, agentId, project: parsed.kind === "project" ? parsed.project : null };
 }
-export function registerAgentExportBrokerRoutes(router: Router, deps: Pick<AgentImportBrokerDeps, "store" | "featurePolicy" | "readIdentity" | "exportBlobs" | "bucket">, context: (res: Response) => OwnerContext): void {
+export function registerAgentExportBrokerRoutes(router: Router, deps: Pick<AgentImportBrokerDeps, "store" | "featurePolicy" | "readIdentity" | "blobs">, context: (res: Response) => OwnerContext): void {
   router.use("/exports", async (_req, res, next) => {
     try {
       const owner = context(res);
@@ -131,8 +131,7 @@ export function registerAgentExportBrokerRoutes(router: Router, deps: Pick<Agent
       const existing = await storedRecord(owner, key);
       if (!owned(existing, owner) || existing.status !== "previewed") fail("export preview is missing");
       const object = `agent-imports/${owner.uid}/${key}/export.json`;
-      if (deps.exportBlobs) await deps.exportBlobs().save(object, req.body, { contentType: "application/json", ifGenerationMatch: 0 });
-      else await deps.bucket.file(object).save(req.body, { contentType: "application/json", resumable: false, preconditionOpts: { ifGenerationMatch: 0 } });
+      await deps.blobs().save(object, req.body, { contentType: "application/json", ifGenerationMatch: 0 });
       res.status(204).end();
     } catch (error) { next(error); }
   });
@@ -141,7 +140,7 @@ export function registerAgentExportBrokerRoutes(router: Router, deps: Pick<Agent
       const owner = context(res), key = id(req.params.id);
       if (!owned(await storedRecord(owner, key), owner)) fail("export record is unavailable");
       const object = `agent-imports/${owner.uid}/${key}/export.json`;
-      const contents = deps.exportBlobs ? (await deps.exportBlobs().download(object))?.bytes : (await deps.bucket.file(object).download())[0];
+      const contents = (await deps.blobs().download(object))?.bytes;
       if (!contents) throw new Error("authored export snapshot is missing");
       res.type("application/json").send(contents);
     } catch (error) { next(error); }

@@ -1014,6 +1014,7 @@ function buildPlacementResponse(opts: {
     const status = glmDoc || heartbeat
       ? observedGatewayStatus({
           desiredStatus,
+          appliedReplicas: glmDoc?.appliedReplicas,
           heartbeatStatus: heartbeat?.status,
           heartbeatAgeMs: ageMsOrNull(toMillis(heartbeat?.lastHeartbeatAt), opts.now),
         })
@@ -1259,6 +1260,7 @@ function projectDurableGatewayRuntime(
     gateway: root.gatewayId,
     imageRepository: runtime.helm.imageRepository,
     imageTag: runtime.helm.imageTag,
+    appliedReplicas: runtime.helm.replicas,
     heartbeat: runtime.heartbeat,
     lastError: runtime.lastError,
     podReplacements: runtime.podReplacements,
@@ -1308,10 +1310,12 @@ function requestedGatewayStatus(
 
 function observedGatewayStatus(input: {
   desiredStatus: ReturnType<typeof projectDesiredStatus>;
+  appliedReplicas: unknown;
   heartbeatStatus: unknown;
   heartbeatAgeMs: number | null;
 }): string {
   if (input.desiredStatus === "retired" || input.desiredStatus === "paused") return input.desiredStatus;
+  if (input.appliedReplicas === 0) return requestedGatewayStatus(input.desiredStatus);
   if (input.heartbeatAgeMs !== null && input.heartbeatAgeMs > GATEWAY_UNREACHABLE_AFTER_MS) return "unreachable";
   return typeof input.heartbeatStatus === "string"
     ? input.heartbeatStatus
@@ -1610,7 +1614,12 @@ export function projectGatewaySummary(
   const desiredStatus = projectDesiredStatus(glmDoc);
   const reservation = projectGatewayReservation(glmDoc);
   const heartbeatAgeMs = ageMsOrNull(toMillis(data.lastHeartbeatAt), now);
-  const status = observedGatewayStatus({ desiredStatus, heartbeatStatus: data.status, heartbeatAgeMs });
+  const status = observedGatewayStatus({
+    desiredStatus,
+    appliedReplicas: glmDoc?.appliedReplicas,
+    heartbeatStatus: data.status,
+    heartbeatAgeMs,
+  });
   return {
     gatewayId,
     gateway: deriveGatewayIdentity(gatewayId, glmDoc?.gateway),
@@ -3991,6 +4000,33 @@ function migrationLockRef(operation: OperationRecord): {
   };
 }
 
+type GatewayPatchRefusal = { ok: false; error: string };
+
+async function gatewayPatchRefusal(
+  transaction: PlatformStateTransaction,
+  gatewayId: string,
+): Promise<GatewayPatchRefusal | null> {
+  const [stored, activeOperations] = await Promise.all([
+    transaction.gateways.roots.get(gatewayId),
+    transaction.journal.operations.listByStatus(["pending", "running"]),
+  ]);
+  const current = durableRootOf(stored, gatewayId);
+  if (!current) return { ok: false, error: ERR_GATEWAY_NOT_FOUND };
+  if (current.desiredStatus === "retired" || current.retirementClaim != null) {
+    return { ok: false, error: "gateway has a current retirement claim" };
+  }
+  if (findActiveGatewayMigration(gatewayId, activeOperations.map(migrationLockRef))) {
+    return { ok: false, error: `user migration is in flight for gateway ${gatewayId}` };
+  }
+  try {
+    await assertGatewayRuntimeMutationUnfencedInStore(transaction, gatewayId);
+  } catch (error) {
+    if (!(error instanceof GatewayRetirementConflictError)) throw error;
+    return { ok: false, error: error.message };
+  }
+  return null;
+}
+
 const IN_FLIGHT_OPERATION_STATUSES = ["pending", "running"] as const;
 
 export function inFlightOperationsForUid(
@@ -4505,10 +4541,15 @@ export function createAdminFleetMutationRunner(store: PlatformStateStore) {
     forced?: boolean;
     action: (claim: OperationAuditActionClaim) => Promise<T>;
     classifyResult?: (result: T) => NormalFleetMutationResult;
+    dryRunRefusal?: () => Promise<T | null>;
     idempotencyScope?: string;
     aliasPlan?: OperationAuditAliasPlan[];
   }): Promise<T> {
-    if (isAdminDryRun(input.req)) throw new AdminDryRunPlanned(input);
+    if (isAdminDryRun(input.req)) {
+      const refusal = await input.dryRunRefusal?.();
+      if (refusal) return refusal;
+      throw new AdminDryRunPlanned(input);
+    }
     const actor = input.req as ActorRequest;
     const headerKey = input.req.get("Idempotency-Key")?.trim();
     return runNormalFleetMutation(store, {
@@ -4941,7 +4982,7 @@ router.post(
           return;
         }
         const repair = plan.currentGatewayId === targetGatewayId;
-        const placement = await runAdminFleetMutation({
+        const { placement, operationId } = await runAdminFleetMutation({
           req,
           what: "assign user to gateway",
           why: ADMIN_FLEET_REQUEST_REASON,
@@ -4953,10 +4994,13 @@ router.post(
             gatewayId: targetGatewayId,
             assignmentWrite: repair ? "create-if-missing" : "upsert",
           },
-          classifyResult: (result) => result.kind === "refused"
-            ? { outcome: "failed", error: result.message }
+          classifyResult: (result) => result.placement.kind === "refused"
+            ? { outcome: "failed", error: result.placement.message }
             : { outcome: "completed" },
-          action: async () => commitOperatorPlacement(store, { uid, gatewayId: targetGatewayId, source: "repair", now: Date.now() }),
+          action: async (claim: OperationAuditActionClaim) => ({
+            placement: await commitOperatorPlacement(store, { uid, gatewayId: targetGatewayId, source: "repair", now: Date.now() }),
+            operationId: claim.auditId,
+          }),
         });
         if (placement.kind === "refused") {
           sendOperatorPlacementRefusal(res, placement, uid, targetGatewayId);
@@ -4967,6 +5011,7 @@ router.post(
           gatewayId: targetGatewayId,
           gatewayProfile: SHARED_GATEWAY_MIRROR.gatewayProfile,
           ...(repair ? { repaired: true } : {}),
+          operationId,
         });
       } catch (e) {
         next(e);
@@ -5099,45 +5144,26 @@ router.post(
           classifyResult: (result) => result.ok
             ? { outcome: "completed" }
             : { outcome: "failed", error: result.error },
-          action: async () => store.transaction({ label: "admin.fleet.patchGateway" }, async (transaction) => {
-            const [currentStored, activeOperations] = await Promise.all([
-              transaction.gateways.roots.get(id),
-              transaction.journal.operations.listByStatus(["pending", "running"]),
-            ]);
-            const current = durableRootOf(currentStored, id);
-            if (!current) return { ok: false as const, error: ERR_GATEWAY_NOT_FOUND };
-            if (current.desiredStatus === "retired" || current.retirementClaim != null) {
-              return {
-                ok: false as const,
-                error: "gateway has a current retirement claim",
-              };
-            }
-            const migrationConflict = findActiveGatewayMigration(id, activeOperations.map(migrationLockRef));
-            if (migrationConflict) {
-              return {
-                ok: false as const,
-                error: `user migration is in flight for gateway ${id}`,
-              };
-            }
-            try {
-              await assertGatewayRuntimeMutationUnfencedInStore(transaction, id);
-            } catch (error) {
-              if (!(error instanceof GatewayRetirementConflictError)) throw error;
-              return { ok: false as const, error: error.message };
-            }
+          dryRunRefusal: () => store.transaction(
+            { label: "admin.fleet.patchGateway.dryRun", readOnly: true },
+            (transaction) => gatewayPatchRefusal(transaction, id),
+          ),
+          action: async (claim: OperationAuditActionClaim) => store.transaction({ label: "admin.fleet.patchGateway" }, async (transaction) => {
+            const refusal = await gatewayPatchRefusal(transaction, id);
+            if (refusal) return refusal;
             await transaction.gateways.roots.patch(id, {
               ...built.ok.patch,
               updatedAt: Date.now(),
               updatedBy,
             });
-            return { ok: true as const };
+            return { ok: true as const, operationId: claim.auditId };
           }),
         });
         if (!patchResult.ok) {
           res.status(409).json({ error: patchResult.error, gatewayId: id });
           return;
         }
-        res.status(202).json({ gatewayId: id, updated: Object.keys(built.ok.patch) });
+        res.status(202).json({ gatewayId: id, updated: Object.keys(built.ok.patch), operationId: patchResult.operationId });
       } catch (e) {
         next(e);
       }
@@ -5808,7 +5834,7 @@ router.get(
                   : `unassign returned ${result.status}`,
               }
             : { outcome: "completed" },
-          action: async () => store.transaction({ label: "admin.fleet.unassignCustomer" }, async (transaction): Promise<{
+          action: async (claim: OperationAuditActionClaim) => store.transaction({ label: "admin.fleet.unassignCustomer" }, async (transaction): Promise<{
             status: number;
             body: Record<string, unknown>;
             from?: string;
@@ -5859,6 +5885,7 @@ router.get(
                 unassigned: true,
                 uid,
                 from: currentGatewayId,
+                operationId: claim.auditId,
               },
               from: currentGatewayId,
             };

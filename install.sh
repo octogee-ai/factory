@@ -29,9 +29,9 @@ usage() {
   say ""
   say "Usage: install.sh [--target=local|gcp|aws] [--check-only] [--yes] [--no-prompt]"
   say ""
-  say "  --target=local   Docker on this machine, for trying it out"
-  say "  --target=gcp     GKE, Cloud SQL and Cloud Storage, for production"
-  say "  --target=aws     EKS, RDS and S3, for production"
+  say "  --target=local   the foundation in Docker on this machine, for trying it out"
+  say "  --target=gcp     the foundation on GKE, Cloud SQL and Cloud Storage"
+  say "  --target=aws     the foundation on EKS, RDS and S3"
   say "  --check-only     verify this machine and stop"
   say "  --yes            install without asking for confirmation"
   say "  --no-prompt      never ask; fail when something is missing"
@@ -272,8 +272,8 @@ choose_target() {
     can_prompt || fail "choose a target with --target=local, --target=gcp or --target=aws"
     printf '%s\n' "Where should Octogee Cloud run?" \
       "  1) This machine, in Docker (for trying it out)" \
-      "  2) Google Cloud: GKE, Cloud SQL, Cloud Storage (production)" \
-      "  3) AWS: EKS, RDS, S3 (production)" >/dev/tty
+      "  2) Google Cloud: GKE, Cloud SQL, Cloud Storage" \
+      "  3) AWS: EKS, RDS, S3" >/dev/tty
     printf 'Choose 1, 2 or 3: ' >/dev/tty
     local choice=""
     IFS= read -r choice </dev/tty || choice=""

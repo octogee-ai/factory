@@ -79,11 +79,8 @@ export async function observeForcedRestart(deps: RestartDeps, beforeBootId: stri
   throw new Error("forced restart readiness is unconfirmed; retry the same Fleet operation to observe without restarting");
 }
 
-export function forceMigrationProbeSource(observation?: { beforeBootId: string; attemptId: string }, dispatch?: ForceMigrationPod): string {
-  const action = dispatch ? `(${dispatchForcedRestart.toString()})(deps,${JSON.stringify(dispatch)},readOwner)` : observation
-    ? `(${observeForcedRestart.toString()})(deps,${JSON.stringify(observation.beforeBootId)},${JSON.stringify(observation.attemptId)})`
-    : "deps.connect().then(async connection=>{try{return {bootId:connection.bootId,nativeOwner:await readOwner()}}finally{connection.close()}})";
-  return `const __name=(target)=>target;const readOwner=${readNativeRestartOwner.toString()};const deadline=setTimeout(()=>{process.stderr.write('forced restart observation timed out; retry the same Fleet operation to observe without restarting\\n');process.exit(1)},185000);(${createRestartDriverDeps.toString()})().then(deps=>${action}).then(value=>{clearTimeout(deadline);process.stdout.write(JSON.stringify(value)+'\\n')}).catch(error=>{clearTimeout(deadline);process.stderr.write(String(error.message)+'\\n');process.exit(1)});`;
+export function forceMigrationProbeSource(): string {
+  return `const __name=(target)=>target;const readOwner=${readNativeRestartOwner.toString()};const dispatch=${dispatchForcedRestart.toString()};const observe=${observeForcedRestart.toString()};const deadline=setTimeout(()=>{process.stderr.write('forced restart observation timed out; retry the same Fleet operation to observe without restarting\\n');process.exit(1)},185000);(${createRestartDriverDeps.toString()})().then(async deps=>{const [mode,input]=process.argv.slice(2);switch(mode){case 'dispatch':return dispatch(deps,JSON.parse(input),readOwner);case 'observe':{const {beforeBootId,attemptId}=JSON.parse(input);return observe(deps,beforeBootId,attemptId);}case 'capture':{const connection=await deps.connect();try{return {bootId:connection.bootId,nativeOwner:await readOwner()}}finally{connection.close()}}default:throw new Error('invalid forced restart probe');}}).then(value=>{clearTimeout(deadline);process.stdout.write(JSON.stringify(value)+'\\n')}).catch(error=>{process.stderr.write(String(error.message)+'\\n');process.exit(1)});`;
 }
 
 interface KubectlResult { code: number; stdout: string; stderr: string }
@@ -132,8 +129,9 @@ export function createForceMigrationTransport(options: ForceMigrationTransportOp
     if (current.podUid !== bound.podUid || current.containerImage !== bound.containerImage) throw new Error("forced restart pod identity or image changed; retained storage is unconfirmed");
   };
   const probe = (podName: string, observation?: { beforeBootId: string; attemptId: string }) => run(
-    ["exec", podName, "-c", "gateway", "-i", "--", "node", "--input-type=commonjs"],
-    { stdin: forceMigrationProbeSource(observation), timeoutMs: observation ? 195000 : 20000 },
+    ["exec", podName, "-c", "gateway", "-i", "--", "node", "--input-type=commonjs", "-",
+      ...(observation ? ["observe", JSON.stringify(observation)] : ["capture"])],
+    { stdin: forceMigrationProbeSource(), timeoutMs: observation ? 195000 : 20000 },
   );
   return {
     capture: async gatewayId => {
@@ -154,8 +152,8 @@ export function createForceMigrationTransport(options: ForceMigrationTransportOp
     dispatch: async bound => {
       await assertSamePod(bound);
       if (!bound.nativeOwner) throw new Error("native force dispatch requires the captured gateway owner");
-      const result = record(await run(["exec", bound.podName, "-c", "gateway", "-i", "--", "node", "--input-type=commonjs"],
-        { stdin: forceMigrationProbeSource(undefined, bound), timeoutMs: 30000 }));
+      const result = record(await run(["exec", bound.podName, "-c", "gateway", "-i", "--", "node", "--input-type=commonjs", "-", "dispatch", JSON.stringify(bound)],
+        { stdin: forceMigrationProbeSource(), timeoutMs: 30000 }));
       if (result.ok !== true || result.pid !== bound.nativeOwner.pid || !["emitted", "coalesced"].includes(String(result.status))) throw new Error("native forced restart acknowledgement is unconfirmed; observe without restarting");
     },
     observe: async (bound, attemptId) => {

@@ -7,8 +7,8 @@ import { describe, expect, it } from "vitest";
 const helperPath = path.resolve(import.meta.dirname, "../lib/secret-extensions.sh");
 
 function run(root: string, body: string): { status: number | null; stdout: string; stderr: string } {
-  const script = [`source ${JSON.stringify(helperPath)}`, `load_secret_extensions ${JSON.stringify(root)}`, body].join("\n");
-  const result = spawnSync("bash", ["-euo", "pipefail", "-c", script], { encoding: "utf8" });
+  const script = ['source "$1"', 'load_secret_extensions "$2"', body].join("\n");
+  const result = spawnSync("bash", ["-euo", "pipefail", "-c", script, "--", helperPath, root], { encoding: "utf8" });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 

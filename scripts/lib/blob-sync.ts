@@ -1,6 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
+import { mkdir, open, type FileHandle } from "node:fs/promises";
 import {
+  isManifestPath,
   putManifestEntries,
   readManifest,
   type Manifest,
@@ -14,6 +16,7 @@ import {
   BLOB_SYNC_MAX_CONCURRENT,
   BLOB_SYNC_MAX_SIZE,
 } from "./config.js";
+import { replaceFileAtomically } from "./atomic-file.js";
 import { MIME_TYPES } from "./helpers.js";
 
 export type { Manifest, ManifestEntry };
@@ -31,6 +34,7 @@ export interface BlobStore {
     relativePath: string;
     gcsPath: string;
     destination: string;
+    size: number;
   }): Promise<void>;
   upload(input: {
     slug: string;
@@ -132,31 +136,35 @@ function pathExists(p: string): boolean {
 }
 
 
-function readJsonOrEmpty<T>(filePath: string): T | null {
+async function withBlobDirectory<T>(
+  root: string,
+  parts: string[],
+  create: boolean,
+  operation: (directory: string) => Promise<T>,
+): Promise<T> {
+  const flags = fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW;
+  const handles: FileHandle[] = [];
+  let directory = root;
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
-  } catch {
-    return null;
+    for (const part of parts) {
+      if (create) await mkdir(path.join(directory, part)).catch(error => {
+        if (error.code !== "EEXIST") throw error;
+      });
+      directory = path.join(directory, part);
+      const handle = await open(directory, flags);
+      handles.push(handle);
+      if (process.platform === "linux") directory = `/proc/self/fd/${handle.fd}`;
+    }
+    return await operation(directory);
+  } finally {
+    for (const handle of handles.reverse()) await handle.close();
   }
-}
-
-function mkdirP(dir: string): void {
-  fs.mkdirSync(dir, { recursive: true });
-}
-
-function writeFile(filePath: string, contents: string): void {
-  fs.writeFileSync(filePath, contents, "utf-8");
-}
-
-function unlinkIfExists(filePath: string): boolean {
-  if (!pathExists(filePath)) return false;
-  fs.unlinkSync(filePath);
-  return true;
 }
 
 function statOrNull(filePath: string): fs.Stats | null {
   try {
-    return fs.statSync(filePath);
+    const stat = fs.lstatSync(filePath);
+    return stat.isFile() ? stat : null;
   } catch {
     return null;
   }
@@ -260,40 +268,46 @@ export async function blobSyncAllWithOptions(opts: BlobSyncAllOptions = {}): Pro
 }
 
 function loadPrevSyncState(syncStatePath: string): string[] {
-  if (!pathExists(syncStatePath)) return [];
-  return readJsonOrEmpty<string[]>(syncStatePath) ?? [];
-}
-
-interface SyncPaths {
-  customerDir: string;
-  blobsDir: string;
-  syncStatePath: string;
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(syncStatePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error("invalid blob sync state file");
+    const state: unknown = JSON.parse(fs.readFileSync(fd, "utf8"));
+    if (!Array.isArray(state) || !state.every(key => typeof key === "string" && isManifestPath(key))) {
+      throw new Error("invalid blob sync state entries");
+    }
+    return state;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      log(`⚠ [blob-sync] could not load sync state: ${error}`);
+    }
+    return [];
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
 }
 
 export function gcsPrefixForSlug(slug: string): string {
   return `customers/${slug}`;
 }
 
-function pathsForSlug(slug: string): SyncPaths {
-  const customerDir = path.join(CUSTOMERS_DIR, slug);
-  const blobsDir = path.join(customerDir, ".blobs");
-  return {
-    customerDir,
-    blobsDir,
-    syncStatePath: path.join(blobsDir, ".sync-state.json"),
-  };
+export async function blobSyncForSlug(slug: string, opts: BlobSyncOptions = {}): Promise<void> {
+  if (!isManifestPath(slug) || slug.includes("/")) throw new Error("invalid blob workspace slug");
+  const store = opts.store ?? await firebaseAdminBlobStore();
+  await mkdir(CUSTOMERS_DIR, { recursive: true });
+  await withBlobDirectory(fs.realpathSync(CUSTOMERS_DIR), [slug, ".blobs"], true, blobsDir =>
+    syncBlobDirectory(slug, blobsDir, store, opts.strict));
 }
 
-export async function blobSyncForSlug(slug: string, opts: BlobSyncOptions = {}): Promise<void> {
-  const paths = pathsForSlug(slug);
-  const store = opts.store ?? await firebaseAdminBlobStore();
+async function syncBlobDirectory(
+  slug: string, blobsDir: string, store: BlobStore, strict?: boolean,
+): Promise<void> {
   const manifestStore = store.manifestFor(slug);
   const manifest = await readManifest(manifestStore, gcsPrefixForSlug(slug));
-
-  mkdirP(paths.blobsDir);
-
-  const prevSyncedPaths = loadPrevSyncState(paths.syncStatePath);
-  const localFiles = discoverLocalFiles(paths.blobsDir);
+  const syncStatePath = path.join(blobsDir, ".sync-state.json");
+  const prevSyncedPaths = loadPrevSyncState(syncStatePath);
+  const localFiles = discoverLocalFiles(blobsDir);
   const actions = computeBlobSyncActions({ manifest, localFiles, prevSyncedPaths });
 
   for (const { path: p, size } of actions.skippedDownload) {
@@ -303,19 +317,19 @@ export async function blobSyncForSlug(slug: string, opts: BlobSyncOptions = {}):
     log(`⚠ [blob-sync] ${slug}: skipping upload ${p} (${mb(size)}MB > ${mb(BLOB_SYNC_MAX_SIZE)}MB)`);
   }
 
-  const downloads = await runDownloads(slug, paths.blobsDir, actions.toDownload, store);
-  const uploads = await runUploads(slug, paths.blobsDir, actions.toUpload, store);
+  const downloads = await runDownloads(slug, blobsDir, actions.toDownload, store);
+  const uploads = await runUploads(slug, blobsDir, actions.toUpload, store);
   const failures = [...downloads.failures, ...uploads.failures];
-  if (opts.strict && failures.length > 0) {
+  if (strict && failures.length > 0) {
     throw new Error(failures.join("; "));
   }
-  const cleanupCount = runCleanup(paths.blobsDir, actions.toDelete);
+  const cleanupCount = await runCleanup(blobsDir, actions.toDelete);
 
   if (uploads.count > 0) {
     await putManifestEntries(manifestStore, gcsPrefixForSlug(slug), uploads.recorded);
     Object.assign(manifest, uploads.recorded);
   }
-  writeFile(paths.syncStatePath, JSON.stringify(Object.keys(manifest)));
+  replaceFileAtomically(syncStatePath, JSON.stringify(Object.keys(manifest)));
 
   logSummary(slug, {
     downloadCount: downloads.count,
@@ -339,14 +353,14 @@ async function runDownloads(
   for (let i = 0; i < queue.length; i += BLOB_SYNC_MAX_CONCURRENT) {
     const batch = queue.slice(i, i + BLOB_SYNC_MAX_CONCURRENT);
     await Promise.all(batch.map(async ({ path: blobPath, entry }) => {
-      const localPath = path.join(blobsDir, blobPath);
-      mkdirP(path.dirname(localPath));
+      const parts = blobPath.split("/");
+      const name = parts.pop()!;
       try {
-        await store.download({
-          slug,
-          relativePath: blobPath,
-          gcsPath: entry.gcsPath,
-          destination: localPath,
+        await withBlobDirectory(blobsDir, parts, true, async directory => {
+          const destination = path.join(directory, name);
+          const existing = fs.lstatSync(destination, { throwIfNoEntry: false });
+          if (existing && (!existing.isFile() || existing.nlink !== 1)) throw new Error("unsafe blob destination");
+          await store.download({ slug, relativePath: blobPath, gcsPath: entry.gcsPath, destination, size: entry.size });
         });
         count++;
       } catch (err) {
@@ -368,15 +382,20 @@ async function runUploads(
   const failures: string[] = [];
   const recorded: Manifest = {};
   for (const relativePath of queue) {
-    const localPath = path.join(blobsDir, relativePath);
-    const stats = statOrNull(localPath);
-    if (!stats) continue;
-    const gcsPath = `customers/${slug}/${relativePath}`;
-    const mimeType = mimeTypeForPath(relativePath);
+    if (!isManifestPath(relativePath)) continue;
+    const parts = relativePath.split("/");
+    const name = parts.pop()!;
     try {
-      await store.upload({ slug, relativePath, gcsPath, localPath, mimeType, size: stats.size });
-      recordUpload(recorded, relativePath, slug, stats.size);
-      count++;
+      await withBlobDirectory(blobsDir, parts, false, async directory => {
+        const localPath = path.join(directory, name);
+        const stats = statOrNull(localPath);
+        if (!stats) return;
+        const gcsPath = `customers/${slug}/${relativePath}`;
+        const mimeType = mimeTypeForPath(relativePath);
+        await store.upload({ slug, relativePath, gcsPath, localPath, mimeType, size: stats.size });
+        recordUpload(recorded, relativePath, slug, stats.size);
+        count++;
+      });
     } catch (err) {
       log(`⚠ [blob-sync] ${slug}: failed to upload ${relativePath}: ${err}`);
       failures.push(`upload ${relativePath}: ${err instanceof Error ? err.message : String(err)}`);
@@ -385,10 +404,19 @@ async function runUploads(
   return { count, failures, recorded };
 }
 
-function runCleanup(blobsDir: string, toDelete: string[]): number {
+async function runCleanup(blobsDir: string, toDelete: string[]): Promise<number> {
   let count = 0;
   for (const relativePath of toDelete) {
-    if (unlinkIfExists(path.join(blobsDir, relativePath))) count++;
+    const parts = relativePath.split("/");
+    const name = parts.pop()!;
+    await withBlobDirectory(blobsDir, parts, false, async directory => {
+      try {
+        fs.unlinkSync(path.join(directory, name));
+        count++;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    });
   }
   return count;
 }

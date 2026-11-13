@@ -7,6 +7,7 @@ import {
   MANIFEST,
   SOURCE_SHA,
   VM_RUNTIME,
+  gatewayRoot,
   harness,
   operation,
   placedUser,
@@ -139,6 +140,14 @@ describe("a dry run of a changing request", () => {
   const movingAda = operation("move-ada", {
     kind: "migrate-user", status: "pending", inputUid: "uid-ada", input: { uid: "uid-ada", toGatewayId: "shared-b" },
   });
+  const sharedB = (overrides: Record<string, unknown>): Seed => ({
+    "gateways/shared-b": gatewayRoot("shared-b", { liveRelease: 1, ...overrides }),
+  });
+  const claimedForRetirement = sharedB({
+    retirementClaim: { operationId: "retire-1", version: 1, claimedAt: 1, phase: "claimed", liveRelease: 1, liveRuntimeIdentity: null, previousDesiredStatus: "running" },
+  });
+  const restartUnresolved = sharedB({ runtimeRestartFence: { attemptId: "restart-1" } });
+  const parkSharedB: ChangingRequest = { method: "patch", path: "/gateways/shared-b", body: { desiredStatus: "paused" } };
 
   it.each<[string, number, ChangingRequest, Seed]>([
     ["restart of an unknown gateway", 404, { method: "post", path: "/gateways/nowhere/restart" }, FLEET],
@@ -159,6 +168,9 @@ describe("a dry run of a changing request", () => {
     ["migration to an unregistered gateway", 404, { method: "post", path: "/users/uid-ada/migrate", body: { to: "nowhere" } }, FLEET],
     ["migration to the user's current gateway", 409, { method: "post", path: "/users/uid-ada/migrate", body: { to: "shared-a" } }, FLEET],
     ["migration while another is in flight", 409, { method: "post", path: "/users/uid-ada/migrate", body: { to: "shared-b" } }, { ...FLEET, ...movingAda }],
+    ["update of a gateway claimed for retirement", 409, parkSharedB, { ...FLEET, ...claimedForRetirement }],
+    ["update of a gateway a user is moving to", 409, parkSharedB, { ...FLEET, ...movingAda }],
+    ["update of a gateway whose restart outcome is unresolved", 409, parkSharedB, { ...FLEET, ...restartUnresolved }],
   ])("refuses a %s exactly as the real request does", async (_label, status, call, seed) => {
     const h = harness(seed);
     const before = h.snapshot();

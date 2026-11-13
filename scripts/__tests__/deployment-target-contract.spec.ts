@@ -22,6 +22,10 @@ function deploymentSettings(path: string): string {
   ];
   for (const { name, image } of images) {
     if (!image?.repository) continue;
+    if (image.repository === `ghcr.io/octogee-ai/octogee-cloud/${name}`) {
+      delete image.repository;
+      continue;
+    }
     const targets = JSON.parse(source("core/src/fixtures/deployment-targets.json")) as {
       targets: Record<string, { artifactRegistry: { location: string; projectId: string; repository: string } }>;
     };

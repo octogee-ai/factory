@@ -1114,6 +1114,19 @@ describe("applyPreBootPatches — memory search embeddings", () => {
     expect(({} as any).polluted).toBeUndefined();
   });
 
+  it("adds legacy fields without traversing an inherited canonical search property", () => {
+    const inherited = { nested: { inherited: true } };
+    const search = Object.create(inherited);
+    const config = { agents: { entries: { "octogee-alice-coach": {
+      memory: { search }, memorySearch: { nested: { migrated: true } },
+    } } } };
+
+    expect(applyMemorySearchSchemaPatch(config, vi.fn())).toBe(true);
+    expect(Object.hasOwn(search, "nested")).toBe(true);
+    expect(search.nested).toEqual({ migrated: true });
+    expect(inherited.nested).toEqual({ inherited: true });
+  });
+
   it("does not add memory search SecretRefs unless embeddings are enabled", () => {
     const config: any = {
       tools: { profile: "coding" },

@@ -1,8 +1,32 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { FeaturePolicy } from "./feature-policy.js";
+import { FEATURE_FLAG_KEYS } from "@octogee/shared/types/feature-flags";
+
+import { FeaturePolicy, configuredFeatureFlagProvider } from "./feature-policy.js";
 
 const subject = { uid: "uid-alice", isAdmin: false, workspaceSlug: "private-workspace" };
+
+describe("configuredFeatureFlagProvider", () => {
+  async function enabledFlags(env: NodeJS.ProcessEnv) {
+    const policy = new FeaturePolicy(configuredFeatureFlagProvider(env));
+    const decisions = await policy.userVisibleDecisions(subject, "configured-flags");
+    return FEATURE_FLAG_KEYS.filter((key) => decisions[key].state === "enabled");
+  }
+
+  it("leaves every flag disabled when ENABLED_FEATURE_FLAGS is unset", async () => {
+    await expect(enabledFlags({})).resolves.toEqual([]);
+  });
+
+  it("enables exactly the listed flags for every user", async () => {
+    await expect(enabledFlags({ ENABLED_FEATURE_FLAGS: " release-voice-talk,release-agent-import ,," }))
+      .resolves.toEqual(["release-agent-import", "release-voice-talk"]);
+  });
+
+  it("refuses a key that is not a platform feature flag", () => {
+    expect(() => configuredFeatureFlagProvider({ ENABLED_FEATURE_FLAGS: "release-agent-import,release-agent-imprt" }))
+      .toThrow(/ENABLED_FEATURE_FLAGS.*release-agent-imprt/);
+  });
+});
 
 describe("FeaturePolicy", () => {
   it("uses the verified subject and maps enabled and disabled provider values", async () => {

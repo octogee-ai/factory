@@ -36,7 +36,7 @@ describe("authored export custody", () => {
     registerAgentExportBrokerRoutes(router, {
       store, featurePolicy: new FeaturePolicy({ evaluate: async () => ({ isEnabled: () => true }) }),
       readIdentity: async () => ({ name: null, persona: null, emoji: null }),
-      bucket: { file: () => { throw new Error("unexpected blob access"); }, deleteFiles: async () => { throw new Error("unexpected blob deletion"); } },
+      blobs: () => { throw new Error("unexpected blob access"); },
     }, () => owner);
     app.use(router);
     app.use((error: { status?: number }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

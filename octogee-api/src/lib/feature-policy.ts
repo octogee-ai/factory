@@ -1,6 +1,8 @@
 import {
+  FEATURE_FLAG_KEYS,
   USER_VISIBLE_FEATURE_FLAG_KEYS,
   featureFlagBypassedForAdmin,
+  isFeatureFlagKey,
   type FeatureDecision,
   type FeatureFlagKey,
   type FeaturePolicy as FeaturePolicyContract,
@@ -124,4 +126,34 @@ export class DisabledFeatureFlagProvider implements FeatureFlagProvider {
   }> {
     return { isEnabled: () => false };
   }
+}
+
+export class StaticFeatureFlagProvider implements FeatureFlagProvider {
+  private readonly enabled: ReadonlySet<FeatureFlagKey>;
+
+  constructor(enabled: Iterable<FeatureFlagKey>) {
+    this.enabled = new Set(enabled);
+  }
+
+  async evaluate(_subject: FeatureSubject, _keys: readonly FeatureFlagKey[]): Promise<{
+    isEnabled(key: FeatureFlagKey): boolean;
+  }> {
+    return { isEnabled: (key) => this.enabled.has(key) };
+  }
+}
+
+const ENABLED_FEATURE_FLAGS = "ENABLED_FEATURE_FLAGS";
+
+export function configuredFeatureFlagProvider(env: NodeJS.ProcessEnv): FeatureFlagProvider {
+  const configured = env[ENABLED_FEATURE_FLAGS];
+  if (configured === undefined) return new DisabledFeatureFlagProvider();
+  const keys = configured.split(",").map((key) => key.trim()).filter((key) => key.length > 0);
+  const unknown = keys.filter((key) => !isFeatureFlagKey(key));
+  if (unknown.length > 0) {
+    throw new Error(
+      `${ENABLED_FEATURE_FLAGS} names unknown feature flags: ${unknown.join(", ")}. `
+      + `Known flags: ${FEATURE_FLAG_KEYS.join(", ")}`,
+    );
+  }
+  return new StaticFeatureFlagProvider(keys.filter(isFeatureFlagKey));
 }

@@ -46,9 +46,10 @@ the command if yours are low.
 | Agent runtime | OpenClaw gateway | OpenClaw gateway | |
 | Model access | Your own API key | Your own API key | Any provider OpenClaw supports |
 
-Docker runs Kubernetes because the fleet controller installs gateways with
-Helm, so both paths use the same charts. [Running in production](running-in-the-cloud.md)
-covers the managed path.
+Both installers run Kubernetes, even in Docker. The full platform needs it
+because the fleet controller installs gateways with Helm.
+[Running the foundation in the cloud](running-in-the-cloud.md) covers the
+managed path, which installs the foundation only.
 
 ## Plug-in points
 

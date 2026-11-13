@@ -26,9 +26,7 @@ function validate(input: {
     is_active: true,
   });
   const result = spawnSync("bash", ["-euo", "pipefail", "-c", [
-    `source ${JSON.stringify(helper)}`,
-    `MM_ME_RESPONSE=${JSON.stringify(admin)}`,
-    `MM_PAT_RESPONSE=${JSON.stringify(accessToken)}`,
+    'source "$1"',
     "curl() {",
     '  case "$*" in',
     '    *"/users/me"*) printf "%s" "$MM_ME_RESPONSE" ;;',
@@ -36,8 +34,10 @@ function validate(input: {
     "    *) return 99 ;;",
     "  esac",
     "}",
-    `mm_admin_pat_is_valid ${JSON.stringify(input.token)} ${JSON.stringify(username)} ${JSON.stringify(userId)} ${JSON.stringify(input.tokenId ?? patId)} ${JSON.stringify(input.tokenFingerprint ?? fingerprint(platformPat))} https://mattermost.test`,
-  ].join("\n")], { cwd: repoRoot, encoding: "utf8" });
+    'mm_admin_pat_is_valid "$2" "$3" "$4" "$5" "$6" https://mattermost.test',
+  ].join("\n"), "--", helper, input.token, username, userId, input.tokenId ?? patId, input.tokenFingerprint ?? fingerprint(platformPat)], {
+    cwd: repoRoot, encoding: "utf8", env: { ...process.env, MM_ME_RESPONSE: admin, MM_PAT_RESPONSE: accessToken },
+  });
   return result;
 }
 

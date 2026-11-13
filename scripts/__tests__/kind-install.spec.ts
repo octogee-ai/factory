@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { parsePlatformModelConfig, resolveHouseModel } from "../../shared/types/platform-config.js";
 import { createStubHost, REPO_ROOT, type StubHost } from "./deploy/stub-host";
 
 const SCRIPT = join(REPO_ROOT, "scripts/ops/kind-install.sh");
@@ -39,6 +40,7 @@ const KUBECTL = `case " $* " in
 esac`;
 
 const KIND = `case "$1 $2" in
+  "get clusters") printf '%s\\n' "\${CLUSTERS:-}" ;;
   "get nodes") echo octogee-control-plane ;;
   "create cluster") cat >/dev/null ;;
 esac`;
@@ -71,7 +73,7 @@ describe("kind-install.sh", () => {
 
   const run = (args: string[], machine = "arm64") => {
     host.stub("uname", `echo ${machine}`);
-    return host.run(SCRIPT, args, { env: { OCTOGEE_KIND_STATE: state, INDEX } });
+    return host.run(SCRIPT, args, { env: { OCTOGEE_KIND_STATE: state, INDEX, OPENROUTER_API_KEY: "sk-or-kind-test" } });
   };
   const copies = () => host.calls().filter(call => call.includes(" imagetools create "));
   const inspected = () => host.calls().filter(call => call.includes(" imagetools inspect "));
@@ -191,14 +193,140 @@ ${KUBECTL}`);
     rmSync(stored, { recursive: true, force: true });
   });
 
-  it("warns that agents cannot reply when no provider key is supplied or stored", () => {
+  const upWithoutExportedKey = (env: Record<string, string> = {}) => {
+    host.stub("uname", "echo arm64");
+    return host.run(SCRIPT, ["up", "--pull", `--sha=${PUBLISHED}`], { env: { OCTOGEE_KIND_STATE: state, INDEX, ...env } });
+  };
+  const startedInstalling = () => host.calls().filter(call =>
+    call.startsWith("docker ") || call.startsWith("kubectl ") || call.startsWith("helm ") || / (create|export) /.test(call));
+
+  it("refuses to install without a model provider key, before it starts the registry, creates the cluster or copies images", () => {
+    const result = upWithoutExportedKey();
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("https://openrouter.ai/keys");
+    for (const variable of ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]) expect(result.stderr).toContain(variable);
+    expect(startedInstalling()).toEqual([]);
+  });
+
+  it("refuses a rerun when the existing cluster stores no provider key", () => {
     host.stub("kubectl", `if [[ " $* " == *" get secret octogee-"* ]]; then exit 1; fi
 ${KUBECTL}`);
-    const result = run(["up", "--pull", `--sha=${PUBLISHED}`]);
+    const result = upWithoutExportedKey({ CLUSTERS: "octogee" });
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toContain("no model provider key");
+    expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("OPENROUTER_API_KEY");
+    expect(startedInstalling().filter(call => !call.includes(" get secret octogee-"))).toEqual([]);
+  });
+
+  it("accepts a provider key the existing cluster already stores, so a rerun need not export it", () => {
+    host.stub("kubectl", `if [[ " $* " == *" get secret octogee-"* ]]; then [[ " $* " == *" get secret octogee-anthropic "* ]]; exit; fi
+${KUBECTL}`);
+    const result = upWithoutExportedKey({ CLUSTERS: "octogee" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).not.toContain("kind-install:");
+  });
+
+  describe("agent models", () => {
+    let sqlDir: string;
+
+    beforeEach(() => {
+      sqlDir = mkdtempSync(join(tmpdir(), "kind-install-sql-"));
+    });
+
+    afterEach(() => {
+      rmSync(sqlDir, { recursive: true, force: true });
+    });
+
+    const withStoredKeys = (stored: string[]) => host.stub("kubectl", `if [[ " $* " == *" get secret octogee-"* ]]; then
+  for provider in ${stored.join(" ")}; do [[ " $* " == *" get secret octogee-$provider "* ]] && exit 0; done
+  exit 1
+fi
+if [[ " $* " == *" exec -i statefulset/postgres -- psql "* ]]; then
+  count=$(cat "$SQL_DIR/count" 2>/dev/null || echo 0); count=$((count + 1)); echo "$count" > "$SQL_DIR/count"
+  cat > "$SQL_DIR/$count.sql"
+  previous=""
+  for arg in "$@"; do
+    [[ "$previous" == -v && "$arg" == value=* ]] && printf '%s' "\${arg#value=}" > "$SQL_DIR/$count.value"
+    previous="$arg"
+  done
+  [[ "$(cat "$SQL_DIR/$count.sql")" == *"SELECT updated_by"* ]] && printf '%s\\n' "$OWNER"
+  exit 0
+fi
+${KUBECTL}`);
+    const up = (env: Record<string, string> = {}, owner = "") => {
+      host.stub("uname", "echo arm64");
+      return host.run(SCRIPT, ["up", "--pull", `--sha=${PUBLISHED}`], { env: { OCTOGEE_KIND_STATE: state, INDEX, CLUSTERS: "octogee", SQL_DIR: sqlDir, OWNER: owner, ...env } });
+    };
+    const statements = () => {
+      const count = existsSync(join(sqlDir, "count")) ? Number(readFileSync(join(sqlDir, "count"), "utf8")) : 0;
+      return Array.from({ length: count }, (_, index) => ({
+        sql: readFileSync(join(sqlDir, `${index + 1}.sql`), "utf8"),
+        value: existsSync(join(sqlDir, `${index + 1}.value`)) ? JSON.parse(readFileSync(join(sqlDir, `${index + 1}.value`), "utf8")) : null,
+      }));
+    };
+    const written = () => statements().filter(statement => statement.sql.includes("INSERT INTO platform.platform_config"));
+
+    it.each([
+      [["openrouter"], "openrouter"],
+      [["anthropic"], "anthropic"],
+      [["openai"], "openai"],
+      [["anthropic", "openai"], "anthropic"],
+      [["anthropic", "openai", "openrouter"], "openrouter"],
+    ])("points agents and the house model at catalog models of a provider with a stored key (%j -> %s)", (stored, provider) => {
+      withStoredKeys(stored);
+      const result = up();
+
+      expect(result.status, result.stderr).toBe(0);
+      const [models] = written();
+      expect(models.sql).toContain("'models'");
+      expect(models.sql).toContain("'kind-install'");
+      expect(parsePlatformModelConfig(models.value)).not.toBeNull();
+      const refs = [models.value.builderAgentModelRef, models.value.builderAgentFallbackModelRef, models.value.freeTierModelRef];
+      expect(refs.map(ref => resolveHouseModel(ref)?.provider)).toEqual([provider, provider, provider]);
+      expect(models.value.builderAgentFallbackModelRef).not.toBe(models.value.builderAgentModelRef);
+      expect(result.stdout).toContain(`Agents use ${models.value.builderAgentModelRef}`);
+    });
+
+    it("uses a key exported for this run before the cluster has its Secret", () => {
+      withStoredKeys([]);
+      const result = up({ OPENROUTER_API_KEY: "sk-or-kind-test" });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(resolveHouseModel(written()[0].value.builderAgentModelRef)?.provider).toBe("openrouter");
+    });
+
+    it("never defaults agents to OpenRouter's z-ai/glm-5.2", () => {
+      withStoredKeys(["openrouter"]);
+      expect(up().status).toBe(0);
+      expect(Object.values(written()[0].value)).not.toContain("platform-openrouter/z-ai/glm-5.2");
+    });
+
+    it("sets no agent models when the install has no provider key", () => {
+      withStoredKeys([]);
+      const result = up();
+
+      expect(result.status).not.toBe(0);
+      expect(statements()).toEqual([]);
+    });
+
+    it("keeps agent models that someone else set", () => {
+      withStoredKeys(["openrouter"]);
+      const result = up({}, "kind-agent-round-trip");
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(written()).toEqual([]);
+      expect(result.stdout).toContain("Keeping the agent models that kind-agent-round-trip set");
+    });
+
+    it("replaces the agent models it set itself when the stored keys change", () => {
+      withStoredKeys(["openai"]);
+      const result = up({}, "kind-install");
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(resolveHouseModel(written()[0].value.builderAgentModelRef)?.provider).toBe("openai");
+    });
   });
 
   it.each([

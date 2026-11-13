@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -32,8 +32,12 @@ function adminHeaders(): Record<string, string> {
 function freshPubKey(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gitea-admin-live-"));
   const keyPath = path.join(dir, "id_ed25519");
-  execSync(`ssh-keygen -t ed25519 -N "" -f "${keyPath}" -C "${USER}@live" -q`, { stdio: "pipe" });
-  return fs.readFileSync(`${keyPath}.pub`, "utf-8").trim();
+  try {
+    execFileSync("/usr/bin/ssh-keygen", ["-t", "ed25519", "-N", "", "-f", keyPath, "-C", `${USER}@live`, "-q"], { stdio: "pipe" });
+    return fs.readFileSync(`${keyPath}.pub`, "utf-8").trim();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 describe.skipIf(!RUN_LIVE)("gitea-admin — live against real Gitea (relocated provisioner ops)", () => {

@@ -85,7 +85,9 @@ export function mkCollection(records, createId) {
 }
 export function harnessDocuments(input) {
     const docsIn = (byName, name) => {
-        byName[name] ??= {};
+        if (!Object.hasOwn(byName, name)) {
+            Object.defineProperty(byName, name, { value: {}, enumerable: true, writable: true, configurable: true });
+        }
         return byName[name];
     };
     const locate = (path) => {
@@ -109,18 +111,18 @@ export function harnessDocuments(input) {
     ];
     return {
         get: (path) => {
-            if (path in input.singletons)
+            if (Object.hasOwn(input.singletons, path))
                 return input.singletons[path].get();
             const [docs, id] = locate(path);
-            return docs[id];
+            return Object.hasOwn(docs, id) ? docs[id] : undefined;
         },
         set: (path, row) => {
-            if (path in input.singletons) {
+            if (Object.hasOwn(input.singletons, path)) {
                 input.singletons[path].set(row);
                 return;
             }
             const [docs, id] = locate(path);
-            docs[id] = row;
+            Object.defineProperty(docs, id, { value: row, enumerable: true, writable: true, configurable: true });
         },
         delete: (path) => {
             const [docs, id] = locate(path);

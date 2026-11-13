@@ -3,7 +3,7 @@ import type { BlobStore } from "../../../gateway-edge/src/lib/blob-store.js";
 import { registerAgentExportBrokerRoutes } from "./agent-export-broker.js";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { randomUUID } from "node:crypto";
-import { Transform, type Readable, type Writable } from "node:stream";
+import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 import type { UserAccountReader } from "@octogee/core/user-account";
@@ -42,24 +42,10 @@ const RECOVERY_STATUSES = new Set([
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 type JsonObject = Record<string, unknown>;
 
-interface BucketLike {
-  file(path: string): {
-    save(value: Buffer | string, options?: unknown): Promise<unknown>;
-    download(): Promise<[Buffer]>;
-    createWriteStream(options?: unknown): Writable;
-    createReadStream(): Readable;
-    exists(): Promise<[boolean]>;
-    delete(): Promise<unknown>;
-    move(destination: string): Promise<unknown>;
-  };
-  deleteFiles(options: { prefix: string }): Promise<unknown>;
-}
-
 export interface AgentImportBrokerDeps {
   store: PlatformStateStore;
   accounts: UserAccountReader;
-  bucket: BucketLike;
-  exportBlobs?: () => BlobStore;
+  blobs: () => BlobStore;
   readGithubToken(uid: string): Promise<string | null>;
   listGithubRepos(token: string): Promise<unknown>;
   readGithubRepoSize(owner: string, repo: string, token: string): Promise<number>;
@@ -187,11 +173,6 @@ function durableRecord(owner: OwnerContext, id: string, payload: JsonObject, now
   return agentImportRecordFromPayload(owner.uid, id, record, now.getTime() + (rollbackEligible ? 8 : 1) * DAY_MS);
 }
 
-function missingObject(error: unknown): boolean {
-  const code = object(error)?.code;
-  return code === 404 || code === "404";
-}
-
 function stagingPath(owner: OwnerContext, id: string, name: string): string {
   return `agent-imports/${owner.uid}/${id}/${name}`;
 }
@@ -201,8 +182,9 @@ async function streamRequestBody(
   deps: AgentImportBrokerDeps,
   objectPath: string,
   limit: number,
-  options: unknown,
+  contentType: string,
 ): Promise<number> {
+  const blobs = deps.blobs();
   const uploadId = deps.newUploadId?.() ?? randomUUID();
   const temporaryPath = `${objectPath}.upload-${uploadId}`;
   let size = 0;
@@ -220,18 +202,18 @@ async function streamRequestBody(
     },
   });
   try {
-    await pipeline(req, limiter, deps.bucket.file(temporaryPath).createWriteStream(options));
+    await pipeline(req, limiter, (source: AsyncIterable<Uint8Array>) => blobs.saveStream(temporaryPath, source, { contentType }));
     if (size === 0) {
       throw Object.assign(new Error("request body is empty"), {
         status: 400,
         code: "invalid_archive",
       });
     }
-    await deps.bucket.file(temporaryPath).move(objectPath);
+    await blobs.move(temporaryPath, objectPath);
   } catch (error) {
     req.resume();
     try {
-      await deps.bucket.file(temporaryPath).delete();
+      await blobs.delete(temporaryPath);
     } catch (cleanupError) {
       throw Object.assign(new AggregateError([error, cleanupError], "import upload cleanup failed"), {
         status: typeof object(error)?.status === "number" ? object(error)?.status : 500,
@@ -451,9 +433,8 @@ function registerPlanRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): 
         res.status(400).json({ error: "invalid_import_plan" });
         return;
       }
-      await deps.bucket.file(stagingPath(context(res), id, "plan.json")).save(JSON.stringify(payload), {
+      await deps.blobs().save(stagingPath(context(res), id, "plan.json"), JSON.stringify(payload), {
         contentType: "application/json",
-        resumable: false,
       });
       res.status(204).end();
     } catch (error) {
@@ -465,17 +446,8 @@ function registerPlanRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): 
     try {
       const id = importId(req, res);
       if (!id) return;
-      let payload: JsonObject | null;
-      try {
-        const [contents] = await deps.bucket.file(stagingPath(context(res), id, "plan.json")).download();
-        payload = ownedPayload(JSON.parse(contents.toString("utf8")), context(res));
-      } catch (error) {
-        if (missingObject(error)) {
-          res.status(404).json({ error: "not_found" });
-          return;
-        }
-        throw error;
-      }
+      const stored = await deps.blobs().download(stagingPath(context(res), id, "plan.json"));
+      const payload = stored ? ownedPayload(JSON.parse(stored.bytes.toString("utf8")), context(res)) : null;
       if (!payload || typeof payload.approvalHash !== "string") {
         res.status(404).json({ error: "not_found" });
         return;
@@ -502,7 +474,7 @@ function registerArchiveRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps
         deps,
         stagingPath(context(res), id, "source.zip"),
         deps.maxArchiveBytes ?? MAX_ARCHIVE_BYTES,
-        { contentType: "application/zip", resumable: true },
+        "application/zip",
       );
       res.status(204).end();
     } catch (error) {
@@ -514,14 +486,12 @@ function registerArchiveRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps
     try {
       const id = importId(req, res);
       if (!id) return;
-      const file = deps.bucket.file(stagingPath(context(res), id, "source.zip"));
-      const [exists] = await file.exists();
-      if (!exists) {
+      const archive = await deps.blobs().download(stagingPath(context(res), id, "source.zip"));
+      if (!archive) {
         res.status(404).json({ error: "not_found" });
         return;
       }
-      res.type("application/zip");
-      await pipeline(file.createReadStream(), res);
+      res.type("application/zip").send(archive.bytes);
     } catch (error) {
       next(error);
     }
@@ -531,7 +501,7 @@ function registerArchiveRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps
     try {
       const id = importId(req, res);
       if (!id) return;
-      await deps.bucket.deleteFiles({ prefix: stagingPath(context(res), id, "") });
+      await deps.blobs().deletePrefix(stagingPath(context(res), id, ""));
       res.status(204).end();
     } catch (error) {
       next(error);
@@ -557,7 +527,7 @@ function registerBlobRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): 
         deps,
         objectPath,
         deps.maxBlobBytes ?? MAX_BLOB_BYTES,
-        { metadata: { contentType: mimeType } },
+        mimeType,
       );
       const manifest: AgentImportManifestEntry = {
         type: "blob",
@@ -576,7 +546,7 @@ function registerBlobRoutes(router: BrokerRouter, deps: AgentImportBrokerDeps): 
     try {
       const id = importId(req, res);
       if (!id) return;
-      await deps.bucket.deleteFiles({ prefix: `customers/${context(res).slug}/agent-imports/${id}/` });
+      await deps.blobs().deletePrefix(`customers/${context(res).slug}/agent-imports/${id}/`);
       res.status(204).end();
     } catch (error) {
       next(error);

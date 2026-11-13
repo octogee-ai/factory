@@ -612,9 +612,9 @@ function mergeMissingInto(
 ): void {
   for (const [key, sourceValue] of Object.entries(source)) {
     if (sourceValue === undefined || PROTO_POLLUTION_KEYS.has(key)) continue;
-    const targetValue = target[key];
+    const targetValue = Object.hasOwn(target, key) ? target[key] : undefined;
     if (targetValue === undefined) {
-      target[key] = sourceValue;
+      Object.defineProperty(target, key, { value: sourceValue, enumerable: true, writable: true, configurable: true });
       continue;
     }
     if (isPlainObject(targetValue) && isPlainObject(sourceValue)) {
