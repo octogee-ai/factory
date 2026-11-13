@@ -109,6 +109,17 @@ describe("public platform image plan", () => {
     }
   });
 
+  it("leaves the isolated gateway and its base out of the GitHub Actions cache", () => {
+    const { target } = plan({ platform: "linux/amd64", cache: "gha" });
+    for (const name of ["octogee-gateway-builder-base", "octogee-gateway-builder"]) {
+      expect(target[name]["cache-from"]).toBeUndefined();
+      expect(target[name]["cache-to"]).toBeUndefined();
+    }
+    for (const name of ["octogee-gateway-base", "octogee-gateway-system", "octogee-gateway"]) {
+      expect(target[name]["cache-to"]).toEqual([`type=gha,scope=octogee-cloud-${name}-linux-amd64,mode=max`]);
+    }
+  });
+
   it("tags images under a prefix to push them to a local registry", () => {
     const { target } = plan({ push: true, tagPrefix: "kind-registry:5000/octogee/" });
     expect(target["gateway-edge"]).toMatchObject({ output: ["type=image,push=true"], tags: ["kind-registry:5000/octogee/gateway-edge:aaaaaaa"] });
