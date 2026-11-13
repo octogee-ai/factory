@@ -107,6 +107,21 @@ it("skips an altered optional snapshot and preserves existing destination state"
   expect(f.log).toHaveBeenCalledWith(expect.stringContaining("checksum mismatch"));
 });
 
+it("skips an optional snapshot with a symlinked manifest", async () => {
+  const f = await fixture();
+  database(path.join(f.source, home, "goals_1.sqlite")).close();
+  await exportCodexStoreSnapshots(f);
+  const filename = path.join(f.stage, home, ".octogee-codex-snapshots/goals_1.sqlite.backup.json");
+  const outside = path.join(f.root, "manifest.json");
+  await fs.rename(filename, outside);
+  await fs.symlink(outside, filename);
+
+  await install(f);
+
+  await expect(fs.stat(path.join(f.target, home, "goals_1.sqlite"))).rejects.toMatchObject({ code: "ENOENT" });
+  expect(f.log).toHaveBeenCalledWith(expect.stringContaining("omitted optional database"));
+});
+
 it("does not replace an optional database still held by a destination process", async () => {
   const f = await fixture(), destination = path.join(f.target, home, "goals_1.sqlite");
   database(path.join(f.source, home, "goals_1.sqlite"), "incoming").close();
