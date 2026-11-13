@@ -164,7 +164,7 @@ jobs:
           name: image-manifest-${{ github.sha }}
           path: ${{ runner.temp }}/build-manifest
       - name: Install octogee-fleet
-        run: GOBIN="$RUNNER_TEMP/bin" go install github.com/octogee-ai/octogee-fleet@v0.1.0
+        run: GOBIN="$RUNNER_TEMP/bin" go install github.com/octogee-ai/octogee-fleet@2c4fbc9ae76406eeab47182778fc487d87324127 # v0.1.0
       - name: Install the published images
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
