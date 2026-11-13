@@ -67,6 +67,30 @@ describe("blob sync without a manifest", () => {
       gcsPath: "customers/aug29/avatar.png",
     });
   });
+  it("refuses a manifest download through a symlinked blob directory", async () => {
+    const blobsDir = path.join(paths.users, "aug29", ".blobs");
+    const outside = path.join(paths.root, "outside");
+    fs.mkdirSync(blobsDir, { recursive: true });
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(blobsDir, "images"), "dir");
+    const download = vi.fn(async ({ destination }: { destination: string }) => fs.writeFileSync(destination, "new"));
+    const manifest = { "images/logo.png": {
+      type: "blob", gcsPath: "customers/aug29/images/logo.png", size: 3,
+      mimeType: "image/png", uploadedAt: new Date().toISOString(),
+    } };
+
+    await expect(blobSyncForSlug("aug29", {
+      strict: true,
+      store: {
+        manifestFor: () => ({ read: async () => ({ contents: JSON.stringify(manifest), generation: "1" }), write: vi.fn() }),
+        download,
+        upload: vi.fn(),
+      },
+    })).rejects.toThrow("download images/logo.png");
+    expect(download).not.toHaveBeenCalled();
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+
 });
 
 describe("canonical user git config", () => {
