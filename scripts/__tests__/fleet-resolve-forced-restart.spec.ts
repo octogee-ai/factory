@@ -199,12 +199,12 @@ describe("replacement native health", () => {
       const config = join(directory, "config.json"), identity = join(directory, "identity.json");
       await writeFile(config, JSON.stringify({ gateway: { port: address.port, auth: { token: "private-test-token" } } }));
       await writeFile(identity, JSON.stringify(generateIdentity()));
-      const child = spawn(process.execPath, ["--input-type=commonjs"], { env: { ...process.env, OPENCLAW_CONFIG_PATH: config, OCTOGEE_PROVISIONER_IDENTITY_PATH: identity,
+      const child = spawn(process.execPath, ["--input-type=commonjs", "-", fileURLToPath(new URL("../package.json", import.meta.url))], { env: { ...process.env, OPENCLAW_CONFIG_PATH: config, OCTOGEE_PROVISIONER_IDENTITY_PATH: identity,
         OPENCLAW_CONTROL_IDENTITY: "shared", OPENCLAW_GATEWAY_TOKEN: "" }, stdio: ["pipe", "pipe", "pipe"] });
       let stdout = "", stderr = "";
       child.stdout.on("data", data => { stdout += data; }); child.stderr.on("data", data => { stderr += data; });
       const completed = new Promise<number | null>((resolve, reject) => { child.on("error", reject); child.on("close", resolve); });
-      child.stdin.end(nativeProbeSource(fileURLToPath(new URL("../package.json", import.meta.url))));
+      child.stdin.end(nativeProbeSource());
       expect(await completed, stderr).toBe(0);
       expect(JSON.parse(stdout)).toEqual({ bootId: "wire-boot", health: true });
       expect(methods).toEqual(["connect", "health"]);

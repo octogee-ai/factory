@@ -5,9 +5,9 @@ import { createForceMigrationTransport, forceMigrationProbeSource, observeForced
 function harness() {
   const pod = { metadata: { name: "pod", uid: "uid", labels: { "gateway-instance": "shared-a" } },
     spec: { containers: [{ name: "gateway", image: "retained-recovery-image" }] }, status: { phase: "Running" } };
-  const runKubectl = vi.fn(async (args: string[], options?: { stdin?: string }) => {
-    const result = args.includes("pods") ? { items: [pod] } : args.includes("get") ? pod : options?.stdin?.includes("gateway.restart.request") ? { ok: true, status: "emitted", pid: 90 } :
-      options?.stdin?.includes("boot-before") ? { version: 1, attemptId: "attempt", beforeBootId: "boot-before", afterBootId: "boot-after", ready: true } : { bootId: "boot-before", nativeOwner: { pid: 90, ownerId: "native-owner", port: 18789 } };
+  const runKubectl = vi.fn(async (args: string[], _options?: { stdin?: string }) => {
+    const result = args.includes("pods") ? { items: [pod] } : args.includes("get") ? pod : args.at(-2) === "dispatch" ? { ok: true, status: "emitted", pid: 90 } :
+      args.at(-2) === "observe" ? { version: 1, attemptId: "attempt", beforeBootId: "boot-before", afterBootId: "boot-after", ready: true } : { bootId: "boot-before", nativeOwner: { pid: 90, ownerId: "native-owner", port: 18789 } };
     return { code: 0, stdout: JSON.stringify(result), stderr: "" };
   });
   return { pod, runKubectl, transport: createForceMigrationTransport({ namespace: "shared-test", runKubectl }) };
@@ -21,14 +21,14 @@ describe("native Fleet force transport", () => {
     await expect(h.transport.observe(bound, "attempt")).resolves.toMatchObject({ afterBootId: "boot-after", ready: true });
     const mutations = h.runKubectl.mock.calls.filter(([args]) => args.includes("openclaw"));
     expect(mutations).toEqual([]);
-    expect(h.runKubectl.mock.calls.some(([, options]) => options?.stdin?.includes("gateway.restart.request"))).toBe(true);
+    expect(h.runKubectl.mock.calls.some(([args]) => args.at(-2) === "dispatch")).toBe(true);
     expect(h.runKubectl.mock.calls.every(([args]) => !args.some(arg => ["delete", "patch", "--safe"].includes(arg)))).toBe(true);
   });
 
   it("surfaces the native JSON error on nonzero exit without exposing other payload fields", async () => {
     const h = harness();
     const original = h.runKubectl.getMockImplementation()!;
-    h.runKubectl.mockImplementation(async (args, options) => options?.stdin?.includes("gateway.restart.request") ? {
+    h.runKubectl.mockImplementation(async (args, options) => args.at(-2) === "dispatch" ? {
       code: 1,
       stdout: JSON.stringify({ ok: false, error: "Gateway restart failed: lock owner unavailable token=private-token", auth: "private-auth" }),
       stderr: "command terminated with exit code 1",
@@ -39,13 +39,13 @@ describe("native Fleet force transport", () => {
     expect(String(error)).toContain("command terminated with exit code 1");
     expect(String(error)).toContain("observe without restarting");
     expect(String(error)).not.toMatch(/private-token|private-auth/);
-    expect(h.runKubectl.mock.calls.filter(([, options]) => options?.stdin?.includes("gateway.restart.request"))).toHaveLength(1);
+    expect(h.runKubectl.mock.calls.filter(([args]) => args.at(-2) === "dispatch")).toHaveLength(1);
   });
 
   it.each(["Bearer", "Basic"])("redacts the complete %s Authorization credential in restart diagnostics", async scheme => {
     const h = harness();
     const original = h.runKubectl.getMockImplementation()!;
-    h.runKubectl.mockImplementation(async (args, options) => options?.stdin?.includes("gateway.restart.request") ? {
+    h.runKubectl.mockImplementation(async (args, options) => args.at(-2) === "dispatch" ? {
       code: 1,
       stdout: JSON.stringify({ ok: false, error: `request failed Authorization: ${scheme} private-native-credential` }),
       stderr: `proxy rejected authorization=${scheme} private-proxy-credential\ncommand terminated`,
@@ -101,6 +101,6 @@ describe("native Fleet force transport", () => {
 
   it("serializes both read-only probes as runnable JavaScript", () => {
     expect(() => new Script(forceMigrationProbeSource())).not.toThrow();
-    expect(() => new Script(forceMigrationProbeSource({ beforeBootId: "before", attemptId: "attempt" }))).not.toThrow();
+    expect(forceMigrationProbeSource()).toContain("process.argv.slice(2)");
   });
 });

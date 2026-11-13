@@ -28,6 +28,6 @@ it.each(['shared','per-user'])('uses %s auth and binds same-wire boot through re
   const deps=await createRestartDriverDeps(fileURLToPath(new URL('../../package.json',import.meta.url)));
   expect(await proveRuntimeRestart('attempt-wire',deps,5000)).toMatchObject({beforeBootId:'boot-before',afterBootId:'boot-after',ready:true});
   expect(restartCount).toBe(1);expect(calls).toEqual(['connect','gateway.restart.request','connect','health']);
-  expect(()=>new Script(runtimeRestartDriverSource('attempt-wire'))).not.toThrow();
+  expect(()=>new Script(runtimeRestartDriverSource())).not.toThrow();
  } finally {for(const ws of wsServer.clients){ws.terminate();}await new Promise<void>(r=>wsServer.close(()=>r()));await new Promise<void>(r=>server.close(()=>r()));await rm(dir,{recursive:true,force:true});}
 });

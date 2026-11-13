@@ -26,7 +26,7 @@ export async function restartGatewayProcess(deps:Deps,gatewayId:string):Promise<
     const pod=pods[0]!;
     const bound={...fence,target:{podName:pod.metadata.name,podUid:pod.metadata.uid}};await save(bound);
     await save({...bound,phase:'dispatched'});
-    const result=await deps.runKubectl(['-n',deps.namespace,'exec',pod.metadata.name,'-c','gateway','-i','--','node','--input-type=commonjs'],{stdin:runtimeRestartDriverSource(fence.attemptId),timeoutMs:210_000});
+    const result=await deps.runKubectl(['-n',deps.namespace,'exec',pod.metadata.name,'-c','gateway','-i','--','node','--input-type=commonjs','-',fence.attemptId],{stdin:runtimeRestartDriverSource(),timeoutMs:210_000});
     if(result.code!==0)throw new Error('gateway process restart outcome is unresolved');
     const receipt=JSON.parse(result.stdout.trim()) as Record<string,unknown>;
     validateProcessRestartReceipt(receipt,fence.attemptId);

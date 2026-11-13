@@ -269,8 +269,8 @@ async function waitForSourceRepair(request: {
 }
 
 async function managementHealth(deps: Deps, op: Operation, pod: Row): Promise<Row> {
-  const result = await deps.runKubectl(['-n', deps.namespace, 'exec', pod.metadata.name, '-c', 'gateway', '-i', '--', 'node', '--input-type=commonjs'],
-    { stdin: managementHealthDriverSource(op.id), timeoutMs: 50_000 }).catch(cause => {
+  const result = await deps.runKubectl(['-n', deps.namespace, 'exec', pod.metadata.name, '-c', 'gateway', '-i', '--', 'node', '--input-type=commonjs', '-', op.id],
+    { stdin: managementHealthDriverSource(), timeoutMs: 50_000 }).catch(cause => {
       throw new Error('source management health unconfirmed; outcome remains fenced', { cause });
     });
   if (result.code !== 0) throw new Error('source management health unconfirmed; outcome remains fenced');

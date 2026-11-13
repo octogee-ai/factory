@@ -35,7 +35,7 @@ async function fixture(options: { startup?: boolean; exitCode?: number; pid?: "z
 const fs=require('fs'),dir=process.env.FIXTURE_DIR;let stopping=false;
 const event=value=>fs.appendFileSync(dir+'/events',value+'\\n');
 process.on('SIGTERM',()=>{event('term');if(stopping)process.exit(81);stopping=true;
-const finish=()=>{if(fs.existsSync(dir+'/release')){event('clean');process.exit(${options.exitCode ?? 0});}};setInterval(finish,10);finish();});
+const finish=()=>{if(fs.existsSync(dir+'/release')){event('clean');process.exit(Number(process.env.FIXTURE_EXIT_CODE));}};setInterval(finish,10);finish();});
 event('ready');setInterval(()=>{},1000);`;
   fs.writeFileSync(childPath, child, { mode: 0o755 });
   const proxySource = `#!${process.execPath}
@@ -43,7 +43,7 @@ const fs=require('fs'),cp=require('child_process'),dir=process.env.FIXTURE_DIR;
 process.on('SIGTERM',()=>fs.appendFileSync(dir+'/events','bus-term\\n'));process.on('SIGINT',()=>{});
 fs.writeFileSync(dir+'/proxy-ready','ready');
 function start(){const args=process.argv.slice(3);let child;
-if(process.env.BAD_PID){child=cp.spawn(${JSON.stringify(process.execPath)},[${JSON.stringify(childPath)}],{stdio:'inherit'});
+if(process.env.BAD_PID){child=cp.spawn(process.execPath,[process.env.FIXTURE_CHILD],{stdio:'inherit'});
  const bad={zero:0,self:process.ppid,bus:process.pid,foreign:process.env.FOREIGN_PID}[process.env.BAD_PID];
  fs.writeFileSync(args.at(-1)+'.tmp',String(bad)+'\\n');fs.renameSync(args.at(-1)+'.tmp',args.at(-1));
 }else child=cp.spawn(args[0],args.slice(1),{stdio:'inherit'});
@@ -54,11 +54,11 @@ ${options.startup ? "const timer=setInterval(()=>{if(fs.existsSync(dir+'/launch'
   fs.writeFileSync(proxy, proxySource, { mode: 0o755 });
   if (options.publicationFails) fs.writeFileSync(path.join(dir, "mv"), "#!/bin/sh\nexit 23\n", { mode: 0o755 });
   let foreign: ChildProcess | undefined;
-  if (options.pid === "foreign") foreign = spawn(process.execPath, ["-e", `process.on('SIGTERM',()=>require('fs').writeFileSync(${JSON.stringify(path.join(dir, "foreign-term"))},'wrong'));setInterval(()=>{},1000);`]);
+  if (options.pid === "foreign") foreign = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>require('fs').writeFileSync(process.argv[1],'wrong'));setInterval(()=>{},1000);", path.join(dir, "foreign-term")]);
   const body = lifecycle.replaceAll("/usr/local/bin/octogee-hobby-session", childPath);
   const root = spawn("/bin/bash", ["-c", `set -euo pipefail\n${body}`], { detached: true, stdio: ["ignore", "ignore", "pipe"], env: {
     ...process.env, FIXTURE_DIR: dir, XDG_RUNTIME_DIR: dir, PATH: dir + path.delimiter + process.env.PATH,
-    BAD_PID: options.pid ?? "", FOREIGN_PID: String(foreign?.pid ?? ""),
+    FIXTURE_CHILD: childPath, FIXTURE_EXIT_CODE: String(options.exitCode ?? 0), BAD_PID: options.pid ?? "", FOREIGN_PID: String(foreign?.pid ?? ""),
   } });
   const foreignExit = foreign ? new Promise(resolve => foreign!.once("exit", resolve)) : undefined;
   const exit = new Promise<number | null>(resolve => root.once("exit", resolve));
@@ -116,15 +116,15 @@ it.each(["exited", "signal-failed"] as const)("continues joining session childre
   const cleanup = session.match(/^cleanup\(\) \{[\s\S]*?^\}/m)?.[0];
   if (!cleanup) throw new Error("session cleanup owner is missing");
   const shellQuote = (text: string) => "'" + text.replaceAll("'", "'\\''") + "'";
-  const program = (name: string) => `const fs=require('fs');process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(path.join(dir, name + "-clean"))},'clean');process.exit(0)});fs.writeFileSync(${JSON.stringify(path.join(dir, name + "-ready"))},'ready');setInterval(()=>{},1000);`;
-  for (const name of ["race", "critical"]) fs.writeFileSync(path.join(dir, name + ".cjs"), program(name));
+  const program = "const fs=require('fs'), name=process.argv[2];process.on('SIGTERM',()=>{fs.writeFileSync(name+'-clean','clean');process.exit(0)});fs.writeFileSync(name+'-ready','ready');setInterval(()=>{},1000);";
+  for (const name of ["race", "critical"]) fs.writeFileSync(path.join(dir, name + ".cjs"), program);
   const script = `set -euo pipefail
 children=();browser_pid="";panel_pid="";reopen_pid=""
 ${cleanup}
 trap cleanup EXIT
-${shellQuote(process.execPath)} ${shellQuote(path.join(dir, "race.cjs"))} &
+${shellQuote(process.execPath)} ${shellQuote(path.join(dir, "race.cjs"))} ${shellQuote(path.join(dir, "race"))} &
 race_pid=$!;children+=("$race_pid")
-${shellQuote(process.execPath)} ${shellQuote(path.join(dir, "critical.cjs"))} &
+${shellQuote(process.execPath)} ${shellQuote(path.join(dir, "critical.cjs"))} ${shellQuote(path.join(dir, "critical"))} &
 children+=("$!")
 while [[ ! -f ${shellQuote(path.join(dir, "race-ready"))} || ! -f ${shellQuote(path.join(dir, "critical-ready"))} ]]; do sleep 0.01; done
 kill() {
