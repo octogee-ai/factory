@@ -63,7 +63,7 @@ export function deferredProjectPlaceholderPaths(stateDir: string, slug: string):
 function isDeferredPlaceholder(filename: string, expected: Buffer): boolean {
   let fd: number;
   try {
-    fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK, 0o600);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ELOOP") return false;
