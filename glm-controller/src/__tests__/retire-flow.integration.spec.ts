@@ -4,7 +4,7 @@ import {
   diffInstancesMap,
   type ReconcileChange,
 } from "../reconcile-plan.js";
-import { createRetireGatewayHandler } from "../handlers/retire-gateway.js";
+import { createRetireGatewayHandler, type RetireGatewayDeps } from "../handlers/retire-gateway.js";
 import type { OperationContext } from "../operation-router.js";
 import type {
   GatewayDesiredState,
@@ -32,7 +32,7 @@ function makeHelm(state: SharedState) {
       return out;
     },
     upsertInstance: vi.fn(async () => undefined),
-    removeInstance: vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
+    removeInstance: vi.fn(async ({ gatewayId }: { namespace: string; gatewayId: string }) => {
       state.helmReleases.delete(gatewayId);
     }),
   };
@@ -93,7 +93,7 @@ function adminDeleteGateway(
   return { status: 202, operationId };
 }
 
-function makeRetireDeps(state: SharedState) {
+function makeRetireDeps(state: SharedState): RetireGatewayDeps {
   return {
     verifyRetirementClaim: async ({ gatewayId }: { gatewayId: string }) => {
       const desiredStatus = state.glmGateways.get(gatewayId)?.desiredStatus;

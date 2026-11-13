@@ -73,7 +73,7 @@ describe("admin VM replacement", () => {
     await request(h.app).post(livePath).send(body).expect(400);
     expect(h.operations()).toHaveLength(0);
   });
-  it.each([
+  it.each<Record<string, Record<string, unknown> | null>>([
     { [`gateways/${GATEWAY}`]: null },
     { [`gateways/${GATEWAY}`]: { ...gateway, desiredStatus: "retired" } },
     { [`gateways/${GATEWAY}`]: { ...gateway, retirementClaim: { claimedAt: 1 } } },

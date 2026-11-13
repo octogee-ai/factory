@@ -514,7 +514,7 @@ describe.skipIf(!dsn)("PostgreSQL secrets and access repositories", { timeout: 3
         await ledger.reserveRequest(`${uid}:embedding`, NOW);
       }
 
-      expect((await harness.store.access.listRecordsForUid("u1")).sort()).toEqual([
+      expect([...await harness.store.access.listRecordsForUid("u1")].sort()).toEqual([
         "modelBrokerRateWindows/u1",
         "modelBrokerRateWindows/u1:embedding",
         "modelBrokerSpendPeriods/u1/week",

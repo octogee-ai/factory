@@ -385,6 +385,10 @@
       "types": "./dist/mattermost.d.ts",
       "default": "./dist/mattermost.js"
     },
+    "./mattermost/agent-channel-purpose": {
+      "types": "./dist/mattermost/agent-channel-purpose.d.ts",
+      "default": "./dist/mattermost/agent-channel-purpose.js"
+    },
     "./mattermost/admin-creds": {
       "types": "./dist/mattermost/admin-creds.d.ts",
       "default": "./dist/mattermost/admin-creds.js"
@@ -874,7 +878,7 @@
     "prebuild": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "pretypecheck": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.spec.json",
     "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test": "vitest run"
   },

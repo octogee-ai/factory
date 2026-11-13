@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import type { SchedulerMigrationRequest, SchedulerMigrationResult } from "@octogee/shared/types/fleet-controller";
-import { reconcileSurgeUserHandoff, type SurgePod } from "../surge-user-handoff.js";
+import { reconcileSurgeUserHandoff, type SurgePod, type SurgeUserHandoffDeps } from "../surge-user-handoff.js";
 import { oldPod, targetPod, assignment, createSurgeHandoffHarness } from "./fixtures/surge-user-handoff.js";
 
 it.each([false, true])("preserves an existing Native job through a complete-roster Shared surge (enabled=%s)", async enabled => {
@@ -93,7 +93,7 @@ it("keeps an abandoned Shared gate closed with only a source pod and no Native c
     state: "quiescing", updatedByOperationId: "surge-default-11111111-2222-4333-8444-555555555555",
   })] });
   const readHealth = h.deps.readPodHealth;
-  h.deps.readPodHealth = vi.fn(async (...args) => ({ ...(await readHealth(...args))!, handoffReleased: true, prelaunchState: "serving" }));
+  h.deps.readPodHealth = vi.fn<SurgeUserHandoffDeps["readPodHealth"]>(async (...args) => ({ ...(await readHealth(...args))!, handoffReleased: true, prelaunchState: "serving" }));
   h.deps.scheduler = vi.fn(async () => { throw new Error("Cron migration must acquire hold before this phase"); });
   await expect(reconcileSurgeUserHandoff(h.deps, {
     gatewayId: "default", desiredImageTag: "new-sha", requiresUserMigration: true,

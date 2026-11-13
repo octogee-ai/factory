@@ -1,6 +1,6 @@
 import { createVmHomeClient } from "../lib/compute-home.js";
 import { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { MissingRecordError, type FleetRegistryRecord } from "@octogee/core/platform-state";
 import { createDocumentFixtureStore, FIXTURE_SIZING_PROFILES } from "@octogee/core/testing/journal-store";
 import type { GatewayVmSpec, HelmInstancesMap } from "@octogee/shared/types/glm";
@@ -15,6 +15,7 @@ import {
   resolveIsolatedParking,
   stampGatewayRuntime,
   vmRoutesFromRecords,
+  type VmGatewayRuntimeDeps,
 } from "../vm-gateway-runtime";
 import { RECOVERY_REPORT_MAX_AGE_AT_PARK_MS, VmCreationPendingError, gatewayVmInstanceInput } from "../vm-lifecycle";
 
@@ -28,6 +29,7 @@ const spec: GatewayVmSpec = {
 };
 
 type Docs = Record<string, Record<string, unknown>>;
+type VmClientMocks = { [K in keyof GatewayVmClient]: Mock<GatewayVmClient[K]> };
 
 function readPath(data: Record<string, unknown>, field: string): unknown {
   return field.split(".").reduce<unknown>((value, key) => (value && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined), data);
@@ -95,7 +97,7 @@ const recorded = { instanceName: VM, zone: "us-west1-b", instanceId: "4242", int
 
 function harness(
   docs: Docs,
-  vmOverrides: Partial<GatewayVmClient> = {},
+  vmOverrides: Partial<VmClientMocks> = {},
   bridge = "172.20.7.7",
   desiredStatus: Record<string, string | null> = {},
   extra: { beforeWrite?: (path: string, data: Record<string, unknown>) => void; disposableParking?: boolean; clock?: { now: number }; onWait?: (ms: number, waits: number) => void | Promise<void>; homeCheckpointTimeoutMs?: number; applyFails?: boolean; onApply?: (routes: Record<string, string>) => Promise<void>; vmSpec?: GatewayVmSpec } = {},
@@ -104,7 +106,7 @@ function harness(
   const { store, writes, deletes } = recordingStore(docs, extra.beforeWrite);
   const clock = extra.clock ?? { now: 1_000 };
   const waits: number[] = [];
-  const vm: GatewayVmClient = {
+  const vm: VmClientMocks = {
     create: vi.fn(async (input) => ({ description: { ...running, machineType: input.machineType }, provisioningModel: "SPOT", fellBackToStandard: false, alreadyExisted: false })),
     describe: vi.fn(async () => running),
     find: vi.fn(async () => null),
@@ -424,7 +426,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     await h.runtime.upsertInstance(upsertOpts);
     expect(h.vm.stop).not.toHaveBeenCalled();
     expect(h.vm.expandHome).not.toHaveBeenCalled();
-    expect(h.docs["users/UidA"].provisioning.homeCapacity).toMatchObject({ desiredGiB: 10, allocatedGiB: 30, status: "shrink-pending" });
+    expect(readPath(h.docs["users/UidA"], "provisioning.homeCapacity")).toMatchObject({ desiredGiB: 10, allocatedGiB: 30, status: "shrink-pending" });
     expect(h.vm.delete).not.toHaveBeenCalled();
   });
 
@@ -439,7 +441,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.vm.expandHome).toHaveBeenCalledWith(expect.objectContaining({ id: "777" }), "UidA", 100);
     expect(h.vm.stop).not.toHaveBeenCalled();
     expect(h.vm.expandHome.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
-    expect(h.docs["users/UidA"].provisioning.homeCapacity).toMatchObject({ desiredGiB: 100, allocatedGiB: 100, status: "ready" });
+    expect(readPath(h.docs["users/UidA"], "provisioning.homeCapacity")).toMatchObject({ desiredGiB: 100, allocatedGiB: 100, status: "ready" });
     expect(h.vm.delete).not.toHaveBeenCalled();
   });
 
@@ -455,7 +457,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.vm.start).not.toHaveBeenCalled();
     expect(h.vm.expandHome).not.toHaveBeenCalled();
     expect(h.vm.setMachineType).not.toHaveBeenCalled();
-    expect(h.docs["users/UidA"].provisioning.homeCapacity).toMatchObject({ desiredGiB: homeDiskSizeGb, allocatedGiB: 30, status, applyOnResume: true });
+    expect(readPath(h.docs["users/UidA"], "provisioning.homeCapacity")).toMatchObject({ desiredGiB: homeDiskSizeGb, allocatedGiB: 30, status, applyOnResume: true });
   });
 
   it("repairs a parked VM's identity scopes before starting it without replacing its disk", async () => {
@@ -2066,7 +2068,7 @@ describe("readDeploymentPrerequisiteError", () => {
 });
 
 describe("VM preemption", () => {
-  const vmDoc = (vm: Record<string, unknown> = {}) => ({
+  const vmDoc = (vm: Record<string, unknown> = {}): Docs => ({
     "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, ...vm }, vmInstance: { enabled: true } },
   });
 
@@ -2334,7 +2336,7 @@ describe("retained home disk recovery", () => {
         if (!exists) throw Object.assign(new Error("missing disk"), { response: { status: 404 } });
         return { status: 200, data: { ...home, type: "zones/us-west1-b/diskTypes/pd-ssd", labels: { "octogee-owner-uid": "uida", "octogee-storage": "customer-home" } } };
       } });
-    const h = harness({ "users/UidA": { provisioning: { homeDisk: home } } }, { deleteRetainedHome: client.deleteRetainedHome }, undefined, undefined,
+    const h = harness({ "users/UidA": { provisioning: { homeDisk: home } } }, { deleteRetainedHome: vi.fn(client.deleteRetainedHome) }, undefined, undefined,
       { beforeWrite: (path, data) => {
         const clearsAnchor = path === "users/UidA" && readPath(data, "provisioning.homeDisk") === undefined;
         if (failClear && clearsAnchor) { failClear = false; throw new Error("anchor clear unavailable"); }
@@ -2365,7 +2367,7 @@ describe("stopped retained-home boot replacement", () => {
     let deleted = false;
     const h = harness(vmDoc(), {
       describe: vi.fn(async () => deleted ? null : ownedStopped),
-      deleteRetainingHome: vi.fn(async () => { deleted = true; return true; }),
+      deleteRetainingHome: vi.fn(async () => { deleted = true; }),
       readBootImage: vi.fn(async () => CURRENT_IMAGE),
       readFamilyImage: vi.fn(async () => accepted),
       readImage: vi.fn(async () => accepted),
@@ -2379,7 +2381,7 @@ describe("stopped retained-home boot replacement", () => {
     let deleted = false;
     const h = harness(vmDoc(), {
       describe: vi.fn(async () => deleted ? null : ownedStopped),
-      deleteRetainingHome: vi.fn(async () => { deleted = true; return true; }),
+      deleteRetainingHome: vi.fn(async () => { deleted = true; }),
       readBootImage: vi.fn(async () => CURRENT_IMAGE), readFamilyImage: vi.fn(async () => accepted), readImage: vi.fn(async () => accepted),
     });
     await h.runtime.upsertInstance(upsertOpts);
@@ -2392,7 +2394,7 @@ describe("stopped retained-home boot replacement", () => {
     docs["glmGateways/b-x"].vm = { ...recorded, status: "TERMINATED", internalIp: null, stopReason: "idle", updatedAt: receipt.observedAt + 120_000 };
     const h = harness(docs, {
       describe: vi.fn(async () => deleted ? null : ownedStopped),
-      deleteRetainingHome: vi.fn(async () => { deleted = true; return true; }),
+      deleteRetainingHome: vi.fn(async () => { deleted = true; }),
       readBootImage: vi.fn(async () => CURRENT_IMAGE), readFamilyImage: vi.fn(async () => accepted), readImage: vi.fn(async () => accepted),
     }, undefined, {}, { clock: { now: receipt.observedAt + 300_000 } });
     await h.runtime.upsertInstance(upsertOpts);
@@ -2434,12 +2436,12 @@ describe("stopped retained-home boot replacement", () => {
   });
   it("updates a parked VM when a new isolated gateway claims it from Shared", async () => {
     let deleted = false;
-    let source = { ...ownedStopped, gatewayId: "b-old", labels: { ...ownedStopped.labels, "octogee-gateway-id": "b-old" }, metadata: { ...ownedStopped.metadata, "gateway-id": "b-old" } };
+    let source: GatewayVmDescription = { ...ownedStopped, gatewayId: "b-old", labels: { ...ownedStopped.labels, "octogee-gateway-id": "b-old" }, metadata: { ...ownedStopped.metadata, "gateway-id": "b-old" } };
     const parked = { instanceName: VM, zone: source.zone, instanceId: "4242", gatewayId: "b-old", parkedAt: 1000, checkpoint: { outcome: "fresh", requestedAt: 400, completedAt: 450 }, bootRecovery: receipt, vmSpec: spec };
     const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vmSpec: spec }, "gateways/shared-0": { gatewayClass: "shared" }, "users/UidA": { provisioning: { openclaw: { gatewayId: "shared-0" }, computer: parked } } }, {
       describe: vi.fn(async () => deleted ? null : source), findByLabels: vi.fn(async () => deleted ? null : source),
       bind: vi.fn(async (_name, _zone, binding) => { source = { ...source, gatewayId: "b-x", labels: binding.labels, metadata: binding.metadata }; }),
-      deleteRetainingHome: vi.fn(async () => { deleted = true; return true; }),
+      deleteRetainingHome: vi.fn(async () => { deleted = true; }),
       readBootImage: vi.fn(async () => CURRENT_IMAGE), readFamilyImage: vi.fn(async () => accepted), readImage: vi.fn(async () => accepted),
     });
     await h.runtime.upsertInstance(upsertOpts);
@@ -2449,7 +2451,7 @@ describe("stopped retained-home boot replacement", () => {
   it("upgrades at boot after best-effort project autosave even when work may remain on the old disk", async () => {
     let deleted = false;
     const h = harness({ ...vmDoc(), "users/UidA": { provisioning: { openclaw: { gatewayId: "b-x" }, projectStorage: { nativeBoot: true } } } }, {
-      describe: vi.fn(async () => deleted ? null : ownedStopped), deleteRetainingHome: vi.fn(async () => { deleted = true; return true; }),
+      describe: vi.fn(async () => deleted ? null : ownedStopped), deleteRetainingHome: vi.fn(async () => { deleted = true; }),
       readBootImage: vi.fn(async () => CURRENT_IMAGE), readFamilyImage: vi.fn(async () => accepted), readImage: vi.fn(async () => accepted),
     });
     await h.runtime.upsertInstance(upsertOpts);
@@ -2464,7 +2466,7 @@ describe("stopped retained-home boot replacement", () => {
     const docs = vmDoc();
     docs["glmGateways/b-x"].vmInstance = instance;
     const h = harness(docs, {
-      describe: vi.fn(async () => deleted ? null : source), deleteRetainingHome: vi.fn(async () => { deleted = true; return true; }),
+      describe: vi.fn(async () => deleted ? null : source), deleteRetainingHome: vi.fn(async () => { deleted = true; }),
       readBootImage: vi.fn(async () => CURRENT_IMAGE), readFamilyImage: vi.fn(async () => accepted), readImage: vi.fn(async () => accepted),
     });
     await h.runtime.recoverUnreachable("b-x");
@@ -2524,7 +2526,7 @@ describe("stopped retained-home boot replacement", () => {
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
   it("permits operator force recovery of a stopped VM while retaining its exact home", async () => {
-    const docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "UidA", gatewayClass: "builder", desiredStatus: "paused" }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 }, "users/UidA": { provisioning: { projectStorage: { nativeBoot: true }, openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } } };
+    const docs: Docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "UidA", gatewayClass: "builder", desiredStatus: "paused" }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 }, "users/UidA": { provisioning: { projectStorage: { nativeBoot: true }, openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } } };
     delete docs["glmGateways/b-x"].vmBootRecovery;
     const h = harness(docs, { describe: vi.fn(async () => ownedStopped), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
     await expect(h.runtime.replaceStoppedVm("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).resolves.toMatchObject({ bootDeleted: true, force: true });
@@ -2581,7 +2583,7 @@ describe("stopped retained-home boot replacement", () => {
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
   it("does not clear a different runtime that appears after force deletion", async () => {
-    const docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "UidA", gatewayClass: "builder", desiredStatus: "paused" }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 }, "users/UidA": { provisioning: { openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } } };
+    const docs: Docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "UidA", gatewayClass: "builder", desiredStatus: "paused" }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 }, "users/UidA": { provisioning: { openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } } };
     const h = harness(docs, { describe: vi.fn(async () => ownedStopped), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
     h.vm.deleteRetainingHome = vi.fn(async () => { h.docs["glmGateways/b-x"].vm = { instanceId: "new-instance" }; });
     await expect(h.runtime.replaceStoppedVm("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow("runtime identity changed");
@@ -2589,7 +2591,7 @@ describe("stopped retained-home boot replacement", () => {
     expect(readPath(h.docs["users/UidA"], "provisioning.computerRecovery.operationId")).toBe("op-force");
   });
   it.each(["class", "status"])("does not clear a runtime after its gateway root changes %s following force deletion", async change => {
-    const docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "UidA", gatewayClass: "builder", desiredStatus: "paused" }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 }, "users/UidA": { provisioning: { openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } } };
+    const docs: Docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "UidA", gatewayClass: "builder", desiredStatus: "paused" }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 }, "users/UidA": { provisioning: { openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } } };
     const h = harness(docs, { describe: vi.fn(async () => ownedStopped), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
     h.vm.deleteRetainingHome = vi.fn(async () => { if (change === "class") h.docs["gateways/b-x"].gatewayClass = "shared"; else h.docs["gateways/b-x"].desiredStatus = "running"; });
     await expect(h.runtime.replaceStoppedVm("b-x", "op-force", async () => {}, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow("gateway identity changed");
@@ -2604,7 +2606,7 @@ describe("stopped retained-home boot replacement", () => {
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
   it.each([2, 3])("keeps the boot when its gateway root changes owners at authority check %s", async changeAt => {
-    const docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "UidA", gatewayClass: "builder", desiredStatus: "paused" }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 }, "users/UidA": { provisioning: { openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } } };
+    const docs: Docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "UidA", gatewayClass: "builder", desiredStatus: "paused" }, "gateways/shared-1": { gatewayId: "shared-1", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 }, "gateways/shared-1/assignments/UidA": { uid: "UidA", slug: "mama", gatewayId: "shared-1", source: "onboarding", state: "serving", epoch: 1 }, "users/UidA": { provisioning: { openclaw: { gatewayId: "shared-1" }, computerRecovery: { operationId: "op-force", gatewayId: "b-x", instanceId: "4242", sharedGatewayId: "shared-1", assignmentEpoch: 1 } } } };
     const h = harness(docs, { describe: vi.fn(async () => ownedStopped), readFamilyImage: vi.fn(async () => accepted) }, undefined, { "b-x": "paused" });
     let checks = 0;
     await expect(h.runtime.replaceStoppedVm("b-x", "op-force", async () => { if (++checks === changeAt) h.docs["gateways/b-x"].ownerUid = "Other"; }, { forceOwnerUid: "UidA", expectedInstanceId: "4242" })).rejects.toThrow("gateway owner changed");
@@ -2670,7 +2672,7 @@ describe("stopped retained-home boot replacement", () => {
     expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toBeUndefined();
   });
   it("retains the latest failed admission report rather than copying earlier success across stop", async () => {
-    const docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "UidA" } };
+    const docs: Docs = { ...vmDoc(), "gateways/b-x": { ownerUid: "UidA" } };
     let stoppedNow = false;
     const h = harness(docs, { describe: vi.fn(async () => stoppedNow ? ownedStopped : { ...ownedStopped, status: "RUNNING" }),
       suspend: vi.fn(async () => { stoppedNow = true; docs["glmGateways/b-x"].vmBootRecovery = { ...receipt, ready: false, observedAt: 1001 }; }) }, undefined, { "b-x": "retired" });

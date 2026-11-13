@@ -425,7 +425,7 @@ describe("gateway durable configuration authorization", () => {
 
   it("rejects invalid mutable ownership and preemption values", () => {
     expect(isGatewayMutableConfig(mutableConfig({ ownerUid: null }))).toBe(false);
-    expect(isGatewayMutableConfig(mutableConfig({ coOwnerUids: [""] }))).toBe(false);
+    expect(isGatewayMutableConfig({ ...mutableConfig(), coOwnerUids: [""] })).toBe(false);
     expect(
       isGatewayMutableConfig(mutableConfig({ modelBrokerLimits: { spendWeekUsd: -1 } })),
     ).toBe(false);

@@ -15,6 +15,9 @@ function diagnostics(podNames: string[], status: GatewayPodDiagnostics["status"]
     unknownCapacityPods: podNames.length,
     pods: podNames.map((name) => ({
       name,
+      gatewayId: null,
+      deleting: false,
+      gatewayContainerStartedAt: null,
       uid: null,
       replicaSetUid: null,
       phase: "Running",

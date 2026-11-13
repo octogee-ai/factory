@@ -131,7 +131,7 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
   it("writeHeartbeat writes ONLY glmGateways/{id}.heartbeat — never the flat gateways/{id} doc", async () => {
     const documents = recordingDocuments({ "glmGateways/walter": { ...WALTER_RUNTIME } });
     const deps = buildGatewayHeartbeatPollerDeps(createDocumentFixtureStore(documents), vi.fn(), FLEET_KEY_PAIR.privateKey, stubInformer());
-    await deps.writeHeartbeat("walter", { status: "ready", mountedCustomers: ["ceckert"], startedAt: 42 });
+    await deps.writeHeartbeat("walter", { status: "ready", mountedCustomers: ["ceckert"], openclawProcess: null, startedAt: 42 });
 
     expect(documents.writes.map((write) => write.path)).toEqual(["glmGateways/walter"]);
     expect(documents.get("glmGateways/walter")).toMatchObject({
@@ -226,7 +226,7 @@ describe("gateway heartbeat poll — a converged gateway writes nothing", () => 
 
   it("writes the first poll and skips an identical second poll", async () => {
     const { deps, writes } = poller();
-    const health = { status: "ready", mountedCustomers: ["ceckert"], startedAt: 42 };
+    const health = { status: "ready", mountedCustomers: ["ceckert"], openclawProcess: null, startedAt: 42 };
 
     expect(await deps.listGatewayIds()).toEqual(["walter"]);
     await deps.writeHeartbeat("walter", health);
@@ -245,6 +245,7 @@ describe("gateway heartbeat poll — a converged gateway writes nothing", () => 
     await deps.writeHeartbeat("walter", {
       status: "ready",
       mountedCustomers: ["ceckert"],
+      openclawProcess: null,
       startedAt: 42,
     });
 
@@ -252,6 +253,7 @@ describe("gateway heartbeat poll — a converged gateway writes nothing", () => 
     await deps.writeHeartbeat("walter", {
       status: "ready",
       mountedCustomers: [],
+      openclawProcess: null,
       startedAt: 42,
     });
 

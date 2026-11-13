@@ -1,0 +1,20 @@
+{
+  "id": "octogee-activity-tools",
+  "name": "Octogee Activity Source",
+  "version": "0.1.0",
+  "description": "Native Voice event relay and delivered-reply notifications.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "heartbeatMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "default": 5000
+      }
+    }
+  }
+}

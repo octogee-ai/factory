@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMigrationProgress } from "./migration-progress.js";
 
+type MigrationProgressDeps = Parameters<typeof createMigrationProgress>[0];
+
 function clock(start = 1_000) {
   let now = start;
   return { now: () => now, advance: (ms: number) => { now += ms; } };
@@ -9,8 +11,8 @@ function clock(start = 1_000) {
 describe("createMigrationProgress persistence", () => {
   it("persists every report with its timestamp and elapsed time, independent of the destination send", async () => {
     const t = clock();
-    const persist = vi.fn(async () => undefined);
-    const send = vi.fn(async () => undefined);
+    const persist = vi.fn<NonNullable<MigrationProgressDeps["persist"]>>(async () => undefined);
+    const send = vi.fn<MigrationProgressDeps["send"]>(async () => undefined);
     const progress = createMigrationProgress({ now: t.now, log: vi.fn(), send, persist });
 
     await progress.report("gate-source", "running");
@@ -27,7 +29,7 @@ describe("createMigrationProgress persistence", () => {
 
   it("keeps persisting after the destination stops accepting progress", async () => {
     const t = clock();
-    const persist = vi.fn(async () => undefined);
+    const persist = vi.fn<NonNullable<MigrationProgressDeps["persist"]>>(async () => undefined);
     const log = vi.fn();
     const send = vi.fn(async () => { throw new Error("pod gone"); });
     const progress = createMigrationProgress({ now: t.now, log, send, persist });
@@ -44,7 +46,7 @@ describe("createMigrationProgress persistence", () => {
     const t = clock();
     const log = vi.fn();
     const persist = vi.fn(async () => { throw new Error("firestore down"); });
-    const send = vi.fn(async () => undefined);
+    const send = vi.fn<MigrationProgressDeps["send"]>(async () => undefined);
     const progress = createMigrationProgress({ now: t.now, log, send, persist });
 
     await expect(progress.run("serving-handoff", async () => "ok")).resolves.toBe("ok");
@@ -56,7 +58,7 @@ describe("createMigrationProgress persistence", () => {
 
   it("reports unchanged without a persist sink", async () => {
     const t = clock();
-    const send = vi.fn(async () => undefined);
+    const send = vi.fn<MigrationProgressDeps["send"]>(async () => undefined);
     const progress = createMigrationProgress({ now: t.now, log: vi.fn(), send });
     await progress.report("gate-source", "running");
     expect(send).toHaveBeenCalledWith({ phase: "gate-source", status: "running", elapsedMs: 0 });

@@ -194,7 +194,7 @@ it.each(["anchor", "schema", "epoch", "missing-roster"])("refuses a spent Postgr
   if (change === "anchor") f.source.postgresAgentStores![0]!.storeId = "00000000-0000-4000-8000-999999999999";
   if (change === "schema") f.source.postgresAgentStores![0]!.schema = "different_store";
   if (change === "epoch") { f.source.assignments[0]!.assignmentEpoch++; f.source.postgresAgentStores![0]!.assignmentEpoch++; }
-  if (change === "missing-roster") delete f.source.postgresAgentStores;
+  if (change === "missing-roster") f.source.postgresAgentStores = [];
   expect(() => assertSharedSourceRecoveryPredecessor(f)).toThrow();
 });
 

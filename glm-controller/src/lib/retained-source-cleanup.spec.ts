@@ -7,7 +7,7 @@ import {abortRetainedSourceImport} from './migration-rsync-transfer.js';
 function fixture() {
  const record={executionId:'snapshot-transfer-one',status:'failed',targetCleanup:'pending',targetGatewayId:'target',targetName:'target-pod',targetIp:'10.0.0.2',targetVm:false} as SourceTransferExecution;
  const settledTarget=vi.fn(async()=>record);
- const fetch=vi.fn(async()=>new Response(JSON.stringify({imported:false,migrationId:'migration-one',slug:'builder'}),{status:200}));
+ const fetch=vi.fn<typeof globalThis.fetch>(async()=>new Response(JSON.stringify({imported:false,migrationId:'migration-one',slug:'builder'}),{status:200}));
  const deps={store:createDocumentFixtureStore({}),namespace:'octogee-test',privateKey:FLEET_KEY_PAIR.privateKey,fleetControllerPort:'3003',resolveGatewayUrl:()=>'',fetch,runCommand:vi.fn(async()=>({code:0,stderr:'',stdout:JSON.stringify({items:[{metadata:{name:'target-pod'},status:{phase:'Running',podIP:'10.0.0.2'}}]})})),retainedSource:{assertActiveClaim:vi.fn(),observe:vi.fn(async()=>record),execute:vi.fn(),settledTarget,acknowledgeCleanup:vi.fn()}};
  return {record,settledTarget,fetch,deps,input:{migrationId:'migration-one',slug:'builder',toGatewayId:'target'}};
 }
