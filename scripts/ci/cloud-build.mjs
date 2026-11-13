@@ -1,20 +1,37 @@
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { IMAGE_BUILDS, PLATFORM_CONTEXT, imagePlan } from "./image-build.mjs";
 import { gatewayBakePlan } from "./gateway-bake.mjs";
 
-export const PLATFORM_IMAGES = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway"];
+export const PLATFORM_IMAGES = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "octogee-gateway-builder", "vm-bridge"];
 export const PLATFORMS = ["linux/amd64", "linux/arm64"];
 export const SOURCE_REPOSITORY = "https://github.com/octogee-ai/octogee-cloud";
 export const CACHE_PREFIX = "octogee-cloud";
 
+const VM_BRIDGE = { dockerfile: "infra/vm-bridge/Dockerfile", args: {} };
 const GATEWAY_BASE = "octogee-gateway-base";
 const GATEWAY_SYSTEM = "octogee-gateway-system";
-const unpublished = [GATEWAY_BASE, GATEWAY_SYSTEM];
+const ISOLATED_BASE = "octogee-gateway-builder-base";
+const ISOLATED_GATEWAY = "octogee-gateway-builder";
+const unpublished = [GATEWAY_BASE, GATEWAY_SYSTEM, ISOLATED_BASE];
 const stageContexts = new Set(unpublished);
+const stagesOf = { "octogee-gateway": [GATEWAY_BASE, GATEWAY_SYSTEM], [ISOLATED_GATEWAY]: [GATEWAY_BASE, GATEWAY_SYSTEM, ISOLATED_BASE] };
 const placeholderBase = `inputs-${"0".repeat(64)}`;
+const ISOLATED_TOOLCHAIN = "infra/gateway/isolated-toolchain";
+
+const imagePlatforms = { [ISOLATED_GATEWAY]: ["linux/amd64"] };
+export const platformsOf = name => imagePlatforms[name] ?? PLATFORMS;
+export const imagesFor = platform => PLATFORM_IMAGES.filter(name => platformsOf(name).includes(platform));
+
+function checkImages(images, platform) {
+  const unknown = images.filter(image => !PLATFORM_IMAGES.includes(image));
+  if (unknown.length) throw new Error(`Unknown platform image: ${unknown.join(", ")}`);
+  const elsewhere = images.filter(image => !platformsOf(image).includes(platform));
+  if (elsewhere.length) throw new Error(`${elsewhere.join(", ")} is not published for ${platform}`);
+}
 
 function checkInputs({ registry, sha, platform }) {
   if (!/^[a-f0-9]{40}$/.test(sha ?? "")) throw new Error("A full source SHA is required");
@@ -22,10 +39,17 @@ function checkInputs({ registry, sha, platform }) {
   if (!PLATFORMS.includes(platform)) throw new Error(`Unsupported platform: ${platform}`);
 }
 
-function gatewayTargets(registry, sha, root) {
+function toolchainPins(root) {
+  const sha256 = file => createHash("sha256").update(readFileSync(join(root, ISOLATED_TOOLCHAIN, file))).digest("hex");
+  return { lockSha256: sha256("package-lock.json"), groupsSha256: sha256("groups.json") };
+}
+
+function gatewayTargets(registry, sha, root, wanted) {
+  const isolated = wanted.has(ISOLATED_GATEWAY);
   return gatewayBakePlan({
-    repository: registry, sha, base: placeholderBase, isolatedBase: `${placeholderBase}-builder-${"0".repeat(12)}`, toolchain: {},
-    build: { base: true, isolatedBase: false, images: ["gateway-edge", "octogee-gateway"] },
+    repository: registry, sha, base: placeholderBase, isolatedBase: `${placeholderBase}-builder-${"0".repeat(12)}`,
+    toolchain: isolated ? toolchainPins(root) : {},
+    build: { base: true, isolatedBase: isolated, images: ["gateway-edge", "octogee-gateway", ISOLATED_GATEWAY].filter(name => wanted.has(name)) },
   }, root).target;
 }
 
@@ -64,11 +88,14 @@ function outputFor({ name, registry, push, load, tagPrefix, short }) {
 }
 
 const planOptions = ({
-  registry, sha, platform, root = ".", context = root, load = false, push = false, tagPrefix = "", cache = "", images = PLATFORM_IMAGES,
+  registry, sha, platform, root = ".", context = root, load = false, push = false, tagPrefix = "", cache = "", images = imagesFor(platform),
 }) => ({ registry, sha, platform, root, context, load, push, tagPrefix, cache, images });
+
+const revisionLabel = sha => ({ labels: { "org.opencontainers.image.revision": sha } });
 
 function sourceFor(name, gateway, { registry, sha, root }) {
   if (gateway[name]) return gateway[name];
+  if (name === "vm-bridge") return { ...VM_BRIDGE, ...revisionLabel(sha) };
   return singleTarget(name, registry, sha, root);
 }
 
@@ -90,11 +117,10 @@ export function cloudBakePlan(input) {
   const { registry, sha, platform, root, load, push, images } = options;
   checkInputs({ registry, sha, platform });
   if (load && push) throw new Error("Choose either load or push");
-  const unknown = images.filter(image => !PLATFORM_IMAGES.includes(image));
-  if (unknown.length) throw new Error(`Unknown platform image: ${unknown.join(", ")}`);
+  checkImages(images, platform);
   const wanted = new Set(images);
-  if (wanted.has("octogee-gateway")) unpublished.forEach(name => wanted.add(name));
-  const gateway = [...wanted].some(name => name.startsWith("octogee-gateway") || name === "gateway-edge") ? gatewayTargets(registry, sha, root) : {};
+  for (const image of images) (stagesOf[image] ?? []).forEach(stage => wanted.add(stage));
+  const gateway = [...wanted].some(name => name.startsWith("octogee-gateway") || name === "gateway-edge") ? gatewayTargets(registry, sha, root, wanted) : {};
   const target = Object.fromEntries([...wanted].map(name => [name, bakeTarget(name, sourceFor(name, gateway, options), options)]));
   return { group: { default: { targets: images } }, target };
 }
@@ -112,7 +138,7 @@ export function mergeCommands({ registry, sha, digests }) {
   for (const platform of PLATFORMS) if (!platforms.includes(platform)) throw new Error(`Missing ${platform} digests`);
   return PLATFORM_IMAGES.map(name => [
     "buildx", "imagetools", "create", `--tag=${registry}/${name}:${sha}`, `--tag=${registry}/${name}:${sha.slice(0, 7)}`,
-    ...PLATFORMS.map(platform => {
+    ...platformsOf(name).map(platform => {
       const digest = digests[platform][name];
       if (!digest) throw new Error(`Missing ${platform} digest for ${name}`);
       return `${registry}/${name}@${digest}`;
@@ -127,7 +153,7 @@ export function imageManifest({ registry, sha, digests, indexes }) {
       if (!/^sha256:[a-f0-9]{64}$/.test(indexes[name] ?? "")) throw new Error(`No index digest for ${name}`);
       return [name, {
         image: `${registry}/${name}@${indexes[name]}`, tag: `${registry}/${name}:${sha}`, digest: indexes[name],
-        platforms: Object.fromEntries(PLATFORMS.map(platform => [platform, digests[platform][name]])),
+        platforms: Object.fromEntries(platformsOf(name).map(platform => [platform, digests[platform][name]])),
       }];
     })),
   };
@@ -232,11 +258,10 @@ function platformDigest(index, platform, reference) {
   return manifest.digest;
 }
 
-export function copyPublished({ registry, sha, platform, tagPrefix, manifest, images = PLATFORM_IMAGES }) {
+export function copyPublished({ registry, sha, platform, tagPrefix, manifest, images = imagesFor(platform) }) {
   checkInputs({ registry, sha, platform });
   if (!tagPrefix) throw new Error("A tag prefix is required to copy published images");
-  const unknown = images.filter(image => !PLATFORM_IMAGES.includes(image));
-  if (unknown.length) throw new Error(`Unknown platform image: ${unknown.join(", ")}`);
+  checkImages(images, platform);
   const build = manifest === undefined ? undefined : JSON.parse(readFileSync(manifest, "utf8"));
   if (manifest !== undefined && (build?.sha !== sha || build?.registry !== registry)) {
     throw new Error(`Image manifest does not match ${registry} at ${sha}`);
@@ -289,7 +314,7 @@ const COMMANDS = {
   }),
   digests: opts => {
     if (!PLATFORMS.includes(opts.platform)) throw new Error(`Unsupported platform: ${opts.platform}`);
-    return { platform: opts.platform, images: digestsFromMetadata(JSON.parse(readFileSync(opts.metadata, "utf8")), selectedImages(opts).images) };
+    return { platform: opts.platform, images: digestsFromMetadata(JSON.parse(readFileSync(opts.metadata, "utf8")), selectedImages(opts).images ?? imagesFor(opts.platform)) };
   },
   copy: opts => copyPublished({ registry: opts.registry, sha: opts.sha, platform: opts.platform, tagPrefix: opts["tag-prefix"], manifest: opts.manifest, ...selectedImages(opts) }),
   publish,

@@ -48,14 +48,15 @@ sharedPool:
 # The gateway and gateway-edge images every shared slot converges to. The
 # platform release (Deploy platform) sets the digest-qualified tags from the
 # deployed build's immutable manifest; the fleet controller rolls each slot with surge.
+# The isolated gateway image is octogee-gateway-builder beside gatewayImageRepository.
 platformRelease:
   sourceSha: ""
-  gatewayImageRepository: ""
+  gatewayImageRepository: ghcr.io/octogee-ai/octogee-cloud/octogee-gateway
   gatewayImageTag: ""
   # Same build's octogee-gateway-builder digest; disposable isolated gateways allocated
   # from a shared slot inherit the slot's release payload and need it.
   builderImageTag: ""
-  gatewayEdgeImageRepository: ""
+  gatewayEdgeImageRepository: ghcr.io/octogee-ai/octogee-cloud/gateway-edge
   gatewayEdgeImageTag: ""
   openclawSourceSha: ""
 
