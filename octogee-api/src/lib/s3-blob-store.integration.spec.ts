@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { S3Client, CreateBucketCommand, ListObjectVersionsCommand, PutBucketVersioningCommand } from "@aws-sdk/client-s3";
+import { Readable } from "node:stream";
+import {
+  S3Client, CreateBucketCommand, HeadObjectCommand, ListMultipartUploadsCommand, ListObjectVersionsCommand, PutBucketVersioningCommand,
+} from "@aws-sdk/client-s3";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createS3BlobStore } from "./s3-blob-store.js";
 
@@ -114,5 +117,54 @@ describe.skipIf(!endpoint)("SeaweedFS blob storage", () => {
     expect(response.headers.get("x-amz-version-id")).toBe(metadata.generation);
     expect(Buffer.from(await response.arrayBuffer())).toEqual(data);
     await blobs.delete(key, metadata.generation);
+  });
+  it("streams an upload in parts and moves it without keeping the source", async () => {
+    const blobs = store();
+    const staged = "agent-imports/uid-stream/import-1/source.zip.upload-1";
+    const key = "agent-imports/uid-stream/import-1/source.zip";
+    const chunk = Buffer.alloc(256 * 1024, 7);
+    const chunks = Array.from({ length: 80 }, (_, index) => Buffer.from(chunk.map((byte) => (byte + index) % 256)));
+    try {
+      await blobs.saveStream(staged, Readable.from(chunks), { contentType: "application/zip" });
+      await blobs.move(staged, key);
+
+      await expect(blobs.download(key)).resolves.toMatchObject({ bytes: Buffer.concat(chunks) });
+      expect((await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))).ContentType).toBe("application/zip");
+      const source = await client.send(new ListObjectVersionsCommand({ Bucket: bucket, Prefix: staged }));
+      expect(source.Versions ?? []).toEqual([]);
+      expect(source.DeleteMarkers ?? []).toEqual([]);
+    } finally {
+      await blobs.deletePrefix("agent-imports/uid-stream/");
+    }
+  });
+
+  it("moves a workspace blob whose path needs encoding", async () => {
+    const blobs = store();
+    const key = "customers/alice/agent-imports/import-1/notes/a b+c#d?ü.md";
+    try {
+      await blobs.saveStream(`${key}.upload-1`, Readable.from([Buffer.from("# notes")]), { contentType: "text/markdown" });
+      await blobs.move(`${key}.upload-1`, key);
+
+      await expect(blobs.download(key)).resolves.toMatchObject({ bytes: Buffer.from("# notes") });
+      await expect(blobs.download(`${key}.upload-1`)).resolves.toBeNull();
+      expect((await client.send(new HeadObjectCommand({ Bucket: workspaceBucket, Key: key }))).ContentType).toBe("text/markdown");
+    } finally {
+      await blobs.deletePrefix("customers/alice/agent-imports/");
+    }
+  });
+
+  it("leaves no object or open upload when the source fails partway", async () => {
+    const blobs = store();
+    const key = "agent-imports/uid-abort/import-1/source.zip.upload-1";
+    async function* failing() {
+      yield Buffer.alloc(9 * 1024 * 1024, 1);
+      throw new Error("client went away");
+    }
+
+    await expect(blobs.saveStream(key, failing(), { contentType: "application/zip" })).rejects.toThrow("client went away");
+
+    await expect(blobs.download(key)).resolves.toBeNull();
+    const uploads = await client.send(new ListMultipartUploadsCommand({ Bucket: bucket, Prefix: "agent-imports/uid-abort/" }));
+    expect(uploads.Uploads ?? []).toEqual([]);
   });
 });

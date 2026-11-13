@@ -1,6 +1,7 @@
 import {
+  AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CopyObjectCommand, CreateMultipartUploadCommand,
   DeleteObjectCommand, DeleteObjectsCommand, GetBucketVersioningCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand,
-  ListObjectVersionsCommand, S3Client,
+  ListObjectVersionsCommand, S3Client, UploadPartCommand, type CompletedPart,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { BlobMetadata, BlobStore } from "../../../gateway-edge/src/lib/blob-store.js";
@@ -30,6 +31,73 @@ function metadataOf(item: {
     generation: item.VersionId === "null" ? undefined : item.VersionId,
     md5Hash: digest ? Buffer.from(digest, "hex").toString("base64") : undefined,
   };
+}
+
+const UPLOAD_PART_BYTES = 8 * 1024 * 1024;
+
+interface MultipartUpload {
+  Bucket: string;
+  Key: string;
+  UploadId: string;
+}
+
+async function startUpload(client: S3Client, target: { Bucket: string; Key: string; ContentType: string }): Promise<string> {
+  const { UploadId } = await client.send(new CreateMultipartUploadCommand(target));
+  if (!UploadId) throw new Error("multipart upload has no upload id");
+  return UploadId;
+}
+
+async function uploadPart(client: S3Client, upload: MultipartUpload, PartNumber: number, Body: Buffer): Promise<CompletedPart> {
+  const { ETag } = await client.send(new UploadPartCommand({ ...upload, PartNumber, Body }));
+  if (!ETag) throw new Error("multipart upload part has no ETag");
+  return { ETag, PartNumber };
+}
+
+async function abortUpload(client: S3Client, upload: MultipartUpload, cause: unknown): Promise<void> {
+  try {
+    await client.send(new AbortMultipartUploadCommand(upload));
+  } catch (abortError) {
+    throw new AggregateError([cause, abortError], "multipart upload abort failed");
+  }
+}
+
+async function streamObject(
+  client: S3Client,
+  target: { Bucket: string; Key: string; ContentType: string },
+  source: AsyncIterable<Uint8Array>,
+): Promise<void> {
+  const parts: CompletedPart[] = [];
+  let upload: MultipartUpload | undefined;
+  let pending: Uint8Array[] = [];
+  let pendingBytes = 0;
+  const flush = async (): Promise<MultipartUpload> => {
+    const current = upload ?? { Bucket: target.Bucket, Key: target.Key, UploadId: await startUpload(client, target) };
+    upload = current;
+    parts.push(await uploadPart(client, current, parts.length + 1, Buffer.concat(pending)));
+    pending = [];
+    pendingBytes = 0;
+    return current;
+  };
+  try {
+    for await (const chunk of source) {
+      pending.push(chunk);
+      pendingBytes += chunk.length;
+      if (pendingBytes >= UPLOAD_PART_BYTES) await flush();
+    }
+    if (!upload) {
+      await client.send(new PutObjectCommand({ ...target, Body: Buffer.concat(pending) }));
+      return;
+    }
+    const completed = pendingBytes > 0 ? await flush() : upload;
+    await client.send(new CompleteMultipartUploadCommand({ ...completed, MultipartUpload: { Parts: parts } }));
+  } catch (error) {
+    if (upload) await abortUpload(client, upload, error);
+    throw error;
+  }
+}
+
+function copySource(Bucket: string, Key: string): string {
+  return [Bucket, ...Key.split("/")].map(encodeURIComponent).join("/");
 }
 
 function statusOf(error: unknown): number | undefined {
@@ -77,6 +145,15 @@ export function createS3BlobStore(options: Options): BlobStore {
         }
         throw error;
       }
+    },
+    async saveStream(Key, source, { contentType }) {
+      await streamObject(client, { Bucket: await bucketFor(Key), Key, ContentType: contentType }, source);
+    },
+    async move(from, to) {
+      const [sourceBucket, Bucket] = await Promise.all([bucketFor(from), bucketFor(to)]);
+      const copied = await client.send(new CopyObjectCommand({ Bucket, Key: to, CopySource: copySource(sourceBucket, from) }));
+      const VersionId = copied.CopySourceVersionId === "null" ? undefined : copied.CopySourceVersionId;
+      await client.send(new DeleteObjectCommand({ Bucket: sourceBucket, Key: from, VersionId }));
     },
     async download(Key) {
       const Bucket = await bucketFor(Key);
