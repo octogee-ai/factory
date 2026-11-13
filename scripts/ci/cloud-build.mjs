@@ -234,19 +234,27 @@ function platformDigest(index, platform, reference) {
   return manifest.digest;
 }
 
-export function copyPublished({ registry, sha, platform, tagPrefix, images = PLATFORM_IMAGES }) {
+export function copyPublished({ registry, sha, platform, tagPrefix, manifest, images = PLATFORM_IMAGES }) {
   checkInputs({ registry, sha, platform });
   if (!tagPrefix) throw new Error("A tag prefix is required to copy published images");
   const unknown = images.filter(image => !PLATFORM_IMAGES.includes(image));
   if (unknown.length) throw new Error(`Unknown platform image: ${unknown.join(", ")}`);
-  const copied = {};
-  for (const name of images) {
-    const reference = `${registry}/${name}:${sha}`;
-    const digest = platformDigest(publishedIndex(reference), platform, reference);
-    docker(["buildx", "imagetools", "create", "--prefer-index=false", `--tag=${tagPrefix}${name}:${sha.slice(0, 7)}`, `${registry}/${name}@${digest}`]);
-    copied[name] = digest;
+  const build = manifest === undefined ? undefined : JSON.parse(readFileSync(manifest, "utf8"));
+  if (manifest !== undefined && (build?.sha !== sha || build?.registry !== registry)) {
+    throw new Error(`Image manifest does not match ${registry} at ${sha}`);
   }
-  return { platform, images: copied };
+  const digests = Object.fromEntries(images.map(name => {
+    const reference = `${registry}/${name}:${sha}`;
+    const digest = build ? build.images?.[name]?.platforms?.[platform] : platformDigest(publishedIndex(reference), platform, reference);
+    if (typeof digest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(digest)) {
+      throw new Error(`Image manifest: ${name} has no valid ${platform} digest`);
+    }
+    return [name, digest];
+  }));
+  for (const [name, digest] of Object.entries(digests)) {
+    docker(["buildx", "imagetools", "create", "--prefer-index=false", `--tag=${tagPrefix}${name}:${sha.slice(0, 7)}`, `${registry}/${name}@${digest}`]);
+  }
+  return { platform, images: digests };
 }
 
 const selectedImages = opts => (typeof opts.images === "string" ? { images: opts.images.split(",") } : {});
@@ -285,7 +293,7 @@ const COMMANDS = {
     if (!PLATFORMS.includes(opts.platform)) throw new Error(`Unsupported platform: ${opts.platform}`);
     return { platform: opts.platform, images: digestsFromMetadata(JSON.parse(readFileSync(opts.metadata, "utf8")), selectedImages(opts).images) };
   },
-  copy: opts => copyPublished({ registry: opts.registry, sha: opts.sha, platform: opts.platform, tagPrefix: opts["tag-prefix"], ...selectedImages(opts) }),
+  copy: opts => copyPublished({ registry: opts.registry, sha: opts.sha, platform: opts.platform, tagPrefix: opts["tag-prefix"], manifest: opts.manifest, ...selectedImages(opts) }),
   publish,
   tripwire,
 };
