@@ -346,7 +346,7 @@ async function createWorkspaceChannels(host: ManagedChannelHost, input: {
       teamId,
       name: defaultAgentChannelName,
       displayName: WORKSPACE_CHANNEL_DISPLAY_NAMES.coach,
-      purpose: `${ownerLabel}'s Octogee workspace`,
+      purpose: `${ownerLabel}'s private channel with their agent`,
     },
     userChannelMembers("coach", { customerMmUserId: userMmUserId, defaultAgentMmUserId: null, adminMmUserId }),
   );

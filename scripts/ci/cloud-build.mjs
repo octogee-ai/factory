@@ -6,12 +6,11 @@ import { pathToFileURL } from "node:url";
 import { IMAGE_BUILDS, PLATFORM_CONTEXT, imagePlan } from "./image-build.mjs";
 import { gatewayBakePlan } from "./gateway-bake.mjs";
 
-export const PLATFORM_IMAGES = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "octogee-gateway-builder", "mattermost", "vm-bridge"];
+export const PLATFORM_IMAGES = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "octogee-gateway-builder", "vm-bridge"];
 export const PLATFORMS = ["linux/amd64", "linux/arm64"];
 export const SOURCE_REPOSITORY = "https://github.com/octogee-ai/octogee-cloud";
 export const CACHE_PREFIX = "octogee-cloud";
 
-const MATTERMOST = { dockerfile: "infra/mattermost/Dockerfile", args: {} };
 const VM_BRIDGE = { dockerfile: "infra/vm-bridge/Dockerfile", args: {} };
 const GATEWAY_BASE = "octogee-gateway-base";
 const GATEWAY_SYSTEM = "octogee-gateway-system";
@@ -96,7 +95,6 @@ const revisionLabel = sha => ({ labels: { "org.opencontainers.image.revision": s
 
 function sourceFor(name, gateway, { registry, sha, root }) {
   if (gateway[name]) return gateway[name];
-  if (name === "mattermost") return { ...MATTERMOST, ...revisionLabel(sha) };
   if (name === "vm-bridge") return { ...VM_BRIDGE, ...revisionLabel(sha) };
   return singleTarget(name, registry, sha, root);
 }

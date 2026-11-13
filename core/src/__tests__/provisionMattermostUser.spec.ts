@@ -144,6 +144,18 @@ describe("provisionMattermostUser — new user (happy path)", () => {
     ]);
   });
 
+  it("describes the agent channel and the general channel by the user's name alone", async () => {
+    await call(HAPPY);
+
+    const purposes = Object.fromEntries(h.mmApiCall.mock.calls
+      .filter(([m, e]: [string, string]) => m === "POST" && e === "/channels")
+      .map(([, , body]: [string, string, { name: string; purpose: string }]) => [body.name, body.purpose]));
+    expect(purposes).toEqual({
+      [workspaceDefaultAgentChannelName("acme")]: "Ada's private channel with their agent",
+      [workspaceGeneralChannelName("acme")]: "Ada's workspace — general discussion",
+    });
+  });
+
   it("registers the /ui command in the new workspace team, pointed at the callback router", async () => {
     vi.stubEnv("K8S_NAMESPACE", "octogee-test");
     try {

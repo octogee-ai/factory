@@ -9,7 +9,7 @@ const registry = "ghcr.io/octogee-ai/octogee-cloud";
 const sha = "a".repeat(40);
 const arm = `sha256:${"1".repeat(64)}`;
 const amd = `sha256:${"2".repeat(64)}`;
-const images = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "mattermost", "vm-bridge"];
+const images = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "vm-bridge"];
 const builder = "octogee-gateway-builder";
 const published = [...images, builder];
 let directory: string;
@@ -50,7 +50,7 @@ it("reports findings and produces an SBOM for every exact architecture digest", 
     expect(readFileSync(join(directory, "summary"), "utf8")).toContain(`${name}@${arm}\` | 1 | 0 | 0 | 0 | 0 |`);
   }
   expect(calls).not.toContain(builder);
-  expect(readdirSync(join(directory, "reports"))).toHaveLength(13);
+  expect(readdirSync(join(directory, "reports"))).toHaveLength(11);
 });
 
 it("scans the isolated gateway image with the amd64 images", () => {
@@ -58,7 +58,7 @@ it("scans the isolated gateway image with the amd64 images", () => {
   expect(result.status, result.stderr).toBe(0);
   const calls = readFileSync(join(directory, "calls"), "utf8");
   for (const name of published) expect(calls).toContain(`${registry}/${name}@${amd}`);
-  expect(readdirSync(join(directory, "reports"))).toHaveLength(15);
+  expect(readdirSync(join(directory, "reports"))).toHaveLength(13);
 });
 
 it.each([
@@ -77,6 +77,6 @@ it("continues scanning other images and fails the job after a Trivy error", () =
   expect(result.status).toBe(1);
   expect(result.stdout).toContain("Trivy could not finish reports");
   const reports = readdirSync(join(directory, "reports"));
-  expect(reports).toContain("mattermost.cdx.json");
+  expect(reports).toContain("octogee-gateway.cdx.json");
   expect(reports).not.toContain("octogee-api.cdx.json");
 });

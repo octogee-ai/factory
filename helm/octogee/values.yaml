@@ -91,9 +91,9 @@ cloud-sql-proxy:
 mattermost:
   enabled: true
   image:
-    repository: ghcr.io/octogee-ai/octogee-cloud/mattermost
-    tag: ""
-    digest: ""
+    repository: mattermost/mattermost-team-edition
+    tag: "12.0.2"
+    digest: "sha256:08c0b4b93a14196b0850f62faa4a437d2643533f009cac4868a0b793aad61fc3"
   db:
     host: postgres
     port: 5432

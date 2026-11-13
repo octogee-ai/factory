@@ -362,6 +362,10 @@ spec:
               value: {{ .Values.env.mmInteractionsCallbackBaseUrl | default (printf "http://mattermost-callback-router.%s.svc.cluster.local:3001/internal/openclaw/mattermost/%s" .Release.Namespace .Values.gatewayId) | quote }}
             - name: MM_INTERACTIONS_ALLOWED_SOURCE_IPS
               value: "127.0.0.1"
+            - name: MM_REPLY_TO_MODE
+              value: {{ .Values.env.mmReplyToMode | quote }}
+            - name: MM_STREAMING_MODE
+              value: {{ .Values.env.mmStreamingMode | quote }}
             - name: GIT_API_URL
               value: {{ .Values.env.gitApiUrl | default (printf "http://octogee-gitea-http.%s.svc.cluster.local:3000/api/v1" .Release.Namespace) | quote }}
             - name: GIT_SSH_HOST

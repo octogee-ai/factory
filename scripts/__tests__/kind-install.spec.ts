@@ -8,7 +8,7 @@ import { createStubHost, REPO_ROOT, type StubHost } from "./deploy/stub-host";
 
 const SCRIPT = join(REPO_ROOT, "scripts/ops/kind-install.sh");
 const REGISTRY = "ghcr.io/octogee-ai/octogee-cloud";
-const IMAGES = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "mattermost"];
+const IMAGES = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway"];
 const AMD64_IMAGES = [...IMAGES, "octogee-gateway-builder"];
 const PUBLISHED = "b".repeat(40);
 const CHECKOUT = "c".repeat(40);
@@ -101,6 +101,7 @@ describe("kind-install.sh", () => {
     expect(values["glm-controller"].image).toEqual({ repository: "localhost:5001/octogee/glm-controller", tag: "bbbbbbb", digest: ARM64 });
     expect(values["glm-controller"].platformRelease).toMatchObject({ sourceSha: PUBLISHED, gatewayImageTag: `bbbbbbb@${ARM64}` });
     expect(values["octogee-api"].replicas).toBeUndefined();
+    expect(values).not.toHaveProperty("mattermost");
   });
 
   const manifest = (sha = CHECKOUT, images = IMAGES) => {
@@ -125,7 +126,7 @@ describe("kind-install.sh", () => {
     expect(json("digests.json").images["glm-controller"]).toBe(`sha256:${"3".repeat(64)}`);
     const values = json("images.yaml");
     expect(values["glm-controller"].image.digest).toBe(`sha256:${"3".repeat(64)}`);
-    expect(values["glm-controller"].platformRelease.builderImageTag).toBe(`ccccccc@sha256:${"8".repeat(64)}`);
+    expect(values["glm-controller"].platformRelease.builderImageTag).toBe(`ccccccc@sha256:${"7".repeat(64)}`);
     expect(values.global).toBeUndefined();
   });
 
@@ -135,7 +136,7 @@ describe("kind-install.sh", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(copies()).toEqual(extra.map((name, index) =>
       `docker KUBECONFIG=unset buildx imagetools create --prefer-index=false --tag=localhost:5001/octogee/${name}:ccccccc ${REGISTRY}/${name}@sha256:${String(index + 3).repeat(64)}`));
-    expect(json("images.yaml").global.computer.bridge.image).toEqual({ repository: "localhost:5001/octogee/vm-bridge", tag: "ccccccc", digest: `sha256:${"8".repeat(64)}` });
+    expect(json("images.yaml").global.computer.bridge.image).toEqual({ repository: "localhost:5001/octogee/vm-bridge", tag: "ccccccc", digest: `sha256:${"7".repeat(64)}` });
   });
 
   it("refuses the isolated gateway image on an arm64 host before copying any image", () => {
@@ -156,7 +157,7 @@ describe("kind-install.sh", () => {
   it("refuses a manifest missing a selected digest before copying any image", () => {
     const result = run(["up", "--pull", `--manifest=${manifest(CHECKOUT, IMAGES.slice(0, -1))}`]);
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("mattermost has no valid linux/arm64 digest");
+    expect(result.stderr).toContain("octogee-gateway has no valid linux/arm64 digest");
     expect(inspected()).toEqual([]);
     expect(copies()).toEqual([]);
   });

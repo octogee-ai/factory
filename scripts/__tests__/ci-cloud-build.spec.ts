@@ -11,8 +11,8 @@ import { IMAGE_BUILDS } from "../ci/image-build.mjs";
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const registry = "ghcr.io/octogee-ai/octogee-cloud";
 const sha = "a".repeat(40);
-const images = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "mattermost", "vm-bridge"];
-const amd64Images = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "octogee-gateway-builder", "mattermost", "vm-bridge"];
+const images = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "vm-bridge"];
+const amd64Images = ["glm-controller", "octogee-api", "gateway-edge", "octogee-gateway", "octogee-gateway-builder", "vm-bridge"];
 const plan = (overrides: Record<string, unknown> = {}) =>
   cloudBakePlan({ registry, sha, platform: "linux/arm64", root, ...overrides });
 const fileSha256 = (path: string) => createHash("sha256").update(readFileSync(join(root, path))).digest("hex");
@@ -121,6 +121,7 @@ describe("public platform image plan", () => {
     [{ platform: "linux/s390x" }, "Unsupported platform"],
     [{ images: ["artifact-worker"] }, "Unknown platform image"],
     [{ images: ["octogee-gateway-builder"] }, "octogee-gateway-builder is not published for linux/arm64"],
+    [{ images: ["mattermost"] }, "Unknown platform image"],
     [{ sha: "abc" }, "full source SHA"],
   ])("refuses %j", (overrides, message) => {
     expect(() => plan(overrides)).toThrow(message);
@@ -160,7 +161,7 @@ describe("public platform image manifest", () => {
     expect(Object.keys(manifest.images)).toEqual(amd64Images);
     expect(manifest.images["vm-bridge"]).toEqual({
       image: `${registry}/vm-bridge@${digest(9)}`, tag: `${registry}/vm-bridge:${sha}`, digest: digest(9),
-      platforms: { "linux/amd64": digest(6), "linux/arm64": digest(12) },
+      platforms: { "linux/amd64": digest(5), "linux/arm64": digest(11) },
     });
     expect(manifest.images["octogee-gateway-builder"].platforms).toEqual({ "linux/amd64": digest(4) });
     expect(() => imageManifest({ registry, sha, digests, indexes: {} })).toThrow("No index digest");

@@ -177,6 +177,9 @@ describe("base image recipes", () => {
     expect(gatewayBaseRecipe(repoRoot).sort()).toEqual([
       ".dockerignore",
       "infra/gateway/Dockerfile.base",
+      "infra/gateway/debian-backports/CVE-2026-60002.patch",
+      "infra/gateway/debian-backports/CVE-2026-6653.patch",
+      "infra/gateway/debian-backports/build.sh",
       "infra/gateway/openclaw-tarball/extract-npm.sh",
       "infra/gateway/openclaw-tarball/npm-distribution.test.mjs",
       "infra/gateway/verify-codex-native-hook-runtime.mjs",

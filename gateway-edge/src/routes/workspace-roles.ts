@@ -8,7 +8,7 @@ import { openNativeUserClient } from "../openclaw-control/native-user-client.js"
 import { signedInProfile } from "../openclaw-control/proxy-identity.js";
 import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
-interface NativeProfile { id: string; emails: string[]; role: string | null }
+interface NativeProfile { id: string; role: string | null }
 type NativeClient = Awaited<ReturnType<typeof openNativeUserClient>>;
 
 function assignedRole(profile: NativeProfile): string | null {
@@ -67,14 +67,27 @@ export function createWorkspaceRolesRouter(deps = { resolveIdentity: resolveWork
       if (!client.scopes.has("operator.admin")) {
         res.json({ canManageRoles: false, roles: [], profiles: [] }); return;
       }
-      const profiles = await client.call<{ profiles: NativeProfile[] }>("users.list", {});
       const config = await client.call<{ config: { gateway?: { roles?: { default?: string; definitions?: Record<string, unknown> } } } }>("config.get", {});
-      if (!profiles.ok) throw new Error(profiles.reason);
       if (!config.ok) throw new Error(config.reason);
       const roles = config.result.config?.gateway?.roles;
       if (!roles?.definitions) throw new Error("OpenClaw role definitions are unavailable");
-      res.set("cache-control", "no-store").json({ canManageRoles: true, roles: Object.keys(roles.definitions), defaultRole: roles.default ?? null,
-        profiles: profiles.result.profiles.map(({ id, emails, role }) => ({ id, uids: emails, role })) });
+      res.set("cache-control", "no-store").json({ canManageRoles: true, roles: Object.keys(roles.definitions), defaultRole: roles.default ?? null });
+    } catch (error) {
+      if (error instanceof WorkspaceNativeAccessError) { res.status(error.status).json({ error: error.message }); return; }
+      next(error);
+    } finally { client?.close(); }
+  });
+  router.get("/:uid", roleRateLimit(240), async (req, res, next) => {
+    let client: NativeClient | undefined;
+    try {
+      const identity = await deps.resolveIdentity({ gatewayId: String((req.params as Record<string, string>).gatewayId), authorization: req.headers.authorization, targetUid: String(req.params.uid) });
+      client = await deps.openClient(identity.uid, identity.gatewayId);
+      if (!client.scopes.has("operator.admin")) {
+        res.status(403).json({ error: "Missing scope: operator.admin" }); return;
+      }
+      const target = await deps.openClient(identity.targetUid!, identity.gatewayId);
+      const profile = await signedInProfile(target).finally(() => target.close());
+      res.set("cache-control", "no-store").json({ role: profile.role ?? null });
     } catch (error) {
       if (error instanceof WorkspaceNativeAccessError) { res.status(error.status).json({ error: error.message }); return; }
       next(error);

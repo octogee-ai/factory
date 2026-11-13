@@ -1,17 +1,14 @@
-# USER.md — About You
+# USER.md
 
 ## The Basics
 - **Name:** {{ownerName}}
 - **Timezone:** {{timeZone}}
 
-## Communication Profile
-*(Coach fills this in during onboarding)*
+## How They Work
+*(How they like to communicate, review changes and make decisions.)*
 
-## Their Project
-*(Coach fills this in during conversation)*
-
-## Goals
-*(Coach fills this in during conversation)*
+## What They Are Building
+*(Their projects, goals and constraints.)*
 
 ## Notes
-*(Coach adds notes here as the relationship develops)*
+*(Anything else worth remembering about working with them.)*

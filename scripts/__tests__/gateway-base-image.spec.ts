@@ -76,7 +76,7 @@ describe("gateway base image", () => {
     const isolatedBase = readRepoFile("infra/gateway/Dockerfile.isolated-base");
     const userConfig = readRepoFile("infra/gateway/openclaw.isolated.template.json");
 
-    expect(base).toMatch(/^FROM node:\d+\.\d+\.\d+-trixie-slim@sha256:[0-9a-f]{64} AS gateway-core-system$/mu);
+    expect(base).toMatch(/^FROM node:\d+\.\d+\.\d+-trixie-slim@sha256:[0-9a-f]{64} AS gateway-debian$/mu);
     expect(base).not.toContain("gateway-core-runtime");
     expect(isolatedBase).toContain("ARG GATEWAY_BASE_IMAGE");
     expect(isolatedBase).toContain("FROM ${GATEWAY_BASE_IMAGE} AS openclaw-runtime");

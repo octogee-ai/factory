@@ -76,7 +76,7 @@ jobs:
           digest="sha256:$(printf '%064d' 0)"
           tag=aaaaaaa
           args=()
-          for image in octogee-api gateway-edge glm-controller mattermost; do
+          for image in octogee-api gateway-edge glm-controller; do
             args+=(--set-string "$image.image.repository=registry.example/$image"
               --set-string "$image.image.tag=$tag" --set-string "$image.image.digest=$digest")
           done
