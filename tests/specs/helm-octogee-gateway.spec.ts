@@ -287,6 +287,27 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(ownerRequired).not.toContain("topologyKey: topology.kubernetes.io/zone");
   });
 
+  it("lets an install prefer, rather than require, one gateway per node", () => {
+    const hostnameTerm = /podAffinityTerm:\s*\n\s*labelSelector:\s*\n\s*matchLabels:\s*\n\s*app: octogee-gateway\s*\n\s*namespaceSelector: \{\}\s*\n\s*topologyKey: kubernetes\.io\/hostname/;
+    const render = (podAntiAffinity: string) => findDoc(helmTemplate("octogee-gw-shared-a", {
+      gatewayId: "shared-a",
+      gatewayClass: "shared",
+      podAntiAffinity,
+    }), "Deployment", "octogee-gateway-shared-a") ?? "";
+    const preferred = render("preferred");
+    const defaulted = findDoc(helmTemplate("octogee-gw-shared-a", {
+      gatewayId: "shared-a",
+      gatewayClass: "shared",
+    }), "Deployment", "octogee-gateway-shared-a") ?? "";
+
+    expect(defaulted).toMatch(/requiredDuringSchedulingIgnoredDuringExecution:[\s\S]*topologyKey: kubernetes\.io\/hostname/);
+    expect(render("required")).toEqual(defaulted);
+    expect(preferred).not.toContain("requiredDuringSchedulingIgnoredDuringExecution");
+    expect(preferred).toMatch(hostnameTerm);
+    expect(preferred).toMatch(/topologyKey: topology\.kubernetes\.io\/zone/);
+    expect(() => render("sometimes")).toThrow(/podAntiAffinity "sometimes"/);
+  });
+
   it("renders isolated gateways with their durable config paths", () => {
     const owned = findDoc(helmTemplate("octogee-gw-walter", {
       gatewayId: "walter",
