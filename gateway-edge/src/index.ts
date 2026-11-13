@@ -10,6 +10,7 @@ import { errorHandler } from "./middleware/errors.js";
 import { logger } from "./middleware/logging.js";
 import { helmetMiddleware, dashboardAssetRateLimit } from "./middleware/security.js";
 import { requireAuthenticatedUid } from "./middleware/auth.js";
+import { authenticationFailureLimit } from "./middleware/authenticated-request-limit.js";
 import { installBodyParsers } from "./middleware/body-parsers.js";
 
 import { mountApi } from "./routes/mount-api.js";
@@ -310,7 +311,7 @@ function mountSidecarLocalitySurface(app: Express, options: {
   // /api/g/<gatewayId>/byosub/* locality seam), so it can read the pod's
   // auth-profile store — the proof /api/model-credentials/subscription/connection's ref-read can't give.
   const byosubLocality = Router();
-  byosubLocality.use("/health", requireAuthenticatedUid);
+  byosubLocality.use("/health", authenticationFailureLimit, requireAuthenticatedUid);
   byosubLocality.use(byosubHealthRoutes);
   mountApi(app, "/byosub", byosubLocality);
   const automationsLocality = Router({ mergeParams: true });
