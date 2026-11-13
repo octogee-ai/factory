@@ -21,7 +21,7 @@ import {
 } from "@octogee/shared/types/openclaw-proxy-identity";
 import { WebSocket } from "ws";
 
-import { attachUpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-rpc.js";
+import { attachUpstreamRpcClient, type UpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-rpc.js";
 import type { OpenClawControlSession } from "./session.js";
 import { synchronizeChannelMemberships, type AuthorizedNativeChannel } from "./channel-membership-sync.js";
 
@@ -46,9 +46,8 @@ export interface OpenClawControlProxyIdentity {
   syncProfile(session: OpenClawControlProxyIdentitySession): Promise<void>;
 }
 
-export interface OpenClawProfileListItem {
+export interface OpenClawProfile {
   id: string;
-  emails: string[];
   role?: string | null;
   displayName?: string | null;
   hasAvatar?: boolean;
@@ -150,9 +149,12 @@ export async function openProxyIdentitySocket(args: {
   }
 }
 
-export function profileFor(profiles: OpenClawProfileListItem[], uid: string): OpenClawProfileListItem | undefined {
-  const subject = uid.trim().toLowerCase();
-  return profiles.find((profile) => profile.emails.some((email) => email === subject));
+export async function signedInProfile(rpc: Pick<UpstreamRpcClient, "call">): Promise<OpenClawProfile> {
+  const self = await rpc.call<{ profile?: OpenClawProfile }>("users.self", {});
+  if (!self.ok) throw new Error(`users.self failed: ${self.reason}`);
+  const profile = self.result?.profile;
+  if (typeof profile?.id !== "string" || !profile.id) throw new Error("users.self returned no profile");
+  return profile;
 }
 
 function deviceSecret(env: NodeJS.ProcessEnv): string {
@@ -183,7 +185,7 @@ export function createOpenClawControlProxyIdentity(
     return authorizedMattermostSessions(session, broker.authorize, broker.listWorkspaceChannels);
   });
 
-  const avatarAlreadySynced = (profile: OpenClawProfileListItem, appearance: OpenClawProfileAppearance): boolean => {
+  const avatarAlreadySynced = (profile: OpenClawProfile, appearance: OpenClawProfileAppearance): boolean => {
     const previous = avatarSyncs.get(profile.id);
     return Boolean(profile.hasAvatar && previous?.revision === appearance.avatar?.revision
       && previous?.updatedAt === profile.updatedAt);
@@ -202,36 +204,32 @@ export function createOpenClawControlProxyIdentity(
     return url;
   };
 
-  const ensureProfile = async (uid: string): Promise<void> => {
+  const userProfile = async (uid: string): Promise<OpenClawProfile> => {
     const ws = await openSocket({
       url: identityUrl(),
       headers: identityHeaders(uid, fallbackAddress()),
       timeoutMs,
     });
-    ws.close();
+    const rpc = attachUpstreamRpcClient(ws, { timeoutMs });
+    try {
+      return await signedInProfile(rpc);
+    } finally {
+      rpc.dispose();
+      ws.close();
+    }
   };
 
   const synchronizeProfile = async (
     session: OpenClawControlProxyIdentitySession, suppliedAppearance?: OpenClawProfileAppearance,
-  ): Promise<OpenClawProfileListItem> => {
+  ): Promise<OpenClawProfile> => {
     const ws = await openSocket({ url: identityUrl(), headers: serviceHeaders(), timeoutMs });
     const rpc = attachUpstreamRpcClient(ws, { timeoutMs });
     try {
-      const listProfiles = async (): Promise<OpenClawProfileListItem[]> => {
-        const listed = await rpc.call<{ profiles: OpenClawProfileListItem[] }>("users.list", {});
-        if (!listed.ok) throw new Error(`users.list failed: ${listed.reason}`);
-        return listed.result.profiles;
-      };
-      let profile = profileFor(await listProfiles(), session.uid);
-      if (!profile) {
-        await ensureProfile(session.uid);
-        profile = profileFor(await listProfiles(), session.uid);
-      }
-      if (!profile) throw new Error(`OpenClaw did not create a profile for ${session.uid}`);
+      let profile = await userProfile(session.uid);
       const appearance = suppliedAppearance ?? await loadAppearance(session);
       const avatarUnchanged = avatarAlreadySynced(profile, appearance);
       const update = async (method: string, params: Record<string, unknown>): Promise<void> => {
-        const result = await rpc.call<{ profile: OpenClawProfileListItem }>(method, { profileId: profile!.id, ...params });
+        const result = await rpc.call<{ profile: OpenClawProfile }>(method, { profileId: profile.id, ...params });
         if (!result.ok) throw new Error(`${method} failed: ${result.reason}`);
         profile = result.result.profile;
       };
@@ -277,14 +275,8 @@ export function createOpenClawControlProxyIdentity(
       const ws = await openSocket({ url: identityUrl(), headers: serviceHeaders(), timeoutMs });
       const rpc = attachUpstreamRpcClient(ws, { timeoutMs });
       try {
-        const profiles = await rpc.call<{ profiles: OpenClawProfileListItem[] }>("users.list", {});
-        if (!profiles.ok) throw new Error(`users.list failed: ${profiles.reason}`);
-        let member = profileFor(profiles.result.profiles, session.uid);
-        if (!member) {
-          member = await synchronizeProfile(session);
-        }
-        const service = profileFor(profiles.result.profiles, OPENCLAW_EDGE_SERVICE_IDENTITY);
-        if (!member || !service) throw new Error("Channel membership identity is not initialized");
+        const service = await signedInProfile(rpc);
+        const member = await userProfile(session.uid);
         await synchronizeChannelMemberships({ rpc, profileId: member.id, serviceProfileId: service.id, authorized });
         state.expiresAt = Date.now() + 10_000;
       } finally {

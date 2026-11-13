@@ -1,3 +1,7 @@
+interface NativeProfile {
+    id: string;
+    role?: string | null;
+}
 type NativeRequest = <T>(method: string, params: Record<string, unknown>, options: {
     scopes: string[];
 }) => Promise<T>;
@@ -8,6 +12,6 @@ export declare function assertWorkspaceIdentityReady(env?: NodeJS.ProcessEnv): v
 export declare function bootstrapWorkspaceIdentities(args: {
     request: NativeRequest;
     env?: NodeJS.ProcessEnv;
-    createProfile?: (uid: string, env: NodeJS.ProcessEnv) => Promise<void>;
+    signIn?: (uid: string, env: NodeJS.ProcessEnv) => Promise<NativeProfile>;
 }): Promise<void>;
 export {};

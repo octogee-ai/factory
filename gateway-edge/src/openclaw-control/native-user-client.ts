@@ -5,7 +5,7 @@ import { WebSocket } from "ws";
 import { isMattermostPostId, parseChannelScopedMattermostSessionRoute } from "@octogee/shared/types/mattermost-session-route";
 import { resolveToolConversationForUid, resolveToolChannelForUid } from '../lib/tool-conversation.js';
 import { attachUpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-rpc.js";
-import { openProxyIdentitySocket, podClientAddress, profileFor, type OpenClawProfileListItem } from "./proxy-identity.js";
+import { openProxyIdentitySocket, podClientAddress, signedInProfile } from "./proxy-identity.js";
 import { openClawControlUpstreamBase } from "./surface.js";
 import { synchronizeChannelMembership } from "./channel-membership-sync.js";
 import { resolveVoiceConversation } from '@octogee/core/voice-conversation';
@@ -28,19 +28,16 @@ function nativeChannelIdentity(options: NativeUserSocketOptions) {
 
 async function synchronizeConnectedChannelMembership(input: {
   ws: WebSocket;
-  uid: string;
   channel: NonNullable<ReturnType<typeof parseChannelScopedMattermostSessionRoute>>;
   url: URL;
   headers: Record<string, string>;
   reauthorize(): Promise<void>;
 }): Promise<void> {
+  const user = attachUpstreamRpcClient(input.ws, { timeoutMs: 30_000 });
+  const member = await signedInProfile(user).finally(() => user.dispose());
   const service = await openProxyIdentitySocket({ url: input.url, headers: input.headers, timeoutMs: 5000 });
   const rpc = attachUpstreamRpcClient(service, { timeoutMs: 30_000 });
   try {
-    const profiles = await rpc.call<{ profiles: OpenClawProfileListItem[] }>("users.list", {});
-    if (!profiles.ok) throw new Error(`users.list failed: ${profiles.reason}`);
-    const member = profileFor(profiles.result.profiles, input.uid);
-    if (!member) throw new Error("Channel membership identity is not initialized");
     if (input.ws.readyState !== WebSocket.OPEN) throw new Error("Native user connection closed during channel synchronization");
     await input.reauthorize();
     await synchronizeChannelMembership(rpc, input.channel, member.id, true);
@@ -76,7 +73,7 @@ export async function openNativeUserSocket(uid: string, gatewayId: string, env: 
   });
   try {
     if (channel) {
-      await synchronizeConnectedChannelMembership({ ws, uid, channel, url, headers: headers(OPENCLAW_EDGE_SERVICE_IDENTITY), reauthorize });
+      await synchronizeConnectedChannelMembership({ ws, channel, url, headers: headers(OPENCLAW_EDGE_SERVICE_IDENTITY), reauthorize });
     }
     return { ws, scopes: new Set(scopes) };
   } catch (error) {

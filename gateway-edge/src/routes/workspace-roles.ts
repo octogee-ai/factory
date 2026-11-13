@@ -5,6 +5,7 @@ import { requireAuthenticatedUid } from "../middleware/auth.js";
 import { DEFAULT_RATE_LIMIT_OPTIONS } from "../middleware/security.js";
 import { resolveWorkspaceNativeIdentity, WorkspaceNativeAccessError } from "../lib/workspace-native-access.js";
 import { openNativeUserClient } from "../openclaw-control/native-user-client.js";
+import { signedInProfile } from "../openclaw-control/proxy-identity.js";
 import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 interface NativeProfile { id: string; emails: string[]; role: string | null }
@@ -88,16 +89,8 @@ export function createWorkspaceRolesRouter(deps = { resolveIdentity: resolveWork
         res.status(403).json({ error: "Missing scope: operator.admin" }); return;
       }
       const { role } = res.locals;
-      const listed = await client.call<{ profiles: NativeProfile[] }>("users.list", {});
-      if (!listed.ok) { res.status(403).json({ error: listed.reason }); return; }
-      let profile = listed.result.profiles.find(item => item.emails.includes(identity.targetUid!.toLowerCase()));
-      if (!profile) {
-        const target = await deps.openClient(identity.targetUid!, identity.gatewayId); target.close();
-        const refreshed = await client.call<{ profiles: NativeProfile[] }>("users.list", {});
-        if (!refreshed.ok) throw new Error(refreshed.reason);
-        profile = refreshed.result.profiles.find(item => item.emails.includes(identity.targetUid!.toLowerCase()));
-      }
-      if (!profile) throw new Error("OpenClaw did not create the member profile");
+      const target = await deps.openClient(identity.targetUid!, identity.gatewayId);
+      const profile = await signedInProfile(target).finally(() => target.close());
       const result = await client.call<{ profile: NativeProfile }>("users.setRole", { profileId: profile.id, role });
       if (!result.ok && result.reason === "upstream-ws-closed" && identity.targetUid === identity.uid) {
         client.close();

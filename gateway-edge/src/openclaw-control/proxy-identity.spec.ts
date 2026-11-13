@@ -13,14 +13,19 @@ interface ConnectRecord {
   params: Record<string, unknown>;
 }
 
+interface StoredProfile { id: string; aliases: string[]; role: string | null; displayName?: string | null; hasAvatar?: boolean; updatedAt?: number }
+
 interface MockGateway {
   base: URL;
   connects: ConnectRecord[];
   calls: Array<{ method: string; params: Record<string, unknown>; user: string | undefined }>;
-  profiles: Array<{ id: string; emails: string[]; role: string | null; displayName?: string | null; hasAvatar?: boolean; updatedAt?: number }>;
+  profiles: StoredProfile[];
   rejectMethod?: string;
   close(): Promise<void>;
 }
+
+const isEmailAddress = (alias: string) => /^[^\s@/:]+@[^\s@/:]+$/u.test(alias);
+const projected = ({ aliases, ...profile }: StoredProfile) => ({ ...profile, emails: aliases.filter(isEmailAddress) });
 
 const servers: MockGateway[] = [];
 
@@ -51,14 +56,14 @@ async function mockGateway(
       if (frame.method === "connect") {
         state.connects.push({ headers: req.headers, params: frame.params });
         if (typeof user === "string" && !user.startsWith("svc:") &&
-          !state.profiles.some((profile) => profile.emails.includes(user.toLowerCase()))) {
-          state.profiles.push({ id: `profile-${state.profiles.length + 1}`, emails: [user.toLowerCase()], role: null });
+          !state.profiles.some((profile) => profile.aliases.includes(user.toLowerCase()))) {
+          state.profiles.push({ id: `profile-${state.profiles.length + 1}`, aliases: [user.toLowerCase()], role: null });
         }
         ws.send(JSON.stringify({
           type: "res",
           id: frame.id,
           ok: true,
-          payload: { type: "hello-ok", features: { methods: ["users.list", "users.setRole"] } },
+          payload: { type: "hello-ok", features: { methods: ["users.list", "users.self", "users.setRole"] } },
         }));
         return;
       }
@@ -72,7 +77,7 @@ async function mockGateway(
         if (frame.method === "users.setDisplayName") profile.displayName = frame.params.displayName as string;
         else profile.hasAvatar = true;
         profile.updatedAt = (profile.updatedAt ?? 0) + 1;
-        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { profile } }));
+        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { profile: projected(profile) } }));
         return;
       }
       if (frame.method === "sessions.list" || frame.method === "sessions.channel.sync") {
@@ -81,7 +86,14 @@ async function mockGateway(
         return;
       }
       if (frame.method === "users.list") {
-        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { profiles: state.profiles } }));
+        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { profiles: state.profiles.map(projected) } }));
+        return;
+      }
+      if (frame.method === "users.self") {
+        const profile = typeof user === "string" && state.profiles.find((entry) => entry.aliases.includes(user.toLowerCase()));
+        ws.send(JSON.stringify(profile
+          ? { type: "res", id: frame.id, ok: true, payload: { profile: projected(profile) } }
+          : { type: "res", id: frame.id, ok: false, error: { message: "profile unavailable" } }));
         return;
       }
       if (frame.method === "users.setRole") {
@@ -89,7 +101,7 @@ async function mockGateway(
         const accepted = Boolean(profile) && profile!.id !== "ghost";
         if (accepted) profile!.role = frame.params.role as string;
         ws.send(JSON.stringify(accepted
-          ? { type: "res", id: frame.id, ok: true, payload: { profile } }
+          ? { type: "res", id: frame.id, ok: true, payload: { profile: projected(profile!) } }
           : { type: "res", id: frame.id, ok: false, error: { message: "role assignment refused" } }));
         return;
       }
@@ -118,8 +130,8 @@ describe("OpenClaw control proxy identity", () => {
   it.each([false, true].map(firstVisit => ({ firstVisit })))(
     "synchronizes native channel access on admission (first visit: $firstVisit)", async ({ firstVisit }) => {
     const gateway = await mockGateway([
-      ...(firstVisit ? [] : [{ id: "member-profile", emails: ["uid-helper"], role: "admin" }]),
-      { id: "service-profile", emails: ["svc:gateway-edge"], role: "service" },
+      ...(firstVisit ? [] : [{ id: "member-profile", aliases: ["uid-helper"], role: "admin" }]),
+      { id: "service-profile", aliases: ["svc:gateway-edge"], role: "service" },
     ]);
     const key = `agent:octogee-alice-coach:mattermost:group:${"a".repeat(26)}`;
     const load = vi.fn(async () => [{ key, displayName: "General" }]);
@@ -134,6 +146,8 @@ describe("OpenClaw control proxy identity", () => {
     expect(gateway.calls).toContainEqual({ method: "sessions.channel.sync", user: "svc:gateway-edge",
       params: { agentId: "octogee-alice-coach", channel: "mattermost", peerKind: "group",
         peerId: "a".repeat(26), profileId: firstVisit ? "profile-2" : "member-profile", member: true, displayName: "General" } });
+    expect(gateway.calls.filter((call) => call.method === "users.self").map((call) => call.user))
+      .toEqual(["svc:gateway-edge", "uid-Helper"]);
     await identity.syncChannelMemberships(session);
     expect(load).toHaveBeenCalledTimes(1);
     await identity.syncChannelMemberships(session, { force: true });
@@ -156,7 +170,7 @@ describe("OpenClaw control proxy identity", () => {
   });
 
   it("preserves the initialized owner when first encountered as a chat author and after native edits", async () => {
-    const gateway = await mockGateway([{ id: "owner-profile", emails: ["owner"], role: "admin" }]);
+    const gateway = await mockGateway([{ id: "owner-profile", aliases: ["owner"], role: "admin" }]);
     const identity = createOpenClawControlProxyIdentity({
       env: { OPENCLAW_CONTROL_IDENTITY: "per-user", API_PUBLIC_URL: "https://api-test.octogee.com" },
       upstreamBase: () => gateway.base, podAddress: () => "10.8.0.4",
@@ -172,7 +186,7 @@ describe("OpenClaw control proxy identity", () => {
   });
 
   it("reuses the profile/avatar sync for chat authors without assigning the viewer's role", async () => {
-    const gateway = await mockGateway([{ id: "author-profile", emails: ["uid-author"], role: "member", displayName: "Author" }]);
+    const gateway = await mockGateway([{ id: "author-profile", aliases: ["uid-author"], role: "member", displayName: "Author" }]);
     const read = vi.fn(async () => Buffer.from("avatar"));
     const identity = createOpenClawControlProxyIdentity({
       env: { OPENCLAW_CONTROL_IDENTITY: "per-user", API_PUBLIC_URL: "https://api-test.octogee.com" },
@@ -188,7 +202,7 @@ describe("OpenClaw control proxy identity", () => {
   });
 
   it("syncs Octogee appearance through the service even when the role is unchanged", async () => {
-    const gateway = await mockGateway([{ id: "person", emails: ["uid-helper"], role: "admin" }]);
+    const gateway = await mockGateway([{ id: "person", aliases: ["uid-helper"], role: "admin" }]);
     const read = vi.fn(async () => Buffer.from("avatar"));
     const appearance = { displayName: "Chris", avatar: { revision: "upload-1", read } };
     const loadAppearance = vi.fn(async () => appearance);
@@ -198,7 +212,8 @@ describe("OpenClaw control proxy identity", () => {
     });
     await identity.syncProfile(helper);
     expect(loadAppearance).toHaveBeenCalledWith(helper);
-    expect(gateway.calls.filter((call) => call.method !== "users.list")).toEqual([
+    expect(gateway.calls).toEqual([
+      { method: "users.self", params: {}, user: "uid-Helper" },
       { method: "users.setDisplayName", params: { profileId: "person", displayName: "Chris" }, user: "svc:gateway-edge" },
       { method: "users.setAvatar", params: { profileId: "person", mime: "image/jpeg", avatarBase64: Buffer.from("avatar").toString("base64") }, user: "svc:gateway-edge" },
     ]);
@@ -215,7 +230,7 @@ describe("OpenClaw control proxy identity", () => {
   });
 
   it("refreshes appearance without reassigning roles on an established connection", async () => {
-    const gateway = await mockGateway([{ id: "person", emails: ["uid-helper"], role: "member" }]);
+    const gateway = await mockGateway([{ id: "person", aliases: ["uid-helper"], role: "member" }]);
     const identity = createOpenClawControlProxyIdentity({
       env: { OPENCLAW_CONTROL_IDENTITY: "per-user", API_PUBLIC_URL: "https://api-test.octogee.com" },
       upstreamBase: () => gateway.base, podAddress: () => "10.8.0.4",
@@ -223,7 +238,7 @@ describe("OpenClaw control proxy identity", () => {
     });
     await identity.syncProfile(helper);
     expect(gateway.profiles[0]).toMatchObject({ displayName: "Chris", role: "member" });
-    expect(gateway.calls.map((call) => call.method)).toEqual(["users.list", "users.setDisplayName"]);
+    expect(gateway.calls.map((call) => call.method)).toEqual(["users.self", "users.setDisplayName"]);
   });
 
   it("shares concurrent profile syncs for the same user and keeps other users separate", async () => {
@@ -240,7 +255,7 @@ describe("OpenClaw control proxy identity", () => {
   });
 
   it("retries refused avatar writes instead of caching them as synchronized", async () => {
-    const gateway = await mockGateway([{ id: "person", emails: ["uid-helper"], role: "admin" }]);
+    const gateway = await mockGateway([{ id: "person", aliases: ["uid-helper"], role: "admin" }]);
     const read = vi.fn(async () => Buffer.from("avatar"));
     const identity = createOpenClawControlProxyIdentity({
       env: { OPENCLAW_CONTROL_IDENTITY: "per-user", API_PUBLIC_URL: "https://api-test.octogee.com" },
@@ -263,7 +278,7 @@ describe("OpenClaw control proxy identity", () => {
   });
 
   it("preserves native role changes, including an explicit default, on reconnect", async () => {
-    const gateway = await mockGateway([{ id: "profile", emails: ["uid-helper"], role: "admin" }]);
+    const gateway = await mockGateway([{ id: "profile", aliases: ["uid-helper"], role: "admin" }]);
     const identity = identityFor(gateway);
     for (const role of ["admin", "member", null]) {
       gateway.profiles[0].role = role;

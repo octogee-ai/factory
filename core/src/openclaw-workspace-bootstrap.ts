@@ -11,7 +11,7 @@ import { isIsolatedGatewayClassValue } from "@octogee/shared/types/glm";
 
 interface BootstrapIdentity { uid: string; role: "admin" | "service" }
 interface BootstrapJournal { ownerUid: string }
-interface NativeProfile { id: string; emails: string[]; role?: string | null }
+interface NativeProfile { id: string; role?: string | null }
 type NativeRequest = <T>(method: string, params: Record<string, unknown>, options: { scopes: string[] }) => Promise<T>;
 
 function enabled(env: NodeJS.ProcessEnv): boolean {
@@ -60,7 +60,14 @@ export function assertWorkspaceIdentityReady(env: NodeJS.ProcessEnv = process.en
   }
 }
 
-async function createProfile(uid: string, env: NodeJS.ProcessEnv): Promise<void> {
+async function readSignedInProfile(ws: WebSocket, uid: string): Promise<NativeProfile> {
+  const self = await sendWsRequest({ ws, id: randomUUID(), method: "users.self", timeoutMs: 5000, params: {} }) as { profile?: Partial<NativeProfile> } | undefined;
+  const profile = self?.profile;
+  if (typeof profile?.id !== "string" || !profile.id) throw new Error(`OpenClaw returned no profile for ${uid}`);
+  return { id: profile.id, role: profile.role ?? null };
+}
+
+async function signIn(uid: string, env: NodeJS.ProcessEnv): Promise<NativeProfile> {
   const address = Object.values(os.networkInterfaces()).flatMap(entries => entries ?? []).find(entry => !entry.internal && entry.family === "IPv4")?.address;
   if (!address) throw new Error("Workspace identity initialization requires the pod address");
   const url = new URL(env.OPENCLAW_GATEWAY_URL ?? "http://127.0.0.1:18789");
@@ -76,6 +83,7 @@ async function createProfile(uid: string, env: NodeJS.ProcessEnv): Promise<void>
       minProtocol: OPENCLAW_PROTOCOL_VERSION, maxProtocol: OPENCLAW_PROTOCOL_VERSION,
       client: { id: "openclaw-control-ui", mode: "backend", version: "1.0.0", platform: process.platform }, role: "operator",
     } });
+    return await readSignedInProfile(ws, uid);
   } finally { ws.terminate(); }
 }
 
@@ -90,7 +98,7 @@ function recordOwnerJournal(journalPath: string, ownerUid: string): void {
 
 export async function bootstrapWorkspaceIdentities(args: {
   request: NativeRequest; env?: NodeJS.ProcessEnv;
-  createProfile?: (uid: string, env: NodeJS.ProcessEnv) => Promise<void>;
+  signIn?: (uid: string, env: NodeJS.ProcessEnv) => Promise<NativeProfile>;
 }): Promise<void> {
   const env = args.env ?? process.env;
   if (!enabled(env)) return;
@@ -103,16 +111,9 @@ export async function bootstrapWorkspaceIdentities(args: {
     { uid: OPENCLAW_PROVISIONER_SERVICE_IDENTITY, role: "service" },
     { uid: ownerUid, role: "admin" },
   ];
-  const list = async () => (await args.request<{ profiles: NativeProfile[] }>("users.list", {}, { scopes: ["operator.admin"] })).profiles;
-  const find = (profiles: NativeProfile[], uid: string) => profiles.find(profile => profile.emails.includes(uid.toLowerCase()));
   recordOwnerJournal(state.journal, ownerUid);
   for (const identity of identities) {
-    let profile = find(await list(), identity.uid);
-    if (!profile) {
-      await (args.createProfile ?? createProfile)(identity.uid, env);
-      profile = find(await list(), identity.uid);
-    }
-    if (!profile) throw new Error(`OpenClaw did not create the profile for ${identity.uid}`);
+    const profile = await (args.signIn ?? signIn)(identity.uid, env);
     if ((profile.role ?? null) !== identity.role) {
       await args.request("users.setRole", { profileId: profile.id, role: identity.role }, { scopes: ["operator.admin"] });
     }
