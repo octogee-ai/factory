@@ -47,7 +47,7 @@ export function createPostgresModelBrokerUsageLedger(pool, schema = DEFAULT_PLAT
          ), added AS (
            INSERT INTO ${spend} AS current (owner_key, period, start_ms, request_count, total_tokens, cost_usd, charge_usd)
            SELECT $2, spend.period, spend.start_ms, 1, $6, $7, $8
-             FROM recorded, unnest($9::text[], $10::bigint[]) AS spend(period, start_ms)
+             FROM recorded, jsonb_to_recordset($9::jsonb) AS spend(period text, start_ms bigint)
            ON CONFLICT (owner_key, period) DO UPDATE SET
              request_count = CASE WHEN EXCLUDED.start_ms = current.start_ms
                THEN current.request_count + 1 ELSE EXCLUDED.request_count END,
@@ -69,8 +69,7 @@ export function createPostgresModelBrokerUsageLedger(pool, schema = DEFAULT_PLAT
                 entry.totalTokens,
                 entry.costUsd,
                 entry.chargeUsd,
-                entry.spendPeriods.map(({ period }) => period),
-                entry.spendPeriods.map(({ startMs }) => startMs),
+                JSON.stringify(entry.spendPeriods.map(({ period, startMs }) => ({ period, start_ms: startMs }))),
             ]);
             return result.rows[0]?.recorded === 1;
         },
